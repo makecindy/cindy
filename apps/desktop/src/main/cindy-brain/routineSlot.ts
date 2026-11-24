@@ -3,7 +3,13 @@ import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import { parseRoutineEvent, RoutineEventAdmission } from '@cindy/maker-scheduler';
 import { createLogger } from '../logger.js';
 import { Buffer } from 'node:buffer';
-import { publishPluginEvent, reportPluginEventStatus, type PluginEventListenState } from '../scheduler-host/webhook/pluginEvents.js';
+import type { PluginEventSubscription } from '@cindy/maker-scheduler';
+import {
+  pluginEventSubscriptionsFor,
+  publishPluginEvent,
+  reportPluginEventStatus,
+  type PluginEventListenState,
+} from '../scheduler-host/webhook/pluginEvents.js';
 
 const log = createLogger('routines:plugin');
 
@@ -14,7 +20,8 @@ const log = createLogger('routines:plugin');
  * for routines keep working without reinstalling or re-approving.
  */
 
-// Publishing and status reports have separate per-plugin and host-wide rate budgets.
+// Publishing and status reports have separate per-plugin and host-wide rate budgets;
+// reading subscriptions shares the status budget.
 const publishAdmission = new RoutineEventAdmission();
 const statusAdmission = new RoutineEventAdmission();
 
@@ -97,7 +104,13 @@ export async function handleRoutineRequest(
   ghost: InstalledGhost | undefined,
   payload: unknown,
   isCurrent: () => boolean,
-): Promise<{ ok: boolean; accepted?: number; duplicate?: boolean; message?: string }> {
+): Promise<{
+  ok: boolean;
+  accepted?: number;
+  duplicate?: boolean;
+  subscriptions?: PluginEventSubscription[];
+  message?: string;
+}> {
   if (!ghost?.enabled || !ghost.manifest.routineEvents)
     return { ok: false, message: 'Routine events are not declared or the plugin is disabled' };
   if (!payload || typeof payload !== 'object' || Array.isArray(payload))
@@ -109,12 +122,17 @@ export async function handleRoutineRequest(
   try {
     release = reserveRequest(plugin);
     validateRequestSize(request);
-    if (request.action !== 'status' && request.action !== 'publish')
+    if (request.action !== 'status' && request.action !== 'publish' && request.action !== 'subscriptions')
       return { ok: false, message: 'Unknown routine operation' };
     if (request.action === 'status' && (typeof request.status !== 'string' || !['listening', 'disconnected', 'error'].includes(request.status)))
       return { ok: false, message: 'Invalid source status' };
     // Rate limits apply before parsing the event and before durable writes; repeated status counts too.
-    releaseRate = (request.action === 'status' ? statusAdmission : publishAdmission).acquire(plugin, Date.now());
+    releaseRate = (request.action === 'publish' ? publishAdmission : statusAdmission).acquire(plugin, Date.now());
+    if (request.action === 'subscriptions') {
+      if (!isCurrent()) return { ok: false, message: 'Plugin owner or installation changed' };
+      // Only the event types and conditions automations chose for this plugin; no automation identity or prompt.
+      return { ok: true, subscriptions: pluginEventSubscriptionsFor(plugin) };
+    }
     if (request.action === 'status') {
       if (!isCurrent()) return { ok: false, message: 'Plugin owner or installation changed' };
       reportPluginEventStatus(plugin, request.status as PluginEventListenState);

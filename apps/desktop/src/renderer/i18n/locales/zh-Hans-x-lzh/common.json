@@ -17148,8 +17148,8 @@
           }
         },
         "gitlab": {
-          "missing": "未见 GitLab CLI（glab），故无 MR 状态。装 glab 并登录乃可见。",
-          "notLoggedIn": "本机 glab 未登录 {{host}}，故无 MR 状态。于终端行 glab auth login，登录乃可见。",
+          "missing": "未见 GitLab CLI（glab），GitLab 法器亦无此实例之连，故无 MR 状态。装 glab 并登录，或于 GitLab 法器添此实例，乃可见。",
+          "notLoggedIn": "本机 glab 未登录 {{host}}，GitLab 法器亦无此实例之连，故无 MR 状态。于终端行 glab auth login，或于 GitLab 法器添此实例，乃可见。",
           "unsupported": "此机尚不支持 GitLab MR 状态",
           "openAria": "于浏览器开 MR !{{number}}",
           "summaryAria": "MR !{{number}} 概览",
@@ -17986,19 +17986,22 @@
         "gitlabSignedConnectionHint": "于 GitLab 项之 Webhook 设中用签名之令，更为稳妥。",
         "gitlabTokenConnection": "Secret token",
         "gitlabTokenConnectionHint": "宜于旧版 GitLab：于 Webhook 设中书 Secret token。",
+        "gitlabPluginConnection": "借 GitLab 法器",
+        "gitlabPluginConnectionHint": "以 GitLab 法器所连之号，每分一察，无须于 GitLab 设 Webhook，亦无须登 Cindy 之号。机寐或机关之时所变，不复补报。",
         "gitlabSetupHint": "存后于差事详情取收址与密钥，书于 GitLab 项之「设置 › Webhooks」。",
         "gitlabItem": {
           "label": "MR 或 Issue",
           "placeholder": "!12、#12、group/project!12 或链",
           "hint": "MR 书 !编号，Issue 书 #编号，亦可径贴其链。",
           "required": "请书所察之 MR 或 Issue。",
-          "mrHint": "GitLab 无推报，Cindy 依「兼定时察」之时读 MR 之状（不行差事），须此机之 glab 已登。",
+          "mrHint": "GitLab 无推报，Cindy 依「兼定时察」之时读 MR 之状（不行差事），用此机 glab 之登，或 GitLab 法器所连之号。",
           "issueHint": "借 GitLab Webhook 受此 Issue 之变。评语之事不能辨 MR 与 Issue，故唯应 Issue 自身之新立、修改、闭与复开。",
+          "issuePluginHint": "GitLab 法器每分一察此 Issue，新评亦在其中。",
           "errors": {
             "invalid": "请依 !12（MR）、#12（Issue）或 group/project!12 之式书之，亦可贴 GitLab 之链。",
             "ambiguous": "GitLab 之 MR 与 Issue 编号各别，请书 !12（MR）或 #12（Issue），或贴其链。",
             "needs-link": "指定 MR 须知 GitLab 之所，请贴 MR 之链。",
-            "needs-account": "此乃 Issue。指定 GitLab Issue 须登 Cindy 之号，以受 GitLab Webhook。"
+            "needs-account": "此乃 Issue。指定 GitLab Issue，须装 GitLab 法器，或登 Cindy 之号以受 GitLab Webhook。"
           },
           "mrChange": {
             "any": "MR 有新动",
@@ -18008,9 +18011,18 @@
           },
           "issueChange": {
             "any": "Issue 有变",
+            "comment": "Issue 有新评",
             "closed": "Issue 已闭",
             "reopened": "Issue 复开"
           }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "项目",
+          "projectHint": "书 group/project 或项目之链。法器连数实例者，宜贴其链。",
+          "projectInvalid": "宜书 group/project 或以 https 起之项目链。",
+          "eventsLabel": "事",
+          "eventsHint": "皆不择者，应此项目诸事。",
+          "unavailable": "GitLab 法器未装或已停，请于「法器」启之，然后存。"
         }
       },
       "trigger": {

@@ -402,6 +402,24 @@ describe('buildScheduleInput webhook trigger', () => {
     const form = makeForm({ webhookEnabled: true, webhookEvents: 'issues', ...webhookSourceFormFields(source) });
     expect(buildScheduleInput(form).webhookTrigger).toEqual({ events: [], source });
   });
+
+  // 2026-11-24: GitLab through the GitLab plugin is stored as that plugin's source with project / issue
+  // conditions; reopening it shows GitLab again (not the generic plugin list) and saving keeps it unchanged.
+  it.each([
+    ['a whole project', { preset: 'plugin' as const, sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.merged'], filters: [
+      { field: 'host', operator: 'equals' as const, value: 'git.example.com' },
+      { field: 'project', operator: 'equals' as const, value: 'group/app' },
+    ] }] }],
+    ['one issue', { preset: 'plugin' as const, sources: [{ plugin: 'cindy-gitlab', events: ['issue.comment'], filters: [
+      { field: 'project', operator: 'equals' as const, value: 'group/app' },
+      { field: 'iid', operator: 'equals' as const, value: '3' },
+      { field: 'kind', operator: 'equals' as const, value: 'issue' },
+    ] }] }],
+  ])('reopens and saves GitLab through the plugin for %s', (_name, source) => {
+    const fields = webhookSourceFormFields(source);
+    expect(fields.webhookPreset).toBe('gitlab-plugin');
+    expect(buildScheduleInput(makeForm({ webhookEnabled: true, ...fields })).webhookTrigger).toEqual({ events: [], source });
+  });
 });
 
 // Same rule: ticking a plugin means all of its events (including ones it declares later);

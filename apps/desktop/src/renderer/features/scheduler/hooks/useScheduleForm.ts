@@ -39,7 +39,7 @@ export type { EffortValue, ScheduleFormState, RunMode } from '../lib/scheduleFor
 export { deriveRunMode, hasRealBinding, PENDING_SESSION_ID } from '../lib/scheduleFormLogic';
 
 import { isGithubPrTriggerUrl, normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
-import { parseGitlabItemReference } from '@cindy/maker-scheduler/github-item';
+import { parseGitlabItemReference, parseGitlabProjectReference } from '@cindy/maker-scheduler/github-item';
 
 function prFields(schedule: Schedule): Partial<ScheduleFormState> {
   if (schedule.webhookTrigger && schedule.prTrigger === undefined) return {};
@@ -574,6 +574,12 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     }
     if (form.webhookEnabled && form.webhookPreset === 'gitlab-item') {
       return { key: 'scheduler.editor.webhook.gitlabItem.required' };
+    }
+    if (form.webhookEnabled && form.webhookPreset === 'gitlab-plugin') {
+      if (!form.gitlabPluginId) return { key: 'scheduler.editor.webhook.gitlabPlugin.unavailable' };
+      if (form.gitlabItemNumber === undefined && !parseGitlabProjectReference(form.gitlabPluginProject ?? '')) {
+        return { key: 'scheduler.editor.webhook.gitlabPlugin.projectInvalid' };
+      }
     }
     if (form.webhookEnabled && form.webhookPreset === 'plugin' && !form.webhookPluginSources?.length) {
       return { key: 'scheduler.editor.webhook.plugin.required' };

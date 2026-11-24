@@ -18,7 +18,8 @@ export default {
     'src/renderer/features/scheduler/components/TemplateGallery': 'export const TemplateGallery = () => null;',
     'src/renderer/features/scheduler/components/ScheduleChips': `import React from 'react'; const chip = label => React.createElement('button', {type: 'button', style: {height: 34}}, label); export const ProjectChip = () => chip('对话'); export const ModelEffortChip = () => chip('Codex'); export const ScheduleChip = () => chip('09:00'); export const ScheduleSettingsButton = () => null; export const ThreadPickerInline = () => null;`,
   },
-  cases: { 'gitlab-mr': { about: 'GitLab 指定 MR：粘贴链接，状态变化才运行，自动打开定时检查' }, 'gitlab-issue': { about: 'GitLab 指定 Issue：#编号 / 链接，需要选签名方式' }, 'single-issue': { about: '同一个输入框填 owner/repo#7，识别为 Issue 后条件换成 Issue 的选项' }, 'single-pr': { about: '在「事件」的 GitHub 里选择「指定 PR」并配置定时补查' }, 'script-settings': { about: '现有脚本能力选择器分别显示成员与用量读取及完整范围说明' },
+  cases: { 'gitlab-plugin-project': { about: '装了 GitLab 插件：整个项目默认「通过 GitLab 插件」，填项目、勾事件，不需要 Webhook' },
+    'gitlab-plugin-issue': { about: '装了 GitLab 插件：指定 Issue 默认通过插件，条件多「有新评论」' }, 'gitlab-mr': { about: 'GitLab 指定 MR：粘贴链接，状态变化才运行，自动打开定时检查' }, 'gitlab-issue': { about: 'GitLab 指定 Issue：#编号 / 链接，需要选签名方式' }, 'single-issue': { about: '同一个输入框填 owner/repo#7，识别为 Issue 后条件换成 Issue 的选项' }, 'single-pr': { about: '在「事件」的 GitHub 里选择「指定 PR」并配置定时补查' }, 'script-settings': { about: '现有脚本能力选择器分别显示成员与用量读取及完整范围说明' },
     default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
     create: { about: '新建表单使用相同的稳定切换布局' },
     scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } },
@@ -34,6 +35,31 @@ export default {
     await page.getByRole('button', { name: label, exact: true }).waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'gitlab-plugin-project' || ui.case === 'gitlab-plugin-issue') {
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.trigger.event'), exact: true }).click();
+      await page.getByRole('combobox', { name: await ui.t('scheduler.editor.webhook.sourceLabel'), exact: true }).click();
+      await page.getByRole('option', { name: 'GitLab', exact: true }).click();
+      if (ui.case === 'gitlab-plugin-issue') {
+        await page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.scope.gitlabItem'), exact: true }).check();
+        await page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.gitlabItem.label') }).fill('https://gitlab.example.com/group/app/-/issues/3');
+      } else {
+        await page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.gitlabPlugin.projectLabel') }).fill('https://gitlab.example.com/group/app');
+        await page.getByRole('checkbox', { name: 'MR 已合并', exact: true }).check();
+      }
+      const plugin = page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.gitlabPluginConnection'), exact: true });
+      assert.equal(await plugin.isChecked(), true, 'GitLab plugin is the default connection');
+      await page.locator('[data-schedule-form-fields]').evaluate(panel => {
+        const label = window.__uiPage.t('scheduler.editor.trigger.label');
+        [...panel.querySelectorAll('[role="radiogroup"]')].find(el => el.getAttribute('aria-label') === label)?.scrollIntoView({ block: 'start' });
+      });
+      await ui.capture(ui.case);
+      // The fields below the connection: project + events, or the issue's conditions.
+      await page.getByText(await ui.t(ui.case === 'gitlab-plugin-issue'
+        ? 'scheduler.editor.webhook.gitlabItem.issuePluginHint' : 'scheduler.editor.webhook.gitlabPlugin.eventsHint'), { exact: true })
+        .evaluate(el => el.scrollIntoView({ block: 'end' }));
+      await ui.capture(`${ui.case}-fields`);
+      return;
+    }
     if (ui.case === 'gitlab-mr' || ui.case === 'gitlab-issue') {
       await page.getByRole('radio', { name: await ui.t('scheduler.editor.trigger.event'), exact: true }).click();
       await page.getByRole('combobox', { name: await ui.t('scheduler.editor.webhook.sourceLabel'), exact: true }).click();

@@ -123,6 +123,9 @@ provider / host / owner / repo / number。不同 GitLab 实例上的同名项目
 执行电脑按 MR 自身 host 调用 `glab config get token --host <host>`，令牌只用于该
 HTTPS origin，重定向不得跨 origin 或降级 HTTP。没有令牌不请求 API；未安装 glab、
 未登录分别提示，401 视为未登录。令牌及 CLI stdout 不写日志，不返回客户端。
+glab 读不到令牌时，改用官方 GitLab 插件（已启用、已批准）里同一实例的连接（2026-11-24 用户确认）：只按 MR 的 host
+精确匹配插件连接，只用于这次只读的 MR 状态请求，不写回、不交给其他功能；插件令牌被 401 拒绝时只暂停插件这一路
+30 秒，不影响 glab。两边都没有时才提示安装或登录 glab（提示里同时说明可在 GitLab 插件里添加该实例）。
 窗口恢复焦点时只清除 glab 令牌负缓存和 GitLab 认证失败结果，保留成功缓存与在途
 请求；终端登录后无需额外刷新按钮。
 远程、SSH 和只读任务不展示本机登录引导；GitLab 不使用 GitHub 安装登录窗口。

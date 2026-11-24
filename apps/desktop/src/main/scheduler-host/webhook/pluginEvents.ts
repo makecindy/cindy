@@ -3,7 +3,7 @@
  * 发布事件；Webhook 宿主（index.ts）登记哪些插件被启用的自动化订阅，并接收事件入队。
  * 两边不直接依赖，避免插件运行时与调度器互相加载。规则见 docs/product-rules/plugin-event-triggers.md。
  */
-import type { PluginPublishedEvent } from '@cindy/maker-scheduler';
+import type { PluginEventSubscription, PluginPublishedEvent } from '@cindy/maker-scheduler';
 
 export type PluginEventListenState = 'listening' | 'disconnected' | 'error';
 
@@ -28,6 +28,7 @@ type Sink = (plugin: string, event: PluginPublishedEvent) => Promise<PluginEvent
 const reports = new Map<string, { state: PluginEventListenState; reportedAt: number }>();
 const lastEvents = new Map<string, number>();
 let subscribed = new Set<string>();
+let subscriptionDetails = new Map<string, PluginEventSubscription[]>();
 const subscriptionListeners = new Set<(plugins: ReadonlySet<string>) => void>();
 const statusListeners = new Set<() => void>();
 let sink: Sink | null = null;
@@ -69,8 +70,24 @@ export function pluginEventSourceStatus(plugin: string): PluginEventSourceStatus
   };
 }
 
-/** Webhook 宿主登记被订阅的插件；变化时通知插件运行时启动对应插件的监听。 */
-export function setSubscribedEventPlugins(plugins: ReadonlySet<string>): void {
+/**
+ * Webhook 宿主登记各插件的订阅（只有事件类型与条件）：插件经 `routine-request` 的 subscriptions
+ * 读取，用来决定盯哪些对象；被订阅的插件集合变化时通知插件运行时启动监听。
+ */
+export function setPluginEventSubscriptions(next: ReadonlyMap<string, PluginEventSubscription[]>): void {
+  subscriptionDetails = new Map(next);
+  setSubscribedEventPlugins(new Set(next.keys()));
+}
+
+/** 某插件当前的订阅副本；没有自动化选择它时为空列表。 */
+export function pluginEventSubscriptionsFor(plugin: string): PluginEventSubscription[] {
+  return (subscriptionDetails.get(plugin) ?? []).map((item) => ({
+    ...(item.events ? { events: [...item.events] } : {}),
+    ...(item.filters ? { filters: item.filters.map((filter) => ({ ...filter })) } : {}),
+  }));
+}
+
+function setSubscribedEventPlugins(plugins: ReadonlySet<string>): void {
   if (plugins.size === subscribed.size && [...plugins].every((plugin) => subscribed.has(plugin))) return;
   subscribed = new Set(plugins);
   for (const listener of subscriptionListeners) listener(subscribed);
@@ -91,7 +108,7 @@ export function setPluginEventSink(next: Sink): () => void {
   return () => {
     if (sink !== next) return;
     sink = null;
-    setSubscribedEventPlugins(new Set());
+    setPluginEventSubscriptions(new Map());
   };
 }
 
@@ -111,6 +128,7 @@ export function resetPluginEventsForTest(): void {
   reports.clear();
   lastEvents.clear();
   subscribed = new Set();
+  subscriptionDetails = new Map();
   subscriptionListeners.clear();
   statusListeners.clear();
   sink = null;

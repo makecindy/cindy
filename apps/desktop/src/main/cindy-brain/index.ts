@@ -138,6 +138,7 @@ import {
   setPluginRuntimeProbe,
   subscribedEventPluginIds,
 } from '../scheduler-host/webhook/pluginEvents.js';
+import { setGitlabPluginTokenResolver } from '../git-context/gitlabTokenChain.js';
 import {
   app,
   BrowserWindow,
@@ -1355,6 +1356,20 @@ function libraryStorageKeyFor(id: string): string | null {
 
 function findGhostForPhysicalStoragePart(id: string): InstalledGhost | null {
   return availableGhosts().find((ghost) => installedGhostStoragePart(ghost) === id) ?? null;
+}
+
+/**
+ * The account the user connected for this GitLab instance in the official GitLab plugin.
+ * Only for the host's read-only merge request status (same instance); a disabled,
+ * unapproved or look-alike plugin is never borrowed from.
+ */
+export function resolveGitlabPluginToken(host: string): string | null {
+  const ghost = findGhostForPhysicalStoragePart(CINDY_GITLAB_GHOST_ID);
+  if (ghost?.manifest.id !== CINDY_GITLAB_GHOST_ID || !ghost.enabled || ghost.approval?.state !== 'approved') {
+    return null;
+  }
+  if (!ghost.manifest.network?.connections?.some((decl) => decl.key === CINDY_GITLAB_CONNECTION_KEY)) return null;
+  return getGhostConnectionManager().resolveTokenByHost(CINDY_GITLAB_GHOST_ID, CINDY_GITLAB_CONNECTION_KEY, host);
 }
 
 /** Runtime-authorized lookup for integrations outside this module. */
@@ -9027,6 +9042,8 @@ let pluginEventListenersActive = false;
 function activatePluginEventListeners(): void {
   if (pluginEventListenersActive) return;
   pluginEventListenersActive = true;
+  // GitLab MR status falls back to the GitLab plugin's connection for the same instance.
+  setGitlabPluginTokenResolver(resolveGitlabPluginToken);
   setPluginRuntimeProbe((plugin) => {
     const state = getGhostRuntime().stateOf(plugin);
     if (state !== 'running' && state !== 'starting') {

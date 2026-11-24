@@ -10418,7 +10418,8 @@ export function isGhostCallToolName(name: string | undefined | null): boolean {
 /** Plugin-to-host routine protocol; source identity always comes from the authenticated pipe. */
 export type GhostPipeRoutineRequest =
   | { type: 'routine-request'; action: 'status'; status: 'listening' | 'disconnected' | 'error' }
-  | { type: 'routine-request'; action: 'publish'; event: import('@cindy/maker-scheduler').RoutineEvent };
+  | { type: 'routine-request'; action: 'publish'; event: import('@cindy/maker-scheduler').RoutineEvent }
+  | { type: 'routine-request'; action: 'subscriptions' };
 
 /** A historical unknown declaration is not authorization. */
 export function hasGhostUiPermission(ghost: InstalledGhost): boolean {

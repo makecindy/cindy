@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { PLUGIN_EVENT_LIMITS, subscribedEventPlugins, toPluginWebhookEvent } from '../plugin-events.js';
-import { gitlabIssueChangeEvents, gitlabIssueChangeFromEvents, issueChangeEvents, issueChangeFromEvents, parseGithubItemReference, parseGitlabItemReference } from '../github-item.js';
+import { PLUGIN_EVENT_LIMITS, pluginEventSubscriptions, subscribedEventPlugins, toPluginWebhookEvent } from '../plugin-events.js';
+import {
+  gitlabIssueChangeEvents,
+  gitlabIssueChangeFromEvents,
+  gitlabPluginIssueChangeEvents,
+  gitlabPluginIssueChangeFromEvents,
+  gitlabPluginScopeFromSource,
+  gitlabPluginSource,
+  isGitlabPluginId,
+  issueChangeEvents,
+  issueChangeFromEvents,
+  parseGithubItemReference,
+  parseGitlabItemReference,
+  parseGitlabProjectReference,
+} from '../github-item.js';
 import { normalizePrTrigger } from '../pr-trigger.js';
 import { normalizeScheduleWebhookSource } from '../webhook-formats.js';
 
@@ -32,6 +45,22 @@ describe('plugin events', () => {
       { status: 'active', expireAt: 1, webhookTrigger: trigger('public/expired') },
       { status: 'active', webhookTrigger: { source: { preset: 'github-app' } } },
     ], 100)]).toEqual(['public/chat']);
+  });
+
+  it('gives each plugin the de-duplicated event types and conditions it is watched for, nothing else', () => {
+    const trigger = (sources: unknown[]) => ({ source: { preset: 'plugin', sources } }) as never;
+    const project = { field: 'project', operator: 'equals' as const, value: 'group/app' };
+    const iid = { field: 'iid', operator: 'equals' as const, value: '7' };
+    const result = pluginEventSubscriptions([
+      { status: 'active', webhookTrigger: trigger([{ plugin: 'gitlab', events: ['mr.merged', 'mr.opened'], filters: [project, iid] }]) },
+      { status: 'active', webhookTrigger: trigger([{ plugin: 'gitlab', events: ['mr.opened', 'mr.merged'], filters: [iid, project] }]) },
+      { status: 'active', webhookTrigger: trigger([{ plugin: 'gitlab' }, { plugin: 'chat', filters: [project] }]) },
+      { status: 'paused', webhookTrigger: trigger([{ plugin: 'gitlab', events: ['issue.closed'] }]) },
+    ], 100);
+    expect(Object.fromEntries(result)).toEqual({
+      gitlab: [{ events: ['mr.merged', 'mr.opened'], filters: [iid, project] }, {}],
+      chat: [{ filters: [project] }],
+    });
   });
 });
 
@@ -92,5 +121,47 @@ describe('specific GitLab MR or issue', () => {
       .toEqual({ preset: 'gitlab', repository: 'group/app', number: 3 });
     expect(() => normalizeScheduleWebhookSource({ preset: 'gitlab', number: 3 })).toThrow('project path');
     expect(gitlabIssueChangeFromEvents(gitlabIssueChangeEvents('closed'))).toBe('closed');
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：表单「通过 GitLab 插件」保存成插件来源、打开时还原；GitLab 插件按这些条件决定轮询哪些对象。
+// - 规则依据：docs/product-rules/schedule-webhook-trigger.md（2026-11-24 GitLab 插件做事件来源）。
+// - 最小失败输入：项目链接带页面路径；Agent 写的其他条件组合不能被表单改写；指定 MR 不走这条路。
+// - tier：unit，纯函数。
+describe('GitLab through the GitLab plugin', () => {
+  it.each([
+    ['group/app', { project: 'group/app' }],
+    ['https://Git.Example.com/Group/Sub/App/-/merge_requests', { host: 'git.example.com', project: 'group/sub/app' }],
+    ['https://git.example.com/group/app.git', { host: 'git.example.com', project: 'group/app' }],
+    ['http://git.example.com/group/app', null],
+    ['app', null],
+    ['host:22/group/app', null],
+  ])('reads project %s', (input, expected) => {
+    expect(parseGitlabProjectReference(input)).toEqual(expected);
+  });
+
+  it('round-trips a whole project and a single issue, and leaves other combinations alone', () => {
+    const project = { plugin: 'cindy-gitlab', host: 'git.example.com', project: 'group/app', events: ['merge_request.merged'] };
+    expect(gitlabPluginScopeFromSource([gitlabPluginSource(project)])).toEqual(project);
+    const issue = { plugin: 'local:cindy-gitlab', project: 'group/app', issue: 3, events: gitlabPluginIssueChangeEvents('comment') };
+    const saved = gitlabPluginSource(issue);
+    expect(saved.filters).toEqual([
+      { field: 'project', operator: 'equals', value: 'group/app' },
+      { field: 'iid', operator: 'equals', value: '3' },
+      { field: 'kind', operator: 'equals', value: 'issue' },
+    ]);
+    expect(gitlabPluginScopeFromSource([saved])).toEqual(issue);
+    expect(gitlabPluginIssueChangeFromEvents(saved.events)).toBe('comment');
+    expect(gitlabPluginScopeFromSource([{ plugin: 'other-gitlab', filters: saved.filters }])).toBeNull();
+    expect(gitlabPluginScopeFromSource([{ ...saved, filters: [...saved.filters, { field: 'fromSelf', operator: 'equals', value: 'false' }] }])).toBeNull();
+    expect(gitlabPluginScopeFromSource([{ plugin: 'cindy-gitlab', filters: [{ field: 'project', operator: 'contains', value: 'app' }] }])).toBeNull();
+    expect(gitlabPluginScopeFromSource([{ plugin: 'cindy-gitlab', filters: [
+      { field: 'project', operator: 'equals', value: 'group/app' }, { field: 'iid', operator: 'equals', value: '7' },
+      { field: 'kind', operator: 'equals', value: 'mr' },
+    ] }])).toBeNull();
+    expect(isGitlabPluginId('public/cindy-gitlab')).toBe(true);
+    expect(isGitlabPluginId('_ns__local__cindy-gitlab')).toBe(true);
+    expect(isGitlabPluginId('cindy-gitlab-fork')).toBe(false);
   });
 });

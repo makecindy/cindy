@@ -17148,8 +17148,8 @@
           }
         },
         "gitlab": {
-          "missing": "GitLab CLI（glab）が見つかりません。glab をインストールしてログインすると MR の状態を表示できます。",
-          "notLoggedIn": "このコンピューターの glab は {{host}} に未ログインです。ターミナルで glab auth login を実行してログインすると MR の状態を表示できます。",
+          "missing": "GitLab CLI（glab）が見つからず、GitLab プラグインにもこのインスタンスの接続がありません。glab をインストールしてログインするか、GitLab プラグインにインスタンスを追加すると MR の状態を表示できます。",
+          "notLoggedIn": "このコンピューターの glab は {{host}} に未ログインで、GitLab プラグインにもこのインスタンスの接続がありません。ターミナルで glab auth login を実行するか、GitLab プラグインにインスタンスを追加すると MR の状態を表示できます。",
           "unsupported": "このコンピューターは GitLab MR の状態表示に未対応です",
           "openAria": "MR !{{number}} をブラウザで開く",
           "summaryAria": "MR !{{number}} の概要",
@@ -17986,19 +17986,22 @@
         "gitlabSignedConnectionHint": "GitLab プロジェクトの Webhook 設定で署名トークンを使うと、より安全です。",
         "gitlabTokenConnection": "Secret token",
         "gitlabTokenConnectionHint": "古い GitLab 向け：Webhook 設定で Secret token を入力します。",
+        "gitlabPluginConnection": "GitLab プラグイン経由",
+        "gitlabPluginConnectionHint": "GitLab プラグインで接続したアカウントで 1 分ごとに確認します。GitLab の Webhook 設定や Cindy アカウントは不要です。このコンピュータがスリープ中や電源オフの間の変化は後から届きません。",
         "gitlabSetupHint": "保存後、タスク詳細の受信アドレスと秘密鍵を GitLab プロジェクトの「設定 › Webhooks」に入力してください。",
         "gitlabItem": {
           "label": "MR または Issue",
           "placeholder": "!12、#12、group/project!12 またはリンク",
           "hint": "MR は !番号、Issue は #番号で入力するか、リンクを貼り付けてください。",
           "required": "監視する MR または Issue を入力してください。",
-          "mrHint": "GitLab にはプッシュ通知がないため、Cindy は「定期チェックも行う」の間隔で MR の状態を読み取ります（タスクは実行しません）。このコンピュータで glab にログインしている必要があります。",
+          "mrHint": "GitLab にはプッシュ通知がないため、Cindy は「定期チェックも行う」の間隔で MR の状態を読み取ります（タスクは実行しません）。このコンピュータの glab のログイン、または GitLab プラグインで接続したアカウントを使います。",
           "issueHint": "この Issue の変化は GitLab Webhook で受け取ります。コメントイベントは MR と Issue を区別できないため、Issue 自体の作成・編集・クローズ・再オープンだけに反応します。",
+          "issuePluginHint": "GitLab プラグインがこの Issue を 1 分ごとに確認します（新しいコメントを含む）。",
           "errors": {
             "invalid": "!番号、#番号、group/project!番号、または GitLab のリンクを入力してください。",
             "ambiguous": "GitLab の MR と Issue は番号が別です。!12（MR）か #12（Issue）と書くか、リンクを貼り付けてください。",
             "needs-link": "特定の MR には GitLab のインスタンスが必要です。MR のリンクを貼り付けてください。",
-            "needs-account": "これは Issue です。特定の GitLab Issue には、GitLab Webhook を受け取るための Cindy アカウントが必要です。"
+            "needs-account": "これは Issue です。特定の GitLab Issue には GitLab プラグイン、または GitLab Webhook を受け取るための Cindy アカウントが必要です。"
           },
           "mrChange": {
             "any": "MR の新しい動き",
@@ -18008,9 +18011,18 @@
           },
           "issueChange": {
             "any": "Issue の変化",
+            "comment": "Issue に新しいコメント",
             "closed": "Issue がクローズ",
             "reopened": "Issue が再オープン"
           }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "プロジェクト",
+          "projectHint": "group/project またはプロジェクトのリンクを入力します。GitLab プラグインが複数のインスタンスに接続している場合はリンクを貼り付けてください。",
+          "projectInvalid": "group/project または https で始まるプロジェクトのリンクを入力してください。",
+          "eventsLabel": "イベント",
+          "eventsHint": "何も選ばない場合、このプロジェクトのすべてのイベントに反応します。",
+          "unavailable": "GitLab プラグインがインストールされていないか、オフになっています。「プラグイン」でオンにしてから保存してください。"
         }
       },
       "trigger": {

@@ -17222,8 +17222,8 @@
           }
         },
         "gitlab": {
-          "missing": "GitLab CLI (glab) was not found. Install glab and sign in to see MR status.",
-          "notLoggedIn": "Local glab is not signed in to {{host}}. Run glab auth login in a terminal to see MR status.",
+          "missing": "GitLab CLI (glab) was not found and the GitLab plugin has no connection for this instance. Install and sign in to glab, or add the instance in the GitLab plugin, to see MR status.",
+          "notLoggedIn": "Local glab is not signed in to {{host}} and the GitLab plugin has no connection for it. Run glab auth login in a terminal, or add the instance in the GitLab plugin, to see MR status.",
           "unsupported": "This computer does not support GitLab MR status yet",
           "openAria": "Open MR !{{number}} in browser",
           "summaryAria": "MR !{{number}} summary",
@@ -18060,19 +18060,22 @@
         "gitlabSignedConnectionHint": "Use a signing token in the GitLab project webhook settings for stronger security.",
         "gitlabTokenConnection": "Secret token",
         "gitlabTokenConnectionHint": "For older GitLab versions: enter a secret token in the webhook settings.",
+        "gitlabPluginConnection": "Through the GitLab plugin",
+        "gitlabPluginConnectionHint": "Checks every minute with the account connected in the GitLab plugin. No GitLab webhook or Cindy account needed. Changes made while this computer sleeps or is off are not delivered later.",
         "gitlabSetupHint": "After saving, copy the receiver URL and secret from the task details into the GitLab project under Settings › Webhooks.",
         "gitlabItem": {
           "label": "Merge request or issue",
           "placeholder": "!12, #12, group/project!12 or a link",
           "hint": "Write !number for a merge request, #number for an issue, or paste a link.",
           "required": "Enter the merge request or issue to watch.",
-          "mrHint": "GitLab has no push notifications. Cindy reads the merge request state on the “Also check on a schedule” timing (without running the task); glab must be signed in on this computer.",
+          "mrHint": "GitLab has no push notifications. Cindy reads the merge request state on the “Also check on a schedule” timing (without running the task), using glab on this computer or the account connected in the GitLab plugin.",
           "issueHint": "Changes to this issue arrive through a GitLab webhook. Comment events cannot tell merge requests and issues apart, so only the issue itself being opened, edited, closed or reopened counts.",
+          "issuePluginHint": "The GitLab plugin checks this issue every minute, including new comments.",
           "errors": {
             "invalid": "Enter !number, #number, group/project!number, or a GitLab merge request or issue link.",
             "ambiguous": "GitLab numbers merge requests and issues separately. Write !12 (merge request) or #12 (issue), or paste a link.",
             "needs-link": "A specific merge request needs its GitLab instance. Paste the merge request link.",
-            "needs-account": "This is an issue. A specific GitLab issue requires a Cindy account to receive GitLab webhooks."
+            "needs-account": "This is an issue. A specific GitLab issue requires the GitLab plugin, or a Cindy account to receive GitLab webhooks."
           },
           "mrChange": {
             "any": "Merge request activity",
@@ -18082,9 +18085,18 @@
           },
           "issueChange": {
             "any": "Issue changes",
+            "comment": "New issue comment",
             "closed": "Issue closed",
             "reopened": "Issue reopened"
           }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "Project",
+          "projectHint": "Enter group/project or a project link. Paste a link if the GitLab plugin connects to more than one instance.",
+          "projectInvalid": "Enter group/project or an https project link.",
+          "eventsLabel": "Events",
+          "eventsHint": "Leave all unchecked to respond to every event in this project.",
+          "unavailable": "The GitLab plugin is not installed or is turned off. Turn it on in Plugins, then save."
         }
       },
       "trigger": {

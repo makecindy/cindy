@@ -1,5 +1,6 @@
 import { readGithubTokenDetailed } from './githubToken.desktop.js';
 import { glabCliTokenSource } from './glabCliTokenSource';
+import { createGitlabTokenChain, gitlabPluginToken } from './gitlabTokenChain';
 import { fetchGitlabMr } from './gitlabPrSummary';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { setGithubReadRuntime } from './githubReadRuntime';
@@ -195,13 +196,18 @@ export async function refreshSchedulePr(url: string): Promise<void> {
   // GitHub PR or GitLab MR: the same host-qualified identity the status reader and follow watcher use.
   const identity = parseSessionPrUrl(url);
   if (!identity) throw new Error('PR_VERIFICATION_FAILED');
-  const { url: _url, ...query } = identity;
+  // The status reader keys on the identity only; the original link is not part of it.
+  const { url: link, ...query } = identity;
+  void link;
   const [result] = await prStatusService.getStatuses([query], { waitForFresh: true, refresh: true });
   if (!result?.ok) {
     // The run history shows this message: say what the user can fix, keep the stable code first.
     const reason = (result as { reason?: unknown } | undefined)?.reason;
-    const hint = reason === 'glab-missing' ? 'GitLab CLI (glab) is not installed on this computer'
-      : reason === 'glab-not-logged-in' ? `glab is not signed in to ${query.host ?? 'this GitLab instance'}`
+    const host = query.host ?? 'this GitLab instance';
+    const hint = reason === 'glab-missing'
+      ? `no GitLab account for ${host}: glab is not installed and the GitLab plugin has no connection for it`
+      : reason === 'glab-not-logged-in'
+        ? `no GitLab account for ${host}: glab is not signed in and the GitLab plugin has no connection for it`
       : typeof reason === 'string' ? reason : undefined;
     throw new Error(hint ? `PR_VERIFICATION_FAILED: ${hint}` : 'PR_VERIFICATION_FAILED');
   }
@@ -244,15 +250,17 @@ export async function readGithub(
 
 /** main 启动期注册(bootstrap-electron 调一次)。 */
 export function registerGitContextIpc(): void {
+  const gitlabTokens = createGitlabTokenChain({ glab: glabCliTokenSource, pluginToken: gitlabPluginToken });
   gitContextService = new GitContextService({
     onChanged: (snapshot) => broadcastToAllWindows(GIT_CONTEXT_PUSH.CHANGED, snapshot),
   });
   prStatusService = new PrStatusService({
     readToken: readGithubToken,
-    readGitlabToken: (host) => glabCliTokenSource.readTokenDetailed(host),
+    // Local glab first, then the account connected for the same instance in the GitLab plugin.
+    readGitlabToken: (host) => gitlabTokens.readTokenDetailed(host),
     fetchGitlab: (token, query) => fetchGitlabMr(token, query, outboundFetch),
-    rejectGitlabToken: (host) => glabCliTokenSource.rejectToken(host),
-    invalidateGitlabTokenFailures: () => glabCliTokenSource.invalidateNegativeCache(),
+    rejectGitlabToken: (host) => gitlabTokens.rejectToken(host),
+    invalidateGitlabTokenFailures: () => gitlabTokens.invalidateNegativeCache(),
     scope: githubReadScope,
     fetchPr: fetchPrRemote,
     // The renderer keeps its last value while awaiting fresh counts; no delayed second tick.

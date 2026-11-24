@@ -148,3 +148,93 @@ export function gitlabIssueChangeFromEvents(events: readonly string[] | undefine
   const key = [...new Set(events ?? [])].sort().join(',');
   return GITLAB_ISSUE_CHANGES.find((change) => [...GITLAB_ISSUE_CHANGE_EVENTS[change]].sort().join(',') === key) ?? null;
 }
+
+/*
+ * GitLab 插件做事件来源（2026-11-24）：GitLab 不推送到本机，官方 GitLab 插件用自己连好的账号轮询
+ * 自动化订阅的项目或 Issue，再把变化作为插件事件发布。表单把「通过 GitLab 插件」保存成一个插件来源，
+ * 条件写成插件事件字段（host / project / iid / kind）的 equals 条件；这里负责两边互转。
+ */
+
+/** GitLab 插件的安装身份：官方安装为 cindy-gitlab，命名空间安装（如本机开发版）以 __cindy-gitlab 结尾。 */
+export function isGitlabPluginId(id: string): boolean {
+  return /(^|[/:]|__)cindy-gitlab$/.test(id);
+}
+
+/** group/project 或项目链接（可带 /-/ 后的页面路径）；链接给出实例地址。 */
+export function parseGitlabProjectReference(input: string): { host?: string; project: string } | null {
+  const text = input.trim().replace(/\/+$/, '');
+  if (!text) return null;
+  const valid = (project: string) => GITLAB_PROJECT.test(project) && !project.split('/').some((part) => part === '.' || part === '..');
+  if (!/^https?:\/\//i.test(text)) return !text.includes(':') && valid(text) ? { project: text.toLowerCase() } : null;
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.port || url.username || url.password || !GITLAB_HOST.test(url.hostname)) return null;
+  const project = url.pathname.replace(/^\/+/, '').replace(/\/-(?:\/.*)?$/, '').replace(/\/+$/, '').replace(/\.git$/i, '');
+  return valid(project) ? { host: url.hostname.toLowerCase(), project: project.toLowerCase() } : null;
+}
+
+/** 通过插件指定 Issue 时的条件：插件能区分 Issue 的评论，所以比 Webhook 多一个「有新评论」。 */
+export const GITLAB_PLUGIN_ISSUE_CHANGES = ['any', 'comment', 'closed', 'reopened'] as const;
+export type GitlabPluginIssueChange = (typeof GITLAB_PLUGIN_ISSUE_CHANGES)[number];
+
+const GITLAB_PLUGIN_ISSUE_EVENTS: Record<GitlabPluginIssueChange, readonly string[]> = {
+  any: ['issue.updated', 'issue.comment', 'issue.closed', 'issue.reopened'],
+  comment: ['issue.comment'],
+  closed: ['issue.closed'],
+  reopened: ['issue.reopened'],
+};
+
+export function gitlabPluginIssueChangeEvents(change: GitlabPluginIssueChange): string[] {
+  return [...GITLAB_PLUGIN_ISSUE_EVENTS[change]];
+}
+
+export function gitlabPluginIssueChangeFromEvents(events: readonly string[] | undefined): GitlabPluginIssueChange | null {
+  const key = [...new Set(events ?? [])].sort().join(',');
+  return GITLAB_PLUGIN_ISSUE_CHANGES.find((change) => [...GITLAB_PLUGIN_ISSUE_EVENTS[change]].sort().join(',') === key) ?? null;
+}
+
+/** 表单里「通过 GitLab 插件」的范围：整个项目（events 为所选事件，空表示全部）或项目里的一个 Issue。 */
+export interface GitlabPluginScope {
+  plugin: string;
+  host?: string;
+  project: string;
+  issue?: number;
+  events: string[];
+}
+
+export function gitlabPluginSource(scope: GitlabPluginScope): { plugin: string; events?: string[]; filters: Array<{ field: string; operator: 'equals'; value: string }> } {
+  const filters: Array<{ field: string; operator: 'equals'; value: string }> = [];
+  if (scope.host) filters.push({ field: 'host', operator: 'equals', value: scope.host.toLowerCase() });
+  filters.push({ field: 'project', operator: 'equals', value: scope.project.toLowerCase() });
+  if (scope.issue !== undefined) {
+    filters.push({ field: 'iid', operator: 'equals', value: String(scope.issue) });
+    filters.push({ field: 'kind', operator: 'equals', value: 'issue' });
+  }
+  return { plugin: scope.plugin, ...(scope.events.length ? { events: [...scope.events] } : {}), filters };
+}
+
+/** 能按「通过 GitLab 插件」表单还原的插件来源；Agent 写的其他组合返回 null，按普通插件来源显示。 */
+export function gitlabPluginScopeFromSource(
+  sources: ReadonlyArray<{ plugin: string; events?: readonly string[]; filters?: ReadonlyArray<{ field: string; operator: string; value: string }> }>,
+): GitlabPluginScope | null {
+  if (sources.length !== 1 || !isGitlabPluginId(sources[0]!.plugin)) return null;
+  const source = sources[0]!;
+  const values: Record<string, string> = {};
+  for (const filter of source.filters ?? []) {
+    if (filter.operator !== 'equals' || !['host', 'project', 'iid', 'kind'].includes(filter.field) || filter.field in values) return null;
+    values[filter.field] = filter.value;
+  }
+  const project = values.project !== undefined ? parseGitlabProjectReference(values.project) : null;
+  if (!project || project.host || (values.host !== undefined && !GITLAB_HOST.test(values.host))) return null;
+  const events = [...(source.events ?? [])];
+  if (values.iid === undefined && values.kind === undefined) {
+    return { plugin: source.plugin, ...(values.host ? { host: values.host } : {}), project: project.project, events };
+  }
+  const issue = values.iid !== undefined ? positive(values.iid) : null;
+  if (values.kind !== 'issue' || !issue || String(issue) !== values.iid) return null;
+  return { plugin: source.plugin, ...(values.host ? { host: values.host } : {}), project: project.project, issue, events };
+}

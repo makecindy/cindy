@@ -48,12 +48,16 @@ IM 机器人是对话入口：有人找机器人，就开或续一个对话。�
 
 ### 插件侧：复用存量声明与管子
 
-- 沿用 `routineEvents` 声明和 `routine-request`（`cindy.routines.request`）的 `status` / `publish`。
+- 沿用 `routineEvents` 声明和 `routine-request`（`cindy.routines.request`）的 `status` / `publish`，另加只读的 `subscriptions`。
   已安装插件的这项能力已在安装批准里，升级后不重装、不重新确认，符合存量插件兼容红线。
 - 校验与限额沿用 V1：来源由宿主从真实插件身份派生（`plugin:<安装身份>`，与前置检查的 pluginId 相同）、
   只接受声明过的事件类型、`data` 平坦且至多 32000 字符、128 KiB 请求预算、固定失败文案。频率限制
   （`RoutineEventAdmission`，单插件 60 次／分钟、全宿主 240 次）对发布与状态上报分开计数，在解析事件和落盘前执行；
   这一层在空操作期间缺失，本次补回。
+- `subscriptions`（2026-11-24 新增，只读）返回 `{ok:true, subscriptions:[{events?, filters?}]}`：启用、未过期的
+  自动化给这个插件选的事件类型与「只看」条件，相同组合去重，单插件至多 200 条；不含自动化身份、名称、提示词
+  或其他插件的订阅。给需要轮询的插件（GitLab 没有推送）只盯被选中的对象用；匹配仍由宿主按完整条件执行。
+  与状态上报共用频率额度。
 - `publish` 返回 `{ok:true, accepted, duplicate}`：`accepted` 是实际持久入队的自动化数（0 表示没有自动化
   选了它或宿主未运行，插件无需重试）；`duplicate` 表示所有匹配的自动化都已收过这条投递。写入失败返回
   可重试的固定文案。

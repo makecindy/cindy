@@ -12,7 +12,7 @@ import {
   ScheduleWebhookQueue,
   isManagedWebhookSource,
   sameManagedWebhookScope,
-  subscribedEventPlugins,
+  pluginEventSubscriptions,
   toPluginWebhookEvent,
   type PluginPublishedEvent,
   scheduleWebhookEventMatches,
@@ -32,7 +32,7 @@ import type { GithubAppStatus } from './github';
 import {
   pluginEventSourceStatus,
   setPluginEventSink,
-  setSubscribedEventPlugins,
+  setPluginEventSubscriptions,
   type PluginEventPublishResult,
   type PluginEventSourceStatus,
 } from './pluginEvents.js';
@@ -467,7 +467,7 @@ export class ScheduleWebhookHost {
       await this.queue.forget(schedule.id);
     }
     this.byEndpoint = next;
-    if (this.releasePluginEvents) setSubscribedEventPlugins(subscribedEventPlugins(schedules));
+    if (this.releasePluginEvents) setPluginEventSubscriptions(pluginEventSubscriptions(schedules));
     if (this.options.local) {
       const addressable = [...next.values()].some((schedule) => !isManagedWebhookSource(schedule.webhookTrigger?.source));
       if (addressable) await this.openServer();

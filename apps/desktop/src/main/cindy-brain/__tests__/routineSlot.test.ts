@@ -9,7 +9,12 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { handleRoutineRequest } from '../routineSlot.js';
-import { pluginEventSourceStatus, resetPluginEventsForTest, setPluginEventSink } from '../../scheduler-host/webhook/pluginEvents.js';
+import {
+  pluginEventSourceStatus,
+  resetPluginEventsForTest,
+  setPluginEventSink,
+  setPluginEventSubscriptions,
+} from '../../scheduler-host/webhook/pluginEvents.js';
 
 const warn = vi.hoisted(() => vi.fn());
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn }) }));
@@ -43,6 +48,21 @@ it('hands declared events to automations under the host-derived source and recor
   // A failed durable write is retryable and never leaks the underlying error to the plugin.
   sink.mockRejectedValueOnce(new Error('/private/path EIO'));
   expect(await handleRoutineRequest(ghost, publish, () => true)).toEqual({ ok: false, message: 'Routine request failed; please retry later' });
+});
+
+it('tells a plugin only its own subscriptions, so it can watch just the chosen objects', async () => {
+  const plugin = installedGhostStoragePart(ghost);
+  const subscriptions = { subscriptions: { action: 'subscriptions' } }.subscriptions;
+  expect(await handleRoutineRequest(ghost, subscriptions, () => true)).toEqual({ ok: true, subscriptions: [] });
+  setPluginEventSubscriptions(new Map([
+    [plugin, [{ events: ['new'], filters: [{ field: 'label', operator: 'equals', value: 'inbox' }] }]],
+    ['someone-else', [{ events: ['secret'] }]],
+  ]));
+  expect(await handleRoutineRequest(ghost, subscriptions, () => true)).toEqual({
+    ok: true,
+    subscriptions: [{ events: ['new'], filters: [{ field: 'label', operator: 'equals', value: 'inbox' }] }],
+  });
+  expect(await handleRoutineRequest(ghost, subscriptions, () => false)).toEqual({ ok: false, message: 'Plugin owner or installation changed' });
 });
 
 it('rate-limits publishing per plugin before events reach the queue', async () => {

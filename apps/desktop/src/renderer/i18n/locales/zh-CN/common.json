@@ -17148,8 +17148,8 @@
           }
         },
         "gitlab": {
-          "missing": "未检测到 GitLab CLI（glab），看不到 MR 状态。安装 glab 并登录后即可显示。",
-          "notLoggedIn": "本机 glab 尚未登录 {{host}}，看不到 MR 状态。在终端运行 glab auth login 登录后即可显示。",
+          "missing": "未检测到 GitLab CLI（glab），GitLab 插件里也没有这个实例的连接，看不到 MR 状态。安装并登录 glab，或在 GitLab 插件里添加该实例后即可显示。",
+          "notLoggedIn": "本机 glab 尚未登录 {{host}}，GitLab 插件里也没有这个实例的连接，看不到 MR 状态。在终端运行 glab auth login，或在 GitLab 插件里添加该实例后即可显示。",
           "unsupported": "此电脑暂不支持 GitLab MR 状态",
           "openAria": "在浏览器中打开 MR !{{number}}",
           "summaryAria": "MR !{{number}} 汇总",
@@ -17986,19 +17986,22 @@
         "gitlabSignedConnectionHint": "在 GitLab 项目的 Webhook 设置里使用签名令牌，安全性更高。",
         "gitlabTokenConnection": "Secret token",
         "gitlabTokenConnectionHint": "适用于较早版本的 GitLab：在 Webhook 设置里填写 Secret token。",
+        "gitlabPluginConnection": "通过 GitLab 插件",
+        "gitlabPluginConnectionHint": "用 GitLab 插件里连好的账号每分钟检查一次，不用在 GitLab 配置 Webhook，也不需要登录 Cindy 账号。电脑休眠或关机期间的变化不会补发。",
         "gitlabSetupHint": "保存后在任务详情里拿到接收地址和密钥，填到 GitLab 项目的「设置 › Webhooks」。",
         "gitlabItem": {
           "label": "MR 或 Issue",
           "placeholder": "!12、#12、group/project!12 或链接",
           "hint": "MR 写 !编号，Issue 写 #编号，也可以直接粘贴链接。",
           "required": "请填写要盯的 MR 或 Issue。",
-          "mrHint": "GitLab 没有推送通知，Cindy 会按「同时定时检查」的时间读取 MR 状态（不运行任务），需要这台电脑的 glab 已登录。",
+          "mrHint": "GitLab 没有推送通知，Cindy 会按「同时定时检查」的时间读取 MR 状态（不运行任务），使用这台电脑的 glab 登录，或 GitLab 插件里连好的账号。",
           "issueHint": "通过 GitLab Webhook 接收这个 Issue 的变化。评论事件无法区分 MR 和 Issue，所以只响应 Issue 本身的新建、编辑、关闭和重新打开。",
+          "issuePluginHint": "GitLab 插件每分钟检查一次这个 Issue，包括新评论。",
           "errors": {
             "invalid": "请按 !12（MR）、#12（Issue）或 group/project!12 的格式填写，也可以粘贴 GitLab 上的链接。",
             "ambiguous": "GitLab 的 MR 和 Issue 编号是分开的，请写 !12（MR）或 #12（Issue），或粘贴链接。",
             "needs-link": "指定 MR 需要知道 GitLab 实例，请粘贴 MR 链接。",
-            "needs-account": "这是一个 Issue。指定 GitLab Issue 需要登录 Cindy 账号，以便接收 GitLab Webhook。"
+            "needs-account": "这是一个 Issue。指定 GitLab Issue 需要安装 GitLab 插件，或登录 Cindy 账号以接收 GitLab Webhook。"
           },
           "mrChange": {
             "any": "MR 有新动态",
@@ -18008,9 +18011,18 @@
           },
           "issueChange": {
             "any": "Issue 有变化",
+            "comment": "Issue 有新评论",
             "closed": "Issue 已关闭",
             "reopened": "Issue 重新打开"
           }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "项目",
+          "projectHint": "填 group/project 或项目链接。GitLab 插件连接了多个实例时，请粘贴链接。",
+          "projectInvalid": "请填写 group/project 或 https 开头的项目链接。",
+          "eventsLabel": "事件",
+          "eventsHint": "都不勾表示响应这个项目的全部事件。",
+          "unavailable": "GitLab 插件未安装或已停用，请在「插件」里启用后再保存。"
         }
       },
       "trigger": {

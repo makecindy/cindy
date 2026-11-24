@@ -1,7 +1,7 @@
 /**
  * GitlabItemFields — GitLab「指定 MR 或 Issue」：一个输入框。GitLab 的 MR（!N）和 Issue（#N）编号各自独立，
  * 所以靠链接或前缀区分，不需要向服务器查询。MR 按状态变化触发（存为 prTrigger，靠定时检查读取状态）；
- * Issue 按 GitLab Webhook 事件触发（地址型发送方加项目与编号筛选）。
+ * Issue 按 GitLab Webhook 事件触发（地址型发送方加项目与编号筛选），或通过 GitLab 插件轮询（插件来源加条件）。
  * 规则见 docs/product-rules/schedule-webhook-trigger.md。颜色只用语义 token，Light / Dark 自动适配。
  */
 import { useEffect, useRef } from 'react';
@@ -12,8 +12,10 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import {
   GITLAB_ISSUE_CHANGES,
+  GITLAB_PLUGIN_ISSUE_CHANGES,
   parseGitlabItemReference,
   type GitlabIssueChange,
+  type GitlabPluginIssueChange,
   type GitlabItemReference,
 } from '@cindy/maker-scheduler/github-item';
 import { PR_CHANGES, type PrChange } from '@cindy/maker-scheduler/pr-trigger';
@@ -31,7 +33,7 @@ export function gitlabItemProblem(
   if (!reference) return /^\d+$/.test(text.trim()) ? 'ambiguous' : 'invalid';
   // An MR's state is read from its instance, so the host must be known (from a link).
   if (reference.kind === 'mr' && !reference.host) return 'needs-link';
-  // An issue arrives through this computer's GitLab Webhook address.
+  // An issue arrives through this computer's GitLab Webhook address or the GitLab plugin.
   if (reference.kind === 'issue' && !addressAvailable) return 'needs-account';
   return null;
 }
@@ -42,8 +44,12 @@ export interface GitlabItemFieldsProps {
   known?: { host?: string; project: string };
   prChange: PrChange;
   issueChange?: GitlabIssueChange;
-  /** 这台电脑能接收 Webhook 地址（已登录 Cindy）；Issue 需要它，MR 不需要。 */
+  /** Issue 能收到事件：这台电脑能接收 Webhook 地址（已登录 Cindy），或装了 GitLab 插件；MR 不需要。 */
   addressAvailable: boolean;
+  /** Issue 通过 GitLab 插件接收：条件多一个「有新评论」。 */
+  viaPlugin?: boolean;
+  pluginIssueChange?: GitlabPluginIssueChange;
+  onPluginIssueChange?(change: GitlabPluginIssueChange): void;
   /** 表单里已经按当前输入保存了 MR / Issue（打开已有任务时）；为 false 时挂载后立即应用一次。 */
   applied: boolean;
   onTextChange(text: string): void;
@@ -59,6 +65,9 @@ export function GitlabItemFields({
   prChange,
   issueChange,
   addressAvailable,
+  viaPlugin = false,
+  pluginIssueChange,
+  onPluginIssueChange,
   applied,
   onTextChange,
   onResolved,
@@ -112,7 +121,17 @@ export function GitlabItemFields({
           <p className={hintClass}>{t('scheduler.editor.webhook.gitlabItem.mrHint')}</p>
         </>
       )}
-      {usable?.kind === 'issue' && (
+      {usable?.kind === 'issue' && viaPlugin && (
+        <>
+          <FormField label={t('scheduler.prTrigger.condition')}>
+            {(control) => <Select {...control} label={t('scheduler.prTrigger.condition')} value={pluginIssueChange ?? 'any'}
+              options={GITLAB_PLUGIN_ISSUE_CHANGES.map((value) => ({ value, label: t(`scheduler.editor.webhook.gitlabItem.issueChange.${value}`) }))}
+              onValueChange={(value) => onPluginIssueChange?.(value as GitlabPluginIssueChange)} />}
+          </FormField>
+          <p className={hintClass}>{t('scheduler.editor.webhook.gitlabItem.issuePluginHint')}</p>
+        </>
+      )}
+      {usable?.kind === 'issue' && !viaPlugin && (
         <>
           <FormField label={t('scheduler.prTrigger.condition')}>
             {(control) => <Select {...control} label={t('scheduler.prTrigger.condition')} value={issueChange ?? 'any'}

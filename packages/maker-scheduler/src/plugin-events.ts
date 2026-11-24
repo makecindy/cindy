@@ -164,18 +164,50 @@ export function toPluginWebhookEvent(plugin: string, event: PluginPublishedEvent
   };
 }
 
-/** 至少有一个启用中的自动化订阅了哪些插件：宿主据此决定保持哪些插件在监听。 */
-export function subscribedEventPlugins(schedules: ReadonlyArray<{
+type SubscribingSchedule = {
   status: string;
   expireAt?: number;
   webhookTrigger?: { source?: { preset: string; sources?: readonly SchedulePluginEventSource[] } };
-}>, now = Date.now()): Set<string> {
-  const plugins = new Set<string>();
+};
+
+/** 插件看到的一条订阅：只有事件类型与条件，不含自动化身份、名称或提示词。 */
+export interface PluginEventSubscription {
+  events?: string[];
+  filters?: SchedulePluginEventFilter[];
+}
+
+/** 每个插件最多返回多少条去重后的订阅。 */
+export const PLUGIN_EVENT_SUBSCRIPTIONS_PER_PLUGIN = 200;
+
+/**
+ * 启用中的自动化按插件汇总的订阅（相同的事件与条件只保留一条）。插件可据此只去盯被订阅的对象，
+ * 例如 GitLab 插件只轮询自动化选中的项目或 MR；要不要处理仍由自动化决定。
+ */
+export function pluginEventSubscriptions(schedules: readonly SubscribingSchedule[], now = Date.now()): Map<string, PluginEventSubscription[]> {
+  const result = new Map<string, PluginEventSubscription[]>();
+  const seen = new Map<string, Set<string>>();
   for (const schedule of schedules) {
     const source = schedule.webhookTrigger?.source;
     if (schedule.status !== 'active' || (schedule.expireAt !== undefined && schedule.expireAt <= now)) continue;
     if (source?.preset !== 'plugin') continue;
-    for (const item of source.sources ?? []) plugins.add(item.plugin);
+    for (const item of source.sources ?? []) {
+      const list = result.get(item.plugin) ?? [];
+      const keys = seen.get(item.plugin) ?? new Set<string>();
+      result.set(item.plugin, list);
+      seen.set(item.plugin, keys);
+      const events = [...new Set(item.events ?? [])].sort();
+      const filters = (item.filters ?? []).map((filter) => ({ field: filter.field, operator: filter.operator, value: filter.value }))
+        .sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y)));
+      const key = JSON.stringify([events, filters]);
+      if (keys.has(key) || list.length >= PLUGIN_EVENT_SUBSCRIPTIONS_PER_PLUGIN) continue;
+      keys.add(key);
+      list.push({ ...(events.length ? { events } : {}), ...(filters.length ? { filters } : {}) });
+    }
   }
-  return plugins;
+  return result;
+}
+
+/** 至少有一个启用中的自动化订阅了哪些插件：宿主据此决定保持哪些插件在监听。 */
+export function subscribedEventPlugins(schedules: readonly SubscribingSchedule[], now = Date.now()): Set<string> {
+  return new Set(pluginEventSubscriptions(schedules, now).keys());
 }

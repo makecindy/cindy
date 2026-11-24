@@ -44,7 +44,8 @@ import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 import { WebhookSourceFields } from './WebhookSourceFields';
 import { GithubItemFields } from './GithubItemFields';
 import { GitlabItemFields } from './GitlabItemFields';
-import { githubItemUrl, gitlabItemUrl } from '@cindy/maker-scheduler/github-item';
+import { GitlabPluginProjectFields } from './GitlabPluginProjectFields';
+import { githubItemUrl, gitlabItemUrl, isGitlabPluginId } from '@cindy/maker-scheduler/github-item';
 import { isGithubPrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
 import { usePluginEventSources } from './PluginEventSourceFields';
 import { WebhookAccountManager } from './WebhookAccountManager';
@@ -177,6 +178,8 @@ export function ScheduleFormDialog({
   // 插件事件只在本机交接，不需要账号；未登录时「事件」优先提供插件事件，否则提供指定 PR。
   const pluginEventCandidates = usePluginEventSources();
   const pluginEventsAvailable = (pluginEventCandidates?.length ?? 0) > 0;
+  // The official GitLab plugin can be GitLab's connection: it polls with its own account, no Webhook address needed.
+  const gitlabPluginCandidate = pluginEventCandidates?.find((candidate) => isGitlabPluginId(candidate.plugin)) ?? null;
   const { form, setField, selectModelConfiguration, selectPluginEngine, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
@@ -349,7 +352,14 @@ export function ScheduleFormDialog({
   const githubItemScope = (!!form.prEnabled && !prIsGitlab) || form.webhookPreset === 'github-item'
     || (form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined);
   const gitlabItemScope = prIsGitlab || form.webhookPreset === 'gitlab-item'
-    || ((form.webhookPreset === 'gitlab' || form.webhookPreset === 'gitlab-token') && form.gitlabItemNumber !== undefined);
+    || ((form.webhookPreset === 'gitlab' || form.webhookPreset === 'gitlab-token' || form.webhookPreset === 'gitlab-plugin')
+      && form.gitlabItemNumber !== undefined);
+  const chooseWebhookPreset = (value: string) => {
+    setField('webhookPreset', value);
+    if (value === 'gitlab-plugin' && gitlabPluginCandidate && form.gitlabPluginId !== gitlabPluginCandidate.plugin) {
+      setField('gitlabPluginId', gitlabPluginCandidate.plugin);
+    }
+  };
   const itemScope = githubItemScope || gitlabItemScope;
   const githubItemDefaultRepository = form.githubItemRepository
     || (() => { const repositories = parseGithubRepositories(form.webhookRepositories); return repositories.length === 1 ? repositories[0] : undefined; })();
@@ -369,7 +379,7 @@ export function ScheduleFormDialog({
   };
   // Address-based senders still need an account; a saved one stays hidden (and preserved) while signed out.
   const webhookSettingsVisible = !isProjectAutomationMode && form.webhookEnabled
-    && (webhookReceiverReady || form.webhookPreset === 'plugin');
+    && (webhookReceiverReady || form.webhookPreset === 'plugin' || form.webhookPreset === 'gitlab-plugin');
 
   const initialId = initial?.id;
   useEffect(() => {
@@ -1343,6 +1353,7 @@ export function ScheduleFormDialog({
                       </div>
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
                       {webhookSettingsVisible && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
+                        && form.webhookPreset !== 'gitlab-plugin'
                         && (!itemScope || (gitlabItemScope && form.gitlabItemNumber !== undefined))
                         && <WebhookAccountManager allowOpenSchedule={false} />}
                       {eventMode && (webhookSettingsVisible || itemScope) && (
@@ -1353,11 +1364,11 @@ export function ScheduleFormDialog({
                             itemScope={itemScope}
                             itemNeedsConnection={gitlabItemScope && form.gitlabItemNumber !== undefined}
                             onConnectionChange={(value) => {
-                              // A GitLab issue keeps its project and number while switching the signing method.
-                              if (gitlabItemScope && form.gitlabItemNumber !== undefined) setField('webhookPreset', value);
+                              // A GitLab issue keeps its project and number while switching how it is received.
+                              if (gitlabItemScope && form.gitlabItemNumber !== undefined) chooseWebhookPreset(value);
                               else {
                                 leaveItemScope();
-                                setField('webhookPreset', value);
+                                chooseWebhookPreset(value);
                               }
                             }}
                             signed={form.webhookSigned !== false}
@@ -1387,7 +1398,7 @@ export function ScheduleFormDialog({
                                 );
                                 setField('webhookFormat', JSON.stringify(format, null, 2));
                               }
-                              setField('webhookPreset', value);
+                              chooseWebhookPreset(value);
                             }}
                             onSignedChange={(value) => setField('webhookSigned', value)}
                             onFormatChange={(value) => setField('webhookFormat', value)}
@@ -1395,13 +1406,26 @@ export function ScheduleFormDialog({
                             pluginCandidates={pluginEventCandidates}
                             onPluginSourcesChange={(value) => setField('webhookPluginSources', value)}
                             addressSourcesAvailable={webhookReceiverReady}
+                            gitlabPluginAvailable={!!gitlabPluginCandidate}
+                            gitlabPluginFields={
+                              <GitlabPluginProjectFields
+                                project={form.gitlabPluginProject ?? ''}
+                                events={form.gitlabPluginEvents ?? []}
+                                candidate={gitlabPluginCandidate}
+                                onProjectChange={(value) => setField('gitlabPluginProject', value)}
+                                onEventsChange={(value) => setField('gitlabPluginEvents', value)}
+                              />
+                            }
                             itemFields={gitlabItemScope ? (
                               <GitlabItemFields
                                 text={form.gitlabItem ?? ''}
                                 known={form.gitlabItemProject ? { host: form.gitlabItemHost, project: form.gitlabItemProject } : undefined}
                                 prChange={form.prChange ?? 'any'}
                                 issueChange={form.gitlabIssueChange}
-                                addressAvailable={webhookReceiverReady}
+                                addressAvailable={webhookReceiverReady || !!gitlabPluginCandidate}
+                                viaPlugin={form.webhookPreset === 'gitlab-plugin'}
+                                pluginIssueChange={form.gitlabPluginIssueChange}
+                                onPluginIssueChange={(value) => setField('gitlabPluginIssueChange', value)}
                                 applied={prIsGitlab || form.gitlabItemNumber !== undefined}
                                 onTextChange={(value) => setField('gitlabItem', value)}
                                 onResolved={(item) => {
@@ -1424,9 +1448,13 @@ export function ScheduleFormDialog({
                                   }
                                   if (form.prEnabled) setField('prEnabled', false);
                                   setField('webhookEnabled', true);
-                                  setField('webhookPreset', form.webhookPreset === 'gitlab-token' ? 'gitlab-token' : 'gitlab');
+                                  // Issues prefer the GitLab plugin (no Webhook setup) when it is installed.
+                                  const keep = form.webhookPreset === 'gitlab' || form.webhookPreset === 'gitlab-token'
+                                    || form.webhookPreset === 'gitlab-plugin' ? form.webhookPreset : null;
+                                  chooseWebhookPreset(keep ?? (gitlabPluginCandidate ? 'gitlab-plugin' : 'gitlab'));
                                   setField('gitlabItemNumber', item.number);
                                   if (!form.gitlabIssueChange) setField('gitlabIssueChange', 'any');
+                                  if (!form.gitlabPluginIssueChange) setField('gitlabPluginIssueChange', 'any');
                                 }}
                                 onUnresolved={enterGitlabItemPending}
                                 onPrChange={(value) => setField('prChange', value)}

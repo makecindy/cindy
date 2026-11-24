@@ -410,6 +410,65 @@ it.each([
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining(expected), true));
 });
 
+// 2026-11-24: with the GitLab plugin installed, GitLab works without a Cindy account or Webhook setup:
+// a whole project or a specific issue is saved as the GitLab plugin's event source with conditions.
+describe('GitLab through the GitLab plugin', () => {
+  const gitlabPlugin = () => {
+    const listEventSources = vi.fn(async () => [{ plugin: 'cindy-gitlab', name: 'GitLab', state: 'listening', events: [
+      { type: 'merge_request.merged', name: 'MR merged', fields: ['project'] },
+      { type: 'issue.comment', name: 'Issue comment', fields: ['project'] },
+    ] }]);
+    vi.stubGlobal('electronAPI', {
+      maker: { schedule: { webhookReceiver: async () => 'signed-out' } },
+      ghosts: { listEventSources, onChanged: () => () => undefined },
+    });
+    return listEventSources;
+  };
+  const chooseGitlab = async (listEventSources: ReturnType<typeof gitlabPlugin>) => {
+    const trigger = await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' });
+    await waitFor(() => expect(listEventSources).toHaveBeenCalled());
+    await act(async () => { await listEventSources.mock.results[0]!.value; });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('combobox', { name: 'scheduler.editor.webhook.sourceLabel' }));
+    fireEvent.click(screen.getByRole('option', { name: 'GitLab' }));
+  };
+
+  it('watches a whole project while signed out', async () => {
+    const listEventSources = gitlabPlugin();
+    const form = mount(schedule());
+    await chooseGitlab(listEventSources);
+    expect((screen.getByRole('radio', { name: 'scheduler.editor.webhook.gitlabPluginConnection' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.gitlabPlugin.projectLabel' }),
+      { target: { value: 'https://git.example.com/Group/App' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'MR merged' }));
+    form.save();
+    await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+      webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.merged'], filters: [
+        { field: 'host', operator: 'equals', value: 'git.example.com' },
+        { field: 'project', operator: 'equals', value: 'group/app' },
+      ] }] } },
+    }), true));
+  });
+
+  it('watches one issue, including new comments', async () => {
+    const listEventSources = gitlabPlugin();
+    const form = mount(schedule());
+    await chooseGitlab(listEventSources);
+    fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.gitlabItem' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.gitlabItem.label' }), { target: { value: 'group/app#3' } });
+    fireEvent.click(await screen.findByRole('combobox', { name: 'scheduler.prTrigger.condition' }));
+    fireEvent.click(screen.getByRole('option', { name: 'scheduler.editor.webhook.gitlabItem.issueChange.comment' }));
+    form.save();
+    await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+      webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'cindy-gitlab', events: ['issue.comment'], filters: [
+        { field: 'project', operator: 'equals', value: 'group/app' },
+        { field: 'iid', operator: 'equals', value: '3' },
+        { field: 'kind', operator: 'equals', value: 'issue' },
+      ] }] } },
+    }), true));
+  });
+});
+
 it('asks for a sigil when a GitLab item is only a number', async () => {
   const form = mount(schedule({}));
   fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));

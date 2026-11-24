@@ -35,9 +35,15 @@ import {
   githubItemUrl,
   gitlabIssueChangeEvents,
   gitlabIssueChangeFromEvents,
+  gitlabPluginIssueChangeEvents,
+  gitlabPluginIssueChangeFromEvents,
+  gitlabPluginScopeFromSource,
+  gitlabPluginSource,
   issueChangeEvents,
   issueChangeFromEvents,
+  parseGitlabProjectReference,
   type GitlabIssueChange,
+  type GitlabPluginIssueChange,
   type IssueChange,
 } from '@cindy/maker-scheduler/github-item';
 import { parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
@@ -196,6 +202,14 @@ export interface ScheduleFormState {
   /** 识别为 Issue 时的编号；为空表示不是指定 GitLab Issue。 */
   gitlabItemNumber?: number;
   gitlabIssueChange?: GitlabIssueChange;
+  /**
+   * 「通过 GitLab 插件」（webhookPreset=gitlab-plugin，保存为插件来源）：插件安装身份、整个项目时的项目原文
+   * 与所选事件（空表示全部）；指定 Issue 时用 gitlabItem* 字段，条件存在 gitlabPluginIssueChange。
+   */
+  gitlabPluginId?: string;
+  gitlabPluginProject?: string;
+  gitlabPluginEvents?: string[];
+  gitlabPluginIssueChange?: GitlabPluginIssueChange;
   agentKind: 'claude-code' | 'codex' | 'pi';
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
   /**
@@ -685,7 +699,8 @@ export function webhookSourceFormFields(
   events?: readonly string[],
 ): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat' | 'webhookRepositories' | 'webhookPluginSources'
   | 'githubItem' | 'githubItemRepository' | 'githubItemNumber' | 'issueChange'
-  | 'gitlabItem' | 'gitlabItemProject' | 'gitlabItemNumber' | 'gitlabIssueChange'> {
+  | 'gitlabItem' | 'gitlabItemHost' | 'gitlabItemProject' | 'gitlabItemNumber' | 'gitlabIssueChange'
+  | 'gitlabPluginId' | 'gitlabPluginProject' | 'gitlabPluginEvents' | 'gitlabPluginIssueChange'> {
   if (source?.preset === 'github-app' && source.number !== undefined) {
     const repository = source.repositories[0] ?? '';
     const change = issueChangeFromEvents(events);
@@ -694,6 +709,21 @@ export function webhookSourceFormFields(
       githubItemNumber: source.number, ...(change ? { issueChange: change } : {}) };
   }
   if (source?.preset === 'plugin') {
+    // Saved from「通过 GitLab 插件」: reopen it as GitLab; any other combination stays a plain plugin source.
+    const gitlab = gitlabPluginScopeFromSource(source.sources);
+    const issueChange = gitlab?.issue !== undefined ? gitlabPluginIssueChangeFromEvents(gitlab.events) : null;
+    if (gitlab && (gitlab.issue === undefined || issueChange)) {
+      const project = gitlab.host ? `https://${gitlab.host}/${gitlab.project}` : gitlab.project;
+      return {
+        webhookPreset: 'gitlab-plugin', webhookPluginSources: source.sources.map((item) => ({ ...item })),
+        webhookSigned: true, webhookFormat: '', gitlabPluginId: gitlab.plugin,
+        ...(gitlab.issue !== undefined
+          ? { gitlabItem: gitlab.host ? `${project}/-/issues/${gitlab.issue}` : `${gitlab.project}#${gitlab.issue}`,
+            ...(gitlab.host ? { gitlabItemHost: gitlab.host } : {}), gitlabItemProject: gitlab.project,
+            gitlabItemNumber: gitlab.issue, gitlabPluginIssueChange: issueChange! }
+          : { gitlabPluginProject: project, gitlabPluginEvents: gitlab.events }),
+      };
+    }
     return { webhookPreset: 'plugin', webhookPluginSources: source.sources.map((item) => ({ ...item })), webhookSigned: true, webhookFormat: '' };
   }
   if (source?.preset === 'github-app') {
@@ -742,10 +772,24 @@ function webhookSourceInput(form: ScheduleFormState): { source?: ScheduleWebhook
     // A condition row whose value was left empty is not a condition yet.
     const sources = (form.webhookPluginSources ?? []).map((source) => {
       const filters = source.filters?.filter((filter) => filter.value.trim() !== '');
-      const { filters: _all, ...rest } = source;
-      return filters?.length ? { ...rest, filters } : rest;
+      return { plugin: source.plugin, ...(source.events ? { events: source.events } : {}), ...(filters?.length ? { filters } : {}) };
     });
     return { source: { preset, sources } };
+  }
+  if (preset === 'gitlab-plugin') {
+    // GitLab through the GitLab plugin is stored as that plugin's event source with project / issue conditions.
+    if (!form.gitlabPluginId) return {};
+    if (form.gitlabItemNumber !== undefined && form.gitlabItemProject) {
+      return { source: { preset: 'plugin', sources: [gitlabPluginSource({
+        plugin: form.gitlabPluginId, ...(form.gitlabItemHost ? { host: form.gitlabItemHost } : {}),
+        project: form.gitlabItemProject, issue: form.gitlabItemNumber,
+        events: gitlabPluginIssueChangeEvents(form.gitlabPluginIssueChange ?? 'any'),
+      })] } };
+    }
+    const project = parseGitlabProjectReference(form.gitlabPluginProject ?? '');
+    return project ? { source: { preset: 'plugin', sources: [gitlabPluginSource({
+      plugin: form.gitlabPluginId, ...project, events: form.gitlabPluginEvents ?? [],
+    })] } } : {};
   }
   if (preset === 'custom') {
     const source = parseWebhookFormatText(form.webhookFormat);
@@ -811,7 +855,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
       webhookTrigger: form.webhookEnabled
         ? {
             // Plugin sources choose event types per plugin; the engine rejects a top-level filter.
-            events: form.webhookPreset === 'plugin'
+            events: form.webhookPreset === 'plugin' || form.webhookPreset === 'gitlab-plugin'
               ? []
               // A specific Issue saves its condition as event filters; an unknown saved set is kept as is.
               : form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined && form.issueChange

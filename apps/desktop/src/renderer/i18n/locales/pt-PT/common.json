@@ -17385,8 +17385,8 @@
           }
         },
         "gitlab": {
-          "missing": "O GitLab CLI (glab) não foi encontrado. Instale o glab e inicie sessão para ver o estado dos MR.",
-          "notLoggedIn": "O glab local não tem sessão iniciada em {{host}}. Execute glab auth login num terminal para ver o estado dos MR.",
+          "missing": "O GitLab CLI (glab) não foi encontrado e o plugin do GitLab não tem ligação a esta instância. Instale o glab e inicie sessão, ou adicione a instância no plugin do GitLab, para ver o estado dos MR.",
+          "notLoggedIn": "O glab local não tem sessão iniciada em {{host}} e o plugin do GitLab não tem ligação a ela. Execute glab auth login num terminal, ou adicione a instância no plugin do GitLab, para ver o estado dos MR.",
           "unsupported": "Este computador ainda não suporta o estado dos MR do GitLab",
           "openAria": "Abrir MR !{{number}} no navegador",
           "summaryAria": "Resumo do MR !{{number}}",
@@ -18226,19 +18226,22 @@
         "gitlabSignedConnectionHint": "Utilize um token de assinatura nas definições de webhook do projeto GitLab para mais segurança.",
         "gitlabTokenConnection": "Secret token",
         "gitlabTokenConnectionHint": "Para versões antigas do GitLab: introduza um secret token nas definições do webhook.",
+        "gitlabPluginConnection": "Através do plugin do GitLab",
+        "gitlabPluginConnectionHint": "Verifica a cada minuto com a conta ligada no plugin do GitLab. Não precisa de webhook do GitLab nem de conta Cindy. As alterações enquanto este computador está em suspensão ou desligado não são entregues depois.",
         "gitlabSetupHint": "Depois de guardar, copie o endereço e o segredo dos detalhes da tarefa para o projeto GitLab em Definições › Webhooks.",
         "gitlabItem": {
           "label": "Merge request ou issue",
           "placeholder": "!12, #12, group/project!12 ou uma ligação",
           "hint": "Escreva !número para merge request, #número para issue, ou cole uma ligação.",
           "required": "Introduza o merge request ou issue a acompanhar.",
-          "mrHint": "O GitLab não envia notificações. O Cindy lê o estado ao ritmo de \"Também verificar num agendamento\" (sem executar a tarefa); o glab tem de ter sessão iniciada neste computador.",
+          "mrHint": "O GitLab não envia notificações. O Cindy lê o estado ao ritmo de \"Também verificar num agendamento\" (sem executar a tarefa), usando o glab deste computador ou a conta ligada no plugin do GitLab.",
           "issueHint": "As alterações deste issue chegam por um webhook do GitLab. Os eventos de comentário não distinguem merge requests de issues, por isso só contam criar, editar, fechar e reabrir o issue.",
+          "issuePluginHint": "O plugin do GitLab verifica este issue a cada minuto, incluindo novos comentários.",
           "errors": {
             "invalid": "Introduza !número, #número, group/project!número ou uma ligação do GitLab.",
             "ambiguous": "O GitLab numera merge requests e issues separadamente. Escreva !12 (merge request) ou #12 (issue), ou cole uma ligação.",
             "needs-link": "Um merge request específico precisa da instância do GitLab. Cole a ligação.",
-            "needs-account": "É um issue. Um issue específico do GitLab requer uma conta Cindy para receber webhooks."
+            "needs-account": "Isto é um issue. Um issue específico do GitLab precisa do plugin do GitLab ou de uma conta Cindy para receber webhooks do GitLab."
           },
           "mrChange": {
             "any": "Atividade no merge request",
@@ -18248,9 +18251,18 @@
           },
           "issueChange": {
             "any": "O issue muda",
+            "comment": "Novo comentário no issue",
             "closed": "Issue fechado",
             "reopened": "Issue reaberto"
           }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "Projeto",
+          "projectHint": "Introduza group/project ou uma ligação do projeto. Cole uma ligação se o plugin do GitLab estiver ligado a mais de uma instância.",
+          "projectInvalid": "Introduza group/project ou uma ligação https do projeto.",
+          "eventsLabel": "Eventos",
+          "eventsHint": "Sem nenhuma seleção, responde a todos os eventos deste projeto.",
+          "unavailable": "O plugin do GitLab não está instalado ou está desativado. Ative-o em Plugins e guarde novamente."
         }
       },
       "trigger": {

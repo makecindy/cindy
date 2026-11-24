@@ -17385,8 +17385,8 @@
           }
         },
         "gitlab": {
-          "missing": "No se encontró GitLab CLI (glab). Instala glab e inicia sesión para ver el estado de las MR.",
-          "notLoggedIn": "El glab local no ha iniciado sesión en {{host}}. Ejecuta glab auth login en una terminal para ver el estado de las MR.",
+          "missing": "No se encontró GitLab CLI (glab) y el complemento de GitLab no tiene conexión con esta instancia. Instala glab e inicia sesión, o añade la instancia en el complemento de GitLab, para ver el estado de las MR.",
+          "notLoggedIn": "El glab local no ha iniciado sesión en {{host}} y el complemento de GitLab no tiene conexión con ella. Ejecuta glab auth login en una terminal, o añade la instancia en el complemento de GitLab, para ver el estado de las MR.",
           "unsupported": "Esta computadora aún no admite el estado de MR de GitLab",
           "openAria": "Abrir MR !{{number}} en el navegador",
           "summaryAria": "Resumen de MR !{{number}}",
@@ -18226,19 +18226,22 @@
         "gitlabSignedConnectionHint": "Usa un token de firma en la configuración de webhooks del proyecto de GitLab para más seguridad.",
         "gitlabTokenConnection": "Secret token",
         "gitlabTokenConnectionHint": "Para versiones anteriores de GitLab: introduce un secret token en la configuración del webhook.",
+        "gitlabPluginConnection": "Mediante el complemento de GitLab",
+        "gitlabPluginConnectionHint": "Comprueba cada minuto con la cuenta conectada en el complemento de GitLab. No necesita webhook de GitLab ni cuenta de Cindy. Los cambios mientras este ordenador está en reposo o apagado no se entregan después.",
         "gitlabSetupHint": "Después de guardar, copia la dirección y el secreto de los detalles de la tarea en el proyecto de GitLab, en Configuración › Webhooks.",
         "gitlabItem": {
           "label": "Merge request o issue",
           "placeholder": "!12, #12, group/project!12 o un enlace",
           "hint": "Escribe !número para un merge request, #número para un issue, o pega un enlace.",
           "required": "Escribe el merge request o issue que quieres vigilar.",
-          "mrHint": "GitLab no envía notificaciones. Cindy lee el estado según «Comprobar también de forma programada» (sin ejecutar la tarea); glab debe tener la sesión iniciada en este ordenador.",
+          "mrHint": "GitLab no envía notificaciones. Cindy lee el estado según «Comprobar también de forma programada» (sin ejecutar la tarea), con glab en este ordenador o con la cuenta conectada en el complemento de GitLab.",
           "issueHint": "Los cambios de este issue llegan por un webhook de GitLab. Los eventos de comentario no distinguen merge requests de issues, así que solo cuentan crear, editar, cerrar y reabrir el issue.",
+          "issuePluginHint": "El complemento de GitLab comprueba este issue cada minuto, incluidos los comentarios nuevos.",
           "errors": {
             "invalid": "Escribe !número, #número, group/project!número o un enlace de GitLab.",
             "ambiguous": "GitLab numera por separado merge requests e issues. Escribe !12 (merge request) o #12 (issue), o pega un enlace.",
             "needs-link": "Un merge request concreto necesita su instancia de GitLab. Pega el enlace.",
-            "needs-account": "Es un issue. Un issue concreto de GitLab requiere una cuenta de Cindy para recibir webhooks."
+            "needs-account": "Esto es un issue. Un issue concreto de GitLab necesita el complemento de GitLab o una cuenta de Cindy para recibir webhooks de GitLab."
           },
           "mrChange": {
             "any": "Actividad del merge request",
@@ -18248,9 +18251,18 @@
           },
           "issueChange": {
             "any": "El issue cambia",
+            "comment": "Nuevo comentario en el issue",
             "closed": "Issue cerrado",
             "reopened": "Issue reabierto"
           }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "Proyecto",
+          "projectHint": "Escribe group/project o un enlace del proyecto. Pega un enlace si el complemento de GitLab está conectado a varias instancias.",
+          "projectInvalid": "Escribe group/project o un enlace https del proyecto.",
+          "eventsLabel": "Eventos",
+          "eventsHint": "Si no marcas ninguno, responde a todos los eventos de este proyecto.",
+          "unavailable": "El complemento de GitLab no está instalado o está desactivado. Actívalo en Complementos y vuelve a guardar."
         }
       },
       "trigger": {
