@@ -166,6 +166,22 @@ export type OrcaOkResult =
 /** Worker 异常终止自动回报的固定开头；撤下过期回报时按它识别。 */
 export const ORCA_AUTO_BRIDGE_FAILURE_HEADER = '[Auto-bridged: worker 异常终止]';
 
+/**
+ * 自动回传的两条路由。六态只有 Worker 能声明，宿主绝不补一个第七态：
+ * 带了结构化回报就按状态走，没带就只有「先核实」这一条路。
+ */
+export type OrcaAutoBridgeRouting = 'reported' | 'open';
+
+export function autoBridgeRouting(carriesReport: boolean): OrcaAutoBridgeRouting {
+  return carriesReport ? 'reported' : 'open';
+}
+
+/** Worker 结束回合且带了结构化回报时的自动回传开头；状态本身由报告标记承载。 */
+export const ORCA_AUTO_BRIDGE_STATE_HEADER = '[Auto-bridged: 回合结束]';
+
+/** Worker 结束回合但没有结构化回报时的自动回传开头：只陈述事实，不评价。 */
+export const ORCA_AUTO_BRIDGE_NO_STATE_HEADER = '[Auto-bridged: 回合结束，未带状态]';
+
 /** 回执里带回的异常终止回报正文上限；完整内容仍在 Worker 自己的任务里。 */
 const MAX_WITHDRAWN_FAILURE_NOTICE_TEXT = 1200;
 
@@ -1030,9 +1046,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     }
     const finalText = turn.finalText.trim() || state.capturedText.trim()
       || turn.diagnostic?.trim() || '(no output captured)';
+    const carriesReport = Boolean(turn.remoteReport);
     const report = turn.status === 'error'
       ? `${ORCA_AUTO_BRIDGE_FAILURE_HEADER}\n\n${finalText}\n\n${buildWorkerFailureRecoveryNote(sessionId)}`
-      : `[Auto-bridged: worker 已完成，系统自动回传结果]\n\n${finalText}`;
+      : autoBridgeRouting(carriesReport) === 'open'
+        ? `${ORCA_AUTO_BRIDGE_NO_STATE_HEADER}\n\n${finalText}`
+        : `${ORCA_AUTO_BRIDGE_STATE_HEADER}\n\n${finalText}`;
+    if (!carriesReport) noteUnreportedRound(sessionId);
     let accepted = false;
     try {
       accepted = (await deps.sendAutoBridgeToLead(
@@ -1617,6 +1637,24 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     }
   }
 
+  /**
+   * 漏报的 Worker：结束回合没有交结构化回报时记一笔，下一次派单开头点一次。
+   * 不强制（模型侧强制不住），只让遗漏在发生地可见——它是偶发而非惯例。
+   */
+  const unreportedRounds = new Map<string, number>();
+
+  function noteUnreportedRound(workerSessionId: string): void {
+    unreportedRounds.set(workerSessionId, (unreportedRounds.get(workerSessionId) ?? 0) + 1);
+  }
+
+  function takeUnreportedReminder(workerSessionId: string): string | undefined {
+    const missed = unreportedRounds.get(workerSessionId);
+    if (!missed) return undefined;
+    unreportedRounds.delete(workerSessionId);
+    return `[Orca host] 你上一轮结束时没有调用 send_to_lead(report)，系统直接把你说的话转发给了 Lead，`
+      + `并把这条投递标成「未带状态」。结束一轮时请用 send_to_lead 的 report 声明状态（${missed} 次未报）。`;
+  }
+
   async function sendToWorker(params: {
     callerLeadSessionId: string;
     targetSessionId: string;
@@ -1644,6 +1682,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     delivery?: 'queue' | 'steer';
     imagePaths?: string[];
   }, captured?: () => Promise<void>): Promise<SendToWorkerResult | InterruptWorkerResult> {
+    const unreported = takeUnreportedReminder(params.targetSessionId);
+    if (unreported) params = { ...params, message: `${unreported}\n\n${params.message}` };
     // interrupt 预留路径只支持纯文本; 内部误传图片宁拒勿静默丢。
     if (params.mode === 'interrupt' && params.imagePaths?.length) {
       return {

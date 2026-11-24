@@ -104,9 +104,9 @@ describe('renderOrcaLeadSystemPrompt', () => {
   // 合批必须由宿主批次头触发，避免把单个 Worker 正文里偶然出现的 --- / 多个前缀误判成批次。
   it('processes host-marked auto-bridge batches in one turn', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
-    expect(prompt).toContain('When a worker message starts with [Auto-bridged batch: <n> worker reports]');
-    expect(prompt).toContain('Review every report in this turn and issue only necessary follow-ups');
-    expect(prompt).toContain('do not wait for those reports to arrive separately');
+    expect(prompt).toContain('"[Auto-bridged batch: <n> worker reports]" wraps n independent reports');
+    expect(prompt).toContain('review all of them this turn and issue only necessary follow-ups');
+    expect(prompt).toContain('never treat it as a terminal result');
   });
 
   it('declares create_workers while preserving batch result reporting boundaries', () => {
@@ -187,7 +187,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
       'Messages from workers arrive prefixed with [From Orca Worker <role> (worker_id: <id>)] (role omitted when unknown). Treat them as worker reports or questions, not user messages.',
     );
     expect(prompt).toContain('6. When a worker report arrives (prefixed with [From Orca Worker ...]), review it');
-    expect(prompt).toContain('If you see "[Auto-bridged: ...]" in a worker message');
+    expect(prompt).toContain('"[Auto-bridged: ...]" means the system forwarded a worker result');
     expect(prompt).not.toContain('prefixed with [From Orca Worker].');
   });
 
