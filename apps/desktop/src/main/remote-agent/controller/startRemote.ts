@@ -379,25 +379,26 @@ function isConfirmedRunEnd(reason: string, idleReclaimed?: boolean): boolean {
  */
 type LinkState = 'connecting' | 'connected' | 'releasing' | 'released' | 'closed';
 
-/** 第一次启动还没完成的远程任务(按任务 id)：任务被删除或归档时据此让对方停下。 */
-const pendingStarts = new Map<string, Set<() => void>>();
+/** 尚未完成的远程启动(按任务 id)：任务结束或主人改选时只退役这些尝试。 */
+const pendingStarts = new Map<string, Set<(reason?: Error) => void>>();
 
 /**
  * 任务被删除或归档时调用。第一次启动还没完成(对方可能还在准备、在供应商组里换电脑或启动 Agent)的，
  * 立即告诉对方结束这个任务，不让它迟到地启动并跑完这一轮(2026-10-22：慢启动期间删掉的任务，对方几分钟后
  * 仍换到另一台电脑启动并生成了回复)。启动已完成的任务由 Maker 照常关闭，这里不管。
+ * 主人明确改选时复用同一取消入口，传入改选原因；不把仍保留的任务误报为已结束。
  */
-export function cancelPendingRemoteStart(sessionId: string): void {
-  for (const cancel of [...pendingStarts.get(sessionId) ?? []]) cancel();
+export function cancelPendingRemoteStart(sessionId: string, reason?: Error): void {
+  for (const cancel of [...pendingStarts.get(sessionId) ?? []]) cancel(reason);
 }
 
-/** Reuse terminal cancellation from allocation through preparation, without a permanent task tombstone. */
+/** Reuse attempt cancellation from allocation through preparation, without a permanent task tombstone. */
 export function registerPendingRemoteStart(sessionId: string, parent = currentSessionCreationSignal(sessionId)) {
   const controller = new AbortController();
   const abort = (reason = new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.')) => controller.abort(reason);
-  const cancel = () => abort();
+  const cancel = (reason?: Error) => abort(reason);
   const cancelParent = () => abort(parent?.reason);
-  const cancels = pendingStarts.get(sessionId) ?? new Set<() => void>();
+  const cancels = pendingStarts.get(sessionId) ?? new Set<(reason?: Error) => void>();
   pendingStarts.set(sessionId, cancels);
   cancels.add(cancel);
   parent?.addEventListener('abort', cancelParent, { once: true });

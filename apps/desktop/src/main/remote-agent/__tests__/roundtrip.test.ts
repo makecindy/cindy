@@ -39,7 +39,11 @@ import { hostedStartOptions } from '../host/service';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
 import { ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
-import { relocateForFreshStart } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { createPendingAgentSwitchRegistry, registerMakerSessionAgentSwitchHandler, relocateForFreshStart,
+  type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
+import { MAKER_INVOKE } from '../../maker-ipc/channels';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
@@ -2807,6 +2811,67 @@ describe('shared startup lease budget', () => {
     })]);
     expect(f.calls.some(call => call.op === 'call')).toBe(false);
     await outcome.handle.close({ reason: 'navigation' });
+  });
+
+  // #11644 / unit: prior cancellation cases called the terminal hook directly.
+  // An authorized picker must release historical startup's real send lock, both
+  // in executor backoff and with an RPC in flight. Late success must not open or
+  // send the old native history; a sibling and the next startup stay usable.
+  it.each([
+    { target: null, stage: 'backoff' }, { target: 'another-computer', stage: 'backoff' },
+    { target: null, stage: 'in-flight' }, { target: 'another-computer', stage: 'in-flight' },
+  ])('stages a manual move to $target during historical executor $stage', async ({ target, stage }) => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
+    const sibling = await f.open('sibling', 'ordinary-device');
+    const late = deferred();
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer !== f.target) return;
+      if (stage === 'in-flight') return late.promise;
+      throw Object.assign(new Error('executor restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const pending = createPendingAgentSwitchRegistry();
+    const deps: MakerSessionAgentSwitchHandlerDeps = {
+      cancelPendingRemoteStart, pendingSwitches: pending, withSessionLock: withSendToSessionLock,
+      getSessionRow: async () => ({ id: 'historical', agentKind: 'codex', model: 'm', providerId: null,
+        status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: 'native-only-on-m', agentDeviceId: f.owner }),
+      getLiveSession: () => null,
+      closeSession: vi.fn(async () => {}), listMessagesForHandoff: async () => [],
+      applyAgentSwitchToDb: vi.fn(async () => {}), setSessionProvider: () => {},
+      insertBoundaryMessage: async () => 'unused', applyResumeFallbackAtomically: async () => {},
+      setPendingHandoff: () => {}, bootstrapSwitchedSession: async () => {},
+      withCloseSuppressed: (_id, run) => run(), log: historyLogger,
+    };
+    const opening = withSendToSessionLock('historical', () =>
+      f.open('historical', f.owner, 'm', 'native-only-on-m')).catch(error => error);
+    let selecting: Promise<unknown> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(historyOpenLink).toHaveBeenCalledWith(f.target);
+      const ipc = new IpcHarness();
+      registerMakerSessionAgentSwitchHandler(ipc, deps, () => {});
+      let staged = false;
+      selecting = ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT, 'historical', 'codex', 'm', null,
+        undefined, undefined, { agentDeviceId: target }).then(result => { staged = true; return result; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(staged).toBe(true);
+      expect(String(await opening)).toContain('new Agent selection');
+      expect(pending.get('historical')).toMatchObject({ targetAgentDeviceId: target });
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+      const probes = historyOpenLink.mock.calls.length;
+      late.resolve();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(historyOpenLink).toHaveBeenCalledTimes(probes);
+      expect(f.calls.filter(call => call.op === 'open')).toEqual([expect.objectContaining({ device: 'ordinary-device' })]);
+      expect(f.calls.some(call => call.op === 'call')).toBe(false);
+      await sibling.setModel!('still-live');
+      const next = await f.open('historical', 'ordinary-device');
+      await next.close();
+    } finally {
+      cancelPendingRemoteStart('historical'); late.resolve();
+      await opening; await selecting;
+      await sibling.close();
+    }
   });
 
   it.each(['cancel', 'permission', 'link-generation', 'lease-expiry'] as const)('stops a delayed executor recovery after %s', async boundary => {
