@@ -249,8 +249,6 @@ export function fixedRemoteAgentLink(client: RemoteAgentRunClient): RemoteAgentL
 
 export interface SharedReconnectSendEvidence {
   handedToTransport: boolean;
-  /** Codex and Pi retain their previous shared reconnect settlement. */
-  trackUnwritten: boolean;
   failure?: { kind: 'rejected' | 'not-written' | 'unconfirmed'; error: unknown };
 }
 
@@ -496,7 +494,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         // A stream close can settle the handle before Session returns. Keep the
         // actual call failure for the transaction, including its link error code.
         const linkError = error instanceof Error ? error.cause : undefined;
-        const notWritten = evidence.trackUnwritten && linkError instanceof DeviceLinkError && linkError.inFlight === false;
+        // Only explicit Device Link evidence proves no write. Agent Net's
+        // pre-write failures remain unconfirmed at this boundary.
+        const notWritten = linkError instanceof DeviceLinkError && linkError.inFlight === false;
         evidence.failure = { kind: rejected ? 'rejected' : notWritten ? 'not-written' : 'unconfirmed', error };
       }
       // The ordered error/done below already settles this send. Do not race it with

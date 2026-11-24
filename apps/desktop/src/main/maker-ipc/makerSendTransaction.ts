@@ -1938,11 +1938,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const reconnect = !recovery && createOpts && persistUserMessage && reconnectInput
         && reconnectInput.canCapture?.(sess) !== false
         ? deps.captureSharedReconnectRecovery?.(sess) : undefined;
-      const settleReturnedFailure = sess.agentKind !== 'codex' && sess.agentKind !== 'pi';
       const sendEvidence = recovery?.observeSend?.evidence
-        ?? (reconnect && reconnectInput?.onUndispatchedFailure
-          ? { handedToTransport: false, trackUnwritten: settleReturnedFailure } : undefined);
-      const replacementEvidence: SharedReconnectSendEvidence = { handedToTransport: false, trackUnwritten: settleReturnedFailure };
+        ?? (reconnect && reconnectInput?.onUndispatchedFailure ? { handedToTransport: false } : undefined);
+      const replacementEvidence: SharedReconnectSendEvidence = { handedToTransport: false };
       let replacementDispatched = false;
       let completion: { result: DesktopMakerSendResult } | { error: unknown };
       let originalFailure: { error: unknown } | undefined;
@@ -2427,7 +2425,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // Both Session's non-accepted return and a thrown failure settle here.
       // Each attempt must independently prove the input did not reach the agent.
       if (reconnect && reconnectInput?.onUndispatchedFailure && sendEvidence && userMessagePersisted
-        && (settleReturnedFailure || originalFailure) && !sendAccepted && !replacementDispatched && !('result' in completion && completion.result.accepted)
+        && !sendAccepted && !replacementDispatched && !('result' in completion && completion.result.accepted)
         && !reconnectInput.signal.aborted && !requestedSendOpts.signal?.aborted
         && !reconnectInput.schedulerRunSignal?.aborted && !reconnectInput.wasStopped?.() && reconnectInput.isCurrent()
         && [sendEvidence, replacementEvidence].every(evidence => !evidence.handedToTransport

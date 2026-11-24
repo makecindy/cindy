@@ -6633,6 +6633,10 @@ describe('shared subscription recovery through controller and account allocation
     { original: 'second', phase: 'session-reconnect', boundary: 'connected-idle' },
     { original: 'second', phase: 'session-reconnect', boundary: 'running-target' },
     { original: 'second', phase: 'session-reconnect', boundary: 'cold-target' },
+    // Unit: a reclaimed non-Claude target keeps the direct tool failure and
+    // offered switch, without adding a pending input or retry hold.
+    { original: 'second', phase: 'session-reconnect', boundary: 'codex-target' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'pi-target' },
     // Unit integration: a device-link enqueue claiming an automatic origin,
     // or a batch including such an item, must not capture the stopped open.
     { original: 'second', phase: 'session-reconnect', boundary: 'remote-session' },
@@ -6744,6 +6748,8 @@ describe('shared subscription recovery through controller and account allocation
     };
     const realSendTransport = notWritten || originalAckTimeout || timeoutReturned;
     const originalReconnectSucceeds = boundary.startsWith('original-');
+    const targetKind = boundary === 'codex-target' ? 'codex' : boundary === 'pi-target' ? 'pi' : 'claude-code';
+    const directFailure = targetKind !== 'claude-code' || boundary === 'ssh-sender';
     const releaseFailedHead = notWritten || originalRejected || cancelBeforeWrite || (phase === 'session-reconnect' && [
       'late-revoke', 'late-owner-change', 'late-generation-change', 'close-failed', 'close-not-closed',
       'replacement-start-failed', 'replacement-send-rejected',
@@ -7064,7 +7070,7 @@ describe('shared subscription recovery through controller and account allocation
       if (weekly) {
         const originalHandle = await openRemote();
         const oldNative = originalHandle.id;
-        guestSession = new Session({ id: task, agentKind: 'claude-code', permissionMode: 'bypassPermissions', workDir: '/controller/work',
+        guestSession = new Session({ id: task, agentKind: targetKind, permissionMode: 'bypassPermissions', workDir: '/controller/work',
           agentDeviceId: route, handle: originalHandle, capabilities: {} as never, logger: guestLog });
         const session = guestSession;
         const settled = new Promise<void>(resolve => session.onEvent(event => { if (event.type === 'done') resolve(); }));
@@ -7320,7 +7326,7 @@ describe('shared subscription recovery through controller and account allocation
               getSession: (id: string) => id === task ? live : id === senderId
                 ? sender ?? { id, agentDeviceId: null, remoteHostId: null, getStatus: () => 'active' } : undefined,
               getSessionMeta: async (id: string) => ({
-                id, agentKind: 'claude-code', workDir: '/controller/work', model, sdkSessionId: row.sdkSessionId,
+                id, agentKind: id === task ? targetKind : 'claude-code', workDir: '/controller/work', model, sdkSessionId: row.sdkSessionId,
               }),
             },
             getSessionRowSnapshot: async () => ({ ...row, status: 'active', title: 'Target', userSendAt: null }),
@@ -7464,8 +7470,11 @@ describe('shared subscription recovery through controller and account allocation
             const receipt = boundary in sendFromSender
               ? await sendFromSender[boundary as keyof typeof sendFromSender]()
               : await sendTool(task, 'Continue.');
-            if (boundary === 'ssh-sender') {
+            if (directFailure) {
               expect(receipt, JSON.stringify(receipt)).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+              expect(receipt).not.toHaveProperty('queued_message_id');
+              expect(session.hasReclaimedSharedRun()).toBe(true);
+              expect(coordinator.getProjection(task)).toMatchObject({ pendingQueue: [], recovery: null });
               expect(JSON.stringify(receipt)).toContain('SUBSCRIPTION_ACCOUNT_LIMITED');
               expect(send).not.toHaveBeenCalled();
               expect(persisted).toEqual(['after-idle']);

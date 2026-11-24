@@ -12822,8 +12822,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // then refreshes queued createOpts from DB before starting the target harness.
       // enqueue does not await dispatch, so the drain can acquire this lock after we return.
       const reconnectTarget = localSessionTool ? maker.getSession(targetSessionId) : undefined;
-      const sharedReconnectTarget = reconnectTarget?.hasReclaimedSharedRun() && !reconnectTarget.isTurnRunning()
-        ? reconnectTarget : undefined;
+      // Only Claude Code takes the queued shared reconnect path. Other engines keep the direct failure and manual retry.
+      const sharedReconnectTarget = targetAgentKind === 'claude-code' && reconnectTarget?.agentKind === 'claude-code'
+        && reconnectTarget.hasReclaimedSharedRun() && !reconnectTarget.isTurnRunning() ? reconnectTarget : undefined;
       if (sharedReconnectTarget || params.files?.length || params.contextFiles?.length || params.forceQueue || verifiedOwnerRequestText(params.autoReviewUserText) !== undefined || explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX) || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
         lockStage = 'enqueue-queued-message';
         const qClientId = explicitClientId ?? createId();
