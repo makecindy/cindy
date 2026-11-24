@@ -453,6 +453,21 @@ describe('MCP setup creation receipt', () => {
   });
 });
 
+// Codex P1: the list payload carries the local command's decrypted args/env (and HTTP
+// headers) for the settings form. Only the app's own renderer may read it; an untrusted
+// sender must not be able to recover what the store encrypted for Main.
+it('does not hand decrypted local command credentials to an untrusted sender', async () => {
+  mountDb();
+  const harness = new IpcHarness();
+  const deps = makeDeps();
+  registerMcpHandlers(harness, deps);
+  vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => {});
+  await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, { ...validConfig, id: 'secret-local', transport: 'stdio', url: '',
+    stdio: { command: 'node', args: ['--token', 'sk-live-123'], env: { API_KEY: 'sk-live-123' } } });
+  vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => { throw new Error('PERMISSION_DENIED'); });
+  await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_LIST)).rejects.toThrow('PERMISSION_DENIED');
+});
+
 // Unit: adding a command upgrades this configuration to local process execution.
 // Exercise the actual IPC handler so an untrusted sender cannot persist it.
 it('requires a trusted Desktop form for local command creation and updates', async () => {
