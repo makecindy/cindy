@@ -53,6 +53,7 @@ import { providerShareGate } from '@/features/provider-share/providerShareFormat
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
+import { PluginFileOpenerSwitch } from './PluginFileOpenerSwitch';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import {
@@ -221,6 +222,7 @@ export function GhostPluginDetailView({
   const hasConfiguration =
     hasGithubConnection ||
     Boolean(ghost?.manifest.browserExtension) ||
+    Boolean(ghost?.manifest.fileOpener) ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
     detail.hasTaskPreferences ||
@@ -534,6 +536,14 @@ export function GhostPluginDetailView({
                     aria-label={t('settings.ghosts.detail.showInSidebar')}
                   />
                 </div>
+              ) : null}
+              {ghost?.manifest.fileOpener ? (
+                <PluginFileOpenerSwitch
+                  ghostId={detail.id}
+                  name={detail.name}
+                  extensions={ghost.manifest.fileOpener.extensions}
+                  surfaceClassName={DETAIL_SURFACE_CLASS}
+                />
               ) : null}
               {detail.hasSettingsUi ? (
                 ghost ? (

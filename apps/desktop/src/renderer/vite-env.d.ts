@@ -1467,6 +1467,9 @@ interface ElectronAPI {
       id: string,
       config: Record<string, unknown> | null,
     ) => Promise<{ config: Record<string, unknown> }>;
+    /** 「用插件打开文件」开关(只对声明了 fileOpener 的插件有意义;默认开)。 */
+    fileOpener: (id: string) => Promise<{ declared: boolean; enabled: boolean }>;
+    setFileOpener: (id: string, enabled: boolean) => Promise<{ declared: boolean; enabled: boolean }>;
     /** 系统文件选择框(.cindy 过滤),只选不装;取消返回 { canceled: true }。 */
     githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number) =>
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean>;
