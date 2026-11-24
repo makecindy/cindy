@@ -2089,6 +2089,11 @@ function LocalGhostPluginPage({
   ) : null;
 
 
+  const backFromInstalledDetail = () => {
+    requestPluginCatalogScrollRestore();
+    setSelectedId(null);
+  };
+
   const renderInstalledDetail = () => selectedDetail ? (
       <div className="flex h-full min-h-0 w-full">
         <div className="flex min-w-0 flex-1 flex-col">
@@ -2108,8 +2113,7 @@ function LocalGhostPluginPage({
               }
               onBack={() => {
                 cancelPendingPluginSuggestion(recommendationNonce ?? undefined);
-                requestPluginCatalogScrollRestore();
-                setSelectedId(null);
+                backFromInstalledDetail();
               }}
               onToggle={(enabled) =>
                 void handleToggle(selectedDetail.id, enabled, selectedDetail.name)
@@ -2213,12 +2217,12 @@ function LocalGhostPluginPage({
         ghost={selectedGhost}
         replacement={findInstalledRetirementReplacement(ghosts, marketItems, target)}
         busy={marketBusyId !== null}
-        onBack={() => setSelectedId(null)}
+        onBack={backFromInstalledDetail}
         onReplace={() => void handleReplaceRetiredFeature()}
         onDismiss={() => {
           void window.electronAPI.ghosts
             .acknowledgeRetirement(installedGhostStoragePart(selectedGhost))
-            .then(() => setSelectedId(null))
+            .then(backFromInstalledDetail)
             .catch(() => toast.error(t('settings.ghosts.retirement.saveFailed')));
         }}
         onUninstall={() => void handleUninstall()}
