@@ -115,10 +115,7 @@ export default {
     await ui.capture('menu');
     await option.click();
     assert.equal(await option.getAttribute('aria-checked'), 'true');
-    await page.keyboard.press('Escape');
-    await page.keyboard.press('Escape');
-    await page.mouse.click(2, 2);
-    await page.mouse.move(0, 0);
+    // 选择后菜单保持展开,列表在菜单后面原地重排;最后一张截图同时留下勾选后的菜单与新的分组。
     await expectPlatformGroups();
   },
 };
