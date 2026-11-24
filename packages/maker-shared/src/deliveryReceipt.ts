@@ -4,7 +4,7 @@
  */
 import { isBotDeliverableFile, type BotDeliverableFile } from './botDeliverable.js';
 import { describeToolUse } from './toolUseDescriptor.js';
-import { extractToolResultDiagnostics } from './toolResultCompaction.js';
+import { extractToolResultDiagnostics, parseToolResultCompactionMarker } from './toolResultCompaction.js';
 
 export const DELIVERY_RECEIPT_FILE_CAP = 20;
 export const DELIVERY_RECEIPT_OUTPUT_CAP = 10;
@@ -236,7 +236,9 @@ function outcomeText(content: unknown, record: Record<string, unknown>): string 
 }
 
 function commandOutcomeOf(content: unknown): string | undefined {
-  // 字符串是命令输出本身。不能因为输出碰巧是 JSON，就把里面的 exitCode / isError 当成进程状态。
+  const compacted = parseToolResultCompactionMarker(content);
+  if (compacted) return judgeCommandOutcome({ isError: compacted.diagnostics?.isError });
+  // 字符串是命令输出本身。失败事实只认落库诊断，不把输出 JSON 里的字段当成退出码。
   if (typeof content === 'string') {
     return judgeCommandOutcome({
       isError: extractToolResultDiagnostics(content)?.isError,
@@ -380,9 +382,10 @@ export function buildDeliveryReceipt(input: DeliveryReceiptInput): DeliveryRecei
       if (previous) previous.removed = true;
       const current = byPath.get(file.path);
       remember(file.path);
+      const stillThere = current != null && !current.removed && current.created;
       byPath.set(file.path, {
         ...file,
-        created: previous?.created === true || current?.created === true,
+        created: previous?.created === true || stillThere,
         removed: false,
       });
       continue;

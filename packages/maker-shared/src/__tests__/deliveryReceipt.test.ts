@@ -225,6 +225,43 @@ describe('buildDeliveryReceipt', () => {
     expect(receipt.changes.items.map((file) => file.path)).toEqual(['/repo/preview/report.csv']);
   });
 
+  it('keeps a compacted command failure and does not revive a moved file at its old path', () => {
+    const renamed = buildDeliveryReceipt({
+      title: 'Report',
+      workingDir: '/repo',
+      changedFiles: [
+        { path: '/repo/out/report.csv', status: 'added' },
+        { path: '/repo/out/draft.csv', oldPath: '/repo/out/report.csv', status: 'renamed' },
+        { path: '/repo/out/report.csv', oldPath: '/repo/out/source.csv', status: 'renamed' },
+      ],
+    });
+    expect(renamed.outputs.items.map((file) => file.path)).toEqual(['/repo/out/draft.csv']);
+    const archived = buildDeliveryReceipt({
+      title: 'Run',
+      messages: [
+        {
+          role: 'tool_use',
+          toolUseId: 't1',
+          content: { toolName: 'bash', toolUseId: 't1', input: { command: 'pnpm test' } },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 't1',
+          content: {
+            type: 'tool_result_compacted',
+            version: 1,
+            originalBytes: 120,
+            compactedAt: 1,
+            diagnostics: { isError: true },
+          },
+        },
+      ],
+    });
+    expect(archived.verification.items).toEqual([
+      { command: 'pnpm test', outcome: 'failed', failed: true },
+    ]);
+  });
+
   it('does not call an incomplete capture a conversation with no file changes', () => {
     const receipt = buildDeliveryReceipt({
       title: 'Edit env',
