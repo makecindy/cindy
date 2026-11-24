@@ -417,10 +417,21 @@ export async function evaluateTurnGate(input: {
   if (
     !consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration, {
       kind: 'judge',
-      token: 'turn-gate',
+      // 额度绑定到「这一次声称」而不是整个会话：常量键会把后续 30 分钟里
+      // 所有判定纠正一起压掉，换一段话再声称就再也叫不醒。
+      token: claimFingerprint(text),
     })
   ) {
     return undefined;
   }
   return JUDGED_CLAIM_REASON;
+}
+
+/** 一段回复的指纹：同文本重复声称不重复纠正，换文本算新问题。 */
+function claimFingerprint(text: string): string {
+  let hash = 5381;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) + hash + text.charCodeAt(index)) >>> 0;
+  }
+  return `${text.length}-${hash.toString(36)}`;
 }

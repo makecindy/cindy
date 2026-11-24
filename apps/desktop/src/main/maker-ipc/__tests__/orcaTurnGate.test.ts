@@ -196,4 +196,19 @@ describe('gate trigger scope', () => {
     noteTurnToolUse('lead-1', 2, 'mcp__cindy__send_to_worker');
     expect(turnOrcaToolUseCount('lead-1', 2)).toBe(1);
   });
+
+  it('reminds once per claimed sentence, not once per session', async () => {
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'claim' });
+    const once = { ...base, leadSessionId: 'lead-once' };
+    const sentence = '这次已经交给 research 了。';
+    // 纠正会开启新一轮，代次前进；同一句话不再提醒。
+    await expect(evaluateTurnGate({ ...once, finalText: sentence })).resolves.toBeTruthy();
+    await expect(
+      evaluateTurnGate({ ...once, turnGeneration: 3, finalText: sentence }),
+    ).resolves.toBeUndefined();
+    // 换一句话再声称，算新问题，必须能再叫醒。
+    await expect(
+      evaluateTurnGate({ ...once, turnGeneration: 4, finalText: '已经交给 research 在做了。' }),
+    ).resolves.toBeTruthy();
+  });
 });
