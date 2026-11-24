@@ -139,6 +139,39 @@ it.each(['onContentProcessDidTerminate', 'onRenderProcessGone'])('releases the L
   expect(() => bridge.runtime.create('three', { closed, open() {}, message() {}, drained() {} })).toThrow('UNAVAILABLE');
 });
 
+// #12456, unit tier: drive the production V1 bridge through the controlled
+// WebView port. Existing lifecycle cases cover disposal, but not iOS interruptions.
+it('keeps the same open LAN path through inactive and still handles network loss', () => {
+  const bridge = createDirectRuntimeBridge();
+  const events = { closed: vi.fn(), open() {}, message: vi.fn(), drained() {} };
+  const receive = (data: object) => {
+    act(() => state.props.onMessage({ nativeEvent: { data: JSON.stringify(data) } }));
+  };
+  const change = (next: string) => {
+    act(() => { for (const listener of state.appStateListeners) listener(next); });
+  };
+  root = createRoot(document.createElement('div'));
+  act(() => root!.render(createElement(DirectLinkTransport, { bridge, enabled: true, owner: 'account-one' })));
+  receive({ type: 'ready' });
+  const connection = 'device-one';
+  const session = bridge.runtime.create(connection, events);
+  receive({ type: 'open', connection });
+  session.send('before-interruption');
+
+  change('inactive');
+  expect(events.closed).not.toHaveBeenCalled();
+  change('active');
+  expect(state.mounts).toBe(1);
+  session.send('after-interruption');
+  expect(state.inject).toHaveBeenLastCalledWith(expect.stringContaining('"text":"after-interruption","sequence":2'));
+  receive({ type: 'message', connection, text: 'direct-reply' });
+  expect(events.message).toHaveBeenCalledWith('direct-reply');
+
+  receive({ type: 'closed', connection, reason: 'network-failed' });
+  expect(events.closed).toHaveBeenCalledExactlyOnceWith('network-failed');
+  expect(() => session.send('after-loss')).toThrow('DIRECT_CHANNEL_CLOSED');
+});
+
 it('does not accept LAN bridge callbacks across backgrounding, owner changes or unmount', () => {
   vi.useFakeTimers();
   const bridge = createDirectRuntimeBridge(), closed = vi.fn();

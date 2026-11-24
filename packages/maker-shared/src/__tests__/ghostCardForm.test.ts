@@ -154,6 +154,12 @@ describe("declarative card forms", () => {
     const invalid: Record<string, string>[] = [{ '-1': 'x' }, { 999: 'x' }, { 0: 'x'.repeat(16001) }, { 0: '\0' }];
     for (const edits of invalid) expect(applyMailInlineEdits(html, edits)).toBeNull();
   });
+  it('preserves inline line breaks only for callers requesting multiline whitespace', () => {
+    const html = '<p><strong>first</strong>\r\n<em>last</em></p>\n<p>Next<br>line</p>';
+    expect(mailInlineRuns(html).map(run => run.text)).toEqual(['first', 'last', 'Next', '\n', 'line']);
+    expect(mailTextParagraphs(html, { preserveMultilineWhitespace: true }).map(paragraph => paragraph.text))
+      .toEqual(['first\nlast', 'Next\nline']);
+  });
   it('treats typed markup as text and allows adding words to an image-only draft', () => {
     const html = '<html><head><title>Not body text</title></head><body><img src="cid:card"></body></html>';
     expect(mailTextParagraphs(html).map(p => p.text)).toEqual(['']);

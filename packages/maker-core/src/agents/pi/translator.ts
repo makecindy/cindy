@@ -1385,9 +1385,10 @@ function translatePiEventInternal(
         });
         return;
       }
-      // 网络 / 超时 / Responses 半截流：复用 Desktop 已有的 Reconnecting N/M 进行态，
+      // 网络 / 超时 / 半截流：复用 Desktop 已有的 Reconnecting N/M 进行态，
       // 不要套 `(auto-retry N/M)`——那条跨端协议在手机上只表示过载。
-      if (isNetworkishErrorMessage(rawMessage)) {
+      // Chat Completions 的 EOF 文案只在原生重试事件内认领，保持终态和 Host 续跑判定。
+      if (isNetworkishErrorMessage(rawMessage) || sdkError?.trim() === 'Stream ended without finish_reason') {
         queue.push({
           type: 'error',
           data: {
