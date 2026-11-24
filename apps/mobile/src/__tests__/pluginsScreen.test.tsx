@@ -20,6 +20,7 @@ const fixture = vi.hoisted(() => ({
   unsubscribe: vi.fn(async () => {}),
   resourceListeners: new Set<(device: string, payload: any) => void>(),
   management: { state: null, controller: null } as any,
+  marketManagement: { state: null, controller: null } as any,
   marketRead: vi.fn(),
   enabled: true,
   online: true,
@@ -32,6 +33,7 @@ const fixture = vi.hoisted(() => ({
   push: vi.fn(),
   blocks: [] as any[],
   extraRows: [] as any[],
+  extraDevices: [] as any[],
   devicesFailed: false,
   devicesAbsent: false,
   platform: "ios",
@@ -44,6 +46,11 @@ vi.mock("@/plugins/usePluginManagement", async (importOriginal) => {
   const actual = await importOriginal<any>();
   return ({
   usePluginManagement: (...args: any[]) => {
+    // The market's install controller is keyed "plugin-market:<attempt>"; keep it apart from the detail's.
+    if (String(args[3] ?? "").startsWith("plugin-market")) {
+      fixture.props.set("marketManagementScope", args);
+      return fixture.realManagement ? actual.usePluginManagement(...args) : fixture.marketManagement;
+    }
     fixture.props.set("managementScope", args);
     const result = fixture.realManagement ? actual.usePluginManagement(...args) : fixture.management;
     fixture.props.set("observedManagement", result);
@@ -83,7 +90,7 @@ vi.mock("@/plugins/pluginManagementClient", async (importOriginal) => {
 vi.mock("@/plugins/PluginManagementMenu", () => ({
   PluginManagementMenu: () => null,
 }));
-vi.mock("@/plugins/PluginManagementConfirmation", () => ({ PluginManagementConfirmation: () => null }));
+vi.mock("@/plugins/PluginManagementConfirmation", () => ({ PluginManagementConfirmation: (p: any) => { fixture.props.set("confirmation", p); return null; } }));
 vi.mock("@/plugins/PluginNotice", () => ({ PluginNotice: (p: any) => { fixture.props.set(p.testID ?? "notice", p); return createElement("span", null, p.title); } }));
 vi.mock("react-native", async () => {
   const React = await import("react");
@@ -179,6 +186,7 @@ vi.mock("@/device-link/useDeviceManagement", () => ({
               platform: "darwin",
               remoteControlEnabled: true,
             },
+            ...fixture.extraDevices,
           ],
     refresh() {},
   }),
@@ -254,6 +262,12 @@ vi.mock("@/plugins/PluginTaskPicker", () => ({
     return null;
   },
 }));
+vi.mock("@/session/FileBrowserSegmentedControl", () => ({
+  FileBrowserSegmentedControl: (p: any) => {
+    fixture.props.set("segment", p);
+    return null;
+  },
+}));
 vi.mock("@/plugins/PluginPage", () => ({ PluginPage: () => null }));
 vi.mock("@/plugins/PluginReadmePage", () => ({ PluginReadmePage: () => null }));
 vi.mock("@/plugins/pluginClient", () => ({
@@ -270,6 +284,7 @@ beforeEach(() => {
   fixture.accountGeneration = 0;
   fixture.wire.mockReset();
   fixture.management = { state: null, controller: null };
+  fixture.marketManagement = { state: null, controller: null };
   fixture.marketRead.mockReset();
   fixture.storage.clear();
   fixture.getStored
@@ -284,6 +299,7 @@ beforeEach(() => {
     });
   fixture.blocks = [];
   fixture.extraRows = [];
+  fixture.extraDevices = [];
   fixture.devicesFailed = false;
   fixture.devicesAbsent = false;
   fixture.push.mockClear();
@@ -1627,4 +1643,104 @@ it.each(['hidden', 'background'] as const)('stops shared hint follow-ups with no
     expect(stateReads).toBe(3);
     expect(manifests).toBe(3);
   } finally { act(() => { first.unmount(); second.unmount(); }); fixture.promptReads = null; vi.useRealTimers(); }
+});
+
+/* 测试价值（手机插件市场，2026-11-25）
+ * - 生产入口与可观察结果：真实 PluginsScreen + usePluginMarket + 管理 client/controller（只替换设备互联 invoke）；
+ *   观察市场分段的状态、列表、确认面板与装好后打开的已装详情，以及发往电脑的请求。
+ * - 依据：same-account-remote-plugin-management.md 旧 Host 只认 INVALID_PARAMS、不回退全量；
+ *   remote-and-mobile-adaptation 切电脑/账号后旧响应不落地；brief 第 7 点装好后打开已装详情。
+ * - 缺口：pluginManagement.test.ts 只到 client/controller，不覆盖手机页面的电脑切换、能力降级与成功后的导航。
+ * - 最小失败输入：capabilities 回 INVALID_PARAMS；切电脑或切账号后上一台电脑的分页才返回；无 installed 的安装确认后成功。
+ * - tier: unit（jsdom，内存 Host，无真实等待）。
+ */
+type MarketWireRequest = { device: string; actionId?: string; input?: any; resourceRef?: any };
+function marketWire(respond: (request: MarketWireRequest) => unknown) {
+  const requests: MarketWireRequest[] = [];
+  fixture.realManagement = true;
+  fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => {
+    options?.preSend?.();
+    if (channel.endsWith(":manifest"))
+      return { protocolVersion: 1, collections: [{ id: "plugins", actions: [{ id: "management:snapshot", label: "Manage" }] }] };
+    const envelope = args?.[0] ?? {};
+    const request = { device, actionId: envelope.actionId, input: envelope.input, resourceRef: envelope.resourceRef };
+    requests.push(request);
+    return { effects: [], result: await respond(request) };
+  });
+  return requests;
+}
+const marketItem = (ghostId: string, name: string) => ({
+  pluginId: `market/${ghostId}`, ghostId, namespace: null, name, description: "Demo", author: "Cindy", publisherKind: "official",
+  scope: "public", organizationId: null, defaultInstall: false, releaseId: `${ghostId}@1`, version: "1", publishedAt: "",
+  icon: null, installState: "not-installed", enabled: null, sourceType: "server", sourceMarketName: null,
+});
+const marketPage = (items: any[]) => ({ items, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [],
+  nextCursor: null, counts: null });
+async function settle(rounds = 10) {
+  for (let index = 0; index < rounds; index++) await act(async () => { await Promise.resolve(); });
+}
+async function openMarket() {
+  await act(async () => root.render(createElement(PluginsScreen)));
+  await act(async () => fixture.props.get("directory").onSegmentChange("market"));
+  await settle();
+}
+const shownMarket = () => fixture.props.get("directory").market;
+it("asks to update an older computer instead of reading its whole market", async () => {
+  const requests = marketWire((request) => {
+    if (request.input?.read === "capabilities") throw Object.assign(new Error("old"), { code: "INVALID_PARAMS" });
+    throw new Error("unexpected market read");
+  });
+  await openMarket();
+  expect(shownMarket().status).toBe("outdated");
+  expect(requests.map((request) => request.input)).toEqual([{ read: "capabilities" }]);
+});
+it.each(["computer", "account"])("drops a late market page after switching the %s", async (change) => {
+  fixture.extraDevices = [{ deviceId: "pc", name: "PC", platform: "win32", remoteControlEnabled: true }];
+  let releaseLate!: (value: unknown) => void;
+  const late = new Promise((resolve) => { releaseLate = resolve; });
+  marketWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true }
+    : request.device === "mac" ? late : marketPage([marketItem("pc-only", "PC only")]));
+  await openMarket();
+  expect(shownMarket().target.deviceId).toBe("mac");
+  if (change === "computer") await act(async () => shownMarket().selectDevice("pc"));
+  else fixture.owner = false;
+  await settle();
+  await act(async () => releaseLate(marketPage([marketItem("stale", "Stale")])));
+  await settle();
+  expect(shownMarket().items.map((item: any) => item.name)).toEqual(change === "computer" ? ["PC only"] : []);
+});
+it("installs from the market through the existing consent sheet and opens the new installed detail", async () => {
+  const item = marketItem("demo", "Demo");
+  const manifest = { schemaVersion: 3, id: "demo", name: "Demo", version: "1" };
+  let installed = false;
+  const requests = marketWire((request) => {
+    switch (request.actionId) {
+      case "management:snapshot":
+        if (request.input?.read === "capabilities") return { catalogPaging: true };
+        if (request.input?.read === "catalog") return marketPage([item]);
+        return { version: 1, market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
+          ghosts: installed ? [{ instanceKey: "_root__demo", namespace: null, manifest, enabled: true,
+            approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } }] : [] };
+      case "management:market-detail": return { ...item, manifest };
+      case "management:begin": return { operationId: request.input.operationId, phase: "confirmation", consent: {
+        requestId: "consent", initiator: "user", origin: "market",
+        facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } };
+      case "management:answer": installed = true; return { operationId: request.input.operationId, phase: "succeeded" };
+      default: throw new Error("unexpected " + request.actionId);
+    }
+  });
+  await openMarket();
+  await act(async () => shownMarket().install(shownMarket().items[0]));
+  await settle(14);
+  const sheet = fixture.props.get("confirmation");
+  expect(sheet.state.outcome).toBe("confirmation");
+  expect(shownMarket().rowState(item)).toEqual({ kind: "waiting" });
+  await act(async () => sheet.controller.answer(true));
+  await settle(14);
+  expect(requests.find((request) => request.actionId === "management:begin")).toMatchObject({ resourceRef: undefined,
+    input: { kind: "install", pluginId: "market/demo", expectedReleaseId: "demo@1" } });
+  expect(requests.find((request) => request.actionId === "management:begin")!.input).not.toHaveProperty("expectedInstalledApproval");
+  expect(fixture.read).toHaveBeenLastCalledWith(fixture.wire, expect.objectContaining({ deviceId: "mac" }),
+    expect.objectContaining({ id: "_root__demo" }), "en", ["plugin-capabilities"]);
+  expect(fixture.props.get("header").title).toBe("Demo");
 });

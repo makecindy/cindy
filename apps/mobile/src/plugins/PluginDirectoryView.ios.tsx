@@ -41,6 +41,7 @@ import { resolveRemoteText } from "@cindy/device-link";
 import { ComposerNativeRow } from "@/session/ComposerNativeRow";
 import { iconSize, radius, spacing, useTheme } from "@/theme";
 import type { PluginDirectoryViewProps } from "./PluginDirectoryView";
+import { PluginMarketRows } from "./PluginMarketRows";
 
 export function PluginDirectoryView(p: PluginDirectoryViewProps) {
   const { t, i18n } = useTranslation();
@@ -215,6 +216,70 @@ export function PluginDirectoryView(p: PluginDirectoryViewProps) {
       </Menu>
     </HStack>
   );
+  const searching = !!p.query.trim();
+  const showInstalled = searching || p.segment === "installed";
+  const showMarket = searching || p.segment === "market";
+  const installedRows = (
+    <>
+      {installedHeader}
+      {p.loading && !p.items.length ? (
+        <ProgressView
+          modifiers={[...sectionModifiers, listRowSeparator("hidden")]}
+        />
+      ) : null}
+      {p.items.map((item, index) => row(item, index === 0))}
+      {!p.loading && !listFailed && !p.items.length ? (
+        <VStack
+          alignment="leading"
+          spacing={spacing.md}
+          modifiers={[...sectionModifiers, listRowSeparator("hidden")]}
+        >
+          <Text>
+            {t(
+              p.query
+                ? "plugins.noResults"
+                : p.targets.length
+                  ? "plugins.noPlugins"
+                  : "plugins.noComputer",
+            )}
+          </Text>
+          {!p.targets.length ? (
+            <Button
+              label={t("plugins.connectComputer")}
+              onPress={p.onConnectComputer}
+            />
+          ) : null}
+        </VStack>
+      ) : null}
+      {listFailed ? (
+        <VStack
+          alignment="leading"
+          spacing={spacing.md}
+          modifiers={[...sectionModifiers, listRowSeparator("hidden")]}
+        >
+          <Text
+            modifiers={[
+              font({ textStyle: "footnote" }),
+              foregroundStyle(colors.textSecondary),
+            ]}
+          >
+            {t(
+              p.items.length
+                ? "plugins.listUnavailable"
+                : "plugins.listLoadFailed",
+            )}
+          </Text>
+          {!p.items.length && !p.loading ? (
+            <Button
+              label={t("plugins.detail.action.retry")}
+              onPress={() => void p.onRefresh()}
+              testID="plugins.retryList"
+            />
+          ) : null}
+        </VStack>
+      ) : null}
+    </>
+  );
   return (
     <Host
       colorScheme={mode}
@@ -230,66 +295,47 @@ export function PluginDirectoryView(p: PluginDirectoryViewProps) {
           background(colors.surface),
           listRowSeparatorTint(colors.border),
           scrollDismissesKeyboard("interactively"),
-          refreshable(p.onRefresh),
+          refreshable(async () => {
+            await Promise.all([
+              showInstalled ? p.onRefresh() : undefined,
+              showMarket ? p.market.refresh() : undefined,
+            ]);
+          }),
         ]}
         testID="plugins.list"
       >
-        {installedHeader}
-        {p.loading && !p.items.length ? (
-          <ProgressView
-            modifiers={[...sectionModifiers, listRowSeparator("hidden")]}
+        {!searching ? (
+          // Native segmented control as an ordinary list row, like the computer range row.
+          <Picker
+            testID="plugins.segment"
+            label={t("plugins.market.segmentsLabel")}
+            selection={p.segment}
+            onSelectionChange={(value: string) =>
+              p.onSegmentChange(value === "market" ? "market" : "installed")
+            }
+            modifiers={[
+              pickerStyle("segmented"),
+              accessibilityLabel(t("plugins.market.segmentsLabel")),
+              listRowBackground(colors.surface),
+              listRowSeparator("hidden"),
+              listRowInsets({
+                leading: spacing.lg + spacing.xs,
+                trailing: spacing.lg + spacing.xs,
+                top: spacing.sm,
+                bottom: spacing.sm,
+              }),
+            ]}
+          >
+            <Text modifiers={[tag("installed")]}>{t("plugins.installed")}</Text>
+            <Text modifiers={[tag("market")]}>{t("plugins.market.title")}</Text>
+          </Picker>
+        ) : null}
+        {showInstalled ? installedRows : null}
+        {showMarket ? (
+          <PluginMarketRows
+            market={p.market}
+            onConnectComputer={p.onConnectComputer}
           />
-        ) : null}
-        {p.items.map((item, index) => row(item, index === 0))}
-        {!p.loading && !listFailed && !p.items.length ? (
-          <VStack
-            alignment="leading"
-            spacing={spacing.md}
-            modifiers={[...sectionModifiers, listRowSeparator("hidden")]}
-          >
-            <Text>
-              {t(
-                p.query
-                  ? "plugins.noResults"
-                  : p.targets.length
-                    ? "plugins.noPlugins"
-                    : "plugins.noComputer",
-              )}
-            </Text>
-            {!p.targets.length ? (
-              <Button
-                label={t("plugins.connectComputer")}
-                onPress={p.onConnectComputer}
-              />
-            ) : null}
-          </VStack>
-        ) : null}
-        {listFailed ? (
-          <VStack
-            alignment="leading"
-            spacing={spacing.md}
-            modifiers={[...sectionModifiers, listRowSeparator("hidden")]}
-          >
-            <Text
-              modifiers={[
-                font({ textStyle: "footnote" }),
-                foregroundStyle(colors.textSecondary),
-              ]}
-            >
-              {t(
-                p.items.length
-                  ? "plugins.listUnavailable"
-                  : "plugins.listLoadFailed",
-              )}
-            </Text>
-            {!p.items.length && !p.loading ? (
-              <Button
-                label={t("plugins.detail.action.retry")}
-                onPress={() => void p.onRefresh()}
-                testID="plugins.retryList"
-              />
-            ) : null}
-          </VStack>
         ) : null}
       </List>
     </Host>

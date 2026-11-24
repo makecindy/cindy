@@ -1,0 +1,405 @@
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useAuth } from "@/auth/AuthContext";
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from "@/auth/authOwnerGeneration";
+import { useDeviceLink } from "@/device-link/DeviceLinkContext";
+import type { RemoteResourceHostTarget } from "@/device-link/remoteResources";
+import { createPluginManagementClient, pluginManagementErrorCode, type PluginManagementClient } from "./pluginManagementClient";
+import { marketItemMatchesPlugin, type ManagedMarketDetail, type ManagedMarketItem } from "./pluginManagementTypes";
+import {
+  PLUGIN_MARKET_QUERY_MAX, pluginMarketErrorKey, pluginMarketMatchesFilter, pluginMarketOrganizationErrorKey,
+  pluginMarketRequest, type PluginMarketCounts, type PluginMarketFilter, type PluginMarketPage,
+} from "./pluginMarketCatalog";
+import { usePluginManagement } from "./usePluginManagement";
+
+/** Same freshness window as the computer's market browser; pull-to-refresh always re-reads. */
+const MARKET_REFRESH_MS = 30_000;
+const CACHED_LISTS = 6;
+const SEARCH_DEBOUNCE_MS = 300;
+/** Publisher tabs filter public pages locally; bound how many empty pages one view may chain. */
+const MAX_EMPTY_CHAIN = 3;
+
+export type PluginMarketStatus = "noComputer" | "offline" | "loading" | "outdated" | "failed" | "ready";
+export type PluginMarketRowState =
+  | { kind: "idle" }
+  | { kind: "waiting" }
+  | { kind: "installing" }
+  | { kind: "unknown" }
+  | { kind: "failed"; messageKey: string }
+  | { kind: "conflict" };
+interface CatalogList {
+  key: string;
+  status: "loading" | "ready" | "failed";
+  items: ManagedMarketItem[];
+  nextCursor: string | null;
+  loadingMore: boolean;
+  meta: Omit<PluginMarketPage, "items" | "nextCursor" | "counts"> | null;
+  at: number;
+}
+interface CountsEntry { key: string; counts: PluginMarketCounts | null; customSourceNames: string[]; at: number }
+interface InstallAttempt {
+  id: number;
+  target: RemoteResourceHostTarget;
+  item: ManagedMarketItem;
+  detail?: ManagedMarketDetail;
+  started: boolean;
+  confirmed: boolean;
+}
+export interface PluginMarketDetailState {
+  item: ManagedMarketItem;
+  target: RemoteResourceHostTarget;
+  detail?: ManagedMarketDetail;
+  loading: boolean;
+  failed: boolean;
+}
+export interface UsePluginMarketOptions {
+  /** The market list or search results are visible on the focused screen. */
+  visible: boolean;
+  focused: boolean;
+  targets: readonly RemoteResourceHostTarget[];
+  isOnline(target: RemoteResourceHostTarget): boolean;
+  /** Installed-tab computer filter; empty means all computers. */
+  installedDeviceId: string;
+  query: string;
+  /** Called once per successful install; instanceKey is absent only if the Host readback failed. */
+  onInstalled(target: RemoteResourceHostTarget, instanceKey: string | undefined, item: ManagedMarketItem): void;
+}
+
+function useDebounced(value: string, delay: number) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    if (!value.trim()) { setDebounced(value); return; }
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return debounced;
+}
+
+/**
+ * Browse one computer's market page by page and install through the existing
+ * management controller. Every read and write is fenced by account owner,
+ * target computer and connection generation; nothing is replayed.
+ */
+export function usePluginMarket(options: UsePluginMarketOptions) {
+  const { invoke, connectionEpoch } = useDeviceLink();
+  const { accountGeneration } = useAuth();
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  const owner = useRef(getMobileAuthOwner()).current;
+  const storageKey = `cindy.pluginMarketDevice.v1.${owner.accountKey}`;
+  const { targets, isOnline, installedDeviceId, visible, focused } = options;
+  const onInstalled = useRef(options.onInstalled);
+  onInstalled.current = options.onInstalled;
+
+  // ---- Target computer: installed filter → this screen's choice → last market choice → an online computer.
+  const [choice, setChoice] = useState<string>();
+  const [remembered, setRemembered] = useState<string>();
+  useEffect(() => {
+    let disposed = false;
+    void AsyncStorage.getItem(storageKey).then((value) => {
+      if (!disposed && isMobileAuthOwnerCurrent(owner) && typeof value === "string" && value.length <= 256) setRemembered(value);
+    }).catch(() => { /* Optional local preference. */ });
+    return () => { disposed = true; };
+  }, [storageKey, owner]);
+  useEffect(() => { if (installedDeviceId) setChoice(undefined); }, [installedDeviceId]);
+  const has = (id: string | undefined) => !!id && targets.some((host) => host.deviceId === id);
+  const deviceId = has(choice) ? choice!
+    : has(installedDeviceId) ? installedDeviceId
+      : has(remembered) ? remembered!
+        : (targets.find((host) => isOnline(host)) ?? targets[0])?.deviceId;
+  const target = targets.find((host) => host.deviceId === deviceId);
+  const online = !!target && isOnline(target);
+
+  // ---- Install attempt (declared early: device switching is blocked while one is pending).
+  const [install, setInstall] = useState<InstallAttempt | null>(null);
+  const installRef = useRef(install);
+  installRef.current = install;
+  const attemptId = useRef(0);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+
+  const selectDevice = useCallback((id: string) => {
+    if (installRef.current || !targets.some((host) => host.deviceId === id)) return;
+    setChoice(id);
+    setRemembered(id);
+    if (isMobileAuthOwnerCurrent(owner)) void AsyncStorage.setItem(storageKey, id).catch(() => {});
+  }, [targets, owner, storageKey]);
+
+  // ---- Read scope: a late reply from another computer, account or connection never lands here.
+  const scope = JSON.stringify([deviceId ?? "", accountGeneration, connectionEpoch]);
+  const liveScope = useRef(scope);
+  liveScope.current = scope;
+  const client = useMemo<PluginManagementClient | null>(() => deviceId
+    ? createPluginManagementClient({ invoke, deviceId, isCurrent: () => liveScope.current === scope })
+    : null, [deviceId, invoke, scope]);
+  const active = visible && focused && online && !!client;
+
+  const [probe, setProbe] = useState<{ scope: string; status: "loading" | "supported" | "outdated" | "failed" }>();
+  const readProbe = useCallback(async () => {
+    if (!client) return;
+    const probeScope = scope;
+    setProbe({ scope: probeScope, status: "loading" });
+    try {
+      const status = (await client.capability()) === "unsupported" ? "outdated"
+        : (await client.catalogPaging()) ? "supported" : "outdated";
+      if (liveScope.current === probeScope) setProbe({ scope: probeScope, status });
+    } catch {
+      if (liveScope.current === probeScope) setProbe({ scope: probeScope, status: "failed" });
+    }
+  }, [client, scope]);
+  useEffect(() => {
+    if (active && probe?.scope !== scope) void readProbe();
+  }, [active, scope, probe?.scope, readProbe]);
+  const probeStatus = probe?.scope === scope ? probe.status : "loading";
+
+  // ---- Lists: one bounded LRU of cursor lists, keyed by scope + source + query.
+  const [filter, setFilterState] = useState<PluginMarketFilter>("official");
+  const debouncedQuery = useDebounced(options.query, SEARCH_DEBOUNCE_MS).trim().slice(0, PLUGIN_MARKET_QUERY_MAX);
+  const searching = !!options.query.trim();
+  const request = pluginMarketRequest(filter, debouncedQuery);
+  const listKey = JSON.stringify([scope, request.scope, debouncedQuery]);
+  const countsKey = JSON.stringify([scope, debouncedQuery]);
+  const lists = useRef(new Map<string, CatalogList>());
+  const counts = useRef(new Map<string, CountsEntry>());
+  const chain = useRef(0);
+  const remember = <T,>(map: Map<string, T>, key: string, value: T) => {
+    map.delete(key); map.set(key, value);
+    while (map.size > CACHED_LISTS) map.delete(map.keys().next().value!);
+  };
+  const readPage = useCallback(async (list: CatalogList, cursor: string | null, publisher: PluginMarketFilter) => {
+    if (!client) return;
+    const readScope = scope;
+    const current = () => liveScope.current === readScope && lists.current.get(list.key) === list;
+    try {
+      const page = await client.catalog({ query: debouncedQuery, scope: request.scope, cursor, limit: request.limit,
+        excludeInstalled: true, counts: false });
+      if (!current()) return;
+      const known = new Set(list.items.map((item) => item.pluginId));
+      const fresh = page.items.filter((item) => !known.has(item.pluginId) && item.installState !== "installed"
+        && item.installState !== "update-available");
+      list.items = cursor ? [...list.items, ...fresh] : fresh;
+      list.nextCursor = page.nextCursor;
+      list.meta = { unavailableReason: page.unavailableReason, customSourceNames: page.customSourceNames,
+        organizationAccessError: page.organizationAccessError,
+        unavailableCustomSourceNames: cursor && list.meta
+          ? [...new Set([...list.meta.unavailableCustomSourceNames, ...page.unavailableCustomSourceNames])]
+          : page.unavailableCustomSourceNames };
+      list.status = "ready"; list.loadingMore = false; list.at = Date.now();
+      rerender();
+      // A publisher tab may find nothing on a public page; continue a few pages, never unbounded.
+      const contributed = fresh.filter((item) => pluginMarketMatchesFilter(item, publisher)).length;
+      if (page.nextCursor && contributed === 0 && (publisher === "official" || publisher === "community")
+        && chain.current < MAX_EMPTY_CHAIN) {
+        chain.current += 1;
+        list.loadingMore = true;
+        await readPage(list, page.nextCursor, publisher);
+      } else chain.current = 0;
+    } catch {
+      if (!current()) return;
+      if (cursor) list.loadingMore = false; else list.status = "failed";
+      chain.current = 0;
+      rerender();
+    }
+  }, [client, scope, debouncedQuery, request.scope, request.limit]);
+  const startList = useCallback((force: boolean) => {
+    const existing = lists.current.get(listKey);
+    if (existing && !force && (existing.status === "loading" || (existing.status === "ready" && Date.now() - existing.at < MARKET_REFRESH_MS))) {
+      remember(lists.current, listKey, existing);
+      return Promise.resolve();
+    }
+    const list: CatalogList = { key: listKey, status: "loading", items: existing?.items ?? [], nextCursor: null,
+      loadingMore: false, meta: existing?.meta ?? null, at: 0 };
+    remember(lists.current, listKey, list);
+    chain.current = 0;
+    rerender();
+    return readPage(list, null, filter);
+  }, [listKey, readPage, filter]);
+  const readCounts = useCallback(async (force: boolean) => {
+    if (!client) return;
+    const existing = counts.current.get(countsKey);
+    if (existing && !force && Date.now() - existing.at < MARKET_REFRESH_MS) return;
+    const entry: CountsEntry = { key: countsKey, counts: existing?.counts ?? null,
+      customSourceNames: existing?.customSourceNames ?? [], at: Date.now() };
+    remember(counts.current, countsKey, entry);
+    const readScope = scope;
+    try {
+      // The same light count read as the computer: scope all, one item, counts only.
+      const page = await client.catalog({ query: debouncedQuery, scope: "all", limit: 1, excludeInstalled: true, counts: true });
+      if (counts.current.get(countsKey) !== entry || liveScope.current !== readScope) return;
+      entry.counts = page.counts; entry.customSourceNames = page.customSourceNames;
+      rerender();
+    } catch {
+      // Counts never hide usable rows; a later visit may retry.
+      if (counts.current.get(countsKey) === entry) entry.at = 0;
+    }
+  }, [client, countsKey, debouncedQuery, scope]);
+  const ready = active && probeStatus === "supported";
+  useEffect(() => {
+    if (!ready || debouncedQuery !== options.query.trim().slice(0, PLUGIN_MARKET_QUERY_MAX)) return;
+    void startList(false);
+    void readCounts(false);
+  }, [ready, listKey, countsKey, startList, readCounts, debouncedQuery, options.query]);
+
+  const list = lists.current.get(listKey);
+  const countEntry = counts.current.get(countsKey);
+  const marketCounts = countEntry?.counts ?? null;
+  const customSourceNames = list?.meta?.customSourceNames.length ? list.meta.customSourceNames : countEntry?.customSourceNames ?? [];
+  const filters: Array<{ value: PluginMarketFilter; count?: number }> = (["all", "official", "community", "organization", "custom"] as const)
+    .filter((value) => value === "organization" ? (marketCounts?.organization ?? 0) > 0 || filter === value
+      : value === "custom" ? customSourceNames.length > 0 || filter === value : true)
+    .map((value) => ({ value, count: marketCounts?.[value] }));
+  const setFilter = useCallback((value: PluginMarketFilter) => setFilterState(value), []);
+  const effectiveFilter: PluginMarketFilter = searching ? "all" : filter;
+  const items = (list?.items ?? []).filter((item) => pluginMarketMatchesFilter(item, effectiveFilter));
+  const total = searching ? marketCounts?.all : marketCounts?.[filter];
+
+  const status: PluginMarketStatus = !targets.length ? "noComputer" : !online ? "offline"
+    : probeStatus === "outdated" ? "outdated" : probeStatus === "failed" ? "failed"
+      : probeStatus === "loading" || !list || (list.status === "loading" && !list.items.length) ? "loading"
+        : list.status === "failed" && !list.items.length ? "failed" : "ready";
+  const loadMore = useCallback(() => {
+    const current = lists.current.get(listKey);
+    if (!ready || !current || current.status !== "ready" || current.loadingMore || !current.nextCursor) return;
+    current.loadingMore = true;
+    rerender();
+    void readPage(current, current.nextCursor, filter);
+  }, [ready, listKey, readPage, filter]);
+  const refresh = useCallback(async () => {
+    if (!active) return;
+    if (probeStatus !== "supported") { await readProbe(); return; }
+    await Promise.all([startList(true), readCounts(true)]);
+  }, [active, probeStatus, readProbe, startList, readCounts]);
+
+  // ---- Market detail (market-detail returns the list item plus the full manifest; no README).
+  const [detail, setDetail] = useState<PluginMarketDetailState | null>(null);
+  const detailRead = useRef(0);
+  const readDetail = useCallback(async (item: ManagedMarketItem, host: RemoteResourceHostTarget) => {
+    const generation = ++detailRead.current;
+    setDetail({ item, target: host, loading: true, failed: false });
+    if (!client || client.deviceId !== host.deviceId || !isOnline(host)) {
+      setDetail({ item, target: host, loading: false, failed: false });
+      return;
+    }
+    try {
+      const value = await client.detail(item.pluginId);
+      if (generation === detailRead.current) setDetail({ item: value, target: host, detail: value, loading: false, failed: false });
+    } catch {
+      if (generation === detailRead.current) setDetail({ item, target: host, loading: false, failed: true });
+    }
+  }, [client, isOnline]);
+  const openDetail = useCallback((item: ManagedMarketItem) => {
+    if (target) void readDetail(item, target);
+  }, [readDetail, target]);
+  const closeDetail = useCallback(() => { detailRead.current += 1; setDetail(null); }, []);
+  // The detail belongs to one computer and connection; drop it when either changes.
+  useEffect(() => { detailRead.current += 1; setDetail(null); setRowErrors({}); }, [scope]);
+
+  // ---- Install: a fresh existing controller per attempt; its state drives the row and the consent sheet.
+  const management = usePluginManagement(install?.target.deviceId, install ? isOnline(install.target) : false,
+    focused, install ? `plugin-market:${install.id}` : "plugin-market");
+  const startInstall = useCallback((item: ManagedMarketItem, known?: ManagedMarketDetail) => {
+    if (installRef.current || !target || !online || probeStatus !== "supported" || item.installState !== "not-installed") return;
+    setRowErrors(({ [item.pluginId]: _removed, ...rest }) => rest);
+    const attempt = { id: ++attemptId.current, target, item, detail: known, started: false, confirmed: false };
+    installRef.current = attempt;
+    setInstall(attempt);
+  }, [target, online, probeStatus]);
+  const finish = useCallback((attempt: InstallAttempt, messageKey?: string) => {
+    if (installRef.current?.id !== attempt.id) return;
+    installRef.current = null;
+    setInstall(null);
+    if (messageKey) setRowErrors((current) => ({ ...current, [attempt.item.pluginId]: messageKey }));
+  }, []);
+  useEffect(() => {
+    const attempt = install, state = management.state, controller = management.controller;
+    if (!attempt || attempt.started || !state || !controller) return;
+    if (!state.online) { finish(attempt, "plugins.actionFailed"); return; }
+    if (state.capability === "unsupported") { finish(attempt, "plugins.market.outdatedShort"); return; }
+    if (state.errorCode && !state.snapshot) { finish(attempt, pluginMarketErrorKey(state.errorCode)); return; }
+    if (state.capability !== "supported" || !state.snapshot || state.busy) return;
+    if (state.snapshot.ghosts.some((ghost) => marketItemMatchesPlugin(attempt.item, ghost))) {
+      finish(attempt, "plugins.market.errors.stateChanged");
+      return;
+    }
+    const started = { ...attempt, started: true };
+    installRef.current = started;
+    setInstall(started);
+    const current = () => installRef.current?.id === attempt.id;
+    void (async () => {
+      let value = attempt.detail;
+      if (!value) {
+        try {
+          value = await createPluginManagementClient({ invoke, deviceId: attempt.target.deviceId, isCurrent: current })
+            .detail(attempt.item.pluginId);
+        } catch (error) {
+          if (current()) finish(attempt, pluginMarketErrorKey(pluginManagementErrorCode(error)));
+          return;
+        }
+      }
+      if (!current()) return;
+      if (value.releaseId !== attempt.item.releaseId) { finish(attempt, "plugins.management.releaseChanged"); return; }
+      await controller.install(value);
+    })();
+  }, [install, management.state, management.controller, finish, invoke]);
+  useEffect(() => {
+    const attempt = install, state = management.state;
+    if (!attempt?.started || !state) return;
+    if (state.outcome === "confirmation" && !attempt.confirmed) {
+      const next = { ...attempt, confirmed: true };
+      installRef.current = next;
+      setInstall(next);
+    } else if (state.outcome === "failed") finish(attempt, pluginMarketErrorKey(state.errorCode));
+    else if (state.outcome === "cancelled") finish(attempt);
+    else if (state.outcome === "succeeded" && !state.busy) {
+      const complete = (instanceKey: string | undefined) => {
+        finish(attempt);
+        for (const entry of lists.current.values()) entry.items = entry.items.filter((item) => item.pluginId !== attempt.item.pluginId);
+        for (const entry of counts.current.values()) entry.at = 0;
+        setDetail((current) => current?.item.pluginId === attempt.item.pluginId ? null : current);
+        onInstalled.current(attempt.target, instanceKey, attempt.item);
+      };
+      // Wait for the controller's post-commit readback; it locates the new physical instance.
+      const installed = state.snapshot?.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
+      if (installed || state.errorCode) { complete(installed?.instanceKey); return; }
+      // The committed install stays successful even if the readback never names it.
+      const timer = setTimeout(() => complete(undefined), 5_000);
+      return () => clearTimeout(timer);
+    }
+  }, [install, management.state, finish]);
+  const rowState = (item: ManagedMarketItem): PluginMarketRowState => {
+    if (install?.item.pluginId === item.pluginId && install.target.deviceId === deviceId) {
+      const outcome = management.state?.outcome;
+      if (outcome === "unknown") return { kind: "unknown" };
+      if (install.confirmed && (outcome === "running" || outcome === "succeeded")) return { kind: "installing" };
+      return { kind: "waiting" };
+    }
+    if (rowErrors[item.pluginId]) return { kind: "failed", messageKey: rowErrors[item.pluginId] };
+    if (item.installState === "conflict") return { kind: "conflict" };
+    return { kind: "idle" };
+  };
+  const checkResult = useCallback(() => { void management.controller?.reconcile(); }, [management.controller]);
+
+  return {
+    target, online, targets, selectDevice,
+    filter, filters, setFilter, searching,
+    status, items, total,
+    hasMore: !!list?.nextCursor && list.status === "ready",
+    loadingMore: !!list?.loadingMore,
+    refreshing: !!list && list.status === "loading" && list.items.length > 0,
+    loadMore, refresh,
+    notices: {
+      unavailable: !!list?.meta?.unavailableReason,
+      organizationKey: pluginMarketOrganizationErrorKey(list?.meta?.organizationAccessError),
+      unavailableCustomSources: list?.meta?.unavailableCustomSourceNames ?? [],
+    },
+    rowState,
+    installBusy: !!install,
+    canInstall: online && probeStatus === "supported" && !install,
+    install: startInstall,
+    checkResult,
+    detail, openDetail, closeDetail,
+    retryDetail: () => { if (detail) void readDetail(detail.item, detail.target); },
+    confirmation: install && management.state && management.controller
+      ? { state: management.state, controller: management.controller, deviceName: install.target.deviceName }
+      : null,
+  };
+}
+export type PluginMarketModel = ReturnType<typeof usePluginMarket>;

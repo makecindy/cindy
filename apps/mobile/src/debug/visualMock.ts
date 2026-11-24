@@ -14,7 +14,7 @@ import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { TASK_TAG_COLORS, type TaskTagRequest, type TaskTagResult } from '@cindy/maker-shared';
 import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
 import { ApiError, type ApiFetchOptions } from '@/api/client';
-import type { DeviceView, LinkAcceptPayload } from '@cindy/device-link';
+import { REMOTE_RESOURCE_MANIFEST_CHANNEL, type DeviceView, type LinkAcceptPayload } from '@cindy/device-link';
 import type { MobileUser } from '@/auth/AuthContext';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { refreshRemoteProjectAliases, setRemoteProjectAliasesAccount } from '@/session/remoteProjectAliases';
@@ -35,6 +35,7 @@ import type {
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
+import { withPluginManagementManifest } from '@/debug/pluginMarketVisualFixture';
 import { prCardVisualFixture } from '@/debug/prCardVisualFixture';
 import { mailDraftCardFixture, mailVisualFixture, VISUAL_MAIL_DRAFT_CALL_ID, VISUAL_MAIL_DRAFT_SESSION_ID } from '@/debug/mailVisualFixture';
 import { teammateVisualFixture, teammateVisualReplyAt, VISUAL_TEAMMATE_SESSION_ID, VISUAL_TEAMMATE_THREAD_ROOT_ID, visualTeammateThreads } from '@/debug/teammateVisualFixture';
@@ -438,7 +439,8 @@ async function visualMockInvoke<T = unknown>(
   const prCardResult = realData ? undefined : prCardVisualFixture(channel, args);
   if (prCardResult !== undefined) return prCardResult as T;
   const teammateResult = realData ? undefined : teammateVisualFixture(channel, args);
-  if (teammateResult !== undefined) return teammateResult as T;
+  if (teammateResult !== undefined)
+    return (channel === REMOTE_RESOURCE_MANIFEST_CHANNEL ? withPluginManagementManifest(teammateResult) : teammateResult) as T;
   if (channel === 'local-db:task-tags:execute') {
     const request = args[0] as TaskTagRequest;
     if (request.action !== 'list' && request.action !== 'get') {

@@ -379,5 +379,67 @@
     "cancelled": "本次不会自动归档",
     "archived": "已归档「{{title}}」",
     "undo": "撤销"
+  },
+  "market": {
+    "title": "插件市场",
+    "installDestination": "安装到：{{device}}",
+    "filterLabel": "按来源筛选插件",
+    "filter": {
+      "all": "全部",
+      "official": "官方",
+      "community": "社区",
+      "organization": "团队共享",
+      "custom": "自定义"
+    },
+    "install": "安装",
+    "installAria": "安装 {{name}}",
+    "waiting": "等待确认…",
+    "installing": "正在安装…",
+    "loadMore": "加载更多",
+    "allLoaded": "已显示全部 {{count}} 个插件",
+    "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
+    "customSourcesUnavailable": "以下自定义市场暂时不可用：{{names}}。其他市场不受影响。",
+    "securityTitle": "安装与权限",
+    "source": "来源",
+    "scope": {
+      "public": "公开",
+      "organization": "组织",
+      "personal": "个人"
+    },
+    "publisherDescription": {
+      "official": "由 Cindy 官方发布和维护",
+      "community": "由社区开发者发布和维护",
+      "organization": "由当前组织共享给有权限的成员",
+      "custom": "来自你添加的 Git 或本地文件夹市场"
+    },
+    "errors": {
+      "generic": "插件市场操作失败，请重试。",
+      "invalidRequest": "插件请求无效。",
+      "notFound": "该插件已不可用，请刷新市场后重试。",
+      "conflict": "已有本地或市场插件使用相同的插件标识。",
+      "stateChanged": "操作期间账号、插件或版本已发生变化，请确认最新状态后重试。",
+      "listChanged": "企业插件目录已变化，请重试。",
+      "accessDenied": "当前插件操作不被允许，或操作已取消。",
+      "notConfigured": "当前环境未提供插件市场。",
+      "invalidPackage": "插件安装包异常，无法安装，请联系发布者。",
+      "downloadAuthorizationExpired": "插件下载授权已过期，无法继续安装。请检查系统日期和时间后重新发起安装",
+      "downloadTimeout": "插件下载超时，请稍后重试。",
+      "downloadFailed": "插件下载失败，请检查网络后重试。",
+      "brokerRedirectPortRequired": "该插件声明了授权 broker，但同一项 OAuth 配置缺少 redirectPort，无法从插件市场安装。请联系发布者补充该字段并重新发布。",
+      "hostUnsupported": "当前 Cindy 无法识别此插件的清单格式。",
+      "namespaceClientRequired": "当前版本无法查看企业插件，请更新 Cindy。已安装的企业插件仍可使用。",
+      "organizationContextUnavailable": "暂时无法确认企业身份，请稍后重试。已安装的企业插件仍可使用。",
+      "namespaceConfigRequired": "企业插件服务暂不可用。已安装的企业插件仍可使用。",
+      "organizationUnavailable": "企业插件暂不可用。已安装的企业插件仍可使用。"
+    },
+    "segmentsLabel": "查看插件",
+    "installTo": "安装到 {{device}}",
+    "conflict": "这台电脑已装了相同标识的插件，请在电脑上处理。",
+    "offline": "「{{device}}」未连接。连接恢复后可以浏览和安装插件。",
+    "outdated": "「{{device}}」上的 Cindy 版本还不支持从手机安装插件，请先在那台电脑更新 Cindy。已安装的插件照常可用。",
+    "outdatedShort": "这台电脑上的 Cindy 版本还不支持从手机安装插件，请先更新。",
+    "readFailed": "未能读取插件市场，请重试。",
+    "securityBody": "点「安装」后，电脑会先下载并检查安装包，再把它需要的权限列给你确认。确认前不会安装；装好后自动启用，可随时停用或卸载。",
+    "resultUnknownDetail": "还没确认这次安装是否完成。"
   }
 }

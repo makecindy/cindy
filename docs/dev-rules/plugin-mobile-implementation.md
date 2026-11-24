@@ -29,6 +29,33 @@
   Host MRU 补充，同排名保持稳定。不同电脑的插件用资源 key 区分，配置与凭证不参与排序。
 - 启停开关等待电脑操作回执并重新读取插件状态，操作期间禁止重复点击，成功后保留详情。
   离线时不可操作；失败不自动重发，账号或详情已切换时旧响应不覆盖当前页面。
+
+### 插件市场与安装（提案实现，待维护者确认）
+
+2026-11-25 提案实现：插件页搜索框下加「已安装 | 插件市场」分段（默认已安装，搜索时收起，
+先列已安装再列市场），让手机给某一台电脑安装它还没装的插件。这是新增界面行为，是否接受由维护者确认。
+
+- 市场是「某一台电脑能装什么」：顶部「安装到 <电脑>」，多台电脑时可切换，不含「所有电脑」；
+  已安装分段选了具体电脑时默认同一台，否则用本机记住的上次市场电脑，再退回一台在线电脑。
+  来源筛选全部 / 官方 / 社区 / 团队共享 / 自定义，默认官方；团队共享与自定义只在有对应内容时出现；
+  官方与社区是公开页按 `publisherKind` 在本地筛出的子集，与电脑端远程页一致。
+- 读取只用目标 Host 的 `management:snapshot {read:'capabilities'}` 与 `{read:'catalog',query}`：
+  列表页 `excludeInstalled:true, counts:false`，计数另读一次 `scope:'all', limit:1, counts:true`；
+  同一电脑、查询、来源 30 秒内复用（最多 6 份），下拉刷新强制重读。旧 Host 回 `INVALID_PARAMS`
+  或没有管理能力时显示「先更新那台电脑」，不回退一次读全量；普通读取失败只给重试。
+  页面按白名单字段做有界解析，`publisherKind`、`organizationAccessError`、`counts`、`nextCursor`
+  缺失即降级；图标只接受未过期的 HTTPS 链接，自定义市场项不显示图标。
+- 详情读 `management:market-detail`（列表项 + manifest，无 README），工具名来自 manifest；
+  权限只在电脑下载并检查真实安装包后的确认回执中出现。安装沿用现有管理 controller 与确认面板：
+  点「安装」→ 等待确认 → 允许并继续 → 正在安装 → 成功后打开该插件的已装详情。每次安装单独
+  挂一个 controller，同一时间只允许一个安装，安装中不能切换市场电脑。失败在行内说明原因并可再点；
+  断线结果不确定沿用「结果待确认 / 核实结果」，只查原操作，不重发。同标识冲突（`conflict`）只提示到电脑上处理。
+- 第一版不做：README、安装前权限预览、下载进度、自定义市场图标、替换同标识插件、今日推荐、
+  手机添加自定义市场、兼容 0.1.112–0.1.129 的全量读取回退。组织插件首装遇到电脑上残留的同名作品库时，
+  电脑会弹只能在电脑上点的原生对话框，手机会等到超时（Host 行为未改）。
+- 实现：`usePluginMarket.ts`（选电脑、分页、计数、安装编排）、`pluginMarketCatalog.ts`（解析与呈现）、
+  `PluginMarketRows.ios.tsx`（原生 List 行）、`PluginMarketSection.tsx`（Android）、
+  `PluginMarketDetailView(.ios).tsx`；`--mock` 演示见 `debug/pluginMarketVisualFixture.ts`。
 - manifest 的可选 `mobile` 包含 `channels`、`panel`、`mainView`、`settings`；路径只覆盖
   已声明的原能力。未声明移动适配的插件仍可被发现和在任务中使用，旧桌面行为保留。
 - 页面租约绑定账号、控制端连接、插件安装版本和页面实例。页面关闭或来源失效后，
@@ -106,6 +133,10 @@ iOS 原生构建、Metro 与真实 PocketMind 数据，以及 Android Debug 包�
 最新 iOS 原生包重复目检为 Light；Dark 证据来自主干同步前。Android 真实账号联动、
 iPad、旧 iOS、VoiceOver，以及真实启停期间的断线恢复尚未实测。
 启停与回读竞态另有定向回归，不能替代运行验收；完整单测门禁由 PR CI 执行。
+插件市场（提案实现）的单测覆盖分页解析与越界拒绝、旧 Host 的更新提示（不回退全量）、
+切换电脑或账号后迟到的分页不落地，以及从全新安装到确认、成功并打开已装详情
+（`pluginManagement.test.ts`、`pluginsScreen.test.tsx`）。iOS/Android 模拟器 Light/Dark 目检、
+与真实电脑的安装联调以对应 PR 的记录为准，未记录前不宣称已验证。
 
 ## 兼容、冷更与回退
 

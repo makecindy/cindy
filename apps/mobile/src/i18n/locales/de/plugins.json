@@ -379,5 +379,67 @@
     "cancelled": "Diesmal keine automatische Archivierung",
     "archived": "„{{title}}“ archiviert",
     "undo": "Rückgängig"
+  },
+  "market": {
+    "title": "Plugin-Marktplatz",
+    "installDestination": "Installieren auf: {{device}}",
+    "filterLabel": "Plugins nach Quelle filtern",
+    "filter": {
+      "all": "Alle",
+      "official": "Offiziell",
+      "community": "Community",
+      "organization": "Im Team geteilt",
+      "custom": "Benutzerdefiniert"
+    },
+    "install": "Installieren",
+    "installAria": "{{name}} installieren",
+    "waiting": "Warten auf Bestätigung…",
+    "installing": "Wird installiert…",
+    "loadMore": "Mehr laden",
+    "allLoaded": "Alle {{count}} Plugins angezeigt",
+    "unavailable": "Der Plugin-Marktplatz ist vorübergehend nicht verfügbar. Installierte Plugins bleiben weiterhin verfügbar.",
+    "customSourcesUnavailable": "Diese benutzerdefinierten Marktplätze sind vorübergehend nicht verfügbar: {{names}}. Andere Marktplätze sind davon nicht betroffen.",
+    "securityTitle": "Installation und Berechtigungen",
+    "source": "Quelle",
+    "scope": {
+      "public": "Öffentlich",
+      "organization": "Organisation",
+      "personal": "Persönlich"
+    },
+    "publisherDescription": {
+      "official": "Von Cindy veröffentlicht und gepflegt",
+      "community": "Von Community-Entwicklern veröffentlicht und gepflegt",
+      "organization": "Von deiner Organisation mit berechtigten Mitgliedern geteilt",
+      "custom": "Aus einem hinzugefügten Git- oder lokalen Ordner-Marktplatz"
+    },
+    "errors": {
+      "generic": "Die Plugin-Marktplatzaktion ist fehlgeschlagen. Versuche es erneut.",
+      "invalidRequest": "Die Plugin-Anfrage ist ungültig.",
+      "notFound": "Dieses Plugin ist nicht mehr verfügbar. Aktualisiere den Marktplatz und versuche es erneut.",
+      "conflict": "Ein anderes installiertes Plugin oder Marktplatz-Plugin verwendet dieselbe Plugin-ID.",
+      "stateChanged": "Das Konto, Plugin oder Release hat sich während dieser Aktion geändert. Prüfe den aktuellen Stand und versuche es erneut.",
+      "listChanged": "Der Plugin-Katalog der Organisation hat sich geändert. Versuche es erneut.",
+      "accessDenied": "Diese Plugin-Aktion ist nicht zulässig oder wurde abgebrochen.",
+      "notConfigured": "Der Plugin-Marktplatz ist in dieser Umgebung nicht verfügbar.",
+      "invalidPackage": "Dieses Plugin-Paket ist ungültig und kann nicht installiert werden. Kontaktiere den Herausgeber.",
+      "downloadAuthorizationExpired": "Die Downloadberechtigung für das Plugin ist abgelaufen. Prüfe Datum und Uhrzeit des Systems, bevor du die Installation erneut startest.",
+      "downloadTimeout": "Zeitüberschreitung beim Plugin-Download. Versuche es später erneut.",
+      "downloadFailed": "Der Plugin-Download ist fehlgeschlagen. Prüfe deine Verbindung und versuche es erneut.",
+      "brokerRedirectPortRequired": "Dieses Plugin deklariert einen Autorisierungsbroker, aber in derselben OAuth-Konfiguration fehlt redirectPort. Daher kann es nicht aus dem Plugin-Marktplatz installiert werden. Bitte den Herausgeber, das Feld hinzuzufügen und ein neues Release zu veröffentlichen.",
+      "hostUnsupported": "Diese Cindy-Version kann das Manifestformat dieses Plugins nicht lesen.",
+      "namespaceClientRequired": "Diese Version kann Organisations-Plugins nicht anzeigen. Aktualisiere Cindy, um fortzufahren. Installierte Organisations-Plugins bleiben verfügbar.",
+      "organizationContextUnavailable": "Die Organisationsidentität ist vorübergehend nicht verfügbar. Versuche es später erneut. Installierte Organisations-Plugins bleiben verfügbar.",
+      "namespaceConfigRequired": "Organisations-Plugins sind vorübergehend nicht verfügbar. Installierte Organisations-Plugins bleiben weiterhin verfügbar.",
+      "organizationUnavailable": "Organisations-Plugins sind vorübergehend nicht verfügbar. Installierte Organisations-Plugins bleiben weiterhin verfügbar."
+    },
+    "segmentsLabel": "Plugins anzeigen",
+    "installTo": "Installieren auf {{device}}",
+    "conflict": "Auf diesem Computer ist bereits ein Plugin mit derselben Kennung installiert. Kläre das am Computer.",
+    "offline": "{{device}} ist nicht verbunden. Sobald die Verbindung wieder besteht, kannst du Plugins durchsuchen und installieren.",
+    "outdated": "Die Cindy-Version auf {{device}} unterstützt das Installieren von Plugins vom Handy noch nicht. Aktualisiere zuerst Cindy auf diesem Computer. Installierte Plugins funktionieren weiterhin.",
+    "outdatedShort": "Cindy auf diesem Computer unterstützt das Installieren vom Handy noch nicht. Aktualisiere Cindy zuerst.",
+    "readFailed": "Der Plugin-Marktplatz konnte nicht geladen werden. Versuche es erneut.",
+    "securityBody": "Nach dem Tippen auf Installieren lädt der Computer das Paket herunter, prüft es und zeigt dir die benötigten Berechtigungen zur Bestätigung. Vor deiner Bestätigung wird nichts installiert. Danach ist das Plugin automatisch aktiviert und lässt sich jederzeit deaktivieren oder deinstallieren.",
+    "resultUnknownDetail": "Es ist noch nicht bestätigt, ob diese Installation abgeschlossen wurde."
   }
 }

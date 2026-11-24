@@ -31,6 +31,8 @@ export interface ManagedMarketItem {
   name: string;
   description: string | null;
   author: string | null;
+  /** Optional display identity of a public release; older Hosts omit it. Never a trust grant. */
+  publisherKind?: 'official' | 'personal' | null;
   scope: 'public' | 'organization' | 'personal';
   organizationId: string | null;
   defaultInstall: boolean;
@@ -151,6 +153,9 @@ function safeMarketItem<T extends ManagedMarketItem>(v: T): T {
   // This target-local icon lookup key must never resolve against the controller's filesystem.
   const safe = { ...v } as T & { customIconKey?: unknown };
   delete safe.customIconKey;
+  // Additive display field: an unknown value degrades to "no publisher label" instead of rejecting the page.
+  if (safe.publisherKind !== undefined && safe.publisherKind !== null && !oneOf(safe.publisherKind, ['official', 'personal']))
+    delete safe.publisherKind;
   return safe;
 }
 export function parsePluginManagementSnapshot(value: unknown): PluginManagementSnapshot {

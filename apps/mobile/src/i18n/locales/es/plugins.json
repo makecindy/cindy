@@ -381,5 +381,67 @@
     "cancelled": "No se archivará automáticamente esta vez",
     "archived": "Se archivó «{{title}}»",
     "undo": "Deshacer"
+  },
+  "market": {
+    "title": "Mercado de complementos",
+    "installDestination": "Instalar en: {{device}}",
+    "filterLabel": "Filtrar complementos por origen",
+    "filter": {
+      "all": "Todo",
+      "official": "Oficial",
+      "community": "Comunidad",
+      "organization": "Compartido con el equipo",
+      "custom": "Personalizado"
+    },
+    "install": "Instalar",
+    "installAria": "Instalar {{name}}",
+    "waiting": "Esperando confirmación…",
+    "installing": "Instalando…",
+    "loadMore": "Cargar más",
+    "allLoaded": "Se muestran los {{count}} complementos",
+    "unavailable": "El mercado de complementos no está disponible temporalmente. Los complementos instalados siguen disponibles.",
+    "customSourcesUnavailable": "Estos mercados personalizados no están disponibles temporalmente: {{names}}. Los demás mercados no se ven afectados.",
+    "securityTitle": "Instalación y permisos",
+    "source": "Fuente",
+    "scope": {
+      "public": "Público",
+      "organization": "Organización",
+      "personal": "Personal"
+    },
+    "publisherDescription": {
+      "official": "Publicado y mantenido por Cindy",
+      "community": "Publicado y mantenido por desarrolladores de la comunidad",
+      "organization": "Compartido por tu organización con los miembros autorizados",
+      "custom": "De un mercado Git o de una carpeta local que añadiste"
+    },
+    "errors": {
+      "generic": "La operación del mercado de complementos falló. Inténtalo de nuevo.",
+      "invalidRequest": "La solicitud del complemento no es válida.",
+      "notFound": "Este complemento ya no está disponible. Actualiza el mercado e inténtalo de nuevo.",
+      "conflict": "Otro complemento instalado o del mercado usa el mismo ID de complemento.",
+      "stateChanged": "La cuenta, el complemento o la versión cambió durante esta operación. Revisa el estado actual e inténtalo de nuevo.",
+      "listChanged": "El catálogo de complementos de la organización cambió. Inténtalo de nuevo.",
+      "accessDenied": "Esta operación del complemento no está permitida o se canceló.",
+      "notConfigured": "El mercado de complementos no está disponible en este entorno.",
+      "invalidPackage": "Este paquete de complemento no es válido y no se puede instalar. Contacta al editor.",
+      "downloadAuthorizationExpired": "La autorización de descarga del complemento ha caducado. Comprueba la fecha y la hora del sistema antes de iniciar una nueva instalación.",
+      "downloadTimeout": "Se agotó el tiempo de descarga del complemento. Inténtalo más tarde.",
+      "downloadFailed": "No se pudo descargar el complemento. Revisa tu conexión e inténtalo de nuevo.",
+      "brokerRedirectPortRequired": "Este complemento declara un intermediario de autorización, pero falta redirectPort en la misma configuración de OAuth, por lo que no se puede instalar desde el mercado de complementos. Contacta al editor para que agregue el campo y publique una nueva versión.",
+      "hostUnsupported": "Esta versión de Cindy no puede leer el formato del manifiesto de este complemento.",
+      "namespaceClientRequired": "Esta versión no puede mostrar los complementos de la organización. Actualiza Cindy para continuar. Los complementos de la organización instalados siguen disponibles.",
+      "organizationContextUnavailable": "La identidad de la organización no está disponible temporalmente. Inténtalo más tarde. Los complementos de la organización instalados siguen disponibles.",
+      "namespaceConfigRequired": "Los complementos de la organización no están disponibles temporalmente. Los complementos de la organización instalados siguen disponibles.",
+      "organizationUnavailable": "Los complementos de la organización no están disponibles temporalmente. Los complementos de la organización instalados siguen disponibles."
+    },
+    "segmentsLabel": "Mostrar complementos",
+    "installTo": "Instalar en {{device}}",
+    "conflict": "Ya hay un complemento con el mismo identificador en este ordenador. Resuélvelo en el ordenador.",
+    "offline": "{{device}} no está conectado. Podrás explorar e instalar complementos cuando se restablezca la conexión.",
+    "outdated": "La versión de Cindy en {{device}} aún no permite instalar complementos desde el teléfono. Actualiza primero Cindy en ese ordenador. Los complementos instalados siguen disponibles.",
+    "outdatedShort": "Cindy en este ordenador aún no permite instalar desde el teléfono. Actualízala primero.",
+    "readFailed": "No se pudo cargar el mercado de complementos. Inténtalo de nuevo.",
+    "securityBody": "Al tocar Instalar, el ordenador descarga y comprueba el paquete y luego te muestra los permisos que necesita para que los confirmes. No se instala nada antes de tu confirmación. Una vez instalado, se activa automáticamente y puedes desactivarlo o desinstalarlo cuando quieras.",
+    "resultUnknownDetail": "Aún no se ha confirmado si esta instalación terminó."
   }
 }

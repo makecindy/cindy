@@ -379,5 +379,67 @@
     "cancelled": "이번에는 자동으로 보관하지 않습니다",
     "archived": "\"{{title}}\"을(를) 보관했습니다",
     "undo": "실행 취소"
+  },
+  "market": {
+    "title": "플러그인 마켓",
+    "installDestination": "설치 대상: {{device}}",
+    "filterLabel": "출처별 플러그인 필터",
+    "filter": {
+      "all": "전체",
+      "official": "공식",
+      "community": "커뮤니티",
+      "organization": "팀 공유",
+      "custom": "사용자 지정"
+    },
+    "install": "설치",
+    "installAria": "{{name}} 설치",
+    "waiting": "확인 대기 중…",
+    "installing": "설치 중…",
+    "loadMore": "더 보기",
+    "allLoaded": "플러그인 {{count}}개를 모두 표시했습니다",
+    "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+    "customSourcesUnavailable": "다음 사용자 지정 마켓을 일시적으로 사용할 수 없습니다: {{names}}. 다른 마켓에는 영향을 주지 않습니다.",
+    "securityTitle": "설치 및 권한",
+    "source": "소스",
+    "scope": {
+      "public": "공개",
+      "organization": "조직",
+      "personal": "개인"
+    },
+    "publisherDescription": {
+      "official": "Cindy 공식 배포 및 유지 관리",
+      "community": "커뮤니티 개발자가 배포 및 유지 관리",
+      "organization": "조직에서 권한이 있는 구성원에게 공유",
+      "custom": "추가한 Git 또는 로컬 폴더 마켓에서 제공"
+    },
+    "errors": {
+      "generic": "플러그인 마켓 작업에 실패했습니다. 다시 시도해 주세요.",
+      "invalidRequest": "플러그인 요청이 올바르지 않습니다.",
+      "notFound": "이 플러그인은 더 이상 사용할 수 없습니다. 마켓을 새로 고친 후 다시 시도해 주세요.",
+      "conflict": "설치된 플러그인 또는 마켓 플러그인이 동일한 플러그인 ID를 사용하고 있습니다.",
+      "stateChanged": "작업 중 계정, 플러그인 또는 릴리스가 변경되었습니다. 최신 상태를 확인한 후 다시 시도해 주세요.",
+      "listChanged": "조직 플러그인 목록이 변경되었습니다. 다시 시도하세요.",
+      "accessDenied": "이 플러그인 작업은 허용되지 않았거나 취소되었습니다.",
+      "notConfigured": "이 환경에서는 플러그인 마켓을 사용할 수 없습니다.",
+      "invalidPackage": "플러그인 패키지에 문제가 있어 설치할 수 없습니다. 게시자에게 문의해 주세요.",
+      "downloadAuthorizationExpired": "플러그인 다운로드 권한이 만료되어 설치를 계속할 수 없습니다. 시스템 날짜와 시간을 확인한 후 설치를 다시 시작하세요.",
+      "downloadTimeout": "플러그인 다운로드 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.",
+      "downloadFailed": "플러그인을 다운로드하지 못했습니다. 네트워크 연결을 확인한 후 다시 시도해 주세요.",
+      "brokerRedirectPortRequired": "이 플러그인은 인증 broker를 선언했지만 같은 OAuth 설정에 redirectPort가 없어 플러그인 마켓에서 설치할 수 없습니다. 게시자에게 이 필드를 추가해 새 버전을 게시해 달라고 알려 주세요.",
+      "hostUnsupported": "이 Cindy 버전에서는 플러그인의 매니페스트 형식을 읽을 수 없습니다.",
+      "namespaceClientRequired": "이 버전에서는 조직 플러그인을 볼 수 없습니다. Cindy를 업데이트하세요. 설치된 조직 플러그인은 계속 사용할 수 있습니다.",
+      "organizationContextUnavailable": "조직 신원을 일시적으로 확인할 수 없습니다. 나중에 다시 시도하세요. 설치된 조직 플러그인은 계속 사용할 수 있습니다.",
+      "namespaceConfigRequired": "조직 플러그인을 일시적으로 사용할 수 없습니다. 설치된 조직 플러그인은 계속 사용할 수 있습니다.",
+      "organizationUnavailable": "조직 플러그인을 일시적으로 사용할 수 없습니다. 설치된 조직 플러그인은 계속 사용할 수 있습니다."
+    },
+    "segmentsLabel": "플러그인 보기",
+    "installTo": "{{device}}에 설치",
+    "conflict": "이 컴퓨터에 같은 식별자의 플러그인이 이미 설치되어 있습니다. 컴퓨터에서 처리하세요.",
+    "offline": "{{device}}이(가) 연결되어 있지 않습니다. 다시 연결되면 플러그인을 둘러보고 설치할 수 있습니다.",
+    "outdated": "{{device}}의 Cindy 버전은 아직 휴대폰에서 플러그인 설치를 지원하지 않습니다. 먼저 해당 컴퓨터에서 Cindy를 업데이트하세요. 설치된 플러그인은 계속 사용할 수 있습니다.",
+    "outdatedShort": "이 컴퓨터의 Cindy는 아직 휴대폰에서 플러그인 설치를 지원하지 않습니다. 먼저 업데이트하세요.",
+    "readFailed": "플러그인 마켓을 불러오지 못했습니다. 다시 시도하세요.",
+    "securityBody": "설치를 탭하면 컴퓨터가 설치 패키지를 내려받아 확인한 뒤 필요한 권한을 보여 줍니다. 확인하기 전에는 설치되지 않습니다. 설치 후에는 자동으로 활성화되며 언제든지 비활성화하거나 제거할 수 있습니다.",
+    "resultUnknownDetail": "이번 설치가 완료되었는지 아직 확인되지 않았습니다."
   }
 }

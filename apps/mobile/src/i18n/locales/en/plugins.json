@@ -379,5 +379,67 @@
     "cancelled": "Will not auto-archive this time",
     "archived": "Archived “{{title}}”",
     "undo": "Undo"
+  },
+  "market": {
+    "title": "Plugin marketplace",
+    "installDestination": "Install to: {{device}}",
+    "filterLabel": "Filter plugins by source",
+    "filter": {
+      "all": "All",
+      "official": "Official",
+      "community": "Community",
+      "organization": "Team shared",
+      "custom": "Custom"
+    },
+    "install": "Install",
+    "installAria": "Install {{name}}",
+    "waiting": "Waiting for confirmation…",
+    "installing": "Installing…",
+    "loadMore": "Load More",
+    "allLoaded": "All {{count}} plugins shown",
+    "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
+    "customSourcesUnavailable": "These custom marketplaces are temporarily unavailable: {{names}}. Other marketplaces are unaffected.",
+    "securityTitle": "Install and permissions",
+    "source": "Source",
+    "scope": {
+      "public": "Public",
+      "organization": "Organization",
+      "personal": "Personal"
+    },
+    "publisherDescription": {
+      "official": "Published and maintained by Cindy",
+      "community": "Published and maintained by community developers",
+      "organization": "Shared by your organization with authorized members",
+      "custom": "From a Git or local folder marketplace you added"
+    },
+    "errors": {
+      "generic": "The plugin market action couldn’t be completed.",
+      "invalidRequest": "The plugin request is invalid.",
+      "notFound": "This plugin is no longer available. Refresh the market and try again.",
+      "conflict": "Another installed or market plugin uses the same plugin ID.",
+      "stateChanged": "The account, plugin, or release changed during this operation. Review the latest state and try again.",
+      "listChanged": "The organization plugin catalog changed. Try again.",
+      "accessDenied": "This plugin operation is not permitted or was cancelled.",
+      "notConfigured": "The plugin market is not available in this environment.",
+      "invalidPackage": "This plugin package is invalid and cannot be installed. Contact the publisher.",
+      "downloadAuthorizationExpired": "The plugin download authorization expired. Check the system date and time before starting a new installation attempt.",
+      "downloadTimeout": "The plugin download timed out. Try again later.",
+      "downloadFailed": "The plugin download failed. Check your connection and try again.",
+      "brokerRedirectPortRequired": "This plugin declares an authorization broker but is missing redirectPort in the same OAuth configuration, so it cannot be installed from the plugin marketplace. Contact the publisher to add the field and publish a new release.",
+      "hostUnsupported": "This Cindy version cannot read this plugin's manifest format.",
+      "namespaceClientRequired": "This version cannot show organization plugins. Update Cindy to continue. Installed organization plugins remain available.",
+      "organizationContextUnavailable": "Organization identity is temporarily unavailable. Try again later. Installed organization plugins remain available.",
+      "namespaceConfigRequired": "Organization plugins are temporarily unavailable. Installed organization plugins remain available.",
+      "organizationUnavailable": "Organization plugins are temporarily unavailable. Installed organization plugins remain available."
+    },
+    "segmentsLabel": "Show plugins",
+    "installTo": "Install to {{device}}",
+    "conflict": "This computer already has a plugin with the same ID. Resolve it on the computer.",
+    "offline": "{{device}} is not connected. You can browse and install plugins once it reconnects.",
+    "outdated": "The Cindy version on {{device}} can’t install plugins from your phone yet. Update Cindy on that computer first. Installed plugins keep working.",
+    "outdatedShort": "Cindy on this computer can’t install plugins from your phone yet. Update it first.",
+    "readFailed": "Couldn’t load the plugin marketplace. Try again.",
+    "securityBody": "After you tap Install, the computer downloads and checks the package, then lists the permissions it needs for you to confirm. Nothing is installed before you confirm. Once installed, it’s enabled automatically, and you can disable or uninstall it anytime.",
+    "resultUnknownDetail": "It’s not confirmed yet whether this installation finished."
   }
 }

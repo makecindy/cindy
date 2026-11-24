@@ -20,9 +20,11 @@ import {
   useLocalSearchParams,
 } from "expo-router";
 import {
+  pluginVisualDemosEnabled,
   pluginVisualPreview,
   pluginVisualScenario,
 } from "@/debug/pluginVisualFixture";
+import { setPluginMarketVisualScenario } from "@/debug/pluginMarketVisualFixture";
 import type { SearchBarCommands } from "react-native-screens";
 import { goBackGuarded } from "@/utils/backGuard";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -81,7 +83,14 @@ import {
   pluginApprovalToken,
 } from "./pluginManagementTypes";
 import { pluginDetailModel } from "./pluginDetailModel";
-import { PluginDirectoryView } from "./PluginDirectoryView";
+import {
+  PluginDirectoryView,
+  type PluginDirectorySegment,
+} from "./PluginDirectoryView";
+import { usePluginMarket } from "./usePluginMarket";
+import { PluginMarketSection } from "./PluginMarketSection";
+import { PluginMarketDetailView } from "./PluginMarketDetailView";
+import { FileBrowserSegmentedControl } from "@/session/FileBrowserSegmentedControl";
 import { PluginDetailView } from "./PluginDetailView";
 import { PluginTaskPicker } from "./PluginTaskPicker";
 import { PluginPage } from "./PluginPage";
@@ -97,7 +106,10 @@ function PluginDirectory() {
     router = useRouter(),
     focused = useIsFocused();
   const { t, i18n } = useTranslation();
-  const { preview } = useLocalSearchParams<{ preview?: string }>();
+  const { preview, market: marketPreview } = useLocalSearchParams<{
+    preview?: string;
+    market?: string;
+  }>();
   const previewSelection = useRef<string | undefined>(undefined);
   const { invoke, connectionEpoch } = useDeviceLink();
   const { colors } = useTheme(),
@@ -124,6 +136,12 @@ function PluginDirectory() {
   const directoryLoading = Boolean(devices.loading || list.loading);
   const [deviceId, setDeviceId] = useState("");
   const [query, setQuery] = useState("");
+  const [segment, setSegment] = useState<PluginDirectorySegment>("installed");
+  // DEV visual mock only: cindy://plugins?market=<scenario> opens a market demo state.
+  useEffect(() => {
+    if (setPluginMarketVisualScenario(marketPreview, pluginVisualDemosEnabled()))
+      setSegment("market");
+  }, [marketPreview]);
   const [settingsNotice, setSettingsNotice] = useState("");
   const transientScope = useRef("");
   const [selected, setSelected] = useState<{
@@ -198,8 +216,42 @@ function PluginDirectory() {
     !!management.state.snapshot &&
     management.state.online &&
     !managementPending;
+  // Market browsing and installs live in usePluginMarket; this screen only routes views.
+  const market = usePluginMarket({
+    visible: focused && (segment === "market" || !!query.trim()) && (wide || !selected),
+    focused,
+    targets,
+    isOnline: list.isOnline,
+    installedDeviceId: deviceId,
+    query,
+    onInstalled: (host, instanceKey, item) => {
+      void list.refresh();
+      // Same as the computer: a fresh install opens its installed detail.
+      if (instanceKey)
+        void showDetail({
+          key: JSON.stringify([host.deviceId, "plugins", "plugin", instanceKey]),
+          host,
+          item: {
+            ref: { collectionId: "plugins", kind: "plugin", id: instanceKey },
+            revision: "",
+            links: [],
+            display: { title: item.name },
+          },
+        });
+    },
+  });
+  const marketDetail = selected ? null : market.detail;
+  const marketView = {
+    ...market,
+    openDetail: (item: Parameters<typeof market.openDetail>[0]) => {
+      detailGeneration.current += 1;
+      setSelected(undefined);
+      market.openDetail(item);
+    },
+  };
 
-  const searchVisible = Platform.OS === "ios" && (!selected || wide);
+  const searchVisible =
+    Platform.OS === "ios" && ((!selected && !marketDetail) || wide);
   const latestQuery = useRef(query);
   latestQuery.current = query;
   const searchBar = useMemo(() => {
@@ -265,18 +317,19 @@ function PluginDirectory() {
     else if (selected && !wide) {
       detailGeneration.current += 1;
       setSelected(undefined);
-    } else goBackGuarded(router);
-  }, [detailOpen, readmeOpen, settingsOpen, selected, wide, router]);
+    } else if (marketDetail && !wide) market.closeDetail();
+    else goBackGuarded(router);
+  }, [detailOpen, readmeOpen, settingsOpen, selected, wide, router, marketDetail, market.closeDetail]);
   // The introduction belongs to one plugin's detail page.
   useEffect(() => setReadmeOpen(false), [selected?.row.key, detailOpen]);
   useEffect(() => {
-    if (!focused || !selected || wide) return;
+    if (!focused || (!selected && !marketDetail) || wide) return;
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
       goBack();
       return true;
     });
     return () => listener.remove();
-  }, [focused, selected, wide, goBack]);
+  }, [focused, selected, marketDetail, wide, goBack]);
   const detailGeneration = useRef(0),
     recentTouched = useRef(false);
   const recentOwner = useRef(getMobileAuthOwner()).current;
@@ -343,6 +396,7 @@ function PluginDirectory() {
   const showDetail = async (row: HostedRemoteCollectionItem) => {
     const generation = ++detailGeneration.current,
       owner = getMobileAuthOwner();
+    market.closeDetail();
     setSelected((current) =>
       current?.row.key === row.key ? { ...current, row } : { row },
     );
@@ -450,6 +504,7 @@ function PluginDirectory() {
       return;
     }
     detailGeneration.current += 1;
+    market.closeDetail();
     setDetailOpen(false);
     setSettingsOpen(false);
     setSelected({ row, surface: action.id.slice(5) as PluginPageSurface });
@@ -567,6 +622,70 @@ function PluginDirectory() {
       </Pressable>
     </View>
   );
+  const showInstalled = !!query.trim() || segment === "installed";
+  const showMarket = !!query.trim() || segment === "market";
+  const installedDirectory = (
+    <>
+      {directoryLoading && !items.length ? (
+        <ActivityIndicator color={colors.textSecondary} />
+      ) : null}
+      <View style={styles.inline}>
+        <Text style={[styles.groupLabel, { flex: 1 }]}>
+          {t("plugins.installed")}
+        </Text>
+      </View>
+      <View style={styles.groupCard}>{items.map(renderRow)}</View>
+      {!directoryLoading && !listFailed && !items.length ? (
+        <View style={styles.empty}>
+          <Puzzle size={iconSize.xl} color={colors.textTertiary} />
+          <Text style={styles.preview}>
+            {t(
+              query
+                ? "plugins.noResults"
+                : targets.length
+                  ? "plugins.noPlugins"
+                  : "plugins.noComputer",
+            )}
+          </Text>
+          {!targets.length ? (
+            <Pressable
+              style={styles.button}
+              onPress={() => router.push("/devices/manage")}
+            >
+              <Text style={styles.controlText}>
+                {t("plugins.connectComputer")}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+      {listFailed ? (
+        <View>
+          <Text style={styles.note}>
+            {t(
+              items.length
+                ? "plugins.listUnavailable"
+                : "plugins.listLoadFailed",
+            )}
+          </Text>
+          {!items.length && !directoryLoading ? (
+            <Pressable
+              accessibilityRole="button"
+              style={styles.button}
+              onPress={() => {
+                devices.refresh();
+                void list.refresh();
+              }}
+            >
+              <Text style={styles.controlText}>
+                {t("plugins.detail.action.retry")}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+    </>
+  );
   const directory =
     Platform.OS === "ios" ? (
       <View style={[styles.directory, wide && styles.sidebar]}>
@@ -586,6 +705,9 @@ function PluginDirectory() {
             void showDetail(row);
           }}
           onConnectComputer={() => router.push("/devices/manage")}
+          segment={segment}
+          onSegmentChange={setSegment}
+          market={marketView}
         />
       </View>
     ) : (
@@ -594,29 +716,41 @@ function PluginDirectory() {
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
+          scrollEventThrottle={200}
+          onScroll={({ nativeEvent: n }) => {
+            // Page the market when the end of the list comes into view.
+            if (showMarket && n.layoutMeasurement.height + n.contentOffset.y >= n.contentSize.height - 240)
+              market.loadMore();
+          }}
           refreshControl={
             <RefreshControl
-              refreshing={list.refreshing}
+              refreshing={
+                (showInstalled && list.refreshing) ||
+                (showMarket && market.refreshing)
+              }
               onRefresh={() => {
-                void refreshDirectory();
+                if (showInstalled) void refreshDirectory();
+                if (showMarket) void market.refresh();
               }}
               tintColor={colors.textSecondary}
             />
           }
         >
           <View style={styles.controls}>
-            <Pressable
-              accessibilityRole="button"
-              style={styles.device}
-              onPress={selectDevice}
-            >
-              <Monitor size={iconSize.sm} color={colors.textSecondary} />
-              <Text style={styles.controlText}>
-                {targets.find((h) => h.deviceId === deviceId)?.deviceName ??
-                  t("plugins.allComputers")}
-              </Text>
-              <ChevronDown size={iconSize.sm} color={colors.textSecondary} />
-            </Pressable>
+            {showInstalled ? (
+              <Pressable
+                accessibilityRole="button"
+                style={styles.device}
+                onPress={selectDevice}
+              >
+                <Monitor size={iconSize.sm} color={colors.textSecondary} />
+                <Text style={styles.controlText}>
+                  {targets.find((h) => h.deviceId === deviceId)?.deviceName ??
+                    t("plugins.allComputers")}
+                </Text>
+                <ChevronDown size={iconSize.sm} color={colors.textSecondary} />
+              </Pressable>
+            ) : null}
             <View style={styles.search}>
               <Search size={iconSize.md} color={colors.textTertiary} />
               <TextInput
@@ -629,64 +763,27 @@ function PluginDirectory() {
                 clearButtonMode="while-editing"
               />
             </View>
+            {!query.trim() ? (
+              <FileBrowserSegmentedControl
+                accessibilityLabel={t("plugins.market.segmentsLabel")}
+                testID="plugins.segment"
+                value={segment}
+                onChange={(next) =>
+                  setSegment(next === "market" ? "market" : "installed")
+                }
+                options={[
+                  { value: "installed", label: t("plugins.installed") },
+                  { value: "market", label: t("plugins.market.title") },
+                ]}
+              />
+            ) : null}
           </View>
-          {directoryLoading && !items.length ? (
-            <ActivityIndicator color={colors.textSecondary} />
-          ) : null}
-          <View style={styles.inline}>
-            <Text style={[styles.groupLabel, { flex: 1 }]}>
-              {t("plugins.installed")}
-            </Text>
-          </View>
-          <View style={styles.groupCard}>{items.map(renderRow)}</View>
-          {!directoryLoading && !listFailed && !items.length ? (
-            <View style={styles.empty}>
-              <Puzzle size={iconSize.xl} color={colors.textTertiary} />
-              <Text style={styles.preview}>
-                {t(
-                  query
-                    ? "plugins.noResults"
-                    : targets.length
-                      ? "plugins.noPlugins"
-                      : "plugins.noComputer",
-                )}
-              </Text>
-              {!targets.length ? (
-                <Pressable
-                  style={styles.button}
-                  onPress={() => router.push("/devices/manage")}
-                >
-                  <Text style={styles.controlText}>
-                    {t("plugins.connectComputer")}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </View>
-          ) : null}
-          {listFailed ? (
-            <View>
-              <Text style={styles.note}>
-                {t(
-                  items.length
-                    ? "plugins.listUnavailable"
-                    : "plugins.listLoadFailed",
-                )}
-              </Text>
-              {!items.length && !directoryLoading ? (
-                <Pressable
-                  accessibilityRole="button"
-                  style={styles.button}
-                  onPress={() => {
-                    devices.refresh();
-                    void list.refresh();
-                  }}
-                >
-                  <Text style={styles.controlText}>
-                    {t("plugins.detail.action.retry")}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </View>
+          {showInstalled ? installedDirectory : null}
+          {showMarket ? (
+            <PluginMarketSection
+              market={marketView}
+              onConnectComputer={() => router.push("/devices/manage")}
+            />
           ) : null}
         </ScrollView>
       </View>
@@ -1038,7 +1135,9 @@ function PluginDirectory() {
               (settingsOpen && t("plugins.settings")) ||
               (!detailOpen && selected.surface && pageTitle) ||
               text(selected.row.item.display.title)
-            : t("plugins.title")
+            : marketDetail && !wide
+              ? marketDetail.item.name
+              : t("plugins.title")
         }
         onBack={goBack}
         rightToolbar={
@@ -1111,9 +1210,22 @@ function PluginDirectory() {
           active={focused && online && detailOpen}
         />
       ) : null}
+      {market.confirmation ? (
+        <PluginManagementConfirmation
+          key={JSON.stringify([
+            "market",
+            auth.accountGeneration,
+            connectionEpoch,
+          ])}
+          state={market.confirmation.state}
+          controller={market.confirmation.controller}
+          deviceName={market.confirmation.deviceName}
+          active={focused && market.confirmation.state.online}
+        />
+      ) : null}
       <View style={styles.layout}>
-        {wide || !selected ? directory : null}
-        {wide || selected ? (
+        {wide || (!selected && !marketDetail) ? directory : null}
+        {wide || selected || marketDetail ? (
           <View style={styles.main}>
             {selected?.surface ? (
               <View style={[styles.main, detailOpen && styles.hidden]}>
@@ -1139,7 +1251,15 @@ function PluginDirectory() {
                       pluginId={selected.row.item.ref.id}
                     />
                   )
-                : detailView
+                : marketDetail
+                  ? (
+                      <PluginMarketDetailView
+                        key={marketDetail.item.pluginId}
+                        detail={marketDetail}
+                        market={marketView}
+                      />
+                    )
+                  : detailView
               : null}
             {settingsNotice && transientScope.current === noticeScope ? (
               <View pointerEvents="none" style={styles.toast}>

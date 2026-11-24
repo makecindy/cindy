@@ -13,6 +13,7 @@ import { createPluginManagementController } from '@/plugins/pluginManagementCont
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
   parsePluginUiConsent, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
+import { parsePluginMarketPage, pluginMarketIconUri } from '@/plugins/pluginMarketCatalog';
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'operation-1' }));
 const appState = vi.hoisted(() => ({ currentState: 'active', listeners: new Set<(state: string) => void>() }));
@@ -34,6 +35,15 @@ vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => n
  * 缺口：已有 pluginClient/page 测试没有管理事务；Desktop 测试不经过手机版 owner/队列 fence。
  * 最小失败输入：begin 丢回执、同物理键更换批准、排队后切设备/账号/离线；tier: unit（内存 Host、假时钟）。
  * 实测耗时：定向两文件 Vitest 0.989s（本文件测试 496ms）；无真实网络/插件/凭证。
+ *
+ * 手机插件市场（2026-11-25 增补）
+ * - 生产入口与可观察结果：client.catalog/catalogPaging、parsePluginMarketPage、controller.install（无已装实例）；
+ *   观察发往 Host 的请求形状、解析后的页面与安装回执阶段。
+ * - 依据：same-account-remote-plugin-management.md「新控制端先探测能力…普通读取失败不得回退全量」；
+ *   plugin-security-and-authoring §5.4 分页只做 discovery；brief 要求有界解析、缺字段降级。
+ * - 缺口：此前手机只有升级（带 installed）的安装用例，没有全新安装与分页读取。
+ * - 最小失败输入：旧 Host 页面缺 nextCursor/counts/publisherKind；101 条或计数不自洽的页面；
+ *   INVALID_PARAMS 与普通网络错误的区分；不带 installed 的 begin。tier: unit（内存 Host）。
  */
 const manifest = { schemaVersion: 3 as const, id: 'demo', name: 'Demo', version: '2', kind: 'chip' };
 const plugin: ManagedPlugin = { instanceKey: '_root__demo', namespace: null, manifest: { ...manifest, version: '1' },
@@ -51,7 +61,7 @@ const capability = { protocolVersion: 1, collections: [{ id: 'plugins', actions:
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void;
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 type Envelope = { actionId: string; input: Record<string, unknown>; resourceRef?: { id: string } };
-function host(handler?: (request: Envelope) => unknown | Promise<unknown>) {
+function host(handler?: (request: Envelope) => unknown | Promise<unknown>, marketDetail: ManagedMarketDetail = detail) {
   const requests: Envelope[] = [];
   let facts = snapshot();
   const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void }) => {
@@ -61,7 +71,7 @@ function host(handler?: (request: Envelope) => unknown | Promise<unknown>) {
     requests.push(request);
     let result;
     if (request.actionId === 'management:snapshot') result = facts;
-    else if (request.actionId === 'management:market-detail') result = detail;
+    else if (request.actionId === 'management:market-detail') result = marketDetail;
     else result = handler ? await handler(request) : receipt();
     return { effects: [], result };
   }) as unknown as PluginManagementInvoke;
@@ -297,6 +307,79 @@ describe('mobile management transactions', () => {
 
 /* 新增依据：页面批准是增量能力；旧 Host 不接新写入，丢失回执不能重放。
  * 缺口/最小输入：v1 snapshot 缺 capability 或批准 answer 超时；tier: unit，真实 client/controller。 */
+describe('mobile plugin market', () => {
+  const fresh: ManagedMarketDetail = { ...detail, installState: 'not-installed', enabled: null };
+  it('installs a plugin the computer does not have yet: begin without an instance, consent, then the new instance is read back', async () => {
+    const installedNow = { ...plugin, manifest };
+    const h = host((request) => {
+      if (request.actionId === 'management:begin') return confirmation();
+      h.setFacts(snapshot([installedNow]));
+      return receipt('succeeded');
+    }, fresh);
+    h.setFacts(snapshot([]));
+    const c = controller(h.client); await c.refresh();
+    await c.install(fresh);
+    expect(c.getState().outcome).toBe('confirmation');
+    const begin = h.requests.find((r) => r.actionId === 'management:begin')!;
+    expect(begin.resourceRef).toBeUndefined();
+    expect(begin.input).toEqual({ operationId: 'operation-1', kind: 'install', pluginId: 'market/demo', expectedReleaseId: 'release-2' });
+    await c.answer(true);
+    expect(c.getState()).toMatchObject({ outcome: 'succeeded', busy: false });
+    expect(c.getState().snapshot?.ghosts.map((g) => g.instanceKey)).toEqual([plugin.instanceKey]);
+    expect(h.requests.filter((r) => r.actionId === 'management:begin')).toHaveLength(1);
+  });
+  it('accepts an older paging Host page with optional fields missing and degrades unknown publisher labels', () => {
+    const page = parsePluginMarketPage({ items: [{ ...fresh, publisherKind: 'partner', customIconKey: 'target-only' }] });
+    expect(page).toMatchObject({ nextCursor: null, counts: null, organizationAccessError: null, unavailableReason: null,
+      customSourceNames: [], unavailableCustomSourceNames: [] });
+    expect(page.items[0]).not.toHaveProperty('publisherKind');
+    expect(page.items[0]).not.toHaveProperty('customIconKey');
+    expect(page.items[0]).not.toHaveProperty('manifest');
+    expect(parsePluginMarketPage({ items: [{ ...fresh, publisherKind: 'official' }], nextCursor: 'next',
+      counts: { all: 3, public: 2, organization: 0, personal: 0, custom: 1, official: 1 } })).toMatchObject({
+      nextCursor: 'next', counts: { all: 3, official: 1 }, items: [{ publisherKind: 'official' }] });
+  });
+  it.each([
+    ['too many items', { items: Array(101).fill(fresh) }],
+    ['oversized cursor', { items: [], nextCursor: 'x'.repeat(2049) }],
+    ['non-string cursor', { items: [], nextCursor: 5 }],
+    ['counts that do not add up', { items: [], counts: { all: 3, public: 1, organization: 0, personal: 0, custom: 0 } }],
+    ['publisher subsets larger than public', { items: [], counts: { all: 1, public: 1, organization: 0, personal: 0, custom: 0, official: 1, community: 1 } }],
+    ['a malformed item', { items: [{ ...fresh, releaseId: '' }] }],
+  ])('rejects a market page with %s', (_name, value) => {
+    expect(() => parsePluginMarketPage(value)).toThrow('INVALID_RESPONSE');
+  });
+  it('sends one bounded catalog query and treats only INVALID_PARAMS as an older Host', async () => {
+    const inputs: unknown[] = [];
+    let capabilities: () => unknown = () => ({ catalogPaging: true });
+    const invoke = vi.fn(async (_id: string, _channel: string, args?: unknown[]) => {
+      const input = (args?.[0] as Envelope).input;
+      inputs.push(input);
+      return { effects: [], result: input.read === 'capabilities' ? capabilities() : { items: [fresh], nextCursor: null } };
+    }) as unknown as PluginManagementInvoke;
+    const client = createPluginManagementClient({ deviceId: 'host-1', invoke });
+    await expect(client.catalog({ query: ' cal ', scope: 'public', limit: 100, excludeInstalled: true, counts: false }))
+      .resolves.toMatchObject({ items: [{ pluginId: 'market/demo' }] });
+    expect(inputs.at(-1)).toEqual({ read: 'catalog', query: { query: 'cal', scope: 'public', limit: 100, excludeInstalled: true, counts: false } });
+    await expect(client.catalog({ query: 'x'.repeat(101) })).rejects.toThrow('INVALID_INPUT');
+    expect(inputs).toHaveLength(1);
+    await expect(client.catalogPaging()).resolves.toBe(true);
+    capabilities = () => { throw Object.assign(new Error('old'), { code: 'INVALID_PARAMS' }); };
+    await expect(client.catalogPaging()).resolves.toBe(false);
+    capabilities = () => { throw Object.assign(new Error('offline'), { code: 'TIMEOUT' }); };
+    await expect(client.catalogPaging()).rejects.toThrow('TIMEOUT');
+  });
+  it.each([
+    ['https://cdn.example.test/icon.png', '2099-01-01T00:00:00.000Z', true],
+    ['http://cdn.example.test/icon.png', '2099-01-01T00:00:00.000Z', false],
+    ['https://cdn.example.test/icon.png', '2000-01-01T00:00:00.000Z', false],
+    ['not a url', '2099-01-01T00:00:00.000Z', false],
+  ])('loads only unexpired HTTPS icons (%s, %s)', (url, expiresAt, loads) => {
+    const icon = { mimeType: 'image/png', sha256: 'a'.repeat(64), sizeBytes: 10, url, expiresAt };
+    expect(pluginMarketIconUri({ icon })).toBe(loads ? url : undefined);
+  });
+});
+
 describe('interactive page capability approval', () => {
   it.each(['approve-ui', 'defer-ui'] as const)('requires advertised support before %s and binds the revision and consent version', async (kind) => {
     const h = host(() => receipt('succeeded'));

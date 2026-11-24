@@ -381,5 +381,67 @@
     "cancelled": "Não será arquivada automaticamente desta vez",
     "archived": "\"{{title}}\" arquivada",
     "undo": "Desfazer"
+  },
+  "market": {
+    "title": "Marketplace de plugins",
+    "installDestination": "Instalar em: {{device}}",
+    "filterLabel": "Filtrar plugins por origem",
+    "filter": {
+      "all": "Todas",
+      "official": "Oficial",
+      "community": "Comunidade",
+      "organization": "Da equipe",
+      "custom": "Personalizados"
+    },
+    "install": "Instalar",
+    "installAria": "Instalar {{name}}",
+    "waiting": "Aguardando confirmação…",
+    "installing": "Instalando…",
+    "loadMore": "Carregar mais",
+    "allLoaded": "Todos os {{count}} plugins exibidos",
+    "unavailable": "O marketplace de plugins está temporariamente indisponível. Os plugins instalados continuam disponíveis.",
+    "customSourcesUnavailable": "Estes marketplaces personalizados estão temporariamente indisponíveis: {{names}}. Os outros marketplaces não foram afetados.",
+    "securityTitle": "Instalação e permissões",
+    "source": "Fonte",
+    "scope": {
+      "public": "Públicos",
+      "organization": "Organização",
+      "personal": "Pessoal"
+    },
+    "publisherDescription": {
+      "official": "Publicado e mantido pela Cindy",
+      "community": "Publicado e mantido por desenvolvedores da comunidade",
+      "organization": "Compartilhado pela sua organização com membros autorizados",
+      "custom": "De um marketplace Git ou de uma pasta local que você adicionou"
+    },
+    "errors": {
+      "generic": "A operação no marketplace de plugins falhou. Tente novamente.",
+      "invalidRequest": "A solicitação do plugin é inválida.",
+      "notFound": "Este plugin não está mais disponível. Atualize o marketplace e tente novamente.",
+      "conflict": "Outro plugin instalado ou do marketplace usa o mesmo ID de plugin.",
+      "stateChanged": "A conta, o plugin ou a versão mudou durante esta operação. Revise o estado mais recente e tente novamente.",
+      "listChanged": "O catálogo de plugins da organização mudou. Tente novamente.",
+      "accessDenied": "Esta operação de plugin não é permitida ou foi cancelada.",
+      "notConfigured": "O marketplace de plugins não está disponível neste ambiente.",
+      "invalidPackage": "Este pacote de plugin é inválido e não pode ser instalado. Entre em contato com o publicador.",
+      "downloadAuthorizationExpired": "A autorização de download do plugin expirou. Verifique a data e a hora do sistema antes de iniciar uma nova instalação.",
+      "downloadTimeout": "O tempo limite do download do plugin foi excedido. Tente novamente mais tarde.",
+      "downloadFailed": "Falha no download do plugin. Verifique sua conexão e tente novamente.",
+      "brokerRedirectPortRequired": "Este plugin declara um intermediário de autorização, mas falta redirectPort na mesma configuração OAuth, por isso ele não pode ser instalado pelo marketplace de plugins. Entre em contato com o publicador para adicionar o campo e publicar uma nova versão.",
+      "hostUnsupported": "Esta versão do Cindy não consegue ler o formato de manifesto deste plugin.",
+      "namespaceClientRequired": "Esta versão não pode mostrar plugins da organização. Atualize o Cindy para continuar. Os plugins da organização instalados continuam disponíveis.",
+      "organizationContextUnavailable": "A identidade da organização está temporariamente indisponível. Tente novamente mais tarde. Os plugins da organização instalados continuam disponíveis.",
+      "namespaceConfigRequired": "Os plugins da organização estão temporariamente indisponíveis. Os plugins da organização instalados continuam disponíveis.",
+      "organizationUnavailable": "Os plugins da organização estão temporariamente indisponíveis. Os plugins da organização instalados continuam disponíveis."
+    },
+    "segmentsLabel": "Mostrar plugins",
+    "installTo": "Instalar em {{device}}",
+    "conflict": "Já existe um plugin com o mesmo identificador neste computador. Resolva isso no computador.",
+    "offline": "{{device}} não está conectado. Você poderá explorar e instalar plugins quando a conexão voltar.",
+    "outdated": "A versão da Cindy em {{device}} ainda não permite instalar plugins pelo celular. Atualize a Cindy nesse computador primeiro. Os plugins instalados continuam disponíveis.",
+    "outdatedShort": "A Cindy neste computador ainda não permite instalar pelo celular. Atualize-a primeiro.",
+    "readFailed": "Não foi possível carregar o marketplace de plugins. Tente novamente.",
+    "securityBody": "Ao tocar em Instalar, o computador baixa e verifica o pacote e depois mostra as permissões necessárias para você confirmar. Nada é instalado antes da sua confirmação. Depois de instalado, o plugin é ativado automaticamente e pode ser desativado ou desinstalado a qualquer momento.",
+    "resultUnknownDetail": "Ainda não foi confirmado se esta instalação foi concluída."
   }
 }

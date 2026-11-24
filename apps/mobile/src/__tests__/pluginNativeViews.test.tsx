@@ -21,6 +21,8 @@ const bridge = vi.hoisted(() => ({
   mode: "light" as "light" | "dark",
 }));
 vi.mock("@/hooks/useReduceMotion", () => ({ useReduceMotionEnabled: () => false }));
+// Metro resolves the iOS market rows inside the iOS directory; vitest needs the platform file named.
+vi.mock("@/plugins/PluginMarketRows", () => import("@/plugins/PluginMarketRows.ios"));
 vi.mock("@/session/useMobileKeyboardState", () => ({ useMobileKeyboardState: () => ({ visible: bridge.keyboardVisible }) }));
 vi.mock("@expo/ui/swift-ui", async () => {
   const React = await import("react");
@@ -126,6 +128,8 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
       "onSubmit",
       "background",
       "buttonStyle",
+      "buttonBorderShape",
+      "onAppear",
       "contentShape",
       "controlSize",
       "disabled",
@@ -356,6 +360,42 @@ const directory = () => ({
   onOpen: vi.fn(),
   onDetail: vi.fn(),
   onConnectComputer: vi.fn(),
+  segment: "installed" as const,
+  onSegmentChange: vi.fn(),
+  market: marketModel(),
+});
+function marketModel(patch: Record<string, unknown> = {}) {
+  return {
+    target: row.host, targets: [row.host], online: true, selectDevice: vi.fn(),
+    filter: "official", filters: [{ value: "all" }, { value: "official", count: 1 }], setFilter: vi.fn(),
+    searching: false, status: "ready", items: [] as any[], total: undefined, hasMore: false, loadingMore: false,
+    refreshing: false, loadMore: vi.fn(), refresh: vi.fn(async () => {}),
+    notices: { unavailable: false, organizationKey: null, unavailableCustomSources: [] },
+    rowState: (): any => ({ kind: "idle" }), installBusy: false, canInstall: true, install: vi.fn(), checkResult: vi.fn(),
+    detail: null, openDetail: vi.fn(), closeDetail: vi.fn(), retryDetail: vi.fn(), confirmation: null, ...patch,
+  };
+}
+// Market segment (2026-11-25): native segmented Picker and SwiftUI market rows inside the same List.
+it("switches to the native market segment and routes row taps to detail, install and progress", () => {
+  const item = { pluginId: "market/demo", ghostId: "demo", name: "Market Demo", description: "From the market",
+    publisherKind: "official", scope: "public", sourceType: "server", installState: "not-installed", icon: null };
+  const market = marketModel({ items: [item] });
+  const p = { ...directory(), market };
+  mount(PluginDirectoryView, p);
+  act(() => bridge.props.get("plugins.segment").onSelectionChange("market"));
+  expect(p.onSegmentChange).toHaveBeenCalledWith("market");
+  const { container, rerender } = mount(PluginDirectoryView, { ...p, segment: "market" });
+  expect(container.querySelector('[data-testid="plugins.installedHeader"]')).toBeNull();
+  expect(container.textContent).toContain("Market Demo");
+  expect(container.textContent).toContain("plugins.market.filter.official");
+  act(() => bridge.props.get("plugins.market.install.market/demo").onPress());
+  expect(market.install).toHaveBeenCalledWith(item);
+  act(() => bridge.props.get("plugins.market.row.market/demo").onPress());
+  expect(market.openDetail).toHaveBeenCalledWith(item);
+  bridge.props.clear();
+  rerender({ ...p, segment: "market", market: { ...market, rowState: () => ({ kind: "waiting" }) } });
+  expect(bridge.props.has("plugins.market.install.market/demo")).toBe(false);
+  expect(container.querySelector('[data-testid="plugins.market.progress.market/demo"]')?.textContent).toContain("plugins.market.waiting");
 });
 it("uses a scrolling native title row without a separator or sticky section header", () => {
   const p = directory();

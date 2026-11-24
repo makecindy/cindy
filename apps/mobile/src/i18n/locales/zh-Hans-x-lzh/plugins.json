@@ -377,5 +377,67 @@
     "cancelled": "此番不自封存",
     "archived": "「{{title}}」已封存",
     "undo": "撤"
+  },
+  "market": {
+    "title": "法器市集",
+    "installDestination": "纳于：{{device}}",
+    "filterLabel": "依来源筛法器",
+    "filter": {
+      "all": "皆",
+      "official": "官设",
+      "community": "社区",
+      "organization": "团队同享",
+      "custom": "自订"
+    },
+    "install": "纳",
+    "installAria": "纳 {{name}}",
+    "waiting": "候确认…",
+    "installing": "方安装…",
+    "loadMore": "载更多",
+    "allLoaded": "诸法器已尽示，共 {{count}} 件",
+    "unavailable": "法器坊暂不可用；已纳之法器仍可照常理之、用之。",
+    "customSourcesUnavailable": "下列自订坊暂不可访问：{{names}}，他坊不受影响。",
+    "securityTitle": "纳器与权柄",
+    "source": "所出",
+    "scope": {
+      "public": "公",
+      "organization": "组织",
+      "personal": "私"
+    },
+    "publisherDescription": {
+      "official": "Cindy 官方所制，发布维护",
+      "community": "社区开发者所制，发布维护",
+      "organization": "本组织共享于获准成员",
+      "custom": "取自所添 Git 或本机目录市场"
+    },
+    "errors": {
+      "generic": "法器坊之操作未成，请再试。",
+      "invalidRequest": "法器之请求无效。",
+      "notFound": "此法器已不可用，请重整法器坊后再试。",
+      "conflict": "已有此机或坊中法器用同一标识。",
+      "stateChanged": "操作之间，名籍、法器或版本已变，请核最新之状后再试。",
+      "listChanged": "企业法器目录已变，请再试。",
+      "accessDenied": "此法器操作不被允许，或已取消。",
+      "notConfigured": "此环境未设法器坊。",
+      "invalidPackage": "法器安装包有异，不可纳，请联系发布者。",
+      "downloadAuthorizationExpired": "法器下载授权已过期，无法续装。请核对系统日期与时间后重新安装",
+      "downloadTimeout": "法器取下逾时，请稍后再试。",
+      "downloadFailed": "法器取下未成，请查网络后再试。",
+      "brokerRedirectPortRequired": "此法器声明授权 broker，然同一 OAuth 设置缺 redirectPort，故不能自法器坊纳之。请联系发布者补此字段并重新发布。",
+      "hostUnsupported": "当前 Cindy 不能识此法器之清单格式。",
+      "namespaceClientRequired": "此版不能观企业法器，请更新 Cindy。已纳之企业法器仍可用。",
+      "organizationContextUnavailable": "暂不能确认企业身分，请稍后再试。已纳之企业法器仍可用。",
+      "namespaceConfigRequired": "企业法器之服务暂不可用。已纳之企业法器仍可用。",
+      "organizationUnavailable": "企业法器暂不可用。已纳之企业法器仍可用。"
+    },
+    "segmentsLabel": "观法器",
+    "installTo": "纳于 {{device}}",
+    "conflict": "此机已纳同标识之法器，请于电脑处之。",
+    "offline": "「{{device}}」未连。连复之后，可览可纳法器。",
+    "outdated": "「{{device}}」之 Cindy 尚不能自手机纳法器，请先于彼机更新 Cindy。已纳之法器照常可用。",
+    "outdatedShort": "此机之 Cindy 尚不能自手机纳法器，请先更新。",
+    "readFailed": "未能读法器市集，请复试。",
+    "securityBody": "点「纳」后，电脑先下载、检视其包，再列所需权柄请君确认。未确认则不纳；纳毕自启，可随时停之、去之。",
+    "resultUnknownDetail": "此番纳器成否，尚未确认。"
   }
 }

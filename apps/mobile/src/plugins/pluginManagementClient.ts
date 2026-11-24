@@ -6,6 +6,7 @@ import {
   parsePluginManagementReceipt, parsePluginManagementSnapshot, parsePluginUiConsent, pluginApprovalToken,
   type ManagedMarketDetail, type ManagedPlugin,
 } from './pluginManagementTypes';
+import { parsePluginMarketPage, pluginMarketQueryInput, type PluginMarketPage, type PluginMarketQuery } from './pluginMarketCatalog';
 
 /** Use DeviceLinkContext.invoke directly; preserve its final, synchronous queue fence. */
 export type PluginManagementInvoke = <T = unknown>(deviceId: string, channel: string, args?: unknown[],
@@ -102,6 +103,23 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
       uiCapabilityApproval = snapshot.uiCapabilityApproval === true;
       return snapshot;
     }),
+    /** Paged market discovery (Host ≥ 0.1.130). Only an explicit INVALID_PARAMS marks an older Host. */
+    async catalogPaging(): Promise<boolean> {
+      try {
+        return await action('snapshot', { read: 'capabilities' }, (value) => {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_RESPONSE');
+          return (value as { catalogPaging?: unknown }).catalogPaging === true;
+        });
+      } catch (error) {
+        if (error instanceof PluginManagementRequestError && error.message === 'INVALID_PARAMS') return false;
+        throw error;
+      }
+    },
+    catalog(query: PluginMarketQuery): Promise<PluginMarketPage> {
+      let input: Record<string, unknown>;
+      try { input = pluginMarketQueryInput(query); } catch { return Promise.reject(new PluginManagementRequestError('INVALID_INPUT')); }
+      return action('snapshot', { read: 'catalog', query: input }, parsePluginMarketPage);
+    },
     async detail(pluginId: string) {
       if (!validId(pluginId, 1024)) return localError('INVALID_INPUT');
       return action('market-detail', { pluginId }, (v) => {

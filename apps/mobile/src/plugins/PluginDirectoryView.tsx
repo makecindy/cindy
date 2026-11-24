@@ -2,6 +2,7 @@ import type {
   HostedRemoteCollectionItem,
   RemoteResourceHostTarget,
 } from "@/device-link/remoteResources";
+import type { PluginMarketModel } from "./usePluginMarket";
 
 export interface PluginDirectoryViewProps {
   targets: readonly RemoteResourceHostTarget[];
@@ -17,7 +18,12 @@ export interface PluginDirectoryViewProps {
   onOpen(row: HostedRemoteCollectionItem): void;
   onDetail(row: HostedRemoteCollectionItem): void;
   onConnectComputer(): void;
+  /** Installed / market switch; hidden while searching, when both sections are listed. */
+  segment: PluginDirectorySegment;
+  onSegmentChange(value: PluginDirectorySegment): void;
+  market: PluginMarketModel;
 }
+export type PluginDirectorySegment = "installed" | "market";
 
 /** iOS renders the system list; other platforms keep the directory in PluginsScreen. */
 export function PluginDirectoryView(_props: PluginDirectoryViewProps) {
