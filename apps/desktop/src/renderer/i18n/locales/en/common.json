@@ -15102,6 +15102,7 @@
       "unavailable": "Automatic input is not available in the current app. Copy the transcript and enter it manually.",
       "unconfirmed": "Could not confirm whether automatic input succeeded. Copy the transcript if needed.",
       "permission": "Accessibility permission is required to enter voice input into the current app. Grant permission, then try again.",
+      "appNotAllowed": "{{app}} isn’t allowed to control this app, so the text wasn’t entered. Add this app for {{app}} in System & App Protection Override, or copy the text and paste it yourself.",
       "failed": "Automatic input failed. Copy the transcript and enter it manually."
     },
     "permissionPrompts": {
@@ -18847,7 +18848,7 @@
       "expired": "Input handoff ended after waiting too long."
     },
     "failure": {
-      "permission": "Cindy can’t read the interface on this Mac. Check control access for the running copy of Cindy. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility.",
+      "permission": "Cindy can’t read the interface on this Mac. Check control access for the running copy of Cindy. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility. If Cindy may control only chosen apps, add this app to them.",
       "target_gone": "The target window was closed.",
       "unreadable": "This screen can't be read. You can finish it on the host computer, then hand back to the agent.",
       "action_failed": "That action didn't take effect. Check the screen and try again.",
@@ -22858,6 +22859,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "In System & App Protection Override, select {{app}} and click ⓘ. If it’s missing, use + to add the running app.",
-    "review": "$t(macControlPermission.selectApp)\nIf offered, Choose Apps limits which apps it can control. Full control gives the app access to all apps and data. If you agree, acknowledge each item, then choose Allow at the bottom."
+    "review": "$t(macControlPermission.selectApp)\nIf offered, Choose Apps limits which apps it can control. Full control gives the app access to all apps and data. If you agree, acknowledge each item, then choose Allow at the bottom.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nRemote keyboard and mouse act anywhere on this Mac, so they need control of the whole Mac: when adding with +, choose Override System Protections; for an app already listed, turn on Control Your Entire Mac and All Apps under ⓘ. With chosen apps only, macOS blocks all remote keyboard and mouse input. Review the access macOS lists before you allow it.",
+    "chosenAppsOnly": "{{app}} can control only the apps you chose, so macOS blocks all remote keyboard and mouse input. To control this Mac remotely, click ⓘ next to {{app}} in System & App Protection Override and turn on Control Your Entire Mac and All Apps."
   }
 }

@@ -183,7 +183,7 @@ export function buildInputHandoffContinuation(result: HandoffResult): string {
     : result.status === 'succeeded'
     ? 'The owner\'s fields were typed in and confirmed. Check the current screen yourself and handle any buttons or options left; values they entered were not shared with you.'
     : result.failure === 'permission'
-      ? 'Cindy lacks macOS Accessibility permission for input handoff. Ask the owner to allow it on this computer, or continue another way.'
+      ? 'Cindy lacks macOS Accessibility permission for input handoff, or (macOS 27.3 and later) may control only apps the owner chose and this app is not one of them. Ask the owner to allow it on this computer, or continue another way.'
     : result.failure === 'screen_locked'
       ? SCREEN_LOCKED_NEXT
       : 'The handoff did not complete. Do not retry it automatically; tell the owner what is still needed or continue another way.';

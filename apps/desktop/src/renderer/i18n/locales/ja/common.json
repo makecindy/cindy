@@ -15042,6 +15042,7 @@
       "unavailable": "現在のアプリでは自動入力できません。認識テキストをコピーして手動で入力してください。",
       "unconfirmed": "自動入力が成功したか確認できません。必要に応じて認識テキストをコピーしてください。",
       "permission": "現在のアプリへ音声入力するにはアクセシビリティ権限が必要です。権限を許可してから再試行してください。",
+      "appNotAllowed": "{{app}} はこのアプリの制御を許可されていないため、自動入力できませんでした。「System & App Protection Override」で {{app}} にこのアプリを追加するか、テキストをコピーして手動で貼り付けてください。",
       "failed": "自動入力に失敗しました。認識テキストをコピーして手動で入力してください。"
     },
     "permissionPrompts": {
@@ -18772,7 +18773,7 @@
       "expired": "待ち時間が長すぎたため、代理入力は終了しました。"
     },
     "failure": {
-      "permission": "この Mac の画面を読み取れません。実行中の Cindy に操作の許可があるか確認してください。操作の許可は macOS 27.3 以降では「System & App Protection Override」、以前のバージョンでは「アクセシビリティ」で確認できます。",
+      "permission": "この Mac の画面を読み取れません。実行中の Cindy に操作の許可があるか確認してください。操作の許可は macOS 27.3 以降では「System & App Protection Override」、以前のバージョンでは「アクセシビリティ」で確認できます。Cindy に一部のアプリだけを許可している場合は、このアプリも追加してください。",
       "target_gone": "対象のウィンドウが閉じられました。",
       "unreadable": "この画面を読み取れません。ホストのコンピュータで直接完了してから Agent に戻してください。",
       "action_failed": "直前の操作が反映されませんでした。画面を確認してもう一度お試しください。",
@@ -22769,6 +22770,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "「System & App Protection Override」で {{app}} の右の ⓘ をクリックします。一覧にない場合は「＋」で実行中のアプリを追加します。",
-    "review": "$t(macControlPermission.selectApp)\n「アプリを選択」が表示された場合は、制御できるアプリを限定できます。Mac 全体の制御を許可すると、すべてのアプリとデータにアクセスできます。同意する場合は各項目を読んで確認し、最後に画面下部で許可します。"
+    "review": "$t(macControlPermission.selectApp)\n「アプリを選択」が表示された場合は、制御できるアプリを限定できます。Mac 全体の制御を許可すると、すべてのアプリとデータにアクセスできます。同意する場合は各項目を読んで確認し、最後に画面下部で許可します。",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nリモートのキーボードとマウスは Mac 全体を操作するため、Mac 全体の制御が必要です。「＋」で追加するときは「Override System Protections」を選び、一覧にある場合は ⓘ で「Control Your Entire Mac and All Apps」をオンにします。一部のアプリだけを許可していると、macOS はリモートのキーボードとマウス操作をすべてブロックします。許可する前に、macOS が示すアクセス範囲を確認してください。",
+    "chosenAppsOnly": "{{app}} は選択したアプリしか制御できないため、macOS がリモートのキーボードとマウス操作をすべてブロックしています。リモート操作するには、「System & App Protection Override」で {{app}} の右の ⓘ をクリックし、「Control Your Entire Mac and All Apps」をオンにします。"
   }
 }
