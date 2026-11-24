@@ -774,6 +774,10 @@ describe('event types the desktop pipeline acts on, classified for the Host', ()
       gaps: ['smaller difference: running=false alone does not write the turn end time'],
     },
     text: { host: 'history.event (sessionEventStreamCore, shared); turn-executor.mjs routeStandaloneTextEvent (sessionEventPreparationSteps.ts, shared)' },
+    tool_use: {
+      host: 'history.event (sessionEventStreamCore, shared); turn-executor.mjs publishes the redacted tool event',
+      platform: 'sessionEventDelivery.ts projects confirmed Claude root ownership for local Electron windows only',
+    },
     turn_diff: { host: 'turn-executor.mjs noteTurnDiffEvent, not published' },
   };
 
