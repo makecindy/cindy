@@ -7,10 +7,12 @@
  * - 生产入口与可观察结果：`ProviderShareDetailScreen` / `ProviderSharesScreen`；断言用户看到的配对码、告知、
  *   链接与提示，以及发给供应商所在电脑的命令。
  * - 规则依据：provider-sharing.md §4.1 第 4 步(同意前核对供应商、Claude 邮箱告知、链接由生成它的设备显示申请)、
- *   §3(未打开「允许被远程调用」不能生成链接)；engineering-conventions.md §8.7(申请 5 秒、状态 15 秒)。
+ *   §3(未打开「允许被远程调用」不能生成链接)；engineering-conventions.md §8.7(申请 5 秒、状态 15 秒)、
+ *   §8.3(切到后台后不再发新的读取)。
  * - 现有覆盖缺口：手机此前没有分享者一侧的界面；Desktop 的同类流程在 renderer 测试里，不覆盖这两页。
- * - 最小失败输入：见各用例(目录未就绪时点同意、链接生成后 5 秒内到达的申请、生成链接途中点同意、读不到的电脑等)。
- * - tier：unit(jsdom 渲染；设备互联为内存替身，生成链接后的轮询用假计时器)。
+ * - 最小失败输入：见各用例(目录未就绪时点同意、链接生成后 5 秒内到达的申请、生成链接途中点同意、读不到的电脑、
+ *   链接在后台期间过期、六台电脑的额度读到一半切到后台、下拉刷新在途时退出页面等)。
+ * - tier：unit(jsdom 渲染；设备互联与应用前后台状态为内存替身，生成链接后的轮询与有效期用假计时器)。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -30,18 +32,28 @@ const mocks = vi.hoisted(() => ({
   clipboard: vi.fn(async () => undefined),
   params: {} as Record<string, string>,
   catalog: { providers: [] as unknown[], ready: false, error: null as string | null },
+  appState: { current: 'active', listeners: new Set<(state: string) => void>() },
 }));
 
 vi.mock('react-native', () => {
   const View = ({ children, testID }: { children?: ReactNode; testID?: string }) => <div data-testid={testID}>{children}</div>;
   return {
     View,
-    ScrollView: View,
+    ScrollView: ({ children, refreshControl, testID }: { children?: ReactNode; refreshControl?: ReactNode; testID?: string }) => (
+      <div data-testid={testID}>{refreshControl}{children}</div>
+    ),
     ActivityIndicator: () => null,
-    RefreshControl: () => null,
+    // 下拉刷新没有可点的元素：用一个按钮代替手势，触发的是页面自己的 onRefresh。
+    RefreshControl: ({ onRefresh }: { onRefresh?: () => void }) => <button data-testid="pullToRefresh" onClick={onRefresh} />,
     Share: { share: mocks.share },
     StyleSheet: { create: (value: unknown) => value },
-    AppState: { currentState: 'active', addEventListener: () => ({ remove: () => undefined }) },
+    AppState: {
+      get currentState() { return mocks.appState.current; },
+      addEventListener: (_type: string, listener: (state: string) => void) => {
+        mocks.appState.listeners.add(listener);
+        return { remove: () => { mocks.appState.listeners.delete(listener); } };
+      },
+    },
   };
 });
 vi.mock('react-native-safe-area-context', () => ({
@@ -142,16 +154,37 @@ function host(handlers: Partial<Record<string, (command: Command, deviceId: stri
 }
 
 const noGroup = () => ({ providerId: 'anthropic', config: null, members: [] });
+/** 建了组的供应商：组里每台电脑各有自己的账号，额度要分别去问。 */
+const groupOf = (deviceIds: string[]) => ({
+  providerId: 'anthropic',
+  config: {
+    strategy: 'least',
+    autoSwitch: true,
+    members: deviceIds.map((deviceId) => ({
+      key: `device:${deviceId}:anthropic`, kind: 'device', agentDeviceId: deviceId, providerId: 'anthropic', limit: 4, weight: 1, paused: false,
+    })),
+  },
+  members: deviceIds.map((deviceId) => ({
+    key: `device:${deviceId}:anthropic`, kind: 'device', label: `Mac ${deviceId}`, state: 'available', running: 0, limit: 4, weight: 1, paused: false,
+  })),
+});
 const weekQuota = () => ({
   state: 'ready', updatedAt: Date.now(), balance: null,
   windows: [{ kind: 'week', label: null, remainingPercent: 40, resetsAt: Date.now() + 3_600_000, windowMinutes: 10_080 }],
 });
+
+/** 应用切到后台 / 回到前台(React Native 的 AppState 事件)。 */
+function setAppState(state: 'active' | 'background') {
+  mocks.appState.current = state;
+  act(() => { for (const listener of [...mocks.appState.listeners]) listener(state); });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
   setMobileAuthOwner('test-account');
   mocks.params = { deviceId: 'studio', deviceName: 'Mac Studio', providerId: 'anthropic', label: 'Anthropic' };
   mocks.catalog = { providers: [anthropic], ready: true, error: null };
+  mocks.appState.current = 'active';
 });
 
 afterEach(() => {
@@ -261,6 +294,89 @@ it('creates a link, then checks for its request every five seconds until it arri
   expect(screen.queryByText('providerShare.manage.link.waiting')).toBeNull();
   expect(screen.queryByTestId('providerShareDetail.linkExpired')).toBeNull();
   expect(screen.getByTestId('providerShareDetail.createLink').textContent).toBe('providerShare.manage.link.create');
+});
+
+it('shows a link that expired while the app was in the background as expired, and lets the owner create a new one', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const computer = host({
+    owned: () => ({ ready: true, shares: [ownedShare('anthropic', [member], [])] }),
+    view: noGroup,
+    'quota-account': weekQuota,
+    'create-link': () => ({ link: LINK, linkId: LINK_ID, expiresAt: new Date(Date.now() + 295_000).toISOString() }),
+  });
+  render(<ProviderShareDetailScreen />);
+  fireEvent.click(await screen.findByTestId('providerShareDetail.createLink'));
+  expect((await screen.findByTestId('providerShareDetail.linkText')).textContent).toBe(LINK);
+
+  // 切到后台后倒计时不走；有效期在后台期间过去。
+  setAppState('background');
+  await act(async () => { await vi.advanceTimersByTimeAsync(300_000); });
+  setAppState('active');
+
+  // 回来时按现在的时刻判断：不再摆着旧倒计时和「发送」「复制」，而是写明已过期并可以重新生成。
+  await waitFor(() => expect(screen.queryByTestId('providerShareDetail.linkText')).toBeNull());
+  expect(screen.queryByTestId('providerShareDetail.sendLink')).toBeNull();
+  expect(screen.getByTestId('providerShareDetail.linkExpired').textContent).toBe('providerShare.manage.link.expired');
+  const regenerate = screen.getByTestId('providerShareDetail.createLink') as HTMLButtonElement;
+  expect(regenerate.textContent).toBe('providerShare.manage.link.regenerate');
+  expect(regenerate.disabled).toBe(false);
+
+  fireEvent.click(regenerate);
+  expect((await screen.findByTestId('providerShareDetail.linkText')).textContent).toBe(LINK);
+  expect(computer.count('create-link')).toBe(2);
+});
+
+it('stops asking the remaining computers for quota once the app is in the background, and asks them after it returns', async () => {
+  const waiting: Array<(value: unknown) => void> = [];
+  const release = () => act(async () => { for (const resolve of waiting.splice(0)) resolve(weekQuota()); });
+  const computer = host({
+    owned: () => ({ ready: true, shares: [ownedShare('anthropic', [member], [])] }),
+    view: () => groupOf(['a', 'b', 'c', 'd', 'e', 'f']),
+    'quota-account': () => new Promise((resolve) => { waiting.push(resolve); }),
+  });
+  const asked = () => computer.received.filter((entry) => entry.command.action === 'quota-account').map((entry) => entry.deviceId);
+  render(<ProviderShareDetailScreen />);
+  // 同时最多读 3 台，其余排队。
+  await waitFor(() => expect(asked()).toEqual(['a', 'b', 'c']));
+
+  setAppState('background');
+  await release();
+  // 已发出的三台照常收下；排着队的三台在后台不再发(§8.3)。
+  await waitFor(() => expect(screen.getAllByRole('progressbar')).toHaveLength(3));
+  expect(asked()).toEqual(['a', 'b', 'c']);
+
+  // 回到前台：没读完的随即重读，不等满一分钟。
+  setAppState('active');
+  await waitFor(() => expect(waiting).toHaveLength(3));
+  await release();
+  await waitFor(() => expect(waiting).toHaveLength(3));
+  await release();
+  await waitFor(() => expect(screen.getAllByRole('progressbar')).toHaveLength(6));
+  expect(asked().slice(3).sort()).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
+});
+
+it('does not start another quota round when the owner pulls to refresh and leaves before the answers come back', async () => {
+  let held: Array<() => void> | null = null;
+  const answer = <T,>(value: T) => held ? new Promise<T>((resolve) => { held!.push(() => resolve(value)); }) : value;
+  const computer = host({
+    owned: () => answer({ ready: true, shares: [ownedShare('anthropic', [member], [])] }),
+    view: () => answer(groupOf(['a', 'b'])),
+    'quota-account': weekQuota,
+  });
+  const page = render(<ProviderShareDetailScreen />);
+  await waitFor(() => expect(screen.getAllByRole('progressbar')).toHaveLength(2));
+  expect(computer.count('quota-account')).toBe(2);
+
+  // 下拉刷新：名单与组状态在途时退出详情页。
+  held = [];
+  fireEvent.click(screen.getByTestId('pullToRefresh'));
+  await waitFor(() => expect(held).toHaveLength(2));
+  page.unmount();
+  await act(async () => { for (const resolve of held!.splice(0)) resolve(); });
+  await new Promise((resolve) => { setTimeout(resolve, 20); });
+
+  // 页面已经不在：迟到的回包不再引出对组内每台电脑的额度读取。
+  expect(computer.count('quota-account')).toBe(2);
 });
 
 it('sends one write at a time: approving and declining wait while a link is being created', async () => {

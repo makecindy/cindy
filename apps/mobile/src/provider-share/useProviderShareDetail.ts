@@ -6,7 +6,8 @@
  *  - 手机刚生成链接后的 7 分钟里，申请改为每 5 秒读一次：这段时间供应商所在电脑不弹审批窗，
  *    申请要靠这一页显示(provider-sharing.md §4.1 第 4 步)；组状态仍是 15 秒；
  *  - 额度每 60 秒一次，同时最多读 3 台(那台电脑自带 30 秒缓存并合并在途读取)。
- * 上一轮没回来不发下一轮；离开页面、切到后台、换账号后停止，迟到结果丢弃。
+ * 上一轮没回来不发下一轮。离开页面或切到后台后不再发新的读取，排着队还没发的额度读取也不发；已发出的照常
+ * 收下。回来时先对齐倒计时的当前时刻(离开期间链接可能已过期)，没读完的额度随即重读。换账号或卸载后迟到结果丢弃。
  * 写请求(生成链接、同意、拒绝)只发一次，不重放；结果不明时重新读取现状。同一时间只进行一个写请求。
  * 链接只能用一次：读到它带来的申请后，链接回到「未生成」，申请留在待处理里。
  */
@@ -110,6 +111,8 @@ export function useProviderShareDetail(input: {
   const busy = useRef({ shares: false, group: false, quota: false, write: false });
   const lastAt = useRef({ group: 0, quota: 0 });
   const kick = useRef<() => void>(() => undefined);
+  // 页面此刻是否可见(聚焦且应用在前台)。排着队的额度读取每发一台前看一眼，不可见后不再发新的。
+  const visible = useRef(false);
   // 本机已处理的申请：处理前发出的那次读取可能还带着它，回来时不再显示。
   const settled = useRef(new Set<string>());
 
@@ -162,8 +165,10 @@ export function useProviderShareDetail(input: {
     const queue = [...targets];
     try {
       await Promise.all(Array.from({ length: Math.min(QUOTA_CONCURRENCY, queue.length) }, async () => {
-        for (let next = queue.shift(); next; next = queue.shift()) {
-          if (!current()) return;
+        // 先看页面还在不在、可不可见，再取下一台：不可见时没取走的留在队列里，由下面交给回来后的那一轮。
+        while (current() && visible.current) {
+          const next = queue.shift();
+          if (!next) return;
           const { key, target } = next;
           let reading: ShareQuotaReading;
           try {
@@ -171,12 +176,15 @@ export function useProviderShareDetail(input: {
           } catch (error) {
             reading = { status: 'error', code: classifyShareManagementError(error) };
           }
+          // 已发出的读取照常收下：切到后台不等于换了账号或页面。
           if (!current()) return;
           setQuotas((previous) => keys.has(key) && Object.hasOwn(previous, key) ? { ...previous, [key]: reading } : previous);
         }
       }));
     } finally {
       busy.current.quota = false;
+      // 中途离开页面或切到后台而没读完：回来后的下一轮立即重读，不等满 60 秒。
+      if (queue.length > 0) lastAt.current.quota = 0;
     }
   }, [deviceId, fence, invoke, providerId]);
 
@@ -199,6 +207,7 @@ export function useProviderShareDetail(input: {
 
   useEffect(() => {
     if (!active) return;
+    visible.current = true;
     let stopped = false;
     let ticking = false;
     let again = false;
@@ -237,6 +246,7 @@ export function useProviderShareDetail(input: {
     kick.current = () => { if (!stopped) void tick(); };
     void tick();
     return () => {
+      visible.current = false;
       stopped = true;
       clearTimeout(timer);
       kick.current = () => undefined;
@@ -248,8 +258,12 @@ export function useProviderShareDetail(input: {
   // 倒计时：纯本机的 1 秒计时器，只在页面可见且链接还没过期时走。
   const linkExpiresAt = link.status === 'ready' ? link.link.expiresAtMs : 0;
   useEffect(() => {
-    if (!active || linkExpiresAt <= Date.now()) return;
-    setNow(Date.now());
+    if (!active) return;
+    // 回到页面时先对齐当前时刻，再决定要不要走计时器：离开期间计时器不走，链接可能已经过期，
+    // 不能停在离开那一刻的倒计时上(那样既显示过期链接，又挡住重新生成)。
+    const started = Date.now();
+    setNow(started);
+    if (linkExpiresAt <= started) return;
     const timer = setInterval(() => {
       const next = Date.now();
       setNow(next);
@@ -317,14 +331,16 @@ export function useProviderShareDetail(input: {
   }, [deviceId, fence, invoke]);
 
   const refresh = useCallback(async () => {
+    // 记下下拉这一刻的页面与账号：读取回来前离开了页面、换了账号或切到后台，就不再起额度这一轮
+    // (回来之后才取的检查会把离开后的状态当成「现在」，拦不住)。
+    const current = fence();
     lastAt.current.group = Date.now();
     await Promise.all([loadShares(), loadGroup()]);
     const view = groupRef.current;
-    if (view) {
-      lastAt.current.quota = Date.now();
-      await loadQuotas(view);
-    }
-  }, [loadGroup, loadQuotas, loadShares]);
+    if (!view || !current() || !visible.current) return;
+    lastAt.current.quota = Date.now();
+    await loadQuotas(view);
+  }, [fence, loadGroup, loadQuotas, loadShares]);
 
   return {
     share,
