@@ -15,8 +15,11 @@ import type {
 
 import { projectAutomationConsents, schedules, sessions } from '../localDb/schema';
 import { projectAutomationConsentToRow } from '../localDb/mapper';
+import { listRegisteredProjectPaths } from '../localDb/ipc/recentWorkdirsCore';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths';
+import { defaultClassifyEnv, isTempPath } from '../session-import/classify';
 import { migrateLegacyXdmakerDir } from '../utils/legacyXdmakerMigration';
+import { detectCwd } from '../worktree/detectCwd';
 import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage.desktop';
 import type { TeammateProjectState } from './ownTeammateProject';
 
@@ -535,23 +538,50 @@ export class ProjectAutomationLoader {
   }
 
   private async listKnownWorkingDirs(): Promise<string[]> {
+    const db = this.deps.getDb();
     const found = new Map<string, string>();
     const add = (workingDir: string | null | undefined) => {
       if (!workingDir) return;
       found.set(path.resolve(workingDir), workingDir);
     };
 
-    const projectSchedules = await this.deps.getDb()
+    const projectSchedules = await db
       .select({ workingDir: schedules.workingDir })
       .from(schedules)
       .where(and(eq(schedules.source, 'project'), isNotNull(schedules.workingDir)));
     for (const row of projectSchedules) add(row.workingDir);
 
-    const projectSessions = await this.deps.getDb()
+    const projectSessions = await db
       .select({ workingDir: sessions.workingDir })
       .from(sessions)
       .where(isNotNull(sessions.workingDir));
     for (const row of projectSessions) add(row.workingDir);
+
+    const classification = defaultClassifyEnv({ appDataDir: null, dialogueRoots: [] });
+    const savedDirs = projectSchedules.flatMap(({ workingDir }) => workingDir ? [workingDir] : []);
+    let protectedDirs: Set<string> | undefined;
+    for (const [key, workingDir] of found) {
+      if (!isTempPath(key, classification)) continue;
+      const physical = await fs.realpath(key).catch(() => null);
+      if (!physical || !isTempPath(physical, classification)) continue;
+      const git = await detectCwd(physical, { repairSafeDirectory: false }).catch(() => null);
+      if (!git?.isInsideWorktree) continue;
+
+      // History alone must not discover temporary linked checkouts. Honor
+      // registered and previously imported directories, including path aliases.
+      if (!protectedDirs) {
+        const registered = await listRegisteredProjectPaths({ drizzle: db });
+        protectedDirs = new Set();
+        for (const dir of [...savedDirs, ...registered]) {
+          protectedDirs.add(workingDirKey(dir));
+          const real = await fs.realpath(dir).catch(() => null);
+          if (real) protectedDirs.add(workingDirKey(real));
+        }
+      }
+      if (!protectedDirs.has(workingDirKey(workingDir)) && !protectedDirs.has(workingDirKey(physical))) {
+        found.delete(key);
+      }
+    }
 
     return [...found.values()];
   }

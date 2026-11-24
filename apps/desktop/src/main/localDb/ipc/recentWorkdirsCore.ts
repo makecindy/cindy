@@ -239,7 +239,7 @@ export async function removeRecentWorkdir(
 
 /** Registered project paths without filesystem probes or task-history enrichment. */
 export async function listRegisteredProjectPaths(
-  client: DbClient = getDbClient(),
+  client: Pick<DbClient, 'drizzle'> = getDbClient(),
 ): Promise<string[]> {
   const rows = await client.drizzle
     .select({ path: recentWorkdirs.path })
