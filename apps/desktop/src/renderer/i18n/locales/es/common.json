@@ -17154,6 +17154,7 @@
       },
       "renameFailed": "Error al cambiar el nombre",
       "pinFailed": "Operación fallida",
+      "projectPinSaveFailed": "No se pudo guardar el estado de fijación del proyecto. Si vuelve a ocurrir, carga los registros en Configuración → Acerca de.",
       "muteNotificationsFailed": "No se pudo actualizar la configuración de notificaciones",
       "deleteFailed": "No se pudo eliminar. Vuelve a intentarlo",
       "archiveFailed": "No se pudo archivar. Vuelve a intentarlo",

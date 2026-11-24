@@ -16922,6 +16922,7 @@
       },
       "renameFailed": "이름 변경 실패",
       "pinFailed": "작업 실패",
+      "projectPinSaveFailed": "프로젝트 고정 상태를 저장하지 못했습니다. 문제가 반복되면 설정의 ‘정보’에서 로그를 업로드하세요.",
       "muteNotificationsFailed": "알림 설정 변경 실패",
       "deleteFailed": "삭제 실패, 다시 시도하세요",
       "archiveFailed": "보관 실패, 다시 시도하세요",

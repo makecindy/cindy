@@ -16996,6 +16996,7 @@
       },
       "renameFailed": "Umbenennen fehlgeschlagen",
       "pinFailed": "Vorgang fehlgeschlagen",
+      "projectPinSaveFailed": "Der Anheftstatus des Projekts konnte nicht gespeichert werden. Wenn das wiederholt passiert, lade die Protokolle unter Einstellungen → Info hoch.",
       "muteNotificationsFailed": "Benachrichtigungseinstellungen konnten nicht aktualisiert werden",
       "deleteFailed": "Löschen fehlgeschlagen, bitte erneut versuchen",
       "archiveFailed": "Archivieren fehlgeschlagen, bitte erneut versuchen",

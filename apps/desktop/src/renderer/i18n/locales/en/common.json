@@ -16996,6 +16996,7 @@
       },
       "renameFailed": "Rename failed",
       "pinFailed": "Operation failed",
+      "projectPinSaveFailed": "Couldn’t save the project’s pin status. If this keeps happening, upload logs from Settings → About.",
       "muteNotificationsFailed": "Failed to update notification settings",
       "deleteFailed": "Delete failed. Try again.",
       "archiveFailed": "Archive failed. Try again.",

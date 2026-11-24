@@ -17154,6 +17154,7 @@
       },
       "renameFailed": "Échec du renommage",
       "pinFailed": "Échec de l'opération",
+      "projectPinSaveFailed": "Impossible d’enregistrer l’état d’épinglage du projet. Si le problème se répète, envoyez les journaux depuis Paramètres → À propos.",
       "muteNotificationsFailed": "Échec de la mise à jour des paramètres de notification",
       "deleteFailed": "Échec de la suppression, veuillez réessayer",
       "archiveFailed": "Échec de l'archivage, veuillez réessayer",

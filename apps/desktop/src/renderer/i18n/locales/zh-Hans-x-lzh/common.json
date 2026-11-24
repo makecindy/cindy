@@ -16922,6 +16922,7 @@
       },
       "renameFailed": "易名未成",
       "pinFailed": "操作未成",
+      "projectPinSaveFailed": "项目置首之状未能存。若屡发，可于设定之「关于」上呈日志。",
       "muteNotificationsFailed": "设讯免扰未成",
       "deleteFailed": "删除未成，请再试",
       "archiveFailed": "封存未成，请再试",

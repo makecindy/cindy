@@ -296,6 +296,7 @@ import {
   projectKeyFromPinnedEntryId,
 } from './lib/pinnedSidebarOrder';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
@@ -3029,7 +3030,15 @@ function ExpandedView({
         }
       } catch (err) {
         log.warn('failed to persist project pin', err);
-        toast.error(t('ccAgent.sidebar.pinFailed'));
+        const ipcError = extractIpcError(err);
+        if (
+          ipcError?.code === 'INTERNAL' &&
+          ipcError.message === 'failed to persist sidebar settings'
+        ) {
+          toast.error(t('ccAgent.sidebar.projectPinSaveFailed'));
+        } else {
+          toast.error(t('ccAgent.sidebar.pinFailed'));
+        }
       }
     },
     [filter.removePin, filter.promotePin, t],

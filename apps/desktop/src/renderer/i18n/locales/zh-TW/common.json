@@ -16922,6 +16922,7 @@
       },
       "renameFailed": "重新命名失敗",
       "pinFailed": "操作失敗",
+      "projectPinSaveFailed": "未能儲存專案置頂狀態。若反覆發生，可於設定的「關於」中上傳日誌。",
       "muteNotificationsFailed": "設定訊息免打擾失敗",
       "deleteFailed": "刪除失敗，請重試",
       "archiveFailed": "歸檔失敗，請重試",

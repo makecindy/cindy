@@ -16922,6 +16922,7 @@
       },
       "renameFailed": "名前の変更に失敗しました",
       "pinFailed": "操作に失敗しました",
+      "projectPinSaveFailed": "プロジェクトの固定状態を保存できませんでした。繰り返し発生する場合は、設定の「情報」からログをアップロードしてください。",
       "muteNotificationsFailed": "通知設定の変更に失敗しました",
       "deleteFailed": "削除に失敗しました。再試行してください",
       "archiveFailed": "アーカイブに失敗しました。再試行してください",
