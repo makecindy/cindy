@@ -9,7 +9,8 @@ afterEach(()=>{for(const p of dirs.splice(0))fs.rmSync(p,{recursive:true,force:t
 it('enables conversation and desktop control for a fresh cloud profile',()=>{
  const dir=fresh();initializeCloudDeviceLinkDefaults(dir);const f=path.join(dir,'device-link-settings.json');
  expect(JSON.parse(fs.readFileSync(f,'utf8'))).toMatchObject({remoteControlEnabled:true,remoteDesktopEnabled:true});
- expect(fs.statSync(f).mode&0o777).toBe(0o600);
+ // POSIX modes only; the instance runs on Linux.
+ if (process.platform !== 'win32') expect(fs.statSync(f).mode&0o777).toBe(0o600);
 });
 it.each(['{"remoteControlEnabled":false,"revokedControllers":["revoked"]}','{"remoteControlEnabled":true,"remoteDesktopEnabled":false}','{broken'])('preserves existing preferences even if corrupt: %s',value=>{
  const dir=fresh(),f=path.join(dir,'device-link-settings.json');fs.writeFileSync(f,value);initializeCloudDeviceLinkDefaults(dir);

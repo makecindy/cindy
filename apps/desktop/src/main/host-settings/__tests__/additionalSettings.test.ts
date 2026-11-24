@@ -45,6 +45,7 @@ import { readGitSafetySettings, writeGitSafetyMode } from '../../maker-host/git-
 import { readMemorySettings } from '../../maker-host/memory-settings-store.js';
 import { readCollaborationSettings } from '../../maker-host/collaboration-settings-store.js';
 import { getDefaultShellPref } from '../../terminal/terminalPrefsStore.js';
+import { probeAvailableShells } from '../../terminal/shellResolver.js';
 import { configureUserDataDir } from '../../userDataPath.js';
 import { registerRuntimeSectionsForTest } from './settingsSectionFixture.js';
 
@@ -107,8 +108,10 @@ describe('expanded settings use the real native stores', () => {
     expect(() => normalizeHostSettingsChange({ domain: 'agentResource', set: { maxConcurrentCommands: 65 } })).toThrow();
   });
   it('terminal writes are seen by existing native consumers and reset clears the override', async () => {
-    await updateHostSettings(caller, await request('terminal', { set: { defaultShellPref: 'sh' } }));
-    expect(getDefaultShellPref()).toBe('sh');
+    // Only a shell present on this host is accepted (`sh` does not exist on Windows).
+    const shell = probeAvailableShells().find(item => item.id !== 'auto')!.id;
+    await updateHostSettings(caller, await request('terminal', { set: { defaultShellPref: shell } }));
+    expect(getDefaultShellPref()).toBe(shell);
     await updateHostSettings(caller, await request('terminal', { clear: ['defaultShellPref'] }));
     expect(getDefaultShellPref()).toBe('auto');
     expect(fs.existsSync(path.join(context.root, 'terminal-prefs.json'))).toBe(false);

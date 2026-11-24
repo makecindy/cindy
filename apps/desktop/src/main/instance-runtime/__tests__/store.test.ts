@@ -28,8 +28,12 @@ afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true });
 });
 
+// The instance store only runs on Linux; it requires 0700/0600, which Windows cannot
+// express. Linux CI keeps these cases.
+const posixModes = process.platform !== "win32";
+
 describe("safeStorage boundary and private file lifecycle", () => {
-  it("persists through the codec, uses 0700/0600 and leaves no probe or temporary files", () => {
+  it.skipIf(!posixModes)("persists through the codec, uses 0700/0600 and leaves no probe or temporary files", () => {
     const test = fixture();
     test.store.preflight();
     expect(test.store.read()).toBeNull();
@@ -58,7 +62,7 @@ describe("safeStorage boundary and private file lifecycle", () => {
       expect(() => test.store.read()).toThrow("INSTANCE_KEYRING_UNAVAILABLE");
     },
   );
-  it("rejects unavailable or wrong keyring instead of treating data as absent", () => {
+  it.skipIf(!posixModes)("rejects unavailable or wrong keyring instead of treating data as absent", () => {
     const test = fixture();
     test.store.write("test-only-value");
     test.codec.isEncryptionAvailable = () => false;
@@ -70,7 +74,7 @@ describe("safeStorage boundary and private file lifecycle", () => {
     expect(() => test.store.read()).toThrow("INSTANCE_STORE_UNREADABLE");
     expect(fs.existsSync(test.file)).toBe(true);
   });
-  it("rejects corrupt, public, oversized and symlinked records without replacing them", () => {
+  it.skipIf(!posixModes)("rejects corrupt, public, oversized and symlinked records without replacing them", () => {
     const test = fixture();
     test.store.write("test-only-value");
     fs.chmodSync(test.file, 0o644);
@@ -90,7 +94,7 @@ describe("safeStorage boundary and private file lifecycle", () => {
     fs.chmodSync(path.dirname(test.file), 0o755);
     expect(() => test.store.preflight()).toThrow("INSTANCE_STORE_PERMISSIONS");
   });
-  it("rejects linked files and linked credential directories", () => {
+  it.skipIf(!posixModes)("rejects linked files and linked credential directories", () => {
     const test = fixture();
     test.store.write("test-only-value");
     const linked = path.join(test.root, "linked.bin");

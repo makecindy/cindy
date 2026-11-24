@@ -31,7 +31,11 @@ function send(socket: string, input: unknown) {
   });
 }
 
-it('isolates identities and joins a durable receipt without repeating the write', async () => {
+// Auth recovery listens on a Unix socket in a 0700 directory on the Linux instance.
+// Windows has neither; Linux CI keeps these cases.
+const unixSocket = process.platform !== 'win32';
+
+it.runIf(unixSocket)('isolates identities and joins a durable receipt without repeating the write', async () => {
   const socket = fixture(), input = request();
   let committed = false;
   let enter!: () => void, release!: () => void;
@@ -57,7 +61,7 @@ it('isolates identities and joins a durable receipt without repeating the write'
   expect((await send(socket, input)).status).toBe(200);
 });
 
-it('does not expose errors or succeed before publication', async () => {
+it.runIf(unixSocket)('does not expose errors or succeed before publication', async () => {
   const socket = fixture(), input = request();
   const recover = vi.fn().mockRejectedValueOnce(new Error(input.refreshToken)).mockResolvedValue(undefined);
   cleanup.push(await startAuthRecoveryControl({ identity, recover, recovered: () => false }, socket));
@@ -67,7 +71,7 @@ it('does not expose errors or succeed before publication', async () => {
   }
 });
 
-it('reclaims only a dead owned socket after a crash', async () => {
+it.runIf(unixSocket)('reclaims only a dead owned socket after a crash', async () => {
   const socket = fixture();
   const child = spawn(process.execPath, ['-e',
     "require('net').createServer().listen(process.argv[1],()=>process.stdout.write('ready'))", socket], { stdio: ['ignore', 'pipe', 'ignore'] });
@@ -80,7 +84,7 @@ it('reclaims only a dead owned socket after a crash', async () => {
   expect((await send(socket, request())).status).toBe(200);
 });
 
-it('replies with only the receipt fields even when identity is the whole instance config', async () => {
+it.runIf(unixSocket)('replies with only the receipt fields even when identity is the whole instance config', async () => {
   const socket = fixture(), input = request();
   const config = { ...identity, authProtocol: 'resource-v1', userDataDir: '/fixture/user-data',
     keyringPasswordFile: '/fixture/keyring', statusFile: '/fixture/status.json' };
@@ -90,7 +94,7 @@ it('replies with only the receipt fields even when identity is the whole instanc
   expect(JSON.parse(result.body)).toEqual({ version: 1, requestId: input.requestId, ...identity, status: 'applied' });
 });
 
-it('passes the optional explicit-login access token through and still rejects unknown fields', async () => {
+it.runIf(unixSocket)('passes the optional explicit-login access token through and still rejects unknown fields', async () => {
   const socket = fixture(), input = { ...request(), accessToken: 'synthetic-explicit-access' };
   let seen: AuthRecoveryRequest | null = null, done = false;
   const recover = vi.fn(async (value: AuthRecoveryRequest) => { seen = { ...value }; done = true; });

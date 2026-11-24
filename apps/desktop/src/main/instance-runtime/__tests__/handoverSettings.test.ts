@@ -67,7 +67,8 @@ describe('handover settings snapshot', () => {
     expect(writeHandoverSettings(owner, groups, 'linux')).toBe(true);
     const file = path.join(owner, 'handover', HANDOVER_SETTINGS_FILE);
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ version: 1, groups: { appearance: { theme: 'dark' } } });
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    // POSIX modes only; the instance runs on Linux.
+    if (process.platform !== 'win32') expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     expect(fs.readdirSync(path.dirname(file))).toEqual([HANDOVER_SETTINGS_FILE]);
     expect(writeHandoverSettings(owner, groups, 'linux')).toBe(false);
     appearance.customized.theme = 'light';
