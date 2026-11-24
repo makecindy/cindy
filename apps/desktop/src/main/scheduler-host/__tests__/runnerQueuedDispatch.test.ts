@@ -1887,15 +1887,17 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
   // Unit regression: runner.fire + the registered terminal handler. The old
   // reconnect test never exercised a usage-limit from a still-live direct run.
   // Minimal input: one accepted Schedule turn, terminal quota error, usable group.
-  it.each(['switch', 'exhausted', 'unknown-reset', 'cancelled'] as const)(
+  it.each(['switch', 'exhausted', 'unknown-reset', 'cancelled', 'consecutive-budget', 'episode-budget'] as const)(
     'tries the selected provider group before scheduled quota waiting: %s', async outcome => {
+    const budgetLimit = outcome === 'consecutive-budget' ? 5 : outcome === 'episode-budget' ? 10 : 0;
+    const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: { debug: vi.fn(), warn: vi.fn() } });
     const pending = new Map<string, { retryClientId?: string }>();
     let releaseGroup!: () => void;
     const groupGate = new Promise<void>(resolve => { releaseGroup = resolve; });
     const onTurnError = vi.fn(async (id: string, signals: InterruptedTurnErrorSignals, token: number) => {
       await groupGate;
       if (outcome === 'exhausted' || outcome === 'unknown-reset') await handler.fallback!(id, signals, token + 1);
-      else if (outcome === 'switch') pending.get(id)!.retryClientId = 'replacement-input';
+      else if (outcome === 'switch' || budgetLimit) pending.get(id)!.retryClientId = 'replacement-input';
     });
     const waitForReset = vi.fn(async () => outcome !== 'unknown-reset');
     const finish = vi.fn(() => { pending.clear(); queue.failAutoResume('usage limit'); });
@@ -1906,7 +1908,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       schedulerAutoResumeRunKey: () => 'run',
       inputCoordinator: { scheduledQuotaOrigin: () => undefined, getProviderGroupSwitchHoldId: () => null },
       providerGroupService: { onTurnError },
-      interruptedTurnAutoResumeGuard: { isBudgetExhausted: () => false },
+      interruptedTurnAutoResumeGuard: guard,
       usageLimitAutoResume: { onTurnError: waitForReset },
       finishSchedulerUsageLimitWait: finish,
       log: createLogger(),
@@ -1918,12 +1920,14 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const fire = runner.fire(heartbeatSchedule(), context);
     await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
     await queue.accept();
-    handler(SESSION_ID, { codexErrorInfo: 'usageLimitExceeded', message: 'usage limit' }, {
+    const signals = { codexErrorInfo: 'usageLimitExceeded', message: 'usage limit' };
+    const item: AgentInputQueuedMessage = {
       clientId: 'scheduled', text: 'original work', persistedContent: 'original work', model: 'gpt-6.2-astra',
       effort: '', permissionMode: 'ask', workingDir: process.cwd(),
       chatMessage: { clientId: 'scheduled', role: 'user', content: 'original work', createdAt: '2026-11-01T00:00:00.000Z' },
       createOpts: { agentKind: 'codex', model: 'gpt-6.2-astra', workingDir: process.cwd() }, origin: SCHEDULER_TURN_ORIGIN,
-    }, 1);
+    };
+    handler(SESSION_ID, signals, item, 1);
     session.emit({ type: 'error', source: 'codex', data: { message: 'usage limit', isTerminal: true } });
     session.emit({ type: 'done', source: 'codex', data: { status: 'failed' } });
     const groupStarted = onTurnError.mock.calls.length;
@@ -1933,6 +1937,21 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     if (outcome === 'cancelled') { context.abortController.abort(); pending.clear(); }
     releaseGroup();
     await vi.waitFor(() => expect(onTurnError.mock.settledResults[0]?.type).toBe('fulfilled'));
+    if (budgetLimit) {
+      // The registered callback must consume the real shared guard: progress
+      // resets consecutive failures, but cannot reset the human episode cap.
+      for (let attempt = 2; attempt <= budgetLimit + 1; attempt += 1) {
+        if (outcome === 'episode-budget') guard.noteProgress(SESSION_ID);
+        handler(SESSION_ID, signals, item, attempt);
+        await vi.waitFor(() => expect(onTurnError.mock.settledResults.at(-1)?.type).toBe('fulfilled'));
+        session.emit({ type: 'error', source: 'codex', data: { message: 'usage limit', isTerminal: true } });
+        session.emit({ type: 'done', source: 'codex', data: { status: 'failed' } });
+      }
+      expect(onTurnError).toHaveBeenCalledTimes(budgetLimit);
+      expect(waitForReset).toHaveBeenCalledOnce();
+      expect(session.listenerCount()).toBe(1);
+      expect(queue.enqueueCalls).toHaveLength(1);
+    }
     if (outcome === 'unknown-reset' || outcome === 'cancelled') {
       expect(await settled).toBe('failed');
       if (outcome === 'unknown-reset') expect(finish).toHaveBeenCalledWith(SESSION_ID, 2);
@@ -1943,7 +1962,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     pending.clear();
     session.emit({ type: 'text', source: 'codex', data: { text: 'same-model result', isFinal: true } });
     session.emit({ type: 'done', source: 'codex', data: {} });
-    if (outcome === 'switch' || outcome === 'exhausted') expect(await settled).toBe('same-model result');
+    if (outcome === 'switch' || outcome === 'exhausted' || budgetLimit) expect(await settled).toBe('same-model result');
     expect(groupStarted).toBe(1);
     expect(resetStarted).toBe(0);
     expect(waiting).toBe(1);

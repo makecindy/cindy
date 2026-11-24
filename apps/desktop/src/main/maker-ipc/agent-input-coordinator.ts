@@ -7946,8 +7946,8 @@ export class AgentInputCoordinator {
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
   ): void {
     state.providerGroupSwitchHold = null;
-    // Scheduled quota waits belong to the runner; do not hide their error behind
-    // a provider-group takeover that this scheduled path does not start.
+    // Scheduled recovery belongs to the runner callback, which claims the group
+    // budget itself. Do not claim or hide its error through this ordinary hold.
     if (isSchedulerOriginItem(item) || this.quotaScheduleOrigins.has(item)) return;
     if (!this.willNotifyUsageLimitedTurnError(state, item)) return;
     const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals, true);

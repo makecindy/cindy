@@ -19948,7 +19948,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Provider-group recovery shares the interrupted-turn budget. Once it is
       // exhausted, do not enter the group's failover loop; keep the normal
       // manual/usage-limit recovery path instead.
-      if (interruptedTurnAutoResumeGuard.isBudgetExhausted(sessionId)) {
+      // Ordinary inputs already claim in the coordinator's switch hold. Live
+      // scheduler inputs skip that hold, so claim their shared budget here.
+      const groupBudgetExhausted = item.origin?.kind === 'scheduler'
+        ? interruptedTurnAutoResumeGuard.claimExternalAutomaticRecovery(sessionId).action !== 'allow'
+        : interruptedTurnAutoResumeGuard.isBudgetExhausted(sessionId);
+      if (groupBudgetExhausted) {
         void waitForUsageLimitAfterGroup(sessionId, signals, candidateToken);
         return;
       }
