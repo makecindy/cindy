@@ -8,8 +8,16 @@ import type { ManagedMarketItem, ManagedPlugin } from "@/plugins/pluginManagemen
  * Writes live only in this process. Scenario links: cindy://plugins?market=<scenario>.
  */
 export type PluginMarketVisualScenario =
-  | "normal" | "outdated" | "unavailable" | "organization" | "customPartial" | "empty" | "readFailed";
-const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavailable", "organization", "customPartial", "empty", "readFailed"];
+  | "normal" | "outdated" | "unavailable" | "organization" | "customPartial" | "empty" | "readFailed"
+  | "twoComputers" | "offline";
+const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavailable", "organization", "customPartial", "empty",
+  "readFailed", "twoComputers", "offline"];
+/** A second online mock computer for the twoComputers scenario (same demo market, shared process state). */
+export const PLUGIN_MARKET_VISUAL_SECOND_DEVICE_ID = "cindy-visual-mock-second-mac";
+/** Device-list adjustments for the market scenarios; other scenarios keep the mock computers unchanged. */
+export function pluginMarketVisualDeviceScenario(): "twoComputers" | "offline" | null {
+  return scenario === "twoComputers" || scenario === "offline" ? scenario : null;
+}
 let scenario: PluginMarketVisualScenario = "normal";
 let failedReads = 0;
 
@@ -136,6 +144,10 @@ function receipt(operationId: string) {
     requestId: `demo-consent-${operationId}`, initiator: "user", origin: demo.publisher === "custom" ? "custom-market" : "market",
     ...(demo.publisher === "custom" ? { originLabel: CUSTOM_MARKET } : {}),
     trust: demo.publisher === "official" ? "cindy-official" : "reviewed",
+    // Same source facts as the Host's obtainGhostInstallConsent for each market origin.
+    installationSource: demo.publisher === "custom" ? { kind: "third-party" }
+      : demo.publisher === "organization" ? { kind: "organization", namespace: "demo-org" }
+        : { kind: demo.publisher === "official" ? "official" : "market" },
     facts: { kind: "install", ghostId: demo.ghostId, name: demo.name, version: "1.4.2", permissions: [
       ...demo.tools.map((name) => ({ key: `tool:${name}`, kind: "tool", labelKey: "tool", labelArgs: { name } })),
       ...(demo.ghostId === "demo-device-simulator" ? [

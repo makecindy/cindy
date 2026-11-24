@@ -7,6 +7,7 @@ import {
   background, clipShape,
 } from "@expo/ui/swift-ui/modifiers";
 import type { ReactNode } from "react";
+import { useWindowDimensions } from "react-native";
 import { useTranslation } from "react-i18next";
 import { iconSize, spacing, useTheme } from "@/theme";
 import { PluginMarketIcon } from "./PluginMarketIcon";
@@ -18,7 +19,16 @@ import type { PluginMarketRowsProps } from "./PluginMarketRows";
 export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRowsProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const { fontScale } = useWindowDimensions();
   const device = market.target?.deviceName ?? "";
+  // Standalone text actions keep a 44×44pt hit target (ios-native-design §5), whatever their label size.
+  const textButton = (label: string, onPress: () => void, testID?: string) => (
+    <Button testID={testID} onPress={onPress} modifiers={[buttonStyle("borderless"), accessibilityLabel(label)]}>
+      <HStack modifiers={[frame({ minWidth: 44, minHeight: 44 }), contentShape(shapes.rectangle())]}>
+        <Text modifiers={[font({ textStyle: "body" })]}>{label}</Text>
+      </HStack>
+    </Button>
+  );
   const rowModifiers = [
     listRowBackground(colors.surface),
     listRowInsets({ leading: spacing.lg + spacing.xs, trailing: spacing.lg + spacing.xs, top: spacing.md, bottom: spacing.md }),
@@ -72,7 +82,7 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
         return (
           <VStack alignment="leading" spacing={spacing.md} modifiers={quiet}>
             {note(t("plugins.noComputer"))}
-            <Button label={t("plugins.connectComputer")} onPress={onConnectComputer} />
+            {textButton(t("plugins.connectComputer"), onConnectComputer, "plugins.market.connect")}
           </VStack>
         );
       case "offline": return <VStack alignment="leading" modifiers={quiet}>{note(t("plugins.market.offline", { device }), "plugins.market.offline")}</VStack>;
@@ -81,7 +91,7 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
         return (
           <VStack alignment="leading" spacing={spacing.md} modifiers={quiet}>
             {note(t("plugins.market.readFailed"), "plugins.market.failed")}
-            <Button label={t("plugins.retry")} testID="plugins.market.retry" onPress={() => { void market.refresh(); }} />
+            {textButton(t("plugins.retry"), () => { void market.refresh(); }, "plugins.market.retry")}
           </VStack>
         );
       case "loading": return <ProgressView testID="plugins.market.loading" modifiers={quiet} />;
@@ -130,7 +140,8 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
             <RNHostView matchContents><PluginMarketIcon item={item} variant="row" /></RNHostView>
             <VStack alignment="leading" spacing={3} modifiers={[frame({ maxWidth: Infinity, alignment: "leading" })]}>
               <HStack spacing={6}>
-                <Text modifiers={[font({ textStyle: "body" }), lineLimit(1)]}>{item.name}</Text>
+                {/* Larger accessibility sizes keep a second line for the name, like the installed rows that wrap. */}
+                <Text modifiers={[font({ textStyle: "body" }), lineLimit(fontScale > 1.3 ? 2 : 1)]}>{item.name}</Text>
                 {origin ? (
                   <Text modifiers={[font({ textStyle: "caption2", weight: "semibold" }), foregroundStyle(colors.textSecondary),
                     padding({ horizontal: spacing.sm, vertical: 2 }), background(colors.surfaceChip), clipShape("capsule")]}>
@@ -170,7 +181,7 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
           onAppear(market.loadMore)]}>
           <Spacer />
           {market.loadingMore || market.refreshing ? <ProgressView /> : (
-            <Button testID="plugins.market.loadMore" label={t("plugins.market.loadMore")} onPress={market.loadMore} />
+            textButton(t("plugins.market.loadMore"), market.loadMore, "plugins.market.loadMore")
           )}
           <Spacer />
         </HStack>

@@ -1839,3 +1839,37 @@ describe("market install recovery", () => {
     expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
   });
 });
+// iOS simulator report (2026-11-25): back from the new installed detail after the 30 s window showed an empty market.
+it("still lists the remaining market plugins when returning from the new installed detail after the reuse window", async () => {
+  const item = marketItem("demo", "Demo"), other = marketItem("other", "Other");
+  let installed = false;
+  marketWire((request) => {
+    switch (request.actionId) {
+      case "management:snapshot":
+        if (request.input?.read === "capabilities") return { catalogPaging: true };
+        // The Host excludes installed plugins from the page, as excludeInstalled asks.
+        if (request.input?.read === "catalog") return marketPage(installed ? [other] : [item, other]);
+        return managementSnapshot(installed);
+      case "management:market-detail": return { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+      case "management:begin": return { operationId: request.input.operationId, phase: "confirmation", consent: {
+        requestId: "consent", initiator: "user", origin: "market",
+        facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } };
+      case "management:answer": installed = true; return { operationId: request.input.operationId, phase: "succeeded" };
+      default: return {};
+    }
+  });
+  await openMarket();
+  await act(async () => shownMarket().install(shownMarket().items[0]));
+  await settle(14);
+  await act(async () => fixture.props.get("confirmation").controller.answer(true));
+  await settle(14);
+  expect(fixture.props.get("header").title).toBe("Demo");
+  const later = Date.now() + 31_000;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(later);
+  try {
+    await act(async () => fixture.props.get("header").onBack());
+    await settle(14);
+    expect(shownMarket()).toMatchObject({ status: "ready" });
+    expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Other"]);
+  } finally { clock.mockRestore(); }
+});

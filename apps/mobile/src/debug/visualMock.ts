@@ -35,7 +35,7 @@ import type {
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
-import { withPluginManagementManifest } from '@/debug/pluginMarketVisualFixture';
+import { PLUGIN_MARKET_VISUAL_SECOND_DEVICE_ID, pluginMarketVisualDeviceScenario, withPluginManagementManifest } from '@/debug/pluginMarketVisualFixture';
 import { prCardVisualFixture } from '@/debug/prCardVisualFixture';
 import { mailDraftCardFixture, mailVisualFixture, VISUAL_MAIL_DRAFT_CALL_ID, VISUAL_MAIL_DRAFT_SESSION_ID } from '@/debug/mailVisualFixture';
 import { teammateVisualFixture, teammateVisualReplyAt, VISUAL_TEAMMATE_SESSION_ID, VISUAL_TEAMMATE_THREAD_ROOT_ID, visualTeammateThreads } from '@/debug/teammateVisualFixture';
@@ -196,9 +196,15 @@ export function visualMockDevices(): DeviceView[] {
       lastSeenAt: ISO_NOW,
       online: false,
       busy: false,
-      remoteControlEnabled: false,
+      // cindy://plugins?market=offline makes this computer selectable so its offline market state shows.
+      remoteControlEnabled: !realData && pluginMarketVisualDeviceScenario() === 'offline',
       isSelf: false,
     },
+    // cindy://plugins?market=twoComputers adds a second online computer for the market's computer picker.
+    ...(!realData && pluginMarketVisualDeviceScenario() === 'twoComputers' ? [{
+      deviceId: PLUGIN_MARKET_VISUAL_SECOND_DEVICE_ID, name: 'CINDY Second Mock Mac', platform: 'darwin',
+      appVersion: '0.0.0-visual-mock', lastSeenAt: ISO_NOW, online: true, busy: false, remoteControlEnabled: true, isSelf: false,
+    }] : []),
   ].filter((device) => !deletedDeviceIds.has(device.deviceId))
     .map((device) => ({ ...device, name: renamedDevices.get(device.deviceId) ?? device.name }));
 }
@@ -314,6 +320,9 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  // The offline mock computer never answers, including in the market's offline scenario.
+  if (_deviceId === VISUAL_MOCK_OFFLINE_DEVICE_ID && pluginMarketVisualDeviceScenario() === 'offline')
+    throw Object.assign(new Error('DEVICE_OFFLINE'), { code: 'DEVICE_OFFLINE' });
   if (channel === DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL && _deviceId === VISUAL_MOCK_DEVICE_ID) {
     const now = new Date();
     const readings = [
