@@ -1,4 +1,5 @@
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { requestUtilityTextWithinTimeout } from '../utility-model/utilityTextTimeout.js';
 import { getMaker } from '../maker-host/index.js';
 import { createLogger } from '../logger.js';
 import {
@@ -24,6 +25,8 @@ type TurnKey = `${string}:${number}`;
 interface TurnCounts {
   tools: number;
   orcaTools: number;
+  /** 会话实例标记：换实例后同一会话 id 与代次会重用，旧计数不能继承。 */
+  instance?: number;
 }
 
 /**
@@ -49,7 +52,7 @@ const judgedByTurn = new Map<string, 'claim' | 'quiet' | 'unavailable'>();
 /** 每个会话当前回合号：Stop hook 只拿得到 sessionId，没有事件里的代次。 */
 const currentGeneration = new Map<string, number>();
 /** 引擎侧已经判过的回合，宿主 settle 不再重判——一个会话只能有一个否决点。 */
-const handledByTurn = new Map<TurnKey, true>();
+const handledByTurn = new Map<TurnKey, number | undefined>();
 
 const turnKey = (sessionId: string, generation: number): TurnKey => `${sessionId}:${generation}`;
 
@@ -71,9 +74,17 @@ export function currentTurnGeneration(sessionId: string): number | undefined {
 }
 
 /** 收口闸门的机械扳机：本轮调过哪些工具，其中有没有 Orca 自己的工具。 */
-export function noteTurnToolUse(sessionId: string, generation: number, toolName?: string): void {
+export function noteTurnToolUse(
+  sessionId: string,
+  generation: number,
+  toolName?: string,
+  instance?: number,
+): void {
   const key = turnKey(sessionId, generation);
-  const counts = countsByTurn.get(key) ?? { tools: 0, orcaTools: 0 };
+  const existing = countsByTurn.get(key);
+  // 换了会话实例：代次从头数，旧实例同一代次的计数必须丢掉。
+  const counts =
+    existing && existing.instance === instance ? existing : { tools: 0, orcaTools: 0, instance };
   counts.tools += 1;
   if (toolName && ORCA_TOOL_NAMES.has(toolName)) counts.orcaTools += 1;
   countsByTurn.set(key, counts);
@@ -81,23 +92,39 @@ export function noteTurnToolUse(sessionId: string, generation: number, toolName?
   trimTracked(countsByTurn, MAX_TRACKED_TURNS);
 }
 
-export function turnToolUseCount(sessionId: string, generation: number): number {
-  return countsByTurn.get(turnKey(sessionId, generation))?.tools ?? 0;
+export function turnToolUseCount(sessionId: string, generation: number, instance?: number): number {
+  const counts = countsByTurn.get(turnKey(sessionId, generation));
+  return counts && counts.instance === instance ? counts.tools : 0;
 }
 
 /** 本回合碰过 Orca 工具的次数。0 表示它没碰过派发面。 */
-export function turnOrcaToolUseCount(sessionId: string, generation: number): number {
-  return countsByTurn.get(turnKey(sessionId, generation))?.orcaTools ?? 0;
+export function turnOrcaToolUseCount(
+  sessionId: string,
+  generation: number,
+  instance?: number,
+): number {
+  const counts = countsByTurn.get(turnKey(sessionId, generation));
+  return counts && counts.instance === instance ? counts.orcaTools : 0;
 }
 
 /** 标记该回合已由引擎侧闸门判过（无论结论是拦还是放）。 */
-export function markTurnGateHandled(sessionId: string, generation: number): void {
-  handledByTurn.set(turnKey(sessionId, generation), true);
+export function markTurnGateHandled(
+  sessionId: string,
+  generation: number,
+  instance?: number,
+): void {
+  handledByTurn.set(turnKey(sessionId, generation), instance);
   trimTracked(handledByTurn, MAX_TRACKED_TURNS);
 }
 
-export function turnGateHandled(sessionId: string, generation: number): boolean {
-  return handledByTurn.has(turnKey(sessionId, generation));
+export function turnGateHandled(
+  sessionId: string,
+  generation: number,
+  instance?: number,
+): boolean {
+  const key = turnKey(sessionId, generation);
+  if (!handledByTurn.has(key)) return false;
+  return handledByTurn.get(key) === instance;
 }
 
 /**
@@ -245,17 +272,30 @@ export async function judgeDispatchClaim(params: {
 
   let verdict: DispatchClaimVerdict = 'unavailable';
   try {
-    const result = await requestUtilityText(
-      getMaker(),
-      judgePrompt(params.workerLabels, text.slice(-JUDGE_TEXT_CHARS)),
-      {
-        source: 'orca-turn-gate',
-        maxTokens: JUDGE_MAX_TOKENS,
-        timeoutMs: JUDGE_TIMEOUT_MS,
-        disableReasoning: true,
-      },
+    // 整个判定必须在一个截止时间内完成:辅助链有多候选模型,单次请求的超时
+    // 挡不住「第一个耗尽后换下一个」,那样收口会被拖到几十秒。
+    const result = await requestUtilityTextWithinTimeout(
+      (signal) =>
+        requestUtilityText(
+          getMaker(),
+          judgePrompt(params.workerLabels, text.slice(-JUDGE_TEXT_CHARS)),
+          {
+            source: 'orca-turn-gate',
+            maxTokens: JUDGE_MAX_TOKENS,
+            disableReasoning: true,
+            signal,
+          },
+        ),
+      JUDGE_TIMEOUT_MS,
+      undefined,
+      () => ({ ok: false, reason: 'timeout', attempts: [] }),
     );
-    if (result.ok) verdict = /\bclaim\b/i.test(result.text) ? 'claim' : 'quiet';
+    // 只接受单值回答：`no claim`、`claim or quiet` 这类都不是结论，按不可用放行。
+    if (result.ok) {
+      const answer = result.text.trim().replace(/^[`'"*]+|[`'"*.]+$/g, '').toLowerCase();
+      if (answer === 'claim') verdict = 'claim';
+      else if (answer === 'quiet') verdict = 'quiet';
+    }
   } catch (error) {
     log.info('orca turn gate judge unavailable', {
       error: error instanceof Error ? error.message : String(error),
@@ -300,11 +340,13 @@ export async function evaluateTurnGate(input: {
   turnGeneration: number;
   finalText: string | undefined;
   workerLabels: string[];
-  /** 本回合被宿主接受的派发数（调用方从凭据账取，这里不推进账本观察）。 */
-  factsCount: number;
+  /** 本回合被宿主接受的派发数（调用方从凭据账按代次筛选，这里不推进账本观察）。 */
+  turnDispatchCount: number;
+  /** 会话实例标记；换实例后代次重用，计数与凭据都不能沿用。 */
+  instance?: number;
 }): Promise<string | undefined> {
   const text = input.finalText?.trim() ?? '';
-  markTurnGateHandled(input.leadSessionId, input.turnGeneration);
+  markTurnGateHandled(input.leadSessionId, input.turnGeneration, input.instance);
   if (!text) return undefined;
 
   const claim = findUnbackedDispatchClaim(input.leadSessionId, text);
@@ -323,7 +365,10 @@ export async function evaluateTurnGate(input: {
   // 只剩「纯口语声称已派」这一格需要语义判定：本回合零派发、且没碰过任何 Orca 工具。
   // 用「零 Orca 工具」而不是「零工具」：读了几个文件再说已派同样可疑，
   // 而那正是 Claude Code 用户最常见的形态。
-  if (input.factsCount > 0 || turnOrcaToolUseCount(input.leadSessionId, input.turnGeneration) > 0) {
+  if (
+    input.turnDispatchCount > 0 ||
+    turnOrcaToolUseCount(input.leadSessionId, input.turnGeneration, input.instance) > 0
+  ) {
     return undefined;
   }
   const verdict = await judgeDispatchClaim({

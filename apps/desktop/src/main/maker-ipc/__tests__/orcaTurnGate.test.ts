@@ -15,9 +15,12 @@ import {
   judgeDispatchClaim,
   leadSettleCount,
   markArrearsNudged,
+  markTurnGateHandled,
   noteLeadSettle,
   noteTurnToolUse,
   noteWorkerReportArrears,
+  turnGateHandled,
+  turnOrcaToolUseCount,
   turnToolUseCount,
 } from '../orcaTurnGate.js';
 
@@ -43,6 +46,34 @@ describe('turn tool-use counter', () => {
     expect(turnToolUseCount('lead-1', 3)).toBe(0);
     expect(turnToolUseCount('lead-2', 3)).toBe(1);
   });
+
+  it('separates Orca tool use from unrelated tools', () => {
+    noteTurnToolUse('lead-1', 3, 'Read');
+    noteTurnToolUse('lead-1', 3, 'Bash');
+    expect(turnToolUseCount('lead-1', 3)).toBe(2);
+    expect(turnOrcaToolUseCount('lead-1', 3)).toBe(0);
+
+    noteTurnToolUse('lead-1', 3, 'send_to_worker');
+    expect(turnOrcaToolUseCount('lead-1', 3)).toBe(1);
+  });
+
+  it('drops counts when the session instance restarts with the same generation', () => {
+    noteTurnToolUse('lead-1', 1, 'Read', 100);
+    expect(turnToolUseCount('lead-1', 1, 100)).toBe(1);
+    // 新实例从代次 1 重新数：旧实例同一代次的计数不能继承。
+    expect(turnToolUseCount('lead-1', 1, 200)).toBe(0);
+    noteTurnToolUse('lead-1', 1, 'Read', 200);
+    expect(turnToolUseCount('lead-1', 1, 200)).toBe(1);
+  });
+
+  it('remembers which turns an engine-side gate already judged, per instance', () => {
+    expect(turnGateHandled('lead-1', 2, 100)).toBe(false);
+    markTurnGateHandled('lead-1', 2, 100);
+    expect(turnGateHandled('lead-1', 2, 100)).toBe(true);
+    expect(turnGateHandled('lead-1', 2, 200)).toBe(false);
+    // 一个会话只能有一个否决点：引擎判过的回合，宿主 settle 必须看得到。
+    expect(turnGateHandled('lead-1', 3, 100)).toBe(false);
+  });
 });
 
 describe('dispatch claim judge', () => {
@@ -55,10 +86,21 @@ describe('dispatch claim judge', () => {
     );
   });
 
-  it('stays quiet for summaries and unparseable replies', async () => {
-    requestUtilityText.mockResolvedValue({ ok: true, text: 'summary of what happened' });
+  it('stays quiet only when the judge answers exactly quiet', async () => {
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'quiet' });
     await expect(judgeDispatchClaim({ ...base, finalText: '修完了，综述如下。' })).resolves.toBe(
       'quiet',
+    );
+  });
+
+  it('treats an ambiguous answer as unavailable instead of guessing', async () => {
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'no claim' });
+    await expect(judgeDispatchClaim({ ...base, finalText: '修完了。' })).resolves.toBe(
+      'unavailable',
+    );
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'claim or quiet' });
+    await expect(judgeDispatchClaim({ ...base, finalText: '修完了。' })).resolves.toBe(
+      'unavailable',
     );
   });
 

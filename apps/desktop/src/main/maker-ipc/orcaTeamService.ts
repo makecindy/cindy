@@ -789,7 +789,7 @@ async function evaluateLeadTurnGateFor(
     workerLabels: workers
       .map((worker) => worker.label)
       .filter((label): label is string => Boolean(label)),
-    factsCount: facts.length,
+    turnDispatchCount: facts.length,
   });
 }
 
