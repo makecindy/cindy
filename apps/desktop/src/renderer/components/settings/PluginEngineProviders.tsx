@@ -336,6 +336,15 @@ function ModelRow({
   const advancedTrigger = useRef<HTMLButtonElement>(null);
   const advanced = openedFor === owner;
   const customized = Object.hasOwn(engine.modelEfforts ?? {}, model.id);
+
+  function setModelEnabled(next: boolean) {
+    setBusy(true);
+    void writePluginEnginePrefs(
+      { key: engine.key, models: { ids: [model.id], disabled: !next } },
+      t('settings.providers.models.accessWriteFailed'),
+    ).finally(() => setBusy(false));
+  }
+
   return (
     <li
       data-plugin-engine-model={model.id}
@@ -366,6 +375,9 @@ function ModelRow({
         model={model}
         providerName={engine.name}
         customized={customized}
+        enabled={enabled}
+        visibilityBusy={busy}
+        onToggle={setModelEnabled}
         onSave={effort => {
           if (!isDataOwnerGenerationCurrent(owner)) return Promise.resolve(false);
           return writePluginEnginePrefs({
@@ -385,13 +397,7 @@ function ModelRow({
         checked={enabled}
         disabled={busy}
         aria-label={t('settings.providers.plugin.modelSwitchAria', { model: name })}
-        onCheckedChange={(next) => {
-          setBusy(true);
-          void writePluginEnginePrefs(
-            { key: engine.key, models: { ids: [model.id], disabled: !next } },
-            t('settings.providers.models.accessWriteFailed'),
-          ).finally(() => setBusy(false));
-        }}
+        onCheckedChange={setModelEnabled}
       />
     </li>
   );

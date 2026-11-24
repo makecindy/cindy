@@ -109,8 +109,8 @@ afterEach(() => {
 });
 
 describe('plugin providers in the provider list', () => {
-  // Unit: open the real settings dialog and save only a level the plugin offers.
-  it('edits and restores the default reasoning level of an Antigravity model', async () => {
+  // Unit: the real drawer saves only offered reasoning levels and shares the row visibility action.
+  it('manages reasoning and visibility in the Antigravity model settings', async () => {
     const api = stubApi();
     const engineView = engine({ name: 'Antigravity', models: [{ id: 'gemini', displayName: 'Gemini', efforts: ['low', 'high'], defaultEffort: 'high' }],
       modelEfforts: { gemini: 'high' } });
@@ -119,6 +119,7 @@ describe('plugin providers in the provider list', () => {
     trigger.focus();
     await userEvent.keyboard('{Enter}');
     const dialog = within(await screen.findByRole('dialog', { name: 'Gemini' }));
+    expect(dialog.getByText('ACP')).toBeTruthy();
     expect(dialog.getByRole('radio', { name: 'effortLevels.high' }).getAttribute('aria-checked')).toBe('true');
     expect(dialog.queryByRole('radio', { name: 'effortLevels.medium' })).toBeNull();
     await userEvent.click(dialog.getByRole('radio', { name: 'effortLevels.low' }));
@@ -129,6 +130,10 @@ describe('plugin providers in the provider list', () => {
     expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: engineView.key, modelEffort: { id: 'gemini', effort: null }, ownerStamp: stamp });
     await userEvent.keyboard('{Escape}');
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+    await userEvent.keyboard('{Enter}');
+    const reopened = within(await screen.findByRole('dialog', { name: 'Gemini' }));
+    await userEvent.click(reopened.getByRole('button', { name: 'settings.providers.models.disableModel' }));
+    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: engineView.key, models: { ids: ['gemini'], disabled: true } });
   });
 
   // Unit: a renamed, suspended provider must still confirm uninstall of its exact plugin instance.
