@@ -1,4 +1,9 @@
-import { useEffect, useMemo, useReducer } from 'react';
+import { useEffect, useMemo, useReducer, useState } from 'react';
+import { ImagePlus } from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { extractIpcError } from '@/utils/ipcError';
 
 import { Select } from '@/components/ui/select';
 import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
@@ -8,7 +13,15 @@ import { SELECTABLE_WALLPAPER_IDS, RETIRED_WALLPAPER_IDS } from '@/../shared/app
 import { isLocalThemeId } from '../../../shared/local-themes';
 
 import { useBotTranslation } from './botPronounContext';
-import { isBotWallpaperId, setBotAppearance, useBotAppearance, type BotWallpaperId } from './botAppearance';
+import {
+  importBotCustomWallpaper,
+  isBotWallpaperId,
+  removeBotCustomWallpaper,
+  setBotAppearance,
+  useBotAppearance,
+  useBotCustomWallpaperUrl,
+  type BotWallpaperId,
+} from './botAppearance';
 
 /** Radix Select needs a non-empty value; real family and wallpaper IDs never start with a colon. */
 const FOLLOW = ':follow';
@@ -32,11 +45,46 @@ export function BotAppearanceSettings({ botId }: { botId: string }) {
 
   // A retired wallpaper stays listed only while this teammate still uses it, like the global picker.
   const wallpaperIds = useMemo<BotWallpaperId[]>(() => {
-    const ids: BotWallpaperId[] = SELECTABLE_WALLPAPER_IDS.flatMap((id) => (id === 'custom' ? [] : [id]));
+    const ids: BotWallpaperId[] = [...SELECTABLE_WALLPAPER_IDS];
     const retired = RETIRED_WALLPAPER_IDS.find((id) => id === appearance.wallpaperId);
     return retired ? [ids[0]!, retired, ...ids.slice(1)] : ids;
   }, [appearance.wallpaperId]);
-  const wallpaperValue = appearance.wallpaperId ?? FOLLOW;
+  const customUrl = useBotCustomWallpaperUrl(botId);
+  // Custom without its media is shown (and applied) as following the global wallpaper.
+  const wallpaperValue =
+    appearance.wallpaperId === 'custom' && !customUrl ? FOLLOW : (appearance.wallpaperId ?? FOLLOW);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const chooseImage = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      if (await importBotCustomWallpaper(botId)) setBotAppearance(botId, { wallpaperId: 'custom' });
+    } catch (failure) {
+      setError(
+        t(
+          extractIpcError(failure)?.code === 'INVALID_PARAMS'
+            ? 'settings.appearance.wallpaper.customInvalid'
+            : 'settings.appearance.wallpaper.customFailed',
+        ),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const removeImage = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await removeBotCustomWallpaper(botId);
+      if (appearance.wallpaperId === 'custom') setBotAppearance(botId, { wallpaperId: null });
+    } catch {
+      setError(t('settings.appearance.wallpaper.customFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="pt-3">
@@ -80,13 +128,44 @@ export function BotAppearanceSettings({ botId }: { botId: string }) {
               size="compact"
               width="sm"
               className="shrink-0"
-              onValueChange={(value) =>
-                setBotAppearance(botId, { wallpaperId: value !== FOLLOW && isBotWallpaperId(value) ? value : null })
-              }
+              onValueChange={(value) => {
+                // Picking custom before this teammate has its own image opens the file picker first.
+                if (value === 'custom' && !customUrl) {
+                  void chooseImage();
+                  return;
+                }
+                setBotAppearance(botId, { wallpaperId: value !== FOLLOW && isBotWallpaperId(value) ? value : null });
+              }}
             />
           }
         />
+        <SettingsRow
+          title={t('settings.appearance.wallpaper.options.custom')}
+          hint={t('settings.appearance.wallpaper.customHint')}
+          wrap
+          trailing={
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <Button variant="secondary" size="sm" type="button" disabled={busy} onClick={() => void chooseImage()}>
+                <ImagePlus size={14} aria-hidden="true" />
+                {t(`settings.appearance.wallpaper.${busy ? 'customBusy' : customUrl ? 'customReplace' : 'customChoose'}`)}
+              </Button>
+              {customUrl && (
+                <Button
+                  variant="secondary"
+                  tone="danger"
+                  size="sm"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void removeImage()}
+                >
+                  {t('settings.appearance.wallpaper.customRemove')}
+                </Button>
+              )}
+            </div>
+          }
+        />
       </SettingsCard>
+      {error && <ErrorNotice role="alert" className="mt-3" message={error} />}
     </div>
   );
 }

@@ -29,7 +29,10 @@ import { useWallpaperAsset } from './useWallpaperAsset';
 import { useWallpaperBackground } from './useWallpaperBackground';
 import { useReducedMotion } from './useReducedMotion';
 import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
-import { useAppearanceOverrideWallpaperId } from '../appearance/appearanceOverride';
+import {
+  useAppearanceOverrideCustomWallpaperUrl,
+  useAppearanceOverrideWallpaperId,
+} from '../appearance/appearanceOverride';
 import type { DownloadRetryReason } from '@/../shared/downloadProgress';
 
 export interface WallpaperSettings {
@@ -123,10 +126,13 @@ export function WallpaperSettingsProvider({
   // A view-scoped wallpaper (a teammate's own) replaces only what is drawn; the saved
   // settings, and everything the settings page reads and writes, stay unchanged.
   const overrideWallpaperId = useAppearanceOverrideWallpaperId();
-  const shown = useMemo<WallpaperSettings>(
-    () => (overrideWallpaperId ? { ...settings, wallpaperId: overrideWallpaperId } : settings),
-    [overrideWallpaperId, settings],
-  );
+  const overrideCustomUrl = useAppearanceOverrideCustomWallpaperUrl();
+  const shown = useMemo<WallpaperSettings>(() => {
+    if (!overrideWallpaperId) return settings;
+    if (overrideWallpaperId !== 'custom') return { ...settings, wallpaperId: overrideWallpaperId };
+    // A teammate's own image or video; never fall through to the global custom media.
+    return { ...settings, wallpaperId: 'custom', customWallpaperUrl: overrideCustomUrl ?? '', customWallpaperFallbackUrl: undefined };
+  }, [overrideWallpaperId, overrideCustomUrl, settings]);
   const visibility = visibilityPreview ?? getBackgroundVisibility(shown, isDark);
   const reducedMotion = useReducedMotion() || settings.motion === 0;
   const imageAsset = useWallpaperAsset(shown.wallpaperId, 'image', visibility > 0);

@@ -35,7 +35,9 @@ vi.mock('../appSessionState.js', () => ({
   },
 }));
 import {
+  importBotWallpaper,
   importCustomWallpaper,
+  removeBotWallpaper,
   removeCustomWallpaper,
   prepareWallpaperImage,
   savePluginWallpaper,
@@ -45,6 +47,7 @@ import {
   readCustomWallpaperUrl,
   readReferencedClientWallpaperUrls,
 } from '../custom-wallpaper-settings';
+import { readBotWallpapers } from '../bot-wallpaper-settings';
 import {
   writeBlob,
   readFile,
@@ -224,6 +227,36 @@ describe('client-owned custom wallpaper lifecycle', () => {
     await importCustomWallpaper(parent);
     await expect(readClientWallpaperFile(url)).rejects.toThrow();
     expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(1);
+  });
+
+  // Teammate wallpapers share the client-wallpaper media library, so replacing the global
+  // image (or another teammate's) must not recycle a teammate's own image; removing a
+  // teammate's image frees only that file. Minimal input: global red, bot-1 blue,
+  // bot-2 green, then replace global and remove bot-2; unit tier, real files and recycler.
+  it('keeps each teammate image across other imports and recycles it only when that teammate removes it', async () => {
+    await selectImage('red');
+    await importCustomWallpaper(parent);
+    await selectImage('blue');
+    await importBotWallpaper(parent, 'bot-1');
+    await selectImage('green');
+    await importBotWallpaper(parent, 'bot-2');
+    const { 'bot-1': first, 'bot-2': second } = readBotWallpapers();
+    expect(first).toMatch(/^cindy-media:\/\/client-wallpaper\/[0-9a-f]{64}\.webp$/);
+    expect(second).not.toBe(first);
+    await selectImage('yellow');
+    await importCustomWallpaper(parent);
+    await expect(readClientWallpaperFile(first!)).resolves.toBeDefined();
+    await expect(readClientWallpaperFile(second!)).resolves.toBeDefined();
+    await removeBotWallpaper('bot-2');
+    expect(readBotWallpapers()).toEqual({ 'bot-1': first });
+    await expect(readClientWallpaperFile(second!)).rejects.toThrow();
+    await expect(readClientWallpaperFile(first!)).resolves.toBeDefined();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(2);
+  });
+
+  it('refuses recycling when teammate wallpaper references are unreadable', () => {
+    fs.writeFileSync(path.join(h.dir, 'bot-wallpapers.json'), '{broken');
+    expect(() => readReferencedClientWallpaperUrls()).toThrow();
   });
 
   it('refuses recycling when custom references are unreadable or invalid instead of dropping the video', () => {

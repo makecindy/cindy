@@ -8,7 +8,7 @@ import type { WallpaperDownloadProgress } from '@/../shared/appearanceSettings';
 import manifest from '@/../shared/wallpaper-video-manifest.json';
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
 import { useReducedMotion } from '../useReducedMotion';
-import { BOT_APPEARANCE_STORAGE_KEY, useBotAppearanceOverride } from '@/features/bots/botAppearance';
+import { BOT_APPEARANCE_STORAGE_KEY, __resetBotAppearanceCacheForTest, useBotAppearanceOverride } from '@/features/bots/botAppearance';
 
 function Controls() {
   const settings = useWallpaperSettings();
@@ -539,6 +539,42 @@ describe('application wallpaper lifecycle', () => {
     rerender(<WallpaperSettingsProvider><TeammateView botId={null} /></WallpaperSettingsProvider>);
     expect(root.dataset.wallpaperActive).toBeUndefined();
     expect(setPatch).not.toHaveBeenCalled();
+    localStorage.clear();
+  });
+
+  // Teammate custom image: each teammate shows its own media from the main-process
+  // reference map, never the global custom image; without its media it follows global.
+  // Minimal input: global custom image A, teammate bot-1 with image B, bot-2 chose custom
+  // but has none; unit tier, real provider/canvas with the IPC bridge stubbed.
+  it('draws each teammate’s own custom image and never the global one', async () => {
+    __resetBotAppearanceCacheForTest();
+    vi.stubGlobal('Image', class { src = ''; decode = async () => {}; });
+    const globalUrl = `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`;
+    const teammateUrl = `cindy-media://client-wallpaper/${'b'.repeat(64)}.webp`;
+    vi.stubGlobal('electronAPI', { appearanceSettings: {
+      getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'custom', customWallpaperUrl: globalUrl }),
+      onChanged: () => () => {}, setPatch: vi.fn(),
+      getBotWallpapers: vi.fn().mockResolvedValue({ 'bot-1': teammateUrl }),
+      onBotWallpapersChanged: () => () => {},
+    } });
+    localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify({
+      'bot-1': { wallpaperId: 'custom' }, 'bot-2': { wallpaperId: 'custom' },
+    }));
+    function TeammateView({ botId }: { botId: string | null }) {
+      useBotAppearanceOverride(botId);
+      return null;
+    }
+    const root = document.documentElement;
+    const { rerender } = render(
+      <WallpaperSettingsProvider><TeammateView botId="bot-1" /></WallpaperSettingsProvider>,
+    );
+    await waitFor(() => expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe(`url("${teammateUrl}")`));
+    rerender(<WallpaperSettingsProvider><TeammateView botId="bot-2" /></WallpaperSettingsProvider>);
+    await waitFor(() => expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe(`url("${globalUrl}")`));
+    rerender(<WallpaperSettingsProvider><TeammateView botId="bot-1" /></WallpaperSettingsProvider>);
+    await waitFor(() => expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe(`url("${teammateUrl}")`));
+    rerender(<WallpaperSettingsProvider><TeammateView botId={null} /></WallpaperSettingsProvider>);
+    await waitFor(() => expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe(`url("${globalUrl}")`));
     localStorage.clear();
   });
 

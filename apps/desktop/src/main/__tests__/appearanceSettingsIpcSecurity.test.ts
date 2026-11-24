@@ -270,7 +270,13 @@ describe('appearance settings IPC authorization', () => {
       'unknown appearance field',
     );
   });
-  it.each(['appearance-settings:import-wallpaper', 'appearance-settings:remove-wallpaper'])(
+  it.each([
+    'appearance-settings:import-wallpaper',
+    'appearance-settings:remove-wallpaper',
+    'appearance-settings:get-bot-wallpapers',
+    'appearance-settings:import-bot-wallpaper',
+    'appearance-settings:remove-bot-wallpaper',
+  ])(
     'rejects untrusted callers before %s can access a picker or media',
     async (channel) => {
       mocks.assertTrustedAppRendererEvent.mockImplementation(() => {

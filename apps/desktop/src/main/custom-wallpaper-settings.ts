@@ -8,6 +8,7 @@ import manifest from '../shared/wallpaper-video-manifest.json';
 import { blobUrl } from './cindy-media/blobStore.desktop.js';
 import { readBoundedFileNoFollowSync } from './utils/readBoundedFile.js';
 import { parsePluginAppearanceSource, type PluginAppearanceSource } from '../shared/pluginAppearance.js';
+import { readReferencedBotWallpaperUrls } from './bot-wallpaper-settings.js';
 
 const filePath = () => path.join(app.getPath('userData'), 'custom-wallpaper.json');
 let appearanceWallpaperReferences: () => string[] = () => [];
@@ -39,7 +40,7 @@ export function readCustomWallpaperUrl(): string {
   return customWallpaperStore.read().url;
 }
 
-/** Both custom media and optional official downloads own references in this scope. */
+/** Custom media (global and per teammate) and optional official downloads own references in this scope. */
 export function readReferencedClientWallpaperUrls(): string[] {
   // Display reads may fall back to defaults; recycling must never interpret a
   // corrupt/unreadable preference as permission to delete the user's video.
@@ -69,6 +70,7 @@ export function readReferencedClientWallpaperUrls(): string[] {
   return [
     customUrl,
     fallbackUrl,
+    ...readReferencedBotWallpaperUrls(),
     ...appearanceWallpaperReferences(),
     ...Object.values(manifest)
       .filter((item) => item.delivery === 'cdn')

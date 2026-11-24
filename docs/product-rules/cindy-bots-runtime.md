@@ -481,7 +481,8 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
 ### 伙伴外观（2026-11-24，提案，待维护者确认）
 
 伙伴设置首页最后一行「外观」：主题、壁纸各一个下拉，默认「跟随应用设置」。主题可选全部内置与本地主题，
-壁纸可选「无」与内置壁纸（自定义图片仍只走全局壁纸）。焦点所在的伙伴视图（`/bots/:botId/**`，含远程伙伴；
+壁纸可选「无」、内置壁纸与这位伙伴自己的图片或视频（「自定义壁纸」一行可选择、替换、移除，格式与
+大小限制同全局自定义壁纸）。焦点所在的伙伴视图（`/bots/:botId/**`，含远程伙伴；
 分屏时只认获得焦点的面板）存在选择时整窗换上它的主题和壁纸，离开或失焦即回到全局外观。远程伙伴所在电脑
 版本过旧、只能用旧版远程设置页时没有这一行。
 
@@ -490,11 +491,16 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
 - 覆盖只在内存中投影（`renderer/appearance/appearanceOverride.ts`）：主题经 `useTheme` 的同一解析与
   `presentTheme` 应用，壁纸经同一张 `WallpaperSettingsProvider` 画布绘制，不新增第二张画布。
 - 指向的本地主题被删除时回落全局，不改写记录；选「跟随应用设置」删除该项。
+- 伙伴自己的图片／视频与全局自定义壁纸同在 client-wallpaper 媒体库：引用只记在 main 的
+  `userData/bot-wallpapers.json`（伙伴 ID → 媒体 URL），回收读取同一张引用表，读不了就延后清理，
+  不会误删任何一张。localStorage 只记「选了自定义」；媒体缺失时按跟随全局显示，绝不借用全局自定义图片。
+  通道 `appearance-settings:{get,import,remove}-bot-wallpaper(s)` 与推送 `bot-wallpapers-changed`
+  只在本机桌面，不进远程白名单；文件路径只来自原生选择器。
 - 覆盖只作用于当前窗口的配色与壁纸画布。原生窗口背景（vibrancy）、Dock 图标与主题快照由 main 对所有
   窗口统一应用，继续跟随全局主题；主题包的共享默认层（字体、壁纸、动效）也不随伙伴进出准备或清除，
   因此伙伴选主题包时只换配色，全局主题包的默认壁纸等在伙伴视图里照常保留。
-- 实现与回归：`features/bots/botAppearance.ts`、`BotAppearanceSettings.tsx`；`useTheme.test.tsx`、
-  `useWallpaperSettings.test.tsx` 的伙伴外观用例。
+- 实现与回归：`features/bots/botAppearance.ts`、`BotAppearanceSettings.tsx`、`main/bot-wallpaper-settings.ts`；
+  `useTheme.test.tsx`、`useWallpaperSettings.test.tsx`、`customWallpaper.test.ts` 的伙伴外观用例。
 
 ### 伙伴的项目在界面上（2026-11-08 主人裁决）
 

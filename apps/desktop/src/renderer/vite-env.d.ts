@@ -1286,6 +1286,10 @@ interface ElectronAPI {
     ensureWallpaperImage?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
     onWallpaperDownloadProgress?: (callback: (progress: import('../shared/appearanceSettings').WallpaperDownloadProgress) => void) => () => void;
     removeWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
+    getBotWallpapers?: () => Promise<Record<string, string>>;
+    importBotWallpaper?: (botId: string) => Promise<Record<string, string> | null>;
+    removeBotWallpaper?: (botId: string) => Promise<Record<string, string>>;
+    onBotWallpapersChanged?: (callback: (wallpapers: Record<string, string>) => void) => () => void;
     getSync: () => import('../shared/appearanceSettings').AppearanceSettings | null;
     get: () => Promise<unknown>;
     setPatch: (

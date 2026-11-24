@@ -10,6 +10,7 @@ import {
   customWallpaperStore,
   readReferencedClientWallpaperUrls,
 } from './custom-wallpaper-settings.js';
+import { botWallpaperStore } from './bot-wallpaper-settings.js';
 import { sniffMediaMime } from './cindy-media/sniffMediaMime.js';
 import { createLogger } from './logger.js';
 import type { PluginAppearanceSource } from '../shared/pluginAppearance.js';
@@ -38,14 +39,14 @@ export async function prepareWallpaperImage(bytes: Buffer): Promise<Buffer> {
 }
 
 /** Paths come only from this native picker, never from the renderer or remote peers. */
-export async function importCustomWallpaper(parent: BrowserWindow): Promise<boolean> {
+async function pickWallpaperMedia(parent: BrowserWindow): Promise<{ buffer: Buffer; mimeType: 'video/mp4' | 'image/webp' } | null> {
   const selected = await dialog.showOpenDialog(parent, {
     properties: ['openFile'],
     filters: [
       { name: 'PNG / JPEG / WebP / MP4', extensions: ['png', 'jpg', 'jpeg', 'webp', 'mp4'] },
     ],
   });
-  if (selected.canceled || !selected.filePaths[0]) return false;
+  if (selected.canceled || !selected.filePaths[0]) return null;
   let bytes: Buffer;
   try {
     const read = await readBoundedFileNoFollow(selected.filePaths[0], MAX_VIDEO_BYTES, {
@@ -62,12 +63,16 @@ export async function importCustomWallpaper(parent: BrowserWindow): Promise<bool
     throwIpcError('INVALID_PARAMS', 'Choose a local image up to 20 MB or MP4 video up to 100 MB');
   }
   const isVideo = sniffMediaMime(bytes) === 'video/mp4';
-  const buffer = isVideo ? bytes : await prepareWallpaperImage(bytes);
+  return isVideo
+    ? { buffer: bytes, mimeType: 'video/mp4' }
+    : { buffer: await prepareWallpaperImage(bytes), mimeType: 'image/webp' };
+}
+
+export async function importCustomWallpaper(parent: BrowserWindow): Promise<boolean> {
+  const picked = await pickWallpaperMedia(parent);
+  if (!picked) return false;
   return withClientWallpaperLock(async () => {
-    const media = await ingestClientWallpaper({
-      buffer,
-      mimeType: isVideo ? 'video/mp4' : 'image/webp',
-    });
+    const media = await ingestClientWallpaper(picked);
     try {
       await customWallpaperStore.writePatchAtomic({ url: media.url, fallbackUrl: undefined, pluginSource: undefined });
     } catch (error) {
@@ -78,6 +83,35 @@ export async function importCustomWallpaper(parent: BrowserWindow): Promise<bool
     }
     await recycleUnusedWallpapers();
     return true;
+  });
+}
+
+/** One teammate's own image or video; the shared media lock and references decide recycling. */
+export async function importBotWallpaper(parent: BrowserWindow, botId: string): Promise<boolean> {
+  const picked = await pickWallpaperMedia(parent);
+  if (!picked) return false;
+  return withClientWallpaperLock(async () => {
+    const media = await ingestClientWallpaper(picked);
+    try {
+      await botWallpaperStore.updateAtomic(({ value }) => ({ wallpapers: { ...value.wallpapers, [botId]: media.url } }));
+    } catch (error) {
+      await recycleUnusedWallpapers();
+      throw error;
+    }
+    await recycleUnusedWallpapers();
+    return true;
+  });
+}
+
+export async function removeBotWallpaper(botId: string): Promise<void> {
+  return withClientWallpaperLock(async () => {
+    await botWallpaperStore.updateAtomic(({ value }) => {
+      if (!Object.hasOwn(value.wallpapers, botId)) return null;
+      const next = { ...value.wallpapers };
+      delete next[botId];
+      return { wallpapers: next };
+    });
+    await recycleUnusedWallpapers();
   });
 }
 

@@ -1013,6 +1013,7 @@ const fanOutWorkerCreationPrefsApply = createIpcFanOut('maker:worker-creation-pr
 const fanOutWorkerRolesApplyRequest = createIpcFanOut('maker:worker-roles:apply-request');
 const fanOutMakerSessionPrefApply = createIpcFanOut('maker:session-pref:apply');
 const fanOutAppearanceSettingsChanged = createIpcFanOut('appearance-settings:changed');
+const fanOutBotWallpapersChanged = createIpcFanOut('appearance-settings:bot-wallpapers-changed');
 
 // 跨 Agent 迁移项的 wire 形态（同 main/cross-agent-convert/types.ts 的 MigrationItem，
 // 但 preload 是单独编译单元，不便 import；renderer 真正消费在 vite-env.d.ts 重新声明）。
@@ -1368,6 +1369,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     importWallpaper: () => ipcRenderer.invoke('appearance-settings:import-wallpaper'),
     ...createWallpaperAssetsBridge(),
     removeWallpaper: () => ipcRenderer.invoke('appearance-settings:remove-wallpaper'),
+    getBotWallpapers: (): Promise<Record<string, string>> => ipcRenderer.invoke('appearance-settings:get-bot-wallpapers'),
+    importBotWallpaper: (botId: string): Promise<Record<string, string> | null> =>
+      ipcRenderer.invoke('appearance-settings:import-bot-wallpaper', botId),
+    removeBotWallpaper: (botId: string): Promise<Record<string, string>> =>
+      ipcRenderer.invoke('appearance-settings:remove-bot-wallpaper', botId),
+    onBotWallpapersChanged: fanOutBotWallpapersChanged,
     getSync: (): AppearanceSettings | null => appearanceSettingsInfo,
     get: (): Promise<unknown> => ipcRenderer.invoke('appearance-settings:get'),
     setPatch: (patch: Partial<AppearanceSettings>): Promise<AppearanceSettings> =>

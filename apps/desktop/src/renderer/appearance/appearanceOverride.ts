@@ -13,13 +13,15 @@ import type { WallpaperId } from '@/../shared/appearanceSettings';
 export interface AppearanceOverride {
   familyId?: string;
   wallpaperId?: WallpaperId;
+  /** Required with `wallpaperId: 'custom'`: the teammate's own image, never the global one. */
+  customWallpaperUrl?: string;
 }
 
 let current: { owner: symbol; value: AppearanceOverride } | null = null;
 const listeners = new Set<() => void>();
 
 function sameOverride(a: AppearanceOverride | null, b: AppearanceOverride | null): boolean {
-  return a?.familyId === b?.familyId && a?.wallpaperId === b?.wallpaperId;
+  return a?.familyId === b?.familyId && a?.wallpaperId === b?.wallpaperId && a?.customWallpaperUrl === b?.customWallpaperUrl;
 }
 
 function notify(): void {
@@ -55,6 +57,10 @@ export function useAppearanceOverrideFamilyId(): string | null {
 
 export function useAppearanceOverrideWallpaperId(): WallpaperId | null {
   return useSyncExternalStore(onAppearanceOverrideChange, () => current?.value.wallpaperId ?? null);
+}
+
+export function useAppearanceOverrideCustomWallpaperUrl(): string | null {
+  return useSyncExternalStore(onAppearanceOverrideChange, () => current?.value.customWallpaperUrl ?? null);
 }
 
 export function __resetAppearanceOverrideForTest(): void {

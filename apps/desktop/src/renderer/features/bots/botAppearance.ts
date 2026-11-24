@@ -5,6 +5,8 @@
  *   同一层；不进伙伴资料、数据库或跨端协议，也不改 `appearance-settings.json`。
  * - 只记录用户显式选择（override）；没有记录 = 跟随全局。选「跟随全局」删除该项。
  * - 主题指向的本地主题被删掉时，应用侧按无效 ID 回落全局，不改写这里的记录。
+ * - 自定义图片（`wallpaperId: 'custom'`）的媒体引用记在主进程 `bot-wallpapers.json`，
+ *   与全局自定义壁纸共用媒体库和回收；这里只记「选了自定义」。图片缺失时按跟随全局显示。
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 
@@ -13,8 +15,7 @@ import { setAppearanceOverride } from '@/appearance/appearanceOverride';
 
 export const BOT_APPEARANCE_STORAGE_KEY = 'bots.appearance';
 
-/** 自定义图片走全局壁纸的导入与存放流程，伙伴外观只提供内置壁纸和「无」。 */
-export type BotWallpaperId = Exclude<WallpaperId, 'custom'>;
+export type BotWallpaperId = WallpaperId;
 
 export interface BotAppearance {
   familyId?: string;
@@ -34,7 +35,7 @@ let cachedMap: BotAppearanceMap = {};
 let unsavedMap: BotAppearanceMap | null = null;
 
 export function isBotWallpaperId(value: unknown): value is BotWallpaperId {
-  return typeof value === 'string' && value !== 'custom' && (WALLPAPER_IDS as readonly string[]).includes(value);
+  return typeof value === 'string' && (WALLPAPER_IDS as readonly string[]).includes(value);
 }
 
 function parse(raw: string | null): BotAppearanceMap {
@@ -128,6 +129,64 @@ export function useBotAppearance(botId: string | null | undefined): BotAppearanc
   return useSyncExternalStore(subscribe, () => getBotAppearance(botId));
 }
 
+// ── 伙伴自定义壁纸（主进程持有引用）──────────────────────────────────────────
+
+const EMPTY_URLS: Readonly<Record<string, string>> = Object.freeze({});
+let customUrls: Readonly<Record<string, string>> = EMPTY_URLS;
+let customUrlsLoaded = false;
+const customUrlListeners = new Set<() => void>();
+let stopCustomUrlBridge: (() => void) | null = null;
+
+function setCustomUrls(next: Record<string, string> | null | undefined): void {
+  if (!next || typeof next !== 'object') return;
+  customUrls = Object.freeze({ ...next });
+  for (const listener of [...customUrlListeners]) listener();
+}
+
+function subscribeCustomUrls(listener: () => void): () => void {
+  customUrlListeners.add(listener);
+  const bridge = typeof window !== 'undefined' ? window.electronAPI?.appearanceSettings : undefined;
+  if (!stopCustomUrlBridge && bridge?.onBotWallpapersChanged) {
+    stopCustomUrlBridge = bridge.onBotWallpapersChanged(setCustomUrls);
+  }
+  if (!customUrlsLoaded && bridge?.getBotWallpapers) {
+    customUrlsLoaded = true;
+    void bridge.getBotWallpapers().then(setCustomUrls, () => {
+      customUrlsLoaded = false;
+    });
+  }
+  return () => {
+    customUrlListeners.delete(listener);
+    if (!customUrlListeners.size && stopCustomUrlBridge) {
+      stopCustomUrlBridge();
+      stopCustomUrlBridge = null;
+      // Changes made while nobody listened are picked up on the next subscription.
+      customUrlsLoaded = false;
+    }
+  };
+}
+
+/** 这位伙伴自己的图片或视频；没有时为 null。 */
+export function useBotCustomWallpaperUrl(botId: string | null | undefined): string | null {
+  return useSyncExternalStore(subscribeCustomUrls, () => (botId ? customUrls[botId] ?? null : null));
+}
+
+/** 打开系统文件选择器，为这位伙伴导入图片或视频；取消返回 false。 */
+export async function importBotCustomWallpaper(botId: string): Promise<boolean> {
+  const bridge = window.electronAPI?.appearanceSettings;
+  if (!bridge?.importBotWallpaper) return false;
+  const next = await bridge.importBotWallpaper(botId);
+  if (!next) return false;
+  setCustomUrls(next);
+  return true;
+}
+
+export async function removeBotCustomWallpaper(botId: string): Promise<void> {
+  const bridge = window.electronAPI?.appearanceSettings;
+  if (!bridge?.removeBotWallpaper) return;
+  setCustomUrls(await bridge.removeBotWallpaper(botId));
+}
+
 /**
  * 当前视图属于某位伙伴时整窗换上它的外观；`botId` 为 null（离开、失焦的分屏面板）时
  * 释放，窗口回到全局主题与壁纸。
@@ -135,9 +194,20 @@ export function useBotAppearance(botId: string | null | undefined): BotAppearanc
 export function useBotAppearanceOverride(botId: string | null): void {
   const owner = useRef(Symbol('bot-appearance')).current;
   const appearance = useBotAppearance(botId);
+  const customUrl = useBotCustomWallpaperUrl(botId);
   useEffect(() => {
-    setAppearanceOverride(owner, botId ? appearance : null);
-  }, [owner, botId, appearance]);
+    if (!botId) {
+      setAppearanceOverride(owner, null);
+      return;
+    }
+    const { wallpaperId, ...rest } = appearance;
+    // Custom without its media (not loaded yet, or removed) shows the global wallpaper.
+    if (wallpaperId === 'custom') {
+      setAppearanceOverride(owner, customUrl ? { ...rest, wallpaperId, customWallpaperUrl: customUrl } : rest);
+    } else {
+      setAppearanceOverride(owner, appearance);
+    }
+  }, [owner, botId, appearance, customUrl]);
   useEffect(() => () => setAppearanceOverride(owner, null), [owner]);
 }
 
@@ -146,4 +216,9 @@ export function __resetBotAppearanceCacheForTest(): void {
   cachedMap = {};
   unsavedMap = null;
   listeners.clear();
+  customUrls = EMPTY_URLS;
+  customUrlsLoaded = false;
+  customUrlListeners.clear();
+  stopCustomUrlBridge?.();
+  stopCustomUrlBridge = null;
 }

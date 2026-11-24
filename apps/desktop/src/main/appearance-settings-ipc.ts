@@ -39,6 +39,7 @@ import { APPEARANCE_RESET_FIELDS, appearanceResetPatch } from './appearance/defi
 import { applyDockIcon } from './app-icon.js';
 import { pluginAppearanceRevision } from './cindy-brain/pluginAppearanceRevision.js';
 import { LOCAL_THEME_SUFFIX } from '../shared/local-themes.js';
+import { BOT_WALLPAPERS_CHANGED_CHANNEL, isBotWallpaperKey, type BotWallpaperMap } from '../shared/botWallpapers.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -124,6 +125,43 @@ export function registerAppearanceSettingsIpc(): void {
       const settings = readAppearanceSettings();
       broadcast(settings);
       return settings;
+    } catch {
+      throwIpcError('INTERNAL', 'Unable to remove wallpaper image');
+    }
+  });
+
+  // Teammate wallpapers stay local to this Desktop like the global custom wallpaper:
+  // no remote allowlist, and the file path still comes only from the native picker.
+  ipcMain.handle('appearance-settings:get-bot-wallpapers', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const { readBotWallpapers } = await import('./bot-wallpaper-settings.js');
+    return readBotWallpapers();
+  });
+
+  ipcMain.handle('appearance-settings:import-bot-wallpaper', async (event, botId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!isBotWallpaperKey(botId)) throwIpcError('INVALID_PARAMS', 'Invalid teammate');
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent) throwIpcError('INVALID_PARAMS', 'Wallpaper picker requires an application window');
+    try {
+      const { importBotWallpaper } = await import('./custom-wallpaper.js');
+      if (!(await importBotWallpaper(parent, botId))) return null;
+      return await broadcastBotWallpapers();
+    } catch (error) {
+      throwIpcError(
+        extractIpcError(error)?.code === 'INVALID_PARAMS' ? 'INVALID_PARAMS' : 'INTERNAL',
+        'Unable to import wallpaper image',
+      );
+    }
+  });
+
+  ipcMain.handle('appearance-settings:remove-bot-wallpaper', async (event, botId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!isBotWallpaperKey(botId)) throwIpcError('INVALID_PARAMS', 'Invalid teammate');
+    try {
+      const { removeBotWallpaper } = await import('./custom-wallpaper.js');
+      await removeBotWallpaper(botId);
+      return await broadcastBotWallpapers();
     } catch {
       throwIpcError('INTERNAL', 'Unable to remove wallpaper image');
     }
@@ -231,6 +269,20 @@ function appearanceForWindow(
     ...publicSettings,
     wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
   };
+}
+
+async function broadcastBotWallpapers(): Promise<BotWallpaperMap> {
+  const { readBotWallpapers } = await import('./bot-wallpaper-settings.js');
+  const wallpapers = readBotWallpapers();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!isTrustedAppearanceSettingsReadWindow(win)) continue;
+    try {
+      win.webContents.send(BOT_WALLPAPERS_CHANGED_CHANNEL, wallpapers);
+    } catch {
+      // A window may be torn down between enumeration and send.
+    }
+  }
+  return wallpapers;
 }
 
 function broadcast(settings: AppearanceSettings): void {
