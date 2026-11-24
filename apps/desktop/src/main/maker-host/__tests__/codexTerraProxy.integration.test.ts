@@ -49,6 +49,7 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
     // #12423 integration: exact model missing from native discovery, one Fast
     // request and one Standard control through the real Desktop proxy.
     { model: 'gpt-6.2-sol', effort: 'medium', declareFastMode: true, mode: 'task' },
+    { model: 'gpt-6.2-astra', effort: 'medium', declareFastMode: true, mode: 'task' },
     // Review has a dedicated host without a context-window override.
     { model: 'gpt-6.2-sol', effort: 'medium', declareFastMode: true, mode: 'review' },
   ])('forwards $model with the selected speed to a loopback API ($mode)', async ({ model, effort, declareFastMode, mode }) => {

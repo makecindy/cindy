@@ -2,8 +2,33 @@ import type {
   AgentKind, Catalog, CatalogModel, ModelMetadata, Provider, ProviderRuntimeModelConfig, RoutingDescriptor,
 } from '@cindy/model-providers';
 
-// https://developers.openai.com/api/docs/guides/fast-mode documents Fast for this exact Responses model.
-const OFFICIAL_API_FAST_FALLBACK_MODEL = 'gpt-6.2-sol';
+// OpenAI documents these exact API model IDs in the Fast pricing tables:
+// https://developers.openai.com/api/docs/pricing.md#fast-pricing-data
+const OFFICIAL_API_FAST_FALLBACK_MODELS = new Set([
+  'gpt-6.2-astra',
+  'gpt-6.2-sol',
+  'gpt-6-astra',
+  'gpt-6.1-sol',
+  'gpt-6.1-terra',
+  'gpt-6-luna',
+  'gpt-6-sol',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.4-mini',
+  'gpt-5.2',
+  'gpt-5.1',
+  'gpt-5',
+  'gpt-5-mini',
+  'gpt-4.1',
+  'gpt-4.1-mini',
+  'gpt-4o',
+  'gpt-4o-mini',
+  'o3',
+  'gpt-5.3-codex',
+]);
 
 /** model/list describes engine capabilities, not account membership or API entitlement. */
 function isOpenAiApiCodexRoute(
@@ -40,7 +65,7 @@ export function codexApiModelMetadata(
   if (!isOpenAiApiCodexRoute(agent, model, routing)) return undefined;
   const report = models?.find(candidate => candidate.id === model.id)?.discoveredMetadata;
   const supportsFastMode = report?.supportsFastMode ??
-    (model.id === OFFICIAL_API_FAST_FALLBACK_MODEL && model.discoveredMetadata?.supportsFastMode === undefined
+    (OFFICIAL_API_FAST_FALLBACK_MODELS.has(model.id) && model.discoveredMetadata?.supportsFastMode === undefined
       ? true : undefined);
   if (!report && supportsFastMode === undefined) return undefined;
   return {
@@ -55,7 +80,7 @@ export function needsOpenAiApiCodexFastDeclaration(
   provider: Provider | undefined,
   modelId: string,
 ): boolean {
-  if (modelId !== OFFICIAL_API_FAST_FALLBACK_MODEL || provider?.source !== 'user') return false;
+  if (!OFFICIAL_API_FAST_FALLBACK_MODELS.has(modelId) || provider?.source !== 'user') return false;
   const routing = provider.routing.codex;
   const model = provider.models.codex?.find(candidate => candidate.id === modelId);
   return !!routing && !routing.disabled && model?.supportsFastMode === true &&
