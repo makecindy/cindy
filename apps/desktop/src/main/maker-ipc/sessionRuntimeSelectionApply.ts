@@ -988,15 +988,16 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       const ownerWindowRebuild = modelSelectionOrigin === 'owner' && !runtimeStatus.remoteHostId;
       const localWindowRebuild = modelSelectionOrigin === undefined &&
         !runtimeStatus.orcaRole && !parseOrcaRemoteLead(runtimeStatus.orcaRemoteLead);
+      // 主人远程切模的窗口闸门刻意不传 `required`：闸门要核实的正是这次重建 env 与重放共同
+      // 使用的收敛值（与创建参数同一支解析）。传 `required` 会让目录未核实的路由取不到目标
+      // 窗口，上游不发布窗口的连接就永远切不了模
+      // （2026-11-25 实测 [PRECONDITION_FAILED] target-window-unverified）。
       const resolveWindowForRoute = (
         agentKind: AgentKind,
         routeModelId: string,
         pid: string | null,
       ): number | null => resolveConfiguredContextWindow(
         getActiveCatalog(), agentKind, pid, routeModelId, sessionContextWindowBudget,
-        // 主人远程切模要走窗口闸门，但闸门的目标窗口就是这次重建 env 与重放共同使用的
-        // 收敛值：目录未核实时按任务预算认，否则上游不发布窗口的连接永远切不了模。
-        ownerWindowRebuild ? 'required-or-budget' : undefined,
       );
       if (runtimeAgentKind && (runtimeRouteChanged || piConfigurationRefresh || confirmedContextWindow !== undefined)) {
         const resolveRouteWindow = (_agentKind: string, modelId: string, pid: string | null) =>
