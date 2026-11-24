@@ -23,7 +23,7 @@ const log = createLogger('session-share-tools');
  * fails instead of opening a dialog nobody may be there to answer.
  */
 async function presetExportDestination(sessionId: string) {
-  const configured = readTaskExportDirectory();
+  const configured = await readTaskExportDirectory();
   if (!configured) return null;
   if (configured === 'unreadable' ||
     !(await fsp.stat(configured.realPath).then(stat => stat.isDirectory(), () => false))) {
