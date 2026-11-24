@@ -166,6 +166,46 @@ describe('TodoListCard flyout interaction', () => {
     expect(older.getAttribute('aria-expanded')).toBe('false');
   });
 
+  // #12437 (unit): the collapsed sidebar menu is a higher layer than the plan.
+  it('keeps the plan pinned until the foreground sidebar menu closes', () => {
+    render(<><TodoListCard todos={TODOS} /><div data-rail-panel="true" role="menu" /></>);
+    const plan = screen.getByRole('button', { name: 'Step 1 / 2' });
+    const menu = screen.getByRole('menu');
+    fireEvent.click(plan, { detail: 0 });
+
+    expect(fireEvent.keyDown(menu, { key: 'Escape' })).toBe(true);
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
+
+    menu.removeAttribute('data-rail-panel');
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(plan.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  // #12437 (unit): a collapsed document rail remains mounted and is clipped.
+  it('closes the visible plan when a newer plan is inside a collapsed document rail', () => {
+    const plans = (collapsed: boolean) => (
+      <>
+        <TodoListCard todos={TODOS} />
+        <div aria-hidden={collapsed || undefined} style={{ width: collapsed ? 0 : 320, contain: 'paint' }}>
+          <TodoListCard todos={TODOS} />
+        </div>
+      </>
+    );
+    const { rerender } = render(plans(false));
+    const [visible, rail] = screen.getAllByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(visible, { detail: 0 });
+    fireEvent.click(rail, { detail: 0 });
+    rerender(plans(true));
+
+    fireEvent.keyDown(visible, { key: 'Escape' });
+    expect(visible.getAttribute('aria-expanded')).toBe('false');
+    expect(rail.getAttribute('aria-expanded')).toBe('true');
+
+    rerender(plans(false));
+    fireEvent.keyDown(rail, { key: 'Escape' });
+    expect(rail.getAttribute('aria-expanded')).toBe('false');
+  });
+
   // Chromium can report keyCode 229 while isComposing is false during IME cancellation.
   it('leaves legacy IME Escape unclaimed while the plan is pinned', () => {
     render(<TodoListCard todos={TODOS} />);
