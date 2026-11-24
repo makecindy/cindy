@@ -92,7 +92,8 @@ function VideoLightboxContent({
   const restorePreviewFocus = usePreviewFocusReturn();
   const { t } = useTranslation();
   const Media = kind === 'audio' ? 'audio' : 'video';
-  const [isVisible, setIsVisible] = useState(false);
+  const [phase, setPhase] = useState<'opening' | 'visible' | 'closing'>('opening');
+  const isVisible = phase === 'visible';
   const [failed, setFailed] = useState(false);
   const isClosingRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -108,7 +109,7 @@ function VideoLightboxContent({
     // load() 会把 currentTime 归零,续播位置必须先取。
     const time = videoRef.current?.currentTime;
     releaseMediaElement(videoRef.current);
-    setIsVisible(false);
+    setPhase('closing');
     setTimeout(() => onClose(time), 200);
   }, [onClose]);
 
@@ -133,7 +134,9 @@ function VideoLightboxContent({
   }, []);
 
   useEffect(() => {
-    const raf = requestAnimationFrame(() => setIsVisible(true));
+    const raf = requestAnimationFrame(() => {
+      if (!isClosingRef.current) setPhase('visible');
+    });
     return () => cancelAnimationFrame(raf);
   }, []);
 
@@ -186,6 +189,7 @@ function VideoLightboxContent({
     // 恢复指向同一元素)。
     <>
     <PreviewScrim
+      closing={phase === 'closing'}
       onClose={() => {
         if (performance.now() - lastMenuCloseAt.current < 150) return;
         handleClose();

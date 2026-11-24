@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { InlinePlanCard, TodoListCard } from '../TodoListCard';
+import { registerComposerEscapeLayer } from '../composerEscapeLayers';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -166,19 +167,27 @@ describe('TodoListCard flyout interaction', () => {
     expect(older.getAttribute('aria-expanded')).toBe('false');
   });
 
-  // #12437 (unit): the collapsed sidebar menu is a higher layer than the plan.
-  it('keeps the plan pinned until the foreground sidebar menu closes', () => {
+  // #12437 (unit): keyboard opening permits the rail and plan to coexist.
+  it.each(['plan', 'rail'] as const)('closes the newer Escape layer when the %s opened first', (first) => {
     render(<><TodoListCard todos={TODOS} /><div data-rail-panel="true" role="menu" /></>);
     const plan = screen.getByRole('button', { name: 'Step 1 / 2' });
     const menu = screen.getByRole('menu');
-    fireEvent.click(plan, { detail: 0 });
+    if (first === 'plan') fireEvent.click(plan, { detail: 0 });
+    const unregister = registerComposerEscapeLayer(menu);
+    if (first === 'rail') fireEvent.click(plan, { detail: 0 });
 
-    expect(fireEvent.keyDown(menu, { key: 'Escape' })).toBe(true);
-    expect(plan.getAttribute('aria-expanded')).toBe('true');
-
-    menu.removeAttribute('data-rail-panel');
-    fireEvent.keyDown(document.body, { key: 'Escape' });
-    expect(plan.getAttribute('aria-expanded')).toBe('false');
+    try {
+      expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(first === 'plan');
+      expect(plan.getAttribute('aria-expanded')).toBe(first === 'plan' ? 'true' : 'false');
+      if (first === 'plan') {
+        unregister();
+        menu.removeAttribute('data-rail-panel');
+        fireEvent.keyDown(document.body, { key: 'Escape' });
+        expect(plan.getAttribute('aria-expanded')).toBe('false');
+      }
+    } finally {
+      unregister();
+    }
   });
 
   // #12437 (unit): a collapsed document rail remains mounted and is clipped.

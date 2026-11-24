@@ -1,4 +1,4 @@
-// A pinned plan and the image sharing bar can open in either order.
+// Pinned plans, image sharing and the sidebar rail can open in different orders.
 const layers = new Set<HTMLElement>();
 
 export function registerComposerEscapeLayer(element: HTMLElement): () => void {

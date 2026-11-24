@@ -320,8 +320,8 @@ export function TodoListCard({
       if (!isForegroundComposerEscapeLayer(card)) return;
       // Other foreground layers may close without cancelling the key event.
       if (document.querySelector(
-        '[data-preview-scrim], [aria-modal="true"], [data-morph-side][data-state="open"], [data-worker-dropdown], '
-        + '[data-rail-panel][role="menu"]',
+        '[data-preview-scrim]:not([data-preview-closing]), [aria-modal="true"], '
+        + '[data-morph-side][data-state="open"], [data-worker-dropdown]',
       )) return;
       event.preventDefault();
       setOpenMode('closed');

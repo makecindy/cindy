@@ -353,7 +353,8 @@ function ImageLightboxContent({
   const { sessionId: contextSessionId, workingDir } = useChatSessionFile();
   const chatSessionId = sessionIdProp ?? contextSessionId;
   const sidebarTargetSessionId = useSidebarTargetSessionId(chatSessionId);
-  const [isVisible, setIsVisible] = useState(false);
+  const [phase, setPhase] = useState<'opening' | 'visible' | 'closing'>('opening');
+  const isVisible = phase === 'visible';
   const [loadFailed, setLoadFailed] = useState<string | null>(null);
   const [retryVersion, setRetryVersion] = useState(0);
   // 会话内翻图列表 + 起始下标。只在挂载时算一次,翻页只在已知列表内移动下标。
@@ -1029,7 +1030,9 @@ function ImageLightboxContent({
 
   // 挂载后触发淡入。
   useEffect(() => {
-    const raf = requestAnimationFrame(() => setIsVisible(true));
+    const raf = requestAnimationFrame(() => {
+      if (!isClosingRef.current) setPhase('visible');
+    });
     return () => cancelAnimationFrame(raf);
   }, []);
 
@@ -1152,7 +1155,7 @@ function ImageLightboxContent({
   function handleClose() {
     if (isClosingRef.current) return;
     isClosingRef.current = true;
-    setIsVisible(false);
+    setPhase('closing');
     setTimeout(() => onClose(), 200);
   }
 
@@ -1425,7 +1428,7 @@ function ImageLightboxContent({
     // 的元素(ChatImageView 键盘路径 = 预览触发器,与 onClose 里的显式恢复
     // 指向同一元素)。
     <>
-    <PreviewScrim onClose={closeFromBackdrop} />
+    <PreviewScrim closing={phase === 'closing'} onClose={closeFromBackdrop} />
     <FocusScope
       onUnmountAutoFocus={restorePreviewFocus}
       asChild

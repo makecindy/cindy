@@ -9,6 +9,7 @@ import {
 } from '@/features/bots/botFollowScopes';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { isForegroundComposerEscapeLayer, registerComposerEscapeLayer } from '@/components/chat/composerEscapeLayers';
 /**
  * CCAgentFeature 的 Sidebar 上半内容。
  * ---------------------------------------------------------------------------
@@ -4258,6 +4259,11 @@ function RailPanelShell({
     setTop(Math.max(8, Math.min(desired, window.innerHeight - el.offsetHeight - 8)));
   }, [anchorTop, children]);
 
+  useLayoutEffect(() => {
+    const panel = ref.current;
+    if (level === 1 && panel) return registerComposerEscapeLayer(panel);
+  }, [level]);
+
   return createPortal(
     <div
       ref={ref}
@@ -4518,7 +4524,9 @@ function RailPanels({
   useEffect(() => {
     if (!panelState.openSection) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      const panel = document.querySelector<HTMLElement>('[data-rail-panel][data-rail-panel-level="1"]');
+      if (!panel || !isForegroundComposerEscapeLayer(panel)) return;
       // 行内重命名编辑中:Esc 归编辑器(取消编辑),不整面板收掉。
       if (panelHasEditingFocus()) return;
       // 有浮层挂载时:这一记 Esc 归浮层(Radix 自己会 dismiss),不能同帧把
@@ -4529,10 +4537,11 @@ function RailPanels({
       // 否则 FindInPageBar 的常驻非模态 role="dialog" 会让 Esc 永远收不掉
       // 面板(#505 同款教训)。
       if (
-        document.querySelector('[data-radix-popper-content-wrapper]') ||
+        document.querySelector('[data-radix-popper-content-wrapper], [data-preview-scrim]:not([data-preview-closing])') ||
         panelHasBlockingOverlay()
       )
         return;
+      e.preventDefault();
       railPanelStore.closeAll();
     };
     const onDown = (e: MouseEvent) => {

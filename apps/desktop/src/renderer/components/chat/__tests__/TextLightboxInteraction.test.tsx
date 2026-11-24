@@ -105,12 +105,14 @@ it.each(['text', 'video', 'audio'] as const)('closes a later %s preview before c
   const preview = document.querySelector<HTMLElement>(kind === 'audio' ? 'audio' : 'video')!;
   act(() => preview.focus());
   fireEvent.keyDown(preview, { key: 'Escape' });
-  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
-  expect(preview.isConnected).toBe(false);
+  expect(preview.isConnected).toBe(true);
   expect(plan.getAttribute('aria-expanded')).toBe('true');
 
-  fireEvent.keyDown(document.body, { key: 'Escape' });
+  fireEvent.keyUp(preview, { key: 'Escape' });
+  fireEvent.keyDown(preview, { key: 'Escape' });
   expect(plan.getAttribute('aria-expanded')).toBe('false');
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(preview.isConnected).toBe(false);
 });
 
 it('opens the referenced line in a collection and returns focus even after switching files', async () => {

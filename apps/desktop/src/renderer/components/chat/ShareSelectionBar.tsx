@@ -39,7 +39,7 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { useBrandLogo } from '@/hooks/useBrandLogo';
 import shareCharacterSrc from '@/assets/cindy-share-character.jpg';
-import { registerComposerEscapeLayer } from './composerEscapeLayers';
+import { isForegroundComposerEscapeLayer, registerComposerEscapeLayer } from './composerEscapeLayers';
 import { shareSelectionStore, useShareSelectionCount } from './shareSelectionStore';
 import { Checkbox } from '@/components/ui/checkbox';
 
@@ -184,6 +184,8 @@ export function ShareSelectionBar({
       if (editableTargetConsumesKey(e.target, e.key)) return;
       if (busy) return;
       if (e.key === 'Escape') {
+        const bar = barRef.current;
+        if (!bar || !isForegroundComposerEscapeLayer(bar)) return;
         e.preventDefault();
         shareSelectionStore.exit();
         return;

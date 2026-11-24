@@ -153,7 +153,8 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
   const { t } = useTranslation();
   const restorePreviewFocus = usePreviewFocusReturn();
   const collection = useContext(ActivePreviewCollection);
-  const [isVisible, setIsVisible] = useState(false);
+  const [phase, setPhase] = useState<'opening' | 'visible' | 'closing'>('opening');
+  const isVisible = phase === 'visible';
   const [loadState, setLoadState] = useState<LoadState>({ phase: 'loading' });
   // 远程会话(device-link / SSH):filePath 是远端绝对路径,内容经 chat-file:fetch
   // 取回缓存副本后 READ_CACHED 读取;本机操作(打开 / 定位)一律对副本进行。
@@ -226,7 +227,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
   const handleClose = useCallback(() => {
     if (isClosingRef.current) return;
     isClosingRef.current = true;
-    setIsVisible(false);
+    setPhase('closing');
     // F6 focus return: restore focus to the trigger chip BEFORE the parent
     // unmounts the lightbox. Wrapping in setTimeout (matched to the fade-out
     // duration) keeps the visual close + focus return in lockstep, mirroring
@@ -252,7 +253,9 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
 
   // Trigger fade-in on mount (mirrors ImageLightbox)
   useEffect(() => {
-    const raf = requestAnimationFrame(() => setIsVisible(true));
+    const raf = requestAnimationFrame(() => {
+      if (!isClosingRef.current) setPhase('visible');
+    });
     return () => cancelAnimationFrame(raf);
   }, []);
 
@@ -524,7 +527,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
       }}
     >
       {/* 遮罩在根节点的层叠上下文里,压在预览窗(zIndex 1)之下。 */}
-      <PreviewScrim onClose={handleClose} zIndex={0} />
+      <PreviewScrim closing={phase === 'closing'} onClose={handleClose} zIndex={0} />
       {/* F3: Doc Card — clicks inside MUST NOT close (per F6 异常流). */}
       <div
         data-text-lightbox-card

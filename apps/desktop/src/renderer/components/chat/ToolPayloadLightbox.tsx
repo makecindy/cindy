@@ -119,7 +119,8 @@ export function ToolPayloadLightbox({
   const { t } = useTranslation();
   // 会话文件来源:remote 时 diff 的"定位文件"改为下载缓存副本后定位。
   const fileCtx = useChatSessionFile();
-  const [isVisible, setIsVisible] = useState(false);
+  const [phase, setPhase] = useState<'opening' | 'visible' | 'closing'>('opening');
+  const isVisible = phase === 'visible';
   const [draftText, setDraftText] = useState(() => (payload.kind === 'text' ? payload.text : ''));
   const isClosingRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -130,7 +131,7 @@ export function ToolPayloadLightbox({
   const handleClose = useCallback(() => {
     if (isClosingRef.current) return;
     isClosingRef.current = true;
-    setIsVisible(false);
+    setPhase('closing');
     setTimeout(() => {
       const trigger = triggerRef?.current;
       if (trigger && document.contains(trigger)) {
@@ -145,7 +146,9 @@ export function ToolPayloadLightbox({
   }, [onClose, triggerRef]);
 
   useEffect(() => {
-    const raf = requestAnimationFrame(() => setIsVisible(true));
+    const raf = requestAnimationFrame(() => {
+      if (!isClosingRef.current) setPhase('visible');
+    });
     return () => cancelAnimationFrame(raf);
   }, []);
 
@@ -298,7 +301,7 @@ export function ToolPayloadLightbox({
       }}
     >
       {/* 遮罩在根节点的层叠上下文里,压在预览窗(zIndex 1)之下。 */}
-      <PreviewScrim onClose={handleClose} zIndex={0} />
+      <PreviewScrim closing={phase === 'closing'} onClose={handleClose} zIndex={0} />
       <div
         data-tool-payload-lightbox-card
         className={cn('cursor-auto flex flex-col pt-16', PREVIEW_PANEL_CLASS)}

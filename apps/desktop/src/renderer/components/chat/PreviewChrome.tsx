@@ -87,12 +87,17 @@ export function previewCompactPanelStyle(extraHeight = 0): CSSProperties {
  * 再声明为拖拽区(作为后代可靠生效),预览期间仍能拖动窗口。预览窗从这条
  * 下面开始,不与它重叠。
  */
-export function PreviewScrim({ onClose, zIndex = Z_INDEX_LAYERS.fullscreen }: { onClose: () => void; zIndex?: number }) {
+export function PreviewScrim({
+  onClose,
+  zIndex = Z_INDEX_LAYERS.fullscreen,
+  closing = false,
+}: { onClose: () => void; zIndex?: number; closing?: boolean }) {
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 键盘关闭由查看器的 Escape 处理,遮罩只承接点外关闭。
     <div
       aria-hidden
       data-preview-scrim
+      data-preview-closing={closing || undefined}
       className="modal-scrim fixed inset-0"
       style={{ ...WINDOW_NO_DRAG_STYLE, zIndex }}
       onClick={onClose}

@@ -75,7 +75,7 @@ describe('TextLightbox — F3 overlay style', () => {
   it('floats the document over the shared preview scrim instead of filling the window', () => {
     // 遮罩与弹窗共用 .modal-scrim(PreviewScrim),组件内不写遮罩颜色;
     // 文稿卡片使用公共预览窗几何。
-    expect(source).toContain('<PreviewScrim onClose={handleClose} zIndex={0} />');
+    expect(source).toMatch(/<PreviewScrim\b[^>]*onClose=\{handleClose\}[^>]*zIndex=\{0\}/);
     expect(source).toContain('style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}');
     expect(source).not.toContain("width: '100vw'");
   });
