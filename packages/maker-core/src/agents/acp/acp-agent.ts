@@ -86,6 +86,8 @@ export interface AcpEndpointConnectOptions {
    * login): the host starts the entry with that account's directory.
    */
   accountDir?: string;
+  /** Local Cindy session id for host-owned task shell env (e.g. native askpass); omitted for remote/guest tasks. */
+  sessionId?: string;
 }
 
 /** Host side: starts the endpoint process for one task and adapts it to a line transport. */
@@ -287,6 +289,7 @@ export class AcpAgent extends BaseAgent {
       ...(hosted ? { remoteWorkspace: true } : {}),
       ...(hosted?.guest ? { guestWorkspace: true } : {}),
       ...(accountDir ? { accountDir } : {}),
+      ...(!hosted && opts.sessionId ? { sessionId: opts.sessionId } : {}),
     };
     const open = async (): Promise<AcpSession> => {
       const tracked = trackClose(Object.keys(connectOptions).length

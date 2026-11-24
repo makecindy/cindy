@@ -68,6 +68,8 @@ export interface PluginHarnessSpawnOptions {
    * the plugin published both `remoteWorkspace` and `guestWorkspace` for this engine.
    */
   guestWorkspace?: boolean;
+  /** Host-owned local task shell env (e.g. native askpass); never forwarded for remote/guest tasks. */
+  extraEnv?: Record<string, string>;
 }
 
 export interface PluginHarness {
@@ -347,6 +349,9 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         ...(options?.remoteWorkspace || options?.guestWorkspace ? { remoteWorkspace: true } : {}),
         ...(options?.guestWorkspace ? { guestWorkspace: true } : {}),
         ...(options?.accountDir !== undefined ? { accountDir: options.accountDir } : {}),
+        ...(!options?.remoteWorkspace && !options?.guestWorkspace && options?.extraEnv && Object.keys(options.extraEnv).length > 0
+          ? { extraEnv: options.extraEnv }
+          : {}),
       };
       return Object.keys(spawnOptions).length
         ? deps.spawn(harness.ghostId, harness.harnessId, spawnOptions)
