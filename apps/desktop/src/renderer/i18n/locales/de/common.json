@@ -4030,6 +4030,7 @@
           "inconclusive": "Verbindung konnte nicht bestätigt werden. Prüfe vor einem erneuten Versuch die Adresse oder das Netzwerk; die vorherige Anfrage wurde möglicherweise ausgeführt.",
           "exhausted": "Alle möglichen Schnittstellen wurden getestet. Keine funktionierende Verbindung gefunden.",
           "model": "Getestetes Modell: {{model}}",
+          "responsesNotFound": "Der Verbindungstest erhielt HTTP 404.",
           "costHint": "Der Test sendet kurze Generierungsanfragen und kann geringe Kosten verursachen.",
           "details": "Versuche anzeigen",
           "stop": "Test stoppen"

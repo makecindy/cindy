@@ -705,8 +705,24 @@ describe('ProviderConnectionDialog accessibility', () => {
     expect(screen.queryByText(/settings\.providers\.custom\.test\.model/)).toBeNull();
   });
 
-  async function openFailingTest(opts: { editedForm?: boolean } = {}) {
-    const route = { baseUrl: 'https://host.example/v1', wireProtocol: 'openai-chat' as const };
+  // #11462: this dialog receives the same generic HTTP 404 for several upstream
+  // causes. The saved Pi Responses test must report the observed status without
+  // blaming the base URL. The existing failure-label tests use other codes.
+  it.each([
+    { wireProtocol: 'openai-responses', editedForm: false, message: 'settings.providers.custom.test.responsesNotFound' },
+    { wireProtocol: 'openai-responses', editedForm: true, message: 'providerError.ENDPOINT_NOT_FOUND' },
+    { wireProtocol: 'openai-chat', editedForm: false, message: 'providerError.ENDPOINT_NOT_FOUND' },
+  ] as const)('shows $message for a $wireProtocol test with editedForm=$editedForm', async ({ wireProtocol, editedForm, message }) => {
+    const test = vi.fn(async () => ({ ok: false as const, code: 'ENDPOINT_NOT_FOUND' as const, status: 404, latencyMs: 1, modelId: 'probed-by-main' }));
+    window.electronAPI.maker.testProviderConnection = test;
+    await openFailingTest({ editedForm, wireProtocol });
+    expect(test).toHaveBeenCalledWith(expect.objectContaining({ kind: editedForm ? 'adhoc' : 'saved' }));
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.getByText('settings.providers.custom.test.model:probed-by-main')).toBeTruthy();
+  });
+
+  async function openFailingTest(opts: { editedForm?: boolean; wireProtocol?: 'openai-chat' | 'openai-responses' } = {}) {
+    const route = { baseUrl: 'https://host.example/v1', wireProtocol: opts.wireProtocol ?? 'openai-chat' };
     const initial: CustomProviderConfig = {
       id: 'test-model-label', name: 'Test model label', auth: { method: 'apiKey' },
       runtimes: { pi: { ...route, models: [{ id: 'chat', name: 'Chat', route }, { id: 'other', name: 'Other' }] } },

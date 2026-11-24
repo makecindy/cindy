@@ -289,6 +289,7 @@ interface TestState {
   status: 'idle' | 'testing' | 'ok' | 'fail';
   /** 失败分类码（providerError.<code> i18n 键）。 */
   code?: string;
+  failureMessageKey?: 'settings.providers.custom.test.responsesNotFound';
   /** 本次实际被测的模型 ID，失败时展示，避免用户把它当成别的模型的结果。 */
   modelId?: string;
   latencyMs?: number;
@@ -1630,11 +1631,21 @@ export function ProviderConnectionDialog({
             ? { ...model, api, piApi: api } : model),
         } }));
       }
+      // A generic upstream 404 cannot establish that the saved base URL is wrong.
+      const savedResponsesNotFound = useSaved && agent === 'pi' && probeWireProtocol === 'openai-responses'
+        && result.status === 404 && result.code === 'ENDPOINT_NOT_FOUND';
       setTest((prev) => ({
         ...prev,
         [agent]: result.ok
           ? { status: 'ok', latencyMs: result.latencyMs }
-          : { status: 'fail', code: result.code ?? 'UNKNOWN', modelId: result.modelId ?? firstModel, decision: result.decision, attempts: result.attempts },
+          : {
+              status: 'fail',
+              code: result.code ?? 'UNKNOWN',
+              failureMessageKey: savedResponsesNotFound ? 'settings.providers.custom.test.responsesNotFound' : undefined,
+              modelId: result.modelId ?? firstModel,
+              decision: result.decision,
+              attempts: result.attempts,
+            },
       }));
     } catch (e) {
       if (requestId && connectionTestRef.current?.id !== requestId) return;
@@ -3334,7 +3345,7 @@ export function ProviderConnectionDialog({
                       ? t('settings.providers.custom.test.inconclusive')
                       : test[activeTab].decision === 'next'
                         ? t('settings.providers.custom.test.exhausted')
-                        : t(`providerError.${test[activeTab].code ?? 'UNKNOWN'}`)}
+                        : t(test[activeTab].failureMessageKey ?? `providerError.${test[activeTab].code ?? 'UNKNOWN'}`)}
                     {test[activeTab].modelId && (
                       <span className="block break-all text-[var(--text-secondary)]">
                         {t('settings.providers.custom.test.model', { model: test[activeTab].modelId })}

@@ -4079,6 +4079,7 @@
           "inconclusive": "Impossible de confirmer la connexion. Vérifiez l'adresse ou le réseau avant de réessayer ; la requête précédente a peut-être été exécutée.",
           "exhausted": "Toutes les interfaces candidates ont été essayées. Aucune connexion fonctionnelle n'a été trouvée.",
           "model": "Modèle testé : {{model}}",
+          "responsesNotFound": "Le test de connexion a reçu une réponse HTTP 404.",
           "costHint": "Le test envoie de courtes requêtes de génération et peut entraîner un léger coût.",
           "details": "Voir les tentatives",
           "stop": "Arrêter le test"
