@@ -12,6 +12,7 @@
  * 内容保真:parse 失败是**整文档**粒度的,失败文档里可能混着合法行,所以修复
  * 不能改变任何标签的**渲染文本**。为此所有"加引号"pass(不改渲染文本)先跑,
  * unicode 箭头替换(会改文本)最后跑——箭头替换会跳过引号段和保留原有定界符的形状变体标签;
+ * 节点形状属性 @{...} 保持原样;
  * unicode 箭头本身也算入"标签需要加引号"的危险字符。残余风险:旧式 `A -- text --> B` 的裸边文本没有可靠定界符,
  * 其中的 unicode 箭头仍会被替换——接受(该写法罕见且修复仅在失败后运行)。
  *
@@ -125,7 +126,7 @@ function replaceArrowsOutsideLabels(line: string): string {
 }
 
 /** 图类型判定:跳过 YAML frontmatter 与 `%%` 注释后,看首个有效行。 */
-function isFlowchartSource(lines: string[]): boolean {
+function flowchartStartLine(lines: string[]): number {
   let start = 0;
   if (lines[0]?.trim() === '---') {
     const close = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
@@ -134,9 +135,9 @@ function isFlowchartSource(lines: string[]): boolean {
   for (let i = start; i < lines.length; i++) {
     const t = lines[i].trim();
     if (!t || t.startsWith('%%')) continue;
-    return /^(flowchart|graph)\b/.test(t);
+    return /^(flowchart|graph)\b/.test(t) ? i : -1;
   }
-  return false;
+  return -1;
 }
 
 /** 未引号边标签 `|text|` → `|"text"|`(仅在引号外片段内成对出现时)。 */
@@ -166,6 +167,58 @@ const quoteSquareLabels = makeNodeLabelQuoter(/([A-Za-z0-9_-]+)\[([^[\]"|]+)\]/g
 const quoteRoundLabels = makeNodeLabelQuoter(/([A-Za-z0-9_-]+)\(([^()"|]+)\)/g, '(', ')');
 const quoteCurlyLabels = makeNodeLabelQuoter(/([A-Za-z0-9_-]+)\{([^{}"|]+)\}/g, '{', '}');
 
+function repairLines(source: string, flowchart: boolean, startsOnNewLine = true): string {
+  return source.split('\n').map((line, index) => {
+    const atLineStart = index > 0 || startsOnNewLine;
+    if (atLineStart && /^\s*\/\//.test(line)) return line.replace(/^(\s*)\/\//, '$1%%');
+    if (!flowchart || !line.trim() || (atLineStart && line.trimStart().startsWith('%%'))) {
+      return line;
+    }
+    let fixed = atLineStart ? line.replace(/^(\s*subgraph\s+[A-Za-z0-9_-]+)\[/, '$1 [') : line;
+    // 加引号不改渲染文本，必须先于箭头替换。
+    fixed = mapOutsideQuotes(fixed, quoteEdgeLabels);
+    fixed = mapOutsideQuotes(fixed, quoteSquareLabels);
+    fixed = mapOutsideQuotes(fixed, quoteRoundLabels);
+    fixed = mapOutsideQuotes(fixed, quoteCurlyLabels);
+    return replaceArrowsOutsideLabels(fixed);
+  }).join('\n');
+}
+
+function findShapeDataEnd(source: string, start: number): number {
+  const delimiters = /["}]/g;
+  delimiters.lastIndex = start;
+  let quoted = false;
+  for (let match = delimiters.exec(source); match; match = delimiters.exec(source)) {
+    if (match[0] === '"') quoted = !quoted;
+    else if (!quoted) return delimiters.lastIndex;
+  }
+  return -1;
+}
+
+function repairOutsideShapeData(source: string, chartStart: number): string {
+  // 形状属性使用 YAML 键值对，可在第一个键之前写注释或给键加引号。
+  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\})|"[^"\n]*(?:"|$)|\|[^|\n]+\||[-.=]+[>xo]?|@\{(?=\s*(?:#[^\n]*\n\s*)*(?:[\w-]+|"[^"\n]+"|'[^'\n]+')[^\S\r\n]*:)/gm;
+  tokens.lastIndex = chartStart;
+  const edgeLabelClosers = new Map([['--', /^--+[-xo>]$/], ['==', /^==+[=xo>]$/], ['-.', /^\.+-[xo>]?$/]]);
+  let result = '';
+  let start = 0;
+  let edgeLabelEnd: RegExp | undefined;
+  for (let match = tokens.exec(source); match; match = tokens.exec(source)) {
+    const token = match[0];
+    // 旧式边标签位于两段连接符之间，例如 A -- text --> B。
+    if (edgeLabelEnd?.test(token)) edgeLabelEnd = undefined;
+    else edgeLabelEnd ??= edgeLabelClosers.get(token);
+    if (token !== '@{' || edgeLabelEnd) continue;
+    const end = findShapeDataEnd(source, tokens.lastIndex);
+    // 未闭合属性走普通修复，同一残缺后缀只扫描一次。
+    if (end === -1) break;
+    result += repairLines(source.slice(start, match.index), true, start === 0);
+    result += source.slice(match.index, end);
+    start = tokens.lastIndex = end;
+  }
+  return result + repairLines(source.slice(start), true, start === 0);
+}
+
 /**
  * 修复一份 parse 失败的 mermaid 源码。无可修项(或触发规模闸)时返回逐字符
  * 相同的字符串,调用方可用 `repaired !== source` 判断是否值得重试 parse。
@@ -174,21 +227,8 @@ export function repairMermaidSource(source: string): string {
   if (source.length > MAX_REPAIR_SOURCE_LENGTH) return source;
   const lines = source.split('\n');
   if (lines.some((l) => l.length > MAX_REPAIR_LINE_LENGTH)) return source;
-  const flowchart = isFlowchartSource(lines);
-  return lines
-    .map((line) => {
-      if (/^\s*\/\//.test(line)) return line.replace(/^(\s*)\/\//, '$1%%');
-      if (!flowchart) return line;
-      const t = line.trim();
-      if (!t || t.startsWith('%%')) return line;
-      let fixed = line.replace(/^(\s*subgraph\s+[A-Za-z0-9_-]+)\[/, '$1 [');
-      // 加引号的 pass 全部先跑(不改渲染文本),箭头替换(改文本)压轴——
-      // 顺序是内容保真的关键,见文件头。
-      fixed = mapOutsideQuotes(fixed, quoteEdgeLabels);
-      fixed = mapOutsideQuotes(fixed, quoteSquareLabels);
-      fixed = mapOutsideQuotes(fixed, quoteRoundLabels);
-      fixed = mapOutsideQuotes(fixed, quoteCurlyLabels);
-      return replaceArrowsOutsideLabels(fixed);
-    })
-    .join('\n');
+  const startLine = flowchartStartLine(lines);
+  if (startLine === -1 || !source.includes('@{')) return repairLines(source, startLine !== -1);
+  const chartStart = lines.slice(0, startLine).reduce((offset, line) => offset + line.length + 1, 0);
+  return repairOutsideShapeData(source, chartStart);
 }

@@ -99,6 +99,44 @@ describe('repairMermaidSource', () => {
     );
   });
 
+  // #7687 的 unit 回归。既有用例只覆盖符号形状；@{...} 的标签同样需要保留箭头，
+  // 连线仍须修复。最小失败输入是 A@{ shape: stadium, label: start → done } → B。
+  it.each([
+    'A@{ shape: stadium, label: start → done }',
+    'A@{ "shape": "stadium", label: start → done }',
+    "A@{ 'shape': 'stadium', label: start → done }",
+    'A@{\n  shape: stadium\n  label: start → done\n}',
+    'A@{\n  # node shape\n  shape: stadium\n  label: start → done\n}',
+    'A@{\n  shape: stadium\n  label: "start } → done"\n}',
+  ])('保留 @{...} 的属性内容并修复后续连线 (%s)', (node) => {
+    expect(repairMermaidSource('flowchart TD\n' + node + ' → B')).toBe(
+      'flowchart TD\n' + node + ' --> B',
+    );
+  });
+
+  it('YAML 标题和边标签中的 @{ 不会阻止后续连线修复', () => {
+    expect(repairMermaidSource('---\ntitle: Demo @{\n---\nflowchart TD\nA → B\nC{ok} --> D')).toBe(
+      '---\ntitle: Demo @{\n---\nflowchart TD\nA --> B\nC{ok} --> D',
+    );
+    expect(repairMermaidSource('flowchart TD\nA -->|literal @{ text| B\nC → D\nE{ok} --> F')).toBe(
+      'flowchart TD\nA -->|"literal @{ text"| B\nC --> D\nE{ok} --> F',
+    );
+  });
+
+  it.each([
+    'accTitle: Demo @{ shape: stadium',
+    'accDescr: Demo @{ shape: stadium',
+    'A --> B; accTitle: Demo @{ shape: stadium',
+    'A -- literal @{ shape: stadium --> B',
+    'A -- literal\n@{ shape: stadium --> B',
+    'A -. literal @{ shape: stadium .-> B',
+  ])('保留 %s 中的普通文本并修复下一行', (line) => {
+    const source = 'flowchart TD\n' + line + '\nC → D\nE{ok} --> F';
+    expect(repairMermaidSource(source)).toBe(
+      'flowchart TD\n' + line + '\nC --> D\nE{ok} --> F',
+    );
+  });
+
   it('未闭合的形状不会吞掉后面的完整标签和连线', () => {
     const prefix = 'flowchart TD\n' + 'A(('.repeat(600);
     expect(repairMermaidSource(prefix + ' C([go → stop]) → B')).toBe(
