@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import { cn } from '@/lib/utils';
 
 import { readProviderGroupAppVersion } from '../../../shared/providerGroup';
@@ -250,9 +251,30 @@ function useRemoteProviderGroupView(deviceId: string, providerId: string) {
     setRetired(false);
     setVersions(new Map());
     setFailed(false);
-    void reload();
-    const timer = window.setInterval(() => void reload(), REFRESH_INTERVAL_MS);
+    let windowHidden = isWindowHidden();
+    let timer: number | undefined;
+    const syncVisibility = () => {
+      if (windowHidden || document.visibilityState === 'hidden') {
+        if (timer === undefined) return;
+        window.clearInterval(timer);
+        timer = undefined;
+        // Invalidate already dispatched reads before their workers can dequeue another member.
+        seq.current += 1;
+        inFlight.current = false;
+      } else if (timer === undefined) {
+        timer = window.setInterval(() => void reload(), REFRESH_INTERVAL_MS);
+        void reload();
+      }
+    };
+    const offHidden = window.electronAPI.onWindowHiddenChange?.(hidden => {
+      windowHidden = hidden;
+      syncVisibility();
+    });
+    document.addEventListener('visibilitychange', syncVisibility);
+    syncVisibility();
     return () => {
+      offHidden?.();
+      document.removeEventListener('visibilitychange', syncVisibility);
       window.clearInterval(timer);
       clearExpiry();
       seq.current += 1;
