@@ -101,13 +101,13 @@ describe('legacy companion context rebuild cards', () => {
     const [journal] = project([card('old-first'), card('old-last')]);
     const saved = { viewportTopKey: journal!.key, offset: 350, messageOffset: 6 };
     expect(resolveViewportRestoreMessage(journal!, { ...saved, messageClientId: 'old-first' }, 80))
-      .toEqual({ clientId: 'old-last', itemOffset: 0 });
+      .toEqual({ clientId: 'old-last', itemOffset: 0, messageOffset: 0 });
     expect(resolveViewportRestoreMessage(journal!, saved, 80))
-      .toEqual({ clientId: undefined, itemOffset: 0 });
+      .toEqual({ clientId: undefined, itemOffset: 0, messageOffset: 6 });
     expect(resolveViewportRestoreMessage(journal!, { ...saved, messageClientId: 'old-last' }, 80))
-      .toEqual({ clientId: 'old-last', itemOffset: 0 });
+      .toEqual({ clientId: 'old-last', itemOffset: 0, messageOffset: 6 });
     expect(resolveViewportRestoreMessage(journal!, { ...saved, offset: -6 }, 80))
-      .toEqual({ clientId: undefined, itemOffset: -6 });
+      .toEqual({ clientId: undefined, itemOffset: -6, messageOffset: 6 });
   });
 
   it('retains prose, distinct handoffs, other recovery cards and unloaded history boundaries', () => {

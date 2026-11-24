@@ -1261,6 +1261,8 @@ export function resolveViewportRestoreMessage(
     && collapsedMessageRepresentative(item) !== undefined;
   return {
     clientId: representative ?? snapshot.messageClientId,
+    // A replacement card may be shorter than the old card's expanded details.
+    messageOffset: representative !== undefined ? 0 : (snapshot.messageOffset ?? 0),
     // A saved offset into the old journal can point below its replacement,
     // including snapshots taken between cards without an exact child anchor.
     itemOffset: representative !== undefined || oldOffsetOutOfBounds ? 0 : snapshot.offset,
@@ -4475,11 +4477,11 @@ export function MessageStream({
     const child = findRenderItemElement(items, item.key);
     if (!child) return false;
     const childRect = child.getBoundingClientRect();
-    const { clientId, itemOffset } = resolveViewportRestoreMessage(item, snap, childRect.height);
+    const { clientId, itemOffset, messageOffset } = resolveViewportRestoreMessage(item, snap, childRect.height);
     const messageTarget = clientId ? queryMessageElement(container, clientId) : null;
     const useMessageTarget = messageTarget && messageTarget.getBoundingClientRect().height > 0;
     const target = useMessageTarget ? messageTarget : child;
-    const offset = useMessageTarget ? (snap.messageOffset ?? 0) : itemOffset;
+    const offset = useMessageTarget ? messageOffset : itemOffset;
     const desiredScrollTop =
       container.scrollTop +
       viewportAnchorCorrection(
@@ -4512,7 +4514,7 @@ export function MessageStream({
     // row was positioned. Prefer the same visible child when it still exists.
     if (
       clientId &&
-      scrollMessageToViewportTop(clientId, snap.messageOffset ?? 0)
+      scrollMessageToViewportTop(clientId, messageOffset)
     ) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
