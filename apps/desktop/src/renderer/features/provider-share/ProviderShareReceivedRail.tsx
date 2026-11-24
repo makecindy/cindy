@@ -25,7 +25,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useRemotePluginEngines } from '@/hooks/usePluginEngines';
 import { providerMonogram } from '@/lib/providerModels';
-import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
+import { retryProviderShareCatalog } from '@/lib/remoteCatalogSnapshot';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
@@ -379,7 +379,7 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
           onRefresh={status === 'active'
             ? (isPluginEngine
                 ? () => pluginCatalogue.refresh()
-                : () => void refreshRemoteCatalogSnapshot(catalogDeviceId).catch(() => undefined))
+                : () => void retryProviderShareCatalog(catalogDeviceId).catch(() => undefined))
             : undefined}
           refreshing={isPluginEngine ? pluginCatalogue.engines === null && status === 'active' : catalog.loading}
           action={
@@ -387,7 +387,7 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => void refreshRemoteCatalogSnapshot(catalogDeviceId).catch(() => undefined)}
+                onClick={() => void retryProviderShareCatalog(catalogDeviceId).catch(() => undefined)}
               >
                 {t('providerShare.received.retryModels')}
               </Button>

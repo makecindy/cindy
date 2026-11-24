@@ -2,6 +2,7 @@
  * Existing device generations remain the authority for disconnect/owner changes.
  */
 import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { readProviderMetadataContinuity } from '@cindy/device-link';
 import {
   evictAllRemoteCapabilities,
@@ -36,6 +37,26 @@ const refreshes = new Map<
     endpointsAreCurrent: () => boolean;
   }
 >();
+
+const shareCatalogRetries = new Map<string, Promise<void>>();
+
+export function retryProviderShareCatalog(deviceId: string): Promise<void> {
+  const pending = shareCatalogRetries.get(deviceId);
+  if (pending) return pending;
+  const owner = getDataOwnerGeneration();
+  const generation = getDeviceProvidersGeneration(deviceId);
+  const retry = (async () => {
+    await window.electronAPI?.providerShare?.command({ action: 'retry-model-catalog', agentDeviceId: deviceId });
+    // A push or eviction during the directory refresh owns the newer catalog.
+    if (isDataOwnerGenerationCurrent(owner) && isDeviceProvidersGenerationCurrent(deviceId, generation)) {
+      await refreshRemoteCatalogSnapshot(deviceId);
+    }
+  })().finally(() => {
+    if (shareCatalogRetries.get(deviceId) === retry) shareCatalogRetries.delete(deviceId);
+  });
+  shareCatalogRetries.set(deviceId, retry);
+  return retry;
+}
 
 function captureRouteEndpoints(deviceId: string): () => boolean {
   const route = parseModelCatalogKey(deviceId);
@@ -123,6 +144,7 @@ export function invalidateRemoteCatalogSnapshots(): void {
   evictAllDeviceProviders();
   evictAllRemoteCapabilities();
   refreshes.clear();
+  shareCatalogRetries.clear();
 }
 
 export async function refreshRemoteCatalogSnapshot(deviceId: string, notification?: unknown,

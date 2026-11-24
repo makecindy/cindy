@@ -118,7 +118,9 @@ import {
   getReceivedSharesSnapshot,
   leaveProviderShare,
   previewProviderShare,
+  parseProviderShareAgentDeviceId,
   refreshReceivedShares,
+  resolveRemoteAgentTargetWhenReady,
   sendProviderShareRequest,
   getProviderShareRequest,
   startProviderShareGuest,
@@ -666,6 +668,11 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
       const decision = value.decision;
       if (decision !== 'approve' && decision !== 'reject') throwIpcError('INVALID_PARAMS', 'Invalid decision');
       return { action: 'reshare-decide', id: text(value.id, 'id', 64), decision };
+    }
+    case 'retry-model-catalog': {
+      const agentDeviceId = text(value.agentDeviceId, 'agentDeviceId', 128);
+      if (!parseProviderShareAgentDeviceId(agentDeviceId)) throwIpcError('INVALID_PARAMS', 'Invalid shared provider');
+      return { action: value.action, agentDeviceId };
     }
     case 'received':
       return { action: 'received' };
@@ -1321,6 +1328,9 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
       return { ok: true };
     }
+    case 'retry-model-catalog':
+      await resolveRemoteAgentTargetWhenReady(command.agentDeviceId, { retryDirectory: true });
+      return { ok: true };
     case 'received':
       if (running) void refreshReceivedShares('ui');
       return getReceivedShares();

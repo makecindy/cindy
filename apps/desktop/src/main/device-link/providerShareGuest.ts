@@ -46,6 +46,7 @@ import {
   isCrossRegionReceivedReady,
   ensureCrossRegionReceivedForFavorites,
   refreshProviderShareCrossRegion,
+  retryCrossRegionReceivedForShare,
   restoreCrossRegionReceivedForRemoteGroup,
   waitForCrossRegionReceived,
   startProviderShareCrossRegion,
@@ -61,6 +62,7 @@ const RECEIVED_POLL_MS = 60_000;
 const RECEIVED_IDLE_POLL_MS = 5 * 60_000;
 const REQUEST_POLL_MS = 4_000;
 const ACCESS_FAILURE_REFRESH_MS = 10_000;
+const CATALOG_RETRY_INTERVAL_MS = 10_000;
 const GROUP_LOCAL_REFRESH_INTERVAL_MS = 30_000;
 const SHARE_DEVICE_PREFIX = 'share:';
 // 任务记录里的电脑 id 最长 128 个字符(含 `share:` 前缀)。
@@ -109,6 +111,7 @@ interface Runtime {
   pending: Map<string, PendingRequest>;
   groupRecoveries: Set<Promise<void>>;
   nextGroupLocalRefreshAt: number;
+  nextCatalogRetryAt: number;
   stopped: boolean;
 }
 
@@ -374,13 +377,40 @@ export function resolveRemoteAgentTarget(agentDeviceId: string): string {
  * 同上，但刚启动、已收到的分享还没拉到时先等第一次拉取，不把「还没加载」当成「已删除」。
  * 未登录或设备互联未就绪时按连不上处理。
  */
-export async function resolveRemoteAgentTargetWhenReady(agentDeviceId: string): Promise<string> {
+export async function resolveRemoteAgentTargetWhenReady(
+  agentDeviceId: string,
+  options?: { retryDirectory: true },
+): Promise<string> {
   const shareId = parseProviderShareAgentDeviceId(agentDeviceId);
   if (!shareId) return agentDeviceId;
   const rt = runtime;
   if (!rt || !current(rt)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] provider sharing is not ready');
-  if (rt.unavailable.has(shareId) || (rt.listUnavailable && rt.received.some(share => share.shareId === shareId))
-    || isCrossRegionShareListUnavailable(shareId)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] shared provider service is unavailable');
+  const localUnavailable = () => rt.unavailable.has(shareId)
+    || (rt.listUnavailable && rt.received.some(share => share.shareId === shareId));
+  if (options?.retryDirectory) {
+    if (rt.leftShareIds.has(shareId) || (!localUnavailable() && !isCrossRegionShareListUnavailable(shareId))) {
+      return resolveRemoteAgentTarget(agentDeviceId);
+    }
+    if (localUnavailable()) {
+      // This directory is shared by all local shares. Join a poll/manual read
+      // already in flight and limit retries across targets and windows.
+      if (rt.refreshing) {
+        await rt.refreshing;
+      } else if (performance.now() >= rt.nextCatalogRetryAt) {
+        rt.nextCatalogRetryAt = performance.now() + CATALOG_RETRY_INTERVAL_MS;
+        await refreshReceivedShares('catalog-retry');
+      }
+    } else if (isCrossRegionShareListUnavailable(shareId)) {
+      await retryCrossRegionReceivedForShare(shareId);
+    }
+    if (!current(rt)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] provider sharing account changed');
+    if (!localUnavailable() && !isCrossRegionShareListUnavailable(shareId)) {
+      return resolveRemoteAgentTarget(agentDeviceId);
+    }
+  }
+  if (localUnavailable() || isCrossRegionShareListUnavailable(shareId)) {
+    throw new Error('[DEVICE_LINK_NOT_CONNECTED] shared provider service is unavailable');
+  }
   // An already loaded share remains usable even while the other region is unavailable.
   if (findReceivedShare(shareId)) return resolveRemoteAgentTarget(agentDeviceId);
   if (rt.fetchedAt === 0) await refreshReceivedShares('resolve');
@@ -457,6 +487,7 @@ export function startProviderShareGuest(events: ProviderShareGuestEvents, option
     pending: new Map(),
     groupRecoveries: new Set(),
     nextGroupLocalRefreshAt: 0,
+    nextCatalogRetryAt: 0,
     stopped: false,
   };
   runtime = rt;
@@ -528,6 +559,10 @@ export function refreshReceivedShares(reason: string): Promise<void> {
           if (current(rt)) {
             const wasConfirmed = rt.listConfirmed;
             rt.listConfirmed = false;
+            const failure = error as { status?: number; statusCode?: number; code?: string } | null | undefined;
+            if ((failure?.statusCode ?? failure?.status) === 429 || failure?.code === 'RATE_LIMITED') {
+              rt.nextCatalogRetryAt = Math.max(rt.nextCatalogRetryAt, performance.now() + RECEIVED_POLL_MS);
+            }
             log.warn('received shares refresh failed', { reason, error: error instanceof Error ? error.message : String(error) });
             if (isAuthoritativeShareListDenial(error)) {
               // Retire the directory immediately without interpreting the

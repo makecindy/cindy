@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as providers from '@/hooks/useDeviceProviders';
 import * as capabilities from '@/hooks/useAgentCapabilities';
-import { invalidateRemoteCatalogSnapshots, refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
+import { invalidateRemoteCatalogSnapshots, refreshRemoteCatalogSnapshot, retryProviderShareCatalog } from '@/lib/remoteCatalogSnapshot';
 import { CONTROLLED_MODEL_CATALOG_CHANNEL, modelCatalogKey } from '../../shared/controlledModelCatalog';
 
 beforeEach(() => {
@@ -17,6 +17,30 @@ function deferred() {
   });
   return { promise, resolve };
 }
+
+
+describe('explicit shared catalog retries', () => {
+  // Unit: the button's shared refresh entry must confirm membership before reading models.
+  // A duplicate click joins it, and a retired share cannot be reopened by that pending retry.
+  it.each([false, true])('does not read ahead of membership or reopen a retired share (%s)', async (retired) => {
+    const deviceId = 'share:retry';
+    const confirmation = deferred();
+    const command = vi.fn(() => confirmation.promise);
+    const invoke = vi.fn(async (_device: string, channel: string) => (
+      channel === 'maker:provider:list' ? { providers: [] }
+        : { availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] }
+    ));
+    vi.stubGlobal('window', { electronAPI: { providerShare: { command }, deviceLink: { invoke } } });
+    const first = retryProviderShareCatalog(deviceId);
+    const second = retryProviderShareCatalog(deviceId);
+    expect(command).toHaveBeenCalledExactlyOnceWith({ action: 'retry-model-catalog', agentDeviceId: deviceId });
+    expect(invoke).not.toHaveBeenCalled();
+    if (retired) await refreshRemoteCatalogSnapshot(deviceId, undefined, { retireOnly: true });
+    confirmation.resolve();
+    await Promise.all([first, second]);
+    expect(invoke.mock.calls.filter(([, channel]) => channel === 'maker:provider:list')).toHaveLength(retired ? 0 : 1);
+  });
+});
 
 describe('remote catalog refresh scheduling', () => {
   // #10711 P2 / unit: both endpoints invalidate the same routed read while it is pending.

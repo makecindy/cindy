@@ -117,6 +117,7 @@ import {
 import { useApiKey } from '@/hooks/useApiKey';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
+import { retryProviderShareCatalog } from '@/lib/remoteCatalogSnapshot';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
 import { useProviders } from '@/hooks/useProviders';
@@ -1602,6 +1603,10 @@ function ModelSelectorContentView({
       : undefined;
   const retryRemoteModels = useCallback(() => {
     if (!catalogDeviceId) return;
+    if (isProviderShareAgentDeviceId(catalogDeviceId)) {
+      void retryProviderShareCatalog(catalogDeviceId).catch(() => undefined);
+      return;
+    }
     evictDeviceCapabilities(catalogDeviceId);
     evictDeviceProviders(catalogDeviceId);
     void Promise.allSettled([

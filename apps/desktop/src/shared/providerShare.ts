@@ -252,6 +252,7 @@ export type ProviderShareCommand =
   /** 转分享：同意或拒绝(拒绝已同意的 = 撤回)。 */
   | { action: 'reshare-decide'; id: string; decision: 'approve' | 'reject' }
   | { action: 'received' }
+  | { action: 'retry-model-catalog'; agentDeviceId: string }
   | { action: 'received-snapshot'; favoriteRecovery?: ProviderShareFavoriteRecovery }
   | { action: 'preview'; link: string }
   | { action: 'send-request'; link: string }
@@ -290,6 +291,7 @@ export interface ProviderShareCommandResult {
   'set-member-note': { ok: true };
   'reshare-decide': { ok: true };
   received: ProviderShareReceived[];
+  'retry-model-catalog': { ok: true };
   'received-snapshot': ProviderShareReceivedSnapshot;
   preview: ProviderShareLinkPreview;
   'send-request': ProviderShareRequestState;
