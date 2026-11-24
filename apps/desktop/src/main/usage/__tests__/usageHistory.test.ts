@@ -224,13 +224,13 @@ function makeDeps(overrides: Partial<UsageHistoryDeps> = {}): UsageHistoryDeps {
   };
 }
 
-function usageView(result: Awaited<ReturnType<typeof readUsageHistoryWith>>) {
-  const scope = usageScope(result, [TODAY], []);
+function usageView(result: Awaited<ReturnType<typeof readUsageHistoryWith>>, days = [TODAY]) {
+  const scope = usageScope(result, days, []);
   return buildMenubarView({
     nowMs: Date.now(), locale: 'zh-CN', moneySymbol: result.totals.today.currency === 'CNY' ? '¥' : '$',
     settings: DEFAULT_MENUBAR_SETTINGS, sources: [], tasks: [], updatedAtMs: null,
     harnessLogos: MENUBAR_HARNESS_LOGOS,
-    usage: { days: [TODAY], scopes: { local: scope, all: scope } }, uiStrings: {},
+    usage: { days, scopes: { local: scope, all: scope } }, uiStrings: {},
     t: (key, vars) => key === 'fact.about' ? `约 ${vars?.value}` : key,
   });
 }
@@ -395,6 +395,37 @@ describe('readUsageHistoryWith', () => {
       expect(result.modelDaily.find(row => row.model === 'foreign-model')?.money.amount).toBe(0);
       expect(result.totals.todayTokens).toBe(1_000_050);
     }
+  });
+
+  // #12476 · unit. The native menu bar view must keep omitted original amounts
+  // without altering its selected-currency chart or tokens. The tests above
+  // only cover the existing single-currency projection and widget contract.
+  it.each(['CNY', 'USD'] as const)('explains omitted amounts in the %s menu bar chart', async (currency) => {
+    const paid = { ...actual(0.10), currency: 'CNY' as const };
+    const estimate = { amount: 2, currency: 'USD', kind: 'value-estimate', approximate: true } as const;
+    const previousDay = '2026-06-10';
+    const result = await readUsageHistoryWith(makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: [paid] }],
+      getModelUsageSince: async () => [
+        modelRow(TODAY, 'pi', 'pi-paid', paid, { inputTokens: 10 }),
+        modelRow(TODAY, 'claude-code', 'claude-estimate#billing=subscription', estimate, { inputTokens: 20 }),
+        modelRow(previousDay, 'pi', 'pi-paid', { ...paid, currency }, { inputTokens: 1 }),
+      ],
+    }), { currency, includeExcludedMoney: true });
+    const isCny = currency === 'CNY';
+    const excluded = isCny ? estimate : paid;
+    const scope = usageView(result, [previousDay, TODAY]).usage.scopes.local;
+    expect(scope.daily[0]).not.toHaveProperty('excludedMoney');
+    expect(scope.daily[1]).toEqual({
+      money: isCny ? [0, 0, 0.1] : [2, 0, 0],
+      paid: isCny ? 0.1 : 0,
+      tokens: [20, 0, 10],
+      excludedMoney: [excluded],
+    });
+    expect(scope.models['7'].find(row => row.harness === (isCny ? 'claude-code' : 'pi'))).toMatchObject({
+      excludedMoney: [excluded],
+      tokens: isCny ? 20 : 11,
+    });
   });
 
   it('keeps media fees in actual totals and model detail without inventing chat tokens', async () => {

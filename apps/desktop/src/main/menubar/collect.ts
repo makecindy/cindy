@@ -23,6 +23,7 @@ import { isXaiWeeklyUsageCurrent } from '@cindy/maker-shared/subscription-usage'
 import { isSessionActivityRunning, type SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from '../../shared/menubarQuota.js';
+import type { RegionalMoney } from '../../shared/regionalMoney.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { isPluginEngineKind, type PluginEngineView } from '../../shared/pluginEngines.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
@@ -32,6 +33,7 @@ import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } fro
 import type { UsageHistoryPayload } from '../usage/usageHistory.js';
 import { familyLogo, MENUBAR_CINDY_LOGO, monogramLogo, providerLogo } from './logos.js';
 import {
+  sumExcludedMoney,
   topModels,
   type MenubarBalanceInput,
   type MenubarHarness,
@@ -700,6 +702,7 @@ export function usageScope(
   const indexOfDay = new Map(days.map((day, index) => [day, index]));
   const windows: Array<keyof MenubarUsageScopeData['models']> = ['7', '30', '90'];
   const modelRows: Record<string, MenubarModelUsage[]> = { '7': [], '30': [], '90': [] };
+  const excludedByDay = new Map<number, RegionalMoney[]>();
   for (const row of payload.modelDaily) {
     const index = indexOfDay.get(row.day);
     if (index === undefined) continue;
@@ -714,13 +717,23 @@ export function usageScope(
     daily.money[slot] += money;
     daily.tokens[slot] += finite(row.tokens);
     daily.paid += finite(row.apiMoney?.amount);
+    if (row.excludedMoney) {
+      const excluded = excludedByDay.get(index);
+      if (excluded) excluded.push(row.excludedMoney);
+      else excludedByDay.set(index, [row.excludedMoney]);
+    }
     const age = days.length - 1 - index;
+    const modelRow = {
+      name: label(row.model), harness, money, tokens: finite(row.tokens),
+      ...(row.excludedMoney && { excludedMoney: [row.excludedMoney] }),
+    };
     for (const window of windows) {
       if (age < Number(window)) {
-        modelRows[window].push({ name: label(row.model), harness, money, tokens: finite(row.tokens) });
+        modelRows[window].push(modelRow);
       }
     }
   }
+  for (const [index, amounts] of excludedByDay) scope.daily[index].excludedMoney = sumExcludedMoney(amounts);
   for (const window of windows) scope.models[window] = topModels(modelRows[window]);
   scope.modelSeries = modelSeries(payload, indexOfDay, days.length, label);
   return scope;

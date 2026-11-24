@@ -37,6 +37,7 @@ import {
   type MenubarUsageScopeData,
   type MenubarView,
 } from '../../shared/menubarQuota.js';
+import { addRegionalMoney, type RegionalMoney } from '../../shared/regionalMoney.js';
 
 export type MenubarHarness = 'claude-code' | 'codex' | 'pi';
 export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go' | 'zhipu' | 'plugin' | 'shared';
@@ -1360,6 +1361,18 @@ export function isLowOnEverything(input: MenubarBuildInput): boolean {
   return new Builder(input).lowOnEverything();
 }
 
+/** Keep actual spend and estimated value separate even when they share a currency. */
+export function sumExcludedMoney(values: readonly RegionalMoney[]): RegionalMoney[] {
+  const groups = new Map<string, RegionalMoney[]>();
+  for (const money of values) {
+    const key = `${money.currency}:${money.kind}`;
+    const group = groups.get(key);
+    if (group) group.push(money);
+    else groups.set(key, [money]);
+  }
+  return [...groups.values()].map(group => addRegionalMoney(group));
+}
+
 /**
  * Merges per-harness model rows into the menu's top models list: the leaders by money and by
  * tokens, so the panel can rank either metric without losing a model that leads only one.
@@ -1372,12 +1385,17 @@ export function topModels(rows: readonly MenubarModelUsage[], limit = 8): Menuba
     if (existing) {
       existing.money += row.money;
       existing.tokens += row.tokens;
+      if (row.excludedMoney) {
+        existing.excludedMoney = sumExcludedMoney([...(existing.excludedMoney ?? []), ...row.excludedMoney]);
+      }
     } else {
       merged.set(key, { ...row });
     }
   }
-  const used = [...merged.values()].filter((row) => row.money > 0 || row.tokens > 0);
-  const byMoney = [...used].sort((a, b) => b.money - a.money || b.tokens - a.tokens).slice(0, limit);
+  const used = [...merged.values()].filter((row) => row.money > 0 || row.tokens > 0 || row.excludedMoney?.length);
+  const byMoney = [...used].sort((a, b) => b.money - a.money
+    || Number(Boolean(b.excludedMoney?.length)) - Number(Boolean(a.excludedMoney?.length))
+    || b.tokens - a.tokens).slice(0, limit);
   const byTokens = [...used].sort((a, b) => b.tokens - a.tokens || b.money - a.money).slice(0, limit);
   return [...byMoney, ...byTokens.filter((row) => !byMoney.includes(row))];
 }

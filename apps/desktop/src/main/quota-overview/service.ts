@@ -628,6 +628,7 @@ export class QuotaOverviewService {
         modelDays: MENUBAR_USAGE_DAYS,
         device: scope,
         includeTasks: scope === 'local',
+        ...(process.platform === 'darwin' && { includeExcludedMoney: true }),
         ...(force ? { forceRefresh: true } : {}),
       }),
     );

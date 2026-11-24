@@ -105,6 +105,14 @@ struct MBModelUsage: Decodable, Equatable {
   let harness: String
   let money: Double
   let tokens: Double
+  let excludedMoney: [MBExcludedMoney]?
+}
+
+struct MBExcludedMoney: Decodable, Equatable {
+  let amount: Double
+  let currency: String
+  let kind: String
+  let approximate: Bool
 }
 
 struct MBActivity: Decodable, Identifiable, Equatable {
@@ -125,6 +133,7 @@ struct MBDaily: Decodable, Equatable {
   let money: [Double]
   let paid: Double
   let tokens: [Double]
+  let excludedMoney: [MBExcludedMoney]?
 }
 
 struct MBScopeData: Decodable, Equatable {
@@ -3356,13 +3365,18 @@ struct UsagePage: View {
         bigNumber(Fmt.money(row.money.reduce(0, +)))
         caption(Fmt.monthDay(date, locale: store.locale) + " " + Fmt.weekday(date, locale: store.locale))
         let present = harnessOrder.filter { row.money[$0.index] > 0 }
+        let excluded = row.excludedMoney ?? []
         caption(present.isEmpty
-          ? store.s("noUsage")
+          ? store.s(excluded.isEmpty ? "noUsage" : "chartCurrencyOnly")
           : present.map { "\(store.s("harness." + $0.key)) \(Fmt.money(row.money[$0.index]))" }.joined(separator: " · "))
+        excludedAmounts(excluded)
       } else {
         bigNumber(Fmt.money(total))
         caption(store.s("wideCaptionMoney", ["n": String(store.usageRange)]) + " · " + store.s(scope == "local" ? "scopeLocal" : "scopeAll"))
         caption(stats(daily: daily, total: total))
+        if daily.contains(where: { !($0.excludedMoney ?? []).isEmpty }) {
+          caption(store.s("chartCurrencyOnly"))
+        }
       }
     }
   }
@@ -3384,6 +3398,20 @@ struct UsagePage: View {
       .monospacedDigit()
       .lineLimit(1)
       .truncationMode(.tail)
+  }
+
+  private func excludedAmounts(_ amounts: [MBExcludedMoney]) -> some View {
+    ForEach(Array(amounts.enumerated()), id: \.offset) { _, money in
+      let symbol = money.currency == "CNY" ? "¥" : "$"
+      let amount = Fmt.money(money.amount, symbol: symbol)
+      let category = store.s(money.kind == "actual-cost" ? "paid" : "subscriptionEstimate")
+      let value = category + " " + (money.approximate ? "≈" + amount : amount)
+      Text(store.s("excludedFromChart", ["value": value]))
+        .font(.system(size: 11))
+        .foregroundStyle(Palette.ink2)
+        .monospacedDigit()
+        .fixedSize(horizontal: false, vertical: true)
+    }
   }
 
   private func stats(daily: [MBDaily], total: Double) -> String {
@@ -3452,21 +3480,28 @@ struct UsagePage: View {
 
   @ViewBuilder
   private func modelList(_ models: [MBModelUsage]) -> some View {
-    let rows = models.filter { $0.money > 0 }.sorted { $0.money > $1.money }.prefix(5)
+    let rows = models.filter { $0.money > 0 || !($0.excludedMoney ?? []).isEmpty }.prefix(5)
     VStack(spacing: 0) {
       if rows.isEmpty {
         emptyRow(store.s("noUsage"))
       }
       ForEach(Array(rows.enumerated()), id: \.offset) { _, model in
-        HStack(spacing: 8) {
-          Circle().fill(Palette.harness(model.harness)).frame(width: 6, height: 6)
-          Text(model.name).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
-          Text(Fmt.money(model.money)).fontWeight(.semibold)
+        VStack(alignment: .leading, spacing: 2) {
+          HStack(spacing: 8) {
+            Circle().fill(Palette.harness(model.harness)).frame(width: 6, height: 6)
+            Text(model.name).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
+            if model.money > 0 {
+              Text(Fmt.money(model.money)).fontWeight(.semibold)
+            }
+          }
+          excludedAmounts(model.excludedMoney ?? [])
+            .padding(.leading, 14)
         }
         .font(.system(size: 12))
         .monospacedDigit()
         .padding(.horizontal, 8)
-        .frame(height: 26)
+        .padding(.vertical, 4)
+        .frame(minHeight: 26)
       }
     }
   }

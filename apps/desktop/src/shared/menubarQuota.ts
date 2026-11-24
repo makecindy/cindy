@@ -7,6 +7,8 @@
  * task's clock, chart scrub readouts).
  */
 
+import type { RegionalMoney } from './regionalMoney.js';
+
 export const MENUBAR_STATUS_TEXT_MODES = ['icon', 'lowest', 'today', 'task'] as const;
 export type MenubarStatusTextMode = (typeof MENUBAR_STATUS_TEXT_MODES)[number];
 
@@ -153,6 +155,7 @@ export interface MenubarModelUsage {
   harness: 'claude-code' | 'codex' | 'pi';
   money: number;
   tokens: number;
+  excludedMoney?: RegionalMoney[];
 }
 
 /** Live task/companion projection, independent of today's local usage ranking. */
@@ -177,6 +180,7 @@ export interface MenubarUsageScopeData {
     /** Actually paid (API) part of `money`, summed across harnesses. */
     paid: number;
     tokens: [number, number, number, ...number[]];
+    excludedMoney?: RegionalMoney[];
   }[];
   /** Model totals for the last 7, 30 and 90 days. */
   models: { '7': MenubarModelUsage[]; '30': MenubarModelUsage[]; '90': MenubarModelUsage[] };

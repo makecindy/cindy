@@ -131,6 +131,8 @@ export interface UsageHistoryModelDay {
   apiMoney: RegionalMoney;
   /** 订阅 token 价值估算金额。 */
   subscriptionEstimateMoney: RegionalMoney;
+  /** Original amount excluded by the single-currency chart projection. */
+  excludedMoney?: RegionalMoney;
   tokens: number;
   inputTokens: number;
   outputTokens: number;
@@ -438,7 +440,8 @@ function optsKey(opts?: UsageHistoryReadOptions): string {
   // 'local' 沿用旧 key, 升级后首页与已有磁盘快照照常命中。
   const deviceSuffix = device === 'local' ? '' : `|device=${encodeURIComponent(device)}`;
   const taskSuffix = opts?.includeTasks ? '|tasks=1' : '';
-  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}${deviceSuffix}${taskSuffix}${opts?.currency ? '|currency=' + opts.currency : ''}`;
+  const excludedMoneySuffix = opts?.includeExcludedMoney ? '|excludedMoney=1' : '';
+  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}${deviceSuffix}${taskSuffix}${opts?.currency ? '|currency=' + opts.currency : ''}${excludedMoneySuffix}`;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -570,6 +573,8 @@ function isLatestRefreshGeneration(expectedOptsKey: string, generation: number):
 
 export interface UsageHistoryReadOptions {
   currency?: MoneyCurrency;
+  /** Native menu bar disclosure for amounts omitted from the selected currency. */
+  includeExcludedMoney?: boolean;
   days?: number | 'all';
   /** Model/table aggregation window. `all` is used by Settings → Usage History. */
   modelDays?: number | 'all';
@@ -714,6 +719,9 @@ export async function readUsageHistoryWith(
   const allModelRows = pricedModels.map((row) => ({
     ...row,
     money: keepCompatibleMoney(row.money),
+    excludedMoney: opts?.includeExcludedMoney && row.money.currency !== ledgerCurrency && row.money.amount > 0
+      && (row.money.kind === 'actual-cost' || isSubscriptionUsageModel(row.model))
+      ? row.money : undefined,
   }));
   const modelRows = modelCutoff === null
     ? allModelRows
@@ -838,6 +846,7 @@ export async function readUsageHistoryWith(
       money,
       apiMoney,
       subscriptionEstimateMoney,
+      ...(row.excludedMoney && { excludedMoney: row.excludedMoney }),
       tokens: row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens,
       inputTokens: row.inputTokens,
       outputTokens: row.outputTokens,
