@@ -251,13 +251,13 @@ describe('request-owned Responses compatibility', () => {
   // call's kind. The public Codex adapter must preserve bare/function and child/custom responses.
   it.each(['application/json', 'text/event-stream'])('restores current tool kinds despite replayed inline declarations (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();
-    const bare = { type: 'function_call', name: 'workspace__read', call_id: 'bare', arguments: '{"line":4}' };
+    const bare = { type: 'function_call', name: 'workspace__read', call_id: 'bare', arguments: '{"line":4.0}' };
     const child = { type: 'function_call', name: 'workspace__read_2', call_id: 'child', arguments: '{"input":"text"}' };
-    const currentFunction = { type: 'function', name: 'workspace__read' };
+    const currentFunction = { type: 'function', name: 'workspace__read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } };
     const group = (type: string) => ({ type: 'namespace', name: 'workspace', tools: [{ type, name: 'read' }] });
     const sse = contentType === 'text/event-stream';
     for (const { tools, replay, item, expected } of [
-      { tools: [currentFunction, group('function')], replay: [{ type: 'custom', name: currentFunction.name }], item: bare, expected: bare },
+      { tools: [currentFunction, group('function')], replay: [{ type: 'custom', name: currentFunction.name }], item: bare, expected: { ...bare, arguments: '{"line":4}' } },
       { tools: [currentFunction, group('custom')], replay: [group('function')], item: child,
         expected: { type: 'custom_tool_call', name: 'read', namespace: 'workspace', call_id: 'child', input: 'text' } },
     ]) {
@@ -267,6 +267,27 @@ describe('request-owned Responses compatibility', () => {
       const text = await responseText(adapter.createResponseTransform(10100, { contentType, contentEncoding: '' })!, wire);
       expect((sse ? JSON.parse(text.trim().slice(6)).response : JSON.parse(text)).output).toEqual([expected]);
     }
+  });
+
+  // The current inline declaration must reach the provider with its schema even if replay
+  // carries the same coordinate. Replayed call items retain the same allocated wire name.
+  it('forwards the current inline definition over a replayed declaration', () => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const tools = [{ type: 'function', name: 'workspace__read' }];
+    const group = (child: object) => ({ type: 'namespace', name: 'workspace', tools: [{ name: 'read', ...child }] });
+    const input = [
+      { type: 'additional_tools', tools: [group({ type: 'function', parameters: { type: 'object', properties: { line: { type: 'integer' } } } })] },
+      { type: 'function_call', name: 'read', namespace: 'workspace', call_id: 'previous', arguments: '{"line":2}' },
+      { type: 'additional_tools', tools: [group({ type: 'custom', description: 'Read a raw location' })] },
+    ];
+    const request = adapter.adaptRequest({ tools, input }, 10101, undefined, true) as { input: unknown[] };
+    expect(request.input).toMatchObject([
+      { type: 'additional_tools', tools: [] },
+      { type: 'function_call', name: 'workspace__read_2', call_id: 'previous' },
+      { type: 'additional_tools', tools: [{ type: 'function', name: 'workspace__read_2', parameters: {
+        type: 'object', properties: { input: { type: 'string' } },
+      } }] },
+    ]);
   });
 
   it.each(['application/json', 'text/event-stream'])('restores default functions custom calls as bare tools (%s)', async contentType => {

@@ -274,7 +274,7 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
     addSelector(selectors, wireName, wireName);
     addSelector(selectors, `${entry.namespace}.${entry.childName}`, wireName);
     addSelector(selectors, entry.childName, wireName);
-    if (entry.namespace === BUILTIN_FUNCTIONS_NAMESPACE) continue;
+    if (entry.namespace === BUILTIN_FUNCTIONS_NAMESPACE || aliases.has(wireName)) continue;
     // A child declared `custom` stays custom; everything else lowers to a function, which is how
     // `buildTools` flattens it upstream.
     const kind = entry.child.type === "custom" ? "custom" : "function";
@@ -295,6 +295,7 @@ function rewriteToolList(
   tools: unknown[],
   plan: NamespaceRewritePlan,
   emitted: Set<string>,
+  bareWireNames: ReadonlySet<string> = plan.bareWireNames,
 ): unknown[] {
   let changed = false;
   const rewritten: unknown[] = [];
@@ -309,7 +310,7 @@ function rewriteToolList(
         // from the complete catalog rather than whichever container happens to be rewritten first.
         if (
           wireName === undefined
-          || (parsed.namespace === BUILTIN_FUNCTIONS_NAMESPACE && plan.bareWireNames.has(wireName))
+          || (parsed.namespace === BUILTIN_FUNCTIONS_NAMESPACE && bareWireNames.has(wireName))
           || emitted.has(wireName)
         ) continue;
         emitted.add(wireName);
@@ -445,10 +446,15 @@ function authorizedAliases(
   );
 }
 
-function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan, emitted: Set<string>): unknown {
+function rewriteInputItem(
+  item: unknown,
+  plan: NamespaceRewritePlan,
+  emitted: Set<string>,
+  bareWireNames?: ReadonlySet<string>,
+): unknown {
   if (!isPlainObject(item)) return item;
   if (item.type === "additional_tools" && Array.isArray(item.tools)) {
-    const tools = rewriteToolList(item.tools, plan, emitted);
+    const tools = rewriteToolList(item.tools, plan, emitted, bareWireNames);
     return tools === item.tools ? item : { ...item, tools };
   }
   if (
@@ -472,6 +478,7 @@ export function rewriteRoutedNamespaceToolsForUpstream(
   bareCustomNames?: ReadonlySet<string>,
   namespaceCustomToolNames?: ReadonlySet<string>,
   originalToolChoice?: unknown,
+  currentInlineIndex?: number,
 ): {
   body: unknown;
   aliases: Map<string, RoutedNamespaceToolIdentity>;
@@ -488,19 +495,41 @@ export function rewriteRoutedNamespaceToolsForUpstream(
     return { body, aliases: new Map(), renamedWireNames: new Map(), renamedKinds: new Map() };
   }
   const groups = collectResponsesToolGroups(body);
+  const currentInline = Array.isArray(body.input) && currentInlineIndex !== undefined
+    ? body.input[currentInlineIndex] : undefined;
+  const currentInlineTools = isPlainObject(currentInline) && currentInline.type === "additional_tools" && Array.isArray(currentInline.tools)
+    ? currentInline.tools : undefined;
+  // Match alias and schema precedence to emission while preserving the input sequence.
+  const currentGroups: unknown[][] = [];
+  if (Array.isArray(body.tools)) currentGroups.push(body.tools);
+  if (currentInlineTools) currentGroups.push(currentInlineTools);
+  const priorityGroups = currentInlineTools
+    ? [...currentGroups, ...groups.filter(group => group !== body.tools && group !== currentInlineTools)]
+    : groups;
   const originalBareCustomNames = bareCustomNames ?? collectBareCustomToolNames(body);
-  const plan = buildRewritePlan(groups);
+  const plan = buildRewritePlan(priorityGroups);
+  const currentBareWireNames = currentInlineIndex === undefined ? undefined : new Set<string>();
+  if (currentBareWireNames) {
+    for (const group of currentGroups) {
+      for (const tool of group) {
+        if (isPlainObject(tool) && tool.type !== "namespace" && isRepresentableName(tool.name)) {
+          currentBareWireNames.add(tool.name);
+        }
+      }
+    }
+  }
 
   // Deliberately not gated on the plan being non-empty: a turn whose catalog is absent can still
   // replay call items carrying a private `namespace`.
   const emitted = new Set<string>();
-  const tools = Array.isArray(body.tools) ? rewriteToolList(body.tools, plan, emitted) : body.tools;
+  const tools = Array.isArray(body.tools) ? rewriteToolList(body.tools, plan, emitted, currentBareWireNames) : body.tools;
 
   let input = body.input;
   if (Array.isArray(body.input)) {
+    const current = rewriteInputItem(currentInline, plan, emitted, currentBareWireNames);
     let inputChanged = false;
-    const rewrittenInput = body.input.map(item => {
-      const next = rewriteInputItem(item, plan, emitted);
+    const rewrittenInput = body.input.map((item, index) => {
+      const next = index === currentInlineIndex ? current : rewriteInputItem(item, plan, emitted);
       if (next !== item) inputChanged = true;
       return next;
     });

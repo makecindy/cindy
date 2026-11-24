@@ -105,12 +105,13 @@ export function collectFunctionCallRepairSchemas(
   const liveGroups: unknown[][] = [];
   if (Array.isArray(body.tools)) liveGroups.push(body.tools);
   const replayedGroups: unknown[][] = [];
+  const replayedInlineGroups: unknown[][] = [];
   if (Array.isArray(body.input)) {
     for (const [index, entry] of body.input.entries()) {
       if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
       if (entry.type === "tool_search_output") replayedGroups.push(entry.tools);
       else if (entry.type === "additional_tools") {
-        (currentInlineIndex === undefined || index === currentInlineIndex ? liveGroups : replayedGroups).push(entry.tools);
+        (currentInlineIndex === undefined || index === currentInlineIndex ? liveGroups : replayedInlineGroups).push(entry.tools);
       }
     }
   }
@@ -126,13 +127,13 @@ export function collectFunctionCallRepairSchemas(
   // had no match when the request was lowered; it must never allocate its own wire names here.
   const { loweredToolChoice: loweredChoice, renamedWireNames } = plan ?? deriveFunctionCallRepairPlan(body);
   const choice = body.tool_choice;
-  const historySelectors = replayedGroups.length > 0 && isObject(choice)
+  const historySelectors = (replayedGroups.length > 0 || replayedInlineGroups.length > 0) && isObject(choice)
     ? new Map<string, string | null>()
     : undefined;
   const declarations = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema; live: boolean; wireName: string } | null>();
   const wireOwners = new Map<string, { key: string; live: boolean } | null>();
   const liveNamespacedIdentities = new Set<string>();
-  const register = (tool: unknown, declaredNamespace: string | undefined, live: boolean): void => {
+  const register = (tool: unknown, declaredNamespace: string | undefined, live: boolean, replayedInline: boolean): void => {
     if (!isObject(tool) || typeof tool.name !== "string" || tool.name.length === 0) return;
     const namespace = namespaceOf(declaredNamespace);
     const identity: FunctionCallRepairSchema = {
@@ -162,15 +163,19 @@ export function collectFunctionCallRepairSchemas(
     }
     const previous = declarations.get(key);
     if (previous === undefined) declarations.set(key, { kind: tool.type, identity, live, wireName });
-    else if (previous && (previous.kind !== tool.type || !sameSchemaValue(previous.identity.parameters, identity.parameters))) {
+    // Earlier inline declarations cannot invalidate the schema we are forwarding for this turn.
+    // Search-only outputs still withhold repair when schemas disagree.
+    else if (previous && (!replayedInline || !previous.live)
+      && (previous.kind !== tool.type || !sameSchemaValue(previous.identity.parameters, identity.parameters))) {
       declarations.set(key, null);
     }
   };
-  const groups: [unknown[], boolean][] = [
-    ...liveGroups.map(group => [group, true] as [unknown[], boolean]),
-    ...replayedGroups.map(group => [group, false] as [unknown[], boolean]),
+  const groups = [
+    ...liveGroups.map(group => ({ group, live: true, replayedInline: false })),
+    ...replayedGroups.map(group => ({ group, live: false, replayedInline: false })),
+    ...replayedInlineGroups.map(group => ({ group, live: false, replayedInline: true })),
   ];
-  for (const [group, live] of groups) {
+  for (const { group, live, replayedInline } of groups) {
     for (const tool of group) {
       if (!isObject(tool)) continue;
       if (tool.type === "namespace") {
@@ -178,11 +183,11 @@ export function collectFunctionCallRepairSchemas(
         for (const child of tool.tools) {
           if (tool.name === "functions" && isObject(child) && typeof child.name === "string"
             && canonicalBareNames.has(child.name)) continue;
-          register(child, tool.name, live);
+          register(child, tool.name, live, replayedInline);
         }
       } else if (tool.type === "function" && isObject(tool.function)) {
-        register({ ...tool.function, type: "function" }, undefined, live);
-      } else register(tool, undefined, live);
+        register({ ...tool.function, type: "function" }, undefined, live, replayedInline);
+      } else register(tool, undefined, live, replayedInline);
     }
   }
   // An unchanged selector can already be a wire name. That exact identity takes precedence

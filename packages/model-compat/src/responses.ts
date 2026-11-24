@@ -154,7 +154,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
     : { body: custom.body, names: new Set<string>() };
   const namespace = policy.namespaceTools === 'functions'
     ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, collectNamespaceCustomToolNames(catalog),
-        body && typeof body === 'object' ? (body as { tool_choice?: unknown }).tool_choice : undefined)
+        body && typeof body === 'object' ? (body as { tool_choice?: unknown }).tool_choice : undefined, currentInlineIndex)
     : {
         body: custom.body !== body ? disambiguateNativeToolChoice(body, search.body, custom.body) : search.body,
         aliases: new Map(), renamedWireNames: new Map<string, string>(), renamedKinds: new Map<string, 'function' | 'custom'>(),
