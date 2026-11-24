@@ -2,19 +2,22 @@
  * 另一台电脑的模型组(model-groups.md §6.3)：远程控制那台电脑、或在本机选择器「其他电脑」那一段时，
  * 列出那台电脑自己的模式，选路、提交记录、记绑定与写说明都由那台电脑做。
  *
- * 读取按需：选择器打开时每台电脑读一次，15 秒内再打开复用上次的答案；不轮询。那台电脑是旧版本
- * (CHANNEL_NOT_ALLOWED)时记为不支持，不再问，直到它重连或下次换账号。
+ * 读取按需：选择器打开时每台电脑读一次，15 秒内再打开复用上次的答案；不轮询。对端明确不支持
+ * (`channel 'model-groups:get' not allowed remotely` 或线性缺 handler)由 preload `remoteReadBridge`
+ * 按连接代记忆，本模块只维护当前 `(dataOwnerId, generation)` 下的业务快照与 15s 新鲜窗口。
  */
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
-import { isSharedTaskPeer } from '@cindy/device-link';
+import { isScopedPeer } from '@cindy/device-link';
 
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
+  subscribeDataOwnerGeneration,
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
+import { subscribeDeviceProviders } from '@/hooks/useDeviceProviders';
 import { createLogger } from '@/lib/logger';
-import { extractIpcError } from '@/utils/ipcError';
+import { extractRemoteOptionalReadMiss } from '@/utils/ipcError';
 
 import {
   MODEL_GROUPS_IPC,
@@ -27,6 +30,7 @@ import {
   type ModelGroupSelection,
   type ModelGroupsConfig,
 } from '../../../shared/modelGroups';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 
 const log = createLogger('model-groups:remote');
 
@@ -50,9 +54,7 @@ interface DeviceGroups {
 let devicesByOwner = new WeakMap<DataOwnerGeneration, Map<string, DeviceGroups>>();
 
 export function isModelGroupsUnsupportedError(error: unknown): boolean {
-  if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
-  const message = error instanceof Error ? error.message : String(error ?? '');
-  return message.includes('CHANNEL_NOT_ALLOWED');
+  return extractRemoteOptionalReadMiss(error, MODEL_GROUPS_IPC.GET) !== null;
 }
 
 function invoke<T>(deviceId: string, channel: string, args: unknown[]): Promise<T> {
@@ -61,24 +63,92 @@ function invoke<T>(deviceId: string, channel: string, args: unknown[]): Promise<
   return api.invoke(deviceId, channel, args) as Promise<T>;
 }
 
-let reconnectWatchInstalled = false;
-const knownOnline = new Map<string, boolean>();
+let observedLink: unknown = undefined;
+let detachReconnectWatch: (() => void) | null = null;
+const knownPeers = new Map<string, { online: boolean; remoteControlEnabled: boolean; appVersion?: string }>();
 
 /**
- * 那台电脑离线或链路重置后丢掉它的答案(含「不支持」)：升级、改了模式或换了版本后，下次打开选择器重新读。
- * 只在状态翻转时清，同一状态的重复推送不触发重读。
+ * 全局离线或控制权变更时原地清空当前 owner 下各设备的快照，不移除 `Map` 里的 `DeviceGroups` 实例：
+ * 已挂载组件的 `useMemo` 与重连后新挂载组件继续共享同一个 `entry`，避免新旧组件各自读写不同缓存。
+ */
+function evictAllCurrentOwnerDeviceModelGroups(): void {
+  const devices = devicesByOwner.get(getDataOwnerGeneration());
+  if (!devices) return;
+  for (const entry of devices.values()) entry.evict();
+}
+
+/**
+ * 那台电脑离线、链路重置/重开、版本变化或本机连接状态变化后丢掉旧答案(含「不支持」)：
+ * 升级、改了模式或换了版本后，下次打开选择器或目录恢复时重新读。常规同版本在线心跳不触发重读。
  */
 function watchReconnects(): void {
-  if (reconnectWatchInstalled) return;
-  const link = window.electronAPI?.deviceLink;
+  const link = typeof window !== 'undefined' ? window.electronAPI?.deviceLink : undefined;
+  if (link === observedLink) return;
+  const hadPrevious = observedLink !== undefined;
+  detachReconnectWatch?.();
+  detachReconnectWatch = null;
+  observedLink = link;
+  knownPeers.clear();
+  if (hadPrevious) evictAllCurrentOwnerDeviceModelGroups();
   if (!link) return;
-  reconnectWatchInstalled = true;
-  link.onPeerLinkReset?.((event) => evictDeviceModelGroups(event.deviceId));
-  link.onPresenceChanged?.((presence) => {
-    const was = knownOnline.get(presence.deviceId);
-    knownOnline.set(presence.deviceId, presence.online);
-    if (was === true && !presence.online) evictDeviceModelGroups(presence.deviceId);
-  });
+
+  const offs = [
+    link.onPeerLinkReset?.((event) => {
+      knownPeers.delete(event.deviceId);
+      evictDeviceModelGroups(event.deviceId);
+    }),
+    link.onPeerLinkReopened?.((event) => {
+      evictDeviceModelGroups(event.deviceId);
+    }),
+    link.onAccessRevoked?.((event) => {
+      knownPeers.delete(event.deviceId);
+      evictDeviceModelGroups(event.deviceId);
+    }),
+    link.onControlTargetChanged?.((event) => {
+      knownPeers.delete(event.deviceId);
+      evictDeviceModelGroups(event.deviceId);
+    }),
+    link.onPresenceChanged?.((presence) => {
+      const prev = knownPeers.get(presence.deviceId);
+      const remoteControlEnabled = presence.remoteControlEnabled !== false;
+      if (!presence.online || !remoteControlEnabled) {
+        knownPeers.delete(presence.deviceId);
+        evictDeviceModelGroups(presence.deviceId);
+        return;
+      }
+      const appVersion = typeof presence.appVersion === 'string' ? presence.appVersion : prev?.appVersion;
+      if (!knownPeers.has(presence.deviceId) && knownPeers.size >= 256) {
+        const oldest = knownPeers.keys().next().value;
+        if (oldest !== undefined) knownPeers.delete(oldest);
+      }
+      knownPeers.set(presence.deviceId, { online: true, remoteControlEnabled: true, appVersion });
+      if (
+        prev &&
+        (!prev.online ||
+          !prev.remoteControlEnabled ||
+          (prev.appVersion !== undefined && appVersion !== undefined && prev.appVersion !== appVersion))
+      ) {
+        evictDeviceModelGroups(presence.deviceId);
+      }
+    }),
+    link.onStatusChanged?.((payload) => {
+      const changedDeviceId = (payload as { dataPathChangedDeviceId?: unknown } | undefined)?.dataPathChangedDeviceId;
+      if (typeof changedDeviceId === 'string' && changedDeviceId) {
+        evictDeviceModelGroups(changedDeviceId);
+      } else if (payload?.status !== 'online') {
+        knownPeers.clear();
+        evictAllCurrentOwnerDeviceModelGroups();
+      }
+    }),
+    link.onOwnershipChanged?.(() => {
+      knownPeers.clear();
+      evictAllCurrentOwnerDeviceModelGroups();
+    }),
+  ];
+
+  detachReconnectWatch = () => {
+    for (const off of offs) off?.();
+  };
 }
 
 function deviceGroups(owner: DataOwnerGeneration, deviceId: string): DeviceGroups {
@@ -101,24 +171,41 @@ function deviceGroups(owner: DataOwnerGeneration, deviceId: string): DeviceGroup
   };
   const entry: DeviceGroups = {
     read(force = false) {
-      if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return Promise.resolve();
+      watchReconnects();
+      if (
+        !owner.dataOwnerId ||
+        !isDataOwnerGenerationCurrent(owner) ||
+        isScopedPeer(deviceId) ||
+        isProviderShareAgentDeviceId(deviceId)
+      ) {
+        return Promise.resolve();
+      }
       if (pending) return pending;
-      if (current.unsupported && !force) return Promise.resolve();
-      if (!force && readAt > 0 && Date.now() - readAt < DEVICE_MODEL_GROUPS_REREAD_MS) return Promise.resolve();
+      // 成功快照在 15s 新鲜窗口内直接复用；负能力判断交给 preload `remoteReadBridge`，
+      // 以便同 appVersion 下仅 `allowlistHash` / `capabilities` 经 `openLink` 变化且无额外 reset/presence 时，
+      // 下一次 `read()` 能立即穿透重探，而仍为旧端时由 bridge 本机短路且下方不重复 publish。
+      if (!force && !current.unsupported && readAt > 0 && Date.now() - readAt < DEVICE_MODEL_GROUPS_REREAD_MS) {
+        return Promise.resolve();
+      }
       const readGeneration = generation;
-      readAt = Date.now();
       const run = invoke<unknown>(deviceId, MODEL_GROUPS_IPC.GET, [])
         .then((reply) => {
           if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== generation) return;
+          readAt = Date.now();
           const config = normalizeModelGroupsConfig(reply);
-          if (current.config && JSON.stringify(current.config) === JSON.stringify(config)) return;
+          if (!current.unsupported && current.config && JSON.stringify(current.config) === JSON.stringify(config)) return;
           publish({ config, unsupported: false });
         })
-        // 连不上时保留上一次的答案；旧版本记为不支持。
+        // 连不上、本机策略拦截或普通权限拒绝时保留上一次答案且不占用 15s 新鲜窗口；仅远端明确缺接口记为不支持。
         .catch((error: unknown) => {
           if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== generation) return;
-          if (isModelGroupsUnsupportedError(error)) publish({ config: null, unsupported: true });
-          else log.warn('device model groups unavailable', error);
+          if (isModelGroupsUnsupportedError(error)) {
+            if (!current.unsupported || current.config !== null) {
+              publish({ config: null, unsupported: true });
+            }
+          } else {
+            log.warn('device model groups unavailable', error);
+          }
         })
         .finally(() => { if (pending === run) pending = undefined; });
       pending = run;
@@ -149,9 +236,12 @@ export function evictDeviceModelGroups(deviceId: string): void {
 
 /** 测试用：清掉全部缓存。 */
 export function resetDeviceModelGroupsForTests(): void {
+  evictAllCurrentOwnerDeviceModelGroups();
   devicesByOwner = new WeakMap();
-  reconnectWatchInstalled = false;
-  knownOnline.clear();
+  detachReconnectWatch?.();
+  detachReconnectWatch = null;
+  observedLink = undefined;
+  knownPeers.clear();
 }
 
 function subscribeNone(): () => void {
@@ -162,12 +252,18 @@ function unread(): DeviceModelGroupsSnapshot {
   return UNREAD;
 }
 
-/** 一台电脑的模式(远程控制那台时用)；readOnEntry 时挂载即读一次。 */
+/** 一台电脑的模式(远程控制那台时用)；readOnEntry 时挂载即读一次，并在重连目录就绪时自动补读。 */
 export function useDeviceModelGroups(deviceId: string | null | undefined, readOnEntry = false): DeviceModelGroupsSnapshot & { read: () => void } {
-  const owner = getDataOwnerGeneration();
+  const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
   const entry = useMemo(() => (deviceId ? deviceGroups(owner, deviceId) : null), [owner, deviceId]);
   const read = useCallback(() => { void entry?.read(); }, [entry]);
-  useEffect(() => { if (readOnEntry) read(); }, [readOnEntry, read]);
+  useEffect(() => {
+    if (!readOnEntry || !owner.dataOwnerId || !deviceId || isScopedPeer(deviceId) || isProviderShareAgentDeviceId(deviceId)) return;
+    read();
+    return subscribeDeviceProviders(deviceId, (event) => {
+      if (event.status === 'ready') read();
+    });
+  }, [readOnEntry, deviceId, read]);
   const snapshot = useSyncExternalStore(entry?.subscribe ?? subscribeNone, entry?.snapshot ?? unread, unread);
   return { ...snapshot, read };
 }
@@ -177,7 +273,7 @@ export function useDevicesModelGroups(deviceIds: readonly string[]): {
   groups: ReadonlyMap<string, DeviceModelGroupsSnapshot>;
   read: () => void;
 } {
-  const owner = getDataOwnerGeneration();
+  const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
   const key = [...new Set(deviceIds)].sort().join('\n');
   const entries = useMemo(
     () => (key ? key.split('\n') : []).map((deviceId) => ({ deviceId, entry: deviceGroups(owner, deviceId) })),
