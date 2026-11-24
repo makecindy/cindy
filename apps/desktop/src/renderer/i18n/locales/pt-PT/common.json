@@ -1381,6 +1381,7 @@
     "openPermissionInNewWindow": "Abrir noutra janela"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Outra instância do Cindy neste computador está a utilizar a ligação remota. Feche-a para que esta instância assuma o controlo automaticamente.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode mudar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness de que precisa.",

@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "另啟一窗"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "此機另一 Cindy 例項方用遠端連線。闔之後，此例項將自行接管。",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暫不支援易 Harness。請擇今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
