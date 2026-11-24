@@ -1436,20 +1436,10 @@ export function createCindyGhostsMcpServer(
       ghost_id: z.string().describe("目标插件 id(来自 ghost_info / ghost_list 或用户消息附带的工具清单)"),
       namespace: ghostNamespaceInput,
       tool: z.string().describe("工具名(来自 ghost_info / ghost_list 该插件的 tools)"),
-      // Like the helper/scheduler MCP boundaries, decode stringified arguments
-      // before record validation. Keep the published schema on the record.
-      args: z.preprocess(
-        (value) => {
-          if (typeof value !== "string") return value;
-          try {
-            return JSON.parse(value);
-          } catch {
-            return value;
-          }
-        },
-        z.record(z.string(), z.unknown())
-          .describe("工具参数(JSON 对象,按该工具的参数 schema;无参可省略)"),
-      ).optional(),
+      args: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe("工具参数(JSON 对象,按该工具的参数 schema;无参可省略)"),
       grant_only: z
         .boolean()
         .optional()

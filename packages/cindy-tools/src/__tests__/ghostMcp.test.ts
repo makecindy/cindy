@@ -2262,58 +2262,6 @@ describe("portable legacy plugin media", () => {
   });
 });
 
-describe("ghost_call MCP arguments", () => {
-  // #12445: handler-level tests bypass the MCP SDK's input schema validation.
-  it("normalizes stringified objects at the MCP boundary and rejects invalid args", async () => {
-    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-    const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
-    const echo = vi.fn<CindyGhostsMcpDeps["callGhostTool"]>(async ({ args }) => ({
-      ok: true,
-      result: args,
-    }));
-    const server = createCindyGhostsMcpServer(fakeDeps({ callGhostTool: echo }));
-    const client = new Client({ name: "ghost-call-args-test", version: "1" });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    await server.connect(serverTransport);
-    await client.connect(clientTransport);
-    try {
-      const catalog = await client.listTools();
-      const schema = catalog.tools.find((tool) => tool.name === "ghost_call")?.inputSchema;
-      expect(schema?.properties?.args).toMatchObject({ type: "object" });
-      expect(schema?.required).not.toContain("args");
-
-      const target = { ghost_id: "echo-fixture", tool: "echo" };
-      const invoke = (fields: Record<string, unknown>) =>
-        client.callTool({ name: "ghost_call", arguments: { ...target, ...fields } });
-      const payload = { value: "echo", nested: { values: [1, null] } };
-      for (const [fields, expected] of [
-        [{ args: payload }, payload],
-        [{}, {}],
-        [{ args: JSON.stringify(payload) }, payload],
-      ] as const) {
-        const result = await invoke(fields);
-        expect(result.isError ?? false).toBe(false);
-        expect(result.content).toEqual([
-          { type: "text", text: JSON.stringify({ ok: true, result: expected }) },
-        ]);
-      }
-
-      echo.mockClear();
-      for (const args of ["{", "[]", [], "null", null, "42", 42, '"text"']) {
-        const result = await invoke({ args });
-        expect(result.isError).toBe(true);
-        expect(result.content).toEqual([
-          { type: "text", text: expect.stringMatching(/MCP error -32602:.*ghost_call/s) },
-        ]);
-      }
-      expect(echo).not.toHaveBeenCalled();
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
-});
-
 describe('personal community author MCP transport', () => {
   async function connected(deps: CindyGhostsMcpDeps) {
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
