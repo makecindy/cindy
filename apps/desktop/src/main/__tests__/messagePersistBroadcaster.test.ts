@@ -312,6 +312,35 @@ const terminalSubagentObservation = (taskId: string, parentToolUseId?: string) =
   },
 });
 
+// Unit: a commentary-only turn may pause before the next tool or final. Exercise the
+// real stream assembler and writer: no draft, one complete row, while the turn is live.
+it('makes completed plugin progress readable before the next event without flushing a later draft', async () => {
+  const { persistSessionStreamEventCore } = await import('../maker-ipc/sessionEventStreamCore.js');
+  const persistence = await import('../messagePersistBroadcaster.desktop.js');
+  type Args = Parameters<typeof persistSessionStreamEventCore>;
+  const session = { id: SESSION, agentKind: 'codex' } as Args[1];
+  noteSessionAgentKind(SESSION, 'codex');
+  const emit = (id: string, text: string, phase: string, isFinal: boolean) =>
+    persistSessionStreamEventCore({
+      persistence, orcaTeamServiceForEvents: null, log: { warn: vi.fn() }, broadcastSubagentRunsChanged: vi.fn(),
+    }, session, { event: { type: 'text', source: 'codex', data: {
+      text, agentMessageId: id, phase, isFinal, isFullText: isFinal,
+    } }, eventAgentMeta: { replyToClientId: 'plugin-task:r' }, groupLaneInputClientId: 'plugin-task:r' });
+
+  emit('progress', '检查', 'commentary', false);
+  await drainPersistQueue();
+  expect(createMessage).not.toHaveBeenCalled();
+  emit('progress', '检查通过。', 'commentary', true);
+  emit('answer', '答案草稿', 'final_answer', false);
+  emit('progress', '检查通过。', 'commentary', true);
+  await drainPersistQueue();
+  expect(createMessage).toHaveBeenCalledTimes(1);
+  expect(createMessage).toHaveBeenCalledWith(SESSION, expect.objectContaining({
+    role: 'assistant', content: '检查通过。', agentMeta: expect.objectContaining({ pluginProgressInputId: 'plugin-task:r' }),
+  }), expect.anything());
+  expect(persistence.getSessionTextSnapshot(SESSION)?.event.data.text).toBe('答案草稿');
+});
+
 describe('Codex done completion boundary', () => {
   it('only treats successful terminal data as a completed turn', () => {
     expect(isSuccessfulCodexDoneEventData({ raw: { status: 'completed' } })).toBe(true);
