@@ -211,7 +211,10 @@ export function useMessageViewport(options: Options) {
       setMounted(next);
     };
     reconcileRef.current = reconcile;
-    reconcile(!initial);
+    // First paint and anchor restoration need the destination immediately.
+    // Ordinary commits share the frame requested by DOM/resize observers.
+    if (initial || anchor) reconcile(!initial);
+    else scheduleViewportReconcile();
   };
   useLayoutEffect(connectViewport);
 
@@ -255,18 +258,16 @@ export function useMessageViewport(options: Options) {
       return false;
     };
     const updateTextAccess = () => {
-      setTextAccess(selectionIntersectsItems());
-      if (!root.contains(document.activeElement)) setKeyboardRows(previous => previous.size ? new Set() : previous);
-    };
-    const settleTextAccess = () => {
       clearTimeout(textAccessTimer);
-      // Native focus movement/selection happens after keydown. Also handle a
-      // prevented Tab or select-all, without leaving the entire window mounted.
-      textAccessTimer = setTimeout(updateTextAccess, 0);
+      setTextAccess(selectionIntersectsItems());
     };
-    const pointer = () => {
-      settleTextAccess();
+    const clearKeyboardRows = () => {
+      setKeyboardRows(previous => previous.size ? new Set() : previous);
     };
+    const onFocusOut = (event: FocusEvent) => {
+      if (!(event.relatedTarget instanceof Node) || !root.contains(event.relatedTarget)) clearKeyboardRows();
+    };
+    let tabTimer: ReturnType<typeof setTimeout> | undefined;
     const prepareTabDestination = (reverse: boolean) => {
       // Include virtual rows in native DOM order, revealing only rows on the
       // way to the next control. Never consume Tab or move focus ourselves.
@@ -298,7 +299,10 @@ export function useMessageViewport(options: Options) {
       if (event.key === 'Tab') {
         if (event.altKey || event.ctrlKey || event.metaKey) return;
         prepareTabDestination(event.shiftKey);
-        settleTextAccess();
+        clearTimeout(tabTimer);
+        tabTimer = setTimeout(() => {
+          if (!root.contains(document.activeElement)) clearKeyboardRows();
+        }, 0);
         return;
       }
       // Clicking ordinary message text leaves BODY focused. The page-level
@@ -306,7 +310,9 @@ export function useMessageViewport(options: Options) {
       if (event.altKey || !(event.ctrlKey || event.metaKey)
         || event.key.toLowerCase() !== 'a' || isEditableKeyboardTarget(event.target)) return;
       flushSync(() => setTextAccess(true));
-      settleTextAccess();
+      // A prevented select-all has no selectionchange to release the rows.
+      clearTimeout(textAccessTimer);
+      textAccessTimer = setTimeout(updateTextAccess, 0);
     };
     const invalidate = (records: MutationRecord[]) => {
       geometry.mutations(records, items);
@@ -337,13 +343,12 @@ export function useMessageViewport(options: Options) {
     // Bubble after editor completion / modal handlers have had first refusal,
     // but before the browser performs its native focus or selection action.
     window.addEventListener('keydown', keyboard);
-    window.addEventListener('pointerdown', pointer, true);
-    document.addEventListener('focusin', settleTextAccess);
-    document.addEventListener('focusout', settleTextAccess);
+    root.addEventListener('focusout', onFocusOut);
     document.addEventListener('selectionchange', updateTextAccess);
     return () => {
       stopObservingWrites();
       clearTimeout(textAccessTimer);
+      clearTimeout(tabTimer);
       observer.disconnect();
       geometry.observe(null);
       mutationObserver.disconnect();
@@ -354,9 +359,7 @@ export function useMessageViewport(options: Options) {
       root.removeEventListener('focusin', retainInteraction);
       root.removeEventListener('keydown', retainInteraction, true);
       window.removeEventListener('keydown', keyboard);
-      window.removeEventListener('pointerdown', pointer, true);
-      document.removeEventListener('focusin', settleTextAccess);
-      document.removeEventListener('focusout', settleTextAccess);
+      root.removeEventListener('focusout', onFocusOut);
       document.removeEventListener('selectionchange', updateTextAccess);
     };
   }, [options.scrollRef, options.itemsRef, options.connection, preserveTextAccessAnchor, scheduleViewportReconcile, geometry]);
