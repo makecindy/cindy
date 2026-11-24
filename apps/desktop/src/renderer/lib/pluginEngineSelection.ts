@@ -188,10 +188,11 @@ export function resolvePluginEngineSessionSwitchEffort(
   currentActive?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
 ): PluginEngineEffort | undefined {
   if (selection.effort) return selection.effort;
-  const carriedEffort = currentActive && isSamePluginEngineChoice(selection, currentActive)
-    ? currentActive.effort
-    : undefined;
-  return resolvePluginEngineEffort(targetEngine, selection.modelId, carriedEffort) ?? undefined;
+  const sameEngine = isSamePluginEngineChoice(selection, currentActive);
+  const carriedEffort = sameEngine ? currentActive?.effort : undefined;
+  return resolvePluginEngineEffort(
+    targetEngine, selection.modelId, carriedEffort, sameEngine ? 'session' : 'new-task',
+  ) ?? undefined;
 }
 
 /**

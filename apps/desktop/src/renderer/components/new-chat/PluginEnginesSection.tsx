@@ -496,8 +496,10 @@ export function PluginEnginesSection({
   picker,
   query,
   onPicked,
+  existingTask = false,
 }: {
   picker: PluginEnginesPickerProps;
+  existingTask?: boolean;
   query: string;
   onPicked(): void;
 }) {
@@ -522,10 +524,12 @@ export function PluginEnginesSection({
   const blocks = picker.engines
     .map((engine) => {
       const activeModelId = activePluginEngineModelId(picker.active, engine);
+      const purpose = existingTask && activeModelId !== null ? 'session' as const : 'new-task' as const;
       return {
         engine,
         activeModelId,
-        rows: engineMatches(engine, pluginEngineModelRows(engine, activeModelId), needle, defaultLabel),
+        purpose,
+        rows: engineMatches(engine, pluginEngineModelRows(engine, activeModelId, purpose), needle, defaultLabel),
       };
     })
     .filter((block) => block.rows.length > 0);
@@ -535,7 +539,7 @@ export function PluginEnginesSection({
     // Each engine carries its own group label (like a provider), so the section has no visible
     // heading of its own; the 「插件引擎」 name stays for assistive technology and the rail tab.
     <div ref={sectionRef} role="group" aria-label={label} data-plugin-engines-section>
-      {blocks.map(({ engine, rows, activeModelId }) => (
+      {blocks.map(({ engine, rows, activeModelId, purpose }) => (
         <EngineBlock
           key={pluginEngineChoiceKey(engine)}
           engine={engine}
@@ -546,7 +550,7 @@ export function PluginEnginesSection({
           }, true); }}
           // A row shows the level it would run with: the chosen one where it is offered, else its own.
           effortOf={(row) => resolvePluginEngineEffort(
-            engine, row.id, isSamePluginEngineChoice(picker.active, engine) ? picker.active?.effort : undefined)}
+            engine, row.id, activeModelId !== null ? picker.active?.effort : undefined, purpose)}
           onChooseEffort={(modelId, effort) => { void choose({
             providerId: engine.providerId, modelId, effort, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
           }, false); }}

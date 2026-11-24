@@ -941,7 +941,7 @@ describe('a task running on a plugin engine', () => {
   });
 
   // Unit: a task with no recorded effort follows the plugin default even after the draft default changes.
-  it('keeps a running task on the plugin default while new tasks use the saved level', async () => {
+  it.each(['plugin panel', 'unified menu'] as const)('keeps the plugin default for a running task in the %s', async (surface) => {
     const [pro, flash, plain] = leveled.models;
     const engine = {
       ...leveled,
@@ -951,7 +951,12 @@ describe('a task running on a plugin engine', () => {
         plain!,
       ],
     };
-    const active = resolveActivePluginEngine([engine], { providerId: engine.providerId, modelId: 'pro' })!;
+    const selection = { providerId: engine.providerId, modelId: 'pro' };
+    const active = resolveActivePluginEngine([engine], selection)!;
+    const onSelect = vi.fn((picked: typeof selection) => {
+      expect(resolvePluginEngineSessionSwitchEffort(picked, engine, selection)).toBe('high');
+      return true;
+    });
     expect(pluginEngineSessionCreateFields(active).effort).toBe('low');
 
     render(React.createElement(ModelSelector, {
@@ -962,6 +967,7 @@ describe('a task running on a plugin engine', () => {
       vendorKey: 'cc',
       remoteAgent: undefined,
       actualRoute: true,
+      ...(surface === 'unified menu' ? { pluginEngines: { engines: [engine], active: selection, onSelect } } : {}),
       pluginEngineSession: {
         providerId: engine.providerId, engine, engineName: engine.name, modelId: 'pro', onSelectModel: vi.fn(),
       },
@@ -969,7 +975,16 @@ describe('a task running on a plugin engine', () => {
     const trigger = screen.getByRole('button', { name: 'Select model. Current: DeepSeek Harness · Pro · high' });
     await act(async () => { fireEvent.click(trigger); });
     const list = await screen.findByRole('listbox', { name: 'Models' });
-    expect(within(list).getAllByRole('option').map(levelOf)).toEqual(['high', null, null]);
+    const group = surface === 'unified menu' ? within(list).getByRole('group', { name: 'DeepSeek Harness' }) : list;
+    expect(within(group).getAllByRole('option').map(levelOf)).toEqual(['high', null, null]);
+    if (surface === 'unified menu') {
+      const search = screen.getByRole('textbox', { name: 'Search models' });
+      await act(async () => { fireEvent.change(search, { target: { value: 'Pro' } }); });
+      const row = within(await screen.findByRole('listbox', { name: 'Models' })).getByRole('option', { name: /Pro/ });
+      expect(levelOf(row)).toBe('high');
+      await act(async () => { fireEvent.click(row); });
+      expect(onSelect).toHaveBeenCalledWith(selection);
+    }
   });
 
   it('falls back to the generic engine label when the plugin is gone', () => {
