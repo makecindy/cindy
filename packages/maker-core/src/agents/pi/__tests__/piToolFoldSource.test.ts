@@ -706,6 +706,41 @@ describe('cindy-tool-fold extension source', () => {
     expect(String(read.content![0].text)).toContain('true');
   });
 
+  it('does not merge two batches whose member ids join to one string', async () => {
+    const { context, tool } = loadExtension();
+    // 企业身份的键由成员 id 拼成。id 里可以有任何字符：['p\0q','s'] 与 ['p','q\0s']
+    // 拼接后完全一样，如果键用 join 拼，第二批会拿到第一批的 ref（成员对不上）。
+    const trip = (ids: string[], textLength: number): Message[] => {
+      const messages: Message[] = [
+        {
+          role: 'assistant',
+          content: ids.map((id) => ({ type: 'toolCall', id, name: 'bash', arguments: { command: `run ${id} ${'c'.repeat(420)}` } })),
+        },
+      ];
+      for (const id of ids) messages.push(result(id, 'bash', `payload ${id} ${'x'.repeat(textLength)}`));
+      return messages;
+    };
+    // 最新 4 个调用永远保持原样，所以每个批次后面跟一组便宜的往返把它推出窗口。
+    const keepAway = (prefix: string): Message[] => {
+      const messages: Message[] = [];
+      for (const suffix of ['0', '1', '2', '3']) {
+        messages.push(call(`${prefix}${suffix}`, 'bash', { command: `echo ${prefix}${suffix}` }), result(`${prefix}${suffix}`, 'bash', 'ok'));
+      }
+      return messages;
+    };
+    const first = [...trip(['p\u0000q', 's'], 19000), ...keepAway('t')];
+    projection(context, first);
+    const second = [...first, ...trip(['p', 'q\u0000s'], 19000), ...keepAway('u')];
+    const view = projection(context, second)!;
+    const refs = refsOf(view);
+    expect(refs).toHaveLength(2);
+    expect(new Set(refs).size).toBe(2);
+    const read = await tool.execute('t-ids', { batch: refs[1] });
+    const text = String(read.content![0].text);
+    expect(text).toContain('payload p ');
+    expect(text).toContain('payload q\u0000s ');
+  });
+
   it('keeps batch refs and call ids in separate namespaces', async () => {
     const { context, tool } = loadExtension();
     const messages = pairs(40);

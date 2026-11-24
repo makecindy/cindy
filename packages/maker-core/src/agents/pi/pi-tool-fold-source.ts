@@ -635,8 +635,15 @@ export default function (pi) {
    * 登记一次删除：返回稳定的 refId。成员集合只用来让同一批在后续投影里复用同一个 id，
    * 身份本身在这里分配（不能复用真实调用 id，否则会被它遮住；也不截断拼接，否则撞名）。
    */
+  // 批身份的键：成员 id 由 provider 生成，含分隔符时 join 会把两个不同的批次并成同一个键，
+  // 后一个批次就复用前一个的 ref（取回拿到别人的成员）。JSON 会转义分隔符，任意 id 下
+  // 单射；登记与剪枝重建两处都调它，避免同一个键各拼一次。
+  function refKey(ids) {
+    return JSON.stringify(ids);
+  }
+
   function admitRef(ids) {
-    var key = ids.join('\u0000');
+    var key = refKey(ids);
     var known = refByKey[key];
     if (known !== undefined) return known;
     var refId;
@@ -1208,7 +1215,7 @@ export default function (pi) {
         });
         refByKey = Object.create(null);
         refs.forEach(function (entry, refId) {
-          refByKey[entry.ids.join('\u0000')] = refId;
+          refByKey[refKey(entry.ids)] = refId;
         });
       }
       var batchIds = [];
