@@ -16922,7 +16922,7 @@
       },
       "renameFailed": "重命名失败",
       "pinFailed": "操作失败",
-      "projectPinSaveFailed": "未能保存项目置顶状态。若反复发生，可在设置的「关于」中上传日志。",
+      "projectPinSaveFailed": "未能保存项目置顶状态。若反复发生，可在设置的「关于」中上传日志",
       "muteNotificationsFailed": "更新通知设置失败",
       "deleteFailed": "删除失败，请重试",
       "archiveFailed": "归档失败，请重试",
