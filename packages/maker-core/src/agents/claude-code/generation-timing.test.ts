@@ -2438,3 +2438,172 @@ describe('claude live token speed', () => {
     finish();
   });
 });
+
+describe('claude proxied response usage segments', () => {
+  const MESSAGE_ID = '0217956000000000000000000000000000000000000000000000';
+
+  function requestStart(usage: Record<string, number>, id = MESSAGE_ID, parent?: string) {
+    return {
+      type: 'stream_event' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      event: {
+        type: 'message_start',
+        message: { id, model: 'deepseek-flash-latest', usage },
+      },
+    };
+  }
+
+  function requestDelta(usage: Record<string, number>, parent?: string) {
+    return {
+      type: 'stream_event' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      event: {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage,
+      },
+    };
+  }
+
+  function requestStop(parent?: string) {
+    return {
+      type: 'stream_event' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      event: { type: 'message_stop' },
+    };
+  }
+
+  function completedRequest(info: {
+    usage: Record<string, number>;
+    id?: string;
+    parent?: string;
+  }) {
+    return [
+      requestStart(info.usage, info.id, info.parent),
+      requestDelta(info.usage, info.parent),
+      requestStop(info.parent),
+    ] as const;
+  }
+
+  function toolResult(parent?: string) {
+    return {
+      type: 'user' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'ok' }],
+      },
+    };
+  }
+
+  function resultEvent(usage: Record<string, number>) {
+    return {
+      type: 'result' as const,
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      result: 'ok',
+      usage,
+      modelUsage: {
+        'deepseek-flash-latest': {
+          inputTokens: usage.input_tokens ?? 0,
+          outputTokens: usage.output_tokens ?? 0,
+          cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
+          cacheCreationInputTokens: 0,
+          costUSD: 0,
+        },
+      },
+    };
+  }
+
+  async function run(...events: Array<Record<string, unknown>>) {
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    for (const event of events) translateSdkMessage(event as never, queue, ctx);
+    queue.end();
+    const out: AgentEvent[] = [];
+    for await (const event of queue) out.push(event);
+    return out.find((event) => event.type === 'done')?.data as
+      | { usageSegments?: Array<Record<string, unknown>> }
+      | undefined;
+  }
+
+  it('merges provider cycles that reuse one message id into a single request segment', async () => {
+    // A proxied response is split into a thinking cycle and a text cycle. Both carry
+    // the same provider message id; the first message_delta reports no output yet.
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, cache_read_input_tokens: 50000 } }),
+      ...completedRequest({
+        usage: { input_tokens: 1000, cache_read_input_tokens: 50000, output_tokens: 120 },
+      }),
+      resultEvent({
+        input_tokens: 2000,
+        cache_read_input_tokens: 100000,
+        cache_creation_input_tokens: 0,
+        output_tokens: 120,
+      }),
+    );
+
+    expect(done?.usageSegments).toHaveLength(1);
+    expect(done?.usageSegments?.[0]).toMatchObject({
+      inputTokens: 1000,
+      outputTokens: 120,
+      cacheReadTokens: 50000,
+      complete: true,
+    });
+  });
+
+  it('keeps distinct provider message ids as separate request segments', async () => {
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, output_tokens: 10 } }),
+      ...completedRequest({
+        usage: { input_tokens: 2000, output_tokens: 20 },
+        id: 'another-message-id',
+      }),
+      resultEvent({ input_tokens: 3000, output_tokens: 30 }),
+    );
+
+    expect(done?.usageSegments).toHaveLength(2);
+    expect(done?.usageSegments?.map((segment) => segment.inputTokens)).toEqual([1000, 2000]);
+  });
+
+  it('starts a new segment when a tool result separates requests reusing one id', async () => {
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, output_tokens: 10 } }),
+      toolResult(),
+      ...completedRequest({ usage: { input_tokens: 2000, output_tokens: 20 } }),
+      resultEvent({ input_tokens: 3000, output_tokens: 30 }),
+    );
+
+    expect(done?.usageSegments).toHaveLength(2);
+    expect(done?.usageSegments?.map((segment) => segment.inputTokens)).toEqual([1000, 2000]);
+  });
+
+  it('does not drop a concurrent stream split-cycle record when another parent reports a tool result', async () => {
+    // Stream A's two cycles straddle a tool result belonging to stream B. Clearing
+    // split-cycle bookkeeping globally would split A's response and bill it twice.
+    const done = await run(
+      ...completedRequest({
+        usage: { input_tokens: 1000, cache_read_input_tokens: 50000 },
+        parent: 'agent-a',
+      }),
+      toolResult('agent-b'),
+      ...completedRequest({
+        usage: { input_tokens: 1000, cache_read_input_tokens: 50000, output_tokens: 120 },
+        parent: 'agent-a',
+      }),
+      ...completedRequest({
+        usage: { input_tokens: 2000, cache_read_input_tokens: 60000, output_tokens: 10 },
+        parent: 'agent-b',
+      }),
+      resultEvent({ input_tokens: 2000, cache_read_input_tokens: 100000, output_tokens: 130 }),
+    );
+
+    const agentA = done?.usageSegments?.filter((segment) =>
+      String(segment.id).endsWith(':agent-a'));
+    const agentB = done?.usageSegments?.filter((segment) =>
+      String(segment.id).endsWith(':agent-b'));
+    expect(agentA).toHaveLength(1);
+    expect(agentA?.[0]).toMatchObject({ inputTokens: 1000, outputTokens: 120, cacheReadTokens: 50000 });
+    expect(agentB).toHaveLength(1);
+    expect(agentB?.[0]).toMatchObject({ inputTokens: 2000, outputTokens: 10, cacheReadTokens: 60000 });
+  });
+});

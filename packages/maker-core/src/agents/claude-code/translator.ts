@@ -299,6 +299,14 @@ function settleMainRequest(ctx: TranslateContext): void {
   ctx.rt.mainOpenRequest = null;
 }
 
+/** Drop only the split-cycle records belonging to one parent stream (main or a subagent). */
+function clearUsageSegmentRequestsForParent(ctx: TranslateContext, parentStreamKey: string): void {
+  const prefix = `${parentStreamKey}:`;
+  for (const key of ctx.rt.usageSegmentIdByRequest.keys()) {
+    if (key.startsWith(prefix)) ctx.rt.usageSegmentIdByRequest.delete(key);
+  }
+}
+
 /** 主流完整 assistant 只登记到所属请求；它早于该请求的 message_delta，不能在此判完整性。 */
 function observeMainAssistant(ctx: TranslateContext, requestId: string | undefined): void {
   const open = ctx.rt.mainOpenRequest;
@@ -831,9 +839,11 @@ export function translateSdkMessage(
       const hasToolResult = Array.isArray(content)
         && content.some((blockRaw) => readToolResultFullText(blockRaw) !== null);
       // A tool result ends the provider request that produced it. Clear split-cycle
-      // bookkeeping so a gateway reusing the same placeholder id for the next request
-      // starts a fresh usage segment instead of merging two different responses.
-      if (hasToolResult) ctx.rt.usageSegmentIdByRequest.clear();
+      // bookkeeping for this parent only: concurrent streams interleave their tool
+      // results, and clearing another parent's entries would split its response again.
+      if (hasToolResult) {
+        clearUsageSegmentRequestsForParent(ctx, parentToolUseId ?? CLAUDE_MAIN_USAGE_PARENT);
+      }
       const toolResultBatchId = hasToolResult
         ? `tool-result-batch-${++ctx.rt.toolResultBatchSeq}`
         : undefined;
