@@ -167,19 +167,10 @@ export type OrcaOkResult =
 export const ORCA_AUTO_BRIDGE_FAILURE_HEADER = '[Auto-bridged: worker 异常终止]';
 
 /**
- * 自动回传的两条路由。六态只有 Worker 能声明，宿主绝不补一个第七态：
- * 带了结构化回报就按状态走，没带就只有「先核实」这一条路。
+ * 自动回传只有一种开头。自动回传按定义不带状态：Worker 真交了结构化回报，
+ * 那份报告由 send_to_lead 直接送达 Lead，这一轮不会再走回传。宿主不拿代理
+ * 信息之类旁证去推断状态。
  */
-export type OrcaAutoBridgeRouting = 'reported' | 'open';
-
-export function autoBridgeRouting(carriesReport: boolean): OrcaAutoBridgeRouting {
-  return carriesReport ? 'reported' : 'open';
-}
-
-/** Worker 结束回合且带了结构化回报时的自动回传开头；状态本身由报告标记承载。 */
-export const ORCA_AUTO_BRIDGE_STATE_HEADER = '[Auto-bridged: 回合结束]';
-
-/** Worker 结束回合但没有结构化回报时的自动回传开头：只陈述事实，不评价。 */
 export const ORCA_AUTO_BRIDGE_NO_STATE_HEADER = '[Auto-bridged: 回合结束，未带状态]';
 
 /** 回执里带回的异常终止回报正文上限；完整内容仍在 Worker 自己的任务里。 */
@@ -1046,13 +1037,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     }
     const finalText = turn.finalText.trim() || state.capturedText.trim()
       || turn.diagnostic?.trim() || '(no output captured)';
-    const carriesReport = Boolean(turn.remoteReport);
     const report = turn.status === 'error'
       ? `${ORCA_AUTO_BRIDGE_FAILURE_HEADER}\n\n${finalText}\n\n${buildWorkerFailureRecoveryNote(sessionId)}`
-      : autoBridgeRouting(carriesReport) === 'open'
-        ? `${ORCA_AUTO_BRIDGE_NO_STATE_HEADER}\n\n${finalText}`
-        : `${ORCA_AUTO_BRIDGE_STATE_HEADER}\n\n${finalText}`;
-    if (!carriesReport) noteUnreportedRound(sessionId);
+      : `${ORCA_AUTO_BRIDGE_NO_STATE_HEADER}\n\n${finalText}`;
+    // 走到这里说明这一轮没有交结构化回报;真交了报告,那份由 send_to_lead 直接送达。
+    noteUnreportedRound(sessionId);
     let accepted = false;
     try {
       accepted = (await deps.sendAutoBridgeToLead(

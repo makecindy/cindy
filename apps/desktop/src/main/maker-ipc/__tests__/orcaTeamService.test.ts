@@ -7,7 +7,6 @@ import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../accep
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import type { OrcaStructuredWorkerReport } from '@cindy/orca-workflow';
 import {
-  autoBridgeRouting,
   captureOrcaDeliveryBaselines,
   createOrcaTeamService,
   evaluateOrcaDeliveryScope,
@@ -1984,10 +1983,16 @@ describe('OrcaTeamService', () => {
       finalText: '没有交报告',
     });
 
-    expect(autoBridgeRouting(false)).toBe('open');
-    expect(autoBridgeRouting(true)).toBe('reported');
     expect(leadMessages).toHaveLength(1);
     expect(leadMessages[0]!.startsWith(AUTO_BRIDGED_NO_STATE)).toBe(true);
+  });
+
+  // 自动回传按定义不带状态：一旦存在「带状态」的头部，就意味着宿主开始替 Worker 推断状态。
+  it('exposes no state-carrying auto-bridge header', async () => {
+    const mod = await import('../orcaTeamService.js');
+
+    expect(mod).not.toHaveProperty('ORCA_AUTO_BRIDGE_STATE_HEADER');
+    expect(mod).toHaveProperty('ORCA_AUTO_BRIDGE_NO_STATE_HEADER');
   });
 
   // 漏报是偶发而不是惯例：让它在发生地可见，而不是每单都贴在正文里。
