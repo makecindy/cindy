@@ -339,6 +339,7 @@ import {
   parsePluginInstanceId,
   pluginStoragePart,
   pluginInstallStoragePart,
+  pluginNewInstallRelId,
   isValidPluginInstallRelId,
   isPluginInstanceKey,
   resolveInstalledGhost,
@@ -382,6 +383,8 @@ import { readRefImagesWithinBudget } from './refImageBudget.js';
 import { resolveCachedGhostRepoRoot, type GhostRepoRootCacheEntry } from './repoRoot.js';
 import { takePendingCindyInstall } from './openFileInstall.js';
 import { GhostRuntime } from './runtime/GhostRuntime.js';
+import { GhostFileOpenerSlot, type GhostFileOpenOutcome } from './fileOpenerSlot.js';
+import { isPluginFileOpenerEnabled, setPluginFileOpenerEnabled } from './fileOpenerPrefs.js';
 import {
   electronSandboxAdapter,
   ensureGhostProtocolRegistered,
@@ -551,6 +554,8 @@ import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir, relocateGhostPickedDirs, issueGhostPickedDirectory, getGhostPickedDirectory } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostBrowserExtensionSlot } from './browserExtensionSlot.js';
+import { createNativeBinding } from '../browser-extension/native-binding.js';
+import { loadWindowsTaskbarNative } from '../windowsTaskbarNative.js';
 import { broadcastTaskViewOpen, GhostTaskViewSlot } from './taskViewSlot.js';
 import { LiveScreenHost } from './liveScreenHost.js';
 import { PluginLiveScreenViews } from '../remote-desktop-viewer/pluginViews.js';
@@ -590,6 +595,7 @@ import {
   confirmedCindyModelActions,
   confirmedControlPoints,
   confirmedHarnesses,
+  confirmedFileOpenerExtensions,
   confirmedUiCapability,
   obtainGhostInstallConsent,
   type GhostInstallConsentDecision,
@@ -1365,6 +1371,42 @@ export function findAvailableGhostForAuthorization(
 
 export function listAvailableGhostsForAuthorization(): InstalledGhost[] {
   return availableGhosts();
+}
+
+let fileOpenerSlotSingleton: GhostFileOpenerSlot | null = null;
+function getGhostFileOpenerSlot(): GhostFileOpenerSlot {
+  if (!fileOpenerSlotSingleton) {
+    fileOpenerSlotSingleton = new GhostFileOpenerSlot({
+      listGhosts: availableGhosts,
+      instanceId: installedGhostStoragePart,
+      isEnabledByUser: isPluginFileOpenerEnabled,
+      isRunning: (id) => getGhostRuntime().stateOf(id) === 'running',
+      wake: async (ghost) => {
+        const r = await getGhostRuntime().spawnForTool(ghost);
+        if (!r.ok) throw new Error(r.reason);
+      },
+      isCurrent: (ghost) => {
+        const id = installedGhostStoragePart(ghost);
+        const current = findGhostForInstanceId(id);
+        return current?.enabled === true && isPluginFileOpenerEnabled(id) &&
+          ghostInstallApprovalToken(current.approval) === ghostInstallApprovalToken(ghost.approval);
+      },
+      send: (id, payload) => sendToGhostLogic(id, payload),
+      log,
+    });
+  }
+  return fileOpenerSlotSingleton;
+}
+
+/**
+ * 「用系统默认应用打开」前先问声明了该扩展名的插件(`fileOpener`)。未处理时调用方照常
+ * 交给系统默认应用;调用方负责只传本机原件(不传其它电脑文件的缓存副本)。
+ */
+export function openFileWithPluginFileOpener(
+  filePath: string,
+  requestIsCurrent: () => boolean,
+): Promise<GhostFileOpenOutcome> {
+  return getGhostFileOpenerSlot().open(filePath, requestIsCurrent);
 }
 
 /** Discovery may yield, but never carries an old owner's results into a new account. */
@@ -4671,6 +4713,13 @@ let browserExtensionSlotSingleton: GhostBrowserExtensionSlot | null = null;
 export function getGhostBrowserExtensionSlot(): GhostBrowserExtensionSlot {
   if (!browserExtensionSlotSingleton) {
     browserExtensionSlotSingleton = new GhostBrowserExtensionSlot({
+      createNativeBinding: options => createNativeBinding({
+        ...options,
+        loadWindowsManifestReader: async () => {
+          const native = await loadWindowsTaskbarNative().catch(() => null);
+          return native?.readBrowserManifest?.bind(native);
+        },
+      }),
       getGhost: findGhostForInstanceId,
       sendToGhost: (ghostId, payload) => sendToGhostLogic(ghostId, payload),
       wake: async (ghostId) => {
@@ -6555,6 +6604,21 @@ function getGhostConnectionManager(): GhostConnectionManager {
   return ghostConnectionManagerSingleton;
 }
 
+/** The status service may use only the approved public plugin's matching instance. */
+export function readGitlabPluginToken(host: string): string | null {
+  if (isGhostBoundaryPending()) return null;
+  const manager = getGhostManager();
+  const identity = createPluginLogicalIdentity(null, CINDY_GITLAB_GHOST_ID);
+  const storage = pluginInstallStoragePart(pluginNewInstallRelId(identity));
+  const known = [manager.findInstalledInstance(storage), manager.findInstalledInstance(CINDY_GITLAB_GHOST_ID)]
+    .filter((ghost): ghost is InstalledGhost => !!ghost);
+  const plugin = findInstalledGhostByIdentity(known, identity) ?? findInstalledGhostByIdentity(manager.list(), identity);
+  if (!plugin || !plugin.enabled || plugin.approval.state !== 'approved') return null;
+  const instance = installedGhostStoragePart(plugin);
+  if (!isGhostAvailableForActiveSession(instance)) return null;
+  return getGhostConnectionManager().resolveTokenByHost(instance, CINDY_GITLAB_CONNECTION_KEY, host);
+}
+
 let ghostSetupKvStore: GhostKvStore | null = null;
 
 /** 默认 OAuth 账号的授权面陈旧建议；只返回首个凭证槽，保持 envelope 有界。 */
@@ -7984,6 +8048,7 @@ async function installAndDockLocked(
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedCindyModelActions: confirmedCindyModelActions(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedHarnesses: confirmedHarnesses(opts.consent.decision, installedBefore, opts.consent.manifest),
+    approvedFileOpenerExtensions: confirmedFileOpenerExtensions(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     initiallyEnabled: opts.enable ?? false,
@@ -8183,6 +8248,7 @@ async function updateLocalGhostPackageLocked(
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           approvedCindyModelActions: confirmedCindyModelActions(consent, previousGhost, inspected.manifest),
           approvedHarnesses: confirmedHarnesses(consent, previousGhost, inspected.manifest),
+          approvedFileOpenerExtensions: confirmedFileOpenerExtensions(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
@@ -8790,6 +8856,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           approvedCindyModelActions: confirmedCindyModelActions(expected.consent, installed, inspected.manifest),
           approvedHarnesses: confirmedHarnesses(expected.consent, installed, inspected.manifest),
+          approvedFileOpenerExtensions: confirmedFileOpenerExtensions(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
@@ -9323,6 +9390,18 @@ export function registerGhostIpc(): void {
     });
   remotePluginManagement = new RemotePluginManagement({
     list: availableGhosts,
+    publication: {
+      prepare: async (id, expected) => {
+        const host = await import('../plugin-contributions/host.js');
+        return host.prepareContribution(id, 'manual', expected).catch(host.mapContributionError);
+      },
+      submit: async (id, assertCaller) => {
+        const host = await import('../plugin-contributions/host.js');
+        return host.submitContribution(id, assertCaller).catch(host.mapContributionError);
+      },
+      status: async id => (await import('../plugin-contributions/host.js')).contributionTransferStatus(id),
+      discard: async id => (await import('../plugin-contributions/host.js')).discardContribution(id),
+    },
     settingsPage: true,
     ui: {
       suppressed: ghost => pluginUiPromptSuppressed(installedGhostStoragePart(ghost), ghost.manifest.version),
@@ -10378,6 +10457,11 @@ export function registerGhostIpc(): void {
       getGhostSubscriptionGateway().handleVerdict(id, payload);
       return { ok: true };
     }
+    if (type === 'file-open-result') {
+      // open-file 回执:只认被问的同一实例,冒名/过期静默丢,恒回 ok。
+      getGhostFileOpenerSlot().handleResult(id, payload);
+      return { ok: true };
+    }
     // notify = 系统提示(notify 槽):资格审/净化/限速在 notifySlot,
     // invoke 返回值即结构化结果(失败带人话原因,供意识作者调试)。
     if (type === 'notify') {
@@ -10977,6 +11061,34 @@ export function registerGhostIpc(): void {
       return { config: writePluginTaskConfig(installedGhostStoragePart(ghost), config) };
     }
     finally { release(); }
+  });
+
+  // 「用插件打开文件」开关:声明 fileOpener 的插件默认接管,这里只记用户关掉的实例。
+  ipcMain.handle('ghosts:file-opener:get', (event, ghostId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
+      throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
+    }
+    const ghost = findGhostForInstanceId(ghostId);
+    if (!ghost?.approvedFileOpenerExtensions?.length) return { declared: false, enabled: false };
+    return { declared: true, enabled: isPluginFileOpenerEnabled(installedGhostStoragePart(ghost)) };
+  });
+  ipcMain.handle('ghosts:file-opener:set', (event, ghostId: unknown, enabled: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const owner = captureGhostMutationOwner();
+    if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
+      throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
+    }
+    if (typeof enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
+    const release = beginGhostMutation(owner);
+    try {
+      const ghost = findGhostForInstanceId(ghostId);
+      if (!ghost?.approvedFileOpenerExtensions?.length) throwIpcError('NOT_FOUND', '插件实例已变化，请刷新后重试');
+      setPluginFileOpenerEnabled(installedGhostStoragePart(ghost), enabled);
+      return { declared: true, enabled };
+    } finally {
+      release();
+    }
   });
 
   const installLocalFile = async (

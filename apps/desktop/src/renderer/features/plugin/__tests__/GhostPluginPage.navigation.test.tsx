@@ -1527,6 +1527,21 @@ describe('retirement migration from the original plugin', () => {
     return bridge;
   }
 
+  // Unit: ordinary plugin details already restore the list. A retirement notice
+  // has its own Back and Later controls; both should return to the original card.
+  it.each(['settings.ghosts.title', 'settings.ghosts.retirement.later'])(
+    'restores the catalog when leaving a retirement notice via %s', async (action) => {
+      installFixture([old]);
+      render(page('/settings?tab=ghosts'));
+      const card = await screen.findByRole('button', { name: 'Legacy Simulator' });
+      fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 640 } });
+      fireEvent.click(card);
+      fireEvent.click(await screen.findByRole('button', { name: action }));
+      const list = await screen.findByRole('main');
+      expect(list.scrollTop).toBe(640);
+    },
+  );
+
   it('exits market details and acknowledges the notice only after it is rendered', async () => {
     const bridge = installFixture([old]);
     const visibleAtAcknowledgement: boolean[] = [];

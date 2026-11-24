@@ -142,6 +142,8 @@ void mountPage({
     onLogUploadSettingsChange: subscription('logUpload'),
     ccSetDebugNet: read(undefined),
     localThemes: { list: read({ success: true, themes: [] }), listSync: () => ({ success: true, themes: [] }) },
+    onAuthStateChange: subscription('authState'),
+    skillhub: { scan: read({ success: true, skills: [], sources: [] }), onLocalStateChanged: subscription('skills') },
     appShortcuts: { getState: async () => ({ platform: ctx.platform, overrides: {}, globalFailures: [] }), onChanged: subscription('shortcuts') },
     localDb: {
       orcaWorkflows: { getCollaborationSettings: read({ workerSoftLimit: 4, workerHardLimit: 16, isCustomized: false }) },
@@ -166,6 +168,7 @@ void mountPage({
       android: { getConfig: read({ value: { adbPathOverride: null, defaultDeviceSerial: null } }) },
       usage: { getHistory: async () => { usageReads.history++; return usageHistory; }, onTodaySpendChanged: subscription('spend'), onTodayTokensChanged: subscription('tokens'), onModelPricingChanged: subscription('pricing') },
       agent: { getBinaryVersion: read({ version: '1.0.0' }) },
+      listPiPackages: read({ available: true, packages: [] }), onPiPackagesChanged: subscription('pi-packages'),
       piKernel: { getState: read({ currentVersion: '0.0.0', restartRequired: false, operation: null, official: { release: null, checkedAt: null, error: false }, upstream: { release: null, checkedAt: null, error: false } }) },
       getCapabilities: read({ availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] }), listAvailableAgents: read([]), onAgentsChanged: subscription('agents'),
       agentResourceSettingsGet: read(state({ maxConcurrentCommands: 0, processPriority: 'normal', capToolchainThreads: false })),

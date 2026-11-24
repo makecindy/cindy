@@ -1,4 +1,4 @@
-import { normalizePrTrigger } from '../pr-trigger.js';
+import { isGitlabMrTriggerUrl, normalizePrTrigger } from '../pr-trigger.js';
 import { EventEmitter } from 'node:events';
 import type {
   Schedule,
@@ -87,6 +87,7 @@ export interface RunNowOptions {
   expectedSchedule?: ScheduleMutationGuard;
   webhook?: FireContext['webhook'];
   trigger?: ScheduleRunTrigger;
+  mrObservation?: ScheduleRun['mrObservation'];
   /** Internal durable-queue handoff. Awaited after insertRun, before any runner side effects. */
   onRunCreated?: () => Promise<void>;
 }
@@ -156,6 +157,9 @@ function validateScheduleExecutionShape(
   }
   // 一次事件就会把定时的一次性任务用完。手动任务的 recurring 不参与调度，不受此限。
   if (schedule.prTrigger && schedule.webhookTrigger) throw new Error('Choose a PR trigger or a Webhook trigger');
+  if (isGitlabMrTriggerUrl(schedule.prTrigger?.url) && (schedule.manual || !schedule.recurring)) {
+    throw new Error('Invalid GitLab MR trigger: use recurring=true and manual=false for timed status checks.');
+  }
   if ((schedule.webhookTrigger || schedule.prTrigger) && !schedule.recurring && !schedule.manual) {
     throw new Error('webhook trigger requires a recurring schedule');
   }
@@ -2354,6 +2358,9 @@ export class Scheduler extends EventEmitter {
       heartbeatAt: firedAt,
       ...(options?.webhook ? { triggerSource: 'webhook' as const } : options?.trigger?.source === 'pr-status' ? { triggerSource: 'pr-status' as const } : {}),
     };
+    if (initialRun.triggerSource === 'pr-status' && options?.mrObservation) {
+      initialRun.mrObservation = options.mrObservation;
+    }
     if (!recovery) await this.storage.insertRun(initialRun);
     if (!recovery && options?.onRunCreated) {
       try {

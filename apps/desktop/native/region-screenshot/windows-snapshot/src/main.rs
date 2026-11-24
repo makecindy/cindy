@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use base64::{engine::general_purpose::STANDARD, Engine};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_COLOR_SPACE_TYPE, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020};
 use windows::Win32::Graphics::Gdi::*;
 use windows::{
     core::Interface,
@@ -71,10 +72,14 @@ fn main() {
                         let mut header = json!({ "id": id, "width": width, "height": height,
                             "encoding": "bgra", "byteLength": pixels.len() });
                         if request.get("displayProfile").and_then(Value::as_bool) == Some(true) {
+                            let space = monitor_color_space(&request);
                             if request.get("verifySdr").and_then(Value::as_bool) == Some(true) {
-                                header["sdrVerified"] = json!(monitor_is_sdr(&request) == Some(true));
+                                header["sdrVerified"] = json!(space == Some(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709));
                             }
-                            if let Some(profile) = display_profile(&request) {
+                            // GDI exposes the SDR desktop rendition on an HDR10 output.
+                            if space == Some(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
+                                header["sdrFromHdr"] = json!(true);
+                            } else if let Some(profile) = display_profile(&request) {
                                 header["icc"] = json!(STANDARD.encode(profile));
                             }
                         }
@@ -196,9 +201,8 @@ fn capture_region(request: &Value) -> Option<(i32, i32, Vec<u8>)> {
 
 // Chromium can serialize a custom SDR and a custom HDR curve in the same
 // textual form. Query the actual output when the host cannot distinguish them.
-fn monitor_is_sdr(request: &Value) -> Option<bool> {
+fn monitor_color_space(request: &Value) -> Option<DXGI_COLOR_SPACE_TYPE> {
     use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6};
-    use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     let point = POINT { x: request["x"].as_i64()?.try_into().ok()?, y: request["y"].as_i64()?.try_into().ok()? };
     unsafe {
         let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONULL);
@@ -209,7 +213,7 @@ fn monitor_is_sdr(request: &Value) -> Option<bool> {
                 let Ok(output) = adapter.EnumOutputs(i) else { break };
                 if output.GetDesc().ok().is_some_and(|desc| desc.Monitor == monitor) {
                     let desc = output.cast::<IDXGIOutput6>().ok()?.GetDesc1().ok()?;
-                    return Some(desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+                    return Some(desc.ColorSpace);
                 }
             }
         }

@@ -119,6 +119,7 @@ interface SettingsSidebarNavProps {
   tabIds: readonly VisibleSettingsTab[];
   searchContext?: SettingsSearchContext;
   activeTab: SettingsTab;
+  activePanelId?: string;
   onSelectTab: (tab: SettingsTab) => void;
   onSelectSearchResult?: (result: { tab: SettingsTab; sectionId: string }) => void;
   pluginPages?: readonly PluginSettingsPage[];
@@ -133,6 +134,7 @@ export function SettingsSidebarNav({
   tabIds,
   searchContext,
   activeTab,
+  activePanelId,
   onSelectTab,
   onSelectSearchResult,
   pluginPages,
@@ -161,7 +163,7 @@ export function SettingsSidebarNav({
         type="button"
         role="tab"
         aria-selected={selected}
-        aria-controls={`settings-panel-${tabId}`}
+        aria-controls={selected && activePanelId ? activePanelId : `settings-panel-${tabId}`}
         data-settings-search-action="Navigate to a settings page"
         onClick={() => onSelectTab(tabId)}
         className={cn(NAV_ITEM_CLASS, grouped ? 'pl-1.5' : 'pl-3', selected ? NAV_ITEM_ACTIVE_CLASS : NAV_ITEM_IDLE_CLASS)}

@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
-import { once } from 'node:events';
+import { on, once } from 'node:events';
 import type { AddressInfo, Socket } from 'node:net';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
@@ -860,6 +860,32 @@ describe('independent V2 relay', () => {
     await vi.waitFor(() => expect(wsTags).toEqual([1, 2, 3, 4, 10, 11, 13]));
     expect(member.downs().map((down) => down.datagram[0]).sort()).toEqual([5, 6, 7]);
     expect(elsewhere.downs()).toEqual([]);
+  });
+
+  // Integration: a phone must be able to verify the authenticated WebSocket
+  // independently of any peer. Previously any non-presence control closed it.
+  it('answers the mobile relay probe on the authenticated socket', async () => {
+    const f = await fixture();
+    const ws = new WebSocket(f.relay.url.replace(/^http/, 'ws') + API + '/ws', {
+      headers: { authorization: authorization(f.owner, f.certificate, 'GET', API + '/ws') },
+    });
+    cleanups.push(() => { ws.terminate(); });
+    const messages = on(ws, 'message', { signal: AbortSignal.timeout(3_000) });
+    try {
+      const { value: [hello] } = await messages.next();
+      expect(JSON.parse(hello.toString())).toMatchObject({ type: 'hello', relayProbe: true });
+      ws.send('{"type":"relay-probe"}');
+      // The relay can broadcast directory updates on the same socket before replying.
+      for await (const [data] of messages) {
+        const frame = JSON.parse(data.toString());
+        if (frame.type === 'directory') continue;
+        expect(frame).toEqual({ type: 'relay-pong' });
+        return;
+      }
+      throw new Error('Relay message stream ended before relay-pong');
+    } finally {
+      await messages.return?.();
+    }
   });
 
   // 2026-11-17 review: UDP credentials are a reusable secret. On an owner-pinned private relay over plain http (the

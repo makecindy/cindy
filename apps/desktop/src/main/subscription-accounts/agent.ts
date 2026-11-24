@@ -10,6 +10,7 @@ import {
   type AgentSessionHandle,
   type StartSessionOptions,
   type ForkSdkSessionOptions,
+  type NativeSubscriptionAccount,
   type RefreshLocalModelsOptions,
 } from '@cindy/maker-core';
 import { CHATGPT_MODEL_PREFIX } from '@cindy/model-providers/classification';
@@ -100,15 +101,21 @@ function engineProviderId(providerId: string | null | undefined, accountId: stri
  * with exactly the same model allowlist, route token and selected account capability.
  */
 function engineOptions<T extends Pick<StartSessionOptions, 'providerId' | 'deviceHosted'>>(
-  options: T, accountId: string,
-): T {
+  options: T, lease: SubscriptionAccountLease, kind: BaseAgent['kind'],
+): T & { [NATIVE_SUBSCRIPTION_ACCOUNT]: NativeSubscriptionAccount } {
   const requested = options.providerId?.trim();
-  if (!requested) return options;
+  if (!requested) return { ...options, [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account };
   const guest = options.deviceHosted?.guest ? options.deviceHosted.guestProvider : undefined;
   if (guest && guest.providerId !== requested)
     throw new AgentStartupStoppedError(new Error('[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] this provider is not allowed for remote use on this computer'));
-  const providerId = engineProviderId(requested, accountId)!;
+  const providerId = engineProviderId(requested, lease.accountId)!;
+  // Codex runs on its native route, but its per-session proxy must check the
+  // original grant. Carry that identity on the host-issued account capability.
+  const account = guest && kind === 'codex' && providerId === 'openai' && requested !== providerId
+    ? { ...lease.account, sharedProviderId: requested }
+    : lease.account;
   return { ...options, providerId,
+    [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
     ...(guest && providerId !== requested ? { deviceHosted: { ...options.deviceHosted!,
       guestProvider: { ...guest, providerId } } } : {}) };
 }
@@ -429,6 +436,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           let lastFailure: unknown;
           for (;;) {
             let lease: SubscriptionAccountLease | null = null;
+            let startOptions: StartSessionOptions;
             let unregister = () => {};
             try {
               lease = await acquireSubscriptionAccount(poolProvider, options.model, keys, false, {
@@ -440,22 +448,21 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 if (lastFailure !== undefined) throw lastFailure;
                 return startLegacy();
               }
-              unregister = registerSessionSubscriptionAccount(options.sessionId, lease.account);
+              const routed = engineOptions(options, lease, target.kind);
+              unregister = registerSessionSubscriptionAccount(options.sessionId, routed[NATIVE_SUBSCRIPTION_ACCOUNT]);
+              startOptions = routed;
             } catch (error) {
               lease?.release();
               if (lastFailure !== undefined) throw lastFailure;
               // No underlying runtime has been started; Maker may release its worktree lease.
-              throw new AgentStartupStoppedError(error);
+                throw error instanceof AgentStartupStoppedError ? error : new AgentStartupStoppedError(error);
             }
             const current = lease;
             let handle: AgentSessionHandle | undefined;
             try {
               const sessionProvider = options.providerId?.trim() || poolProvider;
               const engineId = engineProviderId(sessionProvider, current.accountId);
-              handle = await target.startSession({
-                ...engineOptions(options, current.accountId),
-                [NATIVE_SUBSCRIPTION_ACCOUNT]: current.account,
-              });
+              handle = await target.startSession(startOptions);
               await current.bind([...keys, `native:${handle.id}`]);
               // Startup owns its slot until the first turn completes or the runtime closes.
               return guardAccountSwitch(wrapHandle(handle, current, unregister, options.model), target, {
@@ -527,10 +534,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           const lease = await acquireSubscriptionAccount(provider, options.model, [key], true, { accountId: imported, resuming: true });
           if (!lease) return target.forkSdkSession(options);
           try {
-            const result = await target.forkSdkSession({
-              ...engineOptions(options, lease.accountId),
-              [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account,
-            });
+            const result = await target.forkSdkSession(engineOptions(options, lease, target.kind));
             await lease.bind([key, `native:${result.newSdkSessionId}`]);
             return result;
           } finally {

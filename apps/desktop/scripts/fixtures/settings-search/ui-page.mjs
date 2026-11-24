@@ -44,6 +44,8 @@ export default {
     'appearance-wallpaper-hidden': { about: 'Hidden wallpaper retains blur 12 with a disabled slider', data: { tab: 'appearance', hiddenBackground: 'cindy-window' } },
     'personalization-custom': { about: 'Custom auxiliary slots forward search IDs to real model selector buttons', data: { tab: 'personalization', customAuxiliary: true } },
     'worktree-model-naming': { about: 'Model naming defaults off, can be found in search, and clears its override on reset', data: { tab: 'personalization', worktreeModelNaming: true } },
+    'accessories-escape': { about: 'Escape returns from a device through Accessories to keyboard shortcuts', data: { tab: 'shortcuts' } },
+    'pi-return': { about: 'Returning from Pi extensions restores the location in General', data: { tab: 'general' } },
     'tab-switch': { about: 'Committed settings tabs paint at full opacity with normal motion enabled', data: { tab: 'personalization', tabSwitch: true } },
     'remote-signed-in': { about: 'Signed-in device controls and relay section with searchable targets', data: { tab: 'remote-control', cloud: true } },
     'group-deep-link': { about: 'A device settings link reopens its collapsed group without changing tabs', data: { tab: 'remote-control', cloud: true, groupDeepLink: true } },
@@ -364,6 +366,67 @@ export default {
       await findWidth('settings-chat-width');
       await standard.click();
       await findWidth('settings-chat-layout');
+      return;
+    }
+    if (ui.case === 'accessories-escape') {
+      const accessories = panel.getByTestId('settings-shortcuts-accessories');
+      const device = panel.getByRole('button', { name: await ui.t('settings.shortcuts.xboxGamepad.openAria') });
+      await accessories.click();
+      await device.click();
+      await panel.getByRole('button', { name: await ui.t('settings.shortcuts.xboxGamepad.back') }).waitFor();
+      await page.keyboard.press('Escape');
+      await device.waitFor();
+      await page.keyboard.press('Escape');
+      await accessories.waitFor();
+      assert.equal(await panel.getAttribute('id'), 'settings-panel-shortcuts');
+      await ui.capture('back-to-shortcuts');
+      return;
+    }
+    if (ui.case === 'pi-return') {
+      const entrySelector = '[data-setting-id="general.piExtensions"]';
+      const entry = panel.locator(entrySelector);
+      const viewport = panel.locator('xpath=../..');
+      const back = panel.getByRole('button', { name: await ui.t('settings.piPackages.backToGeneral') });
+      const generalTab = page.locator('#settings-tab-general');
+      const advanced = panel.locator('button[aria-controls="settings-general-advanced"]');
+      await advanced.click();
+      await panel.locator('#settings-general-advanced').evaluate(el =>
+        Promise.allSettled(el.getAnimations().map(animation => animation.finished)));
+      for (const action of ['button', 'Escape']) {
+        await entry.scrollIntoViewIfNeeded();
+        assert.ok(await viewport.evaluate(el => el.scrollTop > 0));
+        const before = await entry.evaluate(el => el.getBoundingClientRect().top);
+        await entry.click();
+        await back.waitFor();
+        assert.equal(await generalTab.getAttribute('aria-controls'), 'settings-panel-pi-extensions');
+        assert.equal(await viewport.evaluate(el => el.scrollTop), 0);
+
+        // Start sampling before the input. Waiting for the entry through Playwright
+        // first can miss a frame where General is visible in the wrong position.
+        const recording = await page.evaluateHandle(selector => ({
+          positions: new Promise(resolve => {
+            const frames = [];
+            const sample = () => {
+              const row = document.querySelector(selector);
+              if (row?.checkVisibility({ visibilityProperty: true, opacityProperty: true })) {
+                frames.push(row.getBoundingClientRect().top);
+              }
+              if (frames.length === 12) resolve(frames);
+              else requestAnimationFrame(sample);
+            };
+            requestAnimationFrame(sample);
+          }),
+        }), entrySelector);
+        if (action === 'button') await back.click();
+        else await page.keyboard.press('Escape');
+        await entry.waitFor();
+        assert.equal(await generalTab.getAttribute('aria-controls'), 'settings-panel-general');
+        const frames = await recording.evaluate(value => value.positions);
+        await recording.dispose();
+        assert.ok(frames.every(y => Math.abs(y - before) <= 1),
+          `${action}: entry was at ${before}px before opening, returned at ${frames.join(', ')}px`);
+        await ui.capture(`general-restored-${action}`);
+      }
       return;
     }
     // Product regression: the opt-in must remain off until selected. Exercise the

@@ -15,6 +15,8 @@ import {
   providerSpeechSetup,
   speechReferenceModels,
   isSpeechModel,
+  isRealtimeModel,
+  providerRealtimeSetup,
 } from '../../../shared/speechProviderSetup';
 import { SpeechModelChoices, type SpeechModelChoice } from './SpeechModelChoices';
 
@@ -25,16 +27,18 @@ export function AddSpeechModelsDialog({
   provider,
   onClose,
   onSaved,
+  mode = 'audio_speech',
 }: {
   provider: ProviderView;
   onClose: () => void;
   onSaved: () => void;
+  mode?: 'audio_speech' | 'realtime';
 }) {
   const { t } = useTranslation();
   const dialog = useDialogExit();
   // Keep one connection snapshot for this dialog; a late provider refresh cannot reset choices.
   const [config] = useState(() => providerViewToCustomProviderConfig(provider));
-  const [target] = useState(() => providerSpeechSetup(provider));
+  const [target] = useState(() => mode === 'realtime' ? providerRealtimeSetup(provider) : providerSpeechSetup(provider));
   const [choices, setChoices] = useState<Choice[]>(() => {
     if (!target) return [];
     const saved = new Map(
@@ -42,7 +46,10 @@ export function AddSpeechModelsDialog({
         (runtime) => runtime?.models.map((model) => [model.id, model] as const) ?? [],
       ),
     );
-    const references = speechReferenceModels(config.runtimes[target.agent]?.baseUrl ?? '').map(
+    const referenceModels = mode === 'audio_speech'
+      ? speechReferenceModels(config.runtimes[target.agent]?.baseUrl ?? '')
+      : [];
+    const references = referenceModels.map(
       (model) => ({
         id: model.id,
         name: saved.get(model.id)?.name ?? model.name,
@@ -54,10 +61,12 @@ export function AddSpeechModelsDialog({
       }),
     );
     const ids = new Set(references.map((model) => model.id));
+    const savedRealtimeIds = new Set(provider.audioModels?.filter(model => model.mode === 'realtime').map(model => model.id));
     return [
       ...references,
       ...[...saved.values()]
-        .filter((model) => isSpeechModel(model) && !ids.has(model.id))
+        .filter((model) => !ids.has(model.id) &&
+          (mode === 'realtime' ? savedRealtimeIds.has(model.id) : isSpeechModel(model)))
         .map((model) => ({
           id: model.id,
           name: model.name,
@@ -83,15 +92,18 @@ export function AddSpeechModelsDialog({
       try {
         const apiKey = await readCustomProviderKey(config.id, target.agent);
         if (cancelled) return;
-        const result = await window.electronAPI.maker.fetchProviderModels({
-          savedProviderId: config.id,
-          agent: target.agent,
-          authMethod: 'apiKey',
-          baseUrl: runtime.baseUrl,
-          wireProtocol: runtime.wireProtocol,
-          modelsUrl: runtime.modelsUrl,
-          apiKey,
-        });
+        const [result, catalog] = await Promise.all([
+          window.electronAPI.maker.fetchProviderModels({
+            savedProviderId: config.id,
+            agent: target.agent,
+            authMethod: 'apiKey',
+            baseUrl: runtime.baseUrl,
+            wireProtocol: runtime.wireProtocol,
+            modelsUrl: runtime.modelsUrl,
+            apiKey,
+          }),
+          mode === 'realtime' ? window.electronAPI.maker.listProviderPresets().catch(() => undefined) : undefined,
+        ]);
         if (cancelled) return;
         setFailed(!result.ok);
         if (result.ok)
@@ -104,7 +116,7 @@ export function AddSpeechModelsDialog({
             );
             for (const model of result.models ?? []) {
               const old = next.get(model.id);
-              if (!isSpeechModel(model)) {
+              if (!(mode === 'realtime' ? isRealtimeModel(model, catalog?.modelRegistry) : isSpeechModel(model))) {
                 // An explicit non-TTS capability beats an offline reference. Saved membership stays intact.
                 if (old?.reference && model.discoveredMetadata?.mode && !old.saved)
                   next.delete(model.id);
@@ -136,7 +148,7 @@ export function AddSpeechModelsDialog({
       cancelled = true;
       mounted.current = false;
     };
-  }, [config, target]);
+  }, [config, target, mode]);
   const selected = choices.filter((choice) => choice.checked && !choice.saved);
   const close = () => {
     if (!savingRef.current) dialog.close(onClose);
@@ -159,7 +171,7 @@ export function AddSpeechModelsDialog({
           },
         },
         {},
-        { appendSpeechModelsOnly: true },
+        mode === 'realtime' ? { appendRealtimeModelsOnly: true } : { appendSpeechModelsOnly: true },
       );
       if (!mounted.current) return;
       if (!result.ok) {
@@ -195,7 +207,7 @@ export function AddSpeechModelsDialog({
         >
           <div className="p-5">
             <Dialog.Title className="text-16 font-medium">
-              {t('settings.providers.speechSetup.add')}
+              {t(mode === 'realtime' ? 'bots.voiceMode.realtime.add' : 'settings.providers.speechSetup.add')}
             </Dialog.Title>
             <p className="mt-1 text-12 text-[var(--text-secondary)]">{provider.name}</p>
           </div>
@@ -213,6 +225,7 @@ export function AddSpeechModelsDialog({
                   </p>
                 )}
                 <SpeechModelChoices
+                  mode={mode}
                   choices={choices}
                   loading={saving}
                   onToggle={(id) =>
@@ -236,7 +249,8 @@ export function AddSpeechModelsDialog({
                         checked: true,
                         recommended: old?.recommended ?? false,
                         manual: true,
-                        model: { id, name: old?.name ?? id, mode: 'audio_speech' },
+                        model: { id, name: old?.name ?? id, mode,
+                          ...(mode === 'realtime' ? { modalities: { input: ['audio', 'text'], output: ['audio', 'text'] } } : {}) },
                       };
                       return old
                         ? previous.map((value) => (value.id === id ? choice : value))

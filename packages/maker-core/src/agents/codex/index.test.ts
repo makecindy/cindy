@@ -36499,6 +36499,23 @@ describe('CodexAgent custom provider context window override', () => {
     await handle.close();
   });
 
+  // #12423 unit: two connections share a model ID and window but carry different
+  // native catalog metadata. Exercise the public session model-switch gate.
+  it('rebuilds the local catalog when the same model and budget move to another connection', async () => {
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: () => 272_000,
+      needsCodexFastCatalog: providerId => providerId === 'cprov-openai',
+    }));
+    installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'connection-scoped-catalog', model: 'gpt-6.2-sol',
+      providerId: 'cprov-openai', workingDir: '/repo',
+    });
+    expect(await handle.requiresModelSwitchRebuild?.('gpt-6.2-sol', { providerId: 'cprov-openai' })).toBe(false);
+    expect(await handle.requiresModelSwitchRebuild?.('gpt-6.2-sol', { providerId: 'cprov-relay' })).toBe(true);
+    await handle.close();
+  });
+
   it('keeps the shared host when async catalog preflight rejects an unknown custom slug', async () => {
     const agent = new CodexAgent(createDeps({}, {
       resolveCodexThreadContextWindow: async () => null,

@@ -7238,6 +7238,23 @@ describe('PluginMarketService install consent', () => {
     },
   );
 
+  it.each(['personal', 'official'] as const)('uses the catalog publisher for the %s install notice', async publisherKind => {
+    const item = summary({ publisherKind });
+    const { service } = harness([item]);
+    const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => false);
+
+    await expect(service.install(item.id, reviewedInstallOptions(item), {
+      consent: { prompt, initiator: 'user' },
+    })).rejects.toMatchObject({ code: 'MUTATION_CANCELLED' });
+    expect(prompt).toHaveBeenCalledOnce();
+    const request = prompt.mock.calls[0]![0];
+    expect(request).toMatchObject({
+      origin: 'market',
+      facts: { kind: 'install' },
+    });
+    expect(request.communityMarket).toBe(publisherKind === 'personal' ? true : undefined);
+  });
+
   it('does not hold the plugin mutation while waiting for install confirmation', async () => {
     const item = summary();
     const h = harness([item]);
