@@ -137,11 +137,17 @@ export class AppShortcutStore {
     this.replaceOverrides(next);
   }
 
-  /** 恢复全部默认 = 清空 overrides。 */
+  /** 恢复当前可用键的默认；暂不可用的覆盖保留，升级后继续生效。 */
   resetAll(): void {
     const current = this.load();
-    if (Object.keys(current).length === 0) return;
-    this.replaceOverrides({});
+    const next = { ...current };
+    let changed = false;
+    for (const id of Object.keys(current)) {
+      if (!isAppShortcutId(id) || !isAppShortcutAvailableOnPlatform(id, this.options.platform, this.options.osRelease)) continue;
+      delete next[id];
+      changed = true;
+    }
+    if (changed) this.replaceOverrides(next);
   }
 
   private load(): AppShortcutOverrides {

@@ -44,7 +44,7 @@ vi.mock('../../appSessionState', () => ({
 }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 import { installAwayGuardShortcut } from '../awayGuardShortcut';
-import { notifyVoiceShortcutRegistrationChanged } from '../../voice-input/shortcutRegistrationEvents';
+import { notifyVoiceShortcutRegistrationChanged, withPendingVoiceShortcutCandidate } from '../../voice-input/shortcutRegistrationEvents';
 let dispose: (() => void) | undefined;
 afterEach(() => {
   dispose?.();
@@ -192,6 +192,16 @@ describe('away shortcut', () => {
     notifyVoiceShortcutRegistrationChanged();
     await Promise.resolve();
     expect(state.register).toHaveBeenCalledTimes(count);
+  });
+
+  it('does not surrender an explicitly customized away binding to a pending voice key', async () => {
+    state.overrides = { 'away-guard': state.combo };
+    state.register.mockReturnValue(true);
+    dispose = installAwayGuardShortcut(async () => {});
+    await withPendingVoiceShortcutCandidate({ code: 'KeyL', key: 'l', modifiers: { meta: false, ctrl: true, alt: false, shift: true, fn: false } }, async () => {
+      expect(state.unregister).not.toHaveBeenCalled();
+    });
+    expect(state.unregister).not.toHaveBeenCalled();
   });
 
 });

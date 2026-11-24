@@ -237,7 +237,7 @@ export function KeyboardShortcutsSection({ scrollRef }: { scrollRef?: RefObject<
     (def) => !def.hiddenInSettings && isAppShortcutAvailableOnPlatform(def.id, platform, window.electronAPI?.osRelease),
   );
 
-  const hasAnyOverride = Object.keys(overrides).length > 0;
+  const hasAnyOverride = visibleDefs.some((definition) => overrides[definition.id] !== undefined);
 
   const itemLabel = useCallback(
     (def: AppShortcutDefinition) => t(def.labelKey, { defaultValue: def.id }),

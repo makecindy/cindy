@@ -130,6 +130,18 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     vi.restoreAllMocks();
   });
 
+  // 同一审阅：只有不可用的覆盖时，真实页面不能显示会误删它的“恢复全部默认”。
+  it('does not expose reset-all when only an unavailable binding is customized', () => {
+    mocks.getOverrides.mockReturnValue({ 'away-guard': combo });
+    mocks.getCombos.mockReturnValue([]);
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      osRelease: '22.6.0', onAuthStateChange: vi.fn(() => () => {}),
+    } });
+    render(<KeyboardShortcutsSection />);
+    expect(document.getElementById('settings-shortcut-away-guard')).toBeNull();
+    expect(screen.queryByText('settings.shortcuts.resetAll')).toBeNull();
+  });
+
   it('opens the Work Louder device settings from the keyboard-shortcuts page', () => {
     mocks.getOverrides.mockReturnValue({});
     mocks.getCombos.mockReturnValue([]);

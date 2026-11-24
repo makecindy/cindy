@@ -61,7 +61,7 @@ void mountPage({
     localThemes: { list: read({ success: true, themes: [] }), listSync: () => ({ success: true, themes: [] }) },
     onAuthStateChange: subscription('authState'),
     skillhub: { scan: read({ success: true, skills: [], sources: [] }), onLocalStateChanged: subscription('skills') },
-    appShortcuts: { getState: () => ({ platform: ctx.platform, overrides: {}, globalFailures: [] }), onChanged: subscription('shortcuts') },
+    appShortcuts: { getState: () => ({ platform: ctx.platform, overrides: ctx.data.awayOverride ? { 'away-guard': { code: 'KeyK', ctrl: true, shift: true, meta: false, alt: false } } : {}, globalFailures: [] }), onChanged: subscription('shortcuts') },
     localDb: {
       orcaWorkflows: { getCollaborationSettings: read({ workerSoftLimit: 4, workerHardLimit: 16, isCustomized: false }) },
       sessions: { list: read([]) },

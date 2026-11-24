@@ -8,7 +8,7 @@ import {
 } from '../app-shortcuts';
 import { createLogger } from '../logger';
 import { onAppSessionCommitted } from '../appSessionState';
-import { onVoiceShortcutRegistrationChanged } from '../voice-input/shortcutRegistrationEvents';
+import { getPendingVoiceShortcutCandidate, onVoiceShortcutRegistrationChanged } from '../voice-input/shortcutRegistrationEvents';
 import { voiceInputDataStore } from '../voice-input/VoiceInputDataStore';
 
 const log = createLogger('remote-desktop:away-shortcut');
@@ -25,7 +25,8 @@ export function installAwayGuardShortcut(activate: () => Promise<void>): () => v
     setGlobalShortcutRegistrationFailures(failed ? [ID] : [], ID);
   const sync = (deferRegistration = false) => {
     const current = ++generation;
-    const voiceShortcut = voiceInputDataStore.getSettings().shortcut;
+    const pending = getPendingVoiceShortcutCandidate();
+    const voiceShortcut = pending === undefined ? voiceInputDataStore.getSettings().shortcut : pending;
     const voiceCombo = voiceShortcut ? voiceInputShortcutToAppShortcutCombo(voiceShortcut) : null;
     const combo = store.getEffectiveMap(voiceCombo ? [voiceCombo] : []).get(ID)?.[0];
     const recording = isAppShortcutRecordingActive();

@@ -193,6 +193,20 @@ describe('AppShortcutStore', () => {
     expect(store.getEffectiveCombos('toggle-sidebar')[0]!.code).toBe('KeyB');
   });
 
+  // PR #10218 review 4684948336：旧系统恢复默认只能删除可用键，升级后仍应看到原自定义键。
+  it('resets available bindings while retaining an unavailable away override for upgrade', () => {
+    const options = { getFilePath: filePath, platform: 'darwin' };
+    const newer = new AppShortcutStore({ ...options, osRelease: '23.0.0' });
+    const custom = combo('KeyK', { ctrl: true, shift: true });
+    expect(newer.setOverride('away-guard', custom)).toBeNull();
+    expect(newer.setOverride('toggle-sidebar', combo('KeyJ', { meta: true }))).toBeNull();
+    const older = new AppShortcutStore({ ...options, osRelease: '22.6.0' });
+    older.resetAll();
+    expect(older.getOverrides()).toEqual({ 'away-guard': custom });
+    older.resetAll();
+    expect(new AppShortcutStore({ ...options, osRelease: '23.0.0' }).getEffectiveCombos('away-guard')).toEqual([custom]);
+  });
+
   it('resetAll clears every override', () => {
     const store = makeStore('darwin');
     store.setOverride('toggle-sidebar', combo('KeyJ', { meta: true }));

@@ -1,4 +1,4 @@
-import { notifyVoiceShortcutRegistrationChanged } from './shortcutRegistrationEvents';
+import { notifyVoiceShortcutRegistrationChanged, withPendingVoiceShortcutCandidate } from './shortcutRegistrationEvents';
 import {
   app,
   BrowserWindow,
@@ -1167,8 +1167,9 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
   ipcMain.handle(
     'voice-input:settings:update-shortcut',
     async (_event, shortcut: VoiceInputShortcut | null | undefined): Promise<VoiceInputSettingsUpdateResult> => {
-      return queueShortcutMutation(async () => {
+      return queueShortcutMutation(() => withPendingVoiceShortcutCandidate(shortcut ?? null, async (replaceCandidate) => {
         const nextShortcut = shortcut ?? null;
+        const previousShortcut = registeredShortcut;
         const registration = await setVoiceInputGlobalShortcut(nextShortcut);
         // 只缺监听权限时仍然存盘：用户的选择要留住，快捷键等授权后自动生效（设置页在
         // 权限转为已授权时会重新 sync）。真故障（冲突、不支持、helper 坏了）照旧不存。
@@ -1188,12 +1189,22 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
         // 用户自己定下了新状态（注册成功 / 换成不需要权限的快捷键 / 清空），之前那条「自动
         // 恢复失败」就过期了：留着只会让之后新开的窗口弹一条与当前状态无关的故障提示。
         clearPendingShortcutRecoveryFailure();
+        let settings: VoiceInputSettings;
+        try {
+          settings = voiceInputDataStore.updateSettings({ shortcut: nextShortcut });
+        } catch (error) {
+          // 写盘失败不能让候选继续占着已让出的默认键，先恢复注册事务前的实际语音键。
+          replaceCandidate(previousShortcut);
+          const restored = await setVoiceInputGlobalShortcut(previousShortcut);
+          if (!restored.ok) log.warn('voice shortcut rollback failed', { error: restored.error });
+          throw error;
+        }
         return {
           ok: true,
-          settings: voiceInputDataStore.updateSettings({ shortcut: nextShortcut }),
+          settings,
           ...(registration.ok ? {} : { pendingInputMonitoring: true }),
         };
-      });
+      }));
     },
   );
 

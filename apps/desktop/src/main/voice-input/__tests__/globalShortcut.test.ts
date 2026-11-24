@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BrowserWindow } from 'electron';
 
+import { getEffectiveAppShortcuts, type AppShortcutCombo } from '../../../shared/appShortcuts';
 import type { VoiceInputShortcut } from '../../../shared/voiceInputData.js';
 import type { GlobalVoiceInputIpcDeps } from '../global.js';
 
@@ -323,10 +324,21 @@ vi.mock('../WindowsFunctionKeyShortcutListener.js', () => ({
     }),
 }));
 
+// 此集成场景用真实 registry 仲裁和同一原生注册池，配置文件替换为内存，避免访问个人目录。
+vi.mock('../../app-shortcuts', () => ({
+  getAppShortcutStore: () => ({
+    getEffectiveMap: (yieldTo: readonly AppShortcutCombo[] = []) => getEffectiveAppShortcuts({}, 'darwin', yieldTo),
+    subscribe: () => () => {},
+  }),
+  isAppShortcutRecordingActive: () => false,
+  subscribeAppShortcutRecording: () => () => {},
+  setGlobalShortcutRegistrationFailures: vi.fn(),
+}));
 vi.mock('../VoiceInputDataStore.js', () => ({
   voiceInputDataStore: {
     updateSettings: mocks.updateSettings,
     getSettings: mocks.getSettings,
+    subscribeShortcut: () => () => {},
   },
 }));
 
@@ -417,6 +429,83 @@ describe('voice input global shortcut registration', () => {
     setPlatform(originalPlatform);
     setTimeoutSpy?.mockRestore();
     setTimeoutSpy = null;
+  });
+
+  // PR #10218 review 4684948322：从真实更新 IPC 验证候选注册前让位，而非只测已存盘的语音键。
+  it('hands the away default to a newly selected voice key before persisting it', async () => {
+    setPlatform('darwin');
+    const { registerGlobalVoiceInputIpc } = await import('../global.js');
+    const { installAwayGuardShortcut } = await import('../../remote-desktop/awayGuardShortcut');
+    registerGlobalVoiceInputIpc(mocks.ipcDeps);
+    mocks.registerShortcut.mockImplementation((key: string) => !mocks.registeredShortcuts.has(key));
+    const activate = vi.fn(async () => {});
+    const dispose = installAwayGuardShortcut(activate);
+    try {
+      const originalCallback = mocks.registeredShortcuts.get('Ctrl+Shift+L');
+      expect(originalCallback).toBeTypeOf('function');
+      const shortcut: VoiceInputShortcut = { code: 'KeyL', key: 'l', modifiers: { meta: false, ctrl: true, alt: false, shift: true, fn: false } };
+      mocks.updateSettings.mockImplementation((patch: { shortcut: VoiceInputShortcut | null }) => {
+        mocks.setStoredShortcut(patch.shortcut);
+        return patch;
+      });
+      const update = mocks.handlers.get('voice-input:settings:update-shortcut');
+      const result = await update?.({}, shortcut);
+      expect(result).toEqual({ ok: true, settings: { shortcut } });
+      expect(mocks.getSettings().shortcut).toEqual(shortcut);
+      expect(mocks.registeredShortcuts.get('Ctrl+Shift+L')).not.toBe(originalCallback);
+      expect(activate).not.toHaveBeenCalled();
+    } finally { dispose(); }
+  });
+
+  it.each(['registration', 'persistence'] as const)('restores the away binding after a failed voice %s', async (failure) => {
+    setPlatform('darwin');
+    const { registerGlobalVoiceInputIpc } = await import('../global.js');
+    const { installAwayGuardShortcut } = await import('../../remote-desktop/awayGuardShortcut');
+    const { getPendingVoiceShortcutCandidate } = await import('../shortcutRegistrationEvents');
+    registerGlobalVoiceInputIpc(mocks.ipcDeps);
+    mocks.registerShortcut.mockImplementation((key: string) => !mocks.registeredShortcuts.has(key));
+    const activate = vi.fn(async () => {});
+    const dispose = installAwayGuardShortcut(activate);
+    try {
+      const shortcut: VoiceInputShortcut = { code: 'KeyL', key: 'l', modifiers: { meta: false, ctrl: true, alt: false, shift: true, fn: false } };
+      const update = mocks.handlers.get('voice-input:settings:update-shortcut');
+      if (failure === 'registration') {
+        mocks.registerShortcut.mockReturnValueOnce(false);
+        expect(await update?.({}, shortcut)).toMatchObject({ ok: false });
+        expect(mocks.updateSettings).not.toHaveBeenCalled();
+      } else {
+        mocks.updateSettings.mockImplementationOnce(() => { throw new Error('disk full'); });
+        await expect(update?.({}, shortcut)).rejects.toThrow('disk full');
+      }
+      await Promise.resolve();
+      expect(getPendingVoiceShortcutCandidate()).toBeUndefined();
+      expect(mocks.getSettings().shortcut).toBeNull();
+      expect(mocks.registeredShortcuts.has('Ctrl+Shift+L')).toBe(true);
+      mocks.registeredShortcuts.get('Ctrl+Shift+L')?.();
+      expect(activate).toHaveBeenCalledOnce();
+    } finally { dispose(); }
+  });
+
+  it('restores the original voice key when clearing it cannot be persisted', async () => {
+    setPlatform('darwin');
+    const { registerGlobalVoiceInputIpc } = await import('../global.js');
+    const { installAwayGuardShortcut } = await import('../../remote-desktop/awayGuardShortcut');
+    registerGlobalVoiceInputIpc(mocks.ipcDeps);
+    mocks.registerShortcut.mockImplementation((key: string) => !mocks.registeredShortcuts.has(key));
+    const shortcut: VoiceInputShortcut = { code: 'KeyL', key: 'l', modifiers: { meta: false, ctrl: true, alt: false, shift: true, fn: false } };
+    mocks.setStoredShortcut(shortcut);
+    await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, shortcut);
+    const originalCallback = mocks.registeredShortcuts.get('Ctrl+Shift+L');
+    const activate = vi.fn(async () => {});
+    const dispose = installAwayGuardShortcut(activate);
+    try {
+      mocks.updateSettings.mockImplementationOnce(() => { throw new Error('disk full'); });
+      await expect(mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, null)).rejects.toThrow('disk full');
+      await Promise.resolve();
+      expect(mocks.getSettings().shortcut).toEqual(shortcut);
+      expect(mocks.registeredShortcuts.get('Ctrl+Shift+L')).toBe(originalCallback);
+      expect(activate).not.toHaveBeenCalled();
+    } finally { dispose(); }
   });
 
   // PR #10218：旧 owner 原生组合释放后通知离开键接手，不要求再次修改已保存配置。
