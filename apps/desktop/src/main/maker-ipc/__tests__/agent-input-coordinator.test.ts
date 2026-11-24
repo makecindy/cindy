@@ -6865,6 +6865,81 @@ describe('AgentInputCoordinator send transaction', () => {
     }
   });
 
+  // #12531 / unit with SQLite: the existing live failure test never reloads the
+  // queue. Inject a lazy-create refusal and reopen through queue restoration.
+  it.each(['unchanged', 'route changed', 'head replaced', 'head reordered', 'ordinary queue'] as const)(
+    'reopens a persisted queue with the appropriate refusal hint (%s)', async scenario => {
+      const sid = 'remote-route-refusal';
+      const reason = '[REMOTE_COMPAT_MODE_UNSUPPORTED]';
+      const sqlite = new Database(':memory:');
+      sqlite.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER)');
+      setCurrentDbClient({ drizzle: drizzle(sqlite) } as unknown as DbClient, 'queue-refusal-test');
+      try {
+        const live = createHarness();
+        live.persistQueueSnapshot.mockImplementation(saveAgentInputQueueSnapshot);
+        live.setLoadQueueSnapshot(loadAgentInputQueueSnapshot);
+        await live.coordinator.ensureQueueRestored(sid);
+        if (scenario === 'ordinary queue' || scenario === 'head reordered') live.setRunning(true);
+        if (scenario !== 'ordinary queue') {
+          live.sendToAgent.mockResolvedValueOnce(hostSendFailure('LAZY_CREATE_FAILED', `${reason} private provider details`));
+        }
+        const item = makeItem('original', 'first');
+        if (scenario === 'ordinary queue') Object.assign(item, { dispatchRefusal: reason.slice(1, -1) });
+        live.coordinator.enqueue(sid, item);
+        if (scenario === 'head reordered') {
+          live.coordinator.enqueue(sid, makeItem('later', 'second'));
+          live.setRunning(false);
+          live.coordinator.onTurnEvent(sid, 'done');
+        }
+        await flush();
+        if (scenario !== 'ordinary queue') {
+          expect(live.coordinator.getProjection(sid).error).toContain(reason);
+          expect(live.sendToAgent).toHaveBeenCalledOnce();
+        }
+        if (scenario === 'route changed') {
+          live.coordinator.refreshQueuedRoute(sid, { model: 'new-model', providerId: 'new-provider' });
+        }
+        if (scenario === 'head replaced') {
+          live.setRunning(true);
+          live.coordinator.enqueue(sid, makeItem('later', 'second'));
+        }
+        if (scenario === 'head reordered') live.coordinator.move(sid, 'later', 0);
+        live.coordinator.onSessionClosed(sid);
+        await awaitAgentInputQueueSnapshotPersistence(sid);
+        const payload = sqlite.prepare('SELECT payload FROM agent_input_queue_snapshots WHERE session_id = ?')
+          .pluck().get(sid);
+        expect(payload).not.toContain('private provider details');
+        if (scenario === 'ordinary queue') expect(payload).not.toContain('dispatchRefusal');
+
+        const reopened = createHarness();
+        reopened.setLoadQueueSnapshot(loadAgentInputQueueSnapshot);
+        await reopened.coordinator.ensureQueueRestored(sid);
+        const projection = reopened.coordinator.getProjection(sid);
+        const expectedIds = scenario === 'head reordered' ? ['later', 'original']
+          : scenario === 'head replaced' ? ['later'] : ['original'];
+        expect(projection.pendingQueue.map(item => item.clientId)).toEqual(expectedIds);
+        expect(projection.queuePaused).toBe(true);
+        expect(reopened.sendToAgent).not.toHaveBeenCalled();
+        expect(mocks.createMessage).not.toHaveBeenCalled();
+        expect(projection.error).toBe(scenario === 'unchanged' ? reason : null);
+        expect(projection.recovery).toBeNull();
+        expect(projection.errorRetryText).toBeNull();
+        if (scenario === 'route changed') {
+          reopened.coordinator.resume(sid);
+          await flush();
+          expect(reopened.sendToAgent).toHaveBeenCalledOnce();
+          expect(reopened.sendToAgent.mock.calls[0][2]).toMatchObject({
+            model: 'new-model', providerId: 'new-provider',
+          });
+          expect(reopened.sendToAgent.mock.calls[0][3].persistUserMessage?.clientId).toBe('original');
+        }
+      } finally {
+        clearCurrentDbClient();
+        sqlite.close();
+      }
+    },
+  );
+
   it.each(['WORKDIR_MISSING', 'LAZY_CREATE_FAILED'] as const)('keeps %s recoverable without leaving an active turn', async code => {
     const h = createHarness();
     const sid = 'host-preflight-failure';
