@@ -320,11 +320,18 @@ export function parseModelsListResponse(
       delete discoveredMetadata.contextWindowMax;
     }
     // OpenRouter speech pricing is per character or generated second, not per token.
-    // Do not project it into the chat cost fields. Other OpenRouter/Vercel entries
+    // Do not project it into the chat cost fields. Other OpenRouter/Vercel/Magpie entries
     // document USD per token; never apply those units to arbitrary proxies.
+    const rawPricing =
+      record.pricing && typeof record.pricing === "object" && !Array.isArray(record.pricing)
+        ? (record.pricing as Record<string, unknown>)
+        : undefined;
     const prices =
-      sourceUrl && !openRouterSpeech && (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))
-        ? (record.pricing as Record<string, unknown> | undefined)
+      !openRouterSpeech &&
+      (magpieCatalog ||
+        (sourceUrl &&
+          (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))))
+        ? rawPricing
         : undefined;
     const discoveredCost = Object.fromEntries(
       (isVercel ? [

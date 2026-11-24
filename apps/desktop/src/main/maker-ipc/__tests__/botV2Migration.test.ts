@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   root: '', routines: [] as Routine[], runs: [] as Array<Record<string, unknown>>, bindings: {} as Record<string, unknown>,
   write: vi.fn(), remove: vi.fn(), moveMemory: vi.fn(async () => 0),
   projectMode: true, updateProfile: vi.fn(), repository: vi.fn(),
+  proof: null as Set<string> | null, readProof: vi.fn(), broadcast: vi.fn(),
 }));
 vi.mock('electron', () => ({ app: { getPath: () => h.root } }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
@@ -19,6 +20,7 @@ vi.mock('../../localDb/ipc/bots.js', () => ({
   readBotSettingsProfile: async () => ({ name: 'Ada', capabilities: { projectMode: h.projectMode } }),
   updateBotProfile: h.updateProfile,
   setNewTeammateSetup: vi.fn(),
+  broadcastBotTaskListChanged: h.broadcast,
 }));
 vi.mock('../../maker-host/bot-model-chain-settings-store.js', () => ({ readEffectiveBotModelChain: async () => [] }));
 vi.mock('../botProfileFolder.js', () => ({
@@ -42,6 +44,7 @@ vi.mock('../botV1Routines.js', () => ({
     return { routines, runs: h.runs.filter(run => routines.some(item => item.id === run.routineId)), next: {}, unreadable: null };
   },
   removeV1Routine: async (_root: string, id: string) => { h.remove(id); h.routines = h.routines.filter(routine => routine.id !== id); },
+  readV1NeverDispatchedSessionIds: async (root: string) => { h.readProof(root); return h.proof; },
 }));
 vi.mock('../botRoutineAutomations.js', () => ({
   writeRoutineAutomations: async (_dir: string, routine: Routine, options: { paused?: boolean }) => {
@@ -53,7 +56,8 @@ vi.mock('../../bot-import/runtime.js', () => ({
   companionEnvironmentStore: { read: async () => ({ automations: h.bindings }) },
 }));
 
-import { carryLegacyTodos, migrateTeammateToV2 } from '../botV2Migration.js';
+import { carryLegacyTodos, migrateTeammateToV2, migrateTeammatesToV2 } from '../botV2Migration.js';
+import { getDbClient } from '../../localDb/client/current.js';
 import { todoCheckRoutineId } from '../../bot-autonomy/todoCheckRoutine.js';
 
 const BOT = 'import_ada';
@@ -169,4 +173,31 @@ it('retries instead of finishing when a state file cannot be read', async () => 
   await fs.mkdir(path.join(home, 'todos.v1.json'), { recursive: true });
   await expect(migrateTeammateToV2(BOT, h.root)).rejects.toThrow();
   await expect(fs.lstat(path.join(home, 'v2-migration.json'))).rejects.toThrow();
+});
+
+// Test value: the startup entry of the empty single-run cleanup (botLegacyRoutineHistoryTx.ts). Run records are
+// read only while the database has a candidate, nothing is deleted without readable proof, and a teammate whose
+// tasks were removed is announced so an open history list re-reads (otherwise it keeps rows that no longer
+// load). Minimal failure: the transaction runs without proof, or no refresh follows a removal. Unit tier.
+it('deletes empty single-run tasks only with readable proof and then refreshes the teammate', async () => {
+  const queryOne = vi.fn(async (): Promise<unknown> => ({ 1: 1 }));
+  const tx = vi.fn(async () => ({ removed: 2, botIds: ['bot-a'] }));
+  vi.mocked(getDbClient).mockReturnValue({ queryOne, tx,
+    drizzle: { select: () => ({ from: () => ({ where: async () => [] }) }) } } as never);
+  h.readProof.mockReset(); h.broadcast.mockReset();
+
+  h.proof = null;
+  await migrateTeammatesToV2();
+  expect(h.readProof).toHaveBeenCalledWith(h.root);
+  expect(tx).not.toHaveBeenCalled();
+
+  h.proof = new Set(['s1', 's2']);
+  await migrateTeammatesToV2();
+  expect(tx).toHaveBeenCalledExactlyOnceWith('bots.pruneEmptyLegacyRoutineHistory', { neverDispatchedSessionIds: ['s1', 's2'] });
+  expect(h.broadcast).toHaveBeenCalledExactlyOnceWith('bot-a');
+
+  // No candidate in the database: the run records are not even read.
+  queryOne.mockResolvedValueOnce(undefined); h.readProof.mockReset();
+  await migrateTeammatesToV2();
+  expect(h.readProof).not.toHaveBeenCalled();
 });

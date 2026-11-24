@@ -666,8 +666,11 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       relayedSendCounters: () => relaySends.sample(function* () {
         for (const channel of channels) {
           const stats = channel.stats();
-          if (stats) yield { key: channel, relay: channel.addressKind() === 'relay',
-            retransmitted: stats.retransmittedSegments ?? 0, sent: stats.packetsSent ?? 0 };
+          if (stats) yield {
+            key: channel, relay: channel.addressKind() === 'relay',
+            retransmitted: stats.retransmittedSegments ?? 0, sent: stats.packetsSent ?? 0,
+            acknowledgedBytes: stats.acknowledgedBytes ?? 0,
+          };
         }
       }()),
     });

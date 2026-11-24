@@ -131,6 +131,7 @@ const SLACK_CARD = /settings\.tina\.prefs\.providerSlack/;
 const TELEGRAM_CARD = /settings\.tina\.prefs\.providerTelegram/;
 const X_CARD = /settings\.tina\.prefs\.providerX/;
 const FEISHU_CARD = /settings\.tina\.prefs\.providerFeishu/;
+const DISCORD_CARD = /settings\.tina\.prefs\.providerDiscord/;
 
 const BASE_HOOK: SlackHookView = {
   enabled: false,
@@ -164,6 +165,16 @@ const BASE_HOOK: SlackHookView = {
     binding: null,
   },
   feishu: {
+    enabled: false,
+    url: '',
+    status: 'disabled',
+    lastError: null,
+    available: false,
+    capabilityPending: false,
+    defaultWorkspace: null,
+    binding: null,
+  },
+  discord: {
     enabled: false,
     url: '',
     status: 'disabled',
@@ -231,10 +242,11 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
 
   // Unit regression (#8481): resolve each rendered provider switch through the
   // production catalog to its own card, rather than accepting the parent group.
-  it.each(['telegram', 'x', 'feishu'])('binds the %s switch to its provider search target', async (provider) => {
+  it.each(['telegram', 'x', 'feishu', 'discord'])('binds the %s switch to its provider search target', async (provider) => {
     ipc.get.mockResolvedValue({ hook: { ...BASE_HOOK,
       x: { ...BASE_HOOK.x, url: 'wss://x.example.test' },
       feishu: { ...BASE_HOOK.feishu, url: 'wss://feishu.example.test' },
+      discord: { ...BASE_HOOK.discord, url: 'wss://telegram-hook.example.test/discord' },
     } });
     render(<HookConnectionsSection />);
     const toggle = await screen.findByRole('switch', { name: `settings.remoteControl.hook.${provider}.toggleAria` });
@@ -858,6 +870,77 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
 
     fireEvent.click(openButton);
     await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('feishu', 'connect'));
+  });
+
+  // 官方 Discord 只能靠关联码关联(私信给机器人或 /bind), 「添加到 Discord」只是添加应用。
+  // 生产入口: 真实 HookConnectionsSection + 状态推送; 可观察结果: 关联码与复制按钮排在动作行之前,
+  // 复制给出 Discord 自己的提示; 关联后收起行显示 Discord 账号, 动作按 binding.actions 渲染。
+  // 端点未下发时整张卡不出现(灰度开关)。tier: unit(jsdom)。
+  it('Discord: 端点下发前不显示; 关联中醒目显示关联码, 关联后显示账号与动作', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    let pushStatus!: (view: SlackHookView) => void;
+    ipc.onStatusChanged.mockImplementation((listener) => { pushStatus = listener; return () => {}; });
+    ipc.get.mockResolvedValue({ hook: BASE_HOOK });
+    render(<HookConnectionsSection />);
+    await screen.findByRole('switch', { name: 'settings.remoteControl.hook.telegram.toggleAria' });
+    expect(document.getElementById('cindy-im-discord')).toBeNull();
+
+    const appId = '100000000000000001';
+    const pendingBinding = {
+      provider: 'discord' as const,
+      state: 'pending' as const,
+      attemptId: 'attempt-d1',
+      bindingId: null,
+      principalId: null,
+      principalName: null,
+      scopeId: appId,
+      scopeName: null,
+      connectUrl: `https://discord.com/oauth2/authorize?client_id=${appId}`,
+      bindCode: 'K7Q4-M2XD',
+      expiresAt: Date.now() + 60_000,
+      reason: null,
+      remediationUrl: null,
+      actions: ['copy_bind_code', 'open_connect_url', 'copy_connect_url', 'cancel'],
+    };
+    const discordView = {
+      enabled: true,
+      url: 'wss://telegram-hook.example.test/discord',
+      status: 'connected' as const,
+      lastError: null,
+      available: true,
+      capabilityPending: false,
+      defaultWorkspace: null,
+      binding: pendingBinding,
+    };
+    await act(async () => pushStatus({ ...BASE_HOOK, discord: discordView }));
+    await expandChannelCard(DISCORD_CARD);
+    const card = within(document.getElementById('cindy-im-discord')!);
+    const addApp = await card.findByRole('button', { name: 'settings.remoteControl.hook.discord.openApp' });
+    const code = card.getByText('K7Q4-M2XD');
+    // 关联码是主路径: 排在「添加到 Discord」等动作之前。
+    expect(code.compareDocumentPosition(addApp) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(card.getByText('settings.remoteControl.hook.discord.bindCode.hint')).toBeTruthy();
+    // 收起行摘要与展开区都给出「把关联码发给机器人」的引导。
+    expect(card.getAllByText('settings.remoteControl.hook.discord.status.pending')).toHaveLength(2);
+    fireEvent.click(card.getByRole('button', { name: 'settings.remoteControl.hook.discord.bindCode.copy' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('K7Q4-M2XD'));
+    expect(toast.success).toHaveBeenCalledWith('settings.remoteControl.hook.discord.bindCode.copied');
+    fireEvent.click(addApp);
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('discord', 'connect'));
+
+    await act(async () => pushStatus({ ...BASE_HOOK, discord: { ...discordView, binding: {
+      ...pendingBinding, state: 'confirmed', attemptId: null, bindingId: 'binding-d1',
+      principalId: '200000000000000002', principalName: 'cindy_user', connectUrl: null, bindCode: null,
+      expiresAt: null, actions: ['revoke', 'open_provider', 'add_to_group'],
+    } } }));
+    expect(card.queryByText('K7Q4-M2XD')).toBeNull();
+    expect(tCalls).toContainEqual({ key: 'settings.remoteControl.hook.discord.status.confirmed', vars: { user: 'cindy_user', bot: '' } });
+    fireEvent.click(card.getByRole('button', { name: 'settings.remoteControl.hook.discord.addToGroup' }));
+    fireEvent.click(card.getByRole('button', { name: 'settings.remoteControl.hook.discord.openBot' }));
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('discord', 'add-to-group'));
+    expect(ipc.openProviderAction).toHaveBeenCalledWith('discord', 'provider');
+    expect(card.getByRole('button', { name: 'settings.remoteControl.hook.discord.unlink' })).toBeTruthy();
   });
 
   it.each([

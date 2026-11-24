@@ -56,7 +56,9 @@ export interface BotCapabilityCallbacks {
     ControlResult<{ groups: TeammateGroupBinding[] }, string>>;
   models?(params: { callerSessionId: string }): Promise<ControlResult<{
     current: AppDefaultModelRoute | null;
-    available: { id: string; route: AppDefaultModelRoute; efforts: string[]; supportsFastMode?: boolean; supportsUltrafastMode?: boolean }[];
+    available: { id: string; route: AppDefaultModelRoute; efforts: string[]; supportsFastMode?: boolean; supportsUltrafastMode?: boolean;
+      /** A plugin engine on this computer: valid only in the teammate's own model chain, never as the application default. */
+      teammateOnly?: true; engine?: string; displayName?: string }[];
   }, string>>;
   setDefaultModel?(params: { callerSessionId: string; id: string; effort?: string; fastMode?: boolean | 'ultrafast' }): Promise<ControlResult<{
     current: AppDefaultModelRoute;
@@ -101,7 +103,8 @@ export interface BotCapabilityCallbacks {
 export type TeammateCapabilityKind = "skill" | "mcp" | "toolset" | "feature";
 
 export interface AppDefaultModelRoute {
-  harness: 'claude' | 'codex' | 'pi'; providerId: string | null;
+  /** `acp` only on teammateOnly choices (this computer's plugin engines). */
+  harness: 'claude' | 'codex' | 'pi' | 'acp'; providerId: string | null;
   model: string; effort: string; fastMode: boolean | 'ultrafast';
 }
 
@@ -294,7 +297,7 @@ export function registerAppDefaultModelTools(
 ): void {
   if (deps.callbacks.models) registry.register({
     name: 'get_app_default_model', category: deps.category ?? 'bots',
-    description: '读取当前用户在应用中选择的默认模型，以及已连接、已启用且引擎可用的型号。修改默认模型前先读此表；查询不会更改设置。available 中的 id 同时绑定型号、来源账号与引擎；不要猜型号或启用用户关闭的型号。伙伴显式配置的模型链可能与此默认值不同。',
+    description: '读取当前用户在应用中选择的默认模型，以及已连接、已启用且引擎可用的型号。修改默认模型前先读此表；查询不会更改设置。available 中的 id 同时绑定型号、来源账号与引擎；不要猜型号或启用用户关闭的型号。伙伴显式配置的模型链可能与此默认值不同。伙伴调用时还会列出这台电脑的插件引擎（teammateOnly: true），只能用于伙伴自己的 modelChain，不能设为应用默认。',
     inputShape: {},
     handler: async () => {
       const callerSessionId = deps.getSessionContext().sessionId;

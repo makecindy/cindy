@@ -1458,29 +1458,56 @@ describe('remote connection pool with a real host', () => {
   });
 
   it('when a release close does not get through, makes room before opening instead of hitting the limit, then closes it', async () => {
-    limits = { perDevice: 2, total: 64 };
-    const pool = new RemoteConnectionPool({ idleMinutes: () => idleMinutes, checkMs: 3_600_000, closeRetryMs: 20 });
-    const a = await start(pool);
-    await ask(a, watch(a), 'hello');
-    await sleep(5);
-    const b = await start(pool);
-    await ask(b, watch(b), 'hello');
-    // 让出 a 时 close 第一次没送到对方。
-    let dropped = false;
-    intercept = (request) => {
-      if (request.op !== 'close' || dropped) return undefined;
-      dropped = true;
-      throw new Error('[DEVICE_LINK_TIMEOUT] link down');
-    };
-    expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
-    expect(host.limitUsage().total).toBe(2);
-    await sleep(5);
-    opens = 0;
-    await start(pool);
-    // 本机仍按 a 占着算：打开前先让了 b，没有白开一次撞上限。
-    expect(opens).toBe(1);
-    // 再发的 close 送到后，对方结束 a。
-    await vi.waitFor(() => expect(host.limitUsage().total).toBe(1));
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const retryRequested = Promise.withResolvers<void>();
+    const deliverRetry = Promise.withResolvers<void>();
+    try {
+      limits = { perDevice: 2, total: 64 };
+      const pool = new RemoteConnectionPool({ idleMinutes: () => idleMinutes, checkMs: 3_600_000, closeRetryMs: 20 });
+      const a = await start(pool);
+      await ask(a, watch(a), 'hello');
+      vi.setSystemTime(Date.now() + 1);
+      const b = await start(pool);
+      await ask(b, watch(b), 'hello');
+      vi.setSystemTime(Date.now() + 1);
+
+      const closeRunIds: unknown[] = [];
+      let usageBeforeOpen: number | undefined;
+      intercept = (request) => {
+        if (request.op === 'open') usageBeforeOpen = host.limitUsage().total;
+        if (request.op !== 'close') return undefined;
+        closeRunIds.push(request.runId);
+        if (closeRunIds.length === 1) throw new Error('[DEVICE_LINK_TIMEOUT] link down');
+        if (request.runId !== closeRunIds[0]) return undefined;
+        // #8097: hold the retry in transit until the new connection has opened.
+        retryRequested.resolve();
+        return deliverRetry.promise.then(() => host.handle(CONTROLLER, request));
+      };
+
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      await retryRequested.promise;
+      expect(pool.occupied()).toBe(2);
+      expect(host.limitUsage().total).toBe(2);
+
+      opens = 0;
+      await start(pool);
+      expect(opens).toBe(1);
+      expect(usageBeforeOpen).toBe(1);
+      expect(closeRunIds).toHaveLength(3);
+      expect(closeRunIds[2]).not.toBe(closeRunIds[0]);
+      expect(pool.occupied()).toBe(2);
+      expect(host.limitUsage().total).toBe(2);
+
+      deliverRetry.resolve();
+      await vi.waitFor(() => {
+        expect(host.limitUsage().total).toBe(1);
+        expect(pool.occupied()).toBe(1);
+      });
+      expect(closeRunIds).toHaveLength(3);
+    } finally {
+      deliverRetry.resolve();
+      vi.useRealTimers();
+    }
   });
 
   // PR #6483 review：连回后补发设置失败只记日志，消息照样在缺设置的 Agent 上执行。

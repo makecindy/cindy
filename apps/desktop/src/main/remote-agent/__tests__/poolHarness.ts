@@ -29,6 +29,9 @@ import { RuntimePluginControlError } from '../../cindy-brain/runtimeControl';
 import { SessionCreationCleanupPendingError } from '@cindy/maker-core';
 
 import { resolveAgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
+import { dbToMakerEngineKind } from '../../../shared/agentKindConversion.js';
+import { applySessionRuntimeOverrideForStart } from '../../maker-ipc/sessionRuntimeControl.js';
+import type { ContextOverflowRolloverDeps } from '../../maker-ipc/contextOverflowRollover.js';
 import { RemoteConnectionPool } from '../controller/connectionPool';
 import { hostRewritesResumeId, startRemoteAgentSession, takeStoppedSharedReconnectOffer, withSharedReconnectHandoff, withSharedReconnectOfferCapture, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
@@ -39,7 +42,7 @@ export function sharedAccountSendTransaction(ports: Pick<MakerSendTransactionDep
   'getSession' | 'captureSharedReconnectRecovery' | 'bootstrapSession' | 'peekPendingHandoff'
   | 'consumePendingHandoff' | 'createDbMessage' | 'reconcileCreateOptsWithDb' | 'readScheduledPermissions'>
   & Partial<Pick<MakerSendTransactionDeps, 'readAutoReviewHistory' | 'onSharedReconnectClaimed'
-    | 'onSharedReconnectFailed' | 'onSharedReconnectFinished'>>) {
+    | 'onSharedReconnectFailed' | 'onSharedReconnectFinished' | 'prepareUnhealthySession'>>) {
   const noop = () => {};
   return createMakerSendTransaction({
     getResolvedMainLocale: () => null,
@@ -87,6 +90,19 @@ const compiledCapture = compileRegisterPart('    captureSharedReconnectRecovery:
   `return ({${source}}).captureSharedReconnectRecovery;`);
 const compiledStopAll = compileRegisterPart('  registerStopSessionBackgroundTasksHandler(createElectronIpcHandlerRegistry(), {',
   '  // 单个后台任务的精确停止', source => source);
+const compiledAccountHandoff = compileRegisterPart('    needsNativeSessionHandoff:', '    classifyCodexHistory:',
+  source => `return ({${source}}).needsNativeSessionHandoff;`);
+
+/** Execute Desktop's real pre-send route projection with the in-memory account runtime. */
+export function sharedAccountHandoffProbe(
+  needsSubscriptionAccountHandoff: NonNullable<ContextOverflowRolloverDeps['needsNativeSessionHandoff']>,
+  groupDeviceId?: string,
+): NonNullable<ContextOverflowRolloverDeps['needsNativeSessionHandoff']> {
+  const bindings = { needsSubscriptionAccountHandoff, applySessionRuntimeOverrideForStart,
+    readProviderGroupBinding: () => groupDeviceId ? { groupDeviceId } : null,
+    dbToMakerEngineKind, remoteBackgroundInvoke: vi.fn() };
+  return new Function(...Object.keys(bindings), compiledAccountHandoff)(...Object.values(bindings));
+}
 
 export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
   getSessionRowSnapshotStrict(): Promise<{ id: string; sdkSessionId?: string | null; clearedAt: number | null }>;

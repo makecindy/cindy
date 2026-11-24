@@ -32,7 +32,7 @@
     "notFound": "Cet appareil ne fait plus partie de votre compte.",
     "deleteDevice": "Supprimer l'appareil",
     "deleteTitle": "Supprimer {{name}} ?",
-    "deleteMessage": "Retirer cet appareil de votre compte et couper l'accès à distance. Ses sessions et fichiers sont conservés. Reconnectez-vous sur cet appareil pour le rajouter.",
+    "deleteMessage": "Retirer cet appareil de votre compte et couper l’accès à distance. Ses sessions et fichiers sont conservés. Touchez « Rejoindre » sur cet appareil pour le réintégrer.",
     "deleteFailed": "Impossible de supprimer l'appareil.",
     "deleteOnline": "Ce serveur ne permet pas encore de retirer des appareils en ligne. Réessayez après la mise à niveau du service.",
     "deleteRejectedWhileOffline": "Impossible de supprimer l'appareil : le serveur l'indique encore en ligne, alors qu'il apparaît hors ligne ici.",

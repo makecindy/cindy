@@ -6,6 +6,7 @@ import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } 
 import WebSocket from 'ws';
 import { CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
 import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
+import { rejoinRemovedDevice } from '../../desktop/src/main/device-link/deviceRejoin.js';
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contract';
 import type { TaskTagRequest } from '@cindy/maker-shared';
@@ -189,6 +190,11 @@ export interface HostDeviceLinkPorts {
    * nothing here changes the Device Link client's behaviour.
    */
   agentNet?: Omit<AgentNetNodePorts, 'enabled' | 'current'>;
+  /**
+   * The official Device Link REST with this Host's account token, for 「重新加入」 (`POST /api/device-link/rejoin`, deviceRejoin.ts).
+   * Absent: `cindy-host remote rejoin` reports that this Host cannot rejoin.
+   */
+  officialDeviceLinkFetch?(path: string, opts: { method: 'POST'; body: Record<string, never>; timeoutMs: number }): Promise<unknown>;
 }
 
 function readGitSafetyWire() {
@@ -835,6 +841,8 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       && settings.readDeviceLinkSettings().remoteControlEnabled && !settings.readDeviceLinkSettings().revokedControllers.includes(peer),
     state: () => ({ enabled: settings.readDeviceLinkSettings().remoteControlEnabled,
       status: client.getStatus(), issue: deps.canRegister() ? issue : 'host-login-required',
+      ...(deps.canRegister() && issue === 'device-removed' && deps.officialDeviceLinkFetch
+        ? { hint: 'This Host was removed from the account. Run cindy-host remote rejoin to bring it back.' } : {}),
       controllers: dispatch.getActiveControllers(),
       ...(agentNet ? { agentNet: { enabled: settings.readDeviceLinkSettings().agentNetEnabled === true, active: agentNet.active(),
         ...(agentNet.active() && compatibilityIssue ? { compatibilityIssue } : {}) } } : {}) }),
@@ -865,6 +873,47 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
         return enabled;
       });
       sync(); return this.state();
+    },
+    /**
+     * 「重新加入」 (`cindy-host remote rejoin`): this Host was removed from the account in Cindy and comes back without signing in
+     * again (the user's decision, 2026-11-23), in the Desktop's order (deviceRejoin.ts): the Device Link registration, then
+     * Agent-Net, then only this Host's own connection. Every outcome comes back as `rejoin` with a hint for the command line,
+     * which does not receive thrown messages from the control channel.
+     */
+    async rejoin() {
+      try {
+        assertCurrent();
+        refuseWhileHeld();
+        if (!deps.canRegister()) throw new Error('Sign in with cindy-host login to register an independent Host device.');
+        const officialFetch = deps.officialDeviceLinkFetch;
+        if (!officialFetch) throw new Error('This Host has no official Device Link service to rejoin.');
+        const { agentNet: agentNetOutcome } = await rejoinRemovedDevice({
+          // This launcher stays on the account's official service (agentNetNode.ts scope).
+          selfHostedRelaySelected: () => false,
+          officialFetch: (path, opts) => officialFetch(path, opts),
+          rejoinAgentNet: async () => (agentNet ? agentNet.rejoin() : 'skipped'),
+          // A refused Agent-Net identity always falls back to the Device Link relay on this launcher (agentNetNode.ts `refusedFor`).
+          agentNetRequired: () => false,
+          // Only the main connection stopped itself on 4410; sync starts it again while remote control is on, and leaves
+          // the connections of tasks shared from other accounts running (start is a no-op for those).
+          restartConnection: () => sync(),
+          // The Host's account may change while the requests are in flight: stop before touching the next one.
+          assertCurrent,
+          warn: (message, error) => log.warn(`${message}: ${error instanceof Error ? error.message : String(error)}`),
+        });
+        return { ...this.state(), rejoin: { result: 'rejoined' as const, agentNet: agentNetOutcome,
+          ...(agentNetOutcome === 'failed'
+            ? { hint: 'Rejoined on Device Link. Agent-Net could not be restored yet; run cindy-host remote rejoin again later.' } : {}) } };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // An older Cindy service has no rejoin endpoint: signing in again is the way back there, as before.
+        if (message === 'DEVICE_REJOIN_UNSUPPORTED') {
+          return { ...this.state(), rejoin: { result: 'unsupported' as const,
+            hint: 'The Cindy service does not support rejoining yet. Sign in again with cindy-host login.' } };
+        }
+        log.warn(`rejoin failed: ${message}`);
+        return { ...this.state(), rejoin: { result: 'failed' as const, hint: `Could not rejoin: ${message}` } };
+      }
     },
     async revoke(deviceId: string) {
       assertCurrent();

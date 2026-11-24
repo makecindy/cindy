@@ -12,7 +12,7 @@
  * 登记只证明小包能来回。经 UDP 发出数据后 4 秒内一个经中继转来的数据报都没收到，而且这期间核心还在反复重发（至少再发
  * 3 次、跨过 1 秒；单个不需要回应的确认包不算），说明这条 UDP 只通登记、不通数据（2026-11-22：VPN 的透明代理接管了
  * 到中继 UDP 端口的流量，登记照常确认，会话数据几个小时一个都没回来）。这时按「不通」处理：两个方向退回 WebSocket，
- * 登记照常发并告诉中继「收不到」，冷却 30 秒、5 分钟、30 分钟后再试 UDP；经 UDP 收到数据后冷却档位清零。
+ * 登记照常发并告诉中继「收不到」，冷却 30 秒、5 分钟、30 分钟后再试 UDP；数据持续双向传通后才清零冷却档位。
  * 本机还收得到、只是发出去的丢了时（对端一直在重发，所以总有数据进来），上面的判断看不出来。另有两条：会话层发往走中转的
  * 对端的请求 60 秒内超时两次（noteStall，本机是发请求的一方）；走中转的连接上本机发出的数据迟迟得不到确认——最近 5 秒
  * 重传了至少 6 个分片、占发出包数的四分之一以上（本机只被控、自己不发请求时也看得到）。都按同样处理。
@@ -55,8 +55,10 @@ const STALL_COUNT = 2;
 const RETRANSMIT_WINDOW_MS = 5_000;
 const RETRANSMIT_MIN_SEGMENTS = 6;
 const RETRANSMIT_MIN_SHARE = 0.25;
-/** 判定不通数据后停用 UDP 的时长，逐次加长；经 UDP 收到数据后回到第一档。 */
+/** 连续故障的冷却时长。恢复观测期间数据已经走 UDP，档位只决定下次故障要等多久。 */
 export const RELAY_UDP_DATA_COOLDOWNS_MS = [30_000, 5 * 60_000, 30 * 60_000] as const;
+
+interface SendCounters { retransmitted: number; sent: number; acknowledgedBytes: number }
 
 export interface RelayUdpOptions {
   sendUdp(to: Address, datagram: Uint8Array): void;
@@ -69,8 +71,8 @@ export interface RelayUdpOptions {
   deliver(relayId: string, datagram: Uint8Array): void;
   /** 把主机名解析成 IPv4 地址；默认用系统 DNS。测试替换它。 */
   resolveHost?(host: string): Promise<string>;
-  /** 走中转的连接上累计重传的分片数与发出的包数（RelaySendCounters）；计数变小时从头算。 */
-  relayedSendCounters?(): { retransmitted: number; sent: number };
+  /** 走中转的连接上累计的重传数、发包数和对端确认的字节数。 */
+  relayedSendCounters?(): SendCounters;
 }
 
 /**
@@ -79,19 +81,21 @@ export interface RelayUdpOptions {
  * 最近 5 秒的中转重传，误把所有中转连接切到 WebSocket）。返回值只增不减。
  */
 export class RelaySendCounters {
-  private readonly last = new WeakMap<object, { retransmitted: number; sent: number; relay: boolean }>();
+  private readonly last = new WeakMap<object, SendCounters & { relay: boolean }>();
   private retransmitted = 0;
   private sent = 0;
+  private acknowledgedBytes = 0;
 
-  sample(connections: Iterable<{ key: object; relay: boolean; retransmitted: number; sent: number }>): { retransmitted: number; sent: number } {
-    for (const connection of connections) {
-      const before = this.last.get(connection.key);
-      this.last.set(connection.key, { retransmitted: connection.retransmitted, sent: connection.sent, relay: connection.relay });
-      if (!before?.relay || !connection.relay) continue;
-      this.retransmitted += Math.max(0, connection.retransmitted - before.retransmitted);
-      this.sent += Math.max(0, connection.sent - before.sent);
+  sample(connections: Iterable<SendCounters & { key: object; relay: boolean }>): SendCounters {
+    for (const { key, relay, retransmitted, sent, acknowledgedBytes } of connections) {
+      const before = this.last.get(key);
+      this.last.set(key, { relay, retransmitted, sent, acknowledgedBytes });
+      if (!before?.relay || !relay) continue;
+      this.retransmitted += Math.max(0, retransmitted - before.retransmitted);
+      this.sent += Math.max(0, sent - before.sent);
+      this.acknowledgedBytes += Math.max(0, acknowledgedBytes - before.acknowledgedBytes);
     }
-    return { retransmitted: this.retransmitted, sent: this.sent };
+    return { retransmitted: this.retransmitted, sent: this.sent, acknowledgedBytes: this.acknowledgedBytes };
   }
 }
 
@@ -134,8 +138,9 @@ export class RelayUdpPath {
   private suspensions = 0;
   /** 走 UDP 期间会话请求超时的时刻（只记最近 STALL_WINDOW_MS 内的）。 */
   private stalls: number[] = [];
-  /** 走 UDP 期间每次 tick 取的重传与发包计数，按时间先后。 */
-  private sendSamples: { at: number; retransmitted: number; sent: number }[] = [];
+  private receivedUdpDatagrams = 0;
+  private healthySince: number | null = null;
+  private readonly sendSamples: (SendCounters & { at: number; received: number })[] = [];
 
   constructor(private readonly options: RelayUdpOptions) {
     void this.resolve();
@@ -163,18 +168,17 @@ export class RelayUdpPath {
   noteStall(): void {
     if (!this.up) return;
     const now = performance.now();
+    this.healthySince = null;
     this.stalls = this.stalls.filter((at) => now - at < STALL_WINDOW_MS);
     this.stalls.push(now);
     if (this.stalls.length >= STALL_COUNT) this.suspend('request-timeouts', now);
   }
 
-  /**
-   * 收到一个经中继转来的数据报（UDP 或中继 WebSocket）：数据能回来，清掉等待。`viaUdp` 时 UDP 确实送到了数据，冷却档位清零。
-   */
+  /** 任一承载送来的数据都结束静默；只有 UDP 数据参与双向恢复判定。 */
   noteInbound(viaUdp: boolean): void {
     this.silentSince = null;
     this.silentResends = 0;
-    if (viaUdp) this.suspensions = 0;
+    if (viaUdp) this.receivedUdpDatagrams++;
   }
 
   /**
@@ -236,6 +240,8 @@ export class RelayUdpPath {
     this.rtt = Math.round(now - sent.at);
     this.unackedSince = oldest;
     this.cookie = cookie;
+    // 重新启用 UDP 后第一笔计数只记基线，不能把 WebSocket 上的进展算进来。
+    if (!wasUp && this.up) this.resetSendWindow();
     // 刚通：马上告诉中继收得到，不等下一次定时登记。中继没认定这个地址（刚换了地址、凭证过期）而给了新凭证：马上带上它再登记，
     // 中继认定后才往这里发。凭证和这次登记带的一样还没认定时不重发，免得来回空转。
     const sameCookie = !!sent.cookie && Buffer.from(sent.cookie).equals(cookie);
@@ -269,6 +275,7 @@ export class RelayUdpPath {
   }
 
   private resetRegistration(): void {
+    this.resetSendWindow();
     this.silentSince = null;
     this.silentResends = 0;
     this.cookie = null;
@@ -298,17 +305,13 @@ export class RelayUdpPath {
       this.resetRegistration();
     }
     if (!current) return;
-    const suspended = now < this.suspendedUntil;
-    if (!suspended && this.silentSince !== null && this.up && now - this.silentSince >= DATA_SILENCE_MS
+    if (this.silentSince !== null && this.up && now - this.silentSince >= DATA_SILENCE_MS
       && this.silentResends >= DATA_SILENCE_MIN_RESENDS && this.silentLastSend - this.silentSince >= DATA_SILENCE_MIN_SPAN_MS) {
       this.suspend('data-silence', now);
       return;
     }
-    if (!suspended && this.up && this.unackedSendsAt(now)) {
-      this.suspend('unacked-sends', now);
-      return;
-    }
-    if (suspended) {
+    if (this.up) this.observeSendWindow(now);
+    if (now < this.suspendedUntil) {
       // 停用期间照常低频登记（收不到），让中转记着本机地址；冷却结束后的第一次 tick 马上登记「收得到」。
       if (now - this.registeredAt >= KEEPALIVE_MS) this.register();
       return;
@@ -327,19 +330,41 @@ export class RelayUdpPath {
    * 走中转的连接上本机发出的数据最近得不到确认：核心一直在重传。这条看的是本机自己的发送，所以本机只是被控、
    * 请求一直进得来（静默判断被清掉）、自己又不发请求（没有超时可报）时也能发现上行坏了。
    */
-  private unackedSendsAt(now: number): boolean {
+  private observeSendWindow(now: number): void {
     const counters = this.options.relayedSendCounters?.();
-    if (!counters) return false;
+    if (!counters) return;
     const last = this.sendSamples.at(-1);
-    // 连接关了计数变小：从这里重新算。
-    if (last && (counters.retransmitted < last.retransmitted || counters.sent < last.sent)) this.sendSamples = [];
-    this.sendSamples.push({ at: now, ...counters });
+    // 休眠、掉线或计数归零后，第一笔只记基线。
+    if (last && (now - last.at >= RETRANSMIT_WINDOW_MS || counters.retransmitted < last.retransmitted
+      || counters.sent < last.sent || counters.acknowledgedBytes < last.acknowledgedBytes)) {
+      this.resetSendWindow();
+    }
+    this.sendSamples.push({ at: now, received: this.receivedUdpDatagrams, ...counters });
     while (this.sendSamples.length > 1 && now - this.sendSamples[1].at >= RETRANSMIT_WINDOW_MS) this.sendSamples.shift();
     const first = this.sendSamples[0];
-    if (now - first.at < RETRANSMIT_WINDOW_MS) return false;
+    if (now - first.at < RETRANSMIT_WINDOW_MS) return;
     const retransmitted = counters.retransmitted - first.retransmitted;
     const sent = counters.sent - first.sent;
-    return retransmitted >= RETRANSMIT_MIN_SEGMENTS && retransmitted >= RETRANSMIT_MIN_SHARE * Math.max(sent, 1);
+    if (retransmitted >= RETRANSMIT_MIN_SEGMENTS && retransmitted >= RETRANSMIT_MIN_SHARE * Math.max(sent, 1)) {
+      this.suspend('unacked-sends', now);
+      return;
+    }
+    if (this.suspensions === 0) return;
+    // 对端的重传也会让本机一直收到 UDP。每个窗口还要看到上行数据确实被确认，
+    // 并持续一整个请求超时观察期，孤立或迟到的确认才不会把反复故障当成恢复。
+    const bidirectionalProgress = this.sentAt > first.at && this.receivedUdpDatagrams > first.received
+      && counters.acknowledgedBytes > first.acknowledgedBytes;
+    if (!bidirectionalProgress) {
+      this.healthySince = null;
+      return;
+    }
+    this.healthySince ??= now;
+    if (now - this.healthySince >= STALL_WINDOW_MS) this.suspensions = 0;
+  }
+
+  private resetSendWindow(): void {
+    this.sendSamples.length = 0;
+    this.healthySince = null;
   }
 
   /** 只通登记、不通数据：停用 UDP，并马上告诉中继收不到，让发给本机的数据报也改走 WebSocket。 */
@@ -351,7 +376,7 @@ export class RelayUdpPath {
     this.silentSince = null;
     this.silentResends = 0;
     this.stalls = [];
-    this.sendSamples = [];
+    this.resetSendWindow();
     this.register();
   }
 

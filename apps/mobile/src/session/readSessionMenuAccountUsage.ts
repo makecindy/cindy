@@ -195,11 +195,16 @@ export async function readSessionMenuAccountUsage(
   if (isPluginEngineSessionKind(session.agentKind)) {
     const result = empty("plugin");
     if (!isPluginEngineProviderId(provider)) return result;
-    const usage = await reader.getPluginEngineUsage?.(provider.slice(PLUGIN_ENGINE_PROVIDER_PREFIX.length));
+    // The task on the controlled computer names itself, so an engine with several accounts reports
+    // the task's own account; a task whose Agent runs elsewhere keeps the engine-level read.
+    const key = provider.slice(PLUGIN_ENGINE_PROVIDER_PREFIX.length);
+    const usage = session.agentDeviceId?.trim()
+      ? await reader.getPluginEngineUsage?.(key)
+      : await reader.getPluginEngineUsage?.(key, session.id);
     if (!usage) return result;
     result.updatedAt = usage.updatedAt;
     result.windows = (usage.windows ?? []).map((row, index) => ({
-      id: String(index), minutes: null, modelLabel: row.label, remainingPercent: row.remainingPercent,
+      id: String(index), minutes: row.windowMinutes ?? null, modelLabel: row.label, remainingPercent: row.remainingPercent,
       resetsAt: row.resetsAt ? row.resetsAt / 1000 : null,
     }));
     result.amounts = (usage.balances ?? []).map(row => ({

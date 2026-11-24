@@ -15,7 +15,7 @@ import { BlueBubblesReceipts, type BlueBubblesState } from './state.js';
 const connections: BlueBubblesIM[] = [];
 afterEach(async () => { await Promise.all(connections.splice(0).map(im => im.dispose())); });
 async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media'], extraChat = false,
-  files?: IMHost['files'], groups = false) {
+  files?: IMHost['files'], groups = false, api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only')) {
   const secrets = new Map<string, string>();
   let saved: BlueBubblesState | null = initialState;
   let callbackUrl = '';
@@ -23,7 +23,6 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
   const chat = { guid: groups ? 'any;+;example-group' : 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
   const otherChat = { guid: groups ? 'any;+;other-group' : 'any;-;other@example.test', participants: [{ address: 'other@example.test', service: 'iMessage' }] };
   const messages = new Map<string, BlueBubblesMessage>();
-  const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only');
   vi.spyOn(api, 'info').mockResolvedValue({ server_version: '1.9.9' });
   vi.spyOn(api, 'chat').mockImplementation(async guid => guid === otherChat.guid ? otherChat : chat);
   vi.spyOn(api, 'history').mockImplementation(async (_chat, after, before) => [...messages.values()].filter(row => row.dateCreated >= after && row.dateCreated <= before));
@@ -1205,6 +1204,58 @@ describe('BlueBubbles local ingress', () => {
     expect(f.im.getStatus().kind).toBe('connected');
     expect(f.received.slice(before).map(event => event.messageId)).toEqual(['later-preparation', 'other-preparation']);
     expect(download.mock.calls.map(([guid]) => guid)).toEqual(['later', 'other']);
+  });
+
+  // Tier 1: Messages can label HEVC bytes as JPEG. Exercise the attachment-only ingress
+  // with a synthetic two-color HEIC, including a bridge returning the original as its preview.
+  it('delivers a verified preview or an original pointer for a mislabeled HEIC without text', async () => {
+    const heic = await fs.readFile(new URL('./fixtures/split-colors.heic', import.meta.url));
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+    const preview = { absPath: '/cache/preview.png', url: 'cindy-media://preview.png', mimeType: 'image/png' };
+    const cached = new Map<string, typeof preview>();
+    const cacheImage: NonNullable<IMHost['media']>['cacheImage'] = async ({ buffer, token }) => {
+      if (!Buffer.from(buffer).equals(png)) throw new UnsupportedInboundMediaError('image');
+      cached.set(token, preview);
+      return preview;
+    };
+    const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', async input => {
+      const url = new URL(String(input));
+      if (url.pathname.includes('/missing-photo/')) return new Response(null, { status: 404 });
+      const converted = url.searchParams.get('original') === 'false' && url.pathname.includes('/converted-photo/');
+      return new Response(new Uint8Array(converted ? png : heic));
+    });
+    const f = await fixture(null, { cacheImage, getCachedImage: async (_, token) => cached.get(token) ?? null, resolveMediaUrl: () => null },
+      false, undefined, false, api);
+    for (const guid of ['converted', 'original-only']) {
+      f.message(guid, { text: null, attachments: [{ guid: guid + '-photo', transferName: 'two.HEIC.jpeg',
+        mimeType: 'image/jpeg', totalBytes: heic.length }] });
+      await f.im.reconcile();
+      const event = f.received.at(-1)!;
+      expect(event.messageId).toBe(guid);
+      expect(event.text).toBe('');
+      expect(event.unsupported).toEqual([{ type: 'original', retrievable: true,
+        label: expect.stringContaining(`message_id=${guid}，attachment_guid=${guid}-photo`) }]);
+      expect(event.attachments).toEqual(guid === 'converted' ? [expect.objectContaining({
+        kind: 'image', mimeType: 'image/png', absPath: '/cache/preview.png',
+      })] : []);
+    }
+    // The bridge loses the source after ingress. A later reply still sees the cached conversion.
+    const download = vi.spyOn(api, 'download').mockRejectedValue(new Error('offline'));
+    const reply = { ...f.received.at(-1)!, imessageReplyGuid: 'converted' };
+    const history = await f.im.contextMedia(reply, []);
+    expect(history.attachments).toEqual([{ ...preview, kind: 'image', originalName: 'two.HEIC.jpeg' }]);
+    expect(history.unavailable).toEqual([]);
+    expect(download).not.toHaveBeenCalled();
+    download.mockRestore();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bb-heic-'));
+    try {
+      const original = await f.im.fetchAttachment(f.chat.guid, 'converted', 'converted-photo', dir);
+      expect(original.complete).toBe(true);
+      expect(await fs.readFile(original.path)).toEqual(heic);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+    f.message('missing', { text: null, attachments: [{ guid: 'missing-photo', transferName: 'lost.jpeg' }] });
+    await f.im.reconcile();
+    expect(f.received.at(-1)?.unsupported).toEqual([{ type: 'unavailable', label: 'lost.jpeg' }]);
   });
 
   // Tier 1, #9250: permanent format rejection must not poison startup catch-up.

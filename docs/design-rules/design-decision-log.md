@@ -1237,3 +1237,15 @@ Toast 仍在它之上：Toast 不拦截操作、只占角落，盖住阻断提�
 明确不包含：Codex（ChatGPT）凭证失效提示可以选「稍后」，不属于阻断提示。主进程发起的授权请求（插件确认、插件安装授权、本机 Agent 确认等）同样会被 `modal-raised` 面板压住，被压住时等到超时按拒绝处理；要不要让它们盖过用户正在用的弹窗，另行决定。
 
 现行规则见 `DESIGN.md` §6 层级刻度。落点：`packages/design-tokens`（`z-modal-blocking`）、`confirm-dialog-provider.tsx`、`AuthContext.tsx`；测试 `confirmDialogBlocking.test.tsx`、`modalBlockingLayer.guard.test.ts`。
+
+## 2026-11-23 · 控件用法回到已有规则：危险操作、选框、下拉尺寸、恢复默认（主人裁决，组件库盘点 PR A）
+
+组件库盘点发现四类控件大多是没跟上已有规则，不是缺规则。主人 2026-11-23 定：盘点里「需要主人定的事」全部按建议。本条记下其中落到现行规则的部分。
+
+- **#6 选框**：手画方框和手画圆形选择圈换成共享 `Checkbox` 后，选中色从 CTA 色或专用色变成文字色，14px 变 16px，接受（B-10 已定 Checkbox 是唯一样式）。登录同意框有专门的读屏设计，保留。菜单里的打勾不算选框，走 `DropdownMenuCheckboxItem`；侧栏机器切换菜单保留已批准的右侧勾选位（`indicator="none"`）。
+- **#7 行内下拉**：给 `Select` 加 `size="inline"`（24px、无边框、跟随文字颜色），用于插件 UI 贡献位、运行位置行、伙伴设备选择；没有选强制 32px，因为这几处嵌在一行文字里，32px 会撑高整行。
+- **#10 恢复默认**：设置页内的页面/分组级恢复默认统一成 `ResetGroupButton`（secondary sm + 图标 + 文字）；输入框浮层里的下划线文字链接保留（空间小），下拉列表里的「恢复默认」选项和不可恢复的用量清零不算恢复默认按钮。
+- **#11 清理源码**：Cindy Make「清理源码」的 `clear-source` 会删除 Cindy 管理的源码目录、它的 worktree 和尚未打包的修改（`main/cindy-make/sourcePreparation.ts`），属于不可恢复操作，按钮用 `tone="danger"`，不换成还原图标。
+- **解绑**：按实际效果判断。个人微信解绑会删除本机凭证并清理未完成的执行，确认按钮标红；飞书、Telegram、X、Slack workspace 解绑只解除这台电脑的绑定、可以重新绑定，插件作品库「解除自定义位置」不删数据，保持默认。
+
+现行规则见 `DESIGN.md` §4 Desktop settings controls、§4 Select & Dropdown。

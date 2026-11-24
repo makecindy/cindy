@@ -78,7 +78,8 @@ export default {
     await message.hover();
     await message.getByRole('button', { name: await ui.t('chat.messageActionBar.moreActions'), exact: true }).click();
     await page.getByRole('menuitem', { name: await ui.t('chat.shareImage.entry'), exact: true }).click();
-    const bar = page.getByRole('checkbox', { name: await ui.t('chat.shareImage.selectAll'), exact: true }).locator('..');
+    // The select-all box sits in a label inside the bar; measure the bar itself.
+    const bar = page.getByRole('checkbox', { name: await ui.t('chat.shareImage.selectAll'), exact: true }).locator('xpath=ancestor::div[1]');
     const during = await bounds(bar);
     await ui.capture('sharing');
     assert.deepEqual(during, before, 'image sharing stays aligned with the composer');

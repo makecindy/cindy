@@ -7,22 +7,25 @@
  *
  * 与普通供应商一致的部分：重命名(只在这台电脑上的显示名)、在模型选择器中隐藏、停用、逐模型开关、
  * 「允许被远程调用」与分享入口、账号用量。不同的部分照实呈现：登录和连接由插件自己管理(详情给
- * 「打开插件」，没有删除，卸载在插件页)；模型由引擎自己上报，打开详情时请插件重新上报一次(主进程
+ * 「打开插件」，更多菜单可卸载提供它的插件)；模型由引擎自己上报，打开详情时请插件重新上报一次(主进程
  * 按插件冷却)；不参与拖动排序、供应商组和引擎切换。
  */
-import { Eye, EyeOff, MoreHorizontal, Pencil, Power, RotateCcw } from 'lucide-react';
+import { Eye, EyeOff, MoreHorizontal, Pencil, Power, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
 
+import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { useUninstallPlugin } from '@/features/plugin/lib/useUninstallPlugin';
+import { findInstalledGhostByInstanceId } from '../../../shared/pluginIdentity';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { QuotaHoverCard } from '@/components/status/QuotaHoverCard';
 import { pluginEngineUsageAccount } from '@/components/status/pluginEngineUsageAccount';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -41,6 +44,7 @@ import {
 } from '../../../shared/pluginEngines';
 import { providersSettings } from './ProvidersSection.settings-search';
 import { SettingsTextInput } from './SettingsTextInput';
+import { SubscriptionAccountsSection } from './SubscriptionAccountsSection';
 
 const AVATAR_STYLE = {
   backgroundColor: 'var(--settings-integration-avatar-bg)',
@@ -132,7 +136,7 @@ export function PluginTag({ size }: { size: 'row' | 'detail' }) {
 }
 
 function engineReady(engine: PluginEngineView): boolean {
-  return engine.availability.state !== 'unavailable';
+  return engine.availability.state === 'available';
 }
 
 /** 左栏里由插件提供的供应商：与本机供应商同一行式，接在它们下面，不参与拖动排序。 */
@@ -277,9 +281,10 @@ function RemoteAccessRow({
 
 /**
  * 引擎账号的用量：打开详情和窗口重新获得焦点时读一次(与任务里的用量标签共用一分钟内的读取)，
- * 读不到或插件没有数据时整块不出现。
+ * 读不到或插件没有数据时整块不出现。`deviceId` 为 null 读这台电脑；自己其他电脑开放的引擎
+ * (OwnRemotePluginEngines)传那台电脑，经既有只读的 `maker:get-plugin-engine-usage` 读那台电脑的账号。
  */
-function EngineUsage({ engine }: { engine: PluginEngineView }) {
+export function PluginEngineUsage({ deviceId, engineKey }: { deviceId: string | null; engineKey: string }) {
   const { t, i18n } = useTranslation();
   const [reading, setReading] = useState<{ usage: GhostHarnessUsage; now: number } | null>(null);
   useEffect(() => {
@@ -287,7 +292,7 @@ function EngineUsage({ engine }: { engine: PluginEngineView }) {
     let active = true;
     const read = () => {
       if (document.hidden) return;
-      void readPluginEngineUsage(owner, null, engine.key).result.then((usage) => {
+      void readPluginEngineUsage(owner, deviceId, engineKey).result.then((usage) => {
         if (!active || !isDataOwnerGenerationCurrent(owner)) return;
         setReading(usage ? { usage, now: Date.now() } : null);
       });
@@ -298,7 +303,7 @@ function EngineUsage({ engine }: { engine: PluginEngineView }) {
       active = false;
       window.removeEventListener('focus', read);
     };
-  }, [engine.key]);
+  }, [deviceId, engineKey]);
   if (!reading) return null;
   return (
     <div data-testid="provider-usage-module" className="shrink-0 border-t px-1 py-2" style={DIVIDER_STYLE}>
@@ -420,8 +425,18 @@ export function PluginEngineProviderDetail({
   const rename = usePluginEngineRename();
   const visibilityError = t('settings.providers.models.visibilityWriteFailed');
   const accessError = t('settings.providers.models.accessWriteFailed');
+  const uninstallPlugin = useUninstallPlugin();
+  const uninstallProviderPlugin = () => {
+    const ghost = findInstalledGhostByInstanceId(readInstalledGhostsSnapshot(), engine.ghostId);
+    if (!ghost) {
+      toast.error(t('settings.ghosts.market.errors.stateChanged'));
+      return;
+    }
+    const marketId = ghost.publishingSource?.kind === 'public-market' ? ghost.publishingSource.pluginId : undefined;
+    void uninstallPlugin(ghost, ghost.manifest.name, marketId);
+  };
   const openPlugin = () => navigate(`/settings?tab=ghosts&ghost=${encodeURIComponent(engine.ghostId)}`);
-  const unavailable = !engine.suspended && !engineReady(engine);
+  const unavailable = !engine.suspended && engine.availability.state === 'unavailable';
   // 与模型选择器同一时机：打开时请插件重新上报模型(主进程按插件冷却)，新列表随推送到达。
   useEffect(() => {
     requestPluginEnginesRefresh(engine.ghostId);
@@ -432,7 +447,7 @@ export function PluginEngineProviderDetail({
       ? 'newChat.pluginEngines.unavailable'
       : engine.hidden
         ? 'settings.providers.pill.hidden'
-        : 'settings.providers.remote.statusReady';
+        : engineReady(engine) ? 'settings.providers.remote.statusReady' : 'settings.providers.wizard.engineState.unknown';
   return (
     <div data-testid="plugin-engine-provider-detail" className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 px-5 py-4">
@@ -516,6 +531,11 @@ export function PluginEngineProviderDetail({
                   <Power size={18} className="mr-2.5" />
                   {t(engine.suspended ? 'settings.providers.menu.enableProvider' : 'settings.providers.menu.disableProvider')}
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="danger" onSelect={uninstallProviderPlugin}>
+                  <Trash2 size={18} className="mr-2.5" />
+                  {t('settings.ghosts.detail.dangerTitle')}
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -584,7 +604,14 @@ export function PluginEngineProviderDetail({
             onManageShare={onManageShare}
           />
         )}
-        {!engine.suspended && engine.reportsUsage && <EngineUsage key={`usage:${engine.key}`} engine={engine} />}
+        {/* Accounts (2026-11-23): the same account section as built-in providers, each account with its
+            own usage; an engine without account support keeps its single usage card. */}
+        {!engine.suspended && engine.accounts && (
+          <SubscriptionAccountsSection key={`accounts:${engine.providerId}`} providerId={engine.providerId} providerName={engine.name} />
+        )}
+        {!engine.suspended && !engine.accounts && engine.reportsUsage && (
+          <PluginEngineUsage key={`usage:${engine.key}`} deviceId={null} engineKey={engine.key} />
+        )}
         {!engine.suspended && <EngineModels engine={engine} />}
       </div>
     </div>

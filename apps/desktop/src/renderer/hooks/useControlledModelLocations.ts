@@ -6,6 +6,7 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts
 import { extractIpcError } from '@/utils/ipcError';
 import { evictDeviceProviders } from './useDeviceProviders';
 import { evictDeviceCapabilities } from './useAgentCapabilities';
+import { evictControlledPluginEngines, evictRemotePluginEngines, refreshControlledPluginEngines } from './usePluginEngines';
 import { refreshControlledAvailableAgents } from './useAvailableAgents';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 import { invalidateControlledCatalogRoutes, refreshDiscoveredCatalogRoutes } from '@/lib/remoteCatalogSnapshot';
@@ -34,6 +35,7 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
     const invalidate = (catalogChanged: boolean) => {
       revision++;
       invalidateControlledCatalogRoutes(deviceId, catalogChanged);
+      evictControlledPluginEngines(deviceId);
       refreshControlledAvailableAgents(deviceId);
       setSnapshot(current => current?.deviceId === deviceId && current.owner === owner
         ? { ...current, locations: [] } : null);
@@ -77,6 +79,7 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
         sourceIds = new Set(locations.map(location => location.agentDeviceId));
         setSnapshot({ deviceId, owner, locations });
         refreshDiscoveredCatalogRoutes(deviceId);
+        refreshControlledPluginEngines(deviceId, sourceIds);
       } catch (error) {
         if (!current()) return;
         const code = extractIpcError(error)?.code;
@@ -132,6 +135,7 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
           if (route) {
             evictDeviceProviders(route);
             evictDeviceCapabilities(route);
+            evictRemotePluginEngines(route);
           }
         }
         return;

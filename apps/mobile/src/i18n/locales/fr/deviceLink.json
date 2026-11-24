@@ -35,7 +35,17 @@
   "retryAccess": "Réessayer l'accès",
   "recheck": "Vérifier à nouveau",
   "deviceRemovedTitle": "Appareil retiré",
-  "deviceRemovedHint": "Déconnectez-vous puis reconnectez-vous pour réintégrer la liste des appareils.",
+  "deviceRemovedHint": "Ce téléphone a été retiré de votre compte. Touchez « Rejoindre » pour le réintégrer.",
+  "rejoin": {
+    "action": "Rejoindre",
+    "busy": "Réintégration en cours",
+    "doneTitle": "Téléphone réintégré",
+    "agentNetUnavailable": "Le service Agent-Net ne prend pas encore en charge la réintégration : ce téléphone se connecte sans Agent-Net pour le moment.",
+    "failedTitle": "Réintégration impossible",
+    "failed": "Vérifiez votre réseau et réessayez.",
+    "unsupported": "Le service ne prend pas encore en charge la réintégration. Déconnectez-vous puis reconnectez-vous.",
+    "agentNetUnsupported": "Le service Agent-Net ne prend pas encore en charge la réintégration. Désactivez « Connexions chiffrées uniquement » pour réintégrer ce téléphone sans Agent-Net."
+  },
   "authFailedTitle": "Connexion expirée",
   "authFailedHint": "Votre connexion a expiré. Déconnectez-vous puis reconnectez-vous.",
   "replacedTitle": "Connexion remplacée",

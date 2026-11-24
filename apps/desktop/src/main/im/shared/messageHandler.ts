@@ -588,7 +588,11 @@ export function createMessageHandler(
         event.delivery.awaitPersistence();
         const dispatch = await turnRunner.dispatchAgentTurn({
           ...turnArgs, queueMode: 'external',
-          beforeProviderStart: async () => { event.assertCurrent?.(); event.delivery!.awaitPersistence(); },
+          beforeProviderStart: async () => {
+            event.assertCurrent?.();
+            event.delivery!.awaitPersistence();
+            if (event.delivery!.isCancelled?.()) throw new Error('IM_INPUT_CANCELLED');
+          },
         });
         if (dispatch.kind === 'busy') event.delivery.defer();
         else if (dispatch.kind === 'rejected') {
@@ -609,6 +613,7 @@ export function createMessageHandler(
         await turnRunner.runAgentTurn(turnArgs);
       }
     } catch (err) {
+      if (event.delivery?.isCancelled?.()) return;
       try { event.assertCurrent?.(); }
       catch {
         const reactionId = await handedOverAck;
