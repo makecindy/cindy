@@ -17,6 +17,7 @@ export function useLoginItemSetting() {
   const refresh = useCallback(async () => {
     if (saving.current) return;
     const current = ++generation.current;
+    setBusy(true);
     try {
       const next = await window.electronAPI.windowBehavior.getLoginItem();
       if (mounted.current && generation.current === current) {

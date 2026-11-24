@@ -157,9 +157,17 @@ describe('WindowBehaviorSection login startup', () => {
     render(<WindowBehaviorSection />);
     const toggle = screen.getByRole('switch', { name: label });
     await waitFor(() => expect(toggle.hasAttribute('disabled')).toBe(false));
-    api.getLoginItem.mockResolvedValue({ available: true, enabled: true, requiresApproval: false });
+    // macOS rejects a write during its native status read. Keep the row stable while locked.
+    let finish!: (state: LoginItemState) => void;
+    api.getLoginItem.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     fireEvent.focus(window);
+    expect(toggle.hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByText('settings.windowBehavior.loginItem.loading')).toBeNull();
+    fireEvent.click(toggle);
+    expect(api.setLoginItem).not.toHaveBeenCalled();
+    await act(async () => finish({ available: true, enabled: true, requiresApproval: false }));
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+    expect(toggle.hasAttribute('disabled')).toBe(false);
   });
 
   it('shows read failure instead of presenting an editable default', async () => {
