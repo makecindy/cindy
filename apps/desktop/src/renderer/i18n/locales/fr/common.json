@@ -15259,6 +15259,7 @@
       "unavailable": "La saisie automatique n'est pas disponible dans l'application actuelle. Copiez la transcription et saisissez-la manuellement.",
       "unconfirmed": "Impossible de confirmer la réussite de la saisie automatique. Copiez la transcription si nécessaire.",
       "permission": "L'autorisation d'accessibilité est requise pour saisir le texte dicté dans l'application actuelle. Accordez l'autorisation, puis réessayez.",
+      "appNotAllowed": "{{app}} n’est pas autorisé à contrôler cette app, le texte n’a donc pas été saisi. Ajoutez cette app pour {{app}} dans « System & App Protection Override », ou copiez le texte et collez-le vous-même.",
       "failed": "Échec de la saisie automatique. Copiez la transcription et saisissez-la manuellement."
     },
     "permissionPrompts": {
@@ -19057,7 +19058,7 @@
       "expired": "Transfert de saisie terminé après une attente trop longue."
     },
     "failure": {
-      "permission": "Cindy ne peut pas lire l’interface de ce Mac. Vérifiez l’autorisation de contrôle de la copie de Cindy en cours d’exécution. Sous macOS 27.3 ou ultérieur, l’autorisation de contrôle se trouve dans « System & App Protection Override ». Sur les versions antérieures, ouvrez Accessibilité.",
+      "permission": "Cindy ne peut pas lire l’interface de ce Mac. Vérifiez l’autorisation de contrôle de la copie de Cindy en cours d’exécution. Sous macOS 27.3 ou ultérieur, l’autorisation de contrôle se trouve dans « System & App Protection Override ». Sur les versions antérieures, ouvrez Accessibilité. Si Cindy ne peut contrôler que certaines apps, ajoutez aussi celle-ci.",
       "target_gone": "La fenêtre cible a été fermée.",
       "unreadable": "Cet écran ne peut pas être lu. Vous pouvez terminer sur l'ordinateur hôte, puis rendre la main à l'Agent.",
       "action_failed": "Cette action n'a pas eu d'effet. Vérifiez l'écran et réessayez.",
@@ -23118,6 +23119,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "Dans « System & App Protection Override », cliquez sur ⓘ à côté de {{app}}. Si l’app ne figure pas dans la liste, ajoutez la copie en cours d’exécution avec +.",
-    "review": "$t(macControlPermission.selectApp)\nSi l’option est proposée, vous pouvez limiter le contrôle aux apps de votre choix. Le contrôle intégral donne accès à toutes les apps et données. Si vous acceptez, lisez et confirmez chaque élément, puis autorisez l’accès en bas de la fenêtre."
+    "review": "$t(macControlPermission.selectApp)\nSi l’option est proposée, vous pouvez limiter le contrôle aux apps de votre choix. Le contrôle intégral donne accès à toutes les apps et données. Si vous acceptez, lisez et confirmez chaque élément, puis autorisez l’accès en bas de la fenêtre.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nLe clavier et la souris à distance agissent sur tout le Mac et nécessitent donc le contrôle du Mac entier : lors de l’ajout avec +, choisissez « Override System Protections » ; si l’app figure déjà dans la liste, activez « Control Your Entire Mac and All Apps » sous ⓘ. Si seules certaines apps sont autorisées, macOS bloque toute saisie clavier et souris à distance. Vérifiez l’accès indiqué par macOS avant d’autoriser.",
+    "chosenAppsOnly": "{{app}} ne peut contrôler que les apps choisies : macOS bloque donc toute saisie clavier et souris à distance. Pour le contrôle à distance, cliquez sur ⓘ à côté de {{app}} dans « System & App Protection Override » et activez « Control Your Entire Mac and All Apps »."
   }
 }

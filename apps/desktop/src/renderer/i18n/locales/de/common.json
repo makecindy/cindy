@@ -15135,6 +15135,7 @@
       "unavailable": "Automatische Eingabe ist in der aktuellen App nicht verfügbar. Kopiere das Transkript und gib es manuell ein.",
       "unconfirmed": "Es konnte nicht bestätigt werden, ob die automatische Eingabe erfolgreich war. Kopiere bei Bedarf das Transkript.",
       "permission": "Für die Spracheingabe in der aktuellen App ist die Bedienungshilfen-Berechtigung erforderlich. Erteile sie und versuche es erneut.",
+      "appNotAllowed": "{{app}} darf diese App nicht steuern, daher wurde der Text nicht eingegeben. Füge die App in „System & App Protection Override“ für {{app}} hinzu oder kopiere den Text und füge ihn selbst ein.",
       "failed": "Automatische Eingabe fehlgeschlagen. Kopiere das Transkript und gib es manuell ein."
     },
     "permissionPrompts": {
@@ -18888,7 +18889,7 @@
       "expired": "Eingabeübergabe wegen zu langer Wartezeit beendet."
     },
     "failure": {
-      "permission": "Cindy kann die Oberfläche auf diesem Mac nicht lesen. Prüfe die Steuerungsberechtigung für die laufende Cindy-App. Die Steuerungsberechtigung findest du ab macOS 27.3 unter „System & App Protection Override“, auf älteren Versionen unter „Bedienungshilfen“.",
+      "permission": "Cindy kann die Oberfläche auf diesem Mac nicht lesen. Prüfe die Steuerungsberechtigung für die laufende Cindy-App. Die Steuerungsberechtigung findest du ab macOS 27.3 unter „System & App Protection Override“, auf älteren Versionen unter „Bedienungshilfen“. Darf Cindy nur ausgewählte Apps steuern, füge auch diese App hinzu.",
       "target_gone": "Das Zielfenster wurde geschlossen.",
       "unreadable": "Dieser Bildschirm kann nicht gelesen werden. Du kannst den Schritt auf dem Host-Computer abschließen und dann an den Agent zurückgeben.",
       "action_failed": "Diese Aktion hatte keine Wirkung. Prüfe den Bildschirm und versuche es erneut.",
@@ -22903,6 +22904,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "Wähle in „System & App Protection Override“ {{app}} und klicke rechts auf ⓘ. Fehlt die App, füge die laufende Kopie mit + hinzu.",
-    "review": "$t(macControlPermission.selectApp)\nFalls angeboten, lässt sich die Kontrolle auf ausgewählte Apps beschränken. Vollständige Kontrolle erlaubt Zugriff auf alle Apps und Daten. Wenn du zustimmst, lies und bestätige jeden Punkt und erlaube den Zugriff unten im Fenster."
+    "review": "$t(macControlPermission.selectApp)\nFalls angeboten, lässt sich die Kontrolle auf ausgewählte Apps beschränken. Vollständige Kontrolle erlaubt Zugriff auf alle Apps und Daten. Wenn du zustimmst, lies und bestätige jeden Punkt und erlaube den Zugriff unten im Fenster.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nTastatur und Maus aus der Ferne wirken auf den ganzen Mac und brauchen deshalb die Kontrolle über den ganzen Mac: Wähle beim Hinzufügen mit + „Override System Protections“; ist die App schon aufgeführt, aktiviere unter ⓘ „Control Your Entire Mac and All Apps“. Sind nur ausgewählte Apps erlaubt, blockiert macOS jede Tastatur- und Mauseingabe aus der Ferne. Prüfe vor dem Erlauben den Zugriff, den macOS auflistet.",
+    "chosenAppsOnly": "{{app}} darf nur die ausgewählten Apps steuern, daher blockiert macOS jede Tastatur- und Mauseingabe aus der Ferne. Für die Fernsteuerung klicke in „System & App Protection Override“ neben {{app}} auf ⓘ und aktiviere „Control Your Entire Mac and All Apps“."
   }
 }

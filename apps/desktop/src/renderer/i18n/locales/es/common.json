@@ -15259,6 +15259,7 @@
       "unavailable": "La inserción automática no está disponible en la aplicación actual. Copia la transcripción e introdúcela manualmente.",
       "unconfirmed": "No se pudo confirmar si la inserción automática se completó. Copia la transcripción si lo necesitas.",
       "permission": "Se requiere permiso de accesibilidad para insertar la entrada de voz en la aplicación actual. Concede el permiso y vuelve a intentarlo.",
+      "appNotAllowed": "{{app}} no tiene permiso para controlar esta app, así que no se insertó el texto. Añade esta app para {{app}} en «System & App Protection Override», o copia el texto y pégalo tú.",
       "failed": "Falló la inserción automática. Copia la transcripción e introdúcela manualmente."
     },
     "permissionPrompts": {
@@ -19057,7 +19058,7 @@
       "expired": "La entrada manual finalizó tras esperar demasiado."
     },
     "failure": {
-      "permission": "Cindy no puede leer la interfaz de este Mac. Comprueba el permiso de control de la copia de Cindy que está en ejecución. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
+      "permission": "Cindy no puede leer la interfaz de este Mac. Comprueba el permiso de control de la copia de Cindy que está en ejecución. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad. Si Cindy solo puede controlar algunas apps, añade también esta.",
       "target_gone": "La ventana de destino se cerró.",
       "unreadable": "No se puede leer esta pantalla. Completa el paso en la computadora anfitriona y devuelve el control al Agent.",
       "action_failed": "Esa acción no surtió efecto. Comprueba la pantalla y vuelve a intentarlo.",
@@ -23118,6 +23119,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "En «System & App Protection Override», pulsa ⓘ junto a {{app}}. Si no aparece, añade la app en ejecución con +.",
-    "review": "$t(macControlPermission.selectApp)\nSi se ofrece, puedes limitar el control a las apps que elijas. El control total permite acceder a todas las apps y datos. Si estás de acuerdo, lee y confirma cada punto y permite el acceso al final de la ventana."
+    "review": "$t(macControlPermission.selectApp)\nSi se ofrece, puedes limitar el control a las apps que elijas. El control total permite acceder a todas las apps y datos. Si estás de acuerdo, lee y confirma cada punto y permite el acceso al final de la ventana.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nEl teclado y el ratón remotos actúan en todo el Mac, por lo que necesitan controlar el Mac completo: al añadirla con +, elige «Override System Protections»; si la app ya aparece, activa «Control Your Entire Mac and All Apps» en ⓘ. Si solo se permiten algunas apps, macOS bloquea toda entrada remota de teclado y ratón. Revisa el acceso que indica macOS antes de permitirlo.",
+    "chosenAppsOnly": "{{app}} solo puede controlar las apps que elegiste, así que macOS bloquea toda entrada remota de teclado y ratón. Para el control remoto, pulsa ⓘ junto a {{app}} en «System & App Protection Override» y activa «Control Your Entire Mac and All Apps»."
   }
 }
