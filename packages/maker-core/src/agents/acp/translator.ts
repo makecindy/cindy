@@ -21,6 +21,10 @@
 
 import { isDeepStrictEqual } from 'node:util';
 import { createTwoFilesPatch } from 'diff';
+import {
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+} from '@cindy/maker-shared/error-redaction';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { AgentEvent } from '../../types/events.js';
 import {
@@ -229,13 +233,16 @@ export class AcpUpdateTranslator {
     const result = this.lastText;
     this.lastText = '';
     if ('error' in outcome) {
+      const reason =
+        outcome.reason ??
+        (isProviderSafetyRefusalError(outcome.error) ? PROVIDER_SAFETY_REFUSAL_REASON : undefined);
       events.push({
         type: 'error',
         data: {
           ...(outcome.signals ?? {}),
           message: outcome.error,
           isTerminal: true,
-          ...(outcome.reason ? { reason: outcome.reason } : {}),
+          ...(reason ? { reason } : {}),
         },
       });
       return events;

@@ -92,6 +92,10 @@ import {
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
 import {
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+} from '@cindy/maker-shared/error-redaction';
+import {
   connectedProvidersForAgent,
   EFFORT_VALUES,
   providerOffersModel,
@@ -2889,10 +2893,15 @@ function CCAgentSessionContent({
   // 模型组(model-groups.md §6.1)：经路线建的本机任务撞了配额，横幅多给一个「换到下一个来源继续」。
   // 只在撞配额的横幅挂着时问一次；点了走输入框里选择器同一条换模型路径，换成了再走横幅原有的重试。
   const sessionModelPickRef = useRef<SessionModelPick | null>(null);
+  const isLiveSafetyRefusalError =
+    !!error &&
+    (errorReason === PROVIDER_SAFETY_REFUSAL_REASON ||
+      isProviderSafetyRefusalError(error, errorReason));
   const modelGroupSwitchOffer = useModelGroupSwitchOffer(
     sessionId,
-    !readOnly && !botChatIdentity && !!error && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
-      && (!!usageLimitWait || usageLimitRecovery?.isAccountUsageLimit === true || isQuotaExhaustedErrorMessage(error) || isOverloadErrorMessage(error)),
+    !readOnly && !botChatIdentity && !!error && !isLiveSafetyRefusalError
+      && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
+      && (!!usageLimitWait || usageLimitRecovery?.isAccountUsageLimit === true || isQuotaExhaustedErrorMessage(error) || isOverloadErrorMessage(error, undefined, errorReason)),
     errorPersistId ?? error,
     // 用户自己换过模型或来源后，旧提议作废，按现在的任务重新问。
     `${session?.agentKind ?? ''}\u0000${session?.providerId ?? ''}\u0000${session?.model ?? ''}`,
