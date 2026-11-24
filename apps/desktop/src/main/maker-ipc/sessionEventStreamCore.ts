@@ -40,6 +40,7 @@ export function persistSessionStreamEventCore(
   } = deps.persistence;
   const { broadcastSubagentRunsChanged } = deps;
   const { event, eventAgentMeta } = prepared;
+  const localClaude = event.source === 'claude-code' && !session.remoteHostId;
   let persistId: string | undefined;
   let resolvedContent: string | undefined;
   let persistedOnly = false;
@@ -88,6 +89,7 @@ export function persistSessionStreamEventCore(
       },
       eventAgentMeta,
       event.turnScope,
+      localClaude,
     );
     // Pi message_end carries the authoritative whole assistant message. Commit
     // its calibrated block now: agent_settled may arrive much later (or never),
@@ -110,7 +112,9 @@ export function persistSessionStreamEventCore(
     const data = event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown; acpInputPatch?: unknown };
     const acpTool = session.agentKind === 'acp';
     persistedOnly = acpTool && data.acpInputPatch === true;
-    if (!persistedOnly && event.turnScope !== 'background') flushAssistantBlock(session.id, eventAgentMeta);
+    if (!persistedOnly && event.turnScope !== 'background') {
+      flushAssistantBlock(session.id, eventAgentMeta, localClaude ? eventAgentMeta?.parentUuid ?? null : undefined);
+    }
     persistId = onToolUseEvent(
       session.id,
       data,

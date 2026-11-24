@@ -3130,6 +3130,62 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
 });
 
 describe('stale-idle assistant late final identity', () => {
+  // #1743, unit. The SDK interleaves root deltas with child envelopes. Existing
+  // stale-idle coverage used one stream, so it missed a child rewriting the root row.
+  it('keeps local Claude text and late snapshots with their SDK parents', async () => {
+    const root = { requestId: 'msg_root' };
+    const child = { requestId: 'msg_child', parentUuid: 'toolu_child' };
+    const other = { requestId: 'msg_other', parentUuid: 'toolu_other' };
+    const delta = (text: string, meta: typeof root) =>
+      onAssistantTextEvent(SESSION, { text }, meta, 'turn', true);
+    const final = (text: string, meta: typeof root) =>
+      onAssistantTextEvent(SESSION, { text, isFinal: true }, meta, 'turn', true);
+
+    const rootId = delta('root draft', root);
+    const childId = final('child reply', child);
+    const otherId = delta('other draft', other);
+    sealAssistantBlockForLateFinal(SESSION);
+    resetTurnPersistState(SESSION);
+
+    expect(final('root draft complete', root)).toBe(rootId);
+    expect(final('other draft complete', other)).toBe(otherId);
+    await drainPersistQueue();
+    expect(final('root draft complete', root)).toBe(rootId);
+    expect(updateMessageContent).toHaveBeenCalledTimes(2);
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION, rootId, 'root draft complete', undefined, expect.anything(),
+    );
+
+    noteTurnStarted(SESSION);
+    const next = { requestId: 'msg_next', uuid: 'next-assistant' };
+    const nextId = delta('root draft', next);
+    expect(nextId).not.toBe(rootId);
+    expect(final('root draft complete', next)).toBe(nextId);
+    flushAssistantBlock(SESSION);
+    await drainPersistQueue();
+    const rows = vi.mocked(createMessage).mock.calls.map(([, row]) => row);
+    expect(rows).toHaveLength(4);
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ clientId: rootId, content: 'root draft', agentMeta: root }),
+      expect.objectContaining({ clientId: childId, content: 'child reply', agentMeta: child }),
+      expect.objectContaining({ clientId: otherId, content: 'other draft', agentMeta: other }),
+      expect.objectContaining({ content: 'root draft complete', agentMeta: next }),
+    ]));
+  });
+
+  it('does not borrow a child parent for local Claude root text without SDK metadata', async () => {
+    const child = { requestId: 'msg_child', parentUuid: 'toolu_child' };
+    const rootId = onAssistantTextEvent(SESSION, { text: 'root draft' }, null, 'turn', true);
+    noteAgentMeta(SESSION, child);
+    flushAssistantBlock(SESSION, child, child.parentUuid);
+    expect(getSessionTextSnapshot(SESSION)?.persistId).toBe(rootId);
+    sealAssistantBlockForLateFinal(SESSION);
+    await drainPersistQueue();
+    expect(createMessage).toHaveBeenCalledWith(SESSION, expect.objectContaining({
+      clientId: rootId, content: 'root draft', agentMeta: null,
+    }), expect.anything());
+  });
+
   it('reuses the sealed row for the same SDK request after per-turn reset', async () => {
     const meta = { requestId: 'req-stale-idle', uuid: 'assistant-stale-idle' };
     const persistId = onAssistantTextEvent(
