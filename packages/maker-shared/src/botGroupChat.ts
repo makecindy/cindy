@@ -700,6 +700,8 @@ export interface BotGroupSummary {
 }
 
 export interface BotGroupDetail extends BotGroupSummary {
+  /** Timeline is readable. Retry incomplete execution or plan information at this deadline. */
+  metadataRetryAt?: number;
   /** Durable cache generation. A changed value discards pages from a previous history/permission boundary. */
   historyRevision?: string;
   /** Current authorized versions of already displayed messages, including deletion tombstones. */
@@ -774,7 +776,7 @@ export interface BotGroupFailure {
 }
 
 export type BotGroupListResult = { ok: true; groups: BotGroupSummary[] } | BotGroupFailure;
-export type BotGroupGetResult = { ok: true; group: BotGroupDetail } | BotGroupFailure;
+export type BotGroupGetResult = { ok: true; group: BotGroupDetail } | (BotGroupFailure & { retryAt?: number });
 export type BotGroupCreateResult = { ok: true; groupId: string } | BotGroupFailure;
 export type BotGroupMutationResult = {
   ok: true;

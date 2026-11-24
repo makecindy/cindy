@@ -74,6 +74,7 @@ export interface HistoryCompanion {
 }
 
 export interface HistorySession {
+  pinnedAt?: number | null;
   id: string;
   title: string;
   workingDir: string | null;

@@ -16,7 +16,10 @@ type StatusRequest = <T>(
 /**
  * Read one MCP server's tools from this thread's own MCP status. The shared
  * app-server's process-level list is not evidence for a thread, so `threadId`
- * is always sent. Read-only: never starts a server or calls its tools.
+ * and `serverName` are always sent. Without the server selector, native Codex
+ * starts fresh catalog discovery for every configured server, even with a
+ * threadId; a stalled sibling can then hide a healthy helper behind a timeout.
+ * Read-only: reuse the selected thread connection, never start catalog clients.
  */
 export async function readCodexThreadMcpServerTools(
   request: StatusRequest,
@@ -24,6 +27,20 @@ export async function readCodexThreadMcpServerTools(
   serverName: string,
   timeoutMs = 5_000,
 ): Promise<AgentMcpServerToolsReport> {
+  const reports = await readCodexThreadMcpServersTools(request, threadId, [serverName], timeoutMs);
+  return reports.get(serverName)!;
+}
+
+/** Share one thread-status traversal and deadline across the requested servers. */
+export async function readCodexThreadMcpServersTools(
+  request: StatusRequest,
+  threadId: string,
+  serverNames: readonly string[],
+  timeoutMs = 5_000,
+): Promise<Map<string, AgentMcpServerToolsReport>> {
+  const missing = new Set(serverNames);
+  const reports = new Map<string, AgentMcpServerToolsReport>();
+  if (!missing.size) return reports;
   const deadline = Date.now() + timeoutMs;
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
@@ -32,13 +49,19 @@ export async function readCodexThreadMcpServerTools(
     if (remainingMs <= 0) throw new Error('Codex MCP status timed out');
     const status: CodexMcpServerStatusListResponse = await request<CodexMcpServerStatusListResponse>(
       Method.McpServerStatusList,
-      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId },
+      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName },
       { timeoutMs: remainingMs },
     );
-    const server = status.data.find((entry) => entry.name === serverName);
-    if (server) return reportFromCodexStatus(server);
+    for (const server of status.data) {
+      if (!missing.delete(server.name)) continue;
+      reports.set(server.name, reportFromCodexStatus(server));
+    }
+    if (!missing.size) return reports;
     cursor = status.nextCursor;
-    if (cursor === null) return { state: 'not-mounted', tools: [] };
+    if (cursor === null) {
+      for (const name of missing) reports.set(name, { state: 'not-mounted', tools: [] });
+      return reports;
+    }
     if (seenCursors.has(cursor)) throw new Error('Codex MCP status pagination repeated a cursor');
     seenCursors.add(cursor);
   }
