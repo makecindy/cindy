@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import {
-  MODEL_GROUP_SAME_SOURCE_RETRIES, canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit,
+  canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit,
   modelGroupFailureScope,
 } from '../botCandidateRecovery';
-import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
+import { InterruptedTurnAutoResumeGuard, isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
 import { createInterruptedTurnAutoResumeHooks } from '../interruptedTurnAutoResumeHooks';
 
 
@@ -450,6 +450,9 @@ describe('model group failure handling', () => {
     ['a gateway 503', { errorStatus: 503 }, 'transient'],
     ['an overload', { reason: 'upstream-overload' }, 'transient'],
     ['a provider 5xx', { reason: 'provider_server_error' }, 'transient'],
+    ['an idle upstream', { reason: 'upstream_response_idle_timeout' }, 'transient'],
+    ['a turn without events', { reason: 'turn_no_event_timeout' }, 'transient'],
+    ['a stalled Codex reconnect', { reason: 'codex_reconnect_stalled' }, 'transient'],
     ['a short rate limit', { errorStatus: 429, sdkError: 'rate_limit' }, 'transient'],
     ['out of credit', { errorStatus: 402 }, 'connection'],
     ['an account quota', { usageLimit: true }, 'connection'],
@@ -469,28 +472,27 @@ describe('model group failure handling', () => {
     expect(modelGroupFailureScope(signals as never)).toBe(scope);
   });
 
-  function groupHarness() {
+  function groupHarness(policy: 'enabled' | 'disabled' = 'enabled', interruptedResumeEnabled = true) {
     const item = { clientId: 'input', createOpts: {} };
-    let episodeAttempt = 0;
     const scheduled: Array<() => Promise<void>> = [];
     const delays: number[] = [];
     const fallback = vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({ session: null, outcome: 'unchanged' }));
-    const resume = vi.fn(async (..._args: unknown[]) => 'resumed');
-    const modelGroupInputs = new WeakSet<object>([item.createOpts]);
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log, random: () => 0.5 });
+    let lastDispatchedToken: number | undefined;
+    const resume = vi.fn(async (sessionId: string, token: number, ..._extra: unknown[]) => {
+      guard.noteAttemptEvent(sessionId, token);
+      lastDispatchedToken = token;
+      return 'resumed';
+    });
+    const finalize = vi.fn();
     const hooks = createInterruptedTurnAutoResumeHooks({
       inputCoordinator: { isExecutionPaused: vi.fn(() => false), isAutoResumeAttemptCurrent: vi.fn(() => true),
         autoRetryLastError: resume },
-      interruptedTurnAutoResumeGuard: {
-        onInterruptedTurn: vi.fn(() => {
-          episodeAttempt += 1;
-          return { action: 'resume', attempt: 1, maxAttempts: 5, episodeAttempt, maxEpisodeAttempts: 10,
-            sessionTotal: episodeAttempt, attemptToken: episodeAttempt, delayMs: 3000 };
-        }),
-        noteResumeSendFailed: vi.fn(),
-      },
+      interruptedTurnAutoResumeGuard: guard,
       maybeApplySessionRuntimeFallback: fallback,
       autoResumeBookkeeping: {
-        beginAttempt: vi.fn(), finalizeSuppressedError: vi.fn(),
+        beginAttempt: vi.fn(), finalizeSuppressedError: finalize,
         schedule: (_id: string, _token: number, delay: number, run: (attempt: { isCurrent(): boolean }) => Promise<void>) => {
           delays.push(delay);
           scheduled.push(() => run({ isCurrent: () => true }));
@@ -500,32 +502,74 @@ describe('model group failure handling', () => {
       pendingSessionRuntimeFallbackRebuilds: new WeakMap(),
       getStableSessionForTurnBoundary: () => ({}),
       pendingContinuationOnlyAutoResumeRebuilds: new WeakMap(),
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
-      botFallbackInputs: new WeakSet(), modelGroupInputs,
+      log,
+      botFallbackInputs: new WeakSet(),
+      modelGroupInputs: {
+        get: (opts: object) => opts === item.createOpts ? policy : undefined,
+        isInterruptedTurnAutoResumeEnabled: () => interruptedResumeEnabled,
+      },
       providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
       pendingSchedulerAutoResumeRunBySession: new Map(), notifySchedulerAutoResumeFailed: vi.fn(),
       autoResumeAttemptToken: () => null,
     } as never);
     const fail = async (signals: Record<string, unknown>) => {
-      (hooks.onResumableTurnError as (...args: unknown[]) => unknown)('s', signals, item);
-      await scheduled.at(-1)!();
+      const progress = (hooks.onResumableTurnError as (...args: unknown[]) => unknown)('s', signals, item);
+      if (!progress) return null;
+      await scheduled.shift()!();
       const call = fallback.mock.calls.at(-1)!;
       return { requireRouteChange: call[3], recovery: call[5] as { retrySameSource?: boolean; accountUnavailable: boolean } };
     };
-    return { fail, fallback, delays, resume };
+    return { fail, fallback, delays, resume, finalize, noteProgress: () => guard.noteProgress('s', lastDispatchedToken) };
   }
 
+  // Product §4.1–4.5 / #12440: the hooks now run with the production guard instead of an
+  // always-allow fake. Two transient failures on each of A and B must still let C receive the retry.
   it('retries a transient failure on the same source twice before switching, and gives the new source its own retries', async () => {
     const h = groupHarness();
     const sameSource: boolean[] = [];
     for (let i = 0; i < 6; i += 1) {
       // The third failure switches source; the group then fails transiently on the new one too.
-      h.fallback.mockResolvedValueOnce({ session: null, outcome: i === 2 ? 'switched' : 'unchanged' });
-      sameSource.push((await h.fail({ errorStatus: 503 })).recovery.retrySameSource === true);
+      h.fallback.mockResolvedValueOnce({ session: null, outcome: i % 3 === 2 ? 'switched' : 'unchanged' });
+      sameSource.push((await h.fail({ errorStatus: 503 }))!.recovery.retrySameSource === true);
     }
-    expect(MODEL_GROUP_SAME_SOURCE_RETRIES).toBe(2);
     expect(sameSource).toEqual([true, true, false, true, true, false]);
-    expect(h.delays).toEqual([3000, 3000, 3000, 3000, 3000, 3000]);
+    expect(h.resume).toHaveBeenCalledTimes(6);
+    expect(h.delays).toEqual([3000, 6000, 0, 3000, 6000, 0]);
+  });
+
+  it('gives the same source a fresh retry after substantive output', async () => {
+    const h = groupHarness();
+    const signals = { errorStatus: 503 };
+    await h.fail(signals);
+    await h.fail(signals);
+    expect(h.noteProgress()).toBe(true);
+    expect(await h.fail(signals)).toMatchObject({ requireRouteChange: false, recovery: { retrySameSource: true } });
+    expect(h.delays.at(-1)).toBe(3000);
+  });
+
+  it.each(['exhausted', 'failed', 'unchanged'])('surfaces the error after two retries when choosing a new source returns %s', async outcome => {
+    const h = groupHarness();
+    const signals = { errorStatus: 503 };
+    await h.fail(signals);
+    await h.fail(signals);
+    h.fallback.mockResolvedValueOnce({ session: null, outcome });
+    await h.fail(signals);
+    expect(h.resume).toHaveBeenCalledTimes(2);
+    expect(h.finalize).toHaveBeenCalledWith('s', 3, { surfaceBanner: true });
+  });
+
+  it('keeps same-source continuation for a disabled model group without invoking catalog fallback', async () => {
+    const h = groupHarness('disabled');
+    const signals = { errorStatus: 503 };
+    await h.fail(signals);
+    expect(await h.fail(signals)).toMatchObject({ requireRouteChange: false, recovery: { retrySameSource: true } });
+    expect(h.resume).toHaveBeenCalledTimes(2);
+  });
+
+  it('a disabled model group does not inherit global fallback when interrupted-turn resume is off', async () => {
+    const h = groupHarness('disabled', false);
+    expect(await h.fail({ errorStatus: 503 })).toBeNull();
+    expect(h.resume).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -533,7 +577,7 @@ describe('model group failure handling', () => {
     ['out of credit', { errorStatus: 402 }, true],
   ] as const)('switches source at once on %s, skipping the connection only when it is the connection that failed', async (_name, signals, wholeConnection) => {
     const h = groupHarness();
-    const { requireRouteChange, recovery } = await h.fail(signals);
+    const { requireRouteChange, recovery } = (await h.fail(signals))!;
     expect(requireRouteChange).toBe(true);
     expect(recovery).toMatchObject({ retrySameSource: false, accountUnavailable: wholeConnection });
     expect(h.delays).toEqual([0]);

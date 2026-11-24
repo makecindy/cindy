@@ -4,6 +4,7 @@
  * 纯函数，所有事实由调用方注入。
  */
 import {
+  modelGroupAutoSwitchFor,
   modelGroupCandidateKey,
   type ModelGroupAgentKind,
   type ModelGroupRoute,
@@ -77,7 +78,9 @@ export async function computeModelGroupSwitchOffer(
     return null;
   }
   const now = deps.now();
-  const target = modelGroupRouteFor(deps.config(), binding.selection, now);
+  const config = deps.config();
+  if (recovery && !modelGroupAutoSwitchFor(config, binding.selection)) return null;
+  const target = modelGroupRouteFor(config, binding.selection, now);
   if (target.outcome === 'missing') return null;
   const { route } = target;
   // 同一个供应商连接是同一个账号、同一份配额：一并跳过，连同正在用的这个。

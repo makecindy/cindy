@@ -1,6 +1,6 @@
 import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
-import { isInterruptedTurnError, isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import { isAcceptedTurnContinuationOnlyReason, isInterruptedTurnError, isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 
 /** A model-specific rate limit leaves other models on the connection available. */
@@ -79,6 +79,7 @@ export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): Mode
   // candidate list above but are exactly what another source fixes.
   if (reason === 'acp-usage-limit') return 'connection';
   if (reason === 'upstream-stream-interrupted') return 'model';
+  if (isAcceptedTurnContinuationOnlyReason(reason)) return 'transient';
   const text = input.message ?? (typeof input.sdkError === 'string' ? input.sdkError : '');
   const status = input.errorStatus ?? leadingHttpStatus(text);
   const signals = status !== undefined && input.errorStatus === undefined ? { ...input, errorStatus: status } : input;

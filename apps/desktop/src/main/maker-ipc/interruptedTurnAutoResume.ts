@@ -380,7 +380,7 @@ export interface InterruptedTurnResumeProgress {
   attemptToken: number;
   /** 本次人工介入周期内第几次自动重连。 */
   episodeAttempt: number;
-  /** 本次人工介入周期的硬上限。 */
+  /** 本次人工介入周期的硬上限（模型组按候选上限计）。 */
   maxEpisodeAttempts: number;
 }
 
@@ -530,6 +530,11 @@ export class InterruptedTurnAutoResumeGuard {
     return true;
   }
 
+  /** A confirmed source change starts a fresh consecutive retry budget, but keeps the episode total. */
+  noteSourceSwitched(sessionId: string, attemptToken: number): void {
+    this.noteProgress(sessionId, attemptToken);
+  }
+
   /**
    * 真实用户消息发出 → 连续失败计数归零（人工介入是新起点）。
    * 自动补发的续跑指令**绝不能**调用本方法（调用方靠 `isAutoResumeUserMessage`
@@ -640,9 +645,13 @@ export class InterruptedTurnAutoResumeGuard {
    * 返回 resume 时已内部累加计数并置 pendingResume，调用方负责在 `delayMs` 后实际
    * 补发，并在补发前**再复核一次**会话状态（退避窗口内用户介入的概率不低）。
    */
-  onInterruptedTurn(sessionId: string, erroredAt: number): InterruptedTurnResumeDecision {
+  onInterruptedTurn(
+    sessionId: string,
+    erroredAt: number,
+    options?: { enabled?: boolean; maxEpisodeAttempts?: number },
+  ): InterruptedTurnResumeDecision {
     const s = this.state(sessionId);
-    if (!this.deps.isEnabled(sessionId)) {
+    if (!(options?.enabled ?? this.deps.isEnabled(sessionId))) {
       this.deps.log.debug('interrupted-turn auto-resume disabled by kill switch', { sessionId });
       return { action: 'skip', why: 'disabled' };
     }
@@ -659,8 +668,9 @@ export class InterruptedTurnAutoResumeGuard {
       });
       return { action: 'skip', why: 'superseded' };
     }
+    const maxEpisodeAttempts = options?.maxEpisodeAttempts ?? INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS;
     const exhaustedReason =
-      s.episodeAttempts >= INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS
+      s.episodeAttempts >= maxEpisodeAttempts
         ? 'episode'
         : s.consecutiveAttempts >= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS
           ? 'consecutive'
@@ -698,7 +708,7 @@ export class InterruptedTurnAutoResumeGuard {
       attempt,
       maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
       episodeAttempt: s.episodeAttempts,
-      maxEpisodeAttempts: INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS,
+      maxEpisodeAttempts,
       sessionTotal: s.sessionTotalResumes,
       attemptToken,
       delayMs,
@@ -708,7 +718,7 @@ export class InterruptedTurnAutoResumeGuard {
       attempt,
       maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
       episodeAttempt: s.episodeAttempts,
-      maxEpisodeAttempts: INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS,
+      maxEpisodeAttempts,
       sessionTotal: s.sessionTotalResumes,
       attemptToken,
       delayMs,

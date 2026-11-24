@@ -156,8 +156,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       const explicitTaskModel = await hasExplicitSessionTaskModel(sessionId);
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       if (explicitTaskModel) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
-      // A model group's transient failure gets its same-source retries first (model-groups.md §4.1); never the
-      // catalog-guessed fallback of ordinary tasks.
+      // Model-group inputs either stay on their source or choose from their group (model-groups.md §4).
       if (groupRecovery?.retrySameSource) return { session: null, outcome: 'unchanged' };
       // Bot routes are explicit and ordered. They switch on the first recoverable
       // failure and never depend on the generic Session fallback toggle/catalog
@@ -166,11 +165,11 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       let currentForFallback: FallbackRouteProfile = profiles.effective;
       let candidate: FallbackRouteProfile | null = botFallback.candidate;
-      // groupRecovery only comes for a model-group task with 「出问题时自动换来源」 on (register.ts modelGroupInputs).
       const group = groupRecovery && !botFallback.isBot && profiles.effective.agentKind !== 'acp'
         ? await readModelGroupFallbackCandidate?.(sessionId, profiles.effective, profiles.control.visitedRoutes, groupRecovery, profiles.control.generation)
         : null;
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
+      if (groupRecovery && !group) return { session: null, outcome: 'exhausted' };
       if (group) candidate = group.candidate;
       let groupLabels = group?.labels;
       const switchedResult = (session: RuntimeSession | null): RuntimeFallbackResult<RuntimeSession> => ({

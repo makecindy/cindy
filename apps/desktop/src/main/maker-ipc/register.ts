@@ -1473,7 +1473,6 @@ import { botModelGroupsSignature, expandBotModelGroups, modelGroupCandidateRoute
 import { pickModelGroupRoute, readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
 import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
 import { isModelGroupRecoverySource } from '../model-groups/switchOffer.js';
-import { modelGroupRouteFor } from '../model-groups/routeFor.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
 import { bindModelGroupSession, readModelGroupBindingForDispatch, readModelGroupSessionBinding } from '../model-groups/sessionBindings.js';
 import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtime-fallback-store.js';
@@ -2311,10 +2310,8 @@ const {
   settleUndispatchedInterruptedAutoResume,
 } = createAutoResumeRuntime({
   isSilentStopAutoResumeEnabled: () => readSilentStopAutoResumeSettings().enabled,
-  // A task on a model group keeps its retries and source switching (model-groups.md §4.5) whatever these settings say.
-  isInterruptedTurnAutoResumeEnabled: (sessionId) =>
-    readInterruptedTurnAutoResumeSettings().enabled || readSessionRuntimeFallbackSettings().enabled ||
-    modelGroupAutoSwitchFor(readModelGroupsConfig(), readModelGroupSessionBinding(sessionId)?.selection),
+  isInterruptedTurnAutoResumeEnabled: () =>
+    readInterruptedTurnAutoResumeSettings().enabled || readSessionRuntimeFallbackSettings().enabled,
   guardLog: {
     debug: (message, meta) => log.debug(message, meta),
     warn: (message, meta) => log.warn(message, meta),
@@ -17593,7 +17590,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!binding || !row.providerId || !row.model ||
         (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi')) return null;
     if (binding.pickedKey !== modelGroupCandidateKey({ agentKind: row.agentKind, model: row.model, providerId: row.providerId })) return null;
-    return modelGroupRouteFor(readModelGroupsConfig(), binding.selection, Date.now()).outcome === 'missing' ? null : binding;
+    return binding;
   }
 
   // Assembled before the runtime selection and the other helpers below; each is read when a fallback runs.
@@ -18685,7 +18682,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Host-only hints belong to the dispatched input, not a persistent session cache.
   // The fallback transaction still rechecks the authoritative Bot link and chain.
   const botFallbackInputs = new WeakSet<object>();
-  const modelGroupInputs = new WeakSet<object>();
+  const modelGroupInputs = new WeakMap<object, 'enabled' | 'disabled'>();
   const scheduledQuotaInputs = new WeakSet<object>();
   // The coordinator and the stable-session lookup are assembled below; both are read when a hook runs.
   const interruptedTurnAutoResumeHooks = createInterruptedTurnAutoResumeHooks<Session>({
@@ -18695,7 +18692,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       autoRetryLastError: (sessionId, attemptToken, resumeExtra) => inputCoordinator.autoRetryLastError(sessionId, attemptToken, resumeExtra),
     },
     resumeQuotaWait: (sessionId, item, signals) => inputCoordinator.resumeModelGroupQuotaWait(sessionId, item, signals),
-    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
+    modelGroupInputs: {
+      get: (createOpts) => modelGroupInputs.get(createOpts),
+      isInterruptedTurnAutoResumeEnabled: () => readInterruptedTurnAutoResumeSettings().enabled,
+    },
+    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
     beginSchedulerAutoResume,
     getStableSessionForTurnBoundary: (sessionId) => getStableSessionForTurnBoundary(sessionId),
     pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
@@ -18758,11 +18759,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         } else scheduledQuotaInputs.delete(args[2]);
         // 自动化发出的这一轮也按任务的模式接替：接管后由 beginSchedulerAutoResume 把这次运行交给续跑(与伙伴的例行运行同一条路)。
         // 任务当前来源不是记下的那个(自动化指定了别的模型)时 activeModelGroupBinding 不认，不会误换。
-        const groupFallback = !ownsQuotaRoute() && !!botInput && isModelGroupRecoverySource(botInput.source) && !botInput.remoteHostId && !botInput.agentDeviceId &&
-          !botInput.orcaRole && modelGroupAutoSwitchFor(readModelGroupsConfig(), (await activeModelGroupBinding(sessionId, botInput))?.selection) &&
-          !isSessionSharedTaskActive(sessionId);
-        if (groupFallback) modelGroupInputs.add(args[2]);
-        else modelGroupInputs.delete(args[2]);
+        const groupBinding = !ownsQuotaRoute() && botInput && isModelGroupRecoverySource(botInput.source) &&
+          !botInput.remoteHostId && !botInput.agentDeviceId && !botInput.orcaRole && !isSessionSharedTaskActive(sessionId)
+          ? await activeModelGroupBinding(sessionId, botInput) : null;
+        if (groupBinding) {
+          modelGroupInputs.set(args[2], modelGroupAutoSwitchFor(readModelGroupsConfig(), groupBinding.selection) ? 'enabled' : 'disabled');
+        } else {
+          modelGroupInputs.delete(args[2]);
+        }
         if (botInput?.source === 'bot' && ['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(botInput.role ?? '')) {
           botFallbackInputs.add(args[2]);
         } else {

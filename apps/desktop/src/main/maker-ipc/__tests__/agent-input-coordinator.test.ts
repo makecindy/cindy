@@ -15869,7 +15869,11 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     });
     const hooks = createInterruptedTurnAutoResumeHooks<Session>({
       inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs: new WeakSet(), modelGroupInputs: new WeakSet([item.createOpts]),
+      botFallbackInputs: new WeakSet(),
+      modelGroupInputs: {
+        get: (opts) => opts === item.createOpts ? 'enabled' : undefined,
+        isInterruptedTurnAutoResumeEnabled: () => false,
+      },
       saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(), getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map(), pendingSessionRuntimeFallbackRebuilds: new Set(),
       providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
