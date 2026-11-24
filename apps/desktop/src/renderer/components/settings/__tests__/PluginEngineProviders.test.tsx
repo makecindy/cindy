@@ -82,19 +82,21 @@ function renderDetail(view: PluginEngineView, props: {
   pendingShareRequests?: number;
   onManageShare?: () => void;
 } = {}) {
-  return render(
+  const tree = (engine: PluginEngineView) => (
     <MemoryRouter initialEntries={['/settings?tab=providers']}>
       <ConfirmDialogProvider>
         <PluginEngineProviderDetail
-          engine={view}
+          engine={engine}
           remoteControlEnabled={props.remoteControlEnabled === undefined ? true : props.remoteControlEnabled}
           pendingShareRequests={props.pendingShareRequests ?? 0}
           onManageShare={props.onManageShare ?? (() => {})}
         />
         <Location />
       </ConfirmDialogProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  const result = render(tree(view));
+  return { ...result, updateView: (engine: PluginEngineView) => result.rerender(tree(engine)) };
 }
 
 async function chooseFromMenu(item: string) {
@@ -114,7 +116,7 @@ describe('plugin providers in the provider list', () => {
     const api = stubApi();
     const engineView = engine({ name: 'Antigravity', models: [{ id: 'gemini', displayName: 'Gemini', efforts: ['low', 'high'], defaultEffort: 'high' }],
       modelEfforts: { gemini: 'high' } });
-    renderDetail(engineView);
+    const { updateView } = renderDetail(engineView);
     const trigger = screen.getByRole('button', { name: /advanced.openAria/ });
     trigger.focus();
     await userEvent.keyboard('{Enter}');
@@ -133,7 +135,14 @@ describe('plugin providers in the provider list', () => {
     await userEvent.keyboard('{Enter}');
     const reopened = within(await screen.findByRole('dialog', { name: 'Gemini' }));
     await userEvent.click(reopened.getByRole('button', { name: 'settings.providers.models.disableModel' }));
-    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: engineView.key, models: { ids: ['gemini'], disabled: true } });
+    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({
+      key: engineView.key, models: { ids: ['gemini'], disabled: true }, ownerStamp: stamp,
+    });
+    updateView({ ...engineView, models: [], disabledModels: engineView.models });
+    expect(reopened.getByRole('button', { name: 'settings.providers.models.enableModel' })).toBeTruthy();
+    await userEvent.keyboard('{Escape}');
+    const movedTrigger = within(screen.getByTestId('plugin-engine-models-off')).getByRole('button', { name: /advanced.openAria/ });
+    await waitFor(() => expect(document.activeElement).toBe(movedTrigger));
   });
 
   // Unit: a renamed, suspended provider must still confirm uninstall of its exact plugin instance.
@@ -248,10 +257,12 @@ describe('plugin providers in the provider list', () => {
     const off = within(screen.getByTestId('plugin-engine-models-off')).getByRole('switch');
     expect([on.getAttribute('aria-checked'), off.getAttribute('aria-checked')]).toEqual(['true', 'false']);
     expect(off.getAttribute('aria-label')).toBe('settings.providers.plugin.modelSwitchAria:{"model":"DeepSeek Lite"}');
+    const { dataOwnerId, generation } = getDataOwnerGeneration();
+    const ownerStamp = { dataOwnerId, ownerGeneration: generation };
     fireEvent.click(on);
-    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: view.key, models: { ids: ['deepseek-v4'], disabled: true } });
+    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: view.key, models: { ids: ['deepseek-v4'], disabled: true }, ownerStamp });
     fireEvent.click(off);
-    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: view.key, models: { ids: ['deepseek-lite'], disabled: false } });
+    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: view.key, models: { ids: ['deepseek-lite'], disabled: false }, ownerStamp });
     await waitFor(() => expect((on as HTMLButtonElement).disabled).toBe(false));
   });
 
