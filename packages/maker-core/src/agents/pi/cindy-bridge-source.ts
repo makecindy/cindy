@@ -3312,8 +3312,8 @@ const SCHEMA_WALK_MAX_DEPTH = 32;
 const SCHEMA_COMBINATORS = ['allOf', 'anyOf', 'oneOf'];
 /** 条件分支: 这些节点里声明的属性也是服务端认的参数(条件成立时的 then / 不成立时的 else)。 */
 const SCHEMA_CONDITIONAL_KEYWORDS = ['if', 'then', 'else'];
-/** 依赖分支: dependentSchemas 的每个取值都是一份 schema, 里面的声明同样算数。 */
-const SCHEMA_DEPENDENCY_KEYWORDS = ['dependentSchemas'];
+/** 依赖分支: dependentSchemas(2020-12)与 schema 形态的 dependencies(draft-07)里声明的字段同样算数。 */
+const SCHEMA_DEPENDENCY_KEYWORDS = ['dependentSchemas', 'dependencies'];
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -3401,8 +3401,12 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
       for (const pattern of Object.keys(node.patternProperties)) {
         // 数量封顶在循环内生效: 一个 patternProperties 里塞上百条模式时, 只看前 N 条,
         // 否则单次调用要把上百条模式全部编译并跑一遍(Codex P1 on #10908)。
-        if (surface.patterns.length >= SCHEMA_PATTERN_MAX_COUNT) break;
+        // 碰到封顶提前停下来时必须标 truncated: 剩下的模式没看到, 不能把后面声明的键静默丢掉。
         if (seenPatterns.has(pattern)) continue;
+        if (surface.patterns.length >= SCHEMA_PATTERN_MAX_COUNT) {
+          surface.truncated = true;
+          break;
+        }
         seenPatterns.add(pattern);
         surface.patterns.push(pattern);
       }
@@ -3466,9 +3470,13 @@ function isNameEnvelopeNode(node: Record<string, unknown>): boolean {
 function isNameEnvelopeSchema(schema: unknown, surface?: SchemaParameterSurface | null): boolean {
   const root = isPlainRecord(schema) ? schema : null;
   if (!root) return false;
-  if (isNameEnvelopeNode(root)) return true;
+  // 不能只在根层命中 name+args 就提前 return: 兄弟字段可能声明在 allOf/anyOf/$ref 等组合分支里。
   const resolved = surface === undefined ? schemaParameterSurface(root) : surface;
-  return Boolean(resolved?.envelope);
+  return Boolean(resolved?.envelope)
+    && !resolved!.truncated
+    && resolved!.names.size === 2
+    && resolved!.names.has('name')
+    && resolved!.names.has('args');
 }
 
 /**
@@ -3633,18 +3641,22 @@ function patternBacktrackBudget(pattern: string, keyLength: number): number {
  *   JSON Schema 默认允许额外字段，但「默认允许」不等于「这个键是模型想给的参数」，
  *   把模型的私货转过去只会让服务端多一条校验错误。
  */
-function schemaAcceptsKey(surface: SchemaParameterSurface | null, key: string): boolean {
+function schemaAcceptsKey(
+  surface: SchemaParameterSurface | null,
+  key: string,
+  patternBudget: { remaining: number } = { remaining: SCHEMA_PATTERN_BACKTRACK_BUDGET },
+): boolean {
   if (!surface) return false;
   if (surface.additionalAllowed) return true;
   if (key.length > SCHEMA_PATTERN_KEY_MAX_LENGTH) return false;
-  let spent = 0;
+  if (patternBudget.remaining <= 0) return false;
   for (const pattern of surface.patterns) {
     if (pattern.length > SCHEMA_PATTERN_MAX_LENGTH) continue;
     const estimate = patternBacktrackBudget(pattern, key.length);
     if (estimate > SCHEMA_PATTERN_BACKTRACK_BUDGET) continue;
-    // 总量上限: 每条都过关不代表合起来还过得去(Codex P1 on #10908)。
-    spent += estimate;
-    if (spent > SCHEMA_PATTERN_BACKTRACK_BUDGET) break;
+    // 总量上限: 单次调用跨所有顶层键共享同一份回溯预算(Codex P1 on #10908)。
+    if (estimate > patternBudget.remaining) continue;
+    patternBudget.remaining -= estimate;
     try {
       if (new RegExp(pattern).test(key)) return true;
     } catch {
@@ -3735,6 +3747,7 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
   const flattenedEnvelopeNoContainer = envelopeSchema
     && !provided
     && selector !== undefined;
+  const patternBudget = { remaining: SCHEMA_PATTERN_BACKTRACK_BUDGET };
   for (const [key, value] of Object.entries(record)) {
     if (GATEWAY_OWN_KEYS.has(key)) continue;
     if ((flattenedEnvelope || flattenedEnvelopeNoContainer) && key === 'name') continue; // 信封层, 不是内层参数。
@@ -3746,7 +3759,7 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
       folded.push(key);
       continue;
     }
-    if (!foldAll && !incomplete && !(declared?.has(key) ?? false) && !schemaAcceptsKey(surface, key)) {
+    if (!foldAll && !incomplete && !(declared?.has(key) ?? false) && !schemaAcceptsKey(surface, key, patternBudget)) {
       unmapped.push(key);
       continue;
     }
@@ -3763,7 +3776,7 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
     folded,
     unmapped,
     parsedFromString,
-    ...(flattenedEnvelope ? { rebuiltEnvelope: true } : {}),
+    ...(flattenedEnvelope || flattenedEnvelopeNoContainer ? { rebuiltEnvelope: true } : {}),
   };
 }
 

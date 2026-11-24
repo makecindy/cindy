@@ -3340,16 +3340,16 @@ it('forwards extra keys that a referenced schema definition explicitly allows', 
   expect(requests[0].params).toEqual({ name: 'patch', arguments: { id: 'x-1', extra: 'keep' } });
 });
 
-// 评审 P1(模式条数封顶没在循环内生效): 收集 patternProperties 时, 条数上限只在**进循环前**
-// 看了一次 —— 一个 patternProperties 里塞 20 条模式时, 20 条全被收下、全部被编译并跑一遍。
-// 条数上限必须落在循环内。
+// 评审 P1(模式条数封顶后把剩下声明当成未声明静默丢掉): 收集 patternProperties 时,
+// 命中 SCHEMA_PATTERN_MAX_COUNT 条数上限并提前 break 后, surface.truncated 必须标为 true;
+// 否则第 17+ 条模式对应的参数会被当成 unmapped 静默丢掉, 违背「声明面不完整时不丢参数」。
 //
 // - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数 + 单次调用耗时。
-// - Bug 依据:codex 对 8d212dd4cf 的 P1。
-// - 覆盖缺口:上一轮只钉了「单条灾难性模式不跑」, 没钉「模式条数」。
-// - 最小失败输入:patternProperties 有 20 条, 第 20 条命中模型给的键。
+// - Bug 依据:codex 对 71d60521a1 的 P1。
+// - 覆盖缺口:上一轮只断言「封顶后不再匹配第 20 条」, 反把真实声明的参数丢掉了。
+// - 最小失败输入:patternProperties 有 20 条, 模型传入命中第 20 条模式的 p19。
 // - tier:unit。
-it('stops examining patternProperties after the count cap', async () => {
+it('stops examining patternProperties after the count cap and preserves parameters as incomplete', async () => {
   const { Gateway } = loadGatewayHarness();
   const requests: Array<{ method: string; params: unknown }> = [];
   const client = { request: async (method: string, params: unknown) => {
@@ -3371,13 +3371,21 @@ it('stops examining patternProperties after the count cap', async () => {
   await gateway.listResult({ server: 'cindy_patterns', tool: 'tag' });
   const started = performance.now();
   const result = await gateway.executeCall({
-    server: 'cindy_patterns', tool: 'tag', args: { file_id: 'doc-1' }, p19: 'late pattern',
+    server: 'cindy_patterns',
+    tool: 'tag',
+    args: { file_id: 'doc-1' },
+    p19: 'late pattern',
+    extra_after_cap: 'kept because truncated',
   });
   expect(performance.now() - started).toBeLessThan(1000);
-  // 第 20 条在封顶之外 → 不看它 → 这个键按「schema 没声明」处理(回执里写明没转发)。
-  expect(requests[0].params).toEqual({ name: 'tag', arguments: { file_id: 'doc-1' } });
+  // 命中 16 条封顶后不再编译后续模式, 且 surface.truncated = true 使整份声明面按不完整处理:
+  // p19 与封顶后的键一并保留转发(即使 extra_after_cap 也不匹配任何 ^p\d+$), 证明确实在 16 条处截断。
+  expect(requests[0].params).toEqual({
+    name: 'tag',
+    arguments: { file_id: 'doc-1', p19: 'late pattern', extra_after_cap: 'kept because truncated' },
+  });
   const note = result.content.map(block => block.text ?? '').join('\n');
-  expect(note).toContain('were not forwarded because the tool schema does not declare them: p19');
+  expect(note).toContain('Cindy moved these top-level parameters into args before forwarding: p19, extra_after_cap.');
 });
 
 // 评审 P1(单条都过关、合起来仍可能拖住同步路径): 每条模式的回溯组合数各自都有上界,
@@ -3420,6 +3428,51 @@ it('caps the total pattern work of one call, not only each pattern', async () =>
   expect(requests[0].params).toEqual({ name: 'tag', arguments: { file_id: 'doc-1' } });
   const note = result.content.map(block => block.text ?? '').join('\n');
   expect(note).toContain('were not forwarded because the tool schema does not declare them: gggggggg');
+});
+
+// 评审 P1(多键未共享模式预算): 4 条各约 3.3 万步的模式对单个 8 字符键只有 ~13.1 万步(低于 20 万上限),
+// 若每个顶层键各自重置预算, 模型传入多个顶层键就能把同步路径的总步数乘以键数。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数 + 单次调用耗时。
+// - Bug 依据:codex 对 71d60521a1 的 P1。
+// - 覆盖缺口:上一轮只传了一个顶层键 gggggggg, 没测多键跨键共享同一份单次调用预算。
+// - 最小失败输入:4 条约 3.3 万步的模式 + 两个 8 字符顶层键, 第二个键命中第 4 条模式。
+// - tier:unit。
+it('caps the total pattern work across multiple top-level keys in one call', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const patternProperties: Record<string, unknown> = {};
+  for (const letter of ['a', 'b', 'c', 'd']) {
+    patternProperties[`^(${letter}{1,8}){1,4}$`] = { type: 'string' };
+  }
+  const gateway = new Gateway();
+  gateway.add('cindy_patterns', client, [{
+    name: 'tag',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' } },
+      patternProperties,
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_patterns', tool: 'tag' });
+  const started = performance.now();
+  const result = await gateway.executeCall({
+    server: 'cindy_patterns',
+    tool: 'tag',
+    args: { file_id: 'doc-1' },
+    x1234567: 'consumes ~131k across 4 patterns',
+    dddddddd: 'past remaining shared budget',
+  });
+  expect(performance.now() - started).toBeLessThan(1000);
+  // 第一个键耗去 ~13.1 万步, 第二个键在跑到第 3/4 条时超出单次调用剩余预算(6.9 万步) → 不转发 dddddddd。
+  expect(requests[0].params).toEqual({ name: 'tag', arguments: { file_id: 'doc-1' } });
+  const note = result.content.map(block => block.text ?? '').join('\n');
+  expect(note).toContain('were not forwarded because the tool schema does not declare them: x1234567, dddddddd');
 });
 
 // 评审 P2(信封藏在组合声明后面): 判据只看根层 —— 根层 $ref 指向一份带 properties 与
@@ -3504,6 +3557,46 @@ it('folds top-level keys declared in conditional and dependent schema branches',
   });
 });
 
+// 评审 P1(遗漏 draft-07 dependencies): 旧版 JSON Schema 使用 dependencies 声明依赖子 schema
+// (而不是 2020-12 的 dependentSchemas); 只走 dependentSchemas 会把仅出现在 dependencies
+// 子 schema 里的合法参数判成未声明并丢掉。同时数组形态的属性依赖(dependencies.tag = ['file_id'])
+// 不是 schema, 必须安全跳过。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 71d60521a1 的 P1。
+// - 覆盖缺口:上一轮只测了 dependentSchemas, 未覆盖 draft-07 dependencies。
+// - 最小失败输入:schema 用 dependencies.file_id 声明 sheet_id, 调用把 sheet_id 放顶层。
+// - tier:unit。
+it('folds top-level keys declared in draft-07 dependencies schemas while ignoring array dependencies', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_grid', client, [{
+    name: 'set_cell',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' }, tag: { type: 'string' } },
+      dependencies: {
+        file_id: { properties: { sheet_id: { type: 'string' } } },
+        tag: ['file_id'],
+      },
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_grid', tool: 'set_cell' });
+  await gateway.executeCall({
+    server: 'cindy_grid', tool: 'set_cell', args: { file_id: 'doc-1' }, sheet_id: 'sheet-1',
+  });
+  expect(requests[0].params).toEqual({
+    name: 'set_cell',
+    arguments: { file_id: 'doc-1', sheet_id: 'sheet-1' },
+  });
+});
+
 // 评审 P1(信封整个摊平、没有 args 容器): 重建信封的前提是「模型给了 args 容器」——
 // 连容器都没给时({server, tool, name:'schedule_list', status:'active'}), 内层参数是**内层
 // 工具**的, 外层信封 schema 只声明 name/args, 判不了它们: 按外层 schema 丢, 内层工具就只
@@ -3535,6 +3628,41 @@ it('rebuilds a fully flattened envelope that has no args container', async () =>
     name: 'call_tool',
     arguments: { name: 'schedule_list', args: { status: 'active' } },
   });
+});
+
+// 评审 P1(无容器零参数信封重建不回显): 仅给出 {server, tool, name:'schedule_list'} 时,
+// 桥把调用重写成了 {name:'schedule_list', args:{}}, 但 rebuiltEnvelope 只认带 args 容器的那支,
+// 导致 folded=[] 且 rebuiltEnvelope=undefined, normalizationNote 返回 null 不回显。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数与回执说明。
+// - Bug 依据:codex 对 71d60521a1 的 P1。
+// - 覆盖缺口:无容器信封用例带了 status 参数, 靠 folded.length > 0 触发回显, 漏了零内层参数场景。
+// - 最小失败输入:顶层只给 name, 不给 args 也不给内层参数。
+// - tier:unit。
+it('echoes rebuilt envelope note even when a no-container envelope has no inner parameters', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_scheduler', client, [{
+    name: 'call_tool',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_scheduler', tool: 'call_tool' });
+  const result = await gateway.executeCall({
+    server: 'cindy_scheduler', tool: 'call_tool', name: 'schedule_list',
+  });
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'schedule_list', args: {} },
+  });
+  const note = result.content.map(block => block.text ?? '').join('\n');
+  expect(note).toContain('Cindy rebuilt the {"name", "args"} envelope');
+  expect(note).toContain('Forwarded arguments: {"name":"schedule_list","args":{}}');
 });
 
 // 评审 P1(信封指纹认得太宽): 一个普通工具只要有「必填 name(string) + args(object)」就被当成
@@ -3569,6 +3697,43 @@ it('does not treat a tool with sibling parameters as a registry envelope', async
   });
   const forwarded = (requests[0].params as { arguments: Record<string, unknown> }).arguments;
   // 没有被改写成信封: 兄弟字段 mode 留在外层(没被挪进 args), name 是这个工具自己的参数。
+  expect(forwarded.mode).toBe('fast');
+  expect(forwarded.name).toBe('job-1');
+  expect(forwarded).not.toHaveProperty('args');
+});
+
+// 评审 P1(根层匹配后提前 return 漏看组合里的兄弟字段): 根层声明了 name + args 且 required 含 name,
+// 兄弟字段 mode 挂在 allOf 分支里 —— isNameEnvelopeSchema 根层命中即 return true 跳过了组合
+// 分支里的 mode, 又把普通工具误认成信封并改写成 {name:'job-1', args:{payload:'p', mode:'fast'}}。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 71d60521a1 的 P1。
+// - 覆盖缺口:上一轮兄弟字段直接写在根层 properties 里, 没测根层只写 name+args、兄弟字段在 allOf 里。
+// - 最小失败输入:根层 properties 仅 name+args + allOf:[{properties:{mode}}], 调用给 name/args/mode。
+// - tier:unit。
+it('does not treat a tool with composed sibling parameters as a registry envelope', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_jobs', client, [{
+    name: 'job',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, args: { type: 'object' } },
+      required: ['name'],
+      allOf: [{ properties: { mode: { type: 'string' } } }],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_jobs', tool: 'job' });
+  await gateway.executeCall({
+    server: 'cindy_jobs', tool: 'job', name: 'job-1', args: { payload: 'p' }, mode: 'fast',
+  });
+  const forwarded = (requests[0].params as { arguments: Record<string, unknown> }).arguments;
   expect(forwarded.mode).toBe('fast');
   expect(forwarded.name).toBe('job-1');
   expect(forwarded).not.toHaveProperty('args');
