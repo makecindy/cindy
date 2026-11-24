@@ -36,13 +36,12 @@ import {
   isCindyGatewayProxyTokenInvalidError,
   isResponsesLiteParallelToolCallsError,
   isRemoteCompactEncryptedContentError,
-  parseAgentErrorCode,
   parseGeminiInputRateLimit,
   localizeSubscriptionAccountError,
   requiresAgentErrorConfigurationChange,
   isRemoteAgentResumeRejectedError,
 } from '@cindy/maker-shared/error-redaction';
-import { chatRemoteErrorGuidanceKey } from '@/lib/autoReviewUnavailableGuidance';
+import { chatRemoteErrorGuidanceKey, parseDesktopChatErrorCode } from '@/lib/autoReviewUnavailableGuidance';
 import { AlertCircle, ArrowRightLeft, Check, Split, Play, RotateCcw, RefreshCw, Timer, Wallet } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
@@ -427,7 +426,7 @@ export function ErrorBanner({
           : undefined;
   const ipcRefusal = extractIpcError(new Error(error));
   const preconditionMessage = ipcRefusal?.code === 'PRECONDITION_FAILED' ? ipcRefusal.message : undefined;
-  const remoteErrorCode = parseAgentErrorCode(error)?.code;
+  const remoteErrorCode = parseDesktopChatErrorCode(error)?.code;
   const isRemoteResumeRejected = isRemoteAgentResumeRejectedError(error);
   const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
   const remoteErrorKey = (isRemoteResumeRejected ? 'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE' : null)

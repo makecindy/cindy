@@ -1,3 +1,9 @@
+import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
+
+export function parseDesktopChatErrorCode(message: string) {
+  return parseAgentErrorCode(message, ['SSH_EXEC_FAILED']);
+}
+
 /**
  * Personal WeChat turns always attach a confirmation policy, and none of the
  * three harnesses allow Full access under that policy. Viewing the task must

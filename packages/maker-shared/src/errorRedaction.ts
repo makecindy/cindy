@@ -299,7 +299,6 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'SUBSCRIPTION_ACCOUNT_SIGNING_IN',
   'SUBSCRIPTION_ACCOUNT_UNAVAILABLE',
   'SSH_HARNESS_SWITCH_UNSUPPORTED',
-  'SSH_EXEC_FAILED',
   'MODEL_SELECTION_UNAVAILABLE',
   'CONTEXT_COMPACTION_MODEL_UNAVAILABLE',
   'MODEL_CATALOG_UNCONFIRMED',
@@ -346,16 +345,20 @@ const MCP_AUTO_BLOCK_REASONS = new Map<string, string>([
 ]);
 
 /** Parse the runtime envelope, including Electron and device-link IPC wrappers.
- * A parsed code is only a translation candidate: unknown REMOTE codes must not
+ * A parsed code is only a translation candidate. Consumers may opt into additional codes with
+ * their own guidance. Unknown REMOTE codes must not
  * promote their upstream fallback text into localized user-facing guidance.
  */
-export function parseAgentErrorCode(message: string): { code: string; fallback: string } | null {
+export function parseAgentErrorCode(
+  message: string,
+  additionalCodes: readonly string[] = [],
+): { code: string; fallback: string } | null {
   // Host send failures wrap the original startup error in a stable
   // `LAZY_CREATE_FAILED:` envelope. Keep accepting that wrapper here so the
   // renderer can still select the actionable remote-provider guidance instead
   // of collapsing the whole failure to the generic "reply failed" card.
   const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:(?:LAZY_CREATE_FAILED|REHYDRATE_FAILED):\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
-  if (!match || (!/^REMOTE_[A-Z_]+$/.test(match[1]) && !AGENT_CHAT_ERROR_CODES.has(match[1]))) {
+  if (!match || (!/^REMOTE_[A-Z_]+$/.test(match[1]) && !AGENT_CHAT_ERROR_CODES.has(match[1]) && !additionalCodes.includes(match[1]))) {
     return null;
   }
   // Released guest hosts and Pi use INVALID for a specific native-history

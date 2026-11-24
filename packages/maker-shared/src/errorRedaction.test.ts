@@ -493,6 +493,14 @@ describe('agent error envelopes shared by desktop and mobile', () => {
       }
     },
   );
+  it('only recognizes SSH command failures for callers that provide guidance', () => {
+    const message = 'LAZY_CREATE_FAILED: [SSH_EXEC_FAILED] SSH command channel open failed';
+    expect(parseAgentErrorCode(message)).toBeNull();
+    expect(parseAgentErrorCode(message, ['SSH_EXEC_FAILED'])).toEqual({
+      code: 'SSH_EXEC_FAILED',
+      fallback: 'SSH command channel open failed',
+    });
+  });
   it('preserves the legacy unknown-REMOTE fallback without treating arbitrary bracket text as a code', () => {
     expect(parseAgentErrorCode('[REMOTE_FUTURE] diagnostic')).toEqual({ code: 'REMOTE_FUTURE', fallback: 'diagnostic' });
     expect(parseAgentErrorCode('[REMOTE_FUTURE]')).toEqual({ code: 'REMOTE_FUTURE', fallback: '[REMOTE_FUTURE]' });
