@@ -79,7 +79,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     send: ['taskId', 'requestKey', 'expectedRevision', 'text', 'context', 'attachments', 'contextAttachments', 'invocationId', 'relay'],
     getRun: ['runId'],
     listRuns: ['taskId', 'after', 'limit'],
-    readMessages: ['taskId', 'after', 'limit'],
+    readMessages: ['taskId', 'after', 'limit', 'progressForRun'],
     cancel: ['runId', 'requestKey'],
     setHidden: ['taskId', 'hidden'],
     archive: ['taskId'],
@@ -141,6 +141,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   )
     return false;
   if (value.relay !== undefined && !validPluginTaskRelay(value.relay)) return false;
+  if (value.progressForRun !== undefined && !requires('progressForRun')) return false;
   if (value.after !== undefined && !text(value.after, 1024)) return false;
   if (
     value.limit !== undefined &&
@@ -245,6 +246,7 @@ export async function handlePluginTaskRequest(
         createPermissionMode: true,
         // getRun returns optional preview.text while the run's own execution is streaming.
         runPreview: true,
+        runProgress: true,
         imProjects: true,
         // imProjectConfig, confirmImPermission and imOverride on create/followImProject.
         imProjectOverrides: true,

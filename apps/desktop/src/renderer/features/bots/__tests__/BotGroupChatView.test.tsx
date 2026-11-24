@@ -2368,6 +2368,24 @@ describe('BotGroupChatView', () => {
       expect(mocks.getBotGroup).toHaveBeenCalledTimes(reads);
     });
 
+    it('keeps visible history through a 429 cooldown and coalesces pushes into one recovery', async () => {
+      vi.useFakeTimers();
+      const metadataRetryAt = Date.now() + 3_000;
+      mocks.getBotGroup.mockResolvedValueOnce({ ok: true, group: detail({ metadataRetryAt }) })
+        .mockResolvedValue({ ok: true, group: detail({ messages: [msg({ content: 'Recovered history' })] }) });
+      await act(async () => { renderView(); });
+      expect(screen.getByText('周六 8:10 有票')).toBeTruthy();
+      const count = mocks.getBotGroup.mock.calls.length;
+      await act(async () => {
+        for (let n = 0; n < 3; n++) mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' }));
+        await vi.advanceTimersByTimeAsync(2_999);
+      });
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(count);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(screen.getByText('Recovered history')).toBeTruthy();
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(count + 1);
+    });
+
     it('keeps recovery reads serialized and lets a newer push cancel the pending retry', async () => {
       renderView();
       await screen.findByText('周六 8:10 有票');

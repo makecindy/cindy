@@ -2353,6 +2353,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     openSession: openCollabSession,
     // 远程供应商：被控电脑声明支持时，Worker 可以像任务一样选其他电脑 / 分享的供应商。
     workerAgentLocationSelectable: capabilities?.supportsOrcaWorkerAgentDevice === true,
+    workerModelGroupSelectable: capabilities?.supportsOrcaWorkerModelGroup === true,
   });
   const { running: runningModel, pending: pendingModel } = taskModelCatalogRoutes(currentSession, deviceId);
   const composerDeviceProviders = useDeviceProviders(
@@ -11230,6 +11231,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 return result;
               },
               onSelect: collab.workerForm.modelPicker.select,
+              modelGroups: collab.workerForm.modelPicker.modelGroups,
               // 远程供应商:其他电脑上开放了远程调用的供应商与分享接在后面(与任务模型列表同一套)，
               // 选中 = Worker 的 Agent 在那台运行。
               ...(collab.workerForm.agentLocationSelectable

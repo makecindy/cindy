@@ -84,6 +84,7 @@ export interface VendorPrefs {
 export interface CollabWorkerConfig {
   role: string;
   model: string;
+  modelGroup?: string;
   effort?: Effort;
   fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;null/缺省 = 未显式(main 侧按默认路由解析)。 */
@@ -382,12 +383,16 @@ function sanitize(raw: unknown): NewMakerDraft {
     if (!wc || typeof wc !== 'object') return undefined;
     // 按另一台电脑(远程供应商)目录选的配置不跨重启保留，见 CollabWorkerConfig.agentDeviceId。
     if (typeof wc.agentDeviceId === 'string') return undefined;
+    const modelGroup = sanitizeModelGroupSelection({ type: 'route', id: wc.modelGroup })?.id;
+    // 恢复后不会连接原来的被控端，也不会恢复 Worker 的执行设备。
+    if (modelGroup && (r.deviceLinkDeviceId || wc.executionDeviceId)) return undefined;
     const model = typeof wc.model === 'string' && wc.model.trim() ? wc.model : undefined;
     if (!model) return undefined;
     const role = typeof wc.role === 'string' && wc.role.trim() ? wc.role.trim() : 'developer';
     return {
       role,
       model,
+      ...(modelGroup && !remoteHostId ? { modelGroup } : {}),
       effort: typeof wc.effort === 'string' ? (wc.effort as Effort) : undefined,
       fast: (typeof wc.fast === 'boolean' || wc.fast === 'ultrafast') ? wc.fast : undefined,
       // 来源与模型是同一次选择的两个维度,随 model 一起耐久保留;与 role 同样 trim,
@@ -1015,6 +1020,11 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   // 路径」同一思路)。
   if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
     next.collab = { ...next.collab, workerConfig: undefined };
+  } else if (next.remoteHostId && next.collab.workerConfig?.modelGroup) {
+    next.collab = {
+      ...next.collab,
+      workerConfig: { ...next.collab.workerConfig, modelGroup: undefined },
+    };
   }
   // 协同与项目/对话形态正交,切 workingDir 不再改 enabled。device-link 与 SSH 的 Worker
   // 创建和团队读写都在对应执行端完成;Worker 子会话不能嵌套协同,由会话侧入口判定兜住。

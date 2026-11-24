@@ -318,6 +318,16 @@ export interface PiNativeProvidersResult {
   env: Record<string, string>;
 }
 
+/** The selected BYOM source was absent from Pi's native route set at startup.
+ * The host must separately verify whether the saved connection still exists.
+ */
+export class PiByomRouteAbsentError extends Error {
+  constructor(readonly providerId: string, message: string) {
+    super(message);
+    this.name = 'PiByomRouteAbsentError';
+  }
+}
+
 /**
  * The host could not construct the first-party Pi provider because its local
  * compatibility proxy is not ready. This is a fatal startup condition for
@@ -2590,6 +2600,8 @@ export interface AgentMcpServerToolsReport {
 }
 
 export interface AgentSessionHandle {
+  /** The sharing computer confirmed that it reclaimed this idle native run. */
+  hasReclaimedSharedRun?(): boolean;
   /** Canonical physical Skill identities frozen at native runtime startup. */
   readonly disabledSkillPaths?: readonly string[];
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
