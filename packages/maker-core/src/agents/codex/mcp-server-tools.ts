@@ -24,6 +24,20 @@ export async function readCodexThreadMcpServerTools(
   serverName: string,
   timeoutMs = 5_000,
 ): Promise<AgentMcpServerToolsReport> {
+  const reports = await readCodexThreadMcpServersTools(request, threadId, [serverName], timeoutMs);
+  return reports.get(serverName)!;
+}
+
+/** Share one thread-status traversal and deadline across the requested servers. */
+export async function readCodexThreadMcpServersTools(
+  request: StatusRequest,
+  threadId: string,
+  serverNames: readonly string[],
+  timeoutMs = 5_000,
+): Promise<Map<string, AgentMcpServerToolsReport>> {
+  const missing = new Set(serverNames);
+  const reports = new Map<string, AgentMcpServerToolsReport>();
+  if (!missing.size) return reports;
   const deadline = Date.now() + timeoutMs;
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
@@ -35,10 +49,16 @@ export async function readCodexThreadMcpServerTools(
       { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId },
       { timeoutMs: remainingMs },
     );
-    const server = status.data.find((entry) => entry.name === serverName);
-    if (server) return reportFromCodexStatus(server);
+    for (const server of status.data) {
+      if (!missing.delete(server.name)) continue;
+      reports.set(server.name, reportFromCodexStatus(server));
+    }
+    if (!missing.size) return reports;
     cursor = status.nextCursor;
-    if (cursor === null) return { state: 'not-mounted', tools: [] };
+    if (cursor === null) {
+      for (const name of missing) reports.set(name, { state: 'not-mounted', tools: [] });
+      return reports;
+    }
     if (seenCursors.has(cursor)) throw new Error('Codex MCP status pagination repeated a cursor');
     seenCursors.add(cursor);
   }

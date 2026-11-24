@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readCodexThreadMcpServerTools } from './mcp-server-tools.js';
+import { readCodexThreadMcpServerTools, readCodexThreadMcpServersTools } from './mcp-server-tools.js';
 
 type Page = { data: Array<Record<string, unknown>>; nextCursor: string | null };
 
@@ -69,5 +69,20 @@ describe('Codex thread MCP server tools', () => {
       a: { nextCursor: 'a', data: [] },
     });
     await expect(readCodexThreadMcpServerTools(invoke, 't', 'custom_omc')).rejects.toThrow(/repeated a cursor/);
+  });
+
+  // Gateway recovery must see a failed plugin client even beside a healthy
+  // helper, without multiplying status RPCs or confusing missing legacy state.
+  // Unit tier, production reader; the servers straddle two native status pages.
+  it('reads independent gateway states in one paginated traversal', async () => {
+    const { request, invoke } = requestFor({
+      first: { nextCursor: 'next', data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }] },
+      next: { nextCursor: null, data: [{ name: 'cindy', runtimeStatus: 'failed', tools: { ghost_info: {} } }] },
+    });
+    const reports = await readCodexThreadMcpServersTools(invoke, 'thread-1', ['cindy_helper', 'cindy', 'missing']);
+    expect(reports.get('cindy_helper')).toMatchObject({ state: 'connected' });
+    expect(reports.get('cindy')).toEqual({ state: 'failed', tools: [] });
+    expect(reports.get('missing')).toEqual({ state: 'not-mounted', tools: [] });
+    expect(request.mock.calls.map(([, params]) => params.cursor)).toEqual([null, 'next']);
   });
 });
