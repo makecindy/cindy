@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { sharedTaskHostPeer } from '@cindy/device-link';
 
 vi.mock('../../store', () => ({
   ensureHydrated: vi.fn(async () => undefined),
@@ -158,8 +157,8 @@ describe('executeSidebarCommand', () => {
   });
 
   // #11546, unit: a forwarded DIFF action must leave the shared guest's saved tabs untouched.
-  it('ignores a forwarded Review toggle for a shared-task guest', async () => {
-    getContext.mockResolvedValue({ available: true, sessionId: 's1', deviceLinkDeviceId: sharedTaskHostPeer('task', 'host') });
+  it('ignores a forwarded Review toggle before task ownership is known', async () => {
+    getContext.mockResolvedValue({ available: true, sessionId: 's1', deviceLinkDeviceId: undefined });
     await executeSidebarCommand({ type: 'toggle-review-tab', sessionId: 's1' });
     expect(ensureHydrated).not.toHaveBeenCalled();
     expect(closeTab).not.toHaveBeenCalled();

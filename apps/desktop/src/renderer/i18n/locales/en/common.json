@@ -10687,6 +10687,8 @@
       "remoteUnavailableDescription": "Terminal is currently available only for sessions running on this device."
     },
     "review": {
+      "guestTaskTitle": "Task changes · Read only",
+      "guestTaskScope": "Shows completed file edits recorded in the shared conversation. Changes without a recorded edit are omitted.",
       "turn": {
         "title": "Changes from this message",
         "localOnly": "Exact message changes are not available for remote sessions yet.",

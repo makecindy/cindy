@@ -1,5 +1,4 @@
 import type { InstalledGhost } from '../../../shared/ghost';
-import { isSharedTaskPeer } from '@cindy/device-link';
 import { getApprovedGhostHostUi } from '../../../shared/ghost';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { FEATURE_RETIREMENTS } from '../../../shared/featureRetirements';
@@ -167,7 +166,7 @@ export function buildTabAvailabilities(input: TabAvailabilityInput): TabAvailabi
           ? input.installedGhosts.filter((ghost) => ghost.manifest.taskView?.remote === true)
           : input.installedGhosts,
       subagentsAvailable: input.subagentsAvailable === true || !eligibilityKnown,
-      reviewAvailable: !isSharedTaskPeer(input.deviceLinkDeviceId),
+      reviewAvailable: input.deviceLinkDeviceId !== undefined,
       hiddenTabIds: input.hiddenTabIds,
     },
     global: {

@@ -1644,7 +1644,7 @@ export function MainLayout() {
         }
         case 'toggleReviewTab': {
           const sessionId = rightSidebarSessionIdRef.current;
-          if (!sessionId || isSharedTaskPeer(rightSidebarWorkdirInfoRef.current.deviceLinkDeviceId)) return false;
+          if (!sessionId || rightSidebarWorkdirInfoRef.current.deviceLinkDeviceId === undefined) return false;
           void (async () => {
             const routed = await routeSidebarCommand({ type: 'toggle-review-tab', sessionId });
             if (routed !== 'attached') return;

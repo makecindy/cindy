@@ -19,15 +19,15 @@ const affected = {
 } as InstalledGhost;
 describe('sidebar availability', () => {
   // #11546 (unit): restore a selected review tab when opening a shared task.
-  it('falls back to Files for a guest and preserves Review for the owner and paired devices', () => {
+  it('waits for ownership before restoring Review for guests, owners and paired devices', () => {
     const files = tabs[0]!;
     const review: TabState = { ...files, id: 'git', kind: 'review' };
-    const project = (deviceLinkDeviceId: string | null) => projectAvailableTabs(
+    const project = (deviceLinkDeviceId?: string | null) => projectAvailableTabs(
       [files, review], review.id,
       buildTabAvailabilities({ installedGhosts: [], remoteHostId: null, deviceLinkDeviceId }).session,
     );
-    expect(project(sharedTaskHostPeer('task', 'owner-device'))).toEqual({ tabs: [files], activeTabId: files.id });
-    for (const owner of [null, 'paired-device']) {
+    expect(project(undefined)).toEqual({ tabs: [files], activeTabId: files.id });
+    for (const owner of [null, 'paired-device', sharedTaskHostPeer('task', 'owner-device')]) {
       expect(project(owner)).toEqual({ tabs: [files, review], activeTabId: review.id });
     }
   });

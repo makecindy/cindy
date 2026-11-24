@@ -330,7 +330,7 @@ describe('RightSidebarShell empty state', () => {
 
   // #11546, unit: an empty task sidebar and its + menu share the session's Review eligibility.
   it.each([
-    ['guest', sharedTaskHostPeer('task', 'host'), false],
+    ['guest', sharedTaskHostPeer('task', 'host'), true],
     ['owner', null, true],
     ['paired device', 'paired-device', true],
   ] as const)('filters both Review creation surfaces for %s', async (_role, deviceLinkDeviceId, available) => {

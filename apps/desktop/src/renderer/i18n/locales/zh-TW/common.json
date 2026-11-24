@@ -10643,6 +10643,8 @@
       "remoteUnavailableDescription": "終端目前僅適用於在此裝置上執行的本機任務。"
     },
     "review": {
+      "guestTaskTitle": "本任務變更 · 唯讀",
+      "guestTaskScope": "僅顯示共享對話中有記錄的已完成檔案編輯。未記錄差異的操作不會顯示。",
       "turn": {
         "title": "本條訊息的變更",
         "localOnly": "本條訊息的精確變更暫不支援遠端任務。",

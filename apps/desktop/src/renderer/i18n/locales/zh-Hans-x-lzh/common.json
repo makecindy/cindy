@@ -10643,6 +10643,8 @@
       "remoteUnavailableDescription": "终端今仅适于此设备上所行之本机差事。"
     },
     "review": {
+      "guestTaskTitle": "本务所改 · 唯读",
+      "guestTaskScope": "惟列共享对话所记且已毕之文件改动。",
       "turn": {
         "title": "此讯之变更",
         "localOnly": "此讯之精确变更，远程差事暂不支持。",

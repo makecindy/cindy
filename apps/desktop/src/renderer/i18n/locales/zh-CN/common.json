@@ -10643,6 +10643,8 @@
       "remoteUnavailableDescription": "终端目前仅适用于在此设备上运行的任务。"
     },
     "review": {
+      "guestTaskTitle": "本任务改动 · 只读",
+      "guestTaskScope": "仅显示共享对话中有记录的已完成文件编辑。未记录差异的操作不会显示。",
       "turn": {
         "title": "本条消息的变更",
         "localOnly": "本条消息的精确变更暂不支持远程任务。",

@@ -10687,6 +10687,8 @@
       "remoteUnavailableDescription": "Das Terminal ist derzeit nur für Sitzungen auf diesem Gerät verfügbar."
     },
     "review": {
+      "guestTaskTitle": "Aufgabenänderungen · Schreibgeschützt",
+      "guestTaskScope": "Zeigt abgeschlossene Dateibearbeitungen aus der geteilten Unterhaltung. Änderungen ohne aufgezeichnete Bearbeitung werden ausgelassen.",
       "turn": {
         "title": "Änderungen aus dieser Nachricht",
         "localOnly": "Exakte Änderungen pro Nachricht sind für Remote-Sitzungen noch nicht verfügbar.",

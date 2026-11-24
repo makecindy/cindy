@@ -10643,6 +10643,8 @@
       "remoteUnavailableDescription": "터미널은 현재 이 기기에서 로컬로 실행되는 세션에서만 사용할 수 있습니다."
     },
     "review": {
+      "guestTaskTitle": "이 작업의 변경 사항 · 읽기 전용",
+      "guestTaskScope": "공유 대화에 기록된 완료된 파일 편집만 표시합니다.",
       "turn": {
         "title": "이 메시지의 변경 사항",
         "localOnly": "메시지별 정확한 변경 사항은 아직 원격 세션에서 사용할 수 없습니다.",

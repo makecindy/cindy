@@ -10763,6 +10763,8 @@
       "remoteUnavailableDescription": "O terminal está disponível no momento apenas para sessões em execução neste dispositivo."
     },
     "review": {
+      "guestTaskTitle": "Alterações da tarefa · Somente leitura",
+      "guestTaskScope": "Exibe apenas as edições de arquivos concluídas e registradas na conversa compartilhada.",
       "turn": {
         "title": "Alterações desta mensagem",
         "localOnly": "As alterações exatas da mensagem ainda não estão disponíveis para sessões remotas.",

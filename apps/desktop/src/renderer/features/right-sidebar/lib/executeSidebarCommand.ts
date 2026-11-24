@@ -1,5 +1,4 @@
 import { openPluginTaskTab } from './openPluginTaskTab';
-import { isSharedTaskPeer } from '@cindy/device-link';
 import { openPluginUiView } from './openPluginUiView';
 import { openMailPreview, openMailCard } from './mailPreview';
 /** 执行 main 已裁决并推给当前 renderer host 的 RSB command。 */
@@ -109,7 +108,7 @@ export async function executeSidebarCommand(
   }
   if (command.type === 'toggle-review-tab') {
     const context = attachedContext ?? await window.electronAPI.rightSidebarWindow.getContext();
-    if (context?.sessionId !== command.sessionId || isSharedTaskPeer(context.deviceLinkDeviceId)) return;
+    if (context?.sessionId !== command.sessionId || context.deviceLinkDeviceId === undefined) return;
     await ensureHydrated(command.sessionId);
     const bucket = getBucket(command.sessionId);
     const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');
