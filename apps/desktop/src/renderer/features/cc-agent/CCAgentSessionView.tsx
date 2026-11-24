@@ -7293,6 +7293,7 @@ function CCAgentSessionContent({
             sessionId={sessionId}
             nativeSessionId={session?.sdkSessionId}
             refreshKey={agentStatus.isRunning}
+            viewVisible={viewVisible}
           >
             <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
           </SessionSubscriptionAccountProvider>

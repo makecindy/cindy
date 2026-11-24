@@ -176,6 +176,7 @@ export function SessionSubscriptionAccountProvider({
   sessionId,
   nativeSessionId,
   refreshKey,
+  viewVisible = true,
   children,
 }: {
   /** Subscription family; the actual source may be an independent account provider. */
@@ -188,6 +189,8 @@ export function SessionSubscriptionAccountProvider({
   nativeSessionId: string | null | undefined;
   /** 变化时重读(例如一轮开始与结束)。 */
   refreshKey?: unknown;
+  /** A collapsed chat rail stays mounted. Pause its local Claude binding reads. */
+  viewVisible?: boolean;
   children: ReactNode;
 }) {
   const pool =
@@ -195,6 +198,7 @@ export function SessionSubscriptionAccountProvider({
   const remoteDeviceId = deviceId || null;
   // Keep an unsaved route distinct so browsing a named source cannot inherit the task's account.
   const bindingOnly = pool === 'anthropic' && routeProviderId === null && !remoteDeviceId;
+  const readEnabled = !bindingOnly || viewVisible;
   const implicit = routeProviderId === null && (pool === 'openai' || bindingOnly);
   const route = implicit ? null : routeProviderId || pool;
   const ownerGeneration = useOptionalDataOwnerGeneration();
@@ -212,7 +216,7 @@ export function SessionSubscriptionAccountProvider({
   } | null>(null);
 
   useEffect(() => {
-    if (!pool) return;
+    if (!pool || !readEnabled) return;
     let disposed = false;
     let latest = 0;
     const owner = getDataOwnerGeneration();
@@ -284,7 +288,7 @@ export function SessionSubscriptionAccountProvider({
       offChanged?.();
       window.removeEventListener('focus', onFocus);
     };
-  }, [pool, route, key, remoteDeviceId, sessionId, nativeSessionId, foreground, refreshKey, reconnectEpoch, ownerGeneration, implicit, bindingOnly]);
+  }, [pool, route, key, remoteDeviceId, sessionId, nativeSessionId, foreground, refreshKey, reconnectEpoch, ownerGeneration, implicit, bindingOnly, readEnabled]);
 
   const loading = useMemo<SessionSubscriptionAccountState | null>(
     () => (pool ? { providerId: pool, state: 'loading' } : null),

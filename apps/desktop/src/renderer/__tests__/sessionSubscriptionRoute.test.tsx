@@ -6,13 +6,14 @@ import { SessionSubscriptionAccountProvider, useSessionSubscriptionAccount, sess
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '../contexts/dataOwnerGeneration';
 import type { ProviderView } from '@cindy/model-providers';
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalDataOwnerGeneration: () => getDataOwnerGeneration() }));
-vi.mock('@/hooks/useWindowVisible', () => ({ useDocumentVisible: () => false }));
-const connection = vi.hoisted(() => ({ epoch: 0 }));
+const connection = vi.hoisted(() => ({ epoch: 0, visible: false }));
+vi.mock('@/hooks/useWindowVisible', () => ({ useDocumentVisible: () => connection.visible }));
 vi.mock('@/features/device-link/useDeviceLinkReconnectEpoch', () => ({ useDeviceLinkReconnectEpoch: () => connection.epoch }));
 const invoke = vi.fn();
 beforeEach(() => {
   invoke.mockReset();
   connection.epoch = 0;
+  connection.visible = false;
   setDataOwnerGeneration('owner-10111');
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { deviceLink: { invoke } } });
 });
@@ -156,4 +157,49 @@ it.each([
   await act(async () => {});
   expect(invoke).not.toHaveBeenCalled();
   expect(screen.getByTestId('implicit-account').textContent).not.toContain('wrong@example.test');
+});
+
+
+// #12403 review (unit): a collapsed file-browser chat stays mounted in a visible window.
+it('pauses local Claude binding reads while its chat rail is collapsed', async () => {
+  vi.useFakeTimers();
+  connection.visible = true;
+  const sessionAccount = vi.fn(async () => ({
+    providerId: 'anthropic', state: 'bound',
+    account: { isDefault: false, number: 2, paused: false, status: 'ready' },
+  }));
+  const listeners = new Set<(event: { providerId: string }) => void>();
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    subscriptionAccounts: { sessionAccount, onChanged: (listener: (event: { providerId: string }) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    } },
+  } });
+  const view = (viewVisible: boolean) => (
+    <SessionSubscriptionAccountProvider providerId="anthropic" routeProviderId={null} deviceId={null}
+      sessionId="claude-file-rail" nativeSessionId="rail-native" viewVisible={viewVisible}>
+      <div />
+    </SessionSubscriptionAccountProvider>
+  );
+  const { rerender, unmount } = render(view(true));
+  try {
+    await act(async () => {});
+    expect(sessionAccount).toHaveBeenCalledTimes(1);
+    expect(listeners.size).toBe(1);
+    rerender(view(false));
+    expect(listeners.size).toBe(0);
+    await act(async () => {
+      for (const listener of listeners) listener({ providerId: 'anthropic' });
+      window.dispatchEvent(new Event('focus'));
+      vi.advanceTimersByTime(61_000);
+    });
+    expect(sessionAccount).toHaveBeenCalledTimes(1);
+    rerender(view(true));
+    await act(async () => {});
+    expect(sessionAccount).toHaveBeenCalledTimes(2);
+    expect(listeners.size).toBe(1);
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
 });
