@@ -80,7 +80,7 @@ export function InteractionPromptCardShell({
         </div>
         <span
           aria-hidden="true"
-          className="flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[6px]"
+          className="flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-lg"
         >
           <Plus size={16} className="text-[var(--plan-min-icon)]" />
         </span>
@@ -107,7 +107,7 @@ export function InteractionPromptCardShell({
               disabled={minimizeDisabled}
               aria-label={minimizeAriaLabel}
               className={cn(
-                'flex h-[28px] w-[28px] shrink-0 cursor-pointer items-center justify-center rounded-[6px]',
+                'flex h-[28px] w-[28px] shrink-0 cursor-pointer items-center justify-center rounded-lg',
                 'border border-[var(--confirm-btn-secondary-border)] bg-transparent',
                 'text-[var(--confirm-btn-secondary-text)] transition-colors',
                 'hover:bg-[var(--confirm-btn-secondary-hover)]',

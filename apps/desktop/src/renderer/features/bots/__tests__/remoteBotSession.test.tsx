@@ -16,7 +16,7 @@ const h = vi.hoisted(() => ({
   listed: true,
   cached: false,
   lastReplyAt: 0,
-  devices: null as Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> | null,
+  devices: null as Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean; controlEnabled?: boolean }> | null,
   deviceListStatus: 'ready' as 'loading' | 'ready' | 'error',
   profileLoadState: 'ready' as 'pending' | 'ready' | 'error',
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
@@ -344,6 +344,23 @@ it('does not confirm offline when an online home is missing its target row', asy
   render(<RemoteBotSessionView />);
   await waitFor(() => expect(h.cloudView).not.toHaveBeenCalled());
   expect(screen.queryByText('cloud-offline-view')).toBeNull();
+});
+
+// #10758, unit tier: the ordinary remote entry can render a retained offline row
+// alongside an already settled online device. Missing-row tests never hit this branch.
+it('shows preparation instead of offline recovery for an online home with a stale roster row', async () => {
+  h.online = false;
+  h.devices = [{ deviceId: 'home', online: true, remoteControlEnabled: true, controlEnabled: true }];
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  const { rerender } = render(<RemoteBotSessionView />);
+  expect(screen.getByText('bots.remote.preparing')).toBeTruthy();
+  expect(h.cloudView).not.toHaveBeenCalled();
+  expect(h.invoke).not.toHaveBeenCalled();
+
+  h.devices = [{ deviceId: 'home', online: false, remoteControlEnabled: true, controlEnabled: true }];
+  rerender(<RemoteBotSessionView />);
+  await screen.findByText('cloud-offline-view');
 });
 
 it('returns to canonical remote chat when the missing target row recovers', async () => {

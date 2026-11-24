@@ -117,6 +117,23 @@ describe('settings discoverability regressions', () => {
     }
     expect(searchSettings(documents, 'with your existing sign-ins').some(({ entry }) => entry.id === 'computerUse.browserTarget')).toBe(true);
   });
+  // #4932: backend-description coverage missed the Browser switch's scope hints.
+  // Unit tier: search the existing Automation switch by its translated hints.
+  it('finds the Browser automation switch by both scope hints', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    for (const lng of ['zh-CN', 'en']) {
+      for (const hint of ['userDefaultToggleHint', 'toggleHint']) {
+        const query = searchI18n.t(`settings.computerUse.browser.${hint}`, { lng });
+        const result = searchSettings(documents, query).find(
+          ({ entry }) => entry.id === 'settings.computerUse.browser.title',
+        );
+        expect(result?.entry, query).toMatchObject({
+          tab: 'computer-use',
+          targetId: 'settings-search-settings-computerUse-browser-title',
+        });
+      }
+    }
+  });
   // Unit regressions (#8481): prior coverage checked generic wallpaper/sound
   // titles, not visible picker names. Query real translations via production search.
   it('finds the wallpaper picker by each selectable wallpaper name', () => {

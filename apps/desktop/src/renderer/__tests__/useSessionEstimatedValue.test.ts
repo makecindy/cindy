@@ -55,7 +55,7 @@ if (!GPT_DETAILS) {
 
 describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
   it('preserves DB-backed costs before chat history has loaded', () => {
-    const current = new Map([['persisted', usdEstimate(0.12)]]);
+    const current = new Map([['persisted', [usdEstimate(0.12)]]]);
     const result = syncEstimatedValueCostsFromStoreSnapshot(current, [], {
       messages: [],
       historyLoaded: false,
@@ -68,8 +68,8 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
   it('clears all costs when /clear leaves an authoritative empty transcript', () => {
     const result = syncEstimatedValueCostsFromStoreSnapshot(
       new Map([
-        ['persisted', usdEstimate(0.12)],
-        ['visible', usdEstimate(0.03)],
+        ['persisted', [usdEstimate(0.12)]],
+        ['visible', [usdEstimate(0.03)]],
       ]),
       ['visible'],
       { messages: [], historyLoaded: true, hasMoreMessages: false },
@@ -108,10 +108,10 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
     );
     const result = syncEstimatedValueCostsFromStoreSnapshot(
       new Map([
-        ['hidden-history', usdEstimate(0.12)],
-        ['oldest', usdEstimate(0.03)],
-        ['middle', usdEstimate(0.03)],
-        ['latest', usdEstimate(0.03)],
+        ['hidden-history', [usdEstimate(0.12)]],
+        ['oldest', [usdEstimate(0.03)]],
+        ['middle', [usdEstimate(0.03)]],
+        ['latest', [usdEstimate(0.03)]],
       ]),
       ['oldest', 'middle', 'latest'],
       { messages: [...messages, assistantMessage('visible-no-cost')], historyLoaded: true, hasMoreMessages: true },
@@ -124,6 +124,23 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
 });
 
 describe('resolveEstimatedValueTurnCostEntry', () => {
+  // Unit: persisted model evidence and the live segment must produce the same two values on replay.
+  it('preserves the other native estimate without counting the primary model twice', () => {
+    const dollars = usdEstimate(2);
+    const yuan = { ...usdEstimate(7), currency: 'CNY' as const };
+    const payload = { clientId: 'mixed', turnMoney: dollars, turnCostIsEstimate: true,
+      turnUsageDetails: buildTurnUsageDetails({ inputTokens: 2, perModelCost: [
+        { model: 'model-a', money: dollars }, { model: 'model-b', money: yuan },
+      ] })! };
+    expect(resolveEstimatedValueTurnCostEntry(payload)).toEqual({
+      clientId: 'mixed', money: dollars, additionalEstimates: [yuan],
+    });
+    const snapshot = { messages: [{ ...assistantMessage('mixed'), ...payload }], historyLoaded: true, hasMoreMessages: false };
+    const first = syncEstimatedValueCostsFromStoreSnapshot(new Map(), [], snapshot)!;
+    const replay = syncEstimatedValueCostsFromStoreSnapshot(first.costs, first.storeClientIds, snapshot)!;
+    expect(replay.costs.get('mixed')).toEqual([dollars, yuan]);
+  });
+
   it('corrects realtime stale full-cache estimates before merging session value', () => {
     expect(
       resolveEstimatedValueTurnCostEntry({

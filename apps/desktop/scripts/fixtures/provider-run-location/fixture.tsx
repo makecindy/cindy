@@ -75,6 +75,7 @@ mountPage({
       for (const id of ['mbp', 'mini']) fixture.catalogs.set(id, { providers: remote, loading: false, error: null });
     }
     if (ctx.case.startsWith('local-management')) snapshot.providers[0] = { ...snapshot.providers[0], connected: false, subscriptionAccountPool: 'openai', runLocation: 'mbp' } as typeof snapshot.providers[0];
+    if (ctx.case === 'empty-pool') Object.assign(snapshot.providers[0], { connected: false, removed: false, subscriptionAccountPool: 'openai' });
     if (ctx.case === 'borrowing') snapshot.providers[0] = { ...snapshot.providers[0], connected: false };
     // Anthropic was never signed in here (no removed flag): it must still be listed, borrowed from another computer.
     if (ctx.case === 'never-signed-in') snapshot.providers[1] = { ...snapshot.providers[1], connected: false };
@@ -121,9 +122,16 @@ mountPage({
             subscriptionControl.connected = true;
           }
           const configured = ctx.case !== 'borrowing' && !(ctx.case === 'never-signed-in' && command.providerId === 'anthropic');
+          if (ctx.case === 'empty-pool' && command.providerId === 'openai') {
+            if (!subscriptionControl.connected) {
+              if (command.action === 'login') throw new Error('[SUBSCRIPTION_ACCOUNT_FAILED] Could not update the subscription account');
+              return { providerId: 'openai', configured, strategy: 'least', accounts: [] };
+            }
+            if (command.action === 'add') (window as any).__uiPage.emit('subscriptionAccountsChanged', { providerId: 'openai' });
+          }
           const directory = command.providerId === 'anthropic' ? '/Users/alex/.claude' : '/Users/alex/.codex';
           const defaultAccount = { id: 'default', identity: 'alex@example.com',
-            plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: ctx.case.startsWith('recovery-') && !(window as any).providerSourcesFixture.snapshot.providers[0].connected ? 'unavailable' : 'ready', directory,
+            plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: ctx.case.startsWith('recovery-') && !(window as any).providerSourcesFixture.snapshot.providers[0].connected ? 'signed-out' : 'ready', directory,
             running: 0, paused: false, limit: 4, weight: 1 };
           if (ctx.case.startsWith('local-management') && command.providerId === 'openai') {
             return { providerId: 'openai', configured: true, strategy: 'least', accounts: Array.from({ length: 5 }, (_, index) => ({

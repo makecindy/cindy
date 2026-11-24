@@ -204,7 +204,7 @@ node secretBindings key、setup kv key——都不能使用 `__proto__`、`const
 
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `slots`。带详单的字段是 `tools`、`cindy`、
 `agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
-`browserExtension`、`skill`、`systemPrompt`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
+`browserExtension`、`skill`、`systemPrompt`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`form`、`fs`、
 `library`、`deviceSync`、`sessionContext`、`pick`、`workspace`、`liveScreen`(需同时声明 `node`,见 [§4.22.1](plugin-task-view.md#4221-在手机上查看与操作设备画面livescreen-能力))。不用的字段直接省略。
 `harnesses` 声明插件提供的任务执行引擎(ACP Agent),每项指向 `node.entries` 里的一个入口,见
 [§4.6.4](plugin-harnesses.md)。

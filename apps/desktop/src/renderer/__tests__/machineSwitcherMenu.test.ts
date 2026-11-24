@@ -282,9 +282,9 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     const cardSource = read('features', 'cc-agent', 'sidebar', 'SessionCard.tsx');
     expect(cardSource).toContain('sourceLabel,');
     // Outside the inbox; the inbox leaves the project name to the row's project icon.
-    expect(cardSource).toContain('{sourceLabel && !inboxMode ? (');
+    expect(cardSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
     const itemSource = read('features', 'cc-agent', 'sidebar', 'SessionItem.tsx');
-    expect(itemSource).toContain('{sourceLabel && !inboxMode ? (');
+    expect(itemSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
   });
 
   // 2026-08-12 用户裁决:筛选各维度选中后菜单不关闭(常要连调几项);排序与显示
@@ -341,7 +341,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(infoMetaSource).toContain("piece.key === 'worktree' ?");
     // 菜单摘要的图标串同样按勾选顺序(遍历 taskInfoFields,不是遍历选项表)。
     const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
-    expect(filterSource).toContain('{taskInfoFields.map((field) => {');
+    expect(filterSource).toContain('{summaryFields.map((field) => {');
   });
 
   // 2026-08-12 用户裁决:任务信息行的当前选中项用图标表示,不再罗列短词。
@@ -371,7 +371,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(projectsSectionSource).not.toMatch(/if \(\s*allProjectKeysForOrder\.length === 0/);
     // 连接中 / 全屏 loading-error 不再把范围标题一起摘掉。设备目录 error 不展示
     // 占位提示，因此不属于这里的标题覆盖分支。
-    const connectingIdx = sidebarUpperSource.indexOf('selectedMachineConnecting ?');
+    const connectingIdx = sidebarUpperSource.indexOf('selectedMachinePlaceholder ?');
     expect(connectingIdx).toBeGreaterThanOrEqual(0);
     expect(sidebarUpperSource.slice(connectingIdx, connectingIdx + 900)).toContain(
       '<MainListScopeHeader',
@@ -384,7 +384,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
       'remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent',
       "remoteDeviceDirectoryStatus === 'loading' && !hasVisibleSidebarContent",
       'remoteSessionBootstrapLoadingDevices.length > 0 && !hasVisibleSidebarContent',
-      'selectedMachineConnecting ?',
+      'selectedMachinePlaceholder ?',
     ];
     for (const marker of placeholderMarkers) {
       const idx = sidebarUpperSource.indexOf(marker);

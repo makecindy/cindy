@@ -24,7 +24,8 @@ const helperMode = process.argv.find(arg => arg.startsWith('--state-helpers='))?
 const viewStateMode = process.argv.includes('--view-state') || !!helperMode;
 const authorMode = process.argv.find(arg => arg.startsWith('--author='))?.split('=')[1];
 const handoffMode = process.argv.includes('--handoff');
-const hostSdk = process.argv.includes('--host-sdk');
+const composerDrag = process.argv.includes('--composer-drag');
+const hostSdk = process.argv.includes('--host-sdk') || composerDrag;
 const bom = process.argv.includes('--bom');
 const pluginView = process.argv.includes('--plugin') || !!authorMode || hostSdk || bom || handoffMode;
 const remoteView = process.argv.includes('--remote');
@@ -115,7 +116,7 @@ try {
       { name: 'host-sdk-raw', setup(builder) {
         builder.onResolve({ filter: /ext-apps\/app-with-deps\?raw$/ }, () => ({ path: createRequire(import.meta.url).resolve('@modelcontextprotocol/ext-apps/app-with-deps'), namespace: 'sdk-raw' }));
         builder.onLoad({ filter: /.*/, namespace: 'sdk-raw' }, async args => ({ contents: await readFile(args.path, 'utf8'), loader: 'text' }));
-        builder.onResolve({ filter: /viewStateSdk(?:React)?\.js\?raw$/ }, args => ({ path: path.resolve(scriptDir, '../src/main/mcp-apps', args.path.split('/').pop().replace('?raw', '')), namespace: 'sdk-raw' }));
+        builder.onResolve({ filter: /(?:viewStateSdk(?:React)?|composerAttachmentSdk)\.js\?raw$/ }, args => ({ path: path.resolve(scriptDir, '../src/main/mcp-apps', args.path.split('/').pop().replace('?raw', '')), namespace: 'sdk-raw' }));
       } },
       {
         name: 'test-only-owner',
@@ -136,6 +137,8 @@ try {
     import assert from 'node:assert/strict';
     import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
     import { open as openFile } from 'node:fs/promises';
+    import { verifyComposerDrag } from './mcp-apps-composer-drag.verify.mjs';
+    import { supportsComposerDrag } from '../src/main/mcp-apps/composerDrag.ts';
     import { saveAppDownload } from '../src/main/mcp-apps/downloadFile.ts';
     import { buildRangedFileResponse } from '../src/main/cindy-media/rangeResponse.ts';
     import { runInNewContext } from 'node:vm';
@@ -221,6 +224,7 @@ try {
       }
       const tool=(await connection.tools()).find(tool=>tool.name===(handoffMode?'open_import':authorMode==='loader'?'open_view':authorMode==='files'?'open_showcase':authorMode?'open_view':independent?'open_metrics':'draft_form'));
       if(process.env.CINDY_MCP_APP_TEST_HOST_SDK==='1' && process.env.CINDY_MCP_APP_TEST_REMOTE!=='1') tool._meta['cindy/attachments']=[{type:'resource_link',name:'fixture.txt',uri:'library:fixture.txt'}];
+      if(process.env.CINDY_MCP_APP_TEST_COMPOSER_DRAG==='1') tool._meta['cindy/attachments'].push({type:'resource_link',name:'fixture.png',uri:loaderImageUri,mimeType:'image/png'});
       // A conversation image handed over with ghost_call.attachments; the generated page reads it from hostContext.
       if(authorMode==='loader') tool._meta['cindy/attachments']=[{type:'resource_link',name:'fixture.png',uri:loaderImageUri,mimeType:'image/png'}];
       const args=authorMode==='loader'?{intent:'请打开一个可以查看和编辑记录的页面'}:independent?{threshold:75}:{title:'AI draft',body:'Review before creating'};
@@ -229,7 +233,15 @@ try {
       let record={version:1,serverId:'example',serverRevision:appServerRevision(config),resourceUri:tool._meta.ui.resourceUri,tool:cardTool,arguments:args,result:authorMode==='loader'?pluginAppResult(result):result};
       if(authorMode==='loader'){assert.ok(result._meta.view.html.includes('<style>'));assert.deepEqual(Object.keys(pluginModelResult(result)),['content']);}
       let turns=0, receivedImages=[], pageApprovals=0, approvalGate, sdkApprovalSignal, sdkReleaseApproval;
+      const composerDrag = process.env.CINDY_MCP_APP_TEST_COMPOSER_DRAG === '1';
+      const dragAttachments = [], dragTray = new Map();
       host=new McpAppsHost({
+        composerDrag: composerDrag ? () => supportsComposerDrag(process.platform, process.versions.electron) : undefined,
+        hasComposerAttachment: composerDrag ? async ({resourceKey}) => dragTray.has(resourceKey) : undefined,
+        sendComposerAttachment: composerDrag ? async ({name,resourceKey,bytes}) => {
+          dragTray.set(resourceKey,name);
+          dragAttachments.push([name,Buffer.from(bytes)]);
+        } : undefined,
         viewState:viewStateMode?()=>({
           read:async()=>{if(readFails)throw new Error('fixture storage unavailable');return structuredClone(savedState);},
           save:async snapshot=>{savedState=snapshot.json===null?null:JSON.parse(snapshot.json);},
@@ -296,6 +308,7 @@ try {
       ipcMain.handle('test:mcp-app',async(event,input)=>{
         assert.equal(event.senderFrame,event.sender.mainFrame);
         const caller='renderer:'+event.sender.id;
+        if(composerDrag && input.op==='redeem-drag') return host.redeemComposerAttachmentDrag(caller,'task',input.ticket);
         if(process.env.CINDY_MCP_APP_TEST_REMOTE==='1')return remoteViews.control(caller,'fixture-device','task',input);
         return handleMcpAppOperation(host,caller,'task',input,{
           supply:(doc)=>supplyMcpAppDocument(doc,caller,raw=>handleMcpAppFrameOperation(host,caller,'task',doc.viewId,raw,async()=>{})),
@@ -385,6 +398,24 @@ try {
       if (process.env.CINDY_MCP_APP_TEST_HOST_SDK==='1') {
         stage='host SDK first generated page';
         await wait(()=>inner()?.executeJavaScript('window.pageState?.ready===true'));
+        if (composerDrag) {
+          if (supportsComposerDrag(process.platform, process.versions.electron)) {
+            stage='native composer drag';
+            await verifyComposerDrag(window.webContents,inner(),wait,loaderImageUri,name=>{
+              const entry=[...dragTray].find(([,value])=>value===name);
+              assert.ok(entry,'attachment is present before removal');
+              dragTray.delete(entry[0]);
+            });
+            const png=['fixture.png',loaderImage], text=['fixture.txt',Buffer.from('host-only-file')];
+            assert.deepEqual(dragAttachments,[png,text,png,text]);
+            assert.equal(turns,0);
+            console.log('COMPOSER_DRAG_VERDICT=passed (four trusted cross-frame drops, PNG/text bytes, removal and re-add, rebuilt controls, zero turns)');
+          } else {
+            assert.equal(await inner().executeJavaScript('!!sdkApp.getHostCapabilities().experimental["cindy/composer-attachment"].drag'),false);
+            console.log('COMPOSER_DRAG_VERDICT=button-only (unverified platform)');
+          }
+          return;
+        }
         assert.equal(await inner().executeJavaScript('window.pageState.page'),1);
         assert.equal(await inner().executeJavaScript('window.loaderCompatMode'), 'CSS1Compat');
         assert.equal(await inner().executeJavaScript('window.computedSdkLoaded&&window.externalSdkLoaded'),true);
@@ -832,6 +863,7 @@ try {
     CINDY_MCP_APP_TEST_PLUGIN: pluginView ? '1' : '0',
     CINDY_MCP_APP_TEST_URL: endpoint.url,
     CINDY_MCP_APP_TEST_RAW: independent ? '1' : '0',
+    CINDY_MCP_APP_TEST_COMPOSER_DRAG: composerDrag ? '1' : '0',
     CINDY_MCP_APP_TEST_HOST_SDK: hostSdk ? '1' : '0',
     CINDY_MCP_APP_TEST_VIEW_STATE: viewStateMode ? '1' : '0',
     CINDY_MCP_APP_TEST_HELPERS: helperMode ?? '',

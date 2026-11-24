@@ -12,7 +12,7 @@ import { toast } from '@/lib/toast';
  * 供应商组(provider-groups.md §10)：另一台电脑把某个供应商建成了组时，组里的电脑与分享不再单独
  * 列出，组所在电脑那一项标成供应商组，详情列出组内电脑与状态，并提供同账号管理入口。规则与模型列表同一份。
  */
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { ProviderView } from '@cindy/model-providers';
@@ -23,20 +23,34 @@ import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
-import { QuotaHoverCard } from '@/components/status/QuotaHoverCard';
+import {
+  QUOTA_WINDOW_COLUMNS,
+  QuotaHoverCard,
+  QuotaWindowSubgridContext,
+} from '@/components/status/QuotaHoverCard';
+import { buildSubscriptionAccountUsageCard } from '@/components/status/usageCardModel';
 import { Tip } from '@/components/ui/tooltip';
+import { useGroupMemberAccounts } from '@/features/provider-group/GroupMemberAccounts';
 import { RemoteProviderGroupMembers } from '@/features/provider-group/RemoteProviderGroupMembers';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
-import { useControllableDevices } from '@/hooks/useControllableDevices';
+import { useControllableDevices, type ControllableDevice } from '@/hooks/useControllableDevices';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
 import { collectRemoteProviderGroups, remoteProviderEntryKey } from '@/lib/remoteProviderGroups';
+import {
+  formatClaudeSubscriptionPlanLabel,
+  formatCodexPlanLabel,
+} from '@/lib/subscriptionPlanLabel';
 import { cn } from '@/lib/utils';
 import { PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from '../../../shared/providerShare';
 import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
+import {
+  isSubscriptionProvider,
+  type SubscriptionProvider,
+} from '../../../shared/subscriptionAccounts';
 
 import { ReadOnlyProviderModelSection, readOnlyProviderModels } from './ReadOnlyProviderModels';
 import { useDeviceProviderSubscriptionCard } from './useProviderSubscriptionCard';
@@ -61,6 +75,8 @@ export interface OwnRemoteProviderList {
   ownedShares: ReturnType<typeof useOwnedProviderShares>;
   /** 被其他电脑的供应商组收进去的分享(「分享给我的供应商」里不再单独列出)。 */
   hiddenShareIds: ReadonlySet<string>;
+  /** 这份列表依据的在线、允许远程控制的同账号电脑；其他电脑的插件引擎沿用同一份，不再另读。 */
+  devices: readonly ControllableDevice[];
 }
 
 /**
@@ -127,7 +143,7 @@ export function useOwnRemoteProviderList(): OwnRemoteProviderList {
       !provider.subscriptionPoolAlias || group || ownedShares.get(deviceId)?.has(provider.id)),
     [entries, ownedShares],
   );
-  return { entries: visibleEntries, hiddenShareIds, ownedShares };
+  return { entries: visibleEntries, hiddenShareIds, ownedShares, devices };
 }
 
 export function useOwnRemoteProviders(): readonly OwnRemoteProvider[] {
@@ -359,17 +375,225 @@ export function OwnRemoteProviderDetail({ entry, pendingShareRequests = 0, onMan
   );
 }
 
+/** 与供应商组成员展开读取一致：账号列表长时间未回包时允许回退单账号默认卡。 */
+const REMOTE_ACCOUNTS_LOADING_GRACE_MS = 8_000;
+
+/** 同账号远程电脑上支持按账号池读取的订阅供应商(内置或拆分/独立创建的账号池)。 */
+function remoteSubscriptionPoolKind(provider: ProviderView): SubscriptionProvider | null {
+  if (
+    provider.removed ||
+    provider.auth?.method !== 'oauth' ||
+    (provider.access && provider.access.kind !== 'subscription')
+  ) {
+    return null;
+  }
+  if (isSubscriptionProvider(provider.id)) return provider.id;
+  return provider.subscriptionAccountPool ?? provider.subscriptionPool ?? null;
+}
+
+function remoteAccountPlanLabel(
+  poolKind: SubscriptionProvider | null,
+  account: { plan?: string; planTier?: string; planDisplayName?: string; planType?: string },
+  fallback?: string | null,
+): string | undefined {
+  return (
+    (poolKind === 'openai'
+      ? formatCodexPlanLabel(account.planType ?? account.plan)
+      : formatClaudeSubscriptionPlanLabel(
+          account.plan,
+          account.planTier,
+          account.planDisplayName,
+        )) ??
+    fallback ??
+    undefined
+  );
+}
+
 /** 只随当前详情读取那台电脑的订阅额度；组的额度保留在各成员里，不取组所在电脑代替。 */
 function OwnRemoteProviderQuota({ entry }: { entry: OwnRemoteProvider }) {
-  const account = useDeviceProviderSubscriptionCard(entry.provider, entry.deviceId);
-  if (!account?.windows.length) return null;
+  const { t, i18n } = useTranslation();
+  const locale = i18n?.resolvedLanguage ?? i18n?.language;
+  const poolKind = remoteSubscriptionPoolKind(entry.provider);
+  const canReadAccounts =
+    poolKind !== null && typeof window.electronAPI?.deviceLink?.invoke === 'function';
+  const { accounts, loading: accountsLoading } = useGroupMemberAccounts(
+    canReadAccounts ? entry.provider.id : null,
+    canReadAccounts ? entry.deviceId : null,
+    canReadAccounts,
+    poolKind ? { poolKind } : undefined,
+  );
+  const [waitedOut, setWaitedOut] = useState(false);
+  useEffect(() => {
+    if (!canReadAccounts || !accountsLoading) {
+      setWaitedOut(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setWaitedOut(true), REMOTE_ACCOUNTS_LOADING_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [canReadAccounts, accountsLoading]);
+
+  // 先确定账号池列表，避免先显示旧单卡再整块切换；旧电脑不支持或超时后回退单卡。
+  // 明确返回空数组(例如全部已暂停)时不回退默认账号的旧缓存。
+  const useFallback =
+    !canReadAccounts || (!accountsLoading && accounts === null) || (accountsLoading && waitedOut);
+  const fallbackCard = useDeviceProviderSubscriptionCard(
+    useFallback ? entry.provider : undefined,
+    useFallback ? entry.deviceId : null,
+  );
+
+  if (accounts !== null) {
+    if (accounts.length === 0) return null;
+    const nowMs = Date.now();
+    if (accounts.length === 1) {
+      const [{ account }] = accounts;
+      const usage = buildSubscriptionAccountUsageCard(account.usage, t, nowMs, locale);
+      const plan = remoteAccountPlanLabel(poolKind, account, usage?.planLabel);
+      if (usage?.windows.length) {
+        return (
+          <div
+            data-testid="provider-usage-module"
+            className="shrink-0 border-t px-1 py-2"
+            style={{ borderColor: 'var(--settings-theme-card-border)' }}
+          >
+            <QuotaHoverCard
+              variant="embedded"
+              account={{
+                ...usage,
+                ...(account.identity ? { identity: account.identity } : {}),
+                ...(plan ? { planLabel: plan } : {}),
+              }}
+              nowMs={nowMs}
+            />
+          </div>
+        );
+      }
+      if (account.status === 'ready') return null;
+      const status = t(
+        `subscriptionAccounts.${account.status === 'signed-out' ? 'signedOut' : account.status}`,
+      );
+      return (
+        <div
+          data-testid="provider-usage-module"
+          className="shrink-0 border-t px-5 py-3"
+          style={{ borderColor: 'var(--settings-theme-card-border)' }}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            {account.identity && (
+              <span
+                title={account.identity}
+                className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]"
+              >
+                {account.identity}
+              </span>
+            )}
+            <span title={status} className="min-w-0 truncate text-12 text-[var(--text-secondary)]">
+              {status}
+            </span>
+            {plan && (
+              <span
+                data-testid="quota-plan-badge"
+                className="ml-auto max-w-[65%] shrink-0 break-words rounded-full border border-[var(--border-default)] px-1.5 py-px text-11 font-medium text-[var(--text-secondary)]"
+              >
+                {plan}
+              </span>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        data-testid="provider-usage-module"
+        className="shrink-0 border-t pb-2"
+        style={{ borderColor: 'var(--settings-theme-card-border)' }}
+      >
+        <div className="flex items-baseline gap-2 px-5 pb-1 pt-3">
+          <span
+            className="text-13 font-medium"
+            style={{ color: 'var(--settings-section-title)' }}
+          >
+            {t('subscriptionAccounts.title')}
+          </span>
+          <span className="text-12 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
+            {accounts.length}
+          </span>
+        </div>
+        <QuotaWindowSubgridContext.Provider value={true}>
+          <div className={cn('grid gap-x-4 px-1', QUOTA_WINDOW_COLUMNS)}>
+            {accounts.map(({ account, number }, index) => {
+              const accountName =
+                account.identity || t('providerGroup.member.accountFallback', { index: number });
+              const usage = buildSubscriptionAccountUsageCard(account.usage, t, nowMs, locale);
+              const hasWindows = Boolean(usage?.windows.length);
+              const plan = remoteAccountPlanLabel(poolKind, account, usage?.planLabel);
+              const status =
+                account.status === 'ready'
+                  ? hasWindows
+                    ? null
+                    : t('quotaCard.noWindows')
+                  : t(
+                      `subscriptionAccounts.${account.status === 'signed-out' ? 'signedOut' : account.status}`,
+                    );
+              return (
+                <div
+                  key={account.id}
+                  data-testid="own-remote-provider-account"
+                  className={cn(
+                    'col-span-full grid grid-cols-subgrid [&>*]:col-span-full',
+                    !hasWindows && 'pb-2',
+                  )}
+                >
+                  {index > 0 && (
+                    <div
+                      aria-hidden="true"
+                      className="mx-4 my-1.5 h-px bg-[var(--border-default)]"
+                    />
+                  )}
+                  <div className="flex min-w-0 items-center gap-2 px-4 pb-0.5 pt-1.5">
+                    <span
+                      title={accountName}
+                      className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]"
+                    >
+                      {accountName}
+                    </span>
+                    {status && (
+                      <span
+                        title={status}
+                        className="min-w-0 truncate text-12 text-[var(--text-secondary)]"
+                      >
+                        {status}
+                      </span>
+                    )}
+                    {plan && (
+                      <span
+                        data-testid="quota-plan-badge"
+                        className="ml-auto max-w-[65%] shrink-0 break-words rounded-full border border-[var(--border-default)] px-1.5 py-px text-11 font-medium text-[var(--text-secondary)]"
+                      >
+                        {plan}
+                      </span>
+                    )}
+                  </div>
+                  {hasWindows && usage && (
+                    <QuotaHoverCard variant="embedded" hideIdentity account={usage} nowMs={nowMs} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </QuotaWindowSubgridContext.Provider>
+      </div>
+    );
+  }
+
+  if (!fallbackCard?.windows.length) return null;
   return (
     <div
       data-testid="provider-usage-module"
       className="shrink-0 border-t px-1 py-2"
       style={{ borderColor: 'var(--settings-theme-card-border)' }}
     >
-      <QuotaHoverCard variant="embedded" account={account} />
+      <QuotaHoverCard variant="embedded" account={fallbackCard} />
     </div>
   );
 }

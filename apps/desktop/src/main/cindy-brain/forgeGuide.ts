@@ -41,6 +41,7 @@ import browserExtension from '../../../resources/system-skills/cindy-plugin-crea
 import bundledSkills from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-bundled-skills.md?raw';
 import workspaceSessions from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-workspace-sessions.md?raw';
 import confirmDialog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-confirm-dialog.md?raw';
+import formDialog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-form-dialog.md?raw';
 import mainView from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-main-view.md?raw';
 import taskView from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-task-view.md?raw';
 import recommendations from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-recommendations.md?raw';
@@ -91,6 +92,7 @@ export const FORGE_GUIDE = [
   bundledSkills,
   workspaceSessions,
   confirmDialog,
+  formDialog,
   mainView,
   taskView,
   recommendations,

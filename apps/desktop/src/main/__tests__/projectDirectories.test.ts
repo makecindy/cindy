@@ -29,6 +29,7 @@ import { readProjectDirectories, setProjectDirectories } from '../projectDirecto
 import { configureProjectDirectoryProbe, validateProjectDirectories } from '../projectDirectoryValidation';
 import { applyProjectDirectoriesForTurn, createTaskWritableDirsUpdater } from '../projectDirectoryRuntime';
 import { applyRemoteDirectoryGrantUpdate } from '../maker-ipc/remoteDirectoryGrantUpdate.js';
+import { libraryExtraDirSlot } from '../maker-ipc/extraDirsValidator.js';
 import {
   parseHostProjectAliasesSnapshot,
   resolveProjectDirectories,
@@ -131,6 +132,27 @@ it('applies the owning project to a worktree on each turn and preserves legacy t
   expect(observed).toEqual({ read: [reference], write: [] });
   expect(h.row.extraDirs).toBe(JSON.stringify([reference]));
 });
+
+// #12340, unit: turn preparation must accept saved grants even when this engine
+// cannot apply them. The existing project and SSH cases only use supported engines.
+it.each(['extraDirs', 'writableDirs'] as const)('keeps saved grants and prepares the turn when %s is unsupported', async (axis) => {
+  const extraDirs = JSON.stringify([reference, libraryExtraDirSlot(reference)]);
+  const writableDirs = JSON.stringify([output]);
+  h.row = { ...h.row, extraDirs, writableDirs };
+  await setProjectDirectories(`local:${main}`, [], () => {});
+  const unsupportedSetter = vi.fn().mockRejectedValue(new Error(`Capability '${axis}' not supported`));
+  const session = {
+    id: 'task',
+    capabilities: { ...capabilities, [axis]: { supported: false } },
+    setExtraDirs: axis === 'extraDirs' ? unsupportedSetter : vi.fn(),
+    setWritableDirs: axis === 'writableDirs' ? unsupportedSetter : vi.fn(),
+  } as unknown as Session;
+
+  await expect(applyProjectDirectoriesForTurn(session)).resolves.toBeUndefined();
+  expect(unsupportedSetter).not.toHaveBeenCalled();
+  expect(h.row).toMatchObject({ extraDirs, writableDirs });
+});
+
 // Unit regression for #11511: turn-only tests missed a picker update replacing the live project's roots.
 it('keeps the running project grant when adding or removing a task directory', async () => {
   h.row!.extraDirs = '[]';

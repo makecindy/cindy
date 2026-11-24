@@ -3,7 +3,7 @@ import { mapMembershipToAuthUser, type User, type CurrentUser } from '../shared/
 import { HOST_NOT_STARTED, readHostUnavailableReason, type HostUnavailable } from '../shared/hostStartFailure.js';
 import { createIpcError } from '../shared/ipc-errors.js';
 export type { User } from '../shared/authUser.js';
-import { resolveRuntimeDeviceId } from './deviceId.js';
+import { resolveRuntimeDeviceIdentity, writeReplacementDeviceId } from './deviceId.js';
 /**
  * authManager.ts
  * ---------------------------------------------------------------------------
@@ -26,6 +26,9 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
 import { machineIdSync } from 'node-machine-id';
+import { writeDeviceLinkSetting } from './device-link/settings-store.desktop';
+import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
+import { enrollTestCloudDesktop } from './cloudDesktopTestEnrollment';
 import {
   AuthApiError,
   CindyAuthClient,
@@ -367,8 +370,21 @@ function isOwnerChangeShellPending(): boolean {
  * dev-only 覆盖:设了 `XDT_DEVICE_ID_OVERRIDE` 则用它——用于在同一台机器上跑多个
  * desktop 实例模拟「多设备」(device-link 跨设备远程控制本地联调)。deviceId 只是
  * 同账号下区分设备的标识、非鉴权凭证(鉴权走 auth-server 签发的 JWT),覆盖无安全风险。
+ *
+ * 用户在设备身份冲突提示里给这台电脑换过身份时，用 profile 根下记录的新身份
+ * (deviceId.ts `DEVICE_IDENTITY_FILE`，只在原硬件身份上生效)。
  */
-const deviceId = resolveRuntimeDeviceId(machineIdSync);
+const deviceIdentity = resolveRuntimeDeviceIdentity(machineIdSync, undefined, profileDirForDeviceIdentity());
+const deviceId = deviceIdentity.deviceId;
+
+function profileDirForDeviceIdentity(): string | undefined {
+  try {
+    const dir = app.getPath('userData');
+    return typeof dir === 'string' && dir ? dir : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 // The offline entry is a renderer landing page, not an auth-server flow step.
 let loginFlowState: Exclude<DesktopLoginState, { step: 'entry' }> | null = null;
@@ -416,6 +432,8 @@ let confirmedAccountDeletionCredential: {
   realm: AuthRegion;
 } | null = null;
 
+const desktopAuthFetch: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init);
+
 function createAuthClient(
   realm: AuthRegion = pendingAuthRealm ?? activeAuthRealm,
 ): CindyAuthClient {
@@ -435,7 +453,7 @@ function createAuthClient(
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
     fetch: withProviderResponseDiagnostics(
-      scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
+      scenarioFetch ?? desktopAuthFetch,
       (diagnostic) => log.warn('login providers non-JSON response', diagnostic),
     ),
     onRequestError: (apiPath, status, error) => {
@@ -4360,6 +4378,27 @@ export function getDeviceId(): string {
   return deviceId;
 }
 
+/**
+ * 这台电脑主动让出的设备身份，包括多次换身份时的旧设备号。
+ * 仅用于识别留在本地的旧记录，例如 Agent-Net 证书。
+ */
+export function getRetiredDeviceIds(): readonly string[] {
+  return deviceIdentity.retiredDeviceIds ?? [];
+}
+
+/**
+ * 设备身份冲突时，用户确认后给这台电脑换一个新身份，下次启动生效。不调用服务端登出：
+ * 旧身份的续期凭证与另一台电脑共用，作废它会把那台电脑一起登出。新身份首次续期得到
+ * DEVICE_MISMATCH 后按既有路径以未登录启动，用户重新登录。
+ */
+export function replaceDeviceIdentityForNextStart(): void {
+  const profileDir = profileDirForDeviceIdentity();
+  if (deviceIdentity.source === 'override' || !deviceIdentity.hardwareId || !profileDir) {
+    throw new Error('DEVICE_IDENTITY_NOT_REPLACEABLE');
+  }
+  writeReplacementDeviceId(profileDir, deviceIdentity.hardwareId, deviceId);
+}
+
 export function getAuthState(): AuthState {
   return snapshotAuthState();
 }
@@ -4965,6 +5004,9 @@ export async function updateServerProfile(
   };
 }
 
+let enterpriseGuestSignIn: Promise<AuthState> | null = null;
+let cloudDesktopTestEnrollment: Promise<void> | null = null;
+
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
   if (authRefreshOverride) {
     receiveHostAuthState(await authRefreshOverride());
@@ -5122,6 +5164,93 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     }
   }
   if (!persistedSession) {
+    if (process.platform === 'linux' && !isPassiveSharedUserDataInstance()) {
+      const guest=await readCloudGuest();
+      if (guest && !await cloudGuestSaved(guest)) {
+        if (!enterpriseGuestSignIn &&
+          (coldStartRecoveryStopped || authStateEpoch !== initializeStartEpoch || pendingAuthRealm || currentUser))
+          return snapshotAuthState();
+        enterpriseGuestSignIn ??= (async () => {
+          // Recover the account-free projection before exposing a sign-in screen.
+          await finishColdStartSignedOut('cold-start-cloud-guest');
+          if (coldStartRecoveryStopped || pendingAuthRealm || currentUser) return snapshotAuthState();
+          const epoch = loginFlowEpoch;
+          const authEpoch = authStateEpoch;
+          const superseded = () => coldStartRecoveryStopped || epoch !== loginFlowEpoch ||
+            authEpoch !== authStateEpoch || pendingAuthRealm || currentUser;
+          const store = {
+            read(key: string) {
+              const value = readAtomicSafe(key);
+              if (value === null && !isAtomicPersistedSecretAbsent(key))
+                throw new Error('Cloud guest credential storage is unavailable');
+              return value;
+            },
+            write(key: string, value: string) {
+              if (!writeAtomicSafe(key, value)) throw new Error('Cloud guest credential storage is unavailable');
+            },
+            remove: removeSafe,
+            withLock<T>(task: () => Promise<T>) {
+              return withCrossProcessLock(authAccountVaultLockPath(), { label: 'cloud-guest-pkce', waitMs: 5_000 }, async (lock) => {
+                if (!lock.held) throw accountVaultLockError(lock.reason);
+                return task();
+              });
+            },
+          };
+          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch);
+          if (superseded()) return snapshotAuthState();
+          const client = createAuthClient(AUTH_REGION);
+          const pair = await client.exchangeAuthorizationCode(grant.code, grant.verifier);
+          if (pair.status !== 'ok') throw new Error('Cloud guest sign-in did not complete');
+          if (pair.membership.kind !== 'org' || pair.membership.id !== guest.membershipId ||
+            pair.membership.orgId !== guest.organizationId || superseded()) {
+            await client.logout(pair.accessToken);
+            throw new Error('Cloud guest owner changed');
+          }
+          // The account owner chose a controllable desktop at checkout. Apply this on the freshly bound guest.
+          await writeDeviceLinkSetting('remoteControlEnabled', true);
+          await writeDeviceLinkSetting('remoteDesktopEnabled', true);
+          await completeLogin(pair, epoch);
+          await markCloudGuestSaved(guest, store);
+          confirmCloudGuestWhenOnline(
+            () => getClientEndpointForRealm(AUTH_REGION, 'modelAccessApiBaseUrl'), getAccessToken, desktopAuthFetch,
+          );
+          return snapshotAuthState();
+        })().catch(() => {
+          log.warn('Cloud guest sign-in did not complete');
+          return snapshotAuthState();
+        }).finally(() => { enterpriseGuestSignIn = null; });
+        const completion = enterpriseGuestSignIn;
+        return awaitWithStartupTimeout(completion, {
+          timeoutMs: COLD_START_AUTH_GATE_TIMEOUT_MS,
+          onTimeout: () => {
+            options.onColdStartPending?.(completion);
+            if (ownerChangeShellGate.isPending() || sealedLoginFlowCommitDepths.size > 0)
+              return snapshotLoggedOutAuthState(true);
+            return snapshotAuthState();
+          },
+        });
+      }
+    }
+    const socket = process.env.CINDY_CLOUD_DESKTOP_TEST_SOCKET;
+    if (socket && !app.isPackaged && process.platform === 'linux' && process.getuid && !isPassiveSharedUserDataInstance()) {
+      const epoch = loginFlowEpoch;
+      cloudDesktopTestEnrollment ??= enrollTestCloudDesktop(socket, process.getuid(), deviceId, async (code, verifier, id) => {
+        const client = createAuthClient(AUTH_REGION);
+        const pair = await client.exchangeAuthorizationCode(code, verifier);
+        if (pair.status !== 'ok') throw new Error('Cloud desktop authorization did not complete');
+        if (pair.membership.kind !== 'personal' || pair.membership.id !== id || pendingAuthRealm || currentUser) {
+          await client.logout(pair.accessToken);
+          throw new Error('Cloud desktop test identity changed');
+        }
+        await completeLogin(pair, epoch);
+      });
+      try {
+        await cloudDesktopTestEnrollment;
+        return snapshotAuthState();
+      } catch {
+        log.warn('Cloud desktop test enrollment unavailable');
+      }
+    }
     return finishColdStartSignedOut('cold-start-no-persisted-session');
   }
   const storedToken = persistedSession.refreshToken;
@@ -5505,6 +5634,14 @@ async function runColdStartRefreshFlow(
         clearReplacementIntegrationReloadTimers();
       },
     });
+    if (process.platform === 'linux' && refreshData.membership.kind === 'org' &&
+      activeAuthRealm === storedRealm && currentUser?.id === refreshData.membership.id) {
+      confirmCloudGuestWhenOnline(
+        () => getClientEndpointForRealm(storedRealm, 'modelAccessApiBaseUrl'),
+        () => activeAuthRealm === storedRealm ? getAccessToken() : null,
+        desktopAuthFetch,
+      );
+    }
     await migrateLocalProviderBindingsAfterCloudCommit(refreshData.membership.id);
     // Schedule with the epoch this flow actually commits under (flowAuthEpoch, which
     // moves forward when the flow accepts its own startup-gate fallback) — passing the
