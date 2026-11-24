@@ -5,7 +5,8 @@ import { directCompanyTokenRoute } from './companyTokenRoute.js';
 import { createHash } from 'node:crypto';
 import { existsSync, writeFileSync, rmSync, readdirSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { app, net } from 'electron';
+import { app } from 'electron';
+import { cookielessNetFetch } from '../cookielessNetFetch.js';
 import { meResponseSchema } from '@cindy/auth-client';
 import * as auth from '../authManager.js';
 import { getClientEndpointForRealm } from '../clientEndpointsService.js';
@@ -58,7 +59,7 @@ const current = (id: Identity) => {
 class CompanyAuthorizationError extends Error {}
 async function sendRequest(signal: AbortSignal, id: Identity, route: string, method = 'GET', body?: object) {
   if (!current(id)) throw new Error('Company identity changed');
-  const response = await net.fetch(id.base + route, {
+  const response = await cookielessNetFetch(id.base + route, {
     method,
     redirect: 'error',
     cache: 'no-store',

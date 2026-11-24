@@ -9,7 +9,7 @@
  *   model-access / oauth-broker / github-server / skillhub-server ...)。
  */
 
-import { net } from 'electron';
+import { cookielessNetFetch } from './cookielessNetFetch.js';
 import * as authManager from './authManager.js';
 import { getResolvedMainLocale } from './i18n.desktop.js';
 import { createLogger } from './logger.js';
@@ -19,7 +19,7 @@ export { ServerApiError } from './serverApiClient.js';
 export type { ApiFetchOptions } from './serverApiClient.js';
 
 export const serverApiFetch = createServerApiClient({
-  fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
+  fetch: cookielessNetFetch,
   auth: authManager,
   locale: () => getResolvedMainLocale(),
   log: createLogger('serverApiClient'),

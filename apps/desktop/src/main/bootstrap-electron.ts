@@ -1,3 +1,4 @@
+import { cookielessNetFetch } from './cookielessNetFetch.js';
 import { createCompanyTokenReporting } from './usage/companyTokenReporting.desktop.js';
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
@@ -7121,7 +7122,7 @@ const registerIpcHandlers = () => {
     uploadAvatar: async ({ buffer, mimeType }) => {
       const result = await uploadPublicAsset(
         {
-          fetchImpl: (input, init) => net.fetch(input, init),
+          fetchImpl: cookielessNetFetch,
           getBaseUrl: () => getClientEndpoint('ossApiBaseUrl'),
           getToken: () => authManager.getAccessToken(),
           onError: (stage, message) => publicUploadLog.warn('avatar upload failed', stage, message),

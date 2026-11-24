@@ -1,4 +1,5 @@
-import { app, net } from 'electron';
+import { app } from 'electron';
+import { cookielessNetFetch } from '../cookielessNetFetch.js';
 import type { z } from 'zod';
 import * as wire from '../../shared/pluginContributionContract.js';
 import { getAccessToken, getActiveAuthRealm, getAuthState, refresh } from '../authManager.js';
@@ -13,7 +14,7 @@ const issuerCache = new Map<string, { issuer: string; until: number }>();
 async function trustedIssuer(endpoint: string): Promise<string> {
   const cached = issuerCache.get(endpoint);
   if (cached && cached.until > Date.now()) return cached.issuer;
-  const response = await net.fetch(
+  const response = await cookielessNetFetch(
     `${endpoint.replace(/\/+$/, '')}/.well-known/openid-configuration`,
     {
       signal: AbortSignal.timeout(15_000),

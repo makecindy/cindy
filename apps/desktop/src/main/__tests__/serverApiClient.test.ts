@@ -142,6 +142,16 @@ describe('serverApiFetch', () => {
     }
   });
 
+  // Unit (protocol): Bearer APIs must not send session cookies. TLS-inspecting gateways
+  // such as Cisco Umbrella set a probe cookie and redirect cookie-returning clients to an
+  // identity page, so every JSON endpoint answered 200 text/html and login failed.
+  it('sends requests without session cookies', async () => {
+    mocks.netFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ok: true }) } as unknown as Response);
+    await serverApiFetch('/api/device-link/devices', { baseUrl: 'https://api.example.invalid', token: 'test-token' });
+    expect(mocks.netFetch).toHaveBeenCalledWith('https://api.example.invalid/api/device-link/devices',
+      expect.objectContaining({ credentials: 'omit' }));
+  });
+
   // Unit: a 429 whose **body** stalls must still carry the server's retry deadline.
   // The deadline lives in the response headers; reading the body first used to lose
   // it, so the caller kept polling on its own cadence and the limit window slid.
