@@ -22666,6 +22666,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Switch sources automatically when one fails",
+        "hint": "When the source this mode is using fails, switch to the next usable one and note it under that turn. When off, a switch is only offered on the error."
+      },
       "newRoute": "New mode",
       "newRouteName": "New mode",
       "routesEmpty": "No modes yet. Create one and add a few sources.",

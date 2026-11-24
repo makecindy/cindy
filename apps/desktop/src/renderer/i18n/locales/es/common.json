@@ -22881,6 +22881,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Cambiar de fuente automáticamente si falla",
+        "hint": "Cuando falla la fuente que usa este modo, pasar a la siguiente disponible y anotarlo bajo ese turno. Si está desactivado, solo se propone el cambio en el error."
+      },
       "newRoute": "Nuevo modo",
       "newRouteName": "Nuevo modo",
       "routesEmpty": "Aún no hay modos. Crea uno y añade varias fuentes.",

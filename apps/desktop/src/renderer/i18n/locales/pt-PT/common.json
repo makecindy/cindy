@@ -22881,6 +22881,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Mudar de fonte automaticamente quando houver problema",
+        "hint": "Quando a fonte usada por este modo falhar, mudar para a seguinte disponível e anotar por baixo dessa ronda. Desligado, a mudança só é sugerida no erro."
+      },
       "newRoute": "Novo modo",
       "newRouteName": "Novo modo",
       "routesEmpty": "Ainda não há modos. Crie um e adicione várias fontes.",

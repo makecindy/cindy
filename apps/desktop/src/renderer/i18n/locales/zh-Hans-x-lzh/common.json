@@ -22577,6 +22577,10 @@
       "separator": "；"
     },
     "settings": {
+      "autoSwitch": {
+        "title": "遇阻自换来源",
+        "hint": "此模式所用来源有阻，则自换次一可用者，并于该轮下书明。关之，则仅于出错时提议换源。"
+      },
       "newRoute": "立模式",
       "newRouteName": "新模式",
       "routesEmpty": "尚无模式。立其一，纳数源于中。",

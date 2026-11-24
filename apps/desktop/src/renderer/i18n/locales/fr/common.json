@@ -22881,6 +22881,10 @@
       "separator": " ; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Changer de source automatiquement en cas de problème",
+        "hint": "Quand la source utilisée par ce mode échoue, passer à la suivante utilisable et le noter sous ce tour. Désactivé, le changement est seulement proposé sur l’erreur."
+      },
       "newRoute": "Nouveau mode",
       "newRouteName": "Nouveau mode",
       "routesEmpty": "Aucun mode pour l'instant. Créez-en un et ajoutez-y plusieurs sources.",

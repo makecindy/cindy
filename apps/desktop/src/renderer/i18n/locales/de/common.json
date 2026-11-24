@@ -22666,6 +22666,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Bei Problemen automatisch die Quelle wechseln",
+        "hint": "Fällt die Quelle dieses Modus aus, zur nächsten nutzbaren wechseln und es unter dem Durchgang vermerken. Ausgeschaltet wird der Wechsel nur beim Fehler angeboten."
+      },
       "newRoute": "Neuer Modus",
       "newRouteName": "Neuer Modus",
       "routesEmpty": "Noch keine Modi. Erstelle einen und füge mehrere Quellen hinzu.",

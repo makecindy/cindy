@@ -15869,7 +15869,11 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     });
     const hooks = createInterruptedTurnAutoResumeHooks<Session>({
       inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs: new WeakSet(), modelGroupInputs: new WeakSet([item.createOpts]),
+      botFallbackInputs: new WeakSet(),
+      modelGroupInputs: {
+        get: (opts) => opts === item.createOpts ? 'enabled' : undefined,
+        isInterruptedTurnAutoResumeEnabled: () => false,
+      },
       saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(), getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map(), pendingSessionRuntimeFallbackRebuilds: new Set(),
       providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
@@ -15951,6 +15955,20 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
     expect(h.coordinator.isActiveInputOwnerContinuation(sid)).toBe(expected);
     expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+  });
+
+  // model-groups.md §4.6: a model group's source switch is recorded on the continuation, so its activity line says
+  // which source the task moved to and why (rendered like a provider group's computer switch).
+  it('records the model group source switch on the automatic continuation', async () => {
+    const { h, fail } = availabilityHarness();
+    const sid = 'model-group-source-switch';
+    h.coordinator.enqueue(sid, availabilityInput());
+    await flush();
+    await fail(sid, { toolResult: true });
+    const agentSwitch = { from: 'Claude · A', to: 'GPT · B', cause: 'usage-limit' as const };
+    expect(await h.coordinator.autoRetryLastError(sid, 1, { agentSwitch })).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent.mock.calls[1]?.[3].persistUserMessage).toMatchObject({ autoResume: true, autoResumeInfo: { agentSwitch } });
   });
 
   it('continues after a completed tool and stops at the existing host retry budget', async () => {
