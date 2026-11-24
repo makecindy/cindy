@@ -6104,7 +6104,6 @@ function isRetiredVisionNotice(event: { type: string; source?: unknown; data?: u
 export function handleStreamEvent(
   inputState: SessionChatState,
   event: CCAgentStreamEvent,
-  remoteIngress = false,
 ): SessionChatState {
   if (isRetiredVisionNotice(event)) return inputState;
   const reconnectAttempt =
@@ -6277,8 +6276,7 @@ export function handleStreamEvent(
         state.messages.some((message) =>
           message.clientId === state.streamingClientId &&
           message.role === 'assistant' && message.isStreaming &&
-          (message.parentToolUseId ?? null) !== finalParent &&
-          (!remoteIngress || !message.parentToolUseId)),
+          (message.parentToolUseId ?? null) !== finalParent),
       );
       const textState = itemBoundary && !independentFinal ? finalizeStreamingInState(state) : state;
 
@@ -8195,7 +8193,6 @@ function dispatchStreamEventPayload(
   persistId?: string,
   resolvedContent?: string,
   deferNotification = false,
-  remoteIngress = false,
 ): void {
   if (!event) return;
   const streamEvent = {
@@ -8213,7 +8210,7 @@ function dispatchStreamEventPayload(
     resolvedContent,
   } as CCAgentStreamEvent;
   supersedeInputProjectionOnTerminalEvent(sessionId, streamEvent);
-  setState(sessionId, (s) => handleStreamEvent(s, streamEvent, remoteIngress), { deferNotification });
+  setState(sessionId, (s) => handleStreamEvent(s, streamEvent), { deferNotification });
   scheduleWakeBridgeReconciliation(sessionId);
 }
 
@@ -8880,7 +8877,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     const displayEvent = ingress.remoteDeviceId && (event.type === 'tool_use' || event.type === 'text') && event.agentMeta?.parentUuid === null
       ? { ...event, agentMeta: { ...event.agentMeta, parentUuid: undefined } }
       : event;
-    dispatchStreamEventPayload(sessionId, displayEvent, persistId, resolvedContent, deferNotification, Boolean(ingress.remoteDeviceId));
+    dispatchStreamEventPayload(sessionId, displayEvent, persistId, resolvedContent, deferNotification);
     if (persistDeferredAfterDispatch) {
       persistTurnErrorDeferredTracked(
         sessionId,

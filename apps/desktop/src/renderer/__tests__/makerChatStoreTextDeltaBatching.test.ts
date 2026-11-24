@@ -2309,7 +2309,9 @@ describe('makerChatStore text delta batching', () => {
     { label: 'remote root final during child', remote: true, activeParent: 'toolu_a', finalParent: null, preserve: false },
     { label: 'legacy final', activeParent: 'toolu_a', preserve: false },
     { label: 'another engine', source: 'codex', activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: false },
-    { label: 'remote children', remote: true, activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: false },
+    { label: 'remote children', remote: true, activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: true },
+    { label: 'same remote child', remote: true, activeParent: 'toolu_a', finalParent: 'toolu_a', preserve: false },
+    { label: 'remote legacy final', remote: true, activeParent: 'toolu_a', preserve: false },
   ])('handles an independent final during a live stream ($label)', ({ activeParent, finalParent, preserve, source = 'claude-code', remote }) => {
     if (remote) remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     const send = (persistId: string, text: string, isFinal: boolean, parentUuid?: string | null) => {
