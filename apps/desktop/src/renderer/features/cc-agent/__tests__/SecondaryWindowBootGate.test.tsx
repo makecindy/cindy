@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   getVisibleMergedRemoteSessions: vi.fn<() => Array<Record<string, unknown>>>(),
   getSessionFor: vi.fn(),
   navigate: vi.fn(),
-  mergeDeviceSessions: vi.fn(),
+  addSessionDetail: vi.fn(),
   resolveSessionRoute: vi.fn(),
 }));
 
@@ -36,7 +36,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
     captureSessionRead: () => Object.assign(() => true, { mergeActivity: (row: unknown) => row }),
     getDeviceSessions: mocks.getVisibleMergedRemoteSessions,
     getVisibleMergedRemoteSessions: mocks.getVisibleMergedRemoteSessions,
-    mergeDeviceSessions: mocks.mergeDeviceSessions,
+    addSessionDetail: mocks.addSessionDetail,
   },
 }));
 
@@ -62,7 +62,7 @@ describe('SecondaryWindowBootGate', () => {
     mocks.getVisibleMergedRemoteSessions.mockReset();
     mocks.getSessionFor.mockReset();
     mocks.navigate.mockReset();
-    mocks.mergeDeviceSessions.mockReset();
+    mocks.addSessionDetail.mockReset();
     mocks.resolveSessionRoute.mockReset();
     mocks.getBootSessionId.mockReturnValue('worker-remote');
     mocks.getBootDeviceId.mockReturnValue('device-remote');
@@ -97,10 +97,10 @@ describe('SecondaryWindowBootGate', () => {
         replace: true,
       }),
     );
-    expect(mocks.mergeDeviceSessions).toHaveBeenCalledWith('device-remote', 'Host', [workerSession], 'active');
+    expect(mocks.addSessionDetail).toHaveBeenCalledWith('device-remote', workerSession);
     expect(mocks.getSessionFor).toHaveBeenCalledWith('worker-remote', 'device-remote');
     expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('worker-remote', workerSession, { remote: true });
-    expect(mocks.mergeDeviceSessions.mock.invocationCallOrder[0]).toBeGreaterThan(
+    expect(mocks.addSessionDetail.mock.invocationCallOrder[0]).toBeGreaterThan(
       mocks.getSessionFor.mock.invocationCallOrder[0],
     );
     expect(mocks.getSessionFor.mock.invocationCallOrder[0]).toBeLessThan(

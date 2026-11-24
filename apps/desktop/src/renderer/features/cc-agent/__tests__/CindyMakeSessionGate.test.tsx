@@ -32,7 +32,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   pinSessionOrigin: (device: string, id: string) => { state.origins.set(id, device); },
   getDeviceSessions: () => state.remote,
   getDeviceName: () => 'Host',
-  mergeDeviceSessions: (_device: string, _name: string, rows: typeof state.remote) => { state.remote = rows; },
+  addSessionDetail: (_device: string, row: (typeof state.remote)[number]) => { state.remote = [row]; },
   captureSessionRead: () => Object.assign(() => state.readCurrent, { mergeActivity: (value: unknown) => value }),
 } }));
 vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: {

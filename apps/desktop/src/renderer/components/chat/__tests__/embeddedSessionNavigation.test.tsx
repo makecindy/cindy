@@ -56,7 +56,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
     getDeviceSessions: (device: string) => mocks.remoteSessions.filter(row => row.deviceLinkDeviceId === device),
     captureSessionRead: () => Object.assign(() => true, { mergeActivity: (row: unknown) => row }),
     getDeviceName: () => 'Host',
-    mergeDeviceSessions: mocks.merge,
+    addSessionDetail: mocks.merge,
   },
 }));
 vi.mock('@/lib/makerTransport', async (original) => ({ ...await original<typeof import('@/lib/makerTransport')>(), getSessionOnDevice: mocks.readOnDevice }));

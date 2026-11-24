@@ -1354,6 +1354,19 @@ const actions = {
     recompute();
   },
 
+  /** A verified detail can populate one row while both full lists remain pending. */
+  addSessionDetail(deviceId: string, row: Session): void {
+    const shard = shards.get(deviceId) ?? {
+      deviceId, deviceName: '', connectionStatus: 'connected', sessions: [], loadedStatuses: new Set<RemoteSessionStatus>(),
+    };
+    if (shard.sessions.some(session => session.id === row.id)) return;
+    shards.set(deviceId, {
+      ...shard,
+      sessions: [...shard.sessions, stamp(row, deviceId, shard.deviceName, shard.connectionStatus)],
+    });
+    recompute();
+  },
+
   /** refresh anti-entropy 用:取某设备当前缓存分片，调用方只读。 */
   getDeviceSessions(deviceId: string, status?: RemoteSessionStatus): readonly Session[] {
     const sessions = shards.get(deviceId)?.sessions ?? EMPTY;

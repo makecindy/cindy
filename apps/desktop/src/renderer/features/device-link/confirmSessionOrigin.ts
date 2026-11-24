@@ -37,8 +37,7 @@ export async function confirmSessionOrigin(sessionId: string, deviceId: string, 
   }
   if (!row || row.id !== sessionId || row.status === 'deleted') throw new Error('[NOT_FOUND] Remote task missing');
   const confirmed = current.mergeActivity(row);
-  remoteProjectsStore.mergeDeviceSessions(deviceId, remoteProjectsStore.getDeviceName(deviceId) ?? '', [confirmed],
-    confirmed.status === 'archived' ? 'archived' : 'active');
+  remoteProjectsStore.addSessionDetail(deviceId, confirmed);
   getStickySessionDeviceId(sessionId);
   return confirmed;
 }

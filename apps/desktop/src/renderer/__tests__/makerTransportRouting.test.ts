@@ -49,6 +49,7 @@ function stubElectron() {
     estimatedSessionValue: vi.fn().mockResolvedValue({ totalValueUsd: 0, entries: [] }),
   };
   const localSessions = {
+    resolveReferences: vi.fn(async ([sessionId]: string[]) => [{ sessionId, state: 'missing' }]),
     get: vi.fn().mockRejectedValue(new Error('[NOT_FOUND] Session does not exist')),
     update: vi.fn(),
   };
@@ -96,6 +97,21 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     await expect(getSessionFor(id)).rejects.toThrow('offline');
     expect(invoke).toHaveBeenLastCalledWith('owner', 'local-db:sessions:get', [id]);
     expect(localSessions.get).toHaveBeenCalledTimes(2);
+  });
+  // Unit #12500: a detail lookup must leave the archive browser's full-list fetch eligible.
+  it('opens an archived remote reference without marking its device archive list complete', async () => {
+    const { invoke } = stubElectron();
+    Object.assign(window, { addEventListener: vi.fn() });
+    const { confirmSessionOrigin } = await import('@/features/device-link/confirmSessionOrigin');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const { getSessionFor } = await import('@/lib/makerTransport');
+    const archived = { ...sess('archive'), status: 'archived' };
+    invoke.mockResolvedValue(archived);
+    await confirmSessionOrigin('archive', 'host', () => true);
+    expect(remoteProjectsStore.getDeviceSessions('host', 'archived')).toHaveLength(1);
+    expect(remoteProjectsStore.hasLoadedSessionStatus('host', 'archived')).toBe(false);
+    await getSessionFor('archive');
+    expect(invoke).toHaveBeenLastCalledWith('host', 'local-db:sessions:get', ['archive']);
   });
   it('accepts deferred switch outcomes only from the owning remote device and session', async () => {
     stubElectron();
