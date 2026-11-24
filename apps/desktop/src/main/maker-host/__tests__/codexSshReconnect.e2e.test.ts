@@ -23,6 +23,7 @@ import { expect, it } from 'vitest';
 
 import { RemoteHost, hostKeyFingerprint } from '@cindy/maker-remote-ssh';
 import { AppServerClient } from '../../../../../../packages/maker-core/src/agents/codex/app-server/client.js';
+import type { Transport } from '../../../../../../packages/maker-core/src/agents/codex/app-server/transport.js';
 import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger.js';
 import { createSshDaemonTransport, shellQuote } from '../codex-remote-transport.js';
 
@@ -108,10 +109,18 @@ it.skipIf(!codexBinary).each([
   'finished during disconnect',
   'first three SSH reconnects fail',
   'stop requested during disconnect',
+  'new task waits for Codex recovery',
+  'only the turn/start response arrives',
+  'only the turn/started notification arrives',
+  'neither start signal arrives',
 ] as const)('recovers the original turn over a real sshd (%s)', async (mode) => {
   const finishWhileDisconnected = mode === 'finished during disconnect';
   const lateReconnect = mode === 'first three SSH reconnects fail';
   const stopWhileDisconnected = mode === 'stop requested during disconnect';
+  const queueNewTask = mode === 'new task waits for Codex recovery';
+  const missingAck = mode === 'neither start signal arrives';
+  const filterStartSignals = missingAck || mode === 'only the turn/start response arrives' ||
+    mode === 'only the turn/started notification arrives';
   // A short path also fits macOS's Unix-domain socket path limit.
   const root = await mkdtemp('/tmp/cindy-ssh-e2e-');
   const home = join(root, 'codex-home');
@@ -224,11 +233,56 @@ it.skipIf(!codexBinary).each([
     await waitFor('Codex Unix socket', () => statSync(socket, { throwIfNoEntry: false })?.isSocket() || undefined, daemon.child);
     const host = remoteHost;
     let threadId: string | undefined;
+    let rawTurnId: string | undefined;
+    let startRequestId: number | undefined;
+    const startSignals = new Set<string>();
+    const deliveredStartSignals = new Set<string>();
+    const requestsWritten: string[] = [];
+    const snapshotGate = Promise.withResolvers<void>();
+    let snapshotHeld = false;
+    // Control JSON-RPC delivery at the client boundary while keeping the
+    // actual daemon, SSH transport, and TCP disconnect in the test.
+    const instrument = (transport: Transport, replacement = false): Transport => ({
+      ...transport,
+      async writeLine(line) {
+        const { id, method } = JSON.parse(line) as { id: number; method: string };
+        if (!replacement && method === 'turn/start') startRequestId = id;
+        if (replacement && queueNewTask && method === 'thread/turns/list') {
+          snapshotHeld = true;
+          await snapshotGate.promise;
+        }
+        requestsWritten.push(method);
+        return transport.writeLine(line);
+      },
+      onLine(handler) {
+        return transport.onLine((line) => {
+          if (!replacement && filterStartSignals) {
+            const msg = JSON.parse(line);
+            const isResponse = startRequestId !== undefined && msg.id === startRequestId && msg.result?.turn;
+            const isNotification = msg.method === 'turn/started' && msg.params?.threadId === threadId;
+            if (isResponse || isNotification) {
+              const signal = isResponse ? 'response' : 'notification';
+              rawTurnId = (isResponse ? msg.result.turn : msg.params.turn).id;
+              startSignals.add(signal);
+              if (missingAck || (isResponse && mode === 'only the turn/started notification arrives') ||
+                  (isNotification && mode === 'only the turn/start response arrives')) return;
+              deliveredStartSignals.add(signal);
+            }
+          }
+          handler(line);
+        });
+      },
+      reconnect: async (signal) => instrument(await transport.reconnect!(signal), true),
+      async close(reason) {
+        snapshotGate.resolve();
+        await transport.close(reason);
+      },
+    });
     let failure: Error | undefined;
     const completed: Array<{ threadId: string; turn: { id: string; status: string } }> = [];
     const finalMessages: string[] = [];
     client = new AppServerClient({
-      createTransport: () => createSshDaemonTransport({ remoteHost: host, socketPath: socket, installRoot: root, logger }),
+      createTransport: () => instrument(createSshDaemonTransport({ remoteHost: host, socketPath: socket, installRoot: root, logger })),
       logger,
       getSubscribedThreadIds: () => threadId ? [threadId] : [],
       onTransportError: (error) => { failure = error; },
@@ -249,15 +303,35 @@ it.skipIf(!codexBinary).each([
       cwd: root, model, modelProvider: 'ssh_test',
     }, { timeoutMs: requestTimeoutMs });
     threadId = started.thread.id;
-    const { turn } = await client.request<{ turn: { id: string } }>('turn/start', {
-      threadId, input: [{ type: 'text', text: 'SSH reconnect test only.', text_elements: [] }],
+    const startTurn = (id: string) => client!.request<{ turn: { id: string } }>('turn/start', {
+      threadId: id, input: [{ type: 'text', text: 'SSH reconnect test only.', text_elements: [] }],
     }, { timeoutMs: requestTimeoutMs });
+    const originalStart = startTurn(threadId).then(
+      ({ turn }) => ({ turn, error: undefined }),
+      (error: Error) => ({ turn: undefined, error }),
+    );
+    if (filterStartSignals) {
+      await waitFor('both daemon start signals at the transport boundary', () => startSignals.size === 2 || undefined);
+      expect([...deliveredStartSignals]).toEqual(missingAck ? [] :
+        [mode === 'only the turn/start response arrives' ? 'response' : 'notification']);
+    } else {
+      const result = await originalStart;
+      if (!result.turn) throw result.error;
+      rawTurnId = result.turn.id;
+    }
     const response = await waitFor('original model request', () => modelRequests[0]);
     expect(acceptedConnections).toBe(1);
 
     offline = true;
     for (const active of sockets) active.destroy();
     await waitFor('SSH reconnecting', () => statuses.includes('reconnecting') || undefined);
+    if (missingAck) {
+      expect((await originalStart).error?.message).toContain('transport failure');
+      expect(failure).toBeDefined();
+      expect(requestsWritten.filter((method) => method === 'turn/start')).toHaveLength(1);
+      expect(requestsWritten).not.toContain('thread/turns/list');
+      return;
+    }
     // A second task on the same host joins the outstanding reconnect round.
     const newTaskConnection = lateReconnect
       ? remoteHost.connect().then(() => ({}), (error: unknown) => ({ error }))
@@ -267,7 +341,7 @@ it.skipIf(!codexBinary).each([
     if (stopWhileDisconnected) {
       // Capture both outcomes immediately so an early rejection cannot become
       // an unhandled promise while the fixture waits for the SSH reconnect.
-      stop = client.request('turn/interrupt', { threadId, turnId: turn.id }).then(() => ({}), (error) => ({ error }));
+      stop = client.request('turn/interrupt', { threadId, turnId: rawTurnId }).then(() => ({}), (error) => ({ error }));
     }
     if (lateReconnect) {
       await waitFor('three SSH reconnects to fail',
@@ -281,11 +355,31 @@ it.skipIf(!codexBinary).each([
     expect(acceptedConnections).toBe(2);
     if (newTaskConnection) expect(await newTaskConnection).toEqual({});
 
+    let secondTask: Promise<{ threadId: string; turnId: string } | Error> | undefined;
+    if (queueNewTask) {
+      await waitFor('Codex recovery snapshot to be held', () => snapshotHeld || undefined);
+      const writes = requestsWritten.length;
+      const params = { cwd: root, model, modelProvider: 'ssh_test' };
+      secondTask = client.request<{ thread: { id: string } }>('thread/start', params, { timeoutMs: requestTimeoutMs })
+        .then(async ({ thread }) => ({ threadId: thread.id, turnId: (await startTurn(thread.id)).turn.id }))
+        .catch((error: Error) => error);
+      const controller = new AbortController();
+      const cancelled = client.request('thread/start', params, { signal: controller.signal })
+        .catch((error: Error) => error);
+      controller.abort(new Error('new task cancelled'));
+      expect(await cancelled).toEqual(new Error('new task cancelled'));
+      expect(requestsWritten).toHaveLength(writes);
+      snapshotGate.resolve();
+    }
+
     await waitFor('original Codex client to recover', () => {
       if (failure) throw failure;
       return logs.includes('Codex SSH transport recovered') || undefined;
     });
     expect(failure).toBeUndefined();
+    const start = await originalStart;
+    if (!start.turn) throw start.error;
+    expect(start.turn.id).toBe(rawTurnId);
     if (stopWhileDisconnected) {
       expect(await stop).toEqual({});
     } else if (finishWhileDisconnected) {
@@ -294,13 +388,24 @@ it.skipIf(!codexBinary).each([
       expect(completed).toHaveLength(0);
       completeModelRequest(response);
     }
-    await waitFor('original turn completion', () => completed[0]);
-    expect(completed).toEqual([{
+    await waitFor('original turn completion', () => completed.find((event) => event.threadId === threadId));
+    const expected = [{
       threadId,
-      turn: expect.objectContaining({ id: turn.id, status: stopWhileDisconnected ? 'interrupted' : 'completed' }),
-    }]);
-    expect(finalMessages).toEqual(stopWhileDisconnected ? [] : [output]);
-    expect(modelRequests).toHaveLength(1);
+      turn: expect.objectContaining({ id: rawTurnId, status: stopWhileDisconnected ? 'interrupted' : 'completed' }),
+    }];
+    if (secondTask) {
+      const second = await secondTask;
+      if (second instanceof Error) throw second;
+      const secondResponse = await waitFor('second model request', () => modelRequests[1]);
+      completeModelRequest(secondResponse);
+      await waitFor('second turn completion', () => completed.find((event) => event.threadId === second.threadId));
+      expected.push({ threadId: second.threadId, turn: expect.objectContaining({ id: second.turnId, status: 'completed' }) });
+    }
+    expect(completed).toEqual(expected);
+    expect(finalMessages).toEqual(stopWhileDisconnected ? [] : secondTask ? [output, output] : [output]);
+    expect(modelRequests).toHaveLength(secondTask ? 2 : 1);
+    expect(requestsWritten.filter((method) => method === 'turn/start')).toHaveLength(secondTask ? 2 : 1);
+    expect(requestsWritten.filter((method) => method === 'thread/start')).toHaveLength(secondTask ? 2 : 1);
     expect(daemon.child.exitCode).toBeNull();
   } catch (error) {
     throw new Error(

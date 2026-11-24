@@ -965,6 +965,24 @@ describe('AppServerClient SSH recovery', () => {
     }
   });
 
+  // PR #12236 P2. Going through request() with the replacement blocked by
+  // an outstanding interaction verifies a queued start never reaches either transport.
+  it('rejects a waiting task without dispatching it when recovery fails', async () => {
+    const { client, transport, replacement, fail } = await startCase('inProgress', { waitingOnApproval: true });
+    const beforeDispatch = vi.fn();
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      const queued = client.request(Method.ThreadStart, {}, { beforeDispatch });
+      await expect(queued).rejects.toThrow('transport failure');
+      expect(fail).toHaveBeenCalledTimes(1);
+      expect(beforeDispatch).not.toHaveBeenCalled();
+      expect(replacement.lines.map((line) => JSON.parse(line).method))
+        .toEqual([Method.Initialize, Method.ThreadResume]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it('reattaches owned descendants and skips unrelated native threads', async () => {
     const { client, transport, replacement, fail, completedThreads } = await startCase('completed', { withChild: true });
     try {

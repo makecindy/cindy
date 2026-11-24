@@ -64,7 +64,10 @@ type TransportRecovery = {
   size: number;
   ownedThreads: ReadonlySet<string>;
   reconnected: boolean;
+  replaying?: boolean;
   interrupts: Map<string, RecoveryInterrupt>;
+  ready: ReturnType<typeof Promise.withResolvers<Error | undefined>>;
+  acknowledgedStarts: Array<{ id: JsonRpcId; request: PendingRequest; threadId: string; turnId: string }>;
 };
 
 /** 响应超过单行上限被丢弃: 只有对应的这一个请求失败, 连接继续可用。 */
@@ -434,10 +437,19 @@ export type ServerRequestHandler = (
   meta: { id: JsonRpcId; method: string },
 ) => Promise<unknown>;
 
+export interface AppServerRequestOptions {
+  timeoutMs?: number;
+  extendWhileProgress?: RequestProgressDeadline;
+  beforeDispatch?: () => void;
+  /** Cancels a request before it is sent. */
+  signal?: AbortSignal;
+}
+
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   method: string;
+  start?: { threadId: string; turnId?: string };
   credentialGeneration?: string | null;
   timeoutId: ReturnType<typeof setTimeout> | null;
 }
@@ -600,6 +612,8 @@ export class AppServerClient {
 
       // reject 所有挂起 request — 包括正在 initialize 的调用。
       const err = new Error(`codex app-server closed: ${reason}`);
+      recovery?.ready.resolve(err);
+      for (const { request } of recovery?.acknowledgedStarts ?? []) request.reject(err);
       for (const interrupt of recovery?.interrupts.values() ?? []) interrupt.result.reject(err);
       for (const [, pending] of this.pending) {
         if (pending.timeoutId) clearTimeout(pending.timeoutId);
@@ -625,14 +639,20 @@ export class AppServerClient {
   request<R = unknown>(
     method: string,
     params?: unknown,
-    opts?: { timeoutMs?: number; extendWhileProgress?: RequestProgressDeadline },
+    opts?: AppServerRequestOptions,
   ): Promise<R> {
     const recovery = this.recovery;
     if (!recovery) return this.sendRequest<R>(method, params, opts);
 
+    const startsTask = method === Method.ThreadStart || method === Method.ThreadResume ||
+      method === Method.ThreadFork || method === Method.TurnStart;
+    if (startsTask) return this.requestAfterRecovery<R>(method, params, opts);
+    if (recovery.replaying) return this.sendRequest<R>(method, params, opts);
+
     // Stop is a new user intent, not a replay of an uncertain write. Keep it
     // only for the acknowledged turn this recovery is already tracking.
     if (method === Method.TurnInterrupt && params && typeof params === 'object') {
+      if (opts?.signal?.aborted) return Promise.reject(opts.signal.reason);
       const { threadId, turnId } = params as Partial<TurnInterruptParams>;
       if (threadId && turnId && recovery.ownedThreads.has(threadId) && this.activeTurns.get(threadId)?.id === turnId) {
         let interrupt = recovery.interrupts.get(threadId);
@@ -646,10 +666,47 @@ export class AppServerClient {
     return Promise.reject(new Error('Codex SSH transport is reconnecting'));
   }
 
+  private async requestAfterRecovery<R>(
+    method: string, params: unknown, opts?: AppServerRequestOptions,
+  ): Promise<R> {
+    const timeoutMs = opts?.timeoutMs ?? SSH_RECONNECT_WAIT_TIMEOUT_MS + SSH_TURN_RESTORE_TIMEOUT_MS;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new Error(`AppServerClient.request(${method}): timeoutMs must be a positive finite number`);
+    }
+    const deadline = Date.now() + timeoutMs;
+    while (this.recovery) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new AppServerRequestTimeoutError(method, timeoutMs);
+      const signal = opts?.signal;
+      signal?.throwIfAborted();
+      const { ready } = this.recovery;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let abort: (() => void) | undefined;
+      try {
+        const error = await Promise.race([
+          ready.promise,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new AppServerRequestTimeoutError(method, timeoutMs)), remaining);
+            timer.unref?.();
+            abort = () => reject(signal?.reason);
+            signal?.addEventListener('abort', abort, { once: true });
+          }),
+        ]);
+        if (error) throw error;
+      } finally {
+        clearTimeout(timer);
+        if (abort) signal?.removeEventListener('abort', abort);
+      }
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new AppServerRequestTimeoutError(method, timeoutMs);
+    return this.sendRequest<R>(method, params, { ...opts, timeoutMs: opts?.timeoutMs === undefined ? undefined : remaining });
+  }
+
   private sendRequest<R>(
     method: string,
     params?: unknown,
-    opts?: { timeoutMs?: number; extendWhileProgress?: RequestProgressDeadline },
+    opts?: AppServerRequestOptions,
   ): Promise<R> {
     if (this.closed) {
       return Promise.reject(new Error(`AppServerClient.request(${method}) after close()`));
@@ -678,12 +735,21 @@ export class AppServerClient {
         new Error(`AppServerClient.request(${method}): timeoutMs must be a positive finite number`),
       );
     }
+    try {
+      opts?.signal?.throwIfAborted();
+      opts?.beforeDispatch?.();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const threadId = method === Method.TurnStart && transport.reconnect
+      ? (params as { threadId?: unknown } | undefined)?.threadId : undefined;
     return new Promise<R>((resolve, reject) => {
       const pending: PendingRequest = {
         resolve: resolve as (v: unknown) => void,
         reject,
         method,
         credentialGeneration,
+        ...(typeof threadId === 'string' && threadId ? { start: { threadId } } : {}),
         timeoutId: null,
       };
       this.pending.set(id, pending);
@@ -752,7 +818,7 @@ export class AppServerClient {
 
   // ── 内部: 入站消息分发 ───────────────────────────────────────────────────
 
-  private handleLine(line: string): void {
+  private handleLine(line: string, replayingRecovery = false): void {
     if (!line) return;
     if (line.length > this.maxLineBytes) {
       if (this.recovery) {
@@ -780,7 +846,7 @@ export class AppServerClient {
     // - id 存在 + result 存在 → 我们 request 的 SuccessResponse
     // - id 存在 + error 存在 → 我们 request 的 ErrorResponse
     // - id 不存在 + method 存在 → Notification
-    if ('method' in msg && this.recovery) {
+    if ('method' in msg && this.recovery && !replayingRecovery) {
       const recovery = this.recovery;
       recovery.size += line.length;
       if (recovery.size > this.maxLineBytes) recovery.controller.abort();
@@ -905,7 +971,7 @@ export class AppServerClient {
     const transport = this.transport;
     const init = this.initializeParams;
     if (!info.reconnectable || !transport?.reconnect || !init ||
-        this.pending.size || this.writeFailureTombstones.size || this.serverRequestsInFlight ||
+        this.writeFailureTombstones.size || this.serverRequestsInFlight ||
         !this.activeTurns.size) {
       this.handleTransportFailure(failure);
       return;
@@ -924,7 +990,24 @@ export class AppServerClient {
       this.handleTransportFailure(failure);
       return;
     }
+    // Only a uniquely matched start notification can account for a missing
+    // response. Every other pending operation still prevents recovery.
+    const acknowledgedStarts: TransportRecovery['acknowledgedStarts'] = [];
+    for (const [id, request] of this.pending) {
+      const start = request.start;
+      if (!start?.turnId || !ownedThreads.has(start.threadId)
+          || this.activeTurns.get(start.threadId)?.id !== start.turnId) {
+        this.handleTransportFailure(failure);
+        return;
+      }
+      acknowledgedStarts.push({ id, request, threadId: start.threadId, turnId: start.turnId });
+    }
+    for (const { id, request } of acknowledgedStarts) {
+      this.pending.delete(id);
+      if (request.timeoutId) clearTimeout(request.timeoutId);
+    }
     const recovery: TransportRecovery = {
+      ready: Promise.withResolvers<Error | undefined>(), acknowledgedStarts,
       controller: new AbortController(), messages: [], size: 0, ownedThreads, reconnected: false, interrupts: new Map(),
     };
     this.recovery = recovery;
@@ -946,8 +1029,19 @@ export class AppServerClient {
     const active = this.activeTurns.get(threadId);
     if (method === 'turn/completed' && turn?.id && turn.id === this.restoredTerminals.get(threadId)) return true;
     if (method === 'turn/started' && turn?.id && active?.id !== turn.id) {
-      this.restoredTerminals.delete(threadId);
-      this.activeTurns.set(threadId, { id: turn.id, completedItems: new Set(), restoredItems: new Set() });
+      if (!active && turn.id !== this.restoredTerminals.get(threadId)) {
+        let matchingStart: PendingRequest['start'];
+        for (const { start } of this.pending.values()) {
+          if (start?.threadId !== threadId) continue;
+          if (matchingStart) {
+            matchingStart = undefined;
+            break;
+          }
+          matchingStart = start;
+        }
+        if (matchingStart && !matchingStart.turnId) matchingStart.turnId = turn.id;
+      }
+      this.recordActiveTurn(threadId, turn.id);
     } else if (method === 'turn/completed' && active && active.id === turn?.id) {
       this.activeTurns.delete(threadId);
     } else if (active && active.id === turnId && method.startsWith('item/')) {
@@ -956,6 +1050,12 @@ export class AppServerClient {
       if (method === 'item/completed' && id) active.completedItems.add(id);
     }
     return false;
+  }
+
+  private recordActiveTurn(threadId: string, turnId: string): void {
+    if (this.activeTurns.get(threadId)?.id === turnId || this.restoredTerminals.get(threadId) === turnId) return;
+    this.restoredTerminals.delete(threadId);
+    this.activeTurns.set(threadId, { id: turnId, completedItems: new Set(), restoredItems: new Set() });
   }
 
   private async recoverTransport(
@@ -1054,21 +1154,28 @@ export class AppServerClient {
         liveTurns.add(JSON.stringify([params.threadId, params.turn.id]));
       }
     }
-    this.recovery = undefined;
+    const restoredStarts = recovery.acknowledgedStarts.map(({ request, threadId, turnId }) => {
+      const snapshot = snapshots.find(({ threadId: id, turn }) => id === threadId && turn.id === turnId);
+      if (!snapshot) throw new Error('SSH recovery could not confirm the acknowledged turn start');
+      return { request, turn: snapshot.turn };
+    });
+    // Synchronous notification handlers can start work too. Keep the startup
+    // gate closed while delivering the recovered items and terminal events.
+    recovery.replaying = true;
     for (const { threadId, turn, observed } of snapshots) {
       for (const item of turn.items) {
         if (item.type === 'userMessage' || item.status === 'inProgress' ||
             observed.completedItems.has(item.id) ||
             liveItems.has(JSON.stringify([threadId, turn.id, item.id]))) continue;
         // The full turn view returns persisted items, not uncommitted deltas.
-        this.handleLine(JSON.stringify({ method: 'item/completed', params: { threadId, turnId: turn.id, item } }));
+        this.handleLine(JSON.stringify({ method: 'item/completed', params: { threadId, turnId: turn.id, item } }), true);
         observed.restoredItems.add(item.id);
       }
     }
-    for (const { line } of recovery.messages) this.handleLine(line);
+    for (const { line } of recovery.messages) this.handleLine(line, true);
     for (const { threadId, turn } of snapshots) {
       if (turn.status !== 'inProgress' && !liveTurns.has(JSON.stringify([threadId, turn.id]))) {
-        this.handleLine(JSON.stringify({ method: 'turn/completed', params: { threadId, turn } }));
+        this.handleLine(JSON.stringify({ method: 'turn/completed', params: { threadId, turn } }), true);
         if (this.restoredTerminals.size >= MAX_RECOVERY_THREADS) {
           const oldest = this.restoredTerminals.keys().next().value;
           if (oldest !== undefined) this.restoredTerminals.delete(oldest);
@@ -1076,6 +1183,10 @@ export class AppServerClient {
         this.restoredTerminals.set(threadId, turn.id);
       }
     }
+    signal.throwIfAborted();
+    this.recovery = undefined;
+    for (const { request, turn } of restoredStarts) request.resolve({ turn });
+    recovery.ready.resolve(undefined);
     this.logger.info('Codex SSH transport recovered', { threadCount: snapshots.length });
   }
 
@@ -1108,6 +1219,10 @@ export class AppServerClient {
       this.notifyAuthInvalidated(error, pending.method, pending.credentialGeneration);
       pending.reject(new AppServerResponseError(pending.method, error));
       return;
+    }
+    if (pending.start && !pending.start.turnId && !this.activeTurns.has(pending.start.threadId)) {
+      const turnId = (result as { turn?: { id?: unknown } } | undefined)?.turn?.id;
+      if (typeof turnId === 'string' && turnId) this.recordActiveTurn(pending.start.threadId, turnId);
     }
     pending.resolve(result);
   }

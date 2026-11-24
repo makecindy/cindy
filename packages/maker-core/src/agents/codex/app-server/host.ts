@@ -27,7 +27,9 @@ import { randomUUID } from 'node:crypto';
 
 import type { Logger } from '../../../interfaces/logger.js';
 import type { CodexSessionMcpConfigInput, CodexSubagentRoutingProfile } from '../../base-agent.js';
-import { AppServerClient, AppServerResponseError, type OversizedNotification, type RequestProgressDeadline } from './client.js';
+import {
+  AppServerClient, AppServerResponseError, type AppServerRequestOptions, type OversizedNotification,
+} from './client.js';
 import { CODEX_EXTERNAL_AUTH_REFRESH, CodexExternalAuthSession, assertCodexEphemeralAuth, type CodexExternalAuth } from './external-auth.js';
 import type { CodexResponseTiming } from './response-timing.js';
 import type { Transport } from './transport.js';
@@ -999,7 +1001,7 @@ export class AppServerHost {
   async request<R = unknown>(
     method: string,
     params?: unknown,
-    opts?: { timeoutMs?: number; beforeDispatch?: () => void; extendWhileProgress?: RequestProgressDeadline; threadOwner?: object },
+    opts?: AppServerRequestOptions & { threadOwner?: object },
   ): Promise<R> {
     const threadId = method === Method.ThreadResume ? (params as { threadId?: unknown } | undefined)?.threadId : undefined;
     if (typeof threadId !== 'string') {
@@ -1076,7 +1078,7 @@ export class AppServerHost {
 
   private async dispatchRequest<R>(
     method: string, params?: unknown,
-    opts?: { timeoutMs?: number; beforeDispatch?: () => void; extendWhileProgress?: RequestProgressDeadline },
+    opts?: AppServerRequestOptions,
   ): Promise<R> {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
     // bootstrap 挂死 / SSH 通道无响应) — 调用方显式给 timeoutMs 时同样给它
@@ -1112,15 +1114,21 @@ export class AppServerHost {
         throw new Error(`app-server startup (for ${method}) consumed the entire ${opts.timeoutMs}ms timeout budget`);
       }
       if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
-      opts?.beforeDispatch?.();
-      if (method !== 'thread/loaded/list') this.writerCandidates.add(this.client);
-      return this.client.request<R>(method, params, { ...opts, timeoutMs: remaining });
+      return this.requestOnStartedClient<R>(method, params, { ...opts, timeoutMs: remaining });
     }
     await started;
-    if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
-    opts?.beforeDispatch?.();
-    if (method !== 'thread/loaded/list') this.writerCandidates.add(this.client);
-    return this.client.request<R>(method, params, opts);
+    return this.requestOnStartedClient<R>(method, params, opts);
+  }
+
+  private requestOnStartedClient<R>(
+    method: string, params?: unknown, opts?: AppServerRequestOptions,
+  ): Promise<R> {
+    const client = this.client;
+    if (!client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
+    return client.request<R>(method, params, { ...opts, beforeDispatch: () => {
+      opts?.beforeDispatch?.();
+      if (method !== 'thread/loaded/list') this.writerCandidates.add(client);
+    } });
   }
 
   /** Release one thread's live runtime without archiving or deleting its history. */
