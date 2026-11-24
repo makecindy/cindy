@@ -475,7 +475,7 @@ describe('take over', () => {
     t.local.host.findConflictingCindy = vi.fn(async () => 'local-cindy');
     expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy', conflictingDeviceId: 'desk' });
     expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
-      action: 'takeOver', botId: 'bot_mia', code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy',
+      action: 'takeOver', botId: 'bot_mia', code: 'LOCAL_CINDY_CONFLICT', stage: 'profile-check', conflictingBotId: 'local-cindy',
     });
     expect(t.calls.every(call => call.method === 'GET')).toBe(true);
     expect(t.actors[0]!.homeDeviceId).toBe('laptop');
@@ -731,15 +731,36 @@ describe('take over', () => {
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(t.local.host.createProfile).not.toHaveBeenCalled();
     expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
-      action: 'takeOver', botId: 'bot_mia', code: 'PROFILE_SNAPSHOT_MISSING',
+      action: 'takeOver', botId: 'bot_mia', code: 'PROFILE_SNAPSHOT_MISSING', stage: 'profile-check',
     });
   });
 
-  it('does not copy an arbitrary failure message into explicit home-change logs', async () => {
-    const t = setup({ home: 'laptop', handler: () => { throw new Error('private response /some/account/file'); } });
+  // #12507, unit: the explicit takeOver action previously logged the same receipt for
+  // these three first failures. Inject the same opaque error at each real boundary.
+  it.each(['profile-check', 'install-claim', 'local-restore'] as const)('logs the first take-over failure at %s without including the error message', async stage => {
+    const failure = new Error('private response /some/account/file');
+    const t = setup({ home: 'desk', installationId: 'this-install', handler: (route, method) => {
+      if (route === '/preferences') {
+        if (stage === 'profile-check' || (stage === 'install-claim' && method === 'POST')) throw failure;
+        return method === 'GET' ? [
+          { key: 'companion.profile.v1', value: MIA, revision: 1 },
+          { key: 'companion.install.v1', value: { installationId: 'old-install', deviceId: 'desk' }, revision: 1 },
+        ] : { revision: 2 };
+      }
+      if (route === '/conversations') return { id: ROOM };
+      if (route.includes('/messages?')) return [];
+      return {};
+    } });
+    t.local.setProfile({ status: 'active', displayName: 'Mia', description: '' });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; entry.pendingRebuild = true; });
+    vi.mocked(t.local.host.rebuildContext).mockRejectedValueOnce(failure);
+
     expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(t.state.isDemoted('bot_mia')).toBe(true);
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(stage !== 'profile-check');
+    expect(t.local.host.rebuildContext).toHaveBeenCalledTimes(stage === 'local-restore' ? 1 : 0);
     expect(t.log.warn).toHaveBeenCalledExactlyOnceWith('Companion home change failed', {
-      action: 'takeOver', botId: 'bot_mia', code: 'FAILED',
+      action: 'takeOver', botId: 'bot_mia', code: 'FAILED', stage,
     });
   });
 
