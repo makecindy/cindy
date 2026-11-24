@@ -14770,6 +14770,7 @@
       },
       "credentialSwitchDeferred": "モデルプロバイダーを切り替えました。現在のタスク終了後に有効になります。",
       "effortRuntimeDirty": "推論強度を更新しています。少し待ってからもう一度送信してください。",
+      "codexImageInputUnsupported": "現在のモデルは画像に対応していません。画像に対応するモデルに切り替えるか、添付画像を削除してください。",
       "steerNotSent": "送信されていません。現在は割り込みできません。下書きは保持されています。",
       "credentialSwitchApplied": "モデルプロバイダーの切り替えが有効になりました。",
       "credentialSwitchFailed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",

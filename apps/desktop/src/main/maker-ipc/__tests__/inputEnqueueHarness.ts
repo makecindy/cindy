@@ -4,7 +4,9 @@ import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '@cindy/maker-shared/synthetic-tr
 import { AgentInputCoordinator, markManualSchedulerContinuation } from '../agent-input-coordinator.desktop.js';
 import { stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin } from '../makerSendTransaction.js';
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
-import { isAutomaticInputOriginKind, type AgentInputProjection, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import { findCatalogModel } from '@cindy/model-providers';
+import { getAgentInputAttachmentBlockType, isAutomaticInputOriginKind, type AgentInputProjection, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import { CODEX_IMAGE_INPUT_UNSUPPORTED } from '../../../shared/ipcError.js';
 import type { SchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
 import type { SavedUsageLimitWait } from '../usageLimitRecoveryStore.js';
 import type { UsageLimitAutoResume } from '../usageLimitAutoResume.js';
@@ -18,7 +20,11 @@ const enqueueChannel = source.indexOf('    MAKER_INVOKE.INPUT_ENQUEUE,');
 const enqueueStart = source.lastIndexOf('  ipcMain.handle(', enqueueChannel);
 const enqueueEnd = source.indexOf('\n  );', enqueueChannel);
 if (enqueueChannel < 0 || enqueueStart < 0 || enqueueEnd < enqueueChannel) throw new Error('INPUT_ENQUEUE registration not found');
-const compiled = transpileModule(source.slice(enqueueStart, enqueueEnd + '\n  );'.length), {
+const imageGateStart = source.indexOf('  async function assertLocalCodexImageInput(');
+const imageGateEnd = source.indexOf('\n  }\n', imageGateStart);
+if (imageGateStart < 0 || imageGateEnd < imageGateStart) throw new Error('Local Codex image input check not found');
+const compiled = transpileModule(source.slice(imageGateStart, imageGateEnd + '\n  }\n'.length) +
+  source.slice(enqueueStart, enqueueEnd + '\n  );'.length), {
   compilerOptions: { target: ScriptTarget.ES2022 },
 }).outputText;
 
@@ -142,6 +148,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
   mobile?: boolean;
   resumeInterruptedScheduleRun?: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun;
   getSessionFsSnapshot?: () => Promise<{ planModeEnabled?: boolean } | null>;
+  codexModel?: { id: string; supportsImageInput?: boolean };
 } = {}) {
   const { remote = true, mobile = false, resumeInterruptedScheduleRun = async () => null } = options;
   const noop = () => undefined;
@@ -195,13 +202,26 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     stampTrustedDeviceLinkQueuedOrigin,
     stampMobileClientOrigin,
     isAutomaticInputOriginKind,
+    getAgentInputAttachmentBlockType,
+    observeLocalInputClearBoundary: async () => options.codexModel
+      ? { source: 'desktop', status: 'active', agentKind: 'codex', providerId: 'fixture-codex', model: options.codexModel.id }
+      : null,
+    getSessionRuntimeControlSnapshot: () => ({ generation: 0 }),
+    agentSwitchPending: new Map(),
+    maker: { getSession: () => null },
+    hasSessionProvider: () => false,
+    activeModelGroupBinding: async () => null,
+    isSessionSharedTaskActive: () => false,
+    getActiveCatalog: () => ({ providers: [{ id: 'fixture-codex', models: { codex: [options.codexModel] } }] }),
+    findCatalogModel,
+    CODEX_IMAGE_INPUT_UNSUPPORTED,
     prepareDeviceLinkAutoTitle: async () => noop,
     queuedAttachmentOwnership: { activateCurrentOwner: noop },
     throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
     ...Object.fromEntries([
       'assertReviewExternalInputAllowed', 'assertTrustedAppRendererEvent', 'withSessionPermissionChange',
       'awaitAgentInputQueueSnapshotPersistence', 'assertRemoteInputClearNotInFlight',
-      'readRemoteInputClearBoundaryPrecondition', 'observeLocalInputClearBoundary',
+      'readRemoteInputClearBoundaryPrecondition',
       'assertExpectedRemoteInputClearBoundary', 'registerQueuedAttachmentOwnership',
       'discardSpecificQueuedAttachmentOwnership', 'markQueuedAttachmentDurableAfterSnapshot',
     ].map(name => [name, noop])),

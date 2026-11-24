@@ -14770,6 +14770,7 @@
       },
       "credentialSwitchDeferred": "模型来源已切换，将于今之差事毕后生效。",
       "effortRuntimeDirty": "思之深浅尚在更新，稍候再遣",
+      "codexImageInputUnsupported": "今之模型不支援图片。可改用支援图片之模型，或移除所附图片",
       "steerNotSent": "未遣，暂不能插话，草稿已留",
       "credentialSwitchApplied": "模型所出已易，即行生效。",
       "credentialSwitchFailed": "模型来源切换未成，请重择。",

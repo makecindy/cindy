@@ -14824,6 +14824,7 @@
       },
       "credentialSwitchDeferred": "Model provider switched — it takes effect after the current task finishes.",
       "effortRuntimeDirty": "Reasoning effort is still updating. Wait a moment, then send again.",
+      "codexImageInputUnsupported": "The current model does not support images. Choose a model that supports images or remove the attachment.",
       "steerNotSent": "Message not sent. Steer is temporarily unavailable; your draft has been kept.",
       "credentialSwitchApplied": "Model provider switch is now in effect.",
       "credentialSwitchFailed": "Model provider switch failed. Choose the model again.",

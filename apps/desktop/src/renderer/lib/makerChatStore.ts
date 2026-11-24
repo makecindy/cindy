@@ -127,7 +127,7 @@ import type {
   AgentInputSessionRef,
   AgentInputReference,
 } from '../../shared/agentInputQueue';
-import { normalizeAgentInputClearBoundaryMs } from '../../shared/agentInputQueue';
+import { getAgentInputAttachmentBlockType, normalizeAgentInputClearBoundaryMs } from '../../shared/agentInputQueue';
 import { hasUserVisibleText } from '../../shared/visibleText';
 import { readReviewRunMeta } from '../../shared/reviewRun';
 import { readBotCollaborationMeta } from '../../shared/botCollaboration';
@@ -193,7 +193,7 @@ import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
-import { clearSessionStarting, markSessionStarting, noteStartingTerminal } from '@/lib/sessionStartingStore';
+import { clearSessionStarting, getStartingInputClientId, markSessionStarting, noteStartingTerminal } from '@/lib/sessionStartingStore';
 import { createLogger } from '@/lib/logger';
 import {
   traceRemoteSendAccepted,
@@ -212,7 +212,7 @@ import {
   mainContiguousRunStartIndex,
   type LoadedWindowIsland,
 } from '@/lib/searchJumpTargeting';
-import { extractIpcError, hostProfileHoldI18nKey } from '@/utils/ipcError';
+import { CODEX_IMAGE_INPUT_UNSUPPORTED, extractIpcError, hostProfileHoldI18nKey } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -16305,9 +16305,13 @@ async function sendMessageCore(
     // fork 出来的占位标题会话,都在第一条带文字的消息上把标题换成用户写的内容。
     maybeAutoNameUnnamedSession(sessionId, autoTitleSeed, current.agentKind);
   };
+  // The local host may reject a Codex image before accepting the message.
+  // Wait for that decision before an auxiliary title request can use its text.
+  const deferImageAutoTitle = !deviceLinkRemote && queued.createOpts.agentKind === 'codex' &&
+    queued.files?.some(file => getAgentInputAttachmentBlockType(file.category, file.ext) === 'image');
   if (materializationPending && remoteRecord) {
     remoteRecord.onMaterializationReady = commitAutoTitle;
-  } else {
+  } else if (!deferImageAutoTitle) {
     commitAutoTitle();
   }
 
@@ -16335,7 +16339,10 @@ async function sendMessageCore(
         }));
       }
       const applied = applyInputProjectionOperationResponse(sessionId, operation, projection);
-      if (applied) markSessionHasUserMessage(sessionId);
+      if (applied) {
+        markSessionHasUserMessage(sessionId);
+        if (deferImageAutoTitle) commitAutoTitle();
+      }
       // 暂停 / 输入锁 / 凭证切换等待只把消息收下,不会马上派发。starting
       // 表示「预期会跑」,不能把明确未派发的任务标成运行中。
       if (
@@ -16353,20 +16360,28 @@ async function sendMessageCore(
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
       // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
       // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
-      const message = remoteErrorMessageForBanner(err);
+      const failure = extractIpcError(err);
+      const imageUnsupported = failure?.code === 'PRECONDITION_FAILED' &&
+        failure.message === CODEX_IMAGE_INPUT_UNSUPPORTED;
+      if (imageUnsupported) {
+        if (getStartingInputClientId(sessionId) === queued.clientId) clearSessionStarting(sessionId);
+        toast.error(i18n.t('newChat.chatInput.codexImageInputUnsupported'));
+      }
       setState(sessionId, (s) => ({
         ...s,
-        error: message,
+        ...(!imageUnsupported && {
+          error: remoteErrorMessageForBanner(err),
+          usageLimitRecovery: null,
+          errorReason: null,
+          recoverableError: null,
+          errorRetryText: null,
+        }),
         pendingQueue: s.pendingQueue.filter(
           (item) => !(item.clientId === queued.clientId && item.isPendingEnqueue === true),
         ),
         messages: s.messages.filter(
           (item) => !(item.clientId === queued.clientId && item.isPendingPersist === true),
         ),
-        usageLimitRecovery: null,
-        errorReason: null,
-        recoverableError: null,
-        errorRetryText: null,
       }));
       return false;
     });

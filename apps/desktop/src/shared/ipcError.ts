@@ -2,6 +2,8 @@ import { isIpcError, isIpcErrorCode, type IpcError } from './ipc-errors';
 
 const IPC_ERROR_MESSAGE_RE = /(?:^|: Error: )\[([A-Z0-9_]+)\]\s*([\s\S]*)$/;
 
+export const CODEX_IMAGE_INPUT_UNSUPPORTED = 'CODEX_IMAGE_INPUT_UNSUPPORTED';
+
 export function extractIpcError(err: unknown): IpcError | null {
   if (isIpcError(err)) {
     return { code: err.code, message: err.message };

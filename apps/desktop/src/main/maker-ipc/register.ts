@@ -369,6 +369,7 @@ import { notifyRelayAccountPreferenceChanged } from '../device-link/selfHostedRe
 import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
+  getAgentInputAttachmentBlockType,
   isAutomaticInputOriginKind,
   normalizeAgentInputClearBoundaryMs,
   serializeSessionReferencePayload,
@@ -380,6 +381,7 @@ import {
   type AgentInputSessionRef,
   type AgentInputSessionReferenceContext,
 } from '../../shared/agentInputQueue.js';
+import { CODEX_IMAGE_INPUT_UNSUPPORTED } from '../../shared/ipcError.js';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
 import { normalizeWorkingDirForProjectSettings } from '../../shared/workingDir.js';
 
@@ -17689,6 +17691,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return binding;
   }
 
+  async function assertLocalCodexImageInput(
+    sessionId: string,
+    row: Awaited<ReturnType<typeof getSessionRowSnapshot>> | undefined,
+    requestedRoute: unknown,
+  ) {
+    if (row?.source !== 'desktop' || row.status !== 'active' || row.agentKind !== 'codex' || row.remoteHostId ||
+        row.agentDeviceId || row.orcaRole || row.orcaRemoteLead || isSessionSharedTaskActive(sessionId)) return;
+    const control = getSessionRuntimeControlSnapshot(sessionId);
+    if (control.pending || agentSwitchPending.get(sessionId)) return;
+    const live = maker.getSession(sessionId);
+    const route = control.effectiveOverride ?? {
+      agentKind: live?.agentKind ?? row.agentKind,
+      model: live?.model ?? row.model,
+      providerId: hasSessionProvider(sessionId) ? getSessionProvider(sessionId) : row.providerId,
+      agentDeviceId: row.agentDeviceId,
+    };
+    if (route.agentKind !== 'codex' || route.agentDeviceId || !route.model || !route.providerId) return;
+    // A pending or explicitly different route is decided by the normal send transaction.
+    if (requestedRoute && typeof requestedRoute === 'object' &&
+        (('agentKind' in requestedRoute && requestedRoute.agentKind !== route.agentKind) ||
+         ('model' in requestedRoute && requestedRoute.model !== route.model) ||
+         ('providerId' in requestedRoute && requestedRoute.providerId !== route.providerId) ||
+         ('remoteHostId' in requestedRoute && requestedRoute.remoteHostId))) return;
+    const provider = getActiveCatalog().providers.find(entry => entry.id === route.providerId);
+    const model = findCatalogModel(provider, route.model, 'codex', { exact: true });
+    const imageInput = model?.supportsImageInput ?? model?.modalities?.input.includes('image');
+    if (imageInput !== false) return;
+    // A resumed task may be pinned to another interface with different capabilities.
+    if (model?.availableInterfaces?.some(({ defaults, profileId }) =>
+      profileId !== model.selectedInterface?.profileId &&
+      (defaults.supportsImageInput ?? defaults.modalities?.input.includes('image')) !== false)) return;
+    if (await activeModelGroupBinding(sessionId, row) ||
+        getSessionRuntimeControlSnapshot(sessionId).generation !== control.generation ||
+        agentSwitchPending.get(sessionId)) return;
+    throwIpcError('PRECONDITION_FAILED', CODEX_IMAGE_INPUT_UNSUPPORTED);
+  }
+
   // Assembled before the runtime selection and the other helpers below; each is read when a fallback runs.
   const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({
     maker,
@@ -19272,6 +19311,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const owner = getCurrentDbClientSnapshot();
         await withSessionPermissionChange(sessionId, async () => undefined);
         if (!owner || owner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
+        if (!isDeviceLinkInvoke() && message && typeof message === 'object' &&
+            'type' in message && message.type === 'user' && 'content' in message &&
+            Array.isArray(message.content) && message.content.some(block => block?.type === 'image')) {
+          await assertLocalCodexImageInput(sessionId, await getSessionRowSnapshot(sessionId), createOpts);
+          if (owner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
+        }
         return sendToAgentAccepted(
           sessionId,
           message,
@@ -21155,8 +21200,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const retryPendingInputClearBoundary = async (
     sid: string,
     remote: boolean,
-    row: { clearedAt?: unknown } | null,
-  ): Promise<{ clearedAt?: unknown } | null> => {
+    row: Awaited<ReturnType<typeof getSessionRowSnapshot>>,
+  ): Promise<Awaited<ReturnType<typeof getSessionRowSnapshot>>> => {
     const inMemory = inputCoordinator.getClearBoundaryMs(sid);
     const persisted = normalizeAgentInputClearBoundaryMs(row?.clearedAt);
     if (typeof inMemory !== 'number' || (typeof persisted === 'number' && persisted >= inMemory)) {
@@ -21176,10 +21221,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
 
-  const observeLocalInputClearBoundary = async (sid: string): Promise<void> => {
+  const observeLocalInputClearBoundary = async (sid: string) => {
     const row = await getSessionRowSnapshot(sid);
     const durableRow = await retryPendingInputClearBoundary(sid, false, row);
     inputCoordinator.observeClearBoundary(sid, durableRow?.clearedAt);
+    return durableRow;
   };
 
   const remoteInputClientIdWasPersisted = async (
@@ -21298,7 +21344,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
       assertRemoteInputClearNotInFlight(sid, deviceLinkInvoke);
       const clearBoundaryPrecondition = readRemoteInputClearBoundaryPrecondition(opts);
-      if (!deviceLinkInvoke) await observeLocalInputClearBoundary(sid);
+      const localInputSession = deviceLinkInvoke ? undefined : await observeLocalInputClearBoundary(sid);
       const inputGeneration = inputCoordinator.getGeneration(sid);
       const isCurrentInputGeneration = () =>
         inputCoordinator.isGenerationCurrent(sid, inputGeneration);
@@ -21349,6 +21395,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
         sendTrace?.finish('known');
         return inputCoordinator.getProjection(sid);
+      }
+      if (!deviceLinkInvoke && !isAutomaticInputOriginKind(parsed.origin?.kind) &&
+          Array.isArray(parsed.files) && parsed.files.some(file => file?.category === 'image' &&
+            typeof file.ext === 'string' && getAgentInputAttachmentBlockType(file.category, file.ext) === 'image')) {
+        await assertLocalCodexImageInput(sid, localInputSession, parsed.createOpts);
+        assertCurrentInputGeneration();
       }
       const materialized = await materializeQueuedOssAttachmentsDeferred(sid, parsed);
       const attachmentOwnerId = registerQueuedAttachmentOwnership(

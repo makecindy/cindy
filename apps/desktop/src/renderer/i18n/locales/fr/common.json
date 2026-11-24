@@ -14942,6 +14942,7 @@
       },
       "credentialSwitchDeferred": "Fournisseur de modèles changé : la modification prendra effet à la fin de la tâche en cours.",
       "effortRuntimeDirty": "L'effort de raisonnement est encore en cours de mise à jour. Patientez un instant, puis renvoyez.",
+      "codexImageInputUnsupported": "Le modèle actuel ne prend pas en charge les images. Choisissez un modèle qui les accepte ou retirez l’image jointe.",
       "steerNotSent": "Message non envoyé. La réorientation est temporairement indisponible ; votre brouillon a été conservé.",
       "credentialSwitchApplied": "Le changement de fournisseur de modèles est désormais effectif.",
       "credentialSwitchFailed": "Échec du changement de fournisseur de modèles. Choisissez à nouveau le modèle.",

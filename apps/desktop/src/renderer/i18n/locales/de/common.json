@@ -14824,6 +14824,7 @@
       },
       "credentialSwitchDeferred": "Modellanbieter gewechselt — wird nach Abschluss der aktuellen Aufgabe wirksam.",
       "effortRuntimeDirty": "Die Denkintensität wird noch aktualisiert. Warte kurz und sende dann erneut.",
+      "codexImageInputUnsupported": "Das aktuelle Modell unterstützt keine Bilder. Wechsle zu einem Modell mit Bildunterstützung oder entferne den Bildanhang.",
       "steerNotSent": "Nachricht nicht gesendet. Das Einbringen ist vorübergehend nicht verfügbar; dein Entwurf wurde beibehalten.",
       "credentialSwitchApplied": "Der Wechsel des Modellanbieters ist jetzt wirksam.",
       "credentialSwitchFailed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut.",

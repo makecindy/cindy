@@ -14942,6 +14942,7 @@
       },
       "credentialSwitchDeferred": "Provedor de modelos alterado — a mudança entra em vigor quando a tarefa atual terminar.",
       "effortRuntimeDirty": "O esforço de raciocínio ainda está sendo atualizado. Aguarde um momento e envie novamente.",
+      "codexImageInputUnsupported": "O modelo atual não aceita imagens. Mude para um modelo que aceite imagens ou remova a imagem anexada.",
       "steerNotSent": "Mensagem não enviada. O encaminhamento está temporariamente indisponível; seu rascunho foi mantido.",
       "credentialSwitchApplied": "A troca de provedor de modelo entrou em vigor.",
       "credentialSwitchFailed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente.",

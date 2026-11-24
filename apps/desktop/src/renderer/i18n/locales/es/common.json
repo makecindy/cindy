@@ -14942,6 +14942,7 @@
       },
       "credentialSwitchDeferred": "Se cambió el proveedor de modelos; el cambio se aplicará cuando termine la tarea actual.",
       "effortRuntimeDirty": "La intensidad de razonamiento aún se está actualizando. Espera un momento y vuelve a enviar.",
+      "codexImageInputUnsupported": "El modelo actual no admite imágenes. Cambia a un modelo que las admita o quita la imagen adjunta.",
       "steerNotSent": "Mensaje no enviado. La incorporación a la tarea no está disponible temporalmente; se conservó tu borrador.",
       "credentialSwitchApplied": "El cambio de proveedor de modelo ya está en vigor.",
       "credentialSwitchFailed": "No se pudo cambiar el proveedor de modelos. Vuelve a elegir el modelo.",

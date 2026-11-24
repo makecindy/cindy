@@ -614,6 +614,40 @@ describe('MCP App queued message grants', () => {
   });
 });
 
+describe('INPUT_ENQUEUE local Codex image validation', () => {
+  // #593, unit: the existing bridge tests start after acceptance. Run the
+  // production admission handler with one new PNG and explicit route metadata.
+  it.each([
+    { supportsImageInput: false, ext: '.png', blocked: true },
+    { supportsImageInput: true, ext: '.png', blocked: false },
+    { supportsImageInput: undefined, ext: '.png', blocked: false },
+    { supportsImageInput: false, ext: '.gif', blocked: false },
+  ])('only rejects an image block on an explicitly text-only route (%j)', async ({ supportsImageInput, ext, blocked }) => {
+    const h = createHarness();
+    const sid = 'local-codex';
+    const { enqueue } = createInputEnqueueHarness(h.coordinator, {
+      remote: false, codexModel: { id: 'fixture-model', supportsImageInput },
+    });
+    const item = makeItem('fresh-input', 'Look at this');
+    item.createOpts = { ...item.createOpts, agentKind: 'codex', providerId: 'fixture-codex', model: 'fixture-model' };
+    item.files = [{ id: 'fixture', name: 'test' + ext, category: 'image', ext,
+      path: 'clipboard://fixture', mimeType: ext === '.png' ? 'image/png' : 'image/gif',
+      size: 3, base64: 'AAAA' }];
+    const submitted = enqueue({}, sid, item);
+    if (blocked) {
+      await expect(submitted).rejects.toMatchObject({
+        code: 'PRECONDITION_FAILED', message: 'CODEX_IMAGE_INPUT_UNSUPPORTED',
+      });
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    } else {
+      await submitted;
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+    }
+  });
+});
+
 describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
   function hostInput(
     h: ReturnType<typeof createHarness>, remote = true, mobile = false,

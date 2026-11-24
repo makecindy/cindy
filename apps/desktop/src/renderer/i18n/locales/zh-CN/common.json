@@ -14770,6 +14770,7 @@
       },
       "credentialSwitchDeferred": "模型来源已切换，将在当前任务结束后生效。",
       "effortRuntimeDirty": "推理强度还在更新，稍等一下再发送",
+      "codexImageInputUnsupported": "当前模型不支持图片。请切换到支持图片的模型，或移除图片附件",
       "steerNotSent": "未发送，暂时无法插话，草稿已保留",
       "credentialSwitchApplied": "模型来源切换已生效。",
       "credentialSwitchFailed": "模型来源切换失败，请重新选择。",

@@ -14770,6 +14770,7 @@
       },
       "credentialSwitchDeferred": "모델 제공자를 전환했습니다. 현재 작업이 끝난 후 적용됩니다.",
       "effortRuntimeDirty": "추론 강도를 업데이트하고 있습니다. 잠시 후 다시 전송해 주세요.",
+      "codexImageInputUnsupported": "현재 모델은 이미지를 지원하지 않습니다. 이미지를 지원하는 모델로 전환하거나 첨부 이미지를 제거하세요.",
       "steerNotSent": "전송되지 않았습니다. 지금은 끼어들기를 사용할 수 없습니다. 초안은 유지됩니다.",
       "credentialSwitchApplied": "모델 제공자 전환이 적용되었습니다.",
       "credentialSwitchFailed": "모델 제공자 전환에 실패했습니다. 모델을 다시 선택해 주세요.",
