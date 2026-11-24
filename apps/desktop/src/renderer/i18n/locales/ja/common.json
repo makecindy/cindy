@@ -14741,6 +14741,8 @@
       "credentialSwitchDeferred": "モデルプロバイダーを切り替えました。現在のタスク終了後に有効になります。",
       "effortRuntimeDirty": "推論強度を更新しています。少し待ってからもう一度送信してください。",
       "steerNotSent": "送信されていません。現在は割り込みできません。下書きは保持されています。",
+      "queuedSteerRevoked": "このメッセージは承認が失効したため送信されませんでした。必要に応じて元のタスクから再送してください。",
+      "queuedSteerUnverified": "現在、承認を確認できません。このメッセージはキューに残っています。",
       "credentialSwitchApplied": "モデルプロバイダーの切り替えが有効になりました。",
       "credentialSwitchFailed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",
       "credentialSwitchKeptSettings": "切り替えは完了しませんでした。タスクは引き続き元の設定を使用します。",

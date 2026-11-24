@@ -14741,6 +14741,8 @@
       "credentialSwitchDeferred": "模型來源已切換，將於今之差事畢後生效。",
       "effortRuntimeDirty": "思之深淺尚在更新，稍候再遣",
       "steerNotSent": "未遣，暫不能插話，草稿已留",
+      "queuedSteerRevoked": "此信之權已失，未遣。若仍須遣，請由原任務再發。",
+      "queuedSteerUnverified": "此信之權暫不可驗，仍留隊中。",
       "credentialSwitchApplied": "模型所出已易，即行生效。",
       "credentialSwitchFailed": "模型來源切換未成，請重擇。",
       "credentialSwitchKeptSettings": "此次更易未成，任務仍循舊設。",

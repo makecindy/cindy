@@ -14913,6 +14913,8 @@
       "credentialSwitchDeferred": "Se cambió el proveedor de modelos; el cambio se aplicará cuando termine la tarea actual.",
       "effortRuntimeDirty": "La intensidad de razonamiento aún se está actualizando. Espera un momento y vuelve a enviar.",
       "steerNotSent": "Mensaje no enviado. La incorporación a la tarea no está disponible temporalmente; se conservó tu borrador.",
+      "queuedSteerRevoked": "La autorización ha caducado. El mensaje en cola no se ha enviado. Puedes volver a enviarlo desde la tarea original.",
+      "queuedSteerUnverified": "No se pudo verificar la autorización. El mensaje sigue en la cola.",
       "credentialSwitchApplied": "El cambio de proveedor de modelo ya está en vigor.",
       "credentialSwitchFailed": "No se pudo cambiar el proveedor de modelos. Vuelve a elegir el modelo.",
       "credentialSwitchKeptSettings": "No se completó el cambio. La tarea seguirá usando la configuración anterior.",

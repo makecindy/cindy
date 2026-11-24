@@ -8991,6 +8991,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       return;
     }
     applyInputProjection(projection);
+    if (projection.queuedSteerRefusal && _activeViewSessions.has(projection.sessionId)) {
+      toast.warning(projection.queuedSteerRefusal.reason === 'revoked'
+        ? i18n.t('newChat.chatInput.queuedSteerRevoked')
+        : i18n.t('newChat.chatInput.queuedSteerUnverified'));
+    }
   };
   bindIpc(
     window.electronAPI.maker.onInputProjection,

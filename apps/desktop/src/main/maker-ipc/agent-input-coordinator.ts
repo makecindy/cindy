@@ -3019,6 +3019,7 @@ export class AgentInputCoordinator {
     }
 
     let authorizationFailed = false;
+    let queuedGuardFailure: 'revoked' | 'unavailable' | undefined;
     // A tool promoting an existing row needs its own current authority as well
     // as the row's original delivery guard. UI-only calls have no action scope.
     const beforeMutation = combineInputGuards(
@@ -3066,9 +3067,16 @@ export class AgentInputCoordinator {
         item.persistedContent,
         referenceContexts,
       );
+      const deliveryGuard = taskActionInputGuard(sessionId, item);
       const appMessageGuard = combineInputGuards(
         queuedAppMessageGuard(item),
-        taskActionInputGuard(sessionId, item),
+        steersStoredQueueItem && deliveryGuard ? async () => {
+          try { await deliveryGuard(); }
+          catch (error) {
+            queuedGuardFailure = taskActionRevocationCode(error) ? 'revoked' : 'unavailable';
+            throw error;
+          }
+        } : deliveryGuard,
         beforeMutation ? assertSteerAuthority : undefined,
       );
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts, {
@@ -3137,6 +3145,20 @@ export class AgentInputCoordinator {
         token: steerRequestToken,
       });
       this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
+
+      if (queuedGuardFailure) {
+        if (markerStillPresent && queuedGuardFailure === 'revoked') {
+          latest.pendingQueue = latest.pendingQueue.filter(row => row.clientId !== item.clientId);
+          this.removePendingCompactWaitClientId(latest, item.clientId);
+          latest.queueEditLocks = latest.queueEditLocks.filter(id => id !== item.clientId);
+          if (!latest.pendingQueue.length) latest.queuePaused = false;
+          observation.policyBlocked = true;
+          this.notifyRejectedUserTurn(sessionId, item);
+          this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        }
+        this.emit(sessionId, markerStillPresent ? { clientId: item.clientId, reason: queuedGuardFailure } : undefined);
+        return finishSteerRequest(false);
+      }
 
       if (authorizationFailed) {
         if (markerStillPresent) this.clearDirectSteeringItem(latest, item.clientId);
@@ -5135,8 +5157,10 @@ export class AgentInputCoordinator {
     return state;
   }
 
-  private emit(sessionId: string): void {
-    this.deps.emitProjection(this.getProjection(sessionId));
+  private emit(sessionId: string, queuedSteerRefusal?: AgentInputProjection['queuedSteerRefusal']): void {
+    const projection = this.getProjection(sessionId);
+    if (queuedSteerRefusal) projection.queuedSteerRefusal = queuedSteerRefusal;
+    this.deps.emitProjection(projection);
     // 崩溃恢复快照的统一收口点:所有队列状态迁移最终都会 emit,在这里做
     // 内容变更检测后异步覆盖写,单点保证内存态与快照不漂移(issue #761)。
     this.maybePersistQueueSnapshot(sessionId);

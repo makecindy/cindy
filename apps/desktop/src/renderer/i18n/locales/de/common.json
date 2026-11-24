@@ -14795,6 +14795,8 @@
       "credentialSwitchDeferred": "Modellanbieter gewechselt — wird nach Abschluss der aktuellen Aufgabe wirksam.",
       "effortRuntimeDirty": "Die Denkintensität wird noch aktualisiert. Warte kurz und sende dann erneut.",
       "steerNotSent": "Nachricht nicht gesendet. Das Einbringen ist vorübergehend nicht verfügbar; dein Entwurf wurde beibehalten.",
+      "queuedSteerRevoked": "Die Berechtigung für diese Nachricht ist abgelaufen. Sie wurde nicht gesendet. Du kannst sie bei Bedarf aus der ursprünglichen Aufgabe erneut senden.",
+      "queuedSteerUnverified": "Die Berechtigung konnte nicht geprüft werden. Die Nachricht bleibt in der Warteschlange.",
       "credentialSwitchApplied": "Der Wechsel des Modellanbieters ist jetzt wirksam.",
       "credentialSwitchFailed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut.",
       "credentialSwitchKeptSettings": "Dieser Wechsel konnte nicht abgeschlossen werden. Die Aufgabe verwendet weiterhin die bisherigen Einstellungen.",

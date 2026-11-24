@@ -14741,6 +14741,8 @@
       "credentialSwitchDeferred": "模型来源已切换，将在当前任务结束后生效。",
       "effortRuntimeDirty": "推理强度还在更新，稍等一下再发送",
       "steerNotSent": "未发送，暂时无法插话，草稿已保留",
+      "queuedSteerRevoked": "这条排队消息的授权已失效，消息未发送。需要时请在来源任务重新发起发送。",
+      "queuedSteerUnverified": "暂时无法核验这条消息的授权。消息仍在队列中。",
       "credentialSwitchApplied": "模型来源切换已生效。",
       "credentialSwitchFailed": "模型来源切换失败，请重新选择。",
       "credentialSwitchKeptSettings": "本次切换未完成，任务会继续使用原来的设置。",

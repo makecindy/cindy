@@ -122,6 +122,39 @@ const mocks = vi.hoisted(() => {
 });
 
 describe('task action dispatch authorization', () => {
+  // #12479, unit: drain tests miss promotion of a stored row while the receiver is busy.
+  it.each(['revoked', 'unavailable'] as const)('settles a queued steer with %s row authority', async outcome => {
+    const h = createHarness(), sid = 'busy-target';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    const row = makeItem('receipt', 'Queued receipt');
+    let allowed = false;
+    bindTaskActionInput(sid, row, async () => {
+      if (!allowed) throw new Error(outcome === 'revoked' ? 'TASK_ACTION_AUTHORIZATION_EXPIRED' : 'Database unavailable');
+    });
+    h.coordinator.enqueue(sid, row);
+    const delivered = vi.fn();
+    h.steerToAgent.mockImplementation(async (_id, _message, opts) => {
+      try { await opts?.[MCP_APP_MESSAGE_GUARD]?.(); }
+      catch { throw new Error('[INTERNAL] preparation failed'); }
+      delivered();
+    });
+    const promote = () => h.coordinator.steer(sid, row, { removeFromQueue: true });
+    expect(await promote()).toBe(false);
+    expect(h.emitProjection).toHaveBeenCalledWith(expect.objectContaining({
+      queuedSteerRefusal: { clientId: row.clientId, reason: outcome },
+    }));
+    expect(h.coordinator.getProjection(sid).error).toBeNull();
+    expect(h.coordinator.hasPendingQueueItem(sid, row.clientId)).toBe(outcome === 'unavailable');
+    expect(delivered).not.toHaveBeenCalled();
+    expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
+    allowed = true;
+    if (outcome === 'unavailable') await promote();
+    else await h.coordinator.steer(sid, makeItem('next', 'Next input'));
+    await promote(); // A stale queue mirror may submit the same clientId again.
+    expect(delivered).toHaveBeenCalledOnce();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
   // Unit regression through the production coordinator: revocation/restore cannot
   // deliver an automatic message, while the following owner input still runs.
   // teammate-authority.md「延迟投递只认真实撤权」: the revoked item settles before the

@@ -538,6 +538,8 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
 
 export interface AgentInputProjection {
   sessionId: string;
+  /** One-shot result of promoting a queued message. Omitted from snapshots and older hosts. */
+  queuedSteerRefusal?: { clientId: string; reason: 'revoked' | 'unavailable' };
   /** Host still owns a turn/dispatch/interaction boundary. Older hosts may omit it. */
   turnInProgress?: boolean;
   pendingQueue: AgentInputQueuedMessage[];

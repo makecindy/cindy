@@ -14795,6 +14795,8 @@
       "credentialSwitchDeferred": "Model provider switched — it takes effect after the current task finishes.",
       "effortRuntimeDirty": "Reasoning effort is still updating. Wait a moment, then send again.",
       "steerNotSent": "Message not sent. Steer is temporarily unavailable; your draft has been kept.",
+      "queuedSteerRevoked": "This queued message was not sent because its authorization expired. To send it again, use the original task.",
+      "queuedSteerUnverified": "Authorization could not be checked. This message is still queued.",
       "credentialSwitchApplied": "Model provider switch is now in effect.",
       "credentialSwitchFailed": "Model provider switch failed. Choose the model again.",
       "credentialSwitchKeptSettings": "The switch didn’t complete. The task will keep using its previous settings.",

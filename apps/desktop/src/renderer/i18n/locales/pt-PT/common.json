@@ -14913,6 +14913,8 @@
       "credentialSwitchDeferred": "Fornecedor de modelos alterado — a alteração entra em vigor quando a tarefa atual terminar.",
       "effortRuntimeDirty": "O esforço de raciocínio ainda está a ser atualizado. Aguarde um momento e volte a enviar.",
       "steerNotSent": "Mensagem não enviada. O encaminhamento está temporariamente indisponível; o rascunho foi mantido.",
+      "queuedSteerRevoked": "A autorização expirou e esta mensagem não foi enviada. Se necessário, volte a enviá-la a partir da tarefa original.",
+      "queuedSteerUnverified": "Não foi possível verificar a autorização. A mensagem continua na fila.",
       "credentialSwitchApplied": "A mudança de fornecedor de modelos já está em vigor.",
       "credentialSwitchFailed": "A mudança de fornecedor de modelos falhou. Escolha novamente o modelo.",
       "credentialSwitchKeptSettings": "A alteração não foi concluída. A tarefa continuará a usar as definições anteriores.",

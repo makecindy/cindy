@@ -14913,6 +14913,8 @@
       "credentialSwitchDeferred": "Fournisseur de modèles changé : la modification prendra effet à la fin de la tâche en cours.",
       "effortRuntimeDirty": "L'effort de raisonnement est encore en cours de mise à jour. Patientez un instant, puis renvoyez.",
       "steerNotSent": "Message non envoyé. La réorientation est temporairement indisponible ; votre brouillon a été conservé.",
+      "queuedSteerRevoked": "Cette autorisation a expiré. Le message en attente n’a pas été envoyé. Vous pouvez le renvoyer depuis la tâche d’origine.",
+      "queuedSteerUnverified": "Impossible de vérifier l’autorisation pour le moment. Le message reste en attente.",
       "credentialSwitchApplied": "Le changement de fournisseur de modèles est désormais effectif.",
       "credentialSwitchFailed": "Échec du changement de fournisseur de modèles. Choisissez à nouveau le modèle.",
       "credentialSwitchKeptSettings": "Le changement n’a pas abouti. La tâche continuera d’utiliser ses paramètres précédents.",
