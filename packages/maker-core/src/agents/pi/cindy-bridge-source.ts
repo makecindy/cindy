@@ -3306,15 +3306,95 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
   }
 }
 
+/** 组合 schema 遍历的预算: 节点数与深度封顶 —— 循环引用、超大 schema 都不能拖住同步路径。 */
+const SCHEMA_WALK_MAX_NODES = 512;
+const SCHEMA_WALK_MAX_DEPTH = 32;
+const SCHEMA_COMBINATORS = ['allOf', 'anyOf', 'oneOf'];
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
- * 工具 schema 明确声明的参数名。返回 null 表示「schema 没声明」——
- * 调用方按「不按名字猜」处理, 宁漏不误转。
+ * 解析 schema 文档内的本地 $ref(纯 JSON 指针: #、#/definitions/X、#/$defs/X)。远程引用
+ * (http(s)://…)与其他 URI 一律不解析 —— 不为归一化发请求, 也不猜。
  */
-function schemaParameterNames(schema: Record<string, unknown> | undefined): Set<string> | null {
-  const properties = schema?.properties;
-  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return null;
-  const names = Object.keys(properties as Record<string, unknown>);
-  return names.length > 0 ? new Set(names) : null;
+function resolveLocalSchemaRef(root: Record<string, unknown>, ref: string): Record<string, unknown> | null {
+  if (ref === '#') return root;
+  if (!ref.startsWith('#/')) return null;
+  let node: unknown = root;
+  for (const rawToken of ref.slice(2).split('/')) {
+    if (!isPlainRecord(node)) return null;
+    const token = rawToken.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (!Object.prototype.hasOwnProperty.call(node, token)) return null;
+    node = node[token];
+  }
+  return isPlainRecord(node) ? node : null;
+}
+
+/**
+ * 工具 schema 收集到的「表态」: 声明过的参数名、是否放开额外字段、以及 patternProperties 模式。
+ *
+ * 组合声明: allOf / anyOf / oneOf 分支与文档内的本地 $ref(第三方 schema 常把公共字段抽成
+ * $defs 再 allOf 进来)。只读根层 properties 会把这些字段全判成「没声明」, 平铺到顶层的
+ * 它们于是被记成 unmapped 不转发。
+ *
+ * 分支里声明的字段也收: 某个 anyOf / oneOf 分支声明了这个键, 它就是服务端认的参数。
+ * 同理, 分支里放开 additionalProperties、或给出 patternProperties, 也算这个 schema 表态过 ——
+ * 否则「根层只有 $ref、声明在被引用文档里」的 schema 会因为名字被收下、额外字段却被丢掉而
+ * 半懂不懂。
+ *
+ * 遍历有预算: 同一个节点只走一次(循环引用靠它终止), 节点数与深度封顶, 超出部分不再展开。
+ */
+interface SchemaParameterSurface {
+  /** 走到的节点声明过的参数名。 */
+  names: Set<string>;
+  /** 有节点明确放开了额外字段(additionalProperties 为 true 或一个 schema)。 */
+  additionalAllowed: boolean;
+  /** 走到的节点给出的 patternProperties 模式(去重, 数量封顶)。 */
+  patterns: string[];
+}
+
+function schemaParameterSurface(schema: Record<string, unknown> | undefined): SchemaParameterSurface | null {
+  if (!schema) return null;
+  const surface: SchemaParameterSurface = {
+    names: new Set<string>(),
+    additionalAllowed: false,
+    patterns: [],
+  };
+  const seenPatterns = new Set<string>();
+  const visited = new Set<Record<string, unknown>>();
+  let remainingNodes = SCHEMA_WALK_MAX_NODES;
+  const walk = (node: unknown, depth: number): void => {
+    if (!isPlainRecord(node) || remainingNodes <= 0 || depth > SCHEMA_WALK_MAX_DEPTH || visited.has(node)) return;
+    visited.add(node);
+    remainingNodes--;
+    if (isPlainRecord(node.properties)) {
+      for (const name of Object.keys(node.properties)) surface.names.add(name);
+    }
+    const additional = node.additionalProperties;
+    if (additional === true || (typeof additional === 'object' && additional !== null)) {
+      surface.additionalAllowed = true;
+    }
+    if (surface.patterns.length < SCHEMA_PATTERN_MAX_COUNT && isPlainRecord(node.patternProperties)) {
+      for (const pattern of Object.keys(node.patternProperties)) {
+        if (seenPatterns.has(pattern)) continue;
+        seenPatterns.add(pattern);
+        surface.patterns.push(pattern);
+      }
+    }
+    if (typeof node.$ref === 'string') walk(resolveLocalSchemaRef(schema, node.$ref), depth + 1);
+    for (const keyword of SCHEMA_COMBINATORS) {
+      const branches = node[keyword];
+      if (!Array.isArray(branches)) continue;
+      for (const branch of branches) {
+        if (remainingNodes <= 0) break;
+        walk(branch, depth + 1);
+      }
+    }
+  };
+  walk(schema, 0);
+  return surface;
 }
 
 /**
@@ -3341,27 +3421,177 @@ function isNameEnvelopeSchema(schema: unknown): boolean {
 }
 
 /**
+ * patternProperties 的求值预算。
+ *
+ * 模式来自服务端、键来自模型, 两头都不受 Cindy 控制, 而归一化在权限与执行两条路径上同步跑它:
+ * 服务端给一个灾难性回溯的模式(如 ^(a+)+$), 模型给一个长 matching prefix 的键, 30 个字符就能
+ * 把 Node 事件循环卡住几秒, 更长的键直接冻结 Pi 进程。所以只跑「回溯组合数有上界」的模式。
+ */
+const SCHEMA_PATTERN_MAX_LENGTH = 512;
+const SCHEMA_PATTERN_MAX_COUNT = 16;
+const SCHEMA_PATTERN_KEY_MAX_LENGTH = 128;
+const SCHEMA_PATTERN_MAX_DEPTH = 32;
+/** 回溯引擎最多探索的「量词取值 × 分支选择 × 起始位置」组合数; 每个组合一步, 约二十万步以内。 */
+const SCHEMA_PATTERN_BACKTRACK_BUDGET = 200_000;
+
+/**
+ * 估算 pattern 在长度 keyLength 的键上, 回溯引擎最多探索多少种「量词取值 × 分支选择 × 起始位置」
+ * 的组合 —— 回溯引擎每一步对应一种组合, 所以这也是步数的上界。超过预算、或含估算不了的语法
+ * (回溯引用、环视、修饰符分组等)时返回预算加一, 调用方据此不跑这个模式。
+ *
+ * 组合数按结构递推: 顺序相乘、分支相加; 量词的轮数取 max 与「键长 + 下界 + 1」里较小的一个
+ * (吃掉字符的轮次不超过键长; 空匹配的轮次只在下界还没凑够时才被允许), 轮数的选择与每轮内部的
+ * 选择相乘。这是个偏松的上界(确定性的量词也按满算), 松掉的部分只会让少数安全模式被判成不收,
+ * 不会放进真正会爆炸的。
+ */
+function patternBacktrackBudget(pattern: string, keyLength: number): number {
+  const limit = SCHEMA_PATTERN_BACKTRACK_BUDGET;
+  const over = limit + 1;
+  const add = (a: number, b: number): number => (a + b > limit ? over : a + b);
+  const multiply = (a: number, b: number): number => (a * b > limit ? over : a * b);
+  const at = { index: 0 };
+  interface QuantifierRange { min: number; max: number; next: number }
+  // 估算不了: 余下的部分不再看, 整个模式按超预算处理。
+  const giveUp = (): number => {
+    at.index = pattern.length;
+    return over;
+  };
+  const parseAlternation = (depth: number): number => {
+    let total = 0;
+    for (;;) {
+      total = add(total, parseSequence(depth));
+      if (pattern[at.index] !== '|') return total;
+      at.index++;
+    }
+  };
+  const parseSequence = (depth: number): number => {
+    let product = 1;
+    // 上一个原子的组合数(含量词), 遇到下一个原子或分支结束时才乘进 product。
+    let pending: number | null = null;
+    for (;;) {
+      const char = pattern[at.index];
+      if (char === undefined || char === '|' || char === ')') break;
+      const range = parseQuantifier();
+      if (range) {
+        if (pending === null) return giveUp();
+        at.index = range.next;
+        if (pattern[at.index] === '?') at.index++; // 惰性量词: 组合数不变。
+        pending = quantified(pending, range);
+        continue;
+      }
+      product = multiply(product, pending ?? 1);
+      pending = parseAtom(depth);
+    }
+    return multiply(product, pending ?? 1);
+  };
+  const parseQuantifier = (): QuantifierRange | null => {
+    const char = pattern[at.index];
+    if (char === '*') return { min: 0, max: Number.POSITIVE_INFINITY, next: at.index + 1 };
+    if (char === '+') return { min: 1, max: Number.POSITIVE_INFINITY, next: at.index + 1 };
+    if (char === '?') return { min: 0, max: 1, next: at.index + 1 };
+    return char === '{' ? parseBraces() : null;
+  };
+  const parseBraces = (): QuantifierRange | null => {
+    const close = pattern.indexOf('}', at.index + 1);
+    const match = close < 0 ? null : /^(\d+)?(,)?(\d*)$/.exec(pattern.slice(at.index + 1, close));
+    // {a}、{}、{,} 在非 unicode 模式下是普通字符, 不是量词。
+    if (!match || (match[1] === undefined && match[3] === '')) return null;
+    const min = Number(match[1] ?? 0);
+    return {
+      min,
+      // 没有逗号时上界等于下界; 逗号后省略表示不封顶。
+      max: match[2] === undefined ? min : match[3] === '' ? Number.POSITIVE_INFINITY : Number(match[3]),
+      next: close + 1,
+    };
+  };
+  const quantified = (base: number, range: QuantifierRange): number => {
+    if (range.min > range.max) return over;
+    // 轮数: 吃掉字符的轮次不超过键长; 能空匹配的轮次只在下界还没凑够时才被允许, 最多再加 min + 1 轮。
+    const rounds = Math.min(range.max, keyLength + range.min + 1);
+    // 轮数本身也是一次选择。
+    if (rounds + 1 > limit) return over;
+    let choices = 1;
+    for (let round = 0; round < rounds; round++) {
+      choices = multiply(choices, Math.max(base, 1));
+    }
+    return multiply(rounds + 1, choices);
+  };
+  const parseAtom = (depth: number): number => {
+    const char = pattern[at.index];
+    if (char === '(') {
+      at.index++;
+      if (pattern[at.index] === '?') {
+        const kind = pattern[at.index + 1];
+        if (kind === ':') {
+          at.index += 2;
+        } else if (kind === '<' && pattern[at.index + 2] !== '=' && pattern[at.index + 2] !== '!') {
+          // 具名分组; 名字里带转义的不估。
+          const close = pattern.indexOf('>', at.index + 2);
+          if (close < 0 || pattern.slice(at.index + 2, close).includes('\\')) return giveUp();
+          at.index = close + 1;
+        } else {
+          return giveUp(); // 环视、修饰符分组。
+        }
+      }
+      if (depth + 1 > SCHEMA_PATTERN_MAX_DEPTH) return giveUp();
+      const inner = parseAlternation(depth + 1);
+      if (pattern[at.index] !== ')') return giveUp();
+      at.index++;
+      return inner;
+    }
+    if (char === '[') {
+      let index = at.index + 1;
+      if (pattern[index] === '^') index++;
+      if (pattern[index] === ']') index++;
+      while (index < pattern.length && pattern[index] !== ']') {
+        // 嵌套字符类是 v 标志的语法, 不按普通字符类估。
+        if (pattern[index] === '[') return giveUp();
+        index += pattern[index] === '\\' ? 2 : 1;
+      }
+      if (index >= pattern.length) return giveUp();
+      at.index = index + 1;
+      return 1;
+    }
+    if (char === '\\') {
+      const next = pattern[at.index + 1];
+      // 回溯引用; 以及带花括号的转义(\u{…}、\p{…})—— 非 unicode 模式下后者其实是字母加量词。
+      if (next === undefined || /[1-9kpP]/.test(next)) return giveUp();
+      if (next === 'u' && !/^[0-9a-fA-F]{4}/.test(pattern.slice(at.index + 2))) return giveUp();
+      at.index += 2;
+      return 1;
+    }
+    at.index++; // 普通字符、.、^、$ 都是单个原子。
+    return 1;
+  };
+  const choices = parseAlternation(0);
+  if (at.index !== pattern.length) return over;
+  // 没有 ^ 锚定时, 引擎从每个位置各起一次匹配。
+  return pattern.startsWith('^') ? choices : multiply(choices, keyLength + 1);
+}
+
+/**
  * schema 明确收下这个键吗（声明之外的动态参数）。
  *
- * - additionalProperties 明确放开（true 或一个 schema）→ 收：schema 说这个键合法，
+ * - additionalProperties 明确放开（true 或一个 schema）→ 收：schema 说这个键合法,
  *   不转发等于又丢一次参数（表格类服务于是按缺省值写回 A1 并返回成功）。
- * - patternProperties 命中某个模式 → 收。
+ *   组合 schema 里任何走到的分支放开它也算数。
+ * - patternProperties 命中某个模式 → 收。但只跑回溯组合数有上界的模式(见 patternBacktrackBudget):
+ *   模式是服务端给的、键是模型给的, 判不了的模式不跑, 那个键按没声明处理。
  * - 其余（没写 additionalProperties，或写成 false）→ 不收：schema 没表态，宁漏不误转。
  *   JSON Schema 默认允许额外字段，但「默认允许」不等于「这个键是模型想给的参数」，
  *   把模型的私货转过去只会让服务端多一条校验错误。
  */
-function schemaAcceptsKey(schema: Record<string, unknown> | undefined, key: string): boolean {
-  if (!schema) return false;
-  const additional = schema.additionalProperties;
-  if (additional === true || (typeof additional === 'object' && additional !== null)) return true;
-  const patterns = schema.patternProperties;
-  if (patterns && typeof patterns === 'object' && !Array.isArray(patterns)) {
-    for (const pattern of Object.keys(patterns as Record<string, unknown>)) {
-      try {
-        if (new RegExp(pattern).test(key)) return true;
-      } catch {
-        // 非法正则: 判不了就不收。
-      }
+function schemaAcceptsKey(surface: SchemaParameterSurface | null, key: string): boolean {
+  if (!surface) return false;
+  if (surface.additionalAllowed) return true;
+  if (key.length > SCHEMA_PATTERN_KEY_MAX_LENGTH) return false;
+  for (const pattern of surface.patterns) {
+    if (pattern.length > SCHEMA_PATTERN_MAX_LENGTH) continue;
+    if (patternBacktrackBudget(pattern, key.length) > SCHEMA_PATTERN_BACKTRACK_BUDGET) continue;
+    try {
+      if (new RegExp(pattern).test(key)) return true;
+    } catch {
+      // 非法正则: 判不了就不收。
     }
   }
   return false;
@@ -3413,23 +3643,34 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
     }
   }
   const schema = tool.inputSchema;
-  const declared = schemaParameterNames(schema);
+  const surface = schemaParameterSurface(schema);
+  const declared = surface && surface.names.size > 0 ? surface.names : null;
   // schema 没声明参数名时, 只有明确禁止额外字段才不转发 —— JSON Schema 默认允许额外字段,
   // 这类工具(如只声明类型不声明 properties 的)把顶层键折进去才是服务端能接住的那一份。
   const foldAll = !declared && schema?.additionalProperties !== false;
   const folded: string[] = [];
   const unmapped: string[] = [];
-  // 信封被平铺: 顶层 name 是内层工具名, 顶层 args 是内层参数。args 容器里已经有 name 时
-  // 说明模型给的就是完整信封, 不重建。
+  // 信封被平铺: 顶层 name 是信封层的内层工具名(选择器), args 容器是内层工具自己的参数。
+  // 内层工具自己常有 name 参数(memory_write 的记忆名、schedule_create 的展示名), 所以「args 里
+  // 有 name」不等于「模型给的是完整信封」—— 顶层选择器与 args 里的 name 各占一层, 两层都要留:
+  // 丢了顶层那层, 服务端拿 {name: <记忆名>, type} 当信封, 内层工具查无此名或调错工具。
+  // 只有 args 容器自身就是一个完整信封({name, args})、且它说的内层工具与顶层 name 一致
+  // (或顶层 name 只是入口工具自己的名字)时, 才是模型把同一个选择器写了两遍, 不再包一层。
+  const selector = typeof record.name === 'string' ? record.name : undefined;
+  const repeatsEnvelope = selector !== undefined
+    && Object.prototype.hasOwnProperty.call(params, 'name')
+    && typeof params.name === 'string'
+    && Object.prototype.hasOwnProperty.call(params, 'args')
+    && (params.name === selector || selector === tool.name);
   const flattenedEnvelope = isNameEnvelopeSchema(schema)
     && provided
-    && typeof record.name === 'string'
-    && !Object.prototype.hasOwnProperty.call(params, 'name');
+    && selector !== undefined
+    && !repeatsEnvelope;
   for (const [key, value] of Object.entries(record)) {
     if (GATEWAY_OWN_KEYS.has(key)) continue;
     if (flattenedEnvelope && key === 'name') continue; // 信封层, 不是内层参数。
     if (Object.prototype.hasOwnProperty.call(params, key)) continue;
-    if (!foldAll && !(declared?.has(key) ?? false) && !schemaAcceptsKey(schema, key)) {
+    if (!foldAll && !(declared?.has(key) ?? false) && !schemaAcceptsKey(surface, key)) {
       unmapped.push(key);
       continue;
     }

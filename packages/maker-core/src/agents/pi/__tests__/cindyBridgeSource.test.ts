@@ -3101,6 +3101,243 @@ it('echoes the forwarded arguments when the server rejects the call', async () =
   })).rejects.toThrow(/Forwarded arguments: \{"file_id":"doc-1","row":10\}/);
 });
 
+/** 新增网关用例用到的最小网关表面(类是从源码片段编译出来的, 没有类型)。 */
+interface GatewayHarness {
+  add(serverName: string, client: unknown, tools: Array<Record<string, unknown>>): void;
+  register(api: { registerTool: (tool: unknown) => unknown }): void;
+  listResult(input: unknown): Promise<unknown>;
+  executeCall(input: unknown): Promise<{ content: Array<{ text?: string }> }>;
+}
+
+/** 编译网关片段(CINDY_MCP_LIST_TOOLS…connectServer), 在独立上下文里取出网关类。 */
+function loadGatewayHarness(): { Gateway: new () => GatewayHarness } {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: {
+    createHash: typeof createHash;
+    recordInput: (value: unknown) => unknown;
+    mcpContentToPi: (content: unknown) => unknown;
+    Gateway?: new () => GatewayHarness;
+  } = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  if (!context.Gateway) throw new Error('gateway class was not exported by the compiled bridge slice');
+  return { Gateway: context.Gateway };
+}
+
+// 评审 P1(两层 name 被压成一层): 平铺信封重建用「args 容器里有 name 就不重建」判定模型给的是
+// 完整信封 —— 但内层工具自己就常有 name 参数(memory_write / schedule_create)。规范调用
+// {name: 'memory_write', args: {name: 'architecture', type: 'project'}} 于是被当成完整信封:
+// 顶层的内层工具名被丢掉, 服务端拿 {name: 'architecture', type} 当信封, 内层工具查无此名
+// (UNKNOWN_TOOL), 或者恰好撞上别的内层工具名而调错工具。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 a24df58791 的 P1;内层 name 参数见 lizi-mcps scheduler/create.ts、
+//   memory/write.ts。
+// - 覆盖缺口:上一轮的重建用例只盖了「args 里没有 name」的内层工具。
+// - 最小失败输入:信封形状工具 + 顶层 name + args 里带 name。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('keeps both name layers when the flattened inner tool has a name parameter of its own', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  const envelopeSchema = { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } } };
+  gateway.add('cindy_memory', client, [
+    { name: 'call_tool', inputSchema: { ...envelopeSchema, required: ['name'] } },
+    // 内层工具在本地工具表里, 自己也声明 name + args 参数: 与双包同形, 双包裁决按它的 schema 放行。
+    { name: 'run', inputSchema: { ...envelopeSchema, required: ['name', 'args'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 记忆名(内层工具自己的 name 参数)与内层工具名(信封层)各占一层。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { name: 'architecture', type: 'project' },
+  });
+  expect(requests[0].params).toEqual({
+    name: 'call_tool', arguments: { name: 'memory_write', args: { name: 'architecture', type: 'project' } },
+  });
+  // 顶层的内层工具名与 args 里的不一致: 两层都保留, 交给下游的双包裁决按内层 schema 判。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'run', args: { name: 'target', args: { cwd: '/work' } },
+  });
+  expect(requests[1].params).toEqual({
+    name: 'call_tool', arguments: { name: 'run', args: { name: 'target', args: { cwd: '/work' } } },
+  });
+  // 同一个内层工具名写了两遍(顶层 + args 里的信封)不再包一层; 顶层填的是入口工具名也一样。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { name: 'memory_write', args: { type: 'project' } },
+  });
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } },
+  });
+  expect(requests.slice(2).map(request => request.params)).toEqual([
+    { name: 'call_tool', arguments: { name: 'memory_write', args: { type: 'project' } } },
+    { name: 'call_tool', arguments: { name: 'memory_write', args: { type: 'project' } } },
+  ]);
+});
+
+// 评审 P1(服务端正则卡死 Pi 进程): patternProperties 的模式来自服务端、键来自模型, 两头都不受
+// Cindy 控制, 而归一化在权限与执行两条路径上同步跑它。服务端给一个灾难性回溯的模式、模型给一个
+// 长 matching prefix 的键, Node 事件循环就被卡住 —— 实测 ^(a+)+$ 配 30 个 a 加 ! 要 7 秒多(每多一个
+// 字符翻一倍); 有界量词同样会爆: (a?){200}$ 配 5 个字符, 8 秒都跑不完。只跑「回溯组合数有上界」的
+// 模式, 其余判不了就不收。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 在这种 schema 下仍即时返回; 那个键按
+//   「schema 没收下」处理(不转发、记进回执), 同一 schema 里的普通模式照常生效。
+// - Bug 依据:codex 对 a24df58791 的 P1;修复前实测同一输入卡住 7 秒以上(超过用例 5 秒超时)。
+// - 覆盖缺口:上一轮只盖了良性模式(^x_)的转发。
+// - 最小失败输入:patternProperties {'^(a+)+$': …} + 顶层键 'a'.repeat(30) + '!'。
+// - tier:unit;耗时上限 1 秒比修复前实测低 7 倍以上(且修复前先撞 5 秒超时), 比修复后高三个数量级。
+it('does not run a catastrophic server-supplied pattern against a model-supplied key', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_extras', client, [{
+    name: 'tag',
+    inputSchema: {
+      type: 'object', properties: { file_id: { type: 'string' } }, required: ['file_id'],
+      patternProperties: {
+        '^(a+)+$': { type: 'string' },
+        '(a?){200}$': { type: 'string' },
+        '^x_[a-z0-9]+$': { type: 'string' },
+      },
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_extras', tool: 'tag' });
+  const probes = [
+    // 无界量词套无界量词。
+    { key: 'a'.repeat(30) + '!', forwarded: { x_note: 'keep me' } },
+    // 有界量词 + 能空匹配的体: 轮数不受键长限制, 按键长估轮数会漏掉这一种。
+    { key: 'a'.repeat(4) + '!', forwarded: {} },
+  ];
+  for (const [index, probe] of probes.entries()) {
+    const started = performance.now();
+    const result = await gateway.executeCall({
+      server: 'cindy_extras', tool: 'tag', args: { file_id: 'doc-1' }, [probe.key]: 'never evaluated', ...probe.forwarded,
+    });
+    const elapsedMs = performance.now() - started;
+    expect(elapsedMs).toBeLessThan(1000);
+    expect(requests[index].params).toEqual({
+      name: 'tag', arguments: { file_id: 'doc-1', ...probe.forwarded },
+    });
+    const note = result.content.map(block => block.text ?? '').join('\n');
+    expect(note).toContain('were not forwarded because the tool schema does not declare them: ' + probe.key);
+  }
+  expect(requests).toHaveLength(probes.length);
+});
+
+// 评审 P1(组合 schema 里声明的参数被丢): 参数名收集只读根层 properties。第三方
+// schema 用 allOf / anyOf 分支或文档内 $ref 声明参数时(根层 properties.file_id +
+// allOf[0].properties.row), declared 只有 file_id; foldAll 于是为 false, 平铺的 row 被记成
+// unmapped 不转发 —— schema 明确声明过的参数照丢。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 a24df58791 的 P1。
+// - 覆盖缺口:上一轮的组合 schema 用例只盖了根层 required 的校验, 没盖参数名的收集。
+// - 最小失败输入:properties.file_id + allOf[0].properties.row + 顶层 row。
+// - tier:unit;循环 $ref 与超深 allOf 链必须在预算内返回(遍历有节点数与深度上限)。
+it('folds top-level keys that a composed schema declares (allOf / anyOf / local $ref)', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'WROTE[A1]' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_sheets', client, [
+    {
+      name: 'set_cell',
+      inputSchema: {
+        type: 'object', properties: { file_id: { type: 'string' } }, required: ['file_id'],
+        allOf: [{ properties: { row: { type: 'integer' } } }, { $ref: '#/$defs/ColInput' }],
+        $defs: { ColInput: { properties: { col: { type: 'integer' } } } },
+      },
+    },
+    {
+      name: 'read_range',
+      inputSchema: {
+        type: 'object', properties: { file_id: { type: 'string' } },
+        anyOf: [{ properties: { sheet: { type: 'string' } } }, { properties: { range: { type: 'string' } } }],
+      },
+    },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_sheets', tool: 'set_cell' });
+  await gateway.listResult({ server: 'cindy_sheets', tool: 'read_range' });
+  await gateway.executeCall({
+    server: 'cindy_sheets', tool: 'set_cell', args: { file_id: 'doc-1' }, row: 10, col: 2,
+  });
+  expect(requests[0].params).toEqual({ name: 'set_cell', arguments: { file_id: 'doc-1', row: 10, col: 2 } });
+  await gateway.executeCall({ server: 'cindy_sheets', tool: 'read_range', args: { file_id: 'doc-1' }, range: 'A1:B2' });
+  expect(requests[1].params).toEqual({ name: 'read_range', arguments: { file_id: 'doc-1', range: 'A1:B2' } });
+  // 循环引用的 $ref 只走一次; 深度超过预算的部分不再展开(那一层的键按未声明处理), 两种都要即时返回。
+  // (节点数预算是同一道闸: 分支多到超出预算时同样停在那里, 不再展开。)
+  let chain: Record<string, unknown> = { properties: { deep: { type: 'integer' } } };
+  for (let depth = 0; depth < 400; depth++) chain = { allOf: [chain] };
+  gateway.add('cindy_graph', client, [{
+    name: 'node',
+    inputSchema: {
+      type: 'object', properties: { id: { type: 'string' } },
+      $defs: { Node: { properties: { label: { type: 'string' } }, allOf: [{ $ref: '#/$defs/Node' }] } },
+      allOf: [{ $ref: '#/$defs/Node' }, chain],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_graph', tool: 'node' });
+  const started = performance.now();
+  await gateway.executeCall({ server: 'cindy_graph', tool: 'node', args: { id: 'n1' }, label: 'root', deep: 9 });
+  expect(performance.now() - started).toBeLessThan(1000);
+  expect(requests[2].params).toEqual({ name: 'node', arguments: { id: 'n1', label: 'root' } });
+});
+
+// 评审 P1 的收尾(参数名改成走组合遍历之后): 「根层只有 $ref、声明在被引用文档里」的 schema,
+// 参数名从 $defs 里收了, 额外字段的表态也必须从同一处收 —— 只把 additionalProperties 留在
+// 根层看的话, 这类 schema 的「允许额外字段」会被漏成「不允许」, 模型给的额外参数又照丢。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 a24df58791 的 P1(组合 schema 的声明被忽略)收尾后的半懂不懂。
+// - 覆盖缺口:组合用例只盖了「声明参数名」, 没盖「组合里放开额外字段」。
+// - 最小失败输入:inputSchema = {$ref:'#/$defs/Input', $defs:{Input:{properties:{id}, additionalProperties:true}}} + 顶层 extra。
+// - tier:unit。
+it('forwards extra keys that a referenced schema definition explicitly allows', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_meta', client, [{
+    name: 'patch',
+    inputSchema: {
+      $ref: '#/$defs/Input',
+      $defs: {
+        Input: { type: 'object', properties: { id: { type: 'string' } }, additionalProperties: true },
+      },
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_meta', tool: 'patch' });
+  await gateway.executeCall({ server: 'cindy_meta', tool: 'patch', args: { id: 'x-1' }, extra: 'keep' });
+  expect(requests[0].params).toEqual({ name: 'patch', arguments: { id: 'x-1', extra: 'keep' } });
+});
+
 it('intercepts a double-wrapped envelope and an entry-tool name before they reach the server', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(
