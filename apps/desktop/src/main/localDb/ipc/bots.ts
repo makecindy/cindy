@@ -201,20 +201,21 @@ function botUserContextSource(config: Record<string, unknown>): string {
 }
 
 /**
- * A Cindy-generated default SOUL may be rebuilt only while the user's Home copy
- * still matches the frozen version. A missing SOUL.md will be seeded from the
- * next version; any other text is user-authored and must survive a metadata edit.
+ * The Home files are user-owned: a save may rewrite a slot only while that slot
+ * still exactly matches the frozen snapshot. A strict read cannot distinguish an
+ * unreadable file from a hand edit, so any error fails closed. Callers must
+ * complete legacy-Home migration/seeding before relying on this comparison.
  */
-async function folderStillTracksFrozenDefaultSoul(
+async function folderSourcesUnchanged(
   userDataDir: string,
   botId: string,
-  identitySource: string,
+  expected: { identitySource?: string; userContextSource?: string },
 ): Promise<boolean> {
   try {
     const folder = await readBotProfileFolder(userDataDir, botId, { strict: true });
-    return !folder.identitySource || folder.identitySource === identitySource;
+    return (expected.identitySource === undefined || folder.identitySource === expected.identitySource)
+      && (expected.userContextSource === undefined || folder.userContextSource === expected.userContextSource);
   } catch {
-    // Unreadable or unsafe Home contents cannot prove that the copy is unedited.
     return false;
   }
 }
@@ -229,15 +230,17 @@ async function ensureBotProfileFolderSeeded(
   identitySource: string,
   config: Record<string, unknown>,
   userDataDir = ownerScopedUserDataPath(),
-): Promise<void> {
+): Promise<boolean> {
   try {
     await migrateBotProfileFolder(userDataDir, botId, {
       identitySource,
       userContextSource: botUserContextSource(config),
       config: Object.fromEntries(Object.entries(config).filter(([key]) => key !== 'userContextSource')),
     }, app.getPath('userData'));
+    return true;
   } catch (cause) {
     log.warn('seed bot profile folder failed', { botId, error: String(cause) });
+    return false;
   }
 }
 
@@ -2247,18 +2250,19 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     nextName !== current.displayName || nextDescription !== current.description;
   let regeneratedDefaultIdentity = false;
   // Only an untouched Cindy-generated default follows a name/description edit.
-  // Explicit identity edits, user-authored SOULs and already customized versions
-  // keep their exact frozen text, and folder reconciliation remains the reader
-  // of hand-edited files.
+  // Migrate/seed the authoritative Home first: an old non-owner Home may still
+  // hold a hand-edited SOUL that has not reached this owner's directory yet.
   if (
     body.identitySource === undefined
     && identityMetadataChanged
     && previousIdentitySource === buildDefaultBotIdentity(current.displayName, current.description)
   ) {
-    regeneratedDefaultIdentity = await folderStillTracksFrozenDefaultSoul(
+    const homeReady = await ensureBotProfileFolderSeeded(id, previousIdentitySource, normalizedNextConfig, owner.userDataDir);
+    owner.assertCurrent();
+    regeneratedDefaultIdentity = homeReady && await folderSourcesUnchanged(
       owner.userDataDir,
       id,
-      previousIdentitySource,
+      { identitySource: previousIdentitySource },
     );
     owner.assertCurrent();
   }
@@ -2356,17 +2360,30 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     });
   } else await commitProfile();
   // The files are the user's editing surface: rewrite only the file whose content this
-  // save changed, so pinning, a model change or editing the other file cannot clobber
-  // hand edits that have not been reconciled yet.
+  // save changed. An automatically regenerated default SOUL is written only if the
+  // authoritative file still matches the frozen snapshot at the write boundary; a
+  // hand edit made while the DB commit or permission refresh was in flight survives
+  // and is adopted by the next folder reconciliation.
   const nextUserContextSource = botUserContextSource(normalizedNextConfig);
+  const previousUserContextSource = botUserContextSource(previous);
   const folderPatch = {
     ...(nextIdentitySource !== previousIdentitySource ? { identitySource: nextIdentitySource } : {}),
-    ...(nextUserContextSource !== botUserContextSource(previous) ? { userContextSource: nextUserContextSource } : {}),
+    ...(nextUserContextSource !== previousUserContextSource ? { userContextSource: nextUserContextSource } : {}),
   };
-  await ensureBotProfileFolderSeeded(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
+  const folderReady = await ensureBotProfileFolderSeeded(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
   owner.assertCurrent();
-  if (Object.keys(folderPatch).length > 0) {
-    await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
+  const finalFolderPatch = { ...folderPatch };
+  if (regeneratedDefaultIdentity && finalFolderPatch.identitySource !== undefined) {
+    const unchangedAtWriteBoundary = folderReady && await folderSourcesUnchanged(
+      owner.userDataDir,
+      id,
+      { identitySource: previousIdentitySource },
+    );
+    owner.assertCurrent();
+    if (!unchangedAtWriteBoundary) delete finalFolderPatch.identitySource;
+  }
+  if (Object.keys(finalFolderPatch).length > 0) {
+    await syncBotProfileFolder(id, finalFolderPatch, owner.userDataDir);
     owner.assertCurrent();
   }
   // Project mode (experimental): turning it on makes the workspace a registered,

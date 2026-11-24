@@ -4493,10 +4493,12 @@ describe('Bot canonical Session lifecycle', () => {
      * - Bug／规则依据：F1 默认身份旧名残留；`docs/product-rules/cindy-bots-runtime.md` §1
      *   要求伙伴名字以当前 Profile 为准，历史快照另属 F2。
      * - 现有覆盖缺口：相邻用例只验证显式清空 identity 时重建默认身份，未覆盖普通改名、
-     *   文件夹回写、连续改名与用户手写 SOUL 的保护。
+     *   文件夹回写、连续改名、用户手写 SOUL、旧版 Home 迁移，以及保存暂停期间的手改。
+     * - 不变量：只有在实际写入边界仍与冻结快照逐字节一致的 Home 文件，才可被这次保存改写；
+     *   旧版 Home 必须先迁移，读取失败或手改一律 fail-closed，由后续对账收进版本行。
      * - 最小失败输入：以 OldName 创建、未显式提供 identitySource 的伙伴，只提交 `name: NewName`。
      * - tier：db/integration；沿用本文件既有真实 SQLite 与 Bot Home 夹具，不新增模块重载或真实等待。
-     * - 实测耗时：新增用例单独运行 26.00s（收集 22.74s，用例 120ms）；本文件原有依赖收集耗时超过单文件预算。
+     * - 实测耗时：新增用例单独运行 22.74s（收集 19.67s，用例 77ms）；本文件原有依赖收集耗时超过单文件预算。
      */
     const home = (botId: string) =>
       join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', botId);
@@ -4611,6 +4613,56 @@ describe('Bot canonical Session lifecycle', () => {
       expect(soul(created.id)).toBe(expected);
       expect(updated.identitySource).not.toContain('OldName');
       expect(updated.identitySource).not.toContain('NewName');
+    });
+
+    it('migrates a hand-edited legacy Home before deciding to rebuild the default SOUL', async () => {
+      const created = await createDefaultBuddy('legacy-home-hand-edit');
+      const handEdited = 'User-authored SOUL for Buddy A.\n';
+      rmSync(home(created.id), { recursive: true, force: true });
+      const legacyHome = join(h.userDataDir, 'bots', created.id);
+      mkdirSync(legacyHome, { recursive: true });
+      writeFileSync(join(legacyHome, 'SOUL.md'), handEdited);
+
+      const updated = await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      expect(soul(created.id)).toBe(handEdited);
+      expect(updated.identitySource).toBe(buildDefaultBotIdentity('OldName'));
+      expect(latestIdentity(created.id)).toBe(buildDefaultBotIdentity('OldName'));
+      expect(await reconcileBotProfileFolder(created.id)).not.toBeNull();
+      expect(latestIdentity(created.id)).toBe(handEdited);
+    });
+
+    it('keeps a SOUL.md hand edit made while the rename save is paused', async () => {
+      const created = await createDefaultBuddy('paused-save-hand-edit');
+      const handEdited = 'User-authored SOUL for Buddy A.\n';
+      let reachedTx!: () => void;
+      let releaseTx!: () => void;
+      const atTx = new Promise<void>(resolve => { reachedTx = resolve; });
+      const resumeTx = new Promise<void>(resolve => { releaseTx = resolve; });
+      const originalTx = h.tx!;
+      let paused = false;
+      h.tx = async (name, args) => {
+        if (name === 'bots.updateProfile' && !paused) {
+          paused = true;
+          reachedTx();
+          await resumeTx;
+        }
+        return originalTx(name, args);
+      };
+      try {
+        const pending = invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+        await atTx;
+        writeFileSync(join(home(created.id), 'SOUL.md'), handEdited);
+        releaseTx();
+        const updated = await pending;
+        expect(updated.identitySource).toBe(buildDefaultBotIdentity('NewName'));
+      } finally {
+        h.tx = originalTx;
+      }
+
+      expect(soul(created.id)).toBe(handEdited);
+      expect(await reconcileBotProfileFolder(created.id)).not.toBeNull();
+      expect(latestIdentity(created.id)).toBe(handEdited);
     });
   });
 
