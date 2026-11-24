@@ -566,6 +566,36 @@ it('keeps a main chat change skipped by the host pause unconfirmed until it is r
   } finally { vi.useRealTimers(); }
 });
 
+// Unit, same rule: B is known; the next roster adds A ahead of it and moves B's main chat. A's
+// read times out and stops the ordinary round before B is reached; B must still be read after
+// the host pause. Minimal input: roster [B] then [A, B moved]; A never answers.
+it('keeps a main chat change unconfirmed when an earlier teammate\'s timeout ends the round', async () => {
+  h.devices = [host('a')];
+  let roster = teammatesAB();
+  roster.items.shift();
+  h.invoke.mockImplementation((_device, channel, args) => {
+    if (channel === REMOTE_RESOURCE_LIST_CHANNEL) return Promise.resolve(roster);
+    if (args[0] === 'canonical') return new Promise(() => {});
+    return Promise.resolve({ ok: true, delegations: [{ requestingBotId: 'second-bot', childSessionId: `${args[0]}-child` }] });
+  });
+  vi.useFakeTimers();
+  try {
+    const { result } = renderHook(useRoster);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(taskTargets()).toEqual(['second']);
+    roster = teammatesAB();
+    roster.items[1] = { ...roster.items[1], links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'moved' } }] };
+    act(() => h.push({ deviceId: 'a', channel: REMOTE_RESOURCE_CHANGED_CHANNEL }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_500); });
+    expect(taskTargets()).toEqual(['second', 'canonical']);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    act(() => h.push({ deviceId: 'a', channel: REMOTE_RESOURCE_CHANGED_CHANNEL }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(taskTargets()).toEqual(['second', 'canonical', 'moved']);
+    expect(result.current.find(bot => bot.id === 'second-bot')?.delegatedSessionIds).toEqual(['moved-child']);
+  } finally { vi.useRealTimers(); }
+});
+
 it('cannot restore old attribution when a pending task-card read completes after switching accounts', async () => {
   h.devices = [host('a')];
   let finish!: (value: unknown) => void;
