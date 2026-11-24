@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { TodoListCard } from '@/components/chat/TodoListCard';
 import { Profiler } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -226,6 +227,23 @@ describe('WorkerLayoutMenu hover interaction', () => {
     fireEvent.click(menuButton());
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByText('orca.rolePill.workersHeader')).toBeNull();
+  });
+
+  // #12437: the real worker layout menu handles Escape without cancelling it.
+  it('closes the keyboard-opened worker layout menu before the pinned plan', () => {
+    const { container } = render(<TodoListCard todos={[{ content: 'Check worker', status: 'pending' }]} />);
+    const plan = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+    fireEvent.click(plan, { detail: 0 });
+    renderToolbar();
+    fireEvent.click(menuButton(), { detail: 0 });
+    expect(screen.getByText('orca.rolePill.workersHeader')).toBeTruthy();
+
+    fireEvent.keyDown(menuButton(), { key: 'Escape' });
+    expect(screen.queryByText('orca.rolePill.workersHeader')).toBeNull();
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.keyDown(plan, { key: 'Escape' });
+    expect(plan.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('选择布局选项后关闭菜单', () => {

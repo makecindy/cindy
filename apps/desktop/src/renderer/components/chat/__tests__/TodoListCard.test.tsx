@@ -153,6 +153,32 @@ describe('TodoListCard flyout interaction', () => {
     }
   });
 
+  // #12437: one Escape should close the newest keyboard-pinned card first.
+  it('closes two keyboard-pinned plans in reverse opening order', () => {
+    render(<><TodoListCard todos={TODOS} /><TodoListCard todos={TODOS} /></>);
+    const [older, newer] = screen.getAllByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(older, { detail: 0 });
+    fireEvent.click(newer, { detail: 0 });
+    fireEvent.keyDown(newer, { key: 'Escape' });
+    expect(newer.getAttribute('aria-expanded')).toBe('false');
+    expect(older.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.keyDown(older, { key: 'Escape' });
+    expect(older.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  // Chromium can report keyCode 229 while isComposing is false during IME cancellation.
+  it('leaves legacy IME Escape unclaimed while the plan is pinned', () => {
+    render(<TodoListCard todos={TODOS} />);
+    const plan = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(plan);
+    const escape = new KeyboardEvent('keydown', {
+      key: 'Escape', keyCode: 229, isComposing: false, bubbles: true, cancelable: true,
+    });
+    fireEvent(plan, escape);
+    expect(escape.defaultPrevented).toBe(false);
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
+  });
+
   it('keeps the plan pinned when another layer has handled Escape', () => {
     render(<TodoListCard todos={TODOS} />);
     const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });

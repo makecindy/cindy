@@ -677,6 +677,7 @@ function WorkerLayoutMenu({
       </Tip>
       {open && (
         <div
+          data-worker-dropdown
           className={cn(
             'absolute right-0 z-dropdown flex w-[320px] flex-col overflow-y-auto overflow-x-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
             menuPlacement?.placeAbove ? 'bottom-full mb-1' : 'top-full mt-1',
@@ -1451,6 +1452,7 @@ export function RolePillDropdown({
       {open && (
         <div
           ref={popoverRef}
+          data-worker-dropdown
           className={cn(
             'absolute left-0 z-dropdown flex w-[320px] flex-col overflow-y-auto overflow-x-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
             menuPlacement?.placeAbove ? 'bottom-full mb-1' : 'top-full mt-1',

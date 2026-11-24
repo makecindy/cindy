@@ -43,6 +43,8 @@ export type TodoItem = MessageRenderTodoItem;
 
 type FlyoutOpenMode = 'closed' | 'hover' | 'pinned';
 
+const pinnedPlanCards: HTMLElement[] = [];
+
 /**
  * 静态灰度进度圆环。
  *
@@ -302,20 +304,28 @@ export function TodoListCard({
   const [openMode, setOpenMode] = useState<FlyoutOpenMode>('closed');
   const [renderFlyout, setRenderFlyout] = useState(false);
   const revealed = openMode !== 'closed';
+  const hasTodos = Boolean(todos?.length);
 
   useEffect(() => {
-    if (openMode !== 'pinned') return;
+    const card = cardRef.current;
+    if (openMode !== 'pinned' || !card) return;
+    pinnedPlanCards.push(card);
 
     const handlePointerDownOutside = (event: PointerEvent) => {
       const target = event.target;
-      if (target instanceof Node && cardRef.current?.contains(target)) return;
+      if (target instanceof Node && card.contains(target)) return;
       setOpenMode('closed');
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
-      if (cardRef.current?.checkVisibility?.({ checkVisibilityCSS: true }) === false) return;
-      // Previews can handle Escape later, and morph popovers close without cancelling it.
-      if (document.querySelector('[data-preview-scrim], [aria-modal="true"], [data-morph-side]')) return;
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      const foregroundPlan = pinnedPlanCards.findLast(
+        (candidate) => candidate.isConnected && candidate.checkVisibility?.({ checkVisibilityCSS: true }) !== false,
+      );
+      if (foregroundPlan !== card) return;
+      // Other foreground layers may close without cancelling the key event.
+      if (document.querySelector(
+        '[data-preview-scrim], [aria-modal="true"], [data-morph-side], [data-worker-dropdown]',
+      )) return;
       event.preventDefault();
       setOpenMode('closed');
     };
@@ -323,16 +333,17 @@ export function TodoListCard({
     document.addEventListener('pointerdown', handlePointerDownOutside, true);
     document.addEventListener('keydown', handleKeyDown);
     return () => {
+      pinnedPlanCards.splice(pinnedPlanCards.indexOf(card), 1);
       document.removeEventListener('pointerdown', handlePointerDownOutside, true);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [openMode]);
+  }, [openMode, hasTodos]);
 
   useEffect(() => {
     if (revealed) setRenderFlyout(true);
   }, [revealed]);
 
-  if (!todos || todos.length === 0) return null;
+  if (!hasTodos) return null;
 
   const completed = todos.filter((todo) => todo.status === 'completed').length;
   const total = todos.length;
