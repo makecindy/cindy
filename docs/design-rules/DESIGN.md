@@ -1038,6 +1038,8 @@ Ordinary input options, control selected-states and action frames do **not** ent
 
 **Registered debt kept as is (owner decision 2026-11-22).** Non-keycap `rounded-[4px]` remains on the two 16px toggle squares in `MachineSwitcherMenu` (8px would read as a circle), the bordered chip in `AgentActionRow`, the experimental page's inline styles (`MakerExperimentalView`, migrate with that page) and the inline code in `SystemCard` (align with Markdown inline code when that card is reworked).
 
+**Mail attachment thumbnail (owner decision 2026-11-25).** The 36px image thumbnail inside the mail attachment card (`chat/GhostCardForm`) uses `rounded-[4px]`, so the thumbnail reads smaller than its 8px frame. This registers only that one thumbnail layer and does not widen where 4px applies; the card, its other controls and every other thumbnail or icon tile keep their own assignment.
+
 A new content-owned outline or mixed object not covered by an existing specification **must be submitted for adjudication**. Reviewers report unresolved classification and request the missing decision; they must **neither force the object into the pill tier solely because it is clickable nor approve an unregistered exception**.
 
 #### Step 2 — Control tiers

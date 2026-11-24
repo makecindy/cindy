@@ -129,7 +129,7 @@ export function GhostCardForm({
                           <img
                             src={previewUrl}
                             alt=""
-                            className="h-9 w-9 shrink-0 rounded-lg object-cover"
+                            className="h-9 w-9 shrink-0 rounded-[4px] object-cover"
                           />
                         ) : (
                           <FileTypeIcon name={file.filename} mimeType={file.mimeType} size={20} />
