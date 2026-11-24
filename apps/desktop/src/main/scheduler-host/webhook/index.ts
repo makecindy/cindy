@@ -509,7 +509,9 @@ export class ScheduleWebhookHost {
       const trigger = schedule.webhookTrigger;
       if (trigger?.source?.preset !== 'github-app') continue;
       const repositories = new Set(trigger.source.repositories.map(repo => repo.toLowerCase()));
+      const itemNumber = trigger.source.number;
       const events = batch.events.filter(event => event.repository && repositories.has(event.repository.toLowerCase())
+        && (itemNumber === undefined || event.number === itemNumber)
         && scheduleWebhookEventMatches(trigger.events, event));
       if (!events.length) continue;
       // A transient status failure is not a mismatch: don't ACK unstored work.

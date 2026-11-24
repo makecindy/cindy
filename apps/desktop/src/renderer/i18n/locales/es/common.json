@@ -18178,9 +18178,34 @@
         "scope": {
           "repository": "Todo el repositorio",
           "repositoryHint": "Se ejecuta con nuevos eventos del repositorio, como pull requests, comentarios o CI terminada.",
-          "pullRequest": "Pull request concreto",
-          "pullRequestHint": "Vigila un pull request y solo se ejecuta cuando su estado cambia de verdad, como fusionado o nuevas revisiones.",
-          "repositoryNeedsAccount": "Inicia sesión en una cuenta de Cindy para recibir eventos del repositorio."
+          "repositoryNeedsAccount": "Inicia sesión en una cuenta de Cindy para recibir eventos del repositorio.",
+          "item": "Pull request o issue concreto",
+          "itemHint": "Vigila un pull request o un issue: el pull request se ejecuta cuando su estado cambia de verdad; el issue, con nueva actividad."
+        },
+        "item": {
+          "label": "Pull request o issue",
+          "placeholder": "42, #42, owner/repo#42 o un enlace",
+          "hint": "Escribe un número, owner/repo#número o pega un enlace. Cindy detecta de cuál se trata.",
+          "resolving": "Identificando…",
+          "pr": "Pull request #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "Cerrado",
+          "required": "Escribe el pull request o issue y espera a que se identifique.",
+          "issueHint": "Un issue concreto recibe eventos mediante la GitHub App conectada desde Cindy, lo que requiere una cuenta de Cindy.",
+          "errors": {
+            "invalid": "Escribe un número, #número, owner/repo#número o un enlace de GitHub a un pull request o issue.",
+            "no-repository": "Un número solo necesita el repositorio. Escribe owner/repo#42 o pega un enlace.",
+            "not-connected": "Conecta GitHub para saber si es un pull request o un issue.",
+            "not-found": "No se encontró ese número en el repositorio o no tienes acceso.",
+            "unavailable": "No se puede conectar con GitHub ahora. Inténtalo más tarde.",
+            "needs-account": "Es un issue. Un issue concreto requiere una cuenta de Cindy y GitHub conectado desde Cindy."
+          },
+          "issueChange": {
+            "any": "Actividad del issue",
+            "comment": "Nuevo comentario",
+            "closed": "Issue cerrado",
+            "reopened": "Issue reabierto"
+          }
         }
       },
       "trigger": {

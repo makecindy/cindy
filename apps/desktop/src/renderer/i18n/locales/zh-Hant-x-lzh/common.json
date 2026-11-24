@@ -17938,9 +17938,34 @@
         "scope": {
           "repository": "全庫",
           "repositoryHint": "庫有新事則行，如新 PR、評語、CI 竣事。",
-          "pullRequest": "指定之 PR",
-          "pullRequestHint": "唯察一 PR，狀實有變乃行，如已合、有新審。",
-          "repositoryNeedsAccount": "須登 Cindy 之號，乃能受庫之事。"
+          "repositoryNeedsAccount": "須登 Cindy 之號，乃能受庫之事。",
+          "item": "指定之 PR 或 Issue",
+          "itemHint": "唯察一 PR 或 Issue：PR 狀實有變乃行，Issue 有新動則行。"
+        },
+        "item": {
+          "label": "PR 或 Issue",
+          "placeholder": "42、#42、owner/repo#42 或鏈",
+          "hint": "書編號、owner/repo#編號，或貼 PR / Issue 之鏈，Cindy 自辨其類。",
+          "resolving": "辨之中…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "已閉",
+          "required": "請書所察之 PR 或 Issue，待其辨畢。",
+          "issueHint": "指定 Issue 藉 Cindy 所連之 GitHub App 受事，須登 Cindy 之號。",
+          "errors": {
+            "invalid": "請書編號、#編號、owner/repo#編號，或 GitHub 上 PR / Issue 之鏈。",
+            "no-repository": "唯書編號則須知其庫，請書 owner/repo#42，或貼其鏈。",
+            "not-connected": "連 GitHub 而後能辨 PR 抑 Issue。",
+            "not-found": "此庫無此編號，或君無權觀之。",
+            "unavailable": "暫不能連 GitHub，請稍後再試。",
+            "needs-account": "此乃 Issue。指定 Issue 須登 Cindy 之號，並藉 Cindy 連 GitHub。"
+          },
+          "issueChange": {
+            "any": "Issue 有新動",
+            "comment": "有新評",
+            "closed": "Issue 已閉",
+            "reopened": "Issue 復開"
+          }
         }
       },
       "trigger": {

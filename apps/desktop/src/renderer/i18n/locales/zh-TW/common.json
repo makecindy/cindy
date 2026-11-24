@@ -17938,9 +17938,34 @@
         "scope": {
           "repository": "整個倉庫",
           "repositoryHint": "倉庫有新事件時執行，例如新 PR、留言、CI 完成。",
-          "pullRequest": "指定 PR",
-          "pullRequestHint": "只盯一條 PR，狀態確實變化時才執行，例如已合併、有新審查。",
-          "repositoryNeedsAccount": "需要登入 Cindy 帳號才能接收倉庫事件。"
+          "repositoryNeedsAccount": "需要登入 Cindy 帳號才能接收倉庫事件。",
+          "item": "指定 PR 或 Issue",
+          "itemHint": "只盯一條 PR 或 Issue：PR 在狀態確實變化時執行，Issue 在有新動態時執行。"
+        },
+        "item": {
+          "label": "PR 或 Issue",
+          "placeholder": "42、#42、owner/repo#42 或連結",
+          "hint": "填編號、owner/repo#編號，或貼上 PR / Issue 連結，Cindy 會自動識別是哪一種。",
+          "resolving": "正在識別…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "已關閉",
+          "required": "請填寫要盯的 PR 或 Issue，並等它識別完成。",
+          "issueHint": "指定 Issue 透過 Cindy 連接的 GitHub App 接收事件，需要登入 Cindy 帳號。",
+          "errors": {
+            "invalid": "請填編號、#編號、owner/repo#編號，或 GitHub 上的 PR / Issue 連結。",
+            "no-repository": "只填編號時需要知道倉庫，請寫成 owner/repo#42，或貼上連結。",
+            "not-connected": "連接 GitHub 後才能識別是 PR 還是 Issue。",
+            "not-found": "這個倉庫裡沒有找到這個編號，或者你沒有存取權限。",
+            "unavailable": "暫時連不上 GitHub，請稍後再試。",
+            "needs-account": "這是一個 Issue。指定 Issue 需要登入 Cindy 帳號，並透過 Cindy 連接 GitHub。"
+          },
+          "issueChange": {
+            "any": "Issue 有新動態",
+            "comment": "有新留言",
+            "closed": "Issue 已關閉",
+            "reopened": "Issue 重新開啟"
+          }
         }
       },
       "trigger": {

@@ -64,7 +64,8 @@ function matchesTrigger(trigger: Schedule['webhookTrigger'], event: ScheduleWebh
   if (source?.preset === 'plugin') return pluginEventMatches(source.sources, event);
   if (event.source !== undefined) return false;
   return scheduleWebhookEventMatches(trigger?.events, event)
-    && (source?.preset !== 'github-app' || source.repositories.some(repo => repo.toLowerCase() === event.repository?.toLowerCase()));
+    && (source?.preset !== 'github-app' || (source.repositories.some(repo => repo.toLowerCase() === event.repository?.toLowerCase())
+      && (source.number === undefined || event.number === source.number)));
 }
 
 function canReceive(schedule: Schedule | null, now: number): schedule is Schedule {

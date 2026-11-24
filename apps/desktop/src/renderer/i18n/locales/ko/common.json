@@ -17938,9 +17938,34 @@
         "scope": {
           "repository": "저장소 전체",
           "repositoryHint": "새 PR, 댓글, CI 완료 등 저장소에 새 이벤트가 생기면 실행합니다.",
-          "pullRequest": "특정 PR",
-          "pullRequestHint": "PR 하나만 지켜보고 병합, 새 리뷰 등 상태가 실제로 바뀔 때만 실행합니다.",
-          "repositoryNeedsAccount": "저장소 이벤트를 받으려면 Cindy 계정에 로그인해야 합니다."
+          "repositoryNeedsAccount": "저장소 이벤트를 받으려면 Cindy 계정에 로그인해야 합니다.",
+          "item": "특정 PR 또는 Issue",
+          "itemHint": "PR 또는 Issue 하나만 지켜봅니다. PR은 상태가 실제로 바뀔 때, Issue는 새 활동이 있을 때 실행합니다."
+        },
+        "item": {
+          "label": "PR 또는 Issue",
+          "placeholder": "42, #42, owner/repo#42 또는 링크",
+          "hint": "번호, owner/repo#번호를 입력하거나 링크를 붙여 넣으세요. 어느 쪽인지 Cindy가 알아냅니다.",
+          "resolving": "확인 중…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "닫힘",
+          "required": "지켜볼 PR 또는 Issue를 입력하고 확인이 끝날 때까지 기다리세요.",
+          "issueHint": "특정 Issue는 Cindy로 연결한 GitHub App으로 이벤트를 받으므로 Cindy 계정이 필요합니다.",
+          "errors": {
+            "invalid": "번호, #번호, owner/repo#번호 또는 GitHub PR / Issue 링크를 입력하세요.",
+            "no-repository": "번호만 입력하면 저장소가 필요합니다. owner/repo#42로 쓰거나 링크를 붙여 넣으세요.",
+            "not-connected": "PR인지 Issue인지 확인하려면 GitHub를 연결하세요.",
+            "not-found": "이 저장소에서 해당 번호를 찾지 못했거나 접근 권한이 없습니다.",
+            "unavailable": "지금은 GitHub에 연결할 수 없습니다. 잠시 후 다시 시도하세요.",
+            "needs-account": "Issue입니다. 특정 Issue에는 Cindy 계정과 Cindy로 연결한 GitHub가 필요합니다."
+          },
+          "issueChange": {
+            "any": "Issue 새 활동",
+            "comment": "새 댓글",
+            "closed": "Issue 닫힘",
+            "reopened": "Issue 다시 열림"
+          }
         }
       },
       "trigger": {

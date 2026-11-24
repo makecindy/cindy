@@ -18012,9 +18012,34 @@
         "scope": {
           "repository": "Gesamtes Repository",
           "repositoryHint": "Läuft bei neuen Repository-Ereignissen, z. B. neuen Pull Requests, Kommentaren oder abgeschlossener CI.",
-          "pullRequest": "Bestimmter Pull Request",
-          "pullRequestHint": "Beobachtet einen Pull Request und läuft nur, wenn sich sein Status tatsächlich ändert, z. B. gemergt oder neue Reviews.",
-          "repositoryNeedsAccount": "Melde dich bei einem Cindy-Konto an, um Repository-Ereignisse zu empfangen."
+          "repositoryNeedsAccount": "Melde dich bei einem Cindy-Konto an, um Repository-Ereignisse zu empfangen.",
+          "item": "Bestimmter Pull Request oder bestimmtes Issue",
+          "itemHint": "Beobachtet einen Pull Request oder ein Issue: ein Pull Request löst aus, wenn sich sein Status tatsächlich ändert, ein Issue bei neuer Aktivität."
+        },
+        "item": {
+          "label": "Pull Request oder Issue",
+          "placeholder": "42, #42, owner/repo#42 oder Link",
+          "hint": "Gib eine Nummer, owner/repo#Nummer ein oder füge einen Link ein. Cindy erkennt, was es ist.",
+          "resolving": "Wird erkannt…",
+          "pr": "Pull Request #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "Geschlossen",
+          "required": "Gib den Pull Request oder das Issue ein und warte, bis es erkannt ist.",
+          "issueHint": "Ein bestimmtes Issue empfängt Ereignisse über die mit Cindy verbundene GitHub App; dafür ist ein Cindy-Konto nötig.",
+          "errors": {
+            "invalid": "Gib eine Nummer, #Nummer, owner/repo#Nummer oder einen GitHub-Link zu einem Pull Request oder Issue ein.",
+            "no-repository": "Für eine reine Nummer wird das Repository benötigt. Schreibe owner/repo#42 oder füge einen Link ein.",
+            "not-connected": "Verbinde GitHub, um zu erkennen, ob es ein Pull Request oder ein Issue ist.",
+            "not-found": "Diese Nummer wurde im Repository nicht gefunden oder du hast keinen Zugriff.",
+            "unavailable": "GitHub ist gerade nicht erreichbar. Versuche es später erneut.",
+            "needs-account": "Das ist ein Issue. Ein bestimmtes Issue erfordert ein Cindy-Konto und eine über Cindy verbundene GitHub App."
+          },
+          "issueChange": {
+            "any": "Issue-Aktivität",
+            "comment": "Neuer Kommentar",
+            "closed": "Issue geschlossen",
+            "reopened": "Issue wieder geöffnet"
+          }
         }
       },
       "trigger": {

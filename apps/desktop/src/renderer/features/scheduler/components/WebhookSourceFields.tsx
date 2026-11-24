@@ -36,8 +36,8 @@ interface WebhookSourceFieldsProps {
   onPluginSourcesChange?(value: SchedulePluginEventSource[]): void;
   /** 这台电脑能接收 Webhook 地址（已登录且有接收服务）；否则只能选插件事件或指定 PR。 */
   addressSourcesAvailable?: boolean;
-  /** 发送方为「GitHub · 指定 PR」（preset=github-pr）时显示的 PR 链接与条件。 */
-  prFields?: ReactNode;
+  /** GitHub「指定 PR 或 Issue」范围（preset=github-item）时显示的输入框与条件。 */
+  itemFields?: ReactNode;
 }
 
 /** 发送方、是否验证签名，以及自定义格式。密钥和接收地址在任务详情里管理。 */
@@ -57,17 +57,17 @@ export function WebhookSourceFields({
   pluginCandidates = null,
   onPluginSourcesChange,
   addressSourcesAvailable = true,
-  prFields,
+  itemFields,
 }: WebhookSourceFieldsProps) {
   const { t } = useTranslation();
   const [advancedOpen, setAdvancedOpen] = useState(!signed);
   const connectionId = useId();
   const appSource = preset === 'github-app';
   const pluginSource = preset === 'plugin';
-  const prSource = preset === 'github-pr';
-  // GitHub is one sender; its scope is the whole repository (App or manual Webhook) or a single PR.
+  const itemSource = preset === 'github-item';
+  // GitHub is one sender; its scope is the whole repository (App or manual Webhook) or one PR / Issue.
   const repositorySource = appSource || preset === 'github';
-  const githubSource = repositorySource || prSource;
+  const githubSource = repositorySource || itemSource;
   // Remembers the repository connection so switching scope back keeps the user's choice.
   const [lastRepositoryPreset, setLastRepositoryPreset] = useState<'github-app' | 'github'>(preset === 'github' ? 'github' : 'github-app');
   const scopeId = useId();
@@ -102,7 +102,7 @@ export function WebhookSourceFields({
               options={options}
               // A single PR needs no account; repository scope needs a receiver on this computer.
               onValueChange={(value) => onPresetChange(value === 'github'
-                ? (githubSource ? preset : addressSourcesAvailable ? lastRepositoryPreset : 'github-pr') : value)}
+                ? (githubSource ? preset : addressSourcesAvailable ? lastRepositoryPreset : 'github-item') : value)}
             />
           )}
         </FormField>
@@ -110,8 +110,8 @@ export function WebhookSourceFields({
       {githubSource && (
         <fieldset className="flex min-w-0 flex-col gap-3">
           <legend className="mb-2 text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.scopeLabel')}</legend>
-          {(['repository', 'pullRequest'] as const).map((scope) => {
-            const checked = scope === 'pullRequest' ? prSource : repositorySource;
+          {(['repository', 'item'] as const).map((scope) => {
+            const checked = scope === 'item' ? itemSource : repositorySource;
             const disabled = scope === 'repository' && !addressSourcesAvailable && !repositorySource;
             const label = t(`scheduler.editor.webhook.scope.${scope}`);
             const hint = disabled ? t('scheduler.editor.webhook.scope.repositoryNeedsAccount') : t(`scheduler.editor.webhook.scope.${scope}Hint`);
@@ -119,7 +119,7 @@ export function WebhookSourceFields({
               disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}>
               <input type="radio" name={scopeId} checked={checked} disabled={disabled} aria-label={label}
                 aria-describedby={`${scopeId}-${scope}`} className="mt-1 shrink-0 accent-[var(--text-primary)]"
-                onChange={() => (scope === 'pullRequest' ? onPresetChange('github-pr') : onPresetChange(lastRepositoryPreset))} />
+                onChange={() => (scope === 'item' ? onPresetChange('github-item') : onPresetChange(lastRepositoryPreset))} />
               <span className="min-w-0">
                 <span>{label}</span>
                 <span id={`${scopeId}-${scope}`} className={`mt-1 block ${hintClass}`}>{hint}</span>
@@ -128,7 +128,7 @@ export function WebhookSourceFields({
           })}
         </fieldset>
       )}
-      {prSource && prFields}
+      {itemSource && itemFields}
       {repositorySource && (
         <fieldset className="flex min-w-0 flex-col gap-3">
           <legend className="mb-2 text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.connectionLabel')}</legend>
@@ -166,7 +166,7 @@ export function WebhookSourceFields({
           {footerAction}
         </>
       )}
-      {!pluginSource && !prSource && <WebhookEventSelect key={preset} preset={preset} value={events} onChange={onEventsChange} />}
+      {!pluginSource && !itemSource && <WebhookEventSelect key={preset} preset={preset} value={events} onChange={onEventsChange} />}
       {preset === 'github' && <p className={hintClass}>{t('scheduler.editor.webhook.manualSetupHint')}</p>}
       {preset === 'custom' ? (
         <FormField
@@ -186,12 +186,12 @@ export function WebhookSourceFields({
           )}
         </FormField>
       ) : null}
-      {!appSource && !pluginSource && !prSource && preset !== 'custom' && !signed && (
+      {!appSource && !pluginSource && !itemSource && preset !== 'custom' && !signed && (
         <p className="text-12 leading-relaxed text-[var(--text-primary)]">
           {t('scheduler.editor.webhook.unsignedWarning')}
         </p>
       )}
-      {!appSource && !pluginSource && !prSource && <div>
+      {!appSource && !pluginSource && !itemSource && <div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="secondary"

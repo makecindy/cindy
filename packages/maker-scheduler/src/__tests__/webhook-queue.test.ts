@@ -98,6 +98,20 @@ describe('ScheduleWebhookQueue', () => {
     h.queue.stop();
   });
 
+  // 2026-11-24, docs/product-rules/schedule-webhook-trigger.md: a specific Issue is the App source
+  // narrowed to one number; other items in the same repository must not wake the automation.
+  it('admits GitHub App events only for the chosen item number', async () => {
+    const h = setup();
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1', events: ['issues', 'issue_comment'],
+      source: { preset: 'github-app', repositories: ['example/project'], number: 7 } } } as Schedule);
+    await h.queue.start();
+    const comment = (deliveryId: string, number?: number) => ({ ...event(deliveryId, 'issue_comment'), action: 'created',
+      repository: 'example/project', ...(number === undefined ? {} : { number }) });
+    expect(await h.queue.acceptBatch('s1', [comment('seven', 7), comment('eight', 8), comment('unnumbered')], 0, 'e1'))
+      .toEqual(['queued', 'filtered', 'filtered']);
+    h.queue.stop();
+  });
+
   // PR #9378 / security review: old on-disk recovery markers carry no scope.
   // Exercise restart through the real queue, including interrupted preparation.
   it.each(['pending', 'preparing'] as const)('filters legacy unscoped recovery markers from restored %s', async where => {

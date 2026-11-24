@@ -17,7 +17,13 @@ const longPrompt = Array.from({ length: 40 }, (_, index) =>
 
 void mountPage({
   route: '/cc-agent/scheduled',
-  host: { gitContext: { githubAppStatus: async () => ({ available: true, login: null }) }, maker: {
+  host: { gitContext: {
+    githubAppStatus: async () => ({ available: true, login: null }),
+    // Fixture lookup: #7 is an issue, every other number a pull request.
+    resolveGithubItem: async (_repository: string, number: number) => number === 7
+      ? { ok: true, kind: 'issue', title: '启动时崩溃', state: 'open' }
+      : { ok: true, kind: 'pr', title: '修复启动流程', state: 'open' },
+  }, maker: {
     listAvailableAgents: async () => ['codex'],
     onAgentsChanged: subscription('agentsChanged'),
     schedule: {

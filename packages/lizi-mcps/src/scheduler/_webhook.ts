@@ -9,6 +9,7 @@ export const webhookSourceSchema = z
     signed: z.boolean().optional(),
     format: z.record(z.string(), z.unknown()).optional(),
     repositories: z.array(z.string().min(1).max(140)).min(1).max(50).optional(),
+    number: z.number().int().positive().optional().describe('仅 github-app：只看这个编号的 Issue（或 PR）的事件，此时 repositories 只能有一个。要按 PR 状态（合并、CI、评审）触发请改用 prTrigger'),
     sources: z.array(z.strictObject({
       plugin: z.string().min(1).max(512).describe('插件 id，取 schedule_list_event_sources 返回的 plugin'),
       events: z.array(z.string().min(1).max(128)).max(32).optional().describe('该插件声明的事件类型；省略 = 该插件的全部事件'),

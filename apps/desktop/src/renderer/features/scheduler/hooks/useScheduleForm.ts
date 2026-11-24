@@ -44,7 +44,8 @@ function prFields(schedule: Schedule): Partial<ScheduleFormState> {
   if (schedule.webhookTrigger && schedule.prTrigger === undefined) return {};
   const rules = schedulePrTriggers(schedule);
   if (rules.length !== 1) return schedule.prTrigger === null ? { prEnabled: false } : {};
-  return { prEnabled: true, prUrl: rules[0]!.url, prChange: rules[0]!.change };
+  return { prEnabled: true, prUrl: rules[0]!.url, prChange: rules[0]!.change, githubItem: rules[0]!.url,
+    githubItemRepository: rules[0]!.url.split('/').slice(3, 5).join('/') };
 }
 
 const DEFAULT_FORM: ScheduleFormState = {
@@ -304,7 +305,7 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     ...prFields(s),
     webhookEnabled: Boolean(s.webhookTrigger),
     webhookEvents: (s.webhookTrigger?.events ?? []).join(', '),
-    ...webhookSourceFormFields(s.webhookTrigger?.source),
+    ...webhookSourceFormFields(s.webhookTrigger?.source, s.webhookTrigger?.events),
     ...scheduleEngineFormFields(s),
     modelAgentDeviceId: s.modelAgentDeviceId,
     agentDeviceId: s.agentDeviceId ?? '',
@@ -559,8 +560,12 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     if (form.webhookEnabled && form.webhookPreset === 'custom' && !parseWebhookFormatText(form.webhookFormat)) {
       return { key: 'scheduler.editor.webhook.customInvalid' };
     }
-    if (form.webhookEnabled && form.webhookPreset === 'github-app' && !validGithubRepositories(form.webhookRepositories)) {
+    if (form.webhookEnabled && form.webhookPreset === 'github-app' && form.githubItemNumber === undefined
+      && !validGithubRepositories(form.webhookRepositories)) {
       return { key: 'scheduler.editor.webhook.repositoriesInvalid' };
+    }
+    if (form.webhookEnabled && form.webhookPreset === 'github-item') {
+      return { key: 'scheduler.editor.webhook.item.required' };
     }
     if (form.webhookEnabled && form.webhookPreset === 'plugin' && !form.webhookPluginSources?.length) {
       return { key: 'scheduler.editor.webhook.plugin.required' };

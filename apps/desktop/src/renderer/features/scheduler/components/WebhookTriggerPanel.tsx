@@ -301,7 +301,9 @@ export function WebhookTriggerPanel({ schedule, connectionSetupVisible = true }:
       <h3 className="text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.cindyConnectionTitle')}</h3>
       <p role="status">{t(state)}</p>
       {connectionSetupVisible && status && !status.connected && status.receiver !== 'signed-out' && schedule.status === 'active' && <GithubAppCard automation repositories={source.repositories} />}
-      <p className="break-words">{source.repositories.join(', ')}</p>
+      <p className="break-words">{source.number !== undefined
+        ? `${source.repositories[0] ?? ''}#${source.number}`
+        : source.repositories.join(', ')}</p>
       <p>{schedule.webhookTrigger?.events?.map(event => eventLabels.get(event) ?? event).join(', ')
         || t('scheduler.editor.webhook.eventPicker.all')}</p>
       {status?.lastReceivedAt ? <p>{t('scheduler.webhook.lastReceived', { time: new Date(status.lastReceivedAt).toLocaleString() })}</p> : null}

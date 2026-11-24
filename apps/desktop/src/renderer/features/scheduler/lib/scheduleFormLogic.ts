@@ -31,6 +31,7 @@ import {
   type ScheduleWebhookSource,
 } from '@cindy/maker-scheduler/webhook-formats';
 import type { SchedulePluginEventSource } from '@cindy/maker-scheduler/plugin-events';
+import { githubItemUrl, issueChangeEvents, issueChangeFromEvents, type IssueChange } from '@cindy/maker-scheduler/github-item';
 import { parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
 
 /** Effort 白名单 — 与 Phase 2 mapper enum 一致;UI 提交前的最后一道关卡。 */
@@ -166,6 +167,17 @@ export interface ScheduleFormState {
   webhookFormat?: string;
   /** 插件事件来源（preset=plugin）。界面不编辑字段条件，但原样保留 Agent 设置的 filters。 */
   webhookPluginSources?: SchedulePluginEventSource[];
+  /**
+   * GitHub「指定 PR 或 Issue」的输入框原文。识别为 PR 时存为 prTrigger；识别为 Issue 时
+   * 存为 github-app 来源加 githubItemRepository / githubItemNumber。webhookPreset 为 github-item
+   * 表示已选该范围但还没识别出来，不能保存。
+   */
+  githubItem?: string;
+  githubItemRepository?: string;
+  /** 识别为 Issue 时的编号；为空表示不是指定 Issue。 */
+  githubItemNumber?: number;
+  /** 指定 Issue 的条件；为空时保留已保存的事件筛选。 */
+  issueChange?: IssueChange;
   agentKind: 'claude-code' | 'codex' | 'pi';
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
   /**
@@ -652,7 +664,16 @@ export function scheduleAgentKindForForm(form: ScheduleFormState): ScheduleFormS
 /** 编辑已有任务时，从它的发送方得到表单初值。 */
 export function webhookSourceFormFields(
   source: ScheduleWebhookSource | undefined,
-): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat' | 'webhookRepositories' | 'webhookPluginSources'> {
+  events?: readonly string[],
+): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat' | 'webhookRepositories' | 'webhookPluginSources'
+  | 'githubItem' | 'githubItemRepository' | 'githubItemNumber' | 'issueChange'> {
+  if (source?.preset === 'github-app' && source.number !== undefined) {
+    const repository = source.repositories[0] ?? '';
+    const change = issueChangeFromEvents(events);
+    return { webhookPreset: 'github-app', webhookRepositories: repository, webhookSigned: true, webhookFormat: '',
+      githubItem: githubItemUrl({ repository, number: source.number }, 'issue'), githubItemRepository: repository,
+      githubItemNumber: source.number, ...(change ? { issueChange: change } : {}) };
+  }
   if (source?.preset === 'plugin') {
     return { webhookPreset: 'plugin', webhookPluginSources: source.sources.map((item) => ({ ...item })), webhookSigned: true, webhookFormat: '' };
   }
@@ -688,6 +709,9 @@ export function parseWebhookFormatText(text: string | undefined): ScheduleWebhoo
 function webhookSourceInput(form: ScheduleFormState): { source?: ScheduleWebhookSource } {
   const preset = form.webhookPreset;
   if (preset === undefined) return {};
+  if (preset === 'github-app' && form.githubItemNumber !== undefined && form.githubItemRepository) {
+    return { source: { preset, repositories: [form.githubItemRepository], number: form.githubItemNumber } };
+  }
   if (preset === 'github-app') return { source: { preset, repositories: parseGithubRepositories(form.webhookRepositories) } };
   if (preset === 'plugin') return { source: { preset, sources: form.webhookPluginSources ?? [] } };
   if (preset === 'custom') {
@@ -753,7 +777,10 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
             // Plugin sources choose event types per plugin; the engine rejects a top-level filter.
             events: form.webhookPreset === 'plugin'
               ? []
-              : (form.webhookEvents ?? '').split(',').map((name) => name.trim()).filter(Boolean),
+              // A specific Issue saves its condition as event filters; an unknown saved set is kept as is.
+              : form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined && form.issueChange
+                ? issueChangeEvents(form.issueChange)
+                : (form.webhookEvents ?? '').split(',').map((name) => name.trim()).filter(Boolean),
             ...webhookSourceInput(form),
           }
         : null,

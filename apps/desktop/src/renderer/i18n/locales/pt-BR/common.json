@@ -18178,9 +18178,34 @@
         "scope": {
           "repository": "Repositório inteiro",
           "repositoryHint": "Executa com novos eventos do repositório, como pull requests, comentários ou CI concluída.",
-          "pullRequest": "Pull request específico",
-          "pullRequestHint": "Acompanha um pull request e só executa quando o estado realmente muda, como mesclado ou novas revisões.",
-          "repositoryNeedsAccount": "Entre em uma conta Cindy para receber eventos do repositório."
+          "repositoryNeedsAccount": "Entre em uma conta Cindy para receber eventos do repositório.",
+          "item": "Pull request ou issue específico",
+          "itemHint": "Acompanha um pull request ou issue: o pull request executa quando o estado muda de verdade; o issue, com nova atividade."
+        },
+        "item": {
+          "label": "Pull request ou issue",
+          "placeholder": "42, #42, owner/repo#42 ou um link",
+          "hint": "Digite um número, owner/repo#número ou cole um link. O Cindy identifica qual é.",
+          "resolving": "Identificando…",
+          "pr": "Pull request #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "Fechado",
+          "required": "Digite o pull request ou issue e aguarde a identificação.",
+          "issueHint": "Um issue específico recebe eventos pela GitHub App conectada pelo Cindy, o que exige uma conta Cindy.",
+          "errors": {
+            "invalid": "Digite um número, #número, owner/repo#número ou um link do GitHub para pull request ou issue.",
+            "no-repository": "Só o número precisa do repositório. Escreva owner/repo#42 ou cole um link.",
+            "not-connected": "Conecte o GitHub para saber se é pull request ou issue.",
+            "not-found": "Esse número não foi encontrado no repositório, ou você não tem acesso.",
+            "unavailable": "Não foi possível conectar ao GitHub agora. Tente mais tarde.",
+            "needs-account": "É um issue. Um issue específico exige uma conta Cindy e o GitHub conectado pelo Cindy."
+          },
+          "issueChange": {
+            "any": "Atividade no issue",
+            "comment": "Novo comentário",
+            "closed": "Issue fechado",
+            "reopened": "Issue reaberto"
+          }
         }
       },
       "trigger": {

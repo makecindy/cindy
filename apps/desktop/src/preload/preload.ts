@@ -5906,6 +5906,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     starCindy: (): Promise<boolean | null> => ipcRenderer.invoke('git-context:github-star:add'),
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown): Promise<unknown> =>
       ipcRenderer.invoke('git-context:github-read', { method, args }),
+    /** 自动化「指定 PR 或 Issue」：识别编号是 PR 还是 Issue。 */
+    resolveGithubItem: (repository: string, number: number): Promise<import('../main/git-context/githubReadHost').GithubItemResolution> =>
+      ipcRenderer.invoke('git-context:github-item:resolve', repository, number),
     githubAppAccess: (): Promise<import('../shared/githubSetup').GithubAppAccess> => ipcRenderer.invoke('git-context:github-app:access'),
     githubAppStatus: (): Promise<import('../shared/githubSetup').GithubAppConnectionState> => ipcRenderer.invoke('git-context:github-app:status'),
     connectGithubApp: (): Promise<void> => ipcRenderer.invoke('git-context:github-app:connect'),

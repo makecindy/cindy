@@ -4581,7 +4581,7 @@ describe('Scheduler', () => {
     await expect(h.scheduler.update(sch.id, { webhookTrigger: { events: ['message.received'] } })).rejects.toThrow('per plugin source');
     await expect(h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'plugin', sources: [] } } })).rejects.toThrow('plugin sources');
     await expect(h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'plugin', sources: [
-      { plugin: 'public/feishu', filters: [{ field: 'chatId', operator: 'regex', value: '.*' }] }] } } })).rejects.toThrow('operator');
+      { plugin: 'public/feishu', filters: [{ field: 'chatId', operator: 'regex' as never, value: '.*' }] }] } } })).rejects.toThrow('operator');
   });
 
   it('rejects malformed webhook event filters', async () => {

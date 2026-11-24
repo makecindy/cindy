@@ -21,9 +21,6 @@ import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
-import { Select } from '@/components/ui/select';
-import { PR_CHANGES, type PrChange } from '@cindy/maker-scheduler/pr-trigger';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -45,6 +42,8 @@ import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 import { WebhookSourceFields } from './WebhookSourceFields';
+import { GithubItemFields } from './GithubItemFields';
+import { githubItemUrl } from '@cindy/maker-scheduler/github-item';
 import { usePluginEventSources } from './PluginEventSourceFields';
 import { WebhookAccountManager } from './WebhookAccountManager';
 
@@ -67,6 +66,7 @@ import {
   resolveScheduleGenerationProviderId,
   resolveScheduleModelEfforts,
   usesBoundSessionGenerationModel,
+  parseGithubRepositories,
 } from '../lib/scheduleFormLogic';
 import type { RunMode, ScheduleFormState } from '../hooks/useScheduleForm';
 import { BoundSessionCard } from './BoundSessionCard';
@@ -341,6 +341,17 @@ export function ScheduleFormDialog({
   // A single PR is one of the event sources (2026-11-24); its storage stays the separate prTrigger field.
   const triggerMode = form.prEnabled || form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
   const eventMode = triggerMode === 'webhook';
+  // GitHub「指定 PR 或 Issue」：PR 存为 prTrigger，Issue 存为带编号的 GitHub App 来源，github-item 表示尚未识别。
+  const githubItemScope = !!form.prEnabled || form.webhookPreset === 'github-item'
+    || (form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined);
+  const githubItemDefaultRepository = form.githubItemRepository
+    || (() => { const repositories = parseGithubRepositories(form.webhookRepositories); return repositories.length === 1 ? repositories[0] : undefined; })();
+  const enterGithubItemPending = () => {
+    if (form.prEnabled) setField('prEnabled', false);
+    setField('webhookEnabled', true);
+    setField('webhookPreset', 'github-item');
+    setField('githubItemNumber', undefined);
+  };
   // Address-based senders still need an account; a saved one stays hidden (and preserved) while signed out.
   const webhookSettingsVisible = !isProjectAutomationMode && form.webhookEnabled
     && (webhookReceiverReady || form.webhookPreset === 'plugin');
@@ -1211,9 +1222,8 @@ export function ScheduleFormDialog({
                             if (mode === triggerMode) return;
                             preserveTriggerScrollPosition();
                             if (mode === 'webhook' && !webhookReceiverReady && !pluginEventsAvailable) {
-                              // Without an account or event plugins, a single PR is the source this computer can use.
-                              setField('prEnabled', true);
-                              setField('webhookEnabled', false);
+                              // Without an account or event plugins, a specific GitHub PR is the source this computer can use.
+                              enterGithubItemPending();
                             } else {
                               if (form.prEnabled) setField('prEnabled', false);
                               setField('webhookEnabled', mode === 'webhook');
@@ -1317,11 +1327,11 @@ export function ScheduleFormDialog({
                         )}
                       </div>
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
-                      {webhookSettingsVisible && !form.prEnabled && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
+                      {webhookSettingsVisible && !githubItemScope && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
                         && <WebhookAccountManager allowOpenSchedule={false} />}
-                      {(webhookSettingsVisible || form.prEnabled) && (
+                      {eventMode && (webhookSettingsVisible || githubItemScope) && (
                           <WebhookSourceFields
-                            preset={form.prEnabled ? 'github-pr' : form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                            preset={githubItemScope ? 'github-item' : form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
                             signed={form.webhookSigned !== false}
                             formatText={form.webhookFormat ?? ''}
                             events={form.webhookEvents ?? ''}
@@ -1329,14 +1339,14 @@ export function ScheduleFormDialog({
                             onRepositoriesChange={(value) => setField('webhookRepositories', value)}
                             onEventsChange={(value) => setField('webhookEvents', value)}
                             onPresetChange={(value) => {
-                              // A single PR keeps its own prTrigger field; every other sender is a webhookTrigger.
-                              if (value === 'github-pr') {
-                                setField('prEnabled', true);
-                                setField('webhookEnabled', false);
+                              // A specific PR / Issue is resolved by GithubItemFields; every other sender is a webhookTrigger.
+                              if (value === 'github-item') {
+                                if (!githubItemScope) enterGithubItemPending();
                                 return;
                               }
                               if (form.prEnabled) setField('prEnabled', false);
                               setField('webhookEnabled', true);
+                              setField('githubItemNumber', undefined);
                               // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
                               if (value === 'custom' && !form.webhookFormat?.trim()) {
                                 const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
@@ -1355,19 +1365,36 @@ export function ScheduleFormDialog({
                             pluginCandidates={pluginEventCandidates}
                             onPluginSourcesChange={(value) => setField('webhookPluginSources', value)}
                             addressSourcesAvailable={webhookReceiverReady}
-                            prFields={
-                              <div className="flex flex-col gap-3">
-                                <FormField label={t('scheduler.prTrigger.url')}>
-                                  {(control) => <Input {...control} value={form.prUrl ?? ''} onChange={value => setField('prUrl', value)}
-                                    placeholder="https://github.com/owner/repo/pull/123" />}
-                                </FormField>
-                                <GithubAppCard automation timedPrCheck={!form.manual} repositories={[(form.prUrl ?? '').split('/').slice(3, 5).join('/')]} />
-                                <FormField label={t('scheduler.prTrigger.condition')}>
-                                  {(control) => <Select {...control} label={t('scheduler.prTrigger.condition')} value={form.prChange ?? 'any'}
-                                    options={PR_CHANGES.map(value => ({ value, label: t(`scheduler.prTrigger.${value}`) }))}
-                                    onValueChange={value => setField('prChange', value as PrChange)} />}
-                                </FormField>
-                              </div>
+                            itemFields={
+                              <GithubItemFields
+                                text={form.githubItem ?? ''}
+                                defaultRepository={githubItemDefaultRepository}
+                                kind={form.prEnabled ? 'pr' : form.githubItemNumber !== undefined ? 'issue' : undefined}
+                                prChange={form.prChange ?? 'any'}
+                                issueChange={form.issueChange}
+                                appEventsAvailable={webhookReceiverReady}
+                                timedCheck={!form.manual}
+                                onTextChange={(value) => setField('githubItem', value)}
+                                onResolved={(item, kind) => {
+                                  setField('githubItemRepository', item.repository);
+                                  if (kind === 'pr') {
+                                    setField('prEnabled', true);
+                                    setField('webhookEnabled', false);
+                                    setField('prUrl', githubItemUrl(item, 'pr'));
+                                    setField('githubItemNumber', undefined);
+                                    setField('webhookPreset', 'github-item');
+                                    return;
+                                  }
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  setField('webhookPreset', 'github-app');
+                                  setField('githubItemNumber', item.number);
+                                  if (!form.issueChange) setField('issueChange', 'any');
+                                }}
+                                onUnresolved={enterGithubItemPending}
+                                onPrChange={(value) => setField('prChange', value)}
+                                onIssueChange={(value) => setField('issueChange', value)}
+                              />
                             }
                           />
                       )}

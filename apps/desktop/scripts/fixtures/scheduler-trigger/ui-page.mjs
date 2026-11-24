@@ -18,7 +18,7 @@ export default {
     'src/renderer/features/scheduler/components/TemplateGallery': 'export const TemplateGallery = () => null;',
     'src/renderer/features/scheduler/components/ScheduleChips': `import React from 'react'; const chip = label => React.createElement('button', {type: 'button', style: {height: 34}}, label); export const ProjectChip = () => chip('对话'); export const ModelEffortChip = () => chip('Codex'); export const ScheduleChip = () => chip('09:00'); export const ScheduleSettingsButton = () => null; export const ThreadPickerInline = () => null;`,
   },
-  cases: { 'single-pr': { about: '在「事件」的 GitHub 里选择「指定 PR」并配置定时补查' }, 'script-settings': { about: '现有脚本能力选择器分别显示成员与用量读取及完整范围说明' },
+  cases: { 'single-issue': { about: '同一个输入框填 owner/repo#7，识别为 Issue 后条件换成 Issue 的选项' }, 'single-pr': { about: '在「事件」的 GitHub 里选择「指定 PR」并配置定时补查' }, 'script-settings': { about: '现有脚本能力选择器分别显示成员与用量读取及完整范围说明' },
     default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
     create: { about: '新建表单使用相同的稳定切换布局' },
     scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } },
@@ -34,12 +34,26 @@ export default {
     await page.getByRole('button', { name: label, exact: true }).waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'single-issue') {
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.trigger.event'), exact: true }).click();
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.scope.item'), exact: true }).check();
+      await page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.item.label') }).fill('example/project#7');
+      await page.getByText(await ui.t('scheduler.editor.webhook.item.issueHint'), { exact: true }).waitFor();
+      await page.getByText(await ui.t('scheduler.editor.webhook.item.resolving'), { exact: true }).waitFor({ state: 'detached' });
+      await page.locator('[data-schedule-form-fields]').evaluate(panel => {
+        const label = window.__uiPage.t('scheduler.editor.trigger.label');
+        [...panel.querySelectorAll('[role="radiogroup"]')].find(el => el.getAttribute('aria-label') === label)?.scrollIntoView({ block: 'start' });
+      });
+      await ui.capture('issue-item');
+      return;
+    }
     if (ui.case === 'single-pr') {
       // 2026-11-24: a single PR is chosen as an event source, not a separate trigger mode.
       await page.getByRole('radio', { name: await ui.t('scheduler.editor.trigger.event'), exact: true }).click();
-      await page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.scope.pullRequest'), exact: true }).check();
-      await page.getByRole('textbox', { name: await ui.t('scheduler.prTrigger.url') }).fill('https://github.com/example/project/pull/42');
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.scope.item'), exact: true }).check();
+      await page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.item.label') }).fill('https://github.com/example/project/pull/42');
       await page.getByText(await ui.t('scheduler.prTrigger.timed'), { exact: true }).click();
+      await page.getByText(await ui.t('scheduler.editor.webhook.item.resolving'), { exact: true }).waitFor({ state: 'detached' });
       await page.locator('[data-schedule-form-fields]').evaluate(panel => {
         const label = window.__uiPage.t('scheduler.editor.trigger.label');
         const group = [...panel.querySelectorAll('[role="radiogroup"]')].find(el => el.getAttribute('aria-label') === label);

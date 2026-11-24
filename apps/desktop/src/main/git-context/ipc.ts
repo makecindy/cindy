@@ -40,6 +40,7 @@ import {
   githubReadScope,
   githubStatusFetch,
   githubTransport,
+  resolveGithubItem,
 } from './githubReadHost';
 import type { GithubReadService } from './githubReadService';
 import type { GithubReadMethod } from '@cindy/maker-shared';
@@ -260,6 +261,12 @@ export function registerGitContextIpc(): void {
   registerGithubSetupIpc(() => {
     prStatusService?.invalidate();
     githubTransport.invalidate();
+  });
+  // 自动化「指定 PR 或 Issue」：识别编号是 PR 还是 Issue（仅本机窗口）。
+  ipcMain.handle('git-context:github-item:resolve', async (event, repository: unknown, number: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof repository !== 'string' || typeof number !== 'number') throwIpcError('INVALID_PARAMS', 'repository and number are required');
+    return resolveGithubItem(repository, number);
   });
   ipcMain.handle('git-context:github-read', async (event, payload: unknown) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);

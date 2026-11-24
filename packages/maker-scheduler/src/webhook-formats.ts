@@ -424,7 +424,8 @@ export function scheduleWebhookPreset(id: string): ScheduleWebhookPreset | undef
 
 /** 任务保存的发送方。缺省等于 GitHub 预设并签名。 */
 export type ScheduleWebhookSource =
-  | { preset: 'github-app'; repositories: string[] }
+  /** number：只看这个编号的 Issue（或 PR）事件，此时 repositories 恰好一个。 */
+  | { preset: 'github-app'; repositories: string[]; number?: number }
   /** 插件事件：本机插件经 routine-request 发布，不需要接收地址、密钥或账号。 */
   | { preset: 'plugin'; sources: SchedulePluginEventSource[] }
   | { preset: ScheduleWebhookPresetId; signed?: boolean }
@@ -455,11 +456,12 @@ export function sameGithubAppScope(
   b: { source?: ScheduleWebhookSource; events?: readonly string[] },
 ): boolean {
   if (a.source?.preset !== 'github-app' || b.source?.preset !== 'github-app') return false;
-  const canonical = (repositories: readonly string[], events: readonly string[] = []) => JSON.stringify([
+  const canonical = (repositories: readonly string[], events: readonly string[] = [], number?: number) => JSON.stringify([
     [...new Set(repositories.map(repo => repo.trim().toLowerCase()))].sort(),
     [...new Set(events.map(event => event.trim()).filter(Boolean))].sort(),
+    number ?? null,
   ]);
-  return canonical(a.source.repositories, a.events) === canonical(b.source.repositories, b.events);
+  return canonical(a.source.repositories, a.events, a.source.number) === canonical(b.source.repositories, b.events, b.source.number);
 }
 
 /**
@@ -469,12 +471,18 @@ export function sameGithubAppScope(
 export function normalizeScheduleWebhookSource(value: unknown): ScheduleWebhookSource {
   if (!isObject(value) || typeof value.preset !== 'string') throw new Error('invalid webhook source');
   if (value.preset === 'github-app') {
-    if (!hasOnlyKeys(value, ['preset', 'repositories']) || !Array.isArray(value.repositories)
+    if (!hasOnlyKeys(value, ['preset', 'repositories'], ['number']) || !Array.isArray(value.repositories)
       || !value.repositories.length || value.repositories.length > 50 || value.repositories.some(repo =>
         typeof repo !== 'string' || !/^[a-z\d][a-z\d-]{0,38}\/[a-z\d_.-]{1,100}$/i.test(repo))) {
       throw new Error('GitHub App requires 1–50 repository names (owner/repository)');
     }
-    return { preset: 'github-app', repositories: [...new Set((value.repositories as string[]).map(repo => repo.toLowerCase()))] };
+    const repositories = [...new Set((value.repositories as string[]).map(repo => repo.toLowerCase()))];
+    if (value.number === undefined) return { preset: 'github-app', repositories };
+    // A single Issue (or PR) number narrows one repository's events to that item.
+    if (typeof value.number !== 'number' || !Number.isSafeInteger(value.number) || value.number < 1 || repositories.length !== 1) {
+      throw new Error('A GitHub item number requires exactly one repository and a positive number');
+    }
+    return { preset: 'github-app', repositories, number: value.number };
   }
   if (value.preset === 'plugin') {
     if (!hasOnlyKeys(value, ['preset', 'sources'])) throw new Error('invalid webhook source');

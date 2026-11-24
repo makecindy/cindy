@@ -4843,6 +4843,9 @@ interface ElectronAPI {
   // ── session-git-pr-context: 会话分支感知 + PR 关联状态 ──
   gitContext: {
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
+    resolveGithubItem: (repository: string, number: number) => Promise<
+      | { ok: true; kind: 'pr' | 'issue'; title: string; state: 'open' | 'closed' }
+      | { ok: false; reason: 'not-connected' | 'not-found' | 'unavailable' }>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     githubAppAccess: () => Promise<import('../shared/githubSetup').GithubAppAccess>;
     githubAppStatus: () => Promise<import('../shared/githubSetup').GithubAppConnectionState>;

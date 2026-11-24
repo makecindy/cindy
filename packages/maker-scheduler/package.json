@@ -14,7 +14,8 @@
     "./templates": "./src/builtin-templates.ts",
     "./template-engine": "./src/engine/template.ts",
     "./webhook-formats": "./src/webhook-formats.ts",
-    "./plugin-events": "./src/plugin-events.ts"
+    "./plugin-events": "./src/plugin-events.ts",
+    "./github-item": "./src/github-item.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

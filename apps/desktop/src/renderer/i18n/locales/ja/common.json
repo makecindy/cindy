@@ -17938,9 +17938,34 @@
         "scope": {
           "repository": "リポジトリ全体",
           "repositoryHint": "新しい PR、コメント、CI 完了など、リポジトリの新しいイベントで実行します。",
-          "pullRequest": "特定の PR",
-          "pullRequestHint": "1 つの PR だけを見て、マージや新しいレビューなど状態が実際に変わったときだけ実行します。",
-          "repositoryNeedsAccount": "リポジトリのイベントを受け取るには Cindy アカウントへのログインが必要です。"
+          "repositoryNeedsAccount": "リポジトリのイベントを受け取るには Cindy アカウントへのログインが必要です。",
+          "item": "特定の PR または Issue",
+          "itemHint": "1 つの PR または Issue を見ます。PR は状態が実際に変わったとき、Issue は新しい動きがあったときに実行します。"
+        },
+        "item": {
+          "label": "PR または Issue",
+          "placeholder": "42、#42、owner/repo#42 またはリンク",
+          "hint": "番号、owner/repo#番号を入力するか、リンクを貼り付けてください。どちらかは Cindy が判別します。",
+          "resolving": "判別中…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "クローズ済み",
+          "required": "監視する PR または Issue を入力し、判別が終わるまでお待ちください。",
+          "issueHint": "特定の Issue は Cindy 経由で接続した GitHub App でイベントを受け取るため、Cindy アカウントが必要です。",
+          "errors": {
+            "invalid": "番号、#番号、owner/repo#番号、または GitHub の PR / Issue のリンクを入力してください。",
+            "no-repository": "番号だけの場合はリポジトリが必要です。owner/repo#42 と書くか、リンクを貼り付けてください。",
+            "not-connected": "PR か Issue かを判別するには GitHub を接続してください。",
+            "not-found": "このリポジトリにその番号が見つからないか、アクセス権がありません。",
+            "unavailable": "現在 GitHub に接続できません。しばらくしてから再試行してください。",
+            "needs-account": "これは Issue です。特定の Issue には Cindy アカウントと Cindy 経由の GitHub 接続が必要です。"
+          },
+          "issueChange": {
+            "any": "Issue の新しい動き",
+            "comment": "新しいコメント",
+            "closed": "Issue がクローズ",
+            "reopened": "Issue が再オープン"
+          }
         }
       },
       "trigger": {

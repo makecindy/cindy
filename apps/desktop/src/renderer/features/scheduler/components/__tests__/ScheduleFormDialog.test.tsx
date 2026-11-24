@@ -335,10 +335,10 @@ it.each(['agent', 'script'] as const)('lets an event trigger add timed checks fo
 it('saves a single PR with optional timed checks and can remove the rule', async () => {
   const form = mount(schedule({}));
   fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
-  // GitHub is one sender; a single PR is its narrower scope.
-  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.pullRequest' }));
+  // GitHub is one sender; one PR or Issue is its narrower scope, entered in a single field.
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.item' }));
   const url = 'https://github.com/example/project/pull/23';
-  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.item.label' }), { target: { value: url } });
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
     manual: true, prTrigger: { url, change: 'any' }, webhookTrigger: null,
@@ -360,6 +360,25 @@ it('saves a single PR with optional timed checks and can remove the rule', async
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null, webhookTrigger: null }), true));
 });
 
+// 2026-11-24: PR and Issue share numbers, so one field takes a number or link and Cindy asks GitHub
+// which it is. An Issue saves the App source narrowed to that number with its condition's events.
+it('identifies an Issue from owner/repo#number and saves it as a numbered GitHub App source', async () => {
+  const resolveGithubItem = vi.fn(async () => ({ ok: true, kind: 'issue', title: 'Crash on start', state: 'open' }));
+  vi.stubGlobal('electronAPI', { gitContext: { githubAppStatus: async () => ({ available: true, login: null }), resolveGithubItem },
+    maker: { schedule: { webhookReceiver: async () => 'cloud', scriptCapabilityStatus: async () => ({ statuses: [] }) } } });
+  const form = mount(schedule({}));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.item' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.item.label' }), { target: { value: 'Example/Project#7' } });
+  await waitFor(() => expect(resolveGithubItem).toHaveBeenCalledWith('example/project', 7));
+  await screen.findByRole('combobox', { name: 'scheduler.prTrigger.condition' });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: ['issues', 'issue_comment'], source: { preset: 'github-app', repositories: ['example/project'], number: 7 } },
+  }), true));
+  expect((form.onSubmit.mock.lastCall?.[0] as { prTrigger?: unknown } | undefined)?.prTrigger ?? null).toBeNull();
+});
+
 // Without an account or event plugins, the event trigger falls back to the source that needs neither.
 it('offers a single PR as the event source while signed out without event plugins', async () => {
   vi.stubGlobal('electronAPI', { gitContext: { githubAppStatus: async () => ({ available: true, login: null }) },
@@ -367,7 +386,7 @@ it('offers a single PR as the event source while signed out without event plugin
   const form = mount(schedule({}));
   fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
   const url = 'https://github.com/example/project/pull/7';
-  fireEvent.change(await screen.findByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
+  fireEvent.change(await screen.findByRole('textbox', { name: 'scheduler.editor.webhook.item.label' }), { target: { value: url } });
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
     manual: true, prTrigger: { url, change: 'any' }, webhookTrigger: null,
