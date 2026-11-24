@@ -1,10 +1,15 @@
 import { SETTINGS_WEB_MAX_BYTES, settingsWebReadResultSchema, type SettingsWebCommand, type SettingsWebReadResult } from '../../shared/settingsWeb.js';
+import { withSharedSettingsModelCatalog } from './catalogScope.js';
 
 type Domains = Extract<SettingsWebCommand, { kind: 'readBatch' }>['domains'];
 
 /** One transport request, many local reads. Each field retains its own CAS revision;
  * this is not a transaction spanning all settings files. Never truncate a domain. */
-export async function readSettingsBatch(domains: Domains, read: (domain: Domains[number]) => Promise<unknown>, assertCurrent: () => void) {
+export function readSettingsBatch(domains: Domains, read: (domain: Domains[number]) => Promise<unknown>, assertCurrent: () => void) {
+  // The IM groups each offer the same model candidates; they read the catalog once.
+  return withSharedSettingsModelCatalog(() => readBatch(domains, read, assertCurrent));
+}
+async function readBatch(domains: Domains, read: (domain: Domains[number]) => Promise<unknown>, assertCurrent: () => void) {
   const entries: Array<{ domain: Domains[number]; result: SettingsWebReadResult }> = [];
   const started = Date.now();
   const response = (remainingDomains: Domains) => ({ ok: true as const, entries, remainingDomains });
