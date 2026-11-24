@@ -63,6 +63,7 @@ import {
   type RemoteAgentHandleController,
   type RemoteAgentLink,
   type RemoteStartedInfo,
+  type SharedReconnectSendEvidence,
 } from './proxyHandle';
 import { ExecServerRelay } from './execServerRelay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
@@ -72,10 +73,19 @@ import { isSharedTaskAuthorizationDenied } from './poller';
 // Local evidence from the same open that failed. An old offer or a send RPC
 // error must never authorize replay of a persisted input.
 const stoppedReconnectOffers = new WeakMap<RemoteAgentRemoteError, () => void>();
-const reconnectOfferCapture = new AsyncLocalStorage<string>();
+const reconnectOfferCapture = new AsyncLocalStorage<{
+  sessionId: string;
+  evidence?: SharedReconnectSendEvidence;
+  replacement?: boolean;
+}>();
 
-export function withSharedReconnectOfferCapture<T>(sessionId: string, send: () => Promise<T>): Promise<T> {
-  return reconnectOfferCapture.run(sessionId, send);
+export function withSharedReconnectOfferCapture<T>(
+  sessionId: string,
+  send: () => Promise<T>,
+  evidence?: SharedReconnectSendEvidence,
+  replacement?: boolean,
+): Promise<T> {
+  return reconnectOfferCapture.run({ sessionId, evidence, replacement }, send);
 }
 
 interface SharedReconnectHandoff {
@@ -763,8 +773,9 @@ async function prepareAndStartRemoteAgentSession(
     const early: Array<{ type: 'event' | 'state'; value: unknown }> = [];
     let closedEarly: { reason: string; message?: string } | null = null;
     const expectedResume = payload.options.resumeSessionId;
+    const capture = reconnectOfferCapture.getStore();
     const captureReconnectOffer = reconnect && deps.recoverSharedReconnect && !!expectedResume
-      && reconnectOfferCapture.getStore() === opts.sessionId
+      && capture && capture.sessionId === opts.sessionId && !capture.replacement
       && payload.acceptsGroupSwitch && !payload.groupAssigned;
     let startupSwitchToken: string | undefined;
     let resumeLost = false;
@@ -1363,6 +1374,10 @@ async function prepareAndStartRemoteAgentSession(
       controller = createRemoteAgentHandle({
         link,
         started,
+        sharedReconnectSendEvidence: () => {
+          const capture = reconnectOfferCapture.getStore();
+          return capture && capture.sessionId === opts.sessionId ? capture.evidence : undefined;
+        },
         workspace,
         getExecutorCwd: () => executor.getCwd(),
         recordApproval: (action) => executor.recordApproval(action),

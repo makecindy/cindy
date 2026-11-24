@@ -40,6 +40,7 @@ import {
 } from '../maker-host/send-outcome.js';
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
+import type { SharedReconnectSendEvidence } from '../remote-agent/controller/proxyHandle.js';
 import { routinePermissionSnapshot } from '../maker-host/routinePermission.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
@@ -368,7 +369,7 @@ export interface MakerSendTransactionDeps {
     signal: AbortSignal;
     isCurrent(): boolean;
     close(): Promise<boolean>;
-    captureOffer<T>(send: () => Promise<T>): Promise<T>;
+    captureOffer<T>(send: () => Promise<T>, evidence?: SharedReconnectSendEvidence, replacement?: boolean): Promise<T>;
     takeOffer(error: unknown): (() => void) | undefined;
     dispose(): void;
   } | undefined;
@@ -596,6 +597,10 @@ export interface SharedReconnectRecovery {
   onScheduledModesChanged(): void;
   onDispatching(): void;
   onDispatched?(): void;
+  observeSend?: {
+    evidence: SharedReconnectSendEvidence;
+    run<T>(send: () => Promise<T>): Promise<T>;
+  };
   offer(): void;
   assertCurrent(): void;
 }
@@ -1933,6 +1938,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const reconnect = !recovery && createOpts && persistUserMessage && reconnectInput
         && reconnectInput.canCapture?.(sess) !== false
         ? deps.captureSharedReconnectRecovery?.(sess) : undefined;
+      const sendEvidence = recovery?.observeSend?.evidence
+        ?? (reconnect && reconnectInput?.onUndispatchedFailure ? { handedToTransport: false } : undefined);
       try {
         let cindyLearnInvocation: CindyLearnInvocationGrant | null = null;
         // Every Cindy harness consumes this exact-path pin at its provider
@@ -2191,7 +2198,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             }
           },
         })));
-        const sendResult = await (reconnect ? reconnect.captureOffer(send) : send());
+        const sendResult = await (recovery?.observeSend ? recovery.observeSend.run(send)
+          : reconnect ? reconnect.captureOffer(send, sendEvidence) : send());
+        if (sendEvidence?.failure?.kind === 'unconfirmed') throw sendEvidence.failure.error;
         if (sendResult.accepted) recovery?.onDispatched?.();
         if (inputHandoffOwnerNote && sendResult.accepted) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
         sendAccepted = sendResult.accepted;
@@ -2258,7 +2267,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             context: `SEND/${sessionId}/send`,
           }),
         );
-      } catch (err) {
+      } catch (error) {
+        const err = sendEvidence?.failure?.kind === 'unconfirmed' ? sendEvidence.failure.error : error;
         if (!sendAccepted) {
           await rewindPersistedUserMessageAfterClearIfStale();
           await cleanupRejectedMaterialization();
@@ -2277,8 +2287,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           const shareDeviceId = sess.agentDeviceId;
           const schedulerRunSignal = reconnectInput.schedulerRunSignal;
           let replacementDispatched = false;
+          const replacementEvidence: SharedReconnectSendEvidence = { handedToTransport: false };
           const attempt = async () => {
-            const offer = reconnect.takeOffer(err);
+            const offer = sendEvidence?.handedToTransport ? undefined : reconnect.takeOffer(err);
             if (!offer) {
               deps.log.warn('send: remote agent switch credential abandoned', {
                 sessionId, reason: 'no-credential',
@@ -2340,6 +2351,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                     onScheduledModesChanged: () => { scheduledModesChanged = true; },
                     onDispatching: () => { replacementDispatching = true; },
                     onDispatched: () => { replacementDispatched = true; },
+                    ...(sendEvidence ? { observeSend: {
+                      evidence: replacementEvidence,
+                      run: send => reconnect.captureOffer(send, replacementEvidence, true),
+                    } } : {}),
                     expectedClearBoundaryMs: persistUserMessage.expectedClearBoundaryMs,
                   });
                 // Keep the queue's existing Stop rollback result when the Session
@@ -2394,8 +2409,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           // The initial row already exists. A proven failure with no
           // replacement should advance the FIFO, but never supersede Stop,
           // new input or an ambiguous dispatch.
-          if (reconnectInput.onUndispatchedFailure && !replacementDispatched
-            && (outcome.ok ? !outcome.result?.accepted : !(outcome.error instanceof TurnDispatchUnconfirmedError))
+          if (reconnectInput.onUndispatchedFailure && sendEvidence && !replacementDispatched
+            && (!sendEvidence.handedToTransport || sendEvidence.failure?.kind === 'rejected')
+            && (!replacementEvidence.handedToTransport || replacementEvidence.failure?.kind === 'rejected')
+            && !(outcome.ok && outcome.result?.accepted)
             && !requestedSendOpts.signal?.aborted && !schedulerRunSignal?.aborted
             && !reconnectInput.wasStopped?.() && reconnectInput.isCurrent()) {
             reconnectInput.onUndispatchedFailure();

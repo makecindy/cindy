@@ -18425,7 +18425,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         close: async () => (await withRehydrateCloseSuppressed(session.id, () =>
           maker.closeSessionIfCurrent(live, 'runtime-refresh', { onlyIfIdle: true }))) === 'closed',
         takeOffer: takeStoppedSharedReconnectOffer,
-        captureOffer: send => withSharedReconnectOfferCapture(session.id, send),
+        captureOffer: (send, evidence, replacement) =>
+          withSharedReconnectOfferCapture(session.id, send, evidence, replacement),
         dispose: recovery.dispose,
       };
     },

@@ -324,7 +324,7 @@ export class RemoteAgentRunClient implements PolledRun {
   }
 
   /** 预先分配的 callId(需要先把回调登记到 callId 上时用)。 */
-  async callWithId(callId: string, method: RemoteAgentMethod, args: unknown[], signal?: AbortSignal): Promise<unknown> {
+  async callWithId(callId: string, method: RemoteAgentMethod, args: unknown[], signal?: AbortSignal, onDispatch?: () => void): Promise<unknown> {
     if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on the other computer.');
     if (method === 'abort' || method === 'requestGracefulStop') this.sendGeneration += 1;
     const generation = this.sendGeneration;
@@ -345,7 +345,12 @@ export class RemoteAgentRunClient implements PolledRun {
       // Stop can overtake gzip or a chunk acknowledgement, including the final
       // await before dispatch. Never deliver that old send after Stop.
       requireActive();
-      const delivery = this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }], { beforeDispatch: requireActive });
+      const delivery = this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }], {
+        beforeDispatch: () => {
+          requireActive();
+          onDispatch?.();
+        },
+      });
       if (method === 'send') this.handlers.onSend?.();
       await delivery;
     } catch (error) {

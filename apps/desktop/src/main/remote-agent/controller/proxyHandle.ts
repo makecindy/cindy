@@ -247,7 +247,13 @@ export function fixedRemoteAgentLink(client: RemoteAgentRunClient): RemoteAgentL
   };
 }
 
+export interface SharedReconnectSendEvidence {
+  handedToTransport: boolean;
+  failure?: { kind: 'rejected' | 'unconfirmed'; error: unknown };
+}
+
 export interface RemoteHandleDeps {
+  sharedReconnectSendEvidence?(): SharedReconnectSendEvidence | undefined;
   getExecutorCwd?(): string;
   /** 缺省时用 `client` 作为固定连接。 */
   link?: RemoteAgentLink;
@@ -476,25 +482,32 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       terminalEventDelivered = false;
       activeTurn = true;
     }
+    const evidence = method === 'send' ? deps.sharedReconnectSendEvidence?.() : undefined;
     try {
-      // Keep Session cancellation local; AbortSignal is never part of the wire payload.
-      await client.callWithId(callId, method, [wireMessage, encoded.wire], opts?.signal);
+      // Keep Session cancellation and delivery evidence local.
+      await client.callWithId(callId, method, [wireMessage, encoded.wire], opts?.signal,
+        evidence && (() => { evidence.handedToTransport = true; }));
       if (method === 'send') terminalOwnership.acceptSend(callId);
     } catch (error) {
+      const rejected = error instanceof RemoteAgentRemoteError && error.info.code === 'TURN_DISPATCH_REJECTED';
+      if (evidence?.handedToTransport) {
+        // A stream close can settle the handle before Session returns. Keep the
+        // actual call failure for the transaction, including its link error code.
+        evidence.failure = { kind: rejected ? 'rejected' : 'unconfirmed', error };
+      }
       // The ordered error/done below already settles this send. Do not race it with
       // a second send rejection that can replace the host-owned recovery receipt.
       if (method !== 'send' || beforeInterruption === interruption) {
         if (method === 'send') {
           if (sendOwnerOptions === opts && terminalOwnership.isDispatchCurrent(callId)
             && !disposed && !teardownRequested) {
-            const previous = error instanceof RemoteAgentRemoteError && error.info.code === 'TURN_DISPATCH_REJECTED'
-              ? terminalOwnership.rejectSend(callId) : undefined;
+            const previous = rejected ? terminalOwnership.rejectSend(callId) : undefined;
             abortRequested = abortRequested || previous?.aborted === true;
             activeTurn = !abortRequested && previous?.active === true;
             terminalEventDelivered = previous?.terminal === true;
             sendOwnerOptions = previousOwnerOptions;
           }
-          if (error instanceof RemoteAgentRemoteError && error.info.code === 'TURN_DISPATCH_REJECTED') {
+          if (rejected) {
             throw new TurnDispatchRejectedError(error.message, { cause: error });
           }
         }
