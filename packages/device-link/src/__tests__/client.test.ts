@@ -1860,6 +1860,38 @@ describe('DeviceLinkClient', () => {
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
+  // #11644: six remote-agent timeouts were indistinguishable from body sends.
+  // Unit, real client timeout/INFO evidence; unknown op/method and payload stay private.
+  it.each([
+    [{ op: 'caps' }, 'caps'],
+    [{ op: 'open' }, 'open'],
+    [{ op: 'call', method: 'send' }, 'call:send'],
+    [{ op: 'call', method: 'PRIVATE_METHOD' }, 'call:other'],
+    [{ op: 'PRIVATE_OPERATION' }, 'other-remote-agent'],
+  ] as const)('identifies remote-agent %j without retaining input in timeout evidence', async (command, operation) => {
+    vi.useFakeTimers();
+    const info = vi.fn(), warn = vi.fn();
+    const h = makeHarness({ logger: { info, warn, debug: vi.fn(), error: vi.fn() },
+      timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack(['provider-share-v1']);
+      const peer = command.op === 'caps' ? providerShareHostPeer('PRIVATE_SHARE', 'abcdef1234567890') : 'abcdef12';
+      const pending = h.client.invoke(peer, { channel: 'maker:remote-agent:v1',
+        args: [{ ...command, payload: { json: 'PRIVATE_BODY' }, token: 'PRIVATE_TOKEN' }] }, 1000);
+      const rejected = expect(pending).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT', inFlight: true });
+      const sent = h.current().sent.find(frame => frame.kind === 'invoke')!;
+      await vi.advanceTimersByTimeAsync(1000); await rejected;
+      const records = info.mock.calls.filter(([line]) => line.startsWith('device-link diagnostic '))
+        .map(([line]) => JSON.parse(line.slice('device-link diagnostic '.length)));
+      expect(records).toContainEqual(expect.objectContaining({ stage: 'request',
+        request: sent.id?.slice(0, 8), channel: 'maker:remote-agent:v1', operation,
+        firstWriteWaitMs: 0, outcome: 'timeout' }));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`operation=${operation}`));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('dst=abcdef12'));
+      expect(JSON.stringify([info.mock.calls, warn.mock.calls])).not.toContain('PRIVATE_');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('invoke:同 id invoke-result 配对 resolve', async () => {
     const h = makeHarness();
     h.client.start();

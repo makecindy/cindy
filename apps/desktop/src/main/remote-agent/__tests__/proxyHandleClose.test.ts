@@ -3,13 +3,13 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { Session, type AgentEvent } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
-import { createRemoteAgentHandle, type RemoteAgentHandleController } from '../controller/proxyHandle';
-import { RemoteAgentRunClient } from '../controller/runClient';
+import { createRemoteAgentHandle, type RemoteAgentHandleController, type RemoteAgentLink } from '../controller/proxyHandle';
+import { RemoteAgentRemoteError, RemoteAgentRunClient } from '../controller/runClient';
 import type { RemoteAgentPoller } from '../controller/poller';
 import { ExecutorWorkspace } from '../executor/workspace';
 import { RemoteTurnTerminalOwnership } from '../turnLifecycle';
 
-function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
+function fixture(agentKind: 'codex' | 'claude-code' = 'codex', startupError?: RemoteAgentRemoteError) {
   let controller!: RemoteAgentHandleController;
   const restartRecovery = vi.fn();
   const deliver = (item: unknown) => client.onData(Buffer.from(JSON.stringify(item) + '\n'), false);
@@ -30,7 +30,11 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
     onRequest: async () => ({ type: 'callback' }), onWs() {},
   }, randomUUID);
   const dispose = vi.fn(async () => undefined);
-  controller = createRemoteAgentHandle({ client,
+  const link: RemoteAgentLink | undefined = startupError ? {
+    live: async () => client, begin: () => () => {}, ensure: async () => { throw startupError; },
+    close: (mode, reason) => client.close(mode, reason),
+  } : undefined;
+  controller = createRemoteAgentHandle({ client, link,
     started: { id: 'sdk-fixture', agentKind, model: 'fixture', shadowDir: '', methods: [], state: {} },
     workspace: new ExecutorWorkspace({ workingDir: os.tmpdir() }),
     recordApproval() {}, newId: randomUUID, dispose,
@@ -48,6 +52,30 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
 }
 
 describe('remote stream close settles the product turn', () => {
+  // Main's stopped-open offer uses error object identity, not a generic timeout.
+  it('preserves the confirmed startup rejection identity for the existing offer handoff', async () => {
+    const error = new RemoteAgentRemoteError({ code: 'SUBSCRIPTION_ACCOUNT_LIMITED',
+      name: 'AgentStartupStoppedError', message: 'confirmed stopped startup' }, 'start');
+    const f = fixture('codex', error);
+    try {
+      await expect(f.controller.handle.send({ type: 'user', content: 'not sent' })).rejects.toBe(error);
+      expect(f.invoke).not.toHaveBeenCalled();
+    } finally { await f.session.close(); }
+  });
+
+  // #11644 unit: unlike a failed caps handshake, a written send may have been
+  // accepted. Preserve the original error and one RPC, without replaying input.
+  it('keeps an in-flight send timeout ambiguous instead of reporting an undispatched input', async () => {
+    const f = fixture();
+    try {
+      const timeout = Object.assign(new Error('[INVOKE_TIMEOUT] send result unknown'),
+        { code: 'INVOKE_TIMEOUT', inFlight: true });
+      f.invoke.mockRejectedValueOnce(timeout);
+      await expect(f.session.send('possibly accepted')).rejects.toBe(timeout);
+      expect(f.invoke.mock.calls.filter(([args]) => (args[0] as { method?: string }).method === 'send')).toHaveLength(1);
+    } finally { await f.session.close(); }
+  });
+
   it('reuses Session after an explicit remote preflight refusal without a stale tail fence', async () => {
     const f = fixture();
     try {

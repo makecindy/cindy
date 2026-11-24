@@ -1457,6 +1457,50 @@ describe('remote connection pool with a real host', () => {
     expect(scenario.started).toHaveLength(2);
   });
 
+  // #11644 unit: the old handle-only tests did not exercise Session's ambiguous
+  // tail fence. Six real starter caps attempts must never dispatch this input or
+  // close its reusable Session. No production network, model, or real 30s wait.
+  it('retains the Session after six caps timeouts and resumes the same history on explicit retry', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'caps-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      let caps = 0;
+      vi.useFakeTimers();
+      intercept = request => request.op !== 'caps' ? undefined : new Promise((_resolve, reject) => {
+        caps++;
+        setTimeout(() => reject(Object.assign(new Error('[INVOKE_TIMEOUT] no invoke-result'),
+          { code: 'INVOKE_TIMEOUT', inFlight: true })), 30_000);
+      });
+      const sending = session.send('not dispatched').catch(error => error);
+      await vi.advanceTimersByTimeAsync(190_000);
+      const result = await sending;
+      expect(caps).toBe(6);
+      expect(result).toMatchObject({ accepted: false, reason: 'provider-rejected-before-dispatch' });
+      expect(session.getStatus()).not.toBe('closed');
+      expect(opens).toBe(1);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+      vi.useRealTimers();
+      intercept = null;
+      expect(await session.send('not dispatched')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 2 }));
+      expect(scenario.started).toHaveLength(2);
+      expect(scenario.started[1].options.resumeSessionId).toBe(handle.id);
+      expect(scenario.calls.filter(call => call.method === 'send').map(call =>
+        (call.args[0] as { content: string }).content)).toEqual(['first', 'not dispatched']);
+    } finally {
+      vi.useRealTimers();
+      intercept = null;
+      await session.close();
+    }
+  });
+
   it('when a release close does not get through, makes room before opening instead of hitting the limit, then closes it', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const retryRequested = Promise.withResolvers<void>();

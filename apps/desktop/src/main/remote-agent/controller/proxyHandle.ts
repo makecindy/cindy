@@ -441,7 +441,18 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         return block;
       });
     };
-    const client = await link.ensure();
+    let client: RemoteAgentRunClient;
+    try {
+      client = await link.ensure();
+    } catch (error) {
+      // A caps/open/restore RPC can be in flight without this input ever reaching
+      // callWithId below. Do not let Session fence/close this handle as though
+      // the send had an ambiguous tail. Confirmed startup errors retain their
+      // identity: Main's stopped-open offer is keyed by that exact error object.
+      if (method !== 'send' || (error instanceof RemoteAgentRemoteError && error.phase === 'start')) throw error;
+      deps.log?.warn('remote agent: connection preparation failed before turn dispatch', { error: String(error) });
+      throw new TurnDispatchRejectedError(error instanceof Error ? error.message : String(error), { cause: error });
+    }
     // Check the actual executor after reconnect, before either send or steer.
     // Older hosts silently drop this origin and would execute without its policy.
     const origins = [opts?.turnPermissionPolicy?.origin, opts?.[MAIN_OWNED_SEND_CONTEXT]?.origin];
