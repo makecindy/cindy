@@ -16,7 +16,7 @@ import { isOwnImSender, parseOrcaCommunicationContent, resolveUserDisplayText } 
 export interface NavRailEntry {
   /** user 消息的 clientId,同时是 data-message-client-id 锚点值。 */
   id: string;
-  /** 原消息的来源字段；保留引用，让流式更新可以复用相同的预览。 */
+  /** 预览署名读取的来源字段（取自原消息）；导航投影逐字段比较，历史行换成浅拷贝时仍复用。 */
   sender: Pick<ChatMessage,
     'sourceDevice' | 'sourcePlugin' | 'automationOrigin' | 'hookSource' | 'sharedAuthorName' | 'createdAt'
   >;

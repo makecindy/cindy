@@ -2,6 +2,15 @@ import type { ChatMessage } from '@/lib/makerChatStore';
 import { deriveNavRailEntries, type NavRailEntry } from './messageNavRailModel';
 import { isStreamingTextOnlyUpdate } from './streamingMessageProjection';
 
+// 预览署名实际读取的来源字段。流式时历史行会换成浅拷贝，按字段比较才能复用；字段本身的引用不变。
+const SENDER_FIELDS = ['sourceDevice', 'sourcePlugin', 'automationOrigin', 'hookSource', 'sharedAuthorName', 'createdAt'] as const;
+
+function sameSender(before: NavRailEntry, after: NavRailEntry): boolean {
+  return before.isOwn === after.isOwn
+    && before.orcaSource === after.orcaSource
+    && SENDER_FIELDS.every((field) => before.sender[field] === after.sender[field]);
+}
+
 function sameEntries(before: readonly NavRailEntry[], after: readonly NavRailEntry[]): boolean {
   return (
     before.length === after.length &&
@@ -9,7 +18,7 @@ function sameEntries(before: readonly NavRailEntry[], after: readonly NavRailEnt
       const next = after[index];
       return (
         entry.id === next.id &&
-        entry.sender === next.sender &&
+        sameSender(entry, next) &&
         entry.preview === next.preview &&
         entry.isAutomation === next.isAutomation &&
         entry.attachmentsOnly === next.attachmentsOnly &&
