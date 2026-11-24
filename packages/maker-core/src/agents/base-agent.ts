@@ -523,7 +523,11 @@ export interface ClaudeSubagentTaskRegistration {
 export interface ClaudeSubagentTaskUsage {
   billing?: {
     sdkSessionId: string;
-    segments: readonly import('./shared/usage-tracker.js').UsageSegment[];
+    /** Local monotonic reservation time and the invocation known when the request started. */
+    segments: readonly (import('./shared/usage-tracker.js').UsageSegment & {
+      reservedAt: number;
+      parentToolUseId?: string;
+    })[];
   };
   totalTokens: number;
 }

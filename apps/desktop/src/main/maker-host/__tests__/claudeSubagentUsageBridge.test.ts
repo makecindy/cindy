@@ -348,6 +348,27 @@ describe('ClaudeSubagentUsageBridge', () => {
   });
 });
 
+function billingFixture() {
+  const bridge = new ClaudeSubagentUsageBridge();
+  const queue = createAsyncQueue<AgentEvent>();
+  const sdkSessionId = 'sdk-session';
+  const turn: TurnState = {
+    text: '', toolUses: 0, apiCalls: 0, sawCompactBoundary: false, hasEmittedText: false,
+    uiEmittedText: '', pendingApiError: null, interruptRequested: false, generation: 0,
+    interruptGeneration: 0, lastAssistantMsgHadSubstance: true,
+  };
+  const ctx = {
+    rt: newRuntimeState(), turn, tracker: new UsageTracker(),
+    getModel: () => 'main-model', getSdkSessionId: () => sdkSessionId,
+    getEffort: () => 'medium', getPermissionMode: () => 'auto', getLogTitle: () => undefined,
+    log: { debug() {}, info() {}, warn() {} }, onSessionId() {},
+    onSubagentTaskLaunched: (task: Parameters<typeof bridge.registerTask>[0]) =>
+      bridge.registerTask(task),
+    getSubagentTaskUsage: (id: string, sid?: string) => bridge.getTaskUsage(id, sid),
+  };
+  return { bridge, queue, sdkSessionId, ctx };
+}
+
 const cacheCases = [
   { name: 'missing read bucket, late 300k', start: { cache_creation_input_tokens: 0 }, aggregate: { cache_read_input_tokens: 300_000, cache_creation_input_tokens: 0 }, expected: null },
   { name: 'missing write bucket, late 300k', start: { cache_read_input_tokens: 0 }, aggregate: { cache_read_input_tokens: 0, cache_creation_input_tokens: 300_000 }, expected: null },
@@ -369,26 +390,10 @@ it.each([
   ...cacheCases.map(cache => ({ mode: 'proxy', name: cache.name, cache, expected: cache.expected })),
 ])('prices the main model and only identifiable completed background requests ($name)',
   async ({ mode, cache, expected }) => {
-    const bridge = new ClaudeSubagentUsageBridge();
-    const queue = createAsyncQueue<AgentEvent>();
-    const sdkSessionId = 'sdk-session';
+    const { bridge, queue, sdkSessionId, ctx } = billingFixture();
     const model = 'child-model';
     const prompt = 'Count the blue flowers';
     bridge.registerTask({ taskId: 'finished-task', parentToolUseId: 'older-tool', prompt, model });
-    const turn: TurnState = {
-      text: '', toolUses: 0, apiCalls: 0, sawCompactBoundary: false, hasEmittedText: false,
-      uiEmittedText: '', pendingApiError: null, interruptRequested: false, generation: 0,
-      interruptGeneration: 0, lastAssistantMsgHadSubstance: true,
-    };
-    const ctx = {
-      rt: newRuntimeState(), turn, tracker: new UsageTracker(),
-      getModel: () => 'main-model', getSdkSessionId: () => sdkSessionId,
-      getEffort: () => 'medium', getPermissionMode: () => 'auto', getLogTitle: () => undefined,
-      log: { debug() {}, info() {}, warn() {} }, onSessionId() {},
-      onSubagentTaskLaunched: (task: Parameters<typeof bridge.registerTask>[0]) =>
-        bridge.registerTask(task),
-      getSubagentTaskUsage: (id: string, sid?: string) => bridge.getTaskUsage(id, sid),
-    };
     const usage = { input_tokens: 100, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
     const childUsage = cache ? { input_tokens: 100, output_tokens: 10, ...cache.start } : {
       ...usage, cache_creation_input_tokens: 50,
@@ -544,6 +549,106 @@ it.each([
     expect(perModel.map(row => [row.model, row.money?.amount ?? null])).toEqual([
       ['main-model', 0.001], [model, expected], ...(mode === 'ambiguous-resume' ? [[model, null]] : []),
     ]);
+  },
+);
+
+it.each(['fresh', 'stale-only', 'late-finish', 'previous-parent', 'reused-id', 'previous-parent-sdk-id', 'unregistered-id', 'same-turn-overlap'])(
+  'charges a resumed background task only for requests belonging to its current invocation (%s)',
+  async mode => {
+    const { bridge, queue, sdkSessionId, ctx } = billingFixture();
+    const model = 'child-model';
+    const prompt = 'Count flowers';
+    const usage = { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const emit = (msg: Parameters<typeof translateSdkMessage>[0]) => translateSdkMessage(msg, queue, ctx);
+    const launch = (parent: string, beforeLaunchReceipt?: () => void) => {
+      emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', id: parent, input: { prompt } }] } });
+      beforeLaunchReceipt?.();
+      emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: parent, content: 'launched' }] },
+        tool_use_result: { isAsync: true, agentId: 'agent-a', resolvedModel: model, prompt: mode === 'unregistered-id' ? undefined : prompt } });
+    };
+    const reserve = (reqId: number, id: string, input = 100) => {
+      createClaudeSubagentUsageRequestTransform(bridge)(requestPayload(model, prompt), {
+        reqId, method: 'POST', url: '/v1/messages',
+        headers: { 'x-claude-code-session-id': sdkSessionId, 'x-claude-code-agent-id': 'agent-a' },
+      });
+      const sink = openObservation(bridge, reqId, model, prompt);
+      return () => {
+        const frames = [
+          { type: 'message_start', message: { id, model, usage: { ...usage, input_tokens: input } } },
+          { type: 'message_delta', usage: { output_tokens: input / 10 } }, { type: 'message_stop' },
+        ];
+        sink?.onData?.(Buffer.from(frames.map(f => `data: ${JSON.stringify(f)}\n\n`).join('')));
+        sink?.onEnd?.();
+      };
+    };
+    const settle = (requests: number) => {
+      emit({ type: 'result', result: 'done', usage: { ...usage, input_tokens: 100 * requests, output_tokens: 10 * requests } });
+      ctx.turn.generation++;
+      ctx.tracker.beginTurn();
+    };
+    launch('first-parent');
+    settle(0);
+
+    // The existing task continues without an Agent/Task call in turn two.
+    const finishOld = reserve(1, 'old');
+    if (mode !== 'late-finish') finishOld();
+    for (const event of [
+      { type: 'message_start', message: { id: 'old', model, usage } },
+      { type: 'message_delta', usage }, { type: 'message_stop' },
+    ]) emit({ type: 'stream_event', parent_tool_use_id: 'first-parent', event });
+    settle(1);
+
+    const overlappingSdkId = mode === 'previous-parent-sdk-id' || mode === 'same-turn-overlap';
+    if (mode === 'same-turn-overlap') launch('earlier-current-parent');
+    launch('new-parent', () => {
+      if (mode === 'unregistered-id') reserve(2, 'old', 200)();
+      if (mode === 'previous-parent' || overlappingSdkId) reserve(2, 'still-running')();
+    });
+    if (mode === 'late-finish') finishOld();
+    if (mode === 'fresh' || mode === 'reused-id') reserve(2, mode === 'reused-id' ? 'old' : 'fresh', mode === 'reused-id' ? 200 : 100)();
+    const currentInput = (overlappingSdkId || mode === 'reused-id' || mode === 'unregistered-id') ? 200 : 100;
+    if (mode === 'unregistered-id') {
+      emit({ type: 'stream_event', parent_tool_use_id: 'new-parent', event: {
+        type: 'message_start', message: { id: 'old', model, usage: { input_tokens: 200 } },
+      } });
+    }
+    if (overlappingSdkId) {
+      for (const event of [
+        { type: 'message_start', message: { id: 'still-running', model, usage: { ...usage, input_tokens: 200 } } },
+        { type: 'message_delta', usage: { output_tokens: 20 } }, { type: 'message_stop' },
+      ]) emit({ type: 'stream_event', parent_tool_use_id: 'new-parent', event });
+    }
+    settle(1 + currentInput / 100);
+    queue.end();
+
+    const charges: Array<{ ids: Array<string | undefined>; amount: number | null }> = [];
+    for await (const event of queue) {
+      if (event.type !== 'done') continue;
+      const done = event.data as { usageSegments?: unknown; usageSegmentsComplete?: boolean };
+      const segments = normalizeTurnUsageSegments(done.usageSegments);
+      if (charges.length === 2 && overlappingSdkId) {
+        expect(segments).toMatchObject([{ inputTokens: 200, outputTokens: 20, complete: false }]);
+      }
+      const delta = charges.length === 2 ? currentInput : charges.length ? 100 : 0;
+      const { perModel } = resolveClaudeTurnCostSinks([{
+        model, inputTokensDelta: delta, outputTokensDelta: delta / 10,
+        cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0, costUsdDelta: 0,
+      }], { supplier: { [model]: {
+        modelId: model, providerId: 'supplier', source: 'user-override', currency: 'USD', approximate: true,
+        inputPerMtok: 20, outputPerMtok: 0,
+      } } }, { providerId: 'supplier', billingRoute: 'provider-api', region: 'global' }, segments, done.usageSegmentsComplete);
+      charges.push({ ids: segments.map(s => s.id), amount: perModel[0]?.money?.amount ?? null });
+    }
+    expect(charges).toHaveLength(3);
+    expect(charges[1]?.amount).toBe(0.002);
+    if (overlappingSdkId || mode === 'unregistered-id') {
+      expect(charges[2]?.amount).toBe(0.004);
+      expect(charges[2]?.ids).toEqual([expect.stringMatching(/^claude:\d+:new-parent$/)]);
+      return;
+    }
+    const fresh = mode === 'fresh' || mode === 'reused-id';
+    expect(charges[2]?.amount).toBe(mode === 'reused-id' ? 0.004 : fresh ? 0.002 : null);
+    expect(charges[2]?.ids).toEqual(fresh ? [`claude:proxy/${mode === 'reused-id' ? 'old' : 'fresh'}:new-parent`] : []);
   },
 );
 

@@ -8,7 +8,6 @@
 
 import type { RequestTransform, ResponseObserver } from '@cindy/anthropic-compat-proxy';
 import type { ClaudeSubagentTaskRegistration, ClaudeSubagentTaskUsage } from '@cindy/maker-core';
-import type { TurnUsageSegment } from '../usage/turnCostCalculator.js';
 import { Buffer } from 'node:buffer';
 
 import {
@@ -106,12 +105,20 @@ function mergeBillingUsage(total: BillingUsage, usage: Record<string, unknown>):
   return true;
 }
 
+type BillingReceipt = NonNullable<ClaudeSubagentTaskUsage['billing']>['segments'][number];
+interface BillingReservation {
+  segments: BillingReceipt[];
+  requestedFast: boolean;
+  reservedAt: number;
+  parentToolUseId?: string;
+}
+
 function recordBillingSegment(
-  segments: Map<string, TurnUsageSegment>,
+  reservation: BillingReservation,
   message: Record<string, unknown> | null,
   usage: BillingUsage,
-  requestedFast: boolean,
 ): void {
+  const { segments, reservedAt, parentToolUseId, requestedFast } = reservation;
   if (!message || typeof message.id !== 'string' || !message.id ||
       typeof message.model !== 'string' || !message.model.trim() ||
       usage.input_tokens === undefined || usage.output_tokens === undefined) return;
@@ -123,9 +130,11 @@ function recordBillingSegment(
   const cache1h = usage.cacheCreate1hTokens ?? 0;
   if (cache1h > cacheCreate) return;
   const id = message.id;
-  if (segments.has(id) || segments.size >= MAX_SEGMENTS_PER_TASK) return;
-  segments.set(id, {
-    id, model: message.model, modelConfirmed: true,
+  // Deduplicate after invocation matching: a stale receipt may share both the
+  // provider ID and the last observed parent with a newly reserved request.
+  if (segments.length >= MAX_SEGMENTS_PER_TASK) return;
+  segments.push({
+    reservedAt, parentToolUseId, id, model: message.model, modelConfirmed: true,
     complete: usage.cache_read_input_tokens !== undefined && usage.cache_creation_input_tokens !== undefined,
     priceVariant: speed === 'fast' || tier === 'priority' ? 'priority' : tier === 'batch' ? 'batch' : 'standard',
     inputTokens: usage.input_tokens, outputTokens: usage.output_tokens,
@@ -139,7 +148,7 @@ export class ClaudeSubagentUsageBridge {
   private readonly tasks = new Map<string, TrackedTask>();
   private readonly reservations = new Map<number, {
     taskId: string;
-    billing?: { segments: Map<string, TurnUsageSegment>; requestedFast: boolean };
+    billing?: BillingReservation;
   }>();
   private readonly activeResponseCountByTaskId = new Map<string, number>();
   // A background request can complete before the SDK sends its async launch receipt.
@@ -147,7 +156,7 @@ export class ClaudeSubagentUsageBridge {
     taskId: string;
     registered: boolean;
     lastRequestAt: number;
-    segments: Map<string, TurnUsageSegment>;
+    segments: BillingReceipt[];
   }>();
   private nextRegistrationOrder = 0;
 
@@ -218,7 +227,7 @@ export class ClaudeSubagentUsageBridge {
     const taskId = selected?.taskId ?? (sdkSessionId ? agentId : undefined);
     if (!taskId) return null;
     if (selected) selected.matchedRequests += 1;
-    let segments: Map<string, TurnUsageSegment> | undefined;
+    let segments: BillingReceipt[] | undefined;
     if (sdkSessionId && agentId) {
       const owner = JSON.stringify([sdkSessionId, agentId]);
       const current = this.segmentsByOwner.get(owner);
@@ -239,7 +248,7 @@ export class ClaudeSubagentUsageBridge {
           }
         }
         if (this.segmentsByOwner.size < MAX_TRACKED_TASKS) {
-          segments = new Map();
+          segments = [];
           this.segmentsByOwner.set(owner, { taskId, segments, registered: Boolean(selected), lastRequestAt: Date.now() });
         }
       }
@@ -247,7 +256,7 @@ export class ClaudeSubagentUsageBridge {
     this.reservations.set(reqId, {
       taskId,
       billing: segments && (body.speed == null || body.speed === 'standard' || body.speed === 'fast')
-        ? { segments, requestedFast: body.speed === 'fast' }
+        ? { segments, requestedFast: body.speed === 'fast', reservedAt: performance.now(), parentToolUseId: selected?.parentToolUseId }
         : undefined,
     });
     return taskId;
@@ -300,7 +309,7 @@ export class ClaudeSubagentUsageBridge {
       const owner = JSON.stringify([sdkSessionId, taskId]);
       const segments = this.segmentsByOwner.get(owner)?.segments;
       this.segmentsByOwner.delete(owner);
-      if (segments?.size) return { totalTokens, billing: { sdkSessionId, segments: [...segments.values()] } };
+      if (segments?.length) return { totalTokens, billing: { sdkSessionId, segments: segments.slice() } };
     }
     return totalTokens > 0 ? { totalTokens } : undefined;
   }
@@ -468,7 +477,7 @@ export function createClaudeSubagentUsageResponseObserver(
       // One HTTP response may carry several SSE cycles for the same message.
       // Only its clean end and the last cycle's stop establish the billing boundary.
       if (billing && (isJson || cycleStopped) && sawInputStart && sawOutputUpdate && !responseError) {
-        recordBillingSegment(billing.segments, message, billingUsage, billing.requestedFast);
+        recordBillingSegment(billing, message, billingUsage);
       }
       done = true;
       bridge.releaseActiveTask(taskId);

@@ -64,7 +64,7 @@ import {
 
 export interface TurnState {
   /** Agent tool calls issued in this turn, paired with their async launch receipt. */
-  subagentTasks?: Map<string, string | undefined>;
+  subagentTasks?: Map<string, { startedAt: number; taskId?: string }>;
   messageIdBySegment?: Map<string, string>;
   text: string;
   toolUses: number;
@@ -395,7 +395,7 @@ function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegme
   const indexBySegment = new Map(sdk.map((segment, index) => [segment.id, index]));
   const added = new Set<string>();
   const soleParentByTask = new Map<string, string | undefined>();
-  for (const [parent, taskId] of ctx.turn.subagentTasks) {
+  for (const [parent, { taskId }] of ctx.turn.subagentTasks) {
     if (!taskId) continue;
     soleParentByTask.set(taskId, soleParentByTask.has(taskId) ? undefined : parent);
   }
@@ -406,16 +406,28 @@ function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegme
     // Reading transfers the whole owner batch, including receipts for resumed calls.
     const billing = ctx.getSubagentTaskUsage?.(taskId, ctx.getSdkSessionId())?.billing;
     if (!billing || billing.sdkSessionId !== ctx.getSdkSessionId()) continue;
-    for (const request of billing.segments) {
+    for (const { reservedAt, parentToolUseId, ...request } of billing.segments) {
       if (!request.id) continue;
       const matches = segmentsByMessageId.get(request.id)?.filter(id =>
-        ctx.turn.subagentTasks?.get(sdkParent(id)) === taskId);
+        ctx.turn.subagentTasks?.get(sdkParent(id))?.taskId === taskId);
       if (matches && matches.length !== 1) continue;
       const sdkId = matches?.[0];
       const receiptKey = sdkId ?? request.id;
       if (added.has(receiptKey)) continue;
       const parent = sdkId ? sdkParent(sdkId) : onlyParent;
-      if (!parent || ctx.turn.subagentTasks.get(parent) !== taskId || (!sdkId && anonymousParents.has(parent))) continue;
+      if (!parent) continue;
+      const invocation = ctx.turn.subagentTasks.get(parent);
+      // HTTP reservations and tool-use observations share the local Host's monotonic clock.
+      // Finishing after a resume cannot move a request that started earlier into this invocation.
+      if (!invocation || invocation.taskId !== taskId || !(reservedAt > invocation.startedAt)) continue;
+      if (parentToolUseId && parentToolUseId !== parent) {
+        // The card registry names only the latest launch. A unique SDK match can
+        // identify an older concurrent call, but cannot move its receipt forward
+        // into a later invocation that happened to reuse the provider ID.
+        const latest = ctx.turn.subagentTasks.get(parentToolUseId);
+        if (!sdkId || latest?.taskId !== taskId || latest.startedAt <= invocation.startedAt) continue;
+      }
+      if (!sdkId && anonymousParents.has(parent)) continue;
       const index = sdkId ? indexBySegment.get(sdkId) : undefined;
       if (index === undefined) {
         merged.push({ ...request, id: `claude:proxy/${request.id}:${parent}` });
@@ -947,9 +959,8 @@ export function translateSdkMessage(
         if (actualModel) {
           ctx.rt.publishedSubagentModelByParentToolUseId.set(parentToolUseId, actualModel);
         }
-        if (subagentResult.agentId && ctx.turn.subagentTasks?.has(parentToolUseId)) {
-          ctx.turn.subagentTasks.set(parentToolUseId, subagentResult.agentId);
-        }
+        const invocation = ctx.turn.subagentTasks?.get(parentToolUseId);
+        if (invocation && subagentResult.agentId) invocation.taskId = subagentResult.agentId;
         if (status === 'running' && prompt && !isTerminal) {
           ctx.onSubagentTaskLaunched?.({ taskId, parentToolUseId, prompt, model: actualModel });
         }
@@ -1754,7 +1765,7 @@ function rememberClaudeToolUseId(
 ): string | null {
   if (typeof toolUseId !== 'string' || toolUseId.length === 0) return null;
   if ((toolName === 'Agent' || toolName === 'Task') && !ctx.turn.subagentTasks?.has(toolUseId)) {
-    (ctx.turn.subagentTasks ??= new Map()).set(toolUseId, undefined);
+    (ctx.turn.subagentTasks ??= new Map()).set(toolUseId, { startedAt: performance.now() });
   }
   const existingName = ctx.rt.toolUseIdToName.get(toolUseId);
   ctx.rt.toolUseIdToName.set(
