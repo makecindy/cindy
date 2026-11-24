@@ -7,6 +7,7 @@ import { useRef, useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { TextLightbox } from '../TextLightbox';
+import { TodoListCard } from '../TodoListCard';
 import { AttachmentCollectionContext } from '../AttachmentCollection';
 
 const state = vi.hoisted(() => ({ line: vi.fn(), parse: vi.fn() }));
@@ -69,6 +70,40 @@ it.each(['before', 'after'])('keeps the preview open when fullscreen exits %s Es
   fireEvent.keyDown(video, { key: 'Escape' });
   await act(async () => { await vi.advanceTimersByTimeAsync(210); });
   expect(close).toHaveBeenCalledOnce();
+});
+
+// PR #12437: a preview opened after pinning the real plan owns the first
+// Escape. Neither component's standalone unit tests exercise listener order.
+it('closes a later text preview before closing a pinned plan with Escape', async () => {
+  vi.useFakeTimers();
+  mockFile('# Preview');
+  function Host() {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <TodoListCard todos={[{ content: 'Check preview', status: 'in_progress' }]} />
+        <button onKeyDown={(event) => {
+          if (event.key === 'Enter') setOpen(true);
+        }}>Open preview</button>
+        {open && <TextLightbox filePath="/preview.md" onClose={() => setOpen(false)} />}
+      </>
+    );
+  }
+  const { container } = render(<Host />);
+  const plan = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+  fireEvent.click(plan);
+  fireEvent.keyDown(screen.getByRole('button', { name: 'Open preview' }), { key: 'Enter' });
+  await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+
+  const preview = screen.getByLabelText('Preview video');
+  act(() => preview.focus());
+  fireEvent.keyDown(preview, { key: 'Escape' });
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(screen.queryByLabelText('Preview video')).toBeNull();
+  expect(plan.getAttribute('aria-expanded')).toBe('true');
+
+  fireEvent.keyDown(document.body, { key: 'Escape' });
+  expect(plan.getAttribute('aria-expanded')).toBe('false');
 });
 
 it('opens the referenced line in a collection and returns focus even after switching files', async () => {
