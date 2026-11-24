@@ -3893,7 +3893,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             cause: err,
           });
         }
-        this.deps.logger.warn('[runner] queued heartbeat setFastMode failed (non-fatal)', err);
+        this.deps.logger.warn?.('[runner] queued heartbeat setFastMode failed (non-fatal)', err);
       }
     }
     // applyProviderId = 裁决后的落地来源:显式来源(通过裁决)或隐式默认被停用时的
