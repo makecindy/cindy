@@ -171,8 +171,8 @@ interface Running {
    * exact input settles the execution. Explicit group stops cancel only that input.
    */
   inTask?: boolean;
-  /** The group's teammates, set when this reply may name another with @ (servers with groupTeammateMentions). */
-  mentionable?: BotGroupMentionMember[];
+  /** Resolve names against the joined roster before restricting wakeups to other bots. */
+  mentionable?: { members: BotGroupMentionMember[]; teammateIds: ReadonlySet<string> };
   /** A request to the group's Cindy (always `inTask`). */
   assistant?: true;
   releaseToolAuthority?: () => void;
@@ -2794,7 +2794,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           pending.payload = terminal.outcome === 'error' ? { detail: botGroupRuntimeFailureDetail(terminal.failureCode ?? 'RUNTIME_ERROR') }
             : { ...(isBotGroupNoReplyText(text) && !files.length ? {} : {
               ...(() => {
-                const named = run.mentionable?.length ? resolveBotGroupMentions(contentText, { members: run.mentionable, allLabels: [] }).botIds.filter(target => target !== run.execution.bot_id) : [];
+                const roster = run.mentionable;
+                const named = roster ? resolveBotGroupMentions(contentText, { members: roster.members, allLabels: [] })
+                  .botIds.filter(target => roster.teammateIds.has(target)) : [];
                 return named.length ? { mentions: named } : {};
               })(),
               content: [{ type: 'text', text: contentText.slice(0, 16000) || '已完成' }, ...files, botGroupProcessCard({ groupId: run.execution.conversation_id, executionId: run.execution.id, sessionId: run.sessionId, clientId: run.clientId, durationMs: run.durationMs, ...(selfDeviceId ? { deviceId: selfDeviceId } : {}) })] }),
@@ -2941,18 +2943,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   function mentionableTeammates(snapshot: Snapshot, speakerId: string) {
     if (!supportsTeammateMentions) return undefined;
-    const bots = snapshot.members.filter(member => member.kind === 'bot' && member.state === 'joined');
-    if (!bots.some(member => member.id !== speakerId)) return undefined;
-    return bots.map(member => ({ botId: member.id, name: memberName(member, snapshot.members),
+    const joined = snapshot.members.filter(member => member.state === 'joined');
+    const teammateIds = new Set(joined.filter(member => member.kind === 'bot' && member.id !== speakerId).map(member => member.id));
+    if (!teammateIds.size) return undefined;
+    const members = joined.map(member => ({ botId: member.id, name: memberName(member, snapshot.members),
       displayName: member.displayName ?? (isAssistant(member) ? undefined : member.name), nickname: member.nickname }));
+    return { members, teammateIds };
   }
 
   function replyMention(source: Message, run: Running) {
-    if (!run.mentionable || source.authorId === run.execution.bot_id) return undefined;
-    const sender = run.mentionable.find(member => member.botId === source.authorId);
+    const roster = run.mentionable;
+    if (!roster?.teammateIds.has(source.authorId)) return undefined;
+    const sender = roster.members.find(member => member.botId === source.authorId);
     if (!sender) return undefined;
     const mention = `@${sender.name}`;
-    const { botIds } = resolveBotGroupMentions(mention, { members: run.mentionable, allLabels: [] });
+    const { botIds } = resolveBotGroupMentions(mention, { members: roster.members, allLabels: [] });
     return botIds.length === 1 && botIds[0] === sender.botId ? mention : undefined;
   }
 
@@ -3017,8 +3022,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         onTaskCreated: created => void postTaskCard(run, s, threadRootId, created),
       });
       run.mentionable = mentionableTeammates(s, execution.bot_id);
-      if (run.mentionable?.length) {
-        const peers = run.mentionable.filter(member => member.botId !== execution.bot_id);
+      if (run.mentionable) {
+        const { members, teammateIds } = run.mentionable;
+        const peers = members.filter(member => teammateIds.has(member.botId));
         background.push(GROUP_TEAMMATE_HANDOFF_GUIDANCE, untrustedJsonBlock({ replyToMention: replyMention(source, run), teammates: peers.map(member => ({ name: member.name, description: localBot(member.botId)?.description?.slice(0, 300) })) }));
       }
       const words = bodyText(source).trim();
@@ -3460,7 +3466,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           : untrustedJsonBlock({ request: run.plan.request_text, steps: run.plan.steps, yourStep: execution.plan_step })] : []),
         ...(run.plan && !talk ? ['Earlier step artifacts, including those produced on another computer, come as attachments. Copy needed files into your working directory before editing.'] : []),
         ...(!run.plan || talk ? ['If you have nothing useful to add, reply with exactly NO_REPLY.'] : []),
-        ...(run.mentionable?.length
+        ...(run.mentionable
           ? ['An @name in your final reply wakes that teammate. When currentRequest.replyToMention is present, use that exact mention to return your result or blocker.', 'Keep your reply concise. Your final response will be posted to the group.']
           : ['Keep your reply concise. Your final response will be posted to the group. Do not call another participant just to reply.']),
       ].join('\n');

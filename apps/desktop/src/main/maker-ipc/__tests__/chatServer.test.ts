@@ -2065,17 +2065,20 @@ describe('Chat Server result delivery and refresh', () => {
   });
 
   // #10717 / bot-group-chat.md §4.1 (unit): settle an ordinary reply against a two-owner roster.
-  // The existing reply cases supply displayName; a snapshot with only name must still resolve a unique short label.
+  // A snapshot with only name must resolve a unique short label after checking all joined members' full names.
   it.each([
     { scenario: 'unique short name', label: 'Luna', resolves: true },
     { scenario: 'duplicate short name', label: 'Luna', duplicate: true },
+    { scenario: 'human full name takes priority', label: 'Luna', humanNamesake: 'joined' },
+    { scenario: 'bot full name with a human namesake', label: 'Luna (Alice)', humanNamesake: 'joined', resolves: true },
+    { scenario: 'departed human does not shadow the short name', label: 'Luna', humanNamesake: 'left', resolves: true },
     { scenario: 'full name with duplicate short names', label: 'Luna (Alice)', duplicate: true, resolves: true },
     { scenario: 'same owner', label: 'Luna', sameOwner: true, resolves: true },
     { scenario: 'departed namesake', label: 'Luna', duplicate: true, departed: true, resolves: true },
     { scenario: 'departed target', label: 'Luna (Alice)', left: true },
     { scenario: 'capability disabled', label: 'Luna', disabled: true },
   ])('settles an ordinary group reply with snapshot names: $scenario', async ({
-    label, resolves, duplicate, sameOwner, departed, left, disabled,
+    label, resolves, duplicate, sameOwner, departed, left, disabled, humanNamesake,
   }) => {
     const alice = '30000000-0000-4000-8000-000000000002';
     const luna = '20000000-0000-4000-8000-000000000002';
@@ -2087,6 +2090,7 @@ describe('Chat Server result delivery and refresh', () => {
       { ...owner, id: alice, name: 'Alice', role: 'member' },
       speaker,
       { ...speaker, id: luna, name: 'Luna', ownerActorId: sameOwner ? selfId : alice, state: left ? 'left' : 'joined' },
+      ...(humanNamesake ? [{ ...owner, id: '30000000-0000-4000-8000-000000000003', name: 'Luna', role: 'member', state: humanNamesake }] : []),
       ...(duplicate ? [{ ...speaker, id: '20000000-0000-4000-8000-000000000003', name: 'Luna',
         state: departed ? 'left' : 'joined' }] : []),
     ];
