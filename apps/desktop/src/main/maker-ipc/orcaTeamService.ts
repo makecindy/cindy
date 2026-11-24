@@ -2747,8 +2747,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       }
     },
   };
-  // 闸门判定入口交给引擎侧的 Stop hook：一个会话一个否决点,
-  // 判定逻辑与宿主 settle 完全共用,不重复实现。
+  // 闸门判定入口交给引擎侧 Stop hook 的转发层；hook 绑的是 Cindy session id，
+  // 与宿主 settle 共用同一份判定，一个会话一个否决点。
   setOrcaTurnGateEvaluator((sessionId, finalText) =>
     evaluateLeadTurnGateFor(deps, {
       leadSessionId: sessionId,
