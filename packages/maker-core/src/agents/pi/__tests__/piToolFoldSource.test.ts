@@ -2131,6 +2131,22 @@ describe('cindy-tool-fold extension source', () => {
     expect(said).not.toMatch(/no longer available|not retained|Cannot page/);
   });
 
+  it('does not treat a foreign numeric note as our marker when the call id is one letter', async () => {
+    // 身份判定用子串会误认：调用 id 是 "a" 时，几乎任何一句英文都含这个字母。
+    // 误认的代价是原文被当成预览丢掉，之后取回只剩拒绝。
+    const { context, tool } = loadExtension({
+      CINDY_PI_TOOL_FOLD_INGEST_LIMIT: '4000',
+      CINDY_PI_TOOL_FOLD_INGEST_KEEP: '500',
+    });
+    const id = 'a';
+    const body = 'x'.repeat(60000) + '\n[truncated 100 of 200 chars; clipped by the upstream tool]';
+    projection(context, [call(id, 'bash', { command: 'cat log' }), result(id, 'bash', body)]);
+    const read = await tool.execute('r1', { call_id: id });
+    const said = String(read.content![0].text);
+    expect(said).toContain('clipped by the upstream tool');
+    expect(said).not.toMatch(/no longer available|not retained|Cannot page/);
+  });
+
   it('never tells the model to repeat a call whose output it cannot return', () => {
     // 扩展不知道被折的命令是否幂等：重复一次 rm 或 push 就是第二次副作用。
     // 取回失败只陈述事实（已经执行过），并要求先核实状态，不劝「重跑」。

@@ -215,7 +215,9 @@ export default function (pi) {
     var head = /\[truncated (\d+) of (\d+) chars; /.exec(tail);
     if (!head) return false;
     if (Number(head[2]) <= Number(head[1])) return false;
-    return tail.indexOf(key) >= 0;
+    // 身份按完整 token 认：自己写的标记要么把 id 放在引号里，要么降级成「call id <名字>」。
+    // 子串包含会把短 id（例如 "a"）当成任何含这个字母的陌生标记，原文就被当预览丢掉。
+    return tail.indexOf('"' + key + '"') >= 0 || tail.indexOf('call id ' + oneLine(key)) >= 0;
   }
 
   // Pins: callId -> { ts, chars }. ts is a monotonic recovery clock so the eviction
