@@ -9175,7 +9175,8 @@
       "updateAll": {
         "title": "Tout mettre à jour · {{count}} plugins",
         "collapseDiff": "Réduire",
-        "description": "Les mises à jour qui n'ajoutent pas d'autorisations s'effectuent normalement en silence ; celles qui en requièrent davantage vous sont soumises une par une. Utilisez cette boîte de dialogue pour relancer les mises à jour ignorées ou en échec.",
+        "description": "Les mises à jour ordinaires sont automatiques. Les demandes de permissions supplémentaires sont regroupées.",
+        "chooseUpdates": "Sélectionnez les extensions auxquelles accorder les permissions affichées, puis confirmez. Les autres seront ignorées.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "En file d'attente",
         "statusInstalling": "Mise à jour…",

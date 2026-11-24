@@ -9058,7 +9058,8 @@
       "updateAll": {
         "title": "全部更新 · {{count}} 个插件",
         "collapseDiff": "收起",
-        "description": "不新增权限的更新通常会静默完成；需要更多权限的更新会逐个请你确认。可在此重试已跳过或失败的更新。",
+        "description": "普通更新会自动完成。需要新增权限的插件会集中列出。",
+        "chooseUpdates": "勾选允许新增权限的插件，再确认更新。未勾选的插件将跳过。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "排队中",
         "statusInstalling": "更新中…",

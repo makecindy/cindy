@@ -9044,7 +9044,8 @@
       "updateAll": {
         "title": "尽更新 · 法器 {{count}} 件",
         "collapseDiff": "收",
-        "description": "权柄未增之更新，通常默然而毕；新版权柄增多者，将逐一请君确认。此处亦可重试因忙略过或运行未成之更新。",
+        "description": "常更自毕，增权者并列。",
+        "chooseUpdates": "择所许增权之插件而确认，未择者略之。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "候次",
         "statusInstalling": "方更新…",

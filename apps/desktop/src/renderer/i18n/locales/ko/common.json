@@ -9058,7 +9058,8 @@
       "updateAll": {
         "title": "모두 업데이트 · {{count}}개",
         "collapseDiff": "접기",
-        "description": "권한이 늘지 않는 업데이트는 보통 알림 없이 실행됩니다. 권한이 늘어나는 업데이트는 하나씩 확인받습니다. 이 화면에서 건너뛰거나 실패한 업데이트도 다시 시도할 수 있습니다.",
+        "description": "일반 업데이트는 자동으로 진행됩니다. 추가 권한이 필요한 플러그인은 함께 표시됩니다.",
+        "chooseUpdates": "표시된 권한을 허용할 플러그인을 선택하고 확인하세요. 선택하지 않은 업데이트는 건너뜁니다.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "대기 중",
         "statusInstalling": "업데이트 중…",
