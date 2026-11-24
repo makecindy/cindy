@@ -78,6 +78,7 @@ interface RegionState {
   timer: ReturnType<typeof setTimeout> | null;
   /** 连续失败次数，用于退避重试(网络或对方区域暂时不可用时不让分享整段消失)。 */
   failures: number;
+  lastFailureWasNetwork: boolean;
   loaded: boolean;
   listConfirmed: boolean;
   /** Request start of the last successful authoritative list for this region. */
@@ -462,7 +463,7 @@ function scheduleRefresh(rt: Runtime, state: RegionState): void {
 }
 
 function initialRegionState(region: Region, loaded = false): RegionState {
-  return { region, apiBase: '', credential: null, expiresAt: 0, shares: [], client: null, refreshing: null, refreshingRevision: 0, timer: null, failures: 0, loaded, viewAnchor: null, requestRevision: 0,
+  return { region, apiBase: '', credential: null, expiresAt: 0, shares: [], client: null, refreshing: null, refreshingRevision: 0, timer: null, failures: 0, lastFailureWasNetwork: false, loaded, viewAnchor: null, requestRevision: 0,
     listConfirmed: false };
 }
 
@@ -549,6 +550,8 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
           rt.events.changed();
         }
         // 退避重试：1 → 2 → 4 … 最多 30 分钟；关闭跨区开关等确定性错误同样按退避慢慢重试。
+        target.lastFailureWasNetwork = error instanceof Error
+          && error.message.startsWith('[DEVICE_LINK_NOT_CONNECTED]');
         target.failures += 1;
         if (target.timer) clearTimeout(target.timer);
         target.timer = setTimeout(() => { void refreshRegion(rt, region); }, Math.min(30 * 60_000, 60_000 * 2 ** Math.min(target.failures - 1, 5)));
@@ -618,6 +621,17 @@ export function restoreCrossRegionReceivedForRemoteGroup(shareIds: readonly stri
   })().finally(() => { rt.groupRecovery = null; });
   rt.groupRecovery = run;
   return run;
+}
+
+/** A known cross-region share may try once after its first transport failure. */
+export function retryCrossRegionReceivedForShare(shareId: string): Promise<void> | undefined {
+  const rt = runtime;
+  if (!rt || !current(rt)) return;
+  const state = stateForShare(shareId);
+  if (!state || state.listConfirmed || !state.shares.some(share => share.shareId === shareId && share.status === 'active')) return;
+  if (state.refreshing) return state.refreshing;
+  // A rate limit, refusal, or repeated failure keeps the existing backoff.
+  if (state.lastFailureWasNetwork && state.failures === 1) return refreshRegion(rt, state.region);
 }
 
 /** Missing shares are not removed until account discovery has answered successfully. */
