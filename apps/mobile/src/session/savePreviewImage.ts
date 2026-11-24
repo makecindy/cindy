@@ -34,8 +34,8 @@ export async function savePreviewImage(source: string, mimeHint?: string, title?
       sniffImageMimeFromBase64(head),
       inline?.[1]?.toLowerCase(),
       mimeHint,
-      imageMimeForUriFallback(title ?? ''),
       imageMimeForUriFallback(source),
+      imageMimeForUriFallback(title ?? ''),
     ].find((candidate) => candidate?.startsWith('image/'));
     if (!mime || !copy.size) throw new Error('UNKNOWN_IMAGE_FORMAT');
     const ext = extOfMime(mime);

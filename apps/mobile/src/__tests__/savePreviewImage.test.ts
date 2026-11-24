@@ -33,10 +33,11 @@ vi.mock('@/session/remoteMediaDiskCacheExpo', () => ({ copyRemoteFile: async () 
 
 // Unit regression for PR #12410. A Markdown image may supply only its URL, with
 // no MIME hint. Toolbar tests mock the export helper, so they cannot catch a
-// missing original-file extension at the native gallery boundary.
-it.each(['avif', 'heic', 'heif'])('exports a Markdown image with the .%s extension', async (extension) => {
+// missing original-file extension at the native gallery boundary. An alt label
+// like preview.png must not override the known source URL extension.
+it.each(['avif', 'heic', 'heif', 'bmp'])('uses the Markdown image URL extension .%s ahead of its display title', async (extension) => {
   native.createAsset.mockClear();
-  await expect(savePreviewImage(`https://example.invalid/photo.${extension}?signature=test`))
+  await expect(savePreviewImage(`https://example.invalid/photo.${extension}?signature=test`, undefined, 'preview.png'))
     .resolves.toBe(true);
   expect(native.createAsset).toHaveBeenCalledExactlyOnceWith(
     expect.stringMatching(new RegExp(`/Image-\\d+\\.${extension}$`)),
