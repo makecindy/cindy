@@ -25,6 +25,8 @@ import {
 import { authorizeSharedTaskOperation } from '@cindy/device-link';
 import type { SharedTaskPeerCapture } from '../../device-link/sharedTaskDispatch';
 import { createSharedTaskSettingGuard } from '../sharedTaskSetting';
+import { isTrustedAppRendererEventForLocation } from '../../security/trustedAppRenderer';
+import { throwIpcError } from '../../utils/ipcValidate';
 
 function makeRow(overrides: Partial<AgentSwitchSessionRow> = {}): AgentSwitchSessionRow {
   return {
@@ -87,6 +89,52 @@ const validParams = {
   model: 'gpt-5.5',
   providerId: null,
 };
+
+describe('manual SWITCH_SESSION_AGENT takeover', () => {
+  // Unit, PR #12422: the registered IPC handler must retire a reconnect before
+  // it can run while the picker waits on the send lock. Existing validation
+  // tests never admitted a request. Either valid selection alone is enough.
+  it.each([
+    { selection: 'engine-only', options: undefined },
+    { selection: 'computer', options: { agentDeviceId: 'another-computer' } },
+  ])('notifies recovery before waiting for the send lock for a manual $selection selection', async ({ options }) => {
+    const order: string[] = [];
+    const afterLock = new Error('locked route application');
+    const withSessionLock = vi.fn(async () => { order.push('lock'); throw afterLock; });
+    const { deps } = makeDeps({ withSessionLock });
+    const notify = vi.fn(() => { order.push('takeover'); });
+    const ipc = new IpcHarness();
+    registerMakerSessionAgentSwitchHandler(ipc, deps, notify);
+
+    await expect(ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', 'gpt-5.5', null,
+      undefined, undefined, options)).rejects.toBe(afterLock);
+
+    expect(notify).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 's1');
+    expect(withSessionLock).toHaveBeenCalledExactlyOnceWith('s1', expect.any(Function));
+    expect(order).toEqual(['takeover', 'lock']);
+  });
+
+  // Unit, PR #12422: an otherwise valid local invoke without a trusted frame
+  // must fail at the Desktop sender gate, before cancelling recovery or locking.
+  it('rejects a frame-less local caller before it can supersede recovery', async () => {
+    const withSessionLock = vi.fn(async () => { throw new Error('unexpected lock'); });
+    const { deps } = makeDeps({ withSessionLock });
+    const noteUserAction = vi.fn();
+    const ipc = new IpcHarness();
+    registerMakerSessionAgentSwitchHandler(ipc, deps, (event, sessionId) => {
+      if (!isTrustedAppRendererEventForLocation(event as Parameters<typeof isTrustedAppRendererEventForLocation>[0],
+        { devServerUrl: null, packagedRendererFile: '/app/index.html' })) {
+        throwIpcError('PERMISSION_DENIED', 'untrusted sender');
+      }
+      noteUserAction(sessionId);
+    });
+
+    await expect(ipc.invokeFrom(42, MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', 'gpt-5.5', null))
+      .rejects.toThrow('PERMISSION_DENIED');
+    expect(noteUserAction).not.toHaveBeenCalled();
+    expect(withSessionLock).not.toHaveBeenCalled();
+  });
+});
 
 // #10893, unit: same-device group members are distinct provider connections.
 // The old same-engine no-op retained the old provider/native session. Exercise
@@ -678,6 +726,8 @@ describe('same-engine selection at send', () => {
   // A guest or malformed request must leave recovery untouched, with or without a location.
   it('rejects unauthorized or malformed switch requests before notifying recovery', async () => {
     const h = sharedSelectionHarness();
+    const withSessionLock = vi.fn(async () => { throw new Error('unexpected lock'); });
+    h.deps.withSessionLock = withSessionLock;
     const ipc = new IpcHarness();
     const onUserSwitchRequested = vi.fn();
     registerMakerSessionAgentSwitchHandler(ipc, h.deps, onUserSwitchRequested);
@@ -692,6 +742,7 @@ describe('same-engine selection at send', () => {
     await expect(select(undefined, '')).rejects.toThrow('INVALID_PARAMS');
     expect(h.context.sharedTaskSetting.admitted).toBe(false);
     expect(onUserSwitchRequested).not.toHaveBeenCalled();
+    expect(withSessionLock).not.toHaveBeenCalled();
   });
 
   it.each(['revoked', 'other-task', 'during-preflight'] as const)(
