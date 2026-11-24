@@ -60,9 +60,21 @@ export default {
       about: 'Controller requires Agent-Net: card and batch explain why it cannot switch a peer to Device Link',
       storage: V2_ON,
     },
+    'removed-rejoin': {
+      about: 'This computer was removed from the account on the official network: its card explains it and offers Rejoin, which runs once',
+      storage: V2_ON,
+    },
   },
   async check(page, ui) {
     await page.getByRole('switch', { name: await ui.t('settings.remoteControl.v2.switch.title') }).waitFor();
+    if (ui.case === 'removed-rejoin') {
+      // Removed from the account, this computer is off the device list; its own card still shows the removal.
+      await page.getByText(await ui.t('settings.devices.rejoin.hint'), { exact: true }).waitFor({ timeout: 3000 });
+      await ui.capture('removed');
+      await page.getByRole('button', { name: await ui.t('settings.devices.rejoin.action'), exact: true }).click();
+      await page.waitForFunction(() => window.__rejoinCalls === 1);
+      return;
+    }
     if (ui.case === 'rename-self') {
       const self = page.locator('[data-device-id="self"]');
       await self.getByText('Office desktop', { exact: true }).waitFor({ timeout: 3000 });

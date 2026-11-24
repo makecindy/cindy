@@ -57,6 +57,7 @@ export interface PortableSocketOptions {
   /** Which directory members to accept from the start (see `AgentNetSocket.restrictPeers`). */
   peerRule?: PeerRule;
   onDirectory?(directory: DeviceView[]): void;
+  onRelayReplaced?(): void;
   onDelegationRequests?(requests: DelegationRequest[]): void;
   onDelegations?(delegations: Delegation[]): void;
   onPathChanged?(deviceId: string, path: 'direct' | 'relay' | null): void;

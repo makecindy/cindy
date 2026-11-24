@@ -6,7 +6,7 @@ import {
   SHARED_TASK_RELAY_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY,
   type Envelope, type HelloPayload, type PresenceSnapshot,
 } from '@cindy/device-link-protocol';
-import type { WsLike } from '@cindy/device-link';
+import { computeDuplicateIdentityCooldownMs, type WsLike } from '@cindy/device-link';
 import { CERT_LIFETIME_MS, delegationEndpointCertificate, delegationVisibleTo, type Delegation, type DeviceView } from '@cindy/agent-net-protocol';
 import { frameMatchesDelegation, scopedFrame, delegatedPeerKey, delegatedPeerTarget, type ScopedPeerTarget } from './scopedRoutes.js';
 import { AGENT_NET_SESSION_V2, DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PathPreference, type PeerChannel, type RelayRoute, type RosterEntry, type SessionWire, type Transport } from './types.js';
@@ -147,6 +147,9 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private reconnect: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   private retryMs = 500;
+  private duplicateIdentityCooldown = false;
+  private replacementStreak = 0;
+  private replacedReconnectUntil = 0;
   private rosterValidUntil = 0;
   private lan: SocketDiscovery | null = null;
   private lanCandidates = new Map<string, { address: string; port: number }>();
@@ -736,6 +739,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   /** Connects the relay now instead of after the backoff; without `force` an attempt already in flight is kept. */
   private reconnectRelayNow(force: boolean): void {
     this.resendWhenRelayBack = true;
+    if (Date.now() < this.replacedReconnectUntil) return;
     if (!force && !this.reconnect) return;
     if (this.reconnect) { clearTimeout(this.reconnect); this.reconnect = null; }
     const attempt = this.connectRelay(), generation = this.generation;
@@ -746,6 +750,13 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   relayRoute(): RelayRoute | null { return this.closed ? null : this.transport?.relayRoute?.() ?? null; }
   /** Whether the relay WebSocket is currently up; false while offline or after an upgrade rejection fell back to cached directory. */
   relayConnected(): boolean { return !this.closed && this.uplink !== null; }
+  setDuplicateIdentityCooldown(active: boolean): void {
+    this.duplicateIdentityCooldown = active;
+    if (!active) {
+      this.replacementStreak = 0;
+      this.replacedReconnectUntil = 0;
+    }
+  }
   /** Resolves once the background initial relay connection attempt (`deferRelay`) finishes. */
   whenInitialRelaySettled(): Promise<void> { return this.openingRelay ?? Promise.resolve(); }
   /**
@@ -780,6 +791,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (this.closed || generation !== this.generation) { uplink.close(); return; }
     this.openingRelay = null;
     this.uplink = uplink; this.retryMs = 500;
+    this.replacedReconnectUntil = 0;
+    const connectedAt = Date.now();
     if (this.resendWhenRelayBack) { this.resendWhenRelayBack = false; this.transport?.networkChanged?.(); }
     this.updateDirectory(uplink.devices, true, uplink.delegations ?? []);
     this.options.onDelegationRequests?.(uplink.delegationRequests ?? []);
@@ -792,6 +805,14 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       if (this.uplink !== uplink || this.closed) return;
       this.uplink = null;
       if ([4410, 4401, 4403].includes(code)) { this.closeOnIdentityRefusal('AGENT_NET_CLOSED_' + code); return; }
+      if (code === 4409) {
+        this.options.onRelayReplaced?.();
+        if (this.duplicateIdentityCooldown) {
+          if (Date.now() - connectedAt >= 5 * 60_000) this.replacementStreak = 0;
+          const floor = computeDuplicateIdentityCooldownMs({ streak: ++this.replacementStreak, baseMs: 5_000, maxMs: 60_000 });
+          this.replacedReconnectUntil = Date.now() + Math.round(floor * (0.7 + Math.random() * 0.3));
+        }
+      }
       this.acknowledgeHello();
       // Existing direct connections remain alive; loss of one relay does not tear down the app socket.
       this.scheduleReconnect();
@@ -817,7 +838,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       // Another attempt (a network change) may have connected meanwhile.
       if (this.uplink) return;
       void this.connectRelay().catch(() => this.scheduleReconnect());
-    }, this.retryMs);
+    }, Math.max(this.retryMs, this.replacedReconnectUntil - Date.now()));
     unrefTimer(this.reconnect); this.retryMs = Math.min(15_000, this.retryMs * 2);
   }
   send(text: string): void {

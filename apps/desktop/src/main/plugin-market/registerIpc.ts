@@ -176,6 +176,19 @@ export function registerPluginMarketIpc(): void {
     const query = requireObject(input, 'query');
     return invokePluginMarket(() => service().query(query));
   });
+  const activeProviderPages = new WeakMap<Electron.WebContents, symbol>();
+  ipcMain.handle('plugin-market:cancel-official-model-plugins', event => {
+    assertTrustedAppRendererEvent(event);
+    activeProviderPages.delete(event.sender);
+  });
+  ipcMain.handle('plugin-market:official-model-plugins', (event, cursor: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const sender = event.sender;
+    const page = Symbol();
+    activeProviderPages.set(sender, page);
+    return invokePluginMarket(() => service().officialModelPlugins(cursor, () =>
+      !sender.isDestroyed() && activeProviderPages.get(sender) === page));
+  });
   ipcMain.handle('plugin-market:recommendations', (event, pluginIds?: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() => service().recommendations(pluginIds));

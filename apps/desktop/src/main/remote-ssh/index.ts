@@ -861,6 +861,7 @@ type RendererHostConfig = Pick<HostConfig,
   | 'authMethod'
   | 'source'
   | 'managedByCindy'
+  | 'managedAliasConflict'
 > & {
   /** Renderer only needs to know whether an owned identity exists. */
   identityFileConfigured: boolean;
@@ -903,6 +904,7 @@ function toRendererHostConfig(config: HostConfig): RendererHostConfig {
       : {}),
     source: config.source,
     managedByCindy: config.managedByCindy,
+    ...(config.managedAliasConflict ? { managedAliasConflict: true } : {}),
   };
 }
 

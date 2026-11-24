@@ -104,7 +104,7 @@ function RichSendAction({ node, text, receiptKey, ready, style }: {
   const sender = useSessionQuickSend();
   const status = useSyncExternalStore(submissions.subscribe, () => submissions.status(receiptKey, text));
   const disabled = !ready || !sender || !text || status === 'sending' || status === 'sent';
-  return <div className="rich-answer-layout rich-answer-stack" style={style}>
+  return <div className="rich-answer-layout rich-answer-stack rich-answer-send" style={style}>
     {text && <p className="rich-answer-caption" style={{ whiteSpace: 'pre-wrap' }}>{text}</p>}
     <Button type="button" variant="secondary" disabled={disabled}
       onClick={() => { if (!disabled) void submissions.submit(receiptKey, text, value => sender.send(value, { literalText: true, independent: true })); }}>
