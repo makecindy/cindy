@@ -62,6 +62,23 @@ describe('model visibility override cleanup', () => {
     expect(manageAppPreferences).not.toHaveBeenCalled();
   });
 
+  // Codex P1: the override map joins its parts with `:`, and provider/model ids may contain
+  // `:` too (`custom:xai`). A stored `pi:custom:xai:foo` is also spelled by the different
+  // target `(pi, custom, xai:foo)`, so "the key exists" cannot prove ownership.
+  it('refuses an orphan key another catalog entry spells the same way', async () => {
+    configureModelSettingsActions({
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      list: async () => ({ providers: [{ id: 'custom:xai', models: { pi: [{ id: 'foo', defaultEnabled: true }] } }],
+        modelVisibilityOverrides: { 'pi:custom:xai:foo': false } }),
+    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
+
+    // (pi, custom, xai:foo) reads the same key but is not the model that owns it.
+    await expect(manageAppModels({ operation: 'set',
+      target: { providerId: 'custom', agent: 'pi', modelId: 'xai:foo' },
+      change: { setting: 'visible', value: null } }, async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
+    expect(manageAppPreferences).not.toHaveBeenCalled();
+  });
+
   it('keeps refusing an explicit on/off choice for a model outside the catalog', async () => {
     await expect(manageAppModels({ operation: 'set', target: orphan, change: { setting: 'visible', value: true } },
       async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');

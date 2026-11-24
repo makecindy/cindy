@@ -10,6 +10,41 @@ import { mediaGuideModel } from '../cindy-brain/customMediaConnection.js';
 
 type Actions = ReturnType<typeof registerProviderHandlers>;
 let actions: Actions | undefined;
+/** 目录形状：对话模型按 agent 分列，媒体模型列在 provider 上。 */
+type CatalogProviders = Awaited<ReturnType<Actions['list']>>['providers'];
+/** Same shape the catalog uses for visibility overrides. */
+function visibilityKey(target: { agent: string; providerId: string; modelId: string }): string {
+  return `${target.agent}:${target.providerId}:${target.modelId}`;
+}
+
+/**
+ * Whether this target is the only catalog entry whose parts spell `visibilityKey(target)`.
+ * The flat key is ambiguous when an id contains `:`, so a typo could otherwise clear
+ * another model's stored preference.
+ */
+function visibilityKeyIsUnambiguous(
+  providers: CatalogProviders,
+  target: { agent: string; providerId: string; modelId: string },
+): boolean {
+  const wanted = visibilityKey(target);
+  for (const provider of providers) {
+    const lists: Array<[string, readonly { id: string }[]]> = [
+      ...Object.entries(provider.models).map(([agent, list]) => [agent, list ?? []] as [string, readonly { id: string }[]]),
+      ...(provider.imageModels ? [['', provider.imageModels] as [string, readonly { id: string }[]]] : []),
+      ...(provider.videoModels ? [['', provider.videoModels] as [string, readonly { id: string }[]]] : []),
+    ];
+    for (const [agent, list] of lists) {
+      for (const entry of list) {
+        if (agent === '') continue; // media overrides are refused above; not this switch's key
+        if (`${agent}:${provider.id}:${entry.id}` !== wanted) continue;
+        if (agent === target.agent && provider.id === target.providerId && entry.id === target.modelId) continue;
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 export function configureModelSettingsActions(value: Actions): void { actions = value; }
 
 /** These are shared domain operations. IPC still performs its sender checks separately. */
@@ -127,7 +162,15 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
         // reset in `followCatalogKeys` and nothing removes such a key again, so a typo
         // would accumulate in local storage forever. Only a stored override may be cleared
         // without a catalog entry.
-        if (!model && catalog.modelVisibilityOverrides[`${target.agent}:${target.providerId}:${target.modelId}`] === undefined) {
+        if (!model && catalog.modelVisibilityOverrides[visibilityKey(target)] === undefined) {
+          throw new Error('MODEL_NOT_IN_CATALOG');
+        }
+        // The override map is flat and joins its parts with `:`, while provider and model
+        // ids may contain `:` themselves (`custom:xai`, `xai:foo`). A stored `pi:custom:xai:foo`
+        // is also produced by the different target `(pi, custom, xai:foo)`, so "the key
+        // exists" cannot prove this target owns it: refuse keys any other catalog entry
+        // would spell the same way.
+        if (!model && !visibilityKeyIsUnambiguous(catalog.providers, target)) {
           throw new Error('MODEL_NOT_IN_CATALOG');
         }
         await guard();
