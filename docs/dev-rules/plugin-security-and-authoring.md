@@ -348,6 +348,19 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   Host receipt 的 `approvedHarnesses`（只来自确认里显示过的这一行；服务端默认安装与随包种子视为已批准），
   旧 receipt 缺字段 = 未批准但插件照常可用，Host 认识该字段之前声明的引擎不随升级静默生效，下一次更新按新增
   权限复核；已装快照里不合新规则的声明只丢弃，不让插件失效。见下文[任务执行引擎](#任务执行引擎harnesses新增能力尚未发布)。
+- `fileOpener`（插件接管打开的文件类型，2026-11-24，未发布）是 v3 顶层字段：`{ extensions: [".docx", …] }`，
+  1–32 个小写带点扩展名，必须同时声明 `node`（插件会拿到用户所开文件的宿主绝对路径，与 `pick` 同一边界）。
+  解析器只在协议包 `pluginFileOpener.ts` 一份，Desktop 镜像复用；已存 Release 与已装快照里不合规的历史值只丢弃。
+  安装／更新确认单列 `file-opener` 权限项并列出扩展名，新增该能力或扩展名即「权限变多」；市场真实包的扩展名只能
+  是审核清单的子集。不另存 receipt 分项批准（同 `mcpApps.host` 声明：整包批准有效且已启用即生效）；
+  用户在插件详情「配置」区可关掉，偏好存 owner 作用域的 `plugin-file-openers.json`，只表示「不再交给它」，不是批准事实。
+  运行时只在 Main 的 `shell:open-path` 入口、经 `assertTrustedAppRendererEvent` 与 `isPathAllowed` 之后生效：
+  仅本机原件（排除 `cindy-media://`、远程文件缓存与聊天附件缓存、文件夹）会以 `open-file` 事件交给第一个已启用、
+  声明 node 与该扩展名、未被用户关掉的插件；回执 `file-open-result` 只认被问的同一实例（发送方由 Main 反查），
+  15 秒内未回执、回 `ok:false`、投递失败均回落系统默认应用，插件不可用不能让文件打不开。右键「打开方式」、
+  媒体「用默认应用打开」与远程／手机端不经此路径。实现见 `cindy-brain/fileOpenerSlot.ts`、`fileOpenerPrefs.ts`，
+  作者手册 §4.25（`plugin-file-opener.md`）；回归见协议包 `manifest.test.ts`、Desktop `ghost.test.ts`、
+  `fileOpenerSlot.test.ts` 与 `shellOpenPath.test.ts`。
 - **Agent 在途调用不需要重复登记具体操作。** 插件工具是否执行由当前
   `ghost_call` 的 Cindy Agent 授权决定；普通网络和当前工作目录操作使用主机
   下发且仍在途的 `callId`。随包代码与 CLI 继续使用已有 Node 工作进程，顶层

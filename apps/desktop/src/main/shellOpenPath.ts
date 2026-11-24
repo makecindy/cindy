@@ -27,3 +27,28 @@ export function resolveShellOpenPathTarget(
   if (target.startsWith('cindy-media://')) return cindyMediaBlobStore.resolveSafe(target).absPath;
   return null;
 }
+
+/**
+ * 只有用户本机的原件才交给声明了 `fileOpener` 的插件打开。Cindy 媒体库里的文件和其它
+ * 电脑文件的缓存副本(远程文件缓存、聊天附件缓存)照旧交给系统默认应用:插件改了副本,
+ * 改动回不到原来那台电脑。
+ */
+export function isLocalOriginalForPluginOpen(
+  input: string,
+  resolvedPath: string,
+  managedCopyRoots: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (input.startsWith('cindy-media://')) return false;
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const fold = (value: string) => {
+    const normalized = pathApi.resolve(value);
+    return platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+  const target = fold(resolvedPath);
+  return !managedCopyRoots.some((root) => {
+    if (!root) return false;
+    const base = fold(root);
+    return target === base || target.startsWith(base.endsWith(pathApi.sep) ? base : base + pathApi.sep);
+  });
+}

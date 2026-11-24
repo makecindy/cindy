@@ -382,6 +382,8 @@ import { readRefImagesWithinBudget } from './refImageBudget.js';
 import { resolveCachedGhostRepoRoot, type GhostRepoRootCacheEntry } from './repoRoot.js';
 import { takePendingCindyInstall } from './openFileInstall.js';
 import { GhostRuntime } from './runtime/GhostRuntime.js';
+import { GhostFileOpenerSlot, type GhostFileOpenOutcome } from './fileOpenerSlot.js';
+import { isPluginFileOpenerEnabled, setPluginFileOpenerEnabled } from './fileOpenerPrefs.js';
 import {
   electronSandboxAdapter,
   ensureGhostProtocolRegistered,
@@ -1365,6 +1367,33 @@ export function findAvailableGhostForAuthorization(
 
 export function listAvailableGhostsForAuthorization(): InstalledGhost[] {
   return availableGhosts();
+}
+
+let fileOpenerSlotSingleton: GhostFileOpenerSlot | null = null;
+function getGhostFileOpenerSlot(): GhostFileOpenerSlot {
+  if (!fileOpenerSlotSingleton) {
+    fileOpenerSlotSingleton = new GhostFileOpenerSlot({
+      listGhosts: availableGhosts,
+      instanceId: installedGhostStoragePart,
+      isEnabledByUser: isPluginFileOpenerEnabled,
+      isRunning: (id) => getGhostRuntime().stateOf(id) === 'running',
+      wake: async (ghost) => {
+        const r = await getGhostRuntime().spawn(ghost);
+        if (!r.ok) throw new Error(r.reason);
+      },
+      send: (id, payload) => sendToGhostLogic(id, payload),
+      log,
+    });
+  }
+  return fileOpenerSlotSingleton;
+}
+
+/**
+ * 「用系统默认应用打开」前先问声明了该扩展名的插件(`fileOpener`)。未处理时调用方照常
+ * 交给系统默认应用;调用方负责只传本机原件(不传其它电脑文件的缓存副本)。
+ */
+export function openFileWithPluginFileOpener(filePath: string): Promise<GhostFileOpenOutcome> {
+  return getGhostFileOpenerSlot().open(filePath);
 }
 
 /** Discovery may yield, but never carries an old owner's results into a new account. */
@@ -10378,6 +10407,11 @@ export function registerGhostIpc(): void {
       getGhostSubscriptionGateway().handleVerdict(id, payload);
       return { ok: true };
     }
+    if (type === 'file-open-result') {
+      // open-file 回执:只认被问的同一实例,冒名/过期静默丢,恒回 ok。
+      getGhostFileOpenerSlot().handleResult(id, payload);
+      return { ok: true };
+    }
     // notify = 系统提示(notify 槽):资格审/净化/限速在 notifySlot,
     // invoke 返回值即结构化结果(失败带人话原因,供意识作者调试)。
     if (type === 'notify') {
@@ -10977,6 +11011,34 @@ export function registerGhostIpc(): void {
       return { config: writePluginTaskConfig(installedGhostStoragePart(ghost), config) };
     }
     finally { release(); }
+  });
+
+  // 「用插件打开文件」开关:声明 fileOpener 的插件默认接管,这里只记用户关掉的实例。
+  ipcMain.handle('ghosts:file-opener:get', (event, ghostId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
+      throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
+    }
+    const ghost = findGhostForInstanceId(ghostId);
+    if (!ghost?.manifest.fileOpener) return { declared: false, enabled: false };
+    return { declared: true, enabled: isPluginFileOpenerEnabled(installedGhostStoragePart(ghost)) };
+  });
+  ipcMain.handle('ghosts:file-opener:set', (event, ghostId: unknown, enabled: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const owner = captureGhostMutationOwner();
+    if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
+      throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
+    }
+    if (typeof enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
+    const release = beginGhostMutation(owner);
+    try {
+      const ghost = findGhostForInstanceId(ghostId);
+      if (!ghost?.manifest.fileOpener) throwIpcError('NOT_FOUND', '插件实例已变化，请刷新后重试');
+      setPluginFileOpenerEnabled(installedGhostStoragePart(ghost), enabled);
+      return { declared: true, enabled };
+    } finally {
+      release();
+    }
   });
 
   const installLocalFile = async (

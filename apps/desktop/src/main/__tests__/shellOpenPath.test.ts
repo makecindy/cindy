@@ -5,7 +5,7 @@ vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cindy-shell-open-test' },
 }));
 
-const { resolveShellOpenPathTarget } = await import('../shellOpenPath.js');
+const { isLocalOriginalForPluginOpen, resolveShellOpenPathTarget } = await import('../shellOpenPath.js');
 
 describe('resolveShellOpenPathTarget', () => {
   it('keeps absolute file paths unchanged', () => {
@@ -56,5 +56,33 @@ describe('resolveShellOpenPathTarget', () => {
     expect(() => resolveShellOpenPathTarget('cindy-media://blobs/../../secret.ogg')).toThrow(
       'invalid url',
     );
+  });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：isLocalOriginalForPluginOpen 决定 shell:open-path 是否先把文件交给声明了
+ *   fileOpener 的插件；为 false 时照旧交给系统默认应用。
+ * - 规则依据：其它电脑文件的缓存副本不能交给插件改（改动回不到原电脑）；媒体库文件同理。
+ * - 现有覆盖缺口：新判定。
+ * - 最小失败输入：大小写不同的远程缓存路径；只共享前缀的同级目录。
+ * - tier：unit（注入 win32 路径语义，纯函数）。
+ */
+describe('isLocalOriginalForPluginOpen', () => {
+  const roots = [
+    'C:\\Users\\a\\AppData\\Roaming\\Cindy\\remote-file-cache',
+    'C:\\Users\\a\\AppData\\Roaming\\Cindy\\chat-attachment-cache',
+  ];
+  it.each([
+    ['a local original', 'C:\\work\\a.docx', 'C:\\work\\a.docx', true],
+    ['a remote-file cache copy in another letter case', 'c:\\users\\a\\appdata\\roaming\\cindy\\Remote-File-Cache\\x-a.docx',
+      'c:\\users\\a\\appdata\\roaming\\cindy\\Remote-File-Cache\\x-a.docx', false],
+    ['a chat attachment cache copy', 'C:\\Users\\a\\AppData\\Roaming\\Cindy\\chat-attachment-cache\\o\\a.bin',
+      'C:\\Users\\a\\AppData\\Roaming\\Cindy\\chat-attachment-cache\\o\\a.bin', false],
+    ['a managed media reference', 'cindy-media://blobs/abc.docx', 'C:\\data\\blobs\\abc.docx', false],
+    ['a sibling folder sharing only a prefix', 'C:\\Users\\a\\AppData\\Roaming\\Cindy\\remote-file-cache-old\\a.docx',
+      'C:\\Users\\a\\AppData\\Roaming\\Cindy\\remote-file-cache-old\\a.docx', true],
+  ])('%s', (_label, input, resolved, expected) => {
+    expect(isLocalOriginalForPluginOpen(input, resolved, roots, 'win32')).toBe(expected);
   });
 });
