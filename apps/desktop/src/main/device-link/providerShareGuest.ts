@@ -559,9 +559,12 @@ export function refreshReceivedShares(reason: string): Promise<void> {
           if (current(rt)) {
             const wasConfirmed = rt.listConfirmed;
             rt.listConfirmed = false;
-            const failure = error as { status?: number; statusCode?: number; code?: string } | null | undefined;
+            const failure = error as { status?: number; statusCode?: number; code?: string; retryAt?: number } | null | undefined;
             if ((failure?.statusCode ?? failure?.status) === 429 || failure?.code === 'RATE_LIMITED') {
-              rt.nextCatalogRetryAt = Math.max(rt.nextCatalogRetryAt, performance.now() + RECEIVED_POLL_MS);
+              const retryAt = failure?.retryAt;
+              const delay = typeof retryAt === 'number' && Number.isFinite(retryAt)
+                ? Math.max(0, retryAt - Date.now()) : RECEIVED_POLL_MS;
+              rt.nextCatalogRetryAt = Math.max(rt.nextCatalogRetryAt, performance.now() + delay);
             }
             log.warn('received shares refresh failed', { reason, error: error instanceof Error ? error.message : String(error) });
             if (isAuthoritativeShareListDenial(error)) {
