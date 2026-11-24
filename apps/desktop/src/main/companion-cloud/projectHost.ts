@@ -78,13 +78,24 @@ async function writeAtomic(file: string, content: string): Promise<void> {
   await fs.rename(tmp, file);
 }
 
+/** Run the same upgrade as project preparation, against the arriving copy before it is saved. */
+export const prepareArrivedMemoryReview: CompanionProjectIo['prepareMemoryReview'] = async (botId, project, config, assertCurrent) => {
+  const { isProjectScheduleConfig } = await import('../scheduler-host/project-automation-loader.js');
+  if (!isProjectScheduleConfig(config)) return config; // Ordinary save validation reports it.
+  const { prepareBotMemoryReviewDefinition } = await import('../maker-ipc/botProjectMode.js');
+  assertCurrent();
+  const upgraded = await prepareBotMemoryReviewDefinition({ botId, ...project }, config);
+  return upgraded ? { ...upgraded } : config;
+};
+
 export function companionProjectIo(): CompanionProjectIo {
   return {
+    prepareMemoryReview: prepareArrivedMemoryReview,
     projectDir: async (botId) => (await readTeammateProjectMode(botId)) ? teammateWorkspace(ownerScopedUserDataPath(), botId) : null,
     prepareProject: async (botId, assertCurrent) => {
       // The teammate becomes a project here first (idempotent): the same path routines take.
       const { prepareTeammateRoutineProject } = await import('../maker-ipc/botRoutineAutomations.js');
-      return (await prepareTeammateRoutineProject(botId, ownerScopedUserDataPath(), assertCurrent)).workingDir;
+      return prepareTeammateRoutineProject(botId, ownerScopedUserDataPath(), assertCurrent);
     },
     readRules: (workingDir) => fs.readFile(path.join(workingDir, RULES_FILE), 'utf8')
       .catch((error: unknown) => { if (missing(error)) return null; throw error; }),

@@ -5,7 +5,8 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Readable } from 'node:stream';
 import { Script } from 'node:vm';
-import type { ProjectScheduleConfig } from '../../scheduler-host/project-automation-loader.js';
+import { Scheduler, type Schedule, type ScheduleStorage } from '@cindy/maker-scheduler';
+import { ProjectAutomationLoader, type ProjectScheduleConfig } from '../../scheduler-host/project-automation-loader.js';
 import { executePreRunHook } from '../../scheduler-host/pre-run-hook.js';
 
 import { MEMORY_STORAGE_MIGRATION_RECEIPT } from '@cindy/maker-core';
@@ -40,6 +41,7 @@ vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ 
 import { BOT_PROJECT_LOCAL_GITIGNORE, BOT_PROJECT_MEMORY_GITIGNORE, BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, ensureTeammateProjectIgnored, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 import { importBotSkillFiles } from '../botSkillStore.js';
+import { prepareArrivedMemoryReview } from '../../companion-cloud/projectHost.js';
 import { OWN_RULES_HEADING, importedStandardSkill } from '../botProjectTemplate.js';
 
 // Evaluate the actual generated check with real SQLite, in-process. The hook
@@ -481,6 +483,83 @@ describe('ensureBotProjectAutomations', () => {
     await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
     expect(await run()).toBe(2);
     expect(loader.upsertSchedule).toHaveBeenCalledTimes(2);
+  });
+
+  // #12608 / unit: local migration and cloud restore previously tested in isolation.
+  // Replaying a paused legacy definition after the local upgrade must converge.
+  it('keeps the migrated review when the same cloud definition arrives twice', async () => {
+    const { applyProjectAutomations } = await import('../../companion-cloud/project.js');
+    const bot = { botId: 'bot-1', displayName: 'Mimi', workingDir };
+    const rows = new Map<string, Schedule>();
+    const storage = {
+      list: async () => [...rows.values()],
+      get: async (id: string) => rows.get(id) ?? null,
+      insert: async (row: Schedule) => { rows.set(row.id, row); return row; },
+      update: async (id: string, patch: Partial<Schedule>) => {
+        const row = { ...rows.get(id)!, ...patch };
+        rows.set(id, row);
+        return row;
+      },
+    };
+    const scheduler = new Scheduler({ storage: storage as ScheduleStorage, runner: { fire: vi.fn() } });
+    const project = new ProjectAutomationLoader({
+      scheduler, storage: storage as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+      getDb: () => { throw new Error('unexpected database access'); }, logger: { warn: vi.fn() },
+    });
+    loader.loadProjectSchedules.mockReset().mockImplementation(dir => project.loadProjectSchedules(dir));
+    loader.upsertSchedule.mockImplementation((dir, config) => project.upsertSchedule(dir, config, { keepUnreadable: true }));
+    try {
+      await ensureBotProjectAutomations(bot);
+      const [fresh] = (await project.loadProjectSchedules(workingDir))!;
+      const legacy = { ...fresh!, prompt: fresh!.prompt.replace('since the last completed review', 'from the last day') };
+      const [created] = await storage.list();
+      await scheduler.pause(created!.id);
+      await project.upsertSchedule(workingDir, legacy);
+      const writes: string[] = [];
+      let writer = 'migration';
+      project.onEvent(event => { if (event.type === 'reconciled') writes.push(`${writer}:${event.updated}`); });
+      const migrate = async () => { writer = 'migration'; await ensureBotProjectAutomations(bot); };
+      const arrive = (config: ProjectScheduleConfig) => applyProjectAutomations({
+        ...bot, selfDeviceId: 'desk', assertCurrent: () => {},
+        rows: [{ id: config.id, value: { config, paused: true, originDeviceId: 'desk' } }],
+        io: {
+          prepareMemoryReview: prepareArrivedMemoryReview,
+          prepareProject: async () => { await migrate(); return bot; },
+          automations: async () => (await project.loadProjectSchedules(workingDir))!.map(value =>
+            ({ config: { ...value }, paused: rows.get(created!.id)?.status === 'paused' })),
+          upsertAutomation: async (_dir, value) => {
+            writer = 'cloud';
+            await project.upsertSchedule(workingDir, value as unknown as ProjectScheduleConfig);
+          },
+          setAutomationPaused: async () => { throw new Error('unexpected pause change'); },
+          removeAutomation: async () => { throw new Error('unexpected removal'); },
+        },
+      });
+      await migrate();
+      await migrate();
+      expect(writes).toEqual(['migration:1']);
+      await arrive(legacy);
+      await arrive(legacy);
+      const olderHook = { ...legacy, preRunHook: { ...legacy.preRunHook!, command: 'xdt-node "../.memory-review-check-v1.cjs"' } };
+      await arrive(olderHook);
+      expect(writes).toEqual(['migration:1']);
+      await arrive({ ...legacy, cronExpr: '0 5 * * *' });
+      expect(rows.get(created!.id)).toMatchObject({ cronExpr: '0 5 * * *', prompt: fresh!.prompt, status: 'paused' });
+      const edited = { ...legacy, prompt: legacy.prompt + ' Keep release notes.' };
+      await arrive(edited);
+      await arrive(edited);
+      expect(await storage.list()).toMatchObject([{ id: created!.id, status: 'paused', prompt: edited.prompt }]);
+      expect(writes).toEqual(['migration:1', 'cloud:1', 'cloud:1']);
+
+      await arrive(fresh!);
+      await fs.appendFile(path.join(root, '.memory-review-check-v1.cjs'), '\n// Owner customization');
+      await arrive(legacy);
+      await arrive(legacy);
+      expect(rows.get(created!.id)?.prompt).toBe(legacy.prompt);
+    } finally {
+      loader.loadProjectSchedules.mockReset();
+      loader.upsertSchedule.mockReset();
+    }
   });
 
   it('upgrades the supplied review while retaining choices, custom checks and removal', async () => {

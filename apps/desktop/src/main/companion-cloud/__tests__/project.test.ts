@@ -20,8 +20,9 @@ function fakeProject(input: { rules?: string | null; carryover?: string | null; 
   let carryover = input.carryover ?? null;
   const automations = new Map((input.automations ?? []).map(entry => [entry.config.id, structuredClone(entry)]));
   const io = {
+    prepareMemoryReview: vi.fn(async (_id: string, _project: { workingDir: string; displayName: string }, config: ProjectAutomationEntry['config']) => config),
     projectDir: vi.fn(async () => (input.isProject === false ? null : '/project')),
-    prepareProject: vi.fn(async () => '/project'),
+    prepareProject: vi.fn(async () => ({ workingDir: '/project', displayName: 'Mia' })),
     readRules: vi.fn(async () => rules),
     writeRules: vi.fn(async (_dir: string, content: string) => { rules = content; }),
     readCarryover: vi.fn(async () => carryover),

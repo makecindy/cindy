@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 
+export const BOT_PROJECT_MEMORY_REVIEW_ID = 'teammate-memory-review';
 export const LEGACY_MEMORY_REVIEW_HOOK_COMMAND = 'xdt-node "../.memory-review-check-v1.cjs"';
 export const MEMORY_REVIEW_HOOK_COMMAND = 'cindy-node-script "../.memory-review-check-v1.cjs"';
 

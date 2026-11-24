@@ -84,7 +84,7 @@ export async function setRoutineAutomationsRunning(workingDir: string, routineId
  * idempotent through its receipt and takes no teammate lock, so a caller may hold one.
  */
 export async function prepareTeammateRoutineProject(botId: string, ownerRoot: string,
-  assertCurrent: () => void = () => {}): Promise<{ workingDir: string; route: BotModelRoute | null }> {
+  assertCurrent: () => void = () => {}): Promise<{ workingDir: string; displayName: string; route: BotModelRoute | null }> {
   // Loaded lazily: the upgrade itself writes routines through this module.
   const { migrateTeammateToV2 } = await import('./botV2Migration.js');
   await migrateTeammateToV2(botId, ownerRoot, assertCurrent);
@@ -93,5 +93,5 @@ export async function prepareTeammateRoutineProject(botId: string, ownerRoot: st
   const profile = await readBotSettingsProfile(botId);
   assertCurrent();
   const [route] = await readEffectiveBotModelChain(profile.capabilities as unknown as Record<string, unknown>).catch(() => []);
-  return { workingDir, route: route ?? null };
+  return { workingDir, displayName: profile.name, route: route ?? null };
 }

@@ -6,6 +6,7 @@
  *
  * The file and scheduler side is injected (host.ts) so the rules here stay testable.
  */
+import { BOT_PROJECT_MEMORY_REVIEW_ID } from '../maker-ipc/botProjectMemoryReview.js';
 import { errorCode, type CompanionLog } from './types.js';
 import {
   COMPANION_AUTOMATION_PREFIX, COMPANION_PROJECT_CARRYOVER_KEY, COMPANION_PROJECT_RULES_KEY, canonicalJson, type CompanionPreferenceValue,
@@ -29,10 +30,13 @@ export interface ProjectAutomationValue extends ProjectAutomationEntry {
 }
 
 export interface CompanionProjectIo {
+  /** Apply this computer's bundled definition upgrades before comparing a received schedule. */
+  prepareMemoryReview: (botId: string, project: { workingDir: string; displayName: string },
+    config: ProjectAutomationEntry['config'], assertCurrent: () => void) => Promise<ProjectAutomationEntry['config']>;
   /** The teammate's project folder when it is a V2 teammate here; null otherwise. */
   projectDir: (botId: string) => Promise<string | null>;
-  /** Make the teammate a project here (the V2 upgrade, idempotent) and return its folder. */
-  prepareProject: (botId: string, assertCurrent: () => void) => Promise<string>;
+  /** Make the teammate a project here (the V2 upgrade, idempotent) and return its folder and current name. */
+  prepareProject: (botId: string, assertCurrent: () => void) => Promise<{ workingDir: string; displayName: string }>;
   /** The rules file; null when the project has none. Other read errors throw. */
   readRules: (workingDir: string) => Promise<string | null>;
   writeRules: (workingDir: string, content: string) => Promise<void>;
@@ -84,7 +88,7 @@ export async function readProjectValues(botId: string, io: CompanionProjectIo, s
 export async function applyProjectRules(input: {
   botId: string; content: string; io: CompanionProjectIo; assertCurrent: () => void; log?: CompanionLog;
 }): Promise<void> {
-  const workingDir = await input.io.prepareProject(input.botId, input.assertCurrent);
+  const { workingDir } = await input.io.prepareProject(input.botId, input.assertCurrent);
   input.assertCurrent();
   if (await input.io.readRules(workingDir) === input.content) return;
   input.assertCurrent();
@@ -99,7 +103,7 @@ export async function applyProjectRules(input: {
 export async function applyProjectCarryover(input: {
   botId: string; content: string; io: CompanionProjectIo; assertCurrent: () => void;
 }): Promise<void> {
-  const workingDir = await input.io.prepareProject(input.botId, input.assertCurrent);
+  const { workingDir } = await input.io.prepareProject(input.botId, input.assertCurrent);
   input.assertCurrent();
   if (await input.io.readCarryover(workingDir) === input.content) return;
   input.assertCurrent();
@@ -112,7 +116,7 @@ export async function mergeProjectRules(input: {
 }): Promise<void> {
   const added = input.content.trim();
   if (!added) return;
-  const workingDir = await input.io.prepareProject(input.botId, input.assertCurrent);
+  const { workingDir } = await input.io.prepareProject(input.botId, input.assertCurrent);
   input.assertCurrent();
   const current = await input.io.readRules(workingDir) ?? '';
   if (current.includes(added)) return;
@@ -147,11 +151,13 @@ function localRoute(config: ProjectAutomationValue['config'], selfDeviceId: stri
  * One unreadable definition is skipped, never keeps the teammate from arriving.
  */
 export async function applyProjectAutomations(input: {
-  botId: string; rows: Array<{ id: string; value: unknown }>; io: CompanionProjectIo;
+  botId: string; rows: Array<{ id: string; value: unknown }>;
+  io: Pick<CompanionProjectIo, 'prepareMemoryReview' | 'prepareProject' | 'automations' | 'upsertAutomation' | 'removeAutomation' | 'setAutomationPaused'>;
   selfDeviceId: string | null; assertCurrent: () => void; log?: CompanionLog;
 }): Promise<void> {
   const { io } = input;
-  const workingDir = await io.prepareProject(input.botId, input.assertCurrent);
+  const project = await io.prepareProject(input.botId, input.assertCurrent);
+  const { workingDir } = project;
   input.assertCurrent();
   const current = new Map((await io.automations(workingDir)).map(entry => [entry.config.id, entry]));
   for (const { id, value } of input.rows) {
@@ -167,12 +173,19 @@ export async function applyProjectAutomations(input: {
       input.log?.warn('Buddy automation skipped: unreadable definition');
       continue;
     }
-    const config = localRoute(arrived.config, input.selfDeviceId);
-    // A check command saved on another computer may not exist here: it arrives paused.
+    let config = localRoute(arrived.config, input.selfDeviceId);
+    const localDefinition = here && canonicalJson(here.config);
+    let changed = localDefinition !== canonicalJson(config);
+    if (changed && id === BOT_PROJECT_MEMORY_REVIEW_ID) {
+      config = await io.prepareMemoryReview(input.botId, project, config, input.assertCurrent);
+      input.assertCurrent();
+      changed = localDefinition !== canonicalJson(config);
+    }
     const hook = config.preRunHook as { command?: unknown } | undefined;
+    // A check command saved on another computer may not exist here: it arrives paused.
     const foreignCheck = typeof hook?.command === 'string' && !!hook.command.trim() && arrived.originDeviceId !== input.selfDeviceId;
     const paused = arrived.paused || foreignCheck;
-    if (!here || canonicalJson(here.config) !== canonicalJson(config)) {
+    if (changed) {
       try { await io.upsertAutomation(workingDir, config); } catch (error) {
         if ((error as { code?: unknown } | null)?.code !== 'INVALID_PARAMS') throw error;
         input.log?.warn('Buddy automation skipped: invalid definition');

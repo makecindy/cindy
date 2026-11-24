@@ -714,7 +714,7 @@ function isProjectAutomationsFile(value: unknown): value is ProjectAutomationsFi
   return true;
 }
 
-function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig {
+export function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig {
   if (!value || typeof value !== 'object') return false;
   const config = value as ProjectScheduleConfig;
   return (
