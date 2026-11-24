@@ -16169,7 +16169,6 @@
       "daemonNotReady": "{{manager}} 升級已畢，然遠端 daemon 尚未啟 — 請親手再遣訊"
     },
     "remoteError": {
-      "SCHEDULE_BOUND_PLUGIN_ENGINE": "所選之務用法器引擎。宜另選用內建引擎之務，或設自動之務為「每次新開」。",
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暫不支援易 Harness。請擇今 Harness 下之模型，或以所需 Harness 另立 SSH 差事。",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所連者無權用前一模型，故易模型時未能壓縮上下文。",
       "MODEL_SELECTION_UNAVAILABLE": "所擇模型於此供方下已不可用。請於規制中察其連線，或另擇可用之模型。",
@@ -18084,6 +18083,7 @@
         "selectThread": "請擇所向差事",
         "selectProject": "請擇案之目錄",
         "modelUnavailable": "模型 {{model}} 已不可用，請另擇",
+        "boundPluginEngine": "所選之務用法器引擎。宜另選用內建引擎之務，或設自動之務為「每次新開」。",
         "pluginEngineUnavailable": "所擇法器引擎今不可用，請另擇模型",
         "reasoningInvalid": "Reasoning 須為 {{values}} 之一",
         "preRunHookCommandRequired": "請填預檢指令碼命令",

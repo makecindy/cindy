@@ -244,16 +244,19 @@ export function ScheduleFormDialog({
     setPromptExpanded(false);
   }, [open, initial?.id]);
   const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<{ key: string; details: string } | null>(null);
   useEffect(() => { setSubmitError(null); }, [open, initial]);
   const showSubmitError = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
-    const code = parseAgentErrorCode(message)?.code;
-    if (code && i18n.exists(`chat.remoteError.${code}`)) {
-      setSubmitError(message);
+    const agentCode = parseAgentErrorCode(message)?.code;
+    const key = extractIpcError(error)?.code === 'SCHEDULE_BOUND_PLUGIN_ENGINE'
+      ? 'scheduler.editor.validation.boundPluginEngine'
+      : agentCode && `chat.remoteError.${agentCode}`;
+    if (key && i18n.exists(key)) {
+      setSubmitError({ key, details: message });
       // Save may be below the notice in a scrolled form. The shared alert toast
       // stays visible above the dialog and announces the localized failure.
-      toast.error(t(`chat.remoteError.${code}`));
+      toast.error(t(key));
     } else toast.error(message);
   };
   const [mode, setMode] = useState<'gallery' | 'form'>('form');
@@ -952,8 +955,8 @@ export function ScheduleFormDialog({
                 {maybeTeammateSchedule && teammateModelReadError && <ErrorNotice message={teammateModelReadFailedText} />}
                 {submitError && (
                   <ErrorNotice
-                    message={t(`chat.remoteError.${parseAgentErrorCode(submitError)?.code}`)}
-                    details={submitError}
+                    message={t(submitError.key)}
+                    details={submitError.details}
                   />
                 )}
                   <div data-schedule-form-fields className="flex flex-col gap-4">

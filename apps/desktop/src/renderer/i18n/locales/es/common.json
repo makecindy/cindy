@@ -16349,7 +16349,6 @@
       "daemonNotReady": "{{manager}} se actualizó, pero el servicio remoto aún no se ha iniciado. Vuelve a enviar tu mensaje manualmente"
     },
     "remoteError": {
-      "SCHEDULE_BOUND_PLUGIN_ENGINE": "La tarea seleccionada usa un motor de complemento. Elige una tarea que use un motor integrado o configura la automatización para crear una tarea en cada ejecución.",
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no puede cambiar de Harness. Elige un modelo en su Harness actual o crea una nueva tarea SSH con el Harness que necesitas.",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "No se pudo compactar el contexto al cambiar de modelo porque esta conexión no permite usar el modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Ajustes o elige otro modelo disponible.",
@@ -18345,6 +18344,7 @@
         "selectThread": "Selecciona una sesión de destino",
         "selectProject": "Selecciona un directorio de proyecto",
         "modelUnavailable": "El modelo {{model}} ya no está disponible. Selecciona otro modelo.",
+        "boundPluginEngine": "La tarea seleccionada usa un motor de complemento. Elige una tarea que use un motor integrado o configura la automatización para crear una tarea en cada ejecución.",
         "pluginEngineUnavailable": "El motor de complemento seleccionado no está disponible ahora. Selecciona otro modelo.",
         "reasoningInvalid": "La intensidad de razonamiento debe ser uno de estos valores: {{values}}",
         "preRunHookCommandRequired": "Ingresa el comando de comprobación previa",

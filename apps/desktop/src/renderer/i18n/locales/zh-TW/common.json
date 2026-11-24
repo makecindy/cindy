@@ -16177,7 +16177,6 @@
       "daemonNotReady": "{{manager}} 升級完成，但遠端 daemon 暫未啟動 — 請手動重新傳送訊息"
     },
     "remoteError": {
-      "SCHEDULE_BOUND_PLUGIN_ENGINE": "所選任務使用插件引擎。請選擇使用內建引擎的任務，或將自動化設為「每次新建」。",
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "目前的連線無法使用上一個模型，切換模型時的上下文壓縮失敗。",
       "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
@@ -18103,6 +18102,7 @@
         "selectThread": "請選擇目標任務",
         "selectProject": "請選擇專案目錄",
         "modelUnavailable": "模型 {{model}} 已不可用，請重新選擇",
+        "boundPluginEngine": "所選任務使用插件引擎。請選擇使用內建引擎的任務，或將自動化設為「每次新建」。",
         "pluginEngineUnavailable": "所選插件引擎目前無法使用，請重新選擇模型",
         "reasoningInvalid": "Reasoning 必須是 {{values}} 之一",
         "preRunHookCommandRequired": "請填寫前置檢查指令碼命令",

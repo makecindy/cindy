@@ -16206,7 +16206,6 @@
       "daemonNotReady": "{{manager}} wurde aktualisiert, aber der Remote-Daemon ist noch nicht gestartet – sende deine Nachricht bitte manuell erneut"
     },
     "remoteError": {
-      "SCHEDULE_BOUND_PLUGIN_ENGINE": "Die ausgewählte Aufgabe verwendet eine Plugin-Engine. Wähle eine Aufgabe mit integrierter Engine oder stelle die Automatisierung so ein, dass sie bei jeder Ausführung eine neue Aufgabe erstellt.",
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Der Kontext konnte beim Modellwechsel nicht komprimiert werden, da das vorherige Modell über diese Verbindung nicht verfügbar ist.",
       "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
@@ -18177,6 +18176,7 @@
         "selectThread": "Wähle eine Zielsitzung",
         "selectProject": "Wähle ein Projektverzeichnis",
         "modelUnavailable": "Modell {{model}} ist nicht mehr verfügbar. Wähle ein anderes Modell.",
+        "boundPluginEngine": "Die ausgewählte Aufgabe verwendet eine Plugin-Engine. Wähle eine Aufgabe mit integrierter Engine oder stelle die Automatisierung so ein, dass sie bei jeder Ausführung eine neue Aufgabe erstellt.",
         "pluginEngineUnavailable": "Die ausgewählte Plugin-Engine ist gerade nicht verfügbar. Wähle ein anderes Modell.",
         "reasoningInvalid": "Denkintensität muss einer der Werte {{values}} sein",
         "preRunHookCommandRequired": "Gib den Befehl für die Vorabprüfung ein",

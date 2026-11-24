@@ -16349,7 +16349,6 @@
       "daemonNotReady": "{{manager}} atualizado, mas o daemon remoto ainda não arrancou — reenvie a sua mensagem manualmente"
     },
     "remoteError": {
-      "SCHEDULE_BOUND_PLUGIN_ENGINE": "A tarefa selecionada usa um motor de plugin. Escolhe uma tarefa que use um motor integrado ou configura a automatização para criar uma tarefa em cada execução.",
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode mudar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness de que precisa.",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Não foi possível compactar o contexto ao mudar de modelo porque esta ligação não permite usar o modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado já não está disponível no respetivo fornecedor. Verifique a ligação nas Definições ou escolha outro modelo disponível.",
@@ -18345,6 +18344,7 @@
         "selectThread": "Selecione uma sessão de destino",
         "selectProject": "Selecione um diretório de projeto",
         "modelUnavailable": "O modelo {{model}} já não está disponível. Selecione outro modelo.",
+        "boundPluginEngine": "A tarefa selecionada usa um motor de plugin. Escolhe uma tarefa que use um motor integrado ou configura a automatização para criar uma tarefa em cada execução.",
         "pluginEngineUnavailable": "O motor de plugin selecionado não está disponível de momento. Selecione outro modelo.",
         "reasoningInvalid": "O raciocínio tem de ser um de {{values}}",
         "preRunHookCommandRequired": "Introduza o comando de verificação prévia",
