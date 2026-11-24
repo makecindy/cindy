@@ -159,7 +159,9 @@ function toView(harness: PluginHarness, key = harness.key, declared = harness.na
   const settings = pluginEngineSettingsOf({ key });
   const listed = engineModels(harness).map(model => {
     const effort = settings.modelEfforts?.[model.id];
-    return effort && model.efforts?.includes(effort) ? { ...model, defaultEffort: effort } : model;
+    return effort && model.efforts?.includes(effort)
+      ? { ...model, defaultEffort: effort, declaredDefaultEffort: model.defaultEffort ?? null }
+      : model;
   });
   const off = settings.disabledModels?.length ? new Set(settings.disabledModels) : null;
   const disabledModels = off ? listed.filter((model) => off.has(model.id)) : [];

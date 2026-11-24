@@ -168,12 +168,15 @@ describe('plugin engines with the settings from Settings → Model providers', (
     await expect(ipc.set({ ...patch, modelEffort: { ...patch.modelEffort, effort: 'max' } })).rejects.toThrow('INVALID_PARAMS');
     await expect(ipc.set({ ...patch, ownerStamp: { ...ownerStamp, ownerGeneration: 0 } })).rejects.toThrow('PERMISSION_DENIED');
     await ipc.set(patch);
-    expect(ipc.list()[0]).toMatchObject({ modelEfforts: { 'deepseek-v4': 'low' }, models: [{ defaultEffort: 'low' }, { id: 'deepseek-lite' }] });
+    expect(ipc.list()[0]).toMatchObject({ modelEfforts: { 'deepseek-v4': 'low' }, models: [{ defaultEffort: 'low', declaredDefaultEffort: 'high' }, { id: 'deepseek-lite' }] });
     expect(JSON.parse(fs.readFileSync(ipc.prefsFile(), 'utf8')).engines[KEY]).toEqual({ modelEfforts: { 'deepseek-v4': 'low' } });
-    expect(ipc.listFromAnotherDevice()[0]).not.toHaveProperty('modelEfforts');
+    const remote = ipc.listFromAnotherDevice()[0];
+    expect(remote).not.toHaveProperty('modelEfforts');
+    expect(remote?.models[0]).toMatchObject({ defaultEffort: 'low', declaredDefaultEffort: 'high' });
     const other = await ipc.set({ ...patch, modelEffort: { id: 'deepseek-v4', effort: null } });
     expect(other).not.toHaveProperty('modelEfforts');
     expect(other?.models[0]?.defaultEffort).toBe('high');
+    expect(other?.models[0]).not.toHaveProperty('declaredDefaultEffort');
     expect(readPluginEnginePrefs(KEY)).toEqual({});
   });
 

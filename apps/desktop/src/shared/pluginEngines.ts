@@ -51,8 +51,10 @@ export interface PluginEngineModel {
   group?: string;
   /** Levels the engine offers for this model, low → high; absent = no selectable level. */
   efforts?: PluginEngineEffort[];
-  /** The engine's own level when none is chosen (one of `efforts`). */
+  /** Default for a new task, including the provider's saved override (one of `efforts`). */
   defaultEffort?: PluginEngineEffort;
+  /** With an override, the original plugin default. Null means the plugin declared no level. */
+  declaredDefaultEffort?: PluginEngineEffort | null;
 }
 
 /**

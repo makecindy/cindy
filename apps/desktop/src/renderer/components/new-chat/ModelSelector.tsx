@@ -5068,7 +5068,7 @@ export function ModelSelector({
         name: pluginEnginePending.engineName,
         engine: pluginEnginePending.engine,
         modelId: pluginEnginePending.modelId,
-        effort: resolvePluginEngineEffort(pluginEnginePending.engine, pluginEnginePending.modelId, pluginEnginePending.effort),
+        effort: resolvePluginEngineEffort(pluginEnginePending.engine, pluginEnginePending.modelId, pluginEnginePending.effort, 'session'),
         pending: true,
       }
     : pluginEngineSession
@@ -5076,7 +5076,7 @@ export function ModelSelector({
         name: pluginEngineSession.engineName,
         engine: pluginEngineSession.engine,
         modelId: pluginEngineSession.modelId,
-        effort: resolvePluginEngineEffort(pluginEngineSession.engine, pluginEngineSession.modelId, pluginEngineSession.effort),
+        effort: resolvePluginEngineEffort(pluginEngineSession.engine, pluginEngineSession.modelId, pluginEngineSession.effort, 'session'),
       }
     : (() => {
         const active = pluginEngines?.active;

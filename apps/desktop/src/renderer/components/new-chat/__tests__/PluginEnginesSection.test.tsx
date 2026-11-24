@@ -940,6 +940,38 @@ describe('a task running on a plugin engine', () => {
     expect(onSelectModel).toHaveBeenLastCalledWith('plain');
   });
 
+  // Unit: a task with no recorded effort follows the plugin default even after the draft default changes.
+  it('keeps a running task on the plugin default while new tasks use the saved level', async () => {
+    const [pro, flash, plain] = leveled.models;
+    const engine = {
+      ...leveled,
+      models: [
+        { ...pro!, defaultEffort: 'low' as const, declaredDefaultEffort: 'high' as const },
+        { ...flash!, declaredDefaultEffort: null },
+        plain!,
+      ],
+    };
+    const active = resolveActivePluginEngine([engine], { providerId: engine.providerId, modelId: 'pro' })!;
+    expect(pluginEngineSessionCreateFields(active).effort).toBe('low');
+
+    render(React.createElement(ModelSelector, {
+      modelId: 'pro',
+      effort: '',
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc',
+      remoteAgent: undefined,
+      actualRoute: true,
+      pluginEngineSession: {
+        providerId: engine.providerId, engine, engineName: engine.name, modelId: 'pro', onSelectModel: vi.fn(),
+      },
+    }));
+    const trigger = screen.getByRole('button', { name: 'Select model. Current: DeepSeek Harness · Pro · high' });
+    await act(async () => { fireEvent.click(trigger); });
+    const list = await screen.findByRole('listbox', { name: 'Models' });
+    expect(within(list).getAllByRole('option').map(levelOf)).toEqual(['high', null, null]);
+  });
+
   it('falls back to the generic engine label when the plugin is gone', () => {
     renderTaskTrigger(null);
     expect(screen.getByRole('button', { name: 'Select model. Current: Plugin engine · Model details unavailable' })).toBeTruthy();

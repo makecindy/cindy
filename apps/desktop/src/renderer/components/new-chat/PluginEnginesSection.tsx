@@ -606,7 +606,7 @@ export function PluginEngineSessionPanel({
       <MenuHighlightLayer />
       <EngineBlock
         engine={engine}
-        rows={pluginEngineModelRows(engine, pending?.modelId ?? picker.modelId)}
+        rows={pluginEngineModelRows(engine, pending?.modelId ?? picker.modelId, 'session')}
         activeModelId={pending?.modelId ?? picker.modelId}
         onChoose={(modelId) => {
           if (modelId === picker.modelId) {
@@ -614,12 +614,12 @@ export function PluginEngineSessionPanel({
             return;
           }
           // Another model keeps the task's level where it offers it, else runs with its own default.
-          const effort = resolvePluginEngineEffort(engine, modelId, picker.effort) ?? undefined;
+          const effort = resolvePluginEngineEffort(engine, modelId, picker.effort, 'session') ?? undefined;
           void Promise.resolve(effort ? picker.onSelectModel(modelId, effort) : picker.onSelectModel(modelId)).then((applied) => {
             if (applied !== false) onPicked();
           });
         }}
-        effortOf={(row) => resolvePluginEngineEffort(engine, row.id, pending?.effort ?? picker.effort)}
+        effortOf={(row) => resolvePluginEngineEffort(engine, row.id, pending?.effort ?? picker.effort, 'session')}
         onChooseEffort={(modelId, effort) => {
           setPending({ modelId, effort });
           void Promise.resolve(picker.onSelectModel(modelId, effort)).then((applied) => {
