@@ -3504,6 +3504,76 @@ it('folds top-level keys declared in conditional and dependent schema branches',
   });
 });
 
+// 评审 P1(信封整个摊平、没有 args 容器): 重建信封的前提是「模型给了 args 容器」——
+// 连容器都没给时({server, tool, name:'schedule_list', status:'active'}), 内层参数是**内层
+// 工具**的, 外层信封 schema 只声明 name/args, 判不了它们: 按外层 schema 丢, 内层工具就只
+// 拿到空参数(列全部定时任务而不是按 status 过滤)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 929ec41d0d 的 P1。
+// - 覆盖缺口:信封用例只盖了「带 args 容器」的平铺形态。
+// - 最小失败输入:顶层给 name + 内层参数, 不给 args。
+// - tier:unit。
+it('rebuilds a fully flattened envelope that has no args container', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_scheduler', client, [{
+    name: 'call_tool',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_scheduler', tool: 'call_tool' });
+  await gateway.executeCall({
+    server: 'cindy_scheduler', tool: 'call_tool', name: 'schedule_list', status: 'active',
+  });
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'schedule_list', args: { status: 'active' } },
+  });
+});
+
+// 评审 P1(信封指纹认得太宽): 一个普通工具只要有「必填 name(string) + args(object)」就被当成
+// 注册表信封 —— 但它还有兄弟字段 mode, name/args 是它自己的参数。平铺调用于是被改写成
+// {name:'job', args:{..., mode:'fast'}}, mode 在服务端校验之前就被挪进了错误的一层。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 929ec41d0d 的 P1。
+// - 覆盖缺口:信封误判的用例只盖了「信封形状完全不同」的第三方工具。
+// - 最小失败输入:工具声明 name + args + mode 三个字段, 调用给 name/args/mode。
+// - tier:unit。
+it('does not treat a tool with sibling parameters as a registry envelope', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_jobs', client, [{
+    name: 'job',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, args: { type: 'object' }, mode: { type: 'string' } },
+      required: ['name'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_jobs', tool: 'job' });
+  await gateway.executeCall({
+    server: 'cindy_jobs', tool: 'job', name: 'job-1', args: { payload: 'p' }, mode: 'fast',
+  });
+  const forwarded = (requests[0].params as { arguments: Record<string, unknown> }).arguments;
+  // 没有被改写成信封: 兄弟字段 mode 留在外层(没被挪进 args), name 是这个工具自己的参数。
+  expect(forwarded.mode).toBe('fast');
+  expect(forwarded.name).toBe('job-1');
+  expect(forwarded).not.toHaveProperty('args');
+});
+
 it('intercepts a double-wrapped envelope and an entry-tool name before they reach the server', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(

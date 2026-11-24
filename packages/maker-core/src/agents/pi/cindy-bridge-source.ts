@@ -3440,6 +3440,10 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
  * 参数却是文件名。所以要求三个信号同时成立 —— properties.name 是 string、properties.args
  * 是 object、且 required 含 name。
  *
+ * 还要求**恰好声明这两个字段**：多一个兄弟字段的工具(name/args 是它自己的参数, 不是信封)
+ * 不能被当成信封 —— 否则平铺调用会把兄弟字段挪进 args 里, 在服务端校验之前就改错了层级
+ * (Codex P1 on #10908)。真实的注册表入口(call_tool)声明的就是 name + args 两个字段。
+ *
  * 归一化(平铺信封重建)与执行前的信封检查必须用同一判据，否则两处对「这是不是信封」
  * 的理解会分叉：重建出来的形状与检查时的形状对不上。
  *
@@ -3451,6 +3455,8 @@ function isNameEnvelopeNode(node: Record<string, unknown>): boolean {
   if (!properties) return false;
   const required = Array.isArray(node.required) ? node.required : [];
   if (!required.includes('name')) return false;
+  const names = Object.keys(properties);
+  if (names.length !== 2 || !names.includes('name') || !names.includes('args')) return false;
   const name = properties.name;
   const args = properties.args;
   return isPlainRecord(name) && name.type === 'string'
@@ -3717,14 +3723,29 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
     && typeof params.name === 'string'
     && Object.prototype.hasOwnProperty.call(params, 'args')
     && (params.name === selector || selector === tool.name);
-  const flattenedEnvelope = isNameEnvelopeSchema(schema, surface)
+  const envelopeSchema = isNameEnvelopeSchema(schema, surface);
+  const flattenedEnvelope = envelopeSchema
     && provided
     && selector !== undefined
     && !repeatsEnvelope;
+  // 信封**整个摊平**: 模型连 args 容器都没给, 只给了顶层选择器 + 内层参数
+  // ({server, tool, name:'schedule_list', status:'active'})。这时内层参数是**内层工具**的,
+  // 外层信封 schema 只声明 name/args, 判不了它们 —— 按外层 schema 丢, 内层工具就只拿到
+  // 空参数(列全部定时任务而不是按 status 过滤)。所以这一形态下顶层键整体收进内层 args。
+  const flattenedEnvelopeNoContainer = envelopeSchema
+    && !provided
+    && selector !== undefined;
   for (const [key, value] of Object.entries(record)) {
     if (GATEWAY_OWN_KEYS.has(key)) continue;
-    if (flattenedEnvelope && key === 'name') continue; // 信封层, 不是内层参数。
+    if ((flattenedEnvelope || flattenedEnvelopeNoContainer) && key === 'name') continue; // 信封层, 不是内层参数。
+    if (flattenedEnvelopeNoContainer && (key === 'args' || key === 'arguments')) continue;
     if (Object.prototype.hasOwnProperty.call(params, key)) continue;
+    if (flattenedEnvelopeNoContainer) {
+      // 内层参数: 外层 schema 判不了, 也不该丢 —— 交给内层工具自己校验。
+      params[key] = value;
+      folded.push(key);
+      continue;
+    }
     if (!foldAll && !incomplete && !(declared?.has(key) ?? false) && !schemaAcceptsKey(surface, key)) {
       unmapped.push(key);
       continue;
@@ -3732,7 +3753,7 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
     params[key] = value;
     folded.push(key);
   }
-  const args = flattenedEnvelope
+  const args = flattenedEnvelope || flattenedEnvelopeNoContainer
     ? { name: record.name as string, args: params }
     : params;
   return {
