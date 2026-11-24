@@ -1,7 +1,7 @@
 /** Real transport -> proxy -> Session regression; only peer IO is in memory. */
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { Session, type AgentEvent } from '@cindy/maker-core';
+import { AgentNotAuthenticatedError, Session, type AgentEvent } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 import { createRemoteAgentHandle, type RemoteAgentHandleController, type RemoteAgentLink } from '../controller/proxyHandle';
 import { RemoteAgentRemoteError, RemoteAgentRunClient } from '../controller/runClient';
@@ -9,7 +9,7 @@ import type { RemoteAgentPoller } from '../controller/poller';
 import { ExecutorWorkspace } from '../executor/workspace';
 import { RemoteTurnTerminalOwnership } from '../turnLifecycle';
 
-function fixture(agentKind: 'codex' | 'claude-code' = 'codex', startupError?: RemoteAgentRemoteError) {
+function fixture(agentKind: 'codex' | 'claude-code' = 'codex', startupError?: Error) {
   let controller!: RemoteAgentHandleController;
   const restartRecovery = vi.fn();
   const deliver = (item: unknown) => client.onData(Buffer.from(JSON.stringify(item) + '\n'), false);
@@ -52,10 +52,14 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex', startupError?: Re
 }
 
 describe('remote stream close settles the product turn', () => {
-  // Main's stopped-open offer uses error object identity, not a generic timeout.
-  it('preserves the confirmed startup rejection identity for the existing offer handoff', async () => {
-    const error = new RemoteAgentRemoteError({ code: 'SUBSCRIPTION_ACCOUNT_LIMITED',
-      name: 'AgentStartupStoppedError', message: 'confirmed stopped startup' }, 'start');
+  // #12612 unit: the existing offer/auth/compatibility owners need the original
+  // semantic failure. These are not transport timeouts or generic refusals.
+  it.each([
+    new RemoteAgentRemoteError({ code: 'SUBSCRIPTION_ACCOUNT_LIMITED',
+      name: 'AgentStartupStoppedError', message: 'confirmed stopped startup' }, 'start'),
+    new AgentNotAuthenticatedError('codex'),
+    new Error('[REMOTE_AGENT_PEER_TOO_OLD] upgrade required'),
+  ])('preserves semantic preparation rejection identity ($message)', async error => {
     const f = fixture('codex', error);
     try {
       await expect(f.controller.handle.send({ type: 'user', content: 'not sent' })).rejects.toBe(error);

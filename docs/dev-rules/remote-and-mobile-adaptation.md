@@ -96,7 +96,8 @@ Device Link 的网络提示在防抖期间收到有效帧，就已取得该提�
 ## 远程 Agent 控制请求与发送取消（2026-11-18）
 
 正文派发与连接准备分别判定：`proxyHandle.sendLike` 的普通 `send` 分支在 `link.ensure()`（能力握手、原生重开、
-设置恢复）失败时，当前输入尚未进入 `callWithId`，即使该准备 RPC 带 `inFlight=true`，也返回
+设置恢复）遇到既有 `isRetryableLinkError` 判定的链路失败时，当前输入尚未进入 `callWithId`，
+即使该准备 RPC 带 `inFlight=true`，也返回
 既有的未派发结果，保留 Session 供显式重试，不因它启动正文的未知尾部排空。已确认的启动错误
 保留原错误对象，继续由原有 stopped-open offer 交接判定；没有 offer 不授予换机或重放权限。
 正文调用发出后的超时仍保留原始错误和接受未知语义。能力读取沿用原来最多六次的有界重试，
@@ -104,6 +105,9 @@ Device Link 的网络提示在防抖期间收到有效帧，就已取得该提�
 显式原线程重试，以及 `proxyHandleClose.test.ts` 的已发出正文超时。Goal 来源保留原始准备错误，
 继续由既有 Goal 失败路径置为 blocked，避免被当成供应商拒绝后自动重试整轮握手；
 `connectionPool.test.ts` 经真实 GoalController → Session → 远程 starter 验证六次超时后没有下一轮 caps。
+非链路准备失败保持原错误合同：组配额的 `ProviderGroupUsageLimitError.limit.resetAtMs`、
+授权拒绝、版本不兼容等交给原有处理者；不把这些业务拒绝吞成无结构的未派发结果。
+同文件经真实重连 open 验证已知／未知配额重置时间仍保留类型和元数据，正文没有派发。
 
 Device Link 的请求与执行诊断使用固定的远程 Agent 操作类别（如 `caps`、`open`、`call:send`），
 未知操作／方法不记录原值，不解码载荷或采集正文、凭证。超时日志与 INFO 诊断共用短请求号，

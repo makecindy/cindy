@@ -21,7 +21,7 @@ import {
 import { hostRewritesResumeId, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { ExecServerRelay } from '../controller/execServerRelay';
 import { RemoteAgentRunClient } from '../controller/runClient';
-import { decideProviderGroupFailure, providerGroupFailureSignals } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, providerGroupFailureSignals, ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
 import { RemoteExecutor } from '../executor/executor';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
@@ -1498,6 +1498,37 @@ describe('remote connection pool with a real host', () => {
         (call.args[0] as { content: string }).content)).toEqual(['first', 'not dispatched']);
     } finally {
       vi.useRealTimers();
+      intercept = null;
+      await session.close();
+    }
+  });
+
+  // #12612 unit: a real starter converts IPC startup quota into a local typed
+  // error. A bare proxy/startup-envelope test misses that conversion. The queue
+  // needs this type and reset metadata, with no second body dispatch.
+  it.each([null, 5_000_000])('preserves group quota metadata on reconnect (reset=%s)', async resetAtMs => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'quota-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      const remoteQuota = Object.assign(new Error(new ProviderGroupUsageLimitError({ resetAtMs }).message),
+        { code: 'IPC_ERROR' });
+      intercept = request => {
+        if (request.op === 'open') throw remoteQuota;
+        return undefined;
+      };
+      const result = await session.send('not dispatched').catch(error => error);
+      expect(result).toBeInstanceOf(ProviderGroupUsageLimitError);
+      expect(result.limit).toEqual({ resetAtMs });
+      expect(opens).toBe(2);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+    } finally {
       intercept = null;
       await session.close();
     }

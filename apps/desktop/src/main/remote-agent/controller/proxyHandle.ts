@@ -37,7 +37,7 @@ import { resolveExecutorShell } from '../executor/shell';
 import { describePermissionAction } from '@cindy/maker-shared';
 import { isProviderShareCredentialSessionApproval } from '../../../shared/providerShareCredentialConsent';
 import { encodeSendOptions, encodeUserMessage } from '../wire';
-import { RemoteAgentRemoteError, type RemoteAgentRunClient } from './runClient';
+import { isRetryableLinkError, RemoteAgentRemoteError, type RemoteAgentRunClient } from './runClient';
 import { localPlanReview, RemoteEventProjection } from './eventProjection';
 import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
 
@@ -447,11 +447,12 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     } catch (error) {
       // A caps/open/restore RPC can be in flight without this input ever reaching
       // callWithId below. Do not let Session fence/close this handle as though
-      // the send had an ambiguous tail. Confirmed startup errors retain their
-      // identity: Main's stopped-open offer is keyed by that exact error object.
+      // the send had an ambiguous tail. Only reclassify link failures: quota,
+      // auth and compatibility errors must reach their existing owners intact.
+      // Main's stopped-open offer is keyed by the exact startup error object.
       // Goal already blocks preparation errors; its provider-rejection result
       // instead schedules a continuation and would repeat the full handshake.
-      if (method !== 'send' || opts?.origin?.kind === 'goal'
+      if (method !== 'send' || opts?.origin?.kind === 'goal' || !isRetryableLinkError(error)
         || (error instanceof RemoteAgentRemoteError && error.phase === 'start')) throw error;
       deps.log?.warn('remote agent: connection preparation failed before turn dispatch', { error: String(error) });
       throw new TurnDispatchRejectedError(error instanceof Error ? error.message : String(error), { cause: error });
