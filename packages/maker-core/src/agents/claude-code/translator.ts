@@ -370,16 +370,23 @@ function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegme
   const knownSegments = new Set(ctx.turn.segmentByMessageId?.values());
   const indexBySegment = new Map(sdk.map((segment, index) => [segment.id, index]));
   const added = new Set<string>();
+  const soleParentByTask = new Map<string, string | undefined>();
   for (const [parent, taskId] of ctx.turn.subagentTasks) {
     if (!taskId) continue;
-    const hasAnonymousRequest = sdk.some(s => s.id?.endsWith(`:${parent}`) && !knownSegments.has(s.id));
+    soleParentByTask.set(taskId, soleParentByTask.has(taskId) ? undefined : parent);
+  }
+  // SDK segment IDs are claude:<sequence>:<parent>. Parent IDs may themselves contain colons.
+  const sdkParent = (id: string) => id.slice(id.indexOf(':', 'claude:'.length) + 1);
+  const anonymousParents = new Set(sdk.flatMap(s => s.id && !knownSegments.has(s.id) ? [sdkParent(s.id)] : []));
+  for (const [taskId, onlyParent] of soleParentByTask) {
+    // Reading transfers the whole owner batch, including receipts for resumed calls.
     const billing = ctx.getSubagentTaskUsage?.(taskId, ctx.getSdkSessionId())?.billing;
     if (!billing || billing.sdkSessionId !== ctx.getSdkSessionId()) continue;
     for (const request of billing.segments) {
       if (!request.id || added.has(request.id)) continue;
       const sdkId = ctx.turn.segmentByMessageId?.get(request.id);
-      if (!sdkId && hasAnonymousRequest) continue;
-      if (sdkId && !sdkId.endsWith(`:${parent}`)) continue;
+      const parent = sdkId ? sdkParent(sdkId) : onlyParent;
+      if (!parent || ctx.turn.subagentTasks.get(parent) !== taskId || (!sdkId && anonymousParents.has(parent))) continue;
       const index = sdkId ? indexBySegment.get(sdkId) : undefined;
       if (index === undefined) {
         merged.push({ ...request, id: `claude:proxy/${request.id}:${parent}` });

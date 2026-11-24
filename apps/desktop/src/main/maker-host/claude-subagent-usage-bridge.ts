@@ -74,51 +74,62 @@ function requestUserTexts(body: Record<string, unknown>): string[] {
   return texts;
 }
 
-/** Price only a complete provider response. Delta counters are snapshots and may omit
- * cache fields or repeat zero placeholders from the start frame. */
+const COUNT_FIELDS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const;
+type BillingUsage = Partial<Record<typeof COUNT_FIELDS[number], number>> & {
+  cacheCreate1hTokens?: number;
+  speed?: unknown;
+  tier?: unknown;
+};
+
+function validCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Provider usage frames are cumulative snapshots. An omitted field carries no new evidence. */
+function mergeBillingUsage(total: BillingUsage, usage: Record<string, unknown>): boolean {
+  for (const key of COUNT_FIELDS) {
+    const count = usage[key];
+    if (count === undefined) continue;
+    if (!validCount(count)) return false;
+    total[key] = Math.max(total[key] ?? 0, count);
+  }
+  if (usage.cache_creation != null) {
+    if (!isPlainObject(usage.cache_creation)) return false;
+    const count = usage.cache_creation.ephemeral_1h_input_tokens;
+    if (count !== undefined) {
+      if (!validCount(count)) return false;
+      total.cacheCreate1hTokens = Math.max(total.cacheCreate1hTokens ?? 0, count);
+    }
+  }
+  total.speed = usage.speed ?? total.speed;
+  total.tier = usage.service_tier ?? total.tier;
+  return true;
+}
+
 function recordBillingSegment(
   segments: Map<string, TurnUsageSegment>,
   message: Record<string, unknown> | null,
-  final: Record<string, unknown> | null,
+  usage: BillingUsage,
   requestedFast: boolean,
 ): void {
-  if (!message || !final || typeof message.id !== 'string' || !message.id ||
-      typeof message.model !== 'string' || !message.model.trim() || !isPlainObject(message.usage)) return;
-  const start = message.usage;
-  const speed = final.speed ?? start.speed ?? (requestedFast ? 'fast' : 'standard');
-  const tier = final.service_tier ?? start.service_tier;
+  if (!message || typeof message.id !== 'string' || !message.id ||
+      typeof message.model !== 'string' || !message.model.trim() || !isPlainObject(message.usage) ||
+      !validCount(message.usage.input_tokens) || usage.output_tokens === undefined) return;
+  const speed = usage.speed ?? (requestedFast ? 'fast' : 'standard');
+  const tier = usage.tier;
   if (speed !== 'standard' && speed !== 'fast') return;
   if (tier != null && tier !== 'standard' && tier !== 'priority' && tier !== 'batch' && tier !== 'default') return;
-  const validCount = (value: unknown): value is number =>
-    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-  if (!validCount(start.input_tokens) || !validCount(final.output_tokens)) return;
-  for (const field of ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']) {
-    if ((start[field] !== undefined && !validCount(start[field])) ||
-        (final[field] !== undefined && !validCount(final[field]))) return;
-  }
-  const inputCount = (key: string) => Math.max(numberField(start, key), numberField(final, key));
-  const cacheCreate = inputCount('cache_creation_input_tokens');
-  let cache1h = 0;
-  for (const ttl of [start.cache_creation, final.cache_creation]) {
-    if (ttl == null) continue;
-    if (!isPlainObject(ttl)) return;
-    const count = ttl.ephemeral_1h_input_tokens;
-    if (count === undefined) continue;
-    if (!validCount(count)) return;
-    cache1h = Math.max(cache1h, count);
-  }
+  const cacheCreate = usage.cache_creation_input_tokens ?? 0;
+  const cache1h = usage.cacheCreate1hTokens ?? 0;
   if (cache1h > cacheCreate) return;
   const id = message.id;
   if (segments.has(id) || segments.size >= MAX_SEGMENTS_PER_TASK) return;
-  // A terminal frame closes the request; omitted cache counters still need
-  // independent confirmation from the SDK's turn totals before pricing.
-  const complete = ['cache_read_input_tokens', 'cache_creation_input_tokens']
-    .every(field => start[field] !== undefined || final[field] !== undefined);
   segments.set(id, {
-    id, model: message.model, modelConfirmed: true, complete,
+    id, model: message.model, modelConfirmed: true,
+    complete: usage.cache_read_input_tokens !== undefined && usage.cache_creation_input_tokens !== undefined,
     priceVariant: speed === 'fast' || tier === 'priority' ? 'priority' : tier === 'batch' ? 'batch' : 'standard',
-    inputTokens: inputCount('input_tokens'), outputTokens: numberField(final, 'output_tokens'),
-    cacheReadTokens: inputCount('cache_read_input_tokens'), cacheCreateTokens: cacheCreate,
+    inputTokens: usage.input_tokens ?? message.usage.input_tokens, outputTokens: usage.output_tokens,
+    cacheReadTokens: usage.cache_read_input_tokens ?? 0, cacheCreateTokens: cacheCreate,
     cacheCreate1hTokens: cache1h,
   });
 }
@@ -351,7 +362,8 @@ export function createClaudeSubagentUsageResponseObserver(
     let latestOutputUsage: Record<string, unknown> | null = null;
 
     let message: Record<string, unknown> | null = null;
-    let finalUsage: Record<string, unknown> | null = null;
+    let billingUsage: BillingUsage = {};
+    let sawOutputUpdate = false;
     let responseError = false;
     const commitUsage = (complete = false): void => {
       if (usageCommitted) return;
@@ -367,8 +379,8 @@ export function createClaudeSubagentUsageResponseObserver(
         output_tokens: latestOutputUsage ? numberField(latestOutputUsage, 'output_tokens') : 0,
       };
       bridge.recordResponseUsage(taskId, usage);
-      if (billing && complete && !responseError) {
-        recordBillingSegment(billing.segments, message, finalUsage, billing.requestedFast);
+      if (billing && complete && sawOutputUpdate && !responseError) {
+        recordBillingSegment(billing.segments, message, billingUsage, billing.requestedFast);
       }
     };
 
@@ -383,14 +395,23 @@ export function createClaudeSubagentUsageResponseObserver(
       if (!data) return;
       if (data.type === 'error') responseError = true;
       const start = isPlainObject(data.message) ? data.message : null;
-      if (data.type === 'message_start') message = start;
-      if (data.type === 'message_delta' && isPlainObject(data.usage)) finalUsage = data.usage;
+      if (data.type === 'message_start') {
+        if (!message || message.id !== start?.id) {
+          billingUsage = {};
+          sawOutputUpdate = false;
+        }
+        message = start;
+      }
       const usage = start && isPlainObject(start.usage)
         ? start.usage
         : isPlainObject(data.usage)
           ? data.usage
           : null;
       if (usage) {
+        if (billing && (data.type === 'message_start' || data.type === 'message_delta')) {
+          if (!mergeBillingUsage(billingUsage, usage)) responseError = true;
+          if (data.type === 'message_delta' && validCount(usage.output_tokens)) sawOutputUpdate = true;
+        }
         const inputTokens = numberField(usage, 'input_tokens')
           + numberField(usage, 'cache_read_input_tokens')
           + numberField(usage, 'cache_creation_input_tokens');
@@ -426,7 +447,10 @@ export function createClaudeSubagentUsageResponseObserver(
         const body = parseJsonObject(buffer);
         if (body && isPlainObject(body.usage)) {
           message = body;
-          finalUsage = body.usage;
+          if (billing) {
+            sawOutputUpdate = validCount(body.usage.output_tokens);
+            if (!mergeBillingUsage(billingUsage, body.usage)) responseError = true;
+          }
           latestInputUsage = body.usage;
           latestOutputUsage = body.usage;
         }
