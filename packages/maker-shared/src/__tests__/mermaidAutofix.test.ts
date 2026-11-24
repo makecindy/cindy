@@ -85,6 +85,7 @@ describe('repairMermaidSource', () => {
     'A([before → "quoted ])" after → text])',
     'A([输入 (含括号) → 输出])',
     'A.([stadium → text])',
+    'A,([stadium → text])',
     "A'([stadium → text])",
     'A`([stadium → text])',
     'A[[outer [inner] → text]]',

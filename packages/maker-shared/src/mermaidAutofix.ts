@@ -105,7 +105,7 @@ function indexLabelEnds(line: string) {
 function replaceArrowsOutsideLabels(line: string): string {
   if (line.search(UNICODE_ARROW_RE) === -1) return line;
   // 先跳过完整引号段或节点形状，再继续同一行的边。未闭合形状沿用普通扫描。
-  const protectedStarts = /"[^"]*(?:"|$)|(?<=[\p{L}\p{N}\p{M}_.!?#$%*+/:&'`\\-])(?:\({2,3}|\(\[|\[[[(\/\\]|\{\{)/gu;
+  const protectedStarts = /"[^"]*(?:"|$)|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:\({2,3}|\(\[|\[[[(\/\\]|\{\{)/gu;
   let result = '';
   let start = 0;
   let labelEnds: ReturnType<typeof indexLabelEnds> | undefined;
@@ -197,7 +197,7 @@ function findShapeDataEnd(source: string, start: number): number {
 
 function repairOutsideShapeData(source: string, chartStart: number): string {
   // 形状属性使用 YAML 键值对，可在第一个键之前写注释或给键加引号。
-  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\})|"[^"]*"|"[^"\n]*|\|[^|\n]+\||[-.=]+[>xo]?|@\{(?=\s*(?:#[^\n]*\n\s*)*(?:[\w-]+|"[^"\n]+"|'[^'\n]+')[^\S\r\n]*:)|\({2,3}|\(\[|\[[[(\/\\]|\{\{|[({\[>]/gm;
+  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\})|"[^"]*"|"[^"\n]*|\|[^|\n]+\||[-.=]+[>xo]?|@\{(?=\s*(?:#[^\n]*\n\s*)*(?:[\w-]+|"[^"\n]+"|'[^'\n]+')[^\S\r\n]*:)|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:\([^()[\]{}"\n]*\)|\[[^()[\]{}"\n]*\]|\{[^()[\]{}"\n]*\}|\({2,3}|\(\[|\[[[(\/\\]|\{\{|[({\[>])/gmu;
   tokens.lastIndex = chartStart;
   const edgeLabelClosers = new Map([['--', /^--+[-xo>]$/], ['==', /^==+[=xo>]$/], ['-.', /^\.+-[xo>]?$/]]);
   let result = '';
@@ -220,9 +220,12 @@ function repairOutsideShapeData(source: string, chartStart: number): string {
         labelLineStart = source.lastIndexOf('\n', match.index) + 1;
         const newline = source.indexOf('\n', match.index);
         labelLineEnd = newline === -1 ? source.length : newline;
-        labelEnds = indexLabelEnds(source.slice(labelLineStart, labelLineEnd));
+        const labelLine = source.slice(labelLineStart, labelLineEnd);
+        // 只有可能改变边或属性扫描状态的行才需要索引。
+        labelEnds = /--|==|-\.|@\{/.test(labelLine) ? indexLabelEnds(labelLine) : undefined;
       }
-      const offsets = shapeEnd ? labelEnds!.shapeEnds.get(shapeEnd) : labelEnds!.bracketEnds.get(bracketEnd!);
+      if (!labelEnds) continue;
+      const offsets = shapeEnd ? labelEnds.shapeEnds.get(shapeEnd) : labelEnds.bracketEnds.get(bracketEnd!);
       const end = offsets![tokens.lastIndex - labelLineStart];
       if (end) tokens.lastIndex = labelLineStart + end;
       continue;
