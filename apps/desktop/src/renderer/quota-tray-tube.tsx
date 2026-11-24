@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { MenubarSourceCell } from '../shared/menubarQuota';
 
 // The Swift panel's TubeView and LiquidSurface (native/menubar/macos-menubar-helper.swift) on
 // Windows: the same surface shape, opening slosh, in-use ripple and hover nudge. Lengths are px,
 // times seconds; keep the numbers in step with the Swift ones.
-/** The 40px tube less the 3px well inset on each side (quota-tray.css). */
+/** The widest (40px) tube less the 3px well inset on each side (quota-tray.css). */
 const WELL_WIDTH = 34;
 const WELL_INSET = 3;
 const STAGGER = 0.06;
@@ -35,35 +36,50 @@ const randomSlosh = () => ({
  * (`second`: edges up, middle down), meeting the walls in a soft corner. Zero everywhere is a
  * flat surface; the lean and bow average to zero, so the level reads the same.
  */
-function surfacePath(height: number, phase: number, amplitude: number, tilt: number, second: number): string {
+function surfacePath(width: number, height: number, phase: number, amplitude: number, tilt: number, second: number): string {
   if (height <= 0) return '';
   const amp = Math.min(amplitude, height / 4);
-  const k = TAU / (WELL_WIDTH * 1.35);
+  const k = TAU / (width * 1.35);
   const y = (x: number) => {
-    const u = x / WELL_WIDTH;
+    const u = x / width;
     const wave = 0.65 * Math.sin(k * x + phase) + 0.35 * Math.sin(1.7 * k * x - 1.3 * phase);
     return amp * (1 + wave) - (tilt * (1 - 2 * u) + second * Math.cos(TAU * u));
   };
   const n = (value: number) => value.toFixed(2);
-  const corner = Math.min(4, height / 2, WELL_WIDTH / 4);
+  const corner = Math.min(4, height / 2, width / 4);
   // Drawn past the bottom: the well clips it, and a level change may resize the box mid-frame.
   const bottom = n(height + 200);
   let d = `M0 ${bottom}L0 ${n(y(0) + corner)}Q0 ${n(y(0))} ${n(corner)} ${n(y(corner))}`;
   for (let step = 1; step < 16; step++) {
-    const x = corner + (WELL_WIDTH - 2 * corner) * step / 16;
+    const x = corner + (width - 2 * corner) * step / 16;
     d += `L${n(x)} ${n(y(x))}`;
   }
-  const right = WELL_WIDTH - corner;
-  return `${d}L${n(right)} ${n(y(right))}Q${WELL_WIDTH} ${n(y(WELL_WIDTH))} ${WELL_WIDTH} ${n(y(WELL_WIDTH) + corner)}L${WELL_WIDTH} ${bottom}Z`;
+  const right = width - corner;
+  const edge = n(width);
+  return `${d}L${n(right)} ${n(y(right))}Q${edge} ${n(y(width))} ${edge} ${n(y(width) + corner)}L${edge} ${bottom}Z`;
 }
 
 export function Tube({ fill, index, active, visible, height, emphasized, level }: {
   fill: number; index: number; active: boolean; visible: boolean; height: number; emphasized: boolean; level: string;
 }) {
   const path = useRef<SVGPathElement>(null);
+  const well = useRef<HTMLSpanElement>(null);
+  // Many sources narrow the columns and the tubes with them (at most 40px, as in the Swift panel),
+  // so the surface is drawn to the well's own width.
+  const [wellWidth, setWellWidth] = useState(WELL_WIDTH);
   const motion = useRef({ opened: -Infinity, slosh: randomSlosh(), nudged: -Infinity, nudgeDirection: 1, rippleFrom: 0, rippleGoal: 0, rippleAt: -Infinity });
   const fraction = Math.max(0, Math.min(1, fill));
   const liquid = fraction > 0 ? Math.max(3, fraction * (height - WELL_INSET * 2)) : 0;
+
+  useLayoutEffect(() => {
+    const node = well.current;
+    if (!node) return;
+    const measured = (width: number) => setWellWidth(width > 0 ? width : WELL_WIDTH);
+    measured(node.getBoundingClientRect().width);
+    const observer = new ResizeObserver(([entry]) => measured(entry.contentRect.width));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (visible) Object.assign(motion.current, { opened: performance.now() / 1000, slosh: randomSlosh(), rippleFrom: 0, rippleGoal: 0 });
@@ -72,7 +88,7 @@ export function Tube({ fill, index, active, visible, height, emphasized, level }
   useEffect(() => {
     const m = motion.current;
     const reduced = matchMedia('(prefers-reduced-motion: reduce)');
-    const draw = (phase = 0, ripple = 0, tilt = 0, second = 0) => path.current?.setAttribute('d', surfacePath(liquid, phase, ripple, tilt, second));
+    const draw = (phase = 0, ripple = 0, tilt = 0, second = 0) => path.current?.setAttribute('d', surfacePath(wellWidth, liquid, phase, ripple, tilt, second));
     draw();
     if (!visible || !liquid || reduced.matches) return;
     const slosh = m.slosh;
@@ -145,10 +161,10 @@ export function Tube({ fill, index, active, visible, height, emphasized, level }
       cancelAnimationFrame(frame);
       source?.removeEventListener('pointerenter', onEnter);
     };
-  }, [visible, liquid, fraction, active, index]);
+  }, [visible, liquid, fraction, active, index, wellWidth]);
 
   return <div className="tube" data-best={emphasized} data-level={level}>
-    <span className="well"><i style={{ height: liquid }}><svg aria-hidden="true"><path ref={path}/></svg></i></span>
+    <span className="well" ref={well}><i style={{ height: liquid }}><svg aria-hidden="true"><path ref={path}/></svg></i></span>
   </div>;
 }
 
@@ -226,4 +242,35 @@ export function CountUp({ text, locale, visible, delay = 0 }: { text: string; lo
     return () => cancelAnimationFrame(frame);
   }, [text, locale, visible, delay]);
   return <span className="count"><span>{text}</span><span ref={live} aria-hidden="true">{text}</span></span>;
+}
+
+/**
+ * The value above a tube (the Swift panel's `valueLabel`): one line in a fixed 22px header, so
+ * every tube in the row starts at the same height. A value wider than its column (many sources)
+ * shrinks to fit, as SwiftUI's `minimumScaleFactor` does, instead of wrapping ("100" over "%"
+ * dropped that column's tube) or running into its neighbour ("¥90.20" over "13%").
+ */
+export function SourceValue({ source, locale, visible, delay }: {
+  source: MenubarSourceCell; locale: string; visible: boolean; delay: number;
+}) {
+  const box = useRef<HTMLElement>(null);
+  const content = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const outer = box.current;
+    const inner = content.current;
+    if (!outer || !inner) return;
+    // Layout widths ignore the scale itself, so fitting never feeds back into the measurement.
+    const fit = () => { inner.style.scale = String(Math.min(1, outer.clientWidth / Math.max(1, inner.offsetWidth))); };
+    fit();
+    // Also refits when the number font finishes loading or the column count changes.
+    const observer = new ResizeObserver(fit);
+    observer.observe(outer);
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, []);
+  const kind = !source.value ? 'label' : source.reserve ? 'reserve' : source.kind === 'balance' ? 'balance' : 'number';
+  return <b ref={box} className={kind === 'label' ? 'value' : 'value metric'} data-kind={kind}>
+    <span ref={content}>{!source.value ? source.valueLabel
+      : <><CountUp text={source.value} locale={locale} visible={visible} delay={delay}/>{source.valueUnit && <small>{source.valueUnit}</small>}</>}</span>
+  </b>;
 }

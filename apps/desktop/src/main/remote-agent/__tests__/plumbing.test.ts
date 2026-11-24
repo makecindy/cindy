@@ -574,7 +574,7 @@ describe('confirmations raised on this computer', () => {
     expect(await controller.confirm(request)).toBe(false);
     expect(credentialConfirmation({ kind: 'exec', command: 'cat .env', cwd: root }, 'x')).toMatchObject({
       toolName: 'Bash',
-      input: { command: 'cat .env' },
+      input: { command: 'cat .env', cwd: root },
     });
   });
 

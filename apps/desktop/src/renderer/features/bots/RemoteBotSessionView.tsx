@@ -169,10 +169,13 @@ function RemoteBotSessionGate() {
   const homeDevice = cloudActor?.homeDeviceId
     ? deviceList?.find((device) => device.deviceId === cloudActor.homeDeviceId)
     : undefined;
+  // The device directory can confirm the home is reachable before its retained roster row updates.
+  const homeConfirmedOnline = deviceListState.status === 'ready' && homeDevice?.online === true
+    && homeDevice.remoteControlEnabled && homeDevice.controlEnabled;
   // A missing teammate row is not evidence that its home computer is offline. Only
   // classify it as offline when the live device directory says so, or when a settled
   // directory has no row and the cloud snapshot itself carries an explicit offline state.
-  const homeOffline = !!cloudActor && (
+  const homeOffline = !!cloudActor && !homeConfirmedOnline && (
     bot ? (!bot.online && bot.connectionKnown !== false)
       : homeDevice ? !homeDevice.online
         : deviceListState.status === 'ready' && cloudActor.homeDevice?.online === false
@@ -228,15 +231,17 @@ function RemoteBotSessionGate() {
       <p className="text-14 text-[var(--text-secondary)]">
         {failed
           ? t('bots.sessionLoadFailedDescription')
-          : connecting && !bot?.online
+          // Undetermined right after launch or waking reads "connecting"; a directory that
+          // already confirms the home online keeps main's preparation copy (#10758).
+          : connecting && !bot?.online && !homeConfirmedOnline
             ? t('ccAgent.sidebar.machineSwitcher.connecting')
-            : bot && !bot.online
+            : bot && !bot.online && !homeConfirmedOnline
               ? t('bots.remote.offlineDescription', { name: bot.name, device: bot.deviceName })
-              : !sessionId
+              : !bot?.online || !sessionId
                 ? t('bots.remote.preparing')
                 : t('ccAgent.common.loading')}
       </p>
-      {!failed && (bot?.online ? sessionId : connecting) ? <Spinner size={18} /> : null}
+      {!failed && (bot?.online ? sessionId : connecting && !homeConfirmedOnline) ? <Spinner size={18} /> : null}
       {failed ? (
         <Button
           variant="secondary"

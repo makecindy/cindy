@@ -11,9 +11,22 @@ export default {
   },
   cases: {
     default: { about: 'Legacy choice migration → one Cindy across computers → unrestricted → single/multiple/reset; archived creator avatar' },
+    'task-info': { about: 'Hide the three row identifiers independently in the task information menu' },
     'archived-reminder': { about: 'Display settings → Task status → Archived shows reminder at every level; Active/All clear it' },
   },
   async check(page, ui) {
+    if (ui.case === 'task-info') {
+      const info = page.getByRole('menuitem').filter({ hasText: await ui.t('ccAgent.sidebar.taskInfoHeading') }).first();
+      await info.press('ArrowRight');
+      for (const field of ['harness', 'project', 'teammate']) {
+        const item = page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.taskInfo.' + field), exact: true });
+        assert.equal(await item.getAttribute('aria-checked'), 'true');
+        await item.click();
+        assert.equal(await item.getAttribute('aria-checked'), 'false');
+      }
+      await ui.capture('hidden-identifiers');
+      return;
+    }
     if (ui.case === 'archived-reminder') {
       const statusRow = page.getByRole('menuitem').filter({ hasText: await ui.t('ccAgent.sidebar.taskStatusHeading') }).first();
       await statusRow.press('ArrowRight');

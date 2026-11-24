@@ -778,7 +778,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           workingDir: startOpts.workingDir,
           ...(startOpts.makerMemoryScopeKey ? { memoryScopeKey: startOpts.makerMemoryScopeKey } : {}),
           memoryEnabled: startOpts.makerMemoryEnabled === true,
-          ...(startOpts.botRuntimeProfile?.mcpPolicy ? { botMcpPolicy: startOpts.botRuntimeProfile.mcpPolicy } : {}),
+          // V2 teammates (projectContext) use the ordinary task's MCP surface; their policy is a snapshot only.
+          ...(isolatedBotProfile(startOpts.botRuntimeProfile)?.mcpPolicy ? { botMcpPolicy: isolatedBotProfile(startOpts.botRuntimeProfile)!.mcpPolicy } : {}),
           vendorOptions,
           mcpCallerKind: 'root',
           mcpCallerAttested: true,

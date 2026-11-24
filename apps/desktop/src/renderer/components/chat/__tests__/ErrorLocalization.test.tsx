@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, act } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
+import { MemoryRouter } from 'react-router-dom';
 import { SUPPORTED_LOCALES } from '../../../../shared/locale';
 import es from '@/i18n/locales/es/common.json';
 import fr from '@/i18n/locales/fr/common.json';
@@ -24,7 +25,10 @@ vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: [], r
 vi.mock('@/hooks/useCodexAuth', () => ({ useCodexAuth: () => ({ state: { kind: 'disconnected' } }), isChatGptConnectionConnected: () => false }));
 import { ErrorBanner } from '../ErrorBanner';
 import { ErrorMessageCard } from '../ErrorMessageCard';
+import { UserMessage } from '../UserMessage';
 import { ErrorTailErrorBanner } from '../InterruptedTurnBanner';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
+import { Tooltip } from '@/components/ui/tooltip';
 import { remoteErrorMessageForBanner, handleStreamEvent, EMPTY_SESSION_STATE } from '@/lib/makerChatStore';
 import { buildErrorDiagnosisPrompt, prefillErrorDiagnosisDraft } from '@/lib/errorDiagnosisPrompt';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
@@ -37,6 +41,39 @@ const raw = JSON.stringify({ error: {
   type: 'invalid_request_error', code: 'unsupported_value', param: 'parallel_tool_calls',
 } });
 afterEach(cleanup);
+
+// #12240, unit: the live banner must explain both options for a retained
+// queue head. The same network error without that recovery cannot promise
+// that the original input is still waiting to be sent.
+it.each([true, false])('describes the original input only for a queue-head retry (%s)', async queuedSendRecovery => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>
+    <ErrorBanner error="LAZY_CREATE_FAILED: [REMOTE_AGENT_UNAVAILABLE] not online within 1500ms"
+      agentKind="codex" agentDeviceId="other-computer" queuedSendRecovery={queuedSendRecovery}
+      retryText="original input" onRetry={retry} />
+  </I18nextProvider>);
+  const hint = screen.queryByText('Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.');
+  expect(Boolean(hint)).toBe(queuedSendRecovery);
+  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.retry }));
+  expect(retry).toHaveBeenCalledExactlyOnceWith('original input');
+});
+
+// L343 / unit: a short input skipped after a context overflow uses the same
+// notice as any skipped input. Exercise the real bubble with its locale bundle.
+it('shows the context-full notice on a skipped short input', async () => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const { container } = render(<I18nextProvider i18n={i18n}><MemoryRouter><Tooltip.Provider>
+    <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} workingDir="" content="继续"
+      inputNotice="oversized-input-skipped" />
+  </Tooltip.Provider></MemoryRouter></I18nextProvider>);
+  expect(screen.getByText('继续')).toBeTruthy();
+  const notice = container.querySelectorAll('[data-input-notice]');
+  expect(notice).toHaveLength(1);
+  expect(notice[0].textContent).toBe('上下文已满，这条消息未能处理。后面的消息会继续按顺序处理。');
+});
 
 it.each(['live', 'history'] as const)('reports a clean Codex transport exit as an interruption in %s', async surface => {
   const i18n = createInstance();

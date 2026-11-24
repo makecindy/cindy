@@ -228,6 +228,14 @@ export function createStagePendingUserRuntimeAxis(ports: {
       assertCurrent();
     }
     if (intent.sameAgentSelection) {
+      if (intent.targetAgentKind === 'claude-code' || intent.targetAgentKind === 'codex') {
+        updated.credentialSelectionAxes = {
+          effort: patch.effort !== undefined ||
+            (intent.credentialSelectionAxes?.effort ?? (!intent.configStaged && intent.effort !== undefined)),
+          fastMode: patch.fastMode !== undefined ||
+            (intent.credentialSelectionAxes?.fastMode ?? (!intent.configStaged && intent.fastMode !== undefined)),
+        };
+      }
       return agentSwitchDeps.selectSameAgentModel!(sessionId, updated, false);
     }
     agentSwitchPending.set(sessionId, updated);
@@ -284,6 +292,8 @@ export function createSetSessionEffort(ports: {
       assertOwnerCurrent();
       assertSharedTaskCurrent.admit();
       await persistSessionFields(sessionId, { effort });
+      assertOwnerCurrent();
+      getPendingCredentialSwitchHolder()?.noteCommittedAxis(sessionId, { effort: true });
       await updateScheduledPreference(sessionId, { effort: effort as ScheduledModelSelection['effort'] });
       if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
     };
@@ -497,6 +507,8 @@ export function createSetSessionFastMode(ports: {
       assertOwnerCurrent();
       assertSharedTaskCurrent.admit();
       await persistSessionFields(sessionId, { fastMode: enabled });
+      assertOwnerCurrent();
+      getPendingCredentialSwitchHolder()?.noteCommittedAxis(sessionId, { fastMode: enabled });
       await updateScheduledPreference(sessionId, { fastMode: enabled });
       if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
     };

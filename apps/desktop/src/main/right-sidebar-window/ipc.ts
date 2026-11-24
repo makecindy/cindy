@@ -11,6 +11,7 @@ import type { BrowserWindow } from 'electron';
 import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
 import { MAKER_INVOKE, MAKER_SEND } from '../maker-ipc/channels.js';
+import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import type {
@@ -28,6 +29,8 @@ import {
   type RsbWindowTabHandoff,
 } from '../../shared/rightSidebarWindow.js';
 import { parseConversationSearchJump } from '../../shared/conversationSearchJump.js';
+import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
+import { isPluginInstanceKey } from '../../shared/pluginIdentity.js';
 import { hasActiveRsbNativePopupSurfaces } from '../rsb-browser-bridge/native-popup-surfaces.js';
 import type { RsbWindowController } from './controller.js';
 
@@ -128,7 +131,23 @@ function parseCommand(raw: unknown): RsbWindowCommand {
     if (typeof r.url !== 'string' || r.url.length === 0) {
       throwIpcError('INVALID_PARAMS', 'command.url required');
     }
-    return { type: r.type, sessionId: r.sessionId, url: r.url };
+    if (r.type === 'open-mail-preview' || r.pluginPreview === undefined) {
+      return { type: r.type, sessionId: r.sessionId, url: r.url };
+    }
+    const preview = requireObject(r.pluginPreview, 'command.pluginPreview');
+    if (!isPluginInstanceKey(preview.instanceId) || !isDataOwnerPushStamp(preview.ownerStamp) ||
+        (preview.reuseExisting !== undefined && preview.reuseExisting !== true)) {
+      throwIpcError('INVALID_PARAMS', 'Invalid plugin preview context');
+    }
+    const { dataOwnerId, ownerGeneration } = preview.ownerStamp;
+    return {
+      type: r.type, sessionId: r.sessionId, url: r.url,
+      pluginPreview: {
+        instanceId: preview.instanceId,
+        ownerStamp: { dataOwnerId, ownerGeneration },
+        ...(preview.reuseExisting === true ? { reuseExisting: true } : {}),
+      },
+    };
   }
   if (r.type === 'open-mail-card') {
     if (typeof r.callId !== 'string' || !r.callId || r.callId.length > 128) {
@@ -304,10 +323,13 @@ function parseCommandRouteRequest(raw: unknown): RsbWindowCommandRouteRequest {
   if (request.userInitiated !== undefined && typeof request.userInitiated !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'request.userInitiated must be boolean');
   }
+  const command = parseCommand(request.command);
+  const userInitiated = command.type === 'open-web-browser' && command.pluginPreview
+    ? false : request.userInitiated;
   return {
-    command: parseCommand(request.command),
+    command,
     allowOpen: request.allowOpen,
-    ...(request.userInitiated === undefined ? {} : { userInitiated: request.userInitiated }),
+    ...(userInitiated === undefined ? {} : { userInitiated }),
   };
 }
 
@@ -489,6 +511,12 @@ export function registerRsbWindowIpc(opts: {
     if (!main || main.isDestroyed() || event.sender !== main.webContents) {
       log.warn('RSB_WINDOW_SEND_COMMAND from non-main-window sender, dropped');
       return 'stale-context';
+    }
+    if (request.command.type === 'open-web-browser' && request.command.pluginPreview) {
+      const { ownerStamp } = request.command.pluginPreview;
+      const current = getActiveDataOwnerPushStamp();
+      if (isAppSessionBoundaryPending() || ownerStamp.dataOwnerId !== current.dataOwnerId ||
+          ownerStamp.ownerGeneration !== current.ownerGeneration) return 'stale-context';
     }
     return controller.routeCommand(request);
   });

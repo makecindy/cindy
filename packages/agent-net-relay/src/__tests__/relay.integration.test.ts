@@ -560,6 +560,49 @@ describe('independent V2 relay', () => {
     await a.request('DELETE', '/devices/second');
     await expect(a.request('DELETE', '/devices/first')).rejects.toMatchObject({ code: 'OWNER_CANNOT_BE_REMOVED' });
   });
+  // Bug (2026-11-23): a device removed in Cindy could never enroll on the official network again, with no way back.
+  // Now it rejoins when it asks to itself; without asking it stays out, and its certificate from before the removal stays void.
+  // Minimal input: enroll, remove, enroll again without and then with `rejoin`.
+  it('lets a removed device rejoin only when it asks to and keeps its certificate from before the removal void', async () => {
+    const root = generateKeyPairSync('ed25519').privateKey, rootPublicKey = publicBytes(root);
+    const identities: Record<string, Identity> = { first: generateIdentity('first'), phone: generateIdentity('phone') };
+    let signedAt: number | undefined; // a replica whose clock runs behind
+    const f = await fixture({ mode: 'official', bootstrap: undefined, enroll: async (req) => {
+      const identity = identities[String(req.headers['x-test-device'])];
+      const issueWithSerial = (serial?: string) => issueCertificate(root, { networkId: 'account:one', subject: 'account:one', identity, role: 'owner', now: signedAt, serial });
+      const certificate = issueWithSerial();
+      return { certificate, rootPublicKey, networkId: certificate.networkId, name: 'Account network', deviceName: identity.deviceId, issueWithSerial };
+    } });
+    const enroll = async (device: string, body: Record<string, unknown> = {}) => {
+      const response = await fetch(f.relay.url + API + '/enroll', { method: 'POST', headers: { 'x-test-device': device }, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() as { certificate: ReturnType<typeof issueCertificate>; error?: { code: string } } };
+    };
+    const first = new AgentNetClient(f.relay.url, identities.first, (await enroll('first')).body.certificate, rootPublicKey);
+    const beforeCertificate = (await enroll('phone')).body.certificate;
+    const before = new AgentNetClient(f.relay.url, identities.phone, beforeCertificate, rootPublicKey);
+    await first.request('PATCH', '/devices/phone', { name: 'My phone' });
+    await first.request('DELETE', '/devices/phone');
+    await expect(before.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
+    expect(await enroll('phone')).toMatchObject({ status: 403, body: { error: { code: 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL' } } });
+    expect((await first.directory()).map((d) => d.certificate.deviceId)).toEqual(['first']);
+    // Review (Greptile P1): a rejoin certificate not newer than the one held before the removal is refused, so
+    // notBefore never lets that pre-removal certificate pass again.
+    signedAt = beforeCertificate.issuedAt - 1;
+    expect(await enroll('phone', { rejoin: true })).toMatchObject({ status: 409, body: { error: { code: 'CERTIFICATE_NOT_NEWER' } } });
+    await expect(before.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
+    signedAt = undefined;
+
+    await new Promise((resolve) => setTimeout(resolve, 5)); // a strictly newer certificate
+    const rejoined = await enroll('phone', { rejoin: true });
+    expect(rejoined.status).toBe(200);
+    const after = new AgentNetClient(f.relay.url, identities.phone, rejoined.body.certificate, rootPublicKey);
+    expect((await after.directory()).map((d) => d.certificate.deviceId).sort()).toEqual(['first', 'phone']);
+    expect((await first.directory()).find((d) => d.certificate.deviceId === 'phone')?.name).toBe('My phone');
+    await expect(before.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
+    // Asking to rejoin does not let new keys take over a device that was never removed.
+    identities.first = generateIdentity('first');
+    expect(await enroll('first', { rejoin: true })).toMatchObject({ status: 403, body: { error: { code: 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL' } } });
+  });
   // §5.5: another account gets its own network on a shared relay. Only the relay owner admits or revokes it,
   // and neither side reaches the other's devices. Minimal input: one invite, one approval, one revocation.
   it('admits another account into an isolated network only after relay-owner approval and revokes it', async () => {

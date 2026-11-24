@@ -153,6 +153,7 @@ export function createHostContextRecovery(deps: {
       isRemoteAuthRetry: false,
       isGatewayProxyTokenRecovery: terminal.isGatewayProxyTokenRecovery,
       autoResumeSuppressesPersist: deps.isErrorSuppressed?.(terminal.session.id, terminal.event) === true,
+      inputClientId: typeof terminal.fields.inputClientId === 'string' ? terminal.fields.inputClientId : undefined,
       // A held terminal reserves no row id, as on the desktop (sessionEventDelivery.ts).
       persistId: undefined,
     };
