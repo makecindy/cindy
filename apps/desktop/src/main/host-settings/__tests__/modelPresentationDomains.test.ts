@@ -62,6 +62,22 @@ describe('model visibility, engines and favorites through the app', () => {
     expect(await readModelPresentationDomain('modelFavorites')).toMatchObject({ value: { entries: [{ harness: 'codex', effort: 'low', fast: true }] } });
   });
 
+  // Unit: each change moves the visibility mirror the model guard watches; the guard is checked
+  // once, before the first change, so a save of several models completes and only the owner is
+  // checked between changes.
+  it('saves several visibility changes under a guard that watches the visibility mirror', async () => {
+    const seen = JSON.stringify(window.visibility);
+    const guard = vi.fn(() => { if (JSON.stringify(window.visibility) !== seen) throw new Error('CONFLICT'); });
+    const owner = vi.fn();
+    await commitModelPresentationDomain('modelVisibility', { set: { entries: [
+      { harness: 'codex', providerId: 'xd', modelId: 'shown', enabled: false },
+      { harness: 'codex', providerId: 'xd', modelId: 'hidden', enabled: false },
+    ] }, clear: [] }, guard, owner);
+    expect(window.visibility).toEqual({ 'codex:xd:shown': false, 'codex:xd:hidden': false });
+    expect(guard).toHaveBeenCalledOnce();
+    expect(owner).toHaveBeenCalledTimes(2);
+  });
+
   it('makes visibility match the list, resetting what the list drops', async () => {
     await commitModelPresentationDomain('modelVisibility', { set: { entries: [{ harness: 'codex', providerId: 'xd', modelId: 'shown', enabled: false }] }, clear: [] }, current);
     expect(window.visibility).toEqual({ 'codex:xd:shown': false });

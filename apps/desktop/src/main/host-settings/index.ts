@@ -122,7 +122,7 @@ export async function updateHostSettings(caller: HostSettingsCaller, input: Host
           const after = await inspectDomain(input.domain, input.workspaceId);
           revision = after.status === 'ready' ? after.revision : undefined;
         } catch { revision = undefined; }
-      } else if (modelAdapter && isModelSettingsDomain(change.domain)) revision = (await modelAdapter.commit(change.domain, change, options)).revision;
+      } else if (modelAdapter && isModelSettingsDomain(change.domain)) revision = (await modelAdapter.commit(change.domain, change, options, assertCurrent)).revision;
       else if (isAdditionalSettingsDomain(change.domain)) {
         const result = await commitAdditionalSettings(change.domain, change, options, input.workspaceId);
         revision = result.revision; applicationFailed = result.applicationFailed === true;

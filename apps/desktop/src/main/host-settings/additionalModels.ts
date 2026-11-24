@@ -139,8 +139,11 @@ export async function validateModelSettingsChange(domain: ModelSettingsDomain, c
   }
   return { choices, assertCurrent };
 }
-export async function commitModelSettings(domain: ModelSettingsDomain, change: { set: Values; clear: string[] }, options: OverrideSettingsCommitOptions): Promise<State & { status: 'ready' }> {
-  if (isModelPresentationDomain(domain)) return commitModelPresentationDomain(domain, change, () => options.assertCurrent?.());
+export async function commitModelSettings(domain: ModelSettingsDomain, change: { set: Values; clear: string[] }, options: OverrideSettingsCommitOptions,
+  assertOwner?: () => void): Promise<State & { status: 'ready' }> {
+  // Saving these changes what the model guard in `options.assertCurrent` watches: it is checked
+  // before the first change, then only the owner.
+  if (isModelPresentationDomain(domain)) return commitModelPresentationDomain(domain, change, () => options.assertCurrent?.(), assertOwner);
   if (isModelPreferenceDomain(domain)) return commitModelPreferences(domain, change, options);
   if (isImSettingsDomain(domain)) return commitImSettings(domain, change, options);
   // subagentModel and auxiliaryModel are saved through their settings sections.

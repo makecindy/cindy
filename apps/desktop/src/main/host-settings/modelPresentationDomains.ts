@@ -95,20 +95,24 @@ export async function setModelVisibility(target: { harness: Harness; providerId:
 const sameFavorite = (item: RemoteModelFavorite, entry: Entry) => item.providerId === entry.providerId && item.modelId === entry.modelId
   && item.agent === engineOf(entry.harness) && (item.effort ?? null) === (entry.effort ?? null) && (item.fast !== undefined) === (entry.fast === true);
 
-/** The whole list for a domain, applied one change at a time, then read back. */
+/**
+ * The whole list for a domain, applied one change at a time, then read back. Each change moves what
+ * `assertCurrent` may watch (the visibility mirror, engines, favourites), so it is checked once,
+ * before the first change; between changes only `assertOwner` is.
+ */
 export async function commitModelPresentationDomain(domain: ModelPresentationDomain, change: { set: Values; clear: string[] },
-  assertCurrent: () => void): Promise<State & { status: 'ready' }> {
+  assertCurrent: () => void, assertOwner: () => void = assertCurrent): Promise<State & { status: 'ready' }> {
   const desired = (change.clear.includes('entries') ? [] : change.set.entries ?? []) as Entry[];
   const current = await readValues(domain);
   assertCurrent();
   if (domain === 'modelVisibility') {
     const wanted = new Map(desired.map(entry => [visibilityKey(entry.harness, entry.providerId, entry.modelId), entry]));
     for (const entry of current.value.entries as Entry[]) {
-      if (!wanted.has(visibilityKey(entry.harness, entry.providerId, entry.modelId))) { await setModelVisibility(entry, null); assertCurrent(); }
+      if (!wanted.has(visibilityKey(entry.harness, entry.providerId, entry.modelId))) { await setModelVisibility(entry, null); assertOwner(); }
     }
     const before = new Map((current.value.entries as Entry[]).map(entry => [visibilityKey(entry.harness, entry.providerId, entry.modelId), entry.enabled]));
     for (const [key, entry] of wanted) {
-      if (before.get(key) !== entry.enabled) { await setModelVisibility(entry, entry.enabled === true); assertCurrent(); }
+      if (before.get(key) !== entry.enabled) { await setModelVisibility(entry, entry.enabled === true); assertOwner(); }
     }
   } else if (domain === 'modelEngines') {
     const wanted = new Map(desired.map(entry => [engineKey(entry.providerId, entry.modelId), entry]));
@@ -116,20 +120,20 @@ export async function commitModelPresentationDomain(domain: ModelPresentationDom
     const save = async (providerId: string, modelId: string, agent: Engine | null) => {
       const engines = (await manageAppPreferences('model-engine', undefined, undefined, { modelEngine: { providerId, modelId, agent } })).modelEngines ?? {};
       if ((engines[engineKey(providerId, modelId)] ?? null) !== agent) throw new HostSettingsError('SAVE_FAILED');
-      assertCurrent();
+      assertOwner();
     };
     for (const [key, entry] of before) if (!wanted.has(key)) await save(entry.providerId, entry.modelId, null);
     for (const [key, entry] of wanted) if (before.get(key)?.harness !== entry.harness) await save(entry.providerId, entry.modelId, engineOf(entry.harness));
   } else {
     let favorites = current.favorites!;
     for (const item of favorites) {
-      if (!desired.some(entry => sameFavorite(item, entry))) { favorites = await requestModelFavorites({ kind: 'remove', expected: item }); assertCurrent(); }
+      if (!desired.some(entry => sameFavorite(item, entry))) { favorites = await requestModelFavorites({ kind: 'remove', expected: item }); assertOwner(); }
     }
     for (const entry of desired) {
       if (favorites.some(item => sameFavorite(item, entry))) continue;
       favorites = await requestModelFavorites({ kind: 'add', item: { providerId: entry.providerId, modelId: entry.modelId, agent: engineOf(entry.harness),
         ...(entry.effort ? { effort: entry.effort } : {}), ...(entry.fast ? { fast: true as const } : {}) } });
-      assertCurrent();
+      assertOwner();
     }
   }
   const after = await readModelPresentationDomain(domain);
