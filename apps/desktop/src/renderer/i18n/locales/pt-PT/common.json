@@ -2846,7 +2846,8 @@
         "errorBusy": "Já está em curso um envio. Aguarde.",
         "errorFailed": "O envio dos registos falhou. Verifique a sua rede e tente novamente.",
         "unavailableNotConfigured": "O envio de registos não está configurado nesta compilação.",
-        "unavailableNoConsent": "Tem de aceitar primeiro a Política de Privacidade."
+        "unavailableNoConsent": "Tem de aceitar primeiro a Política de Privacidade.",
+        "consentPrompt": "Antes de enviar, lê a <policy>Política de Privacidade</policy> e seleciona <accept>Aceitar</accept>."
       },
       "openLogsDirError": "Não foi possível abrir o diretório de registos",
       "autoUpdateLabel": "Instalar atualizações durante a inatividade",

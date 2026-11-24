@@ -2429,6 +2429,7 @@ interface ElectronAPI {
    * `LOG_UPLOAD_EMPTY`(采到 0 条)/ `LOG_UPLOAD_FAILED`(网络)/ `LOG_UPLOAD_BUSY`。
    */
   uploadLogsNow: () => Promise<LogUploadResult>;
+  acceptManualLogUploadConsent: (policyVersion: string) => Promise<LogUploadSettingsPayload>;
   onLogUploadSettingsChange: (callback: (payload: LogUploadSettingsPayload) => void) => () => void;
 
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──

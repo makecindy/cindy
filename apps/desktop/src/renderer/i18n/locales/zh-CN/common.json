@@ -2778,7 +2778,8 @@
         "errorBusy": "已有一次上传正在进行，请稍候",
         "errorFailed": "日志上传失败，请检查网络后重试",
         "unavailableNotConfigured": "当前版本未配置日志上传。",
-        "unavailableNoConsent": "需要先同意《隐私政策》。"
+        "unavailableNoConsent": "需要先同意《隐私政策》。",
+        "consentPrompt": "上传前请阅读<policy>《隐私政策》</policy>并<accept>同意</accept>。"
       },
       "openLogsDirError": "打开日志目录失败",
       "autoUpdateLabel": "空闲时自动安装更新",
