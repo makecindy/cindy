@@ -233,6 +233,7 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 ## 已接入
 
 - `capabilities/models/create/list/get/setModel/send/getRun/listRuns/readMessages/cancel/setHidden/archive`。
+- `capabilities().runProgress:true` 支持按本轮输入分页读取完整的进展文本，详见[插件任务进展协议](protocol-compatibility/plugin-task-run-progress.md)。
 - `capabilities().runPreview:true`（2026-11-17，未发布）：`getRun` 在 run 为 running 且任务当前执行仍是该 run 时可带 `preview:{text}`，取本机正在输出、尚未落库的那一段文字，去内部引用标记、最多 32768 字符；工具调用后重置，不是最终输出，不写回执，`listRuns` 不带。协议见 [插件任务流式预览](protocol-compatibility/plugin-task-run-preview.md)。
 - `archive({taskId})` 归档本插件自建的空闲本地任务（有执行中或排队输入时返回 `TASK_BUSY`），走与侧栏归档相同的 `patchSessionMetaInDb` 路径；可逆（用户可恢复），不提供删除。归档后的任务由「存储空间 → 数据库清理」按既有规则处理。
 - create 可传 `hidden:true`、`setHidden({taskId, hidden})` 切换，`get`/`list` 快照恒返回 `hidden` 布尔值；仅身份卡声明 `agent.hiddenTasks: true`（必须同时 `agent.tasks: true`）时可用，见下文「后台任务」。

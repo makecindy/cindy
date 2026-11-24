@@ -7,6 +7,17 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 桌面后台只读通道的缺失回执
+
+桌面控制端按窗口、对端和通道记住只读接口的明确缺失，不记业务结果，不用版本号猜能力。
+资源列表、历史查询、调度列表及侧栏运行索引在正常桌面上必须注册；调度服务未就绪要等已有
+readiness，不能因为尚未过启动画面而向控制端报“没有 handler”。只认解开 Electron 包装后
+与本次通道完全匹配的 `[NOT_FOUND] no local IPC handler for channel '<channel>'`。
+对象不存在、通道不获准、Host 模式不支持、权限拒绝、背压及超时均原样返回，下次读取仍发送。
+延迟注册的插件引擎列表不记缺失，以便同一连接在启动完成后读取。对端重连、版本或已协商能力变化后可再次探测，
+不增加定时器、不重开其它设备连接。旧端无需升级；手机版不走 Electron 后台刷新入口。
+回归：Desktop preload 的 `remoteReadBridge.test.ts`。
+
 ## 远程模型目录统一读取口径（2026-11-23）
 
 同一台电脑、同一份分享的模型目录在各入口给出一致结论，不再因各自的缓存与等待时长而一处有、一处无：

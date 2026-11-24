@@ -353,6 +353,7 @@ export interface GetMessagesParams {
   toMs: number | null;
   agentKind: HistoryAgentKind | null;
   roles: HistoryRole[] | null;
+  pluginProgressInputId?: string;
   includeRewound: boolean;
   limit: number;
   cursor: HistoryCursor | null; // (messages.createdAt(ms), messages.rowid); id remains for legacy cursors
@@ -446,6 +447,11 @@ export async function getMessagesForHistory(
   }
   if (params.fromMs !== null) conds.push(gte(messages.createdAt, params.fromMs));
   if (params.toMs !== null) conds.push(lt(messages.createdAt, params.toMs));
+  if (params.pluginProgressInputId !== undefined) {
+    conds.push(eq(messages.role, 'assistant'),
+      sql`json_extract(${messages.agentMeta}, '$.pluginProgressInputId') = ${params.pluginProgressInputId}`,
+      sql`json_extract(${messages.agentMeta}, '$.failedSamplingAttempt') IS NULL`);
+  }
   if (params.roles !== null && params.roles.length > 0) {
     conds.push(inArray(messages.role, params.roles));
   }
