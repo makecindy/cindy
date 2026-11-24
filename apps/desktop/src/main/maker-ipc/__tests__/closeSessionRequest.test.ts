@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import {
+  createContextClearSessionClose,
   handleCloseSessionRequest,
   parseCloseSessionOptions,
   type CloseSessionRequestDeps,
@@ -73,5 +74,78 @@ describe('handleCloseSessionRequest', () => {
 
     await expect(handleCloseSessionRequest(deps, 's1', undefined)).rejects.toThrow('boom');
     expect(deps.cleanupPendingInteractions).not.toHaveBeenCalled();
+  });
+});
+
+
+// #12516: exercise the request handlers shared by the two production IPCs.
+// Session.close unit coverage alone cannot catch a stale clear taking down a newer runtime.
+// The minimal input is one captured clear and one soft-close request with a changed owner or timestamp.
+describe('local Pi context clear and close', () => {
+  const sessionId = 's1';
+  const timestamp = '2026-11-24T09:00:00.000Z';
+  const clearOptions = { preserveWorkspace: true, contextClearedAt: timestamp };
+
+  function setup() {
+    const { deps, order } = makeDeps();
+    let generation = 1;
+    let live = { instanceId: 'first', agentKind: 'pi', getTurnGeneration: () => generation };
+    const original = live;
+    const closeSessionIfCurrent = vi.fn(async () => { order.push('clear-close'); });
+    const handlers = createContextClearSessionClose({
+      ...deps,
+      getSession: () => live,
+      closeSessionIfCurrent,
+    });
+    const sender = {};
+    handlers.noteClear(sender, sessionId, timestamp, false);
+    return {
+      deps, order, original, handlers, closeSessionIfCurrent, sender,
+      replaceRuntime: () => { live = { ...live, instanceId: 'replacement' }; },
+      advanceTurn: () => { generation++; },
+    };
+  }
+
+  it('closes the captured runtime and turn inside the workspace suppression window', async () => {
+    const test = setup();
+    await test.handlers.close(test.sender, sessionId, clearOptions, false);
+
+    expect(test.closeSessionIfCurrent).toHaveBeenCalledExactlyOnceWith(test.original, 1);
+    expect(test.deps.closeSession).not.toHaveBeenCalled();
+    expect(test.order).toEqual(['suppress-enter', 'clear-close', 'suppress-exit', 'cleanup-interactions']);
+  });
+
+  it.each(['timestamp', 'runtime replacement', 'turn advance'] as const)(
+    'leaves the runtime and its interactions alone after a mismatch in %s',
+    async (mismatch) => {
+      const test = setup();
+      if (mismatch === 'runtime replacement') test.replaceRuntime();
+      if (mismatch === 'turn advance') test.advanceTurn();
+      const options = mismatch === 'timestamp'
+        ? { ...clearOptions, contextClearedAt: '2026-11-24T08:59:59.000Z' }
+        : clearOptions;
+
+      await test.handlers.close(test.sender, sessionId, options, false);
+      expect(test.order).toEqual([]);
+
+      if (mismatch === 'timestamp') {
+        await test.handlers.close(test.sender, sessionId, clearOptions, false);
+        expect(test.closeSessionIfCurrent).toHaveBeenCalledExactlyOnceWith(test.original, 1);
+      }
+    },
+  );
+
+  it.each([
+    ['ordinary soft close', { preserveWorkspace: true }, false],
+    ['different local window', clearOptions, false],
+    ['device-link close', clearOptions, true],
+  ] as const)('keeps %s on the existing close path', async (kind, options, remote) => {
+    const test = setup();
+    const sender = kind === 'different local window' ? {} : test.sender;
+    await test.handlers.close(sender, sessionId, options, remote);
+
+    expect(test.closeSessionIfCurrent).not.toHaveBeenCalled();
+    expect(test.deps.closeSession).toHaveBeenCalledExactlyOnceWith(sessionId);
+    expect(test.order).toEqual(['suppress-enter', 'close', 'suppress-exit', 'cleanup-interactions']);
   });
 });

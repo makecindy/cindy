@@ -47,3 +47,65 @@ export async function handleCloseSessionRequest(
   }
   deps.cleanupPendingInteractions(sessionId);
 }
+
+interface ContextClearSession {
+  instanceId: string;
+  agentKind: string;
+  remoteHostId?: string | null;
+  agentDeviceId?: string | null;
+  getTurnGeneration(): number;
+}
+
+/** Connect the two Desktop clear IPCs using the origin and live turn captured by Main. */
+export function createContextClearSessionClose<Session extends ContextClearSession>(
+  deps: CloseSessionRequestDeps & {
+    getSession(sessionId: string): Session | null;
+    closeSessionIfCurrent(session: Session, generation: number): Promise<void>;
+  },
+) {
+  const localPiContextClears = new WeakMap<object, Map<string, {
+    instanceId: string;
+    clearedAt: string;
+    generation: number;
+  }>>();
+
+  return {
+    noteClear(sender: object | undefined, sessionId: string, clearedAt: unknown, remoteInvoke: boolean): void {
+      if (remoteInvoke || !sender || typeof clearedAt !== 'string') return;
+      const live = deps.getSession(sessionId);
+      if (live?.agentKind !== 'pi' || live.remoteHostId || live.agentDeviceId) return;
+      let clears = localPiContextClears.get(sender);
+      if (!clears) {
+        clears = new Map();
+        localPiContextClears.set(sender, clears);
+      }
+      clears.set(sessionId, {
+        instanceId: live.instanceId,
+        clearedAt,
+        generation: live.getTurnGeneration(),
+      });
+    },
+
+    async close(sender: object | undefined, sessionId: string, rawOpts: unknown, remoteInvoke: boolean): Promise<void> {
+      const { contextClearedAt } = parseCloseSessionOptions(rawOpts);
+      const clears = !remoteInvoke && sender && contextClearedAt !== undefined
+        ? localPiContextClears.get(sender)
+        : undefined;
+      const clear = clears?.get(sessionId);
+      const live = clear ? deps.getSession(sessionId) : null;
+      if (clear) {
+        if (clear.clearedAt !== contextClearedAt) return;
+        clears?.delete(sessionId);
+        if (!live || live.instanceId !== clear.instanceId || live.getTurnGeneration() !== clear.generation) {
+          return;
+        }
+      }
+      await handleCloseSessionRequest({
+        ...deps,
+        closeSession: live && clear
+          ? () => deps.closeSessionIfCurrent(live, clear.generation)
+          : deps.closeSession,
+      }, sessionId, rawOpts);
+    },
+  };
+}

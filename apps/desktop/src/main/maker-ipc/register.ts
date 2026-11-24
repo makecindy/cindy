@@ -895,7 +895,7 @@ import {
   rehydrateCloseSuppression,
   withRehydrateCloseSuppressed,
 } from '../maker-host/rehydrateCloseSuppression.js';
-import { handleCloseSessionRequest, parseCloseSessionOptions } from './closeSessionRequest.js';
+import { createContextClearSessionClose } from './closeSessionRequest.js';
 import {
   createOrcaIdleReleaseWatcher,
   createOrcaIdleRuntimeClose,
@@ -22075,13 +22075,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
-  // The renderer uses two IPCs for /clear. Bind cancellation to the local
-  // clear request and to the runtime generation that existed before any reset.
-  const localPiContextClears = new WeakMap<IpcMainInvokeEvent['sender'], Map<string, {
-    instanceId: string;
-    clearedAt: string;
-    generation: number;
-  }>>();
+  const contextClearSessionClose = createContextClearSessionClose({
+    getSession: getStableSessionForTurnBoundary,
+    closeSession: (sid) => maker.closeSession(sid),
+    closeSessionIfCurrent: async (live, generation) => {
+      await maker.closeSessionIfCurrent(live, 'requested', { contextClearGeneration: generation });
+    },
+    withRehydrateCloseSuppressed,
+    cleanupPendingInteractions: (sid) => cleanupPendingInteractionsForSession(sid, 'session_closed'),
+  });
   ipcMain.handle(
     MAKER_INVOKE.INPUT_CLEAR_SESSION,
     async (event, sessionId: unknown, clearedAt: unknown) => {
@@ -22103,21 +22105,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           clearedAt: typeof clearedAt === 'string' ? clearedAt : undefined,
           isRemoteInvoke: remoteInvoke,
         });
-        if (!remoteInvoke && typeof clearedAt === 'string') {
-          const live = getStableSessionForTurnBoundary(sid);
-          if (live?.agentKind === 'pi' && !live.remoteHostId && !live.agentDeviceId) {
-            let clears = localPiContextClears.get(event.sender);
-            if (!clears) {
-              clears = new Map();
-              localPiContextClears.set(event.sender, clears);
-            }
-            clears.set(sid, {
-              instanceId: live.instanceId,
-              clearedAt,
-              generation: live.getTurnGeneration(),
-            });
-          }
-        }
+        contextClearSessionClose.noteClear(event.sender, sid, clearedAt, remoteInvoke);
         const projection = inputCoordinator.clearSession(sid, clearBoundary);
         cindyMakeManager.cancelTasksForSession(sid);
         workingDirectoryRecovery.discard(sid);
@@ -22226,39 +22214,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 同时覆盖"主动 closeSession"和"内部异常关闭"两条路径。
     // opts.preserveWorkspace=true(/clear、鉴权重连等软重启)时抑制这些重副作用,
     // 业务体与选项解析见 closeSessionRequest.ts。
-    await withSendToSessionLock(sessionId, async () => {
-      const { contextClearedAt } = parseCloseSessionOptions(opts);
-      const clears = !isDeviceLinkInvoke() && contextClearedAt !== undefined
-        ? localPiContextClears.get(event.sender)
-        : undefined;
-      const clear = clears?.get(sessionId);
-      const live = clear ? getStableSessionForTurnBoundary(sessionId) : null;
-      if (clear) {
-        if (clear.clearedAt !== contextClearedAt) return;
-        clears?.delete(sessionId);
-        if (!live || live.instanceId !== clear.instanceId || live.getTurnGeneration() !== clear.generation) {
-          return;
-        }
-      }
-      await handleCloseSessionRequest(
-        {
-          closeSession: async (sid) => {
-            if (live && clear) {
-              await maker.closeSessionIfCurrent(live, 'requested', {
-                contextClearGeneration: clear.generation,
-              });
-            } else {
-              await maker.closeSession(sid);
-            }
-          },
-          withRehydrateCloseSuppressed,
-          cleanupPendingInteractions: (sid) =>
-            cleanupPendingInteractionsForSession(sid, 'session_closed'),
-        },
-        sessionId,
-        opts,
-      );
-    });
+    await withSendToSessionLock(sessionId, () =>
+      contextClearSessionClose.close(event.sender, sessionId, opts, isDeviceLinkInvoke()),
+    );
   });
 
   ipcMain.handle(MAKER_INVOKE.LIST_ACTIVE, (_event, options?: unknown) => {
