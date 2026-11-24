@@ -23,8 +23,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
 
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: vi.fn() }));
 
-vi.mock('@/hooks/useAgentCapabilities', () => ({
-  evictDeviceCapabilities: vi.fn(),
+vi.mock('@/hooks/useAgentCapabilities', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useAgentCapabilities')>()),
   prefetchDeviceCapabilities: vi.fn(async () => {}),
   useAgentCapabilities: () => ({
     capabilities: { hasFastMode: false, effortLevels: [], availableModels: [] },
@@ -72,14 +72,15 @@ const catalogs = vi.hoisted(() => {
 const shareState = vi.hoisted(() => ({ received: [] as Array<Record<string, unknown>> }));
 vi.mock('@/features/provider-share/providerShareStore', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/features/provider-share/providerShareStore')>()),
+  ensureProviderShareReceivedStarted: vi.fn(),
   useProviderShareReceived: () => ({ received: shareState.received, loaded: true }),
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({ providers: catalogs.local, providerOrder: [] }),
 }));
-vi.mock('@/hooks/useDeviceProviders', () => ({
-  evictDeviceProviders: vi.fn(),
+vi.mock('@/hooks/useDeviceProviders', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useDeviceProviders')>()),
   prefetchDeviceProviders: vi.fn(async () => {}),
   useDeviceProviders: (deviceId?: string) => ({
     providers: deviceId === 'share:abc' && (catalogs.shareError || catalogs.shareLoading) ? [] : deviceId ? (catalogs.byDevice[deviceId] ?? []) : [],
@@ -167,6 +168,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 describe('模型面板底部「配置模型」', () => {
@@ -174,10 +176,16 @@ describe('模型面板底部「配置模型」', () => {
   // recover selection. Existing fixtures only exercised already-loaded shares.
   it('keeps a first-load failed share browsable and selects its model after retry', async () => {
     catalogs.shareError = 'share catalog unavailable';
+    const membership = Promise.withResolvers<{ ok: true }>();
+    const command = vi.fn(() => membership.promise);
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, providerShare: { command } });
     const panel = renderPanel();
     await browse(share.name);
     expect(screen.getByRole('alert').textContent).toContain('newChat.modelSelector.remoteLoadFailed');
     await browse('newChat.modelSelector.retryRemoteModels');
+    expect(command).toHaveBeenCalledExactlyOnceWith({ action: 'retry-model-catalog', agentDeviceId: 'share:abc' });
+    expect(prefetchDeviceProviders).not.toHaveBeenCalled();
+    await act(async () => { membership.resolve({ ok: true }); });
     expect(prefetchDeviceProviders).toHaveBeenCalledWith('share:abc');
     catalogs.shareError = null;
     catalogs.shareLoading = true;
