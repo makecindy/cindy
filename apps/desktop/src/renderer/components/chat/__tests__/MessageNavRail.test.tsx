@@ -134,7 +134,9 @@ describe('MessageNavRail', () => {
     const row = { role: 'user' as const, createdAt: '2026-11-24T10:30:00' };
     const entries = deriveNavRailEntries([
       { ...row, clientId: 'me', content: '我的问题', sourceDevice: { deviceId: 'phone', platform: 'mobile', name: 'iPhone' } },
-      { ...row, clientId: 'worker', content: JSON.stringify({ orcaSource: 'worker', content: '进展' }) },
+      // Orca 标题只写角色，聊天在它前面另有发送方任务的来源标签，预览同样保留。
+      { ...row, clientId: 'worker', content: JSON.stringify({ orcaSource: 'worker', content: '进展' }),
+        automationOrigin: { kind: 'session', senderSessionId: 'lead', senderSessionTitle: 'Lead 任务' } },
       // 发送方和设备是聊天里两个独立标签，非本人来源也要保留设备。
       { ...row, clientId: 'plugin', content: '插件来信', sourcePlugin: { pluginId: 'plugin' },
         sourceDevice: { deviceId: 'tablet', platform: 'mobile', name: 'iPad' } },
@@ -150,6 +152,7 @@ describe('MessageNavRail', () => {
     const cards = await screen.findAllByRole('tooltip');
     expect(cards[0].textContent).toContain('iPhone');
     expect(cards[0].querySelector('time')?.dateTime).toBe(row.createdAt);
+    expect(cards[1].textContent).toContain('Lead 任务');
     expect(cards[2].textContent).toContain('iPad');
     expect(cards[3].textContent).toContain('远端任务标题');
     localTitle.mockRestore();

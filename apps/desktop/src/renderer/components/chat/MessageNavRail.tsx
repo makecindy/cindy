@@ -124,19 +124,25 @@ function PreviewHeading({ entry, sessionId }: { entry: NavRailEntry; sessionId?:
   let author;
   if (entry.isOwn) {
     author = <>{t('chat.messageNavRail.you')}{sourceDevice && <QueueSourceDeviceTag device={sourceDevice} separator />}</>;
-  } else if (sourcePlugin) {
-    author = <MessageSourceLabels sourcePlugin={sourcePlugin} hostSessionId={sessionId} align="start" />;
-  } else if (entry.orcaSource) {
-    author = <OrcaMessageHeading source={entry.orcaSource} origin={automationOrigin} />;
-  } else if (sharedAuthorName) {
-    author = <span className="truncate">{sharedAuthorName}</span>;
-  } else if (hookSource) {
-    author = <><ImIcon im={hookSource.im} /><span className="truncate">{hookTaskCardHeading(hookSource.im, hookSource.origin, t).label}</span></>;
   } else {
-    author = <MessageSourceLabels automationOrigin={automationOrigin} hostSessionId={sessionId} align="start" />;
+    // 与 UserMessage 气泡上方的署名同构：共享成员名，来源标签（发送方与设备是两个独立标签），
+    // Orca / IM 再加卡片标题。照搬各分支传给 MessageSourceLabels 的字段，不在这里另挑一部分。
+    const labels = (origin?: typeof automationOrigin) => (
+      <MessageSourceLabels automationOrigin={origin} sourceDevice={sourceDevice} sourcePlugin={sourcePlugin}
+        hostSessionId={sessionId} align="start" />
+    );
+    author = (
+      <>
+        {sharedAuthorName && <span className="truncate">{sharedAuthorName}</span>}
+        {entry.orcaSource ? (
+          <>{labels(automationOrigin)}<OrcaMessageHeading source={entry.orcaSource} origin={automationOrigin} /></>
+        ) : hookSource ? (
+          // IM 卡片头已写明渠道，聊天在这一支也不传 automationOrigin。
+          <>{labels()}<ImIcon im={hookSource.im} /><span className="truncate">{hookTaskCardHeading(hookSource.im, hookSource.origin, t).label}</span></>
+        ) : labels(automationOrigin)}
+      </>
+    );
   }
-  // 发送方与设备在聊天里是两个独立标签：非本人的来源也保留设备（如从手机经插件发来）。
-  if (!entry.isOwn && sourceDevice) author = <>{author}<QueueSourceDeviceTag device={sourceDevice} separator /></>;
   return (
     <div className="flex min-w-0 items-center gap-1.5 text-12 text-[var(--text-secondary)]">
       <SessionNavigationModeProvider mode="sidebar-embedded">{author}</SessionNavigationModeProvider>
