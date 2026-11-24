@@ -92,6 +92,18 @@ function refsOf(messages: Message[]): string[] {
   return records(messages).flatMap((line) => Array.from(line.matchAll(/cindy_toolfold_read\(\{"batch":"([^"]+)"\}\)/g), (match) => match[1]));
 }
 
+// 页尾只有一个消费者：从「Call cindy_toolfold_read({...}) to continue.]」取出续读参数；
+// 没有页尾、或页尾不是合法 JSON，都算没有下一页。调用 id 由调用方自带。
+function continuation(body: string): Record<string, unknown> | null {
+  const match = /Call cindy_toolfold_read\((\{[^\n]*\})\) to continue\.\]$/.exec(body);
+  if (match === null) return null;
+  const params: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(JSON.parse(match[1]) as Record<string, unknown>)) {
+    if (key !== 'call_id') params[key] = value;
+  }
+  return params;
+}
+
 function textChars(messages: Message[]): number {
   let total = 0;
   for (const message of messages) {
@@ -118,21 +130,24 @@ const idShown = (id: string) => {
 };
 
 async function readWholeBatch(tool: Tool, batchId: string, limit: number) {
-  const next = (body: string) => /"batch":"[^"]+","at":(\d+),"offset":(\d+)\}\) to continue\.\]$/.exec(body);
   const pages: string[] = [];
   let joined = '';
   let params: Record<string, unknown> = { batch: batchId };
+  let again: Record<string, unknown> | null = null;
   for (let guard = 0; guard < 60; guard += 1) {
     const raw = String((await tool.execute('w' + guard, params)).content![0].text).replace(/^Cannot recover batch \S+: /, '');
-    const again = next(raw);
+    again = continuation(raw);
     const body = raw.replace(/\n\n\[truncated: [^\n]*\]$/, '');
     expect(raw.length).toBeLessThanOrEqual(limit);
     pages.push(body);
     // 成员内部续读的两页之间没有分隔；成员开头续读的补回成员之间的分隔。
-    joined += (pages.length > 1 && Number(params.offset) > 0 ? '' : (pages.length > 1 ? '\n\n' : '')) + body;
-    if (!again) break;
-    params = { batch: batchId, at: Number(again[1]), offset: Number(again[2]) };
+    // 页尾带 part 是同一成员内部的续读，不补分隔；不带 part 是下一位成员，补回成员之间的分隔。
+    const fresh = params.part === undefined && !Number(params.offset);
+    joined += (pages.length > 1 && !fresh ? '' : (pages.length > 1 ? '\n\n' : '')) + body;
+    if (again === null) break;
+    params = { batch: batchId, ...again };
   }
+  expect(again, 'pager did not finish within 60 pages; last cursor ' + JSON.stringify(params)).toBeNull();
   return { pages, joined };
 }
 
@@ -428,12 +443,12 @@ describe('cindy-tool-fold extension source', () => {
     messages[23] = result('big-one', 'bash', body);
     projection(context, messages);
 
-    const readAt = async (offset?: number) => {
-      const read = await tool.execute('t-continue', offset === undefined ? { call_id: 'big-one' } : { call_id: 'big-one', offset });
+    const readAt = async (more?: Record<string, unknown>) => {
+      const read = await tool.execute('t-continue', more === undefined ? { call_id: 'big-one' } : { call_id: 'big-one', ...more });
       return String(read.content![0].text);
     };
     const first = await readAt();
-    const next = Number(/"offset":(\d+)/.exec(first)![1]);
+    const next = continuation(first)!;
     const second = await readAt(next);
     const again = await readAt();
     // 同一个 id 再读一次必须得到同样的开头：重拼是稳定的（旧写法把整段又塞进 giants，
@@ -447,7 +462,7 @@ describe('cindy-tool-fold extension source', () => {
     const bodyAt = joined.indexOf(body.slice(0, 64));
     expect(bodyAt).toBeGreaterThan(0);
     expect(joined.slice(bodyAt)).toBe(body.slice(0, joined.length - bodyAt));
-    expect(joined.length).toBeGreaterThan(next);
+    expect(joined.length).toBeGreaterThan(next.offset as number);
   });
 
   it('recovers a folded result that merely quotes the truncation marker text', async () => {
@@ -1035,18 +1050,20 @@ describe('cindy-tool-fold extension source', () => {
       { role: 'toolResult', toolCallId: 'giant-9', toolName: 'bash', content: [{ type: 'text', text: 'preview' }] } as unknown as { content: Block[] },
     ]);
     const pages: string[] = [];
-    let params: { call_id: string; offset?: number } = { call_id: 'giant-9' };
-    for (;;) {
+    let params: Record<string, unknown> = { call_id: 'giant-9' };
+    let next: Record<string, unknown> | null = null;
+    for (let guard = 0; guard < 80; guard += 1) {
       const page = await tool.execute('t', params);
       expect(page.isError).toBeUndefined();
       const text = String(page.content![0].text);
       pages.push(text.replace(/\n\n\[truncated: [^\n]*\]$/, ''));
-      const next = /"offset":(\d+)/.exec(text);
+      next = continuation(text);
       if (next === null) break;
       // 页与页之间发生压缩：调用块离开上下文，全文只剩登记表里那一份。
       projection(context, [{ role: 'user', content: [{ type: 'text', text: 'summary of the earlier work' }] }]);
-      params = { call_id: 'giant-9', offset: Number(next[1]) };
+      params = { call_id: 'giant-9', ...next };
     }
+    expect(next, 'pager did not finish within 80 pages; last cursor ' + JSON.stringify(params)).toBeNull();
     const whole = pages.join('');
     const head = whole.slice(0, whole.indexOf('result:\n'));
     expect(head).toContain('"command":"make giant 9"');
@@ -1073,8 +1090,8 @@ describe('cindy-tool-fold extension source', () => {
   });
 
   it('resumes a batch read inside a cut member at the same offset once compaction has dropped its call block', async () => {
-    // 同一件事的批读取形态：成员被页尾切开时，续读偏移落在它自己的全文里。成员是入库时
-    // 被登记表收存的巨型结果；压缩后批里只有这类成员还取得到（其余缺项点名），那是另一条规则。
+    // 同一件事的批读取形态：成员被页尾切开时，续读偏移落在结果正文里，调用头只在第一页出现一次。成员
+    // 是入库时被登记表收存的巨型结果；压缩后批里只有这类成员还取得到（其余缺项点名），那是另一条规则。
     const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000', CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
     const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
     const body = ['a', 'b', 'c', 'd', 'e'];
@@ -1088,23 +1105,25 @@ describe('cindy-tool-fold extension source', () => {
     const batch = refsOf(out)[0];
     const pages: string[] = [];
     let cuts = 0;
-    let params: { batch: string; at?: number; offset?: number } = { batch };
-    for (;;) {
+    let params: { batch: string; at?: number; part?: string; offset?: number } = { batch };
+    for (let step = 0; step < 600; step += 1) {
       const page = await tool.execute('t', params);
       expect(page.isError).toBeUndefined();
       const text = String(page.content![0].text);
       pages.push(text.replace(/\n\n\[truncated: [^\n]*\]$/, ''));
-      const next = /"at":(\d+)(?:,"offset":(\d+))?/.exec(text);
+      const next = continuation(text);
       if (next === null) break;
+      // 续读不前进时才会碰到上限：没有它，一个不前进的游标会把整个测试进程拖到内存耗尽。
+      expect(step).toBeLessThan(599);
       cuts += 1;
       // 页与页之间发生压缩：调用块全部离开上下文，成员只剩登记表里那一份。
       projection(context, [{ role: 'user', content: [{ type: 'text', text: 'summary of the earlier work' }] }]);
-      params = { batch, at: Number(next[1]), ...(next[2] === undefined ? {} : { offset: Number(next[2]) }) };
+      params = { batch, ...next };
     }
     // 每个成员 21k 字符、每页 1000：每个成员都被切开二十来次。
     expect(cuts).toBeGreaterThan(50);
     const whole = pages.join('');
-    // 第 0 个成员第一次被切开时调用块还在：之后每一页都切同一份带调用头的字节。
+    // 第 0 个成员的第一页带调用头，之后各页只有结果：调用块被压缩带走，偏移也不移动。
     expect(whole).toContain('"command":"member 0"}\nresult:\nmember 0 ' + body[0].repeat(21000));
     // 其余成员（锚点 m-3 在内）第一次被切开时调用块已被压缩带走（没人留有它）：取到的是登记表里的
     // 结果，同样逐页连续。m-4 在常驻窗口里，不成批。
@@ -1280,27 +1299,26 @@ describe('cindy-tool-fold extension source', () => {
     const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '4000' });
     const batchId = refsOf(projection(context, messages)!)[0];
     const page = async (params: Record<string, unknown>) => String((await tool.execute('p' + reads++, params)).content![0].text);
-    const next = (body: string) => /"batch":"[^"]+","at":(\d+),"offset":(\d+)\}\) to continue\.\]$/.exec(body);
     let reads = 0;
     const first = await page({ batch: batchId });
     expect(first.length).toBeLessThanOrEqual(4300);
-    const resume = next(first)!;
+    const resume = continuation(first) as { at: number; offset: number };
     // 第 1 页在 call-1 内部截断；之后模拟压缩，删掉一条还没读到的成员（call-5）。
     const pruned = messages.filter((message) => !(message.role === 'toolResult' && message.toolCallId === 'call-5')
       && !(message.role === 'assistant' && (message.content as Block[]).some((block) => block.id === 'call-5')));
     projection(context, pruned);
-    let params: Record<string, unknown> = { batch: batchId, at: Number(resume[1]), offset: Number(resume[2]) };
+    let params: Record<string, unknown> = { batch: batchId, ...resume };
     let joined = first.replace(/\n\n\[truncated: [^\n]*\]$/, '');
     for (let guard = 0; guard < 40; guard += 1) {
       let body = await page(params);
       expect(body.length).toBeLessThanOrEqual(4300);
-      const again = next(body);
+      const again = continuation(body);
       const cut = /\n\n\[truncated: [^\n]*\]$/.exec(body);
       if (cut) body = body.slice(0, cut.index);
       // 续读点落在成员内部时两页之间没有分隔；落在成员开头时补回成员之间的分隔。
-      joined += (Number(params.offset) > 0 ? '' : '\n\n') + body;
-      if (!again) break;
-      params = { batch: batchId, at: Number(again[1]), offset: Number(again[2]) };
+      joined += (params.part === undefined && !Number(params.offset) ? '\n\n' : '') + body;
+      if (again === null) break;
+      params = { batch: batchId, ...again };
     }
     // 分页拼回去与逐条读取逐字相同，只少被删的那一条；缺项在它的成员位置上被点名。
     const gone = '[missing round-trip call-5 (not in this session); re-run that command]';
@@ -1359,18 +1377,19 @@ describe('cindy-tool-fold extension source', () => {
     // 增长；读取上限调到 1,000，点名总量（96 条、每条约 224）仍是上限的二十倍。
     projection(context, [{ role: 'user', content: [{ type: 'text', text: 'continue' }] }]);
     const lines = ids.slice(0, 96).map((id) => '[missing round-trip ' + idShown(id) + ' (not in this session); re-run that command]');
-    // 续读游标是位置、不带调用 id：每页只有上限以内的成员、至多一条整行放行的说明、一条续读提示。
-    const { pages, joined } = await readWholeBatch(tool, batchId, 1000 + lines[0].length + 300);
+    // 续读游标是位置、不带调用 id：放得下的成员进这一页，放不下的另起一页——页严格不越过上限。
+    const { pages, joined } = await readWholeBatch(tool, batchId, 1000);
     expect(pages.length).toBeGreaterThan(1);
-    for (const page of pages) expect(page.length).toBeLessThanOrEqual(1000 + lines[0].length + 300);
+    for (const page of pages) expect(page.length).toBeLessThanOrEqual(1000);
     expect(joined).toBe(lines.join('\n\n'));
-    // 最新 4 条仍在上下文里，不进批；第一页放下 4 条、第 5 条整行放行后就停，不替后面点名。
-    expect(pages[0]).toContain(lines[4]);
-    expect(pages[0]).not.toContain(lines[5]);
+    // 最新 4 条仍在上下文里，不进批。每条说明 224 字符，页尾按最宽形态留位后第一页余 839：
+    // 放下 3 条就停，第 4 条另起一页，不替后面点名。
+    expect(pages[0]).toContain(lines[2]);
+    expect(pages[0]).not.toContain(lines[3]);
     expect(joined).not.toContain('call_96_');
   });
 
-  it('emits a missing-member line whole even when it is longer than the room left on the page', async () => {
+  it('never cuts a missing-member line and never overflows the page: one that does not fit starts the next page', async () => {
     const { context, tool } = loadExtension({
       CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000', CINDY_PI_TOOL_FOLD_KEEP: '1',
       CINDY_PI_TOOL_FOLD_MIN_PAIRS: '1', CINDY_PI_TOOL_FOLD_MIN_CHARS: '1',
@@ -1385,12 +1404,13 @@ describe('cindy-tool-fold extension source', () => {
     const batchId = refsOf(projection(context, messages)!)[0];
     expect(batchId).toBeTruthy();
     projection(context, [{ role: 'user', content: [{ type: 'text', text: 'continue' }] }]);
-    // 每条说明行 183 字符，预算 1,000：放下 5 条后只剩 73，第 6 条整行放行（不按偏移切开——
-    // 否则下一页的「游标成员已不在 → 偏移作废」会让它永远从头重发）；第 7 条另起一页。
+    // 每条说明行 184 字符，预算 1,000、页尾按最宽形态留位后第一页余 839：放下 4 条，第 5 条放不进
+    // 剩下的余量，整行另起一页——从不按偏移切开（否则下一页的「游标成员已不在 → 偏移作废」会让它
+    // 永远从头重发），也不越过上限。
     const lines = ids.slice(0, 7).map((id) => '[missing round-trip ' + id + ' (not in this session); re-run that command]');
-    const { pages, joined } = await readWholeBatch(tool, batchId, 1000 + Math.max(...lines.map((line) => line.length)) + 300);
-    expect(pages, pages.map((page) => page.length + ':' + page.slice(0, 30)).join(' || ')).toEqual([lines.slice(0, 6).join('\n\n'), lines[6]]);
-    expect(pages[0].length).toBeGreaterThan(1000);
+    const { pages, joined } = await readWholeBatch(tool, batchId, 1000);
+    expect(pages, pages.map((page) => page.length + ':' + page.slice(0, 30)).join(' || ')).toEqual([lines.slice(0, 4).join('\n\n'), lines.slice(4).join('\n\n')]);
+    for (const page of pages) expect(page.length).toBeLessThanOrEqual(1000);
     expect(joined).toBe(lines.join('\n\n'));
   });
 
@@ -1666,29 +1686,40 @@ describe('cindy-tool-fold extension source', () => {
       }
       const batchId = refsOf(projection(context, messages)!)[0];
       const ingest = toolResult({ toolName: 'bash', toolCallId: id, content: [{ type: 'text', text: 'G'.repeat(30000) }] }) as { content: Block[] };
-      const texts = [
-        ...records(projection(context, messages)!),
+      let reads = 0;
+      const run = async (args: Record<string, unknown>) => tool.execute('t-' + reads++, args);
+      const paths: Record<string, string> = {
+        // 批记录只引用批号，永远不含调用 id。
+        batchRecord: records(projection(context, messages)!).join('\n'),
         // 数组内容的入库截断是两个块（预览、标记各一块）。
-        ingest.content.map((block) => String((block as { text?: string }).text ?? '')).join('\n'),
-        String((await tool.execute('t-call', { call_id: id }))?.content?.[0]?.text),
-        String((await tool.execute('t-batch', { batch: batchId, at: 3 }))?.content?.[0]?.text),
-      ].join('\n');
-      // 四条输出路径各留下一枚示例：批记录、入库标记、单次续读页尾、整批续读页尾。
-      const examples = examplesIn(texts);
-      const described = texts.split('\n').map((text) => text.length + '/' + text.includes('cindy_toolfold_read(') + '/' + text.slice(0, 60).replace(/\s+/g, ' '));
-      expect(examples.length, 'id ' + JSON.stringify(id).slice(0, 30) + ': ' + described.join(' || ')).toBeGreaterThanOrEqual(4);
-      for (const example of examples) {
-        expect(example).not.toMatch(/^(NOT-JSON|UNTERMINATED)/);
-        const args = JSON.parse(example) as Record<string, unknown>;
-        expect(problemsOf(args)).toEqual([]);
-        // 照抄执行：读到的必须是一页真正的原文。
-        const followed = await tool.execute('t-example', args);
-        expect(followed?.isError).toBeUndefined();
-        expect(String(followed?.content?.[0]?.text ?? '').length).toBeGreaterThan(0);
-        emitted += 1;
+        ingestMarker: ingest.content.map((block) => String((block as { text?: string }).text ?? '')).join('\n'),
+        singleRead: String((await run({ call_id: id }))?.content?.[0]?.text ?? ''),
+        batchRead: String((await run({ batch: batchId, at: 3 }))?.content?.[0]?.text ?? ''),
+      };
+      const remedy = /CINDY_PI_TOOL_FOLD_RECOVERY_CHARS/;
+      for (const [path, output] of Object.entries(paths)) {
+        const examples = examplesIn(output);
+        // 发不出可照抄的游标时必须明确拒绝并给出补救办法，不许静默少给。
+        if (examples.length === 0) expect(output, path + ' for ' + JSON.stringify(id).slice(0, 30)).toMatch(remedy);
+        for (const example of examples) {
+          expect(example, path).not.toMatch(/^(NOT-JSON|UNTERMINATED)/);
+          const args = JSON.parse(example) as Record<string, unknown>;
+          expect(problemsOf(args), path + ': ' + example).toEqual([]);
+          // 照抄执行：要么读到一页原文，要么明确拒绝并给出补救办法。
+          const followed = await run(args);
+          const body = String(followed?.content?.[0]?.text ?? '');
+          if (followed?.isError === true) expect(body, path).toMatch(remedy);
+          else expect(body.length, path).toBeGreaterThan(0);
+          emitted += 1;
+        }
+        // 读出的页不越界：页尾先占位，内容按余量填，出口再核对一次。
+        if (path === 'singleRead' || path === 'batchRead') {
+          expect(output.length, path + ' for ' + JSON.stringify(id).slice(0, 30)).toBeLessThanOrEqual(1000);
+        }
       }
     }
-    expect(emitted).toBeGreaterThanOrEqual(4 * ids.length);
+    // 批记录这条路径不依赖调用 id，每个 id 都至少发得出可照抄的游标。
+    expect(emitted).toBeGreaterThanOrEqual(ids.length);
   });
 
   it('reads every paged member back exactly, however the context changes between pages', async () => {
@@ -1701,6 +1732,13 @@ describe('cindy-tool-fold extension source', () => {
       return seed % n;
     };
     const limit = 1000;
+    // 对抗性字符表：非 BMP 的表情符号（含 ZWJ 序列）、组合用记号、CRLF、引号与反斜杠。
+    const alphabet = ['a', 'é', '中', '\n', ' ', '\t', '\r', '😀', '👍', 'e\u0301', '\u{1F469}\u200D\u{1F4BB}', '"', '\\', '𝄞'];
+    const nasty = (rand: (n: number) => number, length: number) => {
+      let out = '';
+      for (let i = 0; i < length; i += 1) out += alphabet[rand(alphabet.length)];
+      return out;
+    };
     let exact = 0;
     for (let scenario = 0; scenario < 24; scenario += 1) {
       const { context, tool } = loadExtension({
@@ -1711,10 +1749,15 @@ describe('cindy-tool-fold extension source', () => {
       const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'task' }] }];
       const count = 5 + rnd(3);
       for (let index = 0; index < count; index += 1) {
-        const id = `m-${scenario}-${index}`;
+        // 目标成员的 id 保持可读；其余成员偶带比读取上限还长的 provider id（只出现在缺项说明里）。
+        const id = index === 2 ? `m-${scenario}-${index}` : rnd(5) === 0 ? 'call-' + 'i'.repeat(4000 + rnd(2000)) : `m-${scenario}-${index}`;
         // 第一个场景固定落在边界上：参数 + 结果越过收存预算。
         const args = scenario === 0 ? 'A'.repeat(150000) : rnd(4) === 0 ? 'A'.repeat(20000 + rnd(90000)) : `step ${index}`;
-        const body = rnd(3) === 0 ? `B${index}-` + 'r'.repeat(limit * (1 + rnd(3)) + rnd(400)) : `step ${index} ok ${'x'.repeat(1500 + rnd(600))}`;
+        const body = rnd(5) === 0
+          ? ''
+          : rnd(3) === 0
+            ? nasty(rnd, limit * (1 + rnd(3)) + rnd(400))
+            : `step ${index} ok ${'x'.repeat(1500 + rnd(600))}`;
         messages.push(call(id, 'bash', { command: args }));
         messages.push(result(id, 'bash', body, rnd(6) === 0));
       }
@@ -1729,8 +1772,11 @@ describe('cindy-tool-fold extension source', () => {
       for (let guard = 0; guard < 120; guard += 1) {
         const read = await tool.execute('g' + guard, params);
         const raw = String(read.content![0].text);
-        // 读上限是硬约束：取回结果不经入库截断，越界会原样进入下一次请求。
-        expect(raw.length).toBeLessThanOrEqual(limit + 600);
+        // 读上限是硬约束：取回结果不经入库截断，越界会原样进入下一次请求。单次读取的页以上限为界；
+        // 整批读取的页另加至多一条整行放行的缺项说明。
+        expect(raw.length).toBeLessThanOrEqual(scenario % 2 === 0 ? limit + LINE_CHARS + 64 : limit);
+        // 任何一页都不许带半个代理对：provider 会把它换成乱码。
+        expect(loneSurrogate(raw), 'page ' + pages.length + ' of scenario ' + scenario).toBe(false);
         if (read.isError) { refused = true; break; }
         pages.push(raw.replace(/^\[stale cursor:[^\n]*\]\n\n/, '').replace(/\n\n\[truncated: [^\n]*\]$/, ''));
         const again = /Call cindy_toolfold_read\((\{[^\n]*\})\) to continue\.\]$/.exec(raw);
@@ -1793,4 +1839,179 @@ describe('cindy-tool-fold extension source', () => {
     expect(record).toContain('299 failed');
     expect(record.length).toBeLessThan(1200);
   });
+  it('reads a call whose arguments exceed the read limit in full, page by page', async () => {
+    // 调用与参数是原文的一半：结果能分页读全，参数也必须能。截断调用头换来坐标稳定，是用丢数据
+    // 换来的稳定——参数里常有模型正要复用的命令、路径和写入内容。
+    const args = 'A'.repeat(150000);
+    const body = 'result body ' + 'b'.repeat(3000);
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '4000' });
+    const messages = [call('big', 'bash', { command: args }), result('big', 'bash', body)];
+    projection(context, messages);
+    let params: Record<string, unknown> = { call_id: 'big' };
+    const pages: string[] = [];
+    const paramsSeen: string[] = [];
+    for (let guard = 0; guard < 200; guard += 1) {
+      const read = await tool.execute('a' + guard, params);
+      expect(read.isError).toBeUndefined();
+      const raw = String(read.content![0].text);
+      expect(raw.length, 'page ' + pages.length).toBeLessThanOrEqual(4000);
+      pages.push(raw.replace(/\n\n\[truncated: [^\n]*\]$/, ''));
+      const again = /Call cindy_toolfold_read\((\{[^\n]*\})\) to continue\.\]$/.exec(raw);
+      if (!again) break;
+      params = JSON.parse(again[1]) as Record<string, unknown>;
+      paramsSeen.push(String(params.part ?? 'result'));
+    }
+    const joined = pages.join('');
+    expect(pages.length).toBeGreaterThan(10);
+    expect(joined.startsWith('call: bash')).toBe(true);
+    expect(joined).toContain('"command":"' + args + '"');
+    expect(joined.endsWith('result:\n' + body)).toBe(true);
+    // 结果标签只出现一次；参数段读完之后游标才换到结果段。
+    expect(joined.split('result:').length - 1).toBe(1);
+    expect(paramsSeen[paramsSeen.length - 1]).toBe('result');
+    expect(paramsSeen.includes('call')).toBe(true);
+  });
+
+  it('returns every member of a batch, including a member whose result is empty', async () => {
+    // 「结果为空」是一种结果，不是「没有成员」：静默略过会让模型少看一次调用，还以为整批读完了。
+    const { context, tool } = loadExtension({
+      CINDY_PI_TOOL_FOLD_KEEP: '1', CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000',
+    });
+    const messages: Message[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      // 参数长到会被折、输出为空：一条很长的命令没有输出，正是被报告的形态。
+      messages.push(call(`e-${index}`, 'bash', { command: `step ${index} ${'c'.repeat(400)}` }));
+      messages.push(result(`e-${index}`, 'bash', index === 2 ? '' : `step ${index} ok ${'x'.repeat(2000)}`));
+    }
+    const batchId = refsOf(projection(context, messages)!)[0];
+    const { joined } = await readWholeBatch(tool, batchId, 120000 + LINE_CHARS + 64);
+    // 常驻窗口留下最后一条往返，批里是前五条：每一条的头都恰好出现一次。
+    expect(joined.split('call: bash').length - 1).toBe(5);
+    expect(joined).toMatch(/step 2 c{400}"[\s\S]*?result:\n\n\ncall: bash/);
+    for (const index of [0, 1, 3, 4]) expect(joined).toContain(`step ${index} ok`);
+  });
+
+  it('refuses a call whose id cannot fit the read limit, instead of overflowing the page', async () => {
+    // 页尾必须原样带上调用 id（照抄即读），id 比读取上限还长时页尾自己就放不下。先给页尾占位，
+    // 放不下就明确拒绝；越界的取回结果不经入库截断，会原样进入下一次请求。
+    const id = 'call-' + 'i'.repeat(5000);
+    const { context, tool, toolResult } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const messages = [call(id, 'bash', { command: 'x' }), result(id, 'bash', 'y'.repeat(3000))];
+    projection(context, messages);
+    for (const params of [{ call_id: id }, { call_id: id, offset: 500 }]) {
+      const read = await tool.execute('c', params);
+      expect(read.isError).toBe(true);
+      expect(String(read.content![0].text).length).toBeLessThanOrEqual(LINE_CHARS + 200);
+    }
+    // 小结果整份放得下、不需要页尾：照常读回。
+    const small = await tool.execute('c-small', { call_id: id, offset: 2900 });
+    expect(small.isError).toBeUndefined();
+    expect(String(small.content![0].text)).toContain('yyy');
+    const refused = String((await tool.execute('c-again', { call_id: id })).content![0].text);
+    const need = /RECOVERY_CHARS to at least (\d+)/.exec(refused);
+    expect(need, refused).not.toBeNull();
+    const floor = Number(need![1]);
+    expect(floor).toBeGreaterThan(1000);
+    const marked = toolResult({ toolName: 'bash', toolCallId: id, content: [{ type: 'text', text: 'M'.repeat(30000) }] }) as { content: Block[] };
+    const marker = marked.content.map((block) => String((block as { text?: string }).text ?? '')).join('\n');
+    const said = /RECOVERY_CHARS of at least (\d+)/.exec(marker);
+    expect(said, marker.slice(-400)).not.toBeNull();
+    expect(Number(said![1])).toBe(floor);
+    const raised = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: String(floor) });
+    projection(raised.context, messages);
+    const followed = await raised.tool.execute('c-raised', { call_id: id });
+    expect(followed.isError).toBeUndefined();
+    const followedText = String(followed.content![0].text);
+    expect(followedText.length).toBeLessThanOrEqual(floor);
+    // 照着补救读出来的第一页必须带着正文前进，不能是「只有页尾、游标不动」的一页。
+    expect(followedText.replace(/\n\n\[truncated: [^\n]*\]$/, '').length).toBeGreaterThan(0);
+  });
+
+  it('keeps the error state when a result is re-admitted at recovery time and compaction follows', async () => {
+    // 登记表只有一处写入，错误状态是它的必填项：结果在上下文里、在登记表里、被压缩后只剩登记表，
+    // 三种来处读到的是同一个状态。
+    const body = 'E'.repeat(5000);
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_PIN_BUDGET: '1000' });
+    const messages = [call('e', 'bash', { command: 'x' }), result('e', 'bash', body, true)];
+    context({ messages });
+    const first = await tool.execute('d1', { call_id: 'e' });
+    expect(String(first.content![0].text)).toContain('result (error):');
+    messages.splice(1, 1);
+    context({ messages: messages.slice() });
+    const second = await tool.execute('d2', { call_id: 'e' });
+    expect(String(second.content![0].text)).toContain('result (error):');
+    expect(String(second.content![0].text)).toContain(body);
+  });
+
+  it('never splits a surrogate pair at a cut, wherever text is cut', async () => {
+    // 切文本只有三类落点：分页页尾、行摘要限长、入库预览。半个代理对送给 provider 会被换成乱码。
+    const body = 'x' + '😀'.repeat(2500);
+    for (const limit of [1000, 1001]) {
+      const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: String(limit) });
+      const messages = [call('s', 'bash', { command: 'x' }), result('s', 'bash', body)];
+      projection(context, messages);
+      let params: Record<string, unknown> = { call_id: 's' };
+      const pages: string[] = [];
+      for (let guard = 0; guard < 60; guard += 1) {
+        const read = await tool.execute('s' + guard, params);
+        const raw = String(read.content![0].text);
+        expect(loneSurrogate(raw)).toBe(false);
+        pages.push(raw.replace(/\n\n\[truncated: [^\n]*\]$/, ''));
+        const again = /Call cindy_toolfold_read\((\{[^\n]*\})\) to continue\.\]$/.exec(raw);
+        if (!again) break;
+        params = JSON.parse(again[1]) as Record<string, unknown>;
+      }
+      expect(pages.join('').endsWith('result:\n' + body)).toBe(true);
+      expect(pages.join('').startsWith('call: bash')).toBe(true);
+    }
+    // 入库预览与行摘要：切点同样不落在代理对中间。
+    const { toolResult } = loadExtension();
+    const preview = toolResult({ toolName: 'bash', toolCallId: 'p', content: 'x' + '😀'.repeat(20000) }) as { content: Block[] };
+    const previewText = preview.content.map((block) => String((block as { text?: string }).text ?? '')).join('\n');
+    expect(loneSurrogate(previewText)).toBe(false);
+    // 行摘要限长有三处：参数、工具名、失败末行。表情符号从奇数位、偶数位起始各试一遍，切点才会落进代理对中间。
+    // 成批门槛降到 2 次或 1,000 字符，否则这 4 次可折的往返根本不会折，断言就成了对空集合成立。
+    const low = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '2', CINDY_PI_TOOL_FOLD_MIN_CHARS: '1000' });
+    for (let pad = 0; pad < 4; pad += 1) {
+      const emoji = 'p'.repeat(pad) + '👍'.repeat(300);
+      const longLine = call('l' + pad, 'e' + emoji, { command: emoji });
+      const failed = call('f' + pad, 'bash', { command: 'x' });
+      const texts = records(projection(low.context, [longLine, result('l' + pad, 'e' + emoji, 'z'.repeat(2000)), failed, result('f' + pad, 'bash', 'head\n' + emoji, true), ...pairs(6)])!);
+      expect(texts.join('\n'), 'pad ' + pad).toContain('failed (');
+      expect(loneSurrogate(texts.join('\n')), 'pad ' + pad).toBe(false);
+    }
+  });
+
+  it('writes the retention ledger in one place and never without the error state', () => {
+    // 登记表是「结果」的唯一账本：写入只能有一处，错误状态是必填参数——漏传在源码上就不成立，
+    // 不靠每个调用点记得传。
+    const source = CINDY_TOOL_FOLD_EXTENSION_SOURCE;
+    expect(source.match(/giants\.set\(/g)?.length ?? 0).toBe(1);
+    const argCounts: number[] = [];
+    for (let at = source.indexOf('admitGiant('); at !== -1; at = source.indexOf('admitGiant(', at + 10)) {
+      let depth = 0;
+      let args = 1;
+      let quote = '';
+      for (let i = at + 'admitGiant'.length; i < source.length; i += 1) {
+        const ch = source[i];
+        if (quote) {
+          if (ch === '\\') i += 1;
+          else if (ch === quote) quote = '';
+        } else if (ch === '"' || ch === "'" || ch === '`') quote = ch;
+        else if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+        else if (ch === ')' || ch === ']' || ch === '}') {
+          depth -= 1;
+          if (depth === 0) break;
+        } else if (ch === ',' && depth === 1) args += 1;
+      }
+      argCounts.push(args);
+    }
+    // 定义本身加两个调用点。
+    expect(argCounts).toEqual([4, 4, 4]);
+  });
 });
+
+/** 是否含落单的 UTF-16 代理项（半个代理对）。 */
+function loneSurrogate(text: string): boolean {
+  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
+}

@@ -167,10 +167,21 @@ export default function (pi) {
   // -----------------------------------------------------------------------
   function readCall(args) {
     var out = {};
-    ['batch', 'call_id', 'at', 'offset'].forEach(function (name) {
+    ['batch', 'call_id', 'at', 'part', 'offset'].forEach(function (name) {
       if (args[name] !== undefined) out[name] = args[name];
     });
     return READ_TOOL + '(' + JSON.stringify(out) + ')';
+  }
+
+  // 单次读取一页至少要占的宽度：页尾把调用 id 原样重复一次，所以它随 id 长度增长。
+  // 拒绝理由与入库标记的说法共用这一个数：同一个事实只有一种说法。它不依赖当前上限的
+  // 数值，所以落盘的标记在上限不同的会话里仍能被认出来。
+  function singleReadFloor(id) {
+    var widest = { call_id: String(id) };
+    widest.part = 'call';
+    widest.offset = 999999999999999;
+    // 再加一个完整字符的宽度：上限恰好等于页尾时页里放不下任何正文，游标不前进。
+    return ('\n\n[truncated: ' + 999999999999999 + ' chars remaining. Call ' + readCall(widest) + ' to continue.]').length + 2;
   }
 
   // The endings an ingest marker can have. Emitting and recognizing share this
@@ -178,10 +189,15 @@ export default function (pi) {
   // resumed sessions still carry it, and not recognizing it would make
   // resolve() hand the truncated preview back as if it were the full text.
   function truncationTails(id) {
+    var key = String(id);
+    var named = readCall({ call_id: key }) + ' returns the full text';
+    var evicted = 'full text not retained (call "' + key + '"); re-run if needed';
+    // 标记跟着预览进入每一次请求。调用 id 比预览额度还长时不能再原样重复：降级为点名（限长）。
+    var tooLong = named.length > INGEST_KEEP;
     return {
-      named: readCall({ call_id: id }) + ' returns the full text',
-      legacyNamed: READ_TOOL + '("' + id + '") returns the full text',
-      evicted: 'full text not retained (call "' + id + '"); re-run if needed',
+      named: tooLong ? 'call id ' + oneLine(key) + ' (' + key.length + ' chars) is too long to repeat; re-run that command, or pass the id as "call_id" to ' + READ_TOOL + ' (needs CINDY_PI_TOOL_FOLD_RECOVERY_CHARS of at least ' + singleReadFloor(key) + ')' : named,
+      legacyNamed: READ_TOOL + '("' + key + '") returns the full text',
+      evicted: tooLong ? 'full text not retained (call id ' + oneLine(key) + ', ' + key.length + ' chars); re-run if needed' : evicted,
     };
   }
   // Pins: callId -> { ts, chars }. ts is a monotonic recovery clock so the eviction
@@ -226,7 +242,7 @@ export default function (pi) {
   function oneLine(value) {
     if (typeof value !== 'string') return '';
     var text = value.replace(/\s+/g, ' ').trim();
-    return text.length > LINE ? text.slice(0, LINE - 1) + '\u2026' : text;
+    return text.length > LINE ? text.slice(0, cutBefore(text, LINE - 1)) + '\u2026' : text;
   }
 
   function textOf(content) {
@@ -270,7 +286,7 @@ export default function (pi) {
     while (start <= text.length) {
       var end = text.indexOf('\n', start);
       if (end === -1) end = text.length;
-      var line = oneLine(text.slice(start, end));
+      var line = oneLine(text.slice(start, cutBefore(text, end)));
       if (line) return line;
       start = end + 1;
     }
@@ -281,7 +297,7 @@ export default function (pi) {
     var end = text.length;
     while (end > 0) {
       var start = text.lastIndexOf('\n', end - 1) + 1;
-      var line = oneLine(text.slice(start, end));
+      var line = oneLine(text.slice(start, cutBefore(text, end)));
       if (line) return line;
       end = start - 1;
     }
@@ -561,8 +577,9 @@ export default function (pi) {
   }
 
   /** Admit a giant payload; evict oldest entries until the aggregate bound holds. */
-  function admitGiant(id, blocks, makeText, extra) {
-    // extra：入库时记下的错误状态（压缩后结果消息没了，取回时仍要知道它是不是失败）。
+  function admitGiant(id, blocks, makeText, error) {
+    // error：这条结果是不是失败。压缩后结果消息没了，取回时仍要知道它——登记表是唯一还记着
+    // 的地方，所以它是写入的必填项，由两个写入点各自显式给出。
     var cost = costOfContent(blocks);
     if (cost > GIANT_BUDGET_CHARS) return false; // a single payload over budget is never retained
     // 先按大小决定收不收，再要全文：被拒的载荷不该先付一整份副本的内存。
@@ -572,7 +589,7 @@ export default function (pi) {
       giants.delete(id);
     }
     // Also keep the block structure: a flattened string cannot put text back between images.
-    giants.set(id, Object.assign({ text: text, blocks: blocks, bytes: cost }, extra || undefined));
+    giants.set(id, { text: text, blocks: blocks, bytes: cost, error: error === true });
     giantBytes += cost;
     while (giants.size > 1 && (giants.size > GIANT_KEEP || giantBytes > GIANT_BUDGET_CHARS)) {
       var oldest = giants.keys().next().value;
@@ -600,7 +617,7 @@ export default function (pi) {
       if (block && block.type === 'text' && typeof block.text === 'string') total += block.text.length;
     }
     if (total <= INGEST_LIMIT) return null;
-    var retained = admitGiant(id, blocks, function () { return textOf(blocks); }, { error: isError === true });
+    var retained = admitGiant(id, blocks, function () { return textOf(blocks); }, isError === true);
     var kept = 0;
     var truncated = 0;
     var parts = [];
@@ -610,7 +627,7 @@ export default function (pi) {
       var room = INGEST_KEEP - kept;
       if (room <= 0) { truncated += b.text.length; continue; }
       if (b.text.length <= room) { kept += b.text.length; parts.push(b); }
-      else { truncated += b.text.length - room; parts.push({ type: 'text', text: b.text.slice(0, room) }); kept = INGEST_KEEP; }
+      else { var cut = cutBefore(b.text, room); truncated += b.text.length - cut; parts.push({ type: 'text', text: b.text.slice(0, cut) }); kept += cut; }
     }
     var tails = truncationTails(id);
     parts.push({ type: 'text', text: '[truncated ' + truncated + ' of ' + total + ' chars; ' + (retained ? tails.named : tails.evicted) + ']' });
@@ -708,8 +725,8 @@ export default function (pi) {
   }
 
   // 取回的原文 = 头 + 结果。头是「调用、参数、结果标签与错误状态」，取自当前上下文：压缩或
-  // 编辑带走调用消息后它会变长变短。结果来自登记表或上下文里的结果消息，一旦被分页，偏移
-  // 就只对这部分字节成立。
+  // 编辑带走调用消息后它会变长变短。结果来自登记表或上下文里的结果消息。两段各有自己的
+  // 偏移，互不牵连（pageOriginal）。
   function originalHead(found, error) {
     var bits = [];
     if (found.call) {
@@ -720,8 +737,8 @@ export default function (pi) {
     return bits.join('\n') + '\n';
   }
 
-  // 两半分开交出：调用方按结果分页、只转存结果（可能不在 transcript 里的那一半），头只在
-  // 第一页出现一次。
+  // 两半分开交出：调用方按页切（pageOriginal），只转存结果（可能不在 transcript 里的那一
+  // 半）；头每次从上下文现取，不进登记表。
   function renderOriginal(found) {
     var entry = found.giantEntry;
     var error = found.resultMsg ? found.resultMsg.isError === true : Boolean(entry && entry.error === true);
@@ -736,40 +753,94 @@ export default function (pi) {
     return found.ok === true ? renderOriginal(found) : found;
   }
 
-  // 分页只切登记表或上下文稳定端得出的字节：结果正文。调用头取自当前上下文，压缩或编辑
-  // 带走调用消息后会变长变短，拿它当偏移的参照，下一页就从错位处读起——所以头只在第一页
-  // 出现一次，限长，永不被页尾切开。不放进登记表：收存要过预算，收不进的头照样会变。
-  var HEAD_MAX_CHARS = Math.floor(RECOVERY_READ_MAX_CHARS / 4);
-
-  function clipHead(head) {
-    if (head.length <= HEAD_MAX_CHARS) return head;
-    return head.slice(0, HEAD_MAX_CHARS) + '\n[… ' + (head.length - HEAD_MAX_CHARS) + ' more chars of the call and its arguments not shown; the complete result follows]';
+  // -----------------------------------------------------------------------
+  // Paging. Three rules, each written once.
+  //  1. cutBefore is the only place paged, previewed or summarized text is cut. It never
+  //     splits a UTF-16 surrogate pair: half a pair reaches the provider as a replacement
+  //     character, so the recovered text would no longer be the original.
+  //  2. pageOriginal is the only pager. A page is [the call and its arguments from hOff] +
+  //     [the result from rOff]. A cursor addresses exactly one of the two parts: "call"
+  //     while the call is still being cut, "result" only once the call has been handed over
+  //     in full on that page. A result offset therefore never depends on the call text, which
+  //     comes from the context and changes length when compaction or an edit removes the call
+  //     block. Nothing is clipped to keep coordinates stable: a call longer than a page stays
+  //     readable page by page.
+  //  3. The footer is reserved before the page is filled. It repeats the call id (copying it
+  //     must be a valid call) and provider ids have no length bound. A footer that cannot fit
+  //     leaves no issuable cursor, so the read is refused and names the remedy instead of
+  //     letting the page grow past the read limit.
+  // -----------------------------------------------------------------------
+  function cutBefore(text, end) {
+    if (end >= text.length) return text.length;
+    if (end <= 0) return 0;
+    // 切在第 end 个单元之前。该单元若是低位代理，前一个单元就是它的高位半边：退一个单元。
+    var code = text.charCodeAt(end);
+    return code >= 0xDC00 && code <= 0xDFFF ? end - 1 : end;
   }
 
-  function readSlice(id, rendered, params) {
-    var body = String(rendered.result || '');
-    var offset = typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
-    if (offset >= body.length && body.length > 0) {
-      return { text: 'Offset ' + offset + ' is past the end of ' + oneLine(id) + ' (' + body.length + ' chars).', isError: true };
+  // 陈旧坐标只有一种回应，单次读取与整批读取共用：页首说明，从头给出。
+  function staleLine(id, offset, part, lengthNow) {
+    return '[stale cursor: offset ' + offset + ' is past the end of ' + oneLine(id) + ' (' + lengthNow + ' chars now); shown from the start]';
+  }
+
+  // 一页原文。part 为空表示从这条往返的开头读起；"result" 的偏移只在头整份交出之后才发出。
+  function pageOriginal(src, part, offset, budget) {
+    var head = String(src.head || '');
+    var result = String(src.result || '');
+    var hOff = part === 'call' ? offset : part === 'result' ? head.length : 0;
+    var rOff = part === 'result' ? offset : 0;
+    // 游标从不指向一段的末尾：偏移落在末尾或之后，说明那段变短了（陈旧坐标）。
+    if ((offset > 0 && offset >= (part === 'call' ? head : result).length)) return { stale: true };
+    var rest = head.length - hOff + result.length - rOff;
+    if (rest <= budget) return { text: head.slice(hOff) + result.slice(rOff), rest: 0, cursor: null };
+    var callLeft = head.length - hOff;
+    if (callLeft > budget) {
+      var callShown = cutBefore(head, hOff + budget) - hOff;
+      return { text: head.slice(hOff, hOff + callShown), rest: rest - callShown, cursor: { part: 'call', offset: hOff + callShown } };
     }
-    var head = offset === 0 ? String(rendered.head || '') : '';
-    // 没被切开的原文原样整份给出。
-    if (head.length + body.length - offset <= RECOVERY_READ_MAX_CHARS) return { text: head + body.slice(offset) };
-    head = clipHead(head);
-    if (body.length - offset <= RECOVERY_READ_MAX_CHARS - head.length) return { text: head + body.slice(offset) };
-    var next = offset + RECOVERY_READ_MAX_CHARS - head.length;
-    return {
-      text: head + body.slice(offset, next) + '\n\n[truncated: ' + body.length + ' chars total, ' + (body.length - next) + ' remaining. Call ' + readCall({ call_id: id, offset: next }) + ' to continue.]',
-    };
+    var room = budget - callLeft;
+    if (room < 2) return { text: head.slice(hOff), rest: result.length - rOff, cursor: result.length > rOff ? { part: 'result', offset: 0 } : null };
+    var resultShown = cutBefore(result, rOff + room) - rOff;
+    return { text: head.slice(hOff) + result.slice(rOff, rOff + resultShown), rest: rest - resultShown, cursor: { part: 'result', offset: rOff + resultShown } };
   }
 
-  // 整批取回按「成员游标」分页：at 是起始成员在登记表里的位置，offset 只在这个成员内部
-  // 生效。续读坐标必须是宿主自己的稳定身份——整批拼接后的字符偏移会随成员被压缩删掉而
-  // 漂移，后一页就从
-  // 错位处读起。缺项也是成员：它的一行说明就是该成员的页内容，走同一个游标、同一条
-  // 读取预算（整行放行，不按偏移切开）。页尾不另附缺项清单——那是第二条不受预算约束的
-  // 输出路径（成批缺项配长调用 id 时一页就越过读取上限，而且每页重复）。代价只与页本身
-  // 有关：成员轮到才解析，从 at 起拼到读满为止。
+  function readSlice(id, src, params) {
+    var part = params && params.part === 'call' ? 'call' : params && (params.part === 'result' || (typeof params.offset === 'number' && params.offset > 0)) ? 'result' : '';
+    var offset = params && typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
+    var limit = RECOVERY_READ_MAX_CHARS;
+    var page = pageOriginal(src, part, offset, limit);
+    var notice = '';
+    if (page.stale === true) {
+      notice = staleLine(id, offset, part, part === 'call' ? src.head.length : src.result.length) + '\n\n';
+      part = '';
+      offset = 0;
+      limit -= notice.length;
+      page = pageOriginal(src, part, offset, limit);
+    }
+    if (page.cursor === null) return { text: notice + page.text };
+    // 页尾先占位：按这条调用可能出现的最长页尾预留（数字按最宽计），页就不越过读取上限。
+    var footMax = singleReadFloor(id);
+    page = pageOriginal(src, part, offset, limit - footMax);
+    var args = { call_id: String(id) };
+    if (page.cursor.part === 'call') args.part = 'call';
+    args.offset = page.cursor.offset;
+    var footer = '\n\n[truncated: ' + page.rest + ' chars remaining. Call ' + readCall(args) + ' to continue.]';
+    // 拒绝只有两个成因，说法共用同一个数：页越过上限，或页里放不下任何正文（游标不前进）。
+    var stalled = page.text.length === 0 && page.cursor !== null && page.cursor.part !== 'result';
+    if (stalled || page.text.length + footer.length > limit) {
+      return {
+        text: notice + 'Cannot page ' + oneLine(id) + ': its call id (' + String(id).length + ' chars) does not fit the read limit (' + limit + ' chars) once repeated in the continuation. Raise CINDY_PI_TOOL_FOLD_RECOVERY_CHARS to at least ' + (singleReadFloor(id) + notice.length) + ', or re-run the command.',
+        isError: true,
+      };
+    }
+    return { text: notice + page.text + footer };
+  }
+
+  // 整批取回按「成员游标」分页：at 是起始成员在登记表里的位置，part 与 offset 只在这个成员
+  // 内部生效（见 pageOriginal）。续读坐标必须是宿主自己的稳定身份——整批拼接后的字符偏移会随
+  // 成员被压缩删掉而漂移，后一页就从错位处读起。缺项也是成员：它的一行说明就是该成员的页内容，
+  // 走同一个游标、整行给出、从不切开。页尾不另附缺项清单——那是第二条不受读取上限约束的输出
+  // 路径。代价只与页本身有关：成员轮到才解析，从 at 起拼到读满为止。
   function readBatch(refId, key, params) {
     var entry = refs.get(refId);
     var ids = entry ? entry.ids : [];
@@ -777,64 +848,64 @@ export default function (pi) {
     if (at >= ids.length) {
       return { text: 'cannot continue at ' + at + ': batch ' + key + ' has ' + ids.length + ' members. Read the batch again without "at".', recovered: 0 };
     }
+    var part = params && params.part === 'call' ? 'call' : params && (params.part === 'result' || params.offset > 0) ? 'result' : '';
     var skip = params && typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
+    var widest = { batch: key, at: 99999999, part: 'call', offset: 999999999999999 };
+    var footMax = ('\n\n[truncated: ' + 99999999 + ' round-trips not shown in batch ' + key + '. Call ' + readCall(widest) + ' to continue.]').length;
+    var room = RECOVERY_READ_MAX_CHARS - footMax;
     var parts = [];
     var size = 0;
     var recovered = 0;
     var shown = 0;
     var next = null;
-    var over = 0;
     var stale = null;
-    // 成员轮到才解析（resolve 要扫那条结果的全文找标记），每页的成本只与页本身有关；
-    // 页尾已经没有整批缺项清单，不需要预先解析整段余量。
     for (var p = 0; at + p < ids.length && next === null; p++) {
       var memberId = String(ids[at + p]);
       var found = resolve(memberId);
-      // 游标成员已不在：成员内偏移随之作废，不能落到下一条成员头上（缺项说明从不按偏移
-      // 切开，所以带偏移的缺项游标只可能是陈旧坐标）。
-      if (p === 0 && found.ok !== true) skip = 0;
-      var line = found.ok === true ? null : missingLine(memberId, found);
-      var rendered = line === null ? renderOriginal(found) : null;
-      // 成员被分页的字节只含结果正文；调用头只在它的第一页出现一次（见 readSlice）。
-      var source = rendered === null ? line : String(rendered.result || '');
-      if (source === '') { skip = 0; shown += 1; continue; }
-      var member = source.slice(skip);
-      if (member === '') {
-        // 偏移越过了游标成员现有的正文（续读期间结果被截短）：偏移是陈旧坐标，从头给出并在
-        // 页首说明。静默略过会让模型把缺了一条的半批当成整批原文。
-        stale = '[stale cursor: offset ' + skip + ' is past the end of ' + oneLine(memberId) + ' (' + source.length + ' chars now); shown from the start]';
-        skip = 0;
-        member = source;
-      }
-      // 头不计入游标：切在头里会让下一页从头再来，所以头放不下时整条成员另起一页。
-      var head = skip === 0 && rendered !== null ? clipHead(String(rendered.head || '')) : '';
-      member = head + member;
       var gap = parts.length > 0 ? 2 : 0;
-      var room = RECOVERY_READ_MAX_CHARS - size - gap;
-      if (room <= 0) { next = { at: at + shown, offset: skip }; break; }
-      if (line === null) recovered += 1;
-      if (member.length <= room || line !== null) {
-        // 缺项说明整行放行：越过剩余空间也只越过这一行，下一条成员另起一页。
-        parts.push(member);
-        size += gap + member.length;
+      if (found.ok !== true) {
+        var line = missingLine(memberId, found);
+        // 缺项说明整行给出：这一页放不下就另起一页，从不按偏移切开。
+        if (size + gap + line.length > room) { next = { at: at + shown, part: '', offset: 0 }; break; }
+        parts.push(line);
+        size += gap + line.length;
         shown += 1;
-        if (member.length > room) over += gap + member.length - room;
-      } else {
-        var bodyShown = room - head.length;
-        if (bodyShown <= 0) { next = { at: at + shown, offset: skip }; break; }
-        parts.push(member.slice(0, room));
-        size += gap + room;
-        next = { at: at + shown, offset: skip + bodyShown };
+        part = '';
+        skip = 0;
+        continue;
       }
+      // 成员轮到才解析（resolve 要扫那条结果的全文找标记），每页的成本只与页本身有关。
+      var src = renderOriginal(found);
+      var memberPart = p === 0 ? part : '';
+      var memberSkip = p === 0 ? skip : 0;
+      var budget = room - size - gap;
+      if (budget < 2) { next = { at: at + shown, part: memberPart, offset: memberSkip }; break; }
+      var page = pageOriginal(src, memberPart, memberSkip, budget);
+      if (page.stale === true) {
+        // 偏移越过了游标成员现有的那一段（续读期间它被截短）：陈旧坐标，页首说明并从头给出。
+        // 静默略过会让模型把缺了一条的半批当成整批原文。
+        stale = staleLine(memberId, skip, part, part === 'call' ? src.head.length : src.result.length);
+        // 页首说明和成员内容记在同一本账上：后面成员的余量才扣得掉它。
+        size += stale.length + 2;
+        page = pageOriginal(src, '', 0, room - size - gap);
+      }
+      recovered += 1;
+      parts.push(page.text);
+      size += gap + page.text.length;
+      if (page.cursor !== null) { next = { at: at + shown, part: page.cursor.part, offset: page.cursor.offset }; break; }
+      shown += 1;
+      part = '';
       skip = 0;
     }
-    // 出口不变量：除整行放行的那一条缺项说明外，页正文不越过读取上限。取回结果不经入库
-    // 截断，越界会原样进入下一次请求。
-    if (size - over > RECOVERY_READ_MAX_CHARS) throw new Error('tool-fold page overflow: ' + (size - over));
     var text = (stale === null ? '' : stale + '\n\n') + parts.join('\n\n');
     if (next !== null) {
-      text += '\n\n[truncated: ' + (ids.length - at - shown) + ' round-trips not shown in batch ' + key + '. Call ' + readCall({ batch: key, at: next.at, offset: next.offset }) + ' to continue.]';
+      var again = { batch: key, at: next.at };
+      if (next.part !== '') again.part = next.part;
+      if (next.offset > 0) again.offset = next.offset;
+      text += '\n\n[truncated: ' + (ids.length - next.at) + ' round-trips not shown in batch ' + key + '. Call ' + readCall(again) + ' to continue.]';
     }
+    // 出口核对：页尾先留了位、内容按余量填，装好后仍越过上限就是分页器的错，不许把越界的页发出去。
+    if (text.length > RECOVERY_READ_MAX_CHARS) throw new Error('tool-fold page overflow: ' + text.length + ' > ' + RECOVERY_READ_MAX_CHARS);
     return { text: text, recovered: recovered };
   }
 
@@ -888,7 +959,8 @@ export default function (pi) {
         // 游标不用成员 id：那是 provider 生成的外部字符串，长度不受控，放进 schema 就得设
         // 上限，一旦超长整段余量就取不回。位置是宿主自己的坐标，整数、有界、登记后不变。
         at: { type: 'integer', minimum: 0, description: 'Batch reads only: position of the first member to return, exactly as the previous page stated. Members before it stay skipped.' },
-        offset: { type: 'integer', minimum: 0, description: 'Characters to skip inside the text being read: inside the member at position "at" for a batch, inside that round-trip for a call id. The previous page states the value to pass.' },
+        part: { type: 'string', enum: ['call', 'result'], description: 'Which text "offset" counts in: "call" for the call and its arguments, "result" for its result (the default). The previous page states the value to pass.' },
+        offset: { type: 'integer', minimum: 0, description: 'Characters to skip inside the text named by "part" (the result by default), inside the member at position "at" for a batch. The previous page states the value to pass.' },
       },
       required: [],
       additionalProperties: false,
@@ -924,7 +996,7 @@ export default function (pi) {
         // 只存结果那半：giants 是「结果」的注册表，头每次从上下文现拼。
         if (whole <= PIN_BUDGET_CHARS && whole <= RECOVERY_READ_MAX_CHARS) {
           pinOriginal(id);
-        } else if (!admitGiant(String(id), [{ type: 'text', text: result }], function () { return result; })) {
+        } else if (!admitGiant(String(id), [{ type: 'text', text: result }], function () { return result; }, original.error === true)) {
           // 转存被拒（超出内存预算）时不能退回钉住：那等于让一次取回把整段原文塞回
           // 上下文，把读上限和 pin 预算一起作废。这里 fail-closed，保持折叠并说明原因。
           return { content: [{ type: 'text', text: 'Cannot recover ' + oneLine(id) + ': the payload is over the retention budget, so it was not retained; re-run the command instead.' }], isError: true };
