@@ -42,6 +42,7 @@ export function persistSessionStreamEventCore(
   const { event, eventAgentMeta } = prepared;
   let persistId: string | undefined;
   let resolvedContent: string | undefined;
+  let persistedOnly = false;
   if (
     event.source === 'codex' &&
     event.turnScope !== 'background' &&
@@ -95,17 +96,29 @@ export function persistSessionStreamEventCore(
     if (event.source === 'pi' && td?.isFinal === true && td.isFullText === true) {
       flushAssistantBlock(session.id, eventAgentMeta);
     }
+    // A plugin engine's reply between turns has no done to commit it; its final
+    // segment (closed by maker-core once the agent pauses) is the whole message.
+    if (
+      session.agentKind === 'acp' && event.turnScope === 'background'
+      && td?.isFinal === true && td.isFullText === true
+    ) {
+      flushAssistantBlock(session.id, eventAgentMeta);
+    }
   } else if (event.type === 'tool_use') {
     // tool_use 边界:先 flush 在飞 assistant(保证 assistant 行先于其 tool_use 入队
     // 落库),再落 tool_use 本身,拿回 persistId 盖进 payload。两者都只入队、不阻塞。
-    if (event.turnScope !== 'background') flushAssistantBlock(session.id, eventAgentMeta);
+    const data = event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown; acpInputPatch?: unknown };
+    const acpTool = session.agentKind === 'acp';
+    persistedOnly = acpTool && data.acpInputPatch === true;
+    if (!persistedOnly && event.turnScope !== 'background') flushAssistantBlock(session.id, eventAgentMeta);
     persistId = onToolUseEvent(
       session.id,
-      event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown },
+      data,
       eventAgentMeta,
       event.turnScope === 'background' ? 'background' : 'turn',
       event.backgroundTurnStartedAt,
       event.turnAttemptToken,
+      acpTool,
     );
   } else if (event.type === 'tool_result') {
     const r = onToolResultEvent(
@@ -192,7 +205,7 @@ export function persistSessionStreamEventCore(
         });
       });
   }
-  return { persistId, resolvedContent };
+  return { persistId, resolvedContent, ...(persistedOnly ? { persistedOnly: true } : {}) };
 }
 
 export type SessionStreamResult = ReturnType<typeof persistSessionStreamEventCore>;

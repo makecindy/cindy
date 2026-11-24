@@ -95,3 +95,18 @@ export function chatGroupFailure(error: unknown): BotGroupFailure {
   else errorCode = 'SERVICE_ERROR';
   return { ok: false, errorCode, message: errorCode };
 }
+
+
+// A media batch reports its first failure unchanged, with its longest cooldown
+// available to the migration scheduler for as long as that error is retained.
+const uploadRetryDeadlines = new WeakMap<Error, number>();
+export function rememberUploadRetryDeadline(error: Error, deadline: number): void {
+  uploadRetryDeadlines.set(error, deadline);
+}
+export function chatRetryDeadline(error: unknown): number {
+  if (!(error instanceof Error)) return 0;
+  const deadline = ('serviceRetryAt' in error ? error.serviceRetryAt : undefined)
+    ?? ('retryAt' in error ? error.retryAt : undefined);
+  return Math.max(uploadRetryDeadlines.get(error) ?? 0,
+    typeof deadline === 'number' && Number.isFinite(deadline) ? deadline : 0);
+}

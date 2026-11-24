@@ -11,6 +11,8 @@
  */
 import {
   REMOTE_AGENT_MAX_POLL_RUNS,
+  REMOTE_AGENT_POLL_MAX_BYTES,
+  REMOTE_AGENT_POLL_MIN_BYTES,
   REMOTE_AGENT_READ_WAIT_MS,
   parseRemoteAgentPollResult,
   type RemoteAgentErrorInfo,
@@ -18,7 +20,7 @@ import {
 } from '@cindy/device-link';
 
 /** 经设备互联调用对方；失败时抛出带 `code` 的错误(与 remoteBackgroundInvoke 一致)。 */
-export type RemoteAgentInvoke = (args: unknown[]) => Promise<unknown>;
+export type RemoteAgentInvoke = (args: unknown[], options?: { beforeDispatch?: () => void }) => Promise<unknown>;
 
 /** 对方不可达时持续重拉的最长时间。 */
 export const REMOTE_AGENT_READ_GIVE_UP_MS = 2 * 60_000;
@@ -34,6 +36,19 @@ const FRESH_RUN_WAIT_MS = 1_000;
 const EMPTY_FAST_STREAK = 3;
 const EMPTY_FAST_MS = 50;
 const EMPTY_FAST_DELAY_MS = 1_000;
+/**
+ * 一次 poll 的回包按实测的回程速度要这么久能传完（poll 的 `maxBytes`）：请求时限 30 秒，扣掉对方最长 10 秒的挂起
+ * 和往返还有余量。不按速度要的话，慢线路上一次 1.5MB 的回包传不完，超时后按同一游标重拉同样大小，一直卡住，
+ * 2 分钟后任务被结束（2026-11-19 按代码推出，日志里还没见到）。
+ */
+const POLL_TARGET_TRANSFER_MS = 10_000;
+
+/** 超时这一类失败：回包可能是太大、传不完。 */
+function isTimeoutError(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  if (code === 'INVOKE_TIMEOUT' || code === 'TIMEOUT') return true;
+  return /TIMEOUT|timed out/i.test(error instanceof Error ? error.message : String(error));
+}
 
 export interface PolledRun {
   readonly runId: string;
@@ -96,6 +111,8 @@ export class RemoteAgentPoller {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private rotation = 0;
   private emptyFastStreak = 0;
+  /** 下一次 poll 要的最多字节（`maxBytes`），见 POLL_TARGET_TRANSFER_MS。 */
+  private pollBytes = REMOTE_AGENT_POLL_MAX_BYTES;
   /** 在途的 poll 各自覆盖哪些任务(判断有没有任务没人在拉)。 */
   private readonly inflightCoverage = new Set<ReadonlySet<string>>();
 
@@ -173,9 +190,10 @@ export class RemoteAgentPoller {
     let raw: unknown;
     let failure: unknown = null;
     try {
-      raw = await this.invoke([{ op: 'poll', runs: wanted, waitMs }]);
+      raw = await this.invoke([{ op: 'poll', runs: wanted, waitMs, maxBytes: this.pollBytes }]);
     } catch (error) {
       failure = error;
+      if (isTimeoutError(error)) this.pollBytes = Math.max(REMOTE_AGENT_POLL_MIN_BYTES, Math.floor(this.pollBytes / 2));
     } finally {
       this.inflight -= 1;
       this.inflightCoverage.delete(coverage);
@@ -191,6 +209,7 @@ export class RemoteAgentPoller {
       }
     }
     if (result) {
+      this.measureDelivery(result, this.now() - startedAt);
       if (this.retryTimer && this.attempt > 0) {
         // 另一个在途的 poll 成功了：链路已恢复，不必等退避。
         clearTimeout(this.retryTimer);
@@ -210,6 +229,18 @@ export class RemoteAgentPoller {
       return;
     }
     this.handleFailure(wanted, failure);
+  }
+
+  /**
+   * 按这次回包的大小和用时估回程速度，定下一次要多少（POLL_TARGET_TRANSFER_MS 内传得完）。回包太小时不估：
+   * 那多半是对方挂起等到的零星事件，用时里大半是等待。
+   */
+  private measureDelivery(result: RemoteAgentPollResult, elapsedMs: number): void {
+    let bytes = 0;
+    for (const item of result.runs) if (typeof item.data === 'string') bytes += Buffer.byteLength(item.data, 'base64');
+    if (bytes < REMOTE_AGENT_POLL_MIN_BYTES || elapsedMs <= 0) return;
+    const target = Math.floor(bytes / elapsedMs * POLL_TARGET_TRANSFER_MS);
+    this.pollBytes = Math.min(REMOTE_AGENT_POLL_MAX_BYTES, Math.max(REMOTE_AGENT_POLL_MIN_BYTES, target));
   }
 
   private ensureAfterReturn(): void {

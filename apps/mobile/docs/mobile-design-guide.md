@@ -108,7 +108,11 @@
 
 **登记例外**(只有这些可以偏离上表,新增例外先改本节):MCP App 卡片的第三方来源、本地安装、来源未知标签按 2026-11-16 定稿使用 `warningFg`、caption 字号/行高与常规字重；只用于宿主安装事实的例外来源，不用于插件名或普通自定义 MCP 标签。群聊正文 `@点名` 按用户 2026-11-04 裁决与 PC 对齐，使用专用 `groupMentionText`（数值正本 `tokens.ts`，对应 CINDY `msg-link`），不加下划线、底色或额外字重，详见根规范 §14.5；话题内“New”分界标签使用 `threadUnreadDivider` 红色、13/18 常规字重(2026-10-29 用户指定,与 0.5pt 横线同色);首页列表与队友行的节奏行高(18/28、15/26、13/22);代码 / diff 的紧凑行高;对话 Markdown 标题与长文 24 行高;与相邻图标 / 按钮对齐的文字;行内强调(Markdown strong 700、搜索命中、价格折扣);登录品牌画布(见根规范 §3 豁免表)。
 
+PR 卡片的「已合并」状态文字（`PluginCardActions.statusMergedText`）使用 `prMerged`，与合并图标及桌面端同义（根规范 §2 PR Status Colors）；仅限 PR 合并状态，不扩展为普通蓝色文字。检查通过仍使用 `statusDone`。
+
 **机器会拦什么**:阶梯外字号 / 行高 / 字重与裸数字、缺行高、浅色字配粗字重(`typographyTokenDiscipline.test.ts`);文字用了五档中性字色与已登记语义色以外的 token、占位字没用 `textPlaceholder`(`textColorDiscipline.test.ts`,存量按次数登记、只许减少);字号阶梯本身、文字三档与占位字对比度、深浅双模式同键(`themeTokens.test.ts`)。**拦不住、靠 review 的**:角色选错(比如把说明文字放 12 号、把标题写成 500)、例外被滥用。评审时对照上表逐行看。
+
+复古键帽的主、副印字使用 `retroKeyboardMaterials` 中与机身配套的 `ink` 和 `secondaryInk`，范围仅限实体键面，见下文「复古键盘的实体按压」。
 
 ### 字号 `typeScale`(按角色选,2026-09-27 用户定稿收拢为 11 档)
 
@@ -240,7 +244,8 @@ function Foo() {
 
 ### iOS 外壳 vs Cindy 内容
 
-- **任务行滑动（2026-10-24 用户裁决，iOS / Android）**：右滑提供已读与置顶，全滑默认标记已读；左滑提供选项与归档，全滑归档。跨端组合沿用已有方案：已读沿用灵动岛的青绿色单勾（Lucide `Check` / SF Symbols `checkmark`），归档沿用手机版的蓝色归档盒（`Archive` / `archivebox`），置顶为橙色图钉，选项为中性灰省略号。Mobile 的已读底色独立加深以保证白色图标对比度，数值由 `swipeActionRead` 管理；不把灵动岛深色背景上的高亮色直接复制到手机浅色背景。
+- **任务行滑动（2026-10-24 用户裁决，iOS / Android）**：右滑提供已读与置顶，全滑默认标记已读；左滑提供选项与归档，全滑归档。跨端组合沿用已有方案：已读用青绿色底上的虚线圆（Lucide `CircleDashed` / SF Symbols `circle.dashed`，2026-11-20 用户裁决；收件箱把左滑的归档换成单勾「完成」后，原来的已读单勾会与它混淆，虚线圆表示未读圆点被清掉），手机与任务胶囊同步，归档沿用手机版的蓝色归档盒（`Archive` / `archivebox`），置顶为橙色图钉，选项为中性灰省略号。Mobile 的已读底色独立加深以保证白色图标对比度，数值由 `swipeActionRead` 管理；不把灵动岛深色背景上的高亮色直接复制到手机浅色背景。
+  拉过两个按钮的宽度后，主按钮（右滑的已读，左滑的归档／取消归档／完成）跟着拉长，贴到随任务行外移的次按钮旁边，中间不留空，这一段只有图标；越过全滑阈值后主按钮盖过次按钮铺满露出区，并在图标旁淡入该动作的名称（16/22、500、`swipeActionText`，单行，放不下省略），表示此时松手即生效（2026-11-20 用户裁决）。
   Android 任务行、项目标题与设备管理行共用 `ClassicSwipeable` 的 16pt 横向激活／纵向失效边界：纵向先越界时交回列表，横向先激活后继续正常跟手；iOS 原有识别实现不变。
 
 - **项目标题滑动（iOS / Android）**：仅标题整行横移，展开的子任务不随之移动。左滑露出「新建任务」，超过屏宽 55% 松手打开预填项目电脑与目录的新建页；发送后才创建任务。右滑露出「全部任务」「搜索」，必须点按，搜索限定当前项目并聚焦输入框。点标题继续展开／收起，已有滑开行时先收起操作；自定义排序仍为长按后纵向拖动。项目与任务共用滑动互斥注册表，滚动收行，左屏缘保留返回手势。动作沿用普通任务的圆形到胶囊形态，按钮直径为 56pt，间距使用 spacing.md、图标使用 iconSize.swipeAction；使用双模式 token，并通过标题的无障碍动作提供等价入口。只对有明确电脑和目录的项目启用，不把对话或 Cindy Make 聚合组视为单一目录。实现见 `src/session/SwipeableProjectHeader.tsx`、`HomeSurface.tsx`。
@@ -321,7 +326,7 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 - **一直是实色**：点发送当帧上屏，与正式气泡同款；网络往返、排队、等电脑都不变灰。只有「正在下方输入框编辑」时淡化。
 - **状态只放两处**：气泡左侧图标（转圈 = 发送中 / 上传中，队列图标 = 排队中，时钟 = 等电脑或网络，红色感叹号 `statusError` = 失败），以及气泡下方那一行。送达后正式消息的「复制 / …」占的就是这一行，所以前后行高不变、列表不跳。
 - **本机刚发出的消息**：0.6 秒内不出任何状态，慢了才淡入转圈；入场上浮一次，确认时不重播。
-- **下方那一行**：排队中「排队中 | 插话 编辑 取消」；失败「未发送 | 重试 删除」，有具体原因时原因写在下面；等待「等电脑连上后发送 | 取消」。文字 13/18，按钮命中区补到 44。报错文字保持黑白（`errorText`），只有左侧图标是红色。
+- **下方那一行**：排队中「排队中 | 插话 编辑 取消」；失败「未发送 | 重试 删除」，有具体原因时原因写在下面；等待电脑时显示「连上〈电脑名〉后自动发送」，同账号电脑提供「立即重连」，可取消的消息保留「取消」。文字 13/18，按钮命中区补到 44。报错文字保持黑白（`errorText`），只有左侧图标是红色。
 - **带图**：每张图自己转圈；只有那张没传上去的图上显示重传按钮。
 - **发出后收起输入框（2026-11-18 用户裁决）**：任务页、新建任务页与伙伴群聊在消息被接收后，输入框收回单行简洁态并收起软键盘（与下拉收起同口径）。发送失败或等待期间又输入了内容时不收起，草稿与附件托盘留在原处供重试；只执行斜杠命令、保存排队消息修改不算发出新消息，行为不变。
 
@@ -416,9 +421,9 @@ ActivityIndicator。未知结果保留原有退出/修改/同 operationId 重试
 
 内屏竖向适配保留顶部返回按钮、底部工具栏及各 16pt 留白；Duo 外屏和展开后的横屏使用完整画面，系统安全区仅用于安排控件。复古外观按显示器玻璃开口适配，不能让旧的电脑长宽比反过来决定开口。
 
-画面可缩到适配大小以下并自由平移。手势过程中不吸附；捏合的全部手指松开后，大小在适配大小的 80%～120% 内时，以 280ms 动画恢复到适配大小并居中。这里的 1:1 指适配大小，不是电脑像素与手机像素一一对应。偏离更远则保留大小与位置。
+触屏模式下，画面在适配大小及以下保持居中，放大后可拖动查看局部。手势过程中不吸附；捏合的全部手指松开后，大小在适配大小的 80%～120% 内时，以 280ms 动画恢复到适配大小并居中。这里的 1:1 指适配大小，不是电脑像素与手机像素一一对应。偏离更远则保留缩放大小。
 
-在适配大小平移后，水平、垂直独立吸附：距离中心不超过对应可用画面尺寸的 20%（每轴最多 96pt）时，松手后对齐该轴；更远仍可停留。新触摸立即中断动画，减少动态效果时直接到达目标。实现与回归见 `src/remote-desktop/RemoteDesktopScreen.tsx`、`packages/maker-shared/src/remote-desktop/viewerRuntime.js` 及 `screen.test.tsx`、`viewer.test.ts`。
+在允许自由平移的浏览模式下，适配大小的画面按水平、垂直方向独立吸附：距离中心不超过对应可用画面尺寸的 20%（每轴最多 96pt）时，松手后对齐该轴；更远仍可停留。新触摸立即中断动画，减少动态效果时直接到达目标。实现与回归见 `src/remote-desktop/RemoteDesktopScreen.tsx`、`packages/maker-shared/src/remote-desktop/viewerRuntime.js` 及 `screen.test.tsx`、`viewer.test.ts`。
 
 ### 折叠态远程桌面默认键盘（2026-11-01）
 
@@ -426,7 +431,7 @@ ActivityIndicator。未知结果保留原有退出/修改/同 operationId 重试
 顶行是无键帽的图标条：esc、桌面级快捷键、撤销、重做、fn 和手机输入法入口。图标条高度取一行按键的 0.74 倍，不高于按键行（2026-11-07 用户决定）；触控板固定占下半屏可用高度的 32%（不低于 96pt），其余给按键。桌面级快捷键按被控电脑系统变化，按住图标时显示名称。
 顶行右端是剪贴板和控制面板。触控板按 1.9:1 居中，两侧留白；可见面板之外的掌托区域同样移动指针。
 修饰键点一次作用于下一个键，点两次锁定，再点一次取消；按住则与同时按下的键组合。单独点按不发给电脑。
-按键圆角 8pt，字号用 `body` 与 `micro`。
+默认键盘使用 8pt 圆角、3pt 键缝和跟随主题的浅键帽，行程 1.25pt。字号用 `body` 与 `micro`，数字主字和 Shift 副字分开排印。
 顶部保留与复古外观相同的 44pt 左右滑动切换栏（2026-11-06 用户决定），从折痕处开始、覆盖折痕下的安全边距，按键紧接在它下面；「控制」面板里也能切换外观。
 
 所有远程键盘共用一套布局和输入逻辑（`RemoteKeySurface`）：
@@ -453,7 +458,7 @@ iOS 使用原生 Form 二级页:顶部是与真实气泡同款的预览,预设�
 
 兑换礼品卡的底部面板（`src/gift-card/GiftCardSheet.tsx`）在「确认」与「到账」两步展示卡面，与桌面端兑换弹窗是同一张卡，登记见根规范 §15.7「gift card face」。这是手机上唯一带品牌图稿的面板内容，不作为其他卡片、确认面板带插画的先例。
 
-- **卡面 = 成品图 + 印在上面的金额**。四张成品图在 `assets/gift-cards/{cindy,cat,bell,leap}.webp`（1200×757，不含金额），与桌面端、分享网页、Platform 后台是同一份文件；`faceCode` 由服务端下发，本版本不认识的卡面按默认卡面显示。金额（币种符号 + 数字，小数末尾的 0 不印）的字形轮廓、位置、字号与两种图稿色都在 `@cindy/maker-shared/gift-card-amount`，用 `react-native-svg` 画成矢量；它属于卡面图稿，不是界面文字，`GiftCardFace.tsx` 自己不写任何颜色，也不加载额外字体。
+- **卡面 = 底图 + 印在上面的金额**。底图（1200×757，不含金额）、金额印法与各语言名称由服务端随卡下发（`@cindy/maker-shared/gift-card` 的 `GiftCardFaceStyle`），新卡面不用发版就能显示。`assets/gift-cards/{cindy,cat,bell,leap}.webp` 四张内置图只作兜底：认识的卡面在服务端底图到之前先显示内置图，服务端没给卡面（旧服务端）、给得不合法或底图取不到时用内置图；兜底时图与金额印法都用内置的，不混用。仍不认识的卡面按默认卡面显示，新卡面的底图还没到时只留同比例的中性占位。金额（币种符号 + 数字，小数末尾的 0 不印）的字形轮廓与内置卡面的印法在 `@cindy/maker-shared/gift-card-amount`，用 `react-native-svg` 画成矢量；它属于卡面图稿，不是界面文字，`GiftCardFace.tsx` 自己不写任何颜色，也不加载额外字体。
 - **处理**：容器圆角（`radius.container`）+ 1px `border`，深浅两种面板上都能和背景分开；不倾斜、无阴影、无动效。卡面最宽 420pt，在平板与横屏下居中。
 - **卡面以外全部走本文 token**：来源与到账说明 13/18 `textSecondary` 居中，留言 15/20 `textPrimary` 居中，条款行沿用「行标题 16/22 500 `textPrimary` + 行右侧取值 16/22 400 `textSecondary`」，报错 13/18 `errorText`。金额不在卡面下方重复；只有金额印不上卡面时（本版本没有轮廓的字符）才退回 24/30 600 `textPrimary` 的普通文字。兑换码输入框是 50pt 胶囊，等宽 15 号、自动大写。
 - **容器**：复用 `CompanionSheet`（iOS 系统 sheet，Android 兼容外壳）；主操作撑满宽度，领取请求在途时面板不可关闭。入口是设置页「礼品卡」分组与 `cindy://gift/<code>`、`cindycn://gift/<code>` 链接，两者共用根级 `GiftCardHost`，同时只呈现一张卡。
@@ -472,3 +477,40 @@ There is one mobile home, as on Desktop (owner decision, 2026-10-24): no separat
   - **Timing guards (not motion)**: a 1.6s native timeout ends a morph whose target never appears; the new-task page restores its normal push animation on `transitionEnd`, with a 1600ms fallback; the JS fallback focus (320ms) and focus-release grace (400ms) in `useComposerPillOpen.ts` only cover a missing native view or refused focus.
   - **Degradation**: under Reduce Motion neither the morph nor the pill opening plays — the page and card land directly in place. Without the native module (non-iOS or older binaries) the JS path navigates and focuses without a morph.
   - **Scope boundary**: this button and pill only. Its overshoot must not leak into other buttons, sheets or navigation; other mobile transitions stay on the §14.4 Motion tokens. Implementation: `CindyComposerMorphModule.swift`, `ComposerMorphSource.ios.tsx`, `ComposerFrame.ios.tsx`, `useComposerPillOpen.ts`; geometry in `composerGeometry.ts`, behavior notes in `apps/mobile/docs/navigation-and-composer.md`.
+
+### 复古键盘的实体按压（2026-11-07）
+
+参考 [Tiny Computers 官方键盘近照](https://www.fountaininteractive.com/TinyComputers/press/)，
+学习键帽厚度、键缝、印字和材质的统一关系；不打包第三方素材。
+
+复古键的键帽与印字作为整体下沉，触摸命中框保持原位；不通过整键半透明表达按压。
+厚键帽键程 4pt，PowerBook／ThinkPad／Ice Blue 为 2.5pt，MacBook 为 1.5pt，
+小尺寸按键不超过键高的 12%。实体按键反馈使用 45ms 下压、110ms 回位的 ease-out，
+这是硬件模拟的短反馈，不影响普通按钮动效。减弱动态效果开启或状态未知时直接切换。
+Shift 点一次后键帽保持下沉，输入下一个键后复位。连续点两次则锁定并亮起圆点，再点一次解锁熄灯。
+其他修饰键也只在锁定时显示圆点。F/J 带定位横条。
+皮肤材质在亮暗模式保持物理颜色，键字与状态仍取对应皮肤的语义色。
+声音与触觉继续沿用已有本机反馈，不等待远程响应。
+
+2026-11-07 视觉复核：新皮肤独立命名「冰蓝 / Ice Blue」，不使用参考应用的
+产品名或图形标志。材质采用低对比细磨砂、窄倒角、浅凹键面；冷白、米白和深灰
+分别对应机身材质。位图本身已包含形状与光照，不额外倾斜形成重复透视。
+字母印字采用 footnote，功能键采用 micro；底部接触投影随按压减弱，避免仅移动
+整块图片。最终质感需按实际组件组合与手机实机判断，生成素材不能代替验收。
+
+同日材质方向修正：冰蓝外壳以 iMac G3 的厚实有色半透明注塑为参考，不能做成
+淡蓝玻璃细边。厚边与转角颜色更浓，薄处更透；内层乳白带青色映色，筋位和卡扣
+隔着壳朦胧可见。高光随圆润曲面宽窄变化，不做均匀发光描边；保留独立命名。
+
+全部实体键帽按键宽绘制连续侧壁。键高决定倒角和前缘厚度，按下时前缘与接触阴影一起收短。
+经典原版、窄边经典、极简大屏共用暖象牙键盘；Macintosh II 用白金灰，四者均为 2.5pt 键缝，
+功能键比字母键略深。PowerBook 用石墨灰配暖白字，ThinkPad 用炭黑配左上角直立字母，
+冰蓝用冷白配蓝灰丝印，三者均为 2pt 键缝。MacBook 的薄型炭灰键帽采用居中字母与 3pt 键缝。
+各套功能键沿外侧排字、方向箭头居中，窄键面优先显示主字。F/J 定位凸筋随键面移动。
+
+前三款经典外观和 Macintosh II 的可见触摸板以键盘槽宽的三分之一为目标，在掌托中居中。
+掌托较矮时，板面最宽为 2:1，上下各留至少 4pt；两端的圆角和凹边随高度等比缩放。
+
+### Android in-app update card (owner-approved HTML direction, registered 2026-10-16, #6199)
+
+`AndroidUpdateSheet` is one content-height Material bottom sheet for discovery, install permission, download and install. Its paired actions are pills (secondary `surfaceChip` left, primary `cta` right). The only bare-text control is the centered browser-download fallback ("改用浏览器下载" / "Download in Browser Instead") shown under the pills while a decision is pending: frameless, `footnote` 13/18 medium in `textSecondary`, full-width 44pt hit height, pressed opacity 0.72. It is a secondary escape route rather than a commit action, so it stays out of the pill pair; this is not a general exemption for other sheet actions. In short windows the details region scrolls while the actions stay pinned. Floating compatibility presentations round all four container corners. The Light/Dark HTML previews are not Android device screenshots. Behavior rules (download, install permission, fallback) are in [Mobile development](../../../docs/dev-rules/mobile-development.md).

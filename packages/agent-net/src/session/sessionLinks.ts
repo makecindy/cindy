@@ -14,7 +14,7 @@ import {
   InvokeResultCache, InvokeScheduler, PROTOCOL_VERSION, SessionMessageReuse, acceptedPushDeflateDictionaries,
   bypassInvokeScheduling, decodeModelSpeedPayload, decodePushTransfer, decodeSessionTagCatalog, encodeInvokeResultTransfer,
   encodeModelSpeedPayload, encodePushTransfer, isEncodedPushPayload, isHistoryViewDeltaMiss, pushDeflateCapabilities,
-  isFilePeerStreamRead, isFilePeerStreamTransfer, isPeerResetRetryableInvoke, isScopedPeer, isUnlinkedPushChannel, REMOTE_DESKTOP_CHANNEL, requestSessionTagCatalog, resolveInvokePriority,
+  isFilePeerStreamRead, isFilePeerStreamTransfer, isPeerResetRetryableInvoke, isRemoteAgentUploadChunk, isScopedPeer, isUnlinkedPushChannel, REMOTE_DESKTOP_CHANNEL, requestSessionTagCatalog, resolveInvokePriority,
   type DeviceLinkErrorCode, type DeviceLinkPeerLinkSnapshot, type DeviceLinkPeerRouteStateChanged, type DeviceLinkTransferCodec,
   type Envelope, type InvokePayload, type InvokeResultPayload, type LinkAcceptPayload, type LinkCloseReason, type PresenceSnapshot,
   type PushPayload, diagnosticChannel, invokeIntendedHoldMs, shortDeviceRef,
@@ -36,7 +36,8 @@ export function agentNetSessionLane(channel: string, background?: boolean): Sess
  */
 export function agentNetRequestLane(channel: string, args: unknown[] | undefined): SessionLane | undefined {
   const op = (args?.[0] as { op?: unknown } | undefined)?.op;
-  return channel === REMOTE_DESKTOP_CHANNEL && (op === 'heartbeat' || op === 'input' || op === 'stop') ? 'control' : undefined;
+  return (channel === REMOTE_DESKTOP_CHANNEL && (op === 'heartbeat' || op === 'input' || op === 'stop'))
+    || resolveInvokePriority(channel, undefined, args) === 'interactive' ? 'control' : undefined;
 }
 type FrameHandler = (env: Envelope) => unknown | Promise<unknown>;
 
@@ -102,6 +103,11 @@ export interface AgentNetSessionLinksOptions {
   transferCodec?: DeviceLinkTransferCodec;
   requestTimeoutMs?: number;
   path?(deviceId: string): 'direct' | 'relay' | null;
+  /**
+   * 发往这个对端的请求超时了，而它此刻走中转：交给它所在的 Agent-Net 连接判断中转 UDP 是不是只通登记、不通数据
+   * （relayUdp.ts noteStall）。
+   */
+  onRelayStall?(deviceId: string): void;
   rttMs?(deviceId: string): number | null;
   /** Agent-Net 主连接上和这个对端的这条连接是什么时候建好（或换上）的，`performance.now()` 时刻；没连着时为 null。 */
   connectedAt?(deviceId: string): number | null;
@@ -323,7 +329,10 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       connected = await Promise.race([this.options.connect(deviceId),
-        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), CONNECT_WAIT_MS); timer.unref?.(); })]);
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), CONNECT_WAIT_MS);
+          (timer as { unref?: () => void }).unref?.();
+        })]);
     } catch { return; } finally { clearTimeout(timer); }
     if (!connected || this.stopped || this.available(deviceId)) return;
     const wait = this.sessionPendingMs(deviceId);
@@ -440,14 +449,15 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   }
 
   async invoke(dst: string, payload: InvokePayload, timeoutMs?: number,
-    options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' }): Promise<InvokeResultPayload> {
+    options?: { preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' }): Promise<InvokeResultPayload> {
     if (this.remoteControlDisabled.has(dst)) throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target');
     if (!this.live(dst)) throw new DeviceLinkError('LINK_NOT_OPEN', 'no Agent-Net session with the target');
     const queuedAt = performance.now();
-    const priority = resolveInvokePriority(payload.channel, options?.background);
+    const priority = resolveInvokePriority(payload.channel, options?.background, payload.args);
     const slotBudgetMs = Math.min(timeoutMs ?? this.requestTimeout(), 30_000);
     const send = async (): Promise<InvokeResultPayload> => {
       options?.preSend?.();
+      options?.beforeDispatch?.();
       const peer = this.peer(dst);
       if (payload.channel === 'git-context:github-read' && !peer.githubRead) {
         return { ok: false, error: { code: 'IPC_ERROR', message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' } };
@@ -466,7 +476,12 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
           || (isFilePeerStreamTransfer(tagged) && (tagged.args?.[0] as { body?: unknown } | undefined)?.body !== undefined);
         // noResultCache：和 Device Link 一样不缓存这条的结果（MCP App 的 open／poll）。
         const transfer = scoped || fileBlock ? null : this.invokeResultCache.prepare(dst, tagged, options?.noResultCache);
-        const raw = await this.request(dst, transfer?.payload ?? tagged, timeout, options?.background || fileBlock);
+        // 远程任务的上传块也走后台通道：控制端一次有几块在途，停止等交互请求不该排在它们后面（2026-11-19 实测，慢线路上停止要等 5 秒多）。
+        // 只改通道，排队仍按原优先级，和 Device Link 同一套名额。
+        const backgroundLane = fileBlock || isRemoteAgentUploadChunk(tagged);
+        // Pass the resolved policy too: an explicit false would otherwise undo
+        // a channel's default background lane after admission used its cap.
+        const raw = await this.request(dst, transfer?.payload ?? tagged, timeout, priority === 'background' || backgroundLane);
         const result = transfer ? await transfer.decode(raw) : raw;
         if (transfer?.retryWithoutBase()) return { result, retry: 'remaining-budget' };
         if (!result.ok) return { result };
@@ -484,6 +499,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
         const remainingMs = slotBudgetMs - Math.round(performance.now() - sentAt);
         if (outcome.retry === 'full-timeout' || remainingMs >= 100) {
           options?.preSend?.();
+          options?.beforeDispatch?.();
           outcome = await attempt(outcome.retry === 'full-timeout', outcome.retry === 'full-timeout' ? timeoutMs : remainingMs);
         }
       }
@@ -775,7 +791,11 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     const description = `channel=${diagnosticChannel(channel)} dst=${shortDeviceRef(dst)} lane=${lane ?? 'auto'} attempts=${attempts}`;
     if (!outcome.ok) {
       const code = outcome.error.code;
-      if (code === 'INVOKE_TIMEOUT') { this.options.log.warn(`agent-net session request timeout ${description} elapsed=${elapsedMs}ms`); return; }
+      if (code === 'INVOKE_TIMEOUT') {
+        this.options.log.warn(`agent-net session request timeout ${description} elapsed=${elapsedMs}ms`);
+        if (this.options.path?.(dst) === 'relay') this.options.onRelayStall?.(dst);
+        return;
+      }
       if (code !== 'NOT_SENT' || elapsedMs >= SLOW_REQUEST_LOG_MS) {
         this.options.log.debug(`agent-net session request failed ${description} code=${code} elapsed=${elapsedMs}ms`);
       }

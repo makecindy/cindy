@@ -156,6 +156,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
       activeOwnerScopeKey: () => 'recovered-scope', getActiveAppSession: () => ({ dataOwnerId: scenario.ownerId }),
       getActiveDataOwnerPushStamp: () => recovered, getMakerIfReady: () => scenario.liveMaker ? {} : null,
       refreshHostToolProviderOwner: hostTools.refreshHostToolProviderOwner,
+      scheduleNativeHistoryBackupCleanup: () => {},
       builtinPostCommitStep: { run: async () => 'deferred' },
     };
     try {
@@ -234,6 +235,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
         },
       },
       authManager: run,
+      companyReporting: { refresh: vi.fn() },
       authCredentialRecovery: { request: vi.fn() },
       app: { isPackaged: true },
       isCindyVersionLaunchPending: () => false,
@@ -242,6 +244,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
     new Function(...Object.keys(deps), compiled)(...Object.values(deps));
     try {
       await expect(initialize()).resolves.toBe(run.state);
+      expect(deps.companyReporting.refresh).toHaveBeenCalledTimes(1);
       expect(run.task).toHaveBeenCalledTimes(1);
       expect(deps.noteAuthColdStartState).toHaveBeenCalledWith(run.state, null);
     } finally {

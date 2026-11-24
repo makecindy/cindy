@@ -44,7 +44,7 @@
 | `#2a2828` | 主按钮 / 社交按钮背景、active 边框、Dark 回调页面底、Dark CTA 文本 | 新增别名分语义 | `login-primary-button-bg`、`login-control-border-active`、`login-inverted-button-text`、`login-result-page-bg` dark、`login-link-text` | `#2a2828`，HSL `0 2.4% 16.1%` | 全主题保持；CINDY dark `surface` 同值但语义不同 |
 | `#434343` | 主按钮 / 社交按钮边框、Dark 回调卡片边框 | 新增 | `login-primary-button-border`、`login-panel-border` dark | `#434343`，HSL `0 0% 26.3%` | 全主题保持；可由 CINDY dark `border-default` 提供但 login alias 更稳 |
 | `#252222` | 标题、输入已填文本 | 新增 | `login-title-text`、`login-control-text` | `#252222`，HSL `0 4.2% 13.9%` | 全主题保持；不复用 `text-primary`，因为 default light 是 `#262626`、CINDY light 是 `#3c3f43` |
-| `#6f6f6f` | 副标题、回调正文、**「跳过登录」文字按钮**（2026-07-27 新增消费点） | 新增 | `login-secondary-text` | `#6f6f6f`，HSL `0 0% 43.5%`；light / dark **同值** | 〔2026-10-23 改判：Desktop 改为墨水次要档 黑 56% / 白 55%，与主界面 `text-secondary` 同值，见 `DESIGN.md §16.1`；Mobile 暂保留 `#6f6f6f`〕。**「跳过登录」文字按钮走本 token、不走 `login-link-*` 族**（文字按钮 ≠ 文字链接：不做 hover / pressed 变色），故本次改版**零新增颜色 token** |
+| `#6f6f6f`〔2026-10-23 已取代：Desktop 为墨水次要档 56% / 55%；Mobile 仍 `#6f6f6f`〕 | 副标题、回调正文、**「跳过登录」文字按钮**（2026-07-27 新增消费点） | 新增 | `login-secondary-text` | `#6f6f6f`，HSL `0 0% 43.5%`；light / dark **同值** | 〔2026-10-23 改判：Desktop 改为墨水次要档 黑 56% / 白 55%，与主界面 `text-secondary` 同值，见 `DESIGN.md §16.1`；Mobile 暂保留 `#6f6f6f`〕。**「跳过登录」文字按钮走本 token、不走 `login-link-*` 族**（文字按钮 ≠ 文字链接：不做 hover / pressed 变色），故本次改版**零新增颜色 token** |
 | `#ffffff` | Global 文字、返回按钮边框、Dark 回调按钮边框、状态栏变量 | 语义豁免或 alias | `login-inverted-button-border`；Global text 可用 `login-inverted-button-border` 或 dedicated constant | `#ffffff`，HSL `0 0% 100%` | 白色在这些场景是设计稿固定高对比值；不走 `surface-elevated`，避免主题污染 |
 | `#d91f37` | 错误原因文字 | 复用现有名并改默认 / override | `login-error-text` / existing component alias | 建议把旧 `login-error-text` 从 `error-flat(#ef4444)` 调整为 `#d91f37`，HSL `352.3 75% 48.6%` | 全主题保持；错误色是登录设计稿专用，不应和通用 destructive 混同 |
 | `#b4b4b4` | disabled 按钮边框 | 新增 | `login-control-border-disabled` / component alias | `#b4b4b4`，HSL `0 0% 70.6%` | 全主题保持 |
@@ -97,7 +97,7 @@
 
 > **勘误（2026-07-28）**：「跳过登录」**仅桌面落地**，手机端整体剥离（见 `design-decision-log.md`「2026-07-28」条）。故本表 §4 里 `login-panel-height` 的 `440→500`、`login-skip-entry-*` 尺寸族与「命中区移动端扩 50 / 落码手机 `LOGIN_SKIP_LOGIN`」均只对桌面成立；手机端 `loginSizes.panelHeight` 仍为 `440`、无 `LOGIN_SKIP_LOGIN` 常量。
 
-**「跳过登录」文字按钮的色源（2026-07-27）**：文字色 = `--login-secondary-text`（`#6F6F6F`，light / dark 同值，见 §3 对应行），**不走 `--login-link-*` 族**——文字按钮与文字链接是两种组件，前者不做 hover / pressed 变色，因此本次改版没有新增任何颜色 token。
+**「跳过登录」文字按钮的色源（2026-07-27）**：文字色 = `--login-secondary-text`（`#6F6F6F`，light / dark 同值，见 §3 对应行〔2026-10-23 已取代：Desktop 为墨水次要档 56% / 55%；Mobile 仍 `#6f6f6f`〕），**不走 `--login-link-*` 族**——文字按钮与文字链接是两种组件，前者不做 hover / pressed 变色，因此本次改版没有新增任何颜色 token。
 
 尺寸新增清单中不包含可由其它 token稳定推导的值（例如社交半径 `80/2`、输入左右边距 `(680-540)/2`）。若实现希望所有数值全命名，可额外补 `login-panel-horizontal-padding=70`、`login-panel-title-y=31`、`login-panel-subtitle-y=75` 等布局常量，但它们更适合在组件局部用结构化对象表达。
 
@@ -166,8 +166,9 @@ export const loginColors = {
 
 ## 9. 2026-08 Cindy 皮肤色阶改版(暖象牙 + 中性近黑)
 
-> 用户在 2026-08-11 ~ 2026-08-14 的交互式调参会话中逐项批准;本节为该轮全部色值改动的
-> 唯一权威,取代 §3 中被覆盖的条目(§3 其余条目继续有效)。冻结载体:
+> 用户在 2026-08-11 ~ 2026-08-14 的交互式调参会话中逐项批准;本节是该轮色值改动的决策记录,
+> 取代 §3 中被覆盖的条目(§3 其余条目继续有效);数值以 DTCG(`packages/design-tokens`)与
+> `cindyDecisionData.ts` 为准。冻结载体:
 > `apps/desktop/src/renderer/themes/__tests__/cindyDecisionData.ts`(103 条更新 + 32 条新入表)。
 > 规则正文另见 `DESIGN.md` §15.16。
 
@@ -194,15 +195,16 @@ export const loginColors = {
 | **页底** | **`#F2F2ED`** | surface / titlebar / panel | 0 |
 | 侧栏 | `#EEEEE9` @ 85% 玻璃 | 独立面(玻璃遮盖度用户调参) | −3.3% |
 
-交互态与边框(2026-10-22 用户裁决起为墨水,叠在任何底上都偏移同一档;浅色黑 / 深色白):
+交互态与边框(2026-10-22 用户裁决起为墨水,叠在任何底上都偏移同一档;浅色黑 / 深色白)。各档透明度只在
+[`DESIGN.md` §15.16](./DESIGN.md) 「Fills and lines」维护,本表只记各档覆盖的 token:
 
-| 档 | Light | Dark | 用途 |
-|---|---|---|---|
-| 柔和 hover | 3.5% | 4% | `surface-hover-soft`、设置退出 hover、计划行 hover |
-| 悬停 / 标签底 | 5% | 6% | `surface-hover`、`surface-chip`、`sidebar-item-hover`（菜单 / Select / 侧栏行，Dark 原为白 9%，2026-11-11 维护者裁决 E-02 并入）、菜单 hover、命令面板行 hover、下拉行 hover 等 |
-| 选中 / 按下 | 8% | 10% | 弹层选中、设置菜单选中、计划大纲激活、提问卡标签 |
-| 弱档 | 10% | 13% | file-chip / 滚动条 hover |
-| 边框 / 分割线 | 8% | 10% | `border-default` 及各组件边框、分割线 |
+| 档 | 用途 |
+|---|---|
+| 柔和 hover | `surface-hover-soft`、设置退出 hover、计划行 hover |
+| 悬停 / 标签底 | `surface-hover`、`surface-chip`、`sidebar-item-hover`（菜单 / Select / 侧栏行，Dark 原为白 9%，2026-11-11 维护者裁决 E-02 并入）、菜单 hover、命令面板行 hover、下拉行 hover 等 |
+| 选中 / 按下 | 弹层选中、设置菜单选中、计划大纲激活、提问卡标签 |
+| 弱档 | file-chip / 滚动条 hover |
+| 边框 / 分割线 | `border-default` 及各组件边框、分割线 |
 
 浅色关闭态开关轨道随悬停加深由 `#888888` 改为 `#808080`,压在悬停行上保住 3:1。Fast/思考小开关的关闭轨道
 (`fast-toggle-track`)原本借用禁用文字色,在 Cindy 改为跟随 `switch-track-off`,两类开关关闭态一致且滑块对比保持 ≥3:1。
@@ -218,16 +220,17 @@ export const loginColors = {
 ### 9.4 文字阶梯与对比度
 
 2026-10-22 用户裁决:文字改为中性墨水加透明度(苹果 label 色的做法),取代 2026-08 的实色暖阶梯与 U2 例外。
-层级严格由深到浅;对比度为叠在页面底色上的实算值,括号内为叠在悬停面上的值。
+层级严格由深到浅;各档透明度只在 [`DESIGN.md` §15.16](./DESIGN.md) 「Text tiers」维护,本表只留裁决证据:
+对比度为叠在页面底色上的实算值,括号内为叠在悬停面上的值。
 
-| 档 | 代表 token | Light(黑) | 对比度 | Dark(白) | 对比度 |
-|---|---|---|---|---|---|
-| 强调 | `text-primary-emphasis` | 95% | 17.4 | 100% | 17.8 |
-| 正文 | `text-primary` | 88% | 15.0 | 82% | 12.1 |
-| 说明 | `text-secondary-mid`、`settings-section-desc`、`form-field-hint` | 70% | 8.1 | 66% | 8.2 |
-| 次要/meta | `text-secondary`、`cmd-palette-item-meta` | 56% | 4.8(4.65) | 55% | 6.1 |
-| 三级/侧栏灰字 | `text-tertiary`、`sidebar-list-muted` | 44% | 3.2(3.13) | 40% | 3.8 |
-| 占位/禁用 | `text-placeholder`、`text-disabled` | 32% | 2.2 | 30% | 2.7 |
+| 档 | 代表 token | Light 对比度 | Dark 对比度 |
+|---|---|---|---|
+| 强调 | `text-primary-emphasis` | 17.4 | 17.8 |
+| 正文 | `text-primary` | 15.0 | 12.1 |
+| 说明 | `text-secondary-mid`、`settings-section-desc`、`form-field-hint` | 8.1 | 8.2 |
+| 次要/meta | `text-secondary`、`cmd-palette-item-meta` | 4.8(4.65) | 6.1 |
+| 三级/侧栏灰字 | `text-tertiary`、`sidebar-list-muted` | 3.2(3.13) | 3.8 |
+| 占位/禁用 | `text-placeholder`、`text-disabled` | 2.2 | 2.7 |
 
 - 每个文字 token 按它在 Classic 主题里的档位归入上表(Classic `#262626` → 正文、`#525252` → 说明、
   `#737373` → 次要、`#A3A3A3` → 三级、`#C4C4C4`/`#D4D4D4` → 占位/禁用)。

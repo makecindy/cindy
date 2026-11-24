@@ -1,10 +1,10 @@
-import { computeListContinuation, matchListPrefix } from './composerListContinuation';
+import { computeListContinuation } from './composerListContinuation';
 
 /**
  * Composer 列表接续的**原生 textarea 适配层**(纯字符串逻辑,无 DOM 依赖)。
  *
- * `composerListContinuation.ts` 里的核心匹配(matchListPrefix /
- * computeListContinuation)是编辑器无关的纯文本函数;那份文件另有一套绑定
+ * `composerListContinuation.ts` 里的 computeListContinuation 是编辑器无关的
+ * 纯文本函数;那份文件另有一套绑定
  * ProseMirror(tiptap)的 apply* 适配,供主 composer ChatInput 使用。这里是
  * 第二套适配:面向 `<textarea>` 的 `value` + 光标 offset,让所有原生 textarea
  * 型输入框(二次编辑框、新建目标、待发队列……)复用同一套列表行为,无需各自
@@ -88,10 +88,7 @@ export function computeTextareaBackspace(
 
   const lineStart = lineStartOffset(value, caret);
   const line = value.slice(lineStart, caret);
-  const match = matchListPrefix(line);
-  if (!match) return null;
-  // 前缀后还有内容 → 正常退格(逐字符删),不整删。
-  if (line.slice(match.prefixLength).trim().length > 0) return null;
+  if (computeListContinuation(line)?.action !== 'exit') return null;
 
   return {
     value: value.slice(0, lineStart) + value.slice(caret),

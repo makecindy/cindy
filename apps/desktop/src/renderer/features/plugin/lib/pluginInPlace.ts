@@ -6,12 +6,15 @@ import {
   installedGhostStoragePart,
   resolvePluginInstanceQuery,
 } from '../../../../shared/pluginIdentity';
+import { uniquePluginInstallCandidate } from '../../../../shared/pluginMarket';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
+import { installReviewedMarketRelease } from './installReviewedMarketRelease';
 import { pluginMarketErrorKey } from './pluginMarketErrorKey';
 import {
   marketItemForInstalledGhost,
+  marketItemMatchesInstalledGhost,
   marketReviewTargetsInstalledGhost,
 } from './pluginMarketPresentation';
 
@@ -24,6 +27,8 @@ export interface PluginInPlaceTarget {
   marketPluginId?: string;
   /** Also bring an installed copy to its newer market release. */
   update?: boolean;
+  /** This action needs a task page that can show another computer's devices. */
+  requireRemoteTaskView?: boolean;
   /** Also turn the plugin back on in this project when it was turned off here. */
   workingDir?: string | null;
 }
@@ -80,15 +85,26 @@ export async function makePluginUsableInPlace(target: PluginInPlaceTarget): Prom
     // Recovering an unverified install has its own explanation on the plugin page.
     if (ghost.approval.state !== 'approved' || ghost.retirement) return { status: 'page', route: installedRoute(ghost) };
     let changed: 'enabled' | 'updated' | null = null;
-    if (target.update) {
+    if (target.update && !(target.requireRemoteTaskView && ghost.manifest.taskView?.remote === true)) {
       try {
         const market = await window.electronAPI.pluginMarket.lookup([target.ghostId]);
         const item = marketItemForInstalledGhost(market.items, ghost);
+        if (target.requireRemoteTaskView && !item && (
+          market.unavailableReason || market.organizationAccessError || market.unavailableCustomSourceNames?.length
+        )) return { status: 'page', route: installedRoute(ghost) };
         const detail = item?.installState === 'update-available'
           ? await window.electronAPI.pluginMarket.detail(item.pluginId)
           : null;
         if (!detail || !marketReviewTargetsInstalledGhost(detail, ghost.approval.state))
-          return { status: 'page', route: installedRoute(ghost) };
+          return target.requireRemoteTaskView
+            ? { status: 'unavailable' }
+            : { status: 'page', route: installedRoute(ghost) };
+        // A release is a remedy only if this exact source actually supplies the
+        // required page. Version equality or a newer release alone proves nothing.
+        if (target.requireRemoteTaskView && (
+          !marketItemMatchesInstalledGhost(detail, ghost) ||
+          detail.manifest.taskView?.remote !== true
+        )) return { status: 'unavailable' };
         ghost = (await window.electronAPI.pluginMarket.install(detail.pluginId, {
           expectedReleaseId: detail.releaseId,
           expectedManifest: detail.manifest,
@@ -100,6 +116,8 @@ export async function makePluginUsableInPlace(target: PluginInPlaceTarget): Prom
         return failure(error, true);
       }
     }
+    if (target.requireRemoteTaskView && ghost.manifest.taskView?.remote !== true)
+      return { status: 'unavailable' };
     try {
       if (!ghost.enabled) {
         await window.electronAPI.ghosts.setEnabled(
@@ -119,24 +137,17 @@ export async function makePluginUsableInPlace(target: PluginInPlaceTarget): Prom
 
   try {
     const market = await window.electronAPI.pluginMarket.lookup([target.ghostId]);
-    const matches = market.items.filter(
-      (item) =>
-        item.ghostId === target.ghostId &&
-        item.installState !== 'conflict' &&
-        (!target.marketPluginId || item.pluginId === target.marketPluginId) &&
-        // A missing namespace is unknown, never an implicit root match.
-        (target.namespace === undefined || item.namespace === target.namespace),
-    );
-    if (matches.length !== 1) {
+    const candidate = uniquePluginInstallCandidate(market, target);
+    if (!candidate) {
+      if (market.unavailableReason || market.organizationAccessError || market.unavailableCustomSourceNames?.length)
+        return { status: 'page', route: target.marketPluginId ? marketRoute(target.marketPluginId) : '/plugins' };
       return target.marketPluginId ? { status: 'page', route: marketRoute(target.marketPluginId) } : { status: 'unavailable' };
     }
-    const detail = await window.electronAPI.pluginMarket.detail(matches[0].pluginId);
+    const detail = await window.electronAPI.pluginMarket.detail(candidate.pluginId);
+    if (detail.ghostId !== candidate.ghostId || detail.namespace !== candidate.namespace ||
+        (target.requireRemoteTaskView && detail.manifest.taskView?.remote !== true)) return { status: 'unavailable' };
     if (detail.installState !== 'not-installed') return { status: 'page', route: marketRoute(detail.pluginId) };
-    const { ghost } = await window.electronAPI.pluginMarket.install(detail.pluginId, {
-      expectedReleaseId: detail.releaseId,
-      expectedManifest: detail.manifest,
-      allowSourceReplacement: false,
-    });
+    const { ghost } = await installReviewedMarketRelease(detail);
     await turnOnInProject(ghost, target.workingDir);
     return { status: 'ready', ghost, changed: 'installed' };
   } catch (error) {
@@ -170,6 +181,8 @@ export function usePluginInPlace() {
         onReady?: (ghost: InstalledGhost) => void | Promise<void>;
         /** Replaces opening the plugin page, e.g. to keep a "come back here" request. */
         onPage?: (route: string) => void;
+        /** Explain a missing compatible release in the context of this action. */
+        unavailableMessageKey?: string;
         /**
          * Whether what the user asked from is still on screen. When not, the result is
          * still reported, but nothing continues or navigates for it.
@@ -202,7 +215,7 @@ export function usePluginInPlace() {
             else navigate(result.route);
             break;
           case 'unavailable':
-            toast.info(t('newChat.pluginSuggestions.unavailable'));
+            toast.info(t(options.unavailableMessageKey ?? 'newChat.pluginSuggestions.unavailable'));
             break;
           case 'failed':
             toast.error(t(result.messageKey));

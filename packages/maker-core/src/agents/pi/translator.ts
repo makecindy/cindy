@@ -19,10 +19,11 @@ import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
  */
 
 import { randomUUID } from 'node:crypto';
+import { PI_NATIVE_SUBAGENT_DISPLAY_NAME } from './session-tree.js';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { StartSessionOptions } from '../base-agent.js';
 import type { Logger } from '../../interfaces/logger.js';
-import { PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
+import { PI_SUBAGENT_RUNTIME_TOOL_NAME, PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
@@ -974,14 +975,14 @@ function translatePiEventInternal(
       if (message.cindyCacheRecoveryHandled === true) ctx.cacheRecoveryHandled = true;
       const pendingPriceVariant = ctx.pendingPriceVariants.shift();
       const reportedPriceVariant = priceVariantFromServiceTier(message.usage?.service_tier);
-      const executionPriceVariant = message.usage && ctx.resolveUsagePriceVariant?.({
+      const observed = message.usage && ctx.resolveUsagePriceVariant?.({
         inputTokens: (message.usage.input ?? 0) + (message.usage.cacheRead ?? 0) + (message.usage.cacheWrite ?? 0),
         outputTokens: message.usage.output ?? 0,
         cacheReadTokens: message.usage.cacheRead ?? 0,
       });
       const priceVariant =
-        executionPriceVariant ?? pendingPriceVariant ?? reportedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard';
-      applyUsage(ctx, message.usage, message.model, priceVariant);
+        (typeof observed === 'object' ? observed.priceVariant : observed) ?? pendingPriceVariant ?? reportedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard';
+      applyUsage(ctx, message.usage, message.model || (typeof observed === 'object' ? observed.model : undefined), priceVariant);
       publishUsageReceipts(queue, ctx);
       const hadGenerationHeartbeat = ctx.generationHeartbeatAt > 0;
       samplePiGenerationHeartbeat(ctx);
@@ -1073,6 +1074,7 @@ function translatePiEventInternal(
         // calibration overwrite it.
         ctx.turnMainOutputUsageComplete = false;
         ctx.unreportedEstimatedOutput += messageEstimate;
+        ctx.tokenSpeed.finishUnreportedRequest();
         ctx.lastCalibratedTokens = meterTokens;
       }
       pushStatus(queue, ctx, 'Working…', true);
@@ -1092,13 +1094,16 @@ function translatePiEventInternal(
           toolUseId,
           ...parseMessageToolUse({
             role: 'tool_use',
-            content: { toolName, input: toolArgs },
+            content: {
+              toolName: toolName === PI_SUBAGENT_TOOL_NAME ? PI_NATIVE_SUBAGENT_DISPLAY_NAME : toolName,
+              input: toolArgs,
+            },
             toolUseId,
           }),
         },
         source: 'pi',
       });
-      if (toolName === PI_SUBAGENT_TOOL_NAME && toolUseId && (toolArgs.action === undefined || toolArgs.action === 'run')) {
+      if (toolName === PI_SUBAGENT_RUNTIME_TOOL_NAME && toolUseId && (toolArgs.action === undefined || toolArgs.action === 'run')) {
         const rawTitle = toolArgs.title;
         const taskFallback = typeof toolArgs.task === 'string' && toolArgs.task.trim()
           ? toolArgs.task.trim().replace(/\s+/g, ' ').slice(0, 120)
@@ -1247,6 +1252,7 @@ function translatePiEventInternal(
       // so `unreportedEstimatedOutput` never double counts a reported message.
       settlePiRun(ctx);
       const calibratedElapsedMs = ctx.tokenSpeed.snapshot()?.elapsedMs;
+      const generationTrace = ctx.tokenSpeed.trace();
       const usageDurationMs =
         typeof calibratedElapsedMs === 'number' && Number.isFinite(calibratedElapsedMs) && calibratedElapsedMs > 0
           ? Math.round(calibratedElapsedMs)
@@ -1269,6 +1275,10 @@ function translatePiEventInternal(
         ...(ctx.turnWallClockStartedAt > 0
           ? { turnDurationMs: Math.max(0, Date.now() - ctx.turnWallClockStartedAt) }
           : {}),
+        // Display only: lets the finished message show the chart the turn ran with. The meter
+        // calibrates on the parent's own output and invalidates itself on a broken clock; the
+        // timing flag above covers the usage counters, which child output makes incomparable.
+        ...(generationTrace ? { generationTrace } : {}),
       };
       const terminalError = pendingAssistantError ?? (outputLimited ? {
         message: 'Pi reached the model output limit. The response may be incomplete.',

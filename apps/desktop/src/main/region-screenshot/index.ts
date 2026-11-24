@@ -247,7 +247,7 @@ async function startRegionScreenshot(): Promise<void> {
       // Windows frames and window queries share one serial native helper. Do
       // not let a slow optional query consume a queued frame's timeout (or kill
       // its helper): finish every native frame first. Electron capture (macOS,
-      // HDR / wide gamut, or after native frames fail) does not use the helper,
+      // HDR, or after native frames fail) does not use the helper,
       // so the queries stay parallel with it.
       if (!nativeScreenshotPrecheck(displays, h)) await helperFree;
       const result = await measureTraceOperation('region-screenshot:windows', async () => ({
@@ -361,8 +361,8 @@ async function runAction({ action, image, display, selection, ownerScope, transl
 }
 
 /**
- * Electron 在 macOS 上只区分已授权 / 未授权。未授权时先枚举一次屏幕源, 让
- * Cindy 出现在系统的屏幕录制列表里 (首次还会弹出系统询问), 再说明去哪里开启。
+ * Give macOS a real capture request before offering Settings. Whether a prompt
+ * appears or the application is already listed is up to the system.
  */
 async function ensureMacScreenRecordingPermission(): Promise<boolean> {
   if (systemPreferences.getMediaAccessStatus('screen') === 'granted') return true;

@@ -30,6 +30,7 @@ import {
   beginAppSessionBoundary,
   onAppSessionInvalidated,
   onAppSessionCommitted,
+  getDataOwnerLifetime,
   commitActiveAppSession,
   commitVolatileAppSession,
   getActiveAppSession,
@@ -82,10 +83,15 @@ describe('application session boundary isolation', () => {
   it.each([commitActiveAppSession, commitVolatileAppSession])('notifies after publishing a new owner and supports unsubscribe', (commit) => {
     const original = getActiveAppSession();
     const observed: string[] = [];
-    const unsubscribe = onAppSessionCommitted(() => observed.push(activeOwnerScopeKey()));
+    const observedLifetimes: number[] = [];
+    const unsubscribe = onAppSessionCommitted(() => {
+      observed.push(activeOwnerScopeKey());
+      observedLifetimes.push(getDataOwnerLifetime());
+    });
     try {
       const next = commit('cloud', 'shortcut-owner', true);
       expect(observed).toEqual([`cloud:shortcut-owner:${next.generation}`]);
+      expect(observedLifetimes).toEqual([getDataOwnerLifetime()]);
       commit('cloud', 'shortcut-owner');
       expect(observed).toHaveLength(1);
       unsubscribe();

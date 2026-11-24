@@ -127,6 +127,8 @@ export interface PluginModelRouteNote {
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  /** This input yielded to already queued messages after a context overflow. */
+  inputNotice?: 'oversized-input-skipped';
   /** 新任务「让插件选」的结果(宿主写入，非模型回复)。 */
   pluginModelRoute?: PluginModelRouteNote;
   /** Model boundary recorded by the host when the next input is dispatched. */
@@ -294,6 +296,9 @@ export interface CcMeta {
    */
   goalNotice?: 'usage-resumed' | 'capacity-resumed';
 
+  /** Context rebuilt in-place. Older hosts may omit the coverage marker. */
+  contextRebuild?: ContextRebuildMeta;
+
   /**
    * Host-side marker:个人版制作任务里 Agent 调用 cindy_make.report_complete 后落的
    * 完成记录(role:'assistant' + 空 content)。renderer 渲成完成卡片,不进 prompt。
@@ -391,6 +396,7 @@ export interface Session {
   sdkSessionId: string | null;
   totalTokenUsage: number;
   totalCostUsd: number;
+  totalCostUsdIsApproximate?: boolean;
   /** 新版区域累计金额；旧会话仍只带 totalCostUsd。 */
   totalMoney?: RegionalMoney;
   contextTokens: number;
@@ -439,9 +445,15 @@ export interface Session {
   agentKind: AgentKind;
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
+  /** This follow-up is also visible as an independent task. */
+  sideChatPromoted?: true;
   /** Host-owned teammate link, also used by the existing history API. Display only. */
   companion?: { id: string; role: string; taskProjectDir?: string; channel?: string; routineId?: string } | null;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */
+  /** Owning Lead on this device, when the active team is known. */
+  orcaLeadSessionId?: string;
+  /** Live Worker question state, independent of Agent Island visibility. */
+  orcaHasPendingQuestion?: boolean;
   orcaRole?: OrcaRole | null;
   /** fork-session：派生来源会话 id（self-FK，源被删 → SET NULL）。null = 顶层会话。 */
   parentSessionId?: string | null;
@@ -565,12 +577,16 @@ export type MessageRole =
 
 /**
  * role='agent_switch' 行的 content 结构(JSON 存于 messages.content)。
- * handoff 是发给新引擎的交接摘要全文——只用于 UI 展开查看与 debug,
+ * handoff 是发给新引擎的交接内容——只用于 UI 展开查看与 debug,
  * 不作为对话正文渲染,也绝不回发给 agent(注入走 main 的 wire 前缀通道)。
  */
 export interface AgentSwitchContent {
-  fromAgentKind: 'cc' | 'codex' | 'pi';
-  toAgentKind: 'cc' | 'codex' | 'pi';
+  /** 'acp' = 插件引擎；名称见 fromEngineName / toEngineName。 */
+  fromAgentKind: 'cc' | 'codex' | 'pi' | 'acp';
+  toAgentKind: 'cc' | 'codex' | 'pi' | 'acp';
+  /** 插件引擎那一侧在切换时的名称快照。 */
+  fromEngineName?: string;
+  toEngineName?: string;
   fromModel: string | null;
   toModel: string | null;
   /** Agent 切换时的来源快照；缺失表示旧版边界数据。 */
@@ -581,9 +597,18 @@ export interface AgentSwitchContent {
   resumed?: boolean;
   /** Same-Harness cross-computer restoration result; omitted for legacy switches. */
   nativeHistory?: 'restored' | 'fallback';
+  handoffCoverage?: HandoffCoverage;
   toAgentDeviceId?: string | null;
   toAgentDeviceName?: string | null;
   switchReason?: 'quota-rebalance';
+}
+
+export type HandoffCoverage = 'complete' | 'condensed';
+
+export interface ContextRebuildMeta {
+  reason: string;
+  handoff?: string;
+  handoffCoverage?: HandoffCoverage;
 }
 
 export interface Message {

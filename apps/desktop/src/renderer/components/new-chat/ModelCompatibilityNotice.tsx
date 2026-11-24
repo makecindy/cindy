@@ -25,7 +25,7 @@ export function ModelCompatibilityNotice() {
               <CircleAlert size={12} aria-hidden />
             </button>
           </Tooltip.Trigger>
-          <Tooltip.Content className="z-[10002] max-w-[240px] break-normal">
+          <Tooltip.Content className="max-w-[240px] break-normal">
             {t('settings.providers.models.advanced.protocol.compatibilityHint')}
           </Tooltip.Content>
         </Tooltip.Root>

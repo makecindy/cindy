@@ -23,6 +23,7 @@ export function TaskSnoozeSheet(props: TaskSnoozeSheetProps) {
         {model.options.map(option => <ComposerNativeRow modifiers={[listRowInsets({ top: 0, bottom: 0, leading: spacing.lg, trailing: spacing.lg })]} key={option.id} title={option.label}
           accessory={<Text modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>{option.time}</Text>}
           onPress={() => model.choose(option.until)} testID={`home.snooze.${option.id}`} />)}
+        <ComposerNativeRow modifiers={[listRowInsets({ top: 0, bottom: 0, leading: spacing.lg, trailing: spacing.lg })]} title={t('devices.list.menu.inbox.indefinite')} onPress={model.chooseIndefinite} testID="home.snooze.indefinite" />
       </ComposerNativeSection>
       <ComposerNativeSection>
         <ComposerNativeRow modifiers={[listRowInsets({ top: 0, bottom: 0, leading: spacing.lg, trailing: spacing.lg })]} title={t('devices.list.menu.inbox.custom')} onPress={() => model.setCustom(true)} testID="home.snoozeCustom" />

@@ -445,6 +445,13 @@ indefinitely.
   focus survives rotation and keyboard resizing.
 - The keyboard offers native text composition, modifier combinations, navigation
   keys, and a full key strip. Desktop / All windows use operating system shortcuts.
+- Tapping an editable, focused field on a Mac opens the phone keyboard when the host
+  advertises `editableClick`. Detection follows the click's native input acknowledgement
+  and returns only a boolean. Older hosts, unsupported controls and the macOS lock screen
+  retain the manual keyboard button. Both the system keyboard and the drawn computer
+  keyboard can be dragged down; the desktop fills the revealed area during dismissal.
+  The additive protocol and self-hosted relay compatibility are recorded in
+  [editable-click compatibility](dev-rules/protocol-compatibility/remote-desktop-editable-click.md).
 - Switching displays creates a new lease and retains the control/view-only choice.
   Backgrounding normally releases the lease; explicit system picture in picture
   retains viewing only. Returning to the foreground automatically reconnects. Network failures and viewer process loss also recover automatically,
@@ -652,11 +659,17 @@ reconnect behavior after control or input failure.
 ## Authority and lifetime
 
 On macOS, enabling remote desktop automatically checks screen recording in the
-capturing Cindy process and accessibility in the actual input helper. It opens
+capturing Cindy process and both accessibility and event-posting access in the actual input helper. It opens
 an in-app guide if either permission is missing or unconfirmed. The guide reuses
 Computer Use's interactive permission rows and fixed System Settings targets;
 it never treats CuaDriver's permissions as remote desktop permissions. The
 settings page and guide recheck automatically, including when focus returns.
+On an explicit grant, the guide opens the corresponding settings pane if the
+native request still needs approval. A second local action can open the pane in
+a separate Settings window when a sheet blocks the existing one. Finder can reveal the running copy of Cindy
+when more than one is installed. On macOS 27.3 the system can ask which apps
+Cindy may control. The local bundle path stays on the host. See the
+[Mac permission guide](dev-rules/macos-system-permissions.md).
 Closing the guide cancels any pending follow-up that would open System Settings.
 
 The phone shows separate permission states and can request this Cindy guide on

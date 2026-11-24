@@ -9,13 +9,15 @@ import { MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { shortDeviceRef } from '@cindy/device-link';
 import type { AgentNetSocketOptions } from './socket.js';
 import type { PeerRule } from './socketPorts.js';
-import { DRAIN_LOW_WATER_BYTES } from './types.js';
+import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute } from './types.js';
 import type { SessionConfig, SessionHandle } from './session/peer.js';
 import { WorkerSessions } from './session/workerSessions.js';
 
 export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
   'send' | 'close' | 'terminate' | 'bufferedAmount' | 'onDrain' | 'deviceId' |
   'replaceClient' | 'supports' | 'knowsPeer' | 'certificateFor' | 'scopedPeerTarget' | 'pathTo' | 'peerSnapshot'> & {
+    /** Session requests to a relayed peer timed out (AgentNetWorkerSocket.relayStalled). */
+    relayStalled?(): void;
     on(event: string, listener: (...args: any[]) => void): void;
     once(event: string, listener: (...args: any[]) => void): void;
     removeListener(event: string, listener: (...args: any[]) => void): void;
@@ -32,6 +34,8 @@ export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
     relayConnected?(): boolean;
     /** The last round trip to the relay, in ms (see AgentNetWorkerSocket.relayRttMs). */
     relayRttMs?(): number | null;
+    /** How relayed datagrams travel now, UDP or WebSocket, with that path's round trip (see AgentNetWorkerSocket.relayRoute; event `relay-route`). */
+    relayRoute?(): RelayRoute | null;
     /** By session key: the device id, or inside a delegation the scoped peer it names (see `SessionConfig.handlers`). */
     session?(key: string): SessionHandle | null;
     onSession?(listener: (key: string, session: SessionHandle) => void): void;
@@ -41,6 +45,8 @@ export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
     connectSession?(key: string): Promise<boolean>;
     /** See `PortableSocket.restrictPeers`. */
     restrictPeers?(rule: PeerRule): void;
+    /** Change a peer's local path preference (`auto` / `direct` / `relay`). */
+    setPeerPathPreference?(deviceId: string, preference: PathPreference): void;
   };
 export function workerClient(client: AgentNetClient) {
   return { base: client.base, identity: client.identity, certificate: client.certificate, rootPublicKey: client.rootPublicKey,
@@ -73,21 +79,30 @@ export const AGENT_NET_UPLINK_KEEPALIVE: AgentNetUplinkKeepalive = { intervalMs:
  * Device Link's network probe (its handshake timeout, 15 s): the regular keepalive would take up to 45 s.
  */
 export const AGENT_NET_NETWORK_CHANGE_PROBE_MS = 15_000;
+/** A peer's move between the relay and a direct path is logged at most this often (see `logPath`). */
+export const PATH_MOVE_LOG_INTERVAL_MS = 30_000;
 /** Bytes Main lets wait in one relay WebSocket; on top of it the queue-delay limit in DatagramSendQueue applies. */
 const RELAY_SEND_BUFFER_CAP_BYTES = 1024 * 1024;
 export type AgentNetWorkerSocketOptions = AgentNetSocketOptions & {
+  /** Track this worker's UDP socket bytes until it exits, including direct paths and wrapped relay UDP. */
+  observeUdpTraffic?(read: () => { sent: number; received: number }): () => void;
   log?: AgentNetSocketLog;
   uplinkKeepalive?: AgentNetUplinkKeepalive;
   /** See MAX_DATAGRAM_QUEUE_DELAY_MS; only tests shorten it. */
   uplinkMaxQueueDelayMs?: number;
   /** See AGENT_NET_NETWORK_CHANGE_PROBE_MS; only tests shorten it. */
   networkChangeProbeMs?: number;
+  /** See PATH_MOVE_LOG_INTERVAL_MS; only tests shorten it. */
+  pathMoveLogIntervalMs?: number;
 };
 
 interface PeerStatus {
   available: boolean;
   path: 'direct' | 'relay' | null;
   rttMs: number | null;
+  directRttMs?: number | null;
+  relayRttMs?: number | null;
+  pathPreference?: PathPreference;
   dialing: boolean;
 }
 
@@ -97,7 +112,13 @@ function peerRoute(status: PeerStatus | undefined): 'direct' | 'relay' | 'connec
 }
 
 function peerRoutesChanged(previous: ReadonlyMap<string, PeerStatus>, next: ReadonlyMap<string, PeerStatus>): boolean {
-  for (const [id, status] of next) if (peerRoute(status) !== peerRoute(previous.get(id))) return true;
+  for (const [id, status] of next) {
+    const prev = previous.get(id);
+    if (peerRoute(status) !== peerRoute(prev)) return true;
+    if ((status.pathPreference ?? 'auto') !== (prev?.pathPreference ?? 'auto')) return true;
+    if ((status.directRttMs != null) !== (prev?.directRttMs != null)) return true;
+    if ((status.relayRttMs != null) !== (prev?.relayRttMs != null)) return true;
+  }
   for (const [id, status] of previous) if (!next.has(id) && peerRoute(status)) return true;
   return false;
 }
@@ -124,6 +145,8 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   private readonly renewals = new Map<number, { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   /** Last logged route per peer, so the log records changes rather than every status snapshot. */
   private readonly loggedPaths = new Map<string, 'direct' | 'relay' | null>();
+  /** When each peer's last move between routes was logged (see `logPath`). */
+  private readonly pathMovedAt = new Map<string, number>();
   private readonly relayQueues = new WeakMap<WebSocket, DatagramSendQueue>();
   /** Sessions run in the worker beside the core; this side gets decoded messages (session/workerSessions.ts). */
   private readonly sessions = new WorkerSessions((message) => { if (!this.closed) this.worker.postMessage(message); },
@@ -148,9 +171,17 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       socket.worker.once('error', () => { finish(new Error('AGENT_NET_WORKER_FAILED')); socket.dispose(1006); });
       socket.worker.once('exit', () => { finish(new Error('AGENT_NET_WORKER_EXITED')); socket.dispose(1006); });
     });
-    const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
-      log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, ...portable } = options;
-    socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap });
+    const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, onRelayReplaced, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
+      log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog, observeUdpTraffic, ...portable } = options;
+    if (observeUdpTraffic) {
+      // Only two integers cross the thread boundary. Sampling doesn't copy packets or post per-datagram messages.
+      const bytes = new BigUint64Array(new SharedArrayBuffer(2 * BigUint64Array.BYTES_PER_ELEMENT));
+      portable.udpTraffic = bytes;
+      const stop = observeUdpTraffic(() => ({ sent: Number(Atomics.load(bytes, 0)), received: Number(Atomics.load(bytes, 1)) }));
+      socket.worker.once('exit', stop);
+    }
+    socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap,
+      reportRelayReplacements: !!onRelayReplaced });
     try { await ready; setImmediate(() => { if (!socket.closed) socket.emit('open'); }); return socket; }
     catch (error) { socket.dispose(1006); throw error; }
   }
@@ -171,6 +202,10 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     for (const ws of this.network.values()) this.probeRelayConnection(ws);
     this.worker.postMessage({ type: 'network-changed' });
   }
+  /** Session requests to a relayed peer timed out: let the transport judge whether relay UDP carries data (relayUdp.ts). */
+  relayStalled(): void {
+    if (!this.closed) this.worker.postMessage({ type: 'relay-stalled' });
+  }
   private readonly probing = new WeakSet<WebSocket>();
   /** Relay connections open now. The socket stays open without one (direct peers keep working); `relay` reports the change. */
   private relayOpen = 0;
@@ -179,12 +214,46 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
    * not the others, and phones get no pushes; it says so in its connection status (2026-11-17 review: it showed online).
    */
   relayConnected(): boolean { return this.relayOpen > 0; }
+  setDuplicateIdentityCooldown(active: boolean): void {
+    if (!this.closed) this.worker.postMessage({ type: 'duplicate-identity-cooldown', active });
+  }
   /**
    * The last ping round trip on a relay connection, in ms; null while none is open or before the first pong. The remote
-   * connection page shows it as the relay's round trip, as it does Device Link's (2026-11-17: it was always empty).
+   * connection page shows it as the relay's round trip while relayed datagrams use the WebSocket (2026-11-17: it was always
+   * empty); over UDP it shows that path's own round trip instead (`relayRoute`).
    */
   relayRttMs(): number | null { return this.relayOpen > 0 ? this.relayRtt : null; }
   private relayRtt: number | null = null;
+  /** What the worker last reported about relayed datagrams (`status` messages, about once a second). */
+  private relayVia: RelayRoute['via'] = 'websocket';
+  private relayUdpRtt: number | null = null;
+  /**
+   * How datagrams relayed for this computer travel now — the relay's UDP port or this relay WebSocket — and the last round
+   * trip on that path: the UDP registration round trip, or the WebSocket ping. Null while no relay connection is open.
+   * The remote connection page writes both on the relay point (2026-11-18 owner: it could not tell Agent-Net over UDP from
+   * the WebSocket fallback, and showed the WebSocket's round trip while the data went over UDP).
+   */
+  relayRoute(): RelayRoute | null {
+    if (this.closed || this.relayOpen === 0) return null;
+    return this.relayVia === 'udp' ? { via: 'udp', rttMs: this.relayUdpRtt } : { via: 'websocket', rttMs: this.relayRtt };
+  }
+  private noteRelayRoute(route: unknown): void {
+    const reported = route && typeof route === 'object' ? route as Partial<RelayRoute> : null;
+    const via: RelayRoute['via'] = reported?.via === 'udp' ? 'udp' : 'websocket';
+    const rtt = via === 'udp' ? reported?.rttMs : null;
+    this.relayUdpRtt = typeof rtt === 'number' && Number.isFinite(rtt) && rtt >= 0 ? rtt : null;
+    if (via === this.relayVia) return;
+    this.relayVia = via;
+    const suspension = via === 'websocket' ? reported?.udpSuspension : undefined;
+    const cause = suspension?.reason === 'data-silence' ? 'carried no data back'
+      : suspension?.reason === 'request-timeouts' ? 'session requests over it timed out'
+        : suspension?.reason === 'unacked-sends' ? 'packets sent over it went unacknowledged' : null;
+    const why = cause && typeof suspension?.cooldownMs === 'number'
+      ? ` (relay UDP answered registrations but ${cause}; retrying UDP in ${Math.round(suspension.cooldownMs / 1000)}s)`
+      : '';
+    this.options.log?.info(`agent-net relayed datagrams now go over the relay ${via === 'udp' ? 'UDP port' : 'WebSocket'}${why}`);
+    this.emit('relay-route', via);
+  }
   private readonly pingSentAt = new WeakMap<WebSocket, number>();
   private pingRelay(ws: WebSocket): void {
     this.pingSentAt.set(ws, performance.now());
@@ -213,6 +282,9 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   restrictPeers(rule: PeerRule): void {
     if (!this.closed) this.worker.postMessage({ type: 'restrict', rule: { allowed: rule.allowed && [...rule.allowed], refused: [...rule.refused] } });
   }
+  setPeerPathPreference(deviceId: string, preference: PathPreference): void {
+    if (!this.closed) this.worker.postMessage({ type: 'set-peer-path-preference', deviceId, preference });
+  }
   get bufferedAmount() { return this.queued + this.remoteQueued; }
   /** See PortableSocket.onDrain: fires when `bufferedAmount` falls back to DRAIN_LOW_WATER_BYTES after having been above. */
   onDrain(listener: () => void): void { this.on('drain', listener); }
@@ -237,9 +309,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     const own = this.client.delegation && this.delegations.find(d => delegationVisibleTo(d, this.client.identity, this.client.delegation));
     if (this.client.delegation) return own && verifyDelegation(this.client.rootPublicKey, own) ? delegatedPeerTarget(own, peer, 'guest') : null;
     for (const delegation of this.delegations) {
-      const target = verifyDelegation(this.client.rootPublicKey, delegation) && delegationVisibleTo(delegation, this.client.identity)
-        && delegatedPeerTarget(delegation, peer, 'host');
-      if (target) return target;
+      // Each task sweep looks up one guest. Check the peer before revalidating
+      // certificate lifetimes and signatures in the authenticated snapshot.
+      const target = delegatedPeerTarget(delegation, peer, 'host');
+      if (target && delegationVisibleTo(delegation, this.client.identity)
+        && verifyDelegation(this.client.rootPublicKey, delegation)) return target;
     }
     return null;
   }
@@ -247,16 +321,38 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   pathTo(id: string) { return this.status.get(this.sessions.device(id) ?? id)?.path ?? null; }
   peerSnapshot(id: string) {
     const status = this.status.get(this.sessions.device(id) ?? id);
-    return status?.path ? { path: status.path, rttMs: status.rttMs } : null;
+    return status?.path ? {
+      path: status.path,
+      rttMs: status.rttMs,
+      ...(status.directRttMs !== undefined ? { directRttMs: status.directRttMs } : {}),
+      ...(status.relayRttMs !== undefined ? { relayRttMs: status.relayRttMs } : {}),
+      ...(status.pathPreference !== undefined ? { pathPreference: status.pathPreference } : {}),
+    } : null;
   }
   /** Actual and in-progress transport routes to devices in this account's directory. */
-  peerRoutes(): Array<{ deviceId: string; path: 'direct' | 'relay' | 'connecting'; rttMs: number | null }> {
+  peerRoutes(): Array<{
+    deviceId: string;
+    path: 'direct' | 'relay' | 'connecting';
+    rttMs: number | null;
+    directRttMs?: number | null;
+    relayRttMs?: number | null;
+    pathPreference?: PathPreference;
+  }> {
     if (this.closed || this.closeTimer) return [];
     const routes = [];
     for (const [deviceId, status] of this.status) {
       if (deviceId === this.deviceId || !this.directory.has(deviceId)) continue;
       const path = peerRoute(status);
-      if (path) routes.push({ deviceId, path, rttMs: status.rttMs });
+      if (path) {
+        routes.push({
+          deviceId,
+          path,
+          rttMs: status.rttMs,
+          ...(status.directRttMs !== undefined ? { directRttMs: status.directRttMs } : {}),
+          ...(status.relayRttMs !== undefined ? { relayRttMs: status.relayRttMs } : {}),
+          ...(status.pathPreference !== undefined ? { pathPreference: status.pathPreference } : {}),
+        });
+      }
     }
     return routes;
   }
@@ -291,6 +387,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       if (message.code) pending.reject(new Error(message.code)); else pending.resolve(); return;
     }
     if (message.type === 'closed') { this.dispose(message.code); return; }
+    if (message.type === 'relay-replaced') { this.options.onRelayReplaced?.(); return; }
     if (message.type === 'delegation-requests') { this.options.onDelegationRequests?.(message.requests); return; }
     if (message.type === 'delegations') {
       this.delegations = Array.isArray(message.delegations) ? message.delegations.filter((d: unknown): d is Delegation =>
@@ -309,6 +406,8 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       const previous = this.status;
       this.status = new Map(message.peers);
       for (const id of message.known) this.known.add(id);
+      this.noteRelayRoute(message.relayRoute);
+      if (this.options.log) for (const [id, status] of this.status) this.logPath(id, status?.path, true);
       if (this.listenerCount('peer-routes-changed') && peerRoutesChanged(previous, this.status)) this.emit('peer-routes-changed');
       return;
     }
@@ -408,14 +507,31 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     timer.unref?.();
     ws.once('close', () => clearInterval(timer));
   }
-  private logPath(id: unknown, path: unknown): void {
+  /**
+   * `moved`: from a status snapshot, where a connection that is already open shows the route it uses now. The worker reports
+   * a route (`path`) only when a connection opens or closes, and every connection opens over the relay when there is one, so
+   * without the snapshots the log read "connected via relay" for peers that had long since moved to a direct path
+   * (2026-11-21: a comparison report concluded from it that no two computers were connected directly; six of eight were).
+   * A route that keeps flipping is written at most once per {@link PATH_MOVE_LOG_INTERVAL_MS} per peer; the snapshot after
+   * that writes where it ended up.
+   */
+  private logPath(id: unknown, path: unknown, moved = false): void {
     if (typeof id !== 'string' || !this.options.log) return;
     const next = path === 'direct' || path === 'relay' ? path : null;
-    if (this.loggedPaths.has(id) && this.loggedPaths.get(id) === next) return;
+    const previous = this.loggedPaths.get(id) ?? null;
+    if (this.loggedPaths.has(id) && previous === next) return;
     // A peer that was never connected has nothing to report when it is not connected.
     if (!this.loggedPaths.has(id) && next === null) return;
+    if (moved) {
+      // Opening and closing are the worker's `path` messages; a snapshot only adds the move between two routes.
+      if (!previous || !next) return;
+      const now = performance.now(), last = this.pathMovedAt.get(id);
+      if (last !== undefined && now - last < (this.options.pathMoveLogIntervalMs ?? PATH_MOVE_LOG_INTERVAL_MS)) return;
+      this.pathMovedAt.set(id, now);
+    }
+    if (!next) this.pathMovedAt.delete(id);
     this.loggedPaths.set(id, next);
-    this.options.log.info(`agent-net peer ${shortDeviceRef(id)} ${next ? `connected via ${next}` : 'disconnected'}`);
+    this.options.log.info(`agent-net peer ${shortDeviceRef(id)} ${!next ? 'disconnected' : moved ? `moved from ${previous} to ${next}` : `connected via ${next}`}`);
   }
   private async controlRequest(message: any): Promise<void> {
     const controller = new AbortController();
@@ -453,7 +569,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   private dispose(code: number, drainWorker = false) {
     if (this.closed) return; this.closed = true;
     this.options.log?.info(`agent-net socket closed code=${code}`);
-    this.loggedPaths.clear();
+    this.loggedPaths.clear(); this.pathMovedAt.clear();
     if (this.closeTimer) clearTimeout(this.closeTimer);
     for (const request of this.http.values()) request.abort(); this.http.clear();
     for (const ws of this.network.values()) ws.terminate(); this.network.clear();

@@ -4,8 +4,8 @@ import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import ts from 'typescript';
-import { detectComposerTrigger } from '@/session/composerPalette';
-import { replaceComposerTextRange, slashCommandTextNode, textComposerDocument } from '@/session/composerDocument';
+import { composerSlashInvocationName, detectComposerTrigger } from '@/session/composerPalette';
+import { composerDocumentProjectedText, mentionComposerNode, replaceComposerTextRange, slashCommandTextNode, textComposerDocument } from '@/session/composerDocument';
 import { buildComposerRichInputHtml } from '@/session/composerRichInputHtml';
 import { parseComposerWebMessage } from '@/session/composerRichInputProtocol';
 
@@ -28,7 +28,7 @@ it.each([false, true])('atomically applies a selected slash command while queue 
   const bindings = { pendingSkillSelectionRef: { current: null }, sessionId: 's1', draftRef: { current: '/he' },
     composerDocumentRef: { current: textComposerDocument('/he') }, queueEditingRef: { current: editing }, messageEditingRef: { current: null },
     composerInputRef: { current: { applyDocumentAndSetSelectionToEnd: placeCaret, focus } },
-    applyComposerDocument: apply, detectComposerTrigger, replaceComposerTextRange, slashCommandTextNode };
+    applyComposerDocument: apply, composerSlashInvocationName, detectComposerTrigger, replaceComposerTextRange, slashCommandTextNode };
   pageCallback('selectSlashCommand', bindings)({ name: 'help', kind: 'agent-skill' });
   const document = apply.mock.calls[0][0];
   expect(document.nodes).toEqual([{ type: 'text', text: '/help', slashCommand: '/help' }, { type: 'text', text: ' ' }]);
@@ -36,6 +36,24 @@ it.each([false, true])('atomically applies a selected slash command while queue 
   expect(placeCaret).toHaveBeenCalledExactlyOnceWith(document);
   expect(focus).not.toHaveBeenCalled();
   expect(bindings.pendingSkillSelectionRef.current).toEqual({ name: 'help', sid: 's1' });
+});
+
+// Regression: type `/`, quote a message, type `com`, pick `compact`. The quote has no
+// projected text, so replacing the trigger token used to drop it with the token.
+it.each([
+  ['selectSlashCommand', '/', 'com', { name: 'compact', kind: 'agent-builtin' }, '/compact '],
+  ['selectAtResource', 'read @', 'ses', { type: 'file', name: 'sessions.ts', relPath: 'src/sessions.ts' }, 'read @src/sessions.ts '],
+])('%s keeps a quote that sits inside the trigger token', (handler, head, tail, item, expectedText) => {
+  const apply = vi.fn();
+  const quote = { type: 'quote' as const, quote: { text: 'quoted' } };
+  pageCallback(handler, { pendingSkillSelectionRef: { current: null }, sessionId: 's1', draftRef: { current: head + tail },
+    composerDocumentRef: { current: { version: 1, nodes: [{ type: 'text', text: head }, quote, { type: 'text', text: tail }] } },
+    queueEditingRef: { current: false }, messageEditingRef: { current: null },
+    composerInputRef: { current: { applyDocumentAndSetSelectionToEnd: vi.fn() } },
+    applyComposerDocument: apply, composerSlashInvocationName, detectComposerTrigger, replaceComposerTextRange, slashCommandTextNode, mentionComposerNode })(item);
+  const document = apply.mock.calls[0][0];
+  expect(composerDocumentProjectedText(document)).toBe(expectedText);
+  expect(document.nodes.at(-1)).toEqual(quote);
 });
 
 it.each([false, true])('routes touch and accessibility activation through the actual dictation overlay (native=%s)', (nativeComposerAvailable) => {

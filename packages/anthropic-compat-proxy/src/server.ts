@@ -325,6 +325,11 @@ function formatUpstreamBase(t: UpstreamTarget): string {
   );
 }
 
+/** 只含协议、主机与非默认端口;不含 basePath / query(可能带密钥),用于失败日志。 */
+function formatUpstreamOrigin(t: UpstreamTarget): string {
+  return `${t.protocol}//${formatHostHeader(t.hostname, t.port, t.protocol)}`;
+}
+
 function isRetryableListenError(error: unknown): boolean {
   if (!error || typeof error !== 'object' || !('code' in error)) return false;
   const code = (error as NodeJS.ErrnoException).code;
@@ -1014,8 +1019,18 @@ function forward(
   const queryIndex = routedPath.indexOf('?');
   const routedPathname = queryIndex === -1 ? routedPath : routedPath.slice(0, queryIndex);
   const routedQuery = queryIndex === -1 ? '' : routedPath.slice(queryIndex + 1);
+  // #12233: 与连接探测 joinAnthropicMessagesUrl 同一把尺子——有效请求路径以 /v1/ 开头
+  // (或就是 /v1)时,剥掉上游 basePath 末尾重叠的一段 /v1。自定义供应商的 Messages 地址
+  // 常存成 …/v1(Pi/Codex 通道需要带 /v1),Claude Code CLI 又自己补 /v1/messages,直接
+  // 相加会拼出 /v1/v1/messages,上游空 404 还被误报成「模型不存在」;探测能过、会话挂,
+  // 就是两条路径规则不一致。网关前缀只消除重叠的一段(/proxy/v1 → /proxy/v1/messages);
+  // 显式 requestPath(pathOverride)仍优先——剥与不剥由它自己的前缀决定,不另设规则。
+  const upstreamBasePath =
+    routedPathname === '/v1' || routedPathname.startsWith('/v1/')
+      ? actualTarget.basePath.replace(/\/v1$/, '')
+      : actualTarget.basePath;
   const upstreamPathname =
-    `${actualTarget.basePath}${routedPathname.startsWith('/') ? routedPathname : '/' + routedPathname}`;
+    `${upstreamBasePath}${routedPathname.startsWith('/') ? routedPathname : '/' + routedPathname}`;
   const upstreamQuery = [actualTarget.baseQuery, routedQuery].filter(Boolean).join('&');
   const upstreamPath = upstreamQuery ? `${upstreamPathname}?${upstreamQuery}` : upstreamPathname;
 
@@ -1058,6 +1073,7 @@ function forward(
     }
   }
   const upstreamReq = reqFn(upstreamOptions);
+  const upstreamStartedAt = Date.now();
   if (forwardLifecycle?.onStart) {
     notifyForwardLifecycle(() => forwardLifecycle.onStart?.());
   }
@@ -1348,7 +1364,7 @@ function forward(
               const model = appliedRule.useUpstreamModel
                 ? extractBodyModel(body)
                 : clientModel || extractBodyModel(body);
-              if (model) appliedRule.onRetry?.(threadId, model);
+              if (model) appliedRule.onRetry?.(threadId, model, formatUpstreamBase(actualTarget));
             }
           }
           const retry = (): void => {
@@ -2013,11 +2029,22 @@ function forward(
         ),
       );
     }
+    // 只凭错误文案(如 write EPIPE)分不清原因:上游嫌请求太大而断开、复用了上游已关闭的
+    // 空闲连接、还是超时。补上请求体字节数、耗时与连接是否复用("写完"只代表进了本机缓冲,
+    // 不代表上游收到,故不记)。上游地址只记协议/主机/端口,query 可能带用户配置的密钥,
+    // 不进日志。
+    const errorCode = (err as NodeJS.ErrnoException | null)?.code;
     logger.error?.('upstream request failed', {
       reqId,
       err: String(err),
+      ...(typeof errorCode === 'string' ? { errorCode } : {}),
       method,
       path: upstreamPathname,
+      upstreamOrigin: formatUpstreamOrigin(actualTarget),
+      bodyBytes: body.length,
+      reusedSocket: upstreamReq.reusedSocket,
+      elapsedMs: Date.now() - upstreamStartedAt,
+      ...(requestTimedOut ? { timedOut: true } : {}),
       ...(outboundProxy ? { viaProxy: outboundProxy.target.url } : {}),
     });
     if (upstreamResponseTerminal === null) upstreamResponseTerminal = 'error';

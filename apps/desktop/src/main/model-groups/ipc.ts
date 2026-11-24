@@ -1,4 +1,8 @@
-/** 模型组的 IPC：读写配置、解析选中的路线。只接受可信的主界面。 */
+/**
+ * 模型组的 IPC：读写配置、解析选中的路线。改配置只接受可信的主界面；读、选路、提交、记绑定与写说明
+ * 另外接受同账号本人控制的手机与电脑(model-groups.md §6.3)，分享来的任务等受限控制端不行。
+ */
+import { and, asc, eq } from 'drizzle-orm';
 import { ipcMain } from 'electron';
 
 import {
@@ -6,95 +10,26 @@ import {
   MODEL_GROUPS_IPC,
   modelGroupAgentDeviceId,
   modelGroupCandidateKey,
+  modelGroupSelectionForOwner,
+  modelGroupResolveResultForRemote,
+  modelGroupsConfigForRemote,
   normalizeModelGroupsConfig,
+  sanitizeModelGroupRouteNote,
   sanitizeModelGroupSelection,
   type ModelGroupResolveRequest,
-  type ModelGroupTraceQuota,
 } from '../../shared/modelGroups.js';
-import { activeOwnerScopeKey } from '../appSessionState.js';
-import { getPluginModelPickerAgents, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
-import { remoteBackgroundInvoke } from '../device-link/index.js';
-import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
-import { getGoalController } from '../goal-host/index.js';
-import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
-import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
-import { getQuotaOverviewService } from '../quota-overview/service.js';
-import { getGatewayModelPricing } from '../usage/modelPricing.js';
-import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
-import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
+import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { getDbClient } from '../localDb/client/current.js';
+import { createMessage } from '../localDb/ipc/messages.js';
+import { messages } from '../localDb/schema.js';
+import { getSessionRowSnapshotStrict } from '../localDb/sessionDispatchSnapshot.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { recordModelGroupDecision } from './decisionLog.js';
-import { createModelGroupResolver, modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
-import { bindModelGroupSession, readModelGroupSessionBinding } from './sessionBindings.js';
+import { assertModelGroupsCaller } from './remoteAccess.js';
+import { acceptModelGroupRouteNote, type ModelGroupRouteNotePorts } from './routeNote.js';
+import { bindModelGroupSession } from './sessionBindings.js';
 import { readModelGroupsConfig, writeModelGroupsConfig } from './store.js';
-import { computeModelGroupSwitchOffer } from './switchOffer.js';
-
-/** 选路时让额度总览保持采集这么久；面板没开时它平时不采集。 */
-const QUOTA_LEASE_MS = 5 * 60_000;
-/** 等一份新额度最多这么久，等不到就用已有的；不让新任务卡在读额度上。读别处的位置与目录用同一个上限。 */
-const QUOTA_WAIT_MS = MODEL_GROUP_REMOTE_WAIT_MS;
-
-/**
- * 额度总览里的订阅窗口：本机的按供应商连接 ID；别的电脑上的按那台的设备 id + 那台的连接 ID(modelGroupQuotaKey)，
- * 只给同一台电脑上的来源用。那台此刻读不到、只剩上次读数的(lastSeenAtMs)不算；与本机是同一个账号、
- * 总览里只列了本机那份的，别的电脑上的来源按读不到额度处理。分享来的来源按运行位置 `share:<id>` 取那个分享
- * 开放给本账号的额度(分享者没开「允许查看剩余额度」或读不到时总览里没有它，按读不到处理)。
- */
-async function quotaWindows() {
-  const overview = getQuotaOverviewService();
-  overview.lease(QUOTA_LEASE_MS);
-  const build = await overview.fresh(QUOTA_WAIT_MS);
-  const byProvider = new Map<string, (ModelGroupTraceQuota & { scopedTo?: string | null })[]>();
-  for (const source of build?.input.sources ?? []) {
-    if (source.kind !== 'subscription' || (source.device && source.lastSeenAtMs != null)) continue;
-    // 分享来源在总览里的 id 就是它的运行位置 `share:<shareId>`。
-    const location = source.shared ? source.id : source.device?.id;
-    byProvider.set(modelGroupQuotaKey(location, source.providerId), source.windows.map((window) => ({
-      usedPercent: window.usedPercent,
-      resetAtMs: window.resetsAtMs,
-      windowMs: window.windowMinutes * 60_000,
-      ...(window.kind === 'scoped' ? { scopedTo: window.label ?? null } : {}),
-    })));
-  }
-  return byProvider;
-}
-
-const resolver = createModelGroupResolver({
-  config: readModelGroupsConfig,
-  recordDecision: recordModelGroupDecision,
-  views: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
-  agents: getPluginModelPickerAgents,
-  // 别的电脑上的引擎问那台的 maker:agent:status，与插件选路同一判断。
-  harnessInstalled: (agent, agentDeviceId) => isPluginRouteHarnessInstalled(agent, agentDeviceId, async (deviceId, name) => {
-    const result = await remoteBackgroundInvoke(deviceId, 'maker:agent:status', [name]);
-    if (!result.ok) throw new Error(result.error?.message ?? 'Remote agent status unavailable');
-    return result.result as { binaryReady?: boolean } | null | undefined;
-  }),
-  quotaWindows,
-  // 其他电脑与分享来的来源：与插件卡片里的远程模型同一份位置名单与同一条目录读取。
-  locations: readWorkerAgentLocations,
-  // 带上 stale：读不到时底层会给上次的目录，选路不能把它当成那台现在能用。
-  remoteViews: (agentDeviceId) => readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId),
-  scope: activeOwnerScopeKey,
-  now: Date.now,
-  pricing: async () => ({ gateway: await getGatewayModelPricing(), reference: getReferenceModelPricing() }),
-});
-
-const switchOfferDeps = {
-  readBinding: readModelGroupSessionBinding,
-  readSession: getSessionRowSnapshot,
-  isShared: isSessionSharedTaskActive,
-  // 目标还没就绪时说不清这个任务有没有目标：按有处理，不提议。
-  hasGoal: async (sessionId: string) => {
-    const goals = getGoalController();
-    return !goals || (await goals.getStatus(sessionId).catch(() => null)) !== null;
-  },
-  config: readModelGroupsConfig,
-  candidateFacts: resolver.candidateFacts,
-  now: Date.now,
-};
+import { readModelGroupRecoveryOffer, resolver } from './desktopResolver.js';
 
 function sessionIdOf(value: Record<string, unknown>): string {
   const sessionId = value.sessionId;
@@ -104,10 +39,39 @@ function sessionIdOf(value: Record<string, unknown>): string {
   return sessionId;
 }
 
+function remoteSafeSelection(raw: unknown) {
+  const selection = sanitizeModelGroupSelection(raw);
+  return selection && isDeviceLinkInvoke() ? modelGroupSelectionForOwner(selection) : selection;
+}
+
+const routeNotePorts: ModelGroupRouteNotePorts = {
+  async sessionExists(sessionId) {
+    return !!(await getSessionRowSnapshotStrict(sessionId));
+  },
+  async firstUserMessageAt(sessionId) {
+    const [row] = await getDbClient().drizzle.select({ createdAt: messages.createdAt }).from(messages)
+      .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')))
+      .orderBy(asc(messages.createdAt)).limit(1);
+    const value = row?.createdAt as unknown;
+    const at = value instanceof Date ? value.getTime() : typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : Number.NaN;
+    return Number.isFinite(at) ? at : null;
+  },
+  async createNote(sessionId, row) {
+    await createMessage(sessionId, {
+      clientId: row.clientId,
+      role: 'assistant',
+      content: '',
+      agentMeta: { pluginModelRoute: row.note } as never,
+      ...(row.createdAt !== undefined ? { createdAt: row.createdAt } : {}),
+    });
+  },
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+};
+
 export function registerModelGroupsIpc(): void {
   ipcMain.handle(MODEL_GROUPS_IPC.GET, (event) => {
-    assertTrustedAppRendererEvent(event);
-    return readModelGroupsConfig();
+    assertModelGroupsCaller(event);
+    return isDeviceLinkInvoke() ? modelGroupsConfigForRemote(readModelGroupsConfig()) : readModelGroupsConfig();
   });
   ipcMain.handle(MODEL_GROUPS_IPC.SET, (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -115,9 +79,9 @@ export function registerModelGroupsIpc(): void {
     return writeModelGroupsConfig(normalizeModelGroupsConfig(raw));
   });
   ipcMain.handle(MODEL_GROUPS_IPC.RESOLVE, async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
+    assertModelGroupsCaller(event);
     const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-    const selection = sanitizeModelGroupSelection(value.selection);
+    const selection = remoteSafeSelection(value.selection);
     if (!selection) throwIpcError('INVALID_PARAMS', 'model group selection is required');
     const context = value.context && typeof value.context === 'object' ? value.context as Record<string, unknown> : null;
     const rawLocation = value.location && typeof value.location === 'object' ? value.location as Record<string, unknown> : null;
@@ -132,19 +96,23 @@ export function registerModelGroupsIpc(): void {
       dryRun: value.dryRun === true,
       ...(context?.hasImages === true ? { context: { hasImages: true } } : {}),
       ...(rawLocation ? { location: { agentDeviceId: locationId } } : {}),
+      ...(value.remoteInvocableOnly === true ? { remoteInvocableOnly: true } : {}),
     };
-    return resolver.resolve(request);
+    // 在 await 之前读：调用来源只在同步段里可靠。
+    const remote = isDeviceLinkInvoke();
+    const result = await resolver.resolve(request);
+    return remote ? modelGroupResolveResultForRemote(result) : result;
   });
   ipcMain.handle(MODEL_GROUPS_IPC.COMMIT, (event, decisionId: unknown) => {
-    assertTrustedAppRendererEvent(event);
+    assertModelGroupsCaller(event);
     if (typeof decisionId !== 'string' || decisionId.length > 64) throwIpcError('INVALID_PARAMS', 'decisionId is required');
     return resolver.commit(decisionId);
   });
   ipcMain.handle(MODEL_GROUPS_IPC.BIND_SESSION, (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
+    assertModelGroupsCaller(event);
     const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
     const sessionId = sessionIdOf(value);
-    const selection = sanitizeModelGroupSelection(value.selection);
+    const selection = remoteSafeSelection(value.selection);
     const route = value.route && typeof value.route === 'object' ? value.route as Record<string, unknown> : {};
     const agentKind = route.agentKind;
     const providerId = route.providerId;
@@ -163,6 +131,14 @@ export function registerModelGroupsIpc(): void {
   ipcMain.handle(MODEL_GROUPS_IPC.SWITCH_OFFER, async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
     const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-    return computeModelGroupSwitchOffer(switchOfferDeps, sessionIdOf(value));
+    return readModelGroupRecoveryOffer(sessionIdOf(value));
+  });
+  ipcMain.handle(MODEL_GROUPS_IPC.ROUTE_NOTE, async (event, raw: unknown) => {
+    assertModelGroupsCaller(event);
+    const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    const sessionId = sessionIdOf(value);
+    const note = sanitizeModelGroupRouteNote(value.note);
+    if (!note) throwIpcError('INVALID_PARAMS', 'model group route note is invalid');
+    if (!(await acceptModelGroupRouteNote(routeNotePorts, sessionId, note))) throwIpcError('NOT_FOUND', 'session not found');
   });
 }

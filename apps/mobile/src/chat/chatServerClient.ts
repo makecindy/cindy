@@ -1,5 +1,5 @@
 import { botGroupMentionAudience } from '@cindy/maker-shared/botGroupMentions';
-import { canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
+import { botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { readBotGroupProcessCard, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import type { ChatMaskAction, ChatMaskState, ChatMaskMention, ChatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
@@ -169,6 +169,7 @@ export interface ChatSendInput {
   attachments?: readonly RemoteSerializedAttachment[];
 }
 export interface ChatSendBody {
+  independentReplies?: boolean;
   operationId: string; content: ChatMessage['content']; mentions: string[]; mentionAudience?: 'humans' | 'bots' | 'everyone'; threadRootId?: string;
 }
 
@@ -485,7 +486,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
         && !mayStopWork(members, selfId, execution.bot_id, execution.requester_id)) }, supportsAttachments: true };
 }
 
-type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
+type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
 /** What every screen of one signed-in account may share: who it is on the Chat Server and the
  * read in flight for it. `request` must be fenced to the account, never to one screen, so a
  * screen that closes cannot fail the read another screen is waiting on. */
@@ -574,6 +575,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   let supportsDissolve = false;
   let supportsListRemoval = false;
   let singleSpeaker = false;
+  let independentReplies = false;
   let personalMask = false;
   let supportsMemberAvatar = false;
   let supportsNotificationSettings = false;
@@ -582,6 +584,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   function adopt(capabilities: ChatMe['capabilities']) {
     supportsDissolve = capabilities?.groupLifecycleVersion === 1;
     supportsListRemoval = capabilities?.conversationListStateVersion === 1;
+    independentReplies = capabilities?.independentReplies === 1;
     singleSpeaker = capabilities?.groupSingleSpeaker === 1;
     personalMask = capabilities?.personalMask === 1;
     supportsMemberAvatar = capabilities?.groupMemberAvatar === 1;
@@ -1032,7 +1035,9 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           continue;
         }
         try {
-          await call(`/conversations/${room}/executions/${chatId(execution.id)}/control`, 'POST',
+          const epoch = botGroupStopRunEpoch(execution);
+          const query = epoch === undefined ? '' : `?runEpoch=${epoch}`;
+          await call(`/conversations/${room}/executions/${chatId(execution.id)}/control${query}`, 'POST',
             { operationId: `${operationId}:execution:${execution.id}`, action: 'stop' },
             undefined);
           stopped = true;
@@ -1272,6 +1277,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       try {
         if (input.mentions.all && !mentions.size && !supportsMentionAudiences && self) mentions.add(self);
         const body: ChatSendBody = { operationId: input.clientId,
+          ...(independentReplies && input.conversationKind !== 'direct' ? { independentReplies: true } : {}),
           ...(supportsMentionAudiences && input.conversationKind !== 'direct' && botGroupMentionAudience(input.mentions) ? { mentionAudience: botGroupMentionAudience(input.mentions) } : {}),
           content, mentions: [...mentions], ...(input.threadRootId ? { threadRootId: chatId(input.threadRootId) } : {}) };
         // The exact body is durable before POST. A lost response/restart must not

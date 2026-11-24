@@ -23,3 +23,15 @@ export function codexSharedAuthLinkUnavailableReason(input: {
   if (!input.systemAuthPresent) return undefined;
   return CODEX_SHARED_AUTH_LINK_UNAVAILABLE;
 }
+
+/**
+ * 这条错误是不是「共享凭证连不上」。
+ *
+ * reason 产生后要穿过 `AgentNotAuthenticatedError` 与宿主 send failure 两层包装才到
+ * 界面(`LAZY_CREATE_FAILED: codex not authenticated: <reason>`),renderer 拿不到结构化
+ * 的 errorReason,只能认这个稳定 token —— 于是「主侧留下结论」与「界面翻译结论」必须
+ * 共用同一份字面量,否则两侧各写一遍字符串,迟早对不上。
+ */
+export function isCodexSharedAuthLinkUnavailableError(message: string): boolean {
+  return message.includes(CODEX_SHARED_AUTH_LINK_UNAVAILABLE);
+}

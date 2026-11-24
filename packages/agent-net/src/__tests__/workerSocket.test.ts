@@ -31,6 +31,18 @@
  * Bug：2026-11-17 审查，换网的通知到不了 Agent-Net（Device Link 的探测在那条连接里由本机回答），中转连接要等 45 秒的保活才换。
  * 可观察结果：换网后中转在探测时限内不回 pong，Main 断开这条 ws 并记一条警告；常规保活此时还远没到。
  * 最小失败输入：中转 autoPong=false、常规保活设成很长，连接打开后换网一次。
+ *
+ * 经中转的数据报走 UDP 还是 WebSocket（同一生产入口，worker 的状态快照带上它，Desktop 远程连接页写在中转点上）：
+ * Bug：2026-11-18 用户反馈，拓扑看不出中转走的是 Agent-Net 的 UDP、WS 还是 Device Link，延迟一直是 WebSocket 心跳的。
+ * 可观察结果：`relayRoute()` 给出走法和那条路的往返（UDP 用 worker 报的、WebSocket 用心跳的），切换时发 `relay-route`
+ * 并记一行日志，往返刷新不算切换，中转断开后为 null。现有覆盖缺口：此前 Main 只有心跳往返。
+ * 最小失败输入：worker 先后报 UDP（两次不同往返）、WebSocket，再关掉中转。
+ *
+ * 对端走直连还是中转（同一生产入口，worker 的 `path` 消息与状态快照，日志是排查线上连接的唯一记录）：
+ * Bug：2026-11-21 一份对比报告据日志写「电脑之间都经中转」，实际 8 台里 6 台直连：连接都是先经中转建立再换到直连，
+ * 而日志只在建立和断开时记路径。可观察结果：快照里已连上的对端换了路径时记一行「moved from … to …」，来回跳动时
+ * 在间隔内只记一次、间隔过后记下最后停在哪条路；建立与断开各记一行，没连上过的对端不记。
+ * 现有覆盖缺口：路径日志此前没有测试。最小失败输入：对端经中转连上，快照先后报直连、中转、直连，再断开。
  */
 import { afterEach, expect, it, vi } from 'vitest';
 import { once } from 'node:events';
@@ -85,7 +97,7 @@ it('discards a still-CONNECTING network socket without an uncaught error when cl
   expect(ws.readyState).toBe(WebSocket.CLOSED);
 });
 
-async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { intervalMs: number; timeoutMs: number }; networkChangeProbeMs?: number }) {
+async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { intervalMs: number; timeoutMs: number }; networkChangeProbeMs?: number; workerFile?: URL }) {
   const relay = new WebSocketServer({ host: '127.0.0.1', port: 0, autoPong: options.autoPong });
   await once(relay, 'listening');
   const accepted = once(relay, 'connection') as Promise<[WebSocket]>;
@@ -96,14 +108,16 @@ async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { inte
     transport: { ownerPinnedHttp: false, createWebSocket: (url: string, opts: WebSocket.ClientOptions) => new WebSocket(url, opts) },
   } as unknown as AgentNetClient;
   const warnings: string[] = [];
+  const infos: string[] = [];
   const socket = await AgentNetWorkerSocket.open({
-    workerFile: fakeWorker, client, userId: 'unit-user', log: { info: () => {}, warn: (line: string) => { warnings.push(line); } },
+    workerFile: options.workerFile ?? fakeWorker, client, userId: 'unit-user',
+    log: { info: (line: string) => { infos.push(line); }, warn: (line: string) => { warnings.push(line); } },
     uplinkKeepalive: options.keepalive ?? { intervalMs: 10, timeoutMs: 50 },
     ...(options.networkChangeProbeMs ? { networkChangeProbeMs: options.networkChangeProbeMs } : {}),
   } as Parameters<typeof AgentNetWorkerSocket.open>[0]);
   cleanup.push(() => { socket.terminate(); for (const peer of relay.clients) peer.terminate(); relay.close(); });
   const [server] = await accepted;
-  return { server, warnings, socket };
+  return { server, warnings, infos, socket };
 }
 
 it('drops a relay connection whose pings are never answered, so the worker reconnects it (2026-11-13)', async () => {
@@ -125,13 +139,58 @@ it('reports whether its relay connection is open, and when that changes', async 
   expect(socket.relayRttMs()).toBeNull();
 });
 
+/** Like fakeWorker, and reports how relayed datagrams travel (the real worker does it in each status snapshot) when told to. */
+const relayRouteWorker = new URL('data:text/javascript,' + encodeURIComponent(`
+import { parentPort } from 'node:worker_threads';
+parentPort.on('message', (m) => {
+  if (m.type === 'init') {
+    parentPort.postMessage({ type: 'ready' });
+    parentPort.postMessage({ type: 'ws-open', id: 1, url: m.client.base.replace(/^http/, 'ws') + '/ws', headers: {} });
+  }
+  if (m.type === 'frame') {
+    parentPort.postMessage({ type: 'ack', bytes: m.bytes });
+    parentPort.postMessage({ type: 'status', queued: 0, known: [], peers: [], relayRoute: JSON.parse(m.frame) });
+  }
+});
+`));
+
+it('reports whether relayed datagrams go over the relay UDP port or the WebSocket, with that path\'s round trip (2026-11-18)', async () => {
+  const { server, socket, infos } = await openAgainstRelay({ autoPong: true, keepalive: { intervalMs: 60_000, timeoutMs: 120_000 }, workerFile: relayRouteWorker });
+  // 还没走 UDP：WebSocket，往返是心跳的。
+  await vi.waitFor(() => expect(socket.relayRoute()).toEqual({ via: 'websocket', rttMs: expect.any(Number) }));
+  const changes: string[] = [];
+  socket.on('relay-route', (via: string) => { changes.push(via); });
+  socket.send(JSON.stringify({ via: 'udp', rttMs: 7 }));
+  await vi.waitFor(() => expect(socket.relayRoute()).toEqual({ via: 'udp', rttMs: 7 }));
+  // 往返刷新不算切换。
+  socket.send(JSON.stringify({ via: 'udp', rttMs: 9 }));
+  await vi.waitFor(() => expect(socket.relayRoute()).toEqual({ via: 'udp', rttMs: 9 }));
+  // UDP 不通、退回 WebSocket：往返换回心跳的，不留 UDP 的旧值。
+  socket.send(JSON.stringify({ via: 'websocket', rttMs: null }));
+  await vi.waitFor(() => expect(socket.relayRoute()?.via).toBe('websocket'));
+  expect(socket.relayRoute()!.rttMs).toBe(socket.relayRttMs());
+  expect(changes).toEqual(['udp', 'websocket']);
+  expect(infos.filter((line) => line.startsWith('agent-net relayed datagrams'))).toEqual([
+    'agent-net relayed datagrams now go over the relay UDP port',
+    'agent-net relayed datagrams now go over the relay WebSocket',
+  ]);
+  // 中转连接断了：没有经中转的路可说。
+  server.close();
+  await vi.waitFor(() => expect(socket.relayRoute()).toBeNull());
+});
+
 // PR #11236: the cached directory can show the peer offline during a LAN dial.
 // Unit, real WorkerSocket: one cached same-account device, one pending dial,
 // no routable path. Existing live-relay tests only exercise available peers.
+// Keep the worker alive until cleanup: a once-only listener can let it exit
+// after ready and clear the route before the Windows CI assertion runs.
 it('reports a LAN handshake while the cached directory marks the peer offline', async () => {
+  // The handshake is still in progress: keep this worker alive until cleanup.
+  // A once listener let it exit just after ready, racing the route assertion.
   const workerFile = new URL('data:text/javascript,' + encodeURIComponent(`
 import { parentPort } from 'node:worker_threads';
-parentPort.once('message', () => {
+parentPort.on('message', (message) => {
+  if (message.type !== 'init') return;
   const deviceId = 'lan-peer';
   parentPort.postMessage({ type: 'directory', directory: [{ certificate: { deviceId } }], cached: true });
   parentPort.postMessage({ type: 'status', queued: 0, known: [deviceId],
@@ -230,4 +289,46 @@ it('keeps a relay connection that answers pings past the silence budget', async 
   await new Promise<void>((resolve) => { let pings = 0; server.on('ping', () => { if (++pings === 8) resolve(); }); });
   expect(server.readyState).toBe(WebSocket.OPEN);
   expect(warnings).toEqual([]);
+});
+
+it('logs when a connected peer moves between the relay and a direct path (2026-11-21)', async () => {
+  const workerFile = new URL('data:text/javascript,' + encodeURIComponent(`
+import { parentPort } from 'node:worker_threads';
+parentPort.on('message', (m) => {
+  if (m.type === 'init') { parentPort.postMessage({ type: 'ready' }); return; }
+  if (m.type !== 'frame') return;
+  for (const message of JSON.parse(m.frame)) parentPort.postMessage(message);
+  parentPort.postMessage({ type: 'ack', bytes: m.bytes });
+});
+`));
+  const infos: string[] = [];
+  const client = { identity: { deviceId: 'unit-device' }, transport: {} } as unknown as AgentNetClient;
+  const socket = await AgentNetWorkerSocket.open({ workerFile, client, userId: 'unit-user', pathMoveLogIntervalMs: 40,
+    log: { info: (line: string) => { infos.push(line); }, warn: () => undefined } });
+  cleanup.push(() => socket.terminate());
+  const status = (path: 'direct' | 'relay' | null, other: 'relay' | null = null) => ({ type: 'status', queued: 0, known: ['peer-a', 'peer-b'], peers: [
+    ['peer-a', { available: path !== null, path, rttMs: 1, dialing: false }], ['peer-b', { available: other !== null, path: other, rttMs: null, dialing: false }]] });
+  const post = async (...messages: unknown[]) => { socket.send(JSON.stringify(messages)); while (socket.bufferedAmount > 0) await new Promise((resolve) => setImmediate(resolve)); };
+  const lines = () => infos.filter((line) => line.startsWith('agent-net peer'));
+
+  // Control the logging interval without depending on worker scheduling or CI load.
+  let now = 1_000;
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+  cleanup.push(() => clock.mockRestore());
+
+  // A device that is known but never connected is not reported, in snapshots either.
+  await post(status(null));
+  await post({ type: 'path', id: 'peer-a', path: 'relay' }, status('relay'));
+  expect(lines()).toEqual(['agent-net peer peer-a connected via relay']);
+  await post(status('direct'));
+  expect(lines()).toEqual(['agent-net peer peer-a connected via relay', 'agent-net peer peer-a moved from relay to direct']);
+  // Flipping inside the interval writes nothing more; after it, where the route ended up.
+  now += 39;
+  await post(status('relay'), status('direct'), status('relay'));
+  expect(lines()).toHaveLength(2);
+  now += 1;
+  await post(status('relay'));
+  expect(lines().slice(2)).toEqual(['agent-net peer peer-a moved from direct to relay']);
+  await post({ type: 'path', id: 'peer-a', path: null }, status(null));
+  expect(lines().slice(3)).toEqual(['agent-net peer peer-a disconnected']);
 });

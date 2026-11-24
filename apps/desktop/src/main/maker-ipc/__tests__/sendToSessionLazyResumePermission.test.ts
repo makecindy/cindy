@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { createSessionOptionsReconciler, type SessionExecutionRow } from '../sessionOptionsReconciler.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
+import { isBotGroupInTaskClientId } from '../../../shared/botGroupChat.js';
 import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
@@ -23,11 +24,13 @@ import ts from 'typescript';
 
 import { describe, expect, it, vi } from 'vitest';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, TurnDispatchRejectedError, type SendOptions } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
+import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
 import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
 
@@ -109,7 +112,7 @@ function botTaskDispatchSlice(): string {
   const sendWithBaseline = slice('async function sendUserMessageWithAwaitedGitBaseline(', '\n  /**\n   * 来源标签用的发送方身份快照');
   const dispatchBotSessionMessage = slice(
     'const dispatchBotSessionMessage = async (params: {',
-    '\n  setBotInvitationWelcomeDispatch(dispatchBotSessionMessage);',
+    '\n  setBotInvitationWelcomeDispatch(',
   );
   const groupDispatch = slice(
     '({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, assertDispatchCurrent, onQueued, onAccepted }) =>',
@@ -122,6 +125,7 @@ function botTaskDispatchSlice(): string {
   return ts.transpileModule(
     `${sendWithBaseline}
 ${sendToSessionInternal}
+${slice('const toTaskFile = (attachment:', '  const dispatchBotSessionMessage =')}
 ${dispatchBotSessionMessage}
 ${pluginSource}
 ${sendToSession};
@@ -188,6 +192,7 @@ function botTaskDispatchHarness(
     where: () => dbChain,
     limit: async () => [],
   };
+  const dbClient = { drizzle: { select: () => dbChain } };
   const stubs: Record<string, unknown> = {
     getPluginHostToolCaller: () => undefined,
     sanitizeSourceName,
@@ -207,6 +212,8 @@ function botTaskDispatchHarness(
     noteChannelTurnSource: () => noop,
     channelTurnSourceFor: noop,
     beginTurnChangeSetAtDispatch: asyncNoop,
+    // Plugin-engine guards from register.ts use the real helpers.
+    hasBuiltinAgentKind, requireBuiltinAgentKind, builtinAgentKindOrNull,
     clearPendingTurnChangeSets: noop,
     gitSnapshotCoordinator: null,
     deferredProductTurnFailureGate: { clearSession: noop },
@@ -228,7 +235,10 @@ function botTaskDispatchHarness(
       rows[id]
         ? { status: 'active', title: id, userSendAt: null, providerId: 'fixture-provider', ...rows[id] }
         : null,
-    getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+    getDbClient: () => dbClient,
+    getCurrentDbClientSnapshot: () => dbClient,
+    normalizeAutoTitle,
+    refineCreatedTaskTitle: asyncNoop,
     messages: {},
     sessions: {},
     // 云端伙伴副本门:合成库里没有关联行,目标不是被接管的副本。
@@ -284,6 +294,7 @@ function botTaskDispatchHarness(
     AcceptedCallbackDispatchCancelled: class extends Error {},
     // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
     resolveSendToSessionCreateRoute,
+    isBotGroupInTaskClientId,
     getSelfDeviceId: () => 'self-device',
   };
   Object.assign(stubs, overrides);
@@ -626,6 +637,7 @@ describe('idle forwarded request authorization', () => {
   // an existing one; direct send previously left its next handoff without a source.
   it('queues the first verified request of a newly created task', async () => {
     const broadcast = vi.fn();
+    const refineTitle = vi.fn();
     const row = { id: 'new-child', permissionMode: 'auto', planModeEnabled: false };
     const enqueue = vi.fn(async (input: { onAccepted?: () => Promise<void> }) => { await input.onAccepted?.(); });
     const h = botTaskDispatchHarness({ 'new-child': row }, {}, {
@@ -633,6 +645,7 @@ describe('idle forwarded request authorization', () => {
         ({ row, value: await create(row, async () => {}) }),
       enqueueSendToSessionMessage: enqueue,
       broadcastSessionCreated: broadcast,
+      refineCreatedTaskTitle: refineTitle,
     });
     const receipt = { kind: 'agent-request', request: {
       userText: 'Inspect fixtures', sessionId: 'owner', clientId: 'u1', ownerVerified: true } };
@@ -640,6 +653,7 @@ describe('idle forwarded request authorization', () => {
       createDefaults: { agentKind: 'codex', model: 'fixture', workingDir: '/tmp/fixture', permissionMode: 'auto' },
     })).toMatchObject({ ok: true, targetSessionId: 'new-child', wakeKind: 'created' });
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'new-child', autoReviewUserText: receipt }));
+    expect(refineTitle).toHaveBeenCalledExactlyOnceWith('new-child', 'envelope', { initialTitle: 'envelope' });
     expect(h.sendOptions).toHaveLength(0);
     expect(broadcast).toHaveBeenCalledWith('new-child');
     expect(broadcast).toHaveBeenCalledTimes(1);
@@ -823,6 +837,23 @@ describe('stored-mode Host dispatch keeps the persisted permission and Plan', ()
  * drain 冷启动若照搬它,会话的计划模式就与库内不一致,绑定的心跳又会被判失配。会话起档必须
  * 取库内值;本轮意图由发送事务另按原快照传给 send,不经这里。
  */
+/**
+ * 插件引擎任务(agent_kind = 'acp',docs/plans/acp-plugin-bridge.md)的首次发送:lazy-create 前的
+ * 库内对齐曾用只认三种内置引擎的转换,把 'acp' 读成 Claude 并当作「引擎已切换」改写 createOpts,
+ * 第一条消息就会在 Claude 上启动。最小失败输入:库内与 createOpts 都是 'acp'。
+ */
+describe('cold start of a plugin engine task', () => {
+  it('keeps the plugin engine instead of reading the row as Claude', async () => {
+    const reconcile = createSessionOptionsReconciler({ log: { warn() {} }, readSession: async () => ({
+      agentKind: 'acp', model: 'deepseek-v4-pro', sdkSessionId: null, providerId: 'acp-plugin:dsh-acp:dsh',
+      fastMode: false, permissionMode: 'ask', planModeEnabled: false,
+    }) });
+    const co = { agentKind: 'acp', workingDir: '/repo', model: 'deepseek-v4-pro', providerId: 'acp-plugin:dsh-acp:dsh' };
+    await reconcile('task-1', co as unknown as MakerSessionCreateOpts);
+    expect(co).toMatchObject({ agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', model: 'deepseek-v4-pro' });
+  });
+});
+
 describe('queued cold start keeps the persisted Plan', () => {
   function reconcileWithRow(row: SessionExecutionRow) {
     const reconcile = createSessionOptionsReconciler({ log: { warn() {} }, readSession: async () => row });
@@ -880,12 +911,16 @@ describe('unbound Codex pre-send history wiring', () => {
       await deps.rebuild(id, assertCurrent);
       return true;
     });
+    // A plugin engine account pool is asked first (plugin-engine-accounts/failover.ts); a Codex task is not its.
+    const pluginPrepare = vi.fn(async () => false);
     const ports = { subscriptionAccountRecoveryDeps: { rebuild },
       readCodexThreadStorageReadOnly: history,
+      preparePluginEngineAccountForSend: pluginPrepare, readSubscriptionRuntimeSession: vi.fn(),
       prepareSubscriptionAccountForSend: prepare, prepareSubscriptionAccountFailover: failover,
       agentInputCoordinatorHolder: { cancelUsageLimitWait }, contextOverflowRolloverHolder: undefined };
     const run = new Function(...Object.keys(ports), `${body}; return prepareUnhealthySessionForSend;`)(...Object.values(ports));
     expect(await run('old-task')).toBe(true);
+    expect(pluginPrepare).toHaveBeenCalledOnce();
     expect(history).toHaveBeenCalledExactlyOnceWith('legacy-thread');
     expect(rebuild).toHaveBeenCalledExactlyOnceWith('old-task', assertCurrent);
     expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('old-task');

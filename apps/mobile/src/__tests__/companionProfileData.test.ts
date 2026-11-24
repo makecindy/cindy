@@ -93,3 +93,25 @@ it('negotiates explicit model acceptance only from the models form capability', 
     expect(parseCompanionProfileData(input, ref).panels[0].acceptsModelSelection).not.toBe(true);
   }
 });
+
+// model-groups.md §6.2: the host's model groups ride on its models / create forms. Host data is untrusted: bounded,
+// malformed groups dropped, only displayed facts kept (plus the first enabled source as a new entry's saved model).
+// Production entry: parseCompanionProfileData. Minimal input: one valid, one malformed group. tier: unit.
+describe('host model groups', () => {
+  it('reads valid groups with their enabled source count and first enabled source', () => {
+    const input = raw() as any;
+    input.blocks[0].id = 'models';
+    input.blocks[0].data.modelGroups = { routes: [
+      { id: 'night', name: ' Night ', strategy: 'order', effort: 'high', candidates: [
+        { agentKind: 'cc', providerId: 'sub', model: 'off-one', off: true },
+        { agentKind: 'pi', providerId: 'xd', model: 'glm' },
+        { agentKind: 'codex', providerId: 'openai', model: 'sol', agentDeviceId: 'mac-2' },
+      ] },
+      // A blank name is malformed. An unknown strategy is not: the group stays, only its label is left out (hostModelGroups.test.ts).
+      { id: 'bad', name: '  ', strategy: 'order', candidates: [] },
+    ] };
+    expect(parseCompanionProfileData(input, ref).panels[0].modelGroups).toEqual([{ id: 'night', name: 'Night', strategy: 'order', sources: 2,
+      effort: 'high', fallback: { harness: 'pi', model: 'glm', providerId: 'xd' } }]);
+    expect(parseCompanionProfileData(raw(), ref).panels[0]).not.toHaveProperty('modelGroups');
+  });
+});

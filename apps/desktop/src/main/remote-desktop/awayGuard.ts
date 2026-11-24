@@ -17,6 +17,13 @@
  * assertion so macOS sleeps and locks exactly as it would without Cindy.
  */
 
+import type { AwayGuardFailure } from '../../shared/awayGuard';
+
+export function awayGuardFailure(error: unknown): AwayGuardFailure {
+  return error instanceof Error && error.message === 'DESKTOP_ACCESSIBILITY_REQUIRED'
+    ? 'permission' : 'unavailable';
+}
+
 export interface AwayGuardDeps {
   enabled(): boolean;
   screenLocked(): boolean;
@@ -43,6 +50,7 @@ export interface AwayGuardDeps {
   lockAndHideMasks(): Promise<void>;
   /** Removes the masks without locking (already locked, or a preview ran out). */
   hideMasks(): void;
+  notifyFailure(reason: AwayGuardFailure): void;
   now(): number;
   log(event: string, detail?: Record<string, unknown>): void;
 }
@@ -88,6 +96,10 @@ export class AwayGuardController {
   private mask: MaskState = 'none';
   private ownerInputAt: number;
   private retryAt = 0;
+  private lastFailure?: AwayGuardFailure;
+  get backgroundFailure(): AwayGuardFailure | undefined {
+    return this.lastFailure;
+  }
   private previewUntil = 0;
   private displayAddedWhileShowing = false;
   private ticking = false;
@@ -122,14 +134,17 @@ export class AwayGuardController {
    * so the owner can check the lock and unlock path. Physical input locks as with a
    * real cover; running out uncovers without a lock.
    */
-  async preview(): Promise<void> {
-    if (this.mask !== 'none' || this.deps.screenLocked()) return;
-    if (!(await this.show())) return;
+  async preview(): Promise<boolean> {
+    if (this.deps.screenLocked()) return false;
+    if (this.mask === 'showing' && this.showing) return this.showing;
+    if (this.mask !== 'none') return this.inputShielded;
+    if (!(await this.show())) return false;
     // A remote exit can adopt a preview while its masks are still loading.
-    if (this.remoteExit) return;
+    if (this.remoteExit) return true;
     this.previewUntil = this.deps.now() + AWAY_GUARD_PREVIEW_MS;
     this.deps.keepDisplayAwake(true);
     this.deps.log('preview shown');
+    return true;
   }
 
   /** 主人主动离开：复用持续隐私屏，不等待空闲、不受试用时限影响，也不改变自动偏好。 */
@@ -224,7 +239,10 @@ export class AwayGuardController {
   private async finishShowing(): Promise<boolean> {
     if (this.mask !== 'showing') return false;
     this.mask = 'shown';
-    if (!this.displayAddedWhileShowing) return true;
+    if (!this.displayAddedWhileShowing) {
+      this.lastFailure = undefined;
+      return true;
+    }
     await this.end(true, 'display added while covering');
     return false;
   }
@@ -248,7 +266,10 @@ export class AwayGuardController {
       this.previewUntil = 0;
       if (this.mask === 'shown') return this.end(false, 'preview ended');
     }
-    if (!deps.enabled()) return this.standDown(true, 'disabled');
+    if (!deps.enabled()) {
+      this.lastFailure = undefined;
+      return this.standDown(true, 'disabled');
+    }
     if (this.mask !== 'none') {
       deps.keepDisplayAwake(this.mask !== 'ending' && deps.needsDisplay());
       return;
@@ -277,6 +298,11 @@ export class AwayGuardController {
       this.retryAt = now + AWAY_GUARD_RETRY_MS;
       deps.keepDisplayAwake(false);
       deps.log('masks unavailable', { error: error instanceof Error ? error.message : String(error) });
+      const reason = awayGuardFailure(error);
+      if (deps.enabled() && !deps.screenLocked() && reason !== this.lastFailure) {
+        this.lastFailure = reason;
+        deps.notifyFailure(reason);
+      }
     }
   }
 

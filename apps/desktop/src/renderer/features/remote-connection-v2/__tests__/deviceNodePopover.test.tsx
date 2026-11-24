@@ -134,10 +134,16 @@ describe('DeviceNodePopover', () => {
     render(<DeviceNodePopover node={node({ encrypted })} relayName="Cindy" onRemoteDesktop={vi.fn()} />);
     expect(screen.getByText('settings.remoteControl.v2.popover.' + key)).toBeTruthy();
     // 2026-11-08: route details must identify the actual protocol, not just direct versus relay.
-    const protocol = encrypted === undefined ? '' : `settings.remoteControl.v2.protocol.${encrypted ? 'agentNet' : 'deviceLink'} · `;
-    // 2026-11-13: 协议画成图标 + 名称后文字分在两段里，完整的「协议 · 路径」在这一行的悬停提示上。
-    const pathRow = screen.getByTitle(protocol + 'settings.remoteControl.v2.path.direct');
-    expect(pathRow.textContent?.replace(/\s/g, '')).toBe((protocol + 'settings.remoteControl.v2.path.direct').replace(/\s/g, ''));
+    // 2026-11-19: 同时带上实际底层传输协议（UDP / WebRTC / WS）。
+    // 2026-11-22: 协议与底层传输拆成独立的「连接方式」行,避免与长中转名挤在同一行被截断。
+    if (encrypted === undefined) {
+      expect(screen.getByText('settings.remoteControl.v2.path.direct')).toBeTruthy();
+    } else {
+      const expectedConnection = `settings.remoteControl.v2.protocol.${encrypted ? 'agentNet' : 'deviceLink'} · settings.remoteControl.v2.${encrypted ? 'relayTransport.udp' : 'linkTransport.webrtc'}`;
+      const connRow = screen.getByTitle(expectedConnection);
+      expect(connRow.textContent?.replace(/\s/g, '')).toBe(expectedConnection.replace(/\s/g, ''));
+      expect(screen.getByText('settings.remoteControl.v2.path.direct')).toBeTruthy();
+    }
     expect(!!screen.queryByText('settings.remoteControl.v2.popover.legacyEncryptionHint')).toBe(encrypted === false);
   });
   it('只展示信息:没有开关、没有删除,也没有「管理设备…」', () => {
@@ -187,6 +193,19 @@ describe('DeviceNodePopover', () => {
     );
     expect(screen.getByText('settings.remoteControl.v2.path.offline').className).not.toContain('--warning-accent');
   });
+
+  // 2026-11-19 用户要求：每台电脑之间的链接显示实际底层传输协议（UDP / WS / WebRTC）。
+  // 生产入口:DeviceNodePopover 路径行。覆盖缺口:此前设备卡片路径行只写协议和直连/中转,没有底层传输协议。
+  // 最小失败输入:Agent-Net 直连/经中转(UDP/WS)、Device Link 直连(WebRTC)/经中转(WS)与切换重连中。tier: unit。
+  it.each([
+    ['Agent-Net direct UDP', { encrypted: true, path: 'direct' as const, transport: 'udp' as const }, 'settings.remoteControl.v2.relayTransport.udp'],
+    ['Agent-Net relay WS', { encrypted: true, path: 'relay' as const, status: 'relay' as const, transport: 'websocket' as const }, 'settings.remoteControl.v2.relayTransport.websocket'],
+    ['Device Link direct WebRTC', { encrypted: false, path: 'direct' as const, transport: 'webrtc' as const }, 'settings.remoteControl.v2.linkTransport.webrtc'],
+    ['Device Link relay WS', { encrypted: false, path: 'relay' as const, status: 'relay' as const, transport: 'websocket' as const }, 'settings.remoteControl.v2.relayTransport.websocket'],
+  ])('设备卡片路径行显示底层传输协议: %s', (_label, partial, expectedTransport) => {
+    render(<DeviceNodePopover node={node(partial)} relayName="Cindy" onRemoteDesktop={vi.fn()} />);
+    expect(screen.getByText(`· ${expectedTransport}`)).toBeTruthy();
+  });
 });
 
 describe('HubNodePopover', () => {
@@ -231,5 +250,83 @@ describe('HubNodePopover', () => {
     expect(screen.queryByText('settings.remoteControl.v2.popover.protocol')).toBeNull();
     expect(screen.queryByText('settings.remoteControl.v2.protocol.deviceLink')).toBeNull();
     expect(screen.getByText('settings.devices.linkStatus.connecting')).toBeTruthy();
+  });
+
+  // 2026-11-18 用户要求：看得出中转走的是 Agent-Net 的 UDP 还是 WS,往返是那条路的。原来这一行只有状态和心跳往返。
+  // 最小失败输入:Agent-Net 主连接、transport 为 udp / websocket;连接中不写走法。tier: unit。
+  it('与中转那一行写经中转的数据走 UDP 还是 WS,连接中不写', () => {
+    const relay = { ...model.relay, protocol: 'agent-net' as const };
+    const udp = render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'udp', rttMs: 9 } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.devices.linkStatus.online · settings.remoteControl.v2.relayTransport.udp · 9 ms')).toBeTruthy();
+    udp.unmount();
+
+    const ws = render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'websocket' } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.devices.linkStatus.online · settings.remoteControl.v2.relayTransport.websocket · 20 ms')).toBeTruthy();
+    ws.unmount();
+
+    render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'udp' } }} linkStatus="connecting" issue={null} standby={false} />);
+    expect(screen.getByText('settings.devices.linkStatus.connecting')).toBeTruthy();
+  });
+
+  // 2026-11-22 用户需求:在线 Agent-Net 设备展示独立线路区(直连与中转延迟+三档切换),直连不可达时直连档禁用并标明不可用;
+  // 非 Agent-Net(Device Link)仍保持单行延迟。tier: unit。
+  it('Agent-Net 在线设备展示线路卡片与三档切换器,直连不可达时禁用直连档,保存失败时回退乐观选中,旧版连接保持单行延迟', async () => {
+    const onPref = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+    const dual = node({
+      id: 'dual-peer',
+      encrypted: true,
+      path: 'relay',
+      status: 'relay',
+      rttMs: 86,
+      directRttMs: 220,
+      relayRttMs: 86,
+      pathPreference: 'auto',
+    });
+    const { rerender } = render(
+      <DeviceNodePopover node={dual} relayName="Cindy" onRemoteDesktop={vi.fn()} onPathPreferenceChange={onPref} />,
+    );
+    expect(screen.getByText('settings.remoteControl.v2.path.direct')).toBeTruthy();
+    expect(screen.getByText('220 ms')).toBeTruthy();
+    expect(screen.getByText('settings.remoteControl.v2.path.relay')).toBeTruthy();
+    expect(screen.getByText('86 ms')).toBeTruthy();
+    const directRadio = screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeDirect' }) as HTMLButtonElement;
+    expect(directRadio.disabled).toBe(false);
+    // First click fails to save -> optimistic selection reverts back to serverPref ('auto').
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeRelay' }));
+    });
+    expect(onPref).toHaveBeenCalledWith(dual, 'relay');
+    expect(screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeAuto' }).getAttribute('aria-checked')).toBe('true');
+    // Second click succeeds -> optimistic selection stays on 'relay'.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeRelay' }));
+    });
+    expect(screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeRelay' }).getAttribute('aria-checked')).toBe('true');
+
+    // Direct unreachable on Agent-Net: still shows route card and switcher, with Direct disabled & marked unavailable.
+    rerender(
+      <DeviceNodePopover
+        node={node({ id: 'relay-only-peer', encrypted: true, path: 'relay', status: 'relay', rttMs: 23, directRttMs: null, relayRttMs: 23 })}
+        relayName="Cindy"
+        onRemoteDesktop={vi.fn()}
+        onPathPreferenceChange={onPref}
+      />,
+    );
+    expect(screen.getByRole('radiogroup', { name: 'settings.remoteControl.v2.popover.routePreference' })).toBeTruthy();
+    expect(screen.getByText('settings.remoteControl.v2.popover.routeUnavailable')).toBeTruthy();
+    expect(screen.getByText('23 ms')).toBeTruthy();
+    expect((screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeDirect' }) as HTMLButtonElement).disabled).toBe(true);
+
+    // Legacy Device Link connection keeps the single latency row without the Agent-Net route switcher.
+    rerender(
+      <DeviceNodePopover
+        node={node({ id: 'legacy-peer', encrypted: false, path: 'relay', status: 'relay', rttMs: 86 })}
+        relayName="Cindy"
+        onRemoteDesktop={vi.fn()}
+        onPathPreferenceChange={onPref}
+      />,
+    );
+    expect(screen.queryByRole('radiogroup', { name: 'settings.remoteControl.v2.popover.routePreference' })).toBeNull();
+    expect(screen.getByText('86 ms · settings.remoteControl.v2.popover.rttNote')).toBeTruthy();
   });
 });

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { chunkDiscordText } from '../chunk.js';
+import { chunkDiscordFinalText } from '../chunk.js';
 import { markdownToDiscord } from '../markdown.js';
 import { startStreaming, UPDATE_THROTTLE_MS } from '../streamingText.js';
 
@@ -157,9 +157,9 @@ function makeDeps() {
     edit: vi.fn(async (...args: [string, string]) => {
       void args;
     }),
-    remove: vi.fn(async (_messageId: string) => {}),
+    remove: vi.fn<(messageId: string) => Promise<void>>(async () => {}),
     markdownToDiscord,
-    chunk: chunkDiscordText,
+    chunk: chunkDiscordFinalText,
     resolveImageUrl: vi.fn((url: string) => `/tmp/${url.replace('xdt-image://', '')}.png`),
     uploadImages: vi.fn(async (...args: [string, string[]]) => {
       void args;

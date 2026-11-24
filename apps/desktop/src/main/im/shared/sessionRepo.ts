@@ -1,3 +1,4 @@
+import { mayRefineTaskTitle } from '../../maker-ipc/createdTaskTitles.js';
 /**
  * main/im/shared/sessionRepo.ts
  * ---------------------------------------------------------------------------
@@ -49,6 +50,8 @@ function toDbAgentKind(kind: AgentKind): string {
 }
 
 export interface ImSessionRow {
+  /** Title assigned by this creation, including a resolved group or topic name. */
+  initialTitle?: string;
   agentDeviceId?: string | null;
   id: string;
   agentKind: AgentKind;
@@ -81,6 +84,10 @@ export interface ImSessionRow {
    * 建任务 / `/new` 把它连同路由写进 `im_default_route`(跟随记录)。
    */
   defaultRouteFingerprint?: string;
+  /**
+   * 仅 prepareNewSession 产出的行带: `/new` 使用该路由键的项目或渠道对话目录。
+   */
+  laneWorkingDir?: boolean;
 }
 
 export interface SessionModelRouteSnapshot {
@@ -394,15 +401,28 @@ export function createImSessionRepo(
     async prepareNewSession(botContextId, userId, scopeKey, providerSnapshot) {
       const assertAccount = captureChannelAccount();
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
-      const workingDir = ns.ensureWorkingDir(botContextId, userId);
+      // 路由键自己的项目与模型(个人飞书 bot 的按群设置); 没有就用渠道的。
+      const laneWorkingDir = await ns.laneWorkingDirFor?.(botContextId, userId);
+      const workingDir = laneWorkingDir ?? ns.ensureWorkingDir(botContextId, userId);
+      // 模型路由的优先级: 路由键自己固定的 > 绑定项目的设置 > 渠道「新对话配置」。
+      const routeOverride = ns.routeOverrideFor?.(botContextId, userId) ?? null;
+      const laneProject = laneWorkingDir
+        ? ns.laneProjectDefaultsFor?.(botContextId, userId, laneWorkingDir) ?? null
+        : null;
       const row = rowFromDefaults(
         id,
         workingDir,
-        await resolveImSessionDefaults(config, providerSnapshot, ns.source),
+        !routeOverride && laneProject
+          ? await laneProject.resolve(providerSnapshot)
+          : await resolveImSessionDefaults(config, providerSnapshot, ns.source, routeOverride),
       );
+      if (laneWorkingDir !== undefined) {
+        row.workspaceKind = laneWorkingDir === null ? 'dialogue' : 'project';
+        row.laneWorkingDir = true;
+      }
       // 渠道可按 userId 覆写新会话权限档(telegram guest lane → 只读探索;
-      // feishu 群 lane → 渠道设置「群聊新建任务权限档」)。
-      const overridden = ns.permissionModeFor?.(userId) ?? null;
+      // feishu 群 lane → 这个群单独设置的 > 绑定项目的 > 渠道「群聊新建任务权限档」)。
+      const overridden = ns.permissionModeFor?.(userId, laneProject?.permissionMode ?? null) ?? null;
       if (overridden) row.permissionMode = overridden;
       preparedAccounts.set(row, assertAccount);
       return row;
@@ -424,6 +444,7 @@ export function createImSessionRepo(
       assertAccount();
       const db = getDbClient().drizzle;
       const now = Date.now();
+      const initialTitle = ns.defaultTitle(userId);
       // 新任务经公共入口 openSession(与桌面新建任务同一套模型准入 / Git 初始化 / 账号代次
       // 校验); 建行仍是下面这段确定性 id 的 upsert。准入可能规范化来源 / 推理强度 / Fast,
       // 新插入的行写准入后的路由; 冲突分支(并发建出 / 残留行)照旧不碰路由列。
@@ -440,7 +461,7 @@ export function createImSessionRepo(
         ...((defaults.workspaceKind ?? ns.workspaceKind)
           ? { workspaceKind: (defaults.workspaceKind ?? ns.workspaceKind) as 'project' | 'dialogue' }
           : {}),
-        title: ns.defaultTitle(userId),
+        title: initialTitle,
       }, (admitted, assertCurrent) => {
         row = { ...defaults, ...admitted };
         return withSessionRouteLock(row.id, async () => {
@@ -459,7 +480,7 @@ export function createImSessionRepo(
             .insert(sessions)
             .values({
               id: row.id,
-              title: ns.defaultTitle(userId),
+              title: initialTitle,
               ...(row.workspaceKind ?? ns.workspaceKind
                 ? { workspaceKind: row.workspaceKind ?? ns.workspaceKind }
                 : {}),
@@ -528,19 +549,22 @@ export function createImSessionRepo(
       );
       // 通知 renderer sidebar / device-link 控制端有新会话行,否则要手动刷新才出现
       broadcastSessionCreated(result.id);
-      // 渠道可异步解析正式标题(飞书群/话题 lane → 拉群名拼 [飞书·群/话题] {群名}),
-      // 只对**新建行**生效 — 复活行保留自己的历史标题(首条消息 oneshot 会把
-      // 话题会话升级成 [飞书·群名·简介] 格式, 不能回刷)。失败/无结果保持
-      // defaultTitle, 不阻塞建行。
+      // Native group/channel names are authoritative only while this fresh row still has its draft title.
       if (ns.resolveSessionTitle && persisted?.isFreshInsert) {
         try {
           const resolved = await ns.resolveSessionTitle(userId, scopeKey);
-          if (resolved) {
-            await db
+          assertAccount();
+          if (resolved && mayRefineTaskTitle(result.id)) {
+            const updated = await db
               .update(sessions)
               .set({ title: resolved })
-              .where(eq(sessions.id, result.id));
-            broadcastSessionPatched(result.id, { title: resolved });
+              .where(and(eq(sessions.id, result.id), eq(sessions.title, initialTitle)))
+              .returning({ id: sessions.id });
+            assertAccount();
+            if (updated.length) {
+              result.initialTitle = resolved;
+              broadcastSessionPatched(result.id, { title: resolved });
+            }
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -745,6 +769,15 @@ export async function resetSessionToDefaults(
     prepared ??
     rowFromDefaults(sessionId, '', await resolveImSessionDefaults(config, undefined, channel));
   const db = getDbClient().drizzle;
+  const laneWorkspace = defaults.laneWorkingDir && defaults.workingDir && defaults.workspaceKind
+    ? { workingDir: defaults.workingDir, workspaceKind: defaults.workspaceKind }
+    : null;
+  const previousWorkspace = laneWorkspace
+    ? (await db.select({
+        workingDir: sessions.workingDir,
+        workspaceKind: sessions.workspaceKind,
+      }).from(sessions).where(eq(sessions.id, sessionId)).limit(1))[0]
+    : undefined;
   await db
     .update(sessions)
     .set({
@@ -760,6 +793,8 @@ export async function resetSessionToDefaults(
       // It applies only at the explicit `/new` boundary; existing context is
       // never moved silently.
       ...(channel === 'wechat' && defaults.workingDir ? { workingDir: defaults.workingDir } : {}),
+      // 个人飞书群只在显式 `/new` 时切到群设置的项目或对话目录。
+      ...laneWorkspace,
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),
@@ -768,6 +803,11 @@ export async function resetSessionToDefaults(
     })
     .where(eq(sessions.id, sessionId));
   setSessionProvider(sessionId, defaults.providerId);
+  // 目录变动后侧栏要换分组，沿用 switchSessionWorkingDir 的刷新方式。
+  if (laneWorkspace && (
+    previousWorkspace?.workingDir !== laneWorkspace.workingDir ||
+    previousWorkspace?.workspaceKind !== laneWorkspace.workspaceKind
+  )) broadcastSessionCreated(sessionId);
 }
 
 /**

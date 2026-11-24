@@ -141,7 +141,7 @@ it('only deletes after confirmation and retains task history and independent wor
   render(<MemoryRouter><BotLifecycleSettings bot={bot('active')} mode="actions" onDeleted={deleted} onOpenSession={vi.fn()} /></MemoryRouter>);
   expect(screen.queryByRole('textbox')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'bots.lifecycle.deleteTitle' }));
-  await screen.findByRole('dialog');
+  await screen.findByRole('alertdialog');
   expect(runBotLifecycleAction).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'bots.lifecycle.delete' }));
   await waitFor(() => expect(deleted).toHaveBeenCalledWith('bot-1'));

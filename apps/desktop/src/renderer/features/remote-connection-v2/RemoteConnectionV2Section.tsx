@@ -11,12 +11,13 @@
  * 数据:设备目录与开关来自 useDeviceLinkSettings(与「我的设备」同一份);本机已建链对端的路径 / 往返 /
  * 最近业务收发来自 usePeerLinks(新 IPC);中转名来自 useSelfHostedRelayState;无响应熔断来自
  * unresponsiveDevicesStore。拓扑只画真实存在的数据:消息流动只在这台电脑与那台设备之间真有业务消息时出现,
- * 没有的(流量大小、第三方之间的链路)不画。
+ * 本机连接流量来自同一份快照。第三方之间的链路不画。
  */
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { History } from 'lucide-react';
+import { useDeleteDeviceDialog } from '@/components/settings/useDeleteDeviceDialog';
 import { deviceLabel } from '@/components/settings/deviceLabels';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -31,6 +32,7 @@ import { createLogger } from '@/lib/logger';
 
 import { remoteSwitchStore, startRemoteSwitch, type RemoteSwitchTarget } from './agentNetRemoteSwitch';
 import { RemoteConnectionTopology } from './RemoteConnectionTopology';
+import { ConnectionTraffic } from './ConnectionTraffic';
 import { RemoteSwitchBatch } from './RemoteSwitchBatch';
 import { buildTopology, type TopologyModel, type TopologyNode } from './topologyModel';
 import { relativeTime } from './topologyPresentation';
@@ -100,6 +102,7 @@ export function RemoteConnectionV2Section({
   deepLink: RemoteDevicesDeepLink;
 }) {
   const { t } = useTranslation();
+  const { requestDelete, dialog } = useDeleteDeviceDialog(s.remove);
   const peerLinks = usePeerLinks(true);
   const recent = useRecentPresence(true);
   const unresponsive = useSyncExternalStore(unresponsiveDevicesStore.subscribe, unresponsiveDevicesStore.getSnapshot);
@@ -119,6 +122,7 @@ export function RemoteConnectionV2Section({
         agentNetRoutes: peerLinks.agentNetRoutes,
         relayRttMs: peerLinks.relayRttMs,
         relayProtocol: peerLinks.relayProtocol,
+        relayTransport: peerLinks.relayTransport,
         relayName,
         selfHosted: relay.state?.mode === 'self-hosted',
         controlledBy: s.controlledBy.map((c) => c.deviceId),
@@ -155,6 +159,19 @@ export function RemoteConnectionV2Section({
         toast.error(t(`settings.remoteControl.v2.peerSwitch.toast.${result}`, name));
       }
     });
+  }, [t]);
+
+  const onPathPreferenceChange = useCallback(async (node: TopologyNode, preference: 'auto' | 'direct' | 'relay') => {
+    const setPref = window.electronAPI?.deviceLink?.setPeerPathPreference;
+    if (!setPref) return false;
+    try {
+      await setPref(node.id, preference);
+      return true;
+    } catch (err) {
+      log.warn('setPeerPathPreference failed', err);
+      toast.error(t('settings.remoteControl.v2.popover.routePreferenceFailed'));
+      return false;
+    }
   }, [t]);
 
   const linkStatusText = t(`settings.devices.linkStatus.${s.linkStatus}`);
@@ -198,11 +215,13 @@ export function RemoteConnectionV2Section({
               standby={s.standby}
               onToggleOffline={() => setShowOffline((v) => !v)}
               onRemoteDesktop={onRemoteDesktop}
+              onDelete={(node, restoreFocus) => requestDelete({ deviceId: node.id, name: deviceLabel(node, t) }, restoreFocus)}
               focusDeviceId={focusDeviceId}
               focusRequestKey={deepLink.focusRequestKey}
               ready={s.devices !== null && peerLinks.takenAt > 0}
               switches={remoteSwitch.entries}
               onSwitch={onSwitch}
+              onPathPreferenceChange={onPathPreferenceChange}
             />
           </div>
           {offlineToggleVisible ? (
@@ -218,8 +237,10 @@ export function RemoteConnectionV2Section({
               </button>
             </div>
           ) : null}
+          <ConnectionTraffic traffic={peerLinks.traffic} />
         </SettingsCard>
       </section>
+      {dialog}
     </>
   );
 }

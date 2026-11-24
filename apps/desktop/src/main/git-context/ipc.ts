@@ -1,3 +1,4 @@
+import { readGithubTokenDetailed } from './githubToken.desktop.js';
 import { glabCliTokenSource } from './glabCliTokenSource';
 import { fetchGitlabMr } from './gitlabPrSummary';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
@@ -78,7 +79,7 @@ import {
 
 import { fetchPrSummary } from './prSummary';
 import { PrFollowWatch } from './prFollowWatch';
-import { getSchedulerIfInitialized } from '../scheduler-host/index.desktop.js';
+import { getSchedulerIfInitialized, getScheduleStorageIfInitialized } from '../scheduler-host/index.desktop.js';
 
 const log = createLogger('git-context/ipc');
 
@@ -114,7 +115,7 @@ function broadcastToAllWindows(channel: string, payload: unknown): void {
 const ghCliTokenSource = getSharedGhCliTokenSource();
 
 async function readGithubToken() {
-  return ghCliTokenSource.readTokenDetailed();
+  return readGithubTokenDetailed();
 }
 
 async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteState> {
@@ -149,6 +150,7 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
       mergeable: metadata.mergeable ?? null,
       merge_state: metadata.mergeable_state ?? null,
       updated_at: metadata.updated_at ?? null,
+      merged_at: pr.merged_at ?? null,
       labels: metadata.labels ?? [],
       review_requests: metadata.requested_reviewers ?? [],
     },
@@ -176,16 +178,25 @@ const prFollowWatch = new PrFollowWatch({
   // A passive instance (dev beside a release build on the same data) never starts runs by itself.
   autoRunAllowed: () => getSchedulerIfInitialized()?.isPassive() === false,
   listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
+  hasSuccessfulPrRunSince: async (id, since) => (await getScheduleStorageIfInitialized()?.hasSuccessfulPrRunSince(id, since)) ?? false,
   inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
   hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
-  runNow: async (id, trigger) => {
+  runNow: async (id, trigger, expectedSchedule) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;
-    return scheduler.runNow(id, { trigger });
+    return scheduler.runNow(id, { trigger, expectedSchedule, deferToCaller: Boolean(expectedSchedule.prTrigger) });
   },
   log,
 });
 /** Re-read current facts before running the existing follow-up gate. No new agent task. */
+export async function refreshSchedulePr(url: string): Promise<void> {
+  if (!prStatusService) throw new Error('HOST_NOT_READY');
+  const [, owner, repo, , number] = new URL(url).pathname.split('/');
+  const [result] = await prStatusService.getStatuses([{ owner: owner!, repo: repo!, prNumber: Number(number) }],
+    { waitForFresh: true, refresh: true });
+  if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
+}
+
 export async function githubPrHeads(urls: readonly string[]): Promise<Record<string, string>> {
   if (!prStatusService) throw new Error('HOST_NOT_READY');
   return cachedGithubPrHeads(prStatusService, urls);
@@ -238,6 +249,7 @@ export function registerGitContextIpc(): void {
     staleTtlMs: 0,
     eventCacheTtlMs: query => query.provider !== 'gitlab' && getScheduleWebhookHost()?.githubEventsHealthy(sessionPrUrl(query))
       ? GITHUB_EVENT_CACHE_TTL_MS : undefined,
+    onInvalidated: () => prFollowWatch.reset(),
     onObserved: (query, result) => prFollowWatch.observe(query, result),
   });
   app.on('browser-window-focus', () => {

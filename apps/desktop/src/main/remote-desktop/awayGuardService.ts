@@ -2,12 +2,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { release as osRelease } from 'node:os';
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor, powerSaveBlocker, screen } from 'electron';
+import type { DesktopPermissionStatus } from '@cindy/device-link';
 import { createLogger } from '../logger';
 import { t } from '../i18n.desktop';
 import { onQuit } from '../lifecycle';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { requireBoolean, throwIpcError } from '../utils/ipcValidate';
-import { AwayGuardController, consoleSessionLocked, parseWindowsDisplayOffMs } from './awayGuard';
+import { AwayGuardController, awayGuardFailure, consoleSessionLocked, parseWindowsDisplayOffMs } from './awayGuard';
 import {
   verifyDesktopOwner,
   lockDesktopScreen,
@@ -20,6 +21,7 @@ import { keepAwakeController } from '../device-link/power-blocker';
 import { PrivacyScreen } from './privacyScreen';
 import { installAwayGuardShortcut } from './awayGuardShortcut';
 import { privacyScreenHtml } from './privacyScreenHtml';
+import { macPermissionAppPath } from '../../shared/macControlPermission';
 import {
   AWAY_GUARD_GET_STATE_CHANNEL,
   AWAY_GUARD_PREVIEW_CHANNEL,
@@ -29,6 +31,7 @@ import {
   isAwayGuardDelaySeconds,
   isAwayGuardSupportedPlatform,
   type AwayGuardDelaySeconds,
+  type AwayGuardFailure,
   type AwayGuardPreviewResult,
   type AwayGuardState,
 } from '../../shared/awayGuard';
@@ -45,6 +48,7 @@ const LOCK_SCREEN_SETTLE_MS = 1500;
 export interface AwayGuardServiceDeps {
   /** Publish cover IDs to the shared remote-capture exclusion filter. */
   excludedWindows(ids: number[]): void;
+  notifyFailure(reason: AwayGuardFailure): void;
   enabled(): boolean;
   /** Chosen absence before the cover; null follows the system display-sleep time. */
   delaySeconds(): AwayGuardDelaySeconds | null;
@@ -446,6 +450,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
       masks.stop();
       restoreFront();
     },
+    notifyFailure: deps.notifyFailure,
     now: Date.now,
     log: (event, detail) => log.info(event, detail ?? {}),
   });
@@ -491,13 +496,18 @@ interface AwayGuardSettings {
   delaySeconds: AwayGuardDelaySeconds | null;
 }
 
-export async function readAwayGuardState(settings: AwayGuardSettings): Promise<AwayGuardState> {
+export async function readAwayGuardState(
+  settings: AwayGuardSettings,
+  knownPermission?: DesktopPermissionStatus,
+): Promise<AwayGuardState> {
   if (!privacyScreenAvailable())
     return { available: false, enabled: false, delaySeconds: null, permission: 'unknown' };
-  const status = await readDesktopInputPermission();
+  const status = knownPermission ?? await readDesktopInputPermission();
   return {
     available: true,
     enabled: settings.enabled,
+    permissionAppPath: macPermissionAppPath(process.platform, process.execPath),
+    backgroundFailure: settings.enabled ? controller?.backgroundFailure : undefined,
     delaySeconds: settings.delaySeconds,
     // Windows needs no Accessibility-style grant for the input guard.
     permission:
@@ -510,11 +520,13 @@ export async function readAwayGuardState(settings: AwayGuardSettings): Promise<A
 }
 
 /** Turning the guard on asks macOS for the input helper's Accessibility access once. */
-export async function prepareAwayGuardPermission(): Promise<void> {
-  if (!supportsAwayGuard() || (await readDesktopInputPermission()) !== 'missing') return;
+async function prepareAwayGuardPermission() {
+  const status = await readDesktopInputPermission();
+  if (status !== 'missing') return status;
   await requestDesktopInputPermission(() => true, AbortSignal.timeout(6000)).catch((error) =>
     log.warn('away guard permission request failed', error),
   );
+  return readDesktopInputPermission();
 }
 
 /** Settings → App behavior toggle. Local app renderer only; not a device-link capability. */
@@ -531,12 +543,12 @@ export function registerAwayGuardIpc(settings: {
     assertTrustedAppRendererEvent(event);
     const next = requireBoolean(enabled, 'enabled');
     if (!privacyScreenAvailable()) return readAwayGuardState(settings.read());
-    if (next) await prepareAwayGuardPermission();
+    const permission = next && supportsAwayGuard() ? await prepareAwayGuardPermission() : undefined;
     settings.writeEnabled(next);
     keepAwakeController.setPrivacyScreen(privacyScreenEnabled());
     // Apply now: turning it off while covered locks before the masks go.
     void controller?.tick();
-    return readAwayGuardState(settings.read());
+    return readAwayGuardState(settings.read(), permission);
   });
   ipcMain.handle(AWAY_GUARD_SET_DELAY_CHANNEL, async (event, delaySeconds: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -548,15 +560,17 @@ export function registerAwayGuardIpc(settings: {
   ipcMain.handle(AWAY_GUARD_PREVIEW_CHANNEL, async (event): Promise<AwayGuardPreviewResult> => {
     assertTrustedAppRendererEvent(event);
     if (!supportsAwayGuard() || !controller) return { ok: false, reason: 'unavailable' };
-    await prepareAwayGuardPermission();
-    const permission = await readDesktopInputPermission();
-    if (permission !== 'granted' && permission !== 'notRequired')
-      return { ok: false, reason: 'permission' };
+    const permission = await prepareAwayGuardPermission();
+    if (permission === 'missing') return { ok: false, reason: 'permission' };
+    if (permission === 'unknown') return { ok: false, reason: 'checkFailed' };
     const target = controller;
     // The click that asked for this must not count as someone touching the Mac.
-    setTimeout(() => {
-      void target.preview().catch((error) => log.warn('away guard preview failed', error));
-    }, AWAY_GUARD_PREVIEW_DELAY_MS);
-    return { ok: true };
+    await new Promise<void>((resolve) => setTimeout(resolve, AWAY_GUARD_PREVIEW_DELAY_MS));
+    try {
+      return await target.preview() ? { ok: true } : { ok: false, reason: 'unavailable' };
+    } catch (error) {
+      log.warn('away guard preview failed', error);
+      return { ok: false, reason: awayGuardFailure(error) };
+    }
   });
 }

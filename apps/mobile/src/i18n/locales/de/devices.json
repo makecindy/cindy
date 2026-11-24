@@ -1,5 +1,29 @@
 {
+  "widgetGuideAction": "Widget hinzufügen",
+  "widgetGuideIntro": "Widgets sind kleine Karten auf deinem Startbildschirm. So siehst du dein restliches Kontingent und den heutigen Tokenverbrauch, ohne Cindy zu öffnen.",
+  "widgetGuideExample": "Ein Cindy-Widget neben App-Symbolen auf dem Startbildschirm.",
+  "widgetGuidePicker": "Bearbeiten → Widget hinzufügen",
+  "widgetGuideIOS": "Halte eine freie Stelle auf dem Home-Bildschirm gedrückt und tippe auf {{picker}}.\n\nSuche nach Cindy, wähle „Abo-Kontingent“ oder „Tägliche Nutzung“ und tippe auf „Widget hinzufügen“.",
+  "widgetGuideAndroid": "Halte eine freie Stelle auf dem Startbildschirm gedrückt und tippe auf „Widgets“.\n\nSuche Cindy und ziehe „Abo-Kontingent“ oder „Tägliche Nutzung“ auf den Startbildschirm.",
+  "widgetGuideHome": "Home-Bildschirm",
+  "widgetGuideLock": "Sperrbildschirm",
+  "widgetGuideLockIOS": "Auch auf dem Sperrbildschirm: Halte ihn gedrückt und tippe auf „Anpassen“.",
+  "widgetGuideDismiss": "Verstanden",
+  "usageOther": "Sonstige",
+  "usageTitle": "Nutzungsübersicht",
+  "usageOnlyDevice": "Nur {{name}}",
+  "usagePlans": "Verbleibende Kontingente",
+  "usageBudget": "Verbleibendes Periodenbudget",
+  "usageWaiting": "Kontingente und heutige Nutzung erscheinen, sobald dein Computer verbunden ist",
+  "usageUpdateDesktop": "Aktualisiere Cindy auf deinem Computer, um die Nutzung zu sehen",
+  "usageWaitingTitle": "Deine Nutzung erscheint hier",
+  "usageWaitingCopy": "Sobald dein Smartphone mit deinem Computer verbunden ist, werden Kontingente und tägliche Nutzung aller Konten automatisch synchronisiert – meist innerhalb weniger Sekunden.",
+  "usageUpdateDesktopTitle": "Aktualisiere Cindy auf deinem Computer",
+  "usageUpdateDesktopCopy": "Die Cindy-Version auf deinem Computer ist zu alt, um die Nutzung an dein Smartphone zu senden. Nach dem Update erscheint sie hier automatisch.",
   "management": {
+    "addCloud": "Cloud-Computer hinzufügen",
+    "preparingCloud": "Cloud-Computer wird vorbereitet",
+    "manageCloud": "Cloud-Computer verwalten",
     "title": "Geräteverwaltung",
     "openDevice": "Details zu {{name}} anzeigen",
     "details": "Gerätedetails",
@@ -8,7 +32,7 @@
     "notFound": "Dieses Gerät gehört nicht mehr zu deinem Konto.",
     "deleteDevice": "Gerät löschen",
     "deleteTitle": "{{name}} löschen?",
-    "deleteMessage": "Dieses Gerät aus deinem Konto entfernen und den Fernzugriff trennen. Seine Sitzungen und Dateien bleiben erhalten. Melde dich auf dem Gerät erneut an, um es wieder hinzuzufügen.",
+    "deleteMessage": "Dieses Gerät aus deinem Konto entfernen und den Fernzugriff trennen. Seine Sitzungen und Dateien bleiben erhalten. Tippe auf dem Gerät auf „Wieder beitreten“, um es zurückzuholen.",
     "deleteFailed": "Das Gerät konnte nicht gelöscht werden.",
     "deleteOnline": "Dieser Server unterstützt das Entfernen von Online-Geräten noch nicht. Versuche es nach der Aktualisierung des Dienstes erneut.",
     "deleteRejectedWhileOffline": "Das Gerät konnte nicht gelöscht werden: Der Server führt es noch als online, obwohl es hier als offline angezeigt wird.",
@@ -369,6 +393,7 @@
       "showDeviceTasks": "Aufgaben anzeigen",
       "openDevice": "Öffnen",
       "renameDevice": "Umbenennen",
+      "groupDevice": "Gerät",
       "groupProject": "Projekt",
       "sortBy": {
         "priority": "Priorität",
@@ -410,11 +435,15 @@
       "showCollapsedTeammateAvatars": "Avatare im eingeklappten Zustand anzeigen",
       "displayHeading": "Anzeige",
       "view": {
+        "card": "Karten",
         "text": "Text",
         "list": "Liste"
       },
       "taskInfoHeading": "Aufgabeninfo",
       "taskInfo": {
+        "teammate": "Avatar des Freundes",
+        "project": "Projektsymbol und -name",
+        "harness": "Harness-Symbol",
         "time": "Zeit",
         "pr": "PR-Status",
         "tokens": "Tokens",
@@ -425,6 +454,7 @@
       "filterEmptyCopy": "Passe die Filter in den Anzeigeeinstellungen an oder setze sie zurück.",
       "filterTeammatesHeading": "Freunde",
       "filterAnySource": "Alle",
+      "filterHideAutomations": "Automatisierte Aufgaben ausblenden",
       "filterHideAllTeammates": "Alle ausblenden",
       "filterSelectedTeammates": "{{count}} ausgewählt",
       "inbox": {
@@ -445,13 +475,13 @@
         "thisEvening": "Heute Abend",
         "tomorrow": "Morgen",
         "nextWeek": "Nächste Woche",
+        "indefinite": "Unbefristet",
         "custom": "Benutzerdefiniert…",
         "invalidTime": "Wähle einen zukünftigen Zeitpunkt innerhalb eines Jahres."
       },
       "taskListMode": {
-        "heading": "Aufgabenmodus",
-        "tasks": "Aufgabenliste",
-        "inbox": "Posteingang"
+        "enterInbox": "Zum Posteingang",
+        "leaveInbox": "Zur Aufgabenliste"
       }
     },
     "search": {

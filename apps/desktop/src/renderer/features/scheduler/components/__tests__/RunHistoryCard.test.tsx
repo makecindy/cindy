@@ -128,12 +128,27 @@ describe('RunHistoryCard 会话引用状态', () => {
 });
 
 describe('RunHistoryCard 前置检查结果', () => {
+  // Issue 8351: unit/DOM, real history card. A passed hook must not hide a later
+  // undispatched skip; the previous tests only covered hook-driven skips.
+  it('shows queue-timeout recovery even when the pre-run hook passed', () => {
+    const resultText = '[QUEUE_WAIT_TIMEOUT] Prompt not dispatched within 30min. Use Run now after the session is idle.';
+    renderRun({ id: 'queue-timeout', scheduleId: 'schedule-1', sessionId: 'busy-task',
+      firedAt: 1, finishedAt: 1_800_001, status: 'skipped', readAt: 1_800_001, resultText,
+      preRunHookResult: { status: 'passed', decision: 'run', durationMs: 1, exitCode: 0, timedOut: false, aborted: false,
+        stdout: '', stderr: '', stdoutTruncated: false, stderrTruncated: false },
+    });
+    expect(screen.getByText(resultText, { exact: false })).toBeTruthy();
+    expect(screen.getByText('scheduler.runs.queueWaitTimeoutRecovery')).toBeTruthy();
+    expect(screen.getByText('scheduler.runs.status.skipped')).toBeTruthy();
+    expect(screen.queryByText('chat.unreadFailedScheduleBanner.text')).toBeNull();
+  });
+
   // A failed model selection is persisted in errorMsg, not an agent message.
   // Verify this separate consumer also hides technical text behind details.
-  it('shows switch guidance with expandable diagnostics in failed run history', () => {
+  it.each(['', 'scheduled task auto-resume failed: '])('shows switch guidance with expandable diagnostics in failed run history (%s)', (prefix) => {
     renderRun({ id: 'run-selection', scheduleId: 'schedule-1', firedAt: 1,
       finishedAt: 2, status: 'failed', readAt: 2,
-      errorMsg: '[MODEL_SELECTION_UNAVAILABLE] Scheduled model test is unavailable' });
+      errorMsg: prefix + '[MODEL_SELECTION_UNAVAILABLE] Scheduled model test is unavailable' });
     expect(screen.getByText('chat.remoteError.MODEL_SELECTION_UNAVAILABLE')).toBeTruthy();
     expect(screen.queryByText(/Scheduled model test/)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));

@@ -1,12 +1,17 @@
-/** Settings → App behavior → Keep working while away (macOS). Local app renderer only. */
+export type AwayGuardFailure = 'permission' | 'unavailable';
+
+/** Settings → General → While away. Local app renderer only. */
 export interface AwayGuardState {
-  /** macOS 14+ only; other platforms hide the setting. */
+  /** The local platform has a supported privacy screen backend. */
   available: boolean;
   enabled: boolean;
   /** Seconds of absence before the cover; null follows the system display-sleep time. */
   delaySeconds: AwayGuardDelaySeconds | null;
   /** Accessibility access of the input helper that turns local input into the lock. */
   permission: 'granted' | 'missing' | 'unknown';
+  /** Local settings only. Distinguishes installed copies with the same display name. */
+  permissionAppPath?: string;
+  backgroundFailure?: AwayGuardFailure;
 }
 
 export const AWAY_GUARD_DELAY_OPTIONS = [30, 60, 120, 300] as const;
@@ -23,7 +28,7 @@ export const AWAY_GUARD_PREVIEW_CHANNEL = 'away-guard:preview';
 /** Lets the hand that clicked "Try it" leave the mouse before physical input means "lock". */
 export const AWAY_GUARD_PREVIEW_DELAY_MS = 3_000;
 
-export type AwayGuardPreviewResult = { ok: true } | { ok: false; reason: 'permission' | 'unavailable' };
+export type AwayGuardPreviewResult = { ok: true } | { ok: false; reason: AwayGuardFailure | 'checkFailed' };
 
 /** macOS 14 使用 Darwin 23；preload 与 main 共用内核版本，避免两端可用性漂移。 */
 export function isAwayGuardSupportedPlatform(platform: string, osRelease: string): boolean {

@@ -1,6 +1,8 @@
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import type { ModelGroupSelection } from '../../../../shared/modelGroups';
 import * as Dialog from '@radix-ui/react-dialog';
 import { CalendarClock, FolderOpen, Info, Maximize2, Minimize2, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -13,6 +15,8 @@ import {
   type ScheduleWebhookPresetId,
 } from '@cindy/maker-scheduler/webhook-formats';
 import { PreRunPluginFields } from './PreRunPluginFields';
+import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../../shared/projectAutomationPaths';
+import { teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
@@ -21,6 +25,9 @@ import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
+import { Select } from '@/components/ui/select';
+import { PR_CHANGES, type PrChange } from '@cindy/maker-scheduler/pr-trigger';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -66,6 +73,8 @@ import {
 } from '../lib/scheduleFormLogic';
 import type { RunMode, ScheduleFormState } from '../hooks/useScheduleForm';
 import { BoundSessionCard } from './BoundSessionCard';
+import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { resolveActivePluginEngine, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import { TemplateGallery } from './TemplateGallery';
 import { TemplateParamForm } from './TemplateParamForm';
 import {
@@ -166,7 +175,7 @@ export function ScheduleFormDialog({
     );
     return () => { current = false; };
   }, []);
-  const { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
+  const { form, setField, selectModelConfiguration, selectPluginEngine, selectModelGroup, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
   // 此时目录 / worktree / fastMode 由绑定会话决定,表单隐藏对应字段。
@@ -303,6 +312,43 @@ export function ScheduleFormDialog({
   const isTemplateMode = mode === 'gallery' || !!selectedTemplate;
   // script/agent 双执行模式的唯一判别常量——所有条件渲染共用,避免散拷漂移
   const isScriptMode = (form.executionMode ?? 'agent') === 'script';
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)只给每次新建任务、在本机运行的 Agent 自动任务：绑定 / 持续会话、
+  // 脚本、伙伴例行任务与项目自动化(随代码提交给所有成员，插件只装在这台电脑上)都不提供。
+  const pluginEnginesAllowed = runMode === 'fresh' && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
+  const pluginEngineList = usePluginEngines(pluginEnginesAllowed || !!form.pluginEngine);
+  const pluginEngineChoice = pluginEnginesAllowed ? form.pluginEngine ?? null : null;
+  const pluginEngineUnavailable = !!pluginEngineChoice && !resolveActivePluginEngine(pluginEngineList, pluginEngineChoice);
+  const schedulePluginEngines = useMemo(
+    () => pluginEnginesAllowed && pluginEngineList.length
+      ? {
+          engines: pluginEngineList,
+          active: pluginEngineChoice,
+          onSelect: (selection: PluginEngineSelection) => {
+            const effort = selection.effort ?? pluginEngineChoice?.effort;
+            selectPluginEngine({ providerId: selection.providerId, modelId: selection.modelId, ...(effort ? { effort } : {}) });
+          },
+        }
+      : undefined,
+    [pluginEnginesAllowed, pluginEngineList, pluginEngineChoice, selectPluginEngine],
+  );
+  // 模型组(model-groups.md §6.3)：新建任务时按模式选来源。脚本不跑 Agent，不提供；记住的模式后来被删掉时按没选处理。
+  const modelGroupsAllowed = !isScriptMode;
+  const navigateToModelGroups = useNavigate();
+  const { config: modelGroupsConfig } = useModelGroups(modelGroupsAllowed);
+  const scheduleModelGroupId = form.modelGroup;
+  const scheduleModelGroups = useMemo(
+    () => modelGroupsAllowed
+      ? {
+          config: modelGroupsConfig,
+          active: scheduleModelGroupId && modelGroupsConfig.routes.some((route) => route.id === scheduleModelGroupId)
+            ? { type: 'route' as const, id: scheduleModelGroupId }
+            : null,
+          onSelect: (selection: ModelGroupSelection) => selectModelGroup(selection.id),
+          onManage: () => navigateToModelGroups('/settings?tab=model-groups'),
+        }
+      : undefined,
+    [modelGroupsAllowed, modelGroupsConfig, scheduleModelGroupId, selectModelGroup, navigateToModelGroups],
+  );
   // 项目自动化的配置文件不保存插件前置检查(插件装在各自的电脑上),只提供脚本。
   const usePluginSource = form.preRunSource === 'plugin' && !isProjectAutomationMode;
   const setPreRunPluginId = useCallback((pluginId: string) => setField('preRunPluginId', pluginId), [setField]);
@@ -310,9 +356,15 @@ export function ScheduleFormDialog({
     ? t('scheduler.editor.promptDialog.save')
     : t('scheduler.editor.promptDialog.create');
   // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
-  const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  const triggerMode = form.prEnabled ? 'pr' : form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
   const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
 
+  const maybeTeammateSchedule = isProjectAutomationMode && !!initial?.projectConfigId
+    && !!teammateFolderOfProjectPath(projectWorkingDir);
+  const [ownTeammateProject, setOwnTeammateProject] = useState<string | null>(null);
+  const isTeammateSchedule = maybeTeammateSchedule && ownTeammateProject === projectWorkingDir;
+  const [teammateModelReady, setTeammateModelReady] = useState(false);
+  const [teammateModelReadError, setTeammateModelReadError] = useState(false);
   const initialId = initial?.id;
   useEffect(() => {
     if (!open) return;
@@ -345,6 +397,35 @@ export function ScheduleFormDialog({
     initialWorkingDir,
     setField,
   ]);
+
+  const teammateModelReadFailedText = t('scheduler.editor.reviewModelReadFailed');
+  // Read the durable opt-in, never infer it from an empty model or a matching snapshot.
+  useEffect(() => {
+    if (!open || !maybeTeammateSchedule || !projectWorkingDir) return;
+    let current = true;
+    setOwnTeammateProject(null);
+    setTeammateModelReady(false);
+    setTeammateModelReadError(false);
+    void window.electronAPI.localDb.bots.ownsProject(projectWorkingDir).then(async ownsProject => {
+      if (!current) return;
+      if (!ownsProject) { setTeammateModelReady(true); return; }
+      const result = await window.electronAPI.fileBrowser.readFile({
+        workdir: projectWorkingDir, relPath: PROJECT_AUTOMATION_REL_SEGMENTS.join('/'),
+      });
+      if (!result.ok || result.data.truncated) throw new Error('unreadable config');
+      const file = JSON.parse(result.data.content);
+      const config = file.version === 1 && Array.isArray(file.schedules)
+        ? file.schedules.find((item: { id?: string }) => item.id === initial?.projectConfigId) : null;
+      if (!config) throw new Error('missing automation');
+      if (!current) return;
+      setOwnTeammateProject(projectWorkingDir);
+      setField('followTeammateModel', config.followTeammateModel === true && !config.model?.trim());
+      setTeammateModelReady(true);
+    }).catch(() => {
+      if (current) setTeammateModelReadError(true);
+    });
+    return () => { current = false; };
+  }, [open, maybeTeammateSchedule, projectWorkingDir, initial, initialId, initial?.projectConfigId, setField]);
 
   /** 前置检查「AI 生成」:描述 → utility model 生成脚本落盘 → 命令回填输入框。 */
   const runHookGenerate = useCallback(async () => {
@@ -621,7 +702,9 @@ export function ScheduleFormDialog({
     caps.capabilities, claudeDefaultCaps.capabilities, codexDefaultCaps.capabilities, piDefaultCaps.capabilities,
     form.agentKind, form.model, form.providerId, form.effort, setField]);
 
-  const modelUnavailable = !isScriptMode && modelCatalogReady && (
+  // 选着插件引擎时内置模型字段只是切回内置时的初值，不参与可用性判断(插件引擎另判，见下)。
+  // 选着还在的模式时同理：新建任务由模式选来源，存下的具体模型只在模式被删后才用。
+  const modelUnavailable = !isScriptMode && !pluginEngineChoice && !scheduleModelGroups?.active && modelCatalogReady && (
     (!!form.model.trim() && (
       (agentsLoaded && !availableVendors.has(form.agentKind === 'claude-code' ? 'cc' : form.agentKind))
       || (!legacyRemoteCatalog && !effectiveSourceIdForModel(providers, form.providerId || null, form.model, form.agentKind))
@@ -669,7 +752,7 @@ export function ScheduleFormDialog({
     && (!modelCatalogReady || defaultCapabilitiesLoading || (!agentsLoaded && agentsLoading));
 
   const handleSubmit = async () => {
-    if (awaitingNewModelCatalog) return;
+    if (awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)) return;
     setSubmitError(null);
     const err = validate();
     if (err) {
@@ -688,6 +771,11 @@ export function ScheduleFormDialog({
     }
     if (modelUnavailable) {
       toast.warning(t('scheduler.editor.validation.modelUnavailable', { model: form.model }));
+      return;
+    }
+    // 选的插件引擎已停用、卸载或报告不可用：不保存，也不悄悄换成内置模型。
+    if (pluginEngineUnavailable) {
+      toast.warning(t('scheduler.editor.validation.pluginEngineUnavailable'));
       return;
     }
     if (isProjectAutomationMode && projectWorkingDir) {
@@ -762,7 +850,7 @@ export function ScheduleFormDialog({
     <Dialog.Root open={open} onOpenChange={(v) => !submitting && onOpenChange(v)}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className={cn('modal-scrim fixed inset-0 z-[10000]')}
+          className={cn('modal-scrim fixed inset-0 z-modal')}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
@@ -778,7 +866,7 @@ export function ScheduleFormDialog({
             }
           }}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'flex h-[640px] max-h-[88vh] w-[760px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -786,7 +874,7 @@ export function ScheduleFormDialog({
           {/* 展开编辑时这些内容被盖在下面:inert 让 Tab 与读屏都停在展开层里。 */}
           <header
             inert={promptExpanded || undefined}
-            className="flex min-h-[72px] shrink-0 items-center gap-4 pt-[18px] pr-4 pb-[14px] pl-6"
+            className="flex min-h-[72px] shrink-0 items-center gap-4 pt-4 pr-4 pb-3.5 pl-6"
           >
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <Dialog.Title className="text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
@@ -845,7 +933,7 @@ export function ScheduleFormDialog({
           {!isEdit && !isProjectAutomationMode && mode === 'gallery' ? (
             <div
               inert={promptExpanded || undefined}
-              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-[22px]"
+              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-5"
             >
               <TemplateGallery onSelect={applyTemplateToForm} selectedId={selectedTemplate?.id} />
             </div>
@@ -861,6 +949,7 @@ export function ScheduleFormDialog({
                     })}
                   />
                 )}
+                {maybeTeammateSchedule && teammateModelReadError && <ErrorNotice message={teammateModelReadFailedText} />}
                 {submitError && (
                   <ErrorNotice
                     message={t(`chat.remoteError.${parseAgentErrorCode(submitError)?.code}`)}
@@ -962,7 +1051,8 @@ export function ScheduleFormDialog({
                                     onChangeDestination={setDestination}
                                   />
                                 )}
-                                {!hideWorkspaceFields && form.workspaceKind === 'project' && (
+                                {/* 插件引擎任务不用 worktree(引擎只拿到任务工作目录)。 */}
+                                {!hideWorkspaceFields && form.workspaceKind === 'project' && !pluginEngineChoice && (
                                   <>
                                     <div className="w-0.5 shrink-0" aria-hidden />
                                     <ScheduleSettingsButton
@@ -974,6 +1064,16 @@ export function ScheduleFormDialog({
                                 )}
                                 <div className="min-w-0 flex-1" />
                                 <ModelEffortChip
+                                  disabled={maybeTeammateSchedule && !teammateModelReady}
+                                  followModel={isTeammateSchedule ? {
+                                    active: form.followTeammateModel === true && !form.model.trim(),
+                                    label: t('scheduler.chips.model.followTeammate'),
+                                    onFollow: () => {
+                                      selectModelConfiguration(null);
+                                      setField('followTeammateModel', true);
+                                    },
+                                  } : undefined}
+                                  hostOnly={!!form.primaryHostKey}
                                   onSelect={({
                                     engine,
                                     modelId,
@@ -1002,13 +1102,15 @@ export function ScheduleFormDialog({
                                   agentKind={form.agentKind}
                                   agentDeviceId={selectedAgentDeviceId ?? undefined}
                                   modelValue={form.model}
-                                  onChangeModel={(v) => setField('model', v)}
+                                  onChangeModel={(v) => { setField('model', v); setField('followTeammateModel', false); setField('modelGroup', undefined); }}
                                   effortValue={form.effort}
                                   onChangeEffort={(v) => setField('effort', v)}
                                   followSession={isBound}
                                   providerId={form.providerId}
-                                  onChangeProviderId={(v) => setField('providerId', v)}
+                                  onChangeProviderId={(v) => { setField('providerId', v); setField('modelGroup', undefined); }}
                                   onNavigateToProviders={() => navigate('/settings?tab=providers')}
+                                  {...(schedulePluginEngines ? { pluginEngines: schedulePluginEngines } : {})}
+                                  {...(scheduleModelGroups ? { modelGroups: scheduleModelGroups } : {})}
                                   fastMode={form.fastMode}
                                   onChangeFast={(v) => {
                                     setField('fastMode', v);
@@ -1169,12 +1271,14 @@ export function ScheduleFormDialog({
                           onValueChange={(mode) => {
                             if (mode === triggerMode) return;
                             preserveTriggerScrollPosition();
+                            if (mode === 'pr' || form.prEnabled) setField('prEnabled', mode === 'pr');
                             setField('webhookEnabled', mode === 'webhook');
                             setField('manual', mode !== 'automatic');
                             setField('recurring', mode !== 'manually');
                           }}
                           options={[
                             { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
+                            ...(!isProjectAutomationMode ? [{ value: 'pr', label: t('scheduler.prTrigger.label') }] : []),
                             { value: 'manually', label: t('scheduler.editor.fields.manually') },
                             ...(!isProjectAutomationMode && (webhookReceiverReady || form.webhookEnabled)
                               ? [{ value: 'webhook', label: t('scheduler.cell.tagWebhook'), disabled: !webhookReceiverReady }]
@@ -1231,7 +1335,7 @@ export function ScheduleFormDialog({
                               align="end"
                               sideOffset={8}
                               collisionPadding={16}
-                              className="z-[10010] w-[320px] max-w-[calc(100vw-32px)]"
+                              className="w-[320px] max-w-[calc(100vw-32px)]"
                             >
                               <FormField
                                 label={t('scheduler.deadline.label')}
@@ -1265,6 +1369,30 @@ export function ScheduleFormDialog({
                           </Popover>
                         )}
                       </div>
+                      {form.prEnabled && (
+                        <div className="flex flex-col gap-3">
+                          <FormField label={t('scheduler.prTrigger.url')}>
+                            {(control) => <Input {...control} value={form.prUrl ?? ''} onChange={value => setField('prUrl', value)}
+                              placeholder="https://github.com/owner/repo/pull/123" />}
+                          </FormField>
+                          <GithubAppCard automation timedPrCheck={!form.manual} repositories={[(form.prUrl ?? '').split('/').slice(3, 5).join('/')]} />
+                          <FormField label={t('scheduler.prTrigger.condition')}>
+                            {(control) => <Select {...control} label={t('scheduler.prTrigger.condition')} value={form.prChange ?? 'any'}
+                              options={PR_CHANGES.map(value => ({ value, label: t(`scheduler.prTrigger.${value}`) }))}
+                              onValueChange={value => setField('prChange', value as PrChange)} />}
+                          </FormField>
+                          <label className="flex items-center gap-2 text-13 text-[var(--text-primary)]">
+                            <Checkbox checked={!form.manual} onChange={event => {
+                              const enabled = event.currentTarget.checked;
+                              setField('manual', !enabled);
+                              if (enabled) setField('recurring', true);
+                            }} />
+                            {t('scheduler.prTrigger.timed')}
+                          </label>
+                          {!form.manual && <ScheduleChip cronExpr={form.cronExpr} intervalMs={form.intervalMs}
+                            onChangeSchedule={value => { setField('cronExpr', value.cronExpr); setField('intervalMs', value.intervalMs); }} />}
+                        </div>
+                      )}
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
                       {webhookSettingsVisible && form.webhookPreset !== 'github-app' && <WebhookAccountManager allowOpenSchedule={false} />}
                       {webhookSettingsVisible && (
@@ -1328,7 +1456,7 @@ export function ScheduleFormDialog({
                                   : 'scheduler.editor.preRunHook.tooltip',
                               )}
                               side="top"
-                              contentClassName="z-[10020]"
+                              contentClassName="z-modal-popover-nested"
                             >
                               <span
                                 tabIndex={0}
@@ -1713,7 +1841,7 @@ export function ScheduleFormDialog({
                     : t('scheduler.editor.promptDialog.createAria')
                 }
                 onClick={() => void handleSubmit()}
-                disabled={submitting || awaitingNewModelCatalog}
+                disabled={submitting || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)}
                 className="min-w-[68px] shrink-0"
               >
                 {submitLabel}
@@ -1724,9 +1852,9 @@ export function ScheduleFormDialog({
             <div
               role="group"
               aria-label={t('scheduler.editor.fields.prompt')}
-              className="absolute inset-0 z-10 flex flex-col bg-[var(--confirm-bg)]"
+              className="absolute inset-0 z-raised flex flex-col bg-[var(--confirm-bg)]"
             >
-              <header className="flex min-h-[72px] shrink-0 items-center gap-4 px-6 pt-[18px] pb-[14px]">
+              <header className="flex min-h-[72px] shrink-0 items-center gap-4 px-6 pt-4 pb-3.5">
                 <p className="min-w-0 flex-1 text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
                   {t('scheduler.editor.fields.prompt')}
                 </p>

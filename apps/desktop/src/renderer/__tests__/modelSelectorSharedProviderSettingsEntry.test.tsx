@@ -58,6 +58,8 @@ const catalogs = vi.hoisted(() => {
     ...extra,
   });
   return {
+    shareError: null as string | null,
+    shareLoading: false,
     local: [provider('a-local', 'A Local', 'a-model')] as unknown[],
     byDevice: {
       'device-b': [provider('b-main', 'B Main', 'b-model')],
@@ -67,6 +69,12 @@ const catalogs = vi.hoisted(() => {
   };
 });
 
+const shareState = vi.hoisted(() => ({ received: [] as Array<Record<string, unknown>> }));
+vi.mock('@/features/provider-share/providerShareStore', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/features/provider-share/providerShareStore')>()),
+  useProviderShareReceived: () => ({ received: shareState.received, loaded: true }),
+}));
+
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({ providers: catalogs.local, providerOrder: [] }),
 }));
@@ -74,9 +82,9 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
   evictDeviceProviders: vi.fn(),
   prefetchDeviceProviders: vi.fn(async () => {}),
   useDeviceProviders: (deviceId?: string) => ({
-    providers: deviceId ? (catalogs.byDevice[deviceId] ?? []) : [],
-    loading: false,
-    error: null,
+    providers: deviceId === 'share:abc' && (catalogs.shareError || catalogs.shareLoading) ? [] : deviceId ? (catalogs.byDevice[deviceId] ?? []) : [],
+    loading: deviceId === 'share:abc' && catalogs.shareLoading,
+    error: deviceId === 'share:abc' ? catalogs.shareError : null,
     unsupported: false,
   }),
 }));
@@ -85,7 +93,9 @@ vi.mock('@/hooks/useDevicesProviders', () => ({
     new Map(
       deviceIds.map((deviceId) => [
         deviceId,
-        { providers: catalogs.byDevice[deviceId] ?? [], loading: false, error: null },
+        { providers: deviceId === 'share:abc' && (catalogs.shareError || catalogs.shareLoading) ? [] : catalogs.byDevice[deviceId] ?? [],
+          loading: deviceId === 'share:abc' && catalogs.shareLoading,
+          error: deviceId === 'share:abc' ? catalogs.shareError : null },
       ]),
     ),
 }));
@@ -105,6 +115,7 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 }));
 
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
 import { __resetForTest as resetFavorites } from '@/state/modelFavorites';
 
@@ -120,22 +131,22 @@ function renderPanel(
   props: Partial<ModelSelectorContentBaseProps> = {},
 ) {
   const onNavigateToProviders = vi.fn();
-  render(
-    React.createElement(ModelSelectorContent, {
+  const onUnifiedSelect = vi.fn(async () => true);
+  const panel = () => React.createElement(ModelSelectorContent, {
       modelId: 'a-model',
       effort: 'high',
       onModelChange: vi.fn(),
       onEffortChange: vi.fn(),
       currentProviderId: 'a-local',
       onProviderChange: vi.fn(),
-      onUnifiedSelect: vi.fn(async () => true),
+      onUnifiedSelect,
       vendorKey: 'cc',
       onNavigateToProviders,
       remoteAgent: { devices: [studio, share], selectedDeviceId: null, ...remoteAgent },
       ...props,
-    }),
-  );
-  return { onNavigateToProviders };
+    });
+  const result = render(panel());
+  return { onNavigateToProviders, onUnifiedSelect, refresh: () => result.rerender(panel()) };
 }
 
 async function browse(name: string) {
@@ -145,6 +156,11 @@ async function browse(name: string) {
 }
 
 beforeEach(() => {
+  catalogs.shareError = null;
+  catalogs.shareLoading = false;
+  catalogs.byDevice['share:abc'] = [{ ...(catalogs.byDevice['share:abc'][0] as object), connected: true, hidden: false }];
+  shareState.received = [];
+  vi.clearAllMocks();
   resetEnginePrefs();
   resetFavorites();
 });
@@ -154,6 +170,52 @@ afterEach(() => {
 });
 
 describe('模型面板底部「配置模型」', () => {
+  // Unit / #10826: a known share with no cached catalog must expose retry and
+  // recover selection. Existing fixtures only exercised already-loaded shares.
+  it('keeps a first-load failed share browsable and selects its model after retry', async () => {
+    catalogs.shareError = 'share catalog unavailable';
+    const panel = renderPanel();
+    await browse(share.name);
+    expect(screen.getByRole('alert').textContent).toContain('newChat.modelSelector.remoteLoadFailed');
+    await browse('newChat.modelSelector.retryRemoteModels');
+    expect(prefetchDeviceProviders).toHaveBeenCalledWith('share:abc');
+    catalogs.shareError = null;
+    catalogs.shareLoading = true;
+    panel.refresh();
+    expect(screen.getByRole('button', { name: share.name })).toBeTruthy();
+    catalogs.shareLoading = false;
+    panel.refresh();
+    expect(screen.queryByRole('alert')).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole('option', { name: 's-model high' })); });
+    expect(panel.onUnifiedSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 's-shared', modelId: 's-model', agentDevice: share,
+    }));
+  });
+  // Gap (2026-11-23 real run): once the sharer's computer went offline its provider read as
+  // disconnected, the share had no listed models and vanished from the rail, coming back with the
+  // owner's presence. Minimal input: an active share whose owner is offline and provider disconnected.
+  it('keeps a share whose owner computer is offline in the rail and explains it instead of an empty list', async () => {
+    catalogs.byDevice['share:abc'] = [{ ...(catalogs.byDevice['share:abc'][0] as object), connected: false }];
+    shareState.received = [{ shareId: 'abc', memberId: 'm', providerId: 's-shared', providerLabel: 'S Shared',
+      hostDeviceId: 'host', deviceName: 'Cindy', owner: { displayName: 'Magi', avatarUrl: null, region: 'global' },
+      status: 'active', hostOnline: false, hostCapable: false }];
+    renderPanel();
+    await browse(SHARE_CELL);
+    expect(screen.getAllByRole('status').some((node) => node.textContent?.includes('providerShare.received.offlineNote'))).toBe(true);
+    expect(screen.queryByText('newChat.modelSelector.search.noResults')).toBeNull();
+  });
+
+  // Review (#12246): keeping an offline share must not bring back a share its owner hid from the
+  // picker. Minimal input: the same offline share, with its provider marked hidden.
+  it('does not bring a hidden share back into the rail while its owner computer is offline', () => {
+    catalogs.byDevice['share:abc'] = [{ ...(catalogs.byDevice['share:abc'][0] as object), connected: false, hidden: true }];
+    shareState.received = [{ shareId: 'abc', memberId: 'm', providerId: 's-shared', providerLabel: 'S Shared',
+      hostDeviceId: 'host', deviceName: 'Cindy', owner: { displayName: 'Magi', avatarUrl: null, region: 'global' },
+      status: 'active', hostOnline: false, hostCapable: false }];
+    renderPanel();
+    expect(screen.queryByRole('button', { name: SHARE_CELL })).toBeNull();
+  });
+
   it('本机目录照旧显示，打开供应商页不带目标', () => {
     const { onNavigateToProviders } = renderPanel();
     fireEvent.click(screen.getByRole('button', { name: ENTRY }));

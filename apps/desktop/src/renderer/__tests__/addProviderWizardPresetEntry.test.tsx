@@ -65,6 +65,7 @@ import { UnifiedModelList } from '@/components/settings/UnifiedModelList';
 import { speechModels } from '../../main/voice-conversation/models';
 import { __resetForTest as resetVisibility, setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { createCustomProvider, updateCustomProvider, deleteCustomProvider, readCustomProviderKey } from '@/lib/customProviders';
+import { fetchProviderModels as fetchModelsThroughMain } from '../../main/maker-host/provider-model-fetch';
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn() }),
@@ -365,6 +366,31 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+it('uses two real HTTP reads for the Token Rhythm wizard three-engine discovery', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'tokenrhythm')!;
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry }));
+  const transport = vi.fn<typeof fetch>(async () => new Response('{"data":[{"id":"future-account-model"}]}'));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(input => fetchModelsThroughMain(input, transport));
+  renderWizard('tokenrhythm');
+  fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-tokenrhythm-key' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await screen.findByText('future-account-model');
+  expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledTimes(3);
+  expect(transport).toHaveBeenCalledTimes(2);
+  for (const [url, init] of transport.mock.calls) {
+    expect(String(url)).toBe('https://tokenrhythm.studio/v1/models');
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fake-tokenrhythm-key');
+  }
+  fireEvent.click(screen.getByText('future-account-model'));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const [saved, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    expect(saved.runtimes[agent]!.models.map(model => model.id)).toEqual(['future-account-model']);
+    expect(keys![agent]).toBe('fake-tokenrhythm-key');
+  }
+});
+
 // #8485 unit: the editable vLLM preset can discover Magpie, too. Existing form
 // tests skipped Wizard's per-engine picks and its two final config projections.
 // Minimal failure: a successful source response (or removal) was lost at save.
@@ -437,19 +463,21 @@ describe('Magpie sources through preset discovery', () => {
     }
   });
 
-  it.each(['finish', 'return'] as const)('lets refreshed sources replace old draft fields on %s, including successful removal', async action => {
+  it.each(['finish', 'return'] as const)('lets refreshed sources and pricing replace old draft fields on %s, including successful removal', async action => {
     const agents = ['codex', 'pi'] as const;
     const oldSource = { kind: 'magpie' as const, providerId: 'Old source', snapshotId: 'old-receipt' };
     const config: CustomProviderConfig = { id: 'draft', name: 'Gateway', auth: { method: 'none' }, runtimes: Object.fromEntries(
       agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat', models: [
-        { id: 'foo', name: 'Foo', opaqueModelId: true, discoveredSource: oldSource, discoverySnapshotId: 'old-receipt' },
+        { id: 'foo', name: 'Foo', opaqueModelId: true, discoveredSource: oldSource,
+          discoverySnapshotId: 'old-receipt', discoveredCost: { input: 2, output: 8 } },
       ] }]),
     ) };
     const preset = { id: 'vllm', name: 'vLLM', authMethod: 'none' as const, runtimes: Object.fromEntries(
       agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat' as const, baseUrlEditable: true, models: [] }]),
     ) };
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async ({ agent }) => ({ ok: true, models: [
-      { id: 'foo', name: 'Foo', discoverySnapshotId: `receipt-${agent}`, ...(agent === 'pi' ? { discoveredSource: source(agent) } : {}) },
+      { id: 'foo', name: 'Foo', discoverySnapshotId: `receipt-${agent}`,
+        ...(agent === 'pi' ? { discoveredSource: source(agent), discoveredCost: { input: 3, output: 15 } } : {}) },
     ] }));
     const onReturnCustom = vi.fn();
     render(<AddProviderWizard providers={[]} detected={{ agent: 'pi', apiKey: '', keys: {}, config, preset }}
@@ -472,6 +500,7 @@ describe('Magpie sources through preset discovery', () => {
       expect(model.opaqueModelId).toBe(true);
       expect(model.discoverySnapshotId).toBe(`receipt-${agent}`);
       expect(model.discoveredSource).toEqual(agent === 'pi' ? source(agent) : undefined);
+      expect(model.discoveredCost).toEqual(agent === 'pi' ? { input: 3, output: 15 } : undefined);
     }
   });
 });
@@ -754,6 +783,48 @@ it.each(['delayed', 'failed'] as const)('waits for a %s catalog before building 
 });
 
 describe('AddProviderWizard — preset 直达', () => {
+  // Unit: select the reviewed release after catalog recovery, both for a new install and an older install without ACP.
+  it.each(['not-installed', 'update-available'] as const)('opens the reviewed official engine release for %s', async installState => {
+    const { __resetInstalledGhostsStoreForTest } = await import('../cindy-brain/useInstalledGhosts');
+    __resetInstalledGhostsStoreForTest();
+    const action = installState === 'not-installed' ? 'settings.providers.wizard.installAndConfigure' : 'settings.ghosts.market.update';
+    const query = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ items: [], officialIds: ['tool'], totalOfficial: 2, nextCursor: 'next' }).mockResolvedValueOnce({
+      items: [{ name: 'Antigravity', ghostId: 'engine', pluginId: 'official-engine' }], officialIds: ['official-engine'], totalOfficial: null, nextCursor: 'community-only',
+    });
+    Object.assign(window.electronAPI, { pluginMarket: { officialModelPlugins: query, cancelOfficialModelPlugins: vi.fn().mockResolvedValue(undefined) } });
+    const detail = vi.fn().mockResolvedValue({ pluginId: 'official-engine', ghostId: 'engine', sourceType: 'server',
+      scope: 'public', publisherKind: 'official', releaseId: 'r1', installState, manifest: { harnesses: [{ protocol: 'acp' }] } });
+    const install = vi.fn().mockRejectedValue({ code: 'MUTATION_CANCELLED' });
+    Object.assign(window.electronAPI.pluginMarket, { detail, install });
+    const ghosts = installState === 'update-available' ? [{ manifest: { id: 'engine', version: '0.1.0' },
+      dir: '/plugins/engine', enabled: true, approval: { state: 'approved', revision: 'previous' } }] : [];
+    Object.assign(window.electronAPI, { ghosts: { listSync: () => ({ ghosts }), onChanged: () => () => {} } });
+    render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} showOfficialModelPlugins />);
+    await screen.findByText('settings.ghosts.market.unavailable');
+    expect(screen.getByText('DeepSeek')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.retryPlugin' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.contribution.loadMore' }));
+    await screen.findByText('Antigravity');
+    expect(screen.queryByText('settings.ghosts.market.unavailable')).toBeNull();
+    const search = screen.getByRole('textbox', { name: 'settings.providers.wizard.searchPlaceholder' });
+    fireEvent.change(search, { target: { value: 'deepseek' } });
+    expect(screen.queryByText('Antigravity')).toBeNull();
+    expect(screen.getByText('DeepSeek')).toBeTruthy();
+    fireEvent.change(search, { target: { value: 'antigravity' } });
+    expect(screen.queryByText('Image tool')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Antigravity/ }));
+    await screen.findByRole('button', { name: action });
+    expect(detail).toHaveBeenCalledWith('official-engine');
+    fireEvent.click(screen.getByRole('button', { name: action }));
+    await waitFor(() => expect(install).toHaveBeenCalledWith('official-engine', {
+      ...(installState === 'update-available' ? { expectedInstalledApproval: 'approved:previous' } : {}),
+      expectedReleaseId: 'r1', expectedManifest: { harnesses: [{ protocol: 'acp' }] }, allowSourceReplacement: false,
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    expect(screen.getByRole('textbox', { name: 'settings.providers.wizard.searchPlaceholder' })).toHaveProperty('value', 'antigravity');
+    expect(query.mock.calls).toEqual([[null], [null], ['next']]);
+  });
+
   it('opens custom configuration from the header and leaves only cancel below the list', async () => {
     const onOpenCustomForm = vi.fn();
     const onClose = vi.fn();
@@ -2740,4 +2811,32 @@ it('respects an explicitly empty live directory for a bundled search target', as
     onEntryUnavailable={unavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
   await waitFor(() => expect(unavailable).toHaveBeenCalledOnce());
   expect(screen.queryByDisplayValue('DeepSeek')).toBeNull();
+});
+
+it('offers one Google Gemini API setup and saves a shared key with all chat models unchecked', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!;
+  const legacy = { ...anthropicProvider, id: 'gemini', name: 'Google Gemini',
+    auth: { method: 'apiKey' }, imageModels: [{ id: 'fixture', name: 'Fixture' }] } as ProviderView;
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+  vi.mocked(createCustomProvider).mockResolvedValueOnce({ ok: true });
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[legacy]} onOpenCustomForm={vi.fn()} onDone={onDone} onClose={vi.fn()} />);
+  const row = await screen.findByRole('button', { name: /Google Gemini API/ });
+  expect(screen.queryByText('Google Gemini', { exact: true })).toBeNull();
+  fireEvent.click(row);
+  expect(await screen.findByText('settings.providers.wizard.geminiImageKeyNote')).toBeTruthy();
+  fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-gemini-key' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+  await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+  for (const model of preset.runtimes.codex!.models.filter(model => model.defaultEnabled !== false)) {
+    fireEvent.click(screen.getByText(model.name));
+  }
+  fireEvent.click(finish);
+  await waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+  const [config, keys, options] = vi.mocked(createCustomProvider).mock.calls[0];
+  expect(config.name).toBe('Google Gemini API');
+  expect(options).toEqual({ bindGeminiImages: true });
+  expect(config.runtimes.codex!.models.every(model => model.defaultEnabled === false)).toBe(true);
+  expect(keys).toEqual(Object.fromEntries(Object.keys(preset.runtimes).map(agent => [agent, 'fake-gemini-key'])));
 });

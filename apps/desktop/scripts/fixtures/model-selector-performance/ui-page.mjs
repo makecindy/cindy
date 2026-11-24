@@ -11,6 +11,8 @@ export default {
   cases: {
     'groups-unused': { about: 'No configured modes: no model-groups rail entry', data: { count: 20, groups: false } },
     'groups-configured': { about: 'Configured mode: model-groups rail remains usable', data: { count: 20, groups: true } },
+    'groups-other-computer': { about: "Another computer's modes in its own cell, chosen mode in the trigger", data: { count: 20, groups: true, device: 'short', selected: true } },
+    'groups-other-computer-long': { about: 'Long computer and mode names in that cell', data: { count: 20, groups: true, device: 'long' } },
     default: { about: '20 models; open All, then filter OpenAI with the hidden width probe', data: { count: 20 } },
     large: { about: '200 models across two engines', data: { count: 200 } },
     stress: { about: '600 models across two engines', data: { count: 600 } },
@@ -24,8 +26,16 @@ export default {
       await trigger.click();
       await page.getByRole('listbox').waitFor();
       const rail = page.locator('[data-rail-item="model-groups"]');
-      assert.equal(await rail.count(), ui.case === 'groups-configured' ? 1 : 0);
-      if (ui.case === 'groups-configured') {
+      assert.equal(await rail.count(), ui.case === 'groups-unused' ? 0 : 1);
+      if (ui.case.startsWith('groups-other-computer')) {
+        const cell = page.locator('[data-rail-item="model-groups:desk-2"]');
+        await cell.waitFor();
+        await cell.click();
+        await page.getByText('Review', { exact: true }).waitFor();
+        // That computer's modes are edited on that computer: no favorite star, no manage entry.
+        assert.equal(await page.locator('[data-model-group-favorite]').count(), 0);
+        assert.equal(await page.locator('[data-model-groups-manage]').count(), 0);
+      } else if (ui.case === 'groups-configured') {
         await rail.click();
         await page.getByText('Daily mode', { exact: true }).waitFor();
       }

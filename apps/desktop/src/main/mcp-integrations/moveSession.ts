@@ -5,9 +5,9 @@ import { updateSessionInDb } from '../localDb/ipc/sessions.js';
 import { bindingStore } from '../im/binding.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
+import { validateTaskProject } from './projectManagementCore.js';
 import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 import {
-  validateExistingLocalProjectDirectory,
   validateLocalProjectDirectory,
   withLocalProjectContext,
 } from './createProject.js';
@@ -125,7 +125,7 @@ async function moveSessionProject(
     const assertMoveAllowed = async () => {
       await assertSessionMovable(context.client, sessionId, isSessionRunning, assertCurrent);
       if (targetDir) {
-        const physicalDirectory = await validateExistingLocalProjectDirectory(targetDir);
+        const physicalDirectory = await validateTaskProject(context, targetDir);
         if (!physicalDirectory.ok) throwIpcError('INVALID_PARAMS', physicalDirectory.message);
       }
       await beforeMutation?.();

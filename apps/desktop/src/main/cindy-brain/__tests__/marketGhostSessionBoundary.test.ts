@@ -296,13 +296,8 @@ describe('market Ghost session boundary', () => {
   });
 
   it('allows explicit local replacement and detaches market routing before landing', () => {
-    const updateStart = source.indexOf(
-      "ipcMain.handle('ghosts:update'",
-    );
-    const updateEnd = source.indexOf(
-      "ipcMain.handle('ghosts:pick-file'",
-      updateStart,
-    );
+    const updateStart = source.indexOf('const updateLocalFile = async (');
+    const updateEnd = source.indexOf("ipcMain.handle('ghosts:update'", updateStart);
     const updateBody = source.slice(updateStart, updateEnd);
     const helperStart = source.indexOf('async function updateLocalGhostPackageLocked(');
     const helperEnd = source.indexOf(
@@ -314,7 +309,9 @@ describe('market Ghost session boundary', () => {
     const ledgerReadIndex = helperBody.indexOf(
       '= readLocalGhostUpdateSource(',
     );
-    const captureIndex = updateBody.indexOf('const mutationOwner = captureGhostMutationOwner();');
+    const manualUpdate = source.slice(updateEnd, source.indexOf('\n  });', updateEnd));
+    expect(manualUpdate).toContain('updateLocalFile(event.sender, captureGhostMutationOwner(),');
+    const captureIndex = updateBody.indexOf('mutationOwner: ActiveAppSession');
     const inspectIndex = updateBody.indexOf('await manager.inspect(lizFilePath)');
     const leaseIndex = updateBody.indexOf('const releaseMutation = beginGhostMutation(mutationOwner);');
     const helperCallIndex = updateBody.indexOf('updateLocalGhostPackageLocked(');
@@ -424,8 +421,8 @@ describe('market Ghost session boundary', () => {
   });
 
   it('releases the mutation lease for shutdown failures and restores only after confirmed shutdown', () => {
-    const updateStart = source.indexOf("ipcMain.handle('ghosts:update'");
-    const updateEnd = source.indexOf("ipcMain.handle('ghosts:pick-file'", updateStart);
+    const updateStart = source.indexOf('const updateLocalFile = async (');
+    const updateEnd = source.indexOf("ipcMain.handle('ghosts:update'", updateStart);
     const updateBody = source.slice(updateStart, updateEnd);
     const helperStart = source.indexOf('async function updateLocalGhostPackageLocked(');
     const helperEnd = source.indexOf(

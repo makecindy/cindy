@@ -23,6 +23,7 @@ export default {
     'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: (window.__uiPage.ctx.data.cloud || window.__uiPage.ctx.data.tab === 'billing') ? 'cloud' : 'local', dataOwnerId: 'fixture-account', user: { id: 'fixture-account', name: 'Preview', membershipKind: 'personal' } });` },
   },
   cases: {
+    'model-tokens': { about: 'One analytics switch controls activity and model totals', data: {tab: 'about', cloud: true, modelTokens: true} },
     'archive-search': { about: 'Searching for auto archive or idle days opens the inline controls inside Storage', data: { tab: 'general', archiveEnabled: true } },
     'archive-legacy': { about: 'The previous Task management link opens Storage and highlights auto archive', data: { tab: 'storage', routeTab: 'task-management' } },
     'visibility-desktop-commit': { about: 'Desktop visibility previews during a real pointer drag and commits once', data: { tab: 'appearance', previewBackground: 'none', visibility: 0.4 } },
@@ -49,6 +50,18 @@ export default {
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
     // Product regression: the opt-in must remain off until selected. Exercise the
     // real setting, search and local override; existing cases only read controls.
+    if (ui.data.modelTokens) {
+      const toggle = panel.getByRole('switch', { name: await ui.t('settings.about.analyticsLabel'), exact: true });
+      await toggle.scrollIntoViewIfNeeded();
+      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+      await ui.capture('token-counts-default');
+      await toggle.click();
+      await page.waitForFunction(() => document.querySelector('[data-setting-id="settings.about.analyticsLabel"]')?.getAttribute('aria-checked') === 'true');
+      await ui.capture('token-counts-enabled');
+      await toggle.click();
+      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+      return;
+    }
     if (ui.data.worktreeModelNaming) {
       const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
       await search.fill(await ui.t('settings.worktreeModelNaming.cell.label'));

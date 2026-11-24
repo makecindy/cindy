@@ -1,14 +1,13 @@
 import { flushStandbyUsage, importStandbyUsage } from './providerShareAvailabilityUsage.js';
 import { publishShareAvailability, refreshStandbyGuests } from './providerShareAvailability.js';
 import { onProviderGroupChanged } from '../provider-group/store.js';
-import { keepSharedProvidersOpen, onRemoteProviderAccessChanged, sharedProviderIdsForRevert } from '../maker-host/remote-provider-access-store.js';
-import { readSharedOpenAiLegacyAccountsIfReadable } from '../subscription-accounts/placement.js';
+import { onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
 import { onDeviceLinkSettingChanged } from './settings-store.desktop.js';
 import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
 import { readMemberBudgetStatus, supportsMemberBudget } from './providerShareBudgetRuntime.js';
 import { isRemoteAgentLimitsPatch } from '../../shared/remoteAgentLimits.js';
-import { supportsSubscriptionFastPolicy, unifiedModelKeyId } from '@cindy/model-providers';
+import { supportsSubscriptionFastPolicy, unifiedModelKeyId, type AgentKind } from '@cindy/model-providers';
 import { providerFastPolicy } from '../maker-host/provider-fast-policy-store.js';
 import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
 import { notifyProviderShareCatalogChanged } from './dispatch.desktop.js';
@@ -57,6 +56,12 @@ import {
 import { getAuthState, getDeviceId } from '../authManager.js';
 import { type ProviderShareInsights, parseProviderShareInsights, PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
 import { isProviderGroupProviderId } from '../../shared/providerGroup.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
+import { getPluginHarnessRegistry, requestPluginHarnessRefresh } from '../cindy-brain/pluginHarnesses.js';
+import { onPluginHarnessModelsChanged } from '../maker-host/acp-host.js';
+import { isPluginEngineOfferedToGuests } from '../maker-host/pluginEngineRemoteUse.js';
+import { onPluginEnginePrefsChanged } from '../maker-host/plugin-engine-prefs-store.js';
+import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
 import { providerShareVisibility } from './providerShareVisibility.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
 import { isRemoteModelSelection, type RemoteModelAccessView } from '../../shared/remoteModelAccess.js';
@@ -67,10 +72,10 @@ import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { focusMainWindow } from '../deepLink.js';
 import { isFocusedAppContentWindow } from '../windowFocusClassifier.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getGatewayModelPricing, getModelPriceQuote } from '../usage/modelPricing.js';
 import {
   getReferenceModelPricing,
@@ -78,11 +83,16 @@ import {
   type ModelPriceOverridesSnapshot,
 } from '../usage/referenceModelPricing.js';
 import type { ModelPriceQuote } from '../../shared/regionalMoney.js';
-import { computePriceQuoteTurnMoney, normalizeModelIdForPricing } from '../usage/turnCostCalculator.js';
+import {
+  computePriceQuoteTurnMoney,
+  isOfficialAnthropicProviderConnection,
+  normalizeModelIdForPricing,
+} from '../usage/turnCostCalculator.js';
 import { rememberIssuedClipboardText } from '../textClipboard.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { normalizeProviderShareMemberNote, PROVIDER_SHARE_MEMBER_NOTE_MAX_LENGTH } from '../../shared/providerShareMemberNote.js';
 import { providerShareMemberNotes } from './providerShareMemberNotes.js';
+import { exportProviderShareRoster } from './providerShareRosterExport.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
 import { readProviderManagementShares } from '../provider-group/managementClient.js';
 import type { ProviderShareManagementCommand } from '../../shared/providerManagement.js';
@@ -98,7 +108,7 @@ import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { tapWindowBroadcast } from './broadcast-tap.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { broadcast as broadcastLocal } from './index.js';
-import { fetchIdentityCard, providerShareApi, providerShareLinkFor, providerShareOwnerKey, sha256Hex } from './providerShareApi.js';
+import { providerShareApi, providerShareLinkFor, providerShareOwnerKey } from './providerShareApi.js';
 import { configureProviderShareApprovalWindows } from './providerShareApprovalWindows.js';
 import {
   findReceivedShare,
@@ -127,8 +137,6 @@ import {
   clearProviderShareRequestQuiet,
   ensureProviderSharePeerKnown,
   getProviderShareHostSnapshot,
-  getProviderShareHostCompleteSnapshot,
-  onProviderShareHostChanged,
   getProviderShareQuietRequestIds,
   getProviderShareWatchedRequests,
   markProviderShareHostActive,
@@ -353,8 +361,9 @@ function queueAvailabilityPublish(): void {
         availabilityPublishPending = false;
         const epoch = availabilityPublisherEpoch;
         const shares = getProviderShareHostSnapshot();
-        for (const work of [refreshStandbyGuests, () => publishShareAvailability(shares), flushStandbyUsage,
-          ...shares.map(share => () => importStandbyUsage(share.shareId))]) {
+        const standbyShares = shares.filter(share => !pluginEngineKeyFromProviderId(share.providerId));
+        for (const work of [refreshStandbyGuests, () => publishShareAvailability(standbyShares), flushStandbyUsage,
+          ...standbyShares.map(share => () => importStandbyUsage(share.shareId))]) {
           if (!running || epoch !== availabilityPublisherEpoch) break;
           try { await work(); }
           catch (error) { log.warn('shared standby synchronization unavailable', { error: String(error) }); }
@@ -365,28 +374,41 @@ function queueAvailabilityPublish(): void {
 }
 export function startProviderShareRuntime(broadcast: Broadcast, options: { invoke?: ShareInvoke } = {}): void {
   stopAvailabilityPublisher?.();
+  const pluginCatalogSnapshots = new Map<string, string>();
+  const syncSharedPluginCatalogs = (syncOptions?: { notify?: boolean }) => {
+    const notifyChanged = syncOptions?.notify !== false;
+    const sharedIds = new Set(
+      getProviderShareHostSnapshot()
+        .map((share) => share.providerId)
+        .filter((providerId) => pluginEngineKeyFromProviderId(providerId) !== null),
+    );
+    for (const knownId of pluginCatalogSnapshots.keys()) {
+      if (!sharedIds.has(knownId)) pluginCatalogSnapshots.delete(knownId);
+    }
+    if (sharedIds.size === 0) return;
+    const viewsByProvider = new Map(listPluginEngineViews().map((view) => [view.providerId, view]));
+    for (const providerId of sharedIds) {
+      const next = JSON.stringify(viewsByProvider.get(providerId) ?? null);
+      const previous = pluginCatalogSnapshots.get(providerId);
+      pluginCatalogSnapshots.set(providerId, next);
+      if (notifyChanged && previous !== next) {
+        notifyProviderShareCatalogChanged(providerId);
+      }
+    }
+  };
+  syncSharedPluginCatalogs({ notify: false });
   const stopGroup = onProviderGroupChanged(queueAvailabilityPublish);
   const stopModels = remoteModelAccess.subscribe(queueAvailabilityPublish);
-  const stopAccess = onRemoteProviderAccessChanged(queueAvailabilityPublish);
+  const stopAccess = onRemoteProviderAccessChanged(() => {
+    queueAvailabilityPublish();
+    syncSharedPluginCatalogs();
+  });
+  const stopPluginRegistry = getPluginHarnessRegistry().onChange(() => syncSharedPluginCatalogs());
+  const stopPluginModels = onPluginHarnessModelsChanged(() => syncSharedPluginCatalogs());
+  // The owner renamed or turned off a shared engine (or some of its models) in Settings → Model providers:
+  // friends it is shared with read its list again. Plugin engine shares have no cloud standby to publish.
+  const stopPluginSettings = onPluginEnginePrefsChanged(() => syncSharedPluginCatalogs());
   const stopSettings = onDeviceLinkSettingChanged(key => { if (key === 'remoteControlEnabled') queueAvailabilityPublish(); });
-  // 撤回 11-10 的默认开放：等拿到本账号完整的分享快照，那段时间里用户建过分享的供应商补记为打开。
-  // 补记只做一次，有分享服务暂时读不到、或账号池文件读不了时不做，等下一次再试。
-  let accessDefaultMigrated = false;
-  let accessDefaultMigrating = false;
-  const migrateAccessDefault = () => {
-    if (accessDefaultMigrated || accessDefaultMigrating) return;
-    const loaded = getProviderShareHostCompleteSnapshot();
-    if (!loaded) return;
-    const ids = sharedProviderIdsForRevert(loaded, readSharedOpenAiLegacyAccountsIfReadable);
-    if (!ids) return;
-    accessDefaultMigrating = true;
-    void keepSharedProvidersOpen(ids)
-      .then(() => { accessDefaultMigrated = true; })
-      .catch((error) => log.warn('remote provider access default revert failed', { error: String(error) }))
-      .finally(() => { accessDefaultMigrating = false; });
-  };
-  const stopAccessDefault = onProviderShareHostChanged(migrateAccessDefault, { refreshed: true });
-  migrateAccessDefault();
   const timer = setInterval(queueAvailabilityPublish, 60_000);
   timer.unref?.();
   availabilitySnapshot = undefined;
@@ -394,7 +416,8 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   stopAvailabilityPublisher = () => {
     availabilityPublisherEpoch += 1;
     availabilityPublishPending = false;
-    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopSettings(); stopAccessDefault();
+    pluginCatalogSnapshots.clear();
+    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopPluginRegistry(); stopPluginModels(); stopPluginSettings(); stopSettings();
   };
 
   // 启动仲裁可能早于 IPC 注册；必须在 host 的第一轮快照前配置持久归属。
@@ -458,6 +481,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       })));
       if (snapshot !== availabilitySnapshot) {
         availabilitySnapshot = snapshot;
+        syncSharedPluginCatalogs({ notify: false });
         queueAvailabilityPublish();
       }
       emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
@@ -562,20 +586,25 @@ function usageRange(range: unknown): ProviderShareUsageRange {
   return range;
 }
 
+function isShareableProviderId(value: unknown): value is string {
+  return isProviderGroupProviderId(value)
+    || (typeof value === 'string' && value.length <= 256 && pluginEngineKeyFromProviderId(value) !== null);
+}
+
 export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throwIpcError('INVALID_PARAMS', 'Invalid command');
   const value = raw as Record<string, unknown>;
   switch (value.action) {
     case 'get-fast-policy':
     case 'set-fast-policy': {
-      if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
+      if (!isShareableProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
       if (value.action === 'get-fast-policy') return { action: value.action, providerId: value.providerId };
       if (typeof value.allowFast !== 'boolean') throwIpcError('INVALID_PARAMS', 'allowFast must be a boolean');
       return { action: value.action, providerId: value.providerId, allowFast: value.allowFast };
     }
     case 'get-model-access':
     case 'set-model-access': {
-      if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
+      if (!isShareableProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
       const memberId = value.memberId === undefined ? undefined : text(value.memberId, 'memberId', 128);
       const scope = { providerId: value.providerId, ...(memberId !== undefined ? { memberId } : {}) };
       if (value.action === 'get-model-access') return { action: value.action, ...scope };
@@ -587,10 +616,10 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
     }
     case 'get-visibility':
     case 'quota-account':
-      if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
+      if (!isShareableProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
       return { action: value.action, providerId: value.providerId };
     case 'set-visibility': {
-      if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
+      if (!isShareableProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
       const patch = value.visibility;
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)
         || Object.keys(patch).length === 0 || Object.entries(patch).some(([key, entry]) =>
@@ -646,7 +675,11 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
       if (!recovery || !isDataOwnerPushStamp(recovery.ownerStamp) || !Array.isArray(recovery.regions) ||
           recovery.regions.length > 2 || !recovery.regions.every((region) => region === 'cn' || region === 'global'))
         throwIpcError('INVALID_PARAMS', 'Invalid favorite recovery');
-      return { action: 'received-snapshot', favoriteRecovery: { ownerStamp: recovery.ownerStamp, regions: recovery.regions } };
+      const revision = recovery.cleanedLeftMemberRevision;
+      if (revision !== undefined && (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1))
+        throwIpcError('INVALID_PARAMS', 'Invalid favorite cleanup receipt');
+      return { action: 'received-snapshot', favoriteRecovery: { ownerStamp: recovery.ownerStamp, regions: recovery.regions,
+        ...(revision !== undefined ? { cleanedLeftMemberRevision: revision } : {}) } };
     }
     case 'preview':
     case 'send-request':
@@ -679,7 +712,7 @@ function perTurnAverageMoney(row: ProviderShareUsageEstimateRow, price: ModelPri
     outputTokens: row.outputTokens / turns,
     cacheReadTokens: row.cacheReadTokens / turns,
     cacheCreateTokens: row.cacheCreateTokens / turns,
-  }, price, currentLedgerCurrency());
+  }, price);
   return money && { amount: money.amount * turns, currency: money.currency };
 }
 
@@ -691,6 +724,30 @@ function createUsageEstimator() {
   let gatewayPricing: ReturnType<typeof getGatewayModelPricing> | undefined;
   let overrides: ModelPriceOverridesSnapshot | undefined;
   const referencePricing = new Map<string, ReturnType<typeof getReferenceModelPricing>>();
+  let catalogProviders: ReturnType<typeof getActiveCatalog>['providers'] | undefined;
+  const getCatalogProvider = (providerId: string | null) => {
+    if (!providerId) return undefined;
+    catalogProviders ??= getActiveCatalog().providers;
+    return catalogProviders.find((item) => item.id === providerId);
+  };
+  const isOpaqueRow = (
+    providerId: string | null,
+    agent: AgentKind | undefined,
+    model: string,
+  ): boolean => {
+    if (!providerId || providerId === 'xd') return false;
+    const provider = getCatalogProvider(providerId);
+    if (isOfficialAnthropicProviderConnection(providerId, provider, agent, model)) return false;
+    if (!provider?.models) return false;
+    const agents = agent ? [agent] : (Object.keys(provider.models) as AgentKind[]);
+    return agents.some((candidateAgent) =>
+      (provider.models[candidateAgent] ?? []).some(
+        (entry) =>
+          (entry.opaqueModelId === true || entry.discoveredSource?.kind === 'magpie') &&
+          normalizeModelIdForPricing(entry.id) === model,
+      ),
+    );
+  };
   const referenceCatalog = (day: string | undefined) => {
     const key = day ?? '';
     let pricing = referencePricing.get(key);
@@ -703,24 +760,45 @@ function createUsageEstimator() {
   };
   return async (row: ProviderShareUsageEstimateRow): Promise<ProviderShareMoney | null> => {
     const sdkMoney: ProviderShareMoney | null = row.sdkCostUsd > 0 ? { amount: row.sdkCostUsd, currency: 'USD' } : null;
-    // 只有 SDK 金额、没有 token 计数的行无从按单价估算，保留记录的金额而不是算成 0。
-    if (row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens <= 0) return sdkMoney;
-    // 与本机记账(resolveTurnCost)一致：普通供应商 API 优先用 SDK 记录的金额，只在缺失时按单价估算；
-    // DeepSeek 的 SDK 金额把缓存命中按普通输入计，按参考价重算。XD 只认 Gateway 报价。
-    if (sdkMoney && row.providerId !== 'xd' && row.providerId !== 'deepseek') return sdkMoney;
+    const agent = row.kind === 'claude-code' || row.kind === 'codex' || row.kind === 'pi' ? row.kind : undefined;
+    const model = normalizeModelIdForPricing(row.model);
+    const provider = getCatalogProvider(row.providerId);
+    const isOfficialAnthropic = isOfficialAnthropicProviderConnection(
+      row.providerId,
+      provider,
+      agent,
+      model,
+    );
+    if (isOfficialAnthropic && sdkMoney) {
+      overrides ??= readModelPriceOverridesSnapshot();
+      const hasAnthropicOverride = Object.values(overrides).some(
+        (entry) => entry?.providerId === row.providerId,
+      );
+      if (!hasAnthropicOverride) return sdkMoney;
+    }
+    const hasTokenDeltas =
+      row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens > 0;
+    // 只有 SDK 金额、没有 token 计数的行无从按单价估算，保留记录的金额（不透明模型除外）。
+    if (!hasTokenDeltas) {
+      if (sdkMoney && isOpaqueRow(row.providerId, agent, model)) return null;
+      return sdkMoney;
+    }
     try {
-      const agent = row.kind === 'claude-code' || row.kind === 'codex' || row.kind === 'pi' ? row.kind : undefined;
-      const model = normalizeModelIdForPricing(row.model);
       // XD 的实际报价与其他供应商的参考价独立，不能跨来源借价。
       const pricing = row.providerId === 'xd'
         ? await (gatewayPricing ??= getGatewayModelPricing())
         : referenceCatalog(row.day);
       const price = getModelPriceQuote(pricing, row.providerId, model, agent);
-      const money = perTurnAverageMoney(row, price);
-      if (money) return money;
+      // 与本机记账(resolveTurnCost)一致：非 Anthropic 供应商优先按有效报价重算，
+      // Anthropic 仅让用户显式覆写覆盖 SDK 账单事实，其余仍保留 SDK 记录金额。
+      if (!sdkMoney || !isOfficialAnthropic || price?.source === 'user-override') {
+        const money = perTurnAverageMoney(row, price);
+        if (money) return money;
+      }
     } catch (error) {
       log.warn('provider share usage estimate failed', { error: String(error) });
     }
+    if (sdkMoney && isOpaqueRow(row.providerId, agent, model)) return null;
     return sdkMoney;
   };
 }
@@ -975,22 +1053,38 @@ async function createLink(
   // 逐级开启：允许远程控制 → 允许被远程调用 → 分享。
   if (!readDeviceLinkSettings().remoteControlEnabled) throwIpcError('PRECONDITION_FAILED', 'Remote control is off');
   if (!isRemoteProviderInvocationAllowed(providerId)) throwIpcError('PRECONDITION_FAILED', 'Remote invocation is off for this provider');
-  const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
-  assertCurrent();
-  const provider = providers.find((item) => item.id === providerId);
-  if (!provider || !provider.connected || provider.agents.length === 0) throwIpcError('PRECONDITION_FAILED', 'Provider is not available');
-  const hostDeviceId = getDeviceId();
-  if (!hostDeviceId) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Device is not registered');
-  const identityCard = await fetchIdentityCard('share-link', sha256Hex(`${hostDeviceId}:${providerId}`));
-  assertCurrent();
-  const created = await providerShareApi.createLink({
-    providerId,
+  let providerLabel: string;
+  if (pluginEngineKeyFromProviderId(providerId)) {
+    if (!isPluginEngineOfferedToGuests(providerId)) {
+      throwIpcError('PRECONDITION_FAILED', 'Plugin engine is not available for sharing');
+    }
+    const engine = listPluginEngineViews().find((item) => item.providerId === providerId);
+    if (!engine || engine.availability.state === 'unavailable' || engine.remoteUse?.shareSupported !== true) {
+      throwIpcError('PRECONDITION_FAILED', 'Plugin engine is not available for sharing');
+    }
+    providerLabel = scrubProviderShareLabel(engine.name, [], providerId);
+  } else {
+    const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
+    assertCurrent();
+    const provider = providers.find((item) => item.id === providerId);
+    if (!provider || !provider.connected || provider.agents.length === 0) throwIpcError('PRECONDITION_FAILED', 'Provider is not available');
     // 名称可能自动带上登录身份(如「OpenAI · 邮箱」)，分享出去前去掉。
-    providerLabel: scrubProviderShareLabel(provider.name, [provider.subscriptionAccount?.identity, provider.openAiAccount?.identity], provider.id),
-    // 电脑名不给受邀者(provider-sharing.md §6)：字段必填(旧版受邀者按必填解析)，填固定占位。
-    deviceName: PROVIDER_SHARE_NEUTRAL_DEVICE_NAME,
-    identityCard,
-  });
+    providerLabel = scrubProviderShareLabel(provider.name, [provider.subscriptionAccount?.identity, provider.openAiAccount?.identity], provider.id);
+  }
+  if (!getDeviceId()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Device is not registered');
+  assertCurrent();
+  let created: Awaited<ReturnType<typeof providerShareApi.createLink>>;
+  try {
+    created = await providerShareApi.createLink({
+      providerId,
+      providerLabel,
+      // 电脑名不给受邀者(provider-sharing.md §6)：字段必填(旧版受邀者按必填解析)，填固定占位。
+      deviceName: PROVIDER_SHARE_NEUTRAL_DEVICE_NAME,
+    }, assertCurrent);
+  } catch (error) {
+    assertCurrent();
+    throw error;
+  }
   assertCurrent();
   if (requireLinkId && !created.linkId) {
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Remote share links require an update to the provider share server');
@@ -1009,6 +1103,12 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
   switch (command.action) {
     case 'get-fast-policy':
     case 'set-fast-policy': {
+      if (pluginEngineKeyFromProviderId(command.providerId)) {
+        if (command.action === 'set-fast-policy') {
+          throwIpcError('INVALID_PARAMS', 'Fast policy is available only for supported subscription accounts');
+        }
+        return { supported: false, allowFast: false };
+      }
       const assertOwner = captureProviderManagementScope();
       const assertScope = () => { assertCurrent(); assertOwner(); };
       const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
@@ -1041,6 +1141,38 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
           && share.members.some((member) => member.memberId === command.memberId));
         if (!found) throwIpcError('NOT_FOUND', 'This shared provider member is no longer available');
       }
+      if (pluginEngineKeyFromProviderId(command.providerId)) {
+        const engine = listPluginEngineViews().find((entry) => entry.providerId === command.providerId);
+        const fallbackLabel = getProviderShareHostSnapshot().find((share) => share.providerId === command.providerId)?.providerLabel;
+        if (!engine && !fallbackLabel) throwIpcError('NOT_FOUND', 'This provider is no longer available');
+        if (command.action === 'set-model-access') {
+          if (command.memberBudget?.rules.length) {
+            throwIpcError('PRECONDITION_FAILED', 'Member model limits are not available for plugin engines');
+          }
+          await remoteModelAccess.set(command.providerId, command.models, command.memberId, assertScope, command.memberBudget, assertOwner);
+          assertOwner();
+          await revalidateRemoteModelAccess();
+          assertOwner();
+          emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
+          notifyProviderShareCatalogChanged(command.providerId);
+        }
+        const availableModels = (engine?.models ?? []).map((model) => ({
+          id: model.id,
+          name: model.displayName || model.id,
+        }));
+        const recommendationModelIds = availableModels.map((model) => model.id);
+        assertScope();
+        return {
+          version: 1,
+          ...remoteModelAccess.read(command.providerId, command.memberId),
+          providerName: engine?.name ?? fallbackLabel ?? command.providerId,
+          budgetSupported: false,
+          budgetAvailable: false,
+          budgetModelIds: [],
+          recommendationModelIds,
+          availableModels,
+        } satisfies RemoteModelAccessView;
+      }
       const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
       assertScope();
       const provider = providers.find((entry) => entry.id === command.providerId);
@@ -1050,6 +1182,9 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       const budgetModelIds = recommendationModelIds.filter(id => id === unifiedModelKeyId(id)
         || !recommendationModelIds.includes(unifiedModelKeyId(id)));
       if (command.action === 'set-model-access') {
+        // A connection merged into an account pool reads the pool's provider-wide range; only member grants stay here.
+        if (command.memberId === undefined && provider.subscriptionPoolAlias)
+          throwIpcError('PRECONDITION_FAILED', 'This provider follows its account pool; change the range there');
         if (command.memberBudget?.rules.length && !budgetAvailable) throwIpcError('PRECONDITION_FAILED', 'Member model limits are not available for this provider group');
         if (command.memberBudget) {
           const previous = remoteModelAccess.read(command.providerId, command.memberId).memberBudget;
@@ -1310,14 +1445,14 @@ async function receivedCatalogs(args: unknown[]): Promise<{ ready: boolean; shar
     && (listArgs[0] as { includeCatalog?: unknown }).includeCatalog === false
   );
   // 未全部就绪时也返回已加载的区域，但账号切换期间不得返回旧账号名单。
-  const shares = getReceivedSharesSnapshot().received;
+  const shares = getReceivedShares();
   return {
     ready: isReceivedSharesReady(),
     shares: await Promise.all(shares.map(async (share): Promise<ProviderShareReceivedCatalog> => {
       const agentDeviceId = `share:${share.shareId}`;
       const favoriteSource = receivedFavoriteSource(share);
       let catalog: unknown = null;
-      if (includeCatalog && invoke && share.status === 'active') {
+      if (includeCatalog && invoke && share.status === 'active' && !pluginEngineKeyFromProviderId(share.providerId)) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           const result = await Promise.race([
@@ -1350,6 +1485,7 @@ async function receivedCatalogs(args: unknown[]): Promise<{ ready: boolean; shar
 }
 
 export function registerProviderShareIpc(): void {
+  ipcMain.handle(PROVIDER_SHARE_IPC.EXPORT_ROSTER, exportProviderShareRoster);
   // 受邀者对每个分享的本机偏好(「信任 {分享者}」)：按当前账号存放，读写时解析。
   configureProviderShareGuestPrefs({ resolvePath: () => ownerScopedUserDataPath('provider-share-guest-prefs.json') });
   const insights = createProviderShareInsightsReader({
@@ -1373,6 +1509,11 @@ export function registerProviderShareIpc(): void {
     modelAllowed: (controller, providerId, model) => {
       const access = providerShareGuestAccess(controller);
       return access?.providerId === providerId && remoteModelAccess.allows(providerId, model, access.memberId);
+    },
+    refreshPluginEngine: (providerId) => {
+      if (!isPluginEngineOfferedToGuests(providerId)) return;
+      const view = listPluginEngineViews().find((entry) => entry.providerId === providerId);
+      if (view) requestPluginHarnessRefresh(Date.now(), view.ghostId);
     },
     insights,
     insightsCurrent: insights.isCurrent,
