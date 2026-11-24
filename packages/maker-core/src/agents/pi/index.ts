@@ -8805,7 +8805,8 @@ export class PiAgent extends BaseAgent {
       },
       isCompactingDeliveredReply() {
         return !proc.isClosed && !ctx.turnSettled && ctx.pendingHostTurnStartToken === null
-          && ctx.replyPhase === 'threshold-compaction';
+          && ctx.replyPhase === 'threshold-compaction'
+          && piToolMarkupProjection(ctx).hasDeliveredReply(ctx.finalAssistantText);
       },
 
       setInteractionResolver(resolver: InteractionResolver): void {
