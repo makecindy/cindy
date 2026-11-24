@@ -269,6 +269,9 @@ vi.mock("@/session/FileBrowserSegmentedControl", () => ({
     return null;
   },
 }));
+// The Android market choice sheet (same as pluginNativeViews): render content without native presentation.
+vi.mock("@/session/SheetModal", () => ({ SheetModal: (p: any) => p.children }));
+vi.mock("@/session/SheetSurface", () => ({ SheetSurface: (p: any) => p.children }));
 vi.mock("@/plugins/PluginPage", () => ({ PluginPage: () => null }));
 vi.mock("@/plugins/PluginReadmePage", () => ({ PluginReadmePage: () => null }));
 vi.mock("@/plugins/pluginClient", () => ({

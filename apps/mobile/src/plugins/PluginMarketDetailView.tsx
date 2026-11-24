@@ -8,6 +8,7 @@ import {
 import { PluginNotice } from "./PluginNotice";
 import { PluginMarketIcon } from "./PluginMarketIcon";
 import { PluginToolChips } from "./PluginToolChips";
+import { PluginToolsDisclosure } from "./PluginDetailView";
 import {
   pluginMarketFacts, pluginMarketOrigin, pluginMarketPublisherKey, pluginMarketSubtitle, pluginMarketTools,
 } from "./pluginMarketCatalog";
@@ -79,13 +80,12 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
       {detail.loading ? <ActivityIndicator testID="plugins.market.detailLoading" color={colors.textSecondary} /> : null}
       {tools.length ? (
         <View style={styles.section} testID="plugins.market.tools">
+          {/* Same heading row and disclosure as the installed detail: title fills, toggle on the right. */}
           <View style={styles.inline}>
-            <Text style={[styles.heading, styles.shrink]}>{t("plugins.detail.tools") + " · " + tools.length}</Text>
+            <Text style={[styles.heading, styles.fill]}>{t("plugins.detail.tools") + " · " + tools.length}</Text>
             {toolsOverflow ? (
-              <Pressable accessibilityRole="button" accessibilityState={{ expanded: toolsExpanded }}
-                onPress={() => setToolsExpanded(!toolsExpanded)} style={styles.toggle}>
-                <Text style={styles.toggleText}>{t(toolsExpanded ? "plugins.detail.showLess" : "plugins.detail.showAll")}</Text>
-              </Pressable>
+              <PluginToolsDisclosure testID="plugins.market.toolsDisclosure" expanded={toolsExpanded}
+                onPress={() => setToolsExpanded(!toolsExpanded)} />
             ) : null}
           </View>
           <PluginToolChips key={item.pluginId} tools={tools} expanded={toolsExpanded} onOverflowChange={setToolsOverflow} />
@@ -114,6 +114,7 @@ const makeStyles = (c: ThemeColors) =>
     identityText: { flex: 1, gap: spacing.xs },
     inline: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
     shrink: { flexShrink: 1 },
+    fill: { flex: 1 },
     center: { textAlign: "center" },
     right: { textAlign: "right", flex: 1 },
     title: { fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold, color: c.textPrimary },
@@ -135,6 +136,4 @@ const makeStyles = (c: ThemeColors) =>
     primaryText: { color: c.ctaText },
     buttonText: { fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold, color: c.textPrimary },
     unavailable: { opacity: 0.5 },
-    toggle: { minWidth: 44, minHeight: 44, alignItems: "flex-end", justifyContent: "center" },
-    toggleText: { fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.regular, color: c.textSecondary },
   });

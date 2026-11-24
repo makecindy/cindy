@@ -4,6 +4,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { PluginDirectoryView } from "@/plugins/PluginDirectoryView.ios";
+import { PluginMarketSection } from "@/plugins/PluginMarketSection";
 import { PluginDetailView } from "@/plugins/PluginDetailView.ios";
 import { PluginDetailView as AndroidDetailView } from "@/plugins/PluginDetailView";
 import { PluginTaskPickerView } from "@/plugins/PluginTaskPickerView.ios";
@@ -213,6 +214,8 @@ vi.mock("lucide-react-native", () =>
       "Sparkles",
       "Terminal",
       "Wrench",
+      "Check",
+      "ChevronDown",
     ].map((name) => [name, () => createElement("i", { "data-permission-icon": name })]),
   ),
 );
@@ -1245,4 +1248,22 @@ it('renders UI capability purpose, unknown legacy source and complete Host permi
   for (const fact of ['plugins.uiApproval.purpose', 'mcpApps.source.unknown', 'planner.html', 'api.example.org', 'save_plan, open_plan'])
     expect(container.textContent).toContain(fact);
   expect(container.textContent).not.toContain('plugins.notice.taskCapability');
+});
+
+// Android simulator report (2026-11-25): system alerts show at most three buttons, so two sources and Cancel
+// disappeared and the dialog could not be dismissed. The sheet must offer every source and every computer.
+it("offers every market source and every computer in the Android choice sheet", () => {
+  const filters = ["all", "official", "community", "organization", "custom"].map((value, index) => ({ value, count: index + 1 }));
+  const targets = Array.from({ length: 5 }, (_, index) => ({ deviceId: `pc-${index}`, deviceName: `PC ${index}` }));
+  const market = marketModel({ filters, targets, target: targets[0] });
+  mount(PluginMarketSection, { market, onConnectComputer: vi.fn() });
+  act(() => bridge.props.get("plugins.market.filter").onPress());
+  for (const { value } of filters) expect(bridge.props.has(`plugins.market.filter.${value}`)).toBe(true);
+  expect(bridge.props.get("plugins.market.filter.official").accessibilityState).toMatchObject({ selected: true });
+  act(() => bridge.props.get("plugins.market.filter.custom").onPress());
+  expect(market.setFilter).toHaveBeenCalledWith("custom");
+  act(() => bridge.props.get("plugins.market.computer").onPress());
+  for (const host of targets) expect(bridge.props.has(`plugins.market.computer.${host.deviceId}`)).toBe(true);
+  act(() => bridge.props.get("plugins.market.computer.pc-4").onPress());
+  expect(market.selectDevice).toHaveBeenCalledWith("pc-4");
 });

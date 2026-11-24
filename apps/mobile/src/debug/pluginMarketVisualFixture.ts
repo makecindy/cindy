@@ -44,7 +44,8 @@ const DEMOS: DemoPlugin[] = [
   { ghostId: "demo-device-simulator", name: "Demo Device Simulator", publisher: "official", author: "Cindy",
     description: "Open a phone simulator in a task, take screenshots, tap and type into the app you are building.",
     tools: ["demo_boot_device", "demo_screenshot", "demo_tap", "demo_type_text", "demo_install_app"] },
-  { ghostId: "demo-calendar", name: "Demo Calendar", publisher: "official", author: "Cindy",
+  // Named apart from the installed demo plugins so a market row never looks like something already installed.
+  { ghostId: "demo-agenda", name: "Demo Agenda", publisher: "official", author: "Cindy",
     description: "View, create and adjust events across several calendar accounts.", tools: ["demo_list_events", "demo_create_event"] },
   { ghostId: "demo-image-studio", name: "Demo Image Studio", publisher: "official", author: "Cindy",
     description: "Generate and edit images in a conversation and keep the results in the library.", tools: ["demo_generate_image"] },

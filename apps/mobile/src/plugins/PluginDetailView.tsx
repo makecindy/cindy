@@ -54,6 +54,25 @@ export interface PluginDetailViewProps {
   onResolveStatus(): void;
 }
 
+/** Android "Show all / Show less" beside the Tools heading; shared by the installed and market details. */
+export function PluginToolsDisclosure({ expanded, onPress, testID }: { expanded: boolean; onPress(): void; testID?: string }) {
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityState={{ expanded }}
+      onPress={onPress}
+      style={styles.toolsToggle}
+    >
+      <Text style={styles.toolsToggleText}>
+        {t(expanded ? "plugins.detail.showLess" : "plugins.detail.showAll")}
+      </Text>
+    </Pressable>
+  );
+}
+
 /** Android shares the page hierarchy and Host facts, with its platform Switch. */
 export function PluginDetailView(p: PluginDetailViewProps) {
   const { t, i18n } = useTranslation(),
@@ -223,21 +242,11 @@ export function PluginDetailView(p: PluginDetailViewProps) {
                 {t("plugins.detail.tools") + " · " + model.tools.length}
               </Text>
               {toolsOverflow ? (
-                <Pressable
+                <PluginToolsDisclosure
                   testID="plugins.toolsDisclosure"
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: toolsExpanded }}
+                  expanded={toolsExpanded}
                   onPress={() => setToolsExpanded(!toolsExpanded)}
-                  style={styles.toolsToggle}
-                >
-                  <Text style={styles.toolsToggleText}>
-                    {t(
-                      toolsExpanded
-                        ? "plugins.detail.showLess"
-                        : "plugins.detail.showAll",
-                    )}
-                  </Text>
-                </Pressable>
+                />
               ) : null}
             </View>
             <PluginToolChips
