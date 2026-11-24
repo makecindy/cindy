@@ -453,8 +453,9 @@ export default function (pi) {
     names.sort();
     var tally = [];
     for (var n = 0; n < names.length; n++) tally.push(names[n] + ' ' + batch.names[names[n]]);
-    return '[folded] ' + batch.dropped + (batch.dropped === 1 ? ' round-trip, ' : ' round-trips, ') + tally.join(', ') + ', ' + batch.chars +
-      ' chars, read with ' + readCall({ batch: batch.ref });
+    var text = '[folded] ' + batch.dropped + (batch.dropped === 1 ? ' round-trip, ' : ' round-trips, ') + tally.join(', ') + ', ' + batch.chars + ' chars';
+    if (batch.failed.length > 0) text += ', ' + batch.failed.length + ' failed (' + batch.failed.join('; ') + ')';
+    return text + ', read with ' + readCall({ batch: batch.ref });
   }
 
   function allFolded(trip) {
@@ -561,8 +562,9 @@ export default function (pi) {
   }
 
   /** Admit a giant payload; evict oldest entries until the aggregate bound holds. */
-  function admitGiant(id, blocks, makeText) {
-    var cost = costOfContent(blocks);
+  function admitGiant(id, blocks, makeText, extra) {
+    // extra：续读时冻结的调用头（计入预算）与入库时记下的错误状态。
+    var cost = costOfContent(blocks) + (extra && typeof extra.head === 'string' ? extra.head.length : 0);
     if (cost > GIANT_BUDGET_CHARS) return false; // a single payload over budget is never retained
     // 先按大小决定收不收，再要全文：被拒的载荷不该先付一整份副本的内存。
     var text = makeText();
@@ -571,7 +573,7 @@ export default function (pi) {
       giants.delete(id);
     }
     // Also keep the block structure: a flattened string cannot put text back between images.
-    giants.set(id, { text: text, blocks: blocks, bytes: cost });
+    giants.set(id, Object.assign({ text: text, blocks: blocks, bytes: cost }, extra || undefined));
     giantBytes += cost;
     while (giants.size > 1 && (giants.size > GIANT_KEEP || giantBytes > GIANT_BUDGET_CHARS)) {
       var oldest = giants.keys().next().value;
@@ -589,7 +591,7 @@ export default function (pi) {
   // 结果限长只在这一处判定：字符串与多块内容走同一条路，门槛（INGEST_LIMIT）与保留
   // 额度（INGEST_KEEP）只在这里比较。调用点不再各自比长度——「一个地方放行、另一个地方
   // 截断」正是漏限的温床。图片块原样保留：带图往返本来不折，文本再不限就没人能压它。
-  function clipContent(content, id) {
+  function clipContent(content, id, isError) {
     var isString = typeof content === 'string';
     var blocks = isString ? [{ type: 'text', text: content }] : content;
     if (!Array.isArray(blocks)) return null;
@@ -599,7 +601,7 @@ export default function (pi) {
       if (block && block.type === 'text' && typeof block.text === 'string') total += block.text.length;
     }
     if (total <= INGEST_LIMIT) return null;
-    var retained = admitGiant(id, blocks, function () { return textOf(blocks); });
+    var retained = admitGiant(id, blocks, function () { return textOf(blocks); }, { error: isError === true });
     var kept = 0;
     var truncated = 0;
     var parts = [];
@@ -620,7 +622,7 @@ export default function (pi) {
     if (event && event.toolName === READ_TOOL) return undefined;
     var id = String((event && event.toolCallId) || '');
     if (!id) return undefined;
-    var parts = clipContent(event && event.content, id);
+    var parts = clipContent(event && event.content, id, event && event.isError);
     if (parts === null) return undefined;
     var out = { content: parts };
     if (Object.prototype.hasOwnProperty.call(event, 'structuredContent')) out.structuredContent = event.structuredContent;
@@ -701,31 +703,48 @@ export default function (pi) {
       return { ok: false, reason: truncatedPreview.indexOf('not retained') !== -1 ? 'not-retained' : 'evicted' };
     }
     if (!callBlock && !resultMsg && giant === null) return { ok: false, reason: 'missing' };
-    return { ok: true, call: callBlock, resultMsg: resultMsg, giant: giant };
+    return { ok: true, call: callBlock, resultMsg: resultMsg, giant: giant, giantEntry: giantEntry };
   }
 
-  function renderOriginal(found) {
+  // 取回的原文 = 头 + 结果。头是「调用、参数、结果标签与错误状态」：结果在登记表里不会变，
+  // 头却取自当前上下文，压缩或编辑带走调用消息后同一份原文就变短。
+  function originalHead(found, error) {
     var bits = [];
     if (found.call) {
       bits.push('call: ' + callSummary(found.call));
-      try { bits.push('arguments: ' + JSON.stringify(found.call.arguments || {})); } catch (error) { /* ignore */ }
+      try { bits.push('arguments: ' + JSON.stringify(found.call.arguments || {})); } catch (e) { /* ignore */ }
     }
+    bits.push(error ? 'result (error):' : 'result:');
+    return bits.join('\n') + '\n';
+  }
+
+  function renderOriginal(found) {
+    var entry = found.giantEntry;
+    var error = found.resultMsg ? found.resultMsg.isError === true : Boolean(entry && entry.error === true);
+    var head = entry && typeof entry.head === 'string' ? entry.head : originalHead(found, error);
     // Two halves kept apart: the caller may re-admit only the result (the half that can be
     // absent from the transcript) while still returning call + arguments above.
     var resultText = '';
-    if (found.giant !== null) {
-      resultText = found.giant;
-      bits.push('result:\n' + found.giant);
-    } else if (found.resultMsg) {
-      resultText = textOf(found.resultMsg.content);
-      bits.push('result:\n' + resultText);
-    }
-    return { ok: true, text: bits.join('\n'), result: resultText };
+    if (found.giant !== null) resultText = found.giant;
+    else if (found.resultMsg) resultText = textOf(found.resultMsg.content);
+    return { ok: true, text: head + resultText, result: resultText, head: head, error: error };
   }
 
   function findOriginal(callId) {
     var found = resolve(callId);
     return found.ok === true ? renderOriginal(found) : found;
+  }
+
+  // 续读的偏移是对「上一页切的那份字节」的坐标。页一旦被切开，就把这一刻的头冻结进登记表：
+  // 之后的页永远切同一份字节，不随上下文里调用消息的去留变长变短。块结构原样保留——只读
+  // 回合要靠它把图片放回原位。
+  function freezeHead(id, rendered) {
+    var key = String(id);
+    var prior = giants.get(key);
+    if (prior && typeof prior.head === 'string') return;
+    admitGiant(key, prior ? prior.blocks : [{ type: 'text', text: rendered.result }],
+      function () { return prior ? prior.text : rendered.result; },
+      { head: rendered.head, error: prior ? prior.error : rendered.error });
   }
 
   function readSlice(id, raw, params) {
@@ -775,7 +794,8 @@ export default function (pi) {
       // 切开，所以带偏移的缺项游标只可能是陈旧坐标）。
       if (p === 0 && found.ok !== true) skip = 0;
       var line = found.ok === true ? null : missingLine(memberId, found);
-      var source = line === null ? renderOriginal(found).text : line;
+      var rendered = line === null ? renderOriginal(found) : null;
+      var source = rendered === null ? line : rendered.text;
       if (source === '') { skip = 0; shown += 1; continue; }
       var member = source.slice(skip);
       if (member === '') {
@@ -799,6 +819,8 @@ export default function (pi) {
         parts.push(member.slice(0, room));
         size += gap + room;
         next = { at: at + shown, offset: skip + room };
+        // 这条成员被页尾切开：续读偏移是对它此刻全文的坐标。
+        freezeHead(memberId, rendered);
       }
       skip = 0;
     }
@@ -904,7 +926,9 @@ export default function (pi) {
           return { content: [{ type: 'text', text: 'Cannot recover ' + id + ': the payload is over the retention budget, so it was not retained; re-run the command instead.' }], isError: true };
         }
       }
-      return readSlice(String(id), raw, params);
+      // 这次读取会被分页：先冻结头，续读的偏移才有稳定的参照。
+    if (raw.length > RECOVERY_READ_MAX_CHARS) freezeHead(String(id), original);
+    return readSlice(String(id), raw, params);
     },
   });
 
@@ -1019,13 +1043,20 @@ export default function (pi) {
       if (groupId !== null) {
         if (carriesRecord(unit)) continue;
         var group = groups[groupId];
-        if (!group) group = groups[groupId] = { ref: groupId, dropped: 0, chars: 0, names: Object.create(null), last: null };
+        if (!group) group = groups[groupId] = { ref: groupId, dropped: 0, chars: 0, names: Object.create(null), failed: [], last: null };
         group.last = unit;
         group.dropped += 1;
         group.chars += unit.chars;
         for (var nc = 0; nc < unit.calls.length; nc++) {
           var cname = String(unit.calls[nc].name || '?');
           group.names[cname] = (group.names[cname] || 0) + 1;
+        }
+        // 失败是结果内容的一部分：逐条记录一直带着（error · last: …），批记录不能把它折没。
+        for (var fr = 0; fr < unit.results.length; fr++) {
+          var failedResult = unit.results[fr];
+          if (failedResult.isError !== true) continue;
+          var failedLine = lastLine(textOf(failedResult.content));
+          group.failed.push(String(failedResult.toolName || '?') + (failedLine ? ': ' + failedLine : ''));
         }
         // 同一条 assistant 消息里除调用还有正文时，正文要留着：那是模型自己的计划与
         // 结论，findOriginal 只还原调用参数与结果，取不回这些内容。
@@ -1109,6 +1140,7 @@ export default function (pi) {
         role: 'toolResult',
         toolCallId: anchorCall.id,
         toolName: anchorResult.toolName,
+        isError: anchorResult.isError,
         content: [{ type: 'text', text: batchRecordText(batchGroup) }],
       } };
     }

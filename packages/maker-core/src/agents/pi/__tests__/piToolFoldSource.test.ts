@@ -1017,6 +1017,155 @@ describe('cindy-tool-fold extension source', () => {
     expect(String(rest.content![0].text)).not.toContain('past the end');
   });
 
+  it('resumes a giant read at the same offset once compaction has dropped its call block', async () => {
+    // 取回的原文由「上下文里的调用头 + 登记表里的结果」现拼。压缩只带走前一半：同一份原文
+    // 变短，上一页给的偏移就落进结果正文中间，跳过的正是还没读过的那一段。
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const big = 'body ' + 'z'.repeat(22000);
+    toolResult({ toolName: 'bash', toolCallId: 'giant-9', content: [{ type: 'text', text: big }] });
+    projection(context, [
+      call('giant-9', 'bash', { command: 'make giant 9' }),
+      { role: 'toolResult', toolCallId: 'giant-9', toolName: 'bash', content: [{ type: 'text', text: 'preview' }] } as unknown as { content: Block[] },
+    ]);
+    const pages: string[] = [];
+    let params: { call_id: string; offset?: number } = { call_id: 'giant-9' };
+    for (;;) {
+      const page = await tool.execute('t', params);
+      expect(page.isError).toBeUndefined();
+      const text = String(page.content![0].text);
+      pages.push(text.replace(/\n\n\[truncated: [^\n]*\]$/, ''));
+      const next = /"offset":(\d+)/.exec(text);
+      if (next === null) break;
+      // 页与页之间发生压缩：调用块离开上下文，全文只剩登记表里那一份。
+      projection(context, [{ role: 'user', content: [{ type: 'text', text: 'summary of the earlier work' }] }]);
+      params = { call_id: 'giant-9', offset: Number(next[1]) };
+    }
+    const whole = pages.join('');
+    const head = whole.slice(0, whole.indexOf('result:\n'));
+    expect(head).toContain('"command":"make giant 9"');
+    expect(whole).toBe(head + 'result:\n' + big);
+  });
+
+  it('keeps a failed giant result marked as an error when read back after compaction', async () => {
+    // 失败是结果内容的一部分。超大结果入库时只有登记表里那一份全文；压缩带走上下文里的结果
+    // 消息后，它是不是失败就只剩登记表知道。
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const big = 'boom ' + 'z'.repeat(22000);
+    toolResult({ toolName: 'bash', toolCallId: 'giant-f', isError: true, content: [{ type: 'text', text: big }] });
+    projection(context, [
+      call('giant-f', 'bash', { command: 'make it fail' }),
+      { role: 'toolResult', toolCallId: 'giant-f', toolName: 'bash', isError: true, content: [{ type: 'text', text: 'preview' }] } as unknown as { content: Block[] },
+    ]);
+    // 压缩：调用块和预览都离开上下文。
+    projection(context, [{ role: 'user', content: [{ type: 'text', text: 'summary of the earlier work' }] }]);
+    const page = await tool.execute('t', { call_id: 'giant-f' });
+    expect(page.isError).toBeUndefined();
+    const text = String(page.content![0].text);
+    expect(text).toContain('result (error):\nboom zzz');
+    expect(text).not.toContain('result:\n');
+  });
+
+  it('resumes a batch read inside a cut member at the same offset once compaction has dropped its call block', async () => {
+    // 同一件事的批读取形态：成员被页尾切开时，续读偏移落在它自己的全文里。成员是入库时
+    // 被登记表收存的巨型结果；压缩后批里只有这类成员还取得到（其余缺项点名），那是另一条规则。
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000', CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
+    const body = ['a', 'b', 'c', 'd', 'e'];
+    for (const index of [0, 1, 2, 3, 4]) {
+      // 入库时经过截断钩子：超过入库下限的结果被登记表收存，上下文里只留预览。
+      const clipped = (toolResult({ toolName: 'bash', toolCallId: `m-${index}`, content: [{ type: 'text', text: `member ${index} ` + body[index].repeat(21000) }] }) as { content: Block[] }).content;
+      messages.push(call(`m-${index}`, 'bash', { command: `member ${index}` }));
+      messages.push(result(`m-${index}`, 'bash', String(clipped[0].text)));
+    }
+    const out = projection(context, messages);
+    const batch = refsOf(out)[0];
+    const pages: string[] = [];
+    let cuts = 0;
+    let params: { batch: string; at?: number; offset?: number } = { batch };
+    for (;;) {
+      const page = await tool.execute('t', params);
+      expect(page.isError).toBeUndefined();
+      const text = String(page.content![0].text);
+      pages.push(text.replace(/\n\n\[truncated: [^\n]*\]$/, ''));
+      const next = /"at":(\d+)(?:,"offset":(\d+))?/.exec(text);
+      if (next === null) break;
+      cuts += 1;
+      // 页与页之间发生压缩：调用块全部离开上下文，成员只剩登记表里那一份。
+      projection(context, [{ role: 'user', content: [{ type: 'text', text: 'summary of the earlier work' }] }]);
+      params = { batch, at: Number(next[1]), ...(next[2] === undefined ? {} : { offset: Number(next[2]) }) };
+    }
+    // 每个成员 21k 字符、每页 1000：每个成员都被切开二十来次。
+    expect(cuts).toBeGreaterThan(50);
+    const whole = pages.join('');
+    // 第 0 个成员第一次被切开时调用块还在：之后每一页都切同一份带调用头的字节。
+    expect(whole).toContain('"command":"member 0"}\nresult:\nmember 0 ' + body[0].repeat(21000));
+    // 其余成员（锚点 m-3 在内）第一次被切开时调用块已被压缩带走（没人留有它）：取到的是登记表里的
+    // 结果，同样逐页连续。m-4 在常驻窗口里，不成批。
+    for (const index of [1, 2, 3]) {
+      expect(whole).toContain('result:\nmember ' + index + ' ' + body[index].repeat(21000));
+    }
+  });
+
+  it('reads the anchor back as its own original, never as the batch record', async () => {
+    // 记录占了锚点的结果位，但那只是发给模型的投影：读取走投影前的原始消息，
+    // 锚点取回的必须是它自己的调用与结果。
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000', CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
+    for (const index of [0, 1, 2, 3, 4]) {
+      messages.push(call(`s-${index}`, 'bash', { command: `step ${index}` }));
+      messages.push(result(`s-${index}`, 'bash', `output ${index} ` + 'x'.repeat(600)));
+    }
+    const out = projection(context, messages);
+    const record = out.find(isRecord)!;
+    expect(record.role).toBe('toolResult');
+    expect(recordText(record)).toContain('4 round-trips');
+    const own = await tool.execute('t1', { call_id: 's-3' });
+    expect(own.isError).toBeUndefined();
+    const text = String(own.content![0].text);
+    expect(text).toContain('"command":"step 3"}\nresult:\noutput 3 ');
+    expect(text).not.toContain('round-trips');
+  });
+
+  it("keeps a failed round-trip's error state in its batch record and when read back", async () => {
+    // 错误状态是往返内容的一部分：逐条记录一直带着（error · last: …），批记录换掉锚点结果时
+    // 却丢掉 isError、也不数批内的失败；取回原文同样不带状态，模型读了整批也看不出哪次失败。
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
+    for (const index of [0, 1, 2, 3, 4, 5]) {
+      const failed = index % 2 === 0;
+      messages.push(call(`f-${index}`, 'bash', { command: `step ${index}` }));
+      messages.push(result(`f-${index}`, 'bash', failed ? `step ${index} failed ${'x'.repeat(300)}\nexit code 1` : `step ${index} ok ${'x'.repeat(300)}`, failed));
+    }
+    const out = projection(context, messages);
+    const [record] = records(out);
+    expect(record).toContain('3 failed (');
+    expect(record.match(/bash: exit code 1/g)).toHaveLength(3);
+    // 锚点是最后一条往返，它自己失败了：记录所在的结果位也必须如实标成错误。
+    const recordMessage = out.find((message) => message.role === 'toolResult' && recordText(message) === record)!;
+    expect(recordMessage.isError).toBe(true);
+    const batch = await tool.execute('t', { batch: refsOf(out)[0] });
+    const text = String(batch.content![0].text);
+    expect(Array.from(text.matchAll(/result \(error\):\nstep (\d) failed/g), (match) => match[1])).toEqual(['0', '2', '4']);
+    expect(Array.from(text.matchAll(/result:\nstep (\d) ok/g), (match) => match[1])).toEqual(['1', '3']);
+  });
+
+  it('describes the anchor call alone with isError and names the other failures in the record text', () => {
+    // 结果位的 isError 属于它自己的调用 id：锚点成功就不能标成错误，否则模型会去重跑一条
+    // 其实成功的命令。批内别的成员失败由记录正文点名。
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
+    for (const index of [0, 1, 2, 3, 4, 5]) {
+      const failed = index === 1;
+      messages.push(call(`s-${index}`, 'bash', { command: `step ${index}` }));
+      messages.push(result(`s-${index}`, 'bash', failed ? `boom ${'x'.repeat(300)}\nexit code 2` : `step ${index} ok ${'x'.repeat(300)}`, failed));
+    }
+    const out = projection(context, messages);
+    const [record] = records(out);
+    expect(record).toContain('1 failed (bash: exit code 2)');
+    const recordMessage = out.find((message) => message.role === 'toolResult' && recordText(message) === record)!;
+    expect(recordMessage.isError).toBe(false);
+  });
+
   it('forwards every knob the extension reads to remote Pi sessions', () => {
     // A knob that exists in the extension but is missing from the forward list is
     // silently ignored on remote sessions (the default applies instead).
