@@ -16160,6 +16160,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Der Kontext konnte beim Modellwechsel nicht komprimiert werden, da das vorherige Modell über diese Verbindung nicht verfügbar ist.",
       "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
       "MODEL_CATALOG_UNCONFIRMED": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Nachricht nicht gesendet. Cindy konnte den Sicherheitseintrag nicht rechtzeitig bestätigen.",
       "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
       "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
       "REMOTE_DAEMON_CLOSED": "Die Remote-Verbindung wurde unterbrochen, möglicherweise während eines Updates. Diese Runde wurde beendet. Sende die Nachricht erneut.",

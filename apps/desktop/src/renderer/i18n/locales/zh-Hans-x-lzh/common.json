@@ -16123,6 +16123,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所连者无权用前一模型，故易模型时未能压缩上下文。",
       "MODEL_SELECTION_UNAVAILABLE": "所择模型于此供方下已不可用。请于规制中察其连接，或另择可用之模型。",
       "MODEL_CATALOG_UNCONFIRMED": "模型清单暂未能核实。已保留所选模型，可刷新清单后重试。",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "未发送消息，Cindy 未能及时确认安全记录",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未易毕。请览谬误详情，待 Harness 就绪再试。",
       "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
       "REMOTE_DAEMON_CLOSED": "远程连接中断，或方更新。此轮已终，请再遣。",

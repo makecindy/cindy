@@ -91,6 +91,29 @@ it.each(['live', 'history'] as const)('reports a clean Codex transport exit as a
   }
 });
 
+// #10161 / unit: a stalled local dispatch record used to look like a model
+// reply failure. Both error surfaces use real localized copy after the host
+// identifies that boundary. An unclassified timeout still has generic copy.
+it.each(['live', 'history', 'unclassified'] as const)('attributes a send preparation deadline in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const raw = 'Snapshot operation deadline exceeded';
+  const message = surface === 'unclassified'
+    ? raw
+    : `[SNAPSHOT_DISPATCH_INTENT_TIMEOUT] ${raw} before confirming the send record. The message was not sent.`;
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="codex" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText(surface === 'unclassified'
+    ? zhCN.chat.errorBanner.replyFailed
+    : '未发送消息，Cindy 未能及时确认安全记录')).toBeTruthy();
+  if (surface === 'live') {
+    fireEvent.click(screen.getByRole('button', { name: zhCN.chat.errorBanner.retry }));
+    expect(retry).toHaveBeenCalledWith('原消息');
+  }
+});
+
 // #10854, unit: production live reducer + banner/tail/history must retain the
 // actual cause for diagnosis while legacy reason-only errors use neutral copy.
 it.each(['live', 'tail', 'history'] as const)('keeps silent-stop %s copy neutral and preserves cause details', async surface => {

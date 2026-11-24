@@ -16303,6 +16303,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Não foi possível compactar o contexto ao mudar de modelo porque esta ligação não permite usar o modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado já não está disponível no respetivo fornecedor. Verifique a ligação nas Definições ou escolha outro modelo disponível.",
       "MODEL_CATALOG_UNCONFIRMED": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualiza a lista de modelos e tenta novamente.",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Mensagem não enviada. O Cindy não conseguiu confirmar o registo de segurança a tempo.",
       "HARNESS_SWITCH_NOT_READY": "A mudança de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
       "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente dentro de instantes.",
       "REMOTE_DAEMON_CLOSED": "A ligação remota caiu, possivelmente durante uma atualização. Este turno terminou. Envie a mensagem novamente.",
