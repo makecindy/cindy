@@ -689,6 +689,18 @@ let responsivenessTracker: DeviceResponsivenessTracker | null = null;
 /** 熔断探测的周期 tick(单飞探测由 tracker 内部的退避窗口控制,这里只是驱动时钟)。 */
 let responsivenessProbeTimer: ReturnType<typeof setInterval> | null = null;
 const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
+const PEER_BUSINESS_ACTIVE_WINDOW_MS = 5_000;
+let readPeerBusinessReceivedAgoMs: ((deviceId: string) => number | null) | null = null;
+
+/** 对端最近是否仍在持续向本机送达业务帧/分片(慢网大回包堵在队头时区分「慢但活着」与真实失联)。 */
+export function isPeerDeliveringBusinessTraffic(
+  deviceId: string,
+  maxAgeMs = PEER_BUSINESS_ACTIVE_WINDOW_MS,
+): boolean {
+  if (!client || linkTornDown || isAppSessionBoundaryPending()) return false;
+  const ago = readPeerBusinessReceivedAgoMs?.(deviceId) ?? null;
+  return ago !== null && ago <= maxAgeMs;
+}
 /**
  * 词典同步的对端选择只看「在线 + 是桌面」,不看 remoteControlEnabled ——
  * push 帧不属于 relay 的控制类帧,自己设备之间同步词典不该要求对方开放被控。
@@ -1206,11 +1218,25 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
   client = routeSessionPeers(routedClient, sessionLinks, log);
   compatibilityConnection = () => routedClient.legacyConnection();
+  readPeerBusinessReceivedAgoMs = (deviceId: string): number | null => {
+    const candidates = [
+      sessionLinks.getPeerLinkSnapshots().find((row) => row.deviceId === deviceId)?.receivedAgoMs ?? null,
+      routedClient.connectionFor(deviceId).getPeerLinkSnapshots().find((row) => row.deviceId === deviceId)?.receivedAgoMs ?? null,
+    ].filter((value): value is number => value !== null);
+    return candidates.length > 0 ? Math.min(...candidates) : null;
+  };
   // 这次初始化交出去的客户端（分路的那一层）；之后判断「client 还是不是它」都和它比。
   const primaryFacade = client;
 
   responsivenessTracker = createResponsivenessTracker({
     confirmRelayForTimeout: (deviceId) => client?.connectionFor(deviceId).confirmRelayForPeerTimeout() ?? false,
+    isPeerDeliveringTraffic: (deviceId, elapsedMs) => {
+      if (linkTornDown || isAppSessionBoundaryPending()) return false;
+      const ago = readPeerBusinessReceivedAgoMs?.(deviceId) ?? null;
+      return ago !== null && ago <= PEER_BUSINESS_ACTIVE_WINDOW_MS && (elapsedMs <= 0 || ago < elapsedMs);
+    },
+    canUpgradeLink: (deviceId) =>
+      !isScopedPeer(deviceId) && sessionLinks.available(deviceId) && !sessionLinks.ownsOutbound(deviceId),
     // 探测直接走 client.invoke(guardInvoke 已在 tracker 内持有探测席位,不能再套
     // remoteInvoke 的外层门禁,否则自旋)。曾协商可靠传输的 peer 必须先恢复 link，
     // 否则 sessions:list 也只会滞留发送队列，反复得到 BACKPRESSURE。
@@ -1838,6 +1864,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     setRemoteInvokeBusyChangedListener(null);
     client = null;
     compatibilityConnection = null;
+    readPeerBusinessReceivedAgoMs = null;
   });
 
   // async 阶段(被 await、先于 post-async 的关库)等 DELETE 真正落盘

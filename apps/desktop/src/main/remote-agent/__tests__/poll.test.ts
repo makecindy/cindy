@@ -1,12 +1,27 @@
 /**
  * 多任务共用一个 poll：被控端按游标返回、控制端去重，链路抖动后不丢不重。
+ *
+ * 测试价值
+ * - 生产入口与可观察结果：RemoteAgentPoller；对端仍在持续回传其它业务帧（大包阻塞回程）时保留在途远程任务游标并自动恢复，
+ *   超过 REMOTE_AGENT_CONGESTED_GIVE_UP_MS 仍无 poll 回包时有界结束。
+ * - Bug／规则依据：docs/dev-rules/remote-and-mobile-adaptation.md「远程 Agent 的拉取与恢复」；2026-11-24 慢中转大包拥塞 121 秒误判 remote_agent_lost。
+ * - 现有覆盖缺口：原测试只覆盖完全失联 2 分钟放弃，未覆盖对端持续送达业务帧期间的延迟窗口与 5 分钟硬上限。
+ * - 最小失败输入：对端持续送达业务帧时 poll 连续超时超过 2 分钟后恢复，以及持续超时超过 5 分钟。
+ * - tier：unit（假时钟驱动，无网络或子进程）。
+ * - 实测耗时：5.50s（pnpm --dir apps/desktop exec vitest run src/main/remote-agent/__tests__/poll.test.ts，其中单测执行 1.71s、模块收集 2.94s）
  */
 import { randomUUID } from 'node:crypto';
 
 import { REMOTE_AGENT_MAX_POLL_RUNS, REMOTE_AGENT_READ_MAX_BYTES, REMOTE_AGENT_READ_WAIT_MS, type RemoteAgentErrorInfo } from '@cindy/device-link';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { isRetryableLinkError, remoteAgentErrorFrom, RemoteAgentPoller, type PolledRun } from '../controller/poller';
+import {
+  REMOTE_AGENT_CONGESTED_GIVE_UP_MS,
+  isRetryableLinkError,
+  remoteAgentErrorFrom,
+  RemoteAgentPoller,
+  type PolledRun,
+} from '../controller/poller';
 import { remoteAgentInvoker } from '../controller/runClient';
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker';
 import { EventLog } from '../eventLog';
@@ -626,5 +641,49 @@ describe('link errors', () => {
     const busy = await host([{ op: 'caps' }]).catch((e: unknown) => e);
     expect((busy as Error).message).toBe('[REMOTE_AGENT_BUSY] too many tasks');
     expect(isRetryableLinkError(busy)).toBe(false);
+  });
+
+  it('holds the 2-minute outage cutoff while the peer is actively delivering business frames, up to the 5-minute ceiling', async () => {
+    vi.useFakeTimers();
+    let clock = 0;
+    let congested = true;
+    const sink = collector(randomUUID());
+    const poller = new RemoteAgentPoller(
+      async () => {
+        if (congested) throw Object.assign(new Error('INVOKE_TIMEOUT: head-of-line'), { code: 'INVOKE_TIMEOUT' });
+        return { runs: [{ runId: sink.run.runId, cursor: 4, data: Buffer.from('done').toString('base64'), done: true }] };
+      },
+      undefined,
+      () => clock,
+      () => true,
+    );
+    poller.register(sink.run);
+    for (let step = 0; step < 30; step += 1) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      clock += 5_000;
+    }
+    // 150s (> 120s dead-peer cutoff) while peer actively delivers frames: run stays alive and resumes cleanly.
+    expect(sink.lost).toBeNull();
+    congested = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+    clock += 5_000;
+    expect(sink.done).toBe(true);
+    expect(sink.text()).toBe('done');
+
+    // A permanently wedged poll still terminates at REMOTE_AGENT_CONGESTED_GIVE_UP_MS.
+    const wedged = collector(randomUUID());
+    new RemoteAgentPoller(
+      async () => {
+        throw Object.assign(new Error('INVOKE_TIMEOUT: wedged'), { code: 'INVOKE_TIMEOUT' });
+      },
+      undefined,
+      () => clock,
+      () => true,
+    ).register(wedged.run);
+    for (let elapsed = 0; elapsed <= REMOTE_AGENT_CONGESTED_GIVE_UP_MS + 10_000 && !wedged.lost; elapsed += 5_000) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      clock += 5_000;
+    }
+    expect(wedged.lost?.reason).toBe('unreachable');
   });
 });

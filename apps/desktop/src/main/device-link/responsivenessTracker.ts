@@ -129,6 +129,11 @@ const BOOTSTRAP_FAN_OUT_CHANNELS: ReadonlySet<string> = new Set([
   'maker:git-safety:get',
 ]);
 const BOOTSTRAP_FAN_OUT_COHORT_WINDOW_MS = 250;
+/**
+ * 对端正在持续向本机回传业务分片/推送(慢网大回包堵在队头)时,单笔请求超时不立即累计无响应熔断;
+ * 上限 90s 防止对端单向刷推送而 IPC/DB 永久卡死时永远不熔断。
+ */
+export const PEER_ACTIVE_DELIVERY_PATIENCE_MS = 90_000;
 
 /**
  * 「该失败已被某个熔断观测席位结算」的本地标记(与 DeviceLinkError.inFlight 同
@@ -204,6 +209,10 @@ export interface ResponsivenessTrackerDeps {
   recoverLink?: (deviceId: string) => Promise<unknown>;
   /** Verify shared relay activity before attributing a timeout to one device. */
   confirmRelayForTimeout?: (deviceId: string) => boolean;
+  /** True when the target peer actively delivered business payload bytes during this request's window. */
+  isPeerDeliveringTraffic?: (deviceId: string, elapsedMs: number) => boolean;
+  /** True when a better authenticated transport (e.g. an Agent-Net session) is ready to take over on recovery. */
+  canUpgradeLink?: (deviceId: string) => boolean;
   /** 时钟注入(测试用;默认 Date.now)。 */
   now?: () => number;
   log?: TrackerLogger;
@@ -240,6 +249,7 @@ export function createResponsivenessTracker(
   const linkRecoveryInFlight = new Map<string, Promise<unknown>>();
   const bootstrapFanOutCohorts = new Map<string, { cohort: number; expiresAt: number }>();
   const lifecycleEpochs = new Map<string, number>();
+  const activeDeliverySince = new Map<string, number>();
   // Only a successful response permits recovery work. Clearing state or a relay
   // offline/revoked reply must close the breaker without replaying subscriptions.
   let recoveryEvidence = false;
@@ -305,6 +315,15 @@ export function createResponsivenessTracker(
     return cohort;
   };
 
+  const shouldExcuseTimeoutForActiveDelivery = (deviceId: string, startedAt: number): boolean => {
+    const at = now();
+    const elapsedMs = Math.max(0, at - startedAt);
+    if (deps.isPeerDeliveringTraffic?.(deviceId, elapsedMs) !== true) return false;
+    const since = activeDeliverySince.get(deviceId) ?? at;
+    if (!activeDeliverySince.has(deviceId)) activeDeliverySince.set(deviceId, since);
+    return at - since <= PEER_ACTIVE_DELIVERY_PATIENCE_MS;
+  };
+
   const guardInvoke = async <T>(
     deviceId: string,
     channel: string,
@@ -317,9 +336,12 @@ export function createResponsivenessTracker(
     const slot = breaker.acquire(deviceId, cohort, { allowProbe: false });
     if (slot.decision === 'reject') throw createDeviceUnresponsiveError(deviceId);
     const wasProbe = slot.decision === 'probe';
+    const startedAt = now();
     try {
       const result = await run();
-      settle(deviceId, slot, classifyDeviceSendSuccess(channel, wasProbe));
+      const classified = classifyDeviceSendSuccess(channel, wasProbe);
+      if (classified === 'responded') activeDeliverySince.delete(deviceId);
+      settle(deviceId, slot, classified);
       return result;
     } catch (err) {
       // 结算所有权(收敛检查点不变量 A):同一个错误对象只允许第一个 settle 的
@@ -328,17 +350,26 @@ export function createResponsivenessTracker(
       // 业务加入者,跨 cohort 窗口时不同批),后续 guard 一律不定论——
       // 「单次物理失败恰好结算一次」由结算方原子地声明,与发起方形态无关。
       // 探测席位上非探测通道的失败同样不定论(与成功侧分类对称)。
+      const classified = classifyDeviceSendFailure(err);
+      const sameLifecycle = lifecycleEpochs.get(deviceId) === lifecycleEpoch;
+      const excusedByActiveDelivery =
+        classified === 'timeout'
+        && sameLifecycle
+        && deps.confirmRelayForTimeout?.(deviceId) !== false
+        && shouldExcuseTimeoutForActiveDelivery(deviceId, startedAt);
       const outcome =
         isBreakerObservedError(err)
         || (wasProbe && channel !== DEVICE_RESPONSIVENESS_PROBE_CHANNEL)
-        || (classifyDeviceSendFailure(err) === 'timeout' && (
-          lifecycleEpochs.get(deviceId) !== lifecycleEpoch || deps.confirmRelayForTimeout?.(deviceId) === false
+        || (classified === 'timeout' && (
+          !sameLifecycle
+          || deps.confirmRelayForTimeout?.(deviceId) === false
+          || excusedByActiveDelivery
         ))
           ? 'inconclusive'
-          : classifyDeviceSendFailure(err);
+          : classified;
       markBreakerObserved(err);
       settle(deviceId, slot, outcome, false);
-      if (outcome === 'timeout' && lifecycleEpochs.get(deviceId) === lifecycleEpoch)
+      if (sameLifecycle && (outcome === 'timeout' || (excusedByActiveDelivery && deps.canUpgradeLink?.(deviceId) === true)))
         triggerLinkRecovery(deviceId);
       throw err;
     }
@@ -355,6 +386,7 @@ export function createResponsivenessTracker(
         allowProbe: true,
       });
       if (slot.decision !== 'probe') continue;
+      const probeStartedAt = now();
       let probePromise: Promise<unknown>;
       try {
         const probe = deviceResponsivenessProbe(deviceId);
@@ -368,25 +400,35 @@ export function createResponsivenessTracker(
       }
       void Promise.resolve(probePromise)
         .then(
-          () =>
+          () => {
+            activeDeliverySince.delete(deviceId);
             settle(
               deviceId,
               slot,
               classifyDeviceSendSuccess(DEVICE_RESPONSIVENESS_PROBE_CHANNEL, true),
-            ),
+            );
+          },
           (err) => {
             const classified = classifyDeviceSendFailure(err);
+            const sameLifecycle = lifecycleEpochs.get(deviceId) === lifecycleEpoch;
+            const excusedByActiveDelivery =
+              classified === 'timeout'
+              && sameLifecycle
+              && deps.confirmRelayForTimeout?.(deviceId) !== false
+              && shouldExcuseTimeoutForActiveDelivery(deviceId, probeStartedAt);
             const outcome = classified === 'timeout' && (
-              lifecycleEpochs.get(deviceId) !== lifecycleEpoch || deps.confirmRelayForTimeout?.(deviceId) === false
+              !sameLifecycle
+              || deps.confirmRelayForTimeout?.(deviceId) === false
+              || excusedByActiveDelivery
             )
               ? 'inconclusive' : classified;
             settle(deviceId, slot, outcome, false);
             // 探测是 open 后唯一会真正穿过 peer link 的流量。若它仍等满超时，
             // 继续按单-peer 半径重开 link；clear/reset 已翻代时 breaker 会先关闭。
             if (
-              outcome === 'timeout' &&
-              lifecycleEpochs.get(deviceId) === lifecycleEpoch &&
-              breaker.isOpen(deviceId)
+              sameLifecycle &&
+              breaker.isOpen(deviceId) &&
+              (outcome === 'timeout' || (excusedByActiveDelivery && deps.canUpgradeLink?.(deviceId) === true))
             ) {
               triggerLinkRecovery(deviceId);
             }
@@ -408,12 +450,14 @@ export function createResponsivenessTracker(
       lifecycleEpochs.set(deviceId, (lifecycleEpochs.get(deviceId) ?? 0) + 1);
       linkRecoveryInFlight.delete(deviceId);
       bootstrapFanOutCohorts.delete(deviceId);
+      activeDeliverySince.delete(deviceId);
       breaker.clear(deviceId);
     },
     resetAll: () => {
       for (const [deviceId, epoch] of lifecycleEpochs) lifecycleEpochs.set(deviceId, epoch + 1);
       linkRecoveryInFlight.clear();
       bootstrapFanOutCohorts.clear();
+      activeDeliverySince.clear();
       breaker.resetAll();
     },
   };

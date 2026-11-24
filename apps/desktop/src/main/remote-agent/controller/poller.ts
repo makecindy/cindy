@@ -24,6 +24,8 @@ export type RemoteAgentInvoke = (args: unknown[], options?: { beforeDispatch?: (
 
 /** 对方不可达时持续重拉的最长时间。 */
 export const REMOTE_AGENT_READ_GIVE_UP_MS = 2 * 60_000;
+/** 对方仍在持续回传其它业务帧(慢网大回包堵住 poll)时,重拉的最长总上限。 */
+export const REMOTE_AGENT_CONGESTED_GIVE_UP_MS = 5 * 60_000;
 const RETRY_BASE_MS = 500;
 const RETRY_MAX_MS = 5_000;
 /** 同时在途的 poll 上限：一个长等待 + 一个覆盖新任务的。 */
@@ -106,6 +108,7 @@ export class RemoteAgentPoller {
   /** 有任务还没被任何在途 poll 覆盖。 */
   private needFresh = false;
   private unreachableSince: number | null = null;
+  private congestedSince: number | null = null;
   private attempt = 0;
   private readonly recoveringAuthorization = new WeakSet<PolledRun>();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -120,6 +123,7 @@ export class RemoteAgentPoller {
     readonly invoke: RemoteAgentInvoke,
     private readonly log?: { warn(message: string, meta?: Record<string, unknown>): void },
     private readonly now: () => number = Date.now,
+    private readonly isPeerDelivering?: () => boolean,
   ) {}
 
   /** 开始拉取一个任务(游标从 0 开始)。 */
@@ -136,6 +140,7 @@ export class RemoteAgentPoller {
       if (this.retryTimer) clearTimeout(this.retryTimer);
       this.retryTimer = null;
       this.unreachableSince = null;
+      this.congestedSince = null;
       this.attempt = 0;
     }
   }
@@ -216,6 +221,7 @@ export class RemoteAgentPoller {
         this.retryTimer = null;
       }
       this.unreachableSince = null;
+      this.congestedSince = null;
       this.attempt = 0;
       const delivered = this.apply(wanted, result);
       if (!delivered && this.now() - startedAt < EMPTY_FAST_MS) this.emptyFastStreak += 1;
@@ -327,9 +333,19 @@ export class RemoteAgentPoller {
       this.ensureAfterReturn();
       return;
     }
-    this.unreachableSince ??= this.now();
-    if (this.now() - this.unreachableSince > REMOTE_AGENT_READ_GIVE_UP_MS) {
+    const now = this.now();
+    this.congestedSince ??= now;
+    if (!shareRefused && this.isPeerDelivering?.() === true) {
+      this.unreachableSince = now;
+    } else {
+      this.unreachableSince ??= now;
+    }
+    if (
+      now - this.unreachableSince > REMOTE_AGENT_READ_GIVE_UP_MS
+      || now - this.congestedSince > REMOTE_AGENT_CONGESTED_GIVE_UP_MS
+    ) {
       this.unreachableSince = null;
+      this.congestedSince = null;
       this.attempt = 0;
       // The outage deadline does not prove the peer is offline. Keep the final
       // timeout/backpressure/breaker cause for both live and persisted errors.
