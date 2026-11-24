@@ -13,6 +13,7 @@ import type {
 import type { PluginMarketDetail } from '../../../../shared/pluginMarket';
 import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
 import { MyPluginsPage, type MyPluginsPageCache, type PluginSubmitOptions } from '../MyPluginsPage';
+import type { TeamPublishingOption } from '../PluginPublishDialog';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -38,8 +39,10 @@ vi.mock('@/components/sidebar/AccountSwitcherDialog', () => ({
 vi.mock('@/hooks/useSignInToCindy', () => ({ useSignInToCindy: () => vi.fn() }));
 vi.mock('@/hooks/useMacFullscreen', () => ({ useMacFullscreen: () => ({ isMac: false }) }));
 
-const reviews = vi.hoisted(() => ({ updates: [] as PluginReviewUpdate[], refresh: vi.fn(), markRead: vi.fn() }));
+const reviews = vi.hoisted(() => ({ updates: [] as PluginReviewUpdate[], teamChangeToken: null as string | null, refresh: vi.fn(), markRead: vi.fn() }));
 vi.mock('@/contexts/PluginReviewUpdatesContext', () => ({ usePluginReviewUpdates: () => reviews }));
+const publishing = vi.hoisted(() => ({ entries: [], publishedSignal: 0, track: vi.fn(), dismiss: vi.fn() }));
+vi.mock('@/contexts/TeamPublishProgressContext', () => ({ useTeamPublishProgress: () => publishing }));
 const prefix = 'settings.ghosts.contribution';
 const at = '2026-10-15T00:00:00.000Z';
 const detail: MyPluginDetailView = {
@@ -119,6 +122,7 @@ function view(
   localPlugins: GhostPluginListItem[] = [{ id: 'exact-instance', name: 'Local Plugin', version: '1.2.0' } as GhostPluginListItem],
   onSubmitUpdate = vi.fn().mockResolvedValue(false),
   installedPluginCount = localPlugins.length,
+  teamPublishing?: TeamPublishingOption,
 ) {
   return render(
     <StrictMode>
@@ -127,6 +131,7 @@ function view(
       >
         <MyPluginsPage
           localPlugins={localPlugins}
+          teamPublishing={teamPublishing}
           installedPluginCount={installedPluginCount}
           reader={api}
           cache={cache}
@@ -334,6 +339,155 @@ describe('My Plugins facts', () => {
   // Unit: closing used to clear the real picker while Radix kept it mounted for
   // its exit animation, flashing Loading. Existing close/reopen cases unmounted
   // immediately in jsdom and missed this interval. One loaded choice is enough.
+  // #1541: an organization identity picks "团队共享" or "公开市场" before choosing a plugin. Team
+  // sharing hands the chosen installation to Main (no public preview or submission); the public
+  // market keeps today's flow. Personal identities never see the choice (existing cases).
+  it('lets an organization member publish a local plugin to team sharing first', async () => {
+    const api = reader();
+    const onStart = vi.fn(async () => true);
+    const team = {
+      orgName: 'Acme',
+      plugins: [{ id: 'team-instance', name: 'Team Plugin', version: '0.3.0' } as GhostPluginListItem],
+      onStart,
+    };
+    view(api, false, {}, undefined, undefined, undefined, team);
+    fireEvent.click(screen.getByRole('button', { name: `${prefix}.publishPlugin` }));
+    const picker = screen.getByRole('dialog');
+    expect(within(picker).queryByRole('button', { name: 'Local Plugin · 1.2.0 · exact-instance' })).toBeNull();
+    expect(within(picker).queryByRole('button', { name: `${prefix}.next` })).toBeNull();
+
+    fireEvent.click(within(picker).getByRole('radio', { name: new RegExp(`${prefix}.target.team`) }));
+    expect(within(picker).queryByRole('button', { name: 'Local Plugin · 1.2.0 · exact-instance' })).toBeNull();
+    const next = within(picker).getByRole('button', { name: `${prefix}.next` });
+    expect(next).toHaveProperty('disabled', true);
+    fireEvent.click(within(picker).getByRole('button', { name: 'Team Plugin · 0.3.0 · team-instance' }));
+    fireEvent.click(next);
+    await waitFor(() => expect(onStart).toHaveBeenCalledWith('team-instance'));
+    expect(api.prepare).not.toHaveBeenCalled();
+    expect(api.submit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: `${prefix}.publishPlugin` }));
+    const again = await screen.findByRole('dialog');
+    fireEvent.click(within(again).getByRole('radio', { name: new RegExp(`${prefix}.target.public`) }));
+    await selectPublishingPlugin('Local Plugin · 1.2.0 · exact-instance');
+    await waitFor(() => expect(api.prepare).toHaveBeenCalled());
+  });
+
+  // Review fix: a team review result changing must not reload (and reset) the public list.
+  it('reloads the public list for public review results only', async () => {
+    const api = reader();
+    const { rerender } = view(api, false);
+    await waitFor(() => expect(api.list).toHaveBeenCalled());
+    const before = vi.mocked(api.list).mock.calls.length;
+    reviews.updates = [{ pluginId: 'org:team-1', key: 'team-key', status: 'rejected', unread: true } as PluginReviewUpdate];
+    rerender(<StrictMode><MemoryRouter initialEntries={['/plugins?myPlugins=1']}>
+      <MyPluginsPage localPlugins={[]} installedPluginCount={0} reader={api} cache={{}} onSubmitUpdate={vi.fn()} onViewLocal={vi.fn()} />
+    </MemoryRouter></StrictMode>);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(vi.mocked(api.list).mock.calls.length).toBe(before);
+  });
+
+  // #1541: an organization member's page groups "公开市场" first and "团队共享" second, with counts;
+  // team rows follow the same filters and open the team plugin detail. Personal identities never
+  // read or show team plugins.
+  it('groups public market and team shared plugins for an organization member', async () => {
+    const third = { id: 'team-3', ghostId: 'expense-check', name: 'Expense Check', myRole: 'creator', status: 'active',
+      currentRelease: { id: 'r7', version: '2.0.0', reviewStatus: 'approved' },
+      latestRelease: { id: 'r7', version: '2.0.0', reviewStatus: 'approved' }, pendingRelease: null };
+    const listPlugins = vi.fn(async (cursor?: string) => cursor ? { nextCursor: null, plugins: [third] } : { nextCursor: 'c2', plugins: [
+      { id: 'team-1', ghostId: 'meeting-notes', name: 'Meeting Notes', myRole: 'maintainer', status: 'active',
+        currentRelease: { id: 'r1', version: '1.0.0', reviewStatus: 'approved', icon: { url: 'https://cdn.example.test/icon.png' } },
+        latestRelease: { id: 'r1', version: '1.0.0', reviewStatus: 'approved' }, pendingRelease: null },
+      { id: 'team-2', ghostId: 'ticket-router', name: 'Ticket Router', myRole: 'creator', status: 'disabled',
+        currentRelease: null, latestRelease: { id: 'r9', version: '0.1.0', reviewStatus: 'pending' },
+        pendingRelease: { id: 'r9', version: '0.1.0', reviewStatus: 'pending' } },
+    ] });
+    const plugin = vi.fn(async () => new Promise(() => undefined));
+    Object.assign(window, { electronAPI: { pluginAuthor: { listPlugins, plugin, maintainers: vi.fn(async () => []) } } });
+    try {
+      auth.membershipKind = 'org';
+      reviews.updates = [{ pluginId: 'org:team-2', key: 'k', status: 'rejected', unread: true } as PluginReviewUpdate];
+      const api = reader();
+      view(api, false);
+      expect(await screen.findByText(`${prefix}.introWithTeam`)).toBeTruthy();
+      const teamGroup = await screen.findByRole('region', { name: 'settings.ghosts.page.origin.organization' });
+      expect(within(teamGroup).getByText('Meeting Notes')).toBeTruthy();
+      expect(within(teamGroup).getByText('Ticket Router')).toBeTruthy();
+      expect(teamGroup.querySelector('img[src="https://cdn.example.test/icon.png"]')).not.toBeNull();
+      // A returned team plugin shows the same unread dot as public rows.
+      const ticketRow = within(teamGroup).getByText('Ticket Router').closest('button')!;
+      expect(within(ticketRow).getByRole('img', { name: `${prefix}.unreadReview` })).toBeTruthy();
+      expect(within(within(teamGroup).getByText('Meeting Notes').closest('button')!).queryByRole('img', { name: `${prefix}.unreadReview` })).toBeNull();
+      // More team plugins remain: the count says so and the list continues instead of truncating.
+      expect(within(teamGroup).getByRole('heading', { level: 2 }).textContent).toBe('settings.ghosts.page.origin.organization2+');
+      // A failed "load more" can be retried with the same cursor.
+      listPlugins.mockRejectedValueOnce(new Error('[INTERNAL] offline'));
+      fireEvent.click(within(teamGroup).getByRole('button', { name: `${prefix}.loadMore` }));
+      expect(await within(teamGroup).findByRole('alert')).toBeTruthy();
+      fireEvent.click(within(teamGroup).getByRole('button', { name: `${prefix}.loadMore` }));
+      expect(await within(teamGroup).findByText('Expense Check')).toBeTruthy();
+      expect(listPlugins.mock.calls.slice(-2)).toEqual([['c2'], ['c2']]);
+      const headings = screen.getAllByRole('heading', { level: 2 }).map(item => item.textContent);
+      expect(headings.indexOf(`${prefix}.target.public1`)).toBeLessThan(headings.indexOf('settings.ghosts.page.origin.organization3'));
+
+      fireEvent.click(screen.getByRole('button', { name: `${prefix}.filter.pending` }));
+      await waitFor(() => expect(within(teamGroup).queryByText('Meeting Notes')).toBeNull());
+      expect(within(teamGroup).getByText('Ticket Router')).toBeTruthy();
+      fireEvent.click(within(teamGroup).getByText('Ticket Router'));
+      await waitFor(() => expect(plugin).toHaveBeenCalledWith('team-2'));
+
+      cleanup();
+      listPlugins.mockClear();
+      auth.membershipKind = 'personal';
+      view(reader(), false);
+      await screen.findByText(`${prefix}.intro`);
+      expect(screen.queryByRole('region', { name: 'settings.ghosts.page.origin.organization' })).toBeNull();
+      expect(listPlugins).not.toHaveBeenCalled();
+    } finally {
+      Object.assign(window, { electronAPI: undefined });
+    }
+  });
+
+  // Greptile review on #12208: a first submission is pending, so it is not a review result and
+  // never changed the team list's refresh key. Minimal failing input: the change signal moves (or a
+  // team publish succeeds) while review results stay the same — the new plugin must appear, and
+  // the public list must not be read again.
+  it('reads the team list again when the change signal moves or a team publish succeeds, not the public list', async () => {
+    const fresh = { id: 'team-9', ghostId: 'new-plugin', name: 'New Plugin', myRole: 'creator', status: 'active',
+      currentRelease: null, latestRelease: { id: 'r1', version: '0.1.0', reviewStatus: 'pending' },
+      pendingRelease: { id: 'r1', version: '0.1.0', reviewStatus: 'pending' } };
+    const listPlugins = vi.fn(async () => ({ nextCursor: null, plugins: [] as unknown[] }));
+    Object.assign(window, { electronAPI: { pluginAuthor: { listPlugins, plugin: vi.fn(), maintainers: vi.fn(async () => []) } } });
+    const page = (api: ReturnType<typeof reader>) => <StrictMode><MemoryRouter initialEntries={['/plugins?myPlugins=1']}>
+      <MyPluginsPage localPlugins={[]} installedPluginCount={0} reader={api} cache={{}} onSubmitUpdate={vi.fn()} onViewLocal={vi.fn()} />
+    </MemoryRouter></StrictMode>;
+    try {
+      auth.membershipKind = 'org';
+      reviews.teamChangeToken = '["t",1]';
+      const api = reader();
+      const { rerender } = view(api, false);
+      await waitFor(() => expect(listPlugins).toHaveBeenCalled());
+      await waitFor(() => expect(api.list).toHaveBeenCalled());
+      const publicReads = vi.mocked(api.list).mock.calls.length;
+      const teamReads = listPlugins.mock.calls.length;
+      listPlugins.mockResolvedValue({ nextCursor: null, plugins: [fresh] });
+      reviews.teamChangeToken = '["t",2]';
+      rerender(page(api));
+      const teamGroup = await screen.findByRole('region', { name: 'settings.ghosts.page.origin.organization' });
+      expect(await within(teamGroup).findByText('New Plugin')).toBeTruthy();
+      expect(listPlugins.mock.calls.length).toBeGreaterThan(teamReads);
+      const afterSignal = listPlugins.mock.calls.length;
+      publishing.publishedSignal = 1;
+      rerender(page(api));
+      await waitFor(() => expect(listPlugins.mock.calls.length).toBeGreaterThan(afterSignal));
+      expect(vi.mocked(api.list).mock.calls.length).toBe(publicReads);
+    } finally {
+      reviews.teamChangeToken = null;
+      publishing.publishedSignal = 0;
+      Object.assign(window, { electronAPI: undefined });
+    }
+  });
+
   it('retains the publishing choices and preview throughout the close animation', async () => {
     // jsdom lacks CSS.escape; the simulated animation names are plain identifiers.
     vi.stubGlobal('CSS', { escape: (value: string) => value });

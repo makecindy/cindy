@@ -1867,17 +1867,21 @@ interface ElectronAPI {
   };
   pluginContributions: import('../shared/pluginContributions').PluginContributionsApi;
   pluginPublisher: {
-    start: (filePath: string) => Promise<{ transferId: string; uploadId: string | null }>;
+    startInstalled: (
+      instanceId: string,
+      expected?: import('../shared/pluginContributions').ContributionInstallationBinding,
+    ) => Promise<{ transferId: string; uploadId: string | null }>;
     status: (transferId: string) => Promise<{ progress: unknown }>;
     cancel: (transferId: string) => Promise<{ cancelled: boolean }>;
-    listMine: (cursor?: string) => Promise<{
-      releases: Array<Record<string, unknown>>;
-      nextCursor: string | null;
-    }>;
     onProgress: (callback: (progress: unknown) => void) => () => void;
     onConfirm: (callback: (request: unknown) => void) => () => void;
-    resolveConfirm: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
+    resolveConfirm: (
+      requestId: string,
+      confirmed: boolean,
+      visibilityAudience?: import('../shared/pluginAuthor').AuthorVisibilityAudience,
+    ) => Promise<{ handled: boolean }>;
   };
+  pluginAuthor: import('../shared/pluginAuthor').PluginAuthorRendererApi;
   voiceConversation: import('../shared/voiceConversation').VoiceConversationApi;
   voiceInput: {
     prewarm: (payload?: {

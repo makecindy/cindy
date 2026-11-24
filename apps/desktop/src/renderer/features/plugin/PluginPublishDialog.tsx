@@ -21,6 +21,16 @@ export interface PluginSubmitOptions {
   isCurrent?: () => boolean;
 }
 
+/** Organization identity only: publishing to the team goes through the org confirmation screen. */
+export interface TeamPublishingOption {
+  orgName: string;
+  plugins: readonly GhostPluginListItem[];
+  /** Starts the organization publish; resolves false when it could not start. */
+  onStart: (instanceId: string) => Promise<boolean>;
+}
+
+type PublishTarget = 'team' | 'public';
+
 export interface PluginPublishDialogRequest {
   id: number;
   owner: string;
@@ -32,7 +42,7 @@ export interface PluginPublishDialogRequest {
 export function PluginPublishDialog({
   open, ownerKey, initialInstanceId, onOpenChange, onClosed,
   reader, localPlugins, installedPluginCount, onPrepare, onSubmitUpdate,
-  submitBusy = false, installedRevision, submissionRevision = 0,
+  submitBusy = false, installedRevision, submissionRevision = 0, team,
 }: {
   open: boolean;
   ownerKey: string;
@@ -47,11 +57,19 @@ export function PluginPublishDialog({
   submitBusy?: boolean;
   installedRevision?: string;
   submissionRevision?: number;
+  /** Present for organization identities; personal identities only publish to the public market. */
+  team?: TeamPublishingOption;
 }) {
   const { t } = useTranslation();
   const location = useLocation();
   const pickerStatusId = useId();
   const [pickerSelection, setPickerSelection] = useState<string | null>(initialInstanceId ?? null);
+  // Organization members choose the target first; the quick "submit for review" entry is public.
+  const [target, setTarget] = useState<PublishTarget | null>(team && !initialInstanceId ? null : 'public');
+  const [teamSelection, setTeamSelection] = useState<string | null>(null);
+  const [teamStarting, setTeamStarting] = useState(false);
+  const [teamFailed, setTeamFailed] = useState(false);
+  const publicTarget = target === 'public';
   const [pickerRefresh, setPickerRefresh] = useState(0);
   const [pickerPlugins, setPickerPlugins] = useState<{
     key: string; plugins: MyPluginView[]; failure?: string;
@@ -91,13 +109,13 @@ export function PluginPublishDialog({
   if (pickerContext.current.key !== pickerContextKey)
     pickerContext.current = { key: pickerContextKey, token: {}, open };
   const currentPickerDraft = useContributionPreview(pickerKey,
-    pickerReady && versionReady && !selectedPickerUnavailable ? pickerItem?.id : undefined,
-    pickerItem?.version, onPrepare ?? reader.prepare, reader.discard);
+    publicTarget && pickerReady && versionReady && !selectedPickerUnavailable ? pickerItem?.id : undefined,
+    publicTarget ? pickerItem?.version : undefined, onPrepare ?? reader.prepare, reader.discard);
   const pickerBlocker = currentPickerDraft?.prepared?.preflight?.blockers[0];
 
   useEffect(() => {
     let disposed = false;
-    if (!open || !localPlugins.length) return;
+    if (!open || !localPlugins.length || !publicTarget) return;
     setPickerPlugins(null);
     void (async () => {
       const plugins: MyPluginView[] = [];
@@ -116,10 +134,10 @@ export function PluginPublishDialog({
       if (!disposed) setPickerPlugins({ key: pickerReadKey, plugins: [], failure: contributionErrorKey(error) });
     });
     return () => { disposed = true; };
-  }, [open, pickerReadKey, reader, localPlugins.length]);
+  }, [open, pickerReadKey, reader, localPlugins.length, publicTarget]);
 
   useEffect(() => {
-    if (!open || !pickerReady || !pickerItem || !selectedPlugin || initialUnavailable) return;
+    if (!open || !publicTarget || !pickerReady || !pickerItem || !selectedPlugin || initialUnavailable) return;
     let disposed = false;
     setVersionRead(null);
     const pluginId = selectedPlugin.pluginId, version = pickerItem.version;
@@ -142,7 +160,61 @@ export function PluginPublishDialog({
       if (!disposed) setVersionRead({ key: versionReadKey, used: false, failure: contributionErrorKey(error) });
     });
     return () => { disposed = true; };
-  }, [open, pickerReady, versionReadKey, reader, pickerItem, selectedPlugin, initialUnavailable]);
+  }, [open, publicTarget, pickerReady, versionReadKey, reader, pickerItem, selectedPlugin, initialUnavailable]);
+
+  const startTeam = () => {
+    if (!team || !teamSelection || teamStarting) return;
+    const token = pickerContext.current.token;
+    setTeamStarting(true);
+    setTeamFailed(false);
+    void team.onStart(teamSelection).then((started) => {
+      if (!mounted.current || pickerContext.current.token !== token) return;
+      setTeamStarting(false);
+      if (started) onOpenChange(false);
+      else setTeamFailed(true);
+    });
+  };
+
+  const targetPicker = team ? (
+    <fieldset className="mt-4">
+      <legend className="mb-2 text-13 font-medium text-[var(--text-primary)]">{t(`${copy}.publishTo`)}</legend>
+      <div role="radiogroup" aria-label={t(`${copy}.publishTo`)} className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {([
+          ['team', t(`${copy}.target.team`), t(`${copy}.target.teamHint`, { org: team.orgName })],
+          ['public', t(`${copy}.target.public`), null],
+        ] as const).map(([value, label, hint]) => (
+          <button key={value} type="button" role="radio" aria-checked={target === value}
+            disabled={!open || submitBusy || teamStarting}
+            onClick={() => setTarget(value)}
+            className={`flex min-h-11 flex-col items-start justify-center rounded-lg border px-3 py-2 text-left enabled:hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] ${target === value ? 'border-[var(--text-primary)]' : 'border-[var(--border-default)]'}`}>
+            <span className="text-14 font-medium leading-[1.43] text-[var(--text-primary)]">{label}</span>
+            {hint ? <span className="mt-0.5 text-12 leading-[1.333] text-[var(--text-secondary)]">{hint}</span> : null}
+          </button>
+        ))}
+      </div>
+    </fieldset>
+  ) : null;
+
+  const pluginRow = (local: GhostPluginListItem, options: {
+    selected: boolean; disabled: boolean; dimmed: boolean; unavailable: string | null; onSelect: () => void;
+  }) => (
+    <button type="button" key={local.id}
+      className={`flex w-full min-w-0 items-center gap-3 rounded-lg border px-2 py-3 text-left enabled:hover:bg-[var(--surface-hover)] disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)] ${options.dimmed ? 'opacity-60' : ''} ${options.selected ? 'border-[var(--border-default)] bg-[var(--surface-hover)]' : 'border-transparent'}`}
+      aria-label={`${local.name} · ${local.version} · ${local.id}`}
+      aria-describedby={options.unavailable ? `${pickerStatusId}-${local.id}` : undefined}
+      aria-pressed={options.selected}
+      disabled={options.disabled}
+      onClick={options.onSelect}>
+      <GhostPluginIcon iconDataUrl={local.iconDataUrl} iconId={local.id} iconName={local.name} />
+      <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+        <span className={`block text-14 font-medium leading-5 ${options.unavailable ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]'}`}>{local.name}</span>
+        <span className="mt-1 block text-12 leading-4 text-[var(--text-tertiary)]">{local.version}</span>
+        <span className="mt-1 block text-12 leading-4 text-[var(--text-tertiary)]">{local.id}</span>
+        {options.unavailable ? <span id={`${pickerStatusId}-${local.id}`} className="mt-1 block text-13 leading-5 text-[var(--text-secondary)]">{t(options.unavailable)}</span> : null}
+      </span>
+      {options.selected ? <Check size={16} aria-hidden="true" className="shrink-0 text-[var(--text-primary)]" /> : null}
+    </button>
+  );
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -160,63 +232,82 @@ export function PluginPublishDialog({
           <Dialog.Description className="mt-2 text-13 leading-5 text-[var(--text-secondary)]">
             {t(`${copy}.chooseLocal`)}
           </Dialog.Description>
-          <div className="my-4 min-h-0 overflow-y-auto p-1">
-            {localPlugins.map(local => {
-              const unavailable = pickerUnavailable(local);
-              return (
-                <button type="button" key={local.id}
-                  className={`flex w-full min-w-0 items-center gap-3 rounded-lg border px-2 py-3 text-left enabled:hover:bg-[var(--surface-hover)] disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)] ${submitBusy || !pickerReady ? 'opacity-60' : ''} ${pickerSelection === local.id ? 'border-[var(--border-default)] bg-[var(--surface-hover)]' : 'border-transparent'}`}
-                  aria-label={`${local.name} · ${local.version} · ${local.id}`}
-                  aria-describedby={unavailable ? `${pickerStatusId}-${local.id}` : undefined}
-                  aria-pressed={pickerSelection === local.id}
-                  disabled={!open || submitBusy || !pickerReady || Boolean(unavailable)}
-                  onClick={() => setPickerSelection(local.id)}>
-                  <GhostPluginIcon iconDataUrl={local.iconDataUrl} iconId={local.id} iconName={local.name} />
-                  <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-                    <span className={`block text-14 font-medium leading-5 ${unavailable ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]'}`}>{local.name}</span>
-                    <span className="mt-1 block text-12 leading-4 text-[var(--text-tertiary)]">{local.version}</span>
-                    <span className="mt-1 block text-12 leading-4 text-[var(--text-tertiary)]">{local.id}</span>
-                    {unavailable ? <span id={`${pickerStatusId}-${local.id}`} className="mt-1 block text-13 leading-5 text-[var(--text-secondary)]">{t(unavailable)}</span> : null}
-                  </span>
-                  {pickerSelection === local.id ? <Check size={16} aria-hidden="true" className="shrink-0 text-[var(--text-primary)]" /> : null}
-                </button>
-              );
-            })}
-            {!localPlugins.length ? (
-              <p className="text-14 leading-6 text-[var(--text-secondary)]">
-                {t(`${copy}.${installedPluginCount === 0 ? 'noLocalPlugins' : 'noPublishablePlugins'}`)}
-              </p>
-            ) : null}
-          </div>
-          {pickerItem ? (
-            <section aria-label={t(`${copy}.publishingVersion`, { version: pickerItem.version })}
-              className="mb-4 max-h-52 space-y-2 overflow-y-auto border-t border-[var(--border-default)] pt-3 text-13 leading-5 text-[var(--text-secondary)]">
-              <p className="font-medium text-[var(--text-primary)]">{pickerItem.name} · {pickerItem.version}</p>
-              <p className="whitespace-pre-wrap break-words">{currentPickerDraft?.prepared?.description ?? pickerItem.description}</p>
-              {currentPickerDraft?.prepared ? <>
-                {currentPickerDraft.prepared.releaseNotes?.trim() ? <>
-                  <h3 className="font-medium">{t(`${copy}.releaseNotes`)}</h3>
-                  <p className="whitespace-pre-wrap break-words">{currentPickerDraft.prepared.releaseNotes}</p>
-                </> : null}
-                <p>{t(`${copy}.confirmPublic`)}</p>
-              </> : pickerReady && !selectedPickerUnavailable && !currentPickerDraft?.error && !selectedVersionRead?.failure ? <p role="status">{t(`${copy}.${versionReady ? 'preparing' : 'loading'}`)}</p> : null}
-            </section>
+          {targetPicker}
+          {target === 'team' && team ? (
+            <>
+              <div className="my-4 min-h-0 overflow-y-auto p-1">
+                {team.plugins.map(local => pluginRow(local, {
+                  selected: teamSelection === local.id,
+                  disabled: !open || teamStarting,
+                  dimmed: teamStarting,
+                  unavailable: null,
+                  onSelect: () => setTeamSelection(local.id),
+                }))}
+                {!team.plugins.length ? (
+                  <p className="text-14 leading-[1.714] text-[var(--text-secondary)]">
+                    {t(`${copy}.${installedPluginCount === 0 ? 'noLocalPlugins' : 'noPublishablePlugins'}`)}
+                  </p>
+                ) : null}
+              </div>
+              {teamFailed ? (
+                <p role="alert" className="mb-3 shrink-0 text-13 leading-[1.54] text-[var(--text-secondary)]">{t(`${copy}.teamStartFailed`)}</p>
+              ) : null}
+            </>
           ) : null}
-          {localPlugins.length > 0 && !pickerRead ? <p role="status" className="mb-3 shrink-0 text-13 leading-5 text-[var(--text-secondary)]">{t(`${copy}.loading`)}</p> : null}
-          {pickerRead?.failure || selectedVersionRead?.failure || currentPickerDraft?.error ? (
-            <p role="alert" className="mb-3 shrink-0 text-13 leading-5 text-[var(--text-secondary)]">
-              {t((pickerRead?.failure ?? selectedVersionRead?.failure ?? currentPickerDraft?.error)!, { defaultValue: t(`${copy}.loadFailed`) })}
-            </p>
-          ) : pickerBlocker || selectedPickerUnavailable ? (
-            <p role="status" className="mb-3 shrink-0 text-13 leading-5 text-[var(--text-primary)]">
-              {selectedPickerUnavailable ? t(selectedPickerUnavailable) : t(`${copy}.errors.${pickerBlocker?.code}`, { defaultValue: t(`${copy}.errors.PRECONDITION_FAILED`) })}
-            </p>
+          {publicTarget ? (
+            <>
+              <div className="my-4 min-h-0 overflow-y-auto p-1">
+                {localPlugins.map(local => {
+                  const unavailable = pickerUnavailable(local);
+                  return pluginRow(local, {
+                    selected: pickerSelection === local.id,
+                    disabled: !open || submitBusy || !pickerReady || Boolean(unavailable),
+                    dimmed: submitBusy || !pickerReady,
+                    unavailable,
+                    onSelect: () => setPickerSelection(local.id),
+                  });
+                })}
+                {!localPlugins.length ? (
+                  <p className="text-14 leading-6 text-[var(--text-secondary)]">
+                    {t(`${copy}.${installedPluginCount === 0 ? 'noLocalPlugins' : 'noPublishablePlugins'}`)}
+                  </p>
+                ) : null}
+              </div>
+              {pickerItem ? (
+                <section aria-label={t(`${copy}.publishingVersion`, { version: pickerItem.version })}
+                  className="mb-4 max-h-52 space-y-2 overflow-y-auto border-t border-[var(--border-default)] pt-3 text-13 leading-5 text-[var(--text-secondary)]">
+                  <p className="font-medium text-[var(--text-primary)]">{pickerItem.name} · {pickerItem.version}</p>
+                  <p className="whitespace-pre-wrap break-words">{currentPickerDraft?.prepared?.description ?? pickerItem.description}</p>
+                  {currentPickerDraft?.prepared ? <>
+                    {currentPickerDraft.prepared.releaseNotes?.trim() ? <>
+                      <h3 className="font-medium">{t(`${copy}.releaseNotes`)}</h3>
+                      <p className="whitespace-pre-wrap break-words">{currentPickerDraft.prepared.releaseNotes}</p>
+                    </> : null}
+                    <p>{t(`${copy}.confirmPublic`)}</p>
+                  </> : pickerReady && !selectedPickerUnavailable && !currentPickerDraft?.error && !selectedVersionRead?.failure ? <p role="status">{t(`${copy}.${versionReady ? 'preparing' : 'loading'}`)}</p> : null}
+                </section>
+              ) : null}
+              {localPlugins.length > 0 && !pickerRead ? <p role="status" className="mb-3 shrink-0 text-13 leading-5 text-[var(--text-secondary)]">{t(`${copy}.loading`)}</p> : null}
+              {pickerRead?.failure || selectedVersionRead?.failure || currentPickerDraft?.error ? (
+                <p role="alert" className="mb-3 shrink-0 text-13 leading-5 text-[var(--text-secondary)]">
+                  {t((pickerRead?.failure ?? selectedVersionRead?.failure ?? currentPickerDraft?.error)!, { defaultValue: t(`${copy}.loadFailed`) })}
+                </p>
+              ) : pickerBlocker || selectedPickerUnavailable ? (
+                <p role="status" className="mb-3 shrink-0 text-13 leading-5 text-[var(--text-primary)]">
+                  {selectedPickerUnavailable ? t(selectedPickerUnavailable) : t(`${copy}.errors.${pickerBlocker?.code}`, { defaultValue: t(`${copy}.errors.PRECONDITION_FAILED`) })}
+                </p>
+              ) : null}
+            </>
           ) : null}
           <div className="flex shrink-0 flex-wrap justify-end gap-2">
             <Dialog.Close asChild>
               <Button variant="secondary">{t('settings.ghosts.detail.closeDialog')}</Button>
             </Dialog.Close>
-            {pickerReady && !selectedPickerUnavailable && !pickerBlocker && pickerItem && currentPickerDraft?.prepared?.preflight?.actions.canSubmit ? (
+            {target === 'team' ? (
+              <Button variant="cta" loading={teamStarting} disabled={!open || !teamSelection || teamStarting || !navigator.onLine}
+                onClick={startTeam}>{t(`${copy}.next`)}</Button>
+            ) : null}
+            {publicTarget && pickerReady && !selectedPickerUnavailable && !pickerBlocker && pickerItem && currentPickerDraft?.prepared?.preflight?.actions.canSubmit ? (
               <Button variant="cta" loading={submitBusy} disabled={!open || submitBusy || !navigator.onLine}
                 onClick={() => {
                   const prepared = currentPickerDraft.prepared!;

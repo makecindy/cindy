@@ -17,6 +17,14 @@ export function PluginVersionFacts({ plugin }: {
       ? plugin.market.version : t(`${copy}.market.${plugin.market.state}`)],
     ['pendingVersion', pending ?? t(`${copy}.noPendingVersion`)],
   ];
+  return <VersionFactsList local={facts[0][1]} listed={facts[1][1]} pending={facts[2][1]} />;
+}
+
+/** The 本地版本 / 已上架 / 待审核 overview shared by public and team plugin details. */
+export function VersionFactsList({ local, listed, pending }: { local: string; listed: string; pending: string }) {
+  const { t } = useTranslation();
+  const copy = 'settings.ghosts.contribution';
+  const facts = [['localVersion', local], ['listedVersion', listed], ['pendingVersion', pending]] as const;
   return <dl aria-label={t(`${copy}.versionFacts`)} className="grid grid-cols-3 gap-x-6 gap-y-3 border-y border-[var(--border-default)] py-3 max-[600px]:grid-cols-1">
     {facts.map(([label, value]) => <div key={label} className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
       <dt className="text-12 leading-5 text-[var(--text-tertiary)]">{t(`${copy}.${label}`)}</dt>
