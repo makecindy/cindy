@@ -2297,35 +2297,43 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
-  // #1743 / unit: through local maker:event ingress, the main stream must
-  // keep rendering after a separate Claude child final. Existing item-boundary
-  // tests cover successive items, not a resumed delta on the first persistId.
-  it('continues streaming Claude root text after a child final', () => {
-    const send = (persistId: string, text: string, parentUuid?: string) => onEvent?.({
-      sessionId: SESSION_ID,
-      persistId,
-      event: {
-        type: 'text',
-        source: 'claude-code',
-        data: { text, isFinal: parentUuid !== undefined },
-        ...(parentUuid ? { agentMeta: { parentUuid } } : {}),
-      },
-    });
-    send('root', 'root prefix');
+  // #1743 / unit: different Claude parents may have independent live rows.
+  // Exercise maker:event and DB echo; existing item-boundary tests cover
+  // consecutive assistant items, not resumed deltas after a sibling final.
+  it.each([
+    { label: 'root and child', finalParent: 'toolu_b', preserve: true },
+    { label: 'parallel children', activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: true },
+    { label: 'same child', activeParent: 'toolu_a', finalParent: 'toolu_a', preserve: false },
+    { label: 'legacy final', activeParent: 'toolu_a', preserve: false },
+    { label: 'another engine', source: 'codex', activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: false },
+    { label: 'remote children', remote: true, activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: false },
+  ])('handles an independent final during a live stream ($label)', ({ activeParent, finalParent, preserve, source = 'claude-code', remote }) => {
+    if (remote) remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const send = (persistId: string, text: string, isFinal: boolean, parentUuid?: string) => {
+      const payload = { sessionId: SESSION_ID, persistId, event: {
+        type: 'text', source, data: { text, isFinal }, ...(parentUuid ? { agentMeta: { parentUuid } } : {}),
+      } };
+      if (remote) onRemotePush?.({ deviceId: 'device-1', channel: 'maker:event', payload });
+      else onEvent?.(payload);
+    };
+    send('active', 'prefix', false, activeParent);
     vi.advanceTimersByTime(32);
-    send('child', 'child reply', 'toolu_child');
-    onDbMessageCreated?.({ sessionId: SESSION_ID, message: {
-      id: 'child-db', clientId: 'child', role: 'assistant', content: 'child reply',
-      createdAt: new Date().toISOString(), agentMeta: { parentUuid: 'toolu_child' },
-    } });
-    send('root', ' then more');
+    send('finished', 'complete reply', true, finalParent);
+    const message = {
+      id: 'finished-db', clientId: 'finished', role: 'assistant', content: 'complete reply',
+      createdAt: new Date().toISOString(), agentMeta: finalParent ? { parentUuid: finalParent } : {},
+    };
+    if (remote) onRemotePush?.({ deviceId: 'device-1', channel: 'local-db:messages:created', payload: { sessionId: SESSION_ID, message } });
+    else onDbMessageCreated?.({ sessionId: SESSION_ID, message });
+    send('active', ' suffix', false, activeParent);
     vi.advanceTimersByTime(32);
     const rows = makerChatStore.getSnapshot(SESSION_ID).messages;
     expect(rows).toHaveLength(2);
     expect(rows).toEqual(expect.arrayContaining([
-      expect.objectContaining({ clientId: 'root', content: 'root prefix then more', isStreaming: true }),
-      expect.objectContaining({ clientId: 'child', content: 'child reply', parentToolUseId: 'toolu_child', isStreaming: false }),
+      expect.objectContaining({ clientId: 'active', content: preserve ? 'prefix suffix' : 'prefix', isStreaming: preserve }),
+      expect.objectContaining({ clientId: 'finished', content: 'complete reply', isStreaming: false }),
     ]));
+    expect(rows.find(row => row.clientId === 'finished')?.parentToolUseId).toBe(finalParent);
   });
 
   // #1743 / unit: a child tool boundary must seal only the matching live row.

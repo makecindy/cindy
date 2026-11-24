@@ -6104,6 +6104,7 @@ function isRetiredVisionNotice(event: { type: string; source?: unknown; data?: u
 export function handleStreamEvent(
   inputState: SessionChatState,
   event: CCAgentStreamEvent,
+  remoteIngress = false,
 ): SessionChatState {
   if (isRetiredVisionNotice(event)) return inputState;
   const reconnectAttempt =
@@ -6267,21 +6268,22 @@ export function handleStreamEvent(
         state.streamingClientId &&
         event.persistId !== state.streamingClientId,
       );
-      // Local Claude can finish a child while the root keeps sending deltas
-      // under its original persistId.
-      const childFinalDuringRoot = Boolean(
+      // A child final can arrive while another SDK parent still owns the active row.
+      const finalParent = assistantMetaFields.parentToolUseId;
+      const independentChildFinal = Boolean(
         itemBoundary && isFinal && text &&
         event.source === 'claude-code' && state.remoteHostId === null &&
-        assistantMetaFields.parentToolUseId &&
+        finalParent &&
         state.messages.some((message) =>
           message.clientId === state.streamingClientId &&
-          message.role === 'assistant' && message.isStreaming && !message.parentToolUseId),
+          message.role === 'assistant' && message.isStreaming &&
+          (!message.parentToolUseId || (!remoteIngress && message.parentToolUseId !== finalParent))),
       );
-      const textState = itemBoundary && !childFinalDuringRoot ? finalizeStreamingInState(state) : state;
+      const textState = itemBoundary && !independentChildFinal ? finalizeStreamingInState(state) : state;
 
       if (isFinal) {
         // Confirmation of streamed text, or a non-streaming final burst.
-        if ((!textState.streamingClientId || childFinalDuringRoot) && text) {
+        if ((!textState.streamingClientId || independentChildFinal) && text) {
           // Guard: if the last message is an assistant with identical content,
           // this is a duplicate isFinal event from the SDK — skip it.
           const last = textState.messages[textState.messages.length - 1];
@@ -6302,7 +6304,7 @@ export function handleStreamEvent(
 
           return {
             ...textState,
-            lastAgentMeta: childFinalDuringRoot
+            lastAgentMeta: independentChildFinal
               ? textState.lastAgentMeta
               : incomingMeta ?? textState.lastAgentMeta,
             messages: [
@@ -8192,6 +8194,7 @@ function dispatchStreamEventPayload(
   persistId?: string,
   resolvedContent?: string,
   deferNotification = false,
+  remoteIngress = false,
 ): void {
   if (!event) return;
   const streamEvent = {
@@ -8209,7 +8212,7 @@ function dispatchStreamEventPayload(
     resolvedContent,
   } as CCAgentStreamEvent;
   supersedeInputProjectionOnTerminalEvent(sessionId, streamEvent);
-  setState(sessionId, (s) => handleStreamEvent(s, streamEvent), { deferNotification });
+  setState(sessionId, (s) => handleStreamEvent(s, streamEvent, remoteIngress), { deferNotification });
   scheduleWakeBridgeReconciliation(sessionId);
 }
 
@@ -8876,7 +8879,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     const displayEvent = ingress.remoteDeviceId && event.type === 'tool_use' && event.agentMeta?.parentUuid === null
       ? { ...event, agentMeta: { ...event.agentMeta, parentUuid: undefined } }
       : event;
-    dispatchStreamEventPayload(sessionId, displayEvent, persistId, resolvedContent, deferNotification);
+    dispatchStreamEventPayload(sessionId, displayEvent, persistId, resolvedContent, deferNotification, Boolean(ingress.remoteDeviceId));
     if (persistDeferredAfterDispatch) {
       persistTurnErrorDeferredTracked(
         sessionId,
