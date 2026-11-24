@@ -536,10 +536,13 @@ export class GhostBrowserExtensionSlot {
             return fail('HOST_NOT_READY', '浏览器扩展桥接已重建;稍后重试');
           const status = await entry.bridge.status();
           if (!status.ok) return { ...status, errorCode: 'HOST_NOT_READY' };
+          const nativeBinding = entry.native?.status() ?? 'unavailable';
           return {
             ...status,
             host: true,
-            nativeBinding: entry.native ? entry.native.status() : 'unavailable',
+            nativeBinding,
+            ...(nativeBinding === 'unavailable' && entry.nativeFailureReason
+              ? { nativeBindingReason: entry.nativeFailureReason } : {}),
           };
         }
         case 'act':

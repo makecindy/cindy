@@ -423,6 +423,10 @@ it.each([
     });
     if (mode !== 'early-response') launch();
     if (mode === 'sdk-and-proxy' || mode === 'middle-delta' || cache?.name.startsWith('SDK ')) sdkRequest('msg-child', model, 'tool-a');
+    if (mode === 'sdk-and-proxy') {
+      // A second SDK block shares this provider request with the first block and both proxy receipts.
+      sdkRequest('msg-child', model, 'tool-a');
+    }
     if (resumed) {
       emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-b', name: 'Agent', input: { prompt } }] } });
       launch('tool-b');
@@ -483,6 +487,11 @@ it.each([
       complete = done.usageSegmentsComplete === true;
     }
     const childSegment = segments.find(segment => segment.model === model);
+    if (mode === 'sdk-and-proxy') {
+      const childSegments = segments.filter(segment => segment.model === model);
+      expect(childSegments).toHaveLength(1);
+      expect(childSegments[0]).toMatchObject({ complete: true, cacheCreate1hTokens: 30 });
+    }
     if (mode === 'restarted-stream') expect(childSegment?.outputTokens).toBe(10);
     if (mode === 'restart-without-output') expect(childSegment).toBeUndefined();
     if (mode === 'middle-delta') {
