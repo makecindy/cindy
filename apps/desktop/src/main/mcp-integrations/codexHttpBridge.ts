@@ -19,7 +19,8 @@ import type { AddressInfo } from 'node:net';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createCatalogTransport } from './antigravityToolCatalog.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { runWithLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
@@ -949,7 +950,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   // 新 session: 创建 transport + connect 到新的 mcp server (transport 跟 server 1:1
   // 绑定；McpServer/Protocol 实例不允许并发/重复 connect)。
   const mcpServer = createMcpServer();
-  const transport = new StreamableHTTPServerTransport({
+  const transport = createCatalogTransport(body.params.clientInfo.name, serverName, mcpServer, {
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
       transports.set(newId, { transport, mcpServer, ownerSessionId, ownerSessionInstanceId });

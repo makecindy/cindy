@@ -1,6 +1,9 @@
 import { registerAppServer, clearAppServerConfigs } from '../../mcp-apps/runtime.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createXdtHelperMcpServer, getLiziMcpSessionContext } from '@cindy/mcps';
 
@@ -230,6 +233,50 @@ describe('codexHttpBridge', () => {
     expect(await invoke()).toMatchObject({ result: { content: [{ text: 'current-admission' }] } });
     currentValid = false;
     expect(JSON.stringify(await invoke())).toContain('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  });
+
+  it('keeps Antigravity entry points small while preserving full help, validation and native calls', async () => {
+    const run = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'created' }] }));
+    const description = 'Full Worker assignment and permission guidance. '.repeat(35);
+    bridge = await startCodexHttpBridge({
+      serverFactories: { cindy_orca: () => {
+        const server = createTestServer();
+        server.registerTool('create_workers', { description, inputSchema: {
+          workers: z.array(z.object({ role: z.string(), label: z.string() })).min(1),
+        } }, run);
+        return server;
+      } }, logger: noopLogger(),
+    });
+    const open = async (name: string) => {
+      const client = new Client({ name, version: '1' });
+      const transport = new StreamableHTTPClientTransport(new URL(bridge!.url('cindy_orca')), {
+        requestInit: { headers: { Authorization: 'Bearer ' + bridge!.token } },
+      });
+      await client.connect(transport);
+      return client;
+    };
+    const ordinary = await open('other-client');
+    const agy = await open('antigravity-client');
+    try {
+      const [original, compact] = await Promise.all([ordinary.listTools(), agy.listTools()]);
+      const full = original.tools.find(tool => tool.name === 'create_workers')!;
+      const brief = compact.tools.find(tool => tool.name === full.name)!;
+      expect(original.tools.some(tool => tool.name === 'describe_tool')).toBe(false);
+      expect(brief.description).toContain('describe_tool');
+      expect(JSON.stringify(brief).length).toBeLessThan(512);
+      const help = await agy.callTool({ name: 'describe_tool', arguments: { name: full.name } });
+      expect(help.content).toEqual([{ type: 'text', text: expect.any(String) }]);
+      const [block] = help.content as [{ text: string }];
+      expect(JSON.parse(block.text)).toEqual({ name: full.name, description: full.description, inputSchema: full.inputSchema });
+      expect((await agy.callTool({ name: 'describe_tool', arguments: { name: 'unknown' } })).isError).toBe(true);
+      expect((await agy.callTool({ name: full.name, arguments: { workers: [{}] } })).isError).toBe(true);
+      expect(run).not.toHaveBeenCalled();
+      expect((await agy.callTool({ name: full.name, arguments: { workers: [{ role: 'developer', label: 'A' }] } })).content)
+        .toEqual([{ type: 'text', text: 'created' }]);
+      expect(run).toHaveBeenCalledOnce();
+    } finally {
+      await Promise.all([ordinary.close(), agy.close()]);
+    }
   });
 
   it('scopes startup tools/list before thread registration without authorizing execution', async () => {
