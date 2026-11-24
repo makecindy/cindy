@@ -3,9 +3,13 @@
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
 2026-11-21：发起方读主力电脑版本时，`maker:companion-cloud:caps` 的请求与回包不变，只改本机对「没有回包」的解读：
-设备列表显示主力电脑在线、但探测超时或链路未就绪（`INVOKE_TIMEOUT`、`DEVICE_UNRESPONSIVE`、`NOT_CONNECTED`，以及本机离线闸门或 Agent-Net 会话断开时报出的 `DEVICE_OFFLINE` 等）时，
-放宽等待重试一次，仍无回包则给本机界面 `HOME_UNRESPONSIVE`，不再当作版本 0 自动接管；明确回包（`REMOTE_DISABLED`、
-`ACCESS_REVOKED`、`CHANNEL_NOT_ALLOWED` 等）仍是 0，旧主力电脑照旧可直接接管；设备列表说离线时不探测，照旧直接接管。`HOME_UNRESPONSIVE` 与 `CompanionSwitchOptions.force`
+设备列表显示主力电脑在线时按白名单判定：只有主力电脑回包里的版本（≥ 1），或主力电脑自己答复的 `CHANNEL_NOT_ALLOWED`
+（旧版没有该通道）、`REMOTE_DISABLED`、`ACCESS_REVOKED`（后两项也认经中转 / 设备目录发布的同一状态）算明确答复，
+后者仍记为版本 0、照旧直接接管；其余一律「不可确认」——超时、链路未就绪、`DEVICE_OFFLINE`、本机抛出的
+`CHANNEL_NOT_ALLOWED`、没有错误码的异常、不认识或新增的错误码、没带版本的回包——放宽等待重试一次，仍不可确认
+则给本机界面 `HOME_UNRESPONSIVE`，不自动接管。为区分「对端答复的错误」与「本机 / 中转抛出的错误」，这条探测直接读
+`remoteInvoke` 的回包，不经把两者合并成 `[CODE]` 文本的 `invokeDeviceValue`。设备列表说离线时不探测，照旧直接接管。
+不新增错误码，不改变发给对端的内容。`HOME_UNRESPONSIVE` 与 `CompanionSwitchOptions.force`
 只在同一 Desktop 的 `:home-choices` / `:switch-home` 本机 IPC 中使用；`maker:companion-cloud:hand-over` 仍只转发
 `whenBusy`，`force` 不进 device-link，也不进远程交出的选项解析。不新增 channel、帧或服务端接口，手机与旧版对端不受影响。
 

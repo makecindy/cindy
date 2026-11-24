@@ -4,7 +4,7 @@ import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import { createCompanionHomeRegistry } from '../homes.js';
 import { restoreCloudAvatar } from '../avatarRestore.js';
 import { readTranscriptPage } from '../room.js';
-import { askCompanionHomeVersion, startCompanionCloud, type CompanionCloudHost, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
+import { askCompanionHomeVersion, startCompanionCloud, type CompanionCloudHost, type CompanionHomeProbeOutcome, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
 import type { CompanionApi } from '../types.js';
 import { fakeApi, fakeLocal, memoryState, rejection, type ApiHandler } from './fakes.js';
 
@@ -1163,25 +1163,52 @@ describe('switch home from any computer', () => {
     expect(homeLink.handOver).not.toHaveBeenCalled();
   });
 
+  // A probe step as the transport reports it; an Error is a probe that rejected outright.
+  type ProbeStep = CompanionHomeProbeOutcome | Error;
+  const answer = (version: number): ProbeStep => ({ kind: 'answer', version });
+  const refused = (code: string): ProbeStep => ({ kind: 'refused', code });
+  const thrown = (code?: string): ProbeStep => (code ? { kind: 'thrown', code } : { kind: 'thrown' });
+  const scripted = (steps: readonly ProbeStep[], asked: number[] = []) => async (timeoutMs: number) => {
+    const step = steps[asked.push(timeoutMs) - 1]!;
+    if (step instanceof Error) throw step;
+    return step;
+  };
+
+  // Allow-list (#11999 review): only a version the home declared, or one of its known explicit refusals,
+  // is confirmed; everything else is retried once with a longer wait and then stays unconfirmed.
   it.each([
-    ['answers on the longer retry', [new Error('[INVOKE_TIMEOUT] caps probe timed out'), 4], 4, [8_000, 15_000]],
-    ['link still connecting, then answers', [new Error('[NOT_CONNECTED] link not ready'), 2], 2, [8_000, 15_000]],
-    ['an older Cindy without the channel', [new Error('[CHANNEL_NOT_ALLOWED] not allowed')], 0, [8_000]],
+    ['answers on the longer retry', [thrown(), answer(4)], 4, [8_000, 15_000]],
+    ['link still connecting, then answers', [thrown('NOT_CONNECTED'), answer(2)], 2, [8_000, 15_000]],
+    ['an older Cindy without the channel', [refused('CHANNEL_NOT_ALLOWED')], 0, [8_000]],
+    ['answering that same-account control is off', [refused('REMOTE_DISABLED')], 0, [8_000]],
+    ['published as control off through the relay', [thrown('REMOTE_DISABLED')], 0, [8_000]],
     // Also the local offline gate and Agent-Net cancelling queued calls on a dropped session (Greptile P1).
-    ['reported offline while listed online', [new Error('[DEVICE_OFFLINE] Agent-Net session closed'), 4], 4, [8_000, 15_000]],
-    ['with same-account control turned off', [new Error('[REMOTE_DISABLED] control off')], 0, [8_000]],
-    ['still silent after the longer wait', [new Error('[INVOKE_TIMEOUT] t'), new Error('[DEVICE_UNRESPONSIVE] u')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
-  ] as const)('reads the home version when it is %s', async (_, answers, expected, waits) => {
+    ['reported offline while listed online', [thrown('DEVICE_OFFLINE'), answer(4)], 4, [8_000, 15_000]],
+    ["blocked by this computer's own transport policy", [thrown('CHANNEL_NOT_ALLOWED'), thrown('CHANNEL_NOT_ALLOWED')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
+    ['failing with an error that has no code', [new Error('socket hang up'), new Error('socket hang up')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
+    ['answering an unknown or new code', [refused('SOME_NEW_CODE'), thrown('ANOTHER_NEW_CODE')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
+    ['answering without a version', [answer(0), answer(0)], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
+    ['still silent after the longer wait', [thrown(), thrown('DEVICE_UNRESPONSIVE')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
+  ] as const)('reads the home version when it is %s', async (_, steps, expected, waits) => {
     const asked: number[] = [];
-    const probe = async (timeoutMs: number) => {
-      const answer = answers[asked.push(timeoutMs) - 1];
-      if (answer instanceof Error) throw answer;
-      return answer as number;
-    };
-    const result = askCompanionHomeVersion(probe);
+    const result = askCompanionHomeVersion(scripted(steps, asked));
     if (typeof expected === 'number') await expect(result).resolves.toBe(expected);
     else await expect(result).rejects.toThrow(expected);
     expect(asked).toEqual(waits);
+  });
+
+  // #11999 review (zqchris): a local transport failure is not the home's refusal. An error without a
+  // `[CODE]` prefix, or an unknown / new code, must not move the home without the owner forcing it.
+  it.each([
+    ['an error without a code', [new Error('socket hang up'), new Error('socket hang up')]],
+    ['an unknown code in the message', [new Error('[SOME_NEW_CODE] x'), new Error('[SOME_NEW_CODE] x')]],
+    ['an unknown code from the home', [refused('SOME_NEW_CODE'), refused('SOME_NEW_CODE')]],
+  ] as const)('writes no main computer change when the probe fails with %s', async (_, steps) => {
+    const homeLink = { ...link(2), homeVersion: vi.fn(() => askCompanionHomeVersion(scripted(steps))) };
+    const t = setup({ home: 'laptop', devices: [device('laptop'), device('desk', { isSelf: true, name: 'Desk' })], homeLink });
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE' });
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+    expect(homeLink.handOver).not.toHaveBeenCalled();
   });
 
   it('does not offer a move when the home runs an older Cindy', async () => {

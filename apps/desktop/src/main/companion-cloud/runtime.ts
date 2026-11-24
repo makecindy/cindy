@@ -76,7 +76,8 @@ export interface CompanionCloudHost {
     version: (deviceId: string) => Promise<number>;
     /**
      * `version` for the companion's own home that the device list shows online: waits longer and
-     * rejects with `HOME_UNRESPONSIVE` when it still does not answer (a slow link is not «offline»).
+     * rejects (`HOME_UNRESPONSIVE`) unless the home gave a known, explicit answer (see
+     * `askCompanionHomeVersion`); any rejection means «not confirmed», never «refused».
      */
     homeVersion?: (deviceId: string) => Promise<number>;
     targets: (deviceId: string) => Promise<CompanionTransferTarget[]>;
@@ -211,31 +212,52 @@ export function hasProfileSnapshot(rows: unknown): boolean {
 }
 
 /**
- * No answer yet (a slow, still-connecting or just-dropped link), unlike the home's explicit answers
- * (control off, revoked, an older Cindy without the channel). `DEVICE_OFFLINE` is here too: besides the
- * relay it comes from the local offline gate and from Agent-Net cancelling queued calls when a session
- * drops, so it does not outweigh the device list showing the home online (only then is it probed).
+ * One cloud-companion caps probe of a companion's home, as the transport reported it:
+ * - `answer`: the home answered with its declared version;
+ * - `refused`: the home itself answered with an error code (its own dispatch);
+ * - `thrown`: the call failed before or without the home's answer (local, relay or transport),
+ *   with the device-link code when there was one. A probe that rejects counts the same as `thrown`.
  */
-const HOME_NO_ANSWER = new Set(['INVOKE_TIMEOUT', 'DEVICE_UNRESPONSIVE', 'DEVICE_OFFLINE', 'NOT_CONNECTED', 'DEVICE_LINK_NOT_CONNECTED',
-  'LINK_NOT_OPEN', 'LINK_CLOSED', 'BACKPRESSURE', 'PEER_RESET', 'TIMEOUT', 'NETWORK_ERROR']);
+export type CompanionHomeProbeOutcome =
+  | { kind: 'answer'; version: number }
+  | { kind: 'refused'; code: string }
+  | { kind: 'thrown'; code?: string };
+
+/**
+ * The only failures that let a home listed online be taken over without the owner forcing it
+ * (allow-list, cloud-companions.md §3.1): what the home itself answered, an older Cindy without the
+ * channel, its same-account control off, or this computer's access revoked.
+ */
+const HOME_EXPLICIT_REFUSALS = new Set(['CHANNEL_NOT_ALLOWED', 'REMOTE_DISABLED', 'ACCESS_REVOKED']);
+/**
+ * Thrown without the home's own answer but still published by the target (through the relay or the
+ * device directory): its control turned off, or this computer's access revoked. A locally thrown
+ * `CHANNEL_NOT_ALLOWED` is this computer's transport policy, not the home's answer, so it is not here.
+ */
+const HOME_TARGET_PUBLISHED = new Set(['REMOTE_DISABLED', 'ACCESS_REVOKED']);
 /** First wait, then one longer try: right after start-up the link to an online home can be slow. */
 const HOME_PROBE_WAITS_MS = [8_000, 15_000];
 
+/** The version a probe outcome confirms (0 = the home explicitly cannot hand over), or null when nothing was confirmed. */
+function confirmedHomeVersion(outcome: CompanionHomeProbeOutcome): number | null {
+  if (outcome.kind === 'answer') return outcome.version >= 1 ? outcome.version : null;
+  if (outcome.kind === 'refused') return HOME_EXPLICIT_REFUSALS.has(outcome.code) ? 0 : null;
+  return outcome.code && HOME_TARGET_PUBLISHED.has(outcome.code) ? 0 : null;
+}
+
 /**
  * The cloud-companion version of a companion's home that the device list shows online
- * (cloud-companions.md §3.1). `probe` rejects with a `[CODE]` error when the home does not answer
- * in time. A slow answer is not «offline»: it is asked once more with a longer wait, and still no
- * answer rejects with `HOME_UNRESPONSIVE`. Explicit answers (control off, revoked, an older Cindy
- * without the channel) stay 0: with the device list showing the home offline (not probed), the only
- * automatic take-over.
+ * (cloud-companions.md §3.1). Only a known, explicit answer counts: a version the home declared, or a
+ * refusal from the allow-list above (0, the original automatic take-over). Anything else — a timeout,
+ * a local transport error, an error without a code, an unknown or new code, a malformed answer — is
+ * not proof that the home refused: it is asked once more with a longer wait, and still unconfirmed
+ * rejects with `HOME_UNRESPONSIVE`, so the move needs the owner's explicit force.
  */
-export async function askCompanionHomeVersion(probe: (timeoutMs: number) => Promise<number>): Promise<number> {
+export async function askCompanionHomeVersion(probe: (timeoutMs: number) => Promise<CompanionHomeProbeOutcome>): Promise<number> {
   for (const timeoutMs of HOME_PROBE_WAITS_MS) {
-    try { return await probe(timeoutMs); }
-    catch (error) {
-      const code = /^\[([A-Z_]+)\]/.exec(error instanceof Error ? error.message : '')?.[1];
-      if (!code || !HOME_NO_ANSWER.has(code)) return 0;
-    }
+    const outcome = await probe(timeoutMs).catch((): CompanionHomeProbeOutcome => ({ kind: 'thrown' }));
+    const version = confirmedHomeVersion(outcome);
+    if (version !== null) return version;
   }
   throw new Error('HOME_UNRESPONSIVE');
 }
@@ -1140,10 +1162,11 @@ export function startCompanionCloud(input: {
       const here: CompanionTransferTarget = { deviceId: self, name: selfDevice?.name ?? '', online: true, isSelf: true };
       const homeDevice = home ? devices.find(device => device.deviceId === home) : undefined;
       // Unreachable home (offline, or not controllable from here): only this computer can continue it.
-      // Listed online but not answering is not offline: the owner decides whether to take it over anyway.
+      // Listed online but not confirmed (no answer, or any failure that is not the home's explicit refusal)
+      // is not offline: the owner decides whether to take it over anyway. A failed call is never a refusal.
       const link = input.host.homeLink;
       const version = home && homeDevice?.online && link
-        ? await (link.homeVersion ?? link.version)(home).catch((error: unknown) => errorCode(error) === 'HOME_UNRESPONSIVE' ? -1 : 0) : 0;
+        ? await (link.homeVersion ?? link.version)(home).catch(() => -1) : 0;
       if (version === -1) return { homeDeviceId: home, homeName, mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] };
       if (!home || version === 0) return { homeDeviceId: home, homeName, mode: 'takeOver', targets: [here] };
       if (version < REMOTE_HAND_OVER_VERSION) return { homeDeviceId: home, homeName, mode: 'unavailable', reason: 'HOME_OUTDATED', targets: [] };

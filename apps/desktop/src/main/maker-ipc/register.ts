@@ -772,7 +772,7 @@ import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
-import { activeCompanionCloud, askCompanionHomeVersion } from '../companion-cloud/runtime.js';
+import { activeCompanionCloud, askCompanionHomeVersion, type CompanionHomeProbeOutcome } from '../companion-cloud/runtime.js';
 import { companionCloudView } from '../companion-cloud/view.js';
 import { companionProfileUiMock } from '../companion-cloud/uiMock.js';
 import type { CompanionCloudActionResult, CompanionCloudFailureCode, CompanionHomeChoices, CompanionMergeResult, CompanionSwitchOptions } from '../../shared/companionCloud.js';
@@ -1245,6 +1245,7 @@ import {
   ORCA_EXECUTION_DEVICES_CHANNEL,
   ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
+  DeviceLinkError,
   COMPANION_LIVE_CHANNEL,
   REMOTE_RESOURCE_CHANGED_CHANNEL,
   MACHINE_STATUS_CHANNEL,
@@ -3254,8 +3255,25 @@ async function probeCompanionCloudCaps(deviceId: string, timeoutMs: number): Pro
 async function companionCloudPeerVersion(deviceId: string): Promise<number> {
   return probeCompanionCloudCaps(deviceId, 5_000).catch(() => 0);
 }
-/** The companion's home listed online: a slow answer is retried, never read as «offline» (cloud-companions.md §3.1). */
-const companionCloudHomeVersion = (deviceId: string) => askCompanionHomeVersion(timeoutMs => probeCompanionCloudCaps(deviceId, timeoutMs));
+/**
+ * One caps probe of a companion's home, keeping apart what the home itself answered (a version, or its
+ * own error code) from a call that failed without its answer (thrown locally, by the relay or by the
+ * transport, or timed out). `askCompanionHomeVersion` decides which of these may count as a refusal.
+ */
+async function probeCompanionHomeCaps(deviceId: string, timeoutMs: number): Promise<CompanionHomeProbeOutcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      invokeBotPeer(deviceId, COMPANION_CLOUD_CAPS_CHANNEL, []),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('caps probe timed out')), timeoutMs); }),
+    ]);
+    return result.ok ? { kind: 'answer', version: companionCloudCapsVersion(result.result) } : { kind: 'refused', code: result.error.code };
+  } catch (error) {
+    return error instanceof DeviceLinkError ? { kind: 'thrown', code: error.code } : { kind: 'thrown' };
+  } finally { clearTimeout(timer); }
+}
+/** The companion's home listed online: only an explicit answer may lead to a take-over (cloud-companions.md §3.1). */
+const companionCloudHomeVersion = (deviceId: string) => askCompanionHomeVersion(timeoutMs => probeCompanionHomeCaps(deviceId, timeoutMs));
 const COMPANION_FAILURE_CODES: ReadonlySet<CompanionCloudFailureCode> = new Set<CompanionCloudFailureCode>(
   ['HOME_CONFLICT', 'LOCAL_CINDY_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED']);
 /** Kept and merged Cindy ids from a request (local IPC or another computer). */
