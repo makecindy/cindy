@@ -3549,6 +3549,26 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(currentRunning);
   });
 
+  // Unit, #4663: content arriving during reconnect must not hide an active runtime.
+  it.each([
+    { type: 'text', data: { text: 'Still running', isFinal: true } },
+    { type: 'tool_use', data: { toolUseId: 'tool-1' } },
+  ])('restores running from an explicit snapshot after offline and a $type push', (event) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    pushMakerStatus('s1', { isRunning: true });
+    remoteSessionStore.markDeviceOffline('dev-1');
+    const epoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', { sessionId: 's1', event });
+
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', {
+      format: 'active-sessions-v2',
+      sessions: [{ sessionId: 's1', isTurnRunning: true }],
+    }, epoch);
+
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+  });
+
   it('clears a cached error when the host explicitly reports no remaining activity', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     remoteSessionStore.applySessionActivity('dev-1', {

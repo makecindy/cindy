@@ -406,6 +406,7 @@ const sessionInteractionSources = new Map<string, string>();
 // may clear an older transient reconnect attempt, but must not erase a newer retry event that
 // arrived after the request started.
 const sessionMakerActivityEpochs = new Map<string, number>();
+const sessionMakerRunStateEpochs = new Map<string, number>();
 let makerActivityEpoch = 0;
 const sessionMessageSyncMarkers = new Map<string, SessionMessageSyncMarker>();
 /**
@@ -1126,6 +1127,7 @@ function clearSourcedSessionState(sessionId: string, sources: Map<string, string
     writeSessionRunStatus(sessionId, EMPTY_SESSION_RUN_STATUS);
     writeMakerTurnRunning(sessionId, false);
     sessionMakerActivityEpochs.delete(sessionId);
+    sessionMakerRunStateEpochs.delete(sessionId);
   }
 }
 
@@ -1219,6 +1221,7 @@ function removeSessionRuntimeState(sessionId: string): void {
   if (sessionRunning.delete(sessionId)) bumpHomeStatusVersion();
   sessionRunStatus.delete(sessionId);
   sessionMakerActivityEpochs.delete(sessionId);
+  sessionMakerRunStateEpochs.delete(sessionId);
   sessionMakerTurnRunning.delete(sessionId);
   sessionMessageLifecycle.forget(sessionId);
   sessionsOpenedInDetail.delete(sessionId);
@@ -3317,6 +3320,7 @@ function sweepDevicesOffline(deviceIds: readonly string[]): boolean {
     changed = sessionTaskUpdates.delete(sessionId) || changed;
     changed = sessionParkedTaskUpdates.delete(sessionId) || changed;
     changed = sessionMakerActivityEpochs.delete(sessionId) || changed;
+    sessionMakerRunStateEpochs.delete(sessionId);
     changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
     changed = clearStreamingAssistantPointer(sessionId) || changed;
     // The message window survives a soft offline transition, so both pending
@@ -4495,6 +4499,7 @@ export const remoteSessionStore = {
     boundaryAgentMeta?: Record<string, unknown> | null,
   ): void {
     if (!sessionId) return;
+    markSessionMakerRunState(sessionId);
     recordInputProjectionRemoteEvidence(sessionId, []);
     // A maker turn boundary supersedes any projection query that started
     // before it. This is the terminal fence for late owner snapshots.
@@ -4579,8 +4584,11 @@ export const remoteSessionStore = {
     }
     let changed = false;
     for (const [sessionId, { running, activityPhase, activityAttention }] of snapshotStates) {
-      // A maker push received during the read owns both activity and running state.
-      if ((sessionMakerActivityEpochs.get(sessionId) ?? 0) > activityEpochAtFetchStart) continue;
+      // Content pushes can arrive before runtime hydration. Only newer runtime
+      // evidence supersedes the running flag from an explicit host row.
+      if ((sessionMakerRunStateEpochs.get(sessionId) ?? 0) > activityEpochAtFetchStart) continue;
+      const hasNewerMakerActivity = (sessionMakerActivityEpochs.get(sessionId) ?? 0)
+        > activityEpochAtFetchStart;
       acceptSessionStateSource(sessionId, deviceId, sessionRuntimeSources);
       if (!running) {
         changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
@@ -4589,7 +4597,7 @@ export const remoteSessionStore = {
       const current = readSessionRunStatus(sessionId);
       // A fresh host snapshot can repair a missed activity clear while the phone was
       // backgrounded. Old hosts omit these optional fields, so keep their push-only path.
-      if (typeof activityAttention === 'boolean'
+      if (!hasNewerMakerActivity && typeof activityAttention === 'boolean'
         && (isRemoteSessionLiveActivityPhase(activityPhase) || activityPhase === 'idle')) {
         if (activityPhase === 'running' || activityPhase === 'needs-interaction'
           || (activityAttention && activityPhase !== 'idle')) {
@@ -4609,7 +4617,7 @@ export const remoteSessionStore = {
       const next = clearLiveGenerationOnWideRunStart(current, {
         ...current,
         isRunning: running,
-        reconnectAttempt: null,
+        reconnectAttempt: running && hasNewerMakerActivity ? current.reconnectAttempt : null,
         sideTaskRunning: running ? current.sideTaskRunning : false,
         startedAt: running ? (current.startedAt ?? Date.now()) : null,
       });
@@ -5073,6 +5081,7 @@ export const remoteSessionStore = {
     if (!sessionId || !isRemoteSessionLiveActivityPhase(phase)
       || !acceptSessionStateSource(sessionId, deviceId, sessionRuntimeSources)) return;
     markSessionMakerActivity(sessionId);
+    markSessionMakerRunState(sessionId);
     const compactDetail = typeof payload.compactDetail === 'string' ? payload.compactDetail : '';
     let changed = false;
     if (phase === 'running' || phase === 'needs-interaction') {
@@ -5249,6 +5258,7 @@ export const remoteSessionStore = {
 
     const textFlushed = fullMessageWriteAllowed ? flushPendingTextDelta(sessionId) : false;
     if (type === 'error') {
+      markSessionMakerRunState(sessionId);
       const data = isRecord(event.data) ? event.data : null;
       const reconnectAttempt = data?.willRetry === true
         ? parseReconnectAttemptMessage(
@@ -5377,6 +5387,7 @@ export const remoteSessionStore = {
         if (textFlushed || reconnectCleared) emit();
         return;
       }
+      if (typeof data?.isRunning === 'boolean') markSessionMakerRunState(sessionId);
       const rawTokenUsage = readNumber(data, 'tokenUsage');
       const rawStatus = readString(data, 'status');
       // turn-start 检测用 maker 自己的边界(不用 current.isRunning):activity 推送 / 活跃
@@ -5599,6 +5610,7 @@ export const remoteSessionStore = {
     sessionRuntimeSources.clear();
     sessionInteractionSources.clear();
     sessionMakerActivityEpochs.clear();
+    sessionMakerRunStateEpochs.clear();
     makerActivityEpoch = 0;
     sessionMessageSyncMarkers.clear();
     pendingRefreshSessions.clear();
@@ -6027,6 +6039,11 @@ function clearSessionReconnectAttempt(sessionId: string): boolean {
 function markSessionMakerActivity(sessionId: string): void {
   makerActivityEpoch += 1;
   sessionMakerActivityEpochs.set(sessionId, makerActivityEpoch);
+}
+
+function markSessionMakerRunState(sessionId: string): void {
+  makerActivityEpoch += 1;
+  sessionMakerRunStateEpochs.set(sessionId, makerActivityEpoch);
 }
 
 function parseAttemptPair(
