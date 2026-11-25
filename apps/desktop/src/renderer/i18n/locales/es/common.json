@@ -12418,8 +12418,8 @@
       "footnote": "Esto se incorpora al contexto de identidad del amigo. Los ajustes rápidos de personalidad se guardan por separado y se conservan cuando cambia este texto."
     },
     "welcome": {
-      "generic": "Hola, soy {{name}}. Dime lo que necesites de ahora en adelante; mientras tanto, me iré ubicando.",
-      "withRole": "Hola, soy {{name}}: {{description}}. Solo dime qué necesitas."
+      "generic": "Hola, soy {{name}}. Dime lo que necesites.",
+      "withUser": "Hola, {{userName}}, soy {{name}}. Dime lo que necesites."
     },
     "invitation": {
       "title": "Preparándose para encontrarse",
