@@ -18511,6 +18511,7 @@
         "intervalChip": "Nach Abschluss · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "Benutzerdefinierter Cron",
         "intervalMinutes": "Minütlich (alle N Minuten)",
         "interval": "Stündlich (alle N Stunden)",
         "daily": "Täglich (jeden Tag)",
