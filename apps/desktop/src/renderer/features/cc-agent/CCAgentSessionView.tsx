@@ -4760,7 +4760,7 @@ function CCAgentSessionContent({
         const nowIso = new Date().toISOString();
         const attachmentPayload = buildUserMessageAttachmentPayload(files);
         const optimisticMessage: ChatMessage = {
-          clientId: `pending-send:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
+          clientId: `pending-send:${crypto.randomUUID()}`,
           role: 'user',
           content: message,
           createdAt: nowIso,
