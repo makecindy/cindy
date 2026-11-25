@@ -140,6 +140,15 @@ describe('executePreRunHook', () => {
     );
   });
 
+  it('recognizes a Node crash location before truncating a long path', () => {
+    const location = `/tmp/${'x'.repeat(220)}/gate.mjs:1520`;
+    expect(formatPreRunHookFailure({
+      status: 'failed', decision: 'block', exitCode: 1, durationMs: 1,
+      stdout: '', stderr: `${location}\nthrow new Error('boom');\n^\nError: boom\n`,
+      stdoutTruncated: false, stderrTruncated: false, timedOut: false, aborted: false,
+    })).toBe('pre-run hook failed with exit code 1: Error: boom');
+  });
+
   it('stdout / stderr 分别捕获', async () => {
     const result = await executePreRunHook({
       command: 'node -e "console.log(\'to-out\');console.error(\'to-err\');process.exit(0)"',

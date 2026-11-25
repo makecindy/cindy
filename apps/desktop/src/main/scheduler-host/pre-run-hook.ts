@@ -138,10 +138,10 @@ const NODE_ERROR_LINE = /^(?:Uncaught )?(?:[A-Z][\w$]*)?(?:Error|Exception)(?: \
 /** 前置检查失败时 stderr 里最能说明原因的一行。 */
 function stderrFailureReason(stderr: string): string {
   const text = stderr.trim();
-  const head = firstLine(text);
-  if (!NODE_CRASH_LOCATION.test(head)) return head;
+  const rawHead = text.split(/\r?\n/, 1)[0] ?? '';
+  if (!NODE_CRASH_LOCATION.test(rawHead)) return firstLine(text);
   const errorLine = text.split(/\r?\n/).find(line => NODE_ERROR_LINE.test(line));
-  return errorLine ? firstLine(errorLine) : head;
+  return firstLine(errorLine ?? rawHead);
 }
 
 /** POSIX 下 spawn(shell:true) 实际使用的解释器;语法预检必须用同一个。 */
