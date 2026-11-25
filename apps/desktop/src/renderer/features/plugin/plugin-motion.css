@@ -166,12 +166,49 @@
 }
 
 @container plugin-management (max-width: 720px) {
-  .plugin-management-header-frame {
+  .plugin-management-header[data-catalog-library='plugins'] .plugin-management-header-frame {
     gap: var(--space-2);
   }
 
-  .plugin-management-actions {
+  .plugin-management-header[data-catalog-library='plugins'] .plugin-management-actions {
     flex-shrink: 1;
+  }
+
+  .plugin-management-header[data-catalog-library='skills'] {
+    height: 7rem;
+  }
+
+  .plugin-management-header[data-catalog-library='skills'] .plugin-management-header-frame {
+    display: grid;
+    grid-template-areas:
+      'tools'
+      'tabs';
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 2.25rem 2.25rem;
+    align-content: center;
+    column-gap: 0;
+    row-gap: var(--space-2);
+  }
+
+  .plugin-management-header[data-catalog-library='skills'] .plugin-management-tabs {
+    grid-area: tabs;
+    width: 100%;
+  }
+
+  .plugin-management-header[data-catalog-library='skills'] .plugin-management-tab {
+    min-width: max-content;
+    flex: 1 0 auto;
+  }
+
+  .plugin-management-header[data-catalog-library='skills'] .plugin-management-tools {
+    grid-area: tools;
+    width: 100%;
+  }
+
+  .plugin-management-header[data-catalog-library='skills'] .plugin-management-search-control {
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 auto;
   }
 
   .plugin-management-layout-root .plugin-management-action-trigger {
@@ -186,24 +223,24 @@
 }
 
 @container plugin-management (max-width: 360px) {
-  .plugin-management-layout-root .plugin-management-header {
+  .plugin-management-header[data-catalog-library='plugins'] {
     height: 7rem;
   }
 
-  .plugin-management-header-frame {
+  .plugin-management-header[data-catalog-library='plugins'] .plugin-management-header-frame {
     flex-direction: column;
     justify-content: center;
   }
 
-  .plugin-management-header-frame :is(.plugin-management-tabs, .plugin-management-tools) {
+  .plugin-management-header[data-catalog-library='plugins'] :is(.plugin-management-tabs, .plugin-management-tools) {
     flex: 0 0 auto;
   }
 
-  .plugin-management-header-frame .plugin-management-tabs {
+  .plugin-management-header[data-catalog-library='plugins'] .plugin-management-tabs {
     align-self: flex-start;
   }
 
-  .plugin-management-header-frame .plugin-management-tools {
+  .plugin-management-header[data-catalog-library='plugins'] .plugin-management-tools {
     width: 100%;
   }
 }
@@ -607,61 +644,6 @@
   height: calc(var(--space-16) + var(--space-1));
 }
 
-.plugin-management-search-control {
-  position: relative;
-  min-width: 0;
-  width: 2.25rem;
-  flex: 0 0 2.25rem;
-  padding-inline: 0;
-  gap: 0;
-  background-color: transparent;
-  border-color: transparent;
-}
-
-.plugin-management-search-trigger {
-  position: absolute;
-  inset-inline-start: var(--space-1);
-  pointer-events: none;
-  color: var(--text-primary);
-}
-
-.plugin-management-search-input {
-  width: 0;
-  min-width: 100%;
-  height: 100%;
-  padding-inline: 0;
-  opacity: 0;
-}
-
-.plugin-management-search-control:is(:focus-within, :has(.plugin-management-search-clear)) {
-  width: 15.5rem;
-  flex: 0 1 15.5rem;
-  min-width: 5rem;
-  padding-inline: var(--space-8) var(--space-1);
-  background-color: var(--surface-elevated);
-  border-color: var(--border-default);
-}
-
-.plugin-management-header[data-catalog-library='skills'] .plugin-management-search-control:is(:focus-within, :has(.plugin-management-search-clear)) {
-  background-color: color-mix(in srgb, var(--surface-elevated-soft) 70%, transparent);
-  border-color: color-mix(in srgb, var(--border-default) 52%, transparent);
-}
-
-.plugin-management-search-control:focus-within,
-.plugin-management-header[data-catalog-library='skills'] .plugin-management-search-control:focus-within {
-  border-color: var(--focus-ring);
-}
-
-.plugin-management-search-control:is(:focus-within, :has(.plugin-management-search-clear)) .plugin-management-search-input {
-  min-width: 0;
-  width: auto;
-  opacity: 1;
-}
-
-.plugin-management-search-control:not(:focus-within, :has(.plugin-management-search-clear)):hover {
-  background-color: var(--surface-hover-soft);
-}
-
 .plugin-management-header[data-catalog-library='plugins'] .plugin-management-tools {
   gap: var(--space-1);
 }
@@ -676,6 +658,10 @@
 }
 
 .plugin-management-search-expanded .plugin-management-search-trigger {
+  position: absolute;
+  inset-inline-start: var(--space-1);
+  pointer-events: none;
+  color: var(--text-primary);
   z-index: var(--z-raised);
 }
 

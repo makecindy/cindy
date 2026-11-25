@@ -43,6 +43,19 @@ function CurrentPath() {
   return <output data-testid="current-path">{useLocation().pathname}</output>;
 }
 
+function observeCatalogWidth(initialWidth: number) {
+  let notify: (width: number) => void = () => {};
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(callback: ResizeObserverCallback) {
+      notify = width => callback([{ contentRect: { width } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+    }
+
+    observe() { notify(initialWidth); }
+    disconnect() {}
+  });
+  return (width: number) => act(() => notify(width));
+}
+
 function ActiveMainView() {
   return <output data-testid="active-main-view">{useActiveMainView().activeKey}</output>;
 }
@@ -339,7 +352,12 @@ describe('PluginManagementLayout', () => {
     expect(document.activeElement).toBe(searchInput);
   });
 
-  it.each(['plugins', 'skills'] as const)('keeps tabs, search and actions in the same focus order on %s', (activeTab) => {
+  it.each([
+    ['plugins', 720, false],
+    ['skills', 720, true],
+    ['skills', 721, false],
+  ] as const)('keeps the %s focus order at a content width of %d', (activeTab, width, searchFirst) => {
+    observeCatalogWidth(width);
     const { container } = render(
       <MemoryRouter>
         <PluginManagementLayout
@@ -357,11 +375,15 @@ describe('PluginManagementLayout', () => {
     const search = screen.getByRole(activeTab === 'plugins' ? 'button' : 'textbox', {
       name: activeTab === 'plugins' ? 'Search plugins' : 'Search skills',
     });
-    expect(focusable.indexOf(search)).toBeGreaterThan(focusable.indexOf(screen.getByRole('tab', { name: 'Skills' })));
-    expect(focusable.indexOf(screen.getByRole('button', { name: 'Add' }))).toBeGreaterThan(focusable.indexOf(search));
+    const tab = screen.getByRole('tab', { name: activeTab === 'skills' ? 'Skills' : 'Plugins' });
+    const action = screen.getByRole('button', { name: 'Add' });
+    const expected = searchFirst ? [search, action, tab] : [tab, search, action];
+    expect(focusable.filter(control => expected.includes(control))).toEqual(expected);
+    if (activeTab === 'skills') expect(screen.queryByRole('button', { name: 'Search skills' })).toBeNull();
   });
 
-  it('preserves the focused search control when swapping between plugins and skills', () => {
+  it('keeps the wide tab position and focused search control when switching catalogs', () => {
+    observeCatalogWidth(900);
     const view = (activeTab: 'plugins' | 'skills') => (
       <MemoryRouter>
         <PluginManagementLayout
@@ -375,12 +397,35 @@ describe('PluginManagementLayout', () => {
       </MemoryRouter>
     );
     const { rerender } = render(view('plugins'));
+    const tabs = screen.getByRole('tablist');
+    const tabFrame = tabs.parentElement;
     fireEvent.click(screen.getByRole('button', { name: 'Search plugins' }));
     const search = screen.getByRole('textbox', { name: 'Search plugins' });
     expect(document.activeElement).toBe(search);
     rerender(view('skills'));
+    expect(tabFrame?.firstElementChild).toBe(tabs);
+    expect(screen.getByRole('tablist')).toBe(tabs);
     expect(document.activeElement).toBe(search);
     expect(screen.getByRole('textbox', { name: 'Search skills' })).toBe(search);
+  });
+
+  it('preserves a focused skill input and tab across the stacked breakpoint', () => {
+    const resize = observeCatalogWidth(800);
+    render(
+      <MemoryRouter>
+        <PluginManagementLayout activeTab="skills" query="" onQueryChange={vi.fn()}>
+          <span>Skills content</span>
+        </PluginManagementLayout>
+      </MemoryRouter>,
+    );
+    const search = screen.getByRole('textbox', { name: 'Search skills' });
+    act(() => search.focus());
+    resize(700);
+    expect(document.activeElement).toBe(search);
+    const tab = screen.getByRole('tab', { name: 'Skills' });
+    act(() => tab.focus());
+    resize(800);
+    expect(document.activeElement).toBe(tab);
   });
 
   it('opens the plugin search input and collapses it after Escape when empty', () => {

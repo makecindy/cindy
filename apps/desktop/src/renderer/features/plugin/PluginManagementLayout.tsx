@@ -61,6 +61,13 @@ export const PLUGIN_MANAGEMENT_CARD_GRID_CLASS =
   'grid grid-cols-[repeat(auto-fit,minmax(min(100%,22.5rem),1fr))] gap-3';
 
 export const PLUGIN_MANAGEMENT_CONTENT_CONTAINER_CLASS = 'plugin-management-content-frame';
+const SKILL_STACKED_MAX_WIDTH = 720;
+const SKILL_SEARCH_STYLE = {
+  ...WINDOW_NO_DRAG_STYLE,
+  background: 'color-mix(in srgb, var(--surface-elevated-soft) 70%, transparent)',
+  borderColor: 'color-mix(in srgb, var(--border-default) 52%, transparent)',
+  boxShadow: 'inset 0 1px 0 color-mix(in srgb, var(--surface-elevated) 24%, transparent)',
+};
 
 /**
  * Installed cards keep the two-column catalog track even when only one card is
@@ -117,14 +124,29 @@ export function PluginManagementHeader({
 }: PluginManagementHeaderProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const frameRef = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const pendingSearchFocus = useRef(false);
   const composingRef = useRef(false);
+  const [skillStacked, setSkillStacked] = useState(false);
   const [searchActive, setSearchActive] = useState(false);
   const [compositionQuery, setCompositionQuery] = useState<string | null>(null);
   const searchable = query !== undefined && onQueryChange !== undefined;
   const pluginSearch = activeTab === 'plugins';
   const searchExpanded = !pluginSearch || searchActive || Boolean(query);
+  const stacked = !pluginSearch && skillStacked;
+  useLayoutEffect(() => {
+    if (pluginSearch || typeof ResizeObserver === 'undefined') return;
+    const root = frameRef.current?.closest('.plugin-management-layout-root');
+    if (!root) return;
+    const update = (width: number) => setSkillStacked(width <= SKILL_STACKED_MAX_WIDTH);
+    update(root.getBoundingClientRect().width);
+    const observer = new ResizeObserver(([entry]) => {
+      update(entry?.contentRect.width ?? root.getBoundingClientRect().width);
+    });
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [pluginSearch]);
   useLayoutEffect(() => {
     if (searchExpanded && pendingSearchFocus.current) {
       pendingSearchFocus.current = false;
@@ -146,9 +168,9 @@ export function PluginManagementHeader({
       role="tablist"
       aria-label={t('sidebar.horizontalTabbarAria')}
       style={WINDOW_NO_DRAG_STYLE}
-      height={32}
-      optionHeight={28}
-      optionClassName="text-13"
+      height={stacked ? 38 : 32}
+      optionHeight={stacked ? 32 : 28}
+      optionClassName={cn('text-13', stacked && 'plugin-management-tab px-4')}
       value={activeTab}
       onValueChange={(tab) =>
         onSelectTab
@@ -198,9 +220,9 @@ export function PluginManagementHeader({
               searchExpanded && 'flex',
               pluginSearch
                 ? 'plugin-management-search-expanded'
-                : 'plugin-management-search-control min-w-[148px] max-w-[260px] flex-1 gap-2 rounded-full border px-3 transition-[width,background-color,border-color,box-shadow] focus-within:border-[var(--focus-ring)] focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)] motion-reduce:transition-none',
+                : 'plugin-management-search-control min-w-[148px] max-w-[260px] flex-1 gap-2 rounded-full border px-3 backdrop-blur-md transition-[width,background-color,border-color,box-shadow] focus-within:border-[var(--focus-ring)] focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)] motion-reduce:transition-none',
             )}
-            style={WINDOW_NO_DRAG_STYLE}
+            style={pluginSearch ? WINDOW_NO_DRAG_STYLE : SKILL_SEARCH_STYLE}
           >
             <label
               htmlFor={searchInputId}
@@ -251,10 +273,10 @@ export function PluginManagementHeader({
               }}
               placeholder={resolvedSearchPlaceholder}
               aria-label={resolvedSearchPlaceholder}
-              className={cn('min-w-0 flex-1', !pluginSearch && 'h-full')}
+              className="min-w-0 flex-1"
               inputClassName={pluginSearch
                 ? 'pl-8 pr-8'
-                : 'plugin-management-search-input appearance-none border-0 bg-transparent px-0 focus:ring-0'}
+                : 'h-auto appearance-none border-0 bg-transparent px-0 focus:ring-0'}
             />
             {query && pluginSearch ? (
               <Tip text={resolvedClearSearchLabel}>
@@ -297,13 +319,14 @@ export function PluginManagementHeader({
   return (
     <div className="plugin-management-header h-16 shrink-0 px-3" data-catalog-library={activeTab} style={WINDOW_DRAG_STYLE}>
       <div
+        ref={frameRef}
         className={cn(
           PLUGIN_MANAGEMENT_FRAME_CLASS,
           'plugin-management-header-frame flex h-full items-center gap-4',
         )}
       >
-        {tabs}
-        {tools}
+        {stacked ? tools : tabs}
+        {stacked ? tabs : tools}
       </div>
     </div>
   );
