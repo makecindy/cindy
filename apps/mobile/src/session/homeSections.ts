@@ -135,12 +135,16 @@ export function buildHomeSections(
     for (const project of home.projects) bucket(project.deviceId ?? '').projects.push(project);
     for (const chat of home.chats) bucket(homeRowDeviceKey(chat)).chats.push(chat);
     const labels = new Map(home.deviceFilters.map(device => [device.deviceId, device.label]));
-    for (const id of new Set([...labels.keys(), ...devices.keys()])) {
-      if (id === null) continue;
+    const deviceIds = [...new Set([...labels.keys(), ...devices.keys()])]
+      .filter((id): id is string => id !== null && devices.has(id));
+    const hideDeviceHeading = home.selectedDeviceId !== null || deviceIds.length === 1;
+    for (const id of deviceIds) {
       const contents = devices.get(id);
       if (!contents) continue;
       const key = 'device:' + id;
-      const title = labels.get(id) ?? contents.projects[0]?.deviceName ?? i18n.t('devices.presentation.home.unknownComputer');
+      const title = hideDeviceHeading
+        ? null
+        : labels.get(id) ?? contents.projects[0]?.deviceName ?? i18n.t('devices.presentation.home.unknownComputer');
       const rows = buildMainRows({ ...home, ...contents }, groupByProject, options).map(row => {
         if (row.kind !== 'dialogue' && row.kind !== 'automation') return row;
         const scopedKey = key + ':' + row.key;

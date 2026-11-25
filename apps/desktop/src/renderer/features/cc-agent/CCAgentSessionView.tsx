@@ -127,7 +127,7 @@ import { shortSessionId } from '@/lib/sessionId';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { isOverloadErrorMessage } from '@/utils/overloadError';
 import { ChatInput, type SessionModelPick } from '@/components/new-chat/ChatInput';
-import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiSlot, PluginUiWorkdirButton, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
 import {
   SessionSubscriptionAccountProvider,
   sessionSubscriptionPoolProvider,
@@ -926,6 +926,7 @@ function CCAgentSessionContent({
   onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
+  const hasWorkdirMenu = usePluginUiHas('workdir.menu');
   const hasPluginStatusbar = usePluginUiHas('statusbar');
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
@@ -1871,15 +1872,15 @@ function CCAgentSessionContent({
     // 会把被控端 skill/builtin 影子掉的 /clear、/help 等误判成 desktop 命令、在控制端执行。
     // 本机会话 remoteDeviceId=undefined → 行为不变。desktop 命令始终本地(见 loadAllCommands)。
     if (awaitingCreation) return;
-    // 插件引擎任务只认 Cindy 的桌面命令；其余 `/…` 原样交给引擎(与输入框的命令列表同源)。
+    // 插件引擎任务认 Cindy 的桌面命令与引擎能展开的技能；其余 `/…` 原样交给引擎(与输入框的命令列表同源)。
     const pluginEngineCommands = isPluginEngineKind(session?.agentKind);
     loadAllCommands(
       agentKind,
       wd,
       {
         contextReady: !!session,
-        skipAgentSkills: isRemoteSession || pluginEngineCommands,
-        ...(pluginEngineCommands ? { skipAgentCommands: true } : {}),
+        skipAgentSkills: isRemoteSession || (pluginEngineCommands && !!session?.agentDeviceId),
+        ...(pluginEngineCommands ? { skipAgentCommands: true, pluginEngineSkills: true } : {}),
         sessionId: session?.id,
       },
       remoteDeviceId,
@@ -1893,7 +1894,7 @@ function CCAgentSessionContent({
     return () => {
       cancelled = true;
     };
-  }, [awaitingCreation, session?.id, session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
+  }, [awaitingCreation, session?.id, session?.agentKind, session?.agentDeviceId, session?.workingDir, isRemoteSession, remoteDeviceId]);
 
   // Keep lastWorkingDir in sync so Settings can distinguish a real project
   // scope from「新对话默认值」. Standalone dialogues have an internal runtime
@@ -3329,8 +3330,8 @@ function CCAgentSessionContent({
         agentKind,
         session?.workingDir,
         {
-          skipAgentSkills: isRemoteSession || pluginEngineCommands,
-          ...(pluginEngineCommands ? { skipAgentCommands: true } : {}),
+          skipAgentSkills: isRemoteSession || (pluginEngineCommands && !!session?.agentDeviceId),
+          ...(pluginEngineCommands ? { skipAgentCommands: true, pluginEngineSkills: true } : {}),
           sessionId: session?.id,
         },
         remoteDeviceId,
@@ -3338,7 +3339,7 @@ function CCAgentSessionContent({
     } catch {
       return [];
     }
-  }, [session?.id, session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
+  }, [session?.id, session?.agentKind, session?.agentDeviceId, session?.workingDir, isRemoteSession, remoteDeviceId]);
 
   const insertHelpCard = useCallback(async () => {
     const commands = await getHelpCommandsSnapshot();
@@ -7144,6 +7145,11 @@ function CCAgentSessionContent({
                         </button>
                       </div>
                     </Tip>
+                  ) : hasWorkdirMenu && sessionId && composerDir && !isRemoteWorktreeSession && !remoteDeviceId ? (
+                    <PluginUiWorkdirButton key={JSON.stringify([sessionId, composerDir])}
+                      sessionId={sessionId} path={composerDir} onOpenDirectory={handleOpenWorkingDir}>
+                      {workingDirChipContent}
+                    </PluginUiWorkdirButton>
                   ) : (
                     <WorkingDirectoryTip
                       path={composerDir}
