@@ -65,6 +65,7 @@ import {
 import { ImageGalleryContext, ImageGalleryScopeContext } from '../components/chat/ImageGalleryContext';
 import { MarkdownRenderer } from '../components/chat/MarkdownRenderer';
 import { _clearSmartResolveCache, toLocalFileUrl } from '@/lib/localPathResolver';
+import { withStarterOptionList } from '../../shared/botStarterOptions';
 import i18n from '@/i18n';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '../../shared/remoteMediaUrl';
 import type { GhostCardSnapshot } from '@/cindy-brain/ghostCardStore';
@@ -482,6 +483,35 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
       delete (window as unknown as { electronAPI?: unknown }).electronAPI;
       _clearSmartResolveCache();
     }
+  });
+
+  // PR #12724 review：画廊只收回复实际显示的图。伙伴开场选项列表显示成按钮、不渲染正文，
+  // 其中的图片语法不进画廊。最小失败输入：选项 `![hidden](B)` 让画廊多出 B。
+  it('回复里显示层剥离的内容不进任务画廊', () => {
+    const blob = (char: string) => `cindy-media://blobs/${char.repeat(64)}.png`;
+    const [shown, hidden] = ['s', 'h'].map(blob);
+    const option = `![hidden](${hidden})`;
+    const turns: RenderItem[] = [
+      {
+        type: 'message',
+        key: 'a1',
+        message: {
+          clientId: 'a1',
+          role: 'assistant',
+          content: withStarterOptionList(`Here:\n\n![shown](${shown})`, [option]),
+          botStarterOptions: [option],
+        },
+      },
+    ];
+    const gallery = collectTaskImageGallery(turns, new Map(), {
+      cache: new Map(),
+      workingDir: '/work',
+      allowPrivilegedLinks: true,
+      remoteMediaOrigin: undefined,
+      ownershipPending: false,
+      resolveInWorkspace: false,
+    });
+    expect(gallery.map((image) => image.src)).toEqual([shown]);
   });
 
   // PR #12724 review：同一回复里重复出现的图要从点开的那一处开始；查看器里一张还没写出

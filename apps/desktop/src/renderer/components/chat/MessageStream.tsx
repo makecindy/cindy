@@ -337,7 +337,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 }
 
 import { UserMessage } from './UserMessage';
-import { AssistantMessage } from './AssistantMessage';
+import { AssistantMessage, assistantDisplayContent } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
 import { attachBotStartedTasks, BotStartedTasks, collectBotStartedTasks } from './BotStartedTasks';
 import { BotMessageTimelineHeader } from './BotMessageTimelineHeader';
@@ -1531,7 +1531,16 @@ export function collectReplyGalleryImages(
   const message = item.message;
   if (message.role !== 'assistant' || message.isStreaming || message.systemCardType) return [];
   if (ghostCards?.byCallId.get(message.clientId)?.status === 'ready') return [];
-  return replyGalleryImages(message.content, message.clientId, scope, options);
+  const content = message.content;
+  if (!content.includes('![') && !/<img/i.test(content) && !content.includes('cindy-ui')) return [];
+  // Only what the reply shows: the same text AssistantMessage renders, so stripped
+  // blocks add no images and section offsets match the renderer.
+  return replyGalleryImages(
+    assistantDisplayContent(content, message.botStarterOptions),
+    message.clientId,
+    scope,
+    options,
+  );
 }
 
 /**
