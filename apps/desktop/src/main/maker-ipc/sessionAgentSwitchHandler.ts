@@ -34,6 +34,7 @@
  */
 
 import { CredentialModeSwitchBusyError } from '../maker-host/credentialSwitchError.js';
+import { PROVIDER_GROUP_SUPERSEDED_ERROR } from '../provider-group/failurePolicy.js';
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import {
   CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
@@ -263,6 +264,9 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   ): Promise<{ deferred: boolean; superseded?: boolean }>;
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
+  /** Retire this task's uncompleted remote startup after an authorized manual
+   * choice, before waiting for the send lock held by its historical probe. */
+  cancelPendingRemoteStart?(sessionId: string, reason?: Error): void;
   /** Desktop admission for a completed, unbound automation task. */
   canSwitchCompletedAutomationSession?(sessionId: string, returningToBuiltin: boolean): Promise<boolean>;
   /**
@@ -2011,6 +2015,8 @@ export function registerMakerSessionAgentSwitchHandler(
         guard();
         // An authorized manual choice supersedes recovery even if locked admission later rejects it.
         onUserSwitchRequested(event, valid.sessionId);
+        deps.cancelPendingRemoteStart?.(valid.sessionId,
+          new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
       }
       const localWindowRequest = !!onUserSwitchRequested && !isDeviceLinkInvoke();
       const run = () => performSessionAgentSwitch(deps, { ...request, localWindowRequest });

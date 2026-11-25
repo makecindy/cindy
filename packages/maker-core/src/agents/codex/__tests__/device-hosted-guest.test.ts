@@ -147,6 +147,8 @@ interface Fixture {
   ghostRosterSnapshot?: string;
   /** 经隧道的 Cindy MCP；默认只有通讯录。 */
   mcpServers?: string[];
+  /** Independently failed task-computer plugin gateway; cold resume repairs it. */
+  recoverPluginGateway?: boolean;
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemoryEnabled?: boolean;
   /** 任务所在电脑带来了自己的托管 Skill。 */
@@ -244,6 +246,7 @@ async function startHosted(fixture: Fixture) {
       { name: 'guest', description: 'guest', path: guestSkill, scope: 'repo' as const, enabled: true },
     ];
   }
+  let resumeCount = 0;
   const request = vi.fn(async (method: string, params: unknown): Promise<unknown> => {
     switch (method) {
       case 'initialize':
@@ -277,6 +280,10 @@ async function startHosted(fixture: Fixture) {
             { name: 'local_docs', tools: {} },
             { name: 'cindy_contacts', tools: {} },
             { name: 'configured_server', tools: {} },
+            ...(fixture.recoverPluginGateway && (params as { threadId?: string }).threadId ? [
+              { name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } },
+              { name: 'cindy', runtimeStatus: resumeCount > 1 ? 'connected' : 'failed', tools: { ghost_info: {}, ghost_call: {} } },
+            ] : []),
           ],
           nextCursor: null,
         };
@@ -291,7 +298,10 @@ async function startHosted(fixture: Fixture) {
           model: 'gpt-5.5', modelProvider: 'openai', cwd: workingDir,
         };
       case Method.ThreadResume:
+        resumeCount++;
         return { thread: { id: 'resume-thread-id' }, model: 'gpt-5.5', modelProvider: 'openai', cwd: workingDir };
+      case Method.ThreadBackgroundTerminalsList:
+        return fixture.recoverPluginGateway ? { data: [], nextCursor: null } : {};
       case Method.ThreadFork:
         return { thread: { id: 'fork-thread-id' }, model: 'gpt-5.5', modelProvider: 'openai' };
       case Method.TurnStart:
@@ -311,6 +321,7 @@ async function startHosted(fixture: Fixture) {
     request,
     subscribeThread: vi.fn(() => ({ release: vi.fn() })),
     unsubscribeThread: vi.fn(async () => {}),
+    captureThreadResumeOwnership: vi.fn(() => () => true),
     hasThreadSubscription: vi.fn(() => false),
     isCodexProxyActive: vi.fn(() => false),
     isCodexBrowserUseAvailable: vi.fn(() => false),
@@ -675,6 +686,33 @@ describe('Codex device-hosted guest sessions', () => {
     expect(instructions).toContain(ownerRoster);
     expect(instructions).not.toContain(GHOST_ROSTER);
     expect(fixture.getGhostRosterPrompt).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  // Plugin gateway recovery must preserve provider-sharing §9 isolation and
+  // task-computer routing. Existing helper tests only use local MCP config.
+  // Unit tier, production hosted Agent.send: failed cindy + healthy helper on
+  // a resumed task; inspect the cold-resume wire config and single input.
+  it.each([false, true])('recovers the task-computer plugin gateway with its own tunnel (guest=%s)', async guest => {
+    const fixture = await startHosted({ guest, resume: true, recoverPluginGateway: true,
+      mcpServers: ['cindy_helper', 'cindy'] });
+    const handle = await fixture.started;
+    const originalId = handle.id;
+    expect((await handle.readMcpServerTools?.('cindy'))?.state).toBe('failed');
+    expect((await handle.readMcpServerTools?.('cindy_helper'))?.state).toBe('connected');
+    await handle.send({ type: 'user', content: 'continue with the task computer plugins' }, { throwOnStartFailure: true });
+    const resumes = fixture.request.mock.calls.filter(([method]) => method === Method.ThreadResume);
+    expect(resumes).toHaveLength(2);
+    expect(resumes[1][1]).toMatchObject({ threadId: originalId, config: {
+      'mcp_servers.cindy.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy',
+      'mcp_servers.cindy.enabled': true,
+      'mcp_servers.cindy_helper.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy_helper',
+      'mcp_servers.local_docs.enabled': false,
+    } });
+    expect(fixture.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    expect((await handle.readMcpServerTools?.('cindy'))?.state).toBe('connected');
+    expect(handle.id).toBe(originalId);
+    expect(fixture.host.retire).not.toHaveBeenCalled();
     await handle.close();
   });
 

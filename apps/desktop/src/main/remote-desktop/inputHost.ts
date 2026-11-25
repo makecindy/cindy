@@ -1,3 +1,6 @@
+import { getInstanceConfig } from '../instance-runtime/config.js';
+import { openLinuxDesktopInput } from './linuxInputHost';
+import type { LinuxDesktopInput } from './linuxX11Input';
 import { app, screen } from 'electron';
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -286,6 +289,7 @@ export async function requestDesktopInputPermission(
 }
 
 export class DesktopInputHost {
+  private linuxX11: LinuxDesktopInput | null = null;
   private windows: WindowsDesktopConnection | null = null;
   private queuedBytes = 0;
   private writing = Promise.resolve();
@@ -305,6 +309,7 @@ export class DesktopInputHost {
     private readonly onFailure: () => void,
     private readonly runtime: {
       platform?: NodeJS.Platform;
+      openLinuxInput?: typeof openLinuxDesktopInput;
       resolveBinary(): Promise<string>;
       spawn(binary: string, args?: string[]): ChildProcessWithoutNullStreams;
     } = {
@@ -322,6 +327,7 @@ export class DesktopInputHost {
     const platform = this.runtime.platform ?? process.platform;
     if (platform !== 'darwin' && platform !== 'win32' && platform !== 'linux')
       throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+    const cloudX11 = platform === 'linux' && !process.env.WAYLAND_DISPLAY && (!!getInstanceConfig() || !!this.runtime.openLinuxInput);
     // Only the macOS helper can keep input inside one window.
     if (
       window &&
@@ -333,10 +339,12 @@ export class DesktopInputHost {
         window.pid <= 0)
     )
       throw new Error('DESKTOP_INPUT_UNSUPPORTED');
-    const x11 = platform === 'linux' && isX11Desktop(platform);
+    // The managed cloud desktop keeps its guarded X11 adapter instead of XTest.
+    const x11 = platform === 'linux' && !cloudX11 && isX11Desktop(platform);
     if (
       platform === 'linux' &&
       !x11 &&
+      !cloudX11 &&
       displayId !== WAYLAND_DISPLAY_ID &&
       !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(displayId)
     )
@@ -350,6 +358,17 @@ export class DesktopInputHost {
     if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
     this.activity = new HumanDesktopInput();
     try {
+      if (cloudX11) {
+        const connection = await (this.runtime.openLinuxInput ?? openLinuxDesktopInput)(displayId, () => {
+          if (generation === this.generation) this.onFailure();
+        });
+        if (generation !== this.generation) { await connection.stop(); throw new Error('DESKTOP_LEASE_EXPIRED'); }
+        this.linuxX11 = connection;
+        this.displayId = displayId;
+        this.heartbeat = setInterval(() => this.write([]), 2000);
+        this.privacyPaused = false;
+        return;
+      }
       this.x11Geometry = x11 ? x11InputGeometry(screen.getAllDisplays(), displayId) : null;
       if (platform === 'linux' && !x11 && displayId !== WAYLAND_DISPLAY_ID) {
         this.linuxPoint = linuxInputMapping(await linuxMonitors(), displayId);
@@ -439,7 +458,7 @@ export class DesktopInputHost {
   }
   input(events: DesktopInput[]): void | Promise<boolean> {
     if (this.privacyPaused) return;
-    if ((this.runtime.platform ?? process.platform) === 'linux') {
+    if ((this.runtime.platform ?? process.platform) === 'linux' && !this.linuxX11) {
       if (!this.child) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
       this.checkX11Geometry();
       // Native text is paced for Wayland clients/IMEs. Bound each acknowledged
@@ -475,7 +494,7 @@ export class DesktopInputHost {
       return;
     }
     const display = screen.getAllDisplays().find((item) => String(item.id) === this.displayId);
-    if (!display || (!this.child && !this.windows)) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+    if (!display || (!this.child && !this.windows && !this.linuxX11)) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
     if (events.length === 0) return;
     const batch = this.activity!.begin(events);
     const points: { x: number; y: number }[] = [];
@@ -513,8 +532,9 @@ export class DesktopInputHost {
     const child = this.child;
     const line = `${JSON.stringify(events)}\n`;
     const connection = this.windows;
+    const linuxX11 = this.linuxX11;
     const bytes = Buffer.byteLength(line);
-    if (this.queuedBytes + bytes > 32_768 || (!connection && (!child || child.stdin.destroyed))) {
+    if (this.queuedBytes + bytes > 32_768 || (!linuxX11 && !connection && (!child || child.stdin.destroyed))) {
       batch?.complete();
       this.onFailure();
       return Promise.resolve(false);
@@ -535,7 +555,10 @@ export class DesktopInputHost {
             : undefined;
         try {
           this.checkX11Geometry(); // Recheck after waiting for earlier native batches.
-          if (connection) {
+          if (linuxX11) {
+            linuxX11.input(events as DesktopInput[]);
+            await linuxX11.settled();
+          } else if (connection) {
             if ((await connection.request(line.slice(0, -1))) !== 'ok\n')
               throw new Error('DESKTOP_INPUT_UNAVAILABLE');
           } else {
@@ -581,7 +604,7 @@ export class DesktopInputHost {
    * Restart only this input helper on cancel, never the media session or lease.
    */
   async pauseForPrivacy(): Promise<() => Promise<void>> {
-    if (!this.child && !this.windows) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+    if (!this.child && !this.windows && !this.linuxX11) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
     const displayId = this.displayId;
     const window = this.window ?? undefined;
     this.stop();
@@ -607,6 +630,8 @@ export class DesktopInputHost {
     this.privacyPaused = false;
     this.window = null;
     this.acknowledge?.(new Error('DESKTOP_LEASE_EXPIRED'));
+    const linuxX11 = this.linuxX11;
+    this.linuxX11 = null;
     const windows = this.windows;
     const writing = this.writing;
     this.windows = null;
@@ -636,6 +661,8 @@ export class DesktopInputHost {
       const timer = setTimeout(() => child.kill(), 1500);
       timer.unref();
       child.once('exit', () => clearTimeout(timer));
+    } else if (linuxX11) {
+      this.stopping = linuxX11.stop().finally(release);
     } else if (windows) {
       this.stopping = (async () => {
         try {

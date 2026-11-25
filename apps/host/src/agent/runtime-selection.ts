@@ -379,6 +379,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     resolveProviderGroupTarget: undefined,
     assertAgentDeviceRouteUsable: undefined,
     describeAgentDevice: undefined,
+    cancelPendingRemoteStart: undefined,
     // Plugin engines are only assembled on the desktop. The switch handler rejects ACP without admission.
     canSwitchCompletedAutomationSession: undefined,
     admitPluginEngineTarget: undefined,

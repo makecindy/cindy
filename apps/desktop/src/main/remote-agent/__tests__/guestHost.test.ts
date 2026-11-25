@@ -1013,8 +1013,12 @@ describe('guest provider access and usage', () => {
     } as unknown as AgentEvent;
     const recordOwnerUsage = vi.fn();
     const started: Started[] = [];
-    const host = makeHost(started, { events: [done], recordOwnerUsage, ownerCurrent: () => false });
+    // Start under a valid owner, then switch before the asynchronous startup
+    // emits its late turn. Opening an already stale owner is now rejected.
+    let ownerCurrent = true;
+    const host = makeHost(started, { events: [done], recordOwnerUsage, ownerCurrent: () => ownerCurrent });
     await host.handle(OWNER, { op: 'open', runId: RUN_2, agentKind: 'claude-code', payload: { json: openPayload('task-2') } });
+    ownerCurrent = false;
     await vi.waitFor(async () => {
       const poll = await host.handle(OWNER, { op: 'poll', runs: [{ runId: RUN_2, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
       expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"t":"event","event":{"type":"done"');

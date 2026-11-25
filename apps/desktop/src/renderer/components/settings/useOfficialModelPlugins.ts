@@ -13,8 +13,9 @@ export function useOfficialModelPlugins(enabled: boolean, locale: string) {
   const progress = useRef<{ owner: typeof owner; locale: string; ids: Set<string>; cursors: Set<string>; total: number | null } | undefined>(undefined);
 
   useEffect(() => {
+    if (!enabled) return;
     const market = window.electronAPI?.pluginMarket;
-    if (!enabled || !market?.officialModelPlugins) return;
+    if (!market?.officialModelPlugins) return;
     const previous = cache.current;
     if (previous?.owner === owner && previous.locale === locale && previous.request === currentRequest) return;
     let cancelled = false;
