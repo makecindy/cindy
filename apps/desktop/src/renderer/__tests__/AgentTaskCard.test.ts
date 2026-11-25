@@ -48,7 +48,7 @@ vi.mock('@/features/right-sidebar/lib/openSubagentsTab', () => ({
 const { getWorkflowProgressForMock } = vi.hoisted(() => ({
   getWorkflowProgressForMock: vi.fn().mockResolvedValue(null),
 }));
-const { stopAgentTaskForMock, reportStopFailureMock, canManageMock } = vi.hoisted(() => ({
+const { stopAgentTaskForMock, stopWorkflowAgentForMock, reportStopFailureMock, canManageMock } = vi.hoisted(() => ({
   // 共享任务访客(房主保留后台任务管理权)用 guest- 前缀模拟。
   canManageMock: vi.fn((sessionId: string) => !sessionId.startsWith('guest-')),
   // 默认按本机路由:落到 window.electronAPI.maker.stopAgentTask(与真实实现的本机分支一致)。
@@ -59,6 +59,7 @@ const { stopAgentTaskForMock, reportStopFailureMock, canManageMock } = vi.hoiste
       }
     ).electronAPI.maker.stopAgentTask(sessionId, taskId),
   ),
+  stopWorkflowAgentForMock: vi.fn().mockResolvedValue({ ok: true }),
   reportStopFailureMock: vi.fn(),
 }));
 vi.mock('@/lib/makerTransport', () => ({
@@ -69,12 +70,14 @@ vi.mock('@/lib/makerTransport', () => ({
 vi.mock('@/lib/backgroundTaskStop', () => ({
   canManageBackgroundTasks: (sessionId: string) => canManageMock(sessionId),
   stopBackgroundTask: stopAgentTaskForMock,
+  stopWorkflowAgent: stopWorkflowAgentForMock,
 }));
 vi.mock('@/lib/backgroundTaskStopFailure', () => ({
   reportBackgroundTaskStopFailure: reportStopFailureMock,
 }));
 
 import { AgentTaskCard } from '@/components/chat/AgentTaskCard';
+import { WorkflowProgressTree } from '@/features/right-sidebar/plugins/background-tasks/WorkflowProgressTree';
 import { SessionNavigationModeProvider } from '@/features/cc-agent/embeddedSessionNavigation';
 
 /**
@@ -593,6 +596,81 @@ describe('AgentTaskCard', () => {
       btn!.click();
     });
     expect(openBackgroundTasksTabMock).toHaveBeenCalledWith('session-1', { focusTaskId: 'wf-1' });
+  });
+
+  it('stops the workflow from its card without opening the details panel', async () => {
+    openBackgroundTasksTabMock.mockClear();
+    stopAgentTaskForMock.mockClear();
+    stopAgentTaskForMock.mockResolvedValueOnce({ ok: true });
+    const { container } = render(
+      withPanelHost(
+        'session-1',
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-1',
+          update: {
+            provider: 'claude-code',
+            taskId: 'wf-1',
+            status: 'running',
+            taskType: 'local_workflow',
+            workflowName: 'Release pipeline',
+          },
+        }),
+      ),
+    );
+
+    const button = stopButton(container);
+    expect(button?.getAttribute('aria-label')).toBe('rightSidebar.backgroundTasks.stopWorkflow');
+    await act(async () => {
+      button!.click();
+      await Promise.resolve();
+    });
+    expect(stopAgentTaskForMock).toHaveBeenCalledWith('session-1', 'wf-1');
+    expect(openBackgroundTasksTabMock).not.toHaveBeenCalled();
+  });
+
+  it('stops only the addressed workflow agent and ignores duplicate clicks while in flight', async () => {
+    // 生产入口:WorkflowProgressTree 行按钮;仅目标 agentId 收到请求,排队/终态行
+    // 无假按钮,同一帧重复点击只调用一次。最小失败输入=两Agent+一个终态;tier=unit/jsdom。
+    let resolveStop!: (value: { ok: true }) => void;
+    stopWorkflowAgentForMock.mockClear();
+    stopWorkflowAgentForMock.mockReturnValueOnce(
+      new Promise<{ ok: true }>((resolve) => { resolveStop = resolve; }),
+    );
+    const { container } = render(
+      React.createElement(WorkflowProgressTree, {
+        model: {
+          aggregate: { status: 'running' },
+          logs: [],
+          groups: [{
+            title: null,
+            agents: [
+              { key: 'a', agentId: 'agent-a', label: 'Agent A', state: 'progress' },
+              { key: 'starting', agentId: 'agent-starting', label: 'Starting', state: 'start' },
+              { key: 'queued', label: 'Queued', state: 'queued' },
+              { key: 'done', agentId: 'agent-done', label: 'Done', state: 'done' },
+            ],
+          }],
+        },
+        stopControl: { sessionId: 'session-1', taskId: 'wf-1' },
+      }),
+    );
+
+    const target = container.querySelector<HTMLButtonElement>(
+      '[data-workflow-agent-stop="agent-a"]',
+    );
+    expect(target).not.toBeNull();
+    expect(container.querySelector('[data-workflow-agent-stop="agent-starting"]')).toBeNull();
+    expect(container.querySelector('[data-workflow-agent-stop="agent-done"]')).toBeNull();
+    expect(container.querySelectorAll('[data-workflow-agent-stop]')).toHaveLength(1);
+    await act(async () => {
+      target!.click();
+      target!.click();
+      await Promise.resolve();
+    });
+    expect(stopWorkflowAgentForMock).toHaveBeenCalledTimes(1);
+    expect(stopWorkflowAgentForMock).toHaveBeenCalledWith('session-1', 'wf-1', 'agent-a');
+    resolveStop({ ok: true });
+    await act(async () => { await Promise.resolve(); });
   });
 
   it('opens the background tasks panel on the first click from a split pane', () => {

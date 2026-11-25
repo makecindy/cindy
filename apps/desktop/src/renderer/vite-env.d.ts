@@ -6261,6 +6261,12 @@ interface ElectronAPI {
     ) => () => void;
     /** 精确停止会话内单个后台任务(不中断当前 turn;任务已结束幂等成功)。 */
     stopAgentTask: (sessionId: string, taskId: string) => Promise<{ ok: true }>;
+    /** 停止指定 Workflow 内一个 Agent;旧远程端明确返回不支持。 */
+    stopWorkflowAgent: (
+      sessionId: string,
+      workflowTaskId: string,
+      agentId: string,
+    ) => Promise<{ ok: true }>;
     controlPiSubagent: (input: {
       sessionId: string;
       taskId: string;

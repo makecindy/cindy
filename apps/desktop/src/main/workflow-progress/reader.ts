@@ -101,6 +101,7 @@ export function extractWorkflowProgress(record: unknown): WorkflowProgress | nul
       // 提前退出时文件里会留下这种行 —— 丢弃会让重载后的树比 live 少行。
       // label 与 agentId 双缺才跳过(没有任何可展示身份)。
       const agentId = asString(e.agentId);
+      const skipped = e.skipped === true;
       const state = asString(e.state);
       const label = asString(e.label) ?? agentId;
       if (!label || !state) continue;
@@ -116,7 +117,7 @@ export function extractWorkflowProgress(record: unknown): WorkflowProgress | nul
       agents.push({
         label,
         ...(agentId ? { agentId } : {}),
-        state,
+        state: skipped ? 'stopped' : state,
         ...(model ? { model } : {}),
         ...(phaseTitle ? { phaseTitle } : {}),
         ...(phaseIndex != null ? { phaseIndex } : {}),
@@ -125,7 +126,7 @@ export function extractWorkflowProgress(record: unknown): WorkflowProgress | nul
         ...(lastToolSummary ? { lastToolSummary } : {}),
         ...(resultPreview ? { resultPreview } : {}),
         ...(durationMs != null ? { durationMs } : {}),
-        ...(error ? { error } : {}),
+        ...(error && !skipped ? { error } : {}),
       });
     }
   }
@@ -179,6 +180,52 @@ export function extractWorkflowProgress(record: unknown): WorkflowProgress | nul
   };
 }
 
+/** 运行 id 只允许作为单段文件名;异常记录不得借元数据补读逃逸目录。 */
+const SAFE_RUNTIME_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$/;
+
+/**
+ * 通用 stop_task(agentId) 会把 Workflow 行先写成 error,但 CLI 同时在 Agent 元数据
+ * 持久化 stoppedByUser。用后者恢复用户停止;缺文件/布局变化/非法 JSON 均保留原状态。
+ * 只补读 error/failed 行,8 个一批,避免大型 Workflow 一次发起过多文件 I/O。
+ */
+async function applyUserStoppedAgentEvidence(
+  workflowsDir: string,
+  progress: WorkflowProgress,
+): Promise<void> {
+  if (!SAFE_RUNTIME_ID.test(progress.runId)) return;
+  const candidates = progress.agents.filter(
+    (agent) =>
+      agent.agentId &&
+      SAFE_RUNTIME_ID.test(agent.agentId) &&
+      (agent.state === 'error' || agent.state === 'failed'),
+  );
+  const sessionDir = path.dirname(workflowsDir);
+  for (let offset = 0; offset < candidates.length; offset += 8) {
+    await Promise.all(candidates.slice(offset, offset + 8).map(async (agent) => {
+      const metadataPath = path.join(
+        sessionDir,
+        'subagents',
+        'workflows',
+        progress.runId,
+        `agent-${agent.agentId}.meta.json`,
+      );
+      try {
+        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as unknown;
+        if (
+          metadata &&
+          typeof metadata === 'object' &&
+          (metadata as Record<string, unknown>).stoppedByUser === true
+        ) {
+          agent.state = 'stopped';
+          delete agent.error;
+        }
+      } catch {
+        // 证据不可用 = 保持 CLI 原状态;不能把普通失败猜成用户停止。
+      }
+    }));
+  }
+}
+
 /**
  * 在 session 的 workflows 目录里找到 taskId 匹配的运行记录并解析。
  * 找不到目录 / 无匹配 / 全部解析失败都返回 null(防御式,永不抛)。
@@ -203,7 +250,9 @@ export async function readWorkflowProgressByTaskId(
       const raw = await fs.readFile(path.join(workflowsDir, file), 'utf8');
       const record = JSON.parse(raw) as Record<string, unknown>;
       if (record?.taskId !== taskId) continue;
-      return extractWorkflowProgress(record);
+      const progress = extractWorkflowProgress(record);
+      if (progress) await applyUserStoppedAgentEvidence(workflowsDir, progress);
+      return progress;
     } catch {
       continue; // 单个文件坏了不影响其它
     }

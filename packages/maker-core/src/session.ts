@@ -1560,6 +1560,15 @@ export class Session {
     await this.handle.stopBackgroundTask(taskId);
   }
 
+  /** 停止 Workflow 内一个 Agent;主轮与其它 Agent 继续,原生通知负责告知主模型。 */
+  async stopWorkflowAgent(workflowTaskId: string, agentId: string): Promise<void> {
+    if (this.status === 'closed' || this.status === 'error') return;
+    if (!this.handle.stopWorkflowAgent) {
+      throw new NotSupportedError('stopWorkflowAgent', { supported: false, reason: 'not-implemented' });
+    }
+    await this.handle.stopWorkflowAgent(workflowTaskId, agentId);
+  }
+
   async resumeBackgroundTask(taskId: string, message: string, childId?: string): Promise<void> {
     if (this.status === 'closed' || this.status === 'error') {
       throw new NotSupportedError('resumeBackgroundTask', { supported: false, reason: 'not-implemented' });

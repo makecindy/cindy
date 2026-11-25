@@ -605,6 +605,10 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 被控端,控制端本机调用只会假成功。仅同账号远控,不进 sharedTask 访客白名单。
   // 老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端提示升级被控端。
   'maker:agent-task:stop',
+  // Workflow 单 Agent 停止(写):参数 (sessionId, workflowTaskId, agentId)。
+  // 与顶层停止分开,旧被控端返回 CHANNEL_NOT_ALLOWED,由控制端提示升级;绝不退回
+  // maker:agent-task:stop,否则旧 handler 会忽略 agentId 而停止整个 Workflow。
+  'maker:workflow-agent:stop',
   'maker:session-background-tasks:stop',
   // Durable PI Subagent truth and process handles live on the data-owning device.
   // Reads and exact controls must execute there; the controller must never fall

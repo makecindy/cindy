@@ -10944,6 +10944,8 @@
       "completed": "完了",
       "empty": "このセッションにバックグラウンドタスクはまだありません",
       "stop": "停止",
+      "stopWorkflow": "Workflow 全体を停止",
+      "stopAgent": "{{name}} を停止",
       "stopping": "停止中…",
       "back": "戻る",
       "progressSummary": "{{done}}/{{total}} Agent",

@@ -2704,6 +2704,14 @@ export interface AgentSessionHandle {
    */
   stopBackgroundTask?(taskId: string): Promise<void>;
 
+  /**
+   * 停止运行中 Workflow 内的单个 Agent。
+   *
+   * workflowTaskId 限定 agentId 的归属,禁止跨运行串停。Provider 的原生停止通知
+   * 会告诉主模型这是用户主动停止;本方法不另开模型轮次,也不影响其它 Agent。
+   */
+  stopWorkflowAgent?(workflowTaskId: string, agentId: string): Promise<void>;
+
   /** Resume a terminal durable child on its existing provider session. */
   resumeBackgroundTask?(taskId: string, message: string, childId?: string): Promise<void>;
 

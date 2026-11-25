@@ -11070,6 +11070,8 @@
       "completed": "Concluído",
       "empty": "Ainda não há tarefas em segundo plano nesta sessão",
       "stop": "Parar",
+      "stopWorkflow": "Parar todo o fluxo de trabalho",
+      "stopAgent": "Parar {{name}}",
       "stopping": "Parando…",
       "back": "Voltar",
       "progressSummary": "{{done}}/{{total}} Agents",

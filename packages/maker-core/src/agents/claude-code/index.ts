@@ -97,6 +97,7 @@ import type {
 } from '../../types/capabilities.js';
 import type {
   AgentEvent,
+  AgentTaskUpdateEventData,
   InteractionResolver,
   InteractionRequest,
   InteractionDecision,
@@ -4851,6 +4852,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       runningBackgroundTasks.clear();
       clearPendingBashContinuations();
       terminalBackgroundTaskIds.clear();
+      workflowRunControls.clear();
       closed = true;
       try { dismissAllPending('session_closed', 'deny'); } catch (e) {
         log.warn(`${logLabel}: dismissAllPending threw`, { error: String(e) });
@@ -5040,6 +5042,39 @@ export class ClaudeCodeAgent extends BaseAgent {
     // a fresh continuation claim at the next done.
     const terminalBackgroundTaskIds = new Set<string>();
     const ignoredLateTerminalTaskEvents = new WeakSet<AgentEvent>();
+
+    // Workflow 单 Agent 停止的运行期真相。key 同时保留 workflowTaskId 与 agentId,
+    // 防止把同名/同 id 的其它运行误停。stopped 闩锁只作用于当前 Query,换代即清空。
+    type WorkflowRunControl = {
+      update: AgentTaskUpdateEventData;
+      /** agentId → 被停止时的 attempt;后续明确重试的新 attempt 不受旧闩锁影响。 */
+      stoppedAgentAttempts: Map<string, number>;
+    };
+    const workflowRunControls = new Map<string, WorkflowRunControl>();
+    const activeWorkflowAgentStates = new Set(['running', 'progress']);
+    const projectStoppedWorkflowAgents = (
+      entries: AgentTaskUpdateEventData['workflowProgress'],
+      stoppedAgentAttempts: ReadonlyMap<string, number>,
+    ) => {
+      if (!entries || stoppedAgentAttempts.size === 0) return entries;
+      let changed = false;
+      const projected = entries.map((entry) => {
+        const stoppedAttempt = entry.type === 'workflow_agent' && entry.agentId
+          ? stoppedAgentAttempts.get(entry.agentId)
+          : undefined;
+        if (
+          stoppedAttempt === undefined ||
+          (entry.attempt ?? 1) > stoppedAttempt ||
+          entry.state === 'stopped'
+        ) return entry;
+        // CLI 的通用 stop_task 对 Workflow 行可能回报 error/progress;Cindy 已按
+        // workflowTaskId + agentId 收到停止确认,行状态必须保持 stopped,不能回弹。
+        const { error: _discardedError, ...rest } = entry;
+        changed = true;
+        return { ...rest, state: 'stopped' };
+      });
+      return changed ? projected : entries;
+    };
 
     type ContinuationTaskState = 'running' | 'completed' | 'failed' | 'stopped';
     type ContinuationClaim = {
@@ -5327,6 +5362,23 @@ export class ClaudeCodeAgent extends BaseAgent {
         | undefined;
       const taskId = typeof data?.taskId === 'string' ? data.taskId : undefined;
       if (!taskId) return null;
+      const update = e.data as AgentTaskUpdateEventData;
+      const previousControl = workflowRunControls.get(taskId);
+      if (previousControl || update.taskType === 'local_workflow') {
+        const stoppedAgentAttempts = previousControl?.stoppedAgentAttempts ?? new Map<string, number>();
+        const projected = projectStoppedWorkflowAgents(update.workflowProgress, stoppedAgentAttempts);
+        if (projected && projected !== update.workflowProgress) {
+          update.workflowProgress = projected;
+        }
+        workflowRunControls.set(taskId, {
+          update: {
+            ...previousControl?.update,
+            ...update,
+            workflowProgress: projected ?? previousControl?.update.workflowProgress,
+          },
+          stoppedAgentAttempts,
+        });
+      }
       const status = data?.status;
       if (status === 'running') {
         if (continuationCancellationGeneration !== null) {
@@ -5942,6 +5994,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       runningBackgroundTasks.clear();
       clearPendingBashContinuations();
       terminalBackgroundTaskIds.clear();
+      workflowRunControls.clear();
       void (async () => {
         try {
           for await (const rawMsg of currentQ) {
@@ -7469,6 +7522,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           runningBackgroundTasks.clear();
           clearPendingBashContinuations();
           terminalBackgroundTaskIds.clear();
+          workflowRunControls.clear();
           turnInFlight = false;
           // 本分支自己发 bridge_aborted 终态, send 的收尾责任就此交接完毕 ——
           // 一并清 sendInAcceptPhase。不清的话: send 醒来走进
@@ -7604,6 +7658,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             runningBackgroundTasks.clear();
             clearPendingBashContinuations();
             terminalBackgroundTaskIds.clear();
+            workflowRunControls.clear();
             // main 上 #2151 已给 interrupt 成功分支挂了同一守卫; 本 PR 的差异是
             // close-query / 超时 / 抛错 / bridge 分支也一并纳入同一契约。
             if (!sendInAcceptPhase) turnInFlight = false;
@@ -7645,6 +7700,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             runningBackgroundTasks.clear();
             clearPendingBashContinuations();
             terminalBackgroundTaskIds.clear();
+            workflowRunControls.clear();
             // accept 阶段同上——终态与清理归 send 自己(query 已被关闭, send 的
             // push 会失败并走 finishSendBeforeUserInput)。
             if (!sendInAcceptPhase) turnInFlight = false;
@@ -7680,6 +7736,54 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (cancelledClaim) {
           emitCancelledContinuationBoundary(cancelledClaim, 'user_stop_task');
         }
+      },
+
+      async stopWorkflowAgent(workflowTaskId: string, agentId: string) {
+        if (closed) return;
+        const control = workflowRunControls.get(workflowTaskId);
+        if (!control) {
+          // 没有 live 记录 = 所属 CLI 进程已结束,幂等收口;仍在运行却缺少进度树
+          // 时不能猜 agentId 的归属,更不能把停止落到另一个任务上。
+          if (runningBackgroundTasks.has(workflowTaskId)) {
+            throw new Error('Workflow agent ownership is unavailable');
+          }
+          return;
+        }
+        if (control.update.status !== 'running') return;
+        const row = control.update.workflowProgress?.find(
+          (entry) => entry.type === 'workflow_agent' && entry.agentId === agentId,
+        );
+        if (!row) throw new Error('Workflow agent does not belong to this workflow');
+        if (!activeWorkflowAgentStates.has(row.state ?? '')) return;
+        if (typeof q.stopTask !== 'function') {
+          throw new Error('stopTask is not supported by the current Claude SDK or remote daemon');
+        }
+
+        // 原生 stop_task(agentId) 只中断这个 Agent 的模型/工具循环;其
+        // task-notification("was stopped by user") 让主模型知道用户意图。
+        // 不 interrupt 当前 turn,也不调用 Workflow 顶层的停止入口。
+        await q.stopTask(agentId);
+        if (closed) return;
+        const latest = workflowRunControls.get(workflowTaskId);
+        if (!latest) return;
+        const latestRow = latest.update.workflowProgress?.find(
+          (entry) => entry.type === 'workflow_agent' && entry.agentId === agentId,
+        );
+        // 自然完成先于停止确认到达时,完成保持优先;error/progress 则是停止在途
+        // 与 CLI 原生进度帧的常见竞态,按已接受的用户停止收口。
+        if (!latestRow || latestRow.state === 'done' || latestRow.state === 'completed') return;
+        latest.stoppedAgentAttempts.set(agentId, latestRow.attempt ?? 1);
+        const projected = projectStoppedWorkflowAgents(
+          latest.update.workflowProgress,
+          latest.stoppedAgentAttempts,
+        );
+        if (!projected) return;
+        latest.update = { ...latest.update, workflowProgress: projected };
+        eventQueue.push({
+          type: 'agent_task_update',
+          data: { ...latest.update, workflowProgress: projected },
+          source: 'claude-code',
+        });
       },
 
       listBackgroundTasks() {
@@ -7754,6 +7858,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           runningBackgroundTasks.clear();
           clearPendingBashContinuations();
           terminalBackgroundTaskIds.clear();
+          workflowRunControls.clear();
           // 启动中途关闭由 startSession 的 catch 删文件; Query 已经建起来之后再关闭
           // 走这里, 覆盖 SDK close 不会再回到那个 catch 的路径。
           releaseFlagSettingsFile();
@@ -7792,6 +7897,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 runningBackgroundTasks.clear();
                 clearPendingBashContinuations();
                 terminalBackgroundTaskIds.clear();
+                workflowRunControls.clear();
               } catch (e) {
                 log.warn('detach threw', { error: String(e) });
               }
@@ -8425,6 +8531,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           runningBackgroundTasks.clear();
           clearPendingBashContinuations();
           terminalBackgroundTaskIds.clear();
+          workflowRunControls.clear();
           // bridge counter 兜底: rewind idle 时应该已经归零, 但如果上一轮 bridge 中途异常
           // (SDK 崩 / abort 未 drain result) counter 可能残留, 会污染 rebuild 后的第一 turn。
           clearBridgeState();

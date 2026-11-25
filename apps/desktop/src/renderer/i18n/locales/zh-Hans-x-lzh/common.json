@@ -10944,6 +10944,8 @@
       "completed": "已毕",
       "empty": "此差事后台无役，清静矣",
       "stop": "止",
+      "stopWorkflow": "止此 Workflow 全局",
+      "stopAgent": "止 {{name}}",
       "stopping": "方止…",
       "back": "归",
       "progressSummary": "{{done}}/{{total}} Agent",

@@ -2,8 +2,8 @@
  * WorkflowAgentStrip —— 逐 agent 状态方块条(对齐官方 CLI 的 agent 状态格概念)。
  *
  * 大编队(几十个 agent)时逐行列表看不清全局,方块条给"一眼总览":每个 agent
- * 一格,按视觉四色着色(绿=完成 / 橙=运行中 / 红=失败 / 灰=排队,全部走既有
- * 语义 token,与状态点/running 色的设计定稿同源)。
+ * 一格,按视觉状态着色(绿=完成 / 橙=运行中 / 红=失败 / 中性灰=已停止 / 浅灰=排队,
+ * 全部走既有语义 token,与状态点/running 色的设计定稿同源)。
  *
  * - 纯视觉增强,aria-hidden(相邻的摘要行/聚合行已承担文字语义);每格 title
  *   提示 label · 状态(状态经 chat.workflowTree.state.* 本地化,词表外原词兜底)。
@@ -22,11 +22,14 @@ const STATE_BG: Record<WorkflowAgentVisualState, string> = {
   done: 'bg-[var(--card-status-done)]',
   running: 'bg-[var(--warning-accent)]',
   failed: 'bg-[var(--error-fg)]',
+  stopped: 'bg-[var(--text-tertiary)]',
   queued: 'bg-[var(--surface-chip)]',
 };
 
 export interface WorkflowAgentStripCell {
   state?: string;
+  /** CLI 原生 user-skip;即使上游 state 仍是 error,也按 stopped 显示。 */
+  skipped?: boolean;
   label?: string;
 }
 
@@ -61,7 +64,7 @@ export function WorkflowAgentStrip({
           // 稳定序:workflow_progress 条目顺序即 spawn 顺序,index 作 key 足够。
           key={i}
           title={cellTitle(cell)}
-          className={`h-2 w-2 rounded-[2px] ${STATE_BG[workflowAgentVisualState(cell.state)]}`}
+          className={`h-2 w-2 rounded-[2px] ${STATE_BG[workflowAgentVisualState(cell.state, cell.skipped)]}`}
         />
       ))}
       {overflow > 0 && (

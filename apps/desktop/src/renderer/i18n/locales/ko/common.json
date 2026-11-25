@@ -10944,6 +10944,8 @@
       "completed": "완료",
       "empty": "이 세션에는 아직 백그라운드 작업이 없습니다",
       "stop": "중지",
+      "stopWorkflow": "전체 Workflow 중지",
+      "stopAgent": "{{name}} 중지",
       "stopping": "중지 중…",
       "back": "뒤로",
       "progressSummary": "{{done}}/{{total}} Agent",

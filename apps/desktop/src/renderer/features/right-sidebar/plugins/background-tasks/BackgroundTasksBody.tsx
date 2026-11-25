@@ -1,6 +1,11 @@
 import type { TFunction } from 'i18next';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 /**
+ * [INPUT]: depends on makerChatStore, workflow progress readers and TaskStopButton
+ * [OUTPUT]: exports BackgroundTasksBody with task list, Workflow detail and stop controls
+ * [POS]: the background-tasks tab body in the right sidebar and detached sidebar windows
+ * [PROTOCOL]: Update this header on change, then check CLAUDE.md
+ *
  * BackgroundTasksBody —— 「后台任务」tab 的内容区。
  *
  * 两个视图:
@@ -32,7 +37,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type MouseEvent,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -44,7 +48,6 @@ import {
   CircleStop,
   ListTodo,
   LoaderCircle,
-  Square,
   SquareTerminal,
   Workflow,
 } from 'lucide-react';
@@ -58,8 +61,7 @@ import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/rem
 import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
-import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
-import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
+import { canManageBackgroundTasks } from '@/lib/backgroundTaskStop';
 import {
   getWorkflowProgressFor,
   isRemoteSessionSticky,
@@ -78,6 +80,7 @@ import {
   workflowAgentVisualState,
 } from './workflowProgressModel';
 import { WorkflowProgressTree } from './WorkflowProgressTree';
+import { TaskStopButton } from './TaskStopButton';
 import { requestChatTaskFocus } from './chatTaskFocusIntent';
 
 // ---------------------------------------------------------------------------
@@ -192,8 +195,8 @@ function workflowAgentCounts(
     total += 1;
     // 收口判定走 workflowAgentVisualState 归一(与方块条同一词表源,
     // done/completed 与 error/failed/stopped/killed 全算已收口)。
-    const visual = workflowAgentVisualState(entry.state);
-    if (visual === 'done' || visual === 'failed') done += 1;
+    const visual = workflowAgentVisualState(entry.state, entry.skipped);
+    if (visual === 'done' || visual === 'failed' || visual === 'stopped') done += 1;
   }
   return total > 0 ? { done, total } : null;
 }
@@ -207,65 +210,6 @@ function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
     item.provider === 'claude-code' &&
     Boolean(item.update?.taskId) &&
     Boolean(sessionId && canManageBackgroundTasks(sessionId))
-  );
-}
-
-/** 停止按钮:在飞防连点,状态翻转由事件流收口(不改本地状态)。 */
-function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }) {
-  const { t } = useTranslation();
-  const [stopping, setStopping] = useState(false);
-  const handleStop = useCallback(
-    (e: MouseEvent) => {
-      // 行点击(进详情 / 聊天定位)不该被停止按钮触发。
-      e.stopPropagation();
-      if (stopping) return;
-      setStopping(true);
-      void stopBackgroundTask(sessionId, taskId)
-        .catch((error: unknown) => {
-          // 真失败时状态仍是 running,按钮保留可重试;只有远程电脑版本过旧时提示升级。
-          reportBackgroundTaskStopFailure(error, t);
-        })
-        .finally(() => setStopping(false));
-    },
-    [sessionId, taskId, stopping, t],
-  );
-  const actionLabel = t('rightSidebar.backgroundTasks.stop');
-  const label = stopping
-    ? `${actionLabel} — ${t('rightSidebar.backgroundTasks.stopping')}`
-    : actionLabel;
-  const button = (
-    <button
-      type="button"
-      onClick={handleStop}
-      disabled={stopping}
-      aria-label={actionLabel}
-      aria-hidden={stopping ? true : undefined}
-      className={cn(
-        'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        stopping && 'cursor-default opacity-50',
-      )}
-    >
-      <Square size={12} aria-hidden="true" />
-    </button>
-  );
-
-  return (
-    <Tip text={label} side="bottom">
-      {stopping ? (
-        <span
-          role="button"
-          aria-disabled="true"
-          aria-label={label}
-          tabIndex={0}
-          className="inline-flex rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-        >
-          {button}
-        </span>
-      ) : (
-        button
-      )}
-    </Tip>
   );
 }
 
@@ -376,7 +320,12 @@ function TaskRow({
       </button>
       {canStopItem(item, sessionId) && sessionId && item.update?.taskId && (
         <div className="pt-1.5">
-          <StopButton sessionId={sessionId} taskId={item.update.taskId} />
+          <TaskStopButton
+            sessionId={sessionId}
+            taskId={item.update.taskId}
+            scope={item.kind === 'workflow' ? 'workflow' : 'task'}
+            danger={item.kind === 'workflow'}
+          />
         </div>
       )}
     </div>
@@ -480,12 +429,25 @@ function WorkflowDetail({
           {title}
         </span>
         {canStopItem(item, sessionId) && sessionId && item.update?.taskId && (
-          <StopButton sessionId={sessionId} taskId={item.update.taskId} />
+          <TaskStopButton
+            sessionId={sessionId}
+            taskId={item.update.taskId}
+            scope="workflow"
+            danger
+            showLabel
+          />
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {model ? (
-          <WorkflowProgressTree model={model} />
+          <WorkflowProgressTree
+            model={model}
+            stopControl={
+              canStopItem(item, sessionId) && sessionId && item.update?.taskId
+                ? { sessionId, taskId: item.update.taskId }
+                : undefined
+            }
+          />
         ) : item.update?.summary || item.resultPreview ? (
           // 降级兜底:事件树与 wf 文件都拿不到(老被控端 / SSH / 未落盘即退出)时,
           // 展示 workflow 的结果文本 —— 面板是主视图,点开不能只剩一句「暂无进度」。

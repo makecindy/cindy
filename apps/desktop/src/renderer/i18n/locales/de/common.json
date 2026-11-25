@@ -10987,6 +10987,8 @@
       "completed": "Abgeschlossen",
       "empty": "Noch keine Hintergrundaufgaben in dieser Sitzung",
       "stop": "Stoppen",
+      "stopWorkflow": "Gesamten Workflow stoppen",
+      "stopAgent": "{{name}} stoppen",
       "stopping": "Wird gestoppt…",
       "back": "Zurück",
       "progressSummary": "{{done}}/{{total}} Agents",

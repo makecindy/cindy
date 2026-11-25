@@ -703,6 +703,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:session-background-tasks:list', sessionId),
     stopAgentTask: (sessionId: string, taskId: string): Promise<unknown> =>
       ipcRenderer.invoke('maker:agent-task:stop', sessionId, taskId),
+    stopWorkflowAgent: (sessionId: string, workflowTaskId: string, agentId: string): Promise<unknown> =>
+      ipcRenderer.invoke('maker:workflow-agent:stop', sessionId, workflowTaskId, agentId),
     controlPiSubagent: (input: unknown): Promise<unknown> =>
       ipcRenderer.invoke('maker:pi-subagent:control', input),
     getPendingInteractions: (sessionId: string): Promise<unknown> =>

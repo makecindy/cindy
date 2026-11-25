@@ -1,3 +1,10 @@
+/**
+ * [INPUT]: depends on agent task events, Workflow progress, panel navigation and TaskStopButton
+ * [OUTPUT]: exports AgentTaskCard for Workflow, subagent and background-command messages
+ * [POS]: the task card in the chat stream; the whole Workflow card opens its sidebar detail
+ * [PROTOCOL]: Update this header on change, then check CLAUDE.md
+ */
+
 import type { TFunction } from 'i18next';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { Fragment, useEffect, useMemo, useCallback, useState } from 'react';
@@ -9,7 +16,6 @@ import {
   CircleStop,
   LoaderCircle,
   PanelRight,
-  Square,
   SquareTerminal,
   Workflow,
 } from 'lucide-react';
@@ -31,13 +37,13 @@ import {
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
-import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
-import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
+import { canManageBackgroundTasks } from '@/lib/backgroundTaskStop';
 import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { extractWorkflowTaskId } from '@/features/right-sidebar/plugins/background-tasks/listSessionTasks';
 import { WorkflowAgentStrip } from '@/features/right-sidebar/plugins/background-tasks/WorkflowAgentStrip';
+import { TaskStopButton } from '@/features/right-sidebar/plugins/background-tasks/TaskStopButton';
 import {
   fileStatusToTaskStatus,
   workflowAgentVisualState,
@@ -361,7 +367,8 @@ export function AgentTaskCard({
   // 点击后交给会话归属端的 stopAgentTask(device-link 远程会话隧道到被控端);成功与否
   // 都由 task_notification / durable status 事件流收口(状态翻 stopped → 按钮自然消失),
   // 这里只管在飞态防连点。
-  const [stopping, setStopping] = useState(false);
+  // 停止执行统一由 TaskStopButton 负责:卡片停止整个 Workflow,详情行才使用
+  // workflowTaskId + agentId 单停。成功与否都由真实事件流收口,按钮只防连点。
   const providerCanStop = update?.provider === 'claude-code'
     || (update?.provider === 'pi' && update.taskType === 'pi_subagent');
   const canStop =
@@ -370,16 +377,6 @@ export function AgentTaskCard({
     Boolean(update?.taskId) &&
     providerCanStop &&
     Boolean(sessionId && canManageBackgroundTasks(sessionId));
-  const handleStop = useCallback(() => {
-    if (!sessionId || !update?.taskId) return;
-    setStopping(true);
-    void stopBackgroundTask(sessionId, update.taskId)
-      .catch((error: unknown) => {
-        // 失败时卡片仍显示 running,用户可重试;只有远程电脑版本过旧时提示升级。
-        reportBackgroundTaskStopFailure(error, t);
-      })
-      .finally(() => setStopping(false));
-  }, [sessionId, update?.taskId, t]);
 
   // workflow 卡整卡点击 → 打开右栏后台任务面板并定位本任务(workflowTaskId 在
   // 组件顶部与状态修正共用同一次推导)。三者缺一就退回传统展开交互,让
@@ -421,8 +418,8 @@ export function AgentTaskCard({
     for (const entry of entries) {
       if (entry.type !== 'workflow_agent') continue;
       total += 1;
-      const visual = workflowAgentVisualState(entry.state);
-      if (visual === 'done' || visual === 'failed') {
+      const visual = workflowAgentVisualState(entry.state, entry.skipped);
+      if (visual === 'done' || visual === 'failed' || visual === 'stopped') {
         done += 1;
       } else if (visual === 'running' && entry.phaseTitle) {
         phase = entry.phaseTitle;
@@ -438,6 +435,7 @@ export function AgentTaskCard({
       .filter((entry) => entry.type === 'workflow_agent')
       .map((entry) => ({
         ...(entry.state !== undefined ? { state: entry.state } : {}),
+        ...(entry.skipped !== undefined ? { skipped: entry.skipped } : {}),
         ...(entry.label !== undefined ? { label: entry.label } : {}),
       }));
   }, [isWorkflow, update?.workflowProgress]);
@@ -459,6 +457,13 @@ export function AgentTaskCard({
     return parts;
   }, [duration, providerLabel, t, update?.usage?.totalTokens, update?.usage?.toolUses]);
 
+  const statusContent = (
+    <span className={cn('inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-12 leading-[1.333333]', statusIconClassName)}>
+      <Spinner icon={StatusIcon} size={12} spinning={status === 'running'} />
+      {t(`chat.agentTask.status.${status}`)}
+    </span>
+  );
+
   return (
     // data-message-client-id:MessageStream 的消息级 focus(后台任务面板行点击 /
     // 搜索跳转)靠该锚点滚动定位 —— 普通消息行有,任务卡也必须有,否则面板点
@@ -475,7 +480,11 @@ export function AgentTaskCard({
         <button
           type="button"
           onClick={isWorkflow && canOpenInPanel ? openInPanel : toggle}
-          className="flex min-w-0 flex-1 items-start gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className={cn(
+            'flex min-w-0 flex-1 items-start gap-2 rounded-lg text-left transition-colors',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            isWorkflow && canOpenInPanel && 'cursor-pointer hover:bg-[var(--surface-hover)]',
+          )}
           {...(isWorkflow && canOpenInPanel
             ? { 'aria-label': t('chat.agentTask.openInPanel') }
             : {
@@ -494,10 +503,7 @@ export function AgentTaskCard({
               <span className="min-w-0 flex-1 truncate text-14 font-medium leading-[1.428571] text-[var(--text-primary)]">
                 {title}
               </span>
-              <span className={cn('inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-12 leading-[1.333333]', statusIconClassName)}>
-                <Spinner icon={StatusIcon} size={12} spinning={status === 'running'} />
-                {t(`chat.agentTask.status.${status}`)}
-              </span>
+              {!isWorkflow && statusContent}
             </span>
             <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-12 leading-[1.333333] text-[var(--text-tertiary)]">
               {meta.map((part) => (
@@ -543,13 +549,7 @@ export function AgentTaskCard({
               </span>
             )}
           </span>
-          {isWorkflow && canOpenInPanel ? (
-            <PanelRight
-              size={14}
-              className="mt-1 shrink-0 text-[var(--text-tertiary)]"
-              aria-hidden="true"
-            />
-          ) : (
+          {!(isWorkflow && canOpenInPanel) && (
             <ChevronRight
               size={14}
               className={cn(
@@ -577,23 +577,28 @@ export function AgentTaskCard({
             <PanelRight size={12} aria-hidden="true" />
           </button>
         )}
-        {canStop && (
-          <button
-            type="button"
-            onClick={handleStop}
-            disabled={stopping}
-            title={t('chat.agentTask.stop')}
-            aria-label={t('chat.agentTask.stop')}
-            data-agent-task-stop="true"
-            className={cn(
-              'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
-              'text-[var(--text-secondary)] hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)]',
-              'transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+        {isWorkflow && (
+          // Workflow 尾部组统一承载状态与操作;整组相对卡片垂直居中。
+          // 未来增加文字或按钮只修改这里,不再挤压/偏移标题行的对齐。
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1 self-center">
+            {statusContent}
+            {canStop && sessionId && update?.taskId && (
+              <TaskStopButton
+                sessionId={sessionId}
+                taskId={update.taskId}
+                scope="workflow"
+                danger
+              />
             )}
-          >
-            <Square size={11} aria-hidden="true" />
-          </button>
+          </div>
+        )}
+        {!isWorkflow && canStop && sessionId && update?.taskId && (
+          <TaskStopButton
+            sessionId={sessionId}
+            taskId={update.taskId}
+            scope="task"
+            className="ml-1 self-center"
+          />
         )}
         </div>
 

@@ -11070,6 +11070,8 @@
       "completed": "Terminées",
       "empty": "Aucune tâche en arrière-plan dans cette session pour l'instant",
       "stop": "Arrêter",
+      "stopWorkflow": "Arrêter tout le Workflow",
+      "stopAgent": "Arrêter {{name}}",
       "stopping": "Arrêt en cours…",
       "back": "Retour",
       "progressSummary": "{{done}}/{{total}} Agents",

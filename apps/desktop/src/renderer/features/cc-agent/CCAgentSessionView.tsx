@@ -785,8 +785,8 @@ function summarizeRunningWorkflow(taskUpdates: ReadonlyMap<string, AgentTaskUpda
   if (agents.length === 0) return { done: 0, total: 0 };
   return {
     done: agents.filter((entry) => {
-      const visual = workflowAgentVisualState(entry.state);
-      return visual === 'done' || visual === 'failed';
+      const visual = workflowAgentVisualState(entry.state, entry.skipped);
+      return visual === 'done' || visual === 'failed' || visual === 'stopped';
     }).length,
     total: agents.length,
   };

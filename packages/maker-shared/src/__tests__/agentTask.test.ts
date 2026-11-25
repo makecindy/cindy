@@ -374,15 +374,16 @@ describe('normalizeWorkflowProgressEntries', () => {
     expect(normalizeWorkflowProgressEntries([null, { type: 'nope', index: 0 }])).toBeUndefined();
   });
 
-  it('cached 布尔原样透传,非布尔丢弃', () => {
+  it('cached/skipped 布尔原样透传,非布尔丢弃', () => {
     const entries = normalizeWorkflowProgressEntries([
-      { type: 'workflow_agent', index: 0, cached: true },
-      { type: 'workflow_agent', index: 1, cached: false },
-      { type: 'workflow_agent', index: 2, cached: 'yes' },
+      { type: 'workflow_agent', index: 0, cached: true, skipped: true },
+      { type: 'workflow_agent', index: 1, cached: false, skipped: false },
+      { type: 'workflow_agent', index: 2, cached: 'yes', skipped: 'yes' },
     ]);
-    expect(entries?.[0]?.cached).toBe(true);
-    expect(entries?.[1]?.cached).toBe(false);
+    expect(entries?.[0]).toMatchObject({ cached: true, skipped: true });
+    expect(entries?.[1]).toMatchObject({ cached: false, skipped: false });
     expect(entries && 'cached' in entries[2]).toBe(false);
+    expect(entries && 'skipped' in entries[2]).toBe(false);
   });
 });
 

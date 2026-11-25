@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createIpcError } from '../../../shared/ipc-errors';
 import { MAKER_INVOKE } from '../channels';
 import { registerStopAgentTaskHandler } from '../stopAgentTaskHandler';
+import { registerStopWorkflowAgentHandler } from '../stopWorkflowAgentHandler';
 import { IpcHarness } from './helpers/ipcHarness';
 
 describe('stop agent task IPC handler', () => {
@@ -133,6 +134,72 @@ describe('stop agent task IPC handler', () => {
 
     await expect(
       harness.invoke(MAKER_INVOKE.STOP_AGENT_TASK, 'session-1', 'task-1'),
+    ).rejects.toMatchObject({ code: 'INTERNAL' });
+  });
+});
+
+/**
+ * 测试价值(unit):经真实 IPC handler 验证 Workflow 单停的参数、归属和错误结果。
+ * 保护用户主动停止一个 Agent 时不误停其它 Agent,也不把旧能力/失败伪装成成功。
+ * 现有顶层停止用例不覆盖新通道;最小失败输入是缺 agentId、跨 scope id 和不支持。
+ */
+describe('stop workflow agent IPC handler', () => {
+  it('validates all three ids before looking up a session', async () => {
+    const harness = new IpcHarness();
+    const getLiveSession = vi.fn();
+    registerStopWorkflowAgentHandler(harness, { getLiveSession });
+
+    for (const args of [
+      ['', 'wf-1', 'agent-1'],
+      ['session-1', '', 'agent-1'],
+      ['session-1', 'wf-1', ''],
+      ['session-1', 'wf-1', 'x'.repeat(257)],
+    ]) {
+      await expect(
+        harness.invoke(MAKER_INVOKE.STOP_WORKFLOW_AGENT, ...args),
+      ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    }
+    expect(getLiveSession).not.toHaveBeenCalled();
+  });
+
+  it('passes the exact workflow and agent ids to the live session', async () => {
+    const harness = new IpcHarness();
+    const stopWorkflowAgent = vi.fn().mockResolvedValue(undefined);
+    registerStopWorkflowAgentHandler(harness, {
+      getLiveSession: vi.fn(() => ({ stopWorkflowAgent })),
+    });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.STOP_WORKFLOW_AGENT, 'session-1', 'wf-1', 'agent-1'),
+    ).resolves.toEqual({ ok: true });
+    expect(stopWorkflowAgent).toHaveBeenCalledWith('wf-1', 'agent-1');
+  });
+
+  it('is idempotent when the owning process is no longer loaded', async () => {
+    const harness = new IpcHarness();
+    registerStopWorkflowAgentHandler(harness, { getLiveSession: vi.fn(() => undefined) });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.STOP_WORKFLOW_AGENT, 'session-1', 'wf-1', 'agent-1'),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it('distinguishes unsupported capability from a failed stop', async () => {
+    const unsupported = new Error('stopWorkflowAgent not supported');
+    unsupported.name = 'NotSupportedError';
+    const harness = new IpcHarness();
+    const stopWorkflowAgent = vi.fn()
+      .mockRejectedValueOnce(unsupported)
+      .mockRejectedValueOnce(new Error('rpc timeout'));
+    registerStopWorkflowAgentHandler(harness, {
+      getLiveSession: vi.fn(() => ({ stopWorkflowAgent })),
+    });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.STOP_WORKFLOW_AGENT, 'session-1', 'wf-1', 'agent-1'),
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    await expect(
+      harness.invoke(MAKER_INVOKE.STOP_WORKFLOW_AGENT, 'session-1', 'wf-1', 'agent-1'),
     ).rejects.toMatchObject({ code: 'INTERNAL' });
   });
 });

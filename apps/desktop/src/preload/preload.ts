@@ -7329,6 +7329,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 精确停止会话内单个后台任务(不中断当前 turn;任务已结束幂等成功)。 */
     stopAgentTask: (sessionId: string, taskId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:agent-task:stop', sessionId, taskId),
+    /** 停止 Workflow 内一个 Agent;独立通道保证旧远程端不会误停整个 Workflow。 */
+    stopWorkflowAgent: (
+      sessionId: string,
+      workflowTaskId: string,
+      agentId: string,
+    ): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:workflow-agent:stop', sessionId, workflowTaskId, agentId),
     controlPiSubagent: (input: {
       sessionId: string;
       taskId: string;

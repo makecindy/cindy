@@ -10944,6 +10944,8 @@
       "completed": "已完成",
       "empty": "本任务暂无后台作业",
       "stop": "停止",
+      "stopWorkflow": "停止整个 Workflow",
+      "stopAgent": "停止 {{name}}",
       "stopping": "正在停止…",
       "back": "返回",
       "progressSummary": "{{done}}/{{total}} Agent",

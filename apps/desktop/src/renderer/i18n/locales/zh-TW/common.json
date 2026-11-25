@@ -10944,6 +10944,8 @@
       "completed": "已完成",
       "empty": "本任務暫無背景作業",
       "stop": "停止",
+      "stopWorkflow": "停止整個 Workflow",
+      "stopAgent": "停止 {{name}}",
       "stopping": "正在停止…",
       "back": "返回",
       "progressSummary": "{{done}}/{{total}} Agent",

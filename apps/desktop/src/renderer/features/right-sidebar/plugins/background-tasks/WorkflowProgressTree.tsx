@@ -1,20 +1,15 @@
 /**
- * WorkflowProgressTree —— 后台任务详情页里的 workflow 逐 agent 进度树(纯展示)。
+ * [INPUT]: depends on buildWorkflowTreeModel's WorkflowTreeModel and TaskStopButton
+ * [OUTPUT]: exports WorkflowProgressTree with aggregate, phase, Agent rows and scoped stop controls
+ * [POS]: the Workflow detail body in the background-tasks sidebar
+ * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  *
- * 约束:
- * - 数据由上层用 buildWorkflowTreeModel 合并好后传入;本组件不拉数据、不轮询、无状态;
- * - 无列表动画(DESIGN.md §14.4:静态渲染;唯一动效是 Spinner 的 compositor-only 转圈);
- * - 颜色全走语义 token,Light/Dark 同源;
- * - 状态图标/词表覆盖两套词表:wf 文件词表 + 事件流词表(start/progress → 转圈)。
+ * - 数据由上层合并;本组件不拉数据、不轮询,行状态由 model 唯一驱动。
+ * - 单停只在运行中且有管理权时出现,必须同时携带 workflowTaskId 与真实 agentId。
+ * - stopped 与 failed 分离;颜色全走语义 token,Light/Dark 同源。
  */
 
-import {
-  AlertCircle,
-  CheckCircle2,
-  CircleDashed,
-  CircleStop,
-  LoaderCircle,
-} from 'lucide-react';
+import { AlertCircle, CheckCircle2, CircleDashed, CircleStop, LoaderCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { formatDuration } from '@/components/chat/ThinkingCard';
@@ -25,9 +20,15 @@ import { cn } from '@/lib/utils';
 
 import type { WorkflowTreeAgentRow, WorkflowTreeModel } from './workflowProgressModel';
 import { WorkflowAgentStrip } from './WorkflowAgentStrip';
+import { TaskStopButton } from './TaskStopButton';
 
 interface WorkflowProgressTreeProps {
   model: WorkflowTreeModel;
+  /** 仅运行中且有管理权时传入;每个 Agent 的停止都绑定这个顶层 taskId。 */
+  stopControl?: {
+    sessionId: string;
+    taskId: string;
+  };
 }
 
 function agentStateIcon(state: string) {
@@ -69,7 +70,7 @@ function isSpinning(state: string): boolean {
   }
 }
 
-export function WorkflowProgressTree({ model }: WorkflowProgressTreeProps) {
+export function WorkflowProgressTree({ model, stopControl }: WorkflowProgressTreeProps) {
   const { t } = useTranslation();
   // agent 行与 logs 都空(刚启动 / 未 spawn agent 就结束的 workflow)也照渲染:
   // 聚合行至少有 status,不能返回 null —— 上层按 model 有无选组件,这里再空手
@@ -104,9 +105,7 @@ export function WorkflowProgressTree({ model }: WorkflowProgressTreeProps) {
 
   return (
     <div className="space-y-2">
-      <div className="text-12 leading-4 text-[var(--text-secondary)]">
-        {metaParts.join(' · ')}
-      </div>
+      <div className="text-12 leading-4 text-[var(--text-secondary)]">{metaParts.join(' · ')}</div>
       {/* 逐 agent 状态方块条:详情页不截断,大编队一眼总览。 */}
       {stripCells.length > 0 && <WorkflowAgentStrip cells={stripCells} />}
       {model.logs.length > 0 && (
@@ -128,7 +127,7 @@ export function WorkflowProgressTree({ model }: WorkflowProgressTreeProps) {
             </div>
           )}
           {group.agents.map((row) => (
-            <AgentRow key={row.key} row={row} />
+            <AgentRow key={row.key} row={row} stopControl={stopControl} />
           ))}
         </div>
       ))}
@@ -136,25 +135,39 @@ export function WorkflowProgressTree({ model }: WorkflowProgressTreeProps) {
   );
 }
 
-function AgentRow({ row }: { row: WorkflowTreeAgentRow }) {
+function AgentRow({
+  row,
+  stopControl,
+}: {
+  row: WorkflowTreeAgentRow;
+  stopControl?: WorkflowProgressTreeProps['stopControl'];
+}) {
   const { t } = useTranslation();
   const Icon = agentStateIcon(row.state);
   const spinning = isSpinning(row.state);
+  const canStop = Boolean(
+    stopControl &&
+    row.agentId &&
+    (row.state === 'running' || row.state === 'progress'),
+  );
   const modelLabel = formatModelShortLabel(row.model);
   const stateLabel = t(`chat.workflowTree.state.${row.state}`, { defaultValue: row.state });
   const isErrorState = row.state === 'failed' || row.state === 'error';
   const isDoneState = row.state === 'done' || row.state === 'completed';
+  const isStoppedState = row.state === 'stopped' || row.state === 'killed';
   // 行尾动态文本:error/failed → error(缺失用 i18n 兜底);done → resultPreview;
-  // 进行中(running/start/progress/未知)→ lastToolName · lastToolSummary。
+  // stopped/killed → 明确的本地化状态;进行中 → lastToolName · lastToolSummary。
   const trailing = isErrorState
     ? (row.error ?? t('chat.workflowTree.endedEarly'))
     : isDoneState
       ? row.resultPreview
-      : spinning && row.lastToolName
-        ? row.lastToolSummary
-          ? `${row.lastToolName} · ${row.lastToolSummary}`
-          : row.lastToolName
-        : undefined;
+      : isStoppedState
+        ? stateLabel
+        : spinning && row.lastToolName
+          ? row.lastToolSummary
+            ? `${row.lastToolName} · ${row.lastToolSummary}`
+            : row.lastToolName
+          : undefined;
 
   return (
     <div className="flex min-w-0 items-center gap-2">
@@ -194,6 +207,19 @@ function AgentRow({ row }: { row: WorkflowTreeAgentRow }) {
       {isDoneState && typeof row.durationMs === 'number' && (
         <span className="shrink-0 text-11 leading-4 text-[var(--text-tertiary)]">
           {formatDuration(row.durationMs, t)}
+        </span>
+      )}
+      {stopControl && (
+        <span className="ml-auto inline-flex h-7 w-7 shrink-0 items-center justify-center">
+          {canStop && row.agentId && (
+            <TaskStopButton
+              sessionId={stopControl.sessionId}
+              taskId={stopControl.taskId}
+              scope="workflow-agent"
+              agent={{ id: row.agentId, label: row.label }}
+              danger
+            />
+          )}
         </span>
       )}
     </div>
