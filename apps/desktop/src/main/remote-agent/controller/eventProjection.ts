@@ -6,12 +6,61 @@ import { isTerminalAgentErrorEvent, type AgentEvent } from '@cindy/maker-core';
 
 import { mapJsonPathText, pathTextContext, type ExecutorWorkspace, type PathTextContext } from '../executor/workspace';
 
-// 文件链接仍按 Markdown 分隔符取路径；其它 URL 的括号、IPv6 方括号等属于地址，不能当成本机路径正文。
-const URL_TEXT = /(?:file|xdt-(?:file|audio|image)):\/\/[^\s\x60"'<>()[\]{}]+|[a-z][a-z0-9+.-]*:\/\/[^\s\x60"'<>]+/gi;
-/** 渠道说明要求的 `[名称](xdt-file:///绝对路径)`；括号内才是完整地址，路径可能带裸空格。 */
-const XDT_PATH_LINK = /\]\((xdt-(?:file|image):\/\/\/[^()\r\n]+)\)/gi;
+// 文件链接仍按 Markdown 分隔符与中文标点取路径；其它 URL 的括号、IPv6 方括号等属于地址，不能当成本机路径正文。
+const URL_TEXT = /(?:file|xdt-(?:file|audio|image)):\/\/[^\s\x60"'<>()[\]{}，。、；：！？（）【】《》「」『』“”‘’]+|[a-z][a-z0-9+.-]*:\/\/[^\s\x60"'<>]+/gi;
+/** Markdown 链接 `[名称](file:///绝对路径)` 与 `[名称](xdt-file:///绝对路径)`；括号内才是完整地址，路径可能带裸空格或成对括号。 */
+const MARKDOWN_FILE_LINK = /\]\(((?:file:\/\/|xdt-(?:file|image):\/\/\/)(?:[^()\r\n]|\([^()\r\n]*\))+)\)/gi;
+const FILE_URL_SCHEME = /^(?:file|xdt-(?:file|audio|image)):\/\//i;
+const BARE_URL_HARD_STOP = /[\r\n\x60"'<>()[\]{}，。、；：！？（）【】《》「」『』“”‘’]/;
+const BARE_URL_STOP = /[\s\x60"'<>()[\]{}，。、；：！？（）【】《》「」『』“”‘’]/;
+const FILE_URL_PREFIX_BEFORE_PATH = /(?:file|xdt-(?:file|audio|image)):\/\/(?:localhost)?\/?$/i;
 const TEXT_BOUNDARIES = new Set(['tool_use', 'tool_result', 'tool_result_full', 'interaction_request', 'done', 'error', 'compact_boundary']);
 const IDENTITY_FIELDS = new Set(['id', 'toolUseId', 'toolUseIds', 'agentMessageId', 'taskId', 'parentToolUseId', 'turnId', 'requestId', 'blockId', 'sessionId', 'sdkSessionId', 'toolName', 'lastToolName', 'model', 'providerId']);
+
+interface SpacedAliasPrefix { target: string; windows: boolean }
+const spacedAliasCache = new WeakMap<readonly string[], SpacedAliasPrefix[]>();
+
+function spacedAliasPrefixes(workspace: ExecutorWorkspace): SpacedAliasPrefix[] {
+  const aliases = workspace.agentPathPrefixes();
+  let cached = spacedAliasCache.get(aliases);
+  if (cached) return cached;
+  cached = aliases
+    .filter((alias) => /\s/.test(alias))
+    .map((alias) => {
+      const forward = alias.replace(/\\/g, '/').replace(/\/+$/, '');
+      const windows = /^[A-Za-z]:|^\/\//.test(forward);
+      return { target: windows ? forward.toLowerCase() : forward, windows };
+    });
+  spacedAliasCache.set(aliases, cached);
+  return cached;
+}
+
+/** 裸 `file://` URL 命中带空格的影子目录前缀(如 macOS `Application Support`)时，补全完整路径段。 */
+function extendSpacedFileUrl(
+  value: string, start: number, raw: string, workspace: ExecutorWorkspace,
+): { raw: string; mapped: string } | null {
+  const scheme = /^(?:file:\/\/(?:localhost)?|xdt-(?:file|image):\/\/)/i.exec(raw);
+  if (!scheme) return null;
+  const spaced = spacedAliasPrefixes(workspace);
+  if (!spaced.length) return null;
+  const restStart = start + scheme[0].length;
+  const afterScheme = value.slice(restStart);
+  for (const { target, windows } of spaced) {
+    const driveLead = windows && /^[\\/]/.test(afterScheme) && !target.startsWith('//') ? 1 : 0;
+    const candidate = afterScheme.slice(driveLead, driveLead + target.length).replace(/\\/g, '/');
+    const compared = windows ? candidate.toLowerCase() : candidate;
+    if (compared !== target) continue;
+    let end = driveLead + target.length;
+    const next = afterScheme[end];
+    if (next !== undefined && next !== '/' && next !== '\\' && next !== '?' && next !== '#' && !BARE_URL_STOP.test(next)) continue;
+    while (end < afterScheme.length && !BARE_URL_STOP.test(afterScheme[end])) end += 1;
+    const full = value.slice(start, restStart + end);
+    const encoded = full.replace(/\s/g, encodeURIComponent);
+    const mapped = localFileUrl(encoded, workspace);
+    if (mapped !== encoded) return { raw: full, mapped };
+  }
+  return null;
+}
 
 function localFileUrl(value: string, workspace: ExecutorWorkspace): string {
   try {
@@ -65,22 +114,44 @@ export function localText(value: string, workspace: ExecutorWorkspace, context: 
   // 分隔符沿用 Agent 的写法：Markdown 会把链接里的 `\.git`、`\_x` 当成转义吃掉。
   value = value.replace(/\x60([^\x60\r\n]+)\x60|<([^<>\r\n]+)>/g, (literal, code: string | undefined, angle: string | undefined) => {
     const remote = code ?? angle!;
+    if (angle !== undefined && FILE_URL_SCHEME.test(remote)) {
+      const encoded = remote.replace(/\s/g, encodeURIComponent);
+      const local = localFileUrl(encoded, workspace);
+      return local === encoded ? literal : '<' + local + '>';
+    }
     const local = workspace.mapAliasInText(remote);
     if (code !== undefined && local !== remote && /\s/.test(remote) && !fs.existsSync(local)) return literal;
     return local === remote ? literal : code !== undefined ? '\x60' + local + '\x60' : '<' + local + '>';
   });
-  // URL 分词会在裸空格处截断路径，这类链接先按括号取完整地址；未映射的保持原文。
-  value = value.replace(XDT_PATH_LINK, (link, target: string) => {
+  // URL 分词会在裸空格处截断路径，Markdown 文件链接先按括号取完整地址；未映射的保持原文。
+  value = value.replace(MARKDOWN_FILE_LINK, (link, rawTarget: string) => {
+    const titleMatch = /\s+(?:"[^"\r\n]*"|'[^'\r\n]*')$/.exec(rawTarget);
+    const target = titleMatch ? rawTarget.slice(0, titleMatch.index) : rawTarget;
+    const title = titleMatch ? titleMatch[0] : '';
     const encoded = target.replace(/\s/g, encodeURIComponent);
     const local = localFileUrl(encoded, workspace);
-    return local === encoded ? link : '](' + local + ')';
+    if (local === encoded) return link;
+    // Markdown 链接目标里的括号需要编码，避免本机目录或文件名带括号时提前闭合链接。
+    const safe = local.replace(/\(/g, '%28').replace(/\)/g, '%29');
+    return '](' + safe + title + ')';
   });
   // URL 单独解析；HTTP 与媒体仓标识不得被普通路径替换改写。
   const parts: string[] = [];
   let end = 0;
   for (const match of value.matchAll(URL_TEXT)) {
-    parts.push(workspace.mapTextFromAgent(value.slice(end, match.index), context), localFileUrl(match[0], workspace));
-    end = match.index! + match[0].length;
+    const start = match.index!;
+    if (start < end) continue;
+    let raw = match[0];
+    let mapped = localFileUrl(raw, workspace);
+    if (mapped === raw && FILE_URL_SCHEME.test(raw)) {
+      const extended = extendSpacedFileUrl(value, start, raw, workspace);
+      if (extended) {
+        raw = extended.raw;
+        mapped = extended.mapped;
+      }
+    }
+    parts.push(workspace.mapTextFromAgent(value.slice(end, start), context), mapped);
+    end = start + raw.length;
   }
   parts.push(workspace.mapTextFromAgent(value.slice(end), context));
   return parts.join('');
@@ -131,6 +202,39 @@ function pendingPrefixes(workspace: ExecutorWorkspace): PendingPrefix[] {
   return cached;
 }
 
+function hasClosingParen(suffix: string): boolean {
+  let depth = 0;
+  for (let index = 0; index < suffix.length; index += 1) {
+    const ch = suffix[index];
+    if (ch === '\r' || ch === '\n') return true;
+    if (ch === '(') depth += 1;
+    else if (ch === ')') {
+      if (depth === 0) return true;
+      depth -= 1;
+    }
+  }
+  return false;
+}
+
+function isBareFileUrlEnded(suffix: string, workspace: ExecutorWorkspace): boolean {
+  if (!BARE_URL_STOP.test(suffix)) return false;
+  if (BARE_URL_HARD_STOP.test(suffix)) return true;
+  const spaced = spacedAliasPrefixes(workspace);
+  if (!spaced.length) return true;
+  const normalized = suffix.replace(/^localhost(?=[\\/])/i, '');
+  for (const { target, windows } of spaced) {
+    const driveLead = windows && /^[\\/]/.test(normalized) && !target.startsWith('//') ? 1 : 0;
+    const body = normalized.slice(driveLead).replace(/\\/g, '/');
+    const compared = windows ? body.toLowerCase() : body;
+    if (target.startsWith(compared)) return false;
+    if (compared.startsWith(target)) {
+      const rest = body.slice(target.length);
+      if (!rest || (/^[\\/?#]/.test(rest) && !BARE_URL_STOP.test(rest))) return false;
+    }
+  }
+  return true;
+}
+
 /** 只暂存末尾未闭合的路径，避免地址被多个 delta 切开后漏掉映射。 */
 function pendingPathIndex(text: string, workspace: ExecutorWorkspace): number {
   let pending = text.length;
@@ -138,31 +242,50 @@ function pendingPathIndex(text: string, workspace: ExecutorWorkspace): number {
   if (!prefixes.length) return pending;
   let lowered: string | undefined;
   for (const { prefix, insensitive, target } of prefixes) {
+    const isUrlScheme = prefix.includes('://');
+    const isFileUrlScheme = prefix === 'file://' || prefix === 'xdt-file://' || prefix === 'xdt-image://';
     const source = insensitive ? lowered ??= text.toLowerCase() : text;
     let start = -1;
     while ((start = source.indexOf(target[0], start + 1)) >= 0) {
       if (start && /[A-Za-z0-9_]/.test(text[start - 1])) continue;
+      // 紧跟在 file:// / xdt-file:// 后的路径归对应 URL scheme 统一判断边界，不能把 scheme 和路径拆开刷出。
+      if (!isUrlScheme && start >= 7 && FILE_URL_PREFIX_BEFORE_PATH.test(text.slice(Math.max(0, start - 32), start))) continue;
       const tail = source.slice(start);
       const quote = text[start - 1];
       const closing = quote === '<' ? '>' : /["'\x60]/.test(quote ?? '') ? quote : undefined;
+      const markdownLink = isFileUrlScheme && start >= 2 && text[start - 2] === ']' && text[start - 1] === '(';
+      const openStart = markdownLink ? start - 2 : closing ? start - 1 : start;
       if (target.startsWith(tail)) {
-        pending = Math.min(pending, closing ? start - 1 : start);
+        pending = Math.min(pending, openStart);
         continue;
       }
       if (!tail.startsWith(target)) continue;
-      if (!prefix.includes('://') && !/^[\\/]/.test(tail.slice(target.length))) continue;
+      if (!isUrlScheme && !/^[\\/]/.test(tail.slice(target.length))) continue;
       const suffix = text.slice(start + target.length);
-      const ended = closing ? suffix.includes(closing) : prefix.includes('://')
-        ? /[\s\x60"'<>()[\]{}]/.test(suffix) : /[\s\x60"'<>()[\]{};|&]/.test(suffix);
+      const ended = markdownLink
+        ? hasClosingParen(suffix)
+        : closing
+          ? suffix.includes(closing)
+          : isFileUrlScheme
+            ? isBareFileUrlEnded(suffix, workspace)
+            : isUrlScheme
+              ? /[\s\x60"'<>()[\]{}]/.test(suffix)
+              : /[\s\x60"'<>()[\]{};|&]/.test(suffix);
       if (!ended) {
-        pending = Math.min(pending, closing ? start - 1 : start);
+        pending = Math.min(pending, openStart);
       }
     }
   }
-  // 引号可能独占一个 delta；保留开引号，下一段路径才能按完整引用(含空格)解析。
-  const trailing = text.at(-1);
-  if (pending === text.length && trailing && /["'\x60<]/.test(trailing)
-    && (trailing === '<' || text.split(trailing).length % 2 === 0)) pending = text.length - 1;
+  // 引号或 Markdown 链接开括号可能独占一个 delta；保留它们，下一段路径才能按完整引用(含空格)解析。
+  if (pending === text.length) {
+    if (text.endsWith('](')) pending = text.length - 2;
+    else if (text.endsWith(']')) pending = text.length - 1;
+    else {
+      const trailing = text.at(-1);
+      if (trailing && /["'\x60<]/.test(trailing)
+        && (trailing === '<' || text.split(trailing).length % 2 === 0)) pending = text.length - 1;
+    }
+  }
   return pending;
 }
 
