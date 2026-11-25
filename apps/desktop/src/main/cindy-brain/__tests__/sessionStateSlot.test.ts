@@ -38,6 +38,7 @@ describe('session state queries', () => {
     sqlite.exec(`
       CREATE TABLE sessions (
         id TEXT PRIMARY KEY, status TEXT, source TEXT, orca_role TEXT, remote_host_id TEXT,
+        agent_device_id TEXT,
         title TEXT, working_dir TEXT, workspace_kind TEXT, side_chat_close_pending INTEGER,
         snoozed_until INTEGER, snoozed_at INTEGER, updated_at INTEGER
       );
@@ -47,7 +48,9 @@ describe('session state queries', () => {
       INSERT INTO sessions (id, status, source, orca_role)
         VALUES ('worker', 'active', 'desktop', 'worker'), ('lead', 'active', 'desktop', 'lead');
       INSERT INTO sessions (id, status, source, remote_host_id)
-        VALUES ('remote', 'deleted', 'desktop', 'another-computer');
+        VALUES ('ssh-session', 'deleted', 'desktop', 'ssh-alias');
+      INSERT INTO sessions (id, status, source, agent_device_id)
+        VALUES ('remote-agent', 'archived', 'desktop', 'another-computer');
     `);
   });
 
@@ -97,9 +100,9 @@ describe('session state queries', () => {
     },
   );
 
-  it('does not distinguish missing sessions from worker, Lead, automation or remote sessions', async () => {
+  it('does not distinguish missing sessions from worker, Lead, automation, SSH or remote-agent sessions', async () => {
     const { query, getDbClient } = fixture();
-    const ids = ['worker', 'lead', 'automation', 'remote', 'missing', 'worker'];
+    const ids = ['worker', 'lead', 'automation', 'ssh-session', 'remote-agent', 'missing', 'worker'];
     expect(await query(ids)).toStrictEqual({
       ok: true, sessions: ids.map(sessionId => ({ sessionId, status: 'out_of_scope' })),
     });

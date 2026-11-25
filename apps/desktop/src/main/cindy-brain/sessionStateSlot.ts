@@ -20,6 +20,7 @@ export async function readGhostSessionStateRows(db: Pick<DbClient, 'drizzle'>, s
     source: sessions.source,
     orcaRole: sessions.orcaRole,
     remoteHostId: sessions.remoteHostId,
+    agentDeviceId: sessions.agentDeviceId,
   }).from(sessions).where(inArray(sessions.id, sessionIds));
 }
 
@@ -67,7 +68,7 @@ export class GhostSessionStateSlot {
       if (!approvedSubscriber(current) || ghostInstallApprovalToken(current.approval) !== approval) return denied();
       const states = new Map<string, GhostSessionState>();
       for (const row of rows) {
-        if (!isGhostEligibleSessionRow(row) || row.remoteHostId != null) continue;
+        if (!isGhostEligibleSessionRow(row) || row.remoteHostId != null || row.agentDeviceId != null) continue;
         if (row.status !== 'active' && row.status !== 'archived' && row.status !== 'deleted') {
           return fail('INTERNAL', '无法读取会话状态');
         }

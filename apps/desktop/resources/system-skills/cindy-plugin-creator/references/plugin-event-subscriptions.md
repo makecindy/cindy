@@ -41,8 +41,9 @@
 - 成功返回 `{ ok: true, sessions: [{ sessionId, status }] }`。顺序和重复项与请求一致，每项只有这两个键。
 - `active` 表示在用，`archived` 表示已归档，`deleted` 表示本机仍留有已删除记录。
   未知 id（包括已清除的删除记录）与范围外统一返回 `out_of_scope`，不能据此推断是否删除。
-- 只查询当前账号本机、符合 `did-session-created`／`did-session-archived` 资格的用户会话。
-  不查询协同会话（含 Orca Lead 和 Worker）、后台自动化或远程执行任务，也不向其他设备取数。
+- 只查询当前账号在本机执行、且符合 `did-session-created`／`did-session-archived` 会话资格的用户主会话。
+  协同会话（含 Orca Lead 和 Worker）和后台自动化不在范围内。SSH 远端执行、Agent 在同账号另一台电脑
+  上执行的任务，即使会话记录在本机，也返回 `out_of_scope`。这不改变事件投递，也不向其他设备取数。
 - 失败返回 `{ ok: false, errorCode, message }`，没有 `sessions`。错误码：
   `PERMISSION_DENIED`（未获资格或查询期间被撤权）、`INVALID_REQUEST`（参数无效）、
   `HOST_NOT_READY`（账号或数据库尚未就绪／在途上下文已切换）、`INTERNAL`（状态读取失败）。
