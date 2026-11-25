@@ -1062,6 +1062,7 @@ async function runGhostDeviceFlow(
       headers.Authorization = `Basic ${basic}`;
     }
     let res: Response;
+    let text: string | null;
     try {
       res = await fetchImpl(deviceAuthorizationUrl, {
         method: 'POST',
@@ -1071,6 +1072,7 @@ async function runGhostDeviceFlow(
         redirect: 'error',
         signal: requestSignal(),
       });
+      text = await readBoundedText(res);
     } catch (err) {
       if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
       logger?.warn('ghost oauth 设备码申请网络失败', {
@@ -1079,7 +1081,6 @@ async function runGhostDeviceFlow(
       });
       return { ok: false, error: 'NETWORK', detail: String(err) };
     }
-    const text = await readBoundedText(res);
     opts.remote?.assertCurrent();
     if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
     if (!res.ok) {
@@ -1205,6 +1206,7 @@ async function runGhostDeviceFlow(
       pollForm.set('client_id', clientId);
       if (config.clientSecret) pollForm.set('client_secret', config.clientSecret);
       let pollRes: Response;
+      let pollText: string | null;
       try {
         pollRes = await fetchImpl(config.tokenUrl, {
           method: 'POST',
@@ -1216,6 +1218,7 @@ async function runGhostDeviceFlow(
           redirect: 'error',
           signal: requestSignal(),
         });
+        pollText = await readBoundedText(pollRes);
       } catch (err) {
         if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
         networkFailures += 1;
@@ -1229,7 +1232,6 @@ async function runGhostDeviceFlow(
         continue;
       }
       networkFailures = 0;
-      const pollText = await readBoundedText(pollRes);
       opts.remote?.assertCurrent();
       if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
       if (pollRes.ok) {

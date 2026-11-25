@@ -1300,9 +1300,10 @@ describe('设备码登录(RFC 8628)', () => {
 
   async function runWithTimers(promise: Promise<GhostOauthFlowResult>): Promise<GhostOauthFlowResult> {
     let settled = false;
-    void promise.finally(() => {
+    const markSettled = () => {
       settled = true;
-    });
+    };
+    void promise.then(markSettled, markSettled);
     for (let i = 0; i < 50 && !settled; i += 1) await vi.advanceTimersByTimeAsync(5_000);
     return promise;
   }
@@ -1353,6 +1354,54 @@ describe('设备码登录(RFC 8628)', () => {
         client_id: 'client-123',
         client_secret: 'secret-xyz',
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns NETWORK if the device authorization response body is interrupted', async () => {
+    const response = jsonResponse({});
+    vi.spyOn(response, 'text').mockRejectedValueOnce(new Error('response interrupted'));
+    const fetchImpl = vi.fn(async () => response);
+    const openExternal = vi.fn();
+    await expect(startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl }))
+      .resolves.toMatchObject({ ok: false, error: 'NETWORK' });
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it.each(['retry', 'cancel', 'exhausted'])('handles an interrupted token response body: %s', async (outcome) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const openExternal = vi.fn();
+      let pollCount = 0;
+      const poll = vi.fn(async () => {
+        pollCount += 1;
+        const response = jsonResponse({ access_token: 'at-after-retry' });
+        if (outcome === 'retry' && pollCount === 2) return response;
+        vi.spyOn(response, 'text').mockImplementationOnce(async () => {
+          if (outcome === 'cancel') cancelActiveGhostOauthFlow();
+          throw new Error('response interrupted');
+        });
+        return response;
+      });
+      const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+        String(url) === DEVICE_CONFIG.deviceAuthorizationUrl
+          ? jsonResponse({
+              device_code: 'dev-code-1',
+              user_code: 'ABCD-EFGH',
+              verification_uri: 'https://auth.example.com/verify',
+              interval: 1,
+            })
+          : poll(),
+      );
+      const result = await runWithTimers(startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl }));
+      if (outcome === 'retry') {
+        expect(result).toMatchObject({ ok: true, bundle: { accessToken: 'at-after-retry' } });
+        expect(poll).toHaveBeenCalledTimes(2);
+      } else {
+        expect(result).toMatchObject({ ok: false, error: outcome === 'cancel' ? 'CANCELLED' : 'NETWORK' });
+        expect(poll).toHaveBeenCalledTimes(outcome === 'cancel' ? 1 : 3);
+      }
     } finally {
       vi.useRealTimers();
     }
