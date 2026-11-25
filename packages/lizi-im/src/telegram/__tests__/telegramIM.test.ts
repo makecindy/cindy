@@ -3023,12 +3023,18 @@ describe('TelegramIM', () => {
     const remove = ctx.host.secrets.remove;
     const readResult = ctx.host.secrets.readResult!;
     const sentBefore = api.calls.filter(call => call.method === 'sendMessage').length;
+    let cannotConfirmRemoval = false;
     ctx.host.secrets.remove = (name) => {
       if (failure === 'unreadable' || name !== key) remove(name);
+      if (failure === 'unreadable' && name === key) cannotConfirmRemoval = true;
     };
-    if (failure === 'unreadable') {
-      ctx.host.secrets.readResult = (name) => name === key ? { kind: 'error' } : readResult(name);
-    }
+    ctx.host.secrets.readResult = (name) => {
+      if (name === key && cannotConfirmRemoval) {
+        cannotConfirmRemoval = false;
+        return { kind: 'error' };
+      }
+      return readResult(name);
+    };
 
     expect(await disconnect()).toMatchObject({ status: { kind: 'error', code: 'secret-unavailable' } });
     expect(im.getConfigState().ownerUserId).toBe(OWNER_ID);
@@ -3039,6 +3045,60 @@ describe('TelegramIM', () => {
     ctx.host.secrets.readResult = readResult;
     expect(await disconnect()).toEqual({ status: { kind: 'idle' } });
     expect(ctx.secrets.has(key)).toBe(false);
+  });
+
+  // Unit: a later unlink failure must leave the existing bot offline across restart,
+  // with credentials and cursor available for a retry only when recovery succeeds.
+  it.each([false, true])('fails disconnect safely after a partial unlink (rollback fails: %s)', async (rollbackFails) => {
+    await connect();
+    const tokenKey = 'telegram-bot-token';
+    const ownerKey = 'telegram-owner-user-id';
+    const offsetKey = 'telegram-updates-offset';
+    const offlineKey = 'telegram-bot-offline';
+    const token = ctx.secrets.get(tokenKey);
+    const offset = JSON.stringify({ botId: String(BOT.id), offset: 50 });
+    ctx.secrets.set(offsetKey, offset);
+    const disconnect = ctx.handlers.get('telegramBot:disconnect')!;
+    const remove = ctx.host.secrets.remove;
+    const write = ctx.host.secrets.write;
+    ctx.host.secrets.remove = (name) => { if (name !== offsetKey) remove(name); };
+    ctx.host.secrets.write = (name, value) =>
+      rollbackFails && name === tokenKey ? false : write(name, value);
+
+    expect(await disconnect()).toMatchObject({ status: { kind: 'error', code: 'secret-unavailable' } });
+    expect(ctx.secrets.get(offlineKey)).toBe('1');
+    expect(ctx.secrets.get(ownerKey)).toBe(OWNER_ID);
+    expect(ctx.secrets.get(offsetKey)).toBe(offset);
+    expect(ctx.secrets.has('telegram-group-admission-v1')).toBe(false);
+    expect(ctx.secrets.get(tokenKey)).toBe(rollbackFails ? undefined : token);
+
+    await im.dispose();
+    api.calls.length = 0;
+    await im.init();
+    expect(api.calls).toHaveLength(0);
+    if (rollbackFails) {
+      expect(im.getStatus()).toEqual({ kind: 'idle' });
+      return;
+    }
+    expect(im.getStatus()).toMatchObject({ kind: 'offline' });
+    ctx.host.secrets.remove = remove;
+    expect(await disconnect()).toEqual({ status: { kind: 'idle' } });
+    expect(api.calls.map(({ method }) => method)).toEqual(['deleteMyCommands', 'sendMessage']);
+  });
+
+  // Unit: unreadable ciphertext can still be unbound when the host can confirm physical deletion.
+  it('allows a confirmed disconnect even when the stored token cannot be read', async () => {
+    await connect();
+    const tokenKey = 'telegram-bot-token';
+    const readResult = ctx.host.secrets.readResult!;
+    ctx.host.secrets.readResult = (name) => name === tokenKey ? { kind: 'error' } : readResult(name);
+    ctx.host.secrets.removeConfirmed = (name) => {
+      ctx.secrets.delete(name);
+      return true;
+    };
+
+    expect(await ctx.handlers.get('telegramBot:disconnect')!()).toEqual({ status: { kind: 'idle' } });
+    expect(ctx.secrets.has(tokenKey)).toBe(false);
   });
 
   it('disconnect 清空凭证并回 idle', async () => {

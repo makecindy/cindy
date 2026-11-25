@@ -784,17 +784,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       }
     }
     // Unbinding cannot succeed while a persisted group grant could survive it.
-    const credentials = [
-      TOKEN_SECRET_KEY,
-      OWNER_USER_ID_SECRET_KEY,
-      LEGACY_RUNTIME_ACTIVE_SECRET_KEY,
-      UPDATES_OFFSET_SECRET_KEY,
-      // Leaving this flag would put a replacement binding offline on restart.
-      OFFLINE_SECRET_KEY,
-    ];
-    if (!this.groupAdmission().clear() || !credentials.every((key) =>
-      removeTelegramSecret(this.host.secrets, this.secretKey(key))
-    )) {
+    if (!this.groupAdmission().clear() || !this.removeDisconnectSecrets()) {
       await this.stopPolling();
       this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return { status: this.status };
@@ -2725,6 +2715,40 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   // ── owner notices / secrets ────────────────────────────────────────────────
 
+  private removeDisconnectSecrets(): boolean {
+    const keys = [
+      TOKEN_SECRET_KEY,
+      OWNER_USER_ID_SECRET_KEY,
+      LEGACY_RUNTIME_ACTIVE_SECRET_KEY,
+      UPDATES_OFFSET_SECRET_KEY,
+    ].map((name) => {
+      const key = this.secretKey(name);
+      return { key, previous: this.secretReadResult(key) };
+    });
+    let attempted = 0;
+    const removed = keys.every(({ key }) => {
+      attempted += 1;
+      return removeTelegramSecret(this.host.secrets, key);
+    });
+    if (removed && removeTelegramSecret(this.host.secrets, this.secretKey(OFFLINE_SECRET_KEY))) {
+      return true;
+    }
+
+    // Make restart safe before restoring any credential. Restore the token last,
+    // so it cannot be reused if restoring the owner or cursor fails.
+    if (this.ensureOfflineOrRemoveToken()) {
+      for (const { key, previous } of keys.slice(0, attempted).reverse()) {
+        // An unreadable credential can still be deleted, but has no recoverable snapshot.
+        if (previous.kind === 'error') break;
+        if (previous.kind === 'missing') continue;
+        const current = this.secretReadResult(key);
+        if (current.kind === 'value' && current.value === previous.value) continue;
+        if (!this.restoreSecret(key, previous.value)) break;
+      }
+    }
+    return false;
+  }
+
   /** 恢复一项 secret 并回读确认；调用成功不等于数据真的落盘。 */
   private restoreSecret(key: string, previousValue: string | null): boolean {
     if (previousValue === null) {
@@ -2757,20 +2781,20 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
     await this.stopPolling();
-    const latchWritten = this.host.secrets.write(this.secretKey(OFFLINE_SECRET_KEY), '1');
-    const latchConfirmed = latchWritten && this.offlineFlagState() === 'set';
-    if (!latchConfirmed) {
-      // 最后兜底：闩锁无法确认时删除 token 并回读。二者任一可靠落盘，重启都不会
-      // 自动上线；若存储整体失效，运行态仍保持停止并显式报错。
-      this.host.secrets.remove(this.secretKey(TOKEN_SECRET_KEY));
-      const tokenRemovalConfirmed = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY)).kind === 'missing';
-      if (!tokenRemovalConfirmed) {
-        this.log.warn(
-          'telegram config rollback failed and no durable offline guard could be confirmed',
-        );
-      }
-    }
+    this.ensureOfflineOrRemoveToken();
     this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
+    return false;
+  }
+
+  private ensureOfflineOrRemoveToken(): boolean {
+    const offlineKey = this.secretKey(OFFLINE_SECRET_KEY);
+    if (this.offlineFlagState() === 'set' || this.restoreSecret(offlineKey, '1')) return true;
+
+    // If the marker cannot be confirmed, remove the token instead. An unusable
+    // store can defeat both writes, but the caller still stops polling and reports failure.
+    if (!removeTelegramSecret(this.host.secrets, this.secretKey(TOKEN_SECRET_KEY))) {
+      this.log.warn('telegram rollback failed and no durable offline guard could be confirmed');
+    }
     return false;
   }
 
