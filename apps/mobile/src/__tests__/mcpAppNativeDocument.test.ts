@@ -8,9 +8,11 @@ const state = vi.hoisted(() => ({
   start: vi.fn(),
   stop: vi.fn(),
   random: 0,
+  os: "android",
   hostAvailable: true,
   startAvailable: true,
 }));
+vi.mock("react-native", () => ({ Platform: { get OS() { return state.os; } } }));
 vi.mock("expo-crypto", () => ({
   getRandomBytes: (size: number) => new Uint8Array(size).fill(++state.random),
 }));
@@ -56,6 +58,7 @@ beforeEach(() => {
   state.files.clear();
   state.removed = [];
   state.random = 0;
+  state.os = "android";
   state.hostAvailable = true;
   state.startAvailable = true;
   state.start
@@ -360,4 +363,57 @@ it('reveals the contenteditable caret, a new empty line and an empty editor', ()
     field.blur(); flush();
     expect(postMessage.mock.lastCall![0].params).toBeNull();
   } finally { rangeSpy.mockRestore(); frame.remove(); }
+});
+
+// iOS WKWebView can consume a drag for a 2px rounding difference. The native
+// prop tests do not exercise the served App's CSS, or growth past the 5000px slot.
+// Unit: run the prepared resource in a DOM and supply the viewport/layout metrics.
+it('hands a fitting iOS document to the conversation and restores scrolling when it outgrows the viewport', async () => {
+  state.os = 'ios';
+  await prepareMcpAppNativeDocument(document, 'native-key');
+  const html = state.files.get('file:///cache/mcp-apps/' + '01'.repeat(24) + '/0')!;
+  const iframe = globalThis.document.createElement('iframe');
+  globalThis.document.body.appendChild(iframe);
+  try {
+    const win = iframe.contentWindow as Window & typeof globalThis;
+    const doc = win.document;
+    const resource = new win.DOMParser().parseFromString(html, 'text/html');
+    const script = resource.querySelector('script[data-cindy-ios-scroll]');
+    let height = 2200;
+    let width = 360;
+    let resize = () => {};
+    Object.defineProperties(doc.documentElement, {
+      scrollHeight: { get: () => height },
+      scrollWidth: { get: () => width },
+    });
+    // jsdom has no layout or cascade-layer support. Exercise the actual
+    // stylesheet's media switch here; WKWebView verifies pan ownership.
+    if (script) new Script(script.textContent!).runInNewContext({
+      window: win, document: doc, innerHeight: 2198, innerWidth: 360,
+      getComputedStyle: win.getComputedStyle.bind(win),
+      ResizeObserver: class {
+        constructor(callback: () => void) { resize = callback; }
+        observe() {}
+      },
+    });
+    doc.dispatchEvent(new win.Event('DOMContentLoaded'));
+    const media = () => doc.querySelector('style')?.media;
+    expect(media()).toBe('all');
+    height = 6300;
+    resize();
+    expect(media()).toBe('not all');
+    height = 420;
+    width = 800;
+    doc.dispatchEvent(new win.Event('touchstart'));
+    expect(media()).toBe('not all');
+    width = 360;
+    win.dispatchEvent(new win.Event('resize'));
+    expect(media()).toBe('all');
+    doc.documentElement.style.overflowY = 'scroll';
+    resize();
+    expect(media()).toBe('not all');
+    expect(doc.documentElement.style.overflowY).toBe('scroll');
+  } finally {
+    iframe.remove();
+  }
 });
