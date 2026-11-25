@@ -35,6 +35,15 @@ import { listProviderGroups } from '../provider-group/store.js';
 import { confirmLocalAgent, cancelLocalAgentConfirmations } from './confirmation.js';
 
 const log = createLogger('local-agent');
+
+/**
+ * 旧实例刚退出时锁心跳仍在新窗口里（锁必须静置 `LOCK_STALE_MS` 才允许接管），所以先在锁上
+ * 等过一个 stale 窗口再判占用。自动更新重启是一次真实竞态：观测到 `reason=update-relaunch`
+ * 的旧实例 `disposersCompleted=no`，`host.lock` 留在磁盘，新实例 8.8s 后抢锁时仍被判占用，
+ * 而它此后的整个生命周期都不会再有本机 API。
+ */
+const STARTUP_LOCK_WAIT_MS = 5_000;
+
 let current: Promise<Awaited<ReturnType<typeof createLocalAgentServer>>> | undefined;
 let startupFailure: unknown;
 let teardown = Promise.resolve();
@@ -77,7 +86,9 @@ async function startWithProfileLease(deps: LocalAgentServerDeps) {
   });
   const lifetime = withCrossProcessLock(
     path.join(discovery, 'host.lock'),
-    { label: 'local-agent-host', waitMs: 0 },
+    // 旧实例刚退出时锁心跳仍在新窗口里：等过一个 stale 窗口再判占用，比立刻 HOST_IN_USE
+    // 更接近真实竞态。
+    { label: 'local-agent-host', waitMs: STARTUP_LOCK_WAIT_MS },
     async (status) => {
       if (!status.held)
         throw new LocalAgentError(
