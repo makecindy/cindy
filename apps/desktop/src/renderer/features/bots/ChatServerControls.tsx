@@ -73,7 +73,7 @@ function ReactionPicker({ controls, onChoose }: { controls: ReturnType<typeof us
     const selected = controls.reactions.some(r => r.emoji === emoji && r.me);
     return <button key={emoji} type="button" aria-label={emoji} aria-pressed={selected}
       className={cn(iconClass, 'text-20 motion-safe:transition-transform motion-safe:hover:scale-110 motion-safe:active:scale-95 focus-visible:ring-2 focus-visible:ring-ring',
-        selected && 'bg-[var(--surface-hover)] ring-1 ring-inset ring-[var(--text-tertiary)]')}
+        selected && 'bg-[var(--surface-hover)]')}
       onClick={event => onChoose(emoji, event.currentTarget.getBoundingClientRect())}>
       <ReactionGlyph emoji={emoji} />
     </button>;

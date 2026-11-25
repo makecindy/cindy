@@ -71,7 +71,8 @@
 
 [role='dialog']:has(.chat-full-reaction-picker),
 [role='dialog']:has(.chat-full-reaction-space) {
-  --chat-reaction-catalog-height: clamp(0px, calc(var(--radix-popover-content-available-height, 100vh) - 54px), 256px);
+  /* Leave room for results so collision handling can flip the catalog to the other side. */
+  --chat-reaction-catalog-height: clamp(min(176px, calc(100dvh - 64px)), calc(var(--radix-popover-content-available-height, 100vh) - 54px), 256px);
 }
 
 .chat-full-reaction-space {

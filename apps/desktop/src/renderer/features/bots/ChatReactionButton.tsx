@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { ReactionGlyph, ChatReactionMotion } from './ChatReactionMotion';
@@ -66,6 +67,7 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
       reads?.set(reaction.emoji, entry);
     }
     void entry.request.then(reactors => {
+      if (reactors === null && reads?.get(reaction.emoji) === entry) reads?.delete(reaction.emoji);
       if (!superseded && isDataOwnerGenerationCurrent(owner)) setLoaded({ summary, reactors });
     });
     return () => { superseded = true; };
@@ -82,9 +84,9 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
     ? t(key('reactionWho'), { emoji: reaction.emoji, count: reaction.count, names: reactorNames(reactors, t, i18n.language) })
     : countLabel;
   const ringClass = 'ring-2 ring-[var(--button-face-bg)]';
-  return (
+  const button = (
     <Button ref={badgeRef} variant={reaction.me && !compact ? 'primary' : 'secondary'} size="sm" compact
-      disabled={disabled} aria-pressed={reaction.me} aria-label={label} title={compact ? label : undefined}
+      disabled={disabled} aria-pressed={reaction.me} aria-label={label}
       className={cn(showAvatars && !compact && 'pr-1', compact && cn('h-[22px] gap-0.5 px-1.5 text-13 [--button-face-bg:var(--surface-elevated)]',
         reaction.me ? '[--button-face-border:var(--text-tertiary)]' : '[--button-face-border:var(--border-default)]'))}
       onClick={onToggle}>
@@ -110,4 +112,5 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
       ) : <span>{reaction.count}</span>}
     </Button>
   );
+  return compact ? <Tip text={label}>{button}</Tip> : button;
 }

@@ -297,6 +297,30 @@ describe('reaction avatars', () => {
     expect(mocks.reactors).toHaveBeenCalledTimes(2);
   });
 
+  it('retries only the failed roster when the stacked badge is reopened', async () => {
+    const zoe = { ok: true, reactors: [reactor('z', 'Zoe')] };
+    mocks.reactors.mockResolvedValueOnce({ ok: false }).mockResolvedValue(zoe);
+    render(actions([{ emoji: '👍', count: 1, me: false }, { emoji: '❤️', count: 1, me: false }]));
+    const toggle = screen.getByRole('button', { name: '👍 ❤️ · 2' });
+    await act(async () => fireEvent.click(toggle));
+    expect(badge().getAttribute('aria-label')).toBe('👍 · 1');
+    expect(mocks.reactors).toHaveBeenCalledTimes(2);
+    fireEvent.click(toggle);
+    await act(async () => fireEvent.click(toggle));
+    expect(badge().getAttribute('aria-label')).toContain('Zoe');
+    expect(mocks.reactors.mock.calls.map(([r]) => r.emoji)).toEqual(['👍', '❤️', '👍']);
+  });
+
+  it('shows the reactor name when the compact badge receives keyboard focus', async () => {
+    mocks.reactors.mockResolvedValue({ ok: true, reactors: [reactor('z', 'Zoe')] });
+    render(actions([{ emoji: '👍', count: 1, me: false }]));
+    await waitFor(() => expect(badge().getAttribute('aria-label')).toContain('Zoe'));
+    act(() => badge().focus());
+    const tip = await screen.findByRole('tooltip');
+    expect(tip.textContent).toContain('Zoe');
+    expect(badge().getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('holds an acknowledged undo until a read started after that write confirms it', async () => {
     const reads = new ChatReactionReads();
     const props = { reactionReads: reads };

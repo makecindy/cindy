@@ -116,7 +116,7 @@ export default {
       data: { ...base, bubbles: true, reactionMotion: true },
     },
     'reaction-colors': {
-      about: 'Color emoji retain full opacity in the reaction picker and badges in both themes',
+      about: 'The picker replaces message actions without moving the bubble; keyboard focus and full-color emoji are preserved',
       data: { ...base, bubbles: true, reactionMotion: true },
     },
     arrangement: {
@@ -280,11 +280,22 @@ export default {
       return;
     }
     if (ui.case === 'reaction-colors') {
-      const row = page.locator('[data-bot-group-message-id="a2"]');
+      const row = page.locator('[data-bot-group-message-id="a1"]');
       await row.hover();
-      await row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true }).click();
+      const trigger = row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
+      const toolbar = row.locator('[data-bot-group-message-actions]');
+      const corner = row.locator('[data-message-reactions]');
+      const before = await row.boundingBox();
+      await trigger.click();
       const picker = page.getByRole('dialog', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
       await picker.waitFor();
+      assert.equal(await toolbar.isVisible(), false, 'the selector replaces the action bar');
+      assert.equal(await corner.isVisible(), false, 'the active corner yields to the selector');
+      const neighbor = page.locator('[data-bot-group-message-id="b1"]');
+      await neighbor.hover();
+      assert.equal(await neighbor.locator('[data-bot-group-message-actions]').isVisible(), false, 'crossing another message keeps the selector alone');
+      assert.deepEqual(await row.boundingBox(), before, 'opening the selector keeps the message in place');
+      assert.ok(await picker.evaluate(el => el === document.activeElement), 'pointer entry focuses the palette');
       await ui.capture('reaction-picker');
       // Visual regression: translucent text ink also fades native color emoji.
       // jsdom cannot paint color fonts; sample the actual computed ink alpha in Electron.
@@ -317,17 +328,24 @@ export default {
       await tea.click();
       await row.locator('[data-message-reactions] button[aria-haspopup="dialog"]').click();
       const selected = page.getByRole('dialog').getByRole('button', { name: /🧋/ });
+      assert.equal(await toolbar.isVisible(), false, 'the reaction details also replace the action bar');
+      assert.equal(await corner.isVisible(), false);
       assert.equal(await selected.getAttribute('aria-pressed'), 'true');
       await selected.click();
       assert.equal(await selected.count(), 0);
       await page.keyboard.press('Escape');
       await row.hover();
-      await row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true }).click();
+      await trigger.focus();
+      await page.keyboard.press('Enter');
+      await choice.waitFor();
+      assert.ok(await choice.evaluate(el => el === document.activeElement && el.matches(':focus-visible')), 'keyboard entry highlights the first emoji');
       await choice.hover();
-      await choice.focus();
       assert.equal(await glyph.evaluate(inkAlpha), 255, 'hover and focus preserve emoji colors');
       await page.keyboard.press('Escape');
-      const badge = row.locator('[data-message-reactions] button .chat-reaction-glyph').first();
+      await picker.waitFor({ state: 'hidden' });
+      assert.ok(await trigger.evaluate(el => el === document.activeElement), 'Escape returns keyboard focus');
+      assert.equal(await corner.isVisible(), true);
+      const badge = corner.locator('button .chat-reaction-glyph').first();
       assert.equal(await badge.evaluate(inkAlpha), 255, 'reaction badges preserve emoji colors');
       return;
     }

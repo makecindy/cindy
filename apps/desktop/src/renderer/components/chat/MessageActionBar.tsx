@@ -204,6 +204,7 @@ export function MessageActionBar({
 }: MessageActionBarProps) {
   const { t } = useTranslation();
   const reactionTrigger = useRef<HTMLButtonElement>(null);
+  const pointerOpenedReaction = useRef(false);
   const [reactionAnchor, setReactionAnchor] = useState<Element | null>(null);
   const readAloud = useContext(MessageReadAloudContext);
   const pluginMenuEntries = align === 'right' ? pluginUi.userMenu : pluginUi.assistantMenu;
@@ -500,14 +501,23 @@ export function MessageActionBar({
       <Tip text={reactionAction.label}>
         <PopoverTrigger asChild>
           <button ref={reactionTrigger} type="button" className={actionButtonClass} disabled={inFlight || reactionAction.disabled}
-            aria-label={reactionAction.label} onClick={event => event.stopPropagation()}>
+            aria-label={reactionAction.label} onClick={event => {
+              pointerOpenedReaction.current = event.detail > 0;
+              event.stopPropagation();
+            }}>
             <SmilePlus size={14} strokeWidth={2} className={actionIconClass} />
           </button>
         </PopoverTrigger>
       </Tip>
       <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'}
-        collisionBoundary={reactionAnchor?.closest('[data-testid="bot-group-timeline"], .thread-panel') ?? undefined} collisionPadding={8} sideOffset={8}
-        className="w-fit p-1.5" aria-label={reactionAction.label}>
+        collisionBoundary={reactionAnchor?.closest('[data-testid="bot-group-timeline"], .thread-panel') ?? undefined} collisionPadding={8}
+        className="w-fit p-1" aria-label={reactionAction.label} tabIndex={-1}
+        onOpenAutoFocus={event => {
+          if (pointerOpenedReaction.current && event.currentTarget instanceof HTMLElement) {
+            event.preventDefault();
+            event.currentTarget.focus({ preventScroll: true });
+          }
+        }}>
         {reactionAction.content}
       </PopoverContent>
     </Popover>
@@ -959,7 +969,7 @@ export function MessageActionBar({
  * The frame that hangs a compact toolbar beside its message bubble (群聊): on the bubble's
  * outer `side`, level with its top, inside the message row so moving the pointer across the gap keeps
  * the row hovered. It shows while the message (`group/message`) is hovered, while keyboard focus is
- * inside, while `open` (a picker) is set, and always on touch screens. The bubble must be `relative`.
+ * inside, and on touch screens. The reaction picker takes its place while open. The bubble must be `relative`.
  * Private ThreadPanel keeps this toolbar in flow below content; group topics retain the outer rail.
  */
 export function BubbleHoverToolbar({ side, open = false, marker, children }: {
@@ -971,7 +981,7 @@ export function BubbleHoverToolbar({ side, open = false, marker, children }: {
   const left = side === 'left';
   return (
     <div data-chat-copy-exclude {...{ [SHARE_EXCLUDE_ATTR]: '' }} {...(marker ? { [marker]: '' } : {})} data-open={open ? '' : undefined}
-      className={cn('chat-bubble-toolbar pointer-events-none absolute top-0 z-raised w-max rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] focus-within:pointer-events-auto focus-within:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 data-[open]:pointer-events-auto data-[open]:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
+      className={cn('chat-bubble-toolbar pointer-events-none absolute top-0 z-raised w-max rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] focus-within:pointer-events-auto focus-within:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
         left ? 'right-full mr-1.5' : 'left-full ml-1.5')}>
       {children}
     </div>
