@@ -8783,6 +8783,7 @@
             "message_body": "Nachrichtentext",
             "tool_body": "Werkzeugergebnis",
             "sidebar_navigation": "Seitenleistennavigation",
+            "workdir_menu": "Menü des Arbeitsverzeichnisses",
             "session_menu": "Aufgabenmenü",
             "settings_section": "Einstellungsseite",
             "composer_completion": "Eingabevervollständigung",
