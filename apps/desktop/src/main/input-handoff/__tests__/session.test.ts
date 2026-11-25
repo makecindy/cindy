@@ -41,9 +41,11 @@ describe('InputHandoffSession', () => {
   // `twinFrames`: the code sits in a frame, and a second frame loading the same address holds a never-focused 1x1
   // field with the same id; with `twinDrop`, typing the phone removes the code's frame and leaves the second one.
   // `splitCode`: no phone; a visible first box of the code, then the shrunken focused one, for a field plan joining
-  // them. `rejects`: confirming shows a code error and takes the focus off the code.
+  // them. `rejects`: confirming shows a code error and takes the focus off the code; `errorAbove` puts the error right
+  // above the code, where it names it. `noIds`: the code fields have no page id, and with `twinDrop` the second frame
+  // loads another address.
   type PayLayout = 'focus' | 'insert' | 'trap' | 'frame' | 'fragment' | 'twoSteps' | 'sameFp' | 'twinFrames' | 'twinDrop' | 'splitCode';
-  function payPage(options: { layout?: PayLayout; staleOnce?: boolean; rejects?: boolean } = {}) {
+  function payPage(options: { layout?: PayLayout; staleOnce?: boolean; rejects?: boolean; errorAbove?: boolean; noIds?: boolean } = {}) {
     const layout = options.layout ?? 'focus';
     const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce, secondStep: false, rejected: false };
     const acts: Array<{ kind: string; ref?: string }> = [];
@@ -69,8 +71,8 @@ describe('InputHandoffSession', () => {
       const note = layout === 'trap' ? !state.phoneTyped : ['insert', 'frame'].includes(layout) && state.phoneTyped;
       if (note) out.push(n(next(), 'AXStaticText', { value: 'Check the phone number', frame: [460, 340, 200, 16] }));
       out.push(n(next(), 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }));
-      const code = { domId: 'sms-code', frame: [460, 440, 1, 1], focused: state.focus === 'code', ...(layout === 'splitCode' ? { title: 'Code 2' } : {}) };
-      if (state.rejected) out.push(n(next(), 'AXStaticText', { value: '验证码错误', frame: [460, 470, 200, 16] }));
+      const code = { ...(options.noIds ? {} : { domId: 'sms-code' }), frame: [460, 440, 1, 1], focused: state.focus === 'code', ...(layout === 'splitCode' ? { title: 'Code 2' } : {}) };
+      if (state.rejected) out.push(n(next(), 'AXStaticText', { value: '验证码错误', frame: [460, options.errorAbove ? 425 : 470, 200, 12] }));
       if (layout === 'frame' || layout === 'fragment' || layout === 'twinFrames' || layout === 'twinDrop') {
         const address = layout === 'fragment' && state.phoneTyped ? 'https://secure.example.test/sms#sent' : 'https://secure.example.test/sms';
         if (!(layout === 'twinDrop' && state.phoneTyped)) {
@@ -82,9 +84,9 @@ describe('InputHandoffSession', () => {
         }
         if (layout === 'twinFrames' || layout === 'twinDrop') {
           const twin = next();
-          out.push(n(twin, 'AXWebArea', { url: address, frame: [440, 600, 320, 120] }));
+          out.push(n(twin, 'AXWebArea', { url: options.noIds && layout === 'twinDrop' ? 'https://secure.example.test/sms-b' : address, frame: [440, 600, 320, 120] }));
           if (layout === 'twinDrop') out.push(n(`${twin}.0`, 'AXStaticText', { value: '验证码', frame: [460, 620, 60, 16] }));
-          out.push(n(`${twin}.1`, 'AXTextField', { domId: 'sms-code', frame: [460, 640, 1, 1] }));
+          out.push(n(`${twin}.1`, 'AXTextField', { ...(options.noIds ? {} : { domId: 'sms-code' }), frame: [460, 640, 1, 1] }));
         }
       } else out.push(n(next(), 'AXTextField', code));
       if (layout === 'trap') out.push(n(next(), 'AXTextField', { domId: 'bot-trap', frame: [460, 460, 1, 1] }));
@@ -183,8 +185,10 @@ describe('InputHandoffSession', () => {
   // PR #12780 review (codex r4693448408): typing the phone removed the code's frame; a second frame at the same address
   // then took its order and inherited the code's key, so the code went into that frame's never-focused field.
   // Entry: session.submit. Unit tier.
-  it('does not hand a hidden code field over to another frame at the same address once its own goes away', async () => {
-    const page = payPage({ layout: 'twinDrop' });
+  // PR #12780 review (codex r4693715714): without page ids, the second frame (another address) took the removed frame's
+  // tree place, and a key of tree place alone, without its document, handed it the code.
+  it.each([{ noIds: false }, { noIds: true }])('does not hand a hidden code field over to another frame once its own goes away (%o)', async ({ noIds }) => {
+    const page = payPage({ layout: 'twinDrop', noIds });
     const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
     await session.start();
     const step = latest();
@@ -218,8 +222,10 @@ describe('InputHandoffSession', () => {
     session.cancel();
   });
 
-  it('stays on the card when the page rejects a hidden code field whose tree place moved', async () => {
-    const page = payPage({ layout: 'insert', rejects: true });
+  // PR #12780 review (codex r4693715737, `errorAbove`): the error shown right above the code renamed it, and the
+  // renamed field no longer matched the card's, so the code was lost and the card handed back as succeeded.
+  it.each([{ errorAbove: false }, { errorAbove: true }])('stays on the card when the page rejects a hidden code field whose tree place moved (%o)', async ({ errorAbove }) => {
+    const page = payPage({ layout: 'insert', rejects: true, errorAbove });
     const { session, latest, finished } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
     await session.start();
     const step = latest();

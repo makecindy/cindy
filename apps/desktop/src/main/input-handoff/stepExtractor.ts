@@ -122,11 +122,12 @@ function hiddenFieldInPage(node: NativeAxNode, page: NativeAxNode): boolean {
  * holds it (named by its address and its order among the documents at that address, which outlast tree positions),
  * survives text the page inserts after an earlier field is typed; an id is unique only in its own document, so a
  * frame's field of the same id is another field.
- * Its place in the tree covers only inputs without an id.
+ * Its place in the tree covers only inputs without an id, still within its document: a field of another frame may
+ * take that place once this one's frame goes.
  */
 export const hiddenFieldKeys = (field: { ref: string; fp: string; domId?: string }, document: string): string[] =>
   // With an id, only the id counts: another field may take this one's old place in the tree.
-  field.domId ? [JSON.stringify(['dom', document, field.domId, field.fp])] : [JSON.stringify(['ref', field.ref, field.fp])];
+  field.domId ? [JSON.stringify(['dom', document, field.domId, field.fp])] : [JSON.stringify(['ref', document, field.ref, field.fp])];
 
 const isWithin = (ref: string, scope: string) => ref === scope || ref.startsWith(`${scope}.`);
 const parentRef = (ref: string) => ref.slice(0, Math.max(0, ref.lastIndexOf('.')));
@@ -337,6 +338,7 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
       const frameArea = nestedAreas.filter((area) => isWithin(node.ref, area.ref))
         .sort((a, b) => b.ref.length - a.ref.length)[0];
       const frameOrigin = frameArea?.url ? classifyOrigin(frameArea.url, browser).origin : undefined;
+      // Read back by position in `keptHidden` (session.ts), which leaves the name out.
       const identity = JSON.stringify([node.domId, node.fp, label, stable ? null : node.ref, frameOrigin]);
       bindings.set(controlId, { kind: 'text', ref: node.ref, fp: node.fp, identity, secure: !!node.secure, ...(frameOrigin ? { frameOrigin } : {}) });
       refs.set(controlId, node.ref);

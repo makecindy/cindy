@@ -1352,9 +1352,14 @@ export class InputHandoffSession {
     const page = (url: string | undefined) => url?.split('#')[0];
     if (page(fresh.url) !== page(current.url)) return undefined;
     // A field plan joins several of the page's fields into one: compare the page's own fields, as `sameFields` does.
+    // Their names are left out: an error the page shows right above a field renames it without replacing it.
+    const unnamed = (identity: string) => {
+      const [domId, fp, , place, frameOrigin] = JSON.parse(identity) as unknown[];
+      return JSON.stringify([domId, fp, place, frameOrigin]);
+    };
     const fields = (step: ExtractedStep) => [...step.bindings.values()]
       .flatMap<{ identity: string }>((binding) => binding.kind !== 'text' ? [] : (binding.segments ?? [binding]))
-      .map((field) => field.identity)
+      .map((field) => unnamed(field.identity))
       .sort();
     return JSON.stringify(fields(fresh)) === JSON.stringify(fields(current)) ? fresh : undefined;
   }
