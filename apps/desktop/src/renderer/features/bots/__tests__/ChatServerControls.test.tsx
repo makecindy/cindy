@@ -680,6 +680,17 @@ describe('chat interaction controls', () => {
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
   });
 
+  it('keeps only the last reaction picker when activating three message triggers', () => {
+    render(<>{['first', 'second', 'third'].map(id =>
+      <GroupReactionFixture key={id} pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room"
+        groupId="room" message={{ ...message, id }} onChanged={vi.fn()} />
+    )}</>);
+    const triggers = screen.getAllByRole('button', { name: 'bots.groupChat.server.addReaction' });
+    act(() => { for (const trigger of triggers) fireEvent.click(trigger); });
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(triggers.map(button => button.getAttribute('aria-expanded'))).toEqual(['false', 'false', 'true']);
+  });
+
   it('preserves copy and image sharing beside thread replies and reactions in one toolbar', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined), reply = vi.fn();
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });

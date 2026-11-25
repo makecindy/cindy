@@ -123,7 +123,7 @@ interface MessageActionBarProps {
   /** Extra More-menu items owned by the caller, listed before link copy. */
   menuActions?: Array<{ key: string; label: string; icon: ReactNode; onSelect: () => void; disabled?: boolean }>;
   /** The caller owns reaction persistence; the toolbar owns its trigger and placement. */
-  reactionAction?: { label: string; open: boolean; onOpenChange: (open: boolean) => void; disabled?: boolean; content: ReactNode };
+  reactionAction?: { label: string; open: boolean; onOpenChange: (open: boolean) => void; onCloseAutoFocus?: (event: Event) => void; disabled?: boolean; content: ReactNode };
   /** When provided, the More menu exposes single-message deletion. The
    *  parent owns confirmation + persistence; the promise keeps the action
    *  bar disabled until the flow resolves. */
@@ -512,6 +512,7 @@ export function MessageActionBar({
       <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'}
         collisionBoundary={reactionAnchor?.closest('[data-testid="bot-group-timeline"], .thread-panel') ?? undefined} collisionPadding={8}
         className="w-fit p-1" aria-label={reactionAction.label} tabIndex={-1}
+        onCloseAutoFocus={reactionAction.onCloseAutoFocus}
         onOpenAutoFocus={event => {
           if (pointerOpenedReaction.current && event.currentTarget instanceof HTMLElement) {
             event.preventDefault();

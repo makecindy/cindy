@@ -1,5 +1,5 @@
 import { Plus, ChevronUp } from 'lucide-react';
-import { lazy, Suspense, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { useChatReactions } from './useChatReactions';
 import { ChatReactionMotion, ReactionGlyph } from './ChatReactionMotion';
 import { ChatReactionButton, type ReactorReads } from './ChatReactionButton';
@@ -17,6 +17,35 @@ const key = (name: string) => `bots.groupChat.server.${name}`;
 const quickReactions = ['👍', '❤️', '😂', '🎉', '👀', '🙏'];
 const FullReactionPicker = lazy(() => import('./FullReactionPicker'));
 const iconClass = 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50';
+
+let activeReactionPopover: ((open: boolean) => void) | undefined;
+
+// The timeline and thread can mount separate controls for the same message.
+function useReactionPopover() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => () => {
+    if (activeReactionPopover === setOpen) activeReactionPopover = undefined;
+  }, []);
+  function changeOpen(next: boolean) {
+    if (next) {
+      if (activeReactionPopover !== setOpen) activeReactionPopover?.(false);
+      activeReactionPopover = setOpen;
+    } else if (activeReactionPopover === setOpen) {
+      activeReactionPopover = undefined;
+    }
+    setOpen(next);
+  }
+  return [open, changeOpen] as const;
+}
+
+function preserveNextReactionFocus(event: Event) {
+  if (activeReactionPopover) event.preventDefault();
+}
+
+function ReactionDetailsPopover({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useReactionPopover();
+  return <Popover open={open} onOpenChange={setOpen}>{children}</Popover>;
+}
 
 /** A message's reaction version: the room's reset version plus the message's own realtime changes. */
 export const messageReactionRevision = (group: Pick<BotGroupDetail, 'reactionRevision' | 'reactionRevisions'>, messageId: string) =>
@@ -51,7 +80,7 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
   return (
     <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} data-message-reactions=""
       className={cn('absolute -top-2.5 z-[5] w-max', align === 'right' ? '-left-1' : '-right-1')}>
-      {stacked ? <Popover>
+      {stacked ? <ReactionDetailsPopover>
         <PopoverTrigger asChild>
           <button type="button" aria-label={label} className="relative flex h-[22px] items-center gap-0.5 rounded-full border border-[var(--border-default)] bg-popover px-1.5 text-13 focus-visible:ring-2 focus-visible:ring-ring">
             {reactions.slice(0, 2).map(r => <ReactionGlyph key={r.emoji} emoji={r.emoji} />)}
@@ -59,9 +88,9 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
             {gesture && <ChatReactionMotion key={gesture.emoji} gesture={gesture} onFinish={controls.finishGesture} />}
           </button>
         </PopoverTrigger>
-        <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'} collisionPadding={12} aria-label={label}
+        <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'} collisionPadding={12} aria-label={label} onCloseAutoFocus={preserveNextReactionFocus}
           className="flex max-h-52 w-max max-w-[min(256px,90vw)] flex-wrap gap-1 overflow-y-auto p-2">{badges}</PopoverContent>
-      </Popover> : badges}
+      </ReactionDetailsPopover> : badges}
     </div>
   );
 }
@@ -96,7 +125,7 @@ function ReactionPicker({ controls, onChoose }: { controls: ReturnType<typeof us
 
 export function ChatMessageHoverActions({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, controls, pluginUi }: ChatMessageActionProps) {
   const { t } = useTranslation();
-  const [picker, setPicker] = useState(false);
+  const [picker, setPicker] = useReactionPopover();
   return (
     <BubbleHoverToolbar marker="data-bot-group-message-actions" side={align === 'right' ? 'left' : 'right'} open={picker}>
       <MessageActionBar pluginUi={pluginUi} copyText={copyText ?? message.content} menuActions={menuActions} createdAt={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}
@@ -105,7 +134,7 @@ export function ChatMessageHoverActions({ groupId, shareScope, message, align = 
         quoteAction={onQuote ? { onClick: onQuote, label: t(key('quoteReply')) } : undefined}
         replyAction={onReply ? { onClick: onReply, count: replyCountShown ? undefined : message.replyCount,
           label: message.replyCount ? t(key('openTopic'), { count: message.replyCount }) : t(key('startTopic')) } : undefined}
-        reactionAction={groupId ? { label: t(key('addReaction')), open: picker, onOpenChange: setPicker,
+        reactionAction={groupId ? { label: t(key('addReaction')), open: picker, onOpenChange: setPicker, onCloseAutoFocus: preserveNextReactionFocus,
           content: <ReactionPicker controls={controls} onChoose={(emoji, rect) => {
             setPicker(false);
             void controls.toggle(emoji, rect && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });

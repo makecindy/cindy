@@ -291,9 +291,6 @@ export default {
       await picker.waitFor();
       assert.equal(await toolbar.isVisible(), false, 'the selector replaces the action bar');
       assert.equal(await corner.isVisible(), false, 'the active corner yields to the selector');
-      const neighbor = page.locator('[data-bot-group-message-id="b1"]');
-      await neighbor.hover();
-      assert.equal(await neighbor.locator('[data-bot-group-message-actions]').isVisible(), false, 'crossing another message keeps the selector alone');
       assert.deepEqual(await row.boundingBox(), before, 'opening the selector keeps the message in place');
       assert.ok(await picker.evaluate(el => el === document.activeElement), 'pointer entry focuses the palette');
       await ui.capture('reaction-picker');
@@ -311,6 +308,22 @@ export default {
       const glyph = choice.locator('.chat-reaction-glyph');
       assert.equal(await glyph.evaluate(inkAlpha), 255, 'picker emoji must not inherit translucent text ink');
       assert.equal(await picker.locator('button[aria-pressed]').count(), 6, 'six quick reactions before expanding');
+      const label = await ui.t('bots.groupChat.server.addReaction');
+      const openOn = async target => {
+        await target.hover();
+        const add = target.getByRole('button', { name: label, exact: true });
+        await add.click();
+        await picker.waitFor();
+        assert.equal(await target.locator('[data-bot-group-message-actions][data-open]').count(), 1);
+        assert.equal(await page.getByRole('dialog').count(), 1);
+      };
+      const second = page.locator('[data-bot-group-message-id="b1"]');
+      const third = page.locator('[data-bot-group-message-id="b2"]');
+      await openOn(second);
+      await openOn(third);
+      await second.locator('[data-reaction-anchor]').click();
+      await picker.waitFor({ state: 'hidden' });
+      await openOn(row);
       const more = picker.getByRole('button', { name: await ui.t('bots.groupChat.server.moreReactions') });
       await more.click();
       const search = picker.locator('[data-epr-part="search-input"]');
