@@ -12,11 +12,12 @@
 桌面控制端按窗口、对端和通道记住只读接口的明确缺失，不记业务结果，不用版本号猜能力。
 资源列表、历史查询、调度列表及侧栏运行索引在正常桌面上必须注册；调度服务未就绪要等已有
 readiness，不能因为尚未过启动画面而向控制端报“没有 handler”。只认解开 Electron 包装后
-与本次通道完全匹配的 `[NOT_FOUND] no local IPC handler for channel '<channel>'`。
-对象不存在、通道不获准、Host 模式不支持、权限拒绝、背压及超时均原样返回，下次读取仍发送。
-延迟注册的插件引擎列表不记缺失，以便同一连接在启动完成后读取。对端重连、版本或已协商能力变化后可再次探测，
+与本次通道完全匹配的 `[NOT_FOUND] no local IPC handler for channel '<channel>'`（仅限线性注册通道），
+以及对端 `REMOTE_INVOKE_ALLOWLIST` 明确拒绝本次通道的 `[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel '<channel>' not allowed remotely`。
+对象不存在、本机加密／信任传输策略拦截、非 owner 或共享任务作用域拒绝、Host 模式不支持、权限拒绝、背压及超时均原样返回，下次读取仍发送。
+延迟在启动画面后注册的插件引擎列表与 `maker:model-context-limit:get` 不记缺 handler，以便同一连接在启动完成后读取。对端重连、版本或已协商能力变化后可再次探测，
 不增加定时器、不重开其它设备连接。旧端无需升级；手机版不走 Electron 后台刷新入口。
-回归：Desktop preload 的 `remoteReadBridge.test.ts`。
+回归：Desktop preload 的 `remoteReadBridge.test.ts`、renderer 的 `useCodexContextWindow.test.tsx` 与 `remoteModelGroups.test.tsx`。
 
 ## 远程模型目录统一读取口径（2026-11-23）
 
@@ -1147,6 +1148,14 @@ Session 准备期柔性停止的 `SendOptions.signal` 由本机代理传到同�
 原生会话 ID 必须接回，设置必须重放完成，才能发送续跑；不重发原消息或结果不明的方法调用。
 权限、Plan 和自动动作来源沿用原轮次；Stop、新输入、归档／删除使恢复失效。持续不可达、撤权或
 接不回原生会话保留原错误与人工恢复入口。伙伴、目标模式与共享任务沿用既有自动恢复归属检查。
+
+`remote_agent_restarted` 是以上三类关闭的恢复分类，不证明操作系统进程退出。未完成轮次的合成
+错误保留收到的 `remoteCloseReason` 与原 `remoteRunId`，并经现有持久化字段 `sdkError` 保存同一关联；
+合成错误只说明远端运行不可用，不把关闭详情放进参与恢复判定的 `message` / `sdkError`，避免上下文
+重建、工具或账号错误判定抢占原线程恢复。此前已收到的真实业务错误仍由原终态归属保留，不从这些
+关闭信号推断崩溃、OOM 或退出时刻。
+仅修改当前 run 的本地错误投影，不增加请求、恢复次数或副作用重放，不影响其他 peer；沿用已有
+wire 字段，旧执行端和官方／自建中转无需升级。回归见 `connectionPool.test.ts` 的 first-turn restart 场景。
 
 托管 Claude Code 的工具连接（2026-11-04）：设备托管时 Cindy 工具都是经隧道回到任务所在电脑的
 HTTP MCP，每次握手都要跨机往返。Claude Code 默认 `MCP_TIMEOUT` 只等 30s，到点即判连接失败，
