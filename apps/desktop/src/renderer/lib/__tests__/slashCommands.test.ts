@@ -110,7 +110,7 @@ describe('plugin engine Skills', () => {
 // 引擎广播的命令在 `/` 面板里一个都看不到。
 // 最小失败输入：插件引擎会话，引擎广播了一条带描述的命令（unit）。
 describe('plugin engine commands', () => {
-  const review = { kind: 'agent-builtin', name: 'review', description: 'Review the current change' };
+  const review = { kind: 'agent-builtin' as const, name: 'review', description: 'Review the current change' };
 
   it("lists the commands the engine broadcast to the session, with their descriptions", async () => {
     stubCommandLists({ success: true, skills: [] });
