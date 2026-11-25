@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire, isBuiltin } from 'node:module';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { stageWindowsRustHelpers } from '../../desktop/scripts/stage-windows-rust-helpers.cjs';
 import { parseArgs } from 'node:util';
 import { build } from 'esbuild';

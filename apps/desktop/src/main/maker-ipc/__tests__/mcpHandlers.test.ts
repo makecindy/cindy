@@ -27,7 +27,8 @@ import { configureCloudMcpCredentials, listMcpManagement } from '../../host-sett
 import { IpcHarness } from './helpers/ipcHarness.js';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { CustomMcpProvider } from '../../mcp-integrations/custom-mcp-provider.js';
-import { updateCustomMcpServer as updateFromNativeForm } from '../../../renderer/lib/customMcpServers.js';
+import { createCustomMcpServer as createFromNativeForm, updateCustomMcpServer as updateFromNativeForm,
+  deleteCustomMcpServer as deleteFromNativeForm } from '../../../renderer/lib/customMcpServers.js';
 
 vi.mock('../../instance-runtime/config.js', () => ({ getInstanceConfig: () => ({}) }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
@@ -273,23 +274,39 @@ describe('mcp:custom:* CRUD handlers', () => {
     expect((await listCustomMcpServers())[0]).toMatchObject({ name: 'Renamed', transport: 'stdio', env: {} });
   });
 
-  it('applies native bearer intent before publishing and preserves untouched HTTP/SSE credentials', async () => {
+  // DB tier: drive the native form through real Main handlers. Stubbing these handlers
+  // concealed token changes when the form stopped writing to generic safeStorage itself.
+  it('publishes credentials saved by the native MCP form and revokes them on clear or deletion', async () => {
     mountDb();
-    let token: string | null = 'fake-orphan-token';
+    const tokens = new Map([[validConfig.id, 'fake-orphan-token']]);
     const published: Array<string | undefined> = [];
     const harness = new IpcHarness();
     registerMcpHandlers(harness, makeDeps({
-      removeMcpToken: () => { token = null; return true; },
-      storeMcpToken: (_id, value) => { token = value; return true; },
+      removeMcpToken: id => { tokens.delete(id); return true; },
+      storeMcpToken: (id, value) => { tokens.set(id, value); return true; },
       refreshProviders: async () => {
-        const config = new CustomMcpProvider((await listCustomMcpServers())[0]!, () => token).appServerConfig();
-        published.push(config.transport === 'stdio' ? undefined : config.headers?.Authorization);
+        const [config] = await listCustomMcpServers();
+        if (!config) return;
+        const route = new CustomMcpProvider(config, id => tokens.get(id) ?? null).appServerConfig();
+        published.push(route.transport === 'stdio' ? undefined : route.headers?.Authorization);
       },
     }));
-    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig, { action: 'set', value: 'fake-new-token' });
-    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, { ...validConfig, transport: 'sse' });
-    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, validConfig, { action: 'clear' });
-    expect(published).toEqual(['Bearer fake-new-token', 'Bearer fake-new-token', undefined]);
+    vi.stubGlobal('window', { electronAPI: { maker: {
+      createCustomMcpServer: (...args: unknown[]) => harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, ...args),
+      updateCustomMcpServer: (...args: unknown[]) => harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, ...args),
+      deleteCustomMcpServer: (id: string) => harness.invoke(MAKER_INVOKE.MCP_CUSTOM_DELETE, id),
+    } } });
+    await createFromNativeForm(validConfig, ' fake-new-token ');
+    await updateFromNativeForm(validConfig, 'fake-edited-token', false);
+    await updateFromNativeForm({ ...validConfig, transport: 'sse' }, '', false);
+    await updateFromNativeForm(validConfig, '', true);
+    expect(tokens.has(validConfig.id)).toBe(false);
+    await updateFromNativeForm(validConfig, 'fake-final-token', false);
+    await deleteFromNativeForm(validConfig.id);
+
+    expect(published).toEqual(['Bearer fake-new-token', 'Bearer fake-edited-token', 'Bearer fake-edited-token', undefined, 'Bearer fake-final-token']);
+    expect(tokens.has(validConfig.id)).toBe(false);
+    expect(await listCustomMcpServers()).toEqual([]);
   });
 
   // Native stdio setup contract: previously no environment input or redacted output existed.
