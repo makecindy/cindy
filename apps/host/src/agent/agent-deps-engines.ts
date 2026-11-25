@@ -27,6 +27,7 @@ export const PORTS_ONLY_CODEX_READS = {
   getRemoteCodexTransport: undefined,
   isCodexAccountProvider: undefined,
   isolateCodexAccountSessions: undefined,
+  needsCodexFastCatalog: undefined,
   onCodexLocalModelsListed: undefined,
   prepareCodexExtraSpawnConfig: undefined,
   prepareCodexHostToolCatalog: undefined,

@@ -383,6 +383,8 @@ import { readRefImagesWithinBudget } from './refImageBudget.js';
 import { resolveCachedGhostRepoRoot, type GhostRepoRootCacheEntry } from './repoRoot.js';
 import { takePendingCindyInstall } from './openFileInstall.js';
 import { GhostRuntime } from './runtime/GhostRuntime.js';
+import { GhostFileOpenerSlot, type GhostFileOpenOutcome } from './fileOpenerSlot.js';
+import { isPluginFileOpenerEnabled, setPluginFileOpenerEnabled } from './fileOpenerPrefs.js';
 import {
   electronSandboxAdapter,
   ensureGhostProtocolRegistered,
@@ -552,6 +554,8 @@ import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir, relocateGhostPickedDirs, issueGhostPickedDirectory, getGhostPickedDirectory } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostBrowserExtensionSlot } from './browserExtensionSlot.js';
+import { createNativeBinding } from '../browser-extension/native-binding.js';
+import { loadWindowsTaskbarNative } from '../windowsTaskbarNative.js';
 import { broadcastTaskViewOpen, GhostTaskViewSlot } from './taskViewSlot.js';
 import { LiveScreenHost } from './liveScreenHost.js';
 import { PluginLiveScreenViews } from '../remote-desktop-viewer/pluginViews.js';
@@ -591,6 +595,7 @@ import {
   confirmedCindyModelActions,
   confirmedControlPoints,
   confirmedHarnesses,
+  confirmedFileOpenerExtensions,
   confirmedUiCapability,
   obtainGhostInstallConsent,
   type GhostInstallConsentDecision,
@@ -747,8 +752,9 @@ import { createHostToolRuntime, disposePluginHostTools, hasPluginHostTools, reco
 import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
 import { handlePluginHostToolRequest } from './hostToolSlot.js';
 import { withPluginSchedulerApproval } from './pluginSchedulerApproval.js';
-import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
+import { getSharedGhCliTokenSource, invalidateSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { openGithubSignIn, readLocalGithubToken } from '../git-context/githubSetupIpc.js';
+import { connectGithubDevice, githubDeviceLoginAvailable, startGithubDeviceLogin } from '../git-context/githubDeviceLogin.js';
 import { bindingStore } from '../im/binding.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
@@ -1015,6 +1021,39 @@ export function captureGhostMutationOwnerForMcp(): ActiveAppSession {
 
 export function acquireGhostMutationLeaseForMcp(expectedOwner: ActiveAppSession): () => void {
   return beginGhostMutation(expectedOwner);
+}
+
+/** Reuses the existing official gh-cli credential source; no plugin changes or token IPC. */
+export async function connectGhostGithubAccount(input: {
+  sessionId: string; reauthorize?: boolean; signal?: AbortSignal; assertCurrent(): void;
+}): Promise<Record<string, unknown> | null> {
+  const ghost = findAvailableGhost('cindy-github');
+  if (!ghost || !isCindyOfficialTrustInfo(ghost.trust)
+    || !ghost.manifest.network?.secrets?.some(secret => secret.source === 'gh-cli')) return null;
+  const owner = captureGhostMutationOwner();
+  return connectGithubDevice({ ...input, ghost: { id: ghost.manifest.id, name: ghost.manifest.name },
+    assertCurrent: () => {
+      input.assertCurrent();
+      const current = findAvailableGhost('cindy-github');
+      if (!ghostOwnerScope.isStable?.(owner) || !current || current.dir !== ghost.dir
+        || !isCindyOfficialTrustInfo(current.trust) || JSON.stringify(current.approval) !== JSON.stringify(ghost.approval))
+        throw new Error('AUTH_FAILED');
+    } }, {
+    available: githubDeviceLoginAvailable,
+    probe: () => getSharedGhCliTokenSource().probeAvailability(),
+    start: startGithubDeviceLogin,
+    acquireCommitLease: () => beginGhostMutation(owner),
+    invalidateTokenCache: invalidateSharedGhCliTokenSource,
+    openCard: cardInput => {
+      const bridge = getGhostSetupInteractionBridge();
+      if (!bridge) throw new Error('AUTH_FAILED');
+      return openDeviceAuthorizationCard(cardInput, { bridge,
+        openExternal: url => shell.openExternal(url),
+        copyDeviceCode: code => copyPrivateDeviceCode(clipboard, code),
+        copy: { title: authorizationText('pluginDeviceAuthorization.githubTitle'),
+          description: authorizationText('pluginDeviceAuthorization.githubDescription') } });
+    },
+  });
 }
 
 function isSameAppSession(a: ActiveAppSession, b: ActiveAppSession): boolean {
@@ -1368,6 +1407,42 @@ export function listAvailableGhostsForAuthorization(): InstalledGhost[] {
   return availableGhosts();
 }
 
+let fileOpenerSlotSingleton: GhostFileOpenerSlot | null = null;
+function getGhostFileOpenerSlot(): GhostFileOpenerSlot {
+  if (!fileOpenerSlotSingleton) {
+    fileOpenerSlotSingleton = new GhostFileOpenerSlot({
+      listGhosts: availableGhosts,
+      instanceId: installedGhostStoragePart,
+      isEnabledByUser: isPluginFileOpenerEnabled,
+      isRunning: (id) => getGhostRuntime().stateOf(id) === 'running',
+      wake: async (ghost) => {
+        const r = await getGhostRuntime().spawnForTool(ghost);
+        if (!r.ok) throw new Error(r.reason);
+      },
+      isCurrent: (ghost) => {
+        const id = installedGhostStoragePart(ghost);
+        const current = findGhostForInstanceId(id);
+        return current?.enabled === true && isPluginFileOpenerEnabled(id) &&
+          ghostInstallApprovalToken(current.approval) === ghostInstallApprovalToken(ghost.approval);
+      },
+      send: (id, payload) => sendToGhostLogic(id, payload),
+      log,
+    });
+  }
+  return fileOpenerSlotSingleton;
+}
+
+/**
+ * 「用系统默认应用打开」前先问声明了该扩展名的插件(`fileOpener`)。未处理时调用方照常
+ * 交给系统默认应用;调用方负责只传本机原件(不传其它电脑文件的缓存副本)。
+ */
+export function openFileWithPluginFileOpener(
+  filePath: string,
+  requestIsCurrent: () => boolean,
+): Promise<GhostFileOpenOutcome> {
+  return getGhostFileOpenerSlot().open(filePath, requestIsCurrent);
+}
+
 /** Discovery may yield, but never carries an old owner's results into a new account. */
 export async function listInstalledGhostsAsync(): Promise<InstalledGhost[]> {
   return listInstalledGhostsForOwner(ghostOwnerScope, getGhostManager);
@@ -1401,6 +1476,18 @@ export function findTrustedXdGhostForScript(id: string): InstalledGhost | null {
   const loaded = loadGhostFirstPartyFactsForGhost(storagePart, 'runtime');
   return isTrustedXdGhostForScriptTarget(ghost, loaded, getGhostManager().isPendingLegacyNamespace(storagePart))
     ? ghost : null;
+}
+
+/** Private settings projection; it carries no capability pins. */
+export function getHostPluginPreferenceContext() {
+  return availableGhosts().map(ghost => {
+    const agent = !!ghost.manifest.workspace || ghost.manifest.agent?.errand === true || ghost.manifest.agent?.tasks === true;
+    return { id: ghost.manifest.id, name: ghost.manifest.name, supported: {
+      cindy: !!ghost.manifest.cindy, agent,
+      model: ghost.manifest.showTaskPreferences !== false && (agent || (ghost.manifest.cindy?.text ?? []).includes('oneshot')),
+      mainView: !!ghost.manifest.mainView,
+    } };
+  });
 }
 
 function requireGhostAvailableForActiveSession(id: string): void {
@@ -4672,6 +4759,13 @@ let browserExtensionSlotSingleton: GhostBrowserExtensionSlot | null = null;
 export function getGhostBrowserExtensionSlot(): GhostBrowserExtensionSlot {
   if (!browserExtensionSlotSingleton) {
     browserExtensionSlotSingleton = new GhostBrowserExtensionSlot({
+      createNativeBinding: options => createNativeBinding({
+        ...options,
+        loadWindowsManifestReader: async () => {
+          const native = await loadWindowsTaskbarNative().catch(() => null);
+          return native?.readBrowserManifest?.bind(native);
+        },
+      }),
       getGhost: findGhostForInstanceId,
       sendToGhost: (ghostId, payload) => sendToGhostLogic(ghostId, payload),
       wake: async (ghostId) => {
@@ -8000,6 +8094,7 @@ async function installAndDockLocked(
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedCindyModelActions: confirmedCindyModelActions(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedHarnesses: confirmedHarnesses(opts.consent.decision, installedBefore, opts.consent.manifest),
+    approvedFileOpenerExtensions: confirmedFileOpenerExtensions(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     initiallyEnabled: opts.enable ?? false,
@@ -8199,6 +8294,7 @@ async function updateLocalGhostPackageLocked(
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           approvedCindyModelActions: confirmedCindyModelActions(consent, previousGhost, inspected.manifest),
           approvedHarnesses: confirmedHarnesses(consent, previousGhost, inspected.manifest),
+          approvedFileOpenerExtensions: confirmedFileOpenerExtensions(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
@@ -8806,6 +8902,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           approvedCindyModelActions: confirmedCindyModelActions(expected.consent, installed, inspected.manifest),
           approvedHarnesses: confirmedHarnesses(expected.consent, installed, inspected.manifest),
+          approvedFileOpenerExtensions: confirmedFileOpenerExtensions(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
@@ -9339,6 +9436,18 @@ export function registerGhostIpc(): void {
     });
   remotePluginManagement = new RemotePluginManagement({
     list: availableGhosts,
+    publication: {
+      prepare: async (id, expected) => {
+        const host = await import('../plugin-contributions/host.js');
+        return host.prepareContribution(id, 'manual', expected).catch(host.mapContributionError);
+      },
+      submit: async (id, assertCaller) => {
+        const host = await import('../plugin-contributions/host.js');
+        return host.submitContribution(id, assertCaller).catch(host.mapContributionError);
+      },
+      status: async id => (await import('../plugin-contributions/host.js')).contributionTransferStatus(id),
+      discard: async id => (await import('../plugin-contributions/host.js')).discardContribution(id),
+    },
     settingsPage: true,
     ui: {
       suppressed: ghost => pluginUiPromptSuppressed(installedGhostStoragePart(ghost), ghost.manifest.version),
@@ -10394,6 +10503,11 @@ export function registerGhostIpc(): void {
       getGhostSubscriptionGateway().handleVerdict(id, payload);
       return { ok: true };
     }
+    if (type === 'file-open-result') {
+      // open-file 回执:只认被问的同一实例,冒名/过期静默丢,恒回 ok。
+      getGhostFileOpenerSlot().handleResult(id, payload);
+      return { ok: true };
+    }
     // notify = 系统提示(notify 槽):资格审/净化/限速在 notifySlot,
     // invoke 返回值即结构化结果(失败带人话原因,供意识作者调试)。
     if (type === 'notify') {
@@ -10993,6 +11107,34 @@ export function registerGhostIpc(): void {
       return { config: writePluginTaskConfig(installedGhostStoragePart(ghost), config) };
     }
     finally { release(); }
+  });
+
+  // 「用插件打开文件」开关:声明 fileOpener 的插件默认接管,这里只记用户关掉的实例。
+  ipcMain.handle('ghosts:file-opener:get', (event, ghostId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
+      throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
+    }
+    const ghost = findGhostForInstanceId(ghostId);
+    if (!ghost?.approvedFileOpenerExtensions?.length) return { declared: false, enabled: false };
+    return { declared: true, enabled: isPluginFileOpenerEnabled(installedGhostStoragePart(ghost)) };
+  });
+  ipcMain.handle('ghosts:file-opener:set', (event, ghostId: unknown, enabled: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const owner = captureGhostMutationOwner();
+    if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
+      throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
+    }
+    if (typeof enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
+    const release = beginGhostMutation(owner);
+    try {
+      const ghost = findGhostForInstanceId(ghostId);
+      if (!ghost?.approvedFileOpenerExtensions?.length) throwIpcError('NOT_FOUND', '插件实例已变化，请刷新后重试');
+      setPluginFileOpenerEnabled(installedGhostStoragePart(ghost), enabled);
+      return { declared: true, enabled };
+    } finally {
+      release();
+    }
   });
 
   const installLocalFile = async (

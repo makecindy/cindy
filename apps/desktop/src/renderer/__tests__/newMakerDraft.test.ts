@@ -694,6 +694,7 @@ describe('newMakerDraft store', () => {
         workerConfig: {
           role: 'developer',
           model: 'claude-opus-4-7',
+          modelGroup: 'coding',
           effort: 'high',
           fast: true,
           workerPermissionMode: 'bypassPermissions',
@@ -712,11 +713,29 @@ describe('newMakerDraft store', () => {
     expect(wc).toMatchObject({
       role: 'developer',
       model: 'claude-opus-4-7',
+      modelGroup: 'coding',
       effort: 'high',
       fast: true,
       workerPermissionMode: 'bypassPermissions',
     });
     expect(wc?.initialTask).toBeUndefined();
+  });
+
+  it('clears the Worker model group when the collaboration draft moves to SSH', async () => {
+    const { getDraft, patchDraft } = await loadModule();
+    patchDraft({
+      collab: {
+        enabled: true,
+        worker: 'cc',
+        workerConfig: { role: 'developer', model: 'claude-opus-4-7', modelGroup: 'coding' },
+      },
+    });
+    patchDraft({ workingDir: '/ssh/project', remoteHostId: 'ssh-1' });
+    expect(getDraft().collab).toMatchObject({
+      enabled: true,
+      workerConfig: { model: 'claude-opus-4-7' },
+    });
+    expect(getDraft().collab.workerConfig?.modelGroup).toBeUndefined();
   });
 
   it('另起干净任务时只关闭协同，不覆盖 Worker 创建偏好', async () => {

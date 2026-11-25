@@ -3,7 +3,7 @@ import { DirectLinkTransport } from './DirectLinkTransport';
 import { tryMobilePeerInvoke, resetMobilePeer } from './peerFileRegistry';
 import { isHistoryViewUnavailable, type HistoryWorkPatch } from '@cindy/maker-shared/message-window';
 import { findRemoteHistoryView } from '@/session/remoteHistoryView';
-import { createBackgroundConnection } from './backgroundConnection';
+import { BACKGROUND_STOP_GRACE_MS, createBackgroundConnection } from './backgroundConnection';
 import { invokeWithHistoryViewCapability } from './historyViewCapability';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, releaseTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
@@ -73,7 +73,7 @@ import { getMobileAgentNetPreferences, useMobileAgentNetPreferences, waitForMobi
   mobileAgentNetAllowsLegacy, mobileAgentNetRequiresEncryption } from './agentNetPreferences';
 import { isMobileAgentNetActive, openMobileAgentNetSocket, mobileAgentNetShouldUseLegacyPeer,
   mobileAgentNetShouldProbeLegacyPeer, mobileAgentNetPrefersPrimary, verifyMobileAgentNetTransportProof,
-  connectMobileAgentNetSessionPeer, mobileAgentNetPeerConnectedAt, mobileAgentNetPeerRoute, mobileAgentNetPeerState,
+  connectMobileAgentNetSessionPeer, mobileAgentNetPeerConnectedAt, mobileAgentNetPeerRoute, mobileAgentNetPeerState, mobileAgentNetRelayStalled,
   mobileAgentNetSession, notifyMobileAgentNetNetworkChanged, useMobileAgentNetSessions,
   clearMobileAgentNetIdentityRefusal } from './agentNetRuntime';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net/portable';
@@ -426,7 +426,6 @@ function subscribeRemoteResourceChanged(
  * 退后台断开连接前的宽限:几秒内切回前台的快速 App 切换不触发整套
  * 断连 → 重连 → 补齐,弱网下这套循环的代价远高于让 socket 多活两秒。
  */
-const BACKGROUND_STOP_GRACE_MS = 2_500;
 /** 断开前最多等最后一轮 heavy unsubscribe 应答;超时仍停止,避免后台 socket 久留。 */
 const BACKGROUND_FINAL_UNSUBSCRIBE_WAIT_MS = 1_000;
 /**
@@ -1486,6 +1485,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       selfDeviceId: () => routed.getSelfDeviceId(),
       transferCodec: connectionOptions.transferCodec,
       path: (deviceId) => mobileAgentNetPeerRoute(deviceId).path,
+      onRelayStall: mobileAgentNetRelayStalled,
       rttMs: (deviceId) => mobileAgentNetPeerRoute(deviceId).rttMs,
       connectedAt: mobileAgentNetPeerConnectedAt,
       // The link to it broke with its previous session and a new one is here: recover it as after a Device Link transport reset.
