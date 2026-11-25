@@ -1,3 +1,4 @@
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
 export interface SkillTag {
@@ -35,24 +36,19 @@ export function SkillTagList({ tags, maxVisible = 3, className }: SkillTagListPr
   return (
     <div className={cn('flex min-w-0 items-center gap-1 overflow-hidden', className)} role="list">
       {visibleTags.map((tag) => (
-        <span
-          key={`${tag.slug}:${tag.name}`}
-          role="listitem"
-          title={tag.name}
-          className="inline-flex h-[18px] max-w-20 shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-1.5 text-10 font-normal leading-none text-[var(--text-tertiary)]"
-        >
+        <Badge key={`${tag.slug}:${tag.name}`} role="listitem" title={tag.name} size="xs" className="max-w-20">
           <span className="truncate">{tag.name}</span>
-        </span>
+        </Badge>
       ))}
       {hiddenTags.length > 0 ? (
-        <span
+        <Badge
           role="listitem"
           title={hiddenTags.map((tag) => tag.name).join(', ')}
           aria-label={hiddenTags.map((tag) => tag.name).join(', ')}
-          className="inline-flex h-[18px] shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-1.5 text-10 font-normal leading-none text-[var(--text-tertiary)]"
+          size="xs"
         >
           +{hiddenTags.length}
-        </span>
+        </Badge>
       ) : null}
     </div>
   );

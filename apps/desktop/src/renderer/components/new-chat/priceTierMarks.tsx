@@ -8,6 +8,8 @@
  * 费用统一使用中性色，档位由符号个数表达，折扣由点亮量与 ↓X% 表达。
  */
 
+import { Badge } from '@/components/ui/badge';
+
 /**
  * 不传 = 无报价，调用方**不要渲染任何价格节点**（别把每行都加宽）。
  */
@@ -85,17 +87,13 @@ export function PriceTierMarks({
                   {marks}
                 </span>
               </span>
-              <span
+              <Badge
                 data-discount-badge
                 // 中性胶囊将折扣与模型名称分开。
-                className="inline-flex shrink-0 items-center rounded-full px-2 py-px text-10 font-medium leading-[1.45]"
-                style={{
-                  color: 'var(--text-secondary)',
-                  backgroundColor: 'var(--surface-chip)',
-                }}
+                size="xs"
               >
                 {`↓${discountPct}%`}
-              </span>
+              </Badge>
             </>
           );
         })()
@@ -129,15 +127,8 @@ export const litFractionalMarks = (paidPct: number, tier: 1 | 2 | 3): number =>
  */
 export function PriceFreeBadge({ label }: { label: string }) {
   return (
-    <span
-      data-price-free
-      className="inline-flex shrink-0 items-center rounded-full px-2 py-px text-10 font-medium leading-[1.45]"
-      style={{
-        color: 'var(--text-secondary)',
-        backgroundColor: 'var(--surface-chip)',
-      }}
-    >
+    <Badge data-price-free size="xs">
       {label}
-    </span>
+    </Badge>
   );
 }

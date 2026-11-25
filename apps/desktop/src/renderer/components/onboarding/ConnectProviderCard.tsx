@@ -1,3 +1,4 @@
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 /**
  * ConnectProviderCard — 零可用模型时新会话首屏的「连接供应商」引导卡。
@@ -210,9 +211,9 @@ function ProviderRow({
             {label}
           </span>
           {badge && (
-            <span className="shrink-0 rounded-full border border-[var(--border-default)] px-2 py-px text-10 font-medium uppercase tracking-[0.06em] text-[var(--text-tertiary)]">
+            <Badge tone="outline" size="xs">
               {badge}
-            </span>
+            </Badge>
           )}
         </span>
         <span className="truncate text-11 text-[var(--text-tertiary)]">{sub}</span>

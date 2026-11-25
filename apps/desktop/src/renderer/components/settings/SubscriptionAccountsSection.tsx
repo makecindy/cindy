@@ -17,6 +17,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -156,9 +157,9 @@ function AccountListPlaceholder({ reserve, label }: { reserve: boolean; label: s
 
 function AccountTag({ children }: { children: ReactNode }) {
   return (
-    <span className="flex h-[18px] shrink-0 items-center rounded-full border border-[var(--settings-integration-avatar-border)] px-2 text-11 font-medium text-[var(--text-tertiary)]">
+    <Badge tone="outline">
       {children}
-    </span>
+    </Badge>
   );
 }
 

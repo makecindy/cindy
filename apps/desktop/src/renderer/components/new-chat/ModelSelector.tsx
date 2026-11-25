@@ -5,6 +5,7 @@ import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '
 import { SpeedIcon } from './SpeedIcon';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
@@ -622,12 +623,9 @@ function resolvedTranslationLanguage(
 
 function ModelPromotionBadge({ children }: { children: ReactNode }) {
   return (
-    <span
-      data-model-promotion-badge
-      className="inline-flex shrink-0 items-center rounded-full bg-[var(--accent-cta-bg)] px-2 py-px text-11 font-medium leading-[1.45] text-[var(--accent-pure-cta-fg)]"
-    >
+    <Badge data-model-promotion-badge tone="accent">
       {children}
-    </span>
+    </Badge>
   );
 }
 
@@ -3422,13 +3420,9 @@ function ModelSelectorContentView({
                         </span>
                       )}
                       {paymentRequired && (
-                        <span
-                          data-payment-required-badge
-                          className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]"
-                        >
-                          <Lock size={11} />
+                        <Badge data-payment-required-badge icon={<Lock size={11} />}>
                           {t('newChat.modelSelector.paymentRequired.badge')}
-                        </span>
+                        </Badge>
                       )}
                       {isHiddenSelectedModel && (
                         <span
@@ -3439,15 +3433,14 @@ function ModelSelectorContentView({
                         </span>
                       )}
                       {showSubscriptionTag && (
-                        <span
+                        <Badge
                           aria-label={t('settings.providers.models.subscription')}
                           title={t('settings.providers.models.subscription')}
-                          className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-px text-11 font-medium text-[var(--text-secondary)]"
                         >
                           {t('newChat.modelSelector.meta.subscriptionBadgeCompact', {
                             defaultValue: t('settings.providers.models.subscription'),
                           })}
-                        </span>
+                        </Badge>
                       )}
                       {showPromotionTag && rowPromotionLabel && (
                         <ModelPromotionBadge>{rowPromotionLabel}</ModelPromotionBadge>
@@ -4355,12 +4348,9 @@ function ModelSelectorContentView({
                 <div className="flex min-w-0 items-center gap-2 px-3 pb-0.5 pt-1 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                   <span className="min-w-0 truncate">{providerDisplayName(sec.provider, t)}</span>
                   {!deviceId && sec.provider.id === 'xd' && modelAccessAccountTier === 'free' && (
-                    <span
-                      data-testid="cindy-ai-model-group-free-tier-badge"
-                      className="ml-auto inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-px text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
-                    >
+                    <Badge data-testid="cindy-ai-model-group-free-tier-badge" className="ml-auto">
                       {t('settings.providers.xd.accountTier.free')}
-                    </span>
+                    </Badge>
                   )}
                 </div>
                 <div className="flex flex-col gap-0.5">

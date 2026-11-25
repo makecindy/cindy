@@ -1,3 +1,4 @@
+import { Badge } from '@/components/ui/badge';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -1771,12 +1772,9 @@ function AheadBehindPill({
   const label = t('rightSidebar.review.aheadBehindTooltip', { ahead, behind, upstream });
   return (
     <Tip text={label}>
-      <span
-        className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 font-mono text-10 text-[var(--text-secondary)]"
-        aria-label={label}
-      >
+      <Badge size="xs" mono aria-label={label}>
         ↑{ahead} ↓{behind}
-      </span>
+      </Badge>
     </Tip>
   );
 }
@@ -2048,9 +2046,9 @@ function CommitOrPushDropdown({
           }}
         >
           {push.ahead > 0 && (
-            <span className="rounded-full bg-[var(--surface-chip)] px-1 font-mono text-10 text-[var(--text-secondary)]">
+            <Badge size="xs" mono>
               ↑{push.ahead}
-            </span>
+            </Badge>
           )}
         </CommitDropdownAction>
       </DropdownMenuContent>
@@ -4742,14 +4740,14 @@ function FileRow({
           </span>
         </button>
         {changeChip && (
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+          <Badge size="xs">
             {changeChip}
-          </span>
+          </Badge>
         )}
         {diff.kind !== 'text' && (
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+          <Badge size="xs">
             {t(`rightSidebar.review.status.${diff.kind}`, { defaultValue: diff.kind })}
-          </span>
+          </Badge>
         )}
         <span className="shrink-0 font-mono text-11 tabular-nums">
           <span className="text-[var(--diff-add-fg)]">+{diff.additions}</span>{' '}

@@ -1,3 +1,4 @@
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { localizedModelName, localizedBrandName, matchesModelName } from '@/lib/modelDisplayNames';
 import { modelManagementState } from './modelManagementState';
@@ -1203,13 +1204,9 @@ export function UnifiedModelList({
           </span>
         )}
         {paymentRequired && (
-          <span
-            data-payment-required-badge
-            className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-secondary)]"
-          >
-            <Lock size={11} />
+          <Badge data-payment-required-badge icon={<Lock size={11} />}>
             {t('settings.providers.models.paymentRequired')}
-          </span>
+          </Badge>
         )}
         {/* 上下文窗口已移进高级设置抽屉的「规格」段:它是「查一次就够」
             的属性,常驻列表只会让每行更碎,而真正要决策的是「这个模型贵不贵、
@@ -1606,13 +1603,9 @@ export function UnifiedModelList({
                           </span>
                           <span className="min-w-0 flex-1" />
                           {paymentRequired && (
-                            <span
-                              data-payment-required-badge
-                              className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-secondary)]"
-                            >
-                              <Lock size={11} />
+                            <Badge data-payment-required-badge icon={<Lock size={11} />}>
                               {t('settings.providers.models.paymentRequired')}
-                            </span>
+                            </Badge>
                           )}
                           {!paymentRequired && (
                             <Button
