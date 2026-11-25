@@ -49,6 +49,7 @@ const MCP_APP_DEFAULT_HEIGHT = 320;
 const MCP_APP_SIDEBAR_LOADING_HEIGHT = 48;
 const MCP_APP_LOADING_INDICATOR_DELAY_MS = 400;
 const MCP_APP_HEIGHT_FALLBACK_DELAY_MS = 500;
+const MCP_APP_RESTORED_SHRINK_GRACE_MS = 2_000;
 // A history page can mount several cards in one React commit. Read all settled
 // column widths before React commits any of their restored heights.
 const pendingHeightRestores = new Set<() => void>();
@@ -301,9 +302,17 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     let sizeDelivered = false;
     let latestHeight: number | undefined;
     let measuredWidth = 0;
-    const adoptHeight = (height: number) => {
-      if (rememberLayout && visibleRef.current && measuredWidth > 0 && measuredWidth === element.clientWidth)
-        heights.remember(heightKey, measuredWidth, height);
+    const openingWidth = element.clientWidth;
+    let restoredHeight = rememberLayout ? heights.get(heightKey, openingWidth) : undefined;
+    let heightFallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    const adoptHeight = (height: number, remember = true) => {
+      if (initialized && restoredHeight !== undefined && measuredWidth === openingWidth && height < restoredHeight) return;
+      restoredHeight = undefined;
+      if (remember) {
+        clearTimeout(heightFallbackTimer);
+        if (rememberLayout && visibleRef.current && measuredWidth > 0 && measuredWidth === element.clientWidth)
+          heights.remember(heightKey, measuredWidth, height);
+      }
       setHeight(height);
     };
     let handshakeStarted = false;
@@ -311,10 +320,9 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     let staticTimer: ReturnType<typeof setTimeout> | undefined;
     let maxTimer: ReturnType<typeof setTimeout> | undefined;
     let loadingTimer: ReturnType<typeof setTimeout> | undefined;
-    let heightFallbackTimer: ReturnType<typeof setTimeout> | undefined;
     let phase: 'open' | 'sandbox' | 'initialize' | 'active' = 'open';
     const heightGuard = new McpAppHeightGuard(() => createLogger('mcp-apps').warn('App height feedback loop bounded'));
-    heightGuard.resize(element.clientWidth);
+    heightGuard.resize(openingWidth);
     let frame: HTMLIFrameElement | undefined;
     let localViewId: string | undefined;
     const paintFrameBackdrop = () => {
@@ -382,13 +390,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
             measuredWidth = element.clientWidth;
             const nextHeight = heightGuard.accept(value);
             latestHeight = nextHeight;
-            if (initialized && resultDelivered) {
-              clearTimeout(heightFallbackTimer);
-              heightFallbackTimer = undefined;
-              adoptHeight(nextHeight);
-            } else if (revealedFrame) {
-              if (initialized) setHeight(nextHeight);
-              else adoptHeight(nextHeight);
+            if ((initialized && resultDelivered) || revealedFrame) {
+              adoptHeight(nextHeight, !initialized || resultDelivered);
             }
           }
         }
@@ -425,17 +428,20 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       clearTimeout(revealTimer); clearTimeout(staticTimer); clearTimeout(maxTimer);
       clearTimeout(loadingTimer);
       if (frame) { frame.style.opacity = '1'; frame.style.pointerEvents = 'auto'; }
-      // Static pages may reveal without initialized; apply their latest size
-      // immediately. For SDK pages, keep the remembered height until a
-      // post-result size arrives, with a bounded fallback for pages that never
-      // emit another size notification.
+      // Result delivery can precede an SDK page's first content render. Give a
+      // restored frame one fixed window from reveal before accepting a shrink.
+      // Repeated spinner sizes update latestHeight but never restart the timer.
+      if (!initialized || fixedRef.current ||
+          (restoredHeight !== undefined && latestHeight !== undefined && latestHeight >= restoredHeight)) {
+        restoredHeight = undefined;
+      }
       if (!fixedRef.current && !initialized && latestHeight !== undefined) adoptHeight(latestHeight);
-      if (!fixedRef.current && initialized && !sizeDelivered && latestHeight !== undefined) {
+      if (!fixedRef.current && initialized && (restoredHeight !== undefined || (!sizeDelivered && latestHeight !== undefined))) {
         heightFallbackTimer = setTimeout(() => {
-          heightFallbackTimer = undefined;
-          if (disposed || fixedRef.current || sizeDelivered || latestHeight === undefined) return;
+          restoredHeight = undefined;
+          if (disposed || fixedRef.current || latestHeight === undefined || measuredWidth !== element.clientWidth) return;
           adoptHeight(latestHeight);
-        }, MCP_APP_HEIGHT_FALLBACK_DELAY_MS);
+        }, restoredHeight !== undefined ? MCP_APP_RESTORED_SHRINK_GRACE_MS : MCP_APP_HEIGHT_FALLBACK_DELAY_MS);
       }
       // A sidebar already waiting on a reported size keeps its compact footprint.
       // Give pages with no size notification the standard viewport once visible.
