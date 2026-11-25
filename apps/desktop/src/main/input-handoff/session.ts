@@ -1371,7 +1371,8 @@ export class InputHandoffSession {
       const fresh = await this.options.driver.snapshot(this.target.pid, this.target.window);
       if ('error' in fresh) return false;
       const matches = binding.kind === 'text'
-        ? [...extractStep(fresh).bindings.values()].filter(candidate => candidate.kind === 'text' &&
+        // The same hidden code fields stay part of the step here as on every other read of it.
+        ? [...extractStep(fresh, this.confirmedHidden).bindings.values()].filter(candidate => candidate.kind === 'text' &&
           candidate.identity === binding.identity && candidate.secure === (binding.nativeSecure ?? binding.secure))
         : fresh.nodes.filter((node) => node.fp === binding.fp);
       if (matches.length !== 1 || this.ended) return false;

@@ -31,25 +31,35 @@ const field = (step: InputHandoffSnapshot) => step.controls.find((control) => co
 
 describe('InputHandoffSession', () => {
   // A pay page: a phone field and, under the code prompt, the real code input shrunk to one pixel and focused.
-  // `typing` moves the focus as native typing does; `insertNote` makes the page add a line once the phone is
-  // typed, which shifts the tree positions of everything after it.
-  function payPage(options: { insertNote?: boolean } = {}) {
-    const state = { focus: '0.code', phoneTyped: false };
+  // Typing moves the focus as native typing does. Layouts after the phone is typed: `insert` adds a line above the
+  // code (tree positions shift); `trap` drops a line so a never-focused 1x1 field of the same kind takes the code
+  // field's old place; `frame` holds the code in a frame and adds a line above the frame. `staleOnce`: the first
+  // native fill of the code reports the element stale, as after a re-render.
+  type PayLayout = 'focus' | 'insert' | 'trap' | 'frame';
+  function payPage(options: { layout?: PayLayout; staleOnce?: boolean } = {}) {
+    const layout = options.layout ?? 'focus';
+    const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce };
     const acts: Array<{ kind: string; ref?: string }> = [];
     const chrome = { pid: 20, app: 'Google Chrome', bundleId: 'com.google.Chrome' };
     const n = (ref: string, role: string, extra: Record<string, unknown> = {}) =>
       ({ ref, role, depth: 1, fp: `${role}|${(extra.title as string) ?? ''}`, enabled: true, ...extra });
     const nodes = () => {
-      const note = options.insertNote && state.phoneTyped;
-      const at = (i: number) => `0.${note ? i + 1 : i}`;
-      return [
-        n('0', 'AXWebArea', { url: 'https://secure.example.test/pay', frame: [0, 60, 1200, 840] }),
-        n('0.1', 'AXTextField', { title: 'Phone', frame: [460, 300, 260, 30], focused: state.focus === 'phone' }),
-        ...(note ? [n('0.2', 'AXStaticText', { value: 'Phone number looks fine', frame: [460, 340, 200, 16] })] : []),
-        n(at(2), 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }),
-        n(at(3), 'AXTextField', { domId: 'sms-code', frame: [460, 440, 1, 1], focused: state.focus === '0.code' }),
-        n(at(4), 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }),
-      ];
+      const out = [n('0', 'AXWebArea', { url: 'https://secure.example.test/pay', frame: [0, 60, 1200, 840] })];
+      let i = 0;
+      const next = () => `0.${++i}`;
+      out.push(n(next(), 'AXTextField', { title: 'Phone', frame: [460, 300, 260, 30], focused: state.focus === 'phone' }));
+      const note = layout === 'trap' ? !state.phoneTyped : layout !== 'focus' && state.phoneTyped;
+      if (note) out.push(n(next(), 'AXStaticText', { value: 'Check the phone number', frame: [460, 340, 200, 16] }));
+      out.push(n(next(), 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }));
+      const code = { domId: 'sms-code', frame: [460, 440, 1, 1], focused: state.focus === 'code' };
+      if (layout === 'frame') {
+        const frameRef = next();
+        out.push(n(frameRef, 'AXWebArea', { url: 'https://secure.example.test/sms', frame: [440, 400, 320, 120] }));
+        out.push(n(`${frameRef}.1`, 'AXTextField', code));
+      } else out.push(n(next(), 'AXTextField', code));
+      if (layout === 'trap') out.push(n(next(), 'AXTextField', { domId: 'bot-trap', frame: [460, 460, 1, 1] }));
+      out.push(n(next(), 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }));
+      return out;
     };
     const driver: HandoffDriver = {
       permission: async () => 'granted',
@@ -61,7 +71,7 @@ describe('InputHandoffSession', () => {
         const ref = (request as { ref?: string }).ref;
         acts.push({ kind: request.kind, ref });
         if (request.kind === 'text') {
-          if (ref === '0.1') { state.focus = 'phone'; state.phoneTyped = true; } else state.focus = '0.code';
+          if (ref === '0.1') { state.focus = 'phone'; state.phoneTyped = true; } else if (state.stale) { state.stale = false; return { error: 'stale' }; } else state.focus = 'code';
         }
         return { ok: true };
       },
@@ -69,14 +79,19 @@ describe('InputHandoffSession', () => {
     return { driver, state, acts };
   }
 
-  // PR #12780 reviews (greptile r4691885603, codex r4691958410 / r4692228763): typing the phone moves the focus off
-  // the shrunken code field, and the page may add a line that shifts tree positions. The re-check before typing the
-  // code dropped it, so only the phone was typed and nothing was submitted. Entry: session.submit. Unit tier.
+  // PR #12780 reviews (greptile r4691885603; codex r4691958410 / r4692228763 / r4692664851 / r4692664827 /
+  // r4692664842): typing the phone moves the focus off the shrunken code field, and the page may shift tree positions,
+  // let another hidden field take the old place, hold the code in a frame that moves, or re-render under the fill.
+  // Each dropped or mixed up the code field, so only the phone was typed and nothing was submitted.
+  // Entry: session.submit. Unit tier.
   it.each([
-    { name: 'focus moves', insertNote: false, codeRef: '0.3' },
-    { name: 'the page inserts a line and tree positions shift', insertNote: true, codeRef: '0.4' },
-  ])('types a hidden code field found focused after an earlier field ($name)', async ({ insertNote, codeRef }) => {
-    const page = payPage({ insertNote });
+    { name: 'focus moves', layout: 'focus' as const, typed: ['0.1', '0.3'] },
+    { name: 'the page inserts a line and tree positions shift', layout: 'insert' as const, typed: ['0.1', '0.4'] },
+    { name: 'another hidden field takes its old place', layout: 'trap' as const, typed: ['0.1', '0.3'] },
+    { name: 'its frame moves down the tree', layout: 'frame' as const, typed: ['0.1', '0.4.1'] },
+    { name: 'the fill finds it stale once', layout: 'focus' as const, staleOnce: true, typed: ['0.1', '0.3', '0.3'] },
+  ])('types a hidden code field found focused after an earlier field ($name)', async ({ layout, staleOnce, typed }) => {
+    const page = payPage({ layout, staleOnce });
     const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
     await session.start();
     const step = latest();
@@ -84,7 +99,7 @@ describe('InputHandoffSession', () => {
     expect(texts).toHaveLength(2);
     const values = Object.fromEntries(texts.map((control, i) => [control.id, i === 0 ? '18600000000' : '123456']));
     await session.submit({ expectedRevision: step.revision, values, action: { kind: 'submit' } });
-    expect(page.acts.filter((act) => act.kind === 'text').map((act) => act.ref)).toEqual(['0.1', codeRef]);
+    expect(page.acts.filter((act) => act.kind === 'text').map((act) => act.ref)).toEqual(typed);
     // Then the step is confirmed (the page's button or Return), as after any complete form.
     expect(['press', 'key']).toContain(page.acts.at(-1)?.kind);
     session.cancel();

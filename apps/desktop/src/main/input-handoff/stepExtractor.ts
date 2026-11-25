@@ -118,15 +118,14 @@ function hiddenFieldInPage(node: NativeAxNode, page: NativeAxNode): boolean {
 }
 
 /**
- * A hidden field found focused earlier in this step. Its page id with its fingerprint, within the document (web
- * area) that holds it, survives text the page inserts after an earlier field is typed (tree positions shift); an
- * id is unique only in its own document, so a frame's field of the same id is another field. Its place in the tree
- * covers inputs without an id.
+ * A hidden field found focused earlier in this step. Its page id with its fingerprint, within the document that
+ * holds it (named by its address, which outlasts tree positions), survives text the page inserts after an earlier
+ * field is typed; an id is unique only in its own document, so a frame's field of the same id is another field.
+ * Its place in the tree covers only inputs without an id.
  */
-export const hiddenFieldKeys = (field: { ref: string; fp: string; domId?: string }, document: string): string[] => [
-  JSON.stringify(['ref', field.ref, field.fp]),
-  ...(field.domId ? [JSON.stringify(['dom', document, field.domId, field.fp])] : []),
-];
+export const hiddenFieldKeys = (field: { ref: string; fp: string; domId?: string }, document: string): string[] =>
+  // With an id, only the id counts: another field may take this one's old place in the tree.
+  field.domId ? [JSON.stringify(['dom', document, field.domId, field.fp])] : [JSON.stringify(['ref', field.ref, field.fp])];
 
 const isWithin = (ref: string, scope: string) => ref === scope || ref.startsWith(`${scope}.`);
 const parentRef = (ref: string) => ref.slice(0, Math.max(0, ref.lastIndexOf('.')));
@@ -225,9 +224,13 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
   // A page's accessibility tree includes laid-out fields below the viewport.
   // Scrolling must not turn one form into unrelated partial steps. Zero-size
   // nodes are excluded unless their bounds were clipped at the viewport edge.
-  // The document a node belongs to: its nearest web area (the page itself or a frame inside it).
+  // The document a node belongs to: its nearest web area (the page itself or a frame inside it), by its address;
+  // inserting text above a frame shifts the frame's tree position, not its address.
   const documents = snapshot.nodes.filter((node) => node.role === 'AXWebArea').sort((a, b) => b.ref.length - a.ref.length);
-  const documentOf = (node: NativeAxNode) => documents.find((area) => isWithin(node.ref, area.ref))?.ref ?? '';
+  const documentOf = (node: NativeAxNode) => {
+    const area = documents.find((candidate) => isWithin(node.ref, candidate.ref));
+    return area ? area.url ?? `ref:${area.ref}` : '';
+  };
   const keysOf = (node: NativeAxNode) => hiddenFieldKeys(node, documentOf(node));
   // Taken in by the hidden-field rule itself: focused now, or found focused earlier in this step.
   const takenHidden = (node: NativeAxNode) => !!topWeb && hiddenFieldInPage(node, topWeb) &&
