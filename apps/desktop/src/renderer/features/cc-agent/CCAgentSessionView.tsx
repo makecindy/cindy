@@ -881,14 +881,18 @@ export function createWritableDirRemovalQueue() {
   };
 }
 
-function LocalHistoryLoading() {
+function LocalHistoryLoading({ sessionId }: { sessionId: string }) {
   const { t } = useTranslation();
+  const subscribe = useCallback((notify: () => void) => makerChatStore.subscribe(sessionId, notify), [sessionId]);
+  const loading = useSyncExternalStore(subscribe, () => makerChatStore.isInitialHistoryLoading(sessionId));
   const [visible, setVisible] = useState(false);
   useEffect(() => {
+    setVisible(false);
+    if (!loading) return;
     const timer = setTimeout(() => setVisible(true), REMOTE_LOADING_DELAY_MS);
     return () => clearTimeout(timer);
-  }, []);
-  if (!visible) return null;
+  }, [loading]);
+  if (!visible || !loading) return null;
   return <div role="status" className="pointer-events-none absolute inset-0 z-raised flex items-center justify-center gap-2 text-13 text-[var(--text-secondary)]">
     <Spinner size={14} />{t('ccAgent.common.loading')}
   </div>;
@@ -6512,7 +6516,7 @@ function CCAgentSessionContent({
         </div>}
         {remoteLoading === 'loading' && <RemoteSessionLoading />}
         {sessionId && !remoteDeviceId && !botChatIdentity && !creationPreview && !historyLoaded && !messages.length && !pendingQueue.length && (
-          <LocalHistoryLoading key={sessionId} />
+          <LocalHistoryLoading key={sessionId} sessionId={sessionId} />
         )}
         {remoteLoading === 'inline-syncing' && <RemoteSessionLoading compact />}
 
