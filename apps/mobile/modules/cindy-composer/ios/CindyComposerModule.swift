@@ -22,7 +22,7 @@ public class CindyComposerModule: Module {
       Prop("inputHint") { (view: CindyComposerView, value: String) in view.editor.accessibilityHint = value }
       Prop("inputID") { (view: CindyComposerView, value: String) in view.editor.accessibilityIdentifier = value }
       AsyncFunction("focus") { (view: CindyComposerView) in view.editor.becomeFirstResponder() }
-      AsyncFunction("blur") { (view: CindyComposerView) in view.editor.resignFirstResponder() }
+      AsyncFunction("blur") { (view: CindyComposerView) in view.blur() }
       AsyncFunction("setDocument") { (view: CindyComposerView, value: [String: Any], offset: Int, focus: Bool) in
         guard view.apply(value) else { return }
         view.editor.selectedRange = NSRange(location: min(max(0, offset), view.editor.attributedText.length), length: 0)
@@ -129,6 +129,13 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
   var foreground = UIColor.label
   var chipColor = UIColor.secondarySystemFill
   private var applying = false
+  // A sheet presented over the composer takes the keyboard away while the
+  // editor stays first responder, and UIKit does not bring it back: a later
+  // tap on the still-focused editor only opens the edit menu, and focus() is a
+  // no-op. The editor gives up first responder quietly so the next tap or
+  // focus() starts editing again with a keyboard; JS keeps the composer open.
+  private var focusHeldForPresentation = false
+  private var releasingForPresentation = false
   private var lastHeight: CGFloat = 0
   private var lastScrollEdge: (top: Bool, bottom: Bool)?
   private var deferred: [String: Any]?
@@ -152,6 +159,48 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
     addSubview(editor)
     editor.addSubview(placeholder)
     updateStyle()
+    for name in [UIResponder.keyboardWillHideNotification, UIResponder.keyboardDidHideNotification] {
+      NotificationCenter.default.addObserver(self, selector: #selector(keyboardHidden), name: name, object: nil)
+    }
+    for name in [UITextField.textDidBeginEditingNotification, UITextView.textDidBeginEditingNotification] {
+      NotificationCenter.default.addObserver(self, selector: #selector(otherInputBegan), name: name, object: nil)
+    }
+  }
+  // Typing moved to a field inside the sheet: the composer is no longer focused.
+  @objc private func otherInputBegan(_ note: Notification) {
+    guard focusHeldForPresentation, (note.object as AnyObject?) !== editor else { return }
+    focusHeldForPresentation = false
+    onFocusChange(["focused": false])
+  }
+  // Checked again when the keyboard has finished hiding: a SwiftUI sheet is
+  // registered as presented only after the hide has started.
+  @objc private func keyboardHidden() {
+    guard editor.isFirstResponder, coveredByPresentation else { return }
+    focusHeldForPresentation = true
+    releasingForPresentation = true
+    editor.resignFirstResponder()
+    releasingForPresentation = false
+  }
+  /// Something presented in this window sits above the editor: a React Native
+  /// modal, an alert, or a SwiftUI sheet presented by a child hosting controller.
+  private var coveredByPresentation: Bool {
+    guard let root = window?.rootViewController else { return false }
+    var pending = [root]
+    var seen = Set<ObjectIdentifier>()
+    while let controller = pending.popLast() {
+      guard seen.insert(ObjectIdentifier(controller)).inserted else { continue }
+      if let presented = controller.presentedViewController {
+        if let cover = presented.viewIfLoaded, !isDescendant(of: cover) { return true }
+        pending.append(presented)
+      }
+      pending.append(contentsOf: controller.children)
+    }
+    return false
+  }
+  func blur() {
+    guard focusHeldForPresentation else { editor.resignFirstResponder(); return }
+    focusHeldForPresentation = false
+    onFocusChange(["focused": false])
   }
   override func layoutSubviews() {
     super.layoutSubviews()
@@ -297,8 +346,16 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
   func emitSelection() {
     onSelectionChange(["start": editor.selectedRange.location, "end": NSMaxRange(editor.selectedRange), "revision": revision])
   }
-  func textViewDidBeginEditing(_ textView: UITextView) { onFocusChange(["focused": true]) }
-  func textViewDidEndEditing(_ textView: UITextView) { onFocusChange(["focused": false]) }
+  func textViewDidBeginEditing(_ textView: UITextView) {
+    focusHeldForPresentation = false
+    onFocusChange(["focused": true])
+  }
+  func textViewDidEndEditing(_ textView: UITextView) {
+    // The quiet release keeps JS focused until the user or focus()/blur() decides.
+    guard !releasingForPresentation else { return }
+    focusHeldForPresentation = false
+    onFocusChange(["focused": false])
+  }
   private func measure() {
     placeholder.isHidden = editor.attributedText.length > 0
     guard bounds.width > 0 else { return }

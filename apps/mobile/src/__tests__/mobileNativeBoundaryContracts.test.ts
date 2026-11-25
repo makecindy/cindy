@@ -138,6 +138,18 @@ describe('mobile native boundary contracts', () => {
     expect(existingSessionSource).toContain('cancelVoiceForAppBackground();');
   });
 
+  it('releases composer focus that a covering sheet leaves without a keyboard', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'modules/cindy-composer/ios/CindyComposerModule.swift'),
+      'utf8',
+    );
+
+    expect(source).toContain('UIResponder.keyboardWillHideNotification');
+    expect(source).toContain('guard editor.isFirstResponder, coveredByPresentation else { return }');
+    expect(source).toContain('AsyncFunction("blur") { (view: CindyComposerView) in view.blur() }');
+    expect(source).toContain('guard !releasingForPresentation else { return }');
+  });
+
   it('wires first-party Apple, public Google, and the minimal official WeChat bridge', () => {
     const appJson = JSON.parse(
       readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'),
