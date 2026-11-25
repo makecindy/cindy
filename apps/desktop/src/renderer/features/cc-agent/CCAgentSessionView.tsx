@@ -905,7 +905,9 @@ export function CCAgentSessionView(props: CCAgentSessionViewProps) {
       ownsWindowRoute={!props.navigationMode || props.navigationMode === 'route-owner'}>
       <CindyMakeSessionGate
         sessionId={props.sessionIdProp ?? sessionId}
-        allowOptimisticSession={Boolean(props.awaitingSessionCreation || props.creationFailed)}
+        allowOptimisticSession={Boolean(
+          props.awaitingSessionCreation || props.creationFailed || props.sessionSnapshotProp,
+        )}
       >
         <CCAgentSessionContent {...props} />
       </CindyMakeSessionGate>
