@@ -54,8 +54,13 @@ describe('代输入 screenshot read', () => {
     const missing = await readHandoffPicture(path.join(task, 'elsewhere', 'shot.webp'), task, authorize as never);
     expect(missing).toMatchObject({ ok: false, errorCode: 'IMAGE_NOT_FOUND' });
     expect(!missing.ok && missing.message).toContain('on the computer running Cindy');
+  });
 
-    // PR #12772 review (greptile, r4691724318): a folder Cindy may not read is not a missing file.
+  // PR #12772 review (greptile, r4691724318): a folder Cindy may not read is not a missing file.
+  // POSIX only: Windows does not deny reads through chmod, so the denied folder cannot be built there.
+  it.skipIf(process.platform === 'win32')('does not call an unreadable folder a file missing from this computer', async () => {
+    const task = tempDir();
+    const authorize = vi.fn(async () => ({ allowed: true as const }));
     const locked = path.join(task, 'locked');
     mkdirSync(locked);
     writeFileSync(path.join(locked, 'shot.png'), 'png');
