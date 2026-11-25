@@ -1381,6 +1381,7 @@
     "openPermissionInNewWindow": "Abrir en otra ventana"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Otra instancia de Cindy en esta computadora está usando la conexión remota. Ciérrala y esta instancia tomará el control automáticamente.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no permite cambiar de Harness. Elige un modelo en su Harness actual o crea otra tarea SSH con el Harness que necesitas.",
@@ -2256,6 +2257,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Diseño del chat",
+        "standard": "Estándar",
+        "wide": "Ancho",
+        "width": "Ancho del contenido",
+        "hint": "Se calcula sobre el espacio entre los márgenes del chat. Los paneles estrechos se ajustan automáticamente."
+      },
       "title": "Apariencia",
       "modeLabel": "Modo de apariencia",
       "appIcon": {
@@ -2501,6 +2509,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Tarjeta de la bandeja del sistema",
+        "hint": "Sitúa el puntero sobre el icono de Cindy en la bandeja para ver la cuota restante y las tareas sin leer."
+      },
       "menubar": {
         "label": "Mostrar el uso restante en la barra de menú",
         "hint": "Agrega un icono de Cindy a la barra de menús de macOS. Haz clic en él para ver lo que te queda de tus suscripciones, tu saldo de Cindy y el uso de hoy."
@@ -2846,7 +2858,8 @@
         "errorBusy": "Ya hay una carga en progreso, espera",
         "errorFailed": "Error al cargar el registro. Comprueba tu red y vuelve a intentarlo.",
         "unavailableNotConfigured": "La carga de registros no está configurada en esta compilación.",
-        "unavailableNoConsent": "Primero debes aceptar la Política de privacidad."
+        "unavailableNoConsent": "Primero debes aceptar la Política de privacidad.",
+        "consentPrompt": "Antes de subir los registros, lee la <policy>Política de privacidad</policy> y selecciona <accept>Aceptar</accept>."
       },
       "openLogsDirError": "No se pudo abrir el directorio de registros",
       "autoUpdateLabel": "Instalar actualizaciones mientras está inactivo",
@@ -2893,6 +2906,14 @@
         "projectsRootReset": "Restaurar ubicación sugerida",
         "projectsRootDescription": "Aquí se crean las carpetas de proyecto cuando creas un proyecto desde una sesión. Si no se define, se sugiere una ubicación según tus proyectos existentes.",
         "projectsRootFailed": "No se pudo actualizar la ubicación de nuevos proyectos",
+        "taskExportDirectoryTitle": "Ubicación de exportación de sesiones",
+        "taskExportDirectoryUnset": "Preguntar cada vez",
+        "taskExportDirectoryMissing": "No se encontró la carpeta",
+        "taskExportDirectoryUnreadable": "No se puede leer el ajuste",
+        "taskExportDirectoryChoose": "Elegir directorio",
+        "taskExportDirectoryReset": "Volver a preguntar cada vez",
+        "taskExportDirectoryDescription": "Si se define, las sesiones que exporta el Agent se guardan aquí sin preguntar la ubicación y nunca se reemplazan archivos existentes. Si no se define, eliges la ubicación en cada exportación.",
+        "taskExportDirectoryFailed": "No se pudo actualizar la ubicación de exportación de sesiones",
         "dialogueDirectoryOpen": "Abrir directorio",
         "dialogueDirectoryChoose": "Cambiar directorio",
         "dialogueDirectoryReset": "Restaurar ubicación predeterminada",
@@ -3448,6 +3469,7 @@
       "description": "Trae sesiones de otras herramientas de programación con IA a Cindy y sigue trabajando. Cindy solo lee los originales y nunca los modifica.",
       "rescan": "Buscar de nuevo",
       "allSources": "Todos los orígenes",
+      "sourceFilterAria": "Origen",
       "search": "Buscar sesiones o carpetas",
       "projectFilter": "Solo {{name}}",
       "clearProjectFilter": "Mostrar todos los proyectos",
@@ -5240,6 +5262,7 @@
       "formHint": "El ID de usuario es numérico; escribe a @userinfobot por mensaje directo para consultar tu ID.",
       "connect": "Conectar",
       "connectingAction": "Conectando…",
+      "connectTimedOut": "Se agotó el tiempo de conexión. Vuelve a intentarlo.",
       "errorCode": {
         "invalid-token": "El token del bot no es válido o se restableció: vuelve a introducirlo",
         "provider-api": "Telegram devolvió un error; inténtalo de nuevo en breve",
@@ -6912,6 +6935,7 @@
           "guide": {
             "usageLabel": "Cómo usarlo",
             "usageBody": "Publica en X mencionando a @askmycindy y la tarea se enviará a este dispositivo para ejecutarse aquí; el resultado llegará como respuesta.",
+            "usageBodyOnDevice": "Publica en X mencionando a @askmycindy y la tarea se enviará a {{device}} para ejecutarse allí; el resultado llegará como respuesta.",
             "riskLabel": "Las respuestas son públicas",
             "riskPublicBody": "Las respuestas son públicas y cualquier persona puede verlas. Usa esta función para preguntas y problemas públicos, no para asuntos privados que puedan comprometer tu privacidad.",
             "riskWorkdirBody": "Cada tarea de X se ejecuta en el proyecto predeterminado definido en la configuración de conexión de X. El Agent puede leer y escribir archivos allí, y su conclusión se publica abiertamente; si ese proyecto apunta a un repositorio privado, el contenido de los archivos también podría hacerse público.",
@@ -8280,6 +8304,7 @@
           "official": "Oficial",
           "community": "Comunidad"
         },
+        "communityDisclaimer": "Este complemento lo desarrollan y mantienen miembros de la comunidad. Cindy ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso.",
         "publisherDescription": {
           "official": "Publicado y mantenido por Cindy",
           "community": "Publicado y mantenido por desarrolladores de la comunidad",
@@ -8395,7 +8420,7 @@
             "authTitle": "Repositorios privados",
             "authBody": "La autenticación depende por completo de la configuración de Git de tu sistema: Cindy nunca almacena credenciales de Git. SSH: debes tener una clave funcional configurada en este equipo; si la organización exige SAML SSO, autoriza la clave para esa organización mediante Configure SSO en la configuración de claves SSH de GitHub. HTTPS: usa un Personal Access Token almacenado por el asistente de credenciales del sistema.",
             "rulesTitle": "Reglas de instalación",
-            "rulesBody": "Los identificadores de los complementos son únicos a nivel global y se asignan por orden de llegada; los conflictos con complementos instalados se señalan explícitamente. Los complementos cuyos identificadores usan los prefijos oficiales reservados ({{reservedGhostIdPrefixes}}) no se pueden instalar arrastrando un paquete, eligiendo un archivo ni usando un mercado de complementos personalizado. Los permisos declarados se muestran en la página de detalles; al hacer clic en Instalar, se completa la instalación y se habilita el complemento sin otro diálogo de confirmación de permisos.",
+            "rulesBody": "Los identificadores de los complementos son únicos a nivel global y se asignan por orden de llegada; los conflictos con complementos instalados se señalan explícitamente. Los complementos cuyos identificadores usan los prefijos oficiales reservados ({{reservedGhostIdPrefixes}}) no se pueden instalar arrastrando un paquete, eligiendo un archivo ni usando un mercado de complementos personalizado. Los permisos declarados se muestran en la página de detalles. Al instalar un complemento manualmente por primera vez, Cindy te pide que confirmes los permisos solicitados. El complemento se habilita automáticamente después de la instalación.",
             "copy": "Copiar guía",
             "copied": "Guía copiada al portapapeles.",
             "copyFailed": "No se pudo copiar. Inténtalo de nuevo."
@@ -8512,6 +8537,8 @@
         "installMeta": "Versión {{version}} · {{source}}",
         "updateMeta": "Versión {{from}} → {{to}} · {{source}}",
         "installDescription": "No se instala nada hasta que confirmes. El complemento se activa justo después de instalarse y puedes desactivarlo o desinstalarlo cuando quieras en la página Complementos.",
+        "customMarketSourceNotice": "Asegúrate de que confías en este mercado y revisa los permisos que solicita el complemento.",
+        "localFileSourceNotice": "Antes de continuar, comprueba que el archivo procede de una fuente de confianza.",
         "updateDescription": "La actualización comienza solo cuando confirmes. La versión actual seguirá disponible hasta entonces.",
         "grantsTitle": "Después de la instalación tendrá:",
         "noPermissions": "Este complemento no declara permisos adicionales.",
@@ -8754,6 +8781,8 @@
         "liveScreenDetail": "A través del escritorio remoto, tu teléfono o tus otros ordenadores pueden mostrar las pantallas de dispositivos que ofrece (como simuladores) y enviarles toques, botones y texto. Solo se conecta cuando lo abres desde uno de esos dispositivos y no muestra nada más de este ordenador.",
         "preview": "Puede abrir páginas de vista previa de los siguientes sitios en el navegador de la barra lateral",
         "previewDetail": "Solo se pueden abrir los sitios que se enumeran a continuación; cada página que abre se atribuye a este complemento.",
+        "fileOpener": "Puede abrir los tipos de archivo siguientes cuando los abres desde Cindy",
+        "fileOpenerDetail": "El complemento recibe la ruta completa del archivo y lo abre en lugar de tu aplicación predeterminada; si no puede, lo abre la aplicación predeterminada. Puedes desactivarlo en los detalles del complemento.",
         "browserExtension": "Permite que su extensión de navegador incluida se conecte a Cindy",
         "browserNativeHost": "Puede registrar la conexión de navegador “{{name}}”",
         "browserNativeHostDetail": "El programa registrado se ejecuta fuera del entorno aislado y accede al equipo con tu cuenta y los permisos del sistema.",
@@ -8829,6 +8858,7 @@
             "message_body": "cuerpo del mensaje",
             "tool_body": "resultado de la herramienta",
             "sidebar_navigation": "navegación lateral",
+            "workdir_menu": "menú del directorio de trabajo",
             "session_menu": "menú de la tarea",
             "settings_section": "página de ajustes",
             "composer_completion": "autocompletado de entrada",
@@ -8995,6 +9025,8 @@
         "configurationTitle": "Configuración",
         "sidebarEntryTitle": "Entrada de navegación",
         "showInSidebar": "Mostrar en la navegación izquierda",
+        "fileOpenerTitle": "Abrir archivos con este complemento",
+        "fileOpenerDescription": "Cuando abres archivos {{extensions}} desde Cindy, {{name}} los abre en lugar de tu aplicación predeterminada. Los archivos de otros equipos se siguen abriendo con la aplicación predeterminada.",
         "sidebarEntryDescription": "Al activar esta opción, “{{title}}” aparece en la navegación izquierda junto a Automatizaciones y Complementos, ya sea en la parte superior o en Más. Elige dónde en Más → Personalizar. Ocultarlo no desactiva el complemento.",
         "openTool": "Ver detalles de la herramienta {{name}}",
         "noToolDescription": "No hay una descripción disponible para esta herramienta.",
@@ -9268,10 +9300,12 @@
         "taskWorkdirBoundary": "El directorio de trabajo permanece en la computadora de destino. Cámbialo allí.",
         "configurationLoading": "Cargando configuración…",
         "configurationReadFailed": "No se pudo cargar la configuración.",
+        "settingsWriteUnconfirmed": "No se pudo confirmar el guardado. Actualiza la configuración para comprobarlo antes de reintentar.",
         "refreshConfiguration": "Actualizar configuración",
         "enableBeforeConfigure": "Este complemento está desactivado. Actívalo con el interruptor de arriba antes de configurarlo.",
         "settingsPageUnavailable": "Abre Cindy en {{device}} para usar la página de configuración de este complemento. Esta versión de la computadora de destino no permite mostrarla de forma remota.",
         "offlineNotice": "{{device}} está sin conexión. La administración no estará disponible hasta que se restablezca la conexión.",
+        "publishOnTarget": "Publica los complementos en Cindy en {{device}} o actualiza Cindy en ese equipo para publicarlos de forma remota.",
         "managingTarget": "Administrando {{device}}",
         "managingDescription": "Los cambios se guardan en esta computadora.",
         "viewingTarget": "Instalado en {{device}}",
@@ -12388,8 +12422,8 @@
       "footnote": "Esto se incorpora al contexto de identidad del amigo. Los ajustes rápidos de personalidad se guardan por separado y se conservan cuando cambia este texto."
     },
     "welcome": {
-      "generic": "Hola, soy {{name}}. Dime lo que necesites de ahora en adelante; mientras tanto, me iré ubicando.",
-      "withRole": "Hola, soy {{name}}: {{description}}. Solo dime qué necesitas."
+      "generic": "Hola, soy {{name}}. Dime lo que necesites.",
+      "withUser": "Hola, {{userName}}, soy {{name}}. Dime lo que necesites."
     },
     "invitation": {
       "title": "Preparándose para encontrarse",
@@ -12620,6 +12654,8 @@
       "transferBusy": "{{name}} todavía está trabajando en una respuesta. Muévelo después de que termine la respuesta.",
       "targetUnavailable": "“{{device}}” no está disponible. Debe estar en línea y tener el control remoto activado",
       "targetOutdated": "“{{device}}” ejecuta una versión antigua de Cindy que aún no puede ejecutar a {{name}}. Actualiza Cindy allí primero",
+      "skillTargetOutdated": "Una Habilidad de {{name}} tiene un contenido de más de 64 KB que la versión antigua de Cindy en “{{device}}” no puede recibir. Actualiza Cindy en ese ordenador antes de mover a tu amigo. Tu amigo sigue en el ordenador original",
+      "skillTargetOutdated_skill": "La versión antigua de Cindy en «{{device}}» no puede recibir la habilidad «{{slug}}». Su contenido ocupa {{bodyBytes, number}} bytes y supera el límite de 64 KB. {{name}} sigue en el ordenador original. Actualiza Cindy en el ordenador de destino y vuelve a intentarlo.",
       "targetOutdatedItem": "Mover a “{{device}}” · Cindy antigua",
       "targetOutdatedMeta": "Cindy antigua",
       "olderTargetNote": "“{{device}}” ejecuta una versión antigua de Cindy, así que {{name}} funcionará allí como antes: el historial del chat se sigue sincronizando, pero las reglas y automatizaciones del proyecto no se aplican allí.",
@@ -12642,6 +12678,12 @@
       "arrivingLater": "{{name}} se movió a esta computadora y aún se está preparando. Pronto aparecerá entre tus amigos",
       "arrivalPermissions": "{{name}} ahora usa los permisos predeterminados de esta computadora.",
       "arrivalModel": "El modelo guardado de {{name}} no está disponible en esta computadora, así que usa el modelo predeterminado de esta computadora.",
+      "arrivalModelSetup": "{{name}} ya está en esta computadora, pero aún no tiene un modelo disponible. Conecta un proveedor de modelos o elige un modelo en los ajustes de este amigo, en Modelo.",
+      "arrivalPartialContent": "{{name}} ahora se ejecuta en esta computadora, pero algunos elementos sincronizados no se pudieron restaurar. Sus copias en la nube siguen intactas.",
+      "missingProfileTitle": "¿Continuar con {{name}} usando el perfil predeterminado?",
+      "missingProfileDescription": "La computadora principal original aún no subió la personalidad ni la descripción de {{name}}. Si esa computadora se reinstaló o no se puede recuperar, puedes continuar aquí con un perfil predeterminado y conservar las conversaciones y el contenido ya sincronizados.",
+      "missingProfileConfirm": "Continuar con perfil predeterminado",
+      "missingProfileFailed": "{{name}} aún no ha subido su perfil a la nube",
       "busyTitle": "{{name}} sigue respondiendo",
       "busyDescription": "Muévelo a “{{device}}” cuando termine esta respuesta, o detén la respuesta y muévelo ahora.",
       "busyWait": "Mover cuando haya terminado",
@@ -12863,6 +12905,7 @@
           "conflict": "Este bot ya está conectado en esta computadora, en Configuración → Bots de mensajería instantánea o en otro amigo.",
           "botUnavailable": "{{name}} no está disponible en este momento. Inténtalo cuando vuelva.",
           "connectFailed": "No se pudo conectar: {{reason}}",
+          "connectTimedOut": "Se agotó el tiempo de conexión. Vuelve a intentarlo.",
           "failed": "No se pudo terminar. Inténtalo más tarde.",
           "personalBotGone": "Este bot ya no está configurado en Configuración → Bots de mensajería instantánea. Ingresa sus credenciales."
         },
@@ -12913,6 +12956,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "Voces del sistema",
+        "myVoices": "Mis voces",
+        "refreshMyVoices": "Actualizar mis voces",
+        "callMode": "Modo de llamada",
+        "messageReadAloud": "Lectura de mensajes en voz alta",
+        "callVoice": "Voz para llamadas en tiempo real",
+        "readAloudVoice": "Voz de lectura",
+        "readAloudHint": "Pulsa el altavoz bajo una respuesta de texto para escucharla con esta voz.",
+        "resetReadAloud": "Restablecer los ajustes de lectura",
+        "title": "Audio en tiempo real",
+        "add": "Añadir modelos de audio en tiempo real",
+        "off": "Usar síntesis de voz"
+      },
       "openConversation": "Abrir conversación",
       "inCallWith": "En llamada con {{name}}",
       "showDetails": "Mostrar transcripción de la llamada",
@@ -12934,7 +12991,7 @@
       "settingsTitle": "Voz",
       "openSettings": "Configuración de voz",
       "startConversation": "Iniciar conversación de voz",
-      "settingsHint": "Elige el modelo de síntesis de voz y la voz de este amigo y luego inicia una conversación de voz desde el editor de mensajes.",
+      "settingsHint": "Cuando las llamadas usan síntesis de voz, comparten el modelo y la voz de abajo con la lectura de mensajes.",
       "previewNeedsChat": "Inicia una conversación con este amigo para escuchar una muestra de voz.",
       "voiceId": "ID de voz",
       "manualVoice": "Ingresa un ID de voz",
@@ -14739,6 +14796,7 @@
       "missingDir": "Carpeta no encontrada"
     },
     "pendingQueue": {
+      "waitingForDevice": "Sin enviar · Se enviará cuando el otro equipo se reconecte",
       "stopping": "Parando",
       "queued": "En cola",
       "editingInComposer": "Editando en el cuadro de entrada a continuación…",
@@ -15226,6 +15284,7 @@
       "unavailable": "La inserción automática no está disponible en la aplicación actual. Copia la transcripción e introdúcela manualmente.",
       "unconfirmed": "No se pudo confirmar si la inserción automática se completó. Copia la transcripción si lo necesitas.",
       "permission": "Se requiere permiso de accesibilidad para insertar la entrada de voz en la aplicación actual. Concede el permiso y vuelve a intentarlo.",
+      "appNotAllowed": "{{app}} no tiene permiso para controlar esta app, así que no se insertó el texto. Añade esta app para {{app}} en «System & App Protection Override», o copia el texto y pégalo tú.",
       "failed": "Falló la inserción automática. Copia la transcripción e introdúcela manualmente."
     },
     "permissionPrompts": {
@@ -15416,6 +15475,7 @@
       "label_many": "{{count}} nuevos mensajes"
     },
     "messageNavRail": {
+      "you": "Tú",
       "aria": "Navegación de prompts",
       "jumpAria": "Ir al prompt {{index}}: {{preview}}",
       "attachmentOnly_one": "{{count}} archivo adjunto",
@@ -15573,6 +15633,7 @@
       "gatewayProxyTokenInvalid": "Las credenciales de Cindy AI ya no son válidas. Haz clic en Reintentar. Si vuelve a ocurrir, cierra sesión y vuelve a iniciarla",
       "gatewayProxyTokenInvalidNoRetry": "Las credenciales de Cindy AI ya no son válidas. Si vuelve a ocurrir, cierra sesión y vuelve a iniciarla",
       "modelAccessDenied": "La cuenta del proveedor no puede acceder a este modelo. Selecciona otro modelo o verifica el acceso con el proveedor",
+      "providerSafetyRefusal": "La política de seguridad del proveedor del modelo bloqueó esta respuesta. Ajusta tu solicitud antes de volver a enviarla",
       "silentStopContinue": "Continuar",
       "silentStopContinueTitle": "Continuar la tarea actual",
       "piTransportClosed": "Se interrumpió la conexión con Pi remoto (se cerró el canal SSH). La tarea remota sigue en ejecución: vuelve a conectarte para continuar.",
@@ -15628,13 +15689,14 @@
       "modelCatalogUnconfirmed": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
       "actionScheduled": "La autorización para esta acción caducó. La próxima ejecución sigue programada.",
       "actionExpired": "La autorización de la sesión para esta acción ha caducado. Consulta la última ejecución de la automatización.",
+      "modelRebuildRetry": "No se envió la instrucción. Abre la automatización en tu ordenador y selecciona «Ejecutar ahora» para volver a intentarlo.",
       "actionRecovered": "La autorización para esta acción caducó. La misma automatización se ejecutó correctamente más tarde.",
       "text": "Error en la ejecución automática.",
-      "prCheck_dns": "{{device}} no pudo resolver {{host}}. Si el problema persiste, comprueba la red o el DNS de ese dispositivo. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
-      "prCheck_timeout": "La conexión a GitHub agotó el tiempo de espera en {{device}}. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
-      "prCheck_auth": "Vuelve a iniciar sesión en GitHub en {{device}}. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
-      "prCheck_rate-limit": "GitHub limitó las solicitudes de {{device}}. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
-      "prCheck_unknown": "Falló la comprobación de la PR en {{device}}. Consulta los detalles de la ejecución. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
+      "prCheck_dns": "{{device}} no pudo resolver {{host}}. Si el problema persiste, comprueba la red o el DNS de ese dispositivo. Fallos consecutivos: {{failures}}. Las comprobaciones programadas podrán reintentarse a partir de {{retry}}.",
+      "prCheck_timeout": "La conexión a GitHub agotó el tiempo de espera en {{device}}. Fallos consecutivos: {{failures}}. Las comprobaciones programadas podrán reintentarse a partir de {{retry}}.",
+      "prCheck_auth": "Vuelve a iniciar sesión en GitHub en {{device}}. Fallos consecutivos: {{failures}}. Las comprobaciones programadas podrán reintentarse a partir de {{retry}}.",
+      "prCheck_rate-limit": "GitHub limitó las solicitudes de {{device}}. Fallos consecutivos: {{failures}}. Las comprobaciones programadas podrán reintentarse a partir de {{retry}}.",
+      "prCheck_unknown": "Falló la comprobación de la PR en {{device}}. Consulta los detalles de la ejecución. Fallos consecutivos: {{failures}}. Las comprobaciones programadas podrán reintentarse a partir de {{retry}}.",
       "precheck": "Los controles automáticos están bloqueados temporalmente.",
       "preRunBlocked": "La comprobación previa falló. Esta ejecución no se inició.",
       "rateLimited": "Los controles automáticos están bloqueados temporalmente por un límite de frecuencia de solicitudes.",
@@ -16616,7 +16678,13 @@
       "open": "Abrir la tarea «{{title}}»",
       "untitled": "Tarea sin título",
       "startedOne": "Iniciada",
-      "handedToOne": "Encargada a"
+      "handedToOne": "Encargada a",
+      "status": {
+        "running": "En ejecución",
+        "needsAction": "Esperando tu acción",
+        "error": "Error",
+        "idle": "Inactiva"
+      }
     },
     "botTaskLetter": {
       "replied": "respondió",
@@ -17863,15 +17931,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "Las comprobaciones programadas continúan sin notificaciones de GitHub App.",
-      "label": "PR",
-      "url": "URL de la pull request",
+      "label": "PR / MR",
+      "url": "URL de PR o MR",
       "condition": "Ejecutar cuando",
-      "any": "Actividad de la PR",
+      "any": "Actividad",
       "merged": "Fusión",
       "review": "Actividad de revisión",
       "ci": "Cambios de CI",
       "timed": "Comprobar también periódicamente",
-      "invalid": "Introduce la URL de una pull request de GitHub."
+      "invalid": "Introduce la URL de una PR de GitHub o una MR de GitLab."
     },
     "presentation": {
       "status": {
@@ -18063,6 +18131,7 @@
       "openWorkdirFailed": "No se pudo abrir la carpeta"
     },
     "runs": {
+      "boundPluginEngineRecovery": "La automatización no se ejecutó. Una automatización vinculada a una tarea con motor de complemento usa el modelo de la propia tarea y se ejecuta en este equipo. Si la automatización elige un modelo, quítalo y vuelve a ejecutarla.",
       "queueWaitTimeoutRecovery": "La espera en cola venció antes de enviar el mensaje. Cuando la sesión de destino esté libre, elige {{action}} para ejecutarlo.",
       "status": {
         "running": "En ejecución",
@@ -18414,6 +18483,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalo relativo",
+        "label": "Modo de programación",
         "cronHint": "Se ejecuta en horarios fijos del calendario.",
         "intervalHint": "Espera este tiempo después de que finalice la ejecución anterior.",
         "intervalUnsupportedHint": "Se conserva este intervalo exacto. Si eliges una opción predefinida de minutos u horas, lo reemplazarás.",
@@ -19018,7 +19088,7 @@
       "expired": "La entrada manual finalizó tras esperar demasiado."
     },
     "failure": {
-      "permission": "Cindy no puede leer la interfaz de este Mac. Comprueba el permiso de control de la copia de Cindy que está en ejecución. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
+      "permission": "Cindy no puede leer la interfaz de este Mac. Comprueba el permiso de control de la copia de Cindy que está en ejecución. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad. Si Cindy solo puede controlar algunas apps, añade también esta.",
       "target_gone": "La ventana de destino se cerró.",
       "unreadable": "No se puede leer esta pantalla. Completa el paso en la computadora anfitriona y devuelve el control al Agent.",
       "action_failed": "Esa acción no surtió efecto. Comprueba la pantalla y vuelve a intentarlo.",
@@ -22843,6 +22913,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Cambiar de fuente automáticamente si falla",
+        "hint": "Cuando falla la fuente que usa este modo, pasar a la siguiente disponible y anotarlo bajo ese turno. Si está desactivado, solo se propone el cambio en el error."
+      },
       "newRoute": "Nuevo modo",
       "newRouteName": "Nuevo modo",
       "routesEmpty": "Aún no hay modos. Crea uno y añade varias fuentes.",
@@ -23075,6 +23149,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "En «System & App Protection Override», pulsa ⓘ junto a {{app}}. Si no aparece, añade la app en ejecución con +.",
-    "review": "$t(macControlPermission.selectApp)\nSi se ofrece, puedes limitar el control a las apps que elijas. El control total permite acceder a todas las apps y datos. Si estás de acuerdo, lee y confirma cada punto y permite el acceso al final de la ventana."
+    "review": "$t(macControlPermission.selectApp)\nSi se ofrece, puedes limitar el control a las apps que elijas. El control total permite acceder a todas las apps y datos. Si estás de acuerdo, lee y confirma cada punto y permite el acceso al final de la ventana.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nEl teclado y el ratón remotos actúan en todo el Mac, por lo que necesitan controlar el Mac completo: al añadirla con +, elige «Override System Protections»; si la app ya aparece, activa «Control Your Entire Mac and All Apps» en ⓘ. Si solo se permiten algunas apps, macOS bloquea toda entrada remota de teclado y ratón. Revisa el acceso que indica macOS antes de permitirlo.",
+    "chosenAppsOnly": "{{app}} solo puede controlar las apps que elegiste, así que macOS bloquea toda entrada remota de teclado y ratón. Para el control remoto, pulsa ⓘ junto a {{app}} en «System & App Protection Override» y activa «Control Your Entire Mac and All Apps»."
   }
 }

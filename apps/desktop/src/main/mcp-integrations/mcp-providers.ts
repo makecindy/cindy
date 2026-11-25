@@ -121,6 +121,7 @@ import { readLspModeSettings } from '../maker-host/lsp-mode-store.js';
 import {
   tryGetBotDirectMessageService,
   tryGetOrcaCollabService,
+  readLocalTaskQueuePaused,
   isSessionInTurn,
   getTaskActionInputState,
   isActiveInputAccountScoped,
@@ -157,7 +158,7 @@ import { commitTaskRewind } from '../maker-ipc/rewind.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools, type SharedTaskCallerAccess } from './sharedTaskTools.js';
 import { createSharedTaskProgressReader } from './sharedTaskProgress.js';
-import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, captureTaskActionSyncGuard, taskActionRevocationCode } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
   getSessionRowSnapshotStrict,
@@ -169,7 +170,7 @@ import {
 import { getInputHandoffService } from '../input-handoff/service.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
 import { readHandoffPicture } from '../input-handoff/pictureRef.js';
-import { isIpcError } from '../../shared/ipc-errors.js';
+import { createIpcError, isIpcError } from '../../shared/ipc-errors.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import { BUILTIN_LIZI_MCP_IDS } from '../maker-host/plugins/builtin-plugins.js';
 import {
@@ -178,8 +179,9 @@ import {
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
-import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
+import { createRemoteSessionsPatcher, createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
 import { DeviceLinkError } from '@cindy/device-link';
+import { asWechatIlinkError } from '@cindy/wechat-ilink';
 import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
 import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
@@ -327,6 +329,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       const svc = tryGetOrcaCollabService();
       return svc ? svc.listSessionQueuedCounts(sessionIds) : { ok: false as const };
     },
+    readLocalQueuePaused: readLocalTaskQueuePaused,
     // git-context 牵连 Electron 窗口广播,按需加载,不让工具装配一引用就把它带进来。
     readSessionPrStatuses: async (sessionId) =>
       (await import('../git-context/ipc.js')).readSessionPrStatuses(sessionId),
@@ -572,12 +575,19 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const { messageId } = await wechatIm.sendText(peerId, text);
           return { ok: true, messageId };
         } catch (error) {
+          const safe = asWechatIlinkError(error);
+          const reason = safe.code === 'SEND_REJECTED'
+            ? safe.ret === undefined ? 'SEND_REJECTED' : `SEND_REJECTED:${safe.ret}`
+            : 'SEND_FAIL';
+          const detail = safe.code === 'SEND_REJECTED'
+            ? reason
+            : (error instanceof Error ? error.message : String(error));
           createLogger('mcp/cindy_wechat').warn(
             'sendMessage failed target=...%s detail=%s',
             peerId.slice(-8),
-            error instanceof Error ? error.message : String(error),
+            detail,
           );
-          return { ok: false, reason: 'SEND_FAIL' };
+          return { ok: false, reason };
         }
       },
       sendFile: async (peerId, absPath, displayName) => {
@@ -1185,6 +1195,41 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message };
         }
       },
+      setSessionsPinned: async ({ deviceId, sessionIds, pinned }) => {
+        const changed: { sessionId: string }[] = [];
+        const fail = (index: number, errorCode: string, message: string) => ({
+          ok: false as const, errorCode, message, changed, failedSessionId: sessionIds[index],
+          remainingSessionIds: sessionIds.slice(index + 1),
+        });
+        if (deviceId) {
+          if (!deps.historyRemote) return fail(0, 'REMOTE_UNSUPPORTED', '当前宿主不支持远程置顶。');
+          const patch = createRemoteSessionsPatcher({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote });
+          return patch(deviceId, sessionIds, { pinnedAt: pinned ? new Date().toISOString() : null });
+        }
+        const db = getCurrentDbClientSnapshot();
+        if (!db || isAppSessionBoundaryPending()) return fail(0, 'HOST_NOT_READY', 'localDb not ready');
+        const owner = activeOwnerScopeKey();
+        const checkAction = captureTaskActionSyncGuard();
+        const beforeWrite = () => {
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner || getCurrentDbClientSnapshot() !== db) {
+            throw createIpcError('PRECONDITION_FAILED', '账号或数据库已切换，当前项及后续项未执行。');
+          }
+          checkAction?.();
+        };
+        for (const [index, sessionId] of sessionIds.entries()) {
+          try {
+            await assertTaskActionCurrent();
+            beforeWrite();
+            const row = await patchSessionMetaInDb(sessionId, { pinnedAt: pinned ? new Date().toISOString() : null }, { beforeWrite });
+            if ((row.pinnedAt != null) !== pinned) return fail(index, 'PRECONDITION_FAILED', '目标任务的置顶状态已再次变化。');
+            changed.push({ sessionId });
+          } catch (error) {
+            const code = isIpcError(error) ? error.code : taskActionRevocationCode(error) ?? 'INTERNAL';
+            return fail(index, code, error instanceof Error ? error.message : String(error));
+          }
+        }
+        return { ok: true, changed };
+      },
       setSessionsSnooze: async ({ sessionIds, snoozedUntil }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready', changed: [] };
@@ -1242,11 +1287,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         projectDir,
         agentKind,
         model,
+        providerId,
         effort,
         fast,
         agentDeviceId,
       }) => {
         if (!targetSessionId && device && device !== 'local' && device !== getDeviceId()) {
+          if (providerId !== undefined)
+            return { ok: false, errorCode: 'INVALID_ARGS', message: 'provider_id 仅支持在本机新建任务。' };
           if (!remoteSessionHandoff || !dispatcherSessionId)
             return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task creation is unavailable in this host.' };
           const id = randomUUID();
@@ -1285,6 +1333,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const hasExecutionOverrides =
             agentKind !== undefined
             || model !== undefined
+            || providerId !== undefined
             || effort !== undefined
             || fast !== undefined;
           const recordCreation = targetSessionId ? null : await captureBotCreatedTaskResponsibility(dispatcherSessionId);
@@ -1301,13 +1350,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
                   execution: {
                     agentKind,
                     model,
+                    ...(providerId !== undefined ? { providerId } : {}),
                     effort,
                     fastMode: fast,
                   },
                 }
               : {}),
             ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
-          });
+          }, true);
           if (result.ok && result.wakeKind === 'created' && dispatcherSessionId)
             reportGroupTaskCreated(dispatcherSessionId, { taskId: result.targetSessionId, deviceId: null,
               title: result.targetTitle || title?.trim() || normalizeAutoTitle(message) });
@@ -1362,9 +1412,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             },
             sshConfigProblem: () => sshConfigProblem,
             isSshKeyKnown: async (hostname, port) => (await loadRemoteSsh()).isRemoteHostKeyKnown(hostname, port),
-            readSsh: async (id) => {
+            readSsh: async (id, options) => {
               const remoteSsh = await loadRemoteSsh();
-              await remoteSsh.ensureRemoteHostReady(id);
+              await remoteSsh.ensureRemoteHostReady(id, options);
               const remote = (await remoteSsh.getRemoteSshPoolHydrated()).get(id);
               if (!remote) throw new Error('[SSH_HOST_NOT_FOUND]');
               return (await remote.exec(SSH_STATUS_COMMAND, { timeoutMs: 8_000, label: `list_machines(${id})`, maxOutputBytes: 64 * 1024 })).stdout;
@@ -1388,8 +1438,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const runtime = activeCompanionCloud();
           if (!runtime) return { ok: false, errorCode: 'NOT_ENABLED', message: 'Cloud companions are not available on this server' };
           const result = await runtime.switchHome(teammateId, targetDeviceId, whenBusy ? { whenBusy } : undefined);
-          return result.ok ? { ok: true, teammateId, homeDeviceId: targetDeviceId }
-            : { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
+          if (result.ok) return { ok: true, teammateId, homeDeviceId: targetDeviceId };
+          if (result.code === 'SKILL_TARGET_OUTDATED') {
+            const skill = result.oversizedSkill;
+            const reason = skill ? `Skill "${skill.slug}" has a ${skill.bodyBytes}-byte body, above the target's 64 KiB limit.` : "A skill exceeds the target's 64 KiB limit.";
+            return { ok: false, errorCode: result.code, message: `${reason} The buddy is still on its original computer. Update Cindy on the target computer and retry.` };
+          }
+          return { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
         },
       },
       botProfiles: {

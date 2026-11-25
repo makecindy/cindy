@@ -1,3 +1,4 @@
+import { cardPrSlotKey } from '@cindy/maker-shared';
 /**
  * cardSanitizer.ts — 意识聊天卡片 HTML 净化器(卡槽③海报模式)。
  *
@@ -90,7 +91,7 @@ export type SanitizeCardResult =
   | { ok: false; reason: string };
 
 /** PR 状态位的值:owner/repo#编号(GitHub 允许的名字字符)。 */
-const GHOST_CARD_PR_STATUS_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}#[1-9]\d{0,8}$/;
+
 
 /** @keyframes 体内允许的属性(合成器动画白名单;其余出现即动画版作废)。 */
 const KEYFRAME_ALLOWED_PROPS = new Set(['transform', 'opacity', 'animation-timing-function']);
@@ -314,11 +315,11 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // PR 状态位(data-ghost-pr-status="owner/repo#123"):只挂 div。宿主用标题栏同一份 PR 状态实时
   // 替换其内容(ghostCardPrStatus);插件写在里面的是兜底快照。值不合格只丢属性。
   const prStatus = tag === 'div' ? (attrs['data-ghost-pr-status'] ?? '').trim() : '';
-  if (GHOST_CARD_PR_STATUS_RE.test(prStatus)) parts.push(` data-ghost-pr-status="${escapeAttr(prStatus)}"`);
+  if (cardPrSlotKey(prStatus)) parts.push(` data-ghost-pr-status="${escapeAttr(prStatus)}"`);
   // 只在 PR 开着时成立的部分(data-ghost-pr-open-only="owner/repo#123"):挂 div / span / button。
   // 标题栏同一份状态显示这条 PR 已合并或关闭后,宿主把它藏起来(电脑)或不投影(手机)。
   const prOpenOnly = tag === 'div' || tag === 'span' || tag === 'button' ? (attrs['data-ghost-pr-open-only'] ?? '').trim() : '';
-  if (GHOST_CARD_PR_STATUS_RE.test(prOpenOnly)) parts.push(` data-ghost-pr-open-only="${escapeAttr(prOpenOnly)}"`);
+  if (cardPrSlotKey(prOpenOnly)) parts.push(` data-ghost-pr-open-only="${escapeAttr(prOpenOnly)}"`);
   // 手机端呈现提示(只挂 button):data-ghost-primary 画成主按钮;data-ghost-toggle="on|off"
   // 画成原生开关。电脑端不读,卡内样式照旧由插件决定。
   if (tag === 'button' && attrs['data-ghost-primary'] !== undefined) parts.push(' data-ghost-primary=""');
@@ -374,7 +375,7 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // 归档」,宿主自己确认已合并、用户看过并离开后才归档。
   if (tag === 'button' && !actionValid && !parts.some(p => p.startsWith(' data-ghost-link='))) {
     const archive = (attrs['data-ghost-task-archive'] ?? '').trim();
-    if (GHOST_CARD_PR_STATUS_RE.test(archive)) {
+    if (cardPrSlotKey(archive)) {
       parts.push(` data-ghost-task-archive="${escapeAttr(archive)}"`);
       const state = (attrs['data-ghost-task-archive-state'] ?? '').trim();
       if (state === 'merged' || state === 'closed') parts.push(` data-ghost-task-archive-state="${state}"`);

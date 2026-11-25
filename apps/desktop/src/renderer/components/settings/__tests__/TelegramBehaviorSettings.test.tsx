@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TelegramHookBehaviorState } from '../../../../shared/hookControlIpc';
+import { toast } from '@/lib/toast';
 
 const api = vi.hoisted(() => ({
   getTelegramBehavior: vi.fn(),
@@ -18,10 +19,12 @@ const api = vi.hoisted(() => ({
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 
 import {
   TelegramBehaviorSettings,
   TelegramGroupActivationSettings,
+  TelegramPersonaSettings,
 } from '../TelegramBehaviorSettings';
 
 const behavior: TelegramHookBehaviorState = {
@@ -59,7 +62,29 @@ beforeEach(() => {
   };
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+// Unit: editing a real persona field and closing settings flushes its pending
+// value. A rejected flush still has to reach the user's notification.
+it('reports a refused Telegram persona autosave when settings close', async () => {
+  const persona = { botName: 'Fixture bot', soul: 'Old note' };
+  const save = vi.fn().mockRejectedValue(new Error('[PRECONDITION_FAILED] fixture refusal'));
+  vi.stubGlobal('electronAPI', {
+    telegramBot: { getPersona: vi.fn().mockResolvedValue(persona), setPersona: save },
+  });
+  const errorToast = vi.spyOn(toast, 'error').mockImplementation(() => undefined as never);
+  const view = render(<TelegramPersonaSettings />);
+  const editor = await screen.findByDisplayValue('Old note');
+  fireEvent.change(editor, { target: { value: 'New note' } });
+  await act(async () => view.unmount());
+
+  expect(save).toHaveBeenCalledExactlyOnceWith({ ...persona, soul: 'New note' });
+  expect(errorToast).toHaveBeenCalledExactlyOnceWith('ipcError.PRECONDITION_FAILED');
+});
 
 describe('official Telegram behavior settings', () => {
   it('从 hook-control 读取并写入 emoji / 引用设置', async () => {

@@ -78,6 +78,7 @@ export interface BotGroupOutboxEntry extends BotGroupOutboxDraft {
   errorKey?: string;
   /** False when main refused the message itself: resending it unchanged can only fail again. */
   retryable?: boolean;
+  retryAt?: number;
   entryRevision?: number;
   queueOrdinal?: number;
   editHold?: { operationId: string; revision: number };
@@ -235,18 +236,39 @@ export function startBotGroupOutbox(): () => void {
   ensureOwner();
   const owner = getDataOwnerGeneration();
   let stopped = false;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const current = () => !stopped && isDataOwnerGenerationCurrent(owner);
   const run = async () => {
     if (!current() || !owner.dataOwnerId || !coordinator()) return;
     // A missing/mismatched bridge must not reintroduce a second whole-row writer.
     await refreshCoordinator();
     if (!current()) return;
+    let nextRetryAt = Infinity;
     for (const [groupId, group] of groups) {
       const first = group.entries.find(entry => entry.status !== 'sent' && !entry.editHold);
       if (first && first.retryable !== false && !submitting.has(entryKey(groupId, first.input.clientId))) {
-        if (first.status === 'failed') retryBotGroupSend(groupId, first.input.clientId);
-        else schedule(groupId, first.input.clientId);
+        if (first.retryAt === undefined) {
+          if (first.status === 'failed') retryBotGroupSend(groupId, first.input.clientId);
+          else schedule(groupId, first.input.clientId);
+        } else if (first.status === 'sending') {
+          if (first.retryAt <= Date.now()) schedule(groupId, first.input.clientId);
+          else nextRetryAt = Math.min(nextRetryAt, first.retryAt);
+        }
       }
+    }
+    clearTimeout(retryTimer);
+    if (Number.isFinite(nextRetryAt)) {
+      retryTimer = setTimeout(tick, Math.min(2_147_483_647, Math.max(0, nextRetryAt - Date.now())));
+    }
+    if (!reconciling) {
+      reconciling = true;
+      void reconcileReceipts().catch(() => undefined).finally(() => { reconciling = false; });
+    }
+  };
+  // A slow timeline response for one room must not delay a send in another.
+  const reconcileReceipts = async () => {
+    for (const [groupId, group] of groups) {
+      if (!current()) return;
       if (group.entries.some(entry => entry.status === 'sent')) {
         const token = beginBotGroupTimelineRead();
         const options = group.entries.some(entry => entry.input.conversationKind === 'direct')
@@ -271,6 +293,7 @@ export function startBotGroupOutbox(): () => void {
       }
     }
   };
+  let reconciling = false;
   let running = false;
   const tick = () => { if (!running) { running = true; void run().catch(() => undefined).finally(() => { running = false; }); } };
   const timer = setInterval(tick, 5_000);
@@ -280,7 +303,7 @@ export function startBotGroupOutbox(): () => void {
   wakeCoordinator = tick;
   window.addEventListener('online', tick); window.addEventListener('focus', tick); tick();
   return () => {
-    stopped = true; clearInterval(timer); off?.();
+    stopped = true; clearInterval(timer); clearTimeout(retryTimer); off?.();
     if (isDataOwnerGenerationCurrent(owner)) void coordinator()?.({ action: 'release', owner }).catch(() => undefined);
     if (wakeCoordinator === tick) wakeCoordinator = undefined;
     window.removeEventListener('online', tick); window.removeEventListener('focus', tick);
@@ -437,6 +460,11 @@ export function retryBotGroupSend(groupId: string, clientId: string): void {
   if (!entry || entry.status !== 'failed' || entry.retryable === false || entry.editHold) return;
   if (coordinator()) {
     preparing.delete(entryKey(groupId, clientId));
+    if (entry.retryAt !== undefined && entry.entryRevision !== undefined) {
+      void coordinate({ action: 'retry', owner: getDataOwnerGeneration(), groupId, clientId, entryRevision: entry.entryRevision })
+        .then(() => { schedule(groupId, clientId); wakeCoordinator?.(); }).catch(() => undefined);
+      return;
+    }
     schedule(groupId, clientId);
     return;
   }
@@ -506,6 +534,7 @@ async function submit(
   const group = groups.get(groupId);
   const entry = group?.entries.find((candidate) => candidate.input.clientId === clientId);
   if (!group || !entry || (entry.status !== 'sending' && !(coordinator() && entry.status === 'failed' && entry.retryable !== false))) return;
+  if (entry.retryAt !== undefined && (entry.status === 'failed' || entry.retryAt > Date.now())) return;
   // Local scheduling is only an optimization. Main validates the complete cross-window queue.
   if (durable() && group.entries.slice(0, group.entries.indexOf(entry)).some(row => row.status !== 'sent' && !row.editHold)) return;
   // From here this request owns the files. Still the outbox's message: same account, still listed.
@@ -518,6 +547,8 @@ async function submit(
     else await submitOwned(group, entry, owned, files);
   } finally {
     submitting.delete(key);
+    const current = group.entries.find(row => row.input.clientId === clientId);
+    if (current?.status === 'sending' && current.retryAt !== undefined && current.retryAt > Date.now()) wakeCoordinator?.();
   }
 }
 
@@ -550,6 +581,9 @@ async function submitCoordinated(group: GroupOutbox, entry: BotGroupOutboxEntry,
     if (result.ok) {
       group.claimed = [...group.claimed, result.messageId].slice(-CLAIMED_LIMIT);
       update(groupId, clientId, { status: 'sent', messageId: result.messageId, receiptTick: ++tick, baseline: undefined });
+    } else if (result.retryAt !== undefined) {
+      // Main committed the cooldown or final failure. Keep the optimistic bubble on that state.
+      await refreshCoordinator();
     } else {
       update(groupId, clientId, { status: 'failed', baseline: undefined,
         retryable: !CONTENT_REFUSALS.has(result.errorCode) && !['NOT_FOUND', 'PERMISSION_DENIED'].includes(result.errorCode),

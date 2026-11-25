@@ -275,6 +275,28 @@ it('renders model styling and vector geometry and applies a local visual patch',
   expect(screen.getByText('自由排版').style.color).toBe('var(--error-fg)');
 });
 
+it('renders markdown with an empty style string without reporting incomplete content', () => {
+  const source =
+    line(1, { version: 1, op: 'create', id: 'stack', kind: 'stack' }) +
+    line(2, {
+      op: 'create',
+      id: 'note',
+      kind: 'markdown',
+      parent: 'stack',
+      props: { text: 'Keep this note visible', style: '' },
+    });
+  render(
+    <RichAnswer
+      source={source}
+      stateKey="empty-style"
+      complete
+      renderMarkdown={(text) => <span>{text}</span>}
+    />,
+  );
+  expect(screen.getByText('Keep this note visible')).toBeTruthy();
+  expect(screen.queryByText('richAnswer.incomplete')).toBeNull();
+});
+
 // Tier 1: real model output used a unitless line-height and stock data whose
 // dates became a vertical list whenever point values did not fit. Earlier
 // renderer tests only covered two points and did not exercise either failure.

@@ -142,7 +142,7 @@ import type {
   RemoteDirectoryDrive,
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
-import { describeAgentAuthError, formatRemoteError, humanizeRemoteError } from '@/device-link/remoteStatus';
+import { describeNewSessionError, formatRemoteError, humanizeRemoteError, type NewSessionError } from '@/device-link/remoteStatus';
 import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate';
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
@@ -456,7 +456,7 @@ import {
 import { mobileAgentLabel, mobileAgentVendor } from '@/session/sessionAgentSwitch';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { draftModelMemoryFor, hydrateDraftModelMemory } from '@/session/draftModelMemory';
-import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
+import { composerModelLabel, effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import { useRemoteAgentCatalogs, useRemoteAgentCatalogsWithStatus } from '@/session/useRemoteAgentCatalogs';
 import { restoredRemoteAgentUnusable as restoredRemoteAgentUnusableCheck } from '@/session/remoteAgentCatalogs';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -651,9 +651,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const [createStartedAt, setCreateStartedAt] = useState<number | null>(null);
   const [createPhase, setCreatePhase] = useState<SlowSendPhase>('preparing');
   const waitForLeaveDecision = useConfirmLeaveWhileUploading(creating && createPhase === 'uploading');
-  const [error, setError] = useState<string | null>(() => {
+  const [error, setError] = useState<NewSessionError | null>(() => {
     const creationError = readRouteString(params.creationError);
-    return creationError ? t('session.screen.createFailedNotice', { message: creationError }) : null;
+    return creationError ? { creationError } : null;
   });
   const [capabilities, setCapabilities] = useState<MobileAgentCapabilities | null>(null);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
@@ -729,7 +729,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     : null, [activePluginEngine]);
   // 模型组(model-groups.md §6.3)：列出被控电脑的模式；选中后发送时由那台按它的规则选来源，草稿里的模型是
   // 沿用时的原模型。单独存、不进持久草稿；换了电脑或那台删了这个模式就不再生效。与插件引擎、另一台电脑的模型互斥；
-  // 开了协同时这次不经模式选路(与电脑上相同)。旧电脑读不到模式时整段不出现。
+  // 开启协同时同样给新建的 Lead 选路。旧电脑读不到模式时整段不出现。
   const [modelGroupChoice, setModelGroupChoice] = useState<{ controlledDeviceId: string; id: string } | null>(null);
   const hostModelGroups = useHostModelGroups(selectedDeviceId, maker, pluginEngineDraftEligible);
   const activeHostModelGroup = useMemo(
@@ -756,6 +756,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     // Worker 默认跟任务(Lead)的 Agent 所在电脑。
     leadAgentDeviceId: remoteAgentPick?.deviceId ?? null,
     agentLocationSelectable: workerAgentLocationSupported,
+    modelGroupSelectable: !!selectedDeviceId && !isSharedTaskPeer(selectedDeviceId) && capabilities?.supportsOrcaWorkerModelGroup === true,
     // 任务还没建：没有可审查、可测试的工作，内置角色不带出自带的首条任务。
     leadHasWork: false,
   });
@@ -947,7 +948,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         { enabled: record.creation.planModeArm, restorePermissionMode: record.creation.restorePermissionMode },
         record.deviceId);
       if (record.creation.notice) setAttachmentError(record.creation.notice);
-      if (record.error) setError(t('session.screen.createFailedNotice', { message: record.error }));
+      if (record.error) setError({ creationError: record.error });
       setSelectedDeviceId(record.deviceId);
       setSelectedDeviceName(record.creation.deviceName);
     },
@@ -1406,10 +1407,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     // 每台电脑落定那一刻记一次。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runtimeSettledDeviceId]);
+  const catalogModel = activeSourceProvider ? getModel(activeSourceProvider, draft.model, draft.agentKind) : undefined;
+  const catalogModelName = catalogModel?.name;
   const runtimeSummary = useMemo(
-    () => buildDraftRuntimeSummary(draft, runtimeOptions),
+    () => buildDraftRuntimeSummary(draft, runtimeOptions, catalogModelName),
     // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
-    [draft, runtimeOptions, i18nInstance.language],
+    [draft, runtimeOptions, catalogModelName, i18nInstance.language],
   );
   // 选了另一台电脑的模型:药丸写那台目录里的模型名与档位,读屏一并读出电脑名(与已建任务同口径)。
   const remoteAgentModelName = remoteAgentPick && remoteAgentPillProvider
@@ -1418,10 +1421,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 选了插件引擎：药丸写引擎的模型(+ 思考深度)，读屏带上引擎名。
   const pluginEnginePillSummary = activePluginEngine
     ? [
-        pluginEngineModelName(activePluginEngine.engine, activePluginEngine.modelId)
-          ?? (activePluginEngine.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
-            ? t('models.pluginEngines.defaultModel')
-            : activePluginEngine.modelId),
+        activePluginEngine.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
+          ? t('models.pluginEngines.defaultModel')
+          : composerModelLabel(activePluginEngine.modelId, pluginEngineModelName(activePluginEngine.engine, activePluginEngine.modelId)),
         activePluginEngine.effort
           ? t(`models.options.effortLevels.${activePluginEngine.effort}`, { defaultValue: activePluginEngine.effort })
           : null,
@@ -1430,7 +1432,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 草稿底层模型的名字：模式没选到来源、沿用原模型时，说明里写它。
   const basePillModelSummary = pluginEnginePillSummary ?? (remoteAgentPick
     ? [
-        remoteAgentModelName || remoteAgentPick.model,
+        composerModelLabel(remoteAgentPick.model, remoteAgentModelName),
         effortLabelFromRuntime({ currentModel: null, effortOptions: runtimeOptions.effortOptions }, remoteAgentPick.effort),
       ].filter(Boolean).join(' · ')
     : runtimePending
@@ -3681,7 +3683,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             // 图标统一规则(桌面同源):模型条目 icon(AI Gateway 设定)优先,缺省回落来源标。
             <MobileModelIconMark
               color={colors.textSecondary}
-              icon={getModel(activeSourceProvider, draft.model, draft.agentKind)?.icon}
+              icon={catalogModel?.icon}
               name={activeSourceProvider.name}
               providerId={activeSourceProvider.id}
               routing={activeSourceProvider.routing}
@@ -4238,7 +4240,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       });
       // 模型组：建任务前请被控电脑按模式选一个现在能用的来源，只用于这次新建(记住的草稿与偏好不变)；
       // 那台没有能用的来源或模式已删除时沿用原来的模型。
-      const modelGroupAtSend = activeHostModelGroup && !collabDraft && !effectiveDraft.pluginEngine ? activeHostModelGroup : null;
+      const modelGroupAtSend = effectiveDraft.pluginEngine ? null : activeHostModelGroup;
       const keptModelNameAtSend = basePillModelSummary;
       let modelGroupResult: HostModelGroupResult | null = null;
       if (modelGroupAtSend) {
@@ -4643,7 +4645,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       if (!isCurrentOwner()) return;
       // 模型组：与普通创建同一流程，先请被控电脑按模式选来源，再按实际要用的来源核对登录；目标文本就是
       // 第一条消息(没有附件)。选到了来源就不按草稿底层模型拦；沿用原模型时照常核对原模型。
-      const goalModelGroup = activeHostModelGroup && !collabDraft && !pluginEnginePick ? activeHostModelGroup : null;
+      const goalModelGroup = pluginEnginePick ? null : activeHostModelGroup;
       const goalKeptModelName = basePillModelSummary;
       const goalModelGroupResult = goalModelGroup
         ? await resolveHostModelGroup(maker, goalModelGroup.id, { hasImages: false })
@@ -5772,7 +5774,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             ) : null}
 
             {error ? (
-              <ErrorNotice message={describeAgentAuthError(error) ?? error} />
+              <ErrorNotice message={describeNewSessionError(error)} />
             ) : null}
             {/* 发送前鉴权提示:选中 agent 在被控端无已连接供应商时提前告知;
                 error 已展示(含被门禁拦截的同款文案)时不重复出现。 */}
@@ -6350,6 +6352,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               return result;
             },
             onSelect: collabForm.modelPicker.select,
+            modelGroups: collabForm.modelPicker.modelGroups,
             // 远程供应商:与任务模型列表同一套，选中 = Worker 的 Agent 在那台运行。
             ...(remoteAgentSupported && collabForm.agentLocationSelectable
               ? {
@@ -6534,8 +6537,9 @@ function readRouteString(value: unknown): string | null {
 function buildDraftRuntimeSummary(
   draft: NewSessionDraft,
   runtime: MobileSessionRuntimeOptions,
+  catalogModelName?: string,
 ): { modelSummary: string; permissionLabel: string } {
-  const modelLabel = runtime.currentModel?.label ?? draft.model;
+  const modelLabel = composerModelLabel(draft.model, catalogModelName, runtime.currentModel?.label);
   const effortLabel = effortLabelFromRuntime(runtime, draft.effort);
   return {
     modelSummary: [modelLabel, effortLabel].filter(Boolean).join(' · '),

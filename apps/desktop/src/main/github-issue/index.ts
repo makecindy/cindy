@@ -15,7 +15,6 @@ import { createLogger } from '../logger.js';
 import { serverApiFetch } from '../serverApiClient.desktop';
 import { getClientEndpoint } from '../clientEndpointsService';
 import type { IssueConfirmBridge } from './issueConfirmBridge';
-import { readOsInfo } from './osInfo';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { buildGithubUserSubmitterDeps } from './cindyGithubGhostDeps.js';
 import {
@@ -25,6 +24,7 @@ import {
 } from './githubIssueSubmitService';
 import { invalidateMyIssuesCache } from './myIssuesRuntime.js';
 import { formatRelatedIssueLogs } from './issueDiagnostics';
+import { getIssueOsInfo } from './issueOsInfo';
 import { collectLogsFromDisk } from '../log-upload/collectRuntime';
 import { recordSubmittedIssue } from './submittedIssueLedger.js';
 import {
@@ -96,7 +96,7 @@ export async function submitGithubIssueForSession(
         );
       },
       getAppVersion: () => app.getVersion(),
-      getOsInfo: () => readOsInfo(),
+      getOsInfo: getIssueOsInfo,
       getTurnModelId,
       getRegion: () => CURRENT_CINDY_REGION,
       getFallbackLocale: () => app.getLocale(),

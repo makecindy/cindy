@@ -15,7 +15,7 @@ import { PluginSharedUsage } from './PluginSharedUsage';
 import { PluginPublisherBadge, PluginPublisherDescription } from './PluginPublisherBadge';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
-import { pluginPresentationAuthor, pluginPresentationOrigin } from './lib/pluginMarketPresentation';
+import { pluginPresentationAuthor, pluginPresentationOrigin, publicPublisherFilter } from './lib/pluginMarketPresentation';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 import { PluginInstallRing } from './PluginInstallRing';
 import { usePluginInstallProgress } from './lib/pluginInstallProgress';
@@ -79,6 +79,12 @@ export function MarketPluginDetailView({
   const replacementDescriptionId = useId();
   const replacementDescription =
     detail.installState === 'conflict' ? t('settings.ghosts.market.replaceDescription') : undefined;
+  const communityDisclaimerId = useId();
+  const isCommunityPlugin = presentationOrigin === 'public' && detail.publisherKind === 'personal';
+  const actionDescription = [
+    replacementDescription && replacementDescriptionId,
+    isCommunityPlugin && communityDisclaimerId,
+  ].filter(Boolean).join(' ') || undefined;
 
   return (
     <main
@@ -106,6 +112,7 @@ export function MarketPluginDetailView({
               iconDataUrl={marketIcon.iconDataUrl}
               iconId={detail.ghostId}
               iconName={detail.name}
+              officialCatalog={publicPublisherFilter(detail) === 'official'}
               onIconLoad={marketIcon.onIconLoad}
               onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
               size="detail"
@@ -150,7 +157,7 @@ export function MarketPluginDetailView({
                     disabled={actionDisabled}
                     aria-label={t(showActionLoading ? 'settings.ghosts.remote.detailLoading' : installFailed ? 'commonUi.retry' : actionKey)}
                     aria-busy={busy || refreshing || loading || undefined}
-                    aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
+                    aria-describedby={actionDescription}
                     className="plugin-detail-primary-action min-w-[104px] whitespace-nowrap"
                   >
                     <span className="inline-grid">
@@ -167,7 +174,11 @@ export function MarketPluginDetailView({
               </div>
             ) : null}
           </div>
-          <PluginPublisherDescription origin={presentationOrigin} kind={detail.publisherKind} />
+          {isCommunityPlugin ? (
+            <p id={communityDisclaimerId} className="mt-3 text-12 leading-[1.667] text-[var(--text-tertiary)]">
+              {t('settings.ghosts.market.communityDisclaimer')}
+            </p>
+          ) : <PluginPublisherDescription origin={presentationOrigin} kind={detail.publisherKind} />}
           <p className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]">
             {detail.description || detail.ghostId}
           </p>
@@ -228,13 +239,12 @@ const MarketPluginDetailBody = memo(function MarketPluginDetailBody({ detail, er
               className="mt-0.5 shrink-0 text-[var(--text-secondary)]"
               aria-hidden="true"
             />
-            <p className="text-13 leading-5 text-[var(--text-secondary)]">
-              {t(
-                isCustomSource
-                  ? 'settings.ghosts.market.customSecurityDescription'
-                  : 'settings.ghosts.market.securityDescription',
-              )}
-            </p>
+            <div className="text-13 leading-5 text-[var(--text-secondary)]">
+              <p>{t(isCustomSource
+                ? 'settings.ghosts.market.customSecurityDescription'
+                : 'settings.ghosts.market.securityDescription')}</p>
+              {isCustomSource ? <p className="mt-2">{t('settings.ghosts.installConsent.customMarketSourceNotice')}</p> : null}
+            </div>
           </div>
         </section> : null}
 

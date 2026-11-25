@@ -150,6 +150,7 @@ describe('plugin delivery contract', () => {
   });
 
   it('parses a paginated visible Plugin summary without requiring a manifest', () => {
+    const listingIcon = { ...validIcon, thumbnailUrl: 'https://plugins.example.test/icon.png?x-oss-process=resize' };
     const response = parseListPluginsResponse({
       schemaVersion: PLUGIN_API_SCHEMA_VERSION,
       plugins: [
@@ -168,7 +169,7 @@ describe('plugin delivery contract', () => {
             sha256: 'a'.repeat(64),
             sizeBytes: 1024,
             publishedAt: '2026-07-19T00:00:00.000Z',
-            icon: validIcon,
+            icon: listingIcon,
           },
         },
       ],
@@ -176,7 +177,7 @@ describe('plugin delivery contract', () => {
     });
     expect(response.plugins[0]?.name).toBe(validManifest.name);
     expect(response.plugins[0]?.currentRelease.version).toBe(validManifest.version);
-    expect(response.plugins[0]?.currentRelease.icon).toEqual(validIcon);
+    expect(response.plugins[0]?.currentRelease.icon).toEqual(listingIcon);
     expect(response.nextCursor).toBe(pluginId);
   });
 
