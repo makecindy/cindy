@@ -6938,6 +6938,7 @@
           "guide": {
             "usageLabel": "Cómo usarlo",
             "usageBody": "Publica en X mencionando a @askmycindy y la tarea se enviará a este dispositivo para ejecutarse aquí; el resultado llegará como respuesta.",
+            "usageBodyOnDevice": "Publica en X mencionando a @askmycindy y la tarea se enviará a {{device}} para ejecutarse allí; el resultado llegará como respuesta.",
             "riskLabel": "Las respuestas son públicas",
             "riskPublicBody": "Las respuestas son públicas y cualquier persona puede verlas. Usa esta función para preguntas y problemas públicos, no para asuntos privados que puedan comprometer tu privacidad.",
             "riskWorkdirBody": "Cada tarea de X se ejecuta en el proyecto predeterminado definido en la configuración de conexión de X. El Agent puede leer y escribir archivos allí, y su conclusión se publica abiertamente; si ese proyecto apunta a un repositorio privado, el contenido de los archivos también podría hacerse público.",
