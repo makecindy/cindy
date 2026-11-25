@@ -497,6 +497,26 @@ describe('model advanced editor', () => {
     expect(Boolean(screen.queryByText('987,654'))).toBe(metered);
   });
 
+  it('keeps public prices and specs out of a GLM plan saved at its Responses URL', () => {
+    const id = 'zhipu-coding-plan-cn';
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === id)!;
+    const route = { baseUrl: 'https://open.bigmodel.cn/api/v1', wireProtocol: 'openai-responses' as const };
+    const source = { ...buildUserProvider({ id: 'glm-plan', name: 'GLM', runtimes: {
+      codex: { ...preset.runtimes.codex!, ...route, catalogPresetId: id,
+        models: [{ id: 'glm-5.4', name: 'GLM', route }] },
+    } }), connected: true } as ProviderView;
+    const published = { ...source.models.codex![0], maxOutput: 987_654 };
+    const view = render(drawer(published, published.defaultEffort, published.efforts, source));
+    expect(screen.queryByText('987,654')).toBeNull();
+    expect(screen.getByText('settings.providers.models.subscription')).toBeTruthy();
+
+    const customRoute = { ...route, requestPath: '/custom' };
+    const custom = { ...published, route: customRoute, userModelConfig: { ...published.userModelConfig!, route: customRoute } };
+    view.rerender(drawer(custom, custom.defaultEffort, custom.efforts, source));
+    expect(screen.getByText('987,654')).toBeTruthy();
+    expect(screen.queryByText('settings.providers.models.subscription')).toBeNull();
+  });
+
   it('leaves Kimi Code quote fields empty unless an estimate was explicitly saved', async () => {
     mocks.realPricing = true;
     const preset = BUNDLED_CATALOG.presets!.find(item => item.id === 'moonshot-kimi-code')!;
@@ -518,16 +538,16 @@ describe('model advanced editor', () => {
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 
-  it('updates a saved sparse Kimi Code estimate without revealing the inherited API value', async () => {
+  it.each(['USD', 'CNY'] as const)('updates a saved sparse %s Kimi Code estimate without revealing the inherited API value', async (currency) => {
     mocks.realPricing = true;
     const preset = BUNDLED_CATALOG.presets!.find(item => item.id === 'moonshot-kimi-code')!;
     const source = { ...buildUserProvider({ id: 'kimi-plan', name: 'Kimi', runtimes: {
       codex: { ...preset.runtimes.codex!, catalogPresetId: preset.id, models: [{ id: 'k3.1-pro', name: 'K3.1 Pro' }] },
     } }), connected: true } as ProviderView;
     const previous = window.electronAPI;
-    const reference = { currency: 'USD', inputPerMtok: 1, outputPerMtok: 4 };
+    const reference = { currency, inputPerMtok: 1, outputPerMtok: 4 };
     const estimate = (output: number) => ({ editable: true, reference, effective: { ...reference, outputPerMtok: output },
-      override: { outputPerMtok: output }, conflict: false, allowedCurrencies: ['USD'], registryUpdatedAt: null });
+      override: { outputPerMtok: output }, conflict: false, allowedCurrencies: ['USD', 'CNY'], registryUpdatedAt: null });
     const write = vi.fn(async () => estimate(6));
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
       getModelPriceOverride: async () => estimate(5), setModelPriceOverride: write,
@@ -541,7 +561,7 @@ describe('model advanced editor', () => {
       fireEvent.change(output, { target: { value: '6' } });
       fireEvent.blur(output);
       await waitFor(() => expect(write).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-        inputPerMtok: 1, outputPerMtok: 6,
+        currency, inputPerMtok: 1, outputPerMtok: 6,
       })));
       expect(input.value).toBe('');
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }

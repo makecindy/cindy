@@ -53,12 +53,17 @@ const EMPTY_FORM: FormState = {
   cacheCreate: '',
 };
 
+function savedEstimateCurrency(view: ModelPriceOverrideView | null): FormState['currency'] | undefined {
+  // Same-currency estimates store only numeric differences from the reference.
+  return view?.override ? view.override.currency ?? view.effective?.currency : undefined;
+}
+
 function formFromView(view: ModelPriceOverrideView, manualOnly: boolean): FormState {
   const quote = manualOnly ? view.override : view.effective ?? view.reference;
   const empty = manualOnly ? { ...EMPTY_FORM, currency: view.allowedCurrencies[0] ?? EMPTY_FORM.currency } : EMPTY_FORM;
   return quote
     ? {
-        currency: quote.currency ?? empty.currency,
+        currency: (manualOnly ? savedEstimateCurrency(view) : quote.currency) ?? empty.currency,
         input: quote.inputPerMtok?.toString() ?? '',
         output: quote.outputPerMtok?.toString() ?? '',
         cacheRead: quote.cacheReadPerMtok?.toString() ?? '',
@@ -90,7 +95,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const writableCurrencies = view?.allowedCurrencies ?? [];
-  const referenceCurrency = (manualOnly ? view?.override : view?.effective ?? view?.reference)?.currency;
+  const referenceCurrency = manualOnly ? savedEstimateCurrency(view) : (view?.effective ?? view?.reference)?.currency;
   const currencies = referenceCurrency && !writableCurrencies.includes(referenceCurrency)
     ? [...writableCurrencies, referenceCurrency] : writableCurrencies;
   const canWriteCurrency = writableCurrencies.includes(form.currency);

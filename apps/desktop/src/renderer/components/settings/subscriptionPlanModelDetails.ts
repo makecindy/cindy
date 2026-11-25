@@ -1,5 +1,6 @@
 import {
   BUNDLED_CATALOG,
+  availableModelInterfaces,
   isMimoTokenPlanPreset,
   providerOAuthContract,
   providerPresetOAuthRuntimes,
@@ -34,7 +35,8 @@ export function subscriptionPlanModelDetails(provider: ProviderView, agent: Agen
   if (!routing?.upstream) return undefined;
   // Presets can seed explicit model routes through their provider catalog.
   const configuredRoute = model.userModelConfig?.route;
-  const endpoint = endpointKey(configuredRoute?.baseUrl ?? model.route?.baseUrl ?? routing.upstream);
+  const modelRoute = configuredRoute ?? model.route;
+  const endpoint = endpointKey(modelRoute?.baseUrl ?? routing.upstream);
   const configuredPreset = routing.usagePresetId ?? model.catalogPresetId;
   const oauth = provider.auth?.method === 'oauth' ? provider.auth.oauth : undefined;
   const isMiniMaxSubscription = oauth !== undefined && providerOAuthContract(oauth) === 'minimax';
@@ -52,7 +54,14 @@ export function subscriptionPlanModelDetails(provider: ProviderView, agent: Agen
       && configuredRoute.requestPath === presetModelRoute.requestPath;
     const followsPreset = configuredPreset === preset.id && presetEndpoint === endpointKey(routing.upstream)
       && (configuredRoute === undefined || seededRoute);
-    if (presetEndpoint !== endpoint && !followsPreset &&
+    // A saved connection may use a declared transport directly. Only an explicit
+    // plan identity can disambiguate that URL from another product's interface.
+    const declaredInterface = configuredPreset === preset.id && availableModelInterfaces(
+      BUNDLED_CATALOG.modelRegistry, preset.id, model.id, endpoint, agent,
+    ).some(({ route }) => endpointKey(route.baseUrl) === endpoint
+      && route.wireProtocol === (modelRoute?.wireProtocol ?? routing.wireProtocol)
+      && route.requestPath === (modelRoute ? modelRoute.requestPath : routing.requestPath));
+    if (presetEndpoint !== endpoint && !followsPreset && !declaredInterface &&
         !(preset.id === 'moonshot-kimi-code' && kimiCodeEndpoints.has(endpoint))) return [];
     // GLM's Messages endpoint is also used by its metered API preset.
     if (!miniMax && configuredPreset !== preset.id && presets.some(other =>
