@@ -110,6 +110,10 @@ export interface DeliveryReceiptInput {
    * 不能因此写成「这次没有改动文件」。
    */
   captureIncomplete?: boolean;
+  /**
+   * 文件清单被截断。看不全删除记录时，不能断言成品还在。
+   */
+  fileHistoryTruncated?: boolean;
 }
 
 function isWindowsShaped(filePath: string): boolean {
@@ -419,9 +423,11 @@ export function buildDeliveryReceipt(input: DeliveryReceiptInput): DeliveryRecei
       });
     }
   }
-  const outputs = outputFiles
-    .filter((file) => isBotDeliverableFile(file, file.cwd ?? input.workingDir ?? undefined))
-    .map((file) => ({ path: file.path, name: file.name || fileName(file.path) }));
+  const outputs = input.fileHistoryTruncated
+    ? []
+    : outputFiles
+      .filter((file) => isBotDeliverableFile(file, file.cwd ?? input.workingDir ?? undefined))
+      .map((file) => ({ path: file.path, name: file.name || fileName(file.path) }));
   const commands = recordedCommandsFromMessages(input.messages ?? []);
   const recent = commands.slice(-DELIVERY_RECEIPT_COMMAND_CAP);
   const verification = section(

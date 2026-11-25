@@ -53,9 +53,12 @@ async function readReceiptFacts(session: Session, stillCurrent: () => boolean): 
   const changedFiles: DeliveryReceiptFileInput[] = [];
   let unlistedChangeCount = 0;
   let captureIncomplete = false;
+  let fileHistoryTruncated = false;
   for (const set of [...sets].sort((a, b) => a.createdAt - b.createdAt)) {
-    unlistedChangeCount += Math.max(0, set.fileCount - set.files.length);
-    if (set.state === 'partial' || set.incompleteReasons.length > 0) captureIncomplete = true;
+    const hiddenFiles = Math.max(0, set.fileCount - set.files.length);
+    unlistedChangeCount += hiddenFiles;
+    if (hiddenFiles > 0) fileHistoryTruncated = true;
+    if (set.state === 'partial' || set.incompleteReasons.length > 0 || hiddenFiles > 0) captureIncomplete = true;
     const applied = set.workspaceState !== 'undone';
     for (const file of set.files) {
       changedFiles.push({
@@ -78,6 +81,7 @@ async function readReceiptFacts(session: Session, stillCurrent: () => boolean): 
       pullRequests: [],
       pullRequestsUnavailable: true,
       captureIncomplete,
+      fileHistoryTruncated,
     };
   }
   const activeRefs = refs.filter((ref) => ref.removedAt == null);
@@ -102,6 +106,7 @@ async function readReceiptFacts(session: Session, stillCurrent: () => boolean): 
     messages: messageInputs(messages),
     pullRequests,
     captureIncomplete,
+    fileHistoryTruncated,
   };
 }
 

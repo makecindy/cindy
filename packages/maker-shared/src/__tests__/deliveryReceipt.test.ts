@@ -262,6 +262,19 @@ describe('buildDeliveryReceipt', () => {
     ]);
   });
 
+  it('does not keep an output when the file history was truncated', () => {
+    const receipt = buildDeliveryReceipt({
+      title: 'Report',
+      workingDir: '/repo',
+      fileHistoryTruncated: true,
+      captureIncomplete: true,
+      changedFiles: [{ path: '/repo/out/report.pdf', status: 'added' }],
+    });
+    expect(receipt.outputs.shown).toBe(false);
+    expect(receipt.conversationOnly).toBe(false);
+    expect(receipt.changes.items.map((file) => file.path)).toEqual(['/repo/out/report.pdf']);
+  });
+
   it('does not call an incomplete capture a conversation with no file changes', () => {
     const receipt = buildDeliveryReceipt({
       title: 'Edit env',
