@@ -1209,7 +1209,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
   });
 
   // Review on #12734: each run is a new paid turn, so an engine or model the user turned off while
-  // the run was queued must stop it before dispatch, without changing the task's model.
+  // the run was queued must stop it before dispatch, without changing the task's model, and the
+  // failure must reach the user's configured notifications.
   it.each(['before queueing', 'while queued'] as const)('fails a linked plugin-engine run whose engine was turned off %s', async (when) => {
     const h = createSessionHarness(async () => ({ accepted: true }));
     Object.assign(h.session, { agentKind: 'acp', model: 'plugin-model' });
@@ -1219,7 +1220,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const queue = createQueueHarness({ busy: false });
     const turnedOff = () => { throw new Error('model turned off'); };
     const admitPluginEngine = vi.fn(when === 'before queueing' ? turnedOff : () => ({ model: 'plugin-model', effort: '' }));
-    const { runner } = createRunnerHarness(h.session, queue.deps, { metaModel: 'plugin-model', admitPluginEngine });
+    const { runner, notifier } = createRunnerHarness(h.session, queue.deps, { metaModel: 'plugin-model', admitPluginEngine });
     const ctx = createFireContext();
     const outcome = runner.fire(heartbeatSchedule(), ctx).then(result => ({ result }), error => ({ error }));
     if (when === 'while queued') {
@@ -1229,6 +1230,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     }
     expect(await outcome).toMatchObject({ error: { message: expect.stringContaining('model turned off') } });
     expect(queue.enqueueCalls).toHaveLength(when === 'before queueing' ? 0 : 1);
+    // Review on #12734: the engine's ordinary failure path does not notify, so the runner must.
+    expect(notifier.notify).toHaveBeenCalledOnce();
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: expect.stringContaining('model turned off') });
     expect(ctx.onTurnActive).not.toHaveBeenCalled();
     expect(h.session.setModel).not.toHaveBeenCalled();
   });

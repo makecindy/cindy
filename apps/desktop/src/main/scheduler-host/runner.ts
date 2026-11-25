@@ -1465,7 +1465,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
         if (pluginEngineTarget) {
           const refusal = boundPluginEngineRefusal(schedule, row)
             ?? (resolvedSelection ? new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE) : null);
-          if (refusal) throw refusal;
+          if (refusal) {
+            await this.notifyFailureSilent(schedule, ctx, refusal.message);
+            throw refusal;
+          }
         }
         if (resolvedSelection) {
           schedule = {
@@ -1505,7 +1508,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
           holder.releaseAgentSwitchLock?.();
           holder.releaseAgentSwitchLock = undefined;
           if (!this.deps.schedulerQueue) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
-          this.admitBoundPluginEngine({ providerId: row.providerId ?? null, model: meta?.model, effort: meta?.effort });
+          try {
+            this.admitBoundPluginEngine({ providerId: row.providerId ?? null, model: meta?.model, effort: meta?.effort });
+          } catch (error) {
+            // The engine's ordinary failure path records the run without notifying; use the runner's outlet.
+            await this.notifyFailureSilent(schedule, ctx, error instanceof Error ? error.message : String(error));
+            throw error;
+          }
           if (this.deps.schedulerQueue.hasQueuedPrompt(sessionId, schedule.id)) {
             return await this.settleDuplicateQueuedFire(schedule, ctx, sessionId);
           }
@@ -3599,6 +3608,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
           throw new Error(persistent);
         }
         return this.deferFire(schedule, sessionId, 'routine-dispatch-invalidated');
+      }
+      if (err instanceof QueuedRouteDisabledError) {
+        // Refused before vendor dispatch (route or engine turned off, plugin-engine task no longer
+        // qualifies). A visible failure the user configured notifications for; the engine's
+        // ordinary failure path records it without notifying.
+        await this.notifyFailureSilent(schedule, ctx, err.message, holder.preRunHookResult);
+        throw err;
       }
       if (err instanceof QueuedDispatchTimeoutError || err instanceof QueuedSlotUnavailableError) {
         if (this.canDefer(schedule, ctx)) {
