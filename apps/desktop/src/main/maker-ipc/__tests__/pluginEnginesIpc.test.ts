@@ -339,6 +339,7 @@ describe('plugin engines with accounts', () => {
     host.owner = `account-${caseIndex += 1}`;
     host.harnesses = [dsh({ accounts: { methods: [{ id: 'api-key', label: 'API Key', kind: 'secret' }] } })];
     const handlers = new Map<string, (event: unknown, ...input: unknown[]) => unknown>();
+    const warmPlan = vi.fn();
     const readTaskUsage = vi.fn(async () => ({ updatedAt: 1, balances: [{ currency: 'CNY', amount: '1.00' }] }));
     let deviceLink = false;
     disposers.push(registerPluginEnginesIpc({
@@ -350,6 +351,9 @@ describe('plugin engines with accounts', () => {
       settings: { read: readPluginEnginePrefs, update: updatePluginEnginePrefs, onChange: onPluginEnginePrefsChanged },
       accountProviders: { list: () => [{ suffix: 'ab12cd34', identity: 'b@example.com' }], onChange: () => () => {} },
       readTaskUsage,
+      getActiveOwner: () => ({ dataOwnerId: host.owner, ownerGeneration: 1 }),
+      isCurrentOwner: (stamp) => stamp.dataOwnerId === host.owner && stamp.ownerGeneration === 1,
+      warmPluginEngineDefaultPlan: warmPlan,
       readCachedPluginEngineDefaultPlan: (key) => key === KEY ? 'Original plan' : null,
     }));
     await setPluginEngineRemoteUse(KEY, true);
@@ -382,7 +386,7 @@ describe('plugin engines with accounts', () => {
     await usage({}, KEY, { sessionId: 's1' });
     expect(readTaskUsage).toHaveBeenLastCalledWith(KEY, 's1', { fallbackToOriginal: false });
     deviceLink = true;
-    await usage({}, KEY, { sessionId: 's1' });
+    await usage({}, KEY, { sessionId: 's1', includePlan: true });
     expect(readTaskUsage).toHaveBeenLastCalledWith(KEY, 's1', { fallbackToOriginal: true });
     deviceLink = false;
     expect(await usage({}, KEY)).toBeNull();
@@ -393,6 +397,16 @@ describe('plugin engines with accounts', () => {
     vi.mocked(readPluginHarnessUsage).mockResolvedValueOnce(reported).mockResolvedValueOnce(reported);
     deviceLink = true;
     expect(await usage({}, KEY)).toEqual(reported);
+    expect(warmPlan).not.toHaveBeenCalled();
     expect(await usage({}, KEY, { includePlan: true })).toEqual({ ...reported, plan: 'Original plan' });
+    expect(warmPlan.mock.calls).toEqual([[KEY]]);
+
+    // The usage still in flight belongs to the previous owner. Don't read or warm the new owner's plan.
+    vi.mocked(readPluginHarnessUsage).mockImplementationOnce(async () => {
+      host.owner = 'next-owner';
+      return reported;
+    });
+    expect(await usage({}, KEY, { includePlan: true })).toBeNull();
+    expect(warmPlan).toHaveBeenCalledTimes(1);
   });
 });

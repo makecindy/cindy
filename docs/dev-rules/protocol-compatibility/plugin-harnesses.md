@@ -213,7 +213,8 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
    不认识就按原来的读法读引擎原有登录；旧 Host 忽略多余参数。
    同账号电脑的菜单栏读取原有登录时可传 `{ includePlan: true }`。执行电脑在自己的该引擎原有登录缓存中有档位时，
    在用量回包顶层附上可选的 `plan`（沿用账号状态的 1–64 字符纯文本限制）。未缓存或旧执行电脑缺少字段时仍可显示用量，
-   档位留空；每次仍只发一个用量请求，不触发账号状态刷新。
+   档位暂时留空。每次仍只发一个用量请求。首次取得用量后，支持账号能力的引擎在执行电脑后台读取原有登录的状态；
+   成功后本次启动复用缓存，失败后十分钟内不因菜单栏查询重试。本机读到档位后刷新面板，配对电脑可在下次读取时收到它。
    均为既有 invoke 帧与 channel 的可选字段或新取值，没有新 channel、relay 帧或 allowlist 变化，官方与自建中转原样转发，无需修改。
 7. **存储**（均按 Cindy 账号隔离）：`owners/<账号>/plugin-engine-accounts.json`（各引擎的账号设置、拿出的供应商与归属、任务与原生会话绑定）、
    `owners/<账号>/plugin-engine-account-cooling.json`（与 `subscription-account-cooling.json` 同格式，单独存放：旧版写内置账号冷却会丢掉它不认识的键），

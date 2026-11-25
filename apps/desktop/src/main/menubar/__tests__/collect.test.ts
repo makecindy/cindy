@@ -851,13 +851,16 @@ describe('plugin engine quota collection', () => {
   it('collects local reporting plugin engines (windows and balance-only), drops expired windows, and marks running ACP tasks', async () => {
     const dsh = engine();
     const gemini = engine({ key: 'gem:cli', providerId: 'acp-plugin:gem:cli', ghostId: 'gem', harnessId: 'cli', name: 'Gemini CLI' });
+    const unreadable = engine({ key: 'unknown:cli', providerId: 'acp-plugin:unknown:cli' });
+    const warmPlan = vi.fn();
     const silent = engine({ key: 'off:cli', providerId: 'acp-plugin:off:cli', reportsUsage: undefined });
     const suspended = engine({ key: 'sus:cli', providerId: 'acp-plugin:sus:cli', suspended: true as const, availability: { state: 'unavailable' as const } });
 
     const collected = await collectMenubarInputs({
       nowMs: NOW,
       listProviders: async () => [],
-      listPluginEngines: () => [dsh, gemini, silent, suspended],
+      listPluginEngines: () => [dsh, gemini, silent, suspended, unreadable],
+      warmPluginEngineDefaultPlan: warmPlan,
       readCachedPluginEngineDefaultPlan: (key) => key === dsh.key ? 'Google AI Ultra' : null,
       readPluginEngineUsage: async (key) => {
         if (key === 'dsh:dsh') {
@@ -909,6 +912,7 @@ describe('plugin engine quota collection', () => {
       balances: [{ currency: 'USD', amount: 9.25 }],
     });
     expect(collected.sources.map((s) => s.id)).toEqual([dsh.providerId, gemini.providerId]);
+    expect(warmPlan.mock.calls).toEqual([[dsh.key], [gemini.key]]);
   });
 
   it('keeps distinct plugin engines separate even with identical window percentages and collects remote offered engines', async () => {

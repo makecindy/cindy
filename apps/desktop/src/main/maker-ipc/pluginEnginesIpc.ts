@@ -337,6 +337,8 @@ export interface RegisterPluginEnginesIpcOpts {
    */
   readTaskUsage?(key: string, sessionId: string, options: { fallbackToOriginal: boolean }): Promise<unknown>;
   readCachedPluginEngineDefaultPlan?(key: string): string | null;
+  warmPluginEngineDefaultPlan?(key: string): void;
+  getActiveOwner?(): DataOwnerPushStamp;
   isCurrentOwner?(stamp: DataOwnerPushStamp): boolean;
 }
 
@@ -397,9 +399,13 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     }
     const includePlan = isRemote && task && typeof task === 'object' && 'includePlan' in task && task.includePlan === true
       && sessionId === undefined;
-    const plan = includePlan ? opts.readCachedPluginEngineDefaultPlan?.(key) : null;
+    const owner = includePlan ? opts.getActiveOwner?.() : undefined;
     const usage = await readPluginHarnessUsage(key, undefined, { reportWorkerFailure: isRemote });
-    return usage && plan ? { ...usage, plan } : usage;
+    if (!usage || !owner) return usage;
+    if (!opts.isCurrentOwner?.(owner)) return null;
+    opts.warmPluginEngineDefaultPlan?.(key);
+    const plan = opts.readCachedPluginEngineDefaultPlan?.(key);
+    return plan ? { ...usage, plan } : usage;
   });
   // Opening this computer to the owner's other computers is decided at this computer only.
   opts.handle(PLUGIN_ENGINES_INVOKE.SET_REMOTE_USE, async (event, input) => {

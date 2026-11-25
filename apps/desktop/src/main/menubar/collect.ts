@@ -97,6 +97,7 @@ export interface MenubarCollectDeps {
   /** Reads one plugin engine's current account usage; null when unreadable or empty. */
   readPluginEngineUsage?(key: string): Promise<GhostHarnessUsage | null>;
   readCachedPluginEngineDefaultPlan?(key: string): string | null;
+  warmPluginEngineDefaultPlan?(key: string): void;
   /** Subscriptions on the user's other computers, already read and mapped. */
   readRemoteSubscriptions?(): Promise<MenubarSubscriptionInput[]>;
   /** Null when the account has no Cindy balance (organization accounts, signed out). */
@@ -199,6 +200,7 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
         if (engine.suspended || engine.availability.state === 'unavailable' || engine.reportsUsage !== true) return null;
         const usage = await safe(`plugin:${engine.key}`, () => deps.readPluginEngineUsage!(engine.key), null);
         if (!usage) return null;
+        deps.warmPluginEngineDefaultPlan?.(engine.key);
         return pluginEngineSource(engine, usage, deps.nowMs, 'local', deps.readCachedPluginEngineDefaultPlan?.(engine.key));
       })
     : [];

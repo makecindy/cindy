@@ -49,7 +49,7 @@ import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i1
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { readCachedPluginEngineDefaultPlan } from '../plugin-engine-accounts/runtime.js';
+import { readCachedPluginEngineDefaultPlan, warmPluginEngineDefaultPlan } from '../plugin-engine-accounts/runtime.js';
 import { readPluginHarnessUsage } from '../cindy-brain/pluginHarnesses.js';
 import { listPluginEngineViews, onPluginEnginesChanged } from '../maker-ipc/pluginEnginesIpc.js';
 import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuCodingPlanAccountUsage } from '../maker-host/provider-account-usage.js';
@@ -540,6 +540,7 @@ export class QuotaOverviewService {
       listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
       listPluginEngines: () => listPluginEngineViews(),
       readCachedPluginEngineDefaultPlan,
+      warmPluginEngineDefaultPlan: (key) => warmPluginEngineDefaultPlan(key, () => this.scheduleRebuild()),
       readPluginEngineUsage: (key) => this.readPluginUsage(key, force, nowMs),
       readSubscriptionPool: (providerId) => force ? refreshSubscriptionPool(providerId, true) : readSubscriptionPool(providerId),
       readKimi: (providerId) => readKimiCodingAccountUsage({ providerId, forceRefresh: force }),
