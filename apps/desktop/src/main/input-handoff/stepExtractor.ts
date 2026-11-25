@@ -50,8 +50,11 @@ export interface ExtractedStep {
   hiddenFields?: string[];
   /** How many shrunken fields this step took in, remembered by key or not (an ambiguous key is not remembered). */
   hiddenTaken?: number;
-  /** The page lays out shrunken fields, taken in or not: a code field whose keys stopped matching may be among them. */
-  hiddenCandidates?: boolean;
+  /**
+   * Shrunken fields the page lays out, taken in or not, each as its page id and fingerprint (`[domId, fp]`): a code
+   * field whose keys stopped matching may be among them.
+   */
+  hiddenCandidates?: string[];
 }
 
 /** Keep verified page metadata even when its controls cannot form a complete step. */
@@ -499,7 +502,7 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
     ...(signIn ? { signIn } : {}),
     ...(hiddenFields.length ? { hiddenFields } : {}),
     ...(hiddenNodes.length ? { hiddenTaken: hiddenNodes.length } : {}),
-    ...(hiddenCandidates.length ? { hiddenCandidates: true } : {}),
+    ...(hiddenCandidates.length ? { hiddenCandidates: hiddenCandidates.map((node) => JSON.stringify([node.domId ?? null, node.fp])) } : {}),
   };
 }
 

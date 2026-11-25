@@ -1394,17 +1394,23 @@ export class InputHandoffSession {
     // Names and tree places change with the hidden fields gone (an error above a field, a fingerprint now unique).
     const plain = (step: ExtractedStep) => [...step.bindings.values()]
       .flatMap<{ identity: string }>((binding) => binding.kind !== 'text' ? [] : (binding.segments ?? [binding]))
-      .map((field) => {
-        const [domId, fp, , , frameOrigin] = JSON.parse(field.identity) as unknown[];
-        return JSON.stringify([domId, fp, frameOrigin]);
-      });
+      .map((field) => JSON.parse(field.identity) as unknown[]);
+    const key = ([domId, fp, , , frameOrigin]: unknown[]) => JSON.stringify([domId, fp, frameOrigin]);
     const left = plain(current);
     for (const field of plain(fresh)) {
-      const at = left.indexOf(field);
+      const at = left.findIndex((candidate) => key(candidate) === key(field));
       if (at < 0) return false;
       left.splice(at, 1);
     }
-    return left.length === hidden;
+    if (left.length !== hidden) return false;
+    // Each field gone must still be on the page as a hidden one: a field the page turned into text is simply gone.
+    const candidates = [...fresh.hiddenCandidates];
+    return left.every(([domId, fp]) => {
+      const at = candidates.indexOf(JSON.stringify([domId ?? null, fp]));
+      if (at < 0) return false;
+      candidates.splice(at, 1);
+      return true;
+    });
   }
 
   /** A browser showing no page, or a page whose address went missing for now. */
@@ -1429,12 +1435,19 @@ export class InputHandoffSession {
       // The screen re-rendered; find the same element by identity and retry once.
       const fresh = await this.options.driver.snapshot(this.target.pid, this.target.window);
       if ('error' in fresh) return false;
-      const matches = binding.kind === 'text'
-        // The same hidden code fields stay part of the step here as on every other read of it.
-        ? [...extractStep(fresh, new Set(this.step?.hiddenFields ?? [])).bindings.values()].filter(candidate => candidate.kind === 'text' &&
+      // The same hidden code fields stay part of the step here as on every other read of it.
+      const again = binding.kind === 'text' ? extractStep(fresh, new Set(this.step?.hiddenFields ?? [])) : null;
+      const matches = binding.kind === 'text' && again
+        ? [...again.bindings.values()].filter(candidate => candidate.kind === 'text' &&
           candidate.identity === binding.identity && candidate.secure === (binding.nativeSecure ?? binding.secure))
         : fresh.nodes.filter((node) => node.fp === binding.fp);
       if (matches.length !== 1 || this.ended) return false;
+      // As after the submit check: a key this read found ambiguous no longer vouches for any field of the step.
+      if (again && this.step) {
+        const valid = new Set(again.hiddenFields ?? []);
+        const kept = (this.step.hiddenFields ?? []).filter((key) => valid.has(key));
+        this.step.hiddenFields = kept.length ? kept : undefined;
+      }
       result = await this.options.driver.act({ ...request, ref: matches[0].ref, window: { index: fresh.window.index, title: fresh.window.title } });
     }
     return 'ok' in result && result.ok === true;

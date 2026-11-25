@@ -49,11 +49,13 @@ describe('InputHandoffSession', () => {
   // removes the focused one. `twinIds`: the two frames' fields have different ids, and a rejected code removes the
   // second frame. `dupIdLate`: the field read alike as `dupId`'s appears only once `state.lateTwin` is set, and typing the
   // phone removes the code. `state.paid`: the code goes, success text shows, and a never-focused 1x1 field remains.
+  // `stalePhone`: the first fill of the phone reports it stale and sets `state.lateTwin`. `state.phoneStatic`: the
+  // page turns the phone into plain text.
   type PayLayout = 'focus' | 'insert' | 'trap' | 'frame' | 'fragment' | 'twoSteps' | 'sameFp' | 'twinFrames' | 'twinDrop' |
     'twinSwap' | 'twinDropOther' | 'twinIds' | 'splitCode' | 'dupId' | 'dupIdDrop' | 'dupIdLate';
-  function payPage(options: { layout?: PayLayout; staleOnce?: boolean; rejects?: boolean; errorAbove?: boolean; noIds?: boolean } = {}) {
+  function payPage(options: { layout?: PayLayout; staleOnce?: boolean; stalePhone?: boolean; rejects?: boolean; errorAbove?: boolean; noIds?: boolean } = {}) {
     const layout = options.layout ?? 'focus';
-    const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce, secondStep: false, rejected: false, lateTwin: false, paid: false };
+    const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce, secondStep: false, rejected: false, lateTwin: false, paid: false, phoneStatic: false, stalePhone: !!options.stalePhone };
     const acts: Array<{ kind: string; ref?: string }> = [];
     const chrome = { pid: 20, app: 'Google Chrome', bundleId: 'com.google.Chrome' };
     const n = (ref: string, role: string, extra: Record<string, unknown> = {}) =>
@@ -75,7 +77,8 @@ describe('InputHandoffSession', () => {
       } else if (layout === 'sameFp') {
         out.push(n(next(), 'AXStaticText', { value: 'Phone', frame: [460, 280, 60, 16] }));
         out.push(n(next(), 'AXTextField', { frame: [460, 300, 260, 30], focused: state.focus === 'phone' }));
-      } else out.push(n(next(), 'AXTextField', { title: 'Phone', frame: [460, 300, 260, 30], focused: state.focus === 'phone' }));
+      } else if (state.phoneStatic) out.push(n(next(), 'AXStaticText', { value: '186****0000', frame: [460, 300, 260, 30] }));
+      else out.push(n(next(), 'AXTextField', { title: 'Phone', frame: [460, 300, 260, 30], focused: state.focus === 'phone' }));
       const note = layout === 'trap' ? !state.phoneTyped : ['insert', 'frame'].includes(layout) && state.phoneTyped;
       if (note) out.push(n(next(), 'AXStaticText', { value: 'Check the phone number', frame: [460, 340, 200, 16] }));
       out.push(n(next(), 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }));
@@ -128,6 +131,7 @@ describe('InputHandoffSession', () => {
         acts.push({ kind: request.kind, ref });
         if (request.kind === 'text') {
           if (state.secondStep) state.focus = 'password';
+          else if (ref === '0.1' && state.stalePhone) { state.stalePhone = false; state.lateTwin = true; return { error: 'stale' }; }
           else if (ref === '0.1') { state.focus = 'phone'; state.phoneTyped = true; } else if (state.stale) { state.stale = false; return { error: 'stale' }; } else state.focus = 'code';
         } else if (layout === 'twoSteps' && !state.secondStep) {
           state.secondStep = true;
@@ -289,6 +293,35 @@ describe('InputHandoffSession', () => {
     const values = Object.fromEntries(texts.map((control, i) => [control.id, i === 0 ? '18600000000' : '123456']));
     await session.submit({ expectedRevision: step.revision, values, action: { kind: 'submit' } });
     expect(page.acts.map((act) => act.ref ?? act.kind)).toEqual(['0.1']);
+    session.cancel();
+  });
+
+  // PR #12780 review (codex r4694619550): the same, with the field read alike first seen by the stale retry's re-read;
+  // it dropped the key there but left it on the step. Entry: session.submit. Unit tier.
+  it('drops a hidden code key that the stale retry found ambiguous', async () => {
+    const page = payPage({ layout: 'dupIdLate', stalePhone: true });
+    const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
+    await session.start();
+    const step = latest();
+    const texts = step.controls.filter((control) => control.kind === 'text');
+    expect(texts).toHaveLength(2);
+    const values = Object.fromEntries(texts.map((control, i) => [control.id, i === 0 ? '18600000000' : '123456']));
+    await session.submit({ expectedRevision: step.revision, values, action: { kind: 'submit' } });
+    expect(page.acts.map((act) => act.ref ?? act.kind)).toEqual(['0.1', '0.1']);
+    session.cancel();
+  });
+
+  // PR #12780 review (codex r4694619559): the page turned the phone into plain text while the code stayed focused; one
+  // field gone, as many as the hidden ones, read as the code lost, so the card froze on the old step.
+  // Entry: window watch. Unit tier.
+  it('shows the code alone once the page turns the field before it into text', async () => {
+    const page = payPage();
+    const { session, latest, finished } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' }, windowWatchMs: 2 });
+    await session.start();
+    expect(latest().controls.filter((control) => control.kind === 'text')).toHaveLength(2);
+    page.state.phoneStatic = true;
+    await vi.waitFor(() => expect(latest().controls.filter((control) => control.kind === 'text')).toHaveLength(1));
+    expect(finished).toEqual([]);
     session.cancel();
   });
 
