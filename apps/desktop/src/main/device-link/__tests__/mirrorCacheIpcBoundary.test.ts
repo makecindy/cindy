@@ -125,6 +125,7 @@ vi.mock('../index', () => ({
   getDirectDataDeviceIds: () => [],
   getDeviceLinkConnectionIssue: () => null,
   isDeviceLinkStandby: () => false,
+  getDeviceIdentityConflict: () => null,
   getUnresponsiveDeviceIds: () => [],
   clearDeviceResponsiveness: vi.fn(),
   setRemoteControlEnabled: vi.fn(),

@@ -18,11 +18,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { sharedTaskHostPeer } from '@cindy/device-link';
+import { ANTIGRAVITY_MARK_DATA_URL } from '@cindy/maker-shared/branding';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { applyPluginEnginePick, buildRemoteCreateSessionOptions, type NewSessionDraft } from '@/session/newSession';
 import {
   buildPluginEngineGroups,
+  formatPluginEnginePickerQuota,
   getCachedPluginEngines,
   loadPluginEngines,
   normalizePluginEngines,
@@ -50,6 +52,15 @@ const desktopView = {
   ],
   defaultPermissionMode: 'default',
 };
+
+// Unit / #12735: old desktops can send generic engine IDs and stale artwork
+// to the model picker and task metadata. The exact engine name identifies the mark.
+it('projects the legacy Antigravity engine mark and preserves other artwork', () => {
+  const legacy = { ...desktopView, providerId: 'acp-plugin:legacy:cli', ghostId: 'legacy', name: 'Antigravity' };
+  const [antigravity, other] = normalizePluginEngines([legacy, desktopView]);
+  expect(antigravity?.iconDataUrl).toBe(ANTIGRAVITY_MARK_DATA_URL);
+  expect(other?.iconDataUrl).toBe(desktopView.iconDataUrl);
+});
 
 describe('reading the engines of the controlled computer', () => {
   it('reads the list over device-link and keeps only well-formed engines', async () => {
@@ -302,5 +313,43 @@ describe('a task running on a plugin engine', () => {
         .map((group) => group.title);
     expect(picker(null)).toEqual(['Antigravity']);
     expect(picker({ providerId: DSH, modelId: 'deepseek-v4' })).toEqual(['DeepSeek Harness', 'Antigravity']);
+  });
+
+  // Unit: Mobile model picker plugin engine group header quota formatting (windows, expired
+  // windows falling back to balances, and depleted balance warning). Minimal failing input:
+  // tightest window not chosen or balance-only plugin returns undefined.
+  it('formats plugin engine picker quota from tightest unexpired window or currency balance', () => {
+    const now = 1_700_000_000_000;
+    const countdown = (resetsAtSec: number) => `${Math.round((resetsAtSec * 1000 - now) / 3_600_000)}h`;
+    expect(formatPluginEnginePickerQuota({
+      updatedAt: now,
+      windows: [
+        { label: 'Weekly', remainingPercent: 80, resetsAt: now + 24 * 3_600_000 },
+        { label: '5h', remainingPercent: 20, resetsAt: now + 2 * 3_600_000 },
+        { label: 'Expired', remainingPercent: 0, resetsAt: now - 1000 },
+      ],
+    }, now, 'en-US', countdown)).toEqual({
+      summary: '20% · 2h',
+      level: 'warn',
+      accessibilityLabel: '5h · 20% · 2h',
+    });
+
+    expect(formatPluginEnginePickerQuota({
+      updatedAt: now,
+      windows: [{ label: 'Expired', remainingPercent: 0, resetsAt: now - 1000 }],
+      balances: [{ currency: 'USD', amount: '12.50' }],
+    }, now, 'en-US', countdown)).toMatchObject({
+      level: 'normal',
+      summary: expect.stringContaining('12.50'),
+    });
+
+    expect(formatPluginEnginePickerQuota({
+      updatedAt: now,
+      balances: [{ currency: 'CNY', amount: '0' }],
+    }, now, 'zh-CN', countdown)).toMatchObject({
+      level: 'crit',
+    });
+
+    expect(formatPluginEnginePickerQuota(null, now, 'en-US', countdown)).toBeUndefined();
   });
 });

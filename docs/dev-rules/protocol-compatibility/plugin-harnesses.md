@@ -168,6 +168,7 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
 
 同账号配对设备通过只读 `maker:get-plugin-engine-usage(key)` 查询执行电脑；SSH、分享访客与未配对调用没有账号用量入口。
 旧插件继续使用现有状态与模型，新插件在旧 Host 上仍可在自己的设置页获取用量。旧 Host 缺少该 channel 时控制端按无数据处理。
+支持区分 worker 错误的执行电脑会通过现有 invoke 错误返回临时读取失败。系统栏和小组件保留该引擎的上次读数、显示读取时间，并按已有失败节奏重试。成功的空读数和读取期间账号或授权失效仍返回空；旧版执行电脑返回的空值也按空读数处理。
 既有 Device Link invoke 帧和自建中转可原样转发，无需扩展中转协议。该变更不增加 manifest 权限、批准或安装迁移。
 
 ## 引擎账号（多账号，2026-11-23，未发布）
@@ -243,3 +244,14 @@ method-not-found 时本会话撤回插话能力，之后的插话排队。
 排队消息菜单不出现插话），队列等待时在消息流末尾显示一行说明。旧被控端不带该字段，新界面按支持处理，行为与以前相同；
 旧控制端与手机忽略该字段，仍显示插话入口，点击后由新被控端排队，不再报错。不新增 channel 或中转帧，自建中转原样转发。
 回归见 `agent-input-coordinator.test.ts`「sends a steer after this turn」与 renderer `pendingQueueRowPresentation.test.ts`「PendingQueueBubble steer action」。
+
+## `/` 菜单里的 Skill（2026-11-25）
+
+`maker:list-agent-skills` 的 `agentKind` 新增取值 `acp`：插件引擎任务的 `/` 菜单向执行电脑上的插件引擎读取它展开
+`/<skill>` 用的 Skill 清单（`AcpAgent.listAgentSkills`，与首轮 Skill 清单同源），返回既有 `AgentSkillCommand` 形状，
+`runtimeCommandName` / `runtimeStatus` / `origin` 不出现。这是既有字段的新取值，channel 早已在 allowlist：新控制端对旧被控端
+发出时旧端以 INVALID_PARAMS 拒绝，菜单按读取失败不列 Skill（旧被控端的引擎也不展开 `/<skill>`，不会列出点了没用的项）；
+旧控制端从不发出。Node Host（`/api/agent-skills`）不运行插件引擎，对 `acp` 回「未注册」，不按 Claude 列清单。
+不新增 channel、中转帧或字段，自建中转原样转发，无需同步修改。
+实现见 desktop `maker-ipc/register.ts`、maker-core `agents/acp/acp-agent.ts`、host `agent/agent-skills.ts`；回归见
+`acp-session.test.ts`「lists for the `/` menu」、renderer `slashCommands.test.ts`「plugin engine Skills」与 host `boundary.test.mjs`「25b L1」。

@@ -1,15 +1,5 @@
 // @vitest-environment jsdom
-
-/**
- * 测试价值
- * - 生产入口与可观察结果：useAuxiliaryModelHealthNotice 是否弹出带「去设置」的警告提示。
- * - Bug／规则依据：docs/product-rules/auxiliary-model-health.md「弹一次」：同一个问题、同样的
- *   原因不重复弹；恢复后再出问题要再弹；副窗口不弹。
- * - 现有覆盖缺口：主进程测试只覆盖状态与通知次数，不覆盖界面去重。
- * - 最小失败输入：同一配置问题推送两次（重读两次）。
- * - tier：unit（jsdom；IPC 与推送为内存替身）。
- */
-
+// Unit: settings follow provider repairs and coalesce concurrent invalidations; only a failed custom session can notify.
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,7 +22,7 @@ vi.mock('@/lib/toast', () => ({ toast: { warning: mocks.toastWarning } }));
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({ isDataOwnerPushStampCurrent: () => true }));
 
-import { resetAuxiliaryModelHealthNoticeForTests, useAuxiliaryModelHealthNotice } from '../useAuxiliaryModelHealth';
+import { useAuxiliaryModelHealth } from '../useAuxiliaryModelHealth';
 
 const configProblem = (issue: 'provider_disabled' | 'signed_out'): AuxiliaryModelHealth => ({
   status: 'unavailable',
@@ -49,10 +39,9 @@ async function push(next: AuxiliaryModelHealth): Promise<void> {
   });
 }
 
-describe('useAuxiliaryModelHealthNotice', () => {
+describe('useAuxiliaryModelHealth', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resetAuxiliaryModelHealthNoticeForTests();
     mocks.health = { status: 'ok' };
     mocks.getHealth.mockReset().mockImplementation(async () => mocks.health);
     mocks.secondary = false;
@@ -75,57 +64,24 @@ describe('useAuxiliaryModelHealthNotice', () => {
 
   afterEach(() => cleanup());
 
-  it('announces a problem once, again only for a new cause or after a recovery', async () => {
-    renderHook(() => useAuxiliaryModelHealthNotice());
-    await waitFor(() => expect(mocks.listener).toBeDefined());
-
-    await push(configProblem('provider_disabled'));
-    await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledTimes(1));
-    expect(mocks.toastWarning).toHaveBeenCalledWith(
-      'settings.auxiliaryModels.health.toast.config',
-      expect.objectContaining({ action: expect.objectContaining({ label: 'settings.auxiliaryModels.health.toast.open' }) }),
-    );
-    mocks.toastWarning.mock.calls[0]?.[1]?.action?.onClick();
-    expect(mocks.navigate).toHaveBeenCalledWith('/settings?tab=personalization&section=personalization.auxiliaryModels');
-
-    // Same problem re-read (for example another push): silent.
-    await push({ ...configProblem('provider_disabled'), since: 2 } as AuxiliaryModelHealth);
-    // New cause: announced.
-    await push(configProblem('signed_out'));
-    // Recovery, then the first problem again: announced again.
-    await push({ status: 'ok' });
-    await push(configProblem('provider_disabled'));
-    await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledTimes(3));
-  });
-
-  // Repairing a supplier or its credentials does not require another model request.
-  it('reads a provider repair and can announce a later recurrence', async () => {
+  it('refreshes the diagnostic after a provider repair without raising a global toast', async () => {
     mocks.health = configProblem('provider_disabled');
-    renderHook(() => useAuxiliaryModelHealthNotice());
-    await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledTimes(1));
-
-    let finishRead!: (snapshot: AuxiliaryModelHealth) => void;
-    mocks.getHealth.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    const { result } = renderHook(() => useAuxiliaryModelHealth());
+    await waitFor(() => expect(result.current).toEqual(mocks.health));
+    let finish!: (health: AuxiliaryModelHealth) => void;
+    mocks.getHealth.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     await act(async () => { mocks.providerListener?.(); });
-
     mocks.health = { status: 'ok' };
     await act(async () => {
       mocks.providerListener?.();
       mocks.providerListener?.();
       expect(mocks.getHealth).toHaveBeenCalledTimes(2);
-      finishRead(configProblem('provider_disabled'));
+      finish(configProblem('provider_disabled'));
     });
     expect(mocks.getHealth).toHaveBeenCalledTimes(3);
-    await push(configProblem('provider_disabled'));
-    expect(mocks.toastWarning).toHaveBeenCalledTimes(2);
-  });
-
-  it('stays quiet in secondary windows', async () => {
-    mocks.secondary = true;
-    mocks.health = configProblem('provider_disabled');
-    renderHook(() => useAuxiliaryModelHealthNotice());
-    await waitFor(() => expect(mocks.listener).toBeDefined());
+    expect(result.current).toEqual({ status: 'ok' });
     await push(configProblem('signed_out'));
+    expect(result.current).toEqual(mocks.health);
     expect(mocks.toastWarning).not.toHaveBeenCalled();
   });
 });

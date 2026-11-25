@@ -150,7 +150,7 @@ it('lets a shared user\'s Pi call only tools that Cindy extensions registered', 
   const handlerStart = source.indexOf("  pi.on('tool_call', async");
   const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
   // 子代理扩展的工具名在生成时写进源码。
-  expect(source).toContain('createCindyGuestToolGate(piApi, ["subagent"])');
+  expect(source).toContain('createCindyGuestToolGate(piApi, ["cindy_subagent"])');
   const handlers = new Map<string, (event: any, ctx: any) => any>();
   const registered: string[] = [];
   const api = {
@@ -160,7 +160,7 @@ it('lets a shared user\'s Pi call only tools that Cindy extensions registered', 
   };
   const compiled = ts.transpileModule(
     source.slice(gateStart, gateEnd)
-      + '\nconst guestToolGate = createCindyGuestToolGate(api, ["subagent"]);\nconst pi = guestToolGate.pi;'
+      + '\nconst guestToolGate = createCindyGuestToolGate(api, ["cindy_subagent"]);\nconst pi = guestToolGate.pi;'
       + '\npi.registerTool({ name: "read" });\npi.registerTool({ name: "cindy_mcp_call_tool" });\nresult = pi.getActiveTools();\ngate = guestToolGate;\n'
       + source.slice(handlerStart, handlerEnd),
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
@@ -181,7 +181,8 @@ it('lets a shared user\'s Pi call only tools that Cindy extensions registered', 
   }
   // Cindy 扩展注册的(含经 Pi 原名顶替的 read)与子代理工具放行，交给后面的权限门。
   const gate = sandbox.gate as { blocks: (toolName: unknown) => boolean };
-  for (const toolName of ['read', 'cindy_mcp_call_tool', 'subagent']) expect(gate.blocks(toolName)).toBe(false);
+  for (const toolName of ['read', 'cindy_mcp_call_tool', 'cindy_subagent']) expect(gate.blocks(toolName)).toBe(false);
+  expect(gate.blocks('subagent')).toBe(true);
 });
 
 const canLinkFile = (() => {
@@ -2517,6 +2518,63 @@ it.each(['list_machines', 'ask_user_question_async', 'manage_user_questions'])('
   // Ask and Auto judge the real MCP identity, so this auto-approves like the same tool over MCP.
   expect(direct.resolveHookedCall(name, {}).qualifiedName).toBe('mcp__cindy_helper__' + name);
   expect(direct.resolveHookedCall('read', {})).toBeNull();
+});
+
+it('classifies MCP discovery errors by the registered server before matching the tool (#6926)', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+  };
+  runInNewContext(compiled, context);
+
+  const gateway = new context.Gateway();
+  const client = {};
+  gateway.add('demo', client, [{ name: 'inspect' }], 'Demo');
+  gateway.add('one', client, [{ name: 'inspect' }], 'Shared');
+  gateway.add('two', client, [{ name: 'inspect' }], 'Shared');
+  gateway.add('cindy_memory', client, [{ name: 'call_tool' }]);
+  gateway.setServerDisplayName('offline', 'Offline');
+  gateway.markUnavailable('offline', 'Connection closed');
+  let listTools!: (id: string, input: { server?: string; tool?: string }) => Promise<{ details: unknown }>;
+  gateway.register({
+    registerTool: (tool: { name: string; execute: typeof listTools }) => {
+      if (tool.name === 'cindy_mcp_list_tools') listTools = tool.execute;
+    },
+  }, { botMemoryFacade: true });
+
+  const discover = async (server: string, tool?: string) =>
+    (await listTools('lookup', tool ? { server, tool } : { server })).details;
+  const unknown = {
+    ok: false,
+    errorCode: 'UNKNOWN_SERVER',
+    requested: 'missing',
+    availableServers: ['Demo', 'Shared'],
+    unavailableServers: [{ server: 'offline', reason: 'Connection closed' }],
+  };
+  expect(await discover('missing', 'inspect')).toEqual(unknown);
+  expect(await discover('missing')).toEqual(unknown);
+  expect(await discover('Offline', 'inspect')).toMatchObject({
+    errorCode: 'SERVER_UNAVAILABLE', reason: 'Connection closed',
+  });
+  expect(await discover('Demo', 'missing')).toMatchObject({
+    errorCode: 'UNKNOWN_TOOL', availableTools: ['inspect'],
+  });
+  expect(await discover('Shared', 'inspect')).toMatchObject({
+    errorCode: 'AMBIGUOUS_SERVER', matchingServerIds: ['one', 'two'],
+  });
+  expect(await discover('demo', 'inspect')).toMatchObject({
+    ok: true, tools: [{ server: 'Demo', serverId: 'demo', name: 'inspect', inputSchema: { type: 'object' } }],
+  });
+  expect(await discover('cindy_memory', 'call_tool')).toMatchObject({
+    errorCode: 'UNKNOWN_TOOL', availableTools: [],
+  });
+  expect(await discover('cindy_memory')).toMatchObject({ errorCode: 'UNKNOWN_SERVER' });
 });
 
 it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {

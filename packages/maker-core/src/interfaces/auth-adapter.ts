@@ -43,6 +43,8 @@ export interface AuthAdapterOptions {
 /** A directory capability, minted by the executing host after owner/route checks. */
 export interface NativeSubscriptionAccount {
   id: string;
+  /** Catalog provider authorized for this guest before the host selected the native OpenAI route. */
+  readonly sharedProviderId?: string;
   configDir: string;
   defaultProfile?: boolean;
   assertCurrent(): void;

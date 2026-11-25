@@ -329,7 +329,7 @@ import {
   useRemoteSessionBootstrapFailures,
   useRemoteSessionBootstrapLoading,
   useRemoteSessionBootstrapLoadingDevices,
-  useSelectedMachineConnecting,
+  useSelectedMachinePlaceholder,
   useSwitcherDevices,
 } from '@/features/device-link/useMachineSwitcher';
 import { buildSidebarDeviceIndex } from './lib/sidebarDeviceGrouping';
@@ -1603,8 +1603,7 @@ function ExpandedView({
     sessionsHook.isLoading ||
     remoteSessionBootstrapLoading ||
     remoteDeviceDirectoryStatus === 'loading';
-  // 选中的远程机器尚在连接中(会话未同步)→ 用「连接中」占位替换空列表的「暂无对话」。
-  const selectedMachineConnecting = useSelectedMachineConnecting();
+  const selectedMachinePlaceholder = useSelectedMachinePlaceholder();
   // orca worker + status 过滤(**不含**机器过滤)—— 抽出给「机器过滤后渲染」与「全量项目宇宙」共用。
   const passesOrcaAndStatus = useCallback(
     (s: Session) => {
@@ -3409,6 +3408,7 @@ function ExpandedView({
           : ''),
       confirmText: t('ccAgent.sidebar.bulkSelection.confirmDelete.confirm'),
       cancelText: t('ccAgent.sidebar.bulkSelection.confirmDelete.cancel'),
+      confirmVariant: 'destructive',
     });
     if (!ok) return;
 
@@ -3811,8 +3811,7 @@ function ExpandedView({
                   partial={false}
                 />
               </>
-            ) : selectedMachineConnecting ? (
-              // 选中机器连接中:会话还没同步,显示「连接中」而非「暂无对话」。
+            ) : selectedMachinePlaceholder ? (
               // 范围标题恒在,可从菜单切回「所有 / 本机」,不会被困在占位页。
               <>
                 <MainListScopeHeader
@@ -3822,9 +3821,15 @@ function ExpandedView({
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
-                  <span className="animate-pulse text-xs text-[var(--text-tertiary)]">
-                    {t('ccAgent.sidebar.machineSwitcher.connecting')}
-                  </span>
+                  {selectedMachinePlaceholder === 'offline' ? (
+                    <span role="status" className="text-xs text-[var(--text-tertiary)]">
+                      {t('ccAgent.sidebar.deviceGroup.offline')}
+                    </span>
+                  ) : (
+                    <span className="animate-pulse text-xs text-[var(--text-tertiary)]">
+                      {t('ccAgent.sidebar.machineSwitcher.connecting')}
+                    </span>
+                  )}
                 </div>
               </>
             ) : (
@@ -3998,6 +4003,7 @@ function ExpandedView({
         }
         confirmText={t('ccAgent.sidebar.confirmDelete.confirm')}
         cancelText={t('ccAgent.sidebar.confirmDelete.cancel')}
+        confirmVariant="destructive"
         onConfirm={handleConfirm}
         onCancel={handleCancelConfirm}
       />
@@ -4673,7 +4679,7 @@ function RailPanels({
           aria-disabled={disabled ? true : undefined}
           aria-label={disabled ? label : undefined}
           tabIndex={disabled ? 0 : undefined}
-          className="inline-flex self-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="inline-flex self-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
           <button
             type="button"
@@ -4685,7 +4691,7 @@ function RailPanels({
               onCreate();
             }}
             className={cn(
-              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md -my-1',
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded-lg -my-1',
               'text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
               // globals.css 移除了 Chromium 默认 outline,键盘可达按钮必须自带
               // token 化 focus 环(DESIGN.md §10;codex review)。

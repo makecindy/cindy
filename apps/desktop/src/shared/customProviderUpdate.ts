@@ -8,6 +8,7 @@ export interface CustomProviderUpdateOptions {
   source?: 'manual-settings';
   /** Local Settings additions, merged against the latest connection in Main. */
   appendSpeechModelsOnly?: true;
+  appendRealtimeModelsOnly?: true;
   /** Successful manual discovery routes; Main classifies the merged config before filling a reference. */
   speechReferenceRefreshAgents?: AgentKind[];
   codexImageGenerationRestartPolicy?: CodexImageGenerationRestartPolicy;

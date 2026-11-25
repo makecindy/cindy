@@ -74,6 +74,8 @@ import {
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
   isCindyGatewayProviderId,
   isGatewayProxyTokenInvalidError,
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
   parseAgentErrorCode,
   localizeSubscriptionAccountError,
@@ -251,7 +253,7 @@ import {
   extractUsageLimitRecoveryHint,
   type UsageLimitRecoveryHint,
 } from '@/lib/usageLimitRecovery';
-import { providerErrorExplanation } from '@/utils/streamInterruptError';
+import { hasProviderErrorDetails } from '@/utils/streamInterruptError';
 import { parseReconnectAttemptMessage } from '@/utils/networkError';
 
 import {
@@ -427,8 +429,13 @@ export function remoteErrorMessageForBanner(error: unknown): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
-  // The banner localizes its title from the reason. Preserve structured provider copy underneath.
-  if (providerErrorExplanation(message)) return message;
+  // The banner localizes its summary and decides which details are safe to show inline.
+  if (hasProviderErrorDetails(message)) return message;
+  // Preserve raw upstream safety refusal copy (e.g. plain-text Claude refusal) for
+  // ErrorBanner detection and collapsed details even if an older host sent turn-failed.
+  if (reason === PROVIDER_SAFETY_REFUSAL_REASON || isProviderSafetyRefusalError(message, reason)) {
+    return message;
+  }
   if (reason === 'unexecuted-tool-markup') return i18n.t('logic.errors.unexecutedToolMarkup');
   // The banner localizes this stable reason. Keep the host's bounded cause in
   // the raw detail/diagnosis path instead of replacing it with summary copy.
@@ -3096,6 +3103,7 @@ export type SessionChatLightState = Pick<
 > & {
   /** 窗口是否掺进过孤岛(由 historyWindowIslands 派生,给 UI / 判定用)。 */
   historyWindowHasIsland: boolean;
+  queueHeadRetry: boolean;
 };
 
 /** 没有孤岛的空模型(共享只读实例,避免无谓分配)。 */
@@ -3278,6 +3286,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
 export const EMPTY_LIGHT_STATE: SessionChatLightState = Object.freeze({
   ...EMPTY_SESSION_STATE,
   historyWindowHasIsland: false,
+  queueHeadRetry: false,
 });
 
 // ---------------------------------------------------------------------------
@@ -5231,6 +5240,8 @@ function applyInputProjection(
     const authRetryProjectionError =
       s._authRetryPersistOnProjectionError &&
       projection.error &&
+      // A cold queue snapshot can describe a previous refusal without a new send.
+      !(projection.queuePaused && projection.error === '[REMOTE_COMPAT_MODE_UNSUPPORTED]') &&
       projection.pendingQueue.some(
         (q) => q.clientId === s._authRetryPersistOnProjectionError!.clientId,
       )
@@ -10538,6 +10549,7 @@ function visibleAskUser(state: SessionChatState): PendingAskUser | null {
 }
 
 function selectLightState(state: SessionChatState): SessionChatLightState {
+  const queueHead = state.pendingQueue[0];
   return {
     agentSwitchIntent: state.agentSwitchIntent,
     agentStatus: state.agentStatus,
@@ -10549,6 +10561,9 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     outputLimit: state.outputLimit,
     recoverableError: state.recoverableError,
     errorRetryText: state.errorRetryText,
+    queueHeadRetry: state.inputRecovery?.kind === 'queue-head'
+      && queueHead?.clientId === state.inputRecovery.clientId
+      && !queueHead.origin && !queueHead.originalSyntheticTrigger && !queueHead.sourcePlugin,
     errorCanContinue: state.errorCanContinue,
     errorPersistId: state.errorPersistId,
     disposedErrorPersistId: state.disposedErrorPersistId,
@@ -10608,6 +10623,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.outputLimit === b.outputLimit &&
     a.recoverableError === b.recoverableError &&
     a.errorRetryText === b.errorRetryText &&
+    a.queueHeadRetry === b.queueHeadRetry &&
     a.errorCanContinue === b.errorCanContinue &&
     a.errorPersistId === b.errorPersistId &&
     a.disposedErrorPersistId === b.disposedErrorPersistId &&
@@ -19223,6 +19239,9 @@ export const makerChatStore = {
   getLightSnapshot,
   /** Non-creating read: session has a paused, non-empty pending queue (sidebar indicator). */
   hasPausedQueue,
+  /** Read only the presence of an existing feedback request, without creating chat state. */
+  hasPendingIssueConfirm: (sessionId: string): boolean =>
+    sessions.get(sessionId)?.pendingIssueConfirm != null,
   /** 查询会话是否有正在运行的 wake 型后台任务 (local_agent / local_workflow)。 */
   hasRunningWakeTask: (sessionId: string): boolean => {
     const state = sessions.get(sessionId);

@@ -682,6 +682,58 @@ describe('shared history view lifecycle', () => {
     expect(intents.at(-1)).toEqual([]);
   });
 
+  // Unit regression for #12504: releasing three detail ranges used to scan
+  // 12 cached bodies instead of five and notify the chat after each collapse.
+  it('trims the warm cache once when a mounted group releases its detail ranges', async () => {
+    const visited: string[] = [];
+    const messages = Array.from({ length: 6 }, (_, index) => ({
+      ...row(index + 1, 'thinking', ''),
+      get content() { visited.push(this.id); return 'cached body'; },
+    }));
+    const items = messages.flatMap(message => projectHistoryView([message], false));
+    const summaries = historyWorkSummaries(items);
+    const keys = summaries.slice(2).map(summary => summary.key);
+    const heldKey = keys[0];
+    const queue = { tail: Promise.resolve() };
+    const expanded = vi.fn(async (_refs: readonly { key: string }[]) => {});
+    const readDetails = vi.fn(async () => { throw new Error('Expected a warm read'); });
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: readDetails, expanded,
+    }, queue);
+    const details = new Map(summaries.map((summary, index) => [summary.key, {
+      messages: [messages[index]], revision: summary.revision, lastMessageId: summary.lastMessageId,
+      loading: false, complete: true, error: null,
+    }]));
+    await view.restoreCachedView(async () => ({
+      items, details, expanded: new Set(), nextCursor: null, hasMore: false,
+      loading: false, ready: true, error: null,
+    }));
+
+    const release = view.retainExpanded(keys);
+    const releaseShared = view.retainExpanded([heldKey]);
+    await queue.tail;
+    const notify = vi.fn();
+    const unsubscribe = view.subscribe(notify);
+    visited.length = 0;
+    release();
+    release();
+    await queue.tail;
+
+    expect([...view.getSnapshot().expanded]).toEqual([heldKey]);
+    expect(view.getSnapshot().details).toBe(details);
+    expect(visited.toSorted()).toEqual(messages.filter((_, i) => i !== 2).map(message => message.id));
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(expanded.mock.calls.map(([refs]) => refs.map(ref => ref.key))).toEqual([keys, [heldKey]]);
+    expect(readDetails).not.toHaveBeenCalled();
+
+    releaseShared();
+    await queue.tail;
+    expect([...view.getSnapshot().expanded]).toEqual([]);
+    expect(expanded.mock.calls.at(-1)?.[0]).toEqual([]);
+    unsubscribe();
+  });
+
   // Unit: a delayed ACK used to queue one identical final replacement per
   // refresh/toggle. Only unsent intents may coalesce; reconnect must resend.
   it.each([false, true])('coalesces queued interest behind a slow ACK (rejected=%s)', async (rejected) => {
@@ -1041,6 +1093,45 @@ describe('locating folded history preserves display expansion', () => {
     releaseSecond?.();
     expect(view.getSnapshot().expanded.size).toBe(0);
     view.setActive(false);
+  });
+
+  // Unit regression for #12529. Existing preview tests keep a mounted owner.
+  // A cached running preview must remain usable after its last owner releases
+  // it (a card replaced the work group), until a changed revision needs a read.
+  it('keeps a completed running preview after release until its revision changes', async () => {
+    let messages = [row(1, 'thinking', 'first activity')];
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView(messages, true), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages, hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    const render = () => renderHistoryView({
+      view, snapshot: view.getSnapshot(), liveMessages: [], streaming: true,
+      build: rows => rows.map(message => message.content),
+      structure: ungroupedStructure,
+    });
+    try {
+      await view.refresh();
+      const preview = historyWorkSummaries(view.getSnapshot().items)[0]?.preview;
+      if (!preview) throw new Error('Expected a running preview');
+      const release = view.retainExpanded([preview.key]);
+      await view.loadDetails(preview);
+      release();
+      expect(view.getSnapshot().expanded.size).toBe(0);
+      expect(render()).toEqual(['first activity']);
+
+      messages = [...messages, row(2, 'thinking', 'second activity')];
+      await view.refresh();
+      expect(render()).not.toContain('first activity');
+      const next = historyWorkSummaries(view.getSnapshot().items)[0]?.preview;
+      if (!next) throw new Error('Expected a revised running preview');
+      const releaseNext = view.retainExpanded([next.key]);
+      await view.loadDetails(next);
+      releaseNext();
+      expect(render()).toEqual(['first activity', 'second activity']);
+    } finally {
+      view.setActive(false);
+    }
   });
 
   it('keeps the previous running preview window while its advanced tail is still loading', async () => {

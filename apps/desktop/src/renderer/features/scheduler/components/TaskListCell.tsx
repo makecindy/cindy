@@ -294,7 +294,7 @@ export function TaskListCell({
             // size-5 幽灵按钮 + Silver 图标 + hover 浅灰底,连 token 都复用同一组,
             // 两处"运行"入口视觉与后续调整保持同步。零阴影(docs/design-rules/cindy-design-system.md §6)、
             // 零缩放位移(§14.4),只保留 ≤150ms 的 opacity/颜色功能性过渡。
-            'flex size-5 items-center justify-center rounded-md',
+            'flex size-5 items-center justify-center rounded-lg',
             'text-sidebar-action-icon',
             // 只在行 hover / 按钮 focus 时露出。
             'opacity-0 transition-[opacity,background-color,color] duration-150',
@@ -345,7 +345,7 @@ export function TaskListCell({
               // 高度 / 内边距对齐外面那个 <span>（text-sm 自然 line-height = 20px），
               // 用 h-5 + py-0 + -mx-1 让 input 在视觉上"原地"覆盖标题，
               // 避免双击进入编辑时 cell 整体被撑高 4px 的跳变。
-              'min-w-0 flex-1 h-5 px-1 -mx-1 py-0 rounded',
+              'min-w-0 flex-1 h-5 px-1 -mx-1 py-0 rounded-full',
               'text-sm font-medium text-[var(--msg-assistant-text)]',
               'bg-transparent outline-none',
               'border-[1.5px] border-[var(--focus-ring)]',
@@ -383,7 +383,7 @@ export function TaskListCell({
               'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
             )}
           >
-            {prRule ? t('scheduler.prTrigger.label') : s.webhookTrigger ? t('scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
+            {prRule ? (prRule.url.includes('/-/merge_requests/') ? 'MR' : 'PR') : s.webhookTrigger ? t('scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
           </span>
         )}
       </div>

@@ -110,6 +110,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const saveSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reloadRequestVersionRef = useRef(0);
+  const lifecycleWriteVersionRef = useRef(0);
   const statusPushVersionRef = useRef(0);
   const latestStatusPushRef = useRef<{
     status: FeishuBotStatus;
@@ -394,13 +395,22 @@ export function useFeishuBot(): UseFeishuBotReturn {
   }, [isClearing, isReconnecting, reloadState, t]);
 
   const setLifecycleAnnouncement = useCallback((enabled: boolean) => {
-    setLifecycleAnnouncementState(enabled);
-    if (cachedState) cachedState = { ...cachedState, lifecycleAnnouncement: enabled };
-    window.electronAPI.feishuBot.setLifecycleAnnouncement(enabled).catch((err) => {
+    const version = ++lifecycleWriteVersionRef.current;
+    void window.electronAPI.feishuBot.setLifecycleAnnouncement(enabled).then((result) => {
+      if (version !== lifecycleWriteVersionRef.current) return;
+      if (!result.ok) {
+        toast.error(t('ipcError.INTERNAL'));
+        return;
+      }
+      setLifecycleAnnouncementState(enabled);
+      if (cachedState) cachedState = { ...cachedState, lifecycleAnnouncement: enabled };
+    }).catch((err) => {
+      if (version !== lifecycleWriteVersionRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
       log.error('setLifecycleAnnouncement failed:', msg);
+      toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'ipcError.INTERNAL' })));
     });
-  }, []);
+  }, [t]);
 
   const setService = useCallback(
     (nextService: FeishuBotService) => {

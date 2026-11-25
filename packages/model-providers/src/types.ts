@@ -347,10 +347,13 @@ export interface CatalogModel {
   /** Execution-host derived display identity only; original id remains the request/storage key. */
   selectionAliasKey?: string;
   supportsToolCalls?: boolean;
+  supportsReasoning?: boolean;
+  reasoningOffEffort?: ModelMetadata["reasoningOffEffort"];
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
   /** Local Pi Chat compatibility override; not inherited public model metadata. */
   supportsStore?: boolean;
+  supportsLongCacheRetention?: false;
   /** Connection-scoped Pi Chat ID constraint; null explicitly preserves native IDs. */
   maxToolCallIdLength?: 64 | null;
   catalogPresetId?: string;

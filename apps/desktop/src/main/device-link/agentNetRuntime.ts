@@ -370,10 +370,11 @@ export function agentNetOnlyEncryptedByUser(): boolean {
 export async function createAgentNetOrLegacySocket<T>(
   legacy: () => T | Promise<T>,
   onTransport?: (encrypted: boolean) => void,
+  identityConflict?: AgentNetIdentityConflictObserver,
 ): Promise<AgentNetAppSocket | T> {
   const scope = refusalScope();
   let encrypted: AgentNetAppSocket | null;
-  try { encrypted = await createAgentNetAppSocket(); }
+  try { encrypted = await createAgentNetAppSocket(identityConflict); }
   catch (error) {
     if (scope !== refusalScope() || isAppSessionBoundaryPending()) throw error;
     if (!activeSelfHostedRelay() && agentNetRequiresEncryption()
@@ -531,7 +532,16 @@ export async function openScopedAgentNetAppSocket(api: AgentNetClient, assertCur
     return socket;
   } catch (error) { approver?.close(); throw error; }
 }
-export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | null> {
+interface AgentNetIdentityConflictObserver {
+  onReplaced(readDirectory: () => Promise<Array<{ deviceId: string; isSelf: true; selfName?: string | null }>>): void;
+  cooldownActive(): boolean;
+}
+
+export function setAgentNetDuplicateIdentityCooldown(active: boolean): void {
+  current?.setDuplicateIdentityCooldown(active);
+}
+
+export async function createAgentNetAppSocket(identityConflict?: AgentNetIdentityConflictObserver): Promise<AgentNetAppSocket | null> {
   if (!isAgentNetActive()) return null;
   const attempt = ++socketAttempt;
   const scope = activeOwnerScopeKey();
@@ -606,6 +616,17 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
     observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
     ...(members ? { peerRule: members.rule() } : {}),
     scoped: true, onDelegationRequests: requests => approver.update(requests),
+    ...(identityConflict ? { onRelayReplaced() {
+      if (attempt !== socketAttempt || scope !== activeOwnerScopeKey()
+        || selection !== agentNetSelectionKey() || isAppSessionBoundaryPending()) return;
+      identityConflict.onReplaced(async () => {
+        const devices = await api.directory(AbortSignal.timeout(10_000));
+        assertOwner();
+        if (attempt !== socketAttempt) return [];
+        return devices.flatMap((device) => device.online && device.certificate.deviceId === api.identity.deviceId
+          ? [{ deviceId: device.certificate.deviceId, isSelf: true as const, selfName: device.selfName }] : []);
+      });
+    } } : {}),
     onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); },
     onDirectory(directory) {
       assertOwner();
@@ -633,6 +654,7 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   peerConnectedAt.set(socket, connectedAt);
   notifyCoverage.set(socket, notifyCovered);
   const previous = current; current = socket; previous?.close();
+  if (identityConflict?.cooldownActive()) socket.setDuplicateIdentityCooldown(true);
   socket.on('relay', () => { if (current === socket) relayChanged(); });
   // 经中转的数据报在 UDP 与 WebSocket 之间切换：远程连接页马上刷新中转点上写的走法（不等 5 秒轮询）。
   socket.on('relay-route', () => { if (current === socket) relayChanged(); });

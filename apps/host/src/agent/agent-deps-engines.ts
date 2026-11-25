@@ -27,6 +27,7 @@ export const PORTS_ONLY_CODEX_READS = {
   getRemoteCodexTransport: undefined,
   isCodexAccountProvider: undefined,
   isolateCodexAccountSessions: undefined,
+  needsCodexFastCatalog: undefined,
   onCodexLocalModelsListed: undefined,
   prepareCodexExtraSpawnConfig: undefined,
   prepareCodexHostToolCatalog: undefined,
@@ -59,6 +60,9 @@ export const PORTS_ONLY_PI_READS = {
   getRemotePiAgentProxyEnv: undefined,
   getRemotePiFileOps: undefined,
   getRemotePiTransport: undefined,
+  // #12298: the Pi agent reads the host's subscription connection state; Claude and Codex route
+  // subagent models from their own catalogs and never consult it.
+  isNativeProviderSourceConnected: undefined,
   mutatePiManagedPackage: undefined,
   onPiManagedPackageMutationSettled: undefined,
   preparePiExtraSpawnConfig: undefined,

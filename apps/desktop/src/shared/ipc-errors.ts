@@ -1,3 +1,4 @@
+import { CLOUD_CLIENT_ERRORS, type CloudClientErrorCode } from './cloudSettingsErrors';
 import { CONTRIBUTION_ERROR_CODES } from './pluginContributionContract';
 import { WRITABLE_DIRECTORY_GRANT_ERROR_CODES, type WritableDirectoryGrantErrorCode } from './writableDirectoryGrantError';
 import type { BrowserOpenForLoginErrorCode } from './browserBackend';
@@ -80,6 +81,7 @@ export type IpcErrorCode =
   | 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'
   | 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'
   | WritableDirectoryGrantErrorCode
+  | CloudClientErrorCode
   | (typeof CONTRIBUTION_ERROR_CODES)[number]
   | (typeof COMPANION_IMPORT_ERROR_CODES)[number]
   // 通用错误
@@ -217,6 +219,7 @@ export type IpcErrorCode =
   | 'LEARN_BUSY' // 已有 learn run 在进行(全局并发 1)
   | 'LEARN_INVALID_STATE' // run 状态不允许该操作(如对非 awaiting-review 调 apply)
   // remote-ssh：连接阶段
+  | 'SSH_HOST_UNVERIFIED'
   | 'SSH_HOST_KEY_MISMATCH'
   | 'SSH_CONNECT_FAILED'
   | 'SSH_AUTH_FAILED'
@@ -373,6 +376,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN',
   ...WRITABLE_DIRECTORY_GRANT_ERROR_CODES,
   ...COMPANION_IMPORT_ERROR_CODES,
+  ...CLOUD_CLIENT_ERRORS,
   ...CONTRIBUTION_ERROR_CODES,
   'INVALID_PARAMS',
   'NOT_FOUND',
@@ -479,6 +483,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'GOAL_NOT_FOUND',
   'LEARN_BUSY',
   'LEARN_INVALID_STATE',
+  'SSH_HOST_UNVERIFIED',
   'SSH_HOST_KEY_MISMATCH',
   'SSH_CONNECT_FAILED',
   'SSH_AUTH_FAILED',
