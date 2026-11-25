@@ -498,6 +498,8 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
   伙伴（`bots.appearance` 的 `wallpaperMotion`），未选时跟随应用设置，不改全局壁纸设置。
   伙伴的视频无法播放时，提示出现在这位伙伴的「外观」页（`playbackFailedUrl` 按实际失败的媒体记录），
   不会把全局自定义壁纸标成无法播放。
+  伙伴选的内置壁纸下载失败时，这位伙伴的「外观」页给出提示与「重试下载」，下载中在壁纸一行说明；
+  下载状态按屏幕上那张壁纸记（`downloadWallpaperId`），应用的壁纸设置只在它是自己保存的那张时显示。
   删除伙伴时与头像等自定义资源一起删除它的图片（`botLifecycleService` 删除收尾，失败只记日志）；远程伙伴的
   图片存在控制端，由控制端在对方确认删除后自行清理（`forgetBotAppearance`）。
   通道 `appearance-settings:{get,import,remove}-bot-wallpaper(s)` 与推送 `bot-wallpapers-changed`

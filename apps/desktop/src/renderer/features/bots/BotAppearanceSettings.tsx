@@ -9,7 +9,7 @@ import { Select } from '@/components/ui/select';
 import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { useOptionalWallpaperSettings } from '@/hooks/useWallpaperSettings';
 import { SegmentedControl } from '@/components/ui/segmented-control';
-import { isSceneWallpaper } from '@/lib/wallpaper';
+import { isCdnWallpaper, isSceneWallpaper } from '@/lib/wallpaper';
 import { getThemeFamilies, tryGetFamily, type ThemeFamily } from '@/themes/families';
 import { onLocalThemesChange } from '@/themes/local-themes';
 import {
@@ -71,6 +71,14 @@ export function BotAppearanceSettings({ botId }: { botId: string }) {
   const wallpaper = useOptionalWallpaperSettings();
   const playbackFailed =
     appearance.wallpaperId === 'custom' && !!customUrl && wallpaper?.playbackFailedUrl === customUrl;
+  // A built-in wallpaper is downloaded on first use. The provider reports the wallpaper on
+  // screen, so this is the teammate's own only while its view is the one shown.
+  const ownDownload =
+    !!appearance.wallpaperId &&
+    isCdnWallpaper(appearance.wallpaperId) &&
+    wallpaper?.downloadWallpaperId === appearance.wallpaperId;
+  const downloading = ownDownload && !!wallpaper?.downloadPending;
+  const downloadFailed = ownDownload && !!wallpaper?.downloadFailed && !downloading;
   // Same rule as the app's wallpaper settings: only wallpapers with a video offer the choice.
   const canMove = appearance.wallpaperId === 'custom'
     ? !!customUrl && isCustomWallpaperVideo(customUrl)
@@ -143,6 +151,7 @@ export function BotAppearanceSettings({ botId }: { botId: string }) {
         />
         <SettingsRow
           title={t('bots.appearance.wallpaper')}
+          hint={downloading ? t('settings.appearance.wallpaper.downloading') : undefined}
           wrap
           trailing={
             <Select
@@ -220,6 +229,18 @@ export function BotAppearanceSettings({ botId }: { botId: string }) {
           role="alert"
           className="mt-3"
           message={error || t('settings.appearance.wallpaper.customPlaybackFailed')}
+        />
+      )}
+      {downloadFailed && (
+        <ErrorNotice
+          role="alert"
+          className="mt-3"
+          message={t('settings.appearance.wallpaper.downloadFailed')}
+          actions={
+            <Button variant="secondary" size="sm" type="button" onClick={() => wallpaper?.retryDownload()}>
+              {t('settings.appearance.wallpaper.retryDownload')}
+            </Button>
+          }
         />
       )}
     </div>

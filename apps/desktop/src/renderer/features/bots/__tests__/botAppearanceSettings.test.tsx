@@ -6,6 +6,8 @@
  * - 移除图片的请求还没返回时用户另选了壁纸，返回后不得把新选择改回「跟随应用设置」。
  * - 伙伴自己的视频播放失败要在这张页面给出提示（docs/design-rules/wallpaper.md：
  *   playback failure shows an actionable error in wallpaper settings），且不影响全局壁纸的状态。
+ * - 伙伴选的内置壁纸下载失败时，这张页面要给出提示和重试入口（同一文档：failures retain the
+ *   preview and permit retry）；此前重试入口只在应用的壁纸设置里，且只认应用自己的壁纸。
  * Tier：unit（jsdom）；经真实的页面组件、壁纸 provider 与 `<video>` 元素，只替换 IPC 桥。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -132,5 +134,19 @@ describe('teammate appearance page: own wallpaper media', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     fireEvent.error(document.querySelector('video')!);
     expect((await screen.findByRole('alert')).textContent).toContain('settings.appearance.wallpaper.customPlaybackFailed');
+  });
+
+  // Review of 6c88feb. Minimal input: app wallpaper none, teammate on a built-in wallpaper
+  // whose download returns nothing.
+  it('reports a failed download of this teammate’s built-in wallpaper and retries it', async () => {
+    localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify({ 'bot-1': { wallpaperId: 'cindy-window' } }));
+    const ensureWallpaperImage = vi.fn().mockResolvedValue(null);
+    stubBridge({ getSync: () => DEFAULT_APPEARANCE_SETTINGS, ensureWallpaperImage });
+    render(<WallpaperSettingsProvider><Page botId="bot-1" /></WallpaperSettingsProvider>);
+    expect((await screen.findByRole('alert')).textContent).toContain('settings.appearance.wallpaper.downloadFailed');
+    expect(ensureWallpaperImage).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.retryDownload' }));
+    await waitFor(() => expect(ensureWallpaperImage).toHaveBeenCalledTimes(2));
+    expect(ensureWallpaperImage).toHaveBeenLastCalledWith('cindy-window');
   });
 });

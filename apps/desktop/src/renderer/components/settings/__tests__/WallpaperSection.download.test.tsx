@@ -8,6 +8,7 @@ import { DEFAULT_APPEARANCE_SETTINGS, type WallpaperId } from '@/../shared/appea
 
 const state = vi.hoisted(() => ({
   id: 'cindy-window' as WallpaperId,
+  shown: undefined as WallpaperId | undefined,
   pending: false,
   failed: false,
   progress: 0,
@@ -21,6 +22,7 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
     ...DEFAULT_APPEARANCE_SETTINGS,
     wallpaperId: state.id,
     visibility: 1,
+    downloadWallpaperId: state.shown ?? state.id,
     downloadPending: state.pending,
     downloadFailed: state.failed,
     downloadProgress: state.progress,
@@ -37,6 +39,7 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
 }));
 beforeEach(() => {
   state.id = 'cindy-window';
+  state.shown = undefined;
   state.pending = false;
   state.failed = false;
   state.progress = 0;
@@ -148,6 +151,22 @@ describe('wallpaper download feedback', () => {
     expect(state.retry).toHaveBeenCalledTimes(2);
     expect(state.select).not.toHaveBeenCalled();
     expect(screen.getAllByRole('radio').filter((radio) => radio.tabIndex === 0)).toEqual([tile]);
+  });
+
+  // makecindy/cindy#12542: the provider reports the wallpaper on screen, which is a teammate's
+  // own while its view is open. Not covered before; minimal input: saved cindy-window,
+  // night-launch on screen and failing; unit tier.
+  it('does not show another wallpaper’s download state on the saved selection', () => {
+    state.shown = 'night-launch';
+    state.failed = true;
+    const { rerender } = render(<WallpaperSection />);
+    expect(screen.queryByRole('status')).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: 'settings.appearance.wallpaper.options.cindy-window' }));
+    expect(state.retry).not.toHaveBeenCalled();
+    state.failed = false;
+    state.pending = true;
+    rerender(<WallpaperSection />);
+    expect(screen.queryByRole('progressbar')).toBeNull();
   });
 
   it('does not show stale CDN feedback when no wallpaper is selected', () => {

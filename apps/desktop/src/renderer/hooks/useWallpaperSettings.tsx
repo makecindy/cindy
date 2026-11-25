@@ -53,6 +53,11 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   playbackFailed: boolean;
   /** The media whose playback failed, global or view-scoped; empty when none. */
   playbackFailedUrl: string;
+  /**
+   * The wallpaper the download state below belongs to: the one on screen, which is a
+   * view-scoped wallpaper (a teammate's own) while one is shown, else the saved one.
+   */
+  downloadWallpaperId: WallpaperId;
   downloadPending: boolean;
   downloadFailed: boolean;
   downloadProgress: number;
@@ -332,6 +337,7 @@ export function WallpaperSettingsProvider({
       lastBlur: lastBlurRef.current,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
       playbackFailedUrl: failedUrl,
+      downloadWallpaperId: shown.wallpaperId,
       downloadPending,
       downloadFailed,
       downloadProgress,
@@ -358,6 +364,7 @@ export function WallpaperSettingsProvider({
       settings.wallpaperBlur,
       failedUrl,
       visibility,
+      shown.wallpaperId,
       downloadPending,
       downloadFailed,
       downloadProgress,
@@ -394,9 +401,15 @@ export function useWallpaperSettings(): WallpaperSettingsContextValue {
 
 /**
  * For pages that show a view-scoped wallpaper's own state (a teammate's appearance page):
- * the media whose playback failed, and the saved motion a view follows until it chooses its
- * own. Undefined in a window without a wallpaper provider.
+ * the media whose playback failed, the download state of the wallpaper on screen, and the
+ * saved motion a view follows until it chooses its own. Undefined in a window without a
+ * wallpaper provider.
  */
-export function useOptionalWallpaperSettings(): Pick<WallpaperSettingsContextValue, 'playbackFailedUrl' | 'wallpaperMotion'> | undefined {
+export function useOptionalWallpaperSettings():
+  | Pick<
+      WallpaperSettingsContextValue,
+      'playbackFailedUrl' | 'wallpaperMotion' | 'downloadWallpaperId' | 'downloadPending' | 'downloadFailed' | 'retryDownload'
+    >
+  | undefined {
   return useContext(WallpaperSettingsContext);
 }
