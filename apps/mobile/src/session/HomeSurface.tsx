@@ -3208,14 +3208,14 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       params: {
         deviceId: project.deviceId,
         name: project.deviceName,
-        statusFilter,
+        statusFilter: listStatus,
         ...(search ? { search: '1' } : {}),
         ...(project.workingDir
           ? { workingDir: project.workingDir, projectName: project.title }
           : {}),
       },
     });
-  }, [guardedPush, statusFilter, swipeRegistry]);
+  }, [guardedPush, listStatus, swipeRegistry]);
 
   // renderItem 提取为稳定引用:打开「选项」sheet 等与列表数据无关的页面状态变更不再改变
   // renderItem 身份,SectionList 可见行不随之全量重渲染(review P2:每行 Swipeable 动画树
