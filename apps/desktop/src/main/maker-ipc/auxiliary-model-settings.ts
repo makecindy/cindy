@@ -1,4 +1,5 @@
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
+import type { AppSettingsWriteGuard } from '../app-settings/service.js';
 import { z } from 'zod';
 /** Settings IPC for the shared auxiliary-model chain. */
 
@@ -272,6 +273,7 @@ export async function saveAuxiliaryModelSettings(
   allowedPins: ReadonlySet<string>,
   persistedPins: ReadonlySet<string> = new Set(),
   deps?: Parameters<typeof testAuxiliaryModelSettings>[3],
+  guard?: AppSettingsWriteGuard,
 ): Promise<AuxiliaryModelSettingsTestResult> {
   const owner = activeOwnerScopeKey();
   const patch = parseAuxiliaryModelSettingsPatch(rawPatch, allowedPins, persistedPins);
@@ -286,6 +288,8 @@ export async function saveAuxiliaryModelSettings(
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throwIpcError('INVALID_PARAMS', 'Session changed');
     if (!routesCurrent()) throwIpcError('INVALID_PARAMS', 'The selected connection changed during testing');
     if (revision !== latestSave) throwIpcError('INVALID_PARAMS', 'A newer auxiliary model configuration was requested');
+    // Also checked inside the store lock: a save from an earlier read must not replace a newer one.
+    guard?.assertUnchanged();
   };
   assertCurrent();
   await writeAuxiliaryModelSettingsPatch(patch, assertCurrent);
@@ -323,7 +327,7 @@ export function registerAuxiliaryModelSettingsIpc(): void {
     }
   });
 
-  const updateAuxiliarySettings = async (rawPatch: unknown) => {
+  const updateAuxiliarySettings = async (rawPatch: unknown, guard?: AppSettingsWriteGuard) => {
     try {
       // Persisted intent ignores transient credential readiness, while execution
       // still validates credentials and fails closed immediately before dispatch.
@@ -337,7 +341,7 @@ export function registerAuxiliaryModelSettingsIpc(): void {
         ).map((option) => option.id),
       );
       const persistedPins = new Set(readAuxiliaryModelSettings().models);
-      const result = await saveAuxiliaryModelSettings(rawPatch, allowedPins, persistedPins);
+      const result = await saveAuxiliaryModelSettings(rawPatch, allowedPins, persistedPins, undefined, guard);
       if (!result.ok) return result;
       refreshAuxiliaryModelHealth();
       return settingsWire();
@@ -379,8 +383,8 @@ export function registerAuxiliaryModelSettingsIpc(): void {
     assertTrustedAppRendererEvent(event);
     return updateAuxiliarySettings(rawPatch);
   });
-  const runtimeUpdate = async (patch: unknown) => {
-    const result = await updateAuxiliarySettings(patch);
+  const runtimeUpdate = async (patch: unknown, guard?: AppSettingsWriteGuard) => {
+    const result = await updateAuxiliarySettings(patch, guard);
     if ('ok' in result) throwIpcError('INVALID_PARAMS', `Auxiliary model connection test failed (${result.reason})`);
     return result;
   };
@@ -392,6 +396,6 @@ export function registerAuxiliaryModelSettingsIpc(): void {
     schema: z.strictObject({ models: z.array(z.string().min(1).max(1024)).max(3).optional() }),
     read: settingsWire,
     update: runtimeUpdate,
-    reset: () => runtimeUpdate({ models: [] }),
+    reset: guard => runtimeUpdate({ models: [] }, guard),
   });
 }
