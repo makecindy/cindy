@@ -93,6 +93,8 @@ export type WindowsDesktopSupport = 'ready' | 'missing' | 'installRequired' | 'u
 export type LocalDesktopPermissions = RemoteDesktopPermissions & {
   appBundlePath?: string;
   separateWindowRetries?: DesktopPermission[];
+  /** macOS 27.3+: Cindy may control chosen apps only; remote keyboard and mouse need the whole Mac. */
+  accessibilityChosenAppsOnly?: true;
 };
 export interface RemoteDesktopApi {
   state(checkWindowsSupport?: boolean): Promise<DesktopLocalState>;

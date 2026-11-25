@@ -2837,6 +2837,14 @@
         "projectsRootReset": "恢复推荐位置",
         "projectsRootDescription": "在任务里新建项目时，项目文件夹放在这里。未设置时，按你现有项目所在的文件夹推荐。",
         "projectsRootFailed": "无法更新新项目存放位置",
+        "taskExportDirectoryTitle": "任务导出位置",
+        "taskExportDirectoryUnset": "每次选择",
+        "taskExportDirectoryMissing": "文件夹不存在",
+        "taskExportDirectoryUnreadable": "设置无法读取",
+        "taskExportDirectoryChoose": "选择目录",
+        "taskExportDirectoryReset": "改回每次选择",
+        "taskExportDirectoryDescription": "设置后，Agent 导出任务时直接存到这里，不再每次弹窗选位置，也不会覆盖同名文件。未设置时，每次导出都由你选择位置。",
+        "taskExportDirectoryFailed": "无法更新任务导出位置",
         "dialogueDirectoryOpen": "打开目录",
         "dialogueDirectoryChoose": "更改目录",
         "dialogueDirectoryReset": "恢复默认位置",
@@ -8654,6 +8662,8 @@
         "liveScreenDetail": "通过远程桌面，你的手机或其他电脑可以查看它提供的设备画面（例如模拟器）并直接触控、按键和输入文字。只在你从这些设备打开时连接，不会打开电脑的其他内容。",
         "preview": "可在右侧栏浏览器中打开以下网站的预览页面",
         "previewDetail": "只能打开下方列出的网站；每次打开都会提示是哪个插件打开的。",
+        "fileOpener": "你在 Cindy 里打开以下类型的文件时，由它打开",
+        "fileOpenerDetail": "插件会拿到文件的完整路径，代替系统默认应用打开它；打不开时仍用默认应用。可以在插件详情里关掉。",
         "browserExtension": "可让它自带的浏览器扩展连接到 Cindy",
         "browserNativeHost": "可注册浏览器连接「{{name}}」",
         "browserNativeHostDetail": "注册的程序在沙箱外运行，按你的系统账号与系统授权访问本机。",
@@ -8895,6 +8905,8 @@
         "configurationTitle": "配置",
         "sidebarEntryTitle": "导航入口",
         "showInSidebar": "显示在左侧导航",
+        "fileOpenerTitle": "用这个插件打开文件",
+        "fileOpenerDescription": "在 Cindy 里打开 {{extensions}} 文件时，改用 {{name}} 打开，不再用系统默认应用。其他电脑上的文件仍用默认应用打开。",
         "sidebarEntryDescription": "开启后，「{{title}}」会出现在左侧导航，和「自动化」「插件」并列。放在最外层还是收进「更多」，可在「更多 → 自定义」里调整。隐藏入口不会停用插件。",
         "openTool": "查看工具 {{name}} 的详情",
         "noToolDescription": "该工具暂无描述。",
@@ -9172,6 +9184,7 @@
         "enableBeforeConfigure": "插件已停用，请先打开上方开关，再进行配置。",
         "settingsPageUnavailable": "请在 {{device}} 的 Cindy 中打开此插件的设置页，目标电脑当前版本暂不支持远程显示。",
         "offlineNotice": "「{{device}}」已离线，暂时无法管理。连接恢复后可继续。",
+        "publishOnTarget": "请在「{{device}}」上的 Cindy 中发布插件，或更新那台电脑上的 Cindy 后远程发布。",
         "managingTarget": "正在管理「{{device}}」",
         "managingDescription": "更改将保存在这台电脑上。",
         "viewingTarget": "「{{device}}」的已装插件",
@@ -12785,6 +12798,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "系统音色",
+        "myVoices": "我的音色",
+        "refreshMyVoices": "刷新我的音色",
+        "callMode": "通话方式",
+        "messageReadAloud": "消息朗读",
+        "callVoice": "实时通话音色",
+        "readAloudVoice": "朗读音色",
+        "readAloudHint": "点击伙伴文字回复下方的小喇叭，即可用这个声音朗读。",
+        "resetReadAloud": "恢复默认朗读设置",
+        "title": "实时语音",
+        "add": "添加实时语音模型",
+        "off": "使用语音合成"
+      },
       "openConversation": "打开对话",
       "inCallWith": "正在与 {{name}} 通话",
       "showDetails": "展开通话记录",
@@ -12806,7 +12833,7 @@
       "settingsTitle": "语音",
       "openSettings": "语音设置",
       "startConversation": "开始语音对话",
-      "settingsHint": "选择这位伙伴使用的朗读模型和音色。设置完成后，从输入框开始语音对话。",
+      "settingsHint": "使用语音合成通话时，通话和消息朗读共用下方的模型和音色。",
       "previewNeedsChat": "与伙伴开始对话后可试听。",
       "voiceId": "音色 ID",
       "manualVoice": "手动输入音色 ID",
@@ -14588,6 +14615,7 @@
       "missingDir": "目录不存在"
     },
     "pendingQueue": {
+      "waitingForDevice": "尚未发送，等另一台电脑恢复连接后发送",
       "stopping": "停止处理中",
       "queued": "排队中",
       "editingInComposer": "正在下方输入框编辑…",
@@ -15062,6 +15090,7 @@
       "unavailable": "当前应用无法自动输入。你可以复制文本后手动输入。",
       "unconfirmed": "无法确认是否已经自动输入。你可以复制文本后手动输入。",
       "permission": "需要开启辅助功能权限，才能自动把语音输入到当前应用。授权后可再次尝试。",
+      "appNotAllowed": "{{app}} 未获准控制当前 App，没能自动输入。可在「System & App Protection Override」里为 {{app}} 添加这个 App，或复制文本后手动粘贴。",
       "failed": "未能自动输入。你可以复制文本后手动输入。"
     },
     "permissionPrompts": {
@@ -15482,11 +15511,11 @@
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "此前有自动运行失败。",
-      "prCheck_dns": "{{device}} 无法解析 {{host}}。如果问题持续，请检查这台设备的网络或 DNS。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
-      "prCheck_timeout": "{{device}} 连接 GitHub 超时。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
-      "prCheck_auth": "请在 {{device}} 上重新登录 GitHub。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
-      "prCheck_rate-limit": "GitHub 暂时限制了 {{device}} 的请求频率。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
-      "prCheck_unknown": "{{device}} 上的 PR 检查失败，请查看运行详情。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
+      "prCheck_dns": "{{device}} 无法解析 {{host}}。如果问题持续，请检查这台设备的网络或 DNS。已连续失败 {{failures}} 次。从 {{retry}} 起，定时检查可自动重试。",
+      "prCheck_timeout": "{{device}} 连接 GitHub 超时。已连续失败 {{failures}} 次。从 {{retry}} 起，定时检查可自动重试。",
+      "prCheck_auth": "请在 {{device}} 上重新登录 GitHub。已连续失败 {{failures}} 次。从 {{retry}} 起，定时检查可自动重试。",
+      "prCheck_rate-limit": "GitHub 暂时限制了 {{device}} 的请求频率。已连续失败 {{failures}} 次。从 {{retry}} 起，定时检查可自动重试。",
+      "prCheck_unknown": "{{device}} 上的 PR 检查失败，请查看运行详情。已连续失败 {{failures}} 次。从 {{retry}} 起，定时检查可自动重试。",
       "precheck": "自动检查暂时受阻。",
       "preRunBlocked": "启动前检查未通过，本轮未开始。",
       "rateLimited": "自动检查暂时受阻：请求限流。",
@@ -17847,6 +17876,7 @@
       "openWorkdirFailed": "打开文件夹失败"
     },
     "runs": {
+      "boundPluginEngineRecovery": "自动化未运行，因为绑定的任务使用了插件引擎。请将任务切回内置引擎，或将自动化改绑到使用内置引擎的任务。",
       "queueWaitTimeoutRecovery": "排队等待超时，提示词未发送。目标任务空闲后可点击「{{action}}」补跑。",
       "status": {
         "running": "运行中",
@@ -18800,7 +18830,7 @@
       "expired": "等待时间过长，代输入已结束。"
     },
     "failure": {
-      "permission": "Cindy 无法读取这台 Mac 的界面。请检查正在运行的这份 Cindy 的控制权限。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。",
+      "permission": "Cindy 无法读取这台 Mac 的界面。请检查正在运行的这份 Cindy 的控制权限。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。若只允许 Cindy 控制部分 App，请把这个 App 也加进去。",
       "target_gone": "目标窗口已关闭。",
       "unreadable": "无法读取这个界面。可以在宿主电脑上直接完成，然后交还给 Agent。",
       "action_failed": "刚才的操作没有生效，请检查界面后重试。",
@@ -22565,6 +22595,10 @@
       "separator": "；"
     },
     "settings": {
+      "autoSwitch": {
+        "title": "出问题时自动换来源",
+        "hint": "这个模式正在用的来源出问题时，自动换到下一个能用的来源，并在那一轮下面写明。关掉后只在出错时提议换来源。"
+      },
       "newRoute": "新建模式",
       "newRouteName": "新模式",
       "routesEmpty": "还没有模式。新建一个，把几个来源放进去。",
@@ -22797,6 +22831,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "在「System & App Protection Override」里找到 {{app}}，点右侧 ⓘ。找不到时可点「＋」，按路径添加。",
-    "review": "$t(macControlPermission.selectApp)\n系统若提供「选择 App」，可限定控制范围。整机控制允许访问所有应用和数据。如果同意，请逐项阅读并点「OK」确认，再点窗口底部的允许按钮。"
+    "review": "$t(macControlPermission.selectApp)\n系统若提供「选择 App」，可限定控制范围。整机控制允许访问所有应用和数据。如果同意，请逐项阅读并点「OK」确认，再点窗口底部的允许按钮。",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\n远程键盘和鼠标会操作整台 Mac：用「＋」添加时选「Override System Protections」；已在列表中的，在 ⓘ 里打开「Control Your Entire Mac and All Apps」。只允许部分 App 时，macOS 会拦下全部远程键鼠操作。允许前请逐项阅读系统列出的访问范围。",
+    "chosenAppsOnly": "{{app}} 目前只能控制你选定的 App，macOS 会拦下全部远程键盘和鼠标操作。如需远程控制，在「System & App Protection Override」里点 {{app}} 右侧的 ⓘ，打开「Control Your Entire Mac and All Apps」。"
   }
 }

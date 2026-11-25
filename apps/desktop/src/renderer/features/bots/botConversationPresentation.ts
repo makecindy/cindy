@@ -29,6 +29,34 @@ export function botTurnContinuations(items: readonly RenderItem[]): ReadonlySet<
   }));
 }
 
+/** Project the existing five-minute group starts onto the visible rows. */
+export function botTimeGroupRows(
+  items: readonly RenderItem[],
+  groups: ReadonlyMap<string, number>,
+  continuations: ReadonlySet<string>,
+): ReadonlyMap<string, number> {
+  const timestamps = new Map<string, number>();
+  if (groups.size === 0) return timestamps;
+  let processKey: string | null = null;
+  for (const item of items) {
+    if (item.type === 'work_group') {
+      if (!processKey || !continuations.has(item.key)) processKey = item.key;
+      continue;
+    }
+    if (item.type !== 'message') continue;
+    const { role } = item.message;
+    const reply = isProse(item);
+    const timestamp = groups.get(item.message.clientId);
+    if (timestamp !== undefined) {
+      const key = reply && continuations.has(item.key) ? processKey ?? item.key : item.key;
+      timestamps.set(key, timestamp);
+    }
+    // A later clock must never jump over another clock or an earlier reply.
+    if (timestamp !== undefined || reply || role === 'user') processKey = null;
+  }
+  return timestamps;
+}
+
 /** NEW marks the whole portrait's reply, not the seam between its process and prose.
  * Keep unread selection/receipts unchanged; only project that message to its row owner. */
 export function botUnreadBoundaryItemKey(

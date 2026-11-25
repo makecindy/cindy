@@ -136,12 +136,20 @@ export function createSessionContextBudget(ports: SessionContextBudgetPorts) {
     const clampedByCatalog = requested !== null && declaredMax !== null
       ? Math.min(requested, declaredMax) : requested;
     const budget = tighterBudget(clampedByCatalog, modelLimit);
+    const budgetValue = typeof budget === 'number' && Number.isFinite(budget) && budget > 0 ? budget : null;
     const verified = resolveVerifiedContextWindow(catalog, agent, source, modelId, budget);
-    if (verified !== null || verification === 'required') return verified;
+    if (verified !== null) return verified;
+    if (verification === 'required') {
+      // 用户在这一路由上显式声明的模型上限是人工核实过的事实：`modelLimit` 只由
+      // `model-context-limit-store` 写入（模型详情里手填），上游不发布窗口的连接完全靠它。
+      // 只认这条声明，不认任务预算（工作上限不是物理容量）；回传的仍是收敛后的 budget，
+      // 与建 env 的值相同，重放窗口不会宽于运行时窗口。
+      return rows.length === 1 && modelLimit !== null && budgetValue !== null ? budgetValue : null;
+    }
+    if (budgetValue === null) return null;
     // A saved budget configures the native runtime even if catalog capacity is
     // unknown. It is a working ceiling, not evidence of physical model capacity.
-    return rows.length === 1 && rows[0]!.contextWindowVerified !== true && typeof budget === 'number' && Number.isFinite(budget) && budget > 0
-      ? budget : null;
+    return rows.length === 1 && rows[0]!.contextWindowVerified !== true ? budgetValue : null;
   }
 
   /**

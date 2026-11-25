@@ -752,7 +752,7 @@ describe('teammate pre-run command approval', () => {
 });
 
 describe('cross-device actions use the task permission mode', () => {
-  it.each(['archive_sessions', 'unarchive_sessions'])('reviews remote %s in direct and progressive calls', (name) => {
+  it.each(['archive_sessions', 'unarchive_sessions', 'pin_sessions', 'unpin_sessions'])('reviews remote %s in direct and progressive calls', (name) => {
     for (const session_ids of [['studio::s1'], ['s1', 'studio::s2']]) {
       const args = { session_ids };
       for (const context of [
