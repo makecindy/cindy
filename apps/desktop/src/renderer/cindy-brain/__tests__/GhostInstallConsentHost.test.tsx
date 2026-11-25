@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { HOST_UI_POSITIONS, type GhostHostUi, type GhostHostUiSetting } from '@cindy/plugin-protocol';
@@ -22,8 +22,10 @@ vi.mock('react-i18next', async () => {
   await localized.init({ lng: 'en', interpolation: { escapeValue: false }, resources: { en: { translation: common } } });
   return ({
   useTranslation: () => ({
+    i18n: localized,
     t: (key: string, args?: Record<string, unknown>) =>
-      key.startsWith('settings.ghosts.perm.hostUi.') ? localized.t(key, args) :
+      (key.startsWith('settings.ghosts.perm.hostUi.') || key === 'settings.ghosts.perm.itemCount' ||
+        key === 'settings.ghosts.perm.networkHosts') ? localized.t(key, args) :
         args && Object.keys(args).length > 0 ? `${key}:${JSON.stringify(args)}` : key,
   }),
   });
@@ -177,7 +179,9 @@ describe('GhostInstallConsentHost', () => {
     }));
     const { content } = mocks.confirm.mock.calls[0][0];
     const view = render(content);
-    const permissions = screen.getByRole('heading', { name: 'settings.ghosts.installConsent.grantsTitle' });
+    const permissions = screen.getByRole('heading', {
+      name: /^settings\.ghosts\.installConsent\.grantsTitle\s*1 total$/,
+    });
     const notices = view.queryAllByText(/settings\.ghosts\.(installConsent\..*SourceNotice|market\.communityDisclaimer)/);
     expect(notices.map(notice => notice.textContent)).toEqual(key ? [key] : []);
     if (notices[0]) {
@@ -306,23 +310,27 @@ describe('GhostInstallConsentHost', () => {
   });
 
   it('shows the added permissions of an update and returns the answer to Main', async () => {
+    const request: GhostInstallConsentRequest = {
+      requestId: 'consent-1',
+      initiator: 'user',
+      origin: 'custom-market',
+      originLabel: 'Team market',
+      originSource: { kind: 'git', repository: 'github.com/acme/plugins', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' },
+      facts: {
+        kind: 'update', ghostId: 'weather-chip', name: 'Weather', version: '2.0.0',
+        previousVersion: '1.0.0', added: [
+          HOST,
+          { ...HOST, key: 'network:host:forecast.weather.test', labelArgs: { host: 'forecast.weather.test' } },
+        ], removed: [], unchangedCount: 1,
+        builtinOauthClientChanged: false,
+      },
+    };
+    const original = structuredClone(request.facts);
+    let accept!: (value: boolean) => void;
+    mocks.confirm.mockImplementationOnce(() => new Promise<boolean>(resolve => { accept = resolve; }));
     render(<GhostInstallConsentHost />);
-    await act(async () => {
-      push?.({
-        requestId: 'consent-1',
-        initiator: 'user',
-        origin: 'custom-market',
-        originLabel: 'Team market',
-        originSource: { kind: 'git', repository: 'github.com/acme/plugins', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' },
-        facts: {
-          kind: 'update', ghostId: 'weather-chip', name: 'Weather', version: '2.0.0',
-          previousVersion: '1.0.0', added: [HOST], removed: [], unchangedCount: 1,
-          builtinOauthClientChanged: false,
-        },
-      });
-    });
+    await act(async () => { push?.(request); });
 
-    await waitFor(() => expect(resolveInstallConsent).toHaveBeenCalledWith('consent-1', true));
     const options = mocks.confirm.mock.calls[0][0] as {
       title: string;
       description: string;
@@ -337,8 +345,35 @@ describe('GhostInstallConsentHost', () => {
     expect(options.description).toMatch(/originCustomMarket.* · settings\.ghosts\.installConsent\.originRepository:.*github\.com\/acme\/plugins/);
     expect(options.confirmText).toBe('settings.ghosts.installConsent.confirmUpdate');
     render(<>{options.content}</>);
-    expect(screen.getByText('settings.ghosts.perm.networkHost:{"host":"upload.weather.test"}')).toBeTruthy();
+    const rows = screen.getAllByRole('listitem');
+    expect(rows).toHaveLength(1);
+    expect(within(rows[0]).getByText('Network targets')).toBeTruthy();
+    expect(within(rows[0]).getByText('upload.weather.test, forecast.weather.test')).toBeTruthy();
     expect(screen.getByText('settings.ghosts.installConsent.addedBadge')).toBeTruthy();
+    expect(resolveInstallConsent).not.toHaveBeenCalled();
+    await act(async () => { accept(true); });
+    expect(resolveInstallConsent.mock.calls).toEqual([['consent-1', true]]);
+    expect(request.facts).toEqual(original);
+  });
+
+  it.each(['install', 'update'] as const)('shows every permission before %s consent', (kind) => {
+    const permissions = (group: string) => Array.from({ length: 6 }, (_, index) => ({
+      key: `${group}-${index}`,
+      kind: 'panel' as const,
+      labelKey: 'uiHost',
+      detail: `${group} permission ${index + 1}`,
+    }));
+    const base = { ghostId: 'board', name: 'Board', version: '2' };
+    const added = permissions('Added');
+    const removed = permissions('Removed');
+    const facts = kind === 'install'
+      ? { ...base, kind, permissions: added }
+      : { ...base, kind, previousVersion: '1', added, removed, unchangedCount: 0, builtinOauthClientChanged: false };
+    render(<GhostInstallConsentContent facts={facts} />);
+
+    for (const permission of kind === 'install' ? added : [...added, ...removed]) {
+      expect(screen.getByText(permission.detail)).toBeTruthy();
+    }
   });
 
   it('shows first-use capability consent without claiming a package update or source', async () => {

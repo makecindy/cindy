@@ -397,6 +397,21 @@ export interface CodexDownshiftModelRejection {
   transport: 'http' | 'bridge';
 }
 
+/**
+ * Structured capacity/overload signal observed at the local codex-proxy layer
+ * (WebSocket inbound error frames or HTTP /responses errors) before Codex's
+ * native app-server strips the cause down to a generic `Reconnecting... N/M`
+ * or silently sleeps through retry 1/5.
+ *
+ * Intentionally carries no raw upstream body or user text.
+ */
+export interface CodexUpstreamCapacitySignal {
+  code: 'server_is_overloaded' | 'slow_down' | 'at_capacity';
+  status?: number;
+  retryAfterMs?: number;
+  observedAt: number;
+}
+
 export interface CodexExtraSpawnConfig {
   /** Exact root-connection model IDs frozen with the custom context catalog. */
   contextProviderModels?: readonly string[];
@@ -1448,6 +1463,18 @@ export interface AgentDeps {
 
   /** Original model of the local root's rejected native pre-turn downshift request, if observed. */
   getRejectedCodexDownshiftModel?: (sessionId: string, threadId: string, turnId: string) => CodexDownshiftModelRejection | undefined;
+
+  /** Latest proxy-observed upstream capacity signal for a local Codex root thread, if any. */
+  getObservedCodexUpstreamCapacity?: (sessionId: string, threadId: string) => CodexUpstreamCapacitySignal | undefined;
+
+  /**
+   * Subscribe to real-time upstream capacity signals observed by local codex-proxy
+   * for `sessionId` (covers retry 1/5 where Codex app-server emits no error event).
+   */
+  subscribeCodexUpstreamCapacity?: (
+    sessionId: string,
+    listener: (event: { threadId: string; signal: CodexUpstreamCapacitySignal }) => void,
+  ) => () => void;
 
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
   getCodexSubagentIdentity?: (args: { childThreadId: string }) => {
@@ -2573,6 +2600,8 @@ export interface PiModelSwitchPreview {
   targetContextWindow: number | null;
   /** Only true when the live Pi runtime has confirmed this exact target window. */
   windowVerified: boolean;
+  /** The target provider was resolved and its model list excludes this selection. */
+  modelNotOffered?: true;
   /** Non-secret reason suitable for a host error; never include env values. */
   reason?: string;
 }
@@ -2627,6 +2656,8 @@ export interface AgentSessionHandle {
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
+  /** ACP-only slash-command names advertised by the current plugin session. */
+  getPluginEngineCommandNames?(): readonly string[];
   /** An explicit Skill send may retry exhausted discovery on the existing process. */
   retryFailedRuntimeCapabilityCapture?(): void;
   /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */
@@ -2740,6 +2771,14 @@ export interface AgentSessionHandle {
    * Agents whose background work is fully covered by listBackgroundTasks omit it.
    */
   hasLiveBackgroundWork?(): Promise<boolean>;
+
+  /**
+   * Whether closing this runtime keeps the conversation: the next send can reopen
+   * the same native session. Idle runtime reclamation releases only runtimes that
+   * can. Built-in engines always resume and omit it; a plugin engine answers from
+   * what its agent advertised.
+   */
+  canResumeAfterClose?(): boolean;
 
   /**
    * Resolve the provider claim attached atomically to a specific `done` event.

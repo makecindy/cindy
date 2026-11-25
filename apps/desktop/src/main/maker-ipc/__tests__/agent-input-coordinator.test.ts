@@ -2242,6 +2242,9 @@ function createHarness(opts?: {
   const onRejectedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onRejectedUserTurn']>>(
     () => {},
   );
+  const onQueueEmptied = vi.fn<NonNullable<AgentInputCoordinatorDeps['onQueueEmptied']>>(
+    () => {},
+  );
   const persistTerminalSendError = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['persistTerminalSendError']>
   >(() => {});
@@ -2267,6 +2270,7 @@ function createHarness(opts?: {
     previewQueuedUserTurn,
     onDiscardedQueuedMessage,
     onRejectedUserTurn,
+    onQueueEmptied,
     persistTerminalSendError,
     onUnconfirmedAutoResumeTurn,
     supersedeRetriedUserTurn,
@@ -2379,6 +2383,7 @@ function createHarness(opts?: {
     previewQueuedUserTurn,
     onDiscardedQueuedMessage,
     onRejectedUserTurn,
+    onQueueEmptied,
     persistTerminalSendError,
     onUnconfirmedAutoResumeTurn,
     supersedeRetriedUserTurn,
@@ -9144,6 +9149,129 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(projection.pendingQueue).toEqual([]);
     expect(projection.error).toBeNull();
     expect(projection.recovery).toBeNull();
+  });
+
+  // #12479: a message queued from another task is steered into the reply this task is
+  // already producing; by then its task-action authority can be gone. The receiving task
+  // is still running and will finish its own answer, so the refusal belongs to that one
+  // message: settle it as not delivered instead of reporting the running turn as failed
+  // (「回复未完成」) and leaving the row queued with no delivery result.
+  it('settles a revoked queued steer as its own non-delivery instead of failing the running turn', async () => {
+    const h = createHarness();
+    const sid = 'queued-steer-task-action-revoked';
+    const first = makeItem('q-1', 'first');
+    const report = makeItem('q-2', 'Report ready');
+    bindTaskActionInput(sid, report, async () => { throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); });
+    h.steerToAgent.mockImplementationOnce(async (_id, _message, sendOpts) => {
+      // The delivery guard is judged by maker-core right before the provider sees it; its
+      // rejection then reaches this coordinator wrapping the host code, so the code is not
+      // readable from the error text any more.
+      try {
+        await sendOpts?.[MCP_APP_MESSAGE_GUARD]?.();
+      } catch {
+        throw new Error('[INTERNAL] TASK_ACTION_AUTHORIZATION_EXPIRED');
+      }
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, report);
+    await flush();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+
+    // `false` = this message was not delivered; the row is settled, not retried.
+    await expect(h.coordinator.steer(sid, h.coordinator.getProjection(sid).pendingQueue[0]!, { removeFromQueue: true }))
+      .resolves.toBe(false);
+    await flush();
+
+    const projection = h.coordinator.getProjection(sid);
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+    expect(projection.pendingQueue).toEqual([]);
+    expect(h.onRejectedUserTurn).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'q-2' }));
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'q-2' }));
+    expect(h.coordinator.getActiveInputClientIds(sid)).not.toContain('q-2');
+  });
+
+  // Codex review on #12713: the turn can end while the delivery guard is still pending. That
+  // completion is deferred while the queue is non-empty, so settling the last row must report
+  // the emptied queue; an empty drain returns early and never replays it.
+  it('reports the emptied queue when a late revocation removes the last row', async () => {
+    const h = createHarness();
+    const sid = 'queued-steer-revocation-empties-queue';
+    const first = makeItem('q-1', 'first');
+    const report = makeItem('q-2', 'Report ready');
+    bindTaskActionInput(sid, report, async () => { throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); });
+    const steerGate = deferred<void>();
+    h.steerToAgent.mockImplementationOnce(async (_id, _message, sendOpts) => {
+      let hostCode = 'TASK_ACTION_AUTHORIZATION_EXPIRED';
+      try {
+        await sendOpts?.[MCP_APP_MESSAGE_GUARD]?.();
+      } catch (error) {
+        hostCode = error instanceof Error ? error.message : hostCode;
+      }
+      await steerGate.promise;
+      throw new Error(`[INTERNAL] ${hostCode}`);
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, report);
+    await flush();
+
+    const steering = h.coordinator.steer(sid, h.coordinator.getProjection(sid).pendingQueue[0]!, { removeFromQueue: true });
+    await flush();
+    // The running turn finishes while the delivery guard has not returned yet.
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    h.onQueueEmptied.mockClear();
+    steerGate.resolve();
+    await expect(steering).resolves.toBe(false);
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    expect(h.onQueueEmptied).toHaveBeenCalledWith(sid);
+  });
+
+  // Greptile/Codex review on #12713: Stop clears the steer marker and keeps the row for the
+  // user. A revocation that arrives after that must not settle (or delete) the row again.
+  it('keeps a stopped queued message when its steer revocation arrives late', async () => {
+    const h = createHarness();
+    const sid = 'queued-steer-revocation-after-stop';
+    const first = makeItem('q-1', 'first');
+    const report = makeItem('q-2', 'Report ready');
+    bindTaskActionInput(sid, report, async () => { throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); });
+    const steerGate = deferred<void>();
+    h.steerToAgent.mockImplementationOnce(async (_id, _message, sendOpts) => {
+      // The guard already judged this row before Stop; its rejection only surfaces after it.
+      let hostCode = 'TASK_ACTION_AUTHORIZATION_EXPIRED';
+      try {
+        await sendOpts?.[MCP_APP_MESSAGE_GUARD]?.();
+      } catch (error) {
+        hostCode = error instanceof Error ? error.message : hostCode;
+      }
+      await steerGate.promise;
+      throw new Error(`[INTERNAL] ${hostCode}`);
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, report);
+    await flush();
+
+    const steering = h.coordinator.steer(sid, h.coordinator.getProjection(sid).pendingQueue[0]!, { removeFromQueue: true });
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true });
+    h.onRejectedUserTurn.mockClear();
+    h.onDiscardedQueuedMessage.mockClear();
+    steerGate.resolve();
+    await expect(steering).resolves.toBe(false);
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+    expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
   });
 
   it('preserves a capability-rejected steer when the original active turn errors concurrently', async () => {

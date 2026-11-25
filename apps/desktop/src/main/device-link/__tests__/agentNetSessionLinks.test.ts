@@ -35,7 +35,7 @@ const openPayload = { controllerName: 'test', protocolVersion: 1, appVersion: 't
 function pair(options: { connected?: boolean; connectedAt?(id: string): number | null; hostKey?: string; controllerKey?: string;
   connect?(id: string): Promise<boolean>; agentNetPeer?(id: string): 'online' | 'offline' | null; controllerEpoch?(id: string): number;
   reopenLink?(id: string): void; hostInvokeEpoch?(id: string): string | null; controllerLog?: AgentNetSessionLinksOptions['log'];
-  controllerPath?(id: string): 'direct' | 'relay' | null; onRelayStall?(id: string): void; requestTimeoutMs?: number } = {}) {
+  controllerPath?(id: string): 'direct' | 'relay' | null; onRelayStall?(id: string): void; requestTimeoutMs?: number; holdBodies?: boolean } = {}) {
   const hostKey = options.hostKey ?? 'a-host', controllerKey = options.controllerKey ?? 'b-controller';
   const sessions: Record<'host' | 'controller', SessionPeer | null> = { host: null, controller: null };
   const bytes = { toHost: 0, toController: 0 };
@@ -50,7 +50,24 @@ function pair(options: { connected?: boolean; connectedAt?(id: string): number |
       path: options.controllerPath, onRelayStall: options.onRelayStall, requestTimeoutMs: options.requestTimeoutMs }),
   };
   const receivers: Record<'host' | 'controller', ((lane: SessionLane, data: Uint8Array) => void) | null> = { host: null, controller: null };
+  const bodyReceivers: Record<'host' | 'controller', ((key: number, data: Uint8Array | null) => void) | undefined> = {
+    host: undefined, controller: undefined,
+  };
+  const bodies: Array<{ key: number; data: Uint8Array; deliver(data: Uint8Array | null): void }> = [];
   const wire = (side: 'host' | 'controller') => ({
+    ...(options.holdBodies ? {
+      onBody(handler: (key: number, data: Uint8Array | null) => void) { bodyReceivers[side] = handler; },
+      openBody(_lane: SessionLane, key: number) {
+        const to = side === 'host' ? 'controller' : 'host';
+        const chunks: Uint8Array[] = [];
+        const deliver = (data: Uint8Array | null) => bodyReceivers[to]?.(key, data);
+        return {
+          write: (data: Uint8Array) => chunks.push(data.slice()),
+          finish: () => bodies.push({ key, data: Buffer.concat(chunks), deliver }),
+          abandon: () => deliver(null),
+        };
+      },
+    } : {}),
     write: (lane: SessionLane, data: Uint8Array) => {
       const to = side === 'host' ? 'controller' : 'host';
       bytes[to === 'host' ? 'toHost' : 'toController'] += data.length;
@@ -63,13 +80,13 @@ function pair(options: { connected?: boolean; connectedAt?(id: string): number |
   });
   const scoped = options.hostKey !== undefined;
   const connect = () => {
-    sessions.host = new SessionPeer({ wire: wire('host'), laneFor: agentNetSessionLane, ...(scoped ? { role: 'serve' as const } : {}),
+    sessions.host = new SessionPeer({ wire: wire('host'), laneFor: agentNetSessionLane, bodies: options.holdBodies, ...(scoped ? { role: 'serve' as const } : {}),
       ...links.host.handlers(controllerKey) });
-    sessions.controller = new SessionPeer({ wire: wire('controller'), laneFor: agentNetSessionLane, ...(scoped ? { role: 'call' as const } : {}),
+    sessions.controller = new SessionPeer({ wire: wire('controller'), laneFor: agentNetSessionLane, bodies: options.holdBodies, ...(scoped ? { role: 'call' as const } : {}),
       ...links.controller.handlers(hostKey) });
   };
   if (options.connected !== false) connect();
-  return { links, sessions, bytes, connect, controllerLanes };
+  return { links, sessions, bytes, connect, controllerLanes, bodies };
 }
 
 /** 一个空闲的 Device Link 客户端（没有链路、不等恢复、没有待发）：走到它的建链与调用记进 calls。 */
@@ -448,6 +465,141 @@ describe('AgentNetSessionLinks', () => {
       await sender.invoke('a-host', { channel: REMOTE_DESKTOP_CHANNEL, args: [{ op: 'heartbeat', lease: 'test-lease' }] });
       expect(received).toEqual(['session:' + REMOTE_RESOURCE_LIST_CHANNEL, 'session:start', 'session:heartbeat']);
       expect(pushes).toEqual(Array.from({ length: 27 }, (_, i) => i));
+    } finally {
+      viewer.stop();
+      host.stop();
+      await relay.close();
+    }
+  });
+
+  /** 测试价值
+   * - 生产入口与可观察结果：routeSessionPeers + 真实 DeviceLinkClient（含 RemoteListingReadCoalescer）+ AgentNetSessionLinks。
+   *   验证单发与并发合并的列表读在发送前拥塞让路、无备用会话背压、无备用转有备用过渡，以及已写出（inFlight=true）超时
+   *   四条路径下的选路结果与按调用方错误实例隔离。
+   * - Bug／规则依据：PR #12658 discussion_r4691756694（合并层克隆错误时剥离 DeviceLinkUnsentInvokeError，导致未写出的列表读无法切到备用会话）
+   *   与 docs/dev-rules/remote-and-mobile-adaptation.md「控制端列表读单飞与每位调用者剩余预算续读」。
+   * - 现有覆盖缺口：上方回环测试仅验证不进列表合并器的 REMOTE_RESOURCE_LIST_CHANNEL，未覆盖经 RemoteListingReadCoalescer 的列表通道。
+   * - 最小失败输入：① Device Link 积压 27 帧未确认推送且备用会话在线时发起单笔与并发 local-db:sessions:list；② 会话断开且积压满 64 帧时并发列表读；
+   *   ③ 无备用入队的未写出读取等待期间备用会话上线后的新列表读；④ 积压排空后丢弃 invoke-result 触发已写出超时（inFlight=true）。
+   * - tier：integration（本机内存 relay + 真实 WebSocket DeviceLinkClient + 内存 SessionPeer，<500ms）。 */
+  it('reroutes unsent coalesced listing reads to a standby session while preserving error isolation, no-standby backpressure, and in-flight boundaries', async () => {
+    const relay = await createRelayFixture();
+    const client = (id: string) => new DeviceLinkClient({
+      getWsUrl: () => relay.url, getToken: async () => 'fixture-' + id,
+      getHello: () => ({ deviceName: id, platform: 'darwin', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (url, headers) => new WebSocket(url, { headers }),
+      timing: { transportRetryIntervalMs: 120 }, logger: quiet,
+    });
+    const host = client('a-host');
+    const viewer = client('b-controller');
+    const { links, sessions, connect } = pair();
+    const receiver = routeSessionPeers(host, links.host);
+    const sender = routeSessionPeers(viewer, links.controller);
+    const received: string[] = [];
+    receiver.onFrame((env) => {
+      if (env.kind === 'link-open') receiver.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke') return;
+      const { channel, args } = env.payload as InvokePayload;
+      const via = links.host.ownsRequest(env.src!, env.id!) ? 'session' : 'device-link';
+      const tag = typeof args?.[0] === 'number' ? `${channel}:${args[0]}` : channel;
+      received.push(`${via}:${tag}`);
+      receiver.sendInvokeResult(env.src!, env.id!, { ok: true, result: `${via}:${tag}` });
+    });
+    try {
+      host.start();
+      viewer.start();
+      await vi.waitFor(() => expect(host.getStatus() === 'online' && viewer.getStatus() === 'online').toBe(true));
+      await viewer.openLink('a-host', openPayload);
+
+      // 1) Available standby session + 27 unacknowledged pushes on ready Device Link:
+      // both single and concurrent coalesced listing reads yield before write and coalesce onto the standby session.
+      relay.dropFrames((env) => env.src === 'b-controller' && env.dst === 'a-host' && env.kind === 'push');
+      for (let i = 0; i < 27; i++) viewer.sendPush('a-host', 'maker:event', i);
+      expect(viewer.isLinkReady('a-host')).toBe(true);
+      expect(viewer.getReliableSendQueueDepth('a-host')).toBe(27);
+
+      await expect(
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [10, 'active'] }),
+      ).resolves.toEqual({ ok: true, result: 'session:local-db:sessions:list:10' });
+
+      const [coalescedA, coalescedB] = await Promise.all([
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [] }),
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [20, 'all'] }),
+      ]);
+      expect(coalescedA).toEqual({ ok: true, result: 'session:local-db:sessions:list' });
+      expect(coalescedB).toEqual({ ok: true, result: 'session:local-db:sessions:list' });
+      expect(received).toEqual([
+        'session:local-db:sessions:list:10',
+        'session:local-db:sessions:list',
+      ]);
+
+      // Direct pre-write yield on both coalescible channels preserves DeviceLinkUnsentInvokeError subclass AND per-caller identity isolation.
+      const [unsentA, unsentB] = await Promise.all([
+        viewer.invoke('a-host', { channel: 'maker:schedule:list-sidebar-index-runs', args: [] }, 500, { canRerouteBeforeWrite: () => true }).catch((e) => e),
+        viewer.invoke('a-host', { channel: 'maker:schedule:list-sidebar-index-runs', args: [] }, 500, { canRerouteBeforeWrite: () => true }).catch((e) => e),
+      ]);
+      expect(unsentA).toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(unsentB).toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(unsentA).not.toBe(unsentB);
+      expect((unsentA as DeviceLinkError).inFlight).toBe(false);
+
+      // 2) No standby session: while a no-standby listing read is queued unwritten at depth 27, bringing the session
+      // back up lets a new routed listing read with identical args bypass the stuck direct slot immediately; and at
+      // full 64-frame capacity with no standby session, callers get isolated plain BACKPRESSURE errors.
+      sessions.controller!.dispose('DEVICE_OFFLINE');
+      sessions.host!.dispose('DEVICE_OFFLINE');
+      const queuedWithoutStandby = sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [25] }, 2_000);
+      connect();
+      await expect(
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [25] }, 500),
+      ).resolves.toEqual({ ok: true, result: 'session:local-db:sessions:list:25' });
+
+      sessions.controller!.dispose('DEVICE_OFFLINE');
+      sessions.host!.dispose('DEVICE_OFFLINE');
+      while (viewer.getReliableSendQueueDepth('a-host') < 64) {
+        viewer.sendPush('a-host', 'maker:event', 999);
+      }
+      const [backpressureA, backpressureB] = await Promise.all([
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [40] }, 500).catch((e) => e),
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [40] }, 500).catch((e) => e),
+      ]);
+      expect(backpressureA).toBeInstanceOf(DeviceLinkError);
+      expect(backpressureB).toBeInstanceOf(DeviceLinkError);
+      expect(backpressureA).not.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(backpressureB).not.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(backpressureA).not.toBe(backpressureB);
+      expect((backpressureA as DeviceLinkError).code).toBe('BACKPRESSURE');
+      expect((backpressureA as DeviceLinkError).inFlight).not.toBe(true);
+
+      // Drain backlog and restore the standby session so Device Link becomes writable again.
+      relay.dropFrames(() => false);
+      await expect(queuedWithoutStandby).resolves.toEqual({ ok: true, result: 'device-link:local-db:sessions:list:25' });
+      await vi.waitFor(() => expect(viewer.getReliableSendQueueDepth('a-host')).toBe(0), { timeout: 4_000 });
+      connect();
+
+      // 3) Already-sent (inFlight=true) failure on writable Device Link: must NOT reroute/replay that call on session,
+      // must preserve isolated inFlight=true errors, and subsequent reads escape via targetReturnStalled onto session.
+      received.length = 0;
+      relay.dropFrames((env) => env.kind === 'invoke-result');
+      const [inFlightErrA, inFlightErrB] = await Promise.all([
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [99] }, 120).catch((e) => e),
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [99] }, 120).catch((e) => e),
+      ]);
+      expect(inFlightErrA).toBeInstanceOf(DeviceLinkError);
+      expect(inFlightErrB).toBeInstanceOf(DeviceLinkError);
+      expect(inFlightErrA).not.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(inFlightErrA).not.toBe(inFlightErrB);
+      expect((inFlightErrA as DeviceLinkError).code).toBe('INVOKE_TIMEOUT');
+      expect((inFlightErrA as DeviceLinkError).inFlight).toBe(true);
+      expect(received).toEqual(['device-link:local-db:sessions:list:99']);
+
+      await expect(
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [99] }, 500),
+      ).resolves.toEqual({ ok: true, result: 'session:local-db:sessions:list:99' });
+      expect(received).toEqual([
+        'device-link:local-db:sessions:list:99',
+        'session:local-db:sessions:list:99',
+      ]);
     } finally {
       viewer.stop();
       host.stop();
@@ -979,5 +1131,172 @@ describe('AgentNetSessionLinks', () => {
     void guest.openLink(providerShareHostPeer('share-2', 'a-host'), openPayload);
     expect(calls).toEqual(['device-link:openLink']);
     expect(dialed).toBe(1);
+  });
+
+  // Unit: one body starts before the timeout, completes after it, and serves both listing callers.
+  it('lets coalesced Agent-Net listing callers receive a slowly arriving body', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const { links, sessions, bodies } = pair({ holdBodies: true });
+      const payload = { channel: 'local-db:sessions:list', args: [] };
+      const response = { ok: true, result: { preview: 'x'.repeat(140_000) } };
+      const invokes = vi.fn();
+      links.host.onFrame((env) => {
+        if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+        if (env.kind === 'invoke') {
+          invokes();
+          // Bypass the business compression in the fixture so the session sends a v2 body.
+          sessions.host!.respond(env.id!, { ok: true, result: response });
+        }
+      });
+      const opened = links.controller.openLink('a-host', openPayload);
+      await vi.advanceTimersByTimeAsync(0);
+      await opened;
+      const first = links.controller.invoke('a-host', payload, 100).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(20);
+      const joined = links.controller.invoke('a-host', payload, 100).catch((error) => error);
+      expect(invokes).toHaveBeenCalledTimes(1);
+      expect(bodies).toHaveLength(1);
+      const body = bodies[0]!;
+      body.deliver(body.data.subarray(0, 4096));
+      await vi.advanceTimersByTimeAsync(150);
+      const lateJoin = links.controller.invoke('a-host', payload, 100).catch((error) => error);
+      expect(invokes).toHaveBeenCalledTimes(1);
+      body.deliver(body.data.subarray(4096));
+      body.deliver(null);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await first).toEqual(response);
+      expect(await joined).toEqual(response);
+      expect(await lateJoin).toEqual(response);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('coalesces concurrent session listing reads and piggybacks retired read request ids after timeout', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const { links } = pair({ requestTimeoutMs: 500 });
+      const seenInvokes: Array<{ id: string; payload: InvokePayload }> = [];
+      links.host.onFrame((env) => {
+        if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+        if (env.kind === 'invoke') seenInvokes.push({ id: env.id!, payload: env.payload as InvokePayload });
+      });
+      const opened = links.controller.openLink('a-host', openPayload);
+      await vi.advanceTimersByTimeAsync(0);
+      await opened;
+
+      const timedOutA = links.controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [] }).catch((e) => e);
+      const timedOutB = links.controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [20, 'all', { includePinned: false }] }).catch((e) => e);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seenInvokes).toHaveLength(1);
+      const firstId = seenInvokes[0]!.id;
+
+      await vi.advanceTimersByTimeAsync(600);
+      expect(await timedOutA).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      expect(await timedOutB).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+
+      const retry = links.controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seenInvokes).toHaveLength(2);
+      expect(seenInvokes[1]!.payload.transfer?.retired).toEqual([firstId]);
+      links.host.sendInvokeResult('b-controller', seenInvokes[1]!.id, { ok: true, result: listResult(5) });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(retry).resolves.toEqual({ ok: true, result: listResult(5) });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：AgentNetSessionLinks.invoke 经 RemoteListingReadCoalescer 处理不同超时同参请求（350ms 与 1500ms 间隔 5ms，被控端耗时 600ms）。
+  //   短预算调用者在 350ms 准时 INVOKE_TIMEOUT，长预算调用者按精确剩余预算自动续读并在 ~950ms 拿到结果；剩余预算不足 100ms（35ms）时按精确剩余预算截止，不被 100ms 下限延长。
+  // - Bug／规则依据：审阅实测回归 ②（350ms + 1500ms 间隔 5ms 在 353ms 双双超时，及 100ms 下限延长调用期限）。
+  // - 现有覆盖缺口：前序用例只测两笔相同 500ms 超时同时失败，未覆盖长短超时相差 5ms 同乘时的精确剩余预算续读与 <100ms 边界。
+  // - 最小失败输入：t=0 发起 350ms、t=5ms 发起 1500ms（每笔响应需 600ms）；以及 t=0 发起 350ms、t=5ms 发起 380ms（响应需 90ms）。
+  // - tier：unit（fake timers + 内存 SessionPeer，<20ms）。
+  it('continues a 1500ms co-waiter hatched 5ms after a 350ms timeout without extending sub-100ms deadlines', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const { links } = pair({ requestTimeoutMs: 5_000 });
+      let nextDelay: () => number = () => 600;
+      const seenInvokes: Array<{ id: string; payload: InvokePayload }> = [];
+      links.host.onFrame((env) => {
+        if (env.kind === 'link-open') {
+          links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+        }
+        if (env.kind === 'invoke') {
+          const id = env.id!;
+          seenInvokes.push({ id, payload: env.payload as InvokePayload });
+          const delay = nextDelay();
+          setTimeout(() => {
+            links.host.sendInvokeResult('b-controller', id, { ok: true, result: listResult(3) });
+          }, delay);
+        }
+      });
+      const opened = links.controller.openLink('a-host', openPayload);
+      await vi.advanceTimersByTimeAsync(0);
+      await opened;
+
+      let shortSettledAt: number | null = null;
+      let longSettledAt: number | null = null;
+      const startedAt = performance.now();
+      const shortCall = links.controller
+        .invoke('a-host', { channel: 'local-db:sessions:list', args: [] }, 350)
+        .then(
+          (v) => ({ ok: true as const, v }),
+          (e) => {
+            shortSettledAt = Math.round(performance.now() - startedAt);
+            return { ok: false as const, e };
+          },
+        );
+      await vi.advanceTimersByTimeAsync(5);
+      const longCall = links.controller
+        .invoke('a-host', { channel: 'local-db:sessions:list', args: [] }, 1_500)
+        .then(
+          (v) => {
+            longSettledAt = Math.round(performance.now() - startedAt);
+            return { ok: true as const, v };
+          },
+          (e) => ({ ok: false as const, e }),
+        );
+
+      await vi.advanceTimersByTimeAsync(350);
+      expect(await shortCall).toMatchObject({ ok: false, e: { code: 'INVOKE_TIMEOUT' } });
+      expect(shortSettledAt).toBeGreaterThanOrEqual(350);
+      expect(shortSettledAt).toBeLessThan(370);
+      expect(longSettledAt).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(620);
+      const longRes = await longCall;
+      expect(longRes).toEqual({ ok: true, v: { ok: true, result: listResult(3) } });
+      expect(longSettledAt).toBeLessThanOrEqual(1_000);
+      expect(seenInvokes).toHaveLength(2);
+      expect(seenInvokes[1]!.payload.transfer?.retired).toEqual([seenInvokes[0]!.id]);
+
+      // Sub-100ms remaining budget (380ms joined 5ms after 350ms -> 35ms left at t=350ms; first attempt takes 400ms, continuation takes 90ms):
+      // must expire around 385ms, never stretched to 450ms by a 100ms floor!
+      const subDelays = [400, 90];
+      nextDelay = () => subDelays.shift() ?? 90;
+      const subStart = performance.now();
+      let subBSettledAt: number | null = null;
+      const subA = links.controller
+        .invoke('a-host', { channel: 'local-db:sessions:list', args: [50] }, 350)
+        .catch((e) => e);
+      await vi.advanceTimersByTimeAsync(5);
+      const subB = links.controller
+        .invoke('a-host', { channel: 'local-db:sessions:list', args: [50] }, 380)
+        .catch((e) => {
+          subBSettledAt = Math.round(performance.now() - subStart);
+          return e;
+        });
+      await vi.advanceTimersByTimeAsync(390);
+      expect(await subA).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      expect(await subB).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      expect(subBSettledAt).not.toBeNull();
+      expect(subBSettledAt!).toBeLessThanOrEqual(395);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
