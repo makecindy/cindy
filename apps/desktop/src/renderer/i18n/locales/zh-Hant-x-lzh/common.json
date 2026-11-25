@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 用系統 .deb 安裝套件。Arch Linux 與 Omarchy 用受管之使用者目錄安裝程式，採同一份已驗之 .deb 內容，無須 Debian 套件管理器。",
         "item1": "Ubuntu：用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：請依 docs/linux.md 中之使用者目錄安裝指南行之。",
         "item2": "點擊更新後，系統 .deb 安裝須授權；使用者目錄安裝無須系統密碼即可易版。他套件管理器所裝之版，請經對應之套件管理器更新。",
-        "item3": "Linux x64 與 arm64 支援 Beta 渠道。使用者目錄所裝者，閒時可自行安裝更新；系統 .deb 所裝者，唯於君擇重新啟動時施更新。"
+        "item3": "Linux x64 與 arm64 支援 Beta 渠道。使用者目錄所裝者，閒時可自行安裝更新；已設免密授權的系統 .deb 所裝者，閒時亦可自行安裝更新，其餘系統 .deb 所裝者，唯於君擇重新啟動時施更新。"
       },
       "qnaTitle": "徑問",
       "qnaDescription": "未得其解？徑問君所欲為",

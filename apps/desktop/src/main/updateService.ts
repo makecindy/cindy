@@ -465,7 +465,12 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
   const status = currentStatus;
   const relaunching = isRelaunching || autoRelaunchInProgress;
   const nowMs = Date.now();
-  if (hasBusyTasksNow) lastBusyAtMs = nowMs;
+  if (hasBusyTasksNow) {
+    // Do not probe polkit while work is active. The synchronous check can take
+    // up to two seconds and the next poll will retry after the quiet period.
+    lastBusyAtMs = nowMs;
+    return 'busy';
+  }
 
   return getAutoRelaunchBlockReason({
     enabled,
@@ -697,7 +702,7 @@ export function isUpdateRelaunchImminent(): boolean {
   // side-effects disabled.
   if (hasUserActionInstallBlocker()) return false;
   // 需要 pkexec 密码的 Linux 系统 .deb 不会在空闲/启动时自己装。
-  if (!supportsUnattendedAppUpdate()) return false;
+  if (!canApplyUnattendedAppUpdateNow()) return false;
   // Respecting the user's switch: with auto-relaunch off the patch just sits
   // there until they click the banner, which is not "imminent".
   return readAutoUpdateSettings().autoRelaunchOnIdle;

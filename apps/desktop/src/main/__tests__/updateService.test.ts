@@ -1229,6 +1229,26 @@ describe('checkForUpdate Linux installer flow', () => {
   const userInstall: TestLinuxInstallation = {
     prefix: '/home/u/.local/opt/cindy', current: 'releases/0.0.64', region: currentRegion,
   };
+  it('does not defer IM startup when a user install cannot apply unattended', async () => {
+    checkDebianManagedInstallation.mockReturnValue({ status: 'not-managed' });
+    recognizeLinuxUserInstallation.mockReturnValue(userInstall);
+    findLinuxUserInstallation.mockReturnValue(userInstall);
+    missingLinuxUserInstallTools.mockReturnValue(['bsdtar']);
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('linux', 'x64');
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(linuxInstallerManifest())).resolves.toBe('ready');
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
   it.each([
     { name: 'a system .deb', recognized: null, strict: null, missingTools: [], action: 'none' },
     { name: 'a passwordless system .deb', recognized: null, strict: null, missingTools: [], preauthorized: true, action: 'relaunch' },

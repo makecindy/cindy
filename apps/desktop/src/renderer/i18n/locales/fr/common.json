@@ -2846,7 +2846,7 @@
         "description": "Ubuntu utilise les paquets .deb du système. Arch Linux et Omarchy utilisent l'installateur utilisateur géré, avec la même charge .deb vérifiée, sans gestionnaire de paquets Debian.",
         "item1": "Ubuntu : utilisez sudo apt install ./cindy-<version>-<arch>.deb. Arch/Omarchy : suivez le guide d'installation utilisateur dans docs/linux.md.",
         "item2": "Après avoir choisi Mettre à jour, les installations .deb système demandent une autorisation ; les installations utilisateur gérées changent de version sans mot de passe système. Les autres installations gérées par un gestionnaire de paquets utilisent celui-ci.",
-        "item3": "Linux x64 et arm64 prennent en charge le canal bêta. Les installations utilisateur gérées peuvent installer les mises à jour automatiquement pendant l’inactivité ; les installations .deb système ne les appliquent que lorsque vous choisissez de redémarrer."
+        "item3": "Linux x64 et arm64 prennent en charge le canal bêta. Les installations utilisateur gérées peuvent installer les mises à jour automatiquement pendant l’inactivité ; les installations .deb système autorisées sans mot de passe peuvent également le faire, tandis que les autres ne les appliquent que lorsque vous choisissez de redémarrer."
       },
       "qnaTitle": "Posez votre question",
       "qnaDescription": "Besoin d'aide ? Demandez comment faire ce que vous avez en tête.",

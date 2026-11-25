@@ -2808,7 +2808,7 @@
         "description": "Ubuntu verwendet System-.deb-Pakete. Arch Linux und Omarchy verwenden das verwaltete Benutzerinstallationsprogramm mit derselben verifizierten .deb-Nutzlast, ohne einen Debian-Paketmanager.",
         "item1": "Ubuntu: sudo apt install ./cindy-<version>-<arch>.deb verwenden. Arch/Omarchy: der Anleitung zur Benutzerinstallation in docs/linux.md folgen.",
         "item2": "Nach Auswahl von „Aktualisieren“ erfordern systemweite .deb-Installationen eine Autorisierung; verwaltete Benutzerinstallationen wechseln die Version ohne Systempasswort. Andere paketverwaltete Installationen verwenden ihren Paketmanager.",
-        "item3": "Linux x64 und arm64 unterstützen den Beta-Kanal. Verwaltete Benutzerinstallationen können Updates im Leerlauf automatisch installieren; systemweite .deb-Installationen wenden Updates nur bei einem von dir gewählten Neustart an."
+        "item3": "Linux x64 und arm64 unterstützen den Beta-Kanal. Verwaltete Benutzerinstallationen können Updates im Leerlauf automatisch installieren; systemweite .deb-Installationen mit passwortloser Autorisierung können Updates ebenfalls im Leerlauf installieren, während andere systemweite .deb-Installationen Updates nur bei einem von dir gewählten Neustart anwenden."
       },
       "qnaTitle": "Direkt fragen",
       "qnaDescription": "Brauchst du noch Hilfe? Frag, wie du dein Vorhaben umsetzen kannst.",
