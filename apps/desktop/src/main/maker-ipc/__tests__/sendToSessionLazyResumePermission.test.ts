@@ -1,3 +1,5 @@
+import { syncNewMakerDraftCache, getGroupAssistantPluginSelection, getSelectedNewMakerRoute } from '../../maker-host/newMakerDefaultsCache.js';
+import { admitPluginEngineSwitchTarget } from '../pluginEngineSessionAdmission.js';
 import * as path from 'node:path';
 import { createSessionOptionsReconciler, type SessionExecutionRow } from '../sessionOptionsReconciler.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
@@ -5,6 +7,7 @@ import { isBotGroupInTaskClientId } from '../../../shared/botGroupChat.js';
 import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
+import { withRemoteAccountReads } from '../../subscription-accounts/remotePreflight.js';
 /**
  * #5788:插件 errand 派活走 sendToSessionInternal 的 lazy-resume 时,必须按会话落库的
  * 权限档恢复,不能落到 main 侧通路的缺省 bypass。否则插件任务被提权,errand 复用判定也会
@@ -112,15 +115,15 @@ function botTaskDispatchSlice(): string {
   const sendWithBaseline = slice('async function sendUserMessageWithAwaitedGitBaseline(', '\n  /**\n   * 来源标签用的发送方身份快照');
   const dispatchBotSessionMessage = slice(
     'const dispatchBotSessionMessage = async (params: {',
-    '\n  setBotInvitationWelcomeDispatch(',
+    '\n  setVoiceTaskDispatch(',
   );
   const groupDispatch = slice(
-    '({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, assertDispatchCurrent, onQueued, onAccepted }) =>',
+    'dispatch: (',
     ',\n    prepareAttachments:',
     registerSource.indexOf('const botGroupChatDeps: BotGroupChatServiceDeps = {'),
   );
   const pluginSource = slice('function hostPluginInputSource()', '  const sessionControlService = createSessionControlService(');
-  const sendToSession = slice('sendToSession: async (params) => {', ',\n    enableOrca: enableOrcaInternal,')
+  const sendToSession = slice('sendToSession: async (params', ',\n    enableOrca: enableOrcaInternal,')
     .replace('sendToSession:', 'const sendToSession =');
   return ts.transpileModule(
     `${sendWithBaseline}
@@ -131,8 +134,9 @@ ${pluginSource}
 ${sendToSession};
 // Host-originated input to a teammate task (cloud room, group delivery) resumes with its stored mode.
 const delegationDispatch = (params) => dispatchBotSessionMessage({ ...params, resumeWithStoredPermissionMode: true });
-const groupDispatch = ${groupDispatch};
-return { delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal, sendToSession,
+const ensureGroupAssistantSession = ${slice('ensureGroupAssistantSession: async (', ',\n    isGroupInputLive:').slice('ensureGroupAssistantSession: '.length)};
+const groupDispatch = ${groupDispatch.slice('dispatch: '.length)};
+return { ensureGroupAssistantSession, delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal, sendToSession,
 enqueueGroupMessage: ${slice('async function enqueueSendToSessionMessage(params: {', '\n  async function buildSessionControlInputItem(')} };`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
   ).outputText;
@@ -147,6 +151,7 @@ const loadBotTaskDispatch = new Function(
   enqueueGroupMessage: (input: Record<string, unknown>) => Promise<void>;
   sendToSessionInternal: (input: Record<string, unknown>) => ReturnType<GhostAgentTurnRunnerDeps['send']>;
   sendToSession: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
+  ensureGroupAssistantSession: (input: { title: string; projectDir: null }) => Promise<{ ok: boolean; sessionId?: string }>;
   groupDispatch: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   dispatchBotSessionMessage: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   delegationDispatch: (
@@ -502,6 +507,50 @@ describe('external handoff to hidden group lanes', () => {
     const ordinary = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, { maker });
     expect(await ordinary.groupDispatch(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
     expect(ordinary.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
+    const visible = { ...input, groupAssistantTask: true };
+    expect(await ordinary.sendToSessionInternal(visible)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(await ordinary.groupDispatch(visible)).toMatchObject({ ok: true, wakeKind: 'queued' });
+    expect(ordinary.scope.enqueueSendToSessionMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      targetSessionId: visible.targetSessionId, clientId: visible.clientId,
+    }));
+  });
+
+  // #12496, unit: run the registered group opener and sender up to their DB and queue ports.
+  it('queues the first public Cindy input against the task opened with the selected local plugin engine', async () => {
+    const owner = { dataOwnerId: 'user', ownerGeneration: 1 };
+    const providerId = 'acp-plugin:fixture:engine';
+    const selection = { providerId, modelId: 'chosen', permissionMode: 'plan' };
+    const push = (selectedPluginEngine: unknown) => syncNewMakerDraftCache({ ownerStamp: owner,
+      selectedPluginEngine, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, owner, 'user:1', false);
+    const openSession = vi.fn(async () => ({ row: { id: 'created' } }));
+    const engine = { key: 'fixture:engine', availability: { state: 'available' }, models: [{ id: 'chosen' }],
+      permissionModes: [{ id: 'plan' }], defaultPermissionMode: 'ask' };
+    const h = botTaskDispatchHarness({ created: { permissionMode: 'plan', planModeEnabled: true } }, {}, {
+      captureSessionOwner: () => () => {}, activeOwnerScopeKey: () => 'user:1',
+      getGroupAssistantPluginSelection, getSelectedNewMakerRoute, admitPluginEngineSwitchTarget,
+      listPluginEngineViews: () => [engine], openSession, markGroupCindyTask: vi.fn(), broadcastSessionCreated: vi.fn(),
+      maker: { getSession: () => undefined, getSessionMeta: async () => ({ agentKind: 'acp' }) },
+    });
+    const request = { title: 'Group Cindy', projectDir: null };
+    expect(push(selection)).toBe(true);
+    expect(getGroupAssistantPluginSelection('other')).toBeUndefined();
+    const opened = await h.ensureGroupAssistantSession(request);
+    expect(opened).toMatchObject({ ok: true, sessionId: 'created', created: true });
+    expect(openSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ body: expect.objectContaining({
+      agentKind: 'acp', providerId, model: 'chosen', permissionMode: 'plan',
+    }) }));
+    const input = { targetSessionId: opened.sessionId, clientId: 'bot-group:turn', message: 'Hello' };
+    expect(await h.groupDispatch({ ...input, groupAssistantTask: true })).toMatchObject({ ok: true, wakeKind: 'queued' });
+    expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(input));
+    for (const invalid of [{ ...selection, providerId: 'bad' }, { ...selection, deviceId: 'another-device' }]) {
+      push(invalid);
+      expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false });
+    }
+    engine.availability.state = 'unavailable';
+    push(selection);
+    expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false });
+    expect(openSession).toHaveBeenCalledTimes(1);
+    push(undefined);
   });
 
   it('preserves host continuations inside a group lane', async () => {
@@ -927,7 +976,7 @@ describe('unbound Codex pre-send history wiring', () => {
     });
     // A plugin engine account pool is asked first (plugin-engine-accounts/failover.ts); a Codex task is not its.
     const pluginPrepare = vi.fn(async () => false);
-    const ports = { subscriptionAccountRecoveryDeps: { rebuild },
+    const ports = { withRemoteAccountReads, subscriptionAccountRecoveryDeps: { rebuild },
       readCodexThreadStorageReadOnly: history,
       preparePluginEngineAccountForSend: pluginPrepare, readSubscriptionRuntimeSession: vi.fn(),
       prepareSubscriptionAccountForSend: prepare, prepareSubscriptionAccountFailover: failover,

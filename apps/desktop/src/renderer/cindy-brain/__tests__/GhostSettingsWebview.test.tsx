@@ -116,7 +116,7 @@ describe('GhostSettingsWebview layout ownership', () => {
     const githubRelease = vi.fn()
       .mockResolvedValueOnce({ status: 'available', release: { version: '0.2.15', assetId: 42 } })
       .mockResolvedValueOnce({ status: 'updated', version: '0.2.15' });
-    vi.stubGlobal('electronAPI', { ghosts: { githubRelease } });
+    vi.stubGlobal('electronAPI', { ghosts: { githubRelease }, pluginMarket: { onInstallProgress: () => () => {} } });
     render(<StrictMode><GhostSettingsWebview ghost={releaseGhost} appearance="plugin" /></StrictMode>);
     const install = await screen.findByRole('button', { name: 'settings.ghosts.detail.githubRelease.update' });
     expect(githubRelease).toHaveBeenCalledExactlyOnceWith('check', expect.any(String), undefined);
@@ -124,6 +124,27 @@ describe('GhostSettingsWebview layout ownership', () => {
     await screen.findByText('settings.ghosts.detail.githubRelease.updated');
     expect(githubRelease).toHaveBeenLastCalledWith('update', expect.any(String), 42);
     expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.githubRelease.update' })).toBeNull();
+  });
+
+  // Unit / duplicate update: reopening settings mid-download must show the running
+  // operation until it settles, without submitting a second update.
+  it('keeps a running GitHub update visible across a settings remount', async () => {
+    let finish!: () => void;
+    const available = { status: 'available', release: { version: '0.2.15', assetId: 42 } };
+    const githubRelease = vi.fn().mockResolvedValueOnce(available)
+      .mockImplementationOnce(() => new Promise(resolve => {
+        finish = () => resolve({ status: 'updated', version: '0.2.15' });
+      })).mockResolvedValue({ status: 'current', release: available.release });
+    vi.stubGlobal('electronAPI', { ghosts: { githubRelease }, pluginMarket: { onInstallProgress: () => () => {} } });
+    const first = render(<GhostSettingsWebview ghost={releaseGhost} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.detail.githubRelease.update' }));
+    first.unmount();
+    render(<GhostSettingsWebview ghost={releaseGhost} />);
+    expect(screen.getByText('settings.ghosts.detail.githubRelease.updating')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.ghosts.detail.githubRelease.check' }).hasAttribute('disabled')).toBe(true);
+    expect(githubRelease).toHaveBeenCalledTimes(2);
+    await act(async () => finish());
+    await screen.findByText('settings.ghosts.detail.githubRelease.current');
   });
 
   // Unit / request budget: a hidden detail must not start I/O, and a rapid reopen

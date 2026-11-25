@@ -402,7 +402,7 @@ const FIXED_LEADING_DEBT: Exemption[] = [
   fixedLeadingDebt('src/renderer/features/plugin/PluginPublisherBadge.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/plugin/PluginScopePicker.tsx', { 'leading-4': 1 }),
   fixedLeadingDebt('src/renderer/features/plugin/RemotePluginConfiguration.tsx', { 'leading-5': 7 }),
-  fixedLeadingDebt('src/renderer/features/plugin/RemotePluginPage.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/plugin/RemotePluginCatalogSource.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/plugin/RemotePluginReadOnlyDetail.tsx', { 'leading-5': 4 }),
   fixedLeadingDebt('src/renderer/features/plugin/RetiredFeatureDetail.tsx', { 'leading-5': 2, 'leading-6': 2 }),
   fixedLeadingDebt('src/renderer/features/provider-group/SessionRebalanceChoices.tsx', { 'leading-5': 1 }),

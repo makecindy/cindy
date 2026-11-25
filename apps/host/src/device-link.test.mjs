@@ -123,6 +123,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   });
   await once(wss, 'listening');
   const url = `ws://127.0.0.1:${wss.address().port}`;
+  const closedSessions = [];
+  const metaPatches = [];
   const service = createHostService({
     profileHold: () => held,
     // One USD and one CNY quote: the device-link v1 projection keeps only USD (usageHandlers.ts).
@@ -131,6 +133,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       'cny-model': { providerId: 'xd', modelId: 'cny-model', currency: 'CNY', source: 'gateway', approximate: false, inputPerMtok: 20, outputPerMtok: 80 },
     } }),
     providers: async () => ({ providers: [] }),
+    executeTaskTags: async request => {
+      assert.deepEqual(request, { action: 'list' });
+      return { tags: [], sessions: [] };
+    },
     setSessionEffort: async () => ({}),
     setSessionFastMode: async () => ({}),
     setSessionThinkingEnabled: async () => ({}),
@@ -138,6 +144,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     setSessionPlanMode: async () => ({}),
     listSessions: options => readHostSessionList(db.drizzle, options),
     getSession: id => readHostSession(db.drizzle, id),
+    updateSession: async (id, patch, options) => { metaPatches.push({ id, patch, options }); return { id, ...patch }; },
     messagesList: (id, limit) => readMessagesList(id, { limit }),
     setSessionModel: async (id, model) => {
       if (model === 'release-refusal') throw holdError(releaseFailure());
@@ -145,7 +152,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       modelChoices.push({ id, model, origin: readDeviceLinkModelSelectionOrigin() });
       return { deferred: true };
     },
-    input: { enqueue: async (sessionId, item) => {
+    input: {
+      projection: async sessionId => ({ sessionId, pendingQueue: [], turnInProgress: false, clearBoundaryMs: null }),
+      enqueue: async (sessionId, item) => {
       writes++; source = readDeviceLinkInvokeSourceDevice();
       await hold;
       const projection = { sessionId, pendingQueue: [item], turnInProgress: false };
@@ -159,7 +168,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     worktreeCreates.push({ request, options });
     return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
   } };
-  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', getWsUrl: () => url,
+  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
     send: async (sessionId, message, createOpts, sendOpts) => ({ accepted: true, sessionId, message, createOpts, sendOpts }),
@@ -180,6 +189,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       created++;
       throw new Error('Not part of this transport test');
     },
+    closeRuntimeSession: async id => { closedSessions.push(id); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
     profileHold: () => held,
     isSessionClaimed: async sessionId => {
@@ -202,12 +212,19 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     client.start();
     await waitFor(() => client.getStatus() === 'online');
     await client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+    // The first invocation uses one of the last registered ordinary handlers (no startup delay).
+    // Assigning old-peer "unsupported" here would survive the end of startup in a controller cache.
+    const first = await client.invoke('host', { channel: 'maker:session:prewarm', args: ['task', {}] });
+    assert.deepEqual(first, { ok: true, result: { accepted: false } });
     const reply = await client.invoke('host', { channel: 'local-db:sessions:list', args: [] });
     assert.equal(reply.ok, true, JSON.stringify(reply));
     assert.deepEqual(reply.result.map(row => row.id), ['task']);
     return client;
   }
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
+  // Task tags have a dedicated dispatch port, separate from the ordinary IPC registry.
+  const tags = await clients[2].invoke('host', { channel: 'local-db:task-tags:execute', args: [{ action: 'list' }] });
+  assert.deepEqual(tags, { ok: true, result: { tags: [], sessions: [] } });
   /*
    * Test value (engineering-conventions §3.2)
    * - Production entry and observable result: createHostDeviceLink over the real loopback relay;
@@ -267,6 +284,29 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(sent.result.message, 'hello');
   assert.equal(sent.result.sendOpts.expectedClearBoundaryMs, null);
   assert.equal(sent.result.sendOpts.expectedInputGeneration, 0);
+  const inTurn = await clients[0].invoke('host', { channel: 'maker:session-in-turn', args: ['task'] });
+  assert.equal(inTurn.ok, true, JSON.stringify(inTurn));
+  assert.equal(inTurn.result, false);
+  const projection = await clients[0].invoke('host', { channel: 'maker:input:get-projection', args: ['task'] });
+  assert.equal(projection.ok, true, JSON.stringify(projection));
+  assert.equal(projection.result.sessionId, 'task');
+  assert.equal(projection.result.turnInProgress, false);
+  assert.equal(projection.result.inputDeliveryVersion, undefined);
+  const removalPreview = await clients[0].invoke('host', { channel: 'worktree:removal-preview', args: ['task'] });
+  assert.deepEqual(removalPreview, { ok: true, result: { hasWorktree: false, dirty: false } });
+  const closed = await clients[0].invoke('host', { channel: 'maker:close-session', args: ['task'] });
+  assert.equal(closed.ok, true, JSON.stringify(closed));
+  assert.deepEqual(closedSessions, ['task']);
+  const archived = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'archived', pinnedAt: null }] });
+  assert.deepEqual(archived, { ok: true, result: { id: 'task', status: 'archived', pinnedAt: null } });
+  assert.deepEqual(metaPatches.at(-1), { id: 'task', patch: { status: 'archived', pinnedAt: null }, options: undefined });
+  const deleted = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'deleted', deleteTarget: 'task' }] });
+  assert.deepEqual(deleted, { ok: true, result: { id: 'task', status: 'deleted' } });
+  assert.deepEqual(metaPatches.at(-1), { id: 'task', patch: { status: 'deleted' }, options: { deleteTarget: 'task' } });
+  const badField = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { workingDir: '/tmp' }] });
+  assert.equal(badField.ok, false);
+  const badDiscard = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'archived', discardWorktreeChanges: true }] });
+  assert.equal(badDiscard.ok, false);
   const chosen = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-draft-pref', args: [{
     agent: 'pi', providerId: 'inferx', modelId: 'kimi-k3.1-pro', active: true,
     markModelChoice: true, selectDraftAgent: true, effort: 'max', fast: true, thinking: false,
@@ -638,11 +678,12 @@ test('Host device-link refuses provider-share guests and the platform features i
   });
   await once(wss, 'listening');
   const url = `ws://127.0.0.1:${wss.address().port}`;
-  host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => url,
+  host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async route => { reached.push(route); return { status: 404, body: { message: `unexpected ${route}` } }; },
     subscribe: () => () => {},
     createRuntimeSession: async () => { throw new Error('Not part of this test'); },
+    closeRuntimeSession: async () => { throw new Error('Not part of this test'); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
   });
   await host.setEnabled(true);
@@ -660,6 +701,20 @@ test('Host device-link refuses provider-share guests and the platform features i
   await waitFor(() => desktop.getStatus() === 'online' && guest.getStatus() === 'online');
   await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
 
+  // The genuine relay invoke path used to report IPC_ERROR when an allowlisted handler was absent.
+  // Clients cache only CHANNEL_NOT_ALLOWED as unsupported. Extend the existing loopback fixture
+  // with one request per affected capability, including the goal write that must not reach a handler.
+  for (const channel of [
+    'model-groups:get', 'maker:subscription-accounts', 'maker:goal:get-status', 'maker:goal:set',
+    'maker:model-context-limit:get', 'maker:api-key:present',
+  ]) {
+    const reply = await desktop.invoke('host', { channel, args: [] });
+    assert.deepEqual(reply, {
+      ok: false,
+      error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${channel}' not allowed remotely` },
+    }, channel);
+  }
+
   const filePeer = await desktop.invoke('host', { channel: FILE_PEER_CHANNEL, args: [{}] });
   assert.deepEqual(filePeer, { ok: false, error: { code: 'IPC_ERROR', message: 'FILE_PEER_UNAVAILABLE' } });
   const remoteDesktop = await desktop.invoke('host', { channel: REMOTE_DESKTOP_CHANNEL, args: [{}] });
@@ -672,7 +727,7 @@ test('Host device-link refuses provider-share guests and the platform features i
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
     assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);
   }
-  assert.deepEqual(reached, [], 'neither refusal may reach the Host service');
+  assert.deepEqual(reached, [], 'no refused channel may reach the Host service');
 });
 
 /*
@@ -691,7 +746,7 @@ test('Host device-link refuses provider-share guests and the platform features i
  */
 const PINNED_DISPATCH_PORTS = {
   read: ['sameAccountCapabilities', 'TASK_TAG_CHANNEL', 'app', 'readDeviceLinkSettings', 'noteControllerAccessAllowed',
-    'noteControllerAccessDenied', 'syncRemoteControlAccessGeneration', 'invalidatePluginOauth',
+    'noteControllerAccessDenied', 'syncRemoteControlAccessGeneration', 'invalidatePluginOauth', 'hasLocalChannel',
     'assertRemoteBotInvocationAllowed', 'projectRemoteSessionResult', 'projectRemoteBotPush', 'hasRemoteBotSessionLookup',
     'setRemoteBotSessionLookup', 'captureSharedTaskPeer', 'captureSharedTaskPush', 'assertSharedTaskInvoke',
     'sharedTaskMetadataTopic', 'sharedTaskAccessFailure', 'MAX_SHARED_TASK_TOPICS', 'refreshSharedTaskPeer',
@@ -754,10 +809,10 @@ test('keeps compatibility app callers alive when only the Agent-Net connection d
   let primary, compatibility;
   t.mock.method(AgentNetWorkerSocket, 'open', async () => (primary = wire()));
   const host = createHostDeviceLink({
-    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
-    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
     createWebSocket: () => (compatibility = wire()),
     releaseAuthCaller: caller => releasedAuth.push(caller),
     mcpApps: { invoke: async caller => caller, releaseCaller: async caller => { releasedApps.push(caller); } },
@@ -832,10 +887,10 @@ test('Agent-Net control refuses profile hold and rechecks the owner inside the s
   let held = holdMessage;
   let canRegister = false;
   const host = createHostDeviceLink({
-    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => null, canRegister: () => canRegister, profileHold: () => held,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
-    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
     agentNet: { base: () => null, subject: () => null, deviceId: () => null },
   });
   const server = createHostServer({ instanceId: 'fixture', token: 'fake-token',
@@ -905,7 +960,7 @@ test('cindy-host remote rejoin reports why it could not rejoin, and asks the off
     profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => null, canRegister: () => true, profileHold: () => held,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
-    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
     agentNet: { base: () => null, subject: () => null, deviceId: () => null },
     officialDeviceLinkFetch: async (route, opts) => { requests.push([route, opts]); return answer(); },
   });

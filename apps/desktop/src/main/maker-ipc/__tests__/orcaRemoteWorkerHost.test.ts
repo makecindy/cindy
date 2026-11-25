@@ -157,6 +157,39 @@ describe('orca remote worker host', () => {
     expect(deps.withSessionLock).toHaveBeenCalledWith('w_remote_1', expect.any(Function));
   });
 
+  it('replays the execution computer’s group route without resolving the group again', async () => {
+    const { deps, sessions } = setup();
+    const row = { id: request.sessionId, agentKind: 'pi', model: 'worker-model', providerId: 'worker-provider',
+      agentDeviceId: null, workingDir: '/worker/project', effort: 'low', fastMode: false };
+    const bootstrapSession = vi.fn();
+    const prepare = vi.fn(async () => ({
+      token: 'group-receipt',
+      route: { agentKind: 'pi' as const, model: row.model, providerId: row.providerId, agentDeviceId: null, effort: 'low' },
+    }));
+    const openSession = vi.fn(async (input, commit) => {
+      expect(input.body).toMatchObject({ agentKind: 'pi', model: row.model, providerId: row.providerId, effort: 'low' });
+      return { row, value: await commit({ ...row, orcaRemoteLead: input.body.orcaRemoteLead }, () => {}) };
+    });
+    const host = createOrcaRemoteWorkerHost({
+      ...deps,
+      supportsModelGroup: true,
+      openSession: createOrcaRemoteWorkerSessionOpener({
+        openSession: openSession as unknown as Parameters<typeof createOrcaRemoteWorkerSessionOpener>[0]['openSession'],
+        modelGroupStart: { prepare }, bootstrapSession, broadcastSessionCreated: vi.fn(),
+        insertSession: vi.fn(async (opened) => {
+          sessions.set(opened.id, { ...row, status: 'active', agentKind: 'pi', orcaRemoteLead: opened.orcaRemoteLead ?? null });
+        }),
+      }),
+    });
+
+    expect(host.caps()).toMatchObject({ modelGroup: true });
+    const first = await host.open({ ...request, model: 'fallback', modelGroup: 'coding' });
+    expect(first).toMatchObject({ agentKind: 'pi', model: row.model, providerId: row.providerId, agentDeviceId: null });
+    expect(bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ id: row.id }), expect.any(Function), 'group-receipt');
+    await expect(host.open({ ...request, modelGroup: 'coding' })).resolves.toEqual(first);
+    expect(prepare).toHaveBeenCalledOnce();
+  });
+
   it('is idempotent for the same caller and lead', async () => {
     const { host, deps } = setup();
     const first = await host.open(request);

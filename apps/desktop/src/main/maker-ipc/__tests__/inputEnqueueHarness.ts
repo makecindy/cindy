@@ -7,6 +7,7 @@ import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import { isAutomaticInputOriginKind, type AgentInputProjection, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import type { SchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
 import type { SavedUsageLimitWait } from '../usageLimitRecoveryStore.js';
+import type { UsageLimitAutoResume } from '../usageLimitAutoResume.js';
 import { createSchedulerQueueBridge } from '../schedulerQueueBridge.js';
 import { MAKER_INVOKE } from '../channels.js';
 
@@ -20,6 +21,29 @@ if (enqueueChannel < 0 || enqueueStart < 0 || enqueueEnd < enqueueChannel) throw
 const compiled = transpileModule(source.slice(enqueueStart, enqueueEnd + '\n  );'.length), {
   compilerOptions: { target: ScriptTarget.ES2022 },
 }).outputText;
+
+// Run the production terminal-error wiring, not a copy of its scheduler branch.
+const quotaHandlerStart = source.indexOf('    onUsageLimitedTurnError: (sessionId, signals, item, candidateToken) => {');
+const quotaHandlerEnd = source.indexOf('    onResumableTurnErrorDiscarded:', quotaHandlerStart);
+if (quotaHandlerStart < 0 || quotaHandlerEnd < quotaHandlerStart) throw new Error('Quota terminal handler not found');
+const compiledQuotaHandler = transpileModule(`return ({${source.slice(quotaHandlerStart, quotaHandlerEnd)}}).onUsageLimitedTurnError;`, {
+  compilerOptions: { target: ScriptTarget.ES2022 },
+}).outputText;
+const groupFallbackStart = source.indexOf('function waitForUsageLimitAfterGroup(');
+const groupFallbackEnd = source.indexOf('export function isSchedulerAutoResumePending(', groupFallbackStart);
+if (groupFallbackStart < 0 || groupFallbackEnd < groupFallbackStart) throw new Error('Group quota fallback not found');
+const compiledGroupFallback = transpileModule(
+  `${source.slice(groupFallbackStart, groupFallbackEnd)}\nreturn waitForUsageLimitAfterGroup;`,
+  { compilerOptions: { target: ScriptTarget.ES2022 } },
+).outputText;
+
+export function createUsageLimitedTurnErrorHarness(bindings: Record<string, unknown>) {
+  const fallback = new Function(...Object.keys(bindings), compiledGroupFallback)(...Object.values(bindings)) as UsageLimitAutoResume['onTurnError'];
+  const ports = { ...bindings, waitForUsageLimitAfterGroup: fallback };
+  const handler = new Function(...Object.keys(ports), compiledQuotaHandler)(...Object.values(ports)) as
+    NonNullable<ConstructorParameters<typeof AgentInputCoordinator>[0]['onUsageLimitedTurnError']>;
+  return Object.assign(handler, { fallback });
+}
 
 const stopStart = source.indexOf('  ipcMain.handle(MAKER_INVOKE.INPUT_STOP,');
 const stopEnd = source.indexOf('  ipcMain.handle(MAKER_INVOKE.INPUT_RESUME,', stopStart);

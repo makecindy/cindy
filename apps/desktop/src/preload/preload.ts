@@ -1,6 +1,7 @@
 import { parseSettingsNavigationTarget, type SettingsNavigationTarget } from '@cindy/maker-shared/settings-navigation';
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, type AppPreferenceControlBridge } from '../shared/appPreferenceControl.js';
+import { cloudWindowBridges } from './cloudBridges';
 import type { VoiceConversationApi } from '../shared/voiceConversation';
 import { PERFORMANCE_TRACE_CHANNEL, PERFORMANCE_TRACE_EVENTS_CHANNEL, PERFORMANCE_TRACE_STATE_CHANNEL, type PerformanceTraceAPI, type PerformanceTraceState } from '../shared/performanceTrace';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
@@ -51,6 +52,7 @@ import {
   type StartupGateStallSnapshot,
 } from '../shared/startupGateStall';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { createRemoteReadBridge } from './remoteReadBridge';
 import { createChatFolderUpload } from './chatFolderUpload';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { LOCAL_NETWORK_LOCAL, type LocalNetworkApi, type LocalNetworkState } from '../shared/localNetwork';
@@ -72,6 +74,7 @@ import type {
   PreparedProjectFromTask,
   ProjectsRootState,
 } from '../shared/projectsRoot';
+import type { TaskExportDirectoryState } from '../shared/taskExportDirectory';
 import type {
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
@@ -406,7 +409,7 @@ type VoiceInputGlobalResult =
   | {
       ok: false;
       error: string;
-      errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'superseded';
+      errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'appNotAllowed' | 'failed' | 'superseded';
     };
 type VoiceInputSettingsUpdateResult =
   | {
@@ -1200,6 +1203,7 @@ ipcRenderer.on('appearance-settings:changed', (_event, settings: AppearanceSetti
 const readMicrophonePermissionSnapshot = createMicrophonePermissionSnapshot();
 const voiceInputDataSnapshot = createVoiceInputDataSnapshot();
 
+const remoteReads = createRemoteReadBridge(ipcRenderer);
 contextBridge.exposeInMainWorld('electronAPI', {
   hostConnection: {
     client: 'desktop',
@@ -1341,7 +1345,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   windowMinimize: () => ipcRenderer.send('window-minimize'),
   windowMaximize: () => ipcRenderer.send('window-maximize'),
   windowExitFullscreen: () => ipcRenderer.send('window-exit-fullscreen'),
-  windowClose: () => ipcRenderer.send('window-close'),
+  windowClose: (once?: 'quit' | 'tray' | 'minimize') => {
+    if (once) ipcRenderer.send('window-close', once);
+    else ipcRenderer.send('window-close');
+  },
   /**
    * 手动窗口拖拽(no-drag 元素上"按住拖动移动窗口"):start 后 main 用光标
    * 位置驱动本窗口跟随,直到 stop。见 main/windowManualDrag.ts。
@@ -1363,6 +1370,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pageZoomOut: (): Promise<{ ok: true; zoomFactor: number }> => ipcRenderer.invoke('page-zoom:out'),
   pageZoomReset: (): Promise<{ ok: true; zoomFactor: number }> =>
     ipcRenderer.invoke('page-zoom:reset'),
+  // Main window only (see cloudBridges.ts).
+  ...cloudWindowBridges(process.argv),
   appearanceSettings: {
     ...createPluginFontReader(),
     importWallpaper: () => ipcRenderer.invoke('appearance-settings:import-wallpaper'),
@@ -1601,6 +1610,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       config: Record<string, unknown> | null,
     ): Promise<{ config: Record<string, unknown> }> =>
       ipcRenderer.invoke('ghosts:errand-prefs:set', id, config),
+    fileOpener: (id: string): Promise<{ declared: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke('ghosts:file-opener:get', id),
+    setFileOpener: (id: string, enabled: boolean): Promise<{ declared: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke('ghosts:file-opener:set', id, enabled),
     githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number):
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean> =>
       ipcRenderer.invoke('ghosts:github-release', action, instanceId, assetId),
@@ -1970,6 +1983,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-publisher:resolve-confirm', { requestId, confirmed }),
   },
   voiceConversation: {
+    realtimeCustomVoices: (route, id) => ipcRenderer.invoke('voice-conversation:realtime-custom-voices', route, id),
+    cancelRealtimeCustomVoices: (id) => ipcRenderer.invoke('voice-conversation:cancel-realtime-custom-voices', id),
+    realtimeModels: () => ipcRenderer.invoke('voice-conversation:realtime-models'),
+    setRealtimePreference: (botId, selection) => ipcRenderer.invoke('voice-conversation:set-realtime-preference', botId, selection),
+    setRealtimeQuestion: (callId, pending) => ipcRenderer.invoke('voice-conversation:realtime-question', callId, pending),
     promoteTurn: (callId, inputId) => ipcRenderer.invoke("voice-conversation:promote-turn", callId, inputId),
     submitTurn: (callId, inputId, text, forceHandoff) => ipcRenderer.invoke("voice-conversation:submit-turn", callId, inputId, text, forceHandoff),
     models: () => ipcRenderer.invoke('voice-conversation:models'),
@@ -1988,7 +2006,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     end: (callId) => ipcRenderer.invoke('voice-conversation:end', callId),
     speak: (input) => ipcRenderer.invoke('voice-conversation:speak', input),
     readSpeech: (callId, requestId) => ipcRenderer.invoke('voice-conversation:read-speech', callId, requestId),
-    interrupt: (callId) => ipcRenderer.invoke('voice-conversation:interrupt', callId),
+    interrupt: (callId, position, throughResponse) => ipcRenderer.invoke('voice-conversation:interrupt', callId, position, throughResponse),
     callStatus: () => ipcRenderer.invoke('voice-conversation:call-status'),
     publishCallStatus: (update) => ipcRenderer.send('voice-conversation:call-publish', update),
     callCommand: (command) => ipcRenderer.invoke('voice-conversation:call-command', command),
@@ -3077,6 +3095,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   syncNewMakerDraft: (snapshot: {
     ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
     selectedRoute?: import('../shared/botModelChain').BotModelRoute;
+    selectedPluginEngine?: import('../shared/pluginEngines').NewTaskPluginEngineSelection;
     lastByVendor: Partial<
       Record<
         'cc' | 'codex' | 'pi',
@@ -5060,6 +5079,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     choose: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:choose'),
     reset: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:reset'),
   },
+  taskExportDirectory: {
+    get: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:get'),
+    choose: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:choose'),
+    reset: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:reset'),
+  },
   createProjectFromTask: {
     prepare: (sessionId: string): Promise<PreparedProjectFromTask> =>
       ipcRenderer.invoke('create-project-from-task:prepare', sessionId),
@@ -5404,13 +5428,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     replaceDeviceIdentity: (): Promise<{ restarting: true }> =>
       ipcRenderer.invoke(DEVICE_LINK_INVOKE.REPLACE_DEVICE_IDENTITY),
     // —— 控制端:远程会话视图 ——
-    openLink: (deviceId: string): Promise<{ appVersion: string; allowlistHash: string }> =>
-      ipcRenderer.invoke('device-link:open-link', { deviceId }),
-    closeLink: (deviceId: string): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('device-link:close-link', { deviceId }),
+    openLink: remoteReads.openLink,
+    closeLink: remoteReads.closeLink,
     /** 远程调用被控端的 allowlist 内 channel;成功直接拿返回值,失败 reject 带 code 的 Error */
-    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }): Promise<unknown> =>
-      ipcRenderer.invoke('device-link:invoke', { deviceId, channel, args, ...(scheduling ? { scheduling } : {}) }),
+    invoke: remoteReads.invoke,
     /** 控制端:订阅被控端某 topic 的变更推送(push 驱动侧边栏 / 会话视图) */
     subscribe: (deviceId: string, topics: string[]): Promise<{ ok: true }> =>
       ipcRenderer.invoke('device-link:topic-subscribe', { deviceId, topics }),
@@ -7763,6 +7784,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     enableOrca: (
       leadSessionId: string,
       opts: {
+        modelGroup?: string;
         workerAgent: 'claude-code' | 'codex';
         delegateTask?: string;
         role?: string;

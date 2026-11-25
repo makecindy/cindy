@@ -9,6 +9,11 @@
  */
 
 import Store from 'electron-store';
+import { app } from 'electron';
+import path from 'node:path';
+import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
+import { inspectSettingsFile, validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
+import { createLogger } from '../logger.js';
 
 import type { ShellId } from './shellResolver.js';
 
@@ -57,3 +62,26 @@ export function setDefaultShellPref(value: ShellId): void {
   }
   getStore().set('defaultShellPref', value);
 }
+
+// ── Cloud settings (cloud instances only) ──────────────────────────────────
+/** 不实例化 electron-store：其 defaults/clearInvalidConfig 分支可能写盘。 */
+export function inspectTerminalPrefs() {
+  return inspectSettingsFile<TerminalPrefsShape>({
+    filePath: () => path.join(app.getPath('userData'), 'terminal-prefs.json'),
+    defaults: { defaultShellPref: 'auto' },
+    normalize: (raw) => ({ defaultShellPref: (raw as TerminalPrefsShape).defaultShellPref }),
+    savedSource: 'unknown',
+    validate: (raw) => validateOptionalSettingsFields(raw, {
+      defaultShellPref: (value) => VALID_SHELL_IDS.has(value as ShellId),
+    }),
+  });
+}
+/** Revision-checked cloud commits on the same file; electron-store re-reads it on each access. */
+const cloudStore = createOverrideSettingsFile<TerminalPrefsShape>({
+  filePath: () => path.join(app.getPath('userData'), 'terminal-prefs.json'),
+  defaults: { defaultShellPref: 'auto' },
+  normalize: raw => ({ defaultShellPref: VALID_SHELL_IDS.has((raw as TerminalPrefsShape).defaultShellPref) ? (raw as TerminalPrefsShape).defaultShellPref : 'auto' }),
+  validateOverrides: raw => validateOptionalSettingsFields(raw, { defaultShellPref: value => VALID_SHELL_IDS.has(value as ShellId) }),
+  preserveUnreadableFile: true, log: createLogger('terminal-prefs'), label: 'terminal-prefs',
+});
+export function getTerminalSettingsStore() { return cloudStore; }

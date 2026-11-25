@@ -142,7 +142,7 @@ describe('codexAccountUsageLimit', () => {
     mocks.codex.mockImplementation(async () => payload);
     let redeemed = false;
     const webReader = createCodexAccountUsageSnapshotReader({
-      readAccessToken: async () => 'token', readAccountId: async () => 'account-id',
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
       fetchWebUsageSnapshot: async () => ({ accountId: 'account-id', source: 'openai-web', secondary: { ...secondary, usedPercent: redeemed ? 0 : 100 } }),
       recordSnapshot: async webSnapshot => { payload = { ...payload, webSnapshot }; },
       clearSnapshot: async () => {}, readCachedSnapshot: async () => payload, now: () => now, onRefreshError: vi.fn(),

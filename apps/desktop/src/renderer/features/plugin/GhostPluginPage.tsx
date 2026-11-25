@@ -1,6 +1,7 @@
 import { useUninstallPlugin } from './lib/useUninstallPlugin';
 import { CatalogDeviceScope, type CatalogDeviceControl } from './useCatalogDevice';
-import { RemotePluginPage } from './RemotePluginPage';
+import { RemotePluginCatalogSource } from './RemotePluginCatalogSource';
+import { PluginCatalogView } from './PluginCatalogView';
 import { LocalPluginShareView } from './LocalPluginShareView';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { rememberContributionIntent, consumeContributionIntent, matchesContributionIntent } from './lib/contributionIntent';
@@ -10,11 +11,9 @@ import { PluginPublishDialog, type PluginPublishDialogRequest } from './PluginPu
 import { featureRetirementById, type FeatureRetirement } from '../../../shared/featureRetirements';
 import { RetiredFeatureDetail } from './RetiredFeatureDetail';
 import { Button } from '@/components/ui/button';
-import { PluginCatalogBrowser, PLUGIN_PAGE_SIZE, type PluginMarketRowMetric } from './PluginCatalogBrowser';
-import { PluginVirtualGrid } from './PluginVirtualGrid';
+import { PLUGIN_PAGE_SIZE, type PluginMarketRowMetric } from './PluginCatalogBrowser';
 import { pluginCatalogMemory, pluginCatalogOwnerKey, pluginInstalledGrid, readLocalPluginSnapshot, readPluginRecommendations, usePluginCatalogState } from './lib/pluginCatalogMemory';
-import { PluginRecommendationSlots, selectPluginRecommendationBatch, type PluginRecommendationDeck } from './lib/PluginRecommendationSlots';
-import { PluginCatalogPanels } from './lib/PluginCatalogPanels';
+import { selectPluginRecommendationBatch, type PluginRecommendationDeck } from './lib/PluginRecommendationSlots';
 import { marketDetailAccessRejected, marketDetailCacheFor, retainMarketDetailIcon, marketItemSummary } from './lib/marketDetailCache';
 /**
  * Plugin catalog and detail coordinator backed by the latest Ghost host APIs.
@@ -149,18 +148,11 @@ import { formatSetupGateDescription } from './lib/ghostSetupGateModel';
 import {
   PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
   PLUGIN_INSTALLED_CARD_GRID_CLASS,
-  PluginManagementLayout,
-  CatalogSectionHeader,
-  CatalogHeadingTabs,
-  CatalogTargetControls,
-  CatalogHeading,
   CatalogManagementNotice,
-  PluginManagementPage,
 } from './PluginManagementLayout';
 import { usePluginListScrollRestoration } from './lib/usePluginListScrollRestoration';
 import { GhostPagePanelHost } from './GhostPagePanelHost';
-import { GhostPluginActions, PluginCatalogPublishButton } from './GhostPluginActions';
-import { GhostPluginDetailView } from './GhostPluginDetailView';
+import { GhostPluginActions } from './GhostPluginActions';
 import { formatPluginMarketMetric, PluginSharedUsage } from './PluginSharedUsage';
 import { PluginPublisherBadge } from './PluginPublisherBadge';
 import {
@@ -181,7 +173,6 @@ import {
   usePluginInstallProgress,
 } from './lib/pluginInstallProgress';
 import { GhostPluginIcon } from './GhostPluginIcon';
-import { MarketPluginDetailView } from './MarketPluginDetailView';
 import { relatedPluginCatalogCache, removeUnavailableRelatedPlugin, type PluginRelatedCatalog } from './PluginMoreDetails';
 import { PluginProjectMenu, usePluginRecentWorkdirs } from './PluginScopePicker';
 import {
@@ -497,11 +488,11 @@ export function GhostPluginPage(props: { embedded?: boolean; active?: boolean; o
     ? <LocalPluginShareView key={`${generation}:${snapshotId}:${device?.deviceId ?? 'local'}`} snapshotId={snapshotId}
         deviceControl={deviceControl} onBack={() => closeShare()} onInstalled={closeShare} />
     : device
-    ? <RemotePluginPage key={`${generation}:${device.deviceId}`} device={device} online={online} deviceControl={deviceControl} {...props} />
-    : <LocalGhostPluginPage deviceControl={deviceControl} {...props} />}</CatalogDeviceScope>;
+    ? <RemotePluginCatalogSource key={`${generation}:${device.deviceId}`} device={device} online={online} deviceControl={deviceControl} {...props} />
+    : <LocalPluginCatalogSource deviceControl={deviceControl} {...props} />}</CatalogDeviceScope>;
 }
 
-function LocalGhostPluginPage({
+function LocalPluginCatalogSource({
   embedded = false,
   active = true,
   deviceControl,
@@ -2170,71 +2161,10 @@ function LocalGhostPluginPage({
     loadPage: window.electronAPI.pluginMarket.query, liveItems: marketSnapshot?.items,
     installedGhosts: ghosts, iconCache: catalogMemory.marketIcons, online: catalogOnline,
   };
-  const renderInstalledDetail = () => selectedDetail ? (
-      <div className="flex h-full min-h-0 w-full">
-        <div className="flex min-w-0 flex-1 flex-col">
-          {recommendationNotice}
-          <div className="min-h-0 flex-1">
-            <GhostPluginDetailView
-              ghost={selectedGhost}
-              sharePluginId={selectedMarketInstall?.sourceType === 'server' && selectedMarketInstall.scope === 'public' ? selectedMarketInstall.pluginId : undefined}
-              detail={selectedDetail}
-              marketItem={selectedMarketInstall}
-              installationPending={selectedMarketInstall !== null && marketInstallBusyId === selectedMarketInstall.pluginId}
-              panelStatus={panelStatus}
-              enabledOverride={
-                selectedGhost
-                  ? effectiveEnabled(installedGhostStoragePart(selectedGhost), selectedGhost.enabled)
-                  : undefined
-              }
-              backLabel={relatedMarketTrail.current.items.length ? t('settings.back') : undefined}
-              onBack={() => { setSelectedId(null); handleMarketBack(); }}
-              relatedCatalog={relatedCatalog}
-              onOpenRelated={item => {
-                if (marketBusyLockRef.current) return;
-                relatedMarketTrail.current.items.push({ installedId: selectedDetail.id });
-                setSelectedId(null);
-                void handleSelectMarket(item, false, 'detail');
-              }}
-              onToggle={(enabled) =>
-                void handleToggle(selectedDetail.id, enabled, selectedDetail.name)
-              }
-              onUse={handleUse}
-              mainViewSidebarVisible={selectedMainViewSidebarVisible}
-              onMainViewSidebarVisibleChange={handleMainViewSidebarVisibleChange}
-              onUpdate={() => void handleUpdate()}
-              onUpdateFromFile={() => void handleUpdateFromFile()}
-              onReapprove={() => void handleRecoverInstall(selectedDetail.id)}
-              updateVersion={selectedMarketUpdate?.version}
-              updateNotes={updateNotes}
-              releaseUpdates={releaseUpdates}
-              updateBusy={(selectedMarketUpdate !== null && marketBusyId !== null) || batchRunning}
-              onUninstall={() => void handleUninstall()}
-              onExport={
-                selectedGhost
-                  ? () => void handleExport()
-                  : undefined
-              }
-              onContribute={!showLocalPublishing ? undefined : () => {
-                if (!contributor) { void contribute(selectedDetail.id); return; }
-                setPublicationDialog({
-                  id: ++publicationDialogSequence.current, owner: contributionOwner, open: true, instanceId: selectedDetail.id,
-                });
-              }}
-              contributionUnavailableReason={contributionUnavailableKey === 'officialGithubRequired' || (contributionUnavailableKey === 'reservedId' && selectedGhost?.publishingSource?.kind === 'public-market')
-                ? t(`settings.ghosts.contribution.unavailable.${contributionUnavailableKey}`)
-                : selectedGhost?.publishingSource?.kind === 'local' && contributionUnavailableKey
-                  ? t(`settings.ghosts.contribution.unavailable.${contributionUnavailableKey}`) : undefined}
-              contributionBusy={contributionBusy}
-              toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
-              onIconLoadError={handleMarketIconLoadError}
-            />
-          </div>
-        </div>
-        {panelAside}
-        {publicationDialogView}
-      </div>
-  ) : null;
+  const backFromInstalledDetail = () => {
+    requestPluginCatalogScrollRestore();
+    setSelectedId(null);
+  };
 
   if (showMyPlugins) return <MyPluginsPage
     key={contributionOwner}
@@ -2256,41 +2186,26 @@ function LocalGhostPluginPage({
   />;
 
 
-  if (marketDetail) {
-    return (
-      <div className="flex h-full min-h-0 w-full">
-        <div className="flex min-w-0 flex-1 flex-col">
-          {recommendationNotice}
-          <div className="min-h-0 flex-1">
-            <MarketPluginDetailView
-              key={marketDetail.pluginId}
-              detail={marketDetail}
-              error={marketDetailError}
-              refreshing={marketDetailRefreshing}
-              onRetry={() => void handleSelectMarket(marketDetail, false, 'detail')}
-              busy={marketBusyId === marketDetail.pluginId}
-              showInstallProgress
-              onBack={handleMarketBack}
-              backLabel={relatedMarketTrail.current.items.length ? t('settings.back') : undefined}
-              relatedCatalog={relatedCatalog}
-              onOpenRelated={item => {
-                if (marketBusyLockRef.current) return;
-                relatedMarketTrail.current.items.push(marketItemSummary(marketDetail));
-                void handleSelectMarket(item, false, 'detail');
-              }}
-              onInstall={
-                canOfferMarketInstall(mode, marketDetail.ghostId)
-                  ? handleInstallFromMarket
-                  : undefined
-              }
-              onIconLoadError={handleMarketIconLoadError}
-            />
-          </div>
-        </div>
-        {panelAside}
-      </div>
-    );
-  }
+  if (marketDetail) return (
+    <PluginCatalogView aside={panelAside} notice={recommendationNotice} detail={{ market: {
+      detail: marketDetail,
+      error: marketDetailError,
+      refreshing: marketDetailRefreshing,
+      onRetry: () => void handleSelectMarket(marketDetail, false, 'detail'),
+      busy: marketBusyId === marketDetail.pluginId,
+      showInstallProgress: true,
+      onBack: handleMarketBack,
+      backLabel: relatedMarketTrail.current.items.length ? t('settings.back') : undefined,
+      relatedCatalog,
+      onOpenRelated: item => {
+        if (marketBusyLockRef.current) return;
+        relatedMarketTrail.current.items.push(marketItemSummary(marketDetail));
+        void handleSelectMarket(item, false, 'detail');
+      },
+      onInstall: canOfferMarketInstall(mode, marketDetail.ghostId) ? handleInstallFromMarket : undefined,
+      onIconLoadError: handleMarketIconLoadError,
+    } }} />
+  );
 
   if (selectedGhost?.retirement) {
     const target = featureRetirementById(selectedGhost.retirement.id)?.replacement;
@@ -2299,12 +2214,12 @@ function LocalGhostPluginPage({
         ghost={selectedGhost}
         replacement={findInstalledRetirementReplacement(ghosts, marketItems, target)}
         busy={marketBusyId !== null}
-        onBack={() => setSelectedId(null)}
+        onBack={backFromInstalledDetail}
         onReplace={() => void handleReplaceRetiredFeature()}
         onDismiss={() => {
           void window.electronAPI.ghosts
             .acknowledgeRetirement(installedGhostStoragePart(selectedGhost))
-            .then(() => setSelectedId(null))
+            .then(backFromInstalledDetail)
             .catch(() => toast.error(t('settings.ghosts.retirement.saveFailed')));
         }}
         onUninstall={() => void handleUninstall()}
@@ -2312,315 +2227,334 @@ function LocalGhostPluginPage({
     );
   }
 
-  if (selectedDetail) return renderInstalledDetail();
+  if (selectedDetail) return (
+    <PluginCatalogView aside={panelAside} notice={recommendationNotice} overlay={publicationDialogView} detail={{ installed: {
+      ghost: selectedGhost,
+      sharePluginId: selectedMarketInstall?.sourceType === 'server' && selectedMarketInstall.scope === 'public' ? selectedMarketInstall.pluginId : undefined,
+      detail: selectedDetail,
+      marketItem: selectedMarketInstall,
+      installationPending: selectedMarketInstall !== null && marketInstallBusyId === selectedMarketInstall.pluginId,
+      panelStatus,
+      enabledOverride: selectedGhost ? effectiveEnabled(installedGhostStoragePart(selectedGhost), selectedGhost.enabled) : undefined,
+      backLabel: relatedMarketTrail.current.items.length ? t('settings.back') : undefined,
+      onBack: () => {
+        if (relatedMarketTrail.current.items.length) {
+          setSelectedId(null);
+          handleMarketBack();
+        } else {
+          cancelPendingPluginSuggestion(recommendationNonce ?? undefined);
+          backFromInstalledDetail();
+        }
+      },
+      relatedCatalog,
+      onOpenRelated: item => {
+        if (marketBusyLockRef.current) return;
+        relatedMarketTrail.current.items.push({ installedId: selectedDetail.id });
+        setSelectedId(null);
+        void handleSelectMarket(item, false, 'detail');
+      },
+      onToggle: enabled => void handleToggle(selectedDetail.id, enabled, selectedDetail.name),
+      onUse: handleUse,
+      mainViewSidebarVisible: selectedMainViewSidebarVisible,
+      onMainViewSidebarVisibleChange: handleMainViewSidebarVisibleChange,
+      onUpdate: () => void handleUpdate(),
+      onUpdateFromFile: () => void handleUpdateFromFile(),
+      onReapprove: () => void handleRecoverInstall(selectedDetail.id),
+      updateVersion: selectedMarketUpdate?.version,
+      updateNotes,
+      releaseUpdates,
+      updateBusy: (selectedMarketUpdate !== null && marketBusyId !== null) || batchRunning,
+      onUninstall: () => void handleUninstall(),
+      onExport: selectedGhost ? () => void handleExport() : undefined,
+      onContribute: !showLocalPublishing ? undefined : () => {
+        if (!contributor) { void contribute(selectedDetail.id); return; }
+        setPublicationDialog({
+          id: ++publicationDialogSequence.current, owner: contributionOwner, open: true, instanceId: selectedDetail.id,
+        });
+      },
+      contributionUnavailableReason: contributionUnavailableKey === 'officialGithubRequired' || (contributionUnavailableKey === 'reservedId' && selectedGhost?.publishingSource?.kind === 'public-market')
+        ? t(`settings.ghosts.contribution.unavailable.${contributionUnavailableKey}`)
+        : selectedGhost?.publishingSource?.kind === 'local' && contributionUnavailableKey
+          ? t(`settings.ghosts.contribution.unavailable.${contributionUnavailableKey}`) : undefined,
+      contributionBusy,
+      toggleDisabled: scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled,
+      onIconLoadError: handleMarketIconLoadError,
+    } }} />
+  );
 
   const unreadReviewTone = reviewUnread.length === 0
     ? undefined
     : reviewUnread.some(item => item.status !== 'approved' && item.status !== 'enabled') ? 'error' : 'done';
 
   return (
-    <PluginManagementLayout
-      activeTab="plugins"
-      query={query}
-      onQueryChange={value => { setQuery(value.slice(0, 100)); if (pluginCatalogListRef.current) pluginCatalogListRef.current.scrollTop = 0; }}
-      searchPlaceholder={t('settings.ghosts.page.search')}
-      clearSearchLabel={t('settings.ghosts.page.clearSearch')}
-      embedded={embedded}
-      onSelectTab={onSelectCatalogTab}
-      headerActions={
-        <>
-          <PluginCatalogPublishButton
-            unreadTone={unreadReviewTone}
-            onClick={() => openMyPlugins()}
+    <PluginCatalogView
+      aside={panelAside}
+      overlay={<>
+        {githubInstallOwner === contributionOwner && (
+          <InstallGithubReleaseDialog
+            key={contributionOwner}
+            onClose={() => setGithubInstallOwner(null)}
+            onInstalled={(id) => {
+              if (contributionOwnerRef.current !== contributionOwner) return;
+              setOpenPanelId(null);
+              setSelectedId(id);
+              setGithubInstallOwner(null);
+            }}
           />
-          <GhostPluginActions
-            onInstall={() => void handleInstall()}
-            onInstallGithubRelease={() => setGithubInstallOwner(contributionOwner)}
-            onCreateWithCindy={handleCreateWithCindy}
-            onAddMarketplace={() => setAddMarketplaceOpen(true)}
+        )}
+        <AddMarketplaceDialog
+          open={addMarketplaceOpen}
+          onOpenChange={setAddMarketplaceOpen}
+          onSourcesChanged={() => { setCatalogRevision(value => value + 1); void refreshMarket(); }}
+        />
+        {updateRows ? (
+          <UpdateAllDialog
+            open={updateDialogOpen}
+            rows={updateRows}
+            iconByGhostId={new Map(ghosts.map((ghost) => [ghost.manifest.id, ghost.iconDataUrl]))}
+            onClose={() => setUpdateDialogOpen(false)}
           />
-        </>
-      }
-    >
-      <div className="flex min-h-0 flex-1">
-        <main
-          ref={pluginCatalogListRef}
-          className={cn(
-            'app-wallpaper-surface min-h-0 w-full min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]',
-            embedded ? 'bg-transparent' : 'bg-[var(--surface)]',
-          )}
-          onScroll={onPluginCatalogScroll}
-        >
-          <PluginManagementPage className="plugin-catalog-frame">
-            <CatalogHeading
-              anchor={secondaryTabs}
-              searching={Boolean(query.trim())}
-              title={query.trim() ? t('settings.ghosts.page.searchResults') : t(catalogTab === 'market' ? 'settings.ghosts.page.marketSection' : 'settings.ghosts.page.installedSection')}
-              target={<CatalogTargetControls
-                    computer={deviceControl}
-                    project={
-                      <PluginProjectMenu
-                        scopeDir={scopeDir}
-                        activeSessionWorkingDir={activeSessionWorkingDir ?? undefined}
-                        recentWorkdirs={recentWorkdirs}
-                        onPick={handlePickScope}
-                      />
-                    }
-                    projectLabel={scopeDir ? basename(scopeDir) : undefined}
-                  />}
-              tabs={<CatalogHeadingTabs value={catalogTab} installedCount={installedItems.length} marketCount={marketTotal} onValueChange={value => {
-                if (value === 'market' && catalogTab !== 'market') setOriginFilter('official');
-                setCatalogTab(value);
-                const root = pluginCatalogListRef.current;
-                const tabs = secondaryTabs.current;
-                if (root && tabs && tabs.getBoundingClientRect().top < root.getBoundingClientRect().top)
-                  root.scrollTop += tabs.getBoundingClientRect().top - root.getBoundingClientRect().top;
-              }} />}
-            />
-            {recommendationNotice ? <div className="mt-6">{recommendationNotice}</div> : null}
-
-            <MyPublishesSectionVisibilityGate
-              visible={SHOW_MY_PUBLISHES_SECTION && showEnterprise}
-              overviewLabel={t('settings.ghosts.page.overviewTab')}
-              publishesLabel={t('settings.ghosts.publish.section')}
-              tabsAriaLabel={t('settings.ghosts.page.secondaryTabsAria')}
-              publishes={
-                <MyPublishesSection
-                  enabled={showEnterprise}
-                  onPublish={() => void handlePublish()}
-                />
-              }
-            >
-            {catalogTab === 'market' && !query.trim() && (!todayLoaded || todayItems.length === 3) ? <section className="plugin-catalog-recommendations min-w-0">
-              <PluginRecommendationSlots loading={!todayLoaded} items={todayItems} order={catalogMemory.recommendationOrder}
-                shuffle={{ title: t('settings.ghosts.page.todayRecommendations'), label: t('newChat.homeSuggestions.shuffle'),
-                  candidates: todayCandidates, onChange: setRecommendationBatch }}
-                active={active} busy={todayItems.some(item => item.pluginId === marketBusyId || item.pluginId === marketInstallBusyId)}
-                trackInstallProgress
-                renderItem={(item, featured, deck) => <MarketPluginCard compact featured={featured} item={item} recommendationDeck={deck}
-                  busy={marketBusyId !== null} pending={marketInstallBusyId === item.pluginId} showInstallProgress
-                  onSelect={() => void handleSelectMarket(item)}
-                  onPrefetch={isCurrent => prefetchMarketDetail(item, isCurrent)}
-                  onInstall={canOfferMarketInstall(mode, item.ghostId) ? () => void handleInstallMarketItem(item.pluginId) : undefined}
-                  onIconLoadError={handleCardIconLoadError} />} />
-            </section> : null}
-            {scopeDir ? (
-              <CatalogManagementNotice
-                title={t('settings.ghosts.projectBanner.title', { name: basename(scopeDir) })}
-                action={
-                  <Button
-                    variant="secondary"
-                    tone="quiet"
-                    size="sm"
-                    compact
-                    onClick={() => handlePickScope(null)}
-                  >
-                    {t('settings.ghosts.projectBanner.backToGlobal')}
-                  </Button>
-                }
+        ) : null}
+      </>}
+      catalog={{
+        embedded,
+        onSelectCatalogTab,
+        query,
+        onQueryChange: setQuery,
+        scrollRef: pluginCatalogListRef,
+        onScroll: onPluginCatalogScroll,
+        tabsRef: secondaryTabs,
+        tab: catalogTab,
+        onSelectTab: setCatalogTab,
+        target: {
+          computer: deviceControl,
+          projectLabel: scopeDir ? basename(scopeDir) : undefined,
+          project: <PluginProjectMenu
+            scopeDir={scopeDir}
+            activeSessionWorkingDir={activeSessionWorkingDir ?? undefined}
+            recentWorkdirs={recentWorkdirs}
+            onPick={handlePickScope}
+          />,
+        },
+        notice: recommendationNotice,
+        publication: { onClick: () => openMyPlugins(), unreadTone: unreadReviewTone },
+        headerActions: <GhostPluginActions
+          onInstall={() => void handleInstall()}
+          onInstallGithubRelease={() => setGithubInstallOwner(contributionOwner)}
+          onCreateWithCindy={handleCreateWithCindy}
+          onAddMarketplace={() => setAddMarketplaceOpen(true)}
+        />,
+        wrapSections: sections => (
+          <MyPublishesSectionVisibilityGate
+            visible={SHOW_MY_PUBLISHES_SECTION && showEnterprise}
+            overviewLabel={t('settings.ghosts.page.overviewTab')}
+            publishesLabel={t('settings.ghosts.publish.section')}
+            tabsAriaLabel={t('settings.ghosts.page.secondaryTabsAria')}
+            publishes={<MyPublishesSection enabled={showEnterprise} onPublish={() => void handlePublish()} />}
+          >
+            {sections}
+          </MyPublishesSectionVisibilityGate>
+        ),
+        recommendations: !todayLoaded || todayItems.length === 3 ? {
+          loading: !todayLoaded,
+          items: todayItems,
+          order: catalogMemory.recommendationOrder,
+          shuffle: {
+            title: t('settings.ghosts.page.todayRecommendations'),
+            label: t('newChat.homeSuggestions.shuffle'),
+            candidates: todayCandidates,
+            onChange: setRecommendationBatch,
+          },
+          active,
+          busy: todayItems.some(item => item.pluginId === marketBusyId || item.pluginId === marketInstallBusyId),
+          trackInstallProgress: true,
+          renderItem: (item, featured, deck) => <MarketPluginCard compact featured={featured} item={item}
+            recommendationDeck={deck} busy={marketBusyId !== null} pending={marketInstallBusyId === item.pluginId} showInstallProgress
+            onSelect={() => void handleSelectMarket(item)}
+            onPrefetch={isCurrent => prefetchMarketDetail(item, isCurrent)}
+            onInstall={canOfferMarketInstall(mode, item.ghostId) ? () => void handleInstallMarketItem(item.pluginId) : undefined}
+            onIconLoadError={handleCardIconLoadError} />,
+        } : undefined,
+        scopeNotice: scopeDir ? (
+          <CatalogManagementNotice
+            title={t('settings.ghosts.projectBanner.title', { name: basename(scopeDir) })}
+            action={
+              <Button
+                variant="secondary"
+                tone="quiet"
+                size="sm"
+                compact
+                onClick={() => handlePickScope(null)}
               >
-                {t('settings.ghosts.projectBanner.desc', {
-                  device: t('settings.ghosts.remote.thisComputer'),
-                })}
-              </CatalogManagementNotice>
-            ) : null}
-            <PluginCatalogPanels scrollRef={pluginCatalogListRef} query={query}>
-            <section hidden={!query.trim() && catalogTab !== 'installed'} className="plugin-motion-page-section mt-6 min-w-0">
-              {query.trim() ? <CatalogSectionHeader
-                region="installed"
-                title={t('settings.ghosts.page.installedSection')}
-                count={searchedInstalledItems.length}
-              /> : null}
-
-
-              {legacyRecoveryStatus ? (
-                <LegacyGhostRecoveryNotice
-                  status={legacyRecoveryStatus}
-                  retrying={legacyRecoveryRetrying}
-                  onRetry={() => void handleRetryLegacyRecovery()}
-                />
-              ) : null}
-
-              {bannerVisible && !query.trim() ? (
-                <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl bg-[var(--surface-hover-soft)] px-4 py-2.5">
-                  <span className="plugin-update-icons flex shrink-0 gap-1.5" aria-hidden="true">
-                    {updatableInstalledItems.slice(0, 5).map(item => (
-                      <span key={item.id} className="size-6"><GhostPluginIcon size="mini" iconId={item.id} iconName={item.name} iconDataUrl={item.iconDataUrl} /></span>
-                    ))}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-13 font-medium text-[var(--text-primary)]">
-                      {t('settings.ghosts.page.updatesAvailable', {
-                        count: updatableInstalledItems.length,
-                      })}
-                    </p>
-                    <p className="sr-only">
-                      {updatableInstalledItems
-                        .map((item) => `${item.name} v${item.marketUpdate?.version ?? item.githubUpdate?.version ?? ''}`)
-                        .join(' · ')}
-                    </p>
-                  </div>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      tone="quiet"
-                      compact
-                    type="button"
-                    onClick={handleIgnoreRound}
-                      className="shrink-0"
-                  >
-                    {t('settings.ghosts.page.ignoreRound')}
-                    </Button>
-                    {/* 单项更新在飞时禁用:与 handleUpdateAll 的守卫同因,按钮如实变灰。 */}
-                    <Button
-                      variant="cta"
-                      size="sm"
-                      compact
-                      loading={marketInstallBusyId !== null}
-                    type="button"
-                    onClick={handleUpdateAll}
-                    disabled={marketBusyId !== null}
-                      className="shrink-0"
-                  >
-                    {t('settings.ghosts.page.updateAll')}
-                    </Button>
-                </div>
-              ) : null}
-
-              {primaryInstalledItems.length > 0 ? (
-                <>
-                  <PluginVirtualGrid count={primaryInstalledItems.length} scrollRef={pluginCatalogListRef} cache={installedGridCache} active={!!query.trim() || catalogTab === 'installed'} renderItem={index => {
-                    const item = primaryInstalledItems[index]!;
-                    return (
-                      <GhostPluginCard
-                        key={item.id}
-                        item={item}
-                        sourceLabel={item.origin ? t(`settings.ghosts.page.origin.${item.origin}`) : undefined}
-                        marketItem={item.marketItem}
-                        author={item.author}
-                        updateVersion={item.marketUpdate?.version ?? item.githubUpdate?.version}
-                        updateBusy={
-                          ((item.marketUpdate !== null || item.githubUpdate !== null) && marketBusyId !== null) ||
-                          batchRunning
-                        }
-                        updatePending={
-                          item.githubUpdate
-                            ? githubUpdateKey(item.githubUpdate.instanceId) === marketInstallBusyId
-                            : item.marketUpdate?.pluginId === marketInstallBusyId
-                        }
-                        updateProgressKey={
-                          item.githubUpdate ? githubUpdateKey(item.githubUpdate.instanceId) : undefined
-                        }
-                        onUpdate={
-                          item.marketUpdate
-                            ? () => void handleMarketUpdate(item.id)
-                            : item.githubUpdate
-                              ? () => void handleGithubUpdate(item.githubUpdate!)
-                              : undefined
-                        }
-                        onReapprove={() => void handleRecoverInstall(item.id)}
-                        effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
-                        onPrimary={() => handlePrimaryAction(item)}
-                        onManage={() => { capturePluginCatalogScroll(`installed:${item.id}`); setSelectedId(item.id); }}
-                        onIconLoadError={handleMarketIconLoadError}
-                      />
-                    );
-                  }} />
-                  <div ref={installedSentinel} className="h-1" />
-                </>
-              ) : !legacyRecoveryStatus && installedItems.length > 0 ? (
-                <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-5 py-10 text-center">
-                  <p className="text-13 text-[var(--text-secondary)]">{t('settings.ghosts.page.emptyFiltered')}</p>
-                </div>
-              ) : null}
-            </section>
-
-            <PluginCatalogBrowser cacheRef={browserCache} ownerKey={catalogOwnerKey} iconCache={catalogMemory.marketIcons}
-              prewarm={active && marketSnapshot !== null}
-              catalogKey={marketLocale}
-              revision={JSON.stringify([customSourceNames, catalogRevision,
-                query.trim() ? [installedGhostMarketKey, marketSnapshot?.items.map(item => [item.pluginId, item.installState])] : null])}
-              installedItems={marketSnapshot?.items}
-              installedGhosts={ghosts}
-              query={query} scope={catalogTab === 'installed' && !query.trim() ? 'official' : effectiveOriginFilter}
-              onScope={value => {
-                setOriginFilter(value);
-                const root = pluginCatalogListRef.current;
-                const tabs = secondaryTabs.current;
-                if (root && tabs && tabs.getBoundingClientRect().top < root.getBoundingClientRect().top)
-                  root.scrollTop += tabs.getBoundingClientRect().top - root.getBoundingClientRect().top;
-              }}
-              showOrganization={showEnterprise} visible={active && (!!query.trim() || catalogTab === 'market')}
-              scrollRef={pluginCatalogListRef} loadPage={window.electronAPI.pluginMarket.query} online={catalogOnline}
-              renderRevision={marketBusyId}
-              onCounts={counts => { if (!query.trim()) setMarketTotal(counts?.all ?? null); }}
-              renderPublicPreview={showInstalledEmpty ? publicItems => {
-                const icons = publicItems.filter(item => publicPublisherFilter(item) === 'official').slice(0, 3);
-                return (
-                  <div className="plugin-installed-empty px-5 text-center">
-                    {icons.length > 0 ? (
-                      <div className="mb-7 flex justify-center gap-3.5 [&>span]:size-14" aria-hidden="true">
-                        {icons.map(item => (
-                          <GhostPluginIcon key={item.pluginId} size="detail"
-                            iconId={item.ghostId} iconName={item.name}
-                            iconDataUrl={ghostPluginIconSource(item.icon?.url, item.icon?.sha256)}
-                            onIconLoadError={handleMarketIconLoadError} />
-                        ))}
-                      </div>
-                    ) : null}
-                    <h2 className="text-18 font-medium text-[var(--text-primary)]">{t('settings.ghosts.empty')}</h2>
-                    <p className="mt-2 text-14 text-[var(--text-secondary)]">{t('settings.ghosts.emptyHint')}</p>
-                    <Button className="mt-5" variant="cta" size="lg"
-                      onClick={() => {
-                        setQuery('');
-                        setOriginFilter('official');
-                        setCatalogTab('market');
-                      }}>
-                      {t('settings.ghosts.page.browseMarket')}
-                    </Button>
-                  </div>
-                );
-              } : undefined}
-              renderItem={(item, metric) => <MarketPluginCard key={item.pluginId} item={item} metric={metric}
-                busy={marketBusyId !== null} pending={marketInstallBusyId === item.pluginId} showInstallProgress
-                onSelect={() => void handleSelectMarket(item)}
-                onPrefetch={isCurrent => prefetchMarketDetail(item, isCurrent)}
-                onInstall={canOfferMarketInstall(mode, item.ghostId) && item.installState !== 'installed' && item.installState !== 'update-available'
-                  ? () => void handleInstallMarketItem(item.pluginId) : undefined}
-                onIconLoadError={handleCardIconLoadError} />}
+                {t('settings.ghosts.projectBanner.backToGlobal')}
+              </Button>
+            }
+          >
+            {t('settings.ghosts.projectBanner.desc', {
+              device: t('settings.ghosts.remote.thisComputer'),
+            })}
+          </CatalogManagementNotice>
+        ) : undefined,
+        installedTotal: installedItems.length,
+        installedCount: searchedInstalledItems.length,
+        installedNotice: <>
+          {legacyRecoveryStatus ? (
+            <LegacyGhostRecoveryNotice
+              status={legacyRecoveryStatus}
+              retrying={legacyRecoveryRetrying}
+              onRetry={() => void handleRetryLegacyRecovery()}
             />
-            </PluginCatalogPanels>
-            </MyPublishesSectionVisibilityGate>
-          </PluginManagementPage>
-        </main>
-        {panelAside}
-      </div>
-      {githubInstallOwner === contributionOwner && (
-        <InstallGithubReleaseDialog
-          key={contributionOwner}
-          onClose={() => setGithubInstallOwner(null)}
-          onInstalled={(id) => {
-            if (contributionOwnerRef.current !== contributionOwner) return;
-            setOpenPanelId(null);
-            setSelectedId(id);
-            setGithubInstallOwner(null);
-          }}
-        />
-      )}
-      <AddMarketplaceDialog
-        open={addMarketplaceOpen}
-        onOpenChange={setAddMarketplaceOpen}
-        onSourcesChanged={() => { setCatalogRevision(value => value + 1); void refreshMarket(); }}
-      />
-      {updateRows ? (
-        <UpdateAllDialog
-          open={updateDialogOpen}
-          rows={updateRows}
-          iconByGhostId={new Map(ghosts.map((ghost) => [ghost.manifest.id, ghost.iconDataUrl]))}
-          onClose={() => setUpdateDialogOpen(false)}
-        />
-      ) : null}
-    </PluginManagementLayout>
+          ) : null}
+
+          {bannerVisible && !query.trim() ? (
+            <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl bg-[var(--surface-hover-soft)] px-4 py-2.5">
+              <span className="plugin-update-icons flex shrink-0 gap-1.5" aria-hidden="true">
+                {updatableInstalledItems.slice(0, 5).map(item => (
+                  <span key={item.id} className="size-6"><GhostPluginIcon size="mini" iconId={item.id} iconName={item.name} iconDataUrl={item.iconDataUrl} /></span>
+                ))}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-13 font-medium text-[var(--text-primary)]">
+                  {t('settings.ghosts.page.updatesAvailable', {
+                    count: updatableInstalledItems.length,
+                  })}
+                </p>
+                <p className="sr-only">
+                  {updatableInstalledItems
+                    .map((item) => `${item.name} v${item.marketUpdate?.version ?? item.githubUpdate?.version ?? ''}`)
+                    .join(' · ')}
+                </p>
+              </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  tone="quiet"
+                  compact
+                type="button"
+                onClick={handleIgnoreRound}
+                  className="shrink-0"
+              >
+                {t('settings.ghosts.page.ignoreRound')}
+                </Button>
+                {/* 单项更新在飞时禁用:与 handleUpdateAll 的守卫同因,按钮如实变灰。 */}
+                <Button
+                  variant="cta"
+                  size="sm"
+                  compact
+                  loading={marketInstallBusyId !== null}
+                type="button"
+                onClick={handleUpdateAll}
+                disabled={marketBusyId !== null}
+                  className="shrink-0"
+              >
+                {t('settings.ghosts.page.updateAll')}
+                </Button>
+            </div>
+          ) : null}
+        </>,
+        installedSentinel: primaryInstalledItems.length > 0 ? installedSentinel : undefined,
+        installedGrid: primaryInstalledItems.length > 0 ? {
+          count: primaryInstalledItems.length,
+          cache: installedGridCache,
+          renderItem: index => {
+            const item = primaryInstalledItems[index]!;
+            return (
+              <GhostPluginCard
+                key={item.id}
+                item={item}
+                sourceLabel={item.origin ? t(`settings.ghosts.page.origin.${item.origin}`) : undefined}
+                marketItem={item.marketItem}
+                author={item.author}
+                updateVersion={item.marketUpdate?.version ?? item.githubUpdate?.version}
+                updateBusy={
+                  ((item.marketUpdate !== null || item.githubUpdate !== null) && marketBusyId !== null) ||
+                  batchRunning
+                }
+                updatePending={
+                  item.githubUpdate
+                    ? githubUpdateKey(item.githubUpdate.instanceId) === marketInstallBusyId
+                    : item.marketUpdate?.pluginId === marketInstallBusyId
+                }
+                updateProgressKey={
+                  item.githubUpdate ? githubUpdateKey(item.githubUpdate.instanceId) : undefined
+                }
+                onUpdate={
+                  item.marketUpdate
+                    ? () => void handleMarketUpdate(item.id)
+                    : item.githubUpdate
+                      ? () => void handleGithubUpdate(item.githubUpdate!)
+                      : undefined
+                }
+                onReapprove={() => void handleRecoverInstall(item.id)}
+                effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
+                onPrimary={() => handlePrimaryAction(item)}
+                onManage={() => { capturePluginCatalogScroll(`installed:${item.id}`); setSelectedId(item.id); }}
+                onIconLoadError={handleMarketIconLoadError}
+              />
+            );
+          },
+        } : undefined,
+        installedEmpty: primaryInstalledItems.length === 0 && !legacyRecoveryStatus && installedItems.length > 0 ? (
+          <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-5 py-10 text-center">
+            <p className="text-13 text-[var(--text-secondary)]">{t('settings.ghosts.page.emptyFiltered')}</p>
+          </div>
+        ) : undefined,
+        market: {
+          cacheRef: browserCache,
+          ownerKey: catalogOwnerKey,
+          iconCache: catalogMemory.marketIcons,
+          prewarm: active && marketSnapshot !== null,
+          catalogKey: marketLocale,
+          revision: JSON.stringify([customSourceNames, catalogRevision,
+            query.trim() ? [installedGhostMarketKey, marketSnapshot?.items.map(item => [item.pluginId, item.installState])] : null]),
+          installedItems: marketSnapshot?.items,
+          installedGhosts: ghosts,
+          scope: catalogTab === 'installed' && !query.trim() ? 'official' : effectiveOriginFilter,
+          onScope: setOriginFilter,
+          showOrganization: showEnterprise,
+          visible: active && (!!query.trim() || catalogTab === 'market'),
+          loadPage: window.electronAPI.pluginMarket.query,
+          online: catalogOnline,
+          renderRevision: marketBusyId,
+          onCounts: counts => { if (!query.trim()) setMarketTotal(counts?.all ?? null); },
+          total: marketTotal,
+          renderPublicPreview: showInstalledEmpty ? publicItems => {
+            const icons = publicItems.filter(item => publicPublisherFilter(item) === 'official').slice(0, 3);
+            return (
+              <div className="plugin-installed-empty px-5 text-center">
+                {icons.length > 0 ? (
+                  <div className="mb-7 flex justify-center gap-3.5 [&>span]:size-14" aria-hidden="true">
+                    {icons.map(item => (
+                      <GhostPluginIcon key={item.pluginId} size="detail"
+                        iconId={item.ghostId} iconName={item.name}
+                        iconDataUrl={ghostPluginIconSource(item.icon?.url, item.icon?.sha256)}
+                        onIconLoadError={handleMarketIconLoadError} />
+                    ))}
+                  </div>
+                ) : null}
+                <h2 className="text-18 font-medium text-[var(--text-primary)]">{t('settings.ghosts.empty')}</h2>
+                <p className="mt-2 text-14 text-[var(--text-secondary)]">{t('settings.ghosts.emptyHint')}</p>
+                <Button className="mt-5" variant="cta" size="lg"
+                  onClick={() => {
+                    setQuery('');
+                    setOriginFilter('official');
+                    setCatalogTab('market');
+                  }}>
+                  {t('settings.ghosts.page.browseMarket')}
+                </Button>
+              </div>
+            );
+          } : undefined,
+          renderItem: (item, metric) => <MarketPluginCard key={item.pluginId} item={item} metric={metric}
+            busy={marketBusyId !== null} pending={marketInstallBusyId === item.pluginId} showInstallProgress
+            onSelect={() => void handleSelectMarket(item)}
+            onPrefetch={isCurrent => prefetchMarketDetail(item, isCurrent)}
+            onInstall={canOfferMarketInstall(mode, item.ghostId) && item.installState !== 'installed' && item.installState !== 'update-available'
+              ? () => void handleInstallMarketItem(item.pluginId) : undefined}
+            onIconLoadError={handleCardIconLoadError} />,
+        },
+      }}
+    />
   );
 }
 

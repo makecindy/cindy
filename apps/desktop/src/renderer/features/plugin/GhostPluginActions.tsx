@@ -17,9 +17,11 @@ import {
 export function PluginCatalogPublishButton({
   onClick,
   unreadTone,
+  disabled,
 }: {
   onClick: () => void;
   unreadTone?: 'error' | 'done';
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
   const label = t('settings.ghosts.contribution.myPlugins');
@@ -36,6 +38,7 @@ export function PluginCatalogPublishButton({
         tone="quiet"
         size="md"
         compact
+        disabled={disabled}
         className={cn('plugin-publish-trigger whitespace-nowrap', iconOnly && 'w-8 px-0')}
         aria-label={unreadTone ? `${label} · ${t('settings.ghosts.contribution.unreadReview')}` : label}
         onClick={onClick}

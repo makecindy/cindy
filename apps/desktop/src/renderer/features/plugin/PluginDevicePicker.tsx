@@ -68,6 +68,8 @@ export type CatalogDeviceControl = {
   selected: { deviceId: string; name: string } | null;
   onSelect(device: { deviceId: string; name: string } | null): void;
   directory: ReturnType<typeof usePluginDeviceDirectory>;
+  /** The page belongs to this one computer: the menu offers no computers, only the project scope. */
+  fixed?: boolean;
 };
 
 /** One host menu owns its optional project submenu. Presence never rewrites the selection. */
@@ -75,6 +77,7 @@ export function PluginDevicePicker({
   selected,
   onSelect,
   directory: { candidates, target, online, relayOnline },
+  fixed,
   projectMenu,
   projectLabel,
   disabled,
@@ -83,11 +86,12 @@ export function PluginDevicePicker({
   const computerName = selected
     ? (target?.name ?? selected.name)
     : t('settings.ghosts.remote.thisComputer');
-  const label = projectMenu
-    ? `${computerName} / ${projectLabel ?? t('settings.ghosts.scopePicker.globalScope')}`
-    : computerName;
+  const scopeLabel = projectLabel ?? t('settings.ghosts.scopePicker.globalScope');
+  // A fixed page already names its computer; the button then only says which scope is shown.
+  const label = projectMenu ? (fixed ? scopeLabel : `${computerName} / ${scopeLabel}`) : computerName;
   const offlineLabel = selected && !online ? t('settings.ghosts.remote.offline') : undefined;
   const [trigger, iconOnly] = useCompactPluginControl(360, '.plugin-management-content-frame');
+  if (fixed && !projectMenu) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -121,6 +125,8 @@ export function PluginDevicePicker({
         align="end"
         className={cn('w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-32px)]', iconOnly && 'min-w-48')}
       >
+        {fixed ? null : (
+          <>
         <DropdownMenuLabel>{t('settings.ghosts.scopePicker.computers')}</DropdownMenuLabel>
         <DropdownMenuItem className="gap-2" onSelect={() => onSelect(null)}>
           <Monitor size={14} />
@@ -144,9 +150,11 @@ export function PluginDevicePicker({
             {selected?.deviceId === device.deviceId ? <Check size={14} /> : null}
           </DropdownMenuItem>
         ))}
+          </>
+        )}
         {projectMenu ? (
           <>
-            <DropdownMenuSeparator />
+            {fixed ? null : <DropdownMenuSeparator />}
             {projectMenu}
           </>
         ) : null}

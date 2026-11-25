@@ -17,6 +17,7 @@ export interface PreparedPluginContribution {
   sha256: string;
   sizeBytes: number;
   releaseNotes?: string;
+  permissionLabels?: string[];
   preflight?: import('./pluginContributionContract').ContributionPreflight;
   expiresAt: string;
 }

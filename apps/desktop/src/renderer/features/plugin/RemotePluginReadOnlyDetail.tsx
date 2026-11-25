@@ -1,16 +1,14 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { PluginDetailArticle, PluginDetailRecord, usePluginDetailLayout } from './PluginDetailRecord';
+import { PluginDetailRecord, usePluginDetailLayout } from './PluginDetailRecord';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
 import {
   PluginDetailHeader,
   PluginDetailFactsSection,
   PluginPermissionSummary,
   ToolsSection,
 } from './GhostPluginDetailView';
-import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
-import { PLUGIN_MANAGEMENT_FRAME_CLASS } from './PluginManagementLayout';
+import { PluginInstalledDetailFrame } from './PluginDetailTopBar';
 import type { LegacyManagedPluginDetail } from './remotePluginManagementClient';
 
 export function RemotePluginReadOnlyDetail({
@@ -31,7 +29,6 @@ export function RemotePluginReadOnlyDetail({
   onRetry(): void;
 }) {
   const { t } = useTranslation();
-  const { scrolled, onScroll } = usePluginDetailScrolled();
   const layout = usePluginDetailLayout({
     id: `remote:${detail.id}`,
     ready: !loading,
@@ -58,16 +55,7 @@ export function RemotePluginReadOnlyDetail({
         }]),
   ];
   return (
-    <main
-      className="app-wallpaper-surface plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
-      onScroll={onScroll}
-    >
-      <PluginDetailTopBar
-        label={t('settings.ghosts.detail.backToList')}
-        onBack={onBack}
-        scrolled={scrolled}
-      />
-      <PluginDetailArticle layout={layout} className={cn(PLUGIN_MANAGEMENT_FRAME_CLASS, 'plugin-detail-frame pb-16 pt-5')}>
+    <PluginInstalledDetailFrame label={t('settings.ghosts.detail.backToList')} onBack={onBack} layout={layout}>
         <PluginDetailHeader
           {...detail}
           fallbackFacts={{
@@ -129,7 +117,6 @@ export function RemotePluginReadOnlyDetail({
             {detail.tools ? <ToolsSection tools={detail.tools} /> : null}
           </PluginDetailFactsSection>
         </PluginDetailRecord>
-      </PluginDetailArticle>
-    </main>
+    </PluginInstalledDetailFrame>
   );
 }

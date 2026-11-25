@@ -153,6 +153,8 @@ export interface BotGroupChatServiceDeps {
   readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
   dispatch: (params: {
+    /** Set by the host only after resolving the visible Cindy task for this room or thread. */
+    groupAssistantTask?: true;
     targetSessionId: string;
     message: string;
     persistedContent: string;

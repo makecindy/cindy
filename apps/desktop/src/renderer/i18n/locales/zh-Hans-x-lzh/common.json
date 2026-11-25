@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "另启一窗"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "此机另一 Cindy 实例方用远程连接。阖之后，此实例将自行接管。",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持易 Harness。请择今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
@@ -2837,6 +2838,14 @@
         "projectsRootReset": "复荐处",
         "projectsRootDescription": "于差事中立新案时，案之卷匣置于此。未设则依君旧案所在荐之。",
         "projectsRootFailed": "新案存放处更之未成",
+        "taskExportDirectoryTitle": "差事输出处",
+        "taskExportDirectoryUnset": "每次择之",
+        "taskExportDirectoryMissing": "卷匣不存",
+        "taskExportDirectoryUnreadable": "设定不可读",
+        "taskExportDirectoryChoose": "择目录",
+        "taskExportDirectoryReset": "复每次择之",
+        "taskExportDirectoryDescription": "既设，Agent 所输差事径存于此，不复每次问所，亦不覆同名之档。未设则每输由君择所。",
+        "taskExportDirectoryFailed": "差事输出处更之未成",
         "dialogueDirectoryOpen": "启目录",
         "dialogueDirectoryChoose": "易目录",
         "dialogueDirectoryReset": "复预设处",
@@ -8626,6 +8635,8 @@
         "liveScreenDetail": "借远端桌面，手机或他电脑可观其所供器物之画面(如模拟器)，并触之、按之、书文字于其上。唯自手机或他电脑开启时方连，不示此电脑他物。",
         "preview": "可于右侧栏浏览器中启下列网站之预览页",
         "previewDetail": "仅能启下方所列网站；每启一页，皆示为何法器所启。",
+        "fileOpener": "君于 Cindy 中启下列诸类文件时，由此法器启之",
+        "fileOpenerDetail": "法器得文件之全径，代系统默认之器启之；不能启则仍用默认之器。可于法器详情中关之。",
         "browserExtension": "可令其自带之浏览器扩充功能连 Cindy",
         "browserNativeHost": "可注册浏览器连接「{{name}}」",
         "browserNativeHostDetail": "所注册程序行于沙箱之外，依系统账号与授权访问本机。",
@@ -8701,6 +8712,7 @@
             "message_body": "消息正文",
             "tool_body": "工具结果",
             "sidebar_navigation": "侧边导航栏",
+            "workdir_menu": "工作目录菜单",
             "session_menu": "任务菜单",
             "settings_section": "设置页面",
             "composer_completion": "输入补全入口",
@@ -8904,6 +8916,8 @@
         "recordTitle": "法器资料",
         "sidebarEntryTitle": "导览入口",
         "showInSidebar": "现于左侧导览",
+        "fileOpenerTitle": "以此法器启文件",
+        "fileOpenerDescription": "于 Cindy 中启 {{extensions}} 文件时，改以 {{name}} 启之，不复用系统默认之器。他机之文件仍以默认之器启之。",
         "sidebarEntryDescription": "启之，则「{{title}}」现于左侧导览，与「自运」「法器」并列。置于最外层或收入「余者」，可于「余者 → 自订」中调之。隐其入口不禁用法器。",
         "openTool": "观 Tool {{name}} 之详情",
         "noToolDescription": "此 Tool 暂无描述。",
@@ -9182,6 +9196,7 @@
         "enableBeforeConfigure": "法器已禁用，请先启上方开关，再设之。",
         "settingsPageUnavailable": "请于 {{device}} 之 Cindy 中启此法器之规制页；目标之机今版尚不能远程显示。",
         "offlineNotice": "「{{device}}」已脱机，暂不可理。俟连接复通，即可续之。",
+        "publishOnTarget": "请于「{{device}}」之 Cindy 发布法器，或更新彼机之 Cindy，而后遥发。",
         "managingTarget": "方理「{{device}}」",
         "managingDescription": "变更将存于此机。",
         "viewingTarget": "「{{device}}」已纳之法器",
@@ -12289,8 +12304,8 @@
       "footnote": "此段将入同伴之身分上下文；速设之性情另行存之，改此处不致覆之。"
     },
     "welcome": {
-      "generic": "幸会，吾乃{{name}}。此后有事，径与吾言；容吾先熟悉此间风物。",
-      "withRole": "幸会，吾乃{{name}}——{{description}}。有事径与吾言。"
+      "generic": "幸会，吾乃{{name}}。有事径与吾言。",
+      "withUser": "{{userName}}安好，吾乃{{name}}。有事径与吾言。"
     },
     "invitation": {
       "title": "将与君相见",
@@ -12521,6 +12536,8 @@
       "transferBusy": "{{name}} 方在回复，待此轮毕再换机",
       "targetUnavailable": "「{{device}}」今不可用，须在线并开远程控制",
       "targetOutdated": "「{{device}}」之 Cindy 版本较旧，未能运行「{{name}}」，请先于彼机更新 Cindy",
+      "skillTargetOutdated": "「{{name}}」有技艺正文逾 64 KB，「{{device}}」之旧版 Cindy 无法接收。请先更新彼机之 Cindy，再换主力之机。同伴仍留原机",
+      "skillTargetOutdated_skill": "「{{device}}」之旧版 Cindy 无法接收技艺「{{slug}}」，其正文 {{bodyBytes, number}} 字节，逾 64 KB。「{{name}}」仍行于原机。请更新彼机之 Cindy，再换主力之机。",
       "targetOutdatedItem": "移至「{{device}}」· 旧版 Cindy",
       "targetOutdatedMeta": "旧版 Cindy",
       "olderTargetNote": "「{{device}}」之 Cindy 为旧版，{{name}} 于彼依旧法而行：言谈记录照常同步，案之规约与自运于彼不行。",
@@ -12813,6 +12830,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "预设声",
+        "myVoices": "吾声",
+        "refreshMyVoices": "更新吾声",
+        "callMode": "通话之法",
+        "messageReadAloud": "诵读消息",
+        "callVoice": "即时通话之声",
+        "readAloudVoice": "诵读之声",
+        "readAloudHint": "点同伴答文下之扬声钮，即以此声诵之。",
+        "resetReadAloud": "复诵读预设",
+        "title": "实时声",
+        "add": "增实时声模型",
+        "off": "用语音合成"
+      },
       "openConversation": "启言谈",
       "inCallWith": "正与 {{name}} 通话",
       "showDetails": "展通话录",
@@ -12834,7 +12865,7 @@
       "settingsTitle": "声",
       "openSettings": "语音规制",
       "startConversation": "始语音言谈",
-      "settingsHint": "择此同伴所用之朗读模型与音色。设毕，自输入框始语音言谈。",
+      "settingsHint": "以合成语音通话，则通话与诵读消息同用下列模型及音色。",
       "previewNeedsChat": "与同伴始言谈后方可试听。",
       "voiceId": "音色 ID",
       "manualVoice": "手书音色 ID",
@@ -14616,6 +14647,7 @@
       "missingDir": "目录不存"
     },
     "pendingQueue": {
+      "waitingForDevice": "尚未发，俟彼机复通乃发",
       "stopping": "方止",
       "queued": "方候",
       "editingInComposer": "方于下方输入框修之…",
@@ -15090,6 +15122,7 @@
       "unavailable": "此应用不能自动输入。君可录其文，再手自输入。",
       "unconfirmed": "未能确知是否已自动输入。君可录其文，再手自输入。",
       "permission": "须开辅助功能权柄，方能将声文自动输入此应用。授权后可再试。",
+      "appNotAllowed": "{{app}} 未获准控制此应用，未能自动输入。可于「System & App Protection Override」为 {{app}} 添此应用，或复制文字后手动粘贴。",
       "failed": "未能自动输入。君可录其文，再手自输入。"
     },
     "permissionPrompts": {
@@ -15302,6 +15335,7 @@
       "label_other": "新讯 {{count}} 条"
     },
     "messageNavRail": {
+      "you": "君",
       "aria": "问目导览",
       "jumpAria": "至第 {{index}} 问：{{preview}}",
       "attachmentOnly_one": "附卷 {{count}} 件",
@@ -15449,6 +15483,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI 凭据已失效。请点「再试」。若仍未成，请辞出后重新登录",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 凭据已失效。若此后仍未成，请辞出后重新登录",
       "modelAccessDenied": "今上游名籍无权访问此模型。请易模型，或向供方确认模型访问之权柄",
+      "providerSafetyRefusal": "供方安全规制拦阻此番回复。若欲再请，请改易所求之辞后再发",
       "silentStopContinue": "续",
       "silentStopContinueTitle": "续此差事",
       "piTransportClosed": "远程 Pi 连接已断（SSH 通道已阖）。远程差事仍在行，重连后可续。",
@@ -15501,11 +15536,11 @@
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "前有自运未成。",
-      "prCheck_dns": "{{device}} 未能析 {{host}} 之址。若屡然，宜察此机之网路与 DNS。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
-      "prCheck_timeout": "{{device}} 连 GitHub 逾时。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
-      "prCheck_auth": "请于 {{device}} 重登 GitHub。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
-      "prCheck_rate-limit": "GitHub 暂限 {{device}} 之请。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
-      "prCheck_unknown": "{{device}} 检 PR 未成，详见纪录。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
+      "prCheck_dns": "{{device}} 未能析 {{host}} 之址。若屡然，宜察此机之网路与 DNS。凡 {{failures}} 次未成。自 {{retry}} 始，循例可复检。",
+      "prCheck_timeout": "{{device}} 连 GitHub 逾时。凡 {{failures}} 次未成。自 {{retry}} 始，循例可复检。",
+      "prCheck_auth": "请于 {{device}} 重登 GitHub。凡 {{failures}} 次未成。自 {{retry}} 始，循例可复检。",
+      "prCheck_rate-limit": "GitHub 暂限 {{device}} 之请。凡 {{failures}} 次未成。自 {{retry}} 始，循例可复检。",
+      "prCheck_unknown": "{{device}} 检 PR 未成，详见纪录。凡 {{failures}} 次未成。自 {{retry}} 始，循例可复检。",
       "precheck": "自动查验暂受阻。",
       "preRunBlocked": "行前查验未过，此轮未启。",
       "rateLimited": "自动查验暂受阻：请求限流。",
@@ -17875,6 +17910,7 @@
       "openWorkdirFailed": "启卷匣未成"
     },
     "runs": {
+      "boundPluginEngineRecovery": "所系之务用法器引擎，故自动之务未行。宜将所系之务改回内置引擎，或改系于用内置引擎之务。",
       "queueWaitTimeoutRecovery": "排候逾时，提示词未发。待所系任务闲，按「{{action}}」补行。",
       "status": {
         "running": "方行",
@@ -18828,7 +18864,7 @@
       "expired": "候时过久，代书已终。"
     },
     "failure": {
-      "permission": "Cindy 无法读取这台 Mac 的界面。请检查正在运行的这份 Cindy 的控制权限。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。",
+      "permission": "Cindy 无法读取这台 Mac 的界面。请检查正在运行的这份 Cindy 的控制权限。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。若只允许 Cindy 控制部分 App，请把这个 App 也加进去。",
       "target_gone": "目标窗口已阖。",
       "unreadable": "此界面不可读。可于主机之机上径自完成，而后交还 Agent。",
       "action_failed": "方才之操作未生效，请察界面后再试。",
@@ -22593,6 +22629,10 @@
       "separator": "；"
     },
     "settings": {
+      "autoSwitch": {
+        "title": "遇阻自换来源",
+        "hint": "此模式所用来源有阻，则自换次一可用者，并于该轮下书明。关之，则仅于出错时提议换源。"
+      },
       "newRoute": "立模式",
       "newRouteName": "新模式",
       "routesEmpty": "尚无模式。立其一，纳数源于中。",
@@ -22825,6 +22865,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "在「System & App Protection Override」里找到 {{app}}，点右侧 ⓘ。找不到时可点「＋」，按路径添加。",
-    "review": "$t(macControlPermission.selectApp)\n系统若提供「选择 App」，可限定控制范围。整机控制允许访问所有应用和数据。如果同意，请逐项阅读并点「OK」确认，再点窗口底部的允许按钮。"
+    "review": "$t(macControlPermission.selectApp)\n系统若提供「选择 App」，可限定控制范围。整机控制允许访问所有应用和数据。如果同意，请逐项阅读并点「OK」确认，再点窗口底部的允许按钮。",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\n远程键盘和鼠标会操作整台 Mac：用「＋」添加时选「Override System Protections」；已在列表中的，在 ⓘ 里打开「Control Your Entire Mac and All Apps」。只允许部分 App 时，macOS 会拦下全部远程键鼠操作。允许前请逐项阅读系统列出的访问范围。",
+    "chosenAppsOnly": "{{app}} 目前只能控制你选定的 App，macOS 会拦下全部远程键盘和鼠标操作。如需远程控制，在「System & App Protection Override」里点 {{app}} 右侧的 ⓘ，打开「Control Your Entire Mac and All Apps」。"
   }
 }

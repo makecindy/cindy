@@ -799,6 +799,26 @@ describe('AcpSession model and effort', () => {
     await expect(session.setModel('gpt-x')).rejects.toThrow('does not offer');
   });
 
+  // #12433 (unit): an active prompt's usage belongs to its model even if the
+  // endpoint changes its model option before returning the prompt result.
+  it('reports the model selected when the metered prompt was sent', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const switched = configOptions.map(option =>
+      option.id === 'model' ? { ...option, currentValue: 'v4-pro' } : option,
+    );
+    agent.update({ sessionUpdate: 'config_option_update', configOptions: switched });
+    await vi.waitFor(() => expect(session.model).toBe('v4-pro'));
+    agent.prompts[0]!.settle.resolve({
+      stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 0 },
+    });
+    await vi.waitFor(() => expect(events.at(-1)).toMatchObject({
+      type: 'done', data: { usageModel: 'v4-flash', usage: { inputTokens: 1 } },
+    }));
+  });
+
   // Unit regression for PR #11549. The handle's own tests missed the product
   // Session rejecting newly offered effort levels after a config update.
   it('applies an effort level added after the product session started', async () => {

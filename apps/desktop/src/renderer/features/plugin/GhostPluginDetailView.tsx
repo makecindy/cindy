@@ -52,6 +52,7 @@ import { providerShareGate } from '@/features/provider-share/providerShareFormat
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
+import { PluginFileOpenerSwitch } from './PluginFileOpenerSwitch';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import {
   DropdownMenu,
@@ -91,12 +92,11 @@ import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
 import { ghostPrimaryAction } from './lib/ghostPluginViewModel';
 import { PluginLimitedList, PluginPermissionList, usePluginPermissionFacts, type PluginPermissionFact } from './PluginPermissionList';
 import {
-  PluginDetailArticle, PluginDetailPermissionRow, PluginDetailRecord, PluginDetailRecordRow, PluginDetailSection,
+  PluginDetailPermissionRow, PluginDetailRecord, PluginDetailRecordRow, PluginDetailSection,
   usePluginDetailChoice, usePluginDetailLayout, usePluginDetailRelaxed,
 } from './PluginDetailRecord';
 import { PluginMoreDetails, type PluginRelatedCatalog } from './PluginMoreDetails';
-import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
-import { PLUGIN_MANAGEMENT_FRAME_CLASS } from './PluginManagementLayout';
+import { PluginInstalledDetailFrame } from './PluginDetailTopBar';
 import { PluginInstallRing } from './PluginInstallRing';
 import { usePluginInstallProgress } from './lib/pluginInstallProgress';
 import './plugin-motion.css';
@@ -202,7 +202,6 @@ export function GhostPluginDetailView({
   const installationLabel = detail.installationLabelKey
     ? t(`settings.ghosts.detail.${detail.installationLabelKey}`, { name: detail.installationNamespace })
     : undefined;
-  const { scrolled, onScroll } = usePluginDetailScrolled();
   // 只有本窗口发起的更新才有进度;远程设备上的插件仍按回执显示。
   const updateProgress = usePluginInstallProgress(remote ? null : marketItem?.pluginId);
   const updateFailed = updateProgress?.download.phase === 'failed';
@@ -242,6 +241,7 @@ export function GhostPluginDetailView({
   const hasConfiguration =
     (hasGithubConnection && Boolean(ghost?.manifest.routineEvents)) ||
     Boolean(ghost?.manifest.browserExtension) ||
+    Boolean(ghost?.manifest.fileOpener) ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
     detail.hasTaskPreferences ||
@@ -300,15 +300,11 @@ export function GhostPluginDetailView({
   }
 
   return (
-    <main
-      className="app-wallpaper-surface plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
-      onScroll={onScroll}
-    >
-      <PluginDetailTopBar
-        label={backLabel ?? t('settings.ghosts.detail.backToList')}
-        onBack={() => { layout.rememberBack(); onBack(); }}
-        scrolled={scrolled}
-        actions={<>
+    <PluginInstalledDetailFrame
+      label={backLabel ?? t('settings.ghosts.detail.backToList')}
+      onBack={() => { layout.rememberBack(); onBack(); }}
+      layout={layout}
+      actions={<>
           {sharePluginId ? <PluginShareButton pluginId={sharePluginId} /> : localShareAvailable && ghost ? <PluginShareButton ghost={ghost} /> : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -356,8 +352,7 @@ export function GhostPluginDetailView({
             </DropdownMenuContent>
           </DropdownMenu>
         </>}
-      />
-      <PluginDetailArticle layout={layout} className={cn(PLUGIN_MANAGEMENT_FRAME_CLASS, 'plugin-detail-frame pb-16 pt-5')}>
+    >
         <PluginDetailHeader
           id={detail.id}
           name={detail.name}
@@ -576,6 +571,14 @@ export function GhostPluginDetailView({
                   />
                 </div>
               ) : null}
+              {ghost?.manifest.fileOpener ? (
+                <PluginFileOpenerSwitch
+                  ghostId={detail.id}
+                  name={detail.name}
+                  extensions={ghost.manifest.fileOpener.extensions}
+                  surfaceClassName={DETAIL_SURFACE_CLASS}
+                />
+              ) : null}
               {detail.hasSettingsUi ? (
                 ghost ? (
                   <GhostSettingsWebview
@@ -734,8 +737,7 @@ export function GhostPluginDetailView({
           <PluginMoreDetails detailId={marketItem?.pluginId ?? `installed:${detail.id}`} catalog={relatedCatalog}
             onSelect={onOpenRelated && (item => { layout.rememberForward(item.pluginId); onOpenRelated(item); })} />
         ) : null}
-      </PluginDetailArticle>
-    </main>
+    </PluginInstalledDetailFrame>
   );
 }
 

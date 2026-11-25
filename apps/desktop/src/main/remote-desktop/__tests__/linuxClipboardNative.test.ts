@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ exec: vi.fn(), unlocked: vi.fn(), spawn: vi.fn() }));
+vi.mock('../linuxX11Clipboard', () => ({ managedX11Clipboard: () => false }));
 vi.mock('../linuxSessionLock', () => ({ isLinuxDesktopUnlocked: h.unlocked }));
 vi.mock('electron', () => ({ app: { isPackaged: true } }));
 vi.mock('node:child_process', () => ({ execFile: vi.fn(), spawn: h.spawn }));

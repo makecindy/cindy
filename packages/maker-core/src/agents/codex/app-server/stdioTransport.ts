@@ -291,7 +291,8 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
           // #3699: 卡死进程仍需强杀，且不能在确认退出前释放 Host。
           try { child.kill('SIGKILL'); } catch { /* still confirm exit */ }
           if (await waitForExit(opts.killConfirmationMs ?? KILL_CONFIRMATION_MS)) return;
-          throw new Error('Codex app-server did not exit after SIGKILL');
+          // Automation history persists the message, so name the failed stage (#11257).
+          throw new Error('Codex runtime cleanup failed: app-server exit was not confirmed after SIGKILL');
         });
         fireClose(reason);
       }

@@ -328,6 +328,8 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'worktree:discard-precreated',
       'worktree:cancel-precreated',
       'worktree:removal-preview',
+      'worktree:restore-status',
+      'worktree:restore-for-session',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }
