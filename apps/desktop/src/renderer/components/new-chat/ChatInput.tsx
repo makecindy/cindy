@@ -5316,7 +5316,7 @@ export function ChatInput({
   useEffect(() => {
     panelBridgeRef.current = {
       captureKey: (e) => {
-        if (e.isComposing) return false;
+        if (e.isComposing || (e.key === 'Enter' && e.shiftKey)) return false;
         if (!slashOpen && !atOpen) return false;
         switch (e.key) {
           case 'ArrowDown':

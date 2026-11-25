@@ -782,6 +782,28 @@ it('scrolls to the saved voice draft range and reacts to range-only changes', as
   expect(scroller.querySelector('[data-voice-caret]')?.closest('p')).toBe(paragraphs[0]);
 });
 
+// DESIGN §14.3: with a directory highlighted, verify the draft produced by
+// the real editor keydown. The suggestion bridge used to consume Shift+Enter.
+it.each([false, true])('handles Enter with shiftKey=%s in a typed @ directory query', async shiftKey => {
+  const query = '@src/';
+  h.scan.mockResolvedValue({ success: true, truncated: false, items: [
+    { type: 'dir', name: 'main', relPath: 'src/main', _nameLower: 'main', _relPathLower: 'src/main' },
+  ] });
+  supplyRangeGeometry();
+  const view = renderComposer({ initialWorkingDir: '/synthetic-workspace' });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const editor = h.editor!;
+  await act(async () => { editor.commands.insertContent(query); });
+  await waitFor(() => expect(h.atPanel?.entries[h.atPanel.focusedIndex]).toMatchObject({
+    kind: 'resource', item: { relPath: 'src/main' },
+  }));
+  await act(async () => { fireEvent.keyDown(editor.view.dom, { key: 'Enter', code: 'Enter', shiftKey }); });
+  expect(editor.getJSON().content?.[0]?.content).toEqual(shiftKey
+    ? [{ type: 'text', text: query }, { type: 'hardBreak' }]
+    : [{ type: 'text', text: '@src/main/' }]);
+  expect(view.props.onSend).not.toHaveBeenCalled();
+});
+
 // The removed source guard did not prove the editor consumed the key. Mount the
 // real composer with send enabled: an unmatched slash must close its palette
 // without submitting or changing the draft. Reuse this editor/host harness.
