@@ -10,13 +10,14 @@ type Translate = (key: string, args?: Record<string, unknown>) => string;
 /**
  * The one permission the phone pins above the confirm buttons.
  *
- * This is not a phone-side risk grading. The Host's own permission copy marks exactly one class as
- * high risk: running the bundled Node program (`nodeRuntimeDetail` begins with "High risk: …").
+ * This is not a phone-side risk grading. The Host's user-facing permission copy marks exactly one
+ * class as high risk: running the bundled Node program (`nodeRuntimeDetail` begins with "High risk: …").
  * The Host builds that item for every manifest that declares `node`, always under the stable diff key
- * `node:execute` (label `nodeRuntime` or `nodeMcp` depending on the protocol). The key is the most
- * stable signal: `kind === 'node'` also covers credential, resident and child-process items that the
- * Host does not call high risk, and the label/detail keys are copy that may be reworded.
- * If more permissions should be pinned, the Host has to mark them; do not add a grading here.
+ * `node:execute` (label `nodeRuntime` or `nodeMcp` depending on the protocol), so the key is the signal:
+ * label/detail keys are copy that may be reworded, and `kind === 'node'` also covers other items.
+ * The Host's source comments also call `agent:background`, `agent:errand`, the resident Node lifecycle
+ * and Node credential injection "high risk" add-ons, but nothing machine-readable marks them and their
+ * copy does not say so; they are not pinned unless the maintainers decide otherwise. No grading here.
  */
 export function isPinnedHighRiskPermission(item: Pick<PluginPermissionItem, "key">): boolean {
   return item.key === "node:execute";

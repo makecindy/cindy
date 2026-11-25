@@ -189,7 +189,8 @@ function receipt(operationId: string) {
     ...(demo.publisher === "custom" ? { originLabel: CUSTOM_MARKET } : {}),
     // The Host marks a verified public community publisher; the phone shows the community notice.
     ...(demo.publisher === "personal" ? { communityMarket: true } : {}),
-    trust: demo.publisher === "official" ? "cindy-official" : "reviewed",
+    // Host: trust comes from the inspected package signature; unsigned custom-market packages are "unverified".
+    trust: demo.publisher === "official" ? "cindy-official" : demo.publisher === "custom" ? "unverified" : "reviewed",
     // Same source facts as the Host's obtainGhostInstallConsent for each market origin.
     installationSource: demo.publisher === "custom" ? { kind: "third-party" }
       : demo.publisher === "organization" ? { kind: "organization", namespace: "demo-org" }

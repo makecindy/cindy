@@ -80,9 +80,10 @@
     （Host 核实的社区发布者）时显示社区说明，自定义市场显示「请确认你信任该市场……」，本地文件显示对应提示。
     解析只接受缺省或 `true`。
   - 全新安装首行写「安装到 <电脑>」，升级仍只写电脑名。
-  - 高风险固定段：只固定显示 Host 自己文案标明「高风险」的那一类——运行随包 Node 程序（权限 key `node:execute`，
-    见 `isPinnedHighRiskPermission`）。手机端不另定分级；`kind: 'node'` 还包含凭证注入、常驻、代启子进程等电脑未标
-    高风险的项，所以按稳定的 diff key 判断。该项排在权限列表最前、列表里只留标题，说明原文放在按钮正上方、
+  - 高风险固定段：只固定显示 Host 用户可见文案里标明「高风险」的那一类——运行随包 Node 程序（权限 key `node:execute`，
+    见 `isPinnedHighRiskPermission`），按稳定的 diff key 判断（`kind: 'node'` 还包含其它项）。手机端不另定分级。
+    Host 源码注释另把 `agent:background`、`agent:errand`、Node 常驻与凭证注入称作「高风险加档」，但没有可读字段、
+    文案也未标明，目前不固定显示；是否列入待维护者确认。该项排在权限列表最前、列表里只留标题，说明原文放在按钮正上方、
     滚动区之外（iOS 在 ComposerSheet 的 footer，Android 在 ScrollView 与按钮之间），textPrimary、medium 字重、
     不用警示色，所以 iOS 半高面板与 Android 矮屏都不用滚动就能看到。升级只在新增项里有它时显示。
   - 自定义市场的仓库地址：Host 的确认回执只带市场名（marketplace.json 的 `name`），手机目前只显示市场名；

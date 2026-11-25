@@ -391,14 +391,16 @@ it('serves the market demo consents in the Host shape, including updates that ad
   };
   const keys = (items: Array<{ key: string }>) => items.map((item) => item.key);
   const official = await consentOf('demo-market/demo-device-simulator');
-  expect(official.consent).toMatchObject({ origin: 'market' });
+  // Same source facts as the Host's obtainGhostInstallConsent (trust from the package signature).
+  expect(official.consent).toMatchObject({ origin: 'market', trust: 'cindy-official', installationSource: { kind: 'official' } });
   expect(official.consent.communityMarket).toBeUndefined();
   expect(keys((official.consent.facts as any).permissions)[0]).toBe('node:execute');
   expect(keys((official.consent.facts as any).permissions).some((key) => key.startsWith('tool:'))).toBe(false);
   expect(keys(((await consentOf('demo-market/demo-agenda')).consent.facts as any).permissions)).not.toContain('node:execute');
   expect((await consentOf('demo-market/demo-shift-calendar')).consent).toMatchObject({ origin: 'market', communityMarket: true });
   const custom = await consentOf('demo-market/demo-repo-tools');
-  expect(custom.consent).toMatchObject({ origin: 'custom-market', originLabel: 'Demo Git Market' });
+  expect(custom.consent).toMatchObject({ origin: 'custom-market', originLabel: 'Demo Git Market', trust: 'unverified',
+    installationSource: { kind: 'third-party' } });
   expect(keys((custom.consent.facts as any).permissions)[0]).toBe('node:execute');
   // Updates: the installed detail's update is an install naming the installed instance.
   const weather = await consentOf('demo-market/demo-weather-board', '_root__demo-weather-board');
