@@ -504,6 +504,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   }), sessionId, patch, options);
   const ports = (): SessionRuntimeSelectionPorts => explicitPorts<SessionRuntimeSelectionPorts>({
     maker: maker(),
+    // 订阅账号池交接目前仅由桌面端执行。
+    hasCodexHandoffPool: undefined,
     agentSwitchPending: pendingSwitches,
     broadcastSessionRuntimeProjection,
     assertReviewSettingsUnlocked,
