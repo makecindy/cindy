@@ -15,7 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { retainReportingPluginEngines } from './pluginEngineUsage';
 
-import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityPluginId, isAntigravityProviderId } from '@cindy/maker-shared/branding';
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityEngine } from '@cindy/maker-shared/branding';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -73,7 +73,7 @@ function sanitize(raw: unknown): readonly PluginEngineView[] {
     && typeof (engine as PluginEngineView).providerId === 'string'
     && typeof (engine as PluginEngineView).name === 'string'
     && Array.isArray((engine as PluginEngineView).models))
-    .map((engine) => isAntigravityPluginId(engine.ghostId) || isAntigravityProviderId(engine.providerId)
+    .map((engine) => isAntigravityEngine(engine)
       ? { ...engine, iconDataUrl: ANTIGRAVITY_MARK_DATA_URL }
       : engine);
 }

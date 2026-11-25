@@ -338,8 +338,9 @@ it('asks the controlled computer to republish plugin engine models on picker ref
 // 最小失败输入与 tier：unit；在途 refresh 返回前卸载视图仍触发延迟 LIST，或引擎 A(high)切到引擎 B(默认 low)提交了 high。
 it('discovers newly enabled remote engines after an initially empty list, stops in-flight refresh on leave, and keeps cross-engine default effort', async () => {
   vi.useFakeTimers();
-  const newlyEnabled = engine('agy-plugin:agy', 'Antigravity', { models: [] });
-  const newlyPublished = engine('agy-plugin:agy', 'Antigravity', {
+  // The old peer sends a generic ID and no icon, so only the name identifies Antigravity.
+  const newlyEnabled = engine('legacy:cli', 'Antigravity', { models: [] });
+  const newlyPublished = engine('legacy:cli', 'Antigravity', {
     models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], defaultEffort: 'low' }],
   });
   let hasEngineOnPeer = false;

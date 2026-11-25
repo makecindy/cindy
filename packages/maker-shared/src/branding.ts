@@ -35,6 +35,14 @@ export function isAntigravityProviderId(id: string | null | undefined, legacyNam
     (isAntigravityPluginId(match[1]) && /^(?:agy|antigravity)$/i.test(match[2] ?? '')));
 }
 
+export function isAntigravityEngine({ ghostId, providerId, name }: {
+  ghostId?: string | null;
+  providerId: string;
+  name: string;
+}): boolean {
+  return isAntigravityPluginId(ghostId) || isAntigravityProviderId(providerId, name);
+}
+
 export const ANTIGRAVITY_MARK_DATA_URL = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="${ANTIGRAVITY_MARK_PATH}"/></svg>`,
 );

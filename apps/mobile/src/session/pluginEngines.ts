@@ -13,7 +13,7 @@
  *
  * 列表按电脑缓存在内存里：打开模型选择器时读一次并请那台的插件重新上报模型，不轮询。
  */
-import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityPluginId, isAntigravityProviderId } from '@cindy/maker-shared/branding';
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityEngine } from '@cindy/maker-shared/branding';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { quotaLevelFromRemaining, type QuotaLevel } from '@cindy/maker-shared/quota-level';
 import { createPluginHarnessUsageReader, type GhostHarnessUsage } from '@cindy/plugin-protocol';
@@ -156,8 +156,8 @@ export function normalizePluginEngines(raw: unknown): MobilePluginEngine[] {
     const fallbackModes = [{ id: 'ask', displayName: 'Ask' }, { id: 'bypassPermissions', displayName: 'Allow all' }];
     const modes = permissionModes.length ? permissionModes : fallbackModes;
     const requestedDefault = text(item.defaultPermissionMode, 64);
-    const iconDataUrl = isAntigravityProviderId(providerId) ||
-      isAntigravityPluginId(typeof item.ghostId === 'string' ? item.ghostId : undefined)
+    const ghostId = typeof item.ghostId === 'string' ? item.ghostId : undefined;
+    const iconDataUrl = isAntigravityEngine({ ghostId, providerId, name })
       ? ANTIGRAVITY_MARK_DATA_URL
       : typeof item.iconDataUrl === 'string' && item.iconDataUrl.startsWith('data:image/')
       ? item.iconDataUrl

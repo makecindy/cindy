@@ -579,6 +579,24 @@ describe('collectMenubarInputs', () => {
     expect(collected.usage.days).toHaveLength(90);
   });
 
+  // Unit / #12735: a running task carries only the legacy provider ID. Its
+  // rendered icon must come from the catalogue name, even without quota data.
+  it('uses the catalog mark for a legacy Antigravity task without quota data', async () => {
+    const providerId = 'acp-plugin:legacy:cli';
+    const view = await panel(deps({
+      listProviders: async () => [],
+      listPluginEngines: () => [{
+        key: 'legacy:cli', providerId, ghostId: 'legacy', harnessId: 'cli', name: 'Antigravity',
+        availability: { state: 'available' }, models: [],
+        permissionModes: [{ id: 'ask', displayName: 'Ask' }], defaultPermissionMode: 'ask',
+      }],
+      activities: () => [{ sessionId: 's1', phase: 'running', startedAtMs: NOW } as never],
+      sessionRow: async () => ({ title: 'Legacy task', model: 'gemini', providerId, agentKind: 'acp' }),
+    }));
+    expect(view.sources).toEqual([]);
+    expect(view.tasks).toMatchObject([{ sessionId: 's1', logoSvg: ANTIGRAVITY_LOGO }]);
+  });
+
   it.each(['cindy-make', 'cindy-make-merge'])('hides %s usage tasks without changing accounting totals', async (source) => {
     const input = usage([task('hidden', source), task('ordinary', null)]);
     const collected = await collectMenubarInputs(deps({ readUsage: async () => input }));
