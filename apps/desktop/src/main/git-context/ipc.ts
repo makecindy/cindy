@@ -125,9 +125,9 @@ async function readGithubToken() {
 }
 
 /**
- * 这个 token 对这个仓库有没有读权限。404 是确定没有;其余错误(403 限流、超时、网络、5xx)
- * 是没查成,不能当成没权限记下来。用仓库而不是单条 PR:一次写错的 PR 编号不能把整个仓
- * 库记成读不到。
+ * 这个 token 对这个仓库有没有读权限。只有 404 能证明读不到私有仓库;403(限流、被封、组织
+ * 策略)和超时、网络错误、5xx 都是没查成,不能当成无权限写进失败记忆。用仓库而不是单条 PR:
+ * 一次写错的 PR 编号不能把整个仓库记成读不到。
  */
 async function repoAccess(token: string, q: PrStatusQuery): Promise<boolean | 'unknown'> {
   try {
@@ -139,10 +139,8 @@ async function repoAccess(token: string, q: PrStatusQuery): Promise<boolean | 'u
     }).getRepo();
     return true;
   } catch (err) {
-    const { status, rateLimited } = err as { status?: unknown; rateLimited?: unknown };
-    // 带限流标记的 403/429 只是「现在没查成」,不是「这个账号读不到这个仓库」。
-    if (rateLimited === true) return 'unknown';
-    return status === 404 || status === 403 ? false : 'unknown';
+    const { status } = err as { status?: unknown };
+    return status === 404 ? false : 'unknown';
   }
 }
 

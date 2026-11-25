@@ -4,7 +4,10 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
-import { createRepoAccountResolver, type RepoAccountDeps } from '../git-context/repoAccountResolver';
+import {
+  createRepoAccountResolver,
+  type RepoAccountDeps,
+} from '../git-context/repoAccountResolver';
 
 const PR = { owner: 'acme', repo: 'widgets', prNumber: 1 };
 const active = async () => ({ ok: true as const, token: 'active-token' });
@@ -38,6 +41,23 @@ describe('repoAccountResolver', () => {
       token: 'work-token',
     });
     expect(repoAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('活跃账号重新能读时,按刚失败的 token 重新探测它', async () => {
+    // 最小失败输入:B 先被记住;B 被撚权后,活跃账号 A 其实已经能读这个仓库了。
+    // 若仍然无条件跳过活跃账号,recover 会空手而归并把仓库记成 10 分钟读不到。
+    let readable = 'b-token';
+    const resolver = createRepoAccountResolver(
+      deps({
+        listLogins: async () => ['me', 'work'],
+        readTokenForLogin: async (login) => (login === 'me' ? 'active-token' : 'b-token'),
+        repoAccess: async (token) => token === readable,
+      }),
+    );
+
+    expect(await resolver.recover(PR)).toEqual({ ok: true, token: 'b-token' });
+    readable = 'active-token';
+    expect(await resolver.recover(PR, 'b-token')).toEqual({ ok: true, token: 'active-token' });
   });
 
   it('记住的账号被 404 后 recover 重新探测,不会把同一个 token 原样返回', async () => {

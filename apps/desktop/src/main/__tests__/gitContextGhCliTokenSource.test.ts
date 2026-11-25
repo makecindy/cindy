@@ -115,6 +115,29 @@ describe('createGhCliTokenSource', () => {
     expect(execFileFn).toHaveBeenCalledTimes(1);
   });
 
+  it('零退出但带 state=error 的账号时不当成空列表', async () => {
+    // `gh auth status --json` 在个别账号校验失败时仍以 0 退出,只把那个账号标成 error。
+    // 这种不完整的列表不能当成「本机没有备用账号」——否则仓库会被记成 10 分钟读不到。
+    const execFileFn = vi.fn(
+      (_file: string, _args: string[], _opts: { timeout: number }, cb: ExecCb) =>
+        cb(
+          null,
+          JSON.stringify({
+            hosts: {
+              'github.com': [
+                { login: 'me', state: 'success', active: true },
+                { login: 'work', state: 'error' },
+              ],
+            },
+          }),
+          '',
+        ),
+    );
+    const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
+
+    expect(await src.listLogins()).toBeNull();
+  });
+
   it('可用性探测只执行静默账号 API，不读取或污染 token cache', async () => {
     const execFileFn = vi.fn(
       (_file: string, args: string[], opts: { timeout: number }, cb: ExecCb) => {

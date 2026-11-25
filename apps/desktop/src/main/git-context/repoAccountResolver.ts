@@ -18,6 +18,8 @@ import type { GhCliTokenReadResult } from './ghCliTokenSource.js';
 
 const DEFAULT_TTL_MS = 30 * 60_000;
 const DEFAULT_MISS_TTL_MS = 10 * 60_000;
+/** 长期缓存的全局上限:TTL 只在同一仓库再次访问时生效,不设就随仓库数无界增长。 */
+const MAX_TRACKED_REPOS = 200;
 
 export interface RepoAccountDeps {
   /** 当前活跃账号(原 gh → 插件 PAT → GitHub App 的同一条链)。 */
@@ -54,6 +56,12 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
   // 登录态变化会重置缓存;重置前发起的探测不能把旧结果写回来。
   let generation = 0;
 
+  /** 超过上限时丢掉最早写入的仓库;TTL 命中只在同一仓库访问时才会清理。 */
+  function remember<K, V>(map: Map<K, V>, k: K, value: V): void {
+    if (map.size >= MAX_TRACKED_REPOS && !map.has(k)) map.delete(map.keys().next().value!);
+    map.set(k, value);
+  }
+
   async function saved(pr: PrIdentity): Promise<GhCliTokenReadResult | null> {
     const k = key(pr);
     const hit = chosen.get(k);
@@ -69,7 +77,7 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
     return null;
   }
 
-  async function find(pr: PrIdentity): Promise<GhCliTokenReadResult | null> {
+  async function find(pr: PrIdentity, failedToken?: string): Promise<GhCliTokenReadResult | null> {
     const k = key(pr);
     // 这个仓库已经选好账号了:直接用,不必再探一遍。
     const known = await saved(pr).catch(() => null);
@@ -83,8 +91,12 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
     if (!logins) return null;
     for (const login of logins) {
       const token = await deps.readTokenForLogin(login);
-      // 活跃账号刚刚才 404,不必再问它一次。
-      if (!token || (active.ok && active.token === token)) continue;
+      // 只有「刚被拒的就是活跃账号」时才跳过它;否则活跃账号可能已经能读这个仓库了。
+      if (
+        !token ||
+        (active.ok && active.token === token && (!failedToken || failedToken === token))
+      )
+        continue;
       const access = await deps.repoAccess(token, pr);
       if (access === 'unknown') {
         unknown = true;
@@ -92,13 +104,13 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
       }
       if (!access) continue;
       if (gen !== generation) return null;
-      chosen.set(k, { login, until: now() + ttl });
+      remember(chosen, k, { login, until: now() + ttl });
       missing.delete(k);
       return { ok: true, token };
     }
     // 没查成,或者登录态刚变过:不留下失败记忆,下一次刷新重新探测。
     if (unknown || gen !== generation) return null;
-    missing.set(k, now() + missTtl);
+    remember(missing, k, now() + missTtl);
     return null;
   }
 
@@ -106,7 +118,7 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
     async tokenFor(pr: PrIdentity): Promise<GhCliTokenReadResult> {
       return (await saved(pr)) ?? deps.readToken();
     },
-    async recover(pr: PrIdentity): Promise<GhCliTokenReadResult | null> {
+    async recover(pr: PrIdentity, failedToken?: string): Promise<GhCliTokenReadResult | null> {
       const k = key(pr);
       // 能走到 recover 就是因为「手上这个 token 刚被 404 了」,而它可能就是记住的选择。
       // 不先丢掉,下面的 find() 会把同一个 token 原样取回来,后面的账号探测一次都不跑。
@@ -114,7 +126,7 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
       const inflight = pending.get(k);
       if (inflight) return inflight;
       // 同一仓库的多条 PR 共用一次探测。
-      const p = find(pr)
+      const p = find(pr, failedToken)
         .catch(() => null)
         .finally(() => {
           if (pending.get(k) === p) pending.delete(k);

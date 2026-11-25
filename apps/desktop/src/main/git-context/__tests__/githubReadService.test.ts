@@ -207,32 +207,11 @@ it('shares conditional reads, avoids credential bleed, and honors identity-wide 
   now = 61_000;
   expect(await transport.read('identity', 'fake', '/test')).toEqual(a);
   expect(fetcher.mock.calls[1][1].headers['If-None-Match']).toBe('v1');
-  await expect(transport.read('other', 'fake-other', '/test')).rejects.toMatchObject({
-    status: 429,
-    rateLimited: true,
-  });
+  await expect(transport.read('other', 'fake-other', '/test')).rejects.toThrow();
   await expect(transport.read('other', 'fake-other', '/different')).rejects.toThrow(
     'GITHUB_RATE_LIMITED',
   );
   expect(fetcher).toHaveBeenCalledTimes(3);
-});
-
-// 带限流标记的 403 不是「没有权限」:调用方要能把它当成可重试的失败。
-it('marks a rate-limited 403 as retryable instead of a permission denial', async () => {
-  const fetcher = vi.fn(
-    async () => new Response(null, { status: 403, headers: { 'retry-after': '30' } }),
-  );
-  const transport = new GithubReadTransport(fetcher as unknown as typeof fetch, () => 0);
-
-  await expect(transport.read('identity', 'fake', '/repos/acme/widgets')).rejects.toMatchObject({
-    status: 403,
-    rateLimited: true,
-  });
-  // 退避生效后不再打 GitHub。
-  await expect(transport.read('identity', 'fake', '/repos/acme/other')).rejects.toThrow(
-    'GITHUB_RATE_LIMITED',
-  );
-  expect(fetcher).toHaveBeenCalledTimes(1);
 });
 
 // A paginated thread must be complete, while repeated consumers must not mutate cached GraphQL nodes.

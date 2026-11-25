@@ -102,16 +102,23 @@ export interface GhCliTokenSource {
 /** GitHub 登录名;`gh auth status --json` 的输出只按这个形状采信。 */
 const LOGIN_RE = /^[a-zA-Z0-9-]{1,39}$/;
 
-function parseLogins(stdout: string): string[] {
+/** `null` = 账号列表没读准(探测失败,或某个账号 state=error),不能当成「没有备用账号」。 */
+function parseLogins(stdout: string): string[] | null {
   try {
     const hosts = (JSON.parse(stdout) as { hosts?: Record<string, unknown> }).hosts?.['github.com'];
-    if (!Array.isArray(hosts)) return [];
-    return hosts.flatMap((entry) => {
+    if (!Array.isArray(hosts)) return null;
+    const logins: string[] = [];
+    for (const entry of hosts) {
       const { login, state } = (entry ?? {}) as { login?: unknown; state?: unknown };
-      return state === 'success' && typeof login === 'string' && LOGIN_RE.test(login) ? [login] : [];
-    });
+      // `gh auth status --json` 在个别账号校验失败时仍以 0 退出,只把那个账号标成 error。
+      // 这时列表是不完整的,返回 null 让调用方当作「没查成」。
+      if (state === 'error') return null;
+      if (state === 'success' && typeof login === 'string' && LOGIN_RE.test(login))
+        logins.push(login);
+    }
+    return logins;
   } catch {
-    return [];
+    return null;
   }
 }
 
