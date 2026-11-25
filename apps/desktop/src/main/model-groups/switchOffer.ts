@@ -4,6 +4,7 @@
  * 纯函数，所有事实由调用方注入。
  */
 import {
+  modelGroupAutoSwitchFor,
   modelGroupCandidateKey,
   type ModelGroupAgentKind,
   type ModelGroupRoute,
@@ -62,7 +63,7 @@ export async function computeModelGroupSwitchOffer(
   deps: ModelGroupSwitchOfferDeps,
   sessionId: string,
   recovery?: { visited: ReadonlySet<string>; accountUnavailable: boolean; hasImages?: boolean; recordUnavailable(candidate: ModelGroupRoute['candidates'][number]): void; current: { agentKind: ModelGroupAgentKind; providerId: string; model: string } },
-): Promise<(ModelGroupSwitchOffer & { effort?: string }) | null> {
+): Promise<(ModelGroupSwitchOffer & { effort?: string; fromLabel?: string }) | null> {
   const binding = deps.readBinding(sessionId);
   if (!binding) return null;
   const row = await deps.readSession(sessionId);
@@ -77,7 +78,9 @@ export async function computeModelGroupSwitchOffer(
     return null;
   }
   const now = deps.now();
-  const target = modelGroupRouteFor(deps.config(), binding.selection, now);
+  const config = deps.config();
+  if (recovery && !modelGroupAutoSwitchFor(config, binding.selection)) return null;
+  const target = modelGroupRouteFor(config, binding.selection, now);
   if (target.outcome === 'missing') return null;
   const { route } = target;
   // 同一个供应商连接是同一个账号、同一份配额：一并跳过，连同正在用的这个。
@@ -107,7 +110,11 @@ export async function computeModelGroupSwitchOffer(
   // 能用的都撞了上限时 pick 仍会选最早恢复的那个(带 limitedUntilMs)；换过去一样要等，不提议。
   if ('limitedUntilMs' in entry) return null;
   const candidate = route.candidates[picked.index];
+  // 正在用的那个来源的名字(活动行「{from} …，已换到 {to} 继续」)，在 trace 里与其他候选一起算好了。
+  const currentIndex = route.candidates.findIndex((item) => modelGroupCandidateKey(item) === currentKey);
+  const fromEntry = currentIndex >= 0 ? picked.trace[currentIndex] : undefined;
   return {
+    ...(fromEntry ? { fromLabel: `${fromEntry.modelName} · ${fromEntry.sourceName}` } : {}),
     groupName: target.groupName,
     selection: binding.selection,
     agentKind: candidate.agentKind,

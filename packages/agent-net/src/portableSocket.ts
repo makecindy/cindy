@@ -502,7 +502,15 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         return this.transport.connect({ id: entry.id, dial: { relayId: deviceId } });
       }
     };
-    const dialing = connect().then((channel) => this.adopt(channel, true));
+    const uplink = this.uplink;
+    const dialing = connect().then((channel) => this.adopt(channel, true), error => {
+      // A lost relay may prevent even the first session. Only test the original
+      // socket, once per probe window; an offline peer alone cannot close it.
+      if (!this.closed && uplink === this.uplink && this.roster.get(deviceId)?.online && !this.peers.has(deviceId)) {
+        uplink?.probeRelay?.();
+      }
+      throw error;
+    });
     this.dialing.set(deviceId, dialing);
     try { await dialing; } finally { if (this.dialing.get(deviceId) === dialing) this.dialing.delete(deviceId); }
   }
@@ -717,7 +725,9 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   }
   /** Session requests to a relayed peer timed out (see Transport.relayStalled). */
   relayStalled(): void {
-    if (!this.closed) this.transport?.relayStalled?.();
+    if (this.closed) return;
+    this.transport?.relayStalled?.();
+    if (this.transport?.relayRoute?.()?.via !== 'udp') this.uplink?.probeRelay?.();
   }
   /**
    * This device's own route changed (the phone: Wi-Fi ↔ cellular, lost and back). Besides `networkChanged`, the relay

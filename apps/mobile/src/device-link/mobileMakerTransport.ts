@@ -1005,6 +1005,7 @@ export interface MobileMakerTransport {
 
 /** `maker:session:enable-orca` 的 options(与桌面 preload maker.enableOrca 同形状)。 */
 export interface MobileOrcaEnableOptions {
+  modelGroup?: string;
   workerAgent: OrcaWorkerAgentKind;
   role?: string;
   label?: string;
@@ -1029,6 +1030,7 @@ export interface MobileOrcaEnableResult {
 
 /** `maker:worker:create` 的 body(与桌面 useOrcaWorkerSelection 提交同形状)。 */
 export interface MobileOrcaCreateWorkerInput {
+  modelGroup?: string;
   leadSessionId: string;
   role: string;
   label: string;

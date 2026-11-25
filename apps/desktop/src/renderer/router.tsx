@@ -270,6 +270,13 @@ export const router = createHashRouter([
                   },
                   { path: 'settings', element: <SettingsView /> },
                   {
+                    path: 'cloud-settings',
+                    lazy: () =>
+                      import('@/features/cloud-settings/CloudSettingsRoute').then(({ CloudSettingsRoute }) => ({
+                        Component: CloudSettingsRoute,
+                      })),
+                  },
+                  {
                     path: 'plugins',
                     lazy: () => import('@/features/plugin/GhostPluginPage').then(({ GhostPluginPage }) => ({ Component: GhostPluginPage })),
                     HydrateFallback: EmptyRouteFallback,
