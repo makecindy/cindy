@@ -16502,6 +16502,7 @@
       "updateHost": "Update the computer running this task to open a side chat.",
       "failed": "Could not open the side chat. Try again.",
       "mainTaskOnly": "Open a side chat from the main task.",
+      "pluginEngineUnavailable": "Plugin engines don’t support side chats.",
       "sharedTaskUnavailable": "Side chats are not available in shared tasks.",
       "archivedTask": "Unarchive this task to open a side chat.",
       "closeTitle": "Close and archive this follow-up?",

@@ -16617,6 +16617,7 @@
       "updateHost": "Mettez à jour l'ordinateur qui exécute cette tâche pour ouvrir une conversation annexe.",
       "failed": "Impossible d'ouvrir la conversation annexe. Veuillez réessayer.",
       "mainTaskOnly": "Ouvrez une conversation annexe depuis la tâche principale.",
+      "pluginEngineUnavailable": "Les moteurs de plugins ne prennent pas en charge les conversations annexes.",
       "sharedTaskUnavailable": "Les conversations annexes ne sont pas disponibles dans les tâches partagées.",
       "archivedTask": "Désarchivez cette tâche pour ouvrir une conversation annexe.",
       "closeTitle": "Fermer et archiver cette question de suivi ?",

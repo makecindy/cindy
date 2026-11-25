@@ -173,8 +173,12 @@ describe('side chat task entry', () => {
   // be told to "open from the main task"; a guest whose list snapshot lacks the
   // origin must still be recognised from the caller's resolved device.
   it.each([
-    [{ status: 'active' }, undefined, null],
+    [{ status: 'active', agentKind: 'codex', model: 'default' }, undefined, null],
+    // Unit, #12764: the shared entry gate must explain a completed ACP task's
+    // unsupported history before any entry tries to create a branch.
+    [{ status: 'active', agentKind: 'acp', model: 'default' }, undefined, 'chat.sideChat.pluginEngineUnavailable'],
     [{ status: 'active' }, sharedTaskGuestPeer('task', 'member', 'host'), 'chat.sideChat.sharedTaskUnavailable'],
+    [{ status: 'active', agentKind: 'acp' }, sharedTaskGuestPeer('task', 'member', 'host'), 'chat.sideChat.sharedTaskUnavailable'],
     [{ status: 'archived' }, null, 'chat.sideChat.archivedTask'],
     [{ status: 'active', source: 'review' }, null, 'chat.sideChat.mainTaskOnly'],
   ])('explains why %o on %s cannot open a side chat', (patch, deviceId, expected) => {

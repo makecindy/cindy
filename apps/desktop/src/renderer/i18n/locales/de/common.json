@@ -16465,6 +16465,7 @@
       "updateHost": "Aktualisiere den Computer, auf dem diese Aufgabe läuft, um einen Nebenchat zu öffnen.",
       "failed": "Der Nebenchat konnte nicht geöffnet werden. Versuch es erneut.",
       "mainTaskOnly": "Öffne einen Nebenchat aus der Hauptaufgabe.",
+      "pluginEngineUnavailable": "Plugin-Engines unterstützen keine Nebenchats.",
       "sharedTaskUnavailable": "Nebenchats sind in geteilten Aufgaben nicht verfügbar.",
       "archivedTask": "Hebe die Archivierung dieser Aufgabe auf, um einen Nebenchat zu öffnen.",
       "closeTitle": "Diese Nachfrage schließen und archivieren?",

@@ -16617,6 +16617,7 @@
       "updateHost": "Atualize o computador que executa esta tarefa para abrir uma conversa paralela.",
       "failed": "Não foi possível abrir a conversa paralela. Tente novamente.",
       "mainTaskOnly": "Abra uma conversa paralela a partir da tarefa principal.",
+      "pluginEngineUnavailable": "Os mecanismos de plugins não oferecem suporte a conversas paralelas.",
       "sharedTaskUnavailable": "Conversas paralelas não estão disponíveis em tarefas compartilhadas.",
       "archivedTask": "Desarquive esta tarefa para abrir uma conversa paralela.",
       "closeTitle": "Fechar e arquivar esta pergunta de acompanhamento?",

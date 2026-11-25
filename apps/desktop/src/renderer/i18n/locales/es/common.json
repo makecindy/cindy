@@ -16617,6 +16617,7 @@
       "updateHost": "Actualiza la computadora que ejecuta esta tarea para abrir un chat secundario.",
       "failed": "No se pudo abrir el chat secundario. Inténtalo de nuevo.",
       "mainTaskOnly": "Abre un chat secundario desde la tarea principal.",
+      "pluginEngineUnavailable": "Los motores de complementos no admiten chats secundarios.",
       "sharedTaskUnavailable": "Los chats secundarios no están disponibles en tareas compartidas.",
       "archivedTask": "Desarchiva esta tarea para abrir un chat secundario.",
       "closeTitle": "¿Cerrar y archivar este seguimiento?",

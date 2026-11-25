@@ -14,6 +14,7 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCu
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { isSharedTaskPeer, remoteAgentErrorCode } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
+import { isPluginEngineKind } from '../../../../shared/pluginEngines';
 import { readSessionBatch } from '@/lib/sessionBatchRead';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import type { NavigateFunction } from 'react-router-dom';
@@ -35,6 +36,7 @@ export type SideChatUnavailableKey =
   | 'chat.sideChat.sharedTaskUnavailable'
   | 'chat.sideChat.mainTaskOnly'
   | 'chat.sideChat.archivedTask'
+  | 'chat.sideChat.pluginEngineUnavailable'
   | 'chat.sideChat.failed';
 
 /**
@@ -52,7 +54,10 @@ export function sideChatUnavailableKey(
   if (!session) return 'chat.sideChat.failed';
   if (['side-chat', 'bot', 'review'].includes(session.source ?? '')) return 'chat.sideChat.mainTaskOnly';
   if (session.status === 'archived') return 'chat.sideChat.archivedTask';
-  return session.status === 'active' ? null : 'chat.sideChat.failed';
+  if (session.status !== 'active') return 'chat.sideChat.failed';
+  // Main cannot fork the conversation history of a plugin engine.
+  if (isPluginEngineKind(session.agentKind)) return 'chat.sideChat.pluginEngineUnavailable';
+  return null;
 }
 
 export function canOpenSideChat(session: Session | null | undefined): boolean {

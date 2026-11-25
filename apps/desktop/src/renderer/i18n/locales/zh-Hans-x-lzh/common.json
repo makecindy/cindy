@@ -16420,6 +16420,7 @@
       "updateHost": "请先更新行差事之机，再开旁问。",
       "failed": "旁问未能开，请稍后再试。",
       "mainTaskOnly": "请自主差事开旁问。",
+      "pluginEngineUnavailable": "法器引擎尚不可开旁问。",
       "sharedTaskUnavailable": "共事不可开旁问。",
       "archivedTask": "请先解封存，再开旁问。",
       "closeTitle": "闭而藏此追问乎？",
