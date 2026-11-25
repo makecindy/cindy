@@ -143,6 +143,12 @@ export interface ApplyRuntimeSetModelChangeInput {
   requiresCodexThreadRelink?: boolean | (() => Promise<boolean>);
   /** Closes over the captured Profile DB and atomically commits thread + full target route. */
   relinkCodexThread?: () => Promise<void>;
+  /**
+   * The user moved this task to another source. Its native thread belongs to the source being
+   * left, so the next start hands the transcript over instead of forking it into the destination;
+   * forking would first have to authorize the old account, which is exactly what the user left.
+   */
+  handOffCodexThread?: boolean;
   logger?: RuntimeSetModelLogger;
 }
 
@@ -267,8 +273,9 @@ export async function applyRuntimeSetModelChange(
     if (piPreview.modelNotOffered) throwIpcError('MODEL_SELECTION_UNAVAILABLE', piPreview.reason ?? 'Select an available model');
     throw new Error(piPreview.reason ?? 'Pi target model is unavailable; runtime selection was not changed');
   }
-  let requiresCodexThreadRelink = typeof input.requiresCodexThreadRelink === 'function'
-    ? await input.requiresCodexThreadRelink() : input.requiresCodexThreadRelink === true;
+  const handOffCodexThread = input.handOffCodexThread === true;
+  let requiresCodexThreadRelink = !handOffCodexThread && (typeof input.requiresCodexThreadRelink === 'function'
+    ? await input.requiresCodexThreadRelink() : input.requiresCodexThreadRelink === true);
   const modelSwitchRequiresRebuild =
     sess &&
     sess.agentKind !== 'pi' &&
@@ -283,7 +290,7 @@ export async function applyRuntimeSetModelChange(
     credentialModeRequiresRebuild ||
     piPreview?.action === 'rebuild'
   );
-  if (shouldCloseSession && typeof input.requiresCodexThreadRelink === 'function') {
+  if (shouldCloseSession && !handOffCodexThread && typeof input.requiresCodexThreadRelink === 'function') {
     requiresCodexThreadRelink = await input.requiresCodexThreadRelink();
   }
   if (requiresCodexThreadRelink && !input.relinkCodexThread) {
@@ -432,8 +439,8 @@ export async function applyRuntimeSetModelChange(
     }
     let relinkAfterClose = false;
     try {
-      relinkAfterClose = requiresCodexThreadRelink ||
-        (typeof input.requiresCodexThreadRelink === 'function' && await input.requiresCodexThreadRelink());
+      relinkAfterClose = !handOffCodexThread && (requiresCodexThreadRelink ||
+        (typeof input.requiresCodexThreadRelink === 'function' && await input.requiresCodexThreadRelink()));
       if (relinkAfterClose) {
         if (!input.relinkCodexThread) throw new Error(`Codex provider thread relink is required for session ${sessionId}`);
         await input.relinkCodexThread();

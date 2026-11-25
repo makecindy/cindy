@@ -83,6 +83,27 @@ describe('Codex writer decision freshness', () => {
     expect(relink).toHaveBeenCalledTimes(state === 'moved' ? 1 : 0);
   });
 
+  // 换源时不再先 fork 旧线程：fork 要向旧账号申请授权，而旧账号正是用户离开的那个
+  // （2026-11-25 实报：换源被旧登录挡住）。交接交给发送前的 rebuild 完成。
+  it('hands the thread over instead of forking it into the source the user just left', async () => {
+    const sessionId = rememberSession('user-source-switch-handoff');
+    setSessionProvider(sessionId, 'cprov-source');
+    const relink = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({ agentKind: 'codex', model: 'source', setModel: vi.fn(),
+        requiresModelSwitchRebuild: async () => true }),
+      listActiveSessions: () => [{ id: sessionId, agentKind: 'codex', isTurnRunning: () => false }],
+      closeSession,
+    };
+    await expect(applyRuntimeSetModelChange({ maker, sessionId, model: 'target', providerId: 'cprov-target',
+      handOffCodexThread: true, requiresCodexThreadRelink: async () => true, relinkCodexThread: relink }))
+      .resolves.toEqual({ status: 'applied', retiredRuntime: true });
+    expect(closeSession).toHaveBeenCalledOnce();
+    expect(relink).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('cprov-target');
+  });
+
   it.each([false, true])('rechecks after asynchronous model inspection with busy=%s', async (busy) => {
     const sessionId = rememberSession('route-changes-during-inspection');
     setSessionProvider(sessionId, 'cprov-source');

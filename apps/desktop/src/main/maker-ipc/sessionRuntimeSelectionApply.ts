@@ -839,6 +839,12 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         internalOptions.configStaged === true &&
         (runtimeAgentKind === 'claude-code' || runtimeAgentKind === 'codex');
       const targetRouteProviderId = targetProviderId;
+      // The user picked another source for this task. Its native thread belongs to the source
+      // being left, so the next start hands the transcript over instead of forking it into the
+      // destination first (that fork would have to authorize the old account, which is exactly
+      // what the user is leaving). Ordinary resumes never reach this.
+      const userSourceSwitch = internalOptions.source === 'user' && runtimeAgentKind === 'codex'
+        && targetRouteProviderId !== currentProviderId;
       let currentRuntimeModel = liveSessionBeforeRouteChange?.model ??
         internalOptions.previousPiRoute?.model ?? persistedSessionMeta?.model;
       let runtimeRouteChanged =
@@ -1343,7 +1349,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           remoteHostId: transferStatus.remoteHostId ?? undefined,
           ...(transferMeta?.reviewMode ? { reviewMode: true as const } : {}),
         };
-        const canTransferThread = routeExplicit && runtimeAgentKind === 'codex' &&
+        const canTransferThread = routeExplicit && runtimeAgentKind === 'codex' && !userSourceSwitch &&
           !transferStatus.remoteHostId && !!transferStatus.sdkSessionId;
         const assertTransferOwner = () => {
           assertRuntimeOwnerCurrent();
@@ -1442,6 +1448,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               sessionId,
               model,
               providerId: effectiveProviderId,
+              handOffCodexThread: userSourceSwitch,
               ...(piConfigurationRefresh ? { refreshPiConfiguration: true } : {}),
               ...(canTransferThread ? {
                 requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer({
@@ -1911,10 +1918,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           // The user picked another source, so this task's native thread belongs to the previous
           // one. Record it once: the next start hands the transcript over instead of resuming a
           // thread whose home the new source cannot read (ordinary resumes never record this).
-          if (internalOptions.source === 'user' && runtimeAgentKind === 'codex'
-            && committedProviderId !== currentProviderId) {
-            recordUserSourceSwitch(sessionId, committedProviderId);
-          }
+          if (userSourceSwitch) recordUserSourceSwitch(sessionId, committedProviderId);
           wakeSessionInputAfterCredentialSwitch(sessionId);
         }
         await broadcastSessionRuntimeProjection(sessionId, userBaselineOverride).catch((error) => {
