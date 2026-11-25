@@ -14,6 +14,7 @@ import {
   companionCloudCapsVersion,
   parseCompanionCloudRemoteActionResult,
   parseCompanionCloudRemoteTargets,
+  type CompanionCloudRemoteActionResult,
   type CompanionCloudRemoteTarget,
 } from '@cindy/device-link';
 import { Text } from '@/components/AppText';
@@ -74,7 +75,7 @@ export function CloudHomeSwitchSheet({ visible, onClose, botId, name, homeDevice
     const offered = phase.kind === 'ready' ? phase.targets : [target];
     setPhase({ kind: 'moving', target });
     setError(null);
-    let result;
+    let result: CompanionCloudRemoteActionResult;
     try {
       result = parseCompanionCloudRemoteActionResult(await invoke(homeDeviceId, COMPANION_CLOUD_HAND_OVER_CHANNEL,
         whenBusy ? [botId, target.deviceId, { whenBusy }] : [botId, target.deviceId]));
@@ -98,7 +99,10 @@ export function CloudHomeSwitchSheet({ visible, onClose, botId, name, homeDevice
       return;
     }
     setError(t(result.code === 'BUSY' ? 'devices.cloudCompanion.transferBusy'
-      : result.code === 'HOME_CONFLICT' ? 'devices.cloudCompanion.switchConflict' : 'devices.cloudCompanion.switchFailed', { name, device: target.name }));
+      : result.code === 'SKILL_TARGET_OUTDATED' ? 'devices.cloudCompanion.skillTargetOutdated'
+      : result.code === 'HOME_CONFLICT' ? 'devices.cloudCompanion.switchConflict' : 'devices.cloudCompanion.switchFailed', {
+      name, device: target.name, context: result.oversizedSkill ? 'skill' : undefined, ...result.oversizedSkill,
+    }));
   };
 
   const confirm = (target: CompanionCloudRemoteTarget) => {

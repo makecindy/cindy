@@ -12,6 +12,9 @@ export default {
       'const empty = {}; export const EMPTY_LIGHT_STATE = empty; export const makerChatStore = { subscribeLight: () => () => {}, getLightSnapshot: () => empty };',
   },
   cases: {
+    'realtime-my-voices': { about: 'Model-specific presets and refreshed private voices survive a failed refresh', data: { realtime: true, qwenRealtime: true }, viewport: { width: 320, height: 900 } },
+    'realtime-without-tts': { about: 'A realtime call needs no TTS model; its empty state belongs to message read-aloud', data: { realtime: true, empty: true, noPreference: true }, viewport: { width: 320, height: 740 } },
+    realtime: { about: 'Choose native realtime, save its voice, then return to TTS without altering the TTS preference', data: { realtime: true }, viewport: { width: 320, height: 900 } },
     'openrouter-auto-voice': {
       about: 'Switching to Qwen chooses its first returned voice; an explicit choice survives refresh',
       data: {
@@ -206,6 +209,104 @@ export default {
     }
   },
   async check(page, ui) {
+    if (ui.data.qwenRealtime) {
+      const callMode = page.getByRole('combobox', { name: await ui.t('bots.voiceMode.realtime.callMode') });
+      await callMode.click();
+      await page.getByRole('option', { name: /Qwen 3.1 Plus/ }).click();
+      const refreshLabel = await ui.t('bots.voiceMode.realtime.refreshMyVoices');
+      const refresh = page.getByRole('button', { name: refreshLabel });
+      await page.waitForFunction(label => document.querySelector(`button[aria-label="${label}"]:enabled`), refreshLabel);
+      const settings = page.getByRole('region', { name: await ui.t('bots.voiceMode.realtime.title') });
+      assert.equal(await settings.getByRole('status').count(), 0);
+      await ui.capture('empty-private-voices');
+      const save = page.getByRole('button', { name: await ui.t('bots.save'), exact: true });
+      assert.equal(await save.count(), 0);
+      const picker = page.getByRole('button', { name: await ui.t('bots.voiceMode.realtime.callVoice'), exact: true });
+      const myVoices = page.getByText(await ui.t('bots.voiceMode.realtime.myVoices'), { exact: true });
+      await picker.click();
+      await page.getByText(await ui.t('bots.voiceMode.realtime.systemVoices'), { exact: true }).waitFor();
+      assert.equal(await myVoices.count(), 0);
+      await page.keyboard.press('Escape');
+      await refresh.click();
+      await picker.click();
+      await myVoices.waitFor();
+      await page.getByRole('button', { name: 'Buddy', exact: true }).focus();
+      const audition = page.getByRole('button', { name: await ui.t('bots.voiceMode.previewVoice', { voice: 'Buddy' }), exact: true });
+      const menu = page.getByRole('dialog', { name: await ui.t('bots.voiceMode.realtime.callVoice') });
+      const systemPreview = menu.getByRole('button', { name: await ui.t('bots.voiceMode.previewVoice', { voice: 'longanqian_v3.1' }), exact: true });
+      const systemName = menu.getByRole('button', { name: 'longanqian_v3.1', exact: true });
+      const opacity = (button) => button.evaluate((element) => getComputedStyle(element).opacity);
+      await page.mouse.move(0, 0);
+      assert.equal(await opacity(systemPreview), '0');
+      assert.equal(await opacity(audition), '1'); // Buddy has keyboard focus.
+      await systemName.hover();
+      assert.equal(await opacity(systemPreview), '1');
+      const before = await picker.getAttribute('value');
+      await audition.click();
+      await page.waitForFunction(() => window.__uiPage.ctx.data.previewRequests.some(r => r.mode === 'realtime' && r.voice === 'my-buddy'));
+      assert.equal(await picker.getAttribute('value'), before);
+      await systemName.focus();
+      await systemName.hover();
+      const stop = menu.getByRole('button', { name: await ui.t('bots.voiceMode.stopPreviewVoice', { voice: 'Buddy' }), exact: true });
+      assert.equal(await opacity(stop), '1');
+      assert.equal(await page.evaluate(() => window.__uiPage.ctx.data.savedRealtime.voice), 'longanqian_v3.1');
+      await ui.capture('private-voices');
+
+      await page.getByRole('button', { name: 'Buddy', exact: true }).click();
+      await page.waitForFunction(() => window.__uiPage.ctx.data.previewStops.includes(window.__uiPage.ctx.data.previewRequests[0].previewId));
+      await refresh.click();
+      await page.getByText(await ui.t('bots.voiceMode.voicesCustomError')).waitFor();
+      await page.waitForFunction(() => window.__uiPage.ctx.data.savedRealtime?.voice === 'my-buddy');
+      assert.equal(await picker.getAttribute('value'), 'voice:my-buddy');
+      return;
+    }
+    if (ui.data.realtime) {
+      const model = page.getByRole('combobox', { name: await ui.t('bots.voiceMode.realtime.callMode'), exact: true });
+      await model.focus();
+      await model.press('Enter');
+      await page.getByRole('option', { name: 'gpt-realtime-2 · OpenAI API', exact: true }).press('Enter');
+      await page.getByRole('button', { name: await ui.t('bots.voiceMode.realtime.callVoice'), exact: true }).click();
+      await page.getByRole('button', { name: 'cedar', exact: true }).click();
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.save'), exact: true }).count(), 0);
+      await page.waitForFunction(() => window.__uiPage.ctx.data.savedRealtime?.voice === 'cedar');
+      assert.equal(await page.evaluate(() => window.__uiPage.ctx.data.savedVoice), 'river');
+      assert.equal(await page.evaluate(() => window.__uiPage.ctx.data.saveCount), 0);
+      const readAloud = page.getByRole('button', { name: await ui.t('bots.voiceMode.realtime.messageReadAloud'), exact: true });
+      const synthesis = page.getByRole('combobox', { name: await ui.t('bots.voiceMode.model'), exact: true });
+      const noModels = page.getByText(await ui.t('bots.voiceMode.noModels'), { exact: true });
+      const bySentence = page.getByRole('switch', { name: await ui.t('bots.voiceMode.sentencePlayback'), exact: true });
+      const scope = page.getByText(await ui.t('bots.voiceMode.preferenceHint'), { exact: true });
+      const readingVoice = page.getByRole('button', { name: await ui.t('bots.voiceMode.realtime.readAloudVoice'), exact: true });
+      assert.equal(await scope.isVisible(), true);
+      assert.equal(await readingVoice.isVisible(), false);
+      assert.equal(await readAloud.getAttribute('aria-expanded'), 'false');
+      assert.equal(await synthesis.isVisible(), false);
+      assert.equal(await noModels.isVisible(), false);
+      await ui.capture('realtime-saved');
+      await readAloud.focus();
+      await readAloud.press('Space');
+      assert.equal(await readAloud.getAttribute('aria-expanded'), 'true');
+      await (ui.data.empty ? noModels : synthesis).waitFor();
+      assert.equal(await bySentence.isVisible(), false);
+      assert.equal(await readingVoice.isVisible(), !ui.data.empty);
+      assert.equal(await scope.isVisible(), true);
+      await ui.capture('message-read-aloud');
+      await readAloud.press('Space');
+      assert.equal(await readingVoice.isVisible(), false);
+      assert.equal(await scope.isVisible(), true);
+      await model.focus();
+      await model.press('Enter');
+      await page.getByRole('option', { name: await ui.t('bots.voiceMode.realtime.off'), exact: true }).press('Enter');
+      await page.waitForFunction(() => window.__uiPage.ctx.data.savedRealtime === null);
+      await (ui.data.empty ? noModels : bySentence).waitFor();
+      assert.equal(await readAloud.count(), 0);
+      await model.focus();
+      await model.press('Enter');
+      await page.getByRole('option', { name: 'gpt-realtime-2 · OpenAI API', exact: true }).press('Enter');
+      assert.match(await page.getByRole('button', { name: await ui.t('bots.voiceMode.realtime.callVoice'), exact: true }).innerText(), /cedar/);
+      assert.equal(await page.evaluate(() => window.__uiPage.ctx.data.savedVoice), 'river');
+      return;
+    }
     if (ui.data.autoVoice) {
       assert.equal(await page.evaluate(() => window.__uiPage.ctx.data.saveCount), 0);
       const modelLabel = await ui.t('bots.voiceMode.model');
@@ -355,7 +456,8 @@ export default {
         await ui.capture('hidden-empty');
       } else {
         assert.ok((await model.textContent()).includes('eleven_flash_v2_5'));
-        await model.click();
+        await model.focus();
+      await model.press('Enter');
         await page.getByRole('option', { name: /Visible speech/ }).waitFor();
         assert.equal(await page.getByRole('option', { name: /Unchecked speech/ }).count(), 0);
         await ui.capture('hidden-selection');

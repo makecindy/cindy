@@ -121,6 +121,38 @@ export function createToolReferenceRecoveryRule(): RecoveryRule {
   };
 }
 
+function lowerNativeMcpHistory(rawBody: Buffer): Buffer | null {
+  let body: unknown;
+  try { body = JSON.parse(rawBody.toString('utf8')); } catch { return null; }
+  if (!isPlainObject(body) || !Array.isArray(body.messages)) return null;
+  let changed = false;
+  for (const message of body.messages) {
+    if (!isPlainObject(message) || !Array.isArray(message.content)) continue;
+    message.content = message.content.map((block: unknown) => {
+      if (!isPlainObject(block)) return block;
+      const label = block.type === 'mcp_tool_use' ? 'Historical MCP call'
+        : block.type === 'mcp_tool_result' ? 'Historical MCP result' : null;
+      if (!label) return block;
+      // Keep native IDs and the result's error flag in the history. Turning these
+      // into client tool calls would introduce a tool the client may never have had.
+      changed = true;
+      return { type: 'text', text: `${label}: ${JSON.stringify(block)}` };
+    });
+  }
+  return changed ? Buffer.from(JSON.stringify(body), 'utf8') : null;
+}
+
+export function createNativeMcpHistoryRecoveryRule(): RecoveryRule {
+  return {
+    id: 'unsupported_native_mcp_history',
+    enabled: () => true,
+    matches: text => /messages[.]\d+[.]content[.]\d+:\s*unsupported content type 'mcp_tool_(?:use|result)'/i.test(text),
+    strip: lowerNativeMcpHistory,
+    applyOnUnmatchedRetry: false,
+    allowExtraRules: false,
+  };
+}
+
 /**
  * Responses `input[]` 里的上下文压缩块 (OpenAI `/v1/responses/compact` 与 xAI 同名接口
  * 都回这个形态)。它的 `encrypted_content` 装的是**压缩 blob 本体** —— 压缩点之前的

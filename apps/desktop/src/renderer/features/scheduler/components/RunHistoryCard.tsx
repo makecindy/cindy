@@ -21,7 +21,7 @@ import { cn } from '@/lib/utils';
 import * as sessionService from '@/lib/sessionService';
 import { toast } from '@/lib/toast';
 import { ErrorNotice } from '@/components/ui/error-notice';
-import { isScheduleActionExpired, scheduleFailureDetails } from '@cindy/maker-shared/schedule-model';
+import { isOneTimeModelRebuildFailure, isScheduleActionExpired, scheduleFailureDetails } from '@cindy/maker-shared/schedule-model';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import type { RunStatus, ScheduleAgentKind, ScheduleRun } from '@cindy/maker-scheduler';
 import type { SessionReference } from '../../../../shared/sessionReference';
@@ -116,7 +116,7 @@ function PreRunHookResultDetails({ result }: { result: NonNullable<ScheduleRun['
                 {t(`scheduler.runs.preRun.${section.key}`)}
                 {section.truncated ? ` · ${t('scheduler.runs.preRun.truncated')}` : ''}
               </span>
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[var(--cmd-palette-border)] p-2 font-mono text-11">
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--cmd-palette-border)] p-2 font-mono text-11">
                 {section.value}
               </pre>
             </section>
@@ -151,7 +151,14 @@ export function RunHistoryCard({
   const { t, i18n } = useTranslation();
   const errorDetail = run.errorMsg?.replace(/^scheduled task auto-resume failed: /, '');
   const errorCode = errorDetail ? parseAgentErrorCode(errorDetail)?.code : undefined;
-  const errorKey = isScheduleActionExpired(run.errorMsg)
+  // Match the persisted refusal with or without the recovery sentence added to new runs.
+  const boundPluginEngineRefusal = run.status === 'failed' &&
+    /^Scheduled tasks is not available for tasks running on a plugin engine(?:\.|$)/.test(errorDetail ?? '');
+  const errorKey = boundPluginEngineRefusal
+    ? 'scheduler.runs.boundPluginEngineRecovery'
+    : run.status === 'failed' && isOneTimeModelRebuildFailure(run.errorMsg)
+    ? 'chat.unreadFailedScheduleBanner.modelRebuildRetry'
+    : isScheduleActionExpired(run.errorMsg)
     ? `chat.unreadFailedScheduleBanner.${run.failureRecovered ? 'actionRecovered' : 'actionExpired'}`
     : errorCode ? `chat.remoteError.${errorCode}` : undefined;
   const navigate = useNavigate();
@@ -336,7 +343,7 @@ export function RunHistoryCard({
                     type="button"
                     aria-label={t('scheduler.runs.moreAria')}
                     className={cn(
-                      'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
+                      'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg',
                       'text-[var(--cmd-palette-item-meta)] transition-opacity',
                       'opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100',
                       'hover:bg-[var(--chat-input-chip-bg)] hover:text-[var(--msg-assistant-text)]',

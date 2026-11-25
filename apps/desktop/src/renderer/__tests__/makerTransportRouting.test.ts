@@ -49,6 +49,7 @@ function stubElectron() {
     estimatedSessionValue: vi.fn().mockResolvedValue({ totalValueUsd: 0, entries: [] }),
   };
   const localSessions = {
+    resolveReferences: vi.fn(async ([sessionId]: string[]) => [{ sessionId, state: 'missing' }]),
     get: vi.fn().mockRejectedValue(new Error('[NOT_FOUND] Session does not exist')),
     update: vi.fn(),
   };
@@ -67,6 +68,70 @@ function stubElectron() {
 const sess = (id: string): Session => ({ id }) as unknown as Session;
 
 describe('makerApiFor 路由(完整对等会话级操作)', () => {
+  // Unit #12500: gate-only mocks missed sticky reads made while a link was pending.
+  it('keeps a pending device hint out of ID-only transport and preserves a newer remote owner', async () => {
+    const { invoke, localSessions } = stubElectron();
+    Object.assign(window, { addEventListener: vi.fn() });
+    const { confirmSessionOrigin } = await import('@/features/device-link/confirmSessionOrigin');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const { getSessionFor } = await import('@/lib/makerTransport');
+    const id = 'worker';
+    const local = sess(id);
+    localSessions.get.mockResolvedValue(local);
+    let finish!: (row: Session | null) => void;
+    invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = confirmSessionOrigin(id, 'hint', () => true);
+    expect(await getSessionFor(id)).toBe(local);
+    finish(null);
+    await expect(pending).rejects.toThrow('missing');
+    invoke.mockRejectedValueOnce(new Error('offline'));
+    await expect(confirmSessionOrigin(id, 'hint', () => true)).rejects.toThrow('offline');
+    expect(await getSessionFor(id)).toBe(local);
+    invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const stale = confirmSessionOrigin(id, 'hint', () => true);
+    remoteProjectsStore.setDeviceSessions('owner', 'Owner', [sess(id)]);
+    finish(sess(id));
+    await expect(stale).rejects.toThrow('Conflicting');
+    remoteProjectsStore.clear();
+    invoke.mockRejectedValueOnce(new Error('offline'));
+    await expect(getSessionFor(id)).rejects.toThrow('offline');
+    expect(invoke).toHaveBeenLastCalledWith('owner', 'local-db:sessions:get', [id]);
+    expect(localSessions.get).toHaveBeenCalledTimes(2);
+  });
+  // Unit #12500: a detail lookup must leave the archive browser's full-list fetch eligible.
+  it('opens an archived remote reference without marking its device archive list complete', async () => {
+    const { invoke } = stubElectron();
+    Object.assign(window, { addEventListener: vi.fn() });
+    const { confirmSessionOrigin } = await import('@/features/device-link/confirmSessionOrigin');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const { getSessionFor } = await import('@/lib/makerTransport');
+    const archived = { ...sess('archive'), status: 'archived' };
+    invoke.mockResolvedValue(archived);
+    await confirmSessionOrigin('archive', 'host', () => true);
+    expect(remoteProjectsStore.getDeviceSessions('host', 'archived')).toHaveLength(1);
+    expect(remoteProjectsStore.hasLoadedSessionStatus('host', 'archived')).toBe(false);
+    await getSessionFor('archive');
+    expect(invoke).toHaveBeenLastCalledWith('host', 'local-db:sessions:get', ['archive']);
+  });
+  // Unit #12500: a later device snapshot must not redirect ID-only transport.
+  it.each(['cold', 'mirrored', 'pushed'])('keeps the verified %s owner across a conflicting snapshot', async mode => {
+    const { invoke } = stubElectron();
+    Object.assign(window, { addEventListener: vi.fn() });
+    const { confirmSessionOrigin } = await import('@/features/device-link/confirmSessionOrigin');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const { getSessionFor } = await import('@/lib/makerTransport');
+    const row = sess('same-id');
+    if (mode === 'mirrored') remoteProjectsStore.setDeviceSessions('first', 'First', [row]);
+    invoke.mockImplementation(async () => {
+      if (mode === 'pushed') remoteProjectsStore.setDeviceSessions('first', 'First', [row]);
+      return row;
+    });
+    await confirmSessionOrigin(row.id, 'first', () => true);
+    remoteProjectsStore.setDeviceSessions('second', 'Second', [row]);
+    await expect(confirmSessionOrigin(row.id, 'second', () => true)).rejects.toThrow('Conflicting');
+    await getSessionFor(row.id);
+    expect(invoke).toHaveBeenLastCalledWith('first', 'local-db:sessions:get', [row.id]);
+  });
   it('accepts deferred switch outcomes only from the owning remote device and session', async () => {
     stubElectron();
     let listener: ((push: { deviceId: string; channel: string; payload: unknown }, stamp?: unknown) => void) | undefined;

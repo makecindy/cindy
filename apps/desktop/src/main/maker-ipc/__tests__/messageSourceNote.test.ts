@@ -38,6 +38,7 @@ describe('buildWireMessageSourceNote', () => {
       .toContain('主人对本任务的请求');
     expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'delegated-continuation', request: { ...request, ownerVerified: true } } }))
       .toContain('主人对本任务的请求');
+    expect(verified).not.toContain('不是用户本人输入');
     const unverified = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request } });
     expect(unverified).toContain('未核实为主人本人');
     expect(unverified).not.toContain('主人对本任务的请求');
@@ -54,6 +55,17 @@ describe('buildWireMessageSourceNote', () => {
       request: { ...request, delegatedText: 'Fix #12 and merge it.' } } });
     expect(checked).toContain('代表用户对本任务的请求');
     expect(checked).not.toContain('用户原话');
+    // 2026-11-21: a verified hand-off must not open with "not the user's input" before the host's check.
+    expect(checked).toBe('[消息来源] 本条由伙伴 (bot_id: filo) 通过任务 (session_id: s-1) 发送。'
+      + '宿主已核实这条消息代表用户对本任务的请求，按用户的请求处理，范围以这条消息为限。');
+    // The owner's words in a task-card thread carry the same checked receipt.
+    const thread = { kind: 'session', senderSessionId: '', displayText: 'Ship it',
+      groupThread: { groupId: 'g-1', groupName: 'Launch', speakerId: 'm-1', speakerName: 'Chris' } };
+    expect(buildWireMessageSourceNote({ origin: thread, autoReviewUserText: { kind: 'agent-request',
+      request: { ...request, delegatedText: 'Ship it' } } }))
+      .toBe('[消息来源] 本条由「Chris」(member_id: m-1)在群聊「Launch」(group_id: g-1)的话题里发送。'
+        + '宿主已核实这条消息代表用户对本任务的请求，按用户的请求处理，范围以这条消息为限。');
+    expect(buildWireMessageSourceNote({ origin: thread })).toContain('不是用户本人输入');
     expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request } }))
       .toBe(buildWireMessageSourceNote({ origin }));
     // The older owner mark alone does not make a plain relay speak for the owner.
