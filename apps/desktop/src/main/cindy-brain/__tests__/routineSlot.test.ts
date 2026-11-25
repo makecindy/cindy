@@ -10,6 +10,7 @@ import type { InstalledGhost } from '../../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { handleRoutineRequest } from '../routineSlot.js';
 import {
+  onPluginEventSubscriptionsChanged,
   pluginEventSourceStatus,
   resetPluginEventsForTest,
   setPluginEventSink,
@@ -63,6 +64,18 @@ it('tells a plugin only its own subscriptions, so it can watch just the chosen o
     subscriptions: [{ events: ['new'], filters: [{ field: 'label', operator: 'equals', value: 'inbox' }] }],
   });
   expect(await handleRoutineRequest(ghost, subscriptions, () => false)).toEqual({ ok: false, message: 'Plugin owner or installation changed' });
+});
+
+it('announces a plugin\'s new subscriptions only when they actually change', () => {
+  const seen: Array<[string, unknown]> = [];
+  onPluginEventSubscriptionsChanged((plugin, subscriptions) => seen.push([plugin, subscriptions]));
+  const gitlab = [{ events: ['merge_request.merged'] }];
+  const both = new Map<string, Array<{ events?: string[] }>>([['gitlab', gitlab], ['chat', [{}]]]);
+  setPluginEventSubscriptions(both);
+  setPluginEventSubscriptions(new Map(both));
+  // The last automation for chat was removed: chat hears about it, gitlab does not.
+  setPluginEventSubscriptions(new Map([['gitlab', gitlab]]));
+  expect(seen).toEqual([['gitlab', gitlab], ['chat', [{}]], ['chat', []]]);
 });
 
 it('rate-limits publishing per plugin before events reach the queue', async () => {

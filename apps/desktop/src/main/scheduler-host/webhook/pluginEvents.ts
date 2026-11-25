@@ -29,6 +29,7 @@ const reports = new Map<string, { state: PluginEventListenState; reportedAt: num
 const lastEvents = new Map<string, number>();
 let subscribed = new Set<string>();
 let subscriptionDetails = new Map<string, PluginEventSubscription[]>();
+const detailListeners = new Set<(plugin: string, subscriptions: PluginEventSubscription[]) => void>();
 const subscriptionListeners = new Set<(plugins: ReadonlySet<string>) => void>();
 const statusListeners = new Set<() => void>();
 let sink: Sink | null = null;
@@ -75,8 +76,23 @@ export function pluginEventSourceStatus(plugin: string): PluginEventSourceStatus
  * 读取，用来决定盯哪些对象；被订阅的插件集合变化时通知插件运行时启动监听。
  */
 export function setPluginEventSubscriptions(next: ReadonlyMap<string, PluginEventSubscription[]>): void {
+  const previous = subscriptionDetails;
   subscriptionDetails = new Map(next);
   setSubscribedEventPlugins(new Set(next.keys()));
+  // Only plugins whose own subscriptions changed (including losing all of them) are told.
+  for (const plugin of new Set([...previous.keys(), ...next.keys()])) {
+    if (JSON.stringify(previous.get(plugin) ?? []) === JSON.stringify(next.get(plugin) ?? [])) continue;
+    const copy = pluginEventSubscriptionsFor(plugin);
+    for (const listener of detailListeners) listener(plugin, copy);
+  }
+}
+
+/** 某插件的订阅变了：插件运行时据此把新订阅推给正在运行的插件，插件不必反复询问。 */
+export function onPluginEventSubscriptionsChanged(
+  listener: (plugin: string, subscriptions: PluginEventSubscription[]) => void,
+): () => void {
+  detailListeners.add(listener);
+  return () => detailListeners.delete(listener);
 }
 
 /** 某插件当前的订阅副本；没有自动化选择它时为空列表。 */
@@ -129,6 +145,7 @@ export function resetPluginEventsForTest(): void {
   lastEvents.clear();
   subscribed = new Set();
   subscriptionDetails = new Map();
+  detailListeners.clear();
   subscriptionListeners.clear();
   statusListeners.clear();
   sink = null;

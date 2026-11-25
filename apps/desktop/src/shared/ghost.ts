@@ -9479,6 +9479,15 @@ export type GhostRuntimeControlPointResult = GhostControlPointResult
 export interface GhostPipeCompanionsChanged { type: 'companions-changed'; subscriptionId: string; seq: number }
 
 /**
+ * 下行:声明了 routineEvents 的插件,其自动化订阅变了(新建、修改、暂停、删除)。带完整的新订阅
+ * (只有事件类型与「只看」条件);启动时插件经 routine-request subscriptions 取一次,之后只靠这条更新。
+ */
+export interface GhostPipeRoutineSubscriptions {
+  type: 'routine-subscriptions';
+  subscriptions: import('@cindy/maker-scheduler').PluginEventSubscription[];
+}
+
+/**
  * 下行:主机 → 意识的事件推送(经管子 onHostMessage 到达)。
  * did- 分支带 topic/seq(每意识单调递增,可自查漏收;dropped = 上一段
  * 熄灯期溢出丢弃数);will- 分支带 hookId,意识须在超时窗内回

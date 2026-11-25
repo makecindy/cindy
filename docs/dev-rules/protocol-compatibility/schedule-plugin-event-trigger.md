@@ -18,7 +18,9 @@
 `apps/desktop/src/shared/ghostPageBridge.ts`），请求与回执形状不变：`publish` 的 `accepted` 从固定 0 变为实际入队的自动化数，
 新增可公开的拒绝文案 `Routine request rate limit reached; retry after 60 seconds`。2026-11-24 纯增 `action:"subscriptions"`
 （回执纯增 `subscriptions:[{events?, filters?}]`）：旧宿主对它返回 `Unknown routine operation`，插件需按「没有订阅信息」
-降级（例如 GitLab 插件不轮询，用户改用宿主定时检查）；旧插件不调用它，不受影响。manifest 与安装批准不变，已装插件无需重装或重新确认。
+降级（例如 GitLab 插件不轮询，用户改用宿主定时检查）；旧插件不调用它，不受影响。同时纯增下行消息
+`{type:"routine-subscriptions", subscriptions}`（`GhostPipeRoutineSubscriptions`）：订阅变化时推给正在运行的声明插件，
+旧插件忽略未知 type。manifest 与安装批准不变，已装插件无需重装或重新确认。
 
 本机 Renderer 新增 `ghosts:event-sources`（只读，只信任本机应用窗口，不进 Device Link 白名单），Agent 工具新增
 `schedule_list_event_sources`（只在本机）。服务端、官方与自建中转、手机原生层均无变化；插件事件不经过 webhook-server。

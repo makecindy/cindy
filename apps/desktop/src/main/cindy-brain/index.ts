@@ -134,6 +134,7 @@ import { handleRoutineRequest } from './routineSlot.js';
 import {
   forgetPluginEventStatus,
   onSubscribedEventPluginsChanged,
+  onPluginEventSubscriptionsChanged,
   pluginEventSourceStatus,
   setPluginRuntimeProbe,
   subscribedEventPluginIds,
@@ -508,6 +509,7 @@ import {
   isGhostControlPointId,
   type GhostControlPointCandidate,
   type GhostEventSourceCandidate,
+  type GhostPipeRoutineSubscriptions,
   type GhostControlPointId,
   type GhostModelRoute,
   type GhostPickerModel,
@@ -9060,6 +9062,14 @@ function activatePluginEventListeners(): void {
     }
   };
   onSubscribedEventPluginsChanged(spawnSubscribed);
+  // Running plugins learn about subscription changes right away (routine-subscriptions); they read them
+  // once at start (routine-request subscriptions) and never need to keep asking.
+  onPluginEventSubscriptionsChanged((plugin, subscriptions) => {
+    const ghost = findGhostForPhysicalStoragePart(plugin);
+    if (!ghost?.enabled || !ghost.manifest.routineEvents) return;
+    const message: GhostPipeRoutineSubscriptions = { type: 'routine-subscriptions', subscriptions };
+    sendToGhostLogic(plugin, message);
+  });
   spawnSubscribed(subscribedEventPluginIds());
 }
 
