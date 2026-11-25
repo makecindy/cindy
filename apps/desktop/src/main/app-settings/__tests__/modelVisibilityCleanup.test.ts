@@ -130,16 +130,16 @@ describe('model visibility override cleanup', () => {
     expect(manageAppPreferences).not.toHaveBeenCalled();
   });
 
-  it('still clears an orphan key no live entry or provider spells', async () => {
+  it('still clears an orphan key whose parts contain no colon', async () => {
     configureModelSettingsActions({
       owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
       list: async () => ({ providers: [{ id: 'relay', agents: ['pi'], models: { pi: [] },
         imageModels: [{ id: 'bar', name: 'Bar Image', defaultEnabled: true, sourceAgent: 'pi' }] }],
-        modelVisibilityOverrides: { 'pi:custom:xai:foo': false } }),
+        modelVisibilityOverrides: { 'pi:magpie-bac7deb4:old-image': false } }),
     } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
     manageAppPreferences.mockResolvedValue({ modelVisibility: { visible: true, customized: false } });
 
-    const target = { providerId: 'custom', agent: 'pi' as const, modelId: 'xai:foo' };
+    const target = { providerId: 'magpie-bac7deb4', agent: 'pi' as const, modelId: 'old-image' };
     await expect(manageAppModels({ operation: 'set', target,
       change: { setting: 'visible', value: null } }, async () => {})).resolves.toMatchObject({ setting: 'visible' });
     expect(manageAppPreferences).toHaveBeenCalledWith('model-visibility', undefined,

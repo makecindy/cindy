@@ -18,56 +18,15 @@ function visibilityKey(target: { agent: string; providerId: string; modelId: str
 }
 
 /**
- * Agents whose visibility override a media entry can be stored under. `isCatalogMediaModelVisible`
- * (cindy-brain/mediaDisplayVisibility.ts) reads the explicit source when there is one, while the
- * mirror's legacy projection writes every media entry under the provider's first agent
- * (maker-host/model-visibility-mirror.ts). Media entries are not in the chat selector, but both
- * spellings use the same flat key, so either can collide with a chat target.
+ * Whether this target's flat key can only belong to this target.
+ * The key joins its parts with `:`, so an id that contains `:` gives the same string more than
+ * one split (`pi:custom:xai:foo` is both `(pi, custom:xai, foo)` and `(pi, custom, xai:foo)`,
+ * and a media route can spell it too). Once the provider is gone from the catalog nothing
+ * settles that, so a key with a `:` in its parts is never cleared: refusing beats deleting a
+ * preference the user may still be reading through another route.
  */
-function mediaEntryAgents(
-  provider: CatalogProviders[number],
-  entry: { sourceAgent?: string; sourceAgents?: readonly string[] },
-): string[] {
-  const agents = new Set<string>([provider.agents[0] ?? 'claude-code']);
-  if (entry.sourceAgents?.length) for (const agent of entry.sourceAgents) agents.add(agent);
-  else if (entry.sourceAgent) agents.add(entry.sourceAgent);
-  return [...agents];
-}
-
-/**
- * Whether this target is the only catalog entry whose parts spell `visibilityKey(target)`.
- * The flat key is ambiguous when an id contains `:`, so a typo could otherwise clear
- * another model's stored preference.
- */
-function visibilityKeyIsUnambiguous(
-  providers: CatalogProviders,
-  target: { agent: string; providerId: string; modelId: string },
-): boolean {
-  const wanted = visibilityKey(target);
-  const prefix = `${target.agent}:`;
-  for (const provider of providers) {
-    // Entry scans miss retired models: `pi:custom:xai:foo` is spelled both by the live
-    // provider `custom:xai` (model `foo`) and by `(pi, custom, xai:foo)`. Any live provider
-    // id that fits the rest of the key makes the split ambiguous on its own.
-    if (provider.id !== target.providerId && wanted.startsWith(`${prefix}${provider.id}:`)) return false;
-    for (const [agent, list] of Object.entries(provider.models)) {
-      for (const entry of list ?? []) {
-        if (`${agent}:${provider.id}:${entry.id}` !== wanted) continue;
-        if (agent === target.agent && provider.id === target.providerId && entry.id === target.modelId) continue;
-        return false;
-      }
-    }
-    // A media entry that spells this key always owns it: this switch refuses media entries of
-    // the requested provider above, so the target can never be the entry being matched.
-    for (const list of [provider.imageModels, provider.videoModels, provider.audioModels,
-      provider.evaluationModels, provider.embeddingModels]) {
-      for (const entry of list ?? []) {
-        if (!mediaEntryAgents(provider, entry).some(agent => `${agent}:${provider.id}:${entry.id}` === wanted)) continue;
-        return false;
-      }
-    }
-  }
-  return true;
+function visibilityKeyIsUnambiguous(target: { providerId: string; modelId: string }): boolean {
+  return !target.providerId.includes(':') && !target.modelId.includes(':');
 }
 
 export function configureModelSettingsActions(value: Actions): void { actions = value; }
@@ -193,9 +152,8 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
         // The override map is flat and joins its parts with `:`, while provider and model
         // ids may contain `:` themselves (`custom:xai`, `xai:foo`). A stored `pi:custom:xai:foo`
         // is also produced by the different target `(pi, custom, xai:foo)`, so "the key
-        // exists" cannot prove this target owns it: refuse keys any other catalog entry
-        // would spell the same way.
-        if (!model && !visibilityKeyIsUnambiguous(catalog.providers, target)) {
+        // exists" cannot prove this target owns it.
+        if (!model && !visibilityKeyIsUnambiguous(target)) {
           throw new Error('MODEL_NOT_IN_CATALOG');
         }
         await guard();
