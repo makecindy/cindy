@@ -1381,6 +1381,7 @@
     "openPermissionInNewWindow": "Ouvrir dans une autre fenêtre"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Une autre instance de Cindy sur cet ordinateur utilise la connexion à distance. Fermez-la et cette instance prendra automatiquement le relais.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Cette tâche SSH ne peut pas changer de Harness. Choisissez un modèle dans son Harness actuel, ou créez une nouvelle tâche SSH avec le Harness souhaité.",
@@ -12421,8 +12422,8 @@
       "footnote": "Ce texte est intégré au contexte d'identité de l’ami. Les réglages rapides de personnalité sont stockés séparément et sont conservés lorsque ce texte change."
     },
     "welcome": {
-      "generic": "Bonjour, je suis {{name}}. Dites-moi désormais tout ce dont vous avez besoin ; je prends mes repères en attendant.",
-      "withRole": "Bonjour, je suis {{name}} : {{description}}. Dites-moi simplement ce dont vous avez besoin."
+      "generic": "Bonjour, je suis {{name}}. Dites-moi ce dont vous avez besoin.",
+      "withUser": "Bonjour {{userName}}, je suis {{name}}. Dites-moi ce dont vous avez besoin."
     },
     "invitation": {
       "title": "Préparation de la rencontre",
@@ -15468,6 +15469,7 @@
       "label_many": "{{count}} nouveaux messages"
     },
     "messageNavRail": {
+      "you": "Vous",
       "aria": "Navigation entre les prompts",
       "jumpAria": "Aller au prompt {{index}} : {{preview}}",
       "attachmentOnly_one": "{{count}} pièce jointe",
@@ -15625,6 +15627,7 @@
       "gatewayProxyTokenInvalid": "Les identifiants Cindy AI ne sont plus valides. Cliquez sur Réessayer. Si le problème se reproduit, déconnectez-vous puis reconnectez-vous",
       "gatewayProxyTokenInvalidNoRetry": "Les identifiants Cindy AI ne sont plus valides. Si le problème se reproduit, déconnectez-vous puis reconnectez-vous",
       "modelAccessDenied": "Le compte en amont ne peut pas accéder à ce modèle. Sélectionnez un autre modèle ou vérifiez l'accès auprès du fournisseur",
+      "providerSafetyRefusal": "La politique de sécurité du fournisseur du modèle a bloqué cette réponse. Modifiez votre demande avant de la renvoyer",
       "silentStopContinue": "Continuer",
       "silentStopContinueTitle": "Continuer la tâche en cours",
       "piTransportClosed": "Connexion Pi distante interrompue (canal SSH fermé). La tâche distante est toujours en cours d'exécution : reconnectez-vous pour continuer.",

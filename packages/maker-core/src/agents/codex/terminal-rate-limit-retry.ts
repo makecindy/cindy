@@ -68,7 +68,10 @@ export function isTerminalRateLimitRetryExhaustion(
   if (matchesDeterministicUsageExhaustionText(message)) {
     return false;
   }
-  const status = responseTooManyFailedAttemptsStatus(info) ?? errorStatus;
+  const status =
+    responseTooManyFailedAttemptsStatus(info) ??
+    errorStatus ??
+    (tag === 'rateLimitExceeded' ? 429 : undefined);
   if (status !== 429) return false;
   return (
     tag === 'responseTooManyFailedAttempts' ||
