@@ -322,12 +322,14 @@ describe('ghostPluginViewModel', () => {
     expect(toGhostPluginDetail(ghost, presentation)).not.toHaveProperty('iconDataUrl');
   });
 
-  it('uses the installed package icon for an exact Git market mapping', () => {
+  // #12824: the shared card/detail projection previously covered only Git.
+  // An installed local-market row with the same version and a null icon must use the package PNG. Tier: unit.
+  it.each(['git-market', 'local-market'] as const)('uses the installed package icon for an exact %s mapping', (sourceType) => {
     const ghost = installed({ iconDataUrl: 'data:image/png;base64,LOCAL' });
     const presentation = marketPresentationForInstalledGhost(
       ghost,
       marketItem({
-        sourceType: 'git-market',
+        sourceType,
         sourceMarketName: 'community-plugins',
         icon: null,
       }),
