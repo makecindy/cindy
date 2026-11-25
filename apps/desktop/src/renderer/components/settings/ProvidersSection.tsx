@@ -13,7 +13,6 @@ import {
   ProviderRunLocationSubtitle,
 } from './ProviderRunLocationRow';
 import { useProviderBorrow } from '@/hooks/useProviderBorrow';
-import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
 import { providerSpeechSetup, providerRealtimeSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { SubscriptionFastSetting } from '@/features/provider-share/SubscriptionFastSetting';
@@ -123,8 +122,7 @@ import { isSubscriptionProvider, type SubscriptionPoolView } from '../../../shar
 import type { SubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import { ProviderAccountUsageModule } from './ProviderAccountUsageModule';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
-import { ProviderConnectionDialog } from './ProviderConnectionDialog';
-import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
+import type { WizardEntry } from './AddProviderWizard';
 import type { DetectedProviderDraft } from '../../../shared/providerDetection';
 import { OllamaProviderDetail } from './OllamaProviderDetail';
 import {
@@ -167,7 +165,6 @@ import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../../s
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
-import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
 import {
   ProviderShareReceivedCatalogRetry,
@@ -200,6 +197,24 @@ import { isCustomRoutedProvider, isOrganizationManagedProvider, storedCustomProv
 // 「智能路由」那一页点开才加载(与它还是单独一个设置页时一样)：它带着关系图、路由编辑和选模型面板一大串代码，
 // 跟着模型供应商页一起加载的话，打开模型供应商页要先等这些代码，「加载中」会多停一两秒。
 const ModelGroupsSection = lazy(() => import('./ModelGroupsSection').then(module => ({ default: module.ModelGroupsSection })));
+
+// 点了按钮才出现的几块(添加供应商向导、连接弹窗、语音模型弹窗、分享管理页)用到时再加载：它们和各自依赖的代码加起来
+// 比页面本身还大，跟着页面一起加载时，第一次打开要先等它们(2026-11-25 实测占第一次打开耗时的大头)。
+// 页面画出来之后趁空闲把它们预先取回(preloadProviderDialogs)，所以点按钮时通常已经在了。
+const loadAddProviderWizard = () => import('./AddProviderWizard');
+const loadProviderConnectionDialog = () => import('./ProviderConnectionDialog');
+const loadAddSpeechModelsDialog = () => import('./AddSpeechModelsDialog');
+const loadProviderShareManagePage = () => import('@/features/provider-share/ProviderShareManagePage');
+const AddProviderWizard = lazy(() => loadAddProviderWizard().then(module => ({ default: module.AddProviderWizard })));
+const ProviderConnectionDialog = lazy(() => loadProviderConnectionDialog().then(module => ({ default: module.ProviderConnectionDialog })));
+const AddSpeechModelsDialog = lazy(() => loadAddSpeechModelsDialog().then(module => ({ default: module.AddSpeechModelsDialog })));
+const ProviderShareManagePage = lazy(() => loadProviderShareManagePage().then(module => ({ default: module.ProviderShareManagePage })));
+function preloadProviderDialogs(): void {
+  for (const load of [loadAddProviderWizard, loadProviderConnectionDialog, loadAddSpeechModelsDialog, loadProviderShareManagePage]) {
+    // 取不回来不要紧：真要用时 lazy 会再取一次并走它自己的错误处理。
+    void load().catch(() => undefined);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -2626,6 +2641,14 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
   const { t } = useTranslation();
   const openSmartRouting = useCallback(() => onRoutingChange?.(true), [onRoutingChange]);
   const routingPaneRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (typeof requestIdleCallback === 'function') {
+      const id = requestIdleCallback(preloadProviderDialogs, { timeout: 4_000 });
+      return () => cancelIdleCallback(id);
+    }
+    const timer = setTimeout(preloadProviderDialogs, 1_500);
+    return () => clearTimeout(timer);
+  }, []);
   const reducedMotion = useReducedMotion();
   const signInToCindy = useSignInToCindy();
   const { dataOwnerId } = useAuth();
@@ -3566,6 +3589,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
   };
   useSettingsSubpageBack(shareManageProviderId ? backFromSharing : null);
   const shareManagePage = shareManageProviderId ? (
+    <Suspense fallback={<div role="status" className="px-4 py-6 text-13 leading-[1.5] text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
     <ProviderShareManagePage
       key={`${shareManageRemote?.deviceId ?? 'local'}:${shareManageProviderId}`}
       providerId={shareManageProviderId}
@@ -3592,6 +3616,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
       })}
       onBack={backFromSharing}
     />
+    </Suspense>
   ) : null;
 
   // ── 左栏分组:已隐藏 / 已停用各自收进一个默认折叠的分组 ─────────────────────
@@ -4301,12 +4326,15 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
         onRemove={(modelIds) => void removeWithdrawnModels(modelIds)}
       />
       {speechProvider && speechProvider.owner === dataOwnerId && speechProvider.generation === ownerGeneration && (
+        <Suspense fallback={null}>
         <AddSpeechModelsDialog key={`${dataOwnerId}:${ownerGeneration}:${speechProvider.provider.id}`}
           mode={speechProvider.mode}
           provider={speechProvider.provider} onClose={() => setSpeechProvider(null)}
           onSaved={() => { setSpeechProvider(null); void refetch(); }} />
+        </Suspense>
       )}
       {wizard && (
+        <Suspense fallback={null}>
         <AddProviderWizard
           providers={providers}
           entry={wizard.entry}
@@ -4331,9 +4359,11 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
             await refetch();
           }}
         />
+        </Suspense>
       )}
 
       {dialog && (
+        <Suspense fallback={null}>
         <ProviderConnectionDialog
           draft={dialog.mode === 'create' ? dialog.draft : undefined}
           onDetected={(detected) => { setDialog(null); setWizard({ detected }); }}
@@ -4352,6 +4382,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
             refetch();
           }}
         />
+        </Suspense>
       )}
 
       {Array.isArray(providerImportId) ? (
