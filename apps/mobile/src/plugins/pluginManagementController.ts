@@ -94,7 +94,18 @@ export function createPluginManagementController(client: PluginManagementClient,
    * the operation is over (a final result, or stopped before begin), or when the controller goes.
    */
   let opHold: PluginOperationHold | null = null;
+  /**
+   * One operation's life on this phone (maintainer review 17:43): a cancel is one of its states, never a side effect of
+   * going away. At most one management:cancel per operation, and only while its consent is shown and this phone has
+   * never written an answer to it (Allow or Reject, reply received or not). Disposing never writes anything.
+   */
+  let answerWrittenEver = false, cancelAttempted = false;
   const opGuard = () => opHold?.guard() ?? true;
+  /** The held slot goes once the operation is over: no write on its way, and a final result or no operation at all. */
+  function settleHoldIfOver() {
+    if (opHold && !state.busy && writesInFlight === 0 && (state.operationId
+      ? ['succeeded', 'cancelled', 'failed'].includes(state.outcome) : state.outcome !== 'running')) settleHold();
+  }
   const settleHold = () => { const hold = opHold; opHold = null; hold?.onSettled(); };
   let installDetail: ManagedMarketDetail | undefined;
   const listeners = new Set<() => void>();
@@ -157,10 +168,23 @@ export function createPluginManagementController(client: PluginManagementClient,
   }
   /** Requests to the Host for this operation still waiting for their result (see `ensureProgress`). */
   let requestsInFlight = 0;
-  async function tracked<T>(request: () => Promise<T>): Promise<T> {
+  /**
+   * Writes of this operation (begin, Allow / Reject, cancel) not settled yet, whatever `busy` says (going offline clears
+   * `busy`, but a write already on the link may still reach the computer). The page slot never goes while one is out.
+   */
+  let writesInFlight = 0;
+  async function tracked<T>(request: () => Promise<T>, write = false): Promise<T> {
     requestsInFlight += 1;
+    if (write) writesInFlight += 1;
     // Settled before the caller handles the result; the caller's next state change (or release) checks progress.
-    try { return await request(); } finally { requestsInFlight -= 1; }
+    try { return await request(); } finally {
+      requestsInFlight -= 1;
+      if (write) {
+        writesInFlight -= 1;
+        // The last write settled: the slot may go now, and whoever waits for it (a view that went away) looks again.
+        if (writesInFlight === 0) { settleHoldIfOver(); listeners.forEach((listener) => listener()); }
+      }
+    }
   }
   /** One lookup in flight at a time; a lookup asked for meanwhile runs once it settles. */
   let lookupInFlight = false, lookupWanted = false;
@@ -182,9 +206,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       state.missingReceiptFacts = null;
       missingReceipt = null;
     }
-    // The held slot goes once the operation is over: nothing in flight, and a final result or no operation at all.
-    if (opHold && !state.busy && (state.operationId ? ['succeeded', 'cancelled', 'failed'].includes(state.outcome)
-      : state.outcome !== 'running')) settleHold();
+    settleHoldIfOver();
     options.onChange?.(state);
     listeners.forEach((listener) => listener());
     ensureProgress();
@@ -362,7 +384,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     let began = false, operationId: string | null = null;
     const holder = hold();
     answers.clear(); cancelling = null; consentOrder.length = 0; answerSentAt.clear(); shownRank = -1;
-    lookupFailures = 0; autoLookupStopped = false; resetPace();
+    lookupFailures = 0; autoLookupStopped = false; resetPace(); answerWrittenEver = false; cancelAttempted = false;
     publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle',
       expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null });
     const installed = intent.installed;
@@ -404,7 +426,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       const issuedAt = ++receiptClock;
       const reply = await tracked(() => client.begin({ ...request, operationId: operationId!,
         ...(snapshot.uiCapabilityApproval ? { uiConsentVersion: 1 } : {}) }, () => current(token)
-        && state.online && opGuard() && !!facts && receiverCurrent(facts)));
+        && state.online && opGuard() && !!facts && receiverCurrent(facts)), true);
       await acceptReceipt(reply, token, holder, issuedAt);
     } catch (error) {
       // Maintainer review 10:36 #1: a begin stopped before it was written (for example by the last check after the
@@ -519,8 +541,8 @@ export function createPluginManagementController(client: PluginManagementClient,
       sentAt = ++receiptClock;
       answerSentAt.set(requestId, sentAt);
       const reply = await tracked(() => client.answer(receipt.operationId, requestId, confirmed,
-        () => current(token) && state.online && opGuard() && (!confirmed || (!!facts && receiverCurrent(facts)))));
-      answers.set(requestId, 'written');
+        () => current(token) && state.online && opGuard() && (!confirmed || (!!facts && receiverCurrent(facts)))), true);
+      answers.set(requestId, 'written'); answerWrittenEver = true;
       // The answer's own reply describes the Host after it took this answer.
       await acceptReceipt(reply, token, holder, ++receiptClock);
     } catch (error) {
@@ -532,7 +554,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       }
       // Written, reply lost: this consent request is answered as far as the phone knows; it is never offered again, and
       // the operation's result is unknown whatever the connection epoch is now.
-      answers.set(requestId, 'written');
+      answers.set(requestId, 'written'); answerWrittenEver = true;
       // Unknown unless a receipt applied after this answer was sent already tells the Host took it (running, or the
       // next consent). A later lookup that still found this very consent does not: the answer may arrive yet, so the
       // consent is not offered again and the result is looked up (maintainer review 13:02 #2).
@@ -541,9 +563,15 @@ export function createPluginManagementController(client: PluginManagementClient,
       else conclude(holder, {});
     }
   }
+  /** A cancel is still allowed: a consent shown, no answer ever written or in flight, no cancel tried before. */
+  function mayCancel() {
+    return !!state.operationId && state.outcome === 'confirmation' && !cancelAttempted && !answerWrittenEver
+      && ![...answers.values()].includes('pending') && !state.busy;
+  }
   async function cancel() {
     const id = state.operationId;
-    if (!id || !state.online || disposed || !client.isCurrent() || !opGuard() || ['succeeded', 'cancelled', 'failed'].includes(state.outcome)) return;
+    if (!id || !state.online || disposed || !client.isCurrent() || !opGuard() || !mayCancel()) return;
+    cancelAttempted = true;
     // Cancellation may race a queued/read request. Its newer result invalidates that request's late response.
     const token = ++epoch, holder = hold();
     stopPolling();
@@ -551,7 +579,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     publish({ busy: true, errorCode: null });
     const sentAt = ++receiptClock;
     try {
-      const reply = await tracked(() => client.cancel(id, () => current(token) && state.online && opGuard()));
+      const reply = await tracked(() => client.cancel(id, () => current(token) && state.online && opGuard()), true);
       cancelling = 'written';
       await acceptReceipt(reply, token, holder, sentAt);
     } catch (error) {
@@ -586,7 +614,14 @@ export function createPluginManagementController(client: PluginManagementClient,
     deferUi: (installed: ManagedPlugin) => start({ kind: 'defer-ui', installed }),
     approveUiFromConsent: (installed: PluginUiConsentItem) => start({ kind: 'approve-ui', installed }),
     deferUiFromConsent: (installed: PluginUiConsentItem) => start({ kind: 'defer-ui', installed }),
-    answer, cancel, reconcile,
+    answer, cancel, reconcile, mayCancel,
+    /** The one cancel of this operation: not tried, in flight, or over (written or not). */
+    cancelPhase: (): 'none' | 'inflight' | 'over' => !cancelAttempted ? 'none' : cancelling === 'pending' ? 'inflight' : 'over',
+    /**
+     * No write of this operation is on its way (begin, Allow / Reject and cancel each hold `busy` until they settle). A
+     * lookup still out is a read: letting go drops its reply.
+     */
+    idle: () => !state.busy && writesInFlight === 0,
     /** An operation is under way: neither final nor stopped before begin (see usePluginManagement's retention). */
     hasOpenOperation: () => !disposed && (state.busy || (!!state.operationId && !['succeeded', 'cancelled', 'failed'].includes(state.outcome))),
     /**
@@ -605,12 +640,27 @@ export function createPluginManagementController(client: PluginManagementClient,
     },
     dispose() {
       if (disposed) return;
-      const id = state.operationId;
-      const active = id && !['succeeded', 'cancelled', 'failed'].includes(state.outcome);
+      // Only this phone's tracking ends: nothing is written to the Host (an answered operation must go on; an unanswered
+      // consent left behind was cancelled, once, before getting here, or expires on the computer).
       disposed = true; ++epoch; stopPolling(); unsubscribeOwner(); listeners.clear();
-      if (active && state.online) void client.cancelForCleanup(id).catch(() => {});
       settleHold();
     },
   };
 }
 export type PluginManagementController = ReturnType<typeof createPluginManagementController>;
+
+/**
+ * What a controller whose view went away does next (maintainer review 17:43), decided from its state alone each time it
+ * changes, so it cannot re-enter: wait while anything is in flight; cancel an unanswered consent once (the slot stays
+ * held until that cancel is over); after that, or when an unknown result can no longer move on by itself, let go:
+ * only this phone's tracking ends, nothing is written. An operation whose answer was written is never cancelled.
+ */
+export type DetachedStep = "wait" | "cancel" | "letGo" | "keep";
+export function nextDetachedStep(controller: PluginManagementController): DetachedStep {
+  const state = controller.getState();
+  if (!controller.hasOpenOperation()) return "letGo";
+  if (!controller.idle()) return "wait";
+  if (state.outcome === "confirmation" && !state.answerHeld) return state.online && controller.mayCancel() ? "cancel" : "letGo";
+  if (state.outcome === "unknown" && (controller.lookupsStopped() || !state.online)) return "letGo";
+  return "keep";
+}

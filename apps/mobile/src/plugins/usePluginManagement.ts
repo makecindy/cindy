@@ -8,6 +8,7 @@ import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import { createPluginManagementClient } from "./pluginManagementClient";
 import {
   createPluginManagementController,
+  nextDetachedStep,
   type PluginManagementController,
   type PluginManagementState,
 } from "./pluginManagementController";
@@ -44,19 +45,10 @@ function retain(scope: string, entry: ManagementEntry) {
   retained.set(scope, entry);
   const review = () => {
     if (entry.listener || entry.dead) return;
-    const controller = entry.controller, state = controller.getState();
-    if (!isMobileAuthOwnerCurrent(entry.owner) || !controller.hasOpenOperation()) { letGo(scope, entry); return; }
-    if (state.busy) return;
-    if (state.outcome === "confirmation" && !state.answerHeld) {
-      // Nobody can answer it here: cancel, as leaving always did. A cancel that cannot be sent lets it go.
-      if (!state.online) { letGo(scope, entry); return; }
-      void controller.cancel().then(() => {
-        const after = controller.getState();
-        if (!entry.listener && after.outcome === "confirmation" && !after.busy) letGo(scope, entry);
-      });
-      return;
-    }
-    if (state.outcome === "unknown" && (controller.lookupsStopped() || !state.online)) letGo(scope, entry);
+    if (!isMobileAuthOwnerCurrent(entry.owner)) { letGo(scope, entry); return; }
+    const step = nextDetachedStep(entry.controller);
+    if (step === "letGo") letGo(scope, entry);
+    else if (step === "cancel") void entry.controller.cancel();
   };
   entry.stopWatching = entry.controller.subscribe(review);
   review();

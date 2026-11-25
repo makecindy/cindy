@@ -474,5 +474,9 @@
     "publicInstall": "公開市集",
     "communityDisclaimer": "此法器由社群作者開發與維護，Cindy 已審核此版本，但無法保證其在所有使用情境下皆安全。"
   },
-  "gotIt": "知矣"
+  "gotIt": "知矣",
+  "slot": {
+    "holder": "「{{name}}」於「{{device}}」之事未竟",
+    "show": "觀之"
+  }
 }

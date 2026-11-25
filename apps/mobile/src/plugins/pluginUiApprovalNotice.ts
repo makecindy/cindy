@@ -1,7 +1,7 @@
 import type { PluginNoticeProps } from './PluginNotice';
 import type { PluginManagementController, PluginManagementState } from './pluginManagementController';
 import { pluginNeedsUiApproval, type ManagedPlugin, type PluginUiConsentItem } from './pluginManagementTypes';
-import { pluginOperationHold, type PluginManagementSlot } from './pluginManagementSlot';
+import { pluginOperationHold, type PluginManagementSlot, type PluginSlotHolder } from './pluginManagementSlot';
 
 /** The Host snapshot is the authority for approval and cross-controller deferral. */
 export function pluginUiApprovalNotice(
@@ -14,8 +14,9 @@ export function pluginUiApprovalNotice(
    * The plugins page's management slot: Enable takes it when pressed (and does nothing if it cannot), and the
    * operation holds it until it is over. Its holder is only shown here (an unavailable button).
    */
-  slot?: PluginManagementSlot,
+  page?: { slot: PluginManagementSlot; who: PluginSlotHolder },
 ): PluginNoticeProps | undefined {
+  const slot = page?.slot;
   if (!plugin || !state || !controller || ('manifest' in plugin && !pluginNeedsUiApproval(plugin))) return;
   const supported = state.snapshot?.uiCapabilityApproval === true || state.uiConsent?.uiCapabilityApproval === true;
   if (proactive && (!supported || ('manifest' in plugin && plugin.uiPromptSuppressed))) return;
@@ -34,7 +35,7 @@ export function pluginUiApprovalNotice(
       onPress: () => {
         if (!slot) { if (!pending && state.online) void ('manifest' in plugin ? controller.approveUi(plugin) : controller.approveUiFromConsent(plugin)); return; }
         if (!('manifest' in plugin)) return;
-        const token = slot.tryAcquire('page-approval', plugin.manifest.name);
+        const token = slot.tryAcquire('page-approval', page!.who);
         if (!token) return;
         void controller.approveUi(plugin, pluginOperationHold(slot, token));
       },

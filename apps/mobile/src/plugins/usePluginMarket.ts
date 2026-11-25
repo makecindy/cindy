@@ -14,7 +14,7 @@ import {
   pluginMarketRequest, pluginMarketSourceUnverified, type PluginMarketCounts, type PluginMarketFilter, type PluginMarketPage,
 } from "./pluginMarketCatalog";
 import { usePluginManagement } from "./usePluginManagement";
-import { pluginOperationHold, usePluginManagementSlot, type PluginSlotToken } from "./pluginManagementSlot";
+import { pluginManagementSlotFor, pluginOperationHold, usePluginManagementSlot, type PluginSlotToken } from "./pluginManagementSlot";
 import type { PluginManagementState } from "./pluginManagementController";
 
 /** Same freshness window as the computer's market browser; pull-to-refresh always re-reads. */
@@ -23,6 +23,10 @@ const CACHED_LISTS = 6;
 const SEARCH_DEBOUNCE_MS = 300;
 /** Plugin change notifications from one computer often come in a burst (install, enable, readback): read once after. */
 const PLUGIN_CHANGE_COALESCE_MS = 500;
+/** Install attempts still holding the page slot, per account, for the plugins page mounted again (see usePluginMarket). */
+const pendingInstalls = new Map<string, InstallAttempt>();
+/** Attempt numbers are unique across mounts (a kept attempt and a new one never share a controller scope). */
+let nextAttemptId = 0;
 /** Publisher tabs filter public pages locally; bound how many empty pages one view may chain. */
 const MAX_EMPTY_CHAIN = 3;
 
@@ -111,10 +115,21 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   onInstalled.current = options.onInstalled;
 
   // ---- Install attempt (declared first: it pins the market to the installing computer).
-  const [install, setInstall] = useState<InstallAttempt | null>(null);
+  // An attempt still holding the page slot outlives this hook (maintainer review 17:43): the plugins page mounted again
+  // takes it back, with its computer, plugin and attempt number, so its row shows it and "Check result" looks up the
+  // same operation through the controller that was kept for it (see usePluginManagement).
+  const attemptOwner = `${owner.accountKey}\u0000${owner.generation}`;
+  const [install, setInstallState] = useState<InstallAttempt | null>(() => {
+    const kept = pendingInstalls.get(attemptOwner);
+    return kept && pluginManagementSlotFor(owner).holds(kept.token) ? kept : null;
+  });
   const installRef = useRef(install);
   installRef.current = install;
-  const attemptId = useRef(0);
+  const setInstall = useCallback((attempt: InstallAttempt | null) => {
+    if (attempt) pendingInstalls.set(attemptOwner, attempt);
+    else if (installRef.current && pendingInstalls.get(attemptOwner)?.id === installRef.current.id) pendingInstalls.delete(attemptOwner);
+    setInstallState(attempt);
+  }, [attemptOwner]);
   /** Failure notes per computer + plugin; the same market plugin can exist on several computers. */
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const errorKey = (deviceId: string, pluginId: string) => JSON.stringify([deviceId, pluginId]);
@@ -461,14 +476,15 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   // press, a press from a stale render or from another entry in the same frame cannot take it), released by this
   // attempt's token when it ends, or by the controller once the install it was handed over to is over.
   const { slot, holder } = usePluginManagementSlot();
-  const handedOver = useRef(0);
+  // A kept attempt that had started was handed over to its controller already.
+  const handedOver = useRef(install?.started ? install.id : 0);
   const startInstall = useCallback((item: ManagedMarketItem, known?: ManagedMarketDetail) => {
     if (installRef.current || !target || !online || probeStatus !== "supported" || item.installState !== "not-installed"
       || pluginMarketSourceUnverified(known ?? item)) return;
-    const token = slot.tryAcquire("market-install", item.name);
+    const token = slot.tryAcquire("market-install", { name: item.name, deviceId: target.deviceId, deviceName: target.deviceName, pluginId: item.pluginId });
     if (!token) return;
     setRowErrors(({ [errorKey(target.deviceId, item.pluginId)]: _removed, ...rest }) => rest);
-    const attempt = { id: ++attemptId.current, token, target, item, detail: known, started: false, confirmed: false };
+    const attempt = { id: ++nextAttemptId, token, target, item, detail: known, started: false, confirmed: false };
     installRef.current = attempt;
     setInstall(attempt);
   }, [target, online, probeStatus, slot]);
@@ -479,9 +495,9 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   }, [slot]);
   const finish = useCallback((attempt: InstallAttempt, messageKey?: string) => {
     if (installRef.current?.id !== attempt.id) return;
+    setInstall(null);
     installRef.current = null;
     slot.release(attempt.token);
-    setInstall(null);
     if (messageKey) setRowErrors((current) => ({ ...current, [errorKey(attempt.target.deviceId, attempt.item.pluginId)]: messageKey }));
   }, [slot]);
   /**

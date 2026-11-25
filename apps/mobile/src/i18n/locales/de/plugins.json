@@ -474,5 +474,9 @@
     "publicInstall": "Öffentlicher Marktplatz",
     "communityDisclaimer": "Dieses Plugin wird von Mitgliedern der Community entwickelt und gepflegt. Cindy hat diese Version geprüft, kann die Sicherheit des Plugins aber nicht in jeder Nutzungssituation garantieren."
   },
-  "gotIt": "Verstanden"
+  "gotIt": "Verstanden",
+  "slot": {
+    "holder": "Ein Vorgang für „{{name}}“ auf „{{device}}“ ist nicht abgeschlossen",
+    "show": "Anzeigen"
+  }
 }

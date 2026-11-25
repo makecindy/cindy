@@ -476,5 +476,9 @@
     "publicInstall": "Mercado público",
     "communityDisclaimer": "Este plugin é desenvolvido e mantido por membros da comunidade. A Cindy analisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de utilização."
   },
-  "gotIt": "Compreendido"
+  "gotIt": "Compreendido",
+  "slot": {
+    "holder": "Uma operação de “{{name}}” em “{{device}}” não terminou",
+    "show": "Ver"
+  }
 }

@@ -1,4 +1,4 @@
-import { usePluginManagementSlot } from "./pluginManagementSlot";
+import { usePluginManagementSlot, type PluginSlotHolder } from "./pluginManagementSlot";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -43,9 +43,12 @@ import { invokePlugin } from "./pluginClient";
 export function PluginTaskSettings({
   deviceId,
   pluginId,
+  holder: who,
 }: {
   deviceId: string;
   pluginId: string;
+  /** Who a save holds the page slot for (shown if the page is mounted again while it is out). */
+  holder?: PluginSlotHolder;
 }) {
   const { t } = useTranslation(),
     { invoke } = useDeviceLink(),
@@ -125,7 +128,7 @@ export function PluginTaskSettings({
   }, [picker, maker, agent]);
   const save = async (patch: Record<string, unknown>) => {
     if (!preferences || !current()) return false;
-    const token = slot.tryAcquire("task-settings");
+    const token = slot.tryAcquire("task-settings", who);
     if (!token) return false;
     setBusy(true);
     try {

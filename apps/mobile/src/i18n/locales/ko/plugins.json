@@ -474,5 +474,9 @@
     "publicInstall": "공개 마켓",
     "communityDisclaimer": "이 플러그인은 커뮤니티 개발자가 개발하고 유지 관리합니다. Cindy는 이 버전을 검토했지만 모든 사용 상황에서 안전하다고 보장할 수는 없습니다."
   },
-  "gotIt": "확인"
+  "gotIt": "확인",
+  "slot": {
+    "holder": "\"{{device}}\"의 \"{{name}}\" 작업이 끝나지 않았습니다",
+    "show": "보기"
+  }
 }

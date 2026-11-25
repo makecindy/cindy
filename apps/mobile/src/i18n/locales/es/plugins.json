@@ -476,5 +476,9 @@
     "publicInstall": "Mercado público",
     "communityDisclaimer": "Este complemento lo desarrollan y mantienen miembros de la comunidad. Cindy ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso."
   },
-  "gotIt": "Entendido"
+  "gotIt": "Entendido",
+  "slot": {
+    "holder": "Una operación de “{{name}}” en “{{device}}” no ha terminado",
+    "show": "Ver"
+  }
 }

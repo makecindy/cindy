@@ -1225,7 +1225,17 @@ describe("one page slot for every entry (real components, three ways of deliveri
       await act(async () => fixture.props.get("directory").onSegmentChange("market"));
       await settle(14);
     };
-    return { available, press, release, remount, writes, openOn };
+    /** The whole plugins page goes away and is opened again (no selection, the installed list). */
+    const pageAgain = async () => {
+      await act(async () => root.render(createElement("div")));
+      await settle(6);
+      fixture.props.delete("plugins.slotHolder");
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await settle(14);
+    };
+    /** Lets only the oldest held request through (for example a preparation read, so the write behind it waits). */
+    const step = async () => { await act(async () => { gates.shift()?.(); }); await settle(14); };
+    return { available, press, release, remount, writes, openOn, pageAgain, step };
   }
   const pairs = entries.flatMap((first) => entries.map((second) => [first, second] as const));
   const third = (first: Entry, second: Entry) => entries.find((entry) => entry !== first && entry !== second)!;
@@ -1272,6 +1282,33 @@ describe("one page slot for every entry (real components, three ways of deliveri
     await s.release();
     expect(s.available[third(first, second === first ? third(first, first) : second)]()).toBe(true);
   });
+  // Dispatcher request G: each of the six entries, with its request in flight, survives the whole page going away: the
+  // page says which plugin on which computer holds the slot and goes to it; nothing is sent again; once the request
+  // settles, the notice goes and the entries come back. (After the app process restarts, nothing is kept: the slot and
+  // the operation are in memory only, and the installed state shows the result; see plugin-mobile-implementation.md.)
+  it.each(entries.map((entry) => [entry] as const))("keeps %s findable and checkable after the whole page is opened again", async (entry) => {
+    const s = await screen();
+    (await s.press(entry))();
+    await settle(10);
+    // A market install's own detail read goes through: it is then handed to its controller and waits on begin.
+    if (entry === "market install") await s.step();
+    const sent = s.writes.length;
+    await s.pageAgain();
+    const notice = fixture.props.get("plugins.slotHolder");
+    expect(notice, "a notice names the holder").toBeDefined();
+    expect(notice.title).toBe("plugins.slot.holder");
+    await act(async () => notice.actions[0].onPress());
+    await settle(14);
+    // Gone to it: the market (install) or the plugin's detail; nothing was sent again.
+    if (entry === "market install") expect(shownMarket().installBusy).toBe(true);
+    else expect(fixture.props.get("detail")?.row?.item?.ref?.id).toBe("demo");
+    expect(s.writes.slice(sent)).toEqual([]);
+    await s.release();
+    fixture.props.delete("plugins.slotHolder");
+    await act(async () => root.render(createElement(PluginsScreen)));
+    expect(fixture.props.has("plugins.slotHolder")).toBe(false);
+    expect(pluginManagementSlotFor().holder()).toBeNull();
+  });
   // The maintainer's own steps: plugin A's task settings save is in flight; switch to plugin B and save there.
   it("keeps a second task settings save from another plugin's form while the first is in flight", async () => {
     const s = await screen();
@@ -1299,25 +1336,34 @@ describe("one page slot for every entry (real components, three ways of deliveri
 describe("page slot release paths", () => {
   const holder = () => pluginManagementSlotFor().holder();
   async function updateScreen(host: { begin?: (request: any) => unknown; operation?: (request: any) => unknown; answer?: (request: any) => unknown;
-    detail?: () => unknown }) {
+    detail?: () => unknown; cancel?: (request: any) => unknown; refuseCancel?: () => boolean }) {
     const { snapshot, market } = realManagementHost();
     fixture.width = 900;
-    const requests: string[] = [];
-    fixture.wire.mockImplementation(async (_host: string, channel: string, args: any[], options: any) => transportSend(options, async () => {
+    const requests: string[] = [], asked: string[] = [];
+    fixture.wire.mockImplementation(async (_host: string, channel: string, args: any[], options: any) => {
+      if (args?.[0]?.actionId) asked.push(args[0].actionId);
+      // Refused before its first write (no write receipt): never written.
+      if (args?.[0]?.actionId === "management:cancel" && host.refuseCancel?.()) throw new Error("refused before the first write");
+      return transportSend(options, async () => {
       if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
       const request = args[0];
       requests.push(request.actionId);
       if (request.actionId === "management:snapshot") return { result: snapshot };
       if (request.actionId === "management:market-detail") return { result: host.detail ? host.detail() : market };
       const respond = request.actionId === "management:begin" ? host.begin : request.actionId === "management:operation" ? host.operation
-        : request.actionId === "management:answer" ? host.answer : undefined;
+        : request.actionId === "management:answer" ? host.answer : request.actionId === "management:cancel" ? host.cancel : undefined;
       if (!respond) throw new Error("Unexpected action " + request.actionId);
       return { result: await respond(request) };
-    }));
+      });
+    });
+    fixture.extraRows = [{ ...row(), key: "mac:plugin-b", item: { ...row().item, ref: { collectionId: "plugins", kind: "plugin", id: "demo-b" }, display: { title: "Demo B" } } }];
     await openDetail();
     await settle(8);
     const update = async () => { await act(async () => { void fixture.props.get("header").rightToolbar.props.onAction("update"); }); await settle(14); };
-    return { update, requests, market };
+    /** Leave this detail for another plugin's (the update's view goes away). */
+    const leave = async () => { await act(async () => fixture.props.get("directory").onDetail(fixture.extraRows[0])); await settle(14); };
+    const writes = () => asked.filter((id) => !["management:snapshot", "management:market-detail"].includes(id));
+    return { update, requests, market, leave, writes };
   }
   const receiptOf = (request: any, phase: string, extra: Record<string, unknown> = {}) => ({ operationId: request.input.operationId, phase, ...extra });
   it("releases it when the update succeeds", async () => {
@@ -1386,6 +1432,45 @@ describe("page slot release paths", () => {
     expect(holder()).toMatchObject({ entry: "update" });
     await act(async () => { finish(); });
     await settle(14);
+    expect(holder()).toBeNull();
+  });
+  const updateConsent = (request: any) => ({ ...demoConsent(request), consent: { ...demoConsent(request).consent, facts: {
+    kind: "update", ghostId: "demo", name: "Demo", version: "2", previousVersion: "1", added: [], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } } });
+  // Maintainer review 17:43 (the three cases he ran), on the real screen and its retained controller. Each asserts every
+  // management request asked for, in order, and when the slot goes.
+  it("17:43 a: leaving an unanswered consent asks for one cancel; refused before writing, it lets go, nothing more", async () => {
+    const s = await updateScreen({ begin: updateConsent, refuseCancel: () => true });
+    await s.update();
+    await s.leave();
+    expect(s.writes()).toEqual(["management:begin", "management:cancel"]);
+    expect(holder()).toBeNull();
+  });
+  it("17:43 b: a written cancel whose reply is lost is only looked up afterwards, never asked for again", async () => {
+    let cancelled = false;
+    const s = await updateScreen({ begin: updateConsent,
+      cancel: () => { cancelled = true; throw new Error("[TIMEOUT] remote invoke timed out"); },
+      operation: () => { throw new Error("[INVALID_RESPONSE] nonsense"); } });
+    await s.update();
+    const controller = fixture.props.get("observedManagement").controller;
+    await s.leave();
+    expect(cancelled).toBe(true);
+    expect(holder()).toMatchObject({ entry: "update" });
+    await act(async () => { await controller.reconcile(); });
+    await settle(14);
+    expect(s.writes()).toEqual(["management:begin", "management:cancel", "management:operation"]);
+    expect(holder()).toBeNull();
+  });
+  it("17:43 c: an update whose Allow was written is never cancelled by leaving, even after its lookups stopped", async () => {
+    const s = await updateScreen({ begin: updateConsent,
+      answer: () => { throw new Error("[TIMEOUT] remote invoke timed out"); },
+      operation: () => { throw new Error("[INVALID_RESPONSE] nonsense"); } });
+    await s.update();
+    await act(async () => { await fixture.props.get("observedManagement").controller.answer(true); });
+    await settle(14);
+    await act(async () => { await fixture.props.get("observedManagement").controller.reconcile(); });
+    await settle(14);
+    await s.leave();
+    expect(s.writes()).toEqual(["management:begin", "management:answer", "management:operation"]);
     expect(holder()).toBeNull();
   });
   // Switching accounts: covered with the real account owner in pluginManagement.test.ts ("page management slot").
@@ -2471,6 +2556,47 @@ describe("market install recovery", () => {
       }
     });
   }
+  /* 测试价值（维护者 17:43 复审第 2 条；调度要求 G）
+   * - 生产入口与可观察结果：真实 PluginsScreen + usePluginMarket + 管理 client / controller，只替换传输；整页卸载再打开后，
+   *   观察页面上是否能找到占用者、原行是否恢复为待确认、「核实结果」发出的请求。
+   * - 依据：持有占用的操作的身份（账号、电脑、入口、插件、尝试编号）与占用同层保存，任何页面重挂载时恢复；不允许
+   *   「占用还在、页面上找不到是谁占着、也没有核实入口」。
+   * - 缺口：重开的市场从空开始，拿不回原尝试，也无法核实，其它入口被旧占用挡住。
+   * - 最小失败输入：允许已写出、回包丢失、Host 持续返回同一确认时整页卸载再打开。tier: unit。
+   */
+  it("restores an unconfirmed install after the whole plugins page is closed and opened again, and only looks it up", async () => {
+    const requests = installWire({
+      begin: () => demoConsent({ input: { operationId: "screen-operation" } } as any),
+      answer: () => { throw new Error("[TIMEOUT] remote invoke timed out"); },
+      // The Host keeps showing the same consent (the answer did not get there).
+      operation: () => demoConsent({ input: { operationId: "screen-operation" } } as any),
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    await approveOnPhone();
+    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
+    const begins = () => requests.filter((request) => request.actionId === "management:begin").length;
+    expect(begins()).toBe(1);
+    // The whole page goes away and is opened again.
+    await act(async () => root.render(createElement("div")));
+    await settle(6);
+    fixture.props.delete("plugins.slotHolder");
+    await act(async () => root.render(createElement(PluginsScreen)));
+    await settle(14);
+    // It says which plugin on which computer is still under way, and goes there.
+    expect(fixture.props.get("plugins.slotHolder")).toMatchObject({ title: "plugins.slot.holder" });
+    await act(async () => fixture.props.get("plugins.slotHolder").actions[0].onPress());
+    await settle(14);
+    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
+    expect(shownMarket().installBusy).toBe(true);
+    const before = requests.length;
+    await act(async () => { await shownMarket().checkResult(); });
+    await settle(14);
+    // "Check result" only looks up the original operation; no second install.
+    expect(requests.slice(before).map((request) => request.actionId)).toEqual(["management:operation"]);
+    expect(begins()).toBe(1);
+  });
   it("releases the row when the install never started because the computer went away mid-preparation", async () => {
     let releaseDetail!: () => void;
     const pending = new Promise<void>((resolve) => { releaseDetail = resolve; });

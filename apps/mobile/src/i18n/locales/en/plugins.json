@@ -474,5 +474,9 @@
     "publicInstall": "Public marketplace",
     "communityDisclaimer": "Community developers build and maintain this plugin. Cindy has reviewed this version but can’t guarantee it’s safe in every situation."
   },
-  "gotIt": "Got it"
+  "gotIt": "Got it",
+  "slot": {
+    "holder": "An operation for “{{name}}” on “{{device}}” isn’t finished",
+    "show": "View"
+  }
 }

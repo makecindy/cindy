@@ -474,5 +474,9 @@
     "publicInstall": "公开市场",
     "communityDisclaimer": "此插件由社区作者开发和维护，Cindy 已审核该版本，但无法保证插件在所有使用场景下都安全。"
   },
-  "gotIt": "知道了"
+  "gotIt": "知道了",
+  "slot": {
+    "holder": "「{{name}}」在「{{device}}」上的操作还没结束",
+    "show": "查看"
+  }
 }

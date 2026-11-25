@@ -18,9 +18,24 @@ import { getMobileAuthOwner, type MobileAuthOwnerGeneration } from "@/auth/authO
  * When each entry releases it is listed in docs/dev-rules/plugin-mobile-implementation.md.
  */
 export type PluginSlotEntry = "market-install" | "update" | "uninstall" | "enable" | "page-approval" | "task-settings";
-export interface PluginSlotToken { readonly id: number; readonly entry: PluginSlotEntry; readonly label?: string }
+/**
+ * Who holds the slot, kept with it (maintainer review 17:43): a page or component mounted again finds the holder here,
+ * shows that an operation is under way on which computer, and can go to it (the market row or the plugin's detail).
+ */
+export interface PluginSlotHolder {
+  /** The plugin as shown to the person. */
+  name: string;
+  deviceId: string;
+  deviceName: string;
+  /** Installed instance (installed-detail entries) or market plugin (market install). */
+  instanceKey?: string;
+  pluginId?: string;
+  /** The installed list's row key (its detail's management scope, to take the kept controller back). */
+  rowKey?: string;
+}
+export interface PluginSlotToken { readonly id: number; readonly entry: PluginSlotEntry; readonly who?: PluginSlotHolder }
 export interface PluginManagementSlot {
-  tryAcquire(entry: PluginSlotEntry, label?: string): PluginSlotToken | null;
+  tryAcquire(entry: PluginSlotEntry, who?: PluginSlotHolder): PluginSlotToken | null;
   /** Releases only when `token` is the holder; returns whether it did. */
   release(token: PluginSlotToken | null | undefined): boolean;
   holds(token: PluginSlotToken | null | undefined): boolean;
@@ -40,9 +55,9 @@ export function createPluginManagementSlot(): PluginManagementSlot {
   const listeners = new Set<() => void>();
   const notify = () => listeners.forEach((listener) => listener());
   return {
-    tryAcquire(entry, label) {
+    tryAcquire(entry, who) {
       if (holder) return null;
-      holder = { id: ++nextId, entry, ...(label ? { label } : {}) };
+      holder = { id: ++nextId, entry, ...(who ? { who } : {}) };
       notify();
       return holder;
     },

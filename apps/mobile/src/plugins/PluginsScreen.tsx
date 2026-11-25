@@ -89,7 +89,7 @@ import {
   type PluginDirectorySegment,
 } from "./PluginDirectoryView";
 import { usePluginMarket } from "./usePluginMarket";
-import { pluginOperationHold, usePluginManagementSlot, type PluginSlotToken } from "./pluginManagementSlot";
+import { pluginOperationHold, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
 import { PluginMarketSection } from "./PluginMarketSection";
 import { PluginMarketDetailView } from "./PluginMarketDetailView";
 import { FileBrowserSegmentedControl } from "@/session/FileBrowserSegmentedControl";
@@ -217,6 +217,10 @@ function PluginDirectory() {
   // and only the holder's token releases it. Whether an entry may start is decided by `slot.tryAcquire`; the
   // unavailable buttons below only show `holder`. The table of holders and releases is in plugin-mobile-implementation.md.
   const { slot, holder } = usePluginManagementSlot();
+  // Who an installed-detail entry holds the slot for (shown after the page is mounted again; see the holder notice).
+  const slotHolderOf = (row: HostedRemoteCollectionItem, name?: string): PluginSlotHolder => ({
+    name: name ?? resolveRemoteText(row.item.display.title, i18n.language),
+    deviceId: row.host.deviceId, deviceName: row.host.deviceName, instanceKey: row.item.ref.id, rowKey: row.key });
   // Market browsing and installs live in usePluginMarket; this screen only routes views.
   const market = usePluginMarket({
     visible: focused && (segment === "market" || !!query.trim()) && (wide || !selected),
@@ -820,7 +824,7 @@ function PluginDirectory() {
       generation === detailGeneration.current &&
       isMobileAuthOwnerCurrent(owner);
     // The slot decides: a second tap, or a tap while another entry holds it, does nothing.
-    const token = slot.tryAcquire("enable");
+    const token = slot.tryAcquire("enable", slotHolderOf(row));
     if (!token) return;
     toggleToken.current = token;
     setBusy(true);
@@ -870,6 +874,36 @@ function PluginDirectory() {
     }).catch(() => { /* Existing author page stays usable; an uncertain background read needs no second notice. */ });
   }, [uncertainConfiguration, selected?.row.key, focused, online, detailLoading, detailFailed, connectionEpoch, auth.accountGeneration]);
   const renderedGeneration = detailGeneration.current;
+  // The slot is held but its holder is not on screen (the page was mounted again, another plugin's detail is open, or the
+  // operation runs on another computer): say which plugin on which computer, and go to it (maintainer review 17:43).
+  // The market row or the plugin's detail then shows the operation and its "Check result".
+  const who = holder?.who;
+  const holderShown = !!holder && (holder.entry === "market-install"
+    ? showMarket && !selected
+    : !!selected && detailOpen && selected.row.host.deviceId === who?.deviceId && selected.row.item.ref.id === who?.instanceKey);
+  const showHolder = () => {
+    if (!holder || !who) return;
+    if (holder.entry === "market-install") {
+      detailGeneration.current += 1;
+      setSelected(undefined);
+      setQuery("");
+      setSegment("market");
+      return;
+    }
+    const known = list.items.find((item) => item.key === who.rowKey);
+    void showDetail(known ?? {
+      key: who.rowKey ?? JSON.stringify([who.deviceId, "plugins", "plugin", who.instanceKey]),
+      host: { deviceId: who.deviceId, deviceName: who.deviceName },
+      item: { ref: { collectionId: "plugins", kind: "plugin", id: who.instanceKey ?? "" }, revision: "", links: [], display: { title: who.name } },
+    } as HostedRemoteCollectionItem);
+  };
+  const holderNotice = holder && who && !holderShown ? (
+    <View style={styles.holderNotice}>
+      <PluginNotice testID="plugins.slotHolder" icon="info" compact
+        title={t("plugins.slot.holder", { name: who.name, device: who.deviceName })}
+        actions={[{ label: t("plugins.slot.show"), testID: "plugins.slotHolder.show", onPress: showHolder }]} />
+    </View>
+  ) : null;
   const manageAction = async (action: string) => {
     if (
       !managementAvailable ||
@@ -916,7 +950,7 @@ function PluginDirectory() {
             onPress: async () => {
               if (!current()) return;
               // Taken when the person confirms; the alert itself sends nothing.
-              const token = slot.tryAcquire("uninstall", plugin.manifest.name);
+              const token = slot.tryAcquire("uninstall", slotHolderOf(row, plugin.manifest.name));
               if (!token) return;
               await controller.uninstall(plugin, pluginOperationHold(slot, token));
               reportPreflightFailure();
@@ -927,7 +961,7 @@ function PluginDirectory() {
     } else if (action === "update" && marketItem && managed) {
       const displayed = marketItem;
       // The slot is taken now, before the preparing read: another entry pressed in the same frame cannot start.
-      const token = slot.tryAcquire("update", managed.manifest.name);
+      const token = slot.tryAcquire("update", slotHolderOf(row, managed.manifest.name));
       if (!token) return;
       const hold = pluginOperationHold(slot, token);
       let handedOver = false;
@@ -1121,7 +1155,8 @@ function PluginDirectory() {
         enabled={enabled}
         busy={busy || detailLoading || !!holder || managementPending}
         statusRecoveryBusy={busy || detailLoading}
-        uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t, false, slot)}
+        uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t, false,
+          { slot, who: slotHolderOf(selected.row, managed?.manifest.name) })}
         managementNotice={management.state?.outcome === "unknown" ? {
           testID: "plugins.managementUnknown",
           title: t("plugins.notice.title.resultUnknown"),
@@ -1148,6 +1183,7 @@ function PluginDirectory() {
                   key={JSON.stringify(["tasks", selected.row.host.deviceId, managed.instanceKey, pluginApprovalToken(managed), connectionEpoch])}
                   deviceId={selected.row.host.deviceId}
                   pluginId={managed.instanceKey}
+                  holder={slotHolderOf(selected.row, managed.manifest.name)}
                 />
               ) : null}
               {originalSettingsContent}
@@ -1270,6 +1306,7 @@ function PluginDirectory() {
         />
       ) : null}
       <View style={styles.layout}>
+        {holderNotice}
         {wide || (!selected && !marketDetail) ? directory : null}
         {wide || selected || marketDetail ? (
           <View style={styles.main}>
@@ -1323,6 +1360,7 @@ function PluginDirectory() {
 }
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
+    holderNotice: { paddingHorizontal: spacing.lg + spacing.xs, paddingTop: spacing.sm },
     toast: {
       position: "absolute",
       top: spacing.md,
