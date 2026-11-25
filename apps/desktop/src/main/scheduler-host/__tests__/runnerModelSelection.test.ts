@@ -1508,7 +1508,7 @@ describe('MakerScheduleRunner model selection', () => {
     });
 
     // #12714, unit: only a verified cold resume may receive the one-shot prompt.
-    it.each(['resume', 'cancel', 'missing checkpoint', 'replacement', 'wrong model', 'source mismatch', 'busy once', 'busy recurring'] as const)(
+    it.each(['resume', 'cancel', 'cancel during resume', 'owner changed during resume', 'missing checkpoint', 'replacement', 'wrong model', 'source mismatch', 'busy once', 'busy recurring'] as const)(
       'late Codex rebuild before dispatch: %s',
       async (scenario) => {
         mocks.getSessionProvider.mockReturnValue('mygpt');
@@ -1560,7 +1560,11 @@ describe('MakerScheduleRunner model selection', () => {
         });
         harness.createSession
           .mockResolvedValueOnce(h.session)
-          .mockImplementationOnce(async () => (active = resumed.session));
+          .mockImplementationOnce(async () => {
+            active = resumed.session;
+            if (scenario === 'cancel during resume') controller.abort();
+            return active;
+          });
         const run = harness.runner.fire(
           baseSchedule({
             agentKind: 'codex',
@@ -1569,7 +1573,14 @@ describe('MakerScheduleRunner model selection', () => {
             providerId: scenario === 'source mismatch' ? undefined : 'mygpt',
             targetSessionId: 'scheduler-session',
           }),
-          { ...createFireContext(), signal: controller.signal },
+          {
+            ...createFireContext(),
+            signal: controller.signal,
+            assertFireContext: () => {
+              if (scenario === 'owner changed during resume' && active === resumed.session)
+                throw new Error('owner changed');
+            },
+          },
         );
         if (scenario === 'resume') {
           await vi.waitFor(() => expect(resumed.send).toHaveBeenCalledOnce());
@@ -1585,13 +1596,16 @@ describe('MakerScheduleRunner model selection', () => {
           if (scenario === 'busy recurring') {
             await expect(run).resolves.toMatchObject({ sessionId: h.session.id, deferred: true });
           } else {
-            const reason = scenario === 'cancel' ? /abort/i : scenario === 'busy once' ? /SESSION_RUNNING/ : /instruction was not sent/;
+            const reason = scenario.startsWith('cancel') ? /abort/i : scenario === 'owner changed during resume' ? /owner changed/ : scenario === 'busy once' ? /SESSION_RUNNING/ : /instruction was not sent/;
             await expect(run).rejects.toThrow(reason);
           }
           expect(resumed.send).not.toHaveBeenCalled();
           expect(mocks.backfillSessionMeta).not.toHaveBeenCalled();
-          if (scenario !== 'wrong model') expect(harness.closeSession).not.toHaveBeenCalled();
-          if (scenario === 'wrong model') expect(active).toBeUndefined();
+          if (scenario === 'wrong model' || scenario.endsWith('during resume')) {
+            expect(active).toBeUndefined();
+          } else {
+            expect(harness.closeSession).not.toHaveBeenCalled();
+          }
         }
         expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol');
         expect(h.send).not.toHaveBeenCalled();

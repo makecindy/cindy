@@ -2132,26 +2132,28 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (this.deps.maker.getSession(sessionId)) throw unsafeResume;
           const resumedOpts = { ...createSessionOpts };
           const resumed = await this.createSession(resumedOpts, ctx.signal, holder.assertOwner);
-          holder.assertOwner?.();
-          if (
-            resumed === session ||
-            resumed.id !== sessionId ||
-            resumed.sdkSessionId !== resumeSessionId ||
-            resumed.agentKind !== 'codex' ||
-            resumed.model !== model ||
-            resumed.agentDeviceId ||
-            resumed.remoteHostId ||
-            resumedOpts.providerId !== createSessionOpts.providerId ||
-            this.deps.maker.getSession(sessionId) !== resumed
-          ) {
+          try {
+            holder.assertOwner?.();
+            throwIfFireAborted(ctx.signal, 'model switch rebuild');
+            if (
+              resumed === session ||
+              resumed.id !== sessionId ||
+              resumed.sdkSessionId !== resumeSessionId ||
+              resumed.agentKind !== 'codex' ||
+              resumed.model !== model ||
+              resumed.agentDeviceId ||
+              resumed.remoteHostId ||
+              resumedOpts.providerId !== createSessionOpts.providerId ||
+              this.deps.maker.getSession(sessionId) !== resumed
+            ) throw unsafeResume;
+          } catch (error) {
             if (resumed !== session && resumed.id === sessionId && this.deps.maker.getSession(sessionId) === resumed) {
               await withRehydrateCloseSuppressed(sessionId, () =>
                 this.deps.maker.closeSessionIfCurrent(resumed, 'runtime-refresh', { afterCurrentTurn: true }),
               );
             }
-            throw unsafeResume;
+            throw error;
           }
-          throwIfFireAborted(ctx.signal, 'model switch rebuild');
           session = resumed;
           reusedLiveSession = false;
         } else if (mustSyncReusedPiRoute) {
