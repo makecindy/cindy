@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { extractIpcError } from '@/utils/ipcError';
 import { ImageLightbox } from './ImageLightbox';
+import type { GalleryOccurrence } from './ImageGalleryContext';
 import { useImageClipboard } from './useImageClipboard';
 import { ModelLightbox } from './ModelLightbox';
 import { ImageMissingPlaceholder } from './ImageMissingPlaceholder';
@@ -75,6 +76,11 @@ interface ChatImageViewProps {
    */
   annotationSourceUrl?: string;
   annotationStrokes?: Array<{ points: Array<{ x: number; y: number }> }>;
+  /**
+   * Which repeat of this image address the row shows (structuredImageOccurrence), so
+   * the task image gallery opens at this copy when the row shows it more than once.
+   */
+  galleryOccurrence?: GalleryOccurrence;
 }
 
 /** 各 variant 的尺寸/边框/className 规范集中在这里,以后调样式只用动这一处。 */
@@ -114,6 +120,7 @@ export function ChatImageView({
   sessionId,
   annotationSourceUrl,
   annotationStrokes,
+  galleryOccurrence,
 }: ChatImageViewProps) {
   const { t } = useTranslation();
   // 远程会话改写到 cindy-remote-media://;本地会话原样。下游一律用 displaySrc(渲染 +
@@ -358,13 +365,18 @@ export function ChatImageView({
             src={annotationSourceUrl}
             initialStrokes={annotationStrokes}
             annotationFallbackSrc={displaySrc}
+            galleryOccurrence={galleryOccurrence}
             enableGallery
             onClose={closePreview}
           />
         ) : (
           <ImageLightbox
             filename={filename}
-            src={displaySrc} enableGallery onClose={closePreview} />
+            src={displaySrc}
+            galleryOccurrence={galleryOccurrence}
+            enableGallery
+            onClose={closePreview}
+          />
         ))}
       {lightboxOpen === 'model' && modelFile && (
         <ModelLightbox

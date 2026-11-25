@@ -85,6 +85,7 @@ import {
 } from '@/lib/chatQuotes';
 import { quoteSegmentsToComposerDocument } from '@/lib/composerQuoteDocument';
 import { ChatImageView } from './ChatImageView';
+import { repeatIndexes, structuredImageOccurrence } from './ImageGalleryContext';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
@@ -1334,11 +1335,17 @@ export function UserMessage({
 
   // Define each renderer once, then place it inside the hook / ordinary branch
   // so the ordinary message keeps its established badge-before-attachment order.
+  const imageSrcs = hasImages
+    ? images.map((img) => ('url' in img ? img.url : `data:${img.mimeType};base64,${img.base64}`))
+    : [];
+  // Same count the task gallery uses for this message's uploads, so a repeated
+  // upload opens the gallery at the copy that was clicked.
+  const imageRepeats = repeatIndexes(imageSrcs);
   const imageAttachmentNodes =
     !orcaCommunication && hasImages
       ? images.map((img, idx) => {
           const isUrlMode = 'url' in img;
-          const src = isUrlMode ? img.url : `data:${img.mimeType};base64,${img.base64}`;
+          const src = imageSrcs[idx]!;
           const filename = isUrlMode ? img.originalName : (img.originalName ?? `image-${idx + 1}`);
           return (
             <ChatImageView
@@ -1349,6 +1356,7 @@ export function UserMessage({
               sessionId={sessionId}
               annotationSourceUrl={isUrlMode ? img.annotationSourceUrl : undefined}
               annotationStrokes={isUrlMode ? img.annotationStrokes : undefined}
+              galleryOccurrence={structuredImageOccurrence(imageRepeats[idx]!)}
             />
           );
         })

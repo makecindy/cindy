@@ -57,6 +57,27 @@ export function replySectionId(messageKey: string, partKey: number, nodeId?: str
   return nodeId === undefined ? `${messageKey}\u0000${partKey}` : `${messageKey}\u0000${partKey}\u0000${nodeId}`;
 }
 
+/**
+ * Section of the images a row lists from message data rather than reply text: user
+ * uploads and tool / plugin-card media outside the card itself. Plugin-card images
+ * are identified by galleryId instead.
+ */
+export const STRUCTURED_IMAGE_SECTION = '\u0000structured';
+
+/** Which repeat of its address each image is, in row order (0 for the first). */
+export function repeatIndexes(srcs: readonly string[]): number[] {
+  const seen = new Map<string, number>();
+  return srcs.map((src) => {
+    const index = seen.get(src) ?? 0;
+    seen.set(src, index + 1);
+    return index;
+  });
+}
+
+export function structuredImageOccurrence(index: number): GalleryOccurrence {
+  return { section: STRUCTURED_IMAGE_SECTION, index };
+}
+
 export interface GalleryWorkspacePath {
   path: string;
   workingDir: string;

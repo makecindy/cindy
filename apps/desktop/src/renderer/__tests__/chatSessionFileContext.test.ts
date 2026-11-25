@@ -44,6 +44,12 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
 }));
 // Component answers key their view state by the signed-in user.
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'test-owner' } }) }));
+// UserMessage's message actions are not under test here.
+vi.mock('../components/chat/useForkAtMessage', () => ({
+  useForkAtMessage: () => async () => {},
+  textToTiptapDoc: () => null,
+}));
+vi.mock('../components/chat/useDeleteMessage', () => ({ useDeleteMessage: () => async () => {} }));
 
 import {
   LOCAL_FILE_ORIGIN,
@@ -64,6 +70,10 @@ import {
 } from '../components/chat/MessageStream';
 import { ImageGalleryContext, ImageGalleryScopeContext } from '../components/chat/ImageGalleryContext';
 import { MarkdownRenderer } from '../components/chat/MarkdownRenderer';
+import { UserMessage } from '../components/chat/UserMessage';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
+import { MemoryRouter } from 'react-router-dom';
+import { Provider as TooltipProvider } from '@radix-ui/react-tooltip';
 import { _clearSmartResolveCache, toLocalFileUrl } from '@/lib/localPathResolver';
 import { withStarterOptionList } from '../../shared/botStarterOptions';
 import i18n from '@/i18n';
@@ -483,6 +493,57 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
       delete (window as unknown as { electronAPI?: unknown }).electronAPI;
       _clearSmartResolveCache();
     }
+  });
+
+  // PR #12724 review：同一条用户消息里上传了同一张图两次，点第二张要从第二张开始。
+  // 经真实 UserMessage 与任务画廊。最小失败输入：两张同址上传，点第二张显示「1 / 2」。
+  it('用户消息里重复的上传图从点开的那一张开始', () => {
+    const repeated = `cindy-media://blobs/${'u'.repeat(64)}.png`;
+    const images = [
+      { url: repeated, mimeType: 'image/png', originalName: 'first.png' },
+      { url: repeated, mimeType: 'image/png', originalName: 'again.png' },
+    ];
+    const item: RenderItem = {
+      type: 'message',
+      key: 'u1',
+      message: { clientId: 'u1', role: 'user', content: 'twice', images },
+    };
+    const gallery = collectTaskImageGallery(
+      [item],
+      new Map([[item.key, collectSessionImageSrcs([item])]]),
+      {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: false,
+      },
+    );
+    render(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(TooltipProvider, {
+          children: React.createElement(
+            ImageGalleryContext.Provider,
+            { value: gallery },
+            React.createElement(
+              ImageGalleryScopeContext.Provider,
+              { value: 'u1' },
+              React.createElement(UserMessage, {
+                pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+                content: 'twice',
+                images,
+                workingDir: '/work',
+              }),
+            ),
+          ),
+        }),
+      ),
+    );
+    fireEvent.click(screen.getByAltText('again.png'));
+    expect(screen.getByText('2 / 2')).toBeTruthy();
   });
 
   // PR #12724 review：画廊只收回复实际显示的图。伙伴开场选项列表显示成按钮、不渲染正文，

@@ -383,6 +383,8 @@ import {
   galleryImagePreviewItem,
   ImageGalleryContext,
   ImageGalleryScopeContext,
+  repeatIndexes,
+  structuredImageOccurrence,
   type GalleryImage,
 } from './ImageGalleryContext';
 import { replyGalleryImages, type ReplyGalleryOptions, type ReplyImageCache } from './replyGalleryImages';
@@ -1556,7 +1558,18 @@ export function collectTaskImageGallery(
 ): GalleryImage[] {
   const gallery: GalleryImage[] = [];
   for (const item of items) {
-    for (const image of itemImages.get(item.key) ?? []) gallery.push({ ...image, scope: item.key });
+    // Uploads and tool media: repeats of one address in a row are told apart by
+    // order, as their renderers count them (plugin-card images carry galleryId).
+    const structured = (itemImages.get(item.key) ?? []).filter((image) => !image.galleryId);
+    const repeats = repeatIndexes(structured.map((image) => image.src));
+    for (const image of itemImages.get(item.key) ?? []) {
+      const at = structured.indexOf(image);
+      gallery.push({
+        ...image,
+        scope: item.key,
+        ...(at >= 0 ? { occurrence: structuredImageOccurrence(repeats[at]!) } : {}),
+      });
+    }
     gallery.push(...collectReplyGalleryImages(item, item.key, replyOptions, ghostCards));
   }
   return gallery;
@@ -2941,6 +2954,8 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
                 variant="tool-output"
                 modelFile={m.modelFile}
                 sessionId={sessionId}
+                // Same count the task gallery uses for this row's media (repeatIndexes).
+                galleryOccurrence={structuredImageOccurrence(mediaKeyOccurrence)}
               />
             </div>
           );
