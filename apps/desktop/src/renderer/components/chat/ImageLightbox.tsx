@@ -352,12 +352,13 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const scope = useContext(ImageGalleryScopeContext);
   // A task image browses every loaded image, across turns. The message's own
   // attachment list still serves files and videos opened from that message.
+  // Even a task with a single image keeps to the task collection (no navigation),
+  // so the image never steps into its message's files.
   // Decided once: a reply finishing while the viewer is open must not swap the
   // viewer (and drop zoom or an unsaved annotation).
   const [browsesSession] = useState(
     () =>
       props.enableGallery === true &&
-      (sessionImages?.length ?? 0) > 1 &&
       galleryOpeningIndex(sessionImages, {
         src: props.annotationFallbackSrc ?? props.src,
         galleryId: props.galleryId,

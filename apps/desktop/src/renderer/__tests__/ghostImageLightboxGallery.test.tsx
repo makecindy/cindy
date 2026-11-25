@@ -87,4 +87,29 @@ describe('ImageLightbox gallery positioning', () => {
     step('chat.media.nextImage');
     expect(screen.getByText('again.png')).toBeTruthy();
   });
+
+  // PR #12724 review: a task with a single image still uses the task collection, so the
+  // image does not navigate into its message's PDF. Minimal failing input: one task
+  // image in an image+PDF message showed the message's "1 / 2" navigator.
+  it('keeps a task with one image on the task collection, without navigation', () => {
+    const only = blob('a');
+    render(
+      <AttachmentCollectionContext.Provider
+        value={[
+          { id: 'img', name: 'only.png', source: only, kind: 'image', media: true },
+          { id: 'pdf', name: 'spec.pdf', source: '/work/spec.pdf', kind: 'pdf' },
+        ]}
+      >
+        <ImageGalleryContext.Provider value={[{ src: only, scope: 'u1', name: 'only.png' }]}>
+          <ImageGalleryScopeContext.Provider value="u1">
+            <ImageLightbox src={only} filename="only.png" enableGallery onClose={vi.fn()} />
+          </ImageGalleryScopeContext.Provider>
+        </ImageGalleryContext.Provider>
+      </AttachmentCollectionContext.Provider>,
+    );
+
+    expect(screen.getByText('only.png')).toBeTruthy();
+    expect(screen.queryByText('1 / 2')).toBeNull();
+    expect(screen.queryByRole('button', { name: i18n.t('chat.media.nextImage') })).toBeNull();
+  });
 });
