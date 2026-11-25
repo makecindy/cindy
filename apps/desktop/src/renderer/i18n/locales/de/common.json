@@ -13504,6 +13504,7 @@
         },
         "slash": {
           "detachFailed": "❌ Übernahme konnte nicht beendet werden: {{error}}",
+          "pluginEngineModelsUnavailable": "Die Plugin-Engine dieser Aufgabe ist gerade nicht verfügbar, daher können ihre Modelle nicht angezeigt werden.",
           "companionManaged": "🧭 Diese Verbindung wurde an einen Freund übergeben. Modell, Berechtigungen und Arbeitsverzeichnis folgen dessen Einstellungen. Ändere sie in Cindy in den Einstellungen des Freundes."
         },
         "turn": {

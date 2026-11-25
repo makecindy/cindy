@@ -13451,6 +13451,7 @@
         },
         "slash": {
           "detachFailed": "❌ 이어받기를 종료하지 못했습니다: {{error}}",
+          "pluginEngineModelsUnavailable": "이 작업의 플러그인 엔진을 지금 사용할 수 없어 모델 목록을 표시할 수 없습니다.",
           "companionManaged": "🧭 이 연결은 동반자에게 넘겨졌습니다. 모델, 권한, 작업 디렉터리는 동반자 설정을 따릅니다. Cindy의 동반자 설정에서 변경하세요."
         },
         "turn": {

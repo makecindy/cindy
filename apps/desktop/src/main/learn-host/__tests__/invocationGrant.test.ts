@@ -135,6 +135,14 @@ describe('Learn invocation grant', () => {
         version: 1, sessionInstanceId: 'instance-acp', resolvedSkillPath: await fs.realpath(skillFile),
       });
       expect(listSkills).toHaveBeenCalledWith(session);
+      // The prefixed form (review on #12820): the engine drops `cindy:` and reads the same built-in file.
+      await expect(capture(session, '/cindy:learn', '/cindy:learn')).resolves.toEqual({
+        version: 1, sessionInstanceId: 'instance-acp', resolvedSkillPath: await fs.realpath(skillFile),
+      });
+      // A user Skill named learn elsewhere is never attested for the prefixed form.
+      listSkills.mockImplementationOnce(async () => ({ skills: [{ kind: 'agent-skill' as const, name: 'learn',
+        source: 'skill' as const, path: path.join(os.tmpdir(), 'not-cindy', 'SKILL.md') }] }));
+      await expect(capture(session, '/cindy:learn', '/cindy:learn')).resolves.toBeNull();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

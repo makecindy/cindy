@@ -13613,6 +13613,7 @@
         },
         "slash": {
           "detachFailed": "❌ Impossible de mettre fin à la prise de contrôle : {{error}}",
+          "pluginEngineModelsUnavailable": "Le moteur de plugin de cette tâche n’est pas disponible pour le moment ; ses modèles ne peuvent pas être affichés.",
           "companionManaged": "🧭 Cette connexion a été confiée à un ami : le modèle, les autorisations et le répertoire de travail suivent ses paramètres. Modifiez-les dans les paramètres de l’ami dans Cindy."
         },
         "turn": {

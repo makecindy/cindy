@@ -71,7 +71,7 @@ vi.mock('../../../localDb/client/current', () => ({
 vi.mock('../../../localDb/schema', () => ({ sessions: {} }));
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
-  toCoreAgentKind: (kind: string) => (kind === 'codex' ? 'codex' : 'claude-code'),
+  toCoreEngineKind: (kind: string) => (kind === 'acp' ? 'acp' : kind === 'codex' ? 'codex' : 'claude-code'),
 }));
 vi.mock('../../messagePersistence', () => ({ persistUserMessage: mocks.persistUserMessage }));
 vi.mock('../../binding', () => ({

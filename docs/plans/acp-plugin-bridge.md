@@ -281,8 +281,8 @@ export interface PluginHarnessRegistry {
 
 ## 第一期明确不支持（遇到即明确拒绝，不回落到内置引擎）
 
-（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn 与目标
-见「与内置引擎一致（2026-11-25）」。）分叉、回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、IM 渠道、共享任务、
+（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn、目标与 IM 渠道
+见「与内置引擎一致（2026-11-25）」。）分叉、回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、共享任务、
 上下文溢出后的重放、Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
 
 伙伴的后续支持范围见[模型候选链](../product-rules/cindy-bots-runtime.md#5-模型候选链)。伙伴可以在设置中选择所在电脑的插件模型，主聊天按所选模型运行。
@@ -479,4 +479,9 @@ export interface PluginHarnessRegistry {
 - **目标**：插件引擎任务可以设目标；休眠任务按它自己的引擎恢复（另一台电脑上的引擎留在那台）。用量限额只按回合报错停止
   （Cindy 读不到插件 CLI 的账号窗口）。
 - **自动化绑定插件引擎任务**：见上文「第二期：手机与定时任务」的「绑定插件引擎任务的自动化」。
+- **IM 渠道与官方机器人渠道**：能接管、能对话，冷启动按任务行的 `acp` 与 `providerId` 恢复（IM 读行一律保留 `acp`）；
+  `/model` 列出任务所在电脑的引擎模型（引擎在另一台电脑时读那台开放的目录），只在同一引擎内切换；`/permission` 用引擎自己的
+  权限档。**带本轮权限策略的轮次（群聊要求主人确认）一律拒绝**：插件的 Agent 可以不经 Cindy 询问就执行操作，任何权限档都
+  无法兑现「须经主人确认」，所以与内置引擎在绕过审批钩子的档位下同样 fail-closed（`AcpSession.validateSendOptions` 抛
+  `TurnPermissionPolicyUnsupportedError`，渠道按「所选 Agent 无法提供逐条确认」提示）。不带策略的私聊与已关闭群强确认的轮次照常运行。
 

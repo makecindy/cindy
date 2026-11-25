@@ -13504,6 +13504,7 @@
         },
         "slash": {
           "detachFailed": "❌ Couldn't end the takeover: {{error}}",
+          "pluginEngineModelsUnavailable": "This task's plugin engine isn't available right now, so its models can't be listed.",
           "companionManaged": "🧭 This connection is handed over to a buddy, so the model, permissions and working directory follow the buddy's settings. Change them in the buddy settings in Cindy."
         },
         "turn": {

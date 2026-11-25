@@ -120,7 +120,6 @@ import type {
 import { transformXdtRefs } from '@cindy/im';
 import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
-import { isPluginEngineKind } from '../../../shared/agentKindConversion';
 import { hasBuiltinAgentKind } from '../../maker-host/engineKind';
 import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc';
 import { persistUserMessage } from '../messagePersistence';
@@ -197,7 +196,7 @@ import { isQuotaExhaustionFailure, terminalErrorText, turnRetryNotice } from './
 import { resolveSessionErrorContext } from './sessionProviderLabel';
 import { createTurnPresenter, DEFAULT_PRESENTER_POLICY, type TurnPresenter } from './turnPresenter';
 import {
-  toCoreAgentKind,
+  toCoreEngineKind,
   readPermissionMode,
   touchUserSent as repoTouchUserSent,
   updatePermissionMode,
@@ -389,10 +388,6 @@ type DetachDrainOutcome = 'rewire' | 'cancelled';
  */
 type BuiltinMakerSession = MakerSession;
 
-/** Task row engine → Maker engine kind; plugin engines stay 'acp'. */
-function toCoreEngineKind(kind: Parameters<typeof toCoreAgentKind>[0] | 'acp'): EngineKind {
-  return isPluginEngineKind(kind) ? 'acp' : toCoreAgentKind(kind as Parameters<typeof toCoreAgentKind>[0]);
-}
 
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */

@@ -70,13 +70,17 @@ export function createCindyLearnInvocationCapture(deps: LearnInvocationCaptureDe
     // The explicit Cindy alias still selects the attested built-in file;
     // Pi exposes that file under its native skill:learn runtime command.
     const namespacedRuntimeName = session.agentKind === 'pi' ? 'skill:learn' : 'cindy:learn';
+    // A plugin engine expands `/cindy:learn` by dropping the `cindy:` prefix and reading the attested
+    // built-in file; its Skill list carries no runtime command names, so the prefixed form selects the
+    // built-in entry itself (still checked below to be Cindy's own file).
+    const prefixedSelectsBuiltIn = (skill: { builtIn?: boolean; runtimeCommandName?: string }) =>
+      skill.builtIn === true && (session.agentKind === 'acp' || skill.runtimeCommandName === namespacedRuntimeName);
     const learnCandidates = activeCindyBuiltInAgentSkills(
       result.skills,
       descriptors,
       deps.isSkillEnabled,
     ).filter((skill) => (skill.name.toLowerCase() === 'learn' || skill.runtimeCommandName === 'cindy:learn')
-      && (!/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
-        || (skill.builtIn === true && skill.runtimeCommandName === namespacedRuntimeName)));
+      && (!/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim()) || prefixedSelectsBuiltIn(skill)));
     if (
       learnCandidates.length !== 1
       || learnCandidates.some((skill) => skill.builtIn !== true || !skill.path)
