@@ -11,7 +11,8 @@ import * as activeCatalogForHostParity from '../active-catalog.js';
 import { calibrateDraftModel } from '../../../shared/draftModelCalibration.js';
 import { resolveAutomaticImSettings } from '../../../shared/imAutomaticModel.js';
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings.js';
-import { readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
+import { accountProviderId, readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
+import { remoteAccessProviderId } from '../mergedProviderPool.js';
 import { createHostProviderConfig } from '../../../../../host/src/agent/provider-config.js';
 import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
 import { createHostModelContext } from '../../../../../host/src/agent/model-context.js';
@@ -88,9 +89,11 @@ vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
   };
   return {
     ...actual,
-    accountProviderId: owner,
+    accountProviderId: (kind: Parameters<typeof actual.accountProviderId>[0], id: string) =>
+      h.actualPlacement ? actual.accountProviderId(kind, id) : owner(kind, id),
     readMergedLegacyCodexAccountId: merged,
-    readMergedProviderAccount: merged,
+    readMergedProviderAccount: (id: string) =>
+      h.actualPlacement ? actual.readMergedProviderAccount(id) : merged(id),
     restoreAutoMergedLegacyCodexAccounts: h.restoreLegacy,
     readCreatedSubscriptionProviders: () => {
       if (h.placementError) throw h.placementError;
@@ -926,6 +929,40 @@ describe('provider catalog realm reload', () => {
     } finally {
       publish.mockRestore(); await config.close(); setCustomProviders([]);
       h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false; h.customProviderRead.mockReset();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Unit: production remote-use resolver over the real placement file. External edits may
+  // lag by one minute, but repeated checks must not slide that window; two images suffice.
+  it('bounds cached remote account membership to one minute after an external replacement', async () => {
+    let at = 1_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => at);
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-placement-auth-'));
+    const previousOwner = h.owner;
+    const previousPool = h.pool;
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    const provider = 'openai-sub-1234abcd';
+    const file = path.join(root, h.owner, 'subscription-account-placement.json');
+    const image = (target: string) => JSON.stringify({ accounts: { 'openai:default': target },
+      providers: { [provider]: { kind: 'openai', name: 'Fixture', account: 'default' } } });
+    try {
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await fsp.writeFile(file, image('openai'));
+      expect(remoteAccessProviderId(provider)).toBe('openai');
+      await fsp.writeFile(`${file}.replacement`, image(provider));
+      await fsp.rename(`${file}.replacement`, file);
+      expect(accountProviderId('openai', 'default')).toBe('openai'); // Ordinary cached view.
+      expect(remoteAccessProviderId(provider)).toBe('openai');
+      at += 59_999;
+      expect(remoteAccessProviderId(provider)).toBe('openai');
+      at++;
+      expect(remoteAccessProviderId(provider)).toBe(provider);
+      expect(accountProviderId('openai', 'default')).toBe(provider);
+    } finally {
+      h.pool = previousPool; h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false;
+      clock.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });

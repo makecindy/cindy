@@ -634,7 +634,7 @@ function readGuestAccess(controller: string): GuestAccessCheck {
     || rt.events.memberReady?.({ shareId: share.shareId, memberId: member.memberId, joinedAt: member.joinedAt }) === false) {
     return { denied: 'member-cleanup-pending' };
   }
-  if (!readDeviceLinkSettings().remoteControlEnabled) return { denied: 'remote-control-off' };
+  if (!readDeviceLinkSettings(false, 60_000).remoteControlEnabled) return { denied: 'remote-control-off' };
   if (pluginEngineKeyFromProviderId(share.providerId)
     ? !isPluginEngineOfferedToGuests(share.providerId)
     : !isRemoteProviderInvocationAllowed(share.providerId)) {

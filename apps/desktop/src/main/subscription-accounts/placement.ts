@@ -30,6 +30,9 @@ const PROVIDER_ID = /^[a-z0-9_-]{1,40}$/;
 const CREATED_PROVIDER_ID = /^(openai|anthropic)-sub-[a-f0-9]{8}$/;
 const MAX_PLACEMENTS = 1024;
 const MAX_PROVIDER_NAME = 64;
+// Selection and permission resolution may lag external edits by a minute; local writes
+// update the same store. Owner/generation changes still invalidate the cached image.
+const PLACEMENT_CACHE_MS = 60_000;
 /** The upgrade split counted past ids already taken by the owner's created providers. */
 const UPGRADE_SPLIT_ID_ATTEMPTS = 16;
 
@@ -107,7 +110,7 @@ export function accountProviderId(kind: SubscriptionProvider, accountId: string)
     const api = apiKeyPoolMember(accountId);
     if (api) return api.providerId;
   }
-  file.invalidateIfChanged();
+  file.invalidateIfChanged(PLACEMENT_CACHE_MS);
   return file.read().accounts[keyOf(kind, accountId)] ?? kind;
 }
 
@@ -117,7 +120,7 @@ export function providerAccounts<T extends { id: string }>(
   accounts: readonly T[],
   providerId: string = kind,
 ): T[] {
-  file.invalidateIfChanged();
+  file.invalidateIfChanged(PLACEMENT_CACHE_MS);
   const placements = file.read().accounts;
   return accounts.filter((account) => (placements[keyOf(kind, account.id)] ?? kind) === providerId);
 }
@@ -128,7 +131,7 @@ export function accountSiblings<T extends { id: string }>(
   accounts: readonly T[],
   accountId: string,
 ): T[] {
-  file.invalidateIfChanged();
+  file.invalidateIfChanged(PLACEMENT_CACHE_MS);
   const placements = file.read().accounts;
   const providerId = placements[keyOf(kind, accountId)] ?? kind;
   return accounts.filter((account) => (placements[keyOf(kind, account.id)] ?? kind) === providerId);
@@ -156,12 +159,13 @@ export function readMergedProviderAccount(providerId: string): string | undefine
 
 /** Providers Cindy created for subscription accounts (the file's view; may include hidden ones). */
 export function readCreatedSubscriptionProviders(): Readonly<Record<string, CreatedSubscriptionProvider>> {
-  file.invalidateIfChanged();
+  file.invalidateIfChanged(PLACEMENT_CACHE_MS);
   return file.read().providers ?? {};
 }
 
 /** Preserve an already-published list on an unreadable file; missing or valid empty files clear it. */
 export function readCreatedSubscriptionProvidersIfReadable(): Readonly<Record<string, CreatedSubscriptionProvider>> | null {
+  // Explicit catalog publication refreshes immediately, including external removal/damage.
   file.invalidateIfChanged();
   if (file.isUnreadable()) return null;
   return file.read().providers ?? {};
@@ -287,7 +291,7 @@ export async function discardUnusedSubscriptionAccountPlacement(kind: Subscripti
 }
 
 export function readProviderStrategy(providerId: string): ProviderGroupStrategy | undefined {
-  file.invalidateIfChanged();
+  file.invalidateIfChanged(PLACEMENT_CACHE_MS);
   return file.read().strategies?.[providerId];
 }
 

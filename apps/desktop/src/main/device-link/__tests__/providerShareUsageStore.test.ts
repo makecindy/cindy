@@ -517,10 +517,9 @@ describe('provider share usage store', () => {
   });
 
   // Regression: O may restart, switch M, or let a lease expire while M retries a completed turn's receipt.
-  // This exercises the production ledger entry, its durable acknowledgement, and authenticated M binding (unit tier).
-  // Unit: real receipt ACK/atomic replacement. Metadata incident exposed one full write per ACK.
-  // Existing restart/rollback tests did not cover concurrent receipts or durable duplicate cost.
-  // Minimal input: two receipts and one duplicate held at rename; no timer sleeps.
+  // These unit tests exercise memory receipt acceptance, checkpoint/reload and authenticated M binding.
+  // The metadata incident exposed a full write per ACK; older tests did not distinguish acceptance
+  // from checkpointing. Minimal inputs: two receipts, a replay and a failed concurrent transaction.
   it('keeps a concurrent receipt when a standby usage transaction rolls back', async () => {
     const file = path.join(dir, 'rollback-usage.json');
     const now = new Date(2026, 9, 27, 12).getTime();
@@ -539,12 +538,14 @@ describe('provider share usage store', () => {
       { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 7, 3)] });
     release();
     await imported; expect(await received).toBe(true);
+    await store.flush();
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
     expect(saved.rows[0]?.inputTokens).toBe(7);
     expect(saved.standbyTotals).toEqual([]);
   });
 
-  it('shares a durable receipt barrier and skips durable duplicates, retrying failed writes', async () => {
+  it('accepts receipts in memory and checkpoints once per minute without extending the deadline', async () => {
+    vi.useFakeTimers();
     const file = path.join(dir, 'usage.json');
     const now = Date.now();
     const route = directRoute(now);
@@ -553,49 +554,45 @@ describe('provider share usage store', () => {
     await store.commitDirectReceiptRoute(route);
     const receipt = { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 7, 3)] };
     const record = (value = receipt) => store.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId, value);
-    const realRename = fsp.rename.bind(fsp);
-    let release!: () => void;
-    let entered!: () => void;
-    const ready = new Promise<void>(resolve => { entered = resolve; });
-    const hold = new Promise<void>(resolve => { release = resolve; });
-    const rename = vi.spyOn(fsp, 'rename').mockImplementationOnce(async (...args) => {
-      entered(); await hold; return realRename(...args);
-    });
-    let acknowledged = false;
-    const pending = Promise.all([record(), record({ ...receipt, usageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }), record()])
-      .then(value => { acknowledged = true; return value; });
-    await ready;
-    expect(acknowledged).toBe(false);
-    let duplicateAck = false;
-    const duplicate = record().then(value => { duplicateAck = true; return value; });
-    await Promise.resolve();
-    expect(duplicateAck).toBe(false);
-    let lateEntered!: () => void;
-    let lateRelease!: () => void;
-    const lateReady = new Promise<void>(resolve => { lateEntered = resolve; });
-    const lateHold = new Promise<void>(resolve => { lateRelease = resolve; });
-    rename.mockImplementationOnce(async (...args) => { lateEntered(); await lateHold; return realRename(...args); });
-    let lateAck = false;
-    const late = record({ ...receipt, usageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' }).then(value => { lateAck = true; return value; });
-    release();
-    expect(await duplicate).toBe(false);
-    expect(await pending).toEqual([true, true, false]);
-    await lateReady;
-    expect(lateAck).toBe(false); // The first serialized image did not contain this receipt.
-    lateRelease();
-    expect(await late).toBe(true);
-    expect(rename).toHaveBeenCalledTimes(2);
+    const rename = vi.spyOn(fsp, 'rename');
+    try {
+      expect(await Promise.all([record(), record({ ...receipt, usageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }), record()]))
+        .toEqual([true, true, false]);
+      expect(rename).not.toHaveBeenCalled();
+      expect(store.query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(14);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).rows).toEqual([]);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(await record({ ...receipt, usageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })).toBe(true);
+      expect(rename).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await store.flush();
+      expect(rename).toHaveBeenCalledTimes(1);
+      const restarted = createProviderShareUsageStore(file, { now: () => now });
+      expect(await restarted.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId, receipt)).toBe(false);
+      expect(restarted.query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(21);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await store.flush();
+      expect(rename).toHaveBeenCalledTimes(1); // No dirty state, no idle checkpoint.
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  // Unit: memory ACK is explicitly not a disk promise. A failed checkpoint must retain
+  // both counters and retry IDs; previous immediate-ACK tests did not cover this contract.
+  it('retains acknowledged counters after checkpoint failure and retries without recounting', async () => {
+    const file = path.join(dir, 'usage.json');
+    const route = directRoute(Date.now());
+    const store = createProviderShareUsageStore(file);
+    await store.registerDirectReceiptRoute(route); await store.commitDirectReceiptRoute(route);
+    const receipt = { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 7, 3)] };
+    const record = () => store.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId, receipt);
+    const rename = vi.spyOn(fsp, 'rename').mockRejectedValueOnce(new Error('checkpoint denied'));
+    expect(await record()).toBe(true);
+    await expect(store.flush()).rejects.toThrow('checkpoint denied');
     expect(await record()).toBe(false);
+    expect(store.query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(7);
+    await store.flush();
     expect(rename).toHaveBeenCalledTimes(2);
-    const restarted = createProviderShareUsageStore(file, { now: () => now });
-    expect(await restarted.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId, receipt)).toBe(false);
-    expect(rename).toHaveBeenCalledTimes(2);
-    rename.mockRejectedValueOnce(new Error('disk denied'));
-    const next = { ...receipt, usageId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' };
-    await expect(record(next)).rejects.toThrow('disk denied');
-    expect(await record(next)).toBe(false);
-    expect(rename).toHaveBeenCalledTimes(4);
-    expect(JSON.parse(fs.readFileSync(file, 'utf8')).rows[0].inputTokens).toBe(28);
+    expect(createProviderShareUsageStore(file).query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(7);
   });
 
   it('accepts historical direct receipts after restart or route switch, but only from their assigned executor', async () => {
@@ -650,6 +647,7 @@ describe('provider share usage store', () => {
     const renewed = { ...receipt, generation: '33333333-3333-4333-8333-333333333333',
       usageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', samples: [sample('gpt', 2, 1)] };
     expect(await restarted.recordDirectReceipt('global:owner-1', 'owner-pc', 'member-pc-1', renewed)).toBe(true);
+    await restarted.flush(); // Memory acceptance becomes restart-safe at the explicit checkpoint.
     const afterAck = createProviderShareUsageStore(file, { now: () => now });
     expect(await afterAck.recordDirectReceipt('global:owner-1', 'owner-pc', 'member-pc-1', receipt)).toBe(false);
     expect(afterAck.query(new Set(['share-1']), 'all')[0]?.models.map((row) => [row.memberKey, row.inputTokens]))
