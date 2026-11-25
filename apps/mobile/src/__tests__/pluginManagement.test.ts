@@ -111,6 +111,20 @@ describe('mobile management contract', () => {
       .market.items[0]).toMatchObject(detail);
     expect(parsePluginManagementDetail(extended)).toMatchObject(detail);
   });
+  // Merge check after main 5fd5f542c0: the other optional fields a newer Host now sends (sortValue on catalog items,
+  // release updates on the detail, sizeBytes everywhere) do not make the strict reader reject the whole response;
+  // the source identity keeps its strict key check. Same shapes as apps/desktop/src/shared/pluginMarket.ts. Unit.
+  it('accepts catalog pages and details carrying the newer optional market fields', () => {
+    const id = 'DemoGitMarketSource001';
+    const updates = [{ version: '2', publishedAt: '2026-11-20T08:00:00.000Z', releaseNotes: 'Faster sync' },
+      { version: '1', publishedAt: '2026-10-01T08:00:00.000Z', releaseNotes: '' }];
+    expect(parsePluginManagementDetail({ ...detail, sizeBytes: 1200, sortValue: 42, updates })).toMatchObject(detail);
+    const page = parsePluginMarketPage({ items: [{ ...detail, sizeBytes: 1200, sortValue: 'trending' }], nextCursor: null });
+    expect(page.items[0]).toMatchObject({ pluginId: detail.pluginId, releaseId: detail.releaseId });
+    const custom = parsePluginMarketPage({ items: [{ ...detail, sourceType: 'git-market', sourceMarketName: 'Acme', sizeBytes: 1,
+      sourceIdentity: { kind: 'git', repository: 'github.com/a/b', sourceId: id, sizeBytes: 1 } }] }).items[0]!;
+    expect(custom).not.toHaveProperty('sourceIdentity');
+  });
   it('keeps namespace missing distinct from root, and removes Host-local icon lookup keys', () => {
     const legacy = { ...plugin }; delete legacy.namespace;
     const parsed = parsePluginManagementSnapshot({ ...snapshot([legacy]), market: { ...snapshot().market,
