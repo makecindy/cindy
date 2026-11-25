@@ -38,10 +38,25 @@ import { readCredentialTaskSettings, readEffectiveCredentialSettings, type Crede
 import { isSupportedRuntimeEffort } from './runtimeSelectionAxes.js';
 import { withSendToSessionLock } from './sendToSessionLock.js';
 import {
-  projectSessionRuntimeControl, recordUserSessionRuntimeMutation, recordUserSourceSwitch,
+  projectSessionRuntimeControl, recordUserSessionRuntimeMutation,
   resolveSessionRuntimeAxes, sessionRuntimeControlOwnerEpochMatches,
 } from './sessionRuntimeControl.js';
+import { recordSourceSwitch } from './sourceSwitchStore.js';
 import type { createHandleSetModel } from './sessionRuntimeSelectionApply.js';
+
+/**
+ * A deferred switch just committed this task's route. Only a codex task moved to another source
+ * needs the native-thread handoff: the same source is not a switch (a model change within one
+ * source keeps its thread), and other engines carry their own continuation.
+ */
+export function committedCodexSourceSwitch(input: {
+  agentKind?: string | null;
+  beforeProviderId: string | null;
+  afterProviderId: string | null;
+}): string | null {
+  if (input.agentKind !== 'codex' || !input.afterProviderId) return null;
+  return input.afterProviderId === input.beforeProviderId ? null : input.afterProviderId;
+}
 
 function matchesTaskRow(row: CredentialTaskRow, expected: CredentialTaskRow): boolean {
   return Object.entries(expected).every(([key, value]) => row[key as keyof CredentialTaskRow] === value);
@@ -303,9 +318,12 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
       if (staged || ports.settlementPermit) setSessionProvider(sessionId, route.providerId);
       // A user switch that had to wait for the running turn: its native thread still belongs to
       // the source the task is leaving, so the next start hands the transcript over.
-      if (staged?.agentKind === 'codex' && (desiredRow?.providerId ?? null) !== (route.providerId ?? null)) {
-        recordUserSourceSwitch(sessionId, route.providerId ?? null);
-      }
+      const sourceSwitch = committedCodexSourceSwitch({
+        agentKind: staged?.agentKind,
+        beforeProviderId: desiredRow?.providerId ?? null,
+        afterProviderId: route.providerId ?? null,
+      });
+      if (sourceSwitch) await recordSourceSwitch(sessionId, sourceSwitch);
       setSessionEffort(sessionId, finalEffort);
       setSessionFastMode(sessionId, finalFastMode);
       if (staged && finalModel) {

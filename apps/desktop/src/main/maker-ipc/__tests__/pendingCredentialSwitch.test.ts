@@ -25,7 +25,7 @@ import {
   PendingCredentialSwitchService,
   type PendingCredentialSwitchDeps,
 } from '../pendingCredentialSwitch.js';
-import { createPendingCredentialSwitchRouteReader, createPendingCredentialSwitchService } from '../pendingCredentialSwitchAssembly.js';
+import { committedCodexSourceSwitch, createPendingCredentialSwitchRouteReader, createPendingCredentialSwitchService } from '../pendingCredentialSwitchAssembly.js';
 import { applyRuntimeSetModelChange } from '../runtimeSetModel.js';
 import { withSendToSessionLock } from '../sendToSessionLock.js';
 
@@ -79,6 +79,20 @@ function createHarness(
   });
   return { service, closeSession, broadcastApplied, broadcastFailed, onApplied, persistRoute, sessions };
 }
+
+// 延后生效的换源落地时才写换源记录：同一来源换模型不算换源，别的引擎不走这条路。
+describe('committedCodexSourceSwitch', () => {
+  it('records only a codex task that actually moved to another source', () => {
+    expect(committedCodexSourceSwitch({ agentKind: 'codex', beforeProviderId: 'openai-old', afterProviderId: 'openai' }))
+      .toBe('openai');
+    expect(committedCodexSourceSwitch({ agentKind: 'codex', beforeProviderId: 'openai', afterProviderId: 'openai' }))
+      .toBeNull();
+    expect(committedCodexSourceSwitch({ agentKind: 'claude-code', beforeProviderId: 'anthropic', afterProviderId: 'openai' }))
+      .toBeNull();
+    expect(committedCodexSourceSwitch({ agentKind: 'codex', beforeProviderId: 'openai', afterProviderId: null }))
+      .toBeNull();
+  });
+});
 
 describe('PendingCredentialSwitchService', () => {
   it('applies a busy Pi selection through the model-window transaction before waking the queue', async () => {

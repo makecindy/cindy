@@ -104,6 +104,23 @@ describe('Codex writer decision freshness', () => {
     expect(getSessionProvider(sessionId)).toBe('cprov-target');
   });
 
+  // 冷会话（没有 live handle）换源也要落路由：不能因为跳过线程迁移就连来源一起丢掉。
+  it('publishes the picked source for a cold task without forking its thread', async () => {
+    const sessionId = rememberSession('user-source-switch-cold');
+    setSessionProvider(sessionId, 'cprov-source');
+    const relink = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => undefined,
+      listActiveSessions: () => [],
+      closeSession: async () => {},
+    };
+    await expect(applyRuntimeSetModelChange({ maker, sessionId, model: 'target', providerId: 'cprov-target',
+      handOffCodexThread: true, requiresCodexThreadRelink: async () => true, relinkCodexThread: relink }))
+      .resolves.toEqual({ status: 'applied' });
+    expect(relink).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('cprov-target');
+  });
+
   it.each([false, true])('rechecks after asynchronous model inspection with busy=%s', async (busy) => {
     const sessionId = rememberSession('route-changes-during-inspection');
     setSessionProvider(sessionId, 'cprov-source');

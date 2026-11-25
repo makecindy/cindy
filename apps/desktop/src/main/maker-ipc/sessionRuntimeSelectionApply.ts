@@ -26,8 +26,9 @@ import { PLUGIN_ENGINE_DEFAULT_MODEL, isPluginEngineEffort } from '../../shared/
 import { getSessionFastMode, getSessionEffort, setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { customProviderExists } from '../maker-host/custom-provider-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { sessionRuntimeControlOwnerEpochMatches, acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot, captureSessionRuntimeControlOwnerEpoch, resolveSessionRuntimeRefreshEffort, resolveSessionRuntimeAxes, deferSessionRuntimeAxisMutation, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, recordUserSessionRuntimeMutation, recordUserSourceSwitch, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation } from './sessionRuntimeControl.js';
+import { sessionRuntimeControlOwnerEpochMatches, acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot, captureSessionRuntimeControlOwnerEpoch, resolveSessionRuntimeRefreshEffort, resolveSessionRuntimeAxes, deferSessionRuntimeAxisMutation, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation } from './sessionRuntimeControl.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
+import { recordSourceSwitch } from './sourceSwitchStore.js';
 import { eq } from 'drizzle-orm';
 import { buildDeferredRuntimeSelectionProfile, shouldSkipColdPiWindowRehydration, planUserRuntimeModelSwitch } from '../../shared/runtimeModelSwitchGate.js';
 import { getDbClient, getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -1921,7 +1922,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           // The user picked another source, so this task's native thread belongs to the previous
           // one. Record it once: the next start hands the transcript over instead of resuming a
           // thread whose home the new source cannot read (ordinary resumes never record this).
-          if (userSourceSwitch) recordUserSourceSwitch(sessionId, committedProviderId);
+          if (userSourceSwitch) await recordSourceSwitch(sessionId, committedProviderId);
           wakeSessionInputAfterCredentialSwitch(sessionId);
         }
         await broadcastSessionRuntimeProjection(sessionId, userBaselineOverride).catch((error) => {

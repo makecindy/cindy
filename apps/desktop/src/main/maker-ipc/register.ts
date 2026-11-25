@@ -1547,16 +1547,15 @@ import {
   hasCodexAppliedCustomProviderCapability,
 } from '../maker-host/codex-custom-provider-route.js';
 import { runSchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
+import { consumeSourceSwitch, matchesSourceSwitch } from './sourceSwitchStore.js';
 import {
   acceptSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
   recordFailedSessionRuntimeFallbackCandidate,
   getPendingSessionRuntimeMutation,
   applySessionRuntimeOverrideForStart,
-  consumeUserSourceSwitch,
   getSessionRuntimeControlSnapshot,
   isPendingSessionRuntimeRouteExplicit,
-  matchesUserSourceSwitch,
   recordUserSessionRuntimeMutation,
   remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeEffort,
@@ -5336,8 +5335,8 @@ async function prepareSessionAccountsAndHistory(
     ...accountRecovery,
     resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
     // Only a source the user picked moves a task; an ordinary resume never does.
-    matchesSourceSwitch: providerId => matchesUserSourceSwitch(sessionId, providerId),
-    consumeSourceSwitch: () => consumeUserSourceSwitch(sessionId),
+    matchesSourceSwitch: providerId => matchesSourceSwitch(sessionId, providerId),
+    consumeSourceSwitch: () => consumeSourceSwitch(sessionId),
     log: subscriptionAccountRecoveryDeps.log,
     rebuild: async (id, assertCurrent) => {
       await accountRecovery.rebuild(id, assertCurrent);

@@ -17,7 +17,7 @@ interface PrepareAccountSendDeps {
    * record one. Split so a failed attempt keeps the record for the retry.
    */
   matchesSourceSwitch?(providerId: string | null): boolean;
-  consumeSourceSwitch?(): void;
+  consumeSourceSwitch?(): void | Promise<void>;
   log?(message: string, fields: Record<string, unknown>): void;
   /** Retires only this runtime and durably retains its context before clearing the native id. */
   rebuild(id: string, assertCurrent: () => void): Promise<void>;
@@ -76,7 +76,7 @@ export async function prepareSubscriptionAccountForSend(
       });
     }
     await clearAccountBindings([`task:${sessionId}`], 'openai');
-    deps.consumeSourceSwitch?.();
+    await deps.consumeSourceSwitch?.();
     return true;
   }
   let historyAccountId: string | undefined;

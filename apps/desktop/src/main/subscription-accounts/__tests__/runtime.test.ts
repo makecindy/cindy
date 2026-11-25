@@ -7145,13 +7145,14 @@ describe('unbound Codex history account recovery', () => {
       resumeSessionId: 'legacy', model: row.model! } as StartSessionOptions);
     expect(start.mock.calls[0][0].resumeSessionId).toBe('legacy');
     await before.close();
+    const nativeBefore = { ...h.bindings.get('native:legacy')! };
 
     expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(true);
     expect(deps.rebuild).toHaveBeenCalledOnce();
     expect(row.sdkSessionId).toBeNull();
-    // 新任务路由重新选号，旧线程仍归原账号。
+    // 只交接本任务：原生历史 ID 的归属不改，别的仍引用这条线程的任务不受影响。
     expect(h.bindings.has('task:old-task')).toBe(false);
-    expect(h.bindings.get('native:legacy')?.accountId).toBe('third');
+    expect(h.bindings.get('native:legacy')).toEqual(nativeBefore);
     expect(deps.consumeSourceSwitch).toHaveBeenCalledOnce();
 
     const handle = await agent.startSession({ providerId: 'openai', sessionId: 'old-task',
