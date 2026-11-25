@@ -101,6 +101,7 @@ export const HOST_DISPATCH_PORTS_WHILE_HELD = Object.freeze({
   // The invoke registry: contract channels call the service (gated); maker:create-session and
   // MCP_APPS_INVOKE are refused where they are registered.
   dispatchLocalInvoke: 'service-gate',
+  hasLocalChannel: 'read',
   assertRemoteBotInvocationAllowed: 'read',
   projectRemoteSessionResult: 'read',
   projectRemoteBotPush: 'read',
@@ -640,6 +641,9 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     noteControllerAccessDenied: access.noteControllerAccessDenied,
     syncRemoteControlAccessGeneration: access.syncRemoteControlAccessGeneration,
     dispatchLocalInvoke: invoke,
+    // Registration above is synchronous, before either link starts. A retiring owner
+    // leaves the verdict unknown, including for a late request after stop clears the registry.
+    hasLocalChannel: channel => current() ? registry.has(channel) : undefined,
     assertRemoteBotInvocationAllowed: botBoundary.assertRemoteBotInvocationAllowed,
     projectRemoteSessionResult: botBoundary.projectRemoteSessionResult,
     projectRemoteBotPush: botBoundary.projectRemoteBotPush,

@@ -140,6 +140,11 @@ export interface OpenAcpSessionOptions {
   resumedCompanionBriefing?: string;
   /** Lowercase Skill names discovered for this session, so host briefings defuse `/skill` mentions. */
   skillCommandNames?: readonly string[];
+  /**
+   * Rewrites a message whose text starts with `/<name>` (see skill-invocation.ts); null keeps the
+   * text. Called only for such messages, so ordinary messages are sent without waiting on it.
+   */
+  expandSlashInvocation?: (text: string) => Promise<string | null>;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
@@ -403,6 +408,7 @@ export class AcpSession {
   private readonly connection: AcpConnection;
   private readonly logger: Logger | undefined;
   private readonly readImage: (path: string) => Promise<Uint8Array>;
+  private readonly expandSlashInvocation: ((text: string) => Promise<string | null>) | undefined;
   private readonly cancelGraceMs: number;
   private readonly onEnded: (() => void) | undefined;
   private readonly queue = createAsyncQueue<AgentEvent>();
@@ -452,6 +458,7 @@ export class AcpSession {
     this.capabilitiesSnapshot = this.buildCapabilities();
     this.logger = init.options.logger;
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
+    this.expandSlashInvocation = init.options.expandSlashInvocation;
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onEnded = init.options.onEnded;
     this.now = init.options.now ?? Date.now;
@@ -992,13 +999,23 @@ export class AcpSession {
 
   private async toPrompt(message: UserMessage): Promise<AcpContentBlock[]> {
     if (typeof message.content === 'string') {
-      return message.content.length > 0
-        ? [{ type: 'text', text: message.content }]
-        : [];
+      return message.content.length > 0 ? [{ type: 'text', text: await this.expandText(message.content) }] : [];
     }
     const blocks: AcpContentBlock[] = [];
-    for (const block of message.content) blocks.push(await this.toContentBlock(block));
+    // Only the message's opening text can be a slash invocation: its first text block, the same text
+    // the host keeps its notes off (desktop `shouldPrependMobileClientPromptNote`).
+    const opening = message.content.findIndex((block) => block.type === 'text');
+    for (const [index, block] of message.content.entries()) {
+      blocks.push(index === opening && block.type === 'text'
+        ? { type: 'text', text: await this.expandText(block.text) }
+        : await this.toContentBlock(block));
+    }
     return blocks;
+  }
+
+  private async expandText(text: string): Promise<string> {
+    if (!this.expandSlashInvocation || !text.trimStart().startsWith('/')) return text;
+    return (await this.expandSlashInvocation(text)) ?? text;
   }
 
   private async toContentBlock(block: UserContentBlock): Promise<AcpContentBlock> {

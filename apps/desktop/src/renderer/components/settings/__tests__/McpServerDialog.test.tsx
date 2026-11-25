@@ -184,3 +184,30 @@ it('embeds the same Settings form and uses its existing save path with user-edit
   expect(api.create).toHaveBeenCalledExactlyOnceWith({ id: 'custom_example-2', name: 'Example', transport: 'sse',
     url: 'http://example.test/mcp?key=public', headers: { 'X-Test': 'test-invalid-header' } }, 'test-invalid-token');
 });
+
+it('saves through a supplied persistence without touching this computer or its credentials', async () => {
+  const persistence = { create: vi.fn(async () => {}), update: vi.fn(async () => {}) };
+  const onSaved = vi.fn();
+  render(
+    <McpServerDialog
+      initial={{ ...initial, url: '', headers: {} }}
+      persistence={{ ...persistence, credentialsNote: <p>Credentials are managed elsewhere</p> }}
+      onSaved={onSaved}
+      onClose={vi.fn()}
+    />,
+  );
+  expect(screen.getByText('Credentials are managed elsewhere')).toBeTruthy();
+  expect(screen.queryByLabelText('settings.mcp.fields.token')).toBeNull();
+  // An endpoint that is not shown back stays as stored when the field is left empty.
+  fireEvent.click(save());
+  await waitFor(() => expect(onSaved).toHaveBeenCalledWith('custom_original'));
+  expect(persistence.update).toHaveBeenCalledWith({
+    id: 'custom_original',
+    name: 'Example',
+    transport: 'sse',
+    url: '',
+    headers: {},
+  });
+  expect(persistence.create).not.toHaveBeenCalled();
+  for (const local of [api.read, api.create, api.update]) expect(local).not.toHaveBeenCalled();
+});

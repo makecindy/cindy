@@ -628,6 +628,14 @@ export interface GhostSecretOauthDecl {
   /** code / refresh token 交换端点(https;域名必须命中 hosts——clientSecret 只流向用户同意过的域名)。 */
   tokenUrl: string;
   /**
+   * 可选:设备码授权端点(RFC 8628 Device Authorization Grant,https;域名必须命中
+   * hosts)。声明后主机改走「设备码登录」:申请 user_code 与确认页、拉起确认页,
+   * 再轮询 tokenUrl(grant_type=urn:ietf:params:oauth:grant-type:device_code),
+   * 无需 loopback 回调与重定向 URL 登记。authorizeUrl 仍必填:不认识本字段的旧
+   * 主机忽略它并退回授权码流程。与 tokenBroker / brokerBounce 互斥。
+   */
+  deviceAuthorizationUrl?: string;
+  /**
    * 可选:作者内置的 OAuth 客户端 ID(2026-07-13 定案,开箱即用前置)。
    * 声明后用户零配置即可点"连接账号";用户在设置页自填的
    * client 凭证**覆盖**内置值(清除自填 = 回落内置)。桌面应用的 client
@@ -2639,6 +2647,19 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
           if (!authorizeParsed.ok) return authorizeParsed;
           const tokenParsed = parseHostBoundUrl(oa.tokenUrl, 'tokenUrl');
           if (!tokenParsed.ok) return tokenParsed;
+          let deviceAuthorizationUrl: string | undefined;
+          if (oa.deviceAuthorizationUrl !== undefined) {
+            const deviceParsed = parseHostBoundUrl(oa.deviceAuthorizationUrl, 'deviceAuthorizationUrl');
+            if (!deviceParsed.ok) return deviceParsed;
+            if (oa.tokenBroker !== undefined || oa.brokerBounce !== undefined) {
+              return {
+                ok: false,
+                reason:
+                  'network.secrets[].oauth.deviceAuthorizationUrl 与 tokenBroker / brokerBounce 互斥(broker 只承接授权码交换)',
+              };
+            }
+            deviceAuthorizationUrl = deviceParsed.url;
+          }
           // 内置 client 凭证(可选,成对语义:secret 不许孤儿声明)。
           if (oa.clientId !== undefined) {
             if (
@@ -2956,6 +2977,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
           oauth = {
             authorizeUrl: authorizeParsed.url,
             tokenUrl: tokenParsed.url,
+            ...(deviceAuthorizationUrl !== undefined ? { deviceAuthorizationUrl } : {}),
             ...(oa.clientId !== undefined ? { clientId: oa.clientId as string } : {}),
             ...(oaClientIdAlternatives !== undefined
               ? { clientIdAlternatives: oaClientIdAlternatives }

@@ -164,6 +164,18 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
   它 Cindy 的本地 HTTP MCP 桥（复用 Codex / Pi 已有实现），令牌按任务签发、随任务失效。
   交出的工具范围与内置 Pi 相同（2026-11-18 用户决定），复用 Pi 的允许清单而不另立一份；
   安装确认文案需写明这一范围。直接连接的第三方 MCP 与其凭证留在宿主。
+- **Antigravity 的工具预算（2026-11-25）**：agy 把 ACP 传入的所有 MCP 工具放进一份约 16 KB、
+  所有服务共用的声明预算（按它在 `~/.gemini/antigravity-cli/mcp/<服务>/` 写下的单个工具 JSON 计），
+  超出时从最大的工具开始整个删掉，模型看不到、也没有别的调用途径
+  （[上游 #1530](https://github.com/google-antigravity/antigravity-cli/issues/1530)）。Cindy 的完整目录约
+  160 KB，`ghost_call`、`cindy_scheduler.call_tool` 等因此不可用，PR Skill 挂不了卡片、建不了跟进。
+  HTTP MCP 桥对 `antigravity-client` 按服务数加权分配 12 KB 总量（`antigravityToolCatalog.ts`）：放得下就原样下发；
+  否则压成一句话摘要加参数类型，完整说明经 `describe_tool` 读取；仍放不下时只保留首选入口与
+  `list_tools` / `call_tool`，其余经 `run_tool` 调用。`run_tool` 在传输层还原成原来的 `tools/call`，
+  注册、参数校验与授权不变；其他客户端的目录不受影响。两个辅助入口只由传输层应答、不在 `McpServer` 上注册：
+  MCP App 代理（`mcp-apps/serverProxy.ts`）与伙伴连接（`bot-import/connectionProvider.ts`）自己安装
+  `tools/list` / `tools/call` 处理器，再调 `registerTool` 会与之冲突，使服务初始化失败。新增工具或加长说明不需要改这里，
+  预算由测试 `keeps every agy catalog within the shared budget` 守住。
 - **排除范围**：远程 / SSH / 设备互联被控端、定时任务、伙伴、多 Agent 协同、插件模型路由、
   标题生成的 oneShot 均不接入 `acp`，遇到即返回明确的「不支持」。
 
@@ -413,6 +425,28 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
 - **顺序**：远程工作区说明 → 伙伴说明 → 花名册 → Skill 清单 → 协同角色说明。
 - **缓存**：说明在首条用户消息里，内置引擎的 system prompt 与缓存前缀不变。
 - **防斜杠指令误触**：部分 ACP 对端（如 Antigravity `agy acp`）会扫描整段 `session/prompt` 文本中的 `/命令` 并自动激活对应工作流。宿主拼入的非用户文本（首轮说明、跨引擎交接与各类环境说明）会去掉独立斜杠指令前的 `/`，不动文件路径、URL 与用户原话；用户消息本身以斜杠指令开头时，环境说明与首轮说明不抢占句首（首轮说明顺延到下一条普通消息）。
+
+## 斜杠调用 Skill（2026-11-25）
+
+用户要求插件引擎任务也能像内置引擎一样在输入框打 `/` 选 Skill。此前输入框只列 Cindy 的桌面命令，手打的 `/pr`
+原样送到引擎，引擎不认识 Cindy 的 Skill，只当作一行字。
+
+- **列出**：桌面输入框的 `/` 菜单在插件引擎任务与新任务草稿里列出引擎展开 `/<名字>` 用的同一份清单（上节的首轮
+  Skill 清单，内置 Pi 范围），经 `maker:list-agent-skills` 按 `acp` 向插件引擎读取（`AcpAgent.listAgentSkills`），
+  不借内置 Pi 的清单：本机 Pi 不可用时 Pi 那份读取失败，菜单会是空的。清单不含只在 Pi 里加载的 Pi 包 Skill，也没有
+  Pi 专用的 `/skill:` 别名和「项目 Skill 尚未加载」状态。内置 Harness 的命令仍不列。
+  Agent 在另一台电脑上运行的任务不列，与首轮清单一致；远控另一台电脑时从那台电脑读（旧版电脑不认 `acp`，菜单不列
+  Skill，它的引擎也不展开）；SSH 任务不变。
+- **展开**：消息开头是 `/<名字>` 且对上执行电脑上的 Skill 时，maker-core（`acp/skill-invocation.ts`）在发给引擎前
+  把它换成与 Pi `/skill:` 相同的 `<skill name location>` 块（`SKILL.md` 去掉 frontmatter 的正文），后面接用户其余的文字。
+  也认其他引擎的发送路径留下的 `skill:`、`cindy:`、`cindy-plugin-<id>:` 前缀；同名 Skill 按清单顺序取第一个，与 Pi 相同。
+  界面与历史里的用户消息仍是用户输入的 `/名字`。恢复的会话同样展开；隔离伙伴与另一台电脑托管的任务不展开，原因同上节。
+  没有对应 Skill、文件读不到或超过 512 KB 时原样发送，不挡发送。
+- **开头的文字**：消息的第一段文字（带图片时也是第一段文字）。宿主给消息加的说明（设备、来源、切换引擎的交接、
+  插话说明等）同 Pi 一样不加在以 `/` 开头的消息上（`shouldPrependMobileClientPromptNote`），否则 `/` 被挤到后面、
+  不会展开；可重复的说明留给下一条消息，切换引擎的交接同样顺延。
+- **代价**：只有以 `/` 开头的消息才在发送前读一次 Skill 清单（隔离、限时的扫描进程）；其他消息的发送路径不变。
+  展开内容在当轮用户消息里，不进 system prompt。手机与自动化发来的 `/名字` 走同一发送路径，同样展开；手机输入框的列表本次未改。
 
 ## 已知限制
 

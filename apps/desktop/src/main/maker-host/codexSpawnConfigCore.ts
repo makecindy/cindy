@@ -39,6 +39,7 @@ export function createCodexSpawnConfig(ports: {
 }): Prepare {
   const { getCodexHome, getCodexExtraSpawnConfig, broadcastCodexRuntimeRoute, readClaudeApiKey, isReplacedCindyGatewayKey, getDesktopSelectableCatalog, resolveDesktopModelContextProviderId } = ports;
   const { setCodexProxyAuthInjection, setCodexProxyGatewayKeyReader, setCodexSubagentOAuthReader, ensureCodexCustomContextProxyReady, isCodexCustomContextProxyHandleReady, releaseCodexCustomContextProxy, ensureCodexControlPlaneProxyReady, ensureCodexProxyReady, isCodexControlPlaneProxyHandleReady, isCodexProxyHandleReady, getCodexCustomContextProxyEndpoint, getCodexControlPlaneProxyEndpoint, getCodexProxyEndpoint, setCodexAppliedCustomProviderRoutes } = ports.proxy;
+  let lastBrowserCompanionUnavailableKey: string | null = null;
   return async (providers, ctx) => {
         if (ctx.remoteHostId) return ports.prepareRemote(providers, ctx);
         const isControlPlane = ctx.hostPurpose === 'control-plane';
@@ -107,14 +108,33 @@ export function createCodexSpawnConfig(ports: {
         const browserCompanionSpawnConfig =
           resolveCodexBrowserCompanionSpawnConfig(browserCompanion);
         mcpExtraArgs.push(...browserCompanionSpawnConfig.extraArgs);
-        if (
+        if (browserCompanion?.status === 'ready') {
+          lastBrowserCompanionUnavailableKey = null;
+        } else if (
           browserCompanion?.status === 'unavailable' &&
           browserCompanion.reason !== 'platform_unsupported'
         ) {
-          desktopMakerLogger.warn('Codex Browser companion unavailable', {
-            reason: browserCompanion.reason,
-            detail: browserCompanion.detail,
-          });
+          const unavailableKey = `${browserCompanion.reason}\u0000${browserCompanion.detail}`;
+          const changed = unavailableKey !== lastBrowserCompanionUnavailableKey;
+          lastBrowserCompanionUnavailableKey = unavailableKey;
+          if (browserCompanion.reason === 'provider_not_installed') {
+            if (changed) {
+              desktopMakerLogger.debug?.('Codex Browser companion not installed', {
+                reason: browserCompanion.reason,
+                detail: browserCompanion.detail,
+              });
+            }
+          } else if (changed) {
+            desktopMakerLogger.warn('Codex Browser companion unavailable', {
+              reason: browserCompanion.reason,
+              detail: browserCompanion.detail,
+            });
+          } else {
+            desktopMakerLogger.debug?.('Codex Browser companion unavailable (unchanged)', {
+              reason: browserCompanion.reason,
+              detail: browserCompanion.detail,
+            });
+          }
         }
         // API 模式: 追加 model_provider override, 让 codex app-server 走 AI Gateway
         // 而非 OAuth 订阅后端。每次 createHost 都现读 mode, 切模式后重建即生效。

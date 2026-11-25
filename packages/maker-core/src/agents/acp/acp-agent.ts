@@ -24,12 +24,14 @@ import {
   type PiExtraSpawnConfig,
   type StartSessionOptions,
 } from '../base-agent.js';
+import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import { buildAcpCapabilities } from './capabilities.js';
 import {
   collectPluginEngineSkillNames,
   renderPluginEngineCapabilityBriefing,
   type PluginEngineBriefingSkill,
 } from './briefing.js';
+import { expandPluginEngineSkillInvocation } from './skill-invocation.js';
 import type { AcpLineTransport } from './line-transport.js';
 import type { AcpMcpServer } from './protocol.js';
 import {
@@ -104,10 +106,11 @@ export interface AcpAgentDeps extends AgentDeps {
   /** Remembers what the agent offered so pickers can show it before the next start. */
   onSessionCapabilities?: (harnessKey: string, capabilities: Capabilities) => void;
   /**
-   * The Skills a task in this directory can use, for the briefing ahead of the first message (the
-   * same discovery and enablement as the built-in Pi engine). A failure only leaves the list out.
+   * The Skills a task in this directory can use (the same discovery and enablement as the built-in Pi
+   * engine): the briefing ahead of the first message, `/<skill>` expansion and the `/` menu. A failure
+   * only leaves the list out of the briefing and leaves messages unexpanded.
    */
-  listSessionSkills?: (ctx: { workingDir: string }) => Promise<readonly PluginEngineBriefingSkill[]>;
+  listSessionSkills?: (ctx: { workingDir?: string }) => Promise<readonly PluginEngineBriefingSkill[]>;
 }
 
 const NO_INIT = buildAcpCapabilities(
@@ -198,6 +201,27 @@ export class AcpAgent extends BaseAgent {
     this.acpDeps = deps;
   }
 
+  /**
+   * The `/` menu of a plugin-engine task: the list its `/<skill>` messages are expanded from, so the menu
+   * offers exactly the Skills that reach the engine as instructions, whether or not the built-in Pi engine
+   * is available on this computer. SSH workspaces are not offered to plugin engines.
+   */
+  override async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
+    if (opts.remoteHostId || !this.acpDeps.listSessionSkills) return { skills: [] };
+    const skills = await this.acpDeps.listSessionSkills({ workingDir: opts.workingDir });
+    return {
+      skills: skills.flatMap((skill) => skill.path ? [{
+        kind: 'agent-skill' as const,
+        name: skill.name,
+        ...(skill.description ? { description: skill.description } : {}),
+        source: 'skill' as const,
+        path: skill.path,
+        scope: skill.scope ?? 'user',
+        enabled: true,
+      }] : []),
+    };
+  }
+
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
     // SSH workspaces are not offered. Shared-user tasks require guest-workspace support, enforced
     // by the endpoint launcher against the plugin's live published capabilities.
@@ -284,6 +308,16 @@ export class AcpAgent extends BaseAgent {
       capabilities ? renderPluginEngineCapabilityBriefing(capabilities, acceptedMcpServers) : '',
       opts.pluginEngineBriefing ?? '',
     ].filter((part) => part.trim()).join('\n\n');
+    // `/<skill>` from the composer: the Skill is read from the same list as the briefing, on every
+    // message that asks for one (resumed conversations included). Same exclusions as the Skill list:
+    // an isolated companion keeps its frozen capability set, and a task of another computer has no
+    // Skill source here.
+    const expandSlashInvocation = isolatedBotProfile(opts.botRuntimeProfile) || hosted ? undefined
+      : (text: string) => expandPluginEngineSkillInvocation(
+          text,
+          () => this.readSessionSkills(opts.workingDir, logger),
+          (message) => logger.warn('acp: Skill invocation left unexpanded', { message }),
+        );
     // The host's account pool picked an account Cindy added (its own directory); the agent's
     // original login runs exactly as before.
     const account = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
@@ -313,6 +347,7 @@ export class AcpAgent extends BaseAgent {
           briefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),
+          ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
           logger,
           onEnded: disposeBridge,
         });
