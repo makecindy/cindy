@@ -440,6 +440,7 @@ export function createCompanionCloudHost(input: {
   /** A turn is running (or queued) in this Session. */
   isTurnActive?: (sessionId: string) => boolean;
   listDevices: () => Promise<DeviceLinkDeviceView[]>;
+  readDeviceDirectory?: CompanionCloudHost['readDeviceDirectory'];
   probeCompanionCloud?: (deviceId: string) => Promise<boolean>;
   homeLink?: CompanionCloudHost['homeLink'];
   /** This computer's device-link id: names its workbench folders and routine check commands. */
@@ -539,6 +540,7 @@ export function createCompanionCloudHost(input: {
     materializer: createMaterializer(input),
     upgradeArrived: upgradeArrivedTeammate,
     listDevices: input.listDevices,
+    ...(input.readDeviceDirectory ? { readDeviceDirectory: input.readDeviceDirectory } : {}),
     ...(input.isTurnActive ? { isBotBusy: async (botId: string) =>
       (await companionSessionIds(botId)).some(sessionId => input.isTurnActive!(sessionId)) } : {}),
     ...(input.isTurnActive && input.stopTurn ? { stopBotTurns: async (botId: string) => {

@@ -5,7 +5,7 @@ import type { CompanionCloudActionResult } from '../../../shared/companionCloud.
 import { createCompanionHomeRegistry } from '../homes.js';
 import { restoreCloudAvatar } from '../avatarRestore.js';
 import { readTranscriptPage } from '../room.js';
-import { askCompanionHomeVersion, startCompanionCloud, type CompanionCloudHost, type CompanionHomeProbeOutcome, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
+import { askCompanionHome, startCompanionCloud, type CompanionCloudHost, type CompanionDeviceDirectory, type CompanionHomeAnswer, type CompanionHomeProbeOutcome, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
 import type { CompanionApi } from '../types.js';
 import { createWorkRequestGate, WorkRequestDeferred } from '../../maker-ipc/chatWorkPolling.js';
 import { fakeApi, fakeLocal, memoryState, rejection, type ApiHandler } from './fakes.js';
@@ -22,13 +22,26 @@ const MIA = { name: 'Mia', description: '', soul: '', systemPrompt: '', user: ''
 let runtime: CompanionCloudRuntime | undefined;
 afterEach(() => { runtime?.dispose(); runtime = undefined; });
 
+type HomeLink = NonNullable<CompanionCloudHost['homeLink']>;
+type TestHomeLink = Omit<HomeLink, 'homeStatus'> & Partial<Pick<HomeLink, 'homeStatus'>>;
+/** A test home answers what its `version` says (0: an explicit refusal) unless the test scripts `homeStatus`. */
+const homeLinkOf = (link: TestHomeLink): HomeLink => ({
+  homeStatus: async (deviceId): Promise<CompanionHomeAnswer> => {
+    const version = await link.version(deviceId);
+    return version >= 1 ? { kind: 'answered', version } : { kind: 'refused' };
+  },
+  ...link,
+});
+
 function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[]; backgroundIdentityApi?: CompanionApi;
   backgroundMirror?: Parameters<typeof startCompanionCloud>[0]['backgroundMirror'];
   rowsAfter?: CompanionCloudHost['rowsAfter']; latestRows?: CompanionCloudHost['latestRows'];
   readActors?: () => Promise<CompanionRuntimeActor[]>; identityDeferred?: (error: unknown) => boolean;
   installationId?: string; probe?: (deviceId: string) => Promise<boolean>; values?: Array<{ key: string; value: unknown }>;
   readValues?: CompanionCloudHost['readValues']; syncProfile?: (botId: string) => Promise<void>;
-  turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
+  turnActive?: () => boolean; homeLink?: TestHomeLink; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
+  /** The directory a home decision reads (null: none); defaults to a fresh read of `devices`. */
+  directory?: (() => Promise<CompanionDeviceDirectory>) | null;
   canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
   retireLocalCopy?: CompanionCloudHost['retireLocalCopy']; store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string; upgradeArrived?: CompanionCloudHost['upgradeArrived']; current?: () => boolean }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
@@ -55,11 +68,14 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     readValues: options.readValues ?? (async () => options.values ?? [{ key: 'companion.profile.v1', value: { name: 'Mia' } }]),
     canonicalSession: options.canonicalSession ?? (async () => 'session-1'), rowsAfter: options.rowsAfter ?? (async () => []), latestRows: options.latestRows ?? (async () => []),
     deliverToCanonical: async () => ({ ok: true }),
-    materializer: local.host, listDevices: async () => options.devices ?? [],
+    materializer: local.host,
+    // Older code read the plain list (a failure folded into []): it sees the same directory.
+    listDevices: options.directory ? async () => (await options.directory!()).devices : async () => options.devices ?? [],
+    ...(options.directory === null ? {} : { readDeviceDirectory: options.directory ?? (async () => ({ devices: options.devices ?? [] })) }),
     ...(options.installationId ? { installationId: () => options.installationId! } : {}),
     ...(options.probe ? { probeCompanionCloud: options.probe } : {}),
     ...(options.turnActive ? { isBotBusy: async () => options.turnActive!() } : {}),
-    ...(options.homeLink ? { homeLink: options.homeLink } : {}),
+    ...(options.homeLink ? { homeLink: homeLinkOf(options.homeLink) } : {}),
     ...(options.stopBotTurns ? { stopBotTurns: options.stopBotTurns } : {}),
     ...(options.upgradeArrived ? { upgradeArrived: options.upgradeArrived } : {}),
   };
@@ -1288,7 +1304,7 @@ describe('switch home from any computer', () => {
   // cloud-companions.md §3.1 (2026-11-21): a home listed online that does not answer in time is not
   // «offline». Before, the 5 s probe answered 0 and the move silently became a forced take-over.
   it('never takes over a home listed online that does not answer, unless the owner forces it', async () => {
-    const homeLink = { ...link(2), homeVersion: vi.fn(async (): Promise<number> => { throw new Error('HOME_UNRESPONSIVE'); }) };
+    const homeLink = { ...link(2), homeStatus: vi.fn(async (): Promise<CompanionHomeAnswer> => ({ kind: 'unconfirmed' })) };
     const t = setup({ home: 'laptop', devices: [device('laptop'), device('desk', { isSelf: true, name: 'Desk' })], homeLink });
     expect(await t.runtime.homeChoices('bot_mia')).toEqual({ homeDeviceId: 'laptop', homeName: 'laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE',
       targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] });
@@ -1331,9 +1347,9 @@ describe('switch home from any computer', () => {
     ['still silent after the longer wait', [thrown(), thrown('DEVICE_UNRESPONSIVE')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
   ] as const)('reads the home version when it is %s', async (_, steps, expected, waits) => {
     const asked: number[] = [];
-    const result = askCompanionHomeVersion(scripted(steps, asked));
-    if (typeof expected === 'number') await expect(result).resolves.toBe(expected);
-    else await expect(result).rejects.toThrow(expected);
+    const result = await askCompanionHome(scripted(steps, asked));
+    expect(result).toEqual(expected === 'HOME_UNRESPONSIVE' ? { kind: 'unconfirmed' }
+      : expected === 0 ? { kind: 'refused' } : { kind: 'answered', version: expected });
     expect(asked).toEqual(waits);
   });
 
@@ -1343,8 +1359,12 @@ describe('switch home from any computer', () => {
     ['an error without a code', [new Error('socket hang up'), new Error('socket hang up')]],
     ['an unknown code in the message', [new Error('[SOME_NEW_CODE] x'), new Error('[SOME_NEW_CODE] x')]],
     ['an unknown code from the home', [refused('SOME_NEW_CODE'), refused('SOME_NEW_CODE')]],
+    ['a new code thrown locally', [thrown('ANOTHER_NEW_CODE'), thrown('ANOTHER_NEW_CODE')]],
+    ['a timeout', [thrown(), thrown()]],
+    ["this computer's own transport policy", [thrown('CHANNEL_NOT_ALLOWED'), thrown('CHANNEL_NOT_ALLOWED')]],
+    ['an answer without a version', [answer(0), answer(0)]],
   ] as const)('writes no main computer change when the probe fails with %s', async (_, steps) => {
-    const homeLink = { ...link(2), homeVersion: vi.fn(() => askCompanionHomeVersion(scripted(steps))) };
+    const homeLink = { ...link(2), homeStatus: vi.fn(() => askCompanionHome(scripted(steps))) };
     const t = setup({ home: 'laptop', devices: [device('laptop'), device('desk', { isSelf: true, name: 'Desk' })], homeLink });
     expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop', homeName: 'laptop' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
@@ -1354,7 +1374,7 @@ describe('switch home from any computer', () => {
   // #11999 review (zqchris, 11-25): a force confirmed for home A must not take over home C when the home
   // changes between the force and the missing-profile confirmations (C also listed online, not answering).
   it('applies a confirmed force only to the home it was confirmed for', async () => {
-    const homeLink = { ...link(2), homeVersion: vi.fn(async (): Promise<number> => { throw new Error('HOME_UNRESPONSIVE'); }) };
+    const homeLink = { ...link(2), homeStatus: vi.fn(async (): Promise<CompanionHomeAnswer> => ({ kind: 'unconfirmed' })) };
     const t = setup({ home: 'laptop', homeLink,
       devices: [device('laptop'), device('carbon'), device('desk', { isSelf: true, name: 'Desk' })],
       handler: (route, method) => {
@@ -1384,10 +1404,72 @@ describe('switch home from any computer', () => {
   it('does not take over a home that changed while the devices were read', async () => {
     const t = setup({ home: 'laptop', devices: [device('laptop', { online: false }), device('carbon'), device('desk', { isSelf: true, name: 'Desk' })],
       homeLink: link(2) });
-    const listDevices = t.host.listDevices!;
-    t.host.listDevices = async () => { t.actors[0]!.homeDeviceId = 'carbon'; return listDevices(); };
+    const readDirectory = t.host.readDeviceDirectory!;
+    t.host.readDeviceDirectory = async () => { t.actors[0]!.homeDeviceId = 'carbon'; return readDirectory(); };
     expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: false, code: 'HOME_CONFLICT', homeDeviceId: 'carbon' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+  });
+
+  // #11999 review (zqchris, 11-25): every read of a home decision keeps its failure and how far it can be
+  // trusted. A directory that failed, timed out, is stale (it marks rows offline), is partial or does not
+  // list the home confirms nothing: the home is asked by its id. Without its explicit answer or a force,
+  // no home change is written; with its answer, it hands over itself.
+  const hereRow = device('desk', { isSelf: true, name: 'Desk' });
+  it.each([
+    ['the directory read throws', async (): Promise<CompanionDeviceDirectory> => { throw new Error('[DEVICE_LINK_NOT_CONNECTED] directory'); }],
+    ['the directory read times out', async (): Promise<CompanionDeviceDirectory> => { throw Object.assign(new Error('directory read timed out'), { name: 'TimeoutError' }); }],
+    ['a partial directory misses the home', async (): Promise<CompanionDeviceDirectory> => ({ devices: [hereRow], partial: true })],
+    ['a stale directory marks the home offline', async (): Promise<CompanionDeviceDirectory> => ({ devices: [device('laptop', { online: false }), hereRow], stale: true })],
+    ['a fresh directory does not list the home', async (): Promise<CompanionDeviceDirectory> => ({ devices: [hereRow] })],
+    ['there is no directory', null],
+  ] as const)('asks the home itself when %s, and writes nothing without its answer or a force', async (_, directory) => {
+    const unconfirmed = setup({ home: 'laptop', directory, homeLink: { ...link(2), homeStatus: vi.fn(async (): Promise<CompanionHomeAnswer> => ({ kind: 'unconfirmed' })) } });
+    expect(await unconfirmed.runtime.switchHome('bot_mia', 'desk')).toMatchObject({ ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop' });
+    expect(unconfirmed.calls.some(call => call.method === 'PATCH')).toBe(false);
+    const homeLink = link(2);
+    const answering = setup({ home: 'laptop', directory, homeLink });
+    expect(await answering.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: true });
+    expect(homeLink.handOver).toHaveBeenCalledWith('laptop', 'bot_mia', 'desk', undefined);
+    expect(answering.calls.some(call => call.method === 'PATCH')).toBe(false);
+  });
+
+  // The maintainer's scenario: the menu read normally and offered a normal hand-over by A; at confirm time
+  // the directory request fails. Before, it became an empty directory, A was «not listed», and A was taken over.
+  it('does not take over A when the directory fails at confirm time after a normal menu', async () => {
+    let failing = false;
+    const homeLink = { ...link(2), homeStatus: vi.fn(async (): Promise<CompanionHomeAnswer> => ({ kind: 'answered', version: 2 })) };
+    const t = setup({ home: 'laptop', homeLink, directory: async () => {
+      if (failing) throw new Error('directory read timed out');
+      return { devices: [device('laptop'), hereRow] };
+    } });
+    expect((await t.runtime.homeChoices('bot_mia')).mode).toBe('remote');
+    failing = true;
+    // A still answers: it hands over itself (its own busy check and sync); nothing is written here.
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: true });
+    expect(homeLink.handOver).toHaveBeenCalledWith('laptop', 'bot_mia', 'desk', undefined);
+    // A stops answering as well: unconfirmed, still nothing written without the owner's force.
+    homeLink.homeStatus.mockResolvedValue({ kind: 'unconfirmed' });
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toMatchObject({ ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop' });
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+  });
+
+  it('treats a home check that rejects as unconfirmed, not as a refusal', async () => {
+    const t = setup({ home: 'laptop', directory: async () => ({ devices: [device('laptop'), hereRow] }),
+      homeLink: { ...link(2), homeStatus: vi.fn(async (): Promise<CompanionHomeAnswer> => { throw new Error('probe crashed'); }) } });
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toMatchObject({ ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop' });
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+  });
+
+  // The explicit states still take it over without a force: a fresh directory row saying offline, and the
+  // home's own refusal (kept from the original design).
+  it.each([
+    ['a fresh directory row says the home is offline', { devices: [device('laptop', { online: false }), hereRow] }, link(2)],
+    ['a partial directory row says the home is offline', { devices: [device('laptop', { online: false }), hereRow], partial: true }, link(2)],
+    ['the home refuses (control off)', { devices: [device('laptop'), hereRow] }, link(0)],
+  ] as Array<[string, CompanionDeviceDirectory, ReturnType<typeof link>]>)('takes it over when %s', async (_, directory, homeLink) => {
+    const t = setup({ home: 'laptop', homeLink, directory: async () => directory });
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: true });
+    expect(t.calls.find(call => call.method === 'PATCH')).toMatchObject({ data: { homeDeviceId: 'desk', expectedHomeDeviceId: 'laptop' } });
   });
 
   it('does not offer a move when the home runs an older Cindy', async () => {

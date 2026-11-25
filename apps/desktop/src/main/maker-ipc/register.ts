@@ -777,7 +777,7 @@ import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
-import { activeCompanionCloud, askCompanionHomeVersion, type CompanionHomeProbeOutcome } from '../companion-cloud/runtime.js';
+import { activeCompanionCloud, askCompanionHome, type CompanionDeviceDirectory, type CompanionHomeProbeOutcome } from '../companion-cloud/runtime.js';
 import { companionCloudView } from '../companion-cloud/view.js';
 import { companionProfileUiMock } from '../companion-cloud/uiMock.js';
 import type { CompanionCloudActionResult, CompanionCloudFailureCode, CompanionHomeChoices, CompanionMergeResult, CompanionSwitchOptions } from '../../shared/companionCloud.js';
@@ -3282,6 +3282,11 @@ let unsubscribeCompanionCloudBroadcast: (() => void) | null = null;
 /** What a companion that arrived on this computer could not keep (shown once in its chat). */
 const companionArrivalNotices = (botId: string) => activeCompanionCloud()?.arrivalNotices(botId) ?? [];
 const listCompanionDevices = async () => (await handleListDevices(deviceDirectoryDeps())).devices;
+/**
+ * The same directory read for a companion home decision, passed through whole so it keeps how far it
+ * can be trusted (`stale`, `partial`); failures reject. Other callers keep `listCompanionDevices`.
+ */
+const readCompanionDirectory = (): Promise<CompanionDeviceDirectory> => handleListDevices(deviceDirectoryDeps());
 /** Cloud-companion version another computer's Cindy answers within `timeoutMs`; rejects when it does not answer. */
 async function probeCompanionCloudCaps(deviceId: string, timeoutMs: number): Promise<number> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -3300,7 +3305,7 @@ async function companionCloudPeerVersion(deviceId: string): Promise<number> {
 /**
  * One caps probe of a companion's home, keeping apart what the home itself answered (a version, or its
  * own error code) from a call that failed without its answer (thrown locally, by the relay or by the
- * transport, or timed out). `askCompanionHomeVersion` decides which of these may count as a refusal.
+ * transport, or timed out). `askCompanionHome` decides which of these may count as a refusal.
  */
 async function probeCompanionHomeCaps(deviceId: string, timeoutMs: number): Promise<CompanionHomeProbeOutcome> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -3315,7 +3320,7 @@ async function probeCompanionHomeCaps(deviceId: string, timeoutMs: number): Prom
   } finally { clearTimeout(timer); }
 }
 /** The companion's home listed online: only an explicit answer may lead to a take-over (cloud-companions.md §3.1). */
-const companionCloudHomeVersion = (deviceId: string) => askCompanionHomeVersion(timeoutMs => probeCompanionHomeCaps(deviceId, timeoutMs));
+const companionCloudHomeStatus = (deviceId: string) => askCompanionHome(timeoutMs => probeCompanionHomeCaps(deviceId, timeoutMs));
 const COMPANION_FAILURE_CODES: ReadonlySet<CompanionCloudFailureCode> = new Set<CompanionCloudFailureCode>(
   ['HOME_CONFLICT', 'LOCAL_CINDY_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED', 'SKILL_TARGET_OUTDATED', 'PROFILE_SNAPSHOT_MISSING']);
 /** Kept and merged Cindy ids from a request (local IPC or another computer). */
@@ -13943,12 +13948,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Moving a companion that is still working, when the user chose to stop it first.
       stopTurn: stopSessionTurnExplicitly,
       listDevices: listCompanionDevices,
+      readDeviceDirectory: readCompanionDirectory,
       // Old clients answer CHANNEL_NOT_ALLOWED; unreachable ones time out. Neither may receive a companion.
       probeCompanionCloud: async (deviceId) => (await companionCloudPeerVersion(deviceId)) >= COMPANION_CLOUD_RECEIVE_VERSION,
       selfDeviceId: getSelfDeviceId,
       homeLink: {
         version: companionCloudPeerVersion,
-        homeVersion: companionCloudHomeVersion,
+        homeStatus: companionCloudHomeStatus,
         targets: async (deviceId) =>
           parseCompanionCloudRemoteTargets(await invokeDeviceValue(invokeBotPeer, deviceId, COMPANION_CLOUD_TARGETS_CHANNEL, [])),
         handOver: async (deviceId, botId, targetDeviceId, options) => {
