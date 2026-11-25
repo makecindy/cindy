@@ -93,7 +93,7 @@ import { WithdrawnModelsDialog, type WithdrawnModelsReview } from './WithdrawnMo
 import { createLogger } from '@/lib/logger';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
-import { clearGlmFlashDiscovery, GLM_REALTIME_FLASH, isGlmApiBase, isGlmPresetRoute } from '../../../shared/glmRealtimeDiscovery';
+import { clearGlmFlashDiscovery, hasGlmFlashDiscovery, GLM_REALTIME_FLASH, isGlmApiBase, isGlmPresetRoute } from '../../../shared/glmRealtimeDiscovery';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import type {
   CustomProviderUpdateOptions,
@@ -3219,6 +3219,7 @@ export function ProvidersSection() {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
         let failureCode: ProviderErrorCode | undefined;
+        let flashAccessRevoked = false;
         const refreshedAgents = new Set<AgentKind>();
         // Withdrawal is only judged for API key connections when every configured runtime
         // returned a complete catalog; OAuth discovery stays additions-only.
@@ -3248,6 +3249,10 @@ export function ProvidersSection() {
             savedProviderId: p.id,
             ...((isGlmApiBase(rt.baseUrl) || isGlmPresetRoute(rt.baseUrl, rt.catalogPresetId)) && { refreshBatch }),
           });
+          if (r.glmFlashProbe === 'unavailable' && rt.models.some(hasGlmFlashDiscovery)) {
+            rt.models = rt.models.map(clearGlmFlashDiscovery);
+            flashAccessRevoked = true;
+          }
           if (!r.ok || !r.models) {
             // Prefer actionable authentication recovery when every runtime fails.
             // Partial success still follows the existing merge/save path below.
@@ -3266,7 +3271,7 @@ export function ProvidersSection() {
             ? (rt.modelsUrl ?? 'https://openrouter.ai/api/v1/models')
             : undefined;
           const merged = appendDiscoveredCustomProviderModels(
-            r.glmFlashProbe === 'unavailable' ? rt.models.map(clearGlmFlashDiscovery) : rt.models,
+            rt.models,
             r.models,
             openRouterCatalog,
           );
@@ -3299,6 +3304,11 @@ export function ProvidersSection() {
             absent?.has(model.id) ? { ...model, missingUpstream: true as const } : model);
         }
         if (!refreshedAgents.size) {
+          if (flashAccessRevoked) {
+            const saved = await confirmProviderChange(options => updateCustomProvider(config, {}, options));
+            if (!saved) return;
+            refetch();
+          }
           toast.error(t(failureCode === 'AUTH_INVALID' && p.auth.method === 'oauth'
             ? 'settings.providers.models.refreshReconnect'
             : failureCode && failureCode !== 'UNKNOWN'

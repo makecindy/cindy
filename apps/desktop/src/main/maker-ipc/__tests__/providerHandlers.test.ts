@@ -6715,6 +6715,7 @@ describe('Agent API connection configuration', () => {
   it.each(['https://open.bigmodel.cn/api/anthropic', 'https://open.bigmodel.cn/api/coding/paas/v4', 'https://open.bigmodel.cn/api/paas/v4'])(
     'refreshes ordinary preset Flash at %s and invalidates it on key rotation', async baseUrl => {
     const flash = 'glm-realtime-flash';
+    let catalogDenied = false;
     let key = 'fixture-key';
     let access: 'available' | 'unavailable' | 'unknown' = 'available';
     setup({
@@ -6724,14 +6725,14 @@ describe('Agent API connection configuration', () => {
       fetchModels: spec => {
         expect(spec.probeGlmFlash).toBeTypeOf('function');
         return fetchProviderModels({ ...spec, probeGlmFlash: async () => access },
-          async () => Response.json({ data: [{ id: 'glm-5' }] }));
+          async () => catalogDenied ? new Response('', { status: 403 }) : Response.json({ data: [{ id: 'glm-5' }] }));
       },
     });
     await createCustomProvider({ id: 'glm-test', name: 'GLM', auth: { method: 'apiKey' },
       runtimes: { pi: { baseUrl, catalogPresetId: 'zhipu-glm-cn', wireProtocol: 'openai-chat', models: [] } } });
-    const refresh = async () => {
+    const refresh = async (saved = true) => {
       expect(await manageAppModels({ operation: 'connection', change: { action: 'refreshModels',
-        providerId: 'glm-test', agent: 'pi' } }, async () => {})).toMatchObject({ saved: true });
+        providerId: 'glm-test', agent: 'pi' } }, async () => {})).toMatchObject({ saved, ...(catalogDenied && { ok: false, status: 403 }) });
       const config = (await getCustomProvider('glm-test'))!;
       const rows = config.runtimes.pi!.models;
       expect(rows.map(row => row.id)).toEqual(['glm-5', flash]);
@@ -6749,6 +6750,15 @@ describe('Agent API connection configuration', () => {
     expect(await refresh()).toEqual([]);
     access = 'unknown';
     expect(await refresh()).toEqual([]);
+    access = 'available';
+    expect(await refresh()).toEqual([flash]);
+    catalogDenied = true;
+    access = 'unknown';
+    expect(await refresh(false)).toEqual([flash]);
+    access = 'unavailable';
+    expect(await refresh()).toEqual([]);
+    expect(await refresh(false)).toEqual([]);
+    catalogDenied = false;
     access = 'available';
     expect(await refresh()).toEqual([flash]);
     expect(await manageAppModels({ operation: 'connection', change: { action: 'setKey',

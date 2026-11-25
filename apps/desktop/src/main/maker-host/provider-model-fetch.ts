@@ -337,7 +337,7 @@ export async function fetchProviderModels(
     Promise.resolve().then(spec.probeGlmFlash).catch(() => 'unknown' as const),
   ]);
   const models = (catalog.models ?? []).filter(model => model.id !== GLM_REALTIME_FLASH);
-  if (access !== 'available') return catalog.ok ? { ...catalog, models, glmFlashProbe: access } : catalog;
+  if (access !== 'available') return { ...catalog, ...(catalog.ok && { models }), glmFlashProbe: access };
   const flash = parseModelsListResponse({ data: [{ id: GLM_REALTIME_FLASH }] }, GLM_API_BASE + '/models')!;
   return {
     ok: true,

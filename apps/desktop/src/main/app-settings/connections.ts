@@ -1,4 +1,4 @@
-import { clearGlmFlashDiscovery } from '../../shared/glmRealtimeDiscovery.js';
+import { clearGlmFlashDiscovery, hasGlmFlashDiscovery } from '../../shared/glmRealtimeDiscovery.js';
 import { randomUUID } from 'node:crypto';
 import {
   isLoopbackProviderUrl,
@@ -239,14 +239,17 @@ export async function manageProviderConnection(
   }
   const fetched = change.action === 'refreshModels' ? await api.fetch(config, change.agent) : null;
   await guard();
-  if (fetched && !fetched.ok)
-    return {
-      ok: false,
-      providerId: change.providerId,
-      errorCode: fetched.code ?? 'MODEL_DISCOVERY_FAILED',
-      status: fetched.status,
-      saved: false,
-    };
+  const catalogFailure = fetched && !fetched.ok ? {
+    ok: false,
+    providerId: change.providerId,
+    errorCode: fetched.code ?? 'MODEL_DISCOVERY_FAILED',
+    status: fetched.status,
+  } : null;
+  const flashAccessRevoked = fetched?.glmFlashProbe === 'unavailable'
+    && config.runtimes[change.agent]?.models.some(hasGlmFlashDiscovery);
+  if (catalogFailure && !flashAccessRevoked) {
+    return { ...catalogFailure, saved: false };
+  }
   const next = (current: CustomProviderConfig): CustomProviderConfig => {
     keepCurrent(current);
     const runtime = current.runtimes[change.agent]!;
@@ -269,6 +272,7 @@ export async function manageProviderConnection(
   };
   const result = await api.update(config, {}, guard, next, interrupt);
   await guard();
+  if (result.ok && catalogFailure) return { ...catalogFailure, saved: true };
   return {
     ...result,
     saved: result.ok,

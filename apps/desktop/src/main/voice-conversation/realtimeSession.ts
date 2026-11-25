@@ -539,7 +539,7 @@ export class RealtimeVoiceSession {
     )
       return;
     this.requestedInput = this.queuedReply?.inputId ?? null;
-    if (!this.queuedReply) this.pendingContinuation = false;
+    this.pendingContinuation = false;
     this.queuedReply = undefined;
     this.explicitResponse = true;
     this.awaitingResponse = true;

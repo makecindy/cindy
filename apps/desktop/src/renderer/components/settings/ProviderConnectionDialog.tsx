@@ -1834,6 +1834,11 @@ export function ProviderConnectionDialog({
         // 请求期间切过 Tab 也不会在错误上下文里确认。
         setActiveTab(agent);
       } else {
+        if ('glmFlashProbe' in result && result.glmFlashProbe === 'unavailable') {
+          setRtSynced(previous => ({ ...previous, [agent]: { ...previous[agent],
+            models: previous[agent].models.map(clearGlmFlashDiscovery),
+          } }));
+        }
         showFetchError();
         toast.error(t(`providerError.${result.code ?? 'UNKNOWN'}`));
       }
@@ -1849,7 +1854,7 @@ export function ProviderConnectionDialog({
       modelFetchInFlightRef.current = false;
       setFetchingModels((prev) => ({ ...prev, [agent]: false }));
     }
-  }, [activeTab, authMode, rt, fetchingModels, initial, picker, runtimeFill, savedBaselineFor, t, matchesEndpointTemplate]);
+  }, [activeTab, authMode, rt, fetchingModels, initial, picker, runtimeFill, savedBaselineFor, t, matchesEndpointTemplate, setRtSynced]);
 
   /**
    * 勾选弹层确认：勾选集写回该 runtime 的模型行。基于**确认时的最新表单行**合并，

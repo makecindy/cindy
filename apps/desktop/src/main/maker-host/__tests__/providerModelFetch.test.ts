@@ -883,6 +883,9 @@ describe('GLM ordinary catalog with optional Flash discovery', () => {
         expect(result).toMatchObject({ ok: true, complete: true, glmFlashProbe: access });
         expect(result.models?.map(model => model.id)).toEqual([ordinary.id]);
       }
+      const denied = await fetchProviderModels({ ...spec, probeGlmFlash: async () => 'unavailable' },
+        async () => new Response('', { status: 403 }));
+      expect(denied).toMatchObject({ ok: false, status: 403, glmFlashProbe: 'unavailable' });
       const onlyVoice = await fetchProviderModels(spec, async () => new Response('', { status: 403 }));
       expect(onlyVoice).toMatchObject({ ok: true, complete: false, models: [{ id: flash }] });
     },

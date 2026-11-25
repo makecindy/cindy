@@ -80,6 +80,11 @@ async function fixture(protocol: RealtimeProtocol) {
     handoff,
     send,
     flush,
+    async drainEvents() {
+      const pong = once(peer, 'pong');
+      peer.ping();
+      await pong;
+    },
     changeOwner: () => {
       current = false;
     },
@@ -376,4 +381,29 @@ it('does not bind a GLM task to the last of two unanswered inputs', async () => 
   await vi.waitFor(() => expect(f.received.find(e => e.item?.type === 'function_call_output')?.item.output)
     .toBe(JSON.stringify({status: 'not_accepted'})));
   expect(f.handoff).not.toHaveBeenCalled();
+});
+
+it('requests one GLM response for speech and an already delivered task result, retaining the input ID', async () => {
+  const f = await fixture('glm-realtime');
+  const requests = () => f.received.filter(e => e.type === 'response.create');
+  f.send({ type: 'input_audio_buffer.speech_started', item_id: 'current-input' });
+  await f.drainEvents();
+  f.session.deliverResult('earlier-task', 'Earlier task completed');
+  f.send({ type: 'input_audio_buffer.speech_stopped', item_id: 'current-input' });
+  f.send({ type: 'input_audio_buffer.committed', item_id: 'current-input' });
+  await f.drainEvents();
+  expect(requests()).toHaveLength(1);
+
+  f.send({ type: 'response.created', response: { id: 'combined' } });
+  f.send({ type: 'response.function_call_arguments.done', response_id: 'combined', output_index: 0,
+    name: 'handoff_task', arguments: '{"supplement":"follow up"}' });
+  f.send({ type: 'response.done', response: { id: 'combined', status: 'completed' } });
+  await f.drainEvents();
+  expect(requests()).toHaveLength(1);
+
+  // Only the later tool result needs another generation. It must still use the
+  // original utterance, even when its transcript arrives after response.done.
+  f.send({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'current-input', transcript: 'current request' });
+  await vi.waitFor(() => expect(requests()).toHaveLength(2));
+  expect(f.handoff).toHaveBeenCalledExactlyOnceWith('current-input', 'follow up');
 });
