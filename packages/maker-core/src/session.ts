@@ -415,6 +415,7 @@ export type SessionSendResult =
   | {
       accepted: false;
       reason: 'cancelled-before-dispatch' | 'provider-rejected-before-dispatch';
+      diagnostic?: TurnDispatchRejectedError['diagnostic'];
     };
 
 export interface SessionTurnControlSnapshot {
@@ -1173,6 +1174,7 @@ export class Session {
           return {
             accepted: false,
             reason: reservation.cancelled ? 'cancelled-before-dispatch' : 'provider-rejected-before-dispatch',
+            ...(!reservation.cancelled && e.diagnostic ? { diagnostic: e.diagnostic } : {}),
           };
         }
         // Cancellation cannot downgrade an explicitly ambiguous provider result
@@ -1591,6 +1593,15 @@ export class Session {
   hasPendingHostOperation(): boolean {
     if (this.status === 'closed' || this.status === 'error') return false;
     return this.handle.hasPendingHostOperation?.() ?? false;
+  }
+
+  /**
+   * Whether closing this runtime keeps the conversation (see
+   * AgentSessionHandle.canResumeAfterClose). A plugin engine that does not say
+   * so counts as unable: reclamation must never strand a conversation.
+   */
+  canResumeAfterClose(): boolean {
+    return this.handle.canResumeAfterClose?.() ?? this.agentKind !== 'acp';
   }
 
   /**

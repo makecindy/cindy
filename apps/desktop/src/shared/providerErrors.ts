@@ -15,7 +15,9 @@
 import { isContextOverflowErrorMessage } from '@cindy/maker-shared/context-overflow-error';
 import {
   matchesDeterministicUsageExhaustionText,
+  readProviderBillingCode,
   redactSensitiveText,
+  type ProviderBillingCode,
 } from '@cindy/maker-shared/error-redaction';
 
 export type ProviderErrorCode =
@@ -35,6 +37,12 @@ export type ProviderErrorCode =
   | 'CONTEXT_TOO_LONG'
   /** 400 且命中「不认识的请求字段」类措辞：wire 兼容性问题（端点不完全兼容该协议）。 */
   | 'WIRE_INCOMPATIBLE'
+  /** 连接测试：返回体为空或无法识别为 Responses 结果。 */
+  | 'INVALID_PROBE_RESPONSE'
+  /** 连接测试：响应没有足够的生成证据。 */
+  | 'PROBE_NO_OUTPUT'
+  /** 连接测试：模型拒绝生成或响应被内容过滤。 */
+  | 'PROBE_REFUSED'
   /** 5xx：上游服务端错误，可重试。 */
   | 'UPSTREAM_ERROR'
   /** 网络层不可达（DNS / 连接被拒 / 连接超时），可重试。 */
@@ -48,6 +56,7 @@ export type ProviderErrorCode =
 
 export interface ProviderErrorClassification {
   code: ProviderErrorCode;
+  billingCode?: ProviderBillingCode;
   /** 是否值得原样重试（限流 / 网络抖动 / 上游 5xx）。 */
   retryable: boolean;
   /** 上游原始信息摘要（日志 / 详情展开用；UI 主文案走 i18n，不直接展示 detail）。 */
@@ -61,6 +70,12 @@ export interface ProviderErrorInput {
   bodyText?: string;
   /** 网络层错误码（ECONNREFUSED / ENOTFOUND / ETIMEDOUT / abort 等）。 */
   networkErrorCode?: string;
+}
+
+export function providerRetryAfterAt(value: string | null | undefined, now: number): number | undefined {
+  if (!value?.trim()) return;
+  const at = /^\d+(?:\.\d+)?$/.test(value.trim()) ? now + Number(value) * 1000 : Date.parse(value);
+  return Number.isFinite(at) && at >= now ? at : undefined;
 }
 
 /** 网络层「不可达」错误码集合（Node fetch/undici 常见值）。 */
@@ -203,7 +218,8 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   if (status === undefined) return { code: 'UNKNOWN', retryable: false, detail };
 
   if (status === 401) return { code: 'AUTH_INVALID', retryable: false, detail };
-  if (status === 402) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
+  const billingCode = readProviderBillingCode(status, body);
+  if (billingCode) return { code: 'QUOTA_EXCEEDED', retryable: false, detail, billingCode };
   if (status === 403) {
     // 部分网关把 key 无效也报 403 —— 命中鉴权措辞时归 AUTH_INVALID（提示用户重填 key 更可行动）。
     if (AUTH_RE.test(body)) return { code: 'AUTH_INVALID', retryable: false, detail };

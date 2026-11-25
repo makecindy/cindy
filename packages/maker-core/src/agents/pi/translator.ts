@@ -1,3 +1,4 @@
+import { markPiResponsesCompletion, type PiResponsesCompletion } from './responses-completion.js';
 import { piToolMarkupProjection } from './tool-markup-projection.js';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
@@ -885,6 +886,7 @@ export function translatePiEvent(
   event: PiRpcEvent,
   queue: AsyncQueue<AgentEvent>,
   ctx: PiTranslateContext,
+  responsesCompletion?: PiResponsesCompletion,
 ): void {
   const projection = piToolMarkupProjection(ctx);
   const message = event.message as PiAssistantMessage | undefined;
@@ -894,7 +896,16 @@ export function translatePiEvent(
     || message?.stopReason === 'length' || isCurrentTurnHostAbortRequested(ctx);
   if (event.type === 'message_end' && message?.role === 'assistant') projection.setMessage(message.content, preserve);
   const generation = ctx.turnGeneration;
-  translatePiEventInternal(event, projection.queue(queue) as AsyncQueue<AgentEvent>, ctx);
+  // Projection normalizes the reply and can convert a nominal completion into an
+  // error. Attach private proof to the final event object, after that projection.
+  const sink = responsesCompletion ? { push: (terminal: AgentEvent) => {
+    const result = terminal.data as { status?: string; silentStop?: boolean; result?: string } | null;
+    if (terminal.type === 'done' && result?.status === 'completed' && !result.silentStop && result.result?.trim()) {
+      markPiResponsesCompletion(terminal, responsesCompletion);
+    }
+    return queue.push(terminal);
+  } } : queue;
+  translatePiEventInternal(event, projection.queue(sink) as AsyncQueue<AgentEvent>, ctx);
   if (ctx.turnGeneration !== generation) projection.resetTurn(queue);
   if (event.type === 'message_end' && message?.role === 'assistant') projection.finish(queue, preserve);
 }
