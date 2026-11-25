@@ -181,7 +181,7 @@ export function VendorIcon({
     <span className={wrapperClassName} title={title}>
       {vendor === 'acp' ? (
         iconDataUrl === ANTIGRAVITY_MARK_DATA_URL ? (
-          <PluginEngineIcon size={size} iconDataUrl={iconDataUrl} className="text-[var(--text-secondary)]" />
+          <PluginEngineIcon size={size} iconDataUrl={iconDataUrl} />
         ) : iconDataUrl ? (
           <PluginIdentityMark iconDataUrl={iconDataUrl} size={size} running={running} />
         ) : (

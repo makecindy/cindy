@@ -13,7 +13,7 @@ import java.util.Locale
 // widget model. The app writes the store into the app's files directory; the providers read it.
 
 private val antigravitySourceId = Regex(
-  "(?:^|:)acp-plugin:(?:_ns__[^:]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity):(?:agy|antigravity)(?:~[^:]+)?$",
+  "(?:^|:)acp-plugin:(?:_root__|_ns__[a-z0-9-]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity):(?:agy|antigravity)(?:~[^:]+)?$",
   RegexOption.IGNORE_CASE,
 )
 

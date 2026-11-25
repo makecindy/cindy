@@ -908,6 +908,7 @@ describe('plugin engine quota collection', () => {
   // scoped and older catalog identities, and preserve other engines' monograms.
   it.each([
     ['agy', 'acp-plugin:agy:agy', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:_root__agy-plugin:agy', 'My renamed engine', ANTIGRAVITY_LOGO],
     [undefined, 'acp-plugin:_ns__local__agy-acp:agy~second', 'My renamed engine', ANTIGRAVITY_LOGO],
     [undefined, 'acp-plugin:legacy:cli', 'Antigravity', ANTIGRAVITY_LOGO],
     ['other', 'acp-plugin:other:cli', 'Another engine', monogramLogo('Another engine')],

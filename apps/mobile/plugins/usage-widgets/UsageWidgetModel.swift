@@ -5,7 +5,7 @@ import Foundation
 
 /// Recognize the existing provider ID without changing the saved account key.
 func widgetDisplayLogo(id: String, logo: String?) -> String? {
-  id.range(of: #"(?:^|:)acp-plugin:(?:_ns__[^:]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity):(?:agy|antigravity)(?:~[^:]+)?$"#, options: [.regularExpression, .caseInsensitive]) != nil ? "antigravity" : logo
+  id.range(of: #"(?:^|:)acp-plugin:(?:_root__|_ns__[a-z0-9-]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity):(?:agy|antigravity)(?:~[^:]+)?$"#, options: [.regularExpression, .caseInsensitive]) != nil ? "antigravity" : logo
 }
 
 struct WidgetSource: Decodable, Identifiable {
