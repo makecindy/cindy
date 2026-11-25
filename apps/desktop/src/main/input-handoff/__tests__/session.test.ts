@@ -30,6 +30,45 @@ function harness(driver: HandoffDriver, extra: Partial<ConstructorParameters<typ
 const field = (step: InputHandoffSnapshot) => step.controls.find((control) => control.kind === 'text')!;
 
 describe('InputHandoffSession', () => {
+  // PR #12780 review (greptile, r4691885603): a form with a phone field and a focused one-pixel code field.
+  // Typing the phone moves the focus, and the re-check before the code dropped the hidden field, so the code
+  // was never typed and nothing was submitted. Entry: session.submit with both values. Unit tier, fake driver.
+  it('keeps a hidden code field found focused while typing an earlier field moves the focus', async () => {
+    let focus = '0.3';
+    const acts: Array<{ kind: string; ref?: string }> = [];
+    const chrome = { pid: 20, app: 'Google Chrome', bundleId: 'com.google.Chrome' };
+    const n = (ref: string, role: string, extra: Record<string, unknown> = {}) => ({ ref, role, depth: 1, fp: `${role}|${(extra.title as string) ?? ''}`, enabled: true, ...extra });
+    const driver: HandoffDriver = {
+      permission: async () => 'granted',
+      requestPermission: async () => undefined,
+      windows: async () => ({ frontmost: 20, apps: [{ ...chrome, windows: [{ index: 0, title: 'Pay', frame: [0, 0, 1200, 900], focused: true, minimized: false }] }] }),
+      snapshot: async () => ({ ...chrome, frontmost: true, window: { index: 0, title: 'Pay', frame: [0, 0, 1200, 900] }, nodes: [
+        n('0', 'AXWebArea', { url: 'https://secure.example.test/pay', frame: [0, 60, 1200, 840] }),
+        n('0.1', 'AXTextField', { title: 'Phone', frame: [460, 300, 260, 30], focused: focus === '0.1' }),
+        n('0.2', 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }),
+        n('0.3', 'AXTextField', { frame: [460, 440, 1, 1], focused: focus === '0.3' }),
+        n('0.4', 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }),
+      ] }),
+      commandLine: async () => '',
+      act: async (request) => {
+        acts.push({ kind: request.kind, ref: (request as { ref?: string }).ref });
+        if (request.kind === 'text') focus = (request as { ref: string }).ref;
+        return { ok: true };
+      },
+    };
+    const { session, latest } = harness(driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
+    await session.start();
+    const step = latest();
+    const texts = step.controls.filter((control) => control.kind === 'text');
+    expect(texts).toHaveLength(2);
+    const values = Object.fromEntries(texts.map((control, i) => [control.id, i === 0 ? '18600000000' : '123456']));
+    await session.submit({ expectedRevision: step.revision, values, action: { kind: 'submit' } });
+    expect(acts.filter((act) => act.kind === 'text').map((act) => act.ref)).toEqual(['0.1', '0.3']);
+    // Then the step is confirmed (the page's button or Return), as after any complete form.
+    expect(['press', 'key']).toContain(acts.at(-1)?.kind);
+    session.cancel();
+  });
+
   it('asks only for the fields to type, confirms with the page button and follows the flow across apps', async () => {
     const desktop = fakeDesktop();
     const { session, finished, latest } = harness(desktop.driver);

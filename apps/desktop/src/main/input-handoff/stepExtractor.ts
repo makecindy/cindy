@@ -90,10 +90,10 @@ function visible(node: NativeAxNode, windowFrame: number[]): boolean {
 }
 
 /** Chrome clips offscreen AX bounds at the viewport edge, while retaining the field's identity. */
-function laidOutInPage(node: NativeAxNode, page: NativeAxNode): boolean {
+function laidOutInPage(node: NativeAxNode, page: NativeAxNode, confirmed?: ReadonlySet<string>): boolean {
   if (visible(node, [])) return true;
   if (!node.frame || !page.frame) return false;
-  if (focusedHiddenField(node, page)) return true;
+  if (hiddenFieldInPage(node, page) && (node.focused || confirmed?.has(hiddenFieldKey(node)))) return true;
   const [x, y, w, h] = node.frame;
   const [px, py, pw, ph] = page.frame;
   const edge = (value: number, start: number, size: number) => Math.abs(value - start) < 2 || Math.abs(value - start - size) < 2;
@@ -103,15 +103,20 @@ function laidOutInPage(node: NativeAxNode, page: NativeAxNode): boolean {
 
 /**
  * Split code boxes ("请输入短信验证码" with six drawn digits) type into one real input the page
- * shrinks to a pixel and focuses. Only the focused one counts: unfocused hidden fields are often
+ * shrinks to a pixel and focuses. Only a focused one is found: unfocused hidden fields are often
  * traps for bots, never the owner's to fill (2026-11-25, a payment SMS code read as nothing to fill).
+ * Once found, re-reading the same step keeps it by place and fingerprint, since typing into an
+ * earlier field moves the focus away from it.
  */
-function focusedHiddenField(node: NativeAxNode, page: NativeAxNode): boolean {
-  if (!node.focused || !TEXT_ROLES.has(node.role) || node.frame?.length !== 4 || page.frame?.length !== 4) return false;
+function hiddenFieldInPage(node: NativeAxNode, page: NativeAxNode): boolean {
+  if (!TEXT_ROLES.has(node.role) || node.frame?.length !== 4 || page.frame?.length !== 4) return false;
   const [x, y, w, h] = node.frame;
   const [px, py, pw, ph] = page.frame;
   return w >= 0 && h >= 0 && x >= px && y >= py && x <= px + pw && y <= py + ph;
 }
+
+/** A hidden field found focused earlier in this step: where it sits in the tree, and what it is. */
+export const hiddenFieldKey = (field: { ref: string; fp: string }) => JSON.stringify([field.ref, field.fp]);
 
 const isWithin = (ref: string, scope: string) => ref === scope || ref.startsWith(`${scope}.`);
 const parentRef = (ref: string) => ref.slice(0, Math.max(0, ref.lastIndexOf('.')));
@@ -194,7 +199,8 @@ function signatureOf(source: InputHandoffSource, controls: ScreenControl[]): str
   ]);
 }
 
-export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
+/** `confirmedHidden`: hidden fields this step already found focused (`hiddenFieldKey`), kept when focus moved. */
+export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: ReadonlySet<string>): ExtractedStep {
   const windowFrame = snapshot.window.frame ?? [];
   const browser = isBrowserBundle(snapshot.bundleId);
   const nodes = snapshot.nodes.filter((node) => visible(node, windowFrame));
@@ -209,7 +215,7 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   // A page's accessibility tree includes laid-out fields below the viewport.
   // Scrolling must not turn one form into unrelated partial steps. Zero-size
   // nodes are excluded unless their bounds were clipped at the viewport edge.
-  const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb)) : pageMissing ? [] : nodes;
+  const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb, confirmedHidden)) : pageMissing ? [] : nodes;
 
   // Modal sheets take over the window.
   const sheet = scoped.find((node) => node.role === 'AXSheet');

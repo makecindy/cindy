@@ -16,7 +16,7 @@ import { HumanDesktopInput } from '../remote-desktop/inputOwnership.js';
 import type { HandoffDriver } from './macDriver.js';
 import { qrContent } from './qrCode.js';
 import { isBrowserBundle } from './originPolicy.js';
-import { applyFieldPlan, extractStep, IncompleteFormError, type ExtractedStep } from './stepExtractor.js';
+import { applyFieldPlan, extractStep, hiddenFieldKey, IncompleteFormError, type ExtractedStep } from './stepExtractor.js';
 import type {
   ControlBinding,
   FoundQr,
@@ -1391,14 +1391,15 @@ export class InputHandoffSession {
     if (!this.target) return false;
     const raw = await this.options.driver.snapshot(this.target.pid, this.target.window);
     if ('error' in raw) return false;
-    type FieldTarget = { ref: string; identity: string; secure: boolean; nativeSecure?: boolean };
+    type FieldTarget = { ref: string; fp: string; identity: string; secure: boolean; nativeSecure?: boolean };
     const fields = (candidate: ExtractedStep) => [...candidate.bindings.values()].flatMap<FieldTarget>(binding =>
       binding.kind !== 'text' ? [] : (binding.segments ?? [binding]),
     );
     const identity = (field: FieldTarget) =>
       JSON.stringify([field.identity, field.nativeSecure ?? field.secure]);
     const expected = fields(step);
-    const current = extractStep(raw);
+    // Typing into an earlier field moves the focus off a hidden code field found focused: it is still this step's.
+    const current = extractStep(raw, new Set(expected.map(hiddenFieldKey)));
     if (raw.window.title !== this.target.window.title || current.source.origin !== step.source.origin || current.url !== step.url) return 'origin_changed';
     const actual = fields(current);
     const byIdentity = new Map(actual.map(field => [identity(field), field]));
