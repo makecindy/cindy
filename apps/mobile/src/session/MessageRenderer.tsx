@@ -7562,13 +7562,16 @@ function MediaPreview({
   }, [media.previewable, onImageError, resolveThumbnail]);
 
   // Measure with the same decoder that displays the image: RN getSize cannot
-  // decode SVG. Reuse the decoded dimensions without a second image request.
+  // decode SVG. On Android, resizing can decode the same thumbnail at slightly
+  // different dimensions. Only its first load should size the frame.
+  const measuredThumbUri = useRef<string | null>(null);
   const handleImageLoad = useCallback(({ source: { width, height } }: { source: AttachmentImageIntrinsicSize;
     }) => {
-    if (!(width > 0 && height > 0)) return;
+    if (!thumbUri || measuredThumbUri.current === thumbUri || !(width > 0 && height > 0)) return;
+    measuredThumbUri.current = thumbUri;
     rememberAttachmentIntrinsicSize({ width, height }, media.url);
     setIntrinsicSize({ width, height });
-  }, [media.url, setIntrinsicSize]);
+  }, [media.url, setIntrinsicSize, thumbUri]);
 
   if (media.kind === 'video' && !presentationOnly) {
     return (
