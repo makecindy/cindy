@@ -569,7 +569,7 @@ import {
   getWorkspaceMigrationStartupProgress,
   subscribeWorkspaceMigrationStartupProgress,
 } from './workspace-migration/startupState';
-import { activeCompanionCloud } from './companion-cloud/runtime';
+import { companionHomes, isCompanionShadowed } from './companion-cloud/homes';
 import { botProfiles } from './localDb/schema';
 import { eq } from 'drizzle-orm';
 import {
@@ -10008,8 +10008,7 @@ const registerIpcHandlers = () => {
         if (!profile || profile.status === 'deleting') {
           throwIpcError('NOT_FOUND', 'BUDDY_NOT_FOUND');
         }
-        const cloud = activeCompanionCloud();
-        if (cloud && (await cloud.homeChoices(botId)).mode !== 'local') {
+        if (isCompanionShadowed(botId) || !companionHomes.isHomeHere(botId)) {
           throwIpcError('PRECONDITION_FAILED', 'BUDDY_WORKSPACE_IS_ON_ANOTHER_COMPUTER');
         }
       },
