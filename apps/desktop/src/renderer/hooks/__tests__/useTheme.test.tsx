@@ -41,11 +41,12 @@ vi.mock('../../i18n', () => ({ default: { t: (key: string) => key } }));
 let systemPrefersDark = false;
 
 // jsdom 无 matchMedia,ThemeProvider 初始化与 system 模式需要它。
+const systemModeListeners = new Set<() => void>();
 vi.stubGlobal('matchMedia', (q: string) => ({
-  matches: systemPrefersDark,
+  get matches() { return systemPrefersDark; },
   media: q,
-  addEventListener: () => {},
-  removeEventListener: () => {},
+  addEventListener: (_type: string, listener: () => void) => { systemModeListeners.add(listener); },
+  removeEventListener: (_type: string, listener: () => void) => { systemModeListeners.delete(listener); },
 }));
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -294,7 +295,10 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
       cleanupPaper();
     });
 
-    it('prepares the new system variant after leaving when light/dark flipped meanwhile', async () => {
+    // The shared defaults reach every window, the teammate's too, so they follow the system
+    // right away (f6bf04d review: saved changes from outside this window stay in step) and
+    // leaving has nothing left to prepare.
+    it('prepares the new system variant when light/dark flips behind a teammate palette', async () => {
       systemPrefersDark = false;
       const { selectTheme, rerender, unmount } = setup('system');
       await act(async () => {});
@@ -302,11 +306,57 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
       await act(async () => {});
       selectTheme.mockClear();
       systemPrefersDark = true;
-      act(() => applyThemeClass('system'));
-      expect(selectTheme).not.toHaveBeenCalled();
-      rerender({ botId: null });
+      act(() => { for (const listener of [...systemModeListeners]) listener(); });
       await act(async () => {});
       expect(selectTheme).toHaveBeenCalledExactlyOnceWith({ mode: 'dark', familyId: 'paper-local' });
+      rerender({ botId: null });
+      await act(async () => {});
+      expect(selectTheme).toHaveBeenCalledOnce();
+      unmount();
+      cleanupPaper();
+    });
+
+    // Review of f6bf04d: a package chosen in another window reaches this one as a storage
+    // event. Behind a teammate palette it only updated the rollback snapshot, so this
+    // window never learned that main holds a package and a later builtin choice here sent
+    // no selectTheme(null). Minimal input: saved builtin, teammate palette shown, another
+    // window saves the package, then this window chooses a builtin.
+    it('clears a package another window chose while a teammate palette was shown', async () => {
+      const { selectTheme, result, rerender, unmount } = setup('light');
+      await act(async () => { await result.current.setFamily('cindy'); });
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      localStorage.setItem('theme.familyId', 'paper-local');
+      act(() => dispatchStorage('theme.familyId', 'paper-local'));
+      await act(async () => {});
+      selectTheme.mockClear();
+      await act(async () => { await result.current.setFamily('cindy'); });
+      expect(selectTheme).toHaveBeenCalledExactlyOnceWith(null);
+      rerender({ botId: null });
+      await act(async () => {});
+      expect(selectTheme).toHaveBeenCalledOnce();
+      unmount();
+      cleanupPaper();
+    });
+
+    // Same gap for a local theme removed behind a teammate palette: the saved choice falls
+    // back to a builtin, so the removed package's shared defaults must be cleared right away.
+    // Minimal input: saved package, teammate palette shown, the package's themes disappear.
+    it('clears the saved package when its local theme is removed behind a teammate palette', async () => {
+      const { selectTheme, rerender, unmount } = setup('light');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      let removeThemes!: (payload: unknown) => void;
+      Object.assign(window.electronAPI.localThemes, {
+        onChanged: (listener: (payload: unknown) => void) => { removeThemes = listener; return () => {}; },
+      });
+      bootstrapLocalThemesSync();
+      act(() => removeThemes({ success: true, diagnostics: [], themes: [] }));
+      await act(async () => {});
+      expect(selectTheme).toHaveBeenCalledExactlyOnceWith(null);
       unmount();
       cleanupPaper();
     });

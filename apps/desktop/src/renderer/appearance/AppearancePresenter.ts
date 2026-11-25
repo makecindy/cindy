@@ -101,11 +101,24 @@ export function presentPaletteOnly(theme: Theme): void {
 }
 
 /**
- * The saved choice can change behind a view-scoped palette (settings, another window, system
- * light/dark) without being presented; an expired request must roll back to the latest one.
+ * The saved choice can change behind a view-scoped palette without being presented; an
+ * expired request must roll back to the latest one.
  */
 export function trackSavedTheme(theme: Theme): void {
   savedTheme = theme;
+}
+
+/**
+ * The saved choice changed without being chosen in this window (another window saved it, a
+ * local theme was edited or removed, the system switched light/dark) while a view-scoped
+ * palette is shown. The palette stays; the shared
+ * defaults and the record of what main holds follow the saved theme, as they do in a window
+ * without a view-scoped palette. Without this, a later builtin choice here would not know
+ * there is a package to clear.
+ */
+export function syncSavedThemeDefaults(theme: Theme): void {
+  savedTheme = theme;
+  prepareSharedDefaults(theme, true);
 }
 
 /**

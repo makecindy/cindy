@@ -490,6 +490,9 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
   同层；不进伙伴资料、数据库或跨端协议，不写 `appearance-settings.json`，也不改全局主题选择。
 - 覆盖只在内存中投影（`renderer/appearance/appearanceOverride.ts`）：主题经 `useTheme` 的同一解析与
   `presentTheme` 应用，壁纸经同一张 `WallpaperSettingsProvider` 画布绘制，不新增第二张画布。
+- 伙伴配色显示期间，保存的全局主题若不经本窗口选择而改变（其他窗口保存、本地主题被改或被删、系统明暗切换），本窗口
+  照常让主题包的共享默认层跟上保存的主题（`syncSavedThemeDefaults`），配色不动；否则之后在本窗口
+  选内置主题时不知道有主题包要清。
 - 指向的本地主题被删除时回落全局，不改写记录；选「跟随应用设置」删除该项。
 - 伙伴自己的图片／视频与全局自定义壁纸同在 client-wallpaper 媒体库：引用只记在 main 的
   `userData/bot-wallpapers.json`（伙伴 ID → 媒体 URL），回收读取同一张引用表，读不了就延后清理，

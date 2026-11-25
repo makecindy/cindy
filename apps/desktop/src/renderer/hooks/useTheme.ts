@@ -13,6 +13,7 @@ import {
   restoreSavedTheme,
   prepareThemeSelection,
   presentPaletteOnly,
+  syncSavedThemeDefaults,
   trackSavedTheme,
   presentTheme,
 } from '../appearance/AppearancePresenter';
@@ -173,8 +174,9 @@ export function applyThemeClass(theme: Theme, force = false, prepare = true): vo
 
   // A view-scoped override is this window's palette only. Theme-package defaults
   // (fonts, wallpaper, motion) live in the shared AppearanceService and reach every
-  // window, so showing an override never prepares or clears them. Leaving re-prepares
-  // only if the saved variant changed meanwhile (system light/dark, or a new global theme).
+  // window, so showing an override never prepares or clears them. They follow the saved
+  // theme: explicit choices prepare themselves, changes from outside this window go through
+  // `applyExternalThemeChange`, and leaving re-prepares only if the two still differ.
   if (overridden) {
     presentPaletteOnly(nextTheme);
     return;
@@ -183,9 +185,20 @@ export function applyThemeClass(theme: Theme, force = false, prepare = true): vo
   else presentTheme(nextTheme, true, prepare);
 }
 
+/**
+ * A saved choice that changes without being chosen in this window (another window's storage
+ * event, a local theme edited or removed, the system switching light/dark) is not prepared
+ * by `applyThemeClass` while a view-scoped palette is shown; keep the shared defaults in
+ * step with it here.
+ */
+function applyExternalThemeChange(theme: Theme, force = false): void {
+  applyThemeClass(theme, force);
+  if (overrideFamilyId() !== null) syncSavedThemeDefaults(resolveSessionActiveTheme(theme, true).theme);
+}
+
 /** 无 ThemeProvider 的窗口用。 */
 export function followLocalThemeChanges(): () => void {
-  return onLocalThemesChange(() => applyThemeClass(getStoredTheme(), true));
+  return onLocalThemesChange(() => applyExternalThemeChange(getStoredTheme(), true));
 }
 
 /** Share browser selection synchronization with lightweight windows, without a Provider. */
@@ -195,13 +208,13 @@ export function followThemeSelectionChanges(onChange?: (choice: ThemeChoice) => 
       const next = e.newValue;
       if (next === 'light' || next === 'dark' || next === 'system') {
         onChange?.({ theme: next });
-        applyThemeClass(next);
+        applyExternalThemeChange(next);
       }
     } else if (e.key === FAMILY_KEY) {
       const next = e.newValue;
       if (next && tryGetFamily(next)) {
         onChange?.({ familyId: next });
-        applyThemeClass(getStoredTheme());
+        applyExternalThemeChange(getStoredTheme());
       }
     }
   };
@@ -343,7 +356,7 @@ export function ThemeProvider({
       try { localStorage.setItem(FAMILY_KEY, fallback); } catch { /* ok */ }
     }
     bumpLocalThemeRev();
-    applyThemeClass(getStoredTheme(), true);
+    applyExternalThemeChange(getStoredTheme(), true);
   }), []);
 
   const setSelection = useCallback((choice: ThemeChoice, current?: () => boolean) => {
@@ -407,7 +420,7 @@ export function ThemeProvider({
     const handleChange = () => {
       setSystemPrefersDark(mediaQuery.matches);
       if (theme === 'system') {
-        applyThemeClass('system');
+        applyExternalThemeChange('system');
       }
     };
     mediaQuery.addEventListener('change', handleChange);
