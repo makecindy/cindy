@@ -534,6 +534,12 @@ export class AcpSession {
     return this.hasBackgroundWork();
   }
 
+  /** The next send reopens this session with `session/resume` or `session/load`; without either a resume fails. */
+  canResumeAfterClose(): boolean {
+    const { loadSession, sessionCapabilities } = this.initializeResult.agentCapabilities;
+    return sessionCapabilities.resume || loadSession;
+  }
+
   private hasBackgroundWork(): boolean {
     if (this.ended || this.turn) return false;
     if (this.translator.openToolCount() > 0) return true;
