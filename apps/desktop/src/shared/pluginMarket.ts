@@ -58,8 +58,9 @@ export interface PluginMarketItem {
    */
   installedSourceId?: string;
   /**
-   * 新版本比已装版本权限变多，后台更新已暂停、等待用户确认。只在 Main 按真实包
-   * 判定过后出现；缺省表示未知或无需确认，不能据此推断可以静默更新。
+   * 新版本比已装版本权限变多，或（自定义市场）实际来源与已装版本不同，后台更新已暂停、
+   * 等待用户确认。只在 Main 按真实包与来源记录判定过后出现；缺省表示未知或无需确认，
+   * 不能据此推断可以静默更新。
    */
   updateRequiresConsent?: true;
 }
