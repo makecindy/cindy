@@ -18390,6 +18390,8 @@
       "description": "Künftige Auslöser werden gestoppt. Wähle, was mit den bereits von dieser Automatisierung erstellten Sitzungen geschehen soll.",
       "sessionCountPending": "Erstellte Sitzungen werden gezählt…",
       "sessionCount": "{{count}} erstellte Sitzung(en)",
+      "sessionCountAtLeast": "Mindestens {{count}} erstellte Sitzung(en); einige konnten nicht gezählt werden",
+      "sessionCountUnknown": "Erstellte Sitzungen konnten nicht gezählt werden",
       "inflightCount": "{{count}} Ausführung(en) laufen gerade und werden gestoppt",
       "optionAria": "Umgang mit erstellten Sitzungen wählen",
       "option": {

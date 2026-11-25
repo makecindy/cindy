@@ -18316,6 +18316,8 @@
       "description": "향후 트리거가 중지됩니다. 이 자동화가 이미 생성한 세션을 어떻게 처리할지 선택하세요.",
       "sessionCountPending": "생성된 세션을 확인하는 중…",
       "sessionCount": "생성된 세션 {{count}}개",
+      "sessionCountAtLeast": "생성된 세션 최소 {{count}}개(일부는 확인하지 못했습니다)",
+      "sessionCountUnknown": "생성된 세션 수를 확인하지 못했습니다",
       "inflightCount": "현재 {{count}}건의 실행이 진행 중이며 삭제하면 중지됩니다",
       "optionAria": "생성된 세션 처리 방식 선택",
       "option": {

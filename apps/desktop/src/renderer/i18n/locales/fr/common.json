@@ -18558,6 +18558,8 @@
       "description": "Les déclenchements futurs seront arrêtés. Choisissez quoi faire des sessions déjà générées par cette automatisation.",
       "sessionCountPending": "Décompte des sessions générées…",
       "sessionCount": "{{count}} session(s) générée(s)",
+      "sessionCountAtLeast": "Au moins {{count}} session(s) générée(s) ; certaines n’ont pas pu être comptées",
+      "sessionCountUnknown": "Impossible de compter les sessions générées",
       "inflightCount": "{{count}} exécution(s) actuellement en cours seront arrêtées",
       "optionAria": "Choisir comment traiter les sessions générées",
       "option": {

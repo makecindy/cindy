@@ -561,9 +561,12 @@ export function SchedulerPage() {
         .map((s) => ({
           id: s.id,
           name: s.name,
-          source: s.source,
+          // 上面的 filter 已排除 bot / project。
+          source: s.source as 'user' | undefined,
           workingDir: s.workingDir ?? undefined,
           projectConfigId: s.projectConfigId ?? undefined,
+          // 列表里已有 schedule 记录：直接传手绑会话 id（null = 确认未手绑），免去逐项全量 list()。
+          targetSessionId: s.targetSessionId ?? null,
         }));
       requestDeleteSchedules(targets);
     },

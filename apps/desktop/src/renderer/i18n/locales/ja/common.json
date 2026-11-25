@@ -18316,6 +18316,8 @@
       "description": "今後のトリガーは停止されます。この自動化がすでに生成したセッションの扱いを選択してください。",
       "sessionCountPending": "生成済みのセッションを確認しています…",
       "sessionCount": "生成済みのセッション {{count}} 件",
+      "sessionCountAtLeast": "生成済みのセッションは少なくとも {{count}} 件（一部を確認できませんでした）",
+      "sessionCountUnknown": "生成済みのセッション数を確認できませんでした",
       "inflightCount": "現在 {{count}} 件の実行中タスクがあり、削除すると停止されます",
       "optionAria": "生成済みセッションの扱いを選択",
       "option": {

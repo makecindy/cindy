@@ -18558,6 +18558,8 @@
       "description": "Se detendrán las activaciones futuras. Elige qué hacer con las sesiones que ya generó esta automatización.",
       "sessionCountPending": "Contando sesiones generadas…",
       "sessionCount": "{{count}} sesión(es) generada(s)",
+      "sessionCountAtLeast": "Al menos {{count}} sesión(es) generada(s); no se pudieron contar algunas",
+      "sessionCountUnknown": "No se pudieron contar las sesiones generadas",
       "inflightCount": "{{count}} ejecución(es) están en curso y se detendrán",
       "optionAria": "Elige qué hacer con las sesiones generadas",
       "option": {

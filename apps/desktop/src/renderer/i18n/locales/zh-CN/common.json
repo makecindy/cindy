@@ -18316,6 +18316,8 @@
       "description": "删除后未来的触发会停止。请选择这个自动化已经生成的任务要如何处理。",
       "sessionCountPending": "正在统计已生成的任务…",
       "sessionCount": "已生成 {{count}} 个任务",
+      "sessionCountAtLeast": "至少已生成 {{count}} 个任务，部分无法统计",
+      "sessionCountUnknown": "无法统计已生成的任务数量",
       "inflightCount": "当前有 {{count}} 次执行正在进行，删除会立即停止它们",
       "optionAria": "选择已生成任务的处理方式",
       "option": {

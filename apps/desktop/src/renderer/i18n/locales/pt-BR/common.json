@@ -18558,6 +18558,8 @@
       "description": "Os acionamentos futuros serão interrompidos. Escolha o que fazer com as sessões já geradas por esta automação.",
       "sessionCountPending": "Contando sessões geradas…",
       "sessionCount": "{{count}} sessão(ões) gerada(s)",
+      "sessionCountAtLeast": "Pelo menos {{count}} sessão(ões) gerada(s); não foi possível contar algumas",
+      "sessionCountUnknown": "Não foi possível contar as sessões geradas",
       "inflightCount": "{{count}} execução(ões) em andamento serão interrompidas",
       "optionAria": "Escolha como tratar as sessões geradas",
       "option": {

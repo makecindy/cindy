@@ -13,6 +13,8 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, ExternalLink, ListChecks, RefreshCw, SquarePen, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Tip } from '@/components/ui/tooltip';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -182,21 +184,22 @@ export function TaskListPane({
         <div className="flex items-center gap-1.5">
           <span className="text-11 text-[var(--settings-section-desc)]">{schedules.length}</span>
           {onBatchDelete && onSelectionChange && selectableIds.length > 0 && (
-            <button
-              type="button"
-              aria-pressed={selecting}
-              aria-label={t('scheduler.list.batch.toggleAria')}
-              title={t('scheduler.list.batch.toggle')}
-              onClick={() => onSelectionChange(selecting ? null : new Set())}
-              className={cn(
-                'flex h-6 w-6 items-center justify-center rounded-lg text-[var(--cmd-palette-item-meta)]',
-                'hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                selecting && 'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)]',
-              )}
-            >
-              <ListChecks size={14} strokeWidth={2} />
-            </button>
+            <Tip text={t('scheduler.list.batch.toggle')}>
+              <Button
+                variant="secondary"
+                tone="quiet"
+                size="xs"
+                aria-pressed={selecting}
+                aria-label={t('scheduler.list.batch.toggleAria')}
+                onClick={() => onSelectionChange(selecting ? null : new Set())}
+                className={cn(
+                  'w-6 px-0',
+                  selecting && '[--button-face-bg:var(--chat-input-chip-bg)] text-[var(--text-primary)]',
+                )}
+              >
+                <ListChecks size={14} strokeWidth={2} />
+              </Button>
+            </Tip>
           )}
         </div>
       </div>
@@ -280,15 +283,19 @@ export function TaskListPane({
                   {group.schedules.map((s) => (
                     <li key={s.id} className={cn(selecting && 'flex items-center gap-1.5')}>
                       {selecting && (
-                        <input
-                          type="checkbox"
-                          className="size-3.5 shrink-0 cursor-pointer accent-[var(--msg-assistant-text)] disabled:cursor-default disabled:opacity-40"
-                          checked={selection?.has(s.id) ?? false}
-                          disabled={s.source === 'project'}
-                          title={s.source === 'project' ? t('scheduler.list.batch.projectHint') : undefined}
-                          aria-label={t('scheduler.list.batch.itemAria', { name: s.name })}
-                          onChange={() => toggleSelected(s)}
-                        />
+                        <Tip
+                          text={s.source === 'project' ? t('scheduler.list.batch.projectHint') : null}
+                        >
+                          {/* 禁用的 input 不派发指针事件，Tip 挂在外层 span 上。 */}
+                          <span className="inline-flex shrink-0">
+                            <Checkbox
+                              checked={selection?.has(s.id) ?? false}
+                              disabled={s.source === 'project'}
+                              aria-label={t('scheduler.list.batch.itemAria', { name: s.name })}
+                              onChange={() => toggleSelected(s)}
+                            />
+                          </span>
+                        </Tip>
                       )}
                       <div className={cn(selecting && 'min-w-0 flex-1')}>
                       <TaskListCell
@@ -332,30 +339,40 @@ export function TaskListPane({
       </div>
 
       {selecting && (
-        <div className="flex shrink-0 items-center gap-2 border-t border-[var(--cmd-palette-border)] px-3 py-2">
-          <button
-            type="button"
-            className="text-xs text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)]"
-            onClick={() => onSelectionChange?.(allSelected ? new Set() : new Set(selectableIds))}
-          >
-            {allSelected ? t('scheduler.list.batch.clearAll') : t('scheduler.list.batch.selectAll')}
-          </button>
-          <span className="min-w-0 flex-1 truncate text-xs text-[var(--settings-section-desc)]">
-            {t('scheduler.list.batch.selectedCount', { count: selectedSchedules.length })}
-          </span>
-          <Button variant="secondary" size="sm" type="button" onClick={() => onSelectionChange?.(null)}>
-            {t('scheduler.list.batch.cancel')}
-          </Button>
-          <Button
-            variant="cta"
-            size="sm"
-            type="button"
-            disabled={selectedSchedules.length === 0}
-            onClick={() => void onBatchDelete?.(selectedSchedules)}
-          >
-            <Trash2 size={12} strokeWidth={2} />
-            {t('scheduler.list.batch.delete')}
-          </Button>
+        <div className="flex shrink-0 flex-col gap-1.5 border-t border-[var(--cmd-palette-border)] px-3 py-2">
+          {/* 两行：240px 窄面板下计数始终可见，按钮不越界。 */}
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              className="min-w-0 max-w-[50%] shrink truncate text-xs text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)]"
+              onClick={() => onSelectionChange?.(allSelected ? new Set() : new Set(selectableIds))}
+            >
+              {allSelected ? t('scheduler.list.batch.clearAll') : t('scheduler.list.batch.selectAll')}
+            </button>
+            <span className="min-w-0 flex-1 text-right text-xs text-[var(--settings-section-desc)] [overflow-wrap:anywhere]">
+              {t('scheduler.list.batch.selectedCount', { count: selectedSchedules.length })}
+            </span>
+          </div>
+          <div className="flex min-w-0 items-center justify-end gap-1.5">
+            <Button
+              variant="secondary"
+              size="xs"
+              className="min-w-0 px-2.5"
+              onClick={() => onSelectionChange?.(null)}
+            >
+              <span className="truncate">{t('scheduler.list.batch.cancel')}</span>
+            </Button>
+            <Button
+              variant="cta"
+              size="xs"
+              className="min-w-0 px-2.5"
+              disabled={selectedSchedules.length === 0}
+              onClick={() => void onBatchDelete?.(selectedSchedules)}
+            >
+              <Trash2 size={12} strokeWidth={2} className="shrink-0" />
+              <span className="truncate">{t('scheduler.list.batch.delete')}</span>
+            </Button>
+          </div>
         </div>
       )}
 

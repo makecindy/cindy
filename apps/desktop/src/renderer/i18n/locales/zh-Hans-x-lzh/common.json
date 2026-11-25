@@ -18316,6 +18316,8 @@
       "description": "删之则此后触发皆止。请择此自运已生之差事当如何处之。",
       "sessionCountPending": "方计已生之差事…",
       "sessionCount": "已关联 {{count}} 差事",
+      "sessionCountAtLeast": "至少已关联 {{count}} 差事，余者未能计",
+      "sessionCountUnknown": "已生之差事，未能计其数",
       "inflightCount": "今有 {{count}} 次方行，删之则即止",
       "optionAria": "择已生差事之处置",
       "option": {
