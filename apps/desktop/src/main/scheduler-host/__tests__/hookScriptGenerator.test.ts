@@ -387,6 +387,22 @@ describe('installHookScript(统一安装通道:script/description 双模式 + �
     expect(next.exitCode).toBe(2);
   });
 
+  it('keeps concurrent installs with the same name on separate scripts', async () => {
+    const deps = { maker: null, fallbackDir: dir, hasSystemNode: async () => true };
+    const missingSnapshot = JSON.stringify(path.join(dir, 'ghost-install-state', 'skill-snapshots', 'old'));
+    const skipScript = `const snapshot = ${missingSnapshot};\nprocess.exit(snapshot ? 2 : 1);`;
+    const [skip, run] = await Promise.all([
+      installHookScript(deps, { scheduleName: 'Same name', script: skipScript }),
+      installHookScript(deps, { scheduleName: 'Same name', script: 'process.exit(0);' }),
+    ]);
+
+    expect(skip.command).not.toBe(run.command);
+    expect(skip.test.decision).toBe('skip');
+    expect(run.test.decision).toBe('run');
+    expect(readFileSync(skip.filePath, 'utf8')).toBe(skipScript + '\n');
+    expect(readFileSync(run.filePath, 'utf8')).toBe('process.exit(0);\n');
+  });
+
   it('script 模式:agent 提供内容 → 落盘规范路径 + 自测返回 skip(exit 2)', async () => {
     const result = await installHookScript(
       { maker: null, fallbackDir: path.join(dir, 'fb') },
