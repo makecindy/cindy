@@ -248,6 +248,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   每次调用及现有写入、返回和投递边界仍复核账号、安装目录与批准版本、启用状态、声明组和整体安装批准；保留 Host 业务准入，停用、卸载、批准失效与账号变化继续拒绝。
   每次批准查询均重新读取和验证 receipt，不使用授权缓存或同步段去重。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
+  `list_projects` 允许已批准的 `control` 插件直接查询本机及同账号 Device Link 电脑的项目目录，
+  包括项目路径、别名和可见性。项目详情、自动图标和项目写入仍要求任务上下文。
   浏览器插件调用没有任务归属：选中 `rsb-webview` 时返回现有结构化错误 `BROWSER_RUNTIME_ACTION_FAILED`，
   明确说明不支持侧边栏浏览器，不回退到界面焦点、不伪造任务或新建归属；专用浏览器、我的浏览器与原 Agent/UI 行为保持。
   外部 AI 工具历史的 `scan_importable_sessions`、`get_session_import_status`、`import_sessions` 在共享 handler 中对插件返回 `UNSUPPORTED_CAPABILITY`，不进入扫描、状态或导入回调；前两者会触发既有中断导入恢复，不能作为纯读取开放。Agent 和设置页不变。

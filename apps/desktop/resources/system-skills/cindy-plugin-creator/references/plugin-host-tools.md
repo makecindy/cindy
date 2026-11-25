@@ -76,6 +76,8 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 
 依赖当前任务的工具必须显式传其目标参数（例如 `session_id` 或 `target_session_id`，以工具参数定义为准）。省略时保留 `NO_SESSION_CONTEXT` 等原工具错误；宿主不会替插件挑选任务。参数、设备寻址与返回结构均沿用对应 Agent 工具，可查该版本的 `list_tools` / `tool_schema`。插件能见的范围与普通用户任务一致，包含工具本身支持的跨设备范围。
 
+声明 `control` 的已批准插件可直接调用 `cindy_helper` 的 `list_projects`。结果包含目标电脑已登记项目的路径、别名和可见性，默认包含隐藏项目。传 `device` 可查询通过同账号 Device Link 连接的电脑。项目详情、自动图标和项目写入仍需任务上下文。
+
 整体安装批准有效、已启用且 manifest 声明对应组时，插件直接进入同一个 Host 工具处理器，不套用 Agent 的 MCP Full/Auto/Ask 逐次策略，也不自动弹出确认框或权限卡。真实 Agent 执行继续使用它自己的权限机制。调用仍核对账号、安装目录与批准版本、启用状态和声明组；停用、卸载、撤销安装批准或账号变化使旧请求失效，Host 原有业务准入与写入检查继续执行。
 
 本入口仅支持表中服务的已声明组。插件管理（`ghost_*` 等）、主人代输入或 `ask_owner`、应用更新和反馈不开放。Node 子进程不提供此 API；应由声明的插件 Node 工作进程调用。

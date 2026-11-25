@@ -105,10 +105,12 @@ export function createHostToolService(options: Options) {
     deviceId: () => options.deviceId?.() ?? 'local',
     withAccountDataAccess: async (sessionId, operation) => {
       const database = current() ? getCurrentDbClientSnapshot() : null;
+      const plugin = !sessionId ? getPluginHostToolCaller() : undefined;
       const assertCurrent = async () => {
+        plugin?.assertCurrent();
         if (!current() || !database || database !== getCurrentDbClientSnapshot()) throw new Error('OWNER_SCOPE_CHANGED');
         const db = tryGetDbClient();
-        if (!db || !sessionId || await resolveHelperSurface(db, sessionId) === 'restricted')
+        if (!db || (!sessionId && !plugin) || (sessionId && await resolveHelperSurface(db, sessionId) === 'restricted'))
           throw new Error('Account data is unavailable for this task');
         if (!current() || database !== getCurrentDbClientSnapshot()) throw new Error('OWNER_SCOPE_CHANGED');
       };

@@ -4,6 +4,8 @@ import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
 import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirs.js';
+import { listProjectAliases } from '../localDb/ipc/projectAliases.js';
+import { projectKeyComparisonKey } from '../../shared/projectKeys.js';
 import { resolveBotCanonicalSession } from './botCanonicalSessionRegistry.js';
 import type { PluginTargetCandidate, PluginTargetKind, PluginTargetRef } from '../../shared/pluginTargets.js';
 
@@ -15,14 +17,29 @@ export async function listPluginTargetCandidates(
   const db = snapshot.client.drizzle;
   let result: PluginTargetCandidate[];
   if (kind === 'project') {
-    result = (await listRecentWorkdirs(snapshot.client))
+    const [workdirs, aliasRows] = await Promise.all([
+      listRecentWorkdirs(snapshot.client),
+      listProjectAliases(snapshot.client).catch(() => []),
+    ]);
+    const aliases = new Map<string | null, string>();
+    // Rows are newest first. Preserve the newest alias when Windows keys differ only in case.
+    for (const row of aliasRows) {
+      const key = projectKeyComparisonKey(row.projectKey, process.platform);
+      if (key && !aliases.has(key)) aliases.set(key, row.alias);
+    }
+    result = workdirs
       // Teammates are offered as their own kind; their project is not a second entry.
       .filter((row) => row.exists && !isTeammateProjectPath(row.path))
-      .map((row) => ({
-        id: row.path,
-        label: path.basename(row.path) || row.path,
-        detail: row.path,
-      }));
+      .map((row) => {
+        const key = projectKeyComparisonKey(`local:${row.path}`, process.platform);
+        const alias = aliases.get(key);
+        return {
+          id: row.path,
+          label: alias || path.basename(row.path) || row.path,
+          detail: row.path,
+          ...(alias ? { alias } : {}),
+        };
+      });
   } else if (kind === 'bot') {
     const rows = await db
       .select({

@@ -5,7 +5,18 @@ import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import { PluginTargetSlot, type PluginTargetAdapter } from '../../cindy-brain/pluginTargetSlot.js';
 
-vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ listRecentWorkdirs: async () => [] }));
+const fixtures = vi.hoisted(() => ({
+  workdirs: [] as Array<{ path: string; exists: boolean }>,
+  aliases: [] as Array<{ projectKey: string; alias: string }>,
+  aliasError: null as Error | null,
+}));
+vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ listRecentWorkdirs: async () => fixtures.workdirs }));
+vi.mock('../../localDb/ipc/projectAliases.js', () => ({
+  listProjectAliases: async () => {
+    if (fixtures.aliasError) throw fixtures.aliasError;
+    return fixtures.aliases;
+  },
+}));
 import { listPluginTargetCandidates, resolvePluginSessionTarget, resolvePluginTargetSession } from '../pluginTargetCandidates.js';
 
 // Unit: resolve({session}) must classify actual SQL registrations and apply the
@@ -40,6 +51,9 @@ beforeAll(() => {
 });
 beforeEach(() => {
   db.exec('DELETE FROM bot_session_links; DELETE FROM bot_profiles; DELETE FROM sessions;');
+  fixtures.workdirs = [];
+  fixtures.aliases = [];
+  fixtures.aliasError = null;
   setCurrentDbClient({ drizzle: drizzle(db) } as unknown as DbClient, 'test-owner');
 });
 afterAll(() => { clearCurrentDbClient(); db.close(); });
@@ -93,4 +107,28 @@ it.each([
   session('ordinary');
   db.exec(change);
   await expect(resolve('ordinary')).rejects.toThrow('TARGET_UNAVAILABLE');
+});
+
+// The sidebar names a project with the user's alias; a plugin must show the same name.
+it('names a project the way the sidebar does and keeps the alias for plugins', async () => {
+  fixtures.workdirs = [{ path: '/work/repo', exists: true }, { path: '/work/plain', exists: true }];
+  fixtures.aliases = [
+    { projectKey: 'local:/work/repo', alias: 'My Project' },
+    { projectKey: 'local:/work/other', alias: 'Other Project' },
+  ];
+  const result = await slot.handle('plugin', { kind: 'list', targetKind: 'project' }, () => {});
+  expect(result).toEqual({ targets: [
+    { kind: 'project', id: '/work/repo', label: 'My Project', detail: '/work/repo', alias: 'My Project' },
+    { kind: 'project', id: '/work/plain', label: 'plain', detail: '/work/plain' },
+  ] });
+});
+
+// Losing the names must never lose the projects: an unreadable alias table degrades
+// to directory names instead of failing the whole candidate list.
+it('falls back to the directory name when project aliases cannot be read', async () => {
+  fixtures.workdirs = [{ path: '/work/repo', exists: true }];
+  fixtures.aliasError = new Error('project aliases unavailable');
+  expect(await listPluginTargetCandidates('project')).toEqual([
+    { id: '/work/repo', label: 'repo', detail: '/work/repo' },
+  ]);
 });

@@ -18,6 +18,8 @@ export interface PluginTargetCandidate {
   id: string;
   label: string;
   detail: string;
+  /** User-set display name for a renamed project. */
+  alias?: string;
 }
 export type PluginTargetRequest =
   | { kind: 'capabilities' }
