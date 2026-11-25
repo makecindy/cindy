@@ -8,6 +8,7 @@
  * Maker / Desktop is a separate step; this module has no host dependencies.
  */
 
+import { randomUUID } from 'node:crypto';
 import { readFile as fsReadFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -372,6 +373,7 @@ interface QueuedPrompt {
 
 interface ActiveTurn {
   token: number;
+  permissionTurnId: string | null;
   settled: boolean;
   cancelTimer: ReturnType<typeof setTimeout> | null;
   gate: TurnGate | null;
@@ -387,13 +389,6 @@ const ACP_KIND_POLICY_NAMES: Readonly<Record<string, string>> = {
   execute: 'Bash',
   fetch: 'WebFetch',
 };
-
-/** The name a host turn policy judges an ACP tool call by: the agent's own tool name, else its kind. */
-function acpPolicyToolName(toolCall: Pick<AcpToolCallFields, 'title' | 'name' | 'kind'>): string {
-  return toolCall.name
-    ?? (toolCall.kind ? ACP_KIND_POLICY_NAMES[toolCall.kind] : undefined)
-    ?? acpToolDisplayName(toolCall);
-}
 
 function mergeGates(running: TurnGate, incoming: TurnGate): TurnGate {
   const prior = running.policy;
@@ -477,8 +472,8 @@ export class AcpSession {
   private permissionMode: 'ask' | 'bypassPermissions' = 'ask';
   /** The Cindy mode the task asked for, reported when a turn policy is refused. */
   private selectedPermissionMode: PermissionMode = 'ask';
-  /** Gate of the last turn, for permission requests from work the agent continues after answering it. */
-  private backgroundGate: TurnGate | null = null;
+  /** The most recent finished turn can still own permission requests while the session is idle. */
+  private backgroundPermission: Pick<ActiveTurn, 'permissionTurnId' | 'gate'> | null = null;
   private resolver: InteractionResolver | null = null;
   private turn: ActiveTurn | null = null;
   private turnSeq = 0;
@@ -701,6 +696,8 @@ export class AcpSession {
     this.pendingPrompts.length = 0;
     const turn = this.turn;
     if (!turn) {
+      this.backgroundPermission = null;
+      this.cancelPermissions();
       // Agents that keep working after a prompt (DSH documents it) stop that work on cancel;
       // others ignore a cancel with no prompt in flight.
       if (this.hasBackgroundWork() && !this.connection.closed) this.connection.notify('session/cancel', { sessionId: this.id });
@@ -860,14 +857,25 @@ export class AcpSession {
     this.emit(this.translator.flushPending());
     this.clearBackgroundSegmentClose();
     this.clearOpenToolCap();
-    const turn: ActiveTurn = { token: ++this.turnSeq, settled: false, cancelTimer: null, gate: next.gate };
+    const turn: ActiveTurn = {
+      token: ++this.turnSeq,
+      permissionTurnId: this.initializeResult.permissionGate ? randomUUID() : null,
+      settled: false,
+      cancelTimer: null,
+      gate: next.gate,
+    };
     this.turn = turn;
-    this.backgroundGate = null;
+    this.backgroundPermission = null;
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
     const usageModel = this.model;
     const params: AcpRecord = { sessionId: this.id, prompt: next.blocks };
-    if (next.gate) params._meta = { permissionGate: { scope: ACP_PERMISSION_GATE_SCOPE } };
+    if (turn.permissionTurnId) {
+      params._meta = { permissionGate: {
+        turnId: turn.permissionTurnId,
+        ...(next.gate ? { scope: ACP_PERMISSION_GATE_SCOPE } : {}),
+      } };
+    }
     this.connection.request('session/prompt', params, { timeoutMs: null }).then(
       (result) => {
         // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
@@ -885,7 +893,9 @@ export class AcpSession {
     if (turn.cancelTimer) clearTimeout(turn.cancelTimer);
     this.cancelPermissions();
     this.turn = null;
-    this.backgroundGate = turn.gate;
+    this.backgroundPermission = turn.cancelTimer || 'error' in outcome || outcome.stopReason === 'cancelled'
+      ? null
+      : { permissionTurnId: turn.permissionTurnId, gate: turn.gate };
     // Turn-closing events belong to the turn that just ended, so they are not tagged background.
     for (const event of this.translator.finish(outcome)) this.queue.push(event);
     this.pump();
@@ -971,24 +981,40 @@ export class AcpSession {
   private async decidePermission(params: AcpRecord, signal: AbortSignal): Promise<AcpPermissionOutcome> {
     if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
     const options = normalizePermissionOptions(params.options);
-    const toolCall = normalizeToolCallFields(params.toolCall) ?? { toolCallId: `acp-permission-${this.permissionSeq + 1}` };
-    this.emit(this.translator.noteToolCall(toolCall));
-    // Only the agent can define the lifetime and scope of a persistent grant.
-    const allowOnce = firstOfKind(options, ['allow_once']);
     const reject = firstOfKind(options, ['reject_once']);
-    const gate = this.turn ? this.turn.gate : this.backgroundGate;
+    const permission = this.turn ?? this.backgroundPermission;
+    const requestGate = asRecord(asRecord(params._meta).permissionGate);
+    if (this.initializeResult.permissionGate
+      && (!permission?.permissionTurnId || requestGate.turnId !== permission.permissionTurnId)) {
+      return selected(reject);
+    }
+    const gate = permission?.gate;
     if (gate?.toolsDisabled) return selected(reject);
-    if (this.permissionMode === 'bypassPermissions') return selected(allowOnce ?? reject);
+    const allowOnce = firstOfKind(options, ['allow_once']);
+    const fields = normalizeToolCallFields(params.toolCall);
+    if (gate?.policy && !fields) return selected(reject);
+    const { events, toolCall } = this.translator.noteToolCall(fields ?? { toolCallId: `acp-permission-${this.permissionSeq + 1}` });
+    this.emit(events);
+    if (this.permissionMode === 'bypassPermissions') {
+      return selected(gate?.policy ? reject : allowOnce ?? reject);
+    }
     const input = toolCall.rawInput;
-    const requestInput: Record<string, unknown> = input !== null && typeof input === 'object' && !Array.isArray(input)
-      ? input as Record<string, unknown>
-      : input === undefined ? {} : { value: input };
-    // In a gated turn the agent also asks about calls its own rules would run unasked (`routine`).
-    // Those still run unasked unless the host policy requires a confirmation for them.
-    const policyToolName = gate ? acpPolicyToolName(toolCall) : null;
-    if (gate?.policy && policyToolName
-      && asRecord(asRecord(params._meta).permissionGate).routine === true
-      && !this.policyForcesConfirmation(gate.policy, policyToolName, requestInput)) {
+    const hasInputRecord = input !== null && typeof input === 'object' && !Array.isArray(input);
+    const requestInput = hasInputRecord ? input as AcpRecord : input === undefined ? {} : { value: input };
+    const policyToolName = gate?.policy && toolCall.kind && Object.hasOwn(ACP_KIND_POLICY_NAMES, toolCall.kind)
+      ? ACP_KIND_POLICY_NAMES[toolCall.kind]
+      : undefined;
+    const toolName = policyToolName ?? acpToolDisplayName(toolCall);
+    // The channel must be able to classify the operation and its input before a routine call can run unasked.
+    // A shell approval without a command would also leave the channel's destructive-command check blind.
+    if (gate?.policy && toolCall.kind === 'execute'
+      && (typeof requestInput.command !== 'string' || requestInput.command.trim() === '')) {
+      return selected(reject);
+    }
+    if (gate?.policy && policyToolName && hasInputRecord && requestGate.routine === true
+      && !this.policyForcesConfirmation(gate.policy, policyToolName, requestInput)
+      && (!toolCall.name || toolCall.name === policyToolName
+        || !this.policyForcesConfirmation(gate.policy, toolCall.name, requestInput))) {
       return selected(allowOnce ?? reject);
     }
     const resolver = this.resolver;
@@ -1003,7 +1029,7 @@ export class AcpSession {
       requestId: `acp-permission-${++this.permissionSeq}`,
       toolUseId: toolCall.toolCallId,
       // A gated turn's confirmation goes through the channel's checks, which know tools by these names.
-      toolName: policyToolName ?? acpToolDisplayName(toolCall),
+      toolName,
       input: requestInput,
       ...(toolCall.title ? { title: toolCall.title } : {}),
       displayName: acpToolDisplayName(toolCall),

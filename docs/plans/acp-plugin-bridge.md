@@ -419,6 +419,7 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
   `getLiveSession` 看不到插件引擎的运行时，忙碌检查与关闭改用 `getRuntimeSession`；宿主没有这个读取口时什么都不
   重建（此前会在旧会话仍开着时提交重建、挂上交接，重放又被拒绝）。发送前的换会话（含插件引擎账号切换）同一规则。
   重建记录写 `sourceAgentKind = acp`。插件引擎不会自己压缩上下文，Cindy 也不能截断它的历史，主动换窗不适用。
+  IM 消息的重试由原渠道负责，以便保留每轮权限和审批入口；Desktop 可以准备交接，但不会通用重放 IM 消息。
   实现见 `maker-ipc/contextOverflowRollover.ts`、`contextRecoveryAssembly.ts`，回归见 `contextOverflowRollover.test.ts`。
 - **/learn**：蒸馏任务开在同一个插件引擎上，与在它上面新建任务同一准入（停用、卸载、不可用或模型关闭时本次 /learn
   明确失败），素材与内置引擎相同（含用户画像与其他任务的检索片段，这些内容会交给该插件的服务商），权限收敛到

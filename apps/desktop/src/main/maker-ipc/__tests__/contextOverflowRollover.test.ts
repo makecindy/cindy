@@ -1424,6 +1424,23 @@ describe('createContextOverflowRollover', () => {
     expect(engine).toHaveBeenCalledOnce();
   });
 
+  // Unit: an IM message identified by the persisted imSource belongs to its channel on overflow.
+  it('prepares a fresh plugin session for the IM owner to retry', async () => {
+    const { deps, engine, replayUserMessage } = pluginEngineOverflow();
+    deps.listMessages.mockResolvedValue([{
+      ...msg('user', 'from IM', 'accepted'),
+      agentMeta: { imSource: { im: 'feishu' } },
+    }]);
+    const runtime = { isTurnRunning: () => false, listBackgroundTasks: () => [] };
+    const rollover = createContextOverflowRollover({ ...deps, replayUserMessage, getRuntimeSession: () => runtime });
+    rollover.claim('s1');
+
+    await expect(rollover.tryRecover('s1', { reason: 'acp-request-failed', message: 'prompt is too long' })).resolves.toBe(true);
+
+    expect(deps.commitRebuild).toHaveBeenCalledOnce();
+    expect(engine).not.toHaveBeenCalled();
+  });
+
   // Same rule: a busy runtime, or a host without the any-engine lookup, rebuilds nothing.
   it.each([
     ['a busy plugin engine runtime', { getRuntimeSession: () => ({ isTurnRunning: () => true }) }],

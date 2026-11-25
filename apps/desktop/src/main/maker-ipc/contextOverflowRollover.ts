@@ -390,7 +390,7 @@ function replayWireWithSourceNotes(
 
 function isExternalDispatchOwner(agentMeta: Record<string, unknown> | null | undefined): boolean {
   if (!agentMeta) return false;
-  if (agentMeta.hookSource) return true;
+  if (agentMeta.hookSource || agentMeta.imSource) return true;
   const origin = agentMeta.origin;
   if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return false;
   const kind = (origin as { kind?: unknown }).kind;
@@ -765,6 +765,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // nothing is rebuilt (a rebuild beside a still-open runtime would hand over into the old session).
     const pluginEngine = sessionRow.agentKind === 'acp';
     if (pluginEngine && !deps.getRuntimeSession) return false;
+    // The IM owner supplies approval during its own send; generic replay cannot restore that policy.
+    if (pluginEngine && (externalOwnerAtFailure || deps.hasExternalRecoveryOwner?.(sessionId))) return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
@@ -980,7 +982,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       }, signal);
       signal?.throwIfAborted();
       deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
-      if (plan.skipGenericReplay) {
+      if (plan.skipGenericReplay || (pluginEngine && deps.hasExternalRecoveryOwner?.(sessionId))) {
         deps.log.info('overflow rebuilt; external owner must retry send', {
           sessionId,
           sourceUserClientId: plan.sourceUserClientId,
@@ -1445,7 +1447,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
         // Terminal subscribers may release a headless/IM marker immediately.
         // Keep learning, but never take over that turn's replay after an await.
-        const externalOwnerAtFailure = isUnsupportedRequestOptionErrorData(errorData)
+        const externalOwnerAtFailure = (isUnsupportedRequestOptionErrorData(errorData) || isContextOverflowErrorData(errorData))
           && (deps.hasExternalRecoveryOwner?.(sessionId) ?? false);
         const claim = inFlight.get(sessionId) ?? new AbortController();
         inFlight.set(sessionId, claim);

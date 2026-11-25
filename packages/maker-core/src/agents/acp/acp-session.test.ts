@@ -27,7 +27,7 @@ import {
   type AcpSession,
   type OpenAcpSessionOptions,
 } from './session.js';
-import type { AcpRecord } from './protocol.js';
+import { asRecord, type AcpRecord } from './protocol.js';
 import { AcpAgent, acpMcpServersFromBridge } from './acp-agent.js';
 import {
   AgentStartupCleanupPendingError,
@@ -665,14 +665,17 @@ describe('AcpSession permissions', () => {
 describe('AcpSession per-turn permission gate', () => {
   // Rule: plugin-harnesses.md 每轮权限闸; same contract as the built-in engines' turnPermissionPolicy.
   const gateInit = (): AcpRecord => ({ protocolVersion: 1, agentCapabilities: {}, authMethods: [], _meta: { permissionGate: { supported: true } } });
-  const GATE_META = { permissionGate: { scope: 'all-tool-calls' } };
+  const requestMeta = (agent: ReturnType<typeof createFakeAgent>, index: number, routine = true) => {
+    const { turnId } = asRecord(asRecord(agent.prompts[index]!.params._meta).permissionGate);
+    expect(typeof turnId).toBe('string');
+    return { _meta: { permissionGate: { turnId, routine } } };
+  };
   /** IM-group-like policy: confirm shell commands and anything else not read-only. */
   const channelPolicy = (confirm: (toolName: string, input: unknown) => boolean = (name) => name !== 'Read'): TurnPermissionPolicy => ({
     origin: { kind: 'im', channel: 'feishu', taskId: 'row-1' },
     confirmationSurface: 'channel',
     forceConfirmToolCall: confirm,
   });
-  const routine = { _meta: { permissionGate: { routine: true } } };
 
   async function openGated(extra: Partial<OpenAcpSessionOptions> = {}) {
     const agent = createFakeAgent({ handlers: { initialize: gateInit } });
@@ -706,11 +709,13 @@ describe('AcpSession per-turn permission gate', () => {
     expect(session.capabilities.turnPermissionPolicy).toEqual({ supported: { supported: true }, unsupportedPermissionModes: ['bypassPermissions'] });
     await session.send({ type: 'user', content: 'from the group' }, { turnPermissionPolicy: channelPolicy() });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
-    expect(agent.prompts[0]!.params._meta).toEqual(GATE_META);
+    expect(agent.prompts[0]!.params._meta).toEqual({ permissionGate: { turnId: expect.any(String), scope: 'all-tool-calls' } });
 
-    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1', title: 'Read a.ts', kind: 'read', rawInput: { path: 'a.ts' } }, options: PERMISSION_OPTIONS, ...routine });
-    const shell = await agent.requestPermission({ toolCall: { toolCallId: 'x1', title: 'Run rm -rf build', kind: 'execute', rawInput: { command: 'rm -rf build' } }, options: PERMISSION_OPTIONS, ...routine });
-    const unmarked = await agent.requestPermission({ toolCall: { toolCallId: 'r2', title: 'Read ~/.ssh/id_rsa', kind: 'read' }, options: PERMISSION_OPTIONS });
+    // ACP can report the fields first, then refer to the same call by ID for approval.
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'r1', title: 'Read a.ts', kind: 'read', rawInput: { path: 'a.ts' } });
+    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    const shell = await agent.requestPermission({ toolCall: { toolCallId: 'x1', title: 'Run rm -rf build', kind: 'execute', rawInput: { command: 'rm -rf build' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    const unmarked = await agent.requestPermission({ toolCall: { toolCallId: 'r2', title: 'Read a second file', kind: 'read' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0, false) });
     expect([read, shell, unmarked]).toEqual([
       { outcome: { outcome: 'selected', optionId: 'yes' } },
       { outcome: { outcome: 'selected', optionId: 'no' } },
@@ -719,15 +724,16 @@ describe('AcpSession per-turn permission gate', () => {
     // The channel's own checks (destructive guard, card) see the call as a shell command.
     expect(asked.map((request) => [request.kind === 'permission' && request.toolName, request.kind === 'permission' && request.displayName])).toEqual([
       ['Bash', 'Run rm -rf build'],
-      ['Read', 'Read ~/.ssh/id_rsa'],
+      ['Read', 'Read a second file'],
     ]);
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
 
     // The next turn without a policy is not gated, and the agent's marker approves nothing.
     await session.send({ type: 'user', content: 'from the owner' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
-    expect(agent.prompts[1]!.params).not.toHaveProperty('_meta');
-    await agent.requestPermission({ toolCall: { toolCallId: 'r3', title: 'Read b.ts', kind: 'read' }, options: PERMISSION_OPTIONS, ...routine });
+    expect(agent.prompts[1]!.params._meta).toEqual({ permissionGate: { turnId: expect.any(String) } });
+    expect(requestMeta(agent, 1)._meta.permissionGate.turnId).not.toBe(requestMeta(agent, 0)._meta.permissionGate.turnId);
+    await agent.requestPermission({ toolCall: { toolCallId: 'r3', title: 'Read b.ts', kind: 'read' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
     expect(asked).toHaveLength(3);
     expect(asked[2]).toMatchObject({ toolName: 'Read b.ts' });
   });
@@ -737,7 +743,7 @@ describe('AcpSession per-turn permission gate', () => {
     const failing = channelPolicy(() => { throw new Error('classifier down'); });
     await session.send({ type: 'user', content: 'from the group' }, { turnPermissionPolicy: failing });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
-    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1', kind: 'read' }, options: PERMISSION_OPTIONS, ...routine });
+    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1', kind: 'read', rawInput: { path: 'a.ts' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
     expect(read).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
     expect(asked).toHaveLength(1);
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
@@ -753,11 +759,11 @@ describe('AcpSession per-turn permission gate', () => {
     const { agent, session, asked } = await openGated({ permissionMode: 'bypassPermissions' });
     await session.send({ type: 'user', content: 'say hello' }, { toolsDisabled: true });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
-    expect(agent.prompts[0]!.params._meta).toEqual(GATE_META);
-    const during = await agent.requestPermission({ toolCall: { toolCallId: 'x1', kind: 'execute' }, options: PERMISSION_OPTIONS, ...routine });
+    expect(agent.prompts[0]!.params._meta).toEqual({ permissionGate: { turnId: expect.any(String), scope: 'all-tool-calls' } });
+    const during = await agent.requestPermission({ toolCall: { toolCallId: 'x1', kind: 'execute' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
     await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
-    const after = await agent.requestPermission({ toolCall: { toolCallId: 'x2', kind: 'execute' }, options: PERMISSION_OPTIONS });
+    const after = await agent.requestPermission({ toolCall: { toolCallId: 'x2', kind: 'execute' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
     expect([during, after]).toEqual([
       { outcome: { outcome: 'selected', optionId: 'no' } },
       { outcome: { outcome: 'selected', optionId: 'no' } },
@@ -784,8 +790,8 @@ describe('AcpSession per-turn permission gate', () => {
     await session.send({ type: 'user', content: 'first sender' }, { turnPermissionPolicy: channelPolicy((name) => name === 'Bash') });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
     await session.steer({ type: 'user', content: 'second sender' }, { turnPermissionPolicy: channelPolicy((name) => name === 'Edit') });
-    const edit = await agent.requestPermission({ toolCall: { toolCallId: 'e1', kind: 'edit' }, options: PERMISSION_OPTIONS, ...routine });
-    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1', kind: 'read' }, options: PERMISSION_OPTIONS, ...routine });
+    const edit = await agent.requestPermission({ toolCall: { toolCallId: 'e1', kind: 'edit', rawInput: { path: 'a.ts' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
+    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1', kind: 'read', rawInput: { path: 'a.ts' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
     expect([edit, read]).toEqual([
       { outcome: { outcome: 'selected', optionId: 'no' } },
       { outcome: { outcome: 'selected', optionId: 'yes' } },

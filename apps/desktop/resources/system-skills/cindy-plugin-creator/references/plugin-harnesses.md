@@ -112,10 +112,11 @@ Agent 把内容注入当前这一轮后回 `{ "outcome": "injected" }`,插话之
 **聊天里的每轮权限闸**:用户把任务接到飞书、微信等聊天后,群聊、访客和个人微信发来的消息带一条「这一轮哪些操作必须先让
 用户确认」的规则,内置引擎在执行每个工具前检查它。插件引擎要让 Cindy 看到这一轮的每一次工具调用,才能执行这条规则。
 Agent(或入口)能做到时,在 `initialize` 结果的**顶层** `_meta` 里声明 `{ "permissionGate": { "supported": true } }`。
-Cindy 在这类轮次的 `session/prompt` 参数里带 `_meta: { permissionGate: { scope: "all-tool-calls" } }`,Agent 在这一轮
-(包括答完后继续做的工作)执行任何工具前都先发 `session/request_permission`,平时不问就执行的读文件、搜索也一样。
-按 Agent 自己的规则本来不会询问的调用,在请求的顶层 `_meta` 里加 `{ "permissionGate": { "routine": true } }`:规则不要求
-确认时 Cindy 直接同意,不打扰用户;没有这个标记的请求都交给用户确认。只允许文字回复的轮次,Cindy 拒绝这一轮的全部工具请求。
+声明支持后，每条 `session/prompt` 的 `_meta.permissionGate` 都带 `turnId`。受限轮次另外带
+`scope: "all-tool-calls"`，Agent 在这轮及其后台工作中执行任何工具前都发 `session/request_permission`。
+所有审批请求都要在顶层 `_meta.permissionGate.turnId` 原样回传发起这项工作的轮次 ID。新一轮开始后，
+旧轮次的审批请求会拒绝。Agent 自己原本无需询问的调用可同时带 `routine: true`。Cindy 能识别操作和输入且
+渠道规则允许时会直接同意，其余请求走审批。只允许文字回复的轮次拒绝全部工具请求。
 
 `toolCall.kind` 照 ACP 填写(`read`、`edit`、`delete`、`execute` 等),执行命令时把命令放在 `rawInput.command`:聊天的安全
 规则按它们判断,例如群聊里不能删除文件。没有声明的 Agent 收不到这类轮次,聊天里提示当前引擎不支持,主人私聊的普通消息

@@ -35,6 +35,9 @@ export const ACP_STEERING_METHOD = '_session/steering';
  * Cindy then marks turns that carry a host permission policy (IM group, guest and personal WeChat turns)
  * or allow no tools with `_meta.permissionGate.scope: 'all-tool-calls'` on `session/prompt`, and the agent
  * asks before each tool call it makes for that prompt, including work it continues after answering.
+ * Every prompt on a supporting agent carries a permissionGate.turnId, even without a scope. The
+ * agent echoes that ID from the originating prompt on every permission request. The host rejects
+ * requests whose turn no longer owns the permission surface.
  * Without the advertisement policy turns are refused, exactly like a built-in engine that cannot enforce
  * the policy; other turns are unaffected.
  */
