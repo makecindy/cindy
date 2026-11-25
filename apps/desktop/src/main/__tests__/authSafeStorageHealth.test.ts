@@ -94,8 +94,9 @@ describe('authSafeStorageHealth', () => {
     it('reads primary .enc, falls back to .enc.bak on ENOENT, and reports absent when neither exists', () => {
       const crypto = makeKeyedCrypto('k1');
       const files = new Map<string, string>();
-      const read = () =>
+      const read = (recoverFromBackup = false) =>
         readAtomicSafeRecord({
+          recoverFromBackup,
           isEncryptionAvailable: crypto.isEncryptionAvailable,
           readFileUtf8: (fp) => {
             const v = files.get(fp);
@@ -123,6 +124,9 @@ describe('authSafeStorageHealth', () => {
         crypto.encryptString('{"version":1,"main":true}').toString('base64'),
       );
       expect(read()).toEqual({ status: 'ok', value: '{"version":1,"main":true}' });
+      files.set('/virtual/cindy_auth_accounts_v1.enc', 'broken');
+      expect(read().status).toBe('decrypt-failed');
+      expect(read(true)).toEqual({ status: 'ok', value: '{"version":1,"bak":true}' });
     });
 
     it('separates backend-unavailable, fs io-error, and decrypt-failed with exact ciphertext', () => {

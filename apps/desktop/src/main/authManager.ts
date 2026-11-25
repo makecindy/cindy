@@ -791,8 +791,9 @@ function writeSafe(key: string, value: string): boolean {
  * During the Windows backup-swap fallback, readers use the old backup rather
  * than trying to restore it while the writer still owns the vault lock.
  */
-function readAtomicSafeDetailed(key: string): AtomicSafeReadResult {
+function readAtomicSafeDetailed(key: string, recoverFromBackup = false): AtomicSafeReadResult {
   const result = readAtomicSafeRecord({
+    recoverFromBackup,
     isEncryptionAvailable: () => isCredentialEncryptionAvailable(),
     readFileUtf8: (filepath) => fs.readFileSync(filepath, 'utf-8'),
     decryptBase64: (base64Ciphertext) =>
@@ -1103,6 +1104,7 @@ function readAuthAccountVault(
   options: {
     allowUnreadable?: boolean;
     recoverInvalid?: boolean;
+    previousRead?: AtomicSafeReadResult;
     allowUndecryptableReplacement?: boolean;
     allowUnreadableLogoutTombstones?: boolean;
   } = {},
@@ -1123,9 +1125,13 @@ function readAuthAccountVault(
       throw error;
     }
   }
-  const raw = readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
+  const read = options.previousRead;
+  const raw = read ? (read.status === 'ok' ? read.value : null) : readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
   if (raw === null) {
-    if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY)) {
+    if (
+      read?.status === 'absent' ||
+      ((!read || read.status === 'backend-unavailable') && isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY))
+    ) {
       return persistedLogoutKeys.length > 0
         ? { ...emptyAuthAccountVault(), loggedOutAccountKeys: persistedLogoutKeys }
         : emptyAuthAccountVault();
@@ -1357,7 +1363,7 @@ async function transactAuthAccountVault<T>(
           }
           throw accountVaultLockError(status.reason);
         }
-        const previousVaultRead = readAtomicSafeDetailed(AUTH_ACCOUNT_VAULT_KEY);
+        const previousVaultRead = readAtomicSafeDetailed(AUTH_ACCOUNT_VAULT_KEY, options.recoverInvalidForExplicitLogin);
         const previousRaw = previousVaultRead.status === 'ok' ? previousVaultRead.value : null;
         const previousWasAbsent = previousVaultRead.status === 'absent';
         const undecryptableVaultRecovery =
@@ -1389,6 +1395,7 @@ async function transactAuthAccountVault<T>(
           ? readAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)
           : null;
         const vault = readAuthAccountVault({
+          previousRead: previousVaultRead,
           recoverInvalid: options.recoverInvalidForExplicitLogin,
           allowUndecryptableReplacement: undecryptableVaultRecovery?.recover === true,
           allowUnreadableLogoutTombstones: options.allowUnreadableLogoutTombstones,
@@ -1667,6 +1674,7 @@ async function commitDesktopLoginSessions(
     passportId?: string;
     accountRefreshToken?: string | null;
     memberships: readonly (AuthMembership | AccountMembership | StoredAccountMetadata)[];
+    recoverInvalidForExplicitLogin?: boolean;
     restoreLoggedOutAccount?: boolean;
     accountToLogOut?: LoggedOutAccountIdentity;
     onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
@@ -1725,7 +1733,7 @@ async function commitDesktopLoginSessions(
       }
     },
     {
-      recoverInvalidForExplicitLogin: true,
+      recoverInvalidForExplicitLogin: input.recoverInvalidForExplicitLogin,
       waitWhileBusyAfterRotation: true,
     },
   );
@@ -5994,6 +6002,7 @@ async function completeLogin(
   outcome: Extract<LoginOutcome, { status: 'ok' }>,
   expectedLoginFlowEpoch = loginFlowEpoch,
   options: {
+    recoverInvalidForExplicitLogin?: boolean;
     restoreLoggedOutAccount?: boolean;
     accountToLogOut?: LoggedOutAccountIdentity;
     onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
@@ -6026,6 +6035,7 @@ async function completeLogin(
     let activeSessionWritten = false;
     await commitDesktopLoginSessions(
       {
+        recoverInvalidForExplicitLogin: options.recoverInvalidForExplicitLogin,
         pair: outcome,
         realm: committedRealm,
         passportId: nextUser.passportId || undefined,
@@ -6207,7 +6217,7 @@ async function finishFreshLogin(
     });
     return loginFlowState;
   }
-  return completeLogin(outcome, expectedLoginFlowEpoch);
+  return completeLogin(outcome, expectedLoginFlowEpoch, { recoverInvalidForExplicitLogin: true });
 }
 
 async function runLoginAction(
@@ -6326,7 +6336,7 @@ async function runLoginAction(
         if (!personal)
           throw new AuthApiError('INVALID_AUTH_ACTION', 400, 'Personal login unavailable');
         pendingAuthRealm = personal.realm;
-        const state = await completeLogin(personal.outcome, actionLoginFlowEpoch);
+        const state = await completeLogin(personal.outcome, actionLoginFlowEpoch, { recoverInvalidForExplicitLogin: true });
         pendingPersonalLogin = null;
         return { success: true, state };
       }

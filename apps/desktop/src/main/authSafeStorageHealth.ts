@@ -76,31 +76,33 @@ export function readAtomicSafeRecord(deps: {
   readFileUtf8: (filepath: string) => string;
   decryptBase64: (base64Ciphertext: string) => string;
   filepath: string;
+  recoverFromBackup?: boolean;
 }): AtomicSafeReadResult {
   if (!deps.isEncryptionAvailable()) {
     return { status: 'backend-unavailable' };
   }
-  let content: string;
-  try {
-    content = deps.readFileUtf8(deps.filepath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+  function readOne(filepath: string): AtomicSafeReadResult {
+    let content: string;
+    try {
+      content = deps.readFileUtf8(filepath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return { status: 'absent' };
       return { status: 'io-error', error };
     }
     try {
-      content = deps.readFileUtf8(`${deps.filepath}.bak`);
-    } catch (backupError) {
-      if ((backupError as NodeJS.ErrnoException)?.code === 'ENOENT') {
-        return { status: 'absent' };
-      }
-      return { status: 'io-error', error: backupError };
+      return { status: 'ok', value: deps.decryptBase64(content) };
+    } catch (error) {
+      return { status: 'decrypt-failed', ciphertext: content, error };
     }
   }
-  try {
-    return { status: 'ok', value: deps.decryptBase64(content) };
-  } catch (error) {
-    return { status: 'decrypt-failed', ciphertext: content, error };
+
+  const primary = readOne(deps.filepath);
+  if (primary.status === 'absent') return readOne(`${deps.filepath}.bak`);
+  if (primary.status === 'decrypt-failed' && deps.recoverFromBackup) {
+    const backup = readOne(`${deps.filepath}.bak`);
+    if (backup.status === 'ok' || backup.status === 'io-error') return backup;
   }
+  return primary;
 }
 
 /**

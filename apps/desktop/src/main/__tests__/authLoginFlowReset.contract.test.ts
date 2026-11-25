@@ -65,7 +65,7 @@ describe('auth login-flow reset', () => {
     expect(finish).toContain('pendingPersonalLogin = { outcome, realm: personalRealm }');
     expect(finish).toContain('personalLoginAvailable: true');
     expect(finish).not.toContain('pendingAuthRealm = discovery.region');
-    expect(finish).toContain('return completeLogin(outcome, expectedLoginFlowEpoch)');
+    expect(finish).toContain('return completeLogin(outcome, expectedLoginFlowEpoch, { recoverInvalidForExplicitLogin: true })');
     const lookupStart = source.indexOf('async function lookupOrganizationRealm(');
     const lookup = source.slice(
       lookupStart,
@@ -78,7 +78,7 @@ describe('auth login-flow reset', () => {
       source.indexOf('if (!providerConfig)', continueStart),
     );
     expect(continueBody).toContain('pendingAuthRealm = personal.realm');
-    expect(continueBody).toContain('await completeLogin(personal.outcome, actionLoginFlowEpoch)');
+    expect(continueBody).toContain('await completeLogin(personal.outcome, actionLoginFlowEpoch, { recoverInvalidForExplicitLogin: true })');
     expect(continueBody).not.toContain('finishFreshLogin(');
     const confirmStart = source.indexOf("if (action.type === 'confirm-sso-realm')");
     const confirmBody = source.slice(confirmStart, continueStart);
@@ -439,14 +439,14 @@ describe('auth login-flow reset', () => {
     const loginStart = source.indexOf('async function commitDesktopLoginSessions(');
     const loginEnd = source.indexOf('\n}\n\n/** Persist a rotated Passport', loginStart);
     const loginBody = source.slice(loginStart, loginEnd);
-    expect(loginBody).toContain('recoverInvalidForExplicitLogin: true');
+    expect(loginBody).toContain('recoverInvalidForExplicitLogin: input.recoverInvalidForExplicitLogin');
     expect(loginBody).toContain('waitWhileBusyAfterRotation: true');
     const transitionCommit = loginBody.indexOf('await transition.commit();');
     const transitionRollback = loginBody.indexOf('await transition.rollback();');
     expect(transitionCommit).toBeGreaterThan(loginBody.indexOf('await transactAuthAccountVault('));
     expect(transitionRollback).toBeGreaterThan(transitionCommit);
     expect(transitionRollback).toBeLessThan(
-      loginBody.indexOf('recoverInvalidForExplicitLogin: true'),
+      loginBody.indexOf('recoverInvalidForExplicitLogin: input.recoverInvalidForExplicitLogin'),
     );
   });
 
