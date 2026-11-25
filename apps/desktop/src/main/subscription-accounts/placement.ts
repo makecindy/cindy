@@ -16,6 +16,7 @@ import { createOverrideSettingsFile } from '../maker-host/override-settings-file
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { PROVIDER_GROUP_STRATEGIES, type ProviderGroupStrategy } from '../../shared/providerGroup.js';
+import { apiKeyMemberForConnection, apiKeyPoolMember, apiKeyPoolMembers } from './apiKeyMembers.js';
 import {
   accountIdValid,
   readLegacyCodexAccountId,
@@ -102,6 +103,10 @@ const file = createOverrideSettingsFile<PlacementFile>({
 
 /** The provider an account belongs to; its built-in provider when nothing else was recorded. */
 export function accountProviderId(kind: SubscriptionProvider, accountId: string): string {
+  if (kind === 'openai') {
+    const api = apiKeyPoolMember(accountId);
+    if (api) return api.providerId;
+  }
   file.invalidateIfChanged();
   return file.read().accounts[keyOf(kind, accountId)] ?? kind;
 }
@@ -165,6 +170,7 @@ export interface SubscriptionPoolProviderRef {
   ownAccount?: string;
   /** Created by Cindy (not a built-in provider or a stored connection). */
   created?: true;
+  apiKey?: true;
 }
 
 /**
@@ -175,6 +181,8 @@ export interface SubscriptionPoolProviderRef {
 export function resolveSubscriptionPoolProvider(providerId: string | null | undefined): SubscriptionPoolProviderRef | null {
   if (!providerId) return null;
   if (isKind(providerId)) return { kind: providerId, providerId, ownAccount: 'default' };
+  const api = apiKeyMemberForConnection(providerId);
+  if (api) return { kind: 'openai', providerId, ownAccount: api.id, apiKey: true };
   const created = readCreatedSubscriptionProviders()[providerId];
   if (created) return { kind: created.kind, providerId, ownAccount: created.account, created: true };
   const legacy = readLegacyCodexAccountId(providerId);
@@ -187,10 +195,12 @@ export function resolveSubscriptionPoolProvider(providerId: string | null | unde
  */
 export function pinnedOwnAccount(ref: SubscriptionPoolProviderRef): string | undefined {
   if (!ref.ownAccount) return undefined;
+  if (ref.apiKey) return apiKeyMemberForConnection(ref.providerId)?.providerId === ref.providerId ? undefined : ref.ownAccount;
   const pool = readPool(ref.kind);
   // Only while that account still exists somewhere else: a removed account pins nothing, so its
   // provider is never hidden as merged (a removed legacy account is handled by the restore below).
   return pool && providerAccounts(ref.kind, pool.accounts, ref.providerId).length === 0
+    && (ref.kind !== 'openai' || !apiKeyPoolMembers(ref.providerId).length)
     && pool.accounts.some((account) => account.id === ref.ownAccount)
     ? ref.ownAccount : undefined;
 }

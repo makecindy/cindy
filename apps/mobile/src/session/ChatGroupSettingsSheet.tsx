@@ -14,7 +14,9 @@ import { Check, Ellipsis, Plus, Reply, SlidersHorizontal, UserPlus } from 'lucid
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import { BOT_GROUP_NAME_MAX_CHARS, type BotGroupMemberView, type BotGroupRemoteActionId, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
-import { chatGroupMembership, isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupHumanDisplayName, chatGroupMembership, isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
+import { botGroupMentionDisplayName } from './botGroupMentions';
 import { useAuth } from '@/auth/AuthContext';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
@@ -376,12 +378,20 @@ function MembersTab({ k, group, owner, manager, direct, busy, ownRemoval, identi
   const styles = useThemedStyles(makeStyles);
   const [query, setQuery] = useState('');
   const needle = query.trim().toLocaleLowerCase();
-  const shown = needle ? group.members.filter(member => member.name.toLocaleLowerCase().includes(needle)) : group.members;
+  const shown = needle ? group.members.filter(member => [
+    botGroupMentionDisplayName(member),
+    member.name,
+    member.displayName,
+    member.orgName,
+    member.department,
+    member.departmentPath,
+  ].some(field => field?.toLocaleLowerCase().includes(needle))) : group.members;
   return <>
     <TextInput value={query} onChangeText={setQuery} accessibilityLabel={k('searchMembers')} placeholder={k('searchMembers')}
       placeholderTextColor={colors.textPlaceholder} autoCorrect={false} returnKeyType="search" style={styles.search} testID="botGroup.settings.memberSearch" />
     {shown.length ? <View style={styles.card} testID="botGroup.settings.members">
       {shown.map((member, index) => {
+        const displayName = botGroupMentionDisplayName(member);
         const bot = member.actorKind === 'bot';
         const mine = bot && member.isOwned === true && member.assistant !== true && !!member.actorId;
         // Owners manage everyone but themselves; admins everyone but the owner. Ownership goes to a person.
@@ -394,15 +404,19 @@ function MembersTab({ k, group, owner, manager, direct, busy, ownRemoval, identi
           ...((manageable && (direct || group.supportsMemberRemoval) || mine && ownRemoval) ? [{ id: 'remove', title: t('groupChat.settings.remove'), destructive: true }] : []),
         ];
         const paused = !isActiveBotGroupMember(member);
-        const meta = bot ? `${k('teammateTag')} · ${k(paused ? 'paused' : ACCESS_LABEL[member.guestAccess ?? 'chat'])}` : t(`groupChat.settings.roles.${member.role ?? 'member'}`);
+        const orgInfo = !bot ? (member.departmentPath || member.department || (member.nickname && member.orgName ? member.orgName : null)) : null;
+        const meta = bot
+          ? `${k('teammateTag')} · ${k(paused ? 'paused' : ACCESS_LABEL[member.guestAccess ?? 'chat'])}`
+          : [t(`groupChat.settings.roles.${member.role ?? 'member'}`), orgInfo].filter(Boolean).join(' · ');
         // With a native menu the system opens it from the row; the fallback sheet passes `open`.
-        const row = (menu: boolean, open?: () => void) => <Pressable accessibilityRole={menu ? 'button' : undefined} accessibilityLabel={`${member.name}, ${meta}`}
+        const row = (menu: boolean, open?: () => void) => <Pressable accessibilityRole={menu ? 'button' : undefined} accessibilityLabel={[displayName, member.external ? t('groupChat.externalBadge') : '', meta].filter(Boolean).join(', ')}
           disabled={!menu || busy} onPress={open} style={({ pressed }) => [styles.memberRow, pressed && menu && mobileInteractionStyles.pressed]}
           testID={`botGroup.settings.member.${member.botId}`}>
           <View style={paused ? styles.inactive : undefined}>{avatar(identityOf(member))}</View>
           <View style={styles.flex}>
             <View style={styles.nameLine}>
-              <Text numberOfLines={1} style={styles.rowTitle}>{member.name}</Text>
+              <Text numberOfLines={1} style={styles.rowTitle}>{displayName}</Text>
+              {member.external === true ? <BotGroupExternalBadge /> : null}
               {member.isSelf ? <Text style={styles.tag}>{k('you')}</Text> : null}
             </View>
             <Text numberOfLines={1} style={styles.rowMeta}>{meta}</Text>
@@ -411,7 +425,7 @@ function MembersTab({ k, group, owner, manager, direct, busy, ownRemoval, identi
           {index < shown.length - 1 ? <View style={styles.memberDivider} /> : null}
         </Pressable>;
         if (!options.length || group.dissolvedAt) return <View key={member.botId}>{row(false)}</View>;
-        return <BotGroupMenu key={member.botId} title={member.name} disabled={busy} accessibilityLabel={member.name}
+        return <BotGroupMenu key={member.botId} title={displayName} disabled={busy} accessibilityLabel={displayName}
           testID={`botGroup.settings.memberMenu.${member.botId}`} sections={[{ id: 'member', options }]}
           onSelect={id => { if (id === 'access') access(member.actorId!); else if (id === 'role') role(member); else if (id === 'transfer') transfer(member); else remove(member); }}>
           {open => row(true, open)}
@@ -524,7 +538,7 @@ function ProfilePage({ k, me, identity, avatar, nickname, onNickname, editable, 
     </View>
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{k('nickname')}</Text>
-      <TextInput accessibilityLabel={k('nickname')} value={nickname} maxLength={40} editable={editable} placeholder={me.displayName ?? me.name}
+      <TextInput accessibilityLabel={k('nickname')} value={nickname} maxLength={40} editable={editable} placeholder={chatGroupHumanDisplayName({ ...me, nickname: null, name: me.displayName ?? me.name })}
         onChangeText={onNickname} placeholderTextColor={colors.textPlaceholder} style={styles.input} testID="botGroup.settings.nickname" />
       <Text style={styles.note}>{k('nicknameHint')}</Text>
     </View>

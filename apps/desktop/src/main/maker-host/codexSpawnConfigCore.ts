@@ -13,7 +13,7 @@ import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { prepareCodexBrowserCompanion, resolveCodexBrowserCompanionSpawnConfig } from './codex-browser-companion.js';
 import { getActiveCatalog, getActiveCatalogRevision } from './active-catalog.js';
 import { prepareCodexCustomContextCatalog, prepareCodexGuestModelCatalog } from './codex-custom-context-catalog.js';
-import { needsOpenAiApiCodexFastDeclaration } from './codex-api-model-capabilities.js';
+import { needsOpenAiApiCodexFastDeclaration, needsOpenAiApiCodexUltrafastDeclaration } from './codex-api-model-capabilities.js';
 import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { resolveModelDefaultContextWindow } from './catalog-to-descriptors.js';
 
@@ -266,8 +266,9 @@ export function createCodexSpawnConfig(ports: {
             const catalog = getDesktopSelectableCatalog();
             const source = resolveDesktopModelContextProviderId(catalog, 'codex', ctx.customContextProviderId, requestedCatalogModel);
             const provider = catalog.providers.find(provider => provider.id === source);
-            const declareFastMode = needsOpenAiApiCodexFastDeclaration(provider, requestedCatalogModel) &&
-              (!guestProviderId || (source === guestProviderId && guestModelIds.includes(requestedCatalogModel)));
+            const canDeclareTiers = !guestProviderId || (source === guestProviderId && guestModelIds.includes(requestedCatalogModel));
+            const declareFastMode = canDeclareTiers && needsOpenAiApiCodexFastDeclaration(provider, requestedCatalogModel);
+            const declareUltrafastMode = declareFastMode && needsOpenAiApiCodexUltrafastDeclaration(provider, requestedCatalogModel);
             if (isCustomContext) contextProviderModels = provider?.models.codex?.map(model => model.id) ?? [];
             if (isCustomContext || declareFastMode) {
               const budgets = isCustomContext ? {
@@ -284,6 +285,7 @@ export function createCodexSpawnConfig(ports: {
                 codexHome: effectiveCodexHome,
                 modelId: requestedCatalogModel,
                 declareFastMode,
+                declareUltrafastMode,
                 ...budgets,
                 ...(smartSubagentConfig
                   ? { baseCatalog: smartSubagentConfig.modelCatalog }

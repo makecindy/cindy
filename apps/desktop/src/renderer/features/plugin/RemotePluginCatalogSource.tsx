@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mergePluginSnapshot, pluginCatalogMemory, pluginCatalogPartitionKey, pluginInstalledGrid, usePluginCatalogState } from './lib/pluginCatalogMemory';
 import { samePluginValue, PLUGIN_CATALOG_REFRESH_MS } from './lib/pluginBrowserCache';
+import { selectPluginRecommendationBatch } from './lib/PluginRecommendationSlots';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
@@ -37,7 +38,7 @@ import { GhostPluginCard, MarketPluginCard } from './GhostPluginPage';
 import { PLUGIN_PAGE_SIZE } from './PluginCatalogBrowser';
 import { usePluginListScrollRestoration } from './lib/usePluginListScrollRestoration';
 import { hasPluginCatalogPaging, parsePluginManagementMarketPage, parsePluginManagementRecommendations } from './remotePluginManagementClient';
-import type { PluginMarketQuery, PluginMarketPage } from '../../../shared/pluginMarket';
+import { parsePluginMarketSortFields, type PluginMarketQuery, type PluginMarketPage } from '../../../shared/pluginMarket';
 import { GhostPluginActions } from './GhostPluginActions';
 import { PluginCatalogView } from './PluginCatalogView';
 import { PluginPublishDialog, type PluginSubmitOptions } from './PluginPublishDialog';
@@ -107,10 +108,12 @@ export function RemotePluginCatalogSource({
   const [selected, setSelected] = useState<string | null>(null);
   const ghost = snapshot?.ghosts.find((g) => installedGhostStoragePart(g) === selected);
   const [marketDetail, setMarketDetail] = useState<PluginMarketDetail | null>(null);
+  const relatedMarketTrail = useRef<PluginMarketDetail[]>([]);
   const [query, setQuery] = usePluginCatalogState(catalogMemory, 'query');
   const [catalogTab, setCatalogTab] = usePluginCatalogState(catalogMemory, 'catalogTab');
   const [catalogPaging, setCatalogPaging] = usePluginCatalogState(catalogMemory, 'catalogPaging');
   const [todayPool, setTodayPool] = usePluginCatalogState(catalogMemory, 'todayPool');
+  const [recommendationBatch, setRecommendationBatch] = usePluginCatalogState(catalogMemory, 'recommendationBatch');
   const [consumedToday, setConsumedToday] = usePluginCatalogState(catalogMemory, 'consumedToday');
   const [todayLoaded, setTodayLoaded] = usePluginCatalogState(catalogMemory, 'todayLoaded');
   const installingRecommendation = useRef<string | null>(null);
@@ -118,7 +121,6 @@ export function RemotePluginCatalogSource({
   const [marketTotal, setMarketTotal] = usePluginCatalogState(catalogMemory, 'marketTotal');
   const browserCache = catalogMemory.browser;
   const installedSentinel = useRef<HTMLDivElement>(null);
-  const marketFiltersHost = useRef<HTMLDivElement>(null);
   const secondaryTabs = useRef<HTMLDivElement>(null);
   const installedGridCache = pluginInstalledGrid(catalogMemory, query);
   const [originFilter, setOriginFilter] = usePluginCatalogState(catalogMemory, 'originFilter');
@@ -153,7 +155,7 @@ export function RemotePluginCatalogSource({
     [device.deviceId],
   );
   const refreshAt = useRef(catalogMemory.snapshotAt);
-  const refresh = useCallback(async (force = true) => {
+  const refresh = useCallback(async (force = true, revalidateCatalog = false) => {
     if (!force && catalogMemory.remoteSnapshot && Date.now() - catalogMemory.snapshotAt < PLUGIN_CATALOG_REFRESH_MS) return;
     const revision = ++readRevision.current;
     if (!writable()) return;
@@ -194,7 +196,9 @@ export function RemotePluginCatalogSource({
         setLegacySelected(null);
         setLegacyDetail(null);
         setStatus(null);
-        await browserCache.current.refresh?.({ force: force && !samePluginValue(previousMarket, catalogMemory.remoteSnapshot?.market) });
+        await browserCache.current.refresh?.({
+          force: revalidateCatalog && !samePluginValue(previousMarket, catalogMemory.remoteSnapshot?.market),
+        });
       }
     } catch {
       if (writable() && revision === readRevision.current) setStatus('readFailed');
@@ -232,7 +236,8 @@ export function RemotePluginCatalogSource({
     if (catalogPaging) {
       const value = await invoke('snapshot', { read: 'catalog', query: input });
       if (!writable()) throw new Error('UNAVAILABLE');
-      return parsePluginManagementMarketPage(value);
+      const { sort, sorts, ...page } = parsePluginManagementMarketPage(value);
+      return { ...page, ...parsePluginMarketSortFields({ sort, sorts }) };
     }
     // Explicit legacy Host path: its existing v1 snapshot cannot paginate over the wire.
     // Reconnect can refresh the retained browser before React commits this snapshot.
@@ -333,7 +338,10 @@ export function RemotePluginCatalogSource({
       ++detailRevision.current;
       ++projectReadRevision.current;
       dialog.current?.abort();
-    } else if (active) void refresh(!previous.online || !previous.active);
+    } else if (active) {
+      const activating = !previous.online || !previous.active;
+      void refresh(activating, activating);
+    }
   }, [online, active, refresh]);
   useEffect(
     () =>
@@ -535,14 +543,18 @@ export function RemotePluginCatalogSource({
       snapshot?.uiCapabilityApproval,
     ],
   );
-  const selectMarket = async (item: PluginMarketItem) => {
-    captureCatalogScroll();
+  const selectMarket = async (item: PluginMarketItem, previous?: PluginMarketDetail) => {
+    if (!previous) {
+      relatedMarketTrail.current.length = 0;
+      captureCatalogScroll();
+    }
     const revision = ++detailRevision.current;
     try {
       const detail = parsePluginManagementDetail(
         await invoke('market-detail', { pluginId: item.pluginId }),
       );
       if (writable() && revision === detailRevision.current) {
+        if (previous) relatedMarketTrail.current.push(previous);
         setSelected(null);
         setMarketDetail(detail);
       }
@@ -741,6 +753,11 @@ export function RemotePluginCatalogSource({
       .toLocaleLowerCase()
       .includes(normalizedQuery),
   );
+  const todayCandidates = todayPool.filter(item => {
+    const latest = snapshot?.market.items.find(row => row.pluginId === item.pluginId) ?? item;
+    return !consumedToday.has(item.pluginId) && latest.installState !== 'installed' && latest.installState !== 'update-available';
+  });
+  const todayItems = selectPluginRecommendationBatch(todayCandidates, recommendationBatch);
   const publicationSupported = snapshot?.communityPublication === true;
   const publishableGhosts = (snapshot?.ghosts ?? []).filter(installed =>
     installed.publishingSource?.kind === 'local' && !localPublishingUnavailableKey(
@@ -940,16 +957,21 @@ export function RemotePluginCatalogSource({
     <PluginCatalogView overlay={overlay} notice={detailNotice} detail={{ market: {
       detail: marketDetail,
       busy,
-      onBack: () => { restoreCatalogScroll(); setMarketDetail(null); },
+      backLabel: relatedMarketTrail.current.length ? t('settings.back') : undefined,
+      onBack: () => {
+        ++detailRevision.current;
+        const previous = relatedMarketTrail.current.pop();
+        if (!previous) restoreCatalogScroll();
+        setMarketDetail(previous ?? null);
+      },
+      relatedCatalog: { cache: browserCache, ownerKey: catalogOwnerKey, catalogKey: i18n.language,
+        loadPage: readMarketPage, liveItems: snapshot?.market.items, installedGhosts: snapshot?.ghosts, online },
+      onOpenRelated: item => { if (!busy) void selectMarket(item, marketDetail); },
       onInstall: marketDetail.installState === 'conflict' ? undefined : () => void install(marketDetail),
       onIconLoadError: () => {},
     } }} />
   );
 
-  const todayItems = todayPool.filter(item => {
-    const latest = snapshot?.market.items.find(row => row.pluginId === item.pluginId) ?? item;
-    return !consumedToday.has(item.pluginId) && latest.installState !== 'installed' && latest.installState !== 'update-available';
-  }).slice(0, 3);
   return (
     <PluginCatalogView
       overlay={overlay}
@@ -961,7 +983,6 @@ export function RemotePluginCatalogSource({
         scrollRef: catalogScroller,
         onScroll: onListScroll,
         tabsRef: secondaryTabs,
-        filtersRef: marketFiltersHost,
         tab: catalogTab,
         onSelectTab: setCatalogTab,
         target: {
@@ -984,10 +1005,10 @@ export function RemotePluginCatalogSource({
           />,
         },
         publication: publicationSupported ? {
-          open: () => setPublicationDialog({}),
+          onClick: () => setPublicationDialog({}),
           disabled: !online || publicationPending,
         } : undefined,
-        notice: <>{publicationUnavailable}{publicationProgress}</>,
+        notice: publicationUnavailable || publicationProgress ? <>{publicationUnavailable}{publicationProgress}</> : undefined,
         headerActions: unsupported ? undefined : (
           <GhostPluginActions disabled={busy} installTarget={device.name} onInstall={() => void installFile()} />
         ),
@@ -1017,7 +1038,9 @@ export function RemotePluginCatalogSource({
             const id = installedGhostStoragePart(installed);
             const item = { ...toGhostPluginListItem(effectiveGhost(installed)), canUse: false, tabPanel: false };
             const marketItem = snapshot?.market.items.find(entry => marketItemMatchesInstalledGhost(entry, installed));
-            const update = marketItem?.installState === 'update-available' ? marketItem : undefined;
+            const update = snapshot?.market.items.find(entry =>
+              entry.installState === 'update-available' && marketItemMatchesInstalledGhost(entry, installed),
+            );
             return <GhostPluginCard
               key={id}
               item={item}
@@ -1042,24 +1065,40 @@ export function RemotePluginCatalogSource({
         ) : undefined,
         recommendations: !todayLoaded || todayItems.length === 3 ? {
           loading: !todayLoaded,
-          cards: todayItems.map(item => <MarketPluginCard compact key={item.pluginId} item={item} busy={busy}
-            onSelect={() => void selectMarket(item)} onInstall={() => void install(item)} onIconLoadError={() => {}} />),
+          items: todayItems,
+          order: catalogMemory.recommendationOrder,
+          shuffle: {
+            title: t('settings.ghosts.page.todayRecommendations'),
+            label: t('newChat.homeSuggestions.shuffle'),
+            candidates: todayCandidates,
+            onChange: setRecommendationBatch,
+          },
+          active,
+          busy,
+          renderItem: (item, featured, deck) => <MarketPluginCard compact featured={featured} item={item}
+            recommendationDeck={deck} busy={busy} onSelect={() => void selectMarket(item)}
+            onInstall={() => void install(item)} onIconLoadError={() => {}} />,
         } : undefined,
         market: unsupported ? undefined : {
           cacheRef: browserCache,
           ownerKey: JSON.stringify([device.deviceId, scope.current.owner]),
           catalogKey: i18n.language,
-          revision: JSON.stringify([snapshot?.market.items.map(item => [item.pluginId, item.installState, item.version]), snapshot?.market.customSourceNames]),
+          revision: JSON.stringify([snapshot?.market.customSourceNames, snapshot?.market.unavailableCustomSourceNames,
+            snapshot?.market.unavailableReason, snapshot?.market.organizationAccessError,
+            snapshot?.market.items.filter(item => !catalogPaging || item.sourceType !== 'server').map(item => [item.pluginId, item.version]),
+            query.trim() ? snapshot?.market.items.map(item => [item.pluginId, item.installState]) : null]),
           installedItems: snapshot?.market.items,
+          installedGhosts: snapshot?.ghosts,
           scope: originFilter,
           onScope: setOriginFilter,
           showOrganization: true,
           visible: active && (!!query.trim() || catalogTab === 'market'),
           loadPage: readMarketPage,
-          onCounts: counts => setMarketTotal(counts?.all ?? null),
+          online,
+          onCounts: counts => { if (!query.trim()) setMarketTotal(counts?.all ?? null); },
           renderRevision: busy,
           total: marketTotal,
-          renderItem: item => <MarketPluginCard key={item.pluginId} item={item} busy={busy}
+          renderItem: (item, metric) => <MarketPluginCard key={item.pluginId} item={item} metric={metric} busy={busy}
             onSelect={() => void selectMarket(item)}
             onInstall={item.installState === 'installed' || item.installState === 'update-available' ? undefined : () => void install(item)}
             onIconLoadError={() => {}} />,

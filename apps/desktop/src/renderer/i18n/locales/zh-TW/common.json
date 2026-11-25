@@ -1416,6 +1416,9 @@
     "ENDPOINT_NOT_FOUND": "端點不存在（404），請檢查基礎 URL",
     "CONTEXT_TOO_LONG": "上下文超過模型長度限制",
     "WIRE_INCOMPATIBLE": "端點與該協定不完全相容（存在無法識別的請求欄位）",
+    "INVALID_PROBE_RESPONSE": "模型服務傳回空白或無效的回應",
+    "PROBE_NO_OUTPUT": "連線測試未能確認模型已產生內容",
+    "PROBE_REFUSED": "模型服務拒絕或攔截了測試請求",
     "UPSTREAM_ERROR": "上游服務錯誤（5xx），請稍後重試",
     "UPSTREAM_UNREACHABLE": "無法連線到端點，請檢查網路與基礎 URL",
     "TIMEOUT": "連線逾時，請檢查網路與基礎 URL",
@@ -2693,6 +2696,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "登入手機號碼",
+        "rowHint": "用於登入和接收驗證碼",
+        "change": "更換手機號碼",
+        "verifyTitle": "驗證目前的手機號碼",
+        "introDescription": "為保護帳號安全，更換前需要先驗證目前繫結的手機號碼。",
+        "newTitle": "輸入新的手機號碼",
+        "newDescription": "更換後請使用新的手機號碼登入，原手機號碼將無法再登入此帳號。",
+        "inputLabel": "新的手機號碼",
+        "placeholder": "請輸入手機號碼",
+        "success": "手機號碼已更換為 {{target}}"
+      },
+      "email": {
+        "rowTitle": "登入電子郵件",
+        "rowHint": "用於登入和接收驗證碼",
+        "change": "更換電子郵件",
+        "verifyTitle": "驗證目前的電子郵件",
+        "introDescription": "為保護帳號安全，更換前需要先驗證目前繫結的電子郵件。",
+        "newTitle": "輸入新的電子郵件",
+        "newDescription": "更換後請使用新的電子郵件登入，原電子郵件將無法再登入此帳號。",
+        "inputLabel": "新的電子郵件地址",
+        "placeholder": "請輸入電子郵件地址",
+        "success": "電子郵件已更換為 {{target}}"
+      },
+      "codeSent": "驗證碼已傳送至 {{target}}",
+      "codeLabel": "驗證碼",
+      "codePlaceholder": "6 位驗證碼",
+      "sendCode": "傳送驗證碼",
+      "next": "下一步",
+      "confirm": "確認更換",
+      "cancel": "取消",
+      "resend": "重新傳送驗證碼",
+      "resendIn": "{{seconds}} 秒後可重新傳送",
+      "errors": {
+        "INVALID_CODE": "驗證碼錯誤或已過期",
+        "CODE_ATTEMPTS_EXCEEDED": "驗證碼錯誤次數過多，請重新取得",
+        "CONTACT_TAKEN": "此手機號碼或電子郵件已繫結其他帳號",
+        "CONTACT_UNCHANGED": "與目前繫結的手機號碼或電子郵件相同",
+        "CONTACT_CHANGE_TICKET_INVALID": "驗證已過期，請重新驗證目前的手機號碼或電子郵件",
+        "AUTH_FLOW_SUPERSEDED": "登入狀態已變更，請重新開始",
+        "CONTACT_CHANGE_UNAVAILABLE": "目前帳號不支援在這裡更換登入方式",
+        "CONTACT_CHANGE_BUSY": "上一步仍在處理中",
+        "RATE_LIMITED": "操作過於頻繁，請稍後再試。",
+        "RATE_LIMITED_UNTIL": "操作過於頻繁，請在 {{time}}（本機時間）之後重試。",
+        "INVALID_PARAMS": "格式不正確，請檢查後重試",
+        "EMAIL_DOMAIN_BLOCKED": "此電子郵件暫不支援使用，請換一個",
+        "EMAIL_PATTERN_BLOCKED": "此電子郵件暫不支援使用，請換一個",
+        "ACCOUNT_DELETION_PENDING": "帳號正在等待刪除，無法更換",
+        "NETWORK_ERROR": "網路連線失敗，請檢查網路後重試",
+        "REQUEST_TIMEOUT": "請求逾時，請重試",
+        "fallback": "操作失敗，請稍後重試"
+      }
+    },
     "help": {
       "title": "幫助",
       "description": "瞭解如何用 {{appName}} 完成工作",
@@ -2976,7 +3033,12 @@
         "reconcileButton": "體檢",
         "reconcileFailed": "體檢失敗",
         "reconcileHealthy": "帳實一致，沒有發現異常。",
-        "reconcileIssues": "發現異常：無帳檔案 {{orphans}} 個（{{orphanSize}}）、缺失檔案 {{missing}} 個、無法識別 {{stray}} 個。詳細清單見應用程式日誌。"
+        "reconcileIssues": "發現異常：無帳檔案 {{orphans}} 個（{{orphanSize}}）、缺失檔案 {{missing}} 個、無法識別 {{stray}} 個。詳細清單見應用程式日誌。",
+        "buddyWorkspaceDirectoryTitle": "夥伴工作區",
+        "buddyWorkspaceDirectoryDescription": "新建夥伴的工作區預設存放於此目錄。既有夥伴維持原位，可在各自的進階設定中單獨遷移。",
+        "buddyWorkspaceDirectoryDetails": "Cindy 會在此目錄下為目前帳號建立獨立子目錄存放新建夥伴的工作區，並在原路徑保留目錄連結。",
+        "buddyWorkspaceDirectoryChoose": "變更目錄",
+        "buddyWorkspaceDirectoryFailed": "無法更新夥伴工作區目錄。"
       },
       "piKernel": {
         "manage": "管理 Pi 版本",
@@ -6641,6 +6703,20 @@
         "ssh": "SSH 遠端主機",
         "hook": "Cindy IM 機器人"
       },
+      "cloudComputer": {
+        "title": "雲端主機",
+        "hint": {
+          "addCloud": "開通一台裝好 Cindy 的雲端主機，開好後會自動出現在裝置清單裡。",
+          "preparingCloud": "雲端主機正在準備，好了會自動出現在裝置清單裡。",
+          "manageCloud": "開關機、續費、重灌和刪除都在網頁上操作。"
+        },
+        "actions": {
+          "addCloud": "新增雲端主機",
+          "preparingCloud": "查看進度",
+          "manageCloud": "管理雲端主機"
+        },
+        "openFailed": "無法開啟雲端主機頁面，請檢查系統預設瀏覽器設定"
+      },
       "hook": {
         "description": "把 Slack、Telegram、飛書 / Lark 等渠道接入同一個 Cindy：訊息都會派發到這臺裝置，共用這裡的專案清單和任務；每個專案的模型和權限所有渠道共用一份，帳號繫結按渠道分開保存。",
         "slackDescription": "繫結 Slack workspace，在 Slack 裡 @Cindy 派發任務。",
@@ -6823,6 +6899,7 @@
           "guide": {
             "usageLabel": "怎麼用",
             "usageBody": "在 X 上發一則推文 @askmycindy，任務就會派到這臺裝置上執行，結論會以回覆傳回給你。",
+            "usageBodyOnDevice": "在 X 上發一則推文 @askmycindy，任務就會派到「{{device}}」上執行，結論會以回覆傳回給你。",
             "riskLabel": "回覆是公開的",
             "riskPublicBody": "回覆是公開推文，任何人都能看到。適合公開提問、解決問題；不適合處理私事，以免暴露隱私。",
             "riskWorkdirBody": "X 任務都落在 X 連線設定裡的預設專案，Agent 能讀寫其中檔案，而結論會公開回覆 —— 預設專案指到私密儲存庫時，檔案內容可能隨之公開。",
@@ -8154,6 +8231,11 @@
         "installedExpand": "展開全部 {{count}} 個已安裝插件",
         "installedCollapse": "收起更多已安裝插件",
         "recommendedSection": "推薦",
+        "allPlugins": "全部插件",
+        "searchResults": "搜尋結果",
+        "marketSort": {
+          "label": "排序"
+        },
         "todayRecommendations": "今日推薦",
         "marketSection": "插件市場",
         "browseMarket": "瀏覽插件市場",
@@ -8634,6 +8716,7 @@
         "libraryPersist": "可使用持久作品庫（大量檔案與資料庫）",
         "libraryPersistDetail": "它會取得一個由 Cindy 管理的獨立儲存區，用來保存你的作品資料（如畫布、圖片、資料庫），不受一般插件資料配額限制。檔案與資料庫操作全部由主機代執行，插件只能使用庫內相對路徑，無法觸碰你的其它檔案。它還可以讓 Cindy 在系統資料夾中顯示庫內檔案，或彈出系統另存為視窗由你選擇複製位置；取消則不會複製出任何檔案。它還可以把 PNG 點陣圖寫入系統剪貼簿；沒有確認框，會覆蓋目前剪貼簿內容。解除安裝插件不會刪除這些資料；刪除必須在 Cindy 設定中單獨確認。",
         "networkHost": "存取網路位址 {{host}}",
+        "networkHosts": "存取網路位址",
         "networkSecret": "需要你提供憑證「{{name}}」",
         "networkSecretGhostInputDetail": "憑證由這個插件自己的設定介面收集，錄入時會經過插件頁面；隨後一次性交給主機加密保管，存入後插件無法讀回，主機只在請求它宣告的網域時注入。",
         "networkSecretIdentity": "將使用你的登入電子郵件作為憑證「{{name}}」",
@@ -8840,6 +8923,8 @@
         "dangerTitle": "解除安裝插件",
         "infoContents": "包含",
         "infoVersion": "版本",
+        "infoPackageSize": "套件大小",
+        "infoPackageSizeWithVersion": "{{size}}（{{version}}）",
         "updateTitle": "更新版本",
         "updateDesc": "選擇新的 .cindy 檔案原位替換；啟用狀態與面板位置保持不變。",
         "errandPrefs": {
@@ -8862,11 +8947,25 @@
           "restoreModel": "還原預設模型"
         },
         "toolsTitle": "Tools",
+        "toolCount_other": "{{count}} 個",
         "permissionsTitle": "權限",
         "infoDescription": "描述",
         "customSlotAsleep": "插件已停用，啟用後這裡將顯示它的設定介面。",
         "descriptionExpand": "展開",
         "descriptionCollapse": "收起",
+        "recentUpdates": "近期更新",
+        "olderUpdates": "較早的更新",
+        "collapseOlderUpdates": "收起較早的更新",
+        "includesHighRisk": "含高風險",
+        "heroDownloads": "累計下載",
+        "heroUsage": "累計使用",
+        "heroWeeklyUsage": "近 7 天使用",
+        "heroWeeklyUsageExplanation": "目前共享範圍內各版本近 7 天的工具呼叫次數。",
+        "heroInstalledVersion": "已安裝版本",
+        "heroListedVersion": "已上架版本",
+        "heroLatestUpdate": "最近更新",
+        "morePlugins": "更多插件",
+        "morePluginsHint": "隨機選取，不代表 Cindy 有任何偏好",
         "readmeTitle": "介紹",
         "useAction": "使用",
         "chatAction": "對話",
@@ -8905,6 +9004,7 @@
         "portReclaimMessage": "「{{name}}」需要使用連接埠 {{port}}，是否結束以下程式？",
         "portReclaimDetail": "結束程式可能中斷其工作或遺失未儲存的資料。取消後可自行關閉佔用程式。",
         "configurationTitle": "組態",
+        "recordTitle": "插件資料",
         "sidebarEntryTitle": "導航入口",
         "showInSidebar": "顯示在左側導航",
         "fileOpenerTitle": "用這個插件開啟檔案",
@@ -8915,6 +9015,7 @@
         "viewAllTools": "檢視更多",
         "collapseTools": "收起 Tool",
         "viewAllPermissions": "檢視更多",
+        "remainingPermissions": "查看其餘 {{count}} 項",
         "permissionsDialogDescription": "該插件申請的全部 {{count}} 項權限",
         "closeDialog": "關閉彈窗",
         "resetPlacement": "恢復預設位置"
@@ -9233,6 +9334,7 @@
         "anonymousUnavailable": "作者設定暫不可用",
         "anonymousUpdateFailed": "無法確認匿名設定是否已儲存，請重新整理後再試。",
         "myPlugins": "發佈插件",
+        "backToPublish": "返回發佈插件",
         "publish": "提交審核",
         "submitUpdate": "提交新版本審核",
         "publishHint": "僅限有權發佈的插件，審核通過後在社群上架。",
@@ -9272,6 +9374,7 @@
         "publishedContentUnavailable": "暫時無法讀取目前上架版本的介紹和更新說明。",
         "currentSubmission": "目前提交",
         "localState": {
+          "installed": "本機 {{version}}",
           "missing": "本機未安裝",
           "unavailable": "暫時無法讀取本機版本"
         },
@@ -9284,7 +9387,7 @@
         "publishing": "發佈管理",
         "latestSubmission": "最近提交",
         "noSubmission": "尚無提交",
-        "marketVersion": "已上架 · {{version}}",
+        "marketVersion": "已上架 {{version}}",
         "market": {
           "not_listed": "尚未上架",
           "disabled": "已下架",
@@ -9294,7 +9397,7 @@
         "review": {
           "pending": "待審核",
           "approved": "審核通過",
-          "rejected": "已退回",
+          "rejected": "已駁回",
           "published": "已上架",
           "superseded": "已由後續提交取代",
           "legacy_unverified": "歷史修訂無法核實",
@@ -9302,9 +9405,12 @@
           "cancelled": "已取消"
         },
         "reason": "處理原因",
+        "rejectionReason": "駁回原因",
+        "rejectionReasonLine": "<reasonLabel>駁回原因：</reasonLabel><reasonText />",
         "submittedContent": "已提交內容",
         "snapshotUnavailable": "原提交內容未留存或已無法核實。",
         "history": "發佈紀錄",
+        "marketChanges": "上架變更",
         "loadMore": "載入更多",
         "loadMoreHistory": "載入更多歷史",
         "releaseId": "版本紀錄 ID",
@@ -9319,7 +9425,7 @@
           "submitted": "已提交",
           "metadata_updated": "展示資訊已更新",
           "approved": "審核通過",
-          "rejected": "已退回",
+          "rejected": "已駁回",
           "enabled": "已上架",
           "disabled": "已下架",
           "archived": "已封存",
@@ -9401,6 +9507,8 @@
         "notApproved": "尚未通過",
         "timeUnavailable": "未記錄",
         "releaseNotes": "更新說明",
+        "expandReleaseNotes": "展開全部",
+        "noReleaseNotes": "沒有填寫更新說明",
         "versionUpdates": "版本與更新",
         "versionManagement": "版本管理",
         "versionContent": "版本內容",
@@ -9417,7 +9525,6 @@
         "cancelled": "已取消",
         "cancelReviewCompleted": "已取消本次審核。目前上架版本不受影響。",
         "cancelReviewAlreadyFinal": "審核已經完成，本次未取消。下方顯示實際審核結果。",
-        "viewPendingVersion": "查看正在審核的版本",
         "submitFailed": "提交失敗",
         "viewDetails": "查看詳情"
       },
@@ -9982,6 +10089,18 @@
       "title": "自動更新失敗",
       "description": "更新程式無法啟動，可能被系統安全策略攔截。請手動下載最新版安裝包完成更新。",
       "confirm": "前往下載"
+    },
+    "workspaceMigration": {
+      "title": "正在遷移夥伴工作區",
+      "progressLabel": "夥伴工作區遷移進度",
+      "safetyHint": "正在複製並驗證檔案，切換前不會更動原資料，請勿強制關閉 Cindy。",
+      "phase": {
+        "preparing": "正在準備遷移",
+        "copying": "正在複製檔案",
+        "verifying": "正在驗證檔案",
+        "switching": "正在切換位置",
+        "cleaning": "正在清理備份"
+      }
     }
   },
   "welcome": {
@@ -11313,6 +11432,69 @@
           "routines": "需要看一下的例行任務",
           "upgrade": "升級時沒能自動帶過來的"
         }
+      },
+      "workspaceLocation": {
+        "title": "工作區位置",
+        "description": "可將此夥伴的工作區遷移至本機其他磁碟以釋放系統碟空間。Cindy 會在原路徑保留目錄連結，既有任務、自動化與腳本可繼續正常運作。",
+        "movedDescription": "現有任務和指令碼仍可使用原路徑。",
+        "chooseDialogTitle": "選擇夥伴工作區遷移的目標位置",
+        "fullPath": "完整路徑",
+        "targetPathLabel": "目標目錄",
+        "currentPathLabel": "目前目錄",
+        "defaultPathLabel": "目標目錄（預設位置）",
+        "logicalPathLabel": "原邏輯連結路徑",
+        "copyPath": "複製路徑",
+        "pathCopied": "已複製路徑",
+        "pathCopyFailed": "複製路徑失敗",
+        "openTarget": "開啟資料夾",
+        "moveAction": "遷移工作區",
+        "moveBackAction": "搬回預設位置",
+        "chooseAnother": "另選資料夾",
+        "restartNow": "立即重新啟動",
+        "restartAndMove": "重新啟動並遷移",
+        "scheduleNextRestart": "下次重啟時遷移",
+        "cancel": "取消",
+        "dismissFailed": "關閉紀錄",
+        "scheduledToast": "已登記遷移，將於下次重啟 Cindy 時執行",
+        "cancelledToast": "已取消工作區遷移",
+        "previewTitle": "準備遷移工作區",
+        "previewSummary": "檔案大小：{{size}}",
+        "previewNotice": "重新啟動前，請關閉正在使用此工作區的應用程式或指令碼。",
+        "previewClaudeSkillsNotice": "如果工作區沒有自己的 Git 儲存庫，Claude Code 搬遷後可能發現新位置上層資料夾的技能。若不想引入這些技能，請選擇上層未設定 Claude Code 技能的位置。",
+        "pendingHint": "請先關閉佔用該目錄的外部程式，再重啟 Cindy 執行遷移。",
+        "unavailableTitle": "已遷移的工作區無法使用",
+        "unavailableDescription": "Cindy 無法存取 {{target}}。請重新連接磁碟或還原資料夾；Cindy 不會建立空資料夾覆蓋它。",
+        "errorTitle": "無法遷移工作區",
+        "failedTitle": "上次工作區遷移失敗",
+        "interruptedTitle": "工作區遷移待還原",
+        "backupRemainingHint": "原目錄備份已保留供核對：{{backup}}",
+        "personalPreviewHint": "請關閉共用資料的個人測試版，改用主版本 Cindy 登記或執行工作區遷移。",
+        "status": {
+          "default": "預設位置",
+          "pending": "等待重啟",
+          "moved": "已遷移",
+          "failed": "遷移失敗",
+          "interrupted": "待還原",
+          "unavailable": "目標不可用"
+        },
+        "warnings": {
+          "waitingExclusive": "正在等待獨佔啟動。請關閉共用此帳號資料的其他 Cindy 執行個體，再重啟以執行遷移。",
+          "receiptUpdateFailed": "工作區目前可用，但遷移紀錄更新失敗，將於下次重啟時自動修復。"
+        },
+        "errors": {
+          "insufficientSpace": "目標磁碟可用空間不足，無法容納目前工作區。",
+          "overlapsCindyData": "請選擇 Cindy 資料目錄與目前工作區之外的資料夾。",
+          "localDiskRequired": "請選擇本機磁碟資料夾，不支援網路共用路徑。",
+          "unsupportedFileOrHardLink": "工作區包含硬連結或特殊檔案，暫不支援直接安全遷移。",
+          "alreadyRedirected": "Cindy 無法辨識這個工作區的資料夾連結。請保留現有連結和檔案。",
+          "botHomeRedirected": "此夥伴主目錄已被手動重新導向，無法自動遷移其工作區。",
+          "targetExists": "目標資料夾已存在，請另選位置。",
+          "workspaceChanged": "驗證期間工作區內容有所變更，請關閉外部佔用程式後重試。",
+          "backupRetained": "遷移已完成，但原備份驗證存在差異，已保留備份以免遺失資料。",
+          "backupCleanupIncomplete": "遷移已完成，但暫存備份未能清除，將於下次重啟時自動重試。",
+          "cutoverInterrupted": "上次切換中斷，Cindy 已還原原工作區。請另選空資料夾重新遷移。",
+          "generic": "無法完成工作區遷移請求，請重試。"
+        }
       }
     },
     "profile": {
@@ -12257,7 +12439,8 @@
         "dissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
         "failed": "操作未完成，請重試。",
         "lastOwner": "請先轉讓群主或解散群聊，再退出。"
-      }
+      },
+      "externalBadge": "外部"
     },
     "joined": {
       "today": "今天加入",
@@ -12531,6 +12714,12 @@
       "arrivingLater": "{{name}} 已換到這台電腦，還在準備中，稍後會出現在夥伴列表裡",
       "arrivalPermissions": "{{name}} 已依這台電腦的預設權限運作。",
       "arrivalModel": "{{name}} 先前選的模型在這台電腦上無法使用，已改用這台電腦的預設模型。",
+      "arrivalModelSetup": "{{name}} 已來到這台電腦，但還沒有可用模型。請連接模型供應商，或在這位夥伴的「設定 → 模型」選擇模型。",
+      "arrivalPartialContent": "{{name}} 已來到這台電腦，部分雲端內容未能恢復，原內容仍保留在雲端。",
+      "missingProfileTitle": "用初始資料繼續 {{name}}？",
+      "missingProfileDescription": "原主力電腦還沒上傳 {{name}} 的人設與簡介。如果原電腦已重裝或無法恢復，可以在這台電腦用初始資料繼續，已同步到雲端的對話和內容仍會保留。",
+      "missingProfileConfirm": "用初始資料繼續",
+      "missingProfileFailed": "{{name}} 的資料尚未上傳到雲端",
       "busyTitle": "{{name}} 還在回覆",
       "busyDescription": "可以等這一輪結束後再換到「{{device}}」，也可以停止這一輪馬上換。",
       "busyWait": "等回覆完再換",
@@ -13451,6 +13640,7 @@
         },
         "slash": {
           "detachFailed": "❌ 結束接管失敗：{{error}}",
+          "pluginEngineModelsUnavailable": "這個任務的插件引擎目前無法使用，暫時無法列出模型。",
           "companionManaged": "🧭 這個連線已交給夥伴，模型、權限和工作目錄跟隨夥伴設定。請在 Cindy 的夥伴設定裡修改。"
         },
         "turn": {
@@ -15391,6 +15581,8 @@
       "codexHelperUnavailable": "此任務已啟用 cindy_helper，但目前無法使用，任務結果可能無法回傳。",
       "codexHelperUnverified": "未能確認此任務的 cindy_helper 是否可用，任務結果可能無法回傳。",
       "requestFormatError": "應用程式送出的請求格式有誤，本次回覆未能完成。",
+      "piRetryHistoryTooLarge": "這則訊息未送出。Pi 讀取重試所需的歷史記錄時，有一個資料幀超過本機 16 MiB 限制。你可以在新任務中繼續。",
+      "messageNotSent": "這則訊息未送出。",
       "replyFailed": "回覆未完成",
       "queuedSendRecovery": "上一則訊息尚未傳送。點選「重試」可原樣傳送。傳送新訊息會取代這一則。",
       "retryTitle": "重新傳送最後一則訊息",
@@ -22402,6 +22594,19 @@
     "rendered": "查看文件",
     "wrap": "自動換行",
     "lineNumbers": "行號"
+  },
+  "openAiAccountGroup": {
+    "strategy": "帳號組策略",
+    "leastHint": "優先分配給執行任務最少的連線",
+    "quotaHint": "能讀取訂閱用量時，會先按用量篩選連線，再按組策略分配。",
+    "removeDescription": "此連線將不再接收組內的新任務。正在執行的任務仍留在原連線。",
+    "mergeDescription": "從 {{target}} 新建的任務可以使用這兩個供應商。登入、金鑰和既有任務保留在原處。建立調度關係前，Cindy 會測試 {{apiKey}} 的 API Key。",
+    "modelUnavailable": "此連線無法呼叫本次自動選擇的模型。再次測試可嘗試其他候選。",
+    "noTestModel": "目前的連線沒有可用於測試的模型。請確認 OpenAI 專案可呼叫哪些模型，再重新整理或更新此連線的模型清單。",
+    "billingPaused": "餘額不足或達到計費上限，已暫停組內分配。",
+    "title": "帳號群組",
+    "testPassed": "測試成功",
+    "refresh": "重新整理配額"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

@@ -13,8 +13,8 @@ import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { fitsHistoryDisk, historyDiskAuthority, readHistoryDisk, writeHistoryDisk } from './remoteHistoryDiskCache';
 import {
   detachedRemoteHistorySnapshot,
-  dropDetachedRemoteHistoryView,
   isRemoteHistoryViewMounted,
+  updateDetachedRemoteHistoryView,
 } from './remoteHistoryViews';
 import { remoteSessionStore } from './remoteSessionStore';
 
@@ -85,8 +85,9 @@ export async function prefetchRemoteHistories(
           }
           if (!page || !isCurrent() || isRemoteHistoryViewMounted(deviceId, session.id)) continue;
           const snapshot = historySnapshotForCache(page, previous, fitsHistoryDisk, latestPage);
-          if (!snapshot || !await writeHistoryDisk(authority, { ...snapshot, readReceipt })) continue;
-          dropDetachedRemoteHistoryView(deviceId, session.id);
+          const cached = snapshot ? { ...snapshot, readReceipt } : null;
+          if (!cached || !await writeHistoryDisk(authority, cached)) continue;
+          updateDetachedRemoteHistoryView(deviceId, session.id, cached);
         }
         const version = historyPrefetchVersion(session);
         if (version !== undefined) prefetchedAt.set(keyFor(deviceId, session.id), { version, current: authority.current });

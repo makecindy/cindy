@@ -69,6 +69,7 @@ import {
 import type { MobileCodexRateLimitsResult, MobileCodexRateLimitResetResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { DialogueWorkspaceSettingsState } from '../shared/dialogueWorkspaceSettings';
+import type { BuddyWorkspaceSettingsState } from '../shared/buddyWorkspaceSettings';
 import type {
   CreateProjectFromTaskInput,
   CreateProjectFromTaskResult,
@@ -335,6 +336,11 @@ import type {
   DesktopAccountDeletionConfirmResult,
   DesktopAccountDeletionStatusResult,
   DesktopAccountSwitcherSnapshot,
+  DesktopContactChangeAvailability,
+  DesktopContactChangeCodeSent,
+  DesktopContactChangeCompleted,
+  DesktopContactChangeResult,
+  DesktopContactChangeVerified,
   DesktopLoginAction,
   DesktopLoginActionResult,
 } from '../shared/authIpc';
@@ -1897,8 +1903,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:recommendations', pluginIds),
     snapshot: (): Promise<import('../shared/pluginMarket').PluginMarketSnapshot> =>
       ipcRenderer.invoke('plugin-market:snapshot'),
-    detail: (pluginId: string): Promise<import('../shared/pluginMarket').PluginMarketDetail> =>
-      ipcRenderer.invoke('plugin-market:detail', pluginId),
+    detail: (pluginId: string, options?: { includeReadme?: boolean; includeUpdates?: boolean }): Promise<import('../shared/pluginMarket').PluginMarketDetail> =>
+      options ? ipcRenderer.invoke('plugin-market:detail', pluginId, options) : ipcRenderer.invoke('plugin-market:detail', pluginId),
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions): Promise<import('../shared/share').ShareContent> =>
       ipcRenderer.invoke('plugin-market:prepare-share', pluginId, options),
     prepareLocalShare: (instanceId: string, operationId: string, options: import('../shared/share').ShareOptions, expected: import('../shared/share').LocalPluginShareBinding, uploadConfirmed: boolean): Promise<import('../shared/share').SharePreparation> =>
@@ -2619,6 +2625,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('auth:account-deletion:clear-receipt'),
   authConsumeAccountDeletionRestoredNotice: (): Promise<boolean> =>
     ipcRenderer.invoke('auth:account-deletion:consume-restored-notice'),
+  // 换绑登录联系方式:票据与凭据留在 main,这里只传验证码、新值与展示结果。
+  authGetContactChangeAvailability: (): Promise<DesktopContactChangeAvailability> =>
+    ipcRenderer.invoke('auth:contact-change:get-availability'),
+  authRequestContactChangeCurrentCode: (): Promise<DesktopContactChangeResult<DesktopContactChangeCodeSent>> =>
+    ipcRenderer.invoke('auth:contact-change:request-current-code'),
+  authVerifyContactChangeCurrentCode: (
+    code: string,
+  ): Promise<DesktopContactChangeResult<DesktopContactChangeVerified>> =>
+    ipcRenderer.invoke('auth:contact-change:verify-current-code', code),
+  authRequestContactChangeNewCode: (value: string): Promise<DesktopContactChangeResult<null>> =>
+    ipcRenderer.invoke('auth:contact-change:request-new-code', value),
+  authConfirmContactChange: (input: {
+    value: string;
+    code: string;
+  }): Promise<DesktopContactChangeResult<DesktopContactChangeCompleted>> =>
+    ipcRenderer.invoke('auth:contact-change:confirm', input),
+  authCancelContactChange: (): Promise<void> => ipcRenderer.invoke('auth:contact-change:cancel'),
 
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──
   profileGetState: (): Promise<{
@@ -5080,6 +5103,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     reset: (): Promise<DialogueWorkspaceSettingsState> =>
       ipcRenderer.invoke('dialogue-workspace:reset'),
   },
+  buddyWorkspace: {
+    open: (): Promise<{ success: boolean }> => ipcRenderer.invoke('buddy-workspace:open'),
+    get: (): Promise<BuddyWorkspaceSettingsState> =>
+      ipcRenderer.invoke('buddy-workspace:get'),
+    choose: (): Promise<BuddyWorkspaceSettingsState> =>
+      ipcRenderer.invoke('buddy-workspace:choose'),
+    reset: (): Promise<BuddyWorkspaceSettingsState> =>
+      ipcRenderer.invoke('buddy-workspace:reset'),
+  },
   projectsRoot: {
     get: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:get'),
     choose: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:choose'),
@@ -6414,6 +6446,53 @@ contextBridge.exposeInMainWorld('electronAPI', {
     bots: {
       projectRepository: (botId: string, retry: boolean): Promise<import('../shared/botProjectMode').BotProjectRepositoryStatus> =>
         ipcRenderer.invoke('local-db:bots:project-repository', botId, retry),
+      workspaceMigration: {
+        getStatus: (
+          botId: string,
+        ): Promise<import('../shared/workspaceMigration').WorkspaceMigrationStatus> =>
+          ipcRenderer.invoke('local-db:bots:workspace-migration:status', botId),
+        chooseTarget: (
+          botId: string,
+          useDefault?: boolean,
+        ): Promise<import('../shared/workspaceMigration').WorkspaceMigrationChooseTargetResult> =>
+          ipcRenderer.invoke('local-db:bots:workspace-migration:choose-target', botId, useDefault),
+        schedule: (
+          input: import('../shared/workspaceMigration').WorkspaceMigrationScheduleInput,
+        ): Promise<import('../shared/workspaceMigration').WorkspaceMigrationScheduleResult> =>
+          ipcRenderer.invoke('local-db:bots:workspace-migration:schedule', input),
+        cancel: (
+          botId: string,
+        ): Promise<import('../shared/workspaceMigration').WorkspaceMigrationStatus> =>
+          ipcRenderer.invoke('local-db:bots:workspace-migration:cancel', botId),
+        restart: (botId: string): Promise<{ relaunching: boolean }> =>
+          ipcRenderer.invoke('local-db:bots:workspace-migration:restart', botId),
+        getStartupProgress: (): Promise<
+          import('../shared/workspaceMigration').WorkspaceMigrationStartupProgress | null
+        > => ipcRenderer.invoke('local-db:bots:workspace-migration:startup-progress'),
+        onStartupProgress: (
+          callback: (
+            progress:
+              | import('../shared/workspaceMigration').WorkspaceMigrationStartupProgress
+              | null,
+          ) => void,
+        ): (() => void) => {
+          const handler = (
+            _event: Electron.IpcRendererEvent,
+            progress:
+              | import('../shared/workspaceMigration').WorkspaceMigrationStartupProgress
+              | null,
+          ) => callback(progress);
+          ipcRenderer.on(
+            'local-db:bots:workspace-migration-startup-progress-changed',
+            handler,
+          );
+          return () =>
+            ipcRenderer.removeListener(
+              'local-db:bots:workspace-migration-startup-progress-changed',
+              handler,
+            );
+        },
+      },
       generateAvatar: (token: string): Promise<{ avatarImageBase64: string }> =>
         ipcRenderer.invoke('local-db:bots:generate-avatar', token),
       generateDraft: (
@@ -7017,8 +7096,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCompanionCloudState: (): Promise<import('../shared/companionCloud').CompanionCloudSnapshot> =>
       ipcRenderer.invoke('maker:companion-cloud:state'),
     onCompanionCloudChanged: fanOutCompanionCloudChanged,
-    takeOverCompanion: (botId: string): Promise<import('../shared/companionCloud').CompanionCloudActionResult> =>
-      ipcRenderer.invoke('maker:companion-cloud:take-over', botId),
+    takeOverCompanion: (
+      botId: string,
+      options?: import('../shared/companionCloud').CompanionTakeOverOptions,
+    ): Promise<import('../shared/companionCloud').CompanionCloudActionResult> =>
+      ipcRenderer.invoke('maker:companion-cloud:take-over', botId, options),
     repairCompanionProfile: (botId: string, request: import('../shared/companionCloud').CompanionProfileRepairRequest): Promise<import('../shared/companionCloud').CompanionProfileRepairResult> =>
       ipcRenderer.invoke('maker:companion-cloud:repair-profile', botId, request),
     switchCompanionHome: (
@@ -8671,7 +8753,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 输入框推荐提示词:turn 结束后预测用户下一步输入(turn 完成 → 调 IPC → 返回预测文本)。 */
     predictNextPrompt: (request: {
       sessionId: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      /** 'acp' = plugin-engine task. */
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
       messages: Array<{ role: string; content: string }>;
       workingDir?: string;
       turnGen: number;
