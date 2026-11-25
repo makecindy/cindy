@@ -3609,6 +3609,112 @@ describe("market read fences and lost-receipt facts", () => {
       else expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
     });
   });
+  /* 测试价值（调度要求：扩到第三次已装读取与再次点「核实结果」，让下一个顺序先由测试跑到）
+   * - 生产入口与可观察结果：真实 PluginsScreen + usePluginMarket + 管理 client / controller，只替换传输；观察是否打开
+   *   实例、行的结论。
+   * - 依据：核实事实只在它所依据的已装读取是最新发出的那次时有效（派生判断，单一出口 conclude）。
+   * - 剪枝：A 的回包固定在最前（维护者 05:04 点名的顺序即以它开头）；其余事件 B 发出 / 回包、C 发出 / 回包、按 A 的
+   *   事实发起的市场详情回包、再次点核实的全部合法先后顺序（发出先于回包，C 在 B 之后发出）都在集合里，共 90 种 × 两种
+   *   内容。对应关系：05:04「B 挂起时先放行旧详情」= A → 发 B → 详情 → B 回包；03:54 #1「第一轮详情在途时再次核实」=
+   *   A → 核实 → 详情……。tier: unit。
+   * - 每一步之后断言：结论第一次出现时，最新发出的已装读取已回包且结论与它的内容一致；最新读取在途时仍待确认。
+   *   全部回包后有结论，且等于最新一次读取的内容。
+   */
+  describe("every order with a third installed read and a second check", () => {
+    type Step = "sendB" | "releaseB" | "sendC" | "releaseC" | "releaseDetail" | "check";
+    const perms = <T,>(items: T[]): T[][] => items.length <= 1 ? [items]
+      : items.flatMap((first, index) => perms([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [first, ...rest]));
+    const legal = (order: Step[]) => order.indexOf("sendB") < order.indexOf("releaseB") && order.indexOf("sendC") < order.indexOf("releaseC")
+      && order.indexOf("sendB") < order.indexOf("sendC");
+    const core = perms<Step>(["sendB", "releaseB", "sendC", "releaseC", "releaseDetail"]).filter(legal);
+    const all = core.flatMap((order) => Array.from({ length: order.length + 1 }, (_, at) => [...order.slice(0, at), "check" as Step, ...order.slice(at)]));
+    it("has the orders the maintainer named among them", () => {
+      expect(all).toHaveLength(90);
+      expect(all.some((order) => order.join() === "sendB,releaseDetail,releaseB,sendC,releaseC,check")).toBe(true);
+      expect(all.some((order) => order.join() === "check,releaseDetail,sendB,releaseB,sendC,releaseC")).toBe(true);
+    });
+    describe.each([["B shows the instance, C shows it removed", true, false], ["B shows it removed, C shows it again", false, true]])(
+      "%s", (_case, bPresent, cPresent) => {
+        it.each(all.map((order) => [order.join(" → "), order] as const))("A → %s", async (_label, order) => {
+          const gates = new Map<string, { promise: Promise<void>; release: () => void }>();
+          const gate = (label: string) => {
+            if (!gates.has(label)) { let release!: () => void; const promise = new Promise<void>((resolve) => { release = resolve; }); gates.set(label, { promise, release }); }
+            return gates.get(label)!;
+          };
+          // Installed reads in the order they were sent, with what each shows and whether it came back.
+          const reads: Array<{ label: string; present: boolean; returned: boolean }> = [];
+          let began = false, checking = false, wanted: "B" | "C" | null = null, sentDetail = false;
+          const truth = () => reads.length ? reads[reads.length - 1].present : true;
+          queuedWire((request) => {
+            switch (request.actionId) {
+              case "management:snapshot": {
+                if (request.input?.read === "capabilities") return { catalogPaging: true };
+                if (request.input?.read === "catalog") return marketPage([item]);
+                const read = (request as any).read as typeof reads[number] | undefined;
+                if (read) { read.returned = true; return managementSnapshot(began && read.present); }
+                return managementSnapshot(began && truth());
+              }
+              case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
+              case "management:begin": return demoConsent(request);
+              case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
+              case "management:operation": throw hostError("NOT_FOUND");
+              default: throw new Error("unexpected " + request.actionId);
+            }
+          }, (request) => {
+            if (request === "manifest" || !checking) return undefined;
+            if (request.actionId === "management:snapshot" && request.input?.read === "installed") {
+              const label = reads.length === 0 ? "A" : wanted ?? `R${reads.length}`;
+              const present = label === "A" ? true : label === "B" ? bPresent : label === "C" ? cPresent : truth();
+              const read = { label, present, returned: false };
+              reads.push(read);
+              (request as any).read = read;
+              if (label === "A" || label === "B" || label === "C") { if (wanted === label) wanted = null; return gate(label).promise; }
+              return undefined;
+            }
+            if (request.actionId === "management:market-detail" && !sentDetail) { sentDetail = true; return gate("detail").promise; }
+            return undefined;
+          });
+          await openMarket();
+          await act(async () => shownMarket().install(shownMarket().items[0]));
+          await settle(14);
+          await approveOnPhone();
+          checking = true;
+          await act(async () => { void shownMarket().checkResult(); });
+          await settle(14);
+          gate("A").release();
+          await settle(14);
+          const opened = () => fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
+          const failed = () => shownMarket().rowState(item).kind === "failed";
+          let concluded: boolean | null = opened() ? true : failed() ? false : null;
+          // A was the newest read and settled the result right away: valid (it is what A showed).
+          if (concluded !== null) expect(concluded).toBe(true);
+          for (const step of order) {
+            if (step === "sendB" || step === "sendC") {
+              wanted = step === "sendB" ? "B" : "C";
+              await act(async () => { void fixture.props.get("confirmation")?.controller.refresh(); });
+            } else if (step === "check") {
+              await act(async () => { void shownMarket().checkResult(); });
+            } else gate(step === "releaseB" ? "B" : step === "releaseC" ? "C" : "detail").release();
+            await settle(14);
+            const now = opened() ? true : failed() ? false : null;
+            if (concluded === null && now !== null) {
+              // The first conclusion rests on the newest installed read issued, which has returned and agrees with it.
+              const newest = reads[reads.length - 1];
+              expect(newest.returned, `${step}: concluded before the newest read (${newest.label}) returned`).toBe(true);
+              expect(now, `${step}: conclusion against ${newest.label}`).toBe(newest.present);
+              concluded = now;
+            }
+            if (concluded === null && reads.some((read) => !read.returned)) {
+              expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
+              expect(shownMarket().installBusy).toBe(true);
+            }
+          }
+          // Every gate released (a read a newer one replaced may never be sent): never left waiting; the conclusion was
+          // checked against the newest read when it appeared.
+          expect(concluded, `still waiting: ${JSON.stringify(reads)}`).not.toBeNull();
+        });
+      });
+  });
   // Shuffled release (dispatcher request after the 03:54 review): instead of hand-picked orders, each small scenario
   // holds 2–3 requests in flight and runs every order in which they could return, checking the invariants after each
   // step. The 03:54 orders are among them: second "Check result" while round 1's detail is in flight (#1), the probe
