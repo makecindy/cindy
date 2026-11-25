@@ -65,7 +65,6 @@ export function MarketPluginDetailView({
   const layout = usePluginDetailLayout({
     id: `market:${detail.pluginId}`,
     ready: Boolean(manifest),
-    readmePending: Boolean(manifest?.readme && readme === undefined),
     navigationScope: relatedCatalog?.local ? relatedCatalog.cache : undefined,
     hasParent: Boolean(backLabel),
     blocks: {

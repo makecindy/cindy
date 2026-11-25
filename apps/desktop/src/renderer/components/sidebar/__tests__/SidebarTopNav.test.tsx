@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
+import { createMemoryRouter, MemoryRouter, Outlet, RouterProvider, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
 import { SidebarRailNavigation, SidebarTopNav, type SidebarRailSearchOptions } from '../SidebarTopNav';
@@ -124,6 +124,34 @@ it('requests an early plugin load only on intent at the sidebar entry', () => {
   expect(preloadPluginPage).toHaveBeenCalledTimes(1);
   fireEvent.focus(plugins);
   expect(preloadPluginPage).toHaveBeenCalledTimes(2);
+});
+
+// Unit / 工程约定 §7: a pending plugin route should highlight the real
+// sidebar row while keeping the mounted task. Immediate MemoryRouter routes
+// cannot reproduce the pending module that used to leave the row unselected.
+it('selects Plugins while keeping the task visible until the plugin module is ready', async () => {
+  const module = Promise.withResolvers<{ Component: () => React.JSX.Element }>();
+  const router = createMemoryRouter([{
+    element: <><SidebarTopNav /><Outlet /></>,
+    children: [
+      { path: '/cc-agent/session-1', element: <main>Current task</main> },
+      { path: '/plugins', lazy: () => module.promise },
+    ],
+  }], { initialEntries: ['/cc-agent/session-1'] });
+  render(<MainViewHistoryProvider><RouterProvider router={router} /></MainViewHistoryProvider>);
+  const plugins = screen.getByRole('button', { name: 'sidebar.tabs.plugins' });
+  const task = screen.getByRole('main');
+  expect(plugins.getAttribute('aria-current')).toBeNull();
+
+  await act(async () => { fireEvent.click(plugins); });
+  expect(plugins.getAttribute('aria-current')).toBe('page');
+  expect(screen.getByRole('main')).toBe(task);
+  expect(screen.queryByRole('status')).toBeNull();
+
+  await act(async () => { module.resolve({ Component: () => <main>Installed plugins</main> }); });
+  expect(screen.getByRole('main').textContent).toBe('Installed plugins');
+  expect(plugins.getAttribute('aria-current')).toBe('page');
+  expect(screen.queryByRole('status')).toBeNull();
 });
 
 describe('Retirement attention across sidebar navigation placements', () => {

@@ -251,7 +251,7 @@ export function GhostPluginDetailView({
   const localUpdateAvailable = (!remote || remoteFileUpdate) && ghost?.publishingSource?.kind !== 'public-market';
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
   // 远程设备的插件目录不在本机，详细介绍只在本机详情页读取。
-  const { readme, pending: readmePending } = usePluginReadme(
+  const { readme } = usePluginReadme(
     ghost ? `${detail.id}@${ghost.manifest.version}@${uiLanguage}` : null,
     ghost?.manifest.readme && !remote ? () => window.electronAPI.ghosts.readme(detail.id, uiLanguage) : null,
   );
@@ -268,7 +268,6 @@ export function GhostPluginDetailView({
     id: `installed:${detail.id}`,
     navigationScope: !remote && relatedCatalog?.local ? relatedCatalog.cache : undefined,
     hasParent: Boolean(backLabel),
-    readmePending,
     blocks: {
       description: Boolean(summary), updates: Boolean(releaseUpdates?.length || fallbackNotes),
       readme: Boolean(readme?.markdown.trim()), permissions: permissionFacts.length > 0, facts: true,

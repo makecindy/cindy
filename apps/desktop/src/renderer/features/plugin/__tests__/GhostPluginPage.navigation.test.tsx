@@ -8,7 +8,7 @@ import path from 'node:path';
 import type { PluginMarketDetail } from '../../../../shared/pluginMarket';
 import type { ContributionTransferView, MyPluginDetailView, MyPluginReleasePageView } from '../../../../shared/pluginContributions';
 import type { InstalledGhost } from '../../../../shared/ghost';
-import { __resetInstalledGhostsStoreForTest } from '@/cindy-brain/useInstalledGhosts';
+import { __resetInstalledGhostsStoreForTest, readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
 import { __testing as dataOwnerTesting, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { PluginReviewUpdatesProvider } from '@/contexts/PluginReviewUpdatesContext';
 import type { DataOwnerPushStamp } from '../../../../shared/dataOwnerPush';
@@ -22,7 +22,7 @@ import {
 import { GhostPluginPage } from '../GhostPluginPage';
 import { marketItemSummary } from '../lib/marketDetailCache';
 import { __resetPluginInstallProgressForTest } from '../lib/pluginInstallProgress';
-import { pluginCatalogMemory, pluginCatalogOwnerKey, resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
+import { pluginCatalogMemory, pluginCatalogOwnerKey, readLocalPluginSnapshot, resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import { leadingSlashInvocation, loadAllCommands, rewriteAgentSkillInvocationForDispatch } from '@/lib/slashCommands';
@@ -284,7 +284,8 @@ describe('installed recent usage', () => {
       manifest: { ...detail.manifest, id, name: id }, dir: path.join('plugins', id), enabled: true,
       approval: { state: 'approved', revision: 'recent-usage' },
     }));
-    window.electronAPI.ghosts.listSync = () => ({ ghosts: installed });
+    const listSync = vi.fn(() => ({ ghosts: installed }));
+    window.electronAPI.ghosts.listSync = listSync;
     const pending: Array<{ resolve: (payload: { ids: string[] }) => void; reject: (error: Error) => void }> = [];
     const recentUsage = vi.fn(() => new Promise<{ ids: string[] }>((resolve, reject) => { pending.push({ resolve, reject }); }));
     const listeners = new Set<Listener>();
@@ -297,22 +298,35 @@ describe('installed recent usage', () => {
     });
     const readOrder = () => [...screen.getByRole('main').querySelectorAll<HTMLElement>('[data-plugin-id^="installed:"]')]
       .map(row => row.dataset.pluginId);
-    return { pending, recentUsage, readOrder, owner,
+    return { pending, recentUsage, readOrder, owner, listSync,
       push: (ids: string[], stamp = owner) => { listeners.forEach(listener => listener({ ids }, stamp)); } };
   }
 
-  it('shows the installed list while the main process recent usage reply is still pending', async () => {
-    const { pending, recentUsage, readOrder } = setupRecentUsage();
-    render(page('/plugins'));
-    await screen.findByRole('button', { name: 'alpha' });
+  // Unit / 工程约定 §7: exercise the first render of the actual page with the
+  // shared sidebar snapshot populated and every background data source stalled.
+  it('renders the cached installed list without waiting and keeps late recent usage for the next visit', async () => {
+    const { pending, recentUsage, readOrder, listSync } = setupRecentUsage();
+    readInstalledGhostsSnapshot();
+    const pendingMarketData = new Promise<never>(() => {});
+    window.electronAPI.pluginMarket.snapshot = () => pendingMarketData;
+    window.electronAPI.pluginMarket.query = () => pendingMarketData;
+    window.electronAPI.pluginMarket.recommendations = () => pendingMarketData;
+
+    const view = render(page('/plugins'));
+    expect(screen.getByRole('button', { name: 'alpha' })).toBeTruthy();
+    expect(listSync).toHaveBeenCalledOnce();
     const scroller = screen.getByRole('main');
     scroller.scrollTop = 24;
     expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
     expect(recentUsage).toHaveBeenCalledOnce();
     await act(async () => { pending[0]!.resolve({ ids: ['beta'] }); });
-    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
+    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
     expect(screen.getByRole('main')).toBe(scroller);
     expect(scroller.scrollTop).toBe(24);
+
+    view.unmount();
+    render(page('/plugins'));
+    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
   });
 
   it('discards recent usage that resolves between the owner fence and the new owner render', async () => {
@@ -329,19 +343,26 @@ describe('installed recent usage', () => {
     expect(recentUsage).toHaveBeenCalledTimes(2);
     act(() => push(['beta'], owner));
     expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
-    await act(async () => { pending[1]!.resolve({ ids: ['beta'] }); });
-    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
+    await act(async () => { pending[1]!.resolve({ ids: ['alpha'] }); });
+    view.unmount();
+    await act(async () => { render(page('/plugins')); });
+    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
   });
 
-  it('keeps a recent usage push ahead of the older initial reply', async () => {
+  it('uses prewarmed ordering on first render and keeps the latest push for the next visit', async () => {
     const { pending, recentUsage, readOrder, push } = setupRecentUsage();
-    render(page('/plugins'));
-    await screen.findByRole('button', { name: 'alpha' });
+    const memory = pluginCatalogMemory(pluginCatalogOwnerKey(auth.mode, auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
+    memory.recentUsageIds = ['beta'];
+    const view = render(page('/plugins'));
+    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
     expect(recentUsage).toHaveBeenCalledOnce();
-    act(() => push(['beta']));
+    act(() => push(['alpha']));
+    await act(async () => { pending[0]!.resolve({ ids: ['beta'] }); });
     expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
-    await act(async () => { pending[0]!.resolve({ ids: ['alpha'] }); });
-    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
+
+    view.unmount();
+    render(page('/plugins'));
+    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
   });
 
   it('keeps the installed page usable when the recent usage read fails', async () => {
@@ -1548,6 +1569,21 @@ describe('plugin page return navigation', () => {
     await waitFor(() => expect(install).toHaveBeenCalledWith(update.pluginId, expect.objectContaining({
       expectedReleaseId: update.releaseId, expectedInstalledApproval: 'approved:installed-revision',
     })));
+  });
+
+  // Unit / 工程约定 §7: an on-disk installed plugin and a prewarmed snapshot
+  // should show their update on the first render while its next read is pending.
+  it('shows the prewarmed update notice on first render while revalidation is pending', async () => {
+    const { snapshot, snapshots } = setupInstalledHistory();
+    const update: PluginMarketDetail = { ...installedWithHistory, version: '1.1.0', installState: 'update-available' };
+    snapshots.mockResolvedValueOnce(snapshot(update)).mockReturnValue(new Promise(() => {}));
+    const memory = pluginCatalogMemory(pluginCatalogOwnerKey(auth.mode, auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
+    await readLocalPluginSnapshot(memory);
+
+    render(page('/plugins'));
+    expect(screen.getByRole('button', { name: detail.name })).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.page.updatesAvailable')).toBeTruthy();
+    expect(snapshots).toHaveBeenCalledTimes(2);
   });
 
   it('shows all four installed releases on first open and after returning from the list or a related plugin', async () => {

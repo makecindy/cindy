@@ -387,6 +387,44 @@ it('offers explicit retry from the first page after a second cursor rejection', 
     .toEqual([null, 'chain-1', null, 'chain-2', null, 'chain-3']);
 });
 
+// Unit / §8.6: page seven was beyond the rebuild budget, so it could keep
+// rejecting while the sentinel repeatedly restarted the first six pages.
+it('stops after a rebuilt continuation is rejected and retries it on demand', async () => {
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(150);
+  let generation = 0;
+  let rejected = true;
+  const load = vi.fn(async (input: PluginMarketQuery) => {
+    if (input.counts) return page(0, 70);
+    const start = Number(input.cursor?.split(':').at(-1) ?? 0);
+    if (!input.cursor) generation++;
+    if (start === 60 && rejected) throw new Error('[PLUGIN_LIST_CHANGED] invalid cursor');
+    const batch = page(start, 70);
+    return { ...batch, ...sortedBy(input), nextCursor: batch.nextCursor ? `${generation}:${batch.nextCursor}` : null };
+  });
+  const { cache, view } = fixture(load);
+  render(view());
+  await browseBatches(cache, 5);
+  load.mockClear();
+  const intersect = () => act(async () => { intersections.forEach(callback => callback()); });
+  const cursors = () => load.mock.calls.filter(([input]) => !input.counts).map(([input]) => input.cursor);
+  await intersect();
+  await waitFor(() => expect(cache.current.cursors.get(6)).toBe('2:60'));
+  await intersect();
+  expect(cursors()).toEqual(['1:60', null, '2:10', '2:20', '2:30', '2:40', '2:50', '2:60']);
+  const retry = screen.getByRole('button', { name: 'commonUi.retry' });
+  await intersect();
+  await act(async () => { await cache.current.refresh!({ force: true }); });
+  expect(load).toHaveBeenCalledTimes(8);
+
+  rejected = false;
+  await act(async () => { fireEvent.click(retry); });
+  await intersect();
+  expect(cursors().slice(8)).toEqual([null, '3:10', '3:20', '3:30', '3:40', '3:50', '3:60']);
+  fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 4500 } });
+  expect(await screen.findByText('Tool 60')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'commonUi.retry' })).toBeNull();
+});
+
 it('shows both server totals before visiting a second public page', async () => {
   const load = vi.fn(async (input: PluginMarketQuery) => ({ ...page(0, 250),
     counts: input.counts ? { all: 250, public: 250, organization: 0, personal: 0, custom: 0, official: 210, community: 39 } : null,

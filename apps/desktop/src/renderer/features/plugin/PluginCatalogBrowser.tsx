@@ -53,6 +53,9 @@ function cursorRejected(error: unknown): boolean {
   return code === 'PLUGIN_LIST_CHANGED' || code === 'INVALID_PARAMS';
 }
 
+// Key the retry by the rebuilt cursor chain, so another sort gets its own recovery.
+const retriedSortedPage = new WeakMap<PluginBrowserCache['cursors'], number>();
+
 export type PluginMarketRowMetric = PluginMarketMetric & { icon?: 'download' };
 
 const CatalogCard = memo(function CatalogCard({ item, installState, renderItem, metric }: {
@@ -314,6 +317,9 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           ? [...new Set([...(current.metadata?.unavailableCustomSourceNames ?? []), ...page.unavailableCustomSourceNames])]
           : page.unavailableCustomSourceNames };
         current.error = page.unavailableReason && page.items.length === 0 ? index : null;
+        if (sortedCursors && !page.unavailableReason && retriedSortedPage.get(sortedCursors) === index) {
+          retriedSortedPage.delete(sortedCursors);
+        }
         if (!sortedPage) dedupeCachedPages(current);
         if (initial || changedSort) { current.refreshedRevision = requestedRevision; current.refreshedAt = Date.now(); }
         if (index === 0) settleSort(current, page);
@@ -323,8 +329,13 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         if (sortedCursors && (sortedCursors !== current.cursors || (current.restartAt !== undefined && current.error !== null))) return;
         if (index > 0 && (sortedCursors ? cursorRejected(error) : extractIpcError(error)?.code === 'PLUGIN_LIST_CHANGED')) {
           current.refreshedRevision = undefined;
-          if (sortedCursors) current.restartAt = index;
-          else restartCursors.current = true;
+          if (sortedCursors) {
+            current.restartAt = index;
+            if (retriedSortedPage.get(sortedCursors) === index) {
+              current.error = index;
+              return;
+            }
+          } else restartCursors.current = true;
           void current.refresh?.({ force: true });
         } else current.error = index;
       }
@@ -514,6 +525,11 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           cache.last = last; cache.hasNext = hasNext;
           cache.metadata = { ...metadata, unavailableCustomSourceNames: [...unavailableSources] };
           cache.grid = { ...cache.grid, restore };
+          if (cache.restartAt !== undefined && cache.restartAt > last && hasNext && metadata.sort === effectiveSort) {
+            // The bounded rebuild stopped before the rejected page. Its next read
+            // belongs to this recovery, even though it goes through the sentinel.
+            retriedSortedPage.set(cursors, cache.restartAt);
+          }
           delete cache.restartAt;
           cache.error = null;
           cache.refreshedRevision = requestedRevision;

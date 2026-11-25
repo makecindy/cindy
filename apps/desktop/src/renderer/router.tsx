@@ -17,7 +17,7 @@ import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import { NewMakerDraftRoute } from '@/features/cc-agent/NewMakerDraftRoute';
 import { OrcaWorkflowRoute } from '@/features/cc-agent/OrcaWorkflowRoute';
 import { LegacySkillDetailRedirect } from '@/features/skillhub/LegacySkillDetailRedirect';
-import { GhostPluginRoute } from '@/features/plugin/GhostPluginRoute';
+import { loadPluginPage } from '@/features/plugin/GhostPluginRoute';
 
 function EmptyRouteFallback() {
   return null;
@@ -28,8 +28,7 @@ function EmptyRouteFallback() {
  * 主窗口首屏不再连带伙伴、Skill、插件、定时任务、文件浏览（含 CodeMirror）等页面。
  * 导航在 startTransition 里等分包就绪，期间保留当前页面；窗口直接以这些地址加载时由空的
  * HydrateFallback 占住内容区，MainLayout 导航照常显示。
- * 插件路由用同步壳先切换地址，页面在壳内按需加载。
- * 其他 lazy 路由保留设计台账识别的 `Component: X` 写法。
+ * lazy 路由保留设计台账识别的 `Component: X` 写法。
  */
 
 /**
@@ -280,7 +279,10 @@ export const router = createHashRouter([
                   },
                   {
                     path: 'plugins',
-                    element: <GhostPluginRoute />,
+                    lazy: () => loadPluginPage().then(({ GhostPluginPage }) => ({
+                      Component: GhostPluginPage,
+                    })),
+                    HydrateFallback: EmptyRouteFallback,
                   },
                   {
                     path: 'apps/:ghostId',

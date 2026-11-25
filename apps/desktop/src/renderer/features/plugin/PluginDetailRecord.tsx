@@ -32,14 +32,13 @@ const PluginDetailLayoutContext = createContext<{
   relaxation: DetailRelaxation;
 } | null>(null);
 
-/** Measure at most once per visit, applying each available step before measuring again. */
+/** Fit the available detail content at opening and keep the result for the rest of the visit. */
 export function usePluginDetailLayout({
-  id, blocks, ready = true, readmePending = false, navigationScope, hasParent = false,
+  id, blocks, ready = true, navigationScope, hasParent = false,
 }: {
   id: string;
   blocks: DetailBlocks;
   ready?: boolean;
-  readmePending?: boolean;
   navigationScope?: object;
   hasParent?: boolean;
 }) {
@@ -51,8 +50,6 @@ export function usePluginDetailLayout({
     setVisit(visit);
   }
   const [measuring, setMeasuring] = useState<{ visit: DetailVisit; relaxation: DetailRelaxation }>();
-  const [waiting, setWaiting] = useState<DetailVisit>();
-  const [timedOut, setTimedOut] = useState<DetailVisit>();
   const measuringThisVisit = measuring?.visit === visit ? measuring.relaxation : undefined;
   const relaxation = visit.relaxation ?? measuringThisVisit ?? compact;
 
@@ -71,12 +68,6 @@ export function usePluginDetailLayout({
   }, [hasParent, id, navigationScope, visit]);
 
   useLayoutEffect(() => {
-    if (waiting !== visit) return;
-    const timeout = setTimeout(() => setTimedOut(visit), 150);
-    return () => clearTimeout(timeout);
-  }, [visit, waiting]);
-
-  useLayoutEffect(() => {
     if (visit.relaxation || !ready) return;
     const frame = article.current;
     const scroller = frame?.closest('main');
@@ -84,16 +75,11 @@ export function usePluginDetailLayout({
     if (!scroller || !end) return;
     if (scroller.clientHeight === 0) {
       visit.relaxation = compact;
-      if (waiting === visit) setWaiting(undefined);
       return;
     }
     if (!measuringThisVisit) {
-      if (readmePending && timedOut !== visit) {
-        if (waiting !== visit) setWaiting(visit);
-      } else {
-        // Give the text disclosures a layout pass to settle their line counts.
-        setMeasuring({ visit, relaxation: { level: 0, blocks } });
-      }
+      // Give the text disclosures a layout pass to settle their line counts.
+      setMeasuring({ visit, relaxation: { level: 0, blocks } });
       return;
     }
     const bottom = end.getBoundingClientRect().bottom - scroller.getBoundingClientRect().top + scroller.scrollTop;
@@ -105,7 +91,6 @@ export function usePluginDetailLayout({
       setMeasuring({ visit, relaxation: { ...relaxation, level: next + 1 } });
     } else {
       visit.relaxation = relaxation;
-      if (waiting === visit) setWaiting(undefined);
     }
   });
 
@@ -113,7 +98,6 @@ export function usePluginDetailLayout({
   return {
     article,
     context,
-    waiting: waiting === visit,
     rememberForward(pluginId: string) {
       if (!navigationScope) return;
       const trail = trails.get(navigationScope) ?? { parents: [] };
@@ -138,7 +122,7 @@ export function PluginDetailArticle({ layout, className, children }: {
 }) {
   return (
     <PluginDetailLayoutContext.Provider value={layout.context}>
-      <article ref={layout.article} className={className} data-plugin-detail-waiting={layout.waiting || undefined}>
+      <article ref={layout.article} className={className}>
         {children}
       </article>
     </PluginDetailLayoutContext.Provider>

@@ -1,5 +1,6 @@
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { resolveSystemLocale } from '../../../../shared/locale';
+import { preloadPluginPage } from '../GhostPluginRoute';
 
 const scheduled = new Set<string>();
 
@@ -15,11 +16,13 @@ export function schedulePluginCatalogPrewarm(input: {
   const run = () => {
     if (cancelled || !isDataOwnerGenerationCurrent(owner) || scheduled.has(key)) return;
     scheduled.add(key);
+    preloadPluginPage();
     void import('./pluginCatalogMemory').then(async module => {
       if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
       const ownerKey = module.pluginCatalogOwnerKey(input.mode, input.ownerId, input.generation, input.locale);
       const memory = module.pluginCatalogMemory(ownerKey, 'local');
       const current = () => !cancelled && isDataOwnerGenerationCurrent(owner);
+      void module.refreshLocalPluginRecentUsage(memory, owner);
       await window.electronAPI.setApplicationMenuLocale(resolveSystemLocale(input.locale));
       if (!current()) return;
       memory.localeReady = true;

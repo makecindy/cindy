@@ -358,54 +358,46 @@ describe('More plugins', () => {
 });
 
 describe('MarketPluginDetailView', () => {
-  it('keeps the detail article visible while waiting to measure a pending README', () => {
-    const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(800);
-    try {
-      const { container } = renderDetail({ manifest: { ...manifest, readme: { en: 'README.md' } } });
-      const article = container.querySelector('article');
-      expect(article?.classList.contains('invisible')).toBe(false);
-      expect(article?.getAttribute('data-plugin-detail-waiting')).toBe('true');
-      expect(screen.getByRole('heading', { name: detail.name })).toBeTruthy();
-    } finally {
-      height.mockRestore();
-    }
-  });
-  // Unit / round2 §4.2: manifest readiness starts a bounded README wait.
-  // Hold the body until just before or just after the deadline.
-  it.each([149, 150])('uses only README content ready when fitting at %i ms', delay => {
-    vi.useFakeTimers();
+  // Unit / §7: a verified manifest with a pending README must fit the real
+  // detail body immediately. Existing collapsed-README cases use height zero.
+  it('fits the detail immediately and keeps the disclosure stable when README arrives', () => {
     const viewport = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockImplementation(function (this: Element) {
       return this.tagName === 'MAIN' ? 800 : 0;
     });
+    let measurements = 0;
     const getRect = HTMLElement.prototype.getBoundingClientRect;
     const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
       if (!this.hasAttribute('data-plugin-detail-end')) return getRect.call(this);
-      const preview = this.closest('article')?.querySelector('.plugin-detail-readme-preview');
-      return DOMRect.fromRect({ height: preview ? 780 : 480 });
+      measurements++;
+      return DOMRect.fromRect({ height: 480 });
     });
-    const props = { busy: false, onBack: vi.fn(), onIconLoadError: vi.fn() };
+    const props = { busy: false, onBack: vi.fn(), onInstall: vi.fn(), onIconLoadError: vi.fn() };
     const declared = { ...detail, manifest: { ...manifest, readme: { en: 'README.md' } } };
     try {
       const { container, rerender } = render(<MarketPluginDetailView {...props} detail={marketItemSummary(detail)} />);
-      const article = container.querySelector('article')!;
-      expect(article.hasAttribute('data-plugin-detail-waiting')).toBe(false);
+      const facts = screen.getByText('settings.ghosts.detail.infoTitle').closest('details')!;
+      expect(facts.open).toBe(false);
+      expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', true);
       rerender(<MarketPluginDetailView {...props} detail={declared} />);
-      expect(article.getAttribute('data-plugin-detail-waiting')).toBe('true');
-      act(() => { vi.advanceTimersByTime(delay); });
-      expect(article.hasAttribute('data-plugin-detail-waiting')).toBe(delay < 150);
+      const article = container.querySelector('article')!;
+      expect(article.classList.contains('invisible')).toBe(false);
+      expect(screen.getByRole('heading', { name: detail.name })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', false);
+      expect(facts.open).toBe(true);
+      const fittedMeasurements = measurements;
+
       rerender(<MarketPluginDetailView {...props} detail={{ ...declared,
         readme: { path: 'README.md', markdown: 'A visual guide', images: {} } }} />);
-      expect(article.hasAttribute('data-plugin-detail-waiting')).toBe(false);
-      const preview = article.querySelector('.plugin-detail-readme-preview');
-      expect(Boolean(preview)).toBe(delay < 150);
-      expect(screen.queryByText('A visual guide') !== null).toBe(delay < 150);
-      fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.descriptionExpand' }));
-      expect(article.querySelector('.plugin-detail-readme-preview')).toBeNull();
+      expect(measurements).toBe(fittedMeasurements);
+      expect(facts.open).toBe(true);
+      const expand = screen.getByRole('button', { name: 'settings.ghosts.detail.descriptionExpand' });
+      expect(expand.getAttribute('aria-expanded')).toBe('false');
+      expect(screen.queryByText('A visual guide')).toBeNull();
+      fireEvent.click(expand);
       expect(screen.getByText('A visual guide')).toBeTruthy();
     } finally {
       viewport.mockRestore();
       geometry.mockRestore();
-      vi.useRealTimers();
     }
   });
 

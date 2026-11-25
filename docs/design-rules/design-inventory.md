@@ -38,7 +38,7 @@
 | `desktop.overlay.splash` | desktop | 启动遮罩 | App → SplashScreen；同源 gating 下并挂 LoginBrandStage（z-9980 品牌画布，启动期即可见、Splash(z-9999) 之下） |
 | `desktop.overlay.toast` | desktop | Toast | App 常驻 ToastContainer（用户可见出口，不展开业务逻辑） |
 | `desktop.plugins.app-main` | desktop | 插件主视图 | hash `/apps/:ghostId`（GhostMainViewFeatureLayout） |
-| `desktop.plugins.installed` | desktop | 已装插件 | hash `/plugins`（GhostPluginRoute） |
+| `desktop.plugins.installed` | desktop | 已装插件 | hash `/plugins`（GhostPluginPage） |
 | `desktop.settings` | desktop | 设置 | hash `/settings`（SettingsView；tab 含 general / personalization / providers / billing / usage / voice-input / im-bot / shortcuts / agent-island / import / remote-control / ghosts / builtin-tools / computer-use / help / about） |
 | `desktop.shell.main-layout` | desktop | 主窗口壳（标题栏 / 左右栏 / 内容区） | main BrowserWindow → renderer/index.tsx → main-entry.tsx → App → MainLayout (`#/` 受保护壳) |
 | `desktop.skillhub.local` | desktop | SkillHub 本地技能 | hash `/skillhub/local` 及统一详情 `/skillhub/detail`（旧详情链接重定向） |
@@ -108,7 +108,7 @@
 | `/issues` | IssueTrackerFeatureLayout | `desktop.issues.guide` |
 | `/login` | LoginPage | `desktop.auth.login` |
 | `/maker-experimental` | MakerExperimentalView | `desktop.dev.maker-experimental` |
-| `/plugins` | GhostPluginRoute | `desktop.plugins.installed` |
+| `/plugins` | GhostPluginPage | `desktop.plugins.installed` |
 | `/settings` | SettingsView | `desktop.settings` |
 | `/sidebar-window` | SidebarWindowLayout | `desktop.window.sidebar` |
 | `/skillhub` | SkillhubLocalLayout | `desktop.skillhub.local` |

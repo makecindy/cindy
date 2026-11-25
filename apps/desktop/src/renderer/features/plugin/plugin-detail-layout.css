@@ -2,10 +2,6 @@
   container: plugin-detail-hero / inline-size;
 }
 
-.plugin-detail-frame[data-plugin-detail-waiting='true'] > .plugin-detail-hero-container ~ * {
-  visibility: hidden;
-}
-
 .plugin-detail-readme-preview {
   max-block-size: 360px;
   overflow: hidden;

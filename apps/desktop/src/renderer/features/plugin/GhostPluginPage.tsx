@@ -12,7 +12,7 @@ import { featureRetirementById, type FeatureRetirement } from '../../../shared/f
 import { RetiredFeatureDetail } from './RetiredFeatureDetail';
 import { Button } from '@/components/ui/button';
 import { PLUGIN_PAGE_SIZE, type PluginMarketRowMetric } from './PluginCatalogBrowser';
-import { pluginCatalogMemory, pluginCatalogOwnerKey, pluginInstalledGrid, readLocalPluginSnapshot, readPluginRecommendations, usePluginCatalogState } from './lib/pluginCatalogMemory';
+import { pluginCatalogMemory, pluginCatalogOwnerKey, pluginInstalledGrid, readLocalPluginSnapshot, readPluginRecommendations, refreshLocalPluginRecentUsage, usePluginCatalogState } from './lib/pluginCatalogMemory';
 import { selectPluginRecommendationBatch, type PluginRecommendationDeck } from './lib/PluginRecommendationSlots';
 import { marketDetailAccessRejected, marketDetailCacheFor, retainMarketDetailIcon, marketItemSummary } from './lib/marketDetailCache';
 /**
@@ -56,7 +56,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAuth } from '@/contexts/AuthContext';
-import { isDataOwnerGenerationCurrent, isDataOwnerPushCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { readInstalledGhostsSnapshot, useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -252,7 +252,6 @@ const RECOMMENDED_FILTERS: readonly PluginPresentationFilter[] = [
 const MAX_VISIBLE_INSTALLED_PLUGINS = PLUGIN_PAGE_SIZE;
 /** 折叠入口只预览前三个隐藏插件，避免头像堆叠反过来抢占操作文案。 */
 const MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS = 3;
-const EMPTY_RECENT_GHOST_IDS: readonly string[] = [];
 
 /**
  * 本期隐藏「我的发布」二级 tab，避免与「已安装」争抢顶层布局。
@@ -856,9 +855,13 @@ function LocalPluginCatalogSource({
       scopeDir === null ? globallyEnabled : globallyEnabled && !projectDisabled.has(id),
     [projectDisabled, scopeDir],
   );
-  const [recentUsage, setRecentUsage] = useState<DataOwnerGeneration & { ids: string[] }>();
-  const recentGhostIds = recentUsage && recentUsage.dataOwnerId === dataOwnerId && recentUsage.generation === dataOwnerGeneration
-    ? recentUsage.ids : EMPTY_RECENT_GHOST_IDS;
+  // 进页时固定最近使用顺序。晚到的读取和推送只备给下一次，不移动眼前的行。
+  const [recentUsageAtEntry, setRecentUsageAtEntry] = useState(() => ({
+    memory: catalogMemory, active, ids: catalogMemory.recentUsageIds,
+  }));
+  if (recentUsageAtEntry.memory !== catalogMemory || recentUsageAtEntry.active !== active) {
+    setRecentUsageAtEntry({ memory: catalogMemory, active, ids: catalogMemory.recentUsageIds });
+  }
   useEffect(() => window.electronAPI.ghosts.onWorkdirPrefsChanged?.((policy, ownerStamp) => {
     if (!scopeDirRef.current || !isDataOwnerPushCurrent(ownerStamp)) return;
     if (scopeKeyRef.current === undefined) { handlePickScope(scopeDirRef.current); return; }
@@ -883,28 +886,14 @@ function LocalPluginCatalogSource({
   useEffect(() => {
     if (!active) return;
     const owner = { dataOwnerId, generation: dataOwnerGeneration };
-    let mounted = true;
-    let receivedPush = false;
-    const isCurrent = () => mounted && isDataOwnerGenerationCurrent(owner);
-    const apply = (ids: string[]) => setRecentUsage(ids.length ? { ...owner, ids } : undefined);
     const unsubscribe = window.electronAPI.ghosts.onRecentUsageChanged(({ ids }, ownerStamp) => {
-      if (!isCurrent() || !isDataOwnerPushCurrent(ownerStamp)) return;
-      receivedPush = true;
-      apply(ids);
-    });
-    void (async () => {
-      try {
-        const { ids } = await window.electronAPI.ghosts.recentUsage();
-        if (isCurrent() && !receivedPush) apply(ids);
-      } catch {
-        if (isCurrent() && !receivedPush) apply([]);
+      if (isDataOwnerGenerationCurrent(owner) && isDataOwnerPushCurrent(ownerStamp)) {
+        catalogMemory.recentUsageIds = ids;
       }
-    })();
-    return () => {
-      mounted = false;
-      unsubscribe();
-    };
-  }, [active, dataOwnerId, dataOwnerGeneration]);
+    });
+    void refreshLocalPluginRecentUsage(catalogMemory, owner);
+    return unsubscribe;
+  }, [active, catalogMemory, dataOwnerId, dataOwnerGeneration]);
   useEffect(() => {
     legacyRecoveryStatusRequestRef.current += 1;
     legacyRecoveryRetryRequestRef.current += 1;
@@ -1043,7 +1032,7 @@ function LocalPluginCatalogSource({
         ? 'all'
         : originFilter;
 
-  // 未读通知优先；首屏先用基础序，最近使用返回后在同一列表应用一次排序。
+  // 未读通知优先；最近使用沿用进页时的顺序。
   // marketUpdate 刻意不作排序键——更新已有统一横幅兜底,可被折叠。
   const unreadEntries = useGhostUnreadEntries();
   const unreadAtById = useMemo(
@@ -1053,10 +1042,10 @@ function LocalPluginCatalogSource({
   const displayInstalledItems = useMemo(
     () =>
       sortInstalledForDisplay(searchedInstalledItems, {
-        recentIds: recentGhostIds,
+        recentIds: recentUsageAtEntry.ids,
         unreadAtById,
       }),
-    [searchedInstalledItems, recentGhostIds, unreadAtById],
+    [searchedInstalledItems, recentUsageAtEntry.ids, unreadAtById],
   );
   const primaryInstalledItems = useMemo(
     () => displayInstalledItems.slice(0, installedLimit),

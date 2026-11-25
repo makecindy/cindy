@@ -5,7 +5,7 @@
  * 按用户偏好排序与显示(插件的显隐沿用其「在侧边栏显示」开关);未勾选的进「更多」。
  * 最小化插件面板恢复入口仍按需出现。
  *   - 新建 / 自动任务:项目(cc-agent)视图的动作 —— 在任意视图点击都跳回项目视图并执行。
- *   - Plugins:主视图切换(navigateToView),命中当前视图时高亮。
+ *   - Plugins:主视图切换(navigateToView),等待插件路由就绪时即高亮。
  *   - 伙伴 2026-10-13 起不再是导航行:它是侧栏第一层的「伙伴」段(置顶上方),
  *     与任务列表并存,不再整栏切换(见 features/bots/TeammatesSection)。
  *   - 搜索(SidebarInlineSearch):静息态与其余行同款「🔍 搜索」;hover / 聚焦
@@ -24,14 +24,14 @@
  * (伙伴的 rail 入口由 CollapsedView 提供)。
  */
 
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   CirclePlus,
   Ellipsis,
   SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react';
-import { useLocation, useNavigate, useMatch } from 'react-router-dom';
+import { matchPath, UNSAFE_DataRouterStateContext, useLocation, useNavigate, useMatch } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -126,6 +126,8 @@ function useSidebarNavigationActions(
   const navigate = useNavigate();
   const { activeKey, navigateToView } = useActiveMainView();
   const onScheduleMatch = useMatch('/cc-agent/scheduled');
+  const pendingLocation = useContext(UNSAFE_DataRouterStateContext)?.navigation.location;
+  const pendingPlugins = Boolean(pendingLocation && matchPath('/plugins', pendingLocation.pathname));
   // 任一插件有未读 → 入口行尾一颗**静态**绿点(聚合入口按 AttentionDot 规范不呼吸,
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
   const hasRetirementUnread = useInstalledGhosts().some((ghost) => ghost.retirement?.unread);
@@ -144,7 +146,7 @@ function useSidebarNavigationActions(
       icon: SIDEBAR_NAVIGATION_ITEM_ICONS.plugins,
       onSelect: () => navigateToView('plugins'),
       onIntent: preloadPluginPage,
-      active: activeKey === 'plugins',
+      active: activeKey === 'plugins' || pendingPlugins,
       showDot: hasGhostUnread || reviewUnread.length > 0,
       dotTone: reviewUnread.some(item => item.status !== 'approved' && item.status !== 'enabled') ? 'error' : hasRetirementUnread ? 'awaiting' : 'done',
     },
