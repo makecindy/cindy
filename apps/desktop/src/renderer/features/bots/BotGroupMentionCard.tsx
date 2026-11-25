@@ -79,7 +79,7 @@ export function BotGroupMentionCard({ member, anchor, onPointerEnter, onPointerL
               {member.external ? <BotGroupExternalBadge /> : null}
             </span>
             {fullName ? <span className="truncate text-12 leading-4 text-[var(--text-secondary)]">{fullName}</span> : null}
-            {orgDetail ? <span className="truncate text-12 leading-4 text-[var(--text-secondary)]" title={orgDetail}>{orgDetail}</span> : null}
+            {orgDetail ? <span className="truncate text-12 leading-[1.333] text-[var(--text-secondary)]" title={orgDetail}>{orgDetail}</span> : null}
             {role || status ? (
               <span className="truncate text-12 leading-4 text-[var(--text-tertiary)]">{[role, status].filter(Boolean).join(' · ')}</span>
             ) : null}
