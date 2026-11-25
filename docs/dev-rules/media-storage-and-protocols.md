@@ -554,8 +554,9 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   并清除对应引用定义，不能把原始路径留在 definition 中。网页链接和代码示例不改写。
   兼容仅限 hostless `xdt-image:///绝对路径` / `xdt-file:///绝对路径` 图片引用；协议读取器
   不放宽。目标含裸空格的本机图片（如 `![说明](/Users/me/Library/Application Support/a.png)`，
-  CommonMark 不认）由 `shared/bareSpaceLocalImages.ts` 从普通文本节点的**原文片段**补认（不用解码后的 `value`：同节点里的 `&amp;` 不会让图片漏掉，转义的 `\![` 保持字面）：只认 POSIX／
-  Windows 盘符绝对路径或 hostless `xdt-image:///`、以图片扩展名结尾，不解码、不碰代码；
+  CommonMark 不认）由 `shared/bareSpaceLocalImages.ts` 从行内**原文片段**补认。文件名被拆成强调节点时仍识别完整引用，
+  邻近的 `&amp;` 照常渲染，转义的 `\![` 保持字面。只认 POSIX／Windows 盘符绝对路径或
+  hostless `xdt-image:///`、以图片扩展名结尾，不解码、不碰代码、HTML 与链接；
   主进程 `taskImageReferences` 与桌面渲染 `remarkBareSpaceLocalImages` 共用，手机端
   `parseLocalMarkdownDestination` 早已支持。改写回 Markdown 时含空格的地址用 `<…>` 包住。本机任务归属、账号、清空、编辑及 rewind 在提交时复核，不扫描其它任务目录。
   自动导入在首次文件系统访问前拒绝 UNC、WebDAV 和 Windows 设备命名空间；先解码兼容
