@@ -19,6 +19,7 @@ vi.mock('../../../localDb/client/current', () => ({
   tryGetDbClient: () => ({ drizzle: holder.drizzle }),
 }));
 
+import { receivedHistoryScope, recordReceivedImageMessage } from '../../shared/receivedImageHistory';
 import { buildWecomAdapter } from '../adapter';
 import type { WecomTextInteractions } from '../textInteractions';
 import { WECOM_PERSONAL_GROUP_WINDOW } from '../../shared/channelGroupWindow';
@@ -86,6 +87,21 @@ describe('wecom group window', () => {
     speaker: { id: 'zhangsan', name: 'zhangsan', isOwner: true },
     attachments: [],
     unsupported: [],
+  });
+
+  it('makes a previously received managed image addressable in the next group turn', async () => {
+    const adapter = buildWecomAdapter({ getOwnerUserId: () => 'zhangsan' } as unknown as WecomIM, interactions, CONFIG);
+    const turn = groupEvent('ask', '看看图');
+    await recordReceivedImageMessage({
+      scope: receivedHistoryScope('wecom', turn.contextId, turn.chatId),
+      messageId: 'photo-id', text: '', attachments: [{
+        kind: 'image', originalName: 'photo.jpg', mimeType: 'image/jpeg', absPath: '/photo.jpg',
+        url: `cindy-media://blobs/${'a'.repeat(64)}.jpg`,
+      }],
+    });
+    const next = await adapter.prepareAgentTurnText?.(turn);
+    expect(next?.agentText).toContain('[图片消息 #photo-id]');
+    expect(next?.agentText).toContain('get_images');
   });
 
   it('records group triggers and the bot reply, and feeds them back as the next turn prefix', async () => {

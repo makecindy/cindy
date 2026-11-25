@@ -61,6 +61,7 @@ export interface HookScriptGeneratorDeps {
     maker: Maker,
     prompt: string,
     opts: {
+      source?: string;
       maxTokens: number;
       timeoutMs: number;
       providerId?: string;
@@ -499,6 +500,7 @@ export async function generateHookScript(
   const startedAt = Date.now();
   // 上方守卫保证:maker 为 null 时必有注入的 requestText(测试桩,不读 maker)
   const response = await requestText(deps.maker as Maker, prompt, {
+    source: 'hook-generation',
     maxTokens: GENERATE_MAX_TOKENS,
     timeoutMs: GENERATE_TIMEOUT_MS,
     providerId: input.providerId,

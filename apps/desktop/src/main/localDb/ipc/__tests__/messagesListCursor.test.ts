@@ -120,6 +120,8 @@ function createDb(): Database.Database {
       id TEXT PRIMARY KEY,
       cleared_at INTEGER,
       source TEXT NOT NULL DEFAULT 'desktop',
+      side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       parent_session_id TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL DEFAULT 0,
@@ -384,10 +386,10 @@ describe('local-db:messages:list cursor', () => {
 
   // Side-chat fork boundary: inherited history remains readable but cannot authorize new actions.
   // This real SQLite fixture covers the query predicate missing from ordinary history tests (unit).
-  it('keeps inherited context out of side-chat authorization, including late answers to old cards', async () => {
+  it.each([0, 1])('keeps inherited context out of side-chat authorization (promoted=%s)', async promoted => {
     const sqlite = createDb();
     try {
-      sqlite.prepare("INSERT INTO sessions (id, source, created_at) VALUES ('s1', 'side-chat', 100)").run();
+      sqlite.prepare("INSERT INTO sessions (id, source, created_at, side_chat_promoted) VALUES ('s1', 'side-chat', 100, ?)").run(promoted);
       insertCostMessage(sqlite, { id: 'parent-grant', role: 'user', createdAt: 10 });
       insertCostMessage(sqlite, { id: 'parent-card', role: 'ask_user', createdAt: 20,
         agentMeta: { autoReviewUserText: { text: 'Deploy now', acceptedAt: 150 } } });
@@ -580,6 +582,30 @@ describe('local-db:messages:list cursor', () => {
       release();
       restore.mockRestore();
       capture.mockRestore();
+      sqlite.close();
+    }
+  });
+
+  // The history view reads through the shared reader (localHistoryViewReader.ts), which restores task
+  // images only through the port the desktop binds (restoreTaskImages); the cases above cover the other
+  // channels. Unbound, the view would show the unrestored rows. Both the outline read and the hydration
+  // of the visible rows restore, so the restored body is what the page carries.
+  it('restores visible images before returning the history view', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertMessage(sqlite, { id: 'answer', createdAt: 1000, content: 'Original with a local task image' });
+    const restore = vi.spyOn(taskImages, 'restoreTaskImageRows').mockImplementation(async (_db, rows) =>
+      rows.map((row) => ({ ...row, content: JSON.stringify('restored-image') })));
+    try {
+      registerMessageIpc();
+      const channel = 'local-db:messages:view';
+      const page = await runDeviceLinkInvokeContext({ controllerDeviceId: 'fixture', channel },
+        () => h.handlers.get(channel)!({}, 's1', { lazyDetails: true })) as HistoryViewPage<HistoryMessageSource>;
+      expect(restore).toHaveBeenCalled();
+      expect(JSON.stringify(page)).toContain('restored-image');
+      expect(JSON.stringify(page)).not.toContain('Original with a local task image');
+    } finally {
+      restore.mockRestore();
       sqlite.close();
     }
   });
@@ -1211,6 +1237,25 @@ describe('markLatestAgentHandoffConsumed boundary broadcast', () => {
     expect(storedAtSend).toEqual({ handoff: 'HANDOFF', consumed: true, fromAgentKind: 'cc' });
   });
 
+  // 2026-11-18 replay contract, unit with the existing in-memory DB: a
+  // single large agent_switch must send the preview through list and push,
+  // while restart and consumption still read/write the original replay.
+  it('bounds list and push bodies while keeping the complete pending handoff', async () => {
+    const handoff = `Record start\n${'新'.repeat(24_000)}\n== End of handoff note; the user's new message follows ==`;
+    const { stored, sends } = open({ handoff, handoffCoverage: 'complete', consumed: false });
+    registerMessageIpc();
+    const listed = await h.handlers.get('local-db:messages:list')!({}, 's1', { limit: 10 }) as
+      Array<{ clientId: string; content: { handoff: string; handoffCoverage: string } }>;
+    const content = listed.find(row => row.clientId === 'sw')?.content;
+    expect(content?.handoff.length).toBeLessThanOrEqual(2048);
+    expect(content?.handoff).toContain('preview shortened');
+    expect(content?.handoffCoverage).toBe('complete');
+    await expect(findPendingAgentHandoff('s1')).resolves.toBe(handoff);
+    await markLatestAgentHandoffConsumed('s1');
+    expect(sends[0]?.args[1]).toMatchObject({ message: { content: { ...content, consumed: true } } });
+    expect(stored()).toEqual({ handoff, handoffCoverage: 'complete', consumed: true });
+  });
+
   it('keeps the owner of the moment it was called: after an owner change the row is written but not shown', async () => {
     const { sends, stored } = open({ handoff: 'HANDOFF', consumed: false });
     const consuming = markLatestAgentHandoffConsumed('s1');
@@ -1756,6 +1801,26 @@ describe('media user-round costs', () => {
     } as unknown as DbClient;
     return { sqlite, db };
   }
+
+  // SQLite/IPC: historical mixed turns have per-model facts but only one scalar.
+  // Include an unpriced final continuation on a narrow page to check the whole round.
+  it('recovers both native currencies on a historical continuation from recorded models', async () => {
+    const { sqlite } = fixture();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1 });
+    const dollars = actual(1);
+    const yuan = { ...actual(3), currency: 'CNY' };
+    insertCostMessage(sqlite, { id: 'segment', role: 'assistant', createdAt: 2, agentMeta: {
+      turnCost: dollars, turnUsageDetails: { perModelCost: [
+        { model: 'own-key', money: dollars }, { model: 'gateway', money: yuan },
+      ] },
+    } });
+    insertCostMessage(sqlite, { id: 'final', role: 'assistant', createdAt: 3 });
+    expect(await readPriorUserRoundCost('s1', 'final')).toMatchObject({ amounts: [dollars, yuan] });
+    registerMessageIpc();
+    const rows = await h.handlers.get('local-db:messages:list')!({}, 's1', { limit: 1 }) as Array<{ id: string; agentMeta: unknown }>;
+    expect(rows).toMatchObject([{ id: 'final', agentMeta: { turnUsageDetails: { userTurnAmounts: [dollars, yuan] } } }]);
+    expect(sqlite.prepare("SELECT agent_meta FROM messages WHERE id = 'final'").pluck().get()).toBeNull();
+  });
 
   it('adds media to the visible round, keeps raw subscription valuation, and does not carry it to the next user', async () => {
     const { sqlite, db } = fixture();

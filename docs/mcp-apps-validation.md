@@ -73,7 +73,7 @@ form elicitation、roots 变更通知均到达原 harness；不同 facade 不串
 
 ```powershell
 pnpm.cmd --filter desktop exec vitest run src/main/mcp-apps/__tests__ src/main/maker-ipc/__tests__/makerSendTransaction.test.ts src/main/maker-ipc/__tests__/agent-input-coordinator.test.ts src/main/maker-ipc/__tests__/messageSourceNote.test.ts src/main/__tests__/mobileClientPromptNote.test.ts --maxWorkers=2 --reporter=dot
-pnpm.cmd --filter @cindy/maker-core exec vitest run src/session.vision-bridge.test.ts src/session.origin.test.ts src/session-control.test.ts src/session-send-outcome.test.ts src/session.close.test.ts src/session.async-user-questions.test.ts --maxWorkers=2 --reporter=dot
+pnpm.cmd --filter @cindy/maker-core exec vitest run src/session.origin.test.ts src/session-control.test.ts src/session-send-outcome.test.ts src/session.close.test.ts src/session.async-user-questions.test.ts --maxWorkers=2 --reporter=dot
 pnpm.cmd --filter @cindy/maker-core build
 ```
 

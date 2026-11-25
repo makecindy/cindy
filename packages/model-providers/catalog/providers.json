@@ -27,6 +27,10 @@
         {
           "id": "xai/grok-imagine-video",
           "name": "Grok Imagine Video"
+        },
+        {
+          "id": "xai/grok-imagine-video-1.5",
+          "name": "Grok Imagine Video 1.5"
         }
       ],
       "routing": {
@@ -1476,6 +1480,31 @@
       "regionHint": "global",
       "models": [
         {
+          "id": "gemini-4-neon",
+          "name": "Gemini 4 Neon",
+          "contextWindow": 1048576
+        },
+        {
+          "id": "gemini-4-carbon",
+          "name": "Gemini 4 Carbon",
+          "contextWindow": 1048576
+        },
+        {
+          "id": "gemini-4-argon",
+          "name": "Gemini 4 Argon",
+          "contextWindow": 1048576
+        },
+        {
+          "id": "gemini-4-hydrogen",
+          "name": "Gemini 4 Hydrogen",
+          "contextWindow": 1048576
+        },
+        {
+          "id": "gemini-3.8-flash",
+          "name": "Gemini 3.8 Flash",
+          "contextWindow": 1048576
+        },
+        {
           "id": "gemini-3.6-flash",
           "name": "Gemini 3.6 Flash",
           "contextWindow": 1000000
@@ -1483,7 +1512,8 @@
         {
           "id": "gemini-3.5-flash",
           "name": "Gemini 3.5 Flash",
-          "contextWindow": 1000000
+          "contextWindow": 1000000,
+          "defaultEnabled": false
         },
         {
           "id": "gemini-3.5-flash-lite",
@@ -1620,6 +1650,30 @@
       "regionHint": "cn",
       "models": [
         {
+          "id": "glm-5.4[1m]",
+          "name": "GLM-5.4 (1M)",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["claude-code"]
+        },
+        {
+          "id": "glm-5.4",
+          "name": "GLM-5.4",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["codex", "pi"],
+          "engineOverrides": {
+            "pi": {
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "max"
+            },
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
+        },
+        {
           "id": "glm-5.3[1m]",
           "name": "GLM-5.3 (1M)",
           "contextWindow": 1000000,
@@ -1693,6 +1747,30 @@
       "docsUrl": "https://docs.z.ai/devpack/overview",
       "regionHint": "global",
       "models": [
+        {
+          "id": "glm-5.4[1m]",
+          "name": "GLM-5.4 (1M)",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["claude-code"]
+        },
+        {
+          "id": "glm-5.4",
+          "name": "GLM-5.4",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["codex", "pi"],
+          "engineOverrides": {
+            "pi": {
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "max"
+            },
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
+        },
         {
           "id": "glm-5.3[1m]",
           "name": "GLM-5.3 (1M)",
@@ -2449,6 +2527,29 @@
         "pi": {
           "baseUrl": "https://amr-link.open-design.ai/v1",
           "modelsUrl": "https://amr-link.open-design.ai/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "tokenrhythm",
+      "name": "基元律动 · Token Rhythm",
+      "docsUrl": "https://tokenrhythm.studio/docs/api-integration",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://tokenrhythm.studio",
+          "modelsUrl": "https://tokenrhythm.studio/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://tokenrhythm.studio/v1",
+          "modelsUrl": "https://tokenrhythm.studio/v1/models",
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "https://tokenrhythm.studio/v1",
+          "modelsUrl": "https://tokenrhythm.studio/v1/models",
           "wireProtocol": "openai-chat"
         }
       }

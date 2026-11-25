@@ -10,6 +10,7 @@ import {
   prepareCodexCustomContextCatalog,
   prepareCodexGuestModelCatalog,
   patchCodexModelMaxContextWindow,
+  readNativeCodexCatalog,
   nativeCodexFallbackModel,
 } from '../codex-custom-context-catalog.js';
 
@@ -241,16 +242,43 @@ describe('Codex custom context model catalog', () => {
       context_window: 500_000, max_context_window: 500_000, auto_compact_token_limit: 450_000 });
   });
 
-  it('keeps user-owned catalog instructions untouched', async () => {
+  // #11025 unit: configured catalog selection must survive a BOM in either TOML
+  // layer without rewriting config or stripping a valid BOM inside a string.
+  // Previous catalog tests only supplied BOM-less files.
+  it.each(['config', 'profile'])('keeps user-owned catalog instructions with a BOM in %s', async layer => {
     const { root, binaryPath } = await createFixtureBinary({ models: [{ slug: 'gpt-5.4' }] });
     const native = { slug: 'glm', base_instructions: '## Planning\nYou have access to an `update_plan` tool\nUser-owned text.\n' };
-    await fs.writeFile(path.join(root, 'custom.json'), JSON.stringify({ models: [native] }));
-    await fs.writeFile(path.join(root, 'config.toml'), 'model_catalog_json = "custom.json"');
+    const catalogName = 'custom\uFEFF.json';
+    await fs.writeFile(path.join(root, catalogName), JSON.stringify({ models: [native] }));
+    const selection = `model_catalog_json = "${catalogName}"`;
+    const config = layer === 'config' ? `\uFEFF${selection}` : '\uFEFFprofile = "selected"';
+    await fs.writeFile(path.join(root, 'config.toml'), config);
+    if (layer === 'profile') await fs.writeFile(path.join(root, 'selected.config.toml'), `\uFEFF${selection}`);
     const result = await prepareCodexCustomContextCatalog({ binaryPath, codexHome: root,
       modelId: 'glm', contextWindow: 500_000, scanChunkBytes: 64 });
     const catalog = JSON.parse(await fs.readFile(result.catalogPath, 'utf8'));
     expect(catalog.models[0]).toEqual({ ...native, context_window: 500_000,
       max_context_window: 500_000, auto_compact_token_limit: 450_000 });
+    await expect(fs.readFile(path.join(root, 'config.toml'), 'utf8')).resolves.toBe(config);
+    if (layer === 'profile') {
+      await expect(fs.readFile(path.join(root, 'selected.config.toml'), 'utf8')).resolves.toBe(`\uFEFF${selection}`);
+    }
+  });
+
+  // #11025 unit: only one BOM at offset zero is tolerated. A malformed explicit
+  // catalog config must still fail, never fall back to cached/bundled models.
+  it.each([
+    '\uFEFFmodel_catalog_json = [',
+    '\uFEFF\uFEFFmodel_catalog_json = "custom.json"',
+    ' \uFEFFmodel_catalog_json = "custom.json"',
+  ])('rejects malformed config without hiding it behind native discovery: %j', async config => {
+    const { root, binaryPath } = await createFixtureBinary({ models: [{ slug: 'gpt-5.4' }] });
+    await fs.writeFile(path.join(root, 'models_cache.json'), '{"models":[{"slug":"cached"}]}');
+    await fs.writeFile(path.join(root, 'config.toml'), config);
+    await expect(readNativeCodexCatalog(binaryPath, root)).rejects.toThrow('Invalid TOML document');
+    await fs.writeFile(path.join(root, 'config.toml'), '\uFEFFprofile = "selected"');
+    await fs.writeFile(path.join(root, 'selected.config.toml'), config);
+    await expect(readNativeCodexCatalog(binaryPath, root)).rejects.toThrow('Invalid TOML document');
   });
 
   it('keeps wire aliases independent and preserves native instructions and tools', () => {

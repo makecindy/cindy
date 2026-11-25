@@ -51,7 +51,7 @@ async function fixture(retainDisplaySnapshot = true) {
 }
 
 describe('multi-device provider rows during real catalog refresh', () => {
-  it('keeps the default model-selector consumer empty and loading during refresh', async () => {
+  it('keeps a default (non-retaining) consumer empty and loading during refresh', async () => {
     const f = await fixture(false);
     const { done } = await f.start();
     expect(f.result.current.get('a')).toMatchObject({ providers: [], loading: true, error: null });
@@ -101,6 +101,19 @@ describe('multi-device provider rows during real catalog refresh', () => {
       await Promise.all([first.done, trailing]);
     });
     expect(f.result.current.get('a')?.providers.map(p => p.id)).toEqual(['latest']);
+  });
+
+  // Gap (2026-11-23): a refresh that timed out once dropped that computer's rows from the picker
+  // rail (and greyed its favorites) until the next successful refresh. Minimal input: refresh → timeout.
+  it('keeps retained rows through a temporary refresh failure without reporting a failed source', async () => {
+    const f = await fixture();
+    const { done } = await f.start();
+    await act(async () => {
+      f.pending.get('a')!.reject(new Error('[DEVICE_LINK_TIMEOUT] remote did not answer'));
+      await done;
+    });
+    expect(f.result.current.get('a')).toMatchObject({ loading: false, error: null });
+    expect(f.result.current.get('a')?.providers.map(p => p.id)).toEqual(['xd', 'ollama']);
   });
 
   it('clears display data on failure instead of presenting it as a usable directory', async () => {

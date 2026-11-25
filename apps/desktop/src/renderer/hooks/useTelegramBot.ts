@@ -6,9 +6,9 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('useTelegramBot');
 /** Telegram 数字 user id(私聊 chat id 同值);现网长度 5-15 位左右, 放宽到 4-20。 */
-const OWNER_USER_ID_PATTERN = /^\d{4,20}$/;
+export const OWNER_USER_ID_PATTERN = /^\d{4,20}$/;
 /** BotFather token 形态: `<botId>:<secret>` — 只做粗校验挡手滑。 */
-const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{20,}$/;
+export const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{20,}$/;
 
 interface TelegramBotCache {
   ownerUserId: string;
@@ -42,6 +42,8 @@ export interface UseTelegramBotReturn {
   status: TelegramBotTransportStatus;
   botUsername: string | null;
   validationError: string | null;
+  /** 上次保存只是建连握手超时: 输入原样保留, 卡片提示「连接超时, 请重试」。 */
+  saveTimedOut: boolean;
   isSaving: boolean;
   isDisconnecting: boolean;
   /** 上线/下线切换在途(与解绑分开, 两个按钮各自禁用)。 */
@@ -65,6 +67,7 @@ export function useTelegramBot(): UseTelegramBotReturn {
     () => cachedState?.status ?? { kind: 'idle' },
   );
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [saveTimedOut, setSaveTimedOut] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [isTogglingOnline, setIsTogglingOnline] = useState(false);
@@ -97,6 +100,7 @@ export function useTelegramBot(): UseTelegramBotReturn {
   useEffect(() => {
     const unsub = window.electronAPI.telegramBot.onStatusChange((update) => {
       setStatus(update.status);
+      if (update.status.kind === 'connected') setSaveTimedOut(false);
       setBotUsername(update.botUsername);
       cachedState = {
         ownerUserId: cachedState?.ownerUserId ?? '',
@@ -110,11 +114,13 @@ export function useTelegramBot(): UseTelegramBotReturn {
   const setToken = useCallback((v: string) => {
     setTokenState(v);
     setValidationError(null);
+    setSaveTimedOut(false);
   }, []);
 
   const setOwnerUserId = useCallback((v: string) => {
     setOwnerUserIdState(v);
     setValidationError(null);
+    setSaveTimedOut(false);
   }, []);
 
   const connect = useCallback(async () => {
@@ -136,6 +142,7 @@ export function useTelegramBot(): UseTelegramBotReturn {
     }
 
     setValidationError(null);
+    setSaveTimedOut(false);
     setIsSaving(true);
     try {
       const result = await window.electronAPI.telegramBot.setConfig({
@@ -144,13 +151,19 @@ export function useTelegramBot(): UseTelegramBotReturn {
       });
       const canonicalOwnerUserId = result.ownerUserId ?? '';
       setStatus(result.status);
-      setOwnerUserIdState(canonicalOwnerUserId);
+      // 只是超时: 保留刚填的主人 ID(token 本就不清), 用原输入直接重试, 不必重填。
+      if (!result.saveTimedOut) setOwnerUserIdState(canonicalOwnerUserId);
       setBotUsername(result.botUsername);
       cachedState = {
         ownerUserId: canonicalOwnerUserId,
         botUsername: result.botUsername,
         status: result.status,
       };
+      if (result.saveTimedOut) {
+        setSaveTimedOut(true);
+        toast.error(t('settings.telegramBot.connectTimedOut'));
+        return false;
+      }
       if (result.saveErrorStatus?.kind === 'error' || result.status.kind === 'error') {
         toast.error(t('logic.toasts.telegramBotConnectFailed'));
         return false;
@@ -177,6 +190,7 @@ export function useTelegramBot(): UseTelegramBotReturn {
       setTokenState('');
       setBotUsername(null);
       setValidationError(null);
+      setSaveTimedOut(false);
       cachedState = {
         ownerUserId: '',
         botUsername: null,
@@ -248,6 +262,7 @@ export function useTelegramBot(): UseTelegramBotReturn {
     status,
     botUsername,
     validationError,
+    saveTimedOut,
     isSaving,
     isDisconnecting,
     isTogglingOnline,

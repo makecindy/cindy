@@ -64,6 +64,15 @@ describe('executeSidebarCommand', () => {
     expect(openPluginTaskTab).toHaveBeenCalledWith('s1', 'sim', { userInitiated: userInitiated === true });
   });
 
+  // Unit: detached preview delivery must retain the same plugin identity and passive open.
+  it('passes plugin preview reuse through the detached command executor', async () => {
+    const pluginPreview = { instanceId: 'sim', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 }, reuseExisting: true as const };
+    await executeSidebarCommand({ type: 'open-web-browser', sessionId: 's1', url: 'https://example.com/', pluginPreview });
+    expect(openUrlInSidebarBrowser).toHaveBeenCalledWith('s1', 'https://example.com/', {
+      pluginPreview, userInitiated: false,
+    });
+  });
+
   it('dispatches every command kind to the current renderer host implementation', async () => {
     const searchJump = {
       kind: 'conversation-search' as const,

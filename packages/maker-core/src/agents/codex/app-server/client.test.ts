@@ -214,6 +214,39 @@ describe('detectAuthInvalidationReason', () => {
   });
 });
 
+// Log redaction: the timing trace line carries thread and response ids. It exists only for
+// the speed display and must never reach Cindy's logs, while other stderr stays logged as
+// before. Unit tier through the client's stderr entry point.
+describe('AppServerClient response timing', () => {
+  it('hands the timing line to the speed and keeps it out of the log', () => {
+    const transport = new FakeTransport();
+    const lines: string[] = [];
+    const recording: Logger = {
+      ...logger,
+      debug: (_m: string, d?: { line?: string }) => { if (d?.line) lines.push(d.line); },
+      warn: (_m: string, d?: { line?: string }) => { if (d?.line) lines.push(d.line); },
+      error: (_m: string, d?: { line?: string }) => { if (d?.line) lines.push(d.line); },
+      child: () => recording,
+    };
+    const onResponseTiming = vi.fn();
+    const client = new AppServerClient({ createTransport: () => transport, logger: recording, onResponseTiming });
+    client.start();
+    const payload = JSON.stringify({ type: 'responsesapi.websocket_timing', timing_metrics: {
+      response_id: 'resp_1', num_sampled_tokens_total: 51, critical_path: { sampling_and_stream_total_ms: 894 },
+    } });
+    transport.emitStderr(`TRACE codex_api::responses_websocket_timing: responses websocket timing thread_id="t" turn_id="u" warmup=false payload=${JSON.stringify(payload)}`);
+    // Unreadable timing lines are dropped too: they carry the same ids.
+    transport.emitStderr('TRACE codex_api::responses_websocket_timing: responses websocket timing thread_id="t" payload="{"');
+    transport.emitStderr('WARN codex_core: something else');
+
+    expect(onResponseTiming).toHaveBeenCalledTimes(1);
+    expect(onResponseTiming).toHaveBeenCalledWith({
+      threadId: 't', turnId: 'u', responseId: 'resp_1', sampledTokensTotal: 51, samplingMs: 894,
+    });
+    expect(lines).toEqual(['WARN codex_core: something else']);
+  });
+});
+
 describe('AppServerClient auth invalidation', () => {
   it('keeps stderr diagnostic-only even when it contains auth keywords', () => {
     const transport = new FakeTransport();

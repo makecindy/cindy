@@ -11,10 +11,7 @@ export const UPSTREAM_STREAM_INTERRUPTED_REASON = 'upstream-stream-interrupted';
 
 const STREAM_INTERRUPTED_RE = /Response API in-stream error/i;
 
-export function isStreamInterruptedErrorMessage(
-  message: string,
-  reason?: string | null,
-): boolean {
+export function isStreamInterruptedErrorMessage(message: string, reason?: string | null): boolean {
   if (reason === UPSTREAM_STREAM_INTERRUPTED_REASON) return true;
   return STREAM_INTERRUPTED_RE.test(message);
 }
@@ -22,7 +19,7 @@ export function isStreamInterruptedErrorMessage(
 const OPENAI_API_ERROR_PREFIX = /^(?:Azure )?OpenAI API error \(\d+\):\s*/i;
 const LITELLM_ERROR_PREFIX = /^litellm\.\w+Error:\s*/;
 const VENDOR_JSON_EXCEPTION_RE = /^([A-Za-z][\w.]*)\s*-\s*(\{[\s\S]*\})$/;
-const MAX_UNWRAP_DEPTH = 5;
+const MAX_UNWRAP_DEPTH = 12;
 
 function isLiteLlmEnvelope(text: string): boolean {
   return LITELLM_ERROR_PREFIX.test(text) || /^litellm\./i.test(text);
@@ -33,35 +30,50 @@ function unwrapLiteLlmInner(text: string): string {
   return stripped.length > 0 ? stripped : text;
 }
 
+/** A provider can return JSON directly or embed it between a transport prefix and suffix. */
+function embeddedErrorObject(text: string): unknown {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
 function extractErrorMessage(value: unknown, depth = 0): string | null {
   if (depth > MAX_UNWRAP_DEPTH || value == null) return null;
   if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    if (trimmed.startsWith('{')) {
-      try {
-        return extractErrorMessage(JSON.parse(trimmed), depth + 1) ?? trimmed;
-      } catch {
-        return trimmed;
-      }
+    const text = value.trim();
+    const nested = embeddedErrorObject(text);
+    if (nested) {
+      const explanation = extractErrorMessage(nested, depth + 1);
+      if (explanation) return explanation;
     }
-    const peeled = peelVendorJsonPayload(trimmed);
-    if (peeled !== trimmed) {
-      return extractErrorMessage(peeled, depth + 1) ?? peeled;
-    }
-    return trimmed;
+    return text || null;
   }
-  if (typeof value === 'object' && !Array.isArray(value)) {
-    const obj = value as Record<string, unknown>;
-    if ('error' in obj) {
-      const fromError = extractErrorMessage(obj.error, depth + 1);
-      if (fromError) return fromError;
-    }
-    if (typeof obj.message === 'string') {
-      return extractErrorMessage(obj.message, depth + 1);
-    }
-  }
-  return null;
+  if (typeof value !== 'object' || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  // Producers may supply end-user copy separately from their diagnostic message.
+  if (typeof obj.user_message === 'string' && obj.user_message.trim())
+    return obj.user_message.trim();
+  const nestedError =
+    typeof obj.error === 'object' ? extractErrorMessage(obj.error, depth + 1) : null;
+  return (
+    nestedError ??
+    extractErrorMessage(obj.message, depth + 1) ??
+    extractErrorMessage(obj.detail, depth + 1) ??
+    (typeof obj.error === 'string' ? extractErrorMessage(obj.error, depth + 1) : null)
+  );
+}
+
+/** Only promote a bounded message field, never the transport wrapper or a stack trace. */
+export function providerErrorExplanation(raw: string): string | null {
+  if (raw.length > 64_000) return null;
+  const message = extractErrorMessage(embeddedErrorObject(raw));
+  if (!message || message.length > 1500 || /(?:^\s*[\[{]|\n\s*at\s)/.test(message)) return null;
+  return message;
 }
 
 /** `XaiException - {json}` → 内层 error.message；非 JSON 后缀原样保留。 */

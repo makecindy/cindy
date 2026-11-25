@@ -25,7 +25,7 @@ import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { isSameProvider } from './matching.js';
-import type { ProviderGroupCodexUsageSnapshot, ProviderGroupUsageInvalidation } from './usage.js';
+import type { ProviderGroupCodexUsageSnapshot, ProviderGroupShareQuotaSnapshot, ProviderGroupUsageInvalidation } from './usage.js';
 
 export interface ProviderGroupDirectoryDeps {
   /** 本机供应商(含未连接 / 停用的，便于给出原因)。 */
@@ -55,6 +55,11 @@ export interface ProviderGroupDirectoryDeps {
   readCodexUsage?(member: ProviderGroupMember): Promise<ProviderGroupCodexUsageSnapshot | null>;
   /** At the quick-pick deadline, include completed sources without waiting for a pending sibling. */
   peekCodexUsage?(member: ProviderGroupMember): ProviderGroupCodexUsageSnapshot | null;
+  /**
+   * 分享来的电脑：分享者开放「允许查看剩余额度」时经该分享自己的授权读到的额度(provider-groups.md §5「分享边界」)。
+   * 未开放、读不到、超时为 null，按读不到用量处理。
+   */
+  readShareQuota?(member: ProviderGroupMember): Promise<ProviderGroupShareQuotaSnapshot | null>;
   invalidateUsage?(scope?: ProviderGroupUsageInvalidation): void;
   now(): number;
   /** Monotonic clock paired with now() for bounded budgets and cache deadlines. */
@@ -92,6 +97,8 @@ export interface ResolvedProviderGroupMember {
   /** Internal only: never included in the group wire projection or shared with guests. */
   claudeUsage?: ClaudeSubscriptionUsageSnapshot | null;
   codexUsage?: ProviderGroupCodexUsageSnapshot | null;
+  /** Internal only, like the snapshots above: guests and the group wire view never receive it. */
+  shareQuota?: ProviderGroupShareQuotaSnapshot | null;
   /**
    * 选电脑时到点还没读完(那台慢或不响应)：这次按不能用算，不代表读到了离线；读取照常在后台完成、留在缓存里。
    */
@@ -99,6 +106,8 @@ export interface ResolvedProviderGroupMember {
 }
 
 export interface ResolveMembersOptions {
+  /** Read base availability before fetching optional quota for the settings row. */
+  skipUsage?: boolean;
   /**
    * 最多等多久：到点已经有一台 `enough` 的电脑就不再等其余的(没读完的标 `pending`)；一台都还没有时照旧等全部读完。
    * 不给 = 等全部读完。
@@ -418,10 +427,15 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
         if (member.kind === 'share') return resolveShare(member);
         return deviceListPromise.then((deviceList) => resolveDevice(member, deviceList));
       });
+      if (options?.skipUsage) return Promise.all(partialReads);
       const reads = partialReads.map(async (read, index) => {
         const member = config.members[index]!;
         const resolved = await read;
-        if (member.kind === 'share' || resolved.state !== 'ok' || !resolved.view?.auth) return resolved;
+        if (member.kind === 'share') {
+          return resolved.state === 'ok' && deps.readShareQuota
+            ? { ...resolved, shareQuota: await deps.readShareQuota(member).catch(() => null) } : resolved;
+        }
+        if (resolved.state !== 'ok' || !resolved.view?.auth) return resolved;
         const source = providerWeeklyQuotaSource(resolved.view);
         if (source === 'codex' && deps.readCodexUsage) {
           return { ...resolved, codexUsage: await deps.readCodexUsage(member).catch(() => null) };

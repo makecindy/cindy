@@ -11,10 +11,14 @@ const mocks = vi.hoisted(() => ({
   getVisibleMergedRemoteSessions: vi.fn<() => Array<Record<string, unknown>>>(),
   getSessionFor: vi.fn(),
   navigate: vi.fn(),
-  pinSessionOrigin: vi.fn(),
+  addSessionDetail: vi.fn(),
   resolveSessionRoute: vi.fn(),
 }));
 
+vi.mock('@/lib/sessionService', async (original) => ({
+  ...await original<typeof import('@/lib/sessionService')>(),
+  resolveReferences: async ([sessionId]: string[]) => [{ sessionId, state: 'missing' }],
+}));
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
 }));
@@ -26,14 +30,19 @@ vi.mock('@/lib/secondaryWindow', () => ({
 }));
 
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
+  getSessionDeviceId: () => undefined,
   remoteProjectsStore: {
+    getDeviceName: () => 'Host',
+    captureSessionRead: () => Object.assign(() => true, { mergeActivity: (row: unknown) => row }),
+    getDeviceSessions: mocks.getVisibleMergedRemoteSessions,
     getVisibleMergedRemoteSessions: mocks.getVisibleMergedRemoteSessions,
-    pinSessionOrigin: mocks.pinSessionOrigin,
+    pinSessionOrigin: vi.fn(),
+    addSessionDetail: mocks.addSessionDetail,
   },
 }));
 
 vi.mock('@/lib/makerTransport', () => ({
-  getSessionFor: mocks.getSessionFor,
+  getSessionOnDevice: mocks.getSessionFor,
 }));
 
 vi.mock('@/lib/orcaSessionIdentity', () => ({
@@ -54,7 +63,7 @@ describe('SecondaryWindowBootGate', () => {
     mocks.getVisibleMergedRemoteSessions.mockReset();
     mocks.getSessionFor.mockReset();
     mocks.navigate.mockReset();
-    mocks.pinSessionOrigin.mockReset();
+    mocks.addSessionDetail.mockReset();
     mocks.resolveSessionRoute.mockReset();
     mocks.getBootSessionId.mockReturnValue('worker-remote');
     mocks.getBootDeviceId.mockReturnValue('device-remote');
@@ -65,7 +74,19 @@ describe('SecondaryWindowBootGate', () => {
     cleanup();
   });
 
-  it('reads remote Worker metadata after pinning when the mirror has not hydrated', async () => {
+  // Unit regression: these sidebar targets have no local task row at window boot.
+  it.each(['/bots/mate', '/bots/groups/group-1', '/bots/remote/mac/mate'])(
+    'opens the dragged conversation %s directly in the secondary window',
+    async target => {
+      mocks.getBootSessionId.mockReturnValue(target);
+      mocks.getBootDeviceId.mockReturnValue(null);
+      render(<SecondaryWindowBootGate />);
+      await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith(target, { replace: true }));
+      expect(mocks.resolveSessionRoute).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reads remote Worker metadata before registering its host when the mirror has not hydrated', async () => {
     const workerSession = { id: 'worker-remote', orcaRole: 'worker' };
     mocks.getSessionFor.mockResolvedValue(workerSession);
     mocks.resolveSessionRoute.mockResolvedValue('/cc-agent/lead-remote?worker=worker-remote');
@@ -77,10 +98,10 @@ describe('SecondaryWindowBootGate', () => {
         replace: true,
       }),
     );
-    expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('device-remote', 'worker-remote');
-    expect(mocks.getSessionFor).toHaveBeenCalledWith('worker-remote');
-    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('worker-remote', workerSession);
-    expect(mocks.pinSessionOrigin.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.addSessionDetail).toHaveBeenCalledWith('device-remote', workerSession);
+    expect(mocks.getSessionFor).toHaveBeenCalledWith('worker-remote', 'device-remote');
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('worker-remote', workerSession, { remote: true });
+    expect(mocks.addSessionDetail.mock.invocationCallOrder[0]).toBeGreaterThan(
       mocks.getSessionFor.mock.invocationCallOrder[0],
     );
     expect(mocks.getSessionFor.mock.invocationCallOrder[0]).toBeLessThan(

@@ -13,7 +13,7 @@ const endpoint = z.string().url().max(2048).refine(value => {
 }, 'Use a public endpoint without credentials, query or fragment');
 const interruptCodex = z.boolean().optional().describe('Only after the owner agrees to interrupt running local Codex work; call from Claude Code or Pi.');
 const connectionModel = z.strictObject({ id, name: z.string().min(1).max(256).optional(),
-  mode: z.enum(['chat', 'image_generation', 'video_generation']).optional().describe('媒体型号按用户资料显式声明；不根据品牌或型号名称猜测。Guide 可随后通过 manage_media_guide 补齐。'),
+  mode: z.enum(['chat', 'image_generation', 'video_generation', 'audio_speech', 'audio_transcription', 'realtime']).optional().describe('按用户资料声明型号类型；realtime 对话需声明 audio 输入与输出，账号权限需实际验证。图片/视频 Guide 可通过 manage_media_guide 补齐。'),
   modalities: z.strictObject({ input: z.array(z.enum(['text', 'image', 'video', 'audio'])).min(1).max(4),
     output: z.array(z.enum(['text', 'image', 'video', 'audio'])).min(1).max(4) }).optional().describe('实际输入/输出能力；图片编辑或图生视频须声明 image 输入。媒体能力独立于聊天图片输入和 supportsImageGeneration。'),
 });
@@ -57,6 +57,8 @@ export const appModelConfiguration = z.discriminatedUnion('setting', [
   z.strictObject({ setting: z.literal('imageInput'), value: z.boolean().nullable() }),
   z.strictObject({ setting: z.literal('price'), value: quote.nullable() }),
 ]);
+/** A provider whose accounts Cindy manages: a subscription provider or a plugin engine provider. */
+const accountProviderId = z.string().regex(/^(?:[a-z0-9_-]{1,40}|acp-plugin:[A-Za-z0-9._-]{1,200}:[a-z][a-z0-9-]{0,31}(?:~[a-z0-9]{8})?)$/);
 export const appProviderChange = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('rename'), providerId: id, name: z.string().trim().min(1).max(128) }),
   z.strictObject({ action: z.literal('order'), providerIds: z.array(id).min(1).max(512) }),
@@ -67,11 +69,14 @@ export const appProviderChange = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('restore'), providerId: id }),
   // 2026-11-13: any provider that holds subscription accounts (built-in, created by Cindy, or a
   // legacy Codex connection); the host resolves it and rejects others with the settings page's checks.
-  z.strictObject({ action: z.literal('subscriptionAccounts'), providerId: z.string().regex(/^[a-z0-9_-]{1,40}$/),
+  // 2026-11-23: also plugin engine providers (acp-plugin:…). Never a secret: keys are typed on the
+  // computer that has the plugin, in its own window.
+  z.strictObject({ action: z.literal('subscriptionAccounts'), providerId: accountProviderId,
     command: z.strictObject({
       action: z.enum(['read', 'add', 'create', 'login', 'cancel', 'remove', 'configure', 'place', 'merge', 'remove-provider']),
       accountId: id.optional(), loginKey: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).optional(),
-      target: z.string().regex(/^[a-z0-9_-]{1,40}$/).nullable().optional(),
+      methodId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/).optional(),
+      target: accountProviderId.nullable().optional(),
       strategy: z.enum(['least', 'round', 'order', 'weight', 'usage']).optional(),
       paused: z.boolean().optional(), limit: z.number().int().min(1).max(16).nullable().optional(), weight: z.number().int().min(1).max(100).optional(),
     }) }),
@@ -109,13 +114,13 @@ export function registerAppModelsTools(registry: XdtHelperToolRegistry, callback
     description: '读取某个供应商、引擎与模型的选择器显示开关、上下文窗口覆盖、压缩阈值、图片输入与价格覆盖。先从 list_model_providers 取准确身份。',
     inputShape: { target }, handler: input => invoke({ operation: 'get', ...input }) });
   registry.register({ name: 'manage_media_guide', category: 'settings',
-    description: '按需获取或补齐指定 provider/引擎/model 的媒体调用 Guide。每次需要时 get：自定义优先，没有则官方；source=official 明确尝试官方说明，执行连接、账号与计费不变。缺失时根据用户给的文档链接、cURL、示例或提示生成声明式 HTTP Guide，缺关键资料再请用户协助；不要让用户编写 JSON。validate 只检查不调用；save 按现有任务权限保存，expectedRevision 使用 get 的 customRevision（首次为 null），evidence 仅填 kind 来源类型，不传资料原文或凭据，不能伪造 officialDocs。保存后再次 get 自然生效；prepare 固定快照，换 Guide 重新 prepare。实际生成只能通过 cindy.media 并经过当前 Ask/Auto/完全访问权限及附件交接，不得用 shell/raw HTTP 绕过。只有真实媒体交付才算验证成功；pending、提交结果未知或已经生成但交付失败时恢复原 invocation，不能重复生成。Guide 不得含 host、凭证或执行脚本。',
+    description: '按需获取或补齐媒体调用 Guide。内置媒体来源也支持自定义覆盖，按供应商和型号保存、与聊天引擎无关；沿用原执行器，覆盖其输入参数和说明，不替换托管地址、鉴权或图片传输格式，也不要求 configure_model_connection。Cindy AI（providerId=xd）只能 get 官方 Guide，不允许 validate/save 覆盖。用户自带 HTTP 连接仍按 provider/引擎/model 隔离。每次需要时 get：自定义优先，没有则官方；source=official 明确尝试官方说明，执行连接、账号与计费不变。缺失时根据用户给的文档链接、cURL、示例或提示补齐；自带连接使用声明式 HTTP Guide，内置图片使用原图片适配器的输入格式；缺关键资料再请用户协助，不要让用户编写 JSON。validate 只检查不调用；save 按现有任务权限保存，expectedRevision 使用 get 的 customRevision（首次为 null），evidence 仅填 kind，不传资料原文或凭据，不能伪造 officialDocs。保存后再次 get 自然生效；prepare 固定快照，换 Guide 重新 prepare。实际生成只能通过 cindy.media 并经过当前权限及附件交接，不得用 shell/raw HTTP 绕过。只有真实媒体交付才算验证成功；pending、提交结果未知或已生成但交付失败时恢复原 invocation，不能重复生成。Guide 不得含 host、凭证或执行脚本。',
     inputShape: { target, change: mediaGuideChange }, handler: (input, signal) => invoke({ operation: 'mediaGuide', ...input }, signal) });
   registry.register({ name: 'set_model_configuration', category: 'settings',
     description: '修改用户指定模型的一项高级配置；visible 控制是否在选择器显示，不等于停用；value=null 删除该项覆盖并跟随默认，不影响其它配置。价格只影响本地用量估算，不改供应商实际账单。复用设置页校验与生效逻辑。',
     inputShape: { target, change: appModelConfiguration }, handler: input => invoke({ operation: 'set', ...input }) });
   registry.register({ name: 'configure_model_provider', category: 'settings',
-    description: '管理这台电脑的供应商名称、顺序、开关与模型发现。subscriptionAccounts 管 Anthropic/OpenAI 订阅账号，providerId 可以是 anthropic/openai 或 list_model_providers 里带 subscriptionAccountPool 的同类供应商（每个供应商只分配自己的账号）：command.action=read 查看该供应商的账号；create（providerId 只能是 anthropic/openai）登录另一个账号并作为单独的新供应商，add 登录另一个账号并加入 providerId 指定的供应商，login 重新登录已有账号，这三者都用官方 CLI 浏览器登录（需唯一 loginKey），cancel 用同一 loginKey；place 把 accountId 移到 target 指定的同类供应商，target=null 为拿出来作为单独供应商；merge 把该供应商的全部账号并入 target；remove-provider 删除 Cindy 新建的订阅供应商，不再使用其账号、保留 CLI 文件。所有订阅账号均可移动和移出；内部账号 ID default 仅标识官方 CLI 目录，不代表优先账号。移动、并入与拿出不改任务与账号的绑定：已有任务继续用原账号；拿出生成的新供应商默认不开远程调用、分享和供应商组。configure 设置策略或账号暂停、并发上限（limit=null 为不限制，未设置过即不限制；达到上限不再分配新任务）、权重；remove 移出指定账号，保留 CLI 文件。read 的 planTier（Claude）与 planType（Codex）保留上游套餐档位，缺失时不推测。账号 id 来自 read，不收凭证或自定义路径。供应商 remove/restore 只管理已断开内置来源的显示。',
+    description: '管理这台电脑的供应商名称、顺序、开关与模型发现。subscriptionAccounts 管 Anthropic/OpenAI 订阅账号，providerId 可以是 anthropic/openai 或 list_model_providers 里带 subscriptionAccountPool 的同类供应商（每个供应商只分配自己的账号）：command.action=read 查看该供应商的账号；create（providerId 只能是 anthropic/openai）登录另一个账号并作为单独的新供应商，add 登录另一个账号并加入 providerId 指定的供应商，login 重新登录已有账号，这三者都用官方 CLI 浏览器登录（需唯一 loginKey），cancel 用同一 loginKey；place 把 accountId 移到 target 指定的同类供应商，target=null 为拿出来作为单独供应商；merge 把该供应商的全部账号并入 target；remove-provider 删除 Cindy 新建的订阅供应商，不再使用其账号、保留 CLI 文件。所有订阅账号均可移动和移出；内部账号 ID default 仅标识官方 CLI 目录，不代表优先账号。移动、并入与拿出不改任务与账号的绑定：已有任务继续用原账号；拿出生成的新供应商默认不开远程调用、分享和供应商组。configure 设置策略或账号暂停、并发上限（limit=null 为不限制，未设置过即不限制；达到上限不再分配新任务）、权重；remove 移出指定账号，保留 CLI 文件。read 的 planTier（Claude）与 planType（Codex）保留上游套餐档位，缺失时不推测。账号 id 来自 read，不收凭证或自定义路径。插件引擎（providerId=acp-plugin:…，来自 list_available_models 的 plugin_engines）在插件声明支持时同样管理账号：add/login 用 methodId 选插件的登录方式，只能用浏览器登录类方式；需要填 Key 的方式请主人在这台电脑的设置页填写；没有 create。供应商 remove/restore 只管理已断开内置来源的显示。',
     inputShape: { change: appProviderChange }, handler: input => invoke({ operation: 'provider', ...input }) });
   registry.register({ name: 'configure_model_connection', category: 'settings',
     description: '直接配置这台电脑的 API 模型连接，无需 Computer Use。presets 查看模板；create 使用 presetId 或显式 runtimes（模型可先为空），返回新连接 ID；read 查看连接。API key 只由主人通过 Cindy 安全输入卡交给宿主，禁止在参数、对话或文件中传密钥；不同端点分别填写。none 仅用于免密本机服务。setKey 更换指定引擎密钥；setRuntime 设置一个引擎的端点、协议与型号，变更端点时重新安全输入密钥，保留其它引擎；remove 删除该连接及专属凭证，不删历史。refreshModels 获取并合并型号、保留用户覆盖；setModels 设置型号名单；test 经保存路线发最小推理请求，可能计费。保存、目录发现、推理验证分别报告。需要重载且 Codex 正忙时返回 confirmationRequired，不写入；主人同意中断后可从 Claude Code/Pi 使用 interruptCodex=true，不能中断调用工具的 Codex 自己。不支持 SSH；手机可经原有加密代输入卡填写密钥。',

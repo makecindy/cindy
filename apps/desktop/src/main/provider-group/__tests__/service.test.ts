@@ -808,6 +808,24 @@ describe('onTurnError (automatic switch)', () => {
     expect(none.deps.continueSession).not.toHaveBeenCalled();
   });
 
+  // Unit, PR #12569: both declined and exhausted/rearmed turn recovery must use
+  // the caller-owned fallback. The global fallback cannot carry a Schedule run.
+  it.each(['declined', 'rearmed'] as const)('retains the turn-owned quota fallback: %s', async mode => {
+    const h = harness({ members: mode === 'rearmed' ? [LOCAL] : [LOCAL, MINI], autoSwitch: mode === 'rearmed' });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    if (mode === 'rearmed') {
+      h.deps.leaseRecovery.mockReturnValueOnce(LEASE).mockReturnValue(null);
+      h.deps.rearmContinue.mockReturnValue(42);
+    }
+    const service = createProviderGroupService({ ...h.deps, readAccountSwitch: async () => null });
+    const fallback = vi.fn();
+    await service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, { fallback });
+    expect(fallback).toHaveBeenCalledOnce();
+    expect(fallback.mock.calls[0][0]).toBe(mode === 'rearmed' ? 42 : 1);
+    expect(fallback.mock.calls[0][1]).toEqual(mode === 'rearmed' ? { accountSwitchChecked: true } : undefined);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
   it('stops without blaming the target when the handoff fails for an unrelated reason', async () => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
@@ -1751,6 +1769,36 @@ describe('switching accounts between messages to balance quota', () => {
 });
 
 describe('onTurnError — one decision for every failure (failurePolicy)', () => {
+  // Unit, §6.1: existing stay coverage used invalid_request, which hides this
+  // gap. A terminal shared-provider scope refusal with a healthy spare must
+  // preserve the original error rather than move the task or enqueue a retry.
+  it('returns an explicit shared-provider scope refusal without relocating or continuing', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    const signals = { message: 'unexpected status 403 Forbidden: [SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.', errorStatus: 403 };
+    await h.service.onTurnError('s1', signals, 7);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledTimes(1);
+    expect(h.bindings.get('s1')?.memberKey).toBe('local');
+    expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
+  });
+
+  // Unit, §6.1 / review 4614256549: a disappearing model used the same old
+  // 403 sentence as a scope denial. A healthy spare must still receive the task.
+  it('continues on a healthy member after an ambiguous legacy model refusal', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    await h.service.onTurnError('s1', {
+      message: 'unexpected status 403 Forbidden: This request is outside the provider shared with you.', errorStatus: 403,
+    }, 7);
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(1);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
+  });
+
   it('switches when the agent there ends mid-turn without a terminal event (default: switch), without cooling it', async () => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });

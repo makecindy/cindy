@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { encodeCatalogModelPin } from '../../../shared/catalogModelPin.js';
-import { auxiliaryChainSessionCandidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
+import {
+  auxiliaryChainSessionCandidates,
+  pluginTaskRouteAttempts,
+  pluginTaskSelectionIsOpen,
+  resolveLightestPluginTaskFallback,
+} from '../pluginTaskDefaultRoute.js';
 
 describe('auxiliaryChainSessionCandidates', () => {
   // Rule: a plugin's own persistent task (no originating session) follows the
@@ -13,6 +18,8 @@ describe('auxiliaryChainSessionCandidates', () => {
       'litellm-gpt-5.4-mini',
       encodeCatalogModelPin({ providerId: 'xd', agentKind: 'codex', model: 'deepseek/deepseek-v4-flash' }),
       'not-a-ref',
+      // Retained remote settings cannot become a local plugin task route.
+      'remote-cat:other:cat:xd:codex:remote-only',
     ];
     expect(auxiliaryChainSessionCandidates(refs)).toEqual([
       { agentKind: 'codex', providerId: 'xd', model: 'deepseek/deepseek-v4-flash' },
@@ -41,5 +48,26 @@ describe('auxiliaryChainSessionCandidates', () => {
     expect(pluginTaskSelectionIsOpen({ effort: 'low' })).toBe(true);
     expect(pluginTaskSelectionIsOpen({ model: 'gpt-6.1-sol' })).toBe(false);
     expect(pluginTaskSelectionIsOpen({ providerId: 'openai' })).toBe(false);
+  });
+});
+
+describe('resolveLightestPluginTaskFallback', () => {
+  // Rule (docs/product-rules/auxiliary-model-health.md, 2026-11-23): when no
+  // auxiliary candidate can run a plugin task, the new-task model is used at its
+  // lightest accepted effort instead of the user's coding effort (xhigh made
+  // subtitle passages 3x slower). tier: unit.
+  const defaultRoute = { agentKind: 'codex', model: 'gpt-6.2-astra', providerId: 'openai-1', effort: 'xhigh', fastMode: 'ultrafast' as const };
+  it.each([
+    ['accepts low', ['low', 'medium', 'xhigh'], 'low'],
+    ['only medium among the light levels', ['medium', 'xhigh'], 'medium'],
+    ['no light level at all', ['xhigh'], 'xhigh'],
+  ] as const)('the new-task model %s', async (_name, accepted, expected) => {
+    const resolve = async (selection: { effort?: string; fastMode?: boolean | 'ultrafast' }) => {
+      if (selection.effort === undefined) return defaultRoute;
+      if (!(accepted as readonly string[]).includes(selection.effort)) throw new Error('effort not supported');
+      return { ...defaultRoute, effort: selection.effort, fastMode: selection.fastMode ?? false };
+    };
+    const route = await resolveLightestPluginTaskFallback(resolve, {});
+    expect(route).toEqual({ ...defaultRoute, effort: expected });
   });
 });

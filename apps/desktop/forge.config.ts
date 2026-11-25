@@ -456,6 +456,8 @@ const isDev =
   process.env.NODE_ENV !== 'production' &&
   !process.argv.includes('make') &&
   !process.argv.includes('package');
+const usePrebuiltPersonalInterface = isDev && /^[a-f0-9]{64}$/.test(process.env.CINDY_PERSONAL_ASSET_DIGEST ?? '') &&
+  !!process.env.CINDY_PERSONAL_GENERATION && !!process.env.CINDY_PERSONAL_MONITOR_DIR;
 const isWin = process.platform === 'win32';
 
 /**
@@ -1054,6 +1056,9 @@ function buildSwiftHelperForForgeArch(
 function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void {
   const destDir = path.join(__dirname, 'resources', 'tools', 'remote-desktop');
   fs.mkdirSync(destDir, { recursive: true });
+  if (platform === 'linux') {
+    fs.copyFileSync(path.join(__dirname, 'native', 'remote-desktop', 'linux-input-guard.py'), path.join(destDir, 'linux-input-guard.py'));
+  }
   if (process.platform === 'linux' && platform === 'linux') {
     if (arch !== process.arch)
       throw new Error('Linux desktop input requires a native architecture build');
@@ -2093,6 +2098,17 @@ const config: ForgeConfig = {
   },
   rebuildConfig: {},
   hooks: {
+    generateAssets: async (_config, platform, arch) => {
+      if (process.platform !== 'win32' || platform !== 'win32') return;
+      const source = path.join(__dirname, 'native', 'file-preview');
+      const result = spawnSync(process.execPath, [
+        _require.resolve('node-gyp/bin/node-gyp.js'), 'rebuild', '--release', '--arch=' + arch,
+      ], { cwd: source, stdio: 'inherit' });
+      if (result.status !== 0) throw new Error('Windows Shell preview helper build failed');
+      const dest = path.join(__dirname, 'resources', 'tools', 'file-preview');
+      fs.mkdirSync(dest, { recursive: true });
+      fs.copyFileSync(path.join(source, 'build', 'Release', 'cindy-file-preview.exe'), path.join(dest, 'cindy-file-preview.exe'));
+    },
     // Builds cindy-updater.exe before electron-packager copies resources/ into
     // the package — guarantees the shipped updater matches HEAD.
     prePackage: async (_forgeConfig, platform, arch) => {
@@ -2130,6 +2146,12 @@ const config: ForgeConfig = {
         );
         if (desktopBlurBuild.error || desktopBlurBuild.status !== 0)
           throw new Error('Native desktop blur build failed');
+        const loginItemBuild = spawnSync(process.execPath, [
+          path.join(__dirname, 'native/login-item/build.mjs'),
+          path.join(__dirname, 'resources/tools/login-item/cindy-login-item.node'), arch,
+        ], { stdio: 'inherit' });
+        if (loginItemBuild.error || loginItemBuild.status !== 0)
+          throw new Error('Native login item build failed');
         const trackpadBuild = spawnSync(
           process.execPath,
           [
@@ -2190,7 +2212,7 @@ const config: ForgeConfig = {
     // chat-data-localization F1：自动 unpack 任何 *.node 原生模块（better-sqlite3）
     // 使其在 packaged 应用中可以被 require()——asar 会阻止原生模块的 dlopen 调用。
     new PersonalNativeLaunchPlugin({}),
-    new VitePlugin({
+    ...(usePrebuiltPersonalInterface ? [] : [new VitePlugin({
       // Dev keeps all watcher targets in one process. Build them serially at
       // startup so the initial graph does not multiply the same high baseline;
       // packaged builds retain Forge's normal concurrency.
@@ -2232,6 +2254,11 @@ const config: ForgeConfig = {
           entry: 'src/main/voice-input/speaker/speakerGateWorker.ts',
           config: 'vite.speaker-gate-worker.config.ts',
           // 声纹过滤的 ONNX 推理是同步 CPU 计算，隔离在线程中，避免阻塞 Electron main。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/im/imessage/archiveWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
@@ -2369,6 +2396,16 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/preload/quotaTrayPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload/cloudLoginWindowPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
           entry: 'src/preload/remoteDesktopViewerPreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
@@ -2407,7 +2444,7 @@ const config: ForgeConfig = {
           config: 'vite.renderer.config.ts',
         },
       ],
-    }),
+    })]),
     // FusesPlugin conflicts with VitePlugin on `start` command — only load for package/make
     ...(isDev
       ? []

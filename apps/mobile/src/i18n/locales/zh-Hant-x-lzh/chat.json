@@ -190,9 +190,19 @@
     "worked": "已勞作 {{duration}}",
     "workDetails": "勞作之程"
   },
+  "geminiRateLimit": {
+    "retried": "依 Gemini 所請，已自試",
+    "title": "Gemini 每分鐘所入已達其限",
+    "exhausted": "已自試一次，仍受限。可稍後再試。",
+    "retryIn": "{{seconds}} 秒後自試"
+  },
   "subscriptionAccountError": {
-    "limited": "此差事所用訂閱帳號，用量已盡。可待用量重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
-    "limitedUntil": "此差事所用訂閱帳號，用量已盡，預計 {{resetAt}} 重設。可待重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
+    "poolModelLimited": "此模型訂閱之額已盡，可先易模型。",
+    "poolRetryUntil": "俟 {{resetAt}} 後可再試。",
+    "poolOtherSignedOut": "另有訂閱帳號已退出，可於行此任務之機重新登入而試。",
+    "poolUnavailable": "此模型無可用訂閱帳號。可易模型，或於行此任務之機查帳號。",
+    "limited": "此差事所用訂閱帳號，用量已盡。可待用量重設後再試，或另選模型來源。",
+    "limitedUntil": "此差事所用訂閱帳號，用量已盡，預計 {{resetAt}} 重設。可待重設後再試，或另選模型來源。",
     "loginRequired": "此差事所用訂閱帳號需要重新登入。請在執行差事的電腦上重新登入該帳號，再重試。",
     "signingIn": "此差事所用訂閱帳號正在登入，請完成登入後重試。",
     "unavailable": "此差事所繫訂閱帳號，無法用於本次請求。請於執行差事的電腦檢查模型供方的帳號設定，或另選模型來源。",

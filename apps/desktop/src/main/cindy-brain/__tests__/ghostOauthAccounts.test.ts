@@ -225,6 +225,33 @@ describe('reuse of owner-selected existing OAuth accounts', () => {
     expect(await h.mgr.getFreshAccessToken(GHOST, KEY, h.sourceManifest.network!.secrets![0]!.oauth!)).toMatchObject({ ok: true });
   });
 
+  // Unit regression: a strict read error used to block uninstall before the
+  // consumer lock could retire the unreadable manifest. Archive stays strict.
+  it('retires an unreadable manifest under the consumer lock only on uninstall', async () => {
+    let held = false;
+    const h = setup(async (_id, run) => {
+      held = true;
+      try { return await run(); }
+      finally { held = false; }
+    });
+    const decl = h.consumerManifest.network!.secrets![0]!.oauth!;
+    expect(await h.mgr.reuseAccount(h.consumer, KEY, decl, h.selection)).toMatchObject({ ok: true });
+    const key = KEY + '-accounts';
+    const readError = new Error('test unreadable manifest');
+    h.vault.readStrict = () => { throw readError; };
+    h.vault.readForUninstall = (id, storageKey) => {
+      expect(held).toBe(true);
+      h.vault.remove(id, storageKey);
+      return null;
+    };
+    const targets = [{ instanceKey: h.consumer, keys: [key] }];
+    await expect(h.mgr.relocateSourceReferences(GHOST, 'archive-source', targets)).rejects.toBe(readError);
+    expect(h.vault.read(h.consumer, key)).not.toBeNull();
+    await h.mgr.relocateSourceReferences(GHOST, null, targets);
+    expect(h.vault.read(h.consumer, key)).toBeNull();
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'NO_ACCOUNT' });
+  });
+
   it('does not bind to an incompatible service', async () => {
     const h = setup();
     const secret = h.consumerManifest.network!.secrets![0]!;
@@ -2341,6 +2368,56 @@ describe('tokenBroker 模式', () => {
     expect(exchange).toHaveBeenCalledTimes(1);
     // token 交换不直连 tokenUrl。
     expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain(BROKER_DECL.tokenUrl);
+  });
+
+  /*
+   * 测试价值:connectAccount(设置页与聊天卡共用的生产入口)对声明 deviceAuthorizationUrl
+   * 的插件必须把用户自填 client 与设备码端点交给设备码登录,并照常落库账号与 refresh token;
+   * 接线漏传时会静默退回 loopback 授权码流程,用户永远等不到回调。unit,假计时器 + 注入 fetch。
+   */
+  it('connect:声明设备码端点时走设备码登录,用自填 client 认证并落库账号', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const vault = memoryVault({
+        [`${KEY}-client-id`]: 'cli-device',
+        [`${KEY}-client-secret`]: 'device-secret',
+      });
+      const decl: GhostOauthDecl = {
+        authorizeUrl: 'https://accounts.example.com/authorize',
+        tokenUrl: 'https://accounts.example.com/token',
+        deviceAuthorizationUrl: 'https://accounts.example.com/device',
+        scopes: ['scope.a'],
+      };
+      const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url) === decl.deviceAuthorizationUrl) {
+          expect(new URLSearchParams(String(init?.body)).get('client_id')).toBe('cli-device');
+          return jsonResponse({
+            device_code: 'dc-1',
+            user_code: 'ABCD-EFGH',
+            verification_uri_complete: 'https://accounts.example.com/verify?code=ABCD-EFGH',
+            interval: 1,
+          });
+        }
+        expect(String(url)).toBe(decl.tokenUrl);
+        expect(new URLSearchParams(String(init?.body)).get('client_secret')).toBe('device-secret');
+        return jsonResponse({ access_token: 'at-dev', refresh_token: 'rt-dev', expires_in: 7200 });
+      });
+      const openExternal = vi.fn();
+      const mgr = new GhostOauthAccountManager({
+        vault,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        openExternal,
+      });
+      const pending = mgr.connectAccount(GHOST, KEY, decl);
+      await vi.advanceTimersByTimeAsync(2_000);
+      const result = await pending;
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(openExternal).toHaveBeenCalledWith('https://accounts.example.com/verify?code=ABCD-EFGH');
+      expect(vault.read(GHOST, `${KEY}-rt-${result.account.id}`)).toBe('rt-dev');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('connect: missing first-party grant denies even an official-looking id', async () => {

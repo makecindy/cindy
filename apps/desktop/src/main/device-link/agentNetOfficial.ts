@@ -2,14 +2,14 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createHash, createPrivateKey, randomBytes } from 'node:crypto';
-import WebSocket from 'ws';
+import { openLinkWebSocket } from './linkWebSocket.desktop.js';
 import { identityFromSeed, publicBytes, verifyCertificate, type Identity } from '@cindy/agent-net-relay';
 import { AgentNetClient, acceptEnrollment, createEnrollmentRequest } from '@cindy/agent-net-relay/client';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { getActiveAuthRealm, getCurrentUserId, getDeviceId } from '../authManager.js';
+import { getActiveAuthRealm, getCurrentUserId, getDeviceId, getRetiredDeviceIds } from '../authManager.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
-import { outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { readRelaySecrets, writeRelaySecrets, relayDataPath, type RelaySecrets } from './selfHostedRelayConfig.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { withCrossProcessLock } from './crossProcessLock.js';
@@ -25,9 +25,22 @@ export function officialAgentNetSlot(base = officialAgentNetBase()): string {
   const hex = bytes.toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
-function identity(slot: string, secrets: RelaySecrets): Identity {
+/**
+ * Ignore enrollments issued to identities this computer gave up in an explicit conflict repair.
+ * An unrelated mismatched certificate still fails identity validation below.
+ */
+function currentEnrollment(secrets: RelaySecrets): RelaySecrets['agentNet'] {
   const stored = secrets.agentNet;
-  if (!stored) return identityFromSeed(slot, secrets.seed, getDeviceId());
+  return stored && getRetiredDeviceIds().includes(stored.certificate.deviceId) ? undefined : stored;
+}
+function identity(slot: string, secrets: RelaySecrets): Identity {
+  const stored = currentEnrollment(secrets);
+  if (!stored) {
+    const deviceId = getDeviceId();
+    // A cloned profile may share the old seed. Keep the other device's keys distinct from the new identity.
+    const context = getRetiredDeviceIds().length > 0 ? `${slot}/replacement/${deviceId}` : slot;
+    return identityFromSeed(context, secrets.seed, deviceId);
+  }
   const signingPrivateKey = createPrivateKey(stored.signingPrivateKey), transportPrivateKey = createPrivateKey(stored.transportPrivateKey);
   const c = stored.certificate;
   if (stored.version !== 2 || signingPrivateKey.asymmetricKeyType !== 'ed25519' || transportPrivateKey.asymmetricKeyType !== 'x25519'
@@ -37,10 +50,10 @@ function identity(slot: string, secrets: RelaySecrets): Identity {
   return { deviceId: c.deviceId, signingPrivateKey, transportPrivateKey, signingKey: c.signingKey, transportKey: c.transportKey };
 }
 function client(base: string, secrets: RelaySecrets): AgentNetClient | null {
-  const keys = identity(officialAgentNetSlot(base), secrets), stored = secrets.agentNet;
+  const keys = identity(officialAgentNetSlot(base), secrets), stored = currentEnrollment(secrets);
   if (!stored || stored.certificate.expiresAt <= Date.now()) return null;
   return new AgentNetClient(base, keys, stored.certificate, stored.rootPublicKey, undefined, {
-    fetch: outboundFetch, createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createOutboundHttpAgent(url) }),
+    fetch: outboundFetch, createWebSocket: (url, options) => openLinkWebSocket('agent-net', url, options),
   });
 }
 /**
@@ -53,7 +66,7 @@ export function officialAgentNetStatementIdentity(): Identity | null {
   if (isAppSessionBoundaryPending() || activeSelfHostedRelay() || !getCurrentUserId()) return null;
   const base = officialAgentNetBase(); if (!base) return null;
   const slot = officialAgentNetSlot(base), secrets = readRelaySecrets(slot);
-  return secrets?.agentNet ? identity(slot, secrets) : null;
+  return secrets && currentEnrollment(secrets) ? identity(slot, secrets) : null;
 }
 export function currentOfficialAgentNetClient(): AgentNetClient | null {
   return isAppSessionBoundaryPending() || activeSelfHostedRelay() ? null : outgoingOfficialAgentNetClient();
@@ -68,8 +81,14 @@ export function outgoingOfficialAgentNetClient(): AgentNetClient | null {
   const base = officialAgentNetBase(); if (!base) return null;
   const stored = readRelaySecrets(officialAgentNetSlot(base)); return stored ? client(base, stored) : null;
 }
-/** Enrollment uses the existing token-refreshing account client. Member traffic never carries its token. */
-export function ensureOfficialAgentNetClient(name: string): Promise<AgentNetClient> {
+/**
+ * Enrollment uses the existing token-refreshing account client. Member traffic never carries its token.
+ * `rejoin`: the user asked to bring this device back after it was removed from the account (「重新加入」). Its stored
+ * certificate was revoked with the removal even if it has not expired, so this enrolls again whatever its expiry, and asks the
+ * service to lift the removal (`rejoin: true`; without it the service keeps refusing a removed device).
+ */
+export function ensureOfficialAgentNetClient(name: string, options: { rejoin?: boolean } = {}): Promise<AgentNetClient> {
+  const rejoin = options.rejoin === true;
   const base = officialAgentNetBase(), scope = activeOwnerScopeKey(), subject = getCurrentUserId(), slot = officialAgentNetSlot(base);
   const assertCurrent = () => {
     if (!base || !subject || activeOwnerScopeKey() !== scope || getCurrentUserId() !== subject || isAppSessionBoundaryPending()
@@ -79,8 +98,13 @@ export function ensureOfficialAgentNetClient(name: string): Promise<AgentNetClie
   const url = new URL(base);
   if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:'
     && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) throw new Error('SECURE_AGENT_NET_URL_REQUIRED');
-  const key = scope + '\0' + base;
-  const existing = inflight.get(key); if (existing) return existing;
+  const routineKey = scope + '\0' + base;
+  const rejoinKey = routineKey + '\0rejoin';
+  const key = rejoin ? rejoinKey : routineKey;
+  const existing = inflight.get(rejoinKey) ?? (!rejoin ? inflight.get(routineKey) : undefined);
+  if (existing) return existing;
+  // Finish any earlier write before restoring the membership. New callers use the restored identity.
+  const pendingRenewal = rejoin ? inflight.get(routineKey) : undefined;
   const locked = async <T>(operation: () => Promise<T> | T): Promise<T> => {
     const lock = relayDataPath('secrets', slot + '.initialize.lock');
     await fs.mkdir(path.dirname(lock), { recursive: true, mode: 0o700 }); assertCurrent();
@@ -89,20 +113,22 @@ export function ensureOfficialAgentNetClient(name: string): Promise<AgentNetClie
     });
   };
   const work = (async () => {
+    if (pendingRenewal) await pendingRenewal.catch(() => undefined);
     const secrets = await locked(() => {
       let value = readRelaySecrets(slot, { fresh: true });
       if (!value && existsSync(relayDataPath('secrets', slot + '.enc'))) throw new Error('AGENT_NET_IDENTITY_UNREADABLE');
       if (!value) { value = { credential: 'agent-net-only', seed: randomBytes(32).toString('base64url') }; writeRelaySecrets(slot, value); }
       identity(slot, value); return value;
     });
-    const ready = client(base, secrets);
+    const ready = rejoin ? null : client(base, secrets);
     if (ready && ready.certificate.expiresAt - Date.now() > renewalMargin) return ready;
     const keys = identity(slot, secrets);
+    const request = createEnrollmentRequest(keys, name.trim().slice(0, 64) || 'Cindy');
     let response: unknown;
     try { response = await serverApiFetch('/api/agent-net/enroll', {
-      baseUrl: () => { assertCurrent(); return base; }, method: 'POST', body: createEnrollmentRequest(keys, name.trim().slice(0, 64) || 'Cindy'),
+      baseUrl: () => { assertCurrent(); return base; }, method: 'POST', body: rejoin ? { ...request, rejoin: true } : { ...request, reportRevocation: true },
       timeoutMs: 10_000, cache: 'no-store', logLabel: '/api/agent-net/enroll', redactErrorDetails: true,
-      allowedRedactedErrorCodes: ['DEVICE_REENROLLMENT_REQUIRES_APPROVAL', 'ACCOUNT_AUTH_INVALID', 'ENROLLMENT_PROOF_INVALID'],
+      allowedRedactedErrorCodes: ['DEVICE_REVOKED', 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL', 'ACCOUNT_AUTH_INVALID', 'ENROLLMENT_PROOF_INVALID'],
     }); } catch (error) {
       assertCurrent();
       // Early renewal is optional while the original identity is still valid.

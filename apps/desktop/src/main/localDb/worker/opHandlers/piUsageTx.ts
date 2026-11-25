@@ -1,6 +1,9 @@
 import type Database from 'better-sqlite3';
 
+import { writeModelUsage, type UsageAttribution } from './modelUsageTx.js';
+
 export interface PiUsageWrite {
+  attribution?: UsageAttribution;
   sessionId: string;
   settlementId: string;
   receiptId: string;
@@ -21,7 +24,7 @@ export interface PiUsageWrite {
 }
 
 /** Self-contained for the inline worker. Receipt and all aggregates commit together. */
-export function recordPiUsage(db: Database.Database, args: PiUsageWrite[]) {
+export function recordPiUsage(db: Database.Database, args: PiUsageWrite[], writeModel = writeModelUsage) {
   return db.transaction(() => {
     let changed = false;
     for (const r of args) {
@@ -49,20 +52,10 @@ export function recordPiUsage(db: Database.Database, args: PiUsageWrite[]) {
       const create = inserted.changes ? r.cacheCreateTokens : 0;
       const amount = priced ? r.amount! : 0;
       const total = input + output + read + create;
-      db.prepare(`INSERT INTO daily_model_usage
-        (day, agent_kind, model, cost_currency, cost_amount, cost_is_approximate,
-         input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, updated_at)
-        VALUES (?, 'pi', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(day, agent_kind, model, cost_currency) DO UPDATE SET
-        cost_amount = cost_amount + excluded.cost_amount,
-        cost_is_approximate = cost_is_approximate OR excluded.cost_is_approximate,
-        input_tokens = input_tokens + excluded.input_tokens,
-        output_tokens = output_tokens + excluded.output_tokens,
-        cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
-        cache_create_tokens = cache_create_tokens + excluded.cache_create_tokens,
-        updated_at = MAX(updated_at, excluded.updated_at)`)
-        .run(r.day, r.model, r.currency, amount, Number(r.approximate), input,
-          output, read, create, r.recordedAt);
+      writeModel(db, {
+        ...r, agentKind: 'pi', amount, inputTokens: input, outputTokens: output,
+        cacheReadTokens: read, cacheCreateTokens: create,
+      });
       db.prepare(`INSERT INTO daily_session_usage(day, session_id, tokens, updated_at) VALUES (?, ?, ?, ?)
         ON CONFLICT(day, session_id) DO UPDATE SET tokens = tokens + excluded.tokens,
         updated_at = MAX(updated_at, excluded.updated_at)`).run(r.day, r.sessionId, total, r.recordedAt);
@@ -75,12 +68,20 @@ export function recordPiUsage(db: Database.Database, args: PiUsageWrite[]) {
           updated_at = MAX(updated_at, excluded.updated_at)`)
           .run(r.day, r.currency, amount, Number(r.approximate), r.recordedAt);
         db.prepare(`UPDATE sessions SET
-          total_cost_amount = CASE WHEN total_cost_currency IS NULL OR total_cost_currency = ?
-            THEN total_cost_amount + ? ELSE ? END,
-          total_cost_is_approximate = CASE WHEN total_cost_currency IS NULL OR total_cost_currency = ?
-            THEN total_cost_is_approximate OR ? ELSE ? END,
-          total_cost_currency = ? WHERE id = ?`)
-          .run(r.currency, amount, amount, r.currency, Number(r.approximate), Number(r.approximate), r.currency, r.sessionId);
+      total_cost_usd_is_approximate = total_cost_usd_is_approximate OR CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN @approximate
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN total_cost_is_approximate ELSE 0 END,
+      total_cost_usd = total_cost_usd + CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN @amount
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN total_cost_amount ELSE 0 END,
+      total_cost_amount = CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN total_cost_amount
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN @amount ELSE total_cost_amount + @amount END,
+      total_cost_is_approximate = CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN total_cost_is_approximate
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN @approximate ELSE total_cost_is_approximate OR @approximate END,
+      total_cost_currency = CASE WHEN total_cost_currency = 'CNY' THEN 'CNY' ELSE @currency END
+      WHERE id = @sessionId`).run({ currency: r.currency, amount, approximate: Number(r.approximate), sessionId: r.sessionId });
       }
     }
     return { changed };

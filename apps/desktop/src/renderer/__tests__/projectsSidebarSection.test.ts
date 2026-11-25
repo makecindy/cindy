@@ -53,21 +53,18 @@ describe('Projects sidebar section', () => {
       "entry.kind !== 'project' || collapsed.has(entry.project.projectKey)",
     );
     expect(projectsSectionSource).toContain('allSessionGroupsCollapsed');
-    // 平铺时来源标签要覆盖从项目摊出来的会话,不能只喂 dialogues。
+    // task-inbox.md：收件箱候选现在也在普通列表中保持订阅，不能抢占普通列表的来源标签。
+    // 保留已有 guard 接线契约：普通列表覆盖项目、对话和未分类；只有收件箱模式用 inboxSessions。
     expect(projectsSectionSource).toContain('flattenedSessionsForSourceLabels');
     expect(projectsSectionSource).toContain(
-      '[...projects.flatMap((project) => project.sessions), ...dialogues]',
+      "if (taskListMode === 'inbox' && inboxSessions) return inboxSessions",
+    );
+    expect(projectsSectionSource).toContain(
+      '[...projects.flatMap((project) => project.sessions), ...dialogues, ...unclassified]',
     );
   });
 
-  // 2026-08-12 用户裁决:段头「新建项目」按钮暂时移除(同一动作在新任务页的工作
-  // 目录选择器仍可完成)。prop 保留但不再渲染按钮;恢复入口时把这条断言改回正向。
-  it('no longer renders the create-project button in the header action group', () => {
-    expect(projectsSectionSource).toContain('onCreateProject?: () => void');
-    expect(projectsSectionSource).not.toContain('onClick={onCreateProject}');
-    expect(projectsSectionSource).not.toContain("t('ccAgent.sidebar.newProject')");
-    expect(projectsSectionSource).not.toContain('<Plus size={14} strokeWidth={2} />');
-  });
+
 
   it('only shows project header actions while hovering or focusing the Projects header row', () => {
     const headerSource = readFileSync(

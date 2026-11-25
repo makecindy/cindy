@@ -88,6 +88,8 @@ export interface BotImConnectionRecord {
    * 个人 bot 的同名配置互不相干 —— 每条连接自己一份。
    */
   groupActivation?: Record<string, 'always'>;
+  /** An approved group can use another teammate on this same local transport. */
+  iMessageGroupRoutes?: Record<string, { botId: string; revision: string; authorization: string; replyMode: 'always' | 'mention' }>;
   /**
    * 服务器频道白名单（Discord 连接）：缺省 / 空 = 不开放任何频道。每条连接独立一份，随连接记录
    * 删除而消失；`allowMembers` 缺省 = 只有主人能在该频道召唤，显式开启后成员沿用该伙伴既有的权限与
@@ -165,7 +167,7 @@ export interface BotImConnectionGroupsPayload {
 
 export interface BotImConnectionView extends BotImConnectionRecord {
   /** Optional local bridge health; older clients ignore it. Never contains credentials or message text. */
-  health?: { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number };
+  health?: { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number; automationDenied?: boolean };
   status: BotImConnectionStatus;
   identity: {
     /** Telegram bot 用户名 / Discord bot 标签(连上后才有); 其它渠道为 null。 */
@@ -180,7 +182,7 @@ export interface BotImConnectionListPayload {
 }
 
 export type BotImConnectionAddInput =
-  | { botId: string; channel: 'imessage'; groupAliases?: string[]; serverUrl: string; password: string; ownerAddress: string; chatGuids: string[]; listenHost: string; listenPort: number }
+  | { botId: string; channel: 'imessage'; groupAliases?: string[]; mentionAddress?: string; selfAccountAddresses?: Record<string, string>; serverUrl: string; password: string; ownerAddress: string; chatGuids: string[]; listenHost: string; listenPort: number }
   | { botId: string; channel: 'telegram'; token: string; ownerUserId: string }
   | {
       botId: string;
@@ -255,6 +257,12 @@ export interface BotImConnectionLanesPayload {
 }
 
 export const BOT_IM_CONNECTION_CHANGED_EVENT = 'botImConnection:changed';
+
+/**
+ * 添加连接失败的 `CONNECT_FAILED: <原因>` 里, 「只是建连握手超时」用的稳定原因。
+ * 页面据此提示「连接超时, 请重试」并保留刚填的内容; 其它原因仍是诊断原文。
+ */
+export const BOT_IM_CONNECT_TIMEOUT_REASON = 'timeout';
 
 /** Local-only settings: passwords are write-only and an empty value retains the saved password. */
 export type BotIMessageConfig = Omit<Extract<BotImConnectionAddInput, { channel: 'imessage' }>, 'botId' | 'channel' | 'password'>;

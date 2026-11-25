@@ -50,10 +50,10 @@ describe('ModelSelector:浏览别的电脑的目录时改道换位置', () => {
     const start = selectorSource.indexOf('relocate!(');
     expect(start).toBeGreaterThan(0);
     const call = selectorSource.slice(start, selectorSource.indexOf('.then(', start));
-    // 默认:带上正在浏览的那台电脑(本机那份用不了时另列的同一供应商还带上「先问」标记,2026-11-18)。
-    expect(call).toContain('{ ...row, agentDevice: askBeforeUseDevice(remoteBrowseDevice, row.providerId) }');
+    // 默认:带上正在浏览的那台电脑。
+    expect(call).toMatch(/:\s*\{[^{}]*\bagentDevice:\s*remoteBrowseDevice[,\s}]/);
     // 任务归组、在组那一项里选同一供应商:留在此刻运行的那台,只换模型(provider-groups.md §10)。
-    expect(call).toContain('{ ...row, providerId: currentProviderId, agentDevice: currentAgentDevice }');
+    expect(call).toMatch(/\?\s*\{[^{}]*\bproviderId:\s*currentProviderId,\s*agentDevice:\s*currentAgentDevice[,\s}]/);
   });
 });
 
@@ -146,10 +146,6 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
     expect(selectorSource).toContain(
       'const remoteAgentBrowsing = remoteAgent !== undefined && remoteBrowse !== null;',
     );
-  });
-
-  it('改回被控电脑的确认标题写那台电脑的名字', () => {
-    expect(chatInputSource).toContain('device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),');
   });
 
   it('会话视图:候选电脑去掉被控电脑本身,并入全部可用分享;目录跟随 Agent 所在电脑', () => {

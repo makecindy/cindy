@@ -2,6 +2,8 @@ import type { ModelCatalogEntry as ModelAccessGatewayModel } from "./modelAccess
 import { parseListModelsResponse } from "./modelAccessValidator.js";
 
 export const BYOK_PROVIDERS_PATH =
+  "/api/model-access/byok/providers?schemaVersion=2";
+export const BYOK_PROVIDERS_V1_PATH =
   "/api/model-access/byok/providers?schemaVersion=1";
 export const BYOK_CREDENTIALS_PATH =
   "/api/model-access/byok/credentials?schemaVersion=1";
@@ -34,6 +36,8 @@ export interface ByokProvider {
   name: string;
   connectionRevision: number;
   models: ByokModel[];
+  /** Server-sanitized SVG, supplied only by the v2 directory. */
+  icon?: string;
   imageBinding?: {
     enabled: true;
     modelId: string;
@@ -44,7 +48,7 @@ export interface ByokProvider {
   };
 }
 export interface ByokProvidersResponse {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   organizationId: string;
   revision: string;
   providers: ByokProvider[];
@@ -99,13 +103,9 @@ export function parseByokProvidersResponse(
   value: unknown,
 ): Parsed<ByokProvidersResponse> {
   if (
-    !envelope(value) ||
-    !fields(value, [
-      "schemaVersion",
-      "organizationId",
-      "revision",
-      "providers",
-    ]) ||
+    !record(value) ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== 2) ||
+    !text(value.organizationId) ||
     !text(value.revision, 256) ||
     !Array.isArray(value.providers) ||
     value.providers.length > 100
@@ -117,13 +117,6 @@ export function parseByokProvidersResponse(
   for (const item of value.providers) {
     if (
       !record(item) ||
-      !fields(item, [
-        "id",
-        "name",
-        "connectionRevision",
-        "models",
-        "imageBinding",
-      ]) ||
       !isByokProviderId(item.id) ||
       ids.has(item.id) ||
       !text(item.name, 128) ||
@@ -260,14 +253,6 @@ export function parseByokProvidersResponse(
       const binding = item.imageBinding as Record<string, unknown>;
       if (
         !record(binding) ||
-        !fields(binding, [
-          "enabled",
-          "modelId",
-          "name",
-          "supportsEdit",
-          "wireModel",
-          "litellmModel",
-        ]) ||
         binding.enabled !== true ||
         !text(binding.modelId, 256) ||
         !text(binding.wireModel, 256) ||
@@ -285,7 +270,9 @@ export function parseByokProvidersResponse(
         litellmModel: binding.litellmModel,
       };
     }
+    const icon = value.schemaVersion === 2 ? readByokIcon(item.icon) : undefined;
     providers.push({
+      ...(icon ? { icon } : {}),
       id: item.id,
       name: item.name,
       connectionRevision: item.connectionRevision,
@@ -296,12 +283,21 @@ export function parseByokProvidersResponse(
   return {
     ok: true,
     value: {
-      schemaVersion: 1,
+      schemaVersion: value.schemaVersion,
       organizationId: value.organizationId,
       revision: value.revision,
       providers,
     },
   };
+}
+
+function readByokIcon(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 6144) return undefined;
+  const icon = value.trim();
+  if (icon.startsWith("<svg") && new TextEncoder().encode(value).length <= 6144) {
+    return icon;
+  }
+  return undefined;
 }
 
 function validEndpoint(value: unknown): value is string {

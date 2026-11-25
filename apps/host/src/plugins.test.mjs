@@ -27,6 +27,7 @@ import { createGhostKvStore } from '../../desktop/src/main/cindy-brain/ghostKvSt
 import { defaultPtySpawn } from '../../desktop/src/main/terminal/ptyFactory.ts';
 import { createHostToolService } from './agent/host-tools.ts';
 import { createHostConfirmations } from './host-confirmations.ts';
+import { heldCredentialError, holdCredentialFetch } from './agent/held-credentials.ts';
 import { createLiziMcpProviders } from '@cindy/mcps';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 
@@ -143,11 +144,89 @@ test('Host assembly injects an existing saved credential and rejects its revoked
   } finally { await api.network.disposeAll(); }
 });
 
+// Coexistence plan A (reviewer, 2026-11-17): while a Cindy desktop app running on its own uses the
+// profile, plugin OAuth renews and writes nothing (plugins/authorization.ts, held-credentials.ts).
+// Unit, through the same production assembly as above: an expired access token is not renewed (no
+// token request leaves), the account vault is unchanged, and the tool fails with a refused renewal
+// carrying the reason, not "reconnect"; released, the same request renews and goes out.
+test('while a desktop uses the profile, plugin OAuth renews and writes nothing', async () => {
+  const records = new Map([
+    ['target:account-accounts', JSON.stringify({ accounts: [{ id: 'acc1', status: 'connected' }], defaultAccountId: 'acc1' })],
+    ['target:account-rt-acc1', 'synthetic-refresh-token'],
+  ]);
+  const secret = {
+    readGhostSecret: (id, key) => records.get(id + ':' + key) ?? null,
+    readGhostSecretStrict: (id, key) => records.get(id + ':' + key) ?? null,
+    storeGhostSecret: (id, key, value) => { records.set(id + ':' + key, value); return true; },
+    removeGhostSecret: (id, key) => records.delete(id + ':' + key), readGhostSecretTail: () => null,
+    listGhostAccountReferenceKeys: ids => ids.map(instanceKey => ({ instanceKey, keys: [] })),
+  };
+  const oauthDecl = { authorizeUrl: 'https://accounts.example.test/authorize', tokenUrl: 'https://accounts.example.test/token',
+    scopes: ['read'], clientId: 'fixture-client' };
+  const ghosts = [{ enabled: true, dir: '/fixture/target', approval: { state: 'approved', revision: 'held-oauth-fixture' },
+    manifest: { id: 'target', name: 'target', version: '1.0.0', network: { hosts: ['api.example.test'],
+      secrets: [{ key: 'account', label: 'Account', source: 'oauth', inject: { header: 'Authorization', format: 'Bearer {value}',
+        hosts: ['api.example.test'] }, oauth: oauthDecl }] } } }];
+  const requests = [];
+  const noop = () => {};
+  const imports = new Proxy({
+    GhostSavedCredentialManager, GhostConnectionManager, GhostNetworkSlot, GhostOauthAccountManager, heldCredentialError, holdCredentialFetch,
+    withGhostOauthMutationLock: async (_owner, _id, _path, run) => run(),
+    installedGhostMutationTargetToken, installedGhostStoragePart,
+    activeOwnerScopeKey: () => 'owner:1', isAppSessionBoundaryPending: () => false,
+    createLogger: () => ({ warn: noop, info: noop }), hostRuntimeLayout: () => ({ packaged: false }),
+    createHostPluginSecrets: () => secret, createHostPluginIdentity: () => ({}),
+    createHeadlessPluginSandbox: () => ({ adapter: {}, deliver: noop }),
+    hostBlobStore: {}, hostOutbound: { outboundFetch: async (url, init) => {
+      requests.push(String(url));
+      return String(url).startsWith('https://accounts.example.test/token')
+        ? Response.json({ access_token: 'synthetic-access-token', token_type: 'Bearer', expires_in: 3600 })
+        : Response.json({ accepted: true });
+    } },
+  }, { get: (target, name) => name in target ? target[name] : /^[A-Z]/.test(String(name)) ? class {} : () => ({}) });
+  const load = compiled => {
+    const module = { exports: {} };
+    compiled(name => name === 'node:module' ? { createRequire: () => ({ resolve: () => '/fixture/sqlite' }) }
+      : name.startsWith('node:') ? createRequire(import.meta.url)(name) : imports, module, module.exports);
+    return module.exports;
+  };
+  imports.createHostPluginAuthorization = load(credentialAssembly[0]).createHostPluginAuthorization;
+  let held = true;
+  const api = await load(credentialAssembly[1]).createHostPluginRuntime({
+    profileDir: '/fixture/host', ownerId: 'owner', credentials: {}, getLoginEmail: () => null, isProfileHeld: () => held,
+    manager: { list: () => ghosts, findInstalledInstance: id => ghosts.find(ghost => ghost.manifest.id === id) },
+    publish: noop, assets: { nodeWorker: '/fixture/worker', close: noop },
+  });
+  try {
+    const before = JSON.stringify([...records]);
+    const refused = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(refused.ok, false);
+    const text = JSON.stringify(refused);
+    assert.match(text, /HOST_PROFILE_IN_USE_BY_DESKTOP: this plugin sign-in is not renewed while a Cindy desktop app/);
+    assert.doesNotMatch(text, /重新连接/, 'a refused renewal does not ask to reconnect');
+    assert.deepEqual(requests, [], 'no token request and no API request left');
+    assert.equal(JSON.stringify([...records]), before, 'the account vault is unchanged');
+    // Held, no refresh token stored: the account is not marked expired either (that is a vault write).
+    records.delete('target:account-rt-acc1');
+    const withoutToken = JSON.stringify([...records]);
+    assert.equal((await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' })).ok, false);
+    assert.equal(JSON.stringify([...records]), withoutToken, 'no expired mark while held');
+    records.set('target:account-rt-acc1', 'synthetic-refresh-token');
+    // Released: the same request renews the token and goes out.
+    held = false;
+    const renewed = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(renewed.ok, true, JSON.stringify(renewed));
+    assert.deepEqual(requests, ['https://accounts.example.test/token', 'https://api.example.test/account']);
+  } finally { await api.network.disposeAll(); }
+});
+
 // Rebase #9496 onto #9621: execute the real gateway's registered page-tool
 // callback with process/database boundaries injected. A null task must not be
 // restored, while task-bound calls must retain their original source context.
-test('page tools accept a null task without changing task-bound context', async () => {
+test('page tools accept a null task without changing task-bound context', async t => {
   let runPageTool;
+  let held = false;
+  let completeTool = async () => ({ ok: true, result: { content: [{ type: 'text', text: 'delivered' }] } });
   const contexts = [], restored = [];
   const session = { id: 'task', instanceId: 'instance', agentKind: 'codex', workDir: '/workspace' };
   const boundaries = {
@@ -164,7 +243,7 @@ test('page tools accept a null task without changing task-bound context', async 
     createImageCacheStore: () => ({}), hostChatAttachments: {},
     createGhostGateway: () => ({ setPageControlGhostProvider() {}, getCindyGhostsMcpDeps(context) {
       contexts.push(context);
-      return { callGhostTool: async () => ({ ok: true, result: { content: [{ type: 'text', text: 'delivered' }] } }) };
+      return { callGhostTool: (...args) => completeTool(...args) };
     } }),
     pluginAppResult: value => value,
   };
@@ -174,7 +253,14 @@ test('page tools accept a null task without changing task-bound context', async 
   new Function('require', 'module', 'exports', built.outputFiles[0].text)(
     name => name.startsWith('node:') ? localRequire(name) : boundaries, gatewayModule, gatewayModule.exports);
   gatewayModule.exports.createHostPluginGateway({
-    runtime: { current: () => true, assertCurrent() {}, authorization: { i18n: {} } },
+    runtime: {
+      current: () => true,
+      assertCurrent() {},
+      assertPluginAvailable() {
+        if (held) throw Object.assign(new Error('profile held'), { code: 'PRECONDITION_FAILED' });
+      },
+      authorization: { i18n: {} },
+    },
     profileDir: '/unused', ownerId: 'owner', version: 'test', credentials: {}, cards: {},
     restoreSession: async id => { assert.equal(id, session.id); restored.push(id); return session; },
   });
@@ -186,6 +272,24 @@ test('page tools accept a null task without changing task-bound context', async 
   assert.deepEqual(restored, [session.id]);
   assert.deepEqual(contexts, [undefined, { sessionId: session.id, sessionInstanceId: session.instanceId,
     agentKind: session.agentKind, workingDir: session.workDir }]);
+  held = true;
+  await assert.rejects(runPageTool({ sessionId: session.id, instance: 'plugin', tool: 'read', assertCurrent: async () => {} },
+    {}, new AbortController().signal), { code: 'PRECONDITION_FAILED' });
+  assert.deepEqual(restored, [session.id], 'held page tools must stop before task restore');
+  assert.equal(contexts.length, 2);
+
+  await t.test('page tools preserve an uncertain outcome when a hold interrupts dispatch', async () => {
+    held = false;
+    const interrupted = { ok: false, errorCode: 'PLUGIN_DELIVERY_UNKNOWN', message: 'synthetic pause interruption' };
+    completeTool = async () => {
+      held = true; // admitted above, as in a desktop hold during dispatch
+      return interrupted;
+    };
+    const result = await runPageTool({ sessionId: null, instance: 'plugin', tool: 'read', assertCurrent: async () => {} },
+      {}, new AbortController().signal);
+    assert.equal(result.isError, true);
+    assert.deepEqual(JSON.parse(result.content[0].text), interrupted);
+  });
 });
 
 function tempProfile(t) {

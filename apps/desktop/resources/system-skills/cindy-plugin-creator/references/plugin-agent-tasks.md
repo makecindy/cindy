@@ -172,11 +172,7 @@ const r = await cindy.agent.requestSchedule({
   另一个自动化表单在编辑,那种情况下本次草稿会被**丢弃**(保护他没保存的输入),他看到
   一句提示、面板不换内容。即使面板正常打开,任务也要他亲手点保存才落库。所以你的 UI
   **不要**显示"已开启"这类完成态,写"已为你打开创建面板,请确认"才准确;
-  想确认用户是否照做了,当前唯一可信的信号是任务真的跑起来调了你的 tool。
-  **后续版本会补上**:任务与发起插件的**绑定关系**,以及你查询 / 管理**自己绑定的那条
-  任务**(是否有效、下次运行时间、频率,以及改时间 / 暂停 / 关掉)。届时你就能在自己面板
-  上显示"已开启 · 每小时 · 下次 15:00"并让用户就地改。绑定本身即授权边界:你只能看和改
-  自己请求创建的那条,看不到用户的其它自动化;
+  普通草稿的保存状态不提供查询。若插件需要同账号只在一台电脑执行，见下方的主机绑定用法。
 - `prompt` 里要**自己说清楚该调你哪个工具**(见上面示例第 3 行)。AI 不会自动猜到
   "跑完要更新哪个插件";
 - 预填内容会**净化 + 截断**(去控制字符,名称 60 字 / prompt 2000 字);净化后为空一律
@@ -193,6 +189,21 @@ const r = await cindy.agent.requestSchedule({
 
 什么时候**不该**用它:一次性的事，用快问快答(§4.0.2)或普通任务接口
 (§4.11.3)。这个加档是给"长期定期刷新"用的,每条任务都会反复产生模型费用。
+
+### 只在用户指定的电脑执行
+
+对同时声明 `deviceSync: true` 和 `agent.schedule: true` 的插件，先读取账号主机，再响应用户的创建操作。
+
+```js
+const role = await cindy.deviceSync({ op: 'automationHost' });
+if (role.ok && role.isPrimary && role.localSchedule === 'none') {
+  await cindy.agent.requestSchedule({
+    name: '整理资料', prompt: '调用本插件的整理工具。', primaryDeviceOnly: true
+  });
+}
+```
+
+`primaryDeviceOnly` 默认关闭。开启后，首次保存必须在选中的执行电脑桌面窗口完成，从手机或另一台电脑发起也会打开执行电脑的桌面编辑器。用户在该电脑选择模型并保存。宿主按已安装插件的身份绑定草稿；修改标题或暂停任务会保留绑定。选主本身不会新建或启用自动化。已有任务的实际启停状态可从 `localSchedule` 获取。主机暂停、离线或无法确认账号归属时，其它电脑继续等待。选主及错误状态见 [同账号电脑间的插件资料同步](./plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 
 ## 4.11.3 新建任务与继续任务（普通 Session）
 
@@ -409,6 +420,12 @@ const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
 // 保存 nextCursor；下一页传 after，不以最后一条 assistant 推断 run 已完成。
 ```
 
+**转发本轮进展**：当 `capabilities().runProgress === true` 时，调用
+`readMessages({taskId, progressForRun: runId, after?, limit?})`。结果带有相同的
+`progressForRun`，按时间返回这次输入已落库的用户可见进展。使用消息 ID 去重。
+Codex 使用已结束的 commentary，Claude 和 Pi 使用明确以调用工具结束的助手文本。
+没有明确进展的轮次可以只发最终答复。旧宿主继续按原有的 outputMessageId 读取最终答复。
+
 **边生成边显示（新增接口，尚未发布）**：`capabilities().runPreview === true` 时，`getRun` 在
 `status === 'running'` 且任务当前执行的正是这次输入时，可额外返回 `preview: { text }`：
 Agent 正在输出的那一段回答（最多 32768 个 UTF-16 字符，超出只保留开头），已去掉内部引用标记。
@@ -504,6 +521,8 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
 - `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
 - 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。
 
+`openSession({sessionId, deviceId?})` 可在桌面主窗口打开本机或同账号其他电脑上的可见普通会话，包括独立对话。除 `agent.observe` 外，还需声明并获批 `agent.hostTools: ['history']`。先检测 `typeof cindy.observe?.openSession === 'function'`。远程目标传设备 ID 和原始会话 ID 两个字段。如 `list_sessions` 返回 `deviceId::sessionId`，取该设备组的 ID 并移除会话 ID 的设备前缀。省略设备或传 `local` 表示本机。宿主按指定设备核验目标，返回 `{opened:true}` 表示已交给原生导航；不可见或不存在返回 `TARGET_UNAVAILABLE`，远程连接不可用返回 `REMOTE_UNAVAILABLE`。本方法只导航，不返回会话数据。
+
 ## 4.11.9 查看伙伴和状态
 
 插件要把伙伴画成角色、头像墙或状态面板时，声明 `"agent": { "companions": true }`，在本机 Desktop 逻辑页使用 `cindy.companions`。
@@ -520,6 +539,7 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
     `workingPhase` 只在工作中出现，是公开类别：`thinking` 思考、`replying` 写回复、`reading-file` / `saving-file` / `searching` / `searching-files` / `reading-web` / `testing` / `checking` 等执行工具，`compacting` 整理上下文，`processing` 其他；不含命令、参数、网址或思考原文。`summary` 是宿主写的粗粒度说明。
   - `interactions` 是伙伴正在等主人处理的请求 `[{ref, kind, title}]`。`kind` 为 `question`（提问）、`permission`（工具确认）、`plan`（计划审阅）或 `other`（Cindy 自己的确认，如安装插件、更新、任务操作、代输入，只能用 `open` 去 Cindy 里处理）。`title` 为问题或待确认的工具名，其他为 null；名单里不含工具输入、计划正文，主人在宿主步骤里输入的值任何时候都不给插件。`ref` 不透明，只能传回 `interaction` / `answer` / `open`。伙伴的主对话和它委派的任务同时等主人时，两边的请求都在这里。
   - `lastReplyAt` 是最新一条完成回复的持久化时间。一轮工作结束（`phase` 由 `running` 变为 `completed` 或 `lastReplyAt` 变化）时读一次 `reply`，即可拿到这一轮的最后一条消息。
+  - 可选的 `unread` 是当前桌面侧栏的伙伴未读标记。读取快照只返回布尔值。旧客户端或状态不可用时该字段缺省。状态灯可优先显示运行状态，闲时用 `unread === true` 点亮绿灯。
 - `avatar({companionId})`：返回 `{src, fallback}`。`src` 为 `data:image/jpeg` 头像或 null（伙伴用表情做头像时）；`fallback` 是可直接画的单个字形。
 - `reply({companionId})`：返回 `{reply:null | {text, createdAt, truncated}}`：伙伴主对话里最新一条可见回复的文字（其他电脑上的伙伴从它的主力电脑读取），最多 8000 字，超出时 `truncated=true`；不含更早的消息、附件、私密内容或子 Agent 输出。回复可能含个人或工作信息，插件不得外传或长期保存。
 - `history({companionId, limit?})`：返回 `{history:null | {messages, more}}`：伙伴主对话里最近的 `limit` 条消息（默认 20，最多 50），从旧到新，每条 `{role:'user'|'assistant', text, createdAt, truncated}`，单条最多 2000 字。
@@ -538,7 +558,7 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
   - 允许：`{kind:'permission', decision:'allow'}` / `{kind:'plan', decision:'allow'}` 只用于 `allowHere` 为 true 的请求，会弹出 Cindy 自己的确认框，完整显示真实请求；主人在框里点允许才生效，取消时返回 `{answered:false}`。`allowHere` 为 false 时返回 `ALLOW_IN_CINDY`，请用 `open` 让主人在 Cindy 里允许。插件页面画不出、也点不到这个框，不要自己再做一层「确认允许」。同一时间只开一个框，再请求返回 `TASK_BUSY`；框打开期间请求变了或已在别处处理，返回 `TARGET_UNAVAILABLE`。
   - 只能回答 `interaction` 给出的内容，不能改写工具输入，也不能「本会话一直允许」。其他电脑上的伙伴经它的主力电脑作答（需那台电脑在线并开启远程控制）。
   - 回答后请求会从 `interactions` 里消失；主人在 Cindy、手机或其他插件里先处理了，同样消失，插件据此关掉自己的界面。
-- `watch()` / `unwatch({subscriptionId})`：每插件一个订阅，再次 `watch` 会替换旧订阅。变化时经 `cindy.onHostMessage` 收到 `{type:'companions-changed', subscriptionId, seq}`，不带内容，插件收到后重新 `list`；其他电脑上伙伴的变化也会通知；每插件最快 1 秒一次，订阅期间另有约 5 秒一次的心跳。逻辑页关闭、撤权或卸载后订阅自动结束。
+- `watch()` / `unwatch({subscriptionId})`：每插件一个订阅，再次 `watch` 会替换旧订阅。伙伴活动、新回复和用户阅读后提交的已读变化沿用 `cindy.onHostMessage` 的 `{type:'companions-changed', subscriptionId, seq}` 通知。插件收到后重新 `list` 即可读取 `unread`。其他电脑上伙伴的变化也会通知。每插件最快 1 秒一次，订阅期间另有约 5 秒一次的心跳。逻辑页关闭、撤权或卸载后订阅自动结束。
 - 不存在、已归档、不可见、请求已不在等待，或主力电脑当前连不上的伙伴返回 `TARGET_UNAVAILABLE`；参数或回答不对返回 `INVALID_PARAMS`；要允许确认框显示不全的请求返回 `ALLOW_IN_CINDY`；宿主未就绪返回 `HOST_NOT_READY`。不能发消息、改伙伴设置或停止伙伴；派活请改用 `cindy.targets` 并声明对应权限。
 
 ```js

@@ -40,8 +40,10 @@ import {
   clearDraft,
   discardDraft,
   getDraft,
+  saveDraft,
   setComposerDraftOwner,
 } from '@/lib/composerDraftStore';
+import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 import {
   __testing as dataOwnerTesting,
   setDataOwnerGeneration,
@@ -100,6 +102,27 @@ afterEach(() => {
 });
 
 describe('useAttachments inline rejections', () => {
+  // Tier: unit at the production MCP App → composer boundary. The mounted
+  // composer must mirror a Main-delivered attachment written through the same
+  // helper used by McpAppCard, while preserving the existing text draft.
+  it('shows a MCP App attachment in the mounted composer without replacing text', () => {
+    const sessionId = 'mcp-app-mounted-composer';
+    const text = { type: 'doc' as const, content: [{ type: 'paragraph' as const, content: [{ type: 'text' as const, text: 'keep this draft' }] }] };
+    saveDraft(sessionId, { text, attachments: [], quotes: [], browserComments: [] });
+    const { result, unmount } = renderHook(() => useAttachments(sessionId));
+    const added = {
+      id: 'mcp-app-attachment', name: 'sample.txt', path: '/cache/sample.txt', ext: '.txt',
+      size: 12, category: 'text' as const, mimeType: 'text/plain',
+    };
+
+    act(() => appendMcpAppComposerAttachment(sessionId, added));
+
+    expect(result.current.attachments).toEqual([added]);
+    expect(getDraft(sessionId)?.text).toEqual(text);
+    unmount();
+    clearDraft(sessionId);
+  });
+
   // B, unit: the real add/drop hook must keep the user's file while processing,
   // append text through the same draft and discard late output after removal.
   // Existing read/cache failures do not exercise plugin processing.

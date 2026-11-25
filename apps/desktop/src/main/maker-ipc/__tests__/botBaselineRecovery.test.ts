@@ -4,6 +4,7 @@ import ts from 'typescript';
 import type { ProviderView } from '@cindy/model-providers';
 import { createIpcError } from '../../../shared/ipc-errors';
 import { checkDeviceRoute } from '../../remote-agent/controller/deviceRouteCheck';
+import { readDeviceProviderCatalog } from '../../remote-agent/controller/deviceCatalog';
 import { createBotModelRouteApplier, createBotModelRouteReconciler } from '../botModelRouteReconciler';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, resolveScheduledModelSelection, type ScheduledModelSelection } from '../scheduledModelSelection';
 import { readSshCodexModelList } from '../../remote-ssh/codex-model-list';
@@ -13,6 +14,10 @@ import { createSessionRuntimeProjection } from '../sessionRuntimeProjection';
 import { assertModelRouteUsableWith, type ModelRouteAdmissionPorts } from '../modelRouteAdmission';
 import type { ModelRouteVerdict } from '../../maker-host/model-route-guard';
 import type { AgentKind } from '@cindy/maker-core';
+
+vi.mock('../../maker-host/model-disable-store.js', () => ({
+  readModelDisableOverrides: () => ({ disabledModels: {}, disabledProviders: {} }),
+}));
 
 // Regression for #7177/#7428: an unavailable frozen selection used to reject
 // every input before dispatch, despite a usable saved companion configuration.
@@ -242,7 +247,7 @@ it.each(['same-harness', 'same-harness-staged', 'cross-harness', 'back-to-task-d
   const route = { agentDeviceId: null, agentKind: 'pi', model: 'saved', providerId: 'gateway', effort: null, fastMode: false };
   const apply = vi.fn(async () => path === 'same-harness-staged'
     ? { deferred: true, superseded: false, pendingUntilSend: true } : { effectiveProviderId: 'xai' });
-  const switchAgent = vi.fn(async () => {});
+  const switchAgent = vi.fn(async () => ({ switched: false, agentKind: 'pi', model: 'saved', engineReady: true }));
   const stage = registeredFunction('stageSessionRouteSelection', {
     readSessionAgentDeviceId: async () => path === 'back-to-task-device' ? 'other-device' : null,
     performSessionAgentSwitch: switchAgent, agentSwitchDeps: {},
@@ -399,13 +404,15 @@ describe('production restoration rejection classification', () => {
   });
   it.each(['not-offered', 'REMOTE_AGENT_SHARE_REMOVED', 'REMOTE_AGENT_SHARE_PAUSED', 'unreachable', 'REMOTE_AGENT_SHARE_UNAVAILABLE'])(
     'classifies remote %s before IPC downgrade, retaining transient errors', async (rejection) => {
-      const read = registeredFunction('readUsableAgentDeviceProviders', { throwIpcError, checkDeviceRoute,
-        remoteBackgroundInvoke: vi.fn(), isProviderShareAgentDeviceId: () => false,
+      const readUsableAgentDeviceCatalog = registeredFunction('readUsableAgentDeviceCatalog', {
+        throwIpcError, checkDeviceRoute, readDeviceProviderCatalog,
+        isProviderShareAgentDeviceId: () => false,
         isDeviceLinkInvoke: () => true, log: { warn: vi.fn() },
-        readDeviceProviderViews: async () => {
-          if (rejection === 'not-offered') return [];
-          throw new Error(rejection === 'unreachable' ? 'offline' : '[' + rejection + ']');
-        } });
+        remoteBackgroundInvoke: async () => rejection === 'not-offered'
+          ? { ok: true, result: { providers: [] } }
+          : { ok: false, error: { message: rejection === 'unreachable' ? 'offline' : '[' + rejection + ']' } },
+      });
+      const read = registeredFunction('readUsableAgentDeviceProviders', { readUsableAgentDeviceCatalog });
       await expect(read('device', 'pi', 'model', 'old')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
       await expect(read('device', 'pi', 'model', 'old', 'MODEL_SELECTION_UNAVAILABLE')).rejects.toMatchObject({
         code: rejection === 'not-offered' || rejection === 'REMOTE_AGENT_SHARE_REMOVED'

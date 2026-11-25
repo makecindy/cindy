@@ -201,6 +201,14 @@ export interface RuntimeState {
   /** Per-parent active provider request used to merge message_start + message_delta usage. */
   activeUsageSegmentByParent: Map<string, string>;
   /**
+   * `parent:message.id` → usage segment id. Proxied multi-block responses reach us as
+   * several message_start/message_delta cycles sharing one provider message id; they
+   * describe one response, so they must merge instead of adding the same usage twice.
+   * Entries are dropped at every tool-result boundary and turn end so a gateway that
+   * reuses a placeholder id for a later request still gets its own segment.
+   */
+  usageSegmentIdByRequest: Map<string, { segmentId: string; generation: number }>;
+  /**
    * 主流当前 provider 请求：main message_start 打开；main message_stop、下一次
    * main message_start 或 result 收口。Claude Code 每个 content block 结束就先
    * yield 完整 assistant，携带 output usage 的 message_delta 在整条回复生成完才到，
@@ -241,6 +249,7 @@ export function newRuntimeState(): RuntimeState {
     streamStopTokenByKey: new Map(),
     streamRequestIdByParent: new Map(),
     activeUsageSegmentByParent: new Map(),
+    usageSegmentIdByRequest: new Map(),
     mainOpenRequest: null,
     activeUsagePriceVariantByParent: new Map(),
     pendingUsagePriceVariantByParent: new Map(),
@@ -288,6 +297,14 @@ function settleMainRequest(ctx: TranslateContext): void {
   }
   ctx.rt.activeUsageSegmentByParent.delete(CLAUDE_MAIN_USAGE_PARENT);
   ctx.rt.mainOpenRequest = null;
+}
+
+/** Drop only the split-cycle records belonging to one parent stream (main or a subagent). */
+function clearUsageSegmentRequestsForParent(ctx: TranslateContext, parentStreamKey: string): void {
+  const prefix = `${parentStreamKey}:`;
+  for (const key of ctx.rt.usageSegmentIdByRequest.keys()) {
+    if (key.startsWith(prefix)) ctx.rt.usageSegmentIdByRequest.delete(key);
+  }
 }
 
 /** 主流完整 assistant 只登记到所属请求；它早于该请求的 message_delta，不能在此判完整性。 */
@@ -821,6 +838,12 @@ export function translateSdkMessage(
       const content = msg.message?.content;
       const hasToolResult = Array.isArray(content)
         && content.some((blockRaw) => readToolResultFullText(blockRaw) !== null);
+      // A tool result ends the provider request that produced it. Clear split-cycle
+      // bookkeeping for this parent only: concurrent streams interleave their tool
+      // results, and clearing another parent's entries would split its response again.
+      if (hasToolResult) {
+        clearUsageSegmentRequestsForParent(ctx, parentToolUseId ?? CLAUDE_MAIN_USAGE_PARENT);
+      }
       const toolResultBatchId = hasToolResult
         ? `tool-result-batch-${++ctx.rt.toolResultBatchSeq}`
         : undefined;
@@ -1108,6 +1131,18 @@ function handleSystem(
   if (msg.subtype === 'api_retry') {
     // The backoff wait is not generation time; the retried request's first block resumes.
     ctx.rt.generation.tokenSpeed.pause();
+    // A retry is a new provider request even when the gateway reuses its placeholder
+    // message.id. Drop the failed attempt's split-cycle record (this parent only, so
+    // concurrent streams keep theirs) and close its active segment, allowing a billable
+    // partial attempt to be counted separately instead of merged by field-wise max.
+    // SDKAPIRetryMessage is typed without a parent id; tolerate one if a future SDK
+    // includes it, otherwise this is the main request being retried.
+    const retryParentId = (msg as { parent_tool_use_id?: unknown }).parent_tool_use_id;
+    const retryParentKey = typeof retryParentId === 'string' && retryParentId
+      ? retryParentId
+      : CLAUDE_MAIN_USAGE_PARENT;
+    clearUsageSegmentRequestsForParent(ctx, retryParentKey);
+    ctx.rt.activeUsageSegmentByParent.delete(retryParentKey);
     // SDKAPIRetryMessage 明确表示本次 API 失败仍在自动重试，不是 turn 终态。
     // 除日志外也暂存最后一次 retry 的错误详情，覆盖 SDK 没有额外发送
     // assistant.error envelope、最终 ResultMessage 又没有 result 文本的路径。
@@ -1150,32 +1185,28 @@ function handleSystem(
     // 第 1 次不透出：单次抖动 SDK 一次重试就过，提示只会闪一下徒增噪音（与
     // codex translator 持续重试透出的防噪口径一致）。
     //
-    // **只透出过载类**：这条 message 是内部英文 SDK 字符串，renderer 的 ErrorBanner
-    // 只对过载与网络形态做本地化替换。若把 429、500 这类也透出来，各语言用户会直接
-    // 看到裸英文，而它们在本改动之前是静默的——那是实打实的回归。其它重试类别保持
-    // 原样静默，需要时另行补本地化再放开。
-    //
-    // 判据是 parseOverloadError 的**两种**形态都算（`overloaded`：529 /
-    // overloaded_error；`capacity`：`at capacity`），不只 529：renderer 侧的镜像
-    // (renderer/utils/overloadError.ts) 对两种形态都有本地化文案，所以放开 capacity
-    // 不会产生裸英文；反过来只认 529 会把一条措辞为 `at capacity` 的过载错误静默掉，
-    // 用户看到的是"什么都没发生"。
-    const overloadRetry =
-      typeof msg.attempt === 'number' &&
-      typeof msg.max_retries === 'number' &&
-      msg.attempt >= 2 &&
-      parseOverloadError(`${sdkError} ${statusLabel}`, msg.error_status ?? undefined) !== null;
-    if (overloadRetry) {
+    // Reuse the existing network reconnect marker for gateway failures. Both
+    // Desktop and Mobile localize it as network retry progress; auto-retry is
+    // reserved for overload (Mobile otherwise labels a 5xx as capacity failure).
+    // Keep unclassified/statusless and rate-limit retries silent.
+    const overloadRetry = parseOverloadError(
+      `${sdkError} ${statusLabel}`,
+      msg.error_status ?? undefined,
+    ) !== null;
+    const networkRetry = [500, 502, 503, 504].includes(msg.error_status ?? 0);
+    const hasRetryProgress =
+      Number.isSafeInteger(msg.attempt) &&
+      Number.isSafeInteger(msg.max_retries) &&
+      (msg.attempt as number) >= 2 &&
+      (msg.max_retries as number) >= (msg.attempt as number);
+    if (hasRetryProgress && (overloadRetry || networkRetry)) {
+      const detail = `SDK API request failed: ${sdkError} (${statusLabel})`;
       queue.push({
         type: 'error',
         data: {
-          // 进度用 `(auto-retry N/M)` 后缀编码，与 Codex 侧同一套跨 agent 协议，
-          // renderer 只需一份解析。原始状态留在正文里供分类与折叠查看。
-          message: formatOverloadRetryMessage(
-            `SDK API request failed: ${sdkError} (${statusLabel})`,
-            msg.attempt as number,
-            msg.max_retries as number,
-          ),
+          message: overloadRetry
+            ? formatOverloadRetryMessage(detail, msg.attempt as number, msg.max_retries as number)
+            : `Reconnecting... ${msg.attempt}/${msg.max_retries} (${detail})`,
           isTerminal: false,
           willRetry: true,
           ...(msg.error_status != null ? { errorStatus: msg.error_status } : {}),
@@ -1873,11 +1904,14 @@ function handleStreamEvent(
         ctx.rt.pendingUsagePriceVariantByParent.get(parentStreamKey) ??
         ctx.turn.nextRequestPriceVariant ??
         (ctx.getFastMode?.() ? 'priority' : 'standard');
+      // `cache_creation_input_tokens` is optional on Anthropic-compatible gateways
+      // (and absent when nothing was written to cache). Requiring the key made every
+      // proxied request unpriceable even though its three real token buckets were
+      // fully reported; treat the key as zero when the provider omits it.
       const hasCompleteUsageSnapshot = [
         'input_tokens',
         'output_tokens',
         'cache_read_input_tokens',
-        'cache_creation_input_tokens',
       ].every((field) => Object.prototype.hasOwnProperty.call(usage, field));
       const previousOutput = ctx.tracker.getTurnUsage().output;
       ctx.tracker.upsertApiCallUsage(segmentId, {
@@ -1947,7 +1981,21 @@ function handleStreamEvent(
     ctx.turn.apiCalls += 1;
     // 上一请求缺 message_stop(中断、重试)时，在新请求开段前补收口。
     if (!parentToolUseId) settleMainRequest(ctx);
-    const segmentId = `claude:${++ctx.rt.usageSegmentSeq}:${parentStreamKey}`;
+    // 代理网关把一次响应按 content block 拆成多个 message_start/message_delta
+    // 循环时会重复使用同一个 provider message id；它们共享 usage，必须并入同一段，
+    // 否则 message_delta 的 max 合并只剩段内语义、跨段却会各记一次。
+    const requestKey = typeof eventRequestId === 'string' && eventRequestId
+      ? `${parentStreamKey}:${eventRequestId}`
+      : undefined;
+    const reused = requestKey ? ctx.rt.usageSegmentIdByRequest.get(requestKey) : undefined;
+    const reusedSegmentId = reused?.generation === ctx.turn.generation ? reused.segmentId : undefined;
+    const segmentId = reusedSegmentId ?? `claude:${++ctx.rt.usageSegmentSeq}:${parentStreamKey}`;
+    if (requestKey && !reusedSegmentId) {
+      ctx.rt.usageSegmentIdByRequest.set(requestKey, {
+        segmentId,
+        generation: ctx.turn.generation,
+      });
+    }
     ctx.rt.activeUsageSegmentByParent.set(parentStreamKey, segmentId);
     if (!parentToolUseId) {
       ctx.rt.mainOpenRequest = {
@@ -2271,6 +2319,11 @@ function handleResult(
   // Snap to this turn's streamed main-thread usage: the result aggregate can be
   // a session total turned into a wrong delta, and a bad snap is worse than the estimate.
   liveGeneration.tokenSpeed.stop(mainTurnOutputTokens(ctx.tracker));
+  // Display only: lets the finished message show the chart the turn ran with. The meter pairs
+  // each main-thread request with its own usage and invalidates itself on a broken clock, so
+  // it does not depend on `reliable`, which covers the legacy counters: those fail closed when
+  // the turn's aggregate includes subagent output (a quarter of real Claude turns lost the chart).
+  const generationTrace = liveGeneration.tokenSpeed.trace();
   const endSnapshot = ctx.tracker.endTurn(
     resultUsage
       ? {
@@ -2580,6 +2633,7 @@ function handleResult(
     usageSegments: turnUsageSegments,
     usageSegmentsComplete,
     modelUsageCumulativeStartsAtZero: ctx.modelUsageCumulativeStartsAtZero?.() === true,
+    ...(generationTrace ? { generationTrace } : {}),
   };
   const resultWithAssistantMessageId = ctx.turn.lastAssistantRequestId
     ? { ...resultWithUsageSegments, assistant_message_id: ctx.turn.lastAssistantRequestId }
@@ -2595,6 +2649,7 @@ function handleResult(
   // reset turn 累积 (tracker 内部已经在 endTurn 里 reset 了 currentTurn,这里只清非 usage 状态)
   resetTurnState(ctx.turn);
   ctx.rt.activeUsageSegmentByParent.clear();
+  ctx.rt.usageSegmentIdByRequest.clear();
   ctx.rt.mainRequestToolUseIds.clear();
   resetClaudeGenerationTiming(ctx.rt.generation);
   // turn 结束钩子 — agent 用来清 turnInFlight 标记 (rewind preview/commit 前置守卫读它)

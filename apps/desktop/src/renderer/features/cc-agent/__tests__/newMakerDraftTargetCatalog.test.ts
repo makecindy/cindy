@@ -30,6 +30,7 @@ import {
   type RemoteDraftDefaults,
 } from '../deviceLinkDraftDefaults';
 import { isSameNewMakerDevice } from '../lib/newMakerRouteState';
+import { isCloudDeviceId } from '@/features/cloud-settings/cloudDeviceId';
 import { rememberRemoteDraftDefaults } from '../remoteDraftDefaultsCache';
 
 // Run the real async project-selection and target-transition callbacks. Only their
@@ -50,7 +51,8 @@ function compile<T>(
   cache: Map<string, (...args: unknown[]) => unknown> = factories,
 ): T {
   const keys = Object.keys(bindings);
-  let factory = cache.get(id);
+  const signature = JSON.stringify([id, ...keys]);
+  let factory = cache.get(signature);
   if (!factory) {
     let expression: ts.Node | undefined;
     const visit = (node: ts.Node) => {
@@ -63,7 +65,7 @@ function compile<T>(
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText;
     factory = new Function(...keys, code + ';return callback;') as (...args: unknown[]) => unknown;
-    cache.set(id, factory);
+    cache.set(signature, factory);
   }
   return factory(...Object.values(bindings)) as T;
 }
@@ -196,6 +198,7 @@ function harness(options: {
     setWtBranchPreferenceSaving: vi.fn(), setWtBranchSync: vi.fn(), setWtBranchPreferenceError: vi.fn(),
     setWtBaseRepo: vi.fn(), setWtSourceBranch: vi.fn(), setWtSupportsRecoveryKeyDiscard: vi.fn(),
     setWtConfirmedIneligible: vi.fn(), setWtPreferenceSaving: vi.fn(),
+    setRemoteDraftPluginEngine: vi.fn(),
   };
   const applyDraftTarget = callback<(request: unknown) => void>('applyDraftTarget', bindings);
   const add = callback<(target: RemoteProjectTarget) => Promise<void>>('handleRemoteProjectAdded', { ...bindings, applyDraftTarget });
@@ -287,7 +290,7 @@ describe('Agent location chosen on a controlled new-task draft', () => {
       selectableDevices: [{ deviceId: 'task-device' }],
       selectableDevicesLoaded: true,
       controlledModelRoute: { catalogHostDeviceId },
-      isProviderShareAgentDeviceId, patchDraft, log: { warn: vi.fn() },
+      isProviderShareAgentDeviceId, patchDraft, localAlternate: null, log: { warn: vi.fn() },
     })();
     return patchDraft;
   }
@@ -300,12 +303,43 @@ describe('Agent location chosen on a controlled new-task draft', () => {
     expect(runLocationFallback(undefined)).toHaveBeenCalledWith({ agentDeviceId: null, agentDeviceName: null });
   });
 
+  it.each([
+    { loaded: true, listed: false, clears: true, deviceId: 'alternate-device', catalogHostDeviceId: undefined },
+    { loaded: false, listed: false, clears: false, deviceId: 'alternate-device', catalogHostDeviceId: undefined },
+    { loaded: true, listed: true, clears: false, deviceId: 'alternate-device', catalogHostDeviceId: undefined },
+    { loaded: true, listed: false, clears: false, deviceId: 'alternate-device', catalogHostDeviceId: 'task-device' },
+    { loaded: true, listed: false, clears: false, deviceId: 'share:alternate', catalogHostDeviceId: undefined },
+  ])('invalidates a temporary Agent only after authoritative device removal: %o', ({ loaded, listed, clears, deviceId, catalogHostDeviceId }) => {
+    const setAlternateModel = vi.fn();
+    const setDlSel = vi.fn();
+    const patchDraft = vi.fn();
+    effect('selected agent computer is no longer selectable', {
+      effectiveAgentDeviceId: deviceId,
+      localAlternate: { agentDevice: { deviceId } },
+      selectableDevices: listed ? [{ deviceId, online: false }] : [],
+      selectableDevicesLoaded: loaded,
+      controlledModelRoute: { catalogHostDeviceId },
+      isProviderShareAgentDeviceId, patchDraft, setAlternateModel, setDlSel,
+      log: { warn: vi.fn() },
+    })();
+    if (clears) {
+      expect(setAlternateModel).toHaveBeenCalledWith(null);
+      expect(setDlSel).toHaveBeenCalledWith(null);
+      expect(patchDraft).not.toHaveBeenCalled();
+    } else {
+      expect(setAlternateModel).not.toHaveBeenCalled();
+      expect(setDlSel).not.toHaveBeenCalled();
+    }
+  });
+
   it('does not reseed the chosen model when its catalog is read through the task computer', () => {
     const dlSeedKeyRef = { current: null as string | null };
     const dlRuntimeTouchedRef = { current: false };
     const patchDraft = vi.fn();
     const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
+      localModelIssue: null, localAlternate: null, setAlternateModel: vi.fn(), usesDeviceCatalog: true,
       setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(), setDlSel: vi.fn(),
+      setRemoteDraftPluginEngine: vi.fn(),
       normalizeDbAgentKind, dbToMakerAgentKind, modelCatalogKey, patchDraft,
       effectiveAgentDeviceId: undefined, isDeviceLinkDraft: true, deviceLinkInitial: null,
       controlledModelRoute: { catalogHostDeviceId: 'task-device' },
@@ -798,6 +832,19 @@ describe('new task model falls back when the seeded model is empty', () => {
       })) },
     };
   }
+
+  it('shows the saved host selection on the first render and waits for unknown defaults', () => {
+    const preview = (ready: boolean) => callback<() => DeviceLinkDraftSelection | null>('deviceLinkInitial', {
+      usesDeviceCatalog: true, dlSel: null, deviceDraftDefaultsReady: ready, catalogDeviceId: 'target-device',
+      capabilities: { availableModels: ['first', 'saved'].map(id => ({
+        id, displayName: id, efforts: [], defaultEffort: null,
+      })), permissionModes: [], effortLevels: [] },
+      capabilityAgentKind: 'codex', agentCatalogProviders: [], resolveDeviceLinkDraftDefaults,
+      deviceDraftDefaults: { model: 'saved', modelChosenByUser: true },
+    })();
+    expect(preview(false)).toBeNull();
+    expect(preview(true)?.model).toBe('saved');
+  });
 
   it('uses the seeded model when the catalog offers one', () => {
     // 种子档位是**请求值**:它来自被控端 capabilities 的跨来源并集,最终路由落到的来源
@@ -1391,15 +1438,80 @@ describe('the remote draft holder follows the displayed model', () => {
       deviceLinkInitial: staleHolder,
       remoteDraftRevisionRef: { current: 0 },
       forgetRemoteDraftDefaults: vi.fn(),
+      isCloudDeviceId,
       window: { electronAPI: { deviceLink: { invoke } } },
       invoke,
     };
   }
   function pushPref(bindings: ReturnType<typeof pushBindings>) {
     return callback<
-      (patch: { effort?: Effort; fast?: boolean | 'ultrafast' }) => void
+      (
+        patch: { effort?: Effort; fast?: boolean | 'ultrafast' },
+        target?: { agent: string; providerId: string | null; modelId: string; markModelChoice?: boolean },
+      ) => void
     >('pushActiveDraftPref', bindings);
   }
+
+  it.each([
+    { returningToTaskComputer: false, resetToRecommended: undefined, explicit: true },
+    { returningToTaskComputer: true, resetToRecommended: undefined, explicit: true },
+    { returningToTaskComputer: false, resetToRecommended: true, explicit: false },
+  ])('sends the picker intent for the chosen model: %o', ({ returningToTaskComputer, resetToRecommended, explicit }) => {
+    const bindings = {
+      ...pushBindings(),
+      effectiveAgentDeviceId: returningToTaskComputer ? 'other-computer' : undefined,
+    };
+    const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
+      ...bindings, localModelIssue: null, localAlternate: null, setAlternateModel: vi.fn(),
+      setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(),
+      setRemoteDraftPluginEngine: vi.fn(),
+      normalizeDbAgentKind, dbToMakerAgentKind, setDlSel: vi.fn(), patchDraft: vi.fn(),
+      catalogDeviceId: 'target-device', usesDeviceCatalog: true,
+      dlRuntimeTouchedRef: { current: false }, dlExplicitChoiceRef: { current: false },
+      dlSeedKeyRef: { current: null }, dlSeedCapabilitiesRef: { current: null },
+      pushActiveDraftPref: callback('pushActiveDraftPref', bindings),
+    });
+    select({
+      vendor: 'codex', providerId: 'new-source', modelId: 'new-model',
+      fast: false, favoriteUid: null, agentDevice: null, resetToRecommended,
+    });
+    expect(bindings.invoke).toHaveBeenCalledWith('target-device', 'maker:apply-new-maker-draft-pref', [{
+      agent: 'codex', providerId: 'new-source', modelId: 'new-model', active: true, fast: false,
+      markModelChoice: explicit, ...(explicit ? { selectDraftAgent: true } : {}),
+    }]);
+  });
+
+  // 测试价值:生产入口 handleModelDidChange(编译路由源码里的真实回调，只替换隧道)。只有托管云实例
+  // 把换模型写穿到被控端的新建任务记忆;其它电脑换模型只改控制端草稿。
+  // 最小失败输入:非云 device id 上的一次换模型。tier:unit。
+  const cloudDevice = 'cloud-device-0123456789abcdef01234567';
+  it.each([
+    { deviceId: 'target-device', writes: 0 },
+    { deviceId: cloudDevice, writes: 1 },
+  ])('writes a model change through to the remote memory only on a managed cloud instance: $deviceId', ({ deviceId, writes }) => {
+    const pushActiveDraftPref = vi.fn();
+    const handleModelDidChange = compile<(modelId: string) => void>('handleModelDidChange:write-through',
+      node => ts.isVariableDeclaration(node) && node.name.getText(source) === 'handleModelDidChange'
+        && node.initializer && ts.isCallExpression(node.initializer)
+        ? node.initializer.arguments[0]
+        : undefined, {
+        sshCodexDraftHostId: null, patchSshDraftSelection: vi.fn(), usesDeviceCatalog: true,
+        dlRuntimeTouchedRef: { current: false }, dlExplicitChoiceRef: { current: false },
+        capabilities: {
+          availableModels: [{ id: 'shared-model', displayName: 'Shared model', contextWindow: 200_000,
+            efforts: [], defaultEffort: null, effortsUnknown: false }],
+          hasFastMode: false, effortLevels: [], permissionModes: [],
+        } satisfies AgentCapabilities,
+        deviceDraftDefaults: null, capabilityAgentKind: 'pi', agentCatalogProviders: [],
+        catalogDeviceId: deviceId, effectiveDeviceLinkDeviceId: deviceId,
+        resolveDeviceLinkDraftDefaults, setDlSel: vi.fn(), pushActiveDraftPref,
+        dlSel: staleHolder, deviceLinkInitial: staleHolder, isCloudDeviceId,
+        markDefaultTupleCustomized: vi.fn(), patchActiveTuplePrefs: vi.fn(),
+        setRemoteDraftPluginEngine: vi.fn(), localAlternate: null,
+      });
+    handleModelDidChange('shared-model');
+    expect(pushActiveDraftPref).toHaveBeenCalledTimes(writes);
+  });
 
   it('writes the displayed model to the controlled draft, not the stale seed model', () => {
     const bindings = pushBindings();
@@ -1407,7 +1519,7 @@ describe('the remote draft holder follows the displayed model', () => {
     expect(bindings.invoke).toHaveBeenCalledWith(
       'target-device',
       'maker:apply-new-maker-draft-pref',
-      [expect.objectContaining({ modelId: 'other-model', effort: 'low' })],
+      [expect.objectContaining({ modelId: 'other-model', effort: 'low', markModelChoice: false })],
     );
   });
 
@@ -1495,6 +1607,7 @@ describe('the seeded source is pinned only by an explicit model or source choice
       if (next) Object.assign(dlSel, next);
     });
     const common = {
+      localAlternate: null,
       dlRuntimeTouchedRef,
       dlExplicitChoiceRef,
       setDlSel,
@@ -1509,6 +1622,9 @@ describe('the seeded source is pinned only by an explicit model or source choice
       patchActiveTuplePrefs: vi.fn(),
       patchActivePrefs: vi.fn(),
       pushActiveDraftPref: vi.fn(),
+      activePluginEngine: null,
+      dlPluginEngine: null,
+      setRemoteDraftPluginEngine: vi.fn(),
     };
     // 显式来源(用户为这个目标**明确选过**的那家)。没有显式选择时是 null。
     const explicitProviderId = () => callback<() => string | null>('explicitDraftProviderId', {
@@ -1551,6 +1667,28 @@ describe('the seeded source is pinned only by an explicit model or source choice
     callback<(modelId: string) => void>('handleModelDidChange', h.common)('other-model');
     expect(h.dlExplicitChoiceRef.current).toBe(true);
     expect(h.explicitProviderId()).toBe('seeded-source');
+  });
+
+  it.each([
+    ['handleModelDidChange', 'other-model', { model: 'other-model' }],
+    ['handleEffortDidChange', 'low', { effort: 'low' }],
+    ['handleProviderDidChange', 'picked-source', { providerId: 'picked-source' }],
+  ])('keeps the alternate draft current after %s', (name, value, patch) => {
+    const h = harness();
+    callback<(value: unknown) => void>(name as string, {
+      ...h.common, localAlternate: { agentDevice: { deviceId: 'remote' } },
+    })(value);
+    expect(h.common.patchActiveTuplePrefs).toHaveBeenCalledWith(patch);
+  });
+
+  it('keeps the alternate draft speed current after a remote Fast edit', () => {
+    const h = harness();
+    const localAlternate = { fast: false, agentDevice: { deviceId: 'remote' } };
+    const setAlternateModel = vi.fn();
+    callback<(value: boolean) => void>('handleFastModeChange', {
+      ...h.common, localAlternate, setAlternateModel,
+    })(true);
+    expect(setAlternateModel).toHaveBeenCalledWith({ ...localAlternate, fast: true });
   });
 
   it('pins the source once the user picks a source explicitly', () => {
@@ -1617,6 +1755,9 @@ describe('the seed keeps a restored explicit choice', () => {
       dlSeedKeyRef: { current: null as string | null },
       dlSeedCapabilitiesRef: { current: null as unknown },
       dlSeedDefaultsRef: { current: null as unknown },
+      dlSeedProvidersRef: { current: null as unknown },
+      deviceProvidersError: null,
+      isCloudDeviceId,
       dlRuntimeTouchedRef,
       dlExplicitChoiceRef,
       setDlSel,
@@ -1668,4 +1809,68 @@ describe('the seed keeps a restored explicit choice', () => {
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0]?.[3]).toBe(true);
   });
+});
+
+it('applies a replacement for an unavailable saved model only to the current local draft', () => {
+  const setAlternateModel = vi.fn();
+  const switchVendor = vi.fn();
+  const patchVendorPrefs = vi.fn();
+  const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
+    localModelIssue: 'engine', localAlternate: null, usesDeviceCatalog: false,
+    effectiveRemoteHostId: null, setAlternateModel, dataOwnerGeneration: 12, location: { key: 'draft-page' },
+    switchVendor, patchVendorPrefs,
+  });
+  select({
+    vendor: 'pi', providerId: 'xd', modelId: 'auto', effort: 'high', fast: false, favoriteUid: null,
+  });
+  expect(setAlternateModel).toHaveBeenCalledWith({
+    ownerGeneration: 12, pageKey: 'draft-page', agentDevice: null, vendor: 'pi', prefs: { providerId: 'xd', model: 'auto', effort: 'high' },
+    fast: false, favoriteUid: null,
+  });
+  expect(switchVendor).not.toHaveBeenCalled();
+  expect(patchVendorPrefs).not.toHaveBeenCalled();
+});
+
+// Minimal input: a missing local engine and an alternate on another computer.
+it('keeps remote alternates temporary and applies the latest same-device selection to the holder', () => {
+  const setAlternateModel = vi.fn();
+  const switchVendor = vi.fn();
+  const rememberAgentDeviceSelection = vi.fn();
+  const setDlSel = vi.fn();
+  const dlExplicitChoiceRef = { current: false };
+  const dlSeedKeyRef = { current: null };
+  const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
+    localModelIssue: null, localAlternate: { agentDevice: { deviceId: 'other-computer' } }, usesDeviceCatalog: true,
+    effectiveRemoteHostId: null, setAlternateModel, dataOwnerGeneration: 12, location: { key: 'draft-page' },
+    switchVendor, rememberAgentDeviceSelection, normalizeDbAgentKind, dbToMakerAgentKind,
+    setDlSel, dlExplicitChoiceRef, dlSeedKeyRef, dlRuntimeTouchedRef: { current: false },
+    dlSeedCapabilitiesRef: { current: null }, isDeviceLinkDraft: false,
+    modelCatalogKey, controlledModelRoute: { catalogHostDeviceId: undefined },
+  });
+  const agentDevice = { deviceId: 'other-computer', name: 'Other computer' };
+  select({ vendor: 'pi', providerId: 'xd', modelId: 'auto', effort: 'high',
+    fast: false, favoriteUid: null, agentDevice });
+  expect(setAlternateModel).toHaveBeenCalledWith(expect.objectContaining({ agentDevice, vendor: 'pi' }));
+  expect(rememberAgentDeviceSelection).toHaveBeenCalledWith('other-computer', 'pi', {
+    model: 'auto', providerId: 'xd', effort: 'high', fastMode: false,
+  });
+  select({ vendor: 'pi', providerId: 'xd', modelId: 'other-model', effort: 'medium',
+    fast: true, favoriteUid: null, agentDevice });
+  expect(setDlSel).toHaveBeenLastCalledWith({
+    model: 'other-model', providerId: 'xd', effort: 'medium', fastMode: true,
+  });
+  expect(dlExplicitChoiceRef.current).toBe(true);
+  expect(dlSeedKeyRef.current).toBe('other-computer:pi');
+  select({ vendor: 'codex', providerId: 'openai', modelId: 'remote-codex', effort: 'high',
+    fast: false, favoriteUid: null, agentDevice });
+  expect(dlSeedKeyRef.current).toBe('other-computer:codex');
+  expect(setDlSel).toHaveBeenLastCalledWith({
+    model: 'remote-codex', providerId: 'openai', effort: 'high', fastMode: false,
+  });
+  select({ vendor: 'codex', providerId: 'openai', modelId: 'local-model', effort: 'high',
+    fast: false, favoriteUid: null, agentDevice: null });
+  expect(setDlSel).toHaveBeenLastCalledWith(null);
+  expect(dlSeedKeyRef.current).toBeNull();
+  expect(dlExplicitChoiceRef.current).toBe(false);
+  expect(switchVendor).not.toHaveBeenCalled();
 });

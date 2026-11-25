@@ -193,8 +193,11 @@ function scriptedAnthropicTurn(requestBody: string): string {
   }
   if (requestBody.includes('discover Cindy controls')) {
     const call = (tool: string, args: Record<string, unknown>) => ({ name: 'cindy_mcp_call_tool', input: { server: 'cindy_helper', tool, args } });
+    const missingQuery = 'qzv10721xkfj982none';
     const calls = [
+      { name: 'cindy_mcp_list_tools', input: { query: missingQuery } },
       { name: 'cindy_mcp_list_tools', input: { server: 'cindy_helper', tool: 'list_tools' } },
+      call('list_tools', { query: missingQuery }),
       call('list_tools', { query: '壁纸' }),
       call('list_tools', { key: 'appearance.wallpaper' }),
       { name: 'cindy_mcp_list_tools', input: { server: 'cindy_helper', tool: 'call_tool' } },
@@ -203,7 +206,7 @@ function scriptedAnthropicTurn(requestBody: string): string {
       call('call_tool', { name: 'get_app_settings', args: { section: 'appearance' } }),
     ];
     const step = calls[toolResultCount];
-    return step ? anthropicToolTurn(toolResultCount + 1, step.name, step.input) : anthropicTextTurn(8, 'Controls verified');
+    return step ? anthropicToolTurn(toolResultCount + 1, step.name, step.input) : anthropicTextTurn(toolResultCount + 1, 'Controls verified');
   }
   // #10691: malformed plugin calls -> actionable feedback -> corrected calls.
   // This scripts model output; it tests real Pi routing, not model decision quality.
@@ -405,20 +408,21 @@ function scriptedAnthropicTurn(requestBody: string): string {
   if (requestBody.includes('call without schema inspection')) {
     if (toolResultCount === 0) {
       return anthropicToolTurn(1, 'cindy_mcp_call_tool', {
-        server: 'cindy_echo', tool: 'echo', args: { text: 'hello-pi' },
+        server: 'cindy_echo', tool: 'echo', args: { message: 'hello-pi' },
       });
     }
-    if (toolResultCount === 1) {
+    const feedback = latestToolResultContent(JSON.parse(requestBody));
+    if (toolResultCount === 1 && !feedback.includes('"inputSchema"')) {
       return anthropicToolTurn(2, 'cindy_mcp_list_tools', {
         server: 'cindy_echo', tool: 'echo',
       });
     }
-    if (toolResultCount === 2) {
-      return anthropicToolTurn(3, 'cindy_mcp_call_tool', {
+    if (feedback.includes('"inputSchema"')) {
+      return anthropicToolTurn(toolResultCount + 1, 'cindy_mcp_call_tool', {
         server: 'cindy_echo', tool: 'echo', args: { text: 'hello-pi' },
       });
     }
-    return anthropicTextTurn(4, 'blind call was gated safely');
+    return anthropicTextTurn(toolResultCount + 1, 'blind call was gated safely');
   }
   if (requestBody.includes('invalid args then correct')) {
     if (toolResultCount === 0) return anthropicToolTurn(1, 'cindy_mcp_list_tools', {});
@@ -491,6 +495,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   let recoveryWrites = 0;
   const recoveryCalls: string[] = [];
   const recoveryHandshakes: Array<string | string[] | undefined> = [];
+  let recoveryDeletes = 0;
 
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-mcp-int-'));
@@ -513,6 +518,11 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       const auth = req.headers.authorization ?? '';
       if (req.url?.includes('/recovery')) {
         if (auth !== `Bearer ${MCP_TOKEN}`) { res.writeHead(401).end(); return; }
+        if (req.method === 'DELETE') {
+          recoveryDeletes += 1;
+          res.writeHead(204).end();
+          return;
+        }
         const body = JSON.parse(await readBody(req));
         if (body.id === undefined) { res.writeHead(202).end(); return; }
         let result: unknown = {};
@@ -1309,6 +1319,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
   // Integration: the real Pi binary must traverse both discovery layers with
   // the production helper schemas. Scripted model only; no claim of model choice quality.
+  // #10721: an unmatched query at either layer must explain which existing filter to try.
+  // The adjacent successful search only exercises matching, not recovery.
   it('discovers and calls Cindy controls through the real Pi gateway', { timeout: 90_000 }, async () => {
     controlCalls.length = 0; controlSize = 16;
     const approvals: string[] = [];
@@ -1316,10 +1328,16 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       if (request.kind === 'permission') approvals.push(request.toolName);
       return { kind: 'permission', behavior: 'allow' };
     }, 'controls', 'discover Cindy controls', false, 'controls-first-use');
-    const firstSchema = JSON.parse(latestToolResultContent(requests[1]));
+    const gatewayMiss = JSON.parse(latestToolResultContent(requests[1]));
+    expect.soft(gatewayMiss).toMatchObject({ ok: true, tools: [], total: 0, hint: expect.stringMatching(/Omit query.*server/) });
+    const firstSchema = JSON.parse(latestToolResultContent(requests[2]));
     expect(firstSchema.tools[0].inputSchema.properties).toHaveProperty('query');
-    const search = JSON.parse(latestToolResultContent(requests[2]));
+    const helperMiss = JSON.parse(latestToolResultContent(requests[3]));
+    expect.soft(helperMiss).toMatchObject({ ok: true, items: [], total: 0, complete: true, nextCursor: null,
+      hint: expect.stringMatching(/list_tools\(\{category\}\).*list_tools\(\{name\}\)/) });
+    const search = JSON.parse(latestToolResultContent(requests[4]));
     expect(search.items).toContainEqual(expect.objectContaining({ key: 'appearance.wallpaper', availability: 'available' }));
+    expect(search).not.toHaveProperty('hint');
     expect(controlCalls).toEqual([
       { callerSessionId: 'control-owner', operation: 'update', section: 'appearance', patch: { uiSize: 17 } },
       { callerSessionId: 'control-owner', operation: 'get', section: 'appearance' },
@@ -1350,6 +1368,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     recoveryWrites = 0;
     recoveryCalls.length = 0;
     recoveryHandshakes.length = 0;
+    recoveryDeletes = 0;
     const approvals: string[] = [];
     const { requestBodies } = await runOneTurn('ask', async (req) => {
       if (req.kind === 'permission') approvals.push(req.toolName);
@@ -1358,6 +1377,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     expect(recoveryCalls).toEqual(['write', 'inspect']);
     expect(recoveryHandshakes).toEqual([undefined, undefined]);
     expect(recoveryWrites).toBe(mode === 'expired' ? 0 : 1);
+    expect(recoveryDeletes).toBe(1);
     expect(approvals.filter(name => name === 'mcp__recovery__echo')).toHaveLength(2);
     expect(requestBodies.at(-1)).toContain('not replayed');
     expect(requestBodies.at(-1)).toContain('writes=' + recoveryWrites);
@@ -1805,7 +1825,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       opaqueTurnCaptures.length = 0;
       let permissionCount = 0;
       const sessionId = 'mcp-itest-uninspected-first-call';
-      const { permissionAsked, requestBodies } = await runOneTurn(
+      const { permissionAsked, requests } = await runOneTurn(
         'ask',
         async (req) => {
           permissionCount += 1;
@@ -1825,14 +1845,16 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       );
 
       expect(permissionAsked).toBe(true);
-      // 剧本：首次盲调在权限询问**之前**就被披露门拦下（不弹权限框、不执行工具，只回
-      // 一条指名路标的错误），模型照路标补 list_tools 后重发；重发时已披露，正常过一次
-      // 权限门才真正落到 MCP。
+      // A compact definition lets the caller fix its first attempt without a discovery turn.
+      // The corrected retry still needs approval and is the only call that reaches the server.
       expect(permissionCount).toBe(1);
       expect(echoCalls).toEqual([{ text: 'hello-pi' }]);
-      expect(requestBodies.some((body) => body.includes('Inspect this tool before execution'))).toBe(true);
-      // 披露记录已按当前 schema 写入，模型随后补的 list_tools 仍返回 schema。
-      expect(requestBodies.some((body) => body.includes('inputSchema'))).toBe(true);
+      expect(requests).toHaveLength(3);
+      const firstResult = latestToolResultContent(requests[1]);
+      expect(firstResult).toContain('Tool call did not run');
+      expect(firstResult).toContain('Echo text back in uppercase');
+      expect(firstResult).toContain('"required":["text"]');
+      expect(latestToolResultContent(requests[2])).toContain('ECHO[hello-pi]');
       await waitFor(() => opaqueTurnCaptures.length >= 1);
       expect(opaqueTurnCaptures[0]).toMatchObject({
         sessionId,
@@ -1865,8 +1887,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
       expect(permissionCount).toBe(0);
       expect(echoCalls).toEqual([]);
-      // 两次 execute 都回同一条指名路标的错误。
-      const signposts = requestBodies.filter((body) => body.includes('Inspect this tool before execution'));
+      // Each unapproved attempt returns its definition without calling the server.
+      const signposts = requestBodies.filter((body) => body.includes('Tool call did not run'));
       expect(signposts.length).toBeGreaterThanOrEqual(1);
       await waitFor(() => opaqueTurnCaptures.length >= 1);
     },

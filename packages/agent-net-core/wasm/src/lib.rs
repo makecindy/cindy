@@ -21,7 +21,7 @@ use std::cell::{RefCell, UnsafeCell};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use agent_net_core::{
-    BandwidthShare, Config, Crypto, Endpoint, HASH_LEN, Incoming, PUBLIC_KEY_LEN, PathAddress, Priority, RecoveryPolicy, StreamEvent, TAG_LEN,
+    BandwidthShare, Config, Crypto, Endpoint, HASH_LEN, Incoming, PRIORITY_LEVELS, PUBLIC_KEY_LEN, PathAddress, Priority, RecoveryPolicy, StreamEvent, TAG_LEN,
 };
 
 const IO_LEN: usize = 65_536;
@@ -425,6 +425,31 @@ pub extern "C" fn probe(id: u32, now: f64) -> i32 {
     with(0, |state| state.endpoint.probe(micros(now), id, address) as i32)
 }
 
+/// 仅测速验证连接 `id` 到 addr 里那个地址的路径（不切换数据路径），见 `Endpoint::measure`。开始了新一轮验证时返回 1。
+#[unsafe(no_mangle)]
+pub extern "C" fn measure_probe(id: u32, now: f64) -> i32 {
+    let Some(address) = decode_addr(addr()) else { return 0 };
+    with(0, |state| state.endpoint.measure(micros(now), id, address) as i32)
+}
+
+/// 切换连接 `id` 是否优先走中继路径（`prefer != 0` 时中继代价 0、直连代价 2），见 `Endpoint::set_prefer_relay`。
+#[unsafe(no_mangle)]
+pub extern "C" fn conn_set_prefer_relay(id: u32, prefer: u32) -> i32 {
+    with(0, |state| state.endpoint.set_prefer_relay(id, prefer != 0) as i32)
+}
+
+/// 取出连接 `id` 一条路径测速结果：把地址写进 addr 并返回往返微秒数；没有返回 -1。
+#[unsafe(no_mangle)]
+pub extern "C" fn conn_poll_probe_rtt(id: u32) -> f64 {
+    with(-1.0, |state| match state.endpoint.poll_probe_rtt(id) {
+        Some((address, rtt_us)) => {
+            encode_addr(address, addr());
+            rtt_us as f64
+        }
+        None => -1.0,
+    })
+}
+
 /// 这一端换了网络，见 `Endpoint::on_local_address_change`。
 #[unsafe(no_mangle)]
 pub extern "C" fn local_address_change(now: f64) {
@@ -517,6 +542,60 @@ pub extern "C" fn conn_finish(id: u32, stream: u32) -> i32 {
     with(0, |state| state.endpoint.connection_mut(id).is_some_and(|connection| connection.finish_stream(stream)) as i32)
 }
 
+/// 开一条发往对端的流，`level` 是八档优先级里的第几档（0 最急；原来的交互、普通、后台是 1、3、6，见 `Priority`）。
+/// 返回流号，失败返回 0。
+#[unsafe(no_mangle)]
+pub extern "C" fn conn_open_stream_level(id: u32, level: u32) -> u32 {
+    let Some(priority) = u8::try_from(level).ok().and_then(Priority::level) else { return 0 };
+    with(0, |state| state.endpoint.connection_mut(id).and_then(|connection| connection.open_stream(priority)).unwrap_or(0))
+}
+
+/// 把一条流调到第 `level` 档，下一个分片起生效。成功返回 1。
+#[unsafe(no_mangle)]
+pub extern "C" fn conn_set_level(id: u32, stream: u32, level: u32) -> i32 {
+    let Some(priority) = u8::try_from(level).ok().and_then(Priority::level) else { return 0 };
+    with(0, |state| state.endpoint.connection_mut(id).is_some_and(|connection| connection.set_priority(stream, priority)) as i32)
+}
+
+/// 放弃一条流，见 `Connection::abandon_stream`：返回丢掉的、还没发出的字节数；默认流、不存在或已经结束的流返回 -1，
+/// 连接不存在返回 -2。
+#[unsafe(no_mangle)]
+pub extern "C" fn conn_abandon(id: u32, stream: u32) -> f64 {
+    with(-2.0, |state| match state.endpoint.connection_mut(id) {
+        Some(connection) => connection.abandon_stream(stream).map_or(-1.0, |dropped| dropped as f64),
+        None => -2.0,
+    })
+}
+
+/// 一条流的进展按顺序写成 `f64` 数组放进 io：累计被确认的字节、还在缓冲里的字节、停顿的微秒（见 `StreamProgress`），返回 3；
+/// 流不在了（没开过，或写完并全部被确认）返回 0，连接不存在返回 -1。
+#[unsafe(no_mangle)]
+pub extern "C" fn conn_stream_progress(id: u32, now: f64, stream: u32) -> i32 {
+    let io = io();
+    with(-1, |state| {
+        let Some(connection) = state.endpoint.connection(id) else { return -1 };
+        let Some(progress) = connection.stream_progress(micros(now), stream) else { return 0 };
+        write_f64s(io, &[progress.acked_bytes, progress.buffered as u64, progress.stalled_us])
+    })
+}
+
+/// 发送方向的进展写成 `f64` 数组放进 io：八档各自还在缓冲里的字节（第 0 档在前），再加停顿的微秒（见 `SendProgress`），
+/// 返回 9；连接不存在返回 -1。
+#[unsafe(no_mangle)]
+pub extern "C" fn conn_send_progress(id: u32, now: f64) -> i32 {
+    let io = io();
+    with(-1, |state| {
+        let Some(connection) = state.endpoint.connection(id) else { return -1 };
+        let progress = connection.send_progress(micros(now));
+        let mut values = [0u64; PRIORITY_LEVELS + 1];
+        for (value, queued) in values.iter_mut().zip(progress.queued) {
+            *value = queued as u64;
+        }
+        values[PRIORITY_LEVELS] = progress.stalled_us;
+        write_f64s(io, &values)
+    })
+}
+
 /// 按序读出一条流已到达的数据，写进 io，返回长度；连接不存在返回 -1。
 #[unsafe(no_mangle)]
 pub extern "C" fn conn_recv(id: u32, now: f64, stream: u32) -> i32 {
@@ -572,6 +651,7 @@ pub extern "C" fn conn_stats(id: u32) -> i32 {
             security.connection_ids_retired,
             security.connection_id_packets,
             security.connection_id_retransmissions,
+            stats.acknowledged_bytes,
         ];
         write_f64s(io, &values)
     })

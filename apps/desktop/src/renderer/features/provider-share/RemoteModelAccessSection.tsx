@@ -30,7 +30,11 @@ function modelAccessRows(models: RemoteModelAccessView['availableModels']) {
   return [...rows.values()];
 }
 
-export function RemoteModelAccessSection({ providerId, deviceId }: { providerId: string; deviceId?: string }) {
+export function RemoteModelAccessSection({ providerId, deviceId, poolName }: {
+  providerId: string; deviceId?: string;
+  /** Set for a connection merged into an account pool: it shows the pool's range, which is changed on the pool. */
+  poolName?: string;
+}) {
   const { t } = useTranslation();
   useOptionalAuthUser();
   const owner = getDataOwnerGeneration();
@@ -61,13 +65,17 @@ export function RemoteModelAccessSection({ providerId, deviceId }: { providerId:
     return () => { active = false; off(); };
   }, [providerId, deviceId, owner]);
   const currentView = isDataOwnerGenerationCurrent(viewOwner) ? view : null;
+  const selectedIds = new Set(currentView?.models);
+  const excludesModels = !deviceId && poolName === undefined && !error && currentView?.models != null
+    && currentView.availableModels.some(({ id }) => !selectedIds.has(id));
   return (
     <SettingsSection className="mt-6 shrink-0" testId="remote-model-access" headingLevel={3}
-      title={t(key + 'title')} description={t(key + 'description')}>
+      title={t(key + 'title')} description={poolName !== undefined ? t(key + 'followsPool', { pool: poolName }) : t(key + 'description')}>
       <SettingsCard>
         <SettingsRow
           title={currentView ? t(key + (currentView.models === null ? 'all' : 'selected'), { count: new Set(currentView.models?.map(unifiedModelKeyId)).size }) : t(key + 'loading')}
-          trailing={<Button ref={trigger} variant="secondary" size="sm" disabled={!currentView || Boolean(error)} onClick={() => setOpen(true)}>{t(key + 'choose')}</Button>}
+          hint={excludesModels ? t(key + 'selectionExcludesModels') : undefined}
+          trailing={<Button ref={trigger} variant="secondary" size="sm" disabled={!currentView || Boolean(error) || poolName !== undefined} onClick={() => setOpen(true)}>{t(key + 'choose')}</Button>}
         />
       </SettingsCard>
       {error && <ErrorNotice role="alert" message={t(error)} />}

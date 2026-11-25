@@ -90,6 +90,7 @@ describe('createWorktree naming authority', () => {
       }
       return { stdout: '', stderr: '' };
     });
+    await import('../worktree/WorktreeManagerPorts.desktop');
     manager = await import('../worktree/WorktreeManager');
   });
 
@@ -170,7 +171,7 @@ describe('createWorktree naming authority', () => {
       finishCheckout = (fail) => (fail ? reject(new Error('checkout failed')) : resolve({ stdout: '', stderr: '' }));
     });
     gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
-      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+      if (args[0] === 'checkout' && args.includes('.')) {
         enteredCheckout();
         return checkout;
       }
@@ -206,11 +207,15 @@ describe('createWorktree naming authority', () => {
     const setup = new Promise<void>(resolve => { reachedSetup = resolve; });
     gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
       if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return checkout;
-      if (args.includes('core.hooksPath')) {
-        reachedSetup();
-        if (failSetup) return Promise.reject(new Error('hooks failed'));
-      }
       return previousGit(args, ...rest);
+    });
+    // #11157 removes the hooks write; keep exercising failure compensation at
+    // the remaining fatal metadata-persistence boundary (unit tier).
+    const previousSet = storeSetMock.getMockImplementation()!;
+    storeSetMock.mockImplementation((...args: unknown[]) => {
+      reachedSetup();
+      if (failSetup) return Promise.reject(new Error('metadata failed'));
+      return previousSet(...args);
     });
     const sessionId = `tracked-${failSetup}`;
     const creating = manager.createWorktree({sessionId, baseRepo, name: 'tracked', sourceBranch: 'main'}, {trackBackgroundCheckout: true});
@@ -230,6 +235,45 @@ describe('createWorktree naming authority', () => {
     expect(checkoutLease.release).toHaveBeenCalledOnce();
     expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(failSetup);
     await manager.awaitBackgroundCheckout(sessionId);
+  });
+
+  it('waits for checkout before rolling back an unpublished registry rejection', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let finishCheckout!: () => void;
+    const checkout = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      finishCheckout = () => resolve({ stdout: '', stderr: '' });
+    });
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return checkout;
+      return previousGit(args, ...rest);
+    });
+    let reachedPersist!: () => void;
+    const persist = new Promise<void>((resolve) => { reachedPersist = resolve; });
+    storeSetMock.mockImplementation(async (...args: unknown[]) => {
+      reachedPersist();
+      // The real store invokes this under its registry lock.
+      await (args[2] as (() => Promise<void>) | undefined)?.();
+    });
+    let guardCalls = 0;
+    let settled = false;
+    const creating = manager.createWorktree({
+      sessionId: 'locked-rejection', baseRepo, name: 'guarded', sourceBranch: 'main',
+    }, {
+      assertWriteAllowed: () => {
+        guardCalls++;
+        if (guardCalls === 3) throw new Error('profile held');
+      },
+    }).finally(() => { settled = true; });
+    await persist;
+    try {
+      expect(settled).toBe(false);
+      expect(storeMap.has('locked-rejection')).toBe(false);
+    } finally {
+      finishCheckout();
+    }
+    await expect(creating).resolves.toMatchObject({ ok: false });
+    expect(storeMap.has('locked-rejection')).toBe(false);
+    expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(true);
   });
 
   it.each(['', '   \t'])('generates a meaningful final name for blank input %j', async (name) => {
@@ -306,6 +350,7 @@ describe('createWorktree naming authority', () => {
     // profile lock and cancellation marker are real shared filesystem state.
     const creator = manager;
     vi.resetModules();
+    await import('../worktree/WorktreeManagerPorts.desktop');
     const canceller = await import('../worktree/WorktreeManager');
     let release!: () => void;
     let entered!: () => void;
@@ -449,9 +494,9 @@ describe('createWorktree naming authority', () => {
     // worktree whose ignored file differs from base) nor be compared byte by byte.
     it('rolls back a failed setup with multibox remove --wait, without force, despite carried caches', async () => {
       useMultiboxRepo();
+      storeSetMock.mockRejectedValueOnce(new Error('metadata failed'));
       const previousGit = gitExecMock.getMockImplementation()!;
       gitExecMock.mockImplementation(async (args: string[], ...rest: unknown[]) => {
-        if (args.includes('core.hooksPath')) throw new Error('hooks failed');
         if (args[0] === 'ls-files' && args.includes('--ignored')) {
           return { stdout: 'client/Library/ArtifactDB\0', stderr: '' };
         }

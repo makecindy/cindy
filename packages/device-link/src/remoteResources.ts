@@ -84,6 +84,14 @@ export interface RemoteResourceDisplay {
    * position, so reading on any device clears the badge on the others. Older hosts omit it.
    */
   lastReadAt?: number;
+  /**
+   * Inbox snooze of the conversation behind this row: the snooze fields of its Session, in ISO
+   * host time (null = unset). `userSendAt` is the conversation's latest input (the Session's own
+   * value or its newest message, whichever is later); input after `snoozedAt` wakes the row. A
+   * host that sends this accepts `local-db:sessions:patch-meta` `{ snoozedUntil }` on the row's
+   * `conversation` Session; older hosts omit it, and controllers then offer no snooze for the row.
+   */
+  inboxSnooze?: { snoozedUntil: string | null; snoozedAt: string | null; userSendAt: string | null };
   avatar?: RemoteResourceAvatar;
   status?: RemoteResourceStatus;
   badges?: RemoteResourceBadge[];

@@ -323,12 +323,17 @@ export class AgentNetClient {
       return response;
     } finally { clearTimeout(timer); }
   }
-  /** Native media reads are bounded ranges; retain their deadline until consumed. */
-  async withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60_000); unrefTimer(timer);
+  /** Native media reads retain an idle deadline through body consumption. */
+  async withMediaResponse<T>(id: string, range: string, consume: (response: Response, onByteProgress?: (bytes: number) => void) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const controller = new AbortController();
+    let timer = setTimeout(() => controller.abort(), 60_000); unrefTimer(timer);
+    const onByteProgress = (bytes: number) => {
+      if (controller.signal.aborted || signal?.aborted || !Number.isFinite(bytes) || bytes <= 0) return;
+      clearTimeout(timer); timer = setTimeout(() => controller.abort(), 60_000); unrefTimer(timer);
+    };
     try {
       const response = await this.mediaResponse(id, range, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
-      return await consume(response);
+      return await consume(response, onByteProgress);
     } finally { clearTimeout(timer); controller.abort(); }
   }
 }
@@ -424,10 +429,20 @@ export class AgentNetUplink extends EventEmitter {
       const timer = setTimeout(() => { ws.terminate(); reject(new Error('AGENT_NET_HANDSHAKE_TIMEOUT')); }, 10_000);
       unrefTimer(timer);
       let established = false;
-      const fail = (error: Error) => { clearTimeout(timer); if (!established) reject(error); ws.terminate(); };
+      // Why this side ended an established connection (a frame it refused); goes with 'close' so the host log can say so.
+      let ended: string | undefined;
+      const fail = (error: Error) => {
+        clearTimeout(timer);
+        if (!established) reject(error);
+        else ended ??= /^[A-Z0-9_]{1,80}$/.test(error.message) ? error.message : 'AGENT_NET_UPLINK_FAILED';
+        ws.terminate();
+      };
       ws.on('error', fail);
       ws.once('unexpected-response', (_request, response) => { response.resume(); fail(new Error('AGENT_NET_UPGRADE_' + response.statusCode)); });
-      ws.on('close', (code) => { clearTimeout(timer); if (!established) reject(new Error('AGENT_NET_CLOSED_' + code)); uplink.emit('close', code); });
+      ws.on('close', (code) => {
+        clearTimeout(timer); if (!established) reject(new Error('AGENT_NET_CLOSED_' + code));
+        if (ended) uplink.emit('close', code, ended); else uplink.emit('close', code);
+      });
       ws.on('message', (raw, binary) => {
         const bytes = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
         if (binary) {

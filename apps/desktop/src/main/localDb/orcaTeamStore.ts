@@ -57,7 +57,8 @@ export interface OrcaWorkerRecord {
   session: {
     id: string;
     title: string;
-    agentKind: MakerAgentKind;
+    /** 'acp' = 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)。 */
+    agentKind: MakerAgentKind | 'acp';
     workingDir: string;
     model: string;
     effort: string;
@@ -66,6 +67,8 @@ export interface OrcaWorkerRecord {
     sdkSessionId?: string;
     /** Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)；null = 任务所在电脑。旧端缺省。 */
     agentDeviceId?: string | null;
+    /** 仅插件引擎 Worker：哪一个引擎(acp-plugin:<插件>:<引擎>)，供界面画它的图标。 */
+    providerId?: string;
   };
   /**
    * Worker 在同账号另一台电脑运行时的运行设备与那台上的真实任务 id；缺省 = 本机 Worker。
@@ -285,13 +288,20 @@ export async function createActiveTeam(input: {
   const db = getDbClient().drizzle;
   const now = Date.now();
   const id = input.id ?? createId();
-  await db.insert(orcaTeams).values({
-    id,
-    leadSessionId: input.leadSessionId,
-    status: 'active',
-    completedAt: null,
-    createdAt: now,
-    updatedAt: now,
+  await withSessionRouteLock(input.leadSessionId, async () => {
+    if (getDbClient().drizzle !== db) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+    const [closed] = await db.select({ id: sessions.id }).from(sessions).where(and(
+      eq(sessions.id, input.leadSessionId), eq(sessions.source, 'side-chat'), ne(sessions.status, 'active'),
+    )).limit(1);
+    if (closed) throwIpcError('PRECONDITION_FAILED', 'Follow-up is no longer active');
+    await db.insert(orcaTeams).values({
+      id,
+      leadSessionId: input.leadSessionId,
+      status: 'active',
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
   });
   const created = await getTeamById(id);
   if (!created) throwIpcError('INTERNAL', `Orca team ${id} not found after create`);
@@ -747,11 +757,15 @@ export async function setSessionOrcaRole(
   };
   assertCurrent();
   const db = owner!.client.drizzle;
-  await db.update(sessions).set({ orcaRole: role }).where(eq(sessions.id, sessionId));
+  const changed = await db.update(sessions).set({ orcaRole: role }).where(and(
+    eq(sessions.id, sessionId),
+    role === 'lead' ? sql`NOT (${sessions.source} = 'side-chat' AND ${sessions.status} <> 'active')` : undefined,
+  )).returning({ id: sessions.id });
   // The issued write belongs to the captured DB. Never broadcast its result
   // into another account, or after the owning creation has been cancelled.
   assertCurrent();
-  broadcastSessionPatch(sessionId, { orcaRole: role });
+  if (changed.length) broadcastSessionPatch(sessionId, { orcaRole: role });
+  else if (role === 'lead') throwIpcError('PRECONDITION_FAILED', 'Lead is no longer active');
 }
 
 async function getTeamById(id: string): Promise<OrcaTeamRecord | null> {
@@ -796,7 +810,7 @@ function workerToRecord(
     session: {
       id: session.id,
       title: session.title,
-      agentKind: fromDbAgentKind(session.agentKind),
+      agentKind: session.agentKind === 'acp' ? 'acp' : fromDbAgentKind(session.agentKind),
       workingDir: session.workingDir ?? '',
       model: session.model,
       effort: session.effort,
@@ -804,6 +818,7 @@ function workerToRecord(
       fastMode: (session.fastMode ?? false),
       sdkSessionId: session.sdkSessionId ?? undefined,
       agentDeviceId: session.agentDeviceId && !session.remoteHostId ? session.agentDeviceId : null,
+      ...(session.agentKind === 'acp' && session.providerId ? { providerId: session.providerId } : {}),
     },
     ...(worker.executionDeviceId && worker.remoteSessionId
       ? {

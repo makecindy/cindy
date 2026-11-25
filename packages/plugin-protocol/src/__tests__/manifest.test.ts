@@ -1,5 +1,11 @@
 import { getPluginHostUi, getPluginToolUi, parseGhostUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
 import { hostUiApprovalSubjects } from '../hostUi.js';
+import {
+  GHOST_HARNESS_GUEST_WORKSPACE_ARG,
+  GHOST_HARNESS_REMOTE_WORKSPACE_ARG,
+  parseGhostHarnessAvailability,
+} from '../pluginHarnesses.js';
+import { ghostFileOpenerMatches, ghostFileOpenerWithinCap } from '../pluginFileOpener.js';
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANUAL_DESCRIPTION_MAX_CHARS,
@@ -21,6 +27,7 @@ import {
   supportsCindyVersion,
   validateGhostManifest,
   validateStoredGhostManifest,
+  getGhostGithubReleaseRepository,
 } from '../manifest.js';
 
 const validManifest = {
@@ -58,6 +65,19 @@ it.each([2, 3])('preserves preferred navigation icons and ignores malformed hint
 });
 
 describe('Ghost manifest contract', () => {
+  // Unit: the declared source survives parsing, and a URL-like path cannot become a release endpoint.
+  it('validates new release declarations without breaking existing manifests', () => {
+    const base = { ...validManifest, settingsHtml: 'settings.html' };
+    expect(validateGhostManifest({ ...base, githubRelease: 'Example/Plugin' }))
+      .toMatchObject({ ok: true, manifest: { githubRelease: 'Example/Plugin' } });
+    expect(validateGhostManifest({ ...base, githubRelease: 'example/..' })).toMatchObject({ ok: false });
+    expect(validateGhostManifest({ ...validManifest, githubRelease: 'example/plugin' })).toMatchObject({ ok: false });
+    const historical = { rollback: true };
+    expect(validateStoredGhostManifest({ ...base, githubRelease: historical }))
+      .toMatchObject({ ok: true, manifest: { githubRelease: historical } });
+    expect(getGhostGithubReleaseRepository({ ...base, githubRelease: historical })).toBeUndefined();
+  });
+
   // 第23项：沿用已批准的 network.hosts 字段，以精确 origin 开放端口、内网和 WS。
   // 旧域名语义不变；最小失败输入为 http://127.0.0.1:8080，tier=unit。
   it('validates exact network origins without accepting paths, credentials or wildcard origins', () => {
@@ -79,6 +99,125 @@ describe('Ghost manifest contract', () => {
     expect(stored).toMatchObject({ ok: true, manifest: { cindy: { image: ['generate'] } } });
     if (stored.ok) expect(stored.manifest.cindy?.models).toEqual(models);
   });
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：validateGhostManifest / validateStoredGhostManifest 对 `fileOpener` 的
+   *   接受、拒绝与规范化结果；ghostFileOpenerMatches / ghostFileOpenerWithinCap 的命中与上限判定。
+   * - Bug／规则依据：plugin-security-and-authoring.md §1.2（v3 直接字段）、§4（宿主绝对路径只给声明
+   *   node 的插件）、§5（已存 Release 不因新校验失效）。
+   * - 现有覆盖缺口：新字段，此前作为未知字段原样保留。
+   * - 最小失败输入：没有 node 的 fileOpener；大写扩展名；已存 Release 里不合规的历史 fileOpener。
+   * - tier：unit（纯函数矩阵）。实测耗时：随本文件整体 < 1s。
+   */
+  describe('fileOpener', () => {
+    const node = { entry: 'worker.js', protocol: 'json-rpc-stdio' };
+    const v3 = (extra: Record<string, unknown>) => ({ ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.145', slots: undefined, node, ...extra });
+
+    it('keeps a valid declaration and unknown subfields', () => {
+      const fileOpener = { extensions: ['.docx', '.xlsx', '.tar.gz'], label: 'future' };
+      expect(validateGhostManifest(v3({ fileOpener }))).toMatchObject({ ok: true, manifest: { fileOpener } });
+    });
+
+    it.each([
+      ['not an object', { fileOpener: ['.docx'] }],
+      ['no extensions', { fileOpener: { extensions: [] } }],
+      ['uppercase extension', { fileOpener: { extensions: ['.DOCX'] } }],
+      ['missing dot', { fileOpener: { extensions: ['docx'] } }],
+      ['duplicate extension', { fileOpener: { extensions: ['.docx', '.docx'] } }],
+      ['too many extensions', { fileOpener: { extensions: Array.from({ length: 33 }, (_, i) => `.x${i}`) } }],
+      ['no node', { node: undefined, fileOpener: { extensions: ['.docx'] } }],
+    ])('rejects %s for a new package but drops it from a stored release', (_label, extra) => {
+      expect(validateGhostManifest(v3(extra)).ok).toBe(false);
+      const stored = validateStoredGhostManifest(v3(extra));
+      expect(stored.ok).toBe(true);
+      if (stored.ok) expect(stored.manifest.fileOpener).toBeUndefined();
+    });
+
+    it('matches by file name suffix and caps a package to the reviewed extensions', () => {
+      const decl = { extensions: ['.docx', '.xlsx'] };
+      expect(ghostFileOpenerMatches(decl, 'C:\\报告\\Q3.DOCX')).toBe(true);
+      expect(ghostFileOpenerMatches(decl, '/home/a/notes.doc')).toBe(false);
+      expect(ghostFileOpenerMatches(decl, '/home/a/.docx')).toBe(false);
+      expect(ghostFileOpenerWithinCap({ extensions: ['.docx'] }, decl)).toBe(true);
+      expect(ghostFileOpenerWithinCap({ extensions: ['.docx', '.pdf'] }, decl)).toBe(false);
+      expect(ghostFileOpenerWithinCap(decl, undefined)).toBe(false);
+      expect(ghostFileOpenerWithinCap(undefined, undefined)).toBe(true);
+    });
+  });
+
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：validateGhostManifest / validateStoredGhostManifest 对 `harnesses` 的
+   *   接受、拒绝与规范化结果（作者打包、服务端上架与已存 Release 都读这一份）。
+   * - Bug／规则依据：plugin-security-and-authoring.md §1.2 / §5（v3 未知字段保留、存量不因新校验失效）；
+   *   docs/plans/acp-plugin-bridge.md「接口约定」的清单字段。
+   * - 现有覆盖缺口：新字段，此前作为未知字段原样保留。
+   * - 最小失败输入：entry 写成 node.entry 主入口；已存 Release 里不合规的历史 harnesses。
+   * - tier：unit（纯函数矩阵）。实测耗时：随本文件整体 < 1s。
+   */
+  describe('harnesses', () => {
+    const node = { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js'] };
+    const harness = { id: 'dsh', name: 'DeepSeek Harness', protocol: 'acp', entry: 'engine.js' };
+    const v3 = (extra: Record<string, unknown>) => ({ ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined, node, ...extra });
+
+    it('keeps a valid declaration, its locales, unknown protocols and extension fields', () => {
+      const declared = [
+        { ...harness, description: 'Local agent', icon: 'dsh.png', locales: { 'zh-CN': { name: '深度求索' } } },
+        { id: 'future', name: 'Future', protocol: 'acp/2', entry: 'engine.js' },
+      ];
+      expect(validateGhostManifest(v3({ harnesses: declared }))).toMatchObject({ ok: true, manifest: { harnesses: declared } });
+    });
+
+    it.each([
+      ['not an array', { harnesses: harness }],
+      ['empty', { harnesses: [] }],
+      ['more than four', { harnesses: ['a', 'b', 'c', 'd', 'e'].map(id => ({ ...harness, id })) }],
+      ['bad id', { harnesses: [{ ...harness, id: 'DSH' }] }],
+      ['duplicate id', { harnesses: [harness, harness] }],
+      ['empty name', { harnesses: [{ ...harness, name: ' ' }] }],
+      ['long name', { harnesses: [{ ...harness, name: 'x'.repeat(65) }] }],
+      ['long description', { harnesses: [{ ...harness, description: 'x'.repeat(201) }] }],
+      ['missing protocol', { harnesses: [{ ...harness, protocol: undefined }] }],
+      ['main entry', { harnesses: [{ ...harness, entry: 'worker.js' }] }],
+      ['undeclared entry', { harnesses: [{ ...harness, entry: 'other.js' }] }],
+      ['bad locale text', { harnesses: [{ ...harness, locales: { 'zh-CN': { name: '' } } }] }],
+      ['no node', { node: undefined, harnesses: [harness] }],
+    ])('rejects %s for a new package but drops it from a stored release', (_label, extra) => {
+      expect(validateGhostManifest(v3(extra)).ok).toBe(false);
+      const stored = validateStoredGhostManifest(v3(extra));
+      expect(stored.ok).toBe(true);
+      if (stored.ok) expect(stored.manifest.harnesses).toBeUndefined();
+    });
+
+    it('does not map a v2 manifest', () => {
+      const v2 = validateGhostManifest({ ...validManifest, slots: ['tool', 'node'], node, harnesses: [harness] });
+      expect(v2.ok).toBe(true);
+      if (v2.ok) expect(v2.manifest.harnesses).toBeUndefined();
+    });
+
+    it('keeps guestWorkspace availability only alongside available and remoteWorkspace, and locks CLI flag literals', () => {
+      expect(GHOST_HARNESS_REMOTE_WORKSPACE_ARG).toBe('--cindy-remote-workspace');
+      expect(GHOST_HARNESS_GUEST_WORKSPACE_ARG).toBe('--cindy-guest-workspace');
+      const parsed = parseGhostHarnessAvailability({
+        harnesses: [
+          { id: 'both', available: true, remoteWorkspace: true, guestWorkspace: true },
+          { id: 'remote-only', available: true, remoteWorkspace: true, guestWorkspace: 'yes' },
+          { id: 'guest-without-remote', available: true, guestWorkspace: true },
+          { id: 'offline', available: false, remoteWorkspace: true, guestWorkspace: true },
+        ],
+      }, ['both', 'remote-only', 'guest-without-remote', 'offline']);
+      expect(parsed).toEqual({
+        ok: true,
+        harnesses: [
+          { id: 'both', available: true, remoteWorkspace: true, guestWorkspace: true },
+          { id: 'remote-only', available: true, remoteWorkspace: true },
+          { id: 'guest-without-remote', available: true },
+          { id: 'offline', available: false },
+        ],
+      });
+    });
+  });
+
   it('validates static task prompt declarations while preserving older installed plugin behavior', () => {
     const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
     expect(validateGhostManifest({ ...base, systemPrompt: [{ id: 'style', order: 0, text: 'Static', scope: 'selected-task' }] })).toMatchObject({ ok: true });
@@ -722,6 +861,51 @@ describe('Ghost manifest contract', () => {
     });
   });
 
+  // 与 Desktop 镜像同一组 fixture:设备码端点只在声明时出现并固定在 tokenUrl 之后
+  // (市场能力上限按归一化 JSON 逐字比较),越白名单或与 broker 同用即拒。
+  it('accepts the device authorization endpoint at a fixed position and rejects unsafe combinations', () => {
+    const manifestWith = (oauth: Record<string, unknown>) => ({
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['accounts.example.com', 'api.example.com'],
+        secrets: [
+          {
+            key: 'account',
+            label: 'Example account',
+            source: 'oauth',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+            oauth,
+          },
+        ],
+      },
+    });
+    const base = {
+      authorizeUrl: 'https://accounts.example.com/authorize',
+      tokenUrl: 'https://accounts.example.com/token',
+      scopes: ['read.a'],
+    };
+    const legacy = validateGhostManifest(manifestWith(base));
+    expect(legacy.ok && JSON.stringify(legacy.manifest.network?.secrets?.[0]?.oauth)).toBe(JSON.stringify(base));
+    const device = validateGhostManifest(
+      manifestWith({ ...base, deviceAuthorizationUrl: 'https://api.example.com/device' }),
+    );
+    expect(device.ok && Object.keys(device.manifest.network?.secrets?.[0]?.oauth ?? {})).toEqual([
+      'authorizeUrl',
+      'tokenUrl',
+      'deviceAuthorizationUrl',
+      'scopes',
+    ]);
+    for (const bad of [
+      { ...base, deviceAuthorizationUrl: 'https://evil.example.net/device' },
+      { ...base, deviceAuthorizationUrl: 'https://accounts.example.com/device', tokenBroker: 'feishu', redirectPort: 53684 },
+    ]) {
+      expect(validateGhostManifest(manifestWith(bad)).ok, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it('accepts and normalizes Plugin locale resource declarations', () => {
     const locales = {
       en: 'locales/en.json',
@@ -950,6 +1134,7 @@ describe('Ghost manifest contract', () => {
       notify: true,
       fs: true,
       library: true,
+      form: true,
       tools: [
         {
           name: 'run_helper',
@@ -997,6 +1182,7 @@ describe('Ghost manifest contract', () => {
     expect(result.manifest.notify).toBe(true);
     expect(result.manifest.fs).toBe(true);
     expect(result.manifest.library).toBe(true);
+    expect(result.manifest.form).toBe(true);
     expect(result.manifest.unknownField).toBe('ignored');
   });
 
@@ -2121,6 +2307,19 @@ describe('interactive page declarations', () => {
             file: 'ui/planner.html',
             csp: { connectDomains: ['https://api.example.com'] }
         }], tools: { help: { resourceUri: "ui://planner", visibility: ['model', 'app'] } } } } };
+  // #11918, unit: a new declaration must be valid at install, while historical
+  // snapshots keep their original approval data and all valid page declarations.
+  it.each(['240', NaN, Infinity, -Infinity, {}, null])('rejects an invalid initialHeight %s only for a new package', initialHeight => {
+    const resource = base.mcpApps.ui.resources[0];
+    const other = { uri: 'ui://other', file: 'ui/other.html', initialHeight: 180 };
+    const raw = { ...base, mcpApps: { ui: { ...base.mcpApps.ui, resources: [{ ...resource, initialHeight }, other] } } };
+    expect(validateGhostManifest(raw)).toMatchObject({ ok: false, reason: expect.stringContaining('resources[0].initialHeight') });
+    const stored = validateStoredGhostManifest(raw);
+    if (!stored.ok) throw new Error(stored.reason);
+    expect(getPluginToolUi(stored.manifest)).toEqual({ ...base.mcpApps.ui, resources: [resource, other] });
+    expect(stored.manifest.mcpApps).toEqual(raw.mcpApps);
+    expect(raw.mcpApps.ui.resources[0].initialHeight).toEqual(initialHeight);
+  });
   // Host button preference is presentation only, not a display-mode permission.
   it('preserves the optional Host fullscreen button preference without changing tools', () => {
     const resources = [{ ...base.mcpApps.ui.resources[0], hostFullscreenButton: false }];
@@ -2397,6 +2596,23 @@ describe('tool approval declaration', () => {
     expect(validateGhostManifest({ ...validManifest, tools: [{ name: 'run', description: 'Run', approval: 'bypass' }] }))
       .toMatchObject({ ok: false });
   });
+});
+
+// Unit: the installed manifest must preserve the explicit startup declaration.
+// Approval tests cover tool policies but cannot distinguish an opted-in tool
+// from a legacy tool with no startup claim.
+it('retains tool startup opt-in while ignoring unknown values for installed packages', () => {
+  const tools = [
+    { name: 'find', description: 'Find an item', exposure: 'startup' },
+    { name: 'open', description: 'Open an item' },
+    { name: 'list', description: 'List items', exposure: { legacy: true } },
+  ];
+  for (const validate of [validateGhostManifest, validateStoredGhostManifest]) {
+    expect(validate({ ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined, tools })).toMatchObject({
+      ok: true,
+      manifest: { tools: [tools[0], tools[1], { name: 'list', description: 'List items' }] },
+    });
+  }
 });
 
 describe('readme declarations', () => {

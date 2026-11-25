@@ -18,6 +18,7 @@ import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionC
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { createRemoteReadBridge } from './remoteReadBridge';
 
 import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
@@ -176,8 +177,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deviceLink: {
     getState: (): Promise<unknown> => ipcRenderer.invoke(DEVICE_LINK_INVOKE.GET_STATE),
     listDevices: (): Promise<unknown> => ipcRenderer.invoke(DEVICE_LINK_INVOKE.LIST_DEVICES),
-    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }): Promise<unknown> =>
-      ipcRenderer.invoke(DEVICE_LINK_INVOKE.INVOKE, { deviceId, channel, args, ...(scheduling ? { scheduling } : {}) }),
+    invoke: createRemoteReadBridge(ipcRenderer).invoke,
     subscribe: (deviceId: string, topics: string[]): Promise<{ ok: true }> =>
       ipcRenderer.invoke(DEVICE_LINK_INVOKE.SUBSCRIBE, { deviceId, topics }),
     unsubscribe: (deviceId: string, topics: string[]): Promise<{ ok: true }> =>
@@ -296,6 +296,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url: string): Promise<unknown> => ipcRenderer.invoke('shell:open-external', url),
   openFileInBrowser: (pathOrUrl: string): Promise<unknown> => ipcRenderer.invoke('shell:open-file-in-browser', pathOrUrl),
   openPath: (pathOrUrl: string) => invokeOpenPath(ipcRenderer.invoke.bind(ipcRenderer), pathOrUrl),
+  openSystemPreview: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('file:system-preview', filePath),
+  getFileThumbnail: (params: { path: string; size: number; revalidate?: boolean }): Promise<{
+    dataUrl: string | null; byteSize: number;
+  } | null> => ipcRenderer.invoke('file:thumbnail', params),
   showItemInFolder: (params: unknown): Promise<unknown> => ipcRenderer.invoke('shell:show-item-in-folder', params),
   copyPngToClipboard: (params: CopyPngToClipboardParams): Promise<void> =>
     ipcRenderer.invoke(COPY_PNG_TO_CLIPBOARD_CHANNEL, params),
@@ -480,6 +485,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 鈹€鈹€ RSB browser bridge(WebView 鎵胯浇) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   rsbBrowserBridge: {
+    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbFilePreviewReportPayload): Promise<unknown> =>
+      ipcRenderer.invoke('rsb-browser-bridge:report-file-preview-opener', input),
     report: (input: {
       sessionId: string;
       tabId: string;
@@ -710,7 +717,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Only read operations required by the model selector; sharing/group management stays in the main UI.
   providerShare: {
     command: (command: ProviderShareCommand) => {
-      if (!['received', 'received-snapshot', 'quota-account'].includes(command.action) &&
+      if (!['received', 'received-snapshot', 'retry-model-catalog', 'quota-account'].includes(command.action) &&
           !(command.action === 'insights' && command.includeUsage === false))
         return Promise.reject(new Error('Unsupported model catalog operation'));
       return ipcRenderer.invoke(PROVIDER_SHARE_IPC.COMMAND, command);

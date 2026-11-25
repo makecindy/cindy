@@ -26,6 +26,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { BotGroupChatView } from '../BotGroupChatView';
+import { _resetComposerSendShortcutPreferenceForTests, COMPOSER_SEND_SHORTCUT_STORAGE_KEY, useComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import { BotGroupProcess } from '../BotGroupProcess';
 import { ControlledBanner, __resetControlledBannerForTests } from '../../remote-device/ControlledBanner';
 import type {
@@ -350,6 +351,7 @@ beforeEach(() => {
   resetCompanionCloudStoreForTests();
   mocks.remoteInvoke.mockReset();
   window.localStorage.clear();
+  _resetComposerSendShortcutPreferenceForTests();
   for (const id of ['g1', 'g2']) clearDraft(botGroupAttachmentScope(id));
   // 话题 reply drafts persist like the group's own; start every test without one.
   for (const root of ['u1', 'b1', 'q1', 'm']) clearDraft(botGroupThreadDraftKey('g1', root));
@@ -1818,6 +1820,87 @@ describe('BotGroupChatView', () => {
       .toEqual(['lane-mimi', 'lane-xiaoman']);
   });
 
+  // Issue #11250 / DESIGN §14.3, unit: real page -> composer -> outbox.
+  // Existing tests only used default Enter. Minimal failure: modifier-enter + plain Enter.
+  // The matrix covers platform modifiers, live preference changes and folded input newline.
+  it.each(['win32', 'darwin'])('honors the send preference on %s without changing group delivery', async platform => {
+    Object.defineProperty(window.electronAPI, 'platform', { configurable: true, value: platform });
+    localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    renderView();
+    const input = await screen.findByRole('textbox');
+    fireEvent.change(input, { target: { value: 'first line' } });
+    for (const modifiers of [{}, { shiftKey: true }, { altKey: true }, { isComposing: true }, { keyCode: 229 }, ...(platform === 'win32' ? [{ metaKey: true }] : [])]) {
+      const event = createEvent.keyDown(input, { key: 'Enter', ...modifiers });
+      fireEvent(input, event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    }
+    const modifier = platform === 'darwin' ? { metaKey: true } : { ctrlKey: true };
+    fireEvent.keyDown(input, { key: 'Enter', ...modifier, repeat: true });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', ...modifier });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe('first line');
+  });
+
+  it('applies live send preference changes to an already mounted group composer', async () => {
+    function PreferenceControl() {
+      const { preference, setPreference } = useComposerSendShortcutPreference();
+      return <button onClick={() => setPreference(preference === 'enter' ? 'modifier-enter' : 'enter')}>Toggle send preference</button>;
+    }
+    renderView();
+    render(<PreferenceControl />);
+    const input = await screen.findByRole('textbox');
+    fireEvent.change(input, { target: { value: 'keep this draft' } });
+    fireEvent.click(screen.getByText('Toggle send preference'));
+    const newline = createEvent.keyDown(input, { key: 'Enter' });
+    fireEvent(input, newline);
+    expect(newline.defaultPrevented).toBe(false);
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Toggle send preference'));
+    fireEvent.keyDown(input, { key: 'Enter', repeat: true });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe('keep this draft');
+  });
+
+  it('uses the configured send shortcut in the topic opened from the group page', async () => {
+    localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
+      serverBacked: true, messages: [msg({ id: 'u1', content: 'Topic root' })],
+    }) });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' }));
+    const panel = await screen.findByRole('complementary');
+    const input = await within(panel).findByRole('textbox');
+    fireEvent.change(input, { target: { value: 'topic draft' } });
+    const newline = createEvent.keyDown(input, { key: 'Enter' });
+    fireEvent(input, newline);
+    expect(newline.defaultPrevented).toBe(false);
+    expect(mocks.reply).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(1));
+    expect(mocks.reply.mock.calls[0][0].text).toBe('topic draft');
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a newline after a folded paste until the configured send shortcut', async () => {
+    localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    renderView();
+    const input = await screen.findByRole('textbox');
+    const text = Array.from({ length: 24 }, (_, i) => `line ${i}`).join('\n');
+    fireEvent.paste(input, { clipboardData: { items: [], getData: () => text } });
+    await waitFor(() => expect(document.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    const editor = screen.getByRole('textbox');
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.paste(editor, { clipboardData: { items: [], getData: () => 'after newline' } });
+    fireEvent.keyDown(editor, { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe(`${text}\nafter newline`);
+  });
+
   it('sends with Enter, parses mentions, and re-reads after main accepts', async () => {
     renderView();
     const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
@@ -2283,6 +2366,24 @@ describe('BotGroupChatView', () => {
       const reads = mocks.getBotGroup.mock.calls.length;
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(mocks.getBotGroup).toHaveBeenCalledTimes(reads);
+    });
+
+    it('keeps visible history through a 429 cooldown and coalesces pushes into one recovery', async () => {
+      vi.useFakeTimers();
+      const metadataRetryAt = Date.now() + 3_000;
+      mocks.getBotGroup.mockResolvedValueOnce({ ok: true, group: detail({ metadataRetryAt }) })
+        .mockResolvedValue({ ok: true, group: detail({ messages: [msg({ content: 'Recovered history' })] }) });
+      await act(async () => { renderView(); });
+      expect(screen.getByText('周六 8:10 有票')).toBeTruthy();
+      const count = mocks.getBotGroup.mock.calls.length;
+      await act(async () => {
+        for (let n = 0; n < 3; n++) mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' }));
+        await vi.advanceTimersByTimeAsync(2_999);
+      });
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(count);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(screen.getByText('Recovered history')).toBeTruthy();
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(count + 1);
     });
 
     it('keeps recovery reads serialized and lets a newer push cancel the pending retry', async () => {
@@ -3664,69 +3765,6 @@ describe('BotGroupChatView', () => {
       expect(screen.getAllByTestId('pending-interaction').map((node) => node.textContent)).toEqual(['plan-xiaoman']);
     });
 
-    it('sends a message tagged 安排分工 with division: true and clears the tag', async () => {
-      renderView();
-      const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
-        button: 0,
-        ctrlKey: false,
-      });
-      fireEvent.click(await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ }));
-      expect(screen.getByTestId('bot-group-division-tag').textContent).toContain('bots.groupChat.composer.divisionTag');
-      expect(input.getAttribute('placeholder')).toBe('bots.groupChat.composer.placeholderDivision');
-
-      fireEvent.change(input, { target: { value: '做一个官网介绍页' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
-      expect(mocks.sendBotGroupMessage.mock.calls[0]![0]).toMatchObject({
-        groupId: 'g1',
-        text: '做一个官网介绍页',
-        division: true,
-      });
-      expect(screen.queryByTestId('bot-group-division-tag')).toBeNull();
-
-      // Without the tag the flag is not sent at all.
-      fireEvent.change(input, { target: { value: '谢谢' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(2));
-      expect(mocks.sendBotGroupMessage.mock.calls[1]![0]).not.toHaveProperty('division');
-    });
-
-    it('puts the draft and its tag back when main refuses a second plan', async () => {
-      mocks.sendBotGroupMessage.mockResolvedValue({ ok: false, errorCode: 'PLAN_OPEN', message: '' });
-      renderView();
-      const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
-        button: 0,
-        ctrlKey: false,
-      });
-      fireEvent.click(await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ }));
-      fireEvent.change(input, { target: { value: '再排一次' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.errors.planOpen'));
-      expect(input.value).toBe('再排一次');
-      expect(screen.getByTestId('bot-group-division-tag')).toBeTruthy();
-    });
-
-    it('disables 安排分工 with a reason while a plan is under way', async () => {
-      const running = plan({
-        status: 'running',
-        currentStep: 0,
-        steps: [{ ...plan().steps[0]!, status: 'running' }, plan().steps[1]!],
-      });
-      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(running) });
-      renderView();
-      const input = await screen.findByRole('textbox');
-      expect(input.getAttribute('placeholder')).toBe('bots.groupChat.composer.placeholderPlanRunning:咪咪');
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
-        button: 0,
-        ctrlKey: false,
-      });
-      const item = await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ });
-      expect(item.getAttribute('aria-disabled')).toBe('true');
-      expect(item.textContent).toContain('bots.groupChat.composer.divisionBusy');
-    });
-
     it('re-reads the timeline on a plan change', async () => {
       renderView();
       await screen.findByText('周六 8:10 有票');
@@ -3736,7 +3774,7 @@ describe('BotGroupChatView', () => {
   });
 
   describe('附件', () => {
-    it('offers 添加文件、图片或视频… above 安排分工 and puts the picked files in the tray', async () => {
+    it('offers 添加文件、图片或视频… without a division command and puts the picked files in the tray', async () => {
       renderView();
       await screen.findByRole('textbox');
       const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -3750,7 +3788,6 @@ describe('BotGroupChatView', () => {
         const items = await screen.findAllByRole('menuitem');
         expect(items.map((item) => item.textContent)).toEqual([
           'extraDirs.addFiles',
-          expect.stringContaining('bots.groupChat.composer.division'),
         ]);
         fireEvent.click(items[0]!);
         expect(click).toHaveBeenCalledTimes(1);
@@ -4031,7 +4068,7 @@ it('keeps copy/share in the more menu and includes folded human text in exported
       const row = document.querySelector<HTMLElement>(`[data-bot-group-message-id="${id}"]`)!.querySelector('article')!;
       expect(prepareShareMessageClone(row)?.textContent).toContain('final export line');
     }
-    expect(within(article).getByRole('checkbox').getAttribute('aria-checked')).toBe('true');
+    expect((within(article).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
     expect(screen.getByRole('button', { name: 'chat.shareImage.copy' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'chat.shareImage.cancel' }));
     expect(shareSelectionStore.getActiveSessionId()).toBeNull();
@@ -4941,19 +4978,19 @@ describe('thread previews and posting to the main chat', () => {
     await user.click(await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' }));
     const panel = await screen.findByRole('complementary');
     const toggle = within(panel).getByRole('checkbox', { name: t('alsoSend') });
-    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect((toggle as HTMLInputElement).checked).toBe(false);
     await user.type(within(panel).getByRole('textbox'), 'thread only{Enter}');
     await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(1));
     expect(mocks.shareToMain).not.toHaveBeenCalled();
     await user.click(toggle);
-    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect((toggle as HTMLInputElement).checked).toBe(true);
     mocks.reply.mockResolvedValueOnce({ ok: true, messageId: 'reply-2' });
     await user.type(within(panel).getByRole('textbox'), '@咪咪 both{Enter}');
     await waitFor(() => expect(mocks.shareToMain).toHaveBeenCalledWith({ groupId: 'g1', messageId: 'reply-2' }));
     expect(mocks.reply).toHaveBeenCalledTimes(2);
     expect(mocks.reply.mock.calls[1][0]).toMatchObject({ rootId: 'u1', text: '@咪咪 both' });
     // Each send starts from the default again.
-    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(false));
   });
 
   // Unit, topic latency reproduction: the HTTP receipt arrived seconds before
@@ -5064,7 +5101,7 @@ describe('thread previews and posting to the main chat', () => {
     await user.type(within(panel).getByRole('textbox'), 'both{Enter}');
     await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(1));
     expect(mocks.shareToMain).not.toHaveBeenCalled();
-    expect(within(panel).getByRole('checkbox', { name: t('alsoSend') }).getAttribute('aria-checked')).toBe('true');
+    expect((within(panel).getByRole('checkbox', { name: t('alsoSend') }) as HTMLInputElement).checked).toBe(true);
     await user.click(within(panel).getByRole('button', { name: 'bots.groupChat.server.sendReply' }));
     await waitFor(() => expect(mocks.shareToMain).toHaveBeenCalledTimes(1));
     expect(mocks.reply.mock.calls[1][0].clientId).toBe(mocks.reply.mock.calls[0][0].clientId);
@@ -5079,7 +5116,7 @@ describe('thread previews and posting to the main chat', () => {
     await user.click(within(await screen.findByRole('complementary')).getByRole('checkbox', { name: t('alsoSend') }));
     await user.click(second!);
     await screen.findByText('Reply to u2');
-    expect(within(screen.getByRole('complementary')).getByRole('checkbox', { name: t('alsoSend') }).getAttribute('aria-checked')).toBe('false');
+    expect((within(screen.getByRole('complementary')).getByRole('checkbox', { name: t('alsoSend') }) as HTMLInputElement).checked).toBe(false);
   });
 
   it('posts an existing reply, including someone else’s, from its menu', async () => {
@@ -6115,7 +6152,7 @@ it('sends a rich control only to its thread and keeps the thread draft and main-
   await waitFor(() => expect(mocks.reply).toHaveBeenCalledWith(expect.objectContaining({ groupId: 'g1', rootId: 'u1', text: 'Reply from the card' })));
   expect(mocks.shareToMain).not.toHaveBeenCalled();
   expect(composer.value).toBe('Thread draft');
-  expect(alsoSend.getAttribute('aria-checked')).toBe('true');
+  expect((alsoSend as HTMLInputElement).checked).toBe(true);
 });
 
 it.each(['archived', 'dissolved'])('disables rich answer submissions in %s group history', async state => {
