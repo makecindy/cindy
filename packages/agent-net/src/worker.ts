@@ -114,6 +114,7 @@ port.on('message', (message) => {
       onPathChanged(id, path) { ids.add(id); send({ type: 'path', id, path }); snapshot(); },
       onRelayReplaced() { if (message.reportRelayReplacements) send({ type: 'relay-replaced' }); },
       onRelayClosed(closeCode, reason) { send({ type: 'relay-closed', code: closeCode, reason }); },
+      onUdpRebound(reason) { send({ type: 'udp-rebound', reason }); },
       ...(message.tap ? { tap: (data, via) => send({ type: 'tap', data, via }) } : {}),
     }).then((value) => {
       socket = value;

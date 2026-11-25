@@ -27,7 +27,7 @@ import {
   AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, EARLY_BODY_EVENT_BYTES, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES,
   SESSION_BODY_KIND, SESSION_LANE_KINDS,
   SESSION_LANE_PRIORITY as SESSION_PRIORITY, type PathPreference, type PeerChannel, type PeerPathMetrics, type RosterEntry, type SessionBodyWriter, type SessionLaneName, type Transport,
-  type TransportOptions,
+  type TransportOptions, type UdpRebindReason,
 } from './types.js';
 
 const PROLOGUE = 'cindy/agent-net/device-link/2';
@@ -55,6 +55,19 @@ export const AUTO_RELAY_DELTA_MS = 40;
 export const AUTO_DIRECT_RECOVER_RATIO = 1.2;
 export const AUTO_DIRECT_RECOVER_DELTA_MS = 15;
 export const AUTO_SWITCH_COOLDOWN_MS = 30_000;
+/** 显式换网触发重建 UDP 套接字的最短间隔：合并短时间内连续到达的网卡/代理/中转重连事件，避免高频抖动。 */
+const DEFAULT_NETWORK_REBIND_COOLDOWN_MS = 3_000;
+/** 连续 UDP 发送报错达到该次数，或出现套接字 fd 已失效错误时，触发重建 UDP 套接字。 */
+const UDP_SEND_ERROR_THRESHOLD = 3;
+const FATAL_UDP_SOCKET_ERRORS = new Set(['EBADF', 'ENOTSOCK', 'EPIPE']);
+/** 非显式换网（自动检测）触发重建 UDP 套接字的退避阶梯，防止 UDP 被彻底封禁或系统持续报错时死循环重绑。 */
+const AUTO_REBIND_BACKOFF_MS = [10_000, 30_000, 120_000] as const;
+/** 自动重建后若新套接字一直没有收到任何合法 UDP 回包，最多再自动尝试这么多次，之后等显式换网或收到合法回包再恢复。 */
+const MAX_AUTO_REBINDS_WITHOUT_INBOUND = 2;
+/** 全部直连掉回中转，或中转 UDP 登记持续无回包且期间没有任何合法 UDP 入站超过这么久时，判定旧套接字疑似黑洞。 */
+const DEFAULT_UDP_BLACKHOLE_TIMEOUT_MS = 5_000;
+/** 巡检 UDP 套接字健康状态的默认周期。 */
+const DEFAULT_UDP_HEALTH_POLL_MS = 1_000;
 
 export function decideAutoPreferRelay(input: {
   currentPreferRelay: boolean;
@@ -259,6 +272,24 @@ class CoreChannel implements PeerChannel {
     if (this.localPreference !== 'auto') return this.localPreference === 'relay';
     if (this.peerPreference !== 'auto') return this.peerPreference === 'relay';
     return this.autoPreferRelay || this.peerAutoPreferRelay;
+  }
+
+  /** 当前连接是否因用户选择或自动选路主动偏好中转（与被动断直连区分）。 */
+  isPreferringRelay(): boolean {
+    return this.effectivePreferRelay();
+  }
+
+  /** 本机换网或重建 UDP 套接字后：清掉旧网络的直连测速缓存与自动切路冷却，若此刻走中转则立即重新探测直连。 */
+  onLocalNetworkChanged(): void {
+    if (this.events.closed || this.connection.closed) return;
+    this.lastAutoSwitchAt = Number.NEGATIVE_INFINITY;
+    this.measuredDirectRttMs = null;
+    this.measuredDirectAt = 0;
+    this.nextCandidate = 0;
+    if (this.path() === 'relay') {
+      if (this.effectivePreferRelay()) this.measureStandbyPath();
+      else this.probeCandidates();
+    }
   }
 
   private freshRtt(value: number | null, at: number, now: number): number | null {
@@ -636,6 +667,9 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     return false;
   };
   let stun: StunClient | null = null;
+  let closed = false;
+  let rawUdpInboundCount = 0;
+  let triggerRebind: (reason: UdpRebindReason) => boolean = () => false;
   endpoint = await Endpoint.create({
     identity: options.identity ?? generateIdentity(),
     prologue: PROLOGUE,
@@ -645,7 +679,17 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     udp,
     udpTraffic: options.udpTraffic,
     accept: { admit },
-    intercept: (datagram) => relayUdp?.intercept(datagram) || (stun?.intercept(datagram) ?? false),
+    intercept: (datagram) => {
+      rawUdpInboundCount += 1;
+      return relayUdp?.intercept(datagram) || (stun?.intercept(datagram) ?? false);
+    },
+    onUdpSendError: (error, { consecutiveErrors }) => {
+      if (closed || !udp) return;
+      const errCode = (error as NodeJS.ErrnoException).code;
+      if (consecutiveErrors >= UDP_SEND_ERROR_THRESHOLD || (errCode !== undefined && FATAL_UDP_SOCKET_ERRORS.has(errCode))) {
+        triggerRebind('send-errors');
+      }
+    },
     ...(options.tap
       ? {
           // 只记发出的：每个节点都接了抓包时，线上每个数据报正好记一次。
@@ -679,7 +723,6 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
   const publicOnly = options.publicCandidatesOnly === true;
   const candidates: Address[] = [];
   const channels = new Set<CoreChannel>();
-  let closed = false;
   const channelFor = (connection: Connection) => {
     const remoteId = hex(connection.remotePublicKey);
     const channel = new CoreChannel(connection, candidates, reprobeMs, publicOnly, () => {
@@ -690,18 +733,194 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
   };
   // Install admission listeners before any DNS/STUN wait. Relay RPC never waits for a UDP response.
   endpoint.on('connection', (connection: Connection) => options.onIncoming(channelFor(connection)));
+  const dial: CoreDial = { ...(udp ? { udp: endpoint.address() } : {}), ...(relay ? { relayId: relay.deviceId } : {}) };
+
+  const networkRebindCooldownMs = options.udpRebindCooldownMs ?? DEFAULT_NETWORK_REBIND_COOLDOWN_MS;
+  const blackholeTimeoutMs = options.udpBlackholeTimeoutMs ?? DEFAULT_UDP_BLACKHOLE_TIMEOUT_MS;
+  const autoRebindCooldownMs = (streak: number): number => {
+    const base = AUTO_REBIND_BACKOFF_MS[Math.min(streak, AUTO_REBIND_BACKOFF_MS.length - 1)];
+    if (options.udpRebindCooldownMs === undefined) return base;
+    return Math.max(options.udpRebindCooldownMs, Math.round(options.udpRebindCooldownMs * (base / AUTO_REBIND_BACKOFF_MS[0])));
+  };
+  let socketOpenedAt = performance.now();
+  let lastRebindAt = Number.NEGATIVE_INFINITY;
+  let lastUdpAliveAt = Number.NEGATIVE_INFINITY;
+  let autoRebindStreak = 0;
+  let autoRebindsWithoutInbound = 0;
+  let directCollapseAt: number | null = null;
+  let rebinding: Promise<void> | null = null;
+  let pendingNetworkRefresh = false;
+  let lastObservedRawUdpInbound = 0;
+  const channelDirectState = new WeakMap<CoreChannel, { direct: boolean; packetsReceived: number; retransmitted: number }>();
+
+  const noteUdpAlive = (at = performance.now()) => {
+    if (at > lastUdpAliveAt) lastUdpAliveAt = at;
+    if (at > socketOpenedAt) {
+      autoRebindStreak = 0;
+      autoRebindsWithoutInbound = 0;
+    }
+  };
+
+  const normalizeCandidates = (found: Address[]): Address[] => {
+    const seen = new Set<string>();
+    return found
+      .filter((address) => {
+        if (publicOnly && isPrivate(address.address)) return false;
+        const key = `${address.address}:${address.port}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address)))
+      .slice(0, MAX_CANDIDATES);
+  };
+  const sameCandidates = (a: readonly Address[], b: readonly Address[]): boolean =>
+    a.length === b.length && a.every((item, index) => item.address === b[index].address && item.port === b[index].port);
+  const applyCandidates = (found: Address[]) => {
+    const next = normalizeCandidates(found);
+    if (sameCandidates(candidates, next)) return;
+    candidates.splice(0, candidates.length, ...next);
+    for (const channel of channels) channel.announceCandidates();
+  };
+
   let gathering = 0;
   const gather = () => {
     const round = ++gathering;
-    void gatherCandidates(endpoint, options.stunServers ?? [], (client) => { stun?.close(); stun = client; }).then((gathered) => {
+    const local = localInterfaceAddresses(endpoint);
+    // 先立即用新端口的本机网卡地址更新候选，局域网对端不必等 STUN 超时即可重探直连。
+    applyCandidates(local);
+    const stunServers = options.stunServers ?? [];
+    if (!stunServers.length) return;
+    void queryStunCandidates(endpoint, stunServers, (client) => { stun?.close(); stun = client; }).then((mapped) => {
       if (closed || round !== gathering) return;
-      candidates.splice(0, candidates.length, ...gathered.filter((address) => !publicOnly || !isPrivate(address.address))
-        .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address))).slice(0, MAX_CANDIDATES));
-      for (const channel of channels) channel.announceCandidates();
+      if (mapped.length > 0) noteUdpAlive();
+      applyCandidates([...local, ...mapped]);
     }).catch(() => undefined);
   };
+
+  const refreshAfterNetworkChange = () => {
+    if (closed) return;
+    endpoint.localAddressChanged();
+    if (udp) gather();
+    relayUdp?.networkChanged();
+    for (const channel of channels) channel.onLocalNetworkChanged();
+  };
+
+  /**
+   * 受冷却与退避保护地重建底层 UDP 套接字（macOS 透明代理/VPN 启停后旧 UDP fd 会被系统永久废掉）：
+   * 不关闭既有连接和中转通道，绑定新端口后立即同步发现端口、通知核心迁移、重置中转 UDP 冷却并重新收集/广播候选。
+   */
+  triggerRebind = (reason: UdpRebindReason): boolean => {
+    if (closed || !udp) return false;
+    if (rebinding) {
+      if (reason === 'network-changed') pendingNetworkRefresh = true;
+      return true;
+    }
+    const now = performance.now();
+    if (reason !== 'network-changed') {
+      // UDP 被防火墙彻底封禁时，自动重建在收不到任何合法 UDP 回包的情况下必须有上限，不能死循环重绑。
+      const maxAuto = reason === 'udp-blackhole' && lastUdpAliveAt < socketOpenedAt ? 1 : MAX_AUTO_REBINDS_WITHOUT_INBOUND;
+      if (autoRebindsWithoutInbound >= maxAuto) return false;
+      if (now - lastRebindAt < autoRebindCooldownMs(autoRebindStreak)) return false;
+      autoRebindStreak += 1;
+      autoRebindsWithoutInbound += 1;
+    } else if (now - lastRebindAt < networkRebindCooldownMs) {
+      return false;
+    }
+    lastRebindAt = now;
+    directCollapseAt = null;
+    const run = (async () => {
+      try {
+        await endpoint.rebind({ address: options.bindAddress ?? '0.0.0.0', port: 0 }, false);
+        if (closed) return;
+        socketOpenedAt = performance.now();
+        dial.udp = endpoint.address();
+        options.onLocalPortChanged?.(dial.udp.port, reason);
+        refreshAfterNetworkChange();
+      } catch {
+        if (!closed) refreshAfterNetworkChange();
+      }
+    })();
+    rebinding = run;
+    void run.finally(() => {
+      if (rebinding === run) rebinding = null;
+      if (pendingNetworkRefresh && !closed) {
+        pendingNetworkRefresh = false;
+        refreshAfterNetworkChange();
+      }
+    });
+    return true;
+  };
+
+  /** 巡检 UDP 套接字是否陷入静默黑洞（全部直连退回中转，或曾经正常的中转 UDP 登记持续无回包且无任何合法 UDP 入站）。 */
+  const checkUdpHealth = () => {
+    if (closed || !udp || rebinding) return;
+    const now = performance.now();
+    const udpInboundMoved = rawUdpInboundCount > lastObservedRawUdpInbound;
+    lastObservedRawUdpInbound = rawUdpInboundCount;
+    if (relayUdp && relayUdp.verifiedAt > lastUdpAliveAt) noteUdpAlive(relayUdp.verifiedAt);
+    let directCount = 0;
+    let directRetransmittingWithoutUdp = false;
+    let unwantedRelayCount = 0;
+    let collapsedThisTick = false;
+    for (const channel of channels) {
+      const path = channel.path();
+      const prev = channelDirectState.get(channel);
+      const stats = channel.stats();
+      const packetsReceived = stats?.packetsReceived ?? prev?.packetsReceived ?? 0;
+      const retransmitted = stats?.retransmittedSegments ?? prev?.retransmitted ?? 0;
+      if (path === 'direct') {
+        directCount += 1;
+        // 只有真实 UDP 入站与连接合法收包同时增长（或首次进入直连）才算直连 UDP 存活，避免 WebSocket 中转回包或垃圾 UDP 误判。
+        if (!prev || !prev.direct || (packetsReceived > prev.packetsReceived && udpInboundMoved)) noteUdpAlive(now);
+        else if (!udpInboundMoved && retransmitted > prev.retransmitted) directRetransmittingWithoutUdp = true;
+        channelDirectState.set(channel, { direct: true, packetsReceived, retransmitted });
+      } else if (path === 'relay') {
+        if (!channel.isPreferringRelay()) {
+          unwantedRelayCount += 1;
+          if (prev?.direct) collapsedThisTick = true;
+        }
+        channelDirectState.set(channel, { direct: false, packetsReceived, retransmitted });
+      }
+    }
+    if (directCount > 0) {
+      directCollapseAt = null;
+      // 直连正在重传且完全收不到 UDP 包时，立刻用轻量中转登记测一次底层 UDP 套接字是否还活着；
+      // 曾在该套接字上正常收过回包的中转 UDP 若持续无确认且完全无 UDP 入站，不等 30 秒服务端超时即可提前重建。
+      if (directRetransmittingWithoutUdp) relayUdp?.probeRegistrationNow();
+      if (relayUdp && relayUdp.verifiedAt >= socketOpenedAt
+        && relayUdp.unackedDurationMs(now) >= blackholeTimeoutMs
+        && now - lastUdpAliveAt >= blackholeTimeoutMs) {
+        triggerRebind('udp-blackhole');
+      }
+      return;
+    }
+    if (collapsedThisTick && unwantedRelayCount > 0) {
+      directCollapseAt ??= now;
+      // 立即用轻量中转登记探一下底层 UDP 套接字是否还活着（不改变冷却），活着就能在几十毫秒内取消重建。
+      relayUdp?.probeRegistrationNow();
+    }
+    if (directCollapseAt !== null) {
+      if (lastUdpAliveAt > directCollapseAt || unwantedRelayCount === 0) {
+        directCollapseAt = null;
+      } else if (now - directCollapseAt >= blackholeTimeoutMs) {
+        triggerRebind('udp-blackhole');
+        return;
+      } else {
+        // 持续尝试轻量中转登记（内部带 1s 节流），避免坍塌前不到 1s 刚发过登记导致跳过探测而误判黑洞。
+        relayUdp?.probeRegistrationNow();
+      }
+    }
+    if (relayUdp && relayUdp.unackedDurationMs(now) >= blackholeTimeoutMs && now - lastUdpAliveAt >= blackholeTimeoutMs) {
+      triggerRebind('udp-blackhole');
+    }
+  };
+
+  const healthPollMs = Math.min(DEFAULT_UDP_HEALTH_POLL_MS, Math.max(50, Math.floor(blackholeTimeoutMs / 4)));
+  const healthTimer = udp ? setInterval(checkUdpHealth, healthPollMs) : null;
+  healthTimer?.unref();
+
   if (udp) gather();
-  const dial: CoreDial = { ...(udp ? { udp: endpoint.address() } : {}), ...(relay ? { relayId: relay.deviceId } : {}) };
   return {
     id: hex(endpoint.publicKey),
     dial,
@@ -732,11 +951,13 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     },
     networkChanged() {
       if (closed) return;
-      // 换了网络：每条连接马上从新地址发包，对端看到新地址就跟过来（不等下一次保活）；候选地址按新网络重新收集；
-      // 中转 UDP 清掉旧网络的冷却并重新登记、探测。
-      endpoint.localAddressChanged();
-      if (udp) gather();
-      relayUdp?.networkChanged();
+      // 显式换网（网卡/代理变更、中转意外断线重连等）：解除旧网络的自动重绑上限，优先重建 UDP 套接字以摆脱
+      // macOS 透明代理废掉的旧 fd；若刚重建仍在冷却期内，仍刷新核心迁移、候选地址、中转 UDP 与直连重探。
+      autoRebindsWithoutInbound = 0;
+      autoRebindStreak = 0;
+      directCollapseAt = null;
+      if (udp && triggerRebind('network-changed')) return;
+      refreshAfterNetworkChange();
     },
     relayStalled() { relayUdp?.noteStall(); },
     relayRoute() {
@@ -747,7 +968,9 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       return suspension ? { via: 'websocket', rttMs: null, udpSuspension: suspension } : { via: 'websocket', rttMs: null };
     },
     async close() {
-      closed = true; stun?.close();
+      closed = true;
+      if (healthTimer) clearInterval(healthTimer);
+      stun?.close();
       // 端点先关：各条连接的关闭包经直连、UDP 中转或 WebSocket 中转发出去，等它们交给系统后再关中转。
       await endpoint.close();
       relayUdp?.close();
@@ -756,11 +979,8 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
   };
 }
 
-/**
- * 候选地址：本机 UDP 地址（绑在 `0.0.0.0` 时是各网卡的 IPv4 地址），加上各 STUN 服务器看到的外部地址。
- * 同一台机器问不同的 STUN 服务器可能看到不同的外部地址（国内外分流出口不同），所以每个都问、去重后都给对端。
- */
-async function gatherCandidates(endpoint: Endpoint, stunServers: string[], install: (client: StunClient) => void): Promise<Address[]> {
+/** 本机 UDP 监听地址（绑在 `0.0.0.0` 时枚举各非回环网卡 IPv4 地址）。 */
+function localInterfaceAddresses(endpoint: Endpoint): Address[] {
   const local = endpoint.address();
   const found: Address[] = [];
   if (local.address === '0.0.0.0') {
@@ -770,19 +990,18 @@ async function gatherCandidates(endpoint: Endpoint, stunServers: string[], insta
   } else {
     found.push(local);
   }
-  if (stunServers.length) {
-    const client = new StunClient((to, datagram) => endpoint.sendUdp(to, datagram));
-    install(client);
-    const mapped = await Promise.all(stunServers.map((server) => client.query(server).catch(() => null)));
-    for (const address of mapped) if (address) found.push(address);
-  }
-  const seen = new Set<string>();
-  return found.filter((address) => {
-    const key = `${address.address}:${address.port}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return found;
+}
+
+/**
+ * 向各 STUN 服务器查询当前 UDP 端口的外部地址。
+ * 同一台机器问不同的 STUN 服务器可能看到不同的外部地址（国内外分流出口不同），所以每个都问、去重后都给对端。
+ */
+async function queryStunCandidates(endpoint: Endpoint, stunServers: string[], install: (client: StunClient) => void): Promise<Address[]> {
+  const client = new StunClient((to, datagram) => endpoint.sendUdp(to, datagram));
+  install(client);
+  const mapped = await Promise.all(stunServers.map((server) => client.query(server).catch(() => null)));
+  return mapped.filter((address): address is Address => address !== null);
 }
 
 /** 私有地址：局域网、运营商 NAT、链路本地。 */

@@ -31,8 +31,10 @@ import { AgentNetWorkerSocket, type AgentNetAppSocket } from '../workerSocket.js
 import { startRelayGateway } from '../gateway.js';
 import { StunClient } from '../stun.js';
 import { createCoreTransport } from '../transport.js';
+import dgram from 'node:dgram';
 import { Endpoint, type Connection, type RecvStream } from '@cindy/agent-net-core/node';
-import type { PeerChannel } from '../types.js';
+import { LanDiscovery } from '../lan.js';
+import type { PeerChannel, UdpRebindReason } from '../types.js';
 import WebSocket, { WebSocketServer } from 'ws';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
@@ -1015,4 +1017,224 @@ it('rediscovers certified peers on the LAN after both nodes restart without any 
   await vi.waitFor(() => expect(opened.some((s) => s.pathTo('a-host') === 'direct')).toBe(true), { timeout: 8000 });
   await guest.openLink('a-host', openPayload);
   expect(await guest.invoke('a-host', { channel: 'test:echo', args: ['cold-start-offline'] })).toMatchObject({ ok: true, result: 'cold-start-offline' });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`createCoreTransport` + `Endpoint.rebind` + `RelayUdpPath` + `LanDiscovery.updatePort` 端到端闭环。
+ *   旧 UDP socket 被透明代理废掉后（显式换网、连续发送报错 `EPIPE`、或静默黑洞致直连全退回中转且中转 UDP 无回包），
+ *   自动绑定新端口、同步更新 `dial.udp.port` 与局域网发现公告端口、重新收集广播候选，并在不中断既有连接与中转通路的情况下
+ *   恢复直连与中转 UDP；纯 UDP 被防火墙彻底封禁时自动重建有界不死循环，短时重复换网受冷却保护不抖动。
+ * - Bug／规则依据：2026-11-26 macOS 实测（XDial `NETransparentProxyProvider` 停止后旧 UDP fd 永久失效，所有直连退回 relay 且
+ *   中转 UDP 长期卡死，只有开关 Agent-Net 重建进程才能恢复）；`remote-and-mobile-adaptation.md` 故障半径三问。
+ * - 现有覆盖缺口：此前没有任何测试覆盖 `Endpoint.rebind`、损坏 UDP fd 自动重建、`LanDiscovery` 换端口同步与防死循环上限。
+ * - 最小失败输入：1) 首套接字静默黑洞后调用 `networkChanged()`；2) 首套接字持续回调 `EPIPE`；3) 首套接字静默黑洞且不调 `networkChanged()`；
+ *   4) 全部套接字均丢包的纯防火墙环境。
+ * - tier：integration，真实 WASM 核心、真实回环 UDP 与真实 V2 中转，缩短测试冷却/超时参数。
+ */
+it.each(['network-changed', 'send-errors', 'udp-blackhole'] as const)(
+  'rebinds a broken UDP socket on %s without dropping the peer connection, restoring direct and relay UDP',
+  async (mode) => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-rebind-'));
+    cleanup.push(() => rm(directory, { recursive: true, force: true }));
+    const owner = generateIdentity('a-rebind');
+    const member = generateIdentity('b-rebind');
+    const { root, bootstrap } = createPrivateNetwork('udp rebind test', owner);
+    const relay = await startAgentNetRelay({ dataDir: directory, bootstrap, udpPort: 0 });
+    cleanup.push(() => relay.close());
+    const code = await new AgentNetClient(relay.url, owner, bootstrap.ownerCertificate, bootstrap.rootPublicKey)
+      .request<{ joinCode: string }>('POST', '/join-codes');
+    const join = createJoinRequest(member, bootstrap.networkId, code.joinCode, 'Member', 'rebind-secret');
+    await submitJoin(relay.url, join);
+    const memberCert = approveJoin(root, join, 'rebind-secret', bootstrap.ownerCertificate.subject);
+    const clientA = new AgentNetClient(relay.url, owner, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
+    await clientA.request('POST', '/join-requests/' + join.requestId + '/approve', { certificate: memberCert });
+    const clientB = new AgentNetClient(relay.url, member, memberCert, bootstrap.rootPublicKey);
+    const [uplinkA, uplinkB] = await Promise.all([clientA.connect(), clientB.connect()]);
+    cleanup.push(() => { uplinkA.close(); uplinkB.close(); });
+    const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+    const keyHex = (b64: string) => Buffer.from(b64, 'base64url').toString('hex');
+    const keyA = keyHex(owner.transportKey);
+    const keyB = keyHex(member.transportKey);
+    const udpServer = `127.0.0.1:${relay.udpAddress!.port}`;
+
+    let incomingB: PeerChannel | null = null;
+    const tB = await createCoreTransport({
+      identity: member.transportPrivateKey,
+      module,
+      bindAddress: '127.0.0.1',
+      stunServers: [udpServer],
+      relayUdpServer: udpServer,
+      reprobeMs: 250,
+      relay: { deviceId: member.deviceId, uplink: uplinkB, udpCredentials: () => uplinkB.udp ?? null },
+      admit: (id) => id === keyA,
+      relayIdOf: (id) => (id === keyA ? owner.deviceId : undefined),
+      admittedPeers: () => [{ id: keyA, relayId: owner.deviceId }],
+      onIncoming: (channel) => { incomingB = channel; },
+    });
+    cleanup.push(() => tB.close());
+
+    // Intercept only tA's UDP sockets (created after tB) so we can fault socket #0 deterministically.
+    const realCreateSocket = dgram.createSocket.bind(dgram);
+    const socketsA: dgram.Socket[] = [];
+    const spy = vi.spyOn(dgram, 'createSocket').mockImplementation(((...args: Parameters<typeof dgram.createSocket>) => {
+      const sock = realCreateSocket(...args);
+      socketsA.push(sock);
+      return sock;
+    }) as typeof dgram.createSocket);
+    cleanup.push(() => spy.mockRestore());
+
+    const rebounds: Array<{ port: number; reason: UdpRebindReason }> = [];
+    let lan: LanDiscovery | null = null;
+    const tA = await createCoreTransport({
+      identity: owner.transportPrivateKey,
+      module,
+      bindAddress: '127.0.0.1',
+      stunServers: [udpServer],
+      relayUdpServer: udpServer,
+      reprobeMs: 250,
+      udpRebindCooldownMs: 80,
+      udpBlackholeTimeoutMs: 250,
+      relay: { deviceId: owner.deviceId, uplink: uplinkA, udpCredentials: () => uplinkA.udp ?? null },
+      admit: (id) => id === keyB,
+      relayIdOf: (id) => (id === keyB ? member.deviceId : undefined),
+      admittedPeers: () => [{ id: keyB, relayId: member.deviceId }],
+      onLocalPortChanged: (port, reason) => {
+        rebounds.push({ port, reason });
+        lan?.updatePort(port);
+      },
+      onIncoming: () => undefined,
+    });
+    cleanup.push(() => tA.close());
+
+    const initialPort = (tA.dial as { udp: { port: number } }).udp.port;
+    lan = new LanDiscovery({
+      identity: owner,
+      networkId: bootstrap.networkId,
+      port: initialPort,
+      interfaceAddress: '127.0.0.1',
+      certificateFor: () => undefined,
+      onCandidate: () => undefined,
+    });
+    cleanup.push(() => lan!.close());
+    expect(JSON.parse(lan.beacon()).port).toBe(initialPort);
+
+    const chanA = await tA.connect({ id: keyB, dial: { relayId: member.deviceId } });
+    let closedA = false;
+    chanA.onClose(() => { closedA = true; });
+    await vi.waitFor(() => {
+      expect(incomingB).not.toBeNull();
+      expect(chanA.path?.()).toBe('direct');
+      expect(tA.relayRoute?.()?.via).toBe('udp');
+    }, { timeout: 6_000 });
+
+    const receivedB: string[] = [];
+    incomingB!.onData((bytes) => { receivedB.push(Buffer.from(bytes).toString('utf8')); });
+
+    // Fault tA's initial UDP socket (simulating macOS NETransparentProxyProvider teardown).
+    const brokenSocket = socketsA[0]!;
+    const origEmit = brokenSocket.emit.bind(brokenSocket);
+    brokenSocket.emit = ((event: string | symbol, ...args: unknown[]) =>
+      event === 'message' ? false : origEmit(event, ...args)) as typeof brokenSocket.emit;
+    if (mode === 'send-errors') {
+      brokenSocket.send = ((...args: unknown[]) => {
+        const cb = args.find((arg) => typeof arg === 'function') as ((err: Error) => void) | undefined;
+        const err = Object.assign(new Error('broken pipe'), { code: 'EPIPE' });
+        if (cb) queueMicrotask(() => cb(err));
+      }) as typeof brokenSocket.send;
+    } else {
+      brokenSocket.send = ((...args: unknown[]) => {
+        const cb = args.find((arg) => typeof arg === 'function') as ((err: null) => void) | undefined;
+        if (cb) queueMicrotask(() => cb(null));
+      }) as typeof brokenSocket.send;
+    }
+
+    // Send traffic so the core notices the dead UDP path and falls back / hits send errors promptly.
+    const drive = setInterval(() => {
+      if (!closedA) chanA.send(Buffer.from('ping'));
+    }, 100);
+    cleanup.push(() => clearInterval(drive));
+    chanA.send(Buffer.from('during-fault'));
+
+    if (mode === 'network-changed') {
+      tA.networkChanged?.();
+      // A duplicate networkChanged inside cooldown must not spawn an extra rebind.
+      tA.networkChanged?.();
+    }
+
+    await vi.waitFor(() => {
+      expect(rebounds.length).toBeGreaterThanOrEqual(1);
+    }, { timeout: 8_000 });
+    expect(rebounds[0]!.reason).toBe(mode);
+    const newPort = rebounds[0]!.port;
+    expect(newPort).not.toBe(initialPort);
+    expect((tA.dial as { udp: { port: number } }).udp.port).toBe(newPort);
+    expect(JSON.parse(lan.beacon()).port).toBe(newPort);
+    if (mode === 'network-changed') {
+      expect(rebounds).toHaveLength(1);
+    }
+
+    // Peer connection stays open across rebind; both direct path and relay UDP recover automatically.
+    expect(closedA).toBe(false);
+    await vi.waitFor(() => {
+      expect(chanA.path?.()).toBe('direct');
+      expect(tA.relayRoute?.()?.via).toBe('udp');
+    }, { timeout: 8_000 });
+    clearInterval(drive);
+    chanA.send(Buffer.from('after-rebind'));
+    await vi.waitFor(() => expect(receivedB.join('')).toContain('after-rebind'), { timeout: 4_000 });
+    expect(closedA).toBe(false);
+  },
+);
+
+it('bounds automatic UDP rebinds in a UDP-blocked firewall network instead of looping forever', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-blocked-'));
+  cleanup.push(() => rm(directory, { recursive: true, force: true }));
+  const owner = generateIdentity('a-blocked');
+  const { bootstrap } = createPrivateNetwork('udp blocked test', owner);
+  const relay = await startAgentNetRelay({ dataDir: directory, bootstrap, udpPort: 0 });
+  cleanup.push(() => relay.close());
+  const clientA = new AgentNetClient(relay.url, owner, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
+  const uplinkA = await clientA.connect();
+  cleanup.push(() => uplinkA.close());
+  const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+
+  // Every UDP socket silently drops outbound/inbound packets (firewall blocks all UDP).
+  const realCreateSocket = dgram.createSocket.bind(dgram);
+  const spy = vi.spyOn(dgram, 'createSocket').mockImplementation(((...args: Parameters<typeof dgram.createSocket>) => {
+    const sock = realCreateSocket(...args);
+    const origEmit = sock.emit.bind(sock);
+    sock.emit = ((event: string | symbol, ...eArgs: unknown[]) =>
+      event === 'message' ? false : origEmit(event, ...eArgs)) as typeof sock.emit;
+    sock.send = ((...sArgs: unknown[]) => {
+      const cb = sArgs.find((arg) => typeof arg === 'function') as ((err: null) => void) | undefined;
+      if (cb) queueMicrotask(() => cb(null));
+    }) as typeof sock.send;
+    return sock;
+  }) as typeof dgram.createSocket);
+  cleanup.push(() => spy.mockRestore());
+
+  const rebounds: UdpRebindReason[] = [];
+  const tA = await createCoreTransport({
+    identity: owner.transportPrivateKey,
+    module,
+    bindAddress: '127.0.0.1',
+    relayUdpServer: `127.0.0.1:${relay.udpAddress!.port}`,
+    udpRebindCooldownMs: 40,
+    udpBlackholeTimeoutMs: 120,
+    relay: { deviceId: owner.deviceId, uplink: uplinkA, udpCredentials: () => uplinkA.udp ?? null },
+    admit: () => false,
+    onLocalPortChanged: (_port, reason) => { rebounds.push(reason); },
+    onIncoming: () => undefined,
+  });
+  cleanup.push(() => tA.close());
+
+  await vi.waitFor(() => expect(rebounds).toEqual(['udp-blackhole']), { timeout: 4_000 });
+  // real-wait: allow several blackhole & backoff intervals to prove automatic rebind stays capped at 1 with zero UDP replies.
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  expect(rebounds).toEqual(['udp-blackhole']);
+
+  // An explicit networkChanged still gets a fresh rebind once the user actually switches networks.
+  tA.networkChanged?.();
+  await vi.waitFor(() => expect(rebounds).toEqual(['udp-blackhole', 'network-changed']), { timeout: 2_000 });
 });

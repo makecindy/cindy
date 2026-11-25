@@ -127,8 +127,11 @@ function relayChanged(): void {
     try { listener(); } catch (error) { agentNetLog.error('agent-net relay listener threw', error); }
   }
 }
-/** 这台电脑换了网络：Agent-Net 主连接马上探测中转、从新地址发包（AgentNetWorkerSocket.networkChanged）。Agent-Net 关着时什么也不做。 */
-export function agentNetNetworkChanged(): void { current?.networkChanged?.(); }
+/** 这台电脑换了网络：Agent-Net 主连接与资源专用连接马上探测中转、重建可能失效的 UDP 套接字并重探直连。Agent-Net 关着时什么也不做。 */
+export function agentNetNetworkChanged(): void {
+  current?.networkChanged?.();
+  for (const socket of scopedSockets) socket.networkChanged?.();
+}
 /** 发往这个对端的会话请求超时、它此刻走中转：让承载它的连接判断中转 UDP 是否只通登记（relayUdp.ts noteStall）。 */
 export function agentNetRelayStalled(peer: string): void { sessionSocket(peer)?.relayStalled?.(); }
 /** 本机在官方 Device Link 里删掉了这台设备：Agent-Net 上马上不认它。 */
