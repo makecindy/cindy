@@ -204,6 +204,26 @@ describe('More plugins', () => {
     }
   });
 
+  // Unit: the remembered directory may still call a plugin installed after the current roster has removed it.
+  it('samples an uninstalled candidate from the cached directory on the next detail', async () => {
+    const removed = relatedItem('formerly-installed', { name: 'Formerly installed', installState: 'installed' });
+    const reserve = relatedItem('reserve', { name: 'Reserve' });
+    const loadPage = vi.fn(async () => relatedPage([removed, reserve]));
+    const catalog = relatedCatalog(loadPage);
+    const onOpen = vi.fn();
+    const { rerender } = render(detailWithRelated(detail, {
+      ...catalog, installedGhosts: [{ manifest: { id: removed.ghostId } }],
+    }, onOpen));
+    await screen.findByRole('region', { name: title });
+    expect(cardNames()).toEqual([reserve.name]);
+
+    rerender(detailWithRelated({ ...reserve, manifest }, { ...catalog, installedGhosts: [] }, onOpen));
+    const candidate = await screen.findByRole('button', { name: removed.name });
+    fireEvent.click(candidate);
+    expect(onOpen).toHaveBeenCalledWith({ ...removed, installState: 'not-installed' });
+    expect(loadPage).toHaveBeenCalledTimes(1);
+  });
+
   it('reads through the last cursor before sampling, including a plugin after the first 100', async () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0.9999);
     try {

@@ -1123,7 +1123,7 @@ function LocalPluginCatalogSource({
   const releaseUpdates = catalogOnline && cachedUpdate?.releaseId === historyReleaseId ? cachedUpdate?.updates : undefined;
   const [, setUpdateNotesRevision] = useState(0);
   useEffect(() => {
-    if (!active || !selectedId || !notesPluginId || !notesReleaseId || !navigator.onLine) return;
+    if (!active || !selectedId || !notesPluginId || !notesReleaseId || !catalogOnline) return;
     const cached = detailCache.peek(notesPluginId);
     if (cached?.releaseId === notesReleaseId && (!historyPluginId || cached.updates !== undefined)) return;
     let current = true;
@@ -1143,7 +1143,7 @@ function LocalPluginCatalogSource({
       if (current && result?.releaseId === notesReleaseId) setUpdateNotesRevision(revision => revision + 1);
     })();
     return () => { current = false; };
-  }, [active, detailCache, historyPluginId, notesPluginId, notesReleaseId, selectedId]);
+  }, [active, catalogOnline, detailCache, historyPluginId, notesPluginId, notesReleaseId, selectedId]);
   const selectedMainViewSidebarVisible = selectedDetail?.hasMainView
     ? readMainViewSidebarVisible(dataOwnerId, selectedDetail.id)
     : true;
@@ -1696,7 +1696,10 @@ function LocalPluginCatalogSource({
     const owner = contributionOwnerRef.current;
     const current = () => contributionMounted.current && requestId === marketDetailRequestRef.current && contributionOwnerRef.current === owner && activeDetailCacheRef.current === detailCache;
     try {
-      const detail = await detailCache.load(pluginId, () => window.electronAPI.pluginMarket.detail(pluginId), background ? 'background' : 'refresh');
+      const cached = detailCache.peek(pluginId);
+      const fields = { includeUpdates: !cached || cached.sourceType === 'server', includeReadme: true };
+      const detail = await detailCache.load(pluginId, () => window.electronAPI.pluginMarket.detail(pluginId, fields),
+        background ? 'background' : 'refresh', current, fields);
       if (!current()) return;
       setMarketDetailError(null);
       setMarketDetail((current) => (current?.pluginId === pluginId ? detail : current));

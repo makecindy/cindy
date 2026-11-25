@@ -1485,6 +1485,59 @@ describe('plugin page return navigation', () => {
     ]);
   });
 
+  // Unit: a warm directory and an uncached history must recover after reconnecting on the same release.
+  it('loads installed history once when an offline detail comes back online', async () => {
+    setupInstalledHistory();
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    render(page('/plugins'));
+    fireEvent.click(await screen.findByRole('button', { name: detail.name }));
+    await screen.findByRole('heading', { level: 1, name: detail.name });
+    expect(loadDetail).not.toHaveBeenCalled();
+
+    online.mockReturnValue(true);
+    await act(async () => { window.dispatchEvent(new Event('online')); });
+    expect(await screen.findByText('Newest release notes')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.ghosts.detail.olderUpdates 3' })).toBeTruthy();
+    await act(async () => {
+      online.mockReturnValue(false);
+      window.dispatchEvent(new Event('offline'));
+    });
+    await act(async () => {
+      online.mockReturnValue(true);
+      window.dispatchEvent(new Event('online'));
+    });
+    expect(loadDetail.mock.calls).toEqual([[detail.pluginId, { includeUpdates: true, includeReadme: false }]]);
+  });
+
+  // Unit: a new release must retain the open history, even when the detail has not been reopened.
+  it('keeps earlier market releases open after a foreground refresh publishes a new version', async () => {
+    const original = { ...installedWithHistory, installState: 'not-installed' as const };
+    const next: PluginMarketDetail = { ...original, releaseId: 'new-market-release', version: '2.0.0',
+      manifest: { ...original.manifest, version: '2.0.0', releaseNotes: 'New market notes' },
+      updates: [{ version: '2.0.0', publishedAt: '2026-09-14T12:00:00Z', releaseNotes: 'New market notes' },
+        ...original.updates!],
+    };
+    let current = original;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    window.electronAPI.pluginMarket.snapshot = vi.fn(async () => ({
+      items: [marketItemSummary(current)], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [],
+    }));
+    loadDetail.mockImplementation(async (_id, options) => options?.includeUpdates ? current : { ...current, updates: undefined });
+    render(page('/plugins'));
+    await openFromCatalog();
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.detail.olderUpdates 3' }));
+    const collapse = () => screen.getByRole('button', { name: 'settings.ghosts.detail.collapseOlderUpdates' });
+    expect(collapse().getAttribute('aria-expanded')).toBe('true');
+
+    current = { ...next, installState: 'not-installed' };
+    clock.mockReturnValue(32_000);
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    expect(await screen.findByText('New market notes')).toBeTruthy();
+    expect(collapse().getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Historical release notes A')).toBeTruthy();
+    expect(loadDetail).toHaveBeenCalledTimes(2);
+  });
+
   it('loads installed history after a market-card hover cached details without updates', async () => {
     setupInstalledHistory();
     render(page('/plugins'));

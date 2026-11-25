@@ -79,10 +79,17 @@ function selectRelatedPlugins(directory: RelatedDirectory, detailId: string,
   const liveById = new Map(liveItems?.map(item => [item.pluginId, item]));
   const eligible = new Map<string, PluginMarketItem>();
   for (const original of directory.items.values()) {
-    const item = liveById.get(original.pluginId) ?? original;
-    if (item.pluginId !== detailId && canRecommend(item) && item.installState === 'not-installed' &&
-      !installedGhosts?.some(ghost => marketItemMatchesInstalledGhost(item, ghost))) {
+    const live = liveById.get(original.pluginId);
+    const item = live ?? original;
+    if (item.pluginId === detailId || !canRecommend(item) ||
+        installedGhosts?.some(ghost => marketItemMatchesInstalledGhost(item, ghost))) continue;
+
+    // The once-per-run directory cannot report later uninstalls. Use its old
+    // installed state only when neither the live catalog nor roster can replace it.
+    if (item.installState === 'not-installed') {
       eligible.set(item.pluginId, item);
+    } else if (!live && installedGhosts !== undefined && item.installState !== 'conflict') {
+      eligible.set(item.pluginId, { ...item, installState: 'not-installed' });
     }
   }
   const previous = directory.selections.get(detailId);

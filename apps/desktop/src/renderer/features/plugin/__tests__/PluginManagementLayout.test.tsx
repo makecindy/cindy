@@ -371,7 +371,7 @@ describe('PluginManagementLayout', () => {
       </MemoryRouter>,
     );
 
-    const focusable = [...container.querySelectorAll('input, button')];
+    const focusable = [...container.querySelectorAll<HTMLElement>('input, button')];
     const search = screen.getByRole(activeTab === 'plugins' ? 'button' : 'textbox', {
       name: activeTab === 'plugins' ? 'Search plugins' : 'Search skills',
     });
