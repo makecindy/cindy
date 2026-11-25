@@ -493,9 +493,10 @@ async function normalizeUserMessage(
         if (managedUrl) block.managedUrl = managedUrl;
       }
 
-      // 3) clipboard:// 占位 path —— 没有 base64 兜底就是真没东西, 不发出去
+      // 3) clipboard:// 占位 path —— 没有 base64 兜底就是真没东西, 不发出去。
+      //    这是附件本身没有可用来源(不是传输失败):给「移除原附件、重新添加」的指引,而不是「请重试」。
       if (typeof block.path !== 'string' || !block.path || block.path.startsWith('clipboard://')) {
-        rejectAttachmentTransfer();
+        throw createSourceFileAccessError();
       }
 
       if (!raw.base64 && path.isAbsolute(block.path) && (checksLocalPaths || (ports.getTaskLocation && isManagedImageUrl(raw.path)))) {
@@ -699,7 +700,7 @@ async function materializeQueuedOssAttachmentsInternal(
       if (!source || (typeof source === 'string' && source.startsWith('clipboard://'))) {
         if (!file.base64) {
           log.warn('queued attachment has no usable source');
-          rejectAttachmentTransfer();
+          throw createSourceFileAccessError();
         }
         continue;
       }

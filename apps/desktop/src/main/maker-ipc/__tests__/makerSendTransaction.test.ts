@@ -1879,7 +1879,11 @@ describe('maker SEND transaction', () => {
       content: [{ type: 'text', text: 'read this' }, { type: 'file', path: filePath }],
     }, undefined, { persistUserMessage: { clientId: 'attachment-input', content: 'read this' } });
 
-    for (const brokenPath of ['', 'clipboard://paste-1', 'xdt-image://private', 'cindy-media://private']) {
+    // A source-less attachment needs replacing, so it must not read as a retryable transfer failure.
+    for (const brokenPath of ['', 'clipboard://paste-1']) {
+      await expect(send(brokenPath)).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED' });
+    }
+    for (const brokenPath of ['xdt-image://private', 'cindy-media://private']) {
       await expect(send(brokenPath)).rejects.toMatchObject({
         code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
         message: '[DEVICE_LINK_MEDIA_TRANSFER_FAILED] Attachment transfer failed',

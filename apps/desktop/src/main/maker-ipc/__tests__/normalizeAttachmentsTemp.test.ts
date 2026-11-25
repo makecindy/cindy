@@ -242,8 +242,10 @@ describe('inline attachment temporary files', () => {
     const block = { type: 'image', path: url, autoResume: true, acceptedHistoryReplay: true };
     const input = { type: 'user' as const, content: [{ type: 'text', text: 'keep' }, block], autoResume: true };
     const failure = { code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' };
+    // 没有可用来源的附件需要移除后重新添加,与「传输失败可重试」区分开。
     for (const path of ['', 'clipboard://missing']) {
-      await expect(materializeQueuedOssAttachmentsDeferred('task', { files: [{ type: 'file', path }] })).rejects.toMatchObject(failure);
+      await expect(materializeQueuedOssAttachmentsDeferred('task', { files: [{ type: 'file', path }] }))
+        .rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED' });
     }
     await expect(normalizeUserMessage('task', input)).rejects.toMatchObject(failure);
     // A trusted replay still requires non-images and validates each cache URI.
