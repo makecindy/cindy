@@ -12429,6 +12429,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     resumeWithStoredPermissionMode?: boolean;
     /** Host-stamped by sendToSession only: a plugin follows this word back (origin.pluginReply). */
     pluginReply?: MessageSourcePluginReply;
+    /** Host-only hook to record a new local task before its first input is dispatched. */
+    beforeLocalTaskDispatch?: (taskId: string) => Promise<void>;
   }, hostDispatch?: 'bot' | 'group' | 'group-assistant', localSessionTool = false): Promise<SendToSessionInternalResult> {
     await assertTaskActionCurrent();
     if (hasTaskActionAuthorization()) params = { ...params, forceQueue: true };
@@ -12750,6 +12752,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const clientId = createId();
         createdPreviewSessionId = session.id;
         createdPreviewClientId = clientId;
+        if (!inheritedAgentDeviceId && !session.remoteHostId && params.beforeLocalTaskDispatch) {
+          await params.beforeLocalTaskDispatch(session.id);
+        }
         if (verifiedOwnerRequestText(params.autoReviewUserText) !== undefined) {
           // New tasks need the same accepted-input provenance as busy and idle
           // recipients, so further handoffs cannot lose the original request.
@@ -18027,6 +18032,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...(pluginSource ? { sourcePlugin: pluginSource, inheritTargetPlanMode: true, resumeWithStoredPermissionMode: true } : {}),
           ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
           autoReviewUserText: pluginSource ? params.message : request.autoReviewUserText,
+          ...(openerId && openerInputs.length ? {
+            beforeLocalTaskDispatch: async (openedTaskId: string) => {
+              if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+              // Persist the link before the new task can send any reply, even on its first turn.
+              await withPluginTaskService(service => service.noteOpenedTask(openerId, openerInputs, openedTaskId));
+            },
+          } : {}),
           ...(params.targetSessionId && params[AUTO_REVIEW_DELEGATED_CONTINUATION] ? {
             autoReviewUserText: { ...request.autoReviewUserText, kind: 'delegated-continuation' as const },
             // Use the durable path for idle and busy targets alike. It restores the
@@ -18042,11 +18054,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throw error;
       }
       if (followUp && !sent.ok) await withPluginTaskService(service => service.abandonFollowUp(followUp.runId));
-      // Saved before the tool returns, so the opened task's word back can never arrive first.
-      if (sent.ok && sent.wakeKind === 'created' && openerId && openerInputs.length) {
-        const openedTaskId = sent.targetSessionId;
-        await withPluginTaskService(service => service.noteOpenedTask(openerId, openerInputs, openedTaskId));
-      }
       return sent.ok && projectFromWorkingDir ? { ...sent, projectFromWorkingDir: true } : sent;
     },
     enableOrca: enableOrcaInternal,
