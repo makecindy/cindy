@@ -46,6 +46,8 @@ export interface ExtractedStep {
    * the window itself; mistaking another form for this only sends them there.
    */
   signIn?: boolean;
+  /** Keys (`hiddenFieldKeys`) of shrunken fields this step took in; passed back to keep them once focus moves. */
+  hiddenFields?: string[];
 }
 
 /** Keep verified page metadata even when its controls cannot form a complete step. */
@@ -93,7 +95,7 @@ function visible(node: NativeAxNode, windowFrame: number[]): boolean {
 function laidOutInPage(node: NativeAxNode, page: NativeAxNode, confirmed?: ReadonlySet<string>): boolean {
   if (visible(node, [])) return true;
   if (!node.frame || !page.frame) return false;
-  if (hiddenFieldInPage(node, page) && (node.focused || confirmed?.has(hiddenFieldKey(node)))) return true;
+  if (hiddenFieldInPage(node, page) && (node.focused || hiddenFieldKeys(node).some((key) => confirmed?.has(key)))) return true;
   const [x, y, w, h] = node.frame;
   const [px, py, pw, ph] = page.frame;
   const edge = (value: number, start: number, size: number) => Math.abs(value - start) < 2 || Math.abs(value - start - size) < 2;
@@ -115,8 +117,14 @@ function hiddenFieldInPage(node: NativeAxNode, page: NativeAxNode): boolean {
   return w >= 0 && h >= 0 && x >= px && y >= py && x <= px + pw && y <= py + ph;
 }
 
-/** A hidden field found focused earlier in this step: where it sits in the tree, and what it is. */
-export const hiddenFieldKey = (field: { ref: string; fp: string }) => JSON.stringify([field.ref, field.fp]);
+/**
+ * A hidden field found focused earlier in this step. Its page id with its fingerprint survives text the page
+ * inserts after an earlier field is typed (tree positions shift); its place in the tree covers inputs without an id.
+ */
+export const hiddenFieldKeys = (field: { ref: string; fp: string; domId?: string }): string[] => [
+  JSON.stringify(['ref', field.ref, field.fp]),
+  ...(field.domId ? [JSON.stringify(['dom', field.domId, field.fp])] : []),
+];
 
 const isWithin = (ref: string, scope: string) => ref === scope || ref.startsWith(`${scope}.`);
 const parentRef = (ref: string) => ref.slice(0, Math.max(0, ref.lastIndexOf('.')));
@@ -199,7 +207,7 @@ function signatureOf(source: InputHandoffSource, controls: ScreenControl[]): str
   ]);
 }
 
-/** `confirmedHidden`: hidden fields this step already found focused (`hiddenFieldKey`), kept when focus moved. */
+/** `confirmedHidden`: hidden fields this step already found focused (`hiddenFieldKeys`), kept when focus moved. */
 export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: ReadonlySet<string>): ExtractedStep {
   const windowFrame = snapshot.window.frame ?? [];
   const browser = isBrowserBundle(snapshot.bundleId);
@@ -216,6 +224,9 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
   // Scrolling must not turn one form into unrelated partial steps. Zero-size
   // nodes are excluded unless their bounds were clipped at the viewport edge.
   const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb, confirmedHidden)) : pageMissing ? [] : nodes;
+  const hiddenFields = topWeb
+    ? scoped.filter((node) => !visible(node, []) && hiddenFieldInPage(node, topWeb)).flatMap(hiddenFieldKeys)
+    : [];
 
   // Modal sheets take over the window.
   const sheet = scoped.find((node) => node.role === 'AXSheet');
@@ -452,6 +463,7 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
     ...(deviceCode ? { deviceCode } : {}),
     ...(pageMissing ? { pageMissing } : {}),
     ...(signIn ? { signIn } : {}),
+    ...(hiddenFields.length ? { hiddenFields } : {}),
   };
 }
 

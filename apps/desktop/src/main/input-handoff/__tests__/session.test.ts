@@ -30,42 +30,77 @@ function harness(driver: HandoffDriver, extra: Partial<ConstructorParameters<typ
 const field = (step: InputHandoffSnapshot) => step.controls.find((control) => control.kind === 'text')!;
 
 describe('InputHandoffSession', () => {
-  // PR #12780 review (greptile, r4691885603): a form with a phone field and a focused one-pixel code field.
-  // Typing the phone moves the focus, and the re-check before the code dropped the hidden field, so the code
-  // was never typed and nothing was submitted. Entry: session.submit with both values. Unit tier, fake driver.
-  it('keeps a hidden code field found focused while typing an earlier field moves the focus', async () => {
-    let focus = '0.3';
+  // A pay page: a phone field and, under the code prompt, the real code input shrunk to one pixel and focused.
+  // `typing` moves the focus as native typing does; `insertNote` makes the page add a line once the phone is
+  // typed, which shifts the tree positions of everything after it.
+  function payPage(options: { insertNote?: boolean } = {}) {
+    const state = { focus: '0.code', phoneTyped: false };
     const acts: Array<{ kind: string; ref?: string }> = [];
     const chrome = { pid: 20, app: 'Google Chrome', bundleId: 'com.google.Chrome' };
-    const n = (ref: string, role: string, extra: Record<string, unknown> = {}) => ({ ref, role, depth: 1, fp: `${role}|${(extra.title as string) ?? ''}`, enabled: true, ...extra });
+    const n = (ref: string, role: string, extra: Record<string, unknown> = {}) =>
+      ({ ref, role, depth: 1, fp: `${role}|${(extra.title as string) ?? ''}`, enabled: true, ...extra });
+    const nodes = () => {
+      const note = options.insertNote && state.phoneTyped;
+      const at = (i: number) => `0.${note ? i + 1 : i}`;
+      return [
+        n('0', 'AXWebArea', { url: 'https://secure.example.test/pay', frame: [0, 60, 1200, 840] }),
+        n('0.1', 'AXTextField', { title: 'Phone', frame: [460, 300, 260, 30], focused: state.focus === 'phone' }),
+        ...(note ? [n('0.2', 'AXStaticText', { value: 'Phone number looks fine', frame: [460, 340, 200, 16] })] : []),
+        n(at(2), 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }),
+        n(at(3), 'AXTextField', { domId: 'sms-code', frame: [460, 440, 1, 1], focused: state.focus === '0.code' }),
+        n(at(4), 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }),
+      ];
+    };
     const driver: HandoffDriver = {
       permission: async () => 'granted',
       requestPermission: async () => undefined,
       windows: async () => ({ frontmost: 20, apps: [{ ...chrome, windows: [{ index: 0, title: 'Pay', frame: [0, 0, 1200, 900], focused: true, minimized: false }] }] }),
-      snapshot: async () => ({ ...chrome, frontmost: true, window: { index: 0, title: 'Pay', frame: [0, 0, 1200, 900] }, nodes: [
-        n('0', 'AXWebArea', { url: 'https://secure.example.test/pay', frame: [0, 60, 1200, 840] }),
-        n('0.1', 'AXTextField', { title: 'Phone', frame: [460, 300, 260, 30], focused: focus === '0.1' }),
-        n('0.2', 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }),
-        n('0.3', 'AXTextField', { frame: [460, 440, 1, 1], focused: focus === '0.3' }),
-        n('0.4', 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }),
-      ] }),
+      snapshot: async () => ({ ...chrome, frontmost: true, window: { index: 0, title: 'Pay', frame: [0, 0, 1200, 900] }, nodes: nodes() }),
       commandLine: async () => '',
       act: async (request) => {
-        acts.push({ kind: request.kind, ref: (request as { ref?: string }).ref });
-        if (request.kind === 'text') focus = (request as { ref: string }).ref;
+        const ref = (request as { ref?: string }).ref;
+        acts.push({ kind: request.kind, ref });
+        if (request.kind === 'text') {
+          if (ref === '0.1') { state.focus = 'phone'; state.phoneTyped = true; } else state.focus = '0.code';
+        }
         return { ok: true };
       },
     };
-    const { session, latest } = harness(driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
+    return { driver, state, acts };
+  }
+
+  // PR #12780 reviews (greptile r4691885603, codex r4691958410 / r4692228763): typing the phone moves the focus off
+  // the shrunken code field, and the page may add a line that shifts tree positions. The re-check before typing the
+  // code dropped it, so only the phone was typed and nothing was submitted. Entry: session.submit. Unit tier.
+  it.each([
+    { name: 'focus moves', insertNote: false, codeRef: '0.3' },
+    { name: 'the page inserts a line and tree positions shift', insertNote: true, codeRef: '0.4' },
+  ])('types a hidden code field found focused after an earlier field ($name)', async ({ insertNote, codeRef }) => {
+    const page = payPage({ insertNote });
+    const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
     await session.start();
     const step = latest();
     const texts = step.controls.filter((control) => control.kind === 'text');
     expect(texts).toHaveLength(2);
     const values = Object.fromEntries(texts.map((control, i) => [control.id, i === 0 ? '18600000000' : '123456']));
     await session.submit({ expectedRevision: step.revision, values, action: { kind: 'submit' } });
-    expect(acts.filter((act) => act.kind === 'text').map((act) => act.ref)).toEqual(['0.1', '0.3']);
+    expect(page.acts.filter((act) => act.kind === 'text').map((act) => act.ref)).toEqual(['0.1', codeRef]);
     // Then the step is confirmed (the page's button or Return), as after any complete form.
-    expect(['press', 'key']).toContain(acts.at(-1)?.kind);
+    expect(['press', 'key']).toContain(page.acts.at(-1)?.kind);
+    session.cancel();
+  });
+
+  // PR #12780 review (codex r4692228746): the owner clicks the phone field on the window while the card waits;
+  // the window watch re-read dropped the unfocused code field and handed back as done outside (steps=0).
+  it('keeps waiting when the owner moves the focus off a hidden code field on the window', async () => {
+    const page = payPage();
+    const { session, latest, finished } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' }, windowWatchMs: 2 });
+    await session.start();
+    expect(latest().controls.filter((control) => control.kind === 'text')).toHaveLength(2);
+    page.state.focus = 'phone';
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(finished).toEqual([]);
+    expect(latest().controls.filter((control) => control.kind === 'text')).toHaveLength(2);
     session.cancel();
   });
 
