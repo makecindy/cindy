@@ -93,11 +93,24 @@ function visible(node: NativeAxNode, windowFrame: number[]): boolean {
 function laidOutInPage(node: NativeAxNode, page: NativeAxNode): boolean {
   if (visible(node, [])) return true;
   if (!node.frame || !page.frame) return false;
+  if (focusedHiddenField(node, page)) return true;
   const [x, y, w, h] = node.frame;
   const [px, py, pw, ph] = page.frame;
   const edge = (value: number, start: number, size: number) => Math.abs(value - start) < 2 || Math.abs(value - start - size) < 2;
   return (w >= 2 && h >= 0 && h < 2 && (edge(y, py, ph) || edge(y + h, py, ph))) ||
     (h >= 2 && w >= 0 && w < 2 && (edge(x, px, pw) || edge(x + w, px, pw)));
+}
+
+/**
+ * Split code boxes ("请输入短信验证码" with six drawn digits) type into one real input the page
+ * shrinks to a pixel and focuses. Only the focused one counts: unfocused hidden fields are often
+ * traps for bots, never the owner's to fill (2026-11-25, a payment SMS code read as nothing to fill).
+ */
+function focusedHiddenField(node: NativeAxNode, page: NativeAxNode): boolean {
+  if (!node.focused || !TEXT_ROLES.has(node.role) || node.frame?.length !== 4 || page.frame?.length !== 4) return false;
+  const [x, y, w, h] = node.frame;
+  const [px, py, pw, ph] = page.frame;
+  return w >= 0 && h >= 0 && x >= px && y >= py && x <= px + pw && y <= py + ph;
 }
 
 const isWithin = (ref: string, scope: string) => ref === scope || ref.startsWith(`${scope}.`);

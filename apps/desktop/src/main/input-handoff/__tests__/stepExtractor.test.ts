@@ -24,6 +24,24 @@ const snapshot = (nodes: NativeAxNode[], extra: Partial<NativeAxSnapshot> = {}):
 });
 
 describe('extractStep', () => {
+  // 2026-11-25 real run: a payment page's SMS code (six drawn boxes over one input shrunk to a pixel)
+  // ended a handoff as nothing_to_fill. Entry: extractStep, the step the card shows. Unit tier.
+  // Existing coverage kept zero-size fields only when clipped at the page edge. Minimal failing input:
+  // a focused 1x1 AXTextField inside the page under the code prompt. An unfocused one (a bot trap) stays out.
+  it('keeps the focused one-pixel input behind drawn code boxes, and leaves unfocused hidden fields out', () => {
+    const step = extractStep(snapshot([
+      node('0', 'AXWebArea', { url: 'https://secure.example.test/pay', frame: [0, 60, 1200, 840] }),
+      node('0.1', 'AXStaticText', { value: '请输入短信验证码', frame: [460, 380, 200, 20] }),
+      node('0.2', 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }),
+      node('0.3', 'AXTextField', { focused: true, frame: [460, 440, 1, 1] }),
+      node('0.4', 'AXTextField', { title: 'website', frame: [10, 70, 1, 1] }),
+      node('0.5', 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }),
+    ]));
+    const fields = step.shown.filter(c => c.kind === 'text');
+    expect(fields).toHaveLength(1);
+    expect(fields[0]).toMatchObject({ contentType: 'one-time-code' });
+  });
+
   // Long-form regression: extractStep must retain fields below the viewport (unit).
   // Existing crowded-screen coverage only used links, never an offscreen input or >40 inputs.
   it('keeps the complete scrollable web form and its submit action', () => {
