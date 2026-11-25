@@ -385,9 +385,10 @@ export async function resolveFetchUrl(
       ...(cwd ? { cwd } : {}),
       timeoutMs: 10_000,
     });
-    // 只去掉 git 输出的一个行终止符，不 trim：首尾空白也是 git 实际使用的地址的一部分，交给白名单拒绝。
-    const value = stdout.replace(/\r?\n$/, '');
-    return value && !/[\r\n]/.test(value) ? value : null;
+    // 只去掉 git 输出的那一个 LF，不 trim、也不去 CR：改写目标末尾可以真的带空白或 CR，它们是 git 实际使用的地址
+    // 的一部分，留给白名单拒绝（身份缺省）。Git for Windows 的管道输出同样只用 LF。
+    const value = stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
+    return value && !value.includes('\n') ? value : null;
   } catch {
     return null;
   }

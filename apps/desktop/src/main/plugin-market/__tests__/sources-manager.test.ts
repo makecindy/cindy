@@ -1197,9 +1197,13 @@ describe('MarketSourceManager source identity', () => {
 
   // Codex P1 on PR #12731: git reports the address with its trailing space and fetches another repository than the
   // same address without it. Only the line terminator is removed, so the whitelist sees and rejects the space.
-  it('does not verify an address that git reports with surrounding whitespace', async () => {
+  // Codex P1 (later round): a literal trailing CR is also part of the address git uses; only the LF is removed.
+  it.each([
+    ['a trailing space', 'ssh://git@git.example.test/acme/plugins.git '],
+    ['a trailing carriage return', 'ssh://git@git.example.test/acme/plugins.git\r'],
+  ])('does not verify an address that git reports with %s', async (_label, reported) => {
     const root = makeRoot();
-    const git = rewritingGit(() => 'ssh://git@git.example.test/acme/plugins.git ');
+    const git = rewritingGit(() => reported);
     const manager = identityManager(root, git.executor);
     await manager.addSource({ source: 'https://origin.example.test/acme/plugins.git' });
     expect((await manager.discoverSource('hub')).sourceIdentity).toBeNull();
