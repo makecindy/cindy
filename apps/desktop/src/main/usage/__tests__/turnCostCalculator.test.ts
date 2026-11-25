@@ -1120,6 +1120,39 @@ describe('resolveClaudeTurnCostSinks', () => {
     });
   });
 
+  it('keeps one provider request when a proxied response repeats its usage across cycles', () => {
+    // The translator merges duplicated cycles into one request segment. The SDK's
+    // cumulative usage can still lag that segment (its per-message dedupe keeps the
+    // first cycle's output). Accounting must take the observed request, not add a
+    // residual from the repeated cumulative aggregate.
+    const pricing = catalog(quote('gpt-5.5', 5, 30, { cacheReadPerMtok: 0.5 }));
+    const result = resolveClaudeTurnCostSinks(
+      [delta('gpt-5.5', { inputTokensDelta: 1000, outputTokensDelta: 1, cacheReadTokensDelta: 50_000 })],
+      pricing,
+      XD_GATEWAY,
+      [
+        {
+          model: 'gpt-5.5',
+          inputTokens: 1000,
+          outputTokens: 120,
+          cacheReadTokens: 50_000,
+          cacheCreateTokens: 0,
+          complete: true,
+        },
+      ],
+      false,
+    );
+
+    expect(result.perModel).toHaveLength(1);
+    expect(result.perModel[0]?.deltas).toEqual({
+      inputTokens: 1000,
+      outputTokens: 120,
+      cacheReadTokens: 50_000,
+      cacheCreateTokens: 0,
+    });
+    expect(result.turnMoney?.amount).toBeCloseTo(0.0336);
+  });
+
   it('returns null total when the route is subscription-only', () => {
     const result = resolveClaudeTurnCostSinks(
       [delta('claude-opus-4-8', { costUsdDelta: 4 })],

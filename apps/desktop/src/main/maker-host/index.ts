@@ -22,6 +22,8 @@ import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { resolveLocalMcpDuplicateChoices } from './mcp-duplicate-preferences.js';
 import { cindyMakeManager } from '../cindy-make/manager.js';
 import { makeSourceRoot } from '../cindy-make/sourcePaths.js';
+import { captureHostPersonalization } from '../host-settings/startup.js';
+import { isManagedCloudInstance } from '../host-settings/personalization.js';
 import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 /**
  * apps/desktop/src/main/maker-host
@@ -2644,6 +2646,8 @@ export function getMaker(): Maker {
           }
           // 所有创建路径共用的派发边界,opts.providerId 此刻已是本次启动的终值。
           freezeSessionProviderAtStart(sessionId, opts.providerId);
+          // 托管云实例:没有经过 IPC 装配的创建路径也用实例自己的个性化正文。
+          if (!opts.hostStartupPreferences && isManagedCloudInstance()) await captureHostPersonalization(opts);
           const interfaceProvider = getActiveCatalog().providers.find(p => p.id === opts.providerId);
           // Plugin engines are not catalog providers: no model interface to record.
           const interfaceKind = builtinAgentKindOrNull(opts.agentKind);
