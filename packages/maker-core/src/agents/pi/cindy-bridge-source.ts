@@ -3298,6 +3298,11 @@ interface GatewayArgsResolution {
   /** 信封被平铺(顶层 name + 顶层 args), 已重建回 {name, args}。 */
   rebuiltEnvelope?: boolean;
   /**
+   * 撞名的内层工具本地查不到: 要问服务端那份 schema 才能定「剥不剥那一层」。调用方代拉一次
+   * 内层列表后重新归一化(见 CindyMcpGateway.resolveCallAsync)。
+   */
+  innerSchemaPending?: string;
+  /**
    * 信封判不了: 工具 schema 没能看完(预算截断 / 解析不了的引用), 但已看到的部分就是 {name, args} 信封的
    * 样子, 而顶层又给了 name。它是信封层的内层工具名, 还是这个工具自己的 name 参数, 网关分不清 ——
    * 调用方必须拒收, 不能按普通工具转发(见 callInputError)。
@@ -3645,6 +3650,13 @@ function propertyAdmitsType(root: Record<string, unknown>, property: unknown, ex
       const branches = node[keyword];
       if (!Array.isArray(branches)) continue;
       for (const branch of branches) {
+        // 节点预算用尽就不再逐个走剩下的分支: 每个分支都要进一次 visit, 分支总数上万时
+        // 这一段就能吃掉整轮, 32 节点的上限形同虚设(Codex P2 on #10908)。与声明面遍历
+        // (schemaParameterSurface)同一套做法: 走不到的分支按「看不完」处理。
+        if (remaining <= 0) {
+          exhausted = true;
+          break;
+        }
         const verdict = visit(branch);
         if (verdict === 'admits') return 'admits';
         exhausted = exhausted || verdict === 'exhausted';
@@ -3866,9 +3878,14 @@ function patternBacktrackBudget(pattern: string, keyLength: number): number {
     const rounds = Math.min(range.max, keyLength + range.min + 1);
     // 轮数本身也是一次选择。
     if (rounds + 1 > limit) return over;
+    // 轮数可以很大(a{199999} 这类量词): 逐轮相乘等于把一次估算做成几十万次迭代, 十几条
+    // 模式就是上亿次, 同步卡住 Pi(Codex P1 on #10908)。平方代替逐轮相乘: 步数 O(log 轮数),
+    // 取值与逐轮相乘一致(封顶之后都记超预算)。
     let choices = 1;
-    for (let round = 0; round < rounds; round++) {
-      choices = multiply(choices, Math.max(base, 1));
+    let factor = Math.max(base, 1);
+    for (let exponent = rounds; exponent > 0; exponent = Math.floor(exponent / 2)) {
+      if (exponent % 2 === 1) choices = multiply(choices, factor);
+      factor = multiply(factor, factor);
     }
     return multiply(rounds + 1, choices);
   };
@@ -3964,9 +3981,18 @@ function schemaKeyStatus(
       skipped = true;
       continue;
     }
+    // 共享预算用尽后不再估算后面的模式: 估算本身要走一遍模式(每个量词原子都要算轮数),
+    // 每个顶层键都把这批模式重估一遍, 工作量按键数放大(Codex P1 on #10908)。
+    if (patternBudget.remaining <= 0) {
+      skipped = true;
+      break;
+    }
     const estimate = patternBacktrackBudget(pattern, key.length);
     if (estimate > SCHEMA_PATTERN_BACKTRACK_BUDGET) {
+      // 超预算的模式不跑, 但估算花掉的功夫要记账: 记进共享预算, 后面的顶层键不再重估这批
+      // 模式(判不了 → unknown, 键照常转发不丢)。
       skipped = true;
+      patternBudget.remaining -= SCHEMA_PATTERN_BACKTRACK_BUDGET;
       continue;
     }
     // 总量上限: 单次调用跨所有顶层键共享同一份回溯预算(Codex P1 on #10908)。后面的模式也跑不成。
@@ -4081,17 +4107,31 @@ function normalizeGatewayArgs(
   // 内层工具自己就声明 name + args 参数时(run 这类), args 容器里的 {name, args} 可能正是它的
   // 参数对象 —— 内层名恰好与选择器撞名而已。折叠后 registry 收到的 arguments 仍被剥一层信封,
   // 内层工具拿到 {cwd}, 自己声明的 name/args 没了。内层 schema 声明了 args(与执行前双包裁决
-  // 同一判据、同一来源)就不折叠, 照实重建; 没声明 / 本地查不到 / 判不了时维持折叠 ——
-  // 平铺是 2026-10-31 实测撞出的形状, 从宽折叠, 由服务端报真实的参数要求。
+  // 同一判据、同一来源)就不折叠, 照实重建; 内层确实没有 args 才折叠 —— 平铺是 2026-10-31
+  // 实测撞出的形状, 折与不折都说得通时由执行前的双包裁决按真实 schema 定。
   const containerLooksEnvelope = Object.prototype.hasOwnProperty.call(params, 'name')
     && typeof params.name === 'string'
     && Object.prototype.hasOwnProperty.call(params, 'args');
-  const innerDeclaresArgs = containerLooksEnvelope && lookupInnerTool
-    ? schemaDeclaresArgs(lookupInnerTool(params.name as string)?.inputSchema) === true
-    : false;
+  // 内层工具自己就声明 name + args 参数时(run 这类), args 容器里的 {name, args} 可能正是它的
+  // 参数对象 —— 内层名恰好与选择器撞名而已。三态判据(与执行前双包裁决同一判据、同一来源):
+  // - true  内层确实声明了 args → 容器是内层工具自己的参数对象, 两层都留;
+  // - false 内层确实没有 args   → 容器只能是重复信封, 剥一层;
+  // - null  查不到内层 / 判不了 → 照旧剥一层(判不出就按实测撞出来的形状走), 同时把「要不要问
+  //        服务端那份 schema」标出来: 调用方代拉一次内层列表再判一次, 判据按真实 schema 定,
+  //        审批框与真正发出去的参数才一致(Codex P1 on #10908 第 12 轮, 4094 行)。
+  const innerTool = containerLooksEnvelope && lookupInnerTool
+    ? lookupInnerTool(params.name as string)
+    : null;
+  const innerDeclaresArgs = innerTool ? schemaDeclaresArgs(innerTool.inputSchema) : null;
+  const innerSchemaPending = containerLooksEnvelope
+    && selector !== undefined
+    && params.name === selector
+    && innerTool === null
+    ? params.name as string
+    : undefined;
   const repeatsEnvelope = selector !== undefined
     && containerLooksEnvelope
-    && ((params.name === selector && !innerDeclaresArgs) || selector === tool.name);
+    && ((params.name === selector && innerDeclaresArgs !== true) || selector === tool.name);
   const envelopeSchema = isNameEnvelopeSchema(schema, surface);
   // 信封判不了: schema 看不全, 但已看到的表态仍与信封兼容, 而顶层给了 name。它可能是信封层的
   // 内层工具名 —— 按普通工具折进参数容器, 服务端拿到的是 {name, <内层参数>}: 没有 args 层, 内层
@@ -4165,6 +4205,7 @@ function normalizeGatewayArgs(
     unmapped,
     parsedFromString,
     ...(flattenedEnvelope || flattenedEnvelopeNoContainer ? { rebuiltEnvelope: true } : {}),
+    ...(innerSchemaPending ? { innerSchemaPending } : {}),
   };
 }
 
@@ -4187,8 +4228,19 @@ function schemaDeclaresArgs(schema: unknown): boolean | null {
   const root = isPlainRecord(schema) ? schema : null;
   if (!root) return null;
   const surface = schemaParameterSurface(root);
+  if (!surface) return null;
   if (surface.names.has('args')) return true;
   if (surface.truncated || !surface.declaresProperties) return null;
+  // 动态放开的字段: additionalProperties / unevaluatedProperties 放开, 或有一条模式命中 args ——
+  // 这份 schema 收得下自己的 args 字段。「声明名里没有 args」不等于「这份 schema 不收 args」:
+  // 按「没有」处理, 就是断言内层工具没有 args 参数, 于是把它的参数剥掉一层 —— 服务端收到的是
+  // 少一层的参数, 规范调用被判成「信封套了两遍」而拒收(Codex P1 on #10908)。
+  if (surface.additionalAllowed) return true;
+  if (surface.patterns.length > 0) {
+    // 模式命中 args → 收得下; 模式没跑成(判不了)也算收得下: 宁可多留一层交给服务端校验,
+    // 不凭「没声明」断言它不存在。
+    return schemaKeyStatus(surface, 'args') === 'rejected' ? false : true;
+  }
   return false;
 }
 
@@ -4435,10 +4487,61 @@ class CindyMcpGateway {
 
   /** 归一化撞名裁决用的内层工具本地查询: 按 server + 内层名查工具表, 查不到返回 null。 */
   private innerToolLookup(tool: ConnectedMcpTool): InnerToolLookup {
-    return (innerName) => this.tools.get(mcpGatewayKey(tool.serverName, innerName)) ?? null;
+    return (innerName) => {
+      const local = this.tools.get(mcpGatewayKey(tool.serverName, innerName));
+      if (local) return local;
+      // 代拉过的内层列表也是一份 schema: 判据要跟执行前那份同源(否则审批框与真正发出去的
+      // 参数会不一致 —— 剥不剥那一层取决于内层工具自己有没有 args 参数)。
+      const listing = this.innerListingCache.get(tool.serverName);
+      if (!listing || listing.kind !== 'listing') return null;
+      const match = listing.tools.find((entry) => entry?.name === innerName);
+      if (!match) return null;
+      const schema = match.inputSchema ?? match.parameters ?? match.schema;
+      return schema === undefined ? null : { inputSchema: schema };
+    };
   }
 
   resolveCall(input: unknown): ResolvedMcpGatewayCall | null {
+    const parts = this.resolveCallParts(input);
+    if (!parts) return null;
+    return this.resolvedGatewayCall(parts.serverName, parts.toolName, parts.tool, parts.resolution);
+  }
+
+  /**
+   * 权限询问前的解析: 撞名的内层工具本地查不到时, 先代拉一次服务端内层列表, 归一化再判一次。
+   *
+   * 剥不剥那一层必须按真实 schema 定 —— 剥错了, registry 收到的参数就少一层, 内层工具被按空
+   * 参数调用还返回成功(Codex P1 on #10908 第 12 轮)。判据要在审批之前定, 审批框显示的那份与
+   * 真正发出去的那份才一致。
+   */
+  async resolveCallAsync(input: unknown, signal?: AbortSignal): Promise<ResolvedMcpGatewayCall | null> {
+    const parts = this.resolveCallParts(input);
+    if (!parts) return null;
+    const pending = parts.resolution.innerSchemaPending;
+    const resolution = pending
+      ? await this.resolveInnerSchema(parts.record, parts.tool, pending, signal)
+      : parts.resolution;
+    return this.resolvedGatewayCall(parts.serverName, parts.toolName, parts.tool, resolution);
+  }
+
+  /** 代拉内层列表后重新归一化: 撞名的判据按服务端那份真实 schema 定。 */
+  private async resolveInnerSchema(
+    record: Record<string, unknown>,
+    tool: ConnectedMcpTool,
+    innerName: string,
+    signal?: AbortSignal,
+  ): Promise<GatewayArgsResolution> {
+    await this.probeInnerToolSchema(tool, innerName, signal);
+    return normalizeGatewayArgs(record, tool, this.innerToolLookup(tool));
+  }
+
+  private resolveCallParts(input: unknown): {
+    record: Record<string, unknown>;
+    serverName: string;
+    toolName: string;
+    tool: ConnectedMcpTool;
+    resolution: GatewayArgsResolution;
+  } | null {
     if (this.callInputError(input)) return null;
     const record = recordInput(input);
     const requestedServerName = typeof record.server === 'string' ? record.server : '';
@@ -4448,7 +4551,21 @@ class CindyMcpGateway {
     if (!serverName || (this.botMemoryFacadeEnabled && serverName === 'cindy_memory')) return null;
     const tool = this.tools.get(mcpGatewayKey(serverName, toolName));
     if (!tool) return null;
-    const resolution = normalizeGatewayArgs(record, tool, this.innerToolLookup(tool));
+    return {
+      record,
+      serverName,
+      toolName,
+      tool,
+      resolution: normalizeGatewayArgs(record, tool, this.innerToolLookup(tool)),
+    };
+  }
+
+  private resolvedGatewayCall(
+    serverName: string,
+    toolName: string,
+    tool: ConnectedMcpTool,
+    resolution: GatewayArgsResolution,
+  ): ResolvedMcpGatewayCall {
     return {
       qualifiedName: 'mcp__' + serverName + '__' + toolName,
       args: resolution.args,
@@ -4501,6 +4618,22 @@ class CindyMcpGateway {
     if (toolName === CINDY_MCP_CALL_TOOL) return this.resolveCall(input);
     if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL || toolName === CINDY_ASYNC_QUESTION_TOOL || toolName === CINDY_INPUT_HANDOFF_TOOL || toolName === CINDY_MANAGE_QUESTIONS_TOOL) return this.resolveDirectHelperTool(toolName, input);
     return toolName === CINDY_BOT_MEMORY_TOOL ? this.resolveBotMemory(input) : null;
+  }
+
+  /**
+   * 权限询问那一条路径上的解析: 撞名的内层工具本地查不到时, 先代拉一次服务端内层列表再判。
+   *
+   * 审批框显示的必须是归位后的那一份(pi-harness §4.12), 真正发出去的也必须是那一份 ——
+   * 所以代拉要发生在弹框之前, 不能拖到 execute 里再定。代拉的是同一台服务端的内层列表,
+   * 按 server 缓存, 合法调用最多代拉一次。
+   */
+  async resolveHookedCallAsync(
+    toolName: string,
+    input: unknown,
+    signal?: AbortSignal,
+  ): Promise<ResolvedMcpGatewayCall | null> {
+    if (toolName === CINDY_MCP_CALL_TOOL) return this.resolveCallAsync(input, signal);
+    return this.resolveHookedCall(toolName, input);
   }
 
   resolveCreateTeammate(input: unknown): ResolvedMcpGatewayCall | null {
@@ -4990,7 +5123,9 @@ class CindyMcpGateway {
     const permissionSkipped = this.consumePermissionSkipped(toolCallId);
     const approvedDefinition = toolCallId ? this.approvedDefinitions.get(toolCallId) : undefined;
     if (toolCallId) this.approvedDefinitions.delete(toolCallId);
-    const resolved = this.resolveCall(params);
+    // 归一化要等内层 schema 定下来: 剥不剥那一层按服务端那份真实 schema 判, 审批框显示的
+    // 那份与真正发出去的那份必须是同一份(pi-harness §4.12)。
+    const resolved = await this.resolveCallAsync(params, signal);
     if (!resolved) throw new Error(this.callInputError(params) ?? this.unknownCallMessage(params));
     if (approvedDefinition !== undefined && this.approvalDefinition(resolved) !== approvedDefinition) {
       throw new McpBridgeError('tool definition changed; inspect it with cindy_mcp_list_tools and call again');
@@ -5032,6 +5167,9 @@ class CindyMcpGateway {
         && ![...this.tools.values()].some((tool) => tool.serverName === resolved.tool.serverName
           && tool.name !== 'call_tool' && tool.name !== 'list_tools');
       const doubleWrap = nestedArgsPlain && (verdict ?? hidesInnerRegistry);
+      // 撞名的两层(顶层选择器与容器里的 name 一致)由归一化裁决: 归一化已经按内层工具的
+      // 真实 schema(本地表, 或代拉来的服务端内层列表)决定剥不剥那一层, 剥不剥的结果就是
+      // 真正发出去的那份。这里只判「信封套了两层」这种形状本身不合法的情况, 不改参数。
       if (doubleWrap) {
         throw new Error(
           resolved.tool.serverName + '/' + resolved.tool.name
@@ -6347,7 +6485,9 @@ export default async function cindyBridge(piApi: any) {
     // Pi sees one stable gateway schema, while Host policy and approval UI must
     // continue seeing the real MCP identity and real arguments. That preserves
     // every existing per-server policy without loading each schema at startup.
-    const resolvedGatewayCall = mcpGateway.resolveHookedCall(event.toolName, event.input);
+    // 撞名的内层工具本地查不到时, 这里要等一次服务端内层列表: 归位结论按真实 schema 定,
+    // 弹框里显示的那份与真正发出去的那份必须是同一份。
+    const resolvedGatewayCall = await mcpGateway.resolveHookedCallAsync(event.toolName, event.input);
     // 分类只认「解析成功」：披露状态不参与权限命名与采集分类，否则被门拦下的那次
     // 会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;

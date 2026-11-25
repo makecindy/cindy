@@ -3184,7 +3184,12 @@ it('keeps both name layers when the flattened inner tool has a name parameter of
   await gateway.executeCall({
     server: 'cindy_memory', tool: 'call_tool', name: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } },
   });
-  expect(requests.slice(2).map(request => request.params)).toEqual([
+  // 撞名的内层工具(memory_write)不在本地工具表里: 剥不剥这一层要按服务端那份 schema 定, 网关
+  // 会代拉一次内层列表(下面那次 list_tools 就是这次代拉; 拉不到就照旧剥一层)。
+  const calls = requests
+    .filter(request => (request.params as { name?: unknown } | undefined)?.name === 'call_tool')
+    .map(request => request.params);
+  expect(calls.slice(2)).toEqual([
     { name: 'call_tool', arguments: { name: 'memory_write', args: { type: 'project' } } },
     { name: 'call_tool', arguments: { name: 'memory_write', args: { type: 'project' } } },
   ]);
@@ -4950,5 +4955,183 @@ it('marks the surface truncated when the property type walk runs out of budget',
   await expect(gateway.executeCall({
     server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
   })).rejects.toThrow(/could not read the schema of this tool in full .* Put everything in args/);
+  expect(requests).toHaveLength(0);
+});
+
+// 评审 P1(查不到内层 schema 时按「没声明」折叠): registry 只暴露 call_tool/list_tools 时, 撞名的
+// 内层工具('run' 自己也声明 name + args 参数)不在本地工具表里 —— 归一化分不清「模型把同一个
+// 选择器写了两遍」与「args 容器正是内层工具自己的参数对象」。按「没声明」折叠, registry 剥掉
+// 信封后内层工具只拿到 {cwd}, 自己声明的 name/args 没了; 剥完之后形状里没有嵌套 args, 后面
+// 那条代拉服务端内层列表的探测也根本够不着。改成: 查不到就两层都留着, 由执行前的双包裁决按
+// 服务端那份 schema 判(判不出来才照旧剥一层)(Codex P1 on #10908 第 12 轮, 4094 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数(两层都在)。
+// - Bug 依据:codex 对 #10908 第 12 轮的 P1。
+// - 覆盖缺口:上一轮的撞名用例里内层工具都在本地表里(schema 直接可查, 走不到代拉那条路)。
+// - 最小失败输入:registry 只暴露 call_tool + 服务端 list_tools 里 run 声明 name+args
+//   + 调用 {name:'run', args:{name:'run', args:{cwd}}}。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('keeps both name layers when the inner schema only exists on the server', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    // registry 的内层列表: run 自己就声明 name + args 参数。
+    if ((params as { name?: unknown } | undefined)?.name === 'list_tools') {
+      return {
+        structuredContent: {
+          tools: [{
+            name: 'run',
+            inputSchema: {
+              type: 'object',
+              properties: { name: { type: 'string' }, args: { type: 'object' } },
+              required: ['name', 'args'],
+            },
+          }],
+        },
+      };
+    }
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  // registry 只暴露入口工具: 内层工具在自己的列表里, 本地工具表里没有。
+  gateway.add('cindy_registry', client, [
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_registry', tool: 'call_tool' });
+  await gateway.executeCall({
+    server: 'cindy_registry', tool: 'call_tool', name: 'run', args: { name: 'run', args: { cwd: '/work' } },
+  });
+  const calls = requests
+    .filter(request => (request.params as { name?: unknown } | undefined)?.name === 'call_tool')
+    .map(request => request.params);
+  expect(calls).toEqual([
+    { name: 'call_tool', arguments: { name: 'run', args: { name: 'run', args: { cwd: '/work' } } } },
+  ]);
+});
+
+// 评审 P1(动态放开的字段被当成「没有 args 参数」): 内层 schema 有 properties.name 且
+// additionalProperties: true —— 这份 schema 收得下自己的 args 字段, 但声明名里没有 args,
+// 于是被判成「内层没有 args 参数」: 撞名的调用被剥掉一层, 规范调用反过来被判成「信封套了
+// 两遍」而拒收。动态放开的字段不能当成「不存在」的证据(Codex P1 on #10908 第 12 轮, 4192 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数(两层都在)。
+// - Bug 依据:codex 对 #10908 第 12 轮的 P1。
+// - 覆盖缺口:上一轮的撞名用例里内层 schema 是「明确没有 args」(properties 只有 name),
+//   没有「收得下但没声明」的形态。
+// - 最小失败输入:内层工具 schema = {properties:{name}, additionalProperties:true}
+//   + 调用 {name:'run', args:{name:'run', args:{cwd}}}。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('treats dynamically accepted fields as a declared args parameter', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+    // 内层工具收得下任意字段(含 args), 但没有显式声明 args。
+    { name: 'run', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, additionalProperties: true } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'run', args: { name: 'run', args: { cwd: '/work' } },
+  });
+  const calls = requests
+    .filter(request => (request.params as { name?: unknown } | undefined)?.name === 'call_tool')
+    .map(request => request.params);
+  expect(calls).toEqual([
+    { name: 'call_tool', arguments: { name: 'run', args: { name: 'run', args: { cwd: '/work' } } } },
+  ]);
+});
+
+// 评审 P1(估算病态模式的工作量没封顶): patternProperties 的模式来自服务端、键来自模型, 两头都不受
+// Cindy 控制。估算器对 a{199999} 这类量词逐轮相乘 —— 一个原子就是二十万次迭代, 十六条模式就是
+// 上亿次; 而且超预算的模式被跳过时不记账, 每个顶层键都要把这批模式重估一遍。归一化在权限与执行
+// 两条路径上同步跑它, 于是 Pi 的事件循环被卡住(Codex P1 on #10908 第 12 轮, 3872 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 在病态 schema 下按时返回(同步工作有上界)。
+// - Bug 依据:codex 对 #10908 第 12 轮的 P1。
+// - 覆盖缺口:上一轮的模式用例只盖了「跑得动但慢」的模式, 没有「估不出来的大量词」。
+// - 最小失败输入:16 条各含 8 个 a{199999} 原子的 patternProperties + 一个未声明的顶层键。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待; 未修时这条要跑几秒同步估算, 故给足超时)。
+it('bounds the work spent estimating pathological regex patterns', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const patterns: Record<string, unknown> = {};
+  for (let index = 0; index < 16; index++) patterns['p' + index + 'a{199999}'.repeat(8)] = { type: 'string' };
+  const gateway = new Gateway();
+  gateway.add('cindy_big', client, [
+    {
+      name: 'lookup',
+      inputSchema: { type: 'object', properties: { kind: { type: 'string' } }, patternProperties: patterns },
+    },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_big', tool: 'lookup' });
+  const started = performance.now();
+  // extra_note 不在 properties 里: 每个这样的键都要问一遍「schema 收不收」, 也就是把模式估一遍。
+  await gateway.executeCall({
+    server: 'cindy_big', tool: 'lookup', args: { kind: 'x' }, extra_note: 'keep',
+  });
+  expect(performance.now() - started).toBeLessThan(1000);
+  // 模式没跑成 → 判不了 → 键照常转发不丢。
+  expect(requests[0].params).toEqual({ name: 'lookup', arguments: { kind: 'x', extra_note: 'keep' } });
+}, 20_000);
+
+// 数元素个数用: 每拉一个元素记一次, 用来数「判据走了多少个分支」。
+class CountingArray<T> extends Array<T> {
+  readonly counter = { count: 0 };
+  [Symbol.iterator](): Iterator<T> {
+    const inner = super[Symbol.iterator]();
+    const counter = this.counter;
+    return { next: () => { counter.count++; return inner.next(); } };
+  }
+}
+
+// 评审 P2(属性类型判据的分支遍历没封顶): properties.name.allOf 的分支数远超 32 时, 节点预算用尽后
+// 这个循环仍把剩下的分支逐个 visit 一遍 —— 32 节点的上限形同虚设, 工作量随分支总数增长。声明面
+// 遍历(schemaParameterSurface)早就是这么做的: 预算用尽即停(Codex P2 on #10908 第 12 轮, 3651 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 拒收(类型证据看不完 → 表态不完整),
+//   并且类型判据只走了节点预算内的分支(数分支数组被迭代了多少次)。
+// - Bug 依据:codex 对 #10908 第 12 轮的 P2。
+// - 覆盖缺口:类型判据的用例都在 32 节点之内, 没有「分支数远超预算」的形状。
+// - 最小失败输入:properties.name 是 5 万个分支的 allOf + 平铺调用。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('stops the property type walk at the node budget', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const branches = new CountingArray<Record<string, unknown>>();
+  for (let index = 0; index < 50_000; index++) branches.push({ type: 'null' });
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { allOf: branches }, args: { type: 'object' } },
+      required: ['name'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 类型证据看不完 → 表态不完整 → 平铺调用拒收并指路。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  })).rejects.toThrow(/could not read the schema of this tool in full .* Put everything in args/);
+  // 32 节点的上限是实的: 分支再多也不逐个走完(声明面遍历与类型判据同一套做法)。
+  expect(branches.counter.count).toBeLessThan(1000);
   expect(requests).toHaveLength(0);
 });
