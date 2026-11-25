@@ -1447,6 +1447,9 @@
     "ENDPOINT_NOT_FOUND": "Endpoint introuvable (404). Vérifiez l'URL de base",
     "CONTEXT_TOO_LONG": "Le contexte dépasse la longueur maximale du modèle",
     "WIRE_INCOMPATIBLE": "L'endpoint n'est pas entièrement compatible avec ce protocole (champs de requête non reconnus)",
+    "INVALID_PROBE_RESPONSE": "Le service du modèle a renvoyé une réponse vide ou invalide",
+    "PROBE_NO_OUTPUT": "Le test de connexion n’a pas pu confirmer que le modèle avait généré du contenu",
+    "PROBE_REFUSED": "Le service du modèle a refusé ou bloqué la requête de test",
     "UPSTREAM_ERROR": "Erreur du serveur en amont (5xx). Réessayez plus tard",
     "UPSTREAM_UNREACHABLE": "Impossible de joindre l'endpoint. Vérifiez votre réseau et l'URL de base",
     "TIMEOUT": "Délai de connexion dépassé. Vérifiez votre réseau et l'URL de base",
@@ -22892,6 +22895,19 @@
     "rendered": "Afficher le document",
     "wrap": "Retour à la ligne",
     "lineNumbers": "Numéros de ligne"
+  },
+  "openAiAccountGroup": {
+    "strategy": "Stratégie du groupe de comptes",
+    "leastHint": "Privilégier la connexion qui exécute le moins de tâches",
+    "quotaHint": "Lorsque les données d’utilisation des abonnements sont disponibles, Cindy filtre les connexions selon leur utilisation avant d’appliquer la stratégie du groupe.",
+    "removeDescription": "Cette connexion ne recevra plus de nouvelles tâches du groupe. Les tâches en cours resteront sur cette connexion.",
+    "mergeDescription": "Les nouvelles tâches lancées via {{target}} pourront utiliser les deux fournisseurs. Les connexions, les clés et les tâches existantes restent en place. Cindy testera la clé API de {{apiKey}} avant de relier les fournisseurs.",
+    "modelUnavailable": "Cette connexion ne peut pas utiliser le modèle choisi pour le test. Un nouveau test peut essayer un autre modèle.",
+    "noTestModel": "Aucun modèle configuré n’est disponible pour le test. Vérifiez les modèles autorisés dans votre projet OpenAI, puis actualisez ou modifiez la liste de modèles de cette connexion.",
+    "billingPaused": "Attribution suspendue en raison d’un solde insuffisant ou d’une limite de facturation.",
+    "title": "Groupe de comptes",
+    "testPassed": "Test réussi",
+    "refresh": "Actualiser le quota"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

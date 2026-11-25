@@ -1429,6 +1429,9 @@
     "ENDPOINT_NOT_FOUND": "Endpoint not found (404). Check the base URL",
     "CONTEXT_TOO_LONG": "Context exceeds the model's length limit",
     "WIRE_INCOMPATIBLE": "Endpoint is not fully compatible with this protocol (unrecognized request fields)",
+    "INVALID_PROBE_RESPONSE": "The model service returned an empty or invalid response",
+    "PROBE_NO_OUTPUT": "The connection test could not confirm that the model generated output",
+    "PROBE_REFUSED": "The model service refused or blocked the test prompt",
     "UPSTREAM_ERROR": "Upstream server error (5xx). Try again later",
     "UPSTREAM_UNREACHABLE": "Cannot reach the endpoint. Check your network and the base URL",
     "TIMEOUT": "Connection timed out. Check your network and the base URL",
@@ -22677,6 +22680,19 @@
     "rendered": "View document",
     "wrap": "Wrap lines",
     "lineNumbers": "Line numbers"
+  },
+  "openAiAccountGroup": {
+    "strategy": "Account group strategy",
+    "leastHint": "Prefer the connection running the fewest tasks",
+    "quotaHint": "When subscription usage is available, Cindy uses it to choose eligible connections before applying the group strategy.",
+    "removeDescription": "This connection will stop receiving new tasks from the group. Tasks already running will stay on this connection.",
+    "mergeDescription": "New tasks started through {{target}} can use both providers. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}} before adding the scheduling connection.",
+    "modelUnavailable": "This connection cannot use the model chosen for the test. Test again to try another candidate.",
+    "noTestModel": "No configured model is available for testing. Check which models your OpenAI project can use, then refresh or update this connection’s model list.",
+    "billingPaused": "Group assignment paused due to insufficient balance or a billing limit.",
+    "title": "Account group",
+    "testPassed": "Test passed",
+    "refresh": "Refresh quota"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

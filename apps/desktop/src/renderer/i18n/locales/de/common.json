@@ -1429,6 +1429,9 @@
     "ENDPOINT_NOT_FOUND": "Endpunkt nicht gefunden (404). Prüfe die Basis-URL",
     "CONTEXT_TOO_LONG": "Kontext überschreitet die Längenbegrenzung des Modells",
     "WIRE_INCOMPATIBLE": "Endpunkt ist nicht vollständig mit diesem Protokoll kompatibel (nicht erkannte Anforderungsfelder)",
+    "INVALID_PROBE_RESPONSE": "Der Modelldienst hat eine leere oder ungültige Antwort zurückgegeben",
+    "PROBE_NO_OUTPUT": "Der Verbindungstest konnte keine Modellausgabe bestätigen",
+    "PROBE_REFUSED": "Der Modelldienst hat die Testanfrage abgelehnt oder blockiert",
     "UPSTREAM_ERROR": "Fehler beim vorgelagerten Server (5xx). Versuch es später erneut",
     "UPSTREAM_UNREACHABLE": "Endpunkt nicht erreichbar. Prüfe dein Netzwerk und die Basis-URL",
     "TIMEOUT": "Zeitüberschreitung der Verbindung. Prüfe dein Netzwerk und die Basis-URL",
@@ -22677,6 +22680,19 @@
     "rendered": "Dokument anzeigen",
     "wrap": "Zeilenumbruch",
     "lineNumbers": "Zeilennummern"
+  },
+  "openAiAccountGroup": {
+    "strategy": "Strategie der Kontogruppe",
+    "leastHint": "Verbindung mit den wenigsten laufenden Aufgaben bevorzugen",
+    "quotaHint": "Wenn Abo-Nutzungsdaten vorliegen, wählt Cindy die geeigneten Verbindungen anhand dieser Daten aus und wendet dann die Gruppenstrategie an.",
+    "removeDescription": "Diese Verbindung erhält keine neuen Aufgaben aus der Gruppe. Laufende Aufgaben bleiben auf dieser Verbindung.",
+    "mergeDescription": "Über {{target}} gestartete neue Aufgaben können beide Anbieter nutzen. Anmeldungen, Schlüssel und bestehende Aufgaben bleiben am bisherigen Ort. Vor der Verknüpfung testet Cindy den API-Schlüssel von {{apiKey}}.",
+    "modelUnavailable": "Diese Verbindung kann das ausgewählte Testmodell nicht verwenden. Ein erneuter Test kann ein anderes Modell ausprobieren.",
+    "noTestModel": "Kein konfiguriertes Modell ist zum Testen verfügbar. Prüfe, welche Modelle dein OpenAI-Projekt nutzen darf, und aktualisiere die Modellliste dieser Verbindung.",
+    "billingPaused": "Die Zuteilung ist wegen fehlenden Guthabens oder eines Abrechnungslimits pausiert.",
+    "title": "Kontogruppe",
+    "testPassed": "Test erfolgreich",
+    "refresh": "Kontingent aktualisieren"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

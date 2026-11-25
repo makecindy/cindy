@@ -1447,6 +1447,9 @@
     "ENDPOINT_NOT_FOUND": "Punto final no encontrado (404). Comprueba la URL base",
     "CONTEXT_TOO_LONG": "El contexto excede el límite de longitud del modelo.",
     "WIRE_INCOMPATIBLE": "El punto final no es totalmente compatible con este protocolo (campos de solicitud no reconocidos)",
+    "INVALID_PROBE_RESPONSE": "El servicio del modelo devolvió una respuesta vacía o no válida",
+    "PROBE_NO_OUTPUT": "La prueba de conexión no pudo confirmar que el modelo generara contenido",
+    "PROBE_REFUSED": "El servicio del modelo rechazó o bloqueó la solicitud de prueba",
     "UPSTREAM_ERROR": "Error del servidor ascendente (5xx). Vuelve a intentarlo más tarde",
     "UPSTREAM_UNREACHABLE": "No se puede conectar con el punto final. Comprueba tu red y la URL base",
     "TIMEOUT": "Se agotó el tiempo de conexión. Comprueba tu red y la URL base",
@@ -22892,6 +22895,19 @@
     "rendered": "Ver documento",
     "wrap": "Ajustar líneas",
     "lineNumbers": "Números de línea"
+  },
+  "openAiAccountGroup": {
+    "strategy": "Estrategia del grupo de cuentas",
+    "leastHint": "Priorizar la conexión con menos tareas en ejecución",
+    "quotaHint": "Si se puede consultar el uso de las suscripciones, Cindy filtra las conexiones por uso antes de aplicar la estrategia del grupo.",
+    "removeDescription": "Esta conexión dejará de recibir tareas nuevas del grupo. Las tareas en curso continuarán en esta conexión.",
+    "mergeDescription": "Las tareas nuevas que se inicien en {{target}} podrán usar ambos proveedores. Las sesiones iniciadas, las claves y las tareas existentes se mantienen. Cindy probará la clave API de {{apiKey}} antes de vincular los proveedores.",
+    "modelUnavailable": "Esta conexión no puede usar el modelo elegido para la prueba. Puedes probar de nuevo con otro candidato.",
+    "noTestModel": "No hay ningún modelo configurado disponible para la prueba. Comprueba qué modelos puede usar tu proyecto de OpenAI y actualiza la lista de modelos de esta conexión.",
+    "billingPaused": "Asignación en pausa por saldo insuficiente o un límite de facturación.",
+    "title": "Grupo de cuentas",
+    "testPassed": "Prueba superada",
+    "refresh": "Actualizar cuota"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

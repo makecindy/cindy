@@ -1416,6 +1416,9 @@
     "ENDPOINT_NOT_FOUND": "엔드포인트를 찾을 수 없습니다(404). 기본 URL을 확인하세요",
     "CONTEXT_TOO_LONG": "컨텍스트가 모델의 길이 제한을 초과했습니다",
     "WIRE_INCOMPATIBLE": "엔드포인트가 이 프로토콜과 완전히 호환되지 않습니다(인식할 수 없는 요청 필드가 있음)",
+    "INVALID_PROBE_RESPONSE": "모델 서비스가 비어 있거나 유효하지 않은 응답을 반환했습니다",
+    "PROBE_NO_OUTPUT": "연결 테스트에서 모델이 출력을 생성했는지 확인하지 못했습니다",
+    "PROBE_REFUSED": "모델 서비스가 테스트 요청을 거부하거나 차단했습니다",
     "UPSTREAM_ERROR": "업스트림 서버 오류(5xx)입니다. 잠시 후 다시 시도하세요",
     "UPSTREAM_UNREACHABLE": "엔드포인트에 연결할 수 없습니다. 네트워크와 기본 URL을 확인하세요",
     "TIMEOUT": "연결 시간이 초과되었습니다. 네트워크와 기본 URL을 확인하세요",
@@ -22588,6 +22591,19 @@
     "rendered": "문서 보기",
     "wrap": "자동 줄 바꿈",
     "lineNumbers": "줄 번호"
+  },
+  "openAiAccountGroup": {
+    "strategy": "계정 그룹 전략",
+    "leastHint": "실행 중인 작업이 가장 적은 연결 우선",
+    "quotaHint": "구독 사용량을 확인할 수 있으면 사용량으로 연결을 먼저 선별한 뒤 그룹 전략을 적용합니다.",
+    "removeDescription": "이 연결은 그룹의 새 작업을 받지 않습니다. 실행 중인 작업은 이 연결에 그대로 남습니다.",
+    "mergeDescription": "{{target}}에서 시작한 새 작업은 두 제공자를 모두 사용할 수 있습니다. 로그인, 키, 기존 작업은 그대로 유지됩니다. 연결하기 전에 Cindy가 {{apiKey}}의 API 키를 테스트합니다.",
+    "modelUnavailable": "이 연결에서는 테스트에 선택된 모델을 사용할 수 없습니다. 다시 테스트하면 다른 후보를 시도할 수 있습니다.",
+    "noTestModel": "테스트에 사용할 수 있는 설정된 모델이 없습니다. OpenAI 프로젝트에서 사용할 수 있는 모델을 확인한 뒤 이 연결의 모델 목록을 새로 고치거나 수정하세요.",
+    "billingPaused": "잔액 부족 또는 결제 한도로 그룹 배정이 일시 중지되었습니다.",
+    "title": "계정 그룹",
+    "testPassed": "테스트 성공",
+    "refresh": "할당량 새로고침"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {
