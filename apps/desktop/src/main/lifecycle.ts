@@ -56,6 +56,7 @@ import {
   noteUncaughtExceptionDuringQuit,
   WINDOWS_SESSION_END_REASON,
 } from './startup-diagnostics';
+import { getDeepLinkMainWindow } from './deepLink';
 import { isGhostSandboxWebContentsId } from './cindy-brain/runtime/electronSandboxAdapter';
 import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup-surfaces';
 import { isCloudLoginWindow } from './cloud-settings-client/login-window-registry.js';
@@ -688,14 +689,11 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // native popup manager 回收并让对应 tab 展示恢复态,不能拖垮主窗口。
   // 例外 4:资源用量窗是预热复用的辅助 renderer；Controller 会有限重建，崩溃不影响主界面。
   // 隐藏传输窗口也有自己的失败清理；其 renderer 崩溃只撤下对应传输，不能关闭 device-link。
-  const windowContentsIds = new WeakMap<Electron.WebContents, number>();
+  // Capture the wrapper before teardown. The primary window is assigned after
+  // browser-window-created; resolve its current owner only when handling gone.
+  const contentsByWindow = new WeakMap<BrowserWindow, Electron.WebContents>();
   app.on('browser-window-created', (_event, win) => {
-    if (win.isDestroyed()) return;
-    const contents = win.webContents;
-    if (contents.isDestroyed()) return;
-    windowContentsIds.set(contents, contents.id);
-    // 窗口正常关闭后的迟到通知不能让仍在运行的应用退出。
-    win.once('closed', () => windowContentsIds.delete(contents));
+    if (!win.isDestroyed()) contentsByWindow.set(win, win.webContents);
   });
   app.on('render-process-gone', (_event, webContents, details) => {
     if (isCaptureWindowWebContents(webContents)) {
@@ -704,41 +702,35 @@ export function installQuitHandler(timeoutMs = 2000): void {
       );
       return;
     }
-    const destroyed = webContents.isDestroyed();
-    const id = destroyed ? windowContentsIds.get(webContents) : webContents.id;
-    // A late notification can outlive the window; getType() then throws in Electron.
-    if (id === undefined) return;
-    if (isGhostSandboxWebContentsId(id)) {
+    if (webContents.isDestroyed()) {
+      const main = getDeepLinkMainWindow();
+      if (!main || contentsByWindow.get(main) !== webContents) return;
+    } else if (isGhostSandboxWebContentsId(webContents.id)) {
       log.warn(
         `ghost sandbox render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
-    }
-    if (!destroyed && webContents.getType() === 'webview') {
+    } else if (webContents.getType() === 'webview') {
       log.warn(
         `webview guest render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
-    }
-    if (isRsbNativePopupWebContentsId(id)) {
+    } else if (isRsbNativePopupWebContentsId(webContents.id)) {
       log.warn(
         `native popup render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
-    }
-    if (isResourceUsageWebContentsId(id) || isRemoteDesktopViewer(id) || isCloudLoginWindow(id)) {
+    } else if (isResourceUsageWebContentsId(webContents.id) || isRemoteDesktopViewer(webContents.id) || isCloudLoginWindow(webContents.id)) {
       log.warn(
         `resource usage render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
-    }
-    if (isRsbWindowWebContentsId(id)) {
+    } else if (isRsbWindowWebContentsId(webContents.id)) {
       log.warn(
         `right sidebar render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
-    }
-    if (isReviewArtifactConfirmWebContentsId(id)) {
+    } else if (isReviewArtifactConfirmWebContentsId(webContents.id)) {
       log.warn(
         `Review artifact consent render-process-gone (isolated, access denied): reason=${details.reason} exitCode=${details.exitCode}`,
       );

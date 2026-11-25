@@ -41,6 +41,9 @@ const resourceUsageWebContentsIds = vi.hoisted(() => new Set<number>());
 const rsbWindowWebContentsIds = vi.hoisted(() => new Set<number>());
 const reviewArtifactConfirmWebContentsIds = vi.hoisted(() => new Set<number>());
 
+const currentMainWindow = vi.hoisted(() => vi.fn<() => Electron.BrowserWindow | null>());
+vi.mock('../deepLink', () => ({ getDeepLinkMainWindow: currentMainWindow }));
+
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   isRsbNativePopupWebContentsId: (webContentsId: number) =>
     nativePopupWebContentsIds.has(webContentsId),
@@ -645,7 +648,7 @@ describe('installQuitHandler render-process-gone', () => {
     };
   }
 
-  it.each(['guest', 'auxiliary', 'closed window', 'main window'] as const)(
+  it.each(['guest', 'unregistered auxiliary', 'closed window', 'main window'] as const)(
     'handles destroyed contents from a %s (#12758)',
     async (role) => {
       const { handler, app, restore } = await installAndGrabHandler();
@@ -663,16 +666,28 @@ describe('installQuitHandler render-process-gone', () => {
           isDestroyed: () => false,
           webContents: contents,
         });
-        if (role !== 'guest') {
-          const listeners = vi.mocked(app.on).mock.calls as unknown as Array<
-            [string, (event: unknown, window: typeof win) => void]
-          >;
-          for (const [event, listener] of listeners) {
-            if (event === 'browser-window-created') listener({}, win);
+        const main = role === 'main window' || role === 'closed window'
+          ? win
+          : Object.assign(new EventEmitter(), {
+              isDestroyed: () => false,
+              webContents: { id: 1, isDestroyed: () => false, getType: () => 'window' },
+            });
+        const listeners = vi.mocked(app.on).mock.calls as unknown as Array<
+          [string, (event: unknown, window: typeof win) => void]
+        >;
+        for (const [event, listener] of listeners) {
+          if (event === 'browser-window-created') {
+            listener({}, main);
+            // Screenshot editor and recording preview use ordinary BrowserWindows
+            // whose factory does not register their IDs in the crash isolation lists.
+            if (role === 'unregistered auxiliary') listener({}, win);
           }
         }
-        if (role === 'auxiliary') resourceUsageWebContentsIds.add(contents.id);
-        if (role === 'closed window') win.emit('closed');
+        currentMainWindow.mockReturnValue(main as unknown as Electron.BrowserWindow);
+        if (role === 'closed window') {
+          win.emit('closed');
+          currentMainWindow.mockReturnValue(null);
+        }
         destroyed = true;
         handler({}, contents, { reason: 'oom', exitCode: 137 });
         if (role === 'main window') {
@@ -684,6 +699,7 @@ describe('installQuitHandler render-process-gone', () => {
           expect(app.exit).not.toHaveBeenCalled();
         }
       } finally {
+        currentMainWindow.mockReturnValue(null);
         restore();
       }
     },
