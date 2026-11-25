@@ -10,6 +10,7 @@
 import type { AgentKind, Catalog } from '@cindy/model-providers';
 
 import { normalizeContextWindowBudget } from '../../shared/sessionContextWindowBudget.js';
+import { findContextWindowModels } from '../../shared/sessionContextWindow.js';
 import { resolveVerifiedContextWindow } from './catalog-to-descriptors.js';
 import { readModelContextLimit } from './model-context-limit-store.js';
 import type { ModelContextProviderResolver } from './routeModelEfforts.js';
@@ -119,7 +120,7 @@ export function createSessionContextBudget(ports: SessionContextBudgetPorts) {
     const modelLimit = source ? readModelContextLimit(agent, source, modelId) : null;
     const rows = catalog.providers
       .filter(provider => provider.id === source && provider.routing[agent]?.disabled !== true)
-      .flatMap(provider => (provider.models[agent] ?? []).filter(model => model.id === modelId));
+      .flatMap(provider => findContextWindowModels(provider, agent, modelId));
     const declaredMax = rows.length === 1
       && typeof rows[0]!.contextWindowMax === 'number'
       && Number.isFinite(rows[0]!.contextWindowMax)
