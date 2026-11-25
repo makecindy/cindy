@@ -12450,7 +12450,8 @@
         "failed": "Impossible d'effectuer cette action. Réessayez.",
         "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter."
       },
-      "memberCount_many": "{{count}} membres"
+      "memberCount_many": "{{count}} membres",
+      "externalBadge": "Externe"
     },
     "joined": {
       "today": "Arrivé aujourd'hui",

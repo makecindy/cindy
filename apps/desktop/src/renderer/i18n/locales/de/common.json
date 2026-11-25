@@ -12348,7 +12348,8 @@
         "dissolved": "Diese Gruppe wurde aufgelöst. Du kannst den verfügbaren Verlauf weiterhin lesen.",
         "failed": "Diese Aktion konnte nicht abgeschlossen werden. Versuche es erneut.",
         "lastOwner": "Übertrage die Inhaberschaft oder löse diese Gruppe auf, bevor du sie verlässt."
-      }
+      },
+      "externalBadge": "Extern"
     },
     "joined": {
       "today": "Heute beigetreten",

@@ -12302,7 +12302,8 @@
         "dissolved": "群议已散，仍可览有权访问之旧讯。",
         "failed": "操作未竟，请再试。",
         "lastOwner": "请先转让群主或解散群议，再退出。"
-      }
+      },
+      "externalBadge": "外部"
     },
     "joined": {
       "today": "今日入列",

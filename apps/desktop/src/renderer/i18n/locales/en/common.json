@@ -12348,7 +12348,8 @@
         "dissolved": "This group has been dissolved. You can still read the available history.",
         "failed": "Could not complete this action. Try again.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving."
-      }
+      },
+      "externalBadge": "External"
     },
     "joined": {
       "today": "Joined today",
