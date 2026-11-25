@@ -607,7 +607,7 @@ it('records companions consent only when that capability was shown', async () =>
  */
 it('passes the Main-generated source identity only into custom-market confirmations', async () => {
   const next = manifest(['api.weather.test']);
-  const source = { kind: 'git' as const, repository: 'github.com/acme/plugins', ref: 'main' };
+  const source = { kind: 'git' as const, repository: 'github.com/acme/plugins', ref: 'main', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' };
   const custom = vi.fn<GhostInstallConsentPrompt>(async () => true);
   await obtainGhostInstallConsent({ mode: 'prompt', prompt: custom, initiator: 'user', origin: 'custom-market',
     originLabel: 'Acme', originSource: source }, null, next, reviewedDigest);

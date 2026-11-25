@@ -325,3 +325,25 @@ export async function currentRevision(
   });
   return stdout.trim();
 }
+
+/**
+ * git 实际会连的地址：`ls-remote --get-url` 按当前 git 配置展开 `url.*.insteadOf`，不联网。
+ * `target` 是配置里的地址（clone 前）或 `origin`（在已克隆的工作目录里 fetch 前）。
+ * 结果可能含改写注入的凭证：只交给白名单生成函数，不得写日志、错误详情或任何文件；失败返回 null。
+ */
+export async function resolveFetchUrl(
+  target: string,
+  executor: GitExecutor = defaultExecutor,
+  cwd?: string,
+): Promise<string | null> {
+  try {
+    const { stdout } = await executor(['ls-remote', '--get-url', '--', target], {
+      ...(cwd ? { cwd } : {}),
+      timeoutMs: 10_000,
+    });
+    const value = stdout.trim();
+    return value && !value.includes('\n') ? value : null;
+  } catch {
+    return null;
+  }
+}

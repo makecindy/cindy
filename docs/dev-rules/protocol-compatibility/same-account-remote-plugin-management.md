@@ -75,48 +75,65 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
 
 ## 自定义市场的来源身份
 
-自定义市场条目（`management:market-detail` 与 `{read:'catalog'}` 中 `sourceType` 为 `git-market` /
-`local-market` 的项）可选追加 `sourceIdentity`；`management:begin` 之后确认回执里的 `consent` 可选追加
-`originSource`。两者形状相同：`{kind:'git', repository, ref?}` 或 `{kind:'local'}`。服务端市场条目与其它
-来源的确认不带这两个字段。
+自定义市场插件的安装可以经同账号远程控制端发起，所以控制端需要知道「装的是哪个来源」。目标 Host 在三处
+给出同一形状的可选身份：`{kind:'git', repository, ref?, sourceId}` 或 `{kind:'local', sourceId}`。服务端市场
+条目与其它来源的确认不带这些字段。
 
-- **生成**：目标 Host 用 `pluginMarketSourceIdentity`（`apps/desktop/src/shared/pluginMarket.ts`）从来源配置
-  白名单生成，生成不出时整个字段缺省，不给空值或部分值。
-  - `repository` 只含小写 host 加 2–4 段路径（`host/owner/repo`，允许 GitLab 子组），总长不超过 256，整体匹配
-    `PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN`，结尾 `.git` 去掉。
-  - 只从 URL 读取 hostname 与路径；用户名、密码、令牌、端口、查询串与片段一律不读取。含空白、控制符、
-    零宽或双向控制符、反斜杠、百分号编码、原始 `.` / `..` 路径段或多个 `@` 的地址不生成。
-  - 未配置 ref（存储里缺省该键；null、空串同样视为未配置）时不给 `ref`。配置了 ref 但不是与添加来源时
-    同口径的合法引用时，整个身份不生成：git 实际仍会用它取包，不能给出缺了 ref 的身份。
-  - 本地文件夹市场只给 `{kind:'local'}`，不给路径。
-  - 存储的 `sources.v1.json` 按不可信输入处理，手工改过的配置也不能把凭证或非字符串值带进投影。结果不写日志。
-- **与安装来源同源**：`originSource` 由 `customInstall` 在打包所在的来源租约内、用打包所用的那份来源配置
-  生成，与 `sourceKey` 同出一处；确认前不按市场名重读配置。提交前 Host 复核 `sourceKey`，确认等待期间同名
-  市场被换成其它来源时安装以 `PRECONDITION_FAILED` 拒绝，所以确认时展示的仓库就是随后安装的来源。
-  条目的 `sourceIdentity` 按该条目自己的来源配置生成。同一仓库只改稀疏路径时 `sourceKey` 变、身份不变，
-  控制端视为同一来源。
-- **控制端合同**：按同一形状校验，Git 形式只允许 `kind`、`repository`、`ref`，本地形式只允许 `kind`。
-  - 确认回执里 `originSource` 形状不对，整份回执按无效处理；条目里 `sourceIdentity` 形状不对，只丢弃该字段。
-  - 回执过期后核实自定义市场安装时，要求当前 `sourceIdentity` 与发起安装时记下的 `kind`、`repository`、`ref`
-    全部相同；缺失或不一致都按未确认收口，不能据市场名或 `pluginId` 推断已安装。
-  - Host 缺少这两个字段（旧 Host 或生成不出）时，控制端不能把只显示市场名当作已核对仓库。
-  - 现状：电脑作为控制端时只展示 `originSource`，形状不对时不展示仓库、只显示市场名。手机端由手机插件市场
-    PR #12684 接通，合入前手机不消费这两个字段。
+- **三处投影**：
+  1. 市场条目（`management:market-detail` 的结果，`{read:'catalog'}` 的 `items[]`；仅 `git-market` / `local-market`）：
+     - `sourceIdentity`：由该条目当前来源配置与当前缓存版本的取包记录生成。
+     - `installedSourceId`：这台电脑上当前已装实例的来源标识，由安装账本记录的来源指纹生成。只在已装实例
+       存在、账本记录为已安装且属于本条目 `pluginId` 时给出。
+  2. 确认回执（`management:operation` 的 `consent.originSource`）：由 `customInstall` 在打包所在的来源租约内、
+     用这次打包实际所用的缓存版本、取包记录和同一份配置生成，与提交前复核的 `sourceKey` 同出一处。
+  3. Agent 发起的任务确认卡（`toolName:'cindy.plugin.install'`，`hostOwnedConfirmation:'plugin_install'`）的
+     `input`：`{ghost_id, version, operation, origin, source?}`。`source` 与同一次确认的 `originSource` 相同，
+     只在 `origin === 'custom-market'` 且能生成时给出。卡输入不进模型上下文（宿主交互不是 Agent 的工具调用）；
+     IM 卡把它作为参数显示，其中仓库名本来就在说明里，`sourceId` 是不可反推的标识。
+- **`sourceId`**（`^[A-Za-z0-9_-]{22}$`）：
+  - 算法：`HMAC-SHA256(K, "cindy.plugin-market.source-id.v1\0" + marketSourceKey)` 的前 16 字节，base64url。
+    `marketSourceKey` 含类型、完整地址或本地路径、ref 与稀疏路径，所以不同本地目录、同主机不同端口、
+    不同协议写法与稀疏路径都得到不同的标识。
+  - 密钥 K 每个数据所有者一把，见[凭证与本地存储](../credentials-and-local-storage.md)的路径表。
+  - 用 HMAC 而不是裸哈希，是因为本地路径与仓库地址可被穷举反推。
+  - 实现：`apps/desktop/src/main/plugin-market/sources/sourceId.ts`。
+- **`repository` 取实际取包地址**：`url.*.insteadOf` 可以把配置地址改写到另一个仓库。
+  - 每次 clone 或快进刷新，在网络操作前后各用 `git ls-remote --get-url` 解析一次（与取包同一执行环境，不联网），
+    两次一致才把白名单去敏后的 `host/owner/repo` 写进这次取到的版本目录（`.git/cindy-fetch-identity.json`）。
+  - 记录只含去敏结果与 revision。改写注入的令牌只经过白名单函数 `pluginMarketRepositoryFromUrl`，不进记录、
+    日志或错误详情。
+  - 快进刷新复制旧版本后必须重写或删除记录；删除失败时放弃这份暂存目录，改走全新克隆。
+  - 实现：`sources/fetchIdentity.ts`。
+- **白名单与缺省**：
+  - `repository` 只含小写 host 加 2–4 段路径，整体匹配 `PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN`；用户名、密码、
+    令牌、端口、查询串与片段一律不读取。含空白、控制符、零宽或双向控制符、反斜杠、百分号编码、原始
+    `.` / `..` 路径段或多个 `@` 的地址不生成。
+  - 未配置 ref（缺省键、null、空串）时不给 `ref`；配置了但不合法时整个身份不生成。
+  - 以下情况整个身份缺省，不给部分值：标识密钥不可用（存在但读不出时不覆盖）；版本目录没有取包记录（升级前取的
+    旧缓存，下次刷新后补上）；前后两次解析不一致；去敏生成不出。
+- **控制端合同**：
+  - 形状校验：`originSource` 形状不对时整份回执按无效处理；条目里 `sourceIdentity` 形状不对只丢弃该字段；
+    `installedSourceId` 不合正则时按缺省处理。sourceId 不展示。
+  - 自定义市场的确认回执或任务卡缺来源身份时不在控制端批准，提示回电脑确认；不能把只显示市场名当作已核对仓库。
+  - 发起安装前，最后一次详情读取的 `sourceIdentity` 必须与用户选择时记下的完全相等，否则停止。
+  - 回执过期后核实：同时满足 `installState === 'installed'`、`releaseId` 相同、`installedSourceId` 等于原尝试
+    回执里的 `originSource.sourceId`，才算已确认；缺任何一项都按未确认收口，不打开实例。
+  - 现状：电脑作为控制端时只展示 `originSource`，形状不对时只显示市场名。手机端由手机插件市场 PR #12684 接通，
+    合入前手机不消费这些字段。
 - **展示**：电脑端确认框、电脑作远程端时的确认、任务卡与 IM 卡在来源文案后追加「 · 仓库 …」或「 · 本地文件夹」。
-- **兼容**：只增可选字段，无需能力协商或版本门槛。旧控制端（旧手机、作为远程端的旧电脑）不展示新字段，
-  确认仍只显示市场名，行为不变。批准状态、回执、安装账本、安装布局与 manifest 校验都不变。
+- **兼容**：只增可选字段，无需能力协商或版本门槛。旧控制端忽略新字段，确认仍只显示市场名。批准状态、回执、
+  安装账本、安装布局与 manifest 校验的 schema 都不变；新增的密钥文件与取包记录可重建，缺失时只让身份缺省，
+  不要求重装或重新确认。
 - **已知边界**：
-  - 身份不含协议与端口：同一 host、同一路径的 https / ssh / 不同端口视为同一仓库。确认期间的换源仍由
-    `sourceKey` 复核拦住；受影响的只有控制端「回执过期后按身份核实」这一步，区分不了同一主机不同端口上的
-    两个服务。需要更细时可再加不可逆的来源指纹，目前不做。
-  - 同一仓库只改稀疏路径时身份不变（见上）。
-  - 路径大小写按配置原样保留（host 转小写）：同一仓库的不同大小写写法会被控制端当成不同来源，结果是保守的
-    「未确认」，不会误认。
-  - 以 `.` 开头的路径段（如名为 `.github` 的仓库）、超过 4 段的路径、IPv6 主机生成不出身份：电脑端确认退回
-    只显示市场名，控制端按缺少身份处理。
-- **自建中转**：字段位于既有 resource invoke 的结果载荷中。中转按原样转发 `payload`、不解析内容
+  - 取包前后两次解析之间，本机 git 配置若在极短时间内被改，仍有无法完全消除的时间窗；前后比对排除了绝大多数情况。
+  - `installedSourceId` 由账本记录的来源指纹生成，不含当时的实际取包地址。安装后本机 git 改写规则又变了时，
+    同一配置的标识不变，展示的 `repository` 会在下次刷新后变成新的实际地址。
+  - 路径大小写按配置原样保留：同一仓库的不同大小写写法得到不同标识，结果是保守的「未确认」。
+  - 以 `.` 开头的路径段（如名为 `.github` 的仓库）、超过 4 段的路径、IPv6 主机生成不出 `repository`，Git 身份
+    整体缺省，控制端按无法核实处理。
+- **自建中转**：字段位于既有 resource invoke 的结果载荷与交互请求中，中转按原样转发 `payload`、不解析内容
   （`packages/device-link-relay/src/hub.ts` 的 `route`），握手、帧路由、顶层字段与能力协商都不变，因此无需同步
-  修改中转。新增内容每项最多约 300 字节，单页目录最多 100 项，远低于 2 MiB 的帧上限。
+  修改中转。新增内容每项最多约 330 字节，单页目录最多 100 项，远低于 2 MiB 的帧上限。
 
 ## Desktop 公开市场提审
 

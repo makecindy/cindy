@@ -313,7 +313,7 @@ describe('GhostInstallConsentHost', () => {
         initiator: 'user',
         origin: 'custom-market',
         originLabel: 'Team market',
-        originSource: { kind: 'git', repository: 'github.com/acme/plugins' },
+        originSource: { kind: 'git', repository: 'github.com/acme/plugins', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' },
         facts: {
           kind: 'update', ghostId: 'weather-chip', name: 'Weather', version: '2.0.0',
           previousVersion: '1.0.0', added: [HOST], removed: [], unchangedCount: 1,

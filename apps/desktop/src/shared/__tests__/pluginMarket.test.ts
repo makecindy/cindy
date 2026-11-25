@@ -4,6 +4,7 @@ import { parseMarketSource } from '../../main/plugin-market/sources/parse';
 import {
   isPluginMarketCustomIconKey,
   isPluginMarketSourceIdentity,
+  pluginMarketRepositoryFromUrl,
   pluginMarketSourceIdentity,
   pluginMarketCustomIconProjectionToken,
   pluginMarketCustomIconSourceToken,
@@ -30,26 +31,26 @@ describe('Plugin Market shared contract', () => {
 });
 
 /* 测试价值
- * - 生产入口与可观察结果：pluginMarketSourceIdentity 的返回值（原样进入安装确认、市场条目与远程回执），
- *   以及控制端用的 isPluginMarketSourceIdentity；添加来源的地址先经生产 parseMarketSource 归一。
- * - 依据：PR #12684 维护者评审（2026-11-25）要求目标 Host 生成去敏的 host/owner/repo；
+ * - 生产入口与可观察结果：pluginMarketRepositoryFromUrl（把配置地址或 git 解析出的实际取包地址归约成展示用
+ *   仓库）、pluginMarketSourceIdentity（组装进入确认、条目与远程回执的身份）与控制端用的
+ *   isPluginMarketSourceIdentity；添加来源的地址先经生产 parseMarketSource 归一。
+ * - 依据：PR #12684／#12731 维护者评审（2026-11-25）：目标 Host 生成去敏的仓库身份与不透明来源标识；
  *   credentials-and-local-storage.md：凭证只留在系统 git，不进任何投影。
  * - 现有覆盖缺口：此前没有来源身份投影，来源地址只在 Main 内使用。
- * - 最小失败输入：内嵌令牌、user:pass、query、fragment、端口；手工改坏的 sources.v1.json（非字符串、
- *   双向控制符、百分号编码、`..` 路径段）；新增函数之前这些用例全部失败（函数不存在）。
- * - tier：unit（纯函数，node 环境）。实测耗时：见 PR「验证」。
+ * - 最小失败输入：内嵌令牌、user:pass、query、fragment、端口；手工改坏的配置（非字符串、双向控制符、
+ *   百分号编码、`..` 路径段、不合法 ref）；缺来源标识或取包记录。函数新增之前这些用例全部失败。
+ * - tier：unit（纯函数，node 环境）。
  */
-describe('pluginMarketSourceIdentity', () => {
-  const git = (url: string, ref?: string) =>
-    pluginMarketSourceIdentity({ type: 'git', url, sparsePaths: [], ...(ref ? { ref } : {}) });
-  const added = (input: string, ref?: string) => {
-    const parsed = parseMarketSource({ source: input, ...(ref ? { ref } : {}) }, '/home/tester');
-    if (!parsed.ok) throw new Error(parsed.code);
-    return pluginMarketSourceIdentity(parsed.source);
+const SOURCE_ID = 'AbCdEfGhIjKlMnOpQrStUv';
+
+describe('pluginMarketRepositoryFromUrl', () => {
+  const added = (input: string) => {
+    const parsed = parseMarketSource({ source: input }, '/home/tester');
+    if (!parsed.ok || parsed.source.type !== 'git') throw new Error('not a git source');
+    return pluginMarketRepositoryFromUrl(parsed.source.url);
   };
 
   it('names the repository for every Git address form a source can be added with', () => {
-    const acme = { kind: 'git', repository: 'github.com/acme/plugins' };
     for (const input of [
       'acme/plugins',
       'https://github.com/acme/plugins.git',
@@ -58,17 +59,14 @@ describe('pluginMarketSourceIdentity', () => {
       'HTTPS://GitHub.COM/acme/plugins.git',
       'ssh://git@github.com/acme/plugins.git',
       'git@github.com:acme/plugins.git',
-    ]) expect(added(input)).toEqual(acme);
-    // Hand-edited stored forms that the add dialog does not offer but git still clones.
-    expect(git('git://github.com/acme/plugins.git')).toEqual(acme);
-    expect(git('http://github.com/acme/plugins')).toEqual(acme);
-    expect(added('https://gitlab.example.com/group/sub/plugins.git'))
-      .toEqual({ kind: 'git', repository: 'gitlab.example.com/group/sub/plugins' });
-    expect(added('acme/plugins', 'release/2026'))
-      .toEqual({ kind: 'git', repository: 'github.com/acme/plugins', ref: 'release/2026' });
+    ]) expect(added(input)).toBe('github.com/acme/plugins');
+    // Forms git can still fetch from: hand-edited configs and insteadOf rewrites.
+    expect(pluginMarketRepositoryFromUrl('git://github.com/acme/plugins.git')).toBe('github.com/acme/plugins');
+    expect(pluginMarketRepositoryFromUrl('http://github.com/acme/plugins')).toBe('github.com/acme/plugins');
+    expect(added('https://gitlab.example.com/group/sub/plugins.git')).toBe('gitlab.example.com/group/sub/plugins');
   });
 
-  it('never carries credentials, query strings, fragments or ports into the identity', () => {
+  it('never carries credentials, query strings, fragments or ports into the repository', () => {
     for (const url of [
       'https://ghp_SECRET@github.com/acme/plugins.git',
       'https://user:pass@github.com/acme/plugins.git',
@@ -78,9 +76,9 @@ describe('pluginMarketSourceIdentity', () => {
       'ssh://git@github.com:2222/acme/plugins.git',
       'ssh://git:SECRET@github.com/acme/plugins.git',
     ]) {
-      const identity = git(url);
-      expect(identity).toEqual({ kind: 'git', repository: 'github.com/acme/plugins' });
-      expect(JSON.stringify(identity)).not.toMatch(/SECRET|ghp_|user|pass|8443|2222/);
+      const repository = pluginMarketRepositoryFromUrl(url);
+      expect(repository).toBe('github.com/acme/plugins');
+      expect(JSON.stringify(repository)).not.toMatch(/SECRET|ghp_|user|pass|8443|2222/);
     }
   });
 
@@ -97,37 +95,62 @@ describe('pluginMarketSourceIdentity', () => {
       'file:///home/tester/plugins', '/home/tester/plugins', 'not a url at all',
       'https://github.com/acme/plugins\u202e.git', 'https://github.com/acme/plug\u200bins',
       `https://${'a'.repeat(250)}.com/acme/plugins`,
-    ]) expect(git(url)).toBeNull();
-    // A stored config is untrusted: wrong value types never leak through or break the shape.
-    const stored = (source: unknown) => pluginMarketSourceIdentity(source as MarketSource);
-    expect(stored({ type: 'git', url: 42, sparsePaths: [] })).toBeNull();
-    expect(stored({ type: 'svn', url: 'https://github.com/acme/plugins' })).toBeNull();
+    ]) expect(pluginMarketRepositoryFromUrl(url)).toBeNull();
+    expect(pluginMarketRepositoryFromUrl(42)).toBeNull();
+  });
+});
+
+describe('pluginMarketSourceIdentity', () => {
+  const git = (extra: Record<string, unknown> = {}) =>
+    ({ type: 'git', url: 'https://origin.example.test/acme/plugins.git', sparsePaths: [], ...extra }) as unknown as MarketSource;
+  const facts = { sourceId: SOURCE_ID, fetchedRepository: 'mirror.example.test/tenant/plugins' };
+
+  it('shows the repository git actually fetched from, not the configured address', () => {
+    expect(pluginMarketSourceIdentity(git(), facts))
+      .toEqual({ kind: 'git', repository: 'mirror.example.test/tenant/plugins', sourceId: SOURCE_ID });
+    expect(pluginMarketSourceIdentity(git({ ref: 'release/2026' }), facts))
+      .toEqual({ kind: 'git', repository: 'mirror.example.test/tenant/plugins', ref: 'release/2026', sourceId: SOURCE_ID });
+  });
+
+  it('marks a local folder market by kind and source id only, without its path', () => {
+    const identity = pluginMarketSourceIdentity({ type: 'local', path: '/home/tester/Projects/market' },
+      { sourceId: SOURCE_ID, fetchedRepository: null });
+    expect(identity).toEqual({ kind: 'local', sourceId: SOURCE_ID });
+    expect(JSON.stringify(identity)).not.toContain('Projects');
+  });
+
+  it('yields no identity when any part cannot be produced or verified', () => {
+    // No source id (key unavailable) or a malformed one.
+    expect(pluginMarketSourceIdentity(git(), { ...facts, sourceId: null })).toBeNull();
+    expect(pluginMarketSourceIdentity(git(), { ...facts, sourceId: 'short' })).toBeNull();
+    // No verified fetch record for this cache version, or a malformed one.
+    expect(pluginMarketSourceIdentity(git(), { ...facts, fetchedRepository: null })).toBeNull();
+    expect(pluginMarketSourceIdentity(git(), { ...facts, fetchedRepository: 'https://ghp_SECRET@x.test/a/b' })).toBeNull();
     // git still fetches a configured ref, so an invalid one yields no identity instead of a ref-less one.
     for (const ref of [42, '--upload-pack=evil', 'main branch', '../main', `a${'b'.repeat(128)}`]) {
-      expect(stored({ type: 'git', url: 'https://github.com/acme/plugins', ref, sparsePaths: [] })).toBeNull();
+      expect(pluginMarketSourceIdentity(git({ ref }), facts)).toBeNull();
     }
     // An unset ref (absent key as stored by the add dialog; null or empty as git treats them) is no ref.
     for (const ref of [undefined, null, '']) {
-      expect(stored({ type: 'git', url: 'https://github.com/acme/plugins', ref, sparsePaths: [] }))
-        .toEqual({ kind: 'git', repository: 'github.com/acme/plugins' });
+      expect(pluginMarketSourceIdentity(git({ ref }), facts))
+        .toEqual({ kind: 'git', repository: 'mirror.example.test/tenant/plugins', sourceId: SOURCE_ID });
     }
-  });
-
-  it('marks a local folder market by kind only, without its path', () => {
-    const identity = added('~/Projects/market');
-    expect(identity).toEqual({ kind: 'local' });
-    expect(JSON.stringify(identity)).not.toContain('Projects');
+    expect(pluginMarketSourceIdentity({ type: 'svn' } as unknown as MarketSource, facts)).toBeNull();
   });
 
   it('accepts only the contract shape when a controller validates a received identity', () => {
     for (const valid of [
-      git('https://github.com/acme/plugins'), git('https://github.com/acme/plugins', 'main'), { kind: 'local' },
+      { kind: 'git', repository: 'github.com/acme/plugins', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: 'main', sourceId: SOURCE_ID },
+      { kind: 'local', sourceId: SOURCE_ID },
     ]) expect(isPluginMarketSourceIdentity(valid)).toBe(true);
     for (const invalid of [
-      null, 'github.com/acme/plugins', { kind: 'git' }, { kind: 'git', repository: 'github.com/acme' },
-      { kind: 'git', repository: 'github.com/acme/plugins', url: 'https://github.com/acme/plugins' },
-      { kind: 'git', repository: 'github.com/acme/plugins', ref: 7 },
-      { kind: 'local', path: '/home/tester/market' },
+      null, 'github.com/acme/plugins', { kind: 'local' }, { kind: 'git', repository: 'github.com/acme/plugins' },
+      { kind: 'git', repository: 'github.com/acme', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', sourceId: `${SOURCE_ID}=` },
+      { kind: 'git', repository: 'github.com/acme/plugins', url: 'https://github.com/acme/plugins', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: 7, sourceId: SOURCE_ID },
+      { kind: 'local', path: '/home/tester/market', sourceId: SOURCE_ID },
     ]) expect(isPluginMarketSourceIdentity(invalid)).toBe(false);
   });
 });

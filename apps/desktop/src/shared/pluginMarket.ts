@@ -47,10 +47,16 @@ export interface PluginMarketItem {
   /** 来源市场名（自定义市场项必填；服务端项为 null）。 */
   sourceMarketName: string | null;
   /**
-   * 自定义市场项的去敏来源身份（Main 按该条目的来源配置生成，见 pluginMarketSourceIdentity）。
-   * 远程控制端据此核对「装的是哪个仓库」；服务端项、以及无法安全生成时缺省。
+   * 自定义市场项的去敏来源身份（Main 按该条目的来源配置与当前缓存版本的取包记录生成，见
+   * pluginMarketSourceIdentity）。服务端项、以及无法安全生成或无法核实时缺省。
    */
   sourceIdentity?: PluginMarketSourceIdentity;
+  /**
+   * 这台电脑上当前已装实例的来源标识（同 `sourceIdentity.sourceId` 的算法，由安装账本记录的来源指纹
+   * 生成）。只在已装实例存在、账本记录为已安装且属于本条目的 `pluginId` 时给出。控制端核实回执过期的
+   * 安装时，要求它与原尝试确认回执里的 `originSource.sourceId` 完全相等。
+   */
+  installedSourceId?: string;
   /**
    * 新版本比已装版本权限变多，后台更新已暂停、等待用户确认。只在 Main 按真实包
    * 判定过后出现；缺省表示未知或无需确认，不能据此推断可以静默更新。
@@ -214,17 +220,22 @@ export interface MarketSourceSummary extends MarketSourceConfig {
 }
 
 /**
- * 可以展示给用户和远程控制端的来源身份。Git 来源只含 `host/owner/repo`（可选 ref），
- * 本地文件夹来源只标类型、不含路径；不含任何凭证、查询串、片段或端口。
+ * 可以展示给用户和远程控制端的来源身份（契约第 2 版）。
+ * - `sourceId`：Host 用本机密钥对来源指纹（`marketSourceKey`）做的 HMAC 截断，不透明、不可反推，
+ *   区分不同本地目录、端口、协议写法与稀疏路径；控制端用它核对「装的是哪个来源」。
+ * - Git 来源另给 `repository`（实际取包地址的 `host/owner/repo`）与可选 `ref`，只用于展示。
+ * 不含任何凭证、查询串、片段、端口或本地路径。
  * 远程协议见 docs/dev-rules/protocol-compatibility/same-account-remote-plugin-management.md。
  */
 export type PluginMarketSourceIdentity =
-  | { kind: 'git'; repository: string; ref?: string }
-  | { kind: 'local' };
+  | { kind: 'git'; repository: string; ref?: string; sourceId: string }
+  | { kind: 'local'; sourceId: string };
 
 /** 展示用仓库标识的整体形状；远程控制端按同一形状校验。 */
 export const PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN =
   /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}){2,4}$/;
+/** 来源标识：16 字节 HMAC 截断的 base64url（无填充）。 */
+export const PLUGIN_MARKET_SOURCE_ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 /** 与 sources/parse.ts 的 REF_PATTERN 同一口径。 */
 const SOURCE_IDENTITY_REF = /^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 const SOURCE_IDENTITY_HOST = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
@@ -252,32 +263,19 @@ function sourceIdentityRepository(host: string, pathname: string): string | null
 }
 
 /**
- * 从来源配置生成去敏的来源身份。白名单生成，生成不出就返回 null（字段整体缺省）：
+ * 把一个 Git 地址白名单归约成展示用的 `host/owner/repo`，生成不出就返回 null：
  * - `https://` / `http://` / `ssh://` / `git://` 按 URL 解析，只取小写 hostname 与路径段；
- *   用户名、密码（含 `https://TOKEN@host` 这类单段令牌）、端口、查询串、片段都不读取；
- * - scp 形式 `user@host:owner/repo(.git)` 只取 host 与路径；其它形式一律 null；
+ *   用户名、密码（含 `https://TOKEN@host` 这类单段令牌，例如 `insteadOf` 改写注入的）、端口、
+ *   查询串、片段都不读取；
+ * - scp 形式 `user@host:owner/repo(.git)` 只取 host 与路径；其它形式（含 `file://`、本地路径）一律 null；
  * - 路径 2–4 段（允许 GitLab 子组），每段只允许字母数字与 `._-`，去掉结尾 `.git`；
- *   原始地址里出现 `.` / `..` 路径段也不生成，避免展示 URL 归一后的另一条路径；
- * - 没配置 ref 时不给 ref；配置了 ref 但不是合法引用（只可能来自手工改坏的配置）时整个身份
- *   不生成，不给出缺了 ref 的部分身份；本地文件夹来源只返回 `{kind:'local'}`。
- * 输入按不可信处理：添加来源时已拒绝内嵌凭证，但手工改过的 sources.v1.json 也不能把
- * 凭证、路径或非字符串值带进确认与远程投影。结果不写日志。
+ *   原始地址里出现 `.` / `..` 路径段、多个 `@` 也不生成。
+ * 输入按不可信处理（手工改过的配置、git 解析出的改写地址）。结果不写日志。
  */
-export function pluginMarketSourceIdentity(source: MarketSource): PluginMarketSourceIdentity | null {
-  if (!source || typeof source !== 'object') return null;
-  if (source.type === 'local') return { kind: 'local' };
-  if (source.type !== 'git' || typeof source.url !== 'string') return null;
-  // 添加来源时没填 ref 存成缺省键，git 侧按真假判断，所以 null / 空串同样视为未配置。
-  // 其它值必须是合法引用：git 实际会用它取包，丢掉它展示的身份就与实际不符。
-  const rawRef: unknown = source.ref;
-  let ref: string | undefined;
-  if (rawRef !== undefined && rawRef !== null && rawRef !== '') {
-    if (typeof rawRef !== 'string' || !SOURCE_IDENTITY_REF.test(rawRef)) return null;
-    ref = rawRef;
-  }
-  const url = source.url.trim();
+export function pluginMarketRepositoryFromUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const url = value.trim();
   if (!url || url.length > 2048 || SOURCE_IDENTITY_UNSAFE_CHARS.test(url)) return null;
-  let repository: string | null;
   if (SOURCE_IDENTITY_URL_SCHEME.test(url)) {
     const rest = url.replace(SOURCE_IDENTITY_URL_SCHEME, '');
     const authority = rest.split('/', 1)[0] ?? '';
@@ -289,27 +287,64 @@ export function pluginMarketSourceIdentity(source: MarketSource): PluginMarketSo
     } catch {
       return null;
     }
-    repository = sourceIdentityRepository(parsed.hostname.toLowerCase(), parsed.pathname.replace(/^\//, ''));
-  } else {
-    const scp = SOURCE_IDENTITY_SCP.exec(url);
-    repository = scp ? sourceIdentityRepository(scp[1]!.toLowerCase(), scp[2]!) : null;
+    return sourceIdentityRepository(parsed.hostname.toLowerCase(), parsed.pathname.replace(/^\//, ''));
   }
-  if (!repository) return null;
-  return { kind: 'git', repository, ...(ref !== undefined ? { ref } : {}) };
+  const scp = SOURCE_IDENTITY_SCP.exec(url);
+  return scp ? sourceIdentityRepository(scp[1]!.toLowerCase(), scp[2]!) : null;
+}
+
+/**
+ * 组装来源身份，任何一项生成不出就整体返回 null：
+ * - `sourceId` 由 Main 用本机密钥算出（见 main/plugin-market/sources/sourceId.ts），必须合形；
+ * - 本地文件夹来源只给 `{kind:'local', sourceId}`，不含路径；
+ * - Git 来源的 `repository` 取**实际取包地址**的去敏结果（该缓存版本的取包记录），不取配置字符串；
+ * - 没配置 ref 时不给 ref；配置了 ref 但不是合法引用（只可能来自手工改坏的配置）时整个身份不生成：
+ *   git 实际仍会用它取包，不能给出缺了 ref 的身份。
+ */
+export function pluginMarketSourceIdentity(
+  source: MarketSource,
+  facts: { sourceId: string | null; fetchedRepository: string | null },
+): PluginMarketSourceIdentity | null {
+  if (!source || typeof source !== 'object') return null;
+  const { sourceId, fetchedRepository } = facts;
+  if (typeof sourceId !== 'string' || !PLUGIN_MARKET_SOURCE_ID_PATTERN.test(sourceId)) return null;
+  if (source.type === 'local') return { kind: 'local', sourceId };
+  if (source.type !== 'git') return null;
+  // 添加来源时没填 ref 存成缺省键，git 侧按真假判断，所以 null / 空串同样视为未配置。
+  const rawRef: unknown = source.ref;
+  let ref: string | undefined;
+  if (rawRef !== undefined && rawRef !== null && rawRef !== '') {
+    if (typeof rawRef !== 'string' || !SOURCE_IDENTITY_REF.test(rawRef)) return null;
+    ref = rawRef;
+  }
+  if (
+    typeof fetchedRepository !== 'string' ||
+    fetchedRepository.length > 256 ||
+    !PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN.test(fetchedRepository)
+  ) {
+    return null;
+  }
+  return { kind: 'git', repository: fetchedRepository, ...(ref !== undefined ? { ref } : {}), sourceId };
+}
+
+/** 来源标识的形状（`installedSourceId` 等单独出现的标识也经这里）。 */
+export function isPluginMarketSourceId(value: unknown): value is string {
+  return typeof value === 'string' && PLUGIN_MARKET_SOURCE_ID_PATTERN.test(value);
 }
 
 /**
  * 校验一份来源身份的形状（远程 Host 发来的确认请求也经这里）。只接受契约里的键：
- * Git 形式 `kind`／`repository`／可选 `ref`，本地形式只有 `kind`。
+ * Git 形式 `kind`／`repository`／可选 `ref`／`sourceId`，本地形式只有 `kind`／`sourceId`。
  */
 export function isPluginMarketSourceIdentity(value: unknown): value is PluginMarketSourceIdentity {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  if (record.kind === 'local') return keys.length === 1;
+  if (!isPluginMarketSourceId(record.sourceId)) return false;
+  if (record.kind === 'local') return keys.length === 2;
   return (
     record.kind === 'git' &&
-    keys.every((key) => key === 'kind' || key === 'repository' || key === 'ref') &&
+    keys.every((key) => key === 'kind' || key === 'repository' || key === 'ref' || key === 'sourceId') &&
     typeof record.repository === 'string' &&
     record.repository.length <= 256 &&
     PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN.test(record.repository) &&

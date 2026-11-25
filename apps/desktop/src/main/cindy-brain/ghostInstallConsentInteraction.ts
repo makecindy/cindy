@@ -14,6 +14,7 @@ import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core'
 
 import type { GhostPermissionItem } from '../../shared/ghost.js';
 import { permissionItemDetail } from '../../shared/ghostPermissionDetail.js';
+import { isPluginMarketSourceIdentity } from '../../shared/pluginMarket.js';
 import {
   GHOST_INSTALL_CONSENT_TOOL_NAME,
   ghostInstallConsentOriginSourceText,
@@ -153,7 +154,18 @@ export function buildGhostInstallConsentInteraction(
     kind: 'permission',
     requestId,
     toolName: GHOST_INSTALL_CONSENT_TOOL_NAME,
-    input: { ghost_id: request.facts.ghostId, version: request.facts.version, operation: request.facts.kind },
+    // 结构化来源（契约第 2 版 V2.4 第 3 处）：控制端据此显示仓库，缺身份的自定义市场卡不在控制端批准。
+    // 卡输入不进模型上下文（宿主交互不是 Agent 的工具调用）；IM 卡把它当参数显示，其中 sourceId 是
+    // 本机密钥生成的不透明标识，仓库名本来就在说明文字里。
+    input: {
+      ghost_id: request.facts.ghostId,
+      version: request.facts.version,
+      operation: request.facts.kind,
+      origin: request.origin,
+      ...(request.origin === 'custom-market' && isPluginMarketSourceIdentity(request.originSource)
+        ? { source: request.originSource }
+        : {}),
+    },
     title: text.title,
     description: [deviceName(), publisher?.replace(/[\r\n]+/g, ' '), text.description].filter(Boolean).join(' · '),
     metadata: { hostOwnedConfirmation: GHOST_INSTALL_CONSENT_HOST_CONFIRMATION },
