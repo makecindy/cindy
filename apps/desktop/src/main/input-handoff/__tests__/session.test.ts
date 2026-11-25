@@ -47,12 +47,13 @@ describe('InputHandoffSession', () => {
   // code removes the second frame. `dupId`: no phone; next to the focused code, a never-focused 1x1 field reads with
   // the same id (ids are read cut off at 64 characters) and fingerprint; `dupIdDrop` has the phone, and typing it
   // removes the focused one. `twinIds`: the two frames' fields have different ids, and a rejected code removes the
-  // second frame.
+  // second frame. `dupIdLate`: the field read alike as `dupId`'s appears only once `state.lateTwin` is set, and typing the
+  // phone removes the code. `state.paid`: the code goes, success text shows, and a never-focused 1x1 field remains.
   type PayLayout = 'focus' | 'insert' | 'trap' | 'frame' | 'fragment' | 'twoSteps' | 'sameFp' | 'twinFrames' | 'twinDrop' |
-    'twinSwap' | 'twinDropOther' | 'twinIds' | 'splitCode' | 'dupId' | 'dupIdDrop';
+    'twinSwap' | 'twinDropOther' | 'twinIds' | 'splitCode' | 'dupId' | 'dupIdDrop' | 'dupIdLate';
   function payPage(options: { layout?: PayLayout; staleOnce?: boolean; rejects?: boolean; errorAbove?: boolean; noIds?: boolean } = {}) {
     const layout = options.layout ?? 'focus';
-    const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce, secondStep: false, rejected: false };
+    const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce, secondStep: false, rejected: false, lateTwin: false, paid: false };
     const acts: Array<{ kind: string; ref?: string }> = [];
     const chrome = { pid: 20, app: 'Google Chrome', bundleId: 'com.google.Chrome' };
     const n = (ref: string, role: string, extra: Record<string, unknown> = {}) =>
@@ -105,9 +106,14 @@ describe('InputHandoffSession', () => {
           if (!(layout === 'twinDrop' && state.phoneTyped)) frameA();
           if (!(layout === 'twinDropOther' && state.focus !== 'code') && !(layout === 'twinIds' && state.rejected)) frameB();
         }
-      } else if (!(layout === 'dupIdDrop' && state.phoneTyped)) out.push(n(next(), 'AXTextField', code));
+      } else if (state.paid) {
+        out.push(n(next(), 'AXStaticText', { value: 'Payment complete', frame: [460, 440, 200, 16] }));
+        out.push(n(next(), 'AXTextField', { domId: 'bot-trap', frame: [460, 460, 1, 1] }));
+      } else if (!(['dupIdDrop', 'dupIdLate'].includes(layout) && state.phoneTyped)) out.push(n(next(), 'AXTextField', code));
       if (layout === 'trap') out.push(n(next(), 'AXTextField', { domId: 'bot-trap', frame: [460, 460, 1, 1] }));
-      if (layout === 'dupId' || layout === 'dupIdDrop') out.push(n(next(), 'AXTextField', { domId: 'sms-code', frame: [460, 460, 1, 1] }));
+      if (layout === 'dupId' || layout === 'dupIdDrop' || (layout === 'dupIdLate' && state.lateTwin)) {
+        out.push(n(next(), 'AXTextField', { domId: 'sms-code', frame: [460, 460, 1, 1] }));
+      }
       out.push(n(next(), 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }));
       return out;
     };
@@ -267,6 +273,37 @@ describe('InputHandoffSession', () => {
     expect(latest().phase).toBe('ready');
     expect(latest().controls.filter((control) => control.kind === 'text').map((control) => control.label)).toEqual(['Code']);
     session.cancel();
+  });
+
+  // PR #12780 review (codex r4694414326, `dupIdLate`): the code's key was unique on the card, then a field read alike
+  // appeared. The submit check saw both (the code still focused) but kept the old key, so once typing the phone removed
+  // the code, the other field passed with it and got the code. Entry: session.submit. Unit tier.
+  it('drops a hidden code key that turned ambiguous before the fill', async () => {
+    const page = payPage({ layout: 'dupIdLate' });
+    const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
+    await session.start();
+    const step = latest();
+    const texts = step.controls.filter((control) => control.kind === 'text');
+    expect(texts).toHaveLength(2);
+    page.state.lateTwin = true;
+    const values = Object.fromEntries(texts.map((control, i) => [control.id, i === 0 ? '18600000000' : '123456']));
+    await session.submit({ expectedRevision: step.revision, values, action: { kind: 'submit' } });
+    expect(page.acts.map((act) => act.ref ?? act.kind)).toEqual(['0.1']);
+    session.cancel();
+  });
+
+  // PR #12780 review (codex r4694414343): with the agent's success text on the page, a read that only lost the code
+  // (a never-focused hidden field remaining) froze the card instead of handing back. Entry: window watch. Unit tier.
+  it('hands back on the agent\'s completion text even while a hidden field remains', async () => {
+    const page = payPage();
+    const { session, finished } = harness(page.driver, {
+      target: { app: 'Google Chrome', windowTitle: 'Pay' }, windowWatchMs: 2, completeWhen: { textAppears: 'Payment complete' },
+    });
+    await session.start();
+    page.state.focus = 'phone';
+    page.state.paid = true;
+    await vi.waitFor(() => expect(finished).toHaveLength(1));
+    expect(finished[0]).toMatchObject({ status: 'succeeded' });
   });
 
   // PR #12780 review (codex r4694200929, `twinIds`): the rejected code removed the other frame at the code's address;

@@ -1389,6 +1389,8 @@ export class InputHandoffSession {
     const current = this.step;
     const hidden = current?.hiddenTaken ?? 0;
     if (!current || !hidden || !fresh.hiddenCandidates || fresh.url?.split('#')[0] !== current.url?.split('#')[0]) return false;
+    // The agent's own sign of the end is no unsure read (product rules §2.5).
+    if (this.hintsMet(fresh)) return false;
     // Names and tree places change with the hidden fields gone (an error above a field, a fingerprint now unique).
     const plain = (step: ExtractedStep) => [...step.bindings.values()]
       .flatMap<{ identity: string }>((binding) => binding.kind !== 'text' ? [] : (binding.segments ?? [binding]))
@@ -1477,8 +1479,10 @@ export class InputHandoffSession {
     // Rebind only after the entire form matches. In particular, a reused old
     // index may now point at a different field with the same native fingerprint.
     for (const field of expected) field.ref = byIdentity.get(identity(field))!.ref;
-    // The hidden code fields move with them: a key holding a tree place is that of the same field now.
-    if (current.hiddenFields) step.hiddenFields = current.hiddenFields;
+    // The keys follow this read, which took in the same fields: one that turned ambiguous meanwhile (another field
+    // now reads with it) is dropped, so it cannot vouch for that other field once this one goes.
+    step.hiddenFields = current.hiddenFields;
+    step.hiddenTaken = current.hiddenTaken;
     return true;
   }
 
