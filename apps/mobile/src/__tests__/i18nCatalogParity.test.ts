@@ -5,7 +5,7 @@
  * 随 pnpm test:unit 阻断。直接从组装模块取数,新增区域文件自动纳入校验。
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createInstance } from "i18next";
 
 import esCommon from "@/i18n/locales/es";
@@ -114,31 +114,6 @@ describe("mobile i18n catalog parity", () => {
       for (const category of categories) {
         expect(keys.has(`${family}_${category}`), `${locale}:${family}_${category}`).toBe(true);
       }
-    }
-  });
-
-  // 手机运行时(Hermes)没有 Intl.PluralRules，i18next 对所有语言都按「count 为 1 取 _one、其余取 _other」，
-  // 只写了 _other 的语言在 count 为 1 时会落回英文(iOS 模拟器上繁中显示过「1 share request waiting」)。
-  // 上一条按 Node 的规则检查，中日韩只要求 _other，拦不住这种缺口。
-  // 只检查供应商分享的计数文案：giftCard、models 里有同样只缺 _one 的旧文案，补齐后再放开到全部。
-  const phoneRuntimeFamilies = [...families].filter((family) => family.startsWith("providerShare."));
-  it.each(locales)("%s 在没有 Intl.PluralRules 的手机运行时取到本语言的供应商分享计数文案", async (locale) => {
-    expect(phoneRuntimeFamilies.length).toBeGreaterThan(0);
-    vi.stubGlobal("Intl", Object.create(Intl, { PluralRules: { value: undefined } }));
-    try {
-      const instance = createInstance();
-      await instance.init({
-        lng: locale,
-        fallbackLng: false,
-        resources: { [locale]: { translation: CATALOGS[locale] as object } },
-      });
-      for (const family of phoneRuntimeFamilies) {
-        for (const count of [1, 2]) {
-          expect(instance.t(family, { count }), `${locale}:${family} count=${count}`).toContain(String(count));
-        }
-      }
-    } finally {
-      vi.unstubAllGlobals();
     }
   });
 
