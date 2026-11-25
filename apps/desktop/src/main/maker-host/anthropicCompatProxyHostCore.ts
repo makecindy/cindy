@@ -73,6 +73,7 @@ import {
   GUEST_ROUTE_HEADER,
   guestProviderOffersModel,
   guestProviderModelDenial,
+  hostedPiChildOffersModel,
   hostedProviderOffersModel,
   poolAuthorizationProvider,
   guestProviderRouteForSession,
@@ -122,6 +123,8 @@ import {
 } from './claude-session-background-activity.js';
 import {
   authenticatePiProxySession,
+  getPiProxyHostedModelAccess,
+  getPiProxySessionSignal,
   getPiProxySessionProvider,
   getPiProxySubscriptionAccount,
   isPiProxySubagentRoute,
@@ -682,9 +685,18 @@ function createModelRoutingTransform(): RoutingTransform {
     const selectedPiProviderId = piSessionId ? getSessionProvider(piSessionId) : null;
     const piGuest = piSessionId ? guestProviderRouteForSession(piSessionId) : null;
     const poolRoute = readPoolExecutionRoute(piSessionId);
+    const hostedAccess = piSessionId ? getPiProxyHostedModelAccess(piSessionId, claimedPiSessionToken) : undefined;
+    if (hostedAccess && !hostedAccess.isCurrent())
+      return refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.');
+    const childSignal = piSessionId && subagentRoute && !piGuest && hostedAccess
+      ? getPiProxySessionSignal(piSessionId, claimedPiSessionToken) : null;
+    const childProviderId = piProviderId ?? 'xd';
+    const authorizeHostedChild = childSignal && piSessionId && hostedAccess ? (model: string) =>
+      !childSignal.aborted && hostedPiChildOffersModel(piSessionId, childProviderId, model, hostedAccess.allowsModel) : undefined;
     // The header must still match its own token. Only the live, owner-issued
     // pool reservation may route that token through a different connection.
-    const pooledPiRoute = poolRoute?.logicalModel && piProviderId && piProviderId !== selectedPiProviderId
+    const pooledPiRoute = !subagentRoute && poolRoute?.logicalModel && selectedPiProviderId !== null
+      && piProviderId && piProviderId !== selectedPiProviderId
       && poolAuthorizationProvider(piSessionId, piProviderId) === selectedPiProviderId;
     if (
       piSessionId
@@ -727,8 +739,9 @@ function createModelRoutingTransform(): RoutingTransform {
       };
     }
     // 供应商分享受邀者的 Pi 会话：令牌只为分享的供应商签发，这里按登记再复核一次(含子代理令牌)。
-    if (piGuest && !(pooledPiRoute && piGuest.providerId === selectedPiProviderId)
-      && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)) {
+    if (piGuest && ((subagentRoute && poolRoute && poolRoute.connectionId !== poolRoute.providerId)
+      || (!(pooledPiRoute && piGuest.providerId === selectedPiProviderId)
+        && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)))) {
       return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
     }
     // An async route lookup must finish before the final live model-grant
@@ -744,8 +757,9 @@ function createModelRoutingTransform(): RoutingTransform {
       && isOpenAiSubscriptionProviderId(piProviderId)
       && ctx.headers['content-encoding']?.toLowerCase() === 'zstd'
       && !isPlainObject(body);
-    if ((piGuest || hasHostedSessionModelAccess(piSessionId)) && !nativeCompressedPiRequest) {
-      const providerId = piGuest?.providerId ?? piProviderId ?? selectedPiProviderId;
+    let childRequestModels: string[] = [];
+    if ((piGuest || authorizeHostedChild || hasHostedSessionModelAccess(piSessionId)) && !nativeCompressedPiRequest) {
+      const providerId = piGuest?.providerId ?? (authorizeHostedChild ? childProviderId : piProviderId ?? selectedPiProviderId);
       // Check the live member grant before native handlers and all other Pi routing branches.
       // Google's native API puts the authoritative model in the URL instead of body.model.
       const requestModels: string[] = [];
@@ -763,7 +777,7 @@ function createModelRoutingTransform(): RoutingTransform {
       for (const model of requestModels) {
         const allowed = piGuest
           ? await guestProviderOffersModel(piGuest.providerId, 'pi', model, piGuest.sessionId)
-          : hostedProviderOffersModel(piSessionId, providerId, 'pi', model);
+          : authorizeHostedChild ? authorizeHostedChild(model) : hostedProviderOffersModel(piSessionId, providerId, 'pi', model);
         if (!allowed) { deniedModel = model; break; }
       }
       if (requestModels.length === 0 || deniedModel !== undefined) {
@@ -772,9 +786,10 @@ function createModelRoutingTransform(): RoutingTransform {
         return piGuest ? refuseGuestForeignRoute(deniedModel ?? '')
           : refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.');
       }
+      if (authorizeHostedChild) childRequestModels = requestModels;
     }
     if (pooledPiRoute && piProviderId) {
-      if (!pooledPiModel || readPoolExecutionRoute(piSessionId) !== poolRoute
+      if (!pooledPiModel || hostedAccess?.isCurrent() === false || readPoolExecutionRoute(piSessionId) !== poolRoute
         || poolAuthorizationProvider(piSessionId, piProviderId, pooledPiModel) !== selectedPiProviderId)
         return unavailablePiProviderRoute(piProviderId);
       return pooledPiDecision?.decision ?? unavailablePiProviderRoute(piProviderId);
@@ -785,7 +800,7 @@ function createModelRoutingTransform(): RoutingTransform {
         // authenticates and forwards it; the xAI forwarder also restores its
         // provider server tools, but no Claude protocol bridge runs.
         localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId, undefined,
-          getPiProxySubscriptionAccount(piSessionId, claimedPiSessionToken)),
+          getPiProxySubscriptionAccount(piSessionId, claimedPiSessionToken), authorizeHostedChild),
       };
     }
     const isPiGatewayRequest = Boolean(
@@ -946,11 +961,15 @@ function createModelRoutingTransform(): RoutingTransform {
       // key 时更会把 `sk-ant-oat` 占位 token 直发 api.anthropic.com。这里的
       // piProviderId 已过 registered 匹配门,就是授权边界也是路由来源;openai /
       // xai 在上方已按同一判据早返回,'xd' 留给网关分支(记账 + sanitize)。
-      return resolveProviderRouteDecision(piProviderId, 'pi', gatewayKey)
-        .then((resolved) => withCopilotForwardHeaders(
+      return resolveProviderRouteDecision(piProviderId, 'pi', gatewayKey, authorizeHostedChild ? wireModel : undefined)
+        .then((resolved) => {
+          if (authorizeHostedChild && !childRequestModels.every(authorizeHostedChild))
+            return refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.');
+          return withCopilotForwardHeaders(
           resolved?.decision ?? null, !!wireModel && resolved?.routing.authStrategy === 'oauth-token'
             && /\/responses\/?$/.test(ctx.url.split('?', 1)[0]), ctx,
-        ) ?? unavailablePiProviderRoute(piProviderId))
+          ) ?? unavailablePiProviderRoute(piProviderId);
+        })
         .catch(() => unavailablePiProviderRoute(piProviderId));
     }
 

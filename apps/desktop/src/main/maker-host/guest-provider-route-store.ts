@@ -15,6 +15,7 @@ import { findCatalogModel, type AgentKind, type Catalog } from '@cindy/model-pro
 import { getActiveCatalog } from './active-catalog.js';
 import { clearSessionProvider, getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed, setSessionProvider } from './session-provider-store.js';
 import { readPoolExecutionRoute } from '../subscription-accounts/session.js';
+import { remoteAccessProviderId } from './mergedProviderPool.js';
 
 // Platform assembly supplies the same live account membership used at remote
 // admission. The base catalog alone can omit every model of a signed-in pool.
@@ -134,7 +135,15 @@ export async function guestProviderOffersModel(providerId: string, agent: AgentK
   return false;
 }
 
-/** Same-account remote tasks authorize each root/child request without pinning children to the parent provider. */
+/** An independently authenticated owner-hosted Pi child cannot borrow the parent lease. */
+export function hostedPiChildOffersModel(sessionId: string, providerId: string, wireModel: string,
+  allowsModel: (providerId: string, model: string) => boolean): boolean {
+  return readPoolExecutionRoute(sessionId)?.connectionId !== providerId
+    && remoteAccessProviderId(providerId) === providerId
+    && providerOffersModel(providerId, 'pi', wireModel, model => allowsModel(providerId, model));
+}
+
+/** Hosted root requests can use their own pool reservation; Claude retains its existing route checks. */
 export function hostedProviderOffersModel(sessionId: string | null | undefined, providerId: string | null | undefined, agent: AgentKind, wireModel: string): boolean {
   if (!sessionId) return true;
   const route = readPoolExecutionRoute(sessionId);

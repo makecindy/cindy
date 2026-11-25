@@ -69,6 +69,7 @@ import { bindHostedSessionProvider, clearAllSessionProviders, getSessionProvider
 import { registerPiProxySession } from '../pi-proxy-session-auth';
 import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 import { bindPoolExecutionRoute } from '../../subscription-accounts/session';
+import { setMergedProviderPoolResolver } from '../mergedProviderPool';
 
 const SHARED_UPSTREAM = 'https://shared.example/api/anthropic';
 const OTHER_UPSTREAM = 'https://other.example/api/anthropic';
@@ -327,6 +328,7 @@ describe('Claude proxy routing for shared-provider guests', () => {
       ? registerGuestProviderRoute(session, 'openai', model => sourceAllowed && model === logical)
       : bindHostedSessionProvider(session, 'openai', (id, model) => sourceAllowed && id === 'openai' && model === logical);
     const dispose = registerPiProxySession(session, 'own-token', () => 'shared-a');
+    const disposeChild = registerPiProxySession(session, 'guest-child', () => 'shared-a', { scope: 'subagent-route' });
     const logicalModel = (model: string) => {
       if (model !== wire) throw Error('wrong wire model');
       return logical;
@@ -356,7 +358,8 @@ describe('Claude proxy routing for shared-provider guests', () => {
       memberAllowed = true;
       lease();
       expect(await statusOf(await request(wire))).toBe(403);
-    } finally { lease(); dispose(); grant.release(); }
+      if (trust === 'guest') expect(await statusOf(await request(wire, 'shared-a', 'guest-child'))).toBe(403);
+    } finally { lease(); dispose(); disposeChild(); grant.release(); }
   });
 
   // A loopback mismatch alone is not evidence of shared scope. Only a live
@@ -486,6 +489,57 @@ describe('Claude proxy routing for shared-provider guests', () => {
       childAllowed = false;
       expect(await statusOf(await request())).toBe(403);
     } finally { dispose(); }
+  });
+
+  // Regression #12818: an authenticated hosted Pi child shares the parent's
+  // business session ID, not its pooled credential or its model grant.
+  it('keeps an authorized owner child independent of a live parent Key reservation', async () => {
+    const session = 'owner-pooled-parent';
+    let childAllowed = true;
+    let parentAllowed = true;
+    const grant = bindHostedSessionProvider(session, 'openai', (provider, model) =>
+      (childAllowed && provider === 'other-b' && model === 'other-model')
+      || (parentAllowed && provider === 'openai' && model === 'chatgpt/shared-model'));
+    const root = registerPiProxySession(session, 'root-token', () => 'shared-a');
+    const child = registerPiProxySession(session, 'child-token', () => 'other-b', { scope: 'subagent-route' });
+    const sameKey = registerPiProxySession(session, 'member-token', () => 'shared-a', { scope: 'subagent-route' });
+    const releasePool = bindPoolExecutionRoute(session, {
+      providerId: 'openai', connectionId: 'shared-a',
+      logicalModel(wire) {
+        if (wire !== 'shared-model') throw Error('wrong model');
+        return 'chatgpt/shared-model';
+      },
+      assertCurrent(wire) { if (wire !== undefined && wire !== 'shared-model') throw Error('wrong model'); },
+      captureTurnRejection: () => undefined,
+    });
+    const request = (token: string, provider: string, model: string) => transform({ model }, ctxWith({
+      'x-cindy-pi-session-id': session, 'x-cindy-pi-session-token': token, 'x-cindy-pi-provider-id': provider,
+    }));
+    try {
+      expect(await request('root-token', 'shared-a', 'shared-model')).toMatchObject({ upstreamOverride: SHARED_UPSTREAM });
+      expect(await request('child-token', 'other-b', 'other-model')).toMatchObject({ upstreamOverride: OTHER_UPSTREAM });
+      expect(await statusOf(await request('child-token', 'shared-a', 'shared-model'))).toBe(403);
+      expect(await statusOf(await request('member-token', 'shared-a', 'shared-model'))).toBe(403);
+      expect(await statusOf(await request('root-token', 'other-b', 'other-model'))).toBe(403);
+      expect(await statusOf(await request('child-token', 'other-b', 'other-model[1m]'))).toBe(403);
+      setMergedProviderPoolResolver(provider => provider === 'other-b' ? 'openai' : undefined);
+      expect(await statusOf(await request('child-token', 'other-b', 'other-model'))).toBe(403);
+      setMergedProviderPoolResolver(null);
+      parentAllowed = false;
+      expect(await statusOf(await request('root-token', 'shared-a', 'shared-model'))).toBe(403);
+      expect(await request('child-token', 'other-b', 'other-model')).toMatchObject({ upstreamOverride: OTHER_UPSTREAM });
+      childAllowed = false;
+      expect(await statusOf(await request('child-token', 'other-b', 'other-model'))).toBe(403);
+      childAllowed = true;
+      const nextGrant = bindHostedSessionProvider(session, 'openai', () => true);
+      try {
+        expect(await statusOf(await request('child-token', 'other-b', 'other-model'))).toBe(403);
+        expect(await statusOf(await request('root-token', 'shared-a', 'shared-model'))).toBe(403);
+      } finally { nextGrant.release(); }
+      expect(await statusOf(await request('child-token', 'other-b', 'other-model'))).toBe(403);
+      child();
+      expect(await statusOf(await request('child-token', 'other-b', 'other-model'))).toBe(401);
+    } finally { root(); child(); sameKey(); releasePool(); grant.release(); setMergedProviderPoolResolver(null); }
   });
 
   // Unit regression for review 4328205893 / provider-sharing §12. Pi coverage

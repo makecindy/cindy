@@ -808,6 +808,7 @@ function getPiNativeSubscriptionHandler(
   sessionId: string,
   deps: PiNativeSubscriptionHandlerDeps = defaultPiNativeSubscriptionHandlerDeps,
   account?: NativeSubscriptionAccount,
+  authorizeHostedChild?: (wireModel: string) => boolean,
 ): LocalRequestHandler {
   return async ({ rawBody, parsedBody, ctx, res }) => {
     const upstream = piNativeUpstream(providerId, ctx.url);
@@ -822,7 +823,7 @@ function getPiNativeSubscriptionHandler(
     const scopeAtStart = activeOwnerScopeKey();
     const fastAtStart = getSessionFastMode(sessionId);
     const guest = guestProviderRouteForSession(sessionId);
-    const hostedModelAccess = hasHostedSessionModelAccess(sessionId);
+    const hostedModelAccess = authorizeHostedChild || hasHostedSessionModelAccess(sessionId);
     // Preserve the original catalog profile across wire rewrites (e.g. [1m])
     // and recheck after asynchronous codecs/auth before any upstream request.
     let requestedModel = '';
@@ -831,7 +832,8 @@ function getPiNativeSubscriptionHandler(
       const scopeDenied = !!guest && guest.providerId !== providerId;
       const allowed = guest
         ? !scopeDenied && await guestProviderOffersModel(providerId, 'pi', requestedModel, sessionId)
-        : hasHostedSessionModelAccess(sessionId) && hostedProviderOffersModel(sessionId, providerId, 'pi', requestedModel);
+        : authorizeHostedChild ? authorizeHostedChild(requestedModel)
+          : hasHostedSessionModelAccess(sessionId) && hostedProviderOffersModel(sessionId, providerId, 'pi', requestedModel);
       if (allowed) return true;
       const denial = !scopeDenied && guest && requestedModel ? guestProviderModelDenial(sessionId, requestedModel, 'pi') : null;
       res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
