@@ -344,8 +344,10 @@ describe('provider share usage store', () => {
     rename.mockRejectedValueOnce(new Error('replacement denied'));
     // Another queued write must never serialize the failed commit's tentative location.
     const failed = expect(store.commitDirectReceiptRoute(renewed)).rejects.toThrow('replacement denied');
+    const receipt = store.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId,
+      { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 1, 0)] });
     const revoked = store.markDirectReceiptRouteRevoked(route);
-    await Promise.all([failed, revoked]);
+    await Promise.all([failed, receipt, revoked]);
     expect(store.findDirectTaskLocation(route)).toMatchObject({ generation: route.generation, model: 'gpt' });
     expect(createProviderShareUsageStore(file, { now: () => now }).findDirectTaskLocation(route))
       .toMatchObject({ generation: route.generation, model: 'gpt' });
@@ -516,6 +518,86 @@ describe('provider share usage store', () => {
 
   // Regression: O may restart, switch M, or let a lease expire while M retries a completed turn's receipt.
   // This exercises the production ledger entry, its durable acknowledgement, and authenticated M binding (unit tier).
+  // Unit: real receipt ACK/atomic replacement. Metadata incident exposed one full write per ACK.
+  // Existing restart/rollback tests did not cover concurrent receipts or durable duplicate cost.
+  // Minimal input: two receipts and one duplicate held at rename; no timer sleeps.
+  it('keeps a concurrent receipt when a standby usage transaction rolls back', async () => {
+    const file = path.join(dir, 'rollback-usage.json');
+    const now = new Date(2026, 9, 27, 12).getTime();
+    const route = directRoute(now);
+    const store = createProviderShareUsageStore(file, { now: () => now });
+    await store.registerDirectReceiptRoute(route); await store.commitDirectReceiptRoute(route);
+    let entered!: () => void; let release!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    vi.spyOn(fsp, 'rename').mockImplementationOnce(async () => { entered(); await hold; throw new Error('standby denied'); });
+    const imported = expect(store.importStandbyTotal(route.shareId, { ...route, id: '1'.repeat(64), sequence: 1,
+      day: '2026-10-27', memberId: route.memberId, kind: route.agentKind, providerId: route.providerId,
+      model: 'gpt', totals: sample('gpt', 100, 0), memberKey: 'local' })).rejects.toThrow('standby denied');
+    await ready;
+    const received = store.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId,
+      { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 7, 3)] });
+    release();
+    await imported; expect(await received).toBe(true);
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(saved.rows[0]?.inputTokens).toBe(7);
+    expect(saved.standbyTotals).toEqual([]);
+  });
+
+  it('shares a durable receipt barrier and skips durable duplicates, retrying failed writes', async () => {
+    const file = path.join(dir, 'usage.json');
+    const now = Date.now();
+    const route = directRoute(now);
+    const store = createProviderShareUsageStore(file, { now: () => now });
+    await store.registerDirectReceiptRoute(route);
+    await store.commitDirectReceiptRoute(route);
+    const receipt = { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 7, 3)] };
+    const record = (value = receipt) => store.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId, value);
+    const realRename = fsp.rename.bind(fsp);
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    const rename = vi.spyOn(fsp, 'rename').mockImplementationOnce(async (...args) => {
+      entered(); await hold; return realRename(...args);
+    });
+    let acknowledged = false;
+    const pending = Promise.all([record(), record({ ...receipt, usageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }), record()])
+      .then(value => { acknowledged = true; return value; });
+    await ready;
+    expect(acknowledged).toBe(false);
+    let duplicateAck = false;
+    const duplicate = record().then(value => { duplicateAck = true; return value; });
+    await Promise.resolve();
+    expect(duplicateAck).toBe(false);
+    let lateEntered!: () => void;
+    let lateRelease!: () => void;
+    const lateReady = new Promise<void>(resolve => { lateEntered = resolve; });
+    const lateHold = new Promise<void>(resolve => { lateRelease = resolve; });
+    rename.mockImplementationOnce(async (...args) => { lateEntered(); await lateHold; return realRename(...args); });
+    let lateAck = false;
+    const late = record({ ...receipt, usageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' }).then(value => { lateAck = true; return value; });
+    release();
+    expect(await duplicate).toBe(false);
+    expect(await pending).toEqual([true, true, false]);
+    await lateReady;
+    expect(lateAck).toBe(false); // The first serialized image did not contain this receipt.
+    lateRelease();
+    expect(await late).toBe(true);
+    expect(rename).toHaveBeenCalledTimes(2);
+    expect(await record()).toBe(false);
+    expect(rename).toHaveBeenCalledTimes(2);
+    const restarted = createProviderShareUsageStore(file, { now: () => now });
+    expect(await restarted.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId, receipt)).toBe(false);
+    expect(rename).toHaveBeenCalledTimes(2);
+    rename.mockRejectedValueOnce(new Error('disk denied'));
+    const next = { ...receipt, usageId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' };
+    await expect(record(next)).rejects.toThrow('disk denied');
+    expect(await record(next)).toBe(false);
+    expect(rename).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).rows[0].inputTokens).toBe(28);
+  });
+
   it('accepts historical direct receipts after restart or route switch, but only from their assigned executor', async () => {
     const file = path.join(dir, 'usage.json');
     let now = new Date(2026, 9, 27, 12).getTime();

@@ -117,7 +117,9 @@ export function providerAccounts<T extends { id: string }>(
   accounts: readonly T[],
   providerId: string = kind,
 ): T[] {
-  return accounts.filter((account) => accountProviderId(kind, account.id) === providerId);
+  file.invalidateIfChanged();
+  const placements = file.read().accounts;
+  return accounts.filter((account) => (placements[keyOf(kind, account.id)] ?? kind) === providerId);
 }
 
 /** The accounts that share a provider with `accountId` (itself included). */
@@ -126,7 +128,10 @@ export function accountSiblings<T extends { id: string }>(
   accounts: readonly T[],
   accountId: string,
 ): T[] {
-  return providerAccounts(kind, accounts, accountProviderId(kind, accountId));
+  file.invalidateIfChanged();
+  const placements = file.read().accounts;
+  const providerId = placements[keyOf(kind, accountId)] ?? kind;
+  return accounts.filter((account) => (placements[keyOf(kind, account.id)] ?? kind) === providerId);
 }
 
 /**

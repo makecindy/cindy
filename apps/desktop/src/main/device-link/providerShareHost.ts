@@ -599,7 +599,24 @@ export type ProviderShareGuestDenial =
 
 type GuestAccessCheck = { access: ProviderShareGuestAccess } | { denied: ProviderShareGuestDenial };
 
+// A poll phase is synchronous: no permission result survives its next await.
+let guestAccessSnapshot: Map<string, GuestAccessCheck> | undefined;
+export function withProviderShareGuestAccessSnapshot<T>(read: () => T): T {
+  const previous = guestAccessSnapshot;
+  guestAccessSnapshot = new Map();
+  try { return read(); }
+  finally { guestAccessSnapshot = previous; }
+}
+
 function checkGuestAccess(controller: string): GuestAccessCheck {
+  const cached = guestAccessSnapshot?.get(controller);
+  if (cached) return cached;
+  const result = readGuestAccess(controller);
+  guestAccessSnapshot?.set(controller, result);
+  return result;
+}
+
+function readGuestAccess(controller: string): GuestAccessCheck {
   const rt = runtime;
   if (!rt || rt.stopped || runtime !== rt) return { denied: 'host-not-running' };
   if (!current(rt)) return { denied: 'host-scope-stale' };

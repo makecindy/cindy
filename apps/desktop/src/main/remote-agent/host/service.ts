@@ -32,7 +32,7 @@ import {
 } from '../../device-link/broadcast-tap.js';
 import { setRemoteAgentHandler } from '../../device-link/dispatch.desktop.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
-import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, providerShareGuestDenial, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
+import { withProviderShareGuestAccessSnapshot, getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, providerShareGuestDenial, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { admitAgentNetProviderStandby, applyProviderShareDelegation, beginAgentNetStandbyTurn, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, releaseUnusedAgentNetStandby, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
 import { agentNetSharingRoute } from '../../device-link/agentNetSharing.js';
 import { isTemporaryProviderMetadataFailure } from '../../device-link/providerMetadataContinuity.js';
@@ -1050,6 +1050,7 @@ export function installRemoteAgentHost(options: {
     ownerModelAllowed: (hostSessionId, providerId, kind, model) => hasHostedSessionModelAccess(hostSessionId)
       && hostedProviderOffersModel(hostSessionId, providerId, kind, model),
     isControllerAuthorized,
+    withPollAuthorizationSnapshot: withProviderShareGuestAccessSnapshot,
     controllerTrust: (controller) => (isProviderSharePeer(controller) ? 'guest' : 'owner'),
     providerAccess: {
       models: async (kind, providerId, controller, sessionId) => {

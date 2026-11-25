@@ -361,6 +361,9 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
   // Missing data on/before this local date can affect a rolling snapshot until it ages out.
   let incompleteThroughDay: string | null = null;
   let writing: Promise<void> = Promise.resolve();
+  // Only IDs included in a successful atomic replacement can bypass the ACK barrier.
+  let durableUsageIds = new Map<string, number>();
+  let receiptWrite: Promise<void> | null = null;
 
   const keyOf = (row: Pick<ProviderShareUsageRow, 'day' | 'shareId' | 'memberId' | 'kind' | 'providerId' | 'model'>) =>
     JSON.stringify([row.day, row.shareId, row.memberId, row.kind, row.providerId, row.model]);
@@ -469,6 +472,7 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
     }
     for (const [key, target] of loadedTargets) directCleanupTargets.set(key, target);
     for (const [key, location] of loadedLocations) directTaskLocations.set(key, location);
+    durableUsageIds = new Map([...loadedUsageIds].map(([id, entry]) => [id, entry[1]]));
     rows = loadedRows;
     // Explicit emptiness prevents a cleared location from being remigrated.
     if (migrateLocations) scheduleFlush();
@@ -501,6 +505,7 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
       ? new Map(directReceiptRoutes).set(directReceiptRouteKey(commit.route), commit.route) : directReceiptRoutes;
     const taskLocations = commit?.location
       ? new Map(directTaskLocations).set(directTaskLocationKey(commit.location), commit.location) : directTaskLocations;
+    const writtenUsageIds = new Map(recentUsageIds);
     const body = JSON.stringify({ version: FILE_VERSION, rows: [...map.values()], recentUsageIds: [...recentUsageIds],
       directReceiptRoutes: [...receiptRoutes.values()], directCleanupTargets: [...directCleanupTargets.values()],
       standbyTotals: [...standbyTotals.values()], directTaskLocations: [...taskLocations.values()], memberGenerations: [...memberGenerations.values()],
@@ -510,6 +515,7 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
     try {
       await fsp.writeFile(tmp, body, { encoding: 'utf8', mode: 0o600 });
       await fsp.rename(tmp, filePath);
+      durableUsageIds = writtenUsageIds;
       cleanupPersistenceFailed = false;
     } finally {
       await fsp.rm(tmp, { force: true }).catch(() => undefined);
@@ -531,14 +537,23 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
       clearTimeout(timer);
       timer = null;
     }
-    const pending = writing.then(() => writeNow());
-    writing = pending.catch(() => undefined);
-    await pending;
+    // Coalesce only callers before serialization starts. Later changes require a new image.
+    if (!receiptWrite) {
+      const pending = writing.then(() => {
+        if (receiptWrite === pending) receiptWrite = null;
+        return writeNow();
+      });
+      receiptWrite = pending;
+      writing = pending.catch(() => undefined);
+    }
+    await receiptWrite;
   }
 
   /** Include mutation AND rollback in the write queue, so another write cannot
    * persist a failed commit's tentative route/location before rollback runs. */
   function serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
+    // A transactional mutation is a boundary: never join a receipt image across it.
+    receiptWrite = null;
     const pending = writing.then(operation);
     writing = pending.then(() => undefined, () => undefined);
     return pending;
@@ -847,6 +862,10 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
     async recordDirectReceipt(ownerScope: string, ownerDeviceId: string, executorDeviceId: string,
       receipt: ProviderShareDirectReceipt): Promise<boolean> {
       load();
+      // Durable replays need no new mutation or write. Other receipts must not mutate usage
+      // while a transaction can still roll its rows back. Callers on one tail resume together.
+      if (!recentUsageIds.has(receipt.usageId)
+        || durableUsageIds.get(receipt.usageId) !== recentUsageIds.get(receipt.usageId)) await writing;
       const route = [...directReceiptRoutes.values()].find((saved) => saved.ownerScope === ownerScope
         && saved.ownerDeviceId === ownerDeviceId && saved.executorDeviceId === executorDeviceId
         && saved.shareId === receipt.shareId && saved.memberId === receipt.memberId
@@ -865,7 +884,7 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
         kind: route.agentKind, providerId: route.providerId, memberKey: route.memberKey,
         samples: receipt.samples,
       });
-      await persistNow();
+      if (durableUsageIds.get(receipt.usageId) !== recentUsageIds.get(receipt.usageId)) await persistNow();
       return recorded;
     },
     /** Cumulative cloud counters and their watermarks commit in the same ledger image. */
