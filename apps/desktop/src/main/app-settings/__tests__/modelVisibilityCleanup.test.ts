@@ -85,6 +85,37 @@ describe('model visibility override cleanup', () => {
     expect(manageAppPreferences).not.toHaveBeenCalled();
   });
 
+  it('refuses an orphan key a media entry spells through its own source agent', async () => {
+    configureModelSettingsActions({
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      list: async () => ({ providers: [{ id: 'custom:xai', agents: ['pi'], models: { pi: [] },
+        imageModels: [{ id: 'foo', name: 'Foo Image', defaultEnabled: true, sourceAgent: 'pi' }] }],
+        modelVisibilityOverrides: { 'pi:custom:xai:foo': false } }),
+    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
+
+    // (pi, custom, xai:foo) spells the media route's key but the selector switch never owns it.
+    await expect(manageAppModels({ operation: 'set',
+      target: { providerId: 'custom', agent: 'pi', modelId: 'xai:foo' },
+      change: { setting: 'visible', value: null } }, async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
+    expect(manageAppPreferences).not.toHaveBeenCalled();
+  });
+
+  it('still clears an orphan key no media entry spells', async () => {
+    configureModelSettingsActions({
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      list: async () => ({ providers: [{ id: 'custom:xai', agents: ['pi'], models: { pi: [] },
+        imageModels: [{ id: 'bar', name: 'Bar Image', defaultEnabled: true, sourceAgent: 'pi' }] }],
+        modelVisibilityOverrides: { 'pi:custom:xai:foo': false } }),
+    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
+    manageAppPreferences.mockResolvedValue({ modelVisibility: { visible: true, customized: false } });
+
+    const target = { providerId: 'custom', agent: 'pi' as const, modelId: 'xai:foo' };
+    await expect(manageAppModels({ operation: 'set', target,
+      change: { setting: 'visible', value: null } }, async () => {})).resolves.toMatchObject({ setting: 'visible' });
+    expect(manageAppPreferences).toHaveBeenCalledWith('model-visibility', undefined,
+      { target, visible: null, defaultEnabled: undefined });
+  });
+
   it('reports failure when the override survives the reset', async () => {
     manageAppPreferences.mockResolvedValue({ modelVisibility: { visible: false, customized: true } });
 

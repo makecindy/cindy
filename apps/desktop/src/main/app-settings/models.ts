@@ -22,22 +22,40 @@ function visibilityKey(target: { agent: string; providerId: string; modelId: str
  * The flat key is ambiguous when an id contains `:`, so a typo could otherwise clear
  * another model's stored preference.
  */
+/**
+ * Agents whose visibility override a media entry reads. Mirrors
+ * `isCatalogMediaModelVisible` (cindy-brain/mediaDisplayVisibility.ts): an explicit source
+ * wins, then the provider's first agent. Media entries are not in the chat selector, but they
+ * read the same flat key, so they can spell a key another target appears to own.
+ */
+function mediaEntryAgents(
+  provider: CatalogProviders[number],
+  entry: { sourceAgent?: string; sourceAgents?: readonly string[] },
+): string[] {
+  if (entry.sourceAgents?.length) return [...entry.sourceAgents];
+  if (entry.sourceAgent) return [entry.sourceAgent];
+  return [provider.agents[0] ?? 'claude-code'];
+}
+
 function visibilityKeyIsUnambiguous(
   providers: CatalogProviders,
   target: { agent: string; providerId: string; modelId: string },
 ): boolean {
   const wanted = visibilityKey(target);
   for (const provider of providers) {
-    const lists: Array<[string, readonly { id: string }[]]> = [
-      ...Object.entries(provider.models).map(([agent, list]) => [agent, list ?? []] as [string, readonly { id: string }[]]),
-      ...(provider.imageModels ? [['', provider.imageModels] as [string, readonly { id: string }[]]] : []),
-      ...(provider.videoModels ? [['', provider.videoModels] as [string, readonly { id: string }[]]] : []),
-    ];
-    for (const [agent, list] of lists) {
-      for (const entry of list) {
-        if (agent === '') continue; // media overrides are refused above; not this switch's key
+    for (const [agent, list] of Object.entries(provider.models)) {
+      for (const entry of list ?? []) {
         if (`${agent}:${provider.id}:${entry.id}` !== wanted) continue;
         if (agent === target.agent && provider.id === target.providerId && entry.id === target.modelId) continue;
+        return false;
+      }
+    }
+    // A media entry that spells this key always owns it: this switch refuses media entries of
+    // the requested provider above, so the target can never be the entry being matched.
+    for (const list of [provider.imageModels, provider.videoModels, provider.audioModels,
+      provider.evaluationModels, provider.embeddingModels]) {
+      for (const entry of list ?? []) {
+        if (!mediaEntryAgents(provider, entry).some(agent => `${agent}:${provider.id}:${entry.id}` === wanted)) continue;
         return false;
       }
     }
