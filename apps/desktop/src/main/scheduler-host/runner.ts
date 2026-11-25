@@ -2093,7 +2093,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // preflight 与 setModel 都会动态解析目录身份；配置若在两者之间变化，最终
           // guard 必须 fail-closed，不能落回下面的旧模型 non-fatal 路径。
           throw new Error(
-            `schedule model switch requires rebuilding the session before dispatch (model "${model}")`,
+            `schedule model switch requires rebuilding the session before dispatch (model "${model}")` +
+            (!schedule.recurring ? '. The prompt was not sent. Use Run now to retry the automation.' : ''),
             { cause: err },
           );
         }
