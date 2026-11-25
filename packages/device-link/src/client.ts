@@ -93,6 +93,7 @@ import {
   TRANSPORT_DELAYED_ACK_MS,
   encodeReliableFrames,
   isTransportSkipPayload,
+  type ReliableTransportMeta,
   makeTransportAck,
   makeTransportSkipPayload,
   parseTransportAck,
@@ -945,7 +946,11 @@ interface ReceiveAssembly {
   dst?: string;
   total: number;
   totalBytes: number;
-  deadlineMs?: number;
+  /**
+   * Local monotonic deadline ceiling (`frameReceivedAt + meta.deadlineMs`) computed at the
+   * arrival instant of segment 0; never stored as a relative budget against `receivedAt`.
+   */
+  readyDeadlineAt?: number;
   chunks: Map<number, string>;
   bytes: number;
 }
@@ -4167,13 +4172,9 @@ export class DeviceLinkClient {
         return { handled: true };
       }
       const receivedAt = this.monotonicNow();
-      const readyDeadlineAt =
-        !isSkip
-        && peer.acceptsReadDeadline === true
-        && env.kind === 'invoke'
-        && meta.deadlineMs !== undefined
-          ? receivedAt + meta.deadlineMs
-          : undefined;
+      const readyDeadlineAt = isSkip
+        ? undefined
+        : this.resolveInboundInvokeDeadlineAt(peer, env, meta, receivedAt);
       stream.ready.set(meta.seq, {
         env,
         json: parsed.data,
@@ -4187,9 +4188,10 @@ export class DeviceLinkClient {
         this.log.warn(`dropping oversized reliable reassembly seq=${meta.seq}`);
         return { handled: true };
       }
+      const frameReceivedAt = this.monotonicNow();
       const current = stream.assemblies.get(meta.seq);
       const assembly: ReceiveAssembly = current ?? {
-        receivedAt: this.monotonicNow(),
+        receivedAt: frameReceivedAt,
         kind: env.kind,
         id: env.id,
         src: env.src,
@@ -4199,9 +4201,6 @@ export class DeviceLinkClient {
         chunks: new Map<number, string>(),
         bytes: 0,
       };
-      if (segment.index === 0 && meta.deadlineMs !== undefined) {
-        assembly.deadlineMs = meta.deadlineMs;
-      }
       if (
         assembly.kind !== env.kind ||
         assembly.id !== env.id ||
@@ -4215,6 +4214,15 @@ export class DeviceLinkClient {
         this.log.warn(`dropping reliable payload with changed segment metadata seq=${meta.seq}`);
         this.sendTransportAck(env.src, meta.streamId, stream.lastDeliveredSeq);
         return { handled: true };
+      }
+      if (segment.index === 0) {
+        const frameDeadlineAt = this.resolveInboundInvokeDeadlineAt(peer, env, meta, frameReceivedAt);
+        if (frameDeadlineAt !== undefined) {
+          assembly.readyDeadlineAt =
+            assembly.readyDeadlineAt === undefined
+              ? frameDeadlineAt
+              : Math.max(assembly.readyDeadlineAt, frameDeadlineAt);
+        }
       }
       if (!assembly.chunks.has(segment.index)) {
         const bytes = byteLength(parsed.data);
@@ -4244,24 +4252,45 @@ export class DeviceLinkClient {
           this.sendTransportAck(env.src, meta.streamId, stream.lastDeliveredSeq);
           return { handled: true };
         }
-        const readyDeadlineAt =
-          peer.acceptsReadDeadline === true
-          && env.kind === 'invoke'
-          && assembly.deadlineMs !== undefined
-            ? assembly.receivedAt + assembly.deadlineMs
-            : undefined;
         stream.ready.set(meta.seq, {
           env,
           json,
           receivedAt: assembly.receivedAt,
-          readyAt: this.monotonicNow(),
-          ...(readyDeadlineAt !== undefined ? { readyDeadlineAt } : {}),
+          readyAt: frameReceivedAt,
+          ...(assembly.readyDeadlineAt !== undefined ? { readyDeadlineAt: assembly.readyDeadlineAt } : {}),
         });
       }
     }
 
     const result = this.drainTransportStream(env.src, meta.streamId, stream);
     return { handled: true, result };
+  }
+
+  /**
+   * 入站协商只读期限不变量（唯一所有者）：
+   * - 仅当双方已协商 `read-deadline-v1`、同账号非 scoped 对端且为 `invoke` 时，将携带 `meta.deadlineMs`
+   *   的帧（单帧或分片第 0 片）按**该帧自身到达本机的单调时刻 `frameReceivedAt`** 立即换算为本机
+   *   绝对截止上界 `Math.max(1, frameReceivedAt + meta.deadlineMs)`；
+   * - 重传重复第 0 片或乱序重组（后片先到、第 0 片后到）统一写入 `assembly.readyDeadlineAt` 并取单调不减
+   *   上界，绝不把重传剩余预算叠加到更早分片的 `assembly.receivedAt` 上；
+   * - 旧端/超长预算省略 `deadlineMs`、以及写操作（由 `rememberInboundInvokeChannel` 白名单复核）永不生成过期时间。
+   */
+  private resolveInboundInvokeDeadlineAt(
+    peer: PeerTransportState,
+    env: Envelope,
+    meta: ReliableTransportMeta,
+    frameReceivedAt: number,
+  ): number | undefined {
+    if (
+      peer.acceptsReadDeadline !== true
+      || env.kind !== 'invoke'
+      || !env.src
+      || isScopedPeer(env.src)
+      || meta.deadlineMs === undefined
+    ) {
+      return undefined;
+    }
+    return Math.max(1, frameReceivedAt + meta.deadlineMs);
   }
 
   private drainTransportStream(
@@ -4412,7 +4441,12 @@ export class DeviceLinkClient {
     }
     this.inboundInvokeDeadlines.delete(key);
     const negotiatedExpiresAt = this.receivedReadExpiresAt.get(env);
-    if (negotiatedExpiresAt !== undefined && !isScopedPeer(env.src) && isPeerResetRetryableReadChannel(channel)) {
+    if (
+      negotiatedExpiresAt !== undefined
+      && !isScopedPeer(env.src)
+      && this.peerTransport.get(env.src)?.acceptsReadDeadline === true
+      && isPeerResetRetryableReadChannel(channel)
+    ) {
       this.inboundInvokeDeadlines.set(key, negotiatedExpiresAt);
     }
   }

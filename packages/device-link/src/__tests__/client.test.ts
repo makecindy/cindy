@@ -15303,4 +15303,205 @@ describe('listing read coalescing and stale read invoke-result retirement', () =
       vi.useRealTimers();
     }
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：DeviceLinkClient 分片请求重传/乱序重组期限生命周期（sendReliableFrames -> ingestTransportEnvelope -> retireExpiredInvokeResults）。
+  //   1) 30s 预算的分片只读 invoke 首轮第 0 片在 t=0 到达、第 1 片丢失，20s 后重传 `[第 0 片(deadlineMs≈10s), 第 1 片]` 完成重组：
+  //      被控端排队回包的截止上界必须对齐到 ~t+30s（而非把 10s 叠加到 t=0 首片接收时间误算成 t+10s），在第 26s（调用方仍在等待）绝不提前退役，窗口释放后正常送达；
+  //   2) 乱序收片（首轮第 0 片丢失、第 1 片在 t=0 先建 ReceiveAssembly，第 20s 重传第 0 片到达）同样按第 0 片实际到达时刻换算截止上界，第 26s 不提前退役并正常送达；
+  //   3) 真正超过 30s 协商期限的分片只读回包在 t>31s 时按期原位退役为 transport-skip，而同批 20s 重传的分片写操作（maker:send）永不生成 expiresAt、绝不退役并完整送达。
+  // - Bug／规则依据：PR #12658 第 6 轮 P2（PRRT_kwDOTgdRUs67wnaJ：分片重传更新剩余预算却沿用首片 receivedAt 导致只读回包提前退役）与分片期限状态矩阵。
+  // - 现有覆盖缺口：既有测试覆盖单帧 deadlineMs 退役与 >1h 省略元数据，未覆盖分片请求发生第 0 片重传或乱序到达时的截止时间换算。
+  // - 最小失败输入：>128 KiB 的 2 分片只读 invoke（30s 超时）丢片并在 20s 后重传，被控端发送窗口暂满时推进到 26s 观察回包是否被误换成 skip。
+  // - tier：unit（MemoryRelay + fake timers，<40ms）。
+  it('anchors fragmented invoke read deadlines to the segment-0 arrival instant across retransmissions, out-of-order chunks, and write calls', async () => {
+    vi.useFakeTimers();
+    let nowMs = 1_000;
+    const advance = async (ms: number) => {
+      const target = nowMs + ms;
+      while (nowMs < target) {
+        const step = Math.min(500, target - nowMs);
+        nowMs += step;
+        await vi.advanceTimersByTimeAsync(step);
+      }
+    };
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 2_000,
+      transportMaxRetryAttempts: 10,
+    });
+    const controller = makeRelayClient(relay, 'mac-ctrl', {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 2_000,
+      transportMaxRetryAttempts: 10,
+    });
+    vi.spyOn(host as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => nowMs);
+    vi.spyOn(controller as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => nowMs);
+    const pump = () => relay.settle(async () => { nowMs += 1; await vi.advanceTimersByTimeAsync(1); });
+
+    const replyBlob = 'r'.repeat(180_000);
+    host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+      if (env.kind === 'invoke' && env.src && env.id) {
+        const p = env.payload as InvokePayload;
+        if (p.channel === 'maker:send') {
+          const tag = (p.args?.[0] as string) ?? 'ok';
+          host.sendInvokeResult(env.src, env.id, { ok: true, result: { sent: tag } });
+        } else if (p.channel === 'local-db:sessions:list') {
+          const tag = ((p.args?.[2] as { tag?: string } | undefined)?.tag) ?? 'list';
+          host.sendInvokeResult(env.src, env.id, { ok: true, result: [{ id: tag, blob: replyBlob }] });
+        }
+      }
+    });
+
+    try {
+      host.start();
+      controller.start();
+      await pump();
+      const opening = controller.openLink('desktop', { controllerName: 'Mac', protocolVersion: 1, appVersion: '1' }, 1_000);
+      await pump();
+      await opening;
+
+      // Hold cumulative ACKs from mac-ctrl -> desktop so host's 16-slot window buffers replies in peer.pending.
+      let holdReplyAcks = true;
+      const heldReplyAcks: Array<() => void> = [];
+      const origRoute = relay.route.bind(relay);
+      let dropDupSeg1Once = true;
+      let dropOooSeg0Once = true;
+      let dropExpiringSeg1Once = true;
+      let dropWriteSeg1Once = true;
+      vi.spyOn(relay, 'route').mockImplementation((senderId, ws, env) => {
+        if (holdReplyAcks && senderId === 'mac-ctrl' && parseTransportAck(env) !== null) {
+          heldReplyAcks.push(() => origRoute(senderId, ws, env));
+          return;
+        }
+        if (senderId === 'mac-ctrl' && env.kind === 'invoke') {
+          const parsed = parseTransportPayload(env.payload);
+          const seg = parsed?.meta.segment;
+          if (seg) {
+            if (parsed.meta.seq === 17 && seg.index === 1 && dropDupSeg1Once) {
+              dropDupSeg1Once = false;
+              return;
+            }
+            if (parsed.meta.seq === 18 && seg.index === 0 && dropOooSeg0Once) {
+              dropOooSeg0Once = false;
+              return;
+            }
+            if (parsed.meta.seq === 19 && seg.index === 1 && dropExpiringSeg1Once) {
+              dropExpiringSeg1Once = false;
+              return;
+            }
+            if (parsed.meta.seq === 20 && seg.index === 1 && dropWriteSeg1Once) {
+              dropWriteSeg1Once = false;
+              return;
+            }
+          }
+        }
+        origRoute(senderId, ws, env);
+      });
+
+      // Fill the 16-slot window on host (seqs 1..16 on controller -> desktop and desktop -> controller).
+      const warmups = Array.from({ length: 16 }, (_, idx) =>
+        controller.invoke('desktop', { channel: 'maker:send', args: [`warm-${idx}`, 'x'] }, 120_000),
+      );
+      await pump();
+      await Promise.all(warmups);
+
+      const largeFilterPad = 'f'.repeat(150_000);
+      const startAt = nowMs;
+
+      // seq=17: fragmented read (30s timeout) -> seg 0 arrives at t=0, seg 1 dropped -> retransmitted at t=20s with remaining ~10s!
+      const dupSeg0Read = controller.invoke(
+        'desktop',
+        { channel: 'local-db:sessions:list', args: [20, 'active', { tag: 'dup-seg0', pad: largeFilterPad }] },
+        30_000,
+      );
+      // seq=18: fragmented read (30s timeout) -> seg 0 dropped, seg 1 arrives at t=0 (out-of-order!) -> seg 0 arrives at t=20s with ~10s!
+      const outOfOrderRead = controller.invoke(
+        'desktop',
+        { channel: 'local-db:sessions:list', args: [30, 'active', { tag: 'ooo-seg0', pad: largeFilterPad }] },
+        30_000,
+      );
+      // seq=19: shorter fragmented read (23s timeout) -> seg 0 arrives at t=0, seg 1 dropped -> retransmitted at t=20s with ~3s remaining!
+      const expiringFragRead = controller
+        .invoke('desktop', { channel: 'local-db:sessions:list', args: [40, 'active', { tag: 'expire-frag', pad: largeFilterPad }] }, 23_000)
+        .catch((e: unknown) => e);
+      // seq=20: fragmented write (maker:send > 128 KiB, 22s timeout? No, 60s timeout) -> seg 1 dropped, retransmitted at t=20s -> NEVER gets expiresAt!
+      const fragmentedWrite = controller.invoke(
+        'desktop',
+        { channel: 'maker:send', args: ['frag-write', largeFilterPad] },
+        60_000,
+      );
+      await pump();
+
+      // At t=0: all four fragmented invokes are in ReceiveAssembly on host waiting for their missing chunk.
+      const ctrlOnHost = host['peerTransport'].get('mac-ctrl')!;
+      const hostRecvStream = [...ctrlOnHost.receive.values()][0]!;
+      expect(hostRecvStream.assemblies.size).toBe(4);
+
+      // Advance ~20.5s so controller's retryTimer retransmits seq 17..20 (4 * 2 = 8 frames = exact pass budget)!
+      await advance(20_500);
+      await relay.settle(async () => {});
+      expect(hostRecvStream.assemblies.size).toBe(0);
+
+      const findReplyById = (tag: string) =>
+        [...ctrlOnHost.pending.values()].find((p) => {
+          const res = (p.envelope.payload as { result?: unknown } | undefined)?.result;
+          if (Array.isArray(res)) return (res[0] as { id?: string } | undefined)?.id === tag;
+          return (res as { sent?: string } | undefined)?.sent === tag;
+        });
+
+      const dupReply = findReplyById('dup-seg0')!;
+      const oooReply = findReplyById('ooo-seg0')!;
+      const expiringPending = findReplyById('expire-frag')!;
+      const writeReply = findReplyById('frag-write')!;
+      expect(dupReply).toBeDefined();
+      expect(oooReply).toBeDefined();
+      expect(expiringPending).toBeDefined();
+      expect(writeReply).toBeDefined();
+      expect(dupReply.expiresAt).toBeGreaterThanOrEqual(startAt + 30_000);
+      expect(oooReply.expiresAt).toBeGreaterThanOrEqual(startAt + 30_000);
+      expect(expiringPending.expiresAt).toBeGreaterThanOrEqual(startAt + 23_000);
+      expect(expiringPending.expiresAt).toBeLessThan(startAt + 24_500);
+      expect(writeReply.expiresAt).toBeUndefined();
+
+      // At t=21.5s (< 23s and < 30s): NONE of the four queued replies is retired!
+      await advance(1_000);
+      host.sendPush('mac-ctrl', 'maker:event', { ping: 1 });
+      await relay.settle(async () => {});
+      expect(isTransportSkipPayload(expiringPending.envelope.payload)).toBe(false);
+      expect(isTransportSkipPayload(dupReply.envelope.payload)).toBe(false);
+      expect(isTransportSkipPayload(oooReply.envelope.payload)).toBe(false);
+      expect(isTransportSkipPayload(writeReply.envelope.payload)).toBe(false);
+
+      // Advance to t=26s (> 23s expiringFragRead budget, < 30s dupSeg0Read & outOfOrderRead budgets):
+      // - expiringFragRead genuinely timed out and retires to transport-skip;
+      // - Old buggy code computed startAt + 10_000 and falsely retired dupReply & oooReply too; fixed code keeps both intact!
+      await advance(4_500);
+      expect(await expiringFragRead).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      host.sendPush('mac-ctrl', 'maker:event', { ping: 2 });
+      await relay.settle(async () => {});
+      expect(isTransportSkipPayload(expiringPending.envelope.payload)).toBe(true);
+      expect(isTransportSkipPayload(dupReply.envelope.payload)).toBe(false);
+      expect(isTransportSkipPayload(oooReply.envelope.payload)).toBe(false);
+      expect(isTransportSkipPayload(writeReply.envelope.payload)).toBe(false);
+
+      // Release ACKs at t=26s -> the two 30s reads and the fragmented write resolve cleanly with their full payloads!
+      holdReplyAcks = false;
+      for (const release of heldReplyAcks.splice(0)) release();
+      await pump();
+      await advance(2_500);
+      await pump();
+      await expect(dupSeg0Read).resolves.toEqual({ ok: true, result: [{ id: 'dup-seg0', blob: replyBlob }] });
+      await expect(outOfOrderRead).resolves.toEqual({ ok: true, result: [{ id: 'ooo-seg0', blob: replyBlob }] });
+      await expect(fragmentedWrite).resolves.toEqual({ ok: true, result: { sent: 'frag-write' } });
+    } finally {
+      controller.stop();
+      host.stop();
+      vi.useRealTimers();
+    }
+  });
 });

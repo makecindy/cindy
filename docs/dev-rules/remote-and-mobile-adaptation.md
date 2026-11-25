@@ -26,9 +26,11 @@
   200+ KiB 全量快照。
 - **已放弃或协商到期只读大回包原位退役**：控制端因超时或 `PEER_RESET` 放弃幂等只读请求后，随下一笔同对端请求捎带
   `transfer.retired`（最多 8 个请求 ID）；双方均声明 `read-deadline-v1` 且本次调用超时预算在 wire 可表示范围内
-  （`1..3_600_000ms`）时，控制端在可靠请求帧元数据上附带真实等待期限（`ReliableTransportMeta.deadlineMs`；超出 wire
-  上限的超长自定义调用自动省略 `deadlineMs`，仅凭明确 `transfer.retired` 退役）。被控端**仅**在请求被 `transfer.retired`
-  明确放弃或超过可信协商 `deadlineMs` 时退役只读回包——旧控制端或未携带 `deadlineMs` 的请求永不按默认猜测上限提前退役。
+  （`1..3_600_000ms`）时，控制端在可靠请求帧元数据上附带真实剩余等待期限（`ReliableTransportMeta.deadlineMs`；超出 wire
+  上限的超长自定义调用自动省略 `deadlineMs`，仅凭明确 `transfer.retired` 退役）。被控端在收到携带 `meta.deadlineMs`
+  的帧（单帧或分片第 0 片）时按**该帧自身到达本机的单调时刻**立即折算为单调不减的绝对截止上界（重复重传第 0 片或后片先到、
+  第 0 片后到的乱序重组绝不叠加到更早分片的接收时刻），且**仅**在请求被 `transfer.retired` 明确放弃或超过该可信协商上界时
+  退役只读回包——旧控制端、未携带 `deadlineMs` 的请求与一切写操作永不按默认猜测上限提前退役。
   明确 `transfer.retired` 的请求在入队前直接跳过编码并清理同对端 `remoteInvokeResultOutbox` 中的对应只读条目；已在可靠队列
   `peer.pending` 中积压的只读大回包在命中 `transfer.retired` 或超过协商 `deadlineMs` 时原位替换为同 `seq` 的 `transport-skip`
   占位，释放数百 KiB 缓冲而不制造可靠序号空洞；写操作与其它对端条目永不退役。
