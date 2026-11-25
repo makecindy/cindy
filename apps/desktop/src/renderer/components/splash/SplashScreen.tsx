@@ -614,7 +614,7 @@ export function SplashScreen() {
                 >
                   <div
                     data-testid="workspace-migration-progress-fill"
-                    className="h-full transition-[width] duration-300 motion-reduce:transition-none"
+                    className="h-full transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-out)] motion-reduce:transition-none"
                     style={{
                       width: `${workspaceMigrationPercent}%`,
                       borderRadius: SPLASH_PANEL.progress.radius,
@@ -647,7 +647,7 @@ export function SplashScreen() {
                     top: SPLASH_PANEL.databaseCleanup.actionY + 8,
                     width: SPLASH_PANEL.databaseCleanup.hint.width,
                     height: 36,
-                    fontSize: 15,
+                    fontSize: SPLASH_PANEL.databaseCleanup.hint.fontSize,
                   }}
                 >
                   {(

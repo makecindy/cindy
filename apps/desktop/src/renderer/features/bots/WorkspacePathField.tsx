@@ -112,7 +112,7 @@ export function WorkspacePathField({
             aria-label={fullPathLabel}
             title={path}
             className={cn(
-              'flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-1 text-left transition-colors',
+              'flex h-7 min-w-0 flex-1 items-center gap-2 rounded-lg px-1 text-left transition-colors',
               'hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
             )}
           >
@@ -139,7 +139,7 @@ export function WorkspacePathField({
         <PopoverContent
           align="start"
           sideOffset={6}
-          className="w-[380px] max-w-[calc(100vw-32px)] rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-[var(--text-primary)] shadow-none"
+          className="w-[380px] max-w-[calc(100vw-32px)] rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-[var(--text-primary)]"
         >
           <div className="flex flex-col gap-3">
             <div>
@@ -202,7 +202,7 @@ export function WorkspacePathField({
             aria-label={copyLabel}
             onClick={() => void handleCopy()}
             className={cn(
-              'flex size-7 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors',
+              'flex size-7 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors',
               'enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-[var(--text-primary)]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
               'disabled:cursor-not-allowed disabled:opacity-50',
@@ -225,7 +225,7 @@ export function WorkspacePathField({
               aria-label={openLabel}
               onClick={() => void onOpen()}
               className={cn(
-                'flex size-7 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors',
+                'flex size-7 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors',
                 'enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-[var(--text-primary)]',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                 'disabled:cursor-not-allowed disabled:opacity-50',
