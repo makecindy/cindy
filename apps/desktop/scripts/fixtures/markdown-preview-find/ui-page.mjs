@@ -41,7 +41,7 @@ export default {
     'loading-editor': { about: 'The foreground document owns find and Escape before its file read completes' },
     'focus-restore': { about: 'Closing find restores the document toolbar opener for keyboard navigation' },
     'ime-escape': { about: 'An IME-cancelling Escape and its repeats keep search open until a new press' },
-    'outside-focus': { about: 'Focus stays in the preview; Escape closes find first from the document body' },
+    'outside-focus': { about: 'Focus can leave the non-modal preview and return; Escape still closes find first from the document body' },
     'background-project-search': { about: 'The covered project-search sidebar retains its mode and query until the document closes' },
     'background-ask-voice': { about: 'Preview Escape preserves question-card dictation and its answer draft' },
     'background-voice': { about: 'Preview Escape leaves the real composer voice-cancel handler untouched until the document closes' },
@@ -361,16 +361,33 @@ export default {
     await page.keyboard.press('Shift+Enter');
     await card.getByText('1/2', { exact: true }).waitFor();
     if (ui.case === 'outside-focus') {
-      // Preview FocusScope now traps keyboard focus. Exercise both tab directions
-      // and an external focus attempt without expecting the removed tab escape.
+      // The shared PreviewWindow is non-modal: Tab can leave the preview and
+      // come back, and focusing a control in the conversation stays there.
+      // Keep the "close find first, then close document" Escape order below.
+      const backgroundTrigger = page.getByTestId('open-preview');
       for (const key of ['Tab', 'Shift+Tab']) {
         await input.focus();
+        let left = false;
         for (let tab = 0; tab < 20; tab += 1) {
           await page.keyboard.press(key);
-          assert.equal(await card.evaluate(el => el.contains(document.activeElement)), true);
+          if (!await card.evaluate(el => el.contains(document.activeElement))) {
+            left = true;
+            break;
+          }
         }
-        await page.getByTestId('open-preview').focus();
-        assert.equal(await card.evaluate(el => el.contains(document.activeElement)), true);
+        assert.equal(left, true, `${key} can leave the preview instead of looping inside it`);
+        await backgroundTrigger.focus();
+        assert.equal(await backgroundTrigger.evaluate(el => document.activeElement === el), true);
+        assert.equal(await card.count(), 1); // the preview stays open
+        let returned = false;
+        for (let tab = 0; tab < 20; tab += 1) {
+          await page.keyboard.press('Tab');
+          if (await card.evaluate(el => el.contains(document.activeElement))) {
+            returned = true;
+            break;
+          }
+        }
+        assert.equal(returned, true, 'Tab can return from the conversation');
         await input.focus();
         // The backdrop is intentionally aria-hidden and not focusable. Move into
         // the readable document instead of requiring an inaccessible Tab stop.
