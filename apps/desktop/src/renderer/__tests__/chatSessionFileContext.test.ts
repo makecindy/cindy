@@ -66,6 +66,7 @@ import {
 import {
   collectSessionImageSrcs,
   collectTaskImageGallery,
+  ToolMediaList,
   type RenderItem,
 } from '../components/chat/MessageStream';
 import { ImageGalleryContext, ImageGalleryScopeContext } from '../components/chat/ImageGalleryContext';
@@ -583,6 +584,57 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
     );
     fireEvent.click(screen.getByAltText('again.png'));
     expect(screen.getByText('2 / 2')).toBeTruthy();
+  });
+
+  // PR #12724 review：3D 模型预览图不进任务画廊，渲染端给同一行重复图编号时也必须跳过它，
+  // 否则编号与画廊错位。最小失败输入：同址的 GLB 预览图后跟两张普通图，点第一张显示 2 / 2。
+  it('工具产出里重复的图跳过 3D 模型预览图编号，从点开的那一张开始', () => {
+    const shared = `cindy-media://blobs/${'s'.repeat(64)}.png`;
+    const item: RenderItem = {
+      type: 'tool_media',
+      key: 'm1',
+      items: [
+        {
+          kind: 'image',
+          url: shared,
+          modelFile: { provider: 'cindy', url: `cindy-media://blobs/${'9'.repeat(64)}.glb`, format: 'GLB' },
+        },
+        { kind: 'image', url: shared },
+        { kind: 'image', url: shared },
+      ],
+    };
+    const gallery = collectTaskImageGallery(
+      [item],
+      (node) => collectSessionImageSrcs([node as RenderItem]),
+      {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: false,
+      },
+    );
+    expect(gallery).toHaveLength(2);
+    const openAt = (alt: string) => {
+      const view = render(
+        React.createElement(
+          ImageGalleryContext.Provider,
+          { value: gallery },
+          React.createElement(
+            ImageGalleryScopeContext.Provider,
+            { value: 'm1' },
+            React.createElement(ToolMediaList, { items: item.items }),
+          ),
+        ),
+      );
+      fireEvent.click(screen.getByAltText(alt));
+      const counter = screen.getByText(/^\d+ \/ \d+$/).textContent;
+      view.unmount();
+      return counter;
+    };
+    expect(openAt('tool-image-2')).toBe('1 / 2');
+    expect(openAt('tool-image-3')).toBe('2 / 2');
   });
 
   // PR #12724 review：收进已完成工作时间线的回复被插件卡片替换后，卡片仍在时间线里显示，

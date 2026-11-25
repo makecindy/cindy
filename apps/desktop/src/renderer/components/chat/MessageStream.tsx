@@ -2948,8 +2948,14 @@ function renderItemKeyForClientId(items: readonly RenderItem[], clientId: string
  * 'tool_media' item(工具段外的产物流)与 'ghost_card' item 的回锚媒体
  * (卡正下方)。加新 kind 只需改 extractToolResultMedia + 这里加分支。
  */
-function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId?: string }) {
+export function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId?: string }) {
   const mediaKeyCounts = new Map<string, number>();
+  // Repeats are counted over the images that enter the task gallery only (as
+  // collectSessionImageSrcs lists them), so 3D model posters don't shift the count.
+  const galleryItems = items.filter(
+    (m) => m.kind === 'image' && m.url && !opensModelViewer(m.modelFile),
+  );
+  const galleryRepeats = repeatIndexes(galleryItems.map((m) => m.url));
   return (
     <>
       {items.map((m, i) => {
@@ -2959,6 +2965,7 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
         const mediaKey =
           mediaKeyOccurrence === 0 ? mediaKeyBase : `${mediaKeyBase}-${mediaKeyOccurrence}`;
         if (m.kind === 'image') {
+          const galleryAt = galleryItems.indexOf(m);
           return (
             <div key={mediaKey} className="flex flex-col gap-1.5">
               <ChatImageView
@@ -2968,7 +2975,9 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
                 modelFile={m.modelFile}
                 sessionId={sessionId}
                 // Same count the task gallery uses for this row's media (repeatIndexes).
-                galleryOccurrence={structuredImageOccurrence(mediaKeyOccurrence)}
+                galleryOccurrence={
+                  galleryAt >= 0 ? structuredImageOccurrence(galleryRepeats[galleryAt]!) : undefined
+                }
               />
             </div>
           );
