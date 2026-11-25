@@ -363,6 +363,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
     "oauth": {                                      // source:"oauth" 时必填(其它来源禁写):主机托管 OAuth 授权详单(见 §4.7)
       "authorizeUrl": "https://accounts.example.com/authorize",  // 授权页(https;域名必须命中 hosts 白名单)
       "tokenUrl": "https://accounts.example.com/token",          // code/refresh 交换端点(https;域名必须命中 hosts)。注:个别服务商(如 xAI)的新版 consent 页不再 302 回 loopback,而是页面 JS 跨源投递授权 code——主机允许的投递来源 = authorizeUrl/tokenUrl 的 origin + hosts 白名单命中的 https 域;consent 页与授权端点不同域时,把 consent 域(如 accounts.x.ai)也声明进 hosts 即可
+      "deviceAuthorizationUrl": "https://accounts.example.com/device",  // 可选:设备码登录端点(RFC 8628;https,域名须命中 hosts)。声明后主机改走「申请验证码 → 用户在确认页确认 → 轮询 tokenUrl」,不起 loopback、服务商后台不用登记重定向 URL;与 tokenBroker / brokerBounce 互斥。authorizeUrl 仍必填(旧版 Cindy 忽略本字段、退回授权码流程),详见 §4.7.3
       "clientId": "xxx.apps.example.com",           // 可选:内置 OAuth 客户端 ID(用户零配置开箱即用;用户在设置页自填的覆盖内置,清除自填即回落)
       "clientIdAlternatives": ["xxx-global.apps.example.com"],  // 可选 ≤8 条:仅 tokenBroker 模式;插件按 app-context 选 App 时,connect 只接受默认值或这里声明的公开 ID
       "clientSecret": "xxx",                        // 可选(须与 clientId 成对):内置 client 的 secret;桌面应用的 client 凭证本非机密,纯 PKCE 服务商可省略
