@@ -6,6 +6,7 @@ import { getLiveErrorMessageClientId, type ChatMessage } from '@/lib/makerChatSt
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
 import { findErrorTailMessage } from '@/lib/errorTailMessage';
 import { PendingQueueBubble } from '@/components/chat/PendingQueueBubble';
+import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
 import { McpSetupPrompt, useMcpSetupRequest } from '@/components/new-chat/McpSetupPrompt';
@@ -1210,10 +1211,37 @@ function CCAgentSessionContent({
   const showCenteredControlledBanner = hasControlledBanner && !controlledBannerCollapsed;
   // assistant 气泡左侧的伙伴头像。节点在整场对话里是同一个,memo 住让 MessageItem
   // 的 memo 比较仍然成立(否则每帧新节点 = 全流重渲染)。
-  const botAssistantAvatar = useMemo(
-    () => (botChatIdentity ? <BotAvatar bot={botChatIdentity} size="sm" /> : null),
-    [botChatIdentity],
-  );
+  const [avatarPreview, setAvatarPreview] = useState<{
+    src: string;
+    sessionId: string | undefined;
+    trigger: HTMLButtonElement;
+  } | null>(null);
+  const activeAvatarPreview = viewVisible && !readOnly && botChatIdentity?.canonicalChat
+    && !botChatIdentity.deviceId && avatarPreview?.sessionId === sessionId
+    && avatarPreview?.src === botChatIdentity.avatar
+    ? avatarPreview
+    : null;
+  useEffect(() => {
+    if (avatarPreview && !activeAvatarPreview) setAvatarPreview(null);
+  }, [activeAvatarPreview, avatarPreview]);
+  const avatarPreviewLabel = t('ccAgent.workdirBrowse.imagePreview.viewLarge');
+  const botAssistantAvatar = useMemo(() => {
+    if (!botChatIdentity) return null;
+    if (readOnly || !botChatIdentity.canonicalChat || botChatIdentity.deviceId) {
+      return <BotAvatar bot={botChatIdentity} size="sm" />;
+    }
+    return (
+      <BotAvatar
+        key={botChatIdentity.avatar}
+        bot={botChatIdentity}
+        size="sm"
+        preview={{
+          label: avatarPreviewLabel,
+          open: (src, trigger) => setAvatarPreview({ src, sessionId, trigger }),
+        }}
+      />
+    );
+  }, [avatarPreviewLabel, botChatIdentity, readOnly, sessionId]);
 
   // worktree-parallel-sessions:订阅当前 session 的 worktree 创建态(creating/failed)。
   // 触发源:NewMakerDraftRoute 的 worktree 异步创建路径。
@@ -6532,6 +6560,16 @@ function CCAgentSessionContent({
     // in that case so the card catches scroll/click events without a wrapper
     // swap that would flash the layout.
     <>
+      {activeAvatarPreview && botChatIdentity && (
+        <ImageLightbox
+          src={activeAvatarPreview.src}
+          filename={botChatIdentity.name}
+          onClose={() => {
+            setAvatarPreview(null);
+            activeAvatarPreview.trigger.focus({ preventScroll: true });
+          }}
+        />
+      )}
       {/* ContentHeader 注入：仅 ownsRoute 实例注册。普通路由仍由历史判据获得主权；
           SplitGroup 则把主权交给活动 pane，非活动 pane 不覆盖 header。 */}
       {ownsRoute && session ? (
