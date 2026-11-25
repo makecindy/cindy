@@ -110,7 +110,6 @@ import { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoRe
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
 export { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoResumePresentation';
 import { Spinner } from '@/components/ui/spinner';
-import { useInitialPaint } from '@/hooks/useInitialPaint';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import { projectRemoteUsers } from '@/lib/remoteUserHandoff';
@@ -3151,20 +3150,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   );
 });
 
-export function MessageStream(props: MessageStreamProps) {
-  const { t } = useTranslation();
-  const ready = useInitialPaint(() =>
-    !!props.hasMoreMessages || props.messages.length >= RENDER_WINDOW_INITIAL_ITEMS,
-  );
-  if (!ready) {
-    return <div role="status" className="flex h-full items-center justify-center gap-2 text-13 text-[var(--text-secondary)]">
-      <Spinner size={16} />{t('ccAgent.common.loading')}
-    </div>;
-  }
-  return <MessageStreamContent {...props} />;
-}
-
-function MessageStreamContent({
+export function MessageStream({
   header,
   footer,
   pendingMessages,

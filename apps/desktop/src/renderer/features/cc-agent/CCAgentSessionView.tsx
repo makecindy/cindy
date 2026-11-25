@@ -177,8 +177,11 @@ import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
+import { BrandLoadingMark } from '@/components/branding/BrandLoadingMark';
+import { useInitialPaint } from '@/hooks/useInitialPaint';
 import {
   MessageStream,
+  RENDER_WINDOW_INITIAL_ITEMS,
   type InlinePlanVisibility,
 } from '@/components/chat/MessageStream';
 import {
@@ -879,6 +882,14 @@ export function createWritableDirRemovalQueue() {
       });
     },
   };
+}
+
+function SessionMessageStream(props: React.ComponentProps<typeof MessageStream>) {
+  const ready = useInitialPaint(() =>
+    !!props.hasMoreMessages || props.messages.length >= RENDER_WINDOW_INITIAL_ITEMS,
+  );
+  if (ready) return <MessageStream {...props} />;
+  return <div className="flex h-full items-center justify-center"><BrandLoadingMark /></div>;
 }
 
 function LocalHistoryLoading({ sessionId }: { sessionId: string }) {
@@ -6221,7 +6232,7 @@ function CCAgentSessionContent({
   const messageStreamEl = (
     <BotChatQuoteProvider value={botChatQuote}>
     <MessageReadAloudContext.Provider value={messageReadAloud.value}>
-    <MessageStream
+    <SessionMessageStream
       pendingMessages={pendingMessages}
       renderPendingMessage={renderPendingMessage}
       header={messageStreamHeader}
