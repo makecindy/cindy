@@ -7,7 +7,7 @@ import type { DbTransport } from '../../localDb/client/DbTransport';
  * 因此由 test-workspaces 的 db tier 运行，不放进 fast unit tier。
  */
 
-import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import type { CreateScheduleInput, Schedule, ScheduleRun, Scheduler } from '@cindy/maker-scheduler';
 import Database from 'better-sqlite3';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -18,6 +18,9 @@ import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
 import { recordScheduleRunCostDirect, applyScheduleRunCostMetaChange } from '../runCostLedger';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
+import { createSchedulerHost } from '../index';
+import type { MakerScheduleRunner } from '../runner';
+import type { ScriptScheduleRunner } from '../script-runner';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
   return {
@@ -97,6 +100,10 @@ const SCHEDULER_DDL = [
       title TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'desktop',
       status TEXT NOT NULL DEFAULT 'active',
+      agent_kind TEXT NOT NULL DEFAULT 'cc',
+      agent_device_id TEXT,
+      remote_host_id TEXT,
+      orca_role TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       working_dir TEXT,
       user_send_at INTEGER,
@@ -293,6 +300,72 @@ function createStorageHarness(queries?: { query: string; params: unknown[] }[]) 
     storage: new DrizzleScheduleStorage(() => db),
   };
 }
+
+describe('scheduler host ACP binding saves', () => {
+  // #12582, DB tier. Exercise the host's real Scheduler create/update and SQLite
+  // persistence. The engine-only test checks previous propagation. Here a default
+  // binding to one ACP row is rejected, while renaming its legacy binding succeeds.
+  async function withBindingHost(
+    run: (scheduler: Scheduler, storage: DrizzleScheduleStorage) => Promise<void>,
+  ) {
+    const harness = createStorageHarness();
+    const runner = {
+      attachScheduler() {},
+      async validateModelSelection() {},
+      async fire() { throw new Error('Save must not fire the scheduler'); },
+    };
+    const host = createSchedulerHost({
+      createStorage: () => harness.storage,
+      createRunners: () => ({
+        notifier: { async notify() {} },
+        promptRunner: runner as MakerScheduleRunner,
+        scriptRunner: runner as ScriptScheduleRunner,
+      }),
+      isPassive: () => true,
+      dialogueWorkspaceRoots: () => [],
+      onStarted() {},
+      async beforeReset() {},
+    });
+    try {
+      harness.sqlite.exec(`INSERT INTO sessions (id, title, agent_kind)
+        VALUES ('native', 'Native task', 'cc'), ('plugin', 'Plugin task', 'acp')`);
+      const scheduler = await host.startScheduler({ maker: {} as never, getDb: () => harness.db, logger: {} });
+      await run(scheduler, harness.storage);
+    } finally {
+      await host.resetScheduler();
+      harness.close();
+    }
+  }
+
+  it('rejects creating or rebinding to an ACP task before either write', async () => {
+    await withBindingHost(async (scheduler, storage) => {
+      const input: CreateScheduleInput = {
+        name: 'Automation', prompt: 'Check status', kind: 'cron', cronExpr: '0 9 * * *',
+        timezone: 'UTC', recurring: true, manual: true, agentKind: 'claude-code',
+        workspaceKind: 'dialogue', useWorktree: false, notify: { desktop: false, feishu: false },
+      };
+      const refusal = { code: 'SCHEDULE_BOUND_PLUGIN_ENGINE' };
+      await expect(scheduler.create({ ...input, targetSessionId: 'plugin' })).rejects.toMatchObject(refusal);
+      expect(await storage.list()).toEqual([]);
+
+      const native = await scheduler.create({ ...input, targetSessionId: 'native' });
+      await expect(scheduler.update(native.id, { targetSessionId: 'plugin' })).rejects.toMatchObject(refusal);
+      expect(await storage.list()).toEqual([native]);
+    });
+  });
+
+  it('persists a name-only edit to a previously saved ACP binding', async () => {
+    await withBindingHost(async (scheduler, storage) => {
+      const legacy = await storage.insert(baseSchedule({
+        targetSessionId: 'plugin', workspaceKind: 'dialogue', manual: true,
+      }));
+      await scheduler.update(legacy.id, { name: 'Renamed automation' });
+      expect(await storage.get(legacy.id)).toMatchObject({
+        name: 'Renamed automation', targetSessionId: 'plugin', status: 'active',
+      });
+    });
+  });
+});
 
 // DB-tier regression for app-exit recovery: claim the original run exactly once,
 // and respect user takeover/stop and the current task owner. The old storage had no
