@@ -99,7 +99,13 @@ private struct AgentActivityMascot: View {
       .accessibilityLabel(Text(state.detail))
   }
 
-  private var showsCompanion: Bool { state.companion != nil && state.status != "running" }
+  @Environment(\.redactionReasons) private var redactionReasons
+
+  /// The avatar identifies the companion, so it follows the lock-screen privacy
+  /// setting like the privacy-sensitive title: when the system redacts, show Cindy.
+  private var showsCompanion: Bool {
+    state.companion != nil && state.status != "running" && !redactionReasons.contains(.privacy)
+  }
 
   @ViewBuilder private var identity: some View {
     if let companion = state.companion, showsCompanion {
