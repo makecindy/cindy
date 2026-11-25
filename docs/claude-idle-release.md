@@ -32,10 +32,11 @@ eligible Desktop task share its normal resume path; no new wire API is introduce
 
 Codex and plugin engine (ACP) tasks use the same watcher, scope and gates with a
 fixed 30 minutes and no override; both also wait for `hasLiveBackgroundWork` to
-report no provider work. A plugin engine task holds one engine process and a plugin
-may run only `GHOST_HARNESS_MAX_PROCESSES_PER_GHOST` (8) at once, so without release
-idle tasks used up the slots and new tasks failed to start (2026-11-25). A plugin
-engine runtime is released only when its agent advertised `session/resume` or
+report no provider work. A plugin engine task holds one engine process (a few hundred
+MB each); without release every task ever opened kept its process. Plugins once had a
+fixed 8-process cap, so idle tasks also blocked new ones from starting (2026-11-25);
+#12798 removed that cap, so release is now what keeps idle processes from piling up.
+A plugin engine runtime is released only when its agent advertised `session/resume` or
 `session/load` (`Session.canResumeAfterClose`); resuming never falls back to a new
 session, so other runtimes keep their process. Plugin engine Orca workers follow the
 collaboration Worker idle setting like any Worker. The Node Host does not run plugin

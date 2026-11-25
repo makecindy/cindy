@@ -17324,8 +17324,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   codexIdleReleaseWatcher.start();
 
   // Ordinary local plugin engine (ACP) tasks: same scope and gates as Codex. Each task holds
-  // one engine process, and a plugin may run only a few at once, so idle ones must give their
-  // slot back. Only runtimes whose agent can reopen the conversation (session/resume or
+  // one engine process that does not exit when idle, so idle ones are retired like the built-in
+  // engines' runtimes. Only runtimes whose agent can reopen the conversation (session/resume or
   // session/load) are released; the next send resumes it lazily.
   pluginEngineIdleReleaseWatcher?.stop();
   pluginEngineIdleReleaseWatcher = createClaudeIdleReleaseWatcher({

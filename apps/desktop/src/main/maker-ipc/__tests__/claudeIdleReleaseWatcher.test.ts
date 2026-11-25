@@ -431,8 +431,8 @@ it('keeps a real Codex Session while native work lives, then releases and resume
   }
 });
 
-// Plugin engine (ACP) tasks: each holds one engine process and a plugin runs at most a few, so
-// idle tasks used up the slots and new tasks failed to start (2026-11-25). Release goes through
+// Plugin engine (ACP) tasks: each holds one engine process that never exited when idle, so every
+// task ever opened kept its process (2026-11-25). Release goes through
 // real Maker/Session: a runtime whose agent cannot reopen the conversation, or does not say, is
 // kept; a reopenable one is released and the next send resumes the same native session.
 it.each([
