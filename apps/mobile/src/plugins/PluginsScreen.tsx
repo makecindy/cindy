@@ -84,6 +84,7 @@ import { pluginDetailModel } from "./pluginDetailModel";
 import { PluginDirectoryView } from "./PluginDirectoryView";
 import { PluginDetailView } from "./PluginDetailView";
 import { PluginTaskPicker } from "./PluginTaskPicker";
+import { PluginComputerPicker } from "./PluginComputerPicker";
 import { PluginPage } from "./PluginPage";
 import { invokePlugin } from "./pluginClient";
 import { sortPluginItems } from "./pluginListOrder";
@@ -479,25 +480,20 @@ function PluginDirectory() {
     }
     setDeviceId(id);
   };
-  const selectDevice = () => {
-    const generation = detailGeneration.current;
-    const select = (id: string) => {
-      if (
-        generation !== detailGeneration.current ||
-        !liveSelection.current.focused ||
-        !isMobileAuthOwnerCurrent(recentOwner)
-      )
-        return;
-      selectDirectoryDevice(id);
-    };
-    Alert.alert(t("plugins.computer"), undefined, [
-      { text: t("plugins.allComputers"), onPress: () => select("") },
-      ...targets.map((host) => ({
-        text: host.deviceName,
-        onPress: () => select(host.deviceId),
-      })),
-      { text: t("plugins.cancel"), style: "cancel" },
-    ]);
+  // Android only (iOS uses PluginDirectoryView's native menu). Holds the detail generation seen
+  // when the sheet opened; a choice made after the selection changed is ignored.
+  const [devicePicker, setDevicePicker] = useState<number | null>(null);
+  const selectDevice = () => setDevicePicker(detailGeneration.current);
+  const closeDevicePicker = () => setDevicePicker(null);
+  const chooseDevice = (id: string) => {
+    setDevicePicker(null);
+    if (
+      devicePicker !== detailGeneration.current ||
+      !liveSelection.current.focused ||
+      !isMobileAuthOwnerCurrent(recentOwner)
+    )
+      return;
+    selectDirectoryDevice(id);
   };
   const icon = (row: HostedRemoteCollectionItem) => {
     const uri = row.item.display.avatar?.value;
@@ -689,6 +685,13 @@ function PluginDirectory() {
             </View>
           ) : null}
         </ScrollView>
+        <PluginComputerPicker
+          visible={devicePicker !== null}
+          targets={targets}
+          deviceId={deviceId}
+          onSelect={chooseDevice}
+          onClose={closeDevicePicker}
+        />
       </View>
     );
   const enable = async (enabled: boolean) => {
