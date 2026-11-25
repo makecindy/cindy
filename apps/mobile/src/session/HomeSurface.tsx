@@ -198,6 +198,7 @@ import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingle
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import {
+  applyRemoteScheduleTimingsToIndex,
   remoteScheduleEventStore,
   useRemoteScheduleMirrorInvalidations,
 } from '@/scheduler/remoteScheduleEvents';
@@ -1065,10 +1066,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
         if (!isCurrentHomeSyncTarget(deviceId, expectedHomeSyncGeneration)) return;
         if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
+        // A patchable skipped event does not invalidate this read. Keep its
+        // newer timing even if the host read the index before the skip.
+        const timings = remoteScheduleEventStore.getSnapshot(deviceId).scheduleTimings;
         setScheduleIndex((current) => replaceSessionScheduleIndexEntries(
           current,
           sessionIds,
-          nextIndex,
+          applyRemoteScheduleTimingsToIndex(nextIndex, timings),
         ));
         if (homeScheduleIndexDirtyRef.current.get(deviceId) === pendingSeq) {
           homeScheduleIndexDirtyRef.current.delete(deviceId);
@@ -1727,10 +1731,18 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       if (version === (scheduleEventVersionsRef.current.get(deviceId) ?? 0)) continue;
       scheduleEventVersionsRef.current.set(deviceId, version);
       const projection = snapshot.lastProjection;
-      if (projection?.refresh.sessionIndex !== true && projection?.runPatch.status !== 'running') continue;
       const sessionIds = remoteSessionStore.getSessions()
         .filter((session) => session.deviceLinkDeviceId === deviceId)
         .map((session) => session.id);
+      if (snapshot.scheduleTimings.size > 0 && sessionIds.length > 0) {
+        const deviceSessionSet = new Set(sessionIds);
+        setScheduleIndex((current) => applyRemoteScheduleTimingsToIndex(
+          current,
+          snapshot.scheduleTimings,
+          deviceSessionSet,
+        ));
+      }
+      if (projection?.refresh.sessionIndex !== true && projection?.runPatch.status !== 'running') continue;
       // scheduler 触发的新一次运行不会广播 local-db:sessions:created(桌面 runner 只发
       // schedule 事件),新 run 的会话不会自己进列表。事件带的 sessionId 不在本地列表时,
       // 先触发该设备重拉会话列表 —— hydrate 完成后其内部的 defer 会用新列表刷新 schedule

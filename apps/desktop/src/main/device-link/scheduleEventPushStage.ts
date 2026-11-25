@@ -159,12 +159,12 @@ export class ScheduleEventPushStage {
 
   enqueue(payload: unknown): void {
     if (this.disposed) return;
-    const next = makeStagedEvent(payload);
+    let next = makeStagedEvent(payload);
     if (this.overflowed) {
       this.foldIntoOverflow(next);
       this.rebuildOverflowQueue();
     } else {
-      this.compactBeforeAppend(next);
+      next = this.compactBeforeAppend(next);
       if (
         this.queue.length + 1 > SCHEDULE_EVENT_STAGE_MAX_EVENTS
         || this.queuedBytes + next.bytes > SCHEDULE_EVENT_STAGE_MAX_BYTES
@@ -293,37 +293,46 @@ export class ScheduleEventPushStage {
     }
   }
 
-  private compactBeforeAppend(next: StagedScheduleEvent): void {
+  private compactBeforeAppend(next: StagedScheduleEvent): StagedScheduleEvent {
     const start = this.inFlightItem !== null && this.queue[0] === this.inFlightItem ? 1 : 0;
-    if (start >= this.queue.length) return;
+    if (start >= this.queue.length) return next;
     const ev = next.proj.event;
 
     if (ev.type === 'ready') {
       this.removeWhere(start, (item) => item.proj.event.type === 'ready');
-      return;
+      return next;
     }
     if (ev.type === 'all-read') {
       this.removeWhere(
         start,
         (item) => item.proj.event.type === 'all-read' || item.proj.event.type === 'read',
       );
-      return;
+      return next;
     }
     if (ev.type === 'changed') {
+      const hadUnconditionalChange = Boolean(ev.skippedRunId) && this.queue
+        .slice(start)
+        .some((item) => (
+          item.proj.event.type === 'changed'
+          && item.proj.event.scheduleId === ev.scheduleId
+          && !item.proj.event.skippedRunId
+        ));
       this.removeWhere(
         start,
         (item) => item.proj.event.type === 'changed' && item.proj.event.scheduleId === ev.scheduleId,
       );
-      return;
+      return hadUnconditionalChange
+        ? makeStagedEvent({ type: 'changed', scheduleId: ev.scheduleId })
+        : next;
     }
     if (ev.type === 'read') {
       this.removeWhere(
         start,
         (item) => item.proj.event.type === 'read' && item.proj.event.scheduleId === ev.scheduleId,
       );
-      return;
+      return next;
     }
-    if (!isRunLifecycleEvent(ev)) return;
+    if (!isRunLifecycleEvent(ev)) return next;
 
     let barrierIdx = start - 1;
     for (let i = this.queue.length - 1; i >= start; i--) {
@@ -340,23 +349,45 @@ export class ScheduleEventPushStage {
         segIndices.push(i);
       }
     }
-    if (segIndices.length === 0) return;
+    if (segIndices.length === 0) return next;
+
+    const hasSkippedTimingPatch = (x: StagedScheduleEvent): boolean =>
+      x.proj.event.type === 'skipped'
+      && (x.proj.event.lastFiredAt !== undefined
+        || x.proj.event.lastFinishedAt !== undefined
+        || x.proj.event.nextFireAt !== undefined);
+    const hasPreRunRecovery = (x: StagedScheduleEvent): boolean =>
+      (x.proj.event.type === 'skipped' && x.proj.event.preRunCheckSucceeded === true)
+      || (x.proj.refresh.sessionIndex && x.proj.refresh.unreadSummary);
 
     let kept: StagedScheduleEvent[] = [...segIndices.map((i) => this.queue[i]!), next];
     const origHasSessionIndex = kept.some((x) => x.proj.refresh.sessionIndex);
     const origHasUnreadIncrease = kept.some((x) => x.proj.unreadImpact === 'may-increase');
+    const origHasPreRunRecovery = kept.some(hasPreRunRecovery);
     const toRemove = new Set<number>();
 
     for (const idx of segIndices) {
       const candidate = this.queue[idx]!;
+      const pos = kept.indexOf(candidate);
+      const after = pos >= 0 ? kept.slice(pos + 1) : [];
       const without = kept.filter((x) => x !== candidate);
       const keepsSessionIndex = without.some((x) => x.proj.refresh.sessionIndex) === origHasSessionIndex;
       const keepsUnreadIncrease =
         without.some((x) => x.proj.unreadImpact === 'may-increase') === origHasUnreadIncrease;
+      const keepsPreRunRecovery = without.some(hasPreRunRecovery) === origHasPreRunRecovery;
       const sid = candidate.proj.runPatch.sessionId;
       const keepsSessionBinding =
         sid === null || without.some((x) => x.proj.runPatch.sessionId === sid);
-      if (keepsSessionIndex && keepsUnreadIncrease && keepsSessionBinding) {
+      const keepsSkippedTiming =
+        !hasSkippedTimingPatch(candidate)
+        || after.some((x) => x.proj.refresh.sessionIndex || hasSkippedTimingPatch(x));
+      if (
+        keepsSessionIndex
+        && keepsUnreadIncrease
+        && keepsPreRunRecovery
+        && keepsSessionBinding
+        && keepsSkippedTiming
+      ) {
         kept = without;
         toRemove.add(idx);
       }
@@ -374,6 +405,7 @@ export class ScheduleEventPushStage {
       }
       this.queue.length = write;
     }
+    return next;
   }
 
   private removeWhere(start: number, predicate: (item: StagedScheduleEvent) => boolean): void {

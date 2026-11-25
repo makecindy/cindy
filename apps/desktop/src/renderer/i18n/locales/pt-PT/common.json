@@ -1381,6 +1381,7 @@
     "openPermissionInNewWindow": "Abrir noutra janela"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Outra instância do Cindy neste computador está a utilizar a ligação remota. Feche-a para que esta instância assuma o controlo automaticamente.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode mudar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness de que precisa.",
@@ -12418,8 +12419,8 @@
       "footnote": "Este texto faz parte do contexto de identidade do amigo. As definições rápidas de personalidade são guardadas separadamente e mantidas quando este texto muda."
     },
     "welcome": {
-      "generic": "Olá, sou {{name}}. Diga-me tudo o que precisar a partir de agora — entretanto, vou orientar-me.",
-      "withRole": "Olá, sou {{name}} — {{description}}. Basta dizer-me o que precisa."
+      "generic": "Olá, sou {{name}}. Diga-me o que precisa.",
+      "withUser": "Olá, {{userName}}, sou {{name}}. Diga-me o que precisa."
     },
     "invitation": {
       "title": "A preparar o encontro",
@@ -15465,6 +15466,7 @@
       "label_many": "{{count}} novas mensagens"
     },
     "messageNavRail": {
+      "you": "Eu",
       "aria": "Navegação entre pedidos",
       "jumpAria": "Ir para o pedido {{index}}: {{preview}}",
       "attachmentOnly_one": "{{count}} anexo",
@@ -15622,6 +15624,7 @@
       "gatewayProxyTokenInvalid": "As credenciais do Cindy AI já não são válidas. Clique em Tentar novamente. Se voltar a acontecer, termine sessão e volte a iniciar sessão",
       "gatewayProxyTokenInvalidNoRetry": "As credenciais do Cindy AI já não são válidas. Se voltar a acontecer, termine sessão e volte a iniciar sessão",
       "modelAccessDenied": "A conta do serviço a montante não tem acesso a este modelo. Selecione outro modelo ou verifique o acesso junto do fornecedor",
+      "providerSafetyRefusal": "A política de segurança do fornecedor do modelo bloqueou esta resposta. Ajuste o seu pedido antes de voltar a enviar",
       "silentStopContinue": "Continuar",
       "silentStopContinueTitle": "Continuar a tarefa atual",
       "piTransportClosed": "Ligação ao Pi remoto interrompida (canal SSH fechado). A tarefa remota continua em execução — restabeleça a ligação para continuar.",

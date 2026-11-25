@@ -1933,4 +1933,144 @@ describe('[7] 账号级状态快照不占满卡住对端的可靠窗口', () => 
       hostDl.stop();
     }
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ScheduleEventPushStage 拥塞暂存对主线新增 skipped 原位时间补丁与 changed(skippedRunId) 去重字段的语义保持。
+  //   1) 真实无条件 `{ type: 'changed', scheduleId }` 排队期间若到达后续空跳派生的 `{ type: 'changed', scheduleId, skippedRunId }`，
+  //      合并结果必须保留无条件 `changed`（不带 skippedRunId），防止现代接收端因同次 skipped 已原位打补丁而吞掉更早的真实任务变更；
+  //   2) 连续带时间戳的静默 `skipped` 折叠为最新排期，同时保留尚未被恢复刷新覆盖的 `preRunCheckSucceeded: true`，且前序 `fired`
+  //      绝不会导致后序终态 `skipped` 在无索引刷新的事件（`deferred`）前被误删。
+  // - Bug／规则依据：合入主线 skipped 时间补丁与远程 skip 去重后的拥塞折叠不变量。
+  // - 现有覆盖缺口：既有测试覆盖旧版无时间戳 skipped，未覆盖 `changed(skippedRunId)` 与原位可补丁 `skipped` 的跨事件折叠交互。
+  // - 最小失败输入：① `changed(sched)` + `skipped(r2)` + `changed(sched, skippedRunId:'r2')`；② `fired(r1)` + `skipped(r1, nextFireAt)` + `deferred(r2)`。
+  // - tier：unit（假时钟，<20ms）。
+  it('preserves unconditional changed across skippedRunId follow-ups and keeps patchable skipped terminal state intact', async () => {
+    vi.useFakeTimers();
+    try {
+      let writable = false;
+      const sent: unknown[] = [];
+      const stage = new ScheduleEventPushStage(
+        undefined,
+        () => writable,
+        async (payload) => {
+          sent.push(payload);
+        },
+        () => {},
+      );
+
+      // Case 1: Real `changed` + `skipped(r2)` + `changed(skippedRunId: 'r2')` must emit unconditional `changed`!
+      stage.enqueue({ type: 'changed', scheduleId: 'sched-edit' });
+      stage.enqueue({
+        type: 'skipped',
+        scheduleId: 'sched-edit',
+        runId: 'r2',
+        sessionId: '',
+        lastFiredAt: 1_000,
+        lastFinishedAt: 1_100,
+        nextFireAt: 61_100,
+      });
+      stage.enqueue({ type: 'changed', scheduleId: 'sched-edit', skippedRunId: 'r2' });
+
+      writable = true;
+      stage.nudge();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(sent).toEqual([
+        {
+          type: 'skipped',
+          scheduleId: 'sched-edit',
+          runId: 'r2',
+          sessionId: '',
+          lastFiredAt: 1_000,
+          lastFinishedAt: 1_100,
+          nextFireAt: 61_100,
+        },
+        { type: 'changed', scheduleId: 'sched-edit' },
+      ]);
+
+      // Case 2: Consecutive patchable skips collapse while preserving preRunCheckSucceeded: true,
+      // and an earlier `fired` never drops a later terminal patchable `skipped` before `deferred` (`sessionIndex: false`).
+      sent.length = 0;
+      writable = false;
+      stage.enqueue({
+        type: 'skipped',
+        scheduleId: 'sched-hb',
+        runId: 'hb-1',
+        sessionId: '',
+        lastFinishedAt: 2_000,
+        nextFireAt: 12_000,
+        preRunCheckSucceeded: true,
+      });
+      stage.enqueue({
+        type: 'skipped',
+        scheduleId: 'sched-hb',
+        runId: 'hb-2',
+        sessionId: '',
+        lastFinishedAt: 12_000,
+        nextFireAt: 22_000,
+      });
+      stage.enqueue({
+        type: 'skipped',
+        scheduleId: 'sched-hb',
+        runId: 'hb-3',
+        sessionId: '',
+        lastFinishedAt: 22_000,
+        nextFireAt: 32_000,
+      });
+
+      stage.enqueue({ type: 'fired', scheduleId: 'sched-guard', runId: 'g-1' });
+      stage.enqueue({
+        type: 'skipped',
+        scheduleId: 'sched-guard',
+        runId: 'g-1',
+        sessionId: '',
+        lastFinishedAt: 5_000,
+        nextFireAt: 65_000,
+      });
+      stage.enqueue({
+        type: 'deferred',
+        scheduleId: 'sched-guard',
+        runId: 'g-2',
+      });
+
+      writable = true;
+      stage.nudge();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(sent).toEqual([
+        {
+          type: 'skipped',
+          scheduleId: 'sched-hb',
+          runId: 'hb-1',
+          sessionId: '',
+          lastFinishedAt: 2_000,
+          nextFireAt: 12_000,
+          preRunCheckSucceeded: true,
+        },
+        {
+          type: 'skipped',
+          scheduleId: 'sched-hb',
+          runId: 'hb-3',
+          sessionId: '',
+          lastFinishedAt: 22_000,
+          nextFireAt: 32_000,
+        },
+        { type: 'fired', scheduleId: 'sched-guard', runId: 'g-1' },
+        {
+          type: 'skipped',
+          scheduleId: 'sched-guard',
+          runId: 'g-1',
+          sessionId: '',
+          lastFinishedAt: 5_000,
+          nextFireAt: 65_000,
+        },
+        {
+          type: 'deferred',
+          scheduleId: 'sched-guard',
+          runId: 'g-2',
+        },
+      ]);
+      stage.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

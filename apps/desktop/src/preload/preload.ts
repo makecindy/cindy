@@ -1345,7 +1345,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   windowMinimize: () => ipcRenderer.send('window-minimize'),
   windowMaximize: () => ipcRenderer.send('window-maximize'),
   windowExitFullscreen: () => ipcRenderer.send('window-exit-fullscreen'),
-  windowClose: () => ipcRenderer.send('window-close'),
+  windowClose: (once?: 'quit' | 'tray' | 'minimize') => {
+    if (once) ipcRenderer.send('window-close', once);
+    else ipcRenderer.send('window-close');
+  },
   /**
    * 手动窗口拖拽(no-drag 元素上"按住拖动移动窗口"):start 后 main 用光标
    * 位置驱动本窗口跟随,直到 stop。见 main/windowManualDrag.ts。
