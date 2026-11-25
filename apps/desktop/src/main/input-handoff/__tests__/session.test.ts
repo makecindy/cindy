@@ -39,8 +39,10 @@ describe('InputHandoffSession', () => {
   // moves to a password step on the same address that remounts a never-focused 1x1 field with the code's id.
   // `sameFp`: the phone has no id or title, only a line above naming it, so it shares the code field's fingerprint.
   // `twinFrames`: the code sits in a frame, and a second frame loading the same address holds a never-focused 1x1
-  // field with the same id. `rejects`: confirming shows a code error and takes the focus off the code.
-  type PayLayout = 'focus' | 'insert' | 'trap' | 'frame' | 'fragment' | 'twoSteps' | 'sameFp' | 'twinFrames';
+  // field with the same id; with `twinDrop`, typing the phone removes the code's frame and leaves the second one.
+  // `splitCode`: no phone; a visible first box of the code, then the shrunken focused one, for a field plan joining
+  // them. `rejects`: confirming shows a code error and takes the focus off the code.
+  type PayLayout = 'focus' | 'insert' | 'trap' | 'frame' | 'fragment' | 'twoSteps' | 'sameFp' | 'twinFrames' | 'twinDrop' | 'splitCode';
   function payPage(options: { layout?: PayLayout; staleOnce?: boolean; rejects?: boolean } = {}) {
     const layout = options.layout ?? 'focus';
     const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce, secondStep: false, rejected: false };
@@ -58,23 +60,30 @@ describe('InputHandoffSession', () => {
         out.push(n(next(), 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }));
         return out;
       }
-      if (layout === 'sameFp') {
+      if (layout === 'splitCode') {
+        out.push(n(next(), 'AXTextField', { title: 'Code 1', frame: [460, 300, 40, 30], focused: state.focus === 'phone' }));
+      } else if (layout === 'sameFp') {
         out.push(n(next(), 'AXStaticText', { value: 'Phone', frame: [460, 280, 60, 16] }));
         out.push(n(next(), 'AXTextField', { frame: [460, 300, 260, 30], focused: state.focus === 'phone' }));
       } else out.push(n(next(), 'AXTextField', { title: 'Phone', frame: [460, 300, 260, 30], focused: state.focus === 'phone' }));
       const note = layout === 'trap' ? !state.phoneTyped : ['insert', 'frame'].includes(layout) && state.phoneTyped;
       if (note) out.push(n(next(), 'AXStaticText', { value: 'Check the phone number', frame: [460, 340, 200, 16] }));
       out.push(n(next(), 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }));
-      const code = { domId: 'sms-code', frame: [460, 440, 1, 1], focused: state.focus === 'code' };
+      const code = { domId: 'sms-code', frame: [460, 440, 1, 1], focused: state.focus === 'code', ...(layout === 'splitCode' ? { title: 'Code 2' } : {}) };
       if (state.rejected) out.push(n(next(), 'AXStaticText', { value: '验证码错误', frame: [460, 470, 200, 16] }));
-      if (layout === 'frame' || layout === 'fragment' || layout === 'twinFrames') {
-        const frameRef = next();
+      if (layout === 'frame' || layout === 'fragment' || layout === 'twinFrames' || layout === 'twinDrop') {
         const address = layout === 'fragment' && state.phoneTyped ? 'https://secure.example.test/sms#sent' : 'https://secure.example.test/sms';
-        out.push(n(frameRef, 'AXWebArea', { url: address, frame: [440, 400, 320, 120] }));
-        out.push(n(`${frameRef}.1`, 'AXTextField', code));
-        if (layout === 'twinFrames') {
+        if (!(layout === 'twinDrop' && state.phoneTyped)) {
+          const frameRef = next();
+          out.push(n(frameRef, 'AXWebArea', { url: address, frame: [440, 400, 320, 120] }));
+          // With `twinDrop` each frame names its own field, so both read alike.
+          if (layout === 'twinDrop') out.push(n(`${frameRef}.0`, 'AXStaticText', { value: '验证码', frame: [460, 420, 60, 16] }));
+          out.push(n(`${frameRef}.1`, 'AXTextField', code));
+        }
+        if (layout === 'twinFrames' || layout === 'twinDrop') {
           const twin = next();
           out.push(n(twin, 'AXWebArea', { url: address, frame: [440, 600, 320, 120] }));
+          if (layout === 'twinDrop') out.push(n(`${twin}.0`, 'AXStaticText', { value: '验证码', frame: [460, 620, 60, 16] }));
           out.push(n(`${twin}.1`, 'AXTextField', { domId: 'sms-code', frame: [460, 640, 1, 1] }));
         }
       } else out.push(n(next(), 'AXTextField', code));
@@ -171,6 +180,44 @@ describe('InputHandoffSession', () => {
   // PR #12780 review (codex r4693191346): the inserted line rebinds the code field to a new tree place; once the page
   // rejects the code and takes the focus off it, the re-read lost the code and handed back as succeeded.
   // Entry: session.submit. Unit tier.
+  // PR #12780 review (codex r4693448408): typing the phone removed the code's frame; a second frame at the same address
+  // then took its order and inherited the code's key, so the code went into that frame's never-focused field.
+  // Entry: session.submit. Unit tier.
+  it('does not hand a hidden code field over to another frame at the same address once its own goes away', async () => {
+    const page = payPage({ layout: 'twinDrop' });
+    const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
+    await session.start();
+    const step = latest();
+    const texts = step.controls.filter((control) => control.kind === 'text');
+    expect(texts).toHaveLength(2);
+    const values = Object.fromEntries(texts.map((control, i) => [control.id, i === 0 ? '18600000000' : '123456']));
+    await session.submit({ expectedRevision: step.revision, values, action: { kind: 'submit' } });
+    expect(page.acts.map((act) => act.ref ?? act.kind)).toEqual(['0.1']);
+    session.cancel();
+  });
+
+  // PR #12780 review (codex r4693448414): a field plan joins a visible box and the shrunken code field into one; once
+  // the page rejects the code and takes the focus off it, the joined field was compared with the page's two and lost.
+  // Entry: session.submit with a field plan. Unit tier.
+  it('keeps a hidden code field a field plan joined with another box when the page rejects the code', async () => {
+    const page = payPage({ layout: 'splitCode', rejects: true });
+    const { session, latest, finished } = harness(page.driver, {
+      target: { app: 'Google Chrome', windowTitle: 'Pay' },
+      fields: [{ label: 'Code', contentType: 'one-time-code', targets: [{ label: 'Code 1', length: 3 }, { label: 'Code 2', length: 3 }] }],
+    });
+    await session.start();
+    const step = latest();
+    const texts = step.controls.filter((control) => control.kind === 'text');
+    expect(texts).toHaveLength(1);
+    await session.submit({ expectedRevision: step.revision, values: { [texts[0].id]: '123456' }, action: { kind: 'submit' } });
+    expect(page.acts.filter((act) => act.kind === 'text').map((act) => act.ref)).toEqual(['0.1', '0.3']);
+    expect(page.state.rejected).toBe(true);
+    expect(finished).toEqual([]);
+    expect(latest().phase).toBe('ready');
+    expect(latest().controls.filter((control) => control.kind === 'text').map((control) => control.label)).toEqual(['Code']);
+    session.cancel();
+  });
+
   it('stays on the card when the page rejects a hidden code field whose tree place moved', async () => {
     const page = payPage({ layout: 'insert', rejects: true });
     const { session, latest, finished } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });

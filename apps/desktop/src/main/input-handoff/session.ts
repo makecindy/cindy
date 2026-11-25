@@ -1351,9 +1351,10 @@ export class InputHandoffSession {
     const fresh = extractStep(raw, new Set(current.hiddenFields));
     const page = (url: string | undefined) => url?.split('#')[0];
     if (page(fresh.url) !== page(current.url)) return undefined;
+    // A field plan joins several of the page's fields into one: compare the page's own fields, as `sameFields` does.
     const fields = (step: ExtractedStep) => [...step.bindings.values()]
-      .filter((binding): binding is ControlBinding & { kind: 'text' } => binding.kind === 'text')
-      .map((binding) => binding.identity)
+      .flatMap<{ identity: string }>((binding) => binding.kind !== 'text' ? [] : (binding.segments ?? [binding]))
+      .map((field) => field.identity)
       .sort();
     return JSON.stringify(fields(fresh)) === JSON.stringify(fields(current)) ? fresh : undefined;
   }

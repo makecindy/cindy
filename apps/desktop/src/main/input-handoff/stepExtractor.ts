@@ -119,7 +119,7 @@ function hiddenFieldInPage(node: NativeAxNode, page: NativeAxNode): boolean {
 
 /**
  * A hidden field found focused earlier in this step. Its page id with its fingerprint, within the document that
- * holds it (named by its address and its order among documents at that address, which outlast tree positions),
+ * holds it (named by its address and its order among the documents at that address, which outlast tree positions),
  * survives text the page inserts after an earlier field is typed; an id is unique only in its own document, so a
  * frame's field of the same id is another field.
  * Its place in the tree covers only inputs without an id.
@@ -227,17 +227,25 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
   // nodes are excluded unless their bounds were clipped at the viewport edge.
   // The document a node belongs to: its nearest web area (the page itself or a frame inside it), by its address;
   // inserting text above a frame shifts the frame's tree position, not its address.
-  // Two frames may load the same address, each its own document with its own ids: their order tells them apart.
+  // Two frames may load the same address, each its own document with its own ids: their order tells them apart,
+  // counted among how many there are. Once one goes or another comes, an order may name another document, so the
+  // key of a field kept by order no longer matches (it is not handed over to whichever frame now has that order).
   const documentNames = new Map<NativeAxNode, string>();
+  // A frame that only rewrites its fragment (`#sent`) is still the same document.
+  const addressOf = (node: NativeAxNode) => node.url?.split('#')[0];
   const atAddress = new Map<string, number>();
   for (const node of snapshot.nodes) {
+    const address = node.role === 'AXWebArea' ? addressOf(node) : undefined;
+    if (address !== undefined) atAddress.set(address, (atAddress.get(address) ?? 0) + 1);
+  }
+  const seen = new Map<string, number>();
+  for (const node of snapshot.nodes) {
     if (node.role !== 'AXWebArea') continue;
-    // A frame that only rewrites its fragment (`#sent`) is still the same document.
-    const address = node.url?.split('#')[0];
+    const address = addressOf(node);
     if (address === undefined) { documentNames.set(node, `ref:${node.ref}`); continue; }
-    const order = atAddress.get(address) ?? 0;
-    atAddress.set(address, order + 1);
-    documentNames.set(node, JSON.stringify([address, order]));
+    const order = seen.get(address) ?? 0;
+    seen.set(address, order + 1);
+    documentNames.set(node, JSON.stringify([address, order, atAddress.get(address)]));
   }
   const documents = [...documentNames.keys()].sort((a, b) => b.ref.length - a.ref.length);
   const documentOf = (node: NativeAxNode) => {
