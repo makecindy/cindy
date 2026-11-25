@@ -1,0 +1,25 @@
+/* User annotation emphasis: the theme's blue informational ink, softly mixed
+   with the current surface so both light and dark retain readable text. */
+.cindy-button.message-annotation-action {
+  color: var(--status-info);
+  --button-face-bg: color-mix(in srgb, var(--status-info) 14%, hsl(var(--popover)));
+  --button-face-border: color-mix(in srgb, var(--status-info) 30%, transparent);
+}
+.cindy-button.message-annotation-action:enabled:not([aria-disabled=true]):hover {
+  --button-face-bg: color-mix(in srgb, var(--status-info) 23%, hsl(var(--popover)));
+}
+.cindy-button.message-annotation-action:enabled:not([aria-disabled=true]):active {
+  --button-face-bg: color-mix(in srgb, var(--status-info) 30%, hsl(var(--popover)));
+}
+.message-annotation-badge {
+  color: var(--status-info);
+  background-color: color-mix(in srgb, var(--status-info) 14%, hsl(var(--popover)));
+  border-color: color-mix(in srgb, var(--status-info) 35%, transparent);
+}
+.message-annotation-badge:hover {
+  color: var(--status-info);
+  background-color: color-mix(in srgb, var(--status-info) 23%, hsl(var(--popover)));
+}
+.message-annotation-quote {
+  border-color: color-mix(in srgb, var(--status-info) 65%, transparent);
+}

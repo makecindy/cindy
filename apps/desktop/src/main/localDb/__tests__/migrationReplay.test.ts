@@ -21,6 +21,8 @@ import {
 import { reconcileStrandedOrcaLeads } from '../orcaStrandedLeadReconcile';
 import { initializeTaskTagPresets } from '../taskTagPresets';
 import { tx as runDbTransaction } from '../worker/opHandlers/tx';
+import { executeMessageAnnotationRequest } from '../messageAnnotationStore';
+import { annotationSourceVersion, formatMessageAnnotationsForSend } from '../../../shared/messageAnnotations';
 
 const canRunMigrationReplay = process.platform === 'win32' || process.platform === 'darwin';
 const describeMigrationReplay = canRunMigrationReplay ? describe : describe.skip;
@@ -119,7 +121,15 @@ describe('native usage currency upgrade', () => {
       db.prepare(`INSERT INTO daily_model_usage VALUES
         (date(? / 1000,'unixepoch','localtime'),'codex','projected-model#billing=subscription','CNY',6.7,0,1,3,4,0,0,?),
         (date(? / 1000,'unixepoch','localtime'),'codex','projected-model#billing=subscription','USD',2,0,1,2,1,0,0,?)`).run(at,at,at,at);
-      const replay = () => runMigrationReplay(db, {drizzleDir: drizzleDir(), currentVersion: 158});
+      // Only the currency companions are deliberately replayed twice. Later additive DDL
+      // is not idempotent and must never be forced through an artificial old version.
+      const currencyDir = path.join(path.dirname(db.name), 'currency-replay');
+      mkdirSync(path.join(currencyDir, 'scripts'), { recursive: true });
+      for (const name of ['0159_restore_native_usage_currency', '0160_native_usage_amount_metadata']) {
+        copyFileSync(path.join(drizzleDir(), name + '.sql'), path.join(currencyDir, name + '.sql'));
+        copyFileSync(path.join(drizzleDir(), 'scripts', name + '.ts'), path.join(currencyDir, 'scripts', name + '.ts'));
+      }
+      const replay = () => runMigrationReplay(db, {drizzleDir: currencyDir, currentVersion: 158});
       replay();
       const read = (id: string) => JSON.parse(db.prepare('SELECT agent_meta FROM messages WHERE id=?').pluck().get(id) as string);
       const restored = {currency: 'USD',amount: 1,kind: 'value-estimate'};
@@ -198,6 +208,7 @@ describeMigrationReplay('existing side-chat teams', () => {
         '0160_native_usage_amount_metadata.sql',
         '0161_schedule_model_group.sql',
         '0162_schedule_mr_observation.sql',
+        '0163_silly_deadpool.sql',
       ]);
       expect(columnNames(db, 'schedules')).toContain('model_group');
       expect(columnNames(db, 'schedules')).toContain('primary_host_key');
@@ -413,6 +424,56 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
+  // Production store + worker transaction: protects durable numbering, permission denial,
+  // acceptance/rollback and task deletion. Existing replay fixtures have no annotations.
+  // Minimal input is one assistant response and an annotation-only user send. Migration tier:
+  // actual SQLite schema/foreign keys/transaction semantics cannot be replaced by mock calls.
+  it('persists inline annotations and acknowledges only the committed user message', async () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      runMigrationReplay(db, { drizzleDir: drizzleDir() });
+      db.exec("INSERT INTO sessions (id, created_at, updated_at) VALUES ('annotation-task', 1, 1)");
+      db.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('reply', 'reply-client', 'annotation-task', 'assistant', ?, 1)")
+        .run(JSON.stringify('同一句，同一句'));
+      const ports = {
+        db: {
+          query: async <T,>(sql: string, params: unknown[] = []) => db.prepare(sql).all(...params) as T[],
+          queryOne: async <T,>(sql: string, params: unknown[] = []) => db.prepare(sql).get(...params) as T | undefined,
+          exec: async (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params),
+        },
+        assertCurrent: () => {}, canCreate: async () => true,
+      };
+      const request = { action: 'add' as const, sessionId: 'annotation-task', comment: '请展开第二处', anchor: {
+        messageClientId: 'reply-client', sourceVersion: annotationSourceVersion('同一句，同一句'),
+        start: 4, end: 7, quote: '同一句', prefix: '同一句，', suffix: '',
+      } };
+      await expect(executeMessageAnnotationRequest(request, { ...ports, canCreate: async () => false })).rejects.toThrow('approved annotation plugin');
+      let records = await executeMessageAnnotationRequest(request, ports);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ ordinal: 1, sentAt: null, start: 4 });
+      const args = { id: 'user-row', clientId: 'user-client', sessionId: 'annotation-task', role: 'user',
+        content: JSON.stringify({ text: formatMessageAnnotationsForSend('', records) }), createdAt: 100 };
+      runDbTransaction(db, { name: 'message.insert', args: { ...args, publication: 'stage' } });
+      records = await executeMessageAnnotationRequest({ action: 'list', sessionId: request.sessionId }, ports);
+      expect(records[0].sentAt).toBeNull();
+      runDbTransaction(db, { name: 'message.insert', args: { ...args, publication: 'publish' } });
+      records = await executeMessageAnnotationRequest({ action: 'list', sessionId: request.sessionId }, ports);
+      expect(records[0].sentAt).toBe(100);
+      await executeMessageAnnotationRequest({ action: 'remove', sessionId: request.sessionId, id: records[0].id }, ports);
+      expect(db.prepare('SELECT count(*) AS count FROM message_annotations').get()).toEqual({ count: 1 });
+      runDbTransaction(db, { name: 'message.insert', args: { ...args, publication: 'rollback' } });
+      expect((await executeMessageAnnotationRequest({ action: 'list', sessionId: request.sessionId }, ports))[0].sentAt).toBeNull();
+      for (let i = 1; i < 99; i++) await executeMessageAnnotationRequest(request, ports);
+      await expect(executeMessageAnnotationRequest(request, ports)).rejects.toThrow('99 annotations');
+      const full = await executeMessageAnnotationRequest({ action: 'list', sessionId: request.sessionId }, ports);
+      await executeMessageAnnotationRequest({ action: 'remove', sessionId: request.sessionId, id: full.find(a => a.ordinal === 50)!.id }, ports);
+      const replaced = await executeMessageAnnotationRequest(request, ports);
+      expect(replaced).toHaveLength(99);
+      expect(new Set(replaced.map(a => a.ordinal)).size).toBe(99);
+      db.exec("DELETE FROM sessions WHERE id = 'annotation-task'");
+      expect(db.prepare('SELECT count(*) AS count FROM message_annotations').get()).toEqual({ count: 0 });
+    } finally { cleanup(); }
+  });
   it.each(['missing', 'legacy', 'partial'])(
     'replays remote report persistence with %s Worker schema',
     (shape) => {
@@ -430,7 +491,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162,
+          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -610,7 +671,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。

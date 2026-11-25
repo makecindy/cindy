@@ -8761,7 +8761,8 @@
             "context": "Read the current task and selected text",
             "draft": "Read and edit the message draft",
             "appearance": "Change the declared appearance settings",
-            "visibility": "Show or hide the window and declared interface regions"
+            "visibility": "Show or hide the window and declared interface regions",
+            "annotations": "Add annotations to messages, keep highlights, and include replies when sending"
           },
           "fields": {
             "uiFont": "Change the interface font",
@@ -16548,6 +16549,21 @@
       "signingIn": "The subscription account used by this task is signing in. Retry after sign-in finishes.",
       "unavailable": "The subscription account assigned to this task is unavailable for this request. Check the account in model provider settings on the computer running the task, or choose another model source.",
       "legacy": "The subscription account assigned to this task is unavailable. Check its sign-in and usage status on the computer running the task, or choose another model source. This task does not switch accounts automatically."
+    },
+    "annotations": {
+      "add": "Add annotation",
+      "title": "Annotation",
+      "open": "Open annotation {{number}}",
+      "close": "Close",
+      "placeholder": "Reply to this passage…",
+      "pending": "Included in your next message",
+      "sent": "Sent · kept in history",
+      "save": "Save annotation",
+      "saving": "Saving…",
+      "remove": "Delete",
+      "saveFailed": "Could not save. The response may have changed or reached 99 annotations. Select the text again and retry.",
+      "ready": "{{count}} annotations will be included when you send. You can send without typing.",
+      "deliverySaveFailed": "Your message was sent, but annotation delivery status could not be saved. Check before sending again."
     }
   },
   "ccAgent": {

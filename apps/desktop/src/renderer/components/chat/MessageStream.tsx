@@ -64,6 +64,7 @@ import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { createPortal, flushSync } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
+import { MessageAnnotations } from './MessageAnnotations';
 import { copyChatSelection } from './chatSelectionClipboard';
 import {
   groupWorkRuns,
@@ -6740,7 +6741,8 @@ export function MessageStream({
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
             {sessionId ? (
-              <SelectionQuoteButton sessionId={sessionId} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
+              <><SelectionQuoteButton sessionId={sessionId} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
+                {!ownerDeviceId && <MessageAnnotations sessionId={sessionId} containerRef={scrollRef} />}</>
             ) : null}
             {/*
         原生滚动容器:overflow-y-auto + overflow-x-hidden。

@@ -1,4 +1,9 @@
 import { Button } from '@/components/ui/button';
+import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { getApprovedGhostHostUi } from '../../../shared/ghost';
+import type { MessageAnnotationAnchor } from '../../../shared/messageAnnotations';
+import { captureAnnotationSelection, openMessageAnnotation } from './messageAnnotationRange';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 /**
  * SelectionQuoteButton — 聊天消息流的"选中文字 → 添加到对话"浮动按钮。
  *
@@ -20,7 +25,8 @@ import { Button } from '@/components/ui/button';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageSquarePlus } from 'lucide-react';
+import { MessageSquarePlus, Highlighter } from 'lucide-react';
+import './messageAnnotations.css';
 import { useTranslation } from 'react-i18next';
 
 import type { ChatQuote } from '@/lib/chatQuotes';
@@ -31,6 +37,7 @@ import { CHAT_SELECTION_EXCLUDE_SELECTOR, hasChatSelectionGap, isChatSelectionRo
 const QUOTE_MAX_CHARS = 4000;
 
 interface SelectionAnchor {
+  annotation?: MessageAnnotationAnchor;
   text: string;
   x: number;
   y: number;
@@ -272,6 +279,8 @@ export function SelectionQuoteButton({
   containerRef: React.RefObject<HTMLElement | null>;
 }) {
   const { t } = useTranslation();
+  const ghosts = useInstalledGhosts();
+  const annotationsEnabled = !sourcePath && !getStickySessionDeviceId(sessionId) && ghosts.some(ghost => getApprovedGhostHostUi(ghost)?.capabilities?.includes('annotations'));
   const [anchor, setAnchor] = useState<SelectionAnchor | null>(null);
   const [openingSideChat, setOpeningSideChat] = useState(false);
   const pillRef = useRef<HTMLDivElement>(null);
@@ -323,7 +332,7 @@ export function SelectionQuoteButton({
       const floatingAnchor = getFloatingAnchor(sel, range);
       if (!floatingAnchor) return null;
 
-      return { text, ...floatingAnchor };
+      return { text, ...floatingAnchor, annotation: annotationsEnabled ? captureAnnotationSelection(range, sessionId) ?? undefined : undefined };
     };
 
     const onMouseUp = () => {
@@ -359,7 +368,7 @@ export function SelectionQuoteButton({
         delete container.dataset.selectionQuoteContext;
       }
     };
-  }, [commitQuote, containerRef, getQuoteText]);
+  }, [commitQuote, containerRef, getQuoteText, annotationsEnabled, sessionId]);
 
   if (!anchor) return null;
 
@@ -403,6 +412,12 @@ export function SelectionQuoteButton({
           } finally { setOpeningSideChat(false); }
         }}>
         {t(openingSideChat ? 'chat.sideChat.opening' : 'chat.sideChat.title')}
+      </Button>}
+      {anchor.annotation && annotationsEnabled && <Button variant="secondary" size="sm" compact type="button"
+        className="message-annotation-action"
+        onClick={() => { openMessageAnnotation(sessionId, anchor.annotation!, { x: anchor.x, y: anchor.y }); setAnchor(null); }}>
+        <Highlighter className="h-3.5 w-3.5" aria-hidden="true" />
+        {t('chat.annotations.add')}
       </Button>}
     </div>,
     document.body,

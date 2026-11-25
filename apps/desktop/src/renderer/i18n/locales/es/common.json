@@ -8835,7 +8835,8 @@
             "context": "Leer la tarea actual y el texto seleccionado",
             "draft": "Leer y editar el borrador del mensaje",
             "appearance": "Cambiar los ajustes de apariencia declarados",
-            "visibility": "Mostrar u ocultar la ventana y las áreas de interfaz declaradas"
+            "visibility": "Mostrar u ocultar la ventana y las áreas de interfaz declaradas",
+            "annotations": "Anotar mensajes, conservar resaltados e incluir respuestas al enviar"
           },
           "fields": {
             "uiFont": "Cambiar la fuente de la interfaz",
@@ -16701,6 +16702,21 @@
       "signingIn": "Se está iniciando sesión en la cuenta de suscripción de esta tarea. Vuelve a intentarlo cuando termine.",
       "unavailable": "La cuenta de suscripción asignada a esta tarea no se puede usar para esta solicitud. Revisa la cuenta en los ajustes del proveedor de modelos del ordenador que ejecuta la tarea o elige otra fuente de modelos.",
       "legacy": "La cuenta de suscripción asignada a esta tarea no está disponible. Revisa el inicio de sesión y el uso en el ordenador que ejecuta la tarea o elige otra fuente de modelos. La cuenta no cambia automáticamente."
+    },
+    "annotations": {
+      "add": "Añadir anotación",
+      "title": "Anotación",
+      "open": "Abrir anotación {{number}}",
+      "close": "Cerrar",
+      "placeholder": "Responde a este pasaje…",
+      "pending": "Se incluirá en tu próximo mensaje",
+      "sent": "Enviada · guardada en el historial",
+      "save": "Guardar anotación",
+      "saving": "Guardando…",
+      "remove": "Eliminar",
+      "saveFailed": "No se pudo guardar. La respuesta puede haber cambiado o tener 99 anotaciones. Selecciona el texto de nuevo e inténtalo otra vez.",
+      "ready": "Se enviarán {{count}} anotaciones. Puedes enviar sin escribir texto.",
+      "deliverySaveFailed": "El mensaje se envió, pero no se pudo guardar el estado de las anotaciones. Compruébalo antes de volver a enviar."
     }
   },
   "ccAgent": {

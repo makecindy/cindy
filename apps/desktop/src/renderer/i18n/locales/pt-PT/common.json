@@ -8835,7 +8835,8 @@
             "context": "Ler a tarefa atual e o texto selecionado",
             "draft": "Ler e editar o rascunho da mensagem",
             "appearance": "Alterar as definições de aparência declaradas",
-            "visibility": "Mostrar ou ocultar a janela e as áreas de interface declaradas"
+            "visibility": "Mostrar ou ocultar a janela e as áreas de interface declaradas",
+            "annotations": "Anotar mensagens, manter destaques e incluir respostas no envio"
           },
           "fields": {
             "uiFont": "Alterar o tipo de letra da interface",
@@ -16701,6 +16702,21 @@
       "signingIn": "O início de sessão na conta de subscrição desta tarefa está em curso. Tenta novamente quando terminar.",
       "unavailable": "A conta de subscrição atribuída a esta tarefa não pode ser utilizada neste pedido. Verifica a conta nas definições do fornecedor de modelos no computador que executa a tarefa ou escolhe outra origem de modelos.",
       "legacy": "A conta de subscrição atribuída a esta tarefa não está disponível. Verifica o início de sessão e a utilização no computador que executa a tarefa ou escolhe outra origem de modelos. A conta não muda automaticamente."
+    },
+    "annotations": {
+      "add": "Adicionar anotação",
+      "title": "Anotação",
+      "open": "Abrir anotação {{number}}",
+      "close": "Fechar",
+      "placeholder": "Responda a este excerto…",
+      "pending": "Incluída na próxima mensagem",
+      "sent": "Enviada · guardada no histórico",
+      "save": "Guardar anotação",
+      "saving": "A guardar…",
+      "remove": "Eliminar",
+      "saveFailed": "Não foi possível guardar. A resposta pode ter mudado ou atingido 99 anotações. Selecione novamente o texto e tente outra vez.",
+      "ready": "Serão enviadas {{count}} anotações. Pode enviar sem escrever texto.",
+      "deliverySaveFailed": "A mensagem foi enviada, mas não foi possível guardar o estado das anotações. Verifique antes de voltar a enviar."
     }
   },
   "ccAgent": {

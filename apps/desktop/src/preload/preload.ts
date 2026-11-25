@@ -6291,6 +6291,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── chat-data-localization (M-FE2)：本地 SQLite IPC 桥接 ──
   // 所有 db 操作 main 独占；renderer 仅通过这里间接访问。
   localDb: {
+    messageAnnotations: (request: import('../shared/messageAnnotations').MessageAnnotationRequest): Promise<import('../shared/messageAnnotations').MessageAnnotation[]> =>
+      ipcRenderer.invoke('local-db:message-annotations', request),
     onRuntimeCorruption: (callback: (stamp: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) =>
       fanOutLocalDbRuntimeCorruption((data) => {
         if (isDataOwnerPushStamp(data)) callback(data);

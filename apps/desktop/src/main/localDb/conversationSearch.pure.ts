@@ -7,6 +7,7 @@ import type {
 } from '../../shared/conversationSearch.js';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
+import { messageAnnotationPresentation } from '../../shared/messageAnnotations.js';
 
 const Bonus = {
   WORD_BOUNDARY: 15,
@@ -282,6 +283,8 @@ function roleVisibleText(role: string, content: unknown): string {
 
 function userVisibleText(content: unknown): string {
   const text = userVisibleTextRaw(content);
+  const annotation = messageAnnotationPresentation(text);
+  if (annotation) return [annotation.text, ...annotation.annotations.map(a => `${a.quote}\n${a.reply}`)].filter(Boolean).join('\n');
   // 合成 UI 指令行(隐藏续跑指令等)对用户不可见,全文检索/learn-host 证据链
   // 同样不可见:返回空串 → keywordMatchedVisibleText=false → 命中被上游丢弃。
   // 与 mapper(sidebar 预览)/任务摘要/embedder 的排除口径一致,防隐藏英文指令

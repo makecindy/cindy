@@ -211,6 +211,29 @@ export async function searchConversations(
     });
   }
 
+  // Annotations remain searchable before sending, without inserting a fake user turn.
+  // Candidate session IDs above already enforce the same account/filter/remote boundary.
+  if (allowedSessionIds.length) {
+    const annotationRows = await getDbClient().query<{
+      sessionId: string; messageId: string; messageClientId: string; comment: string; quote: string; createdAt: number;
+    }>(`SELECT a.session_id AS sessionId, m.id AS messageId, m.client_id AS messageClientId,
+      a.comment, json_extract(a.anchor_json, '$.quote') AS quote, a.created_at AS createdAt
+      FROM message_annotations a JOIN messages m ON m.id = a.message_id
+      WHERE m.rewind_at IS NULL AND m.role = 'assistant'
+      AND a.session_id IN (SELECT value FROM json_each(?))
+      AND (instr(lower(a.comment), lower(?)) > 0 OR instr(lower(json_extract(a.anchor_json, '$.quote')), lower(?)) > 0)
+      ORDER BY a.created_at DESC LIMIT 150`, [JSON.stringify(allowedSessionIds), query, query]);
+    for (const row of annotationRows) {
+      const session = sessionSummaries.get(row.sessionId);
+      if (!session || (activityCutoff && row.createdAt < activityCutoff)) continue;
+      const preview = normalizeConversationContentPreview('user', `${row.quote}\n${row.comment}`, query, 180);
+      contentHits.push({ session, hit: {
+        messageId: row.messageId, messageClientId: row.messageClientId, role: 'assistant',
+        createdAt: new Date(row.createdAt).toISOString(), snippet: preview.snippet, preview: preview.preview,
+        score: 1, ftsRank: 1, vectorRank: null,
+      } });
+    }
+  }
   const results = mergeConversationSearchResults({ titleMatches, contentHits, limit, sortBy });
 
   return {

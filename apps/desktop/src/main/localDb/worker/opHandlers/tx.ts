@@ -1,4 +1,5 @@
 import { PROJECT_ARCHIVE_GUARD_SQL, type ProjectArchiveGuard } from '../../projectArchiveGuard.js';
+import { sentMessageAnnotationSnapshots } from '../../../../shared/messageAnnotations.js';
 import { deleteDeletedSessionViewStates, saveMcpAppViewState } from './mcpAppViewState.js';
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
@@ -1715,6 +1716,22 @@ function messageInsert(db: Database.Database, args: unknown): { changes: number 
         .changes;
     }
     if (changes > 0 && (!payload.publication || payload.publication === 'publish' || payload.publication === 'rollback')) {
+      if (role === 'user') {
+        let body: unknown;
+        try { body = JSON.parse(content); } catch { body = content; }
+        const annotations = sentMessageAnnotationSnapshots(body);
+        for (const annotation of annotations) {
+          // Acceptance and the immutable sent snapshot share the user-message transaction.
+          // A rollback only undoes acknowledgements owned by this exact publication time.
+          const rollback = payload.publication === 'rollback';
+          db.prepare(`UPDATE message_annotations SET sent_at = ?
+            WHERE session_id = ? AND id = ? AND comment = ?
+            AND json_extract(anchor_json, '$.quote') = ? AND json_extract(anchor_json, '$.sourceVersion') = ?
+            AND ${rollback ? 'sent_at = ?' : 'sent_at IS NULL'}`)
+            .run(rollback ? null : createdAt, sessionId, annotation.annotationId, annotation.reply,
+              annotation.quote, annotation.responseVersion, ...(rollback ? [createdAt] : []));
+        }
+      }
       if (role === 'user' || role === 'assistant') {
         db.prepare(
           'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',

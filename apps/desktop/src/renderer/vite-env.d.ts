@@ -5128,6 +5128,7 @@ interface ElectronAPI {
 
   // ── chat-data-localization (M-FE2) — local SQLite IPC bridge ──
   localDb: {
+    messageAnnotations: (request: import('../shared/messageAnnotations').MessageAnnotationRequest) => Promise<import('../shared/messageAnnotations').MessageAnnotation[]>;
     onRuntimeCorruption?: (callback: (stamp: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
     /** Open / migrate the per-user db file. Failure → fatal dialog + ready:false. */
     ensureReady: (userId: string, recovery?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => Promise<
