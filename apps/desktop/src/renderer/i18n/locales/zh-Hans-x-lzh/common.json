@@ -12272,8 +12272,8 @@
       "footnote": "此段将入同伴之身分上下文；速设之性情另行存之，改此处不致覆之。"
     },
     "welcome": {
-      "generic": "幸会，吾乃{{name}}。此后有事，径与吾言；容吾先熟悉此间风物。",
-      "withRole": "幸会，吾乃{{name}}——{{description}}。有事径与吾言。"
+      "generic": "幸会，吾乃{{name}}。有事径与吾言。",
+      "withUser": "{{userName}}安好，吾乃{{name}}。有事径与吾言。"
     },
     "invitation": {
       "title": "将与君相见",
