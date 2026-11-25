@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mergePluginSnapshot, pluginCatalogMemory, pluginCatalogPartitionKey, pluginInstalledGrid, usePluginCatalogState } from './lib/pluginCatalogMemory';
 import { samePluginValue, PLUGIN_CATALOG_REFRESH_MS } from './lib/pluginBrowserCache';
-import { PluginRecommendationSlots } from './lib/PluginRecommendationSlots';
+import { PluginRecommendationSlots, selectPluginRecommendationBatch } from './lib/PluginRecommendationSlots';
 import { PluginCatalogPanels } from './lib/PluginCatalogPanels';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
 import {
@@ -13,7 +13,6 @@ import {
 } from '@cindy/device-link';
 import { Button } from '@/components/ui/button';
 import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
-import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   getDataOwnerGeneration,
@@ -40,7 +39,7 @@ import { PluginCatalogBrowser, PLUGIN_PAGE_SIZE } from './PluginCatalogBrowser';
 import { PluginVirtualGrid } from './PluginVirtualGrid';
 import { usePluginListScrollRestoration } from './lib/usePluginListScrollRestoration';
 import { hasPluginCatalogPaging, parsePluginManagementMarketPage, parsePluginManagementRecommendations } from './remotePluginManagementClient';
-import type { PluginMarketQuery, PluginMarketPage } from '../../../shared/pluginMarket';
+import { parsePluginMarketSortFields, type PluginMarketQuery, type PluginMarketPage } from '../../../shared/pluginMarket';
 import { GhostPluginActions } from './GhostPluginActions';
 import type { CatalogDeviceControl } from './useCatalogDevice';
 import { GhostPluginDetailView } from './GhostPluginDetailView';
@@ -49,7 +48,9 @@ import { RemotePluginReadOnlyDetail } from './RemotePluginReadOnlyDetail';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
 import {
   PluginManagementLayout,
-  InstalledCatalogHeader,
+  CatalogSectionHeader,
+  CatalogHeadingTabs,
+  CatalogHeading,
   CatalogTargetControls,
   CatalogManagementNotice,
   PluginManagementPage,
@@ -110,10 +111,12 @@ export function RemotePluginPage({
   const [selected, setSelected] = useState<string | null>(null);
   const ghost = snapshot?.ghosts.find((g) => installedGhostStoragePart(g) === selected);
   const [marketDetail, setMarketDetail] = useState<PluginMarketDetail | null>(null);
+  const relatedMarketTrail = useRef<PluginMarketDetail[]>([]);
   const [query, setQuery] = usePluginCatalogState(catalogMemory, 'query');
   const [catalogTab, setCatalogTab] = usePluginCatalogState(catalogMemory, 'catalogTab');
   const [catalogPaging, setCatalogPaging] = usePluginCatalogState(catalogMemory, 'catalogPaging');
   const [todayPool, setTodayPool] = usePluginCatalogState(catalogMemory, 'todayPool');
+  const [recommendationBatch, setRecommendationBatch] = usePluginCatalogState(catalogMemory, 'recommendationBatch');
   const [consumedToday, setConsumedToday] = usePluginCatalogState(catalogMemory, 'consumedToday');
   const [todayLoaded, setTodayLoaded] = usePluginCatalogState(catalogMemory, 'todayLoaded');
   const installingRecommendation = useRef<string | null>(null);
@@ -121,7 +124,6 @@ export function RemotePluginPage({
   const [marketTotal, setMarketTotal] = usePluginCatalogState(catalogMemory, 'marketTotal');
   const browserCache = catalogMemory.browser;
   const installedSentinel = useRef<HTMLDivElement>(null);
-  const marketFiltersHost = useRef<HTMLDivElement>(null);
   const secondaryTabs = useRef<HTMLDivElement>(null);
   const installedGridCache = pluginInstalledGrid(catalogMemory, query);
   const [originFilter, setOriginFilter] = usePluginCatalogState(catalogMemory, 'originFilter');
@@ -156,7 +158,7 @@ export function RemotePluginPage({
     [device.deviceId],
   );
   const refreshAt = useRef(catalogMemory.snapshotAt);
-  const refresh = useCallback(async (force = true) => {
+  const refresh = useCallback(async (force = true, revalidateCatalog = false) => {
     if (!force && catalogMemory.remoteSnapshot && Date.now() - catalogMemory.snapshotAt < PLUGIN_CATALOG_REFRESH_MS) return;
     const revision = ++readRevision.current;
     if (!writable()) return;
@@ -197,7 +199,9 @@ export function RemotePluginPage({
         setLegacySelected(null);
         setLegacyDetail(null);
         setStatus(null);
-        await browserCache.current.refresh?.({ force: force && !samePluginValue(previousMarket, catalogMemory.remoteSnapshot?.market) });
+        await browserCache.current.refresh?.({
+          force: revalidateCatalog && !samePluginValue(previousMarket, catalogMemory.remoteSnapshot?.market),
+        });
       }
     } catch {
       if (writable() && revision === readRevision.current) setStatus('readFailed');
@@ -235,7 +239,8 @@ export function RemotePluginPage({
     if (catalogPaging) {
       const value = await invoke('snapshot', { read: 'catalog', query: input });
       if (!writable()) throw new Error('UNAVAILABLE');
-      return parsePluginManagementMarketPage(value);
+      const { sort, sorts, ...page } = parsePluginManagementMarketPage(value);
+      return { ...page, ...parsePluginMarketSortFields({ sort, sorts }) };
     }
     // Explicit legacy Host path: its existing v1 snapshot cannot paginate over the wire.
     // Reconnect can refresh the retained browser before React commits this snapshot.
@@ -336,7 +341,10 @@ export function RemotePluginPage({
       ++detailRevision.current;
       ++projectReadRevision.current;
       dialog.current?.abort();
-    } else if (active) void refresh(!previous.online || !previous.active);
+    } else if (active) {
+      const activating = !previous.online || !previous.active;
+      void refresh(activating, activating);
+    }
   }, [online, active, refresh]);
   useEffect(
     () =>
@@ -538,14 +546,18 @@ export function RemotePluginPage({
       snapshot?.uiCapabilityApproval,
     ],
   );
-  const selectMarket = async (item: PluginMarketItem) => {
-    captureCatalogScroll();
+  const selectMarket = async (item: PluginMarketItem, previous?: PluginMarketDetail) => {
+    if (!previous) {
+      relatedMarketTrail.current.length = 0;
+      captureCatalogScroll();
+    }
     const revision = ++detailRevision.current;
     try {
       const detail = parsePluginManagementDetail(
         await invoke('market-detail', { pluginId: item.pluginId }),
       );
       if (writable() && revision === detailRevision.current) {
+        if (previous) relatedMarketTrail.current.push(previous);
         setSelected(null);
         setMarketDetail(detail);
       }
@@ -742,13 +754,17 @@ export function RemotePluginPage({
       .toLocaleLowerCase()
       .includes(normalizedQuery),
   );
+  const todayCandidates = todayPool.filter(item => {
+    const latest = snapshot?.market.items.find(row => row.pluginId === item.pluginId) ?? item;
+    return !consumedToday.has(item.pluginId) && latest.installState !== 'installed' && latest.installState !== 'update-available';
+  });
+  const todayItems = selectPluginRecommendationBatch(todayCandidates, recommendationBatch);
   const pageHeading = (
-    <header className="mb-8" data-catalog-region="heading">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-28 font-medium leading-tight text-[var(--text-primary)]">
-          {t('settings.ghosts.title')}
-        </h1>
-        <CatalogTargetControls
+    <CatalogHeading
+      anchor={secondaryTabs}
+      searching={Boolean(query.trim())}
+      title={query.trim() ? t('settings.ghosts.page.searchResults') : unsupported ? t('settings.ghosts.title') : t(catalogTab === 'market' ? 'settings.ghosts.page.marketSection' : 'settings.ghosts.page.installedSection')}
+      target={<CatalogTargetControls
           computer={
             deviceControl ?? {
               selected: device,
@@ -770,12 +786,16 @@ export function RemotePluginPage({
               onPick={pickProject}
             />
           }
-        />
-      </div>
-      <p className="mt-2 text-14 leading-6 text-[var(--text-secondary)]">
-        {t('settings.ghosts.description')}
-      </p>
-    </header>
+        />}
+      tabs={!unsupported ? <CatalogHeadingTabs value={catalogTab} installedCount={snapshot?.ghosts.length ?? 0} marketCount={marketTotal}
+        onValueChange={value => {
+          if (value === 'market' && catalogTab !== 'market') setOriginFilter('official');
+          setCatalogTab(value);
+          const root = catalogScroller.current, tabs = secondaryTabs.current;
+          if (root && tabs && tabs.getBoundingClientRect().top < root.getBoundingClientRect().top)
+            root.scrollTop += tabs.getBoundingClientRect().top - root.getBoundingClientRect().top;
+        }} /> : undefined}
+    />
   );
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--surface)]">
@@ -850,9 +870,19 @@ export function RemotePluginPage({
           />
         ) : marketDetail ? (
           <MarketPluginDetailView
+            key={marketDetail.pluginId}
             detail={marketDetail}
             busy={busy}
-            onBack={() => { restoreCatalogScroll(); setMarketDetail(null); }}
+            backLabel={relatedMarketTrail.current.length ? t('settings.back') : undefined}
+            onBack={() => {
+              ++detailRevision.current;
+              const previous = relatedMarketTrail.current.pop();
+              if (!previous) restoreCatalogScroll();
+              setMarketDetail(previous ?? null);
+            }}
+            relatedCatalog={{ cache: browserCache, ownerKey: catalogOwnerKey, catalogKey: i18n.language,
+              loadPage: readMarketPage, liveItems: snapshot?.market.items, installedGhosts: snapshot?.ghosts, online }}
+            onOpenRelated={item => { if (!busy) void selectMarket(item, marketDetail); }}
             onInstall={
               marketDetail.installState === 'conflict'
                 ? undefined
@@ -879,40 +909,21 @@ export function RemotePluginPage({
               )
             }
           >
-            <main ref={catalogScroller} onScroll={onListScroll} className="min-h-0 flex-1 overflow-y-auto">
-              <PluginManagementPage>
+            <main ref={catalogScroller} onScroll={onListScroll} className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
+              <PluginManagementPage className="plugin-catalog-frame">
                 {pageHeading}
-                {!query.trim() && (!todayLoaded || todayPool.filter(item => {
-                  const latest = snapshot?.market.items.find(row => row.pluginId === item.pluginId) ?? item;
-                  return !consumedToday.has(item.pluginId) && latest.installState !== 'installed' && latest.installState !== 'update-available';
-                }).length >= 3) ? <section className="mb-6 min-w-0">
-                  <h2 className="mb-4 text-20 font-medium text-[var(--text-primary)]">{t('settings.ghosts.page.todayRecommendations')}</h2>
-                  <PluginRecommendationSlots loading={!todayLoaded}>
-                    {todayPool.filter(item => {
-                      const latest = snapshot?.market.items.find(row => row.pluginId === item.pluginId) ?? item;
-                      return !consumedToday.has(item.pluginId) && latest.installState !== 'installed' && latest.installState !== 'update-available';
-                    }).slice(0, 3).map(item => <MarketPluginCard compact key={item.pluginId} item={item} busy={busy}
-                      onSelect={() => void selectMarket(item)} onInstall={() => void install(item)} onIconLoadError={() => {}} />)}
-                  </PluginRecommendationSlots>
+                {!unsupported && catalogTab === 'market' && !query.trim() && (!todayLoaded || todayItems.length === 3) ? <section className="plugin-catalog-recommendations min-w-0">
+                  <PluginRecommendationSlots loading={!todayLoaded} items={todayItems} order={catalogMemory.recommendationOrder}
+                    shuffle={{ title: t('settings.ghosts.page.todayRecommendations'), label: t('newChat.homeSuggestions.shuffle'),
+                      candidates: todayCandidates, onChange: setRecommendationBatch }}
+                    active={active} busy={busy}
+                    renderItem={(item, featured, deck) => <MarketPluginCard compact featured={featured} item={item} recommendationDeck={deck} busy={busy}
+                      onSelect={() => void selectMarket(item)} onInstall={() => void install(item)} onIconLoadError={() => {}} />} />
                 </section> : null}
-                {!unsupported && !query.trim() ? <><div ref={secondaryTabs} className="h-0" /><div className="sticky top-0 z-raised mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] app-wallpaper-surface bg-[var(--surface)] py-3">
-                  <SegmentedControl role="tablist" height={38} optionHeight={32}
-                    optionClassName="plugin-management-tab min-w-[88px] px-4 text-13" value={catalogTab} onValueChange={value => {
-                    if (value === 'market' && catalogTab !== 'market') setOriginFilter('official');
-                    setCatalogTab(value);
-                    const root = catalogScroller.current, tabs = secondaryTabs.current;
-                    if (root && tabs && tabs.getBoundingClientRect().top < root.getBoundingClientRect().top)
-                      root.scrollTop += tabs.getBoundingClientRect().top - root.getBoundingClientRect().top;
-                  }} aria-label={t('settings.ghosts.page.secondaryTabsAria')}
-                    options={[
-                      { value: 'installed', label: <>{t('settings.ghosts.page.installedSection')} <span className="ml-1.5 inline-block min-w-[3ch] text-right tabular-nums">{snapshot?.ghosts.length ?? 0}</span></> },
-                      { value: 'market', label: <>{t('settings.ghosts.page.marketSection')} <span className="ml-1.5 inline-block min-w-[3ch] text-right tabular-nums">{marketTotal ?? '\u00a0'}</span></> },
-                    ]} />
-                  <div ref={marketFiltersHost} className="min-w-0" />
-                </div></> : null}
                 <PluginCatalogPanels scrollRef={catalogScroller} query={query}>
-                <section hidden={!unsupported && !query.trim() && catalogTab !== 'installed'}>
-                  <InstalledCatalogHeader
+                <section hidden={!unsupported && !query.trim() && catalogTab !== 'installed'} className="mt-6">
+                  {unsupported || query.trim() ? <CatalogSectionHeader
+                    region="installed"
                     title={t('settings.ghosts.page.installedSection')}
                     count={
                       unsupported
@@ -921,7 +932,7 @@ export function RemotePluginPage({
                           : undefined
                         : filteredGhosts?.length
                     }
-                  />
+                  /> : null}
                   {notice}
                   <div className="min-w-0">
                     {unsupported
@@ -1003,10 +1014,13 @@ export function RemotePluginPage({
                   ) : null}
                 </section>
                 {!unsupported ? <PluginCatalogBrowser cacheRef={browserCache}
-                  filterHost={marketFiltersHost}
                   ownerKey={JSON.stringify([device.deviceId, scope.current.owner])}
                   catalogKey={i18n.language}
-                  revision={JSON.stringify([snapshot?.market.items.map(item => [item.pluginId, item.installState, item.version]), snapshot?.market.customSourceNames])} installedItems={snapshot?.market.items}
+                  revision={JSON.stringify([snapshot?.market.customSourceNames, snapshot?.market.unavailableCustomSourceNames,
+                    snapshot?.market.unavailableReason, snapshot?.market.organizationAccessError,
+                    snapshot?.market.items.filter(item => !catalogPaging || item.sourceType !== 'server').map(item => [item.pluginId, item.version]),
+                    query.trim() ? snapshot?.market.items.map(item => [item.pluginId, item.installState]) : null])}
+                  installedItems={snapshot?.market.items} installedGhosts={snapshot?.ghosts}
                   query={query} scope={originFilter}
                   onScope={value => {
                     setOriginFilter(value);
@@ -1015,8 +1029,8 @@ export function RemotePluginPage({
                       root.scrollTop += tabs.getBoundingClientRect().top - root.getBoundingClientRect().top;
                   }} showOrganization={true}
                   visible={active && (!!query.trim() || catalogTab === 'market')} scrollRef={catalogScroller}
-                  loadPage={readMarketPage} onCounts={counts => setMarketTotal(counts?.all ?? null)} renderRevision={busy}
-                  renderItem={item => <MarketPluginCard key={item.pluginId} item={item} busy={busy}
+                  loadPage={readMarketPage} online={online} onCounts={counts => { if (!query.trim()) setMarketTotal(counts?.all ?? null); }} renderRevision={busy}
+                  renderItem={(item, metric) => <MarketPluginCard key={item.pluginId} item={item} metric={metric} busy={busy}
                     onSelect={() => void selectMarket(item)}
                     onInstall={item.installState === 'installed' || item.installState === 'update-available' ? undefined : () => void install(item)}
                     onIconLoadError={() => {}} />}

@@ -1823,7 +1823,7 @@ interface ElectronAPI {
     lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     recommendations: (pluginIds?: string[]) => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
-    detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
+    detail: (pluginId: string, options?: { includeReadme?: boolean; includeUpdates?: boolean }) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
     prepareLocalShare: (instanceId: string, operationId: string, options: import('../shared/share').ShareOptions, expected: import('../shared/share').LocalPluginShareBinding, uploadConfirmed: boolean) => Promise<import('../shared/share').SharePreparation>;
     localShareDetail: (snapshotId: string) => Promise<import('@cindy/plugin-protocol').LocalPluginShareSnapshot>;

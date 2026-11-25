@@ -5,10 +5,11 @@ const PREFETCH_TTL_MS = 30_000;
 const MAX_ENTRIES = 50;
 
 /** Catalog identity never carries detail permissions or README authority. */
-export function marketItemSummary<T extends Partial<PluginMarketDetail>>(item: T): Omit<T, 'manifest' | 'readme'> {
+export function marketItemSummary<T extends Partial<PluginMarketDetail>>(item: T): Omit<T, 'manifest' | 'readme' | 'updates'> {
   const summary = { ...item };
   delete summary.manifest;
   delete summary.readme;
+  delete summary.updates;
   return summary;
 }
 
@@ -34,8 +35,10 @@ export function marketDetailAccessRejected(error: unknown): boolean {
 }
 
 /** Renderer memory only. Every read still goes through Main's visibility gate. */
+type DetailFields = { includeUpdates?: boolean; includeReadme?: boolean };
+
 class MarketDetailCache {
-  private entries = new Map<string, { value?: PluginMarketDetail; updatedAt: number; accept: () => boolean; pending?: Promise<PluginMarketDetail> }>();
+  private entries = new Map<string, { value?: PluginMarketDetail; updatedAt: number; accept: () => boolean; pending?: Promise<PluginMarketDetail>; pendingFields?: DetailFields }>();
   private prefetchPending: Promise<unknown> | null = null;
 
   peek(id: string): PluginMarketDetail | undefined {
@@ -61,13 +64,19 @@ class MarketDetailCache {
     this.prefetchPending = pending;
   }
 
-  load(id: string, load: () => Promise<PluginMarketDetail>, mode: 'open' | 'prefetch' | 'refresh' | 'background' = 'open', accept: () => boolean = () => true): Promise<PluginMarketDetail> {
+  load(id: string, load: () => Promise<PluginMarketDetail>, mode: 'open' | 'prefetch' | 'refresh' | 'background' = 'open', accept: () => boolean = () => true, fields: DetailFields = {}): Promise<PluginMarketDetail> {
     const existing = this.entries.get(id);
     if (existing?.pending) {
       if (mode !== 'prefetch') existing.accept = accept;
+      if ((fields.includeUpdates && !existing.pendingFields?.includeUpdates) ||
+        (fields.includeReadme !== false && existing.pendingFields?.includeReadme === false)) {
+        return existing.pending.then(value => accept() ? this.load(id, load, mode, accept, fields) : value);
+      }
       return existing.pending;
     }
-    if ((mode === 'open' || mode === 'prefetch') && existing?.value && this.isFresh(id)) {
+    if ((mode === 'open' || mode === 'prefetch') && existing?.value && this.isFresh(id) &&
+      (!fields.includeUpdates || existing.value.updates !== undefined) &&
+      (!fields.includeReadme || existing.value.readme !== undefined)) {
       return Promise.resolve(existing.value);
     }
     const entry = existing ?? { updatedAt: 0, accept };
@@ -81,14 +90,21 @@ class MarketDetailCache {
         if (this.entries.get(id) === entry) this.entries.delete(id);
         return value;
       }
-      if (mode === 'refresh' || contentKey(entry.value) !== contentKey(value)) entry.value = value;
+      const previous = entry.value;
+      const next = previous?.releaseId === value.releaseId ? {
+        ...value,
+        ...(value.updates === undefined && previous.updates !== undefined ? { updates: previous.updates } : {}),
+        ...(fields.includeReadme === false && previous.readme !== undefined ? { readme: previous.readme } : {}),
+      } : value;
+      if (mode === 'refresh' || contentKey(previous) !== contentKey(next)) entry.value = next;
       entry.updatedAt = Date.now();
       return entry.value!;
     }).catch(error => {
       if ((!entry.value || marketDetailAccessRejected(error)) && this.entries.get(id) === entry) this.entries.delete(id);
       throw error;
-    }).finally(() => { entry.pending = undefined; });
+    }).finally(() => { entry.pending = undefined; entry.pendingFields = undefined; });
     entry.pending = pending;
+    entry.pendingFields = fields;
     return pending;
   }
 }

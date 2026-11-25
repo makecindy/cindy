@@ -1,9 +1,10 @@
 /**
- * Regression coverage for the shared Plugin and Skill shell, search accessibility, and focus order.
+ * Regression coverage for the shared Plugin and Skill shell, catalog headings, and focus order.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
 
+import { createRef } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +25,8 @@ vi.mock('react-i18next', () => ({
 }));
 
 import {
+  CatalogHeading,
+  CatalogHeadingTabs,
   PLUGIN_INSTALLED_CARD_GRID_CLASS,
   PLUGIN_MANAGEMENT_CONTENT_CONTAINER_CLASS,
   PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
@@ -57,6 +60,44 @@ function ActiveMainViewNavigationProbe() {
 }
 
 describe('PluginManagementLayout', () => {
+  // Unit, round2 SPEC §1 (G): search replaces the underlined tabs in the accessibility tree
+  // while the same heading and device control remain mounted in their row.
+  it('retains the heading and device control while hiding catalog tabs during search', () => {
+    const anchor = createRef<HTMLDivElement>();
+    const select = vi.fn();
+    const view = (searching: boolean) => (
+      <main>
+        <CatalogHeading
+          anchor={anchor}
+          title={searching ? 'Search results' : 'Installed'}
+          searching={searching}
+          target={<button type="button">Current computer</button>}
+          tabs={<CatalogHeadingTabs value="installed" installedCount={15} marketCount={93} onValueChange={select} />}
+        />
+      </main>
+    );
+    const { rerender } = render(view(false));
+    const heading = screen.getByRole('heading', { level: 1, name: 'Installed' });
+    const target = screen.getByRole('button', { name: 'Current computer' });
+    const tablist = screen.getByRole('tablist');
+    const installed = screen.getByRole('tab', { name: /installedSection.*15/ });
+    const market = screen.getByRole('tab', { name: /marketSection.*93/ });
+    expect(installed.getAttribute('aria-selected')).toBe('true');
+    expect(tablist.style.getPropertyValue('--segmented-option-height')).toBe('44px');
+    fireEvent.keyDown(installed, { key: 'ArrowRight' });
+    expect(select).toHaveBeenCalledWith('market');
+    expect(document.activeElement).toBe(market);
+
+    rerender(view(true));
+    expect(screen.getByRole('heading', { level: 1, name: 'Search results' })).toBe(heading);
+    expect(heading.closest('header')).toBe(tablist.closest('header'));
+    expect(screen.getByRole('button', { name: 'Current computer' })).toBe(target);
+    expect(screen.queryByRole('tablist')).toBeNull();
+
+    rerender(view(false));
+    expect(screen.getByRole('tab', { name: /installedSection.*15/ })).toBe(installed);
+  });
+
   it('presents Plugins and Skills as peer tabs and navigates to the skill home', async () => {
     render(
       <MemoryRouter initialEntries={['/plugins']}>
@@ -206,6 +247,24 @@ describe('PluginManagementLayout', () => {
     },
   );
 
+  // Unit: activating the clear control sends an empty query and returns focus to the search field.
+  it('clears plugin search and restores input focus from the clear button', () => {
+    const onQueryChange = vi.fn();
+    render(
+      <MemoryRouter>
+        <PluginManagementLayout activeTab="plugins" query="calendar" onQueryChange={onQueryChange}>
+          <span>Content</span>
+        </PluginManagementLayout>
+      </MemoryRouter>,
+    );
+    const clear = screen.getByRole('button', { name: 'Clear Plugin Search' });
+    act(() => clear.focus());
+    expect(document.activeElement).toBe(clear);
+    fireEvent.click(clear);
+    expect(onQueryChange).toHaveBeenCalledWith('');
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Search plugins' }));
+  });
+
   it('keeps search directly editable and blurs an empty search with Escape', async () => {
     render(
       <MemoryRouter>
@@ -221,11 +280,9 @@ describe('PluginManagementLayout', () => {
       </MemoryRouter>,
     );
 
-    const searchInput = screen.getByRole('textbox', { name: 'Search skills' });
-    const searchControl = searchInput.parentElement;
-    const searchLabel = searchControl?.querySelector(
-      'label[for="plugin-management-skills-search"]',
-    );
+    const searchInput = screen.getByRole<HTMLInputElement>('textbox', { name: 'Search skills' });
+    const searchLabel = searchInput.labels?.[0];
+    const searchControl = searchLabel?.parentElement;
 
     expect(searchControl?.getAttribute('data-expanded')).toBeNull();
     expect(searchLabel).toBeTruthy();
@@ -282,106 +339,65 @@ describe('PluginManagementLayout', () => {
     expect(document.activeElement).toBe(searchInput);
   });
 
-  it('matches DOM focus order to the stacked visual rows', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        readonly callback: ResizeObserverCallback;
-
-        constructor(callback: ResizeObserverCallback) {
-          this.callback = callback;
-        }
-
-        observe() {
-          this.callback(
-            [{ contentRect: { width: 700 } } as ResizeObserverEntry],
-            this as unknown as ResizeObserver,
-          );
-        }
-
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-
+  it.each(['plugins', 'skills'] as const)('keeps tabs, search and actions in the same focus order on %s', (activeTab) => {
     const { container } = render(
       <MemoryRouter>
         <PluginManagementLayout
-          activeTab="plugins"
+          activeTab={activeTab}
           query=""
           onQueryChange={vi.fn()}
-          headerActions={<button type="button">Add plugin</button>}
+          headerActions={<button type="button">Add</button>}
         >
           <span>Content</span>
         </PluginManagementLayout>
       </MemoryRouter>,
     );
 
-    await waitFor(() => {
-      const focusable = [...container.querySelectorAll('input, button')];
-      expect(
-        focusable.indexOf(screen.getByRole('textbox', { name: 'Search plugins' })),
-      ).toBeLessThan(focusable.indexOf(screen.getByRole('tab', { name: 'Plugins' })));
-      expect(focusable.indexOf(screen.getByRole('button', { name: 'Add plugin' }))).toBeLessThan(
-        focusable.indexOf(screen.getByRole('tab', { name: 'Plugins' })),
-      );
+    const focusable = [...container.querySelectorAll('input, button')];
+    const search = screen.getByRole(activeTab === 'plugins' ? 'button' : 'textbox', {
+      name: activeTab === 'plugins' ? 'Search plugins' : 'Search skills',
     });
+    expect(focusable.indexOf(search)).toBeGreaterThan(focusable.indexOf(screen.getByRole('tab', { name: 'Skills' })));
+    expect(focusable.indexOf(screen.getByRole('button', { name: 'Add' }))).toBeGreaterThan(focusable.indexOf(search));
   });
 
-  it('preserves focused controls while reordering rows across the stacked breakpoint', async () => {
-    let resizeCallback: ResizeObserverCallback | null = null;
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        constructor(callback: ResizeObserverCallback) {
-          resizeCallback = callback;
-        }
-
-        observe() {
-          resizeCallback?.(
-            [{ contentRect: { width: 800 } } as ResizeObserverEntry],
-            this as unknown as ResizeObserver,
-          );
-        }
-
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-
-    render(
+  it('preserves the focused search control when swapping between plugins and skills', () => {
+    const view = (activeTab: 'plugins' | 'skills') => (
       <MemoryRouter>
         <PluginManagementLayout
-          activeTab="plugins"
+          activeTab={activeTab}
           query=""
           onQueryChange={vi.fn()}
           headerActions={<button type="button">Add plugin</button>}
         >
           <span>Content</span>
         </PluginManagementLayout>
+      </MemoryRouter>
+    );
+    const { rerender } = render(view('plugins'));
+    fireEvent.click(screen.getByRole('button', { name: 'Search plugins' }));
+    const search = screen.getByRole('textbox', { name: 'Search plugins' });
+    expect(document.activeElement).toBe(search);
+    rerender(view('skills'));
+    expect(document.activeElement).toBe(search);
+    expect(screen.getByRole('textbox', { name: 'Search skills' })).toBe(search);
+  });
+
+  it('opens the plugin search input and collapses it after Escape when empty', () => {
+    render(
+      <MemoryRouter>
+        <PluginManagementLayout activeTab="plugins" query="" onQueryChange={vi.fn()}>
+          <span>Plugins</span>
+        </PluginManagementLayout>
       </MemoryRouter>,
     );
-
-    const search = screen.getByRole('textbox', { name: 'Search plugins' });
-    search.focus();
-    act(() => {
-      resizeCallback?.(
-        [{ contentRect: { width: 700 } } as ResizeObserverEntry],
-        {} as ResizeObserver,
-      );
-    });
-    await waitFor(() => expect(document.activeElement).toBe(search));
-    expect(screen.getByRole('textbox', { name: 'Search plugins' })).toBe(search);
-
-    const pluginsTab = screen.getByRole('tab', { name: 'Plugins' });
-    pluginsTab.focus();
-    act(() => {
-      resizeCallback?.(
-        [{ contentRect: { width: 800 } } as ResizeObserverEntry],
-        {} as ResizeObserver,
-      );
-    });
-    await waitFor(() => expect(document.activeElement).toBe(pluginsTab));
-    expect(screen.getByRole('tab', { name: 'Plugins' })).toBe(pluginsTab);
+    const name = 'Search plugins';
+    expect(screen.queryByRole('textbox', { name })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name }));
+    const search = screen.getByRole('textbox', { name });
+    expect(document.activeElement).toBe(search);
+    fireEvent.keyDown(search, { key: 'Escape' });
+    expect(screen.getByRole('button', { name })).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name })).toBeNull();
   });
 });

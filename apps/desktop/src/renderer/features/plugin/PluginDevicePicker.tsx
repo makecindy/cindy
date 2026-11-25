@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react
 import { Check, ChevronDown, Monitor } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,6 +13,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
+import { cn } from '@/lib/utils';
+import { useCompactPluginControl } from './lib/useCompactPluginControl';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 
 export function eligiblePluginDevices(
@@ -83,32 +86,40 @@ export function PluginDevicePicker({
   const label = projectMenu
     ? `${computerName} / ${projectLabel ?? t('settings.ghosts.scopePicker.globalScope')}`
     : computerName;
+  const offlineLabel = selected && !online ? t('settings.ghosts.remote.offline') : undefined;
+  const [trigger, iconOnly] = useCompactPluginControl(360, '.plugin-management-content-frame');
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          disabled={disabled}
-          variant="secondary"
-          size="lg"
-          compact
-          pressFeedback={false}
-          className="min-w-[200px] max-w-[280px] justify-start [&>svg]:shrink-0"
-          aria-label={t('settings.ghosts.remote.device')}
-          title={label}
+        <Tip
+          ref={trigger}
+          text={offlineLabel ? `${label} · ${offlineLabel}` : label}
+          controlledOpen={iconOnly ? undefined : false}
+          resetHoverOnControlChange
         >
-          <Monitor size={14} aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-          {selected && !online ? (
-            <span className="text-[var(--text-tertiary)]">
-              {t('settings.ghosts.remote.offline')}
-            </span>
-          ) : null}
-          <ChevronDown size={13} aria-hidden="true" />
-        </Button>
+          <Button
+            disabled={disabled}
+            variant="secondary"
+            size="lg"
+            compact
+            className={cn('max-w-[280px] [&>svg]:shrink-0', iconOnly ? 'w-9 px-0' : 'min-w-[200px] justify-start')}
+            aria-label={t('settings.ghosts.remote.device')}
+            title={iconOnly ? undefined : label}
+          >
+            <Monitor size={14} aria-hidden="true" />
+            {!iconOnly && (
+              <span className={cn('min-w-0 flex-1 truncate text-left', projectMenu && 'text-[var(--text-secondary)]')}>
+                {label}
+              </span>
+            )}
+            {!iconOnly && offlineLabel && <span className="text-[var(--text-tertiary)]">{offlineLabel}</span>}
+            <ChevronDown size={13} aria-hidden="true" />
+          </Button>
+        </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-32px)]"
+        className={cn('w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-32px)]', iconOnly && 'min-w-48')}
       >
         <DropdownMenuLabel>{t('settings.ghosts.scopePicker.computers')}</DropdownMenuLabel>
         <DropdownMenuItem className="gap-2" onSelect={() => onSelect(null)}>

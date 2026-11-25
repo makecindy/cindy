@@ -3,13 +3,16 @@
  * `onSelectTab` to keep the embedded catalog inside Settings.
  */
 
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Info, Search, TriangleAlert, X } from 'lucide-react';
 
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { PluginDevicePicker, type CatalogDeviceControl } from './PluginDevicePicker';
 import './plugin-motion.css';
@@ -66,8 +69,6 @@ export const PLUGIN_MANAGEMENT_CONTENT_CONTAINER_CLASS = 'plugin-management-cont
  */
 export const PLUGIN_INSTALLED_CARD_GRID_CLASS = 'plugin-installed-card-grid grid grid-cols-2 gap-3';
 
-const PLUGIN_MANAGEMENT_STACKED_MAX_WIDTH = 720;
-
 export function PluginManagementLayout({
   activeTab,
   children,
@@ -116,11 +117,20 @@ export function PluginManagementHeader({
 }: PluginManagementHeaderProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const frameRef = useRef<HTMLDivElement | null>(null);
-  const [stacked, setStacked] = useState(false);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const pendingSearchFocus = useRef(false);
   const composingRef = useRef(false);
+  const [searchActive, setSearchActive] = useState(false);
   const [compositionQuery, setCompositionQuery] = useState<string | null>(null);
   const searchable = query !== undefined && onQueryChange !== undefined;
+  const pluginSearch = activeTab === 'plugins';
+  const searchExpanded = !pluginSearch || searchActive || Boolean(query);
+  useLayoutEffect(() => {
+    if (searchExpanded && pendingSearchFocus.current) {
+      pendingSearchFocus.current = false;
+      searchInput.current?.focus();
+    }
+  }, [searchExpanded]);
   const searchInputId = `plugin-management-${activeTab}-search`;
   const resolvedSearchPlaceholder =
     searchPlaceholder ??
@@ -129,30 +139,16 @@ export function PluginManagementHeader({
     clearSearchLabel ??
     t(activeTab === 'plugins' ? 'settings.ghosts.page.clearSearch' : 'skillhub.home.clearSearch');
 
-  useLayoutEffect(() => {
-    const frame = frameRef.current;
-    const root = frame?.closest('.plugin-management-layout-root');
-    if (!root || typeof ResizeObserver === 'undefined') return;
-    const update = (width: number) => setStacked(width <= PLUGIN_MANAGEMENT_STACKED_MAX_WIDTH);
-    update(root.getBoundingClientRect().width);
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      update(entry?.contentRect.width ?? root.getBoundingClientRect().width);
-    });
-    observer.observe(root);
-    return () => observer.disconnect();
-  }, []);
-
   const tabs = showPrimaryTabs ? (
     <SegmentedControl
       key="plugin-management-tabs"
-      className="plugin-motion-tabs shrink-0"
+      className="plugin-management-tabs"
       role="tablist"
       aria-label={t('sidebar.horizontalTabbarAria')}
       style={WINDOW_NO_DRAG_STYLE}
-      height={38}
-      optionHeight={32}
-      optionClassName="plugin-management-tab min-w-[88px] px-4 text-13"
+      height={32}
+      optionHeight={28}
+      optionClassName="text-13"
       value={activeTab}
       onValueChange={(tab) =>
         onSelectTab
@@ -175,16 +171,36 @@ export function PluginManagementHeader({
         key="plugin-management-tools"
         className="plugin-management-tools flex min-w-0 flex-1 items-center justify-end gap-1.5"
       >
+        {searchable && !searchExpanded ? (
+          <Tip text={resolvedSearchPlaceholder}>
+            <Button
+              type="button"
+              variant="secondary"
+              tone="quiet"
+              size="md"
+              className="w-8 shrink-0 px-0 text-[var(--text-secondary)] enabled:hover:text-[var(--text-primary)]"
+              style={WINDOW_NO_DRAG_STYLE}
+              aria-label={resolvedSearchPlaceholder}
+              onClick={() => {
+                pendingSearchFocus.current = true;
+                setSearchActive(true);
+              }}
+            >
+              <Search size={15} strokeWidth={1.75} aria-hidden="true" />
+            </Button>
+          </Tip>
+        ) : null}
         {searchable ? (
           <div
-            className="plugin-management-search-control flex h-9 min-w-[148px] max-w-[260px] flex-1 items-center gap-2 rounded-full border px-3 backdrop-blur-md transition-[width,background-color,border-color,box-shadow] focus-within:border-[var(--focus-ring)] focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)] motion-reduce:transition-none"
-            style={{
-              ...WINDOW_NO_DRAG_STYLE,
-              background: 'color-mix(in srgb, var(--surface-elevated-soft) 70%, transparent)',
-              borderColor: 'color-mix(in srgb, var(--border-default) 52%, transparent)',
-              boxShadow:
-                'inset 0 1px 0 color-mix(in srgb, var(--surface-elevated) 24%, transparent)',
-            }}
+            hidden={!searchExpanded}
+            className={cn(
+              'relative h-9 items-center',
+              searchExpanded && 'flex',
+              pluginSearch
+                ? 'plugin-management-search-expanded'
+                : 'plugin-management-search-control min-w-[148px] max-w-[260px] flex-1 gap-2 rounded-full border px-3 transition-[width,background-color,border-color,box-shadow] focus-within:border-[var(--focus-ring)] focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)] motion-reduce:transition-none',
+            )}
+            style={WINDOW_NO_DRAG_STYLE}
           >
             <label
               htmlFor={searchInputId}
@@ -192,11 +208,13 @@ export function PluginManagementHeader({
             >
               <Search size={15} strokeWidth={1.75} aria-hidden="true" />
             </label>
-            <input
+            <Input
               id={searchInputId}
-              type="text"
+              inputRef={searchInput}
               inputMode="search"
               value={compositionQuery ?? query}
+              onFocus={() => setSearchActive(true)}
+              onBlur={() => setSearchActive(false)}
               onCompositionStart={(event) => {
                 composingRef.current = true;
                 setCompositionQuery(event.currentTarget.value);
@@ -206,12 +224,12 @@ export function PluginManagementHeader({
                 setCompositionQuery(null);
                 onQueryChange(event.currentTarget.value);
               }}
-              onChange={(event) => {
+              onChange={(value) => {
                 // Skill search updates router state; keep IME drafts local until committed.
                 if (composingRef.current) {
-                  setCompositionQuery(event.target.value);
+                  setCompositionQuery(value);
                 } else {
-                  onQueryChange(event.target.value);
+                  onQueryChange(value);
                 }
               }}
               onKeyDown={(event) => {
@@ -233,9 +251,29 @@ export function PluginManagementHeader({
               }}
               placeholder={resolvedSearchPlaceholder}
               aria-label={resolvedSearchPlaceholder}
-              className="plugin-management-search-input min-w-0 flex-1 appearance-none border-0 bg-transparent text-13 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)]"
+              className={cn('min-w-0 flex-1', !pluginSearch && 'h-full')}
+              inputClassName={pluginSearch
+                ? 'pl-8 pr-8'
+                : 'plugin-management-search-input appearance-none border-0 bg-transparent px-0 focus:ring-0'}
             />
-            {query ? (
+            {query && pluginSearch ? (
+              <Tip text={resolvedClearSearchLabel}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  tone="quiet"
+                  size="sm"
+                  className="plugin-management-search-clear w-7 px-0"
+                  aria-label={resolvedClearSearchLabel}
+                  onClick={() => {
+                    searchInput.current?.focus();
+                    onQueryChange('');
+                  }}
+                >
+                  <X size={13} strokeWidth={1.75} aria-hidden="true" />
+                </Button>
+              </Tip>
+            ) : query ? (
               <button
                 type="button"
                 onClick={() => onQueryChange('')}
@@ -248,7 +286,7 @@ export function PluginManagementHeader({
           </div>
         ) : null}
         {children ? (
-          <div className="flex shrink-0 items-center gap-1.5" style={WINDOW_NO_DRAG_STYLE}>
+          <div className="plugin-management-actions flex min-w-0 shrink-0 items-center gap-1.5" style={WINDOW_NO_DRAG_STYLE}>
             {children}
           </div>
         ) : null}
@@ -257,16 +295,15 @@ export function PluginManagementHeader({
 
   // Catalog scroll surfaces reserve a 12px gutter on both edges; mirror it here.
   return (
-    <div className="plugin-management-header h-16 shrink-0 px-3" style={WINDOW_DRAG_STYLE}>
+    <div className="plugin-management-header h-16 shrink-0 px-3" data-catalog-library={activeTab} style={WINDOW_DRAG_STYLE}>
       <div
-        ref={frameRef}
         className={cn(
           PLUGIN_MANAGEMENT_FRAME_CLASS,
           'plugin-management-header-frame flex h-full items-center gap-4',
         )}
       >
-        {stacked ? tools : tabs}
-        {stacked ? tabs : tools}
+        {tabs}
+        {tools}
       </div>
     </div>
   );
@@ -320,29 +357,91 @@ export function CatalogTargetControls({
   );
 }
 
-export function InstalledCatalogHeader({
+export function CatalogHeading({ title, target, tabs, searching = false, anchor }: {
+  title: string;
+  target: ReactNode;
+  tabs?: ReactNode;
+  searching?: boolean;
+  anchor: RefObject<HTMLDivElement | null>;
+}) {
+  const heading = (
+    <h1 className={tabs && !searching ? 'sr-only' : 'plugin-catalog-heading-title text-15 font-medium text-[var(--text-primary)]'}>
+      {title}
+    </h1>
+  );
+  return <>
+    <div ref={anchor} aria-hidden="true" />
+    <header className="plugin-catalog-heading" data-catalog-region="heading">
+      {tabs ? (
+        <div className="plugin-catalog-heading-navigation">
+          {heading}
+          <div className="flex min-w-0" aria-hidden={searching || undefined} inert={searching || undefined}>{tabs}</div>
+        </div>
+      ) : heading}
+      {target}
+    </header>
+  </>;
+}
+
+export function CatalogHeadingTabs({ value, onValueChange, installedCount, marketCount }: {
+  value: 'installed' | 'market';
+  onValueChange(value: 'installed' | 'market'): void;
+  installedCount: number;
+  marketCount: number | null;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SegmentedControl
+      role="tablist"
+      aria-label={t('settings.ghosts.page.secondaryTabsAria')}
+      className="plugin-catalog-heading-tabs"
+      height={44}
+      optionHeight={44}
+      optionClassName="text-15"
+      value={value}
+      onValueChange={onValueChange}
+      options={[
+        { value: 'installed', label: <CatalogTabLabel title={t('settings.ghosts.page.installedSection')} count={installedCount} /> },
+        { value: 'market', label: <CatalogTabLabel title={t('settings.ghosts.page.marketSection')} count={marketCount} /> },
+      ]}
+    />
+  );
+}
+
+function CatalogTabLabel({ title, count }: { title: string; count: number | null }) {
+  return (
+    <span className="inline-flex items-baseline gap-1.5">
+      <span>{title}</span>
+      <span className="text-13 font-normal tabular-nums text-[var(--text-tertiary)]">{count ?? '\u00a0'}</span>
+    </span>
+  );
+}
+
+export function CatalogSectionHeader({
+  region,
   title,
   count,
   controls,
 }: {
+  region: 'installed' | 'market';
   title: string;
   count?: number;
   controls?: ReactNode;
 }) {
   return (
     <header
-      className="mb-4 flex flex-wrap items-center justify-between gap-3"
-      data-catalog-region="installed"
+      className="mb-4 flex min-h-8 flex-wrap items-center justify-between gap-3"
+      data-catalog-region={region}
     >
       <div className="flex items-baseline gap-2">
-        <h2 className="text-20 font-medium leading-6 text-[var(--text-primary)]">{title}</h2>
+        <h2 className="text-16 font-medium leading-tight text-[var(--text-primary)]">{title}</h2>
         {count !== undefined ? (
           <span className="text-13 tabular-nums text-[var(--text-tertiary)]">{count}</span>
         ) : null}
       </div>
       {controls ? (
         <div
-          className="flex min-w-0 max-w-full flex-wrap items-center gap-2"
+          className="plugin-catalog-filters ms-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2"
           style={WINDOW_NO_DRAG_STYLE}
         >
           {controls}
