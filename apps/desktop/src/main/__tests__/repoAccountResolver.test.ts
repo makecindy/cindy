@@ -15,7 +15,7 @@ const active = async () => ({ ok: true as const, token: 'active-token' });
 function deps(over: Partial<RepoAccountDeps> = {}): RepoAccountDeps {
   return {
     readToken: active,
-    listLogins: async () => ['me', 'work'],
+    listLogins: async () => ({ logins: ['me', 'work'], complete: true }),
     readTokenForLogin: async (login) => (login === 'me' ? 'active-token' : 'work-token'),
     repoAccess: async (token) => token === 'work-token',
     ...over,
@@ -49,7 +49,7 @@ describe('repoAccountResolver', () => {
     let readable = 'b-token';
     const resolver = createRepoAccountResolver(
       deps({
-        listLogins: async () => ['me', 'work'],
+        listLogins: async () => ({ logins: ['me', 'work'], complete: true }),
         readTokenForLogin: async (login) => (login === 'me' ? 'active-token' : 'b-token'),
         repoAccess: async (token) => token === readable,
       }),
@@ -60,12 +60,42 @@ describe('repoAccountResolver', () => {
     expect(await resolver.recover(PR, 'b-token')).toEqual({ ok: true, token: 'active-token' });
   });
 
+  it('列表不完整时仍探测读得到的账号', async () => {
+    // 一个无关账号校验失败,不能让剩下能读的账号一起被跳过。
+    const listLogins = vi.fn(async () => ({ logins: ['work'], complete: false }));
+    const resolver = createRepoAccountResolver(deps({ listLogins }));
+
+    expect(await resolver.recover(PR)).toEqual({ ok: true, token: 'work-token' });
+  });
+
+  it('列表不完整且都不行时不写失败记忆', async () => {
+    const listLogins = vi.fn(async () => ({ logins: ['work'], complete: false }));
+    const repoAccess = vi.fn(async () => false);
+    const resolver = createRepoAccountResolver(deps({ listLogins, repoAccess }));
+
+    expect(await resolver.recover(PR)).toBeNull();
+    expect(await resolver.recover(PR)).toBeNull();
+    // 没有 10 分钟 miss:两次都真的重新探测。
+    expect(listLogins).toHaveBeenCalledTimes(2);
+  });
+
+  it('PR 编号写错时先复核刚被拒的凭证,不因此换账号', async () => {
+    // 活跃账号能读仓库,只是这条 PR 不存在:PR 接口 404 不等于仓库没权限。
+    const repoAccess = vi.fn(async (token: string) => token === 'active-token');
+    const resolver = createRepoAccountResolver(deps({ repoAccess }));
+
+    expect(await resolver.recover(PR, 'active-token')).toBeNull();
+    expect(repoAccess).toHaveBeenCalledTimes(1);
+    expect(repoAccess).toHaveBeenCalledWith('active-token', PR);
+    expect(await resolver.tokenFor(PR)).toEqual({ ok: true, token: 'active-token' });
+  });
+
   it('记住的账号被 404 后 recover 重新探测,不会把同一个 token 原样返回', async () => {
     // 最小失败输入:work 在 30 分钟 TTL 内失去仓库权限,而 personal 还能读。
     let readable = 'work-token';
     const resolver = createRepoAccountResolver(
       deps({
-        listLogins: async () => ['me', 'work', 'personal'],
+        listLogins: async () => ({ logins: ['me', 'work', 'personal'], complete: true }),
         readTokenForLogin: async (login) =>
           ({ me: 'active-token', work: 'work-token', personal: 'personal-token' })[login] ?? null,
         repoAccess: async (token) => token === readable,
@@ -79,11 +109,11 @@ describe('repoAccountResolver', () => {
   });
 
   it('账号列表没探测成时不写失败记忆', async () => {
-    let logins: string[] | null = null;
-    const resolver = createRepoAccountResolver(deps({ listLogins: async () => logins }));
+    let listed: { logins: string[]; complete: boolean } | null = null;
+    const resolver = createRepoAccountResolver(deps({ listLogins: async () => listed }));
 
     expect(await resolver.recover(PR)).toBeNull();
-    logins = ['me', 'work'];
+    listed = { logins: ['me', 'work'], complete: true };
     expect(await resolver.recover(PR)).toEqual({ ok: true, token: 'work-token' });
   });
 
@@ -102,7 +132,7 @@ describe('repoAccountResolver', () => {
   });
 
   it('确认没有账号能读时记住这次结论,不反复探测', async () => {
-    const listLogins = vi.fn(async () => ['me', 'work']);
+    const listLogins = vi.fn(async () => ({ logins: ['me', 'work'], complete: true }));
     const repoAccess = vi.fn(async () => false);
     const resolver = createRepoAccountResolver(deps({ listLogins, repoAccess }));
 
@@ -114,7 +144,9 @@ describe('repoAccountResolver', () => {
 
   it('账号列表没查成时不写失败记忆', async () => {
     let reachable = false;
-    const listLogins = vi.fn(async () => (reachable ? ['me', 'work'] : null));
+    const listLogins = vi.fn(async () =>
+      reachable ? { logins: ['me', 'work'], complete: true } : null,
+    );
     const resolver = createRepoAccountResolver(deps({ listLogins }));
 
     expect(await resolver.recover(PR)).toBeNull();
@@ -130,7 +162,7 @@ describe('repoAccountResolver', () => {
     ]);
     const resolver = createRepoAccountResolver(
       deps({
-        listLogins: async () => ['me', 'work', 'other'],
+        listLogins: async () => ({ logins: ['me', 'work', 'other'], complete: true }),
         readTokenForLogin: async (login) =>
           login === 'me' ? 'active-token' : login === 'work' ? 'work-token' : 'other-token',
         repoAccess: async (token) => access.get(token) ?? false,
@@ -147,7 +179,7 @@ describe('repoAccountResolver', () => {
 
   it('没查成不写失败记忆,下一次刷新重新探测', async () => {
     let reachable = false;
-    const listLogins = vi.fn(async () => ['me', 'work']);
+    const listLogins = vi.fn(async () => ({ logins: ['me', 'work'], complete: true }));
     const resolver = createRepoAccountResolver(
       deps({ listLogins, repoAccess: async () => (reachable ? true : 'unknown') }),
     );

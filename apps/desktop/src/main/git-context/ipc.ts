@@ -117,9 +117,6 @@ function broadcastToAllWindows(channel: string, payload: unknown): void {
   }
 }
 
-/** gh CLI 登录态来源(进程内共享单例,内置 5min 正 / 30s 负缓存)。 */
-const ghCliTokenSource = getSharedGhCliTokenSource();
-
 async function readGithubToken() {
   return readGithubTokenDetailed();
 }
@@ -147,8 +144,10 @@ async function repoAccess(token: string, q: PrStatusQuery): Promise<boolean | 'u
 /** 本机登录多个 gh 账号时,按仓库选用看得到它的那个(见 repoAccountResolver)。 */
 const repoAccounts = createRepoAccountResolver({
   readToken: readGithubToken,
-  listLogins: () => ghCliTokenSource.listLogins(),
-  readTokenForLogin: (login) => ghCliTokenSource.readTokenForLogin(login),
+  // 共享实例会被 invalidateSharedGhCliTokenSource() 换掉(聊天里的设备登录、重新授权),
+  // 这里每次取当前实例,不能把模块加载时的那个闭包住。
+  listLogins: () => getSharedGhCliTokenSource().listLogins(),
+  readTokenForLogin: (login) => getSharedGhCliTokenSource().readTokenForLogin(login),
   repoAccess,
 });
 

@@ -94,7 +94,7 @@ export interface GhCliTokenSource {
   /** 只探测 github.com 登录可用性，不读取或缓存 token。 */
   probeAvailability(): Promise<boolean>;
   /** 本机登录 github.com 的账号(活跃账号在前);`null` 表示探测没做成。永不抛错。 */
-  listLogins(): Promise<string[] | null>;
+  listLogins(): Promise<GhCliLoginList | null>;
   /** 指定账号的 token(不是活跃账号也不切换);拿不到返回 null。永不抛错。 */
   readTokenForLogin(login: string): Promise<string | null>;
 }
@@ -102,21 +102,31 @@ export interface GhCliTokenSource {
 /** GitHub 登录名;`gh auth status --json` 的输出只按这个形状采信。 */
 const LOGIN_RE = /^[a-zA-Z0-9-]{1,39}$/;
 
-/** `null` = 账号列表没读准(探测失败,或某个账号 state=error),不能当成「没有备用账号」。 */
-function parseLogins(stdout: string): string[] | null {
+/** 账号列表;complete=false 表示其中某个账号没读准(不能据此得出「没有账号能读」)。 */
+export interface GhCliLoginList {
+  logins: string[];
+  complete: boolean;
+}
+
+/** `null` = 账号列表没读准(探测失败、输出形状不对),不能当成「没有备用账号」。 */
+function parseLogins(stdout: string): GhCliLoginList | null {
   try {
     const hosts = (JSON.parse(stdout) as { hosts?: Record<string, unknown> }).hosts?.['github.com'];
     if (!Array.isArray(hosts)) return null;
     const logins: string[] = [];
+    let complete = true;
     for (const entry of hosts) {
       const { login, state } = (entry ?? {}) as { login?: unknown; state?: unknown };
       // `gh auth status --json` 在个别账号校验失败时仍以 0 退出,只把那个账号标成 error。
-      // 这时列表是不完整的,返回 null 让调用方当作「没查成」。
-      if (state === 'error') return null;
+      // 读得到的账号照样可用,但这时的列表不完整:不能因为它的存在得出「没有账号能读」。
+      if (state === 'error') {
+        complete = false;
+        continue;
+      }
       if (state === 'success' && typeof login === 'string' && LOGIN_RE.test(login))
         logins.push(login);
     }
-    return logins;
+    return { logins, complete };
   } catch {
     return null;
   }
@@ -147,8 +157,8 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
   let inFlight: Promise<GhCliTokenReadResult> | null = null;
   let generation = 0;
   // 多账号只服务「这个仓库该用哪个账号」的分支(见 repoAccountResolver),活跃账号仍是默认。
-  let loginsCache: { logins: string[] | null; expiresAt: number } | null = null;
-  let loginsInFlight: Promise<string[] | null> | null = null;
+  let loginsCache: { list: GhCliLoginList | null; expiresAt: number } | null = null;
+  let loginsInFlight: Promise<GhCliLoginList | null> | null = null;
   const loginTokens = new Map<string, { token: string; expiresAt: number }>();
   const loginTokenInFlight = new Map<string, Promise<string | null>>();
 
@@ -203,9 +213,9 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
     return inFlight;
   }
 
-  async function readLogins(): Promise<string[] | null> {
+  async function readLogins(): Promise<GhCliLoginList | null> {
     const bin = deps.resolveBinary ? await deps.resolveBinary() : resolveGhBinary();
-    return new Promise<string[] | null>((resolve) => {
+    return new Promise<GhCliLoginList | null>((resolve) => {
       try {
         // `--json` 不吐 token,并在有账号鉴权异常时仍以 0 退出;逐个账号读钥匙串约 1s。
         execFileFn(
@@ -224,20 +234,20 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
 
   // 一次批量刷新可能同时遇到多个仓库的恢复探测,账号列表和每个账号的 token 都要合并在途读取,
   // 否则同一轮会重复 spawn gh、重复读钥匙串。
-  async function listLogins(): Promise<string[] | null> {
-    if (loginsCache && loginsCache.expiresAt > now()) return loginsCache.logins;
+  async function listLogins(): Promise<GhCliLoginList | null> {
+    if (loginsCache && loginsCache.expiresAt > now()) return loginsCache.list;
     if (loginsInFlight) return loginsInFlight;
     const gen = generation;
     loginsInFlight = readLogins()
-      .then((logins) => {
+      .then((list) => {
         // 登录态变过就丢掉:那可能是旧账号列表。
         if (gen === generation)
           loginsCache = {
-            logins,
-            // 探测失败只短记,避免一次 CLI 卡顿锁住十分钟的失败记忆。
-            expiresAt: now() + (logins && logins.length > 0 ? ttl : negativeTtl),
+            list,
+            // 没读准的列表只短记,避免一次 CLI 卡顿锁住十分钟的失败记忆。
+            expiresAt: now() + (list && list.complete && list.logins.length > 0 ? ttl : negativeTtl),
           };
-        return logins;
+        return list;
       })
       .finally(() => {
         if (gen === generation) loginsInFlight = null;

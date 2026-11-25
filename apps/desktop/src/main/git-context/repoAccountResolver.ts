@@ -14,7 +14,7 @@
  */
 
 import type { PrIdentity } from '@cindy/maker-shared';
-import type { GhCliTokenReadResult } from './ghCliTokenSource.js';
+import type { GhCliLoginList, GhCliTokenReadResult } from './ghCliTokenSource.js';
 
 const DEFAULT_TTL_MS = 30 * 60_000;
 const DEFAULT_MISS_TTL_MS = 10 * 60_000;
@@ -25,7 +25,7 @@ export interface RepoAccountDeps {
   /** 当前活跃账号(原 gh → 插件 PAT → GitHub App 的同一条链)。 */
   readToken(): Promise<GhCliTokenReadResult>;
   /** 本机登录的账号;`null` 表示这次探测没做成(不能当成「没有备用账号」)。 */
-  listLogins(): Promise<string[] | null>;
+  listLogins(): Promise<GhCliLoginList | null>;
   readTokenForLogin(login: string): Promise<string | null>;
   /** 这个 token 对这个仓库有没有读权限;'unknown' 表示没查成,不能当成没有权限。 */
   repoAccess(token: string, pr: PrIdentity): Promise<boolean | 'unknown'>;
@@ -86,16 +86,13 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
     const gen = generation;
     let unknown = false;
     const active = await deps.readToken();
-    const logins = await deps.listLogins();
+    const listed = await deps.listLogins();
     // 账号列表没探测成功:整体当没查成,不留失败记忆(下次重新探测)。
-    if (!logins) return null;
-    for (const login of logins) {
+    if (!listed) return null;
+    for (const login of listed.logins) {
       const token = await deps.readTokenForLogin(login);
-      // 只有「刚被拒的就是活跃账号」时才跳过它;否则活跃账号可能已经能读这个仓库了。
-      if (
-        !token ||
-        (active.ok && active.token === token && (!failedToken || failedToken === token))
-      )
+      // 刚被拒的凭证已经单独复核过;没有它的时候按老规矩跳过活跃账号。
+      if (!token || token === failedToken || (!failedToken && active.ok && active.token === token))
         continue;
       const access = await deps.repoAccess(token, pr);
       if (access === 'unknown') {
@@ -108,8 +105,8 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
       missing.delete(k);
       return { ok: true, token };
     }
-    // 没查成,或者登录态刚变过:不留下失败记忆,下一次刷新重新探测。
-    if (unknown || gen !== generation) return null;
+    // 没查成、列表不完整,或者登录态刚变过:不留下失败记忆,下一次刷新重新探测。
+    if (unknown || !listed.complete || gen !== generation) return null;
     remember(missing, k, now() + missTtl);
     return null;
   }
@@ -120,13 +117,18 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
     },
     async recover(pr: PrIdentity, failedToken?: string): Promise<GhCliTokenReadResult | null> {
       const k = key(pr);
-      // 能走到 recover 就是因为「手上这个 token 刚被 404 了」,而它可能就是记住的选择。
-      // 不先丢掉,下面的 find() 会把同一个 token 原样取回来,后面的账号探测一次都不跑。
-      chosen.delete(k);
       const inflight = pending.get(k);
       if (inflight) return inflight;
       // 同一仓库的多条 PR 共用一次探测。
-      const p = find(pr, failedToken)
+      const p = (async () => {
+        // 先复核「刚被拒的那份凭证」本身能不能读这个仓库:PR 编号写错或 PR 已删时,
+        // PR 接口同样回 404,那不是权限问题,不该因此在这个仓库上换账号或写失败记忆。
+        if (failedToken && (await deps.repoAccess(failedToken, pr)) === true) return null;
+        // 能走到这一步就是因为这个 token 被拒了,而它可能就是记住的选择。
+        // 不先丢掉,find() 会把同一个 token 原样取回来,后面的账号探测一次都不跑。
+        chosen.delete(k);
+        return find(pr, failedToken);
+      })()
         .catch(() => null)
         .finally(() => {
           if (pending.get(k) === p) pending.delete(k);
