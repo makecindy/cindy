@@ -22775,7 +22775,7 @@
       "autoTag": "Automatic",
       "chooseProvider": "Choose a provider",
       "removeAria": "Remove {{name}} from this route",
-      "note": "Automatic routes follow your connected providers. Their members cannot be changed; you can change the strategy or hide them.",
+      "note": "Automatic routes follow your connected providers. Members cannot be added or removed, but you can reorder them, set weights, turn one off, change the strategy or hide the route.",
       "providers_one": "{{count}} provider",
       "providers_other": "{{count}} providers",
       "addWhole": "Add a whole provider",

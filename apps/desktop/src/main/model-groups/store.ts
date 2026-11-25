@@ -26,6 +26,7 @@ const store = createOverrideSettingsFile<ModelGroupsConfig>({
     ...(next.hiddenAuto?.length ? { hiddenAuto: next.hiddenAuto } : {}),
     ...(next.autoStrategy && Object.keys(next.autoStrategy).length > 0 ? { autoStrategy: next.autoStrategy } : {}),
     ...(next.autoSwitchOff?.length ? { autoSwitchOff: next.autoSwitchOff } : {}),
+    ...(next.autoSources && Object.keys(next.autoSources).length > 0 ? { autoSources: next.autoSources } : {}),
   }),
   log,
   label: 'model groups',
@@ -68,16 +69,17 @@ export function readModelGroupsConfig(): ModelGroupsConfig {
  */
 export function writeModelGroupsConfig(
   config: ModelGroupsConfig,
-  keep: readonly ('sourceRoutes' | 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff')[] = [],
+  keep: readonly ('sourceRoutes' | 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources')[] = [],
 ): ModelGroupsConfig {
   const before = readStored();
-  const pick = <K extends 'sourceRoutes' | 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff'>(key: K) => (keep.includes(key) ? before[key] : config[key]);
+  const pick = <K extends 'sourceRoutes' | 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources'>(key: K) => (keep.includes(key) ? before[key] : config[key]);
   store.writePatch({
     routes: config.routes.filter((route) => !route.parent),
     sourceRoutes: (pick('sourceRoutes') ?? []).filter((route) => !route.auto),
     hiddenAuto: pick('hiddenAuto') ?? [],
     autoStrategy: pick('autoStrategy') ?? {},
     autoSwitchOff: pick('autoSwitchOff') ?? [],
+    autoSources: pick('autoSources') ?? {},
   });
   const saved = readModelGroupsConfig();
   log.info('model groups written', { routes: saved.routes.filter((route) => !route.parent).length, sourceRoutes: saved.sourceRoutes?.length ?? 0 });

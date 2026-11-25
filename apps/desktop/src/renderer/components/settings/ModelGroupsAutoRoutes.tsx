@@ -7,7 +7,7 @@
  * 成员可以是本机的供应商，也可以是其他电脑上的或别人分享来的。
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Waypoints, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Waypoints, X } from 'lucide-react';
 import { useInRouterContext, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -23,7 +23,6 @@ import {
   SettingsRowIcon,
   SettingsSection,
 } from '@/components/ui/settings-rows';
-import { Tip } from '@/components/ui/tooltip';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { useProviderGroup } from '@/features/provider-group/useProviderGroup';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
@@ -31,11 +30,13 @@ import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { useProviders } from '@/hooks/useProviders';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
 
 import {
   MODEL_GROUP_LIMITS,
   MODEL_GROUP_STRATEGIES,
   modelGroupAutoSwitchOn,
+  modelGroupWeight,
   type ModelGroupsConfig,
   type ModelGroupSource,
   type ModelGroupSourceRoute,
@@ -43,11 +44,10 @@ import {
 import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
 import { SAME_SOURCE_ROUTE_STRATEGIES, type RouteStrategy } from '../../../shared/routeStrategy';
 import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
+import { RowIconButton, WeightInput } from './ModelGroupRowControls';
 import { SettingsTextInput } from './SettingsTextInput';
 
 type Provider = ReturnType<typeof useProviders>['providers'][number];
-
-const ICON_BUTTON = 'inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] disabled:opacity-50';
 
 function StrategySelect({ label, value, disabled, onChange, strategies = SAME_SOURCE_ROUTE_STRATEGIES }: {
   label: string; value: RouteStrategy; disabled?: boolean; onChange(next: RouteStrategy): void;
@@ -64,6 +64,9 @@ function StrategySelect({ label, value, disabled, onChange, strategies = SAME_SO
       onValueChange={(next) => { if (next !== value) onChange(next as RouteStrategy); }} />
   );
 }
+
+/** 账号权重能选的值：与供应商页账号行里的同一组。 */
+const ACCOUNT_WEIGHTS = [1, 2, 3, 5, 10, 20, 50, 100];
 
 function ProviderLead({ provider }: { provider: Provider }) {
   return (
@@ -106,16 +109,60 @@ function AccountsRouteRow({ provider, plain = null }: { provider: Provider; plai
       setSaving(false);
     }
   };
+  const setWeight = async (accountId: string, weight: number) => {
+    setSaving(true);
+    try {
+      await window.electronAPI.subscriptionAccounts.command({ action: 'configure', providerId: provider.id, accountId, weight });
+      await read();
+    } catch {
+      toast.error(t('modelGroups.settings.saveFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
+  // 「按顺序」「按权重」要看得见每个账号排第几、权重多少：选了这两种就把账号列出来。权重在这里改(与供应商页账号行里
+  // 是同一个设置)；账号的先后是加入的先后，不能调。
+  const listed = view.strategy === 'weighted' || view.strategy === 'order';
   return (
-    <SettingsRow
-      media
-      wrap
-      data-auto-route={`accounts:${provider.id}`}
-      lead={<ProviderLead provider={provider} />}
-      title={provider.name}
-      hint={`${t('modelGroups.auto.accounts', { count: view.accounts.length })} · ${t(`modelGroups.strategy.${view.strategy}.hint`)}`}
-      trailing={<StrategySelect label={t('modelGroups.auto.pickFor', { name: provider.name })} value={view.strategy} disabled={saving} onChange={(next) => void change(next)} />}
-    />
+    <>
+      {plain}
+      <SettingsRow
+        media
+        wrap
+        data-auto-route={`accounts:${provider.id}`}
+        lead={<ProviderLead provider={provider} />}
+        title={plain ? t('modelGroups.auto.accounts', { count: view.accounts.length }) : provider.name}
+        hint={plain
+          ? t(`modelGroups.strategy.${view.strategy}.hint`)
+          : `${t('modelGroups.auto.accounts', { count: view.accounts.length })} · ${t(`modelGroups.strategy.${view.strategy}.hint`)}`}
+        trailing={<StrategySelect label={t('modelGroups.auto.pickFor', { name: provider.name })} value={view.strategy} disabled={saving} onChange={(next) => void change(next)} />}
+      />
+      {listed && view.accounts.map((account, index) => {
+        const name = account.identity || t('providerGroup.member.accountFallback', { index: index + 1 });
+        return (
+          <SettingsRow
+            key={account.id}
+            media
+            data-auto-route-account={account.id}
+            lead={<span className="flex w-8 justify-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>}
+            title={name}
+            className={cn(account.paused && '[&>span:nth-child(-n+2)]:opacity-60')}
+            trailing={view.strategy === 'weighted' ? (
+              <Select
+                label={t('providerGroup.member.weightAria', { name })}
+                value={String(account.weight)}
+                disabled={saving}
+                width="xs"
+                // 存着的权重不在那组里时照实列出，不悄悄显示成别的值。
+                options={[...new Set([...ACCOUNT_WEIGHTS, account.weight])].sort((a, b) => a - b)
+                  .map((weight) => ({ value: String(weight), label: t('providerGroup.member.weightOption', { weight }) }))}
+                onValueChange={(value) => { if (Number(value) !== account.weight) void setWeight(account.id, Number(value)); }}
+              />
+            ) : undefined}
+          />
+        );
+      })}
+    </>
   );
 }
 
@@ -285,6 +332,22 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
     if (await save((latest) => ({ ...latest, sourceRoutes: (latest.sourceRoutes ?? []).filter((item) => item.id !== route.id) }))) onBack();
   };
   const models = config.routes.filter((item) => item.parent?.id === route.id).length;
+  // 成员的先后、权重、是否启用。自己建的路由直接改它的成员；自动合好的路由成员是谁仍跟着连接走，
+  // 用户调的这三样单独存(autoSources)，下次合成时按它排。
+  const setSources = (change: (sources: ModelGroupSource[]) => ModelGroupSource[]) => save((latest) => {
+    const current = (latest.sourceRoutes ?? []).find((item) => item.id === route.id)?.sources ?? route.sources;
+    return route.auto
+      ? { ...latest, autoSources: { ...(latest.autoSources ?? {}), [route.id]: change(current) } }
+      : { ...latest, sourceRoutes: (latest.sourceRoutes ?? []).map((item) => (item.id === route.id ? { ...item, sources: change(item.sources) } : item)) };
+  });
+  const patchSource = (key: string, patch: (source: ModelGroupSource) => ModelGroupSource) =>
+    setSources((sources) => sources.map((item) => (optionKey(item) === key ? patch(item) : item)));
+  const moveSource = (index: number, delta: number) => setSources((sources) => {
+    const next = [...sources];
+    const [item] = next.splice(index, 1);
+    next.splice(index + delta, 0, item);
+    return next;
+  });
   return (
     <SettingsPageScope>
       <div data-testid="model-groups-source-route" data-source-route={route.id} className="flex min-w-0 flex-col">
@@ -321,32 +384,72 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
               )}
             </SettingsCard>
           </SettingsSection>
-          <SettingsSection title={t('modelGroups.settings.sources')} description={t('modelGroups.sources.models', { count: models })}>
+          <SettingsSection
+            title={t('modelGroups.settings.sources')}
+            description={route.strategy === 'weighted'
+              ? `${t('modelGroups.sources.models', { count: models })} · ${t('modelGroups.settings.weightHint')}`
+              : t('modelGroups.sources.models', { count: models })}
+          >
             <SettingsCard>
-              {route.sources.map((source) => {
-                const option = options.find((item) => item.key === optionKey(source));
+              {route.sources.map((source, index) => {
+                const key = optionKey(source);
+                const option = options.find((item) => item.key === key);
                 const label = option?.label ?? source.providerId;
-                const plain = (
+                // 与按模型排的路由里来源那一行同一套：序号、(按权重时)权重、上移下移、(自己建的)移出、启用开关。
+                const member = (
                   <SettingsRow
-                    key={optionKey(source)}
+                    key={key}
                     media
-                    lead={option ? <ProviderLead provider={option.provider} /> : <SettingsRowIcon><Waypoints size={16} aria-hidden /></SettingsRowIcon>}
+                    data-source-route-member={index}
+                    lead={
+                      <span className="flex items-center gap-3">
+                        <span className="w-4 text-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>
+                        {option ? <ProviderLead provider={option.provider} /> : <SettingsRowIcon><Waypoints size={16} aria-hidden /></SettingsRowIcon>}
+                      </span>
+                    }
                     title={label}
                     tag={option ? undefined : t('modelGroups.settings.notConnected')}
-                    trailing={route.auto ? undefined : (
-                      <Tip text={t('modelGroups.settings.remove')}>
-                        <button type="button" className={ICON_BUTTON} aria-label={t('modelGroups.sources.removeAria', { name: label })}
-                          onClick={() => patchOwn((current) => ({ ...current, sources: current.sources.filter((item) => optionKey(item) !== optionKey(source)) }))}>
-                          <X size={15} aria-hidden />
-                        </button>
-                      </Tip>
-                    )}
+                    className={cn(source.off && '[&>span:nth-child(-n+2)]:opacity-60')}
+                    trailing={
+                      <span className="flex shrink-0 items-center gap-1">
+                        {route.strategy === 'weighted' && (
+                          <span className="mr-2 flex items-center">
+                            <WeightInput
+                              key={`${key}:${modelGroupWeight(source.weight)}`}
+                              value={modelGroupWeight(source.weight)}
+                              label={t('modelGroups.settings.weightAria', { name: label })}
+                              onCommit={(weight) => patchSource(key, (item) => {
+                                const { weight: _weight, ...rest } = item;
+                                void _weight;
+                                return weight === 1 ? rest : { ...rest, weight };
+                              })}
+                            />
+                          </span>
+                        )}
+                        <RowIconButton label={t('modelGroups.settings.moveUp')} disabled={index === 0} onClick={() => void moveSource(index, -1)}><ArrowUp size={15} /></RowIconButton>
+                        <RowIconButton label={t('modelGroups.settings.moveDown')} disabled={index === route.sources.length - 1} onClick={() => void moveSource(index, 1)}><ArrowDown size={15} /></RowIconButton>
+                        {!route.auto && (
+                          <RowIconButton label={t('modelGroups.sources.removeAria', { name: label })}
+                            onClick={() => void setSources((sources) => sources.filter((item) => optionKey(item) !== key))}><X size={15} /></RowIconButton>
+                        )}
+                        <Switch
+                          className="ml-2"
+                          checked={!source.off}
+                          aria-label={t('modelGroups.settings.useSource', { name: label })}
+                          onCheckedChange={(on) => void patchSource(key, (item) => {
+                            const { off: _off, ...rest } = item;
+                            void _off;
+                            return on ? rest : { ...rest, off: true };
+                          })}
+                        />
+                      </span>
+                    }
                   />
                 );
-                // 自动合成的路由里，本机成员自己有几个账号时，账号之间怎么分就在这一行改。
-                return route.auto && option && !source.agentDeviceId && (option.provider.subscriptionAccountKeys?.length ?? 0) >= 2
-                  ? <AccountsRouteRow key={optionKey(source)} provider={option.provider} plain={plain} />
-                  : plain;
+                // 本机成员自己有几个账号时，账号之间怎么分紧跟在它下面改。
+                return option && !source.agentDeviceId && (option.provider.subscriptionAccountKeys?.length ?? 0) >= 2
+                  ? <AccountsRouteRow key={key} provider={option.provider} plain={member} />
+                  : member;
               })}
               {route.sources.length === 0 && (
                 <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.sourcesEmpty')}</SettingsBlock>

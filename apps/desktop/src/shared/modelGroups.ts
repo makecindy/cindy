@@ -186,6 +186,11 @@ export interface ModelGroupsConfig {
   autoStrategy?: Record<string, ModelGroupStrategy>;
   /** 用户关掉了「出问题时自动换来源」的自动供应商路由 id。 */
   autoSwitchOff?: string[];
+  /**
+   * 用户给自动供应商路由的成员排的先后、填的权重、暂停了哪个：键是路由 id，值是按用户排的顺序列出的成员。
+   * 成员本身仍跟着供应商的连接增减：这里没列到的新成员排在后面，已经不在的留着(重新连上时回到原来的位置)。
+   */
+  autoSources?: Record<string, ModelGroupSource[]>;
 }
 
 /** 用了这个模式的任务出问题时是否自动换来源(默认开)。 */
@@ -442,14 +447,14 @@ function normalizeModelGroupRoute(raw: unknown): ModelGroupRoute | null {
   };
 }
 
-function normalizeSourceRoute(raw: unknown): ModelGroupSourceRoute | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const value = raw as Record<string, unknown>;
-  const id = text(value.id, MODEL_GROUP_LIMITS.id);
-  const name = text(value.name, MODEL_GROUP_LIMITS.name);
-  if (!id || !name || isExpandedModelGroupId(id)) return null;
+/** 供应商路由的成员在配置里的身份：运行位置 + 供应商连接。 */
+export function modelGroupSourceKey(source: Pick<ModelGroupSource, 'providerId' | 'agentDeviceId'>): string {
+  return `${source.agentDeviceId ?? ''}\u0000${source.providerId}`;
+}
+
+function normalizeSources(raw: unknown): ModelGroupSource[] {
   const seen = new Set<string>();
-  const sources = (Array.isArray(value.sources) ? value.sources : []).flatMap((item): ModelGroupSource[] => {
+  return (Array.isArray(raw) ? raw : []).flatMap((item): ModelGroupSource[] => {
     const entry = item && typeof item === 'object' ? item as Record<string, unknown> : null;
     const providerId = entry ? text(entry.providerId, MODEL_GROUP_LIMITS.field) : '';
     // 运行位置格式不对的整条丢弃，不悄悄变成本机。
@@ -464,6 +469,15 @@ function normalizeSourceRoute(raw: unknown): ModelGroupSourceRoute | null {
       ...(entry.off === true ? { off: true } : {}), ...(weight !== 1 ? { weight } : {}),
     }];
   }).slice(0, MODEL_GROUP_LIMITS.candidates);
+}
+
+function normalizeSourceRoute(raw: unknown): ModelGroupSourceRoute | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const id = text(value.id, MODEL_GROUP_LIMITS.id);
+  const name = text(value.name, MODEL_GROUP_LIMITS.name);
+  if (!id || !name || isExpandedModelGroupId(id)) return null;
+  const sources = normalizeSources(value.sources);
   const strategy = MODEL_GROUP_STRATEGIES.find((item) => item === value.pick)
     ?? MODEL_GROUP_STRATEGIES.find((item) => item === value.strategy) ?? 'expiring';
   const effort = text(value.effort, MODEL_GROUP_LIMITS.effort);
@@ -560,12 +574,18 @@ export function normalizeModelGroupsConfig(raw: unknown): ModelGroupsConfig {
     .slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT)) as Record<string, ModelGroupStrategy>;
   const autoSwitchOff = [...new Set((Array.isArray(value.autoSwitchOff) ? value.autoSwitchOff : [])
     .map((id) => text(id, MODEL_GROUP_LIMITS.id)).filter(isAutoModelGroupId))].slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT);
+  const autoSources = Object.fromEntries(Object.entries(value.autoSources && typeof value.autoSources === 'object' ? value.autoSources : {})
+    .filter(([id]) => isAutoModelGroupId(id) && id.length <= MODEL_GROUP_LIMITS.id)
+    .map(([id, sources]) => [id, normalizeSources(sources)] as const)
+    .filter(([, sources]) => sources.length > 0)
+    .slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT)) as Record<string, ModelGroupSource[]>;
   return {
     routes: routes.map((route) => pruneExceptions(route, routeIds)),
     ...(sourceRoutes.length > 0 ? { sourceRoutes } : {}),
     ...(hiddenAuto.length > 0 ? { hiddenAuto } : {}),
     ...(autoSwitchOff.length > 0 ? { autoSwitchOff } : {}),
     ...(Object.keys(autoStrategy).length > 0 ? { autoStrategy } : {}),
+    ...(Object.keys(autoSources).length > 0 ? { autoSources } : {}),
   };
 }
 

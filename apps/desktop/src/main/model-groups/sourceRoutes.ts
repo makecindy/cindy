@@ -23,7 +23,9 @@ import {
   type ModelGroupCandidate,
   type ModelGroupRoute,
   type ModelGroupsConfig,
+  type ModelGroupSource,
   type ModelGroupSourceRoute,
+  modelGroupSourceKey,
 } from '../../shared/modelGroups.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 
@@ -66,7 +68,7 @@ const locationAgents = (catalog: SourceCatalog, agentDeviceId: string | undefine
  */
 export function buildAutoSourceRoutes(
   catalog: Pick<SourceCatalog, 'views' | 'remote'>,
-  config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff'>,
+  config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources'>,
 ): ModelGroupSourceRoute[] {
   const others = [...(catalog.remote ?? [])].map(([deviceId, providers]) => ({ deviceId, providers }));
   // 去重只在自己的电脑之间做(同一个登录在两台电脑上算一个)。别人分享来的各是各的账号，即使供应商同名也都算成员，
@@ -87,13 +89,21 @@ export function buildAutoSourceRoutes(
   for (const [family, members] of families) {
     if (members.length < 2) continue;
     const id = `${MODEL_GROUP_AUTO_PREFIX}${family}`.slice(0, MODEL_GROUP_LIMITS.id);
+    // 成员是谁仍按连接自动定；用户排过先后、填过权重、暂停过的，按他存的来(没排到的新成员排在后面)。
+    const saved = config.autoSources?.[id] ?? [];
+    const rank = new Map(saved.map((source, index) => [modelGroupSourceKey(source), { index, source }]));
+    const detected = members.map(({ view, agentDeviceId }): ModelGroupSource => ({ providerId: view.id, ...(agentDeviceId ? { agentDeviceId } : {}) }));
+    const ordered = detected
+      .map((source, index) => ({ source, index, saved: rank.get(modelGroupSourceKey(source)) }))
+      .sort((a, b) => (a.saved ? a.saved.index : saved.length + a.index) - (b.saved ? b.saved.index : saved.length + b.index))
+      .map(({ source, saved: kept }): ModelGroupSource => ({
+        ...source, ...(kept?.source.off ? { off: true } : {}), ...(kept?.source.weight ? { weight: kept.source.weight } : {}),
+      }));
     routes.push({
       id,
       name: members[0].view.name.slice(0, MODEL_GROUP_LIMITS.name),
       strategy: config.autoStrategy?.[id] ?? 'expiring',
-      sources: members.slice(0, MODEL_GROUP_LIMITS.candidates).map(({ view, agentDeviceId }) => ({
-        providerId: view.id, ...(agentDeviceId ? { agentDeviceId } : {}),
-      })),
+      sources: ordered.slice(0, MODEL_GROUP_LIMITS.candidates),
       ...(switchOff.has(id) ? { autoSwitch: false as const } : {}),
       auto: true,
       ...(hidden.has(id) ? { hidden: true as const } : {}),

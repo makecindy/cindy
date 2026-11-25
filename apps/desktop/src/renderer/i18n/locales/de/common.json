@@ -22775,7 +22775,7 @@
       "autoTag": "Automatisch",
       "chooseProvider": "Anbieter wählen",
       "removeAria": "{{name}} aus diesem Modus entfernen",
-      "note": "Automatische Modi folgen deinen verbundenen Anbietern. Ihre Mitglieder lassen sich nicht ändern; Strategie ändern oder ausblenden ist möglich.",
+      "note": "Automatische Modi folgen deinen verbundenen Anbietern. Mitglieder lassen sich nicht hinzufügen oder entfernen, aber du kannst ihre Reihenfolge und Gewichte ändern, einzelne ausschalten, die Strategie ändern oder den Modus ausblenden.",
       "providers_one": "{{count}} Anbieter",
       "providers_other": "{{count}} Anbieter",
       "addWhole": "Ganzen Anbieter hinzufügen",

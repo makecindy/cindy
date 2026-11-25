@@ -80,7 +80,7 @@ export function registerModelGroupsIpc(): void {
     assertTrustedAppRendererEvent(event);
     if (!raw || typeof raw !== 'object') throwIpcError('INVALID_PARAMS', 'model groups config must be an object');
     // 这次写入没带的字段(只改路由的界面、旧界面)不动已存的。
-    const keep = (['sourceRoutes', 'hiddenAuto', 'autoStrategy', 'autoSwitchOff'] as const).filter((key) => !Object.hasOwn(raw, key));
+    const keep = (['sourceRoutes', 'hiddenAuto', 'autoStrategy', 'autoSwitchOff', 'autoSources'] as const).filter((key) => !Object.hasOwn(raw, key));
     return writeModelGroupsConfig(normalizeModelGroupsConfig(raw), keep);
   });
   ipcMain.handle(MODEL_GROUPS_IPC.RESOLVE, async (event, raw: unknown) => {

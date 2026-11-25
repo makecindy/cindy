@@ -22993,7 +22993,7 @@
       "autoTag": "Automático",
       "chooseProvider": "Elegir proveedor",
       "removeAria": "Quitar {{name}} de este modo",
-      "note": "Los modos automáticos siguen tus proveedores conectados. Sus miembros no se pueden cambiar; puedes cambiar la estrategia u ocultarlos.",
+      "note": "Los modos automáticos siguen tus proveedores conectados. No se pueden añadir ni quitar miembros, pero puedes reordenarlos, asignar pesos, desactivar uno, cambiar la estrategia u ocultar el modo.",
       "providers_one": "{{count}} proveedor",
       "providers_many": "{{count}} proveedores",
       "providers_other": "{{count}} proveedores",

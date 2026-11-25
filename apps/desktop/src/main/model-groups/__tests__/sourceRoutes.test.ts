@@ -49,6 +49,22 @@ const childrenOf = (config: ModelGroupsConfig, parentId: string) => config.route
 const sources = (candidates: readonly ModelGroupCandidate[]) => candidates.map((item) => `${item.providerId}:${item.model}`);
 
 describe('provider routes', () => {
+  // 2026-11-25 用户反馈：自动合好的路由选了「按顺序」「按权重」，却没有地方调先后和权重。成员是谁仍自动定，
+  // 用户排的先后、填的权重、暂停的成员单独存，合成时按它来，并带进每个模型展开出的路由。
+  // 失效后果：调了不生效，或调过之后新连上的成员不见了。最小输入：同一家两个连接，存的顺序与连接顺序相反。
+  it('keeps the order, weight and pause the user set on an automatic route, and still adds new members', () => {
+    const config = effective({ routes: [], autoStrategy: { 'auto:openai': 'weighted' },
+      autoSources: { 'auto:openai': [{ providerId: 'byok-1', weight: 5 }, { providerId: 'gone' }] } },
+    [GATEWAY, SUBSCRIPTION, ORGANIZATION, OTHER]);
+    // 存的顺序在前(已经不在的那个不出现)，没排过的成员跟在后面。
+    expect(config.sourceRoutes?.[0].sources).toEqual([{ providerId: 'byok-1', weight: 5 }, { providerId: 'openai' }]);
+    const shared = childrenOf(config, 'auto:openai').find((route) => route.candidates.length === 2)!;
+    expect(shared.candidates.map((candidate) => [candidate.providerId, candidate.weight ?? 1])).toEqual([['byok-1', 5], ['openai', 1]]);
+    const paused = effective({ routes: [], autoSources: { 'auto:openai': [{ providerId: 'openai', off: true }] } }, [GATEWAY, SUBSCRIPTION, ORGANIZATION, OTHER]);
+    expect(paused.sourceRoutes?.[0].sources).toEqual([{ providerId: 'openai', off: true }, { providerId: 'byok-1' }]);
+    expect(childrenOf(paused, 'auto:openai').every((route) => route.candidates.filter((candidate) => candidate.providerId === 'openai').every((candidate) => candidate.off === true))).toBe(true);
+  });
+
   it('combines providers of one brand automatically and expands the route per model', () => {
     const own = { id: 'mine', name: 'Mine', strategy: 'order' as const, candidates: [] };
     const config = effective({ routes: [own] }, [GATEWAY, SUBSCRIPTION, ORGANIZATION, OTHER]);
