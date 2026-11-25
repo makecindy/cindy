@@ -15465,6 +15465,7 @@
       "label_many": "{{count}} novas mensagens"
     },
     "messageNavRail": {
+      "you": "Você",
       "aria": "Navegação de prompts",
       "jumpAria": "Ir para o prompt {{index}}: {{preview}}",
       "attachmentOnly_one": "{{count}} anexo",

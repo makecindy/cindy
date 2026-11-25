@@ -810,6 +810,10 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 实现见 `useProportionalWidth.ts`，真实组件几何与明暗回归见 `scripts/fixtures/task-content-width/`
 和 `scripts/fixtures/group-width/`。
 
+### Desktop message nav rail preview
+
+提问导航条的悬停预览在首行标出发送者，有发送时间时一并显示。圆角底框只用来标出本人的提问：只有本人提问才放进与用户气泡同色（`--msg-user-bg`）的圆角框。本人身份与聊天来源一致，设备标签只说明发送设备。其他来源沿用聊天的署名和图标，正文使用次级文字色，不得加圆角底框；给所有消息加框就无法一眼认出自己的提问。
+
 ### Desktop chat threads
 
 Group and private threads share the same panel chrome, root message row and reply divider. The complete root message belongs to the replies’ scroll container; it has no independent height limit or scrollbar. Keep the header and reply composer visible outside that scrolling content. Private threads retain the ordinary task runtime for progress, approvals and stopping.

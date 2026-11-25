@@ -15312,6 +15312,7 @@
       "label_other": "{{count}} 条新消息"
     },
     "messageNavRail": {
+      "you": "你",
       "aria": "提问导航",
       "jumpAria": "跳转到第 {{index}} 条提问：{{preview}}",
       "attachmentOnly_one": "附件 {{count}} 件",
