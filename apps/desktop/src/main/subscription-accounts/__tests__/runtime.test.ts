@@ -7161,6 +7161,25 @@ describe('unbound Codex history account recovery', () => {
     expect(start.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/second');
     await handle.close();
   });
+  // 目标来源当下没有能服务该模型的账号：保持旧上下文与记录，等真有账号的那次发送再接手。
+  it('keeps the context and the record while the destination cannot serve the model yet', async () => {
+    const { row, deps } = fixture();
+    deps.matchesSourceSwitch.mockReturnValue(true);
+    h.bindings.set('task:old-task', { providerId: 'openai', accountId: 'second' });
+    row.model = 'gpt-not-offered-by-pool';
+    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(false);
+    expect(deps.rebuild).not.toHaveBeenCalled();
+    expect(row.sdkSessionId).toBe('legacy');
+    expect(h.bindings.get('task:old-task')?.accountId).toBe('second');
+    expect(deps.consumeSourceSwitch).not.toHaveBeenCalled();
+
+    // 目标来源有了能服务该模型的账号：这一次才交接并消费记录。
+    row.model = 'gpt-6.1-sol';
+    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(true);
+    expect(deps.rebuild).toHaveBeenCalledOnce();
+    expect(deps.consumeSourceSwitch).toHaveBeenCalledOnce();
+  });
+
   // 反例: 只是普通续聊(没有换源记录)时, 即使原来源自己的登录起不了, 也不跨账号移动。
   it('keeps an ordinary resume on its own account instead of crossing accounts', async () => {
     const { row, deps } = fixture();
