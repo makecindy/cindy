@@ -357,7 +357,9 @@ describe('materializeCompanion', () => {
     const log = { warn: vi.fn(), info: vi.fn() };
     const { state } = memoryState();
     await expect(materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM, log })).rejects.toThrow('RESTORE_INCOMPLETE');
-    expect(log.warn).toHaveBeenCalledWith('Companion content could not be restored', { actorId: 'actor-1', kind: 'memory', code: 'EBUSY' });
+    expect(log.warn).toHaveBeenCalledWith('Companion content could not be restored', {
+      actorId: 'actor-1', kind: 'memory', op: 'write', nameKind: 'store', nameLen: 'user_bad.md'.length, code: 'EBUSY',
+    });
     // Not runnable, so the stale file is never uploaded over the cloud value.
     expect(state.bot('bot_mia')?.demoted).toBe(true);
     expect(state.bot('bot_mia')?.prefs['companion.memory.v1:user_ok.md']?.local).toBe(true);
@@ -596,6 +598,45 @@ describe('materializeCompanion', () => {
       const result = await materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM });
       expect(result.notices).toEqual(['permissions']);
       expect(state.bot('bot_mia')?.demoted).toBeUndefined();
+    });
+
+    // #12621, unit: when session creation pauses for model selection after capabilities already applied,
+    // retrying must not re-apply the same cloud capabilities row and wipe the owner's local model choice.
+    // A newer cloud capabilities revision still applies.
+    it('does not re-apply unchanged cloud capabilities on retry after ensureCanonicalSession fails, but applies newer revisions', async () => {
+      const caps = { modelChain: [{ harness: 'codex', model: 'mac-only', providerId: 'p', effort: '', fastMode: false }] };
+      let revision = 1;
+      let hasModel = false;
+      const { api } = fakeApi((route, method) => {
+        if (route === '/preferences' && method === 'GET') return [
+          { ...profilePref, revision: 1 },
+          { key: 'companion.capabilities.v1', value: caps, revision },
+        ];
+        if (route.startsWith(`/conversations/${ROOM}/messages?`)) return [];
+        throw new Error(`unexpected ${method} ${route}`);
+      });
+      const applyCapabilities = vi.fn(async () => ['model' as const]);
+      const ensureCanonicalSession = vi.fn(async () => {
+        if (!hasModel) throw new Error('[PRECONDITION_FAILED] 请先连接模型供应商或选择伙伴模型');
+        return 'session-1';
+      });
+      const local = fakeLocal({ applyCapabilities, ensureCanonicalSession });
+      const { state } = memoryState();
+      await expect(materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM }))
+        .rejects.toThrow('请先连接模型供应商或选择伙伴模型');
+      expect(applyCapabilities).toHaveBeenCalledTimes(1);
+      expect(state.bot('bot_mia')?.capabilitiesApplied?.revision).toBe(1);
+      // Owner picks a local model; next retry skips re-applying the same cloud capabilities row.
+      hasModel = true;
+      await materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM });
+      expect(applyCapabilities).toHaveBeenCalledTimes(1);
+      expect(state.bot('bot_mia')?.demoted).toBeUndefined();
+      expect(state.bot('bot_mia')?.capabilitiesApplied).toBeUndefined();
+      // A newer cloud revision after moving back still applies.
+      revision = 2;
+      state.update('bot_mia', actor.id, entry => { entry.demoted = true; });
+      await materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM });
+      expect(applyCapabilities).toHaveBeenCalledTimes(2);
     });
   });
 

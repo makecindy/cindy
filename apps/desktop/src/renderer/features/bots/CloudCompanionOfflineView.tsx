@@ -38,6 +38,8 @@ export interface CloudCompanionOfflineViewProps {
   /** The home is online but has not opened remote control; otherwise it is simply not reachable. */
   controlOff?: boolean;
   profileFailure?: BotProfileSourceFailure;
+  /** This computer is the home, but take-over is waiting for a usable model here. */
+  needsModel?: boolean;
 }
 
 type TakeOverState =
@@ -54,7 +56,7 @@ export function CloudCompanionOfflineView(props: CloudCompanionOfflineViewProps)
   if (!owner.dataOwnerId || !isDataOwnerGenerationCurrent(transcriptOwner)) { transcriptOwner = owner; transcriptPages.clear(); }
   return <CloudCompanionOfflineContent key={JSON.stringify([owner, props.botId, props.deviceId])} {...props} />;
 }
-function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false, profileFailure }: CloudCompanionOfflineViewProps) {
+function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false, profileFailure, needsModel = false }: CloudCompanionOfflineViewProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const conflict = useCompanionCindyConflictAction();
@@ -193,7 +195,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
         actions={<><CompanionCindyConflictAction action={conflict.action} />
           {typeof companionCloudApi()?.repairCompanionProfile === 'function' && <Button variant="primary" size="md" disabled={state.kind === 'running'} onClick={() => setRepairOpen(true)}>{t('bots.cloud.repair.action')}</Button>}
           <Button variant="secondary" size="md" loading={state.kind === 'running'} disabled={state.kind === 'running'} onClick={() => void takeOver()}>{t('bots.retry')}</Button></>}
-      /> : recoveryHere ? <CompanionShadowBanner botId={botId} name={name} /> : <section
+      /> : recoveryHere ? <CompanionShadowBanner botId={botId} name={name} needsModel={needsModel} /> : <section
         role="status"
         className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
       >

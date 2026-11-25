@@ -65,6 +65,8 @@ const bot = z.object({
   skillFileGaps: z.record(z.string(), z.object({ omitted: z.array(z.string()), truncated: z.boolean().optional(), stale: z.record(z.string(), z.string()).optional() })).optional(),
   /** Deleted here while this computer was the home; disable the cloud actor until it succeeds. */
   retirePending: z.boolean().optional(),
+  /** Cloud capabilities already applied during this pending take-over; prevents retries from wiping local recovery model edits. */
+  capabilitiesApplied: z.object({ hash: z.string(), revision: z.number().int().nonnegative() }).optional(),
 });
 const file = z.object({ version: z.literal(1), bots: z.record(z.string(), bot) });
 

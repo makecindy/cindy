@@ -403,7 +403,7 @@ describe.skipIf(!BASE)('cloud companions against a real chat-server (two devices
     await dev.runtime.syncNow();
     expect(dev.calls.filter(call => call.method !== 'GET').length).toBe(devWritesBefore);
     // Taking over needs the home's profile snapshot; without it the take-over waits.
-    expect(await dev.runtime.takeOver(bot)).toEqual({ ok: false, code: 'FAILED' });
+    expect(await dev.runtime.takeOver(bot)).toEqual({ ok: false, code: 'FAILED', reason: 'PROFILE_SNAPSHOT_MISSING' });
     await release.runtime.syncNow();
     // Taking over from the dev installation overwrites the claim.
     expect(await dev.runtime.takeOver(bot)).toEqual({ ok: true });

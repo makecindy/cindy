@@ -768,7 +768,7 @@ describe('take over', () => {
       if (route === '/preferences' && method === 'GET') return [];
       return {};
     } });
-    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED', reason: 'PROFILE_SNAPSHOT_MISSING' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(t.local.host.createProfile).not.toHaveBeenCalled();
     expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
@@ -810,7 +810,7 @@ describe('take over', () => {
       if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: { name: 'Mia' }, revision: 1 }];
       return {};
     } });
-    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED', reason: 'PROFILE_SNAPSHOT_MISSING' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
   });
 
@@ -961,7 +961,7 @@ describe('transfer', () => {
     let tick = 0;
     const busy = setup({ home: 'desk', devices: [device('laptop')],
       readValues: async () => [{ key: 'companion.profile.v1', value: { name: `Mia ${tick++}` } }] });
-    expect(await busy.runtime.transfer('bot_mia', 'laptop')).toEqual({ ok: false, code: 'FAILED' });
+    expect(await busy.runtime.transfer('bot_mia', 'laptop')).toEqual({ ok: false, code: 'FAILED', reason: 'COMPANION_STILL_CHANGING' });
     expect(busy.calls.some(call => call.method === 'PATCH')).toBe(false);
   });
 
@@ -995,7 +995,7 @@ describe('transfer', () => {
     t.runtime.dispose();
 
     const failing = setup({ home: 'desk', devices: [device('laptop')], syncProfile: async () => { throw new Error('AVATAR_UPLOAD_FAILED'); } });
-    expect(await failing.runtime.transfer('bot_mia', 'laptop')).toEqual({ ok: false, code: 'FAILED' });
+    expect(await failing.runtime.transfer('bot_mia', 'laptop')).toEqual({ ok: false, code: 'FAILED', reason: 'AVATAR_UPLOAD_FAILED' });
     expect(failing.calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(failing.state.isDemoted('bot_mia')).toBe(false);
   });
@@ -1031,7 +1031,7 @@ describe('transfer', () => {
       homeLink: { version: async () => COMPANION_CLOUD_VERSION, targets: async () => [], handOver: async () => ({ ok: true }) }, values: [
       { key: 'companion.profile.v1', value: { name: 'Mia' } },
       { key: 'companion.skill.v1:huge', value: { slug: 'huge', content: 'x'.repeat(70 * 1024) } }] });
-    expect(await t.runtime.transfer('bot_mia', 'laptop')).toEqual({ ok: false, code: 'FAILED' });
+    expect(await t.runtime.transfer('bot_mia', 'laptop')).toEqual({ ok: false, code: 'FAILED', reason: 'COMPANION_VALUE_TOO_LARGE' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(t.state.isDemoted('bot_mia')).toBe(false);
   });
@@ -1098,7 +1098,7 @@ describe('transfer', () => {
     if (failure === 'SKILL_TARGET_OUTDATED') {
       expect(result).toEqual({ ok: false, code: failure, oversizedSkill: { slug: 'large', bodyBytes } });
     } else {
-      expect(result).toEqual(succeeds ? { ok: true } : { ok: false, code: failure });
+      expect(result).toEqual(succeeds ? { ok: true } : { ok: false, code: failure, reason: 'COMPANION_VALUE_TOO_LARGE' });
     }
     expect(t.actors[0]!.homeDeviceId).toBe(succeeds ? 'laptop' : 'desk');
     expect(t.state.isDemoted('bot_mia')).toBe(succeeds);
@@ -1647,7 +1647,7 @@ describe('merging copies of Cindy', () => {
     const t = mergeSetup({ sourceHome: 'desk' });
     t.state.update('bot_lap', 'actor-from', entry => { entry.demoted = true; entry.prefsSeeded = true; });
     Object.assign(t.host, { hasLocalData: async () => false });
-    expect(await t.runtime.mergeCindy('cindy-default', ['bot_lap'])).toEqual({ ok: false, code: 'FAILED' });
+    expect(await t.runtime.mergeCindy('cindy-default', ['bot_lap'])).toEqual({ ok: false, code: 'FAILED', reason: 'NOT_HOME' });
     expect(t.order).toEqual([]);
   });
 
@@ -1735,4 +1735,187 @@ it('lists a single remaining Cindy by profile identity, without running a merge'
   } });
   expect(await t.runtime.cindyCopies()).toEqual([{ botId: 'bot_mia', name: 'Mia', homeDeviceId: 'laptop' }]);
   expect(t.calls.every(call => call.method === 'GET')).toBe(true);
+});
+
+// #12621, unit: when a target computer became cloud home but its local take-over never completed
+// (still demoted), switchHome/transfer previously failed with flush()->NOT_HOME->FAILED. Allow
+// moving it back cleanly (without losing cloud state), while still refusing when another local
+// installation on the same device owns the companion.
+describe('recovery from an uncompleted take-over (#12621)', () => {
+  it('hands an uncompleted demoted take-over back to another computer without failing on NOT_HOME', async () => {
+    const t = setup({
+      home: 'desk',
+      devices: [device('laptop')],
+      installationId: 'install-a',
+      handler: (route, method) => {
+        if (route === '/preferences' && method === 'GET') {
+          return [
+            { key: 'companion.profile.v1', value: MIA, revision: 1 },
+            { key: 'companion.install.v1', value: { installationId: 'install-a', deviceId: 'desk' }, revision: 1 },
+          ];
+        }
+        return {};
+      },
+    });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; });
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual({ ok: true });
+    expect(t.actors[0]!.homeDeviceId).toBe('laptop');
+    expect(t.calls.some(call => call.method === 'PATCH' && call.route === '/actors/actor-1')).toBe(true);
+  });
+
+  it('refuses to hand over a demoted copy owned by another installation on the same computer', async () => {
+    const t = setup({
+      home: 'desk',
+      devices: [device('laptop')],
+      installationId: 'install-b',
+      handler: (route, method) => {
+        if (route === '/preferences' && method === 'GET') {
+          return [
+            { key: 'companion.profile.v1', value: MIA, revision: 1 },
+            { key: 'companion.install.v1', value: { installationId: 'install-a', deviceId: 'desk' }, revision: 1 },
+          ];
+        }
+        return {};
+      },
+    });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; });
+    expect(await t.runtime.transfer('bot_mia', 'laptop')).toEqual({ ok: false, code: 'FAILED', reason: 'OWNED_BY_OTHER_INSTALL' });
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+  });
+
+  // #12621 review P1: skipping local flush for an uncompleted take-over must still enforce target
+  // version compatibility against cloud content (store-only rows for <v3 and >64 KiB skills for <v5).
+  it.each([
+    {
+      label: 'rejects store-only cloud memory for a target without store reader (v2)',
+      version: 2,
+      storeEntries: [{ key: 'companion.memory.v1:big.md', revision: 1, cursor: '1', hash: 'h1', size: 70_000, deleted: false,
+        value: { companionStore: 1, prefRevision: 0, value: { filename: 'big.md', content: 'x'.repeat(65_000) } } }],
+      expected: { ok: false, code: 'FAILED', reason: 'COMPANION_VALUE_TOO_LARGE' },
+    },
+    {
+      label: 'allows store-only cloud memory for a store-capable target (v4)',
+      version: 4,
+      storeEntries: [{ key: 'companion.memory.v1:big.md', revision: 1, cursor: '1', hash: 'h1', size: 70_000, deleted: false,
+        value: { companionStore: 1, prefRevision: 0, value: { filename: 'big.md', content: 'x'.repeat(65_000) } } }],
+      expected: { ok: true },
+    },
+    {
+      label: 'rejects >64 KiB cloud skill body for a pre-v5 target (v4)',
+      version: 4,
+      storeEntries: [{ key: 'companion.skill.v1:large', revision: 1, cursor: '1', hash: 'h2', size: 72_000, deleted: false,
+        value: { companionStore: 1, prefRevision: 0, value: { slug: 'large', content: 'x'.repeat(71_560) } } }],
+      expected: { ok: false, code: 'SKILL_TARGET_OUTDATED', oversizedSkill: { slug: 'large', bodyBytes: 71_560 } },
+    },
+    {
+      label: 'allows >64 KiB cloud skill body for a current target (v5)',
+      version: COMPANION_CLOUD_VERSION,
+      storeEntries: [{ key: 'companion.skill.v1:large', revision: 1, cursor: '1', hash: 'h2', size: 72_000, deleted: false,
+        value: { companionStore: 1, prefRevision: 0, value: { slug: 'large', content: 'x'.repeat(71_560) } } }],
+      expected: { ok: true },
+    },
+  ])('$label during an uncompleted take-over hand-over', async ({ version, storeEntries, expected }) => {
+    const t = setup({
+      home: 'desk',
+      devices: [device('laptop')],
+      store: { enabled: () => true },
+      homeLink: { version: async () => version, targets: async () => [], handOver: async () => ({ ok: true }) },
+      handler: (route, method) => {
+        if (route.startsWith('/preferences') && method === 'GET') {
+          return [{ key: 'companion.profile.v1', value: MIA, revision: 1 }];
+        }
+        if (route.startsWith('/companion-store/changes')) {
+          return { entries: storeEntries, cursor: '1', hasMore: false };
+        }
+        if (route.startsWith('/companion-store/entry?')) {
+          return { key: 'companion.profile.v1', revision: 0, cursor: '0', hash: '', size: 0, deleted: true };
+        }
+        if (method === 'PATCH') return {};
+        throw new Error(`unexpected ${method} ${route}`);
+      },
+    });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; });
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual(expected);
+    expect(t.actors[0]!.homeDeviceId).toBe(expected.ok ? 'laptop' : 'desk');
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(expected.ok);
+  });
+
+  it('records needsModel, avoids server polling until a local model is usable, and finishes on local change', async () => {
+    let modelReady = false;
+    let notifyLocalChange: ((botId: string) => void) | undefined;
+    const hasUsableBotModel = vi.fn(async () => modelReady);
+    const t = setup({
+      home: 'desk',
+      handler: (route, method) => {
+        if (route === '/actors' && method === 'GET') return t.actors;
+        if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: MIA, revision: 1 }];
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      },
+    });
+    // Wire hasUsableBotModel and onLocalChange through a dedicated runtime instance.
+    t.runtime.dispose();
+    const calls: Array<{ route: string; method: string }> = [];
+    const actors = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', homeDeviceId: 'desk' as string | null }];
+    const { state } = memoryState();
+    const local = fakeLocal({
+      ensureCanonicalSession: vi.fn(async () => {
+        if (!modelReady) throw new Error('[PRECONDITION_FAILED] 请先连接模型供应商或选择伙伴模型');
+        return 'session-1';
+      }),
+    });
+    const log = { warn: vi.fn(), info: vi.fn() };
+    const { api } = fakeApi((route, method) => {
+      calls.push({ route, method });
+      if (route === '/actors' && method === 'GET') return actors;
+      if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: MIA, revision: 1 }];
+      if (route === '/conversations') return { id: ROOM };
+      if (route.includes('/messages?')) return [];
+      return {};
+    });
+    const rt = startCompanionCloud({
+      api,
+      endpoint: 'https://chat.test',
+      humanActorId: 'human',
+      selfDeviceId: 'desk',
+      current: () => true,
+      bots: () => [],
+      actors: () => actors,
+      initialKick: false,
+      log,
+      host: {
+        homes: createCompanionHomeRegistry(),
+        openState: () => state,
+        readValues: async () => [],
+        canonicalSession: async () => null,
+        rowsAfter: async () => [],
+        latestRows: async () => [],
+        deliverToCanonical: async () => ({ ok: true }),
+        onLocalChange: (listener) => { notifyLocalChange = listener; return () => { notifyLocalChange = undefined; }; },
+        hasUsableBotModel,
+        materializer: local.host,
+      },
+    });
+    try {
+      expect(await rt.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED', reason: 'MODEL_UNAVAILABLE' });
+      expect(rt.needsModel('bot_mia')).toBe(true);
+      expect(state.isDemoted('bot_mia')).toBe(true);
+
+      // Reconcile while still without a model must NOT make additional server calls.
+      const callsAfterFirst = calls.length;
+      notifyLocalChange?.('bot_mia');
+      await vi.waitFor(() => expect(hasUsableBotModel).toHaveBeenCalledTimes(1));
+      expect(calls.length).toBe(callsAfterFirst);
+      expect(rt.needsModel('bot_mia')).toBe(true);
+
+      // Once a local model is chosen, onLocalChange wakes take-over immediately and completes it.
+      modelReady = true;
+      notifyLocalChange?.('bot_mia');
+      await vi.waitFor(() => expect(state.isDemoted('bot_mia')).toBe(false));
+      expect(rt.needsModel('bot_mia')).toBe(false);
+    } finally {
+      rt.dispose();
+    }
+  });
 });

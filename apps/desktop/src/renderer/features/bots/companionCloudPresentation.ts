@@ -34,7 +34,7 @@ export function cloudCompanionAt(cloud: CompanionCloudSnapshot, deviceId: string
 /** A local home is not runnable while this installation is shadowed or its restore was rejected. */
 export function localCompanionNeedsRecovery(cloud: CompanionCloudSnapshot, botId: string | undefined): boolean {
   const actor = cloudCompanionAt(cloud, cloud.selfDeviceId ?? undefined, botId);
-  return !!actor && (cloud.demotedBotIds.includes(actor.externalId) || !!actor.profileFailure);
+  return !!actor && (cloud.demotedBotIds.includes(actor.externalId) || !!actor.profileFailure || !!actor.needsModel);
 }
 
 /** Read-only cloud rows do not announce a connection, including a pending local restore. */

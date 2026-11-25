@@ -13,6 +13,7 @@ import { COMPANION_HISTORY_CLIENT_PREFIX } from './mirror.js';
 import { parseCompanionCapabilities, type CompanionArrivalNotice, type CompanionCapabilitiesValue } from './capabilities.js';
 import { directRoomSourceId } from './directRoom.js';
 import { readAllRoomMessages } from './room.js';
+import { classifyMemoryFilename } from '../maker-ipc/botProjectMemory.js';
 import type { BotSkillFile } from '../maker-ipc/botSkillFiles.js';
 import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
 import type { CompanionBotState, CompanionCloudState } from './state.js';
@@ -263,11 +264,13 @@ export async function materializeCompanion(input: {
   const profileRow = prefs.get(COMPANION_PROFILE_KEY);
   if (profileRow && profile) applied.set(COMPANION_PROFILE_KEY, { hash: valueHash(profileRow.value), revision: profileRow.revision });
   let failures = 0;
-  const apply = async (kind: string, run: () => Promise<void>) => {
+  const apply = async (kind: string, run: () => Promise<void>, meta?: () => Record<string, unknown>) => {
     try { await run(); } catch (error) {
       if (errorCode(error) === 'OWNER_CHANGED') throw error;
       failures += 1;
-      log?.warn('Companion content could not be restored', { actorId: actor.id, kind, code: errorCode(error) });
+      const restoreStep = error instanceof Error ? (error as Error & { restoreStep?: unknown }).restoreStep : undefined;
+      const step = typeof restoreStep === 'string' ? { step: restoreStep } : {};
+      log?.warn('Companion content could not be restored', { actorId: actor.id, kind, ...(meta ? meta() : {}), ...step, code: errorCode(error) });
     }
   };
   // The cloud copy wins: a tombstone deletes the local file (the copy was backed up above), so
@@ -277,17 +280,24 @@ export async function materializeCompanion(input: {
     if (key.startsWith(COMPANION_MEMORY_PREFIX)) {
       const filename = key.slice(COMPANION_MEMORY_PREFIX.length);
       const content = text(record(value)?.content);
+      let op: 'read' | 'write' | 'remove' = 'read';
       await apply('memory', async () => {
         const current = await host.readMemory(botId, filename);
         if (value === null) {
-          if (current !== null) await step(() => host.removeMemory(botId, filename, fence));
+          if (current !== null) {
+            op = 'remove';
+            await step(() => host.removeMemory(botId, filename, fence));
+          }
           applied.set(key, { hash: TOMBSTONE_HASH, revision: row.revision });
           return;
         }
         if (content === undefined) return;
-        if (content !== current) await step(() => host.restoreMemory(botId, filename, content, fence));
+        if (content !== current) {
+          op = 'write';
+          await step(() => host.restoreMemory(botId, filename, content, fence));
+        }
         applied.set(key, { hash: valueHash(value), revision: row.revision });
-      });
+      }, () => ({ op, nameKind: classifyMemoryFilename(filename), nameLen: filename.length }));
     } else if (key.startsWith(COMPANION_SKILL_PREFIX)) {
       const slug = key.slice(COMPANION_SKILL_PREFIX.length);
       const content = text(record(value)?.content);
@@ -339,13 +349,22 @@ export async function materializeCompanion(input: {
   if (!local && !notices.includes('permissions')) notices.push('permissions');
   const capabilitiesRow = prefs.get(COMPANION_CAPABILITIES_KEY);
   const capabilities = capabilitiesRow ? parseCompanionCapabilities(capabilitiesRow.value) : null;
+  const capabilitiesHash = capabilitiesRow ? valueHash(capabilitiesRow.value) : undefined;
+  const capabilitiesAlreadyApplied = !!local && !!capabilitiesRow && known?.actorId === actor.id && known.demoted === true
+    && known.capabilitiesApplied?.hash === capabilitiesHash && known.capabilitiesApplied?.revision === capabilitiesRow.revision;
+  let capabilitiesAppliedThisRun: { hash: string; revision: number } | undefined = capabilitiesAlreadyApplied ? known.capabilitiesApplied : undefined;
   if (capabilitiesRow && capabilities && host.applyCapabilities) {
-    await apply('capabilities', async () => {
-      for (const notice of await step(() => host.applyCapabilities!(botId, capabilities, fence))) {
-        if (!notices.includes(notice)) notices.push(notice);
-      }
-      applied.set(COMPANION_CAPABILITIES_KEY, { hash: valueHash(capabilitiesRow.value), revision: capabilitiesRow.revision });
-    });
+    if (capabilitiesAlreadyApplied) {
+      applied.set(COMPANION_CAPABILITIES_KEY, { hash: capabilitiesHash!, revision: capabilitiesRow.revision });
+    } else {
+      await apply('capabilities', async () => {
+        for (const notice of await step(() => host.applyCapabilities!(botId, capabilities, fence))) {
+          if (!notices.includes(notice)) notices.push(notice);
+        }
+        capabilitiesAppliedThisRun = { hash: capabilitiesHash!, revision: capabilitiesRow.revision };
+        applied.set(COMPANION_CAPABILITIES_KEY, capabilitiesAppliedThisRun);
+      });
+    }
   }
 
   // Routines an older computer uploaded move with the companion, applied in one batch. Teammates no
@@ -409,11 +428,22 @@ export async function materializeCompanion(input: {
     // Keep what was restored (so the retry does not back the copy up again) and stay demoted.
     state.update(botId, actor.id, entry => {
       for (const [key, value] of applied) remember(entry, key, value);
+      if (capabilitiesAppliedThisRun) entry.capabilitiesApplied = capabilitiesAppliedThisRun;
       // The copy now exists: the retry no longer sees it as new, so remember what it could not keep.
       if (notices.length) entry.arrivalNotices = notices;
     });
     throw new Error('RESTORE_INCOMPLETE');
   }
+
+  // Persist restored content & capabilities before creating the canonical session: if session
+  // creation waits on model configuration, a local model selection will not be overwritten by the
+  // same cloud capabilities row on the next retry.
+  fence.assertCurrent();
+  state.update(botId, actor.id, entry => {
+    for (const [key, value] of applied) remember(entry, key, value);
+    if (capabilitiesAppliedThisRun) entry.capabilitiesApplied = capabilitiesAppliedThisRun;
+    if (notices.length) entry.arrivalNotices = notices;
+  });
 
   const sessionId = await step(() => host.ensureCanonicalSession(botId, fence));
   const roomId = await step(() => input.roomId());
@@ -445,7 +475,7 @@ export async function materializeCompanion(input: {
     delete entry.demoted;
     // The next take-over (after this copy hands the companion away again) backs it up anew.
     delete entry.backedUp;
-
+    delete entry.capabilitiesApplied;
   });
   return { created: !local, inserted, rebuild, notices, ...(backup !== undefined ? { backup } : {}) };
 }
