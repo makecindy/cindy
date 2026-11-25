@@ -858,7 +858,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       if (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh) && liveSessionBeforeRouteChange) {
         if (!piPreview || piPreview.action === 'unavailable') {
           throwIpcError(
-            'PRECONDITION_FAILED',
+            piPreview?.modelNotOffered ? 'MODEL_SELECTION_UNAVAILABLE' : 'PRECONDITION_FAILED',
             piPreview?.reason ?? 'Pi target route cannot be previewed; runtime selection was not changed',
           );
         }

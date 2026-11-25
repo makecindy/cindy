@@ -2570,6 +2570,8 @@ export interface PiModelSwitchPreview {
   targetContextWindow: number | null;
   /** Only true when the live Pi runtime has confirmed this exact target window. */
   windowVerified: boolean;
+  /** The target provider was resolved and its model list excludes this selection. */
+  modelNotOffered?: true;
   /** Non-secret reason suitable for a host error; never include env values. */
   reason?: string;
 }
