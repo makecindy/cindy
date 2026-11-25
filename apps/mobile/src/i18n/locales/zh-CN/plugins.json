@@ -310,7 +310,7 @@
       "nodeSecretOne": "本机 Node 程序可获得 1 个已保存凭证"
     },
     "releaseChanged": "可用版本已变化，请查看刷新后的版本，再选择安装。",
-    "sourceUnverified": "这台电脑暂未提供这个市场的仓库信息，不能从手机升级。请在电脑上刷新这个市场后再试（Cindy 较旧时先更新），或在电脑上升级。",
+    "sourceUnverified": "这台电脑没有提供这个自定义市场的仓库信息，不能从手机升级。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上升级。",
     "sourceChanged": "这个市场的来源刚刚有变化，已停止升级。请在电脑上核对这个市场后再试。",
     "settingsUnavailable": "插件设置加载失败，请重新加载设置后重试。",
     "settingsResultUnknown": "尚未确认操作结果。请先重新读取电脑上的设置，再决定是否提交。",
@@ -356,8 +356,8 @@
       "marketSourceChanged": "这次更新会改为插件市场里的版本。旧账号和数据会隔离保存，需要重新连接账号。",
       "sourceChangedIsolated": "这次更新的来源与已安装的版本不同。旧账号和数据会隔离保存，需要重新连接账号。",
       "localFolder": "本地文件夹",
-      "repositoryMissingInstall": "这台电脑没有提供仓库信息，不能在手机上允许这次安装。请在电脑上刷新这个市场后再试（Cindy 较旧时先更新），或在电脑上安装。",
-      "repositoryMissingUpdate": "这台电脑没有提供仓库信息，不能在手机上允许这次升级。请在电脑上刷新这个市场后再试（Cindy 较旧时先更新），或在电脑上升级。",
+      "repositoryMissingInstall": "这台电脑没有提供这个自定义市场的仓库信息，不能从手机安装。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上安装。",
+      "repositoryMissingUpdate": "这台电脑没有提供这个自定义市场的仓库信息，不能从手机升级。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上升级。",
       "sourceChanged": "确认里的来源与你选择时不同，不能在手机上允许。请拒绝后重新选择。"
     },
     "sourceNotice": {
@@ -467,8 +467,8 @@
     "unconfirmedNotInstalled": "没能确认这次安装的结果；目前这台电脑上没有这个插件。",
     "alreadyInstalled": "这台电脑已经安装了这个插件。",
     "unconfirmedMismatch": "没能确认这次安装的结果；这台电脑上同标识的插件可能来自本地文件、其他版本或其他来源，请在电脑上核对。",
-    "sourceUnverified": "这台电脑暂时没有提供这个市场的仓库信息，暂不能从手机安装。请在电脑上刷新这个市场后再试；如果电脑上的 Cindy 版本较旧，请先更新，或直接在电脑上安装。",
-    "sourceUnverifiedShort": "这台电脑暂未提供仓库信息。请在电脑上刷新这个市场后再试，或在电脑上安装。",
+    "sourceUnverified": "这台电脑没有提供这个自定义市场的仓库信息，不能从手机安装。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上安装。",
+    "sourceUnverifiedShort": "缺少仓库信息，不能从手机安装",
     "sourceChanged": "这个市场的来源刚刚有变化，请重新选择要安装的插件。"
   },
   "gotIt": "知道了"

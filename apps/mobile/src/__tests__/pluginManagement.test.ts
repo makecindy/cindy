@@ -13,7 +13,9 @@ import { createPluginManagementController } from '@/plugins/pluginManagementCont
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
   parsePluginUiConsent, samePluginMarketSourceIdentity, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
-import { parsePluginMarketPage, pluginMarketIconUri } from '@/plugins/pluginMarketCatalog';
+import { parsePluginMarketPage, pluginMarketIconUri, pluginMarketSourceUnverified } from '@/plugins/pluginMarketCatalog';
+import { readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'operation-1' }));
 const appState = vi.hoisted(() => ({ currentState: 'active', listeners: new Set<(state: string) => void>() }));
@@ -1832,6 +1834,58 @@ describe('confirmation sheet wording', () => {
       .toEqual({ kind: 'git', repository: 'github.com/a/b', sourceId: id });
     expect(item({ installedSourceId: 'not-an-id' })).not.toHaveProperty('installedSourceId');
     expect(item({ installedSourceId: id }).installedSourceId).toBe(id);
+  });
+  /* 测试价值（缺仓库信息的说明，调度 2026-11-25 文案决定，提案，待维护者确认）
+   * - 生产入口与可观察结果：12 种语言的实际文案；市场条目经真实解析后的判定。
+   * - 依据：手机分不清缺省原因（电脑上的 Cindy 较旧、Host 升级后 Git 市场还没刷新、地址生成不出身份），说明不能暗示
+   *   以后会有，长句要先让更新并刷新、再给「仍不行就在电脑上做」的出口；只在非官方市场出现。
+   * - 缺口：旧文案写「暂未 / yet」，只让刷新再试。
+   * - 最小失败输入：zh-CN market.sourceUnverified 含「暂」。tier: unit。
+   */
+  it('words the missing repository information the same way in every language, without implying it comes later', () => {
+    const locales = resolve(process.cwd(), 'src/i18n/locales');
+    const read = (language: string, file: string, key: string) => key.split('.')
+      .reduce((node: any, part) => node?.[part], JSON.parse(readFileSync(resolve(locales, language, `${file}.json`), 'utf8')));
+    const keys = [['plugins', 'market.sourceUnverified'], ['plugins', 'market.sourceUnverifiedShort'], ['plugins', 'management.sourceUnverified'],
+      ['plugins', 'notice.consentSource.repositoryMissingInstall'], ['plugins', 'notice.consentSource.repositoryMissingUpdate'],
+      ['interaction', 'permission.installSourceUnverified']] as const;
+    const languages = readdirSync(locales);
+    expect(languages).toHaveLength(12);
+    for (const language of languages) for (const [file, key] of keys) {
+      const value = read(language, file, key);
+      expect(typeof value, `${language} ${key}`).toBe('string');
+      expect(value, `${language} ${key}`).not.toMatch(/暂|暫|\byet\b|\bnoch\b|\bencore\b|\baún\b|\bainda\b|まだ|아직/i);
+    }
+    // zh-CN as decided: update and refresh first, then the way out; the card ends with deny here, confirm on the computer.
+    expect(read('zh-CN', 'plugins', 'market.sourceUnverified')).toBe('这台电脑没有提供这个自定义市场的仓库信息，不能从手机安装。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上安装。');
+    expect(read('zh-CN', 'plugins', 'notice.consentSource.repositoryMissingInstall')).toBe(read('zh-CN', 'plugins', 'market.sourceUnverified'));
+    expect(read('zh-CN', 'plugins', 'notice.consentSource.repositoryMissingUpdate')).toBe(read('zh-CN', 'plugins', 'management.sourceUnverified'));
+    expect(read('zh-CN', 'plugins', 'management.sourceUnverified')).toContain('若仍不行，请直接在电脑上升级');
+    expect(read('zh-CN', 'plugins', 'market.sourceUnverifiedShort')).toBe('缺少仓库信息，不能从手机安装');
+    expect(read('zh-CN', 'interaction', 'permission.installSourceUnverified')).toMatch(/这里只能拒绝，要安装请在电脑上确认。$/);
+  });
+  // Covers existing behavior: the repository is what the person checks, so the longest allowed one (256 characters, no
+  // spaces) reaches the confirmation line whole, from the Host receipt through parsing; the line itself wraps on screen.
+  it('keeps a 256-character repository whole from the receipt to the confirmation line', () => {
+    const repository = 'github.com/' + 'o'.repeat(100) + '/' + 'r'.repeat(100) + '/' + 'p'.repeat(43);
+    expect(repository).toHaveLength(256);
+    const parsed = parsePluginManagementReceipt({ operationId: 'op', phase: 'confirmation', consent: {
+      requestId: 'r', origin: 'custom-market', originLabel: 'Acme', initiator: 'user',
+      originSource: { kind: 'git', repository, sourceId: 'DemoGitMarketSource001' },
+      facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } }, 'op');
+    const t = (key: string, args?: Record<string, unknown>) => args ? `${key}|${args.repository ?? ''}` : key;
+    expect(pluginConsentPresentation(parsed.consent!, t as any, 'Mac').repository).toBe(`plugins.notice.consentSource.repository|${repository}`);
+  });
+  // Covers existing behavior: the market shows it only off the official market, for a missing or unusable identity.
+  it('marks only a non-official market item without a usable identity as missing its repository', () => {
+    const id = 'DemoGitMarketSource001';
+    const item = (extra: Record<string, unknown>) => parsePluginMarketPage({ items: [{ ...detail, installState: 'not-installed', enabled: null,
+      sourceMarketName: 'Acme', ...extra }] }).items[0]!;
+    expect(pluginMarketSourceUnverified(item({ sourceType: 'server' }))).toBe(false);
+    expect(pluginMarketSourceUnverified(item({ sourceType: 'git-market' }))).toBe(true);
+    expect(pluginMarketSourceUnverified(item({ sourceType: 'git-market', sourceIdentity: { kind: 'git', repository: 'https://u:p@github.com/a/b', sourceId: id } }))).toBe(true);
+    expect(pluginMarketSourceUnverified(item({ sourceType: 'git-market', sourceIdentity: { kind: 'git', repository: 'github.com/a/b', sourceId: id } }))).toBe(false);
+    expect(pluginMarketSourceUnverified(item({ sourceType: 'git-market', sourceIdentity: { kind: 'local', sourceId: id } }))).toBe(false);
   });
   // Contract V2.9: installedOperationId matches ^[A-Za-z0-9_-]{8,128}$ (on page items, server items included, and on
   // the market detail); any other value counts as absent, so a lost-receipt result stays unconfirmed.

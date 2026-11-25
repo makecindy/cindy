@@ -1,7 +1,7 @@
 {
   "permission": {
     "install": "安装",
-    "installSourceUnverified": "手机无法核对这次安装的来源（电脑暂未提供仓库信息，或电脑上的 Cindy 版本较旧），只能在这里拒绝。可在电脑上刷新这个市场后让 Agent 再试，或在电脑上确认安装。",
+    "installSourceUnverified": "这台电脑没有提供这个自定义市场的仓库信息，不能从手机安装。可以先在那台电脑上更新 Cindy 并刷新这个市场，再让 Agent 重试；这里只能拒绝，要安装请在电脑上确认。",
     "mcpComplete": "完成",
     "mcpCancel": "取消",
     "mode": {

@@ -312,7 +312,7 @@
       "nodeSecretOne": "Le programme Node local peut recevoir un identifiant enregistré"
     },
     "releaseChanged": "La version disponible a changé. Examinez la version actualisée avant de l'installer.",
-    "sourceUnverified": "Cet ordinateur n’a pas encore indiqué le dépôt de ce marketplace : la mise à jour depuis le téléphone n’est pas possible. Actualisez le marketplace sur l’ordinateur puis réessayez (mettez d’abord Cindy à jour si elle est plus ancienne), ou mettez à jour depuis l’ordinateur.",
+    "sourceUnverified": "Cet ordinateur n’a pas indiqué le dépôt de ce marketplace personnalisé : la mise à jour depuis le téléphone n’est pas possible. Mettez d’abord Cindy à jour sur cet ordinateur et actualisez ce marketplace ; si cela ne suffit pas, mettez à jour directement depuis l’ordinateur.",
     "sourceChanged": "La source de ce marketplace vient de changer, la mise à jour a été arrêtée. Vérifiez ce marketplace sur l’ordinateur puis réessayez.",
     "settingsUnavailable": "Impossible de charger les paramètres du plugin. Rechargez les paramètres pour réessayer.",
     "settingsResultUnknown": "Le résultat de l'opération n'a pas pu être confirmé. Rechargez les paramètres de l'ordinateur avant de soumettre à nouveau.",
@@ -358,8 +358,8 @@
       "marketSourceChanged": "Cette mise à jour passe à la version du marketplace de plugins. Les comptes et données existants sont archivés séparément. Reconnectez vos comptes après la mise à jour.",
       "sourceChangedIsolated": "Cette mise à jour provient d’une autre source que la version installée. Les comptes et données existants sont archivés séparément ; reconnectez vos comptes après la mise à jour.",
       "localFolder": "Dossier local",
-      "repositoryMissingInstall": "Cet ordinateur n’a pas indiqué le dépôt : cette installation ne peut pas être autorisée depuis le téléphone. Actualisez le marketplace sur l’ordinateur puis réessayez (mettez d’abord Cindy à jour si elle est plus ancienne), ou installez depuis l’ordinateur.",
-      "repositoryMissingUpdate": "Cet ordinateur n’a pas indiqué le dépôt : cette mise à jour ne peut pas être autorisée depuis le téléphone. Actualisez le marketplace sur l’ordinateur puis réessayez (mettez d’abord Cindy à jour si elle est plus ancienne), ou mettez à jour depuis l’ordinateur.",
+      "repositoryMissingInstall": "Cet ordinateur n’a pas indiqué le dépôt de ce marketplace personnalisé : l’installation depuis le téléphone n’est pas possible. Mettez d’abord Cindy à jour sur cet ordinateur et actualisez ce marketplace ; si cela ne suffit pas, installez directement depuis l’ordinateur.",
+      "repositoryMissingUpdate": "Cet ordinateur n’a pas indiqué le dépôt de ce marketplace personnalisé : la mise à jour depuis le téléphone n’est pas possible. Mettez d’abord Cindy à jour sur cet ordinateur et actualisez ce marketplace ; si cela ne suffit pas, mettez à jour directement depuis l’ordinateur.",
       "sourceChanged": "La source de cette demande diffère de celle que vous avez choisie : elle ne peut pas être autorisée depuis le téléphone. Refusez-la et choisissez à nouveau."
     },
     "sourceNotice": {
@@ -469,8 +469,8 @@
     "unconfirmedNotInstalled": "Impossible de confirmer le résultat de cette installation. Le plugin n’est pas présent sur cet ordinateur pour le moment.",
     "alreadyInstalled": "Ce plugin est déjà installé sur cet ordinateur.",
     "unconfirmedMismatch": "Impossible de confirmer le résultat de cette installation. Le plugin portant le même identifiant sur cet ordinateur peut provenir d’un fichier local, d’une autre version ou d’une autre source. Vérifiez-le sur l’ordinateur.",
-    "sourceUnverified": "Cet ordinateur n’a pas encore indiqué le dépôt de ce marketplace : l’installation depuis le téléphone n’est pas possible. Actualisez ce marketplace sur l’ordinateur puis réessayez ; si Cindy y est plus ancienne, mettez-la d’abord à jour, ou installez depuis l’ordinateur.",
-    "sourceUnverifiedShort": "Cet ordinateur n’a pas encore indiqué le dépôt. Actualisez le marketplace sur l’ordinateur puis réessayez, ou installez depuis celui-ci.",
+    "sourceUnverified": "Cet ordinateur n’a pas indiqué le dépôt de ce marketplace personnalisé : l’installation depuis le téléphone n’est pas possible. Mettez d’abord Cindy à jour sur cet ordinateur et actualisez ce marketplace ; si cela ne suffit pas, installez directement depuis l’ordinateur.",
+    "sourceUnverifiedShort": "Dépôt non indiqué : installation impossible depuis le téléphone",
     "sourceChanged": "La source de ce marketplace vient de changer. Choisissez à nouveau le plugin à installer."
   },
   "gotIt": "Compris"

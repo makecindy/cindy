@@ -312,7 +312,7 @@
       "nodeSecretOne": "O programa Node local pode receber uma credencial armazenada"
     },
     "releaseChanged": "A versão disponível mudou. Revise a versão atualizada antes de instalar.",
-    "sourceUnverified": "Este computador ainda não informou o repositório deste marketplace, então não dá para atualizar pelo celular. Atualize o marketplace no computador e tente de novo (atualize a Cindy antes se for mais antiga), ou atualize pelo computador.",
+    "sourceUnverified": "Este computador não informou o repositório deste marketplace personalizado, então não dá para atualizar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, atualize direto pelo computador.",
     "sourceChanged": "A origem deste marketplace acabou de mudar e a atualização foi interrompida. Confira o marketplace no computador e tente de novo.",
     "settingsUnavailable": "Não foi possível carregar as configurações do plugin. Recarregue as configurações para tentar novamente.",
     "settingsResultUnknown": "Não foi possível confirmar o resultado da operação. Recarregue as configurações do computador antes de enviar novamente.",
@@ -358,8 +358,8 @@
       "marketSourceChanged": "Esta atualização muda para a versão do marketplace de plugins. As contas e os dados existentes são arquivados separadamente. Conecte suas contas novamente após atualizar.",
       "sourceChangedIsolated": "Esta atualização vem de uma origem diferente da versão instalada. As contas e os dados existentes são arquivados separadamente; conecte suas contas novamente após atualizar.",
       "localFolder": "Pasta local",
-      "repositoryMissingInstall": "Este computador não informou o repositório, então esta instalação não pode ser permitida pelo celular. Atualize o marketplace no computador e tente de novo (atualize a Cindy antes se for mais antiga), ou instale pelo computador.",
-      "repositoryMissingUpdate": "Este computador não informou o repositório, então esta atualização não pode ser permitida pelo celular. Atualize o marketplace no computador e tente de novo (atualize a Cindy antes se for mais antiga), ou atualize pelo computador.",
+      "repositoryMissingInstall": "Este computador não informou o repositório deste marketplace personalizado, então não dá para instalar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, instale direto pelo computador.",
+      "repositoryMissingUpdate": "Este computador não informou o repositório deste marketplace personalizado, então não dá para atualizar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, atualize direto pelo computador.",
       "sourceChanged": "A origem desta solicitação é diferente da que você escolheu, então ela não pode ser permitida pelo celular. Recuse e escolha de novo."
     },
     "sourceNotice": {
@@ -469,8 +469,8 @@
     "unconfirmedNotInstalled": "Não foi possível confirmar o resultado desta instalação. O plugin não está neste computador no momento.",
     "alreadyInstalled": "Este plugin já está instalado neste computador.",
     "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um arquivo local, de outra versão ou de outra origem. Confira no computador.",
-    "sourceUnverified": "Este computador ainda não informou o repositório deste marketplace, então não dá para instalar pelo celular. Atualize este marketplace no computador e tente de novo; se a Cindy no computador for mais antiga, atualize-a antes ou instale por lá.",
-    "sourceUnverifiedShort": "Este computador ainda não informou o repositório. Atualize o marketplace no computador e tente de novo, ou instale por lá.",
+    "sourceUnverified": "Este computador não informou o repositório deste marketplace personalizado, então não dá para instalar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, instale direto pelo computador.",
+    "sourceUnverifiedShort": "Falta o repositório; não dá para instalar pelo celular",
     "sourceChanged": "A origem deste marketplace acabou de mudar. Escolha de novo o plugin para instalar."
   },
   "gotIt": "Entendi"

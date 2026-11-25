@@ -1,7 +1,7 @@
 {
   "permission": {
     "install": "Instalar",
-    "installSourceUnverified": "O celular não consegue verificar de onde vem esta instalação (o computador ainda não informou o repositório ou a Cindy nele é mais antiga), então aqui você só pode recusar. Atualize o marketplace no computador e peça ao Agent para tentar de novo, ou confirme no computador.",
+    "installSourceUnverified": "Este computador não informou o repositório deste marketplace personalizado, então não dá para instalar pelo celular. Você pode atualizar a Cindy nesse computador, atualizar este marketplace e pedir ao Agent para tentar de novo; aqui você só pode recusar. Para instalar, confirme no computador.",
     "mcpComplete": "Concluído",
     "mcpCancel": "Cancelar",
     "mode": {

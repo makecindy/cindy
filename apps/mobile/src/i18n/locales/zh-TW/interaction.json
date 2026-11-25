@@ -1,7 +1,7 @@
 {
   "permission": {
     "install": "安裝",
-    "installSourceUnverified": "手機無法核對這次安裝的來源（電腦暫未提供儲存庫資訊，或電腦上的 Cindy 版本較舊），只能在這裡拒絕。可在電腦上重新整理這個市場後讓 Agent 再試，或在電腦上確認安裝。",
+    "installSourceUnverified": "這台電腦沒有提供這個自訂市場的儲存庫資訊，無法從手機安裝。可以先在那台電腦上更新 Cindy 並重新整理這個市場，再讓 Agent 重試；這裡只能拒絕，要安裝請在電腦上確認。",
     "mcpComplete": "已完成",
     "mcpCancel": "取消",
     "mode": {

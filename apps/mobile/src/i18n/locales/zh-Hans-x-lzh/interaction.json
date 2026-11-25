@@ -1,7 +1,7 @@
 {
   "permission": {
     "install": "纳",
-    "installSourceUnverified": "手机无从核此纳之所出（电脑暂未示库，或其 Cindy 旧），此处唯可却之。可于电脑刷新此坊后令 Agent 再试，或于电脑定之。",
+    "installSourceUnverified": "此机未示此自订之坊之库，不能自手机纳之。可先于彼机更新 Cindy 并刷新此坊，再令 Agent 试之；此处唯可却之，欲纳请于电脑定之。",
     "mcpComplete": "已毕",
     "mcpCancel": "罢",
     "mode": {

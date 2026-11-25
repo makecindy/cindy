@@ -1,7 +1,7 @@
 {
   "permission": {
     "install": "Install",
-    "installSourceUnverified": "Your phone can’t check where this install comes from (the computer hasn’t shared the repository yet, or Cindy on it is older), so you can only deny it here. Refresh this marketplace on the computer and have the Agent try again, or confirm the install on the computer.",
+    "installSourceUnverified": "This computer didn’t share the repository for this custom marketplace, so it can’t be installed from your phone. You can update Cindy on that computer, refresh this marketplace and have the Agent try again; here you can only deny it. To install, confirm on the computer.",
     "mcpComplete": "Done",
     "mcpCancel": "Cancel",
     "mode": {

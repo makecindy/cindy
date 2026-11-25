@@ -310,7 +310,7 @@
       "nodeSecretOne": "Lokales Node-Programm kann gespeicherte Zugangsdaten erhalten"
     },
     "releaseChanged": "Die verfügbare Version hat sich geändert. Prüfe die aktualisierte Version vor der Installation.",
-    "sourceUnverified": "Dieser Computer hat das Repository dieses Marktplatzes noch nicht angegeben. Aktualisieren vom Handy ist daher nicht möglich. Aktualisiere den Marktplatz am Computer und versuche es erneut (bei älterem Cindy zuerst Cindy aktualisieren) oder aktualisiere am Computer.",
+    "sourceUnverified": "Dieser Computer hat das Repository dieses benutzerdefinierten Marktplatzes nicht angegeben. Aktualisieren vom Handy ist daher nicht möglich. Aktualisiere zuerst Cindy auf diesem Computer und dann den Marktplatz; hilft das nicht, aktualisiere direkt am Computer.",
     "sourceChanged": "Die Quelle dieses Marktplatzes hat sich gerade geändert, die Aktualisierung wurde gestoppt. Prüfe den Marktplatz am Computer und versuche es erneut.",
     "settingsUnavailable": "Die Plugin-Einstellungen konnten nicht geladen werden. Lade die Einstellungen neu, um es erneut zu versuchen.",
     "settingsResultUnknown": "Das Ergebnis des Vorgangs konnte nicht bestätigt werden. Lade die Einstellungen des Computers neu, bevor du sie erneut sendest.",
@@ -356,8 +356,8 @@
       "marketSourceChanged": "Dieses Update wechselt zur Version aus dem Plugin-Marktplatz. Bestehende Konten und Daten werden separat archiviert. Verbinde deine Konten nach dem Update erneut.",
       "sourceChangedIsolated": "Dieses Update stammt aus einer anderen Quelle als die installierte Version. Bestehende Konten und Daten werden separat archiviert; verbinde deine Konten nach dem Update erneut.",
       "localFolder": "Lokaler Ordner",
-      "repositoryMissingInstall": "Dieser Computer hat das Repository nicht angegeben. Diese Installation kann nicht vom Handy aus erlaubt werden. Aktualisiere den Marktplatz am Computer und versuche es erneut (bei älterem Cindy zuerst Cindy aktualisieren) oder installiere am Computer.",
-      "repositoryMissingUpdate": "Dieser Computer hat das Repository nicht angegeben. Diese Aktualisierung kann nicht vom Handy aus erlaubt werden. Aktualisiere den Marktplatz am Computer und versuche es erneut (bei älterem Cindy zuerst Cindy aktualisieren) oder aktualisiere am Computer.",
+      "repositoryMissingInstall": "Dieser Computer hat das Repository dieses benutzerdefinierten Marktplatzes nicht angegeben. Installieren vom Handy ist daher nicht möglich. Aktualisiere zuerst Cindy auf diesem Computer und dann den Marktplatz; hilft das nicht, installiere direkt am Computer.",
+      "repositoryMissingUpdate": "Dieser Computer hat das Repository dieses benutzerdefinierten Marktplatzes nicht angegeben. Aktualisieren vom Handy ist daher nicht möglich. Aktualisiere zuerst Cindy auf diesem Computer und dann den Marktplatz; hilft das nicht, aktualisiere direkt am Computer.",
       "sourceChanged": "Die Quelle in dieser Anfrage weicht von deiner Auswahl ab und kann nicht vom Handy aus erlaubt werden. Lehne ab und wähle erneut."
     },
     "sourceNotice": {
@@ -467,8 +467,8 @@
     "unconfirmedNotInstalled": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin ist derzeit nicht auf diesem Computer.",
     "alreadyInstalled": "Dieses Plugin ist auf diesem Computer bereits installiert.",
     "unconfirmedMismatch": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin mit derselben Kennung auf diesem Computer stammt möglicherweise aus einer lokalen Datei, einer anderen Version oder einer anderen Quelle. Bitte prüfe es auf dem Computer.",
-    "sourceUnverified": "Dieser Computer hat das Repository dieses Marktplatzes noch nicht angegeben. Installieren vom Handy ist daher nicht möglich. Aktualisiere den Marktplatz am Computer und versuche es erneut; ist Cindy dort älter, aktualisiere Cindy zuerst oder installiere am Computer.",
-    "sourceUnverifiedShort": "Dieser Computer hat das Repository noch nicht angegeben. Aktualisiere den Marktplatz am Computer und versuche es erneut oder installiere dort.",
+    "sourceUnverified": "Dieser Computer hat das Repository dieses benutzerdefinierten Marktplatzes nicht angegeben. Installieren vom Handy ist daher nicht möglich. Aktualisiere zuerst Cindy auf diesem Computer und dann den Marktplatz; hilft das nicht, installiere direkt am Computer.",
+    "sourceUnverifiedShort": "Repository-Angabe fehlt, Installieren vom Handy nicht möglich",
     "sourceChanged": "Die Quelle dieses Marktplatzes hat sich gerade geändert. Wähle das Plugin erneut aus."
   },
   "gotIt": "Verstanden"

@@ -310,7 +310,7 @@
       "nodeSecretOne": "本機 Node 程式可得已存之憑證一件"
     },
     "releaseChanged": "可用之版已變，請觀更新後之版，再擇安裝。",
-    "sourceUnverified": "此機暫未示此坊之庫，不能自手機升之。請於電腦刷新此坊再試（Cindy 舊則先更新），或於電腦升之。",
+    "sourceUnverified": "此機未示此自訂之坊之庫，不能自手機升之。請先於彼機更新 Cindy 並刷新此坊；若仍不可，請逕於電腦升之。",
     "sourceChanged": "此坊之源方易，已止其升。請於電腦核此坊再試。",
     "settingsUnavailable": "法器規制載入未成，請重載規制後再試。",
     "settingsResultUnknown": "此舉之果尚未確認。請先重讀機上之設定，再決是否呈之。",
@@ -356,8 +356,8 @@
       "marketSourceChanged": "此次更新將改為法器坊之版。舊名籍與資料隔離保留，須重新連接名籍。",
       "sourceChangedIsolated": "此番更新所出之源，與已裝之版不同。舊名籍與資料隔離保留，須重新連接名籍。",
       "localFolder": "本地之匣",
-      "repositoryMissingInstall": "此機未示庫之所出，不能於手機許此納。請於電腦刷新此坊再試（Cindy 舊則先更新），或於電腦納之。",
-      "repositoryMissingUpdate": "此機未示庫之所出，不能於手機許此升。請於電腦刷新此坊再試（Cindy 舊則先更新），或於電腦升之。",
+      "repositoryMissingInstall": "此機未示此自訂之坊之庫，不能自手機納之。請先於彼機更新 Cindy 並刷新此坊；若仍不可，請逕於電腦納之。",
+      "repositoryMissingUpdate": "此機未示此自訂之坊之庫，不能自手機升之。請先於彼機更新 Cindy 並刷新此坊；若仍不可，請逕於電腦升之。",
       "sourceChanged": "所請之源與汝擇時異，不能於手機許之。請卻之而復擇。"
     },
     "sourceNotice": {
@@ -467,8 +467,8 @@
     "unconfirmedNotInstalled": "此番納器之果未能確認；今此機未有此法器。",
     "alreadyInstalled": "此機已納此法器。",
     "unconfirmedMismatch": "此番納器之果未能確認；此機同名之法器或出自本地之卷、他版或他源，請就機核之。",
-    "sourceUnverified": "此機暫未示此坊之庫，暫不能自手機納之。請於電腦刷新此坊再試；若電腦之 Cindy 舊，請先更新，或逕於電腦納之。",
-    "sourceUnverifiedShort": "此機暫未示庫。請於電腦刷新此坊再試，或於電腦納之。",
+    "sourceUnverified": "此機未示此自訂之坊之庫，不能自手機納之。請先於彼機更新 Cindy 並刷新此坊；若仍不可，請逕於電腦納之。",
+    "sourceUnverifiedShort": "缺庫之訊，不能自手機納之",
     "sourceChanged": "此坊之源方易，請復擇所欲納之法器。"
   },
   "gotIt": "知矣"

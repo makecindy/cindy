@@ -310,7 +310,7 @@
       "nodeSecretOne": "Local Node program can receive a stored credential"
     },
     "releaseChanged": "The available version changed. Review the refreshed version before installing.",
-    "sourceUnverified": "This computer hasn’t shared the repository for this marketplace yet, so it can’t be updated from your phone. Refresh this marketplace on the computer and try again (update Cindy first if it’s older), or update on the computer.",
+    "sourceUnverified": "This computer didn’t share the repository for this custom marketplace, so it can’t be updated from your phone. Update Cindy on that computer and refresh this marketplace first; if that doesn’t help, update on the computer.",
     "sourceChanged": "This marketplace’s source just changed, so the update stopped. Check this marketplace on the computer and try again.",
     "settingsUnavailable": "Could not load the plugin settings. Reload settings to try again.",
     "settingsResultUnknown": "The operation result could not be confirmed. Reload the computer’s settings before submitting again.",
@@ -356,8 +356,8 @@
       "marketSourceChanged": "This update switches to the version from the plugin market. Existing accounts and data are archived separately. Connect your accounts again after updating.",
       "sourceChangedIsolated": "This update comes from a different source than the installed version. Existing accounts and data are archived separately; connect your accounts again after updating.",
       "localFolder": "Local folder",
-      "repositoryMissingInstall": "This computer didn’t share the repository, so this install can’t be allowed from your phone. Refresh this marketplace on the computer and try again (update Cindy first if it’s older), or install on the computer.",
-      "repositoryMissingUpdate": "This computer didn’t share the repository, so this update can’t be allowed from your phone. Refresh this marketplace on the computer and try again (update Cindy first if it’s older), or update on the computer.",
+      "repositoryMissingInstall": "This computer didn’t share the repository for this custom marketplace, so it can’t be installed from your phone. Update Cindy on that computer and refresh this marketplace first; if that doesn’t help, install on the computer.",
+      "repositoryMissingUpdate": "This computer didn’t share the repository for this custom marketplace, so it can’t be updated from your phone. Update Cindy on that computer and refresh this marketplace first; if that doesn’t help, update on the computer.",
       "sourceChanged": "The source in this request differs from the one you chose, so it can’t be allowed from your phone. Deny it and choose again."
     },
     "sourceNotice": {
@@ -467,8 +467,8 @@
     "unconfirmedNotInstalled": "Couldn’t confirm the result of this installation. The plugin isn’t on this computer right now.",
     "alreadyInstalled": "This computer already has this plugin installed.",
     "unconfirmedMismatch": "Couldn’t confirm the result of this installation. The plugin with the same ID on this computer may come from a local file, another version or another source. Check it on the computer.",
-    "sourceUnverified": "This computer hasn’t shared the repository for this marketplace yet, so it can’t be installed from your phone. Refresh this marketplace on the computer and try again; if Cindy on the computer is older, update it first, or install on the computer.",
-    "sourceUnverifiedShort": "This computer hasn’t shared the repository yet. Refresh this marketplace on the computer and try again, or install there.",
+    "sourceUnverified": "This computer didn’t share the repository for this custom marketplace, so it can’t be installed from your phone. Update Cindy on that computer and refresh this marketplace first; if that doesn’t help, install on the computer.",
+    "sourceUnverifiedShort": "Repository info missing, so it can’t be installed from your phone",
     "sourceChanged": "This marketplace’s source just changed. Choose the plugin to install again."
   },
   "gotIt": "Got it"

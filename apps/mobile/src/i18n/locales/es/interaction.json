@@ -1,7 +1,7 @@
 {
   "permission": {
     "install": "Instalar",
-    "installSourceUnverified": "El teléfono no puede comprobar de dónde viene esta instalación (el ordenador aún no ha indicado el repositorio o Cindy es más antigua), así que aquí solo puedes rechazarla. Actualiza el mercado en el ordenador y pide al Agent que lo intente de nuevo, o confirma en el ordenador.",
+    "installSourceUnverified": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede instalar desde el teléfono. Puedes actualizar Cindy en ese ordenador, actualizar este mercado y pedir al Agent que lo intente de nuevo; aquí solo puedes rechazarla. Para instalar, confirma en el ordenador.",
     "mcpComplete": "Listo",
     "mcpCancel": "Cancelar",
     "mode": {
