@@ -19,7 +19,7 @@ export function toSessionDispatchOutcome(
       dispatched: false,
       reason: result.reason,
       context,
-      message: '[PI_RETRY_HISTORY_FRAME_TOO_LARGE] Your message was not sent. Pi could not read the history needed to retry after a response exceeded the local 16 MiB limit. You can continue in a new task.',
+      message: '[PI_RETRY_HISTORY_FRAME_TOO_LARGE] Your message was not sent. Pi could not read the history needed to retry after a frame exceeded the local 16 MiB limit. You can continue in a new task.',
     };
   }
   const message = result.reason === 'provider-rejected-before-dispatch'
