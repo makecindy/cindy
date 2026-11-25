@@ -18135,6 +18135,7 @@
       "openWorkdirFailed": "No se pudo abrir la carpeta"
     },
     "runs": {
+      "boundPluginEngineRecovery": "La automatización no se ejecutó porque la tarea vinculada usa un motor de complemento. Vuelve a usar un motor integrado en esa tarea o vincula la automatización a una tarea que lo utilice.",
       "queueWaitTimeoutRecovery": "La espera en cola venció antes de enviar el mensaje. Cuando la sesión de destino esté libre, elige {{action}} para ejecutarlo.",
       "status": {
         "running": "En ejecución",

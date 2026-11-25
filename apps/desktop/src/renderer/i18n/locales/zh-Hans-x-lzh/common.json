@@ -17893,6 +17893,7 @@
       "openWorkdirFailed": "启卷匣未成"
     },
     "runs": {
+      "boundPluginEngineRecovery": "所系之务用法器引擎，故自动之务未行。宜将所系之务改回内置引擎，或改系于用内置引擎之务。",
       "queueWaitTimeoutRecovery": "排候逾时，提示词未发。待所系任务闲，按「{{action}}」补行。",
       "status": {
         "running": "方行",

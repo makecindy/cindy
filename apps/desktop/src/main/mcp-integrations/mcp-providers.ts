@@ -121,6 +121,7 @@ import { readLspModeSettings } from '../maker-host/lsp-mode-store.js';
 import {
   tryGetBotDirectMessageService,
   tryGetOrcaCollabService,
+  readLocalTaskQueuePaused,
   isSessionInTurn,
   getTaskActionInputState,
   isActiveInputAccountScoped,
@@ -157,7 +158,7 @@ import { commitTaskRewind } from '../maker-ipc/rewind.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools, type SharedTaskCallerAccess } from './sharedTaskTools.js';
 import { createSharedTaskProgressReader } from './sharedTaskProgress.js';
-import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, captureTaskActionSyncGuard, taskActionRevocationCode } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
   getSessionRowSnapshotStrict,
@@ -169,7 +170,7 @@ import {
 import { getInputHandoffService } from '../input-handoff/service.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
 import { readHandoffPicture } from '../input-handoff/pictureRef.js';
-import { isIpcError } from '../../shared/ipc-errors.js';
+import { createIpcError, isIpcError } from '../../shared/ipc-errors.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import { BUILTIN_LIZI_MCP_IDS } from '../maker-host/plugins/builtin-plugins.js';
 import {
@@ -178,7 +179,7 @@ import {
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
-import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
+import { createRemoteSessionsPatcher, createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
 import { DeviceLinkError } from '@cindy/device-link';
 import { asWechatIlinkError } from '@cindy/wechat-ilink';
 import { MAKER_INVOKE } from '../maker-ipc/channels.js';
@@ -328,6 +329,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       const svc = tryGetOrcaCollabService();
       return svc ? svc.listSessionQueuedCounts(sessionIds) : { ok: false as const };
     },
+    readLocalQueuePaused: readLocalTaskQueuePaused,
     // git-context 牵连 Electron 窗口广播,按需加载,不让工具装配一引用就把它带进来。
     readSessionPrStatuses: async (sessionId) =>
       (await import('../git-context/ipc.js')).readSessionPrStatuses(sessionId),
@@ -1193,6 +1195,41 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message };
         }
       },
+      setSessionsPinned: async ({ deviceId, sessionIds, pinned }) => {
+        const changed: { sessionId: string }[] = [];
+        const fail = (index: number, errorCode: string, message: string) => ({
+          ok: false as const, errorCode, message, changed, failedSessionId: sessionIds[index],
+          remainingSessionIds: sessionIds.slice(index + 1),
+        });
+        if (deviceId) {
+          if (!deps.historyRemote) return fail(0, 'REMOTE_UNSUPPORTED', '当前宿主不支持远程置顶。');
+          const patch = createRemoteSessionsPatcher({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote });
+          return patch(deviceId, sessionIds, { pinnedAt: pinned ? new Date().toISOString() : null });
+        }
+        const db = getCurrentDbClientSnapshot();
+        if (!db || isAppSessionBoundaryPending()) return fail(0, 'HOST_NOT_READY', 'localDb not ready');
+        const owner = activeOwnerScopeKey();
+        const checkAction = captureTaskActionSyncGuard();
+        const beforeWrite = () => {
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner || getCurrentDbClientSnapshot() !== db) {
+            throw createIpcError('PRECONDITION_FAILED', '账号或数据库已切换，当前项及后续项未执行。');
+          }
+          checkAction?.();
+        };
+        for (const [index, sessionId] of sessionIds.entries()) {
+          try {
+            await assertTaskActionCurrent();
+            beforeWrite();
+            const row = await patchSessionMetaInDb(sessionId, { pinnedAt: pinned ? new Date().toISOString() : null }, { beforeWrite });
+            if ((row.pinnedAt != null) !== pinned) return fail(index, 'PRECONDITION_FAILED', '目标任务的置顶状态已再次变化。');
+            changed.push({ sessionId });
+          } catch (error) {
+            const code = isIpcError(error) ? error.code : taskActionRevocationCode(error) ?? 'INTERNAL';
+            return fail(index, code, error instanceof Error ? error.message : String(error));
+          }
+        }
+        return { ok: true, changed };
+      },
       setSessionsSnooze: async ({ sessionIds, snoozedUntil }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready', changed: [] };
@@ -1320,7 +1357,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
                 }
               : {}),
             ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
-          });
+          }, true);
           if (result.ok && result.wakeKind === 'created' && dispatcherSessionId)
             reportGroupTaskCreated(dispatcherSessionId, { taskId: result.targetSessionId, deviceId: null,
               title: result.targetTitle || title?.trim() || normalizeAutoTitle(message) });

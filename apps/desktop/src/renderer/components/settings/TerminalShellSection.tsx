@@ -101,7 +101,46 @@ export function TerminalShellSection() {
     pref !== 'auto' && !shells.some((shell) => shell.id === pref) ? pref : null;
 
   return (
-    <SettingsSection title={t('settings.terminalShell.title')} description={t('settings.terminalShell.description')}>
+    <TerminalShellSectionView
+      pref={pref}
+      shells={shells}
+      resetting={resetting}
+      isCustomized={isCustomized}
+      onChange={onChange}
+      onReset={onReset}
+      autoLabel={autoLabel}
+      unavailablePref={unavailablePref}
+    />
+  );
+}
+
+/** Shared native view. Local and cloud controllers provide the same state/actions. */
+export function TerminalShellSectionView({
+  pref,
+  shells,
+  resetting,
+  isCustomized,
+  onChange,
+  onReset,
+  autoLabel,
+  unavailablePref,
+  headingStatus,
+}: {
+  pref: ShellId;
+  shells: AvailableShell[];
+  resetting: boolean;
+  isCustomized: boolean;
+  onChange: (value: ShellId) => void;
+  onReset: () => Promise<void>;
+  autoLabel: string;
+  unavailablePref: ShellId | null;
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <SettingsSection title={t('settings.terminalShell.title')} description={t('settings.terminalShell.description')} action={headingStatus}>
       <SettingsCard>
         {/* 下拉框占满整行放在名称/说明下方, 名称与下拉框同属一项 */}
         <SettingsField

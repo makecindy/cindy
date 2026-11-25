@@ -18135,6 +18135,7 @@
       "openWorkdirFailed": "Impossible d'ouvrir le dossier"
     },
     "runs": {
+      "boundPluginEngineRecovery": "L’automatisation ne s’est pas exécutée, car la tâche associée utilise un moteur de plugin. Repassez la tâche sur un moteur intégré ou associez l’automatisation à une tâche qui en utilise un.",
       "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
       "status": {
         "running": "En cours",

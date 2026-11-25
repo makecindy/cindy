@@ -1,4 +1,4 @@
-import type { SettingsSearchContext } from './settingsSearchTypes';
+import type { SettingsSearchContext, SettingsSearchEntry } from './settingsSearchTypes';
 import type { ComponentType, ReactElement } from 'react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -110,16 +110,31 @@ export const SETTINGS_NAV_ENTRIES: Record<VisibleSettingsTab, readonly [NavSecti
   'voice-input': ['interaction', Mic],
 };
 
-function settingsTabSection(tab: SettingsTab): NavSection | undefined {
-  return (SETTINGS_NAV_ENTRIES as Partial<Record<SettingsTab, readonly [NavSection, SettingsNavIcon]>>)[tab]?.[0];
+function settingsTabSection(tab: SettingsTab | null): NavSection | undefined {
+  return tab === null ? undefined : (SETTINGS_NAV_ENTRIES as Partial<Record<SettingsTab, readonly [NavSection, SettingsNavIcon]>>)[tab]?.[0];
+}
+
+/** A category of the page that is not a settings tab. */
+interface SettingsNavExtraTab {
+  id: string;
+  label: string;
+  icon: SettingsNavIcon;
+  selected: boolean;
+  onSelect(): void;
 }
 
 interface SettingsSidebarNavProps {
   requestedQuery?: string;
   tabIds: readonly VisibleSettingsTab[];
+  /** Categories search looks in; the listed tabs when not given. */
+  searchTabIds?: readonly VisibleSettingsTab[];
   searchContext?: SettingsSearchContext;
-  activeTab: SettingsTab;
+  allowSearchEntry?: (entry: SettingsSearchEntry) => boolean;
+  activeTab: SettingsTab | null;
   activePanelId?: string;
+  leadingTab?: SettingsNavExtraTab;
+  trailingTab?: SettingsNavExtraTab;
+  grouped?: boolean;
   onSelectTab: (tab: SettingsTab) => void;
   onSelectSearchResult?: (result: { tab: SettingsTab; sectionId: string }) => void;
   pluginPages?: readonly PluginSettingsPage[];
@@ -132,7 +147,9 @@ interface SettingsSidebarNavProps {
 export function SettingsSidebarNav({
   requestedQuery,
   tabIds,
+  searchTabIds,
   searchContext,
+  allowSearchEntry,
   activeTab,
   activePanelId,
   onSelectTab,
@@ -141,6 +158,9 @@ export function SettingsSidebarNav({
   pluginSearchDocuments,
   selectedPluginPage,
   onSelectPluginPage,
+  leadingTab,
+  trailingTab,
+  grouped = true,
   navigationKey,
 }: SettingsSidebarNavProps) {
   const { t } = useTranslation();
@@ -152,27 +172,30 @@ export function SettingsSidebarNav({
     setDisclosure({ destination, navigationKey, openSection: activeSection });
   }
 
-  const renderTab = (tabId: VisibleSettingsTab, grouped = false) => {
-    const selected = activeTab === tabId && !selectedPluginPage;
-    const [, Icon] = SETTINGS_NAV_ENTRIES[tabId];
-    const label = t(TAB_LABEL_KEY[tabId]);
-    return (
+  const renderNavTab = ({ id, label, icon: Icon, selected, onSelect }: SettingsNavExtraTab, inset = false) => (
       <button
-        key={tabId}
-        id={`settings-tab-${tabId}`}
+        key={id}
+        id={`settings-tab-${id}`}
         type="button"
         role="tab"
         aria-selected={selected}
-        aria-controls={selected && activePanelId ? activePanelId : `settings-panel-${tabId}`}
+        aria-controls={selected && activePanelId ? activePanelId : `settings-panel-${id}`}
         data-settings-search-action="Navigate to a settings page"
-        onClick={() => onSelectTab(tabId)}
-        className={cn(NAV_ITEM_CLASS, grouped ? 'pl-1.5' : 'pl-3', selected ? NAV_ITEM_ACTIVE_CLASS : NAV_ITEM_IDLE_CLASS)}
+        onClick={onSelect}
+        className={cn(NAV_ITEM_CLASS, inset ? 'pl-1.5' : 'pl-3', selected ? NAV_ITEM_ACTIVE_CLASS : NAV_ITEM_IDLE_CLASS)}
       >
         <Icon size={15} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
         <span className={NAV_LABEL_CLASS}>{label}</span>
       </button>
-    );
-  };
+  );
+
+  const renderTab = (tabId: VisibleSettingsTab, inset = false) => renderNavTab({
+    id: tabId,
+    label: t(TAB_LABEL_KEY[tabId]),
+    icon: SETTINGS_NAV_ENTRIES[tabId][1],
+    selected: activeTab === tabId && !selectedPluginPage,
+    onSelect: () => onSelectTab(tabId),
+  }, inset);
 
   const renderDirectTabs = (section: 'preferences' | 'support', label: string) => {
     const tabs = tabIds.filter((tabId) => settingsTabSection(tabId) === section);
@@ -187,17 +210,18 @@ export function SettingsSidebarNav({
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
         <SettingsSearchBox
+          allowSearchEntry={allowSearchEntry}
           requestedQuery={requestedQuery}
-          visibleTabIds={tabIds}
+          visibleTabIds={searchTabIds ?? tabIds}
           searchContext={searchContext}
           additionalDocuments={pluginSearchDocuments}
           onSelect={(result) => {
             if (!onSelectSearchResult) return;
-            setDisclosure({ destination, navigationKey, openSection: settingsTabSection(result.tab) });
+            if (grouped) setDisclosure({ destination, navigationKey, openSection: settingsTabSection(result.tab) });
             onSelectSearchResult(result);
           }}
         />
-        <nav aria-label={t('settings.title')} className="flex flex-col gap-0.5">
+        {grouped ? <nav aria-label={t('settings.title')} className="flex flex-col gap-0.5">
           {renderDirectTabs('preferences', t('settings.navGroups.preferences'))}
           <div className="flex flex-col gap-0.5">
             {NAV_GROUPS.map(([group, labelKey, Icon]) => {
@@ -265,7 +289,13 @@ export function SettingsSidebarNav({
             })}
           </div>
           {renderDirectTabs('support', t('settings.tabs.help'))}
-        </nav>
+        </nav> : (
+          <nav role="tablist" aria-label={t('settings.title')} aria-orientation="vertical" className="flex flex-col gap-0.5">
+            {leadingTab && renderNavTab(leadingTab)}
+            {tabIds.map((tabId) => renderTab(tabId))}
+            {trailingTab && renderNavTab(trailingTab)}
+          </nav>
+        )}
       </div>
   );
 }

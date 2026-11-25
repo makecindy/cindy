@@ -17,7 +17,7 @@ import { storageManagementCardSettings } from './StorageManagementCard.settings-
  * 点击用 ref 标志,不产生任何视觉变化。
  */
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RefreshCw } from 'lucide-react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
@@ -64,6 +64,126 @@ type CleanPhase =
   | { kind: 'idle' }
   | { kind: 'scanned'; scan: ScanResult }
   | { kind: 'done'; result: CleanupResult };
+
+/**
+ * 占用总览卡片(纯展示):本页与云端设置页共用;云端页传入云实例的占用与自己的标题、说明。
+ */
+export function StorageOverviewView({
+  databaseBytes,
+  mediaBytes,
+  legacyImagesBytes,
+  chatAttachmentsBytes,
+  warningThresholdGiB,
+  statsFailed,
+  refreshing,
+  onRefresh,
+  title,
+  description,
+  children,
+  usagePercent,
+  usageLabel,
+}: {
+  databaseBytes: number | null;
+  mediaBytes: number | null;
+  legacyImagesBytes: number | null;
+  chatAttachmentsBytes: number | null;
+  warningThresholdGiB: number;
+  statsFailed: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+  title?: ReactNode;
+  description?: ReactNode;
+  /** 说明下方的补充行。 */
+  children?: ReactNode;
+  /** 进度条改为表示别的占用(如另一台电脑的磁盘);不传时为数据库相对提醒阈值。 */
+  usagePercent?: number | null;
+  usageLabel?: string;
+}) {
+  const { t } = useTranslation();
+  const fixedCacheBytes = legacyImagesBytes !== null && chatAttachmentsBytes !== null
+    ? legacyImagesBytes + chatAttachmentsBytes
+    : null;
+  const totalBytes = databaseBytes !== null && mediaBytes !== null && fixedCacheBytes !== null
+    ? databaseBytes + mediaBytes + fixedCacheBytes
+    : null;
+  const overviewPercent = usagePercent !== undefined
+    ? usagePercent
+    : databaseBytes === null || warningThresholdGiB <= 0
+      ? null
+      : Math.min(100, (databaseBytes / (warningThresholdGiB * GIB_BYTES)) * 100);
+  return (
+    <div
+      className={cn(
+        'grid gap-4 rounded-xl px-5 py-5 md:grid-cols-[1.15fr_0.85fr] md:items-center',
+        'bg-[var(--settings-theme-card-bg)]',
+        'border border-[var(--settings-theme-card-border)]',
+      )}
+    >
+      <div>
+        <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
+          {title ?? t('settings.about.storage.overviewTitle')}
+        </h3>
+        <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
+          {description ?? t('settings.about.storage.overviewDescription')}
+        </p>
+        {children}
+        <div id={storageManagementCardSettings.aboutStorageDatabaseSectionTitle.targetId}
+          role="progressbar"
+          aria-label={usageLabel ?? t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={overviewPercent ?? undefined}
+          className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--settings-theme-card-border)]"
+        >
+          {overviewPercent !== null && (
+            <span
+              className="block h-full rounded-full bg-[var(--accent-cta-bg)] transition-[width]"
+              style={{ width: `${overviewPercent}%` }}
+            />
+          )}
+        </div>
+      </div>
+      <div className="flex items-end justify-between gap-3 md:flex-col md:items-end">
+        <div className="text-right">
+          <strong className="block text-24 font-medium leading-none tracking-[-0.04em] text-[var(--settings-section-title)]">
+            {totalBytes === null ? t('settings.about.storage.unknown') : formatBytes(totalBytes)}
+          </strong>
+          <span id={storageManagementCardSettings.aboutStorageMediaSectionTitle.targetId} className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.databaseUsage', {
+              size: databaseBytes === null
+                ? t('settings.about.storage.unknown')
+                : formatBytes(databaseBytes),
+            })}{' '}
+            · {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)} {mediaBytes === null
+              ? t('settings.about.storage.unknown')
+              : formatBytes(mediaBytes)}{' '}
+            · {t('settings.about.storage.legacyImagesLabel')} {legacyImagesBytes === null
+              ? t('settings.about.storage.unknown')
+              : formatBytes(legacyImagesBytes)}{' '}
+            · {t('settings.about.storage.chatAttachmentsLabel')} {chatAttachmentsBytes === null
+              ? t('settings.about.storage.unknown')
+              : formatBytes(chatAttachmentsBytes)}
+          </span>
+          {statsFailed && (
+            <span className="mt-1 block text-11 text-[var(--warning-fg)]">
+              {t('settings.about.storage.statsFailed')}
+            </span>
+          )}
+        </div>
+        <Button data-setting-id={storageManagementCardSettings.aboutStorageMediaSectionTitle.id}
+          variant="secondary"
+          size="md"
+          onClick={onRefresh}
+          disabled={refreshing}
+          loading={refreshing}
+        >
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+          {t('settings.about.storage.refreshStatsButton')}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 export function StorageManagementCard() {
   const { t } = useTranslation();
@@ -265,24 +385,10 @@ export function StorageManagementCard() {
     scan.tmpFileCount > 0;
 
   const mediaBytes = stats?.success ? stats.blobs.totalBytes : null;
-  const fixedCacheBytes = stats?.success
-    ? stats.fixedCaches.legacyImages.bytes + stats.fixedCaches.chatAttachments.bytes
-    : null;
   const fixedCaches = stats?.success ? stats.fixedCaches : null;
-  const totalBytes = databaseBytes !== null && mediaBytes !== null && fixedCacheBytes !== null
-    ? databaseBytes + mediaBytes + fixedCacheBytes
-    : null;
-  const overviewPercent = databaseBytes === null || warningThresholdGiB <= 0
-    ? null
-    : Math.min(100, (databaseBytes / (warningThresholdGiB * GIB_BYTES)) * 100);
 
   return (
-    <SettingsSection
-      variant="page"
-      id="settings-storage-section"
-      title={t(storageManagementCardSettings.storage.sectionKey)}
-      description={t('settings.about.storage.overviewDescription')}
-    >
+    <StorageSectionFrame>
       {/* 目录与占用总览同属一组，彼此 14px */}
       <SettingsSection>
         <DialogueDirectorySection />
@@ -292,75 +398,16 @@ export function StorageManagementCard() {
         <TaskExportDirectorySection />
 
         {/* 占用总览 */}
-        <div
-          className={cn(
-            'grid gap-4 rounded-xl px-5 py-5 md:grid-cols-[1.15fr_0.85fr] md:items-center',
-            'bg-[var(--settings-theme-card-bg)]',
-            'border border-[var(--settings-theme-card-border)]',
-          )}
-        >
-          <div>
-            <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
-              {t('settings.about.storage.overviewTitle')}
-            </h3>
-            <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.overviewDescription')}
-            </p>
-            <div id={storageManagementCardSettings.aboutStorageDatabaseSectionTitle.targetId}
-              role="progressbar"
-              aria-label={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={overviewPercent ?? undefined}
-              className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--settings-theme-card-border)]"
-            >
-              {overviewPercent !== null && (
-                <span
-                  className="block h-full rounded-full bg-[var(--accent-cta-bg)] transition-[width]"
-                  style={{ width: `${overviewPercent}%` }}
-                />
-              )}
-            </div>
-          </div>
-          <div className="flex items-end justify-between gap-3 md:flex-col md:items-end">
-            <div className="text-right">
-              <strong className="block text-24 font-medium leading-none tracking-[-0.04em] text-[var(--settings-section-title)]">
-                {totalBytes === null ? t('settings.about.storage.unknown') : formatBytes(totalBytes)}
-              </strong>
-              <span id={storageManagementCardSettings.aboutStorageMediaSectionTitle.targetId} className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
-                {t('settings.about.storage.databaseUsage', {
-                  size: databaseBytes === null
-                    ? t('settings.about.storage.unknown')
-                    : formatBytes(databaseBytes),
-                })}{' '}
-                · {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)} {mediaBytes === null
-                  ? t('settings.about.storage.unknown')
-                  : formatBytes(mediaBytes)}{' '}
-                · {t('settings.about.storage.legacyImagesLabel')} {fixedCacheBytes === null
-                  ? t('settings.about.storage.unknown')
-                  : formatBytes(fixedCaches?.legacyImages.bytes ?? 0)}{' '}
-                · {t('settings.about.storage.chatAttachmentsLabel')} {fixedCacheBytes === null
-                  ? t('settings.about.storage.unknown')
-                  : formatBytes(fixedCaches?.chatAttachments.bytes ?? 0)}
-              </span>
-              {statsFailed && (
-                <span className="mt-1 block text-11 text-[var(--warning-fg)]">
-                  {t('settings.about.storage.statsFailed')}
-                </span>
-              )}
-            </div>
-            <Button data-setting-id={storageManagementCardSettings.aboutStorageMediaSectionTitle.id}
-              variant="secondary"
-              size="md"
-              onClick={() => void refreshStats()}
-              disabled={statsRefreshing}
-              loading={statsRefreshing}
-            >
-              <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-              {t('settings.about.storage.refreshStatsButton')}
-            </Button>
-          </div>
-        </div>
+        <StorageOverviewView
+          databaseBytes={databaseBytes}
+          mediaBytes={mediaBytes}
+          legacyImagesBytes={fixedCaches?.legacyImages.bytes ?? null}
+          chatAttachmentsBytes={fixedCaches?.chatAttachments.bytes ?? null}
+          warningThresholdGiB={warningThresholdGiB}
+          statsFailed={statsFailed}
+          refreshing={statsRefreshing}
+          onRefresh={() => void refreshStats()}
+        />
       </SettingsSection>
 
       <SettingsSection
@@ -559,7 +606,7 @@ export function StorageManagementCard() {
           </SettingsField>
         </SettingsCard>
       </SettingsSection>
-    </SettingsSection>
+    </StorageSectionFrame>
   );
 }
 
@@ -567,6 +614,59 @@ type DbSlimmingPhase =
   | { kind: 'idle' }
   | { kind: 'scanned'; scan: DbSlimmingScanResult }
   | { kind: 'done'; result: DbSlimmingResult };
+
+
+/** 存储空间页框架:页标题与说明 + 各分区。云实例设置复用同一框架。 */
+export function StorageSectionFrame({
+  children,
+  description,
+}: {
+  children: ReactNode;
+  /** 另一台电脑的存储页用自己的说明。 */
+  description?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsSection
+      variant="page"
+      id="settings-storage-section"
+      title={t(storageManagementCardSettings.storage.sectionKey)}
+      description={description ?? t('settings.about.storage.overviewDescription')}
+    >
+      {children}
+    </SettingsSection>
+  );
+}
+
+/** 「数据库」卡片内容的留白(与 SettingsField 一致),本机清理区与云实例阈值设置共用。 */
+export const STORAGE_DATABASE_BODY_CLASS = 'flex flex-col gap-3 px-4 py-4';
+
+/** 「数据库」分区:标题、占用(可选)与卡片。 */
+export function StorageDatabaseSection({
+  usage,
+  children,
+  headingStatus,
+}: {
+  usage?: string;
+  children: ReactNode;
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsSection
+      title={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
+      action={
+        headingStatus ??
+        (usage !== undefined ? (
+          <span className="text-11 text-[var(--settings-section-sublabel)]">{usage}</span>
+        ) : undefined)
+      }
+    >
+      <SettingsCard>{children}</SettingsCard>
+    </SettingsSection>
+  );
+}
 
 function DatabaseSlimmingSection({
   warningThresholdGiB,
@@ -998,68 +1098,21 @@ function DatabaseSlimmingSection({
         onConfirm={handleSchedule}
       />
 
-      <div id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.targetId} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
-        <FormField
-          id="db-size-warning-threshold"
-          label={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.titleKey)}
-          hint={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.descriptionKey)}
-          error={warningThresholdInvalid ? t('settings.about.storage.dbSizeWarningThresholdInvalid') : undefined}
-          reserveFeedback
-          className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] items-center [&>div:last-child]:col-span-2"
-        >
-          {({ error, ...control }) => (
-            <div className="flex items-center gap-1.5">
-              {/* Group reset sits left of the first control, only when customized (CONTROLS decision 3). */}
-              <DefaultOverrideControls
-                isCustomized={warningCustomized}
-                disabled={warningSaving}
-                onReset={() => void persistWarningSettings()}
-              />
-              <SettingsTextInput data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.id}
-                {...control}
-                type="number"
-                size="sm"
-                surface="ivory"
-                min={1}
-                max={1024}
-                step={1}
-                value={warningThresholdDraft}
-                disabled={warningSaving}
-                error={error}
-                onChange={(next) => {
-                  warningThresholdDirtyRef.current = true;
-                  warningThresholdEditVersionRef.current += 1;
-                  setWarningThresholdDraft(next);
-                  setWarningThresholdInvalid(false);
-                }}
-                onBlur={() => void saveWarningThreshold()}
-                className="w-16"
-                inputClassName="text-center"
-              />
-              <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>
-            </div>
-          )}
-        </FormField>
-
-        <label
-          htmlFor="db-size-warning-disabled"
-          className="flex min-w-0 cursor-pointer flex-col gap-0.5"
-        >
-          <span id={storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.targetId} className="text-12 text-[var(--settings-section-sublabel)]">
-            {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
-          </span>
-          <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
-            {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.descriptionKey)}
-          </span>
-        </label>
-        <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.id}
-          id="db-size-warning-disabled"
-          checked={warningDisabled}
-          disabled={warningSaving}
-          onCheckedChange={(checked) => void persistWarningSettings({ disabled: checked })}
-          aria-label={t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
-        />
-      </div>
+      <DatabaseWarningSettingsView
+        warningThresholdDraft={warningThresholdDraft}
+        warningThresholdInvalid={warningThresholdInvalid}
+        warningSaving={warningSaving}
+        warningDisabled={warningDisabled}
+        warningCustomized={warningCustomized}
+        saveWarningThreshold={saveWarningThreshold}
+        persistWarningSettings={persistWarningSettings}
+        onThresholdChange={(value) => {
+          warningThresholdDirtyRef.current = true;
+          warningThresholdEditVersionRef.current += 1;
+          setWarningThresholdDraft(value);
+          setWarningThresholdInvalid(false);
+        }}
+      />
     </SettingsField>
   );
 }
@@ -1254,5 +1307,99 @@ function CardButton({
     >
       {children}
     </Button>
+  );
+}
+
+
+export function DatabaseWarningSettingsView({
+  warningThresholdDraft,
+  warningThresholdInvalid,
+  warningSaving,
+  warningDisabled,
+  warningCustomized,
+  saveWarningThreshold,
+  persistWarningSettings,
+  onThresholdChange,
+}: {
+  warningThresholdDraft: string;
+  warningThresholdInvalid: boolean;
+  warningSaving: boolean;
+  warningDisabled: boolean;
+  warningCustomized: boolean;
+  saveWarningThreshold: () => Promise<void> | undefined;
+  persistWarningSettings: (patch?: { disabled?: boolean; thresholdGiB?: number }) => Promise<void>;
+  onThresholdChange: (value: string) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.targetId}
+      className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5"
+    >
+      <FormField
+        id="db-size-warning-threshold"
+        label={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.titleKey)}
+        hint={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.descriptionKey)}
+        error={
+          warningThresholdInvalid
+            ? t('settings.about.storage.dbSizeWarningThresholdInvalid')
+            : undefined
+        }
+        reserveFeedback
+        className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] items-center [&>div:last-child]:col-span-2"
+      >
+        {({ error, ...control }) => (
+          <div className="flex items-center gap-1.5">
+            {/* Group reset sits left of the first control, only when customized (CONTROLS decision 3). */}
+            <DefaultOverrideControls
+              isCustomized={warningCustomized}
+              disabled={warningSaving}
+              onReset={() => void persistWarningSettings()}
+            />
+            <SettingsTextInput data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.id}
+              {...control}
+              type="number"
+              size="sm"
+              surface="ivory"
+              min={1}
+              max={1024}
+              step={1}
+              value={warningThresholdDraft}
+              disabled={warningSaving}
+              error={error}
+              onChange={(next) => {
+                onThresholdChange(next);
+              }}
+              onBlur={() => void saveWarningThreshold()}
+              className="w-16"
+              inputClassName="text-center"
+            />
+            <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>
+          </div>
+        )}
+      </FormField>
+
+      <label
+        htmlFor="db-size-warning-disabled"
+        className="flex min-w-0 cursor-pointer flex-col gap-0.5"
+      >
+        <span
+          id={storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.targetId}
+          className="text-12 text-[var(--settings-section-sublabel)]"
+        >
+          {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
+        </span>
+        <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
+          {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.descriptionKey)}
+        </span>
+      </label>
+      <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.id}
+        id="db-size-warning-disabled"
+        checked={warningDisabled}
+        disabled={warningSaving}
+        onCheckedChange={(checked) => void persistWarningSettings({ disabled: checked })}
+        aria-label={t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
+      />
+    </div>
   );
 }

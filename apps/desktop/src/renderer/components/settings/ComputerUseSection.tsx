@@ -18,7 +18,7 @@ import { computerUseSettings } from './ComputerUseSection.settings-search';
  * 浏览器开关读写完全复用 builtin plugin IPC, 不新造持久化通道。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
@@ -42,7 +42,8 @@ import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
 import { DownloadMeter } from '@/components/ui/download-meter';
-import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsField, SettingsPageHeader, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { withDefaultOverride, type DefaultOverrideReset } from './DefaultOverrideControls';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
@@ -2214,5 +2215,111 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
         </p>
       </SettingsSection>
     </SettingsSection>
+  );
+}
+
+// The cloud settings page shows the browser and computer cards with an optional reset and read status.
+export function BrowserAutomationHeader({
+  checked,
+  disabled,
+  onChange,
+  reset,
+  headingStatus,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  onChange: (next: boolean) => void;
+  /** Optional: a saved override and how to clear it (the cloud page). */
+  reset?: DefaultOverrideReset;
+  /** Cloud settings: the card could not be read; this says so in place of the switch. */
+  headingStatus?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsRow
+      lead={
+        <span
+          className={cn(
+            'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+            'bg-[var(--settings-input-bg)]',
+          )}
+        >
+          <Globe size={16} className="text-[var(--settings-section-title)]" />
+        </span>
+      }
+      title={
+        <span id={computerUseSettings.browserTitle.targetId}>
+          {t(computerUseSettings.browserTitle.titleKey)}
+        </span>
+      }
+      hint={t(computerUseSettings.browserTitle.descriptionKey)}
+      trailing={headingStatus ?? withDefaultOverride(
+        <Switch data-setting-id={computerUseSettings.browserTitle.id}
+          checked={checked}
+          disabled={disabled}
+          onCheckedChange={onChange}
+          aria-label={t('settings.computerUse.browser.toggleAria')}
+        />,
+        reset,
+      )}
+    />
+  );
+}
+
+export function ComputerAutomationHeader({
+  checked,
+  disabled,
+  onChange,
+  reset,
+  headingStatus,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  onChange: (next: boolean) => void;
+  /** Optional: a saved override and how to clear it (the cloud page). */
+  reset?: DefaultOverrideReset;
+  /** Cloud settings: the card could not be read; this says so in place of the switch. */
+  headingStatus?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsRow
+      lead={
+        <span
+          className={cn(
+            'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+            'bg-[var(--settings-input-bg)]',
+          )}
+        >
+          <MonitorCog size={16} className="text-[var(--settings-section-title)]" />
+        </span>
+      }
+      title={
+        <span id={computerUseSettings.directControlTitle.targetId}>
+          {t(computerUseSettings.directControlTitle.titleKey)}
+        </span>
+      }
+      hint={t(computerUseSettings.directControlTitle.descriptionKey)}
+      trailing={headingStatus ?? withDefaultOverride(
+        <Switch data-setting-id={computerUseSettings.directControlTitle.id}
+          checked={checked}
+          disabled={disabled}
+          onCheckedChange={onChange}
+          aria-label={t('settings.computerUse.directControl.toggleAria')}
+        />,
+        reset,
+      )}
+    />
+  );
+}
+
+/** 自动操作页标题与说明。 */
+export function ComputerUseSectionHeader() {
+  const { t } = useTranslation();
+  return (
+    <SettingsPageHeader
+      title={t(computerUseSettings.computerUse.sectionKey)}
+      description={t('settings.computerUse.description')}
+    />
   );
 }

@@ -255,6 +255,7 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
       void settleTaskActionInput(item).catch(() => undefined);
       // The desktop also releases the Orca accepted callback; Orca tasks are refused at Host admission.
     },
+    workerInputs: undefined, // Orca Worker recovery is owned by the desktop runtime.
     onUiRetry: (id, clientId, source, attemptToken) => {
       const bookkeeping = ctx.autoResume.autoResumeBookkeeping;
       bookkeeping.claimSuppressedErrorForRetry(id, clientId, source);

@@ -11,7 +11,7 @@ import { aboutSettings } from './AboutSection.settings-search';
  * 分区、卡片与行用 settings-rows;版本菜单行与日志行来自别的文件,包在 SettingsBlock(p-0) 里只取分割线。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ExternalLink } from 'lucide-react';
 
@@ -28,8 +28,17 @@ import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
 import { useLogUploadSettings } from '@/hooks/useLogUploadSettings';
 import { OpenLogsRow, UploadLogsRow } from '@/components/log-support/LogSupportActions';
 import { PiKernelVersionRow } from './PiKernelVersionRow';
-import { HARNESS_MENU_ITEM_CLASS, HarnessMenuFootnote, HarnessVersionMenuItem, HarnessVersionMenuRow } from './HarnessVersionMenuRow';
-import { DefaultOverrideControls } from './DefaultOverrideControls';
+import {
+  HARNESS_MENU_ITEM_CLASS,
+  HarnessMenuFootnote,
+  HarnessVersionMenuItem,
+  HarnessVersionMenuRow,
+} from './HarnessVersionMenuRow';
+import {
+  DefaultOverrideControls,
+  withDefaultOverride,
+  type DefaultOverrideReset,
+} from './DefaultOverrideControls';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
 
@@ -78,7 +87,10 @@ const DESKTOP_SOCIAL_LINKS = [
   },
 ] as const;
 
-function useAgentBinaryVersion(kind: UpdatableAgentKind): { state: AgentVersionState; check: () => void } {
+function useAgentBinaryVersion(kind: UpdatableAgentKind): {
+  state: AgentVersionState;
+  check: () => void;
+} {
   const [state, setState] = useState<AgentVersionState>(INITIAL);
   const mounted = useRef(false);
   const checkPending = useRef(false);
@@ -112,7 +124,12 @@ function useAgentBinaryVersion(kind: UpdatableAgentKind): { state: AgentVersionS
         },
         () => {
           if (mounted.current) {
-            setState((prev) => ({ ...prev, checking: false, checkFailed: true, updateAvailable: false }));
+            setState((prev) => ({
+              ...prev,
+              checking: false,
+              checkFailed: true,
+              updateAvailable: false,
+            }));
           }
         },
       )
@@ -326,7 +343,9 @@ function AgentVersionRow({
       </DropdownMenuItem>
       {state.checkedAt && (
         <HarnessMenuFootnote>
-          {t('settings.about.harnessCheckedAt', { time: new Date(state.checkedAt).toLocaleString(i18n.language) })}
+          {t('settings.about.harnessCheckedAt', {
+            time: new Date(state.checkedAt).toLocaleString(i18n.language),
+          })}
         </HarnessMenuFootnote>
       )}
     </HarnessVersionMenuRow>
@@ -337,7 +356,7 @@ export function AboutSection() {
   const { t } = useTranslation();
 
   return (
-    <SettingsSection variant="page" title={t('settings.about.title')} description={t('settings.about.description')}>
+    <AboutSectionView>
       <SettingsSection title={t(aboutSettings.autoUpdateLabel.sectionKey)}>
         <SettingsCard id={aboutSettings.appVersionLabel.targetId}>
           {CURRENT_CINDY_REGION === 'cn' && (
@@ -371,8 +390,30 @@ export function AboutSection() {
           <LegalLinksRows />
         </SettingsCard>
       </SettingsSection>
-
       <SocialLinksPanel />
+    </AboutSectionView>
+  );
+}
+
+/** 关于页框架:页标题 + 信息卡片(card)+ 卡片下方内容(children)。云实例设置复用同一框架。 */
+export function AboutSectionView({
+  card,
+  children,
+  headingStatus,
+}: {
+  card?: ReactNode;
+  children?: ReactNode;
+  /** Cloud settings: rows of the card that could not be read say so here, in the page heading. */
+  headingStatus?: ReactNode;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <SettingsSection variant="page" title={t('settings.about.title')} description={t('settings.about.description')} action={headingStatus}>
+      {/* Info Card */}
+      {card !== undefined && <SettingsCard id={aboutSettings.appVersionLabel.targetId}>{card}</SettingsCard>}
+
+      {children}
     </SettingsSection>
   );
 }
@@ -639,19 +680,44 @@ function AnalyticsToggleRow() {
   };
 
   return (
+    <AnalyticsToggleView
+      customized={state.analyticsEnabledCustomized}
+      enabled={state.analyticsEnabled}
+      disabled={state.loading || saving}
+      handleReset={handleReset}
+      handleToggle={handleToggle}
+    />
+  );
+}
+
+export function AnalyticsToggleView({
+  customized,
+  enabled,
+  disabled,
+  handleReset,
+  handleToggle,
+}: {
+  customized: boolean;
+  enabled: boolean;
+  disabled: boolean;
+  handleReset: () => Promise<void>;
+  handleToggle: (next: boolean) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  return (
     <SettingsRow
       title={<span id={aboutSettings.analyticsLabel.targetId}>{t(aboutSettings.analyticsLabel.titleKey)}</span>}
       hint={t(aboutSettings.analyticsLabel.descriptionKey)}
       trailing={
         <div className="flex shrink-0 items-center gap-2">
           <DefaultOverrideControls
-            isCustomized={state.analyticsEnabledCustomized}
-            disabled={state.loading || saving}
+            isCustomized={customized}
+            disabled={disabled}
             onReset={handleReset}
           />
           <Switch data-setting-id={aboutSettings.analyticsLabel.id}
-            checked={state.analyticsEnabled}
-            disabled={state.loading || saving}
+            checked={enabled}
+            disabled={disabled}
             onCheckedChange={handleToggle}
             aria-label={t(aboutSettings.analyticsLabel.titleKey)}
           />
@@ -673,7 +739,6 @@ function AnalyticsToggleRow() {
  *     在 mount 时同步一次,toggle 变化时立即同步
  */
 function DebugLogToggleRow() {
-  const { t } = useTranslation();
   const { enabled, setEnabled } = useExperimentalFlag('debug-network');
   const lockedOn = import.meta.env.DEV;
   const effectiveEnabled = lockedOn ? true : enabled;
@@ -682,18 +747,35 @@ function DebugLogToggleRow() {
     void window.electronAPI?.ccSetDebugNet?.(effectiveEnabled);
   }, [effectiveEnabled]);
 
+  return <DebugLogToggleView enabled={effectiveEnabled} disabled={lockedOn} onChange={setEnabled} />;
+}
+
+export function DebugLogToggleView({
+  enabled,
+  disabled,
+  onChange,
+  reset,
+}: {
+  enabled: boolean;
+  disabled: boolean;
+  onChange: (next: boolean) => void;
+  /** Optional: a saved override and how to clear it (the cloud page). */
+  reset?: DefaultOverrideReset;
+}) {
+  const { t } = useTranslation();
   return (
     <SettingsRow
       title={<span id={aboutSettings.debugLogLabel.targetId}>{t(aboutSettings.debugLogLabel.titleKey)}</span>}
       hint={t(aboutSettings.debugLogLabel.descriptionKey)}
-      trailing={
+      trailing={withDefaultOverride(
         <Switch data-setting-id={aboutSettings.debugLogLabel.id}
-          checked={effectiveEnabled}
-          disabled={lockedOn}
-          onCheckedChange={setEnabled}
+          checked={enabled}
+          disabled={disabled}
+          onCheckedChange={onChange}
           aria-label={t(aboutSettings.debugLogLabel.titleKey)}
-        />
-      }
+        />,
+        reset,
+      )}
     />
   );
 }
@@ -748,18 +830,46 @@ function CrashAutoUploadToggleRow() {
   const disabled = state.loading || saving || blocked;
 
   return (
+    <CrashAutoUploadToggleView
+      customized={state.crashAutoUploadCustomized}
+      enabled={state.crashAutoUploadEnabled}
+      disabled={disabled}
+      resetting={state.loading || saving}
+      handleReset={handleReset}
+      handleToggle={handleToggle}
+    />
+  );
+}
+
+export function CrashAutoUploadToggleView({
+  customized,
+  enabled,
+  disabled,
+  resetting,
+  handleReset,
+  handleToggle,
+}: {
+  customized: boolean;
+  enabled: boolean;
+  disabled: boolean;
+  resetting: boolean;
+  handleReset: () => Promise<void>;
+  handleToggle: (next: boolean) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  return (
     <SettingsRow
       title={<span id={aboutSettings.logUploadCrashAutoLabel.targetId}>{t(aboutSettings.logUploadCrashAutoLabel.titleKey)}</span>}
       hint={t('settings.about.logUpload.crashAutoDescription')}
       trailing={
         <div className="flex shrink-0 items-center gap-2">
           <DefaultOverrideControls
-            isCustomized={state.crashAutoUploadCustomized}
-            disabled={state.loading || saving}
+            isCustomized={customized}
+            disabled={resetting}
             onReset={handleReset}
           />
           <Switch data-setting-id={aboutSettings.logUploadCrashAutoLabel.id}
-            checked={state.crashAutoUploadEnabled}
+            checked={enabled}
             disabled={disabled}
             onCheckedChange={handleToggle}
             aria-label={t(aboutSettings.logUploadCrashAutoLabel.titleKey)}
@@ -770,7 +880,7 @@ function CrashAutoUploadToggleRow() {
   );
 }
 
-function InfoRow({
+export function InfoRow({
   label,
   value,
   title = value,

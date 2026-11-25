@@ -26,7 +26,6 @@ import { BetaChannelCell } from './BetaChannelCell';
 import { additionalSettings } from './AdditionalSettings.settings-search';
 
 export function ExperimentalSection({ enabled = true }: { enabled?: boolean }) {
-  const { t } = useTranslation();
   const betaChannelSupported = additionalSettings.betaChannel.isVisible({
     platform: window.electronAPI?.platform ?? '',
     supportsBetaUpdateChannel: window.electronAPI?.supportsBetaUpdateChannel,
@@ -40,8 +39,21 @@ export function ExperimentalSection({ enabled = true }: { enabled?: boolean }) {
     })),
   ];
 
+  return <ExperimentalSectionView rows={rows} />;
+}
+
+/** 实验功能卡片:一张卡片里的设置行,分割线只出现在可见行之间。云实例设置复用。 */
+export function ExperimentalSectionView({
+  rows,
+  headingStatus,
+}: {
+  rows: { key: string; node: ReactNode }[];
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: ReactNode;
+}) {
+  const { t } = useTranslation();
   return (
-    <SettingsSection title={t('settings.experimental.title')}>
+    <SettingsSection title={t('settings.experimental.title')} action={headingStatus}>
       <SettingsCard>
         {rows.map((row) => (
           <SettingsBlock key={row.key} className="p-0">
