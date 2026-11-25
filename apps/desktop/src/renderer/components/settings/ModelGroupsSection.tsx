@@ -349,6 +349,8 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
                       id: route.id, name: route.name, strategy: route.strategy, sources: [source],
                       ...(route.effort ? { effort: route.effort } : {}),
                       ...(route.autoSwitch === false ? { autoSwitch: false as const } : {}),
+                      // 例外跟着走(合并整个供应商的路由也有例外)。别的路由改走到它的时段例外会失效：它不再是一条能直接改走的路由。
+                      ...(route.exceptions?.length ? { exceptions: route.exceptions } : {}),
                     }],
                   })).then((ok) => { if (ok) setView({ kind: 'source', id: route.id }); })} />
                 )}
@@ -390,7 +392,8 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
             <ModelGroupRouteExceptions
               key={route.id}
               route={route}
-              routes={config.routes}
+              // 时段例外只能改走自己排的路由：展开出来的那些不存盘，存的时候会被当成不存在的目标去掉。
+              routes={userRoutes}
               onChange={(next) => updateRoute(route.id, (current) => ({ ...current, exceptions: next }))}
             />
 

@@ -54,7 +54,7 @@ async function quotaWindows(options?: { cached?: boolean }) {
 
 /** 其他电脑与分享来的位置各自允许远程调用的供应商：按账号记，最多每分钟读一次。 */
 let remoteCatalogs: { scope: string; at: number; value: Map<string, ProviderView[]> } | null = null;
-let remoteReading: Promise<void> | null = null;
+let remoteReading: { scope: string; promise: Promise<void> } | null = null;
 let lastLocal: { scope: string; views: ProviderView[] } | null = null;
 const REMOTE_CATALOG_TTL_MS = 60_000;
 
@@ -79,7 +79,8 @@ function publishCatalog(): void {
  */
 function readRemoteCatalogs(): Promise<void> {
   const scope = activeOwnerScopeKey();
-  if (remoteReading) return remoteReading;
+  // 换了账号：上一个账号那一轮读完也会丢掉结果，不等它，按这个账号重读。
+  if (remoteReading?.scope === scope) return remoteReading.promise;
   if (remoteCatalogs?.scope === scope && Date.now() - remoteCatalogs.at < REMOTE_CATALOG_TTL_MS) return Promise.resolve();
   const timeout = <T>(work: Promise<T>): Promise<T | null> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -88,7 +89,7 @@ function readRemoteCatalogs(): Promise<void> {
       new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), MODEL_GROUP_REMOTE_WAIT_MS); }),
     ]).finally(() => clearTimeout(timer));
   };
-  remoteReading = (async () => {
+  const promise: Promise<void> = (async () => {
     const { locations } = await readWorkerAgentLocations();
     const entries = await Promise.all(locations.map(async ({ agentDeviceId }) => {
       const catalog = await timeout(readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId));
@@ -97,8 +98,9 @@ function readRemoteCatalogs(): Promise<void> {
     if (scope !== activeOwnerScopeKey()) return;
     remoteCatalogs = { scope, at: Date.now(), value: new Map(entries.filter((entry): entry is readonly [string, ProviderView[]] => !!entry)) };
     publishCatalog();
-  })().catch(() => undefined).finally(() => { remoteReading = null; });
-  return remoteReading;
+  })().catch(() => undefined).finally(() => { if (remoteReading?.promise === promise) remoteReading = null; });
+  remoteReading = { scope, promise };
+  return promise;
 }
 
 /**
@@ -166,7 +168,8 @@ const switchOfferDeps = {
 };
 
 export async function readModelGroupRecoveryOffer(sessionId: string, recovery?: NonNullable<Parameters<typeof computeModelGroupSwitchOffer>[2]>) {
-  await refreshAutoModelGroupRoutes();
+  // 刚启动时别处的目录还没读过：合并路由里在别处的成员要算进来，等一轮(有时限)，否则这次认不出任务用的路由。
+  await refreshAutoModelGroupRoutes({ waitRemote: true });
   return computeModelGroupSwitchOffer(switchOfferDeps, sessionId, recovery);
 }
 

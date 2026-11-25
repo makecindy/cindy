@@ -27,6 +27,7 @@ const store = createOverrideSettingsFile<ModelGroupsConfig>({
     ...(next.autoStrategy && Object.keys(next.autoStrategy).length > 0 ? { autoStrategy: next.autoStrategy } : {}),
     ...(next.autoSwitchOff?.length ? { autoSwitchOff: next.autoSwitchOff } : {}),
     ...(next.autoSources && Object.keys(next.autoSources).length > 0 ? { autoSources: next.autoSources } : {}),
+    ...(next.autoExceptions && Object.keys(next.autoExceptions).length > 0 ? { autoExceptions: next.autoExceptions } : {}),
   }),
   log,
   label: 'model groups',

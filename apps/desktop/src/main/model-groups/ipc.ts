@@ -73,8 +73,10 @@ export function registerModelGroupsIpc(): void {
   void refreshAutoModelGroupRoutes();
   ipcMain.handle(MODEL_GROUPS_IPC.GET, async (event) => {
     assertModelGroupsCaller(event);
-    await refreshAutoModelGroupRoutes({ waitRemote: true });
-    return isDeviceLinkInvoke() ? modelGroupsConfigForRemote(readModelGroupsConfig()) : readModelGroupsConfig();
+    // 别的设备拿到的配置不含供应商路由，不为它去读各处的目录。
+    const remoteCaller = isDeviceLinkInvoke();
+    await refreshAutoModelGroupRoutes({ waitRemote: !remoteCaller });
+    return remoteCaller ? modelGroupsConfigForRemote(readModelGroupsConfig()) : readModelGroupsConfig();
   });
   ipcMain.handle(MODEL_GROUPS_IPC.SET, (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);

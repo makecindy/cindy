@@ -426,9 +426,15 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
   // 用户调的这三样单独存(autoSources)，下次合成时按它排。
   const setSources = (change: (sources: ModelGroupSource[]) => ModelGroupSource[]) => save((latest) => {
     const current = (latest.sourceRoutes ?? []).find((item) => item.id === route.id)?.sources ?? route.sources;
-    return route.auto
-      ? { ...latest, autoSources: { ...(latest.autoSources ?? {}), [route.id]: change(current) } }
-      : { ...latest, sourceRoutes: (latest.sourceRoutes ?? []).map((item) => (item.id === route.id ? { ...item, sources: change(item.sources) } : item)) };
+    if (!route.auto) {
+      return { ...latest, sourceRoutes: (latest.sourceRoutes ?? []).map((item) => (item.id === route.id ? { ...item, sources: change(item.sources) } : item)) };
+    }
+    // 自动合成的路由：此刻没连上的成员(电脑离线、分享暂停)不在列表里，但用户给它排的位置、权重、暂停要留着，
+    // 重新连上时回到原来的设置(model-groups.md §3.5)。
+    const next = change(current);
+    const shown = new Set(next.map(optionKey));
+    const away = (latest.autoSources?.[route.id] ?? []).filter((item) => !shown.has(optionKey(item)));
+    return { ...latest, autoSources: { ...(latest.autoSources ?? {}), [route.id]: [...next, ...away] } };
   });
   const patchSource = (key: string, patch: (source: ModelGroupSource) => ModelGroupSource) =>
     setSources((sources) => sources.map((item) => (optionKey(item) === key ? patch(item) : item)));

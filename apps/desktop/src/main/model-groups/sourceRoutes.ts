@@ -125,8 +125,18 @@ export function sourceModelKey(view: ProviderView, agent: AgentKind, modelId: st
   return unifiedModelKeyId(id.replace(/^[a-z0-9][a-z0-9._-]*\/([^/]+)$/, '$1'));
 }
 
-const expandedId = (routeId: string, modelKey: string) =>
-  `${MODEL_GROUP_EXPANDED_PREFIX}${createHash('sha256').update(`${routeId}\u0000${modelKey}`).digest('hex').slice(0, 40)}`;
+/** 展开出来的路由 id 与模型一一对应、稳定不变；每次选路都要重新展开，算过的直接用(有上限)。 */
+const expandedIds = new Map<string, string>();
+const expandedId = (routeId: string, modelKey: string) => {
+  const key = `${routeId}\u0000${modelKey}`;
+  let id = expandedIds.get(key);
+  if (!id) {
+    id = `${MODEL_GROUP_EXPANDED_PREFIX}${createHash('sha256').update(key).digest('hex').slice(0, 40)}`;
+    if (expandedIds.size >= 4096) expandedIds.clear();
+    expandedIds.set(key, id);
+  }
+  return id;
+};
 
 /** 一条供应商路由展开成每个模型一条普通路由：成员里谁提供这个模型，谁就是这条的来源(顺序同成员顺序)。 */
 export function expandSourceRoute(route: ModelGroupSourceRoute, catalog: SourceCatalog): ModelGroupRoute[] {
