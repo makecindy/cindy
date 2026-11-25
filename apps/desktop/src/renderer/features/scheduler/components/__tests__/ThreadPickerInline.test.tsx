@@ -48,7 +48,7 @@ describe('ThreadPickerInline 会话引用状态', () => {
     expect(screen.queryByRole('option', { name: 'Review task · Codex' })).toBeNull();
   });
 
-  // #2769 (unit): the production picker must distinguish identical Worker labels
+  // Issue 2769 (unit): the production picker must distinguish identical Worker labels
   // while returning the chosen Worker ID. Filtering and deleted-binding tests
   // do not cover two same-title, same-engine Workers with different Leads.
   // Standalone Vitest run: 2.89 s.
