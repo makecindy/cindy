@@ -164,6 +164,18 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
   它 Cindy 的本地 HTTP MCP 桥（复用 Codex / Pi 已有实现），令牌按任务签发、随任务失效。
   交出的工具范围与内置 Pi 相同（2026-11-18 用户决定），复用 Pi 的允许清单而不另立一份；
   安装确认文案需写明这一范围。直接连接的第三方 MCP 与其凭证留在宿主。
+- **Antigravity 的工具预算（2026-11-25）**：agy 把 ACP 传入的所有 MCP 工具放进一份约 16 KB、
+  所有服务共用的声明预算（按它在 `~/.gemini/antigravity-cli/mcp/<服务>/` 写下的单个工具 JSON 计），
+  超出时从最大的工具开始整个删掉，模型看不到、也没有别的调用途径
+  （[上游 #1530](https://github.com/google-antigravity/antigravity-cli/issues/1530)）。Cindy 的完整目录约
+  160 KB，`ghost_call`、`cindy_scheduler.call_tool` 等因此不可用，PR Skill 挂不了卡片、建不了跟进。
+  HTTP MCP 桥对 `antigravity-client` 按服务数加权分配 12 KB 总量（`antigravityToolCatalog.ts`）：放得下就原样下发；
+  否则压成一句话摘要加参数类型，完整说明经 `describe_tool` 读取；仍放不下时只保留首选入口与
+  `list_tools` / `call_tool`，其余经 `run_tool` 调用。`run_tool` 在传输层还原成原来的 `tools/call`，
+  注册、参数校验与授权不变；其他客户端的目录不受影响。两个辅助入口只由传输层应答、不在 `McpServer` 上注册：
+  MCP App 代理（`mcp-apps/serverProxy.ts`）与伙伴连接（`bot-import/connectionProvider.ts`）自己安装
+  `tools/list` / `tools/call` 处理器，再调 `registerTool` 会与之冲突，使服务初始化失败。新增工具或加长说明不需要改这里，
+  预算由测试 `keeps every agy catalog within the shared budget` 守住。
 - **排除范围**：远程 / SSH / 设备互联被控端、定时任务、伙伴、多 Agent 协同、插件模型路由、
   标题生成的 oneShot 均不接入 `acp`，遇到即返回明确的「不支持」。
 
