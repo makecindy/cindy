@@ -14,6 +14,7 @@ import { findCatalogModel, type AgentKind, type Catalog } from '@cindy/model-pro
 
 import { getActiveCatalog } from './active-catalog.js';
 import { clearSessionProvider, getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed, setSessionProvider } from './session-provider-store.js';
+import { readPoolExecutionRoute } from '../subscription-accounts/session.js';
 
 // Platform assembly supplies the same live account membership used at remote
 // admission. The base catalog alone can omit every model of a signed-in pool.
@@ -99,6 +100,15 @@ export function guestProviderRouteForSession(sessionId: string): GuestProviderRo
   return binding ? { sessionId: binding.sessionId, providerId: binding.providerId } : null;
 }
 
+/** A pool can execute through a different connection, without changing the task's grant. */
+export function poolAuthorizationProvider(sessionId: string | null | undefined, connectionId: string, model?: string): string | null {
+  const route = readPoolExecutionRoute(sessionId);
+  if (!route) return connectionId;
+  if (!sessionId || route.connectionId !== connectionId || getSessionProvider(sessionId) !== route.providerId) return null;
+  try { route.assertCurrent(model); } catch { return null; }
+  return route.providerId;
+}
+
 /** Legacy SDK aliases may differ by the 1M suffix when the catalog has only one profile. */
 function bareModelId(model: string): string {
   return model.trim().replace(/\[1m\]$/i, '');
@@ -116,7 +126,16 @@ export async function guestProviderOffersModel(providerId: string, agent: AgentK
 
 /** Same-account remote tasks authorize each root/child request without pinning children to the parent provider. */
 export function hostedProviderOffersModel(sessionId: string | null | undefined, providerId: string | null | undefined, agent: AgentKind, wireModel: string): boolean {
-  if (!sessionId || !hasHostedSessionModelAccess(sessionId)) return true;
+  if (!sessionId) return true;
+  const route = readPoolExecutionRoute(sessionId);
+  const connection = route && providerId === route.providerId ? route.connectionId : providerId;
+  const authorized = connection && poolAuthorizationProvider(sessionId, connection, wireModel);
+  if (route && !authorized) return false;
+  if (!hasHostedSessionModelAccess(sessionId)) return true;
+  if (connection && authorized && authorized !== connection) {
+    return providerOffersModel(connection, agent, wireModel) && providerOffersModel(authorized, agent, wireModel,
+      model => hostedSessionModelAllowed(sessionId, authorized, model));
+  }
   return !!providerId && providerOffersModel(providerId, agent, wireModel,
     model => hostedSessionModelAllowed(sessionId, providerId, model));
 }
@@ -144,10 +163,14 @@ function providerOffersModel(providerId: string, agent: AgentKind, wireModel: st
 export async function guestProviderModelAllowed(providerId: string, model: string, sessionId: string | null | undefined): Promise<boolean> {
   if (sessionId) {
     const binding = bySession.get(sessionId);
-    if (binding?.providerId !== providerId) return false;
+    // Checks on the logical provider remain valid. A private engine route must
+    // additionally match the still-live owner-side account reservation.
+    const authorized = binding?.providerId === providerId ? providerId : poolAuthorizationProvider(sessionId, providerId, model);
+    if (!authorized || binding?.providerId !== authorized) return false;
     try {
       const allowed = !binding.allowsModel || await binding.allowsModel(model);
-      return allowed && bySession.get(sessionId) === binding && getSessionProvider(sessionId) === providerId;
+      return allowed && bySession.get(sessionId) === binding && getSessionProvider(sessionId) === authorized
+        && (authorized === providerId || poolAuthorizationProvider(sessionId, providerId, model) === authorized);
     } catch { return false; }
   }
   return ![...bySession.values()].some((binding) => binding.providerId === providerId && binding.modelAccessRestricted?.());

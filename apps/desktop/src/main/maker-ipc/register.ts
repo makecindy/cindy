@@ -11,6 +11,8 @@ import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccount
 import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot, schedulerFailureDetail, type SchedulerQueueBridge, type SchedulerQueuedPromptObserver, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
+import { readPoolExecutionRoute } from '../subscription-accounts/session.js';
+import { prepareLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { prepareRestoredOrcaReportAcceptance } from '../maker-host/index.js';
 import { createSessionControlRuntimeWriter } from './sessionControlRuntimeWriter.js';
@@ -1414,7 +1416,11 @@ import {
   refreshProviderModelsManually,
   requestProviderModelAutoRefresh,
 } from '../maker-host/provider-model-auto-refresh.js';
-import { setProviderUpstreamErrorBroadcaster } from '../maker-host/provider-upstream-error-observer.js';
+import { setProviderUpstreamErrorBroadcaster, setProviderUpstreamHealthCapture, setProviderUpstreamSuccessObserver } from '../maker-host/provider-upstream-error-observer.js';
+import { captureOpenAiGroupApiResponse, captureOpenAiGroupDirectRecovery, isOpenAiGroupApiAccount } from '../provider-group/localOpenAiAccounts.js';
+import { readProviderBillingCode } from '@cindy/maker-shared/error-redaction';
+import { isOpenAiApiEndpoint } from '../../shared/openAiAccountGroup.js';
+import { matchesCustomProviderBearer } from '../maker-host/provider-route.js';
 import {
   createClaudeAutoPermissionFallbackCoordinator,
   setClaudeAutoClassifierUnavailableListener,
@@ -5156,15 +5162,27 @@ const subscriptionAccountRecoveryDeps = {
 } satisfies AccountFailoverDeps;
 
 /** 直发路径在 createSession / 重读 live session 之前换掉不能用的订阅账号、关掉不健康原生会话。 */
-export async function prepareUnhealthySessionForSend(sessionId: string): Promise<boolean> {
-  const switched = await prepareSubscriptionAccountForSend(sessionId, {
+export async function prepareUnhealthySessionForSend(
+  sessionId: string,
+  retry?: Parameters<NonNullable<typeof contextOverflowRolloverHolder>['prepareNativeSessionRecovery']>[4],
+): Promise<boolean> {
+  const accountRecovery = retry ? {
     ...subscriptionAccountRecoveryDeps,
+    rebuild: async (id: string, assertCurrent: () => void) => {
+      const recovery = contextOverflowRolloverHolder;
+      if (!recovery) throw new Error('Subscription account recovery is not ready');
+      await recovery.prepareNativeSessionRecovery(id, 'retain-route', assertCurrent,
+        agentInputCoordinatorHolder?.getInputAbortSignal(id), retry);
+    },
+  } : subscriptionAccountRecoveryDeps;
+  const switched = await prepareSubscriptionAccountForSend(sessionId, {
+    ...accountRecovery,
     resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
     rebuild: async (id, assertCurrent) => {
-      await subscriptionAccountRecoveryDeps.rebuild(id, assertCurrent);
+      await accountRecovery.rebuild(id, assertCurrent);
       agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
     },
-  }) || await prepareSubscriptionAccountFailover(sessionId, subscriptionAccountRecoveryDeps);
+  }) || await prepareSubscriptionAccountFailover(sessionId, accountRecovery);
   return switched || (await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? false);
 }
 
@@ -6331,6 +6349,7 @@ const sessionEventDependencies: Omit<SessionEventDependencies, 'handleSilentStop
 };
 
 const sessionTurnObserverDependencies = {
+  onLocalTurnTerminal: settleDirectProviderDispatch,
   onProviderInitiatedTurn: (session: Session, generation: number) =>
     agentInputCoordinatorHolder?.noteProviderInitiatedTurn(session.id, generation),
   beforeLocalProviderStart: (session: Session) =>
@@ -6340,6 +6359,60 @@ const sessionTurnObserverDependencies = {
   providerTurnLeaseId,
   log,
 };
+
+const directApiTurnEvidence = new WeakMap<Session, {
+  generation: number;
+  id: string;
+  verified: boolean;
+  recover: NonNullable<ReturnType<typeof captureOpenAiGroupDirectRecovery>>;
+}>();
+
+function captureDirectProviderDispatch(session: Session): void {
+  directApiTurnEvidence.delete(session);
+  if ((session.agentKind !== 'codex' && session.agentKind !== 'pi') || !session.model
+    || session.agentDeviceId || session.remoteHostId) return;
+  const id = getSessionProvider(session.id);
+  if (!id || !isOpenAiGroupApiAccount(id) || readPoolExecutionRoute(session.id) || readProviderGroupBinding(session.id)
+    || (readProviderGroup(id) && !isProviderGroupReleased(session.id, { providerId: id }))) return;
+  const recover = captureOpenAiGroupDirectRecovery(id, session.agentKind, session.model);
+  if (recover) directApiTurnEvidence.set(session, { generation: session.getTurnGeneration(), id, recover, verified: false });
+}
+
+function settleDirectProviderDispatch(session: Session, generation: number, event: AgentEvent): void {
+  const direct = directApiTurnEvidence.get(session);
+  if (direct?.generation !== generation) return;
+  directApiTurnEvidence.delete(session);
+  if (event.type !== 'done' || !direct.verified || direct.id !== getSessionProvider(session.id)
+    || readPoolExecutionRoute(session.id) || readProviderGroupBinding(session.id)) return;
+  const outcome = event.data as { raw?: { status?: string }; status?: string; cancelled?: boolean; silentStop?: boolean } | null;
+  if (!outcome?.cancelled && !outcome?.silentStop && (
+    (event.source === 'codex' && outcome?.raw?.status === 'completed')
+    || (event.source === 'pi' && outcome?.status === 'completed')
+  )) void direct.recover().catch(() => {});
+}
+
+const mixedProviderTurnEvidence = new WeakMap<NonNullable<ReturnType<Maker['getSession']>>, {
+  generation: number;
+  delivered: boolean;
+  failed: boolean;
+  observe?: ReturnType<typeof captureOpenAiGroupApiResponse>;
+}>();
+
+function mixedProviderCanRetryTurn(sessionId: string, signals: InterruptedTurnErrorSignals): boolean {
+  const binding = readProviderGroupBinding(sessionId);
+  if (!readPoolExecutionRoute(sessionId) && (!binding || binding.groupDeviceId
+    || !readProviderGroup(binding.providerId)?.localAccountIds?.length)) return true;
+  const session = sessionBindings.getSession(sessionId);
+  const evidence = session ? mixedProviderTurnEvidence.get(session) : undefined;
+  // A switch replays accepted input. Without evidence of a clean start and an
+  // explicit account rejection, leave this turn to the user's normal recovery.
+  return evidence?.generation === session?.getTurnGeneration() && evidence?.delivered === false
+    && providerGroupSwitchCause(signals, 'run') !== null
+    && (signals.errorStatus === 401 || signals.errorStatus === 402 || signals.errorStatus === 429
+      || signals.sdkError === 'billing_error' || signals.sdkError === 'rate_limit'
+      || signals.codexErrorInfo === 'usageLimitExceeded'
+      || readProviderBillingCode(undefined, signals.message ?? '') !== undefined);
+}
 
 export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void {
   if (!session) return;
@@ -6393,6 +6466,33 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       return;
     }
     const generation = event.sessionTurnGeneration ?? session.getTurnGeneration();
+    if (event.turnScope !== 'background' && generation === session.getTurnGeneration() && !session.agentDeviceId && !session.remoteHostId
+      && (event.source === 'codex' || event.source === 'pi')) {
+      let evidence = mixedProviderTurnEvidence.get(session);
+      if (evidence?.generation !== generation) {
+        const id = getSessionProvider(session.id);
+        evidence = { generation, delivered: false, failed: false,
+          observe: id ? captureOpenAiGroupApiResponse(id, event.source) : undefined };
+        mixedProviderTurnEvidence.set(session, evidence);
+      }
+      if (event.type === 'text' || event.type === 'tool_use' || event.type === 'tool_result'
+        || event.type === 'tool_result_full' || event.type === 'image' || event.type === 'thinking'
+        || event.type === 'interaction_request' || event.type === 'turn_diff' || event.type === 'agent_task_update') {
+        evidence.delivered = true;
+      }
+      if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
+        evidence.failed = true;
+        const error = event.data as InterruptedTurnErrorSignals | undefined;
+        const billingCode = readProviderBillingCode(error?.errorStatus, error?.message ?? '');
+        const result = billingCode ? { ok: false, code: 'QUOTA_EXCEEDED', billingCode } as const
+          : error?.errorStatus === 401 ? { ok: false, code: 'AUTH_INVALID' } as const
+            : error?.errorStatus === 429 || error?.sdkError === 'rate_limit'
+              ? { ok: false, code: 'RATE_LIMITED' } as const : undefined;
+        if (result) void evidence.observe?.(result).catch(() => {});
+      } else if (event.type === 'done' && evidence.delivered && !evidence.failed) {
+        void evidence.observe?.({ ok: true }).catch(() => {});
+      }
+    }
     handleSessionEvent(ownerEventDependencies, session, event, usageAccount.forEvent(generation), () => {
       if (generation !== session.getTurnGeneration() || sessionBindings.getSession(session.id) !== session
           || event.source !== session.agentKind) return;
@@ -7956,6 +8056,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setProviderUpstreamErrorBroadcaster((event) =>
     broadcastToAllWindows(MAKER_PUSH.PROVIDER_UPSTREAM_ERROR, event),
   );
+  setProviderUpstreamHealthCapture((id, agent, upstream, authorization, sessionId) => {
+    if (!isOpenAiApiEndpoint(upstream)
+      || !matchesCustomProviderBearer(id, agent, authorization)) return;
+    const observe = captureOpenAiGroupApiResponse(id, agent);
+    if (!observe) return;
+    const route = readPoolExecutionRoute(sessionId);
+    const reject = route?.connectionId === id ? route.captureTurnRejection() : undefined;
+    return (result, retryAt) => {
+      reject?.(result);
+      return observe(result, retryAt);
+    };
+  });
+  setProviderUpstreamSuccessObserver((sessionId, id, agent, ctx) => {
+    const session = sessionBindings.getSession(sessionId);
+    const evidence = session ? directApiTurnEvidence.get(session) : undefined;
+    if (session && evidence?.id === id && evidence.generation === session.getTurnGeneration()
+      && session.agentKind === agent && isOpenAiApiEndpoint(ctx.upstreamBase)
+      && matchesCustomProviderBearer(id, agent, ctx.outboundHeaders?.authorization)) {
+      return () => { evidence.verified = true; };
+    }
+    return undefined;
+  });
   // 会话后台活动翻转 → 广播给所有窗口(renderer 会话内横幅 +「全部停止」入口)。
   setClaudeBackgroundActivityBroadcaster((payload) =>
     broadcastToAllWindows(MAKER_PUSH.SESSION_BACKGROUND_ACTIVITY_CHANGED, payload),
@@ -11440,8 +11562,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       projectDeferredCredentialSwitchIntent(getPendingCredentialSwitchTarget(sessionId)),
     insertBoundaryMessage: createAgentSwitchBoundaryInsert(createDbMessage),
     applyResumeFallbackAtomically: applyAgentSwitchResumeFallbackAtomically,
-    setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
-      agentHandoffPending.set(sessionId, handoff, expectedGeneration),
+    setPendingHandoff: (sessionId, handoff, expectedGeneration, replay) =>
+      agentHandoffPending.set(sessionId, handoff, expectedGeneration, replay),
     readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
     rememberThinkingIntent: createRememberThinkingIntent({ broadcastToAllWindows }),
     bootstrapSwitchedSession: createSwitchedSessionBootstrap({
@@ -11475,6 +11597,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   providerGroupService = createProviderGroupService({
+    isLocalApiAccount: isOpenAiGroupApiAccount,
+    isLocalApiPoolTurn: sessionId => !!readPoolExecutionRoute(sessionId),
+    prepareLocalAccountPool: prepareLegacyOpenAiPool,
     router: getProviderGroupRouter(),
     directory: getProviderGroupDirectory(),
     readGroup: readProviderGroup,
@@ -11501,6 +11626,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     switchAgentLocation: async (sessionId, route, switchOptions) => {
       const isCurrent = switchOptions?.isCurrent;
+      const recovery = switchOptions?.recoveryToken === undefined ? null
+        : agentInputCoordinatorHolder?.snapshotUsageLimitRecovery(sessionId, switchOptions.recoveryToken);
+      const retryClientId = recovery?.kind === 'active-turn'
+        ? recovery.item.retrySourceClientId ?? recovery.item.clientId : undefined;
       const assertCurrent = () => {
         if (isCurrent && !isCurrent()) throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
       };
@@ -11519,6 +11648,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           providerGroupRelocation: true,
           // 分享的人换电脑：位置仍是同一个分享，强制重新交接，由组所在电脑换一台。
           ...(switchOptions?.relocate ? { forceRelocation: true } : {}),
+          ...(retryClientId ? { retryClientId } : {}),
           // 发送前换电脑：随后的 lazy-create 按任务记录在新电脑上启动，不重复 bootstrap。
           ...(switchOptions?.beforeSend ? { skipBootstrap: true } : {}),
           // 用户确认为了先用那台的配额换号：分隔条写明原因。
@@ -15700,8 +15830,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       inputCoordinator.steerControlInput(sessionId, { item }, expectedTurn),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
     withSendToSessionLock,
-    prepareUnhealthySession: (sessionId) =>
-      prepareUnhealthySessionForSend(sessionId),
+    prepareUnhealthySession: (sessionId) => prepareUnhealthySessionForSend(sessionId),
     hydrateOrcaSessionIfNeeded: async (sessionId, meta) => {
       // 目标必是 Orca Lead/Worker；已装载时不读库、不建 createOpts。
       if (isOrcaMcpHydrated(sessionId) || !maker.getSession(sessionId)) return;
@@ -18187,6 +18316,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
+    onUserProviderDispatch: (sessionId) => {
+      const session = sessionBindings.getSession(sessionId);
+      if (session) captureDirectProviderDispatch(session);
+    },
     getResolvedMainLocale: () => getResolvedMainLocale(),
     getMainClassicalStyle: () => getMainClassicalStyle(),
     readMcpAppModelContext: sessionId => mcpAppModelContext(sessionId),
@@ -18431,7 +18564,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // session-agent-switch:lazy-create 前以 DB 行为真源校正 createOpts(定义见
     // reconcileCreateOptsAgainstDb;GET_CONTEXT_USAGE 的 lazy 分支共用)。
     reconcileCreateOptsWithDb: reconcileCreateOptsAgainstDb,
-    peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
+    peekPendingHandoff: (sessionId, retryClientId) => agentHandoffPending.peek(sessionId, retryClientId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
     peekPlanReconcileNote: async (sessionId) => {
       const snapshot = await enqueueDurableWrite(`plan-reconcile-read:${sessionId}`, () =>
@@ -18518,8 +18651,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentInputCoordinatorHolder?.setProviderGroupSendReconnect(sessionId, null);
       });
     },
-    prepareUnhealthySession: (sessionId) =>
-      prepareUnhealthySessionForSend(sessionId),
+    prepareUnhealthySession: prepareUnhealthySessionForSend,
     workdirDiagnostics: workdirLog,
     log,
   });
@@ -19769,7 +19901,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 被按住的 error 最终没接管 → 只补落 error 行(横幅 coordinator 自己设)。
     // 纯判定：供应商组会先试着换电脑时，这次错误先不呈现(provider-groups.md §6.1)。
     providerGroupSwitchCandidate: (sessionId, signals) =>
-      providerGroupService?.mayHandleTurnError(sessionId, signals)
+      mixedProviderCanRetryTurn(sessionId, signals) && providerGroupService?.mayHandleTurnError(sessionId, signals)
         ? providerGroupSwitchCause(signals, 'run')
         : null,
     claimExternalAutomaticRecovery: (sessionId) =>
@@ -19797,7 +19929,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return;
       }
       // 供应商组分配的任务先试自动换电脑，不换时由它交回额度重置后自动继续。
-      if (!providerGroupService || signals.providerGroupUsageLimit) {
+      if (!providerGroupService || signals.providerGroupUsageLimit || !mixedProviderCanRetryTurn(sessionId, signals)) {
         usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
         return;
       }

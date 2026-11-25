@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 /**
@@ -149,6 +150,18 @@ export function setOAuthTokenReader(reader: OAuthTokenReader): void {
 export function hasCustomProviderKey(providerId: string, agent: AgentKind): boolean {
   if (isProviderRouteMutationInProgress(providerId)) return false;
   return Boolean(customProviderKeyReader(storedCustomProviderId(providerId), agent));
+}
+
+export function matchesCustomProviderBearer(providerId: string, agent: AgentKind, authorization: string | undefined): boolean {
+  if (!authorization || isProviderRouteMutationInProgress(providerId)) return false;
+  const key = customProviderKeyReader(storedCustomProviderId(providerId), agent);
+  return !!key && authorization === `Bearer ${key}`;
+}
+
+/** Main-only comparison of the credential actually read by the route. */
+export function customProviderCredentialFingerprint(providerId: string, agent: AgentKind): string | undefined {
+  const key = customProviderKeyReader(storedCustomProviderId(providerId), agent);
+  return key ? createHash('sha256').update(key).digest('hex') : undefined;
 }
 
 export interface ProviderOAuthTokenReadOptions {
@@ -546,7 +559,7 @@ export function gatewayDefaultRouteDecision(
  * 未声明 = universal(网关 / Anthropic 直连 / 自定义供应商,上游本身能服务任意模型);
  * wireModel 为空 = 控制面请求(如 codex `GET /models`,无 body.model),不受范围限制。
  */
-function routingServesWireModel(
+export function routingServesWireModel(
   routing: RoutingDescriptor,
   wireModel: string | undefined,
 ): boolean {

@@ -222,4 +222,13 @@ describe('usage limit recovery detection', () => {
       ),
     ).toBeNull();
   });
+
+  it('uses structured OpenAI codes before rate, billing or overload wording', () => {
+    expect(extractUsageLimitRecoveryHint({
+      errorStatus: 429, message: '{"error":{"code":"credit_balance_exhausted","message":"upstream overloaded"}}',
+    }, NOW)).toBeNull();
+    expect(extractUsageLimitRecoveryHint({
+      errorStatus: 429, message: '{"error":{"code":"rate_limit_exceeded","type":"insufficient_quota"}}',
+    }, NOW)).toEqual({ resetAtMs: null });
+  });
 });

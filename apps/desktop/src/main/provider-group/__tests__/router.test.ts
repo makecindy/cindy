@@ -6,7 +6,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { RemoteAgentCaps } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
+import { normalizeProviderGroupConfig, type ProviderGroupConfig, type ProviderGroupMember } from '../../../shared/providerGroup';
 import type { ProviderGroupBinding } from '../bindings.desktop';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 import { createProviderGroupDirectory, type ProviderGroupDirectory, type ResolvedProviderGroupMember } from '../directory';
@@ -147,6 +147,33 @@ function harness(
     ...overrides,
   });
 }
+
+// Unit through router.pick: before migration neither caller may dispatch the
+// former private list. A migrated physical group is picked normally again.
+it('waits for migration before routing the same group for local and remote callers', async () => {
+  const providerId = 'anthropic';
+  let config = normalizeProviderGroupConfig({ members: [{ kind: 'local' }], localAccountIds: ['work-key'] }, providerId)!;
+  const prepareGroup = vi.fn(async () => {});
+  const resolveMembers = vi.fn(async (_id: string, current: ProviderGroupConfig) => current.members.map(member => ({
+    member, label: member.providerId, state: 'ok' as const, view: view(member.providerId),
+  })));
+  const router = harness({}, {}, [], config, {
+    prepareGroup, readGroup: () => config,
+    directory: {
+      resolveMembers, listCandidates: async () => [], readDeviceCatalog: async () => [],
+      probe: async () => 'ok', memberLabel: member => member.providerId, invalidate() {},
+    },
+  });
+  const input = { providerId, agentKind: 'claude-code' as const, model: MODEL };
+  await expect(router.pick({ ...input, localTask: true })).resolves.toMatchObject({ kind: 'unavailable' });
+  await expect(router.pick(input)).resolves.toMatchObject({ kind: 'unavailable' });
+  expect(resolveMembers).not.toHaveBeenCalled();
+  prepareGroup.mockImplementation(async () => {
+    config = normalizeProviderGroupConfig({ members: [{ kind: 'local' }] }, providerId)!;
+  });
+  await expect(router.pick(input)).resolves.toMatchObject({ kind: 'member', member: { key: 'local' } });
+  expect(prepareGroup).toHaveBeenCalledTimes(3);
+});
 
 it('routes a shared image model only to a group member that offers it', async () => {
   const model = 'openai/gpt-image-2';

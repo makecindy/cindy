@@ -26,12 +26,18 @@ import {
   type SubscriptionAccountLease,
 } from './runtime.js';
 import { readAccountBinding, readPool, writeAccountBindings, readLegacyCodexProviderId } from './store.js';
+import { apiKeyPoolMember, apiKeyPoolMembers, legacyApiKeyPoolBinding } from './apiKeyMembers.js';
 import {
   readMergedProviderAccount,
   accountProviderId,
+  pinnedOwnAccount,
   resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef,
 } from './placement.js';
-import { registerSessionSubscriptionAccount } from './session.js';
+import { bindPoolExecutionRoute, poolFailuresAfterOutput, registerSessionSubscriptionAccount } from './session.js';
+import { captureOpenAiGroupApiResponse, settleOpenAiGroupAccountHealth } from '../provider-group/localOpenAiAccounts.js';
+import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../provider-group/cooling.js';
+import { readProviderBillingCode } from '@cindy/maker-shared/error-redaction';
+import type { OpenAiGroupProbeResult } from '../../shared/openAiAccountGroup.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 
 interface SubscriptionRouteOptions {
@@ -44,6 +50,7 @@ interface SubscriptionAccountRouting extends Pick<AuthAdapter, 'getState'> {
   resolveCodexHistoryHome?(threadId: string): Promise<string | undefined>;
   /** Codex can use an OAuth host while routing an implicit model elsewhere. */
   resolveDefaultProvider?(model?: string): string | null | Promise<string | null>;
+  preparePool?(providerId: string): Promise<void>;
 }
 
 /**
@@ -89,6 +96,8 @@ async function providerFor(
  * keeps its id (its directory is the connection's own), as before 2026-11-13.
  */
 function engineProviderId(providerId: string | null | undefined, accountId: string): string | null | undefined {
+  const api = apiKeyPoolMember(accountId);
+  if (api) return api.connectionId;
   const ref = resolveSubscriptionPoolProviderRef(providerId);
   if (!ref || ref.providerId === ref.kind) return providerId;
   if (!ref.created && ref.ownAccount === accountId) return providerId;
@@ -166,6 +175,7 @@ async function historicalCodexAccount(
 function legacyConnectionAccount(providerId: string | null | undefined, keys: string[], agentKind: string, hasNativeHistory: boolean): string | undefined {
   const ref = resolveSubscriptionPoolProviderRef(providerId);
   if (!ref?.ownAccount) return;
+  if (ref.apiKey) return pinnedOwnAccount(ref);
   if (!readPool(ref.kind)?.accounts.some(entry => entry.id === ref.ownAccount)
     && keys.some(key => readAccountBinding(key, ref.kind)?.accountId === ref.ownAccount))
     throw new AgentNotAuthenticatedError(agentKind, 'Subscription account was removed');
@@ -191,14 +201,20 @@ function wrapHandle(
   lease: SubscriptionAccountLease,
   unregister: () => void,
   model: string | undefined,
+  agent?: 'codex' | 'pi' | 'claude-code',
+  poolTurn?: { current?: { delivered: boolean; rejection?: OpenAiGroupProbeResult } },
 ): AgentSessionHandle {
   let cleanupPending = false;
+  let observe: ReturnType<typeof captureOpenAiGroupApiResponse>;
   return new Proxy(handle, {
     get(target, property) {
       if (property === 'send')
         return async (...args: Parameters<AgentSessionHandle['send']>) => {
           if (cleanupPending) throw new Error('Subscription account runtime is closing');
           lease.assertDispatchable();
+          if (poolTurn) poolTurn.current = { delivered: false };
+          if (lease.apiConnectionId && (agent === 'codex' || agent === 'pi'))
+            observe = captureOpenAiGroupApiResponse(lease.apiConnectionId, agent);
           lease.running(true);
           try {
             return await target.send(...args);
@@ -235,15 +251,45 @@ function wrapHandle(
       if (property === 'events')
         return async function* () {
           for await (const event of target.events()) {
-            if (event.type === 'account_usage')
+            const turn = event.turnScope === 'background' ? undefined : poolTurn?.current;
+            if (turn && (event.type === 'text' || event.type === 'thinking' || event.type === 'tool_use'
+              || event.type === 'tool_result' || event.type === 'tool_result_full' || event.type === 'image'
+              || event.type === 'interaction_request' || event.type === 'turn_diff' || event.type === 'agent_task_update'))
+              turn.delivered = true;
+            if (event.type === 'account_usage' && lease.account)
               observeSubscriptionAccountUsage(lease.account, event.data);
-            if (event.type === 'error' && isTerminalTurnEvent(event))
+            if (event.type === 'error' && isTerminalTurnEvent(event)) {
               lease.observeFailure(event.data, model, 'run');
+              if (observe && event.turnScope !== 'background') {
+                const error = event.data as { message?: string; errorStatus?: number };
+                const billingCode = readProviderBillingCode(error.errorStatus, error.message ?? '');
+                if (billingCode) await observe({ ok: false, code: 'QUOTA_EXCEEDED', billingCode }).catch(() => {});
+                else if (error.errorStatus === 401) await observe({ ok: false, code: 'AUTH_INVALID' }).catch(() => {});
+                else if (error.errorStatus === 429) await observe({ ok: false, code: 'RATE_LIMITED' }).catch(() => {});
+                else if (error.errorStatus === 529) await observe({ ok: false, code: 'RATE_LIMITED' },
+                  undefined, PROVIDER_GROUP_FAILURE_COOLDOWN_MS).catch(() => {});
+                if (turn && !turn.rejection && (billingCode || error.errorStatus === 401)) {
+                  turn.rejection = billingCode ? { ok: false, code: 'QUOTA_EXCEEDED', billingCode } : { ok: false, code: 'AUTH_INVALID' };
+                }
+              }
+              if (lease.apiConnectionId && agent && event.turnScope !== 'background')
+                await settleOpenAiGroupAccountHealth(lease.apiConnectionId, agent);
+            }
             if (event.type === 'session_id') await lease.bind([`native:${target.id}`]);
+            if (turn && isTerminalTurnEvent(event) && poolTurn) poolTurn.current = undefined;
             if (isTerminalTurnEvent(event) && !cleanupPending) lease.running(false);
             if (event.type === 'status' && (event.data as { isRunning?: boolean })?.isRunning)
               lease.running(true);
-            yield event.type === 'account_usage'
+            const rejected = event.type === 'error' && isTerminalTurnEvent(event) && !turn?.delivered
+              ? turn?.rejection : undefined;
+            if (event.type === 'error' && isTerminalTurnEvent(event) && turn?.delivered)
+              poolFailuresAfterOutput.add(event);
+            yield rejected?.code === 'QUOTA_EXCEEDED' || rejected?.code === 'AUTH_INVALID'
+              ? { ...event, data: { ...(event.data as Record<string, unknown>),
+                ...(rejected.code === 'AUTH_INVALID' ? { errorStatus: 401, sdkError: 'authentication_failed' }
+                  : { errorStatus: 429, sdkError: 'billing_error' }),
+              } }
+              : event.type === 'account_usage' && lease.account
               ? {
                   ...event,
                   data: {
@@ -392,10 +438,22 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           let provider: string | null = null;
           let imported: string | undefined;
           try {
+            if (!options.remoteHostId && options.providerId) await auth?.preparePool?.(options.providerId);
             imported = await historicalCodexAccount(target, options, options.resumeSessionId, keys, auth);
             provider = imported ? 'openai' : await resolveSubscriptionPoolProvider(target, options, auth);
             if (!provider) return startLegacy();
             const kind = kindOf(provider);
+            const ref = resolveSubscriptionPoolProviderRef(provider);
+            if (ref?.apiKey && pinnedOwnAccount(ref) && !keys.some(key => readAccountBinding(key, kind))
+              && !legacyApiKeyPoolBinding(options.sessionId, provider)) return startLegacy();
+            if (kind === 'openai' && options.providerId && keys.length
+              && !keys.some(key => readAccountBinding(key, kind))) {
+              const migrated = legacyApiKeyPoolBinding(options.sessionId, options.providerId);
+              if (migrated) {
+                await writeAccountBindings(keys, kind, migrated, options.providerId);
+                imported = migrated;
+              }
+            }
             imported ??= legacyConnectionAccount(options.providerId?.trim(), keys, target.kind, !!options.resumeSessionId);
             if (!imported && options.resumeSessionId && !keys.some((key) => readAccountBinding(key, kind))) {
               if (kind === 'openai') {
@@ -417,17 +475,31 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           for (;;) {
             let lease: SubscriptionAccountLease | null = null;
             let unregister = () => {};
+            const poolTurn: { current?: { delivered: boolean; rejection?: OpenAiGroupProbeResult } } = {};
             try {
               lease = await acquireSubscriptionAccount(poolProvider, options.model, keys, false, {
                 remote: !!options.deviceHosted, ownComputer: !!options.deviceHosted && !options.deviceHosted.guest,
-                accountId: imported, resuming: !!options.resumeSessionId,
+                accountId: imported, resuming: !!options.resumeSessionId, includeApiKeys: true,
+                ...(target.kind === 'codex' || target.kind === 'pi' || target.kind === 'claude-code' ? { agent: target.kind } : {}),
                 ...(tried.size ? { exclude: tried } : {}),
               });
               if (!lease) {
                 if (lastFailure !== undefined) throw lastFailure;
                 return startLegacy();
               }
-              unregister = registerSessionSubscriptionAccount(options.sessionId, lease.account);
+              if (lease.account) unregister = registerSessionSubscriptionAccount(options.sessionId, lease.account);
+              else if (lease.apiConnectionId) unregister = bindPoolExecutionRoute(options.sessionId, {
+                providerId: options.providerId?.trim() || poolProvider,
+                connectionId: lease.apiConnectionId,
+                assertCurrent: lease.assertDispatchable,
+                captureTurnRejection: () => {
+                  const turn = poolTurn.current;
+                  return turn && (result => {
+                    if (poolTurn.current === turn && !result.ok
+                      && (result.code === 'QUOTA_EXCEEDED' || result.code === 'AUTH_INVALID')) turn.rejection = result;
+                  });
+                },
+              });
             } catch (error) {
               lease?.release();
               if (lastFailure !== undefined) throw lastFailure;
@@ -441,11 +513,16 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
               const engineId = engineProviderId(sessionProvider, current.accountId);
               handle = await target.startSession({
                 ...engineOptions(options, current.accountId),
+                ...(current.apiConnectionId && target.kind === 'pi' && options.model?.startsWith(CHATGPT_MODEL_PREFIX)
+                  ? { model: options.model.slice(CHATGPT_MODEL_PREFIX.length) } : {}),
                 [NATIVE_SUBSCRIPTION_ACCOUNT]: current.account,
               });
               await current.bind([...keys, `native:${handle.id}`]);
               // Startup owns its slot until the first turn completes or the runtime closes.
-              return guardAccountSwitch(wrapHandle(handle, current, unregister, options.model), target, {
+              return guardAccountSwitch(wrapHandle(handle, current, unregister, options.model,
+                target.kind === 'codex' || target.kind === 'pi' || target.kind === 'claude-code' ? target.kind : undefined,
+                current.apiConnectionId || (kindOf(poolProvider) === 'openai'
+                  && apiKeyPoolMembers(accountProviderId('openai', current.accountId)).length) ? poolTurn : undefined), target, {
                 ...options,
                 // Keep the effective native source for later switch checks even if
                 // the user's implicit default changes while this runtime is alive.

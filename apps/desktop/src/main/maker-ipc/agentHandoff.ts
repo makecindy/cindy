@@ -29,6 +29,7 @@ export type DbAgentKind = 'cc' | 'codex' | 'pi';
 
 /** 构造交接文本所需的最小消息投影(content 已 JSON.parse,即 camel Message.content)。 */
 export interface HandoffSourceMessage {
+  clientId?: string;
   role: string;
   content: unknown;
   createdAt: number; // unix ms
@@ -922,6 +923,19 @@ export function buildHandoff(
   return buildAtConservativeBudget(build, Math.min(budget, tokens), tokens, opts);
 }
 
+export interface UserReplayHandoff {
+  userClientId: string;
+  text: string;
+}
+
+export function buildUserReplayHandoff(
+  source: HandoffSourceMessage[], options: BuildHandoffOptions, userClientId?: string,
+): UserReplayHandoff | undefined {
+  if (!userClientId || !source.some(entry => entry.role === 'user' && entry.clientId === userClientId)) return;
+  return { userClientId, text: buildHandoff(source.filter(entry =>
+    entry.role !== 'user' || entry.clientId !== userClientId), options).handoff };
+}
+
 function buildAtConservativeBudget(
   build: (budget: number) => { handoff: string; handoffCoverage: HandoffCoverage },
   chars: number,
@@ -1389,10 +1403,10 @@ export interface AgentHandoffPendingRegistry {
    * `consume` 都不推进它,所以同一流程内的二次写入、以及与别处 consume 的并发,
    * 都不会被误拒。
    */
-  set(sessionId: string, handoff: string, expectedGeneration?: number): void;
+  set(sessionId: string, handoff: string, expectedGeneration?: number, replay?: UserReplayHandoff): void;
   /** 取当前 clear 纪元(只由 `/clear` 推进),配合 `set` 的 `expectedGeneration` 使用。 */
   readGeneration(sessionId: string): number;
-  peek(sessionId: string): Promise<string | null>;
+  peek(sessionId: string, retryClientId?: string): Promise<string | null>;
   consume(sessionId: string): void;
   /**
    * 丢弃内存里的待注入交接并推进 clear 纪元,**允许后续 peek 回落 DB 重建**。
@@ -1456,6 +1470,7 @@ export function createAgentHandoffPendingRegistry(
   decorateCached?: (sessionId: string, handoff: string) => Promise<string>,
 ): AgentHandoffPendingRegistry {
   const pending = new Map<string, string | null>();
+  const retryHandoffs = new Map<string, { full: string; replay: UserReplayHandoff }>();
   /** 值由 queryPending 产出(已含组合结果)的 session,decorate 必须跳过它们。 */
   const composedByQuery = new Set<string>();
   /**
@@ -1478,22 +1493,30 @@ export function createAgentHandoffPendingRegistry(
   };
   const genOf = (sessionId: string): number => clearEpoch.get(sessionId) ?? 0;
   return {
-    set(sessionId, handoff, expectedGeneration) {
+    set(sessionId, handoff, expectedGeneration, replay) {
       // 调用方带了 clear 纪元就校验:它是在读历史之前取的,不符说明期间用户 /clear 过,
       // 这份交接算的是已作废的历史,丢弃而不是盖回去。纪元只由 clear 推进,所以同一
       // 流程内的二次写入、以及与别处 consume 的并发,都不会被误拒。
       if (expectedGeneration !== undefined && genOf(sessionId) !== expectedGeneration) return;
       pending.set(sessionId, handoff);
+      if (replay) retryHandoffs.set(sessionId, { full: handoff, replay });
+      else retryHandoffs.delete(sessionId);
       // 外部直接塞进来的交接没经过 queryPending 的组合,重新纳入 decorate 范围。
       composedByQuery.delete(sessionId);
     },
     readGeneration(sessionId) {
       return genOf(sessionId);
     },
-    async peek(sessionId) {
+    async peek(sessionId, retryClientId) {
+      const forInput = (value: string | null) => {
+        const variant = retryHandoffs.get(sessionId);
+        return retryClientId && variant?.replay.userClientId === retryClientId && variant.full && value?.endsWith(variant.full)
+          ? value.slice(0, -variant.full.length) + variant.replay.text
+          : value;
+      };
       if (pending.has(sessionId)) {
         const cached = pending.get(sessionId) ?? null;
-        if (cached === null || !decorateCached || composedByQuery.has(sessionId)) return cached;
+        if (cached === null || !decorateCached || composedByQuery.has(sessionId)) return forInput(cached);
         const gen = genOf(sessionId);
         try {
           const decorated = await decorateCached(sessionId, cached);
@@ -1507,7 +1530,7 @@ export function createAgentHandoffPendingRegistry(
           // 而且要靠 decorate 自身幂等才不会叠加。
           pending.set(sessionId, decorated);
           composedByQuery.add(sessionId);
-          return decorated;
+          return forInput(decorated);
         } catch {
           // 失败路径与成功路径同一套校验:decorate 抛错期间若发生 /clear,或这份交接
           // 已被别处 consume / 被新交接替换,退回 cached 都等于把过期内容注入这次发送
@@ -1516,7 +1539,7 @@ export function createAgentHandoffPendingRegistry(
           if (pending.get(sessionId) !== cached) return null;
           // 组合失败不能吞掉本来就该注入的交接——退回未组合的原值,且不写缓存,
           // 下次 peek 仍会重试组合。
-          return cached;
+          return forInput(cached);
         }
       }
       const gen = genOf(sessionId);
@@ -1534,12 +1557,14 @@ export function createAgentHandoffPendingRegistry(
       return fromDb;
     },
     consume(sessionId) {
+      retryHandoffs.delete(sessionId);
       pending.set(sessionId, null);
       composedByQuery.delete(sessionId);
       // 不推进 clear 纪元:消费的是"这一份"交接,不代表别处正在构造的新交接作废。
       onConsume?.(sessionId);
     },
     clear(sessionId) {
+      retryHandoffs.delete(sessionId);
       pending.delete(sessionId);
       composedByQuery.delete(sessionId);
       // 不要"顺手"改成 clearEpoch.delete():缺省值 0 会让 clear 前取到 0 的在途写入
@@ -1547,6 +1572,7 @@ export function createAgentHandoffPendingRegistry(
       bumpClearEpoch(sessionId);
     },
     invalidate(sessionId) {
+      retryHandoffs.delete(sessionId);
       pending.set(sessionId, null);
       composedByQuery.delete(sessionId);
       // 纪元不在这里推进,见接口声明:要等 cleared_at 落库尝试结束。

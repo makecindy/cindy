@@ -844,6 +844,26 @@ describe('pi translator', () => {
     ]);
   });
 
+  // Unit: the SDK's 401 envelope needs to survive translation for group failover.
+  it('preserves the HTTP 401 from the OpenAI SDK error at terminal settlement', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: 'OpenAI API error (401): {"code":"invalid_api_key"}',
+      },
+    }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(events.filter(event => event.type === 'error')).toEqual([
+      expect.objectContaining({ source: 'pi', data: expect.objectContaining({ errorStatus: 401, isTerminal: true }) }),
+    ]);
+  });
+
   it('classifies LiteLLM Response API in-stream errors without auto-retry markers', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

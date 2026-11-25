@@ -1411,6 +1411,9 @@
     "ENDPOINT_NOT_FOUND": "端點不存（404），請察基礎 URL",
     "CONTEXT_TOO_LONG": "上下文逾模型長度之限",
     "WIRE_INCOMPATIBLE": "端點與此協議不盡相容（有不可辨之請求欄位）",
+    "INVALID_PROBE_RESPONSE": "模型服務傳回空白或無效的回應",
+    "PROBE_NO_OUTPUT": "連線測試未能確認模型已產生內容",
+    "PROBE_REFUSED": "模型服務拒絕或攔截了測試請求",
     "UPSTREAM_ERROR": "上游服務謬誤（5xx），請稍後再試",
     "UPSTREAM_UNREACHABLE": "不能連端點，請察網路與基礎 URL",
     "TIMEOUT": "連線逾時，請察網路與基礎 URL",
@@ -22096,6 +22099,19 @@
       "description": "重覽識 Cindy、自舊電腦遷移、連模型與納已有之物的引導。",
       "open": "開啟引導"
     }
+  },
+  "openAiAccountGroup": {
+    "strategy": "帳號組策略",
+    "leastHint": "優先分配給執行任務最少的連線",
+    "quotaHint": "能讀取訂閱用量時，會先按用量篩選連線，再按組策略分配。",
+    "removeDescription": "此連線將不再接收組內的新任務。正在執行的任務仍留在原連線。",
+    "mergeDescription": "從 {{target}} 新建的任務可以使用這兩個供應商。登入、金鑰和既有任務保留在原處。建立調度關係前，Cindy 會測試 {{apiKey}} 的 API Key。",
+    "modelUnavailable": "此連線無法呼叫本次自動選擇的模型。再次測試可嘗試其他候選。",
+    "noTestModel": "目前的連線沒有可用於測試的模型。請確認 OpenAI 專案可呼叫哪些模型，再重新整理或更新此連線的模型清單。",
+    "billingPaused": "餘款不足或已達計費之限，暫停組內分派。",
+    "title": "帳號組",
+    "testPassed": "測試成功",
+    "refresh": "更新額度"
   },
   "subscriptionAccounts": {
     "placement": {

@@ -1442,6 +1442,9 @@
     "ENDPOINT_NOT_FOUND": "Endpoint não encontrado (404). Verifique o URL base",
     "CONTEXT_TOO_LONG": "O contexto excede o limite de comprimento do modelo",
     "WIRE_INCOMPATIBLE": "O endpoint não é totalmente compatível com este protocolo (campos de pedido não reconhecidos)",
+    "INVALID_PROBE_RESPONSE": "O serviço do modelo devolveu uma resposta vazia ou inválida",
+    "PROBE_NO_OUTPUT": "O teste de ligação não conseguiu confirmar que o modelo gerou conteúdo",
+    "PROBE_REFUSED": "O serviço do modelo recusou ou bloqueou o pedido de teste",
     "UPSTREAM_ERROR": "Erro do servidor a montante (5xx). Tente novamente mais tarde",
     "UPSTREAM_UNREACHABLE": "Não é possível contactar o endpoint. Verifique a rede e o URL base",
     "TIMEOUT": "O tempo de ligação esgotou-se. Verifique a rede e o URL base",
@@ -22396,6 +22399,19 @@
     "rendered": "Ver documento",
     "wrap": "Moldar linhas",
     "lineNumbers": "Números de linha"
+  },
+  "openAiAccountGroup": {
+    "strategy": "Estratégia do grupo de contas",
+    "leastHint": "Dar prioridade à ligação com menos tarefas em execução",
+    "quotaHint": "Quando há dados de utilização das subscrições, a Cindy filtra as ligações pela utilização antes de aplicar a estratégia do grupo.",
+    "removeDescription": "Esta ligação deixará de receber novas tarefas do grupo. As tarefas em execução permanecerão nesta ligação.",
+    "mergeDescription": "As novas tarefas iniciadas em {{target}} podem usar os dois fornecedores. As sessões iniciadas, chaves e tarefas existentes mantêm-se. A Cindy testará a chave de API de {{apiKey}} antes de ligar os fornecedores.",
+    "modelUnavailable": "Esta ligação não pode usar o modelo escolhido para o teste. Um novo teste pode experimentar outro modelo.",
+    "noTestModel": "Nenhum modelo configurado está disponível para teste. Verifique os modelos permitidos no seu projeto da OpenAI e atualize ou edite a lista de modelos desta ligação.",
+    "billingPaused": "Atribuição em pausa por saldo insuficiente ou limite de faturação.",
+    "title": "Grupo de contas",
+    "testPassed": "Teste concluído com sucesso",
+    "refresh": "Atualizar quota"
   },
   "subscriptionAccounts": {
     "placement": {

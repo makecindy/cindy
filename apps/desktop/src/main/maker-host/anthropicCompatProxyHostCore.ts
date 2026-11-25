@@ -1291,6 +1291,23 @@ async function startAnthropicCompatProxy(generation: number): Promise<void> {
           resolveUserProviderName: (providerId) =>
             getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,
         }),
+        createProviderUpstreamErrorObserver({
+          agent: 'pi',
+          healthOnly: true,
+          resolveUserSessionId: headers => {
+            const sessionId = headerValue(headers, 'x-cindy-pi-session-id');
+            const token = headerValue(headers, 'x-cindy-pi-session-token');
+            return sessionId && authenticatePiProxySession(sessionId, token)
+              && !isPiProxySubagentRoute(sessionId, token) ? sessionId : null;
+          },
+          // Only accept a provider pinned by the same authenticated Pi runtime.
+          resolveUserProviderId: (headers) => {
+            const sessionId = headerValue(headers, 'x-cindy-pi-session-id');
+            const token = headerValue(headers, 'x-cindy-pi-session-token');
+            const providerId = sessionId ? getPiProxySessionProvider(sessionId, token) : null;
+            return sessionId && providerId ? getUserProviderIdForSession(sessionId, providerId) : null;
+          },
+        }),
       ),
       transformRequest: [
         // Pi 的通用 openai-responses adapter 不发送 text.verbosity；只对 Cindy

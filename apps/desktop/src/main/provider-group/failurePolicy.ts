@@ -299,9 +299,10 @@ export function decideProviderGroupFailure(
   // Explicit upstream account denial is not a broken connection. Preserve the
   // existing authorized account fallback instead of retrying that source.
   if (reason === 'account_access_denied') return switchTo('auth', null);
+  if (isBillingDepletionError(signals)) return switchTo('usage-limit', null);
   // 过载先于用量上限判(529 / serverOverloaded 也会被用量判定认作限流)：过载只短冷却，用量上限按重置时刻冷却。
   if (classifyTurnOverload(signals)) return switchTo('overload', null);
-  if (isBillingDepletionError(signals) || classifyTurnUsageLimit(signals)) return switchTo('usage-limit', null);
+  if (classifyTurnUsageLimit(signals)) return switchTo('usage-limit', null);
   if (
     signals.sdkError === 'authentication_failed'
     || signals.codexErrorInfo === 'unauthorized'

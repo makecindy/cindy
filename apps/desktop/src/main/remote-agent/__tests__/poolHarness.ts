@@ -39,7 +39,7 @@ export function sharedAccountSendTransaction(ports: Pick<MakerSendTransactionDep
   'getSession' | 'captureSharedReconnectRecovery' | 'bootstrapSession' | 'peekPendingHandoff'
   | 'consumePendingHandoff' | 'createDbMessage' | 'reconcileCreateOptsWithDb' | 'readScheduledPermissions'>
   & Partial<Pick<MakerSendTransactionDeps, 'readAutoReviewHistory' | 'onSharedReconnectClaimed'
-    | 'onSharedReconnectFailed' | 'onSharedReconnectFinished'>>) {
+    | 'onSharedReconnectFailed' | 'onSharedReconnectFinished' | 'prepareUnhealthySession'>>) {
   const noop = () => {};
   return createMakerSendTransaction({
     getResolvedMainLocale: () => null,

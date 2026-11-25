@@ -20,6 +20,7 @@
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readPool } from './store.js';
 import { accountProviderId, providerAccounts } from './placement.js';
+import { apiKeyPoolAllowsAutoSwitch, apiKeyPoolMembers, hasApiKeyPoolWithMultipleMembers } from './apiKeyMembers.js';
 import {
   acquireSubscriptionAccount,
   readRemoteSubscriptionAccountSwitch,
@@ -68,7 +69,9 @@ function boundAccount(sessionId: string, row: AccountFailoverSession): BoundAcco
   const task = readTaskPoolAccount(sessionId, row);
   if (!task) return null;
   const pool = readPool(task.provider);
-  if (!pool || (pool.disconnected && task.providerId === task.provider) || providerAccounts(task.provider, pool.accounts, task.providerId).length < 2) return null;
+  const keys = task.provider === 'openai' ? apiKeyPoolMembers(task.providerId).length : 0;
+  if (!pool || (keys && !apiKeyPoolAllowsAutoSwitch(task.providerId)) || (pool.disconnected && task.providerId === task.provider)
+    || providerAccounts(task.provider, pool.accounts, task.providerId).length + keys < 2) return null;
   return { ...task, model: row.model ?? undefined };
 }
 
@@ -78,6 +81,7 @@ async function routeAdmits(bound: BoundAccount): Promise<boolean> {
 }
 
 function hasMultiAccountPool(): boolean {
+  if (hasApiKeyPoolWithMultipleMembers()) return true;
   return (['anthropic', 'openai'] as const).some((provider) => {
     const pool = readPool(provider);
     if (!pool) return false;
@@ -85,6 +89,7 @@ function hasMultiAccountPool(): boolean {
     for (const account of pool.accounts) {
       const owner = accountProviderId(provider, account.id);
       if (pool.disconnected && owner === provider) continue;
+      if (provider === 'openai' && apiKeyPoolMembers(owner).length) return true;
       const count = (counts.get(owner) ?? 0) + 1;
       if (count > 1) return true;
       counts.set(owner, count);
@@ -115,11 +120,12 @@ export async function readSubscriptionAccountSwitch(
       : null;
   }
   const bound = local ? boundAccount(sessionId, row) : null;
-  if (!bound || !readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model)) return null;
+  const agent = row.agentKind === 'pi' ? 'pi' : 'codex';
+  if (!bound || !readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model, agent)) return null;
   if (!(await routeAdmits(bound))) return null;
   try {
     await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, {
-      exclude: new Set([bound.accountId]), dryRun: true,
+      includeApiKeys: true, agent, exclude: new Set([bound.accountId]), dryRun: true,
     });
     return `local#${bound.provider}:${bound.accountId}`;
   } catch {
@@ -189,16 +195,17 @@ export async function prepareSubscriptionAccountFailover(
   if (!local) return false;
   const bound = row && boundAccount(sessionId, row);
   if (!bound || deps.isRunning(sessionId)) return false;
-  if (!readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model)) return false;
+  const agent = row?.agentKind === 'pi' ? 'pi' : 'codex';
+  if (!readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model, agent)) return false;
   if (bound.previousProviderId && !deps.moveRoute) return false;
   if (!(await routeAdmits(bound))) return false;
   assertOwner();
   // Reserve the replacement with the same pool policy, limits and quota order as a new task.
   // None left (all blocked or full): keep the original account and let the send report it.
-  let lease: Awaited<ReturnType<typeof acquireSubscriptionAccount>>;
+  let lease: import('./runtime.js').SubscriptionAccountLease | null;
   try {
     lease = await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, {
-      exclude: new Set([bound.accountId]),
+      includeApiKeys: true, agent, exclude: new Set([bound.accountId]),
     });
   } catch {
     return false;

@@ -4625,6 +4625,7 @@ assertRouteCurrent();
      */
     let overloadRetry: {
       retry: (continueHistory?: boolean) => Promise<void>;
+      inputAcceptedInNativeHistory: boolean;
       /**
        * 同一 logical send 已消耗的外层重放次数，所有 provider failure policy 共享。
        * policy 切换不重置：否则 capacity 4 次 + terminal-rate-limit 2 次会把同一条
@@ -12584,7 +12585,11 @@ assertRouteCurrent();
       state.timer = setTimeout(() => {
         state.timer = null;
         if (closed || overloadRetry !== state) return;
-        void state.retry(continueSummaryHistory).catch((error) => {
+        // Codex has already committed this input to the thread. Starting the
+        // next turn with the same input would append it to the model history again.
+        const continueHistory = continueSummaryHistory
+          || (policy.kind === 'terminal-rate-limit' && state.inputAcceptedInNativeHistory);
+        void state.retry(continueHistory).catch((error) => {
           // 取消之后 RPC 才 reject：Stop / close / 新 send 都已经各自收口过这一轮
           // （abort 与新 send 会把 overloadRetry 置 null，close 会置 closed）。
           // 此时再报一次 terminal error + Done 会让 UI 二次收口，并把用户主动停止
@@ -13347,6 +13352,10 @@ assertRouteCurrent();
           return;
         }
         if (collabTerminalKey) handledCollabTerminalItemIds.add(collabTerminalKey);
+        if (params.item.type === 'userMessage' && params.turnId === currentTurnId && overloadRetry
+          && turnOriginByTurnId.get(params.turnId)?.sendGen === overloadRetry.sendGen) {
+          overloadRetry.inputAcceptedInNativeHistory = true;
+        }
         if (params.item.type === 'contextCompaction') {
           compactingTurnIds.delete(params.turnId);
           if (ownsManualCompact(params.turnId)) manualCompact!.boundarySeen = true;
@@ -14457,6 +14466,7 @@ assertRouteCurrent();
         let continueNativeHistory = false;
         overloadRetry = {
           attempt: 0,
+          inputAcceptedInNativeHistory: false,
           automaticRecoveryAttempted: false,
           pendingAutomaticRecovery: null,
           timer: null,

@@ -49,6 +49,9 @@ import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 import {
   buildHandoff,
+  buildUserReplayHandoff,
+  type BuildHandoffOptions,
+  type UserReplayHandoff,
   type HandoffCoverage,
   type DbAgentKind,
   type HandoffSourceMessage,
@@ -402,7 +405,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
    * 历史到写回之间有大量异步工作,期间若发生 /clear,这份按 clear 前历史算出的交接
    * 必须被丢弃,而不是盖掉 clear 立的墓碑。
    */
-  setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
+  setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number, replay?: UserReplayHandoff): void;
   /** 读交接注册表的当前代次(在读历史之前取一次)。 */
   readPendingHandoffGeneration?(sessionId: string): number;
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
@@ -645,6 +648,7 @@ export async function relocateForFreshStart(
     /** 原来那个位置(调用方可能已把任务记录改到了目标位置)；不给 = 按任务记录。 */
     from?: { agentDeviceId: string | null; providerId: string | null };
     sharedRelocation?: boolean;
+    retryClientId?: string;
     /** Publish the shared handoff only after the replacement runtime is ready. */
     deferSharedCommit?: true;
     assertCurrent?: () => void;
@@ -659,7 +663,8 @@ export async function relocateForFreshStart(
   const model = row.model;
   const dbKind = normalizeDbAgentKind(row.agentKind);
   const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
-  const full = buildHandoff(await deps.listMessagesForHandoff(sessionId), {
+  const source = await deps.listMessagesForHandoff(sessionId);
+  const handoffOptions: BuildHandoffOptions = {
     fromLabel: `${agentEngineLabel(dbKind)} (on a different computer)`,
     toLabel: agentEngineLabel(dbKind),
     sessionId,
@@ -668,7 +673,8 @@ export async function relocateForFreshStart(
       sessionId, agent: dbToMakerAgentKind(dbKind), model, providerId, agentDeviceId,
     }),
     ...(await switchCompanionRecall(deps, sessionId)),
-  });
+  };
+  const full = buildHandoff(source, handoffOptions);
   const fromAgentDeviceId = params.from ? params.from.agentDeviceId : row.agentDeviceId ?? null;
   const fromProviderId = params.from ? params.from.providerId : row.providerId;
   const assertCurrent = () => {
@@ -743,7 +749,9 @@ export async function relocateForFreshStart(
       });
     }
     if (deferred) assertCurrent();
-    deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+    const retry = nativeId ? undefined : buildUserReplayHandoff(source, handoffOptions, params.retryClientId);
+    if (retry) deps.setPendingHandoff(sessionId, handoff, handoffGeneration, retry);
+    else deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
     deps.log.info('agent-switch: relocated for a fresh start', {
       sessionId,
       handoffChars: handoff.length,
@@ -843,6 +851,7 @@ export async function performSessionAgentSwitch(
      * 只在 applyNow 且 Agent 在另一台电脑上时生效。
      */
     forceRelocation?: boolean;
+    retryClientId?: string;
     /**
      * 仅限 main 内部(不接受 IPC 传入)：供应商组为这个任务换电脑——引擎与模型不变、只换 Agent 所在位置
      * (docs/product-rules/provider-groups.md §6.1)。只在 applyNow 时生效。
@@ -1524,7 +1533,10 @@ export async function performSessionAgentSwitch(
         err: err instanceof Error ? err.message : String(err),
       });
     }
-    deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+    const retry = !relocatedNativeId && !parked
+      ? buildUserReplayHandoff(fullSourceMessages, handoffOptsBase, params.retryClientId) : undefined;
+    if (retry) deps.setPendingHandoff(sessionId, handoff, handoffGeneration, retry);
+    else deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
 
     let engineReady = true;
     let bootstrapError: string | undefined;

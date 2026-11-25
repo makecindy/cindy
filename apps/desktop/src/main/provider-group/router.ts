@@ -62,6 +62,7 @@ export const PROVIDER_GROUP_PICK_QUICK_MS = 3_000;
 
 export interface ProviderGroupRouterDeps {
   directory: ProviderGroupDirectory;
+  prepareGroup?(providerId: string): Promise<void>;
   /** 仅详情页按需读取；分配与普通状态查询不探测远端能力。 */
   readCaps?(member: ProviderGroupMember): Promise<RemoteAgentCaps>;
   /** Owner-only, model-specific confirmation from a configured multi-account pool. */
@@ -334,8 +335,12 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
 
   return {
     async pick(input) {
+      await deps.prepareGroup?.(input.providerId);
       const config = deps.readGroup(input.providerId);
       if (!config) return { kind: 'none' };
+      // An old private list can only be imported into the executing computer's
+      // account pool. Never dispatch it as a second set of computer routes.
+      if (config.localAccountIds?.length) return { kind: 'unavailable', resolved: [] };
       // Continuity snapshots keep new-task discovery available, but cannot
       // justify moving an existing task just to balance cached quota/load.
       const offers = usableFor(input);

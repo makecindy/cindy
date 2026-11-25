@@ -94,6 +94,10 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
     return { action: 'login', providerId, accountId, loginKey };
   if (value.action === 'remove' && accountIdValid(accountId))
     return { action: 'remove', providerId, accountId };
+  if (value.action === 'reorder' && Array.isArray(value.accountIds) && value.accountIds.length > 1
+    && value.accountIds.length <= 512 && value.accountIds.every(accountIdValid)
+    && new Set(value.accountIds).size === value.accountIds.length)
+    return { action: 'reorder', providerId, accountIds: value.accountIds };
   if (value.action === 'configure') {
     if (
       value.strategy !== undefined &&

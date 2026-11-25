@@ -18,6 +18,8 @@ vi.mock('../runtime.js', () => ({
 }));
 vi.mock('../store.js', () => ({ readProviderGroup: vi.fn(), writeProviderGroup: vi.fn(), listProviderGroups: vi.fn() }));
 vi.mock('../bindings.desktop.js', () => ({ pruneProviderGroupBindings: vi.fn() }));
+vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: vi.fn() }));
+vi.mock('../../subscription-accounts/runtime.js', () => ({ refreshSubscriptionPool: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: vi.fn(() => 'owner-a'),
   isAppSessionBoundaryPending: vi.fn(() => false),
@@ -71,6 +73,83 @@ const MINI = {
 const SHARED = {
   ...MINI, key: 'share:s1:anthropic', kind: 'share' as const, agentDeviceId: 'share:s1', providerId: 'anthropic',
 };
+
+// Unit through the local command handler. Existing fixtures only add remote
+// computers. A model refusal must never commit a scheduling connection.
+it('admits distinct OpenAI connections from either anchor and probes only API keys', async () => {
+  const model = { id: 'gpt-4.1-mini', name: 'mini', contextWindow: 100_000, efforts: [], defaultEffort: null };
+  const subscription = (id: string) => ({ id, name: id, source: 'builtin', auth: { method: 'oauth' },
+    subscriptionPool: 'openai', connected: true, models: {}, routing: {} }) as ProviderView;
+  const api = (id: string) => ({ id, name: id, source: 'user', auth: { method: 'apiKey' }, agents: ['codex'],
+    connected: true, models: { codex: [model] }, routing: { codex: {
+      upstream: 'https://api.openai.com/v1', authStrategy: 'api-key-header', wireProtocol: 'openai-responses',
+    } } }) as ProviderView;
+  const records = [subscription('openai'), subscription('other-subscription'), api('work-key'), api('lab-key'),
+    { ...api('gateway'), routing: { codex: { upstream: 'https://proxy.example/v1', authStrategy: 'api-key-header' } } } as ProviderView];
+  const d = deps([]);
+  const groups: Record<string, ProviderGroupConfig> = {};
+  d.listLocalAccounts = vi.fn(async () => records);
+  d.listGroups = () => groups;
+  d.readGroup = id => groups[id] ?? null;
+  d.writeGroup.mockImplementation(async (id: string, group: ProviderGroupConfig) => (groups[id] = group));
+  const probe = vi.fn<NonNullable<ProviderGroupCommandDeps['probeAccount']>>().mockResolvedValueOnce({
+    ok: false, code: 'MODEL_NOT_FOUND',
+  }).mockResolvedValue({ ok: true });
+  d.probeAccount = probe;
+  for (const anchor of ['openai', 'work-key']) {
+    expect(await executeProviderGroupCommand(d, { action: 'account-list', providerId: anchor })).toEqual(
+      records.slice(0, 4).map(record => expect.objectContaining({ id: record.id, included: record.id === anchor })),
+    );
+  }
+  const merge = (providerId: string, targetProviderId: string) =>
+    executeProviderGroupCommand(d, { action: 'account-merge', providerId, targetProviderId });
+  await expect(merge('openai', 'other-subscription')).rejects.toThrow('PRECONDITION_FAILED');
+  await expect(merge('openai', 'lab-key')).rejects.toThrow('PRECONDITION_FAILED');
+  expect(probe).not.toHaveBeenCalled();
+  await expect(merge('work-key', 'openai')).resolves.toEqual({ ok: false, code: 'MODEL_NOT_FOUND' });
+  expect(groups).toEqual({});
+  await expect(merge('work-key', 'openai')).resolves.toEqual({ ok: true });
+  await expect(merge('other-subscription', 'lab-key')).resolves.toEqual({ ok: true });
+  await expect(merge('work-key', 'openai')).rejects.toThrow('PRECONDITION_FAILED');
+  await expect(merge('openai', 'work-key')).rejects.toThrow('PRECONDITION_FAILED');
+  expect(groups.openai?.localAccountIds).toEqual(['work-key']);
+  expect(groups['lab-key']?.localAccountIds).toEqual(['other-subscription']);
+  for (const [providerId, targetId] of [['openai', 'openai'], ['work-key', 'openai'],
+    ['lab-key', 'lab-key'], ['other-subscription', 'lab-key']]) {
+    await expect(executeProviderGroupCommand(d, { action: 'account-detail', providerId })).resolves.toMatchObject({
+      group: { providerId: targetId, config: groups[targetId], members: [expect.any(Object), expect.any(Object)] },
+    });
+  }
+  expect(() => parseProviderManagementRequest({ action: 'manage-group', command: {
+    action: 'account-detail', providerId: 'work-key',
+  } })).toThrow();
+  for (const [providerId, accountId] of [['openai', 'work-key'], ['lab-key', 'other-subscription']]) {
+    const snapshot = groups[providerId]!;
+    const allocate = (edit: unknown) => {
+      const command = parseProviderGroupCommand({ action: 'account-allocation', providerId, expectedConfig: groups[providerId], edit });
+      if (command.action !== 'account-allocation') throw new Error('Unexpected allocation command');
+      return executeProviderGroupCommand(d, command);
+    };
+    await expect(allocate({ accountId, weight: 3 })).resolves.toMatchObject({ localAccountSettings: { weights: { [accountId]: 3 } } });
+    await expect(allocate({ accountId: providerId, weight: 2 })).resolves.toMatchObject({
+      localAccountSettings: { weights: { [accountId]: 3, [providerId]: 2 } },
+    });
+    await expect(allocate({ accountId, paused: true })).resolves.toMatchObject({ localAccountSettings: { paused: [accountId] } });
+    await expect(allocate({ accountId: providerId, limit: 2 })).resolves.toMatchObject({
+      localAccountSettings: { limits: { [providerId]: 2 }, paused: [accountId] },
+    });
+    await expect(allocate({ order: [accountId, providerId] })).resolves.toMatchObject({
+      localAccountSettings: { order: [accountId, providerId] },
+    });
+    await expect(allocate({ strategy: 'weight' })).resolves.toMatchObject({ strategy: 'weight' });
+    await expect(allocate({ accountId: 'unrelated', weight: 10 })).rejects.toThrow('PRECONDITION_FAILED');
+    expect(d.writeGroup).toHaveBeenCalledWith(providerId, expect.anything(), snapshot);
+    expect(() => parseProviderManagementRequest({ action: 'manage-group', command: {
+      action: 'account-allocation', providerId, expectedConfig: snapshot, edit: { strategy: 'round' },
+    } })).toThrow();
+  }
+  expect(probe.mock.calls).toEqual([['work-key'], ['work-key'], ['lab-key']]);
+});
 
 afterEach(() => vi.mocked(isAppSessionBoundaryPending).mockReturnValue(false));
 

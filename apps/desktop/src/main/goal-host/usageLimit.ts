@@ -86,6 +86,7 @@ export function readTurnUsageResetAt(
  */
 export function classifyTurnOverload(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
+  if (isBillingDepletionError(data)) return false;
   const d = data as { message?: unknown; errorStatus?: unknown; codexErrorInfo?: unknown };
   // 结构化 tag 优先(与 maker-core 的 parseOverloadError 同序): Codex 的过载文案是
   // codex 二进制里硬编码的用户可见提示语, 随版本漂移; 只靠文案判定会在某次升级后

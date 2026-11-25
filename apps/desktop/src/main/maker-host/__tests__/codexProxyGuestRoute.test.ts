@@ -38,11 +38,12 @@ import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 import { getActiveCatalog, getActiveCatalogWithCodexModels, setCustomProviders, setDiscoveredCodexModels } from '../active-catalog';
 import { createCodexGuestRoutingGuard, createModelRoutingTransform, registerComposed, registerReviewerRouteContext, unregister } from '../codex-proxy-host.desktop';
 import { CODEX_CUSTOM_PROVIDER_ROUTE_ROOT, deriveCodexCustomProviderRoutes } from '../codex-custom-provider-route';
-import { captureGuestRequestUsage, registerGuestProviderRoute, resetGuestProviderRoutesForTest, setGuestProviderModelCatalogReader } from '../guest-provider-route-store';
+import { captureGuestRequestUsage, guestProviderModelAllowed, registerGuestProviderRoute, resetGuestProviderRoutesForTest, setGuestProviderModelCatalogReader } from '../guest-provider-route-store';
 import { bindHostedSessionProvider, clearAllSessionProviders, setSessionProvider } from '../session-provider-store';
 import { setCustomProviderKeyReader } from '../provider-route';
 import { createUsagePricingObserver } from '../model-usage-pricing';
 import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
+import { bindPoolExecutionRoute } from '../../subscription-accounts/session';
 
 function ctx(url: string, headers: Record<string, string> = {}, method = 'POST') {
   return { reqId: 1, method, url, headers } as never;
@@ -58,6 +59,27 @@ async function statusOf(input: RoutingDecision | null | undefined | Promise<Rout
 }
 
 describe('Codex proxy guard for shared-provider guests', () => {
+  // Unit: a pool member on a different connection still uses the original
+  // share's model grant. Single-provider guard tests cannot detect this crossing.
+  it('keeps a pooled connection within its original live grant', async () => {
+    let current = true;
+    const guest = registerGuestProviderRoute('pooled-guest', 'openai', model => model === 'fixture-model');
+    const release = bindPoolExecutionRoute('pooled-guest', { providerId: 'openai', connectionId: 'official-key',
+      captureTurnRejection: () => undefined,
+      assertCurrent() { if (!current) throw new Error('retired credential'); } });
+    const guard = createCodexGuestRoutingGuard('official-key', 'env-key', 'pooled-guest');
+    try {
+      expect(await guestProviderModelAllowed('official-key', 'fixture-model', 'pooled-guest')).toBe(true);
+      expect(await guestProviderModelAllowed('official-key', 'foreign-model', 'pooled-guest')).toBe(false);
+      expect(await statusOf(guard({ model: 'fixture-model' }, ctx('/v1/responses')))).toBe(403);
+      current = false;
+      expect(await guestProviderModelAllowed('official-key', 'fixture-model', 'pooled-guest')).toBe(false);
+    } finally {
+      release();
+      guest.release();
+    }
+  });
+
   // Unit: follow the real guest guard's HTTP refusal into the common group
   // policy. Earlier tests asserted only 403, missing the automatic relocation.
   it('keeps a rejected request outside the shared provider out of group failover', async () => {

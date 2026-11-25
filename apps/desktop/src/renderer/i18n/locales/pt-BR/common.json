@@ -1442,6 +1442,9 @@
     "ENDPOINT_NOT_FOUND": "Endpoint não encontrado (404). Verifique a URL base",
     "CONTEXT_TOO_LONG": "O contexto excede o limite de comprimento do modelo",
     "WIRE_INCOMPATIBLE": "O endpoint não é totalmente compatível com este protocolo (campos de requisição não reconhecidos)",
+    "INVALID_PROBE_RESPONSE": "O serviço do modelo retornou uma resposta vazia ou inválida",
+    "PROBE_NO_OUTPUT": "O teste de conexão não conseguiu confirmar que o modelo gerou conteúdo",
+    "PROBE_REFUSED": "O serviço do modelo recusou ou bloqueou a solicitação de teste",
     "UPSTREAM_ERROR": "Erro no servidor upstream (5xx). Tente novamente mais tarde",
     "UPSTREAM_UNREACHABLE": "Não foi possível acessar o endpoint. Verifique sua rede e a URL base",
     "TIMEOUT": "A conexão expirou. Verifique sua rede e a URL base",
@@ -22397,6 +22400,19 @@
     "rendered": "Ver documento",
     "wrap": "Quebra de linha",
     "lineNumbers": "Números de linha"
+  },
+  "openAiAccountGroup": {
+    "strategy": "Estratégia do grupo de contas",
+    "leastHint": "Priorizar a conexão com menos tarefas em execução",
+    "quotaHint": "Quando há dados de uso das assinaturas, Cindy filtra as conexões pelo uso antes de aplicar a estratégia do grupo.",
+    "removeDescription": "Esta conexão deixará de receber novas tarefas do grupo. As tarefas em execução continuarão nesta conexão.",
+    "mergeDescription": "Novas tarefas iniciadas em {{target}} podem usar os dois fornecedores. Logins, chaves e tarefas existentes permanecem como estão. Cindy testará a chave de API de {{apiKey}} antes de vincular os fornecedores.",
+    "modelUnavailable": "Esta conexão não pode usar o modelo escolhido para o teste. Teste novamente para tentar outro candidato.",
+    "noTestModel": "Nenhum modelo configurado está disponível para teste. Confira quais modelos seu projeto da OpenAI pode usar e atualize ou edite a lista de modelos desta conexão.",
+    "billingPaused": "Atribuição pausada por saldo insuficiente ou limite de cobrança.",
+    "title": "Grupo de contas",
+    "testPassed": "Teste concluído com sucesso",
+    "refresh": "Atualizar cota"
   },
   "subscriptionAccounts": {
     "placement": {
