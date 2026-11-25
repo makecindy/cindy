@@ -250,6 +250,13 @@ describe('side chat panel lifecycle', () => {
       creationFailed: false,
     });
 
+    // patchTabState paints the new tab metadata before the write is accepted.
+    rerender(<SideChatTabBody state={{ sessionId: 'child', deviceId }} ctx={ctx} active />);
+    expect(screen.getByTestId('editor')).toBe(initialEditor);
+    expect(JSON.parse(initialEditor.textContent!)).toMatchObject({
+      sessionIdProp: draftKey, awaitingSessionCreation: true,
+    });
+
     await act(async () => {
       resolvePendingSideChat('tab', {
         id: 'child', parentSessionId: 'parent', source: 'side-chat', status: 'active', model: 'forked-model',

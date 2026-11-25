@@ -62,9 +62,10 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     subscribePendingSideChat,
     () => getPendingSideChat(ctx.tabId),
   );
-  const childId = state.sessionId ?? pending?.childSession?.id ?? null;
-  const awaitingSessionCreation = !childId && pending?.status === 'creating';
-  const creationFailed = !childId && pending?.status === 'failed';
+  const childId = pending ? (pending.status === 'ready' ? pending.childSession?.id ?? null : null) : state.sessionId;
+  const awaitingSessionCreation = pending?.status === 'creating';
+  const creationFailed = pending?.status === 'failed';
+  const closeChildId = childId ?? (creationFailed ? pending?.childSession?.id : undefined);
   const effectiveSessionId = childId ?? pending?.draftKey ?? null;
   const effectiveDraftKey = pending?.draftKey;
   const pendingChildSession = pending?.childSession?.id === childId ? pending.childSession : null;
@@ -186,6 +187,7 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     return () => { disposed = true; off(); };
   }, [active, childId, ctx.sessionId, ctx.tabId, readChild, retry, state.deviceId, t]);
   const close = useCallback(() => {
+    const childId = closeChildId;
     if (!childId) {
       const currentPending = cancelPendingSideChat(ctx.tabId);
       if (currentPending) {
@@ -257,10 +259,10 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     pendingClose.current = request;
     void request.then(() => { if (pendingClose.current === request) pendingClose.current = null; });
     return request;
-  }, [childId, confirm, ctx.sessionId, ctx.tabId, readChild, state.deviceId, t]);
+  }, [closeChildId, confirm, ctx.sessionId, ctx.tabId, readChild, state.deviceId, t]);
   useEffect(() => ctx.setCloseInterceptor(close), [ctx, close]);
   const handlePendingSendStateChange = useCallback((queued: boolean) => {
-    setPendingSideChatQueuedSend(ctx.tabId, queued);
+    return setPendingSideChatQueuedSend(ctx.tabId, queued);
   }, [ctx.tabId]);
   const handlePendingDraftSettled = useCallback(() => {
     if (!state.sessionId) return;

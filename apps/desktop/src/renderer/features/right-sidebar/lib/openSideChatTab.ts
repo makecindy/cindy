@@ -114,15 +114,17 @@ function settlePendingSideChatCreation(
 ): void {
   void creationPromise.then(
     async (child) => {
-      if (!isDataOwnerGenerationCurrent(owner)) return;
-      const pending = getPendingSideChat(tabId);
-      const tabStillOpen = getBucket(sessionId).tabs.some(tab => tab.id === tabId);
-      if (!pending || pending.status === 'cancelled' || !tabStillOpen) {
+      const tabAcceptsChild = () => {
+        const pending = getPendingSideChat(tabId);
+        return pending?.status === 'creating' && getBucket(sessionId).tabs.some(tab => tab.id === tabId);
+      };
+      const discardUnclaimedChild = async () => {
         removePendingSideChat(tabId);
         await deleteOrphanSideChat(child.id, deviceId, owner);
         flushDeferredRestore(sessionId, owner);
-        return;
-      }
+      };
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      if (!tabAcceptsChild()) return discardUnclaimedChild();
       if (deviceId) {
         remoteProjectsStore.pinSessionOrigin(deviceId, child.id);
         remoteProjectsStore.mergeDeviceSessions(deviceId, remoteProjectsStore.getDeviceName(deviceId) ?? '', [child]);
@@ -135,27 +137,25 @@ function settlePendingSideChatCreation(
         await closeTab(sessionId, duplicate.id, { skipBeforeClose: true }).catch(() => undefined);
       }
       if (!isDataOwnerGenerationCurrent(owner)) return;
-      if (getPendingSideChat(tabId)?.status === 'cancelled'
-        || !getBucket(sessionId).tabs.some(tab => tab.id === tabId)) {
-        removePendingSideChat(tabId);
-        await deleteOrphanSideChat(child.id, deviceId, owner);
-        flushDeferredRestore(sessionId, owner);
-        return;
-      }
-      resolvePendingSideChat(tabId, child);
+      if (!tabAcceptsChild()) return discardUnclaimedChild();
+      let bindFailure: { error: unknown } | undefined;
       try {
         await patchTabState(sessionId, tabId, () => ({ sessionId: child.id, deviceId }));
       } catch (error) {
+        bindFailure = { error };
+      }
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      if (!tabAcceptsChild()) return discardUnclaimedChild();
+      if (bindFailure) {
+        const { error } = bindFailure;
         log.warn('side chat tab bind failed', { sessionId, tabId, childId: child.id, error });
         const message = formatSideChatOpenError(error);
-        // The child is already a usable side-chat session. Keep it attached to
-        // the pending record so the user can retry only the tab-state bind
-        // without losing a draft or deleting the branch they may have used.
-        failPendingSideChat(tabId, message);
-        if (isDataOwnerGenerationCurrent(owner)) toast.error(message);
-      } finally {
-        flushDeferredRestore(sessionId, owner);
+        failPendingSideChat(tabId, message, child);
+        toast.error(message);
+      } else {
+        resolvePendingSideChat(tabId, child);
       }
+      flushDeferredRestore(sessionId, owner);
     },
     async (error) => {
       if (!isDataOwnerGenerationCurrent(owner)) return;
@@ -188,21 +188,9 @@ export function retryPendingSideChatCreation(parentSessionId: string, tabId: str
   if (!pending || pending.parentSessionId !== parentSessionId || pending.status !== 'failed') return false;
   const owner = getDataOwnerGeneration();
   markPendingSideChatRetrying(tabId);
-  if (pending.childSession) {
-    const child = pending.childSession;
-    void patchTabState(parentSessionId, tabId, () => ({
-      sessionId: child.id,
-      deviceId: pending.deviceId,
-    })).then(() => {
-      if (!isDataOwnerGenerationCurrent(owner)) return;
-      resolvePendingSideChat(tabId, child);
-    }).catch(error => {
-      if (!isDataOwnerGenerationCurrent(owner)) return;
-      failPendingSideChat(tabId, formatSideChatOpenError(error));
-    });
-    return true;
-  }
-  const creationPromise = makerApiForSticky(parentSessionId).createSideChat(parentSessionId);
+  const creationPromise = pending.childSession
+    ? Promise.resolve(pending.childSession)
+    : makerApiForSticky(parentSessionId).createSideChat(parentSessionId);
   settlePendingSideChatCreation(parentSessionId, tabId, pending.draftKey, pending.deviceId, owner, creationPromise);
   return true;
 }

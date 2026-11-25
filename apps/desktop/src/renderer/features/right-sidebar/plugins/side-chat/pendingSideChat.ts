@@ -123,13 +123,14 @@ export function resolvePendingSideChat(tabId: string, childSession: Session): Pe
   return next;
 }
 
-export function failPendingSideChat(tabId: string, errorMessage: string): PendingSideChatRecord | undefined {
+export function failPendingSideChat(tabId: string, errorMessage: string, childSession?: Session): PendingSideChatRecord | undefined {
   const current = getPendingSideChat(tabId);
   if (!current || current.status === 'cancelled') return undefined;
   const next: PendingSideChatRecord = {
     ...current,
     status: 'failed',
     errorMessage,
+    childSession: childSession ?? current.childSession,
   };
   records.set(tabId, next);
   emit();
@@ -149,11 +150,14 @@ export function markPendingSideChatRetrying(tabId: string): PendingSideChatRecor
   return next;
 }
 
-export function setPendingSideChatQueuedSend(tabId: string, queued: boolean): void {
+export function setPendingSideChatQueuedSend(tabId: string, queued: boolean): boolean {
   const current = getPendingSideChat(tabId);
-  if (!current || current.hasQueuedSend === queued) return;
-  records.set(tabId, { ...current, hasQueuedSend: queued });
-  emit();
+  if (!current || current.status === 'cancelled') return false;
+  if (current.hasQueuedSend !== queued) {
+    records.set(tabId, { ...current, hasQueuedSend: queued });
+    emit();
+  }
+  return true;
 }
 
 export function cancelPendingSideChat(tabId: string): PendingSideChatRecord | undefined {

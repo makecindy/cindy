@@ -656,8 +656,8 @@ interface CCAgentSessionViewProps {
   awaitingSessionCreation?: boolean;
   /** True when optimistic side-chat creation failed and the tab stayed open with user input. */
   creationFailed?: boolean;
-  /** Reports whether this view holds a queued first message waiting for optimistic creation. */
-  onPendingSendStateChange?: (queued: boolean) => void;
+  /** Tracks the queued first message. Returns false if its tab is no longer live. */
+  onPendingSendStateChange?: (queued: boolean) => boolean;
   /** Called once the first real message is sent after optimistic creation, so the tab can switch back to canonical sessionId draftKey. */
   onPendingDraftSettled?: () => void;
 }
@@ -905,9 +905,7 @@ export function CCAgentSessionView(props: CCAgentSessionViewProps) {
       ownsWindowRoute={!props.navigationMode || props.navigationMode === 'route-owner'}>
       <CindyMakeSessionGate
         sessionId={props.sessionIdProp ?? sessionId}
-        allowOptimisticSession={Boolean(
-          props.awaitingSessionCreation || props.creationFailed || props.sessionSnapshotProp,
-        )}
+        sessionSnapshot={props.sessionSnapshotProp}
       >
         <CCAgentSessionContent {...props} />
       </CindyMakeSessionGate>
@@ -4688,6 +4686,7 @@ function CCAgentSessionContent({
       annotationBurnFailure?: 'abort';
     };
     optimisticMessage: ChatMessage;
+    restoreDraft: () => void;
   };
   const [deferredCreationSend, setDeferredCreationSend] = useState<DeferredCreationSend | null>(null);
   const deferredCreationSendRef = useRef<DeferredCreationSend | null>(null);
@@ -4756,7 +4755,8 @@ function CCAgentSessionContent({
       if (cindyMakeInputLocked) return false;
       if (creationFailed) return false;
       if (awaitingSessionCreation) {
-        if (deferredCreationSendRef.current) return false;
+        if (deferredCreationSendRef.current || onPendingSendStateChange?.(true) === false) return false;
+        const owner = getDataOwnerGeneration();
         const nowIso = new Date().toISOString();
         const attachmentPayload = buildUserMessageAttachmentPayload(files);
         const optimisticMessage: ChatMessage = {
@@ -4776,11 +4776,21 @@ function CCAgentSessionContent({
           mentions,
           opts,
           optimisticMessage,
+          restoreDraft: () => {
+            if (!isDataOwnerGenerationCurrent(owner) || !composerDraftKey
+              || onPendingSendStateChange?.(false) === false) return;
+            restoreRemoteOptimisticDraft(composerDraftKey, {
+              clientId: optimisticMessage.clientId,
+              text: plainTextToTiptapDoc(message),
+              builtInSkillIntent: opts?.builtInSkillIntent,
+              attachments: files ?? [],
+              browserComments: [],
+            });
+          },
         };
         deferredCreationSendRef.current = queued;
         typedWhileAwaitingCreationRef.current = false;
         setDeferredCreationSend(queued);
-        onPendingSendStateChange?.(true);
         return true;
       }
       invalidateHistoryRecoveryNavigation();
@@ -5199,6 +5209,7 @@ function CCAgentSessionContent({
       cindyMakeInputLocked,
       botChatIdentity,
       awaitingSessionCreation,
+      composerDraftKey,
       creationFailed,
       onPendingSendStateChange,
     ],
@@ -5214,23 +5225,13 @@ function CCAgentSessionContent({
       deferredCreationSendRef.current = null;
       deferredCreationSendDispatchingRef.current = false;
       setDeferredCreationSend(null);
-      onPendingSendStateChange?.(false);
-      if (composerDraftKey) {
-        restoreRemoteOptimisticDraft(composerDraftKey, {
-          clientId: queued.optimisticMessage.clientId,
-          text: plainTextToTiptapDoc(queued.message),
-          builtInSkillIntent: queued.opts?.builtInSkillIntent,
-          attachments: queued.files ?? [],
-          browserComments: [],
-        });
-      }
+      queued.restoreDraft();
       return;
     }
     if (awaitingSessionCreation || !confirmedSessionId || !session || deferredCreationSendDispatchingRef.current) {
       return;
     }
     deferredCreationSendDispatchingRef.current = true;
-    const owner = getDataOwnerGeneration();
     void handleSendRef
       .current(
         queued.message,
@@ -5242,29 +5243,9 @@ function CCAgentSessionContent({
         queued.opts,
       )
       .then((accepted) => {
-        if (!isDataOwnerGenerationCurrent(owner)) return;
-        if (accepted === false && composerDraftKey) {
-          restoreRemoteOptimisticDraft(composerDraftKey, {
-            clientId: queued.optimisticMessage.clientId,
-            text: plainTextToTiptapDoc(queued.message),
-            builtInSkillIntent: queued.opts?.builtInSkillIntent,
-            attachments: queued.files ?? [],
-            browserComments: [],
-          });
-        }
+        if (accepted === false) queued.restoreDraft();
       })
-      .catch(() => {
-        if (!isDataOwnerGenerationCurrent(owner)) return;
-        if (composerDraftKey) {
-          restoreRemoteOptimisticDraft(composerDraftKey, {
-            clientId: queued.optimisticMessage.clientId,
-            text: plainTextToTiptapDoc(queued.message),
-            builtInSkillIntent: queued.opts?.builtInSkillIntent,
-            attachments: queued.files ?? [],
-            browserComments: [],
-          });
-        }
-      })
+      .catch(() => queued.restoreDraft())
       .finally(() => {
         if (deferredCreationSendRef.current === queued) {
           deferredCreationSendRef.current = null;
@@ -5275,7 +5256,6 @@ function CCAgentSessionContent({
       });
   }, [
     awaitingSessionCreation,
-    composerDraftKey,
     confirmedSessionId,
     creationFailed,
     deferredCreationSend,
@@ -5285,15 +5265,8 @@ function CCAgentSessionContent({
 
   useEffect(() => () => {
     const queued = deferredCreationSendRef.current;
-    if (!queued || deferredCreationSendDispatchingRef.current || !composerDraftKey) return;
-    restoreRemoteOptimisticDraft(composerDraftKey, {
-      clientId: queued.optimisticMessage.clientId,
-      text: plainTextToTiptapDoc(queued.message),
-      builtInSkillIntent: queued.opts?.builtInSkillIntent,
-      attachments: queued.files ?? [],
-      browserComments: [],
-    });
-  }, [composerDraftKey]);
+    if (queued && !deferredCreationSendDispatchingRef.current) queued.restoreDraft();
+  }, []);
 
   const voiceSurfaceAvailable = Boolean(botChatIdentity && !botChatIdentity.deviceId && sessionId
     && !remoteDeviceId && !session?.remoteHostId && !readOnly && ownsRoute && viewVisible);

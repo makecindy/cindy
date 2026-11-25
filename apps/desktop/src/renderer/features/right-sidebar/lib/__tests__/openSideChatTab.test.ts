@@ -160,7 +160,7 @@ describe('side chat task entry', () => {
     await vi.waitFor(() => expect(mocks.status).toHaveBeenCalledWith('child', 'deleted', { kind: 'local' }, undefined, 'side-chat'));
   });
 
-  it('deletes the orphan remote branch when tab creation or bind persistence fails', async () => {
+  it('deletes the orphan remote branch when initial tab creation fails', async () => {
     mocks.device = 'execution-host';
     mocks.add.mockRejectedValueOnce(new Error('disk full'));
     expect(await openSideChatTab('parent', { prompt: 'question' })).toBe(false);
@@ -174,19 +174,50 @@ describe('side chat task entry', () => {
     expect(mocks.reveal).not.toHaveBeenCalled();
   });
 
-  // Unit: closing an optimistic tab before fork finishes must delete the late
-  // child on the host instead of leaving an unreachable branch behind.
-  it('deletes a late-arriving child if the user closed the pending tab mid-fork', async () => {
+  // Unit, #12799: a failed state write used to expose a ready child and could
+  // dispatch the queued send before the tab could be saved. Retry by child id.
+  it('keeps the preview pending until binding saves and retries the same fork on failure', async () => {
+    let failBinding!: (error: Error) => void;
+    mocks.patchTab.mockReturnValueOnce(new Promise((_, reject) => { failBinding = reject; }));
+    expect(await openSideChatTab('parent', { prompt: 'keep this' })).toBe(true);
+    const draftKey = getPendingSideChat('tab-0')!.draftKey;
+    await vi.waitFor(() => expect(mocks.patchTab).toHaveBeenCalledOnce());
+    expect(getPendingSideChat('tab-0')).toMatchObject({ status: 'creating', childSession: null });
+    failBinding(new Error('tab write rejected'));
+    await vi.waitFor(() => expect(getPendingSideChat('tab-0'))
+      .toMatchObject({ status: 'failed', childSession: { id: 'child' }, draftKey }));
+    expect(mocks.clear).not.toHaveBeenCalled();
+    expect(mocks.status).not.toHaveBeenCalled();
+    expect(retryPendingSideChatCreation('parent', 'tab-0')).toBe(true);
+    await vi.waitFor(() => expect(getPendingSideChat('tab-0'))
+      .toMatchObject({ status: 'ready', childSession: { id: 'child' }, draftKey }));
+    expect(mocks.create).toHaveBeenCalledOnce();
+  });
+
+  // Unit, #12799: close can race the fork or the subsequent tab write. Either
+  // way the branch must be reclaimed before it can be used for a send.
+  it.each(['fork', 'bind'])('deletes the child if the user closes the pending tab during %s', async phase => {
     let finishFork!: (child: { id: string }) => void;
+    let finishBinding!: () => void;
     mocks.create.mockReturnValueOnce(new Promise(resolve => { finishFork = resolve; }));
+    if (phase === 'bind') {
+      mocks.patchTab.mockReturnValueOnce(new Promise(resolve => { finishBinding = resolve; }));
+    }
     expect(await openSideChatTab('parent')).toBe(true);
+    const child = { id: 'orphan-child' };
+    if (phase === 'bind') {
+      finishFork(child);
+      await vi.waitFor(() => expect(mocks.patchTab).toHaveBeenCalledOnce());
+    }
     cancelPendingSideChat('tab-0');
     mocks.tabs = [];
-    finishFork({ id: 'orphan-child' });
+    if (phase === 'fork') finishFork(child);
+    else finishBinding();
     await vi.waitFor(() => expect(mocks.status).toHaveBeenCalledExactlyOnceWith(
       'orphan-child', 'deleted', { kind: 'local' }, undefined, 'side-chat',
     ));
-    expect(mocks.patchTab).not.toHaveBeenCalled();
+    expect(mocks.patchTab).toHaveBeenCalledTimes(phase === 'bind' ? 1 : 0);
+    expect(getPendingSideChat('tab-0')).toBeUndefined();
   });
 
   // Unit: background fork failure closes an empty pending tab automatically,

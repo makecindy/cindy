@@ -3,7 +3,7 @@ import { registerTabKind } from '../../registry';
 import { hasTabCloseInterceptor, setActiveTab } from '../../store';
 import type { TabKindPlugin } from '../../types';
 import { SideChatTabBody } from './SideChatTabBody';
-import { cancelPendingSideChat } from './pendingSideChat';
+import { cancelPendingSideChat, getPendingSideChat } from './pendingSideChat';
 import { hydrateSideChatState, type SideChatState } from './state';
 
 const plugin: TabKindPlugin<SideChatState> = {
@@ -23,7 +23,8 @@ const plugin: TabKindPlugin<SideChatState> = {
   hydrateState: hydrateSideChatState,
   serializeState: hydrateSideChatState,
   onBeforeClose: async (state, ctx) => {
-    if (!state.sessionId) {
+    const pending = getPendingSideChat(ctx.tabId);
+    if (pending?.status === 'creating' || (!state.sessionId && !pending?.childSession)) {
       cancelPendingSideChat(ctx.tabId);
       return true;
     }

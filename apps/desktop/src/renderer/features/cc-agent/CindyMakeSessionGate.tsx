@@ -8,10 +8,10 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts
 import { SessionEntryError, sessionEntryFailure } from './SessionEntryError';
 
 /** Resolve old links before mounting a chat composer or file browser. */
-export function CindyMakeSessionGate({ sessionId, children, allowOptimisticSession = false }: {
+export function CindyMakeSessionGate({ sessionId, children, sessionSnapshot }: {
   sessionId?: string;
   children: ReactNode;
-  allowOptimisticSession?: boolean;
+  sessionSnapshot?: { id: string; source?: string | null } | null;
 }) {
   const remoteSource = useSyncExternalStore(remoteProjectsStore.subscribe, () => {
     const source = remoteProjectsStore.getMergedRemoteSessions().find(session => session.id === sessionId)?.source;
@@ -23,7 +23,9 @@ export function CindyMakeSessionGate({ sessionId, children, allowOptimisticSessi
   const localSource = useSyncExternalStore(sessionsStore.subscribe, () =>
     sessionId ? sessionsStore.findById(sessionId)?.source : undefined,
   );
-  const listedSource = remoteSource !== undefined ? remoteSource : localSource;
+  const snapshotSource = sessionSnapshot && sessionSnapshot.id === sessionId ? sessionSnapshot.source : undefined;
+  const listedSource = remoteSource !== undefined ? remoteSource
+    : localSource !== undefined ? localSource : snapshotSource;
   // 列表重拉、镜像重连时任务会短暂不在缓存里。同一任务的来源一经确认就沿用，
   // 不能因此卸载正在显示的对话再重新挂载（消息清空、滚动位置丢失）。
   const confirmedRef = useRef<{ id: string; source: string | null } | null>(null);
@@ -38,7 +40,7 @@ export function CindyMakeSessionGate({ sessionId, children, allowOptimisticSessi
   const [failure, setFailure] = useState<{ id: string; reason: ReturnType<typeof sessionEntryFailure> } | null>(null);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
-    if (CINDY_MAKE_ENABLED || allowOptimisticSession || !sessionId || knownSource !== undefined) return;
+    if (CINDY_MAKE_ENABLED || !sessionId || knownSource !== undefined) return;
     let cancelled = false;
     const owner = getDataOwnerGeneration();
     setFailure(null);
@@ -53,13 +55,13 @@ export function CindyMakeSessionGate({ sessionId, children, allowOptimisticSessi
       if (!cancelled && isDataOwnerGenerationCurrent(owner)) setFailure({ id: sessionId, reason: sessionEntryFailure(error) });
     });
     return () => { cancelled = true; };
-  }, [allowOptimisticSession, sessionId, knownSource, retry]);
+  }, [sessionId, knownSource, retry]);
 
   const source = knownSource !== undefined ? knownSource : (loaded && loaded.id === sessionId ? loaded.source : undefined);
   if (!CINDY_MAKE_ENABLED && isCindyMakeSource(source)) {
     return <Navigate to="/cc-agent" replace />;
   }
-  if (!CINDY_MAKE_ENABLED && !allowOptimisticSession && sessionId && source === undefined) {
+  if (!CINDY_MAKE_ENABLED && sessionId && source === undefined) {
     return failure?.id === sessionId
       ? <SessionEntryError reason={failure.reason} onRetry={() => setRetry(value => value + 1)} />
       : null;
