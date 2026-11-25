@@ -887,4 +887,93 @@ describe('deviceLinkApiFetch', () => {
     expect(mocks.netFetch).not.toHaveBeenCalled();
   });
 
+  // 测试价值:
+  // - 生产入口与可观察结果: deviceLinkApiFetch('/api/device-link/devices') -> readCurrentDeviceDirectory，
+  //   混合目录下展示的设备名保留 V1 自定义名并把漂移的 V2 customName 一次性回填。
+  // - Bug/规则依据: 用户在传统远程连接自定义设备名后开启 Agent-Net，新注册的 V2 行 customName 为 null、
+  //   name 等于主机名，合并时无条件覆盖了 V1 自定义名。
+  // - 现有覆盖缺口: 原有目录合并用例未区分 V1/V2 的 name 与 selfName 差异，也没有验证回填与去重。
+  // - 最小失败输入: V1 返回 { name: '办公机', selfName: 'HOST-A' }，V2 返回 { name: 'HOST-A', selfName: 'HOST-A' }。
+  // - tier: unit（真实 deviceLinkApi + 真实 readCurrentDeviceDirectory + 进程内 mock）。
+  it('preserves V1 custom device names over uncustomized V2 hostnames and backfills V2 once', async () => {
+    mocks.v2Active = true;
+    const legacyRows = [
+      { deviceId: 'pc', name: '主开发机', selfName: 'MAC-SELF', platform: 'darwin', appVersion: '1', lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: true },
+      { deviceId: 'win-box', name: '编译机', selfName: 'WIN-HOST', platform: 'win32', appVersion: '1', lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false },
+      { deviceId: 'renamed-before-online', name: '测试机', selfName: null, platform: 'linux', appVersion: '1', lastSeenAt: null, online: false, busy: false, remoteControlEnabled: false, isSelf: false },
+      { deviceId: 'v2-renamed', name: '旧名', selfName: 'V2-HOST', platform: 'darwin', appVersion: '1', lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false },
+      { deviceId: 'default-host', name: 'OLD-HOST', selfName: 'OLD-HOST', platform: 'darwin', appVersion: '1', lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false },
+    ];
+    const v2Rows = [
+      { certificate: { deviceId: 'win-box' }, name: 'WIN-HOST', selfName: 'WIN-HOST', platform: 'win32', online: true, remoteControlEnabled: true, capabilities: [] },
+      { certificate: { deviceId: 'pc' }, name: 'MAC-SELF', selfName: 'MAC-SELF', platform: 'darwin', online: true, remoteControlEnabled: true, capabilities: [] },
+      { certificate: { deviceId: 'renamed-before-online' }, name: 'LINUX-HOST', selfName: 'LINUX-HOST', platform: 'linux', online: false, remoteControlEnabled: false, capabilities: [] },
+      { certificate: { deviceId: 'v2-renamed' }, name: '新名', selfName: 'V2-HOST', platform: 'darwin', online: true, remoteControlEnabled: true, capabilities: [] },
+      { certificate: { deviceId: 'default-host' }, name: 'NEW-HOST', selfName: 'NEW-HOST', platform: 'darwin', online: true, remoteControlEnabled: true, capabilities: [] },
+    ];
+    mocks.netFetch.mockImplementation(async () => new Response(JSON.stringify({ devices: legacyRows }), { status: 200 }));
+    mocks.v2Directory.mockResolvedValue(v2Rows);
+
+    const first = await deviceLinkApiFetch<{ devices: Array<{ deviceId: string; name: string; selfName?: string | null }> }>('/api/device-link/devices');
+    const byId = new Map(first.devices.map(d => [d.deviceId, d]));
+    expect(byId.get('pc')).toMatchObject({ name: '主开发机', selfName: 'MAC-SELF' });
+    expect(byId.get('win-box')).toMatchObject({ name: '编译机', selfName: 'WIN-HOST' });
+    expect(byId.get('renamed-before-online')).toMatchObject({ name: '测试机', selfName: 'LINUX-HOST' });
+    expect(byId.get('v2-renamed')).toMatchObject({ name: '新名', selfName: 'V2-HOST' });
+    expect(byId.get('default-host')).toMatchObject({ name: 'NEW-HOST', selfName: 'NEW-HOST' });
+
+    await vi.waitFor(() => expect(mocks.v2Request).toHaveBeenCalledTimes(3));
+    expect(mocks.v2Request.mock.calls).toEqual([
+      ['PATCH', '/devices/pc', { name: '主开发机' }],
+      ['PATCH', '/devices/win-box', { name: '编译机' }],
+      ['PATCH', '/devices/renamed-before-online', { name: '测试机' }],
+    ]);
+
+    // Repeat read with the same uncustomized V2 payload must not loop or re-send PATCHes.
+    await deviceLinkApiFetch('/api/device-link/devices');
+    await Promise.resolve();
+    expect(mocks.v2Request).toHaveBeenCalledTimes(3);
+  });
+
+  // 部分目录(仅 V2 腿成功)合入上次完整目录时,不能用未自定义的主机名覆盖记住的 V1 自定义名。
+  it('keeps remembered custom names when a partial V2-only directory read falls back to the last complete union', async () => {
+    mocks.v2Active = true;
+    mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+      devices: [{ deviceId: 'win-box', name: '编译机', selfName: 'WIN-HOST', platform: 'win32', appVersion: '1', lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false }],
+    }), { status: 200 }));
+    mocks.v2Directory.mockResolvedValue([
+      { certificate: { deviceId: 'win-box' }, name: 'WIN-HOST', selfName: 'WIN-HOST', platform: 'win32', online: true, remoteControlEnabled: true, capabilities: [] },
+    ]);
+    await deviceLinkApiFetch('/api/device-link/devices');
+    mocks.netFetch.mockRejectedValueOnce(new TypeError('network down'));
+
+    const partial = await deviceLinkApiFetch<{ devices: Array<{ deviceId: string; name: string }>; partial?: boolean }>('/api/device-link/devices');
+    expect(partial.partial).toBe(true);
+    expect(partial.devices).toEqual([expect.objectContaining({ deviceId: 'win-box', name: '编译机' })]);
+  });
+
+  // 在途目录读发起之后、完成之前若本地发起了改名/清空(PATCH name: null),不得用旧读结果把名字回填回去。
+  it('does not backfill a stale V1 custom name after a concurrent rename/clear starts', async () => {
+    mocks.v2Active = true;
+    let resolveLegacy!: (response: Response) => void;
+    mocks.netFetch
+      .mockImplementationOnce(() => new Promise<Response>(resolve => { resolveLegacy = resolve; }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ deviceId: 'win-box', name: 'WIN-HOST', manualName: null }), { status: 200 }));
+    mocks.v2Directory.mockResolvedValue([
+      { certificate: { deviceId: 'win-box' }, name: 'WIN-HOST', selfName: 'WIN-HOST', platform: 'win32', online: true, remoteControlEnabled: true, capabilities: [] },
+    ]);
+
+    const inflightRead = deviceLinkApiFetch('/api/device-link/devices');
+    await Promise.resolve();
+    await deviceLinkApiFetch('/api/device-link/devices/win-box', { method: 'PATCH', body: { name: null } });
+    expect(mocks.v2Request).toHaveBeenCalledExactlyOnceWith('PATCH', '/devices/win-box', { name: null });
+
+    resolveLegacy(new Response(JSON.stringify({
+      devices: [{ deviceId: 'win-box', name: '旧自定义名', selfName: 'WIN-HOST', platform: 'win32', appVersion: '1', lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false }],
+    }), { status: 200 }));
+    await inflightRead;
+    await Promise.resolve();
+    expect(mocks.v2Request).toHaveBeenCalledTimes(1);
+  });
+
 });

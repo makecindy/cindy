@@ -24,7 +24,7 @@ vi.mock('@/device-link/selfHostedRelayRouting', () => ({ getSelfHostedRelayRoute
   getActiveSelfHostedRelay: () => fake.relayMode === 'official' ? null : { agentNetOnly: fake.relayMode === 'v2-only' },
   isAgentNetOnlyRoute: (route: { agentNetOnly?: boolean } | null) => route?.agentNetOnly === true }));
 vi.mock('@/device-link/agentNetDirectoryCache', () => ({ writeMobileAgentNetDirectory: fake.cache }));
-import { mobileAgentNetDeviceRequest } from '@/device-link/agentNetDeviceApi';
+import { __resetMobileAgentNetNameBackfillForTests, mobileAgentNetDeviceRequest } from '@/device-link/agentNetDeviceApi';
 
 const options = { baseUrl: 'https://devices.example.test' };
 const enrollment = { deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null };
@@ -35,6 +35,7 @@ const encryptedDevice = (deviceId: string, online = true) => ({ certificate: { d
 const request = (path = '/api/device-link/devices', extra = {}) => mobileAgentNetDeviceRequest<{ devices: DeviceView[] }>(path, { ...options, ...extra }, enrollment, fake.legacy);
 beforeEach(() => {
   vi.clearAllMocks(); fake.owner = 'owner-a'; fake.encryptedOnly = false; fake.relayMode = 'official';
+  __resetMobileAgentNetNameBackfillForTests();
   fake.directory.mockResolvedValue([encryptedDevice('new'), encryptedDevice('shared', false)]);
   fake.legacy.mockResolvedValue({ devices: [legacyDevice('old'), legacyDevice('shared')] });
   fake.cache.mockResolvedValue(undefined); fake.mutation.mockResolvedValue({ name: 'Renamed' });
@@ -145,4 +146,36 @@ it('allows a V2-only device absent from the legacy store but preserves legacy de
   await expect(request('/api/device-link/devices/new', { method: 'PATCH', body: { name: 'Renamed' } })).rejects.toMatchObject({ status: 403 });
   fake.legacy.mockImplementation(async () => { fake.owner = 'owner-b'; return {}; });
   await expect(request('/api/device-link/devices/new', { method: 'DELETE' })).rejects.toThrow('AGENT_NET_OWNER_CHANGED');
+});
+
+// Preserving V1 custom names on mobile mixed-directory reads: uncustomized V2
+// hostnames must not clobber legacy aliases, and V2 is backfilled at most once.
+it('preserves V1 custom names over uncustomized V2 hostnames and backfills V2 once', async () => {
+  fake.legacy.mockResolvedValue({
+    devices: [
+      { ...legacyDevice('work-pc'), name: '办公机', selfName: 'WORK-HOST' },
+      { ...legacyDevice('v2-custom'), name: '旧名', selfName: 'V2-HOST' },
+    ],
+  });
+  fake.directory.mockResolvedValue([
+    { ...encryptedDevice('work-pc', true), name: 'WORK-HOST', selfName: 'WORK-HOST' },
+    { ...encryptedDevice('v2-custom', true), name: 'V2新名', selfName: 'V2-HOST' },
+  ]);
+
+  const result = await request();
+  expect(result).toMatchObject({
+    handled: true,
+    value: {
+      devices: [
+        { deviceId: 'work-pc', name: '办公机', selfName: 'WORK-HOST' },
+        { deviceId: 'v2-custom', name: 'V2新名', selfName: 'V2-HOST' },
+      ],
+    },
+  });
+  await vi.waitFor(() => expect(fake.mutation).toHaveBeenCalledTimes(1));
+  expect(fake.mutation).toHaveBeenCalledWith('PATCH', '/devices/work-pc', { name: '办公机' });
+
+  await request();
+  await Promise.resolve();
+  expect(fake.mutation).toHaveBeenCalledTimes(1);
 });

@@ -13,6 +13,7 @@ import {
   directoryRetryDeadline,
   recordDirectoryRetryDeadline,
 } from './directoryThrottle.js';
+import { beginDeviceDirectoryMutation } from './deviceDirectoryMutationFence.js';
 
 export interface DeviceLinkApiPorts {
   getClientEndpoint(key: 'deviceLinkApiBaseUrl'): string;
@@ -171,6 +172,9 @@ async function deviceLinkApiFetch<T>(
     }
     const device = /^\/api\/device-link\/devices\/([^/?#]+)$/.exec(apiPath);
     if (device && (opts.method === 'PATCH' || opts.method === 'DELETE')) {
+      const target = decodeURIComponent(device[1]);
+      const endMutation = beginDeviceDirectoryMutation(target);
+      try {
       const base = officialDeviceLinkApiBase();
       const managementScope = ports.managementScopeKey();
       const { activeOwnerScopeKey, isAppSessionBoundaryPending } = await ports.prepareOwnerScope();
@@ -190,7 +194,6 @@ async function deviceLinkApiFetch<T>(
       };
       const api = runtime.currentAgentNetClient();
       if (!api && runtime.agentNetRequiresEncryption()) throw new Error('AGENT_NET_ENCRYPTED_IDENTITY_REQUIRED');
-      const target = decodeURIComponent(device[1]);
       let deleteEncryptedMember = false;
       if (api) {
         const directory = await api.directory();
@@ -238,6 +241,9 @@ async function deviceLinkApiFetch<T>(
       // (packages/agent-net/src/membership.ts); the account and selection are still the ones that removed it (assertCurrent).
       if (opts.method === 'DELETE' && deletion?.deleted === true && deletion.deviceId === target) runtime.agentNetNoteDeviceRemoved(target);
       return result;
+      } finally {
+        endMutation();
+      }
     }
     return officialDeviceLinkApiFetch<T>(apiPath, opts);
   }
@@ -256,6 +262,10 @@ async function deviceLinkApiFetch<T>(
     ) as Promise<T>;
   }
   const device = /^\/api\/device-link\/devices\/([^/?#]+)$/.exec(apiPath);
+  const endMutation = device && ['DELETE', 'PATCH'].includes(opts.method ?? 'GET')
+    ? beginDeviceDirectoryMutation(decodeURIComponent(device[1]))
+    : null;
+  try {
   if (device && ['DELETE', 'PATCH'].includes(opts.method ?? 'GET')) {
     const { readRelaySecrets } = await ports.prepareRelayConfig();
     assertRoute();
@@ -278,13 +288,16 @@ async function deviceLinkApiFetch<T>(
     }
   }
   assertRoute();
-  return serverApiFetch<T>(apiPath, {
+  return await serverApiFetch<T>(apiPath, {
     ...opts,
     baseUrl: relay.baseUrl,
     authorization: `CindyRelay ${relay.credential}`,
     skipAutoRefresh: true,
     skipSessionInvalidation: true,
   });
+  } finally {
+    endMutation?.();
+  }
 }
 
 return { resolveDeviceLinkApiBase, officialDeviceLinkApiBase, officialDeviceLinkApiFetch, officialDeviceListFetch, deviceLinkApiFetch };
