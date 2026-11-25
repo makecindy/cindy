@@ -51,7 +51,7 @@ vi.mock('../session/durableOutboxFiles', () => {
 vi.mock('../session/mobileAttachmentUpload', () => ({ discardMobileUploadedAttachment: vi.fn() }));
 vi.mock('expo-crypto', () => ({ getRandomBytes: (n: number) => new Uint8Array(n).fill(7) }));
 import { getCurrentMobileOutboxRecords, mobileDurableOutbox, persistCancelledCreationDraft } from '../session/mobileDurableOutbox';
-import { completeNewSessionDurableEdit, getNewSessionCreationTask, hasLiveNewSessionCreation, holdNewSessionCreationDraft, prepareNewSessionCreationForEdit, restoreNewSessionDurableEdit, startNewSessionCreation } from '../session/newSessionCreation';
+import { completeNewSessionDurableEdit, getNewSessionCreationTask, hasLiveNewSessionCreation, holdNewSessionCreationDraft, prepareNewSessionCreationForEdit, recoverUnconfirmedCreationDrafts, restoreNewSessionDurableEdit, startNewSessionCreation } from '../session/newSessionCreation';
 import { remoteSessionStore } from '../session/remoteSessionStore';
 import { listPendingPrecreatedWorktrees, recoverPendingPrecreatedWorktrees, registerPendingPrecreatedWorktree } from '../session/precreatedWorktreeRecovery';
 import { completePrecreatedWorktreeRecovery } from '../session/completePrecreatedWorktreeRecovery';
@@ -746,6 +746,28 @@ it.each([
   await expect(mergeNewSessionEditFollowUps(first.item.sessionId, 'pc')).resolves.toBeUndefined();
   expect(mobileDurableOutbox.getSnapshot()).toEqual([first]);
   expect(first.creation?.editReady).toBeUndefined();
+});
+
+it('reopens a failed suspended creation after reload and keeps a queued send out of the editor', async () => {
+  const original = await saveDraftFixture();
+  const failed = await mobileDurableOutbox.update(original, {
+    state: 'failed', suspended: true, error: '[NOT_CONNECTED] reliable link stalled; pending abandoned',
+    creation: { ...original.creation!, collabDraft: { role: 'reviewer', agent: 'codex', model: null, permissionMode: 'auto', initialTask: 'check' } },
+  });
+  await mobileDurableOutbox.add({ ...failed, createdAt: 2, state: 'queued', suspended: false, error: undefined,
+    item: { ...failed.item, clientId: 'queued', sessionId: 'queued-session' } });
+  await mobileDurableOutbox.activate('');
+  const ids = await recoverUnconfirmedCreationDrafts();
+  expect(ids).toContain(failed.item.sessionId);
+  expect(ids).not.toContain('queued-session');
+  const restored = getCurrentMobileOutboxRecords().find(record => record.item.sessionId === failed.item.sessionId)!;
+  expect(restored.creation?.editReady).toBe(true);
+  expect(restored.error).toBe('[NOT_CONNECTED] reliable link stalled; pending abandoned');
+  expect(getCurrentMobileOutboxRecords().find(record => record.item.sessionId === 'queued-session')).toMatchObject({
+    state: 'queued', suspended: false,
+  });
+  const edited = await persistNewSessionDraftEdit(restored, { collabDraft: null });
+  expect(edited?.creation?.collabDraft).toBeNull();
 });
 
 it.each([false, true])('recovers sent follow-ups before composer input, retaining upload bytes (pending: %s)', async pendingUpload => {

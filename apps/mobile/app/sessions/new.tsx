@@ -6018,6 +6018,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               collabForm.remember(collabForm.submission);
               collabDraftTargetRef.current = collabTargetKey;
               setCollabDraft(collabForm.submission);
+              editRecoveredDraft({ collabDraft: collabForm.submission });
               setContextSheetView('main');
               setContextSheetOpen(false);
             }}
@@ -6152,6 +6153,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   label={t('session.collab.draftRemove')}
                   onPress={() => {
                     setCollabDraft(null);
+                    editRecoveredDraft({ collabDraft: null });
                     setContextSheetView('main');
                   }}
                   testID="newSession.collabDraftRemove"

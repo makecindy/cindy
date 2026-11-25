@@ -1,54 +1,61 @@
 import { useEffect, useRef } from 'react';
 import { Alert } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useIsFocused, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { useIsFocused } from '@react-navigation/native';
-import { i18n } from '@/i18n';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { isDurableCreationDraft } from './durableOutbox';
-import { getCurrentMobileOutboxRecords } from './mobileDurableOutbox';
+import { getCurrentMobileOutboxRecords, mobileDurableOutbox } from './mobileDurableOutbox';
 import { recoverUnconfirmedCreationDrafts } from './newSessionCreation';
 
 const offered = new Set<string>();
 
-/** Tell the owner a create never reached the host, and put the draft back in the form. */
+/** Tell the owner a failed create can be reopened. Match the draft flag, not translated error text. */
 export function UnconfirmedCreationNotice() {
   const focused = useIsFocused();
   const router = useRouter();
   const { t } = useTranslation();
-  const running = useRef(false);
+  const focusedRef = useRef(focused);
+  focusedRef.current = focused;
   useEffect(() => {
-    if (!focused || running.current) return;
-    running.current = true;
-    void recoverUnconfirmedCreationDrafts().then((sessionIds) => {
-      const notSent = i18n.t('session.screen.firstMessageNotSent');
-      const record = getCurrentMobileOutboxRecords().find((item) =>
-        !offered.has(item.item.sessionId)
-        && (sessionIds.includes(item.item.sessionId)
-          || (isDurableCreationDraft(item) && item.error === notSent)));
-      if (!record?.creation) return;
-      const sessionId = record.item.sessionId;
-      offered.add(sessionId);
-      Alert.alert(
-        t('session.screen.createFailedTitle'),
-        t('session.screen.firstMessageNotSent'),
-        [
-          { text: t('session.common.cancel'), style: 'cancel' },
-          {
-            text: t('session.screen.retry'),
-            onPress: () => {
-              router.push({
-                pathname: '/sessions/new',
-                params: {
-                  recoverySessionId: sessionId,
-                  deviceId: record.deviceId,
-                  deviceName: record.creation?.deviceName ?? '',
-                },
-              });
+    if (!focused) return;
+    let active = true;
+    const scan = () => {
+      if (!active || !focusedRef.current) return;
+      const owner = getMobileAuthOwner();
+      void recoverUnconfirmedCreationDrafts().then(() => {
+        if (!active || !focusedRef.current || !isMobileAuthOwnerCurrent(owner)) return;
+        const record = getCurrentMobileOutboxRecords().find((item) =>
+          isDurableCreationDraft(item) && !offered.has(item.item.sessionId));
+        if (!record?.creation) return;
+        offered.add(record.item.sessionId);
+        Alert.alert(
+          t('session.screen.createFailedTitle'),
+          t('session.screen.firstMessageNotSent'),
+          [
+            { text: t('session.common.cancel'), style: 'cancel' },
+            {
+              text: t('session.screen.retry'),
+              onPress: () => {
+                router.push({
+                  pathname: '/sessions/new',
+                  params: {
+                    recoverySessionId: record.item.sessionId,
+                    deviceId: record.deviceId,
+                    deviceName: record.creation?.deviceName ?? '',
+                  },
+                });
+              },
             },
-          },
-        ],
-      );
-    }).finally(() => { running.current = false; });
+          ],
+        );
+      }).catch(() => undefined);
+    };
+    const unsubscribe = mobileDurableOutbox.subscribe(scan);
+    scan();
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, [focused, router, t]);
   return null;
 }

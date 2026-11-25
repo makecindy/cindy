@@ -54,7 +54,6 @@ import {
   drainStashedNewSessionDraft,
   getNewSessionCreationTask,
   prepareNewSessionCreationForEdit,
-  recoverUnconfirmedCreationDrafts,
   retryNewSessionCreation,
   restoreNewSessionDurableEdit,
   shouldBlockSessionSync,
@@ -1647,42 +1646,20 @@ describe('newSessionCreation pipeline', () => {
       });
     }
 
-    it('keeps an unconfirmed collaboration create editable when the host never accepts it', async () => {
+    it('keeps a dropped collaboration create failed without enqueueing the first message', async () => {
       const maker = makeMaker({
         createSession: vi.fn(async () => { throw new Error('[NOT_CONNECTED] reliable link stalled; pending abandoned'); }),
       });
-      const record = recoveryOutboxRecord('unsent-collab');
-      record.state = 'queued';
-      record.suspended = false;
-      editOutbox.records.mockReturnValue([record]);
       startNewSessionCreation(makeParams('unsent-collab', maker, {
         collabDraft: { role: 'reviewer', agent: 'codex', model: null, permissionMode: 'auto', initialTask: 'check' },
       }));
       await flushPipeline();
-      expect(getNewSessionCreationTask('unsent-collab')?.status).toBe('create-failed');
-      expect(maker.createSession).toHaveBeenCalled();
+      expect(getNewSessionCreationTask('unsent-collab')).toMatchObject({
+        status: 'create-failed',
+        collabDraft: expect.objectContaining({ role: 'reviewer', initialTask: 'check' }),
+      });
       expect(maker.input.enqueue).not.toHaveBeenCalled();
-      expect(editOutbox.update).toHaveBeenCalledWith(record, expect.objectContaining({
-        suspended: true,
-        state: 'failed',
-        creation: expect.objectContaining({
-          editReady: true,
-          collabDraft: expect.objectContaining({ role: 'reviewer', initialTask: 'check' }),
-        }),
-      }));
-    });
-
-    it('restores a queued creation that lost its in-memory task without resending', async () => {
-      const record = recoveryOutboxRecord('cold-unsent');
-      record.state = 'queued';
-      record.suspended = false;
-      editOutbox.records.mockReturnValue([record]);
-      await expect(recoverUnconfirmedCreationDrafts()).resolves.toEqual(['cold-unsent']);
-      expect(editOutbox.update).toHaveBeenCalledWith(record, expect.objectContaining({
-        suspended: true,
-        state: 'failed',
-        creation: expect.objectContaining({ editReady: true }),
-      }));
+      expect(editOutbox.update).not.toHaveBeenCalled();
     });
 
     it('brings the collaboration draft back with the draft when a failed create returns to editing', async () => {
