@@ -494,6 +494,11 @@ export class Session {
       ? this.handle.negotiatedCapabilities ?? this.initialCapabilities
       : this.initialCapabilities;
   }
+
+  /** ACP-only command names used when sanitizing host-added wire notes. */
+  getPluginEngineCommandNames(): readonly string[] {
+    return this.handle.getPluginEngineCommandNames?.() ?? [];
+  }
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;
   /** 见 SessionOptions.agentDeviceId。 */

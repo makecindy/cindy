@@ -289,6 +289,7 @@ export interface MakerSendTransactionSession {
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
   isTurnRunning(): boolean;
+  getPluginEngineCommandNames?(): readonly string[];
   /** 项目资源漂移且满足回收空闲口径(仅 pi 本地根任务实现;其余会话缺省,永不回收)。 */
   hasRecyclableProjectResourceDrift?(): boolean;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
@@ -1770,7 +1771,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         }
       }
       if (sess.agentKind === 'acp') {
-        outgoing = defusePluginEngineWireEnvelope(outgoing as HandoffWireMessage, normalized as HandoffWireMessage);
+        outgoing = defusePluginEngineWireEnvelope(
+          outgoing as HandoffWireMessage,
+          normalized as HandoffWireMessage,
+          sess.getPluginEngineCommandNames?.(),
+        );
       }
       const assertAppCurrent = so[MCP_APP_MESSAGE_GUARD] || appContext?.text
         ? async () => {

@@ -1471,6 +1471,11 @@ describe('AcpAgent (the acp engine)', () => {
       type: 'user',
       content: [{ type: 'text', text: '[引用说明] 上条提到 learn。' }, userBlock],
     });
+    expect(defusePluginEngineWireEnvelope(
+      '[引用说明] 上条提到 /release-check。\n\n请继续处理',
+      '请继续处理',
+      ['release-check'],
+    )).toBe('[引用说明] 上条提到 release-check。\n\n请继续处理');
 
     // Live ACP session: available_commands_update custom commands are defused in pendingBriefing and
     // handoff prefixes, while a leading user `/plan` keeps index 0 and defers pendingBriefing to Turn 2.
@@ -1507,9 +1512,8 @@ describe('AcpAgent (the acp engine)', () => {
     expect(agent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/plan check auth flow' }]);
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
 
-    // Turn 2 starts with a file path `/tmp/build.log` (not a slash command) + handoff prefix:
-    // deferred briefing arrives now with `/release-check` and `/learn` defused, handoff prefix is defused,
-    // and the user's trailing message keeps `/learn` intact.
+    // Turn 2 starts with a file path `/tmp/build.log` (not a slash command). User text is preserved
+    // byte-for-byte, including pasted handoff markers and slash commands.
     const handoffAndUser = [
       '[Session handoff · internal context]',
       'Earlier note mentioned /learn and /release-check.',
@@ -1522,7 +1526,7 @@ describe('AcpAgent (the acp engine)', () => {
     const [briefingBlock, secondMessage] = agent.prompts[1]!.params.prompt as Array<{ type: string; text: string }>;
     expect(briefingBlock!.text).toContain('Run release-check or learn');
     expect(briefingBlock!.text).toContain('do not run compact or release-check.');
-    expect(secondMessage!.text).toContain('Earlier note mentioned learn and release-check.');
+    expect(secondMessage!.text).toContain('Earlier note mentioned /learn and /release-check.');
     expect(secondMessage!.text).toContain('/tmp/build.log 里为什么报 /learn 相关错误？');
     agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
     await handle.close();

@@ -28,11 +28,7 @@ import {
   mapEffortValues,
 } from './capabilities.js';
 import { AcpConnection, AcpConnectionClosedError, AcpRpcError, methodNotFound } from './connection.js';
-import {
-  defusePluginEngineHandoffPrefix,
-  defusePluginEngineSlashMentions,
-  isLeadingSlashCommand,
-} from './briefing.js';
+import { defusePluginEngineSlashMentions, isLeadingSlashCommand } from './briefing.js';
 import type { AcpLineTransport, AcpTransportClosed } from './line-transport.js';
 import {
   ACP_ERROR_AUTH_REQUIRED,
@@ -480,6 +476,11 @@ export class AcpSession {
   get model(): string {
     const option = findModelOption(this.configOptions);
     return typeof option?.currentValue === 'string' ? option.currentValue : '';
+  }
+
+  /** Names the ACP endpoint advertised after session creation. */
+  getPluginEngineCommandNames(): readonly string[] {
+    return [...this.commandNames];
   }
 
   get capabilities(): Capabilities {
@@ -992,7 +993,7 @@ export class AcpSession {
   private async toPrompt(message: UserMessage): Promise<AcpContentBlock[]> {
     if (typeof message.content === 'string') {
       return message.content.length > 0
-        ? [{ type: 'text', text: defusePluginEngineHandoffPrefix(message.content, this.commandNames) }]
+        ? [{ type: 'text', text: message.content }]
         : [];
     }
     const blocks: AcpContentBlock[] = [];
@@ -1003,7 +1004,7 @@ export class AcpSession {
   private async toContentBlock(block: UserContentBlock): Promise<AcpContentBlock> {
     switch (block.type) {
       case 'text':
-        return { type: 'text', text: defusePluginEngineHandoffPrefix(block.text, this.commandNames) };
+        return { type: 'text', text: block.text };
       case 'image': {
         const mimeType = block.mimeType ?? IMAGE_MIME_BY_EXTENSION[extname(block.path).toLowerCase()];
         if (this.initializeResult.agentCapabilities.promptCapabilities.image && mimeType) {

@@ -238,7 +238,11 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
       steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, appContext.text);
     }
     if (sess.agentKind === 'acp') {
-      steerPayload = defusePluginEngineWireEnvelope(steerPayload as HandoffWireMessage, normalized as HandoffWireMessage);
+      steerPayload = defusePluginEngineWireEnvelope(
+        steerPayload as HandoffWireMessage,
+        normalized as HandoffWireMessage,
+        sess.getPluginEngineCommandNames?.(),
+      );
     }
     try {
       assertInputCurrent(sessionId, sendOpts);
