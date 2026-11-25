@@ -67,6 +67,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
   groupRelay?: RemoteAgentGroupRelayDeps;
   directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
   captureOwner?: () => unknown;
+  isOwnerCurrent?: (owner: unknown) => boolean;
   isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'];
   prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
   imageArtifacts?: Parameters<typeof createRemoteAgentHost>[0]['imageArtifacts'];
@@ -165,7 +166,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
     ...(options.reshare ? { reshare: options.reshare } : {}),
     ...(options.log ? { log: options.log } : {}),
     captureOwner: options.captureOwner ?? (() => 'owner'),
-    isOwnerCurrent: () => true,
+    isOwnerCurrent: options.isOwnerCurrent ?? (() => true),
     runsRoot: path.join(root, name),
   });
 }
@@ -1253,6 +1254,60 @@ describe('provider group relay for shared users', () => {
       await expect(host.handle(peer, request)).resolves.toBeNull();
       expect(await old).toEqual([expect.objectContaining({ status: 'rejected' })]);
     } finally { release(); await head; await waiting; await host.dispose(); }
+  });
+
+  // Host.handle unit: a stable account key does not imply a current app-session
+  // generation. Existing account-change tests changed the key, hiding stale joins.
+  it.each(['allocate', 'revoke', 'forget'] as const)('does not join a queued %s from an older owner generation', async kind => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    let generation = 1;
+    const mutate = vi.fn();
+    const host = fakeAgentHost(`generation-${kind}`, [], {
+      trust: controller => controller === OWNER_DEVICE ? 'owner' : 'guest',
+      captureOwner: () => ({ generation }),
+      isOwnerCurrent: captured => (captured as { generation: number }).generation === generation,
+      directGuestExecution: {
+        ownerScope: () => 'same-account',
+        allocate: async (_controller, request) => {
+          if (request.model === 'blocked') { enter(); await gate; }
+          else mutate();
+          return null;
+        },
+        delegate: async () => { mutate(); return false; },
+        forget: () => { mutate(); return false; },
+        status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+        sessionAllowed: () => true, sessionDelegated: () => false,
+      },
+    });
+    const allocate = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const request = kind === 'allocate' ? allocate : kind === 'revoke'
+      ? { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+        sessionId: 'task', providerId: 'provider', model: 'claude-opus', generation: '11111111-1111-4111-8111-111111111111' }
+      : { op: 'forget', directGuest: { shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+        forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1 } };
+    const controller = kind === 'allocate' ? peer : OWNER_DEVICE;
+    const head = host.handle(peer, { ...allocate, model: 'blocked' });
+    let old: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    let current: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      old = Promise.allSettled([host.handle(controller, request)]);
+      generation += 1;
+      current = Promise.allSettled([host.handle(controller, request), host.handle(controller, request)]);
+      release(); await head;
+      expect(await old).toEqual([expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({
+        message: expect.stringContaining('direct guest account changed'),
+      }) })]);
+      expect((await current).map(result => result.status)).toEqual(['fulfilled', 'fulfilled']);
+      expect(mutate).toHaveBeenCalledTimes(1);
+      // After actual settlement the result is not an authorization cache.
+      await host.handle(controller, request);
+      expect(mutate).toHaveBeenCalledTimes(2);
+    } finally { release(); await head; await old; await current; await host.abortAll(); await host.dispose(); }
   });
 
   // A direct open must reserve its mutation boundary before its first await,

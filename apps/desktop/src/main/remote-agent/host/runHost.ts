@@ -881,12 +881,16 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     run(): Promise<unknown>;
     settle(outcome: DirectGuestOutcome): void;
   }
+  interface DirectGuestFlight {
+    owner: unknown;
+    work: Promise<unknown>;
+  }
   interface DirectGuestQueue {
     waiting: DirectGuestOperation[];
     running?: DirectGuestOperation;
-    pending: Map<string, Promise<unknown>>;
+    pending: Map<string, DirectGuestFlight>;
     mutationEpoch: number;
-    allocation?: { key: string; work: Promise<unknown> };
+    allocation?: DirectGuestFlight & { key: string };
   }
   const directGuestLocks = new Map<string, DirectGuestQueue>();
   let directGuestOperations = 0;
@@ -917,15 +921,17 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     const scope = JSON.stringify([ownerScope, peer]);
     const previous = directGuestLocks.get(scope);
     const queue: DirectGuestQueue = previous
-      ?? { waiting: [], pending: new Map<string, Promise<unknown>>(), mutationEpoch: 0 };
+      ?? { waiting: [], pending: new Map<string, DirectGuestFlight>(), mutationEpoch: 0 };
     // A grant/open between two revokes is an ordering boundary: the later
     // revoke must not borrow an ACK from before the intervening mutation.
     const allocationKey = dedupe?.kind === 'allocate' ? dedupe.key : undefined;
     const dedupeKey = dedupe && dedupe.kind !== 'allocate'
       && JSON.stringify([dedupe.kind, dedupe.kind === 'revoke' ? queue.mutationEpoch : null, dedupe.key]);
-    const duplicate = allocationKey ? queue.allocation?.key === allocationKey ? queue.allocation.work : undefined
+    const duplicate = allocationKey ? queue.allocation?.key === allocationKey ? queue.allocation : undefined
       : dedupeKey ? queue.pending.get(dedupeKey) : undefined;
-    if (duplicate) return duplicate;
+    // The stable sharing account may survive a same-owner projection repair.
+    // Only join work whose captured app-session generation is still current.
+    if (duplicate && deps.isOwnerCurrent(duplicate.owner)) return duplicate.work;
     // Only adjacent identical in-flight allocations join. A different model,
     // task, grant, open or revoke must fence the old allocation's receipt.
     // Fence even a refused reservation: decoded relay opens bypass this budget.
@@ -955,7 +961,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (index >= 0) queue.waiting.splice(index, 1);
         if (queue.running === operation) queue.running = undefined;
         directGuestOperations -= 1;
-        if (dedupeKey && queue.pending.get(dedupeKey) === work) queue.pending.delete(dedupeKey);
+        if (dedupeKey && queue.pending.get(dedupeKey)?.work === work) queue.pending.delete(dedupeKey);
         if (queue.allocation?.work === work) queue.allocation = undefined;
         if (!queue.running && queue.waiting.length === 0) directGuestLocks.delete(scope);
         if (outcome.ok) resolve(outcome.value);
@@ -964,8 +970,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       },
     };
     queue.waiting.push(operation);
-    if (dedupeKey) queue.pending.set(dedupeKey, work);
-    if (allocationKey) queue.allocation = { key: allocationKey, work };
+    if (dedupeKey) queue.pending.set(dedupeKey, { owner, work });
+    if (allocationKey) queue.allocation = { key: allocationKey, owner, work };
     directGuestLocks.set(scope, queue);
     if (preparation) {
       // Only preparation may retire a queued item early. A running mutation
