@@ -71,18 +71,25 @@ describe('Codex thread MCP server tools', () => {
     await expect(readCodexThreadMcpServerTools(invoke, 't', 'custom_omc')).rejects.toThrow(/repeated a cursor/);
   });
 
-  // Gateway recovery must see a failed plugin client even beside a healthy
-  // helper, without multiplying status RPCs or confusing missing legacy state.
-  // Unit tier, production reader; the servers straddle two native status pages.
-  it('reads independent gateway states in one paginated traversal', async () => {
-    const { request, invoke } = requestFor({
-      first: { nextCursor: 'next', data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }] },
-      next: { nextCursor: null, data: [{ name: 'cindy', runtimeStatus: 'failed', tools: { ghost_info: {} } }] },
+  // Gateway recovery must inspect every requested server through its own
+  // thread-scoped native selector, so a stalled sibling cannot trigger a
+  // full-catalog discovery and hide a failed gateway.
+  it('reads independent gateway states with directed status requests', async () => {
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) => {
+      if (params.serverName === 'cindy_helper') return {
+        nextCursor: null,
+        data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }],
+      };
+      if (params.serverName === 'cindy') return {
+        nextCursor: null,
+        data: [{ name: 'cindy', runtimeStatus: 'failed', tools: { ghost_info: {} } }],
+      };
+      return { nextCursor: null, data: [] };
     });
-    const reports = await readCodexThreadMcpServersTools(invoke, 'thread-1', ['cindy_helper', 'cindy', 'missing']);
+    const reports = await readCodexThreadMcpServersTools(request, 'thread-1', ['cindy_helper', 'cindy', 'missing']);
     expect(reports.get('cindy_helper')).toMatchObject({ state: 'connected' });
     expect(reports.get('cindy')).toEqual({ state: 'failed', tools: [] });
     expect(reports.get('missing')).toEqual({ state: 'not-mounted', tools: [] });
-    expect(request.mock.calls.map(([, params]) => params.cursor)).toEqual([null, 'next']);
+    expect(request.mock.calls.map(([, params]) => params.serverName)).toEqual(['cindy_helper', 'cindy', 'missing']);
   });
 });
