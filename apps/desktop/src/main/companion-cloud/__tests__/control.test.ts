@@ -77,9 +77,16 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
 it('resumes only the original demoted companion after the owner chooses a model', async () => {
   const t = setup({ home: 'desk' });
   const route = { harness: 'codex' as const, model: 'chosen', providerId: 'local', effort: '', fastMode: false };
-  const apply = vi.fn(async () => []);
+  let savedModel: string | undefined;
+  const apply = vi.fn<NonNullable<typeof t.local.host.applyCapabilities>>(async (_bot, _value, _fence, selected) => {
+    savedModel = selected?.model;
+    return [];
+  });
   t.local.host.applyCapabilities = apply;
-  t.local.host.ensureCanonicalSession.mockRejectedValueOnce(new BotModelUnavailable());
+  t.local.host.ensureCanonicalSession = vi.fn(async () => {
+    if (savedModel !== 'chosen') throw new BotModelUnavailable();
+    return 'session-1';
+  });
   const first = await t.runtime.takeOver('bot_mia');
   expect(first).toMatchObject({ ok: false, modelRecoveryToken: expect.any(String) });
   if (first.ok || !first.modelRecoveryToken) throw new Error('Missing model recovery');

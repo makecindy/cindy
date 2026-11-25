@@ -606,6 +606,11 @@ describe('CompanionShadowBanner', () => {
     const select = await screen.findByText('Choose local model');
     expect((proceed.closest('button') as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(select);
+    maker.takeOverCompanion.mockResolvedValueOnce({ ok: false, code: 'BUSY' });
+    fireEvent.click(proceed);
+    await screen.findByText(/bots.cloud.takingOver/);
+    await waitFor(() => expect((proceed.closest('button') as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.getByText('Choose local model')).toBeTruthy();
     maker.takeOverCompanion.mockResolvedValueOnce({ ok: true });
     fireEvent.click(proceed);
     await waitFor(() => expect(maker.takeOverCompanion).toHaveBeenLastCalledWith('mia', {

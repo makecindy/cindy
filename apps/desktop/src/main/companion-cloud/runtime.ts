@@ -189,6 +189,7 @@ function checkLegacySkillSizes(values: CompanionPreferenceValue[]): void {
 }
 
 function actionFailure(error: unknown, fallback: 'FAILED' | 'OFFLINE' = 'FAILED'): CompanionCloudActionResult {
+  if (errorCode(error) === 'RESTORE_BUSY') return { ok: false, code: 'BUSY' };
   if (error instanceof CompanionProfileRepairError) return { ok: false, code: 'FAILED', profileRepairError: error.reason };
   if (error instanceof BotProfileSourceTooLong) return { ok: false, code: 'FAILED', profileFailure: error.failure };
   if (error instanceof CompanionIdentityConflict) return { ok: false, code: 'LOCAL_CINDY_CONFLICT' };

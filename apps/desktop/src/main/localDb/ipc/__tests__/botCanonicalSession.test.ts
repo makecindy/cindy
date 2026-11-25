@@ -1214,6 +1214,33 @@ describe('Bot canonical Session lifecycle', () => {
       } finally { await modelSettings.resetBotModelChainSettings(); }
     });
 
+    // #12822, SQLite integration: only a custom provider is available during a same-device recovery.
+    it('creates the original companion chat with its selected local model and retains its profile', async () => {
+      const availableProvider = h.providers[0]!;
+      const target = await invoke('local-db:bots:create', { id: 'recover-local', name: 'Recover local', identitySource: 'Existing profile' });
+      const other = await invoke('local-db:bots:get', 'bot-1');
+      h.providers = [{
+        id: 'custom-gateway', connected: true, source: 'user', agents: ['pi'], auth: { method: 'api-key' },
+        models: { pi: [{ id: 'custom-model', efforts: [], defaultEffort: null, defaultEnabled: true }] },
+      }] as unknown as ProviderView[];
+      const route = { harness: 'pi' as const, providerId: 'custom-gateway', model: 'custom-model', effort: '', fastMode: false };
+      const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+        ensureCanonicalSession: async () => 'unused', rebuildContext: async () => 'rebuilt', listDevices: async () => [] });
+      const createMain = (version: number) => invoke('local-db:bots:create-canonical-session', {
+        botId: target.id, expectedCanonicalSessionId: null, expectedProfileVersion: version });
+      await expect(createMain(target.currentVersion)).rejects.toThrow('请先连接模型供应商或选择伙伴模型');
+      h.providers = [{ ...availableProvider, id: 'custom-gateway', models: {
+        ...availableProvider.models, pi: [{ ...availableProvider.models.pi![0]!, id: route.model }],
+      } }];
+      const save = (model: string) => host.materializer!.applyCapabilities!(target.id, {}, { assertCurrent() {} }, { ...route, model });
+      await expect(save('expired-model')).rejects.toThrow();
+      await save(route.model);
+      const restored = await invoke('local-db:bots:get', target.id);
+      expect(restored).toMatchObject({ id: target.id, name: 'Recover local', identitySource: 'Existing profile' });
+      await expect(createMain(restored.currentVersion)).resolves.toMatchObject({ created: true, session: { model: route.model } });
+      expect(await invoke('local-db:bots:get', 'bot-1')).toEqual(other);
+    });
+
     it('keeps a finished meeting record', async () => {
       unfinished('ready');
       await updateStoredBotProfile({ id: 'bot-1', name: 'Cindy' }, undefined, undefined, { replacesUnfinishedMeeting: true });

@@ -45,6 +45,10 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
         setModelDraft({ token: result.modelRecoveryToken, routes: [] });
         return;
       }
+      if (modelDraft && result.code === 'BUSY') {
+        setError(t('bots.cloud.takingOver', { name }));
+        return;
+      }
       setModelDraft(null);
       conflict.report(result);
       if (result.code === 'HOME_CONFLICT') toast.info(t('bots.cloud.takeOverConflict', { name, device }));
