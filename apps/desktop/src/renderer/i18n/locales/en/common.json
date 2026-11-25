@@ -6684,6 +6684,20 @@
         "ssh": "SSH remote hosts",
         "hook": "Cindy IM bots"
       },
+      "cloudComputer": {
+        "title": "Cloud computer",
+        "hint": {
+          "addCloud": "Set up a cloud computer with Cindy installed. Once ready, it appears in your device list.",
+          "preparingCloud": "Your cloud computer is being prepared. It appears in your device list when ready.",
+          "manageCloud": "Start, stop, renew, reinstall and delete it on the web."
+        },
+        "actions": {
+          "addCloud": "Add cloud computer",
+          "preparingCloud": "View progress",
+          "manageCloud": "Manage cloud computer"
+        },
+        "openFailed": "Could not open the cloud computer page. Check your default browser settings."
+      },
       "hook": {
         "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; every project’s model and permissions are shared by all channels, while each channel keeps its own account link.",
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
@@ -8198,6 +8212,11 @@
         "installedExpand": "Show all {{count}} installed plugins",
         "installedCollapse": "Hide additional installed plugins",
         "recommendedSection": "Recommended",
+        "allPlugins": "All plugins",
+        "searchResults": "Search results",
+        "marketSort": {
+          "label": "Sort"
+        },
         "todayRecommendations": "Today's picks",
         "marketSection": "Plugin marketplace",
         "browseMarket": "Browse plugin marketplace",
@@ -8678,6 +8697,7 @@
         "libraryPersist": "Can use a durable library (large files and databases)",
         "libraryPersistDetail": "It gets a Cindy-managed storage area for your work (canvases, images, databases) with no normal plugin data quota. All file and database operations are executed by the host; the plugin only uses relative paths inside its own library and cannot touch your other files. It can also ask Cindy to show a library file in Finder or Explorer, or open the system Save As dialog so you choose where a copy goes; cancelling Save As copies nothing. It can also write a PNG bitmap to the system clipboard with no confirmation dialog; this overwrites the current clipboard. Uninstalling the plugin does not delete this data; deletion requires separate confirmation in Cindy settings.",
         "networkHost": "Accesses the network target {{host}}",
+        "networkHosts": "Network targets",
         "networkSecret": "Needs a credential from you: “{{name}}”",
         "networkSecretGhostInputDetail": "Collected by this plugin's own settings UI — the plugin page sees the value at entry time. It is then handed to the host in one step for encrypted storage; once stored, the plugin can never read it back, and the host injects it only for the domains it declares.",
         "networkSecretIdentity": "Will use your login email as the credential “{{name}}”",
@@ -8884,6 +8904,8 @@
         "dangerTitle": "Uninstall plugin",
         "infoContents": "Contains",
         "infoVersion": "Version",
+        "infoPackageSize": "Package size",
+        "infoPackageSizeWithVersion": "{{size}} ({{version}})",
         "updateTitle": "Update version",
         "updateDesc": "Pick a new .cindy file to replace the installed version in place; enabled state and panel position are preserved.",
         "errandPrefs": {
@@ -8906,11 +8928,26 @@
           "restoreModel": "Reset model"
         },
         "toolsTitle": "Tools",
+        "toolCount_one": "{{count}} tool",
+        "toolCount_other": "{{count}} tools",
         "permissionsTitle": "Permissions",
         "infoDescription": "Description",
         "customSlotAsleep": "This plugin is disabled. Enable it to see its settings UI here.",
         "descriptionExpand": "Show more",
         "descriptionCollapse": "Show less",
+        "recentUpdates": "Recent updates",
+        "olderUpdates": "Earlier updates",
+        "collapseOlderUpdates": "Hide earlier updates",
+        "includesHighRisk": "High risk",
+        "heroDownloads": "Total downloads",
+        "heroUsage": "Total uses",
+        "heroWeeklyUsage": "Uses in the last 7 days",
+        "heroWeeklyUsageExplanation": "Tool calls in the past 7 days across all releases in the authorized audience.",
+        "heroInstalledVersion": "Installed version",
+        "heroListedVersion": "Published version",
+        "heroLatestUpdate": "Last updated",
+        "morePlugins": "More plugins",
+        "morePluginsHint": "Selected at random. This does not reflect any preference on Cindy’s part.",
         "readmeTitle": "About",
         "useAction": "Use Plugin",
         "chatAction": "Chat",
@@ -8949,6 +8986,7 @@
         "portReclaimMessage": "“{{name}}” needs port {{port}}. End the following program?",
         "portReclaimDetail": "Ending it may interrupt its work or lose unsaved data. You can cancel and close the program yourself.",
         "configurationTitle": "Configuration",
+        "recordTitle": "Plugin information",
         "sidebarEntryTitle": "Navigation Entry",
         "showInSidebar": "Show in Left Navigation",
         "fileOpenerTitle": "Open Files with This Plugin",
@@ -8959,6 +8997,7 @@
         "viewAllTools": "See All",
         "collapseTools": "Collapse Tools",
         "viewAllPermissions": "See All",
+        "remainingPermissions": "Show {{count}} more",
         "permissionsDialogDescription": "All {{count}} permissions requested by this Plugin",
         "closeDialog": "Close Dialog",
         "resetPlacement": "Reset to default position"
@@ -9277,6 +9316,7 @@
         "anonymousUnavailable": "Author settings unavailable",
         "anonymousUpdateFailed": "Could not confirm the anonymity setting was saved. Refresh before trying again.",
         "myPlugins": "Publish Plugin",
+        "backToPublish": "Back to Publish Plugin",
         "publish": "Submit for Review",
         "submitUpdate": "Submit New Version for Review",
         "publishHint": "Publish only plugins you have permission to publish. Human approval is required for community listing.",
@@ -9316,6 +9356,7 @@
         "publishedContentUnavailable": "The current published version’s description and release notes are temporarily unavailable.",
         "currentSubmission": "Current submission",
         "localState": {
+          "installed": "Local {{version}}",
           "missing": "Not installed on this computer",
           "unavailable": "Local version temporarily unavailable"
         },
@@ -9328,7 +9369,7 @@
         "publishing": "Publishing",
         "latestSubmission": "Latest Submission",
         "noSubmission": "No submissions yet",
-        "marketVersion": "Published · {{version}}",
+        "marketVersion": "Published {{version}}",
         "market": {
           "not_listed": "Not Listed",
           "disabled": "Unlisted",
@@ -9338,7 +9379,7 @@
         "review": {
           "pending": "Pending Review",
           "approved": "Approved",
-          "rejected": "Returned",
+          "rejected": "Rejected",
           "published": "Published",
           "superseded": "Replaced by a Later Submission",
           "legacy_unverified": "Historical revision unavailable",
@@ -9346,9 +9387,12 @@
           "cancelled": "Cancelled"
         },
         "reason": "Reason",
+        "rejectionReason": "Rejection reason",
+        "rejectionReasonLine": "<reasonLabel>Rejection reason:</reasonLabel> <reasonText />",
         "submittedContent": "Submitted Content",
         "snapshotUnavailable": "The original content was not retained or can no longer be verified.",
         "history": "Publishing History",
+        "marketChanges": "Listing changes",
         "loadMore": "Load More",
         "loadMoreHistory": "Load More History",
         "releaseId": "Release ID",
@@ -9363,7 +9407,7 @@
           "submitted": "Submitted",
           "metadata_updated": "Display Information Updated",
           "approved": "Approved",
-          "rejected": "Returned",
+          "rejected": "Rejected",
           "enabled": "Published",
           "disabled": "Unlisted",
           "archived": "Archived",
@@ -9445,6 +9489,8 @@
         "notApproved": "Not approved yet",
         "timeUnavailable": "Not recorded",
         "releaseNotes": "Release notes",
+        "expandReleaseNotes": "Show all",
+        "noReleaseNotes": "No release notes provided.",
         "versionUpdates": "Versions & Updates",
         "versionManagement": "Manage Versions",
         "versionContent": "Version content",
@@ -9461,7 +9507,6 @@
         "cancelled": "Cancelled",
         "cancelReviewCompleted": "Review cancelled. The currently listed version is unchanged.",
         "cancelReviewAlreadyFinal": "Review already finished, so it was not cancelled. The actual result is shown below.",
-        "viewPendingVersion": "View version under review",
         "submitFailed": "Submission failed",
         "viewDetails": "View details"
       },

@@ -343,6 +343,22 @@ function renderPanel(
   );
 }
 
+// #12816, unit: an empty snapshot followed by 80 models in the same opening
+// must leave a frame for the search box before mounting the incoming rows.
+it('defers a large catalog arriving before the open picker has painted', async () => {
+  const provider = providersRef.providers[0] as ProviderView;
+  const model = provider.models['claude-code']![0]!;
+  const models = Array.from({ length: 80 }, (_, i) => ({ ...model, id: 'late-' + i, name: 'Late ' + i }));
+  const props = { remoteAgent: undefined, modelId: model.id, currentProviderId: provider.id, effort: 'medium' as const,
+    onModelChange: vi.fn(), onEffortChange: vi.fn(), onProviderChange: vi.fn() };
+  const view = render(<ModelSelectorContent {...props} providersOverride={[]} />);
+  const search = screen.getByRole('textbox');
+  view.rerender(<ModelSelectorContent {...props} providersOverride={[{ ...provider, models: { 'claude-code': models } }]} />);
+  expect(screen.getByRole('textbox')).toBe(search);
+  expect(screen.queryByText('Late 79')).toBeNull();
+  await waitFor(() => expect(rowFor('Late 79')).toBeTruthy());
+});
+
 // 浮层里也会出现同一个模型名,故只在列表内定位行。
 function rowFor(name: string): HTMLElement {
   const list = screen.getByRole('listbox');
