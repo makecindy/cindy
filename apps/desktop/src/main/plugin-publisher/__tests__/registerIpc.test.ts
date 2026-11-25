@@ -9,7 +9,8 @@ const {
   snapshotForOwnerMock,
   cancelForOwnerMock,
   trustedRendererMock,
-  publisherApiMock,
+  startInstalledMock,
+  confirmResolveMock,
 } = vi.hoisted(() => ({
   handlers: new Map<string, Handler>(),
   boundaryPendingMock: vi.fn(() => false),
@@ -21,7 +22,8 @@ const {
   snapshotForOwnerMock: vi.fn(() => ({ transferId: 'transfer-1', stage: 'confirming' })),
   cancelForOwnerMock: vi.fn(() => ({ cancelled: true })),
   trustedRendererMock: vi.fn(),
-  publisherApiMock: vi.fn(() => ({ listMine: async () => ({ releases: [], nextCursor: null }) })),
+  startInstalledMock: vi.fn(async () => ({ transferId: 'transfer-2', uploadId: null })),
+  confirmResolveMock: vi.fn(() => true),
 }));
 
 vi.mock('electron', () => ({
@@ -37,21 +39,16 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: trustedRendererMock,
 }));
 vi.mock('../host.js', () => ({
-  createPluginPublisherApi: publisherApiMock,
-  currentPublisherIdentity: vi.fn(() => ({
-    membershipId: 'member-1',
-    orgSlug: 'acme',
-    orgName: 'Acme',
-  })),
-  getPluginPublisherConfirmBridge: vi.fn(() => ({ resolve: vi.fn() })),
+  startInstalledPluginPublish: startInstalledMock,
+  getPluginPublisherConfirmBridge: vi.fn(() => ({ resolve: confirmResolveMock })),
   getPluginPublisherOrchestrator: vi.fn(() => ({
     snapshotForOwner: snapshotForOwnerMock,
     cancelForOwner: cancelForOwnerMock,
   })),
   trackPublisherConfirmRequester: vi.fn(),
 }));
-vi.mock('../api.js', () => ({
-  PluginPublisherApiError: class extends Error {},
+vi.mock('../../plugin-contributions/host.js', () => ({
+  mapContributionError: (error: unknown) => { throw error; },
 }));
 
 const { registerPluginPublisherIpc } = await import('../registerIpc.js');
@@ -73,24 +70,39 @@ beforeEach(() => {
   snapshotForOwnerMock.mockClear();
   cancelForOwnerMock.mockClear();
   trustedRendererMock.mockClear();
-  publisherApiMock.mockClear();
+  startInstalledMock.mockClear();
+  confirmResolveMock.mockClear();
 });
 
 describe('plugin-publisher IPC owner boundary', () => {
-  it('uses the shared Host HTTP client for publication-history requests', async () => {
-    await expect(handler('plugin-publisher:list-mine')(event, null)).resolves.toEqual({ releases: [], nextCursor: null });
-    expect(publisherApiMock).toHaveBeenCalledOnce();
+  // #1541 reopens UI publishing to the organization. The renderer may only name an installed
+  // plugin: a file path (forgeable by an XSS) must never reach the publisher.
+  it('starts UI publishing from an installed plugin and never accepts a file path', async () => {
+    const sender = { id: 9 };
+    await expect(handler('plugin-publisher:start-installed')({ sender }, { instanceId: 'local/demo' }))
+      .resolves.toEqual({ transferId: 'transfer-2', uploadId: null });
+    expect(startInstalledMock).toHaveBeenCalledWith('local/demo', undefined, sender);
+
+    for (const payload of ['C:\\Users\\demo\\plugin.cindy', { filePath: '/tmp/plugin.cindy' },
+      { instanceId: 'local/demo', filePath: '/tmp/plugin.cindy' }]) {
+      await expect(handler('plugin-publisher:start-installed')(event, payload))
+        .rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    }
+    expect(handlers.has('plugin-publisher:start')).toBe(false);
+    expect(startInstalledMock).toHaveBeenCalledOnce();
   });
 
-  it('fails closed when an untrusted Renderer submits a publish file path', async () => {
-    let caught: unknown;
-    try {
-      await handler('plugin-publisher:start')(event, 'C:\\Users\\demo\\plugin.cindy');
-    } catch (error) {
-      caught = error;
-    }
-    // Excludes restoring the path-taking Renderer IPC before a Main-minted grant exists.
-    expect(caught).toMatchObject({ code: 'INVALID_PARAMS' });
+  it('forwards a well-formed audience with the confirmation and rejects malformed ones', () => {
+    const audience = { type: 'matchAny', departmentIds: ['d1'] };
+    expect(handler('plugin-publisher:resolve-confirm')(event, {
+      requestId: 'request-1', confirmed: true, visibilityAudience: audience,
+    })).toEqual({ handled: true });
+    expect(confirmResolveMock).toHaveBeenCalledWith(9, 'request-1', true, audience);
+
+    expect(() => handler('plugin-publisher:resolve-confirm')(event, {
+      requestId: 'request-2', confirmed: true, visibilityAudience: { type: 'everyone' },
+    })).toThrow(/INVALID_PARAMS/);
+    expect(confirmResolveMock).toHaveBeenCalledOnce();
   });
 
   it('passes same-owner status and cancel through the owner-aware lookup', () => {
