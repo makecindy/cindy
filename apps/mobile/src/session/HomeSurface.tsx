@@ -2184,15 +2184,16 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const searchFilterTick = useHomeFilterClock(
     filterWithoutQuery && indexedSearch.lastActivityFilter !== 'all' && screenFocused && active,
   );
+  const sharedSearchOwners = ownedSharedTasks.length ? ownedSharedTasks : undefined;
   const homeSearchSessionFilter = useMemo(() => filterWithoutQuery
     ? createHomeSearchSessionFilter(indexedSearch.scopedOrigins, {
       agentKind: indexedSearch.agentFilter,
       lastActivity: indexedSearch.lastActivityFilter,
       status: searchStatusFilter,
-    }, searchFilterTick || Date.now())
+    }, searchFilterTick || Date.now(), { owned: sharedSearchOwners, projects: indexedSearch.projectSelection })
     : undefined,
   [filterWithoutQuery, indexedSearch.scopedOrigins, indexedSearch.agentFilter,
-    indexedSearch.lastActivityFilter, searchStatusFilter, searchFilterTick]);
+    indexedSearch.lastActivityFilter, indexedSearch.projectSelection, sharedSearchOwners, searchStatusFilter, searchFilterTick]);
   const messageSearchVersion = useRemoteMessageVersion(normalizedSearchQuery.length > 0);
   const homeStatusVersion = useRemoteHomeStatusVersion();
   const searchFilterA11y = t('devices.list.search.filterAria', {
@@ -2468,9 +2469,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const displayedManualProjectOrder = displayed.manualProjectOrder;
   const displayedHome = taskListMode === 'inbox' ? inboxHome : home;
   const displayedStatus = listStatus;
+  // Discovery carries ownership, visibility and a title but no project, engine or activity fields.
+  const includeDiscoveredShares = !filterWithoutQuery || (indexedSearch.projectSelection === 'all'
+    && indexedSearch.agentFilter === 'all' && indexedSearch.lastActivityFilter === 'all');
   const sharedGroup = useMemo(() => splitSharedHomeGroup(displayedHome, ownedSharedTasks, {
-    sessions: homeSessions, searchQuery, statusFilter: displayedStatus,
-  }), [displayedHome, ownedSharedTasks, homeSessions, searchQuery, displayedStatus]);
+    sessions: homeSessions, searchQuery, statusFilter: displayedStatus, includeDiscovered: includeDiscoveredShares,
+  }), [displayedHome, ownedSharedTasks, homeSessions, searchQuery, displayedStatus, includeDiscoveredShares]);
   const cloudTeammates = useCloudCompanionHome(false);
   const cloudTeammateIds = useMemo(() => new Set(cloudTeammates.actors.filter(actor => actor.kind === 'bot').map(actor => actor.externalId)), [cloudTeammates.actors]);
   const cindyTeammateIds = useMemo(() => new Set(cloudTeammates.cindyIds), [cloudTeammates.cindyIds]);
@@ -2494,11 +2498,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // 「最近活跃」按当前时间截断:列表没有新数据时也要让越过截止线的任务按时移出。
   const filterTick = useHomeFilterClock(lastActivityFilter !== 'all' && screenFocused);
   const filteredSharedRows = useMemo(
-    () => filterSharedHomeRows(
-      filterWithoutQuery ? sharedGroup.rows.filter((row) => row.item) : sharedGroup.rows,
-      contentFilters, filterTick || Date.now(),
-    ),
-    [contentFilters, filterTick, filterWithoutQuery, sharedGroup.rows],
+    () => filterSharedHomeRows(sharedGroup.rows, contentFilters, filterTick || Date.now()),
+    [contentFilters, filterTick, sharedGroup.rows],
   );
   const sharedRows = shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? [] : filteredSharedRows;
   const contentFilterCount = activeContentFilterCount(contentFilters);

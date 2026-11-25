@@ -4,6 +4,8 @@
  *
  * 纯函数 + 注入依赖,不直接碰 React / store。
  */
+import { isSharedTaskPeer, type SharedTaskListItem } from '@cindy/device-link';
+import { ownsSharedHomeSession } from './sharedHomeGroup';
 import {
   conversationSearchResultKey,
   createConversationSearchSessionFilter,
@@ -504,13 +506,22 @@ export function createHomeSearchSessionFilter(
   origins: readonly ConversationSearchDeviceOrigin[],
   filters: Pick<NonNullable<ConversationSearchRequest['filters']>, 'agentKind' | 'lastActivity' | 'status'>,
   now: number,
+  sharing: { owned?: readonly SharedTaskListItem[]; projects: ConversationSearchProjectSelection },
 ): (session: MobileHomeSessionLike) => boolean {
   const filtersByDevice = new Map(origins.map(({ deviceId, workingDirs }) => [
     deviceId, createConversationSearchSessionFilter({ ...filters, workingDirs }, now),
   ]));
+  const sharedFilter = sharing.projects === 'all'
+    ? createConversationSearchSessionFilter(filters, now)
+    : null;
   return (session) => {
     const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId;
-    return deviceId != null && filtersByDevice.get(deviceId)?.(session) === true;
+    const deviceFilter = deviceId == null ? undefined : filtersByDevice.get(deviceId);
+    if (deviceFilter) return deviceFilter(session);
+    // Home already scopes shared rows by its authoritative projection and selected computer.
+    if (sharedFilter && (isSharedTaskPeer(session.deviceLinkDeviceId)
+      || sharing.owned?.some(task => ownsSharedHomeSession(session, task)))) return sharedFilter(session);
+    return false;
   };
 }
 

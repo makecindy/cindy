@@ -134,7 +134,7 @@ it('keeps only the matching sessions in grouped Home with an empty search field'
   const options = { sessions, statusFilter: 'all', searchQuery: '' } as const;
   const result = buildMobileHomePresentation({
     ...options,
-    sessionFilter: createHomeSearchSessionFilter([origin], filters, Date.now()),
+    sessionFilter: createHomeSearchSessionFilter([origin], filters, Date.now(), { owned: [], projects: ['dev-a:/repo'] }),
   });
   expect(result.projects.map((project) => project.sessions.map((item) => item.session.id))).toEqual([['match']]);
   expect(searchCachedDeviceSessions(origin, {

@@ -8,6 +8,7 @@ import { sharedTaskHostPeer } from '@cindy/device-link';
 import { buildMobileHomePresentation, type MobileHomeSessionLike } from '@/session/mobileHome';
 import { buildHomeScopeMenuItems, buildHomeScopePullDownActions } from '@/session/homeChromeMenus';
 import { splitSharedHomeGroup } from '@/session/sharedHomeGroup';
+import { createHomeSearchSessionFilter } from '@/session/conversationSearch';
 
 const peer = sharedTaskHostPeer('shared', 'host');
 function session(id: string, deviceId: string, name: string): MobileHomeSessionLike {
@@ -92,6 +93,37 @@ describe('shared Home group', () => {
   it('keeps source-confirmed owner tasks visible without a complete session mirror', () => {
     expect(split([]).rows).toEqual([{ key: 'shared:mine', role: 'owned', task: own }]);
     expect(split([], []).rows).toEqual([]);
+  });
+
+  // #4605: Home projection and shared grouping use separate visibility sources.
+  it('filters joined session fields and keeps discovery rows only when their fields suffice', () => {
+    const now = Date.parse('2026-09-22T00:00:00Z');
+    const sessions = [
+      { ...session('joined', peer, 'Joined'), agentKind: 'codex' },
+      { ...session('owner-task', 'desktop', 'Owned'), agentKind: 'codex' },
+      { ...session('unrelated', 'desktop', 'Unrelated'), agentKind: 'codex' },
+      { ...session('old', peer, 'Older joined'), updatedAt: '2026-09-01T00:00:00Z' },
+    ];
+    const discovery = { ...own, sessionId: 'not-mirrored', sharedTaskId: 'more' };
+    const owned = [own, discovery];
+    const projectRows = (
+      status: 'active' | 'archived',
+      opts: Parameters<typeof createHomeSearchSessionFilter>[1],
+      projects: Parameters<typeof createHomeSearchSessionFilter>[3]['projects'],
+      includeDiscovered: boolean,
+    ) => {
+      const home = buildMobileHomePresentation({
+        sessions, statusFilter: status,
+        sessionFilter: createHomeSearchSessionFilter([], { ...opts, status }, now, { owned, projects }),
+      });
+      return splitSharedHomeGroup(home, owned, {
+        sessions, searchQuery: '', statusFilter: status, includeDiscovered,
+      }).rows.map(row => row.item?.session.id ?? row.task?.sessionId).sort();
+    };
+    expect(projectRows('active', {}, 'all', true)).toEqual(['joined', 'not-mirrored', 'old', 'owner-task']);
+    expect(projectRows('active', { agentKind: 'codex', lastActivity: '3d' }, 'all', false)).toEqual(['joined', 'owner-task']);
+    expect(projectRows('active', {}, ['device:/repo'], false)).toEqual([]);
+    expect(projectRows('archived', {}, 'all', true)).toEqual([]);
   });
 
   it.each([undefined, 'cindy-make', 'cindy-make-merge'])('does not synthesize a share row with source %s', source => {
