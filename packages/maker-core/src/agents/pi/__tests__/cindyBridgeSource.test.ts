@@ -5223,3 +5223,81 @@ it('stops the property type walk at the node budget', async () => {
   expect(branches.counter.count).toBeLessThan(1000);
   expect(requests).toHaveLength(0);
 });
+
+// 评审 P1(载荷平铺在顶层、args 容器却是空的时, 载荷判据只看容器): 模型给 args:{} 再把参数
+// 平铺在顶层(status 之类)时, 容器是空的 → 载荷判据说「没有载荷」→ 信封判不了那道闸不触发,
+// 于是照缺省值那一路把 {name, status} 发出去: 少了 registry 那层 args, 内层工具被按缺省值
+// 调用还返回成功(Codex P1 on #10908 第 13 轮, 4201 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 拒收(信封判不了 → 指路), 一个请求都不发。
+// - Bug 依据:codex 对 #10908 第 13 轮的 P1。
+// - 覆盖缺口:上一轮的截断用例给的是「容器里有载荷」, 没有「容器空、载荷平铺在顶层」这一形状。
+// - 最小失败输入:schema 看不全的 call_tool + args:{} + 顶层 status:"active"。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('rejects a flattened call whose payload sits beside an empty args container', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  // 根 + 600 个分支远超 512 节点预算: 信封信号看不全, 顶层 name 是信封层的内层工具名还是
+  // 这个工具自己的参数, 分不清。
+  const branches: Record<string, unknown>[] = Array.from({ length: 600 }, () => ({}));
+  branches.push({ required: ['name'] });
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, args: { type: 'object' } },
+      allOf: branches,
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // args 容器是空的, 载荷平铺在顶层: 判不出来就拒收并指路, 不照发(照发就少了 args 层)。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'schedule_list', args: {}, status: 'active',
+  })).rejects.toThrow(/could not read the schema of this tool in full .* Put everything in args/);
+  expect(requests).toHaveLength(0);
+});
+
+// 评审 P1(内层 schema 代拉没有限定在信封工具上): 普通第三方工具的 args 容器碰巧长得像
+// {name, args}(顶层 name 与 args.name 同名)时, 归一化把「要不要问服务端那份内层 schema」
+// 标了出来, 权限那条路径就去打一次服务端自定的 list_tools —— 那个工具名是服务端说了算的,
+// 可能带副作用, 也可能把弹框拖到整轮远端超时(Codex P1 on #10908 第 13 轮, 4179 行)。
+// 归位结论本来也跟内层 schema 无关(不是信封就没有「剥不剥那一层」这回事)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 不发任何 list_tools 探测请求, 参数照原样发出。
+// - Bug 依据:codex 对 #10908 第 13 轮的 P1。
+// - 覆盖缺口:代拉只在「registry 信封 + 内层工具本地查不到」这一形状上盖过, 没盖过普通第三方工具。
+// - 最小失败输入:第三方工具 search(name/args/query 三个参数, 不是信封) + 顶层 name 与 args.name 同名。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('does not probe the inner list of a third-party tool that is not an envelope', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('third_party', client, [{
+    name: 'search',
+    // name / args / query 三个参数: 不是 {name, args} 信封。
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, args: { type: 'object' }, query: { type: 'string' } },
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'third_party', tool: 'search' });
+  await gateway.executeCall({
+    server: 'third_party', tool: 'search', name: 'lookup', args: { name: 'lookup', args: { query: 'x' } },
+  });
+  // 只发这一次调用本身: 没有 list_tools 探测(那个工具名是服务端自定的, 可能带副作用)。
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'search', arguments: { name: 'lookup', args: { query: 'x' } },
+  });
+});

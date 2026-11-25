@@ -4161,6 +4161,11 @@ function normalizeGatewayArgs(
   const containerLooksEnvelope = Object.prototype.hasOwnProperty.call(params, 'name')
     && typeof params.name === 'string'
     && Object.prototype.hasOwnProperty.call(params, 'args');
+  // 信封判据先算: 「要不要问服务端那份内层 schema」只在**确实认得出信封**时才问 ——
+  // 普通第三方工具的 args 容器碰巧长得像 {name, args} 时, 问它没有意义(归位结论与内层 schema
+  // 无关), 却会在弹框前打一次服务端自定的 list_tools: 那个工具名是服务端说了算的, 可能带副作用
+  // (Codex P1 on #10908 第 13 轮, 4179 行)。
+  const envelopeSchema = isNameEnvelopeSchema(schema, surface);
   // 内层工具自己就声明 name + args 参数时(run 这类), args 容器里的 {name, args} 可能正是它的
   // 参数对象 —— 内层名恰好与选择器撞名而已。三态判据(与执行前双包裁决同一判据、同一来源):
   // - true  内层确实声明了 args → 容器是内层工具自己的参数对象, 两层都留;
@@ -4172,7 +4177,8 @@ function normalizeGatewayArgs(
     ? lookupInnerTool(params.name as string)
     : null;
   const innerDeclaresArgs = innerTool ? schemaDeclaresArgs(innerTool.inputSchema) : null;
-  const innerSchemaPending = containerLooksEnvelope
+  const innerSchemaPending = envelopeSchema
+    && containerLooksEnvelope
     && selector !== undefined
     && params.name === selector
     && innerTool === null
@@ -4181,7 +4187,6 @@ function normalizeGatewayArgs(
   const repeatsEnvelope = selector !== undefined
     && containerLooksEnvelope
     && ((params.name === selector && innerDeclaresArgs !== true) || selector === tool.name);
-  const envelopeSchema = isNameEnvelopeSchema(schema, surface);
   // 信封判不了: schema 看不全, 但已看到的表态仍与信封兼容, 而顶层给了 name。它可能是信封层的
   // 内层工具名 —— 按普通工具折进参数容器, 服务端拿到的是 {name, <内层参数>}: 没有 args 层, 内层
   // 工具被按空参数调用还返回成功(Codex P1 on #10908)。也可能就是这个工具自己的 name 参数,
@@ -4196,9 +4201,12 @@ function normalizeGatewayArgs(
     && !surface.additionalAllowed
     && surface.patterns.length === 0
     && [...surface.names].every((name) => name === 'name' || name === 'args');
-  const carriesPayload = provided
-    ? Object.keys(params).length > 0
-    : Object.entries(record).some(([key]) => !GATEWAY_OWN_KEYS.has(key) && key !== 'name');
+  // 载荷不只看 args 容器: 容器给了但是空的, 载荷可能平铺在顶层(模型给 args:{} 再给几个平铺键)。
+  // 这种形状有没有 registry 那层 args, 两种读法发出去的参数不一样 —— 判不出来就要拒收,
+  // 不能照发(少了 args 层, 内层工具被按缺省值调用还返回成功)。
+  const flatSiblings = Object.entries(record)
+    .some(([key]) => !GATEWAY_OWN_KEYS.has(key) && key !== 'name');
+  const carriesPayload = Object.keys(params).length > 0 || flatSiblings;
   const indeterminateEnvelope = selector !== undefined && surface !== null
     && surface.truncated && envelopeCompatible && carriesPayload;
   if (indeterminateEnvelope) {
@@ -4313,6 +4321,12 @@ class CindyMcpGateway {
   /** 本次调用跳过了权限询问（hook 未披露即放行）：按 toolCallId 记账，execute 见此标记一律回路标。 */
   private readonly permissionSkippedCalls = new Set<string>();
   private readonly approvedDefinitions = new Map<string, string>();
+  /**
+   * 归一化结论(按 toolCallId 记): 审批那条路径与执行那条路径必须用同一份结论 ——
+   * 剥不剥那一层可能要问服务端那份 schema, 代拉失败时两次答案可能不同; 记下来,
+   * 执行时就发审批框里显示的那一份(pi-harness §4.12)。
+   */
+  private readonly approvedCalls = new Map<string, ResolvedMcpGatewayCall>();
   private disclosureNotePending = false;
   private botMemoryFacadeEnabled = false;
   private botHelperFacadeEnabled = false;
@@ -4827,6 +4841,11 @@ class CindyMcpGateway {
     if (typeof toolCallId === 'string' && toolCallId) this.approvedDefinitions.set(toolCallId, definition);
   }
 
+  /** 记下审批框里显示的那份归一化结论, 执行时照它发(见 approvedCalls)。 */
+  rememberResolvedCall(toolCallId: unknown, call: ResolvedMcpGatewayCall): void {
+    if (typeof toolCallId === 'string' && toolCallId) this.approvedCalls.set(toolCallId, call);
+  }
+
   /**
    * Sorted, prompt-ready server/tool names worth re-surfacing after compaction:
    * only tools that still exist AND whose stored fingerprint still matches the
@@ -5182,9 +5201,13 @@ class CindyMcpGateway {
     const permissionSkipped = this.consumePermissionSkipped(toolCallId);
     const approvedDefinition = toolCallId ? this.approvedDefinitions.get(toolCallId) : undefined;
     if (toolCallId) this.approvedDefinitions.delete(toolCallId);
+    // 审批框里显示的那份归一化结论: 执行就照它发, 不再重新判一次(重新判可能要再问一次
+    // 服务端, 代拉失败时两次答案会不同 —— 那样弹框里是一份、发出去是另一份)。
+    const approvedCall = toolCallId ? this.approvedCalls.get(toolCallId) : undefined;
+    if (toolCallId) this.approvedCalls.delete(toolCallId);
     // 归一化要等内层 schema 定下来: 剥不剥那一层按服务端那份真实 schema 判, 审批框显示的
     // 那份与真正发出去的那份必须是同一份(pi-harness §4.12)。
-    const resolved = await this.resolveCallAsync(params, signal);
+    const resolved = approvedCall ?? await this.resolveCallAsync(params, signal);
     if (!resolved) throw new Error(this.callInputError(params) ?? this.unknownCallMessage(params));
     if (approvedDefinition !== undefined && this.approvalDefinition(resolved) !== approvedDefinition) {
       throw new McpBridgeError('tool definition changed; inspect it with cindy_mcp_list_tools and call again');
@@ -5312,7 +5335,7 @@ class CindyMcpGateway {
 
   register(pi: any, options: { botMemoryFacade?: boolean } = {}): void {
     // Aborted turns may approve a call that Pi never executes.
-    pi.on?.('agent_end', () => { this.approvedDefinitions.clear(); });
+    pi.on?.('agent_end', () => { this.approvedDefinitions.clear(); this.approvedCalls.clear(); });
     pi.on?.('tool_result', (event: any) => {
       const failure = this.failedResults.get(event.content) ?? this.failedResults.get(event.details);
       if (failure) {
@@ -6693,6 +6716,10 @@ export default async function cindyBridge(piApi: any) {
       };
     }
     if (approvedDefinition !== undefined) mcpGateway.rememberApproval(event.toolCallId, approvedDefinition);
+    // 执行那条路径照审批框里显示的那份发: 归位结论不再重判一次。
+    if (event.toolName === CINDY_MCP_CALL_TOOL && gatewayCall) {
+      mcpGateway.rememberResolvedCall(event.toolCallId, gatewayCall);
+    }
     if (
       FILE_WRITE_BUILTINS.has(event.toolName)
       && writeTargetResolved !== null
