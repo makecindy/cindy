@@ -87,6 +87,19 @@ describe('teammate appearance page: own wallpaper media', () => {
     await waitFor(() => expect(getBotAppearance('bot-1').wallpaperId).toBeUndefined());
   });
 
+  // Review of 00481ae: a slow import wrote "custom" over a wallpaper chosen meanwhile.
+  // The wallpaper row is locked until the import or removal returns.
+  it('locks the wallpaper choice while an import is in flight', async () => {
+    let finishImport!: (map: Record<string, string> | null) => void;
+    stubBridge({ importBotWallpaper: vi.fn(() => new Promise((resolve) => { finishImport = resolve; })) });
+    render(<WallpaperSettingsProvider><Page botId="bot-1" /></WallpaperSettingsProvider>);
+    const wallpaper = () => screen.getByRole('combobox', { name: 'bots.appearance.wallpaper' });
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.appearance.wallpaper.customReplace' }));
+    expect(wallpaper()).toHaveProperty('disabled', true);
+    await act(async () => { finishImport(null); });
+    expect(wallpaper()).toHaveProperty('disabled', false);
+  });
+
   // Minimal input: the teammate's own MP4 fails to play while its page is open.
   it('reports that this teammate’s video cannot play', async () => {
     stubBridge({});

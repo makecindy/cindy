@@ -5,6 +5,7 @@ import path from 'node:path';
 import { normalizeCustomWallpaperUrl } from '../shared/appearanceSettings.js';
 import {
   BOT_WALLPAPERS_CHANGED_CHANNEL,
+  MAX_BOT_WALLPAPERS,
   isBotWallpaperKey,
   normalizeBotWallpaperMap,
   type BotWallpaperMap,
@@ -65,14 +66,24 @@ export function loadBotWallpapers(): Promise<BotWallpaperMap> {
   return loading.done;
 }
 
-/** The only write path: updates the file under its lock, then the in-memory copy. */
+/**
+ * The only write path: updates the file under its lock, then the in-memory copy.
+ * The store's own read is lenient (a damaged table reads as empty), so the raw file is
+ * validated first: rewriting a table that cannot be read reliably would drop the other
+ * teammates' references and let recycling delete their media. A damaged file is left as is
+ * and the write fails.
+ */
 export async function updateBotWallpapers(
   updater: (current: BotWallpaperMap) => BotWallpaperMap | null,
 ): Promise<void> {
   const file = filePath();
   const value = await botWallpaperStore.updateAtomic(({ value: current }) => {
+    readReferencedBotWallpaperUrls();
     const next = updater(current.wallpapers);
-    return next ? { wallpapers: next } : null;
+    if (!next) return null;
+    // Past the cap, normalization would silently drop entries on the next read.
+    if (Object.keys(next).length > MAX_BOT_WALLPAPERS) throw new Error('Too many teammate wallpapers');
+    return { wallpapers: next };
   });
   snapshot = { file, wallpapers: value.wallpapers };
 }

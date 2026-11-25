@@ -135,6 +135,8 @@ export function BotAppearanceSettings({ botId }: { botId: string }) {
               data-settings-search-action="Teammate appearance lives in its own settings drawer, outside the settings index"
               label={t('bots.appearance.wallpaper')}
               value={wallpaperValue}
+              // An import or removal settles the choice when it returns; no other choice meanwhile.
+              disabled={busy}
               options={[
                 { value: FOLLOW, label: t('bots.appearance.followGlobal') },
                 ...wallpaperIds.map((id) => ({ value: id, label: t('settings.appearance.wallpaper.options.' + id) })),

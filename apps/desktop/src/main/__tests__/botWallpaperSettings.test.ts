@@ -55,6 +55,19 @@ describe('teammate wallpaper references', () => {
     expect(await loadBotWallpapers()).toEqual({ 'bot-2': url('b') });
   });
 
+  // Review of 00481ae, engineering-conventions.md §8.2: the write path read the table
+  // leniently, so a parseable but damaged file became an empty table and the next import
+  // rewrote it without the other teammates' references. Minimal input: `{"wallpapers":[]}`.
+  it.each(['{"wallpapers":[]}', '[]', '{"wallpapers":{"bot-1":"file:///private.webp"}}'])(
+    'refuses to rewrite a damaged reference table and leaves it untouched: %s',
+    async (content) => {
+      const file = path.join(h.dir, 'bot-wallpapers.json');
+      fs.writeFileSync(file, content);
+      await expect(updateBotWallpapers((current) => ({ ...current, 'bot-2': url('b') }))).rejects.toThrow();
+      expect(fs.readFileSync(file, 'utf8')).toBe(content);
+    },
+  );
+
   it('broadcasts media URLs to app-content windows only', async () => {
     const appWindow = { appContent: true, webContents: { send: vi.fn() } };
     const fontOnlyWindow = { appContent: false, webContents: { send: vi.fn() } };

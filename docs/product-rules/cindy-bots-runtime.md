@@ -500,6 +500,7 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
   图片存在控制端，由控制端在对方确认删除后自行清理（`forgetBotAppearance`）。
   通道 `appearance-settings:{get,import,remove}-bot-wallpaper(s)` 与推送 `bot-wallpapers-changed`
   只在本机桌面，不进远程白名单；文件路径只来自原生选择器。
+  写入前在锁内严格校验原始引用表，表损坏时拒绝改写并保留原文件，不会把读不懂的表当成空表覆盖掉。
   读取由内存快照应答（首次异步加载，写入后更新），不在 IPC 里同步读盘；推送只发给 app-content 窗口，
   只读字体的工具窗口拿不到任何伙伴的媒体 URL。
 - 覆盖只作用于当前窗口的配色与壁纸画布。原生窗口背景（vibrancy）、Dock 图标与主题快照由 main 对所有
