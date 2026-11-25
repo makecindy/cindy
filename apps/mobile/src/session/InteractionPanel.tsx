@@ -826,17 +826,10 @@ function PermissionCard({
   const { t, i18n: i18nInstance } = useTranslation();
   // Host-owned plugin install card: never hand the raw input to the generic previews (they serialize it whole). The
   // source is shown only as the checked repository line below; its sourceId or a malformed value never appears.
-  const displayRequest = useMemo(() => {
-    if (item.request.toolName !== 'cindy.plugin.install') return item.request;
-    const raw = item.request.input && typeof item.request.input === 'object' ? item.request.input as Record<string, unknown> : {};
-    const safe: Record<string, string> = {};
-    for (const key of ['ghost_id', 'version', 'operation', 'origin'] as const) if (typeof raw[key] === 'string') safe[key] = raw[key] as string;
-    return { ...item.request, input: safe };
-  }, [item.request]);
-  const presentation = useMemo(
-    () => buildPermissionReviewPresentation(displayRequest, mobilePresentationLocalizer),
-    [i18nInstance.language, displayRequest],
-  );
+  const { displayRequest, presentation } = useMemo(() => {
+    const displayRequest = safePluginInstallRequest(item.request);
+    return { displayRequest, presentation: buildPermissionReviewPresentation(displayRequest, mobilePresentationLocalizer) };
+  }, [i18nInstance.language, item.request]);
   const companion = useContext(CompanionInteractionContext);
   const companionIdentity = useContext(CompanionIdentityContext);
   const hung = useContext(CompanionHungContext);
@@ -2144,6 +2137,15 @@ function UnsupportedCard({
       {summaryText ? <Text style={styles.body} numberOfLines={6}>{summaryText}</Text> : null}
     </View>
   );
+}
+
+/** Host-owned plugin install card: only the safe display fields reach the generic previews (never the raw source). */
+function safePluginInstallRequest<T extends Record<string, unknown>>(request: T): T {
+  if (request.toolName !== 'cindy.plugin.install') return request;
+  const raw = request.input && typeof request.input === 'object' ? request.input as Record<string, unknown> : {};
+  const safe: Record<string, string> = {};
+  for (const key of ['ghost_id', 'version', 'operation', 'origin'] as const) if (typeof raw[key] === 'string') safe[key] = raw[key] as string;
+  return { ...request, input: safe };
 }
 
 function ResolveButton({
