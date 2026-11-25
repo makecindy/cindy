@@ -32,17 +32,24 @@ function boundedString(value: unknown, maxLength: number): string | undefined {
 function parseSourceInfo(value: unknown): PiRuntimeCommandSourceInfo | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).some((key) => !['path', 'scope', 'baseDir', 'source', 'origin'].includes(key))) return undefined;
+  if (Object.keys(raw).some((key) => !['path', 'scope', 'baseDir', 'source', 'origin', 'changelogPath'].includes(key))) return undefined;
   for (const key of ['path', 'scope', 'baseDir', 'source', 'origin'] as const) {
     if (Object.hasOwn(raw, key) && !boundedString(raw[key], MAX_SOURCE_INFO_VALUE_LENGTH)) {
       return undefined;
     }
   }
+  if (Object.hasOwn(raw, 'changelogPath') && (
+    typeof raw.changelogPath !== 'string'
+    || raw.changelogPath.length > MAX_SOURCE_INFO_VALUE_LENGTH
+  )) return undefined;
   const path = boundedString(raw.path, MAX_SOURCE_INFO_VALUE_LENGTH);
   const scope = boundedString(raw.scope, MAX_SOURCE_INFO_VALUE_LENGTH);
   const baseDir = boundedString(raw.baseDir, MAX_SOURCE_INFO_VALUE_LENGTH);
   const source = boundedString(raw.source, MAX_SOURCE_INFO_VALUE_LENGTH);
   const origin = boundedString(raw.origin, MAX_SOURCE_INFO_VALUE_LENGTH);
+  // Pi 1.5 adds changelogPath to package command provenance. It is accepted
+  // and validated above, but intentionally not retained: Cindy authorizes
+  // commands only through the stable path/scope/source/origin fields below.
   // A sourceInfo object with no recognized provenance is not trustworthy enough
   // to mark the command catalog loaded.
   if (!path && !scope && !baseDir && !source) return undefined;
