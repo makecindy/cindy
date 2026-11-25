@@ -153,10 +153,9 @@ describe('Feishu parent-chat file reuse', () => {
       const candidate = outcome === 'mismatch'
         ? await fileFixture('decoy.txt', 'different inode')
         : absPath;
+      let inheritedIdentity: fsSync.BigIntStats | undefined;
       const child = stubWindowsPathHelper(candidate, outcome, (fd) => {
-        const identity = fsSync.fstatSync(fd, { bigint: true });
-        expect(identity.dev).toBe(expectedIdentity.dev);
-        expect(identity.ino).toBe(expectedIdentity.ino);
+        inheritedIdentity = fsSync.fstatSync(fd, { bigint: true });
       });
 
       if (outcome === 'timeout') vi.useFakeTimers();
@@ -170,6 +169,14 @@ describe('Feishu parent-chat file reuse', () => {
       }
 
       const primary = await sending;
+      // spawn exceptions are caught by production code. Assert outside that
+      // boundary so a missing/invalid/wrong fd cannot pass as an empty proof.
+      if (outcome !== 'native') {
+        expect(inheritedIdentity).toMatchObject({
+          dev: expectedIdentity.dev,
+          ino: expectedIdentity.ino,
+        });
+      }
       expect(primary).toMatchObject({
         ok: true,
         messageId: 'om_sent',
