@@ -5,7 +5,7 @@
  * @vitest-environment node
  */
 
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync, symlinkSync, realpathSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -349,6 +349,42 @@ describe('installHookScript(统一安装通道:script/description 双模式 + �
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each(['script', 'description'] as const)('keeps the installed %s wrapper runnable after a plugin update', async (mode) => {
+    const state = path.join(realpathSync(dir), "user's data", 'ghost-install-state');
+    const skill = (revision: string) => path.join(state, 'skill-snapshots', 'plugin', revision, 'skills', 'check');
+    const projection = path.join(state, 'agent-skills', 'skills', 'plugin--check');
+    mkdirSync(path.dirname(projection), { recursive: true });
+    for (const revision of ['old', 'new']) {
+      mkdirSync(skill(revision), { recursive: true });
+      writeFileSync(path.join(skill(revision), 'decision'), revision === 'old' ? '0' : '2');
+    }
+    symlinkSync(skill('old'), projection, 'junction');
+    const literal = JSON.stringify(path.join(skill('old'), 'decision'));
+    const script = [
+      "import { readFileSync } from 'node:fs';",
+      `// Original input: ${literal}`,
+      `process.exit(Number(readFileSync(${literal}, 'utf8')));`,
+    ].join('\n');
+    const result = await installHookScript({
+      maker: null, fallbackDir: dir, hasSystemNode: async () => true,
+      requestText: async () => utilitySuccess(script),
+    }, mode === 'script' ? { script } : { description: 'use the plugin decision' });
+    expect(result.test.exitCode).toBe(0);
+    expect(result.content).toContain(`// Original input: ${literal}`);
+    expect(readFileSync(result.filePath, 'utf8')).toBe(result.content + '\n');
+
+    unlinkSync(projection);
+    symlinkSync(skill('new'), projection, 'junction');
+    rmSync(skill('old'), { recursive: true });
+    const { executePreRunHook } = await import('../pre-run-hook');
+    const next = await executePreRunHook({
+      command: result.command, cwd: dir,
+      stdinPayload: { event: 'schedule-pre-run', scheduleId: 'test', scheduleName: 'check', runId: 'second', firedAt: Date.now() },
+    });
+    expect(next.decision).toBe('skip');
+    expect(next.exitCode).toBe(2);
   });
 
   it('script 模式:agent 提供内容 → 落盘规范路径 + 自测返回 skip(exit 2)', async () => {

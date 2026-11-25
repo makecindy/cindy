@@ -311,6 +311,36 @@ function pluginSkillProjectionPath(
   return resolved;
 }
 
+/** Persist static Skill paths inside the wrapper as JavaScript strings (shell quoting would corrupt them). */
+async function writeHookScript(filePath: string, script: string): Promise<string> {
+  let content = script;
+  if (script.includes('skill-snapshots')) {
+    const { parse } = await import('@babel/parser');
+    // Keep the existing self-test responsible for invalid scripts and syntax newer than the parser.
+    let tokens: ReturnType<typeof parse>['tokens'];
+    try {
+      tokens = parse(script, { sourceType: 'module', tokens: true }).tokens;
+    } catch {
+      tokens = [];
+    }
+    // Work backwards so each replacement preserves the parser offsets still to be used.
+    for (const token of (tokens ?? []).reverse()) {
+      if (token.type.label !== 'string') continue;
+      const value: string = token.value;
+      if (!path.isAbsolute(value) || !/[\\/]ghost-install-state[\\/]skill-snapshots[\\/]/.test(value)) continue;
+      if (value.split(/[\\/]/).includes('..')) continue;
+      const normalized = path.normalize(value);
+      const stable = pluginSkillProjectionPath(normalized, realpathSync, readdirSync);
+      if (stable !== normalized) {
+        content = content.slice(0, token.start) + JSON.stringify(stable) + content.slice(token.end);
+      }
+    }
+  }
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content.endsWith('\n') ? content : `${content}\n`, 'utf8');
+  return content;
+}
+
 /**
  * A Skill's own check script reached through that per-process link folder disappears when Cindy restarts,
  * so every later run would fail closed. Persist the Skill's real location instead, through the shared
@@ -508,8 +538,8 @@ export async function generateHookScript(
     model: input.model,
   });
   if (!response.ok) throw new HookScriptUtilityModelError(response);
-  const content = extractScriptFromResponse(response.text);
-  if (!content) {
+  const script = extractScriptFromResponse(response.text);
+  if (!script) {
     throw new Error('hook script generation failed: response did not contain a code block');
   }
 
@@ -520,8 +550,7 @@ export async function generateHookScript(
     reusePath,
     exists: existsSync,
   });
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, content.endsWith('\n') ? content : `${content}\n`, 'utf8');
+  const content = await writeHookScript(filePath, script);
 
   // Persist an absolute path so a later session/workdir rebind cannot retarget the script.
   const command = buildHookCommand(filePath, undefined, await resolveRunner(deps));
@@ -586,14 +615,13 @@ export async function installHookScript(
       reusePath,
       exists: existsSync,
     });
-    mkdirSync(path.dirname(filePath), { recursive: true });
-    writeFileSync(filePath, script.endsWith('\n') ? script : `${script}\n`, 'utf8');
+    const content = await writeHookScript(filePath, script);
     // script 模式内容同为 Node ESM(工具契约),执行方同样按探测结果选
     written = {
       // Persist an absolute path so a later session/workdir rebind cannot retarget the script.
       command: buildHookCommand(filePath, undefined, await resolveRunner(deps)),
       filePath,
-      content: script,
+      content,
     };
     deps.logger?.info?.('[hook-script-generator] agent-authored script installed', {
       filePath,
