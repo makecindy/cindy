@@ -188,7 +188,7 @@ describe('worker arrears', () => {
 describe('gate trigger scope', () => {
   const base = { leadSessionId: 'lead-1', turnGeneration: 2, workerLabels: ['research'] };
 
-  it('does not let a dispatch from an earlier turn silence this turn', async () => {
+  it('keeps the judge out once the host has a dispatch to point at', async () => {
     requestUtilityText.mockResolvedValue({ ok: true, text: 'claim' });
     noteLeadDispatchFact('lead-1', {
       workerId: 'w-1',
@@ -196,10 +196,44 @@ describe('gate trigger scope', () => {
       dispatchId: 'q-earlier',
       delivery: 'queued',
       turnGeneration: 1,
+      at: Date.now() - 60_000,
+    });
+    // 账本里就有一笔真派发，「已经交给 research」是对它的复述；
+    // 单回合文本分不清复述与新声称，宁可不判，也不要纠正真话。
+    await expect(evaluateTurnGate({ ...base, finalText: '已派给它了。' })).resolves.toBeUndefined();
+    expect(requestUtilityText).not.toHaveBeenCalled();
+  });
+
+  it('lets a dispatch that landed a moment ago pass, whatever its generation says', async () => {
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'claim' });
+    // 写入与判定两侧各取一次轮次，异步投递落地时常常错开一轮。
+    noteLeadDispatchFact('lead-1', {
+      workerId: 'w-1',
+      workerLabel: 'research',
+      dispatchId: 'q-this-turn',
+      delivery: 'queued',
+      turnGeneration: 99,
       at: Date.now(),
     });
-    await expect(evaluateTurnGate({ ...base, finalText: '已派给它了。' })).resolves.toBeTruthy();
-    expect(requestUtilityText).toHaveBeenCalledTimes(1);
+    await expect(evaluateTurnGate({ ...base, finalText: '已派给它了。' })).resolves.toBeUndefined();
+    expect(requestUtilityText).not.toHaveBeenCalled();
+  });
+
+  it('tells the judge that a denial is not a claim', async () => {
+    // 判定器是模型，唯一能固定下来的就是「否认」这条指令：没有它，
+    // 一句「本轮没有派单」会被判成声称已派，同一个回合反复纠正。
+    let seen = '';
+    requestUtilityText.mockImplementation((_maker: unknown, prompt: string) => {
+      seen = prompt;
+      return Promise.resolve({ ok: true, text: 'quiet' });
+    });
+    await judgeDispatchClaim({
+      leadSessionId: 'lead-1',
+      turnGeneration: 1,
+      workerLabels: ['research'],
+      finalText: '本轮没有派单。',
+    });
+    expect(seen).toContain('denies having dispatched');
   });
 
   it('still treats a namespaced Orca tool name as Orca', () => {
@@ -207,18 +241,19 @@ describe('gate trigger scope', () => {
     expect(turnOrcaToolUseCount('lead-1', 2)).toBe(1);
   });
 
-  it('reminds once per claimed sentence, not once per session', async () => {
+  it('judges every turn, so insisting on the next turn is still corrected', async () => {
     requestUtilityText.mockResolvedValue({ ok: true, text: 'claim' });
-    const once = { ...base, leadSessionId: 'lead-once' };
-    const sentence = '这次已经交给 research 了。';
-    // 纠正会开启新一轮，代次前进；同一句话不再提醒。
-    await expect(evaluateTurnGate({ ...once, finalText: sentence })).resolves.toBeTruthy();
+    const lead = { ...base, leadSessionId: 'lead-repeat' };
     await expect(
-      evaluateTurnGate({ ...once, turnGeneration: 3, finalText: sentence }),
+      evaluateTurnGate({ ...lead, turnGeneration: 2, finalText: '这次已经交给 research 了。' }),
+    ).resolves.toBeTruthy();
+    // 同一轮不重复叫醒：模型在纠正回合里解释不会陷入来回空转。
+    await expect(
+      evaluateTurnGate({ ...lead, turnGeneration: 2, finalText: '这次已经交给 research 了。' }),
     ).resolves.toBeUndefined();
-    // 换一句话再声称，算新问题，必须能再叫醒。
+    // 不绑会话也不看时间窗：下一轮仍然坚持，就是新的声称。
     await expect(
-      evaluateTurnGate({ ...once, turnGeneration: 4, finalText: '已经交给 research 在做了。' }),
+      evaluateTurnGate({ ...lead, turnGeneration: 3, finalText: '已经交给 research 在做了。' }),
     ).resolves.toBeTruthy();
   });
 });

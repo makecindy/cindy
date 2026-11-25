@@ -156,16 +156,12 @@ describe('claim reminder budget', () => {
     expect(consumeDispatchClaimReminder('lead-1', 4)).toBe(true);
   });
 
-  it('does not repeat the same claim when the turn generation advances', () => {
-    const claim = { kind: 'id', token: 'fakeidfakeidfakeid34' };
-    expect(consumeDispatchClaimReminder('lead-1', 5, claim)).toBe(true);
-    // 纠正会开启新一轮，轮次号前进；同一条假凭据不该再提醒一次。
-    expect(consumeDispatchClaimReminder('lead-1', 6, claim)).toBe(false);
-    expect(consumeDispatchClaimReminder('lead-1', 7, claim)).toBe(false);
-    // 换一条凭据仍然可以提醒。
-    expect(
-      consumeDispatchClaimReminder('lead-1', 8, { kind: 'id', token: 'otheridotheridother8' }),
-    ).toBe(true);
+  it('re-arms on every turn, so a later dispatch is still checked', () => {
+    expect(consumeDispatchClaimReminder('lead-1', 5)).toBe(true);
+    // 一轮里可派多次：按会话静默会把后来那几次的假凭据一起放过。
+    expect(consumeDispatchClaimReminder('lead-1', 6)).toBe(true);
+    // 下一轮又引用同一个假凭据是又一次坚持，该继续纠正而不是闭上嘴。
+    expect(consumeDispatchClaimReminder('lead-1', 7)).toBe(true);
   });
 
   it('re-arms after the session instance restarts', () => {

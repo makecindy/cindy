@@ -47,11 +47,6 @@ interface LeadLedger {
   facts: LeadDispatchFact[];
   /** 已经就哪一轮的不实凭据提醒过。同一轮只提醒一次，避免空转。 */
   remindedGeneration: number | null;
-  /**
-   * 已经提醒过的凭据身份（`kind:token`）及时间。纠正会开启新一轮、轮次号前进，
-   * 只按轮次去重会让同一条假凭据在每一轮被重新提醒一次。
-   */
-  remindedClaims: Map<string, number>;
   /** 账本属于哪个会话实例。换实例后旧账整体作废，新实例从第一条凭据重新记。 */
   instanceToken?: number;
 }
@@ -59,8 +54,6 @@ interface LeadLedger {
 const ledgers = new Map<string, LeadLedger>();
 /** 派发凭据只在本轮有用，留一天足够覆盖跨重启的收口。 */
 const FACT_RETENTION_MS = 24 * 60 * 60 * 1000;
-/** 同一条不实凭据的重复提醒窗口：纠正会让轮次号前进，只按轮次去重挡不住复述。 */
-const CLAIM_REMINDER_RETENTION_MS = 30 * 60 * 1000;
 const MAX_FACTS = 200;
 
 function ledgerFor(leadSessionId: string): LeadLedger {
@@ -70,7 +63,6 @@ function ledgerFor(leadSessionId: string): LeadLedger {
       turnGeneration: 0,
       facts: [],
       remindedGeneration: null,
-      remindedClaims: new Map(),
     };
     ledgers.set(leadSessionId, ledger);
   }
@@ -90,7 +82,6 @@ function observeGeneration(ledger: LeadLedger, turnGeneration: number): void {
 function ledgersReset(ledger: LeadLedger): void {
   ledger.facts = [];
   ledger.remindedGeneration = null;
-  ledger.remindedClaims.clear();
   ledger.instanceToken = undefined;
 }
 
@@ -186,22 +177,18 @@ export function findUnbackedDispatchClaim(
 /**
  * 同一轮只提醒一次。返回 true 表示这次可以用掉提醒额度。
  * 换成 true 之后再调用同一轮会返回 false，避免模型坚持不改时来回空转。
+ *
+ * 额度只按轮次：不绑会话、不用时间窗口。派单密集时一轮内就可能来好几次派发，
+ * 按会话静默会把后来那几次的假凭据一起放过；而下一轮再引用同一个假凭据，
+ * 是模型的又一次坚持，该继续纠正而不是闭嘴。
  */
 export function consumeDispatchClaimReminder(
   leadSessionId: string,
   turnGeneration: number,
-  claim?: { kind: string; token: string },
 ): boolean {
   const ledger = ledgerFor(leadSessionId);
   observeGeneration(ledger, turnGeneration);
   if (ledger.remindedGeneration === turnGeneration) return false;
-  if (claim) {
-    const key = `${claim.kind}:${claim.token}`;
-    const now = Date.now();
-    const last = ledger.remindedClaims.get(key);
-    if (last !== undefined && now - last < CLAIM_REMINDER_RETENTION_MS) return false;
-    ledger.remindedClaims.set(key, now);
-  }
   ledger.remindedGeneration = turnGeneration;
   return true;
 }

@@ -279,7 +279,7 @@ function judgePrompt(workerLabels: string[], finalText: string): string {
     'One assistant turn ended with no tool call and no accepted dispatch.',
     `Workers that could receive work: ${workers}.`,
     "Decide whether this closing text asserts that work was already handed to a worker.",
-    'Answer "claim" only for an explicit assertion that work was already given, dispatched, queued, or is being done by a worker.',
+    'Answer "claim" only for an explicit assertion that work was already given, dispatched, queued, or is being done by a worker. A reply that denies having dispatched anything is not a claim.',
     'Answer "quiet" for summaries, plans, questions, status of user-facing work, or anything that does not assert that a handoff already happened.',
     'When unsure, answer "quiet".',
     'Reply with exactly one word: claim or quiet.',
@@ -389,27 +389,24 @@ export async function evaluateTurnGate(input: {
 
   const claim = findUnbackedDispatchClaim(input.leadSessionId, text);
   if (claim) {
-    if (
-      !consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration, {
-        kind: claim.kind,
-        token: claim.token,
-      })
-    ) {
+    if (!consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration)) {
       return undefined;
     }
     return unbackedClaimReason(claim);
   }
 
-  // 只剩「纯口语声称已派」这一格需要语义判定：本回合零派发、且没碰过任何 Orca 工具。
+  // 只剩「纯口语声称已派」这一格需要语义判定：宿主账本里一条派发凭据都没有，
+  // 且本回合没碰过任何 Orca 工具。
+  //
+  // 判据是「整本账空」而不是「本回合零派发」：账本里有凭据时，一句「已交给 X」
+  // 很可能是对既有那笔派发的复述，宿主拿单回合文本无权判它为假。按回合切会让
+  // 「我上一轮派过了」这类**真话**每轮被判成声称并纠正一次。
+  //
   // 用「零 Orca 工具」而不是「零工具」：读了几个文件再说已派同样可疑，
   // 而那正是 Claude Code 用户最常见的形态。
-  // 派发数在这里自己数：交给调用方算，就会有人把「整本账」当成「本回合」，
-  // 于是历史上派过一次之后，后面零派发的回合永远跳过判定。
-  const turnDispatches = dispatchFactsForTurn(input.leadSessionId, input.turnGeneration).filter(
-    (fact) => fact.turnGeneration === input.turnGeneration,
-  );
+  const facts = dispatchFactsForTurn(input.leadSessionId, input.turnGeneration);
   if (
-    turnDispatches.length > 0 ||
+    facts.length > 0 ||
     turnOrcaToolUseCount(input.leadSessionId, input.turnGeneration, input.instance) > 0
   ) {
     return undefined;
@@ -421,24 +418,8 @@ export async function evaluateTurnGate(input: {
     workerLabels: input.workerLabels,
   });
   if (verdict !== 'claim') return undefined;
-  if (
-    !consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration, {
-      kind: 'judge',
-      // 额度绑定到「这一次声称」而不是整个会话：常量键会把后续 30 分钟里
-      // 所有判定纠正一起压掉，换一段话再声称就再也叫不醒。
-      token: claimFingerprint(text),
-    })
-  ) {
+  if (!consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration)) {
     return undefined;
   }
   return JUDGED_CLAIM_REASON;
-}
-
-/** 一段回复的指纹：同文本重复声称不重复纠正，换文本算新问题。 */
-function claimFingerprint(text: string): string {
-  let hash = 5381;
-  for (let index = 0; index < text.length; index += 1) {
-    hash = ((hash << 5) + hash + text.charCodeAt(index)) >>> 0;
-  }
-  return `${text.length}-${hash.toString(36)}`;
 }
