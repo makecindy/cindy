@@ -261,6 +261,7 @@ export async function discardInvalidSessionTurnLease(
 
 type LeaseRecoveryResult = 'cleared' | 'active-turn-conflict' | 'owner-still-live' | 'exact-release-missed';
 
+/** Carries the fixed reason logged when lease replacement fails. */
 class LeaseReplacementError extends Error {
   constructor(readonly reason: Exclude<LeaseRecoveryResult, 'cleared'> | 'own-row-missing') {
     super('could not replace the previous turn lease');
