@@ -1056,6 +1056,9 @@ function buildSwiftHelperForForgeArch(
 function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void {
   const destDir = path.join(__dirname, 'resources', 'tools', 'remote-desktop');
   fs.mkdirSync(destDir, { recursive: true });
+  if (platform === 'linux') {
+    fs.copyFileSync(path.join(__dirname, 'native', 'remote-desktop', 'linux-input-guard.py'), path.join(destDir, 'linux-input-guard.py'));
+  }
   if (process.platform === 'linux' && platform === 'linux') {
     if (arch !== process.arch)
       throw new Error('Linux desktop input requires a native architecture build');
@@ -2394,6 +2397,11 @@ const config: ForgeConfig = {
         },
         {
           entry: 'src/preload/quotaTrayPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload/cloudLoginWindowPreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
         },

@@ -26,7 +26,6 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 const log = createLogger('ChatEmbeddingCell');
 
 export function ChatEmbeddingCell() {
-  const setting = useSettingDefinition(additionalSettings.chatEmbedding);
   const { t } = useTranslation();
   const { enabled, isCustomized, beginMutation, completeMutation, rollbackMutation } =
     useChatEmbedding();
@@ -82,6 +81,34 @@ export function ChatEmbeddingCell() {
       setPending(false);
     }
   }, [beginMutation, completeMutation, rollbackMutation, t]);
+
+  return (
+    <ChatEmbeddingCellView
+      enabled={enabled}
+      isCustomized={isCustomized}
+      pending={pending}
+      handleToggle={handleToggle}
+      handleReset={handleReset}
+    />
+  );
+}
+
+/** Shared native view. Local and cloud controllers provide the same state/actions. */
+export function ChatEmbeddingCellView({
+  enabled,
+  isCustomized,
+  pending,
+  handleToggle,
+  handleReset,
+}: {
+  enabled: boolean;
+  isCustomized: boolean;
+  pending: boolean;
+  handleToggle: (next: boolean) => Promise<void>;
+  handleReset: () => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const setting = useSettingDefinition(additionalSettings.chatEmbedding);
 
   return (
     <SettingsRow
