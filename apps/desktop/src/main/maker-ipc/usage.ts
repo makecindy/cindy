@@ -404,10 +404,17 @@ export function registerMakerUsageIpc(maker: Maker): void {
   timer.unref();
   const unobserve = observeUsageChanges(kind => { if (kind === 'codex') checkEnabled(); });
   const unobservePool = onSubscriptionAccountsChanged((provider, resetAccountId) => {
-    if (provider === 'openai' && resetAccountId) checkEnabled();
+    if (provider === 'openai') {
+      automatic.resetFailureBackoff();
+      if (resetAccountId) checkEnabled();
+    }
   });
-  powerMonitor.on('resume', checkEnabled);
-  app.once('will-quit', () => { clearInterval(timer); unobserve(); unobservePool(); powerMonitor.removeListener('resume', checkEnabled); });
+  const onResume = () => {
+    automatic.resetFailureBackoff();
+    checkEnabled();
+  };
+  powerMonitor.on('resume', onResume);
+  app.once('will-quit', () => { clearInterval(timer); unobserve(); unobservePool(); powerMonitor.removeListener('resume', onResume); });
   checkEnabled();
 
   const usageTaskDeltaCache = createUsageTaskDeltaCache();
@@ -423,6 +430,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
       if (patch !== null) parseCodexResetAutoUse({ ...codexResetAutoUseStore.read(providerId, key).settings, ...patch });
       await codexResetAutoUseStore.write(providerId, key, patch as Partial<CodexResetAutoUseSettings> | null);
       if (scope !== activeOwnerScopeKey() || key !== await accountKeyFor(providerId)) throw new Error('PRECONDITION_FAILED: Account changed');
+      automatic.resetFailureBackoff(providerId);
       checkEnabled();
       return readCodexRateLimits(providerId);
     },

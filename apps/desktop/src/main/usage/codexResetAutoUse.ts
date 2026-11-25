@@ -54,32 +54,64 @@ export interface CodexResetAutoUseDeps {
   warn(): void;
 }
 
+const NORMAL_COOLDOWN_MS = 30_000;
+const FAILURE_BACKOFF_BASE_MS = 60_000;
+const FAILURE_BACKOFF_MAX_MS = 15 * 60_000;
+
 /** One in-flight check per owner/account. Consumption itself shares the manual reset service's lock and key. */
 export class CodexResetAutoUse {
   private readonly pending = new Map<string, Promise<void>>();
   private readonly attempts = new Map<string, string>();
   private readonly cooldown = new Map<string, number>();
+  private readonly consecutiveFailures = new Map<string, number>();
+  private readonly backoffGeneration = new Map<string, number>();
   constructor(private readonly deps: CodexResetAutoUseDeps) {}
+
+  /** Clear failure backoff for the current owner (optionally one provider) without disturbing healthy cooldowns. */
+  resetFailureBackoff(providerId?: string): void {
+    const scopePrefix = `${this.deps.scope()}:`;
+    const keys = providerId !== undefined
+      ? [`${scopePrefix}${providerId}`]
+      : [...new Set([...this.consecutiveFailures.keys(), ...this.pending.keys()])]
+          .filter(key => key.startsWith(scopePrefix));
+    for (const key of keys) {
+      const hadFailure = this.consecutiveFailures.delete(key);
+      const isPending = this.pending.has(key);
+      if (hadFailure || isPending) this.cooldown.delete(key);
+      if (isPending) {
+        this.backoffGeneration.set(key, (this.backoffGeneration.get(key) ?? 0) + 1);
+      } else {
+        this.backoffGeneration.delete(key);
+      }
+    }
+  }
 
   check(providerId: string): Promise<void> {
     const scope = this.deps.scope();
     const key = `${scope}:${providerId}`;
     const existing = this.pending.get(key);
     if (existing) return existing;
+    const generation = this.backoffGeneration.get(key) ?? 0;
     // Reading also broadcasts usage. Deferring the read installs the in-flight guard before that callback.
     const run = Promise.resolve().then(async () => {
       if ((this.cooldown.get(key) ?? 0) > this.deps.now()) return;
-      this.cooldown.set(key, this.deps.now() + 30_000);
+      this.cooldown.set(key, this.deps.now() + NORMAL_COOLDOWN_MS);
       const snapshot = await this.deps.read(providerId);
       const authorized = () => scope === this.deps.scope() && this.deps.authorized(providerId, snapshot);
-      if (!authorized()) return;
+      if (!authorized()) {
+        this.consecutiveFailures.delete(key);
+        return;
+      }
       const retryOwnAttempt = snapshot.resetOffer?.retryOnly
         && this.attempts.get(key) === snapshot.resetOffer.idempotencyKey;
       if (retryOwnAttempt || shouldAutoUseCodexReset(snapshot, this.deps.now())) {
         this.attempts.set(key, snapshot.resetOffer!.idempotencyKey);
         const result = await this.deps.consume(providerId, snapshot.resetOffer!.idempotencyKey, authorized);
         this.attempts.delete(key);
-        if (scope !== this.deps.scope()) return;
+        if (scope !== this.deps.scope()) {
+          this.consecutiveFailures.delete(key);
+          return;
+        }
         if (result.outcome === 'reset' || result.outcome === 'alreadyRedeemed') {
           // Persistence failure cannot turn a completed redemption into a second attempt.
           try { await this.deps.record(providerId, snapshot, this.deps.now()); } catch { this.deps.warn(); }
@@ -94,7 +126,22 @@ export class CodexResetAutoUse {
         await this.deps.refreshWeb(providerId);
         if (authorized()) await this.deps.restored(providerId, snapshot);
       }
-    }).catch(() => this.deps.warn()).finally(() => this.pending.delete(key));
+      this.consecutiveFailures.delete(key);
+    }).catch(() => {
+      if ((this.backoffGeneration.get(key) ?? 0) === generation) {
+        const failures = (this.consecutiveFailures.get(key) ?? 0) + 1;
+        this.consecutiveFailures.set(key, failures);
+        const backoffMs = Math.min(
+          FAILURE_BACKOFF_BASE_MS * 2 ** (failures - 1),
+          FAILURE_BACKOFF_MAX_MS,
+        );
+        this.cooldown.set(key, this.deps.now() + backoffMs);
+      }
+      this.deps.warn();
+    }).finally(() => {
+      this.pending.delete(key);
+      this.backoffGeneration.delete(key);
+    });
     this.pending.set(key, run);
     return run;
   }
