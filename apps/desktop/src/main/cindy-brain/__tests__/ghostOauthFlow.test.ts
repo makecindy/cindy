@@ -1345,6 +1345,8 @@ describe('设备码登录(RFC 8628)', () => {
         scope: 'read:a write:b',
       });
       expect(polls).toHaveLength(3);
+      // 两类请求都带 client 凭证,不得跟随重定向把表单带出白名单。
+      expect(calls.every((call) => call.init.redirect === 'error')).toBe(true);
       expect(Object.fromEntries(new URLSearchParams(String(polls[0]!.init.body)))).toEqual({
         grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
         device_code: 'dev-code-1',
@@ -1403,6 +1405,41 @@ describe('设备码登录(RFC 8628)', () => {
     expect(result).toMatchObject({ ok: false, error: 'EXCHANGE_FAILED' });
     expect(openExternal).not.toHaveBeenCalled();
     expect(calls).toHaveLength(1);
+  });
+
+  it('远程单领到令牌后不取消控制端事务(账号落库前 assertCurrent 仍须有效)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { fetchImpl } = deviceFetch(
+        {
+          device_code: 'dev-code-5',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'https://auth.example.com/verify',
+          interval: 1,
+        },
+        [{ body: { access_token: 'at-remote', refresh_token: 'rt-remote', expires_in: 3600 } }],
+      );
+      let offerSignal: AbortSignal | undefined;
+      const authorizePlugin = vi.fn(async (_offer: unknown, signal: AbortSignal) => {
+        offerSignal = signal;
+        return { kind: 'device-opened' as const, state: 'x' };
+      });
+      const remote = {
+        scope: 'remote-2',
+        assertCurrent: () => undefined,
+        authorize: vi.fn(),
+        authorizePlugin,
+        finish: vi.fn(),
+      };
+      const result = await runWithTimers(
+        startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal: vi.fn(), fetchImpl, remote: remote as never }),
+      );
+      expect(result).toMatchObject({ ok: true, bundle: { accessToken: 'at-remote' } });
+      expect(offerSignal?.aborted).toBe(false);
+      expect(remote.finish).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('远程单:验证码与确认页交给控制端,不在执行设备开浏览器;轮询中途取消即停', async () => {

@@ -303,10 +303,12 @@ const FLOW_TIMEOUT_DEFAULT_MS = 5 * 60 * 1000;
 const DEVICE_FLOW_MAX_MS = 15 * 60 * 1000;
 /** 服务商未给 expires_in 时的缺省有效期(RFC 8628 未规定缺省,取常见值)。 */
 const DEVICE_FLOW_DEFAULT_EXPIRES_MS = 5 * 60 * 1000;
-/** 轮询间隔:缺省 5s(RFC 8628 §3.5),slow_down 每次 +5s,上限 60s。 */
+/**
+ * 轮询间隔:缺省 5s(RFC 8628 §3.5),服务商给的 interval 原样遵守(只设 1s 下限防异常值),
+ * slow_down 每次 +5s 且不设上限——放慢是服务商的要求,整单时长由 deadline 兜底。
+ */
 const DEVICE_POLL_DEFAULT_INTERVAL_MS = 5 * 1000;
 const DEVICE_POLL_MIN_INTERVAL_MS = 1 * 1000;
-const DEVICE_POLL_MAX_INTERVAL_MS = 60 * 1000;
 /** 轮询遇到连续网络失败的容忍次数(偶发抖动不该让用户重来一遍)。 */
 const DEVICE_POLL_MAX_NETWORK_FAILURES = 3;
 /** 单次端点请求超时(设备码申请与每次轮询)。 */
@@ -1038,6 +1040,9 @@ async function runGhostDeviceFlow(
   const inflight = new AbortController();
   void cancellation.cancelledPromise.then(() => inflight.abort());
   const remoteAbort = new AbortController();
+  // 控制端回「已打开」后,远程事务要一直活到账号落库(connectAccount 还会 assertCurrent);
+  // 此后不能再用 remoteAbort 取消它,失败收尾交给外层 remote.finish(false)。
+  let remoteOpened = false;
   let releasePrompt: (() => void) | void = undefined;
   const requestSignal = () =>
     AbortSignal.any([inflight.signal, AbortSignal.timeout(DEVICE_REQUEST_TIMEOUT_MS)]);
@@ -1062,6 +1067,8 @@ async function runGhostDeviceFlow(
         method: 'POST',
         headers,
         body: form.toString(),
+        // 请求带 client 凭证:不跟随重定向,免得 307/308 把表单带到白名单之外。
+        redirect: 'error',
         signal: requestSignal(),
       });
     } catch (err) {
@@ -1136,12 +1143,9 @@ async function runGhostDeviceFlow(
     let deadline = startedAt + Math.min(expiresInMs, DEVICE_FLOW_MAX_MS);
     if (opts.timeoutMs !== undefined) deadline = Math.min(deadline, startedAt + opts.timeoutMs);
     if (opts.remote?.expiresAt !== undefined) deadline = Math.min(deadline, opts.remote.expiresAt);
-    let intervalMs = Math.min(
-      Math.max(
-        (positiveSeconds(authorization.interval) ?? DEVICE_POLL_DEFAULT_INTERVAL_MS / 1000) * 1000,
-        DEVICE_POLL_MIN_INTERVAL_MS,
-      ),
-      DEVICE_POLL_MAX_INTERVAL_MS,
+    let intervalMs = Math.max(
+      (positiveSeconds(authorization.interval) ?? DEVICE_POLL_DEFAULT_INTERVAL_MS / 1000) * 1000,
+      DEVICE_POLL_MIN_INTERVAL_MS,
     );
 
     if (opts.remote) {
@@ -1166,6 +1170,7 @@ async function runGhostDeviceFlow(
         return { ok: false, error: 'CANCELLED' };
       }
       if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+      remoteOpened = true;
       opts.remote.assertCurrent();
     } else {
       // 带码确认页(verification_uri_complete)打开即可确认;只给了通用页时
@@ -1208,6 +1213,7 @@ async function runGhostDeviceFlow(
             Accept: 'application/json',
           },
           body: pollForm.toString(),
+          redirect: 'error',
           signal: requestSignal(),
         });
       } catch (err) {
@@ -1246,7 +1252,7 @@ async function runGhostDeviceFlow(
       const error = readOauthError(pollText);
       if (error === 'authorization_pending') continue;
       if (error === 'slow_down') {
-        intervalMs = Math.min(intervalMs + 5 * 1000, DEVICE_POLL_MAX_INTERVAL_MS);
+        intervalMs += 5 * 1000;
         continue;
       }
       if (error === 'access_denied') {
@@ -1262,7 +1268,7 @@ async function runGhostDeviceFlow(
     return { ok: false, error: 'TIMEOUT' };
   } finally {
     inflight.abort();
-    remoteAbort.abort();
+    if (!remoteOpened) remoteAbort.abort();
     if (typeof releasePrompt === 'function') {
       try {
         releasePrompt();
