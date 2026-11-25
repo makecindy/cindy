@@ -106,6 +106,7 @@ import {
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
+import { useToolPreview } from './ToolPreviewHost';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
@@ -758,12 +759,6 @@ export interface AgentActionRowProps {
   onActivateOverride?: () => void;
 }
 
-type LightboxState =
-  | { kind: 'none' }
-  | { kind: 'file'; path: string; name: string }
-  | { kind: 'image'; src: string }
-  | { kind: 'payload'; payload: ToolPayloadMode };
-
 function fileChangeVerbKey(descriptor: FileChangeDescriptor): string {
   if (descriptor.changes.length !== 1) return 'chat.agentActionRow.verb.updated';
   switch (descriptor.changes[0].action) {
@@ -953,7 +948,7 @@ export function AgentActionRow({
   // v10:命令类工具走就地展开；Claude/Codex 文件编辑统一走 diff lightbox。
   const isInlineExpand = !isFilePathTool && !isFileChange;
 
-  const [lightbox, setLightbox] = useState<LightboxState>({ kind: 'none' });
+  const preview = useToolPreview();
   const [expanded, setExpanded] = useState(false);
   const triggerRef = useRef<HTMLElement | null>(null);
   const fileChipRef = useRef<HTMLSpanElement | null>(null);
@@ -972,7 +967,7 @@ export function AgentActionRow({
     const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
-      setLightbox({ kind: 'payload', payload: diffPayload });
+      preview.open(<ToolPayloadLightbox payload={diffPayload} triggerRef={triggerRef} onClose={preview.close} />);
       return;
     }
     if (isInlineExpand) {
@@ -991,16 +986,14 @@ export function AgentActionRow({
       if (isImagePath(absPath)) {
         // remote 会话:xdt-file://?path= 经 origin 改写走远程媒体管线(device 全量 /
         // ssh 限 workdir 内);本地 no-op。
-        setLightbox({
-          kind: 'image',
-          src: rewriteToRemoteMediaOrigin(
-            toLocalFileUrl(absPath),
-            toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
-          ),
-        });
+        const src = rewriteToRemoteMediaOrigin(
+          toLocalFileUrl(absPath),
+          toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
+        );
+        preview.open(<ImageLightbox src={src} onClose={preview.close} />);
       } else {
         if (!(await shouldOpenTextLightboxForOrigin(fileCtx, absPath))) return;
-        setLightbox({ kind: 'file', path: absPath, name: basename(absPath) });
+        preview.open(<TextLightbox filePath={absPath} fileName={basename(absPath)} triggerRef={triggerRef} onClose={preview.close} />);
       }
       return;
     }
@@ -1008,8 +1001,6 @@ export function AgentActionRow({
     // 地把 JSON 塞进全屏 lightbox。
     setExpanded((prev) => !prev);
   };
-
-  const closeLightbox = () => setLightbox({ kind: 'none' });
 
   // 就地展开时要展示的 input 文本(已按 tool 名做了人类可读的格式化)。
   const inlineInputText = useMemo(
@@ -1243,22 +1234,7 @@ export function AgentActionRow({
         飞书拉图,都能被用户一眼看到,而不是埋在 tool_segment 折叠卡里。
       */}
 
-      {lightbox.kind === 'file' && (
-        <TextLightbox
-          filePath={lightbox.path}
-          fileName={lightbox.name}
-          triggerRef={triggerRef}
-          onClose={closeLightbox}
-        />
-      )}
-      {lightbox.kind === 'image' && <ImageLightbox src={lightbox.src} onClose={closeLightbox} />}
-      {lightbox.kind === 'payload' && (
-        <ToolPayloadLightbox
-          payload={lightbox.payload}
-          triggerRef={triggerRef}
-          onClose={closeLightbox}
-        />
-      )}
+      {preview.localPreview}
     </div>
   );
 }

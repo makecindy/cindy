@@ -389,6 +389,7 @@ import {
 } from './ImageGalleryContext';
 import { replyGalleryImages, type ReplyGalleryOptions, type ReplyImageCache } from './replyGalleryImages';
 import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCard';
+import { ToolPreviewHost } from './ToolPreviewHost';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
@@ -6868,7 +6869,7 @@ export function MessageStream({
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
-        <>
+        <ToolPreviewHost key={sessionId}>
           <div className="relative h-full w-full">
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
@@ -7334,7 +7335,7 @@ export function MessageStream({
                 chipSlot,
               )}
           </div>
-        </>
+        </ToolPreviewHost>
       </GhostFulfillmentContext.Provider>
     </ChatSessionFileProvider>
   );

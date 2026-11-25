@@ -67,6 +67,8 @@ vi.mock('@/lib/localPathResolver', () => ({ toLocalFileUrl: (p: string) => `xdt-
 import { AgentActionRow, humanizeDocumentToolResult } from '@/components/chat/AgentActionRow';
 import { ChatSessionFileProvider } from '@/components/chat/ChatSessionFileContext';
 import { AgentActionsBlock } from '@/components/chat/AgentActionsBlock';
+import { ToolPreviewHost } from '@/components/chat/ToolPreviewHost';
+import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { __test_internals as expandMemory } from '@/hooks/useExpandedBlockMemory';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
@@ -86,6 +88,29 @@ const mkTool = (id: string, toolName: string, toolInput: unknown): ChatMessage =
   toolUseId: `tu-${id}`,
   toolName,
   toolInput,
+});
+
+// #12851 (unit): the latest-five projection tests replace the clickable tool row.
+// Open the oldest Write chip, then let an unrelated sixth action evict its row.
+it('keeps the opened Write snapshot when its chip leaves the running group', () => {
+  const calls = Array.from({ length: 6 }, (_, index) =>
+    mkTool(String(index), 'Write', { file_path: `/repo/file-${index}.ts`, content: `snapshot-${index}` }));
+  const group = (count: number) => createElement(WorkGroupBlock, {
+    pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+    blockId: 'work:preview', isStreaming: true,
+    childItems: [{ kind: 'tools', key: 'tools', toolCalls: calls.slice(0, count),
+      resultMap: new Map(), settledIds: new Set<string>() }],
+  });
+  const stream = (count: number, key = 'task') => createElement(ToolPreviewHost, { key }, group(count));
+  const view = render(stream(5));
+  const chip = screen.getByText('file-0.ts');
+  fireEvent.click(chip);
+  expect(document.body.textContent).toContain('snapshot-0');
+  view.rerender(stream(6));
+  expect(chip.isConnected).toBe(false);
+  expect(document.body.textContent).toContain('snapshot-0');
+  view.rerender(stream(6, 'next-task'));
+  expect(document.body.textContent).not.toContain('snapshot-0');
 });
 
 it.each(['ContextMenu', 'F10'])('passes the focused tool row to its file menu (%s)', (key) => {
