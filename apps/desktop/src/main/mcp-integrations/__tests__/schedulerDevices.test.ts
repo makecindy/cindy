@@ -136,6 +136,28 @@ describe('desktop scheduler cross-device transport', () => {
     ]);
   });
 
+  // PR #11881 review r4661510132: an older desktop drops the unknown modelGroup and still reports success, so the
+  // task silently runs the concrete model. Minimal input: create/update carrying a mode against a target with and
+  // without the capability; clearing the mode needs no capability.
+  it.each([
+    { op: 'create' as const, modelGroup: 'daily', supported: true, ok: true },
+    { op: 'create' as const, modelGroup: 'daily', supported: false, ok: false },
+    { op: 'update' as const, modelGroup: 'daily', supported: false, ok: false },
+    { op: 'update' as const, modelGroup: null, supported: false, ok: true },
+  ])('requires the target to store a model group: $op/$modelGroup/$supported', async ({ op, modelGroup, supported, ok }) => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_device, channel) => ({ ok: true, result:
+      channel === 'maker:get-capabilities' ? { supportsRemoteScheduleDirectoryCheck: true, supportsScheduleModelGroup: supported } : { id: 's1' },
+    }));
+    const patch = { modelGroup };
+    const result = await s.remote.invoke('mac', op, op === 'create' ? [patch] : ['s1', patch]);
+    expect(result.ok).toBe(ok);
+    if (!ok) expect(result).toMatchObject({ code: 'REMOTE_UNSUPPORTED' });
+    const channels = s.invoke.mock.calls.map(([, channel]) => channel);
+    if (ok) expect(channels).toContain(`maker:schedule:${op}`);
+    else expect(channels).not.toContain(`maker:schedule:${op}`);
+  });
+
   it('does not write after ownership changes during the webhook receiver check', async () => {
     const s = setup();
     s.invoke.mockImplementation(async (_device, channel) => {

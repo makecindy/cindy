@@ -262,3 +262,21 @@ export function parseSessionPrUrl(value: string): (PrIdentity & { url: string })
     return { ...ref, url: sessionPrUrl(ref) };
   } catch { return null; }
 }
+
+/** Older GitHub cards store a short slot key. GitLab cards use the complete MR URL to distinguish instances. */
+export function cardPrSlotKey(value: string): string | null {
+  const short = /^([a-z\d_.-]{1,100}\/[a-z\d_.-]{1,100})#([1-9]\d{0,8})$/i.exec(value.trim());
+  if (short) return short[0].toLowerCase();
+  const ref = parseSessionPrUrl(value);
+  return ref?.provider === 'gitlab' && value.toLowerCase() === ref.url ? prStatusKey(ref) : null;
+}
+
+export function cardPrLinkKey(url: string): string | undefined {
+  const ref = parseSessionPrUrl(url.replace(/^https:\/\/www\.github\.com\//i, 'https://github.com/'));
+  if (!ref) return undefined;
+  return ref.provider === 'gitlab' ? prStatusKey(ref) : `${ref.owner}/${ref.repo}#${ref.prNumber}`;
+}
+
+export function qualifiedCardPrKey(key: string | null): string | null {
+  return key && (key.startsWith('gitlab:') ? key : `github:github.com/${key}`);
+}

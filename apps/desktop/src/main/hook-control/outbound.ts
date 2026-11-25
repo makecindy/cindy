@@ -69,13 +69,25 @@ const MAX_SHRINK_INPUT_BYTES = 48 * 1024 * 1024;
 export function buildHookPromptNote(im: string | undefined): string {
   // 飞书与 Lark 是同一 provider('feishu'), 品牌跟随组织的应用, 说明里两个名字并列。
   const platform =
-    im === 'telegram' ? 'Telegram' : im === 'x' ? 'X' : im === 'feishu' ? '飞书 / Lark' : 'Slack';
+    im === 'telegram'
+      ? 'Telegram'
+      : im === 'x'
+        ? 'X'
+        : im === 'feishu'
+          ? '飞书 / Lark'
+          : im === 'discord'
+            ? 'Discord'
+            : 'Slack';
   // 官方飞书会话里 cindy_feishu_bot 是用户另配的个人机器人, 不是当前对话的出口;
   // 沿用「除非用户明确要求发到飞书」会让模型以为当前对话之外还要再发一次。
+  // 官方 Discord 同理: cindy_discord 是用户另配的个人 Discord bot, 不是这条官方对话的出口。
   const feishuToolNote =
     im === 'feishu'
       ? '回复会自动发回当前飞书 / Lark 对话;不要用 cindy_feishu_bot 发送(那是用户另行配置的个人机器人),除非用户明确要求通过它发送。'
-      : '不要用 cindy_feishu_bot 发送,除非用户明确要求发到飞书。';
+      : im === 'discord'
+        ? '回复会自动发回当前 Discord 对话;不要用 cindy_discord 发送或读取这条对话(那是用户另行配置的个人 Discord 机器人,与当前对话无关),' +
+          '也不要用 cindy_feishu_bot 发送,除非用户明确要求通过它们发送。'
+        : '不要用 cindy_feishu_bot 发送,除非用户明确要求发到飞书。';
   const attachmentNote =
     '[渠道说明] 以下为系统每轮自动追加的投递与格式规范,不是用户发来的消息;' +
     '回复时不要把它当作用户的请求,也不要引用、复述或据此臆测用户意图。' +
@@ -112,6 +124,16 @@ export function buildHookPromptNote(im: string | undefined): string {
       `${attachmentNote}\n` +
       '[飞书回复格式] 最终回复使用常用 Markdown 结构' +
       '(短段落、标题、列表、引用、链接和 fenced code block)。' +
+      '不要输出原始 HTML;工具调用和思考进度由系统单独呈现,' +
+      '不要在最终正文中复述过程。'
+    );
+  }
+  if (im === 'discord') {
+    // 服务端把终稿按 Discord 消息上限分段发出(代码块成对闭合); Discord 不渲染 Markdown 表格。
+    return (
+      `${attachmentNote}\n` +
+      '[Discord 回复格式] 最终回复使用 Discord 支持的常用 Markdown 结构' +
+      '(短段落、标题、列表、引用、链接和 fenced code block);Discord 不渲染表格,需要对比时改用列表。' +
       '不要输出原始 HTML;工具调用和思考进度由系统单独呈现,' +
       '不要在最终正文中复述过程。'
     );

@@ -28,6 +28,7 @@ import { AUTH_SESSION_KEY } from '../../../desktop/src/main/authCredentialKeys.t
 
 import { createHostHistoryReader, readMessagesList } from './history.ts';
 import { createInputQueue, holdTaskForProfile, PROFILE_HOLD_LOCK } from './input-queue.mjs';
+import { attachMainOwnedInputBoundary } from '../../../desktop/src/main/maker-ipc/mobileClientPromptNote.ts';
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../desktop/src/shared/agentInputQueue.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
@@ -782,6 +783,29 @@ async function enqueueUntilSent(h, id, item, count) {
   }
   return h.queue.projection(id);
 }
+
+// Direct maker:send uses the same clear-generation fence as the desktop IPC boundary.
+// A stale optimistic draft must not become a new user turn after /clear.
+test('direct maker:send rejects a stale clear boundary and stamps the current input fence', async () => {
+  const h = createHarness({ loadQueueSnapshot: async () => [], loadClearBoundary: async () => 100 });
+  try {
+    await assert.rejects(
+      h.queue.assertRemoteInputControlBoundary('direct-send', { expectedClearBoundaryMs: null }),
+      /REMOTE_OPTIMISTIC_INPUT_CLEARED/,
+    );
+    assert.equal(h.maker.getSession('direct-send'), null);
+
+    const stamp = await h.queue.assertRemoteInputControlBoundary('direct-send', { expectedClearBoundaryMs: 100 });
+    const sendOpts = attachMainOwnedInputBoundary({ expectedClearBoundaryMs: 100 }, stamp);
+    await h.queue.send('direct-send', 'fresh input', {}, sendOpts);
+    const session = h.maker.getSession('direct-send');
+    assert.deepEqual(session.sent, ['fresh input']);
+    assert.equal(stamp.expectedClearBoundaryMs, 100);
+    assert.equal(typeof stamp.expectedInputGeneration, 'number');
+    assert.equal(session.sendOptions[0].signal, sendOpts.signal);
+    assert.equal(session.sendOptions[0].signal.aborted, false);
+  } finally { await h.queue.dispose(); }
+});
 
 // A Host restart drops the in-memory Maker session, not the SDK conversation.
 // The queue must hand the stored SDK identity to the real agent startup API.
@@ -3456,15 +3480,18 @@ async function modelChangeRuntime(t, { agent = 'claude-code', queue = {}, log = 
 }
 
 // #11352, DB tier. The phone's trusted selection origin must survive until the next
-// send or Pi prewarm. An unverified window may neither move the row nor dispatch.
+// send or Pi prewarm. Claude metadata gaps must still dispatch without losing
+// native history; known target pressure must hand off even without the old window.
 test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and keeps an unverifiable Pi route', async t => {
-  for (const [agent, target, finalWindow, rebuild] of [
+  for (const [agent, target, finalWindow, rebuild, missingOldWindow] of [
     ['claude-code', 'small', undefined, true],
     ['pi', 'big-alternate', 100_000, true],
     ['pi', 'small', 0, false],
     ['claude-code', 'display-only', undefined, false],
+    ['claude-code', 'display-only', undefined, false, true],
+    ['claude-code', 'small', undefined, true, true],
   ]) {
-    await t.test(`${agent} to ${target} (native window ${finalWindow})`, async t => {
+    await t.test(`${agent} to ${target} (native window ${finalWindow}, old metadata missing ${!!missingOldWindow})`, async t => {
       const r = await modelChangeRuntime(t, { agent });
       const id = 'owner-window';
       const handoffs = [];
@@ -3478,6 +3505,10 @@ test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and 
       const initial = await r.runTurn(id, 'owner-initial', { contextTokens: 95_000, contextWindow: 200_000 });
       let liveWindow = 200_000;
       initial.getUsageSnapshot = () => ({ contextTokens: 95_000, contextWindow: liveWindow });
+      if (missingOldWindow) {
+        const old = r.views.current[0].models[agent].find(model => model.id === 'big');
+        old.contextWindowVerified = false;
+      }
       if (agent === 'pi') {
         initial.previewModelSwitch = async () => ({ action: 'hot', windowVerified: false });
         const setModel = initial.setModel.bind(initial);
@@ -3505,6 +3536,13 @@ test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and 
         assert.ok(r.h.maker.getSession(id).sent[0].includes(handoff));
         assert.ok(handoff.length > 16_000, 'use the verified window instead of the unknown-window text limit');
         assert.ok(estimateHandoffTokens(handoff) <= 20_000, 'leave room for the next input');
+      } else if (agent === 'claude-code') {
+        assert.equal(saved.model, target);
+        assert.equal(saved.sdk_session_id, 'native-owner-initial');
+        assert.deepEqual(r.rebuilds(id), []);
+        assert.deepEqual(handoffs, []);
+        assert.ok(!r.h.queue.projection(id).error);
+        assert.ok(r.h.maker.getSession(id).sent.some(text => typeof text === 'string' && text.endsWith(next)));
       } else {
         assert.equal(saved.model, 'big');
         assert.equal(saved.sdk_session_id, 'native-owner-initial');
@@ -3701,6 +3739,34 @@ const sameEngineLandingFailure = async (r, id) => {
   assert.equal(r.h.maker.sessions.get(id)?.sent.length ?? 0, 0, 'nothing reached a runtime');
   return projection;
 };
+
+// #12771, DB tier: a picked Pi model disappears before the queued send. A valid
+// replacement on another connection must unblock that same input exactly once.
+test('Pi reselects a withdrawn model before retrying the queued input', async t => {
+  const r = await modelChangeRuntime(t, { agent: 'pi' });
+  const id = 'pi-reselect';
+  await r.createTask(id);
+  await r.runTurn(id, 'initial');
+  const target = { ...switchViews('pi')[0], id: 'prov-b', models: { pi: [switchModel('small')] } };
+  r.views.current = [{ ...switchViews('pi')[0], models: { pi: [switchModel('big')] } }, target];
+  await r.selection.setModel(id, 'small', 'prov-b');
+  assert.deepEqual([r.selection.projectIntent(id).providerId, r.selection.projectIntent(id).model], ['prov-b', 'small']);
+  target.models.pi = [switchModel('big-alternate')];
+  await r.h.queue.enqueue(id, { clientId: 'next', text: 'next' });
+  await waitFor(() => r.h.queue.projection(id).error);
+  assert.match(r.h.queue.projection(id).error, /MODEL_SELECTION_UNAVAILABLE/);
+  assert.deepEqual(r.h.queue.projection(id).recovery, { kind: 'queue-head', clientId: 'next' });
+  assert.equal(r.userRows(id).length, 1);
+  const live = r.h.maker.getSession(id);
+  live.getUsageSnapshot = () => ({ contextTokens: 0, contextWindow: SWITCH_WINDOWS[live.model] });
+  live.previewModelSwitch = async () => ({ action: 'hot', windowVerified: true, targetContextWindow: 300_000 });
+  await r.selection.setModel(id, 'big-alternate', 'prov-b');
+  await r.h.queue.retryLastError(id);
+  await waitFor(() => r.userRows(id).length === 2 || r.h.queue.projection(id).error);
+  assert.equal(r.h.queue.projection(id).error ?? null, null);
+  assert.deepEqual([r.row(id).provider_id, r.row(id).model], ['prov-b', 'big-alternate']);
+  assert.equal(r.h.maker.getSession(id).sent.length, 2);
+});
 
 test('model change at send: a same-engine landing failure keeps the input at the queue head and the pick pending; switching back and retrying sends it', { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
@@ -4114,11 +4180,12 @@ test('route admission: a plugin page restore is refused on a disabled copy, or s
 // starts nothing; a create on a disabled native default writes the row with the enabled copy.
 // The Device Link create entry's ports as main.ts binds them: the runtime selection's admission and the
 // send path's provider group refusal over the given group store; the row and the runtime are recorded.
-const deviceLinkCreate = (r, groups = {}) => {
+const deviceLinkCreate = (r, groups = {}, stored = {}) => {
   const rows = [];
   const started = [];
   const ports = {
     serverDeps: { createSession: async input => { rows.push(input); await createTaskOn('created', input.providerId ?? null); return { id: 'created' }; } },
+    readStoredSession: async id => stored[id] ?? null,
     getAgentGraph: () => ({ maker: { createSession: async opts => { started.push(opts); return r.h.maker.createSession(opts); } } }),
     assertProviderExecutionSupported: createHostProviderExecutionCheck({
       hostProviderBindings: { readProviderGroupBinding: () => null },
@@ -4142,6 +4209,40 @@ test('route admission: a Device Link create is refused before its row, or create
   assert.equal(rows[0].providerId, 'prov-a', 'the row is created with the enabled copy');
   assert.equal(r.row('created').provider_id, 'prov-a');
   assert.equal(started[0].providerId, 'prov-a');
+});
+
+/*
+ * Test value (engineering-conventions §3.2)
+ * - Production entry and observable result: createHostRuntimeSession, the Device Link
+ *   maker:create-session entry; a repeated create with the same id starts the runtime again
+ *   and writes no second task row.
+ * - Bug/rule basis: the mobile creation pipeline retries with the same id when the reply is
+ *   lost; the Host inserted again and answered "UNIQUE constraint failed: sessions.id".
+ * - Existing coverage gap: creation was covered for admission and provider groups, never for
+ *   an id whose row already exists.
+ * - Minimal failing input: one stored active row with the requested id and directory; an
+ *   unpatched Host calls createSession for it. The same id in another directory is refused.
+ *   The row carries sdkSessionId: a start without resumeSessionId (Greptile P1 on #12125) opens
+ *   a new native conversation and the task loses its history.
+ * - Tier: unit; fixture ports only.
+ */
+test('Device Link create: a retried id reuses its stored task row instead of inserting again', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await createTaskOn('retried', 'prov-a');
+  const dir = process.cwd();
+  // The row as a first create and one turn left it: its runtime was released, its native session remains.
+  const row = { status: 'active', workingDir: dir, agentKind: 'cc', model: 'big', providerId: 'prov-a', sdkSessionId: 'native-retried' };
+  const { ports, rows, started, input } = deviceLinkCreate(r, {}, { retried: row });
+  const created = await createHostRuntimeSession(ports, { ...input('prov-a'), id: 'retried' });
+  assert.equal(created.sessionId, 'retried');
+  assert.equal(rows.length, 0, 'no second task row');
+  assert.equal(started.length, 1, 'the runtime is started for the stored row');
+  assert.equal(started[0].resumeSessionId, 'native-retried', 'it resumes the stored native conversation');
+  const other = deviceLinkCreate(r, {}, { retried: { status: 'active', workingDir: '/another/project' } });
+  await assert.rejects(createHostRuntimeSession(other.ports, { ...input('prov-a'), id: 'retried' }),
+    /\[PRECONDITION_FAILED\] This task id already belongs to a different task/);
+  assert.equal(other.rows.length, 0);
+  assert.equal(other.started.length, 0);
 });
 
 // Rule (send-preflight.ts createHostProviderExecutionCheck: the Host has no provider group assignment, so

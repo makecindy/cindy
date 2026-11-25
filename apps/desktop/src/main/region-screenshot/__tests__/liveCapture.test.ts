@@ -79,29 +79,51 @@ describe('live region capture recovery', () => {
       [1, { width: 200, height: 400 }], [2, { width: 100, height: 200 }],
     ]);
     expect(mocks.capture.mock.calls).toEqual([
-      [{ x: 0, y: 0, width: 200, height: 400 }, 32768],
-      [{ x: -100, y: 0, width: 100, height: 200 }, 32768],
+      [{ x: 0, y: 0, width: 200, height: 400 }, 32768, true],
+      [{ x: -100, y: 0, width: 100, height: 200 }, 32768, true],
     ]);
     expect(mocks.createBitmap.mock.calls[0][0][0]).toBe(77);
     expect(mocks.createBitmap.mock.calls[0][1].scaleFactor).toBe(1);
     expect(mocks.sources).not.toHaveBeenCalled();
   });
-  it.each([null, { width: 1, height: 1, data: new Uint8Array(4) }])('recaptures the complete set when native pixels are unavailable or wrong-sized (%j)', async badFrame => {
+  it.each([null, { width: 1, height: 1, data: new Uint8Array(4) }])('recaptures just the display whose native pixels are unavailable or wrong-sized (%j)', async badFrame => {
     mocks.capture.mockResolvedValueOnce({ width: 100, height: 200, data: new Uint8Array(80000) }).mockResolvedValueOnce(badFrame);
     const second = { ...sdr, id: 2 };
     const electronFirst = bitmap(200, 400), electronSecond = bitmap(300, 600);
     mocks.sources.mockResolvedValueOnce([{ display_id: '2', thumbnail: electronSecond }, { display_id: '1', thumbnail: electronFirst }]);
     const result = await captureScreenshotDisplays([sdr, second], helper);
-    expect(result.backend).toBe('electron');
+    expect(result.backend).toBe('mixed');
     const reason = badFrame ? 'native-size-mismatch' : 'native-frame-unavailable';
     expect(result.fallbackReason).toBe(reason);
     expectFallbackDiagnostic(reason);
-    expect(result.captures.map(c => c.image)).toEqual([electronFirst, electronSecond]);
+    expect(result.captures.map(c => c.image)).toEqual([mocks.createBitmap.mock.results[0].value, electronSecond]);
+  });
+  // Unit: a custom-calibrated SDR display beside an HDR screen previously lost
+  // its ICC. A single-monitor P3 case cannot expose that routing error.
+  // Windows can expose HDR10 as P3/sRGB to Chromium. Trust the frame's DXGI result.
+  it.each([['BT2020', 'PQ'], ['P3', 'SRGB']])('keeps the SDR ICC and the HDR desktop rendition (%s/%s)', async (primaries, transfer) => {
+    const custom = { ...sdr, colorSpace: '{primaries:CUSTOM, transfer:custom curve, matrix:RGB, range:FULL}' };
+    const hdr = { ...sdr, id: 2, depthPerComponent: 10, colorSpace: `{primaries:${primaries}, transfer:${transfer}, matrix:RGB, range:FULL}` };
+    const icc = Uint8Array.of(42);
+    const frame = { width: 100, height: 200, data: new Uint8Array(80000) };
+    mocks.capture.mockResolvedValueOnce({ ...frame, sdrFromHdr: true }).mockResolvedValueOnce({ ...frame, icc });
+    const result = await captureScreenshotDisplays([hdr, custom], helper);
+    expect(result).toMatchObject({ backend: 'native', captures: [{ display: hdr, previewProfile: undefined }, { display: custom, previewProfile: icc }] });
+    expect(mocks.capture.mock.calls).toEqual([[hdr.bounds, 32768, 'verify-sdr'], [custom.bounds, 32768, 'verify-sdr']]);
+  });
+  // Unit: a Dell P3 desktop faded on opening the overlay. The previous
+  // fallback-only coverage never checked whether device RGB kept its profile.
+  it.each([8, 10])('pairs SDR P3 device pixels with their monitor profile at %i bpc', async depthPerComponent => {
+    const monitor = { ...sdr, depthPerComponent, colorSpace: '{primaries:P3, transfer:SRGB, matrix:RGB, range:FULL}' };
+    const frame = { width: 100, height: 200, data: new Uint8Array(80000) };
+    const icc = Uint8Array.of(42);
+    mocks.capture.mockResolvedValueOnce({ ...frame, icc }).mockResolvedValueOnce(frame);
+    expect(await captureScreenshotDisplays([monitor], helper)).toMatchObject({ backend: 'native', captures: [{ previewProfile: icc }] });
+    expect(await captureScreenshotDisplays([monitor], helper)).toMatchObject({ backend: 'electron', fallbackReason: 'color-space' });
   });
   it.each([
     ['darwin', sdr],
-    ['win32', { ...sdr, depthPerComponent: 10 }],
-    ['win32', { ...sdr, colorSpace: '{primaries:P3, transfer:SRGB, matrix:RGB, range:FULL}' }],
+    ['win32', { ...sdr, depthPerComponent: 10, colorSpace: '{primaries:BT2020, transfer:INVALID, matrix:RGB, range:FULL}' }],
     ['win32', { ...sdr, colorSpace: undefined }],
   ] as const)('preserves Electron capture for unsupported color/platform (%s, %j)', async (platform, monitor) => {
     vi.stubGlobal('process', Object.create(process, { platform: { value: platform } }));

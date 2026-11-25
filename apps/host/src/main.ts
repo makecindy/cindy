@@ -12,6 +12,7 @@ import { runLegacyPluginMigrationPreflight } from './plugins/legacy-approvals.js
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
 import { createHostPlatformTools } from './platform/tools.js';
 import { createHostCodexRuntime, createHostSubscriptionFastPolicies } from './agent/codex-runtime.js';
+import type { EngineKind } from '@cindy/maker-core';
 import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
@@ -33,6 +34,7 @@ import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-ident
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
 import { createHostService } from './service.mjs';
+import { holdError } from './agent/profile-hold.js';
 import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
 import {
   createHostProfileCoexistenceMonitor, createDesktopScanner, HOST_PROFILE_IN_USE_BY_DESKTOP, HostProfileInUseError,
@@ -70,7 +72,10 @@ import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedI
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
   hasAssistantProgressAfterMessage, getRecoveryContextSnapshot,
 } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
-import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb } from '../../desktop/src/main/maker-host/session-storage.js';
+import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb, readSessionWorkingDirFromDb } from '../../desktop/src/main/maker-host/session-storage.js';
+import { applyRemoteDirectoryGrantUpdate } from '../../desktop/src/main/maker-ipc/remoteDirectoryGrantUpdate.js';
+import { createTaskWritableDirsUpdater } from '../../desktop/src/main/projectDirectoryRuntime.js';
+import { extraDirsForRuntime, libraryRootForRuntime, replaceUserExtraDirs, validateExtraDirs, excludeDirectoryGrantConflictsWithSlots } from '../../desktop/src/main/maker-ipc/extraDirsValidator.js';
 import { createProviderGroupStore } from '../../desktop/src/main/provider-group/storeCore.js';
 import { createProviderGroupBindings } from '../../desktop/src/main/provider-group/bindings.js';
 import { createHostHarnessBinaries, HOST_HARNESS_KINDS } from './agent/harness-binary.js';
@@ -178,6 +183,8 @@ import { resolveSessionReferencesWithPorts } from '../../desktop/src/main/maker-
 import { readSwitchOptionsAgentDeviceId, readSwitchOptionsConfirmedContextWindow } from '../../desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts';
 import { setSessionRouteLockImplementation } from '../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { withSendToSessionLock } from '../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
+import { createHostWorktreeLifecycle } from './agent/worktree-lifecycle.ts';
+import { requireBuiltinAgentKind } from '../../desktop/src/main/maker-host/engineKind.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { readHostSessionList, readHostSession } from './session-reads.js';
@@ -209,7 +216,7 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 const command = process.argv[2];
-const usage = 'cindy-host [serve|login [--region=cn|global] [--org=<domain-or-id>] [--method=<id>]|open|status [--json]|migration-preflight <profile-directory>|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]|stop]';
+const usage = 'cindy-host [serve|login [--region=cn|global] [--org=<domain-or-id>] [--method=<id>]|open|status [--json]|migration-preflight <profile-directory>|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off|rejoin]|stop]';
 
 /** The status command's boundary category: the running Host's, else a lock-free read of the profile. */
 function readStatusSkillProjectionBoundary(processStatus: { running: boolean | null; runtime?: { skillProjectionBoundary?: string } }) {
@@ -297,9 +304,14 @@ if (command === '--help' || command === '-h') {
  } else if (command === 'remote') {
   try {
     const action = process.argv[3] ?? 'status';
-    if (!['status', 'enable', 'disable', 'revoke', 'agent-net-on', 'agent-net-off'].includes(action))
-      throw new Error('Usage: cindy-host remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]');
-    console.log(JSON.stringify(await requestHostRemote(resolveHostDataDir(), action, process.argv[4]), null, 2));
+    if (!['status', 'enable', 'disable', 'revoke', 'agent-net-on', 'agent-net-off', 'rejoin'].includes(action))
+      throw new Error('Usage: cindy-host remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off|rejoin]');
+    const result = await requestHostRemote(resolveHostDataDir(), action, process.argv[4]);
+    console.log(JSON.stringify(result, null, 2));
+    // 「重新加入」 reports its outcome in the result (device-link.ts `rejoin`): say why it did not work, and fail the command.
+    const rejoin = action === 'rejoin' ? (result as { rejoin?: { result?: unknown; hint?: unknown } }).rejoin : undefined;
+    if (rejoin && typeof rejoin.hint === 'string') (rejoin.result === 'rejoined' ? console.log : console.error)(rejoin.hint);
+    if (rejoin && rejoin.result !== 'rejoined') process.exitCode = 1;
   } catch (error) {
     console.error(`cindy-host remote failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
@@ -451,7 +463,7 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
   });
   const { machineIdSync } = createRequire(import.meta.url)('node-machine-id');
-  const verifiedDeviceId = resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, ''));
+  const verifiedDeviceId = resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '', resolveHostDataDir()));
   const client = new CindyAuthClient({
     baseUrl: endpoints.authApiBaseUrl,
     region: realm,
@@ -484,7 +496,7 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
     confirmCloudGuestWhenOnline(() => base, () => currentSessionToken, hostAuthFetch);
   }
   currentDeviceId = verifiedDeviceId;
-  remoteIdentityReady = canRegisterHostDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, ''));
+  remoteIdentityReady = canRegisterHostDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '', resolveHostDataDir()));
   return { ...mapMembershipToAuthUser(membership, me.passportId), orgSlug: decodeAccessTokenOrgSlug(sessionToken) };
 }
 
@@ -1202,7 +1214,8 @@ const readSessionForRun = async (sessionId: string) => {
   if (!row || row.status !== 'active') throw new Error('session is not active');
   const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
     .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
-  const agentKind: 'claude-code' | 'codex' | 'pi' = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
+  const storedKind = requireBuiltinAgentKind(row.agentKind as EngineKind, 'Host task execution');
+  const agentKind: 'claude-code' | 'codex' | 'pi' = storedKind === 'codex' ? 'codex' : storedKind === 'pi' ? 'pi' : 'claude-code';
   return {
     id: row.id,
     status: row.status, source: row.source, botId: botLink?.botId ?? null,
@@ -1662,7 +1675,7 @@ const serverDeps = {
           const client = new CindyAuthClient({
             baseUrl: endpoints.authApiBaseUrl,
             region: realm,
-            deviceId: resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '')),
+            deviceId: resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '', resolveHostDataDir())),
             clientType: 'desktop',
             fetch: (input, init) => hostAuthFetch(input, init),
           });
@@ -1759,14 +1772,35 @@ const serverDeps = {
       activity: row.lastToolUse?.toolName ?? null,
     }));
   },
-  updateSession: lockSessionRoute(createHostSessionUpdate({
-    restoreTaskToActive: taskRestore.restoreTaskToActive,
-    publish: event => eventHub.publish(event),
-    setModel: (sessionId, model, providerId, revision, selection) =>
-      runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
-    persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
-    move: sessionMove.move,
-  })),
+  updateSession: (() => {
+    const run = createHostSessionUpdate({
+      restoreTaskToActive: taskRestore.restoreTaskToActive,
+      publish: event => eventHub.publish(event),
+      setModel: (sessionId, model, providerId, revision, selection) =>
+        runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
+      persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
+      move: sessionMove.move,
+      onSoftDelete: async sessionId => {
+        await inputQueue.disposeSession(sessionId);
+        runtimeSelection.clearIntent(sessionId);
+        void recoverGeneratedImagesForHistory(sessionId).catch(() => undefined);
+        try { removeSessionModelInterface(sessionId); } catch (error) {
+          hostLog.warn('session interface snapshot cleanup failed', { sessionId, error: String(error) });
+        }
+        void removeTurnChangeSetsForSession(sessionId).catch(error =>
+          hostLog.warn('turn change-set cleanup failed', { sessionId, err: error instanceof Error ? error.message : String(error) }));
+        forgetProvisionalSession(sessionId);
+      },
+    });
+    return (sessionId: string, patch: Record<string, unknown>, options?: { deleteTarget?: 'side-chat' | 'task' }) => {
+      const owner = activeOwnerScopeKey();
+      return run(sessionId, patch, options, () => {
+        const held = inputQueue.profileHoldReason();
+        if (held) throw holdError(held);
+        if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('[NOT_FOUND] Host account changed');
+      });
+    };
+  })(),
   /**
    * Register a switch under the route lock for enqueue or the dispatch boundary.
    */
@@ -1996,7 +2030,8 @@ const serverDeps = {
     ensureSharedGlobalSkills: () => sharedGlobalSkills.ensureSharedGlobalSkills(),
   }),
   capabilities: async (agentKind: string) => {
-    const kind = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'claude-code';
+    const requested = requireBuiltinAgentKind(agentKind as EngineKind, 'Host model capabilities');
+    const kind = requested === 'codex' ? 'codex' : requested === 'pi' ? 'pi' : 'claude-code';
     const baseCaps = agentGraph?.capabilitiesByAgent?.[kind];
     if (!baseCaps) throw new Error(`Agent '${kind}' is not registered`);
     const providerSnapshot = await listProviders({ gateway: currentGateway(), ownerId: runtime.owner });
@@ -2180,6 +2215,8 @@ const server = createHostServer({ ...serverDeps, service, platformClient: () => 
     if (action === 'revoke') return deviceLink.revoke(body.deviceId ?? '');
     // This Host's 「Agent-Net (Beta)」 setting; off by default (docs/agent-net-session-plan.md 阶段 5).
     if (action === 'agent-net-on' || action === 'agent-net-off') return deviceLink.setAgentNetEnabled(action === 'agent-net-on');
+    // 「重新加入」 after this Host was removed from the account (device-link.ts `rejoin`).
+    if (action === 'rejoin') return deviceLink.rejoin();
     throw new Error('Unknown remote control command');
   },
 });
@@ -2232,12 +2269,59 @@ function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentN
   };
 }
 
+async function setSessionExtraDirs(sessionId: string, requestedDirs: string[]): Promise<string[] | void> {
+  const owner = activeOwnerScopeKey();
+  const generation = inputQueue.profileHoldGeneration();
+  const assertWriteAllowed = () => {
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) {
+      throwIpcError('PRECONDITION_FAILED', 'Host account changed');
+    }
+    const held = inputQueue.profileHoldReason();
+    if (held || generation !== inputQueue.profileHoldGeneration()) {
+      throwIpcError('PRECONDITION_FAILED', held ?? 'Host profile ownership changed');
+    }
+  };
+  assertWriteAllowed();
+  return withSendToSessionLock(sessionId, async () => {
+    assertWriteAllowed();
+    const session = agentGraph?.maker.getSession(sessionId);
+    if (session && !session.capabilities.extraDirs.supported) return;
+    const workDir = session?.workDir || await readSessionWorkingDirFromDb(sessionId);
+    const runtime = session
+      ? {
+          setExtraDirs: (dirs: string[]) => session.setExtraDirs(extraDirsForRuntime(dirs), libraryRootForRuntime(dirs)),
+          setWritableDirs: createTaskWritableDirsUpdater(session),
+        }
+      : { setExtraDirs: async () => {}, setWritableDirs: async () => {} };
+    const persisted = await readSessionExtraDirsFromDb(sessionId);
+    const dirs = replaceUserExtraDirs(requestedDirs, persisted);
+    const result = await applyRemoteDirectoryGrantUpdate('extraDirs', dirs, runtime, {
+      assertWriteAllowed,
+      validate: dirs => validateExtraDirs(dirs, workDir),
+      readExtraDirs: async () => persisted,
+      readWritableDirs: () => readSessionWritableDirsFromDb(sessionId),
+      excludeConflicts: excludeDirectoryGrantConflictsWithSlots,
+      persist: patch => runtimeSelection.persistSessionFields(sessionId, patch),
+      terminate: async () => {
+        if (session && agentGraph) await agentGraph.maker.closeSessionIfCurrent(session, 'runtime-refresh');
+      },
+    });
+    // Device Link returns the applied subset, not the transaction metadata.
+    return result.dirs;
+  });
+}
+
 function startDeviceLink(): void {
   if (deviceLink) return;
   const endpoint = readAuthEndpoints(account.realm === 'cn' ? 'cn' : 'global').deviceLinkApiBaseUrl;
   if (!endpoint) throw new Error('The endpoint manifest does not contain a Device Link relay');
+  const worktree = createHostWorktreeLifecycle(profileDir);
+  if (!inputQueue.profileHoldReason()) {
+    void worktree.reconcilePendingSafeDirectoryCleanups().catch(error =>
+      hostLog.warn('deferred Worktree safe.directory cleanup failed', { error }));
+  }
   deviceLink = createHostDeviceLink({
-    profileDir, version: layout.version,
+    profileDir, worktree, version: layout.version,
     mcpApps: pluginGateway ?? undefined,
     releaseAuthCaller: caller => agentAuth?.releaseCaller(caller),
     getWsUrl: () => endpoint.replace(/^https:/, 'wss:') + '/api/device-link/ws',
@@ -2245,9 +2329,23 @@ function startDeviceLink(): void {
     refreshToken: async () => { await refreshAuthSession(); },
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     agentNet: hostAgentNetPorts(),
+    // 「重新加入」 (`cindy-host remote rejoin`): the same official Device Link service and account token as the device list.
+    officialDeviceLinkFetch: (route, opts) => serverApi(route, { ...opts, baseUrl: endpoint, cache: 'no-store', redactErrorDetails: true }),
     invoke: service, subscribe: eventHub.subscribe,
     isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
       || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
+    sessionInTurn: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
+      || inputQueue.isTurnRunning(id) || inputQueue.isTurnRecovering(id),
+    closeRuntimeSession: id => {
+      const owner = activeOwnerScopeKey();
+      return withSendToSessionLock(id, async () => {
+        const held = inputQueue.profileHoldReason();
+        if (held) throw holdError(held);
+        if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('[NOT_FOUND] Host account changed');
+        await agentGraph?.maker.closeSession(id);
+        interactions.detach(id, 'session_closed');
+      });
+    },
     onProjectTaskStatus: (sessionId, status) => {
       eventHub.publish({ type: 'session_changed', sessionId, status, patch: { status } });
     },
@@ -2261,14 +2359,33 @@ function startDeviceLink(): void {
     // The Device Link create entry, with the runtime start admission (agent/create-runtime-session.ts).
     // Coexistence plan A: a new task's runtime and a plugin page's calls are refused while held (device-link.ts).
     profileHold: inputQueue.profileHoldReason,
+    isSessionClaimed: async sessionId => {
+      if (agentGraph?.maker.getSession(sessionId)) return true;
+      const [row] = await getDbClient().drizzle.select({ id: sessionTable.id })
+        .from(sessionTable).where(eq(sessionTable.id, sessionId)).limit(1);
+      return !!row;
+    },
     createRuntimeSession: input => {
       return createHostRuntimeSession(explicitPorts<HostRuntimeSessionCreatePorts>({
       serverDeps,
       getAgentGraph: () => agentGraph,
       assertProviderExecutionSupported,
       admitLocalRoute: opts => runtimeSelection.admitLocalRoute(opts),
+      readStoredSession: async id => {
+        const [row] = await getDbClient().drizzle.select({
+          status: sessionTable.status, workingDir: sessionTable.workingDir, agentKind: sessionTable.agentKind,
+          model: sessionTable.model, effort: sessionTable.effort, permissionMode: sessionTable.permissionMode,
+          providerId: sessionTable.providerId, fastMode: sessionTable.fastMode,
+          planModeEnabled: sessionTable.planModeEnabled, sdkSessionId: sessionTable.sdkSessionId,
+        }).from(sessionTable).where(eq(sessionTable.id, id)).limit(1);
+        return row ? { ...row, workingDir: row.workingDir || null } : null;
+      },
     }), input);
     },
+    send: (sessionId, message, createOpts, sendOpts) => inputQueue.send(sessionId, message, createOpts, sendOpts),
+    assertRemoteInputControlBoundary: (sessionId, opts) => inputQueue.assertRemoteInputControlBoundary(sessionId, opts),
+    setExtraDirs: setSessionExtraDirs,
+    publish: event => eventHub.publish(event),
     availabilityPolicy: availabilityPolicy ?? undefined,
     disableShareAvailability,
 

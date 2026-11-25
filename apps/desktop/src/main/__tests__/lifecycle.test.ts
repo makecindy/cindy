@@ -6,7 +6,7 @@
  *   - async 并发, 整体超时兜底
  *   - post-async 串行, 必须晚于 async (用于 db close 这种依赖 async 产物的清理)
  *
- * installQuitHandler 只覆盖不触发真实退出的异常分支；真实 process / app 信号路径仍走集成验证。
+ * installQuitHandler 通过模拟 Electron 事件和进程退出验证诊断；测试进程不会退出。
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -21,8 +21,7 @@ const scanFork = vi.hoisted(() => vi.fn());
 const electronPaths = vi.hoisted(() => ({ userData: '' }));
 
 // lifecycle.ts 里 import { app } from 'electron' —— 用最小 stub 喂给它。
-// 真实退出路径 (信号 / before-quit) 不在本文件覆盖。getPath / getVersion /
-// crashReporter 只供 session-end 用例初始化真实 run marker。
+// getPath / getVersion / crashReporter 供退出诊断用例初始化真实 run marker。
 vi.mock('electron', () => ({
   utilityProcess: { fork: scanFork },
   app: {
@@ -207,6 +206,26 @@ describe('runQuitDisposers', () => {
     await runQuitDisposers(1000);
 
     expect(log).toEqual(['a-sync', 'b-async', 'c-post']);
+  });
+
+  // Unit: an observer learns about every quit step that failed or ran out of time, with no
+  // dependence on the log wording; a clean chain reports none.
+  it('tells the quit observer about each step that did not finish cleanly', async () => {
+    const { onQuit, runQuitDisposers, observeQuitSteps } = await freshLifecycle();
+    const observer = { fault: vi.fn(), completed: vi.fn() };
+    observeQuitSteps(observer);
+    await runQuitDisposers(20);
+    expect(observer.fault).not.toHaveBeenCalled();
+    onQuit('sync-throws', () => { throw new Error('sync'); }, 'sync');
+    onQuit('sync-promise', (() => Promise.resolve()) as never, 'sync');
+    onQuit('async-throws', async () => { throw new Error('async'); }, 'async');
+    onQuit('async-hangs', () => new Promise<void>(() => {}), 'async');
+    onQuit('post-throws', async () => { throw new Error('post'); }, 'post-async');
+    onQuit('post-hangs', () => new Promise<void>(() => {}), 'post-async');
+    onQuit('post-throws-sync', () => { throw new Error('post sync'); }, 'post-async');
+    await runQuitDisposers(20);
+    expect(observer.fault).toHaveBeenCalledTimes(7);
+    expect(observer.completed).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('keeps real bootstrap Codex and DB dependencies until Maker settles or times out (timeout=%s)', async (timesOut) => {
@@ -597,7 +616,7 @@ describe('installQuitHandler render-process-gone', () => {
 
   type RenderGoneHandler = (
     event: unknown,
-    webContents: { id: number; getType(): string },
+    webContents: { id: number; isDestroyed(): boolean; getType(): string },
     details: { reason: string; exitCode: number },
   ) => void;
 
@@ -626,12 +645,34 @@ describe('installQuitHandler render-process-gone', () => {
     };
   }
 
+  it('ignores a late renderer exit notification after its window has closed (#12758)', async () => {
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(
+        undefined,
+        {
+          id: 41,
+          isDestroyed: () => true,
+          getType: () => {
+            throw new TypeError('Object has been destroyed');
+          },
+        },
+        { reason: 'crashed', exitCode: 5 },
+      );
+      await Promise.resolve();
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
   it('webview guest crash (e.g. OOM) does NOT shut the app down', async () => {
     const { handler, app, restore } = await installAndGrabHandler();
     try {
       handler(
         undefined,
-        { id: 42, getType: () => 'webview' },
+        { id: 42, isDestroyed: () => false, getType: () => 'webview' },
         { reason: 'oom', exitCode: 1 },
       );
       // beginShutdown 是异步链;等一拍再断言"什么都没发生"。
@@ -650,7 +691,7 @@ describe('installQuitHandler render-process-gone', () => {
     nativePopupWebContentsIds.add(43);
     const { handler, app, restore } = await installAndGrabHandler();
     try {
-      handler(undefined, { id: 43, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      handler(undefined, { id: 43, isDestroyed: () => false, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
       await new Promise((r) => setTimeout(r, 20));
       expect(app.exit).not.toHaveBeenCalled();
       expect(mocks.logger.warn).toHaveBeenCalledWith(
@@ -666,7 +707,7 @@ describe('installQuitHandler render-process-gone', () => {
     resourceUsageWebContentsIds.add(44);
     const { handler, app, restore } = await installAndGrabHandler();
     try {
-      handler(undefined, { id: 44, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      handler(undefined, { id: 44, isDestroyed: () => false, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
       await new Promise((r) => setTimeout(r, 20));
       expect(app.exit).not.toHaveBeenCalled();
       expect(mocks.logger.warn).toHaveBeenCalledWith(
@@ -677,7 +718,7 @@ describe('installQuitHandler render-process-gone', () => {
       // cleanup ran, but the app-wide event still disposed DB/device-link.
       // Other auxiliary tests never registered the transport factory's owner.
       const { markCaptureWindowWebContents } = await import('../remote-desktop/captureWindowRegistry');
-      const capture = { id: 46, getType: () => 'window' };
+      const capture = { id: 46, isDestroyed: () => false, getType: () => 'window' };
       markCaptureWindowWebContents(capture as unknown as Electron.WebContents);
       handler(undefined, capture, { reason: 'crashed', exitCode: 5 });
       await Promise.resolve();
@@ -695,7 +736,7 @@ describe('installQuitHandler render-process-gone', () => {
     rsbWindowWebContentsIds.add(45);
     const { handler, app, restore } = await installAndGrabHandler();
     try {
-      handler(undefined, { id: 45, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      handler(undefined, { id: 45, isDestroyed: () => false, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
       await new Promise((r) => setTimeout(r, 20));
       expect(app.exit).not.toHaveBeenCalled();
       expect(mocks.logger.warn).toHaveBeenCalledWith(
@@ -710,7 +751,7 @@ describe('installQuitHandler render-process-gone', () => {
     reviewArtifactConfirmWebContentsIds.add(47);
     const { handler, app, restore } = await installAndGrabHandler();
     try {
-      handler(undefined, { id: 47, getType: () => 'window' }, { reason: 'oom', exitCode: 5 });
+      handler(undefined, { id: 47, isDestroyed: () => false, getType: () => 'window' }, { reason: 'oom', exitCode: 5 });
       await new Promise((r) => setTimeout(r, 20));
       expect(app.exit).not.toHaveBeenCalled();
       expect(mocks.logger.warn).toHaveBeenCalledWith(
@@ -727,7 +768,7 @@ describe('installQuitHandler render-process-gone', () => {
     try {
       handler(
         undefined,
-        { id: 1, getType: () => 'window' },
+        { id: 1, isDestroyed: () => false, getType: () => 'window' },
         { reason: 'crashed', exitCode: 5 },
       );
       await vi.waitFor(() => {
@@ -839,6 +880,116 @@ describe('installQuitHandler', () => {
         err,
       );
     } finally {
+      snapshot.restore();
+    }
+  });
+
+  // #7210: exercise the installed before-quit handler and classify its real persisted marker.
+  // The existing exception tests start with an idle app. A pending disposer is the minimal
+  // condition needed to reproduce the race in this unit test. The fatal-shutdown
+  // notification drives log backfill and must be emitted once even if two exceptions arrive.
+  it.each([
+    {
+      name: 'fatal exception during cleanup',
+      timing: 'cleanup',
+      error: new TypeError('Object has been destroyed'),
+      exitCode: 1,
+      kind: 'crash-exit',
+      shutdownReason: 'uncaughtException',
+    },
+    {
+      name: 'fatal exception in app.exit before the exit event',
+      timing: 'before-exit-event',
+      error: new TypeError('Object has been destroyed'),
+      exitCode: 0,
+      kind: 'crash-exit',
+      shutdownReason: 'uncaughtException',
+    },
+    {
+      name: 'fatal exception in app.exit after the exit event',
+      timing: 'after-exit-event',
+      error: new TypeError('Object has been destroyed'),
+      exitCode: 0,
+      kind: 'crash-exit',
+      shutdownReason: 'uncaughtException',
+    },
+    {
+      name: 'recoverable network error during cleanup',
+      timing: 'cleanup',
+      error: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
+      exitCode: 0,
+      kind: 'clean',
+      shutdownReason: 'before-quit',
+    },
+  ])('records the outcome of $name on the next startup', async ({
+    error, exitCode, kind, shutdownReason, timing,
+  }) => {
+    const snapshot = snapshotProcessListeners([
+      'SIGINT', 'SIGTERM', 'exit', 'uncaughtException', 'unhandledRejection',
+    ]);
+    const sigbreakBefore = new Set(process.listeners('SIGBREAK'));
+    const previousUserData = electronPaths.userData;
+    electronPaths.userData = watchdogTmpDir;
+    vi.useFakeTimers({ toFake: ['setInterval'] });
+    try {
+      const lifecycle = await freshLifecycle();
+      const diagnostics = await import('../startup-diagnostics');
+      const { app } = await import('electron');
+      diagnostics.initStartupDiagnostics();
+      lifecycle.installQuitHandler();
+      const onFatalShutdown = vi.fn();
+      lifecycle.onFatalShutdown(onFatalShutdown);
+
+      let finishCleanup!: () => void;
+      const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
+      const dispose = vi.fn(() => cleanup);
+      lifecycle.onQuit('pending-cleanup', dispose, 'post-async');
+
+      const [, beforeQuit] = (vi.mocked(app.on).mock.calls as unknown as Array<[
+        string, (event: { preventDefault(): void }) => void,
+      ]>).find(([event]) => event === 'before-quit')!;
+      const event = { preventDefault: vi.fn() };
+      beforeQuit(event);
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+      expect(dispose).toHaveBeenCalledOnce();
+
+      const [uncaughtException] = snapshot.added('uncaughtException');
+      const raiseError = () => uncaughtException(error, 'uncaughtException');
+      vi.mocked(app.exit).mockImplementationOnce((actualExitCode = 0) => {
+        if (timing === 'before-exit-event') raiseError();
+        for (const onExit of snapshot.added('exit')) onExit(actualExitCode);
+        if (timing === 'after-exit-event') raiseError();
+      });
+      if (timing === 'cleanup') {
+        raiseError();
+        raiseError();
+      }
+      const repeatedQuit = { preventDefault: vi.fn() };
+      beforeQuit(repeatedQuit);
+      expect(app.exit).not.toHaveBeenCalled();
+      finishCleanup();
+
+      await vi.waitFor(() => expect(app.exit).toHaveBeenCalledOnce());
+      const nextStart = new diagnostics.RunMarkerStore({
+        dir: join(watchdogTmpDir, 'diagnostics', 'run-markers'),
+        pid: process.pid + 1,
+        version: 'next',
+        isPidAlive: () => false,
+      });
+      expect(nextStart.analyzePreviousRuns()).toMatchObject([
+        { kind, marker: { exitCode, shutdownReason, disposedAt: expect.any(String) } },
+      ]);
+      expect(onFatalShutdown.mock.calls).toEqual(
+        kind === 'crash-exit' ? [['uncaughtException']] : [],
+      );
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(repeatedQuit.preventDefault).toHaveBeenCalledOnce();
+    } finally {
+      electronPaths.userData = previousUserData;
+      vi.useRealTimers();
+      for (const listener of process.listeners('SIGBREAK')) {
+        if (!sigbreakBefore.has(listener)) process.removeListener('SIGBREAK', listener);
+      }
       snapshot.restore();
     }
   });

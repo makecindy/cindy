@@ -33,7 +33,9 @@ import { StunClient } from '../stun.js';
 import { createCoreTransport } from '../transport.js';
 import { Endpoint, type Connection, type RecvStream } from '@cindy/agent-net-core/node';
 import type { PeerChannel } from '../types.js';
-import WebSocket from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
@@ -645,6 +647,47 @@ it('tells a directly connected peer right away when its worker socket is termina
   await vi.waitFor(() => expect(controller.pathTo('a-host')).toBeNull(), { timeout: 2_000 });
 });
 /** 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 连真实中转。连上以后中转
+ *   发来一帧本机不认的消息，本机自己关掉这条连接：随后要自己连回中转（中转看到第二条连接、`relayConnected` 又为真），日志写明
+ *   是本机关的、为什么。
+ * - Bug 依据：2026-11-25 一台 Mac 04:26 的中转连接被本机关掉后再没有重连，只经中转能到的设备全部离线 4.5 小时，重启 App 才恢复。
+ *   worker 里代替 WebSocket 的对象 terminate() 后不发 'close'，Main 随后报的关闭又因它已被删掉而被丢弃，上面一层一直把这条死掉的
+ *   连接当成中转连接，从不重连。
+ * - 现有覆盖缺口：中转断开的用例都是中转或网络关的（Main 收到 close 再转给 worker），没有本机自己关的。
+ * - 最小失败输入：连上后中转发来一帧未知类型的控制消息（经本机回环转发注入）。
+ * - tier：integration，真实 worker、真实中转与证书，本机回环转发；约 1 秒。 */
+it('reconnects its relay after ending that relay connection itself over a frame it refused', async () => {
+  const f = await network(false, undefined, true);
+  f.host.stop();
+  // Between this device and the relay, so a test can send this device a frame the relay itself never would.
+  const forwarder = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(forwarder, 'listening');
+  const toDevice: WebSocket[] = [];
+  forwarder.on('connection', (device, request) => {
+    toDevice.push(device);
+    const relay = new WebSocket(f.relay.url.replace(/^http/, 'ws') + request.url, { headers: { authorization: request.headers.authorization! } });
+    relay.on('message', (data, binary) => { if (device.readyState === WebSocket.OPEN) device.send(data, { binary }); });
+    device.on('message', (data, binary) => { if (relay.readyState === WebSocket.OPEN) relay.send(data, { binary }); });
+    relay.on('close', () => device.terminate()); relay.on('error', () => device.terminate());
+    device.on('close', () => relay.terminate()); device.on('error', () => relay.terminate());
+  });
+  cleanup.push(() => { for (const device of forwarder.clients) device.terminate(); forwarder.close(); });
+  const forwarderUrl = 'ws://127.0.0.1:' + (forwarder.address() as AddressInfo).port;
+  f.a.transport.createWebSocket = (url, options) => new WebSocket(forwarderUrl + new URL(url).pathname, options);
+  const warnings: string[] = [];
+  const socket = await AgentNetWorkerSocket.open({ workerFile: new URL('../../dist/node-worker.mjs', import.meta.url), client: f.a,
+    userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false, bindAddress: '127.0.0.1', lanDiscovery: false,
+    log: { info() {}, warn: (line: string) => { warnings.push(line); } } });
+  cleanup.push(() => socket.close());
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(toDevice).toHaveLength(1);
+  toDevice[0].send(JSON.stringify({ type: 'not-a-relay-message' }));
+  await vi.waitFor(() => expect(toDevice).toHaveLength(2), { timeout: 5_000 });
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(toDevice[0].readyState).toBe(WebSocket.CLOSED);
+  expect(warnings).toEqual(['agent-net relay connection was ended by this device (INVALID_CONTROL); reconnecting']);
+});
+/** 测试价值
  * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 与真实中转读目录。
  *   目录里一台设备有新旧两个设备号、同一把传输密钥时，交给业务的目录里只有新的；旧设备号不可用（`supports` 为否），
  *   但仍算见过的 Agent-Net 设备（`knowsPeer` 为是），Desktop 据此不让它改走 Device Link、仍要它出示关闭证明。
@@ -910,6 +953,43 @@ it('does not renew an expired public-directory cache or use it for an offline bu
   }));
   socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'invoke', id: 'expired-cache-request', dst: 'a-host', payload: { channel: 'test:echo', args: [] } }));
   expect(await denied).toMatchObject({ payload: { code: 'DEVICE_OFFLINE' } });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：AgentNetWorkerSocket 的 `setPeerPathPreference` 与 `peerRoutes()` 双路往返（directRttMs / relayRttMs）。
+ * - Bug／规则依据：2026-11-22 用户需求——跨国直连慢于中转时需支持双路测速与无断链手动切换（自动 / 直连 / 中转），且两端同步切路。
+ * - 现有覆盖缺口：此前集成测试只验证了中转打洞升级直连，未覆盖直连切回中转、双路 RTT 采集及再切回直连。
+ * - 最小失败输入：一对已直连的真实 worker 对端，依次执行 `setPeerPathPreference('a-host', 'relay')` 和 `'direct'`。
+ * - tier：integration，真实 worker、真实 WASM 核心与 V2 中转。
+ */
+it('measures both direct and relay RTTs and symmetrically switches a live peer between direct and relay without dropping RPC', async () => {
+  const f = await network(true, undefined, true); serve(f.host);
+  await f.controller.openLink('a-host', openPayload);
+  const host = f.sockets.find((socket) => socket.deviceId === 'a-host')!;
+  const controller = f.sockets.find((socket) => socket.deviceId === 'b-controller')!;
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('direct');
+    expect(host.pathTo('b-controller')).toBe('direct');
+  }, { timeout: 8_000 });
+  // Switching to relay updates both sides symmetrically and keeps RPC alive without reconnecting.
+  controller.setPeerPathPreference!('a-host', 'relay');
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('relay');
+    expect(host.pathTo('b-controller')).toBe('relay');
+  }, { timeout: 8_000 });
+  const relayed = controller.peerSnapshot('a-host');
+  expect(relayed).toMatchObject({ path: 'relay', pathPreference: 'relay' });
+  expect(typeof relayed?.directRttMs).toBe('number');
+  expect(typeof relayed?.relayRttMs).toBe('number');
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['via-relay'] })).toMatchObject({ ok: true, result: 'via-relay' });
+  // Switching back to direct restores direct on both sides.
+  controller.setPeerPathPreference!('a-host', 'direct');
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('direct');
+    expect(host.pathTo('b-controller')).toBe('direct');
+  }, { timeout: 8_000 });
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['back-direct'] })).toMatchObject({ ok: true, result: 'back-direct' });
 });
 
 // Bug: cached identities could keep an existing direct path, but could not find it after both nodes restarted.

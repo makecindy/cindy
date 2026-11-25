@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { extractIpcError } from '@/utils/ipcError';
 import { ImageLightbox } from './ImageLightbox';
+import type { GalleryOccurrence } from './ImageGalleryContext';
 import { useImageClipboard } from './useImageClipboard';
 import { ModelLightbox } from './ModelLightbox';
 import { ImageMissingPlaceholder } from './ImageMissingPlaceholder';
@@ -47,6 +48,11 @@ import { useRemoteMediaErrorRetry } from '@/hooks/useRemoteMediaErrorRetry';
 import { isRemoteMediaUrl } from '../../../shared/remoteMediaUrl';
 import { useImageLoadFailure } from './useImageLoadFailure';
 import type { ToolMediaModelFile } from './AgentActionRow';
+
+/** A preview poster that opens the 3D viewer instead of the image viewer (not a gallery image). */
+export function opensModelViewer(modelFile: ToolMediaModelFile | undefined): boolean {
+  return Boolean(modelFile && ['GLB', 'GLTF'].includes(modelFile.format.toUpperCase()));
+}
 
 export type ChatImageVariant = 'user-attached' | 'tool-output';
 
@@ -76,6 +82,11 @@ interface ChatImageViewProps {
   annotationStrokes?: Array<{ points: Array<{ x: number; y: number }> }>;
   /** Stable attachment ID for selecting the clicked item in a collection. */
   itemId?: string;
+  /**
+   * Which repeat of this image address the row shows (structuredImageOccurrence), so
+   * the task image gallery opens at this copy when the row shows it more than once.
+   */
+  galleryOccurrence?: GalleryOccurrence;
 }
 
 /** 各 variant 的尺寸/边框/className 规范集中在这里,以后调样式只用动这一处。 */
@@ -116,6 +127,7 @@ export function ChatImageView({
   annotationSourceUrl,
   annotationStrokes,
   itemId,
+  galleryOccurrence,
 }: ChatImageViewProps) {
   const { t } = useTranslation();
   // 远程会话改写到 cindy-remote-media://;本地会话原样。下游一律用 displaySrc(渲染 +
@@ -244,11 +256,8 @@ export function ChatImageView({
           // 3D 模型预览图 → 弹 ModelLightbox 直接渲真模型;普通图 → 走 ImageLightbox。
           // model-viewer 只原生支持 glTF/GLB,非此两者退回 2D 预览,
           // 用户仍可右键 "打开模型" 用系统程序打开。
-          onClick={(e) => {
-            const next =
-              modelFile && ['GLB', 'GLTF'].includes(modelFile.format.toUpperCase())
-                ? 'model'
-                : 'image';
+          onClick={() => {
+            const next = opensModelViewer(modelFile) ? 'model' : 'image';
             // 打 image lightbox 前,在被点的这张图上做个临时标记,让 lightbox
             // 精确定位到用户点的这张(而不是按 src 搜到的第一张)。model 路径
             // 不进 gallery,不标记。
@@ -353,7 +362,7 @@ export function ChatImageView({
           // 历史带标注图的再编辑视图:打开未烧录原图 + 持久化笔迹(可撤销/
           // 续画,出口是"发送到对话"生成新消息)。displaySrc !== src 说明是
           // 远程会话改写,原图在被控端拿不到,退回普通烧录图预览。
-          // 单张展示:gallery 按烧录图 src 定位,换成原图后无法匹配。
+          // 画廊按烧录图(annotationFallbackSrc)定位,翻页照常;不在画廊里时单张展示。
           // 原图若已被清理,lightbox 退回烧录图(annotationFallbackSrc)供查看 / 叠加新标。
           <ImageLightbox
             filename={filename}
@@ -361,6 +370,8 @@ export function ChatImageView({
             initialItemId={itemId}
             initialStrokes={annotationStrokes}
             annotationFallbackSrc={displaySrc}
+            galleryOccurrence={galleryOccurrence}
+            enableGallery
             onClose={closePreview}
           />
         ) : (
@@ -368,6 +379,7 @@ export function ChatImageView({
             filename={filename}
             src={displaySrc}
             initialItemId={itemId}
+            galleryOccurrence={galleryOccurrence}
             enableGallery
             onClose={closePreview}
           />

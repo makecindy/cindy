@@ -1,3 +1,4 @@
+import { qualifiedCardPrKey } from '@cindy/maker-shared';
 import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { GhostCardSessionLink } from './GhostCardSessionLink';
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
@@ -444,7 +445,7 @@ function GhostCardCanvas({
       el.style.setProperty('display', 'inline-flex', 'important');
     });
     if (!prSlotKey) return;
-    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(`github:github.com/${key}`) ?? prStatusesRef.current.get(key), t, taskArchiveEligible));
+    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(qualifiedCardPrKey(key)!) ?? prStatusesRef.current.get(key), t, taskArchiveEligible));
     fillGhostCardTaskAutoArchiveHint(doc, taskArchiveEligible ? autoArchiveStateRef.current : 'inactive', {
       pending: t('chat.ghostCall.taskAutoArchivePending'),
       cancel: t('chat.ghostCall.taskAutoArchiveCancel'),
@@ -1354,7 +1355,8 @@ export function GhostToolCard({
         >
           {toolName ? (
             <div
-              className="mb-1 inline-block rounded px-1.5 py-px font-mono text-10"
+              // design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版）
+              className="mb-1 inline-block rounded-[6px] px-1.5 py-px font-mono text-10"
               style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
             >
               {toolName}

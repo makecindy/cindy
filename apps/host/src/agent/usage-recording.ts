@@ -251,7 +251,10 @@ export function createHostUsageRecording(options: HostUsageRecordingOptions) {
       }
       if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code')
         && (!wasInTurn || !turnUsageContextBySession.has(session.id))) {
-        turnUsageContextBySession.set(session.id, captureTurnUsageContext(session.id));
+        turnUsageContextBySession.set(
+          session.id,
+          captureTurnUsageContext(session.id, undefined, event.source, session.model),
+        );
       }
     },
 

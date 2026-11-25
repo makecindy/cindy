@@ -142,7 +142,7 @@ function memoryTerminalLedger(): HookRequestLedger & { records: HookTerminalReco
  * 可控假 runner: run 挂起直到测试显式 resolve —— 用于验证排队;
  * sessions 表模拟 inspect。
  */
-function fakeRunner(opts?: { sessions?: Record<string, { workingDir: string; usable: boolean }> }) {
+function fakeRunner(opts?: { sessions?: Record<string, { workingDir: string; usable: boolean; companionOwned?: boolean }> }) {
   const sessions = opts?.sessions ?? {};
   const calls: HookRunRequest[] = [];
   const resolvers: Array<(o: HookRunOutcome) => void> = [];
@@ -746,7 +746,7 @@ describe('normalizeTaskSource', () => {
 
   // laneKind 的唯一消费者是群轮次的 turn lease(见 session-runner);派生判据必须
   // 在正常派发与续跑观察两条路径上一致, 否则续跑轮会丢掉那层独占。
-  it('laneKind 派生: telegram group/topic 与飞书话题 externalKey → group, DM 与 Slack → dm', async () => {
+  it('laneKind 派生: telegram group/topic、飞书话题与 Discord 频道 externalKey → group, DM 与 Slack → dm', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
@@ -759,6 +759,9 @@ describe('normalizeTaskSource', () => {
       // 官方飞书 / Lark: 群里一律在话题回复, 话题 lane 是多人可见的群轮次。
       'feishu:topic:cli_app:oc_chat:om_root:ou_user:g0',
       'feishu:dm:cli_app:ou_user:g0',
+      // 官方 Discord: 服务器频道 / 子区的回复多人可见, 与群轮次同样需要 turn lease。
+      'discord:ch:100000000000000001:300000000000000003:200000000000000002:g0',
+      'discord:dm:100000000000000001:200000000000000002:g0',
     ];
     for (const [i, externalKey] of keys.entries()) {
       d.handleDispatch('conn-1', dispatch({ requestId: `req-lane-${i}`, externalKey }), c.send);
@@ -766,7 +769,7 @@ describe('normalizeTaskSource', () => {
       fr.finish();
       await tick();
     }
-    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm', 'group', 'dm']);
+    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm', 'group', 'dm', 'group', 'dm']);
     expect(fr.calls[0]?.groupHistoryAccess).toEqual({
       access: 'lane',
       provider: 'telegram:9',
@@ -1836,6 +1839,20 @@ describe('dispatcher 核心语义', () => {
       result: 'rejected',
       reason: 'workspace_not_allowed',
     });
+  });
+
+  // PR #12405 (unit): a permitted directory may hold a teammate's private session.
+  // Exercise both routes through dispatch; the directory-only tests have no private session.
+  it.each([true, false])('rejects a private teammate session inside an allowed project (explicit=%s)', async explicit => {
+    const fr = fakeRunner({ sessions: { buddy: { workingDir: WS_DIR, usable: true, companionOwned: true } } });
+    const bindings = memoryBindings();
+    if (!explicit) bindings.set('conn-1', 'team-slack:C1:1.1', 'buddy');
+    const { d } = makeDispatcher({ runner: fr.runner, bindings });
+    const c = collector();
+    d.handleDispatch('conn-1', dispatch({ sessionId: explicit ? 'buddy' : null }), c.send);
+    await tick();
+    expect(c.last('task.ack')?.payload).toMatchObject({ result: 'rejected', reason: 'workspace_not_allowed' });
+    expect(fr.calls).toHaveLength(0);
   });
 
   it('接管白名单按 inspect 完成后的当前映射判定', async () => {

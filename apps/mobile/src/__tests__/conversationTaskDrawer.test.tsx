@@ -12,11 +12,28 @@ vi.mock('react-native', () => ({ View: ({ children }: any) => <div>{children}</d
 vi.mock('@/session/SessionListDrawer', () => ({ SessionListDrawer: (props: any) => { useState(() => ++state.instances); state.pane = props; return null; }, useSessionListDrawerMotion: () => ({}),
   useSessionListDrawerOpenGesture: (props: any) => { state.gesture = props; return props; } }));
 let root: ReturnType<typeof createRoot>, node: HTMLDivElement, drawer: ReturnType<typeof useConversationTaskDrawer>;
-function Probe({ persistent = false, enabled = true }: { persistent?: boolean; enabled?: boolean }) {
-  drawer = useConversationTaskDrawer({ enabled, persistent, width: 400 }); return null;
+function Probe({ persistent = false, enabled = true, onSwipeBack }: { persistent?: boolean; enabled?: boolean; onSwipeBack?: () => void }) {
+  drawer = useConversationTaskDrawer({ enabled, persistent, width: 400, onSwipeBack }); return null;
 }
 beforeEach(() => { state.focused = true; haptic.mockClear(); (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; node = document.createElement('div'); root = createRoot(node); });
 afterEach(() => act(() => root.unmount()));
+// Unit, #11621: a message-link push on iOS must yield the swipe to the stack.
+// Check the button, exit fence, and switching back to list entry on the same screen.
+it('returns from linked tasks by swipe but still opens the list by button', () => {
+  act(() => root.render(<Probe onSwipeBack={vi.fn()} />));
+  expect(drawer.stackGestureEnabled).toBe(true);
+  expect(state.gesture.enabled).toBe(false);
+  act(() => drawer.openSessionListDrawer());
+  expect(drawer.sessionListDrawerOpen).toBe(true);
+  expect(drawer.stackGestureEnabled).toBe(false);
+  act(() => drawer.closeSessionListDrawer());
+  expect(drawer.stackGestureEnabled).toBe(false);
+  act(() => drawer.handleSessionListDrawerClosed());
+  expect(drawer.stackGestureEnabled).toBe(true);
+  act(() => root.render(<Probe />));
+  expect(drawer.stackGestureEnabled).toBe(false);
+  expect(state.gesture.enabled).toBe(true);
+});
 it('defers the first destination until the drawer is gone, rejecting subsequent taps', () => {
   act(() => root.render(<Probe />)); act(() => drawer.openSessionListDrawer());
   const first = vi.fn(), second = vi.fn();

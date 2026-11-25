@@ -30,6 +30,10 @@ describe('paged Host reads', () => {
     const page = { ...snapshot.market, nextCursor: null, counts: { all: 1, public: 0, organization: 0, personal: 0, custom: 1 },
       customSourceNames: ['team'], customSourceCounts: [{ name: 'team', count: 1 }] };
     expect(parsePluginManagementMarketPage(page).customSourceCounts).toEqual(page.customSourceCounts);
+    const counts = { ...page.counts, official: 0, community: 0 };
+    expect(parsePluginManagementMarketPage({ ...page, counts }).counts).toEqual(counts);
+    for (const change of [{ official: 1 }, { community: -1 }, { official: '0' }])
+      expect(() => parsePluginManagementMarketPage({ ...page, counts: { ...counts, ...change } })).toThrow('INVALID_RESPONSE');
     expect(() => parsePluginManagementMarketPage({ ...page, customSourceCounts: [{ name: 'other', count: 1 }] })).toThrow('INVALID_RESPONSE');
     expect(() => parsePluginManagementMarketPage({ ...page, counts: { ...page.counts, all: 12 } })).toThrow('INVALID_RESPONSE');
   });

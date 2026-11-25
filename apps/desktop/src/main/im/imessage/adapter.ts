@@ -16,6 +16,7 @@ import { handleDingTalkTextInteraction } from '../dingtalk/interaction';
 import { directDeliveryFile, readDirectDelivery } from './directDelivery';
 import { archiveDirectory, readArchive } from './archive';
 import { ui } from './uiText';
+import { isIMessageSteeringEnabled } from './steering';
 
 export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestratorConfig,
   options: { instanceKey: string; companionBotId: string; connectionId: string }) {
@@ -67,6 +68,8 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
     },
     buildVendorOptions: userId => ({ imessageChatId: userId, source: 'imessage' }),
     companionLane,
+    steerWhileBusy: (botId, chatId) => groupOwner(chatId) === botId &&
+      isIMessageSteeringEnabled(options.connectionId, botId, chatId),
     requiresCompanionLane: chat => groupOwner(chat) !== options.companionBotId,
     groupHistoryAccessFor: historyScope,
     connectedChatForLane(botId, routeKey) {

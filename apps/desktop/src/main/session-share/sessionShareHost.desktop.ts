@@ -12,15 +12,20 @@ import { cleanupReplacedSessionMediaRefs, commitShareImport, type CommitShareImp
   type CommitShareImportResult } from './sessionShareImport.js';
 import { SHARE_FILE_EXT } from './xdtshareFormat.pure.js';
 
-/** Existing native save location and filename, shared by the UI and Agent tools. */
-export async function chooseSessionShareExportPath(sessionId: string): Promise<string | null> {
-  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-  if (!win) return null;
+/** Package file name from the task title, shared by the save dialog and the Settings export folder. */
+export async function sessionShareExportFileName(sessionId: string): Promise<string> {
   const row = await getDbClient().queryOne<{ title: string | null }>('SELECT title FROM sessions WHERE id = ? LIMIT 1', [sessionId]);
   const name = (row?.title || 'session')
     // eslint-disable-next-line no-control-regex -- Windows filename characters.
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80).trim() || 'session';
-  const result = await dialog.showSaveDialog(win, { defaultPath: `${name}${SHARE_FILE_EXT}`,
+  return `${name}${SHARE_FILE_EXT}`;
+}
+
+/** Existing native save location and filename, shared by the UI and Agent tools. */
+export async function chooseSessionShareExportPath(sessionId: string): Promise<string | null> {
+  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  if (!win) return null;
+  const result = await dialog.showSaveDialog(win, { defaultPath: await sessionShareExportFileName(sessionId),
     filters: [{ name: `${BRAND_NAME} Session Share`, extensions: [SHARE_FILE_EXT.slice(1)] }] });
   return result.canceled ? null : result.filePath ?? null;
 }

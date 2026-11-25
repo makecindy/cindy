@@ -52,7 +52,7 @@ import {
 } from './dirty';
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
 import { withWorktreeRestoreMutation } from './restoreLock';
-import { recycleManagedWorktree } from './managedRecycle';
+import { worktreeManagerPorts } from './WorktreeManagerPorts.js';
 import { withWorktreeResourceLock } from './resourceLock';
 import {
   acquireWorktreeRuntimeLease,
@@ -60,8 +60,7 @@ import {
   reclaimOrphanedWorktreeRuntimeLeases,
   releaseWorktreeRuntimeLease,
 } from './runtimeLeases';
-import * as store from './worktreeStore';
-import { assertPrecreatedSessionNotCancelled, sealPrecreatedSessionCancellation, withPrecreatedSessionOperationLock } from './precreatedCancellation';
+import * as store from './worktreeStore.js';
 import { createLogger } from '../logger';
 import { getDbClient } from '../localDb/client/current';
 import {
@@ -399,7 +398,7 @@ async function withPrecreatedWorktreeOperationQueue<T>(
 
   await previous.catch(() => {});
   try {
-    return await withPrecreatedSessionOperationLock(sessionId, fn);
+    return await worktreeManagerPorts().withPrecreatedSessionOperationLock(sessionId, fn);
   } finally {
     releaseCurrent();
     if (precreatedWorktreeOperationQueues.get(sessionId) === queued) {
@@ -639,9 +638,14 @@ interface CreatedSnapshot {
   parentEnsured?: string;
   /** git worktree add 已成功执行(此时 worktree path 真实存在)。 */
   worktreeAdded?: { path: string; baseRepo: string; multibox?: boolean };
+  /** Wait for writers before any failed-create rollback, even when metadata was never published. */
+  backgroundCheckout?: Promise<void>;
 }
 
 async function rollbackPartialCreate(snap: CreatedSnapshot): Promise<void> {
+  // An unpublished record cannot be found by recovery-key discard later. Never
+  // leave its checkout writer running after the failed-create rollback returns.
+  await snap.backgroundCheckout?.catch(() => undefined);
   // A failed create may already have launched checkout or acquired a task reference.
   if (snap.worktreeAdded) {
     const { path: wp, baseRepo, multibox } = snap.worktreeAdded;
@@ -834,7 +838,7 @@ export async function awaitBackgroundCheckout(sessionId: string): Promise<void> 
 }
 
 export interface CreateWorktreeOptions {
-  /** Desktop new-task entry only; internal option, never taken from IPC request fields. */
+  /** Internal opt-in to refresh a selected full remote default ref. */
   refreshDefaultSource?: boolean;
   /** Keep a handle on the background checkout so failure compensation can wait for it. */
   trackBackgroundCheckout?: boolean;
@@ -843,13 +847,16 @@ export interface CreateWorktreeOptions {
    * For callers that hand the directory to a running agent, which must not see a half-written tree.
    */
   awaitFullCheckout?: boolean;
+  /** Host profile/owner fence, checked again immediately before metadata publication. */
+  assertWriteAllowed?: () => void;
   /** Local task creation can become stale while queued or while Git is running. */
   assertCurrent?: () => void;
 }
 
 export async function createWorktree(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
+  options?.assertWriteAllowed?.();
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
-    assertPrecreatedSessionNotCancelled(req.sessionId);
+    worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
     return createWorktreeInner(req, options);
   });
   return withPrecreatedWorktreeOperationQueue(req.sessionId, create);
@@ -916,28 +923,34 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
     }
     const baseRepo = cwdInfo.repoRoot ?? path.resolve(req.baseRepo);
 
+    let sourceBranch = req.sourceBranch;
+    if (options?.refreshDefaultSource && sourceBranch?.startsWith('origin/')) {
+      // The new-task picker sends short local names and full remote refs.
+      const localRef = `refs/heads/${sourceBranch}`;
+      if (await revParseCommit(baseRepo, localRef)) sourceBranch = localRef;
+    }
+
     // 2. branches — sourceBranch 既可以是本地分支(常规 schedule),也可以是
     //    任意 commit-ish。
     //    本地分支命中优先,否则用 rev-parse 校验是不是合法 commit-ish。
     const { branches } = await timed('list branches', () => listBranches(baseRepo));
-    if (!branches.includes(req.sourceBranch)) {
+    if (!branches.includes(sourceBranch)) {
       try {
-        await gitExec(['rev-parse', '--verify', `${req.sourceBranch}^{commit}`], baseRepo);
+        await gitExec(['rev-parse', '--verify', `${sourceBranch}^{commit}`], baseRepo);
       } catch {
         return {
           ok: false,
           error: {
             kind: 'unknown',
-            message: `源分支 "${req.sourceBranch}" 不存在`,
+            message: `源分支 "${sourceBranch}" 不存在`,
             hint: '请刷新分支列表或选择其他源分支',
           },
         };
       }
     }
 
-    // Refresh before add/checkout. Other creation paths preserve their existing behavior.
     if (options?.refreshDefaultSource) {
-      await refreshSelectedDefaultSource(baseRepo, req.sourceBranch);
+      await refreshSelectedDefaultSource(baseRepo, sourceBranch);
     }
 
     // 3. 路径冲突避让
@@ -984,13 +997,13 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       if (useMultibox) {
         try {
           const added = await timed('git multibox add', () =>
-            gitExec(buildMultiboxAddArgs(branch, worktreePath, req.sourceBranch), baseRepo));
+            gitExec(buildMultiboxAddArgs(branch, worktreePath, sourceBranch), baseRepo));
           logMultiboxAddResult(worktreePath, added.stdout);
         } catch (err) {
           return { ok: false, error: classifyError(classifyAny(err)) };
         }
       } else {
-        const addArgs = buildWorktreeAddArgs(branch, worktreePath, req.sourceBranch);
+        const addArgs = buildWorktreeAddArgs(branch, worktreePath, sourceBranch);
         try {
           await timed('git worktree add', () => gitExec(addArgs, baseRepo));
         } catch (err) {
@@ -1029,6 +1042,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
               (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
             ));
             bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
+            snap.backgroundCheckout = bgPromise;
             if (options?.trackBackgroundCheckout) {
               const settled = bgPromise.catch(() => undefined);
               backgroundCheckouts.set(req.sessionId, settled);
@@ -1090,7 +1104,8 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       // 8. Recheck after asynchronous Git/setup work before publishing metadata.
       // The profile/session lock also closes the check -> store.set window.
       try {
-        assertPrecreatedSessionNotCancelled(req.sessionId);
+        options?.assertWriteAllowed?.();
+        worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
         options?.assertCurrent?.();
       } catch (error) {
         // Rollback must not race our own background checkout writer.
@@ -1104,13 +1119,19 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
         path: worktreePath,
         baseRepo,
         branch,
-        sourceBranch: req.sourceBranch,
+        sourceBranch,
         createdAt: nowIso(),
         generation: randomUUID(),
         ...(recoveryKey ? { recoveryKey } : {}),
         ephemeral: req.ephemeral ?? false,
       };
-      await timed('persist metadata', () => store.set(req.sessionId, meta));
+      await timed('persist metadata', () => store.set(req.sessionId, meta, async () => {
+        // The registry lock wait is async too: recheck after acquiring it,
+        // immediately before the synchronous read/modify/write.
+        options?.assertWriteAllowed?.();
+        worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
+        options?.assertCurrent?.();
+      }));
 
       log.info(`[worktree:create] total completed in ${Date.now() - totalStartedAt}ms`);
       return { ok: true, meta };
@@ -1197,7 +1218,7 @@ export async function removeWorktreeForSession(
   if (!options.preserveDirty) {
     const meta = store.get(sessionId);
     if (!meta) return;
-    await withWorktreeRestoreMutation(sessionId, () => recycleManagedWorktree(meta, {
+    await withWorktreeRestoreMutation(sessionId, () => worktreeManagerPorts().recycleManagedWorktree(meta, {
       ...options,
       onRemoved: () => removeWorktreeSafeDirectory(meta.baseRepo, meta.path),
     }));
@@ -1531,7 +1552,7 @@ export async function cancelPrecreatedWorktree(
     }
     if (meta?.ephemeral) return { status: 'preserved' };
     if (!options.canRemove || !(await options.canRemove())) return { status: 'preserved' };
-    sealPrecreatedSessionCancellation(sessionId);
+    worktreeManagerPorts().sealPrecreatedSessionCancellation(sessionId);
     return meta
       ? discardPrecreatedWorktree(sessionId, meta.path, {
         ...options,
@@ -1540,7 +1561,9 @@ export async function cancelPrecreatedWorktree(
       : { status: 'absent' };
   });
 }
-export { assertPrecreatedSessionNotCancelled } from './precreatedCancellation';
+export function assertPrecreatedSessionNotCancelled(sessionId: string): void {
+  worktreeManagerPorts().assertPrecreatedSessionNotCancelled(sessionId);
+}
 
 /**
  * 手机在 worktree:create 之前先持久化 sessionId + recoveryKey；若进程在 create

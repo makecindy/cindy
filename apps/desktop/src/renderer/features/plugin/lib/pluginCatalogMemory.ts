@@ -1,16 +1,18 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { emptyPluginBrowserCache, mergePluginItems, samePluginValue, PLUGIN_CATALOG_REFRESH_MS } from './pluginBrowserCache';
+import { emptyPluginBrowserCache, mergePluginItems, readReusedMarketIcon, reuseMarketIcon, samePluginValue, PLUGIN_CATALOG_REFRESH_MS, type MarketIconCache } from './pluginBrowserCache';
 import { ghostWebviewOwnerKey } from './ghostPluginViewModel';
 import { resolveSystemLocale } from '../../../../shared/locale';
 import type { PluginGridCache } from '../PluginVirtualGrid';
 import type { PluginMarketItem, PluginMarketSnapshot } from '../../../../shared/pluginMarket';
 import type { PluginManagementSnapshot } from '../../../../shared/pluginManagement';
+import type { PluginCatalogFilter } from './pluginMarketPresentation';
 
 function emptyCatalogMemory() {
   return {
-    query: '', catalogTab: 'installed' as 'installed' | 'market', originFilter: 'all' as 'all' | 'public' | 'organization' | 'personal' | 'custom' | 'local',
+    query: '', catalogTab: 'installed' as 'installed' | 'market', originFilter: 'all' as PluginCatalogFilter,
     installedLimit: 10, marketTotal: null as number | null,
     browser: { current: emptyPluginBrowserCache() },
+    marketIcons: new Map() as MarketIconCache,
     installedGrid: { columns: 2, measurements: [] } as PluginGridCache, installedQuery: '',
     scroll: { offset: 0, anchor: null as { id: string; top: number } | null },
     todayPool: [] as PluginMarketItem[], consumedToday: new Set<string>(), todayLoaded: false,
@@ -93,12 +95,32 @@ export function readLocalPluginSnapshot(memory: CatalogMemory, force = false, re
   return flight;
 }
 
-export function readPluginRecommendations(memory: CatalogMemory): Promise<PluginMarketItem[]> {
+async function renewRecommendationIcons(memory: CatalogMemory, visible: readonly PluginMarketItem[]): Promise<PluginMarketItem[]> {
+  const renewed = new Map(visible.filter(item => item.icon).map(item =>
+    [item, readReusedMarketIcon(memory.marketIcons, item, true)] as const));
+  const missing = [...renewed].filter(([item, cached]) => item === cached).map(([item]) => item);
+  if (missing.length) {
+    const result = await window.electronAPI.pluginMarket.recommendations(missing.map(item => item.pluginId));
+    const currentById = new Map(result.map(item => [item.pluginId, item]));
+    for (const item of missing) {
+      const current = currentById.get(item.pluginId);
+      // A withdrawn or iconless release should not keep an expired URL in the timer.
+      renewed.set(item, current?.icon
+        ? reuseMarketIcon(memory.marketIcons, readReusedMarketIcon(memory.marketIcons, current, true))
+        : { ...item, icon: null });
+    }
+  }
+  return memory.todayPool.map(item => renewed.get(item) ?? item);
+}
+
+export function readPluginRecommendations(memory: CatalogMemory, renewItems?: readonly PluginMarketItem[]): Promise<PluginMarketItem[]> {
+  // Renew the visible identities without drawing a new recommendation pool.
+  if (renewItems) return renewRecommendationIcons(memory, renewItems);
   if (memory.recommendationsFlight) return memory.recommendationsFlight;
   if (memory.todayLoaded && Date.now() - memory.recommendationsAt < PLUGIN_CATALOG_REFRESH_MS) return Promise.resolve(memory.todayPool);
   const flight = window.electronAPI.pluginMarket.recommendations().then(next => {
     memory.recommendationsAt = Date.now();
-    return mergePluginItems(memory.todayPool, next);
+    return mergePluginItems(memory.todayPool, next, false, memory.marketIcons);
   }).finally(() => { if (memory.recommendationsFlight === flight) memory.recommendationsFlight = null; });
   memory.recommendationsFlight = flight;
   return flight;

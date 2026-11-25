@@ -12,6 +12,7 @@ import { acknowledgeRemoteBotRead, getBotReadStateSyncStatus, getRemoteBotReadAt
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
+import { startDeviceLinkFirstConnectionWatch } from '@/features/device-link/deviceLinkFirstConnection';
 import { useCompanionCloud, companionCloudApi } from './companionCloudStore';
 import { parseRemoteBots, parseTeammateInboxSnooze, remoteBotCreatedTaskIds, type RemoteBot } from './remoteBotRoster';
 
@@ -72,6 +73,8 @@ export function useRemoteBotSync(): void {
   const cloud = useCompanionCloud();
   const dataOwner = getDataOwnerGeneration();
   const actorsKey = cloud.actors.map(actor => `${actor.externalId}:${actor.homeDeviceId ?? ''}`).join(',');
+  // Watch relay drops app-wide, so a chat opened right after waking still sees its window.
+  useEffect(startDeviceLinkFirstConnectionWatch, []);
   useEffect(() => subscribeBotReadState(() => {
     if (owner === dataOwnerId && isDataOwnerGenerationCurrent(dataOwner)) publish(snapshot);
   }), [dataOwnerId, dataOwner]);

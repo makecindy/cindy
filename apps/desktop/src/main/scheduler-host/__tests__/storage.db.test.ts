@@ -153,6 +153,7 @@ const SCHEDULER_DDL = [
       provider_id TEXT,
       agent_device_id TEXT,
       effort TEXT,
+      model_group TEXT,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       working_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
@@ -200,6 +201,7 @@ const SCHEDULER_DDL = [
       result_text TEXT,
       pre_run_hook_result TEXT,
       trigger_source TEXT,
+      mr_observation TEXT,
       read_at INTEGER,
       heartbeat_at INTEGER
     )
@@ -753,6 +755,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(run).toMatchObject({
         runId: 'blocked-missing-plugin',
         failureKind: 'precheck',
+        preRunBlocked: true,
         ...diagnosis,
       });
     } finally {
@@ -873,6 +876,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(await harness.storage.listSidebarIndexRuns()).toEqual([
         expect.objectContaining({ runId: 'legacy-check', failureKind: 'precheck' }),
       ]);
+      expect((await harness.storage.listSidebarIndexRuns())[0]).not.toHaveProperty('preRunBlocked');
       await harness.storage.insertRun({ id: 'execution', scheduleId: 'sch-1', firedAt: 2,
         status: 'failed', sessionId: 'legacy-check-session', errorMsg: 'agent failed' });
       await harness.storage.insertRun({ id: 'healthy', scheduleId: 'sch-1', firedAt: 3, status: 'skipped',
@@ -2187,6 +2191,27 @@ it('only counts successful PR-triggered runs since the merge when reconciling', 
     await h.storage.insertRun({ id: 'watch', scheduleId: 'sch-1', firedAt: 50, status: 'success', triggerSource: 'pr-status' });
     expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 20)).toBe(true);
     expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 51)).toBe(false);
+  } finally { h.close(); }
+});
+
+// Read the durable receipt using the same SQLite run insert/update path as the scheduler.
+it('recovers the latest successful MR observation of this schedule', async () => {
+  const h = createStorageHarness();
+  try {
+    await h.storage.insert(baseSchedule());
+    const run = { scheduleId: 'sch-1', triggerSource: 'pr-status' as const };
+    const url = 'https://git.example.test/group/project/-/merge_requests/7';
+    await h.storage.insertRun({ ...run, id: 'legacy', firedAt: 1, status: 'success' });
+    expect(await h.storage.lastSuccessfulMrObservation('sch-1')).toBeNull();
+    const previous = { url, signature: 'old' };
+    await h.storage.insertRun({ ...run, id: 'previous', firedAt: 2, status: 'success', mrObservation: previous });
+    const latest = { url, signature: 'new' };
+    await h.storage.insertRun({ ...run, id: 'latest', firedAt: 3, status: 'running', mrObservation: latest });
+    await h.storage.insertRun({ ...run, id: 'failed', firedAt: 4, status: 'failed', mrObservation: latest });
+    expect(await h.storage.lastSuccessfulMrObservation('sch-1')).toEqual(previous);
+    await h.storage.updateRun('latest', { status: 'success' });
+    expect(await h.storage.lastSuccessfulMrObservation('sch-1')).toEqual(latest);
+    expect(await h.storage.lastSuccessfulMrObservation('other')).toBeNull();
   } finally { h.close(); }
 });
 
