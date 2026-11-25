@@ -25,9 +25,10 @@ import { createAgentNetSharing, type AgentNetSharingOptions, type SharingHost } 
 import { DatagramSendQueue } from './datagramQueue.js';
 import { MEDIA_TRANSFER_DIRECT, MEDIA_TRANSFER_HEADER, type DirectMediaRequest } from '@cindy/agent-net-protocol';
 import { createLocalMediaStorage, DIRECT_GRANT_MAX_MS, guardMediaStorage, RelayMediaStorageError, RelayMediaStorageUnavailableError, type RelayMediaStorage } from './mediaStorage.js';
-import { UDP_RELAY_FEATURE, UDP_RELAY_HEADER, UDP_RELAY_KEY_BYTES, UDP_RELAY_MAX_FORWARD_BYTES, UDP_RELAY_MIN_FORWARD_BYTES, UDP_RELAY_REGISTER,
-  UDP_RELAY_SESSION_BYTES, UDP_RELAY_VERSION, UdpReplayWindow, encodeUdpDown, encodeUdpRegisterAck, isUdpRelayPacket, readUdpRelaySession,
-  sameUdpRelayCookie, udpRelayAddressCookie, udpRelayPeerHash, verifyUdpRegister, verifyUdpUp } from './udpRelay.js';
+import { UDP_RELAY_FEATURE, UDP_RELAY_HEADER, UDP_RELAY_KEY_BYTES, UDP_RELAY_MAX_FORWARD_BYTES, UDP_RELAY_MIN_FORWARD_BYTES, UDP_RELAY_PROBE,
+  UDP_RELAY_PROBE_FEATURE, UDP_RELAY_REGISTER, UDP_RELAY_SESSION_BYTES, UDP_RELAY_VERSION, UdpReplayWindow, encodeUdpDown, encodeUdpProbeAck,
+  encodeUdpRegisterAck, isUdpRelayPacket, readUdpRelaySession, sameUdpRelayCookie, udpRelayAddressCookie, udpRelayPeerHash, verifyUdpProbe,
+  verifyUdpRegister, verifyUdpUp } from './udpRelay.js';
 import type { TLSSocket } from 'node:tls';
 import { agentNetInvitationAsset } from '@cindy/device-link-sharing/pages';
 
@@ -92,7 +93,7 @@ interface Session { principal: Principal; ws: WebSocket; lastPong: number; remot
    * registration that proved its source address (echoed the address cookie); `receiving` is what that registration said
    * about the device getting our UDP packets. `uplinks` drops replayed uplink packets.
    */
-  udp?: { session: Buffer; key: Buffer; counter: bigint; registeredAt: number; receiving: boolean; address?: { address: string; port: number };
+  udp?: { session: Buffer; key: Buffer; counter: bigint; probeCounter: bigint; registeredAt: number; receiving: boolean; address?: { address: string; port: number };
     uplinks: UdpReplayWindow }; }
 /**
  * An idle device re-registers every 15s (every few seconds while sending); after this without one, deliveries to it
@@ -542,6 +543,18 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         remote.port, remote.address);
       return;
     }
+    if (packet[0] === UDP_RELAY_PROBE) {
+      const probe = verifyUdpProbe(packet, session.udp.key);
+      // Increasing counters only, and only to an already-proven address with a fresh registration; ack is strictly shorter than probe.
+      if (probe === null || probe.counter <= session.udp.probeCounter) return;
+      if (!session.udp.address || session.udp.address.address !== remote.address || session.udp.address.port !== remote.port
+        || now() - session.udp.registeredAt >= UDP_REGISTRATION_TTL_MS) return;
+      session.udp.probeCounter = probe.counter;
+      if (udpSocket && udpSocket.getSendQueueSize() < UDP_SEND_QUEUE_LIMIT_BYTES) {
+        udpSocket.send(encodeUdpProbeAck(session.udp, probe.counter, probe.size), remote.port, remote.address);
+      }
+      return;
+    }
     const up = verifyUdpUp(packet, session.udp.key);
     // Each uplink counter is taken once: a captured packet replayed later is not forwarded again.
     if (!up || !session.udp.uplinks.accept(up.counter)) return;
@@ -654,7 +667,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       protocolVersion: AGENT_NET_VERSION, mode, udpPort: advertisedUdpPort,
       ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', ...(storage.direct ? ['media-direct-v1'] : []), 'notification-keys-v2', ...(privateSharing ? ['private-sharing-v1'] : []), ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
         ...(mode === 'self-hosted' && store.primaryNetworkId() !== undefined ? ['tenants-v1'] : []),
-        ...(advertisedUdpPort !== null ? [UDP_RELAY_FEATURE] : [])],
+        ...(advertisedUdpPort !== null ? [UDP_RELAY_FEATURE, UDP_RELAY_PROBE_FEATURE] : [])],
     });
     if (url.pathname.startsWith(API + '/sharing/') || url.pathname.startsWith(API + '/private-sharing/')) {
       const authority = url.pathname.startsWith(API + '/private-sharing/') ? privateSharing : accountSharing;
@@ -1232,7 +1245,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
               'agent-net session send queue moving again'),
           }, options.datagramQueueDelayMs),
           hash: udpRelayPeerHash(principal.deviceId), udpBudget: { tokens: UDP_BUDGET_BURST, at: performance.now() },
-          ...(wantsUdp ? { udp: { session: randomBytes(UDP_RELAY_SESSION_BYTES), key: randomBytes(UDP_RELAY_KEY_BYTES), counter: 0n, registeredAt: 0,
+          ...(wantsUdp ? { udp: { session: randomBytes(UDP_RELAY_SESSION_BYTES), key: randomBytes(UDP_RELAY_KEY_BYTES), counter: 0n, probeCounter: 0n, registeredAt: 0,
             receiving: false, uplinks: new UdpReplayWindow() } } : {}) };
         sessions.set(id, session);
         if (session.udp) udpSessions.set(session.udp.session.toString('hex'), session);
@@ -1245,7 +1258,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         let probeReplyPending = false;
         ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2, relayProbe: !principal.delegation, notifications: !!options.notify, networkId: principal.networkId, deviceId: principal.deviceId, devices: roster(principal), delegations: delegatedPeers(principal),
           delegationRequests: principal.delegation ? [] : sharing?.requestsFor(principal.networkId, principal.deviceId) ?? [],
-          ...(session.udp ? { udp: { session: session.udp.session.toString('base64url'), key: session.udp.key.toString('base64url') } } : {}) }));
+          ...(session.udp ? { udp: { session: session.udp.session.toString('base64url'), key: session.udp.key.toString('base64url'), probe: true } } : {}) }));
         ws.on('message', (raw: RawData, binary: boolean) => {
           if (sessions.get(id) !== session || !active(principal)) { ws.close(expiredCredential(principal) ? 4408 : 4410, 'access unavailable'); return; }
           const bytes = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);

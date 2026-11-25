@@ -42,7 +42,7 @@ import {
 import { app, powerMonitor } from 'electron';
 import { requireAppCapability } from '../appCapabilities.js';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
-import { readUsageDeviceRows } from '../usage/usageDeviceRows.js';
+import { createUsageTaskDeltaCache, readUsageDeviceRows } from '../usage/usageDeviceRows.js';
 import {
   configurePeerUsageSync,
   peerUsageCacheFilePath,
@@ -83,9 +83,14 @@ import {
 } from '../subscription-accounts/runtime.js';
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
-import { CodexResetAutoUse, parseCodexResetAutoUse } from '../usage/codexResetAutoUse.js';
+import {
+  CodexResetAutoUse,
+  parseCodexResetAutoUse,
+  shouldResetCodexAutoUseBackoffForAccountChange,
+} from '../usage/codexResetAutoUse.js';
 import {
   detachedDefaultCodexHome,
+  readCodexWebUsageCredentials,
   readDefaultCodexHomeIdentity,
   withDetachedDefaultCodexHome,
 } from '../usage/codexDefaultAccountHome.js';
@@ -242,19 +247,24 @@ export function readCodexAccountUsageSnapshotWithWebRefresh(requestedProviderId?
   const key = providerId ?? 'openai';
   const existing = codexUsageReaders.get(key);
   if (existing) return existing(options);
-const reader = createCodexAccountUsageSnapshotReader({
-  readAccessToken: () => scope === activeOwnerScopeKey() ? desktopCodexAuthAdapter.getAccessToken(providerId) : Promise.reject(new Error('Account scope changed')),
-  readAccountId: () => desktopCodexAuthAdapter.getAccountId(providerId),
-  fetchWebUsageSnapshot: fetchCodexWebUsageSnapshot,
-  recordSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
-  clearSnapshot: () => scope === activeOwnerScopeKey() ? clearCodexAccountUsageSnapshot(providerId) : Promise.resolve(),
-  readCachedSnapshot: () => scope === activeOwnerScopeKey() ? readCodexAccountUsageSnapshot(providerId) : Promise.resolve(null),
-  now: () => Date.now(),
-  isUnauthorizedError: (err) => err instanceof CodexWebUsageUnauthorizedError,
-  onRefreshError: (err) => {
-    log.warn('codex web usage refresh failed:', err instanceof Error ? err.message : String(err));
-  },
-});
+  const reader = createCodexAccountUsageSnapshotReader({
+    readCredentials: async () => {
+      const current = () => scope === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
+      if (!current()) throw new Error('Account scope changed');
+      const credentials = await readCodexWebUsageCredentials(providerId, desktopCodexAuthAdapter);
+      if (!current()) throw new Error('Account scope changed');
+      return credentials;
+    },
+    fetchWebUsageSnapshot: fetchCodexWebUsageSnapshot,
+    recordSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
+    clearSnapshot: () => scope === activeOwnerScopeKey() ? clearCodexAccountUsageSnapshot(providerId) : Promise.resolve(),
+    readCachedSnapshot: () => !isAppSessionBoundaryPending() && scope === activeOwnerScopeKey() ? readCodexAccountUsageSnapshot(providerId) : Promise.resolve(null),
+    now: () => Date.now(),
+    isUnauthorizedError: (err) => err instanceof CodexWebUsageUnauthorizedError,
+    onRefreshError: (err) => {
+      log.warn('codex web usage refresh failed:', err instanceof Error ? err.message : String(err));
+    },
+  });
 
   codexUsageReaders.set(key, reader);
   return reader(options);
@@ -397,13 +407,21 @@ export function registerMakerUsageIpc(maker: Maker): void {
   const timer = setInterval(checkEnabled, 60_000);
   timer.unref();
   const unobserve = observeUsageChanges(kind => { if (kind === 'codex') checkEnabled(); });
-  const unobservePool = onSubscriptionAccountsChanged((provider, resetAccountId) => {
+  const unobservePool = onSubscriptionAccountsChanged((provider, resetAccountId, change) => {
+    if (shouldResetCodexAutoUseBackoffForAccountChange(provider, resetAccountId, change)) {
+      automatic.resetFailureBackoff();
+    }
     if (provider === 'openai' && resetAccountId) checkEnabled();
   });
-  powerMonitor.on('resume', checkEnabled);
-  app.once('will-quit', () => { clearInterval(timer); unobserve(); unobservePool(); powerMonitor.removeListener('resume', checkEnabled); });
+  const onResume = () => {
+    automatic.resetFailureBackoff();
+    checkEnabled();
+  };
+  powerMonitor.on('resume', onResume);
+  app.once('will-quit', () => { clearInterval(timer); unobserve(); unobservePool(); powerMonitor.removeListener('resume', onResume); });
   checkEnabled();
 
+  const usageTaskDeltaCache = createUsageTaskDeltaCache();
   setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
   registerMakerUsageHandlers(cloudManagementProviderRegistry(createElectronIpcHandlerRegistry()), {
     readAgentTodayUsage,
@@ -416,6 +434,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
       if (patch !== null) parseCodexResetAutoUse({ ...codexResetAutoUseStore.read(providerId, key).settings, ...patch });
       await codexResetAutoUseStore.write(providerId, key, patch as Partial<CodexResetAutoUseSettings> | null);
       if (scope !== activeOwnerScopeKey() || key !== await accountKeyFor(providerId)) throw new Error('PRECONDITION_FAILED: Account changed');
+      automatic.resetFailureBackoff(providerId);
       checkEnabled();
       return readCodexRateLimits(providerId);
     },
@@ -460,6 +479,8 @@ export function registerMakerUsageIpc(maker: Maker): void {
             return new Set(ids.filter((id) => (access.get(id) ?? 'hidden') !== 'hidden'));
           },
           todayKey: () => localDayKey(),
+          taskDeltaCache: usageTaskDeltaCache,
+          scopeKey: activeOwnerScopeKey,
         },
         request,
       ),

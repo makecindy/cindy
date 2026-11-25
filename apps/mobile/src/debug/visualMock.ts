@@ -901,7 +901,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
     message(sessionId, 'mail-draft-answer', 'assistant', '草稿已经写好，抄送了 Sam 和试玩团队。确认没问题就点发送。', -45000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
   ];
   if (sessionId === 'visual-teammate-process') return [
-    message(sessionId, 'fixture-process-source', 'user', '帮我整理任务和 PR 的进展。', -90000),
+    message(sessionId, 'fixture-process-source', 'user', '帮我整理任务和 PR 的进展。', -420_000),
     message(sessionId, 'fixture-first-work', 'thinking', { text: '核对任务记录', durationMs: 1000 }, -80000),
     message(sessionId, 'fixture-note1', 'assistant', '我先核对任务的最近进展，再看未完成 PR 的阻塞点。', -70000, { agentMeta: { assistantPhase: 'commentary' } }),
     message(sessionId, 'fixture-read', 'tool_use', { toolName: 'Read', input: { file_path: '/repo/tasks.md' }, toolUseId: 'fixture-read' }, -65000),

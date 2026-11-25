@@ -2,6 +2,7 @@ export const REMOTE_PLUGIN_SETTINGS_PARTITION = 'remote-plugin-settings:';
 export const REMOTE_PLUGIN_SETTINGS_OPEN = 'device-link:plugin-settings:open';
 export const REMOTE_PLUGIN_SETTINGS_CLOSE = 'device-link:plugin-settings:close';
 export const REMOTE_PLUGIN_SETTINGS_DIRECTORY = 'device-link:plugin-settings:directory';
+export const REMOTE_PLUGIN_SETTINGS_STATUS = 'device-link:plugin-settings:status';
 export const REMOTE_PLUGIN_SETTINGS_DIRECTORY_ANSWER =
   'device-link:plugin-settings:answer-directory';
 export const REMOTE_PLUGIN_SETTINGS_MODEL_ANSWER = 'device-link:plugin-settings:answer-model-picker';
@@ -15,6 +16,10 @@ export interface RemotePluginSettingsView {
   id: string;
   partition: string;
   src: string;
+}
+export interface RemotePluginSettingsStatus {
+  viewId: string;
+  status: 'unavailable' | 'write-unconfirmed';
 }
 export interface RemotePluginSettingsDirectory {
   viewId: string;

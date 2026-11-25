@@ -115,6 +115,9 @@ import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
 import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from './SubscriptionAccountsSection';
+import { OpenAiAccountGroupSection, useOpenAiAccountGroup } from './OpenAiAccountGroupSection';
+import { MergeProviderButton } from './SubscriptionPlacement';
+import { openAiAccountGroupKind } from '../../../shared/openAiAccountGroup';
 import { subscriptionAccountErrorKey } from './subscriptionAccountErrors';
 import { placementErrorKey } from './SubscriptionPlacement';
 import { isSubscriptionProvider, type SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
@@ -753,6 +756,8 @@ function DetailHeader({
     : isSubscriptionProvider(provider.id) ? provider.id
       : provider.subscriptionAccountPool ?? provider.subscriptionPool ?? null;
   const subscriptionPool = subscriptionKind && provider ? provider.id : null;
+  const openAiGroupKind = provider && !provider.subscriptionPoolAlias ? openAiAccountGroupKind(provider) : undefined;
+  const openAiGroup = useOpenAiAccountGroup(openAiGroupKind ? provider?.id : undefined);
   const dashboard =
     subscriptionKind === 'anthropic' || provider?.auth.native === 'claude'
       ? {
@@ -941,7 +946,13 @@ function DetailHeader({
             defaultUsage={usageCard}
             dashboard={dashboard ?? undefined}
             expectAccounts={provider?.connected === true}
+            openAiAccounts={openAiGroup.accounts}
           />
+        )}
+        {provider && openAiGroupKind && (openAiGroup.allocation || (!subscriptionPool && openAiGroupKind === 'apiKey')) && (
+          <OpenAiAccountGroupSection key={`openai-account-group:${provider.id}`} providerId={provider.id} group={openAiGroup}
+            settingsAnchor={!subscriptionPool} mergeAction={openAiGroupKind === 'apiKey' ? <MergeProviderButton kind={null} providerId={provider.id}
+              providerName={provider.name} openAiAccounts={openAiGroup.accounts} onDone={openAiGroup.refresh} /> : undefined} />
         )}
         {assetModule ??
           (subscriptionPool ? null : usageCard ? (
@@ -2484,7 +2495,7 @@ function ListRow({
       {sortable && (
         <button data-setting-id={providersSettings.providers.id}
           type="button"
-          className="provider-order-handle absolute inset-y-0 left-0 z-[1] my-auto flex h-9 w-3 cursor-grab items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
+          className="provider-order-handle absolute inset-y-0 left-0 z-[1] my-auto flex h-9 w-3 cursor-grab items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
           aria-label={t('settings.providers.order.handle', {
             provider: title,
             position,

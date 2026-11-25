@@ -249,7 +249,7 @@ export function fixedRemoteAgentLink(client: RemoteAgentRunClient): RemoteAgentL
 
 export interface SharedReconnectSendEvidence {
   handedToTransport: boolean;
-  failure?: { kind: 'rejected' | 'not-written' | 'unconfirmed'; error: unknown };
+  failure?: { kind: 'preparation' | 'rejected' | 'not-written' | 'unconfirmed'; error: unknown };
 }
 
 export interface RemoteHandleDeps {
@@ -300,8 +300,8 @@ export interface RemoteAgentHandleController {
   onState(state: Record<string, unknown>): void;
   onRequest(request: RemoteAgentReverseRequest): Promise<RemoteAgentReply> | null;
   onClosed(reason: string, message?: string, runId?: string): void;
-  /** Supplier process disappeared; keep the local executor and let host recovery own the next send. */
-  onInterrupted(onUnsettled?: () => void): void;
+  /** Supplier run disappeared; keep the local executor and let host recovery own the next send. */
+  onInterrupted(close: { reason: string; runId: string }, onUnsettled?: () => void): void;
   /** Decide idle reclaim only after the owning Session consumes queued events. */
   onIdleReclaimed(onDrained: (unfinished: boolean) => void): void;
   hasActiveTurn(): boolean;
@@ -447,6 +447,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         return block;
       });
     };
+    const evidence = method === 'send' ? deps.sharedReconnectSendEvidence?.() : undefined;
     let client: RemoteAgentRunClient;
     try {
       client = await link.ensure();
@@ -460,6 +461,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       // instead schedules a continuation and would repeat the full handshake.
       if (method !== 'send' || opts?.origin?.kind === 'goal' || !isRetryableLinkError(error)
         || (error instanceof RemoteAgentRemoteError && error.phase === 'start')) throw error;
+      // Session converts this exception to a generic non-dispatch result. Keep
+      // the link error for the captured input's existing failure settlement.
+      if (evidence) evidence.failure = { kind: 'preparation', error };
       deps.log?.warn('remote agent: connection preparation failed before turn dispatch', { error: String(error) });
       throw new TurnDispatchRejectedError(error instanceof Error ? error.message : String(error), { cause: error });
     }
@@ -497,7 +501,6 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       terminalEventDelivered = false;
       activeTurn = true;
     }
-    const evidence = method === 'send' ? deps.sharedReconnectSendEvidence?.() : undefined;
     try {
       // Keep Session cancellation and delivery evidence local.
       await client.callWithId(callId, method, [wireMessage, encoded.wire], opts?.signal,
@@ -835,7 +838,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         return [];
       });
     },
-    onInterrupted(onUnsettled) {
+    onInterrupted({ reason, runId }, onUnsettled) {
       if (disposed) return;
       const ownerOptions = sendOwnerOptions;
       const wasActive = activeTurn;
@@ -860,8 +863,13 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         if (sendOwnerOptions === ownerOptions) terminalEventDelivered = true;
         // Keep the iterator/executor live: the coordinator owns continuation.
         return [markSessionSendTerminal(ownerOptions, { type: 'error', source: eventSource, data: {
-          message: '[REMOTE_AGENT_UNAVAILABLE] The provider process stopped; reconnecting to the original conversation.',
+          // Close details must not select another recovery owner through message
+          // or sdkError classifiers. Run loss is not evidence of an OS process exit.
+          message: '[REMOTE_AGENT_UNAVAILABLE] The remote run is no longer available; reconnecting to the original conversation.',
           reason: 'remote_agent_restarted', isTerminal: true,
+          remoteCloseReason: reason, remoteRunId: runId,
+          // The existing error persistence keeps sdkError alongside message/reason.
+          sdkError: `Remote agent stream closed (${reason}); runId: ${runId}`,
         } }), { type: 'done', source: eventSource, data: { reason: 'remote_agent_restarted' } }];
       });
     },

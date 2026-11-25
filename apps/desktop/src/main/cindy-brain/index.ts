@@ -557,6 +557,7 @@ import { GhostBrowserExtensionSlot } from './browserExtensionSlot.js';
 import { createNativeBinding } from '../browser-extension/native-binding.js';
 import { loadWindowsTaskbarNative } from '../windowsTaskbarNative.js';
 import { broadcastTaskViewOpen, GhostTaskViewSlot } from './taskViewSlot.js';
+import { GhostSessionStateSlot, readGhostSessionStateRows } from './sessionStateSlot.js';
 import { LiveScreenHost } from './liveScreenHost.js';
 import { PluginLiveScreenViews } from '../remote-desktop-viewer/pluginViews.js';
 import { GhostScheduleSlot, isMainShellWindowUrl } from './scheduleSlot.js';
@@ -6536,6 +6537,9 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
       // 意识 OAuth 的 token 端点(Google / Atlassian 等)多在境外。
       fetchImpl: (url, init) => outboundFetch(url, init as RequestInit),
       openExternal: (url) => shell.openExternal(url),
+      // 设备码登录只给了通用确认页时,把验证码放进剪贴板供用户粘贴(与随包 CLI
+      // 设备码卡片的本机行为一致);本单结束时只撤掉仍属于本单的验证码。
+      presentDeviceUserCode: (prompt) => copyPrivateDeviceCode(clipboard, prompt.userCode),
       // tokenBroker 资格按可信安装事实判定，名称前缀不放行。
       // 校验层保持纯函数不感知装入语境，门控在装入闸与连接闸。经独立 oauth-broker
       // 服务换/刷 token:serverApiFetch 自带登录 JWT 注入与
@@ -10205,6 +10209,10 @@ export function registerGhostIpc(): void {
     readOwner: getActiveAppSession,
     ghostIdForLogicWebContents,
   });
+  const sessionStateSlot = new GhostSessionStateSlot({
+    getGhost: findGhostForInstanceId,
+    readSessions: (sessionIds) => readGhostSessionStateRows(getDbClient(), sessionIds),
+  });
   ipcMain.handle('ghost-pipe:send', async (event, payload: unknown) => {
     const id = ghostIdForLogicWebContents(event.sender.id);
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
@@ -10212,6 +10220,14 @@ export function registerGhostIpc(): void {
     const coreResult = executionPipe(id, payload, () => !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id);
     if (coreResult !== undefined) return coreResult;
     const type = (payload as { type?: unknown } | null)?.type;
+    if (type === 'session-state-request') {
+      const owner = ghostOwnerScope.capture();
+      const ownerId = getActiveAppSession().dataOwnerId;
+      return sessionStateSlot.handleRequest(id, payload, () =>
+        ownerId != null && getCurrentDbClientUserId() === ownerId &&
+        ghostOwnerScope.isCurrent(owner) && ghostOwnerScope.isStable(owner) &&
+        !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id);
+    }
     if (type === 'ui-state-update') return publishPluginUiControl(id, payload);
     if (type === 'recommendations-update') {
       const ghost = findGhostForInstanceId(id);
@@ -10411,7 +10427,7 @@ export function registerGhostIpc(): void {
       try { return { ok: true, data: await pluginTargetSlot.handle(id, payload, assertAuthorized) }; }
       catch (error) {
         const rawCode = (error as { code?: unknown })?.code ?? (error instanceof Error ? error.message : '');
-        const code = ['PERMISSION_DENIED', 'HOST_NOT_READY', 'INVALID_PARAMS', 'INVALID_ATTACHMENTS', 'INVALID_INVOCATION', 'TASK_BUSY', 'TARGET_UNAVAILABLE', 'SUPERSEDED', 'REQUEST_KEY_CONFLICT', 'DELIVERY_UNCERTAIN', 'DELIVERY_REJECTED', 'STALE_REVISION', 'ROUTE_UNAVAILABLE'].includes(String(rawCode)) ? String(rawCode) : 'HOST_NOT_READY';
+        const code = ['PERMISSION_DENIED', 'UNSUPPORTED_CAPABILITY', 'HOST_NOT_READY', 'INVALID_PARAMS', 'INVALID_ATTACHMENTS', 'INVALID_INVOCATION', 'TASK_BUSY', 'TARGET_UNAVAILABLE', 'SUPERSEDED', 'REQUEST_KEY_CONFLICT', 'DELIVERY_UNCERTAIN', 'DELIVERY_REJECTED', 'STALE_REVISION', 'ROUTE_UNAVAILABLE'].includes(String(rawCode)) ? String(rawCode) : 'HOST_NOT_READY';
         return { ok: false, error: { code, message: code, retryable: code === 'TASK_BUSY' } };
       }
     }

@@ -110,6 +110,28 @@ describe('buildHomeSections', () => {
     expect(sections.find((s) => s.key === 'pinned')).toBeUndefined();
   });
 
+  it('只有一个设备时不渲染设备分区标题', () => {
+    const home = presentation({
+      deviceFilters: [{ deviceId: 'a', id: 'a', label: '电脑 A' } as unknown as MobileHomePresentation['deviceFilters'][number]],
+      chats: [{ ...listItem('c1', '2026-06-01T00:00:00Z'), session: { id: 'c1', deviceLinkDeviceId: 'a' } as never }],
+    });
+    const [section] = buildHomeSections(home, false, false, { groupDevice: true });
+    expect(section).toMatchObject({ key: 'device:a', title: null });
+  });
+
+  it('选中一个设备时不渲染设备分区标题', () => {
+    const home = presentation({
+      selectedDeviceId: 'a',
+      deviceFilters: [
+        { deviceId: 'a', id: 'a', label: '电脑 A' } as unknown as MobileHomePresentation['deviceFilters'][number],
+        { deviceId: 'b', id: 'b', label: '电脑 B' } as unknown as MobileHomePresentation['deviceFilters'][number],
+      ],
+      chats: [{ ...listItem('c1', '2026-06-01T00:00:00Z'), session: { id: 'c1', deviceLinkDeviceId: 'a' } as never }],
+    });
+    const [section] = buildHomeSections(home, false, false, { groupDevice: true });
+    expect(section).toMatchObject({ key: 'device:a', title: null });
+  });
+
   it('分组模式把项目与普通对话放在同一分区,不渲染项目 / 对话汇总表头', () => {
     const home = presentation({
       chats: [listItem('c1', '2026-06-01T00:00:00Z')],
@@ -537,6 +559,25 @@ it('builds inbox sections and recomputes snooze expiry without losing collapsed 
   expect(sections.find(s => s.key === 'inbox-snoozed')?.count).toBe(1);
   expect(sections.find(s => s.key === 'inbox-archived')?.count).toBe(1);
   expect(buildInboxHomeSections(home, new Set(), signals, now + 3600000).find(s => s.key === 'inbox-inbox')?.count).toBe(4);
+});
+
+// 2026-11-25 user decision (task-inbox.md「分区与动作」): rows inside a section follow time alone.
+// Before, the inbox reused the priority sort, so week-old unread archives sat above a task archived
+// a minute ago. Unit: real inbox projection; minimal input is an older unread and a newer read task
+// in both Pending and Done.
+it('orders each inbox section by latest activity, whether or not a task is unread', () => {
+  const at = (daysAgo: number) => new Date(Date.parse('2026-11-25T08:00:00Z') - daysAgo * 86_400_000).toISOString();
+  const items = ['old-unread', 'new-read', 'old-unread-done', 'new-read-done']
+    .map(id => listItem(id, at(id.startsWith('old') ? 7 : 0)));
+  for (const item of items) {
+    if (item.session.id.endsWith('done')) item.session.status = 'archived';
+    if (item.session.id.startsWith('old')) item.liveActivity = { attention: true, phase: 'completed' } as RemoteSessionListItem['liveActivity'];
+  }
+  const signals = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  const ids = (key: string) => buildInboxHomeSections(presentation({ chats: items }), new Set(), signals, Date.now())
+    .find(s => s.key === key)!.data.flatMap(row => row.kind === 'session' ? [row.item.session.id] : []);
+  expect(ids('inbox-inbox')).toEqual(['new-read', 'old-unread']);
+  expect(ids('inbox-archived')).toEqual(['new-read-done', 'old-unread-done']);
 });
 
 // 2026-11-18 user decision: teammates' routine results filled the phone's inbox. Teammate tasks

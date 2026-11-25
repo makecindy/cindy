@@ -203,6 +203,17 @@ describe('names in multi-owner groups', () => {
     expect(botGroupMemberBaseName(theirs)).toBe('Cindy');
   });
 
+  // 依据: bot-group-chat.md §5 企业身份与外部群标识; 覆盖跨组织企业名中点拼接与群昵称覆盖 (unit tier).
+  it('appends · OrgName for external enterprise humans without a group nickname, and respects nickname overrides', () => {
+    const externalOrg = { ...human, name: '林知行', orgName: '星辰科技', showOrgName: true, external: true };
+    const nicknamed = { ...externalOrg, name: '阿行', nickname: '阿行', showOrgName: undefined };
+    const sameOrg = { ...human, name: '林知行', orgName: '星辰科技', department: '客户端组' };
+    expect(botGroupMemberDisplayName(externalOrg)).toBe('林知行 · 星辰科技');
+    expect(botGroupMemberDisplayName({ ...externalOrg, name: '林知行 · 星辰科技' })).toBe('林知行 · 星辰科技');
+    expect(botGroupMemberDisplayName(nicknamed)).toBe('阿行');
+    expect(botGroupMemberDisplayName(sameOrg)).toBe('林知行');
+  });
+
   it('lists the teammates a human brought in', () => {
     expect(botGroupOwnedBotNames(human, [human, theirs, mine])).toEqual(['Cindy', 'LiZi']);
     expect(botGroupOwnedBotNames(theirs, [human, theirs])).toEqual([]);

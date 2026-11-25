@@ -1810,9 +1810,10 @@ export class Maker {
 
   /**
    * Agent 用户/项目目录扫出的 skill (palette 'agent-skill' 类目) —— 异步, 有 IO。
+   * `acp`：插件引擎任务的 `/` 菜单，与引擎展开 `/<skill>` 同一份清单（AcpAgent.listAgentSkills）。
    */
   async listAgentSkills(
-    agentKind: AgentKind,
+    agentKind: EngineKind,
     opts: ListAgentSkillsOptions & { sessionId?: string },
     /** Host-only request-scoped verification; never part of renderer/remote options. */
     readDisabledSkillPaths?: () => Promise<readonly string[]>,
