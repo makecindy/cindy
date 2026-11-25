@@ -94,6 +94,8 @@ export function useRuns(scheduleId: string | null, limit = 50): UseRunsResult {
         ev.type === 'fired' ||
         ev.type === 'completed' ||
         ev.type === 'failed' ||
+        ev.type === 'skipped' ||
+        ev.type === 'deferred' ||
         ev.type === 'session-bound' ||
         ev.type === 'changed' ||
         ev.type === 'read'

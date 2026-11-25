@@ -27,7 +27,30 @@ export async function readCodexThreadMcpServerTools(
   serverName: string,
   timeoutMs = 5_000,
 ): Promise<AgentMcpServerToolsReport> {
+  return readCodexThreadMcpServerToolsBeforeDeadline(request, threadId, serverName, Date.now() + timeoutMs);
+}
+
+/** Query each selected thread server under one shared deadline. */
+export async function readCodexThreadMcpServersTools(
+  request: StatusRequest,
+  threadId: string,
+  serverNames: readonly string[],
+  timeoutMs = 5_000,
+): Promise<Map<string, AgentMcpServerToolsReport>> {
   const deadline = Date.now() + timeoutMs;
+  const reports = await Promise.all([...new Set(serverNames)].map(async serverName => [
+    serverName,
+    await readCodexThreadMcpServerToolsBeforeDeadline(request, threadId, serverName, deadline),
+  ] as const));
+  return new Map(reports);
+}
+
+async function readCodexThreadMcpServerToolsBeforeDeadline(
+  request: StatusRequest,
+  threadId: string,
+  serverName: string,
+  deadline: number,
+): Promise<AgentMcpServerToolsReport> {
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
   for (let page = 0; page < MAX_STATUS_PAGES; page++) {
@@ -38,7 +61,7 @@ export async function readCodexThreadMcpServerTools(
       { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName },
       { timeoutMs: remainingMs },
     );
-    const server = status.data.find((entry) => entry.name === serverName);
+    const server = status.data.find(entry => entry.name === serverName);
     if (server) return reportFromCodexStatus(server);
     cursor = status.nextCursor;
     if (cursor === null) return { state: 'not-mounted', tools: [] };

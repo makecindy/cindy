@@ -1722,6 +1722,11 @@ export class AgentInputCoordinator {
     return this.projectQueueInspection(state);
   }
 
+  /** Read the canonical pause bit without creating state or restoring a snapshot. */
+  getQueuePausedIfRestored(sessionId: string): boolean | undefined {
+    return this.isQueueRestored(sessionId) ? this.states.get(sessionId)?.queuePaused : undefined;
+  }
+
   /** Cold sessions return null for SQLite counting; live-but-unrestored sessions stay unknown. */
   getQueueInspectionIfRestored(
     sessionId: string,

@@ -6,6 +6,9 @@ import { remoteControlSettings } from './RemoteControlSection.settings-search';
  *   1. 我的设备:同账号设备一处管理 —— 本机承载被控总开关 + relay 状态,其余设备逐台管
  *      「我控制它 / 允许它控制本机」+ 重命名 / 删除(MyDevicesPanel)
  *   2. SSH:原 RemoteSection 原样嵌入(showTitle=false,标题由本页统一给)
+ * 云实例就是「我的设备」里的一台设备:白名单账号(instanceAccess.allowed)在它的设备卡上多一组
+ * 实例运维(CloudDeviceDirectory),且云实例卡与本机卡一起常驻,「我的设备」收起时
+ * 也可见;其余账号的页面与请求不变。
  * (Slack 连接子块已迁至「IM 机器人」页 Cindy 栏, 见 ImBotSection.tsx + HookConnectionsSection.tsx)
  *
  * 「Agent-Net (Beta)」开关(useRemoteConnectionV2,默认关，由主进程保存并切换这台电脑的传输):
@@ -24,7 +27,7 @@ import { remoteControlSettings } from './RemoteControlSection.settings-search';
  * SSH 主机摘要由本组件自取轻量快照(list + onStatusChanged),不侵入 RemoteSection。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router-dom';
 
@@ -37,6 +40,7 @@ import { RemoteSection } from './RemoteSection';
 import { CollapsibleSubSection } from './CollapsibleSubSection';
 import { useRemoteDevicesDeepLink } from './useRemoteDevicesDeepLink';
 import { useAuth } from '@/contexts/AuthContext';
+import { CloudDeviceDirectory } from '@/features/cloud-settings/CloudDeviceDirectory';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { useRemoteConnectionV2 } from '@/features/remote-connection-v2/useRemoteConnectionV2';
 import { RemoteConnectionV2Section } from '@/features/remote-connection-v2/RemoteConnectionV2Section';
@@ -59,9 +63,11 @@ const SSH_PROGRESS_STATUSES: ReadonlySet<RemoteHostSnapshot['status']> = new Set
 function deviceSummary(
   s: DeviceLinkSettings,
   t: (k: string, o?: Record<string, unknown>) => string,
+  /** 常驻在折叠区外的云实例:收起时已经可见,不计入「其它设备」。 */
+  pinned: (deviceId: string) => boolean = () => false,
 ): string | null {
   if (s.devices === null) return null;
-  const others = s.devices.filter((d) => !d.isSelf).length;
+  const others = s.devices.filter((d) => !d.isSelf && !pinned(d.deviceId)).length;
   return others === 0
     ? t('settings.remoteControl.summary.noOtherDevices')
     : t('settings.remoteControl.summary.otherDevices', { count: others });
@@ -114,6 +120,11 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
     return () => window.removeEventListener('agent-net-preference-error', report);
   }, [t]);
   const deepLink = useRemoteDevicesDeepLink();
+  // The device list's names, for the cloud cards' own names (CloudDeviceDirectory).
+  const deviceNames = useMemo(
+    () => new Map((s.devices ?? []).map((device) => [device.deviceId, device.name] as const)),
+    [s.devices],
+  );
   const relay = useSelfHostedRelayState(deviceLinkAvailable);
   const location = useLocation();
   const [sshOpen, setSshOpen] = useState(
@@ -163,7 +174,6 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
     void refreshHosts();
   }, [refreshHosts]);
 
-  const devSumText = deviceSummary(s, t);
   const sshSum = sshSummary(hosts, t);
 
   return (
@@ -179,13 +189,35 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
             {/* Agent-Net:「我的设备」只留本机卡片,其它设备在下面的拓扑里看 */}
             <section id={remoteControlSettings.devices.targetId} className="flex flex-col gap-3">
               <h3 className="text-14 font-medium text-[var(--text-primary)]">{t(remoteControlSettings.devices.titleKey)}</h3>
-              <MyDevicesPanel
-                s={s}
-                variant="self"
-                selfSettings={<div className="flex flex-col gap-2"><RemoteDesktopSetting /></div>}
-                focusDeviceId={deepLink.focusDeviceId}
-                focusRequestKey={deepLink.focusRequestKey}
-              />
+              {/* 云端 Cindy 的卡与本机卡并列(其余设备在拓扑里) */}
+              <CloudDeviceDirectory
+                enabled={deviceLinkAvailable}
+                directory={s.listError ? [] : (s.devices?.map((device) => device.deviceId) ?? null)}
+                names={deviceNames}
+                offline={s.devices?.filter((device) => !device.online).map((device) => device.deviceId)}
+                devicesOpen={deepLink.devicesOpen}
+              >
+                {(cloud) => (
+                  <div className="flex flex-col gap-2">
+                    <MyDevicesPanel
+                      s={s}
+                      variant="self"
+                      selfSettings={<div className="flex flex-col gap-2"><RemoteDesktopSetting /></div>}
+                      focusDeviceId={deepLink.focusDeviceId}
+                      focusRequestKey={deepLink.focusRequestKey}
+                    />
+                    {cloud && (
+                      <MyDevicesPanel
+                        s={s}
+                        variant="cloud"
+                        cloud={cloud}
+                        focusDeviceId={deepLink.focusDeviceId}
+                        focusRequestKey={deepLink.focusRequestKey}
+                      />
+                    )}
+                  </div>
+                )}
+              </CloudDeviceDirectory>
             </section>
             <RemoteConnectionV2Section s={s} relay={relay} deepLink={deepLink} />
           </>
@@ -194,30 +226,60 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
         {deviceLinkAvailable ? (
           <>
             {v2.enabled ? null : (
-              <CollapsibleSubSection
-                id={remoteControlSettings.devices.targetId}
-                title={t(remoteControlSettings.devices.titleKey)}
-                summary={devSumText}
-                dotColor={null}
-                open={deepLink.devicesOpen}
-                onToggle={deepLink.toggleDevices}
-                pinned={
-                  <MyDevicesPanel
-                    s={s}
-                    variant="self"
-                    selfSettings={<div className="flex flex-col gap-2"><RemoteDesktopSetting /></div>}
-                    focusDeviceId={deepLink.focusDeviceId}
-                    focusRequestKey={deepLink.focusRequestKey}
-                  />
-                }
+              <CloudDeviceDirectory
+                enabled={deviceLinkAvailable}
+                directory={s.listError ? [] : (s.devices?.map((device) => device.deviceId) ?? null)}
+                names={deviceNames}
+                offline={s.devices?.filter((device) => !device.online).map((device) => device.deviceId)}
+                devicesOpen={deepLink.devicesOpen}
               >
-                <MyDevicesPanel
-                  s={s}
-                  variant="others"
-                  focusDeviceId={deepLink.focusDeviceId}
-                  focusRequestKey={deepLink.focusRequestKey}
-                />
-              </CollapsibleSubSection>
+                {(cloud) => {
+                  const selfPanel = (
+                    <MyDevicesPanel
+                      s={s}
+                      variant="self"
+                      selfSettings={<div className="flex flex-col gap-2"><RemoteDesktopSetting /></div>}
+                      focusDeviceId={deepLink.focusDeviceId}
+                      focusRequestKey={deepLink.focusRequestKey}
+                    />
+                  );
+                  return (
+                    <CollapsibleSubSection
+                      id={remoteControlSettings.devices.targetId}
+                      title={t(remoteControlSettings.devices.titleKey)}
+                      summary={deviceSummary(s, t, cloud?.isManaged)}
+                      dotColor={null}
+                      open={deepLink.devicesOpen}
+                      onToggle={deepLink.toggleDevices}
+                      pinned={
+                        // 云端 Cindy 的卡与本机卡一起常驻,「我的设备」收起时也可见。
+                        cloud ? (
+                          <div className="flex flex-col gap-2">
+                            {selfPanel}
+                            <MyDevicesPanel
+                              s={s}
+                              variant="cloud"
+                              cloud={cloud}
+                              focusDeviceId={deepLink.focusDeviceId}
+                              focusRequestKey={deepLink.focusRequestKey}
+                            />
+                          </div>
+                        ) : (
+                          selfPanel
+                        )
+                      }
+                    >
+                      <MyDevicesPanel
+                        s={s}
+                        variant="others"
+                        cloud={cloud}
+                        focusDeviceId={deepLink.focusDeviceId}
+                        focusRequestKey={deepLink.focusRequestKey}
+                      />
+                    </CollapsibleSubSection>
+                  );
+                }}
+              </CloudDeviceDirectory>
             )}
             {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}
             <section id={remoteControlSettings.relay.targetId} className="flex flex-col gap-3">

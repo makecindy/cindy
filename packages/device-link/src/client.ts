@@ -2773,9 +2773,10 @@ export class DeviceLinkClient {
   }
 
   private describeRequest(env: Omit<Envelope, 'id'>, expectKind: 'invoke-result' | 'link-accept'): string {
-    const dst = shortDeviceRef(env.dst);
+    const dst = diagnosticRef(env.dst);
     const channel = env.kind === 'invoke' ? (env.payload as InvokePayload | undefined)?.channel : env.kind;
-    return `kind=${env.kind} channel=${channel ?? 'unknown'} dst=${dst} expect=${expectKind}`;
+    const operation = env.kind === 'invoke' ? ` operation=${diagnosticOperation(env.payload as InvokePayload)}` : '';
+    return `kind=${env.kind} channel=${channel ?? 'unknown'} dst=${dst} expect=${expectKind}${operation}`;
   }
 
   private failAllPending(err: DeviceLinkError): void {
@@ -4063,6 +4064,7 @@ export class DeviceLinkClient {
         assembly.chunks.set(segment.index, parsed.data);
         assembly.bytes += bytes;
         stream.bufferedBytes += bytes;
+        if (isBusinessTraffic(env)) peer.lastBusinessReceivedAt = this.monotonicNow();
       }
       stream.assemblies.set(meta.seq, assembly);
       if (assembly.chunks.size === assembly.total) {

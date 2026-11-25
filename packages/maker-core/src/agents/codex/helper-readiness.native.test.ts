@@ -13,7 +13,8 @@ import { expect, it, vi } from 'vitest';
 import { CodexAgent } from './index.js';
 import { AppServerHost } from './app-server/host.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
-import { readCodexThreadMcpServerTools } from './mcp-server-tools.js';
+import type { CodexMcpServerStatusListResponse } from './app-server/protocol.js';
+import { readCodexThreadMcpServerTools, readCodexThreadMcpServersTools } from './mcp-server-tools.js';
 import type { AgentDeps, AgentSessionHandle } from '../base-agent.js';
 import type { AgentEvent } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
@@ -25,10 +26,13 @@ const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {
 // discovery, creating new clients for every server. Existing startup/recovery
 // fixtures did not distinguish that probe from the thread's live connection.
 // Native tier: production reader -> real app-server -> synthetic HTTP MCP.
-// Minimal failure: a healthy helper and a sibling that stalls only new discovery.
-it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP clients or probing a sibling', async () => {
+// Minimal failure: helper + connected/failed plugin gateway, beside a sibling
+// that stalls only new discovery. The healthy-only fixture did not establish
+// the sibling's connected state or exercise an independently failed gateway.
+it.skipIf(!binaryPath).each(['connected', 'failed'] as const)(
+  'reads helper and %s gateway readiness without starting fresh MCP clients or probing a sibling', async gatewayState => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-helper-status-'));
-  const initializes = { helper: 0, sibling: 0 };
+  const initializes = { helper: 0, gateway: 0, sibling: 0 };
   let stallNewSibling = false;
   let nativePid: number | undefined;
   const server = createServer(async (req, res) => {
@@ -36,10 +40,11 @@ it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP client
     let raw = '';
     for await (const chunk of req) raw += chunk;
     const q = JSON.parse(raw);
-    const name = req.url === '/helper' ? 'helper' : 'sibling';
+    const name = req.url === '/helper' ? 'helper' : req.url === '/gateway' ? 'gateway' : 'sibling';
     if (q.method === 'initialize') {
       initializes[name]++;
       if (name === 'sibling' && stallNewSibling) return;
+      if (name === 'gateway' && gatewayState === 'failed') { res.writeHead(503).end(); return; }
     }
     if (q.id === undefined) { res.writeHead(202).end(); return; }
     const result = q.method === 'initialize'
@@ -60,19 +65,25 @@ it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP client
         env: { PATH: process.env.PATH ?? '', HOME: root, USERPROFILE: root, CODEX_HOME: root,
           ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) },
         extraArgs: ['-c', `mcp_servers.cindy_helper.url="${endpoint}/helper"`,
+          '-c', `mcp_servers.cindy.url="${endpoint}/gateway"`,
+          '-c', 'mcp_servers.cindy.startup_timeout_sec=2',
           '-c', `mcp_servers.cindy_docs.url="${endpoint}/docs"`,
           '-c', 'mcp_servers.cindy_docs.startup_timeout_sec=2'],
       }),
     });
     const started = await host.request<{ thread: { id: string } }>('thread/start', { cwd: root });
     const threadId = started.thread.id;
-    // Establish the control: both actual thread clients are ready before the
+    // Establish the control: actual thread clients have settled before the
     // sibling becomes unavailable to new discovery. No model request is sent.
-    for (const serverName of ['cindy_helper', 'cindy_docs']) {
-      await host.request('mcpServerStatus/list', { threadId, serverName, detail: 'toolsAndAuthOnly' });
+    for (const serverName of ['cindy_helper', 'cindy', 'cindy_docs']) {
+      const status = await host.request<CodexMcpServerStatusListResponse>('mcpServerStatus/list',
+        { threadId, serverName, detail: 'toolsAndAuthOnly' });
+      expect(status.data.find(server => server.name === serverName)?.runtimeStatus)
+        .toBe(serverName === 'cindy' ? gatewayState : 'connected');
     }
     const before = { ...initializes };
     expect(before.helper).toBeGreaterThan(0);
+    expect(before.gateway).toBeGreaterThan(0);
     expect(before.sibling).toBeGreaterThan(0);
     stallNewSibling = true;
     const activeHost = host;
@@ -81,6 +92,17 @@ it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP client
     );
     expect(report.state).toBe('connected');
     expect(report.tools.map(tool => tool.name).sort()).toEqual(['call_tool', 'list_tools']);
+    const requests = vi.fn((method: string, params: Record<string, unknown>, options: { timeoutMs: number }) =>
+      activeHost.request(method, params, options));
+    const reports = await readCodexThreadMcpServersTools(
+      requests as Parameters<typeof readCodexThreadMcpServersTools>[0], threadId, ['cindy_helper', 'cindy'], 500,
+    );
+    const batchHelper = reports.get('cindy_helper');
+    expect(batchHelper?.state).toBe(report.state);
+    expect(batchHelper?.tools.toSorted((a, b) => a.name.localeCompare(b.name)))
+      .toEqual(report.tools.toSorted((a, b) => a.name.localeCompare(b.name)));
+    expect(reports.get('cindy')?.state).toBe(gatewayState);
+    expect(requests.mock.calls.map(([, params]) => params.serverName)).toEqual(['cindy_helper', 'cindy']);
     expect(initializes).toEqual(before);
   } finally {
     await stopWindowsFixtureTree(nativePid);
@@ -220,8 +242,13 @@ for await (const line of createInterface({ input: process.stdin })) {
 // subsequent turns. #10499 only checks the warning, not recovery or real calls.
 // Integration/native tier: real Agent -> host -> native HTTP MCP -> read-only
 // call. Minimal failure is one stalled initialize/tools/list, then a healthy URL.
-it.skipIf(!binaryPath).each(['initialize', 'tools/list'] as const)(
-  'recovers a timed-out %s helper in the same task without retiring a healthy peer', async (failedMethod) => {
+// The plugin-gateway cases cover the missing branch in helper-only recovery:
+// helper stays healthy while ALL_TOOLS loses ghost_info until the cold resume.
+it.skipIf(!binaryPath).each([
+  ['initialize', 'cindy_helper'], ['tools/list', 'cindy_helper'],
+  ['initialize', 'cindy'], ['tools/list', 'cindy'],
+] as const)(
+  'recovers a timed-out %s %s in the same task without retiring a healthy peer', async (failedMethod, serverName) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-helper-recovery-'));
     let healthy = false;
     let helperCalls = 0;
@@ -247,7 +274,7 @@ it.skipIf(!binaryPath).each(['initialize', 'tools/list'] as const)(
         if (requestRead) attemptedRead = true;
         const output = requestRead
           ? [{ type: 'custom_tool_call', name: 'exec', call_id: 'read-helper', input:
-            'const tool = ALL_TOOLS.find(t => t.name === "mcp__cindy_helper__list_tools"); if (!tool) throw new Error("HELPER_MISSING"); text(await tools[tool.name]({}));' }]
+            `const tool = ALL_TOOLS.find(t => t.name === "mcp__${serverName}__${serverName === 'cindy' ? 'ghost_info' : 'list_tools'}"); if (!tool) throw new Error("GATEWAY_MISSING"); text(await tools[tool.name]({}));` }]
           : [{ type: 'message', role: 'assistant', id: `done-${modelCalls}`, status: 'completed',
             content: [{ type: 'output_text', text: 'Done.', annotations: [] }] }];
         res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -264,7 +291,9 @@ it.skipIf(!binaryPath).each(['initialize', 'tools/list'] as const)(
       if (q.id === undefined) { res.writeHead(202); res.end(); return; }
       let result = {};
       if (q.method === 'initialize') result = { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'probe', version: '1' } };
-      if (q.method === 'tools/list') result = { tools: ['list_tools', 'call_tool'].map(name => ({ name, description: 'Read-only probe', inputSchema: { type: 'object', properties: {} } })) };
+      if (q.method === 'tools/list') result = { tools: (helper && serverName === 'cindy'
+        ? ['ghost_info', 'ghost_call'] : ['list_tools', 'call_tool'])
+        .map(name => ({ name, description: 'Read-only probe', inputSchema: { type: 'object', properties: {} } })) };
       if (q.method === 'tools/call') { if (helper) helperCalls++; result = { content: [{ type: 'text', text: 'READ_ONLY_HELPER_OK' }] }; }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ jsonrpc: '2.0', id: q.id, result }));
@@ -280,9 +309,11 @@ it.skipIf(!binaryPath).each(['initialize', 'tools/list'] as const)(
       host = new AppServerHost({
         logger, clientInfo: { name: 'cindy-helper-recovery-test', version: '1' },
         buildSessionMcpConfig: instance => ({
-          'mcp_servers.cindy_helper.url': `${endpoint}/helper`,
-          'mcp_servers.cindy_helper.enabled': instance !== 'peer',
-          'mcp_servers.cindy_helper.startup_timeout_sec': 0.25,
+          // The plugin gateway can fail independently of a healthy helper.
+          ...(serverName === 'cindy' ? { 'mcp_servers.cindy_helper.url': `${endpoint}/docs` } : {}),
+          [`mcp_servers.${serverName}.url`]: `${endpoint}/helper`,
+          [`mcp_servers.${serverName}.enabled`]: instance !== 'peer',
+          [`mcp_servers.${serverName}.startup_timeout_sec`]: 0.25,
           'mcp_servers.cindy_docs.url': `${endpoint}/docs`,
         }),
         createTransport: () => createStdioTransport({ binaryPath: binaryPath!, cwd: root,
@@ -316,11 +347,12 @@ it.skipIf(!binaryPath).each(['initialize', 'tools/list'] as const)(
       handles.push(handle);
       const originalId = handle.id;
       await run(handle, 'first turn before recovery');
-      expect((await handle.readMcpServerTools?.('cindy_helper'))?.tools).toHaveLength(0);
+      expect((await handle.readMcpServerTools?.(serverName))?.state).toBe('failed');
+      if (serverName === 'cindy') expect((await handle.readMcpServerTools?.('cindy_helper'))?.state).toBe('connected');
       healthy = true;
       const recovered = await run(handle, 'recover helper with a read-only call');
       expect(handle.id).toBe(originalId);
-      expect((await handle.readMcpServerTools?.('cindy_helper'))?.state).toBe('connected');
+      expect((await handle.readMcpServerTools?.(serverName))?.state).toBe('connected');
       expect(helperCalls).toBe(1);
       expect(toolResultSeen).toBe(true);
       expect(historyPreserved).toBe(true);

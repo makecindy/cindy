@@ -37748,22 +37748,35 @@ describe('unpublished Codex runtime cleanup', () => {
   });
 });
 
-describe('failed expected helper recovery', () => {
+// Plugin gateway outage: helper-only recovery missed an independently failed
+// cindy client. Exercise the same production send/Stop/owner fences for both
+// gateways (unit tier); the native fixture additionally checks ALL_TOOLS/calls.
+describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverName => {
   const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   async function setup(state: string | null | (() => string | null), background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
     const agent = new CodexAgent(createDeps());
     let resumes = 0;
-    const host = installFakeHost(agent, method => {
+    const host = installFakeHost(agent, (method, params) => {
       if (method === Method.ThreadResume) {
         resumes++;
         return { thread: { id: threadId }, model: 'gpt-5.4' };
       }
       if (method === Method.ThreadBackgroundTerminalsList) return background();
-      if (method === Method.McpServerStatusList) return { data: [{ name: 'cindy_helper', runtimeStatus: resumes > 1 && recover ? 'connected' : typeof state === 'function' ? state() : state,
-        tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
+      if (method === Method.McpServerStatusList) {
+        if ((params as { serverName?: string }).serverName === 'cindy_helper' && serverName === 'cindy') {
+          return { data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
+        }
+        return { data: [
+          { name: serverName, runtimeStatus: resumes > 1 && recover ? 'connected' : typeof state === 'function' ? state() : state,
+            tools: serverName === 'cindy' ? { ghost_info: {}, ghost_call: {} } : { list_tools: {}, call_tool: {} } },
+        ], nextCursor: null };
+      }
       if (method === Method.TurnStart) return { turn: { id: 'helper-turn' } };
       return undefined;
-    }, { buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_helper.command': 'fixture-helper' }) });
+    }, { buildSessionMcpConfig: () => ({
+      ...(serverName === 'cindy' ? { 'mcp_servers.cindy_helper.command': 'healthy-helper' } : {}),
+      [`mcp_servers.${serverName}.command`]: 'fixture-gateway',
+    }) });
     const handle = await agent.startSession({ sessionId: 'helper-recovery', sessionInstanceId: 'helper-instance',
       resumeSessionId: threadId, model: 'gpt-5.4', workingDir: '/repo' });
     return { agent, host, handle };
@@ -37786,7 +37799,7 @@ describe('failed expected helper recovery', () => {
       for await (const event of handle.events()) events.push(event);
       const notices = events.filter(event => event.type === 'error' || event.standaloneText);
       const unavailable = { code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE' };
-      expect(notices).toMatchObject(state === 'failed' ? [
+      expect(notices).toMatchObject(state === 'failed' && serverName === 'cindy_helper' ? [
         { type: 'error', data: unavailable },
         { type: 'text', standaloneText: true, data: unavailable },
       ] : []);
@@ -37807,7 +37820,7 @@ describe('failed expected helper recovery', () => {
     expect(sends).toHaveLength(1);
     expect(sends[0][1]).toMatchObject({ threadId, input: [{ type: 'text', text: 'continue the same task' }] });
     expect(host.retire).not.toHaveBeenCalled();
-    expect((await handle.readMcpServerTools?.('cindy_helper'))?.state).toBe('connected');
+    expect((await handle.readMcpServerTools?.(serverName))?.state).toBe('connected');
     await handle.close();
     await agent.dispose();
   });
@@ -37824,7 +37837,7 @@ describe('failed expected helper recovery', () => {
     await handle.send({ type: 'user', content: 'recover the failed helper' });
     expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadResume)).toHaveLength(2);
     expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(2);
-    expect((await handle.readMcpServerTools?.('cindy_helper'))?.state).toBe('connected');
+    expect((await handle.readMcpServerTools?.(serverName))?.state).toBe('connected');
     await handle.close();
     await agent.dispose();
   });
@@ -37853,7 +37866,7 @@ describe('failed expected helper recovery', () => {
     const rejected = expect(send).rejects.toThrow();
     await waitForExpectation(() => expect(host.request.mock.calls.some(([m]) => m === Method.ThreadBackgroundTerminalsList)).toBe(true));
     if (action === 'account-retired') host.getThreadHandlers()?.hostForcedRetire?.({ reason: 'account switched' });
-    else if (action === 'config-revoked') host.getSessionMcpConfig.mockReturnValue({ 'mcp_servers.cindy_helper.enabled': false });
+    else if (action === 'config-revoked') host.getSessionMcpConfig.mockReturnValue({ [`mcp_servers.${serverName}.enabled`]: false });
     else await handle[action]();
     resolve({ data: [] });
     await rejected;
@@ -37917,9 +37930,13 @@ describe('failed expected helper recovery', () => {
     const events = [];
     for await (const event of handle.events()) events.push(event);
     expect(events.filter(event => event.type === 'text' && event.standaloneText
-      && (event.data as { code?: string }).code === 'CINDY_EXPECTED_HELPER_UNAVAILABLE')).toHaveLength(1);
+      && (event.data as { code?: string }).code === 'CINDY_EXPECTED_HELPER_UNAVAILABLE')).toHaveLength(serverName === 'cindy_helper' ? 1 : 0);
     expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadResume)).toHaveLength(1);
-    expect(host.request.mock.calls.filter(([m]) => m === Method.McpServerStatusList)).toHaveLength(finalState === 'failed' ? 3 : 2);
+    const expectedProbes = finalState === 'failed' ? 3 : 2;
+    const statusCalls = host.request.mock.calls.filter(([m]) => m === Method.McpServerStatusList);
+    expect(statusCalls).toHaveLength(expectedProbes * (serverName === 'cindy' ? 2 : 1));
+    expect(statusCalls.filter(([, params]) => (params as { serverName?: string }).serverName === serverName))
+      .toHaveLength(expectedProbes);
     await agent.dispose();
   });
   it('backs off repeated failures and stops after two recovery attempts', async () => {
