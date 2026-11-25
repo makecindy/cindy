@@ -254,6 +254,11 @@ export type CindyForgePackResult =
       version: string;
       /** 仅 intent=publish 返回；一次性、不可解析的 Host 发布票据。 */
       publishToken?: string;
+      /**
+       * 当前登录身份可用的发布目标；只有 public 表示个人身份，直接走公开市场。
+       * null 表示当前 Host 无法判断（未接入组织发布），按原规则：目标不明确时询问。
+       */
+      publishTargets?: Array<'organization' | 'public'> | null;
       /** 打包结果说明；成功仅表示产物已生成，不表示已经安装。 */
       note: string;
     }
@@ -270,6 +275,11 @@ export type CindyForgeInstallResult =
       enabled: boolean;
       instanceId?: string;
       namespace?: string | null;
+      /**
+       * 当前登录身份可用的发布目标；只有 public 表示个人身份，直接走公开市场。
+       * null 表示当前 Host 无法判断（未接入组织发布），按原规则：目标不明确时询问。
+       */
+      publishTargets?: Array<'organization' | 'public'> | null;
       note: string;
     }
   | {
@@ -279,6 +289,16 @@ export type CindyForgeInstallResult =
       targets?: Array<{ instanceId: string; name: string; namespace: string | null; version: string; enabled: boolean }>;
       copyNamespace?: string | null;
     };
+
+/**
+ * 用户在对话里主动说出的可见范围（原话里的名字），由 Host 在确认屏上预先选好；
+ * 对不上的名字在确认屏标出，由用户在选择器里补。
+ */
+export interface CindyForgePublishAudienceHint {
+  departments?: string[];
+  members?: string[];
+  emails?: string[];
+}
 
 /** ghost_forge_publish 立即返回时的失败分类。传输开始后的失败走 status.errorCode。 */
 export type CindyForgePublishErrorCode =
@@ -535,7 +555,7 @@ export interface CindyGhostsMcpDeps {
    * 消费 forgePack(intent=publish) 签发的一次性票据，把该次打包的确切字节
    * 提交到当前组织发布。立即返回 transferId / uploadId,传输在后台跑。
    */
-  forgePublish(request: { token: string }): Promise<CindyForgePublishResult>;
+  forgePublish(request: { token: string; audienceHint?: CindyForgePublishAudienceHint }): Promise<CindyForgePublishResult>;
   /** 查询一次后台发布传输的当前状态。 */
   forgePublishStatus(request: { transferId: string }): Promise<CindyForgePublishStatusResult>;
   /** Ordinary personal community author capability, separate from organization Forge publishing. */

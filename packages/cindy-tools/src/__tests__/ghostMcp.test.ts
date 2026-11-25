@@ -1757,6 +1757,35 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
     ).toMatchObject({ success: true });
   });
 
+  // #1541: names the user said ("只给技术部和王一鸣") reach the Host untouched so the confirmation
+  // screen can preselect them; the hint is a closed shape and cannot smuggle a path or audience.
+  it("forge_publish passes the user's audience hint through and keeps the schema closed", async () => {
+    const requests: unknown[] = [];
+    const deps = fakeDeps({
+      forgePublish: async (request) => {
+        requests.push(request);
+        return { ok: true, transferId: "t", uploadId: null, note: "" };
+      },
+    });
+    const input = ghostForgePublishInputSchema.parse({
+      token: "publish-token-3",
+      audience_hint: { departments: ["技术部"], members: [" 王一鸣 "] },
+    });
+    await handleForgePublish(deps, input);
+    await handleForgePublish(deps, { token: "publish-token-4" });
+    expect(requests).toEqual([
+      { token: "publish-token-3", audienceHint: { departments: ["技术部"], members: ["王一鸣"] } },
+      { token: "publish-token-4" },
+    ]);
+    for (const audience_hint of [
+      { departments: ["技术部"], file: "/tmp/x.cindy" },
+      { visibilityAudience: { type: "all" } },
+      { members: Array.from({ length: 21 }, (_, index) => `m${index}`) },
+    ]) {
+      expect(ghostForgePublishInputSchema.safeParse({ token: "t", audience_hint }).success).toBe(false);
+    }
+  });
+
   it("registered forge_publish schema rejects file paths and accepts token only", () => {
     const server = createCindyGhostsMcpServer(fakeDeps()) as unknown as {
       _registeredTools: Record<
