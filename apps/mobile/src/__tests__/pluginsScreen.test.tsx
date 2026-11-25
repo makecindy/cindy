@@ -2155,6 +2155,69 @@ describe("market caches across two computers", () => {
     expect(requests.filter((request) => request.device === "mac" && request.input?.read)).toEqual([]);
   });
 });
+// Codex review (2026-11-25): a refresh sent before an install must not write the pre-install rows back,
+// and an unmounted page must not keep chaining empty publisher pages.
+describe("market reads that outlive their purpose", () => {
+  it("drops a refresh sent before an install, so the installed plugin does not come back as installable", async () => {
+    const item = marketItem("demo", "Demo"), other = marketItem("other", "Other");
+    let installed = false;
+    let holdNextPage = false;
+    let releasePage!: () => void;
+    marketWire(async (request) => {
+      switch (request.actionId) {
+        case "management:snapshot": {
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") {
+            if (request.input.query.counts) return { ...marketPage([]), counts: null };
+            // The page reflects the computer at the time the read was sent.
+            const page = marketPage(installed ? [other] : [item, other]);
+            if (holdNextPage) { holdNextPage = false; await new Promise<void>((resolve) => { releasePage = resolve; }); }
+            return page;
+          }
+          return managementSnapshot(installed);
+        }
+        case "management:market-detail": return { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+        case "management:begin": return { operationId: request.input.operationId, phase: "confirmation", consent: {
+          requestId: "consent", initiator: "user", origin: "market",
+          facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } };
+        case "management:answer": installed = true; return { operationId: request.input.operationId, phase: "succeeded" };
+        default: return {};
+      }
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    holdNextPage = true;
+    await act(async () => { void shownMarket().refresh(); });
+    await settle();
+    await act(async () => fixture.props.get("confirmation").controller.answer(true));
+    await settle(14);
+    expect(fixture.props.get("header").title).toBe("Demo");
+    // The pre-install refresh reply arrives while the new installed detail is open.
+    await act(async () => { releasePage(); });
+    await settle();
+    await act(async () => fixture.props.get("header").onBack());
+    await settle(14);
+    expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Other"]);
+  });
+  it("stops chaining empty publisher pages once the plugins page is unmounted", async () => {
+    const community = { ...marketItem("community", "Community"), publisherKind: "personal" };
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let page = 0;
+    const requests = marketWire(async (request) => {
+      if (request.input?.read === "capabilities") return { catalogPaging: true };
+      if (request.input?.query?.counts) return { ...marketPage([]), counts: null };
+      if (++page === 1) await held;
+      return { ...marketPage([{ ...community, pluginId: `market/c${page}`, ghostId: `c${page}` }]), nextCursor: `cursor-${page}` };
+    });
+    await openMarket();
+    await act(async () => root.render(null));
+    await act(async () => { release(); });
+    await settle(20);
+    expect(requests.filter((request) => request.input?.read === "catalog" && !request.input.query.counts)).toHaveLength(1);
+  });
+});
 // Review F2 (2026-11-25): an offline remembered computer should not cost an extra step; explicit choices stay.
 describe("market computer choice", () => {
   const remembered = "cindy.pluginMarketDevice.v1.demo";

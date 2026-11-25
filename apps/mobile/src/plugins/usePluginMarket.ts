@@ -32,6 +32,8 @@ interface CatalogList {
   key: string;
   /** The computer these rows describe; an install on one computer never edits another's list. */
   deviceId: string;
+  /** Read generation: a reply lands only if no install invalidated this list after the read started. */
+  token: number;
   status: "loading" | "ready" | "failed";
   items: ManagedMarketItem[];
   nextCursor: string | null;
@@ -155,6 +157,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const active = visible && focused && online && !!client;
   const activeRef = useRef(active);
   activeRef.current = active;
+  // Refs keep their last render's values after unmount; this flag fences replies and follow-up pages.
+  // Reset on mount so a development remount (effects run twice) keeps working.
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const [probe, setProbe] = useState<{ scope: string; status: "loading" | "supported" | "outdated" | "failed" }>();
   const readProbe = useCallback(async () => {
@@ -202,14 +208,15 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     map.delete(key); map.set(key, value);
     while (map.size > CACHED_LISTS) map.delete(map.keys().next().value!);
   };
-  const readPage = useCallback(async (list: CatalogList, cursor: string | null, publisher: PluginMarketFilter) => {
+  const readPage = useCallback(async (list: CatalogList, cursor: string | null, publisher: PluginMarketFilter, token = list.token) => {
     if (!client) return;
     const readScope = scope;
-    const current = () => liveScope.current === readScope && lists.current.get(list.key) === list;
+    const current = () => mounted.current && liveScope.current === readScope && lists.current.get(list.key) === list
+      && list.token === token;
     // A reply dropped because the view moved to another computer or connection leaves no request in
     // charge of this entry. Release it so returning here reads again instead of waiting forever.
     const abandon = () => {
-      if (lists.current.get(list.key) !== list) return;
+      if (lists.current.get(list.key) !== list || list.token !== token) return;
       if (cursor) list.loadingMore = false;
       else if (list.status === "loading") { list.status = list.items.length ? "ready" : "failed"; list.at = 0; }
     };
@@ -233,10 +240,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       // A publisher tab may find nothing on a public page; continue a few pages, never unbounded.
       const contributed = fresh.filter((item) => pluginMarketMatchesFilter(item, publisher)).length;
       if (page.nextCursor && contributed === 0 && (publisher === "official" || publisher === "community")
-        && chain.current < MAX_EMPTY_CHAIN && activeRef.current && liveListKey.current === list.key) {
+        && chain.current < MAX_EMPTY_CHAIN && mounted.current && activeRef.current && liveListKey.current === list.key) {
         chain.current += 1;
         list.loadingMore = true;
-        await readPage(list, page.nextCursor, publisher);
+        await readPage(list, page.nextCursor, publisher, token);
       } else chain.current = 0;
     } catch (error) {
       if (!current()) { abandon(); return; }
@@ -253,7 +260,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       return Promise.resolve();
     }
     if (!deviceId) return Promise.resolve();
-    const list: CatalogList = { key: listKey, deviceId, status: "loading", items: existing?.items ?? [], nextCursor: null,
+    const list: CatalogList = { key: listKey, deviceId, token: 0, status: "loading", items: existing?.items ?? [], nextCursor: null,
       loadingMore: false, meta: existing?.meta ?? null, at: 0 };
     remember(lists.current, listKey, list);
     chain.current = 0;
@@ -366,8 +373,18 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     if (installRef.current?.id !== attempt.id) return;
     finish(attempt);
     const installedOn = attempt.target.deviceId;
-    for (const entry of lists.current.values())
-      if (entry.deviceId === installedOn) entry.items = entry.items.filter((item) => item.pluginId !== attempt.item.pluginId);
+    for (const [key, entry] of [...lists.current]) {
+      if (entry.deviceId !== installedOn) continue;
+      // Reads sent before the install still describe the old computer; drop them (their replies no longer
+      // land) and read again on the next visit. Rows already shown stay, minus the installed plugin.
+      entry.token += 1;
+      entry.items = entry.items.filter((item) => item.pluginId !== attempt.item.pluginId);
+      entry.loadingMore = false;
+      entry.at = 0;
+      if (entry.status === "loading") {
+        if (entry.items.length) entry.status = "ready"; else lists.current.delete(key);
+      }
+    }
     for (const entry of counts.current.values()) if (entry.deviceId === installedOn) entry.at = 0;
     setCountsTick((tick) => tick + 1);
     setDetail((current) => current?.item.pluginId === attempt.item.pluginId ? null : current);
