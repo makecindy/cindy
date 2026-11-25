@@ -68,7 +68,7 @@ const locationAgents = (catalog: SourceCatalog, agentDeviceId: string | undefine
  */
 export function buildAutoSourceRoutes(
   catalog: Pick<SourceCatalog, 'views' | 'remote'>,
-  config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources'>,
+  config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources' | 'autoExceptions'>,
 ): ModelGroupSourceRoute[] {
   const others = [...(catalog.remote ?? [])].map(([deviceId, providers]) => ({ deviceId, providers }));
   // 去重只在自己的电脑之间做(同一个登录在两台电脑上算一个)。别人分享来的各是各的账号，即使供应商同名也都算成员，
@@ -105,6 +105,7 @@ export function buildAutoSourceRoutes(
       strategy: config.autoStrategy?.[id] ?? 'expiring',
       sources: ordered.slice(0, MODEL_GROUP_LIMITS.candidates),
       ...(switchOff.has(id) ? { autoSwitch: false as const } : {}),
+      ...(config.autoExceptions?.[id]?.length ? { exceptions: config.autoExceptions[id] } : {}),
       auto: true,
       ...(hidden.has(id) ? { hidden: true as const } : {}),
     });
@@ -167,6 +168,7 @@ export function expandSourceRoute(route: ModelGroupSourceRoute, catalog: SourceC
     candidates: entry.candidates,
     ...(route.effort ? { effort: route.effort } : {}),
     ...(route.autoSwitch === false ? { autoSwitch: false as const } : {}),
+    ...(route.exceptions?.length ? { exceptions: route.exceptions } : {}),
     parent: { id: route.id, name: route.name },
     ...(route.hidden ? { hidden: true as const } : {}),
   }));

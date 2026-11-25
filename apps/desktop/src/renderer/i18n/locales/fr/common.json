@@ -22985,7 +22985,8 @@
         "picked": "Utiliser celle-ci",
         "standby": "En réserve",
         "skipped": "Ignorée",
-        "unavailable": "Aucune source de cette route n'est utilisable pour l'instant. Une nouvelle tâche utilisera le modèle que vous aviez sélectionné."
+        "unavailable": "Aucune source de cette route n'est utilisable pour l'instant. Une nouvelle tâche utilisera le modèle que vous aviez sélectionné.",
+        "model": "Modèle à tester"
       },
       "deleteRoute": "Supprimer cette route",
       "deleteRouteConfirmTitle": "Supprimer « {{name}} » ?",

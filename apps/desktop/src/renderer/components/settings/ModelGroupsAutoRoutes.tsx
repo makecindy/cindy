@@ -37,10 +37,13 @@ import {
   MODEL_GROUP_STRATEGIES,
   modelGroupAutoSwitchOn,
   modelGroupWeight,
+  type ModelGroupException,
   type ModelGroupsConfig,
   type ModelGroupSource,
   type ModelGroupSourceRoute,
 } from '../../../shared/modelGroups';
+import { ModelGroupRouteExceptions } from './ModelGroupRouteExceptions';
+import { ModelGroupRoutePreview } from './ModelGroupRoutePreview';
 import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
 import { SAME_SOURCE_ROUTE_STRATEGIES, type RouteStrategy } from '../../../shared/routeStrategy';
 import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
@@ -334,7 +337,12 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
   const remove = async () => {
     if (await save((latest) => ({ ...latest, sourceRoutes: (latest.sourceRoutes ?? []).filter((item) => item.id !== route.id) }))) onBack();
   };
-  const models = config.routes.filter((item) => item.parent?.id === route.id).length;
+  const expanded = useMemo(() => config.routes.filter((item) => item.parent?.id === route.id), [config, route.id]);
+  const expandedCandidates = useMemo(() => expanded.flatMap((item) => item.candidates), [expanded]);
+  const models = expanded.length;
+  const setExceptions = (next: ModelGroupException[]) => save((latest) => (route.auto
+    ? { ...latest, autoExceptions: { ...(latest.autoExceptions ?? {}), [route.id]: next } }
+    : { ...latest, sourceRoutes: (latest.sourceRoutes ?? []).map((item) => (item.id === route.id ? { ...item, exceptions: next } : item)) }));
   // 成员的先后、权重、是否启用。自己建的路由直接改它的成员；自动合好的路由成员是谁仍跟着连接走，
   // 用户调的这三样单独存(autoSources)，下次合成时按它排。
   const setSources = (change: (sources: ModelGroupSource[]) => ModelGroupSource[]) => save((latest) => {
@@ -463,6 +471,15 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
               )}
             </SettingsCard>
           </SettingsSection>
+          {/* 例外与「试一下」：与按模型排的路由同一块(2026-11-26 补上)。例外对展开出来的每个模型都生效；
+              时段例外只能改走自己排的路由。 */}
+          <ModelGroupRouteExceptions
+            key={`exceptions:${route.id}`}
+            route={{ id: route.id, name: route.name, strategy: route.strategy, candidates: [], ...(route.exceptions ? { exceptions: route.exceptions } : {}) }}
+            routes={config.routes.filter((item) => !item.parent)}
+            onChange={(next) => setExceptions(next)}
+          />
+          <ModelGroupRoutePreview key={`try:${JSON.stringify(route)}`} routes={expanded} nameCandidates={expandedCandidates} />
           {!route.auto && (
             <SettingsSection>
               <SettingsCard>

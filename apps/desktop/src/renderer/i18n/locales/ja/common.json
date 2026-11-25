@@ -22680,7 +22680,8 @@
         "picked": "これを使用",
         "standby": "待機",
         "skipped": "スキップ",
-        "unavailable": "このルートには今使えるソースがありません。新しいタスクは元々選んでいたモデルを使います。"
+        "unavailable": "このルートには今使えるソースがありません。新しいタスクは元々選んでいたモデルを使います。",
+        "model": "試すモデル"
       },
       "deleteRoute": "このルートを削除",
       "deleteRouteConfirmTitle": "「{{name}}」を削除しますか？",

@@ -22769,7 +22769,8 @@
         "picked": "Diese verwenden",
         "standby": "Reserve",
         "skipped": "Übersprungen",
-        "unavailable": "Keine Quelle dieser Route ist gerade nutzbar. Eine neue Aufgabe verwendet das Modell, das du ausgewählt hattest."
+        "unavailable": "Keine Quelle dieser Route ist gerade nutzbar. Eine neue Aufgabe verwendet das Modell, das du ausgewählt hattest.",
+        "model": "Zu testendes Modell"
       },
       "deleteRoute": "Diese Route löschen",
       "deleteRouteConfirmTitle": "„{{name}}“ löschen?",

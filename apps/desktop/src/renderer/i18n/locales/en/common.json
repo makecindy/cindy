@@ -22769,7 +22769,8 @@
         "picked": "Use this",
         "standby": "Standby",
         "skipped": "Skipped",
-        "unavailable": "No source in this route can be used right now. A new task will use the model you had selected."
+        "unavailable": "No source in this route can be used right now. A new task will use the model you had selected.",
+        "model": "Model to try"
       },
       "deleteRoute": "Delete this route",
       "deleteRouteConfirmTitle": "Delete “{{name}}”?",

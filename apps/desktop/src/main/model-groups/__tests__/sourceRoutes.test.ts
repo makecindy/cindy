@@ -19,6 +19,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import {
   modelGroupAutoSwitchFor,
   modelGroupCandidateKey,
+  normalizeModelGroupsConfig,
   type ModelGroupCandidate,
   type ModelGroupsConfig,
 } from '../../../shared/modelGroups.js';
@@ -63,6 +64,25 @@ describe('provider routes', () => {
     const paused = effective({ routes: [], autoSources: { 'auto:openai': [{ providerId: 'openai', off: true }] } }, [GATEWAY, SUBSCRIPTION, ORGANIZATION, OTHER]);
     expect(paused.sourceRoutes?.[0].sources).toEqual([{ providerId: 'openai', off: true }, { providerId: 'byok-1' }]);
     expect(childrenOf(paused, 'auto:openai').every((route) => route.candidates.filter((candidate) => candidate.providerId === 'openai').every((candidate) => candidate.off === true))).toBe(true);
+  });
+
+  // 2026-11-26 用户要求补齐：合并整个供应商的路由也能加例外(时段改走、带图只用能看图的来源)，对它展开出的每个模型都生效。
+  // 失效后果：例外存了但选路时不看，或目标路由删掉后还指着它。最小输入：一条自己建的、一条自动合成的，各带一条时段例外。
+  it('carries the exceptions of a provider route into every model it expands into, and drops them with their target', () => {
+    const night = { when: { type: 'hours' as const, from: 22, to: 6 }, use: { type: 'route' as const, routeId: 'cheap' } };
+    const cheap = { id: 'cheap', name: 'Cheap', strategy: 'order' as const, candidates: [{ agentKind: 'codex' as const, providerId: 'xd', model: 'openai/gpt-6-luna' }] };
+    const stored = normalizeModelGroupsConfig({
+      routes: [cheap],
+      sourceRoutes: [{ id: 'mine', name: 'Mine', strategy: 'order', sources: [{ providerId: 'openai' }], exceptions: [night] }],
+      autoExceptions: { 'auto:openai': [night, { when: { type: 'image' }, use: 'vision' }] },
+    });
+    const config = effective(stored, [GATEWAY, SUBSCRIPTION, ORGANIZATION]);
+    expect(childrenOf(config, 'mine').every((route) => JSON.stringify(route.exceptions) === JSON.stringify([night]))).toBe(true);
+    expect(childrenOf(config, 'auto:openai').every((route) => route.exceptions?.length === 2)).toBe(true);
+    // 目标路由删掉：两处的时段例外都去掉，图片例外留着。
+    const pruned = normalizeModelGroupsConfig({ ...stored, routes: [] });
+    expect(pruned.sourceRoutes?.[0].exceptions).toBeUndefined();
+    expect(pruned.autoExceptions).toEqual({ 'auto:openai': [{ when: { type: 'image' }, use: 'vision' }] });
   });
 
   it('combines providers of one brand automatically and expands the route per model', () => {

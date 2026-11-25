@@ -69,10 +69,10 @@ export function readModelGroupsConfig(): ModelGroupsConfig {
  */
 export function writeModelGroupsConfig(
   config: ModelGroupsConfig,
-  keep: readonly ('sourceRoutes' | 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources')[] = [],
+  keep: readonly ('sourceRoutes' | 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources' | 'autoExceptions')[] = [],
 ): ModelGroupsConfig {
   const before = readStored();
-  const pick = <K extends 'sourceRoutes' | 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources'>(key: K) => (keep.includes(key) ? before[key] : config[key]);
+  const pick = <K extends 'sourceRoutes' | 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources' | 'autoExceptions'>(key: K) => (keep.includes(key) ? before[key] : config[key]);
   store.writePatch({
     routes: config.routes.filter((route) => !route.parent),
     sourceRoutes: (pick('sourceRoutes') ?? []).filter((route) => !route.auto),
@@ -80,6 +80,7 @@ export function writeModelGroupsConfig(
     autoStrategy: pick('autoStrategy') ?? {},
     autoSwitchOff: pick('autoSwitchOff') ?? [],
     autoSources: pick('autoSources') ?? {},
+    autoExceptions: pick('autoExceptions') ?? {},
   });
   const saved = readModelGroupsConfig();
   log.info('model groups written', { routes: saved.routes.filter((route) => !route.parent).length, sourceRoutes: saved.sourceRoutes?.length ?? 0 });

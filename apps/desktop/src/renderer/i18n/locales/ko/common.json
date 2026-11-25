@@ -22680,7 +22680,8 @@
         "picked": "이것을 사용",
         "standby": "대기",
         "skipped": "건너뜀",
-        "unavailable": "이 라우트에 지금 쓸 수 있는 소스가 없습니다. 새 작업은 원래 선택한 모델을 사용합니다."
+        "unavailable": "이 라우트에 지금 쓸 수 있는 소스가 없습니다. 새 작업은 원래 선택한 모델을 사용합니다.",
+        "model": "시험할 모델"
       },
       "deleteRoute": "이 라우트 삭제",
       "deleteRouteConfirmTitle": "'{{name}}'을(를) 삭제할까요?",

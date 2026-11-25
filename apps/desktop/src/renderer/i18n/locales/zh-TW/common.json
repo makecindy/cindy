@@ -22679,7 +22679,8 @@
         "picked": "用它",
         "standby": "備用",
         "skipped": "跳過",
-        "unavailable": "這個路由裡現在沒有能用的來源，新任務會用你原來選的模型。"
+        "unavailable": "這個路由裡現在沒有能用的來源，新任務會用你原來選的模型。",
+        "model": "試哪個模型"
       },
       "deleteRoute": "刪除這個路由",
       "deleteRouteConfirmTitle": "刪除「{{name}}」？",

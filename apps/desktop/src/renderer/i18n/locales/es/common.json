@@ -22985,7 +22985,8 @@
         "picked": "Usar esta",
         "standby": "En reserva",
         "skipped": "Omitida",
-        "unavailable": "Ninguna fuente de esta ruta se puede usar ahora. Una tarea nueva usará el modelo que tenías seleccionado."
+        "unavailable": "Ninguna fuente de esta ruta se puede usar ahora. Una tarea nueva usará el modelo que tenías seleccionado.",
+        "model": "Modelo que probar"
       },
       "deleteRoute": "Eliminar esta ruta",
       "deleteRouteConfirmTitle": "¿Eliminar «{{name}}»?",

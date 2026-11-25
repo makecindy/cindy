@@ -47,6 +47,7 @@ import {
   type ModelGroupStrategy,
 } from '../../../shared/modelGroups';
 import { ModelGroupRouteExceptions } from './ModelGroupRouteExceptions';
+import { ModelGroupRoutePreview } from './ModelGroupRoutePreview';
 import {
   ModelSettingsElsewhere,
   ProviderAllocationRows,
@@ -131,13 +132,10 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
     if (entry?.tab === 'model-groups') setView({ kind: 'list' });
   }, [entry, activation]);
   const captureScroll = useSettingsSubpageScroll(scrollRef, subpageOpen ? 1 : 0, activation);
-  const [preview, setPreview] = useState<{ routeId: string; result: ModelGroupResolveResult } | null>(null);
-  const [previewing, setPreviewing] = useState(false);
 
   const save = useCallback(async (change: (latest: ModelGroupsConfig) => ModelGroupsConfig) => {
     try {
       await saveModelGroups(change);
-      setPreview(null);
       return true;
     } catch (error) {
       log.warn('save failed', error);
@@ -187,17 +185,6 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
       candidates.splice(index + delta, 0, item);
       return { ...current, candidates };
     });
-    const runPreview = async () => {
-      setPreviewing(true);
-      try {
-        setPreview({ routeId: route.id, result: await window.electronAPI.modelGroups.resolve({ selection: { type: 'route', id: route.id }, dryRun: true }) });
-      } catch (error) {
-        log.warn('preview failed', error);
-        toast.error(t('modelGroups.settings.saveFailed'));
-      } finally {
-        setPreviewing(false);
-      }
-    };
     const removeRoute = async () => {
       if (!await confirm({
         title: t('modelGroups.settings.deleteRouteConfirmTitle', { name: route.name }),
@@ -208,7 +195,6 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
       })) return;
       if (await save((latest) => ({ ...latest, routes: latest.routes.filter((item) => item.id !== route.id) }))) back();
     };
-    const shown = preview?.routeId === route.id ? preview.result : null;
     const full = route.candidates.length >= MODEL_GROUP_LIMITS.candidates;
     return (
       <SettingsPageScope>
@@ -408,50 +394,8 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
               onChange={(next) => updateRoute(route.id, (current) => ({ ...current, exceptions: next }))}
             />
 
-            <SettingsSection
-              title={t('modelGroups.settings.try.title')}
-              description={t('modelGroups.settings.try.hint')}
-              action={
-                <Button variant="secondary" size="md" loading={previewing} disabled={route.candidates.length === 0} onClick={() => void runPreview()}
-                  data-settings-search-action="Previews which source a route would pick; changes no setting">
-                  <Play size={14} aria-hidden />
-                  {t('modelGroups.settings.try.run')}
-                </Button>
-              }
-            >
-              {shown && (
-                <SettingsCard data-testid="model-group-preview" className="animate-fade-in">
-                  {shown.outcome === 'routed' && shown.exceptions && shown.exceptions.length > 0 && (
-                    <SettingsBlock data-model-group-preview-exception className="text-13 leading-[1.5] text-[var(--text-secondary)]">
-                      {modelGroupExceptionText(shown.exceptions, t)}
-                    </SettingsBlock>
-                  )}
-                  {shown.outcome !== 'routed' && (
-                    <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.try.unavailable')}</SettingsBlock>
-                  )}
-                  {shown.trace.map((entry) => {
-                    const Icon = entry.state === 'picked' ? Check : entry.state === 'standby' ? CornerDownRight : Minus;
-                    // 同一个来源的几个模型共用一份额度：备用的那几行不再重复写「先留着」。
-                    const picked = shown.trace.find((item) => item.state === 'picked');
-                    const sameQuota = entry.state === 'standby' && !!picked?.quota && !!entry.quota
-                      && picked.quota.resetAtMs === entry.quota.resetAtMs && picked.quota.usedPercent === entry.quota.usedPercent;
-                    // 名字与路线里那一行相同(含运行位置)；设置页还没读到那边的目录时用这次选路读到的。
-                    const names = namesOf(entry, entry);
-                    const title = `${names.modelName} · ${names.sourceLabel}`;
-                    return (
-                      <SettingsRow
-                        key={modelGroupCandidateKey(entry)}
-                        data-model-group-trace={entry.state}
-                        lead={<Icon size={15} aria-hidden className={entry.state === 'picked' ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)]'} />}
-                        title={title}
-                        tag={t(`modelGroups.settings.try.${entry.state}`)}
-                        hint={modelGroupWhyText(sameQuota ? { ...entry, quota: null } : entry, t, locale)}
-                      />
-                    );
-                  })}
-                </SettingsCard>
-              )}
-            </SettingsSection>
+            {/* 配置一改，旧的试用结果作废：换 key 重来。 */}
+            <ModelGroupRoutePreview key={JSON.stringify(route)} routes={[route]} nameCandidates={allCandidates} />
 
             <SettingsSection>
               <SettingsCard>

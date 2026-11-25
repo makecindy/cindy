@@ -170,6 +170,8 @@ export interface ModelGroupSourceRoute {
   effort?: string;
   /** 「出问题时自动换来源」(model-groups.md §4.5)，与普通路由同一个开关：默认开，只在关掉时存 false；展开出来的每条路由沿用它。 */
   autoSwitch?: false;
+  /** 例外(时段改走、带图只用能看图的来源)，与普通路由同一种；展开出来的每条路由沿用它。 */
+  exceptions?: ModelGroupException[];
   auto?: true;
   hidden?: true;
 }
@@ -191,6 +193,8 @@ export interface ModelGroupsConfig {
    * 成员本身仍跟着供应商的连接增减：这里没列到的新成员排在后面，已经不在的留着(重新连上时回到原来的位置)。
    */
   autoSources?: Record<string, ModelGroupSource[]>;
+  /** 用户给自动供应商路由加的例外：键是路由 id。 */
+  autoExceptions?: Record<string, ModelGroupException[]>;
 }
 
 /** 用了这个模式的任务出问题时是否自动换来源(默认开)。 */
@@ -471,6 +475,12 @@ function normalizeSources(raw: unknown): ModelGroupSource[] {
   }).slice(0, MODEL_GROUP_LIMITS.candidates);
 }
 
+function normalizeExceptions(raw: unknown): ModelGroupException[] {
+  return (Array.isArray(raw) ? raw : []).map(exception)
+    .filter((item): item is ModelGroupException => !!item)
+    .slice(0, MODEL_GROUP_LIMITS.exceptions);
+}
+
 function normalizeSourceRoute(raw: unknown): ModelGroupSourceRoute | null {
   if (!raw || typeof raw !== 'object') return null;
   const value = raw as Record<string, unknown>;
@@ -482,9 +492,11 @@ function normalizeSourceRoute(raw: unknown): ModelGroupSourceRoute | null {
     ?? MODEL_GROUP_STRATEGIES.find((item) => item === value.strategy) ?? 'expiring';
   const effort = text(value.effort, MODEL_GROUP_LIMITS.effort);
   const auto = isAutoModelGroupId(id);
+  const exceptions = normalizeExceptions(value.exceptions);
   return {
     id, name, strategy, sources, ...(effort ? { effort } : {}),
     ...(value.autoSwitch === false ? { autoSwitch: false as const } : {}),
+    ...(exceptions.length > 0 ? { exceptions } : {}),
     ...(auto ? { auto: true as const } : {}),
     ...(auto && value.hidden === true ? { hidden: true as const } : {}),
   };
@@ -532,13 +544,17 @@ export function modelGroupHoursMatch(when: { from: number; to: number; days?: re
 }
 
 /** 去掉指向自己或已不存在路线的时段例外，以及重复的图片例外。 */
-function pruneExceptions(route: ModelGroupRoute, routeIds: ReadonlySet<string>): ModelGroupRoute {
-  if (!route.exceptions) return route;
+function pruneExceptionList(list: readonly ModelGroupException[], selfId: string, routeIds: ReadonlySet<string>): ModelGroupException[] {
   let image = false;
-  const exceptions = route.exceptions.filter((item) => {
+  return list.filter((item) => {
     if (item.when.type === 'image') return !image && (image = true);
-    return item.use !== 'vision' && item.use.routeId !== route.id && routeIds.has(item.use.routeId);
+    return item.use !== 'vision' && item.use.routeId !== selfId && routeIds.has(item.use.routeId);
   });
+}
+
+function pruneExceptions<T extends { id: string; exceptions?: ModelGroupException[] }>(route: T, routeIds: ReadonlySet<string>): T {
+  if (!route.exceptions) return route;
+  const exceptions = pruneExceptionList(route.exceptions, route.id, routeIds);
   if (exceptions.length > 0) return { ...route, exceptions };
   const rest = { ...route };
   delete rest.exceptions;
@@ -579,13 +595,20 @@ export function normalizeModelGroupsConfig(raw: unknown): ModelGroupsConfig {
     .map(([id, sources]) => [id, normalizeSources(sources)] as const)
     .filter(([, sources]) => sources.length > 0)
     .slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT)) as Record<string, ModelGroupSource[]>;
+  // 时段例外只能改走用户排的路由(展开出来的不存盘，没有稳定的目标)；目标删了一并去掉。
+  const autoExceptions = Object.fromEntries(Object.entries(value.autoExceptions && typeof value.autoExceptions === 'object' ? value.autoExceptions : {})
+    .filter(([id]) => isAutoModelGroupId(id) && id.length <= MODEL_GROUP_LIMITS.id)
+    .map(([id, list]) => [id, pruneExceptionList(normalizeExceptions(list), id, routeIds)] as const)
+    .filter(([, list]) => list.length > 0)
+    .slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT)) as Record<string, ModelGroupException[]>;
   return {
     routes: routes.map((route) => pruneExceptions(route, routeIds)),
-    ...(sourceRoutes.length > 0 ? { sourceRoutes } : {}),
+    ...(sourceRoutes.length > 0 ? { sourceRoutes: sourceRoutes.map((route) => pruneExceptions(route, routeIds)) } : {}),
     ...(hiddenAuto.length > 0 ? { hiddenAuto } : {}),
     ...(autoSwitchOff.length > 0 ? { autoSwitchOff } : {}),
     ...(Object.keys(autoStrategy).length > 0 ? { autoStrategy } : {}),
     ...(Object.keys(autoSources).length > 0 ? { autoSources } : {}),
+    ...(Object.keys(autoExceptions).length > 0 ? { autoExceptions } : {}),
   };
 }
 

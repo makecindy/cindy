@@ -22680,7 +22680,8 @@
         "picked": "用之",
         "standby": "備用",
         "skipped": "略過",
-        "unavailable": "此路今無可用之源，新差事將用君原擇之模型。"
+        "unavailable": "此路今無可用之源，新差事將用君原擇之模型。",
+        "model": "試何模型"
       },
       "deleteRoute": "刪此路",
       "deleteRouteConfirmTitle": "刪「{{name}}」？",
