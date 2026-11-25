@@ -8783,6 +8783,7 @@
             "message_body": "message body",
             "tool_body": "tool result",
             "sidebar_navigation": "sidebar navigation",
+            "workdir_menu": "working directory menu",
             "session_menu": "task menu",
             "settings_section": "settings page",
             "composer_completion": "input completion",

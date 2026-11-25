@@ -58,6 +58,8 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
  */
 const SESSION_GRACE_MIN_MS = 250;
 const SESSION_GRACE_MAX_MS = 1500;
+/** 经中转的 Agent-Net 连接建好后，控制流上的会话宣告还要穿过中转与 worker（实测 2.8～3.4 秒）：给中转路径留够首轮窗口。 */
+const RELAY_SESSION_GRACE_MAX_MS = 4000;
 /** 被控端记着的「经会话来、还没回结果」的请求 id 上限；超过时丢掉最早的（它的结果改走 Device Link，对端按 id 配不上而丢弃）。 */
 const MAX_TRACKED_REQUESTS = 4096;
 /** 和 Device Link 一样（client.ts SLOW_REQUEST_WARN_MS）：请求超过这么久（加上通道本来就要挂起的时长）记一条慢请求。 */
@@ -268,8 +270,11 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     if (this.stopped || this.available(deviceId)) return 0;
     const connectedAt = this.options.connectedAt?.(deviceId);
     if (connectedAt == null) return 0;
+    const relayed = this.options.path?.(deviceId) === 'relay';
     const rtt = this.options.rttMs?.(deviceId);
-    const grace = rtt == null ? SESSION_GRACE_MAX_MS : Math.min(SESSION_GRACE_MAX_MS, SESSION_GRACE_MIN_MS + 4 * rtt);
+    const grace = relayed
+      ? RELAY_SESSION_GRACE_MAX_MS
+      : rtt == null ? SESSION_GRACE_MAX_MS : Math.min(SESSION_GRACE_MAX_MS, SESSION_GRACE_MIN_MS + 4 * rtt);
     return Math.max(0, grace - (performance.now() - connectedAt));
   }
 
@@ -302,7 +307,8 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   async openAttested(dst: string, payload: unknown, timeoutMs: number | undefined,
     primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload> {
     if (this.stopped || isScopedPeer(dst)) return primary();
-    const deadline = performance.now() + ATTESTED_SESSION_WAIT_MS;
+    const waitMs = this.options.path?.(dst) === 'relay' ? RELAY_SESSION_GRACE_MAX_MS : ATTESTED_SESSION_WAIT_MS;
+    const deadline = performance.now() + waitMs;
     while (!this.stopped && !this.available(dst) && performance.now() < deadline) {
       // 连上了、过了宽限期仍没有会话：是没有会话层的 Agent-Net 旧版，不再等。
       if (this.options.connectedAt?.(dst) != null && this.sessionPendingMs(dst) === 0) break;

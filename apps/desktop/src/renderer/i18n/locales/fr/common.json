@@ -8857,6 +8857,7 @@
             "message_body": "corps du message",
             "tool_body": "résultat de l’outil",
             "sidebar_navigation": "navigation latérale",
+            "workdir_menu": "menu du répertoire de travail",
             "session_menu": "menu de la tâche",
             "settings_section": "page des paramètres",
             "composer_completion": "saisie semi-automatique",

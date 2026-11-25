@@ -476,6 +476,8 @@ export interface InboundDispatchPorts {
   syncRemoteControlAccessGeneration: typeof syncRemoteControlAccessGeneration;
   requestPluginOauth?: typeof requestPluginOauth;
   invalidatePluginOauth?: typeof invalidatePluginOauth;
+  /** An omitted verdict leaves channel handling to the existing IPC path. */
+  hasLocalChannel?: (channel: string) => boolean | undefined;
   dispatchLocalInvoke: typeof dispatchLocalInvoke;
   assertRemoteBotInvocationAllowed: typeof assertRemoteBotInvocationAllowed;
   projectRemoteSessionResult: typeof projectRemoteSessionResult;
@@ -544,6 +546,7 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     syncRemoteControlAccessGeneration,
     requestPluginOauth = unavailable('requestPluginOauth'),
     invalidatePluginOauth,
+    hasLocalChannel,
     dispatchLocalInvoke,
     assertRemoteBotInvocationAllowed,
     projectRemoteSessionResult,
@@ -5221,6 +5224,10 @@ async function runAuthorizedInvoke(
   return withRemoteDbAdmission(payload?.channel, () => executeRemoteInvoke(src, payload, timing));
 }
 
+function channelNotAllowed(channel: string): InvokeResultPayload {
+  return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${channel}' not allowed remotely` } };
+}
+
 async function executeRemoteInvoke(src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming): Promise<InvokeResultPayload> {
   if (!payload || typeof payload.channel !== 'string') {
     return { ok: false, error: { code: 'INTERNAL', message: 'malformed invoke payload' } };
@@ -5259,10 +5266,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
   // 双层校验之二:allowlist(权威)
   if (!REMOTE_INVOKE_ALLOWLIST.has(payload.channel)) {
     log.warn(`blocked non-allowlisted channel from ${shortId(src)}: ${payload.channel}`);
-    return {
-      ok: false,
-      error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed remotely` },
-    };
+    return channelNotAllowed(payload.channel);
   }
 
   if (payload.channel === FILE_PEER_CHANNEL) {
@@ -5611,6 +5615,11 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     // session, so it gets full pushes again until its next page read.
     if (payload.channel === 'local-db:messages:list' && typeof args[0] === 'string') subscriptions.forgetFoldedAcrossLink(src, args[0]);
     if (hasRemoteBotSessionLookup()) await timing.measure('authorizeBefore', () => assertRemoteBotInvocationAllowed(args, payload.channel));
+    const isTurnChangeAction = payload.channel === 'maker:turn-change-set:apply';
+    const isTaskTagsAction = payload.channel === TASK_TAG_CHANNEL;
+    if (!isTurnChangeAction && !isTaskTagsAction && hasLocalChannel?.(payload.channel) === false) {
+      return channelNotAllowed(payload.channel);
+    }
     const listingCapabilities = payload.channel === 'maker:provider:list'
       ? invokeControllerCapabilities(payload)
       : [];
@@ -5631,7 +5640,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
       () =>
-          payload.channel === 'maker:turn-change-set:apply'
+          isTurnChangeAction
             ? (() => {
                 if (!remoteTurnChangeAction) throw new Error('[UNSUPPORTED_CAPABILITY] Turn restore is unavailable');
                 return remoteTurnChangeAction(args[0], args[1], args[2], async () => {
@@ -5645,7 +5654,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
                   }
                 });
               })()
-            : payload.channel === TASK_TAG_CHANNEL
+            : isTaskTagsAction
             ? executeTaskTags(args[0] as TaskTagRequest)
             : dispatchLocalInvoke(
         payload.channel,

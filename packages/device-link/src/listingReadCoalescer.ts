@@ -3,7 +3,13 @@ import {
   normalizeRemoteListingArgsKey,
   type InvokePriority,
 } from './invokePolicy.js';
-import { DeviceLinkError, isScopedPeer, type InvokePayload, type InvokeResultPayload } from './protocol.js';
+import {
+  DeviceLinkError,
+  DeviceLinkUnsentInvokeError,
+  isScopedPeer,
+  type InvokePayload,
+  type InvokeResultPayload,
+} from './protocol.js';
 
 const MAX_FLIGHT_SLOTS = 256;
 
@@ -84,6 +90,24 @@ function cloneInvokeResult(result: InvokeResultPayload): InvokeResultPayload {
   return JSON.parse(JSON.stringify(result)) as InvokeResultPayload;
 }
 
+/**
+ * Clones per-waiter failure instances so caller-side tracking (e.g. WeakSet
+ * breaker markers) remains isolated per invocation while preserving the exact
+ * transport error class and `inFlight` state (`DeviceLinkUnsentInvokeError` iff
+ * the underlying sender yielded before writing any wire fragment).
+ */
+function cloneFlightFailureForWaiter(error: unknown): unknown {
+  if (error instanceof DeviceLinkUnsentInvokeError) {
+    return new DeviceLinkUnsentInvokeError();
+  }
+  if (error instanceof DeviceLinkError) {
+    return Object.assign(new DeviceLinkError(error.code, error.message), {
+      ...(error.inFlight !== undefined ? { inFlight: error.inFlight } : {}),
+    });
+  }
+  return error;
+}
+
 function ensureFreshSessionListPayload(payload: InvokePayload, requireFresh: boolean): InvokePayload {
   if (!requireFresh || payload.channel !== 'local-db:sessions:list') return payload;
   const rawArgs = payload.args ? [...payload.args] : [];
@@ -119,7 +143,13 @@ export interface ListingCoalesceExecutionContext {
  * Controller-side single-flight coalescer for idempotent listing reads
  * (`local-db:sessions:list` and `maker:schedule:list-sidebar-index-runs`).
  *
- * - Isolation: keyed by `(scopeKey, dst, normalizedArgsKey, priority)`.
+ * - Isolation: keyed by `(scopeKey, dst, rerouteMode, normalizedArgsKey, priority)`.
+ * - Pre-send reroute & error isolation: only the underlying sender emits
+ *   `DeviceLinkUnsentInvokeError` (`inFlight: false`) when zero wire fragments were written.
+ *   Reroute-capable callers are partitioned from direct callers and each waiter receives a
+ *   cloned error instance preserving `DeviceLinkUnsentInvokeError` vs plain `DeviceLinkError`
+ *   and `inFlight`, so unsent flights switch cleanly to a live standby session while
+ *   no-standby backpressure and already-sent (`inFlight: true`) failures never replay sent work.
  * - Per-caller exact budgets: every caller keeps its own `callDeadlineAt = enqueuedAt + timeoutMs`
  *   with no join-gap heuristics, no clock-equality checks, and no minimum floor that could
  *   extend a caller past its deadline. When an earlier shorter-budget flight times out, any
@@ -151,7 +181,8 @@ export class RemoteListingReadCoalescer {
     });
     if (!normalized) return null;
 
-    const baseKey = `${scopeKey}\u0000${dst}\u0000${normalized.key}`;
+    const rerouteMode = typeof options?.canRerouteBeforeWrite === 'function' ? 'reroute' : 'direct';
+    const baseKey = `${scopeKey}\u0000${dst}\u0000${rerouteMode}\u0000${normalized.key}`;
     const fgKey = `${baseKey}\u0000foreground`;
     const bgKey = `${baseKey}\u0000background`;
 
@@ -360,13 +391,7 @@ export class RemoteListingReadCoalescer {
               continue;
             }
             waiter.settled = true;
-            waiter.reject(
-              error instanceof DeviceLinkError
-                ? Object.assign(new DeviceLinkError(error.code, error.message), {
-                    ...(error.inFlight !== undefined ? { inFlight: error.inFlight } : {}),
-                  })
-                : error,
-            );
+            waiter.reject(cloneFlightFailureForWaiter(error));
           }
         }
         this.advanceSlot(slot, flight);

@@ -472,6 +472,141 @@ describe('AgentNetSessionLinks', () => {
     }
   });
 
+  /** 测试价值
+   * - 生产入口与可观察结果：routeSessionPeers + 真实 DeviceLinkClient（含 RemoteListingReadCoalescer）+ AgentNetSessionLinks。
+   *   验证单发与并发合并的列表读在发送前拥塞让路、无备用会话背压、无备用转有备用过渡，以及已写出（inFlight=true）超时
+   *   四条路径下的选路结果与按调用方错误实例隔离。
+   * - Bug／规则依据：PR #12658 discussion_r4691756694（合并层克隆错误时剥离 DeviceLinkUnsentInvokeError，导致未写出的列表读无法切到备用会话）
+   *   与 docs/dev-rules/remote-and-mobile-adaptation.md「控制端列表读单飞与每位调用者剩余预算续读」。
+   * - 现有覆盖缺口：上方回环测试仅验证不进列表合并器的 REMOTE_RESOURCE_LIST_CHANNEL，未覆盖经 RemoteListingReadCoalescer 的列表通道。
+   * - 最小失败输入：① Device Link 积压 27 帧未确认推送且备用会话在线时发起单笔与并发 local-db:sessions:list；② 会话断开且积压满 64 帧时并发列表读；
+   *   ③ 无备用入队的未写出读取等待期间备用会话上线后的新列表读；④ 积压排空后丢弃 invoke-result 触发已写出超时（inFlight=true）。
+   * - tier：integration（本机内存 relay + 真实 WebSocket DeviceLinkClient + 内存 SessionPeer，<500ms）。 */
+  it('reroutes unsent coalesced listing reads to a standby session while preserving error isolation, no-standby backpressure, and in-flight boundaries', async () => {
+    const relay = await createRelayFixture();
+    const client = (id: string) => new DeviceLinkClient({
+      getWsUrl: () => relay.url, getToken: async () => 'fixture-' + id,
+      getHello: () => ({ deviceName: id, platform: 'darwin', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (url, headers) => new WebSocket(url, { headers }),
+      timing: { transportRetryIntervalMs: 120 }, logger: quiet,
+    });
+    const host = client('a-host');
+    const viewer = client('b-controller');
+    const { links, sessions, connect } = pair();
+    const receiver = routeSessionPeers(host, links.host);
+    const sender = routeSessionPeers(viewer, links.controller);
+    const received: string[] = [];
+    receiver.onFrame((env) => {
+      if (env.kind === 'link-open') receiver.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke') return;
+      const { channel, args } = env.payload as InvokePayload;
+      const via = links.host.ownsRequest(env.src!, env.id!) ? 'session' : 'device-link';
+      const tag = typeof args?.[0] === 'number' ? `${channel}:${args[0]}` : channel;
+      received.push(`${via}:${tag}`);
+      receiver.sendInvokeResult(env.src!, env.id!, { ok: true, result: `${via}:${tag}` });
+    });
+    try {
+      host.start();
+      viewer.start();
+      await vi.waitFor(() => expect(host.getStatus() === 'online' && viewer.getStatus() === 'online').toBe(true));
+      await viewer.openLink('a-host', openPayload);
+
+      // 1) Available standby session + 27 unacknowledged pushes on ready Device Link:
+      // both single and concurrent coalesced listing reads yield before write and coalesce onto the standby session.
+      relay.dropFrames((env) => env.src === 'b-controller' && env.dst === 'a-host' && env.kind === 'push');
+      for (let i = 0; i < 27; i++) viewer.sendPush('a-host', 'maker:event', i);
+      expect(viewer.isLinkReady('a-host')).toBe(true);
+      expect(viewer.getReliableSendQueueDepth('a-host')).toBe(27);
+
+      await expect(
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [10, 'active'] }),
+      ).resolves.toEqual({ ok: true, result: 'session:local-db:sessions:list:10' });
+
+      const [coalescedA, coalescedB] = await Promise.all([
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [] }),
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [20, 'all'] }),
+      ]);
+      expect(coalescedA).toEqual({ ok: true, result: 'session:local-db:sessions:list' });
+      expect(coalescedB).toEqual({ ok: true, result: 'session:local-db:sessions:list' });
+      expect(received).toEqual([
+        'session:local-db:sessions:list:10',
+        'session:local-db:sessions:list',
+      ]);
+
+      // Direct pre-write yield on both coalescible channels preserves DeviceLinkUnsentInvokeError subclass AND per-caller identity isolation.
+      const [unsentA, unsentB] = await Promise.all([
+        viewer.invoke('a-host', { channel: 'maker:schedule:list-sidebar-index-runs', args: [] }, 500, { canRerouteBeforeWrite: () => true }).catch((e) => e),
+        viewer.invoke('a-host', { channel: 'maker:schedule:list-sidebar-index-runs', args: [] }, 500, { canRerouteBeforeWrite: () => true }).catch((e) => e),
+      ]);
+      expect(unsentA).toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(unsentB).toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(unsentA).not.toBe(unsentB);
+      expect((unsentA as DeviceLinkError).inFlight).toBe(false);
+
+      // 2) No standby session: while a no-standby listing read is queued unwritten at depth 27, bringing the session
+      // back up lets a new routed listing read with identical args bypass the stuck direct slot immediately; and at
+      // full 64-frame capacity with no standby session, callers get isolated plain BACKPRESSURE errors.
+      sessions.controller!.dispose('DEVICE_OFFLINE');
+      sessions.host!.dispose('DEVICE_OFFLINE');
+      const queuedWithoutStandby = sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [25] }, 2_000);
+      connect();
+      await expect(
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [25] }, 500),
+      ).resolves.toEqual({ ok: true, result: 'session:local-db:sessions:list:25' });
+
+      sessions.controller!.dispose('DEVICE_OFFLINE');
+      sessions.host!.dispose('DEVICE_OFFLINE');
+      while (viewer.getReliableSendQueueDepth('a-host') < 64) {
+        viewer.sendPush('a-host', 'maker:event', 999);
+      }
+      const [backpressureA, backpressureB] = await Promise.all([
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [40] }, 500).catch((e) => e),
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [40] }, 500).catch((e) => e),
+      ]);
+      expect(backpressureA).toBeInstanceOf(DeviceLinkError);
+      expect(backpressureB).toBeInstanceOf(DeviceLinkError);
+      expect(backpressureA).not.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(backpressureB).not.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(backpressureA).not.toBe(backpressureB);
+      expect((backpressureA as DeviceLinkError).code).toBe('BACKPRESSURE');
+      expect((backpressureA as DeviceLinkError).inFlight).not.toBe(true);
+
+      // Drain backlog and restore the standby session so Device Link becomes writable again.
+      relay.dropFrames(() => false);
+      await expect(queuedWithoutStandby).resolves.toEqual({ ok: true, result: 'device-link:local-db:sessions:list:25' });
+      await vi.waitFor(() => expect(viewer.getReliableSendQueueDepth('a-host')).toBe(0), { timeout: 4_000 });
+      connect();
+
+      // 3) Already-sent (inFlight=true) failure on writable Device Link: must NOT reroute/replay that call on session,
+      // must preserve isolated inFlight=true errors, and subsequent reads escape via targetReturnStalled onto session.
+      received.length = 0;
+      relay.dropFrames((env) => env.kind === 'invoke-result');
+      const [inFlightErrA, inFlightErrB] = await Promise.all([
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [99] }, 120).catch((e) => e),
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [99] }, 120).catch((e) => e),
+      ]);
+      expect(inFlightErrA).toBeInstanceOf(DeviceLinkError);
+      expect(inFlightErrB).toBeInstanceOf(DeviceLinkError);
+      expect(inFlightErrA).not.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(inFlightErrA).not.toBe(inFlightErrB);
+      expect((inFlightErrA as DeviceLinkError).code).toBe('INVOKE_TIMEOUT');
+      expect((inFlightErrA as DeviceLinkError).inFlight).toBe(true);
+      expect(received).toEqual(['device-link:local-db:sessions:list:99']);
+
+      await expect(
+        sender.invoke('a-host', { channel: 'local-db:sessions:list', args: [99] }, 500),
+      ).resolves.toEqual({ ok: true, result: 'session:local-db:sessions:list:99' });
+      expect(received).toEqual([
+        'device-link:local-db:sessions:list:99',
+        'session:local-db:sessions:list:99',
+      ]);
+    } finally {
+      viewer.stop();
+      host.stop();
+      await relay.close();
+    }
+  });
+
   // Mac Studio -> MacBook: the old link stays ready with 27 queued frames. Follow a fresh
   // desktop lease through start, input and stop, and distinguish a local withdrawal from errors on the wire.
   it('moves an unwritten negotiation and keeps only the granted desktop lease on its session', async () => {
@@ -572,6 +707,98 @@ describe('AgentNetSessionLinks', () => {
     // 不是从会话来的请求，结果交回 Device Link。
     controller.sendInvokeResult('a-host', 'request-from-device-link', { ok: true, result: 1 });
     expect(calls).toEqual(['device-link:invoke', 'device-link:openLink', 'device-link:sendInvokeResult']);
+  });
+
+  // 2026-11-24 远程 Agent 断链回归：① 经中转的 Agent-Net 连接握手后会话宣告常在 2.8～3.4 秒到达，原 1.5 秒上限提前落回 Device Link；
+  // ② 控制端发包小（willSendNow=true）、被控端回程堵着大包时，首个只读超时后后续远程 Agent poll/caps 与列表探测立即改走会话，
+  // 写操作仍走原链路保序，待旧流排空后重开链路切换到会话，不影响相邻对端。
+  it('waits past 1.5s for a relayed session, escapes return-path timeouts for remote-agent polls, and upgrades an idle Device Link on reopen', async ({ onTestFinished }) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    onTestFinished(() => { vi.useRealTimers(); });
+
+    const relayedConnectedAt = new Map<string, number>([['a-host', performance.now()]]);
+    const relayedPair = pair({
+      connected: false,
+      connectedAt: (id) => relayedConnectedAt.get(id) ?? null,
+      controllerPath: (id) => (id === 'a-host' ? 'relay' : 'direct'),
+    });
+    answerOnSession(relayedPair.links.host);
+    const relayedCalls: string[] = [];
+    const relayedRouter = routeSessionPeers(idleDeviceLink(relayedCalls), relayedPair.links.controller);
+    const relayedOpen = relayedRouter.openLink('a-host', openPayload);
+    setTimeout(relayedPair.connect, 2_800);
+    await vi.advanceTimersByTimeAsync(2_800);
+    await expect(relayedOpen).resolves.toMatchObject({ appVersion: 'host' });
+    expect(relayedCalls).toEqual([]);
+
+    const { links } = pair();
+    const sessionCalls: string[] = [];
+    links.host.onFrame((env) => {
+      if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke') return;
+      const { channel, args } = env.payload as InvokePayload;
+      const op = (args?.[0] as { op?: string } | undefined)?.op;
+      sessionCalls.push(op ? `${channel}:${op}` : channel);
+      links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'session' });
+    });
+    const dlCalls: string[] = [];
+    let hostReturnStalled = true;
+    let hostPending = true;
+    let releasePreStallCall!: () => void;
+    const preStallGate = new Promise<void>((resolve) => { releasePreStallCall = resolve; });
+    const old = idleDeviceLink(dlCalls, 4);
+    old.isLinkReady = (dst) => dst === 'a-host' || dst === 'other-host';
+    old.isOutboundExplicitlyClosed = () => false;
+    old.hasPendingRequestsTo = (dst) => dst === 'a-host' && hostPending;
+    old.closeLink = (dst, reason) => { dlCalls.push(`device-link:closeLink:${dst}:${reason}`); };
+    old.invoke = async (dst, payload) => {
+      const op = (payload.args?.[0] as { op?: string } | undefined)?.op;
+      dlCalls.push(`device-link:invoke:${dst}:${op ? `${payload.channel}:${op}` : payload.channel}`);
+      if (dst === 'a-host' && op === 'pre-stall') {
+        await preStallGate;
+        return { ok: true, result: 'pre-stall-device-link' };
+      }
+      if (dst === 'a-host' && hostReturnStalled) {
+        const timeout = new DeviceLinkError('INVOKE_TIMEOUT', 'return path blocked behind large response');
+        timeout.inFlight = true;
+        throw timeout;
+      }
+      return { ok: true, result: 'device-link' };
+    };
+    const router = routeSessionPeers(old, links.controller);
+    // An older slow request is already in flight on Device Link when a concurrent read times out
+    // and triggers the guardInvoke -> recoverLink -> openLink callback.
+    const preStallInFlight = router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'pre-stall' }] });
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(
+      router.invoke('a-host', { channel: 'local-db:sessions:list', args: [] }).catch(async (err) => {
+        // Recovery openLink while hasPendingRequestsTo('a-host') === true stays on Device Link
+        // and must NOT erase targetReturnStalled.
+        await expect(router.openLink('a-host', openPayload)).resolves.toMatchObject({ appVersion: 'dl' });
+        throw err;
+      }),
+    ).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+    expect(links.controller.ownsOutbound('a-host')).toBe(false);
+    // Subsequent eligible reads (including remote-agent poll/caps and list probes) still bypass the stalled Device Link return path.
+    await expect(router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll', runs: [] }] })).resolves.toEqual({ ok: true, result: 'session' });
+    await expect(router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'caps' }] })).resolves.toEqual({ ok: true, result: 'session' });
+    // Even if the older pre-stall request finishes while newer responses remain backed up, reads keep bypassing Device Link.
+    releasePreStallCall();
+    await expect(preStallInFlight).resolves.toEqual({ ok: true, result: 'pre-stall-device-link' });
+    await expect(router.invoke('a-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'session' });
+    // Non-idempotent remote-agent commands stay ordered on the existing stream; once a post-stall call succeeds, the stall mark clears.
+    await vi.advanceTimersByTimeAsync(10);
+    hostReturnStalled = false;
+    await expect(router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'call', method: 'send' }] })).resolves.toEqual({ ok: true, result: 'device-link' });
+    await expect(router.invoke('a-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'device-link' });
+    await expect(router.invoke('other-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'device-link' });
+    // Once in-flight work drains, re-opening upgrades the ready Device Link to the live session and closes both cleanly on user disconnect.
+    hostPending = false;
+    await expect(router.openLink('a-host', openPayload)).resolves.toMatchObject({ appVersion: 'host' });
+    expect(links.controller.ownsOutbound('a-host')).toBe(true);
+    router.closeLink('a-host', 'user');
+    expect(sessionCalls).toEqual(['maker:remote-agent:v1:poll', 'maker:remote-agent:v1:caps', 'local-db:sessions:list']);
+    expect(dlCalls).toContain('device-link:closeLink:a-host:user');
   });
 
   it('waits for the session of a peer that just connected instead of settling on Device Link, and only within the grace period', async ({ onTestFinished }) => {

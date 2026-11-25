@@ -133,6 +133,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       'cny-model': { providerId: 'xd', modelId: 'cny-model', currency: 'CNY', source: 'gateway', approximate: false, inputPerMtok: 20, outputPerMtok: 80 },
     } }),
     providers: async () => ({ providers: [] }),
+    executeTaskTags: async request => {
+      assert.deepEqual(request, { action: 'list' });
+      return { tags: [], sessions: [] };
+    },
     setSessionEffort: async () => ({}),
     setSessionFastMode: async () => ({}),
     setSessionThinkingEnabled: async () => ({}),
@@ -208,12 +212,19 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     client.start();
     await waitFor(() => client.getStatus() === 'online');
     await client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+    // The first invocation uses one of the last registered ordinary handlers (no startup delay).
+    // Assigning old-peer "unsupported" here would survive the end of startup in a controller cache.
+    const first = await client.invoke('host', { channel: 'maker:session:prewarm', args: ['task', {}] });
+    assert.deepEqual(first, { ok: true, result: { accepted: false } });
     const reply = await client.invoke('host', { channel: 'local-db:sessions:list', args: [] });
     assert.equal(reply.ok, true, JSON.stringify(reply));
     assert.deepEqual(reply.result.map(row => row.id), ['task']);
     return client;
   }
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
+  // Task tags have a dedicated dispatch port, separate from the ordinary IPC registry.
+  const tags = await clients[2].invoke('host', { channel: 'local-db:task-tags:execute', args: [{ action: 'list' }] });
+  assert.deepEqual(tags, { ok: true, result: { tags: [], sessions: [] } });
   /*
    * Test value (engineering-conventions §3.2)
    * - Production entry and observable result: createHostDeviceLink over the real loopback relay;
@@ -690,6 +701,20 @@ test('Host device-link refuses provider-share guests and the platform features i
   await waitFor(() => desktop.getStatus() === 'online' && guest.getStatus() === 'online');
   await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
 
+  // The genuine relay invoke path used to report IPC_ERROR when an allowlisted handler was absent.
+  // Clients cache only CHANNEL_NOT_ALLOWED as unsupported. Extend the existing loopback fixture
+  // with one request per affected capability, including the goal write that must not reach a handler.
+  for (const channel of [
+    'model-groups:get', 'maker:subscription-accounts', 'maker:goal:get-status', 'maker:goal:set',
+    'maker:model-context-limit:get', 'maker:api-key:present',
+  ]) {
+    const reply = await desktop.invoke('host', { channel, args: [] });
+    assert.deepEqual(reply, {
+      ok: false,
+      error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${channel}' not allowed remotely` },
+    }, channel);
+  }
+
   const filePeer = await desktop.invoke('host', { channel: FILE_PEER_CHANNEL, args: [{}] });
   assert.deepEqual(filePeer, { ok: false, error: { code: 'IPC_ERROR', message: 'FILE_PEER_UNAVAILABLE' } });
   const remoteDesktop = await desktop.invoke('host', { channel: REMOTE_DESKTOP_CHANNEL, args: [{}] });
@@ -702,7 +727,7 @@ test('Host device-link refuses provider-share guests and the platform features i
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
     assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);
   }
-  assert.deepEqual(reached, [], 'neither refusal may reach the Host service');
+  assert.deepEqual(reached, [], 'no refused channel may reach the Host service');
 });
 
 /*
@@ -721,7 +746,7 @@ test('Host device-link refuses provider-share guests and the platform features i
  */
 const PINNED_DISPATCH_PORTS = {
   read: ['sameAccountCapabilities', 'TASK_TAG_CHANNEL', 'app', 'readDeviceLinkSettings', 'noteControllerAccessAllowed',
-    'noteControllerAccessDenied', 'syncRemoteControlAccessGeneration', 'invalidatePluginOauth',
+    'noteControllerAccessDenied', 'syncRemoteControlAccessGeneration', 'invalidatePluginOauth', 'hasLocalChannel',
     'assertRemoteBotInvocationAllowed', 'projectRemoteSessionResult', 'projectRemoteBotPush', 'hasRemoteBotSessionLookup',
     'setRemoteBotSessionLookup', 'captureSharedTaskPeer', 'captureSharedTaskPush', 'assertSharedTaskInvoke',
     'sharedTaskMetadataTopic', 'sharedTaskAccessFailure', 'MAX_SHARED_TASK_TOPICS', 'refreshSharedTaskPeer',

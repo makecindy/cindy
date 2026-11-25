@@ -18,7 +18,7 @@
   `ifNoneMatch` 标签换 `notModified` 或小增量）。每位调用者始终持有自身 `callDeadlineAt = enqueuedAt + timeoutMs`：
   若前序较短预算读取先超时，仍有剩余预算的同乘调用者按精确剩余时长（`callDeadlineAt - now`，无加入时差启发式、
   无延长调用期限的下限）自动续读；不同 `limit`、`status`、`includePinned`、跨账号 scoped 对端与各调用方的
-  `preSend`／`beforeDispatch` 严格隔离。排队期间无法共享已有准入期限的调用方独立排队，发送前拥塞直接交还给调用方。Agent-Net 的共享预算调用者由会话层按正文流
+  `preSend`／`beforeDispatch` 严格隔离。排队期间无法共享已有准入期限的调用方独立排队；备用会话可用与无备用会话的调用分槽隔离，底层传输在零分片写出前让路（`DeviceLinkUnsentInvokeError`，`inFlight=false`）时按每位调用者克隆保留该类型以切到备用 Agent-Net 会话，无备用会话的发送前拥塞与已写出（`inFlight=true`）失败则保留原 `DeviceLinkError` 与错误实例隔离、不重放已发请求。Agent-Net 的共享预算调用者由会话层按正文流
   进展决定超时；需要更早截止的调用者单独结算。合并层放弃最后一位调用者时，通过会话层已有的取消帧停止底层请求。
 - **弱网滞后期的列表增量基准保留**：`InvokeDeltaBases` 按 `(src, requestKey)` 同时保留控制端已确认持有的
   基准（`confirmed`）与最新发出的快照（`latest`），且 `local-db:sessions:list` 的缓存键与基准键忽略布尔型
@@ -702,8 +702,11 @@ Device Link 上有活着的链路时照旧走 Device Link，那上面已确认�
 对端把结果放进本机已经没有的旧可靠链路，59 秒后超时、再引发重开。包这一层后，原客户端返回它自己的方法（`connectionFor`、
 `crossAccountConnection`）改为返回这一层，入口里「`connectionFor(peer) === client`」这类身份比较仍然成立。
 和对端的连接刚建好（或换了一条）时，双方的会话宣告还要一来一回：这段时间里 Device Link 上又没有这个对端的链路状态，
-建链和调用先等会话，最多到连接建好后 250 毫秒 + 4 个往返（往返未知时 1.5 秒，上限也是 1.5 秒），会话一到就放行；
-到时还没有（对端没启用会话）就走 Device Link，之后不再等。不等的话这一次会落到 Device Link 并一直用到那条链路断开。
+建链和调用先等会话，直连最多到连接建好后 250 毫秒 + 4 个往返（往返未知时 1.5 秒，上限 1.5 秒），经 Agent-Net 中转的路径上限放宽到 4 秒
+（2026-11-24 实测中转路径从连接建好到会话宣告就绪常需 2.8～3.4 秒，1.5 秒上限会导致提前回落 Device Link），会话一到就放行；
+到时还没有（对端没启用会话）就走 Device Link，之后不再等。即使首轮建链早于会话到达落在了 Device Link 上：若控制端发包小但被控端回程大包堵住导致
+`INVOKE_TIMEOUT`，后续同账号幂等只读请求（含 `maker:remote-agent:v1` 的 `poll` / `caps` 与列表探测）立即改走已就绪的会话，写操作仍保序留在原流；
+一旦旧 Device Link 流无待发帧与在途请求，下一次 `openLink` 重开即把控制链路平滑切到会话（用户显式断开时同步关闭两条出站状态）。
 连接建好的时刻取自 Agent-Net 主连接的路径通知（`agentNetRuntime.ts`）。
 还没有连接时（2026-11-17 真机发现，同账号所有开着 Agent-Net 的设备都有）：
 - 对方此刻在 Agent-Net 目录里在线（本机刚启动，或连接刚断）：先拨它（`PortableSocket.connectSession`），会话一到就放行，最多 1.5 秒，不等拨号结束；
@@ -1223,11 +1226,18 @@ HTTP MCP，每次握手都要跨机往返。Claude Code 默认 `MCP_TIMEOUT` 只
 既有 `user-revoked`，不自动续跑或让供应商组换电脑；中转也不发换电脑凭证。旧版 `aborted` 无法
 区分退出和主动断开：兼容旧版退出意味着旧版一键断开可能连回一次，关闭远程控制则被权限门拒绝。
 
-分享在已经发生链路不可达后临时报 `ACCESS_REVOKED` / `REMOTE_AGENT_SHARE_UNAVAILABLE`，
-只保留原两分钟窗口，不重置截止时间；首次即撤权仍立即失败。恢复只作用于当前 run 的连接与
+分享名单未确认等临时故障可能首先报 `REMOTE_AGENT_SHARE_UNAVAILABLE`，此时也进入已有两分钟
+拉取恢复窗口，沿原游标重拉，不重发正文；错误仍携带明确撤权或关闭远控的底层 code 时，不按
+临时不可用启动恢复。已经发生链路不可达后临时报 `ACCESS_REVOKED` / `REMOTE_AGENT_SHARE_UNAVAILABLE`，
+只保留原窗口，不重置截止时间；首次即撤权、明确暂停／移除与远端撤权终态仍立即失败。恢复只作用于当前 run 的连接与
 当前电脑的拉取器，不重连共享 relay、不绕过授权。两控制端共用一个 host 的回归中，一个 run 消失并
 重新打开，另一控制端仍能发送、原生会话不变。实现及回归：`remote-agent/controller/`、
 `remote-agent/__tests__/connectionPool.test.ts`、`poll.test.ts` 与 `provider-group/service.ts`。
+
+远程 Agent 分享调用层保留拒绝的原始底层 code，供应商策略拒绝保留固定的
+`REMOTE_AGENT_PROVIDER_NOT_ALLOWED` 标记；分享专属展示前缀不替代拒绝证据。
+首次明确撤权、关闭远控或供应商策略拒绝不会被 `IPC_ERROR + SHARE_UNAVAILABLE` 翻译成临时重试。
+回归经 `remoteInvokeSendGuard.test.ts` 的真实分享调用适配器、invoker 与 poller 串联验证。
 
 直连分享任务持久位置仍为 `share:<id>`，该位置代表 O，不等于实际执行电脑 M。重启恢复通过
 现有直连句柄向 O 为原 M 申请新许可并探测 M，空闲 run 重开也先完成相同授权，不改选电脑。
@@ -1245,7 +1255,10 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
 
 1. **故障层级**：只处理同一台被控端的事件拉取。`poll` 遇到 peer reset、超时、背压或链路暂断时，
    用同样的游标重拉(0.5s 起指数退避，上限 5s；另一个在途 poll 成功即提前恢复)；连续 2 分钟拉不到
-   才结束这台被控端上的任务并提示对方不可达。本机「目标设备无响应」熔断打开后的快速失败
+   才结束这台被控端上的任务并提示对方不可达。若该被控端此刻仍在持续向本机送达业务分片或推送（`DeviceLinkClient`
+   分片重组期同步更新 `lastBusinessReceivedAt`，慢中转上单个数百 KB 回包堵住队头时对端并非失联），`responsivenessTracker`
+   在 90 秒耐心上限内不把并发超时计入 `DEVICE_UNRESPONSIVE` 熔断，`RemoteAgentPoller` 也暂缓推进 2 分钟失联计时（总上限
+   `REMOTE_AGENT_CONGESTED_GIVE_UP_MS = 5 分钟`，防止单向刷推送而 `poll` 永久卡死时无限挂起）。本机「目标设备无响应」熔断打开后的快速失败
    (`DEVICE_UNRESPONSIVE`)同样按链路暂断重拉：它不发网络请求，熔断按自己的单飞探测恢复，
    不能绕过两分钟窗口直接结束任务（2026-11-04：一次 1–2 分钟的出口抖动让后台 PR 跟进轮次
    当场失败）。单个任务的流数据与游标对不上时只结束那一个任务。

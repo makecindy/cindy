@@ -52,6 +52,7 @@ import {
   MAX_FRAME_BYTES,
   SERVER_CAPABILITY_NOTIFY,
   DeviceLinkError,
+  DeviceLinkUnsentInvokeError,
   isScopedPeer,
   type Envelope,
   type HelloPayload,
@@ -669,13 +670,7 @@ export interface DeviceLinkPeerTransportReset {
 // A local transport can confirm revocation before it has a socket to emit 4410.
 export class DeviceLinkRegistrationRemovedError extends Error {}
 
-/** Local-only signal. The reliable sender has retained no business frame and wrote no fragment. */
-export class DeviceLinkUnsentInvokeError extends DeviceLinkError {
-  constructor() {
-    super('BACKPRESSURE', 'unsent invoke yielded to an available route');
-    this.inFlight = false;
-  }
-}
+export { DeviceLinkUnsentInvokeError } from './protocol.js';
 
 export function classifyConnectionIssue(
   code?: number,
@@ -4239,6 +4234,7 @@ export class DeviceLinkClient {
         assembly.chunks.set(segment.index, parsed.data);
         assembly.bytes += bytes;
         stream.bufferedBytes += bytes;
+        if (isBusinessTraffic(env)) peer.lastBusinessReceivedAt = this.monotonicNow();
       }
       stream.assemblies.set(meta.seq, assembly);
       if (assembly.chunks.size === assembly.total) {
