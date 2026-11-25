@@ -4889,7 +4889,7 @@
         "groupCount_other": "{{count}} groupes",
         "groupCount_many": "{{count}} groupes",
         "customCount_one": "{{count}} avec ses propres réglages",
-        "customCount_other": "{{count}} avec ses propres réglages",
+        "customCount_other": "{{count}} avec leurs propres réglages",
         "customCount_many": "{{count}} avec leurs propres réglages",
         "refresh": "Actualiser",
         "loading": "Chargement des groupes…",
