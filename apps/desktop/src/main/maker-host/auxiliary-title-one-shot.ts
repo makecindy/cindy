@@ -6,7 +6,7 @@
  * is unavailable; an explicit custom/env chain remains fail-closed.
  */
 
-import type { AgentKind } from '@cindy/maker-core';
+import type { MakerEngineKindWire } from '../../shared/agentKindConversion.js';
 import { AUTO_TITLE_MAX_CHARS } from '@cindy/maker-shared/session-title';
 
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -51,7 +51,7 @@ const DEFAULT_DEPS: AuxiliaryTitleRuntimeDeps = {
 
 type TitleRequest = {
   sessionId: string;
-  agentKind: AgentKind;
+  agentKind: MakerEngineKindWire;
   prompt: string;
   signal?: AbortSignal;
 };
@@ -60,7 +60,7 @@ export interface AuxiliaryTextRequest {
   source?: string;
   automaticTitle?: boolean;
   sessionId?: string;
-  agentKind: AgentKind;
+  agentKind: MakerEngineKindWire;
   prompt: string;
   maxTokens: number;
   timeoutMs: number;
@@ -102,34 +102,30 @@ export async function requestAuxiliaryText(
       && getEffectiveAuxiliaryModelChainSnapshot() === auxiliaryChainSnapshot
       && currentModels === snapshot;
   };
-  // `route.model` 是 agent 实际选中的模型(Codex 默认模型在 thread/start 后才知道)。
+  const builtinAgentKind = args.agentKind === 'acp' ? null : args.agentKind;
   const beforeSessionAgentDispatch = async (route?: { model?: string }) =>
-    !(await isAgentOneShotRouteDisabled(args.agentKind, route?.model)) && await beforeDispatch();
+    builtinAgentKind !== null
+    && !(await isAgentOneShotRouteDisabled(builtinAgentKind, route?.model))
+    && await beforeDispatch();
   const result = await deps.requestText(args.prompt, {
     source: args.source, sessionId: args.sessionId, automaticTitle: args.automaticTitle,
     maxTokens: args.maxTokens,
     timeoutMs: args.timeoutMs,
-    // Short budgets cannot afford provider-default thinking. Messages /
-    // chat routes receive their native disable flag; Responses routes use the
-    // lowest supported effort because that protocol has no off value.
     disableReasoning: true,
     reasoningEffort: 'minimal',
     responseInstructions: args.responseInstructions,
     signal: args.signal,
-    // Settings may change while OAuth refresh/credential discovery awaits.
     beforeDispatch,
   });
   if (result.ok) return { ok: true, text: result.text };
-  // A signed-out user still has the current session agent available. Only
-  // the automatic chain may use that same-agent fallback; custom and env
-  // chains are explicit routing decisions and must remain fail-closed.
   const canFallbackToSessionAgent = args.sessionAgentFallback !== false
+    && builtinAgentKind !== null
     && auxiliaryChain.source === 'auto'
-    && agentSupportsOneShot(args.agentKind)
+    && agentSupportsOneShot(builtinAgentKind)
     && await beforeSessionAgentDispatch();
-  if (canFallbackToSessionAgent) {
+  if (canFallbackToSessionAgent && builtinAgentKind !== null) {
     try {
-      const fallbackText = await getMaker().oneShot(args.agentKind, args.prompt, {
+      const fallbackText = await getMaker().oneShot(builtinAgentKind, args.prompt, {
         source: args.source, sessionId: args.sessionId,
         maxTokens: args.maxTokens,
         timeoutMs: args.timeoutMs,
@@ -164,6 +160,9 @@ async function generateAuxiliaryTitle(
   }, deps);
   if (!result.ok) {
     log.warn('auxiliary title model failed', { reason: result.reason });
+    if (args.agentKind === 'acp' && result.reason === 'no_candidate') {
+      return { status: 'unsupported-provider' };
+    }
     return { status: 'failed' };
   }
   const title = normalizeAuxiliaryTitle(result.text);

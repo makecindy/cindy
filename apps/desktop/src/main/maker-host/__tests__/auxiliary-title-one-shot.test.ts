@@ -260,4 +260,29 @@ describe('auxiliary task-title routing', () => {
     await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, runtimeDeps())).resolves.toBeNull();
     expect(h.oneShot).not.toHaveBeenCalled();
   });
+
+  it('supports ACP sessions through the auxiliary chain without falling back to a built-in agent oneShot', async () => {
+    h.requestText.mockResolvedValue({ ok: true, text: '插件引擎标题' });
+    await expect(
+      generateTitleWithAuxiliaryModelResult(
+        { sessionId: 'acp-1', agentKind: 'acp', prompt: 'Summarize' },
+        {},
+        runtimeDeps(),
+      ),
+    ).resolves.toEqual({ status: 'ok', title: '插件引擎标题' });
+    expect(h.requestText).toHaveBeenCalledOnce();
+    expect(h.oneShot).not.toHaveBeenCalled();
+  });
+
+  it('returns unsupported-provider for ACP when no auxiliary candidate is available and skips agent fallback', async () => {
+    h.requestText.mockResolvedValue({ ok: false, reason: 'no_candidate', attempts: [] });
+    await expect(
+      generateTitleWithAuxiliaryModelResult(
+        { sessionId: 'acp-2', agentKind: 'acp', prompt: 'Summarize' },
+        {},
+        runtimeDeps(),
+      ),
+    ).resolves.toEqual({ status: 'unsupported-provider' });
+    expect(h.oneShot).not.toHaveBeenCalled();
+  });
 });

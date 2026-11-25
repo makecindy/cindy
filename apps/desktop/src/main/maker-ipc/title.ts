@@ -15,7 +15,7 @@
 
 import { ipcMain } from 'electron';
 import { activeOwnerScopeKey } from '../appSessionState.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, dbToMakerEngineKind, type MakerEngineKindWire } from '../../shared/agentKindConversion.js';
 import { eq } from 'drizzle-orm';
 
 import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
@@ -108,7 +108,7 @@ async function listConnectedProvidersForAgent(agentKind: AgentKind): Promise<Pro
  */
 export async function generateMakerSessionTitle(
   message: string,
-  agentKind: AgentKind,
+  agentKind: MakerEngineKindWire,
   sessionId?: string,
 ): Promise<string | null> {
   // 空消息(如仅图片/附件的首条输入)不发标题请求:LLM 收到空素材会把
@@ -134,7 +134,7 @@ export async function generateMakerSessionTitle(
 /** regenerate 的依赖注入面——单测用内存实现替换 DB / LLM 调用。 */
 export interface RegenerateTitleDeps {
   /** 读会话 agentKind。会话不存在 → null(直接放弃)。 */
-  readSessionAgentKind: (sessionId: string) => Promise<AgentKind | null>;
+  readSessionAgentKind: (sessionId: string) => Promise<MakerEngineKindWire | null>;
   /** 素材包:对话开场 + 最近 limit 条非空消息(与 sessionTaskSummary 同可见性口径)。 */
   collectMaterial: (
     sessionId: string,
@@ -144,22 +144,19 @@ export interface RegenerateTitleDeps {
   /** 用给定 prompt 走 title oneShot 通道。 */
   generateTitle: (
     sessionId: string,
-    agentKind: AgentKind,
+    agentKind: MakerEngineKindWire,
     prompt: string,
   ) => Promise<TitleOneShotResult>;
 }
 
-async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind | null> {
+async function readSessionAgentKindFromDb(sessionId: string): Promise<MakerEngineKindWire | null> {
   const [row] = await getDbClient()
     .drizzle.select({ agentKind: sessions.agentKind, status: sessions.status })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
   if (!row || row.status === 'deleted') return null;
-  if (row.agentKind === 'acp') {
-    throwIpcError('TITLE_PROVIDER_UNSUPPORTED', 'The current provider does not support AI naming');
-  }
-  return dbToMakerAgentKind(row.agentKind);
+  return dbToMakerEngineKind(row.agentKind);
 }
 
 const defaultRegenerateDeps: RegenerateTitleDeps = {

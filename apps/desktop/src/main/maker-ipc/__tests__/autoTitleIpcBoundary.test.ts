@@ -291,8 +291,30 @@ describe('maker title IPC — 本机 / device-link 来源边界', () => {
     expect(h.drainPersistQueue).toHaveBeenCalledOnce();
   });
 
+  it('活跃 ACP 任务走辅助模型链生成标题，并在无可用辅助候选时透传 TITLE_PROVIDER_UNSUPPORTED', async () => {
+    vi.mocked(getDbClient).mockReturnValue({
+      drizzle: {
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: async () => [{ agentKind: 'acp', status: 'active' }],
+            }),
+          }),
+        }),
+      },
+    } as unknown as ReturnType<typeof getDbClient>);
+
+    await expect(invokeRegenerate('s1')).resolves.toEqual({ title: '任务标题' });
+    expect(h.generateTitleResult).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 's1', agentKind: 'acp' }),
+      expect.anything(),
+    );
+
+    h.generateTitleResult.mockResolvedValueOnce({ status: 'unsupported-provider' });
+    await expect(invokeRegenerate('s1')).rejects.toThrow('[TITLE_PROVIDER_UNSUPPORTED]');
+  });
+
   it.each([
-    { label: 'ACP', rows: [{ agentKind: 'acp', status: 'active' }], code: 'TITLE_PROVIDER_UNSUPPORTED' },
     { label: '缺失', rows: [], code: 'NOT_FOUND' },
     { label: '软删除 ACP', rows: [{ agentKind: 'acp', status: 'deleted' }], code: 'NOT_FOUND' },
   ])('$label 任务返回 $code 且不调用标题模型', async ({ rows, code }) => {

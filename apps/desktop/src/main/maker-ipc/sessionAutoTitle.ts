@@ -23,7 +23,7 @@
  * 线上出现过。这类占位记进归属表,等用户真正打字时再替换成他写的内容。
  */
 
-import type { AgentKind } from '@cindy/maker-core';
+import type { MakerEngineKindWire } from '../../shared/agentKindConversion.js';
 import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
 import {
@@ -47,7 +47,7 @@ export interface SessionAutoTitleRequest {
   text: string;
   /** Readable placeholder when generation also consumes supplementary material. */
   placeholderText?: string;
-  agentKind: AgentKind;
+  agentKind: MakerEngineKindWire;
   /**
    * text 是否为用户真正写下的文字。false = 本地合成的描述(附件文件名 / 被引用
    * 会话标题等):只写占位标题,不调用标题模型。缺省 true。
@@ -78,7 +78,7 @@ export interface SessionAutoTitleDeps {
     sessionId: string,
     synthesizedPlaceholder?: string,
   ) => Promise<OverwritableAutoTitleTarget | null>;
-  generateTitle: (message: string, agentKind: AgentKind, sessionId?: string) => Promise<string | null>;
+  generateTitle: (message: string, agentKind: MakerEngineKindWire, sessionId?: string) => Promise<string | null>;
   /** 条件写:仅当当前标题等于 expectedTitle 时才落库(默认期望草稿占位)。 */
   persistTitle: (sessionId: string, title: string, expectedTitle?: string) => Promise<boolean>;
 }
