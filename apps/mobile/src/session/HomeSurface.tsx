@@ -3687,7 +3687,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         ListFooterComponent={(taskSuggestionsMode === 'footer' ? (
           <RemoteTaskSuggestions mode="footer" onNewSession={() => openSuggestedSession()}
             onSelect={openSuggestedSession}
-            onDismiss={canDismissTaskSuggestionFooter ? dismissTaskSuggestionFooter : undefined} />
+            onHideFooterSuggestions={canDismissTaskSuggestionFooter ? dismissTaskSuggestionFooter : undefined} />
         ) : null) ?? undefined}
         renderItem={renderHomeRow}
       />

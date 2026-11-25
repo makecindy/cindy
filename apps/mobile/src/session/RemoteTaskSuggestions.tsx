@@ -43,19 +43,19 @@ export function RemoteTaskSuggestions({
   mode,
   onNewSession,
   onSelect,
-  onDismiss,
+  onHideFooterSuggestions,
 }: {
   mode: "empty" | "footer";
   onNewSession(): void;
   onSelect(id: RemoteTaskSuggestionId): void;
-  onDismiss?(): void;
+  onHideFooterSuggestions?(): void;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [batch, setBatch] = useState(0);
   const empty = mode === "empty";
-  const dismiss = empty ? undefined : onDismiss;
+  const dismiss = empty ? undefined : onHideFooterSuggestions;
   return (
     <View style={styles.root} testID={`home.taskSuggestions.${mode}`}>
       {empty ? (
