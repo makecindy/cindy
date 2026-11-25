@@ -99,6 +99,29 @@ it('expands a restored-open sidebar and closes without a renderer-derived shrink
   expect(result.current.collapsed).toBe(true);
 });
 
+// Linux regression (#11560): on Wayland the compositor pushes the new viewport to
+// the renderer before the windowSidebarExpansion invoke reply returns (setBounds
+// blocks the main thread ~3-7ms). The hook must unfreeze on that early viewport
+// change — armed before the IPC call — rather than wait for the reply, or the
+// frozen layout lingers an extra frame and the open direction shows a blank band.
+it('unfreezes on the viewport resize that lands before the open reply', async () => {
+  const resolvers: ((delta: number) => void)[] = [];
+  window.electronAPI = { windowSidebarExpansion: vi.fn(
+    () => new Promise<number>((done) => { resolvers.push(done); }),
+  ) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  expect(result.current.frozenWidth).toBe(800);
+  // Viewport grows to the predicted target before the invoke replies.
+  window.innerWidth = 1800;
+  act(() => { window.dispatchEvent(new Event('resize')); });
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 1600 });
+  // A reply arriving after settle is a no-op.
+  await act(async () => { resolvers[0](800); });
+  expect(result.current.collapsed).toBe(false);
+});
+
 // Codex review P2 on #11561: a superseded invocation rejecting after the newer
 // reply armed its resize listener must not detach that listener — the release
 // ref already belongs to the newer transition, so a late rejection must no-op.

@@ -22,6 +22,8 @@ export function useSidebarPresentation(
   const previous = useRef<boolean | null>(null);
   const latest = useRef(presentation);
   latest.current = presentation;
+  /** Viewport width before the last expansion — the size a collapse returns to. */
+  const preExpandViewport = useRef<number | null>(null);
 
   useLayoutEffect(() => {
     const wasCollapsed = previous.current;
@@ -43,39 +45,61 @@ export function useSidebarPresentation(
     // The sidebar consumes this same snapshot, so it cannot begin its own animation yet.
     setPresentation({ ...latest.current, ...(openingFromMount ? { collapsed: true } : {}), frozenWidth: width });
     const viewport = window.innerWidth;
+    const requested = collapsed ? 0 : expansion.current();
+    if (!collapsed) preExpandViewport.current = viewport;
     let active = true;
     let frame: number | null = null;
+    let growth: number | null = null;
+    const started = performance.now();
     const listener = new AbortController();
     const stopWaiting = () => {
       active = false;
       listener.abort();
       if (frame !== null) cancelAnimationFrame(frame);
     };
-    void resize(collapsed ? 0 : expansion.current()).then((delta) => {
+    const settle = (observed: number) => {
       if (!active) return;
-      const growth = typeof delta === 'number' ? delta : 0;
-      const target = viewport + growth;
-      const started = performance.now();
-      const finish = () => {
-        if (!active) return;
-        // The invoke reply can arrive before Chromium observes the new native bounds.
-        // A hidden/closing window must not retain a frozen layout indefinitely.
-        if (growth !== 0 && Math.abs(window.innerWidth - target) > 1 && performance.now() - started < 1000) {
-          if (frame === null) {
-            frame = requestAnimationFrame(() => {
-              frame = null;
-              finish();
-            });
-          }
-          return;
-        }
-        stopWaiting();
-        setPresentation({ collapsed, instant: growth !== 0,
-          ...(!collapsed ? { expandedWidth: width + growth } : {}),
-        });
-      };
-      finish();
-      if (active) window.addEventListener('resize', finish, { signal: listener.signal });
+      stopWaiting();
+      setPresentation({ collapsed, instant: observed !== 0,
+        ...(!collapsed ? { expandedWidth: width + observed } : {}),
+      });
+    };
+    const atViewport = (candidate: number): boolean => Math.abs(window.innerWidth - candidate) <= 1;
+    // On Linux/Wayland setBounds is synchronous and its reply outlives the viewport
+    // landing, so a reply-gated unfreeze keeps the frozen layout up an extra frame.
+    // Settle the moment the viewport reaches the expected size instead; only trust a
+    // change that matches the resize we asked for, so an unrelated resize is ignored.
+    const tryViewport = (): void => {
+      if (!active) return;
+      const observed = window.innerWidth - viewport;
+      if (observed === 0) return;
+      if (collapsed ? observed > 0 : observed < 0) return;
+      if (growth !== null) {
+        if (!atViewport(viewport + growth)) return;
+        settle(growth);
+        return;
+      }
+      const expected = collapsed ? preExpandViewport.current : viewport + requested;
+      if (expected === null || expected === undefined || !atViewport(expected)) return;
+      settle(observed);
+    };
+    const poll = (): void => {
+      if (!active) return;
+      tryViewport();
+      if (!active) return;
+      // A hidden/closing window must not retain a frozen layout indefinitely.
+      if (performance.now() - started >= 1000) { settle(growth ?? window.innerWidth - viewport); return; }
+      frame = requestAnimationFrame(poll);
+    };
+    // Arm before the IPC call: the native bounds can land before the reply returns.
+    window.addEventListener('resize', tryViewport, { signal: listener.signal });
+    frame = requestAnimationFrame(poll);
+    void resize(requested).then((delta) => {
+      if (!active) return;
+      growth = typeof delta === 'number' ? delta : 0;
+      // No native change → nothing to wait for; run the ordinary animation now.
+      if (growth === 0) { settle(0); return; }
+      tryViewport();
     }).catch(() => {
       if (active) setPresentation({ collapsed, instant: false });
     });
