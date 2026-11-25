@@ -204,12 +204,16 @@ function PluginDirectory() {
         marketItemMatchesPlugin(item, managed),
       )
     : undefined;
+  // An installed-plugin update reads its market detail before the controller starts; that preparation already
+  // holds the one management slot, so a market install cannot start beside it.
+  const [updatePreparing, setUpdatePreparing] = useState(false);
   const managementPending =
-    !!management.state &&
-    (management.state.busy ||
-      ["running", "confirmation", "unknown"].includes(
-        management.state.outcome,
-      ));
+    updatePreparing ||
+    (!!management.state &&
+      (management.state.busy ||
+        ["running", "confirmation", "unknown"].includes(
+          management.state.outcome,
+        )));
   const managementAvailable =
     management.state?.capability === "supported" &&
     !management.state.errorCode &&
@@ -241,6 +245,8 @@ function PluginDirectory() {
         });
     },
   });
+  const liveMarketBusy = useRef(market.installBusy);
+  liveMarketBusy.current = market.installBusy;
   const marketDetail = selected ? null : market.detail;
   const marketView = {
     ...market,
@@ -248,6 +254,13 @@ function PluginDirectory() {
       detailGeneration.current += 1;
       setSelected(undefined);
       market.openDetail(item);
+    },
+    // Pull-to-refresh and "Retry" on the market alone also look for computers again: after a failed lookup the
+    // market has no target and its own refresh would do nothing. A search shows both lists; the installed
+    // refresh already does the lookup there.
+    refresh: async () => {
+      if (!query.trim()) devices.refresh();
+      await market.refresh();
     },
   };
 
@@ -731,7 +744,7 @@ function PluginDirectory() {
               }
               onRefresh={() => {
                 if (showInstalled) void refreshDirectory();
-                if (showMarket) void market.refresh();
+                if (showMarket) void marketView.refresh();
               }}
               tintColor={colors.textSecondary}
             />
@@ -906,23 +919,31 @@ function PluginDirectory() {
       );
     } else if (action === "update" && marketItem && managed) {
       const displayed = marketItem;
+      // A market install that started anyway (same frame) wins; this update then stops before begin.
+      const updateCurrent = () => current() && !liveMarketBusy.current;
+      setUpdatePreparing(true);
       try {
         const client = createPluginManagementClient({
           invoke,
           deviceId: row.host.deviceId,
-          isCurrent: current,
+          isCurrent: updateCurrent,
         });
         const next = await client.detail(displayed.pluginId);
-        if (!current()) return;
+        if (!updateCurrent()) return;
         if (next.releaseId !== displayed.releaseId) {
           await controller.refresh();
           if (current()) Alert.alert(t("plugins.management.releaseChanged"));
           return;
         }
-        await controller.install(next, managed);
+        // The controller is busy from here on; the preparation flag can be released once it has started.
+        const started = controller.install(next, managed);
+        setUpdatePreparing(false);
+        await started;
         reportPreflightFailure();
       } catch {
         if (current()) Alert.alert(t("plugins.management.state.readFailed"));
+      } finally {
+        setUpdatePreparing(false);
       }
     }
   };

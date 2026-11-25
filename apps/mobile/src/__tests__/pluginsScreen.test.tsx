@@ -22,6 +22,7 @@ const fixture = vi.hoisted(() => ({
   management: { state: null, controller: null } as any,
   marketManagement: { state: null, controller: null } as any,
   marketRead: vi.fn(),
+  devicesRefresh: vi.fn(),
   enabled: true,
   online: true,
   focused: true,
@@ -189,7 +190,7 @@ vi.mock("@/device-link/useDeviceManagement", () => ({
             },
             ...fixture.extraDevices,
           ],
-    refresh() {},
+    refresh: () => fixture.devicesRefresh(),
   }),
 }));
 const row = () => ({
@@ -1017,6 +1018,50 @@ function realManagementHost() {
   });
   return { plugin, market, snapshot };
 }
+// Codex review (c656f8da): on a wide screen the market stays beside an installed detail. While an update read its
+// market detail, the market could start an install, and both reached begin with two consent sheets.
+it("holds the management slot while an update reads its market detail, so the market cannot install beside it", async () => {
+  const { snapshot, market } = realManagementHost();
+  fixture.width = 900;
+  const other = { ...marketItem("other", "Other"), pluginId: "market/other" };
+  let releaseDetail!: () => void;
+  const held = new Promise<void>((resolve) => { releaseDetail = resolve; });
+  let holdUpdateDetail = true;
+  fixture.wire.mockImplementation(async (_host: string, channel: string, args: any[], options: any) => {
+    options?.preSend?.();
+    if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
+    const request = args[0];
+    if (request.actionId === "management:snapshot") {
+      if (request.input?.read === "capabilities") return { result: { catalogPaging: true } };
+      if (request.input?.read === "catalog") return { result: marketPage([other]) };
+      return { result: snapshot };
+    }
+    if (request.actionId === "management:market-detail") {
+      if (request.input?.pluginId === market.pluginId && holdUpdateDetail) { holdUpdateDetail = false; await held; }
+      return { result: request.input?.pluginId === market.pluginId ? market : { ...other, manifest: { schemaVersion: 3, id: "other", name: "Other", version: "1" } } };
+    }
+    if (request.actionId === "management:begin") return { result: { operationId: request.input.operationId, phase: "running" } };
+    if (request.actionId === "management:operation") return { result: { operationId: request.input.operationId, phase: "running" } };
+    throw new Error("Unexpected action " + request.actionId);
+  });
+  await openDetail();
+  await act(async () => fixture.props.get("directory").onSegmentChange("market"));
+  await settle(14);
+  expect(shownMarket().items.map((item: any) => item.pluginId)).toEqual(["market/other"]);
+  await act(async () => { void fixture.props.get("header").rightToolbar.props.onAction("update"); });
+  await settle(6);
+  expect(holdUpdateDetail).toBe(false);
+  // The update is still reading its detail: the market offers no install and a press sends nothing.
+  expect(shownMarket()).toMatchObject({ canInstall: false });
+  await act(async () => shownMarket().install(shownMarket().items[0]));
+  await settle(14);
+  const begins = () => fixture.wire.mock.calls.map((call) => call[2]?.[0]).filter((request) => request?.actionId === "management:begin");
+  expect(begins()).toHaveLength(0);
+  await act(async () => { releaseDetail(); });
+  await settle(14);
+  // Only the update reaches begin.
+  expect(begins().map((request) => request.input.pluginId)).toEqual([market.pluginId]);
+});
 it("rejects a delayed native menu after changing selection through the real hook", async () => {
   realManagementHost();
   await openDetail();
@@ -1690,6 +1735,16 @@ async function openMarket() {
   await settle();
 }
 const shownMarket = () => fixture.props.get("directory").market;
+// Codex review (c656f8da): after a failed computer lookup the market alone has no target; refreshing it did nothing.
+it("looks for computers again when the market is refreshed without one", async () => {
+  fixture.devicesFailed = true;
+  marketWire(() => { throw new Error("no computer to read"); });
+  await openMarket();
+  expect(shownMarket().status).toBe("noComputer");
+  fixture.devicesRefresh.mockClear();
+  await act(async () => { await shownMarket().refresh(); });
+  expect(fixture.devicesRefresh).toHaveBeenCalledTimes(1);
+});
 it("asks to update an older computer instead of reading its whole market", async () => {
   const requests = marketWire((request) => {
     // Real wire shape: dispatch sends IPC_ERROR and unwrapInvoke throws the bare "[CODE] message".
