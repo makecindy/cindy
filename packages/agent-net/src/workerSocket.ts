@@ -30,6 +30,8 @@ export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
     lastKnownCertificateFor?(id: string): DeviceCertificate | undefined;
     /** This computer changed networks (see AgentNetWorkerSocket.networkChanged). */
     networkChanged?(): void;
+    /** Updates STUN servers on the running transport (e.g. peer official region STUN). */
+    setStunServers?(servers: readonly string[]): void;
     /** A relay connection of this socket is open now (see AgentNetWorkerSocket.relayConnected; event `relay`). */
     relayConnected?(): boolean;
     /** The last round trip to the relay, in ms (see AgentNetWorkerSocket.relayRttMs). */
@@ -182,7 +184,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       socket.worker.once('exit', () => { finish(new Error('AGENT_NET_WORKER_EXITED')); socket.dispose(1006); });
     });
     const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, onRelayReplaced, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
-      log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog,
+      log: _log, onLog: _onLog, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog,
       relayStuckMs: _stuck, onRelayClosed: _relayClosed, observeUdpTraffic, ...portable } = options;
     if (observeUdpTraffic) {
       // Only two integers cross the thread boundary. Sampling doesn't copy packets or post per-datagram messages.
@@ -212,6 +214,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     if (this.closed) return;
     for (const ws of this.network.values()) this.probeRelayConnection(ws, 'a network change');
     this.worker.postMessage({ type: 'network-changed' });
+  }
+  /** Updates STUN servers on the running transport (e.g. when a peer official region's STUN resolves asynchronously). */
+  setStunServers(servers: readonly string[]): void {
+    if (this.closed) return;
+    this.worker.postMessage({ type: 'set-stun-servers', servers: [...servers] });
   }
   /** Session requests to a relayed peer timed out: let the transport judge whether relay UDP carries data (relayUdp.ts). */
   relayStalled(): void {
@@ -467,6 +474,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     if (message.type === 'buffered') { this.setRemoteQueued(message.queued); return; }
     if (message.type === 'path') { this.logPath(message.id, message.path); this.options.onPathChanged?.(message.id, message.path); return; }
     if (message.type === 'frame-in') { this.emit('message', { toString: () => message.frame }); return; }
+    if (message.type === 'log' && typeof message.message === 'string') {
+      if (message.level === 'warn') this.options.log?.warn(message.message);
+      else if (message.level === 'info') this.options.log?.info(message.message);
+      return;
+    }
     if (message.type === 'tap') { this.options.tap?.(message.data, message.via); return; }
     if (message.type === 'ws-open') {
       this.relayAttemptAt = performance.now();
