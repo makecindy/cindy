@@ -6749,6 +6749,20 @@
         "ssh": "Hosts remotos SSH",
         "hook": "Bots de mensajería de Cindy"
       },
+      "cloudComputer": {
+        "title": "Equipo en la nube",
+        "hint": {
+          "addCloud": "Configura un equipo en la nube con Cindy instalado. Cuando esté listo, aparecerá en tu lista de dispositivos.",
+          "preparingCloud": "Tu equipo en la nube se está preparando. Aparecerá en tu lista de dispositivos cuando esté listo.",
+          "manageCloud": "Enciéndelo, apágalo, renuévalo, reinstálalo o elimínalo en la web."
+        },
+        "actions": {
+          "addCloud": "Añadir equipo en la nube",
+          "preparingCloud": "Ver progreso",
+          "manageCloud": "Gestionar equipo en la nube"
+        },
+        "openFailed": "No se pudo abrir la página del equipo en la nube. Comprueba la configuración de tu navegador predeterminado."
+      },
       "hook": {
         "description": "Conecta Slack, Telegram, Feishu / Lark y otros canales al mismo Cindy. Los mensajes se envían a este dispositivo y comparten su lista de proyectos y su ejecutor de sesiones; el modelo y los permisos de cada proyecto se comparten entre todos los canales, y cada canal conserva su propia vinculación de cuenta.",
         "slackDescription": "Vincula espacios de trabajo de Slack y asigna tareas a Cindy desde Slack.",
@@ -8267,6 +8281,11 @@
         "installedExpand": "Mostrar los {{count}} complementos instalados",
         "installedCollapse": "Ocultar complementos instalados adicionales",
         "recommendedSection": "Recomendado",
+        "allPlugins": "Todos los complementos",
+        "searchResults": "Resultados de búsqueda",
+        "marketSort": {
+          "label": "Orden"
+        },
         "todayRecommendations": "Recomendados de hoy",
         "marketSection": "Mercado de complementos",
         "browseMarket": "Explorar el mercado de complementos",
@@ -8758,6 +8777,7 @@
         "libraryPersist": "Puede utilizar una biblioteca duradera (archivos y bases de datos grandes)",
         "libraryPersistDetail": "Obtiene un área de almacenamiento administrada por Cindy para tu trabajo (lienzos, imágenes, bases de datos) sin la cuota normal de datos de complementos. Todas las operaciones de archivos y bases de datos las ejecuta el host; el complemento solo usa rutas relativas dentro de su propia biblioteca y no puede tocar tus otros archivos. También puede pedirle a Cindy que muestre un archivo de la biblioteca en Finder o Explorer, o abrir el cuadro de diálogo Guardar como del sistema para que elijas dónde va una copia; cancelar Guardar como no copia nada. También puede escribir un mapa de bits PNG en el portapapeles del sistema sin ningún cuadro de diálogo de confirmación; esto sobrescribe el portapapeles actual. Desinstalar el complemento no elimina estos datos; la eliminación requiere una confirmación por separado en la configuración de Cindy.",
         "networkHost": "Accede al destino de red {{host}}",
+        "networkHosts": "Destinos de red",
         "networkSecret": "Necesita que proporciones una credencial: \"{{name}}\"",
         "networkSecretGhostInputDetail": "Se recopila mediante la interfaz de configuración propia de este complemento: la página del complemento ve el valor en el momento de introducirlo. Luego se entrega al host en un solo paso para almacenarlo cifrado; una vez almacenado, el complemento nunca podrá volver a leerlo y el host lo inyecta solo para los dominios que declara.",
         "networkSecretIdentity": "Usará tu correo electrónico de inicio de sesión como credencial \"{{name}}\"",
@@ -8964,6 +8984,8 @@
         "dangerTitle": "Desinstalar complemento",
         "infoContents": "Contiene",
         "infoVersion": "Versión",
+        "infoPackageSize": "Tamaño del paquete",
+        "infoPackageSizeWithVersion": "{{size}} ({{version}})",
         "updateTitle": "Actualizar versión",
         "updateDesc": "Elige un nuevo archivo .cindy para reemplazar la versión instalada; se conservan el estado de activación y la posición del panel.",
         "errandPrefs": {
@@ -8986,11 +9008,27 @@
           "restoreModel": "Restablecer modelo"
         },
         "toolsTitle": "Herramientas",
+        "toolCount_one": "{{count}} herramienta",
+        "toolCount_other": "{{count}} herramientas",
+        "toolCount_many": "{{count}} herramientas",
         "permissionsTitle": "Permisos",
         "infoDescription": "Descripción",
         "customSlotAsleep": "Este complemento está desactivado. Actívalo para ver aquí su interfaz de configuración.",
         "descriptionExpand": "Mostrar más",
         "descriptionCollapse": "Mostrar menos",
+        "recentUpdates": "Actualizaciones recientes",
+        "olderUpdates": "Actualizaciones anteriores",
+        "collapseOlderUpdates": "Ocultar actualizaciones anteriores",
+        "includesHighRisk": "Riesgo alto",
+        "heroDownloads": "Descargas totales",
+        "heroUsage": "Usos totales",
+        "heroWeeklyUsage": "Usos en los últimos 7 días",
+        "heroWeeklyUsageExplanation": "Llamadas a herramientas de todas las versiones en los últimos 7 días dentro del ámbito compartido actual.",
+        "heroInstalledVersion": "Versión instalada",
+        "heroListedVersion": "Versión publicada",
+        "heroLatestUpdate": "Última actualización",
+        "morePlugins": "Más complementos",
+        "morePluginsHint": "Selección aleatoria. No refleja ninguna preferencia de Cindy.",
         "readmeTitle": "Acerca de",
         "useAction": "Usar complemento",
         "chatAction": "Conversación",
@@ -9029,6 +9067,7 @@
         "portReclaimMessage": "«{{name}}» necesita el puerto {{port}}. ¿Cerrar el siguiente programa?",
         "portReclaimDetail": "Cerrarlo puede interrumpir su trabajo o provocar la pérdida de datos sin guardar. Puedes cancelar y cerrar el programa manualmente.",
         "configurationTitle": "Configuración",
+        "recordTitle": "Información del complemento",
         "sidebarEntryTitle": "Entrada de navegación",
         "showInSidebar": "Mostrar en la navegación izquierda",
         "fileOpenerTitle": "Abrir archivos con este complemento",
@@ -9039,6 +9078,7 @@
         "viewAllTools": "Ver todo",
         "collapseTools": "Contraer herramientas",
         "viewAllPermissions": "Ver todo",
+        "remainingPermissions": "Ver {{count}} más",
         "permissionsDialogDescription": "Los {{count}} permisos solicitados por este complemento",
         "closeDialog": "Cerrar diálogo",
         "resetPlacement": "Restablecer posición predeterminada"
@@ -9357,6 +9397,7 @@
         "anonymousUnavailable": "Configuración del autor no disponible",
         "anonymousUpdateFailed": "No se pudo confirmar que se guardó la configuración de anonimato. Actualiza antes de volver a intentarlo.",
         "myPlugins": "Publicar complemento",
+        "backToPublish": "Volver a Publicar plugins",
         "publish": "Enviar a revisión",
         "submitUpdate": "Enviar nueva versión a revisión",
         "publishHint": "Publica solo complementos que tengas permiso para publicar. Se requiere aprobación humana para aparecer en el catálogo de la comunidad.",
@@ -9396,6 +9437,7 @@
         "publishedContentUnavailable": "La descripción y las notas de la versión publicada actual no están disponibles temporalmente.",
         "currentSubmission": "Envío actual",
         "localState": {
+          "installed": "Versión local {{version}}",
           "missing": "No está instalado en esta computadora",
           "unavailable": "Versión local no disponible temporalmente"
         },
@@ -9408,7 +9450,7 @@
         "publishing": "Publicación",
         "latestSubmission": "Último envío",
         "noSubmission": "Aún no hay envíos",
-        "marketVersion": "Publicado · {{version}}",
+        "marketVersion": "Publicado {{version}}",
         "market": {
           "not_listed": "No incluido en el catálogo",
           "disabled": "Retirado del catálogo",
@@ -9418,7 +9460,7 @@
         "review": {
           "pending": "Pendiente de revisión",
           "approved": "Aprobado",
-          "rejected": "Devuelto",
+          "rejected": "Rechazado",
           "published": "Publicado",
           "superseded": "Reemplazado por un envío posterior",
           "legacy_unverified": "Revisión histórica no disponible",
@@ -9426,9 +9468,12 @@
           "cancelled": "Cancelado"
         },
         "reason": "Motivo",
+        "rejectionReason": "Motivo del rechazo",
+        "rejectionReasonLine": "<reasonLabel>Motivo del rechazo:</reasonLabel> <reasonText />",
         "submittedContent": "Contenido enviado",
         "snapshotUnavailable": "El contenido original no se conservó o ya no se puede verificar.",
         "history": "Historial de publicación",
+        "marketChanges": "Cambios en el mercado",
         "loadMore": "Cargar más",
         "loadMoreHistory": "Cargar más historial",
         "releaseId": "ID de lanzamiento",
@@ -9443,7 +9488,7 @@
           "submitted": "Enviado",
           "metadata_updated": "Información de presentación actualizada",
           "approved": "Aprobado",
-          "rejected": "Devuelto",
+          "rejected": "Rechazado",
           "enabled": "Publicado",
           "disabled": "Retirado del catálogo",
           "archived": "Archivado",
@@ -9525,6 +9570,8 @@
         "notApproved": "Aún sin aprobar",
         "timeUnavailable": "No registrado",
         "releaseNotes": "Notas de la versión",
+        "expandReleaseNotes": "Mostrar todo",
+        "noReleaseNotes": "No se proporcionaron notas de la versión.",
         "versionUpdates": "Versiones y actualizaciones",
         "versionManagement": "Administrar versiones",
         "versionContent": "Contenido de la versión",
@@ -9541,7 +9588,6 @@
         "cancelled": "Cancelado",
         "cancelReviewCompleted": "Revisión cancelada. La versión publicada actualmente no cambia.",
         "cancelReviewAlreadyFinal": "La revisión ya terminó, por lo que no se canceló. El resultado real se muestra a continuación.",
-        "viewPendingVersion": "Ver versión en revisión",
         "submitFailed": "Error al enviar",
         "viewDetails": "Ver detalles"
       },

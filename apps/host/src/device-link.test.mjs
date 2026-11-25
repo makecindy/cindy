@@ -12,7 +12,8 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
-  ORCA_REMOTE_WORKER_CAPS_CHANNEL, PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
+  ORCA_REMOTE_WORKER_CAPS_CHANNEL, MACHINE_STATUS_CHANNEL, parseMachineStatus,
+  PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
 import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.ts';
@@ -56,6 +57,13 @@ const waitFor = async condition => {
 // relay authenticates synthetic tokens and stamps src; it is NOT official-relay
 // or physical iOS/Android acceptance, and does not make a model call.
 test('headless dispatcher serves multiple clients and enforces owner and per-device revocation', async t => {
+  const previousDeviceName = process.env.CINDY_HOST_DEVICE_NAME;
+  const deviceName = 'Fixture cloud computer';
+  process.env.CINDY_HOST_DEVICE_NAME = `  ${deviceName}  `;
+  t.after(() => {
+    if (previousDeviceName === undefined) delete process.env.CINDY_HOST_DEVICE_NAME;
+    else process.env.CINDY_HOST_DEVICE_NAME = previousDeviceName;
+  });
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-remote-'));
   configureAppDataDir(profile);
   configureHostOwner({ userDataDir: profile, ownerId: 'test-headless-owner' });
@@ -86,6 +94,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   const clients = [];
   let host, hold, release, writes = 0, duplicateNext = false;
+  let hostHello;
   let source;
   // Coexistence plan A: the refusal while a desktop uses the profile (null: not held).
   let held = null;
@@ -110,6 +119,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     socket.on('message', raw => {
       const frame = JSON.parse(raw.toString());
       if (frame.kind === 'hello') {
+        if (id === 'host') hostHello = frame.payload;
         platforms.set(id, frame.payload.platform);
         socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
           serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: 'synthetic-user', capabilities: [],
@@ -686,6 +696,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       });
       assert.equal(create.ok, true, JSON.stringify(create));
       assert.equal(create.wakeKind, 'created');
+      assert.equal(hostHello?.deviceName, deviceName);
+      assert.ok(hostHello?.deviceInfo?.osVersion);
       const [stored] = await db.drizzle.select().from(sessions).where(eq(sessions.id, id));
       assert.equal(stored.permissionMode, 'ask');
       assert.equal(stored.model, 'fixture-model');
@@ -783,7 +795,17 @@ test('Host device-link refuses provider-share guests and the platform features i
   const sockets = new Map();
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   const reached = [];
-  let host, desktop, guest;
+  // list_machines opens a background link with no subscriptions. Keep the
+  // fixture's status reader explicit so a guest cannot reach the OS probes.
+  let machineReads = 0;
+  const machineStatus = {
+    capturedAt: '2026-11-01T00:00:00.000Z',
+    cpu: { logicalCores: 8, busyPercent: 2, loadAverage1m: 1 },
+    memory: { totalBytes: 256, availableBytes: 128 },
+    disk: { freeBytes: 512, totalBytes: 1024 },
+    idleSeconds: 25, onBattery: false, runningTasks: 1,
+  };
+  let host, desktop, guest, hostDeviceInfo;
   t.after(async () => {
     desktop?.stop(); guest?.stop();
     await host?.stop();
@@ -800,6 +822,7 @@ test('Host device-link refuses provider-share guests and the platform features i
     socket.on('message', raw => {
       const frame = JSON.parse(raw.toString());
       if (frame.kind === 'hello') {
+        if (id === 'host') hostDeviceInfo = frame.payload.deviceInfo;
         socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
           serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: `synthetic-${id === 'guest' ? 'other' : 'same'}-user`,
           capabilities: [PROVIDER_SHARE_RELAY_CAPABILITY],
@@ -820,6 +843,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async route => { reached.push(route); return { status: 404, body: { message: `unexpected ${route}` } }; },
+    readMachineStatus: async () => { machineReads++; return machineStatus; },
     subscribe: () => () => {},
     createRuntimeSession: async () => { throw new Error('Not part of this test'); },
     closeRuntimeSession: async () => { throw new Error('Not part of this test'); },
@@ -827,6 +851,9 @@ test('Host device-link refuses provider-share guests and the platform features i
   });
   await host.setEnabled(true);
   await waitFor(() => host.state().status === 'online');
+  // The directory gets hardware and OS labels from hello, before it requests live status.
+  assert.ok(hostDeviceInfo?.osVersion, 'the Host hello must include the OS version');
+  if (os.cpus()[0]?.model.trim()) assert.ok(hostDeviceInfo.cpuLabel, 'the Host hello must include the CPU label');
   const client = id => {
     const value = new DeviceLinkClient({ getWsUrl: () => url, getToken: async () => `synthetic-${id}`,
       getHello: () => ({ deviceName: id, platform: 'darwin', appVersion: 'test', remoteControlEnabled: false }),
@@ -838,7 +865,16 @@ test('Host device-link refuses provider-share guests and the platform features i
   desktop = client('desktop');
   guest = client('guest');
   await waitFor(() => desktop.getStatus() === 'online' && guest.getStatus() === 'online');
-  await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+  // Production loopback entry and regression for cindy-machines §3: a desktop
+  // opens a regular relay background link and reads a valid status. Without the
+  // capability or handler, the directory reports update_required.
+  const accepted = await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION,
+    appVersion: 'test', capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] });
+  assert.ok(accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1));
+  const status = await desktop.invoke('host', { channel: MACHINE_STATUS_CHANNEL, args: [] });
+  assert.deepEqual(status, { ok: true, result: machineStatus });
+  assert.deepEqual(parseMachineStatus(status.result), machineStatus);
+  assert.deepEqual(host.state().controllers, [], 'background probe does not control the computer');
 
   // The genuine relay invoke path used to report IPC_ERROR when an allowlisted handler was absent.
   // Clients cache only CHANNEL_NOT_ALLOWED as unsupported. Extend the existing loopback fixture
@@ -861,11 +897,13 @@ test('Host device-link refuses provider-share guests and the platform features i
   assert.equal(remoteDesktop.error.code, 'IPC_ERROR');
   assert.match(remoteDesktop.error.message, /^\[NOT_SUPPORTED\] requestRemoteDesktop /);
 
-  for (const channel of [REMOTE_AGENT_CHANNEL, DL_HISTORY_MESSAGES_CHANNEL, 'local-db:sessions:list', 'host:execute-arbitrary']) {
+  for (const channel of [REMOTE_AGENT_CHANNEL, MACHINE_STATUS_CHANNEL, DL_HISTORY_MESSAGES_CHANNEL,
+    'local-db:sessions:list', 'host:execute-arbitrary']) {
     const reply = await guest.invoke(hostKey, { channel, args: [] });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
     assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);
   }
+  assert.equal(machineReads, 1, 'only the same-account machine status request reached the reader');
   assert.deepEqual(reached, [], 'no refused channel may reach the Host service');
 });
 

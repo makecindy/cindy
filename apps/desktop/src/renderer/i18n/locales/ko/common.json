@@ -6641,6 +6641,20 @@
         "ssh": "SSH 원격 호스트",
         "hook": "Cindy IM 봇"
       },
+      "cloudComputer": {
+        "title": "클라우드 컴퓨터",
+        "hint": {
+          "addCloud": "Cindy가 설치된 클라우드 컴퓨터를 준비합니다. 준비되면 기기 목록에 표시됩니다.",
+          "preparingCloud": "클라우드 컴퓨터를 준비하고 있습니다. 준비되면 기기 목록에 표시됩니다.",
+          "manageCloud": "시작·중지, 연장, 재설치, 삭제는 웹에서 할 수 있습니다."
+        },
+        "actions": {
+          "addCloud": "클라우드 컴퓨터 추가",
+          "preparingCloud": "진행 상황 보기",
+          "manageCloud": "클라우드 컴퓨터 관리"
+        },
+        "openFailed": "클라우드 컴퓨터 페이지를 열 수 없습니다. 기본 브라우저 설정을 확인하세요."
+      },
       "hook": {
         "description": "Slack, Telegram, Feishu / Lark 등을 하나의 Cindy에 연결합니다. 메시지는 이 기기로 전달되며 프로젝트 목록과 세션 실행기를 공유합니다. 각 프로젝트의 모델과 권한은 모든 채널이 함께 쓰고, 계정 연동만 채널별로 분리됩니다.",
         "slackDescription": "Slack 워크스페이스를 연결하고 Slack에서 Cindy에게 작업을 맡기세요.",
@@ -8155,6 +8169,11 @@
         "installedExpand": "설치된 플러그인 {{count}}개 모두 보기",
         "installedCollapse": "추가 설치 플러그인 숨기기",
         "recommendedSection": "추천",
+        "allPlugins": "모든 플러그인",
+        "searchResults": "검색 결과",
+        "marketSort": {
+          "label": "정렬"
+        },
         "todayRecommendations": "오늘의 추천",
         "marketSection": "플러그인 마켓",
         "browseMarket": "플러그인 마켓 둘러보기",
@@ -8641,6 +8660,7 @@
         "libraryPersist": "영구 라이브러리 사용 가능(대용량 파일 및 데이터베이스)",
         "libraryPersistDetail": "Cindy가 관리하는 독립 저장 공간을 받아 작업 데이터(캔버스, 이미지, 데이터베이스 등)를 저장하며, 일반 플러그인 데이터 할당량 제한을 받지 않습니다. 파일과 데이터베이스 작업은 모두 호스트가 대신 실행하고 플러그인은 라이브러리 내 상대 경로만 사용하여 다른 파일에는 접근할 수 없습니다. 라이브러리 파일을 시스템 폴더에서 보여 주거나 시스템 다른 이름으로 저장 대화상자를 열어 복사 위치를 고르게 할 수도 있으며, 취소하면 아무 파일도 복사되지 않습니다. 확인 대화상자 없이 PNG 비트맵을 시스템 클립보드에 쓸 수도 있으며, 이때 현재 클립보드 내용이 덮어쓰입니다. 플러그인을 제거해도 이 데이터는 삭제되지 않으며, 삭제는 Cindy 설정에서 별도 확인이 필요합니다.",
         "networkHost": "네트워크 대상 {{host}}에 접근",
+        "networkHosts": "네트워크 대상",
         "networkSecret": "자격 증명 \"{{name}}\" 입력 필요",
         "networkSecretGhostInputDetail": "이 자격 증명은 플러그인 자체 설정 화면에서 입력받으므로 입력 시점에 플러그인 페이지를 거칩니다. 이후 호스트에 한 번만 전달되어 암호화 저장되며, 저장 후에는 플러그인이 다시 읽을 수 없습니다. 주입은 선언된 도메인 요청 시에만 호스트가 수행합니다.",
         "networkSecretIdentity": "로그인 이메일을 자격 증명 \"{{name}}\"(으)로 사용합니다",
@@ -8847,6 +8867,8 @@
         "dangerTitle": "플러그인 제거",
         "infoContents": "포함",
         "infoVersion": "버전",
+        "infoPackageSize": "패키지 크기",
+        "infoPackageSizeWithVersion": "{{size}} ({{version}})",
         "updateTitle": "버전 업데이트",
         "updateDesc": "새 .cindy 파일을 선택해 설치된 버전을 그 자리에서 교체합니다. 활성 상태와 패널 위치는 유지됩니다.",
         "errandPrefs": {
@@ -8869,11 +8891,25 @@
           "restoreModel": "모델 초기화"
         },
         "toolsTitle": "Tools",
+        "toolCount_other": "{{count}}개",
         "permissionsTitle": "권한",
         "infoDescription": "설명",
         "customSlotAsleep": "이 플러그인은 비활성 상태입니다. 활성화하면 여기에 설정 화면이 표시됩니다.",
         "descriptionExpand": "더 보기",
         "descriptionCollapse": "접기",
+        "recentUpdates": "최근 업데이트",
+        "olderUpdates": "이전 업데이트",
+        "collapseOlderUpdates": "이전 업데이트 접기",
+        "includesHighRisk": "높은 위험 포함",
+        "heroDownloads": "누적 다운로드",
+        "heroUsage": "누적 사용 횟수",
+        "heroWeeklyUsage": "최근 7일 사용",
+        "heroWeeklyUsageExplanation": "현재 공유 범위에서 모든 버전의 최근 7일간 도구 호출 횟수입니다.",
+        "heroInstalledVersion": "설치된 버전",
+        "heroListedVersion": "게시된 버전",
+        "heroLatestUpdate": "최근 업데이트",
+        "morePlugins": "다른 플러그인",
+        "morePluginsHint": "무작위로 선정되며 Cindy의 선호를 나타내지 않습니다.",
         "readmeTitle": "소개",
         "useAction": "플러그인 사용",
         "chatAction": "대화",
@@ -8912,6 +8948,7 @@
         "portReclaimMessage": "“{{name}}”에 포트 {{port}}이(가) 필요합니다. 다음 프로그램을 종료할까요?",
         "portReclaimDetail": "작업이 중단되거나 저장하지 않은 데이터가 손실될 수 있습니다. 취소 후 직접 프로그램을 닫을 수도 있습니다.",
         "configurationTitle": "설정",
+        "recordTitle": "플러그인 정보",
         "sidebarEntryTitle": "내비게이션 항목",
         "showInSidebar": "왼쪽 내비게이션에 표시",
         "fileOpenerTitle": "이 플러그인으로 파일 열기",
@@ -8922,6 +8959,7 @@
         "viewAllTools": "더 보기",
         "collapseTools": "Tool 접기",
         "viewAllPermissions": "더 보기",
+        "remainingPermissions": "나머지 {{count}}개 보기",
         "permissionsDialogDescription": "이 플러그인이 요청하는 전체 {{count}}개 권한",
         "closeDialog": "대화 상자 닫기",
         "resetPlacement": "기본 위치로 복원"
@@ -9240,6 +9278,7 @@
         "anonymousUnavailable": "작성자 설정을 불러올 수 없습니다",
         "anonymousUpdateFailed": "익명 설정이 저장되었는지 확인할 수 없습니다. 새로고침 후 다시 시도하세요.",
         "myPlugins": "플러그인 게시",
+        "backToPublish": "플러그인 게시로 돌아가기",
         "publish": "심사 요청",
         "submitUpdate": "새 버전 심사 요청",
         "publishHint": "게시 권한이 있는 플러그인만 게시하세요. 담당자의 검토와 승인 후 커뮤니티에 게시됩니다.",
@@ -9279,6 +9318,7 @@
         "publishedContentUnavailable": "현재 공개된 버전의 설명과 업데이트 내용을 불러올 수 없습니다.",
         "currentSubmission": "현재 제출",
         "localState": {
+          "installed": "로컬 버전 {{version}}",
           "missing": "이 컴퓨터에 설치되지 않음",
           "unavailable": "로컬 버전을 불러올 수 없음"
         },
@@ -9291,7 +9331,7 @@
         "publishing": "게시 관리",
         "latestSubmission": "최근 제출",
         "noSubmission": "아직 제출 내역 없음",
-        "marketVersion": "게시됨 · {{version}}",
+        "marketVersion": "게시됨 {{version}}",
         "market": {
           "not_listed": "게시 전",
           "disabled": "게시 중단",
@@ -9309,9 +9349,12 @@
           "cancelled": "취소됨"
         },
         "reason": "처리 사유",
+        "rejectionReason": "반려 사유",
+        "rejectionReasonLine": "<reasonLabel>반려 사유:</reasonLabel> <reasonText />",
         "submittedContent": "제출된 내용",
         "snapshotUnavailable": "원래 제출 내용이 보존되지 않았거나 확인할 수 없습니다.",
         "history": "게시 이력",
+        "marketChanges": "게시 상태 변경",
         "loadMore": "더 보기",
         "loadMoreHistory": "이력 더 보기",
         "releaseId": "릴리스 ID",
@@ -9408,6 +9451,8 @@
         "notApproved": "아직 승인되지 않음",
         "timeUnavailable": "기록 없음",
         "releaseNotes": "업데이트 내용",
+        "expandReleaseNotes": "모두 펼치기",
+        "noReleaseNotes": "업데이트 설명이 작성되지 않았습니다.",
         "versionUpdates": "버전 및 업데이트",
         "versionManagement": "버전 관리",
         "versionContent": "버전 내용",
@@ -9424,7 +9469,6 @@
         "cancelled": "취소됨",
         "cancelReviewCompleted": "심사가 취소되었습니다. 현재 게시된 버전에는 영향이 없습니다.",
         "cancelReviewAlreadyFinal": "심사가 이미 완료되어 취소되지 않았습니다. 아래에 실제 결과가 표시됩니다.",
-        "viewPendingVersion": "심사 중인 버전 보기",
         "submitFailed": "제출 실패",
         "viewDetails": "상세 보기"
       },

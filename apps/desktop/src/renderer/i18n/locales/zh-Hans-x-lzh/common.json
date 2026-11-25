@@ -6641,6 +6641,20 @@
         "ssh": "SSH 远方主机",
         "hook": "Cindy IM 使者"
       },
+      "cloudComputer": {
+        "title": "云机",
+        "hint": {
+          "addCloud": "启一云机，已装 Cindy；备毕则见于设备之列。",
+          "preparingCloud": "云机备置中，毕则自见于设备之列。",
+          "manageCloud": "开关、续期、重装、删除，皆于网页行之。"
+        },
+        "actions": {
+          "addCloud": "增云机",
+          "preparingCloud": "观其进度",
+          "manageCloud": "理云机"
+        },
+        "openFailed": "云机之页未能启，请察系统默认浏览器之设。"
+      },
       "hook": {
         "description": "将 Slack、Telegram、飞书 / Lark 诸渠道接入同一 Cindy：讯皆派至此台设备，共用此间案之清单与差事；每案之模型与权限，诸渠道共用一份，名籍绑定依渠道各自隔离。",
         "slackDescription": "绑定 Slack workspace，于 Slack 中 @Cindy 派差事。",
@@ -8155,6 +8169,11 @@
         "installedExpand": "展全部已纳法器 {{count}} 件",
         "installedCollapse": "收余下已纳法器",
         "recommendedSection": "所荐",
+        "allPlugins": "诸法器",
+        "searchResults": "检索所获",
+        "marketSort": {
+          "label": "次第"
+        },
         "todayRecommendations": "今日所荐",
         "marketSection": "法器市集",
         "browseMarket": "览法器市集",
@@ -8607,6 +8626,7 @@
         "libraryPersist": "可用持久作品库(大量文件与数据库)",
         "libraryPersistDetail": "其将得一 Cindy 所管之独立保存区，用以存君之作品数据(如画布、图、数据库)，不受一般法器数据配额所限。文件与数据库之操作全由主机代行，法器仅能用库内相对路径，不能触君之他文件。其亦可请 Cindy 于系统文件夹中显示库内文件，或弹系统另存为窗口由君择拷贝之处；罢之则不拷出任何文件。其亦可将 PNG 位图写入系统剪贴板；无确认框，将覆盖当前剪贴板内容。卸除法器不删此等数据；删除须于 Cindy 规制中另行确认。",
         "networkHost": "访问网络地址 {{host}}",
+        "networkHosts": "访问网络地址",
         "networkSecret": "须君提供凭证「{{name}}」",
         "networkSecretGhostInputDetail": "凭证由此法器自身之设置界面收集，录入时经法器页面；随即一次交主机加密保管，存入后法器不能读回，主机仅于请求其所声明之网域时注入。",
         "networkSecretIdentity": "将以君登门之电子邮件为凭证「{{name}}」",
@@ -8833,6 +8853,8 @@
         "dangerTitle": "卸除法器",
         "infoContents": "所含",
         "infoVersion": "版次",
+        "infoPackageSize": "包之体量",
+        "infoPackageSizeWithVersion": "{{size}}（{{version}}）",
         "updateTitle": "易新版",
         "updateDesc": "择新 .cindy 卷原处替换；生效之状与面板位置不变。",
         "errandPrefs": {
@@ -8855,11 +8877,25 @@
           "restoreModel": "复预设模型"
         },
         "toolsTitle": "Tools",
+        "toolCount_other": "{{count}} 个",
         "permissionsTitle": "权柄",
         "infoDescription": "述",
         "customSlotAsleep": "法器未生效；生效后，此处将示其设置界面。",
         "descriptionExpand": "展",
         "descriptionCollapse": "收",
+        "recentUpdates": "近日更新",
+        "olderUpdates": "往昔更新",
+        "collapseOlderUpdates": "收往昔更新",
+        "includesHighRisk": "含高风险",
+        "heroDownloads": "总下载",
+        "heroUsage": "总用次",
+        "heroWeeklyUsage": "近七日用次",
+        "heroWeeklyUsageExplanation": "今所共享之各版本，近七日调用工具之次数。",
+        "heroInstalledVersion": "已装版本",
+        "heroListedVersion": "已刊版本",
+        "heroLatestUpdate": "最近更新",
+        "morePlugins": "其余法器",
+        "morePluginsHint": "随机择取，非 Cindy 有所偏重",
         "readmeTitle": "介绍",
         "useAction": "用",
         "chatAction": "言谈",
@@ -8898,6 +8934,7 @@
         "portReclaimMessage": "「{{name}}」须用端口 {{port}}，可结束下列程序乎？",
         "portReclaimDetail": "结束之，或致其事中断、未存之数据丢失。亦可取消，自行关闭占用程序。",
         "configurationTitle": "设置",
+        "recordTitle": "法器资料",
         "sidebarEntryTitle": "导览入口",
         "showInSidebar": "现于左侧导览",
         "fileOpenerTitle": "以此法器启文件",
@@ -8908,6 +8945,7 @@
         "viewAllTools": "观全部",
         "collapseTools": "收 Tool",
         "viewAllPermissions": "观全部",
+        "remainingPermissions": "观余 {{count}} 项",
         "permissionsDialogDescription": "此法器所请权柄共 {{count}} 项",
         "closeDialog": "阖弹窗",
         "resetPlacement": "复预设位置"
@@ -9226,6 +9264,7 @@
         "anonymousUnavailable": "作者之设暂弗能用",
         "anonymousUpdateFailed": "匿名设置是否已存，无从确认，请重整后再试。",
         "myPlugins": "发布法器",
+        "backToPublish": "返法器发布",
         "publish": "呈审",
         "submitUpdate": "呈新版待审",
         "publishHint": "仅限有权发布之法器，审核通过后于社区上架。",
@@ -9265,6 +9304,7 @@
         "publishedContentUnavailable": "今上架之版之介绍与更新说明，暂无从读取。",
         "currentSubmission": "今所呈",
         "localState": {
+          "installed": "此机 {{version}}",
           "missing": "此机未纳",
           "unavailable": "此机之版暂无从读取"
         },
@@ -9277,7 +9317,7 @@
         "publishing": "发布之理",
         "latestSubmission": "近所呈",
         "noSubmission": "尚无所呈",
-        "marketVersion": "已陈列 · {{version}}",
+        "marketVersion": "已陈列 {{version}}",
         "market": {
           "not_listed": "未上架",
           "disabled": "已撤",
@@ -9287,7 +9327,7 @@
         "review": {
           "pending": "待审",
           "approved": "审准",
-          "rejected": "见退",
+          "rejected": "见驳",
           "published": "已陈列",
           "superseded": "已为后呈所代",
           "legacy_unverified": "旧修订无从核实",
@@ -9295,9 +9335,12 @@
           "cancelled": "已罢"
         },
         "reason": "处置之由",
+        "rejectionReason": "驳回之由",
+        "rejectionReasonLine": "<reasonLabel>驳回之由：</reasonLabel><reasonText />",
         "submittedContent": "已呈之内容",
         "snapshotUnavailable": "原呈内容未留存，或已无从核实。",
         "history": "发布之录",
+        "marketChanges": "陈列更易",
         "loadMore": "载更多",
         "loadMoreHistory": "载更多旧录",
         "releaseId": "版录 ID",
@@ -9312,7 +9355,7 @@
           "submitted": "已呈",
           "metadata_updated": "展示之讯已新",
           "approved": "审准",
-          "rejected": "见退",
+          "rejected": "见驳",
           "enabled": "已陈列",
           "disabled": "已撤",
           "archived": "已归档",
@@ -9394,6 +9437,8 @@
         "notApproved": "未获准",
         "timeUnavailable": "未记",
         "releaseNotes": "更新之述",
+        "expandReleaseNotes": "尽展",
+        "noReleaseNotes": "未书更新之要",
         "versionUpdates": "版次与更新",
         "versionManagement": "理版",
         "versionContent": "版之内容",
@@ -9410,7 +9455,6 @@
         "cancelled": "已罢",
         "cancelReviewCompleted": "此次审核已罢。今上架之版不受影响。",
         "cancelReviewAlreadyFinal": "审核已毕，此次未能罢之。下方所示为实际审核之果。",
-        "viewPendingVersion": "观方审之版",
         "submitFailed": "提交未成",
         "viewDetails": "观详情"
       },

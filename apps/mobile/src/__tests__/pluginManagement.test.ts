@@ -103,6 +103,14 @@ describe('mobile management contract', () => {
     expect(() => parsePluginManagementReceipt({ ...confirmation(), consent: { ...confirmation().consent,
       facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '2', permissions: [{ key: 'fs' }] } } }, 'operation-1')).toThrow('INVALID_RESPONSE');
   });
+  // Unit: the mobile reader has no package size field in its model and accepts it from a newer Host.
+  it('continues reading snapshots and details with additional package metadata', () => {
+    const extended = { ...detail, sizeBytes: 1200 };
+    const value = snapshot();
+    expect(parsePluginManagementSnapshot({ ...value, market: { ...value.market, items: [extended] } })
+      .market.items[0]).toMatchObject(detail);
+    expect(parsePluginManagementDetail(extended)).toMatchObject(detail);
+  });
   it('keeps namespace missing distinct from root, and removes Host-local icon lookup keys', () => {
     const legacy = { ...plugin }; delete legacy.namespace;
     const parsed = parsePluginManagementSnapshot({ ...snapshot([legacy]), market: { ...snapshot().market,
