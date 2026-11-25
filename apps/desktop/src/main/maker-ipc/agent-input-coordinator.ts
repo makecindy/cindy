@@ -677,6 +677,8 @@ export interface AgentInputCoordinatorDeps {
    * 否则被丢弃项的暂存条目会永久泄漏。
    */
   onDiscardedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage, opts?: { mergedInto?: string; admissionFailed?: true }) => void;
+  /** Release dispatch-only resources without treating the report as withdrawn. */
+  onAcknowledgedQueuedReport?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
    * 排队项派发那一刻，追加在发给模型的 wire 消息末尾的宿主说明；返回 null 不追加。
    * `pendingQueue` 是该项取出后仍在等待的队列。说明不写回队列项（不进排队正文与落库正文）。
@@ -4272,24 +4274,46 @@ export class AgentInputCoordinator {
   }
 
   remove(sessionId: string, clientId: string): AgentInputProjection {
-    return this.removeQueuedInput(sessionId, clientId);
+    this.removeQueuedInput(sessionId, clientId);
+    return this.getProjection(sessionId);
+  }
+
+  /** Consume the exact report read by the Lead without handing it to the provider. */
+  acknowledgeQueuedReport(
+    sessionId: string,
+    expected: AgentInputQueuedMessage,
+    sealDelivery: () => Promise<boolean>,
+  ): Promise<boolean> | 'changed' | 'busy' | 'unrestored' {
+    const state = this.getState(sessionId);
+    const clientId = expected.clientId;
+    if (!this.isQueueRestored(sessionId)) return 'unrestored';
+    if (this.projectQueueInspection(state).some(entry => entry.queuedMessageId === clientId && entry.consuming)
+      || state.queueEditLocks.includes(clientId)
+      || state.queueInteractionLocks.includes(`durable-input:${clientId}`)) return 'busy';
+    if (!state.pendingQueue.includes(expected)) return 'changed';
+    return this.removeQueuedInput(sessionId, clientId, false, sealDelivery) ?? 'changed';
   }
 
   /** Failed admission releases callbacks without publishing a user withdrawal. */
-  private removeQueuedInput(sessionId: string, clientId: string, admissionFailed = false): AgentInputProjection {
+  private removeQueuedInput(
+    sessionId: string, clientId: string, admissionFailed = false, sealAcknowledgedDelivery?: () => Promise<boolean>,
+  ): Promise<boolean> | undefined {
     const state = this.getState(sessionId);
-    assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.withdraw', state.pendingQueue.find((item) => item.clientId === clientId));
-    if (state.steeringQueueClientIds.includes(clientId)) return this.getProjection(sessionId);
-    const before = state.pendingQueue.length;
     const removed = state.pendingQueue.find((q) => q.clientId === clientId);
+    assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.withdraw', removed);
+    if (state.steeringQueueClientIds.includes(clientId)) return;
+    // Schedule the durable receipt before emit() queues the new snapshot.
+    const acknowledgement = removed && sealAcknowledgedDelivery?.();
     state.pendingQueue = state.pendingQueue.filter((q) => q.clientId !== clientId);
     if (removed) {
-      if (admissionFailed) this.deps.onDiscardedQueuedMessage?.(sessionId, removed, { admissionFailed: true });
+      if (acknowledgement) {
+        this.deps.onAcknowledgedQueuedReport?.(sessionId, removed);
+      } else if (admissionFailed) this.deps.onDiscardedQueuedMessage?.(sessionId, removed, { admissionFailed: true });
       else this.deps.onDiscardedQueuedMessage?.(sessionId, removed);
     }
     // 显式移除的消息从未派发:该 clientId 允许被合法地重新入队(重排/再发都是
     // 既有产品流),必须从弱网重发幂等窗口里遗忘,否则再入队会被误吞。
-    if (removed) {
+    if (removed && !sealAcknowledgedDelivery) {
       state.recentEnqueuedClientIds = state.recentEnqueuedClientIds.filter((id) => id !== clientId);
     }
     if (removed) this.removePendingCompactWaitClientId(state, removed.clientId);
@@ -4315,8 +4339,8 @@ export class AgentInputCoordinator {
       this.clearCredentialSwitchWait(state);
     }
     this.emit(sessionId);
-    if (state.pendingQueue.length !== before) this.scheduleDrain(sessionId, 'remove');
-    return this.getProjection(sessionId);
+    if (removed) this.scheduleDrain(sessionId, acknowledgement ? 'acknowledge-report' : 'remove');
+    return acknowledgement;
   }
 
   updateText(

@@ -920,8 +920,8 @@ export const messages = sqliteTable(
       // 也不落 user 消息——wire 注入与显示分离。
       // 'context_rebuild':消息内容删除后的内部重建标记。rewind_at 固定非 NULL,
       // 所有普通历史读取都不可见；content.handoff 只在下一次发送的 wire 前缀消费。
-      // 'message_tombstone':被删除消息的无内容墓碑，保留 id/client_id 仅用于阻止
-      // 外部原生 transcript importer 把同一消息重新导入；正文/元数据均已清空。
+      // 'message_tombstone':无正文墓碑，保留 id/client_id 以阻止旧快照重放或外部原生
+      // transcript importer 重新导入；Lead 已确认 Worker 回报时有内部终态标记，不保存正文。
       enum: [
         'user',
         'assistant',

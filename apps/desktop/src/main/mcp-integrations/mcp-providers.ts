@@ -1717,6 +1717,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       mergeWorkerQueuedMessages: wrap((s, params) => s.mergeWorkerQueuedMessages(params)),
       steerWorkerQueuedMessage: wrap((s, params) => s.steerWorkerQueuedMessage(params)),
       moveWorkerQueuedMessage: wrap((s, params) => s.moveWorkerQueuedMessage(params)),
+      acknowledgeWorkerQueuedMessage: wrap((s, params) => s.acknowledgeWorkerQueuedMessage(params)),
       idleWorker: wrap((s, params) => s.idleWorker(params)),
       endTeam: wrap((s, params) => s.endTeam(params)),
       archiveWorker: wrap((s, params) => s.archiveWorker(params)),

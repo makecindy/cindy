@@ -1804,6 +1804,8 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       replaceQueuedMessage: () => false,
       steerStoredQueuedMessage: async () => ({ kind: 'gone' as const }),
       moveQueuedMessage: () => null,
+      isActiveLead: async () => false,
+      acknowledgeQueuedReport: async () => 'changed',
       mergeQueuedMessages: () => false,
       log: mocks.logger,
     } satisfies OrcaTeamServiceDeps;
@@ -3261,6 +3263,45 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
 
     expect(h.coordinator.getQueueInspection(sid)).toEqual([]);
+  });
+
+  // Unit (Orca queue contract 9a): unlike the service's mocked removal, real
+  // acknowledgement must survive an edit race and drain only the next input.
+  it('seals the current Worker report before publishing removal and draining the next input', async () => {
+    const h = createHarness();
+    const sid = 'acknowledged-report';
+    const report = makeItem('report', 'review result', {
+      origin: { kind: 'orca', senderSessionId: 'worker', senderLabel: 'Reviewer' },
+      orcaReportDelivery: { workerId: 'worker' },
+    });
+    const seal = vi.fn(async () => true);
+    expect(h.coordinator.acknowledgeQueuedReport(sid, report, seal)).toBe('unrestored');
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, report);
+    h.coordinator.enqueue(sid, makeItem('next', 'user follow-up'));
+    const readReport = () => h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    const beforeEdit = readReport();
+    h.coordinator.setEditLock(sid, 'report', true);
+    expect(h.coordinator.acknowledgeQueuedReport(sid, beforeEdit, seal)).toBe('busy');
+    h.coordinator.setEditLock(sid, 'report', false);
+    h.coordinator.updateText(sid, 'report', 'updated review result');
+    expect(h.coordinator.acknowledgeQueuedReport(sid, beforeEdit, seal)).toBe('changed');
+    expect(seal).not.toHaveBeenCalled();
+
+    h.persistQueueSnapshot.mockClear();
+    h.emitProjection.mockClear();
+    await expect(h.coordinator.acknowledgeQueuedReport(sid, readReport(), seal)).resolves.toBe(true);
+    expect(seal).toHaveBeenCalledBefore(h.persistQueueSnapshot);
+    expect(seal).toHaveBeenCalledBefore(h.emitProjection);
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['next']);
+    expect(h.coordinator.getQueueInspection(sid).map(item => item.queuedMessageId)).toEqual(['next']);
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await flush();
+    expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId)).toEqual(['next']);
   });
 
   it('does not materialize coordinator state when checking an unrestored queue', async () => {

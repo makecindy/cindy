@@ -52,6 +52,8 @@ export type SessionQueueAuthorization = (
   item: AgentInputQueuedMessage,
 ) => { ok: true } | { ok: false; message: string; errorCode?: 'UNSUPPORTED_CAPABILITY' };
 
+type AcknowledgeControlResult = SessionQueueControlResult | { ok: false; errorCode: 'QUEUE_CHANGED' | 'INTERNAL' | 'LEAD_NOT_SUPPORTED'; message: string };
+
 type BaseControlParams = {
   sessionId: string;
   queuedMessageId: string;
@@ -143,6 +145,34 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
       return { ok: true, queuedMessageId: params.queuedMessageId };
     },
 
+    async acknowledge(
+      params: BaseControlParams & {
+        matchesReadVersion: (item: AgentInputQueuedMessage) => boolean;
+        finish: (item: AgentInputQueuedMessage) => Promise<'acknowledged' | 'changed' | 'busy' | 'unrestored' | 'uncertain' | 'not-lead'>;
+      },
+    ): Promise<AcknowledgeControlResult> {
+      const resolved = await resolve(params);
+      if (!resolved.ok) return resolved;
+      if (!params.matchesReadVersion(resolved.item)) return acknowledgementChanged();
+      await params.beforeMutation?.();
+      const outcome = await params.finish(resolved.item);
+      if (outcome === 'busy') return consumingFailure(params.queuedMessageId);
+      if (outcome === 'unrestored') return {
+        ok: false, errorCode: 'INTERNAL', message: 'Lead queue could not be restored; no messages were changed',
+      };
+      if (outcome === 'not-lead') return { ok: false, errorCode: 'LEAD_NOT_SUPPORTED', message: 'Acknowledgement requires an active Orca Lead' };
+      if (outcome === 'changed') {
+        const latest = await deps.getSnapshot(params.sessionId);
+        if (latest.consumingClientIds.includes(params.queuedMessageId)) return consumingFailure(params.queuedMessageId);
+        return latest.pendingQueue.some(item => item.clientId === params.queuedMessageId)
+          ? acknowledgementChanged() : missingFailure(params.queuedMessageId);
+      }
+      if (outcome === 'uncertain') return {
+        ok: false, errorCode: 'INTERNAL', message: 'Could not confirm acknowledgement on disk; do not retry blindly',
+      };
+      return { ok: true, queuedMessageId: params.queuedMessageId };
+    },
+
     /** 转插话不改正文与身份；没插成时消息原位保留并说明原因。 */
     async steer(params: BaseControlParams): Promise<SessionQueueSteerResult> {
       const resolved = await resolve(params);
@@ -183,6 +213,10 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
       return { ok: true, queuedMessageId: params.queuedMessageId, position };
     },
   };
+}
+
+function acknowledgementChanged(): AcknowledgeControlResult {
+  return { ok: false, errorCode: 'QUEUE_CHANGED', message: 'Worker report changed; read the current queue before handling it' };
 }
 
 function missingFailure(queuedMessageId: string): Exclude<SessionQueueControlResult, { ok: true }> {

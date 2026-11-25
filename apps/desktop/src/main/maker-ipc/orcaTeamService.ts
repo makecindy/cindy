@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-shared/orca-team';
 
@@ -250,6 +251,7 @@ export interface WorkerQueuedMessageSnapshot {
   content: string;
   /** true = 该条正在 steering 投递中,不可修改 / 撤回。 */
   consuming: boolean;
+  acknowledgementToken?: string;
 }
 
 /** 排队消息控制的 domain result。 */
@@ -273,6 +275,11 @@ export type SteerWorkerQueuedMessageResult =
 export type MoveWorkerQueuedMessageResult =
   | { ok: true; workerId: string | null; queuedMessageId: string; position: number }
   | WorkerQueuedMessageFailure;
+
+export type AcknowledgeWorkerQueuedMessageResult =
+  | { ok: true; queuedMessageId: string }
+  | WorkerQueuedMessageFailure
+  | { ok: false; errorCode: 'LEAD_NOT_SUPPORTED'; message: string };
 
 export type ListWorkerQueuedMessagesResult =
   | {
@@ -418,6 +425,9 @@ export function evaluateOrcaDeliveryScope(input: {
 
 /** service 的 I/O 边界。register.ts 只负责把 DB、Maker、IPC broadcast 作为依赖组合进来。 */
 export interface OrcaTeamServiceDeps {
+  isActiveLead(sessionId: string): Promise<boolean>;
+  acknowledgeQueuedReport(sessionId: string, expected: AgentInputQueuedMessage):
+    Promise<'acknowledged' | 'changed' | 'busy' | 'unrestored' | 'uncertain'>;
   captureControlAuthority?(leadSessionId: string): Promise<() => Promise<void>>;
   /**
    * Delivery-scope authority for callbacks that may settle after the caller's turn ended
@@ -525,7 +535,7 @@ export interface OrcaTeamServiceDeps {
     willQueue: boolean;
     queuePaused: boolean;
   }>;
-  /** Strict restore gate for atomic merge; false means no mutation is allowed. */
+  /** Strict restore gate for atomic merge and acknowledgement; false means no mutation is allowed. */
   ensureWorkerQueueRestored(sessionId: string): Promise<boolean>;
   /** 从队列移除一条排队消息;实现方必须走 coordinator.remove(带 discard settle)。返回是否真的移除。 */
   removeQueuedMessage(sessionId: string, clientId: string, expected?: AgentInputQueuedMessage): boolean;
@@ -602,6 +612,11 @@ export interface OrcaTeamService {
     workerRef: string;
     queuedMessageId: string;
   }): Promise<WorkerQueuedMessageControlResult>;
+  acknowledgeWorkerQueuedMessage(params: {
+    callerLeadSessionId: string;
+    queuedMessageId: string;
+    acknowledgementToken: string;
+  }): Promise<AcknowledgeWorkerQueuedMessageResult>;
   mergeWorkerQueuedMessages(params: {
     callerLeadSessionId: string;
     workerRef: string;
@@ -1938,6 +1953,22 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     };
   }
 
+  function isAcknowledgableWorkerReport(item: AgentInputQueuedMessage, leadId: string): boolean {
+    return isOrcaCollaborationMessage(item) && !!item.origin.senderSessionId
+      && item.origin.senderSessionId !== leadId && !!(item.orcaReportDelivery || item.orcaReportDeliveryFence)
+      // Inspection returns text, not the report's attachments or reference context.
+      && !item.files?.length && !item.contextFiles?.length && !item.chatMessage.images?.length
+      && !item.chatMessage.files?.length && !item.sessionRefs?.length && !item.agentReferences?.length;
+  }
+
+  function reportAcknowledgementToken(item: AgentInputQueuedMessage, leadId: string): string | undefined {
+    if (!isAcknowledgableWorkerReport(item, leadId) || item.origin?.kind !== 'orca') return;
+    return createHash('sha256').update(JSON.stringify([
+      leadId, item.clientId, item.origin.senderSessionId, item.origin.displayText ?? item.text,
+      item.mergedDeliveryClientIds,
+    ])).digest('base64url');
+  }
+
   async function listWorkerQueuedMessages(params: {
     callerLeadSessionId: string;
     workerRef?: string;
@@ -1945,6 +1976,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     const target = await resolveQueueTarget(params.callerLeadSessionId, params.workerRef);
     if (!target.ok) return target;
     const snapshot = await deps.getSessionQueueSnapshot(target.sessionId);
+    const waiting = target.worker === null
+      ? new Map(snapshot.pendingQueue.map(item => [item.clientId, item])) : undefined;
     const messages = (
       snapshot.inspectionMessages ??
       snapshot.pendingQueue.map((item, index): WorkerQueuedMessageSnapshot => {
@@ -1961,10 +1994,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           consuming: snapshot.consumingClientIds.includes(item.clientId),
         };
       })
-    ).map((entry) =>
-      // 自身队列里的协同条目来自对端(Lead 收到的是 Worker 回报),不是 lead 自己发的。
-      target.worker === null && entry.source === 'lead' ? { ...entry, source: 'worker' as const } : entry,
-    );
+    ).map((entry): WorkerQueuedMessageSnapshot => {
+      if (!waiting || entry.source !== 'lead') return entry;
+      const item = entry.consuming ? undefined : waiting.get(entry.queuedMessageId);
+      const token = item && reportAcknowledgementToken(item, target.sessionId);
+      return { ...entry, source: 'worker', ...(token ? { acknowledgementToken: token } : {}) };
+    });
     return {
       ok: true,
       workerId: target.worker?.id ?? null,
@@ -1975,6 +2010,35 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       queuePaused: snapshot.queuePaused,
       messages,
     };
+  }
+
+  async function acknowledgeWorkerQueuedMessage(params: {
+    callerLeadSessionId: string;
+    queuedMessageId: string;
+    acknowledgementToken: string;
+  }): Promise<AcknowledgeWorkerQueuedMessageResult> {
+    const { callerLeadSessionId, queuedMessageId } = params;
+    const assertCurrent = await deps.captureControlAuthority?.(callerLeadSessionId);
+    if (!await deps.isActiveLead(callerLeadSessionId)) {
+      return { ok: false, errorCode: 'LEAD_NOT_SUPPORTED', message: 'Acknowledgement requires an active Orca Lead' };
+    }
+    if (!(await deps.ensureWorkerQueueRestored(callerLeadSessionId))) {
+      return { ok: false, errorCode: 'INTERNAL', message: 'Lead queue could not be restored; no messages were changed' };
+    }
+    const result = await queueControl.acknowledge({
+      sessionId: callerLeadSessionId,
+      queuedMessageId,
+      authorize: (item) => isAcknowledgableWorkerReport(item, callerLeadSessionId)
+        ? { ok: true }
+        : { ok: false, message: `queued message ${queuedMessageId} is not a Worker report` },
+      matchesReadVersion: (item) => reportAcknowledgementToken(item, callerLeadSessionId) === params.acknowledgementToken,
+      finish: async (item) => {
+        if (!await deps.isActiveLead(callerLeadSessionId)) return 'not-lead';
+        await assertCurrent?.();
+        return deps.acknowledgeQueuedReport(callerLeadSessionId, item);
+      },
+    });
+    return result.ok || result.errorCode === 'LEAD_NOT_SUPPORTED' ? result : mapWorkerQueueControlFailure(result, true);
   }
 
   async function steerWorkerQueuedMessage(params: {
@@ -2298,6 +2362,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     mergeWorkerQueuedMessages,
     steerWorkerQueuedMessage,
     moveWorkerQueuedMessage,
+    acknowledgeWorkerQueuedMessage,
     captureWorkerText(sessionId, text, opts) {
       const state = autoBridge.get(sessionId);
       if (!state?.pending || text.length === 0) return;

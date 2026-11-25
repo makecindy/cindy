@@ -456,6 +456,8 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
   const findWorkerById = (workerId: string) => workers.find((item) => item.id === workerId);
 
   const deps: OrcaTeamServiceDeps = {
+    isActiveLead: vi.fn(async sid => sid === 'lead-1'),
+    acknowledgeQueuedReport: vi.fn(async () => 'acknowledged' as const),
     getWorkerLinkBySessionId: vi.fn(async (workerSessionId: string) => {
       const worker = findWorkerBySessionId(workerSessionId);
       return worker
@@ -3903,6 +3905,55 @@ describe('OrcaTeamService worker queued message control', () => {
     else await expect(run()).rejects.toThrow('Revoked');
     const mutations=[deps.replaceQueuedMessage,deps.removeQueuedMessage,deps.mergeQueuedMessages].reduce((n,fn)=>n+vi.mocked(fn).mock.calls.length,0);
     expect(mutations).toBe(phase==='healthy'?1:0);
+  });
+
+  // Unit: inspecting a waiting report leaves it visible; its version must match
+  // when the Lead later handles it, even if the Worker reuses the queue ID.
+  it('acknowledges only the version the Lead inspected', async () => {
+    const origin = { kind: 'orca' as const, senderLabel: 'Worker', senderSessionId: 'worker-session-1', displayText: 'first' };
+    const original = { ...queuedItem('report', origin), orcaReportDelivery: { workerId: 'worker-1' } };
+    const user = queuedItem('user');
+    let pendingQueue = [original as AgentInputQueuedMessage, user];
+    let consumingClientIds: string[] = [];
+    const acknowledgeQueuedReport = vi.fn(async (_sid, expected) => {
+      pendingQueue = pendingQueue.filter(item => item !== expected);
+      return 'acknowledged' as const;
+    });
+    const { service, deps } = createDeps({
+      acknowledgeQueuedReport,
+      getSessionQueueSnapshot: async () => ({ pendingQueue, consumingClientIds,
+        steeringClientIds: [], isWorking: true, willQueue: true, queuePaused: false }),
+    });
+    const caller = { callerLeadSessionId: 'lead-1' };
+    const read = () => service.listWorkerQueuedMessages(caller);
+    const first = await read();
+    expect(first).toMatchObject({ ok: true, messages: [
+      { source: 'worker', consuming: false, acknowledgementToken: expect.any(String) }, { source: 'user' },
+    ] });
+    expect(await read()).toEqual(first);
+    if (!first.ok) throw new Error(first.message);
+    const params = { ...caller, queuedMessageId: 'report', acknowledgementToken: first.messages[0].acknowledgementToken! };
+    await expect(service.acknowledgeWorkerQueuedMessage({ ...params, callerLeadSessionId: 'worker-session-1' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'LEAD_NOT_SUPPORTED' });
+    await expect(service.acknowledgeWorkerQueuedMessage({ ...params, queuedMessageId: 'user' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'NOT_ORCA_MESSAGE' });
+    consumingClientIds = ['report'];
+    await expect(service.acknowledgeWorkerQueuedMessage(params)).resolves.toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });
+    consumingClientIds = [];
+    pendingQueue[0] = { ...original, chatMessage: { ...original.chatMessage, files: [{ name: 'report.txt', path: '/repo/report.txt' }] } };
+    const withAttachment = await read();
+    if (!withAttachment.ok) throw new Error(withAttachment.message);
+    expect(withAttachment.messages[0].acknowledgementToken).toBeUndefined();
+    await expect(service.acknowledgeWorkerQueuedMessage(params)).resolves.toMatchObject({ ok: false, errorCode: 'NOT_ORCA_MESSAGE' });
+    pendingQueue[0] = { ...original, origin: { ...origin, displayText: 'second' } };
+    await expect(service.acknowledgeWorkerQueuedMessage(params)).resolves.toMatchObject({ ok: false, errorCode: 'QUEUE_CHANGED' });
+    expect(acknowledgeQueuedReport).not.toHaveBeenCalled();
+    const latest = await read();
+    if (!latest.ok) throw new Error(latest.message);
+    await expect(service.acknowledgeWorkerQueuedMessage({ ...params, acknowledgementToken: latest.messages[0].acknowledgementToken! }))
+      .resolves.toEqual({ ok: true, queuedMessageId: 'report' });
+    expect(await read()).toMatchObject({ ok: true, messages: [{ queuedMessageId: 'user' }] });
+    expect(deps.removeQueuedMessage).not.toHaveBeenCalled();
   });
 
   it('lists queue with content for all sources and marks consuming', async () => {

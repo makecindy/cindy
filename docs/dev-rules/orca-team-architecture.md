@@ -114,7 +114,7 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 
 ### MCP 与 IPC 控制面
 
-`cindy_orca` 是独立 MCP server，直接顶层注册 22 个工具：19 个 team 控制工具 + 3 个只读诊断工具（后者从已下线的 `orca_bridge` 桥入，保裸名）。它与 renderer IPC 共用同一组 main 侧 service，因此 MCP 和 UI 操作必须有一致的权限、状态和回滚语义。
+`cindy_orca` 是独立 MCP server，直接顶层注册 23 个工具：20 个 team 控制工具 + 3 个只读诊断工具（后者从已下线的 `orca_bridge` 桥入，保裸名）。它与 renderer IPC 共用同一组 main 侧 service，因此 MCP 和 UI 操作必须有一致的权限、状态和回滚语义。
 
 1. `start_team`
 2. `end_team`
@@ -129,15 +129,16 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 11. `cancel_queued_message`（排队消息控制）
 12. `merge_queued_messages`（原子合并连续排队消息）
 13. `steer_queued_message`（排队消息转插话）
-14. `move_queued_message`（调整排队顺序）
-15. `idle_worker`
-16. `archive_worker`
-17. `update_worker`（改 worker 的展示角色名 `role` 与 team 内唯一标识 `label`；只改身份元数据，不换 Agent/模型/权限）
-18. `set_worker_runtime`（给已开始的本机 Worker 换引擎、模型、来源、推理强度与 Fast；与该 Worker 任务的 `set_session_runtime` 同一事务，见坑点 #13）
-19. `list_available_models`
-20. `get_workspace_info`（只读诊断）
-21. `worker_status`（只读诊断）
-22. `read_worker`（只读诊断）
+14. `acknowledge_queued_message`（Lead 确认已处理自己的 Worker 回报，不撤回回报信用）
+15. `move_queued_message`（调整排队顺序）
+16. `idle_worker`
+17. `archive_worker`
+18. `update_worker`（改 worker 的展示角色名 `role` 与 team 内唯一标识 `label`；只改身份元数据，不换 Agent/模型/权限）
+19. `set_worker_runtime`（给已开始的本机 Worker 换引擎、模型、来源、推理强度与 Fast；与该 Worker 任务的 `set_session_runtime` 同一事务，见坑点 #13）
+20. `list_available_models`
+21. `get_workspace_info`（只读诊断）
+22. `worker_status`（只读诊断）
+23. `read_worker`（只读诊断）
 
 创建回执陈述交接事实，不让 Lead 猜（2026-11-10 现场：五个 Worker「创建成功、首条任务已排队」被说成
 「五个在跑」，随后全部因读不到 Lead 的文件受阻）。`create_worker` 与 `create_workers` 的每个成功项都带：
@@ -154,7 +155,7 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 
 批量创建必须走一次 `create_workers` 调用，不能让 Lead 并行或连续发多个独立 `create_worker`。批量工具按输入顺序复用同一个 `OrcaLifecycleService.createWorker` 原语；首次收到 `WORKER_LIMIT_HARD_EXCEEDED` 或批次级 `HOST_NOT_READY` 后不再调用 host，剩余项稳定标为 `skipped`。返回值必须包含请求数、实际尝试数、成功数、失败数、跳过数、总未创建数、数量闸快照、代码确定生成的 `user_report`，以及逐项真实 worker/session 或失败终态，供 Lead 如实向用户收口；`success_count + failure_count + skipped_count` 必须等于 `request_count`，其中 `not_created_count = failure_count + skipped_count`。单个 `create_worker` 继续作为兼容入口，并返回相同的结构化 hard-limit 快照。
 
-排队消息控制 6 工具让 Lead 在消息被 worker 消费前管理自己发出的排队消息：`send_to_worker` / `create_worker`（initial_task）在 `wakeKind='queued'` 时回传 `queued_message_id`（coordinator 队列内的 clientId），Lead 可据此查看工作态和完整队列、整条改写、撤回、原子合并连续的 Lead 消息、转为插话或调整顺序。`get_worker_queue_status` / `steer_queued_message` / `move_queued_message` 省略 `worker_id` 时作用于调用方自己的队列（Lead 忙时 Worker 回报排在这里）。实现走 `OrcaTeamService.listWorkerQueuedMessages / updateWorkerQueuedMessage / cancelWorkerQueuedMessage / mergeWorkerQueuedMessages / steerWorkerQueuedMessage / moveWorkerQueuedMessage`，语义约束见「协同运行时行为契约 · 消息派发与 auto-bridge」第 1b、6–9 条。
+Lead 可查看队列，并在 Worker 消费前改写、撤回或原子合并自己发出的排队消息。`send_to_worker` / `create_worker`（initial_task）在 `wakeKind='queued'` 时回传 `queued_message_id`（coordinator 队列内的 clientId）。`get_worker_queue_status` / `steer_queued_message` / `move_queued_message` 省略 `worker_id` 时作用于调用方自己的队列。`acknowledge_queued_message` 只接受自己队列中已处理的 Worker 回报，不接受 `worker_id`。以上工具经 `OrcaTeamService`，语义见「协同运行时行为契约 · 消息派发与 auto-bridge」第 1b、6–9a 条。
 
 反方向由 `orca_worker_bridge` 承接：除 `send_to_lead` / `read_lead_history` / `read_lead` / `lead_status` 外，Worker 另有 `get_lead_queue_status` / `update_queued_report` / `cancel_queued_report` / `merge_queued_reports` 四个工具，管理自己发给 Lead、仍在 Lead 队列里等待的回报。两个方向的排队回执与送达提示见同一小节第 11 条，Worker 侧队列管理见第 12 条。Worker 提示词的 `Tools:` 一行必须与 bridge 实际注册的工具名逐个一致（`orca-bridge-mcp.test.ts` 有对应用例）。
 
@@ -645,6 +646,11 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    插话绕过 drain，因此 coordinator 在每次 provider 接受插话后调用 `onSteerAccepted`，由宿主
    释放该 clientId 排队时登记的 Orca 回调（不运行，理由见 1b）。排序同样遵守编辑锁：
    用户正在编辑的行不可移动（`MESSAGE_CONSUMING`）。
+
+9a. **Lead 可确认已处理的排队回报，不再投递**<br>
+    `get_worker_queue_status` 保持只读；对自己队列中未进入投递的纯文本 Worker 回报提供 `acknowledgement_token`。
+    活动 Lead 读完且处理完才调用 `acknowledge_queued_message`，原样传回条目 ID 和版本标识。宿主复核当前轮次权限、真实回报来源、内容版本及活队列对象；恢复未完成、版本变化或已进入投递时不移除。含附件或正文未读全的回报继续正常投递。
+    确认不是撤回、转插话或 provider 派发，不新增可见历史消息，不撤销 Worker 已回报的记录。回报的持久终态标记先于出队快照写入；即使旧快照仍在，恢复也不会重投已封存的 ID。已通过合并结算的别名保留原终态。
 
 10. **轮次结束后才落地的 accepted 只能用交付级凭证（状态：不变量，2026-10-24）**<br>
     排队消息的 accepted 回调要等目标排空队列才跑，此时发起它的那一轮早已结束；因此它只能复核

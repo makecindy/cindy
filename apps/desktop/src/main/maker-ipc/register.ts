@@ -554,6 +554,8 @@ import {
   listQueuedOrcaReportSessionIds,
   saveAgentInputQueueSnapshot,
   saveCancelledInputDelivery,
+  saveAcknowledgedOrcaReportDelivery,
+
   readInputDeliveryReceipts,
   hasInputDeliveryCancellation,
 } from '../localDb/agentInputQueueSnapshots.js';
@@ -3134,6 +3136,8 @@ interface OrcaCollabService {
     workerRef?: string;
     queuedMessageId: string;
   }) => Promise<SteerWorkerQueuedMessageResult>;
+  acknowledgeWorkerQueuedMessage: OrcaTeamService['acknowledgeWorkerQueuedMessage'];
+
   moveWorkerQueuedMessage: (params: {
     callerLeadSessionId: string;
     workerRef?: string;
@@ -16607,6 +16611,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const orcaTeamService = createOrcaTeamService(orcaRemoteWorkers.wrapTeamDeps({
     captureControlAuthority: async () => (await captureOrcaTaskAuthority()).assertCurrent,
+    isActiveLead: async (sessionId) => !!await getActiveTeamByLead(sessionId),
+    acknowledgeQueuedReport: async (sessionId, item) => {
+      const receipt = inputCoordinator.acknowledgeQueuedReport(sessionId, item, () =>
+        saveAcknowledgedOrcaReportDelivery(sessionId, item.clientId, item.mergedDeliveryClientIds));
+      if (typeof receipt === 'string') return receipt;
+      try {
+        // Recovery filters even an older snapshot by the durable tombstone. Attachment
+        // cleanup separately waits for the snapshot, which has its own failure logging.
+        return await receipt ? 'acknowledged' : 'uncertain';
+      } catch {
+        log.warn('could not confirm Orca acknowledgement persistence', { sessionId });
+        return 'uncertain';
+      }
+    },
+
     // Queued dispatch acceptance and terminal-time retries land after this turn is gone.
     captureDeliveryAuthority: (leadSessionId) => captureOrcaDeliveryAuthority(leadSessionId),
     withSessionSendLock: withSendToSessionLock,
@@ -18082,6 +18101,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     mergeWorkerQueuedMessages: (params) => orcaTeamService.mergeWorkerQueuedMessages(params),
     steerWorkerQueuedMessage: (params) => orcaTeamService.steerWorkerQueuedMessage(params),
     moveWorkerQueuedMessage: (params) => orcaTeamService.moveWorkerQueuedMessage(params),
+    acknowledgeWorkerQueuedMessage: (params) => orcaTeamService.acknowledgeWorkerQueuedMessage(params),
+
     startTeam: ({ leadSessionId, workerPermissionMode }) => startOrcaTeamForCaller(leadSessionId, workerPermissionMode),
     createWorker: async (params) => {
       params = { ...params, useCreationPrefs: true };
@@ -20519,6 +20540,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 协同消息送达时告诉接收方后面还排着哪些协同消息;其它来源的排队项不触发。
     describeQueueBehindDispatch: (_sessionId, item, pendingQueue) =>
       buildOrcaQueueDispatchNote(item, pendingQueue),
+    onAcknowledgedQueuedReport: (sessionId, item) => {
+      void settleTaskActionInput(item).catch(() => undefined);
+      orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
+      discardQueuedAttachmentOwnership(sessionId, item.clientId);
+      // Report credit survives handling, just as it survives normal delivery.
+    },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item, opts) => {
       void settleTaskActionInput(item).catch(() => undefined);
