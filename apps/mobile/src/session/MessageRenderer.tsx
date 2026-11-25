@@ -135,6 +135,7 @@ import {
   parseChatQuoteSegments,
   type ChatQuote,
 } from '@cindy/maker-shared/chat-quotes';
+import { splitGhostDirective } from '@cindy/maker-shared/ghost-command';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { QuoteCapsule } from '@/session/QuoteCapsule';
 import { MessageListActionButton } from './MessageListActionButton';
@@ -3612,7 +3613,7 @@ function SyncingMessages() {
 }
 
 function MessageBubble({
-  item,
+  item: sourceItem,
   actions,
 }: {
   item: MobileMessageItem;
@@ -3624,6 +3625,22 @@ function MessageBubble({
   const styles = useThemedStyles(makeStyles);
   const { colors, mode } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
+  const message = sourceItem.message;
+  const canShowPluginDirective = message.kind === 'user' && message.align === 'user'
+    && !actions.companion && !message.hookSource && !message.systemCardType && message.draftBody === undefined;
+  const ghostSplit = useMemo(
+    () => canShowPluginDirective ? splitGhostDirective(message.body) : null,
+    [canShowPluginDirective, message.body],
+  );
+  // Use the same visible body for the bubble, copy and draft restoration. The
+  // original history row is still available as message.source.
+  const item = useMemo(() => ghostSplit
+    ? { ...sourceItem, message: { ...message, body: ghostSplit.body } }
+    : sourceItem, [ghostSplit, message, sourceItem]);
+  const [pluginDirectiveExpanded, setPluginDirectiveExpanded] = useRecyclingState(false);
+  const pluginDirective = ghostSplit?.directive;
+  const pluginDirectiveLabel = pluginDirective?.kind === 'command' ? pluginDirective.name
+    : pluginDirective?.ghosts.map((ghost) => ghost.name).join(t('message.pluginInvocation.listSeparator'));
   const [copyState, setCopyState] = useRecyclingState<CopyMessageStatus | 'idle' | 'copying'>('idle');
   const [actionSheetOpen, setActionSheetOpen] = useRecyclingState(false);
   const historyActive = useMessageHistoryActive();
@@ -4042,7 +4059,7 @@ function MessageBubble({
     />
   ) : null;
   const hasBubbleContent = !!(
-    hookSource || item.message.systemCardType || displayBubbleBody || item.message.secondaryBody ||
+    hookSource || item.message.systemCardType || displayBubbleBody || item.message.secondaryBody || pluginDirective ||
     // A quote or reply target alone still needs the bubble, e.g. an attachment-only reply.
     (companionQuote && (replyQuote || replyTarget))
   );
@@ -4228,6 +4245,22 @@ function MessageBubble({
         >
           {longMessageExpanded ? t('message.renderer.collapse') : t('message.renderer.expand')}
         </Text>
+      ) : null}
+      {pluginDirective && pluginDirectiveLabel ? (
+        <>
+          <Text
+            accessibilityRole="button"
+            accessibilityState={{ expanded: pluginDirectiveExpanded }}
+            onPress={() => setPluginDirectiveExpanded((expanded) => !expanded)}
+            style={styles.collapseToggleText}
+            suppressHighlighting
+          >
+            {t(pluginDirectiveExpanded ? 'message.renderer.collapseRow' : 'message.renderer.expandRow', {
+              label: pluginDirectiveLabel,
+            })}
+          </Text>
+          {pluginDirectiveExpanded ? <Text style={styles.detailText}>{pluginDirective.raw}</Text> : null}
+        </>
       ) : null}
       {item.message.secondaryBody ? (
         <MarkdownSelectableText selectable={bubbleTextSelectable} style={styles.detailText}>
