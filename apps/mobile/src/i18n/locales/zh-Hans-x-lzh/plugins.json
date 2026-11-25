@@ -25,7 +25,9 @@
       "replyAll": "悉覆此函诸受书者",
       "forward": "转致此函"
     },
+    "messageCount_one": "凡 {{count}} 函",
     "messageCount_other": "凡 {{count}} 函",
+    "showMessages_one": "示 {{count}} 函",
     "showMessages_other": "示 {{count}} 函",
     "conversationFailed": "前后之函暂不可读。",
     "expandMessage": "展 {{from}} 之函",

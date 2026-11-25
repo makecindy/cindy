@@ -30,6 +30,7 @@ import {
   type ModelFavoritesHostApi,
 } from '../shared/modelFavoritesSync';
 import { invokeOpenPath } from './openPath';
+import { REMOTE_PLUGIN_SETTINGS_STATUS } from '../shared/remotePluginSettings.js';
 import {
   COPY_PNG_TO_CLIPBOARD_CHANNEL,
   type CopyPngToClipboardParams,
@@ -829,6 +830,7 @@ const fanOutGhostHookFused = createIpcFanOut('ghosts:hook-fused');
 // 意识系统提示(notify 槽:宿主 Toast 渲染,带意识身份头)。
 const fanOutGhostNotify = createIpcFanOut('ghosts:notify');
 const fanOutRemoteSettingsDirectory = createIpcFanOut('device-link:plugin-settings:directory');
+const fanOutRemoteSettingsStatus = createIpcFanOut(REMOTE_PLUGIN_SETTINGS_STATUS);
 // 意识未读角标(badge 槽:插件入口与插件卡上的绿点,持久状态非一次性 toast)。
 const fanOutGhostBadge = createIpcFanOut('ghosts:badge');
 // 未读全量快照(换账号后整表替换;逐条 badge 只表达增量)。
@@ -1533,6 +1535,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('device-link:plugin-settings:open', target),
     closeRemoteSettings: (id: string): Promise<void> => ipcRenderer.invoke('device-link:plugin-settings:close', id),
     onRemoteSettingsDirectory: fanOutRemoteSettingsDirectory,
+    onRemoteSettingsStatus: fanOutRemoteSettingsStatus,
     answerRemoteSettingsDirectory: (answer: import('../shared/remotePluginSettings').RemotePluginSettingsDirectoryAnswer): Promise<void> =>
       ipcRenderer.invoke('device-link:plugin-settings:answer-directory', answer),
     recommendationsSync:
@@ -7011,8 +7014,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCompanionCloudState: (): Promise<import('../shared/companionCloud').CompanionCloudSnapshot> =>
       ipcRenderer.invoke('maker:companion-cloud:state'),
     onCompanionCloudChanged: fanOutCompanionCloudChanged,
-    takeOverCompanion: (botId: string): Promise<import('../shared/companionCloud').CompanionCloudActionResult> =>
-      ipcRenderer.invoke('maker:companion-cloud:take-over', botId),
+    takeOverCompanion: (
+      botId: string,
+      options?: import('../shared/companionCloud').CompanionTakeOverOptions,
+    ): Promise<import('../shared/companionCloud').CompanionCloudActionResult> =>
+      ipcRenderer.invoke('maker:companion-cloud:take-over', botId, options),
     repairCompanionProfile: (botId: string, request: import('../shared/companionCloud').CompanionProfileRepairRequest): Promise<import('../shared/companionCloud').CompanionProfileRepairResult> =>
       ipcRenderer.invoke('maker:companion-cloud:repair-profile', botId, request),
     switchCompanionHome: (
