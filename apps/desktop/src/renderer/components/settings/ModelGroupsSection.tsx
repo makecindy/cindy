@@ -150,7 +150,6 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
   const { config, loaded } = useModelGroups(true, { includeHidden: true });
   // 这里能打开、能改的是用户按模型排的路由；供应商路由(及它们在每个模型上的展开)在下面单独一段(ModelGroupsAutoRoutes)。
   const userRoutes = useMemo(() => config.routes.filter((item) => !item.parent), [config]);
-  const shownConfig = useMemo(() => ({ ...config, routes: userRoutes }), [config, userRoutes]);
   // 路由只有一种，来源分两类：某个模型，或一整个供应商(含其他电脑上的、分享来的)。后一类存在 sourceRoutes 里。
   const sourceRoutes = config.sourceRoutes ?? [];
   const sourceOptions = useSourceOptions();
@@ -505,8 +504,9 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
   // ── 列表 ───────────────────────────────────────────────────────────────────
   return (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
-      <ModelGroupsOverview config={shownConfig}
-        onOpenRoute={(id) => { if (userRoutes.some((item) => item.id === id)) openRoute(id); }} />
+      <ModelGroupsOverview config={config}
+        onOpenRoute={(id) => { if (userRoutes.some((item) => item.id === id)) openRoute(id); }}
+        onOpenSourceRoute={(id) => { captureScroll(); setView({ kind: 'source', id }); }} />
       <SettingsSection
         title={t('modelGroups.routes')}
         titleId={modelGroupsSettings.routes.targetId}

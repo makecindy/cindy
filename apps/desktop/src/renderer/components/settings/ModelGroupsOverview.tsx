@@ -1,15 +1,17 @@
 /**
- * 设置 → 模型组 → 总览：一张「现在怎么走」的关系图（路线 → 来源）和「最近的选择」。
+ * 设置 → 模型组 → 总览：一张「现在怎么走」的关系图（路线 → 来源），「最近的选择」收在图下面那一行里，点开才列出。
  * 连线按节点的实际位置画在一层 SVG 上，尺寸变化时重画；悬停或聚焦一个节点时，与它相连的整条路径换成深一档的线色。
  * 来源后面的余量来自最近一次选中它时记下的额度，已过重置时刻的不显示。
+ * 合并整个供应商的路由按供应商画：右边一个成员一格，不按它展开出的几十个模型逐个画(2026-11-25 用户反馈)。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 import { agentOptionOf } from '@/components/new-chat/agentOptions';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Waypoints } from 'lucide-react';
+import { ChevronDown, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { ProviderMark } from '@/components/new-chat/ModelSelector';
+import { Collapse } from '@/components/ui/collapse';
 import { SettingsBlock, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { modelGroupWhyText, useModelGroupCandidateNames } from '@/features/model-groups/modelGroupsClient';
 import { createLogger } from '@/lib/logger';
@@ -19,7 +21,9 @@ import type { ModelGroupDecision } from '../../../shared/modelGroupDecisions';
 import {
   modelGroupCandidateKey,
   type ModelGroupCandidate,
+  type ModelGroupRoute,
   type ModelGroupsConfig,
+  type ModelGroupSourceRoute,
   type ModelGroupTraceQuota,
 } from '../../../shared/modelGroups';
 
@@ -50,6 +54,32 @@ interface MapNode {
   candidate?: CandidateRef;
   /** 来源后面的余量（%）。 */
   left?: number | null;
+  /** 名字后面的一句补充，如合并整个供应商的路由写「7 个模型」。 */
+  meta?: string;
+  /** 这一格是一整个供应商(合并整个供应商的路由的成员)，不是某个模型。 */
+  provider?: boolean;
+}
+/** 合并整个供应商的路由，连同它在每个模型上展开出的那些路由。 */
+interface ProviderRouteView { route: ModelGroupSourceRoute; children: ModelGroupRoute[] }
+
+const memberKey = (item: { agentDeviceId?: string; providerId: string }) => `${item.agentDeviceId ?? ''}\u0000${item.providerId}`;
+
+/**
+ * 读余量时要解析哪些路由：用户按模型排的每条都读；合并整个供应商的只挑刚好覆盖全部成员的几条展开(通常一两条)，
+ * 不把几十个模型逐个解析一遍。
+ */
+function quotaProbes(userRoutes: readonly ModelGroupRoute[], providerRoutes: readonly ProviderRouteView[]): ModelGroupRoute[] {
+  const probes = [...userRoutes];
+  for (const { children } of providerRoutes) {
+    const covered = new Set<string>();
+    for (const child of children) {
+      const fresh = child.candidates.filter((candidate) => !covered.has(memberKey(candidate)));
+      if (fresh.length === 0) continue;
+      for (const candidate of child.candidates) covered.add(memberKey(candidate));
+      probes.push(child);
+    }
+  }
+  return probes;
 }
 interface MapEdge { from: string; to: string; off?: boolean }
 
@@ -106,9 +136,9 @@ function remainingFor(
  * 打开总览时读一次各条路线每个来源此刻的额度：与「试一下」同一个只看不选的解析(不推进轮流、不记录)。
  * 只在路线或来源变了时重读，不轮询。
  */
-function useLiveSourceQuota(config: ModelGroupsConfig): ReadonlyMap<string, ModelGroupTraceQuota | null> {
+function useLiveSourceQuota(routes: readonly ModelGroupRoute[]): ReadonlyMap<string, ModelGroupTraceQuota | null> {
   const [live, setLive] = useState<ReadonlyMap<string, ModelGroupTraceQuota | null>>(() => new Map());
-  const routesKey = config.routes
+  const routesKey = routes
     .map((route) => `${route.id}\u0001${route.candidates.map((candidate) => modelGroupCandidateKey(candidate)).join('\u0002')}`)
     .join('\u0003');
   useEffect(() => {
@@ -185,6 +215,7 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
     >
       {icon}
       <span className="min-w-0 flex-1 truncate">{node.name}</span>
+      {node.meta && <span className="shrink-0 text-12 font-normal leading-[1.33] text-[var(--text-tertiary)]">{node.meta}</span>}
       {node.left != null && (
         <span className={cn('shrink-0 text-12 font-normal tabular-nums leading-[1.33]', leftTone(node.left))}>{node.left}%</span>
       )}
@@ -193,16 +224,18 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
   );
 }
 
-function RelationMap({ config, decisions, liveQuota, onOpenRoute, namesOf }: {
-  config: ModelGroupsConfig;
+function RelationMap({ userRoutes, providerRoutes, decisions, liveQuota, onOpenRoute, onOpenSourceRoute, namesOf }: {
+  userRoutes: readonly ModelGroupRoute[];
+  providerRoutes: readonly ProviderRouteView[];
   decisions: readonly ModelGroupDecision[];
   liveQuota: ReadonlyMap<string, ModelGroupTraceQuota | null>;
   onOpenRoute(id: string): void;
+  onOpenSourceRoute?(id: string): void;
   namesOf: CandidateNames;
 }) {
   const { t } = useTranslation();
 
-  const { columns, edges } = useMemo(() => {
+  const { columns, edges, parents } = useMemo(() => {
     const now = Date.now();
     const sources = new Map<string, MapNode>();
     const list: MapEdge[] = [];
@@ -215,19 +248,51 @@ function RelationMap({ config, decisions, liveQuota, onOpenRoute, namesOf }: {
       }
       return id;
     };
-    const routes: MapNode[] = config.routes.map((route) => {
+    const routes: MapNode[] = userRoutes.map((route) => {
       const id = nodeId('route', route.id);
       for (const candidate of route.candidates) list.push({ from: id, to: source(candidate), off: candidate.off });
       return { id, kind: 'route', name: route.name, open: () => onOpenRoute(route.id), openLabel: t('modelGroups.overview.openRoute', { name: route.name }) };
     });
+    // 合并整个供应商的路由：右边一个成员一格。同一个供应商在几条这样的路由里时共用一格。
+    const members = new Map<string, MapNode>();
+    const parents = new Map<string, string>();
+    for (const { route, children } of providerRoutes) {
+      const id = nodeId('route', route.id);
+      for (const child of children) parents.set(child.id, id);
+      const off = new Set(route.sources.filter((item) => item.off).map(memberKey));
+      const seen = new Set<string>();
+      for (const candidate of children.flatMap((child) => child.candidates)) {
+        const key = memberKey(candidate);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (!members.has(key)) {
+          // 余量取这个成员读到的几份里最紧的一份：有的额度只管某个模型。
+          const readings = providerRoutes.flatMap((item) => item.children).flatMap((child) => child.candidates)
+            .filter((item) => memberKey(item) === key)
+            .map((item) => remainingFor(item, liveQuota, decisions, now))
+            .filter((value): value is number => value !== null);
+          members.set(key, {
+            id: nodeId('source', `provider\u0000${key}`), kind: 'source', name: namesOf(candidate).sourceLabel, candidate, provider: true,
+            left: readings.length > 0 ? Math.min(...readings) : null,
+          });
+        }
+        list.push({ from: id, to: members.get(key)!.id, off: off.has(key) });
+      }
+      routes.push({
+        id, kind: 'route', name: route.name, meta: t('modelGroups.sources.models', { count: children.length }),
+        ...(onOpenSourceRoute ? { open: () => onOpenSourceRoute(route.id) } : {}),
+        openLabel: t('modelGroups.overview.openRoute', { name: route.name }),
+      });
+    }
     return {
       columns: [
         { key: 'routes', title: t('modelGroups.routes'), nodes: routes },
-        { key: 'sources', title: t('modelGroups.overview.columnSources'), nodes: withEngineWhenAmbiguous([...sources.values()]) },
+        { key: 'sources', title: t('modelGroups.overview.columnSources'), nodes: [...withEngineWhenAmbiguous([...sources.values()]), ...members.values()] },
       ],
       edges: list,
+      parents,
     };
-  }, [config, decisions, liveQuota, namesOf, onOpenRoute, t]);
+  }, [userRoutes, providerRoutes, decisions, liveQuota, namesOf, onOpenRoute, onOpenSourceRoute, t]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -266,15 +331,16 @@ function RelationMap({ config, decisions, liveQuota, onOpenRoute, namesOf }: {
     const picked = last ? decisionCandidate(last) : null;
     const out = new Set<string>();
     if (!last || !picked) return out;
-    const sourceKey = modelGroupCandidateKey(picked);
-    const group = nodeId(last.groupType, last.groupId);
-    const end = nodeId('source', sourceKey);
+    // 经合并整个供应商的路由开的任务，记录里记的是它在那个模型上展开出的那一条：标在那条路由和选中的成员上。
+    const parent = parents.get(last.groupId);
+    const group = parent ?? nodeId(last.groupType, last.groupId);
+    const end = parent ? nodeId('source', `provider\u0000${memberKey(picked)}`) : nodeId('source', modelGroupCandidateKey(picked));
     if (edges.some((edge) => edge.from === group && edge.to === end)) {
       out.add(group);
       out.add(end);
     }
     return out;
-  }, [decisions, edges]);
+  }, [decisions, edges, parents]);
   const paths = edges
     .map((edge) => {
       const a = points.get(edge.from);
@@ -353,11 +419,11 @@ function RecentDecisions({ decisions, namesOf }: { decisions: readonly ModelGrou
   }, [locale]);
 
   if (decisions.length === 0) {
-    return <SettingsCard><SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.overview.recentEmpty')}</SettingsBlock></SettingsCard>;
+    return <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.overview.recentEmpty')}</SettingsBlock>;
   }
   return (
     // 各行共用一套列：时间长短不一(今天只写时刻、更早的写日期)时，模型那一列仍在同一位置对齐。
-    <SettingsCard data-testid="model-groups-recent" className="grid grid-cols-[minmax(0,1fr)_minmax(0,232px)_auto] gap-x-4">
+    <div data-testid="model-groups-recent" className="grid grid-cols-[minmax(0,1fr)_minmax(0,232px)_auto] gap-x-4">
       {decisions.slice(0, RECENT_ROWS).map((item) => {
         const routed = item.outcome === 'routed';
         const picked = decisionCandidate(item);
@@ -400,7 +466,7 @@ function RecentDecisions({ decisions, namesOf }: { decisions: readonly ModelGrou
           </SettingsBlock>
         );
       })}
-    </SettingsCard>
+    </div>
   );
 }
 
@@ -408,24 +474,33 @@ function RecentDecisions({ decisions, namesOf }: { decisions: readonly ModelGrou
 function withEngineWhenAmbiguous(nodes: MapNode[]): MapNode[] {
   const seen = new Map<string, number>();
   for (const node of nodes) seen.set(node.name, (seen.get(node.name) ?? 0) + 1);
-  return nodes.map((node) => (node.candidate && (seen.get(node.name) ?? 0) > 1
+  return nodes.map((node) => (node.candidate && !node.provider && (seen.get(node.name) ?? 0) > 1
     ? { ...node, name: `${node.name} · ${agentOptionOf(node.candidate.agentKind).label}` }
     : node));
 }
 
-export function ModelGroupsOverview({ config, onOpenRoute }: {
+export function ModelGroupsOverview({ config, onOpenRoute, onOpenSourceRoute }: {
+  /** 完整的一份：用户按模型排的路由、合并整个供应商的路由(sourceRoutes)和它们展开出的路由(带 parent)。 */
   config: ModelGroupsConfig;
   onOpenRoute(id: string): void;
+  onOpenSourceRoute?(id: string): void;
 }) {
   const { t } = useTranslation();
   const [decisions, setDecisions] = useState<ModelGroupDecision[] | null>(null);
+  const [recentOpen, setRecentOpen] = useState(false);
+  const userRoutes = useMemo(() => config.routes.filter((route) => !route.parent), [config]);
+  // 隐藏了的不画；一个模型都展开不出来的(成员都没连上)也不画。
+  const providerRoutes = useMemo(() => (config.sourceRoutes ?? []).filter((route) => !route.hidden)
+    .map((route) => ({ route, children: config.routes.filter((child) => child.parent?.id === route.id && !child.hidden) }))
+    .filter((item) => item.children.length > 0), [config]);
   // 关系图与「最近的选择」共用一份名字：本机看本机目录，别的电脑或分享来的看那里的目录并写上位置。
   const candidates = useMemo(() => [
     ...config.routes.flatMap((route) => route.candidates),
     ...(decisions ?? []).flatMap((item) => decisionCandidate(item) ?? []),
   ], [config, decisions]);
   const namesOf = useModelGroupCandidateNames(candidates);
-  const liveQuota = useLiveSourceQuota(config);
+  const probes = useMemo(() => quotaProbes(userRoutes, providerRoutes), [userRoutes, providerRoutes]);
+  const liveQuota = useLiveSourceQuota(probes);
 
   useEffect(() => {
     let cancelled = false;
@@ -438,25 +513,40 @@ export function ModelGroupsOverview({ config, onOpenRoute }: {
     return () => { cancelled = true; };
   }, []);
 
-  if (config.routes.length === 0) return null;
+  if (userRoutes.length === 0 && providerRoutes.length === 0) return null;
+  const routed = (decisions ?? []).some((item) => item.outcome === 'routed');
   return (
-    <>
-      <SettingsSection title={t('modelGroups.overview.mapTitle')} description={t('modelGroups.overview.mapDescription')}>
-        <SettingsCard>
-          <RelationMap config={config} decisions={decisions ?? []} liveQuota={liveQuota} onOpenRoute={onOpenRoute} namesOf={namesOf} />
-          {(decisions ?? []).some((item) => item.outcome === 'routed') && (
-            <div className="flex items-center gap-1.5 border-t border-[var(--settings-theme-card-border)] px-4 py-2.5 text-12 leading-[1.33] text-[var(--text-tertiary)]">
-              <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--text-secondary)]" />
-              {t('modelGroups.overview.latest')}
-            </div>
-          )}
-        </SettingsCard>
-      </SettingsSection>
-      {decisions && (
-        <SettingsSection title={t('modelGroups.overview.recentTitle')}>
-          <RecentDecisions decisions={decisions} namesOf={namesOf} />
-        </SettingsSection>
-      )}
-    </>
+    <SettingsSection title={t('modelGroups.overview.mapTitle')} description={t('modelGroups.overview.mapDescription')}>
+      <SettingsCard>
+        <RelationMap userRoutes={userRoutes} providerRoutes={providerRoutes} decisions={decisions ?? []} liveQuota={liveQuota}
+          onOpenRoute={onOpenRoute} onOpenSourceRoute={onOpenSourceRoute} namesOf={namesOf} />
+        {decisions && (
+          <>
+            {/* 「最近的选择」平时收着(2026-11-25 用户反馈：平时不看，占地方)：这一行既是图上圆点的说明，也是展开它的开关。 */}
+            <button
+              type="button"
+              data-model-groups-recent-toggle
+              data-settings-search-action="Shows or hides the recent route choices; changes no setting"
+              aria-expanded={recentOpen}
+              onClick={() => setRecentOpen((open) => !open)}
+              className={cn(
+                'flex min-h-9 w-full items-center gap-1.5 border-t border-[var(--settings-theme-card-border)] px-4 py-2 text-left text-12 leading-[1.33] text-[var(--text-tertiary)] outline-none',
+                'transition-colors duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
+                'hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] focus-visible:bg-[var(--surface-hover)] focus-visible:text-[var(--text-secondary)]',
+              )}
+            >
+              {routed && <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--text-secondary)]" />}
+              <span className="min-w-0 flex-1 truncate">{routed ? t('modelGroups.overview.latest') : ''}</span>
+              <span className="shrink-0">{t('modelGroups.overview.recentTitle')}</span>
+              <ChevronDown size={14} aria-hidden
+                className={cn('shrink-0 transition-transform duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] motion-reduce:transition-none', recentOpen && 'rotate-180')} />
+            </button>
+            <Collapse open={recentOpen} className="border-t border-[var(--settings-theme-card-border)]">
+              <RecentDecisions decisions={decisions} namesOf={namesOf} />
+            </Collapse>
+          </>
+        )}
+      </SettingsCard>
+    </SettingsSection>
   );
 }
