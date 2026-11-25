@@ -11,7 +11,7 @@ const URL_TEXT = /(?:file|xdt-(?:file|audio|image)):\/\/[^\s\x60"'<>()[\]{}，�
 /** Markdown 链接 `[名称](file:///绝对路径)` 与 `[名称](xdt-file:///绝对路径)` 开头；支持前导水平空白。 */
 const MARKDOWN_FILE_LINK_OPEN = /\]\(([ \t]*(?:file:\/\/|xdt-(?:file|image):\/\/\/))/gi;
 const FILE_URL_SCHEME = /^(?:file|xdt-(?:file|audio|image)):\/\//i;
-const BARE_URL_HARD_STOP = /[\r\n\x60"'<>()[\]{}，。、；：！？（）【】《》「」『』“”‘’]/;
+const BARE_URL_LINE_STOP = /[\r\n\x60"'<>]/;
 const BARE_URL_STOP = /[\s\x60"'<>()[\]{}，。、；：！？（）【】《》「」『』“”‘’]/;
 const FILE_URL_PREFIX_BEFORE_PATH = /(?:file|xdt-(?:file|audio|image)):\/\/(?:localhost)?\/?$/i;
 
@@ -114,35 +114,35 @@ function replaceMarkdownFileLinks(value: string, workspace: ExecutorWorkspace): 
 const TEXT_BOUNDARIES = new Set(['tool_use', 'tool_result', 'tool_result_full', 'interaction_request', 'done', 'error', 'compact_boundary']);
 const IDENTITY_FIELDS = new Set(['id', 'toolUseId', 'toolUseIds', 'agentMessageId', 'taskId', 'parentToolUseId', 'turnId', 'requestId', 'blockId', 'sessionId', 'sdkSessionId', 'toolName', 'lastToolName', 'model', 'providerId']);
 
-interface SpacedAliasPrefix { target: string; windows: boolean }
-const spacedAliasCache = new WeakMap<readonly string[], SpacedAliasPrefix[]>();
+interface DelimitedAliasPrefix { target: string; windows: boolean }
+const delimitedAliasCache = new WeakMap<readonly string[], DelimitedAliasPrefix[]>();
 
-function spacedAliasPrefixes(workspace: ExecutorWorkspace): SpacedAliasPrefix[] {
+function delimitedAliasPrefixes(workspace: ExecutorWorkspace): DelimitedAliasPrefix[] {
   const aliases = workspace.agentPathPrefixes();
-  let cached = spacedAliasCache.get(aliases);
+  let cached = delimitedAliasCache.get(aliases);
   if (cached) return cached;
   cached = aliases
-    .filter((alias) => /\s/.test(alias))
+    .filter((alias) => BARE_URL_STOP.test(alias))
     .map((alias) => {
       const forward = alias.replace(/\\/g, '/').replace(/\/+$/, '');
       const windows = /^[A-Za-z]:|^\/\//.test(forward);
       return { target: windows ? forward.toLowerCase() : forward, windows };
     });
-  spacedAliasCache.set(aliases, cached);
+  delimitedAliasCache.set(aliases, cached);
   return cached;
 }
 
-/** 裸 `file://` URL 命中带空格的影子目录前缀(如 macOS `Application Support`)时，补全完整路径段。 */
-function extendSpacedFileUrl(
+/** 裸 `file://` URL 命中含空格或标点的影子目录前缀(如 `Application Support` 或中文括号目录)时，补全完整路径段。 */
+function extendDelimitedFileUrl(
   value: string, start: number, raw: string, workspace: ExecutorWorkspace,
 ): { raw: string; mapped: string } | null {
   const scheme = /^(?:file:\/\/(?:localhost)?|xdt-(?:file|image):\/\/)/i.exec(raw);
   if (!scheme) return null;
-  const spaced = spacedAliasPrefixes(workspace);
-  if (!spaced.length) return null;
+  const delimited = delimitedAliasPrefixes(workspace);
+  if (!delimited.length) return null;
   const restStart = start + scheme[0].length;
   const afterScheme = value.slice(restStart);
-  for (const { target, windows } of spaced) {
+  for (const { target, windows } of delimited) {
     const driveLead = windows && /^[\\/]/.test(afterScheme) && !target.startsWith('//') ? 1 : 0;
     const candidate = afterScheme.slice(driveLead, driveLead + target.length).replace(/\\/g, '/');
     const compared = windows ? candidate.toLowerCase() : candidate;
@@ -231,7 +231,7 @@ export function localText(value: string, workspace: ExecutorWorkspace, context: 
     let raw = match[0];
     let mapped = localFileUrl(raw, workspace);
     if (mapped === raw && FILE_URL_SCHEME.test(raw)) {
-      const extended = extendSpacedFileUrl(value, start, raw, workspace);
+      const extended = extendDelimitedFileUrl(value, start, raw, workspace);
       if (extended) {
         raw = extended.raw;
         mapped = extended.mapped;
@@ -295,11 +295,11 @@ function hasClosingParen(suffix: string): boolean {
 
 function isBareFileUrlEnded(suffix: string, workspace: ExecutorWorkspace): boolean {
   if (!BARE_URL_STOP.test(suffix)) return false;
-  if (BARE_URL_HARD_STOP.test(suffix)) return true;
-  const spaced = spacedAliasPrefixes(workspace);
-  if (!spaced.length) return true;
+  if (BARE_URL_LINE_STOP.test(suffix)) return true;
+  const delimited = delimitedAliasPrefixes(workspace);
+  if (!delimited.length) return true;
   const normalized = suffix.replace(/^localhost(?=[\\/])/i, '');
-  for (const { target, windows } of spaced) {
+  for (const { target, windows } of delimited) {
     const driveLead = windows && /^[\\/]/.test(normalized) && !target.startsWith('//') ? 1 : 0;
     const body = normalized.slice(driveLead).replace(/\\/g, '/');
     const compared = windows ? body.toLowerCase() : body;

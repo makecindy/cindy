@@ -333,6 +333,7 @@ describe('remote file references on the task computer', () => {
   describe.each([['完整回复', true], ['逐字流式', false]])('file:// links with bare spaces (%s)', (_delivery, final) => it.each([
     ['macOS 影子目录', '/Users/agent/Library/Application Support/Cindy/remote-agent/workspaces/run-1/fs/workspace'],
     ['Windows 影子目录', 'C:\\Users\\Agent Name\\Cindy\\workspaces\\run-1\\fs\\workspace'],
+    ['含中文标点影子目录', '/Users/张（测试）/workspace'],
   ])('restores unencoded file:// links, line anchors, parens and bare URLs at %s', async (_name, virtual) => {
     const { real, controller } = setup(virtual);
     const native = virtual.startsWith('C:') ? path.win32 : path.posix;
