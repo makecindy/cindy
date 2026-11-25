@@ -128,11 +128,20 @@ describe('splitStreamingMarkdownChunks', () => {
       '# [Guide](https://example.com)\n\nbody\n\n# Guide',
       '# snake_case\n\nbody\n\n# snake_case',
       'Title\n=====\n\nbody\n\n# Title',
+      // 引用、列表里的标题也参与去重计数，但不在顶层标题清单里。
+      '> # Same\n\nbody\n\n# Same\n\nbody\n\n# Tail',
+      '# A\n\n> ## A\n\n# A',
+      '- # Item\n\nbody\n\n# Item',
+      '> Quote\n> ---\n\nbody\n\n# Quote',
     ]) {
       expect(splitStreamingMarkdownChunks(headings)).toEqual([
         { start: 0, content: headings },
       ]);
     }
+
+    // 围栏里的 # 注释不是标题，不该让带代码的长回答失去分片。
+    const fencedComment = '# A\n\n1. Step\n\n   ```bash\n       # install\n   ```\n\n# A\n\ntail';
+    expect(splitStreamingMarkdownChunks(fencedComment).length).toBeGreaterThan(1);
 
     for (const htmlBlock of [
       '<details>\nsummary\n\nbody\n</details>\n\nafter',
@@ -163,22 +172,12 @@ describe('StreamingMarkdownChunk', () => {
   // 全文 Markdown，长回答越写越卡（2026-11-25 黑盒基准 long 场景）。现在分片
   // 只重解析尾块，但标题 id（含重复标题的 -1/-2 后缀）必须与整篇解析一致，
   // 否则文内锚点链接在流式期间跳错位置。
-  it('多标题长文分片解析，标题 id 与整篇解析一致', () => {
-    const markdown = [
-      '# Same', 'body', '## **Bold** `code` heading', 'body', '# same', 'body',
-      '# Same', 'body', '## Bold code heading', 'tail',
-    ].join('\n\n');
+  const headingIds = (root: ParentNode) =>
+    Array.from(root.querySelectorAll('h1, h2, h3, h4, h5, h6'), (heading) => heading.id);
+
+  function renderChunks(markdown: string) {
     const chunks = splitStreamingMarkdownChunks(markdown);
-    expect(chunks.length).toBeGreaterThan(1);
-
-    const ids = (root: ParentNode) =>
-      Array.from(root.querySelectorAll('h1, h2'), (heading) => heading.id);
-    const whole = render(<ReactMarkdown rehypePlugins={[rehypeSlug]}>{markdown}</ReactMarkdown>);
-    const expected = ids(whole.container);
-    expect(expected).toEqual(['same', 'bold-code-heading', 'same-1', 'same-2', 'bold-code-heading-1']);
-    whole.unmount();
-
-    const chunked = render(
+    return render(
       <div>
         {chunks.map((chunk) => (
           <StreamingMarkdownChunk
@@ -195,9 +194,43 @@ describe('StreamingMarkdownChunk', () => {
         ))}
       </div>,
     );
-    expect(ids(chunked.container)).toEqual(expected);
+  }
+
+  function wholeDocumentIds(markdown: string): string[] {
+    const whole = render(<ReactMarkdown rehypePlugins={[rehypeSlug]}>{markdown}</ReactMarkdown>);
+    const ids = headingIds(whole.container);
+    whole.unmount();
+    return ids;
+  }
+
+  it('多标题长文分片解析，标题 id 与整篇解析一致', () => {
+    const markdown = [
+      '# Same', 'body', '## **Bold** `code` heading', 'body', '# same', 'body',
+      '# Same', 'body', '## Bold code heading', 'tail',
+    ].join('\n\n');
+    expect(splitStreamingMarkdownChunks(markdown).length).toBeGreaterThan(1);
+
+    const expected = wholeDocumentIds(markdown);
+    expect(expected).toEqual(['same', 'bold-code-heading', 'same-1', 'same-2', 'bold-code-heading-1']);
+    const chunked = renderChunks(markdown);
+    expect(headingIds(chunked.container)).toEqual(expected);
     // 占位标题只用于计数，不进入 DOM。
     expect(chunked.container.querySelectorAll('h1, h2')).toHaveLength(expected.length);
+  });
+
+  // 回归（PR #12892 review）：引用、列表里的标题同样参与 rehype-slug 去重，曾被
+  // headingSeed 漏掉，后面同名顶层标题的 id 少了 -1 后缀，锚点在流式期间指错。
+  it('引用或列表里有标题时，标题 id 仍与整篇解析一致', () => {
+    for (const markdown of [
+      '> # Same\n\nbody\n\n# Same\n\nbody\n\n# Tail',
+      '# A\n\n> ## A\n\n# A',
+      '- # Item\n\nbody\n\n# Item\n\ntail',
+    ]) {
+      const expected = wholeDocumentIds(markdown);
+      const chunked = renderChunks(markdown);
+      expect(headingIds(chunked.container), markdown).toEqual(expected);
+      chunked.unmount();
+    }
   });
 
   it('增长尾部重解析时保留稳定前缀的解析结果与 DOM', () => {

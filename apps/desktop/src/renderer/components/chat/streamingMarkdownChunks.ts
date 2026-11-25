@@ -135,6 +135,43 @@ function hasMultipleHeadings(markdown: string): boolean {
   return false;
 }
 
+/** 引用、列表标记与缩进：其后的标题属于嵌套容器。 */
+const CONTAINER_PREFIX = /^(?:[\t ]*(?:>[\t ]?|[-+*][\t ]+|\d{1,9}[.)][\t ]+))*[\t ]*/;
+
+/**
+ * 引用、列表里的标题（以及缩进超过 3 格的标题）也会被 rehype-slug 计数，但
+ * collectHeadings 只认顶层标题，分片的 headingSeed 会漏掉它们，后面同名标题的
+ * -1/-2 后缀就和整篇解析对不上。出现这种标题时回退整篇。围栏内的行不算；
+ * 缩进代码块里的 # 行会被保守地当成标题，只少做一次优化。
+ */
+function hasNestedHeading(markdown: string): boolean {
+  const lines = markdown.split(/\r?\n/);
+  let fence: FenceState | null = null;
+  let previous = '';
+  for (const line of lines) {
+    const prefix = CONTAINER_PREFIX.exec(line)?.[0] ?? '';
+    const inner = line.slice(prefix.length);
+    const fenceRun = /^(`{3,}|~{3,})(.*)$/.exec(inner);
+    if (fenceRun) {
+      const marker = fenceRun[1][0] as '`' | '~';
+      if (!fence) fence = { marker, length: fenceRun[1].length };
+      else if (marker === fence.marker && fenceRun[1].length >= fence.length && fenceRun[2].trim().length === 0) {
+        fence = null;
+      }
+      previous = '';
+      continue;
+    }
+    if (fence) continue;
+    const nested = prefix.length > 3 || /[^\t ]|\t/.test(prefix);
+    if (nested) {
+      if (/^#{1,6}(?:[\t ]|$)/.test(inner)) return true;
+      if (previous.length > 0 && /^(?:=+|-+)[\t ]*$/.test(inner)) return true;
+    }
+    previous = inner.trim();
+  }
+  return false;
+}
+
 function hasPotentialHtmlBlock(markdown: string): boolean {
   return /^ {0,3}<(?:!--|\?|!\[CDATA\[|![A-Za-z]|\/?[A-Za-z][A-Za-z0-9-]*(?:[\t />]|$))/m.test(
     markdown,
@@ -143,13 +180,15 @@ function hasPotentialHtmlBlock(markdown: string): boolean {
 
 /**
  * 多个标题本身不再强制整篇解析：分片用 headingSeed 预置 slug 去重计数即可得到与
- * 整篇一致的 id。只有标题文本无法从源码可靠还原时才回退整篇（见 UNSAFE_HEADING_SOURCE）。
+ * 整篇一致的 id。标题文本无法从源码可靠还原（见 UNSAFE_HEADING_SOURCE），或引用、列表里
+ * 也有标题（见 hasNestedHeading）时回退整篇。
  */
 function needsWholeDocumentContext(markdown: string, headings: HeadingLine[] | null): boolean {
   return (
     hasGlobalMarkdownDefinitions(markdown) ||
     (headings !== null && headings.some((heading) => heading.text === null)) ||
-    hasPotentialHtmlBlock(markdown)
+    hasPotentialHtmlBlock(markdown) ||
+    hasNestedHeading(markdown)
   );
 }
 

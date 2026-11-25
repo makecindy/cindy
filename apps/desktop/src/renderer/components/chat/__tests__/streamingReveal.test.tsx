@@ -145,7 +145,7 @@ describe('StreamingRevealBuffer', () => {
       const next = markdown[text.length];
       const last = text[text.length - 1];
       const atBoundary =
-        /\s/.test(next) || /[\s.,;:!?)\]，。；：！？、）]/.test(last) || /[　-鿿]/.test(last + next);
+        /\s/.test(next) || /[\s.,;:!?)\]，。；：！？、）]/.test(last) || /[\u3000-鿿]/.test(last + next);
       expect(atBoundary, JSON.stringify(text.slice(-12) + '|' + markdown.slice(text.length, text.length + 6))).toBe(true);
       const lineStart = text.lastIndexOf('\n') + 1;
       expect(text.slice(lineStart).startsWith('|'), 'table row cut mid-line').toBe(false);
@@ -178,6 +178,8 @@ describe('streamingRevealPublishInterval', () => {
   });
 });
 
+type HiddenGateWindow = Window & { __xdtHiddenAnimationGateLastHidden?: boolean };
+
 describe('MarkdownRenderer 流式放出', () => {
   beforeEach(() => {
     vi.useFakeTimers({
@@ -190,6 +192,7 @@ describe('MarkdownRenderer 流式放出', () => {
     localStorage.removeItem('chat.streamFadePreference');
     _resetStreamFadePreferenceForTests();
     __resetComposerTypingActivityForTest();
+    delete (window as HiddenGateWindow).__xdtHiddenAnimationGateLastHidden;
   });
 
   const visibleText = (container: HTMLElement) => container.querySelector('.msg-markdown')?.textContent ?? '';
@@ -291,5 +294,95 @@ describe('MarkdownRenderer 流式放出', () => {
     expect(typing.changes).toBeGreaterThanOrEqual(4);
     expect(idle.changes).toBeGreaterThan(typing.changes);
     expect(typing.done && idle.done).toBe(true);
+  });
+
+  // 回归（PR #12892 review）：改写还没显示出来的尾部时，buffer 直接换成新全文，
+  // 曾经只和「本帧开始前的 buffer」比较，判定没有变化而不发布；已显示的前缀仍是
+  // 新全文的前缀，界面停在旧前缀上，直到下一次追加。
+  it('改写尚未显示的尾部后，新正文在下一帧显示，不必等下一次追加', () => {
+    const full = `Intro. ${PROSE}`;
+    const view = render(reply('Intro.', true));
+    view.rerender(reply(full, true));
+    advanceFrames(2);
+    const cut = full.length - 60;
+    expect(visibleText(view.container).length).toBeLessThan(cut);
+
+    const rewritten = `${full.slice(0, cut)} REWRITTEN ending.`;
+    view.rerender(reply(rewritten, true));
+    advanceFrames(2);
+    expect(visibleText(view.container)).toBe(rewritten);
+  });
+
+  // 回归（PR #12892 review）：主线程繁忙时发布退避走定时器（可达数百毫秒）。流式
+  // 结束进入收尾时若沿用这个定时器，150ms 收尾窗口在等待中耗尽，剩余积压一次跳出。
+  it('主线程繁忙时流式结束，收尾立即按帧放出，不被流式期的退避定时器拖住', () => {
+    // 模拟繁忙主线程：每次动画帧回调都晚到 60ms，发布间隔因此退避到约 160ms：
+    // 发布后先等一帧，再挂一个长定时器。
+    const BUSY_FRAME_MS = 60;
+    window.requestAnimationFrame = (callback) =>
+      setTimeout(() => callback(performance.now()), BUSY_FRAME_MS) as unknown as number;
+    window.cancelAnimationFrame = (handle) => clearTimeout(handle);
+    const STEP_MS = 5;
+    const step = () =>
+      act(() => {
+        vi.advanceTimersByTime(STEP_MS);
+      });
+
+    const source = PROSE.repeat(6);
+    let length = 60;
+    const view = render(reply(source.slice(0, length), true));
+    // 约 600 字/秒持续到达；预热 800ms 让繁忙信号收敛，等到一次发布后再过一帧多，
+    // 在下一次发布正挂在退避定时器上时结束流式。
+    let shown = visibleText(view.container).length;
+    for (let elapsed = 0; elapsed < 2000; elapsed += STEP_MS) {
+      if (elapsed % 50 === 0) {
+        length += 30;
+        view.rerender(reply(source.slice(0, length), true));
+      }
+      step();
+      const now = visibleText(view.container).length;
+      if (elapsed >= 800 && now !== shown) break;
+      shown = now;
+    }
+    for (let waited = 0; waited < BUSY_FRAME_MS + 10; waited += STEP_MS) step();
+    const atEnd = visibleText(view.container).length;
+    const final = source.slice(0, length);
+    expect(atEnd).toBeLessThan(final.length);
+    view.rerender(reply(final, false));
+
+    const samples: Array<{ at: number; length: number }> = [];
+    for (let at = STEP_MS; at <= STREAM_REVEAL_END_DRAIN_MS + 2 * BUSY_FRAME_MS; at += STEP_MS) {
+      step();
+      samples.push({ at, length: visibleText(view.container).length });
+    }
+    const firstGrowth = samples.find((sample) => sample.length > atEnd);
+    expect(firstGrowth?.at).toBeLessThanOrEqual(BUSY_FRAME_MS + 2 * STEP_MS);
+    // 收尾分多步放出，而不是窗口耗尽后一次跳出。
+    const partial = new Set(samples.map((sample) => sample.length).filter((n) => n > atEnd && n < final.length));
+    expect(partial.size).toBeGreaterThanOrEqual(1);
+    expect(visibleText(view.container)).toBe(final);
+  });
+
+  // 回归（PR #12892 review）：有运行中的回复时 main 关掉了后台节流，窗口最小化后
+  // visibilityState 仍是 'visible'，只认它会在隐藏窗口里继续按帧渲染。必须同时认
+  // main 广播的隐藏信号（hiddenAnimationGate），退回约 100ms 一次、不做匀速放出。
+  it('窗口被最小化（main 广播隐藏）时不按帧渲染，按约 100ms 一次直接显示已收到的正文', () => {
+    (window as HiddenGateWindow).__xdtHiddenAnimationGateLastHidden = true;
+    expect(document.visibilityState).toBe('visible');
+    const source = PROSE.repeat(4);
+    let length = 20;
+    const view = render(reply(source.slice(0, length), true));
+    const samples: number[] = [];
+    for (let frame = 0; frame < 60; frame++) {
+      length = Math.min(source.length, length + 12);
+      view.rerender(reply(source.slice(0, length), true));
+      advanceFrames(1, () => samples.push(visibleText(view.container).length));
+    }
+    const changes = increments(samples).filter((n) => n > 0).length;
+    // 1 秒内最多约 10 次发布（逐帧渲染会接近 60 次）。
+    expect(changes).toBeLessThanOrEqual(Math.ceil(1000 / 100) + 1);
+    expect(changes).toBeGreaterThanOrEqual(5);
+    view.rerender(reply(source.slice(0, length), false));
+    expect(visibleText(view.container)).toBe(source.slice(0, length));
   });
 });

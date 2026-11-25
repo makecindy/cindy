@@ -23,6 +23,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 
 import { isComposerTypingRecently } from '@/lib/composerTypingActivity';
+import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 
 export const STREAM_REVEAL = {
   /** 目标显示延迟的上下限。下限决定匀速流的「跟手」程度，上限决定突发能摊多平。 */
@@ -61,7 +62,7 @@ export const STREAM_REVEAL = {
   busyFactor: 4,
 } as const;
 
-const WIDE_CHAR = /[⺀-鿿가-힯豈-﫿＀-￯　-〿]/;
+const WIDE_CHAR = /[⺀-鿿가-힯豈-﫿＀-￯\u3000-〿]/;
 const BREAK_AFTER = /[\s.,;:!?)\]}>，。；：！？、）】」』》…—-]/;
 
 function isHighSurrogate(code: number): boolean {
@@ -167,6 +168,14 @@ export class StreamingRevealBuffer {
     this.lastTickAt = null;
   }
 
+  /**
+   * 从 `now` 起重新计时。收尾开始时调用：流式期间退避等待的时间不该在收尾的第一帧
+   * 一次补上，否则剩余积压仍会整段跳出。
+   */
+  restartClock(now: number): void {
+    if (this.pending) this.lastTickAt = now;
+  }
+
   /** 当前目标显示延迟（ms）：取到达节奏与积压量要求的较大者，夹在上下限之间。 */
   get targetLagMs(): number {
     const byArrival = this.arrivalGapMs * STREAM_REVEAL.lagPerArrivalGap;
@@ -258,6 +267,8 @@ interface RevealController {
   pace: boolean;
   /** 收尾截止时刻（performance.now 基准）；null = 不在收尾。 */
   drainUntil: number | null;
+  /** 最近一次交给 React 的正文。改写未显示的尾部时 buffer 文本会变而发布没变，要和它比。 */
+  publishedText: string;
   publish: (text: string, draining: boolean) => void;
 }
 
@@ -268,8 +279,13 @@ function cancelScheduled(controller: RevealController): void {
   controller.timer = null;
 }
 
+/**
+ * 窗口对用户不可见。有运行中的回复时 main 会关掉后台节流，最小化或 hide() 后
+ * visibilityState 仍是 'visible'，必须同时认 main 广播的隐藏信号，否则隐藏窗口照样按帧渲染。
+ */
 function isDocumentHidden(): boolean {
-  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+  if (typeof document === 'undefined') return false;
+  return document.visibilityState === 'hidden' || isWindowHidden();
 }
 
 /** 流式结束后剩余积压最多用这么久放完，再切到终版渲染。 */
@@ -312,7 +328,6 @@ function runFrame(controller: RevealController, viaFrame = false): void {
     }
     return;
   }
-  const before = controller.buffer.text;
   if (!controller.pace || hidden) controller.buffer.flush();
   else if (draining) controller.buffer.tick(now, controller.drainUntil! - now);
   else controller.buffer.tick(now);
@@ -321,7 +336,7 @@ function runFrame(controller: RevealController, viaFrame = false): void {
   const finished = draining && !controller.buffer.pending;
   if (finished) controller.drainUntil = null;
   controller.lastPublishAt = now;
-  if (next !== before) {
+  if (next !== controller.publishedText) {
     // 不在动画帧里 flushSync：同步提交会把这棵子树的 render 叠进本帧的布局与绘制，
     // 以及同帧的其它刷新，合成一个更长的长任务（2026-11-25 合并 main 后黑盒实测
     // 最长单个长任务 +40~70ms）。交给 React 作为独立任务渲染，最多晚一帧可见；
@@ -381,8 +396,10 @@ export function useStreamingReveal(content: string, streaming: boolean, pace: bo
       frameRequestedAt: 0,
       pace,
       drainUntil: null,
+      publishedText: content,
       publish: (text, draining) => {
         controllerRef.current!.renderPending = true;
+        controllerRef.current!.publishedText = text;
         setState({ text, draining });
       },
     };
@@ -402,7 +419,7 @@ export function useStreamingReveal(content: string, streaming: boolean, pace: bo
     if (streaming) {
       controller.drainUntil = null;
       controller.buffer.update(content, now);
-      if (controller.buffer.text !== state.text || controller.buffer.pending) scheduleReveal(controller);
+      if (controller.buffer.text !== controller.publishedText || controller.buffer.pending) scheduleReveal(controller);
       return;
     }
     // 流式刚结束：有积压且能按帧放出时收尾，否则立即全文。
@@ -410,7 +427,11 @@ export function useStreamingReveal(content: string, streaming: boolean, pace: bo
       controller.buffer.update(content, now);
       if (controller.buffer.pending) {
         controller.drainUntil = now + STREAM_REVEAL_END_DRAIN_MS;
+        controller.buffer.restartClock(now);
+        controller.publishedText = controller.buffer.text;
         setState({ text: controller.buffer.text, draining: true });
+        // 流式期间排下的退避定时器可能还要等几百毫秒；收尾不退避，按帧重排。
+        cancelScheduled(controller);
         scheduleReveal(controller);
         return;
       }
@@ -418,6 +439,7 @@ export function useStreamingReveal(content: string, streaming: boolean, pace: bo
     if (controller.drainUntil !== null && controller.buffer.pending) {
       // 收尾中原文又变了：继续收尾到同一截止时刻。
       controller.buffer.update(content, now);
+      cancelScheduled(controller);
       scheduleReveal(controller);
       return;
     }
@@ -425,6 +447,7 @@ export function useStreamingReveal(content: string, streaming: boolean, pace: bo
     controller.drainUntil = null;
     controller.buffer = new StreamingRevealBuffer(content);
     controller.lastPublishAt = 0;
+    controller.publishedText = content;
     if (state.text !== content || state.draining) setState({ text: content, draining: false });
     // `state` 只用来判断是否已同步；把它放进依赖会让每次发布再排一帧。
     // eslint-disable-next-line react-hooks/exhaustive-deps
