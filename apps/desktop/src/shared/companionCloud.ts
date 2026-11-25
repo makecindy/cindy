@@ -73,6 +73,8 @@ export type CompanionCloudFailureCode =
 export type CompanionCloudActionResult =
   | { ok: true }
   | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null;
+      /** Device-link name of `homeDeviceId` from the same decision (local `switchHome` results only; may be empty). */
+      homeName?: string;
       oversizedSkill?: CompanionOversizedSkill;
       /** Local identity conflict provenance; older/remote replies may omit it. Never a cleanup authorization. */
       conflictingBotId?: string; conflictingDeviceId?: string | null;

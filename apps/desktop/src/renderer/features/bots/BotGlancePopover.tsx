@@ -246,7 +246,7 @@ function CloudComputers({
         onSelect: () => {
           onClose();
           state.setError(null);
-          if (unresponsive) state.askForce(target, state.choices?.homeDeviceId ?? null);
+          if (unresponsive) state.askForce(target, state.decidedHome(state.choices?.homeDeviceId, state.choices?.homeName));
           else state.setPending(target);
         },
       })),
@@ -259,7 +259,7 @@ function CloudComputers({
       ) : !state.movable ? (
         <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.resumeToMove', { name: bot.name })}</p>
       ) : unresponsive ? (
-        <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.homeUnresponsive', { name: bot.name, device: state.homeName })}</p>
+        <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.homeUnresponsive', { name: bot.name, device: state.decidedHome(state.choices?.homeDeviceId, state.choices?.homeName)?.name ?? state.homeName })}</p>
       ) : null}
     </>
   );

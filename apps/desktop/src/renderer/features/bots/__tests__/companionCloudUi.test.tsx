@@ -471,32 +471,38 @@ describe('BotHomeComputerSetting', () => {
   // cloud-companions.md §3.1 (2026-11-21): a main computer listed online that does not answer is never
   // taken over silently. Read so from the menu, or found at confirm time after the menu offered a normal
   // hand-over, the owner sees a separate warning and only an explicit force takes it over.
-  it.each(['menu', 'confirm'] as const)('takes over a main computer that does not answer only when forced (found at %s)', async (found) => {
+  // #11999 review (zqchris, 11-25): the warning names the computer whose id is submitted, both taken from the
+  // same decision (choices or switch result), even when the rendered snapshot still shows another home (A vs C).
+  it.each([
+    ['menu', 'laptop', 'Laptop'], ['confirm', 'laptop', 'Laptop'],
+    ['menu', 'carbon', 'Carbon'], ['confirm', 'carbon', 'Carbon'],
+  ] as const)('takes over a main computer that does not answer only when forced (found at %s, decided home %s)', async (found, decided, decidedName) => {
     const here = { deviceId: 'desk', name: 'Desk', online: true, isSelf: true };
     maker.getCompanionHomeChoices.mockResolvedValue(found === 'menu'
-      ? { homeDeviceId: 'laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] }
-      : { homeDeviceId: 'laptop', mode: 'remote', targets: [here] });
+      ? { homeDeviceId: decided, homeName: decidedName, mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] }
+      : { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [here] });
     maker.switchCompanionHome.mockImplementation(async (_bot: string, _target: string, options?: { force?: boolean }) =>
-      options?.force ? { ok: true } : { ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop' });
+      options?.force ? { ok: true } : { ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: decided, homeName: decidedName });
     show(snapshot('laptop'));
     openMenu();
     if (found === 'menu') {
-      expect(await screen.findByText('bots.cloud.homeUnresponsive:{"name":"Mia","device":"Laptop"}')).toBeTruthy();
+      expect(await screen.findByText(`bots.cloud.homeUnresponsive:{"name":"Mia","device":"${decidedName}"}`)).toBeTruthy();
       expect(screen.queryByText('bots.cloud.switchHere')).toBeNull();
       fireEvent.click(screen.getByText('bots.cloud.forceHere'));
     } else {
       fireEvent.click(await screen.findByText('bots.cloud.switchHere'));
       fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.switchAction:{"device":"bots.cloud.thisComputer"}' }));
     }
-    await screen.findByText('bots.cloud.forceDescription:{"name":"Mia","device":"Laptop"}');
-    expect(maker.switchCompanionHome).not.toHaveBeenCalledWith('mia', 'desk', { force: true, forceHomeDeviceId: 'laptop' });
+    await screen.findByText(`bots.cloud.forceDescription:{"name":"Mia","device":"${decidedName}"}`);
+    expect(screen.getByText(`bots.cloud.forceTitle:{"device":"${decidedName}"}`)).toBeTruthy();
+    expect(maker.switchCompanionHome).not.toHaveBeenCalledWith('mia', 'desk', { force: true, forceHomeDeviceId: decided });
     h.ensureLoaded.mockImplementation(async () => {
       resetCompanionCloudStoreForTests(snapshot('desk'));
       return [{ id: 'mia', status: 'active' }];
     });
     fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.forceAction' }));
     await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/mia'));
-    expect(maker.switchCompanionHome).toHaveBeenLastCalledWith('mia', 'desk', { force: true, forceHomeDeviceId: 'laptop' });
+    expect(maker.switchCompanionHome).toHaveBeenLastCalledWith('mia', 'desk', { force: true, forceHomeDeviceId: decided });
   });
 
   // Merge with the missing-profile confirmation (2026-11-25): a forced take-over that then meets a missing
@@ -504,7 +510,7 @@ describe('BotHomeComputerSetting', () => {
   // refused as HOME_UNRESPONSIVE and the owner was sent back to the force dialog.
   it('keeps the force through the missing-profile confirmation', async () => {
     const here = { deviceId: 'desk', name: 'Desk', online: true, isSelf: true };
-    maker.getCompanionHomeChoices.mockResolvedValue({ homeDeviceId: 'laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] });
+    maker.getCompanionHomeChoices.mockResolvedValue({ homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] });
     maker.switchCompanionHome.mockImplementation(async (_bot: string, _target: string, options?: { force?: boolean; allowMissingProfile?: boolean }) =>
       !options?.force ? { ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop' }
         : !options.allowMissingProfile ? { ok: false, code: 'PROFILE_SNAPSHOT_MISSING' } : { ok: true });

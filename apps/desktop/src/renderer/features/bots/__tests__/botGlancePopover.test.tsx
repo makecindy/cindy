@@ -174,7 +174,9 @@ describe('BotGlanceButton', () => {
   // cloud-companions.md §3.1 (2026-11-21, issue #12016): the 近况 popover, like the settings menu, names the
   // forced take-over of a main computer that is listed online but does not answer, in the destructive
   // style. Before, the clickable row read like an ordinary choice («this computer · online»).
-  it('names the forced take-over here when the main computer is listed online but does not answer', async () => {
+  // The force is submitted for the home the popover's choices decided on (C), even while the rendered
+  // snapshot still shows A (#11999 review, zqchris 11-25); the dialog names it from the same decision.
+  it.each([['laptop', 'Laptop'], ['carbon', 'Carbon']] as const)('names the forced take-over here when the main computer is listed online but does not answer (decided home %s)', async (decided, decidedName) => {
     const cloud = (home: string) => ({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [],
       actors: [{ id: 'a-1', externalId: 'bot-1', name: '葫芦', avatar: null, homeDeviceId: home,
         homeDevice: { deviceId: home, name: home === 'desk' ? 'Desk' : 'Laptop', online: true, isSelf: home === 'desk' } }] });
@@ -184,7 +186,7 @@ describe('BotGlanceButton', () => {
     Object.assign((window as unknown as { electronAPI: { maker: Record<string, unknown> } }).electronAPI.maker, {
       getCompanionCloudState: async () => cloud('laptop'),
       onCompanionCloudChanged: () => () => undefined,
-      getCompanionHomeChoices: async () => ({ homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE',
+      getCompanionHomeChoices: async () => ({ homeDeviceId: decided, homeName: decidedName, mode: 'takeOver', reason: 'HOME_UNRESPONSIVE',
         targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] }),
       switchCompanionHome,
     });
@@ -199,7 +201,7 @@ describe('BotGlanceButton', () => {
     expect(switchCompanionHome).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.forceAction' }));
     await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/bot-1'));
-    expect(switchCompanionHome).toHaveBeenCalledWith('bot-1', 'desk', { force: true, forceHomeDeviceId: 'laptop' });
+    expect(switchCompanionHome).toHaveBeenCalledWith('bot-1', 'desk', { force: true, forceHomeDeviceId: decided });
   });
 
   // PR + file entries share one chronology and one fold; separate lists hid newer files below older PRs.

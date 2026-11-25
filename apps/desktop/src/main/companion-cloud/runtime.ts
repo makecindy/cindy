@@ -244,10 +244,12 @@ export function hasProfileSnapshot(rows: unknown): boolean {
  *   with the device-link code when there was one. A probe that rejects counts the same as `thrown`.
  */
 /**
- * `takeOver` options inside the main process: `expectedHomeDeviceId` (a forced take-over from
- * `switchHome`) binds the take-over to the home the owner confirmed. Not accepted over IPC.
+ * `takeOver` options inside the main process: `expectedHomeDeviceId` binds a take-over from
+ * `switchHome` to the home its decision was made for (and, for a force, the home the owner confirmed):
+ * a different current home is refused and the final write compares against it. `null` means the
+ * decision saw no home; absent (`undefined`) means unbound. Not accepted over IPC.
  */
-export type CompanionTakeOverInternalOptions = CompanionTakeOverOptions & { expectedHomeDeviceId?: string };
+export type CompanionTakeOverInternalOptions = CompanionTakeOverOptions & { expectedHomeDeviceId?: string | null };
 
 export type CompanionHomeProbeOutcome =
   | { kind: 'answer'; version: number }
@@ -1144,7 +1146,8 @@ export function startCompanionCloud(input: {
         actor = actorOf(botId);
       }
       if (!actor) return homeActionFailure('takeOver', botId, new Error('COMPANION_NOT_FOUND'), { stage: 'actor-lookup' });
-      if (expectedHome !== undefined && actor.homeDeviceId !== expectedHome) return { ok: false, code: 'HOME_CONFLICT', homeDeviceId: actor.homeDeviceId ?? null };
+      if (expectedHome !== undefined && (actor.homeDeviceId ?? null) !== expectedHome)
+        return { ok: false, code: 'HOME_CONFLICT', homeDeviceId: actor.homeDeviceId ?? null };
       const actorId = actor.id;
       const pendingCorrection = state.bot(botId);
       if (!correction && pendingCorrection?.actorId === actorId && pendingCorrection.profileCorrection
@@ -1188,7 +1191,7 @@ export function startCompanionCloud(input: {
       // stale (another computer took over while this one was offline). Unchanged homes are a no-op.
       try {
         await input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: self,
-          expectedHomeDeviceId: correction ? correction.home : expectedHome ?? actor.homeDeviceId ?? null });
+          expectedHomeDeviceId: correction ? correction.home : expectedHome !== undefined ? expectedHome : actor.homeDeviceId ?? null });
       } catch (error) {
         const failure = homeActionFailure('takeOver', botId, error, { stage: 'home-cas' });
         if (!failure.ok && failure.code === 'HOME_CONFLICT') {
@@ -1298,17 +1301,19 @@ export function startCompanionCloud(input: {
       if (choices.mode === 'unavailable') return { ok: false, code: choices.reason === 'HOME_OUTDATED' ? 'HOME_OUTDATED' : 'FAILED' };
       // A force was confirmed for one home: if the home changed meanwhile, nothing is written and the
       // owner confirms again for the new home (the result names it).
-      if (options?.force && options.forceHomeDeviceId !== choices.homeDeviceId) return { ok: false, code: 'HOME_CONFLICT', homeDeviceId: choices.homeDeviceId };
+      if (options?.force && options.forceHomeDeviceId !== choices.homeDeviceId)
+        return { ok: false, code: 'HOME_CONFLICT', homeDeviceId: choices.homeDeviceId, homeName: choices.homeName ?? '' };
       // Never a silent take-over of a home that may still be running and syncing: only on the owner's explicit choice.
       if (choices.reason === 'HOME_UNRESPONSIVE' && !(options?.force && targetDeviceId === self))
-        return { ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: choices.homeDeviceId };
+        return { ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: choices.homeDeviceId, homeName: choices.homeName ?? '' };
       const chosen = choices.targets.find(target => target.deviceId === targetDeviceId);
       if (!chosen) return { ok: false, code: 'TARGET_UNAVAILABLE' };
       if (choices.mode === 'local') return runtime.transfer(botId, targetDeviceId, options);
       if (choices.mode === 'takeOver') {
-        const forcedHome = options?.force && choices.homeDeviceId ? { expectedHomeDeviceId: choices.homeDeviceId } : {};
-        const takeOverOptions = { ...(options?.allowMissingProfile ? { allowMissingProfile: true } : {}), ...forcedHome };
-        return runtime.takeOver(botId, Object.keys(takeOverOptions).length ? takeOverOptions : undefined);
+        // Every take-over is bound to the home this decision saw (null: none): if it changed while the
+        // devices were read or the home probed, the new home was never checked and is not taken over.
+        return runtime.takeOver(botId, { ...(options?.allowMissingProfile ? { allowMissingProfile: true } : {}),
+          expectedHomeDeviceId: choices.homeDeviceId });
       }
       // The home hands it over itself (flush, busy check, compare-and-set), exactly as from its own settings.
       let result: CompanionCloudActionResult;

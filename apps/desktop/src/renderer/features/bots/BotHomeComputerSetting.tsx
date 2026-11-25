@@ -100,9 +100,15 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const [busyTarget, setBusyTarget] = useState<CompanionTransferTarget | null>(null);
   /** The home is listed online but did not answer: the owner may take it over here anyway. */
   const [forceTarget, setForceTarget] = useState<CompanionTransferTarget | null>(null);
-  /** The home that force dialog is about: a confirmed force applies to this home only. */
-  const [forceHome, setForceHome] = useState<string | null>(null);
-  const askForce = (target: CompanionTransferTarget, forHome: string | null) => { setForceHome(forHome); setForceTarget(target); };
+  /**
+   * The home the force dialog is about, id and name from the same decision (the probe's choices or the
+   * switch result), never the live snapshot: the warning names the computer the force is submitted for.
+   */
+  const [forceHome, setForceHome] = useState<{ id: string; name: string } | null>(null);
+  /** The home a decision saw, named from that same decision; an unknown name reads as an unknown device. */
+  const decidedHome = (id: string | null | undefined, name: string | undefined) =>
+    id ? { id, name: name?.trim() || t('bots.cloud.unknownDevice') } : null;
+  const askForce = (target: CompanionTransferTarget, home: { id: string; name: string } | null) => { setForceHome(home); setForceTarget(target); };
   /** Another computer never uploaded a profile snapshot: ask before starting fresh here. */
   const [missingProfileTarget, setMissingProfileTarget] = useState<CompanionTransferTarget | null>(null);
   /**
@@ -161,7 +167,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       setMissingProfileTarget(null);
       // The home did not answer (not offline): never a silent take-over, the owner decides.
       if (!result.ok && result.code === 'HOME_UNRESPONSIVE' && !options?.force) {
-        askForce({ deviceId: cloud.selfDeviceId ?? target.deviceId, name: '', online: true, isSelf: true }, result.homeDeviceId ?? null);
+        askForce({ deviceId: cloud.selfDeviceId ?? target.deviceId, name: '', online: true, isSelf: true }, decidedHome(result.homeDeviceId, result.homeName));
         return;
       }
       // Still working and nothing chosen yet: offer to wait for the turn or stop it.
@@ -227,7 +233,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
     ? t('bots.cloud.thisComputer')
     : actor?.homeDevice?.name?.trim() || t('bots.cloud.unknownDevice');
   return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget,
-    forceTarget, setForceTarget, forceHome, askForce, missingProfileTarget, setMissingProfileTarget, missingProfileForceHome, busy,
+    forceTarget, setForceTarget, forceHome, askForce, decidedHome, missingProfileTarget, setMissingProfileTarget, missingProfileForceHome, busy,
     error, setError, inFlight, load, confirm, targetName, conflictAction: conflict.action, repairOpen, setRepairOpen, repairAvailable };
 }
 
@@ -253,11 +259,11 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
     return (
       <>
         <DropdownMenuItem disabled className="whitespace-normal">
-          {t('bots.cloud.homeUnresponsive', { name: bot.name, device: state.homeName })}
+          {t('bots.cloud.homeUnresponsive', { name: bot.name, device: state.decidedHome(choices.homeDeviceId, choices.homeName)?.name ?? state.homeName })}
         </DropdownMenuItem>
         {/* May lose what that computer has not synced: a destructive row (DESIGN.md §4 Destructive actions). */}
         {choices.targets.filter((target) => target.isSelf).map((target) => (
-          <DropdownMenuItem key={target.deviceId} variant="danger" onSelect={() => { state.setError(null); state.askForce(target, choices.homeDeviceId); }}>
+          <DropdownMenuItem key={target.deviceId} variant="danger" onSelect={() => { state.setError(null); state.askForce(target, state.decidedHome(choices.homeDeviceId, choices.homeName)); }}>
             <span className="min-w-0 truncate">{t('bots.cloud.forceHere')}</span>
           </DropdownMenuItem>
         ))}
@@ -305,13 +311,13 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
     <ConfirmDialog
       open={state.forceTarget !== null}
       onOpenChange={(open) => { if (!open && !state.inFlight.current) state.setForceTarget(null); }}
-      title={t('bots.cloud.forceTitle', { device: state.homeName })}
-      description={t('bots.cloud.forceDescription', { name: bot.name, device: state.homeName })}
+      title={t('bots.cloud.forceTitle', { device: state.forceHome?.name ?? t('bots.cloud.unknownDevice') })}
+      description={t('bots.cloud.forceDescription', { name: bot.name, device: state.forceHome?.name ?? t('bots.cloud.unknownDevice') })}
       confirmText={t('bots.cloud.forceAction')}
       confirmVariant="destructive"
       cancelText={t('bots.cloud.forceLater')}
       loading={state.busy}
-      onConfirm={() => void state.confirm(state.forceTarget, state.forceHome ? { force: true, forceHomeDeviceId: state.forceHome } : undefined)}
+      onConfirm={() => void state.confirm(state.forceTarget, state.forceHome ? { force: true, forceHomeDeviceId: state.forceHome.id } : undefined)}
     />
     <ConfirmDialog
       open={state.missingProfileTarget !== null}
