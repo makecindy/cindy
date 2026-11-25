@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { ContentHeaderSlot } from '../../../src/renderer/components/layout/ContentHeader';
+import { useSidebarResize } from '../../../src/renderer/hooks/useSidebarResize';
 import { useWallpaperBackground } from '../../../src/renderer/hooks/useWallpaperBackground';
 import { Sidebar } from '../../../src/renderer/components/sidebar/Sidebar';
 import { FeatureSidebarSlotProvider, useOwnTopNavScrollableRows } from '../../../src/renderer/features/feature-context';
@@ -31,7 +32,10 @@ function EmptyRoute() {
 
 function Specimen() {
   const hidden = ctx.case === 'hidden';
-  const peek = ctx.case === 'peek';
+  const peek = ctx.case === 'peek' || ctx.case === 'inbox-peek';
+  const draggable = ctx.case === 'inbox-resize';
+  const [rail, setRail] = useState(false);
+  const resize = useSidebarResize({ railMode: rail, onRailModeChange: setRail });
   const wallpaper = ctx.case === 'wallpaper';
   const visibility = ctx.case === 'transparent' ? 1 : wallpaper || ctx.case === 'half' ? 0.5 : 0;
   useWallpaperBackground({
@@ -49,8 +53,11 @@ function Specimen() {
     <div className="relative flex h-screen text-foreground">
       <Sidebar
         isCollapsed={hidden || peek}
-        isRail={ctx.case === 'rail'}
-        width={ctx.case === 'inbox-wide' ? 360 : 260}
+        isRail={ctx.case === 'rail' || rail}
+        width={draggable ? resize.width : ctx.case === 'inbox-wide' ? 360 : 260}
+        isDragging={draggable && resize.isDragging}
+        onDragStart={draggable ? resize.handleDragStart : undefined}
+        onResetWidth={draggable ? resize.resetWidth : undefined}
         peekState={peek ? 'pinning' : null}
         peekDrawerProps={peek ? {
           'data-sidebar-peek-drawer': '',
@@ -66,14 +73,19 @@ function Specimen() {
 }
 
 if (ctx.case.startsWith('inbox-')) {
+  localStorage.setItem('sidebar-width', '260');
   localStorage.setItem('sidebar.taskListMode', 'tasks');
   localStorage.setItem('featureIntro.taskInbox.seen', '1');
 }
 
+const zoomed = ctx.case.startsWith('empty-') ||
+  (ctx.case.startsWith('inbox-') && ctx.case !== 'inbox-normal');
+const windowZoom = ctx.case === 'inbox-zoom-70' ? 0.7 : zoomed ? 0.5 : 1;
+
 void mountPage({
   host: {
     appearanceSettings: {
-      getSync: () => ({ windowZoom: ctx.case === 'inbox-zoom' || ctx.case === 'inbox-wide' || ctx.case.startsWith('empty-') ? 0.5 : 1 }),
+      getSync: () => ({ windowZoom }),
       onChanged: subscription('appearance'),
     },
     theme: { setSidebarWidth: () => {} },

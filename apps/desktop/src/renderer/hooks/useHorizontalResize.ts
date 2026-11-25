@@ -55,7 +55,8 @@ const SNAP_TOLERANCE = 16;
 export interface HorizontalResizeResult {
   width: number;
   isDragging: boolean;
-  handleDragStart: (e: React.PointerEvent) => void;
+  /** Supply the displayed width when layout temporarily clamps the preferred width. */
+  handleDragStart: (e: React.PointerEvent, displayedWidth?: number) => void;
   resetWidth: () => void;
   /**
    * 命令式设宽：clamp 到 [minWidth, maxWidth] 并持久化。供调用方按运行时布局
@@ -96,6 +97,7 @@ export function useHorizontalResize(opts: HorizontalResizeOptions): HorizontalRe
   const isDraggingRef = useRef(false);
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
+  const startPreferredWidthRef = useRef(width);
   const currentWidthRef = useRef(width);
 
   // rail 选项进 ref——拖拽中 active 会被 onChange 翻转触发 re-render，
@@ -161,9 +163,14 @@ export function useHorizontalResize(opts: HorizontalResizeOptions): HorizontalRe
       currentWidthRef.current = restored;
     } else {
       const snapped = Math.max(opts.minWidth, currentWidthRef.current);
-      setWidth(snapped);
-      currentWidthRef.current = snapped;
-      persistWidth(opts.storageKey, snapped);
+      // Pulling against a temporary layout floor does not move the divider;
+      // keep the original preference for when the floor goes away.
+      const stayedAtFloor = startWidthRef.current > startPreferredWidthRef.current &&
+        snapped <= startWidthRef.current;
+      const committedWidth = stayedAtFloor ? startPreferredWidthRef.current : snapped;
+      setWidth(committedWidth);
+      currentWidthRef.current = committedWidth;
+      persistWidth(opts.storageKey, committedWidth);
     }
 
     document.removeEventListener('pointermove', handlePointerMove);
@@ -172,17 +179,20 @@ export function useHorizontalResize(opts: HorizontalResizeOptions): HorizontalRe
   }, [handlePointerMove, opts.storageKey, opts.minWidth, opts.maxWidth, opts.defaultWidth]);
 
   const handleDragStart = useCallback(
-    (e: React.PointerEvent) => {
+    (e: React.PointerEvent, displayedWidth?: number) => {
       // Only left mouse button
       if (e.button !== 0) return;
       e.preventDefault();
 
       isDraggingRef.current = true;
       startXRef.current = e.clientX;
+      startPreferredWidthRef.current = currentWidthRef.current;
       // rail 态下从 railWidth 起算——currentWidth 还停留在上次展开宽度
       const rail = railRef.current;
       railActiveRef.current = rail?.active ?? false;
-      startWidthRef.current = railActiveRef.current && rail ? rail.railWidth : currentWidthRef.current;
+      startWidthRef.current = railActiveRef.current && rail
+        ? rail.railWidth
+        : displayedWidth ?? currentWidthRef.current;
       // rail 态下 width state 仍停在上次展开宽度(松手时刻意还原的),而 Sidebar 在
       // isDragging 期间按 width 渲染(visualWidth = isDragging ? width)。若不先把
       // width 拉回 railWidth,按下 handle 那一刻会从 64 跳到展开宽度、等第一个

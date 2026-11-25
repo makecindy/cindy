@@ -248,34 +248,6 @@ function isZoomShortcutBlockedTarget(target: EventTarget | null): boolean {
   );
 }
 
-/**
- * SidebarPinSpacer —— peek 抽屉固定展开(pinning)期的流内占位。
- * 抽屉在 pinning 期保持 fixed 冻结不动,本组件在流内跑 0→width 的宽度动画
- * (与 ChromeActions 的 left 平移同时长同缓动)把主区平滑推开;pinning 结束
- * 后卸载,aside 同帧摘掉 fixed 落回流内。双 rAF 确保 0 宽先提交一帧再翻到
- * 目标宽,transition 可靠触发。
- */
-function SidebarPinSpacer({ width }: { width: number }) {
-  const [animatedWidth, setAnimatedWidth] = useState(0);
-  useEffect(() => {
-    let raf2 = 0;
-    const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => setAnimatedWidth(width));
-    });
-    return () => {
-      cancelAnimationFrame(raf1);
-      if (raf2) cancelAnimationFrame(raf2);
-    };
-  }, [width]);
-  return (
-    <div
-      aria-hidden
-      className="h-full shrink-0 transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:duration-0"
-      style={{ width: animatedWidth }}
-    />
-  );
-}
-
 export function MainLayout() {
   useRememberMainEntry();
   // 未处理报错的恢复与已处置收敛不依赖当前路由或侧栏是否挂载。
@@ -1802,7 +1774,6 @@ export function MainLayout() {
             {/* pinning 冻结期的流内占位:抽屉保持 fixed 不动,由本 spacer 跑 0→W 的
                 200ms 宽度动画把主区推开;动画结束(peekState 回 idle)后同一帧内
                 spacer 卸载、aside 摘掉 fixed 落回流内 —— 两者矩形一致,交换无跳变。 */}
-            {sidebarPeek.peekState === 'pinning' && <SidebarPinSpacer width={sidebarWidth} />}
             <Sidebar
               pluginSections={pluginSidebarSections}
               pluginSessionId={rightSidebarSessionId}

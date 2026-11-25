@@ -42,6 +42,9 @@ import { UserInfoSection } from './UserInfoSection';
  *  否则红绿灯会越过 rail 右缘溢出到主区(64px 时的问题)。78px 也容得下 36px 瓷砖
  *  / 头像居中 + 两侧呼吸。 */
 const RAIL_WIDTH = 78;
+const INBOX_BUTTON_WIDTH = 28; // ChromeIconButton
+const INBOX_RIGHT_PADDING = 8;
+const INBOX_MIN_GAP = 8;
 
 interface SidebarProps {
   pluginSections?: readonly PluginUiEntry[];
@@ -57,7 +60,7 @@ interface SidebarProps {
   /** Keep feature state mounted while the sidebar remains visually hidden. */
   forceMountFeatureContent?: boolean;
   /** Pointer-down handler for the resize handle. */
-  onDragStart?: (e: React.PointerEvent) => void;
+  onDragStart?: (e: React.PointerEvent, displayedWidth: number) => void;
   /** Double-click handler to reset width to default. */
   onResetWidth?: () => void;
   /** Open the update notice dialog to review release notes. */
@@ -79,6 +82,34 @@ interface SidebarProps {
   peekState?: SidebarPeekState | null;
   /** peek 期挂在 aside 上的 mouse enter/leave + data 标记(useSidebarPeek)。 */
   peekDrawerProps?: SidebarPeekDrawerProps;
+}
+
+/**
+ * SidebarPinSpacer —— peek 抽屉固定展开(pinning)期的流内占位。
+ * 抽屉在 pinning 期保持 fixed 冻结不动,本组件在流内跑 0→width 的宽度动画
+ * (与 ChromeActions 的 left 平移同时长同缓动)把主区平滑推开;pinning 结束
+ * 后卸载,aside 同帧摘掉 fixed 落回流内。双 rAF 确保 0 宽先提交一帧再翻到
+ * 目标宽,transition 可靠触发。
+ */
+function SidebarPinSpacer({ width }: { width: number }) {
+  const [animatedWidth, setAnimatedWidth] = useState(0);
+  useEffect(() => {
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setAnimatedWidth(width));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
+  }, [width]);
+  return (
+    <div
+      aria-hidden
+      className="h-full shrink-0 transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:duration-0"
+      style={{ width: animatedWidth }}
+    />
+  );
 }
 
 export function Sidebar({
@@ -138,33 +169,21 @@ export function Sidebar({
     prevIsPeekRef.current = isPeek;
   });
 
-  // 宽度三态：完全隐藏 0（toggle/⌘B，旧版语义）→ rail 64（拖到最窄）→ 展开 width。
-  // 拖拽中宽度直接跟手（useHorizontalResize 已把下限放宽到 railWidth）。
-  // peek 抽屉恒用展开宽 —— peek 的语义就是「预览完整展开列表」。
-  const visualWidth = isPeek
-    ? (width ?? 260)
-    : isCollapsed
-      ? 0
-      : isDragging
-        ? (width ?? 260)
-        : isRail
-          ? RAIL_WIDTH
-          : (width ?? 260);
+  const showInbox = shouldMountFeatureContent && ownsTopNavScrollableRows && !isRail;
+  const preferredWidth = width ?? 260;
+  const inboxMinWidth = Math.ceil(
+    chromeClusterX + CHROME_ACTIONS_GEOMETRY.clusterWidth +
+    INBOX_MIN_GAP + INBOX_BUTTON_WIDTH + INBOX_RIGHT_PADDING,
+  );
+  // Keep the user's preferred width so zooming back in restores it. During a
+  // collapse the contents retain their expanded width while the aside clips them.
+  const expandedWidth = showInbox ? Math.max(preferredWidth, inboxMinWidth) : preferredWidth;
+  const contentWidth = !isPeek && isRail
+    ? (isDragging ? preferredWidth : RAIL_WIDTH)
+    : expandedWidth;
+  const visualWidth = isCollapsed && !isPeek ? 0 : contentWidth;
 
-  // 内容层宽度:与 visualWidth 唯一的区别是**收起态不归零** —— 收起/展开动画期间
-  // 内容保持展开宽度被 aside 的 overflow-hidden 从右侧裁切,而不是跟随 aside 宽度
-  // 连续 reflow(否则文字换行/挤压,视觉很难受)。同时内容层做透明度渐隐/渐显,
-  // 对齐 Codex 的「文字淡出的同时侧栏收起」手感(2026-07 用户定稿;与右栏
-  // RightSidebar 的定宽内容层同一套路,规则 7)。
-  const contentWidth = isPeek
-    ? (width ?? 260)
-    : isDragging
-      ? (width ?? 260)
-      : isRail
-        ? RAIL_WIDTH
-        : (width ?? 260);
-
-  return (
+  const sidebar = (
     <aside
       ref={sidebarRef}
       {...(isPeek ? peekDrawerProps : undefined)}
@@ -228,7 +247,7 @@ export function Sidebar({
           - 不画下边框 —— 顶行与列表区是一块连续表面（对齐 Codex）。 */}
         <div
           // 46px 与 ContentHeader / ChromeActions 行高一致(红绿灯心 y=23 同轴)。
-          className="flex min-h-[46px] w-full shrink-0 flex-wrap items-center"
+          className="flex h-[46px] w-full shrink-0 items-center"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
           <div
@@ -244,11 +263,10 @@ export function Sidebar({
               } as React.CSSProperties
             }
           />
-          {/* 优先与浮层同排；缩放后安全区占满侧栏时换至下一行，避免裁掉收件箱入口。rail 态隐藏。 */}
-          {shouldMountFeatureContent && ownsTopNavScrollableRows && !isRail && (
+          {showInbox && (
             <div
-              className="ml-auto flex h-[46px] shrink-0 items-center pr-2"
-              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+              className="ml-auto flex h-[46px] shrink-0 items-center"
+              style={{ paddingRight: INBOX_RIGHT_PADDING, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             >
               <TaskListModeToggle hasUnread={inboxUnread} />
             </div>
@@ -312,7 +330,7 @@ export function Sidebar({
       {!isCollapsed && !isPeek && (
         <div
           className="absolute right-0 top-0 z-10 h-full w-[4px] cursor-col-resize group/handle"
-          onPointerDown={onDragStart}
+          onPointerDown={onDragStart ? (event) => onDragStart(event, visualWidth) : undefined}
           onDoubleClick={onResetWidth}
         >
           {/* Visual highlight line — default transparent so the frosted layer's
@@ -322,5 +340,11 @@ export function Sidebar({
         </div>
       )}
     </aside>
+  );
+  return (
+    <>
+      {peekState === 'pinning' && <SidebarPinSpacer width={visualWidth} />}
+      {sidebar}
+    </>
   );
 }

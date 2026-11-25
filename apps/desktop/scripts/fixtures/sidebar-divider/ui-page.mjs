@@ -23,7 +23,10 @@ export default {
     'empty-left': { about: '#11830: a preceding left pane owns zoomed chrome; empty route has no blank header' },
     'empty-top': { about: '#11830: a preceding top pane owns zoomed chrome; empty route has no blank header' },
     'empty-direct': { about: '#11830: chat directly beside the narrow sidebar retains its overflow header' },
-    'inbox-zoom': { about: '#8656: default 260px expanded sidebar at 50% keeps inbox visible below chrome' },
+    'inbox-zoom': { about: '#11830: 50% keeps inbox on the first row and 100% restores the chosen width' },
+    'inbox-zoom-70': { about: '#11830: the approved 70% layout keeps the full toolbar on one row' },
+    'inbox-peek': { about: '#11830: pinning reserves the same width as the expanded drawer' },
+    'inbox-resize': { about: '#11830: dragging starts at the displayed divider and can still enter rail' },
     'inbox-normal': { about: '#8656: default 260px expanded sidebar at 100% keeps inbox in the top row' },
     'inbox-wide': { about: '#8656: 360px expanded sidebar at 50% keeps inbox in the top row' },
     default: { about: 'No wallpaper, 0% desktop visibility keeps the original backdrop: border must retain its tinted backing' },
@@ -68,19 +71,60 @@ export default {
     if (ui.case.startsWith('inbox-')) {
       const button = page.locator('[data-task-list-mode-toggle]');
       await button.waitFor();
-      const box = await button.boundingBox();
-      assert.ok(box && box.x >= bounds.x && box.x + box.width <= bounds.x + bounds.width,
-        'Inbox stays fully visible inside the expanded sidebar');
-      const zoom = ui.case === 'inbox-normal' ? 1 : 0.5;
-      assert.ok(box.y >= 46 || box.x >= 78 / zoom + 124,
-        'Inbox does not overlap the floating chrome controls');
-      assert.equal(box.y >= 46, ui.case === 'inbox-zoom',
-        'Only the narrow zoomed sidebar needs a second row');
+      const zoom = ui.case === 'inbox-normal' ? 1 : ui.case === 'inbox-zoom-70' ? 0.7 : 0.5;
+      const expectedWidth = ui.case === 'inbox-normal' ? 260 :
+        ui.case === 'inbox-wide' ? 360 : zoom === 0.7 ? 280 : 324;
+      const assertFirstRow = async (width, factor) => {
+        const sidebar = await aside.boundingBox();
+        const box = await button.boundingBox();
+        assert.ok(sidebar && box);
+        assert.ok(box.y < sidebar.y + 46, 'Inbox belongs in the first chrome row');
+        assert.equal(sidebar.width, width);
+        assert.ok(box.x >= sidebar.x + 78 / factor + 124 + 8 &&
+          box.x + box.width <= sidebar.x + width - 8,
+          'Inbox stays to the right of all four chrome buttons and clear of the resize handle');
+      };
+      await assertFirstRow(expectedWidth, zoom);
+      if (ui.case === 'inbox-peek') {
+        await page.waitForFunction(width =>
+          document.querySelector('main').getBoundingClientRect().left === width, expectedWidth);
+      }
+      if (ui.case === 'inbox-resize') {
+        const handle = await aside.locator('[class*="group/handle"]').boundingBox();
+        assert.ok(handle);
+        const startX = handle.x + 2;
+        await page.mouse.move(startX, 180);
+        await page.mouse.down();
+        await page.mouse.move(startX - 20, 180);
+        await assertFirstRow(expectedWidth, zoom);
+        await page.mouse.up();
+        assert.equal(await page.evaluate(() => localStorage.getItem('sidebar-width')), '260');
+        await page.mouse.move(startX, 180);
+        await page.mouse.down();
+        await page.mouse.move(startX + 22, 180);
+        await assertFirstRow(expectedWidth + 22, zoom);
+        await page.mouse.up();
+        assert.equal(await page.evaluate(() => localStorage.getItem('sidebar-width')), '346');
+        await page.mouse.move(startX + 22, 180);
+        await page.mouse.down();
+        await page.mouse.move(90, 180);
+        await button.waitFor({ state: 'detached' });
+        await page.mouse.up();
+        assert.equal((await aside.boundingBox()).width, 78);
+        assert.equal(await page.evaluate(() => localStorage.getItem('sidebar-width')), '346');
+        return;
+      }
       await button.click();
       assert.equal(await button.getAttribute('aria-pressed'), 'true');
       await button.click();
       assert.equal(await button.getAttribute('aria-pressed'), 'false');
       await ui.capture('inbox-visible');
+      if (ui.case === 'inbox-zoom') {
+        await ui.emit('appearance', { windowZoom: 1 });
+        await page.waitForFunction(() => document.querySelector('aside.bg-sidebar').getBoundingClientRect().width === 260);
+        await assertFirstRow(260, 1);
+        assert.equal(await page.evaluate(() => localStorage.getItem('sidebar-width')), '260');
+      }
       return;
     }
     if (ui.case === 'hidden') {
