@@ -264,7 +264,7 @@ export type CompanionHomeProbeOutcome =
   | { kind: 'thrown'; code?: string };
 
 /**
- * The only failures that let a home listed online be taken over without the owner forcing it
+ * The only failures that let a home be taken over without the owner forcing it
  * (allow-list, cloud-companions.md §3.1), as the home's own dispatcher answers them: its same-account
  * control off, or this computer's access revoked. An older Cindy without the channel is recognised by
  * the exact answer its dispatcher gives for this channel (below), not by the code alone.

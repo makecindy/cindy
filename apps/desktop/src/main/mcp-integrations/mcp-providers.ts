@@ -1446,7 +1446,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
           // Never forced from a tool: what the home has not synced yet could be lost (cloud-companions.md §3.1).
           if (result.code === 'HOME_UNRESPONSIVE') return { ok: false, errorCode: result.code,
-            message: 'The buddy did not move: its main computer is listed online but did not answer. Try again later; only the user can force a take-over, from the buddy\'s settings' };
+            message: 'The buddy did not move: the state of its main computer could not be confirmed (no clear answer). Try again later; only the user can force a take-over, from the buddy\'s settings' };
           return { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
         },
       },

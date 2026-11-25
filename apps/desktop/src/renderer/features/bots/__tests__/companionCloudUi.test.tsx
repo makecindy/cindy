@@ -473,10 +473,15 @@ describe('BotHomeComputerSetting', () => {
   // hand-over, the owner sees a separate warning and only an explicit force takes it over.
   // #11999 review (zqchris, 11-25): the warning names the computer whose id is submitted, both taken from the
   // same decision (choices or switch result), even when the rendered snapshot still shows another home (A vs C).
+  // The texts never claim the home is «online» (HOME_UNRESPONSIVE also covers a failed, stale or partial
+  // directory; zqchris 11-25): without a name in the decision they use the `_unnamed` variants instead of
+  // putting a placeholder name in the sentence.
   it.each([
     ['menu', 'laptop', 'Laptop'], ['confirm', 'laptop', 'Laptop'],
     ['menu', 'carbon', 'Carbon'], ['confirm', 'carbon', 'Carbon'],
-  ] as const)('takes over a main computer that does not answer only when forced (found at %s, decided home %s)', async (found, decided, decidedName) => {
+    ['menu', 'carbon', ''], ['confirm', 'carbon', ''],
+  ] as const)('takes over a main computer whose state is not confirmed only when forced (found at %s, decided home %s, name "%s")', async (found, decided, decidedName) => {
+    const named = decidedName ? { device: decidedName } : { context: 'unnamed' };
     const here = { deviceId: 'desk', name: 'Desk', online: true, isSelf: true };
     maker.getCompanionHomeChoices.mockResolvedValue(found === 'menu'
       ? { homeDeviceId: decided, homeName: decidedName, mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] }
@@ -486,15 +491,15 @@ describe('BotHomeComputerSetting', () => {
     show(snapshot('laptop'));
     openMenu();
     if (found === 'menu') {
-      expect(await screen.findByText(`bots.cloud.homeUnresponsive:{"name":"Mia","device":"${decidedName}"}`)).toBeTruthy();
+      expect(await screen.findByText(`bots.cloud.homeUnresponsive:${JSON.stringify({ name: 'Mia', ...named })}`)).toBeTruthy();
       expect(screen.queryByText('bots.cloud.switchHere')).toBeNull();
       fireEvent.click(screen.getByText('bots.cloud.forceHere'));
     } else {
       fireEvent.click(await screen.findByText('bots.cloud.switchHere'));
       fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.switchAction:{"device":"bots.cloud.thisComputer"}' }));
     }
-    await screen.findByText(`bots.cloud.forceDescription:{"name":"Mia","device":"${decidedName}"}`);
-    expect(screen.getByText(`bots.cloud.forceTitle:{"device":"${decidedName}"}`)).toBeTruthy();
+    await screen.findByText(`bots.cloud.forceDescription:${JSON.stringify({ name: 'Mia', ...named })}`);
+    expect(screen.getByText(`bots.cloud.forceTitle:${JSON.stringify(named)}`)).toBeTruthy();
     expect(maker.switchCompanionHome).not.toHaveBeenCalledWith('mia', 'desk', { force: true, forceHomeDeviceId: decided });
     h.ensureLoaded.mockImplementation(async () => {
       resetCompanionCloudStoreForTests(snapshot('desk'));

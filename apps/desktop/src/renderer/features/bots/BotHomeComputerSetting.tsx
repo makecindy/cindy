@@ -98,17 +98,19 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const [pending, setPending] = useState<CompanionTransferTarget | null>(null);
   /** The companion was still working when asked to move there: wait for it, or stop it. */
   const [busyTarget, setBusyTarget] = useState<CompanionTransferTarget | null>(null);
-  /** The home is listed online but did not answer: the owner may take it over here anyway. */
+  /** The home's state could not be confirmed (no explicit answer): the owner may take it over here anyway. */
   const [forceTarget, setForceTarget] = useState<CompanionTransferTarget | null>(null);
   /**
    * The home the force dialog is about, id and name from the same decision (the probe's choices or the
    * switch result), never the live snapshot: the warning names the computer the force is submitted for.
    */
-  const [forceHome, setForceHome] = useState<{ id: string; name: string } | null>(null);
-  /** The home a decision saw, named from that same decision; an unknown name reads as an unknown device. */
+  const [forceHome, setForceHome] = useState<{ id: string; name: string | null } | null>(null);
+  /** The home a decision saw, named from that same decision (null when it had no name). */
   const decidedHome = (id: string | null | undefined, name: string | undefined) =>
-    id ? { id, name: name?.trim() || t('bots.cloud.unknownDevice') } : null;
-  const askForce = (target: CompanionTransferTarget, home: { id: string; name: string } | null) => { setForceHome(home); setForceTarget(target); };
+    id ? { id, name: name?.trim() || null } : null;
+  /** Text options naming that home; without a name, the `_unnamed` text (never a placeholder name in the sentence). */
+  const homeText = (name: string | null | undefined) => (name ? { device: name } : { context: 'unnamed' as const });
+  const askForce = (target: CompanionTransferTarget, home: { id: string; name: string | null } | null) => { setForceHome(home); setForceTarget(target); };
   /** Another computer never uploaded a profile snapshot: ask before starting fresh here. */
   const [missingProfileTarget, setMissingProfileTarget] = useState<CompanionTransferTarget | null>(null);
   /**
@@ -233,7 +235,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
     ? t('bots.cloud.thisComputer')
     : actor?.homeDevice?.name?.trim() || t('bots.cloud.unknownDevice');
   return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget,
-    forceTarget, setForceTarget, forceHome, askForce, decidedHome, missingProfileTarget, setMissingProfileTarget, missingProfileForceHome, busy,
+    forceTarget, setForceTarget, forceHome, askForce, decidedHome, homeText, missingProfileTarget, setMissingProfileTarget, missingProfileForceHome, busy,
     error, setError, inFlight, load, confirm, targetName, conflictAction: conflict.action, repairOpen, setRepairOpen, repairAvailable };
 }
 
@@ -259,12 +261,13 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
     return (
       <>
         <DropdownMenuItem disabled className="whitespace-normal">
-          {t('bots.cloud.homeUnresponsive', { name: bot.name, device: state.decidedHome(choices.homeDeviceId, choices.homeName)?.name ?? state.homeName })}
+          {t('bots.cloud.homeUnresponsive', { name: bot.name, ...state.homeText(state.decidedHome(choices.homeDeviceId, choices.homeName)?.name) })}
         </DropdownMenuItem>
         {/* May lose what that computer has not synced: a destructive row (DESIGN.md §4 Destructive actions). */}
         {choices.targets.filter((target) => target.isSelf).map((target) => (
-          <DropdownMenuItem key={target.deviceId} variant="danger" onSelect={() => { state.setError(null); state.askForce(target, state.decidedHome(choices.homeDeviceId, choices.homeName)); }}>
-            <span className="min-w-0 truncate">{t('bots.cloud.forceHere')}</span>
+          // A destructive action's label wraps instead of being cut off (long in some languages).
+          <DropdownMenuItem key={target.deviceId} variant="danger" className="whitespace-normal" onSelect={() => { state.setError(null); state.askForce(target, state.decidedHome(choices.homeDeviceId, choices.homeName)); }}>
+            <span className="min-w-0">{t('bots.cloud.forceHere')}</span>
           </DropdownMenuItem>
         ))}
       </>
@@ -311,8 +314,8 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
     <ConfirmDialog
       open={state.forceTarget !== null}
       onOpenChange={(open) => { if (!open && !state.inFlight.current) state.setForceTarget(null); }}
-      title={t('bots.cloud.forceTitle', { device: state.forceHome?.name ?? t('bots.cloud.unknownDevice') })}
-      description={t('bots.cloud.forceDescription', { name: bot.name, device: state.forceHome?.name ?? t('bots.cloud.unknownDevice') })}
+      title={t('bots.cloud.forceTitle', state.homeText(state.forceHome?.name))}
+      description={t('bots.cloud.forceDescription', { name: bot.name, ...state.homeText(state.forceHome?.name) })}
       confirmText={t('bots.cloud.forceAction')}
       confirmVariant="destructive"
       cancelText={t('bots.cloud.forceLater')}
@@ -327,7 +330,7 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
       confirmText={t('bots.cloud.missingProfileConfirm')}
       cancelText={t('bots.cancel')}
       loading={state.busy}
-      // After a forced take-over (home listed online but not answering) keep the force, or the move asks again.
+      // After a forced take-over (home state not confirmed) keep the force, or the move asks again.
       onConfirm={() => {
         const forcedHome = state.missingProfileForceHome.current;
         void state.confirm(state.missingProfileTarget, { allowMissingProfile: true, ...(forcedHome ? { force: true, forceHomeDeviceId: forcedHome } : {}) });

@@ -3301,7 +3301,7 @@ async function probeCompanionCloudCaps(deviceId: string, timeoutMs: number): Pro
 async function companionCloudPeerVersion(deviceId: string): Promise<number> {
   return probeCompanionCloudCaps(deviceId, 5_000).catch(() => 0);
 }
-/** The companion's home listed online: only an explicit answer may lead to a take-over (cloud-companions.md §3.1). */
+/** What the companion's home answered: only an explicit answer may lead to a take-over (cloud-companions.md §3.1). */
 const companionCloudHomeStatus = (deviceId: string) =>
   askCompanionHome(companionHomeProbe(() => invokeBotPeer(deviceId, COMPANION_CLOUD_CAPS_CHANNEL, [])));
 const COMPANION_FAILURE_CODES: ReadonlySet<CompanionCloudFailureCode> = new Set<CompanionCloudFailureCode>(

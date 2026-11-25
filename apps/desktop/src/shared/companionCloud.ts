@@ -65,8 +65,9 @@ export type CompanionCloudFailureCode =
   /** Cloud has no uploaded profile snapshot yet; another computer requires confirmation before starting fresh. */
   | 'PROFILE_SNAPSHOT_MISSING'
   /**
-   * Local only (never sent to another computer): the home is listed online but did not answer, so it
-   * was not asked to hand over. Taking over anyway needs `CompanionSwitchOptions.force`.
+   * Local only (never sent to another computer): the home's state could not be confirmed (no explicit
+   * answer; cloud-companions.md §3.1), so it was not asked to hand over. Taking over anyway needs
+   * `CompanionSwitchOptions.force`.
    */
   | 'HOME_UNRESPONSIVE';
 
@@ -104,7 +105,7 @@ export interface CompanionSwitchOptions {
   /** User confirmed continuing with a default profile when switching in take-over mode without a snapshot. */
   allowMissingProfile?: boolean;
   /**
-   * Take the companion over here although its home is listed online but does not answer
+   * Take the companion over here although its home's state could not be confirmed
    * (`HOME_UNRESPONSIVE`); what it has not synced yet may stay on that computer. Local UI only.
    * Only counts together with `forceHomeDeviceId`.
    */
@@ -162,7 +163,7 @@ export interface CompanionTransferTarget {
  * - `local`: this computer is the home and hands it over itself;
  * - `remote`: the home is another reachable computer, asked to hand it over;
  * - `takeOver`: the home cannot be reached; only this computer can continue it. With `reason:
- *   'HOME_UNRESPONSIVE'` the home is listed online but did not answer: taking over needs `force`;
+ *   'HOME_UNRESPONSIVE'` the home's state could not be confirmed: taking over needs `force`;
  * - `unavailable`: the home cannot be changed from here (`reason`).
  */
 export interface CompanionHomeChoices {
