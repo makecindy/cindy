@@ -72,6 +72,11 @@ older sections below differ, this section wins.
   `startLinuxAwayCover()` driving the compositor cover from its idle time. Windows reads
   "follow system" from `powercfg` (`parseWindowsDisplayOffMs`); Hyprland uses 10 minutes.
 
+## Cloud instance defaults
+
+A managed cloud instance enables conversation control and remote desktop when it creates a new
+profile; later starts keep whatever the owner chose. Ordinary desktops keep their opt-in defaults.
+
 ## Idle protection
 
 > 2026-11-14: hosts advertising `hostIdle` replace the per-viewer minutes below with
@@ -805,6 +810,20 @@ and key/button release on EOF, SIGTERM and heartbeat loss. It never injects into
 the user's desktop. Host/unit tests separately cover geometry, opt-in, ownership,
 and the unsupported-input message. Full Air-to-GX102 UI validation remains a
 separate acceptance step after installing a build containing this change.
+
+## Managed X11 desktop (cloud instance)
+
+Clipboard synchronization uses Electron's X11 CLIPBOARD and PRIMARY selections under the usual
+lease, limits and version checks, on an unchanged local display only. Paste sends Shift+Insert,
+because terminals treat Ctrl+V as literal input. Lock-on-exit is not offered: Xvfb has no locker.
+
+Pointer, keys and committed text go through the authenticated X11/XTest helper
+(`linux-input-guard.py`, system `libxdo.so.3`), never through CDP or the clipboard. Text is sent
+in chunks of at most 32 code points. Main rechecks lease and display between chunks, and the
+helper checks the active window, PID and focus before each character; a focus change stops
+delivery without retrying or redirecting it. Modifiers, Caps Lock and any keycode borrowed for
+Unicode are restored, and held input is released on stop. Wayland, macOS and Windows do not use
+this path.
 
 ## Wayland capture lifetime
 
