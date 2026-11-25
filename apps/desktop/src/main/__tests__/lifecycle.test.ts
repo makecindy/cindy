@@ -41,6 +41,9 @@ const resourceUsageWebContentsIds = vi.hoisted(() => new Set<number>());
 const rsbWindowWebContentsIds = vi.hoisted(() => new Set<number>());
 const reviewArtifactConfirmWebContentsIds = vi.hoisted(() => new Set<number>());
 
+const currentMainWindow = vi.hoisted(() => vi.fn<() => Electron.BrowserWindow | null>());
+vi.mock('../deepLink', () => ({ getDeepLinkMainWindow: currentMainWindow }));
+
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   isRsbNativePopupWebContentsId: (webContentsId: number) =>
     nativePopupWebContentsIds.has(webContentsId),
@@ -645,6 +648,63 @@ describe('installQuitHandler render-process-gone', () => {
     };
   }
 
+  it.each(['guest', 'unregistered auxiliary', 'closed window', 'main window'] as const)(
+    'handles destroyed contents from a %s (#12758)',
+    async (role) => {
+      const { handler, app, restore } = await installAndGrabHandler();
+      try {
+        let destroyed = false;
+        const contents = {
+          isDestroyed: () => destroyed,
+          get id() {
+            if (destroyed) throw new TypeError('Object has been destroyed');
+            return 48;
+          },
+          getType(): string { throw new TypeError('Object has been destroyed'); },
+        };
+        const win = Object.assign(new EventEmitter(), {
+          isDestroyed: () => false,
+          webContents: contents,
+        });
+        const main = role === 'main window' || role === 'closed window'
+          ? win
+          : Object.assign(new EventEmitter(), {
+              isDestroyed: () => false,
+              webContents: { id: 1, isDestroyed: () => false, getType: () => 'window' },
+            });
+        const listeners = vi.mocked(app.on).mock.calls as unknown as Array<
+          [string, (event: unknown, window: typeof win) => void]
+        >;
+        for (const [event, listener] of listeners) {
+          if (event === 'browser-window-created') {
+            listener({}, main);
+            // Screenshot editor and recording preview use ordinary BrowserWindows
+            // whose factory does not register their IDs in the crash isolation lists.
+            if (role === 'unregistered auxiliary') listener({}, win);
+          }
+        }
+        currentMainWindow.mockReturnValue(main as unknown as Electron.BrowserWindow);
+        if (role === 'closed window') {
+          win.emit('closed');
+          currentMainWindow.mockReturnValue(null);
+        }
+        destroyed = true;
+        handler({}, contents, { reason: 'oom', exitCode: 137 });
+        if (role === 'main window') {
+          await vi.waitFor(() => expect(app.exit).toHaveBeenCalledWith(1));
+          expect(mocks.logger.error).toHaveBeenCalledWith('render-process-gone: reason=oom exitCode=137');
+          expect(mocks.logger.info).toHaveBeenCalledWith(expect.stringContaining('reason=render-process-gone:oom'));
+        } else {
+          expect(mocks.spawn).not.toHaveBeenCalled();
+          expect(app.exit).not.toHaveBeenCalled();
+        }
+      } finally {
+        currentMainWindow.mockReturnValue(null);
+        restore();
+      }
+    },
+  );
+
   it('ignores a late renderer exit notification after its window has closed (#12758)', async () => {
     const { handler, app, restore } = await installAndGrabHandler();
     try {
@@ -1012,10 +1072,16 @@ describe('installQuitHandler', () => {
       Object.defineProperty(process, 'platform', platform);
 
       const { app } = await import('electron');
-      const [, onWindowCreated] = (vi.mocked(app.on).mock.calls as unknown as Array<[string, (e: unknown, w: EventEmitter) => void]>)
-        .find(([event]) => event === 'browser-window-created')!;
-      const win = new EventEmitter();
-      onWindowCreated({}, win);
+      const win = Object.assign(new EventEmitter(), {
+        isDestroyed: () => false,
+        webContents: { id: 1, isDestroyed: () => false },
+      });
+      const listeners = vi.mocked(app.on).mock.calls as unknown as Array<
+        [string, (event: unknown, window: typeof win) => void]
+      >;
+      for (const [event, listener] of listeners) {
+        if (event === 'browser-window-created') listener({}, win);
+      }
       win.emit('session-end', { reasons: ['shutdown'] });
 
       const nextStart = new diagnostics.RunMarkerStore({
