@@ -16,6 +16,10 @@ vi.mock('../../logger.js', () => ({
 
 import { AppShortcutStore } from '../AppShortcutStore';
 import type { AppShortcutCombo } from '../../../shared/appShortcuts';
+import { nativeShortcutSettings } from '../../host-settings/additionalShortcuts';
+
+let nativeStore: AppShortcutStore;
+vi.mock('../index.js', () => ({ getAppShortcutStore: () => nativeStore }));
 
 let dir: string;
 
@@ -74,6 +78,41 @@ describe('AppShortcutStore', () => {
     expect(older.setOverride('away-guard', null)).toBe('platform-unavailable');
     expect(older.getOverrides()['away-guard']).toEqual(custom);
     expect(current.getEffectiveCombos('away-guard')).toEqual([custom]);
+  });
+
+  it('Host edits share native conflict checks, preserve hidden overrides and reject a stale form', async () => {
+    const store = makeStore('darwin');
+    fs.writeFileSync(filePath(), JSON.stringify({ version: 1, overrides: { 'save-file': null }, future: true }));
+    const before = store.inspectHost();
+    if (before.status !== 'ready') throw new Error('fixture');
+    await expect(store.commitHost({ 'toggle-sidebar': combo('KeyF', { meta: true }) }, ['toggle-sidebar'], { expectedRevision: before.revision })).rejects.toThrow('conflict');
+    const saved = await store.commitHost({ 'toggle-sidebar': combo('KeyJ', { meta: true }) }, ['toggle-sidebar'], { expectedRevision: before.revision });
+    expect(store.getEffectiveCombos('toggle-sidebar')[0]?.code).toBe('KeyJ');
+    expect(JSON.parse(fs.readFileSync(filePath(), 'utf8'))).toMatchObject({ overrides: { 'save-file': null, 'toggle-sidebar': { code: 'KeyJ' } }, future: true });
+    await expect(store.commitHost({}, ['toggle-sidebar'], { expectedRevision: before.revision })).rejects.toThrow();
+    await store.commitHost({}, ['toggle-sidebar'], { expectedRevision: saved.revision });
+    expect(JSON.parse(fs.readFileSync(filePath(), 'utf8'))).toEqual({ version: 1, overrides: { 'save-file': null }, future: true });
+  });
+
+  // main 的云设置合并回归：本机 away 覆盖不能破坏固定 wire 目录，也不能被远程恢复默认删掉。
+  it('keeps the local away binding outside Host choices and preserves it when Host resets entries', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      nativeStore = new AppShortcutStore({ getFilePath: filePath, platform: 'darwin', osRelease: '23.0.0' });
+      const custom = combo('KeyK', { ctrl: true, shift: true });
+      expect(nativeStore.setOverride('away-guard', custom)).toBeNull();
+      expect(nativeStore.setOverride('toggle-sidebar', combo('KeyJ', { meta: true }))).toBeNull();
+      const before = nativeShortcutSettings.read();
+      expect(before.status).toBe('ready');
+      if (before.status !== 'ready') throw new Error('fixture');
+      expect(before.value.entries.map(entry => entry.id)).toEqual(['toggle-sidebar']);
+      expect(before.choices.entries.map(choice => choice.value.id)).not.toContain('away-guard');
+      await nativeShortcutSettings.commit({ set: {}, clear: ['entries'] }, { expectedRevision: before.revision });
+      expect(makeStore().getOverrides()).toEqual({ 'away-guard': custom });
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
   });
 
   it('returns registry defaults when no overrides exist', () => {

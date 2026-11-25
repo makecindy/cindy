@@ -208,6 +208,26 @@ describe('runQuitDisposers', () => {
     expect(log).toEqual(['a-sync', 'b-async', 'c-post']);
   });
 
+  // Unit: an observer learns about every quit step that failed or ran out of time, with no
+  // dependence on the log wording; a clean chain reports none.
+  it('tells the quit observer about each step that did not finish cleanly', async () => {
+    const { onQuit, runQuitDisposers, observeQuitSteps } = await freshLifecycle();
+    const observer = { fault: vi.fn(), completed: vi.fn() };
+    observeQuitSteps(observer);
+    await runQuitDisposers(20);
+    expect(observer.fault).not.toHaveBeenCalled();
+    onQuit('sync-throws', () => { throw new Error('sync'); }, 'sync');
+    onQuit('sync-promise', (() => Promise.resolve()) as never, 'sync');
+    onQuit('async-throws', async () => { throw new Error('async'); }, 'async');
+    onQuit('async-hangs', () => new Promise<void>(() => {}), 'async');
+    onQuit('post-throws', async () => { throw new Error('post'); }, 'post-async');
+    onQuit('post-hangs', () => new Promise<void>(() => {}), 'post-async');
+    onQuit('post-throws-sync', () => { throw new Error('post sync'); }, 'post-async');
+    await runQuitDisposers(20);
+    expect(observer.fault).toHaveBeenCalledTimes(7);
+    expect(observer.completed).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('keeps real bootstrap Codex and DB dependencies until Maker settles or times out (timeout=%s)', async (timesOut) => {
     vi.useFakeTimers();
     const { onQuit, runQuitDisposers } = await freshLifecycle();
