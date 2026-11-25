@@ -4616,6 +4616,29 @@ describe("remote desktop controls", () => {
     ).toMatchObject({ audio: true });
     expect(host.textContent).not.toContain("remoteDesktop.audioUnavailable");
   });
+  it("keeps the Android landscape toolbar outside the system navigation area", async () => {
+    fixture.platform = "android";
+    fixture.size = { width: 914, height: 411 };
+    fixture.safe = { top: 0, bottom: 0, left: 50, right: 48 };
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await connect();
+
+    for (const { left, right, bottom } of [
+      { left: 50, right: 48, bottom: 0 },
+      { left: 48, right: 50, bottom: 0 },
+      { left: 50, right: 0, bottom: 24 },
+    ]) {
+      fixture.safe = { top: 0, left, right, bottom };
+      act(() => root.render(<RemoteDesktopScreen />));
+      const style = Object.assign(
+        {},
+        ...fixture.views["remoteDesktop.toolbarPosition"].style
+          .flat(Infinity)
+          .filter(Boolean),
+      );
+      expect(style).toMatchObject({ right, bottom, paddingBottom: 0 });
+    }
+  });
   it("moves the centered rail opposite the island in both landscape directions", async () => {
     fixture.size = { width: 874, height: 402 };
     for (const islandRight of [false, true, false]) {
