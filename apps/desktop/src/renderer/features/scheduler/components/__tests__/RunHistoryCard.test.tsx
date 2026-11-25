@@ -154,6 +154,17 @@ describe('RunHistoryCard 前置检查结果', () => {
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(/Scheduled model test/)).toBeTruthy();
   });
+  // #12714, unit: the runner stores English diagnostics; the card must show translated recovery first.
+  it('localizes one-time rebuild recovery and preserves the stored diagnostics', () => {
+    const errorMsg = 'schedule model switch requires rebuilding the session before dispatch (model "test"). The prompt was not sent. Use Run now to retry the automation.';
+    renderRun({ id: 'rebuild', scheduleId: 'one-time', firedAt: 1, finishedAt: 2,
+      status: 'failed', errorMsg });
+    expect(screen.getByText('chat.unreadFailedScheduleBanner.modelRebuildRetry')).toBeTruthy();
+    expect(screen.queryByText(errorMsg)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(errorMsg)).toBeTruthy();
+  });
+
   it('diagnoses an execution failure before a task was created without fabricating a link', () => {
     renderRun({ id: 'early-run', scheduleId: 'schedule-1', firedAt: 1,
       finishedAt: 2, status: 'failed', errorMsg: 'provider mismatch' });

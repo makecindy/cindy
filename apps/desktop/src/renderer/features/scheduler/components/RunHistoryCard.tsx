@@ -21,7 +21,7 @@ import { cn } from '@/lib/utils';
 import * as sessionService from '@/lib/sessionService';
 import { toast } from '@/lib/toast';
 import { ErrorNotice } from '@/components/ui/error-notice';
-import { isScheduleActionExpired, scheduleFailureDetails } from '@cindy/maker-shared/schedule-model';
+import { isOneTimeModelRebuildFailure, isScheduleActionExpired, scheduleFailureDetails } from '@cindy/maker-shared/schedule-model';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import type { RunStatus, ScheduleAgentKind, ScheduleRun } from '@cindy/maker-scheduler';
 import type { SessionReference } from '../../../../shared/sessionReference';
@@ -156,6 +156,8 @@ export function RunHistoryCard({
     /^Scheduled tasks is not available for tasks running on a plugin engine(?:\.|$)/.test(errorDetail ?? '');
   const errorKey = boundPluginEngineRefusal
     ? 'scheduler.runs.boundPluginEngineRecovery'
+    : run.status === 'failed' && isOneTimeModelRebuildFailure(run.errorMsg)
+    ? 'chat.unreadFailedScheduleBanner.modelRebuildRetry'
     : isScheduleActionExpired(run.errorMsg)
     ? `chat.unreadFailedScheduleBanner.${run.failureRecovered ? 'actionRecovered' : 'actionExpired'}`
     : errorCode ? `chat.remoteError.${errorCode}` : undefined;
