@@ -7269,7 +7269,7 @@ export class PiAgent extends BaseAgent {
         }
         if (!nativeModel) {
           return { action: 'unavailable', targetContextWindow: null, windowVerified: false,
-            reason: `Pi provider '${sourceId}' does not offer model '${model}'` };
+            modelNotOffered: true, reason: `Pi provider '${sourceId}' does not offer model '${model}'` };
         }
         inheritsNativeWindow = native.inheritModels === true && nativeModel.api === undefined
           && nativeModel.catalogAddition !== true && nativeModel.contextWindow === undefined;

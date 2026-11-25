@@ -41,6 +41,7 @@ import {
   isSharedTaskPeer,
   parseProviderSharePeer,
 } from '@cindy/device-link';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -490,6 +491,8 @@ export interface PendingAgentSwitchIntent {
   cindyAutoRelocation?: { fromProviderId: string; targetProviderId: string };
   /** SET_MODEL intent: apply the route without a cross-engine handoff. */
   sameAgentSelection?: boolean;
+  /** Keep a rejected pick as a send barrier until a new user selection replaces it. */
+  requiresModelReselection?: true;
   /** Original user input, before staging fills omitted axes from the current row. */
   credentialSelectionAxes?: { effort: boolean; fastMode: boolean };
   /** Set by the host at selection time. Never projected or accepted from IPC. */
@@ -1802,6 +1805,9 @@ export function applyPendingAgentSwitchIfIdle(
         const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
         const access = sharedTask ? createSharedTaskPendingSelectionGuard(sharedTask, sessionId) : undefined;
         access?.();
+        if (intent.requiresModelReselection) {
+          throwIpcError('MODEL_SELECTION_UNAVAILABLE', 'Select an available model before sending');
+        }
         // #7825: the guest triggers a send, but the choice above came from the
         // host registry. Apply only that choice under host authority; retain the
         // captured send fence through preflight and admit before mutation. Keep
@@ -1893,6 +1899,12 @@ export function applyPendingAgentSwitchIfIdle(
       throwIfAgentSwitchAborted(opts?.signal);
     } catch (err) {
       // 失败(包括 pre-check 后 running guard 的竞态)保留原 intent,下一次发送重试。
+      if (intent.sameAgentSelection && intent.targetAgentKind === 'pi' && isUserPendingAgentSwitchIntent(intent)
+        && isIpcError(err) && err.code === 'MODEL_SELECTION_UNAVAILABLE') {
+        // Mutate only the object that failed. A concurrent re-selection owns a fresh intent.
+        intent.requiresModelReselection = true;
+        throw err;
+      }
       deps.log.warn('agent-switch: pending apply failed; intent retained for next send', {
         sessionId,
         targetAgentKind: intent.targetAgentKind,
