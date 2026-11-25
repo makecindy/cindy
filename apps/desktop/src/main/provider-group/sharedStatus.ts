@@ -111,6 +111,9 @@ export async function readSharedGroupStatus(deps: SharedGroupStatusDeps, provide
     return deps.readCaps(member);
   });
   sharedSupportReaders.set(scope.router, readSupport);
+  // Capture one configuration for the batch; a store identity check per member
+  // would amplify synchronous filesystem work on the main/remote-IPC path.
+  const views = scope.router.memberViews(providerId);
   const states = await Promise.all(config.members.map(async (member): Promise<ProviderShareGroupState> => {
     if (member.paused) return 'paused';
     // Reuse the member-detail path so one slow directory/quota read or stale
@@ -118,7 +121,7 @@ export async function readSharedGroupStatus(deps: SharedGroupStatusDeps, provide
     // directory still coalesces device/catalog reads across accounts and refreshes.
     const view = await readWithin(() => {
       if (!scope.isCurrent()) throw new Error('The account changed');
-      return scope.router.view(providerId, { display: { memberKey: member.key, details: true } });
+      return views.get(member.key)?.() ?? Promise.resolve(null);
     });
     if (!scope.isCurrent()) return 'unknown';
     const status = view?.members.find((item) => item.key === member.key);

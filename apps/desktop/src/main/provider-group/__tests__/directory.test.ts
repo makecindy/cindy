@@ -540,6 +540,31 @@ describe('resolveMembers', () => {
 // sharedStatus tests stubbed one whole router view, hiding partial directory
 // coverage. Unit: real directory -> router -> anonymous projection, fake clocks.
 describe('anonymous status with partial member reads', () => {
+  // PR #12691 review: readProviderGroup checks the file identity synchronously.
+  // Real anonymous-status -> router -> directory entry, unit tier, in-memory
+  // local accounts: 512 unpaused members must not cause 512 store checks.
+  it('keeps configuration reads constant for a 512-member refresh', async () => {
+    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true,
+      members: Array.from({ length: 512 }, (_, index) => ({
+        key: `local-${index}`, kind: 'local', agentDeviceId: null, providerId: 'anthropic',
+        limit: 4, weight: 1, paused: false,
+      })),
+    };
+    const readGroup = vi.fn(() => config);
+    const directory = createProviderGroupDirectory(deps({ localRunning: async () => 0 }));
+    const router = createProviderGroupRouter({ directory, readGroup,
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => Date.now(), random: () => 0 });
+    const statusDeps = {
+      scope: () => ({ router, isCurrent: () => true }) as ProviderGroupOwnerScope,
+      readGroup, readCaps: vi.fn(), isIncapable: () => false,
+    };
+    expect(await readSharedGroupStatus(statusDeps, 'anthropic')).toEqual(['available']);
+    expect(readGroup).toHaveBeenCalledTimes(3);
+    expect(await readSharedGroupStatus(statusDeps, 'anthropic')).toEqual(['available']);
+    expect(readGroup).toHaveBeenCalledTimes(6);
+    expect(statusDeps.readCaps).not.toHaveBeenCalled();
+  });
+
   it.each(['stale', 'expired', 'catalog-timeout', 'quota-timeout'] as const)(
     'keeps other computers confirmed when one has %s', async (failure) => {
       vi.useFakeTimers();
