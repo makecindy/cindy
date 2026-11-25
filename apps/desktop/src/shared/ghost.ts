@@ -2117,6 +2117,8 @@ export interface InstalledGhost {
   enabled: boolean;
   /** Host 是否持有一次明确安装/更新确认形成的批准快照。 */
   approval: GhostInstallApproval;
+  /** Digest of the installed package, when available in the Host receipt. */
+  installedPackageSha256?: string;
   /** Host-owned approval-revision snapshot root for approved skill directories. */
   approvedSkillRoot?: string;
   /** 安装时由主机验出的来源/签名等级；作者清单不能自报。 */
