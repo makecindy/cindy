@@ -806,20 +806,36 @@ export class Endpoint extends EventEmitter {
     if (this.rebinding) return this.rebinding;
     const run = (async () => {
       let fallbackAddress = this.options.bind?.address ?? '0.0.0.0';
-      if (!bind.address && this.socket) {
-        try { fallbackAddress = this.socket.address().address; } catch { /* 旧套接字可能已失效 */ }
+      let currentPort = 0;
+      if (this.socket) {
+        try {
+          const current = this.socket.address();
+          if (!bind.address) fallbackAddress = current.address;
+          currentPort = current.port;
+        } catch { /* 旧套接字可能已失效 */ }
       }
-      const next = await this.createBoundSocket(bind.address ?? fallbackAddress, bind.port ?? 0);
+      const targetAddress = bind.address ?? fallbackAddress;
+      const targetPort = bind.port ?? 0;
+      const old = this.socket;
+      // 固定端口重绑时须先释放旧套接字占用，否则会 EADDRINUSE；随机端口（0）则先绑好新套接字再关闭旧套接字实现无中断切换。
+      if (old && targetPort > 0 && currentPort === targetPort) {
+        this.socket = null;
+        await new Promise<void>((resolve) => {
+          try { old.close(() => resolve()); } catch { resolve(); }
+        });
+        if (this.broken) throw this.broken;
+      }
+      const next = await this.createBoundSocket(targetAddress, targetPort);
       if (this.broken) {
         try { next.close(); } catch { /* 端点在绑定途中已关闭 */ }
         throw this.broken;
       }
-      const old = this.socket;
+      const previous = this.socket;
       this.socket = next;
       this.sendErrors = 0;
       this.consecutiveSendErrors = 0;
-      if (old && old !== next) {
-        try { old.close(); } catch { /* 旧套接字可能已关闭 */ }
+      if (previous && previous !== next) {
+        try { previous.close(); } catch { /* 旧套接字可能已关闭 */ }
       }
       if (notify && !this.broken) this.localAddressChanged();
     })();

@@ -46,6 +46,15 @@ export interface ExtractedStep {
    * the window itself; mistaking another form for this only sends them there.
    */
   signIn?: boolean;
+  /** Keys (`hiddenFieldKeys`) of shrunken fields this step took in; passed back to keep them once focus moves. */
+  hiddenFields?: string[];
+  /** How many shrunken fields this step took in, remembered by key or not (an ambiguous key is not remembered). */
+  hiddenTaken?: number;
+  /**
+   * Shrunken fields the page lays out, taken in or not, each as its page id and fingerprint (`[domId, fp]`): a code
+   * field whose keys stopped matching may be among them.
+   */
+  hiddenCandidates?: string[];
 }
 
 /** Keep verified page metadata even when its controls cannot form a complete step. */
@@ -90,15 +99,41 @@ function visible(node: NativeAxNode, windowFrame: number[]): boolean {
 }
 
 /** Chrome clips offscreen AX bounds at the viewport edge, while retaining the field's identity. */
-function laidOutInPage(node: NativeAxNode, page: NativeAxNode): boolean {
+function laidOutInPage(node: NativeAxNode, page: NativeAxNode, takenHidden: (node: NativeAxNode) => boolean): boolean {
   if (visible(node, [])) return true;
   if (!node.frame || !page.frame) return false;
+  if (takenHidden(node)) return true;
   const [x, y, w, h] = node.frame;
   const [px, py, pw, ph] = page.frame;
   const edge = (value: number, start: number, size: number) => Math.abs(value - start) < 2 || Math.abs(value - start - size) < 2;
   return (w >= 2 && h >= 0 && h < 2 && (edge(y, py, ph) || edge(y + h, py, ph))) ||
     (h >= 2 && w >= 0 && w < 2 && (edge(x, px, pw) || edge(x + w, px, pw)));
 }
+
+/**
+ * Split code boxes ("请输入短信验证码" with six drawn digits) type into one real input the page
+ * shrinks to a pixel and focuses. Only a focused one is found: unfocused hidden fields are often
+ * traps for bots, never the owner's to fill (2026-11-25, a payment SMS code read as nothing to fill).
+ * Once found, re-reading the same step keeps it by place and fingerprint, since typing into an
+ * earlier field moves the focus away from it.
+ */
+function hiddenFieldInPage(node: NativeAxNode, page: NativeAxNode): boolean {
+  if (!TEXT_ROLES.has(node.role) || node.frame?.length !== 4 || page.frame?.length !== 4) return false;
+  const [x, y, w, h] = node.frame;
+  const [px, py, pw, ph] = page.frame;
+  return w >= 0 && h >= 0 && x >= px && y >= py && x <= px + pw && y <= py + ph;
+}
+
+/**
+ * A hidden field found focused earlier in this step: its page id (if any) with its fingerprint, within the document
+ * that holds it (named by its address). It survives text the page inserts after an earlier field is typed, which
+ * shifts tree positions; an id is unique only in its own document, so a frame's field of the same id is another field.
+ * The tree position is left out: another field (of another frame, say) may take that place.
+ * A key counts only while exactly one hidden field reads with it, and is remembered only then: two frames at one
+ * address, two fields without ids, or two ids read alike (they are read cut off) cannot tell whose the field was.
+ */
+export const hiddenFieldKeys = (field: { fp: string; domId?: string }, document: string): string[] =>
+  [JSON.stringify(['hidden', document, field.domId ?? null, field.fp])];
 
 const isWithin = (ref: string, scope: string) => ref === scope || ref.startsWith(`${scope}.`);
 const parentRef = (ref: string) => ref.slice(0, Math.max(0, ref.lastIndexOf('.')));
@@ -181,7 +216,8 @@ function signatureOf(source: InputHandoffSource, controls: ScreenControl[]): str
   ]);
 }
 
-export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
+/** `confirmedHidden`: hidden fields this step already found focused (`hiddenFieldKeys`), kept when focus moved. */
+export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: ReadonlySet<string>): ExtractedStep {
   const windowFrame = snapshot.window.frame ?? [];
   const browser = isBrowserBundle(snapshot.bundleId);
   const nodes = snapshot.nodes.filter((node) => visible(node, windowFrame));
@@ -196,7 +232,37 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   // A page's accessibility tree includes laid-out fields below the viewport.
   // Scrolling must not turn one form into unrelated partial steps. Zero-size
   // nodes are excluded unless their bounds were clipped at the viewport edge.
-  const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb)) : pageMissing ? [] : nodes;
+  // The document a node belongs to: its nearest web area (the page itself or a frame inside it), by its address;
+  // inserting text above a frame shifts the frame's tree position, not its address.
+  // Two frames may load the same address, each its own document with its own ids; their keys read alike, so neither
+  // is kept (see `hiddenFieldKeys`).
+  const documentNames = new Map<NativeAxNode, string>();
+  for (const node of snapshot.nodes) {
+    if (node.role !== 'AXWebArea') continue;
+    // A frame that only rewrites its fragment (`#sent`) is still the same document.
+    const address = node.url?.split('#')[0];
+    documentNames.set(node, address === undefined ? `ref:${node.ref}` : address);
+  }
+  const documents = [...documentNames.keys()].sort((a, b) => b.ref.length - a.ref.length);
+  const documentOf = (node: NativeAxNode) => {
+    const area = documents.find((candidate) => isWithin(node.ref, candidate.ref));
+    return area ? documentNames.get(area)! : '';
+  };
+  const keysOf = (node: NativeAxNode) => hiddenFieldKeys(node, documentOf(node));
+  // Every hidden field the page lays out, focused or not, and how many read with each key.
+  const hiddenCandidates = topWeb
+    ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && !visible(node, []) && hiddenFieldInPage(node, topWeb))
+    : [];
+  const readers = new Map<string, number>();
+  for (const node of hiddenCandidates) for (const key of keysOf(node)) readers.set(key, (readers.get(key) ?? 0) + 1);
+  // Taken in by the hidden-field rule itself: focused now, or found focused earlier in this step and alone in its key.
+  const takenHidden = (node: NativeAxNode) => !!topWeb && hiddenFieldInPage(node, topWeb) &&
+    (!!node.focused || keysOf(node).some((key) => readers.get(key) === 1 && confirmedHidden?.has(key)));
+  const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb, takenHidden)) : pageMissing ? [] : nodes;
+  // Only fields the hidden-field rule took in are remembered, never zero-size fields kept for the viewport edge.
+  const hiddenNodes = scoped.filter((node) => !visible(node, []) && takenHidden(node));
+  // Remembered only when unambiguous now: a key two fields read with names neither once the focus moves.
+  const hiddenFields = hiddenNodes.flatMap(keysOf).filter((key) => readers.get(key) === 1);
 
   // Modal sheets take over the window.
   const sheet = scoped.find((node) => node.role === 'AXSheet');
@@ -274,6 +340,7 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
       const frameArea = nestedAreas.filter((area) => isWithin(node.ref, area.ref))
         .sort((a, b) => b.ref.length - a.ref.length)[0];
       const frameOrigin = frameArea?.url ? classifyOrigin(frameArea.url, browser).origin : undefined;
+      // Read back by position in `keptHidden` (session.ts), which leaves the name out.
       const identity = JSON.stringify([node.domId, node.fp, label, stable ? null : node.ref, frameOrigin]);
       bindings.set(controlId, { kind: 'text', ref: node.ref, fp: node.fp, identity, secure: !!node.secure, ...(frameOrigin ? { frameOrigin } : {}) });
       refs.set(controlId, node.ref);
@@ -433,6 +500,9 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     ...(deviceCode ? { deviceCode } : {}),
     ...(pageMissing ? { pageMissing } : {}),
     ...(signIn ? { signIn } : {}),
+    ...(hiddenFields.length ? { hiddenFields } : {}),
+    ...(hiddenNodes.length ? { hiddenTaken: hiddenNodes.length } : {}),
+    ...(hiddenCandidates.length ? { hiddenCandidates: hiddenCandidates.map((node) => JSON.stringify([node.domId ?? null, node.fp])) } : {}),
   };
 }
 

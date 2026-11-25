@@ -90,6 +90,7 @@ import {
 } from './groupRelay';
 import { PROVIDER_GROUP_LOCAL_MEMBER_KEY, type ProviderGroupUsageLimit } from '../../../shared/providerGroup';
 import { decideProviderGroupFailure, describeProviderGroupFailure, providerGroupFailureSignals, providerGroupUnavailableError } from '../../provider-group/failurePolicy';
+import { poolFailuresAfterOutput } from '../../subscription-accounts/session.js';
 import { isAccountUsageLimitError } from '../../maker-ipc/usageLimitAutoResume';
 import { projectPathText } from '../executor/workspace';
 import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
@@ -2062,6 +2063,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         meterRunUsage(run, handle.model, event);
         if (currentTerminal) run.turnUsage = undefined;
         const failure = currentTerminal ? relayRunFailureOf(event) : null;
+        if (failure && poolFailuresAfterOutput.has(event)) {
+          groupTurnFailed = true;
+          append(run, { t: 'event', event });
+          continue;
+        }
         if (failure && isAccountFailure(failure)) {
           groupTurnFailed = true;
           await deliverAccountFailure(run, localGroupMember(run.providerId ?? ''), failure, handle.model, () => {
@@ -3766,6 +3772,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
                 tailTurnsToDrop: request.tailTurnsToDrop,
                 forkAtTimestampMs: request.forkAtTimestampMs,
                 workingDir,
+                hostedForkAccess: { ownComputer: !guest, assertCurrent: assertProvider },
                 ...(guest ? { hostedGuestHome: guestHomeFor(scope) } : {}),
               });
             } catch (error) {

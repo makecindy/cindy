@@ -737,6 +737,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     this.transport?.networkChanged?.();
     if (!this.uplink) this.reconnectRelayNow(false);
   }
+  /** Updates the STUN server list (e.g. peer official region STUN discovered asynchronously). */
+  setStunServers(servers: readonly string[]): void {
+    if (this.closed) return;
+    this.transport?.setStunServers?.(servers);
+  }
   /** Session requests to a relayed peer timed out (see Transport.relayStalled). */
   relayStalled(): void {
     if (this.closed) return;

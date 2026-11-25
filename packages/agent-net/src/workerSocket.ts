@@ -9,7 +9,7 @@ import { MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { shortDeviceRef } from '@cindy/device-link';
 import type { AgentNetSocketOptions } from './socket.js';
 import type { PeerRule } from './socketPorts.js';
-import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute } from './types.js';
+import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute, type UdpRebindReason } from './types.js';
 import type { SessionConfig, SessionHandle } from './session/peer.js';
 import { WorkerSessions } from './session/workerSessions.js';
 
@@ -30,6 +30,8 @@ export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
     lastKnownCertificateFor?(id: string): DeviceCertificate | undefined;
     /** This computer changed networks (see AgentNetWorkerSocket.networkChanged). */
     networkChanged?(): void;
+    /** Updates STUN servers on the running transport (e.g. peer official region STUN). */
+    setStunServers?(servers: readonly string[]): void;
     /** A relay connection of this socket is open now (see AgentNetWorkerSocket.relayConnected; event `relay`). */
     relayConnected?(): boolean;
     /** The last round trip to the relay, in ms (see AgentNetWorkerSocket.relayRttMs). */
@@ -133,6 +135,11 @@ function peerRoutesChanged(previous: ReadonlyMap<string, PeerStatus>, next: Read
   return false;
 }
 
+const UDP_REBIND_REASONS: ReadonlySet<UdpRebindReason> = new Set(['network-changed', 'send-errors', 'udp-blackhole']);
+function isUdpRebindReason(value: unknown): value is UdpRebindReason {
+  return typeof value === 'string' && UDP_REBIND_REASONS.has(value as UdpRebindReason);
+}
+
 /** The encrypted transport/parser runs off Main; privileged outbound sockets retain the host's proxy policy. */
 /** `terminate()` 后 worker 最多再跑这么久（毫秒），把关闭包发出去；端点自己最多等 250 毫秒（agent-net-core 的 CLOSE_DRAIN_MS）。 */
 const TERMINATE_DRAIN_MS = 500;
@@ -182,7 +189,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       socket.worker.once('exit', () => { finish(new Error('AGENT_NET_WORKER_EXITED')); socket.dispose(1006); });
     });
     const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, onRelayReplaced, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
-      log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog,
+      log: _log, onLog: _onLog, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog,
       relayStuckMs: _stuck, onRelayClosed: _relayClosed, onUdpRebound: _udpRebound, observeUdpTraffic, ...portable } = options;
     if (observeUdpTraffic) {
       // Only two integers cross the thread boundary. Sampling doesn't copy packets or post per-datagram messages.
@@ -212,6 +219,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     if (this.closed) return;
     for (const ws of this.network.values()) this.probeRelayConnection(ws, 'a network change');
     this.worker.postMessage({ type: 'network-changed' });
+  }
+  /** Updates STUN servers on the running transport (e.g. when a peer official region's STUN resolves asynchronously). */
+  setStunServers(servers: readonly string[]): void {
+    if (this.closed) return;
+    this.worker.postMessage({ type: 'set-stun-servers', servers: [...servers] });
   }
   /** Session requests to a relayed peer timed out: let the transport judge whether relay UDP carries data (relayUdp.ts). */
   relayStalled(): void {
@@ -442,8 +454,9 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       return;
     }
     if (message.type === 'udp-rebound') {
-      const reason = typeof message.reason === 'string' && /^[a-z0-9-]{1,40}$/.test(message.reason) ? message.reason : 'unknown';
-      this.options.log?.info(`agent-net rebound UDP socket (reason=${reason})`);
+      const reason = isUdpRebindReason(message.reason) ? message.reason : null;
+      this.options.log?.info(`agent-net rebound UDP socket (reason=${reason ?? 'unknown'})`);
+      if (reason) this.options.onUdpRebound?.(reason);
       return;
     }
     if (message.type === 'delegation-requests') { this.options.onDelegationRequests?.(message.requests); return; }
@@ -472,6 +485,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     if (message.type === 'buffered') { this.setRemoteQueued(message.queued); return; }
     if (message.type === 'path') { this.logPath(message.id, message.path); this.options.onPathChanged?.(message.id, message.path); return; }
     if (message.type === 'frame-in') { this.emit('message', { toString: () => message.frame }); return; }
+    if (message.type === 'log' && typeof message.message === 'string') {
+      if (message.level === 'warn') this.options.log?.warn(message.message);
+      else if (message.level === 'info') this.options.log?.info(message.message);
+      return;
+    }
     if (message.type === 'tap') { this.options.tap?.(message.data, message.via); return; }
     if (message.type === 'ws-open') {
       this.relayAttemptAt = performance.now();

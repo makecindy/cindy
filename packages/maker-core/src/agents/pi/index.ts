@@ -29,6 +29,7 @@ import { canonicalSkillPath, snapshotDisabledSkillLaunch, currentDisabledSkillLa
  */
 
 import { LIBRARY_READ_ROOT, libraryNativeReadContext } from '../shared/library-native-read.js';
+import { completedPiResponsesMessage, type PiResponsesCompletion } from './responses-completion.js';
 import { piCacheRouteKey, type PiCacheCompatibility } from './cache-compatibility.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -115,6 +116,7 @@ import {
   CINDY_PI_TEXT_ONLY_READY_PREFIX,
   CINDY_PI_TEXT_ONLY_CLOSED_PREFIX,
   CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX,
+  CINDY_PI_RESPONSES_COMPLETION_PREFIX,
   projectPiRequestDiagnostics,
   CINDY_BRIDGE_EXTENSION_SOURCE } from './cindy-bridge-source.js';
 import { nativeProviderAdapterAliases } from './native-provider-adapter-source.js';
@@ -3471,6 +3473,18 @@ export class PiAgent extends BaseAgent {
       },
     );
     const explicitlyRequestedGateway = isExplicitPiGatewayProviderId(opts.providerId);
+    // An inherited Codex model can have no entry in either of Pi's model
+    // catalogs. Pi would treat it as a custom Cindy model and send the first
+    // request without the selected subscription's provider identity.
+    if (
+      !remote && !hosted && !reviewMode && !opts.resumeSessionId &&
+      !explicitlyRequestedGateway && !nativeResolveFailed &&
+      initialProvider === PI_PROVIDER_ID && !gatewayApiByModel.has(opts.model) &&
+      authProviderId === 'openai' &&
+      await opts.isNewMakerTask?.()
+    ) {
+      throw new Error(`Model '${opts.model}' is unavailable in the current Pi catalog. Choose a different model for this task.`);
+    }
     if (
       explicitlyRequestedGateway &&
       initialProvider === PI_PROVIDER_ID &&
@@ -4351,6 +4365,19 @@ export class PiAgent extends BaseAgent {
     }
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger, { model: initialWireModel });
     piToolMarkupProjection(ctx).attachTerminalQueue(queue);
+    let responsesReceipt: string | undefined;
+    let completedResponsesId: string | undefined;
+    function readResponsesCompletion(): PiResponsesCompletion | undefined {
+      const receipt = responsesReceipt;
+      const responseId = completedResponsesId;
+      responsesReceipt = completedResponsesId = undefined;
+      const provider = mutablePiProviderId;
+      const model = mutableWireModel;
+      const source = mutableProviderId;
+      if (!receipt || !responseId || !source || !nativeProviderById.has(provider)) return;
+      return (providerId, fingerprint) => providerId === source && receipt === createHmac('sha256', runtimeInstanceId)
+        .update(JSON.stringify([provider, model, responseId, fingerprint])).digest('hex');
+    }
     ctx.getPriceVariant = opts.getPriceVariant;
     ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
     ctx.workingContextWindow = startupWorkingContextWindow;
@@ -5986,6 +6013,27 @@ export class PiAgent extends BaseAgent {
           // Retry exhaustion already settled the old run. Its optional native
           // tail must not clear a new prompt's permission policy before start.
           if (ctx.turnSettled && (event.type === 'agent_settled' || event.type === 'auto_retry_end')) return;
+          if (event.type === 'extension_ui_request' && event.method === 'notify'
+            && typeof event.message === 'string' && event.message.startsWith(CINDY_PI_RESPONSES_COMPLETION_PREFIX)) {
+            const prefix = CINDY_PI_RESPONSES_COMPLETION_PREFIX + runtimeInstanceId + ':';
+            const proof = event.message.slice(prefix.length);
+            if (!remote && !hosted && !reviewMode && ctx.isStreaming
+              && event.message.startsWith(prefix) && /^[a-f0-9]{64}$/.test(proof)) {
+              responsesReceipt = proof;
+            }
+            return;
+          }
+          if (!remote && !hosted && !reviewMode) {
+            if (event.type === 'agent_start' || event.type === 'auto_retry_start') {
+              responsesReceipt = completedResponsesId = undefined;
+            } else if (event.type === 'message_end') {
+              const message = event.message as { role?: string; provider?: string; model?: string; responseId?: string } | undefined;
+              if (message?.role === 'assistant') {
+                completedResponsesId = message.provider === mutablePiProviderId && message.model === mutableWireModel
+                  && completedPiResponsesMessage(message) ? message.responseId : undefined;
+              }
+            }
+          }
           if (nativeRecovery) {
             switch (event.type) {
               case 'auto_retry_start':
@@ -6257,7 +6305,8 @@ export class PiAgent extends BaseAgent {
               dismissPending: true,
             });
           }
-          translatePiEvent(event, queue, ctx);
+          translatePiEvent(event, queue, ctx,
+            event.type === 'agent_settled' ? readResponsesCompletion() : undefined);
           if (event.type === 'compaction_end') {
             const nativeAutomaticFailure =
               event.aborted !== true &&
@@ -8263,6 +8312,7 @@ export class PiAgent extends BaseAgent {
                   before.error === PI_RPC_OVERSIZED_FRAME_ERROR
                     ? `Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`
                     : 'Pi retry history unavailable',
+                  before.error === PI_RPC_OVERSIZED_FRAME_ERROR ? { diagnostic: 'pi-retry-history-frame-too-large' } : undefined,
                 );
               }
               const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId!);
@@ -8277,7 +8327,9 @@ export class PiAgent extends BaseAgent {
               const switched = await proc.request({ type: 'prompt', message: `/cindy-branch-switch ${payload}` });
               const after = await proc.request({ type: 'get_tree' });
               if (!after.success && after.error === PI_RPC_OVERSIZED_FRAME_ERROR) {
-                throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`);
+                throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`, {
+                  diagnostic: 'pi-retry-history-frame-too-large',
+                });
               }
               if (!switched.success || !after.success || rawPiSessionTreeLeafId(after.data) !== branch.parentId) {
                 throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');

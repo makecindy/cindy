@@ -2,21 +2,23 @@ import { PluginShareButton } from './PluginShareButton';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Spinner } from '@/components/ui/spinner';
-import { PluginVersionUpdates } from './PluginVersionUpdates';
-import { ToolsSection } from './GhostPluginDetailView';
-import { PluginReadmeSection } from './PluginReadmeSection';
-import { memo, useEffect, useId, useRef, useState } from 'react';
-import { Download, ShieldCheck } from 'lucide-react';
+import { PluginRecentUpdates } from './PluginRecentUpdates';
+import { PluginMoreDetails, type PluginRelatedCatalog } from './PluginMoreDetails';
+import { PluginDetailFactsSection, PluginDetailHeader, pluginPackageSizeFacts, PluginPermissionCount, ToolsSection } from './GhostPluginDetailView';
+import { PluginDetailArticle, PluginDetailPermissionRow, PluginDetailRecord, usePluginDetailLayout } from './PluginDetailRecord';
+import { PluginPermissionList, usePluginPermissionFacts, type PluginPermissionFact } from './PluginPermissionList';
+import { memo, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail, PluginMarketItem } from '../../../shared/pluginMarket';
-import { PluginSharedUsage } from './PluginSharedUsage';
-import { PluginPublisherBadge, PluginPublisherDescription } from './PluginPublisherBadge';
-import { GhostPluginIcon } from './GhostPluginIcon';
+import { cn } from '@/lib/utils';
+import { PluginPublisherDescription } from './PluginPublisherBadge';
 import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
 import { pluginPresentationAuthor, pluginPresentationOrigin, publicPublisherFilter } from './lib/pluginMarketPresentation';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
+import { PLUGIN_MANAGEMENT_FRAME_CLASS } from './PluginManagementLayout';
 import { PluginInstallRing } from './PluginInstallRing';
 import { usePluginInstallProgress } from './lib/pluginInstallProgress';
 
@@ -32,6 +34,9 @@ interface MarketPluginDetailViewProps {
    */
   showInstallProgress?: boolean;
   onBack: () => void;
+  backLabel?: string;
+  relatedCatalog?: PluginRelatedCatalog;
+  onOpenRelated?: (item: PluginMarketItem) => void;
   onInstall?: () => void;
   onIconLoadError: () => void;
 }
@@ -44,12 +49,30 @@ export function MarketPluginDetailView({
   busy,
   showInstallProgress = false,
   onBack,
+  backLabel,
+  relatedCatalog,
+  onOpenRelated,
   onInstall,
   onIconLoadError,
 }: MarketPluginDetailViewProps) {
   const { t } = useTranslation();
   const root = useRef<HTMLElement>(null);
   const manifest = 'manifest' in detail ? detail.manifest : undefined;
+  const readme = 'readme' in detail ? detail.readme : undefined;
+  const updates = 'updates' in detail ? detail.updates : undefined;
+  const permissionItems = useMemo(() => manifest ? ghostPermissionItems(manifest) : [], [manifest]);
+  const permissions = usePluginPermissionFacts(permissionItems);
+  const layout = usePluginDetailLayout({
+    id: `market:${detail.pluginId}`,
+    ready: Boolean(manifest),
+    navigationScope: relatedCatalog?.local ? relatedCatalog.cache : undefined,
+    hasParent: Boolean(backLabel),
+    blocks: {
+      description: Boolean(detail.description || detail.ghostId),
+      updates: Boolean(updates?.length || manifest?.releaseNotes?.trim()),
+      readme: Boolean(readme?.markdown.trim()), permissions: permissions.length > 0, facts: true,
+    },
+  });
   const loading = !manifest && !error;
   const [showLoading, setShowLoading] = useState(false);
   const showActionLoading = showLoading || (refreshing && Boolean(manifest));
@@ -95,8 +118,8 @@ export function MarketPluginDetailView({
       onScroll={onScroll}
     >
       <PluginDetailTopBar
-        label={t('settings.ghosts.detail.backToList')}
-        onBack={onBack}
+        label={backLabel ?? t('settings.ghosts.detail.backToList')}
+        onBack={() => { layout.rememberBack(); onBack(); }}
         scrolled={scrolled}
         actions={
           detail.sourceType === 'server' && detail.scope === 'public' ? (
@@ -104,39 +127,39 @@ export function MarketPluginDetailView({
           ) : undefined
         }
       />
-      <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
-        <header>
-          <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
-            <GhostPluginIcon
-              iconContainerRef={marketIcon.containerRef}
-              iconDataUrl={marketIcon.iconDataUrl}
-              iconId={detail.ghostId}
-              iconName={detail.name}
-              officialCatalog={publicPublisherFilter(detail) === 'official'}
-              onIconLoad={marketIcon.onIconLoad}
-              onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
-              size="detail"
-            />
-            <div className="plugin-detail-heading min-w-0">
-              <div className="flex min-w-0 items-center gap-1.5">
-                <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">{detail.name}</h1>
-                <PluginPublisherBadge origin={presentationOrigin} kind={detail.publisherKind} />
-              </div>
-              <div className="plugin-detail-metadata mt-1.5 flex min-w-0 flex-wrap items-center gap-2 text-12 text-[var(--text-tertiary)]">
-                <span>{t(`settings.ghosts.market.scope.${presentationOrigin}`)}</span>
-                <span aria-hidden="true">·</span>
-                <span>v{detail.version}</span>
-                <PluginSharedUsage detail={detail} />
-                {pluginPresentationAuthor(detail) ? (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span>{pluginPresentationAuthor(detail)}</span>
-                  </>
-                ) : null}
-              </div>
-            </div>
-            {onInstall || installRing ? (
-              <div className="plugin-detail-actions flex min-w-0 flex-wrap items-center gap-1.5">
+      <PluginDetailArticle layout={layout} className={cn(PLUGIN_MANAGEMENT_FRAME_CLASS, 'plugin-detail-frame pb-16 pt-5')}>
+        <PluginDetailHeader
+          key={detail.pluginId}
+          id={detail.ghostId}
+          name={detail.name}
+          description={detail.description || detail.ghostId}
+          readme={readme}
+          fallbackFacts={manifest ? {
+            permissionCount: permissions.length,
+            toolCount: manifest.tools?.length,
+            source: t(`settings.ghosts.page.origin.${presentationOrigin}`),
+          } : undefined}
+          author={pluginPresentationAuthor(detail)}
+          version={detail.version}
+          marketItem={detail}
+          origin={presentationOrigin}
+          publisherKind={detail.publisherKind}
+          iconContainerRef={marketIcon.containerRef}
+          iconDataUrl={marketIcon.iconDataUrl}
+          officialCatalog={publicPublisherFilter(detail) === 'official'}
+          onIconLoad={marketIcon.onIconLoad}
+          onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
+          sourceNotice={isCommunityPlugin ? (
+            <p id={communityDisclaimerId} className="mt-3 text-12 leading-[1.667] text-[var(--text-tertiary)]">
+              {t('settings.ghosts.market.communityDisclaimer')}
+            </p>
+          ) : detail.sourceType !== 'server' ? (
+            <p className="mt-3 text-12 leading-[1.667] text-[var(--text-tertiary)]">
+              {t('settings.ghosts.installConsent.customMarketSourceNotice')}
+            </p>
+          ) : null}
+          actions={onInstall || installRing ? (
+              <>
                 {installRing ? (
                   <PluginInstallRing
                     label={detail.name}
@@ -150,7 +173,6 @@ export function MarketPluginDetailView({
                   <Button
                     variant="cta"
                     size="lg"
-                    compact
                     loading={busy}
                     type="button"
                     onClick={onInstall}
@@ -158,141 +180,95 @@ export function MarketPluginDetailView({
                     aria-label={t(showActionLoading ? 'settings.ghosts.remote.detailLoading' : installFailed ? 'commonUi.retry' : actionKey)}
                     aria-busy={busy || refreshing || loading || undefined}
                     aria-describedby={actionDescription}
-                    className="plugin-detail-primary-action min-w-[104px] whitespace-nowrap"
                   >
-                    <span className="inline-grid">
-                      <span aria-hidden="true" className="invisible col-start-1 row-start-1 inline-flex items-center justify-center gap-2">
-                        <Download size={15} />{t('settings.ghosts.remote.detailLoading')}
-                      </span>
-                      <span className="col-start-1 row-start-1 inline-flex items-center justify-center gap-2">
-                        {showActionLoading ? <Spinner size={15} aria-hidden="true" /> : installFailed ? null : <Download size={15} aria-hidden="true" />}
-                        {t(showActionLoading ? 'settings.ghosts.remote.detailLoading' : installFailed ? 'commonUi.retry' : actionKey)}
-                      </span>
-                    </span>
+                    {showActionLoading ? <Spinner size={15} aria-hidden="true" /> : null}
+                    {t(showActionLoading ? 'settings.ghosts.remote.detailLoading' : installFailed ? 'commonUi.retry' : actionKey)}
                   </Button>
                 ) : null}
-              </div>
-            ) : null}
-          </div>
-          {isCommunityPlugin ? (
-            <p id={communityDisclaimerId} className="mt-3 text-12 leading-[1.667] text-[var(--text-tertiary)]">
-              {t('settings.ghosts.market.communityDisclaimer')}
-            </p>
-          ) : <PluginPublisherDescription origin={presentationOrigin} kind={detail.publisherKind} />}
-          <p className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]">
-            {detail.description || detail.ghostId}
-          </p>
+              </>
+          ) : null}
+        >
           {replacementDescription ? (
             <p id={replacementDescriptionId} className="mt-3 text-13 leading-5 text-[var(--text-secondary)]">
               {replacementDescription}
             </p>
           ) : null}
-        </header>
+        </PluginDetailHeader>
 
         {error ? (
           <ErrorNotice className="mt-10" role="alert" message={error} actions={
             <Button size="sm" onClick={onRetry}>{t('settings.ghosts.remote.retry')}</Button>
           } />
         ) : null}
-        <MarketPluginDetailBody detail={detail} error={manifest ? null : error} showLoading={showLoading} />
-      </article>
+        <MarketPluginDetailBody detail={detail} error={manifest ? null : error} showLoading={showLoading} permissions={permissions} />
+        {manifest && detail.sourceType === 'server' && detail.installState === 'not-installed' ? (
+          <PluginMoreDetails detailId={detail.pluginId} catalog={relatedCatalog}
+            onSelect={onOpenRelated && (item => { layout.rememberForward(item.pluginId); onOpenRelated(item); })} />
+        ) : null}
+      </PluginDetailArticle>
     </main>
   );
 }
 
 /** Body content stays mounted when only the install freshness indicator changes. */
-const MarketPluginDetailBody = memo(function MarketPluginDetailBody({ detail, error, showLoading }: {
+const MarketPluginDetailBody = memo(function MarketPluginDetailBody({ detail, error, showLoading, permissions }: {
   detail: PluginMarketItem | PluginMarketDetail;
   error?: string | null;
   showLoading: boolean;
+  permissions: readonly PluginPermissionFact[];
 }) {
   const { t } = useTranslation();
   const manifest = !error && 'manifest' in detail ? detail.manifest : undefined;
-  const permissions = manifest ? ghostPermissionItems(manifest) : [];
   const isCustomSource = detail.sourceType !== 'server';
-  return <>
-        {!error ? <div className="flow-root">
-          {manifest ? <>
-            <PluginReadmeSection readme={'readme' in detail ? detail.readme ?? null : null} />
-            {manifest.tools?.length ? <ToolsSection tools={manifest.tools} /> : null}
-          </> : !error ? (
-            <section className={`pt-10 ${showLoading ? '' : 'invisible'}`} aria-label={t('settings.ghosts.detail.readmeTitle')}>
-              <h2 className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]">{t('settings.ghosts.detail.readmeTitle')}</h2>
-              <div aria-hidden="true" className="mt-5 space-y-3">
-                <div className="h-4 w-full rounded-full bg-[var(--surface-hover-soft)]" />
-                <div className="h-4 w-5/6 rounded-full bg-[var(--surface-hover-soft)]" />
-                <div className="h-4 w-4/5 rounded-full bg-[var(--surface-hover-soft)]" />
-              </div>
-            </section>
-          ) : null}
-        </div> : null}
-        {!error ? <section className="mt-10" aria-labelledby="market-security-title">
-          <h2
-            id="market-security-title"
-            className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]"
-          >
-            {t('settings.ghosts.market.securityTitle')}
-          </h2>
-          <div className="mt-5 flex max-w-[760px] items-start gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 py-4">
-            <ShieldCheck
-              size={18}
-              className="mt-0.5 shrink-0 text-[var(--text-secondary)]"
-              aria-hidden="true"
-            />
-            <div className="text-13 leading-5 text-[var(--text-secondary)]">
-              <p>{t(isCustomSource
-                ? 'settings.ghosts.market.customSecurityDescription'
-                : 'settings.ghosts.market.securityDescription')}</p>
-              {isCustomSource ? <p className="mt-2">{t('settings.ghosts.installConsent.customMarketSourceNotice')}</p> : null}
-            </div>
+  const author = pluginPresentationAuthor(detail);
+  const origin = pluginPresentationOrigin(detail);
+  const source = origin === 'public'
+    ? t('settings.ghosts.detail.publicInstall')
+    : t(`settings.ghosts.market.scope.${origin}`);
+  if (error) return null;
+  const releaseNotes = manifest?.releaseNotes?.trim();
+  return (
+    <>
+    <PluginRecentUpdates key={detail.pluginId} updates={'updates' in detail ? detail.updates : undefined}
+      fallback={releaseNotes ? {
+        version: detail.version, releaseNotes, publishedAt: isCustomSource ? undefined : detail.publishedAt,
+      } : undefined} />
+    <PluginDetailRecord>
+      <PluginDetailPermissionRow key={detail.pluginId} summary={manifest ? <PluginPermissionCount items={permissions} /> : undefined}>
+        {limit => <>
+        <p className="mb-4 text-13 font-medium text-[var(--text-primary)]">{t('settings.ghosts.perm.grantsTitle')}</p>
+        {!manifest ? (
+          <div aria-hidden="true" className={`space-y-4 py-4 ${showLoading ? '' : 'invisible'}`}>
+            <div className="h-4 w-4/5 rounded-full bg-[var(--surface-hover-soft)]" />
+            <div className="h-4 w-2/3 rounded-full bg-[var(--surface-hover-soft)]" />
           </div>
-        </section> : null}
-
-        {!error ? <section className="mt-10" aria-labelledby="market-permissions-title">
-          <div className="flex items-baseline gap-2">
-            <h2
-              id="market-permissions-title"
-              className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]"
-            >
-              {t('settings.ghosts.perm.grantsTitle')}
-            </h2>
-            {manifest ? <span className="text-12 text-[var(--text-tertiary)]">
-              {t('settings.ghosts.perm.itemCount', { count: permissions.length })}
-            </span> : null}
+        ) : permissions.length ? <PluginPermissionList items={permissions} limit={limit} choiceKey="permissionList" /> : (
+          <p className="text-13 text-[var(--text-tertiary)]">{t('settings.ghosts.market.noPermissions')}</p>
+        )}
+        <div className="mt-5 flex items-start gap-3 border-t border-[var(--border-default)] pt-4">
+          <ShieldCheck size={16} className="mt-0.5 shrink-0 text-[var(--text-secondary)]" aria-hidden="true" />
+          <div className="min-w-0">
+            <h3 className="text-12 font-medium text-[var(--text-primary)]">{t('settings.ghosts.market.securityTitle')}</h3>
+            <p className="mt-1 text-pretty text-12 leading-normal text-[var(--text-secondary)]">
+              {t(isCustomSource ? 'settings.ghosts.market.customSecurityDescription' : 'settings.ghosts.market.securityDescription')}
+            </p>
           </div>
-          <div className="mt-5 max-w-[760px] divide-y divide-[var(--border-default)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5">
-            {!manifest ? (
-              <div aria-hidden="true" className={`space-y-4 py-4 ${showLoading ? '' : 'invisible'}`}>
-                <div className="h-4 w-4/5 rounded-full bg-[var(--surface-hover-soft)]" />
-                <div className="h-4 w-2/3 rounded-full bg-[var(--surface-hover-soft)]" />
-              </div>
-            ) : permissions.length > 0 ? (
-              permissions.map((permission, index) => (
-                <div
-                  key={`${permission.kind}-${permission.labelKey}-${index}`}
-                  className="py-3.5 text-13 leading-5 text-[var(--text-secondary)]"
-                >
-                  {t(`settings.ghosts.perm.${permission.labelKey}`, permission.labelArgs)}
-                </div>
-              ))
-            ) : (
-              <div className="py-4 text-13 text-[var(--text-tertiary)]">
-                {t('settings.ghosts.market.noPermissions')}
-              </div>
-            )}
-          </div>
-        </section> : null}
-        {manifest?.releaseNotes?.trim() ? (
-          <PluginVersionUpdates key={detail.pluginId}>
-            <section className="space-y-3" aria-label={t('settings.ghosts.contribution.releaseNotes')}>
-              <h2 className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]">
-                {t('settings.ghosts.contribution.releaseNotes')} · {detail.version}
-              </h2>
-              <p className="whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-secondary)]">
-                {manifest.releaseNotes}
-              </p>
-            </section>
-          </PluginVersionUpdates>
-        ) : null}
-  </>;
+        </div>
+        </>}
+      </PluginDetailPermissionRow>
+      <PluginDetailFactsSection facts={[
+        { key: 'version', label: t('settings.ghosts.detail.infoVersion'), value: `v${detail.version}` },
+        ...pluginPackageSizeFacts(t, detail),
+        ...(author ? [{ key: 'author', label: t('settings.ghosts.detail.infoAuthor'), value: author }] : []),
+        { key: 'source', label: t('mcpApps.sourceLabel'), value: source },
+        { key: 'identifier', label: t('settings.ghosts.detail.infoId'), value: detail.ghostId, monospace: true },
+      ]}>
+        {origin === 'public' && detail.publisherKind === 'personal' ? null : (
+          <PluginPublisherDescription origin={origin} kind={detail.publisherKind} />
+        )}
+        {manifest?.tools ? <ToolsSection tools={manifest.tools} /> : null}
+      </PluginDetailFactsSection>
+    </PluginDetailRecord>
+    </>
+  );
 });
