@@ -66,6 +66,7 @@ import {
   suspendRemoteProjectAliasesForReleasedTopics,
 } from '@/session/remoteProjectAliases';
 import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL, getOfficialAgentNetApiBaseUrl, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
+import { applyMobileTurnChangesPush, TURN_CHANGES_UPDATED } from '@/session/useMobileTurnChanges';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { useAuth } from '@/auth/AuthContext';
 import { useSelfHostedRelayRouteGeneration } from './selfHostedRelay';
@@ -2525,6 +2526,10 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
   if (env.kind !== 'push' || !env.src) return;
   const rawPush = env.payload as PushPayload;
   const push = { ...rawPush, payload: decodeModelSpeedPayload(rawPush.channel, rawPush.payload) };
+  if (push.channel === TURN_CHANGES_UPDATED) {
+    applyMobileTurnChangesPush(env.src, push.payload);
+    return;
+  }
   if (push.channel === TASK_ACTIVITY_SNAPSHOT) {
     if (!isScopedPeer(env.src)) receiveHostTaskActivity(env.src, push.payload);
     return;

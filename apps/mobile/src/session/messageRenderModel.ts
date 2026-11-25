@@ -25,6 +25,8 @@ import {
   hasSubagentMessages,
 } from '@/session/subagentGrouping';
 
+import type { MobileTurnChanges } from '@/session/mobileTurnChanges';
+
 const MAX_VALID_DATE_MS = 8.64e15;
 export type MobileTodoItem = MessageRenderTodoItem;
 export type MobileMessageItem = MessageRenderMessageItem<NormalizedRemoteMessage>;
@@ -73,6 +75,7 @@ export type MobileMessageRenderItem =
   | MessageRenderItem<NormalizedRemoteMessage>
   | MobileSubagentGroupItem
   | MobileForkOriginItem
+  | { type: 'turn_changes'; key: string; summary: MobileTurnChanges }
   // 待发送气泡(排队 / 落定 / 本地 outbox)也是消息流的一等项:与正式消息同容器同 key,
   // 回流时原地变实,不再跨 footer↔data 搬家(见 pendingSendItems.ts 的说明)。
   | MobilePendingSendItem;

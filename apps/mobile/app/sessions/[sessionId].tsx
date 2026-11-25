@@ -201,6 +201,8 @@ import { useSideChatCount } from '@/session/useSideChatCount';
 import { SessionTaskLayout, type SessionTaskChrome } from '@/session/SessionTaskLayout';
 import { buildMobileSessionRenderWindow, mobileSessionHistoryBoundary } from '@/session/mobileHistoryRender';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { insertMobileTurnChanges } from '@/session/mobileTurnChanges';
+import { useMobileTurnChanges } from '@/session/useMobileTurnChanges';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { InteractionPanel, type MobilePlanViewerState } from '@/session/InteractionPanel';
 import {
@@ -6441,9 +6443,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       settlingItemsForRender,
     ],
   );
+  const turnChanges = useMobileTurnChanges({
+    deviceId, sessionId, owner: outboxOwner, syncKey: contentRecoveryKey, invoke,
+    enabled: appStateActive && remoteHistoryAvailable && !!currentSession && !companionChat
+      && !isDeviceAccessRevoked && !isScopedPeer(listedSession?.deviceLinkDeviceId),
+  });
+  const timelineWithTurnChanges = useMemo(
+    () => insertMobileTurnChanges(timelineItems, turnChanges),
+    [timelineItems, turnChanges],
+  );
   const messageListItems = useMemo(
-    () => mergePendingSendItems(timelineItems, pendingSendItems, optimisticClientIds),
-    [timelineItems, pendingSendItems, optimisticClientIds],
+    () => mergePendingSendItems(timelineWithTurnChanges, pendingSendItems, optimisticClientIds),
+    [timelineWithTurnChanges, pendingSendItems, optimisticClientIds],
   );
   const canLoadEarlierHistory = (historyView.snapshot.ready ? historyView.snapshot.hasMore : hasOlderMessages && messages.length > 0)
     && !isScheduleDetail;
@@ -6539,7 +6550,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const companionItemsStructureKey = companionChat ? messageListItems.map((item) => item.key).join('\u0000') : null;
   const messageListStructureKey = useMemo(
     () => ({}),
-    [pendingSendItems, renderItemsStructureKey, optimisticClientIds, companionItemsStructureKey],
+    [pendingSendItems, renderItemsStructureKey, optimisticClientIds, companionItemsStructureKey, turnChanges],
   );
   const shareExpandableBlockIds = useMemo(
     () =>

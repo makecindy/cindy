@@ -24,7 +24,7 @@ export function findMobileMessageSearchHits(
   if (!query.trim()) return [];
   const hits: MessageSearchHit[] = [];
   for (const item of items) {
-    if (item.type === 'fork_origin') {
+    if (item.type === 'fork_origin' || item.type === 'turn_changes') {
       continue;
     }
     // 待发送气泡不进搜索:它还不是会话记录,命中它无法定位/跳转(回流后正式消息会被索引)。

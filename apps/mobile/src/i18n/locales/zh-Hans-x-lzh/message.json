@@ -9,6 +9,10 @@
     }
   },
   "renderer": {
+    "turnChanges": {
+      "title": "已改 {{count}} 卷",
+      "partial": "仅录可精确捕获之部分变更"
+    },
     "sourceLocalApp": "此机应用程序「{{name}}」所遣",
     "sourceLocalAppId": "应用 ID：{{id}}",
     "failedSamplingAttempt": "此答未竟，所言仅供参酌。",

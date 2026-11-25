@@ -9,6 +9,10 @@
     }
   },
   "renderer": {
+    "turnChanges": {
+      "title": "Changed files ({{count}})",
+      "partial": "Only the changes captured exactly are shown"
+    },
     "sourceLocalApp": "Sent by local app “{{name}}”",
     "sourceLocalAppId": "App ID: {{id}}",
     "failedSamplingAttempt": "This reply did not complete. Its content is for reference only.",

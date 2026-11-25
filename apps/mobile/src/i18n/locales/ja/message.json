@@ -9,6 +9,10 @@
     }
   },
   "renderer": {
+    "turnChanges": {
+      "title": "{{count}} ファイルを変更",
+      "partial": "正確に取得できた変更のみ表示しています"
+    },
     "sourceLocalApp": "ローカルアプリ「{{name}}」から送信",
     "sourceLocalAppId": "アプリ ID：{{id}}",
     "failedSamplingAttempt": "この返信は完了しませんでした。内容は参考情報としてご覧ください。",

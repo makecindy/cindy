@@ -9,6 +9,10 @@
     }
   },
   "renderer": {
+    "turnChanges": {
+      "title": "{{count}} fichiers modifiés",
+      "partial": "Seules les modifications capturées avec exactitude sont affichées"
+    },
     "sourceLocalApp": "Envoyé par l'app locale « {{name}} »",
     "sourceLocalAppId": "ID de l'app : {{id}}",
     "failedSamplingAttempt": "Cette réponse n'a pas abouti. Son contenu est fourni à titre indicatif uniquement.",

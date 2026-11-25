@@ -9,6 +9,10 @@
     }
   },
   "renderer": {
+    "turnChanges": {
+      "title": "已更改 {{count}} 个文件",
+      "partial": "仅显示已精确记录的变更"
+    },
     "sourceLocalApp": "由本机应用「{{name}}」发送",
     "sourceLocalAppId": "应用 ID：{{id}}",
     "failedSamplingAttempt": "此回复未完成，内容仅供参考。",

@@ -9,6 +9,10 @@
     }
   },
   "renderer": {
+    "turnChanges": {
+      "title": "파일 {{count}}개 변경",
+      "partial": "정확히 캡처된 변경 사항만 표시됩니다"
+    },
     "sourceLocalApp": "로컬 앱 “{{name}}”에서 전송",
     "sourceLocalAppId": "앱 ID: {{id}}",
     "failedSamplingAttempt": "완료되지 않은 답변입니다. 내용은 참고용으로만 확인해 주세요.",

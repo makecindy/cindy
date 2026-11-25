@@ -439,6 +439,7 @@ import {
 } from '@/session/mobileMarkdownRenderMetrics';
 import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
 import type { RemoteTextFilePreviewResult } from '@/device-link/mobileMakerTransport';
+import { MobileTurnChangesCard } from '@/session/MobileTurnChangesCard';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { iconSize, iconStroke, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
@@ -3263,6 +3264,9 @@ const RenderItemView = memo(function RenderItemView({
       break;
     case 'subagent_group':
       node = <SubagentCard item={item} actions={actions} />;
+      break;
+    case 'turn_changes':
+      node = <MobileTurnChangesCard summary={item.summary} />;
       break;
     case 'fork_origin':
       node = <ForkOriginMarker onOpenForkOrigin={actions.onOpenForkOrigin} />;

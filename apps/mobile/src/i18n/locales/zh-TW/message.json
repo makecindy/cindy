@@ -9,6 +9,10 @@
     }
   },
   "renderer": {
+    "turnChanges": {
+      "title": "已更改 {{count}} 個檔案",
+      "partial": "僅記錄了可精確捕獲的部分變更"
+    },
     "sourceLocalApp": "由本機應用程式「{{name}}」傳送",
     "sourceLocalAppId": "應用程式 ID：{{id}}",
     "failedSamplingAttempt": "此回覆未完成，內容僅供參考。",
