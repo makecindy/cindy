@@ -51,6 +51,7 @@ interface BuildMobileStreamingRenderWindowInput {
   messageStructureToken?: object;
   options: MessageRenderOptions & {
     autoResumePending?: Record<string, unknown> | null;
+    retainSyntheticTriggers?: boolean;
     preserveSourceOrder?: boolean;
     sessionId?: string;
     sessionSource?: string | null;

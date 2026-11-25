@@ -32,8 +32,9 @@ export function buildMobileHistoryRenderItems(options: {
   localUserClientIds?: ReadonlySet<string>;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
   cacheKey?: string;
+  retainSyntheticTriggers?: boolean;
 }): MobileMessageRenderItem[] {
-  const key = JSON.stringify([options.sessionId, options.sessionSource, options.cacheKey]);
+  const key = JSON.stringify([options.sessionId, options.sessionSource, options.cacheKey, options.retainSyntheticTriggers]);
   let cache = historyPrefixes.get(options.view);
   if (!cache || cache.key !== key) {
     cache = { key, prefix: { current: null }, placeholders: new WeakMap() };
@@ -58,6 +59,7 @@ export function buildMobileHistoryRenderItems(options: {
         sessionSource: options.sessionSource,
         pendingQuestionIds: options.pendingQuestionIds,
         preserveSourceOrder: true,
+        retainSyntheticTriggers: options.retainSyntheticTriggers,
       }, taskUpdates: options.taskUpdates,
     }).items,
     structure: {

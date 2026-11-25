@@ -66,7 +66,6 @@ import {
   suspendRemoteProjectAliasesForReleasedTopics,
 } from '@/session/remoteProjectAliases';
 import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL, getOfficialAgentNetApiBaseUrl, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
-import { applyMobileTurnChangesPush, TURN_CHANGES_UPDATED } from '@/session/useMobileTurnChanges';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { useAuth } from '@/auth/AuthContext';
 import { useSelfHostedRelayRouteGeneration } from './selfHostedRelay';
@@ -379,6 +378,11 @@ export function subscribeRemoteOrcaWorkerChanged(
 ): () => void {
   remoteOrcaWorkerChangedListeners.add(listener);
   return () => { remoteOrcaWorkerChangedListeners.delete(listener); };
+}
+const remoteTurnChangesUpdatedListeners = new Set<(deviceId: string, payload: unknown) => void>();
+export function subscribeRemoteTurnChangesUpdated(listener: (deviceId: string, payload: unknown) => void): () => void {
+  remoteTurnChangesUpdatedListeners.add(listener);
+  return () => { remoteTurnChangesUpdatedListeners.delete(listener); };
 }
 const remoteBotChangedListeners = new Set<(deviceId: string, channel: string, payload: unknown) => void>();
 export function subscribeRemoteBotChanges(listener: (deviceId: string, channel: string, payload: unknown) => void): () => void {
@@ -2526,8 +2530,10 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
   if (env.kind !== 'push' || !env.src) return;
   const rawPush = env.payload as PushPayload;
   const push = { ...rawPush, payload: decodeModelSpeedPayload(rawPush.channel, rawPush.payload) };
-  if (push.channel === TURN_CHANGES_UPDATED) {
-    applyMobileTurnChangesPush(env.src, push.payload);
+  if (push.channel === 'maker:turn-change-set:updated') {
+    if (!isScopedPeer(env.src)) {
+      for (const listener of remoteTurnChangesUpdatedListeners) listener(env.src, push.payload);
+    }
     return;
   }
   if (push.channel === TASK_ACTIVITY_SNAPSHOT) {

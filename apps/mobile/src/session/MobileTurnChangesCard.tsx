@@ -47,9 +47,9 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   title: {
-    fontSize: typeScale.bodySmall,
-    lineHeight: lineHeight.bodySmall,
-    fontWeight: fontWeight.semibold,
+    fontSize: typeScale.subtitle,
+    lineHeight: lineHeight.subtitle,
+    fontWeight: fontWeight.medium,
   },
   stats: {
     fontSize: typeScale.caption,

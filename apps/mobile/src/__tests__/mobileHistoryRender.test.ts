@@ -7,6 +7,7 @@ import { reconcileMobileMessageRenderItems } from '../session/messageRenderRecon
 import { buildMobileStreamingRenderWindow } from '../session/messageRenderStreamingCache';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
 import { companionConversationItems } from '../session/companionConversationPresentation';
+import { insertMobileTurnChanges, type MobileTurnChanges } from '../session/mobileTurnChanges';
 
 function row(index: number, role: RemoteMessage['role'], content: unknown, toolUseId: string | null = null): RemoteMessage {
   return { id: `id-${index}`, clientId: `client-${index}`, sessionId: 'session', role, content, toolUseId,
@@ -35,6 +36,41 @@ function harness(rows: RemoteMessage[], streaming = false, lazyDetails = false) 
 }
 
 describe('remote history preserves original folding', () => {
+  // Unit regression for #4751: neither the raw nor projected session window
+  // previously kept the exact dispatched IDs of hidden recovery prompts.
+  it.each([false, true])('places file summaries after their own recovery attempts (history=%s)', async (ready) => {
+    const answer = (index: number) => ({
+      ...row(index, 'assistant', `Answer ${index}`),
+      agentMeta: { turnCompleted: true, assistantPhase: 'final_answer' as const },
+    });
+    const rows = [row(0, 'user', 'First task'), answer(1),
+      { ...row(2, 'user', CONTINUE_AFTER_ERROR_PROMPT), agentMeta: { autoResume: true } },
+      answer(3), row(4, 'user', CONTINUE_AFTER_ERROR_PROMPT), answer(5),
+      row(6, 'user', 'Next task'), answer(7)];
+    const { view } = harness(rows);
+    if (ready) await view.refresh();
+    const { items } = buildMobileSessionRenderWindow({
+      history: { view, snapshot: view.getSnapshot(), messages: [], streaming: false, sessionId: 'session', retainSyntheticTriggers: true },
+      raw: { cacheKey: 'en', messages: rows, options: { retainSyntheticTriggers: true } },
+    });
+    const summary = (index: number): MobileTurnChanges => ({
+      id: String(index), anchorClientId: `client-${index}`, fileCount: 1,
+      additions: 1, deletions: 0, fileNames: [`${index}.txt`], partial: false,
+    });
+    const result = insertMobileTurnChanges(items, [summary(0), summary(2), summary(4), summary(99)]);
+    expect(result.map((item) => item.key)).toEqual([
+      'message-client-0', 'work-summary-client-1', 'turnchanges-0',
+      'message-client-2', 'work-summary-client-3', 'turnchanges-2',
+      'message-client-5', 'turnchanges-4', 'message-client-6', 'message-client-7',
+    ]);
+    expect(insertMobileTurnChanges(items, [summary(0)]).map((item) => item.key)).toEqual([
+      'message-client-0', 'work-summary-client-1', 'turnchanges-0',
+      'message-client-2', 'work-summary-client-3', 'message-client-5',
+      'message-client-6', 'message-client-7',
+    ]);
+    view.setActive(false);
+  });
+
   // Unit: ready history previously normalized old message bodies on every delta.
   // Exercise the screen entry; stale/changed history must still invalidate reuse.
   it('reuses ready-history bodies across deltas and rebuilds edited or localized history', async () => {

@@ -1,4 +1,5 @@
-import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
+import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
+import { dropSyntheticTriggerItems, isHiddenSyntheticTriggerItem, type MobileMessageRenderItem } from '@/session/messageRenderModel';
 
 export interface MobileTurnChanges {
   id: string;
@@ -41,7 +42,7 @@ export function insertMobileTurnChanges(
   items: readonly MobileMessageRenderItem[],
   summaries: readonly MobileTurnChanges[],
 ): readonly MobileMessageRenderItem[] {
-  if (summaries.length === 0) return items;
+  if (summaries.length === 0) return dropSyntheticTriggerItems(items);
   const byAnchor = new Map<string, MobileTurnChanges[]>();
   for (const summary of summaries) {
     const changes = byAnchor.get(summary.anchorClientId) ?? [];
@@ -51,20 +52,29 @@ export function insertMobileTurnChanges(
 
   const result: MobileMessageRenderItem[] = [];
   let pending: MobileTurnChanges[] | undefined;
+  let changed = false;
   const finishTurn = () => {
     for (const summary of pending ?? []) {
+      changed = true;
       result.push({ type: 'turn_changes', key: `turnchanges-${summary.id}`, summary });
     }
   };
   for (const item of items) {
-    if (item.type === 'message' && item.message.kind === 'user' &&
-      !item.message.isSyntheticTrigger && item.message.source.agentMeta?.delivery !== 'steer') {
-      finishTurn();
-      pending = byAnchor.get(item.message.source.clientId);
-      byAnchor.delete(item.message.source.clientId);
+    if (item.type === 'message' && item.message.kind === 'user') {
+      const { source, isSyntheticTrigger } = item.message;
+      const anchored = byAnchor.get(source.clientId);
+      // Match ordinary turns and recovery by the host's exact dispatch ID. A hidden
+      // continuation still ends the preceding attempt, even without a summary.
+      if (source.agentMeta?.delivery !== 'steer' &&
+        (!isSyntheticTrigger || anchored || isContinuationMessage(source))) {
+        finishTurn();
+        pending = anchored;
+        byAnchor.delete(source.clientId);
+      }
     }
-    result.push(item);
+    if (isHiddenSyntheticTriggerItem(item)) changed = true;
+    else result.push(item);
   }
   finishTurn();
-  return result.length === items.length ? items : result;
+  return changed ? result : items;
 }

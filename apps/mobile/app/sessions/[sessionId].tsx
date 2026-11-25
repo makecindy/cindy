@@ -676,7 +676,7 @@ import {
   findHistoryWindowGap,
   historyWindowGapKey,
 } from '@/session/historyWindowGap';
-import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
+import { dropSyntheticTriggerItems, type MobileMessageRenderItem } from '@/session/messageRenderModel';
 import {
   commitMobileStreamingPrefixItems,
   type MobileStreamingRenderPrefixCache,
@@ -5132,6 +5132,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           options: {
             autoResumePending: inputProjection.autoResumePending,
             preserveSourceOrder: optimisticUsers.length > 0,
+            retainSyntheticTriggers: true,
             isSessionStreaming: isMessageListStreaming,
             renderOrphanTaskUpdates: makerTurnRunning,
             sessionId,
@@ -5144,21 +5145,23 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         history: {
           view: historyView.view, snapshot: historyView.snapshot, messages: projectedMessages,
           streaming: isMessageListStreaming, sessionId, sessionSource: currentSession?.source, taskUpdates, pendingQuestionIds,
-          pendingHandoff: handoff.pending, staleTail: handoff.tail, localUserClientIds,
+          pendingHandoff: handoff.pending, staleTail: handoff.tail, localUserClientIds, retainSyntheticTriggers: true,
         },
         forkOrigin, errorTailClientId, activeErrorClientId, previousRenderState: previousRenderItemsRef.current,
       });
     },
     [pendingQuestionIds, optimisticUsers, currentSession?.source, localUserClientIds, renderMessageStructureToken, historyView.snapshot, historyView.view, handoff.pending, handoff.tail, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
   );
+  // Keep hidden recovery boundaries in the render cache for exact summary placement.
+  const visibleRenderItems = useMemo(() => dropSyntheticTriggerItems(renderWindow.items), [renderWindow.items]);
   // Search, media and sharing only see durable user rows. Local user boundaries
   // still participate in grouping and in the message list below.
-  const renderItems = useMemo(() => optimisticClientIds.size === 0 ? renderWindow.items : renderWindow.items.filter((item) =>
+  const renderItems = useMemo(() => optimisticClientIds.size === 0 ? visibleRenderItems : visibleRenderItems.filter((item) =>
     !(item.type === 'message' && optimisticClientIds.has(item.message.source.clientId))),
-  [renderWindow.items, optimisticClientIds]);
+  [visibleRenderItems, optimisticClientIds]);
   const timelineItems = useMemo(
-    () => companionChat ? companionProcessItems(renderWindow.items, isMessageListStreaming) : renderWindow.items,
-    [companionChat, isMessageListStreaming, renderWindow.items],
+    () => companionChat ? companionProcessItems(visibleRenderItems, isMessageListStreaming) : visibleRenderItems,
+    [companionChat, isMessageListStreaming, visibleRenderItems],
   );
   const renderItemsStructureKey = useMemo(
     () => ({}),
@@ -6449,8 +6452,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       && !isDeviceAccessRevoked && !isScopedPeer(listedSession?.deviceLinkDeviceId),
   });
   const timelineWithTurnChanges = useMemo(
-    () => insertMobileTurnChanges(timelineItems, turnChanges),
-    [timelineItems, turnChanges],
+    () => turnChanges.length ? insertMobileTurnChanges(renderWindow.items, turnChanges) : timelineItems,
+    [renderWindow.items, timelineItems, turnChanges],
   );
   const messageListItems = useMemo(
     () => mergePendingSendItems(timelineWithTurnChanges, pendingSendItems, optimisticClientIds),

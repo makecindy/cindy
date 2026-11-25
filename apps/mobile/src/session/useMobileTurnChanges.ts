@@ -2,18 +2,12 @@ import { useCallback, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { GIT_REVIEW_REMOTE_OP_CHANNEL, isScopedPeer } from '@cindy/device-link';
 import { isMobileAuthOwnerCurrent, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
+import { subscribeRemoteTurnChangesUpdated } from '@/device-link/DeviceLinkContext';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { decodeGzipBase64TextBounded } from '@/utils/gzipBase64';
 import { parseMobileTurnChanges, type MobileTurnChanges } from './mobileTurnChanges';
 
-export const TURN_CHANGES_UPDATED = 'maker:turn-change-set:updated';
-const listeners = new Set<(deviceId: string, payload: unknown) => void>();
 const EMPTY: readonly MobileTurnChanges[] = [];
-
-export function applyMobileTurnChangesPush(deviceId: string, payload: unknown): void {
-  if (isScopedPeer(deviceId)) return;
-  for (const listener of listeners) listener(deviceId, payload);
-}
 
 export function useMobileTurnChanges({
   deviceId, sessionId, owner, syncKey, enabled, invoke,
@@ -54,7 +48,7 @@ export function useMobileTurnChanges({
         publish();
       }
     };
-    listeners.add(listen);
+    const unsubscribe = subscribeRemoteTurnChangesUpdated(listen);
     void invoke<{ ok?: boolean; result?: unknown; resultGz?: string }>(
       deviceId, GIT_REVIEW_REMOTE_OP_CHANNEL, [{ op: 'turn-list', payload: { sessionId } }],
     ).then((response) => {
@@ -73,7 +67,7 @@ export function useMobileTurnChanges({
     });
     return () => {
       active = false;
-      listeners.delete(listen);
+      unsubscribe();
     };
   }, [deviceId, invoke, key, owner, sessionId]));
 

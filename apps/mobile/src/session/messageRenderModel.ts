@@ -84,6 +84,7 @@ export function buildMobileMessageRenderItems(
   messages: readonly RemoteMessage[],
   options: MessageRenderOptions & {
     autoResumePending?: Record<string, unknown> | null;
+    retainSyntheticTriggers?: boolean;
     sessionId?: string;
     preserveSourceOrder?: boolean;
     sessionSource?: string | null;
@@ -112,14 +113,15 @@ export function buildMobileMessageRenderItems(
   // Task / collab:* 工具调用按 toolUseId→clientId 链接;无对应工具调用的孤儿更新兜底
   // 仅在会话运行中(isSessionStreaming)生效——空闲时孤儿是 stale 残留(工具调用已滑出
   // 分页窗口),渲染会把旧子 agent 卡重放到消息流末尾(收口在 shared buildLinearItems)。
+  const visible = (items: MobileMessageRenderItem[]) => options.retainSyntheticTriggers ? items : dropSyntheticTriggerItems(items);
   if (!hasSubagentMessages(normalized)) {
-    return dropSyntheticTriggerItems(buildMessageRenderItems(normalized, options, taskUpdates));
+    return visible(buildMessageRenderItems(normalized, options, taskUpdates));
   }
   // 有 Claude `Agent` 嵌套 → 走 #311 的子 agent 分组路径:Agent 调用已被表达成更丰富的 subagent_group
   // 卡(嵌套 children + 终稿 summary + 状态)。此路径内部按 run 多次调用 buildMessageRenderItems,若再
   // 灌入 taskUpdates,孤儿兜底会在每个 run 重复追加同一张卡;且 agent_task_update 是 live-only、在该
   // 路径触发的历史/持久化场景下通常为空。故此处不另渲染 agent_task,避免重复(Agent 状态由 subagent_group 表达)。
-  return dropSyntheticTriggerItems(
+  return visible(
     buildSubagentAwareRenderItems(normalized, buildSubagentResultMeta(messages), options),
   );
 }
@@ -131,10 +133,14 @@ export function buildMobileMessageRenderItems(
  * user 行作为新一轮的边界,提前丢弃会让上一轮被中断的历史工具行在续跑时重新转圈。
  * 消息搜索走过滤后的 render items,自然搜不到隐藏指令。
  */
-function dropSyntheticTriggerItems(items: MobileMessageRenderItem[]): MobileMessageRenderItem[] {
-  return items.filter(
-    (item) => !(item.type === 'message' && item.message.isSyntheticTrigger === true && !item.message.systemCardType),
-  );
+export function isHiddenSyntheticTriggerItem(item: MobileMessageRenderItem): boolean {
+  return item.type === 'message' && item.message.isSyntheticTrigger === true && !item.message.systemCardType;
+}
+
+export function dropSyntheticTriggerItems(items: MobileMessageRenderItem[]): MobileMessageRenderItem[];
+export function dropSyntheticTriggerItems(items: readonly MobileMessageRenderItem[]): readonly MobileMessageRenderItem[];
+export function dropSyntheticTriggerItems(items: readonly MobileMessageRenderItem[]): readonly MobileMessageRenderItem[] {
+  return items.some(isHiddenSyntheticTriggerItem) ? items.filter((item) => !isHiddenSyntheticTriggerItem(item)) : items;
 }
 
 /** 同一次中断只展示最新状态；旧行仍作为 turn boundary 留在 normalized 流中。 */
