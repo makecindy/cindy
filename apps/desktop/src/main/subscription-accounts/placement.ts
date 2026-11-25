@@ -120,9 +120,16 @@ export function providerAccounts<T extends { id: string }>(
   accounts: readonly T[],
   providerId: string = kind,
 ): T[] {
+  const providerOf = accountPlacementSnapshot(kind);
+  return accounts.filter((account) => providerOf(account.id) === providerId);
+}
+
+/** Same precedence as accountProviderId, with each file checked once for this batch. */
+function accountPlacementSnapshot(kind: SubscriptionProvider): (accountId: string) => string {
+  const api = kind === 'openai' ? new Map(apiKeyPoolMembers().map(member => [member.id, member.providerId])) : undefined;
   file.invalidateIfChanged(PLACEMENT_CACHE_MS);
   const placements = file.read().accounts;
-  return accounts.filter((account) => (placements[keyOf(kind, account.id)] ?? kind) === providerId);
+  return accountId => api?.get(accountId) ?? placements[keyOf(kind, accountId)] ?? kind;
 }
 
 /** The accounts that share a provider with `accountId` (itself included). */
@@ -131,10 +138,9 @@ export function accountSiblings<T extends { id: string }>(
   accounts: readonly T[],
   accountId: string,
 ): T[] {
-  file.invalidateIfChanged(PLACEMENT_CACHE_MS);
-  const placements = file.read().accounts;
-  const providerId = placements[keyOf(kind, accountId)] ?? kind;
-  return accounts.filter((account) => (placements[keyOf(kind, account.id)] ?? kind) === providerId);
+  const providerOf = accountPlacementSnapshot(kind);
+  const providerId = providerOf(accountId);
+  return accounts.filter((account) => providerOf(account.id) === providerId);
 }
 
 /**
