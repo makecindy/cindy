@@ -28,7 +28,6 @@ import { customProviderExists } from '../maker-host/custom-provider-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { sessionRuntimeControlOwnerEpochMatches, acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot, captureSessionRuntimeControlOwnerEpoch, resolveSessionRuntimeRefreshEffort, resolveSessionRuntimeAxes, deferSessionRuntimeAxisMutation, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation } from './sessionRuntimeControl.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
-import { recordSourceSwitch } from './sourceSwitchStore.js';
 import { eq } from 'drizzle-orm';
 import { buildDeferredRuntimeSelectionProfile, shouldSkipColdPiWindowRehydration, planUserRuntimeModelSwitch } from '../../shared/runtimeModelSwitchGate.js';
 import { getDbClient, getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -1940,10 +1939,6 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
             effort: getSessionEffort(sessionId) ?? undefined,
             fastMode: getSessionFastMode(sessionId),
           });
-          // The user picked another source, so this task's native thread belongs to the previous
-          // one. Record it once: the next start hands the transcript over instead of resuming a
-          // thread whose home the new source cannot read (ordinary resumes never record this).
-          if (userSourceSwitch) await recordSourceSwitch(sessionId, committedProviderId);
           wakeSessionInputAfterCredentialSwitch(sessionId);
         }
         await broadcastSessionRuntimeProjection(sessionId, userBaselineOverride).catch((error) => {

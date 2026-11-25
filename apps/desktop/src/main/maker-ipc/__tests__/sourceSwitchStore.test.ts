@@ -21,6 +21,7 @@ import {
   matchesSourceSwitch,
   normalizeSourceSwitchFile,
   recordSourceSwitch,
+  recordSourceSwitchBestEffort,
 } from '../sourceSwitchStore.js';
 
 const file = () => path.join(h.root, 'codex-source-switch.json');
@@ -73,6 +74,13 @@ describe('codex source switch record', () => {
     expect(matchesSourceSwitch('task-a', 'openai')).toBe(false);
     await recordSourceSwitch('task-a', 'openai');
     expect(matchesSourceSwitch('task-a', 'openai')).toBe(true);
+  });
+
+  // 写入失败只记日志：已提交的换源不能被一条记录文件判成失败。
+  it('keeps a committed selection when the record cannot be written', async () => {
+    fs.mkdirSync(file());
+    await expect(recordSourceSwitchBestEffort('task-a', 'openai')).resolves.toBeUndefined();
+    expect(matchesSourceSwitch('task-a', 'openai')).toBe(false);
   });
 
   it('drops expired entries and bounds the record', () => {

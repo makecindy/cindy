@@ -9,6 +9,7 @@ import {
   normalizeSessionProviderId,
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
+import { recordSourceSwitchBestEffort } from './sourceSwitchStore.js';
 // type-only import:编译期擦除,不会把 codex-proxy-host 的运行时依赖拖进本模块/单测。
 import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.desktop.js';
 import {
@@ -454,7 +455,12 @@ export async function applyRuntimeSetModelChange(
       }
       throw error;
     }
-    if (providerId !== undefined) setSessionProvider(sessionId, nextProviderId);
+    if (providerId !== undefined) {
+      setSessionProvider(sessionId, nextProviderId);
+      // The user moved this task to another source with a replacement handoff: remember it so the
+      // next start hands the transcript over (even after a restart or a deferred commit).
+      if (handOffCodexThread) await recordSourceSwitchBestEffort(sessionId, nextProviderId);
+    }
     // close + route 都落定后再唤醒队列:排队消息按新凭证形态 lazy-create 派发。
     input.wakeSessionInputQueue?.(sessionId);
     logger?.info('set-model: closed live session for route rebuild', {
@@ -481,6 +487,7 @@ export async function applyRuntimeSetModelChange(
   input.admit?.();
   if (providerId !== undefined) {
     setSessionProvider(sessionId, nextProviderId);
+    if (handOffCodexThread) await recordSourceSwitchBestEffort(sessionId, nextProviderId);
     // 显式选源且无需切换 → 取消尚未兑现的 pending(后选覆盖先选)。
     input.clearPendingCredentialSwitch?.(sessionId);
   } else if (pendingTarget !== undefined) {

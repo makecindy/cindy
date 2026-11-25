@@ -63,6 +63,22 @@ export async function recordSourceSwitch(sessionId: string, providerId: string |
   }));
 }
 
+/**
+ * Same record, but a failed write never changes the outcome of a selection that already committed:
+ * the only cost is that the next send keeps the old behaviour. Both landing paths use this so a
+ * transient file/lock failure cannot make the user's accepted choice look rejected.
+ */
+export async function recordSourceSwitchBestEffort(sessionId: string, providerId: string | null): Promise<void> {
+  try {
+    await recordSourceSwitch(sessionId, providerId);
+  } catch (error) {
+    desktopMakerLogger.warn('codex source switch record failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 /** Whether this task still waits for the source the user picked; a stale record never matches. */
 export function matchesSourceSwitch(sessionId: string, providerId: string | null): boolean {
   if (!SESSION_ID.test(sessionId) || !providerId) return false;

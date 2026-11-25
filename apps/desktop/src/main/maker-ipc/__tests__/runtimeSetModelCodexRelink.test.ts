@@ -8,6 +8,15 @@ import {
 import { applyRuntimeSetModelChange, type RuntimeSetModelMaker } from '../runtimeSetModel.js';
 import { isUserCodexSourceSwitch } from '../sessionRuntimeSelectionApply.js';
 
+const sourceSwitchRecords = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('../sourceSwitchStore.js', () => ({
+  recordSourceSwitch: sourceSwitchRecords,
+  recordSourceSwitchBestEffort: sourceSwitchRecords,
+  matchesSourceSwitch: vi.fn(() => false),
+  consumeSourceSwitch: vi.fn(async () => {}),
+}));
+
+
 const sessionProviderWriteObserver = vi.hoisted(() => ({
   current: null as ((sessionId: string, providerId: string | null) => void) | null,
 }));
@@ -137,11 +146,14 @@ describe('Codex writer decision freshness', () => {
       listActiveSessions: () => [{ id: sessionId, agentKind: 'codex', isTurnRunning: () => false }],
       closeSession: async () => {},
     };
+    sourceSwitchRecords.mockClear();
     await expect(applyRuntimeSetModelChange({ maker, sessionId, model: 'target', providerId: to,
       handOffCodexThread: false, requiresCodexThreadRelink: async () => true, relinkCodexThread: relink }))
       .resolves.toEqual({ status: 'applied', persistedRoute: true, retiredRuntime: true });
     expect(relink).toHaveBeenCalledOnce();
     expect(getSessionProvider(sessionId)).toBe(to);
+    // 不在交接范围的换源不写记录：那里没有替代交接，记录也永远不会被消费。
+    expect(sourceSwitchRecords).not.toHaveBeenCalled();
   });
 
   // 旧账号已失效 + 旧线程仍被另一个进程加载：这就是实测里换源被挡住的组合。
@@ -157,11 +169,14 @@ describe('Codex writer decision freshness', () => {
       listActiveSessions: () => [{ id: sessionId, agentKind: 'codex', isTurnRunning: () => false }],
       closeSession,
     };
+    sourceSwitchRecords.mockClear();
     await expect(applyRuntimeSetModelChange({ maker, sessionId, model: 'target', providerId: 'cprov-target',
       handOffCodexThread: true, requiresCodexThreadRelink: async () => true, relinkCodexThread: relink }))
       .resolves.toEqual({ status: 'applied', retiredRuntime: true });
     expect(relink).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('cprov-target');
+    // 换源记录随已提交的路由落盘；下一步发送据此交接（重启后仍有效）。
+    expect(sourceSwitchRecords).toHaveBeenCalledExactlyOnceWith(sessionId, 'cprov-target');
   });
 
   it('keeps failing closed on the old account when the switch is not a user source switch', async () => {

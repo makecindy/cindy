@@ -41,7 +41,7 @@ import {
   projectSessionRuntimeControl, recordUserSessionRuntimeMutation,
   resolveSessionRuntimeAxes, sessionRuntimeControlOwnerEpochMatches,
 } from './sessionRuntimeControl.js';
-import { recordSourceSwitch } from './sourceSwitchStore.js';
+import { recordSourceSwitchBestEffort } from './sourceSwitchStore.js';
 import type { createHandleSetModel } from './sessionRuntimeSelectionApply.js';
 
 /**
@@ -323,7 +323,7 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
         beforeProviderId: desiredRow?.providerId ?? null,
         afterProviderId: route.providerId ?? null,
       });
-      if (sourceSwitch) await recordSourceSwitch(sessionId, sourceSwitch);
+      if (sourceSwitch) await recordSourceSwitchBestEffort(sessionId, sourceSwitch);
       setSessionEffort(sessionId, finalEffort);
       setSessionFastMode(sessionId, finalFastMode);
       if (staged && finalModel) {

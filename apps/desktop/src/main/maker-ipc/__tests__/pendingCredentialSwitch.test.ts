@@ -36,6 +36,7 @@ const sourceSwitchStore = vi.hoisted(() => ({
 }));
 vi.mock('../sourceSwitchStore.js', () => ({
   recordSourceSwitch: sourceSwitchStore.record,
+  recordSourceSwitchBestEffort: sourceSwitchStore.record,
   matchesSourceSwitch: sourceSwitchStore.matches,
   consumeSourceSwitch: sourceSwitchStore.consume,
 }));
