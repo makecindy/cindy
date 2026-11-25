@@ -116,6 +116,16 @@ function bareModelId(model: string): string {
 
 /** 核对目录与授权时优先匹配请求的窗口档位；单条目的旧 SDK 后缀别名仍兼容。 */
 export async function guestProviderOffersModel(providerId: string, agent: AgentKind, wireModel: string, sessionId?: string): Promise<boolean> {
+  const route = readPoolExecutionRoute(sessionId);
+  if (route?.logicalModel && providerId === route.providerId) {
+    try {
+      const model = route.logicalModel(wireModel);
+      return agent === 'pi' && providerOffersModel(route.connectionId, agent, wireModel)
+        && poolAuthorizationProvider(sessionId, route.connectionId, wireModel) === providerId
+        && await guestProviderModelAllowed(providerId, model, sessionId)
+        && poolAuthorizationProvider(sessionId, route.connectionId, wireModel) === providerId;
+    } catch { return false; }
+  }
   const models: string[] = [];
   providerOffersModel(providerId, agent, wireModel, model => { models.push(model); return false; });
   for (const model of models) {
@@ -132,6 +142,12 @@ export function hostedProviderOffersModel(sessionId: string | null | undefined, 
   const authorized = connection && poolAuthorizationProvider(sessionId, connection, wireModel);
   if (route && !authorized) return false;
   if (!hasHostedSessionModelAccess(sessionId)) return true;
+  if (route?.logicalModel && connection && authorized) {
+    try {
+      return agent === 'pi' && providerOffersModel(connection, agent, wireModel)
+        && hostedSessionModelAllowed(sessionId, authorized, route.logicalModel(wireModel));
+    } catch { return false; }
+  }
   if (connection && authorized && authorized !== connection) {
     return providerOffersModel(connection, agent, wireModel) && providerOffersModel(authorized, agent, wireModel,
       model => hostedSessionModelAllowed(sessionId, authorized, model));

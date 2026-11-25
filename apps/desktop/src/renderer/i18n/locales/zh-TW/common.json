@@ -22424,7 +22424,7 @@
     "billingPaused": "餘額不足或達到計費上限，已暫停組內分配。",
     "title": "帳號群組",
     "testPassed": "測試成功",
-    "refresh": "重新整理額度"
+    "refresh": "重新整理配額"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

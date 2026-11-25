@@ -14,6 +14,7 @@ import {
   type RefreshLocalModelsOptions,
 } from '@cindy/maker-core';
 import { CHATGPT_MODEL_PREFIX } from '@cindy/model-providers/classification';
+import { apiKeyEngineModel } from './apiKeyModel.js';
 import { isSubscriptionProvider, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import {
   acquireSubscriptionAccount,
@@ -126,8 +127,11 @@ function engineOptions<T extends Pick<StartSessionOptions, 'providerId' | 'devic
     : lease.account;
   return { ...options, providerId,
     [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
-    ...(guest && providerId !== requested ? { deviceHosted: { ...options.deviceHosted!,
-      guestProvider: { ...guest, providerId } } } : {}) };
+    ...(guest && (providerId !== requested || lease.apiConnectionId && kind === 'pi') ? { deviceHosted: { ...options.deviceHosted!,
+      guestProvider: { ...guest, providerId,
+        modelIds: lease.apiConnectionId && kind === 'pi'
+          ? [...new Set(guest.modelIds.map(id => apiKeyEngineModel(id, kind)))] : guest.modelIds,
+      } } } : {}) };
 }
 function assertOwnerCurrent(owner: string) {
   if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
@@ -224,6 +228,7 @@ function wrapHandle(
 ): AgentSessionHandle {
   let cleanupPending = false;
   let observe: ReturnType<typeof captureOpenAiGroupApiResponse>;
+  const modelForEngine = (id: string) => lease.apiConnectionId && agent ? apiKeyEngineModel(id, agent) : id;
   return new Proxy(handle, {
     get(target, property) {
       if (property === 'send')
@@ -243,14 +248,20 @@ function wrapHandle(
           }
         };
       if (property === 'setModel' && target.setModel)
-        return async (...args: Parameters<NonNullable<AgentSessionHandle['setModel']>>) => {
+        return async (next: string, options?: Parameters<NonNullable<AgentSessionHandle['setModel']>>[1]) => {
           if (cleanupPending) throw new Error('Subscription account runtime is closing');
-          return lease.changeModel(args[0], async () => {
-            await target.setModel!(...args);
+          return lease.changeModel(next, async () => {
+            await target.setModel!(modelForEngine(next), options);
             // The runtime already switched even if the lease's final grant check fails.
-            model = args[0];
+            model = next;
           });
         };
+      if (property === 'previewModelSwitch' && target.previewModelSwitch)
+        return (next: string, options?: Parameters<NonNullable<AgentSessionHandle['previewModelSwitch']>>[1]) =>
+          target.previewModelSwitch!(modelForEngine(next), options);
+      if (property === 'requiresModelSwitchRebuild' && target.requiresModelSwitchRebuild)
+        return (next: string, options?: Parameters<NonNullable<AgentSessionHandle['requiresModelSwitchRebuild']>>[1]) =>
+          target.requiresModelSwitchRebuild!(modelForEngine(next), options);
       if (property === 'close' || property === 'detach') {
         const method = target[property];
         return method
@@ -525,6 +536,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 providerId: options.providerId?.trim() || poolProvider,
                 connectionId: lease.apiConnectionId,
                 assertCurrent: lease.assertDispatchable,
+                logicalModel: lease.logicalModel,
                 captureTurnRejection: () => {
                   const turn = poolTurn.current;
                   return turn && (result => {
@@ -533,8 +545,8 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                   });
                 },
               });
-              startOptions = lease.apiConnectionId && target.kind === 'pi' && options.model?.startsWith(CHATGPT_MODEL_PREFIX)
-                ? { ...routed, model: options.model.slice(CHATGPT_MODEL_PREFIX.length) } : routed;
+              startOptions = lease.apiConnectionId && options.model
+                ? { ...routed, model: apiKeyEngineModel(options.model, target.kind) } : routed;
             } catch (error) {
               lease?.release();
               if (lastFailure !== undefined) throw lastFailure;
@@ -641,7 +653,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             if (api) options.hostedForkAccess?.assertCurrent();
             const result = await target.forkSdkSession(lease.apiConnectionId
               ? { ...routed, providerId: lease.apiConnectionId,
-                model: routed.model?.replace(/^chatgpt\//, '') } : routed);
+                model: routed.model ? apiKeyEngineModel(routed.model, target.kind) : routed.model } : routed);
             // A key's source affinity is an immutable record of where its history ran.
             await lease.bind([...(api ? [] : [key]), `native:${result.newSdkSessionId}`]);
             return result;

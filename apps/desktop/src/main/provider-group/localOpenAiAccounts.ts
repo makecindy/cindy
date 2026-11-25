@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { safeStorage } from 'electron';
-import { findCatalogModel, isModelSelectableForNewRoute, providerModelRecord, type AgentKind, type CatalogModel, type Provider } from '@cindy/model-providers';
+import { findCatalogModel, getModel, isModelSelectableForNewRoute, providerModelRecord, type AgentKind, type CatalogModel, type Provider } from '@cindy/model-providers';
 import { readProviderBillingCode, type ProviderBillingCode } from '@cindy/maker-shared/error-redaction';
 import { isOpenAiApiEndpoint, openAiAccountGroupKind, type OpenAiGroupAccount, type OpenAiGroupApiAgent, type OpenAiGroupProbeResult } from '../../shared/openAiAccountGroup.js';
 import { isProviderGroupProviderId } from '../../shared/providerGroup.js';
@@ -190,7 +190,7 @@ export function openAiGroupAccountResult(row: Provider): Pick<OpenAiGroupAccount
 }
 
 function accountHasApiModel(account: Provider, modelId: string, agent: AgentKind): boolean {
-  const model = findCatalogModel(account, modelId, agent, { exact: true });
+  const model = getModel(account, modelId, agent);
   return !!model && isOpenAiGroupApiModel(account, agent, model);
 }
 

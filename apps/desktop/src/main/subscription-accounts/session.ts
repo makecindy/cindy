@@ -29,6 +29,8 @@ interface PoolExecutionRoute {
   providerId: string;
   connectionId: string;
   assertCurrent(model?: string): void;
+  /** The live reservation owns the Pi alias; never infer it from request text. */
+  logicalModel?(wireModel: string): string;
   captureTurnRejection(): ((result: OpenAiGroupProbeResult) => void) | undefined;
 }
 const executions = new Map<string, PoolExecutionRoute>();

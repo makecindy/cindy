@@ -70,6 +70,7 @@ import {
   writeAccountBindings,
 } from './store.js';
 import { legacyCodexAccountCanRun, subscriptionRouteAllowsModel } from './legacyAccountAccess.js';
+import { apiKeyEngineModel } from './apiKeyModel.js';
 import {
   accountOwnProvider,
   accountProviderId,
@@ -1848,7 +1849,7 @@ export async function readSubscriptionSessionAccount(
   const legacyRouteAdmits = () => !!keys.legacyProviderId && !!keys.model
     && options.remote === true && options.ownComputer === true && (apiAlias
       ? apiKeyMemberForConnection(requestedRoute)?.id === apiAlias.id
-        && subscriptionRouteAllowsModel(requestedRoute, keys.model.replace(/^chatgpt\//, ''), options)
+        && subscriptionRouteAllowsModel(requestedRoute, keys.model, options)
       : !!legacyAccountId && readLegacyCodexAccountId(keys.legacyProviderId) === legacyAccountId
         && legacyCodexAccountCanRun(keys.legacyProviderId, keys.model, { remote: true, ownComputer: true, newRoute: false }));
   if (keys.legacyProviderId && !legacyRouteAdmits())
@@ -1916,7 +1917,7 @@ export async function readSubscriptionSessionAccount(
     if (options.remote && api.providerId === api.connectionId && requestedRoute !== api.connectionId)
       return { providerId: provider, state: 'unavailable' };
     if (options.remote && (!(apiAlias ? legacyRouteAdmits() : subscriptionRouteAllowsModel(requestedRoute, keys.model, options))
-      || !subscriptionRouteAllowsModel(api.connectionId, keys.model?.replace(/^chatgpt\//, ''), options))) {
+      || !subscriptionRouteAllowsModel(api.connectionId, keys.model, options))) {
       return { providerId: provider, state: 'unavailable' };
     }
     const blocked = !api.paused && !!keys.model && readSubscriptionAccountBlocked(provider, api.id, keys.model);
@@ -2516,6 +2517,8 @@ export interface SubscriptionAccountLease {
   apiConnectionId?: string;
   /** New turns must not reuse a disabled, renewing or unverified account. */
   assertDispatchable(model?: string): void;
+  /** Resolve an authenticated private Pi wire request to the live task model. */
+  logicalModel?(wireModel: string): string;
   /** Pool account id (not the owner-scoped capability id). */
   accountId: string;
   /** Selected from an existing task binding or an explicit legacy route rather than by the pool policy. */
@@ -2600,11 +2603,16 @@ export async function acquireSubscriptionAccount(
   if (!pool) return null;
   const state = currentRuntime();
   const agent = options.agent ?? (model?.startsWith('chatgpt/') ? 'pi' : 'codex');
+  // The selected member inherits the group's model range. Both the named
+  // source and the selected route must admit the original logical ID.
+  const apiRouteAdmits = (id: string, requestedModel: string) =>
+    (!options.remote || id === ref.providerId || subscriptionRouteAllowsModel(ref.providerId, requestedModel, options))
+    && subscriptionRouteAllowsModel(id, requestedModel, options);
   const apiAllowed = (id: string, boundFork: boolean) => !options.capability && !!model
     && hasCustomProviderKey(id, agent)
-    && (boundFork ? hasOpenAiGroupApiModel(id, model.replace(/^chatgpt\//, ''), agent)
-      : !control && isLocalOpenAiGroupAccountUsable(id, id, model.replace(/^chatgpt\//, ''), agent))
-    && subscriptionRouteAllowsModel(id, model.replace(/^chatgpt\//, ''), options);
+    && (boundFork ? hasOpenAiGroupApiModel(id, apiKeyEngineModel(model, agent), agent)
+      : !control && isLocalOpenAiGroupAccountUsable(id, id, apiKeyEngineModel(model, agent), agent))
+    && apiRouteAdmits(id, model);
   const accountsFor = (accounts: SubscriptionAccountConfig[], owner: string): SubscriptionAccountConfig[] => {
     const native = providerAccounts(provider, accounts, owner);
     return provider === 'openai' && options.includeApiKeys ? poolDispatchOrder(owner, [...native, ...apiKeyPoolMembers(owner)]) : native;
@@ -2962,8 +2970,8 @@ export async function acquireSubscriptionAccount(
         && keys.some(key => readAccountBinding(key, provider)?.accountId === selected);
       if ((member?.providerId !== selectionProvider && !detachedLocalBinding) || !targetModel
         || getProviderRouteCredentialRevision(api.connectionId) !== credentialRevision || !hasCustomProviderKey(api.connectionId, agent)
-        || !subscriptionRouteAllowsModel(api.connectionId, targetModel.replace(/^chatgpt\//, ''), options)
-        || (modelSwitch && !isLocalOpenAiGroupAccountUsable(api.connectionId, api.connectionId, targetModel.replace(/^chatgpt\//, ''), agent))) {
+        || !apiRouteAdmits(api.connectionId, targetModel)
+        || (modelSwitch && !isLocalOpenAiGroupAccountUsable(api.connectionId, api.connectionId, apiKeyEngineModel(targetModel, agent), agent))) {
         throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task API key account is unavailable');
       }
       return;
@@ -2983,9 +2991,16 @@ export async function acquireSubscriptionAccount(
       }))
       throw new Error(options.remote ? 'Subscription account remote access was revoked' : 'Subscription account does not allow this model');
   };
+  const logicalModel = api && agent === 'pi' ? (wireModel: string) => {
+    if (!currentModel || wireModel !== apiKeyEngineModel(currentModel, agent))
+      throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task API key account does not offer this model');
+    return currentModel;
+  } : undefined;
   return {
+    logicalModel,
     assertDispatchable: (dispatchModel) => {
-      assertCurrent(dispatchModel, dispatchModel !== undefined && dispatchModel !== currentModel);
+      const requestedModel = dispatchModel !== undefined && logicalModel ? logicalModel(dispatchModel) : dispatchModel;
+      assertCurrent(requestedModel, requestedModel !== undefined && requestedModel !== currentModel);
       const account = api ? apiKeyPoolMember(selected) : readPool(provider)?.accounts.find(a => a.id === selected);
       if (account?.paused)
         throw new Error('The task subscription account is disabled; retry to switch accounts');

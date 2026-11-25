@@ -68,6 +68,7 @@ import {
 import { bindHostedSessionProvider, clearAllSessionProviders, getSessionProvider, setSessionProvider } from '../session-provider-store';
 import { registerPiProxySession } from '../pi-proxy-session-auth';
 import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
+import { bindPoolExecutionRoute } from '../../subscription-accounts/session';
 
 const SHARED_UPSTREAM = 'https://shared.example/api/anthropic';
 const OTHER_UPSTREAM = 'https://other.example/api/anthropic';
@@ -312,6 +313,50 @@ describe('Claude proxy routing for shared-provider guests', () => {
       disposeRoot();
       disposeChild();
     }
+  });
+
+  // Unit through the actual Pi request router. The source policy sees the
+  // logical Pi ID; the private route must still match its own authenticated token.
+  it.each(['guest', 'owner'])('routes only the leased Pi Key and exact model for %s', async trust => {
+    const session = 'pool-pi';
+    const wire = 'shared-model';
+    const logical = 'chatgpt/shared-model';
+    let memberAllowed = true;
+    let sourceAllowed = true;
+    const grant = trust === 'guest'
+      ? registerGuestProviderRoute(session, 'openai', model => sourceAllowed && model === logical)
+      : bindHostedSessionProvider(session, 'openai', (id, model) => sourceAllowed && id === 'openai' && model === logical);
+    const dispose = registerPiProxySession(session, 'own-token', () => 'shared-a');
+    const logicalModel = (model: string) => {
+      if (model !== wire) throw Error('wrong wire model');
+      return logical;
+    };
+    const lease = bindPoolExecutionRoute(session, {
+      providerId: 'openai', connectionId: 'shared-a', logicalModel,
+      assertCurrent(model) {
+        if (!memberAllowed) throw Error('member revoked');
+        if (model !== undefined) logicalModel(model);
+      },
+      captureTurnRejection: () => undefined,
+    });
+    const request = (model: string, id = 'shared-a', token = 'own-token') => transform({ model }, ctxWith({
+      'x-cindy-pi-session-id': session, 'x-cindy-pi-session-token': token, 'x-cindy-pi-provider-id': id,
+    }));
+    try {
+      expect(await request(wire)).toMatchObject({ upstreamOverride: SHARED_UPSTREAM });
+      for (const denied of [logical, wire + '[1m]', 'other-model'])
+        expect(await statusOf(await request(denied))).toBe(403);
+      expect(await statusOf(await request(wire, 'other-b'))).toBe(403);
+      expect(await statusOf(await request(wire, 'shared-a', 'wrong-token'))).toBe(401);
+      sourceAllowed = false;
+      expect(await statusOf(await request(wire))).toBe(403);
+      sourceAllowed = true;
+      memberAllowed = false;
+      expect(await statusOf(await request(wire))).toBe(403);
+      memberAllowed = true;
+      lease();
+      expect(await statusOf(await request(wire))).toBe(403);
+    } finally { lease(); dispose(); grant.release(); }
   });
 
   // A loopback mismatch alone is not evidence of shared scope. Only a live

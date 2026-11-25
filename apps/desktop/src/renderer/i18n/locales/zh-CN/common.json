@@ -22424,7 +22424,7 @@
     "billingPaused": "余额不足或达到计费上限，已暂停组内分配。",
     "title": "账号组",
     "testPassed": "测试成功",
-    "refresh": "刷新额度"
+    "refresh": "刷新配额"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

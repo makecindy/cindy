@@ -360,7 +360,7 @@ import {
   type AgentSwitchSessionRow,
   type MakerSessionAgentSwitchHandlerDeps,
 } from '../../maker-ipc/sessionAgentSwitchHandler.js';
-import { createAgentHandoffPendingRegistry, extractPlainText, prependHandoffToUserMessage, type HandoffSourceMessage } from '../../maker-ipc/agentHandoff.js';
+import { composeForkOriginHandoff, createAgentHandoffPendingRegistry, extractPlainText, prependHandoffToUserMessage, type HandoffSourceMessage } from '../../maker-ipc/agentHandoff.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
 import { readAccountBinding } from '../store.js';
 import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
@@ -515,6 +515,60 @@ it('keeps an existing local Key task on its native history after removal, but no
   }
 });
 
+// Unit through the production pool-assembled Pi handle: catalog IDs stay on
+// the task, but the bound official Key's native methods require bare IDs.
+it('uses the bound Pi Key model ID for preview, rebuild and in-place switch', async () => {
+  const connection = 'pi-model-key';
+  const model = 'chatgpt/gpt-6';
+  const next = 'chatgpt/gpt-6-mini';
+  h.pools.openai = { strategy: 'order', accounts: [] };
+  h.apiMembers = [{ ...account('bound-key'), connectionId: connection, providerId: 'openai' }];
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  const requires = vi.fn<NonNullable<AgentSessionHandle['requiresModelSwitchRebuild']>>(async () => false);
+  const preview = vi.fn<NonNullable<AgentSessionHandle['previewModelSwitch']>>();
+  const change = vi.fn<NonNullable<AgentSessionHandle['setModel']>>(async () => {});
+  const start = vi.fn<BaseAgent['startSession']>(async () => ({
+    id: 'native-pi-model', close: async () => {}, requiresModelSwitchRebuild: requires,
+    previewModelSwitch: preview, setModel: change,
+  } as unknown as AgentSessionHandle));
+  const engine = withSubscriptionAccounts({ kind: 'pi', startSession: start } as unknown as BaseAgent);
+  try {
+    const handle = await engine.startSession({ providerId: 'openai', model } as StartSessionOptions);
+    expect(start.mock.lastCall?.[0]).toMatchObject({ providerId: connection, model: 'gpt-6' });
+    const options = { providerId: 'openai' };
+    await handle.requiresModelSwitchRebuild!(next, options);
+    await handle.previewModelSwitch!(next, options);
+    await handle.setModel!(next, options);
+    for (const call of [requires, preview, change])
+      expect(call).toHaveBeenCalledWith('gpt-6-mini', { providerId: connection });
+    await handle.close();
+  } finally { setCustomProviderKeyReader(() => null); }
+});
+
+// Unit through actual pool admission: the hosted provider range lists the
+// exact subscription ID, including when the requested account is a Key.
+it('admits a remote Key with the source Pi model and blocks an ungranted alias or member', async () => {
+  const connection = 'remote-pi-key';
+  const model = 'chatgpt/gpt-6';
+  h.pools.openai = { strategy: 'order', accounts: [] };
+  h.apiMembers = [{ ...account('remote-key'), connectionId: connection, providerId: 'openai' }];
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  const acquire = (id: string) => acquireSubscriptionAccount('openai', id, [], false, { includeApiKeys: true, remote: true, agent: 'pi' });
+  h.routeAllowed.mockImplementation((id, _options, source) => id === model && (source === 'openai' || source === connection));
+  try {
+    const lease = await acquire(model);
+    expect(lease?.apiConnectionId).toBe(connection);
+    expect(() => lease?.assertDispatchable('gpt-6')).not.toThrow();
+    h.routeAllowed.mockImplementation((id, _options, source) => id === model && source === connection);
+    expect(() => lease?.assertDispatchable('gpt-6')).toThrow();
+    await expect(acquire(model)).rejects.toThrow();
+    h.routeAllowed.mockImplementation((id, _options, source) => id === model && source === 'openai');
+    await expect(acquire(model)).rejects.toThrow();
+    await expect(acquire('gpt-6')).rejects.toThrow();
+    lease?.release();
+  } finally { setCustomProviderKeyReader(() => null); }
+});
+
 // Unit through the production pool wrapper: a native history fork is pinned
 // and offline, even when the bound key is paused for new inference. The existing
 // native subscription fork tests never exercise a key account lease.
@@ -625,7 +679,9 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
   { mode: 'guest', rejection: 429, code: 'rate_limit_exceeded', nativeFirst: true },
   { mode: 'paired', rejection: 429, code: 'rate_limit_exceeded', nativeFirst: true },
   { mode: 'guest', rejection: 429, code: 'rate_limit_exceeded', nativeFirst: true, partialOutput: true },
-])('handles a mixed $mode task over loopback after HTTP $rejection ($code, output=$partialOutput)', async ({ mode, rejection, code, nativeFirst, partialOutput }) => {
+  { mode: 'guest', rejection: 429, code: 'rate_limit_exceeded', nativeFirst: true, piFork: true },
+  { mode: 'paired', rejection: 429, code: 'rate_limit_exceeded', nativeFirst: true, piFork: true },
+])('handles a mixed $mode task over loopback after HTTP $rejection ($code, output=$partialOutput, piFork=$piFork)', async ({ mode, rejection, code, nativeFirst, partialOutput, piFork }) => {
   const invited = mode === 'guest';
   const share = { id: 'fixture-share', host: 'fixture-host', guest: 'fixture-guest', member: 'fixture-member' };
   const relay = await createRelayFixture(invited ? share : undefined);
@@ -650,7 +706,8 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
     res.end(JSON.stringify(status === 200 ? { text: `fixture-reply-${account}` } : { error: { code } }));
   }).listen(0, '127.0.0.1');
   await once(upstream, 'listening');
-  const model = 'gpt-6';
+  const kind = piFork ? 'pi' as const : 'codex' as const;
+  const model = piFork ? 'chatgpt/gpt-6' : 'gpt-6';
   const task = 'fixture-scoped-task';
   const providerId = 'openai';
   const credential = 'fixture-openai-key';
@@ -667,19 +724,26 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
   let native = 0;
   let authorized = true;
   let live: Session | undefined;
-  const pendingHandoff = createAgentHandoffPendingRegistry(async () => null);
+  const pendingHandoff = createAgentHandoffPendingRegistry(async () => null, undefined,
+    piFork ? async () => handoff => composeForkOriginHandoff('synthetic-parent', handoff) : undefined);
+  if (piFork) {
+    h.routeAllowed.mockImplementation((id, _options, caller) =>
+      id === model && (caller === providerId || caller === credential));
+    history.push({ role: 'assistant', content: 'earlier branch '.repeat(110_000), createdAt: 1 });
+  }
   let sdkSessionId: string | null = null;
-  const row = () => ({ id: task, status: 'active', agentKind: 'codex' as const, model, providerId,
+  const row = () => ({ id: task, status: 'active', agentKind: kind, model, providerId,
     agentDeviceId: route, remoteHostId: null, orcaRole: null, sdkSessionId });
   const log: Logger = { trace() {}, debug() {}, info: console.info, warn: console.warn, error: console.error, fatal() {}, child: () => log };
-  const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async (options: StartSessionOptions) => {
+  const agent = withSubscriptionAccounts({ kind, startSession: async (options: StartSessionOptions) => {
     const events: AgentEvent[] = [];
     const path = options.providerId === credential ? '/key' : '/subscription';
+    expect(options.model).toBe(piFork && path === '/key' ? 'gpt-6' : model);
     const url = new URL(path, `http://127.0.0.1:${(upstream.address() as { port: number }).port}`);
     if (url.hostname !== '127.0.0.1' || url.protocol !== 'http:') throw new Error('non-loopback fixture upstream');
     let closed = false;
     let wake: (() => void) | undefined;
-    return { id: `loopback-native-${++native}`, agentKind: 'codex', model,
+    return { id: `loopback-native-${++native}`, agentKind: kind, model,
       setInteractionResolver() {}, abort: async () => {},
       close: async () => { closed = true; wake?.(); },
       send: async (input: { content: unknown }) => {
@@ -688,12 +752,12 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
         if (!result.ok) {
           if (path === '/key') h.apiAllowed = false; // Synthetic key health port.
           if (partialOutput)
-            events.push({ type: 'text', source: 'codex', data: { text: 'fixture-visible-partial' } } as AgentEvent);
-          events.push({ type: 'error', source: 'codex', data: { message: JSON.stringify(payload), errorStatus: result.status,
+            events.push({ type: 'text', source: kind, data: { text: 'fixture-visible-partial' } } as AgentEvent);
+          events.push({ type: 'error', source: kind, data: { message: JSON.stringify(payload), errorStatus: result.status,
             ...(nativeFirst ? { sdkError: 'rate_limit' } : {}), isTerminal: true } } as AgentEvent);
         } else {
-          events.push({ type: 'text', source: 'codex', data: { text: payload.text } } as AgentEvent,
-            { type: 'done', source: 'codex', data: {} } as AgentEvent);
+          events.push({ type: 'text', source: kind, data: { text: payload.text } } as AgentEvent,
+            { type: 'done', source: kind, data: {} } as AgentEvent);
         }
         wake?.();
       },
@@ -747,7 +811,7 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
     controller.client.invoke(id, { channel, args }, undefined, { preSend: options?.preSend });
   const poller = new RemoteAgentPoller(invoke);
   const open = async () => {
-    const handle = await startRemoteAgentSession('codex', { sessionId: task, model, providerId, workingDir: '/controller/work' }, {
+    const handle = await startRemoteAgentSession(kind, { sessionId: task, model, providerId, workingDir: '/controller/work' }, {
       invoke, poller, log, rgPath: 'rg', newId: randomUUID,
       prepareMcp: async () => ({ servers: new Map(), dispose() {} }),
       collectProjectFiles: async () => [], isGitRepo: async () => false,
@@ -755,7 +819,7 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
     });
     offers.release(task);
     sdkSessionId = handle.id;
-    const session = new Session({ id: task, agentKind: 'codex', permissionMode: 'bypassPermissions',
+    const session = new Session({ id: task, agentKind: kind, permissionMode: 'bypassPermissions',
       workDir: '/controller/work', agentDeviceId: route, handle, capabilities: {} as never, logger: log });
     live = session;
     session.onEvent(event => {
@@ -828,7 +892,7 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
     sendToAgent: async (...args) => (await tx.sendToAgentAccepted(...args)).outcome,
     steerToAgent: async () => {}, abortSession: async () => {}, touchUserSend: async () => {}, createUserMessage: vi.fn(),
     isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
-    getAgentKind: () => 'codex', getSdkSessionId: async () => sdkSessionId ?? undefined,
+    getAgentKind: () => kind, getSdkSessionId: async () => sdkSessionId ?? undefined,
     getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
     hasAssistantProgressAfter: async () => false, emitProjection: () => {}, persistTerminalSendError: vi.fn(),
     providerGroupSwitchCandidate: (id, signals) => service.mayHandleTurnError(id, signals) ? providerGroupSwitchCause(signals, 'run') : null,
@@ -836,7 +900,7 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
   });
   const enqueue = (clientId: string, text: string) => coordinator.enqueue(task, {
     clientId, text, persistedContent: text, model, effort: 'medium', permissionMode: 'default', workingDir: '/controller/work',
-    createOpts: { agentKind: 'codex', model, workingDir: '/controller/work', permissionMode: 'bypassPermissions' },
+    createOpts: { agentKind: kind, model, workingDir: '/controller/work', permissionMode: 'bypassPermissions' },
     chatMessage: { clientId, role: 'user', content: text, isStreaming: false, createdAt: new Date().toISOString() },
   }, { manualUiSend: true });
   try {
@@ -860,6 +924,7 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
     expect(requests.map(({ account, status }) => [account, status])).toEqual([['A', 200], ['A', rejection], ['B', 200]]);
     expect(requests[2].text).toContain('fixture-first-marker');
     expect(requests[2].text).toContain('fixture-reply-A');
+    if (piFork) expect(requests[2].text).toContain('synthetic-parent');
     expect(requests[2].text.match(/fixture-second-marker/g)).toHaveLength(1);
     expect(h.bindings.get(`task:${hostSessionIdFor(controllerPeer, task)}`)?.accountId).toBe(nativeFirst ? 'key-fixture' : 'default');
     await vi.waitFor(() => expect(live?.isTurnRunning()).toBe(false));
@@ -869,7 +934,7 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
     expect(requests).toHaveLength(3);
     expect(relay.frames.some(frame => frame.kind === 'invoke' && (invited
       ? frame.providerShare?.shareId === share.id : !frame.providerShare))).toBe(true);
-    console.info('mixed pool loopback', { mode, upstream: requests.map(({ account, status }) => [account, status]),
+    console.info('mixed pool loopback', { mode, kind, upstream: requests.map(({ account, status }) => [account, status]),
       frames: relay.frames.filter(frame => frame.kind === 'invoke').length, revokedRequests: requests.length - 3 });
   } finally {
     await live?.close();
