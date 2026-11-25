@@ -580,6 +580,8 @@ describe('BotHomeComputerSetting', () => {
     { code: 'TARGET_OUTDATED', key: 'targetOutdated' },
     { code: 'SKILL_TARGET_OUTDATED', key: 'skillTargetOutdated' },
     { code: 'SKILL_TARGET_OUTDATED', key: 'skillTargetOutdated', oversizedSkill: { slug: 'research-paper-writing', bodyBytes: 71_560 } },
+    // #11999 review (zqchris 11-25): a code is untrusted text; one named like an inherited object property is unknown.
+    ...['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__'].map(code => ({ code, key: 'switchFailed', oversizedSkill: undefined })),
   ])('shows why a move did not happen ($code)', async ({ code, key, oversizedSkill }) => {
     maker.getCompanionHomeChoices.mockResolvedValue(local());
     maker.switchCompanionHome.mockResolvedValue({ ok: false, code, oversizedSkill });

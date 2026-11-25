@@ -185,7 +185,8 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       if (!result.ok) {
         setRepairAvailable(!!result.profileFailure);
         report(result.profileFailure ? t(result.profileFailure.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: result.profileFailure.maxLength })
-          : t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', {
+          // Own keys only: a code relayed from another computer is untrusted text (`constructor`, `__proto__`…).
+          : t(Object.hasOwn(SWITCH_ERROR_KEYS, result.code) ? SWITCH_ERROR_KEYS[result.code] : 'bots.cloud.switchFailed', {
             name: bot.name, device, context: result.oversizedSkill ? 'skill' : undefined, ...result.oversizedSkill,
           }),
           result.profileFailure ? { label: t('bots.cloud.repair.action'), onClick: () => setRepairOpen(true) } : conflict.report(result));
