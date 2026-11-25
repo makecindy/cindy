@@ -412,6 +412,7 @@ export function decodeRemoteErrorMessage(msg: string): string {
 /** Keep known codes for the banner's active locale; retain unknown-code fallback behavior. */
 export function remoteErrorMessageForBanner(error: unknown): string {
   const msg = error instanceof Error ? error.message : String(error);
+  if (extractIpcError(error)?.code === 'ATTACHMENT_SOURCE_UNAVAILABLE') return msg;
   // A Host refusal while a Cindy desktop app uses its data: the banner reads no key from it, so
   // say why and what to do here, in the window's language (the Host's own sentence is not shown).
   const held = hostProfileHoldI18nKey(msg, 'send');

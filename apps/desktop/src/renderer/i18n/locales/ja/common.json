@@ -15479,6 +15479,9 @@
       "remoteCompactEncryptedContent": "履歴内の暗号化された内容をモデルが読み取れず、コンテキストの圧縮に失敗しました。自動継続は完了していません。再試行して復旧を試せます。",
       "contextOverflow": "このメッセージ自体がモデルのコンテキスト上限を超えているため、新しい Agent セッションへ自動的に引き継いで続行できません。入力を短くするか大きな添付ファイルを外してから再試行してください。",
       "attachmentAccessDeniedTitle": "Cindy が元の添付ファイルを読み取れないため、メッセージは送信されていません。",
+      "attachmentSourceUnavailableNamed": "添付ファイル「{{name}}」は利用できなくなりました",
+      "attachmentSourceUnavailable": "利用できなくなった添付ファイルがあります",
+      "attachmentSourceUnavailableRecovery": "添付ファイルを削除するか追加し直してから、メッセージを送信してください。",
       "attachmentAccessDeniedRecovery": "「ダウンロード」などアクセス可能なフォルダーにコピーを保存し、元の添付ファイルを削除してから、添付ボタンでコピーを追加し、再送信してください。"
     },
     "backgroundActivity": {

@@ -231,7 +231,7 @@ describe('inline attachment temporary files', () => {
     try {
       for (const request of [
         () => normalizeUserMessage('task', { type: 'user', content: [file] }),
-        () => materializeQueuedOssAttachmentsDeferred('task', { files: [file] }),
+        () => materializeQueuedOssAttachmentsDeferred('task', { files: [file] }, { reportMissingSource: true }),
       ]) await expect(request()).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED', message: expect.not.stringContaining(source) });
     } finally { access.mockRestore(); }
   });
@@ -251,6 +251,34 @@ describe('inline attachment temporary files', () => {
     vi.mocked(imageCacheStore.resolveSafe).mockReturnValueOnce({ absPath: path.join(tempRoot.value, 'gone.pdf'), mimeType: 'application/pdf' });
     await expect(normalizeUserMessage('task', input, ACCEPTED_ATTACHMENT_REPLAY)).rejects.toMatchObject(failure);
     await expect(materializeQueuedOssAttachmentsDeferred('task', { text: 'keep', files: [block], autoResume: true })).rejects.toMatchObject(failure);
+  });
+
+  // #12868 / unit: the same preflight rejects the whole item, with a safe name only
+  // when the local Desktop enqueue requests recovery guidance for a confirmed source loss.
+  it('reports known missing attachment sources to local Desktop enqueue without returning a path', async () => {
+    sessionRow.mockResolvedValue(local);
+    const cachedUrl = 'cindy-media://blobs/missing.png';
+    vi.mocked(cindyMediaBlobStore.resolveSafe).mockReturnValue({
+      absPath: path.join(tempRoot.value, 'private-cache.png'), mimeType: 'image/png', hash: 'a'.repeat(64),
+    });
+    const options = { reportMissingSource: true };
+    for (const [file, name] of [
+      [{ name: 'sample.png', url: cachedUrl, category: 'image', ext: '.png' }, 'sample.png'],
+      [{ name: 'clipboard.png', path: 'clipboard://unavailable' }, 'clipboard.png'],
+      [{ name: 'C:\\private\\sample.png', url: cachedUrl }, ''],
+    ] as const) {
+      await expect(materializeQueuedOssAttachmentsDeferred('task', { text: 'keep', files: [file] }, options))
+        .rejects.toMatchObject({
+          code: 'ATTACHMENT_SOURCE_UNAVAILABLE',
+          message: `[ATTACHMENT_SOURCE_UNAVAILABLE] ${name}`,
+        });
+    }
+    const inline = { name: 'clipboard.png', path: 'clipboard://available', base64: 'aGk=' };
+    await expect(materializeQueuedOssAttachmentsDeferred('task', { files: [inline] }, options))
+      .resolves.toMatchObject({ item: { files: [inline] } });
+    await expect(materializeQueuedOssAttachmentsDeferred('task', {
+      files: [{ ...inline, url: cachedUrl }],
+    }, options)).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' });
   });
 
   it('keeps a resolved xdt-image URL as the Host-managed image identity', async () => {

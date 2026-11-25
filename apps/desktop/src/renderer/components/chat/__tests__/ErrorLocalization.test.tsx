@@ -311,6 +311,20 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(error)).toBeNull();
   });
 
+  // #12868 / unit: a pre-enqueue source rejection keeps the attachment name
+  // through the renderer and directs recovery through the editable composer.
+  it('names an unavailable attachment without offering a blind retry', async () => {
+    const i18n = createInstance();
+    await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
+    const failure = new Error("Error invoking remote method 'maker:input:enqueue': Error: [ATTACHMENT_SOURCE_UNAVAILABLE] sample.png");
+    render(<I18nextProvider i18n={i18n}>
+      <ErrorBanner error={remoteErrorMessageForBanner(failure)} retryText="Original draft" onRetry={vi.fn()} />
+    </I18nextProvider>);
+    expect(screen.getByText(i18n.t('chat.errorBanner.attachmentSourceUnavailableNamed', { name: 'sample.png' }))).toBeTruthy();
+    expect(screen.getByText(i18n.t('chat.errorBanner.attachmentSourceUnavailableRecovery'))).toBeTruthy();
+    expect(screen.queryByTitle(i18n.t('chat.errorBanner.retryTitle'))).toBeNull();
+  });
+
   // #10796, unit: a transport timeout used to lose its cause in both banners.
   it.each([
     ['live', 'REMOTE_LOCAL_ONLY_PROVIDER'], ['tail', 'REMOTE_LOCAL_ONLY_PROVIDER'],

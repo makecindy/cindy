@@ -50,6 +50,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { extractIpcError } from '@/utils/ipcError';
+import { safeAttachmentDisplayName } from '../../../shared/attachmentSafety';
 import { buildCodexSyncWarning } from '@/utils/codexAuthSync';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
@@ -441,6 +442,10 @@ export function ErrorBanner({
           ? t(errorReasonI18nKey)
           : undefined;
   const ipcRefusal = extractIpcError(new Error(error));
+  const isAttachmentSourceUnavailable = ipcRefusal?.code === 'ATTACHMENT_SOURCE_UNAVAILABLE';
+  const unavailableAttachmentName = isAttachmentSourceUnavailable
+    ? safeAttachmentDisplayName(ipcRefusal.message)
+    : undefined;
   const preconditionMessage = ipcRefusal?.code === 'PRECONDITION_FAILED' ? ipcRefusal.message : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
   const isRemoteResumeRejected = isRemoteAgentResumeRejectedError(error);
@@ -496,7 +501,8 @@ export function ErrorBanner({
   });
   // 订阅套餐错误保留 Retry：用户重新连接 Anthropic 后可从当前错误卡片重试；
   // Gateway 错误则隐藏 Retry，改走切换到 Claude.ai 的明确恢复动作。
-  const hideRetry = remoteErrorCode === 'REMOTE_AGENT_RESUME_UNAVAILABLE' || isMemberBudgetPaused(error) ||
+  const hideRetry = isAttachmentSourceUnavailable ||
+    remoteErrorCode === 'REMOTE_AGENT_RESUME_UNAVAILABLE' || isMemberBudgetPaused(error) ||
     isProviderSafetyRefusal ||
     isRemoteResumeRejected ||
     isSilentStopExhausted ||
@@ -572,7 +578,11 @@ export function ErrorBanner({
   const piCloudContextRecovery = agentKind === 'pi'
     ? /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?\[PI_STARTUP_CLOUD_CONTEXT_FILE\] ([^\r\n]+)\npi rpc timeout after \d+ms: [^\r\n]+$/.exec(error)?.[1]
     : undefined;
-  if (piCloudContextRecovery) {
+  if (isAttachmentSourceUnavailable) {
+    displayError = unavailableAttachmentName
+      ? t('chat.errorBanner.attachmentSourceUnavailableNamed', { name: unavailableAttachmentName })
+      : t('chat.errorBanner.attachmentSourceUnavailable');
+  } else if (piCloudContextRecovery) {
     displayError = piCloudContextRecovery;
   } else if (isProviderSafetyRefusal) {
     displayError = t('chat.errorBanner.providerSafetyRefusal');
@@ -895,7 +905,9 @@ export function ErrorBanner({
       style={style}
       message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : displayError}
       description={
-        isAttachmentAccessDenied
+        isAttachmentSourceUnavailable
+          ? t('chat.errorBanner.attachmentSourceUnavailableRecovery')
+          : isAttachmentAccessDenied
           ? t('chat.errorBanner.attachmentAccessDeniedRecovery')
           : showQueuedSendRecovery
             ? t('chat.errorBanner.queuedSendRecovery')
@@ -903,7 +915,8 @@ export function ErrorBanner({
               ? t('chat.errorBanner.readableHistoryRecoveryDescription')
               : renderProviderErrorExplanation(error, displayError, t)
       }
-      details={canShowErrorDetails && preconditionMessage !== displayError ? preconditionMessage ?? error : undefined}
+      details={!isAttachmentSourceUnavailable && canShowErrorDetails && preconditionMessage !== displayError
+        ? preconditionMessage ?? error : undefined}
       onDiagnose={
         onDiagnose
           ? () => onDiagnose({ message: displayError, details: error, reason: errorReason })

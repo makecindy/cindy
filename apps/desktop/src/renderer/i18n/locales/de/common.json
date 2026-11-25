@@ -15507,6 +15507,9 @@
       "remoteCompactEncryptedContent": "Die Kontextkomprimierung ist fehlgeschlagen, weil das Modell den verschlüsselten Verlauf nicht lesen konnte. Die automatische Fortsetzung wurde nicht abgeschlossen. Versuche es erneut, um eine Wiederherstellung zu versuchen.",
       "contextOverflow": "Diese Nachricht allein überschreitet das Kontextfenster des Modells. Deshalb kann Cindy sie nicht in einer neuen Agent-Sitzung fortsetzen. Kürze die Eingabe oder entferne einen großen Anhang und versuche es erneut.",
       "attachmentAccessDeniedTitle": "Cindy kann den ursprünglichen Anhang nicht lesen. Die Nachricht wurde nicht gesendet.",
+      "attachmentSourceUnavailableNamed": "Der Anhang „{{name}}“ ist nicht mehr verfügbar",
+      "attachmentSourceUnavailable": "Ein Anhang ist nicht mehr verfügbar",
+      "attachmentSourceUnavailableRecovery": "Entferne den Anhang oder füge ihn erneut hinzu und sende dann die Nachricht.",
       "attachmentAccessDeniedRecovery": "Speichere eine Kopie unter Downloads oder in einem anderen zugänglichen Ordner, entferne den ursprünglichen Anhang und füge die Kopie über die Anhang-Schaltfläche hinzu, bevor du erneut sendest."
     },
     "backgroundActivity": {

@@ -15544,6 +15544,9 @@
       "remoteCompactEncryptedContent": "Context compaction failed because the model could not read encrypted history. Automatic continuation did not complete. Retry to attempt recovery.",
       "contextOverflow": "This message itself exceeds the model's context window, so Cindy cannot continue it in a fresh agent session. Shorten the input or remove a large attachment, then try again.",
       "attachmentAccessDeniedTitle": "Cindy cannot read the source attachment; the message was not sent.",
+      "attachmentSourceUnavailableNamed": "“{{name}}” is no longer available",
+      "attachmentSourceUnavailable": "An attachment is no longer available",
+      "attachmentSourceUnavailableRecovery": "Remove or re-add the attachment, then send the message.",
       "attachmentAccessDeniedRecovery": "Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again."
     },
     "backgroundActivity": {

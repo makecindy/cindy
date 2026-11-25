@@ -15470,6 +15470,9 @@
       "remoteCompactEncryptedContent": "整理上下文未成：模型不能读旧事中之加密内容。自动接续未竟，可再试以复之。",
       "contextOverflow": "此讯本身已逾模型上下文之限，不能于今之 Agent 中自动换窗续行。请缩短所输，或去过大附件，再试。",
       "attachmentAccessDeniedTitle": "Cindy 不能读来源附件，讯未遣出。",
+      "attachmentSourceUnavailableNamed": "附件「{{name}}」已不可用",
+      "attachmentSourceUnavailable": "有附件已不可用",
+      "attachmentSourceUnavailableRecovery": "移除此件或重加，而后遣讯。",
       "attachmentAccessDeniedRecovery": "请将卷另存至「下载」或他可访问之卷匣，移除原附件，再以附件钮加入副本后遣之。"
     },
     "backgroundActivity": {

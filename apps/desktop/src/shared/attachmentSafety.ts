@@ -72,4 +72,13 @@ export function isDangerousAttachmentName(name: string): boolean {
   return DANGEROUS_ATTACHMENT_EXTS.has(attachmentExtension(name));
 }
 
+/** Only display metadata from the attachment chip, never a path or URL. */
+export function safeAttachmentDisplayName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const name = value.trim();
+  return name.length > 0 && name.length <= 120 && !/[/:\\\p{Cc}\p{Cf}]/u.test(name)
+    ? name
+    : undefined;
+}
+
 export const __attachmentSafetyTesting = { DANGEROUS_ATTACHMENT_EXTS };

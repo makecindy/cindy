@@ -15479,6 +15479,9 @@
       "remoteCompactEncryptedContent": "整理上下文失败：模型无法读取历史中的加密内容。自动接续未完成，可重试恢复。",
       "contextOverflow": "这条消息本身已经超过模型上下文上限，没法在当前 Agent 里自动换窗继续。请缩短输入或去掉超大附件后再试。",
       "attachmentAccessDeniedTitle": "Cindy 无法读取源附件，消息未发送。",
+      "attachmentSourceUnavailableNamed": "附件「{{name}}」已不可用",
+      "attachmentSourceUnavailable": "有附件已不可用",
+      "attachmentSourceUnavailableRecovery": "请移除或重新添加该附件后发送。",
       "attachmentAccessDeniedRecovery": "请将文件另存到「下载」或其他可访问的文件夹，移除原附件，再用附件按钮添加副本后发送。"
     },
     "backgroundActivity": {

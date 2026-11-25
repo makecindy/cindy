@@ -15642,6 +15642,9 @@
       "remoteCompactEncryptedContent": "La compaction du contexte a échoué, car le modèle n'a pas pu lire l'historique chiffré. La reprise automatique n'a pas abouti. Réessayez pour tenter une récupération.",
       "contextOverflow": "Ce message dépasse à lui seul la fenêtre de contexte du modèle : Cindy ne peut donc pas le poursuivre dans une nouvelle session Agent. Raccourcissez la saisie ou retirez une pièce jointe volumineuse, puis réessayez.",
       "attachmentAccessDeniedTitle": "Cindy ne peut pas lire la pièce jointe source ; le message n'a pas été envoyé.",
+      "attachmentSourceUnavailableNamed": "La pièce jointe « {{name}} » est indisponible",
+      "attachmentSourceUnavailable": "Une pièce jointe est indisponible",
+      "attachmentSourceUnavailableRecovery": "Retirez ou ajoutez de nouveau la pièce jointe, puis envoyez le message.",
       "attachmentAccessDeniedRecovery": "Enregistrez une copie dans Téléchargements ou dans un autre dossier accessible, retirez la pièce jointe d'origine et ajoutez la copie à l'aide du bouton de pièce jointe avant de renvoyer."
     },
     "backgroundActivity": {
