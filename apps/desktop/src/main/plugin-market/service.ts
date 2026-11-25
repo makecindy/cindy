@@ -61,6 +61,7 @@ import {
   customMarketReleaseId,
   marketSourceKey,
   parseCustomMarketPluginId,
+  pluginMarketSourceIdentity,
   PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH,
   PLUGIN_MARKET_CUSTOM_ICON_SOURCE_TOKEN_LENGTH,
   pluginMarketCustomIconProjectionToken,
@@ -2623,6 +2624,9 @@ export class PluginMarketService {
           sourceKey,
           reviewInstalledIdentity,
           sourceType: discovered.config.source.type,
+          // 与 sourceKey 同出这份打包所用的来源配置；不在确认前按市场名重读（可能已被同名来源替换）。
+          // beforeCommit 复核 sourceKey，来源被换即拒绝，所以确认展示的就是随后安装的来源。
+          sourceIdentity: pluginMarketSourceIdentity(discovered.config.source),
           assertCustomApprovalStateUnchanged,
         };
       });
@@ -2636,6 +2640,7 @@ export class PluginMarketService {
           sourceKey,
           reviewInstalledIdentity,
           sourceType,
+          sourceIdentity,
           assertCustomApprovalStateUnchanged,
         } = packedAttempt;
         // 来源只决定后台更新路由，不是 ghostId 的永久所有权。只有详情页明确
@@ -2649,7 +2654,9 @@ export class PluginMarketService {
           'rejection' in packed.inspected
             ? { mode: 'unprompted' }
             : await obtainGhostInstallConsent(
-                consent.mode === 'prompt' ? { ...consent, trust: packed.inspected.trust.level } : consent,
+                consent.mode === 'prompt'
+                  ? { ...consent, trust: packed.inspected.trust.level, originSource: sourceIdentity ?? undefined }
+                  : consent,
                 installedGhostMatchingMarketPluginNow(plugin),
                 packed.inspected.manifest,
                 packed.inspected.packageSha256,
@@ -2964,6 +2971,7 @@ export class PluginMarketService {
           ? 'installed'
           : 'update-available';
     const iconKey = entry.iconKey;
+    const sourceIdentity = pluginMarketSourceIdentity(config.source);
     return {
       pluginId,
       ghostId: plugin.ghostId,
@@ -2991,6 +2999,8 @@ export class PluginMarketService {
       enabled: matchesUpdateRoute ? (ghost?.enabled ?? null) : null,
       sourceType: config.source.type === 'git' ? 'git-market' : 'local-market',
       sourceMarketName: config.name,
+      // 远程控制端发起安装时记下它，回执过期后按它核对仍是同一个来源。
+      ...(sourceIdentity ? { sourceIdentity } : {}),
     };
   }
 

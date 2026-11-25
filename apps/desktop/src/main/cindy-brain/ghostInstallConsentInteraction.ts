@@ -16,6 +16,7 @@ import type { GhostPermissionItem } from '../../shared/ghost.js';
 import { permissionItemDetail } from '../../shared/ghostPermissionDetail.js';
 import {
   GHOST_INSTALL_CONSENT_TOOL_NAME,
+  ghostInstallConsentOriginSourceText,
   ghostInstallSourceNoticeKey,
   type GhostInstallConsentRequest,
 } from '../../shared/ghostInstallConsent.js';
@@ -54,9 +55,9 @@ export function ghostInstallTargetText(translate: Translate, target: GhostInstal
 /** 来源说明：包从哪里来，Agent 发起时再标明发起方。桌面确认框与任务卡共用。 */
 export function ghostInstallConsentSourceText(
   translate: Translate,
-  request: Pick<GhostInstallConsentRequest, 'initiator' | 'origin' | 'originLabel'>,
+  request: Pick<GhostInstallConsentRequest, 'initiator' | 'origin' | 'originLabel' | 'originSource'>,
 ): string {
-  const origin =
+  const market =
     request.origin === 'market'
       ? consentText(translate, 'originMarket')
       : request.origin === 'custom-market'
@@ -66,6 +67,9 @@ export function ghostInstallConsentSourceText(
         : request.origin === 'local-file'
           ? consentText(translate, 'originLocalFile')
           : consentText(translate, 'originForge');
+  // 自定义市场再写明包来自哪个仓库（Main 生成的去敏身份），任务卡与 IM 卡共用。
+  const repository = ghostInstallConsentOriginSourceText(request, (key, args) => consentText(translate, key, args));
+  const origin = repository ? `${market} · ${repository}` : market;
   return request.initiator === 'agent'
     ? consentText(translate, 'initiatedByAgent', { origin })
     : origin;

@@ -8443,7 +8443,10 @@
         "localOidcUnavailable": "此开发副本不得企业身份。欲自测，请以 Forge 明确装入当前企业。",
         "personalTarget": "私",
         "sourceChanged": "此次更新将改为此机来源。旧名籍与数据隔离保留，须重新连接名籍。",
-        "otherCopies": "已有同名法器 {{count}} 份；彼等不被覆盖或禁用。另纳之法器须各自连接名籍。"
+        "otherCopies": "已有同名法器 {{count}} 份；彼等不被覆盖或禁用。另纳之法器须各自连接名籍。",
+        "originRepository": "仓库 {{repository}}",
+        "originRepositoryRef": "仓库 {{repository}}（{{ref}}）",
+        "originLocalFolder": "此机卷匣"
       },
       "trust": {
         "official": "Cindy 官方法器",

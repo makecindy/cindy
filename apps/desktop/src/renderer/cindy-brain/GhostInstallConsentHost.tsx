@@ -17,6 +17,7 @@ import { permissionItemDetail } from '../../shared/ghostPermissionDetail';
 import { cn } from '@/lib/utils';
 import type { GhostPermissionItem } from '../../shared/ghost';
 import {
+  ghostInstallConsentOriginSourceText,
   ghostInstallSourceNoticeKey,
   type GhostInstallConsentFacts,
   type GhostInstallConsentRequest,
@@ -24,12 +25,15 @@ import {
 
 type Translate = ReturnType<typeof useTranslation>['t'];
 
+/** 安装确认的标题与来源行：插件名、仓库标识可能是无空格长串，任意处可断行。 */
+export const GHOST_INSTALL_CONSENT_TEXT_CLASS = '[overflow-wrap:anywhere]';
+
 /** 来源说明与 Main 侧任务确认卡同口径（ghostInstallConsentInteraction.ts）。 */
 export function ghostInstallConsentSourceLabel(
   t: Translate,
-  request: Pick<GhostInstallConsentRequest, 'initiator' | 'origin' | 'originLabel'>,
+  request: Pick<GhostInstallConsentRequest, 'initiator' | 'origin' | 'originLabel' | 'originSource'>,
 ): string {
-  const origin =
+  const market =
     request.origin === 'market'
       ? t('settings.ghosts.installConsent.originMarket')
       : request.origin === 'custom-market'
@@ -39,6 +43,9 @@ export function ghostInstallConsentSourceLabel(
         : request.origin === 'local-file'
           ? t('settings.ghosts.installConsent.originLocalFile')
           : t('settings.ghosts.installConsent.originForge');
+  // 自定义市场再写明包来自哪个仓库；电脑作远程端时这份请求来自另一台 Host，形状不对就不展示。
+  const repository = ghostInstallConsentOriginSourceText(request, (key, args) => t(`settings.ghosts.installConsent.${key}`, args));
+  const origin = repository ? `${market} · ${repository}` : market;
   return request.initiator === 'agent'
     ? t('settings.ghosts.installConsent.initiatedByAgent', { origin })
     : origin;
@@ -257,6 +264,8 @@ export function GhostInstallConsentHost() {
                     replacement={replacement} sourceChanged={request.target?.sourceChanged} />
                 </>,
                 maxWidth: 460,
+                // 来源行可能带最长 256 字符、无空格的仓库标识，必须可断行，不能撑宽弹窗。
+                textClassName: GHOST_INSTALL_CONSENT_TEXT_CLASS,
                 contentSelectable: true,
                 describeContent: true,
                 confirmText:

@@ -8560,7 +8560,10 @@
         "localOidcUnavailable": "Esta cópia de desenvolvimento não pode usar a identidade da organização. Para testar, instale-a explicitamente na sua organização atual pelo Forge.",
         "personalTarget": "Pessoal",
         "sourceChanged": "Esta atualização muda para uma fonte local. As contas e os dados existentes são arquivados separadamente. Conecte suas contas novamente após atualizar.",
-        "otherCopies": "Há {{count}} outras cópias deste plugin. Elas permanecerão instaladas e manterão o estado de ativação atual. Uma cópia separada precisa de suas próprias conexões de conta."
+        "otherCopies": "Há {{count}} outras cópias deste plugin. Elas permanecerão instaladas e manterão o estado de ativação atual. Uma cópia separada precisa de suas próprias conexões de conta.",
+        "originRepository": "Repositório {{repository}}",
+        "originRepositoryRef": "Repositório {{repository}} ({{ref}})",
+        "originLocalFolder": "Pasta local"
       },
       "trust": {
         "official": "Plugin oficial do Cindy",

@@ -2173,6 +2173,41 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     });
   });
 
+  /* 测试价值（PR #12684 维护者评审，2026-11-25：确认展示的仓库必须是随后真正安装的来源）
+   * - 生产入口与可观察结果：PluginMarketService.detail / install（真实来源管理器、打包与提交复核），
+   *   观察市场详情的 sourceIdentity、确认请求的 originSource 与安装结果。
+   * - 缺口：此前确认请求与条目只带市场名；同名换源只有提交点指纹复核，没有用例覆盖「确认等待期间换源」。
+   * - 最小失败输入：确认弹出后把同名市场换成另一个目录。身份字段在改动前不存在（前两条断言改前失败）；
+   *   换源拒绝属于覆盖既有提交点复核，改前即通过，用来锁住这条保证不被后续改动绕开。
+   * - tier：unit（临时目录 + 本地来源，不起 git）。
+   */
+  it('shows the identity of the packed source and rejects a same-name source swap during the confirmation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dirA = writeLocalMarket(path.join(root, 'a'), 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const dirB = writeLocalMarket(path.join(root, 'b'), 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir: dirA }]);
+    runtime.install.mockResolvedValue(installedGhost(root, 'alpha'));
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    const detail = await h.service.detail(pluginId);
+    // A local folder market is identified by kind only; its path never leaves Main.
+    expect(detail.sourceIdentity).toEqual({ kind: 'local' });
+    expect(JSON.stringify(detail)).not.toContain(root);
+    // Same market name, plugin id, release and manifest: only the source differs.
+    const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => {
+      h.sourceStore.remove('team-lib');
+      h.sourceStore.add({ name: 'team-lib', addedAt: '2026-07-30T00:00:00.000Z', lastSyncedAt: '2026-07-30T01:00:00.000Z',
+        lastRevision: null, source: { type: 'local', path: dirB } });
+      return true;
+    });
+    await expect(h.service.install(pluginId, { expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      expectedManifest: detail.manifest }, { consent: { prompt, initiator: 'user' } })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt.mock.calls[0]?.[0]).toMatchObject({ origin: 'custom-market', originLabel: 'team-lib', originSource: { kind: 'local' } });
+    expect(JSON.stringify(prompt.mock.calls[0]?.[0])).not.toContain(root);
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
   it('rejects the install when the source vanishes before the commit point', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

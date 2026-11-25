@@ -8443,7 +8443,10 @@
         "localOidcUnavailable": "이 개발 사본은 조직 인증을 사용할 수 없습니다. 테스트하려면 Forge에서 현재 조직을 명시하여 설치하세요.",
         "personalTarget": "개인",
         "sourceChanged": "이 업데이트는 로컬 소스로 전환합니다. 기존 계정과 데이터는 별도로 보관됩니다. 업데이트 후 계정을 다시 연결하세요.",
-        "otherCopies": "같은 이름의 플러그인이 {{count}}개 더 있습니다. 덮어쓰거나 비활성화하지 않습니다. 별도 사본에는 독립적인 계정 연결이 필요합니다."
+        "otherCopies": "같은 이름의 플러그인이 {{count}}개 더 있습니다. 덮어쓰거나 비활성화하지 않습니다. 별도 사본에는 독립적인 계정 연결이 필요합니다.",
+        "originRepository": "저장소 {{repository}}",
+        "originRepositoryRef": "저장소 {{repository}} ({{ref}})",
+        "originLocalFolder": "로컬 폴더"
       },
       "trust": {
         "official": "Cindy 공식 플러그인",

@@ -40,6 +40,10 @@ const STRINGS: Record<string, string> = {
   'settings.ghosts.installConsent.originMarket': 'From market',
   'settings.ghosts.installConsent.originForge': 'Local plugin',
   'settings.ghosts.installConsent.initiatedByAgent': 'Agent · {{origin}}',
+  'settings.ghosts.installConsent.originCustomMarket': 'From custom market {{name}}',
+  'settings.ghosts.installConsent.originRepository': 'Repository {{repository}}',
+  'settings.ghosts.installConsent.originRepositoryRef': 'Repository {{repository}} ({{ref}})',
+  'settings.ghosts.installConsent.originLocalFolder': 'Local folder',
   'settings.ghosts.perm.networkHost': 'Reach {{host}}',
   'settings.ghosts.perm.networkSecretOauth': 'Connect {{name}} ({{host}})',
   'settings.ghosts.perm.networkSecretOauthDetail': 'Requested scopes:',
@@ -71,6 +75,23 @@ describe('plugin install confirmation card', () => {
       title: 'Install Weather?',
       description: 'v1.0.0 · Agent · From market\nConfirm to install.\nIt will have:\n• Reach api.weather.test',
     });
+  });
+
+  // PR #12684 maintainer review (2026-11-25): task and IM cards name the repository a custom-market
+  // package comes from. Before this change the line only had the market name. A malformed identity
+  // never prints partial values; the line falls back to the market name.
+  it.each([
+    [{ kind: 'git', repository: 'github.com/acme/plugins' }, 'From custom market Acme · Repository github.com/acme/plugins'],
+    [{ kind: 'git', repository: 'github.com/acme/plugins', ref: 'main' }, 'From custom market Acme · Repository github.com/acme/plugins (main)'],
+    [{ kind: 'local' }, 'From custom market Acme · Local folder'],
+    [undefined, 'From custom market Acme'],
+    [{ kind: 'git', repository: 'https://ghp_SECRET@github.com/acme/plugins' }, 'From custom market Acme'],
+  ] as const)('names the custom-market repository on the source line (%o)', (originSource, line) => {
+    const request = { ...INSTALL, origin: 'custom-market' as const, originLabel: 'Acme',
+      ...(originSource ? { originSource: originSource as GhostInstallConsentRequest['originSource'] } : {}) };
+    expect(renderGhostInstallConsentText({ ...request, initiator: 'user' }, translate).description.split('\n')[0])
+      .toBe(`v1.0.0 · ${line}`);
+    expect(renderGhostInstallConsentText(request, translate).description.split('\n')[0]).toBe(`v1.0.0 · Agent · ${line}`);
   });
 
   it.each([

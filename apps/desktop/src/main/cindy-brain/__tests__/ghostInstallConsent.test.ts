@@ -600,3 +600,20 @@ it('records companions consent only when that capability was shown', async () =>
   expect(confirmedTaskCapability(decision, before, next, 'observe')).toBeUndefined();
   expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'companions')).toBeUndefined();
 });
+
+/* 测试价值：PR #12684 维护者评审（2026-11-25）要求自定义市场确认写明包来自哪个仓库。
+ * 生产入口 obtainGhostInstallConsent，可观察结果是交给所有确认界面（确认框、任务卡、远程回执）的请求。
+ * 缺口：此前请求只带市场名。最小失败输入：custom-market 策略带 originSource；其它 origin 即使带了也不透传。
+ */
+it('passes the Main-generated source identity only into custom-market confirmations', async () => {
+  const next = manifest(['api.weather.test']);
+  const source = { kind: 'git' as const, repository: 'github.com/acme/plugins', ref: 'main' };
+  const custom = vi.fn<GhostInstallConsentPrompt>(async () => true);
+  await obtainGhostInstallConsent({ mode: 'prompt', prompt: custom, initiator: 'user', origin: 'custom-market',
+    originLabel: 'Acme', originSource: source }, null, next, reviewedDigest);
+  expect(custom.mock.calls[0]?.[0]).toMatchObject({ origin: 'custom-market', originLabel: 'Acme', originSource: source });
+  const market = vi.fn<GhostInstallConsentPrompt>(async () => true);
+  await obtainGhostInstallConsent({ mode: 'prompt', prompt: market, initiator: 'user', origin: 'market', originSource: source },
+    null, next, reviewedDigest);
+  expect(market.mock.calls[0]?.[0]).not.toHaveProperty('originSource');
+});

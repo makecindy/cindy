@@ -20,6 +20,7 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { extractIpcError } from '@/utils/ipcError';
 import { toast } from '@/lib/toast';
 import {
+  GHOST_INSTALL_CONSENT_TEXT_CLASS,
   GhostInstallConsentContent,
   ghostInstallConsentSourceLabel,
 } from '@/cindy-brain/GhostInstallConsentHost';
@@ -398,6 +399,7 @@ export function RemotePluginCatalogSource({
               ),
               cancelText: t('settings.ghosts.installConsent.cancel'),
               maxWidth: 460,
+              textClassName: GHOST_INSTALL_CONSENT_TEXT_CLASS,
               contentSelectable: true,
             },
             abort.signal,

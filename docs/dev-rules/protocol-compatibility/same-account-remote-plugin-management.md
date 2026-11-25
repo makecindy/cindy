@@ -73,6 +73,39 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
 存储，任务 patch 保留目标工作目录。旧控制端忽略新增字段，旧 Host 的缺失能力如实展示。
 无需服务端、通用 IPC allowlist、数据库或 Mobile 原生改动。
 
+## 自定义市场的来源身份
+
+自定义市场条目（`management:market-detail` 与 `{read:'catalog'}` 中 `sourceType` 为 `git-market` /
+`local-market` 的项）可选追加 `sourceIdentity`；`management:begin` 之后确认回执里的 `consent` 可选追加
+`originSource`。两者形状相同：`{kind:'git', repository, ref?}` 或 `{kind:'local'}`。服务端市场条目与其它
+来源的确认不带这两个字段。
+
+- **生成**：目标 Host 用 `pluginMarketSourceIdentity`（`apps/desktop/src/shared/pluginMarket.ts`）从来源配置
+  白名单生成，生成不出时整个字段缺省，不给空值或部分值。
+  - `repository` 只含小写 host 加 2–4 段路径（`host/owner/repo`，允许 GitLab 子组），总长不超过 256，整体匹配
+    `PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN`，结尾 `.git` 去掉。
+  - 只从 URL 读取 hostname 与路径；用户名、密码、令牌、端口、查询串与片段一律不读取。含空白、控制符、
+    零宽或双向控制符、反斜杠、百分号编码、原始 `.` / `..` 路径段或多个 `@` 的地址不生成。
+  - `ref` 只在配置了与添加来源时同口径的合法引用时给出。本地文件夹市场只给 `{kind:'local'}`，不给路径。
+  - 存储的 `sources.v1.json` 按不可信输入处理，手工改过的配置也不能把凭证或非字符串值带进投影。结果不写日志。
+- **与安装来源同源**：`originSource` 由 `customInstall` 在打包所在的来源租约内、用打包所用的那份来源配置
+  生成，与 `sourceKey` 同出一处；确认前不按市场名重读配置。提交前 Host 复核 `sourceKey`，确认等待期间同名
+  市场被换成其它来源时安装以 `PRECONDITION_FAILED` 拒绝，所以确认时展示的仓库就是随后安装的来源。
+  条目的 `sourceIdentity` 按该条目自己的来源配置生成。同一仓库只改稀疏路径时 `sourceKey` 变、身份不变，
+  控制端视为同一来源。
+- **控制端**：按同一形状校验，Git 形式只允许 `kind`、`repository`、`ref`，本地形式只允许 `kind`。
+  - 手机：确认回执里 `originSource` 形状不对，整份回执视为无效；条目里 `sourceIdentity` 形状不对，只丢弃该字段。
+    回执过期后核实自定义市场安装时，要求当前 `sourceIdentity` 与发起安装时记下的完全一致，缺失或不一致都按
+    未确认收口（实现见手机插件市场 PR #12684）。
+  - 电脑作为控制端：形状不对时不展示仓库，只显示市场名。
+- **展示**：电脑端确认框、电脑作远程端时的确认、任务卡与 IM 卡在来源文案后追加「 · 仓库 …」或「 · 本地文件夹」。
+- **兼容**：只增可选字段，无需能力协商或版本门槛。旧控制端（旧手机、作为远程端的旧电脑）不展示新字段，
+  确认仍只显示市场名，行为不变。旧 Host 不发时，新手机按 #12684 的旧 Host 路径处理。批准状态、回执、
+  安装账本、安装布局与 manifest 校验都不变。
+- **自建中转**：字段位于既有 resource invoke 的结果载荷中。中转按原样转发 `payload`、不解析内容
+  （`packages/device-link-relay/src/hub.ts` 的 `route`），握手、帧路由、顶层字段与能力协商都不变，因此无需同步
+  修改中转。新增内容每项最多约 300 字节，单页目录最多 100 项，远低于 2 MiB 的帧上限。
+
 ## Desktop 公开市场提审
 
 `management:snapshot` 可选返回 `communityPublication: true` 并为来源可确认的本地安装投影
