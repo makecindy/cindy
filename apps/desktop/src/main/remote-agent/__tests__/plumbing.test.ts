@@ -885,7 +885,7 @@ describe('remote ACP command state', () => {
   // expose no such getter at all.
   it('projects the remote engine command list from the initial and updated state', () => {
     const workspace = new ExecutorWorkspace({ workingDir: root });
-    const create = (state: Record<string, unknown>, agentKind = 'acp') => createRemoteAgentHandle({
+    const create = (state: Record<string, unknown>, agentKind: 'acp' | 'claude-code' = 'acp') => createRemoteAgentHandle({
       client: {} as RemoteAgentRunClient,
       started: { id: 'acp-1', agentKind, model: 'm', shadowDir: '', methods: [], state },
       workspace,
