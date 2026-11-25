@@ -1918,7 +1918,13 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledOnce();
     expect(deps.finalizeCodexCustomProviderHostChange).toHaveBeenCalledOnce();
 
-    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, { codex: 'fixture-new-key' });
+    const modelsUrlEdit = structuredClone(config);
+    modelsUrlEdit.runtimes.codex!.modelsUrl = 'https://api.openai.com/v1/models';
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, modelsUrlEdit, { codex: 'fixture-current-key' });
+    expect(await isConfirmed()).toBe(true);
+    expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, modelsUrlEdit, { codex: 'fixture-new-key' });
     expect(await isConfirmed()).toBeUndefined();
     expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledTimes(2);
     await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, {});

@@ -741,7 +741,8 @@ function invalidateEditedProviderMetadata(
       JSON.stringify([runtime.baseUrl, runtime.modelsUrl, runtime.headers, runtime.wireProtocol, runtime.requestPath,
         auth?.method === 'apiKey' || !auth ? null : auth]);
     if (context(before, previous.auth) !== context(after, next.auth)) {
-      delete after.openAiApiUltrafastConfirmed;
+      // Confirmation belongs to the inference project, whose route and credentials
+      // are checked by the provider update handler. Listing edits only invalidate discovery.
       // A different endpoint is a different catalog: drop source receipts and the
       // #11298 upstream-listing marker so its absences are never offered as withdrawals.
       after.models = after.models.map(({ discoveredSource: _source, listedUpstream: _listed, missingUpstream: _missing, ...model }) => model);
