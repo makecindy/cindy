@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 import { CompanionCindyConflictAction, useCompanionCindyConflictAction } from './CompanionCindyConflictAction';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { CompanionProfileRepairDialog } from './CompanionProfileRepairDialog';
 import {
   DropdownMenu,
@@ -235,7 +236,14 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const homeName = homeHere
     ? t('bots.cloud.thisComputer')
     : actor?.homeDevice?.name?.trim() || t('bots.cloud.unknownDevice');
-  return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget,
+  /**
+   * Opening the menu or the 近况 popover asks the home (another computer) about its state before any choice
+   * is shown, and a confirmation asks it again: say so while it runs (cloud-companions.md §3.1).
+   */
+  const checkingHome = movable && !homeHere && !!home && choices === null && !choicesFailed;
+  /** The home's own name for that line (null: the unnamed wording, never a placeholder name). */
+  const checkingName = homeHere ? null : actor?.homeDevice?.name?.trim() || null;
+  return { actor, home, homeHere, homeName, checkingHome, checkingName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget,
     forceTarget, setForceTarget, forceHome, askForce, decidedHome, homeText, missingProfileTarget, setMissingProfileTarget, missingProfileForceHome, busy,
     error, setError, inFlight, load, confirm, targetName, conflictAction: conflict.action, repairOpen, setRepairOpen, repairAvailable };
 }
@@ -248,6 +256,13 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
   if (!state.movable)
     return <DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.resumeToMove', { name: bot.name })}</DropdownMenuItem>;
   if (state.choicesFailed) return <DropdownMenuItem disabled>{t('bots.cloud.devicesFailed')}</DropdownMenuItem>;
+  if (choices === null && state.checkingHome)
+    return (
+      <DropdownMenuItem disabled className="gap-2 whitespace-normal">
+        <Spinner size={14} aria-hidden className="shrink-0" />
+        <span role="status" className="min-w-0">{t('bots.cloud.checkingHome', state.homeText(state.checkingName))}</span>
+      </DropdownMenuItem>
+    );
   if (choices === null) return <DropdownMenuItem disabled>{t('bots.cloud.loadingDevices')}</DropdownMenuItem>;
   if (choices.mode === 'unavailable')
     return (
@@ -297,6 +312,13 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
   const { t } = useTranslation();
   const device = state.pending ? state.targetName(state.pending) : '';
   const busyDevice = state.busyTarget ? state.targetName(state.busyTarget) : '';
+  /**
+   * While a confirmation runs, the home (another computer) is asked about its state again: say so. A
+   * confirmed force asks it once, briefly; every other confirmation asks in full (cloud-companions.md §3.1).
+   */
+  const checkingNote = (forced: boolean) => state.busy && !state.homeHere
+    ? <p role="status" className="text-base text-[var(--confirm-desc)]">{t(forced ? 'bots.cloud.checkingHomeForced' : 'bots.cloud.checkingHomeWait')}</p>
+    : undefined;
   return (
     <>
     <CompanionProfileRepairDialog botId={bot.id} open={state.repairOpen} onOpenChange={state.setRepairOpen} />
@@ -308,6 +330,7 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
       confirmText={t('bots.cloud.busyWait')}
       tertiaryText={t('bots.cloud.busyStop')}
       cancelText={t('bots.cancel')}
+      content={checkingNote(false)}
       loading={state.busy}
       onConfirm={() => void state.confirm(state.busyTarget, { whenBusy: 'wait' })}
       onTertiary={() => void state.confirm(state.busyTarget, { whenBusy: 'stop' })}
@@ -320,6 +343,7 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
       confirmText={t('bots.cloud.forceAction')}
       confirmVariant="destructive"
       cancelText={t('bots.cloud.forceLater')}
+      content={checkingNote(!!state.forceHome)}
       loading={state.busy}
       onConfirm={() => void state.confirm(state.forceTarget, state.forceHome ? { force: true, forceHomeDeviceId: state.forceHome.id } : undefined)}
     />
@@ -330,6 +354,7 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
       description={t('bots.cloud.missingProfileDescription', { name: bot.name })}
       confirmText={t('bots.cloud.missingProfileConfirm')}
       cancelText={t('bots.cancel')}
+      content={checkingNote(!!state.missingProfileForceHome.current)}
       loading={state.busy}
       // After a forced take-over (home state not confirmed) keep the force, or the move asks again.
       onConfirm={() => {
@@ -343,8 +368,12 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
       title={t('bots.cloud.switchTitle', { name: bot.name, device })}
       description={t('bots.cloud.switchDescription', { name: bot.name, device })}
       // An older Cindy there: say what the teammate keeps and what does not apply.
-      content={state.pending?.outdated
-        ? <p className="text-base text-[var(--confirm-desc)]">{t('bots.cloud.olderTargetNote', { name: bot.name, device })}</p> : undefined}
+      content={state.pending?.outdated || checkingNote(false) ? (
+        <div className="space-y-2">
+          {state.pending?.outdated ? <p className="text-base text-[var(--confirm-desc)]">{t('bots.cloud.olderTargetNote', { name: bot.name, device })}</p> : null}
+          {checkingNote(false)}
+        </div>
+      ) : undefined}
       confirmText={t('bots.cloud.switchAction', { device })}
       cancelText={t('bots.cancel')}
       loading={state.busy}

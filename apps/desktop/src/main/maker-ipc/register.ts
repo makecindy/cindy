@@ -777,7 +777,7 @@ import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
-import { activeCompanionCloud, askCompanionHome, companionHomeProbe, type CompanionDeviceDirectory } from '../companion-cloud/runtime.js';
+import { activeCompanionCloud, askCompanionHome, companionHomeProbe, type CompanionDeviceDirectory, type CompanionHomeProbeMode } from '../companion-cloud/runtime.js';
 import { companionCloudView } from '../companion-cloud/view.js';
 import { companionProfileUiMock } from '../companion-cloud/uiMock.js';
 import type { CompanionCloudActionResult, CompanionCloudFailureCode, CompanionHomeChoices, CompanionMergeResult, CompanionSwitchOptions } from '../../shared/companionCloud.js';
@@ -3302,8 +3302,8 @@ async function companionCloudPeerVersion(deviceId: string): Promise<number> {
   return probeCompanionCloudCaps(deviceId, 5_000).catch(() => 0);
 }
 /** What the companion's home answered: only an explicit answer may lead to a take-over (cloud-companions.md §3.1). */
-const companionCloudHomeStatus = (deviceId: string) =>
-  askCompanionHome(companionHomeProbe(() => invokeBotPeer(deviceId, COMPANION_CLOUD_CAPS_CHANNEL, [])));
+const companionCloudHomeStatus = (deviceId: string, mode: CompanionHomeProbeMode) =>
+  askCompanionHome(companionHomeProbe(() => invokeBotPeer(deviceId, COMPANION_CLOUD_CAPS_CHANNEL, [])), mode);
 const COMPANION_FAILURE_CODES: ReadonlySet<CompanionCloudFailureCode> = new Set<CompanionCloudFailureCode>(
   ['HOME_CONFLICT', 'LOCAL_CINDY_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED', 'SKILL_TARGET_OUTDATED', 'PROFILE_SNAPSHOT_MISSING']);
 /** Kept and merged Cindy ids from a request (local IPC or another computer). */

@@ -510,6 +510,52 @@ describe('BotHomeComputerSetting', () => {
     expect(maker.switchCompanionHome).toHaveBeenLastCalledWith('mia', 'desk', { force: true, forceHomeDeviceId: decided });
   });
 
+  // cloud-companions.md §3.1 (author self-review, 11-25): opening the menu asks the main computer about its
+  // state before any choice is shown (up to about half a minute when it does not answer). The menu opens at
+  // once and says so, named from the snapshot or with the unnamed wording, never a placeholder name; when this
+  // computer is the main one nothing is asked, so the plain loading text stays.
+  it.each([
+    ['laptop', 'Laptop', 'bots.cloud.checkingHome:{"device":"Laptop"}'],
+    ['laptop', '', 'bots.cloud.checkingHome:{"context":"unnamed"}'],
+    ['desk', 'Desk', 'bots.cloud.loadingDevices'],
+  ] as const)('says what the menu waits for (main computer %s, name "%s")', async (home, name, text) => {
+    let answer!: (value: unknown) => void;
+    maker.getCompanionHomeChoices.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    const cloud = snapshot(home);
+    cloud.actors[0]!.homeDevice!.name = name;
+    show(cloud);
+    openMenu();
+    expect(await screen.findByText(text)).toBeTruthy();
+    expect(screen.queryByText(text === 'bots.cloud.loadingDevices' ? 'bots.cloud.checkingHome' : 'bots.cloud.loadingDevices')).toBeNull();
+    answer(home === 'desk' ? local() : { homeDeviceId: 'laptop', homeName: name, mode: 'remote', targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] });
+    expect(await screen.findByText(home === 'desk' ? 'bots.cloud.switchTo:{"device":"Laptop"}' : 'bots.cloud.switchHere')).toBeTruthy();
+    expect(screen.queryByText(text)).toBeNull();
+  });
+
+  // While a confirmation runs, the main computer is asked again: the dialog says so. A confirmed force asks it
+  // once, briefly (its own wording); an ordinary confirmation asks in full.
+  it.each([
+    ['an ordinary confirmation', 'remote', 'bots.cloud.checkingHomeWait'],
+    ['a confirmed force', 'unresponsive', 'bots.cloud.checkingHomeForced'],
+  ] as const)('says the main computer is being checked during %s', async (_, menu, note) => {
+    const here = { deviceId: 'desk', name: 'Desk', online: true, isSelf: true };
+    maker.getCompanionHomeChoices.mockResolvedValue(menu === 'remote'
+      ? { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [here] }
+      : { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] });
+    let settle!: (value: unknown) => void;
+    maker.switchCompanionHome.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+    show(snapshot('laptop'));
+    openMenu();
+    fireEvent.click(await screen.findByText(menu === 'remote' ? 'bots.cloud.switchHere' : 'bots.cloud.forceHere'));
+    const confirm = await screen.findByRole('button', { name: menu === 'remote' ? 'bots.cloud.switchAction:{"device":"bots.cloud.thisComputer"}' : 'bots.cloud.forceAction' });
+    expect(screen.queryByText(note)).toBeNull();
+    fireEvent.click(confirm);
+    expect(await screen.findByText(note)).toBeTruthy();
+    expect(screen.queryByText(note === 'bots.cloud.checkingHomeWait' ? 'bots.cloud.checkingHomeForced' : 'bots.cloud.checkingHomeWait')).toBeNull();
+    settle({ ok: false, code: 'OFFLINE' });
+    await waitFor(() => expect(screen.queryByText(note)).toBeNull());
+  });
+
   // Merge with the missing-profile confirmation (2026-11-25): a forced take-over that then meets a missing
   // profile snapshot keeps the force when that second confirmation is accepted. Without it the retry was
   // refused as HOME_UNRESPONSIVE and the owner was sent back to the force dialog.

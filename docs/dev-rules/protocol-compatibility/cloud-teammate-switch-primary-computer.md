@@ -26,6 +26,8 @@ Mobile 仍通过既有换主力流程发起请求，不改原生指纹。
 调用抛出的 `DeviceLinkError` 一律不可确认，包括本机缓存的 `REMOTE_DISABLED`（`DeviceLinkClient.request` / Agent-Net
 会话发送前抛出）、中转 relay-error、链路关闭带回的 `ACCESS_REVOKED` 与 Agent-Net `UNAUTHORIZED`。现有 API 已能区分
 （失败一律抛出、对端回包一律正常返回），不需要在 device-link 里加来源标记，也不改共享包。
+2026-11-25 起主人确认过的强制只探测一次（5 秒），同一台主力电脑、同一种探测的在途请求在本机主进程里合并（不缓存结果）；
+请求与回包不变，探测次数只减不增。
 不新增错误码，不改变发给对端的内容。`HOME_UNRESPONSIVE` 与 `CompanionSwitchOptions.force` / `forceHomeDeviceId`
 只在同一 Desktop 的 `:home-choices` / `:switch-home` 本机 IPC 中使用；`maker:companion-cloud:hand-over` 仍只转发
 `whenBusy`，`force` 不进 device-link，也不进远程交出的选项解析。不新增 channel、帧或服务端接口，手机与旧版对端不受影响。

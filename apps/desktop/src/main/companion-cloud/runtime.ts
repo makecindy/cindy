@@ -87,9 +87,10 @@ export interface CompanionCloudHost {
     version: (deviceId: string) => Promise<number>;
     /**
      * What the companion's own home answered (see `askCompanionHome`), for deciding a move. Three
-     * states, never folded: answered / refused (the only automatic take-over) / unconfirmed.
+     * states, never folded: answered / refused (the only automatic take-over) / unconfirmed. `mode`
+     * is how long it is asked (`CompanionHomeProbeMode`).
      */
-    homeStatus: (deviceId: string) => Promise<CompanionHomeAnswer>;
+    homeStatus: (deviceId: string, mode: CompanionHomeProbeMode) => Promise<CompanionHomeAnswer>;
     targets: (deviceId: string) => Promise<CompanionTransferTarget[]>;
     handOver: (deviceId: string, botId: string, targetDeviceId: string, options?: CompanionSwitchOptions) => Promise<CompanionCloudActionResult>;
     /** Ask the kept Cindy's home to merge the other copies into it. */
@@ -293,8 +294,24 @@ const HOME_EXPLICIT_REFUSALS: ReadonlyMap<string, CompanionHomeRefusal> = new Ma
  * (`Encrypted transport required`) or from other gates: those prove nothing about the home's version.
  */
 const OLDER_CINDY_ANSWER = `channel '${COMPANION_CLOUD_CAPS_CHANNEL}' not allowed remotely`;
-/** First wait, then one longer try: right after start-up the link to an online home can be slow. */
+/**
+ * First wait, then one longer try: right after start-up the link to an online home can be slow.
+ * Chosen by this change's author without field measurements (#11999 lists it for the maintainer).
+ */
 const HOME_PROBE_WAITS_MS = [8_000, 15_000];
+/**
+ * The one wait once the owner has read the force warning and confirmed forcing past this very home:
+ * the home is still asked (an answer hands the companion over normally), but not for the full
+ * `HOME_PROBE_WAITS_MS` again, which the menu has just spent. 5 s is origin/main's earlier probe wait.
+ */
+const HOME_FORCED_PROBE_WAIT_MS = 5_000;
+
+/**
+ * How long a home is asked (cloud-companions.md §3.1): `full` for every decision that could move it
+ * without the owner's force; `brief` (one `HOME_FORCED_PROBE_WAIT_MS`) only for a move the owner
+ * confirmed forcing past this very home, where any outcome but an answer takes it over as forced.
+ */
+export type CompanionHomeProbeMode = 'full' | 'brief';
 
 /**
  * What a companion's home answered, for deciding a move (cloud-companions.md §3.1). Three states that
@@ -361,13 +378,39 @@ export function companionHomeProbe(invoke: () => Promise<InvokeResultPayload>) {
  * a malformed answer, a probe that rejected — is asked once more with a longer wait, and is then
  * `unconfirmed`: the move needs the owner's explicit force.
  */
-export async function askCompanionHome(probe: (timeoutMs: number) => Promise<CompanionHomeProbeOutcome>): Promise<CompanionHomeAnswer> {
-  for (const timeoutMs of HOME_PROBE_WAITS_MS) {
+export async function askCompanionHome(
+  probe: (timeoutMs: number) => Promise<CompanionHomeProbeOutcome>, mode: CompanionHomeProbeMode = 'full',
+): Promise<CompanionHomeAnswer> {
+  for (const timeoutMs of mode === 'brief' ? [HOME_FORCED_PROBE_WAIT_MS] : HOME_PROBE_WAITS_MS) {
     const outcome = await probe(timeoutMs).catch((): CompanionHomeProbeOutcome => ({ from: 'local', kind: 'failed' }));
     const answer = confirmedHomeAnswer(outcome);
     if (answer) return answer;
   }
   return { kind: 'unconfirmed' };
+}
+
+/**
+ * One home check in flight per home and mode (cloud-companions.md §3.1). Decisions that overlap for the
+ * same home and mode (the settings menu and the 近况 popover, a menu opened again) share the call in
+ * flight. Nothing is cached: once it settles, the next decision asks again, so a confirmation always
+ * gets the home's state at that moment. `full` and `brief` never share a call: a brief «unconfirmed»
+ * must not end a full check early, and a forced confirmation does not wait out a full check in flight
+ * (it asks once itself). Keyed by the home's id, so one home's answer (and its reply evidence) never
+ * decides for another home.
+ */
+export function coalesceHomeStatus(
+  status: (deviceId: string, mode: CompanionHomeProbeMode) => Promise<CompanionHomeAnswer>,
+): (deviceId: string, mode: CompanionHomeProbeMode) => Promise<CompanionHomeAnswer> {
+  const inFlight = new Map<string, Promise<CompanionHomeAnswer>>();
+  return (deviceId, mode) => {
+    const key = `${mode}\u0000${deviceId}`;
+    const running = inFlight.get(key);
+    if (running) return running;
+    const call = (async () => status(deviceId, mode))()
+      .finally(() => { if (inFlight.get(key) === call) inFlight.delete(key); });
+    inFlight.set(key, call);
+    return call;
+  };
 }
 
 /**
@@ -1083,6 +1126,9 @@ export function startCompanionCloud(input: {
     return (await probe(deviceId).catch(() => false)) ? COMPANION_CLOUD_TEAMMATE_PROJECT_VERSION : 0;
   }
 
+  /** The home check of a decision; overlapping checks of one home and mode share the call in flight. */
+  const homeStatus = coalesceHomeStatus((deviceId, mode) => input.host.homeLink!.homeStatus(deviceId, mode));
+
   /**
    * One home decision for a move (cloud-companions.md §3.1), in three states: the home can hand over
    * (`remote`, or `unavailable` when too old to be asked), it is explicitly gone (`no-home`, a fresh
@@ -1090,10 +1136,12 @@ export function startCompanionCloud(input: {
    * a directory that failed, is stale or partial, a probe without an explicit answer). Every read that
    * could not confirm stays unconfirmed; nothing here falls back to a default that reads as «offline».
    */
-  async function decideHome(botId: string): Promise<HomeDecision> {
+  async function decideHome(botId: string, forcedHome?: string): Promise<HomeDecision> {
     const self = input.selfDeviceId;
     const actor = actorOf(botId);
     const home = actor?.homeDeviceId ?? null;
+    // Only a force the owner confirmed for this very home shortens the check; anything else asks in full.
+    const probeMode: CompanionHomeProbeMode = forcedHome !== undefined && forcedHome === home ? 'brief' : 'full';
     if (!self || !live()) return { basis: { kind: 'unavailable' }, choices: { homeDeviceId: home, mode: 'unavailable', reason: 'NOT_ENABLED', targets: [] } };
     if (!actor) return { basis: { kind: 'unavailable' }, choices: { homeDeviceId: null, mode: 'unavailable', reason: 'NOT_FOUND', targets: [] } };
     // Read failure is kept (null), not turned into an empty directory: an empty one would read as «home not listed».
@@ -1113,7 +1161,7 @@ export function startCompanionCloud(input: {
     const fresh = freshDirectory(directory);
     if (fresh && homeRow?.online === false) return takeOver({ kind: 'offline', directory: fresh });
     const link = input.host.homeLink;
-    const answer: CompanionHomeAnswer = link ? await link.homeStatus(home).catch((): CompanionHomeAnswer => ({ kind: 'unconfirmed' }))
+    const answer: CompanionHomeAnswer = link ? await homeStatus(home, probeMode).catch((): CompanionHomeAnswer => ({ kind: 'unconfirmed' }))
       : { kind: 'unconfirmed' };
     if (answer.kind === 'refused') return takeOver({ kind: 'refused', reply: answer });
     if (answer.kind === 'unconfirmed') return takeOver({ kind: 'unconfirmed' }, 'HOME_UNRESPONSIVE');
@@ -1426,7 +1474,9 @@ export function startCompanionCloud(input: {
     async switchHome(botId, targetDeviceId, options) {
       const self = input.selfDeviceId;
       if (!self || !live()) return { ok: false, code: 'NOT_ENABLED' };
-      const decision = await decideHome(botId);
+      // A force bound to the home it was confirmed for, moving it here: the home is asked once, briefly.
+      const forcedHome = options?.force && options.forceHomeDeviceId && targetDeviceId === self ? options.forceHomeDeviceId : undefined;
+      const decision = await decideHome(botId, forcedHome);
       const { choices } = decision;
       if (choices.homeDeviceId === targetDeviceId) return { ok: true };
       if (choices.mode === 'unavailable') return { ok: false, code: choices.reason === 'HOME_OUTDATED' ? 'HOME_OUTDATED' : 'FAILED' };

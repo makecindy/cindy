@@ -5,7 +5,7 @@ import type { CompanionCloudActionResult } from '../../../shared/companionCloud.
 import { createCompanionHomeRegistry } from '../homes.js';
 import { restoreCloudAvatar } from '../avatarRestore.js';
 import { readTranscriptPage } from '../room.js';
-import { askCompanionHome, companionHomeProbe, startCompanionCloud, type CompanionCloudHost, type CompanionDeviceDirectory, type CompanionHomeAnswer, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
+import { askCompanionHome, coalesceHomeStatus, companionHomeProbe, startCompanionCloud, type CompanionCloudHost, type CompanionDeviceDirectory, type CompanionHomeAnswer, type CompanionHomeProbeMode, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
 import type { CompanionApi } from '../types.js';
 import { createWorkRequestGate, WorkRequestDeferred } from '../../maker-ipc/chatWorkPolling.js';
 import { fakeApi, fakeLocal, memoryState, rejection, type ApiHandler } from './fakes.js';
@@ -1410,6 +1410,120 @@ describe('switch home from any computer', () => {
     t.actors[0]!.homeDeviceId = 'laptop';
     expect(await t.runtime.switchHome('bot_mia', 'desk', { ...forcedForLaptop, allowMissingProfile: true })).toEqual({ ok: true });
     expect(t.calls.find(call => call.method === 'PATCH')).toMatchObject({ data: { homeDeviceId: 'desk', expectedHomeDeviceId: 'laptop' } });
+  });
+
+  // How long a home is asked (cloud-companions.md §3.1, author self-review 11-25): every decision that could
+  // move it without the owner's force asks in full (8 s, then 15 s); only a move the owner confirmed forcing
+  // past this very home asks once for 5 s. The home is asked through the real probe adapter on fake timers.
+  const askedHome = (invoke: () => Promise<InvokeResultPayload>) => {
+    const waits: number[] = [];
+    const homeLink = { ...link(2), homeStatus: vi.fn((_id: string, mode: CompanionHomeProbeMode) =>
+      askCompanionHome(timeoutMs => { waits.push(timeoutMs); return companionHomeProbe(invoke)(timeoutMs); }, mode)) };
+    return { waits, homeLink };
+  };
+  const silent = () => new Promise<InvokeResultPayload>(() => {});
+  const settledAfter = async <T,>(promise: Promise<T>, ms: number) => {
+    let settled = false;
+    void promise.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(ms);
+    return settled;
+  };
+  const forcedForLaptop = { force: true, forceHomeDeviceId: 'laptop' };
+
+  it('asks a home the owner forced past once, briefly, then takes it over as forced', async () => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn(silent);
+      const { waits, homeLink } = askedHome(invoke);
+      const t = setup({ home: 'laptop', homeLink, directory: async () => ({ devices: [device('laptop'), hereRow] }) });
+      const moving = t.runtime.switchHome('bot_mia', 'desk', forcedForLaptop);
+      expect(await settledAfter(moving, 4_999)).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await moving).toEqual({ ok: true });
+      expect(waits).toEqual([5_000]);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(t.calls.find(call => call.method === 'PATCH')).toMatchObject({ data: { homeDeviceId: 'desk', expectedHomeDeviceId: 'laptop' } });
+      expect(homeLink.handOver).not.toHaveBeenCalled();
+    } finally { runtime?.dispose(); runtime = undefined; vi.useRealTimers(); }
+  });
+
+  it('lets a home that answers the brief check hand over itself instead of being forced', async () => {
+    vi.useFakeTimers();
+    try {
+      const { waits, homeLink } = askedHome(async () => ({ ok: true, result: { companionCloud: COMPANION_CLOUD_VERSION } }));
+      const t = setup({ home: 'laptop', homeLink, directory: async () => ({ devices: [device('laptop'), hereRow] }) });
+      expect(await t.runtime.switchHome('bot_mia', 'desk', forcedForLaptop)).toEqual({ ok: true });
+      expect(waits).toEqual([5_000]);
+      expect(homeLink.handOver).toHaveBeenCalledWith('laptop', 'bot_mia', 'desk', forcedForLaptop);
+      expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+    } finally { runtime?.dispose(); runtime = undefined; vi.useRealTimers(); }
+  });
+
+  // Without a valid force for this very home (and for this computer), the check is never shortened:
+  // a shorter wait there would be «timeout means take over» again.
+  it.each([
+    ['an ordinary confirmation', 'desk', undefined, 'HOME_UNRESPONSIVE'],
+    ['the missing-profile confirmation without a force', 'desk', { allowMissingProfile: true }, 'HOME_UNRESPONSIVE'],
+    ['the busy confirmation', 'desk', { whenBusy: 'wait' as const }, 'HOME_UNRESPONSIVE'],
+    ['a force for another computer than this one', 'tablet', forcedForLaptop, 'HOME_UNRESPONSIVE'],
+    ['a force without the home it was confirmed for', 'desk', { force: true }, 'HOME_CONFLICT'],
+    ['a force confirmed for an earlier home', 'desk', { force: true, forceHomeDeviceId: 'carbon' }, 'HOME_CONFLICT'],
+  ] as const)('asks a silent home in full on %s, and writes nothing', async (_, target, options, code) => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn(silent);
+      const { waits, homeLink } = askedHome(invoke);
+      const t = setup({ home: 'laptop', homeLink, directory: async () => ({ devices: [device('laptop'), hereRow] }) });
+      const moving = t.runtime.switchHome('bot_mia', target, options);
+      expect(await settledAfter(moving, 22_999)).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await moving).toMatchObject({ ok: false, code, homeDeviceId: 'laptop' });
+      expect(waits).toEqual([8_000, 15_000]);
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+    } finally { runtime?.dispose(); runtime = undefined; vi.useRealTimers(); }
+  });
+
+  // Overlapping checks of one home share the call in flight (the menu and the 近况 popover, a menu opened
+  // again); a finished answer is never reused: the confirmation right after asks the home again.
+  it('shares a home check in flight but asks again for every later decision', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResultPayload> => ({ ok: true, result: { companionCloud: COMPANION_CLOUD_VERSION } }));
+    const { homeLink } = askedHome(invoke);
+    const t = setup({ home: 'laptop', homeLink, directory: async () => ({ devices: [device('laptop'), hereRow] }) });
+    const [menu, popover] = await Promise.all([t.runtime.homeChoices('bot_mia'), t.runtime.homeChoices('bot_mia')]);
+    expect(menu).toEqual(popover);
+    expect(menu.mode).toBe('remote');
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: true });
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  // A full and a brief check of one home never share: the forced confirmation does not wait out the
+  // full check in flight, and its brief «unconfirmed» does not end the full check early.
+  it('keeps a full check and a forced brief check of one home apart', async () => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn(silent);
+      const { homeLink } = askedHome(invoke);
+      const t = setup({ home: 'laptop', homeLink, directory: async () => ({ devices: [device('laptop'), hereRow] }) });
+      const menu = t.runtime.homeChoices('bot_mia');
+      const forced = t.runtime.switchHome('bot_mia', 'desk', forcedForLaptop);
+      expect(await settledAfter(forced, 5_000)).toBe(true);
+      expect(await forced).toEqual({ ok: true });
+      expect(await settledAfter(menu, 17_999)).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await menu).toMatchObject({ mode: 'takeOver', reason: 'HOME_UNRESPONSIVE' });
+      expect(invoke).toHaveBeenCalledTimes(3);
+    } finally { runtime?.dispose(); runtime = undefined; vi.useRealTimers(); }
+  });
+
+  it('never shares a check, or its answer, between two homes', async () => {
+    const answers = new Map<string, CompanionHomeAnswer>([['laptop', { kind: 'unconfirmed' }], ['carbon', { kind: 'answered', version: 4 }]]);
+    const status = vi.fn(async (deviceId: string) => answers.get(deviceId)!);
+    const check = coalesceHomeStatus(status);
+    const [laptop, carbon] = await Promise.all([check('laptop', 'full'), check('carbon', 'full')]);
+    expect(status.mock.calls).toEqual([['laptop', 'full'], ['carbon', 'full']]);
+    expect([laptop, carbon]).toEqual([{ kind: 'unconfirmed' }, { kind: 'answered', version: 4 }]);
   });
 
   // #11999 review (zqchris, 11-25): an ordinary take-over is bound to the home its decision saw too. The home

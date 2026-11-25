@@ -10,6 +10,7 @@ import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { MENU_DANGER_TEXT } from '@/components/ui/menu-row';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Spinner } from '@/components/ui/spinner';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -160,6 +161,11 @@ interface ComputerRowModel {
    * the forced action, in the destructive style, like the settings menu (cloud-companions.md §3.1).
    */
   force?: boolean;
+  /**
+   * A cloud companion's home whose state is not confirmed (still being checked, or only a take-over here
+   * is possible): no «running there» claim on the row. Other rows are unchanged.
+   */
+  unconfirmed?: boolean;
   onSelect?: () => void;
 }
 
@@ -177,7 +183,7 @@ function ComputerRows({ rows }: { rows: ComputerRowModel[] }) {
       title={row.force ? t('bots.cloud.forceHere') : row.name}
       muted={!row.current && !row.online}
       danger={row.force}
-      meta={row.force ? undefined : row.current ? t('bots.glance.runningHere') : row.outdated ? t('bots.cloud.targetOutdatedMeta')
+      meta={row.force || row.unconfirmed ? undefined : row.current ? t('bots.glance.runningHere') : row.outdated ? t('bots.cloud.targetOutdatedMeta')
         : row.online ? t('bots.glance.online') : t('bots.glance.offline')}
       inlineMeta
       trailing={
@@ -233,7 +239,9 @@ function CloudComputers({
   // Listed online but not answering: only an explicit, forced take-over here (with its own warning).
   const unresponsive = state.choices?.reason === 'HOME_UNRESPONSIVE';
   const rows: ComputerRowModel[] = [
-    { key: `home:${state.home ?? ''}`, name: state.homeName, current: true, online: true },
+    // The home is only said to be running there once it answered (or it is this computer).
+    { key: `home:${state.home ?? ''}`, name: state.homeName, current: true, online: true,
+      ...(state.checkingHome || state.choices?.mode === 'takeOver' ? { unconfirmed: true } : {}) },
     ...targets
       .filter((target) => target.deviceId !== state.home)
       .map((target) => ({
@@ -258,6 +266,11 @@ function CloudComputers({
         <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.devicesFailed')}</p>
       ) : !state.movable ? (
         <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.resumeToMove', { name: bot.name })}</p>
+      ) : state.checkingHome ? (
+        <p role="status" className="flex items-center gap-1.5 px-2 pb-1 text-12 text-[var(--text-tertiary)]">
+          <Spinner size={12} aria-hidden className="shrink-0" />
+          <span className="min-w-0">{t('bots.cloud.checkingHome', state.homeText(state.checkingName))}</span>
+        </p>
       ) : unresponsive ? (
         <p className="px-2 pb-1 text-12 text-[var(--text-tertiary)]">{t('bots.cloud.homeUnresponsive', { name: bot.name, ...state.homeText(state.decidedHome(state.choices?.homeDeviceId, state.choices?.homeName)?.name) })}</p>
       ) : null}

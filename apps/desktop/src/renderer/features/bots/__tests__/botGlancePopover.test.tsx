@@ -204,6 +204,34 @@ describe('BotGlanceButton', () => {
     expect(switchCompanionHome).toHaveBeenCalledWith('bot-1', 'desk', { force: true, forceHomeDeviceId: decided });
   });
 
+  // cloud-companions.md §3.1 (author self-review, 11-25): opening the popover asks the main computer about its
+  // state (up to about half a minute when it does not answer). Meanwhile the popover says so, and the home row
+  // claims «running there» only once the home answered: never while checking, nor when only a take-over is left.
+  it.each([
+    ['answers', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] }, true],
+    ['cannot be confirmed', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] }, false],
+    ['is explicitly gone', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] }, false],
+  ] as const)('says it is checking the main computer, then shows its state once it %s', async (_, choices, running) => {
+    const cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [],
+      actors: [{ id: 'a-1', externalId: 'bot-1', name: '葫芦', avatar: null, homeDeviceId: 'laptop',
+        homeDevice: { deviceId: 'laptop', name: 'Laptop', online: true, isSelf: false } }] };
+    resetCompanionCloudStoreForTests(cloud);
+    h.local = [{ id: 'bot-1', name: '葫芦', status: 'active', sessionId: 's1' }];
+    let answer!: (value: unknown) => void;
+    Object.assign((window as unknown as { electronAPI: { maker: Record<string, unknown> } }).electronAPI.maker, {
+      getCompanionCloudState: async () => cloud,
+      onCompanionCloudChanged: () => () => undefined,
+      getCompanionHomeChoices: () => new Promise((resolve) => { answer = resolve; }),
+    });
+    render(<BotGlanceButton bot={bot} cloudHome />);
+    fireEvent.click(screen.getByTestId('bot-glance-button'));
+    expect((await screen.findByRole('status')).textContent).toBe('bots.cloud.checkingHome');
+    expect(screen.getAllByTestId('bot-glance-computer')[0]!.textContent).not.toContain('bots.glance.runningHere');
+    answer(choices);
+    await waitFor(() => expect(screen.queryByText('bots.cloud.checkingHome')).toBeNull());
+    expect(screen.getAllByTestId('bot-glance-computer')[0]!.textContent?.includes('bots.glance.runningHere')).toBe(running);
+  });
+
   // PR + file entries share one chronology and one fold; separate lists hid newer files below older PRs.
   it('mixes PRs and files by time with one shared show-more control', async () => {
     h.sessions = [{ id: 'task', title: 'Task', status: 'active' }];
