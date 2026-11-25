@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as ReactI18next from 'react-i18next';
-import { findErrorTailMessage } from '@/lib/errorTailMessage';
+import { findErrorTailMessage, hasSavedPiInterruptedReply } from '@/lib/errorTailMessage';
 import { makerChatStore, remoteErrorMessageForBanner, type ChatMessage } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
 import { ErrorTailErrorBanner } from '../InterruptedTurnBanner';
@@ -79,4 +79,38 @@ describe('terminal error tail across noninteractive boundaries', () => {
     expect(findErrorTailMessage([earlier, ...dismissed])).toBeNull();
     expect(findErrorTailMessage([earlier, ...messages], 'timeout')).toBeNull();
   });
+});
+
+// #9861, unit/jsdom: the existing retry UI tests do not tie saved text to the
+// failed input. Exercise persisted message projection and the reopened banner.
+it.each([
+  { replyToClientId: 'request', showsSavedReply: true },
+  { replyToClientId: 'previous-request', showsSavedReply: false },
+])('describes saved text only for the interrupted Pi reply ($replyToClientId)', ({ replyToClientId, showsSavedReply }) => {
+  const messages = makerChatStore.__mapServerMessagesForTest([
+    {
+      id: 'partial', clientId: 'partial', sessionId: 'pi-tail', role: 'assistant',
+      content: 'Received text', createdAt: new Date(1000).toISOString(),
+      agentMeta: { replyToClientId, turnCompleted: false },
+    },
+    {
+      id: 'failure', clientId: 'failure', sessionId: 'pi-tail', role: 'error',
+      content: { message: 'Stream ended without finish_reason' }, createdAt: new Date(2000).toISOString(),
+      agentMeta: { replyToClientId: 'request' },
+    },
+  ] as Message[]);
+  const error = findErrorTailMessage(messages);
+  const resume = vi.fn();
+  render(<ErrorTailErrorBanner
+    errorText={error!.content}
+    savedInterruptedReply={hasSavedPiInterruptedReply(messages, error ?? undefined)}
+    agentKind="pi"
+    onContinue={resume}
+    onDismiss={() => {}}
+  />);
+  expect(Boolean(screen.queryByText('chat.errorBanner.streamInterruptedSavedReply'))).toBe(showsSavedReply);
+  fireEvent.click(screen.getByRole('button', {
+    name: showsSavedReply ? 'chat.interruptedBanner.continueAction' : 'chat.errorBanner.retry',
+  }));
+  expect(resume).toHaveBeenCalledOnce();
 });

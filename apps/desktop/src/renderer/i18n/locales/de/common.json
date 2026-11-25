@@ -15480,6 +15480,7 @@
       "overloadBusy": "Der Modelldienst ist ausgelastet — der vorgeschaltete Dienst hat derzeit keine Kapazität. Klicke auf „Erneut versuchen“ oder wechsle zu einem anderen Modell.",
       "overloadBusyNoRetry": "Der Modelldienst ist ausgelastet — der vorgeschaltete Dienst hat derzeit keine Kapazität. Versuche es später erneut oder wechsle zu einem anderen Modell.",
       "streamInterrupted": "Der Modellstream wurde unterbrochen. Meist ist das ein vorübergehendes Problem des vorgeschalteten Dienstes — klicke auf „Erneut versuchen“.",
+      "streamInterruptedSavedReply": "Die Antwort wurde unterbrochen. Der bisher empfangene Text wurde gespeichert.",
       "streamInterruptedNoRetry": "Der Modellstream wurde unterbrochen. Meist ist das ein vorübergehendes Problem des vorgeschalteten Dienstes. Versuche es in Kürze erneut.",
       "networkShowRaw": "Fehlerdetails",
       "networkHideRaw": "Details ausblenden",

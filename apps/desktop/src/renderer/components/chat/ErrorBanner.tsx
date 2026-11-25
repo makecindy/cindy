@@ -84,6 +84,7 @@ import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 interface ErrorBannerProps {
   onChooseComputer?: () => void;
   error: string;
+  savedInterruptedReply?: boolean;
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
    *  续跑额度耗尽)时隐藏 Retry、改显「继续」按钮(onSilentStopContinue)。 */
   errorReason?: string | null;
@@ -172,6 +173,7 @@ function OpenAiConnectionSettingsAction({ providerId }: { providerId: string }) 
 export function ErrorBanner({
   onChooseComputer,
   error,
+  savedInterruptedReply,
   errorReason,
   toolLoop,
   outputLimit,
@@ -428,6 +430,7 @@ export function ErrorBanner({
     !isProviderSafetyRefusal && isOverloadErrorMessage(error, undefined, errorReason);
   const isStreamInterrupted =
     !isProviderSafetyRefusal && isStreamInterruptedErrorMessage(error, errorReason);
+  const showSavedInterruptedReply = savedInterruptedReply && !isRecoverable && !isProviderSafetyRefusal;
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = resolveErrorReasonI18nKey(errorReason, error);
   const toolLoopI18nKey =
@@ -698,6 +701,8 @@ export function ErrorBanner({
           maxAttempts: overloadRetryProgress.maxAttempts,
         })
       : t(retryAction ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
+  } else if (showSavedInterruptedReply) {
+    displayError = t('chat.errorBanner.streamInterruptedSavedReply');
   } else if (isStreamInterrupted) {
     // LiteLLM / Responses 流中途空壳 500。协议客户端会写成 OpenAI API error,
     // 对非 OpenAI 模型是误导。只改展示,不自动续跑。
@@ -747,6 +752,7 @@ export function ErrorBanner({
     isNetworkishError ||
     isOverloadError ||
     isStreamInterrupted ||
+    showSavedInterruptedReply ||
     showUnwrappedRaw ||
     isCodexUsageLimitError ||
     Boolean(usageLimitResumeAt) ||
@@ -1088,10 +1094,10 @@ export function ErrorBanner({
               disabled={forkStripEncryptedRunning}
               loading={retrying}
               onClick={() => void handleRetry()}
-              title={t('chat.errorBanner.retryTitle')}
+              title={t(showSavedInterruptedReply ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retryTitle')}
             >
-              <RotateCcw size={12} />
-              {t('chat.errorBanner.retry')}
+              {showSavedInterruptedReply ? <Play size={12} /> : <RotateCcw size={12} />}
+              {t(showSavedInterruptedReply ? 'chat.interruptedBanner.continueAction' : 'chat.errorBanner.retry')}
             </Button>
           )}
           {(showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted && (

@@ -15615,6 +15615,7 @@
       "overloadBusy": "Le service du modèle est occupé : le service en amont n'a pas de capacité disponible pour le moment. Cliquez sur « Réessayer » ou passez à un autre modèle.",
       "overloadBusyNoRetry": "Le service du modèle est occupé : le service en amont n'a pas de capacité disponible pour le moment. Réessayez plus tard ou passez à un autre modèle.",
       "streamInterrupted": "Le flux du modèle a été interrompu. Il s'agit généralement d'un problème temporaire en amont : cliquez sur Réessayer.",
+      "streamInterruptedSavedReply": "La réponse a été interrompue. Le texte reçu a été enregistré.",
       "streamInterruptedNoRetry": "Le flux du modèle a été interrompu. Il s'agit généralement d'un problème temporaire en amont. Réessayez dans un instant.",
       "networkShowRaw": "Détails de l'erreur",
       "networkHideRaw": "Masquer les détails",

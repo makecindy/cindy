@@ -15443,6 +15443,7 @@
       "overloadBusy": "模型之服繁忙，上游暂无余力。可点「再试」，或易一模型。",
       "overloadBusyNoRetry": "模型之服繁忙，上游暂无余力。可稍后再试，或易一模型。",
       "streamInterrupted": "模型输出中道而断。多为上游暂故，可点「再试」。",
+      "streamInterruptedSavedReply": "答复中断，已得之文仍存。",
       "streamInterruptedNoRetry": "模型输出中道而断。多为上游暂故，请稍后再试。",
       "networkShowRaw": "谬误详情",
       "networkHideRaw": "收详情",

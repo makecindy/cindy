@@ -41,6 +41,7 @@ import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export function ErrorMessageCard({
   message,
+  savedInterruptedReply,
   reason,
   providerId,
   toolLoop,
@@ -51,6 +52,7 @@ export function ErrorMessageCard({
   onDiagnose,
 }: {
   message: string;
+  savedInterruptedReply?: boolean;
   onDiagnose?: (error: ErrorDiagnosisSource) => void;
   /** Blocked input has not reached the agent; its explanation is already user-facing. */
   kind?: 'reply-error' | 'blocked-input';
@@ -103,7 +105,9 @@ export function ErrorMessageCard({
           ?? t(isAccountUsageLimitReachedText(decoded) ? 'chat.errorBanner.usageLimitReached' : 'chat.errorBanner.replyFailed');
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
-    : geminiGuidance ?? subscriptionGuidance ?? fallbackText;
+    : geminiGuidance ?? subscriptionGuidance ?? (savedInterruptedReply
+      ? t('chat.errorBanner.streamInterruptedSavedReply')
+      : fallbackText);
   const showRawToggle = kind === 'reply-error' && Boolean(decoded);
 
   if (!text) return null;

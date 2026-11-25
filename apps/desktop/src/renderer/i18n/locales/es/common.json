@@ -15615,6 +15615,7 @@
       "overloadBusy": "El servicio del modelo está ocupado: el proveedor no tiene capacidad en este momento. Haz clic en «Reintentar» o cambia a otro modelo.",
       "overloadBusyNoRetry": "El servicio del modelo está ocupado: el proveedor no tiene capacidad en este momento. Inténtalo más tarde o cambia a otro modelo.",
       "streamInterrupted": "Se interrumpió la transmisión del modelo. Suele ser un problema temporal del proveedor: haz clic en Reintentar.",
+      "streamInterruptedSavedReply": "La respuesta se interrumpió. Se ha guardado el texto recibido hasta ahora.",
       "streamInterruptedNoRetry": "Se interrumpió la transmisión del modelo. Suele ser un problema temporal del proveedor. Vuelve a intentarlo en un momento.",
       "networkShowRaw": "Detalles del error",
       "networkHideRaw": "Ocultar detalles",

@@ -15615,6 +15615,7 @@
       "overloadBusy": "O serviço do modelo está ocupado — o serviço de origem está sem capacidade no momento. Clique em \"Tentar novamente\" ou mude para outro modelo.",
       "overloadBusyNoRetry": "O serviço do modelo está ocupado — o serviço de origem está sem capacidade no momento. Tente novamente mais tarde ou mude para outro modelo.",
       "streamInterrupted": "O fluxo de resposta do modelo foi interrompido. Geralmente, isso é um problema temporário no serviço de origem — clique em Tentar novamente.",
+      "streamInterruptedSavedReply": "A resposta foi interrompida. O texto recebido até agora foi salvo.",
       "streamInterruptedNoRetry": "O fluxo do modelo foi interrompido. Geralmente, isso é um problema temporário no serviço de origem. Tente novamente daqui a pouco.",
       "networkShowRaw": "Detalhes do erro",
       "networkHideRaw": "Ocultar detalhes",

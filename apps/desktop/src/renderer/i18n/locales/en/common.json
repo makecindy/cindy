@@ -15517,6 +15517,7 @@
       "overloadBusy": "The model service is busy — the upstream has no capacity right now. Click “Retry”, or switch to another model.",
       "overloadBusyNoRetry": "The model service is busy — the upstream has no capacity right now. Try again later, or switch to another model.",
       "streamInterrupted": "The model stream was interrupted. This is usually a temporary upstream issue — click Retry.",
+      "streamInterruptedSavedReply": "The reply was interrupted. The text received so far has been saved.",
       "streamInterruptedNoRetry": "The model stream was interrupted. This is usually a temporary upstream issue. Try again in a little while.",
       "networkShowRaw": "Error Details",
       "networkHideRaw": "Hide Details",

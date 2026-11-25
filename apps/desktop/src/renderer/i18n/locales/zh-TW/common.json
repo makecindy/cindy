@@ -15451,6 +15451,7 @@
       "overloadBusy": "模型服務繁忙，上游暫時沒有可用容量。可點選「重試」，或換一個模型。",
       "overloadBusyNoRetry": "模型服務繁忙，上游暫時沒有可用容量。可稍後重試，或換一個模型。",
       "streamInterrupted": "模型輸出中途中斷了。通常是上游暫時故障，可點選「重試」。",
+      "streamInterruptedSavedReply": "回覆中斷。已收到的正文已保留。",
       "streamInterruptedNoRetry": "模型輸出中途中斷了。通常是上游暫時故障，請稍後重試。",
       "networkShowRaw": "錯誤詳情",
       "networkHideRaw": "收起詳情",
