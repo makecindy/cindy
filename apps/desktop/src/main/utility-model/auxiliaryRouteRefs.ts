@@ -60,15 +60,24 @@ function refreshPreferred(routeId: string): void {
     .finally(() => refreshing.delete(key));
 }
 
-/** 一条路由在辅助模型里依次试的目录钉；路由不存在或本机没有能用的来源时为空。 */
-export function expandAuxiliaryRouteRef(routeId: string): string[] {
+/**
+ * 一条路由里本机、没停用的来源，按「路由此刻会选的排第一、其余照路由里的先后」排好。路由不存在时为空。
+ * 辅助模型与 Subagent 共用：它们都只能用本机的来源，也都不能等一次选路。
+ */
+export function localRouteCandidatesInPickOrder(routeId: string): ModelGroupCandidate[] {
   const route = routes().find((item) => item.id === routeId);
   if (!route) return [];
-  const pins = [...new Set(localCandidates(route).map(pinOf))];
-  if (pins.length === 0) return [];
+  const members = localCandidates(route);
+  if (members.length === 0) return [];
   refreshPreferred(routeId);
   const first = preferred.get(`${activeOwnerScopeKey()}\u0000${routeId}`)?.pin;
-  return first && pins.includes(first) ? [first, ...pins.filter((pin) => pin !== first)] : pins;
+  const at = first ? members.findIndex((candidate) => pinOf(candidate) === first) : -1;
+  return at > 0 ? [members[at]!, ...members.filter((_, index) => index !== at)] : members;
+}
+
+/** 一条路由在辅助模型里依次试的目录钉；路由不存在或本机没有能用的来源时为空。 */
+export function expandAuxiliaryRouteRef(routeId: string): string[] {
+  return [...new Set(localRouteCandidatesInPickOrder(routeId).map(pinOf))];
 }
 
 /**
