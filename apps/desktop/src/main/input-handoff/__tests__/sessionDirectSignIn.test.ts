@@ -708,6 +708,57 @@ describe('a waiting card watching its window', () => {
     run.session.cancel();
   });
 
+  // PR #12766 review (codex r4693526385): the same race with a look that finds nothing: it set the wait back on for the
+  // step the owner had already left, so the next form was swapped under the phone when the page added a field.
+  // Entry: window watch with session.submit. Unit tier.
+  it('does not wait over the next step after a passive look that started on the earlier one', async () => {
+    const { driver, state } = desktop('address');
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    let next = false;
+    let moreFields = false;
+    driver.act = async (request) => {
+      if (request.kind !== 'text') next = true;
+      return { ok: true };
+    };
+    const read = driver.snapshot.bind(driver);
+    // Confirming the address moves on to the next form of the same page.
+    driver.snapshot = async (pid, window) => next
+      ? { pid, app: chrome.app, bundleId: chrome.bundleId, frontmost: true, window: { index: 1, title: 'Sign in', frame },
+        nodes: page('https://shop.example.com/', [node('1.0', 'AXTextField', { title: 'Workspace name' }),
+          ...(moreFields ? [node('1.1', 'AXTextField', { title: 'Team size' })] : [])]) }
+      : read(pid, window);
+    const releases: Array<() => void> = [];
+    const qr = vi.fn(() => new Promise<null>((resolve) => { releases.push(() => resolve(null)); }));
+    driver.qr = qr;
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    state.screen = 'blank';
+    await vi.waitFor(() => expect(qr).toHaveBeenCalled());
+    state.screen = 'address';
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    const asked = run.latest();
+    const street = asked.controls.find((c) => c.kind === 'text')!;
+    await run.session.submit({ expectedRevision: asked.revision, values: { [street.id]: '1 Main St' }, action: { kind: 'submit' } }, { deviceId: 'phone' });
+    await settle();
+    const labels = () => run.latest().controls.map((c) => c.kind === 'text' && c.label);
+    expect(labels()).toEqual(['Workspace name']);
+    const revision = run.latest().revision;
+    // The page adds a field as the late look returns.
+    moreFields = true;
+    releases.splice(0).forEach((release) => release());
+    await settle();
+    expect(run.latest().revision).toBe(revision);
+    expect(labels()).toEqual(['Workspace name']);
+    expect(run.finished).toEqual([]);
+    run.session.cancel();
+    releases.splice(0).forEach((release) => release());
+  });
+
   it('shows a device code that replaces the sign-in fields while the completion hint is pending', async () => {
     const { driver, state } = desktop('password');
     let deviceCode = false;

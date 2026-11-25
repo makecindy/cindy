@@ -1226,13 +1226,21 @@ export class InputHandoffSession {
       const waiting = this.hintsPending(step) && !actionable(this.shownStep(step));
       // While waiting the card keeps its step during the look: an owner claiming it meanwhile gets that step.
       if (!waiting) this.step = step;
+      const shown = this.step;
+      const submissions = this.submissions;
       const scanning = !waiting
         ? await this.showQr()
         : list.frontmost === target.pid && window.focused && window.frame?.length === 4
           ? await this.showQr(window.frame, step)
           : false;
-      // The owner may have ended it or started answering meanwhile.
+      // The owner may have ended it or started answering meanwhile, or already moved on through the card: what this
+      // look found, or did not, is about a step that is gone.
       if (this.ended || this.busy || this.phase !== 'ready') return;
+      if (this.step !== shown || this.submissions !== submissions) {
+        // A code a raising look set up for the gone step is not this one's (a passive look already dropped it).
+        if (scanning) { this.stopQr(); this.dropPicture(); }
+        return;
+      }
       if (scanning) {
         this.step = step;
         this.publish('ready');
