@@ -7,6 +7,9 @@
  * @vitest-environment node
  */
 
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 // 透传真实 spawn,只计数:用来断言某些路径根本没有启动真实命令。
@@ -123,6 +126,18 @@ describe('executePreRunHook', () => {
     expect(result.decision).toBe('block');
     expect(result.status).toBe('failed');
     expect(result.exitCode).not.toBe(2);
+  });
+
+  // Bug: a PR follow-up's check script was deleted and every run reported only
+  // "pre-run hook failed with exit code 1: node:internal/modules/cjs/loader:1520",
+  // Node's crash location, instead of the missing file. Real Node process boundary.
+  it('a crashed Node check reports the error line, not the crash location', async () => {
+    const missing = path.join(os.tmpdir(), `cindy-missing-check-${process.pid}`, 'gate.mjs');
+    const result = await executePreRunHook({ command: `node "${missing}"`, stdinPayload: payload });
+    expect(result.decision).toBe('block');
+    expect(formatPreRunHookFailure(result)).toBe(
+      `pre-run hook failed with exit code 1: Error: Cannot find module '${missing}'`,
+    );
   });
 
   it('stdout / stderr 分别捕获', async () => {
