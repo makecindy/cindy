@@ -11,7 +11,6 @@ import type {
 } from './collabSendOutcome.js';
 import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 import {
-  dispatchFactsForTurn,
   dropLeadDispatchFact,
   noteLeadDispatchFact,
   resetDispatchClaimState,
@@ -781,9 +780,6 @@ async function evaluateLeadTurnGateFor(
     ].join('\n');
   }
 
-  // 读一次凭据：推进轮次观察并清掉过期项，核对本身看整本账。
-  // 推进轮次观察并清掉过期项（evaluateTurnGate 内部自己数本回合的派发）。
-  dispatchFactsForTurn(params.leadSessionId, params.turnGeneration);
   return evaluateTurnGate({
     leadSessionId: params.leadSessionId,
     turnGeneration: params.turnGeneration,
