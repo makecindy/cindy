@@ -15,6 +15,7 @@ import path from 'node:path';
 import { registerSendToSessionTool, XdtHelperToolRegistry, type SendToSessionCallback } from '@cindy/mcps';
 import { sessionQueueOriginForDispatcher } from '../../maker-ipc/sessionControlService';
 import { buildSessionCreatedBy, serializeSessionCreatedBy } from '../../../shared/sessionOrigin';
+import { isAuthorizedExternalDelivery } from '../../maker-ipc/crashRestoreQueueRelease.js';
 import type { RemoteAgentKind } from '@cindy/device-link';
 import { ScriptTarget, transpileModule } from 'typescript';
 import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
@@ -119,6 +120,7 @@ export function sharedAccountSessionTool(dispatcherSessionId: string, ports: Rec
     assertTaskActionCurrent: none, hasTaskActionAuthorization: () => false,
     captureDataOwnerBroadcastScope: noop, isDataOwnerBroadcastScopeCurrent: () => true,
     captureSessionAgentRequest: async (_id: string, message: string) => ({ message }),
+    isAuthorizedExternalDelivery,
     AUTO_REVIEW_DELEGATED_CONTINUATION: Symbol(), verifiedOwnerRequestText: noop,
     isDeviceLinkInvoke: () => false,
     hostPluginInputSource: noop, readSenderIdentity: none, sessionQueueOriginForDispatcher,
