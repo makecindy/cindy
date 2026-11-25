@@ -42,7 +42,7 @@ vi.mock('@/session/draftModelMemory',()=>({useDraftModelMemoryVersion:()=>0}));
 vi.mock('@/session/sessionModelMirror',()=>({useSessionModelMirrorVersion:()=>0}));
 vi.mock('@/session/modelPickerRows',()=>({budgetRowDisabled:()=>false,presentPickerPrice:()=>null}));
 vi.mock('@/session/unifiedMobileModels',async importOriginal=>({...await importOriginal<any>(),mobileUnifiedEntries:(providers:any[])=>test.entriesFor?test.entriesFor(providers):test.entries}));
-vi.mock('react-i18next',()=>({useTranslation:()=>({t:(key:string, options?: { provider?: string; device?: string }) =>
+vi.mock('react-i18next',()=>({useTranslation:()=>({i18n:{language:"en"},t:(key:string, options?: { provider?: string; device?: string }) =>
   key === 'models.unified.remoteCopyUnavailableOn' ? `${options?.provider} on ${options?.device} is unavailable` : key})}));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;
 let root:ReturnType<typeof createRoot>;
@@ -66,6 +66,41 @@ async function mount(onSelect=vi.fn(async()=>true),extra={}) {
   } as any)));
   return {onSelect,onClose};
 }
+// #12452: the iOS ordinary-session picker offered both Gemini rows in All but neither source.
+// Production sheet output and selection callbacks cover the gap. Minimal input: one selectable plugin group. Tier: unit.
+it('filters eligible plugin sources by provider ID and searches across them', async () => {
+  const selectPlugin = vi.fn(async () => true);
+  const engine = (key: string, name: string, state = 'available') => ({
+    key, name, providerId: `acp-plugin:${key}`, availability: { state },
+    defaultModelAllowed: false,
+    models: [{ id: 'gemini', displayName: 'Gemini', efforts: [] }],
+  });
+  const first = engine('one:acp', 'Antigravity');
+  const second = engine('two:acp', 'Other');
+  const disabled = engine('disabled:acp', 'Disabled', 'unavailable');
+  const { onClose } = await mount(undefined, { unified: {
+    scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({}), onSelect: vi.fn(),
+    pluginEngines: { engines: [first, second, disabled], active: null, sourceFilter: true, onSelect: selectPlugin },
+  } });
+  const groups = () => test.view.pluginEngines.groups.map((group: { providerId: string }) => group.providerId);
+  expect(groups()).toEqual([first.providerId, second.providerId]);
+  expect(test.view.filters.filter((item: { id: string }) => item.id.startsWith('acp-plugin:'))).toEqual([
+    expect.objectContaining({ id: first.providerId, label: first.name }),
+    expect.objectContaining({ id: second.providerId, label: second.name }),
+  ]);
+  await act(async () => test.view.onFilter(first.providerId));
+  expect(groups()).toEqual([first.providerId]);
+  expect(test.view.groups).toEqual([]);
+  expect(selectPlugin).not.toHaveBeenCalled();
+  await act(async () => test.view.onQuery('Gemini'));
+  expect(groups()).toEqual([first.providerId, second.providerId]);
+  await act(async () => test.view.onQuery(''));
+  expect(groups()).toEqual([first.providerId]);
+  await act(async () => test.view.pluginEngines.onSelect(test.view.pluginEngines.groups[0].rows[0]));
+  expect(selectPlugin).toHaveBeenCalledExactlyOnceWith({ providerId: first.providerId, modelId: 'gemini' });
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
 it('keeps the sheet and preferences unchanged after cancelled selection',async()=>{
   const {onClose}=await mount(vi.fn(async()=>false));
   await act(async()=>test.view.onSelect(test.view.groups[0].rows[0]));

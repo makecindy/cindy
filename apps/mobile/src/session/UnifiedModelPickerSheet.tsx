@@ -21,6 +21,7 @@ import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import {
   buildPluginEngineGroups,
   formatPluginEnginePickerQuota,
+  isPluginEngineProviderId,
   type MobilePluginEngine,
   type MobilePluginEngineSelection,
   type PluginEngineEffort,
@@ -214,6 +215,8 @@ export interface UnifiedMobileModelGroupOptions {
 
 export interface UnifiedMobilePluginEngineOptions {
   engines: readonly MobilePluginEngine[];
+  /** 普通会话可以按现有可选插件引擎筛选。 */
+  sourceFilter?: boolean;
   /** 当前选中的引擎与模型(新任务的选择、插件引擎任务自己的引擎、或待切到的引擎)；null = 选的是内置模型。 */
   active: MobilePluginEngineSelection | null;
   /** 返回 false = 没有应用(选择器留在原地)。 */
@@ -910,7 +913,28 @@ export function UnifiedModelPickerSheet(
         }
     return null;
   })();
-  const shownFilter = hiddenFilterTarget ?? filter;
+  const pluginEngineLabels = {
+    defaultModel: t("models.pluginEngines.defaultModel"),
+    effort: (effort: PluginEngineEffort) => t(`models.options.effortLevels.${effort}`, { defaultValue: effort }),
+    unavailable: (name: string, hint?: string) => hint
+      ? t("models.pluginEngines.unavailableWithHint", { engine: name, hint })
+      : t("models.pluginEngines.unavailable", { engine: name }),
+  };
+  const unfilteredPluginGroups = pluginEngineOptions?.sourceFilter
+    ? buildPluginEngineGroups(pluginEngineOptions, "", pluginEngineLabels)
+    : null;
+  const pluginEngineSources = unfilteredPluginGroups
+    ? unfilteredPluginGroups.filter((group) => group.rows.some((row) => !row.disabled))
+      .map((group) => ({
+        id: group.providerId,
+        label: group.title,
+        providerMark: { name: group.title, providerId: group.providerId, customIcon: group.rows[0]?.iconDataUrl },
+      }))
+    : [];
+  const pluginEngineFilter = pluginEngineSources.find((source) => source.id === filter);
+  const shownFilter = unfilteredPluginGroups && isPluginEngineProviderId(filter) && !pluginEngineFilter
+    ? "all"
+    : hiddenFilterTarget ?? filter;
   const all = query.trim() || shownFilter === "all";
   const filtered = rows.filter(
     (row) => !hiddenSources.has(row.entry.providerId) && matches(row) && (all || shownFilter === row.entry.providerId),
@@ -966,15 +990,12 @@ export function UnifiedModelPickerSheet(
           rows: group,
         });
     }
-  // 插件引擎(「全部」或搜索命中时)：每个引擎一段，列在内置模型之前(与 Desktop 面板顺序一致)。
-  const pluginEngineGroups = pluginEngineOptions && all
-    ? buildPluginEngineGroups(pluginEngineOptions, query, {
-        defaultModel: t("models.pluginEngines.defaultModel"),
-        effort: (effort) => t(`models.options.effortLevels.${effort}`, { defaultValue: effort }),
-        unavailable: (name, hint) => hint
-          ? t("models.pluginEngines.unavailableWithHint", { engine: name, hint })
-          : t("models.pluginEngines.unavailable", { engine: name }),
-      }).map((group) => {
+  const pluginEngineGroups = pluginEngineOptions && (all || pluginEngineFilter)
+    ? (query.trim() || !unfilteredPluginGroups
+      ? buildPluginEngineGroups(pluginEngineOptions, query, pluginEngineLabels)
+      : unfilteredPluginGroups)
+      .filter((group) => all || group.providerId === pluginEngineFilter?.id)
+      .map((group) => {
         const quota = formatPluginEnginePickerQuota(
           pluginEngineQuotas?.[group.providerId],
           now,
@@ -1515,6 +1536,7 @@ export function UnifiedModelPickerSheet(
               customIcon: provider.customIcon,
             },
           })),
+        ...pluginEngineSources,
         ...sourceFilters,
       ]}
       groups={groups}

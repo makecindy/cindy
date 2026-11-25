@@ -9588,12 +9588,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         : null;
     return {
       engines: pluginEngines.engines,
+      sourceFilter: pluginEngineSwitchEligible && sessionAgentSwitchSupported,
       active,
       onSelect: selectComposerPluginEngine,
       onOpen: pluginEngines.refresh,
     };
   }, [agentSwitchIntent, currentSession, pluginEngineSwitchEligible, pluginEngineSwitchIntent, pluginEngineTask,
-    pluginEngineTargetIsRemote, pluginEngines.engines, pluginEngines.refresh, selectComposerPluginEngine]);
+    pluginEngineTargetIsRemote, pluginEngines.engines, pluginEngines.refresh, selectComposerPluginEngine, sessionAgentSwitchSupported]);
 
   // 模型组(model-groups.md §6.3)：列出被控电脑的模式；选一个，就请那台按它的规则、只在任务此刻所在的位置里
   // 挑一个来源，再走选模型的同一条路径换过去(跨引擎、换位置按既有意图登记)。不留选中态，之后不会自己再换。
