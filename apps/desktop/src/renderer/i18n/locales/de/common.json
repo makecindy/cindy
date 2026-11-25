@@ -9224,6 +9224,7 @@
         "taskWorkdirBoundary": "Das Arbeitsverzeichnis bleibt auf dem Zielcomputer. Ändere es dort.",
         "configurationLoading": "Einstellungen werden geladen…",
         "configurationReadFailed": "Einstellungen konnten nicht geladen werden.",
+        "settingsWriteUnconfirmed": "Das Speichern konnte nicht bestätigt werden. Aktualisiere die Einstellungen und prüfe sie vor einem erneuten Versuch.",
         "refreshConfiguration": "Einstellungen aktualisieren",
         "enableBeforeConfigure": "Dieses Plugin ist deaktiviert. Aktiviere es vor der Konfiguration mit dem Schalter oben.",
         "settingsPageUnavailable": "Öffne Cindy auf {{device}}, um die Einstellungsseite dieses Plugins zu verwenden. Die Version auf dem Zielcomputer kann sie nicht aus der Ferne anzeigen.",

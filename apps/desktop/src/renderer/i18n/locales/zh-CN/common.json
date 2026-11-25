@@ -9181,6 +9181,7 @@
         "taskWorkdirBoundary": "工作目录沿用目标电脑的设置，请在目标电脑修改。",
         "configurationLoading": "正在读取设置…",
         "configurationReadFailed": "未能读取设置。",
+        "settingsWriteUnconfirmed": "未能确认保存结果。请刷新设置，核对后再决定是否重试。",
         "refreshConfiguration": "刷新设置",
         "enableBeforeConfigure": "插件已停用，请先打开上方开关，再进行配置。",
         "settingsPageUnavailable": "请在 {{device}} 的 Cindy 中打开此插件的设置页，目标电脑当前版本暂不支持远程显示。",

@@ -9224,6 +9224,7 @@
         "taskWorkdirBoundary": "The working directory stays on the target computer. Change it there.",
         "configurationLoading": "Loading settings…",
         "configurationReadFailed": "Could not load settings.",
+        "settingsWriteUnconfirmed": "Save result could not be confirmed. Refresh settings to check before retrying.",
         "refreshConfiguration": "Refresh Settings",
         "enableBeforeConfigure": "This plugin is disabled. Enable it with the switch above before configuring.",
         "settingsPageUnavailable": "Open Cindy on {{device}} to use this plugin’s settings page. This version of the target computer cannot display it remotely.",

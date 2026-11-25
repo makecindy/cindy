@@ -9298,6 +9298,7 @@
         "taskWorkdirBoundary": "O diretório de trabalho permanece no computador de destino. Altere-o lá.",
         "configurationLoading": "Carregando configurações…",
         "configurationReadFailed": "Não foi possível carregar as configurações.",
+        "settingsWriteUnconfirmed": "Não foi possível confirmar o salvamento. Atualize as configurações para verificar antes de tentar novamente.",
         "refreshConfiguration": "Atualizar configurações",
         "enableBeforeConfigure": "Este plugin está desativado. Ative-o com o botão acima antes de configurar.",
         "settingsPageUnavailable": "Abra o Cindy em {{device}} para usar a página de configurações deste plugin. Esta versão do computador de destino não pode exibi-la remotamente.",

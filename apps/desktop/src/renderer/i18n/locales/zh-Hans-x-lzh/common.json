@@ -9167,6 +9167,7 @@
         "taskWorkdirBoundary": "工作目录依目标之机所设，请于彼机改之。",
         "configurationLoading": "方读规制…",
         "configurationReadFailed": "规制未能读取。",
+        "settingsWriteUnconfirmed": "存录是否得成，尚未可知。请重读规制，验明后再试。",
         "refreshConfiguration": "重整规制",
         "enableBeforeConfigure": "法器已禁用，请先启上方开关，再设之。",
         "settingsPageUnavailable": "请于 {{device}} 之 Cindy 中启此法器之规制页；目标之机今版尚不能远程显示。",
