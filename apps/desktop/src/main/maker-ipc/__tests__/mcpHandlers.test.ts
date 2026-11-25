@@ -22,11 +22,14 @@ import {
 import type { CustomMcpInput, CustomMcpRemoteConfig } from '../../../shared/customMcp.js';
 import { MAKER_INVOKE } from '../channels.js';
 import { createCustomMcpServerForSetup, createCustomMcpServerFromMain, registerMcpHandlers, type McpHandlerDeps } from '../mcpHandlers.js';
+import { callCloudManagement, cloudManagementProviderRegistry } from '../../host-settings/managementCalls.js';
+import { configureCloudMcpCredentials, listMcpManagement } from '../../host-settings/managementData.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { CustomMcpProvider } from '../../mcp-integrations/custom-mcp-provider.js';
 import { updateCustomMcpServer as updateFromNativeForm } from '../../../renderer/lib/customMcpServers.js';
 
+vi.mock('../../instance-runtime/config.js', () => ({ getInstanceConfig: () => ({}) }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 
 // This suite uses isolated SQLite fixtures; OS encryption is covered by the store suite.
@@ -123,6 +126,42 @@ describe('mcp:custom:* CRUD handlers', () => {
     await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_DELETE, 'broken-http');
     await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_DELETE, 'broken-local');
     expect(await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_LIST)).toEqual({ servers: [validConfig] });
+  });
+
+  // #11295, db tier: a mixed local/remote catalog must keep cloud HTTP CRUD working.
+  // UI-only and fake domain adapters do not exercise the real, renderer-guarded handlers.
+  it('keeps cloud management limited to remote transports in a mixed native catalog', async () => {
+    mountDb();
+    const local = { id: 'stdio-only', name: 'Private tool', transport: 'stdio' as const,
+      command: 'private-command', args: [], env: { LOCAL: 'test-private' } };
+    await createCustomMcpServer(local);
+    const native = new IpcHarness();
+    registerMcpHandlers(cloudManagementProviderRegistry(native), makeDeps());
+    vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => { throw new Error('[PERMISSION_DENIED]'); });
+    configureCloudMcpCredentials({ has: () => false, set: vi.fn(), remove: vi.fn() });
+    const caller = { key: 'cloud-owner', assertCurrent() {} };
+    const exec = { signal: new AbortController().signal, assertCurrent() {}, prompt() {}, onCancel() {} };
+    const [create] = await listMcpManagement(caller);
+    expect(await callCloudManagement(MAKER_INVOKE.MCP_CUSTOM_LIST, [], exec)).toEqual({ servers: [] });
+    const values = { name: 'HTTP Tool', url: 'https://example.invalid/mcp', transport: 'http' };
+    await create!.actions[0]!.run(values, exec);
+    const entries = await listMcpManagement(caller);
+    expect(entries.map(entry => entry.label)).toEqual(['Add MCP', 'HTTP Tool']);
+    const edit = entries[1]!.actions.find(action => action.intent === 'edit')!;
+    await edit.run({ ...values, name: 'Changed' }, exec);
+    const renamed = (await listMcpManagement(caller)).find(entry => entry.label === 'Changed')!;
+    await renamed.actions.find(action => action.intent === 'delete')!.run({}, exec);
+
+    const stdioInput = { id: 'new-local', name: 'Local', transport: 'stdio', command: 'uvx',
+      args: [], envChanges: { set: {}, remove: [] } };
+    for (const [channel, input] of [
+      [MAKER_INVOKE.MCP_CUSTOM_CREATE, stdioInput],
+      [MAKER_INVOKE.MCP_CUSTOM_UPDATE, { ...validConfig, id: local.id }],
+      [MAKER_INVOKE.MCP_CUSTOM_DELETE, local.id],
+    ] as const) {
+      await expect(callCloudManagement(channel, [input], exec)).rejects.toThrow(/PERMISSION_DENIED/);
+    }
+    expect(await listCustomMcpServers()).toEqual([local]);
   });
 
   // Security regression (db tier): an HTTP token survived HTTP → stdio → another HTTP URL.

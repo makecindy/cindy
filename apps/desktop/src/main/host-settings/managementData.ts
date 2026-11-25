@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Maker } from '@cindy/maker-core';
-import type { CustomMcpConfig } from '../../shared/customMcp.js';
+import type { CustomMcpRemoteConfig } from '../../shared/customMcp.js';
 import { callCloudManagement } from './managementCalls.js';
 import {
   managementReadExecution,
@@ -90,7 +90,7 @@ export async function listMcpManagement(caller: ManagementCaller): Promise<Manag
   const raw = managementRecord(await callCloudManagement('maker:mcp:custom:list', [], read));
   if (!Array.isArray(raw.servers) || !mcpCredentials) throw new Error('MANAGEMENT_MCP_UNAVAILABLE');
   const credentials = mcpCredentials;
-  const fields = (value?: CustomMcpConfig) => [
+  const fields = (value?: CustomMcpRemoteConfig) => [
     { ...managementTextField('name', 'text', true, value?.name), maxLength: 60 },
     managementTextField('url', 'text', !value, value?.url),
     {
@@ -101,7 +101,7 @@ export async function listMcpManagement(caller: ManagementCaller): Promise<Manag
       ],
     },
   ];
-  const config = (values: Record<string, string>, before?: CustomMcpConfig): CustomMcpConfig => {
+  const config = (values: Record<string, string>, before?: CustomMcpRemoteConfig): CustomMcpRemoteConfig => {
     const address = values.url?.trim() || before?.url;
     if (!address) throw new Error('MANAGEMENT_INVALID_INPUT');
     const url = new URL(address);
@@ -142,7 +142,7 @@ export async function listMcpManagement(caller: ManagementCaller): Promise<Manag
       ],
     },
   ];
-  for (const server of raw.servers as CustomMcpConfig[]) {
+  for (const server of raw.servers as CustomMcpRemoteConfig[]) {
     const resource = `mcp:${server.id}`,
       hadToken = credentials.has(server.id);
     const check = async (execution: ManagementExecution) => {
@@ -152,7 +152,7 @@ export async function listMcpManagement(caller: ManagementCaller): Promise<Manag
       execution.assertCurrent();
       if (
         JSON.stringify(
-          (fresh.servers as CustomMcpConfig[]).find((item) => item.id === server.id),
+          (fresh.servers as CustomMcpRemoteConfig[]).find((item) => item.id === server.id),
         ) !== JSON.stringify(server) ||
         credentials.has(server.id) !== hadToken
       )

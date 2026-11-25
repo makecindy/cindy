@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { extractIpcError } from '../../shared/ipcError.js';
 import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { cloudManagementExecution, isCloudManagementInvocation } from '../host-settings/managementCalls.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import type { CustomMcpListContext, CustomMcpListEntry, CustomMcpInput, CustomMcpTokenChange } from '../../shared/customMcp.js';
 import type { McpDuplicateChoice, McpDuplicateReport } from '../../shared/customMcp.js';
@@ -111,13 +112,28 @@ export function createCustomMcpServerFromMain(input: unknown, token: string | nu
   return mainProcessMcpCreate(input, token);
 }
 
+/** The cloud settings service has only the existing HTTP/SSE management surface. */
+function isCloudSettingsCaller(event: unknown): boolean {
+  if (isCloudManagementInvocation(event)) return true;
+  assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+  return false;
+}
+
+function assertCloudTransportAllowed(transport: unknown): void {
+  if (transport !== 'http' && transport !== 'sse') {
+    throwIpcError('PERMISSION_DENIED', 'Only remote MCP connections can be managed here');
+  }
+}
+
 export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandlerDeps): void {
   // A late token write from one save must never attach to the next save's transport.
   // Capture the owner before queuing so an account switch cannot redirect pending writes.
   let mutations: Promise<unknown> = Promise.resolve();
   function mutate<T>(operation: (assertOwner: () => void) => Promise<T>): Promise<T> {
     const owner = getCurrentDbClientSnapshot();
+    const execution = cloudManagementExecution();
     const assertOwner = () => {
+      execution?.assertCurrent();
       if (!owner || getCurrentDbClientSnapshot() !== owner) throwIpcError('PERMISSION_DENIED', 'MCP settings owner changed');
     };
     const result = mutations.then(() => { assertOwner(); return operation(assertOwner); });
@@ -151,7 +167,11 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     return { ok: true };
   });
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_LIST, async (event, context: unknown) => {
-    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    const cloud = isCloudSettingsCaller(event);
+    if (cloud) {
+      const result = await readCustomMcpServers();
+      return { servers: result.servers.filter(server => server.transport !== 'stdio') };
+    }
     const parsed = context === undefined ? undefined : listContextSchema.safeParse(context);
     if (parsed && !parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid MCP catalog context');
     const input = parsed?.data;
@@ -208,7 +228,8 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
   }
 
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (event, input: unknown, tokenInput: unknown) => {
-    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    const cloud = isCloudSettingsCaller(event);
+    if (cloud) assertCloudTransportAllowed((input as Partial<CustomMcpInput> | null)?.transport);
     const change = parseTokenChange(tokenInput);
     await mutate(assertOwner => createServer(input, change.action === 'set' ? change.value : null, assertOwner));
     return { ok: true };
@@ -230,13 +251,15 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
   });
 
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (event, input: unknown, tokenInput: unknown) => {
-    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    const cloud = isCloudSettingsCaller(event);
     const v = validateCustomMcpInput(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
     const config = input as CustomMcpInput;
+    if (cloud) assertCloudTransportAllowed(config.transport);
     const change = parseTokenChange(tokenInput);
     await mutate(async assertOwner => {
       const previous = (await listCustomMcpRuntimeGenerations()).find(row => row.id === config.id);
+      if (cloud) assertCloudTransportAllowed(previous?.transport);
       if (!previous) throwIpcError('NOT_FOUND', `custom mcp '${config.id}' not found`);
       assertOwner();
       // A failed conversion into stdio must retain the working remote credential.
@@ -257,11 +280,16 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
   });
 
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_DELETE, async (event, mcpId: unknown) => {
-    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    const cloud = isCloudSettingsCaller(event);
     if (typeof mcpId !== 'string' || mcpId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'mcpId required');
     }
     await mutate(async assertOwner => {
+      if (cloud) {
+        const previous = (await listCustomMcpRuntimeGenerations()).find(row => row.id === mcpId);
+        assertCloudTransportAllowed(previous?.transport);
+        assertOwner();
+      }
       await deleteCustomMcpServer(mcpId);
       assertOwner();
       // Deletion must revoke the server even if orphan cleanup fails. Creation always clears it first.
@@ -274,7 +302,7 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
   // 兼容旧 token-only 调用方；原生设置已通过单次保存 IPC 处理凭证和发布。
   // 无 DB 改动；仅重跑 afterChange()（refreshProviders + broadcastChanged）。
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_REFRESH, async (event) => {
-    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    isCloudSettingsCaller(event);
     await mutate(() => afterChange());
     return { ok: true };
   });
