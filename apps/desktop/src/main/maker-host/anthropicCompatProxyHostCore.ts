@@ -688,11 +688,11 @@ function createModelRoutingTransform(): RoutingTransform {
     const hostedAccess = piSessionId ? getPiProxyHostedModelAccess(piSessionId, claimedPiSessionToken) : undefined;
     if (hostedAccess && !hostedAccess.isCurrent())
       return refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.');
-    const childSignal = piSessionId && subagentRoute && !piGuest && hostedAccess
+    const hostedSignal = piSessionId && !piGuest && hostedAccess
       ? getPiProxySessionSignal(piSessionId, claimedPiSessionToken) : null;
     const childProviderId = piProviderId ?? 'xd';
-    const authorizeHostedChild = childSignal && piSessionId && hostedAccess ? (model: string) =>
-      !childSignal.aborted && hostedPiChildOffersModel(piSessionId, childProviderId, model, hostedAccess.allowsModel) : undefined;
+    const authorizeHostedChild = subagentRoute && hostedSignal && piSessionId && hostedAccess ? (model: string) =>
+      !hostedSignal.aborted && hostedPiChildOffersModel(piSessionId, childProviderId, model, hostedAccess.allowsModel) : undefined;
     // The header must still match its own token. Only the live, owner-issued
     // pool reservation may route that token through a different connection.
     const pooledPiRoute = !subagentRoute && poolRoute?.logicalModel && selectedPiProviderId !== null
@@ -795,12 +795,18 @@ function createModelRoutingTransform(): RoutingTransform {
       return pooledPiDecision?.decision ?? unavailablePiProviderRoute(piProviderId);
     }
     if (piSessionId && piProviderId && (isOpenAiSubscriptionProviderId(piProviderId) || isXaiSubscriptionProviderId(piProviderId))) {
+      // The native forwarder may await decoding and credential reads. It must
+      // recheck the grant that minted this token, not a replacement grant.
+      const authorizeHostedRequest = authorizeHostedChild
+        ?? (!subagentRoute && hostedSignal && hostedAccess ? (model: string) =>
+          hostedAccess.isCurrent() && hostedProviderOffersModel(piSessionId, piProviderId, 'pi', model)
+          && hostedAccess.isCurrent() && !hostedSignal.aborted : undefined);
       return {
         // PI has already built the provider-native request. The local handler
         // authenticates and forwards it; the xAI forwarder also restores its
         // provider server tools, but no Claude protocol bridge runs.
         localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId, undefined,
-          getPiProxySubscriptionAccount(piSessionId, claimedPiSessionToken), authorizeHostedChild),
+          getPiProxySubscriptionAccount(piSessionId, claimedPiSessionToken), authorizeHostedRequest),
       };
     }
     const isPiGatewayRequest = Boolean(

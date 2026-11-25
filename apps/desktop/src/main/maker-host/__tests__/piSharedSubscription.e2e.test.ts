@@ -9,7 +9,7 @@ import { expect, it, vi } from 'vitest';
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
 import { buildUserProvider } from '@cindy/model-providers';
 
-const fixture = vi.hoisted(() => ({ fetch: vi.fn() }));
+const fixture = vi.hoisted(() => ({ fetch: vi.fn(), onReadAuth: undefined as (() => void) | undefined }));
 vi.mock('../../appSessionState.js', () => ({
   getDataOwnerLifetime: () => 0,
   isAppSessionBoundaryPending: () => false, activeOwnerScopeKey: () => 'cloud:pi-codec-fixture',
@@ -25,14 +25,17 @@ vi.mock('../logger-adapter.js', () => {
 // routing transform, native decoder and live grant checks are production code.
 vi.mock('../anthropic-responses-bridge-host.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../anthropic-responses-bridge-host.js')>();
-  return { ...actual, getPiNativeSubscriptionHandler: (...[provider, session, , account, authorizeHostedChild]:
+  return { ...actual, getPiNativeSubscriptionHandler: (...[provider, session, , account, authorizeHostedRequest]:
     Parameters<typeof actual.getPiNativeSubscriptionHandler>) =>
     actual.getPiNativeSubscriptionHandler(provider, session, {
       fetch: fixture.fetch,
-      getChatgptAuth: async () => ({ accessToken: 'fixture-token', accountId: 'fixture-account' }),
+      getChatgptAuth: async () => {
+        fixture.onReadAuth?.();
+        return { accessToken: 'fixture-token', accountId: 'fixture-account' };
+      },
       getGrokToken: async () => 'fixture-token', peekGrokToken: () => 'fixture-token',
       invalidateChatgpt: async () => false, invalidateXai: async () => 'ignored', recordXaiRateLimit() {},
-    }, account, authorizeHostedChild),
+    }, account, authorizeHostedRequest),
   };
 });
 
@@ -126,7 +129,25 @@ it.skipIf(!existsSync(binary)).each(['guest', 'owner', 'owner-child'])('replies 
     expect(denied.code).not.toBe(0);
     expect(denied.stderr).toContain('not available');
     expect(fixture.fetch).toHaveBeenCalledTimes(1);
+    // For a root HTTP request, replace the grant after routing but before the
+    // upstream send. Even a replacement that permits the same model is not
+    // the grant that authenticated this token.
+    if (trust === 'owner') {
+      allowed = true;
+      let replacement: ReturnType<typeof bindHostedSessionProvider> | undefined;
+      fixture.onReadAuth = () => {
+        replacement = bindHostedSessionProvider('codec-runtime', providerId, () => true);
+      };
+      try {
+        const superseded = await run();
+        expect(replacement).toBeDefined();
+        expect(superseded.code).not.toBe(0);
+        expect(superseded.stderr).toContain('not available');
+        expect(fixture.fetch).toHaveBeenCalledTimes(1);
+      } finally { replacement?.release(); }
+    }
   } finally {
+    fixture.onReadAuth = undefined;
     child?.kill(); await proxy?.dispose(); disposeToken(); binding.release(); releasePool?.(); setCustomProviders([]);
     await rm(directory, { recursive: true, force: true });
   }
