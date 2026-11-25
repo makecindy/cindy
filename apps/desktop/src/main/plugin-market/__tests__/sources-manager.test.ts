@@ -1086,7 +1086,7 @@ describe('MarketSourceManager source identity', () => {
     expect((await manager.discoverSource('hub')).sourceIdentity).toBeNull();
   });
 
-  /* PR #12731 Codex P1（init.defaultBranch 与远端默认分支不同）：git clone 在初始分支 main 上取包，返回前已切到
+  /* PR #12731 Codex P1（init.defaultBranch 与远端默认分支不同）：部分 git 版本（如 2.43）的 clone 在初始分支 main 上取包，返回前已切到
    * master，`includeIf "onbranch:main"` 的改写在四次采样里都看不到。配置里只要有按分支生效的条件包含（无仓库
    * 上下文或 staging 仓库里），就不核实；读不到配置同样不核实；无关的条件包含不受影响。
    * 最小失败输入：staging 仓库上下文里有 includeif.onbranch 键，四次采样都给出同一个地址。 */
