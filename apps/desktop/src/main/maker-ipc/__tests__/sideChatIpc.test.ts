@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
-  create: vi.fn(), list: vi.fn(), broadcast: vi.fn(), fromWebContents: vi.fn(),
+  create: vi.fn(), list: vi.fn(), promote: vi.fn(), broadcast: vi.fn(), fromWebContents: vi.fn(),
 }));
 vi.mock('electron', () => ({
   ipcMain: { handle: (channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => mocks.handlers.set(channel, handler) },
@@ -15,6 +15,8 @@ vi.mock('../../maker-orchestration/fork.js', () => ({
 }));
 vi.mock('../../localDb/ipc/sessionCreatedBroadcast.js', () => ({ emitSessionCreated: mocks.broadcast }));
 
+vi.mock('../../localDb/ipc/sessions.js', () => ({ promoteSideChatInDb: mocks.promote }));
+
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
 import { markAppContentWindow } from '../../windowFocusClassifier';
 import { registerMakerForkIpc } from '../fork';
@@ -26,7 +28,7 @@ import { MAKER_INVOKE } from '../channels';
 // Minimal failures: a child/external/unregistered frame or a mismatched remote
 // context must not read history, create a task, or broadcast it.
 describe('side chat IPC caller boundary', () => {
-  const channels = [MAKER_INVOKE.SIDE_CHAT, MAKER_INVOKE.SIDE_CHAT_LIST];
+  const channels = [MAKER_INVOKE.SIDE_CHAT, MAKER_INVOKE.SIDE_CHAT_LIST, MAKER_INVOKE.SIDE_CHAT_PROMOTE];
   function event(kind = 'trusted') {
     const frame = { url: kind === 'external' ? 'https://untrusted.example/' : 'http://localhost:5173/', parent: null };
     const win = { isDestroyed: () => false };
@@ -35,7 +37,7 @@ describe('side chat IPC caller boundary', () => {
     return { sender: { mainFrame: frame }, senderFrame: kind === 'child' ? { ...frame, parent: frame } : frame };
   }
   function invoke(channel: string, caller: unknown) {
-    return Promise.resolve().then(() => mocks.handlers.get(channel)!(caller, 'parent'));
+    return Promise.resolve().then(() => mocks.handlers.get(channel)!(caller, 'parent', 'origin'));
   }
   beforeEach(() => {
     vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', 'http://localhost:5173/');
@@ -43,6 +45,7 @@ describe('side chat IPC caller boundary', () => {
     mocks.handlers.clear();
     mocks.create.mockReset().mockResolvedValue({ id: 'child', source: 'side-chat' });
     mocks.list.mockReset().mockResolvedValue([{ id: 'child', source: 'side-chat' }]);
+    mocks.promote.mockReset().mockResolvedValue(undefined);
     mocks.broadcast.mockClear();
     registerMakerForkIpc();
   });
@@ -52,19 +55,22 @@ describe('side chat IPC caller boundary', () => {
     for (const channel of channels) await expect(invoke(channel, event(kind))).rejects.toThrow('[PERMISSION_DENIED]');
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.promote).not.toHaveBeenCalled();
     expect(mocks.broadcast).not.toHaveBeenCalled();
   });
 
   it('allows a registered top-level app frame to create and list follow-ups', async () => {
     await expect(invoke(channels[0], event())).resolves.toMatchObject({ id: 'child' });
     await expect(invoke(channels[1], event())).resolves.toEqual([{ id: 'child', source: 'side-chat' }]);
+    await expect(invoke(channels[2], event())).resolves.toBeUndefined();
+    expect(mocks.promote).toHaveBeenCalledExactlyOnceWith('parent', 'origin');
     expect(mocks.broadcast).toHaveBeenCalledExactlyOnceWith('child');
   });
 
   it('preserves authorized same-account device-link calls without an Electron frame', async () => {
     for (const channel of channels) {
       await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel }, () => invoke(channel, {})))
-        .resolves.toEqual(channel === channels[0] ? { id: 'child', source: 'side-chat' } : [{ id: 'child', source: 'side-chat' }]);
+        .resolves.toEqual(channel === channels[0] ? { id: 'child', source: 'side-chat' } : channel === channels[1] ? [{ id: 'child', source: 'side-chat' }] : undefined);
     }
   });
 
@@ -77,5 +83,6 @@ describe('side chat IPC caller boundary', () => {
     }
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.promote).not.toHaveBeenCalled();
   });
 });

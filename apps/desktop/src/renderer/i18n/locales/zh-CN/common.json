@@ -16407,6 +16407,9 @@
       "opened": "打开了一个预览页面"
     },
     "sideChat": {
+      "promote": "转为主任务",
+      "promoting": "正在转换…",
+      "promoteFailed": "未能将这条追问转为主任务。",
       "returnMain": "返回主任务",
       "new": "新建侧边追问",
       "mainWindowDescription": "侧边追问目前在主窗口中使用。追问记录仍然保留。",

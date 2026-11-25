@@ -16399,6 +16399,9 @@
     },
     "sessionLoading": "差事方載",
     "sideChat": {
+      "promote": "轉為主任務",
+      "promoting": "轉換中…",
+      "promoteFailed": "未能將此追問轉為主任務。",
       "returnMain": "歸主差事",
       "new": "增旁問",
       "mainWindowDescription": "旁問今於主窗中用之。所問之錄猶存。",

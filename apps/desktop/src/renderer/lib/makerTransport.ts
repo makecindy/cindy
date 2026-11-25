@@ -200,6 +200,7 @@ export interface RoutableMaker {
   // —— 完整对等:会话级功能(fork / rewind / context-usage / extra-dirs / close / orca)——
   // 本地分支返回完整 maker 天然带这些;远程分支在 remoteMakerApi 里逐一隧道映射。
   fork: FullMaker['fork'];
+  promoteSideChat: FullMaker['promoteSideChat'];
   createSideChat: FullMaker['createSideChat'];
   listSideChats: FullMaker['listSideChats'];
   forkStripEncrypted: FullMaker['forkStripEncrypted'];
@@ -313,6 +314,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     ) as FullMaker['getPendingInteractions'],
     deleteMessage: t('maker:message:delete') as FullMaker['deleteMessage'],
     fork: t('maker:fork') as FullMaker['fork'],
+    promoteSideChat: t('maker:side-chat:promote:v1') as FullMaker['promoteSideChat'],
     createSideChat: t('maker:side-chat:v1') as FullMaker['createSideChat'],
     listSideChats: t('maker:side-chat:list:v1') as FullMaker['listSideChats'],
     forkStripEncrypted: t('maker:fork-strip-encrypted') as FullMaker['forkStripEncrypted'],

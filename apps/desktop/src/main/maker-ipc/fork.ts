@@ -23,6 +23,8 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertTaskActionCurrent } from './taskActionAuthorization.js';
 
+import { promoteSideChatInDb } from '../localDb/ipc/sessions.js';
+
 import { MAKER_INVOKE } from './channels.js';
 
 const log = createLogger('maker-ipc/fork');
@@ -57,6 +59,10 @@ function assertSideChatCaller(event: Electron.IpcMainInvokeEvent, channel: strin
 }
 
 export function registerMakerForkIpc(): void {
+  ipcMain.handle(MAKER_INVOKE.SIDE_CHAT_PROMOTE, (event, sessionId: unknown, parentSessionId: unknown) => {
+    assertSideChatCaller(event, MAKER_INVOKE.SIDE_CHAT_PROMOTE);
+    return promoteSideChatInDb(requireString(sessionId, 'sessionId'), requireString(parentSessionId, 'parentSessionId'));
+  });
   ipcMain.handle(MAKER_INVOKE.SIDE_CHAT_LIST, (event, sourceSessionId: unknown) => {
     assertSideChatCaller(event, MAKER_INVOKE.SIDE_CHAT_LIST);
     return listSideChats(requireString(sourceSessionId, 'sourceSessionId'));

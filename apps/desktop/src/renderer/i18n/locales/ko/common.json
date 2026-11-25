@@ -16407,6 +16407,9 @@
       "opened": "미리보기 페이지를 열었습니다"
     },
     "sideChat": {
+      "promote": "기본 작업으로 전환",
+      "promoting": "전환 중…",
+      "promoteFailed": "이 사이드 채팅을 기본 작업으로 전환하지 못했습니다.",
       "returnMain": "기본 작업으로 돌아가기",
       "new": "새 사이드 채팅",
       "mainWindowDescription": "사이드 채팅은 현재 메인 창에서 사용할 수 있습니다. 대화 내용은 저장되어 있습니다.",

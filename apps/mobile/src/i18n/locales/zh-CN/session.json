@@ -39,6 +39,9 @@
     "hint": "左右拖动可调整两栏宽度"
   },
   "sideChat": {
+    "promote": "转为主任务",
+    "promoting": "正在转换…",
+    "promoteFailed": "未能将这条追问转为主任务。",
     "collapse": "收起追问",
     "resume": "继续追问",
     "list": "追问列表",

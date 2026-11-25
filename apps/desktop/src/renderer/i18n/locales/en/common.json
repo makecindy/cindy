@@ -16481,6 +16481,9 @@
       "opened": "Opened a preview page"
     },
     "sideChat": {
+      "promote": "Make main task",
+      "promoting": "Converting…",
+      "promoteFailed": "Could not convert this side chat to a main task.",
       "returnMain": "Back to main task",
       "new": "New side chat",
       "mainWindowDescription": "Side chats currently run in the main window. Your conversation is saved.",

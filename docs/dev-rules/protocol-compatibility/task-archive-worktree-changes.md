@@ -22,6 +22,18 @@
 
 ## 关闭已关联的侧边追问
 
+桌面追问面板和手机追问页右上角「…」菜单提供「转为主任务」；手机输入区上方保留原有
+「返回主任务」入口。两端调用新增的
+`maker:side-chat:promote:v1(sessionId, parentSessionId)`；只允许任务主人转换仍活跃、
+父任务匹配且没有关闭意图的追问。复用 `sideChatPromoted` 和既有任务列表投影，不新增
+数据库 migration，不更换会话 ID、原生上下文或消息，也不修改来源关系。重复调用幂等。
+写入与关闭沿用同一任务路由锁；转换后旧界面的追问删除请求被既有删除目标校验拒绝。
+已有 `local-db:sessions:patched` 推送同步电脑和手机；新客户端连接旧宿主时明确提示
+更新电脑，不回退为新建任务、修改普通元数据或重放写入。新通道只传两个 ID，沿用现有
+invoke 加密载荷，官方和自建中转无需修改。实现与回归见
+`maker-ipc/fork.ts`、`localDb/ipc/sessions.ts`、`sideChatIpc.test.ts`、`sessionsUpdate.test.ts`
+以及 Mobile `sideChatPromotion.test.tsx`、`mobileMakerTransport.test.ts`。
+
 确认关闭右侧追问标签后，桌面通过同一个 `local-db:sessions:patch-meta` 发送
 `{ status: 'archived', archiveSideChatParentId: parentId }`。宿主使用原始来源、已关联标记和父任务 ID
 校验意图，只归档追问自身，并沿用保留工作目录改动的归档与协同停止流程。宿主将关闭意图和归档

@@ -210,6 +210,7 @@ import {
   deleteBotProfileAndDetachSessionsInDb,
   patchSessionMetaInDb,
   promoteSideChatLeadInDb,
+  promoteSideChatInDb,
   setSideChatArchiveCleanup,
   restoreArchivedSessionForSend,
   persistSessionFields,
@@ -582,6 +583,36 @@ it('makes a follow-up independently visible only when its worker exists', async 
   });
   const raw = h.sqlite!.prepare("SELECT source, side_chat_promoted FROM sessions WHERE id = 'codex-local'").get();
   expect(raw).toEqual({ source: 'side-chat', side_chat_promoted: 1 });
+});
+
+// DB tier: explicit promotion must retain native identity without a Worker. The
+// existing automatic-promotion test requires a Worker and misses this user action.
+it('promotes the same side chat once and protects it from stale close-as-delete requests', async () => {
+  h.sqlite!.exec("UPDATE sessions SET source='side-chat', parent_session_id='cc-local', sdk_session_id='native-fork' WHERE id='codex-local'");
+  await promoteSideChatInDb('codex-local', 'cc-local');
+  await promoteSideChatInDb('codex-local', 'cc-local');
+  expect(await h.handlers.get('local-db:sessions:get')!({}, 'codex-local')).toMatchObject({
+    id: 'codex-local', source: 'desktop', sideChatPromoted: true, parentSessionId: 'cc-local', sdkSessionId: 'native-fork',
+  });
+  await expect(h.handlers.get('local-db:sessions:patch-meta')!({}, 'codex-local', { status: 'deleted', deleteTarget: 'side-chat' }))
+    .rejects.toThrow('[PRECONDITION_FAILED]');
+  expect(h.sqlite!.prepare("SELECT source, status FROM sessions WHERE id='codex-local'").get())
+    .toEqual({ source: 'side-chat', status: 'active' });
+});
+
+// Minimal invalid targets: ordinary task, other parent, ended task or pending close.
+// Same DB harness; a rejected conversion must leave its promotion flag untouched.
+it.each([
+  { source: 'desktop', status: 'active', parent: 'cc-local', closing: 0 },
+  { source: 'side-chat', status: 'active', parent: 'other', closing: 0 },
+  { source: 'side-chat', status: 'archived', parent: 'cc-local', closing: 0 },
+  { source: 'side-chat', status: 'deleted', parent: 'cc-local', closing: 0 },
+  { source: 'side-chat', status: 'active', parent: 'cc-local', closing: 1 },
+])('rejects an unavailable promotion target %o', async ({ source, status, parent, closing }) => {
+  h.sqlite!.prepare("UPDATE sessions SET source=?, status=?, parent_session_id=?, side_chat_close_pending=? WHERE id='codex-local'")
+    .run(source, status, parent, closing);
+  await expect(promoteSideChatInDb('codex-local', 'cc-local')).rejects.toThrow('[PRECONDITION_FAILED]');
+  expect(h.sqlite!.prepare("SELECT side_chat_promoted FROM sessions WHERE id='codex-local'").pluck().get()).toBe(0);
 });
 
 // DB tier: the remote preview must cover the owning project even when only one task

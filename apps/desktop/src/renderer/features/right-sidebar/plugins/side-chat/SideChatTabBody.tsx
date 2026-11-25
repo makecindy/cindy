@@ -51,6 +51,14 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
   const viewVisible = Boolean(active && shellVisible && windowVisible);
   const chatRealtime = Boolean(active && shellVisible && documentVisible);
   const childId = state.sessionId;
+  const [promoting, setPromoting] = useState(false);
+  const promotionPending = useRef(false);
+  const promotionScope = useRef<object | null>(null);
+  useEffect(() => {
+    const scope = {};
+    promotionScope.current = scope;
+    return () => { if (promotionScope.current === scope) promotionScope.current = null; };
+  }, [childId, state.deviceId]);
   const retiredChildRef = useRef<string | null>(null);
   const linkedChildRef = useRef<string | null>(null);
   const pendingClose = useRef<Promise<boolean> | null>(null);
@@ -148,6 +156,34 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     void read().catch(() => { if (valid() && !unavailable) setLoadFailed(true); });
     return () => { disposed = true; off(); };
   }, [active, childId, ctx.sessionId, ctx.tabId, readChild, retry, state.deviceId, t]);
+  const promote = async () => {
+    if (!childId || promotionPending.current) return;
+    const scope = promotionScope.current;
+    const owner = getDataOwnerGeneration();
+    const current = () => scope !== null && promotionScope.current === scope && isDataOwnerGenerationCurrent(owner);
+    promotionPending.current = true;
+    setPromoting(true);
+    try {
+      if (state.deviceId) {
+        await window.electronAPI.deviceLink.invoke(state.deviceId, 'maker:side-chat:promote:v1', [childId, ctx.sessionId]);
+      } else {
+        await window.electronAPI.maker.promoteSideChat(childId, ctx.sessionId);
+      }
+      if (!current()) return;
+      linkedChildRef.current = childId;
+      setLinkedChild(childId);
+      navigate(sideChatTaskRoute(childId, state.deviceId));
+    } catch (error) {
+      if (current()) {
+        const code = extractIpcError(error)?.code;
+        toast.error(t(code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' || code === 'UNSUPPORTED_CAPABILITY'
+          ? 'chat.sideChat.updateHost' : 'chat.sideChat.promoteFailed'));
+      }
+    } finally {
+      promotionPending.current = false;
+      if (current()) setPromoting(false);
+    }
+  };
   const close = useCallback(() => {
     if (!childId) return Promise.resolve(true);
     if (pendingClose.current) return pendingClose.current;
@@ -213,14 +249,18 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
   if (unavailableChild && unavailableChild === childId) return null;
   const role = collaboration?.childId === childId ? collaboration?.role : undefined;
   const collaborationActive = role === 'lead';
-  const collaborationEnded = childId !== null && linkedChild === childId && role === null;
+  const collaborationEnded = childId !== null && linkedChild === childId && !collaborationActive;
   const content = <SidebarHostSessionProvider sessionId={ctx.sessionId}>
     <div className="chat-rail-compact flex h-full min-h-0 flex-col">
-      <div className="mx-4 flex items-center justify-between gap-2 border-b border-[var(--border-default)] py-3">
+      <div className="mx-4 flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-default)] py-3">
         <div className="text-13 leading-5 text-[var(--text-primary)]">
-          <p>{t('chat.sideChat.context')}</p>
+          <p>{t(linkedChild === childId ? 'chat.sideChat.origin' : 'chat.sideChat.context')}</p>
           {collaborationEnded && <p>{t('chat.sideChat.openFromTaskList')}</p>}
         </div>
+        {childId && linkedChild !== childId && <Button size="sm" variant="secondary" tone="quiet"
+          disabled={promoting || loadFailed} onClick={() => void promote()}>
+          {t(promoting ? 'chat.sideChat.promoting' : 'chat.sideChat.promote')}
+        </Button>}
         {childId && linkedChild === childId && (collaborationActive || collaborationEnded) && <Button size="sm" variant="secondary" tone="quiet" className="shrink-0"
           onClick={() => {
             const route = sideChatTaskRoute(childId, state.deviceId);

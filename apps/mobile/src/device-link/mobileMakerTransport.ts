@@ -551,6 +551,7 @@ export interface MobileMakerTransport {
    * CHANNEL_NOT_ALLOWED，调用方忽略即可。
    */
   prewarmSession(sessionId: string, createOpts: unknown): Promise<unknown>;
+  promoteSideChat(sessionId: string, parentSessionId: string): Promise<void>;
   createSideChat(sessionId: string): Promise<RemoteSession>;
   listSideChats(sessionId: string): Promise<Array<{ id: string }>>;
   searchConversations(
@@ -1304,6 +1305,7 @@ export function createMobileMakerTransport({
     getSession: (sessionId) => call("local-db:sessions:get", [sessionId]),
     prewarmSession: (sessionId, createOpts) =>
       call("maker:session:prewarm", [sessionId, createOpts]),
+    promoteSideChat: (sessionId, parentSessionId) => call("maker:side-chat:promote:v1", [sessionId, parentSessionId]),
     createSideChat: (sessionId) => call("maker:side-chat:v1", [sessionId]),
     listSideChats: (sessionId) => call("maker:side-chat:list:v1", [sessionId]),
     searchConversations: (request) =>

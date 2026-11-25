@@ -39,6 +39,9 @@
     "hint": "Arraste para a esquerda ou direita para ajustar a largura das colunas"
   },
   "sideChat": {
+    "promote": "Converter em tarefa principal",
+    "promoting": "Convertendo…",
+    "promoteFailed": "Não foi possível converter esta conversa lateral em uma tarefa principal.",
     "collapse": "Recolher conversa paralela",
     "resume": "Continuar conversa paralela",
     "list": "Lista de conversas paralelas",

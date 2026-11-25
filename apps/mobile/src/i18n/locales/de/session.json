@@ -39,6 +39,9 @@
     "hint": "Ziehe nach links oder rechts, um die Spaltenbreiten anzupassen"
   },
   "sideChat": {
+    "promote": "Zur Hauptaufgabe machen",
+    "promoting": "Wird umgewandelt…",
+    "promoteFailed": "Dieser Seitenchat konnte nicht in eine Hauptaufgabe umgewandelt werden.",
     "collapse": "Nebenchat einklappen",
     "resume": "Nebenchat fortsetzen",
     "list": "Liste der Nebenchats",
