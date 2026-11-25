@@ -379,7 +379,13 @@ import {
   createGhostCardSpawnIndex,
 } from '@/cindy-brain/ghostCardGallery';
 import { ChatImageView } from './ChatImageView';
-import { galleryImagePreviewItem, ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
+import {
+  galleryImagePreviewItem,
+  ImageGalleryContext,
+  ImageGalleryScopeContext,
+  type GalleryImage,
+} from './ImageGalleryContext';
+import { replyGalleryImages, type ReplyGalleryOptions } from './replyGalleryImages';
 import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
@@ -1430,9 +1436,8 @@ export function resolveRestoredRenderWindow(snapshot: SessionScrollSnapshot | un
  *   - 用户上传图 → user message 的 images(url 或 data:base64,与 UserMessage 同款拼法)
  *   - 插件生成图 → ghost card 及其衍生卡中会打开 ImageLightbox 的图片
  *
- * 不收正文 Markdown 内嵌图:用正则扫文本会误抓代码块里当作文本展示的 ![]() 语法,
- * 虚增计数 / 让翻页跳到无效图(codex review);要准确得复刻 MarkdownRenderer 的
- * AST 渲染规则,成本高且易漂移。Markdown 内嵌图点开仍是单图预览,不进会话画廊。
+ * 回复正文里的 Markdown / 组件图由 `collectReplyGalleryImages` 另行收集(与
+ * MarkdownRenderer 同一套 AST 解析,不用正则扫文本,代码块里的 ![]() 不计入)。
  * 顺序与 DOM 渲染一致(用户消息里上传图在正文之前),便于 lightbox 做位置映射。
  */
 export function collectSessionImageSrcs(
@@ -1484,9 +1489,12 @@ export function collectSessionImageSrcs(
                     annotationStrokes: img.annotationStrokes,
                   }
                 : undefined;
-            push(img.url, meta);
+            push(img.url, img.originalName ? { ...meta, name: img.originalName } : meta);
           } else {
-            push(`data:${img.mimeType};base64,${img.base64}`);
+            push(
+              `data:${img.mimeType};base64,${img.base64}`,
+              img.originalName ? { name: img.originalName } : undefined,
+            );
           }
         }
       } else if (msg.role === 'assistant' && ghostCards) {
@@ -1503,6 +1511,46 @@ export function collectSessionImageSrcs(
     }
   }
   return out;
+}
+
+/**
+ * Images embedded in completed assistant replies of one render item, including
+ * replies folded into a finished work timeline. A reply still streaming joins
+ * once it completes; an open viewer keeps the list it opened with. A reply that
+ * a plugin card replaced is hidden, so only the card's images count.
+ */
+export function collectReplyGalleryImages(
+  item: RenderItem | WorkGroupChildItem,
+  scope: string,
+  options: ReplyGalleryOptions,
+  ghostCards?: GhostCardSnapshot,
+): GalleryImage[] {
+  if (item.type === 'work_group')
+    return item.children.flatMap((child) => collectReplyGalleryImages(child, scope, options, ghostCards));
+  if (item.type !== 'message') return [];
+  const message = item.message;
+  if (message.role !== 'assistant' || message.isStreaming || message.systemCardType) return [];
+  if (ghostCards?.byCallId.get(message.clientId)?.status === 'ready') return [];
+  return replyGalleryImages(message.content, message.clientId, scope, options);
+}
+
+/**
+ * The task image gallery: every image in the loaded history, across turns, in
+ * render order. Each entry records the render item showing it, so a URL shown
+ * twice opens where it was clicked.
+ */
+export function collectTaskImageGallery(
+  items: readonly RenderItem[],
+  itemImages: ReadonlyMap<string, readonly GalleryImage[]>,
+  replyOptions: ReplyGalleryOptions,
+  ghostCards?: GhostCardSnapshot,
+): GalleryImage[] {
+  const gallery: GalleryImage[] = [];
+  for (const item of items) {
+    for (const image of itemImages.get(item.key) ?? []) gallery.push({ ...image, scope: item.key });
+    gallery.push(...collectReplyGalleryImages(item, item.key, replyOptions, ghostCards));
+  }
+  return gallery;
 }
 
 // Workflow 工具(Claude Code SDK 多 agent 编排)在父会话事件流里 = 单个 local_workflow
@@ -4298,6 +4346,36 @@ export function MessageStream({
     [renderMetadataItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
   );
 
+  // Task image gallery: every image in the loaded history, across turns, in render
+  // order. Reply images use the renderer's own parse and address derivation; the
+  // per-message cache keeps rebuilds to messages whose content changed.
+  const replyGalleryTargetCacheRef = useRef<MarkdownImageTargetCache>(new Map());
+  const sessionImageGallery = useMemo(() => {
+    const localConfirmed = sessionFileValue.localConfirmed === true;
+    const replyOptions: ReplyGalleryOptions = {
+      cache: replyGalleryTargetCacheRef.current,
+      workingDir,
+      allowPrivilegedLinks: true,
+      remoteMediaOrigin: sessionId ? galleryMediaOrigin : undefined,
+      ownershipPending: Boolean(sessionId) && !localConfirmed,
+      resolveInWorkspace: Boolean(sessionId) && localConfirmed,
+    };
+    return collectTaskImageGallery(
+      renderMetadataItems,
+      messageImageCollections,
+      replyOptions,
+      ghostCardSnapshot,
+    );
+  }, [
+    renderMetadataItems,
+    messageImageCollections,
+    sessionFileValue,
+    galleryMediaOrigin,
+    workingDir,
+    sessionId,
+    ghostCardSnapshot,
+  ]);
+
   const messageAttachmentCollections = useMemo(
     () =>
       new Map(
@@ -6807,9 +6885,8 @@ export function MessageStream({
                           key={item.key}
                           value={messageAttachmentCollections.get(item.key) ?? null}
                         >
-                          <ImageGalleryContext.Provider
-                            value={messageImageCollections.get(item.key) ?? null}
-                          >
+                          <ImageGalleryContext.Provider value={sessionImageGallery}>
+                          <ImageGalleryScopeContext.Provider value={item.key}>
                             {(() => {
                     if (!messageViewport.shouldMount(viewportEntries[itemIndex])) {
                       return (
@@ -7128,6 +7205,7 @@ export function MessageStream({
                       </div>
                     );
                   })()}
+                          </ImageGalleryScopeContext.Provider>
                           </ImageGalleryContext.Provider>
                         </AttachmentCollectionContext.Provider>
                       ))}

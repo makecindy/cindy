@@ -1,4 +1,4 @@
-import type { Image, Root } from 'mdast';
+import type { Image, ImageReference, Root } from 'mdast';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
@@ -7,6 +7,7 @@ import {
   REMARK_PLUGINS_PRIVILEGED,
 } from './MarkdownRenderer';
 import { isManagedMarkdownVideoUrl } from './markdownMedia';
+import { RAW_IMAGE_TARGET_PROP } from './remarkPreserveRawLocalDestinations';
 
 const markdownImageParser = unified()
   .use(remarkParse)
@@ -43,6 +44,24 @@ export function extractRenderedMarkdownImageTargets(markdown: string): string[] 
     urls.push(node.url);
   });
   return urls;
+}
+
+/**
+ * Every image the renderer shows, in document order and with repeats, as the
+ * destination the img renderer receives under RAW_IMAGE_TARGET_PROP (reference
+ * images resolve through their definition). Videos are excluded.
+ */
+export function extractMarkdownGalleryTargets(markdown: string): string[] {
+  if (!markdown.includes('![') && !/<img/i.test(markdown)) return [];
+
+  const normalized = normalizeMarkdownRendererContent(markdown);
+  const tree = markdownImageParser.runSync(markdownImageParser.parse(normalized), normalized) as Root;
+  const targets: string[] = [];
+  visit(tree, ['image', 'imageReference'], (node) => {
+    const target = (node as Image | ImageReference).data?.hProperties?.[RAW_IMAGE_TARGET_PROP];
+    if (typeof target === 'string' && target && !isManagedMarkdownVideoUrl(target)) targets.push(target);
+  });
+  return targets;
 }
 
 /**

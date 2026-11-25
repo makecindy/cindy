@@ -10,10 +10,16 @@
  *  3. gallery 改写同源契约:collectSessionImageSrcs 的输出必须与渲染侧
  *     rewriteToRemoteMedia(url, deviceId) 逐条一致,否则 ImageLightbox 的
  *     `sessionImages.includes(src)` 匹配失效(计数错 / 翻图退化)。
+ *     回复正文图(Markdown / 组件图)同理:任务画廊按产品规则
+ *     docs/product-rules/attachment-preview.md(2026-11-24 定稿)跨回合收录,
+ *     从真实 MarkdownRenderer 点开必须落在画廊里的对应位置。最小失败输入:改动前
+ *     回复图点开只有单张(无计数),代码块示例图若被计入则总数错。渲染时地址会变的
+ *     回复图(URL 转码、引用式写法、任务目录内查找)另有一例,见该用例注释。
+ *     Tier: unit/DOM(jsdom,真实 MarkdownRenderer + ImageLightbox)。
  */
 import React, { memo } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { act, render, renderHook, screen } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 
 // 可控的 remoteProjectsStore 假件:deviceMap 模拟 sessionId→deviceId 注册,
 // notify() 模拟 store 更新广播(origin-injection race 的"迟到注册"时刻)。
@@ -36,6 +42,8 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   },
   getSessionDeviceId: (sessionId: string) => storeMock.deviceMap.get(sessionId),
 }));
+// Component answers key their view state by the signed-in user.
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'test-owner' } }) }));
 
 import {
   LOCAL_FILE_ORIGIN,
@@ -49,7 +57,15 @@ import {
   useChatSessionFile,
   useChatSessionFileValue,
 } from '../components/chat/ChatSessionFileContext';
-import { collectSessionImageSrcs, type RenderItem } from '../components/chat/MessageStream';
+import {
+  collectSessionImageSrcs,
+  collectTaskImageGallery,
+  type RenderItem,
+} from '../components/chat/MessageStream';
+import { ImageGalleryContext, ImageGalleryScopeContext } from '../components/chat/ImageGalleryContext';
+import { MarkdownRenderer } from '../components/chat/MarkdownRenderer';
+import { _clearSmartResolveCache, toLocalFileUrl } from '@/lib/localPathResolver';
+import i18n from '@/i18n';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '../../shared/remoteMediaUrl';
 import type { GhostCardSnapshot } from '@/cindy-brain/ghostCardStore';
 import {
@@ -321,5 +337,150 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
       { src: spawnImage, galleryId: ghostCardGalleryId(spawnCallId, 0) },
       { src: anchoredImage },
     ]);
+  });
+
+  it('回复正文图进入跨回合任务画廊，点开落在对应位置', () => {
+    const blob = (char: string) => `cindy-media://blobs/${char.repeat(64)}.png`;
+    const [uploaded, before, after, example, live] = ['1', '2', '3', '4', '5'].map(blob);
+    const reply = [
+      `Before:\n\n![before](${before})\n`,
+      '```md',
+      `![example](${example})`,
+      '```',
+      '',
+      '```cindy-ui',
+      `{"version":1,"seq":1,"op":"create","id":"after","kind":"image","props":{"src":"${after}","alt":"after"}}`,
+      '```',
+    ].join('\n');
+    const turns: RenderItem[] = [
+      {
+        type: 'message',
+        key: 'u1',
+        message: {
+          clientId: 'u1',
+          role: 'user',
+          content: 'Here is the bug',
+          images: [{ url: uploaded, mimeType: 'image/png', originalName: 'bug.png' }],
+        },
+      },
+      { type: 'message', key: 'a1', message: { clientId: 'a1', role: 'assistant', content: reply } },
+      {
+        type: 'message',
+        key: 'a2',
+        message: { clientId: 'a2', role: 'assistant', content: `![live](${live})`, isStreaming: true },
+      },
+    ];
+    const gallery = collectTaskImageGallery(
+      turns,
+      new Map(turns.map((item) => [item.key, collectSessionImageSrcs([item])])),
+      {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: false,
+      },
+    );
+    // 代码块里的示例图、仍在输出的回复不进画廊。
+    expect(gallery.map((image) => image.src)).toEqual([uploaded, before, after]);
+
+    render(
+      React.createElement(
+        ImageGalleryContext.Provider,
+        { value: gallery },
+        React.createElement(
+          ImageGalleryScopeContext.Provider,
+          { value: 'a1' },
+          React.createElement(MarkdownRenderer, {
+            renderRichAnswers: true,
+            content: reply,
+            workingDir: '/work',
+            currentSessionId: 'task',
+          }),
+        ),
+      ),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'before' }));
+    expect(screen.getByText('2 / 3')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.media.prevImage') }));
+    expect(screen.getByText('1 / 3')).toBeTruthy();
+    expect(screen.getByText('bug.png')).toBeTruthy();
+  });
+
+  // 渲染时地址会变的回复图：URL 被转码、引用式写法、相对任务目录写的路径（画廊在
+  // 历史加载时、目录查找完成前就已建好）。最小失败输入：`![web](https://example.com/图片.png)`
+  // 点开只有单张；`[r]:` 引用图不在画廊；翻到 `out/b.png` 显示直接拼接的坏地址。
+  it('地址被改写或需在任务目录查找的回复图，点开与翻页都落在任务画廊', async () => {
+    const resolvePathBatch = vi.fn(async ({ hrefs }: { hrefs: string[] }) =>
+      Object.fromEntries(
+        hrefs.map((href) => [href, { status: 'unique', candidates: [`/work/sub/${href}`], kind: 'file' }]),
+      ),
+    );
+    (window as unknown as { electronAPI?: unknown }).electronAPI = { resolvePathBatch };
+    try {
+      const web = 'https://example.com/图片.png';
+      const ref = 'https://example.com/ref.png';
+      const first = `![web](${web})\n\n![ref][r]\n\n[r]: ${ref}`;
+      const second = '![a](out/a.png)\n\n![b](out/b.png)';
+      const turns: RenderItem[] = [
+        { type: 'message', key: 'a1', message: { clientId: 'a1', role: 'assistant', content: first } },
+        { type: 'message', key: 'a2', message: { clientId: 'a2', role: 'assistant', content: second } },
+      ];
+      const gallery = collectTaskImageGallery(turns, new Map(), {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: true,
+      });
+      expect(gallery.map((image) => image.target)).toEqual([web, ref, 'out/a.png', 'out/b.png']);
+
+      const session = { sessionId: 'task', workingDir: '/work', origin: LOCAL_FILE_ORIGIN, localConfirmed: true };
+      const mount = (scope: string, content: string) =>
+        render(
+          React.createElement(ChatSessionFileProvider, {
+            value: session,
+            children: React.createElement(
+              ImageGalleryContext.Provider,
+              { value: gallery },
+              React.createElement(
+                ImageGalleryScopeContext.Provider,
+                { value: scope },
+                React.createElement(MarkdownRenderer, {
+                  renderRichAnswers: true,
+                  content,
+                  workingDir: '/work',
+                  currentSessionId: 'task',
+                }),
+              ),
+            ),
+          }),
+        );
+      const next = () => fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.media.nextImage') }));
+
+      const firstView = mount('a1', first);
+      fireEvent.click(screen.getByRole('button', { name: 'web' }));
+      expect(screen.getByText('1 / 4')).toBeTruthy();
+      next();
+      expect(screen.getByText('2 / 4')).toBeTruthy();
+      firstView.unmount();
+
+      mount('a2', second);
+      fireEvent.click(await screen.findByRole('button', { name: 'a' }));
+      expect(screen.getByText('3 / 4')).toBeTruthy();
+      next();
+      expect(screen.getByText('4 / 4')).toBeTruthy();
+      // The viewer resolves the entry in the task folder, as the reply does.
+      await waitFor(() =>
+        expect(document.querySelector('.modal-panel img')?.getAttribute('src')).toBe(
+          toLocalFileUrl('/work/sub/out/b.png'),
+        ),
+      );
+    } finally {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+      _clearSmartResolveCache();
+    }
   });
 });

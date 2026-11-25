@@ -351,13 +351,14 @@ export function ChatImageView({
           // 历史带标注图的再编辑视图:打开未烧录原图 + 持久化笔迹(可撤销/
           // 续画,出口是"发送到对话"生成新消息)。displaySrc !== src 说明是
           // 远程会话改写,原图在被控端拿不到,退回普通烧录图预览。
-          // 单张展示:gallery 按烧录图 src 定位,换成原图后无法匹配。
+          // 画廊按烧录图(annotationFallbackSrc)定位,翻页照常;不在画廊里时单张展示。
           // 原图若已被清理,lightbox 退回烧录图(annotationFallbackSrc)供查看 / 叠加新标。
           <ImageLightbox
             filename={filename}
             src={annotationSourceUrl}
             initialStrokes={annotationStrokes}
             annotationFallbackSrc={displaySrc}
+            enableGallery
             onClose={closePreview}
           />
         ) : (
