@@ -15624,6 +15624,7 @@
       "gatewayProxyTokenInvalid": "As credenciais do Cindy AI não são mais válidas. Clique em Tentar novamente. Se acontecer de novo, saia e entre novamente",
       "gatewayProxyTokenInvalidNoRetry": "As credenciais do Cindy AI não são mais válidas. Se acontecer de novo, saia e entre novamente",
       "modelAccessDenied": "A conta no serviço de origem não pode acessar este modelo. Selecione outro modelo ou verifique o acesso com o provedor",
+      "providerSafetyRefusal": "A política de segurança do provedor do modelo bloqueou esta resposta. Ajuste sua solicitação antes de enviar novamente",
       "silentStopContinue": "Continuar",
       "silentStopContinueTitle": "Continuar a tarefa atual",
       "piTransportClosed": "Conexão remota do Pi interrompida (canal SSH fechado). A tarefa remota continua em execução — reconecte para continuar.",

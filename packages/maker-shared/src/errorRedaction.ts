@@ -1,6 +1,103 @@
 export { parseGeminiInputRateLimit } from './geminiInputRateLimit.js';
 
 export const REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON = 'remote-compact-encrypted-content';
+export const PROVIDER_SAFETY_REFUSAL_REASON = 'provider-safety-refusal';
+
+const SAFETY_REFUSAL_CODES = new Set([
+  'content_policy_violation',
+  'safety_violation',
+  'moderation_blocked',
+  'cyber_policy_violation',
+  'cyberpolicy',
+  'misalignment_policy_violation',
+  'misalignmentpolicyviolation',
+  'bio_policy_violation',
+  'content_filter',
+  'content_filtering',
+]);
+
+const SAFETY_REFUSAL_STOP_REASONS = new Set([
+  'content_filter',
+  'safety',
+  'prohibited_content',
+  'blocklist',
+  'spii',
+  'image_safety',
+  'refusal',
+]);
+
+const UPSTREAM_ERROR_WRAPPER_PREFIX_RE =
+  /^(?:\s*(?:(?:Azure\s+)?OpenAI\s+API\s+error|Anthropic\s+API\s+error|API\s+Error|SDK\s+API\s+request\s+failed|SDK\s+error|Request\s+rejected|stream\s+disconnected\s+before\s+completion|(?:unexpected\s+status|HTTP(?:\s+status)?)\s*:?\s*\d{3}(?:\s+[A-Za-z][A-Za-z -]{0,32})?|litellm\.\w+Error|\d{3})\s*(?:\(\s*\d{3}\s*\)|\d{3})?\s*[:·—-]?\s*)+/i;
+
+const UPSTREAM_STATUS_SUFFIX_RE =
+  /\s*\((?:HTTP\s+\d{3}(?:,\s*retry\s+\d+\/\d+)?|connection\s+error(?:,\s*retry\s+\d+\/\d+)?)\)\s*$/i;
+
+const ANCHORED_UPSTREAM_SAFETY_TEXT_RE =
+  /^(?:this request was flagged for (?:possible|potential) (?:cybersecurity|cbrn|biological|biosecurity) risk(?:\b|$)|output blocked by content filtering policy(?:\b|$)|(?:invalid prompt:\s*)?(?:your prompt|this request|the response|the output) (?:was )?(?:rejected as a result of our safety system|blocked by our safety system|flagged as potentially violating our usage polic(?:y|ies)|violates our usage polic(?:y|ies))(?:\b|$)|openai(?:'s)? safety system (?:has )?blocked the output stream\b[^\r\n]*\bsafety_violation\b|\[?(?:content_policy_violation|moderation_blocked|cyber_policy_violation|misalignment_policy_violation)\]?(?:\s*[:—.-]|$)|(?:the )?response was blocked due to (?:safety|prohibited content)(?:\b|$)|FinishReason\.SAFETY(?:\b|$))/i;
+
+function unwrapUpstreamErrorBody(sample: string): string {
+  const withoutSuffix = sample.trim().replace(UPSTREAM_STATUS_SUFFIX_RE, '').trim();
+  return withoutSuffix.replace(UPSTREAM_ERROR_WRAPPER_PREFIX_RE, '').trim();
+}
+
+function isParsedSafetyEnvelope(value: unknown, depth = 0): boolean {
+  if (depth > 10 || value == null) return false;
+  if (typeof value === 'string') {
+    const body = unwrapUpstreamErrorBody(value);
+    if (!body) return false;
+    if (ANCHORED_UPSTREAM_SAFETY_TEXT_RE.test(body)) return true;
+    if (body.startsWith('{') && body.endsWith('}')) {
+      try {
+        return isParsedSafetyEnvelope(JSON.parse(body), depth + 1);
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  for (const key of ['code', 'type', 'decline_code'] as const) {
+    const raw = obj[key];
+    if (typeof raw === 'string' && SAFETY_REFUSAL_CODES.has(raw.trim().toLowerCase())) {
+      return true;
+    }
+  }
+  for (const key of [
+    'finish_reason',
+    'finishReason',
+    'stop_reason',
+    'stopReason',
+    'blockReason',
+    'block_reason',
+  ] as const) {
+    const raw = obj[key];
+    if (typeof raw === 'string' && SAFETY_REFUSAL_STOP_REASONS.has(raw.trim().toLowerCase())) {
+      return true;
+    }
+  }
+  if (isParsedSafetyEnvelope(obj.error, depth + 1)) return true;
+  if (typeof obj.message === 'string' && isParsedSafetyEnvelope(obj.message, depth + 1)) return true;
+  if (typeof obj.detail === 'string' && isParsedSafetyEnvelope(obj.detail, depth + 1)) return true;
+  if (Array.isArray(obj.candidates)) {
+    return obj.candidates.some((candidate) => isParsedSafetyEnvelope(candidate, depth + 1));
+  }
+  return false;
+}
+
+/**
+ * High-precision detection for upstream model provider safety / policy blocks.
+ * Requires either the stable translator reason, a structured provider JSON error
+ * envelope, or an anchored upstream refusal message (after known API/SDK wrappers),
+ * so ordinary chat quotes and local plugin/tool/hook errors referencing keywords
+ * like `safety_violation` or `"This request was flagged..."` are never misclassified.
+ */
+export function isProviderSafetyRefusalError(message: string, reason?: unknown): boolean {
+  if (reason === PROVIDER_SAFETY_REFUSAL_REASON) return true;
+  if (!message) return false;
+  const sample = message.length > 64_000 ? message.slice(0, 64_000) : message;
+  return isParsedSafetyEnvelope(sample, 0);
+}
 
 /**
  * Raw failures require explicit ciphertext evidence. For persisted UI errors,
@@ -146,6 +243,7 @@ export function extractNonSecretErrorSignals(input: string): NonSecretErrorSigna
       input,
     ) ?? /\brequest\s+rejected\s*\(\s*(401|403|429|529)\s*\)/i.exec(input);
   const usageLimit =
+    !isProviderSafetyRefusalError(input) &&
     /(?:^|[\s,{;])(?:rate\s+limit(?:ed|s|ing)?|usage\s+limit(?:ed|s|ing)?|too\s+many\s+requests|quota(?:["']?\s*[:=]\s*["']?|\s+)(?:exhausted|exceeded)|(?:["']?(?:code|type|error|message)["']?\s*[:=]\s*["']?)?(?:rate_limit_exceeded|insufficient_quota|exceeded[-_ ]?budget|budget[-_ ]?exceeded))\b/i.test(
       input,
     );
