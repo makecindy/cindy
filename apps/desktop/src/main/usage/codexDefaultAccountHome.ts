@@ -82,8 +82,8 @@ export async function readCodexWebUsageCredentials(
     if (home) {
       const tokens = await readCodexWebTokens(home).catch(() => undefined);
       if (await detachedDefaultCodexHome() !== home) continue;
-      if (tokens === null) return null;
       if (!tokens?.canDispatch()) continue;
+      if (!tokens.accessToken) return null;
       return { accessToken: tokens.accessToken, accountId: tokens.chatgptAccountId };
     }
     const credentials = await readAdapter();

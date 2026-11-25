@@ -219,8 +219,8 @@ export async function readNativeCodexTokens(directory: string, refresh = false) 
     }
   }
   const tokens = await readCodexTokenFile(directory, false);
-  if (!tokens || tokens.chatgptAccountId === null) throw new Error('Codex account authentication bridge is unavailable');
-  return { ...tokens, chatgptAccountId: tokens.chatgptAccountId };
+  if (!tokens.accessToken || tokens.chatgptAccountId === null) throw new Error('Codex account authentication bridge is unavailable');
+  return { ...tokens, accessToken: tokens.accessToken, chatgptAccountId: tokens.chatgptAccountId };
 }
 
 /** WHAM can read usage without a workspace header; the external-auth bridge requires one. */
@@ -252,7 +252,12 @@ async function readCodexTokenFile(directory: string, webUsage: boolean) {
     };
     if (!sameFile(before, after) || !canDispatch())
       throw new Error('Codex account authentication bridge is unavailable');
-    if (typeof raw.tokens?.access_token !== 'string' || !raw.tokens.access_token) return null;
+    if (typeof raw.tokens?.access_token !== 'string' || !raw.tokens.access_token) {
+      if (webUsage && (raw.auth_mode === 'apikey' || typeof raw.OPENAI_API_KEY === 'string' && raw.OPENAI_API_KEY.length > 0)) {
+        return { accessToken: null, chatgptAccountId: null, canDispatch };
+      }
+      throw new Error('Codex account authentication bridge is unavailable');
+    }
     return {
       accessToken: raw.tokens.access_token as string,
       chatgptAccountId: webUsage ? codexWorkspaceIdFromTokens(raw.tokens)
