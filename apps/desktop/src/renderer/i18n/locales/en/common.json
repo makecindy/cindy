@@ -1363,6 +1363,7 @@
     "openPermissionInNewWindow": "Open in a new window"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
@@ -2470,6 +2471,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Tray hover card",
+        "hint": "Hover over the Cindy tray icon to see remaining quota and unread tasks."
+      },
       "menubar": {
         "label": "Show remaining usage in the menu bar",
         "hint": "Adds a Cindy icon to the macOS menu bar. Click it to see what's left on your subscriptions, your Cindy balance and today's usage."
@@ -2863,6 +2868,14 @@
         "projectsRootReset": "Restore suggested location",
         "projectsRootDescription": "Where project folders go when you create a project from a session. If not set, a location is suggested from where your existing projects are.",
         "projectsRootFailed": "Couldn't update the new project location",
+        "taskExportDirectoryTitle": "Session export location",
+        "taskExportDirectoryUnset": "Ask each time",
+        "taskExportDirectoryMissing": "Folder not found",
+        "taskExportDirectoryUnreadable": "Can't read setting",
+        "taskExportDirectoryChoose": "Choose directory",
+        "taskExportDirectoryReset": "Ask each time instead",
+        "taskExportDirectoryDescription": "When set, sessions the Agent exports are saved here without asking for a location, and existing files are never replaced. If not set, you choose a location for each export.",
+        "taskExportDirectoryFailed": "Couldn't update the session export location",
         "dialogueDirectoryOpen": "Open directory",
         "dialogueDirectoryChoose": "Change directory",
         "dialogueDirectoryReset": "Restore default location",
@@ -8229,6 +8242,7 @@
           "official": "Official",
           "community": "Community"
         },
+        "communityDisclaimer": "Community developers build and maintain this plugin. Cindy has reviewed this version but can’t guarantee it’s safe in every situation.",
         "publisherDescription": {
           "official": "Published and maintained by Cindy",
           "community": "Published and maintained by community developers",
@@ -8343,7 +8357,7 @@
             "authTitle": "Private Repositories",
             "authBody": "Authentication relies entirely on your system Git configuration — Cindy never stores Git credentials. SSH: a working key must be configured on this machine; if the organization enforces SAML SSO, authorize the key for that organization via Configure SSO in your GitHub SSH key settings. HTTPS: use a Personal Access Token stored by the system credential helper.",
             "rulesTitle": "Install Rules",
-            "rulesBody": "Plugin ids are globally unique, first come first served — conflicts with installed plugins are called out explicitly. Plugins whose ids use the official reserved prefixes ({{reservedGhostIdPrefixes}}) cannot be installed by dragging in a package, choosing a file, or using a custom plugin marketplace. Declared permissions are shown on the detail page; clicking Install completes installation and enables the plugin without another permission confirmation dialog.",
+            "rulesBody": "Plugin ids are globally unique, first come first served — conflicts with installed plugins are called out explicitly. Plugins whose ids use the official reserved prefixes ({{reservedGhostIdPrefixes}}) cannot be installed by dragging in a package, choosing a file, or using a custom plugin marketplace. Declared permissions are shown on the detail page. When you first install a plugin manually, Cindy asks you to confirm its requested permissions. The plugin is enabled automatically after installation.",
             "copy": "Copy guide",
             "copied": "Guide copied to clipboard.",
             "copyFailed": "Copy failed. Try again."
@@ -8456,6 +8470,8 @@
         "installMeta": "Version {{version}} · {{source}}",
         "updateMeta": "Version {{from}} → {{to}} · {{source}}",
         "installDescription": "Nothing is installed until you confirm. The plugin is enabled right after installing, and you can disable or uninstall it anytime on the Plugins page.",
+        "customMarketSourceNotice": "Make sure you trust this marketplace and review the permissions the plugin requests.",
+        "localFileSourceNotice": "Make sure this file came from a source you trust before installing.",
         "updateDescription": "The update starts only after you confirm. The current version remains available until then.",
         "grantsTitle": "After installing it will have:",
         "noPermissions": "This plugin declares no additional permissions.",
@@ -8698,6 +8714,8 @@
         "liveScreenDetail": "Through remote desktop, your phone or other computers can show the device screens it provides (such as simulators) and send touches, buttons and text to them. It connects only when you open it from one of those devices and shows nothing else on this computer.",
         "preview": "Can open preview pages from the sites below in the sidebar browser",
         "previewDetail": "Only the sites listed below can be opened; every page it opens is attributed to this plugin.",
+        "fileOpener": "Can open the file types below when you open them from Cindy",
+        "fileOpenerDetail": "The plugin receives the file's full path and opens it in place of your default app; if it can't, your default app opens it. You can turn this off in the plugin's details.",
         "browserExtension": "Lets its bundled browser extension connect to Cindy",
         "browserNativeHost": "Can register browser connection “{{name}}”",
         "browserNativeHostDetail": "Registers a program outside the sandbox. Its local access follows your user account and system permissions.",
@@ -8773,6 +8791,7 @@
             "message_body": "message body",
             "tool_body": "tool result",
             "sidebar_navigation": "sidebar navigation",
+            "workdir_menu": "working directory menu",
             "session_menu": "task menu",
             "settings_section": "settings page",
             "composer_completion": "input completion",
@@ -8939,6 +8958,8 @@
         "configurationTitle": "Configuration",
         "sidebarEntryTitle": "Navigation Entry",
         "showInSidebar": "Show in Left Navigation",
+        "fileOpenerTitle": "Open Files with This Plugin",
+        "fileOpenerDescription": "When you open {{extensions}} files from Cindy, {{name}} opens them instead of your default app. Files from other computers still open with your default app.",
         "sidebarEntryDescription": "When turned on, “{{title}}” appears in the left navigation alongside Automations and Plugins, either at the top or under More — choose where in More → Customize. Hiding it does not disable the plugin.",
         "openTool": "View details for Tool {{name}}",
         "noToolDescription": "No description is available for this Tool.",
@@ -9216,6 +9237,7 @@
         "enableBeforeConfigure": "This plugin is disabled. Enable it with the switch above before configuring.",
         "settingsPageUnavailable": "Open Cindy on {{device}} to use this plugin’s settings page. This version of the target computer cannot display it remotely.",
         "offlineNotice": "{{device}} is offline. Management is unavailable until the connection is restored.",
+        "publishOnTarget": "Publish plugins in Cindy on {{device}}, or update Cindy on that computer to publish remotely.",
         "managingTarget": "Managing {{device}}",
         "managingDescription": "Changes are saved on this computer.",
         "viewingTarget": "Installed on {{device}}",
@@ -12305,8 +12327,8 @@
       "footnote": "This enters the buddy's identity context. Quick personality settings are stored separately and are preserved when this text changes."
     },
     "welcome": {
-      "generic": "Hi, I'm {{name}}. Tell me anything you need from now on — I will get my bearings in the meantime.",
-      "withRole": "Hi, I'm {{name}} — {{description}}. Just tell me what you need."
+      "generic": "Hi, I’m {{name}}. Just tell me what you need.",
+      "withUser": "Hi {{userName}}, I’m {{name}}. Just tell me what you need."
     },
     "invitation": {
       "title": "Getting ready to meet",
@@ -12537,6 +12559,8 @@
       "transferBusy": "{{name}} is still working on a reply. Move it after the reply finishes",
       "targetUnavailable": "“{{device}}” isn’t available. It must be online with remote control turned on",
       "targetOutdated": "“{{device}}” runs an older Cindy that can’t run {{name}} yet. Update Cindy there first",
+      "skillTargetOutdated": "A Skill in {{name}} has a body larger than 64 KB, which the older Cindy on “{{device}}” cannot receive. Update Cindy on that computer before moving your buddy. Your buddy remains on the original computer",
+      "skillTargetOutdated_skill": "The older Cindy on “{{device}}” can’t receive the Skill “{{slug}}”. Its body is {{bodyBytes, number}} bytes, over the 64 KB limit. {{name}} is still running on the original computer. Update Cindy on the target computer and try again.",
       "targetOutdatedItem": "Move to “{{device}}” · older Cindy",
       "targetOutdatedMeta": "Older Cindy",
       "olderTargetNote": "“{{device}}” runs an older Cindy, so {{name}} works the older way there: the chat history still syncs, but project rules and automations don’t apply there.",
@@ -12830,6 +12854,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "System voices",
+        "myVoices": "My voices",
+        "refreshMyVoices": "Refresh my voices",
+        "callMode": "Voice call mode",
+        "messageReadAloud": "Read messages aloud",
+        "callVoice": "Realtime call voice",
+        "readAloudVoice": "Read-aloud voice",
+        "readAloudHint": "Click the speaker below your buddy’s text reply to hear it in this voice.",
+        "resetReadAloud": "Reset read-aloud settings",
+        "title": "Realtime Audio",
+        "add": "Add realtime audio models",
+        "off": "Use text to speech"
+      },
       "openConversation": "Open conversation",
       "inCallWith": "In a call with {{name}}",
       "showDetails": "Show call transcript",
@@ -12851,7 +12889,7 @@
       "settingsTitle": "Voice",
       "openSettings": "Voice settings",
       "startConversation": "Start voice conversation",
-      "settingsHint": "Choose this companion’s speech model and voice, then start a voice conversation from the message composer.",
+      "settingsHint": "When calls use speech synthesis, calls and message playback share the model and voice below.",
       "previewNeedsChat": "Start a conversation with this companion to preview a voice.",
       "voiceId": "Voice ID",
       "manualVoice": "Enter a voice ID",
@@ -14641,6 +14679,7 @@
       "missingDir": "Folder not found"
     },
     "pendingQueue": {
+      "waitingForDevice": "Not sent · Will send when the other computer reconnects",
       "stopping": "Stopping…",
       "queued": "Queued",
       "editingInComposer": "Editing in the input box below…",
@@ -15121,6 +15160,7 @@
       "unavailable": "Automatic input is not available in the current app. Copy the transcript and enter it manually.",
       "unconfirmed": "Could not confirm whether automatic input succeeded. Copy the transcript if needed.",
       "permission": "Accessibility permission is required to enter voice input into the current app. Grant permission, then try again.",
+      "appNotAllowed": "{{app}} isn’t allowed to control this app, so the text wasn’t entered. Add this app for {{app}} in System & App Protection Override, or copy the text and paste it yourself.",
       "failed": "Automatic input failed. Copy the transcript and enter it manually."
     },
     "permissionPrompts": {
@@ -15343,6 +15383,7 @@
       "label_other": "{{count}} new messages"
     },
     "messageNavRail": {
+      "you": "You",
       "aria": "Prompt navigation",
       "jumpAria": "Jump to prompt {{index}}: {{preview}}",
       "attachmentOnly_one": "{{count}} attachment",
@@ -15494,6 +15535,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI credentials are no longer valid. Click Retry. If it happens again, sign out and sign back in.",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI credentials are no longer valid. If it happens again, sign out and sign back in.",
       "modelAccessDenied": "The upstream account cannot access this model. Select another model or check its access with the provider",
+      "providerSafetyRefusal": "The model provider's safety policy blocked this response. Adjust your request before sending again.",
       "silentStopContinue": "Continue",
       "silentStopContinueTitle": "Continue the current task",
       "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
@@ -15544,13 +15586,14 @@
       "modelCatalogUnconfirmed": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
       "actionScheduled": "Authorization expired for this action. The next run is still scheduled.",
       "actionExpired": "Task authorization expired for this action. Check the latest automation run.",
+      "modelRebuildRetry": "The instruction was not sent. Open the automation on your computer and choose “Run now” to retry.",
       "actionRecovered": "Authorization expired for this action. A later run of the same automation succeeded.",
       "text": "An automatic run failed.",
-      "prCheck_dns": "{{device}} could not resolve {{host}}. Check the network or DNS on that device if this persists. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
-      "prCheck_timeout": "The connection to GitHub timed out on {{device}}. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
-      "prCheck_auth": "Sign in to GitHub again on {{device}}. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
-      "prCheck_rate-limit": "GitHub rate-limited requests from {{device}}. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
-      "prCheck_unknown": "The PR check failed on {{device}}. See the run details. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
+      "prCheck_dns": "{{device}} could not resolve {{host}}. Check the network or DNS on that device if this persists. Consecutive failures: {{failures}}. Scheduled checks can retry at or after {{retry}}.",
+      "prCheck_timeout": "The connection to GitHub timed out on {{device}}. Consecutive failures: {{failures}}. Scheduled checks can retry at or after {{retry}}.",
+      "prCheck_auth": "Sign in to GitHub again on {{device}}. Consecutive failures: {{failures}}. Scheduled checks can retry at or after {{retry}}.",
+      "prCheck_rate-limit": "GitHub rate-limited requests from {{device}}. Consecutive failures: {{failures}}. Scheduled checks can retry at or after {{retry}}.",
+      "prCheck_unknown": "The PR check failed on {{device}}. See the run details. Consecutive failures: {{failures}}. Scheduled checks can retry at or after {{retry}}.",
       "precheck": "Automatic checks are temporarily blocked.",
       "preRunBlocked": "The pre-run check failed. This run did not start.",
       "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
@@ -17720,15 +17763,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "Scheduled checks will continue while GitHub App notifications are unavailable.",
-      "label": "PR",
-      "url": "Pull request URL",
+      "label": "PR / MR",
+      "url": "PR or MR URL",
       "condition": "Run when",
-      "any": "PR activity",
+      "any": "Activity",
       "merged": "Merged",
       "review": "Review activity",
       "ci": "CI status changes",
       "timed": "Also check on a schedule",
-      "invalid": "Enter a GitHub pull request URL."
+      "invalid": "Enter a GitHub PR or GitLab MR URL."
     },
     "presentation": {
       "status": {
@@ -17920,6 +17963,7 @@
       "openWorkdirFailed": "Failed to open folder"
     },
     "runs": {
+      "boundPluginEngineRecovery": "This automation didn’t run. An automation linked to a plugin engine task uses the task’s own model and runs on this computer. If the automation chooses a model, remove it, then run it again.",
       "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
       "status": {
         "running": "Running",
@@ -18271,6 +18315,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Relative interval",
+        "label": "Timing mode",
         "cronHint": "Runs at calendar clock slots.",
         "intervalHint": "Waits this long after the previous run finishes.",
         "intervalUnsupportedHint": "This exact interval is preserved. Choosing a minute or hour preset will replace it.",
@@ -18874,7 +18919,7 @@
       "expired": "Input handoff ended after waiting too long."
     },
     "failure": {
-      "permission": "Cindy can’t read the interface on this Mac. Check control access for the running copy of Cindy. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility.",
+      "permission": "Cindy can’t read the interface on this Mac. Check control access for the running copy of Cindy. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility. If Cindy may control only chosen apps, add this app to them.",
       "target_gone": "The target window was closed.",
       "unreadable": "This screen can't be read. You can finish it on the host computer, then hand back to the agent.",
       "action_failed": "That action didn't take effect. Check the screen and try again.",
@@ -22653,6 +22698,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Switch sources automatically when one fails",
+        "hint": "When the source this mode is using fails, switch to the next usable one and note it under that turn. When off, a switch is only offered on the error."
+      },
       "newRoute": "New mode",
       "newRouteName": "New mode",
       "routesEmpty": "No modes yet. Create one and add a few sources.",
@@ -22885,6 +22934,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "In System & App Protection Override, select {{app}} and click ⓘ. If it’s missing, use + to add the running app.",
-    "review": "$t(macControlPermission.selectApp)\nIf offered, Choose Apps limits which apps it can control. Full control gives the app access to all apps and data. If you agree, acknowledge each item, then choose Allow at the bottom."
+    "review": "$t(macControlPermission.selectApp)\nIf offered, Choose Apps limits which apps it can control. Full control gives the app access to all apps and data. If you agree, acknowledge each item, then choose Allow at the bottom.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nRemote keyboard and mouse act anywhere on this Mac, so they need control of the whole Mac: when adding with +, choose Override System Protections; for an app already listed, turn on Control Your Entire Mac and All Apps under ⓘ. With chosen apps only, macOS blocks all remote keyboard and mouse input. Review the access macOS lists before you allow it.",
+    "chosenAppsOnly": "{{app}} can control only the apps you chose, so macOS blocks all remote keyboard and mouse input. To control this Mac remotely, click ⓘ next to {{app}} in System & App Protection Override and turn on Control Your Entire Mac and All Apps."
   }
 }

@@ -452,7 +452,7 @@ it('does not render unchanged cards or signed-url renewals and renders only a ch
   const renderItem = vi.fn((item: PluginMarketItem) => <article>{item.name}</article>);
   const load = vi.fn(async () => ({ ...page(0, 2), items: [
     { ...item(0), usageStatistics: { usageCount: '4', asOf: signature }, icon: { sha256: 'a'.repeat(64), mimeType: 'image/png', sizeBytes: 12,
-      url: `https://icons.invalid/${signature}`, expiresAt: signature } },
+      url: `https://icons.invalid/${signature}`, expiresAt: '2099-01-01T00:00:00.000Z' } },
     { ...item(1), name },
   ] }));
   const { cache, view } = fixture(load, renderItem);
@@ -463,9 +463,13 @@ it('does not render unchanged cards or signed-url renewals and renders only a ch
   signature = 'second';
   await act(async () => { await cache.current.refresh!({ force: true }); });
   expect(renderItem).toHaveBeenCalledTimes(before);
-  // The normal merge refreshed cached transport metadata silently; an image
-  // error must still deliver those URLs to the actual rendered image.
+  expect(cache.current.pages.get(0)?.[0].icon?.url).toBe('https://icons.invalid/first');
+  // Explicit recovery replaces the address even before the old signature expires.
+  cache.current.countsAt = 0;
+  const requestsBeforeRenewal = load.mock.calls.length;
   await act(async () => { await cache.current.refresh!({ force: true, renewIcons: true }); });
+  expect(load.mock.calls.length - requestsBeforeRenewal).toBe(1);
+  expect(cache.current.pages.get(0)?.[0].icon?.url).toBe('https://icons.invalid/second');
   expect(renderItem).toHaveBeenCalledTimes(before + 1);
   name = 'Changed tool';
   await act(async () => { await cache.current.refresh!({ force: true }); });

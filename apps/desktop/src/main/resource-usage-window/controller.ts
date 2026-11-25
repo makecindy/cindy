@@ -379,7 +379,9 @@ export class ResourceUsageWindowController {
       }
       this.visibilityGeneration += 1;
       this.clearLeaveTimeout();
-      if (win.isVisible()) this.hideNativeWindow(win);
+      // App-level hiding and minimization can report false while macOS still
+      // plans to restore the window. Explicit close must also clear that intent.
+      this.hideNativeWindow(win);
       this.visible = false;
       if (options.restoreOwner !== false) this.focusOwnerWindow();
     };

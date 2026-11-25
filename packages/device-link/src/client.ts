@@ -658,6 +658,14 @@ export interface DeviceLinkPeerTransportReset {
 // A local transport can confirm revocation before it has a socket to emit 4410.
 export class DeviceLinkRegistrationRemovedError extends Error {}
 
+/** Local-only signal. The reliable sender has retained no business frame and wrote no fragment. */
+export class DeviceLinkUnsentInvokeError extends DeviceLinkError {
+  constructor() {
+    super('BACKPRESSURE', 'unsent invoke yielded to an available route');
+    this.inFlight = false;
+  }
+}
+
 export function classifyConnectionIssue(
   code?: number,
   reason?: string,
@@ -2269,7 +2277,7 @@ export class DeviceLinkClient {
     dst: string,
     payload: InvokePayload,
     timeoutMs?: number,
-    options?: { preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' },
+    options?: { canRerouteBeforeWrite?: () => boolean; preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' },
   ): Promise<InvokeResultPayload> {
     if (this.status !== 'online' && !this.hasOfflineDirectPath(dst)) {
       throw new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
@@ -2307,6 +2315,7 @@ export class DeviceLinkClient {
           { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: transfer?.payload ?? tagged },
           'invoke-result',
           timeout, true, { id, admissionMs, source: options?.diagnosticSource ?? 'client', operation: diagnosticOperation(payload) },
+          id === requestId ? options?.canRerouteBeforeWrite : undefined,
         );
         this.reportInvokeMetric(payload, env.payload as InvokeResultPayload);
         decodeStarted = this.monotonicNow();
@@ -2575,6 +2584,7 @@ export class DeviceLinkClient {
     timeoutMs?: number,
     allowPeerResetRetry = true,
     diagnostic?: { id: string; admissionMs: number; source: string; operation: string },
+    canRerouteBeforeWrite?: () => boolean,
   ): Promise<Envelope> {
     if (env.dst && this.remoteControlDisabled.has(env.dst)) {
       return Promise.reject(new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target'));
@@ -2731,10 +2741,14 @@ export class DeviceLinkClient {
         const outbound = { ...env, id };
         if (outbound.kind === 'link-open' && outbound.dst) this.beginRecoveryTrace(outbound.dst, id);
         if (outbound.kind === 'invoke' && outbound.dst) {
-          const reliable = this.sendPeerEnvelope(outbound);
+          const reliable = this.sendPeerEnvelope(outbound, false, canRerouteBeforeWrite);
           if (reliable) {
             const pending = this.pending.get(id);
-            if (pending) pending.reliableDst = outbound.dst;
+            if (pending) {
+              pending.reliableDst = outbound.dst;
+              // A direct buffer or relay credit check can still defer the actual write after admission.
+              if (!pending.hasWritten() && canRerouteBeforeWrite?.()) throw new DeviceLinkUnsentInvokeError();
+            }
           }
         } else {
           this.sendRoutedEnvelope(outbound);
@@ -2743,6 +2757,12 @@ export class DeviceLinkClient {
       } catch (err) {
         this.pending.delete(id);
         clearTimeout(timer);
+        if (err instanceof DeviceLinkUnsentInvokeError && env.dst && !pendingRequest.hasWritten()) {
+          this.settleOutboundRouteAttemptsForId(env.dst, id);
+          if (pendingRequest.reliableDst) this.dropReliablePendingForRequest(env.dst, id);
+          reject(err);
+          return;
+        }
         const deviceLinkErr =
           err instanceof DeviceLinkError
             ? err
@@ -2753,9 +2773,10 @@ export class DeviceLinkClient {
   }
 
   private describeRequest(env: Omit<Envelope, 'id'>, expectKind: 'invoke-result' | 'link-accept'): string {
-    const dst = shortDeviceRef(env.dst);
+    const dst = diagnosticRef(env.dst);
     const channel = env.kind === 'invoke' ? (env.payload as InvokePayload | undefined)?.channel : env.kind;
-    return `kind=${env.kind} channel=${channel ?? 'unknown'} dst=${dst} expect=${expectKind}`;
+    const operation = env.kind === 'invoke' ? ` operation=${diagnosticOperation(env.payload as InvokePayload)}` : '';
+    return `kind=${env.kind} channel=${channel ?? 'unknown'} dst=${dst} expect=${expectKind}${operation}`;
   }
 
   private failAllPending(err: DeviceLinkError): void {
@@ -4043,6 +4064,7 @@ export class DeviceLinkClient {
         assembly.chunks.set(segment.index, parsed.data);
         assembly.bytes += bytes;
         stream.bufferedBytes += bytes;
+        if (isBusinessTraffic(env)) peer.lastBusinessReceivedAt = this.monotonicNow();
       }
       stream.assemblies.set(meta.seq, assembly);
       if (assembly.chunks.size === assembly.total) {
@@ -4350,7 +4372,7 @@ export class DeviceLinkClient {
     );
   }
 
-  private sendPeerEnvelope(env: Envelope, allowClosedLegacyResponse = false): boolean {
+  private sendPeerEnvelope(env: Envelope, allowClosedLegacyResponse = false, canRerouteBeforeWrite?: () => boolean): boolean {
     if (env.dst) this.directNegotiator?.activity(env.dst);
     if (!env.dst || !isReliableKind(env.kind)) {
       this.sendBestEffortRoutedEnvelope(env);
@@ -4427,8 +4449,14 @@ export class DeviceLinkClient {
       && (viaDirect || !this.isRelaySendPaced() || this.congestionSendBudget.canTake(
         env.dst, additionalFrames, this.getReadyReliablePeers(env.dst), this.monotonicNow(),
       ));
+    // Yield before allocating a sequence whenever the known backlog would hold this request.
+    if (canRerouteBeforeWrite && (!willSendNow || !hasPendingCapacity()) && canRerouteBeforeWrite()) {
+      throw new DeviceLinkUnsentInvokeError();
+    }
     if (willSendNow && !viaDirect) {
-      this.assertWebSocketCapacity(this.measureReliableFrames(frames));
+      const bytes = this.measureReliableFrames(frames);
+      if (canRerouteBeforeWrite && !this.canWriteReliableBytes(bytes) && canRerouteBeforeWrite()) throw new DeviceLinkUnsentInvokeError();
+      this.assertWebSocketCapacity(bytes);
     }
     if (!hasPendingCapacity()) {
       if (routedEnv.kind === 'invoke-result') {

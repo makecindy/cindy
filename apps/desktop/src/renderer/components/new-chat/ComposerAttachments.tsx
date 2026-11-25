@@ -359,7 +359,7 @@ function ThumbnailItem({
         file.category !== 'image' &&
         createPortal(
           <div
-            className="pointer-events-none fixed z-50 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs"
+            className="pointer-events-none fixed z-50 whitespace-nowrap rounded-xl px-2.5 py-1.5 text-xs"
             style={{
               top: popoverPos.top - 10, // 10px gap above thumbnail
               left: popoverPos.left,

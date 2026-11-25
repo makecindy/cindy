@@ -587,6 +587,39 @@ it('keeps Linux whole-desktop coordinates normalized and releases input before r
   }
 });
 
+it('cloud X11 waits for agent input and holds ownership until native cleanup completes', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('WAYLAND_DISPLAY', '');
+  let finishAgent!: () => void, finishInput!: () => void, finishStop!: () => void;
+  const connection = {
+    input: vi.fn(), settled: () => new Promise<void>(resolve => { finishInput = resolve; }),
+    stop: () => new Promise<void>(resolve => { finishStop = resolve; }),
+  };
+  const host = new DesktopInputHost(vi.fn(), {
+    platform: 'linux', openLinuxInput: async () => connection as never,
+    resolveBinary: async () => { throw new Error('X11 must not resolve the Wayland helper'); },
+    spawn: () => { throw new Error('X11 must not spawn the Wayland helper'); },
+  });
+  try {
+    await host.start('1');
+    const agent = withAgentDesktopInput(() => new Promise<void>(resolve => { finishAgent = resolve; }));
+    await flush();
+    host.input([{ kind: 'text', text: 'fixture' }]);
+    await flush();
+    expect(connection.input).not.toHaveBeenCalled();
+    finishAgent(); await agent; await flush();
+    expect(connection.input).toHaveBeenCalledExactlyOnceWith([{ kind: 'text', text: 'fixture' }]);
+    await expect(withAgentDesktopInput(async () => {})).rejects.toThrow('input is active');
+    host.stop(); await flush();
+    finishInput(); await flush();
+    await expect(withAgentDesktopInput(async () => {})).rejects.toThrow('input is active');
+    finishStop(); await flush();
+    await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+  } finally {
+    finishAgent?.(); finishInput?.(); host.stop(); finishStop?.(); await flush(); vi.unstubAllEnvs();
+  }
+});
+
 describe('代输入 window input', () => {
   it('starts the helper confined to one window and passes fractions through untouched', async () => {
     const c = childProcess();

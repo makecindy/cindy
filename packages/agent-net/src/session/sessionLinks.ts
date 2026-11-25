@@ -58,6 +58,8 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
  */
 const SESSION_GRACE_MIN_MS = 250;
 const SESSION_GRACE_MAX_MS = 1500;
+/** 经中转的 Agent-Net 连接建好后，控制流上的会话宣告还要穿过中转与 worker（实测 2.8～3.4 秒）：给中转路径留够首轮窗口。 */
+const RELAY_SESSION_GRACE_MAX_MS = 4000;
 /** 被控端记着的「经会话来、还没回结果」的请求 id 上限；超过时丢掉最早的（它的结果改走 Device Link，对端按 id 配不上而丢弃）。 */
 const MAX_TRACKED_REQUESTS = 4096;
 /** 和 Device Link 一样（client.ts SLOW_REQUEST_WARN_MS）：请求超过这么久（加上通道本来就要挂起的时长）记一条慢请求。 */
@@ -151,6 +153,7 @@ interface PeerState {
   /** 对方最近一次链路回复里它的请求去重记忆是哪一份（agentNetInvokeEpoch）；没带为 null。 */
   hostInvokeEpoch: string | null;
   /** 本机正在会话上建的控制链路：对端关链（拒绝、撤权）时用它马上结束，不等超时。 */
+  opening?: { session: SessionHandle; offer: string | undefined; timeout: number; result: Promise<LinkAcceptPayload> };
   refuseOpen: ((error: DeviceLinkError) => void) | null;
 }
 
@@ -201,7 +204,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   private readonly messageReuse = new SessionMessageReuse();
   private readonly historyViewDelta = new HistoryViewDeltaCache();
   /** 正等着会话就绪的对端：同一个对端的等待共用一个，按到达顺序放行。 */
-  private readonly sessionWaits = new Map<string, { promise: Promise<void>; release(): void; until(ms: number): void }>();
+  private readonly sessionWaits = new Map<string, { promise: Promise<void>; dialing?: boolean; release(): void; until(ms: number): void }>();
   /** 在途请求在等这个对端的控制链路在新会话上重开（awaitReopened）；链路状态一变就各自复查。 */
   private readonly reopenWaiters = new Map<string, Set<() => void>>();
   private readonly streamIds = new WeakMap<SessionHandle, string>();
@@ -217,6 +220,11 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
 
   /** 这个对端现在能走会话（双方都启用了，连接在）。 */
   available(deviceId: string): boolean { return !this.stopped && !!this.live(deviceId); }
+  /** Identity of this authenticated session, for work that must expire when it is replaced. */
+  sessionStreamId(deviceId: string): string | null {
+    const session = this.stopped ? null : this.live(deviceId);
+    return session && this.streamIdFor(session);
+  }
   /** 本机对这个对端的控制链路正走会话（建链中或已建好）。 */
   ownsOutbound(deviceId: string): boolean { return this.peers.get(deviceId)?.outbound !== undefined && this.peers.get(deviceId)!.outbound !== 'idle'; }
   /** 对端对本机的控制链路走会话（已接受，或 link-open 正等本机回答）。 */
@@ -259,8 +267,11 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     if (this.stopped || this.available(deviceId)) return 0;
     const connectedAt = this.options.connectedAt?.(deviceId);
     if (connectedAt == null) return 0;
+    const relayed = this.options.path?.(deviceId) === 'relay';
     const rtt = this.options.rttMs?.(deviceId);
-    const grace = rtt == null ? SESSION_GRACE_MAX_MS : Math.min(SESSION_GRACE_MAX_MS, SESSION_GRACE_MIN_MS + 4 * rtt);
+    const grace = relayed
+      ? RELAY_SESSION_GRACE_MAX_MS
+      : rtt == null ? SESSION_GRACE_MAX_MS : Math.min(SESSION_GRACE_MAX_MS, SESSION_GRACE_MIN_MS + 4 * rtt);
     return Math.max(0, grace - (performance.now() - connectedAt));
   }
 
@@ -293,7 +304,8 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   async openAttested(dst: string, payload: unknown, timeoutMs: number | undefined,
     primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload> {
     if (this.stopped || isScopedPeer(dst)) return primary();
-    const deadline = performance.now() + ATTESTED_SESSION_WAIT_MS;
+    const waitMs = this.options.path?.(dst) === 'relay' ? RELAY_SESSION_GRACE_MAX_MS : ATTESTED_SESSION_WAIT_MS;
+    const deadline = performance.now() + waitMs;
     while (!this.stopped && !this.available(dst) && performance.now() < deadline) {
       // 连上了、过了宽限期仍没有会话：是没有会话层的 Agent-Net 旧版，不再等。
       if (this.options.connectedAt?.(dst) != null && this.sessionPendingMs(dst) === 0) break;
@@ -311,11 +323,14 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
    */
   private connectFirst(deviceId: string): Promise<void> {
     const wait = this.awaitSession(deviceId, SESSION_GRACE_MAX_MS);
-    const release = () => this.sessionWaits.get(deviceId)?.release();
+    const current = this.sessionWaits.get(deviceId)!;
+    if (current.dialing) return wait;
+    current.dialing = true;
     void this.options.connect!(deviceId).then((connected) => {
       const pending = connected ? this.sessionPendingMs(deviceId) : 0;
-      if (pending > 0) this.sessionWaits.get(deviceId)?.until(pending); else release();
-    }, release);
+      if (this.sessionWaits.get(deviceId) !== current) return;
+      if (pending > 0) current.until(pending); else current.release();
+    }, current.release);
     return wait;
   }
 
@@ -388,6 +403,21 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     if (this.remoteControlDisabled.has(dst)) throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target');
     const session = this.requireSession(dst);
     const peer = this.peer(dst);
+    const offer = this.withLocalCapabilities(dst, payload);
+    const key = JSON.stringify(offer);
+    const timeout = timeoutMs ?? this.requestTimeout();
+    const current = peer.opening;
+    if (peer.outbound === 'opening' && current?.session === session && current.offer === key && current.timeout === timeout) {
+      return current.result;
+    }
+    peer.refuseOpen?.(new DeviceLinkError('LINK_NOT_OPEN', 'control handshake superseded'));
+    const result = this.openOnSession(dst, peer, session, offer, timeout);
+    peer.opening = { session, offer: key, timeout, result };
+    try { return await result; }
+    finally { if (peer.opening?.result === result) delete peer.opening; }
+  }
+
+  private async openOnSession(dst: string, peer: PeerState, session: SessionHandle, offer: unknown, timeout: number): Promise<LinkAcceptPayload> {
     peer.outboundClosed = false;
     peer.outbound = 'opening';
     const openStartedAt = performance.now();
@@ -395,8 +425,8 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     const refused = new Promise<never>((_resolve, reject) => { refuse = reject; });
     peer.refuseOpen = refuse;
     try {
-      const accepted = await Promise.race([session.open(this.withLocalCapabilities(dst, payload), timeoutMs ?? this.requestTimeout()), refused]);
-      if (this.live(dst) !== session || peer.outbound !== 'opening') {
+      const accepted = await Promise.race([session.open(offer, timeout), refused]);
+      if (this.live(dst) !== session || peer.outbound !== 'opening' || peer.refuseOpen !== refuse) {
         throw new DeviceLinkError('LINK_NOT_OPEN', 'session closed while opening the control link');
       }
       const accept = (isRecord(accepted) ? accepted : {}) as unknown as LinkAcceptPayload;
@@ -417,7 +447,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
       }
       return accept;
     } catch (error) {
-      if (peer.outbound === 'opening') peer.outbound = 'idle';
+      if (peer.refuseOpen === refuse && peer.outbound === 'opening') peer.outbound = 'idle';
       const failure = error instanceof DeviceLinkError ? error
         : error instanceof SessionError ? toDeviceLinkError(error.code, error.message) : null;
       this.options.log.debug(`agent-net session link open failed dst=${shortDeviceRef(dst)} code=${failure?.code ?? 'UNKNOWN'}`
@@ -456,6 +486,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     const priority = resolveInvokePriority(payload.channel, options?.background, payload.args);
     const slotBudgetMs = Math.min(timeoutMs ?? this.requestTimeout(), 30_000);
     const send = async (): Promise<InvokeResultPayload> => {
+      if (this.remoteControlDisabled.has(dst)) throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target');
       options?.preSend?.();
       options?.beforeDispatch?.();
       const peer = this.peer(dst);
@@ -766,7 +797,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
       }
     } finally {
       peer.pendingInvokes = Math.max(0, peer.pendingInvokes - 1);
-      this.logRequest(dst, channel, args, lane, startedAt, outcome, attempts);
+      this.logRequest(dst, channel, args, lane, startedAt, outcome, attempts, id);
     }
     if (!outcome.ok) {
       const code = outcome.error.code;
@@ -786,9 +817,9 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
    * 失败与慢请求记 debug。只写通道名（不在远程调用名单里的写 unknown）、缩短的设备号、通道、次数与耗时，不写参数和结果。
    */
   private logRequest(dst: string, channel: string, args: unknown[] | undefined, lane: SessionLane | undefined, startedAt: number,
-    outcome: SessionResult, attempts: number): void {
+    outcome: SessionResult, attempts: number, requestId: string): void {
     const elapsedMs = Math.max(0, Math.round(performance.now() - startedAt));
-    const description = `channel=${diagnosticChannel(channel)} dst=${shortDeviceRef(dst)} lane=${lane ?? 'auto'} attempts=${attempts}`;
+    const description = `channel=${diagnosticChannel(channel)} dst=${shortDeviceRef(dst)} lane=${lane ?? 'auto'} attempts=${attempts} request=${requestId}`;
     if (!outcome.ok) {
       const code = outcome.error.code;
       if (code === 'INVOKE_TIMEOUT') {

@@ -3,7 +3,7 @@
  * 来源本身仍在「模型供应商」里连接和管理；这里只引用已连接的模型。每次改动立即保存。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode, type RefObject } from 'react';
 import { ArrowDown, ArrowUp, Check, CornerDownRight, Minus, Play, Plus, Waypoints, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -37,6 +37,7 @@ import { cn } from '@/lib/utils';
 import {
   MODEL_GROUP_LIMITS,
   MODEL_GROUP_STRATEGIES,
+  modelGroupAutoSwitchOn,
   modelGroupCandidateKey,
   modelGroupWeight,
   type ModelGroupCandidate,
@@ -49,6 +50,9 @@ import { ModelGroupRouteExceptions } from './ModelGroupRouteExceptions';
 import { modelGroupsSettings } from './ModelGroupsSection.settings-search';
 import { ModelGroupsOverview } from './ModelGroupsOverview';
 import { SettingsTextInput } from './SettingsTextInput';
+import { useSettingsSubpageBack } from './useSettingsEscape';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { useSettingsSubpageScroll } from './useSettingsSubpageScroll';
 
 const log = createLogger('ModelGroupsSection');
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -130,7 +134,7 @@ function WeightInput({ value, label, onCommit }: { value: number; label: string;
   );
 }
 
-export function ModelGroupsSection() {
+export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDivElement | null> }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const { confirm } = useConfirmDialog();
@@ -141,6 +145,12 @@ export function ModelGroupsSection() {
   // 「添加来源」与其它设置页一样列出其他电脑与分享来的供应商；选中哪一行，来源就连同运行位置一起存。
   const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: null });
   const [view, setView] = useState<View>({ kind: 'list' });
+  const route = view.kind === 'route' ? config.routes.find((item) => item.id === view.id) : undefined;
+  const { entry, activation } = useSettingsSearchNavigation();
+  useEffect(() => {
+    if (entry?.tab === 'model-groups') setView({ kind: 'list' });
+  }, [entry, activation]);
+  const captureScroll = useSettingsSubpageScroll(scrollRef, route ? 1 : 0, activation);
   const [preview, setPreview] = useState<{ routeId: string; result: ModelGroupResolveResult } | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
@@ -175,15 +185,19 @@ export function ModelGroupsSection() {
     route.effort ? t(`effortLevels.${route.effort}`, { defaultValue: route.effort }) : '',
   ].filter(Boolean).join(' · ');
 
+  const openRoute = (id: string) => {
+    captureScroll();
+    setView({ kind: 'route', id });
+  };
   const addRoute = async () => {
     const route: ModelGroupRoute = { id: crypto.randomUUID(), name: t('modelGroups.settings.newRouteName'), strategy: 'expiring', candidates: [] };
-    if (await save((latest) => ({ ...latest, routes: [...latest.routes, route] }))) setView({ kind: 'route', id: route.id });
+    if (await save((latest) => ({ ...latest, routes: [...latest.routes, route] }))) openRoute(route.id);
   };
   const back = () => setView({ kind: 'list' });
+  useSettingsSubpageBack(route ? back : null);
 
   // ── 路线详情 ───────────────────────────────────────────────────────────────
-  const route = view.kind === 'route' ? config.routes.find((item) => item.id === view.id) : undefined;
-  if (view.kind === 'route' && route) {
+  if (route) {
     const move = (index: number, delta: number) => updateRoute(route.id, (current) => {
       const candidates = [...current.candidates];
       const [item] = candidates.splice(index, 1);
@@ -258,6 +272,25 @@ export function ModelGroupsSection() {
                         const { effort: _previous, ...rest } = current;
                         void _previous;
                         return value === UNSET_EFFORT ? rest : { ...rest, effort: value };
+                      })}
+                    />
+                  }
+                />
+                <SettingsRow
+                  title={t('modelGroups.settings.autoSwitch.title')}
+                  hint={t('modelGroups.settings.autoSwitch.hint')}
+                  wrap
+                  trailing={
+                    <Switch
+                      data-setting-id={modelGroupsSettings.routes.id}
+                      data-model-group-auto-switch
+                      checked={modelGroupAutoSwitchOn(route)}
+                      aria-label={t('modelGroups.settings.autoSwitch.title')}
+                      onCheckedChange={(on) => void updateRoute(route.id, (current) => {
+                        // 默认开：开着时不存这一项，关掉才存 false(model-groups.md §4.5)。
+                        const { autoSwitch: _was, ...rest } = current;
+                        void _was;
+                        return on ? rest : { ...rest, autoSwitch: false };
                       })}
                     />
                   }
@@ -440,7 +473,7 @@ export function ModelGroupsSection() {
   // ── 列表 ───────────────────────────────────────────────────────────────────
   return (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
-      <ModelGroupsOverview config={config} onOpenRoute={(id) => setView({ kind: 'route', id })} />
+      <ModelGroupsOverview config={config} onOpenRoute={openRoute} />
       <SettingsSection
         title={t('modelGroups.routes')}
         titleId={modelGroupsSettings.routes.targetId}
@@ -465,7 +498,7 @@ export function ModelGroupsSection() {
               title={item.name}
               hint={routeSummary(item)}
               chevron
-              onClick={() => setView({ kind: 'route', id: item.id })}
+              onClick={() => openRoute(item.id)}
             />
           ))}
           {config.routes.length === 0 && (

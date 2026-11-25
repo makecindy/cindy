@@ -227,7 +227,7 @@ export function RunHistoryPane({
     ? t('scheduler.detail.manualTrigger')
     : s.intervalMs ? formatIntervalDuration(s.intervalMs, appI18n.language) : summarizeConfig(cronToConfig(s.cronExpr), t);
   const rules = schedulePrTriggers(s);
-  const prText = rules.map(rule => `${rule.url.replace('https://github.com/', '').replace('/pull/', '#')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
+  const prText = rules.map(rule => `${rule.url.replace('https://github.com/', '').replace('/pull/', '#').replace('/-/merge_requests/', '!')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
   const cronText = prText ? (s.manual ? prText : `${timingText} · ${prText}`) : s.webhookTrigger
     ? s.manual ? t('scheduler.webhook.title') : `${timingText} · ${t('scheduler.webhook.title')}`
     : timingText;
@@ -271,6 +271,7 @@ export function RunHistoryPane({
                 onClick={() => void handleOpenWorkingDir()}
                 title={dest.workingDir}
                 className={cn(
+                  // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                   'rounded text-[var(--cmd-palette-item-meta)] underline-offset-2 transition-colors',
                   'hover:text-[var(--msg-assistant-text)] hover:underline',
                 )}

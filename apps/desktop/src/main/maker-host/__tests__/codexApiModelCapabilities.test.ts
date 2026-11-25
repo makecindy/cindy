@@ -19,6 +19,7 @@ import {
 } from '../active-catalog.js';
 import {
   hasCodexApiConnections,
+  needsOpenAiApiCodexFastDeclaration,
   setCodexApiModelProbe,
   requestCodexApiModelProbe,
 } from '../codex-api-model-capabilities.js';
@@ -51,6 +52,45 @@ afterEach(() => {
 });
 
 describe('Codex API engine capabilities', () => {
+  // #12423 unit: the installed Codex catalog can omit a known API model.
+  // Exercise active catalog projection, including a same-name relay and explicit opt-out.
+  it('fills Fast for the official 6.2 Sol route when the engine omits the model', () => {
+    const stored = config();
+    const modelId = 'gpt-6.2-sol';
+    stored.runtimes.codex!.models[0] = { id: modelId, name: modelId };
+    const relay = structuredClone(stored);
+    relay.id = 'relay-same-model';
+    relay.runtimes.codex!.baseUrl = 'https://relay.example/v1';
+    setCustomProviderConfigs([stored, relay]);
+    setCodexApiModelCapabilities([live()]);
+    const provider = getActiveCatalog().providers.find(entry => entry.id === stored.id);
+    expect(model()).toMatchObject({ id: modelId, supportsFastMode: true });
+    expect(model().supportsUltrafastMode).not.toBe(true);
+    expect(needsOpenAiApiCodexFastDeclaration(provider, modelId)).toBe(true);
+    expect(model(relay.id).supportsFastMode).not.toBe(true);
+    expect(needsOpenAiApiCodexFastDeclaration(
+      getActiveCatalog().providers.find(entry => entry.id === relay.id), modelId,
+    )).toBe(false);
+
+    stored.runtimes.codex!.models[0]!.supportsFastMode = false;
+    setCustomProviderConfigs([stored, relay]);
+    expect(model().supportsFastMode).toBe(false);
+    expect(needsOpenAiApiCodexFastDeclaration(
+      getActiveCatalog().providers.find(entry => entry.id === stored.id), modelId,
+    )).toBe(false);
+  });
+
+  it('preserves an explicit provider report that Fast is unavailable', () => {
+    const stored = config();
+    const modelId = 'gpt-6.2-sol';
+    stored.runtimes.codex!.models[0] = {
+      id: modelId, name: modelId, discoveredMetadata: { supportsFastMode: false },
+    };
+    setCustomProviderConfigs([stored]);
+    setCodexApiModelCapabilities([live()]);
+    expect(model().supportsFastMode).toBe(false);
+  });
+
   it.each(['gpt-5.6-terra', 'gpt-6.1-terra'])(
     'projects the native Ultra/Fast report for official API model %s', modelId => {
       const stored = config();
