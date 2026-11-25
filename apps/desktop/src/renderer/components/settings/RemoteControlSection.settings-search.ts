@@ -32,9 +32,10 @@ export const remoteControlSettings = defineSettings({
     aliases: ['device link', 'devices', 'device management', '设备互联', '我的设备', '设备列表', '设备管理'],
   },
   // 「我的设备」里的「云主机」一行:开通、查看进度与管理都在账号中心完成,这里只是入口。
+  // 只有组织成员才有云主机入口(useCloudComputerEntry),个人账号搜不到这一行。
   cloudComputer: {
     id: 'remoteControl.cloudComputer',
-    isVisible: ({ mode }) => mode === 'cloud',
+    isVisible: ({ mode, membershipKind }) => mode === 'cloud' && membershipKind === 'org',
     tab: 'remote-control',
     targetId: 'settings-search-target-remote-devices',
     titleKey: 'settings.remoteControl.cloudComputer.title',

@@ -70,6 +70,7 @@ vi.mock('../components/settings/RemoteSection', () => ({
 import { RemoteControlSection } from '@/components/settings/RemoteControlSection';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import { _resetRemoteConnectionV2ForTests } from '@/features/remote-connection-v2/useRemoteConnectionV2';
+import { toast } from '@/lib/toast';
 
 // 收起态的 header 无障碍名里还会带上摘要文案,所以用前缀匹配。
 const devicesHeader = () =>
@@ -362,7 +363,8 @@ describe('RemoteControlSection cloud instance deep link', () => {
 // - 生产入口与可观察结果:RemoteControlSection →「我的设备」里的「云主机」一行;用户看到哪些按钮,点了在浏览器里打开哪一页。
 // - 规则依据:用户裁决 2026-11-25,云主机的添加和管理放进设备管理(侧栏菜单入口保留,与这里读同一份入口)。
 // - 现有覆盖缺口:入口解析在 maker-shared deviceList.test.ts,但没有测试经界面验证按钮与打开的地址。
-// - 最小失败输入:组织成员已有一台运行中的云主机、还能再开一台 → 两个按钮,「添加」带下单参数;个人账号没有这一行。
+// - 最小失败输入:组织成员已有一台运行中的云主机、还能再开一台 → 两个按钮,「添加」带下单参数;个人账号没有这一行;
+//   浏览器没打开(主进程回 success: false,不拒绝)→ 提示打开失败(PR #12823 评审)。
 // - tier:unit(jsdom),与同页其它用例同一文件、同一套 mock。
 describe('RemoteControlSection cloud computer row', () => {
   const consoleUrl = 'https://console.example.test/console/orgs/org-1/personal/cloud';
@@ -376,8 +378,8 @@ describe('RemoteControlSection cloud computer row', () => {
   });
   let openExternal: ReturnType<typeof vi.fn>;
 
-  function renderWithEntry(value: unknown) {
-    openExternal = vi.fn(async () => ({ success: true }));
+  function renderWithEntry(value: unknown, opened = true) {
+    openExternal = vi.fn(async () => ({ success: opened }));
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -444,5 +446,18 @@ describe('RemoteControlSection cloud computer row', () => {
     expect(screen.getByTestId('my-devices-panel-self')).toBeTruthy();
     expect(screen.queryByText('settings.remoteControl.cloudComputer.title')).toBeNull();
     expect(screen.queryByRole('button', { name: /^settings\.remoteControl\.cloudComputer\.actions\./ })).toBeNull();
+  });
+
+  it('tells the user when the browser does not open the cloud computer page', async () => {
+    const error = vi.spyOn(toast, 'error');
+    try {
+      renderWithEntry(entry({ status: 'linked' }), false);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'settings.remoteControl.cloudComputer.actions.manageCloud' }));
+
+      await waitFor(() => expect(error).toHaveBeenCalledWith('settings.remoteControl.cloudComputer.openFailed'));
+    } finally {
+      error.mockRestore();
+    }
   });
 });

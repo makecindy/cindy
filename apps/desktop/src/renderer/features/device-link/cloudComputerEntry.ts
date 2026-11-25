@@ -49,10 +49,15 @@ export function cloudComputerActions(entry: CloudComputerEntry): CloudComputerAc
   return 'canAdd' in entry && entry.canAdd ? [entry.action, 'addCloud'] : [entry.action];
 }
 
-/** 在浏览器里打开账号中心的云主机页;「添加云主机」直接打开下单表单。 */
-export function openCloudComputerPage(entry: CloudComputerEntry, action: CloudComputerAction) {
+/**
+ * 在浏览器里打开账号中心的云主机页;「添加云主机」直接打开下单表单。
+ * 主进程把打不开写在返回值里(success: false)而不是让调用失败,这里统一转成拒绝,
+ * 侧栏菜单和设置页各自在 catch 里提示用户。
+ */
+export async function openCloudComputerPage(entry: CloudComputerEntry, action: CloudComputerAction): Promise<void> {
   const url = new URL(entry.url);
   url.searchParams.set('app', BRAND_IDENTITY.primaryScheme);
   if (action === 'addCloud') url.searchParams.set('add', '1');
-  return window.electronAPI.openExternal(url.href);
+  const result = await window.electronAPI.openExternal(url.href);
+  if (!result.success) throw new Error('The cloud computer page did not open');
 }
