@@ -273,14 +273,15 @@ export function forgetTurnGate(sessionId?: string): void {
   instanceOf.delete(sessionId);
 }
 
-function judgePrompt(workerLabels: string[], finalText: string): string {
-  const workers = workerLabels.length ? workerLabels.join(', ') : '(none registered)';
+function judgePrompt(workerLabels: string[] | undefined, finalText: string): string {
+  const workers = workerLabels?.length ? workerLabels.join(', ') : '(none registered)';
   return [
-    'One assistant turn ended with no tool call and no accepted dispatch.',
+    'One assistant turn ended with no Orca tool call and no accepted dispatch.',
     `Workers that could receive work: ${workers}.`,
     "Decide whether this closing text asserts that work was already handed to a worker.",
-    'Answer "claim" only for an explicit assertion that work was already given, dispatched, queued, or is being done by a worker. A reply that denies having dispatched anything is not a claim.',
-    'Answer "quiet" for summaries, plans, questions, status of user-facing work, or anything that does not assert that a handoff already happened.',
+    'Answer "claim" only for an explicit assertion that work was already given, dispatched, queued, or is being done by a worker.',
+    'Denials such as "this turn dispatched nothing" are not claims.',
+    'Answer "quiet" for summaries, plans, questions, status of user-facing work, restatements without a named worker, or anything that does not assert that a handoff already happened.',
     'When unsure, answer "quiet".',
     'Reply with exactly one word: claim or quiet.',
     '',
@@ -298,7 +299,7 @@ export async function judgeDispatchClaim(params: {
   leadSessionId: string;
   turnGeneration: number;
   finalText: string;
-  workerLabels: string[];
+  workerLabels?: string[];
 }): Promise<DispatchClaimVerdict> {
   const text = params.finalText.trim();
   if (!text) return 'quiet';
@@ -379,13 +380,22 @@ export async function evaluateTurnGate(input: {
   leadSessionId: string;
   turnGeneration: number;
   finalText: string | undefined;
-  workerLabels: string[];
+  workers: { label: string; status: string }[];
   /** 会话实例标记；换实例后代次重用，计数与凭据都不能沿用。 */
   instance?: number;
 }): Promise<string | undefined> {
   const text = input.finalText?.trim() ?? '';
   markTurnGateHandled(input.leadSessionId, input.turnGeneration, input.instance);
   if (!text) return undefined;
+
+  const turnDispatches = dispatchFactsForTurn(input.leadSessionId, input.turnGeneration).filter(
+    (fact) =>
+      // 只认这一回合自己的派发，代次在**请求时**就被记下了（见 noteLeadDispatchFact
+      // 调用点），不需要时间窗补救。放宽成「最近一分钟内派过」会把
+      // 「上一轮派 A、这一轮声称派 B、B 根本没收到」整段放过。
+      (input.instance === undefined || fact.instanceToken === input.instance) &&
+      fact.turnGeneration === input.turnGeneration,
+  ).length;
 
   const claim = findUnbackedDispatchClaim(input.leadSessionId, text);
   if (claim) {
@@ -397,31 +407,21 @@ export async function evaluateTurnGate(input: {
 
   // 只剩「纯口语声称已派」这一格需要语义判定。
   //
-  // 账本里有凭据时默认不判：一句「已交给 research」很可能是对既有那笔派发的
-  // 复述，宿主拿单回合文本无权判它为假。按回合切会让「我上一轮派过了」这类
-  // **真话**每轮被判成声称并纠正一次。
-  //
-  // 唯一能核实的是「点名的 worker 账本里根本没派过」——那不是复述，是新的声称，
-  // 即使这个会话昨天派过别人也要判。
+  // 判据只有一条：**这个回合自己有没有派发**。账本里有更早的凭据不算——上一轮
+  // 派过 A，这一轮说「已派给 B」而 B 根本没收到，正是要防的形态；拿「账本非空」
+  // 或「文本点到的名字账本里有」放行，都会把这个形态整段放过。
   //
   // 用「零 Orca 工具」而不是「零工具」：读了几个文件再说已派同样可疑，
   // 而那正是 Claude Code 用户最常见的形态。
-  const facts = dispatchFactsForTurn(input.leadSessionId, input.turnGeneration);
-  if (turnOrcaToolUseCount(input.leadSessionId, input.turnGeneration, input.instance) > 0) {
-    return undefined;
-  }
-  const backed = new Set(facts.map((fact) => fact.workerLabel));
-  const namesUnbackedWorker = input.workerLabels.some(
-    (label) => text.includes(label) && !backed.has(label),
-  );
-  if (facts.length > 0 && !namesUnbackedWorker) {
-    return undefined;
-  }
+  const dispatchedThisTurn =
+    turnDispatches > 0 ||
+    turnOrcaToolUseCount(input.leadSessionId, input.turnGeneration, input.instance) > 0;
+  if (dispatchedThisTurn) return undefined;
   const verdict = await judgeDispatchClaim({
     leadSessionId: input.leadSessionId,
     turnGeneration: input.turnGeneration,
     finalText: text,
-    workerLabels: input.workerLabels,
+    workerLabels: input.workers.map((worker) => worker.label),
   });
   if (verdict !== 'claim') return undefined;
   if (!consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration)) {

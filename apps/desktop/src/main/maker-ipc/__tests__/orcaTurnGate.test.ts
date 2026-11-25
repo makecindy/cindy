@@ -7,7 +7,7 @@ vi.mock('../../utility-model/oneShotCandidates.js', () => ({
 }));
 vi.mock('../../maker-host/index.js', () => ({ getMaker: () => ({}) }));
 
-import { noteLeadDispatchFact } from '../orcaDispatchClaims.js';
+import { noteLeadDispatchFact, resetDispatchClaimState } from '../orcaDispatchClaims.js';
 import {
   arrearsCount,
   arrearsDue,
@@ -29,6 +29,9 @@ import {
 
 beforeEach(() => {
   forgetTurnGate();
+  // 凭据账在另一个模块里，forgetTurnGate 清不掉它：不清就会把上一条用例
+  // 一分钟内的派发带进来，让「本回合零派发」的用例静默变成「有派发」。
+  resetDispatchClaimState();
   requestUtilityText.mockReset();
 });
 
@@ -89,7 +92,13 @@ describe('turn tool-use counter', () => {
 });
 
 describe('dispatch claim judge', () => {
-  const base = { leadSessionId: 'lead-1', turnGeneration: 1, workerLabels: ['research'] };
+  const base = {
+    leadSessionId: 'lead-1',
+    turnGeneration: 1,
+    orcaToolCalls: 0,
+    ledger: [],
+    workers: [{ label: 'research', status: 'idle' }],
+  };
 
   it('reports a claim when the judge says claim', async () => {
     requestUtilityText.mockResolvedValue({ ok: true, text: 'claim' });
@@ -186,7 +195,11 @@ describe('worker arrears', () => {
 });
 
 describe('gate trigger scope', () => {
-  const base = { leadSessionId: 'lead-1', turnGeneration: 2, workerLabels: ['research'] };
+  const base = {
+    leadSessionId: 'lead-1',
+    turnGeneration: 2,
+    workers: [{ label: 'research', status: 'idle' }],
+  };
 
   it('keeps the judge out once the host has a dispatch to point at', async () => {
     requestUtilityText.mockResolvedValue({ ok: true, text: 'claim' });
@@ -195,49 +208,69 @@ describe('gate trigger scope', () => {
       workerLabel: 'research',
       dispatchId: 'q-earlier',
       delivery: 'queued',
-      turnGeneration: 1,
-      at: Date.now() - 60_000,
+      turnGeneration: 2,
+      at: Date.now() - 10 * 60_000,
     });
-    // 账本里就有一笔真派发，「已经交给 research」是对它的复述；
-    // 单回合文本分不清复述与新声称，宁可不判，也不要纠正真话。
+    // 这一回合自己派过活：再判就成了纠正一句真话。
     await expect(evaluateTurnGate({ ...base, finalText: '已派给它了。' })).resolves.toBeUndefined();
     expect(requestUtilityText).not.toHaveBeenCalled();
   });
 
-  it('lets a dispatch that landed a moment ago pass, whatever its generation says', async () => {
+  it('judges a claim made right after the previous turn dispatched to someone else', async () => {
+    // 最要防的一格：上一轮派给 research 的凭据刚落账（就在几秒前），这一轮
+    // 什么都没派，却说「已派给 developer2」。按「最近派过」或「账本里有这个
+    // 名字」放行，都会把这一格整段漏掉。
     requestUtilityText.mockResolvedValue({ ok: true, text: 'claim' });
-    // 写入与判定两侧各取一次轮次，异步投递落地时常常错开一轮。
     noteLeadDispatchFact('lead-1', {
-      workerId: 'w-1',
-      workerLabel: 'research',
-      dispatchId: 'q-this-turn',
+      workerId: 'w-2',
+      workerLabel: 'developer2',
+      dispatchId: 'q-earlier',
       delivery: 'queued',
-      turnGeneration: 99,
+      turnGeneration: 1,
       at: Date.now(),
-    });
-    await expect(evaluateTurnGate({ ...base, finalText: '已派给它了。' })).resolves.toBeUndefined();
-    expect(requestUtilityText).not.toHaveBeenCalled();
-  });
-
-  it('still judges a claim that names a worker the ledger never dispatched to', async () => {
-    requestUtilityText.mockResolvedValue({ ok: true, text: 'claim' });
-    // 这个会话昨天真派过 research；今天说「已派给 developer2」而账本里没有
-    // 任何给 developer2 的凭据——这不是复述，宿主能核实。
-    noteLeadDispatchFact('lead-1', {
-      workerId: 'w-1',
-      workerLabel: 'research',
-      dispatchId: 'q-yesterday',
-      delivery: 'queued',
-      turnGeneration: 1,
-      at: Date.now() - 60_000,
     });
     await expect(
       evaluateTurnGate({
         ...base,
-        workerLabels: ['research', 'developer2'],
-        finalText: '已改派给 developer2 了。',
+        finalText: '已派给 developer2 了，它在跑。',
       }),
-    ).resolves.toBeTruthy();
+    ).resolves.toContain('dispatched nothing');
+    expect(requestUtilityText).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the judge the worker list without ledger details', async () => {
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'restatement' });
+    noteLeadDispatchFact('lead-1', {
+      workerId: 'w-1',
+      workerLabel: 'research',
+      dispatchId: 'q-yesterday',
+      delivery: 'direct',
+      turnGeneration: 1,
+      at: Date.now() - 3 * 60 * 60 * 1000,
+    });
+    await expect(
+      evaluateTurnGate({
+        ...base,
+        workers: [{ label: 'research', status: 'running' }],
+        finalText: '派单发生在前一轮，research 正在跑。',
+      }),
+    ).resolves.toBeUndefined();
+    const prompt = String(requestUtilityText.mock.calls[0]?.[1] ?? '');
+    // 「谁能接活」是判定需要的事实；账本细节不进 prompt，免得判定器把
+    // 「账本里有这一笔」当放行理由——那正是要收掉的口子。
+    expect(prompt).toContain('research');
+    expect(prompt).not.toContain('delivery=');
+  });
+
+  it('judges a claim made after dispatch attempts that all failed', async () => {
+    // 两次 send_to_worker 都报错、第三次才成的情况在真实会话里出现过：
+    // 本回合 Orca 工具次数 > 0 但一条都没派成，说「已派」同样是假话。
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'claim' });
+    noteTurnEvent('lead-1', 1, 'send_to_worker', 7);
+    noteTurnEvent('lead-1', 1, 'send_to_worker', 7);
+    await expect(
+      evaluateTurnGate({ ...base, instance: 7, finalText: '已派出去了，不需要重发。' }),
+    ).resolves.toContain('dispatched nothing');
     expect(requestUtilityText).toHaveBeenCalledTimes(1);
   });
 
@@ -255,7 +288,7 @@ describe('gate trigger scope', () => {
       workerLabels: ['research'],
       finalText: '本轮没有派单。',
     });
-    expect(seen).toContain('denies having dispatched');
+    expect(seen).toContain('are not claims');
   });
 
   it('still treats a namespaced Orca tool name as Orca', () => {

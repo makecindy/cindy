@@ -784,9 +784,9 @@ async function evaluateLeadTurnGateFor(
     leadSessionId: params.leadSessionId,
     turnGeneration: params.turnGeneration,
     finalText: text,
-    workerLabels: workers
-      .map((worker) => worker.label)
-      .filter((label): label is string => Boolean(label)),
+    workers: workers
+      .filter((worker): worker is typeof worker & { label: string } => Boolean(worker.label))
+      .map((worker) => ({ label: worker.label, status: worker.status })),
   });
 }
 
