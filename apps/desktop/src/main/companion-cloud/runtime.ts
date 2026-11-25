@@ -185,12 +185,25 @@ function checkLegacySkillSizes(values: CompanionPreferenceValue[]): void {
   }
 }
 
+/**
+ * The take-over stopped because this computer has no usable companion model. That is setup the
+ * owner can fix, not a transient fault: the old copy stays hidden and the background retries, so
+ * the UI must name the cause instead of the generic "could not continue here" (issue #12843).
+ * The worker boundary strips custom error fields, so the message is what survives; keep this in
+ * step with the PRECONDITION_FAILED message createBotCanonicalSession throws for a missing route.
+ */
+function missingCompanionModel(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return text.includes('请先连接模型供应商或选择伙伴模型');
+}
+
 function actionFailure(error: unknown, fallback: 'FAILED' | 'OFFLINE' = 'FAILED'): CompanionCloudActionResult {
   if (error instanceof CompanionProfileRepairError) return { ok: false, code: 'FAILED', profileRepairError: error.reason };
   if (error instanceof BotProfileSourceTooLong) return { ok: false, code: 'FAILED', profileFailure: error.failure };
   if (error instanceof CompanionIdentityConflict) return { ok: false, code: 'LOCAL_CINDY_CONFLICT' };
   const conflict = chatRejection(error, 409, 'HOME_DEVICE_CONFLICT');
   if (conflict) return { ok: false, code: 'HOME_CONFLICT', homeDeviceId: typeof conflict.homeDeviceId === 'string' ? conflict.homeDeviceId : null };
+  if (missingCompanionModel(error)) return { ok: false, code: 'FAILED', reason: 'COMPANION_MODEL_UNAVAILABLE' };
   return { ok: false, code: isUnreachable(error) ? 'OFFLINE' : fallback };
 }
 
@@ -341,6 +354,7 @@ export function startCompanionCloud(input: {
     input.log?.warn('Companion home change failed', { action, botId,
       code: /^[A-Z][A-Z0-9_]{0,79}$/.test(reason) ? reason : (result.ok ? 'FAILED' : result.code),
       ...(stage ? { stage } : {}),
+      ...(!result.ok && result.reason ? { reason: result.reason } : {}),
       ...(error instanceof CompanionIdentityConflict ? { conflictingBotId: error.conflictingBotId } : {}),
     });
     return !result.ok && error instanceof CompanionIdentityConflict
@@ -490,6 +504,8 @@ export function startCompanionCloud(input: {
   const materializing = new Map<string, Promise<CompanionMaterializeResult>>();
   const autoRetryAt = new Map<string, number>();
   const autoPending = new Set<string>();
+  /** Companions already reported as waiting for a usable model; the retry stays quiet afterwards. */
+  const modelWaitNoted = new Set<string>();
   const identityConflicts = new Map<string, { actorId: string; conflictingBotId: string }>();
   const profileFailures = new Map<string, { actorId: string; failure: BotProfileSourceFailure }>();
   const repairDrafts = new Map<string, { token: string; actorId: string; home: string | null; version: string }>();
@@ -714,6 +730,7 @@ export function startCompanionCloud(input: {
       return materialize(actor, correction);
     })().then(result => {
       autoRetryAt.delete(botId);
+      modelWaitNoted.delete(botId);
       profileFailures.delete(botId);
       input.log?.info?.('Companion moved to this computer', { actorId: actor.id, created: result.created, inserted: result.inserted, rebuild: result.rebuild });
       publish(); mirrors.kick(botId); uploads.kick(botId);
@@ -731,6 +748,14 @@ export function startCompanionCloud(input: {
         return;
       }
       if (chatRejection(error, 409, 'HOME_DEVICE_CONFLICT')) { void input.refresh?.().catch(() => undefined); return; }
+      // A missing companion model waits for the owner, so say it once instead of a WARN a minute.
+      if (missingCompanionModel(error)) {
+        if (!modelWaitNoted.has(botId)) {
+          modelWaitNoted.add(botId);
+          input.log?.warn('Companion take-over waits for a usable model', { actorId: actor.id, reason: 'COMPANION_MODEL_UNAVAILABLE' });
+        }
+        return;
+      }
       input.log?.warn('Companion take-over will retry', { actorId: actor.id, code: errorCode(error) });
     }).finally(() => { autoPending.delete(botId); });
   }

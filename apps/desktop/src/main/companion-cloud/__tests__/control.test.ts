@@ -805,6 +805,29 @@ describe('take over', () => {
     });
   });
 
+  // #12843: a missing companion model is setup the owner can fix, so the explicit action must carry
+  // a reason the UI can explain, and the background retry must not warn every minute while it waits.
+  it('reports a missing companion model as a reason and warns only once while it waits', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup({ home: 'laptop' });
+      const missing = () => Object.assign(new Error('请先连接模型供应商或选择伙伴模型'), { code: 'PRECONDITION_FAILED' });
+      vi.mocked(t.local.host.createProfile).mockRejectedValueOnce(missing());
+      expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED', reason: 'COMPANION_MODEL_UNAVAILABLE' });
+      expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
+        action: 'takeOver', botId: 'bot_mia', code: 'FAILED', stage: 'local-restore', reason: 'COMPANION_MODEL_UNAVAILABLE' });
+
+      vi.mocked(t.local.host.createProfile).mockRejectedValue(missing());
+      t.log.warn.mockClear();
+      for (let i = 0; i < 3; i++) {
+        t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(60_000);
+      }
+      const waits = t.log.warn.mock.calls.filter(call => String(call[0]).includes('take-over'));
+      expect(waits).toEqual([['Companion take-over waits for a usable model', { actorId: 'actor-1', reason: 'COMPANION_MODEL_UNAVAILABLE' }]]);
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
   it('does not move the home for an incomplete profile snapshot', async () => {
     const t = setup({ home: 'laptop', handler: (route, method) => {
       if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: { name: 'Mia' }, revision: 1 }];

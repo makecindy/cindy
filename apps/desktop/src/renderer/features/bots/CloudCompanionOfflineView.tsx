@@ -168,6 +168,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
           navigate(`/bots/remote/${encodeURIComponent(result.homeDeviceId)}/${encodeURIComponent(botId)}`);
         } else setState({ kind: 'conflict', device: winner });
       } else if (result.profileFailure) setState({ kind: 'profile', failure: result.profileFailure });
+      else if (result.reason === 'COMPANION_MODEL_UNAVAILABLE') setState({ kind: 'error', key: 'bots.cloud.takeOverModelMissing' });
       else setState({ kind: 'error', key: result.code === 'OFFLINE' ? 'bots.cloud.takeOverOffline'
         : result.code === 'NOT_ENABLED' ? 'bots.cloud.notEnabled' : result.code === 'LOCAL_CINDY_CONFLICT'
           ? 'bots.cloud.localCindyConflict' : 'bots.cloud.takeOverFailed' });
@@ -206,7 +207,9 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
             <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
               {state.kind === 'running' ? t('bots.cloud.takingOver', { name })
                 : state.kind === 'conflict' ? t('bots.cloud.takeOverConflict', { name, device: state.device })
-                  : state.kind === 'error' ? t(state.key, { name })
+                  : state.kind === 'error' ? (state.key === 'bots.cloud.takeOverModelMissing'
+                    ? t(state.key, { name, defaultValue: 'This computer has no usable companion model, so {{name}} cannot continue here. Connect a model provider or choose a companion model in Settings, then try again.' })
+                    : t(state.key, { name }))
                     : t('bots.cloud.takeOverHint', { name })}
             </p>
           </div>
