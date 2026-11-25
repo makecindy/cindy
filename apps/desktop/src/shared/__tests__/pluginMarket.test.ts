@@ -4,6 +4,7 @@ import { parseMarketSource } from '../../main/plugin-market/sources/parse';
 import {
   isPluginMarketCustomIconKey,
   isPluginMarketSourceIdentity,
+  pluginMarketFetchAddress,
   pluginMarketRepositoryFromUrl,
   pluginMarketSourceIdentity,
   pluginMarketCustomIconProjectionToken,
@@ -97,6 +98,24 @@ describe('pluginMarketRepositoryFromUrl', () => {
       `https://${'a'.repeat(250)}.com/acme/plugins`,
     ]) expect(pluginMarketRepositoryFromUrl(url)).toBeNull();
     expect(pluginMarketRepositoryFromUrl(42)).toBeNull();
+  });
+});
+
+describe('pluginMarketFetchAddress', () => {
+  // Parts that feed the source id: scheme, host and port distinguish endpoints; credentials never appear.
+  it('keeps the endpoint parts that tell sources apart and drops credentials', () => {
+    expect(pluginMarketFetchAddress('https://ghp_SECRET@Git.Example.test:8443/acme/plugins.git?x=1#y'))
+      .toEqual({ scheme: 'https', host: 'git.example.test', port: '8443', path: '/acme/plugins.git' });
+    expect(pluginMarketFetchAddress('ssh://git@git.example.test:2222/acme/plugins.git'))
+      .toEqual({ scheme: 'ssh', host: 'git.example.test', port: '2222', path: '/acme/plugins.git' });
+    expect(pluginMarketFetchAddress('git@git.example.test:acme/plugins.git'))
+      .toEqual({ scheme: 'scp', host: 'git.example.test', port: '', path: 'acme/plugins.git' });
+    // Paths the display identity rejects (e.g. a `.github` repository) still identify a source.
+    expect(pluginMarketFetchAddress('https://github.com/acme/.github')).toMatchObject({ path: '/acme/.github' });
+    expect(pluginMarketRepositoryFromUrl('https://github.com/acme/.github')).toBeNull();
+    for (const url of ['file:///home/tester/plugins', 'https://github.com/', 'https://a@b@github.com/acme/plugins', 42]) {
+      expect(pluginMarketFetchAddress(url)).toBeNull();
+    }
   });
 });
 

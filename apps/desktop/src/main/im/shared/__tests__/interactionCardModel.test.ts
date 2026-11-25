@@ -431,6 +431,28 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
     ]);
   });
 
+  // PR #12731 (2026-11-25): the plugin install card carries the Host's source identity for controllers to
+  // verify. IM and official-hook cards show the repository but not the opaque sourceId in their parameter
+  // preview; the decision path keeps the original request.
+  it('插件安装确认卡的参数预览不显示来源标识', () => {
+    const request: PermissionRequest = {
+      kind: 'permission',
+      requestId: 'req-plugin-install',
+      toolName: 'cindy.plugin.install',
+      input: { ghost_id: 'weather', version: '1.0.0', operation: 'install', origin: 'custom-market',
+        source: { kind: 'git', repository: 'github.com/acme/plugins', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' } },
+      description: 'v1.0.0 · From custom market Acme · Repository github.com/acme/plugins',
+      metadata: { hostOwnedConfirmation: 'plugin_install' },
+    };
+    const im = cards.buildPermissionCard(request);
+    const hook = composeInteractionCard(request);
+    for (const body of [im.body, hook?.card.body]) {
+      expect(body).toContain('github.com/acme/plugins');
+      expect(body).not.toContain('AbCdEfGhIjKlMnOpQrStUv');
+    }
+    expect(request.input.source).toHaveProperty('sourceId');
+  });
+
   it('AI ask 的富卡片写明审阅原因，且只能允许这一次', () => {
     const request = {
       ...PERMISSION_RICH,

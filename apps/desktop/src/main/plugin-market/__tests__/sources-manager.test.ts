@@ -9,7 +9,15 @@ import type { GitExecutor } from '../sources/git';
 import { releaseCachePath, retainCachePath } from '../sources/cacheLease';
 import { MarketSourceStore } from '../sources/store';
 import { createMarketSourceIdOf } from '../sources/sourceId';
-import { marketSourceKey } from '../../../shared/pluginMarket';
+import { marketSourceKey, pluginMarketFetchAddress } from '../../../shared/pluginMarket';
+
+const logged = vi.hoisted(() => [] as unknown[]);
+vi.mock('../../logger.js', () => ({
+  createLogger: () => {
+    const record = (...args: unknown[]) => { logged.push(args); };
+    return { trace: record, debug: record, info: record, warn: record, error: record, fatal: record };
+  },
+}));
 
 const roots: string[] = [];
 
@@ -869,16 +877,17 @@ describe('MarketSourceManager git sources', () => {
   });
 });
 
-/* 测试价值（PR #12731 维护者评审 2026-11-25：回执核实要用 Host 生成的不透明来源标识；展示的仓库必须是
- * git 实际取包的地址）
+/* 测试价值（PR #12731 维护者评审 2026-11-25 两轮 + Codex P1：回执核实要用 Host 生成、绑定实际取包端点的
+ * 不透明来源标识；展示的仓库必须是 git 实际取包的地址，且要在取包实际发生的仓库上下文里采集；刷新落位的
+ * 包必须就是本次获取的目标提交）
  * - 生产入口与可观察结果：MarketSourceManager.addSource / refreshSource / discoverSource 产出的 sourceIdentity
- *   （原样进入安装确认、市场条目与远程回执），以及 createMarketSourceIdOf 的标识与密钥文件。
- * - 缺口：此前所有本地目录都是 {kind:'local'}，同主机不同端口身份相同；仓库取自配置字符串，
- *   insteadOf 改写后展示 A、实际取 B。
- * - 最小失败输入：两个本地目录；同主机不同端口；insteadOf 改写到另一仓库；只注入令牌的改写；
- *   取包前后解析不一致；刷新时解析失败而旧版本带着记录。改动前这些断言全部失败（字段与记录不存在）。
- * - tier：unit（临时目录，git 由 fake 执行器模拟；真实 git 的 insteadOf 解析见
- *   sources-fetch-url.git-integration.test.ts）。
+ *   与 sourceId（原样进入安装确认、市场条目与远程回执），createMarketSourceIdOf 的标识与密钥文件，以及刷新时
+ *   是否改走全新克隆。
+ * - 缺口：此前所有本地目录都是 {kind:'local'}；标识只看配置，同一配置改写到另一仓库仍相同；地址在无仓库的
+ *   上下文采集，includeIf 只对缓存仓库生效时会记下错的地址；快进后 HEAD 未必是取到的目标。
+ * - 最小失败输入：两个本地目录；同主机两个端口；同一配置先后改写到仓库 A、B；只改注入的令牌；includeIf 只在
+ *   仓库上下文生效；取包前后解析不一致；刷新时上游停在本地 HEAD 的祖先；解析失败报错内容含令牌。
+ * - tier：unit（临时目录，git 由 fake 执行器模拟；真实 git 的行为见 sources-fetch-url.git-integration.test.ts）。
  */
 describe('MarketSourceManager source identity', () => {
   function identityManager(root: string, gitExecutor?: GitExecutor) {
@@ -891,9 +900,15 @@ describe('MarketSourceManager source identity', () => {
     });
   }
 
-  /** git 的 fake：clone 写出市场与 .git 目录；`ls-remote --get-url` 按 resolve() 当下的返回模拟 insteadOf。 */
-  function rewritingGit(resolve: () => string | null) {
-    const executor: GitExecutor = async (args) => {
+  /**
+   * git 的 fake：clone 写出市场与 .git 目录；`ls-remote --get-url` 按 resolve(cwd) 当下的返回模拟 insteadOf
+   * （cwd 有值即在某个仓库的上下文里解析，可模拟只对缓存仓库生效的 includeIf）；`rev-parse` 默认 HEAD 与
+   * 获取目标一致，upstream() 可让上游停在别处。
+   */
+  function rewritingGit(resolve: (cwd?: string) => string | null, upstream: () => string = () => 'abc123') {
+    const calls: string[][] = [];
+    const executor: GitExecutor = async (args, options) => {
+      calls.push([...args]);
       if (args[0] === '--version') return { stdout: 'git version 2.43.0\n', stderr: '' };
       if (args[0] === 'clone') {
         const dest = String(args[args.length - 1]);
@@ -902,15 +917,18 @@ describe('MarketSourceManager source identity', () => {
         return { stdout: '', stderr: '' };
       }
       if (args[0] === 'ls-remote') {
-        const url = resolve();
-        if (url === null) throw new Error('cannot resolve');
+        const url = resolve(options.cwd);
+        if (url === null) throw new Error('fatal: could not read https://ghp_SECRET@github.com/acme/plugins.git');
         return { stdout: `${url}\n`, stderr: '' };
       }
-      if (args[0] === 'rev-parse') return { stdout: 'abc123\n', stderr: '' };
+      if (args[0] === 'rev-parse') {
+        return { stdout: `${String(args[args.length - 1]).startsWith('@{u}') ? upstream() : 'abc123'}\n`, stderr: '' };
+      }
       return { stdout: '', stderr: '' };
     };
-    return executor;
+    return { executor, calls, clones: () => calls.filter((call) => call[0] === 'clone').length };
   }
+  const SOURCE_ID = /^[A-Za-z0-9_-]{22}$/;
 
   it('gives two local folders different source ids and keeps them stable', async () => {
     const root = makeRoot();
@@ -921,87 +939,141 @@ describe('MarketSourceManager source identity', () => {
     await manager.addSource({ source: path.join(root, 'b') });
     const a = (await manager.discoverSource('lib-a')).sourceIdentity;
     const b = (await manager.discoverSource('lib-b')).sourceIdentity;
-    expect(a).toEqual({ kind: 'local', sourceId: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/) });
+    expect(a).toEqual({ kind: 'local', sourceId: expect.stringMatching(SOURCE_ID) });
     expect(b?.sourceId).not.toBe(a?.sourceId);
     expect(JSON.stringify([a, b])).not.toContain(root);
     // A new manager (a later operation or a restart) reads the same key and yields the same ids.
     expect((await identityManager(root).discoverSource('lib-a')).sourceIdentity).toEqual(a);
   });
 
-  it('gives the same repository on two ports of one host different source ids', () => {
+  it('gives two ports of one host different source ids', () => {
     const root = makeRoot();
     const sourceIdOf = createMarketSourceIdOf(path.join(root, 'source-id.key'));
-    const at = (port: number) => sourceIdOf(marketSourceKey({
-      type: 'git', url: `https://git.example.test:${port}/acme/plugins.git`, sparsePaths: [],
-    }));
-    expect(at(8443)).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    const sourceKey = marketSourceKey({ type: 'git', url: 'https://git.example.test/acme/plugins.git', sparsePaths: [] });
+    const at = (port: number) => sourceIdOf({ kind: 'git', sourceKey,
+      address: pluginMarketFetchAddress(`https://git.example.test:${port}/acme/plugins.git`)! });
+    expect(at(8443)).toMatch(SOURCE_ID);
     expect(at(8443)).not.toBe(at(9443));
   });
 
-  it('keeps the key on this computer and never rewrites an unreadable one', () => {
+  it('keeps the key on this computer and rebuilds it only when missing or damaged', () => {
     const root = makeRoot();
     const keyPath = path.join(root, 'plugin-market', 'source-id.key');
     const key = marketSourceKey({ type: 'local', path: path.join(root, 'a') });
-    const first = createMarketSourceIdOf(keyPath)(key);
+    const first = createMarketSourceIdOf(keyPath)({ kind: 'local', sourceKey: key });
     if (process.platform !== 'win32') expect(fs.statSync(keyPath).mode & 0o777).toBe(0o600);
-    expect(first).not.toContain(fs.readFileSync(keyPath, 'utf8').trim().slice(0, 8));
-    // Lost key: a new one is created and old ids no longer match (controllers stay "unconfirmed").
+    // Lost or damaged key: a new one is written and read back; old ids no longer match (controllers stay
+    // "unconfirmed"), and the rebuilt key is stable for later operations.
     fs.rmSync(keyPath);
-    const second = createMarketSourceIdOf(keyPath)(key);
-    expect(second).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    const second = createMarketSourceIdOf(keyPath)({ kind: 'local', sourceKey: key });
+    expect(second).toMatch(SOURCE_ID);
     expect(second).not.toBe(first);
-    // Damaged key: no ids at all, and the file is left as it is.
     fs.writeFileSync(keyPath, 'damaged');
-    expect(createMarketSourceIdOf(keyPath)(key)).toBeNull();
-    expect(fs.readFileSync(keyPath, 'utf8')).toBe('damaged');
+    const third = createMarketSourceIdOf(keyPath)({ kind: 'local', sourceKey: key });
+    expect(third).toMatch(SOURCE_ID);
+    expect(third).not.toBe(second);
+    expect(createMarketSourceIdOf(keyPath)({ kind: 'local', sourceKey: key })).toBe(third);
+    // A key that exists but cannot be read is left alone: no ids this time.
+    const lockedPath = path.join(root, 'locked', 'source-id.key');
+    fs.mkdirSync(lockedPath, { recursive: true });
+    expect(createMarketSourceIdOf(lockedPath)({ kind: 'local', sourceKey: key })).toBeNull();
+    expect(fs.statSync(lockedPath).isDirectory()).toBe(true);
   });
 
-  it('shows the repository an insteadOf rule actually fetches from', async () => {
+  it('binds the source id to the actual fetch address: a rewrite to another repository changes it', async () => {
     const root = makeRoot();
-    const manager = identityManager(root, rewritingGit(() => 'https://mirror.example.test/tenant/plugins.git'));
+    let target = 'https://mirror-a.example.test/tenant/plugins.git';
+    const git = rewritingGit(() => target);
+    const manager = identityManager(root, git.executor);
     await manager.addSource({ source: 'https://origin.example.test/acme/plugins.git' });
-    const { sourceIdentity } = await manager.discoverSource('hub');
-    expect(sourceIdentity).toEqual({
-      kind: 'git', repository: 'mirror.example.test/tenant/plugins', sourceId: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
-    });
+    const a = await manager.discoverSource('hub');
+    expect(a.sourceIdentity).toEqual({ kind: 'git', repository: 'mirror-a.example.test/tenant/plugins', sourceId: expect.stringMatching(SOURCE_ID) });
+    // Same configuration, the insteadOf target now points at another repository.
+    target = 'https://mirror-b.example.test/tenant/plugins.git';
+    await manager.refreshSource('hub');
+    const b = await manager.discoverSource('hub');
+    expect(b.sourceIdentity).toMatchObject({ repository: 'mirror-b.example.test/tenant/plugins' });
+    expect(b.sourceId).not.toBe(a.sourceId);
+    // The refresh did not fast-forward B on top of A's history: it cloned afresh.
+    expect(git.clones()).toBe(2);
   });
 
-  it('keeps a token injected by an insteadOf rule out of the identity and the fetch record', async () => {
+  it('keeps the source id when only the credentials injected by a rewrite change', async () => {
     const root = makeRoot();
-    const manager = identityManager(root, rewritingGit(() => 'https://ghp_SECRET@github.com/acme/plugins.git'));
+    let token = 'ghp_SECRET_ONE';
+    const git = rewritingGit(() => `https://${token}@github.com/acme/plugins.git`);
+    const manager = identityManager(root, git.executor);
     await manager.addSource({ source: 'acme/plugins' });
-    const { sourceIdentity } = await manager.discoverSource('hub');
-    expect(sourceIdentity).toMatchObject({ kind: 'git', repository: 'github.com/acme/plugins' });
+    const first = await manager.discoverSource('hub');
+    token = 'ghp_SECRET_TWO';
+    await manager.refreshSource('hub');
+    const second = await manager.discoverSource('hub');
+    expect(second.sourceIdentity).toEqual(first.sourceIdentity);
+    expect(first.sourceIdentity).toMatchObject({ kind: 'git', repository: 'github.com/acme/plugins' });
     const records = fs.readdirSync(path.join(root, 'sources'), { recursive: true })
-      .map(String).filter((file) => file.endsWith('cindy-fetch-identity.json'));
-    expect(records).toHaveLength(1);
-    const stored = fs.readFileSync(path.join(root, 'sources', records[0]!), 'utf8');
-    expect(`${JSON.stringify(sourceIdentity)}${stored}`).not.toMatch(/SECRET|ghp_/);
+      .map(String).filter((file) => file.endsWith('cindy-fetch-identity.json'))
+      .map((file) => fs.readFileSync(path.join(root, 'sources', file), 'utf8'));
+    expect(records.length).toBeGreaterThan(0);
+    expect(`${JSON.stringify([first, second])}${records.join('')}`).not.toMatch(/SECRET|ghp_/);
   });
 
-  it('leaves the identity unverified when the fetch address cannot be pinned down', async () => {
+  it('collects the fetch address in the repository git fetches in, not only the global context', async () => {
     const root = makeRoot();
-    // The rewrite changes between the two resolutions around the clone.
+    // An includeIf "gitdir:…" rule that only applies inside the cache repository rewrites to a mirror.
+    const git = rewritingGit((cwd) => cwd ? 'https://mirror.example.test/tenant/plugins.git' : 'https://origin.example.test/acme/plugins.git');
+    const manager = identityManager(root, git.executor);
+    await manager.addSource({ source: 'https://origin.example.test/acme/plugins.git' });
+    // The two contexts disagree, so neither the configured nor the mirrored address is claimed.
+    expect((await manager.discoverSource('hub')).sourceIdentity).toBeNull();
+    expect(git.calls.some((call) => call[0] === 'ls-remote')).toBe(true);
+  });
+
+  it('leaves the identity unverified when the fetch address changes around the clone', async () => {
+    const root = makeRoot();
     let calls = 0;
-    const flipping = identityManager(root, rewritingGit(() =>
-      (calls += 1) === 1 ? 'https://github.com/acme/plugins.git' : 'https://mirror.example.test/tenant/plugins.git'));
+    const git = rewritingGit(() =>
+      (calls += 1) === 1 ? 'https://github.com/acme/plugins.git' : 'https://mirror.example.test/tenant/plugins.git');
+    const flipping = identityManager(root, git.executor);
     await flipping.addSource({ source: 'acme/plugins' });
     expect((await flipping.discoverSource('hub')).sourceIdentity).toBeNull();
+  });
+
+  it('never records a fast-forward whose HEAD is not the fetched target', async () => {
+    const root = makeRoot();
+    let upstreamAt = 'abc123';
+    const git = rewritingGit(() => 'https://github.com/acme/plugins.git', () => upstreamAt);
+    const manager = identityManager(root, git.executor);
+    await manager.addSource({ source: 'acme/plugins' });
+    expect(git.clones()).toBe(1);
+    // The upstream now sits on an ancestor of the cached HEAD: pull --ff-only would "succeed" and keep the
+    // newer local commit, so the refresh must clone afresh instead of recording that HEAD.
+    upstreamAt = 'ancestor';
+    await expect(manager.refreshSource('hub')).resolves.toMatchObject({ status: 'ok' });
+    expect(git.clones()).toBe(2);
   });
 
   it('never lets a refreshed version inherit the previous fetch record', async () => {
     const root = makeRoot();
     let resolved: string | null = 'https://github.com/acme/plugins.git';
-    const manager = identityManager(root, rewritingGit(() => resolved));
+    const manager = identityManager(root, rewritingGit(() => resolved).executor);
     await manager.addSource({ source: 'acme/plugins' });
     expect((await manager.discoverSource('hub')).sourceIdentity).toMatchObject({ repository: 'github.com/acme/plugins' });
     // A refresh copies the current version first; when resolution now fails, the copied record must go.
     resolved = null;
     await manager.refreshSource('hub');
     expect((await manager.discoverSource('hub')).sourceIdentity).toBeNull();
-    // A changed rewrite shows the new actual repository after the next refresh.
     resolved = 'https://mirror.example.test/tenant/plugins.git';
     await manager.refreshSource('hub');
     expect((await manager.discoverSource('hub')).sourceIdentity).toMatchObject({ repository: 'mirror.example.test/tenant/plugins' });
+  });
+
+  it('keeps a failed address resolution, which may echo an injected token, out of the logs', async () => {
+    const root = makeRoot();
+    logged.splice(0);
+    const manager = identityManager(root, rewritingGit(() => null).executor);
+    await manager.addSource({ source: 'acme/plugins' });
+    await manager.refreshSource('hub');
+    expect((await manager.discoverSource('hub')).sourceIdentity).toBeNull();
+    expect(JSON.stringify(logged)).not.toMatch(/SECRET|ghp_/);
   });
 });

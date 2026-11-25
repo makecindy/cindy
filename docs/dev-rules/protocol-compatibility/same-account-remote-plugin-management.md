@@ -82,55 +82,77 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
 - **三处投影**：
   1. 市场条目（`management:market-detail` 的结果，`{read:'catalog'}` 的 `items[]`；仅 `git-market` / `local-market`）：
      - `sourceIdentity`：由该条目当前来源配置与当前缓存版本的取包记录生成。
-     - `installedSourceId`：这台电脑上当前已装实例的来源标识，由安装账本记录的来源指纹生成。只在已装实例
-       存在、账本记录为已安装且属于本条目 `pluginId` 时给出。
+     - `installedSourceId`：这台电脑上当前已装实例的来源标识，取自**安装记录**（见下文「账本」）。只在已装实例
+       存在、账本记录为已安装且属于本条目 `pluginId`、磁盘上的包仍是记录里那份时给出。
   2. 确认回执（`management:operation` 的 `consent.originSource`）：由 `customInstall` 在打包所在的来源租约内、
-     用这次打包实际所用的缓存版本、取包记录和同一份配置生成，与提交前复核的 `sourceKey` 同出一处。
+     用这次打包实际所用的缓存版本、取包记录和同一份配置生成，与提交前复核的 `sourceKey` 同出一处。提交时落位的
+     就是租约内打好的那份包（`packed.tempPath`），不在提交时重新取包。
   3. Agent 发起的任务确认卡（`toolName:'cindy.plugin.install'`，`hostOwnedConfirmation:'plugin_install'`）的
      `input`：`{ghost_id, version, operation, origin, source?}`。`source` 与同一次确认的 `originSource` 相同，
      只在 `origin === 'custom-market'` 且能生成时给出。卡输入不进模型上下文（宿主交互不是 Agent 的工具调用）；
-     IM 卡把它作为参数显示，其中仓库名本来就在说明里，`sourceId` 是不可反推的标识。
+     IM 卡与官方 hook 卡的参数预览去掉 `source.sourceId`，仓库名本来就在说明里。
 - **`sourceId`**（`^[A-Za-z0-9_-]{22}$`）：
-  - 算法：`HMAC-SHA256(K, "cindy.plugin-market.source-id.v1\0" + marketSourceKey)` 的前 16 字节，base64url。
-    `marketSourceKey` 含类型、完整地址或本地路径、ref 与稀疏路径，所以不同本地目录、同主机不同端口、
-    不同协议写法与稀疏路径都得到不同的标识。
-  - 密钥 K 每个数据所有者一把，见[凭证与本地存储](../credentials-and-local-storage.md)的路径表。
+  - 算法：`HMAC-SHA256(K, input)` 的前 16 字节，base64url。`input` 是带域名与版本的 JSON 数组：
+    - 本地：`["cindy.plugin-market.source-id", 1, "local", marketSourceKey]`；
+    - Git：`["cindy.plugin-market.source-id", 1, "git", marketSourceKey, scheme, host, port, path]`，后四项是
+      **实际取包地址**的白名单部件，不含用户名、密码、令牌、查询串、片段。
+  - 区分能力：不同本地目录、同主机不同端口、不同协议写法、不同稀疏路径、配置相同但被改写到不同实际地址，
+    `sourceId` 都不同。只改变认证信息（例如改写注入的令牌不同）时不变。
   - 用 HMAC 而不是裸哈希，是因为本地路径与仓库地址可被穷举反推。
+  - 密钥 K 每个数据所有者一把，见[凭证与本地存储](../credentials-and-local-storage.md)的路径表。
   - 实现：`apps/desktop/src/main/plugin-market/sources/sourceId.ts`。
-- **`repository` 取实际取包地址**：`url.*.insteadOf` 可以把配置地址改写到另一个仓库。
-  - 每次 clone 或快进刷新，在网络操作前后各用 `git ls-remote --get-url` 解析一次（与取包同一执行环境，不联网），
-    两次一致才把白名单去敏后的 `host/owner/repo` 写进这次取到的版本目录（`.git/cindy-fetch-identity.json`）。
-  - 记录只含去敏结果与 revision。改写注入的令牌只经过白名单函数 `pluginMarketRepositoryFromUrl`，不进记录、
-    日志或错误详情。
-  - 快进刷新复制旧版本后必须重写或删除记录；删除失败时放弃这份暂存目录，改走全新克隆。
-  - 实现：`sources/fetchIdentity.ts`。
+- **实际取包地址**：`url.*.insteadOf` 可以把配置地址改写到另一个仓库，按仓库路径加载的
+  `includeIf "gitdir:…"` 也可以只在缓存仓库里生效。所以地址在取包实际发生的仓库上下文里用
+  `git ls-remote --get-url` 采集（与取包同一执行环境，不联网）：
+  - clone：克隆前（无仓库）、克隆完成落位前在 staging 仓库里、克隆后（无仓库）各解析一次，三次一致才算核实。
+  - 快进刷新：在 fetch 发生的暂存仓库里前后各解析一次。若这次地址对应的 `sourceId` 与上一版本记录的不同，
+    不在旧来源的历史上快进，改走全新克隆。
+  - 落位前确认检出的 HEAD 就是本次获取的目标提交（无 ref 与 `@{u}` 比，有 ref 与 `FETCH_HEAD` 比），对不上即
+    改走全新克隆。
+  - 核实后，把白名单去敏的 `host/owner/repo` 与 `sourceId` 写进这次取到的版本目录
+    （`.git/cindy-fetch-identity.json`，两项各自可缺省）。原始解析结果只在内存里用一次，不落盘、不写日志、
+    不进错误详情；git 子进程的输出由 `resolveFetchUrl` 读取后只交给白名单函数，失败时丢弃不记录。
+  - 快进刷新复制旧版本后必须重写或删除记录；删除失败时放弃这份暂存目录、改走全新克隆。
+  - 实现：`sources/fetchIdentity.ts`、`sources/git.ts`。
+- **账本**（存量兼容）：
+  - 自定义市场安装记录（`custom-ledger.v1.json`）只增一个可选字段 `sourceIdBinding:
+    {sourceId, sourceKey, rawManifestSha256}`。显式安装、后台自动更新、换源都经 `customInstall` 整条重写，
+    值取自打包所用的版本。
+  - 投影 `installedSourceId` 时，绑定的 `sourceKey` 与 raw 摘要必须仍等于记录当前的值，否则缺省。这样，
+    任何保留了旧值、但来源或包已变的写入都不会让它误配。
+  - 读取校验不检查这个字段，形状不对时投影当缺省，不会因此丢记录。旧记录不迁移：本地来源按记录的
+    `sourceKey` 现算，Git 来源缺省（控制端未确认）。
+  - 降级时，旧版本的读取校验同样只认已知键，读到的记录原样写回，字段被保留。旧版本重新安装或更新时写出不含
+    此字段的记录，结果是缺省；旧版本的卸载标记、摘要补写保留字段，但不改来源与包摘要，绑定仍然成立。
 - **白名单与缺省**：
   - `repository` 只含小写 host 加 2–4 段路径，整体匹配 `PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN`；用户名、密码、
     令牌、端口、查询串与片段一律不读取。含空白、控制符、零宽或双向控制符、反斜杠、百分号编码、原始
     `.` / `..` 路径段或多个 `@` 的地址不生成。
   - 未配置 ref（缺省键、null、空串）时不给 `ref`；配置了但不合法时整个身份不生成。
-  - 以下情况整个身份缺省，不给部分值：标识密钥不可用（存在但读不出时不覆盖）；版本目录没有取包记录（升级前取的
-    旧缓存，下次刷新后补上）；前后两次解析不一致；去敏生成不出。
+  - 以下情况整个身份缺省，不给部分值：密钥不可用；版本目录没有可核实的取包记录（升级前取的旧缓存，下次刷新
+    后补上；解析不一致；去敏生成不出）。
 - **控制端合同**：
   - 形状校验：`originSource` 形状不对时整份回执按无效处理；条目里 `sourceIdentity` 形状不对只丢弃该字段；
     `installedSourceId` 不合正则时按缺省处理。sourceId 不展示。
-  - 自定义市场的确认回执或任务卡缺来源身份时不在控制端批准，提示回电脑确认；不能把只显示市场名当作已核对仓库。
+  - `origin === 'custom-market'` 的确认回执或任务卡缺来源身份时，控制端不允许批准（不分首装和升级），提示回电脑
+    确认；不能把只显示市场名当作已核对仓库。
   - 发起安装前，最后一次详情读取的 `sourceIdentity` 必须与用户选择时记下的完全相等，否则停止。
   - 回执过期后核实：同时满足 `installState === 'installed'`、`releaseId` 相同、`installedSourceId` 等于原尝试
     回执里的 `originSource.sourceId`，才算已确认；缺任何一项都按未确认收口，不打开实例。
   - 现状：电脑作为控制端时只展示 `originSource`，形状不对时只显示市场名。手机端由手机插件市场 PR #12684 接通，
     合入前手机不消费这些字段。
 - **展示**：电脑端确认框、电脑作远程端时的确认、任务卡与 IM 卡在来源文案后追加「 · 仓库 …」或「 · 本地文件夹」。
+  实际地址与配置不同时只展示实际仓库，没有额外提示。
 - **兼容**：只增可选字段，无需能力协商或版本门槛。旧控制端忽略新字段，确认仍只显示市场名。批准状态、回执、
-  安装账本、安装布局与 manifest 校验的 schema 都不变；新增的密钥文件与取包记录可重建，缺失时只让身份缺省，
-  不要求重装或重新确认。
+  安装布局与 manifest 校验不变；账本只增上面的可选字段。密钥文件与取包记录可重建，缺失时只让身份缺省，不要求
+  重装或重新确认。
 - **已知边界**：
-  - 取包前后两次解析之间，本机 git 配置若在极短时间内被改，仍有无法完全消除的时间窗；前后比对排除了绝大多数情况。
-  - `installedSourceId` 由账本记录的来源指纹生成，不含当时的实际取包地址。安装后本机 git 改写规则又变了时，
-    同一配置的标识不变，展示的 `repository` 会在下次刷新后变成新的实际地址。
-  - 路径大小写按配置原样保留：同一仓库的不同大小写写法得到不同标识，结果是保守的「未确认」。
+  - 取包前后的解析之间，本机 git 配置若在极短时间内被改，仍有无法完全消除的时间窗；多次比对排除了绝大多数情况。
+  - 路径大小写按原样参与 `sourceId`：同一仓库的不同大小写写法得到不同标识，结果是保守的「未确认」。
   - 以 `.` 开头的路径段（如名为 `.github` 的仓库）、超过 4 段的路径、IPv6 主机生成不出 `repository`，Git 身份
     整体缺省，控制端按无法核实处理。
+  - 升级后、到下次刷新前，Git 来源的旧缓存版本没有取包记录，身份缺省，控制端按无法核实处理；第一次刷新会改走
+    全新克隆以建立可核实的记录。
 - **自建中转**：字段位于既有 resource invoke 的结果载荷与交互请求中，中转按原样转发 `payload`、不解析内容
   （`packages/device-link-relay/src/hub.ts` 的 `route`），握手、帧路由、顶层字段与能力协商都不变，因此无需同步
   修改中转。新增内容每项最多约 330 字节，单页目录最多 100 项，远低于 2 MiB 的帧上限。

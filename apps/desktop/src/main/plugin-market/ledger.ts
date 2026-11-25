@@ -64,6 +64,16 @@ export interface PluginMarketInstallationRecord {
   rawManifestSha256?: string;
   /** Verified delivery endpoint; absent legacy records require catalog verification before reporting. */
   serverRoot?: string;
+  /**
+   * 仅自定义市场安装：这次落位的包所用来源的不透明标识（sourceId，见 sources/sourceId.ts），连同它是为哪个
+   * `sourceKey`、哪份已装 `ghost.json` 字节（`rawManifestSha256`）算的。市场条目投影 `installedSourceId`
+   * 时要求两者仍等于本记录当前的值，否则缺省；任何保留了旧值、但来源或包已变的写入都不会让它误配。
+   *
+   * 存量兼容：只增可选字段，`validRecord` 不检查它（形状不对在投影时当缺省，绝不因此丢记录）；旧记录
+   * 不迁移。降级时旧版本的 `validRecord` 同样只认已知键，读到的记录对象原样写回，所以字段会被保留；
+   * 旧版本重写安装记录（重新安装或更新）时写出不含此字段的新记录，结果是缺省（控制端未确认）。
+   */
+  sourceIdBinding?: { sourceId: string; sourceKey: string; rawManifestSha256: string };
 }
 
 export type PluginMarketAuthorizationTarget = { ghostId: string; namespace?: string | null };

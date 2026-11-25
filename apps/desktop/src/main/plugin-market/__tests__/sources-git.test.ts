@@ -10,6 +10,7 @@ import {
   fetchMarketplace,
   gitVersion,
   isGitVersionSupported,
+  MarketGitError,
   type GitExecutor,
 } from '../sources/git';
 import { checkGitPreflight } from '../sources/preflight';
@@ -133,9 +134,22 @@ describe('fetchMarketplace', () => {
     const dir = destPath();
     fs.mkdirSync(dir, { recursive: true });
     const revision = await fetchMarketplace(dir, undefined, executor);
-    expect(calls.map((call) => call.args[0])).toEqual(['pull', 'rev-parse']);
+    expect(calls.map((call) => call.args[0])).toEqual(['pull', 'rev-parse', 'rev-parse']);
     expect(calls[0]?.args).toContain('--ff-only');
+    // The checked-out HEAD must be the fetched upstream commit (see the next case).
+    expect(calls[2]?.args).toEqual(['rev-parse', '--verify', '@{u}^{commit}']);
     expect(revision).toBe('def456');
+  });
+
+  // PR #12731 maintainer review (2026-11-25, item 2): when the upstream (or an insteadOf target) sits on an
+  // ancestor of the cached HEAD, pull --ff-only succeeds but keeps the newer local commit. The refresh must
+  // fail so the caller clones afresh instead of labelling that commit with the new repository.
+  it('fails when the checked-out HEAD is not the fetched target', async () => {
+    const { executor } = fakeExecutor((args) => ({ stdout: args.includes('--verify') ? 'ancestor\n' : 'def456\n' }));
+    const dir = destPath();
+    fs.mkdirSync(dir, { recursive: true });
+    await expect(fetchMarketplace(dir, undefined, executor)).rejects.toBeInstanceOf(MarketGitError);
+    await expect(fetchMarketplace(dir, 'v1.2', executor)).rejects.toBeInstanceOf(MarketGitError);
   });
 
   it('resets to FETCH_HEAD when a ref is pinned', async () => {
@@ -143,8 +157,10 @@ describe('fetchMarketplace', () => {
     const dir = destPath();
     fs.mkdirSync(dir, { recursive: true });
     await fetchMarketplace(dir, 'v1.2', executor);
-    expect(calls.map((call) => call.args[0])).toEqual(['fetch', 'reset', 'rev-parse']);
+    expect(calls.map((call) => call.args[0])).toEqual(['fetch', 'reset', 'rev-parse', 'rev-parse']);
     expect(calls[1]?.args).toEqual(['reset', '--hard', 'FETCH_HEAD']);
+    // An annotated tag's FETCH_HEAD is the tag object: compare the peeled commit.
+    expect(calls[3]?.args).toEqual(['rev-parse', '--verify', 'FETCH_HEAD^{commit}']);
   });
 });
 
