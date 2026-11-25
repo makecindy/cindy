@@ -4405,6 +4405,9 @@ export function MessageStream({
   // per-message cache keeps rebuilds to messages whose content changed.
   const replyGalleryTargetCacheRef = useRef<ReplyImageCache>(new Map());
   const sessionImageGallery = useMemo(() => {
+    // Desktop tasks only: companion chats keep each message's own collection
+    // (docs/product-rules/attachment-preview.md).
+    if (simplifiedBotConversation) return null;
     const localConfirmed = sessionFileValue.localConfirmed === true;
     const replyOptions: ReplyGalleryOptions = {
       cache: replyGalleryTargetCacheRef.current,
@@ -4433,6 +4436,7 @@ export function MessageStream({
     workingDir,
     sessionId,
     ghostCardSnapshot,
+    simplifiedBotConversation,
   ]);
 
   const messageAttachmentCollections = useMemo(
