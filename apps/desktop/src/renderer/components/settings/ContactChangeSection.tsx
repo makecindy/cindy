@@ -16,6 +16,17 @@ type Step = 'intro' | 'current-code' | 'new-value' | 'new-code';
 const RESTART_CODES = new Set(['CONTACT_CHANGE_TICKET_INVALID', 'AUTH_FLOW_SUPERSEDED']);
 
 /**
+ * 确认更换时这些错误指向新联系方式本身(已被占用、与当前相同、邮箱不可用)。服务端此时
+ * 不消费票据,退回「输入新联系方式」并保留输入,改完可直接重新发码,不必再验证当前联系方式。
+ */
+const NEW_VALUE_CODES = new Set([
+  'CONTACT_TAKEN',
+  'CONTACT_UNCHANGED',
+  'EMAIL_DOMAIN_BLOCKED',
+  'EMAIL_PATTERN_BLOCKED',
+]);
+
+/**
  * 设置页「换绑登录手机号 / 邮箱」入口与分步弹窗:先验证当前联系方式,再验证新联系方式。
  * 入口只读 main 的本地可用性(不发网络请求);打开弹窗并点击发送后才访问服务端。
  * 票据、凭据与网络都在 Electron main,本组件只持有展示状态与用户输入。
@@ -70,10 +81,11 @@ export function ContactChangeSection() {
     void window.electronAPI.authCancelContactChange().catch(() => undefined);
   };
 
-  /** 串行执行一步;失败时展示错误码,票据失效则回到第一步。 */
+  /** 串行执行一步;失败时展示错误码,票据失效则回到第一步,其余失败交给 onFailure。 */
   const run = async <T,>(
     operation: () => Promise<{ success: true; value: T } | { success: false; code: string }>,
     onSuccess: (value: T) => void,
+    onFailure?: (code: string) => void,
   ) => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -89,6 +101,8 @@ export function ContactChangeSection() {
       if (RESTART_CODES.has(result.code)) {
         setStep('intro');
         setCode('');
+      } else {
+        onFailure?.(result.code);
       }
     } catch {
       setErrorCode('AUTH_REQUEST_FAILED');
@@ -134,6 +148,11 @@ export function ContactChangeSection() {
       (completed) => {
         toast.success(t(`settings.contactChange.${type}.success`, { target: completed.maskedValue }));
         close();
+      },
+      (failedCode) => {
+        if (!NEW_VALUE_CODES.has(failedCode)) return;
+        setCode('');
+        setStep('new-value');
       },
     );
 

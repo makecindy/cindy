@@ -150,4 +150,38 @@ describe('ContactChangeSection', () => {
     expect(screen.getByText('settings.contactChange.phone.introDescription')).toBeTruthy();
     expect(screen.queryByLabelText('settings.contactChange.phone.inputLabel')).toBeNull();
   });
+
+  it('lets the user pick another number when the new one is already taken', async () => {
+    api.authConfirmContactChange
+      .mockResolvedValueOnce({ success: false, code: 'CONTACT_TAKEN' })
+      .mockResolvedValueOnce({ success: true, value: { type: 'phone', maskedValue: '+8613****77' } });
+    render(<ContactChangeSection />);
+    fireEvent.click(await screen.findByText('settings.contactChange.phone.change'));
+    fireEvent.click(screen.getByText('settings.contactChange.sendCode'));
+    await enterCode('123456');
+    fireEvent.click(await screen.findByText('settings.contactChange.next'));
+    fireEvent.change(await screen.findByLabelText('settings.contactChange.phone.inputLabel'), {
+      target: { value: '13700006666' },
+    });
+    fireEvent.click(screen.getByText('settings.contactChange.sendCode'));
+    await enterCode('654321');
+    fireEvent.click(await screen.findByText('settings.contactChange.confirm'));
+
+    // 已被占用：回到输入新手机号，保留刚才的输入并提示原因，不必重新验证当前手机号。
+    expect(await screen.findByText('settings.contactChange.errors.CONTACT_TAKEN')).toBeTruthy();
+    const input = screen.getByLabelText('settings.contactChange.phone.inputLabel') as HTMLInputElement;
+    expect(input.value).toBe('13700006666');
+
+    fireEvent.change(input, { target: { value: '13700007777' } });
+    fireEvent.click(screen.getByText('settings.contactChange.sendCode'));
+    await enterCode('112233');
+    fireEvent.click(await screen.findByText('settings.contactChange.confirm'));
+
+    await waitFor(() =>
+      expect(toastSuccess).toHaveBeenCalledWith('settings.contactChange.phone.success:+8613****77'),
+    );
+    expect(api.authVerifyContactChangeCurrentCode).toHaveBeenCalledTimes(1);
+    expect(api.authRequestContactChangeNewCode).toHaveBeenLastCalledWith('13700007777');
+    expect(api.authConfirmContactChange).toHaveBeenLastCalledWith({ value: '13700007777', code: '112233' });
+  });
 });
