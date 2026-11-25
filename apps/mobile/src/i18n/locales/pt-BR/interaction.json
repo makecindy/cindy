@@ -1,6 +1,7 @@
 {
   "permission": {
     "install": "Instalar",
+    "installSourceUnverified": "O celular não consegue verificar de onde vem esta instalação (a Cindy no computador é mais antiga ou não informou o repositório), então aqui você só pode recusar. Para instalar, confirme no computador.",
     "mcpComplete": "Concluído",
     "mcpCancel": "Cancelar",
     "mode": {

@@ -461,6 +461,7 @@
     "alreadyInstalled": "Este complemento ya está instalado en este ordenador.",
     "unconfirmedMismatch": "No se pudo confirmar el resultado de esta instalación. El complemento con el mismo identificador en este ordenador puede venir de un archivo local, de otra versión o de otro origen. Compruébalo en el ordenador.",
     "sourceUnverified": "Cindy en este ordenador no indica de qué repositorio procede este mercado, así que aún no se puede instalar desde el teléfono. Actualiza Cindy en el ordenador o instálalo allí.",
-    "sourceUnverifiedShort": "Este ordenador no indica el repositorio. Instálalo en el ordenador."
+    "sourceUnverifiedShort": "Este ordenador no indica el repositorio. Instálalo en el ordenador.",
+    "sourceChanged": "El origen de este mercado acaba de cambiar. Vuelve a elegir el complemento que quieres instalar."
   }
 }

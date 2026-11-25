@@ -1,6 +1,6 @@
 import {
   isBoundedPluginResponse,
-  isPluginMarketSourceIdentity,
+  isPluginMarketSourceId, isPluginMarketSourceIdentity,
   parsePluginManagementSnapshot,
   type ManagedMarketItem,
 } from "./pluginManagementTypes";
@@ -89,13 +89,14 @@ function parseCounts(value: unknown): PluginMarketCounts | null {
 
 const ITEM_FIELDS = ["pluginId", "ghostId", "namespace", "name", "description", "author", "publisherKind", "scope",
   "organizationId", "defaultInstall", "releaseId", "version", "publishedAt", "icon", "installState", "enabled",
-  "sourceType", "sourceMarketName", "updateRequiresConsent", "sourceIdentity"] as const;
+  "sourceType", "sourceMarketName", "updateRequiresConsent", "sourceIdentity", "installedSourceId"] as const;
 /** Keep only the list fields the phone shows or sends back; extra Host fields are not retained. */
 function marketItemFields(item: ManagedMarketItem): ManagedMarketItem {
   const picked: Record<string, unknown> = {};
   for (const key of ITEM_FIELDS) if (Object.hasOwn(item, key)) picked[key] = item[key];
   // Additive identity: an unusable value is dropped (source checks then fail closed).
   if (picked.sourceIdentity !== undefined && !isPluginMarketSourceIdentity(picked.sourceIdentity)) delete picked.sourceIdentity;
+  if (picked.installedSourceId !== undefined && !isPluginMarketSourceId(picked.installedSourceId)) delete picked.installedSourceId;
   return picked as unknown as ManagedMarketItem;
 }
 
@@ -211,6 +212,7 @@ export function pluginMarketErrorKey(code: string | null | undefined): string {
     case "NOT_FOUND": return "plugins.market.errors.notFound";
     case "ALREADY_EXISTS": return "plugins.market.errors.conflict";
     case "PLUGIN_RELEASE_CHANGED": return "plugins.management.releaseChanged";
+    case "PLUGIN_SOURCE_CHANGED": return "plugins.market.sourceChanged";
     case "PRECONDITION_FAILED":
     case "PLUGIN_INSTALL_CHANGED": return "plugins.market.errors.stateChanged";
     case "PLUGIN_LIST_CHANGED": return "plugins.market.errors.listChanged";

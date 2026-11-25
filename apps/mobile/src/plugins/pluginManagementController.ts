@@ -3,7 +3,7 @@ import type { PluginPromptDisplay } from './pluginPromptReads';
 import { subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { PluginManagementRequestError, pluginManagementErrorCode,
   type PluginManagementBegin, type PluginManagementClient } from './pluginManagementClient';
-import { marketItemMatchesPlugin, pluginApprovalToken, type ManagedMarketDetail, type ManagedPlugin,
+import { marketItemMatchesPlugin, pluginApprovalToken, samePluginMarketSourceIdentity, type ManagedMarketDetail, type ManagedPlugin,
   type PluginManagementReceipt, type PluginManagementSnapshot, type PluginUiConsentItem, type PluginUiConsentSnapshot } from './pluginManagementTypes';
 
 export interface PluginManagementState {
@@ -217,6 +217,11 @@ export function createPluginManagementController(client: PluginManagementClient,
         if (detail.releaseId !== intent.detail.releaseId || detail.namespace !== intent.detail.namespace
           || detail.sourceType !== intent.detail.sourceType || (detail.sourceType !== 'server'
             && JSON.stringify(detail.manifest) !== JSON.stringify(intent.detail.manifest))) throw new Error('PLUGIN_RELEASE_CHANGED');
+        // Custom markets: this is the last detail read before begin. Its source must be exactly the one the person
+        // chose (a same-name market may now point to another repository or folder with the same id, release and
+        // manifest); missing or changed, stop and let them choose again.
+        if (detail.sourceType !== 'server' && !samePluginMarketSourceIdentity(detail.sourceIdentity, intent.detail.sourceIdentity))
+          throw new Error('PLUGIN_SOURCE_CHANGED');
         request = { ...intent, detail };
       }
       const snapshot = await readSnapshot(token);

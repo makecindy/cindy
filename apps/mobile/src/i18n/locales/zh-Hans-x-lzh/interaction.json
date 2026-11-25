@@ -1,6 +1,7 @@
 {
   "permission": {
     "install": "纳",
+    "installSourceUnverified": "手机无从核此纳之所出（电脑之 Cindy 旧，或未示库），此处唯可却之。欲纳，请于电脑定之。",
     "mcpComplete": "已毕",
     "mcpCancel": "罢",
     "mode": {

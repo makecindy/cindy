@@ -1,6 +1,7 @@
 {
   "permission": {
     "install": "Installieren",
+    "installSourceUnverified": "Dein Handy kann die Quelle dieser Installation nicht prüfen (Cindy auf dem Computer ist älter oder hat das Repository nicht angegeben). Hier kannst du nur ablehnen. Zum Installieren bestätige am Computer.",
     "mcpComplete": "Fertig",
     "mcpCancel": "Abbrechen",
     "mode": {

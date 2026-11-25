@@ -459,6 +459,7 @@
     "alreadyInstalled": "Dieses Plugin ist auf diesem Computer bereits installiert.",
     "unconfirmedMismatch": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin mit derselben Kennung auf diesem Computer stammt möglicherweise aus einer lokalen Datei, einer anderen Version oder einer anderen Quelle. Bitte prüfe es auf dem Computer.",
     "sourceUnverified": "Cindy auf diesem Computer gibt nicht an, aus welchem Repository dieser Marktplatz stammt. Installieren vom Handy ist daher noch nicht möglich. Aktualisiere Cindy auf dem Computer oder installiere dort.",
-    "sourceUnverifiedShort": "Dieser Computer gibt das Repository nicht an. Installiere am Computer."
+    "sourceUnverifiedShort": "Dieser Computer gibt das Repository nicht an. Installiere am Computer.",
+    "sourceChanged": "Die Quelle dieses Marktplatzes hat sich gerade geändert. Wähle das Plugin erneut aus."
   }
 }

@@ -1,6 +1,7 @@
 {
   "permission": {
     "install": "Install",
+    "installSourceUnverified": "Your phone can’t check where this install comes from (Cindy on the computer is older, or it didn’t share the repository), so you can only deny it here. To install, confirm on the computer.",
     "mcpComplete": "Done",
     "mcpCancel": "Cancel",
     "mode": {

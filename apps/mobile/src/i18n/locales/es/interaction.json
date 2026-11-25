@@ -1,6 +1,7 @@
 {
   "permission": {
     "install": "Instalar",
+    "installSourceUnverified": "El teléfono no puede comprobar de dónde viene esta instalación (Cindy en el ordenador es más antigua o no indicó el repositorio), así que aquí solo puedes rechazarla. Para instalar, confirma en el ordenador.",
     "mcpComplete": "Listo",
     "mcpCancel": "Cancelar",
     "mode": {

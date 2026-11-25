@@ -9,6 +9,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { InputHandoffCard } from '@/inputHandoff/InputHandoffCard';
 import { parseInputHandoffSnapshotLike } from '@/inputHandoff/inputHandoffNative';
 import { mobilePluginSetupActions } from '@/plugins/pluginSetupActions';
+import { isPluginMarketSourceIdentity } from '@/plugins/pluginManagementTypes';
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -834,7 +835,23 @@ function PermissionCard({
   const requestId = readRequestId(item);
   const [armedDecision, setArmedDecision] = useState<'allow-once' | 'always-allow' | null>(null);
   const isPluginInstall = item.request.toolName === 'cindy.plugin.install';
-  const isFirstInstall = isPluginInstall && (item.request.input as { operation?: unknown } | null)?.operation === 'install';
+  const installInput = isPluginInstall ? item.request.input as { operation?: unknown; origin?: unknown; source?: unknown } | null : null;
+  const isFirstInstall = installInput?.operation === 'install';
+  // Host-owned plugin install card (Agent-initiated). Newer Hosts name the origin and, for custom markets, the
+  // source they pack from; a malformed source counts as missing.
+  const installSource = isPluginInstall && installInput?.origin === 'custom-market' && isPluginMarketSourceIdentity(installInput.source)
+    ? installInput.source : undefined;
+  // A first install the phone cannot tie to a source stays rejectable only: an older Host's card has no origin
+  // (it may come from a custom market), and a custom-market card without a valid source cannot say which
+  // repository would be allowed. Install on the computer instead.
+  const installSourceUnverified = isFirstInstall
+    && (installInput?.origin === undefined || (installInput.origin === 'custom-market' && !installSource));
+  const installRepository = installSource
+    ? installSource.kind === 'local' ? t('plugins.notice.consentSource.localFolder')
+      : installSource.ref
+        ? t('plugins.notice.consentSource.repositoryRef', { repository: installSource.repository, ref: installSource.ref })
+        : t('plugins.notice.consentSource.repository', { repository: installSource.repository })
+    : undefined;
   const [showInstallDetails, setShowInstallDetails] = useState(false);
   const installSummary = isPluginInstall && !showInstallDetails;
   const permissionState = buildMobilePermissionCardState({ armedDecision, presentation });
@@ -883,6 +900,7 @@ function PermissionCard({
   const allowButton = (
     <ResolveButton
       key="allow"
+      disabled={installSourceUnverified}
       accessibilityLabel={t(isFirstInstall ? 'interaction.permission.install' : installSummary ? 'interaction.companion.details' : isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnceAccessibility')}
       armed={armedDecision === 'allow-once'}
       busy={busy}
@@ -923,6 +941,12 @@ function PermissionCard({
         riskWarningText={permissionState.riskWarningText}
         touchLayout={touchLayout}
       />}
+      {installRepository ? <Text style={styles.body} testID="interaction.permission.installRepository">{installRepository}</Text> : null}
+      {installSourceUnverified ? (
+        <Text style={styles.body} testID="interaction.permission.installSourceUnverified">
+          {t('interaction.permission.installSourceUnverified')}
+        </Text>
+      ) : null}
       {isFirstInstall && <InteractionTouchButton
         accessibilityLabel={t('interaction.companion.details')} expanded={showInstallDetails}
         disabled={busy} onPress={() => setShowInstallDetails(open => !open)} style={styles.companionDetailsButton}>

@@ -459,6 +459,7 @@
     "alreadyInstalled": "这台电脑已经安装了这个插件。",
     "unconfirmedMismatch": "没能确认这次安装的结果；这台电脑上同标识的插件可能来自本地文件、其他版本或其他来源，请在电脑上核对。",
     "sourceUnverified": "这台电脑上的 Cindy 版本不会告知这个市场来自哪个仓库，暂不能从手机安装。请先更新电脑上的 Cindy，或在电脑上安装。",
-    "sourceUnverifiedShort": "这台电脑未提供仓库信息，请在电脑上安装。"
+    "sourceUnverifiedShort": "这台电脑未提供仓库信息，请在电脑上安装。",
+    "sourceChanged": "这个市场的来源刚刚有变化，请重新选择要安装的插件。"
   }
 }

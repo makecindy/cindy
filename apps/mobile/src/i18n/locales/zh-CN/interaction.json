@@ -1,6 +1,7 @@
 {
   "permission": {
     "install": "安装",
+    "installSourceUnverified": "手机无法核对这次安装的来源（电脑上的 Cindy 版本较旧，或未提供仓库信息），只能在这里拒绝。要安装，请在电脑上确认。",
     "mcpComplete": "完成",
     "mcpCancel": "取消",
     "mode": {

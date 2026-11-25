@@ -76,9 +76,10 @@
   目前没有 / 未能确认）只经同一个出口，落地前再判断一次有效性。回归用例按全部回包顺序枚举，不手挑顺序；每次判定带代次，
   较早一次核实的市场详情晚到时不落地，也不打开实例。快照里有同 ghostId、同 namespace 的实例只是线索
   （电脑上可能是同标识的本地包）：再按原 `pluginId` 读一次 `management:market-detail`，只有电脑按市场来源记录
-  判为 `installed` 且 `releaseId` 与这次安装一致时才按成功处理、打开已装详情；自定义市场还要求当前的
-  `sourceIdentity` 与发起安装时 Host 报告的完全一致（同名市场被换成另一个仓库、插件 ID 与版本都相同时，
-  Host 的 `installed` 描述的是新来源），旧 Host 给不出来源身份时同样不算成功；`conflict`、`update-available`
+  判为 `installed` 且 `releaseId` 与这次安装一致时才按成功处理、打开已装详情；自定义市场还要求条目的
+  `installedSourceId` 与这次确认回执 `originSource.sourceId` 完全相等（同名市场被换成另一个仓库或本机另一个目录、
+  插件 ID 与版本都相同时，Host 的 `installed` 描述的是新来源；`sourceId` 是 Host 按完整来源配置生成的不透明标识，
+  能区分仓库文字区分不了的情况）。没收到确认回执、或旧 Host 给不出 `installedSourceId` 时同样不算成功；`conflict`、`update-available`
   或版本不一致时不打开任何实例：Host 已确认查不到原操作（NOT_FOUND）且市场事实已读到时，这一行记下
   「没能确认这次安装的结果……请在电脑上核对」并放开市场与其它管理操作（原操作不重发，是否重新安装由用户决定）；
   只是电脑暂时连不上、原操作可能还在时，保持「结果待确认」。快照里没有时放开这一行并说明
@@ -129,7 +130,14 @@
   - 自定义市场的仓库：「来自 <市场名>」下方显示目标 Host 从本次实际取包的来源生成的去敏仓库标识（「仓库 host/owner/repo」，
     带 ref 时附上；本地文件夹市场显示「本地文件夹」）。字段约定见
     `protocol-compatibility/same-account-remote-plugin-management.md`「自定义市场的来源身份」（随 Host 前置改动登记）。
-    回执里 `originSource` 形状不合法时整份回执按无效处理；市场条目的 `sourceIdentity` 不合法时只丢掉该字段。
+    形状按契约第 2 版：git `{kind, repository, ref?, sourceId}`、本地 `{kind, sourceId}`，`sourceId` 为 22 位 base64url，
+    多键或缺键都算不合法。回执里 `originSource` 不合法时整份回执按无效处理；市场条目的 `sourceIdentity` 不合法时
+    只丢掉该字段，`installedSourceId` 不合法时按缺省。比较来源时四个键都要相等，`sourceId` 不展示。
+  - 发起前复核来源：市场开始安装时读到的详情、以及 controller 在 begin 前最后一次读到的详情，其 `sourceIdentity`
+    都必须与用户选择时的完全相等；缺失或变化时不发 begin，这一行提示「来源刚刚有变化，请重新选择」。
+  - Agent 发起的首装走任务确认卡（`cindy.plugin.install`，`InteractionPanel`）：卡的 `input` 带 `origin`，自定义市场
+    另带 `source`（与回执的 `originSource` 相同）。卡上显示仓库一行；首装时旧 Host 的卡（没有 `origin`）或自定义市场
+    缺 `source`（或形状不合法）只能拒绝，说明回电脑确认。升级卡不受影响。
   - 旧 Host 不提供仓库身份时（提案，待维护者确认）：
     - 全新安装不从手机发起：自定义市场条目缺 `sourceIdentity` 时行内与详情的「安装」不可点，行内写短说明、详情写完整
       说明（更新电脑上的 Cindy，或在电脑上安装）；列表有、开始安装时读到的详情没有时，在 begin 之前停下并在这一行说明。

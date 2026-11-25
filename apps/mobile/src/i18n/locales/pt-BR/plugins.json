@@ -461,6 +461,7 @@
     "alreadyInstalled": "Este plugin já está instalado neste computador.",
     "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um arquivo local, de outra versão ou de outra origem. Confira no computador.",
     "sourceUnverified": "A Cindy neste computador não informa de qual repositório vem este marketplace, então ainda não dá para instalar pelo celular. Atualize a Cindy no computador ou instale por lá.",
-    "sourceUnverifiedShort": "Este computador não informa o repositório. Instale pelo computador."
+    "sourceUnverifiedShort": "Este computador não informa o repositório. Instale pelo computador.",
+    "sourceChanged": "A origem deste marketplace acabou de mudar. Escolha de novo o plugin para instalar."
   }
 }

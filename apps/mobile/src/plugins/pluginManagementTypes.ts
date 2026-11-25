@@ -47,22 +47,36 @@ export interface ManagedMarketItem {
   updateRequiresConsent?: true;
   /** Custom-market items: the Host's credential-free source identity (newer Hosts only). */
   sourceIdentity?: PluginMarketSourceIdentity;
+  /** Custom-market items: the source id of the instance installed on this computer, when it came from this item. */
+  installedSourceId?: string;
 }
-/** Host-generated, credential-free source of a custom market (host/owner/repo, optional ref; local folder: kind only). */
-export type PluginMarketSourceIdentity = { kind: 'git'; repository: string; ref?: string } | { kind: 'local' };
+/**
+ * Host-generated, credential-free source of a custom market: the repository actually fetched from (host/owner/repo,
+ * optional ref) or a local folder, plus an opaque per-Host `sourceId` (HMAC of the full source configuration) that
+ * tells apart sources the repository text cannot (other folders, ports, URL forms, sparse paths).
+ */
+export type PluginMarketSourceIdentity =
+  | { kind: 'git'; repository: string; ref?: string; sourceId: string }
+  | { kind: 'local'; sourceId: string };
 // Same shapes as the Host's PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN and Git ref rule.
 const SOURCE_REPOSITORY = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}){2,4}$/;
 const SOURCE_REF = /^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
+const SOURCE_ID = /^[A-Za-z0-9_-]{22}$/;
+export function isPluginMarketSourceId(v: unknown): v is string {
+  return typeof v === 'string' && SOURCE_ID.test(v);
+}
 export function isPluginMarketSourceIdentity(v: unknown): v is PluginMarketSourceIdentity {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const value = v as Record<string, unknown>;
-  if (value.kind === 'local') return Object.keys(value).length === 1;
+  if (!isPluginMarketSourceId(value.sourceId)) return false;
+  if (value.kind === 'local') return Object.keys(value).every((key) => key === 'kind' || key === 'sourceId');
   return value.kind === 'git' && typeof value.repository === 'string' && value.repository.length <= 256
     && SOURCE_REPOSITORY.test(value.repository) && (value.ref === undefined || (typeof value.ref === 'string' && SOURCE_REF.test(value.ref)))
-    && Object.keys(value).every((key) => key === 'kind' || key === 'repository' || key === 'ref');
+    && Object.keys(value).every((key) => key === 'kind' || key === 'repository' || key === 'ref' || key === 'sourceId');
 }
+/** All keys equal (kind, repository, ref, sourceId); a missing side never matches. */
 export function samePluginMarketSourceIdentity(a: PluginMarketSourceIdentity | undefined, b: PluginMarketSourceIdentity | undefined): boolean {
-  if (!a || !b || a.kind !== b.kind) return false;
+  if (!a || !b || a.kind !== b.kind || a.sourceId !== b.sourceId) return false;
   return a.kind === 'local' || (b.kind === 'git' && a.repository === b.repository && (a.ref ?? null) === (b.ref ?? null));
 }
 export interface ManagedMarketDetail extends ManagedMarketItem {
@@ -181,6 +195,7 @@ function safeMarketItem<T extends ManagedMarketItem>(v: T): T {
     delete safe.publisherKind;
   // Additive identity: an unusable value is dropped, which makes any source check fail closed.
   if (safe.sourceIdentity !== undefined && !isPluginMarketSourceIdentity(safe.sourceIdentity)) delete safe.sourceIdentity;
+  if (safe.installedSourceId !== undefined && !isPluginMarketSourceId(safe.installedSourceId)) delete safe.installedSourceId;
   return safe;
 }
 export function parsePluginManagementSnapshot(value: unknown): PluginManagementSnapshot {

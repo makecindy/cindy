@@ -1,6 +1,7 @@
 {
   "permission": {
     "install": "安裝",
+    "installSourceUnverified": "手機無法核對這次安裝的來源（電腦上的 Cindy 版本較舊，或未提供儲存庫資訊），只能在這裡拒絕。要安裝，請在電腦上確認。",
     "mcpComplete": "已完成",
     "mcpCancel": "取消",
     "mode": {

@@ -12,7 +12,7 @@ import { PluginPromptReadsProvider, usePluginPromptReads } from '@/plugins/Plugi
 import { createPluginManagementController } from '@/plugins/pluginManagementController';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
-  parsePluginUiConsent, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
+  parsePluginUiConsent, samePluginMarketSourceIdentity, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
 import { parsePluginMarketPage, pluginMarketIconUri } from '@/plugins/pluginMarketCatalog';
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'operation-1' }));
@@ -947,21 +947,41 @@ describe('confirmation sheet wording', () => {
     // Official and community market installs carry no repository and are never blocked by its absence.
     expect(pluginConsentPresentation(install({}, []), t, 'Mac')).toMatchObject({ allowBlocked: false, repository: undefined });
   });
+  // Contract v2: git { kind, repository, ref?, sourceId } or local { kind, sourceId }; sourceId is 22 base64url chars.
   it('accepts only a credential-free source identity from the Host', () => {
+    const id = 'AbCdEfGhIjKlMnOpQr_-12';
     const receipt = (originSource: unknown) => ({ operationId: 'op', phase: 'confirmation', consent: { requestId: 'r', initiator: 'user',
       origin: 'custom-market', originLabel: 'Acme', originSource, facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } });
-    for (const value of [{ kind: 'local' }, { kind: 'git', repository: 'github.com/acme/plugins' }, { kind: 'git', repository: 'gitlab.example.com/g/s/plugins', ref: 'v1.2' }])
+    for (const value of [{ kind: 'local', sourceId: id }, { kind: 'git', repository: 'github.com/acme/plugins', sourceId: id },
+      { kind: 'git', repository: 'gitlab.example.com/g/s/plugins', ref: 'v1.2', sourceId: id }])
       expect(parsePluginManagementReceipt(receipt(value), 'op').consent?.originSource).toEqual(value);
-    for (const value of [{ kind: 'git', repository: 'https://ghp_x@github.com/acme/plugins' }, { kind: 'git', repository: 'github.com/acme' },
-      { kind: 'git', repository: 'github.com/acme/plugins?token=x' }, { kind: 'local', path: '/Users/me/market' }, { kind: 'git', repository: 'github.com/a/b', url: 'x' },
-      { kind: 'git', repository: 'github.com/acme/plugins', ref: '--upload-pack=x' }, 'github.com/acme/plugins'])
+    for (const value of [{ kind: 'git', repository: 'https://ghp_x@github.com/acme/plugins', sourceId: id },
+      { kind: 'git', repository: 'github.com/acme', sourceId: id }, { kind: 'git', repository: 'github.com/acme/plugins?token=x', sourceId: id },
+      { kind: 'local', sourceId: id, path: '/Users/me/market' }, { kind: 'git', repository: 'github.com/a/b', sourceId: id, url: 'x' },
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: '--upload-pack=x', sourceId: id },
+      // sourceId is required and has a fixed shape (first-edition objects without it are rejected).
+      { kind: 'git', repository: 'github.com/acme/plugins' }, { kind: 'local' }, { kind: 'local', sourceId: 'short' },
+      { kind: 'local', sourceId: id + '=' }, 'github.com/acme/plugins'])
       expect(() => parsePluginManagementReceipt(receipt(value), 'op')).toThrow('INVALID_RESPONSE');
-    // A page item with an unusable identity keeps the item but drops the identity (source checks then fail closed).
-    const page = parsePluginMarketPage({ items: [{ ...detail, installState: 'not-installed', enabled: null, sourceType: 'git-market', sourceMarketName: 'Acme',
-      sourceIdentity: { kind: 'git', repository: 'https://u:p@github.com/a/b' } }] });
-    expect(page.items[0]).not.toHaveProperty('sourceIdentity');
-    expect(parsePluginMarketPage({ items: [{ ...detail, installState: 'not-installed', enabled: null, sourceType: 'git-market', sourceMarketName: 'Acme',
-      sourceIdentity: { kind: 'git', repository: 'github.com/a/b' } }] }).items[0]!.sourceIdentity).toEqual({ kind: 'git', repository: 'github.com/a/b' });
+    // A page item with an unusable identity or installedSourceId keeps the item but drops the field (checks then fail closed).
+    const item = (extra: Record<string, unknown>) => parsePluginMarketPage({ items: [{ ...detail, installState: 'not-installed', enabled: null,
+      sourceType: 'git-market', sourceMarketName: 'Acme', ...extra }] }).items[0]!;
+    expect(item({ sourceIdentity: { kind: 'git', repository: 'https://u:p@github.com/a/b', sourceId: id } })).not.toHaveProperty('sourceIdentity');
+    expect(item({ sourceIdentity: { kind: 'git', repository: 'github.com/a/b', sourceId: id } }).sourceIdentity)
+      .toEqual({ kind: 'git', repository: 'github.com/a/b', sourceId: id });
+    expect(item({ installedSourceId: 'not-an-id' })).not.toHaveProperty('installedSourceId');
+    expect(item({ installedSourceId: id }).installedSourceId).toBe(id);
+  });
+  // Maintainer review 04:44 #1: every local folder used to compare equal; two folders now differ by sourceId.
+  it('compares source identities on every key, sourceId included', () => {
+    const a = 'SourceA_0123456789abcd', b = 'SourceB_0123456789abcd';
+    expect(samePluginMarketSourceIdentity({ kind: 'local', sourceId: a }, { kind: 'local', sourceId: a })).toBe(true);
+    expect(samePluginMarketSourceIdentity({ kind: 'local', sourceId: a }, { kind: 'local', sourceId: b })).toBe(false);
+    const git = { kind: 'git' as const, repository: 'github.com/acme/plugins', sourceId: a };
+    expect(samePluginMarketSourceIdentity(git, { ...git })).toBe(true);
+    expect(samePluginMarketSourceIdentity(git, { ...git, sourceId: b })).toBe(false);
+    expect(samePluginMarketSourceIdentity(git, { ...git, ref: 'main' })).toBe(false);
+    expect(samePluginMarketSourceIdentity(git, undefined)).toBe(false);
   });
   it('accepts the community flag only as true', () => {
     const receipt = (communityMarket: unknown) => ({ operationId: 'op', phase: 'confirmation', consent: { requestId: 'r', initiator: 'user',

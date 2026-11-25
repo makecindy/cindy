@@ -8,7 +8,6 @@ import type { RemoteResourceHostTarget } from "@/device-link/remoteResources";
 import { createPluginManagementClient, pluginManagementErrorCode, type PluginManagementClient } from "./pluginManagementClient";
 import {
   marketItemMatchesPlugin, samePluginMarketSourceIdentity, type ManagedMarketDetail, type ManagedMarketItem,
-  type PluginMarketSourceIdentity,
 } from "./pluginManagementTypes";
 import {
   PLUGIN_MARKET_QUERY_MAX, pluginMarketErrorKey, pluginMarketMatchesFilter, pluginMarketOrganizationErrorKey,
@@ -56,8 +55,8 @@ interface InstallAttempt {
   detail?: ManagedMarketDetail;
   started: boolean;
   confirmed: boolean;
-  /** Custom markets: the Host's source identity when the install started; a later check must match it. */
-  source?: PluginMarketSourceIdentity;
+  /** Custom markets: the source id of the consent the Host showed (`originSource.sourceId`); a later check must match it. */
+  originSourceId?: string;
 }
 export interface PluginMarketDetailState {
   item: ManagedMarketItem;
@@ -478,10 +477,14 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       }
       if (!current()) return;
       if (value.releaseId !== attempt.item.releaseId) { finish(attempt, "plugins.management.releaseChanged"); return; }
-      // The detail read now is what the install binds to; without a repository the phone cannot show what is allowed.
+      // Without a repository the phone cannot show what is allowed.
       if (pluginMarketSourceUnverified(value)) { finish(attempt, "plugins.market.sourceUnverified"); return; }
-      // Bind this attempt to the source the Host reported now (same object as the attempt in state and ref).
-      started.source = value.sourceIdentity;
+      // The source read now must be the one the person chose; the controller checks its own last read again.
+      const chosen = (attempt.detail ?? attempt.item).sourceIdentity;
+      if (value.sourceType !== "server" && !samePluginMarketSourceIdentity(value.sourceIdentity, chosen)) {
+        finish(attempt, "plugins.market.sourceChanged");
+        return;
+      }
       await controller.install(value);
       // The controller returns quietly when its connection generation changed or it only published
       // an error (offline, not ready). Nothing was sent, so release this attempt instead of waiting.
@@ -528,10 +531,12 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     } catch {
       return; // Market facts not read: still unconfirmed; "Check result" verifies again.
     }
-    // A custom market can be replaced by another repository under the same name, with the same plugin id and
-    // release: the Host's "installed" then describes the new source. Require the source identity recorded
-    // when this install started; without it (older Host) the result stays unconfirmed.
-    const sameSource = attempt.item.sourceType === "server" || samePluginMarketSourceIdentity(attempt.source, market.sourceIdentity);
+    // A custom market can be replaced by another repository or folder under the same name, with the same plugin id
+    // and release: the Host's "installed" then describes the new source. The installed instance's source id must be
+    // exactly the one of the consent shown for this attempt; without either (older Host, consent never seen) the
+    // result stays unconfirmed.
+    const sameSource = attempt.item.sourceType === "server"
+      || (!!attempt.originSourceId && market.installedSourceId === attempt.originSourceId);
     conclude(market.installState === "installed" && market.releaseId === attempt.item.releaseId && sameSource
       ? { installed: instance.instanceKey } : "mismatch");
   }, [invoke, complete, finish, management.controller]);
@@ -539,7 +544,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     const attempt = install, state = management.state;
     if (!attempt?.started || !state) return;
     if (state.outcome === "confirmation" && !attempt.confirmed) {
-      const next = { ...attempt, confirmed: true };
+      // Custom markets: record the source the Host packed from and showed, the only one a later check accepts.
+      const next = { ...attempt, confirmed: true, originSourceId: state.receipt?.consent?.originSource?.sourceId };
       installRef.current = next;
       setInstall(next);
     } else if (state.outcome === "failed") finish(attempt, pluginMarketErrorKey(state.errorCode));

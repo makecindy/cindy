@@ -146,8 +146,9 @@ const DEMOS: DemoPlugin[] = [
   })),
 ];
 const CUSTOM_MARKET = "Demo Git Market";
-// What a new Host generates for a Git market: host/owner/repo only, never the configured URL.
-const CUSTOM_MARKET_SOURCE = { kind: "git" as const, repository: "github.com/demo-org/demo-git-market" };
+// What a new Host generates for a Git market: the fetched host/owner/repo (never the configured URL) and an opaque
+// per-Host source id.
+const CUSTOM_MARKET_SOURCE = { kind: "git" as const, repository: "github.com/demo-org/demo-git-market", sourceId: "DemoGitMarketSource001" };
 const OFFLINE_MARKET = "Demo Offline Market";
 const LEGACY_MARKET = "Demo Legacy Market";
 const marketName = (demo: DemoPlugin) => demo.legacySource ? LEGACY_MARKET : CUSTOM_MARKET;
@@ -176,6 +177,8 @@ function marketItem(demo: DemoPlugin): ManagedMarketItem {
     enabled: entry?.enabled ?? null,
     sourceType: server ? "server" : "git-market", sourceMarketName: server ? null : marketName(demo),
     ...(server || demo.legacySource ? {} : { sourceIdentity: CUSTOM_MARKET_SOURCE }),
+    // The installed instance came from this item's source (newer Hosts only).
+    ...(entry && !server && !demo.legacySource ? { installedSourceId: CUSTOM_MARKET_SOURCE.sourceId } : {}),
     ...(entry && entry.version !== RELEASE ? { updateRequiresConsent: true as const } : {}),
   };
 }

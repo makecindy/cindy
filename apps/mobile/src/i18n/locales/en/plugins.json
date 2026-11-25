@@ -459,6 +459,7 @@
     "alreadyInstalled": "This computer already has this plugin installed.",
     "unconfirmedMismatch": "Couldn’t confirm the result of this installation. The plugin with the same ID on this computer may come from a local file, another version or another source. Check it on the computer.",
     "sourceUnverified": "Cindy on this computer doesn’t say which repository this marketplace comes from, so it can’t be installed from your phone yet. Update Cindy on the computer, or install it there.",
-    "sourceUnverifiedShort": "This computer doesn’t share the repository. Install it on the computer."
+    "sourceUnverifiedShort": "This computer doesn’t share the repository. Install it on the computer.",
+    "sourceChanged": "This marketplace’s source just changed. Choose the plugin to install again."
   }
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, useLayoutEffect, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { AuthorizationMessageCard } from '@/session/AuthorizationMessageCard';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
@@ -1019,6 +1019,50 @@ it('keeps plugin update decisions outside the scrollable permission details', as
     expect(button).not.toBeNull();
     expect(details!.contains(button)).toBe(false);
   }
+});
+
+// Maintainer review 04:44 #2 (#12684): an Agent-initiated first install reaches the phone as a task card. The plugin
+// management sheet's "no repository" block did not apply there; the card must use the Host's source identity too.
+describe('plugin first-install task card and its source', () => {
+  const source = { kind: 'git', repository: 'github.com/acme/market', sourceId: 'SourceA_0123456789abcd' };
+  const card = (input: Record<string, unknown>) => ({ kind: 'permission', requestId, toolName: 'cindy.plugin.install',
+    description: 'Install Runner\nPermission detail', input: { ghost_id: 'runner', version: '1', ...input } });
+  const render = async (input: Record<string, unknown>) => act(async () => root.render(<InteractionPanel deviceId="d1" sessionId="s1"
+    pinPermissionActions interactions={[{ request: card(input) }]} onError={onError} />));
+  it.each([
+    ['an older Host card without an origin', { operation: 'install' }],
+    ['a custom-market card without a source', { operation: 'install', origin: 'custom-market' }],
+    ['a custom-market card with a malformed source', { operation: 'install', origin: 'custom-market', source: { kind: 'git', repository: 'https://u:p@github.com/a/b', sourceId: 'x' } }],
+  ])('keeps only Reject for %s and says to confirm on the computer', async (_name, input) => {
+    await render(input);
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).not.toBeNull();
+    await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).not.toHaveBeenCalled();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.denyButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'deny' }));
+  });
+  it('shows the repository of a custom-market card and allows it', async () => {
+    await render({ operation: 'install', origin: 'custom-market', source });
+    expect(host.querySelector('[data-testid="interaction.permission.installRepository"]')?.textContent)
+      .toBe('plugins.notice.consentSource.repository');
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).toBeNull();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'allow' }));
+  });
+  it.each([
+    ['an official market card', { operation: 'install', origin: 'market' }],
+    ['an older Host update card', { operation: 'update' }],
+  ])('still allows %s', async (_name, input) => {
+    await render(input);
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).toBeNull();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.allowOnceButton');
+    // An update first opens its details; a first install allows directly.
+    if (input.operation === 'update') await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'allow' }));
+  });
 });
 
 // #8706 unit: both actual confirmation layouts must use the safe quota translation.

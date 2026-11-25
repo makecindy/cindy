@@ -1816,7 +1816,7 @@ it("installs from the market through the existing consent sheet and opens the ne
 // PR review (2026-11-25): a first install from the user's own Git market, end to end on the phone side.
 it("installs from a custom Git market with the Host's manifest check and opens the new installed detail", async () => {
   const { publisherKind: _server, ...base } = marketItem("repo-tools", "Repo Tools");
-  const source = { kind: "git", repository: "github.com/demo-org/demo-git-market" };
+  const source = { kind: "git", repository: "github.com/demo-org/demo-git-market", sourceId: "DemoGitMarketSource001" };
   const item = { ...base, pluginId: "custom-market:Demo%20Git%20Market/repo-tools", sourceType: "git-market", sourceMarketName: "Demo Git Market",
     sourceIdentity: source };
   const manifest = { schemaVersion: 3, id: "repo-tools", name: "Repo Tools", version: "1", node: { entry: "worker.cjs", protocol: "json-rpc-stdio" } };
@@ -1890,7 +1890,7 @@ it("stops chaining empty publisher pages after three extra reads", async () => {
  */
 describe("older Host custom market without a repository identity", () => {
   const { publisherKind: _server, ...base } = marketItem("legacy", "Legacy");
-  const source = { kind: "git", repository: "github.com/acme/market" };
+  const source = { kind: "git", repository: "github.com/acme/market", sourceId: "SourceA_0123456789abcd" };
   const wire = (listSource: unknown, detailSource: unknown) => marketWire((request) => {
     const item = { ...base, pluginId: "custom:Team/legacy", sourceType: "git-market", sourceMarketName: "Team",
       ...(listSource ? { sourceIdentity: listSource } : {}) };
@@ -2028,31 +2028,36 @@ describe("market install recovery", () => {
       .every((request) => request.input.pluginId === "market/demo")).toBe(true);
     expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
   });
-  // Maintainer review (2026-11-25): after the receipt expired, the computer replaced custom market A with a same-name
-  // repository B and installed B's plugin with the same id and release; the phone took it as A's result.
+  // Maintainer reviews (2026-11-25, 01:52 and 04:44): after the receipt expired, the computer replaced custom market A
+  // with a same-name repository or folder B and installed B's plugin with the same id and release; the phone took it
+  // as A's result. The Host's installedSourceId must equal the sourceId of the consent shown for this attempt.
+  const sourceA = { kind: "git", repository: "github.com/acme/market", sourceId: "SourceA_0123456789abcd" };
   it.each([
-    ["the same-name market now points to another repository", { kind: "git", repository: "github.com/other/market" }, "unconfirmed"],
-    ["the computer reports no source identity (older Host)", undefined, "unconfirmed"],
-    ["the source is the one the install started with", { kind: "git", repository: "github.com/acme/market" }, "installed"],
-  ])("binds a lost-receipt check of a custom-market install to its source: %s", async (_name, laterSource, expected) => {
+    ["the installed instance comes from another source under the same name", "SourceB_0123456789abcd", "unconfirmed"],
+    ["the computer reports no installed source (older Host)", undefined, "unconfirmed"],
+    ["the installed instance comes from the source of the consent shown", sourceA.sourceId, "installed"],
+  ])("binds a lost-receipt check of a custom-market install to its consent's source: %s", async (_name, installedSourceId, expected) => {
     const { publisherKind: _server, ...base } = marketItem("demo", "Demo");
-    const sourceA = { kind: "git", repository: "github.com/acme/market" };
     const item = { ...base, pluginId: "custom:Team/demo", sourceType: "git-market", sourceMarketName: "Team", sourceIdentity: sourceA };
-    let installed = false;
+    let installed = false, receiptGone = false;
     const requests = marketWire((request) => {
       switch (request.actionId) {
         case "management:snapshot":
           if (request.input?.read === "capabilities") return { catalogPaging: true };
           if (request.input?.read === "catalog") return { ...marketPage(installed ? [] : [item]), customSourceNames: ["Team"] };
           return managementSnapshot(installed);
-        case "management:market-detail": {
-          const { sourceIdentity: _current, ...rest } = item;
-          const source = installed ? laterSource : sourceA;
-          return { ...rest, installState: installed ? "installed" : "not-installed", ...(source ? { sourceIdentity: source } : {}),
+        case "management:market-detail":
+          return { ...item, installState: installed ? "installed" : "not-installed",
+            ...(installed && installedSourceId ? { installedSourceId } : {}),
             manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
-        }
-        case "management:begin": installed = true; throw new Error("[TIMEOUT] remote invoke timed out");
-        case "management:operation": throw hostError("NOT_FOUND");
+        case "management:begin": return { operationId: request.input.operationId, phase: "confirmation", consent: {
+          requestId: "consent", initiator: "user", origin: "custom-market", originLabel: "Team", originSource: sourceA,
+          installationSource: { kind: "third-party" },
+          facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } };
+        case "management:answer": installed = true; throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:operation":
+          if (receiptGone) throw hostError("NOT_FOUND");
+          return { operationId: request.input.operationId, phase: "running" };
         default: throw new Error("unexpected " + request.actionId);
       }
     });
@@ -2061,7 +2066,10 @@ describe("market install recovery", () => {
     await settle();
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
+    await act(async () => fixture.props.get("confirmation").controller.answer(true));
+    await settle(14);
     expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
+    receiptGone = true;
     await act(async () => { await shownMarket().checkResult(); });
     await settle(14);
     const opened = fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
@@ -2072,6 +2080,71 @@ describe("market install recovery", () => {
       expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
     }
     expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+  });
+  // Without the consent the phone has no source to bind to: even a matching-looking install stays unconfirmed.
+  it("keeps a custom-market install unconfirmed when its consent was never received", async () => {
+    const { publisherKind: _server, ...base } = marketItem("demo", "Demo");
+    const item = { ...base, pluginId: "custom:Team/demo", sourceType: "git-market", sourceMarketName: "Team", sourceIdentity: sourceA };
+    let installed = false;
+    marketWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return { ...marketPage(installed ? [] : [item]), customSourceNames: ["Team"] };
+          return managementSnapshot(installed);
+        case "management:market-detail":
+          return { ...item, installState: installed ? "installed" : "not-installed", ...(installed ? { installedSourceId: sourceA.sourceId } : {}),
+            manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+        case "management:begin": installed = true; throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:operation": throw hostError("NOT_FOUND");
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    });
+    await openMarket();
+    await act(async () => shownMarket().setFilter("custom"));
+    await settle();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    await act(async () => { await shownMarket().checkResult(); });
+    await settle(14);
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
+  });
+  // Maintainer review 04:44 #1: the controller re-reads the detail right before begin; a same-name market that now
+  // points to another source (same id, release and manifest) must stop there, and so must a detail without a source.
+  it.each([
+    ["another source under the same name", { kind: "git", repository: "github.com/other/market", sourceId: "SourceB_0123456789abcd" }],
+    ["the same repository text but another source id", { ...sourceA, sourceId: "SourceB_0123456789abcd" }],
+    ["no source identity", undefined],
+  ])("stops before begin when the last detail read shows %s", async (_name, laterSource) => {
+    const { publisherKind: _server, ...base } = marketItem("demo", "Demo");
+    const item = { ...base, pluginId: "custom:Team/demo", sourceType: "git-market", sourceMarketName: "Team", sourceIdentity: sourceA };
+    let details = 0;
+    const requests = marketWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return { ...marketPage([item]), customSourceNames: ["Team"] };
+          return managementSnapshot(false);
+        case "management:market-detail": {
+          // The market's own read sees A; the controller's read right before begin sees the later source.
+          const { sourceIdentity: _a, ...rest } = item;
+          const source = ++details === 1 ? sourceA : laterSource;
+          return { ...rest, ...(source ? { sourceIdentity: source } : {}), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+        }
+        case "management:begin": throw new Error("begin must not be sent");
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    });
+    await openMarket();
+    await act(async () => shownMarket().setFilter("custom"));
+    await settle();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    expect(details).toBe(2);
+    expect(requests.some((request) => request.actionId === "management:begin")).toBe(false);
+    expect(shownMarket()).toMatchObject({ installBusy: false });
+    expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.sourceChanged" });
   });
   it("stays unconfirmed while the original operation may still exist on an unreachable computer", async () => {
     let sameIdOnComputer = false;
