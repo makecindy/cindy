@@ -4760,7 +4760,7 @@ export function ChatInput({
     isRemoteSession,
     sessionId ?? null,
     deviceLinkDeviceId ?? null,
-    // 插件引擎不列内置 Harness 的命令(见下方 skipAgentCommands)；内置引擎时数组与之前逐项相同。
+    // 插件引擎不列内置 Harness 的命令，改列引擎给这个会话广播的 `/…`(见下方 engineCommandKind)；内置引擎时数组与之前逐项相同。
     ...(pluginEngineActive ? ['plugin-engine', pluginEngineSkillsListed] : []),
   ]);
   const [slashCommandLoadState, setSlashCommandLoadState] = useState<SlashCommandRosterState>({
@@ -4811,7 +4811,15 @@ export function ChatInput({
           contextReady: slashContextReady,
           // 插件引擎不认内置 Harness 的命令；技能按引擎能展开的范围列出(见 pluginEngineSkillsListed)。
           skipAgentSkills: isRemoteSession || (pluginEngineActive && !pluginEngineSkillsListed),
-          ...(pluginEngineActive ? { skipAgentCommands: true, pluginEngineSkills: true } : {}),
+          // 有在跑的会话时改列引擎自己广播的 `/…`（ACP available_commands_update）；
+          // 还没有会话(新建任务的草稿)时没有清单可问，只留桌面命令。
+          ...(pluginEngineActive
+            ? {
+                skipAgentCommands: true,
+                pluginEngineSkills: true,
+                ...(sessionId ? { engineCommandKind: 'acp' as const } : {}),
+              }
+            : {}),
           sessionId,
           allowManagedPiPackagePreview: !isRemoteSession,
           onPiRuntimeStatus: (status) => {

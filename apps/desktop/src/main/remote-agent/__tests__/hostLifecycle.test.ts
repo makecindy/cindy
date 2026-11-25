@@ -132,6 +132,37 @@ it('includes an engine-advertised command roster in state only when the handle e
   expect(builtinState).not.toHaveProperty('pluginEngineCommandNames');
 });
 
+// The same snapshot path carries the description-bearing list the `/` panel reads:
+// entries are projected name+description (kind is not a wire concern), both counts
+// and description lengths are bounded, and the field is omitted — not empty — when
+// the handle (an older host build, or a builtin agent) has no such getter.
+it('includes the description-bearing command list in state only when the handle exposes one', () => {
+  const commands = [
+    { kind: 'agent-builtin' as const, name: 'deploy', description: 'Ship the current branch' },
+    { kind: 'agent-builtin' as const, name: 'verbose', description: 'y'.repeat(300) },
+    ...Array.from({ length: 130 }, (_, i) => ({
+      kind: 'agent-builtin' as const,
+      name: `c${i}`,
+      description: '',
+    })),
+  ];
+  const acpState = snapshotHandleState({
+    id: 'acp-session',
+    model: 'm',
+    getSessionCommands: () => commands,
+  } as unknown as AgentSessionHandle);
+  const projected = acpState.pluginEngineCommands as Array<{ name: string; description: string }>;
+  expect(projected[0]).toEqual({ name: 'deploy', description: 'Ship the current branch' });
+  expect(projected[1]).toEqual({ name: 'verbose', description: `${'y'.repeat(280)}…` });
+  expect(projected).toHaveLength(128);
+
+  const builtinState = snapshotHandleState({
+    id: 'builtin-session',
+    model: 'm',
+  } as unknown as AgentSessionHandle);
+  expect(builtinState).not.toHaveProperty('pluginEngineCommands');
+});
+
 function sessionRoot(controller: string, sessionId: string): string {
   const controllerDir = createHash('sha256').update(controller).digest('hex').slice(0, 16);
   return path.join(runsRoot, 'workspaces', controllerDir, hostSessionIdFor(controller, sessionId));

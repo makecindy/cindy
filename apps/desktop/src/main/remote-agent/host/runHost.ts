@@ -66,7 +66,7 @@ import {
   type RemoteAgentReverseRequest,
   type RemoteAgentTeardownReason,
 } from '@cindy/device-link';
-import { AgentNotAuthenticatedError, AgentStartupStoppedError, TurnDispatchRejectedError, type AgentEvent, type AgentSessionHandle, type SendOptions, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
+import { AgentNotAuthenticatedError, AgentStartupStoppedError, TurnDispatchRejectedError, type AgentBuiltinCommand, type AgentEvent, type AgentSessionHandle, type SendOptions, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
 
 import { EXEC_SERVER_WS_PATH } from '../controller/execServerRelay';
 import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
@@ -682,6 +682,26 @@ function safeCall<T>(fn: (() => T) | undefined): T | undefined {
   }
 }
 
+/**
+ * 状态行里会话命令清单的上限。状态行每个任务最多 512KB，一份异常大的广播不能顶爆同步；
+ * 超出上限的条目不进面板(引擎广播的命令远少于这个数)。
+ */
+const SESSION_COMMANDS_MAX_ENTRIES = 128;
+const SESSION_COMMAND_DESCRIPTION_MAX_CHARS = 280;
+
+/** 带描述的会话命令清单投影到状态行；句柄不提供清单时返回 undefined(状态行里不带这一项)。 */
+function projectSessionCommands(
+  commands: AgentBuiltinCommand[] | undefined,
+): Array<{ name: string; description: string }> | undefined {
+  if (!commands) return undefined;
+  return commands.slice(0, SESSION_COMMANDS_MAX_ENTRIES).map((command) => ({
+    name: command.name,
+    description: command.description.length > SESSION_COMMAND_DESCRIPTION_MAX_CHARS
+      ? `${command.description.slice(0, SESSION_COMMAND_DESCRIPTION_MAX_CHARS)}…`
+      : command.description,
+  }));
+}
+
 /** 控制端镜像同步读取的会话状态。 */
 export function snapshotHandleState(handle: AgentSessionHandle): Record<string, unknown> {
   const planMode = safeCall(handle.getPlanMode?.bind(handle));
@@ -712,6 +732,9 @@ export function snapshotHandleState(handle: AgentSessionHandle): Record<string, 
     requiresRuntimeRecycleForExtraDirs: safeCall(handle.requiresRuntimeRecycleForExtraDirs?.bind(handle)),
     // ACP 的会话命令名单会随 available_commands_update 替换；沿用既有 state 行透给控制端。
     pluginEngineCommandNames: safeCall(handle.getPluginEngineCommandNames?.bind(handle)),
+    // 同一份广播里带描述的完整清单：控制端的 `/` 面板要显示描述，并在引擎重播空清单时移除条目。
+    // 名单另走上一行原字段(旧控制端照旧)；这一项只在运行端句柄提供时发送，条数与描述长度设上限。
+    pluginEngineCommands: projectSessionCommands(safeCall(handle.getSessionCommands?.bind(handle))),
   };
   for (const key of Object.keys(state)) if (state[key] === undefined) delete state[key];
   return JSON.parse(JSON.stringify(state)) as Record<string, unknown>;

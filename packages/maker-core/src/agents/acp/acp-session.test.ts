@@ -218,6 +218,49 @@ describe('ACP line decoder (host stdout chunks)', () => {
   });
 });
 
+// #11963 / #12138: the `/` composer of a plugin-engine task lists the engine's latest
+// `available_commands_update`, descriptions included. 覆盖缺口：`getPluginEngineCommandNames`
+// 只留名字且只增不减，面板既显示不了描述，也不会在引擎重播空清单后移除条目。
+// 最小失败输入：引擎广播一条带描述的命令，随后重播另一份、再重播空清单（unit）。
+describe('session commands', () => {
+  it('lists the latest advertised commands with descriptions and clears on an empty broadcast', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+    expect(session.getSessionCommands()).toEqual([]);
+
+    agent.update({
+      sessionUpdate: 'available_commands_update',
+      availableCommands: [
+        { name: '/review', description: 'Review the current change' },
+        { name: 'deploy' },
+        { name: 'review', description: 'a duplicate name keeps the first entry' },
+        { description: 'an entry without a name is dropped' },
+        'not an object',
+      ],
+    });
+    expect(session.getSessionCommands()).toEqual([
+      { kind: 'agent-builtin', name: 'review', description: 'Review the current change' },
+      { kind: 'agent-builtin', name: 'deploy', description: '' },
+    ]);
+
+    // The engine re-broadcasts the whole list after it adds or removes commands: replace, not append.
+    agent.update({
+      sessionUpdate: 'available_commands_update',
+      availableCommands: [{ name: 'ship', description: 'Ship it' }],
+    });
+    expect(session.getSessionCommands()).toEqual([
+      { kind: 'agent-builtin', name: 'ship', description: 'Ship it' },
+    ]);
+
+    // An empty broadcast removes everything the engine no longer advertises.
+    agent.update({ sessionUpdate: 'available_commands_update', availableCommands: [] });
+    expect(session.getSessionCommands()).toEqual([]);
+
+    // The send/steer guard keeps what was advertised once; only the composer list is replaced.
+    expect([...session.getPluginEngineCommandNames()].sort()).toEqual(['deploy', 'review', 'ship']);
+  });
+});
+
 describe('openAcpSession handshake', () => {
   it('negotiates v1 without client fs/terminal and drops MCP transports the agent did not advertise', async () => {
     const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: false } } });

@@ -49,6 +49,15 @@ ACP 会话命令状态（2026-11-22）：`t: 'state'` 可选追加 `pluginEngine
 状态键作为不透明状态忽略。host 仍仅在现有状态快照变化时发送（当前最长间隔 2 秒）；供应商组和自建中转透明
 转发原状态行，无需同步改动。回归覆盖 host 快照与 proxy 的初始／增量状态。
 
+ACP 会话命令面板清单（2026-11-26）：`t: 'state'` 可选追加 `pluginEngineCommands`，与上一段的名单同源 —— 同一份
+`available_commands_update` 广播、经代理句柄的 `getSessionCommands` 透出，但带描述且**整份替换**（引擎重播空清单
+即清空，控制端据此移除条目），供控制端 `/` 面板读取。形态为 `{ name, description }[]`；条数上限 128、单条描述
+截断到 280 字符（运行端 `projectSessionCommands` 投影时裁剪，超限部分不发送），name 不可用的条目在运行端丢弃。
+控制端只认「非空字符串 name」的条目，其余丢弃不让整份清单失效。仍不新增 `op`、方法、能力协商或 relay 解析：
+旧控制端把未知状态键忽略；新控制端连旧运行端时字段缺省即空清单；旧运行端照发 `pluginEngineCommandNames`，
+发送／steer 守卫不受影响。回归覆盖 host 快照（有 getter 才有该键、条数与描述长度上限）与 proxy 的初始／增量
+状态、缺字段降级（`hostLifecycle.test.ts`、`plumbing.test.ts`）。
+
 ## 托管请求的附件预算与保存（2026-11-17）
 
 `open.acceptsAttachmentPreservation?: true` 表示任务所在电脑能接收被请求预算移出的附件。

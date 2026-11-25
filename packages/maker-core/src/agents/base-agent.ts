@@ -2739,6 +2739,12 @@ export interface AgentSessionHandle {
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
   /** ACP-only slash-command names advertised by the current plugin session. */
   getPluginEngineCommandNames?(): readonly string[];
+  /**
+   * ACP-only: the engine's latest advertised `/…` list (name + description) for
+   * the composer. Replaced on every `available_commands_update`; an empty list
+   * means the engine advertises none. Absent for engines without a per-session list.
+   */
+  getSessionCommands?(): AgentBuiltinCommand[];
   /** An explicit Skill send may retry exhausted discovery on the existing process. */
   retryFailedRuntimeCapabilityCapture?(): void;
   /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */

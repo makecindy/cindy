@@ -14,6 +14,7 @@ import { markSessionSendTerminal, readSessionSendTerminalStatus, MAIN_OWNED_SEND
 
 import { DeviceLinkError, type RemoteAgentMethod, type RemoteAgentReply, type RemoteAgentReverseRequest, type RemoteAgentTeardownReason } from '@cindy/device-link';
 import type {
+  AgentBuiltinCommand,
   AgentEvent,
   AgentKind,
   AgentSessionHandle,
@@ -321,6 +322,26 @@ export interface RemoteAgentHandleController {
   onReconnected(started: RemoteStartedInfo): void;
   /** 连回时没能接上原来的会话、对方开了新会话：告诉用户之前的上下文没接上。 */
   notifyResumeLost(): void;
+}
+
+/**
+ * 状态行里的会话命令清单来自另一台电脑：只认「非空字符串 name + 字符串 description」的条目，
+ * 其余丢弃而不是让整份清单失效。
+ */
+function readSessionCommands(raw: unknown): AgentBuiltinCommand[] {
+  if (!Array.isArray(raw)) return [];
+  const commands: AgentBuiltinCommand[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.name !== 'string' || !record.name) continue;
+    commands.push({
+      kind: 'agent-builtin',
+      name: record.name,
+      description: typeof record.description === 'string' ? record.description : '',
+    });
+  }
+  return commands;
 }
 
 export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHandleController {
@@ -686,6 +707,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       getPluginEngineCommandNames: () => Array.isArray(state.pluginEngineCommandNames)
         ? (state.pluginEngineCommandNames as unknown[]).filter((n): n is string => typeof n === 'string')
         : [],
+      // 引擎最新广播的 `/…`（含描述、整份替换），给控制端的 `/` 面板用；旧运行端不发这一项，
+      // 这里就是空清单 —— 名单(pluginEngineCommandNames)另走原字段，发送/steer 守卫不受影响。
+      getSessionCommands: () => readSessionCommands(state.pluginEngineCommands),
     } : {}),
 
     send: (message, opts) => sendLikeTracked('send', message, opts),

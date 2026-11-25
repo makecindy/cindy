@@ -878,6 +878,41 @@ describe('remote ACP command state', () => {
     expect(controller.handle.getPluginEngineCommandNames?.()).toEqual(updatedNames);
     expect(create({}).handle.getPluginEngineCommandNames?.()).toEqual([]);
   });
+
+  // The `/` panel reads the description-bearing list: entries without a usable
+  // name are dropped (not fatal to the whole list), a broadcast replaces the
+  // whole list, old hosts (no field) mean no commands, and non-ACP sessions
+  // expose no such getter at all.
+  it('projects the remote engine command list from the initial and updated state', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const create = (state: Record<string, unknown>, agentKind = 'acp') => createRemoteAgentHandle({
+      client: {} as RemoteAgentRunClient,
+      started: { id: 'acp-1', agentKind, model: 'm', shadowDir: '', methods: [], state },
+      workspace,
+      mapEvent: mapClaudeHostedEvent,
+      recordApproval: () => {},
+      newId: () => 'request-id',
+      dispose: async () => {},
+    });
+    const controller = create({
+      pluginEngineCommands: [
+        { name: 'deploy', description: 'Ship the current branch' },
+        { description: 'no name' },
+        null,
+        'deploy',
+      ],
+    });
+    expect(controller.handle.getSessionCommands?.()).toEqual([
+      { kind: 'agent-builtin', name: 'deploy', description: 'Ship the current branch' },
+    ]);
+    // 引擎重播整份清单时整份替换 —— 空清单即清空，面板据此移除条目。
+    controller.onState({ pluginEngineCommands: [] });
+    expect(controller.handle.getSessionCommands?.()).toEqual([]);
+    // 旧运行端不发这一项：空清单，而不是报错。
+    expect(create({}).handle.getSessionCommands?.()).toEqual([]);
+    // 非 ACP 会话本来就没有会话级命令清单。
+    expect(create({}, 'claude-code').handle.getSessionCommands).toBeUndefined();
+  });
 });
 
 describe('wire payloads', () => {

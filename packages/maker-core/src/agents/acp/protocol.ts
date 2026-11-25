@@ -9,6 +9,8 @@
  * agent (DSH, Gemini, ...) or about plugins.
  */
 
+import type { AgentBuiltinCommand } from '../../types/palette.js';
+
 export const ACP_PROTOCOL_VERSION = 1;
 
 /** JSON-RPC error codes defined by ACP v1 on top of the JSON-RPC 2.0 reserved range. */
@@ -361,6 +363,32 @@ export function normalizeAvailableCommandNames(raw: unknown): string[] {
     if (name) names.push(name);
   }
   return names;
+}
+
+/**
+ * Extracts the engine-advertised `/…` list (name + description) from
+ * `available_commands_update.availableCommands`.
+ *
+ * A malformed entry is dropped instead of voiding the whole list — an engine
+ * that sends a half-written object should still leave the rest usable. The same
+ * name twice keeps the first entry (the palette de-dupes by name anyway).
+ */
+export function normalizeAvailableCommands(raw: unknown): AgentBuiltinCommand[] {
+  if (!Array.isArray(raw)) return [];
+  const commands: AgentBuiltinCommand[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    const record = asRecord(entry);
+    const name = asNonEmptyString(record.name)?.trim().replace(/^\/+/, '');
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    commands.push({
+      kind: 'agent-builtin',
+      name,
+      description: asNonEmptyString(record.description) ?? '',
+    });
+  }
+  return commands;
 }
 
 const STOP_REASONS: ReadonlySet<string> = new Set(['end_turn', 'max_tokens', 'max_turn_requests', 'refusal', 'cancelled']);

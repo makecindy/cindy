@@ -231,15 +231,22 @@ describe('loadAllCommands deviceId', () => {
     s.listAgentCommands.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
       .mockResolvedValueOnce({ success: true, commands: [c('deploy', 'agent-builtin')] });
     const observed: import('@cindy/maker-core').UnifiedCommand[][] = [];
+    // The composer's production call shape for a plugin-engine task: the built-in
+    // Harness list is skipped and the engine's own session list is asked for.
     const refresh = async () => {
       observed.push(await loadAllCommands('claude-code', null, {
-        sessionId: 'acp-session', skipAgentSkills: true, forceReload: true,
+        sessionId: 'acp-session',
+        skipAgentCommands: true,
+        pluginEngineSkills: true,
+        engineCommandKind: 'acp',
+        forceReload: true,
       }));
     };
     const stop = refreshSlashCommandRosterWhileOpen(refresh);
     try {
       await vi.advanceTimersByTimeAsync(0);
       expect(s.listAgentCommands).toHaveBeenCalledTimes(1);
+      expect(s.listAgentCommands).toHaveBeenCalledWith('acp', { sessionId: 'acp-session' });
       await vi.advanceTimersByTimeAsync(ACP_SLASH_COMMAND_REFRESH_INTERVAL_MS * 3);
       expect(s.listAgentCommands).toHaveBeenCalledTimes(1);
 

@@ -281,10 +281,12 @@ import {
   parseOfferedPluginEngines,
   PLUGIN_ENGINES_INVOKE,
   pluginEngineKeyFromProviderId,
+  PLUGIN_ENGINE_AGENT_KIND,
   PLUGIN_ENGINE_DEFAULT_MODEL,
   type PluginEngineView,
 } from '../../shared/pluginEngines.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, PluginEngineUnsupportedError, requireBuiltinAgentKind } from '../maker-host/engineKind.js';
+import { parseCommandListAgentKind, pluginEngineCommandList } from './pluginEngineCommandList.js';
 import type {
   AgentEvent,
   AgentKind,
@@ -8501,7 +8503,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ),
       });
       try {
-        const kind = requireAgentKind(agentKind);
+        // `acp`: a plugin-engine task's own `/…` list (the one its engine broadcast to that
+        // session). Older computers reject it, and their engines advertise nothing either.
+        const listKind = parseCommandListAgentKind(agentKind);
+        if (!listKind) throwIpcError('INVALID_PARAMS', 'agentKind required');
         const params = rawParams === undefined ? {} : requireObject(rawParams);
         if (params.sessionId !== undefined && typeof params.sessionId !== 'string') {
           throwIpcError('INVALID_PARAMS', 'sessionId must be a string');
@@ -8517,6 +8522,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ? params.sessionId.trim()
             : undefined;
         const sessionMetaRaw = sessionId ? await maker.getSessionMeta(sessionId) : null;
+        if (listKind === PLUGIN_ENGINE_AGENT_KIND) {
+          // 插件引擎的 `/…` 是引擎给**这个会话**广播的（ACP `available_commands_update`，带描述、
+          // 整份替换），不是 agent 级别的静态清单：会话由 Main 按 sessionId 解析，调用方必须
+          // 给出 sessionId。任务不存在、不是插件引擎、或引擎还没广播过，都是空清单。
+          if (!sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required for plugin-engine commands');
+          return {
+            success: true,
+            commands: pluginEngineCommandList(sessionId, {
+              sessionMeta: sessionMetaRaw,
+              listSessionCommands: (id) => maker.getSessionCommands(id),
+            }),
+          };
+        }
+        const kind = listKind;
         // Command palettes for plugin-engine tasks have no built-in session context.
         const sessionMeta = sessionMetaRaw && hasBuiltinAgentKind(sessionMetaRaw) ? sessionMetaRaw : null;
         const builtins = maker.listAgentCommands(kind);
