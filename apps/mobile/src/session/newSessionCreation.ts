@@ -927,6 +927,11 @@ function failTask(task: InternalTask, status: 'create-failed' | 'enqueue-failed'
   }
   task.status = status;
   task.error = error;
+  if (status === 'create-failed') {
+    // 主机还没确认创建。立刻把草稿标成可恢复,不等会话页还停在前台。
+    // 断线放弃可靠帧、用户离开页面或进程被收起时,列表里的乐观行都会消失。
+    void persistUnconfirmedCreationDraft(task);
+  }
   if (status === 'enqueue-failed') {
     // 会话已建成但首条消息未入队:摘掉乐观排队气泡(草稿 / 附件由会话页从 task
     // 回填 composer,用户走正常发送);同时清掉合成行的 pendingLocalCreation
@@ -942,6 +947,62 @@ function failTask(task: InternalTask, status: 'create-failed' | 'enqueue-failed'
     });
   }
   emit();
+}
+
+function unconfirmedCreationRecord(sessionId: string, deviceId: string) {
+  return getCurrentMobileOutboxRecords().find((record) =>
+    record.deviceId === deviceId
+    && record.item.sessionId === sessionId
+    && record.creation
+    && !record.creation.editReady
+    && !record.creation.cancelled
+    && !record.prepared
+    && !record.template
+    && !record.enqueueStarted
+    && !record.historyConfirmed
+    && record.cleanupOutcome === undefined
+    && record.state !== 'host-owned');
+}
+
+/** Host never confirmed this create. Keep the text and collaboration settings editable. */
+async function persistUnconfirmedCreationDraft(task: InternalTask): Promise<void> {
+  if (!tasks.has(task.sessionId) || !isTaskOwnerCurrent(task)) return;
+  const record = unconfirmedCreationRecord(task.sessionId, task.deviceId);
+  if (!record?.creation) return;
+  await mobileDurableOutbox.update(record, {
+    suspended: true,
+    state: 'failed',
+    error: task.error || i18n.t('session.screen.firstMessageNotSent'),
+    creation: {
+      ...record.creation,
+      editReady: true,
+      ...(task.collabDraft ? { collabDraft: task.collabDraft } : {}),
+    },
+  });
+}
+
+/**
+ * A queued creation whose in-memory task is gone was never confirmed by the host.
+ * Link abandonment and process suspension both leave it invisible unless it becomes
+ * an editor draft. Live tasks, handed-off sends and already-restored drafts are left alone.
+ *
+ * Fault radius: one local outbox record; no link reset, no resend, no other device.
+ */
+export async function recoverUnconfirmedCreationDrafts(): Promise<string[]> {
+  const recovered: string[] = [];
+  for (const record of getCurrentMobileOutboxRecords()) {
+    if (!record.creation || hasLiveNewSessionCreation(record.item.sessionId)) continue;
+    if (record.state !== 'queued' && record.state !== 'sending' && record.state !== 'failed') continue;
+    if (!unconfirmedCreationRecord(record.item.sessionId, record.deviceId)) continue;
+    await mobileDurableOutbox.update(record, {
+      suspended: true,
+      state: 'failed',
+      error: record.error || i18n.t('session.screen.firstMessageNotSent'),
+      creation: { ...record.creation, editReady: true },
+    });
+    recovered.push(record.item.sessionId);
+  }
+  return recovered;
 }
 
 function forgetPrecreatedRecoveryRecord(task: InternalTask): void {

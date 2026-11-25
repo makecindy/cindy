@@ -943,6 +943,14 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     onRestore: (record) => {
       outboxRecoveryRef.current = record;
       userTouchedDeviceRef.current = true;
+      if (record.creation.collabDraft) {
+        collabDraftTargetRef.current = orcaCollabDraftTargetKey(
+          record.deviceId,
+          record.creation.draft.workspaceKind,
+          record.creation.draft.workingDir,
+        );
+        setCollabDraft(record.creation.collabDraft);
+      }
       restoreCreationDraft(record.creation.draft,
         record.item.attachmentSlots.filter((a): a is RemoteSerializedAttachment => a !== null),
         { enabled: record.creation.planModeArm, restorePermissionMode: record.creation.restorePermissionMode },
@@ -4322,6 +4330,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         prePlanPermissionModeRef,
         planModeCapability,
         planModeDraftOn,
+        collabDraft,
         sendAttachments,
         attachmentPreviews,
         getUploadedSource,

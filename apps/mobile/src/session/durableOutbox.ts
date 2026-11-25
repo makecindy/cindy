@@ -1,4 +1,5 @@
 import type { AnnotationRegion } from "@cindy/maker-shared/image-annotation";
+import type { OrcaWorkerFormValue } from "./orcaTeam";
 import type { NewSessionDraft } from "./newSession";
 import type { ComposerDocument } from './composerDocument';
 import type { MobileOutboxItem } from "./sessionOutbox";
@@ -72,6 +73,8 @@ export interface DurableOutboxRecord {
     cancelled?: true;
     /** Creation was handed back to the editor; restore its entry after restart. */
     editReady?: true;
+    /** Collaboration settings captured before the host confirmed the task. */
+    collabDraft?: OrcaWorkerFormValue | null;
     /** Content that could not be carried back, shown beside the restored attachments. */
     notice?: string;
     /** Messages already copied into this draft; makes interrupted consolidation idempotent. */

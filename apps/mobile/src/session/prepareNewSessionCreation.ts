@@ -4,6 +4,7 @@ import type { MobileMakerTransport } from "@/device-link/mobileMakerTransport";
 import { formatRemoteError } from "@/device-link/remoteStatus";
 import type { MobileSessionRuntimeOptions } from "./agentCapabilities";
 import type { DurableOutboxRecord } from "./durableOutbox";
+import type { OrcaWorkerFormValue } from "./orcaTeam";
 import type { MobileLocalAttachmentUploadCandidate } from "./mobileLocalAttachmentUpload";
 import {
   getCurrentMobileOutboxRecords,
@@ -75,6 +76,7 @@ export interface NewSessionCreationPreparationInput {
   prePlanPermissionModeRef: RefObject<string | null>;
   planModeCapability: boolean;
   planModeDraftOn: boolean;
+  collabDraft?: OrcaWorkerFormValue | null;
   sendAttachments: RemoteSerializedAttachment[];
   attachmentPreviews: Record<string, string>;
   getUploadedSource: (
@@ -244,6 +246,7 @@ export async function prepareNewSessionCreation(
         // Replacing a restored draft does not hand it to the background pipeline.
         // Keep its recovery intent durable until the creation pipeline takes over.
         ...(recovering ? { editReady: true } : {}),
+        ...(input.collabDraft ? { collabDraft: input.collabDraft } : {}),
         ...(creatingWorktree
           ? { originalWorkingDir: effectiveDraft.workingDir }
           : {}),

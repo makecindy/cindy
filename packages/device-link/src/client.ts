@@ -4689,15 +4689,17 @@ export class DeviceLinkClient {
     // 死锁兜底:link 断开状态下 pending 冻结(不重试、不清理,只等 link 重建),
     // 若 link-accept/link-open 丢失则永远等不到,满队列把所有新帧顶成 BACKPRESSURE。
     // 队头滞留超过阈值即整队放弃 —— push 由重连 resync 补偿,invoke-result 的
-    // 原请求方早已超时;放弃后 baseSeq 前移,对端按新基线跳过这些 seq。
+    // 原请求方早已超时。用户 invoke 不能静默丢掉:放弃时记错误并拒绝等待方,
+    // 让新建任务把未确认的正文放回输入框。放弃后 baseSeq 前移,对端按新基线跳过这些 seq。
     if (!this.isPeerSendReady(peer) && peer.pending.size > 0) {
       const oldest = peer.pending.values().next().value as PendingReliableMessage | undefined;
       if (
         oldest
         && this.monotonicNow() - oldest.enqueuedAt > this.timing.stalledLinkPendingMaxAgeMs
       ) {
+        const stalledInvokes = [...peer.pending.values()].filter((frame) => frame.envelope.kind === 'invoke').length;
         this.log.warn(
-          `abandoning ${peer.pending.size} stalled reliable frame(s) for peer ${shortDeviceRef(env.dst)} (link down > ${this.timing.stalledLinkPendingMaxAgeMs}ms)`,
+          `abandoning ${peer.pending.size} stalled reliable frame(s) for peer ${shortDeviceRef(env.dst)} (link down > ${this.timing.stalledLinkPendingMaxAgeMs}ms, invokes=${stalledInvokes})`,
         );
         this.abandonReliablePending(env.dst, 'reliable link stalled; pending abandoned');
       }
@@ -7219,6 +7221,17 @@ export class DeviceLinkClient {
   }
 
   private abandonReliablePending(dst: string, message: string): void {
+    const peerBefore = this.peerTransport.get(dst);
+    const abandonedInvokes = peerBefore
+      ? [...peerBefore.pending.values()].filter((frame) => frame.envelope.kind === 'invoke').length
+      : 0;
+    if (abandonedInvokes > 0) {
+      // Push frames are rebuilt on reconnect. A user invoke is not: the waiter
+      // must fail closed so the composer can restore the unconfirmed text.
+      this.log.error(
+        `abandoned ${abandonedInvokes} unconfirmed user invoke(s) for peer ${shortDeviceRef(dst)}: ${message}`,
+      );
+    }
     this.invokeScheduler.cancel(dst, new DeviceLinkError('NOT_CONNECTED', message));
     const peer = this.peerTransport.get(dst);
     if (peer) {
