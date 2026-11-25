@@ -9503,8 +9503,12 @@ export function registerGhostIpc(): void {
       query: input => requireRemotePluginManagementServices().market.query!(input),
       recommendations: () => requireRemotePluginManagementServices().market.recommendations!(),
       detail: id => requireRemotePluginManagementServices().market.detail(id),
-      install: async (id, options, prompt, assertCurrent, assertScope) => {
-        await requireRemotePluginManagementServices().market.install(id, options, prompt, assertCurrent, assertScope);
+      install: async (id, options, prompt, assertCurrent, assertScope, remoteOperation) => {
+        await requireRemotePluginManagementServices().market.install(id, options, prompt, assertCurrent, assertScope, remoteOperation);
+      },
+      installedOperations: (items, controller) => {
+        const services = requireRemotePluginManagementServices();
+        return services.market.installedOperations ? services.market.installedOperations(items, controller) : Promise.resolve([...items]);
       },
     },
     setEnabled: async (id, enabled, approval, assertCurrent) => { await setGhostEnabledForUser(id, enabled, approval, assertCurrent); },

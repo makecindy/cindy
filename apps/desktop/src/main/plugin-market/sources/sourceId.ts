@@ -40,6 +40,8 @@ export const SOURCE_ID_KEY_DIR = 'source-id';
 const SOURCE_ID_DOMAIN = 'cindy.plugin-market.source-id';
 const SOURCE_ID_VERSION = 2;
 const KEY_ID_DOMAIN = 'cindy.plugin-market.source-id.key-id';
+/** 远程操作发起方（控制端设备身份）的本机不可逆标识，与 sourceId、keyId 域分隔。 */
+const CONTROLLER_DOMAIN = 'cindy.plugin-market.operation-controller';
 const KEY_TEXT = /^[0-9a-f]{64}$/;
 const KEY_FILE = 'key';
 const GENERATION = /^v([1-9][0-9]{0,8})$/;
@@ -58,6 +60,11 @@ export type MarketSourceIdInput =
 export type MarketSourceIdOf = ((input: MarketSourceIdInput) => string | null) & {
   prepare?: () => Promise<void>;
   keyId: () => string | null;
+  /**
+   * 远程管理操作发起方的本机不可逆标识（契约 V2.9）：同一把密钥、独立域名。安装记录里只存它，不存原始设备号；
+   * 未备好密钥时为 null。
+   */
+  controllerTag?: (controller: string) => string | null;
 };
 
 /** 'unreadable'：在但读不到（文件锁、权限、瞬时 I/O），不能当成缺失去重建。 */
@@ -149,6 +156,11 @@ export function createMarketSourceIdOf(keyDir: string): MarketSourceIdOf {
     return crypto.createHmac('sha256', key).update(JSON.stringify(parts)).digest().subarray(0, 16).toString('base64url');
   }) as MarketSourceIdOf;
   sourceIdOf.keyId = () => keyId;
+  sourceIdOf.controllerTag = (controller) => {
+    if (!key || typeof controller !== 'string' || !controller) return null;
+    return crypto.createHmac('sha256', key).update(JSON.stringify([CONTROLLER_DOMAIN, 1, controller]))
+      .digest().subarray(0, 16).toString('base64url');
+  };
   sourceIdOf.prepare = () => (loading ??= loadOrCreateKey(keyDir).then((loaded) => {
     key = loaded;
     keyId = loaded ? keyIdOf(loaded) : null;

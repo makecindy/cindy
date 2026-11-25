@@ -4,6 +4,7 @@ import { RemotePluginManagement, type RemotePluginManagementDeps } from '../remo
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import type { PluginManagementReceipt } from '../../../shared/pluginManagement';
+import type { PluginMarketItem } from '../../../shared/pluginMarket';
 
 function fixture() {
   let owner = 'owner-a',
@@ -397,6 +398,38 @@ describe('remote plugin management receipt boundaries', () => {
     expect((await f.read()).disabled).toEqual([installedGhostStoragePart(f.ghosts[0])]);
     expect(f.deps.projects!.setDisabled).toHaveBeenCalledTimes(1);
   });
+  /* 测试价值（契约 V2.9，PR #12731）
+   * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 begin（install 更新）、market-detail 与 catalog；
+   *   交给安装出口的远程操作参数、响应里的 installedOperationId。
+   * - 缺口：回执过期后控制端需要 Host 返回的操作级证据；它只能对发起那次操作的控制端可见，否则同账号的另一台
+   *   控制端可在原操作被清掉后复用同一操作号冒认。
+   * - 最小失败输入：phone-a 发起一次更新；phone-a 与 desktop-b 各读一次详情；服务层条目自带该字段时。
+   * - tier：unit（fake 依赖，假定时器）。
+   */
+  it('passes the operation and its controller to the installer and projects the evidence only to that controller', async () => {
+    const f = fixture();
+    await f.invoke('begin', {
+      operationId: 'op-0000000000000001', kind: 'install', pluginId: 'plugin-weather', expectedReleaseId: 'release-2',
+      expectedInstalledApproval: ghostInstallApprovalToken(f.ghosts[0].approval),
+    }, 'phone-a', installedGhostStoragePart(f.ghosts[0]));
+    await flush();
+    expect(vi.mocked(f.deps.market.install).mock.calls[0]?.[5]).toEqual({ operationId: 'op-0000000000000001', controller: 'phone-a' });
+
+    const item = { pluginId: 'plugin-weather', installState: 'installed', installedOperationId: 'from-service' };
+    f.deps.market.detail = vi.fn(async () => item as never);
+    // Without the Host projection the field never leaves, even if a lower layer set it.
+    expect(await f.invoke('market-detail', { pluginId: 'plugin-weather' }, 'phone-a')).not.toHaveProperty('installedOperationId');
+    const installedOperations = vi.fn(async (items: readonly PluginMarketItem[], controller: string) => items.map((entry) => (
+      { ...entry, ...(controller === 'phone-a' ? { installedOperationId: 'op-0000000000000001' } : {}) })));
+    f.deps.market.installedOperations =
+      installedOperations as unknown as NonNullable<RemotePluginManagementDeps['market']['installedOperations']>;
+    expect(await f.invoke('market-detail', { pluginId: 'plugin-weather' }, 'phone-a'))
+      .toMatchObject({ installedOperationId: 'op-0000000000000001' });
+    expect(installedOperations.mock.calls.at(-1)?.[1]).toBe('phone-a');
+    await f.invoke('market-detail', { pluginId: 'plugin-weather' }, 'desktop-b');
+    expect(installedOperations.mock.calls.at(-1)?.[1]).toBe('desktop-b');
+  });
+
   it('rejects removed projects, arbitrary paths, malformed scope and scoped installation', async () => {
     const f = projectsFixture();
     const state = await f.read();

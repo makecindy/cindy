@@ -58,6 +58,13 @@ export interface PluginMarketItem {
    */
   installedSourceId?: string;
   /**
+   * 当前已装实例是哪一次远程管理操作装入的（契约 V2.9）：远程 `management:begin` 安装／更新提交成功时，Host 把
+   * 操作号连同发起方设备身份的本机不可逆标识和装入的包摘要写进安装记录。只在远程管理响应里、只对发起那次
+   * 操作的控制端给出，且要求磁盘上的包仍是那份；电脑本机界面与其它控制端永远看不到。形状见
+   * PLUGIN_MARKET_OPERATION_ID_PATTERN。
+   */
+  installedOperationId?: string;
+  /**
    * 新版本比已装版本权限变多，或（自定义市场）实际来源与已装版本不同，后台更新已暂停、
    * 等待用户确认。只在 Main 按真实包与来源记录判定过后出现；缺省表示未知或无需确认，
    * 不能据此推断可以静默更新。
@@ -235,6 +242,11 @@ export type PluginMarketSourceIdentity =
 /** 展示用仓库标识的整体形状；远程控制端按同一形状校验。 */
 export const PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN =
   /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}){2,4}$/;
+/** 远程管理操作号（契约 V2.9）：Host 只为这个形状的操作号留安装证据；控制端应使用随机 UUID。 */
+export const PLUGIN_MARKET_OPERATION_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+export function isPluginMarketOperationId(value: unknown): value is string {
+  return typeof value === 'string' && PLUGIN_MARKET_OPERATION_ID_PATTERN.test(value);
+}
 /** 来源标识：16 字节 HMAC 截断的 base64url（无填充）。 */
 export const PLUGIN_MARKET_SOURCE_ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 /** 与 sources/parse.ts 的 REF_PATTERN 同一口径。 */

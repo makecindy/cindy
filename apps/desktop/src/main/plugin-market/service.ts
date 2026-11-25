@@ -60,6 +60,7 @@ import type {
 import {
   customMarketPluginId,
   customMarketReleaseId,
+  isPluginMarketOperationId,
   isPluginMarketSourceId,
   marketSourceKey,
   parseCustomMarketPluginId,
@@ -155,7 +156,7 @@ import {
 import type { DiscoveredMarketPlugin } from './sources/discover.js';
 import { checkGitPreflight, type GitPreflightResult } from './sources/preflight.js';
 import { MarketSourceManager } from './sources/index.js';
-import { createMarketSourceIdOf, SOURCE_ID_KEY_DIR } from './sources/sourceId.js';
+import { createMarketSourceIdOf, SOURCE_ID_KEY_DIR, type MarketSourceIdOf } from './sources/sourceId.js';
 import { MarketSourceStore } from './sources/store.js';
 
 const log = createLogger('plugin-market');
@@ -623,6 +624,21 @@ function isGhostBusy(
 }
 
 /** 自定义市场发现到的单个插件条目（快照投影的原料）。 */
+/** 写进安装记录的远程操作证据（契约 V2.9），落位时再补上当次包的 raw manifest 摘要。 */
+interface RemoteOperationEvidence {
+  operationId: string;
+  /** 发起方设备身份的本机不可逆标识。 */
+  controller: string;
+  keyId: string;
+}
+
+function remoteOperationBindingOf(
+  evidence: RemoteOperationEvidence | null | undefined,
+  rawManifestSha256: string,
+): Pick<PluginMarketInstallationRecord, 'remoteOperationBinding'> {
+  return evidence ? { remoteOperationBinding: { ...evidence, rawManifestSha256 } } : {};
+}
+
 /** 同一 owner 当前密钥下的来源标识视图（见 sources/sourceId.ts）。只有同一 keyId 算出的标识才能比较。 */
 interface CustomSourceIds {
   keyId: string | null;
@@ -708,6 +724,11 @@ export interface PluginMarketSnapshotOptions {
  */
 export interface PluginMarketInstallContext {
   consent: { prompt: GhostInstallConsentPrompt; initiator: GhostInstallConsentInitiator };
+  /**
+   * Main-only：这次安装由远程管理的哪一次操作、哪个控制端（设备身份）发起（契约 V2.9）。提交成功时写进安装记录
+   * 作为操作级证据；Renderer 的 IPC 永远不传。
+   */
+  remoteOperation?: { operationId: string; controller: string };
   /** Main-only caller authority and installed approval, checked before replacement. */
   assertCurrent?: () => void;
   /** Owner/peer/cancellation only; remains valid after the package directory swap. */
@@ -2305,6 +2326,12 @@ export class PluginMarketService {
   ): Promise<PluginMarketInstallResult> {
     const { assertCurrent, assertScope = assertCurrent } = context;
     assertCurrent?.();
+    // 只有远程管理发起时才异步算证据；本机路径不能在捕获 owner 之前多出一次 await。远程路径的 assertCurrent 会在
+    // 这之后立即复核 owner 与控制端。
+    const operationEvidence = context.remoteOperation
+      ? await this.remoteOperationEvidence(context.remoteOperation)
+      : null;
+    if (context.remoteOperation) assertCurrent?.();
     const customRef = parseCustomMarketPluginId(pluginId);
     if (customRef) {
       return this.customInstall(
@@ -2321,6 +2348,7 @@ export class PluginMarketService {
         assertCurrent,
         assertScope,
         progress,
+        operationEvidence,
       );
     }
     if (!isValidPluginResourceId(pluginId)) {
@@ -2378,6 +2406,7 @@ export class PluginMarketService {
             ? 'user-requested-source-change'
             : 'preserve-existing-source',
         ...(progress ? { progress } : {}),
+        ...(operationEvidence ? { remoteOperation: operationEvidence } : {}),
       },
       owner,
       ledger,
@@ -2606,6 +2635,8 @@ export class PluginMarketService {
     assertCurrent?: () => void,
     assertScope = assertCurrent,
     progress?: PluginInstallProgress,
+    /** 远程管理发起时的操作证据（契约 V2.9）；其它路径不传，落位后的记录里就没有。 */
+    operationEvidence?: RemoteOperationEvidence | null,
   ): Promise<PluginMarketInstallResult> {
     const automatic = consent.mode === 'automatic';
     if (options.expectedManifest === undefined) {
@@ -2897,6 +2928,7 @@ export class PluginMarketService {
                 ...(sourceId && sourceIdKeyId
                   ? { sourceIdBinding: { sourceId, sourceKey, rawManifestSha256: evidence.rawManifestSha256, keyId: sourceIdKeyId } }
                   : {}),
+                ...remoteOperationBindingOf(operationEvidence, evidence.rawManifestSha256),
               });
             });
             replacedRoute = null;
@@ -3171,6 +3203,8 @@ export class PluginMarketService {
       acquireMutation?: boolean;
       /** Display-only progress of a user-started install; background installs pass none. */
       progress?: PluginInstallProgress;
+      /** 远程管理发起时的操作证据（契约 V2.9）。 */
+      remoteOperation?: RemoteOperationEvidence;
     },
     owner = captureMarketOwner(),
     ledger = this.ledgerForOwner(owner),
@@ -3326,6 +3360,7 @@ export class PluginMarketService {
             ...(reclaimLegacyBareInstance ? { reclaimLegacyBareInstance: true } : {}),
             expectedInstalled: options.expectedInstalled,
             verifiedServerRoot,
+            ...(options.remoteOperation ? { remoteOperation: options.remoteOperation } : {}),
             ...(options.expectedInstalledApproval !== undefined
               ? { expectedInstalledApproval: options.expectedInstalledApproval }
               : {}),
@@ -3379,6 +3414,7 @@ export class PluginMarketService {
       assertCurrent?: () => void;
       expectedInstalled: boolean;
       verifiedServerRoot?: string;
+      remoteOperation?: RemoteOperationEvidence;
     },
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
@@ -3505,7 +3541,8 @@ export class PluginMarketService {
               rawManifestSha256: evidence.rawManifestSha256,
               legacyManifestDigest: evidence.legacyManifestDigest,
               legacyManifestDigests: [],
-            }), ...(options.verifiedServerRoot ? { serverRoot: options.verifiedServerRoot } : {}) };
+            }), ...(options.verifiedServerRoot ? { serverRoot: options.verifiedServerRoot } : {}),
+            ...remoteOperationBindingOf(options.remoteOperation, evidence.rawManifestSha256) };
             if (simulatorMigration) {
               if (!currentRecordNow || !ledger.migrateSimulatorInstallation(currentRecordNow, next)) {
                 throwIpcError('PRECONDITION_FAILED', 'Simulator market route changed during migration');
@@ -3532,6 +3569,73 @@ export class PluginMarketService {
         throw error;
       });
       return installed;
+    });
+  }
+
+  /** 当前 owner 的来源标识计算器（密钥已异步备好）。 */
+  private async preparedSourceIds(): Promise<MarketSourceIdOf> {
+    const sourceIds = createMarketSourceIdOf(ownerScopedUserDataPath('plugin-market', SOURCE_ID_KEY_DIR));
+    await sourceIds.prepare?.();
+    return sourceIds;
+  }
+
+  /**
+   * 远程管理发起的安装要留的操作证据（契约 V2.9）。操作号不合 PLUGIN_MARKET_OPERATION_ID_PATTERN、或密钥不可用时
+   * 不留证据（照常安装，控制端届时按未确认处理）。原始设备身份只用于算本机标识，不写盘、不记日志。
+   */
+  private async remoteOperationEvidence(
+    remoteOperation: PluginMarketInstallContext['remoteOperation'],
+  ): Promise<RemoteOperationEvidence | null> {
+    if (!remoteOperation || !isPluginMarketOperationId(remoteOperation.operationId)) return null;
+    const sourceIds = await this.preparedSourceIds();
+    const controller = sourceIds.controllerTag?.(remoteOperation.controller) ?? null;
+    const keyId = sourceIds.keyId();
+    return controller && keyId ? { operationId: remoteOperation.operationId, controller, keyId } : null;
+  }
+
+  /**
+   * 远程管理响应专用（契约 V2.9）：只对发起那次操作的控制端，给条目补上 `installedOperationId`。要求当前已装
+   * 实例的安装记录为已安装、属于该条目，记录里的操作证据由当前密钥为这个控制端算出，且绑定的包摘要等于记录与
+   * 磁盘上的包。传入条目上已有的该字段一律先去掉（只认这里的结论）。本机界面不经过这里，永远看不到。
+   */
+  async withInstalledOperationIds<T extends PluginMarketItem>(
+    items: readonly T[],
+    controller: string,
+  ): Promise<T[]> {
+    const stripped = items.map((item) => {
+      if (!('installedOperationId' in item)) return item;
+      const copy = { ...item };
+      delete copy.installedOperationId;
+      return copy;
+    });
+    if (stripped.length === 0 || !controller || !canCaptureMarketOwner()) return stripped;
+    const owner = captureMarketOwner();
+    const sourceIds = await this.preparedSourceIds();
+    requireSameMarketOwner(owner);
+    const tag = sourceIds.controllerTag?.(controller) ?? null;
+    const keyId = sourceIds.keyId();
+    if (!tag || !keyId) return stripped;
+    const local = await this.readLocalInstallSnapshot(owner);
+    requireSameMarketOwner(owner);
+    const evidenceByPlugin = new Map<string, string>();
+    for (const record of Object.values(local.installations)) {
+      const binding: unknown = record.remoteOperationBinding;
+      if (!record.installed || !binding || typeof binding !== 'object' || Array.isArray(binding)) continue;
+      const value = binding as Record<string, unknown>;
+      if (
+        !isPluginMarketOperationId(value.operationId) || value.controller !== tag || value.keyId !== keyId ||
+        typeof record.rawManifestSha256 !== 'string' || value.rawManifestSha256 !== record.rawManifestSha256
+      ) continue;
+      const ghost = snapshotGhost(local, record);
+      const identity = ghost ? local.manifestIdentityByStoragePart.get(installedGhostStoragePart(ghost)) : null;
+      if (!identity || !verifyInstalledMarketManifest(record, identity)) continue;
+      evidenceByPlugin.set(record.pluginId, value.operationId);
+    }
+    return stripped.map((item) => {
+      const operationId = item.installState === 'installed' || item.installState === 'update-available'
+        ? evidenceByPlugin.get(item.pluginId)
+        : undefined;
+      return operationId ? { ...item, installedOperationId: operationId } : item;
     });
   }
 

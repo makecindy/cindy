@@ -95,6 +95,8 @@ vi.mock('../../cindy-brain/index.js', () => ({
         },
       })),
     inspect: runtime.inspect,
+    // Same default as service.test.ts: no first-party approval evidence for these fixtures.
+    approvedInstallEvidence: () => null,
   }),
   isGhostAvailableForActiveSession: vi.fn(() => runtime.accountGhostAvailable),
   installOrUpdateMarketGhostPackage: async (
@@ -1947,6 +1949,82 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       }, TEST_INSTALL_CONTEXT),
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'alpha' } } });
     expect(runtime.install).toHaveBeenCalledTimes(1);
+  });
+
+  /* 测试价值（契约 V2.9，PR #12731）
+   * - 生产入口与可观察结果：PluginMarketService.install（带 Main-only 的 remoteOperation）写下的安装记录；
+   *   withInstalledOperationIds 对不同控制端给出的 installedOperationId；新建 service（重启）后的结果。
+   * - 缺口：回执过期后控制端需要 Host 返回的操作级证据，且只能对发起方可见、只认当前装着的那份包。
+   * - 最小失败输入：phone-a 远程安装后 phone-a / desktop-b 各读一次；新 service；desktop-b 远程更新；本机更新。
+   * - tier：unit（临时目录，运行时替身）。
+   */
+  it('records which remote operation installed a custom-market plugin and shows it only to that controller', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    let version = '1.0.0';
+    runtime.install.mockImplementation(async () => {
+      const ghost = installedGhost(root, 'alpha', version);
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    const install = async (remoteOperation?: { operationId: string; controller: string }) => {
+      const detail = await h.service.detail(pluginId);
+      const installed = runtime.ghosts.find((ghost) => ghost.manifest.id === 'alpha');
+      await h.service.install(pluginId, {
+        expectedReleaseId: detail.releaseId, expectedManifest: detail.manifest,
+        ...(installed ? { expectedInstalledApproval: APPROVED_INSTALL_TOKEN } : {}),
+      }, { ...TEST_INSTALL_CONTEXT, ...(remoteOperation ? { remoteOperation } : {}) });
+    };
+    const seenBy = async (service: PluginMarketService, controller: string) =>
+      (await service.withInstalledOperationIds([await service.detail(pluginId)], controller))[0]?.installedOperationId;
+
+    await install({ operationId: 'op-0000000000000001', controller: 'phone-a' });
+    expect(await seenBy(h.service, 'phone-a')).toBe('op-0000000000000001');
+    expect(await seenBy(h.service, 'desktop-b')).toBeUndefined();
+    // The ledger keeps only a local one-way tag of the controller, never its device id.
+    expect(JSON.stringify(h.ledger.read())).not.toContain('phone-a');
+    // Persisted: a new service (Host restart, receipts gone) still answers.
+    expect(await seenBy(new PluginMarketService(h.api as unknown as PluginMarketApi, h.ledger, h.sourceStore), 'phone-a'))
+      .toBe('op-0000000000000001');
+
+    // Another controller updates: the evidence becomes its own, invisible to the first.
+    version = '2.0.0';
+    writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha', version }]);
+    await install({ operationId: 'op-0000000000000002', controller: 'desktop-b' });
+    expect(await seenBy(h.service, 'phone-a')).toBeUndefined();
+    expect(await seenBy(h.service, 'desktop-b')).toBe('op-0000000000000002');
+
+    // A local update leaves no evidence; nothing from before survives.
+    version = '3.0.0';
+    writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha', version }]);
+    await install();
+    expect(await seenBy(h.service, 'desktop-b')).toBeUndefined();
+    expect(h.ledger.installationForGhost('alpha')).not.toHaveProperty('remoteOperationBinding');
+  });
+
+  it('records the remote operation for a server-market install as well', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const h = harness([serverSummary()], []);
+    h.api.download.mockResolvedValue({
+      url: 'https://downloads.test.invalid/plugin.cindy', expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64), sizeBytes: 42,
+    });
+    runtime.install.mockImplementation(async () => {
+      const ghost = installedGhost(root, 'server-plugin');
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    await h.service.install(PLUGIN_ID, { expectedReleaseId: serverSummary().currentRelease.id },
+      { ...TEST_INSTALL_CONTEXT, remoteOperation: { operationId: 'op-0000000000000003', controller: 'phone-a' } });
+    const [item] = await h.service.withInstalledOperationIds([await h.service.detail(PLUGIN_ID)], 'phone-a');
+    expect(item).toMatchObject({ installState: 'installed', installedOperationId: 'op-0000000000000003' });
+    // An operation id outside the contract shape is not recorded at all.
+    const [other] = await h.service.withInstalledOperationIds([await h.service.detail(PLUGIN_ID)], 'desktop-b');
+    expect(other).not.toHaveProperty('installedOperationId');
   });
 
   it('lets a selected custom source install when the server catalog declares the same ghostId', async () => {

@@ -75,6 +75,16 @@ export interface PluginMarketInstallationRecord {
    * 旧版本重写安装记录（重新安装或更新）时写出不含此字段的新记录，结果是缺省（控制端未确认）。
    */
   sourceIdBinding?: { sourceId: string; sourceKey: string; rawManifestSha256: string; keyId: string };
+  /**
+   * 远程管理操作的安装证据（契约 V2.9，服务端与自定义市场记录都可能带）：这条记录是哪一次远程
+   * `management:begin` 安装／更新提交的。`controller` 是发起方设备身份的本机不可逆标识（不存原始设备号），
+   * `keyId` 是算它的密钥，`rawManifestSha256` 是当次装入的包。投影时要求包摘要仍等于记录当前的值、keyId 等于
+   * 当前密钥、controller 等于请求方，否则缺省。其它路径重装或更新都会整条重写记录，旧值不会残留。
+   *
+   * 存量兼容同 `sourceIdBinding`：只增可选字段，`validRecord` 不检查它；旧记录缺省；降级时旧版本保留未知字段、
+   * 重写记录时丢弃，结果都是缺省（控制端未确认）。
+   */
+  remoteOperationBinding?: { operationId: string; controller: string; keyId: string; rawManifestSha256: string };
 }
 
 export type PluginMarketAuthorizationTarget = { ghostId: string; namespace?: string | null };
