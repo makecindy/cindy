@@ -292,6 +292,8 @@ import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderRea
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
 import {
   getRejectedCodexDownshiftModel,
+  getObservedCodexUpstreamCapacity,
+  subscribeCodexUpstreamCapacity,
   armCodexHttpRecovery,
   clearCodexProxyAuthInjection,
   ensureCodexControlPlaneProxyReady,
@@ -1989,6 +1991,8 @@ export function getMaker(): Maker {
       getCodexSubagentIdentity: ({ childThreadId }) =>
         getObservedCodexSubagentIdentity(childThreadId),
       getRejectedCodexDownshiftModel,
+      getObservedCodexUpstreamCapacity,
+      subscribeCodexUpstreamCapacity,
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);
