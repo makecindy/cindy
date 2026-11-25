@@ -616,7 +616,7 @@ describe('installQuitHandler render-process-gone', () => {
 
   type RenderGoneHandler = (
     event: unknown,
-    webContents: { id: number; getType(): string },
+    webContents: { id: number; isDestroyed(): boolean; getType(): string },
     details: { reason: string; exitCode: number },
   ) => void;
 
@@ -645,12 +645,57 @@ describe('installQuitHandler render-process-gone', () => {
     };
   }
 
+  it.each(['guest', 'auxiliary', 'closed window', 'main window'] as const)(
+    'handles destroyed contents from a %s (#12758)',
+    async (role) => {
+      const { handler, app, restore } = await installAndGrabHandler();
+      try {
+        let destroyed = false;
+        const contents = {
+          isDestroyed: () => destroyed,
+          get id() {
+            if (destroyed) throw new TypeError('Object has been destroyed');
+            return 48;
+          },
+          getType(): string { throw new TypeError('Object has been destroyed'); },
+        };
+        const win = Object.assign(new EventEmitter(), {
+          isDestroyed: () => false,
+          webContents: contents,
+        });
+        if (role !== 'guest') {
+          const listeners = vi.mocked(app.on).mock.calls as unknown as Array<
+            [string, (event: unknown, window: typeof win) => void]
+          >;
+          for (const [event, listener] of listeners) {
+            if (event === 'browser-window-created') listener({}, win);
+          }
+        }
+        if (role === 'auxiliary') resourceUsageWebContentsIds.add(contents.id);
+        if (role === 'closed window') win.emit('closed');
+        destroyed = true;
+        handler({}, contents, { reason: 'oom', exitCode: 137 });
+        if (role === 'main window') {
+          await vi.waitFor(() => expect(app.exit).toHaveBeenCalledWith(1));
+          expect(mocks.logger.error).toHaveBeenCalledWith('render-process-gone: reason=oom exitCode=137');
+          expect(mocks.logger.info).toHaveBeenCalledWith(expect.stringContaining('reason=render-process-gone:oom'));
+        } else {
+          expect(mocks.spawn).not.toHaveBeenCalled();
+          expect(app.exit).not.toHaveBeenCalled();
+          expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('reason=oom exitCode=137'));
+        }
+      } finally {
+        restore();
+      }
+    },
+  );
+
   it('webview guest crash (e.g. OOM) does NOT shut the app down', async () => {
     const { handler, app, restore } = await installAndGrabHandler();
     try {
       handler(
         undefined,
-        { id: 42, getType: () => 'webview' },
+        { id: 42, isDestroyed: () => false, getType: () => 'webview' },
         { reason: 'oom', exitCode: 1 },
       );
       // beginShutdown 是异步链;等一拍再断言"什么都没发生"。
@@ -669,7 +714,7 @@ describe('installQuitHandler render-process-gone', () => {
     nativePopupWebContentsIds.add(43);
     const { handler, app, restore } = await installAndGrabHandler();
     try {
-      handler(undefined, { id: 43, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      handler(undefined, { id: 43, isDestroyed: () => false, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
       await new Promise((r) => setTimeout(r, 20));
       expect(app.exit).not.toHaveBeenCalled();
       expect(mocks.logger.warn).toHaveBeenCalledWith(
@@ -685,7 +730,7 @@ describe('installQuitHandler render-process-gone', () => {
     resourceUsageWebContentsIds.add(44);
     const { handler, app, restore } = await installAndGrabHandler();
     try {
-      handler(undefined, { id: 44, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      handler(undefined, { id: 44, isDestroyed: () => false, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
       await new Promise((r) => setTimeout(r, 20));
       expect(app.exit).not.toHaveBeenCalled();
       expect(mocks.logger.warn).toHaveBeenCalledWith(
@@ -696,7 +741,7 @@ describe('installQuitHandler render-process-gone', () => {
       // cleanup ran, but the app-wide event still disposed DB/device-link.
       // Other auxiliary tests never registered the transport factory's owner.
       const { markCaptureWindowWebContents } = await import('../remote-desktop/captureWindowRegistry');
-      const capture = { id: 46, getType: () => 'window' };
+      const capture = { id: 46, isDestroyed: () => false, getType: () => 'window' };
       markCaptureWindowWebContents(capture as unknown as Electron.WebContents);
       handler(undefined, capture, { reason: 'crashed', exitCode: 5 });
       await Promise.resolve();
@@ -714,7 +759,7 @@ describe('installQuitHandler render-process-gone', () => {
     rsbWindowWebContentsIds.add(45);
     const { handler, app, restore } = await installAndGrabHandler();
     try {
-      handler(undefined, { id: 45, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      handler(undefined, { id: 45, isDestroyed: () => false, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
       await new Promise((r) => setTimeout(r, 20));
       expect(app.exit).not.toHaveBeenCalled();
       expect(mocks.logger.warn).toHaveBeenCalledWith(
@@ -729,7 +774,7 @@ describe('installQuitHandler render-process-gone', () => {
     reviewArtifactConfirmWebContentsIds.add(47);
     const { handler, app, restore } = await installAndGrabHandler();
     try {
-      handler(undefined, { id: 47, getType: () => 'window' }, { reason: 'oom', exitCode: 5 });
+      handler(undefined, { id: 47, isDestroyed: () => false, getType: () => 'window' }, { reason: 'oom', exitCode: 5 });
       await new Promise((r) => setTimeout(r, 20));
       expect(app.exit).not.toHaveBeenCalled();
       expect(mocks.logger.warn).toHaveBeenCalledWith(
@@ -746,7 +791,7 @@ describe('installQuitHandler render-process-gone', () => {
     try {
       handler(
         undefined,
-        { id: 1, getType: () => 'window' },
+        { id: 1, isDestroyed: () => false, getType: () => 'window' },
         { reason: 'crashed', exitCode: 5 },
       );
       await vi.waitFor(() => {
@@ -990,10 +1035,16 @@ describe('installQuitHandler', () => {
       Object.defineProperty(process, 'platform', platform);
 
       const { app } = await import('electron');
-      const [, onWindowCreated] = (vi.mocked(app.on).mock.calls as unknown as Array<[string, (e: unknown, w: EventEmitter) => void]>)
-        .find(([event]) => event === 'browser-window-created')!;
-      const win = new EventEmitter();
-      onWindowCreated({}, win);
+      const win = Object.assign(new EventEmitter(), {
+        isDestroyed: () => false,
+        webContents: { id: 1, isDestroyed: () => false },
+      });
+      const listeners = vi.mocked(app.on).mock.calls as unknown as Array<
+        [string, (event: unknown, window: typeof win) => void]
+      >;
+      for (const [event, listener] of listeners) {
+        if (event === 'browser-window-created') listener({}, win);
+      }
       win.emit('session-end', { reasons: ['shutdown'] });
 
       const nextStart = new diagnostics.RunMarkerStore({

@@ -688,6 +688,15 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // native popup manager 回收并让对应 tab 展示恢复态,不能拖垮主窗口。
   // 例外 4:资源用量窗是预热复用的辅助 renderer；Controller 会有限重建，崩溃不影响主界面。
   // 隐藏传输窗口也有自己的失败清理；其 renderer 崩溃只撤下对应传输，不能关闭 device-link。
+  const windowContentsIds = new WeakMap<Electron.WebContents, number>();
+  app.on('browser-window-created', (_event, win) => {
+    if (win.isDestroyed()) return;
+    const contents = win.webContents;
+    if (contents.isDestroyed()) return;
+    windowContentsIds.set(contents, contents.id);
+    // 窗口正常关闭后的迟到通知不能让仍在运行的应用退出。
+    win.once('closed', () => windowContentsIds.delete(contents));
+  });
   app.on('render-process-gone', (_event, webContents, details) => {
     if (isCaptureWindowWebContents(webContents)) {
       log.warn(
@@ -695,37 +704,46 @@ export function installQuitHandler(timeoutMs = 2000): void {
       );
       return;
     }
-    if (isGhostSandboxWebContentsId(webContents.id)) {
+    const destroyed = webContents.isDestroyed();
+    const id = destroyed ? windowContentsIds.get(webContents) : webContents.id;
+    if (id === undefined) {
+      // Guest、popup 及已经正常关闭的窗口无需触发应用级退出。
+      log.warn(
+        `destroyed contents render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
+      );
+      return;
+    }
+    if (isGhostSandboxWebContentsId(id)) {
       log.warn(
         `ghost sandbox render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
     }
-    if (webContents.getType() === 'webview') {
+    if (!destroyed && webContents.getType() === 'webview') {
       log.warn(
         `webview guest render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
     }
-    if (isRsbNativePopupWebContentsId(webContents.id)) {
+    if (isRsbNativePopupWebContentsId(id)) {
       log.warn(
         `native popup render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
     }
-    if (isResourceUsageWebContentsId(webContents.id) || isRemoteDesktopViewer(webContents.id) || isCloudLoginWindow(webContents.id)) {
+    if (isResourceUsageWebContentsId(id) || isRemoteDesktopViewer(id) || isCloudLoginWindow(id)) {
       log.warn(
         `resource usage render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
     }
-    if (isRsbWindowWebContentsId(webContents.id)) {
+    if (isRsbWindowWebContentsId(id)) {
       log.warn(
         `right sidebar render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
     }
-    if (isReviewArtifactConfirmWebContentsId(webContents.id)) {
+    if (isReviewArtifactConfirmWebContentsId(id)) {
       log.warn(
         `Review artifact consent render-process-gone (isolated, access denied): reason=${details.reason} exitCode=${details.exitCode}`,
       );
