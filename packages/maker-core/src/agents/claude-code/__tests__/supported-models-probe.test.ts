@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps } from '../../base-agent.js';
-import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
 const sdkMock = vi.hoisted(() => ({
@@ -18,7 +18,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: sdkMock.query,
 }));
 
-import { ClaudeCodeAgent, setClaudeSupportedModelsListener } from '../index.js';
+import { ClaudeCodeAgent, setClaudeRateLimitInfoListener, setClaudeSupportedModelsListener } from '../index.js';
 import { OneShotError } from '../../base-agent.js';
 
 function createNoopLogger(): Logger {
@@ -209,6 +209,28 @@ describe('ClaudeCodeAgent.nativeSubscriptionText(订阅登录的无状态文本�
     expect(path.basename(options.cwd as string)).toMatch(/^cindy-claude-text-/);
     await expect(fs.access(options.cwd as string)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(q.close).toHaveBeenCalledTimes(1);
+  });
+
+  // Codex P2 (PR #12756, 653a319): like subscription sessions, the quota event reaches
+  // the host with the leased account, so quota display and pool scheduling stay current.
+  it('把订阅的 rate_limit_event 连同所用账号转交给宿主', async () => {
+    const info = { status: 'allowed_warning', rateLimitType: 'five_hour', utilization: 0.92 };
+    sdkMock.query.mockReturnValue(fakeTextQuery([
+      { type: 'rate_limit_event', rate_limit_info: info, session_id: 'sdk' },
+      { type: 'result', subtype: 'success', is_error: false, result: 'ok' },
+    ]));
+    const seen: unknown[][] = [];
+    setClaudeRateLimitInfoListener((value, account) => { seen.push([value, account?.id]); });
+    const account = { id: 'acct-1', configDir: os.tmpdir(), assertCurrent: vi.fn(), readState: vi.fn() };
+    const { agent } = createAgent(true);
+    try {
+      await expect(agent.nativeSubscriptionText('x', {
+        model: 'claude-opus-4-5', [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
+      })).resolves.toBe('ok');
+    } finally {
+      setClaudeRateLimitInfoListener(null);
+    }
+    expect(seen).toEqual([[info, 'acct-1']]);
   });
 
   it('未登录订阅或派发守卫拒绝时不起 CLI', async () => {

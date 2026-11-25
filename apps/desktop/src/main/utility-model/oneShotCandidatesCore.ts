@@ -1563,9 +1563,9 @@ async function requestBuiltinProviderText(
       model: input.model,
       transport: input.transport,
       profile,
-      execute: (text, requestOpts) => {
+      execute: async (text, requestOpts) => {
         const guard = requestOpts?.beforeDispatch;
-        return requestNative({
+        const reply = await requestNative({
           prompt: text,
           providerId: input.provider.id,
           model: input.model,
@@ -1586,6 +1586,12 @@ async function requestBuiltinProviderText(
           // Runs inside the metered context: keeps the caller's source and task.
           onUsage: ({ model, ...tokens }) => recordUsage(tokens, NATIVE_SUBSCRIPTION_CLI_TRANSPORT, input.model, model),
         });
+        // Like the HTTP path: a complete reply cannot outlive the route that sent it
+        // (provider disabled, reconfigured or its model removed during the CLI turn).
+        if (input.routeStillCurrent && !input.routeStillCurrent()) {
+          throw new UtilityTextExecutionError({ reason: 'request_failed' });
+        }
+        return reply;
       },
     }], prompt, [], input);
   }

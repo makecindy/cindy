@@ -105,14 +105,21 @@ const desktopOneShot = createOneShotCandidates({
         lease.assertDispatchable();
         lease.running(true);
       }
-      return await run(prompt, {
+      const text = await run(prompt, {
         ...request,
         beforeDispatch: async () => {
           if (!dispatchable()) return false;
-          return request.beforeDispatch ? request.beforeDispatch() : true;
+          if (request.beforeDispatch && !(await request.beforeDispatch())) return false;
+          // The awaited route/owner read can outlive a pause, disconnect or provider move.
+          return dispatchable();
         },
         ...(lease ? { [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account } : {}),
       });
+      // A reply cannot outlive the account that produced it (the HTTP path rechecks
+      // its credential after the full response the same way); the core reports it as
+      // request_failed, so nothing is spoken.
+      if (!dispatchable()) throw new Error('The subscription account changed before the reply was accepted');
+      return text;
     } finally {
       lease?.release();
     }

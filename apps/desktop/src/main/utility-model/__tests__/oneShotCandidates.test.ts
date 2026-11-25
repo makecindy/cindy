@@ -3181,6 +3181,65 @@ describe('utility one-shot candidates', () => {
       expect(usageSink.close).toHaveBeenCalledOnce();
     });
 
+    // Codex P2(PR #12756,653a319):账号在等待路由守卫期间、或在 CLI 作答期间失效／换来源,
+    // 以及路由在作答期间失效时,不能派发或交出回复(按 request_failed,通话不会念出)。
+    it('等待守卫期间账号失效不派发;作答期间账号或路由变化时拒绝回复', async () => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      const account = { id: 'acct-1', configDir: '/tmp/acct-1', assertCurrent: vi.fn(), readState: vi.fn() };
+      let usable = true;
+      const lease = {
+        account, accountId: 'acct-1', pinned: true,
+        assertDispatchable: vi.fn(() => { if (!usable) throw new Error('account paused'); }),
+        running: vi.fn(), release: vi.fn(),
+        observeFailure: vi.fn(), changeModel: vi.fn(), bind: vi.fn(), reserveForTask: vi.fn(),
+      };
+      acquireAccount.mockResolvedValue(lease as never);
+      let dispatched = 0;
+      let duringTurn: () => void = () => {};
+      setNativeSubscriptionTextRunner(async (_prompt, opts) => {
+        if (opts.beforeDispatch && !(await opts.beforeDispatch())) throw new Error('guard rejected');
+        dispatched += 1;
+        duringTurn();
+        return '{"say":"hi"}';
+      });
+      let pauseWhileGuarding = false;
+      const request = () => requestExplicitUtilityText('hello', {
+        sessionId: 'companion-task', providerId: 'anthropic', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true,
+        beforeDispatch: async () => {
+          if (pauseWhileGuarding) usable = false;
+          return true;
+        },
+      });
+
+      // 1. Paused while the caller's async route/owner guard was running.
+      pauseWhileGuarding = true;
+      expect(await request()).toMatchObject({ ok: false });
+      expect(dispatched).toBe(0);
+
+      // 2. Account paused while the CLI was answering: the reply is rejected.
+      pauseWhileGuarding = false;
+      usable = true;
+      duringTurn = () => { usable = false; };
+      expect(await request()).toMatchObject({
+        ok: false, attempts: [expect.objectContaining({ status: 'failed', reason: 'request_failed' })],
+      });
+      expect(dispatched).toBe(1);
+
+      // 3. Route disabled while the CLI was answering (model removed from the catalog).
+      usable = true;
+      duringTurn = () => {
+        activeCatalog.mockReturnValue({
+          providers: [{ ...(subscriptionCatalog as { providers: Record<string, unknown>[] }).providers[0], models: { 'claude-code': [] } }],
+        } as never);
+      };
+      expect(await request()).toMatchObject({
+        ok: false, attempts: [expect.objectContaining({ status: 'failed', reason: 'request_failed' })],
+      });
+      expect(dispatched).toBe(2);
+      expect(lease.release).toHaveBeenCalledTimes(3);
+    });
+
     it('有账号池时使用伙伴任务绑定的账号,账号失效则不派发', async () => {
       activeCatalog.mockReturnValue(subscriptionCatalog);
       const account = { id: 'acct-1', configDir: '/tmp/acct-1', assertCurrent: vi.fn(), readState: vi.fn() };

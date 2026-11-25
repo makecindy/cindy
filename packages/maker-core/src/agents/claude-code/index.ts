@@ -1498,6 +1498,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       });
       let streamed = '';
       for await (const message of q) {
+        // Same as subscription sessions: keep the account's quota snapshot and pool
+        // scheduling current; this request runs on the subscription login.
+        if (message.type === 'rate_limit_event') {
+          notifyRateLimitInfo(message, nativeSubscriptionAccount);
+          continue;
+        }
         if (message.type === 'stream_event' && opts.onText && message.parent_tool_use_id === null) {
           const event = message.event;
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
