@@ -883,6 +883,11 @@ export function MessageRenderer({
   const isDraggingRef = useRef(false);
   const isMomentumScrollingRef = useRef(false);
   const dragStartOffsetYRef = useRef<number | null>(null);
+  // Keyboard dismissal can expand the viewport while the native drag is still active. Keep
+  // that candidate until endDrag, when the final geometry can be evaluated without the drag
+  // ownership guard masking an automatic return to the tail.
+  const pendingViewportExpandRepinRef = useRef(false);
+  const pendingViewportExpandPreviousHeightRef = useRef(0);
   // 用户是否主动拖动过(区分「冷开初始布局」与「用户上翻」):自动加载更早只在用户真拖过之后才允许,
   // 否则短会话(只加载了少量最新消息但 hasOlderMessages)冷开时会落在 onStartReachedThreshold 内、
   // 未经用户操作就自动拉历史(review P2)。切会话重置。
@@ -2364,6 +2369,31 @@ export function MessageRenderer({
   ]);
   attemptAutoLoadEarlierRef.current = attemptAutoLoadEarlier;
 
+  const repinAfterViewportExpand = useCallback(() => {
+    if (!pendingViewportExpandRepinRef.current) return;
+    pendingViewportExpandRepinRef.current = false;
+    const previousViewportHeight = pendingViewportExpandPreviousHeightRef.current;
+    pendingViewportExpandPreviousHeightRef.current = 0;
+    if (nearBottomRef.current
+      || readingOlderRef.current
+      || programmaticScrollInFlightRef.current || processViewport.inspecting.current
+      || inlineEditorCountRef.current > 0) {
+      return;
+    }
+    const metrics = scrollMetricsRef.current;
+    if (shouldRepinMobileFollowOnViewportExpand({
+      previousViewportHeight,
+      nextViewportHeight: metrics.viewportHeight,
+      contentHeight: metrics.contentHeight,
+      offsetY: metrics.offsetY,
+    })) {
+      nearBottomRef.current = true;
+      userScrollForOlderRef.current = false;
+      setIsAwayFromBottom(false);
+      setHasNewMessages(false);
+    }
+  }, [processViewport.inspecting, setHasNewMessages, setIsAwayFromBottom]);
+
   // 近底/跟随态迁移 + 「跳到底部」浮标与新消息红点;metrics 也供 DEV harness 读取。
   // 「解除跟随」的主路径是拖动意图(shouldUnpinMobileFollowOnDrag):拖动中相对起点
   // 上移超过死区立即解除(nearBottomRef 翻 false 即关掉 handleContentSize 的贴底补滚)。
@@ -2389,6 +2419,16 @@ export function MessageRenderer({
     };
     const previousOffsetY = scrollMetricsRef.current.offsetY;
     const previousViewportHeight = scrollMetricsRef.current.viewportHeight;
+    if (!nearBottomRef.current && metrics.viewportHeight > previousViewportHeight
+      && shouldRepinMobileFollowOnViewportExpand({
+        previousViewportHeight,
+        nextViewportHeight: metrics.viewportHeight,
+        contentHeight: metrics.contentHeight,
+        offsetY: metrics.offsetY,
+      })) {
+      pendingViewportExpandRepinRef.current = true;
+      pendingViewportExpandPreviousHeightRef.current = previousViewportHeight;
+    }
     const resumedProcessFollow = processViewport.scroll(metrics.offsetY, previousOffsetY, isDragSample || isMomentumScrollingRef.current,
       metrics.contentHeight - metrics.offsetY - metrics.viewportHeight <= 1);
     scrollMetricsRef.current = metrics;
@@ -2634,6 +2674,7 @@ export function MessageRenderer({
     handleScroll(event, true);
     isDraggingRef.current = false;
     dragStartOffsetYRef.current = null;
+    repinAfterViewportExpand();
     // Wait one frame so Android can report whether this drag transitioned into momentum.
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
@@ -2672,6 +2713,8 @@ export function MessageRenderer({
       isDraggingRef.current = false;
       isMomentumScrollingRef.current = false;
       dragStartOffsetYRef.current = null;
+      pendingViewportExpandRepinRef.current = false;
+      pendingViewportExpandPreviousHeightRef.current = 0;
       historyTouchStartYRef.current = null;
       historyTouchTriggeredRef.current = false;
       clearProgrammaticScroll();
@@ -2712,6 +2755,16 @@ export function MessageRenderer({
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return;
     const previous = scrollMetricsRef.current;
     scrollMetricsRef.current = { ...previous, viewportHeight };
+    if (!nearBottomRef.current && viewportHeight > previous.viewportHeight
+      && shouldRepinMobileFollowOnViewportExpand({
+        previousViewportHeight: previous.viewportHeight,
+        nextViewportHeight: viewportHeight,
+        contentHeight: previous.contentHeight,
+        offsetY: previous.offsetY,
+      })) {
+      pendingViewportExpandRepinRef.current = true;
+      pendingViewportExpandPreviousHeightRef.current = previous.viewportHeight;
+    }
     if (
       !nearBottomRef.current
       && !readingOlderRef.current
@@ -2736,6 +2789,7 @@ export function MessageRenderer({
     acknowledgeCompanionReadRef.current();
   }, [
     isUserControllingScroll,
+    repinAfterViewportExpand,
     messageListVisibility,
     markMobileMvcpSettle,
     processViewport.inspecting,
