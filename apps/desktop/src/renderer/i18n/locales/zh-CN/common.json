@@ -22692,9 +22692,7 @@
     },
     "elsewhere": {
       "title": "其他地方用的模型",
-      "description": "这些模型设置在各自的页面里，从这里可以直接过去。",
-      "auxiliaryHint": "任务命名、推荐指令、摘要这类后台小事用的模型",
-      "subagentHint": "Claude Code 与 Codex 的 Subagent 用哪个模型",
+      "description": "伙伴用哪个模型在它自己的设置里改，从这里可以直接过去。",
       "botsTitle": "伙伴",
       "botsHint": "每个伙伴用哪个模型、备用哪个，在伙伴自己的设置里"
     },

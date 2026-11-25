@@ -23005,8 +23005,6 @@
     "elsewhere": {
       "title": "Modèles utilisés ailleurs",
       "description": "Ces réglages de modèle ont leurs propres pages. Accédez-y directement d’ici.",
-      "auxiliaryHint": "Le modèle des tâches d’arrière-plan : nommage, suggestions, résumés",
-      "subagentHint": "Quel modèle utilisent les sous-agents de Claude Code et Codex",
       "botsTitle": "Compagnons",
       "botsHint": "Chaque compagnon choisit son modèle et ses secours dans ses réglages"
     },

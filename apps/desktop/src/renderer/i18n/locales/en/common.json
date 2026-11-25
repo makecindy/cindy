@@ -22785,9 +22785,7 @@
     },
     "elsewhere": {
       "title": "Models used elsewhere",
-      "description": "These model settings live on their own pages. Go straight to them from here.",
-      "auxiliaryHint": "The model for background chores such as naming tasks, suggestions and summaries",
-      "subagentHint": "Which model Claude Code and Codex subagents use",
+      "description": "A buddy’s model is set in its own settings; this takes you there.",
       "botsTitle": "Buddies",
       "botsHint": "Each buddy chooses its own model and backups in its settings"
     },

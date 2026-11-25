@@ -6,7 +6,7 @@
  * 一个供应商里的几个账号、几台电脑上同一个供应商合成的组，也是同一套选法、同一个选择函数，选法在这里改。
  * 成员可以是本机的供应商，也可以是其他电脑上的或别人分享来的。
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Waypoints, X } from 'lucide-react';
 import { useInRouterContext, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -48,6 +48,9 @@ import { RowIconButton, WeightInput } from './ModelGroupRowControls';
 import { SettingsTextInput } from './SettingsTextInput';
 
 type Provider = ReturnType<typeof useProviders>['providers'][number];
+
+// Subagent 模型与辅助模型两块设置：路由页画出来以后再取，不拖慢它的第一屏。
+const OtherModelSettings = lazy(() => import('./OtherModelSettings').then(module => ({ default: module.OtherModelSettings })));
 
 function StrategySelect({ label, value, disabled, onChange, strategies = SAME_SOURCE_ROUTE_STRATEGIES }: {
   label: string; value: RouteStrategy; disabled?: boolean; onChange(next: RouteStrategy): void;
@@ -507,18 +510,17 @@ export function ModelSettingsElsewhere() {
 function ElsewhereRows() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const rows = [
-    { key: 'auxiliary', title: t('settings.sections.auxiliaryModels'), hint: t('modelGroups.elsewhere.auxiliaryHint'), to: '/settings?tab=personalization&section=personalization.auxiliaryModels' },
-    { key: 'subagent', title: t('settings.sections.subagentModels'), hint: t('modelGroups.elsewhere.subagentHint'), to: '/settings?tab=personalization&section=personalization.subagents' },
-    { key: 'bots', title: t('modelGroups.elsewhere.botsTitle'), hint: t('modelGroups.elsewhere.botsHint'), to: '/bots/list' },
-  ];
   return (
-    <SettingsSection title={t('modelGroups.elsewhere.title')} description={t('modelGroups.elsewhere.description')} testId="model-settings-elsewhere">
-      <SettingsCard>
-        {rows.map((row) => (
-          <SettingsRow key={row.key} data-model-settings-elsewhere={row.key} title={row.title} hint={row.hint} chevron onClick={() => navigate(row.to)} />
-        ))}
-      </SettingsCard>
-    </SettingsSection>
+    <>
+      <Suspense fallback={null}>
+        <OtherModelSettings />
+      </Suspense>
+      <SettingsSection title={t('modelGroups.elsewhere.title')} description={t('modelGroups.elsewhere.description')} testId="model-settings-elsewhere">
+        <SettingsCard>
+          <SettingsRow data-model-settings-elsewhere="bots" title={t('modelGroups.elsewhere.botsTitle')} hint={t('modelGroups.elsewhere.botsHint')}
+            chevron onClick={() => navigate('/bots/list')} />
+        </SettingsCard>
+      </SettingsSection>
+    </>
   );
 }

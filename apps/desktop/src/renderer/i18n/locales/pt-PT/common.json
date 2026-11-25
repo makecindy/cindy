@@ -23005,8 +23005,6 @@
     "elsewhere": {
       "title": "Modelos usados noutros locais",
       "description": "Estas definições de modelo estão em páginas próprias. Aceda diretamente a partir daqui.",
-      "auxiliaryHint": "O modelo para tarefas de fundo, como nomear, sugestões e resumos",
-      "subagentHint": "Que modelo usam os subagentes do Claude Code e do Codex",
       "botsTitle": "Parceiros",
       "botsHint": "Cada parceiro escolhe o seu modelo e reservas nas suas definições"
     },

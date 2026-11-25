@@ -22786,8 +22786,6 @@
     "elsewhere": {
       "title": "Anderswo genutzte Modelle",
       "description": "Diese Modelleinstellungen liegen auf eigenen Seiten. Von hier gelangst du direkt dorthin.",
-      "auxiliaryHint": "Das Modell für Hintergrundaufgaben wie Benennen, Vorschläge und Zusammenfassungen",
-      "subagentHint": "Welches Modell Subagents von Claude Code und Codex nutzen",
       "botsTitle": "Buddies",
       "botsHint": "Jeder Buddy wählt sein Modell und seine Reserven in den eigenen Einstellungen"
     },

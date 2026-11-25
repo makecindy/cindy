@@ -31,7 +31,7 @@ import { SettingsSidebar } from './SettingsSidebar';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
 import { buildPluginSettingsPages, buildPluginSettingsSearchDocuments, type PluginSettingsPage } from './pluginSettingsNavigation';
 import { getApprovedGhostHostUi, type InstalledGhost } from '../../../shared/ghost';
-import { isLegacyAppearanceDeepLink, resolveSettingsSearchEntry } from './settingsSearchCatalog';
+import { isLegacyAppearanceDeepLink, isLegacyModelSettingsDeepLink, resolveSettingsSearchEntry } from './settingsSearchCatalog';
 import { SettingsCard, SettingsPageScope, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { SettingsSearchNavigationContext } from './SettingsSearchNavigation';
 import type { SettingsSearchContext } from './settingsSearchTypes';
@@ -76,8 +76,6 @@ import { useCloudInstanceAccess } from '@/features/cloud-settings/CloudInstanceA
 // Keep General available with the route; load other sections only when opened.
 const VoiceInputSection = lazy(() => import('./VoiceInputSection').then(module => ({ default: module.VoiceInputSection })));
 const AppearanceSection = lazy(() => import('./AppearanceSection').then(module => ({ default: module.AppearanceSection })));
-const SubagentModelSection = lazy(() => import('./SubagentModelSection').then(module => ({ default: module.SubagentModelSection })));
-const AuxiliaryModelSection = lazy(() => import('./AuxiliaryModelSection').then(module => ({ default: module.AuxiliaryModelSection })));
 const ProvidersSection = lazy(() => import('./ProvidersSection').then(module => ({ default: module.ProvidersSection })));
 const McpServersSection = lazy(() => import('./McpServersSection').then(module => ({ default: module.McpServersSection })));
 const RemoteControlSection = lazy(() => import('./RemoteControlSection').then(module => ({ default: module.RemoteControlSection })));
@@ -199,6 +197,8 @@ function SettingsViewContent() {
     if (raw === 'agent-island' && !isMac) return 'general';
     // legacy 深链:外观设置原在「通用」、回复动效原在「个性化」,旧 section 深链落到「外观」。
     if (isLegacyAppearanceDeepLink(raw, rawSection)) return 'appearance';
+    // legacy 深链:Subagent 模型与辅助模型原在「个性化」,现在在智能路由页。
+    if (isLegacyModelSettingsDeepLink(raw, rawSection)) return 'model-groups';
     return isSettingsTab(raw) ? raw : 'general';
   }, [canAccessBilling, canAccessUsage, isMac, rawSection, rawTab]);
   const previousTabRef = useRef(activeTab);
@@ -650,14 +650,7 @@ function SettingsViewContent() {
                   <section id={personalizationSettings.codexCompaction.targetId} aria-label={t(personalizationSettings.codexCompaction.titleKey)}>
                     <CompactionSection key={`codex-compaction:${mode}:${dataOwnerId ?? 'none'}`} />
                   </section>
-                  <section id={personalizationSettings.subagents.targetId} aria-label={t(personalizationSettings.subagents.titleKey)}>
-                    <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
-                  </section>
-                  <section id={personalizationDetailsSettings.auxiliaryModelsTitle.targetId} aria-label={t(personalizationSettings.auxiliaryModels.titleKey)}>
-                    <AuxiliaryModelSection
-                      key={`auxiliary-models:${mode}:${dataOwnerId ?? 'none'}`}
-                    />
-                  </section>
+                  {/* Subagent 模型与辅助模型在「模型供应商 → 智能路由」页里(ModelGroupsAutoRoutes)，不在这里重复。 */}
                   {/* RSB 默认终端 shell —— 改默认只影响新建 tab,已有 tab 不动 */}
                   <section id={personalizationDetailsSettings.terminalShellCardLabel.targetId} aria-label={t(personalizationSettings.terminalShell.titleKey)}>
                     <TerminalShellSection />

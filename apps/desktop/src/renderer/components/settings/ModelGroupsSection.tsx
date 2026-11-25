@@ -3,7 +3,7 @@
  * 来源本身仍在「模型供应商」里连接和管理；这里只引用已连接的模型。每次改动立即保存。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ArrowDown, ArrowUp, Check, CornerDownRight, Minus, Play, Plus, Waypoints, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -61,6 +61,7 @@ import { RowIconButton, WeightInput } from './ModelGroupRowControls';
 import { SettingsTextInput } from './SettingsTextInput';
 import { useSettingsSubpageBack } from './useSettingsEscape';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { useSettingsSectionTarget } from './useSettingsSectionTarget';
 import { useSettingsSubpageScroll } from './useSettingsSubpageScroll';
 
 const log = createLogger('ModelGroupsSection');
@@ -121,6 +122,11 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
   const sourceRoute = view.kind === 'source' ? sourceRoutes.find((item) => item.id === view.id) : undefined;
   const subpageOpen = !!(route ?? sourceRoute);
   const { entry, activation } = useSettingsSearchNavigation();
+  // 这一页并在模型供应商页里、自己滚动：从设置搜索或别处的「去设置」过来时，由这里把要找的那一项滚到眼前
+  // (设置页外层那个滚动区不动)。
+  const ownScrollRef = useRef<HTMLDivElement | null>(null);
+  useSettingsSectionTarget(entry?.tab === 'model-groups' ? entry.targetId : null, scrollRef ?? ownScrollRef,
+    `${entry?.id ?? ''}:${activation}`, entry?.fallbackTargetId);
   useEffect(() => {
     if (entry?.tab === 'model-groups') setView({ kind: 'list' });
   }, [entry, activation]);

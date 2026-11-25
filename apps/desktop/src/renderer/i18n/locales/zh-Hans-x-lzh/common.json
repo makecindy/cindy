@@ -22693,8 +22693,6 @@
     "elsewhere": {
       "title": "他处所用之模型",
       "description": "此诸设置各在其页，由此可径往。",
-      "auxiliaryHint": "命名、荐令、摘要诸杂务所用之模型",
-      "subagentHint": "Claude Code 与 Codex 之 Subagent 用何模型",
       "botsTitle": "伙伴",
       "botsHint": "各伙伴用何模型、备何模型，于其自设中定之"
     },

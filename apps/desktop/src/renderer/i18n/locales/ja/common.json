@@ -22693,8 +22693,6 @@
     "elsewhere": {
       "title": "ほかの場所で使うモデル",
       "description": "これらのモデル設定はそれぞれのページにあります。ここから直接移動できます。",
-      "auxiliaryHint": "タスク名付け・提案・要約などの裏方作業に使うモデル",
-      "subagentHint": "Claude Code と Codex のサブエージェントが使うモデル",
       "botsTitle": "バディ",
       "botsHint": "各バディが使うモデルと予備は、そのバディの設定で選びます"
     },

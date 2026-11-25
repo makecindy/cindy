@@ -23005,8 +23005,6 @@
     "elsewhere": {
       "title": "Modelos usados en otros sitios",
       "description": "Estos ajustes de modelo están en sus propias páginas. Ve directamente desde aquí.",
-      "auxiliaryHint": "El modelo para tareas de fondo como nombrar, sugerencias y resúmenes",
-      "subagentHint": "Qué modelo usan los subagentes de Claude Code y Codex",
       "botsTitle": "Compañeros",
       "botsHint": "Cada compañero elige su modelo y sus reservas en sus ajustes"
     },
