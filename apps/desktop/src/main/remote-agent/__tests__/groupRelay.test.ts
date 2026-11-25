@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 
 import { isProviderSharePeer, parseRemoteAgentPollResult, parseRemoteAgentStreamItem, providerShareGuestPeer, REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
 import { AgentStartupStoppedError, TurnDispatchRejectedError, TurnDispatchUnconfirmedError, TurnPermissionPolicyUnsupportedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
@@ -1252,6 +1253,73 @@ describe('provider group relay for shared users', () => {
       await expect(host.handle(peer, request)).resolves.toBeNull();
       expect(await old).toEqual([expect.objectContaining({ status: 'rejected' })]);
     } finally { release(); await head; await waiting; await host.dispose(); }
+  });
+
+  // A direct open must reserve its mutation boundary before its first await,
+  // including real uploaded-payload decoding. Earlier tests only interposed
+  // already-queued mutations and missed allocation -> preparing open -> retry.
+  it.each(['inline', 'uploaded', 'invalid-upload'] as const)('reserves a preparing %s open before another allocation', async mode => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const order: string[] = [];
+    let allocations = 0;
+    const host = fakeAgentHost(`allocate-open-${mode}`, [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner',
+      allocate: async () => {
+        const attempt = ++allocations;
+        if (attempt === 1) { enter(); await gate; }
+        order.push(`allocate:${attempt}`);
+        return null;
+      },
+      acceptDelegated: async () => { order.push('open'); },
+      status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+      delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+    } });
+    const uploadId = '33333333-3333-4333-8333-333333333333';
+    const input = openPayload('task');
+    const bytes = mode === 'invalid-upload' ? Buffer.from('invalid gzip') : gzipSync(Buffer.from(JSON.stringify(input)));
+    if (mode !== 'inline') await host.handle(peer, { op: 'upload', uploadId, index: 0, data: bytes.toString('base64') });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const head = host.handle(peer, request);
+    let opening: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    let next: Promise<unknown> | undefined;
+    try {
+      await entered;
+      opening = Promise.allSettled([host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: mode === 'inline' ? { json: input } : { uploadId, chunks: 1, bytes: bytes.length } })]);
+      next = host.handle(peer, request);
+      release(); await head; await next;
+      const [opened] = await opening;
+      expect(opened.status).toBe(mode === 'invalid-upload' ? 'rejected' : 'fulfilled');
+      expect(order).toEqual(mode === 'invalid-upload' ? ['allocate:1', 'allocate:2'] : ['allocate:1', 'open', 'allocate:2']);
+    } finally { release(); await head; await next; await opening; await host.abortAll(); await host.dispose(); }
+  });
+
+  it('keeps a decoded relay open out of the direct allocation critical section', async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const host = fakeAgentHost('allocate-relay-boundary', [], {
+      trust: () => 'guest',
+      resolveProvider: async () => { enter(); await gate; return 'shared-provider'; },
+      directGuestExecution: {
+        ownerScope: () => 'owner', allocate: async () => null, status() {}, release: async () => {},
+        switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+        sessionAllowed: () => true, sessionDelegated: () => false,
+      },
+    });
+    const opening = host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+      payload: { json: openPayload('relay-task', { relay: relayKeyFor(GUEST_A) }) } });
+    try {
+      await entered;
+      await expect(host.handle(peer, { op: 'allocate', sessionId: 'direct-task', agentKind: 'claude-code', model: 'claude-opus' })).resolves.toBeNull();
+    } finally { release(); await opening; await host.abortAll(); await host.dispose(); }
   });
 
   it.each(['direct-release', 'direct-switch', 'standby-prepare'] as const)(
