@@ -17881,7 +17881,7 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動化未執行，因為繫結的任務使用插件引擎。請將任務切回內建引擎，或將自動化重新繫結到使用內建引擎的任務。",
+      "boundPluginEngineRecovery": "自動化未執行。繫結到插件引擎任務的自動化會沿用任務自己的模型，並在這台電腦上執行。如果自動化裡指定了模型，請先移除，再重新執行。",
       "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",

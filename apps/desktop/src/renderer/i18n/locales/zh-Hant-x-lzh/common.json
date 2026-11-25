@@ -17881,7 +17881,7 @@
       "openWorkdirFailed": "啟卷匣未成"
     },
     "runs": {
-      "boundPluginEngineRecovery": "所繫之務用法器引擎，故自動之務未行。宜將所繫之務改回內建引擎，或改繫於用內建引擎之務。",
+      "boundPluginEngineRecovery": "自動之務未行。繫於法器引擎之務者，循其務之模型，行於此機。若自動之務另擇模型，宜去之，復行之。",
       "queueWaitTimeoutRecovery": "排候逾時，提示詞未發。待所繫任務閒，按「{{action}}」補行。",
       "status": {
         "running": "方行",

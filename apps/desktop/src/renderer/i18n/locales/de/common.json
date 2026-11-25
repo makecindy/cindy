@@ -17955,7 +17955,7 @@
       "openWorkdirFailed": "Ordner konnte nicht geöffnet werden"
     },
     "runs": {
-      "boundPluginEngineRecovery": "Die Automatisierung wurde nicht ausgeführt, weil die verknüpfte Aufgabe eine Plug-in-Engine verwendet. Stelle die Aufgabe auf eine integrierte Engine zurück oder verknüpfe die Automatisierung mit einer Aufgabe, die eine integrierte Engine nutzt.",
+      "boundPluginEngineRecovery": "Die Automatisierung wurde nicht ausgeführt. Eine Automatisierung, die mit einer Aufgabe auf einer Plug-in-Engine verknüpft ist, nutzt das Modell der Aufgabe und läuft auf diesem Computer. Wenn in der Automatisierung ein Modell gewählt ist, entferne es und führe sie erneut aus.",
       "queueWaitTimeoutRecovery": "Die Wartezeit ist abgelaufen, bevor die Eingabe gesendet wurde. Sobald die Zielsitzung frei ist, wähle {{action}}, um sie auszuführen.",
       "status": {
         "running": "Wird ausgeführt",

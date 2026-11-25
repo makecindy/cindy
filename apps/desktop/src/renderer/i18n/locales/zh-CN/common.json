@@ -17881,7 +17881,7 @@
       "openWorkdirFailed": "打开文件夹失败"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自动化未运行，因为绑定的任务使用了插件引擎。请将任务切回内置引擎，或将自动化改绑到使用内置引擎的任务。",
+      "boundPluginEngineRecovery": "自动化未运行。绑定到插件引擎任务的自动化会沿用任务自己的模型，并在这台电脑上运行。如果自动化里指定了模型，请先去掉，再重新运行。",
       "queueWaitTimeoutRecovery": "排队等待超时，提示词未发送。目标任务空闲后可点击「{{action}}」补跑。",
       "status": {
         "running": "运行中",
