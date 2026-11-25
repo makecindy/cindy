@@ -214,6 +214,43 @@ async function browseBatches(cache: ReturnType<typeof fixture>['cache'], last: n
   }
 }
 
+it('shows a moved sorted plugin once after rereading both evicted pages', async () => {
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(150);
+  let moved = false;
+  const load = vi.fn(async (input: PluginMarketQuery) => {
+    const start = Number(input.cursor ?? 0);
+    const batch = page(start, 330);
+    const items = !moved ? batch.items
+      : start === 0 ? [item(1000), ...batch.items.slice(1)]
+      : start === 10 ? [item(0), item(1), ...batch.items.slice(2)]
+      : batch.items;
+    return { ...batch, ...sortedBy(input), items };
+  });
+  const { cache, view } = fixture(load);
+  render(view());
+  await browseBatches(cache, 31);
+  expect(cache.current.pages.has(0)).toBe(false);
+  expect(cache.current.pages.has(1)).toBe(false);
+
+  moved = true;
+  load.mockClear();
+  await act(async () => {
+    fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 0 } });
+    readVisibleRange?.(0, 0);
+  });
+  await act(async () => {
+    fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 750 } });
+    readVisibleRange?.(10, 10);
+  });
+  expect(load.mock.calls.filter(([input]) => !input.counts).map(([input]) => input.cursor)).toEqual([null, '10']);
+  const firstPage = cache.current.pages.get(0)?.map(item => item.pluginId) ?? [];
+  const secondPage = cache.current.pages.get(1)?.map(item => item.pluginId) ?? [];
+  expect(firstPage).toContain('plugin-1');
+  expect(secondPage).toContain('plugin-0');
+  expect([...firstPage, ...secondPage].filter(id => id === 'plugin-0')).toHaveLength(1);
+  expect([...firstPage, ...secondPage].filter(id => id === 'plugin-1')).toHaveLength(1);
+});
+
 it.each(['legacy', 'custom', 'offline'] as const)('refreshes only six pages near the visible position when the catalog is %s', async mode => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(150);
   const scope = mode === 'custom' ? 'custom' : 'all';

@@ -282,9 +282,16 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         const sortedPage = sort && activeCatalogSort(page, onlineRef.current);
         const advanceCursor = !sortedPage || !current.sizes.has(index) || current.error === index;
         if (sortedPage) {
-          current.pageByPlugin ??= new Map([...current.pages].flatMap(([page, items]) =>
+          const owners = current.pageByPlugin ??= new Map([...current.pages].flatMap(([page, items]) =>
             items.map(item => [item.pluginId, page] as const)));
-          page.items = uniquePageItems(current.pageByPlugin, index, page.items);
+          if (current.sizes.has(index)) {
+            // Page ownership survives row eviction. Release entries absent from the replacement.
+            const retained = new Set(page.items.map(item => item.pluginId));
+            for (const [id, owner] of owners) {
+              if (owner === index && !retained.has(id)) owners.delete(id);
+            }
+          }
+          page.items = uniquePageItems(owners, index, page.items);
         }
         const previousItems = current.pages.get(index) ?? (index === 0 && displayed.current.partitionKey === partitionKey
           ? [...displayed.current.pages.values()].flat() : []);
