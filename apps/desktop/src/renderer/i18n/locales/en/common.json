@@ -15904,6 +15904,8 @@
         "loading": "Loading…",
         "noLiveSession": "No context data is available yet. Try again after the Claude Code session starts.",
         "unsupportedAgent": "{{agent}} does not support context usage yet.",
+        "noReportedUsage": "No context usage data is available for this conversation yet.",
+        "noBreakdown": "This engine does not provide a breakdown.",
         "percentFull": "{{pct}}% Full",
         "tokensSummary": "{{used}} / {{total}} ({{pct}}%)",
         "expand": "Expand context details",

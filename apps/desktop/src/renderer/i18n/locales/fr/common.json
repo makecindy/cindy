@@ -16010,6 +16010,8 @@
         "loading": "Chargement…",
         "noLiveSession": "Aucune donnée de contexte disponible pour l'instant. Réessayez après le démarrage de la session Claude Code.",
         "unsupportedAgent": "{{agent}} ne prend pas encore en charge l'utilisation du contexte.",
+        "noReportedUsage": "Les données d’utilisation du contexte ne sont pas encore disponibles pour cette conversation.",
+        "noBreakdown": "Ce moteur ne fournit pas de ventilation détaillée.",
         "percentFull": "Rempli à {{pct}} %",
         "tokensSummary": "{{used}} / {{total}} ({{pct}} %)",
         "expand": "Développer les détails du contexte",

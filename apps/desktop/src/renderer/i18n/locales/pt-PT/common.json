@@ -16010,6 +16010,8 @@
         "loading": "A carregar…",
         "noLiveSession": "Ainda não há dados de contexto disponíveis. Tente novamente após o início da sessão do Claude Code.",
         "unsupportedAgent": "{{agent}} ainda não suporta a utilização do contexto.",
+        "noReportedUsage": "Ainda não há dados de utilização do contexto para esta conversa.",
+        "noBreakdown": "Este motor não fornece uma discriminação por categoria.",
         "percentFull": "{{pct}}% ocupado",
         "tokensSummary": "{{used}} / {{total}} ({{pct}}%)",
         "expand": "Expandir detalhes do contexto",

@@ -15839,6 +15839,8 @@
         "loading": "불러오는 중…",
         "noLiveSession": "아직 사용할 수 있는 컨텍스트 데이터가 없습니다. Claude Code 세션이 시작된 뒤 다시 시도해 주세요.",
         "unsupportedAgent": "{{agent}}에서는 아직 컨텍스트 사용량 표시를 지원하지 않습니다.",
+        "noReportedUsage": "현재 대화의 컨텍스트 사용량 데이터가 아직 없습니다.",
+        "noBreakdown": "이 엔진은 사용량 세부 내역을 제공하지 않습니다.",
         "percentFull": "{{pct}}% 사용 중",
         "tokensSummary": "{{used}} / {{total}} ({{pct}}%)",
         "expand": "컨텍스트 세부 정보 펼치기",

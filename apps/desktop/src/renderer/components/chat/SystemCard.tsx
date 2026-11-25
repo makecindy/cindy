@@ -372,6 +372,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
     (row) => finiteNumber(row.tokens) > 0 || row.count !== '0',
   );
 
+  const summaryOnly = data?.summaryOnly === true;
+  const Header = summaryOnly ? 'div' : 'button';
+
   return (
     <div
       className={cn(
@@ -379,15 +382,15 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
         'px-3 py-3 text-13 leading-none text-[var(--msg-user-text)] select-text',
       )}
     >
-      <button
+      <Header
         data-chat-copy-content
-        type="button"
         className="flex w-full items-center gap-2 text-left"
-        onClick={() => setExpanded((prev) => !prev)}
-        aria-expanded={expanded}
-        aria-label={
-          expanded ? t('chat.systemCard.context.collapse') : t('chat.systemCard.context.expand')
-        }
+        {...(!summaryOnly && {
+          type: 'button' as const,
+          onClick: () => setExpanded((prev) => !prev),
+          'aria-expanded': expanded,
+          'aria-label': t(expanded ? 'chat.systemCard.context.collapse' : 'chat.systemCard.context.expand'),
+        })}
       >
         <Layers size={14} strokeWidth={1.8} className="shrink-0 text-[var(--msg-user-text)]" />
         <span className="min-w-0 flex-1 truncate text-15 font-medium">
@@ -400,15 +403,17 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
             pct: Math.round(pct),
           })}
         </span>
-        <ChevronRight
-          size={13}
-          strokeWidth={1.8}
-          className={cn(
-            'shrink-0 text-[var(--msg-tool-text)] transition-transform',
-            expanded && 'rotate-90',
-          )}
-        />
-      </button>
+        {!summaryOnly && (
+          <ChevronRight
+            size={13}
+            strokeWidth={1.8}
+            className={cn(
+              'shrink-0 text-[var(--msg-tool-text)] transition-transform',
+              expanded && 'rotate-90',
+            )}
+          />
+        )}
+      </Header>
 
       <div
         className="mt-2 flex h-[7px] w-full overflow-hidden rounded-full bg-[var(--msg-tool-card-bg)]"
@@ -432,7 +437,13 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
           ))}
       </div>
 
-      <Collapse open={expanded}>
+      {summaryOnly && (
+        <div className="mt-2 text-12 leading-[1.3] text-[var(--msg-tool-text)]">
+          {t('chat.systemCard.context.noBreakdown')}
+        </div>
+      )}
+
+      <Collapse open={expanded && !summaryOnly}>
         <div className="mt-2">
           {usage.model && (
             <div className="mb-2 truncate text-12 leading-[1.3] text-[var(--msg-tool-text)]">

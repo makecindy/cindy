@@ -15839,6 +15839,8 @@
         "loading": "読み込み中…",
         "noLiveSession": "利用できるコンテキストデータはまだありません。Claude Code セッション開始後にもう一度お試しください。",
         "unsupportedAgent": "{{agent}} はまだコンテキスト使用量表示に対応していません。",
+        "noReportedUsage": "この会話のコンテキスト使用量データはまだありません。",
+        "noBreakdown": "このエンジンでは内訳を表示できません。",
         "percentFull": "{{pct}}% 使用中",
         "tokensSummary": "{{used}} / {{total}} ({{pct}}%)",
         "expand": "コンテキスト詳細を展開",

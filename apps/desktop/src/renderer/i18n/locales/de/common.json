@@ -15867,6 +15867,8 @@
         "loading": "Wird geladen…",
         "noLiveSession": "Noch keine Kontextdaten verfügbar. Versuch es erneut, nachdem die Claude Code-Sitzung gestartet wurde.",
         "unsupportedAgent": "{{agent}} unterstützt die Kontextauslastung noch nicht.",
+        "noReportedUsage": "Für diese Unterhaltung liegen noch keine Daten zur Kontextauslastung vor.",
+        "noBreakdown": "Diese Engine stellt keine Aufschlüsselung bereit.",
         "percentFull": "{{pct}}% belegt",
         "tokensSummary": "{{used}} / {{total}} ({{pct}}%)",
         "expand": "Kontextdetails einblenden",

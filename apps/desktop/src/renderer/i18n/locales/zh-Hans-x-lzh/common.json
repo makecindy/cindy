@@ -15830,6 +15830,8 @@
         "loading": "方载…",
         "noLiveSession": "暂无可用之上下文数据。俟 Claude Code 会话启动后再试。",
         "unsupportedAgent": "{{agent}} 暂不支持示上下文耗用。",
+        "noReportedUsage": "此对话尚无上下文耗用之数",
+        "noBreakdown": "此引擎尚无分项明细",
         "percentFull": "已用 {{pct}}%",
         "tokensSummary": "{{used}} / {{total}} ({{pct}}%)",
         "expand": "展上下文详情",

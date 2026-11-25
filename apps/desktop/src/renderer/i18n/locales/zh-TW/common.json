@@ -15838,6 +15838,8 @@
         "loading": "正在載入…",
         "noLiveSession": "暫無可用的上下文資料。Claude Code 會話啟動後再試一次。",
         "unsupportedAgent": "{{agent}} 暫不支援上下文用量展示。",
+        "noReportedUsage": "目前對話暫無上下文用量資料",
+        "noBreakdown": "目前的引擎暫不提供分項明細",
         "percentFull": "已使用 {{pct}}%",
         "tokensSummary": "{{used}} / {{total}} ({{pct}}%)",
         "expand": "展開上下文詳情",

@@ -4580,13 +4580,30 @@ function CCAgentSessionContent({
         });
         return true;
       }
-      // 插件引擎没有这条上下文查询通道；不拿 Claude Code 的 createOpts 去问。
       if (isPluginEngineKind(session?.agentKind)) {
+        const { contextTokens, contextWindow, contextWindowFromRuntime } =
+          makerChatStore.getSnapshot(sessionId).agentStatus;
+        if (
+          !contextWindowFromRuntime ||
+          !Number.isFinite(contextWindow) || contextWindow <= 0 ||
+          !Number.isFinite(contextTokens) || contextTokens < 0
+        ) {
+          insertSystemCard('context', {
+            usage: null,
+            error: t('chat.systemCard.context.noReportedUsage'),
+          });
+          return true;
+        }
         insertSystemCard('context', {
-          usage: null,
-          error: t('chat.systemCard.context.unsupportedAgent', {
-            agent: pluginEngine?.name ?? t('newChat.pluginEngines.genericName'),
-          }),
+          summaryOnly: true,
+          usage: {
+            totalTokens: contextTokens,
+            maxTokens: contextWindow,
+            rawMaxTokens: contextWindow,
+            percentage: (contextTokens / contextWindow) * 100,
+            categories: [],
+            model: session?.model ?? '',
+          },
         });
         return true;
       }
@@ -4628,7 +4645,7 @@ function CCAgentSessionContent({
         });
       return true;
     },
-    [fastMode, insertSystemCard, remoteDeviceId, session, sessionId, t, updateSystemCardData, pluginEngine?.name],
+    [fastMode, insertSystemCard, remoteDeviceId, session, sessionId, t, updateSystemCardData],
   );
 
   // 开始输入（打字、粘贴、开始语音输入）时提前启动 Agent，把冷启动藏进输入时间（本机与远程任务相同）。
