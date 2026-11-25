@@ -6,6 +6,7 @@
 
 import {
   AUTO_AUXILIARY_MODEL_CHAIN,
+  auxiliaryRouteRefId,
   parseAuxiliaryModelRef,
   type ParsedAuxiliaryModelRef,
 } from '../../shared/auxiliaryModelChain.js';
@@ -28,11 +29,28 @@ export type EffectiveAuxiliaryModelChain = {
 /** The settings read, resolved by each launcher. */
 export interface AuxiliaryModelChainResolverPorts {
   readAuxiliaryModelSettings(): AuxiliaryModelSettings;
+  /**
+   * 一格选的是智能路由时，换成这条路由里本机能用的具体模型(目录钉)，路由此刻会选的排在最前。
+   * 不提供(Node Host 没有智能路由)或路由已不存在时为空：这一格跳过，与选中的模型已不可用一样。
+   */
+  expandRouteRef?(routeId: string): string[];
 }
 
 /** One resolver per launcher, reading that launcher's auxiliary-model settings. */
 export function createAuxiliaryModelChainResolver(ports: AuxiliaryModelChainResolverPorts) {
-const { readAuxiliaryModelSettings } = ports;
+const { readAuxiliaryModelSettings, expandRouteRef } = ports;
+
+/** 用户选的几格展开成具体模型：路由换成它的成员，去掉重复(先出现的位置为准)。 */
+function expandCustomRefs(custom: readonly string[]): string[] {
+  const refs: string[] = [];
+  for (const ref of custom) {
+    const routeId = auxiliaryRouteRefId(ref);
+    for (const item of routeId ? (expandRouteRef?.(routeId) ?? []) : [ref]) {
+      if (!refs.includes(item)) refs.push(item);
+    }
+  }
+  return refs;
+}
 
 function firstNonBlank(...values: Array<string | undefined>): string | undefined {
   return values.find((value) => typeof value === 'string' && value.trim().length > 0)?.trim();
@@ -111,7 +129,8 @@ function readEnvUtilityChain(): string[] | null {
 
 function getEffectiveAuxiliaryModelChain(custom: readonly string[] = readAuxiliaryModelSettings().models): EffectiveAuxiliaryModelChain {
   if (custom.length > 0) {
-    return { source: 'custom', refs: [...custom] };
+    // 选了路由的格子在这里换成具体模型：后面所有用这条链的地方(发请求、健康记录、快照比对)只见到具体模型。
+    return { source: 'custom', refs: expandCustomRefs(custom) };
   }
   const envChain = readEnvUtilityChain();
   if (envChain) {

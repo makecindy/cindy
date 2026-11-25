@@ -5649,7 +5649,8 @@
           "runtime": "Os últimos pedidos aos modelos auxiliares falharam. A atribuição de nomes às tarefas, os resumos e as tarefas de plugins, como a tradução de legendas, podem ser afetados.",
           "open": "Abrir definições"
         }
-      }
+      },
+      "missingRoute": "Modo eliminado"
     },
     "compaction": {
       "codex": {

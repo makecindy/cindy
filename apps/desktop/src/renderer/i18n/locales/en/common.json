@@ -5589,7 +5589,8 @@
           "runtime": "Recent auxiliary model requests failed. Task naming, summaries and plugin tasks such as subtitle translation may be affected.",
           "open": "Open Settings"
         }
-      }
+      },
+      "missingRoute": "Deleted route"
     },
     "compaction": {
       "codex": {

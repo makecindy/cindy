@@ -5589,7 +5589,8 @@
           "runtime": "Die letzten Anfragen an Hilfsmodelle sind fehlgeschlagen. Aufgabentitel, Zusammenfassungen und Plugin-Aufgaben wie die Untertitelübersetzung können betroffen sein.",
           "open": "Einstellungen öffnen"
         }
-      }
+      },
+      "missingRoute": "Gelöschter Modus"
     },
     "compaction": {
       "codex": {

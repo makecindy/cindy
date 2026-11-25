@@ -5649,7 +5649,8 @@
           "runtime": "Las últimas solicitudes a los modelos auxiliares fallaron. Puede afectar al nombrado de tareas, los resúmenes y las tareas de complementos, como la traducción de subtítulos.",
           "open": "Abrir configuración"
         }
-      }
+      },
+      "missingRoute": "Modo eliminado"
     },
     "compaction": {
       "codex": {

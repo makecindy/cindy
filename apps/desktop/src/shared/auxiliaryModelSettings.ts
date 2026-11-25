@@ -45,6 +45,11 @@ export interface AuxiliaryModelOption {
   agentSuffix: string;
   /** False only for a persisted selection that is no longer currently usable. */
   available: boolean;
+  /**
+   * 这一项是一条智能路由(id 为 route:<路由 id>)：merged = 合并整个供应商的路由在一个模型上的展开，
+   * route = 自己排的路由。name 是路由名，members = 本机能用的成员数。具体模型没有这一项。
+   */
+  route?: { kind: 'route' | 'merged'; name: string; members: number };
 }
 
 export interface AuxiliaryModelSettingsState extends AuxiliaryModelSettings {

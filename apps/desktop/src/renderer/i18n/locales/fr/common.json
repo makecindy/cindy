@@ -5649,7 +5649,8 @@
           "runtime": "Les dernières requêtes aux modèles auxiliaires ont échoué. Le nommage des tâches, les résumés et les tâches de plugins comme la traduction des sous-titres peuvent être concernés.",
           "open": "Ouvrir les paramètres"
         }
-      }
+      },
+      "missingRoute": "Mode supprimé"
     },
     "compaction": {
       "codex": {
