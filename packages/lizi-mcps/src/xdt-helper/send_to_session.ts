@@ -37,6 +37,7 @@ export type SendToSessionCallback = (params: {
   agentKind?: ControlWorkerAgent;
   /** create 模式可选:显式目标模型；缺省继承 dispatcher。jump 忽略。 */
   model?: string;
+  providerId?: string;
   /** create 模式可选:显式推理强度；缺省继承 dispatcher。jump 忽略。 */
   effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   /** create 模式可选:显式 Fast 开关；缺省继承 dispatcher。jump 忽略。 */
@@ -225,6 +226,9 @@ export function registerSendToSessionTool(
       device: z.string().trim().min(1).max(128).optional().describe(
         '仅 create：任务、目录和文件所在电脑，取 list_machines 的 machines.computers[].deviceId；省略或 local 为当前宿主。远程项目/目录按目标电脑解析；未选项目不继承本机路径，未选模型用目标默认。已有任务使用 target_session_id，不同时传 device。',
       ),
+      provider_id: z.string().trim().min(1).optional().describe(
+        "仅本机新建任务可选：从 list_available_models 对应模型的 providers 选取本机连接 ID。省略沿用原选路；jump 忽略。",
+      ),
       provider_device_id: z.string().trim().min(1).max(128).optional().describe(
         '仅 create：模型供应商所在电脑，取 list_available_models 的 locations；local 表示任务所在电脑。与 device（任务和文件位置）独立。旧名 agent_device_id 兼容保留，同时填写必须一致。',
       ),
@@ -305,6 +309,7 @@ export function registerSendToSessionTool(
       target_session_id,
       device,
       provider_device_id,
+      provider_id,
       message,
       title,
       use_worktree,
@@ -359,6 +364,7 @@ export function registerSendToSessionTool(
         ...(project_path !== undefined ? { projectDir: project_path } : {}),
         ...(agent_kind !== undefined ? { agentKind: agent_kind } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(localTargetId === undefined && provider_id !== undefined ? { providerId: provider_id } : {}),
         ...(effort !== undefined ? { effort } : {}),
         ...(fast !== undefined ? { fast } : {}),
         // jump 不改既有任务的位置：只在 create 时传。

@@ -62,6 +62,8 @@ export interface PluginEnginesPickerProps {
   engines: readonly PluginEngineChoice[];
   /** Current engine choice (already resolved against the list); null = a built-in model is used. */
   active: PluginEngineSelection | null;
+  /** The task's current engine and effort, even when the picker highlights a pending switch. */
+  running?: PluginEngineSelection | null;
   /** Existing tasks wait for the host to accept the choice. False leaves the panel open. */
   onSelect(selection: PluginEngineSelection): void | boolean | Promise<boolean>;
   /** Device Link picker reloads its own computer's list when opened. */
@@ -522,10 +524,15 @@ export function PluginEnginesSection({
   const blocks = picker.engines
     .map((engine) => {
       const activeModelId = activePluginEngineModelId(picker.active, engine);
+      const running = isSamePluginEngineChoice(picker.running, engine) ? picker.running : null;
+      const effort = running ? running.effort : activeModelId !== null ? picker.active?.effort : undefined;
+      const purpose = running ? 'session' as const : 'new-task' as const;
       return {
         engine,
         activeModelId,
-        rows: engineMatches(engine, pluginEngineModelRows(engine, activeModelId), needle, defaultLabel),
+        purpose,
+        effort,
+        rows: engineMatches(engine, pluginEngineModelRows(engine, activeModelId, purpose), needle, defaultLabel),
       };
     })
     .filter((block) => block.rows.length > 0);
@@ -535,7 +542,7 @@ export function PluginEnginesSection({
     // Each engine carries its own group label (like a provider), so the section has no visible
     // heading of its own; the 「插件引擎」 name stays for assistive technology and the rail tab.
     <div ref={sectionRef} role="group" aria-label={label} data-plugin-engines-section>
-      {blocks.map(({ engine, rows, activeModelId }) => (
+      {blocks.map(({ engine, rows, activeModelId, purpose, effort }) => (
         <EngineBlock
           key={pluginEngineChoiceKey(engine)}
           engine={engine}
@@ -546,7 +553,7 @@ export function PluginEnginesSection({
           }, true); }}
           // A row shows the level it would run with: the chosen one where it is offered, else its own.
           effortOf={(row) => resolvePluginEngineEffort(
-            engine, row.id, isSamePluginEngineChoice(picker.active, engine) ? picker.active?.effort : undefined)}
+            engine, row.id, effort, purpose)}
           onChooseEffort={(modelId, effort) => { void choose({
             providerId: engine.providerId, modelId, effort, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
           }, false); }}
@@ -606,7 +613,7 @@ export function PluginEngineSessionPanel({
       <MenuHighlightLayer />
       <EngineBlock
         engine={engine}
-        rows={pluginEngineModelRows(engine, pending?.modelId ?? picker.modelId)}
+        rows={pluginEngineModelRows(engine, pending?.modelId ?? picker.modelId, 'session')}
         activeModelId={pending?.modelId ?? picker.modelId}
         onChoose={(modelId) => {
           if (modelId === picker.modelId) {
@@ -614,12 +621,12 @@ export function PluginEngineSessionPanel({
             return;
           }
           // Another model keeps the task's level where it offers it, else runs with its own default.
-          const effort = resolvePluginEngineEffort(engine, modelId, picker.effort) ?? undefined;
+          const effort = resolvePluginEngineEffort(engine, modelId, picker.effort, 'session') ?? undefined;
           void Promise.resolve(effort ? picker.onSelectModel(modelId, effort) : picker.onSelectModel(modelId)).then((applied) => {
             if (applied !== false) onPicked();
           });
         }}
-        effortOf={(row) => resolvePluginEngineEffort(engine, row.id, pending?.effort ?? picker.effort)}
+        effortOf={(row) => resolvePluginEngineEffort(engine, row.id, pending?.effort ?? picker.effort, 'session')}
         onChooseEffort={(modelId, effort) => {
           setPending({ modelId, effort });
           void Promise.resolve(picker.onSelectModel(modelId, effort)).then((applied) => {

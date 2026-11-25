@@ -199,12 +199,16 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
    */
   networkChanged(): void {
     if (this.closed) return;
-    for (const ws of this.network.values()) this.probeRelayConnection(ws);
+    for (const ws of this.network.values()) this.probeRelayConnection(ws, 'a network change');
     this.worker.postMessage({ type: 'network-changed' });
   }
   /** Session requests to a relayed peer timed out: let the transport judge whether relay UDP carries data (relayUdp.ts). */
   relayStalled(): void {
-    if (!this.closed) this.worker.postMessage({ type: 'relay-stalled' });
+    if (this.closed) return;
+    if (this.relayVia === 'websocket') {
+      for (const ws of this.network.values()) this.probeRelayConnection(ws, 'a relayed request timeout');
+    }
+    this.worker.postMessage({ type: 'relay-stalled' });
   }
   private readonly probing = new WeakSet<WebSocket>();
   /** Relay connections open now. The socket stays open without one (direct peers keep working); `relay` reports the change. */
@@ -264,7 +268,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     this.relayOpen = Math.max(0, this.relayOpen + delta);
     if (!this.closed && before !== this.relayOpen > 0) this.emit('relay', this.relayOpen > 0);
   }
-  private probeRelayConnection(ws: WebSocket): void {
+  private probeRelayConnection(ws: WebSocket, reason: string): void {
     if (typeof ws.ping !== 'function' || ws.readyState !== WebSocket.OPEN || this.probing.has(ws)) return;
     this.probing.add(ws);
     let answered = false;
@@ -273,7 +277,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     const timer = setTimeout(() => {
       this.probing.delete(ws); ws.off('pong', pong);
       if (answered || this.closed || ws.readyState !== WebSocket.OPEN) return;
-      this.options.log?.warn('agent-net relay connection did not answer after a network change; reconnecting');
+      this.options.log?.warn(`agent-net relay connection did not answer after ${reason}; reconnecting`);
       ws.terminate();
     }, this.options.networkChangeProbeMs ?? AGENT_NET_NETWORK_CHANGE_PROBE_MS);
     (timer as { unref?: () => void }).unref?.();

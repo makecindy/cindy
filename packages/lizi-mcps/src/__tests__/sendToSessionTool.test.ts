@@ -55,6 +55,24 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('send_to_session tool', () => {
+  // #12060, unit: exercise schema parsing and the actual handoff arguments.
+  // A provider-only create used to silently lose the requested connection.
+  it('forwards the provider only on explicit create and preserves legacy calls', async () => {
+    const { registry, sendToSession } = setup();
+    for (const args of [
+      { provider_id: 'second' },
+      {},
+      { target_session_id: UUID, provider_id: 'second' },
+    ]) {
+      expect(parse(await registry.call('send_to_session', { message: 'Work', ...args })).ok).toBe(true);
+    }
+    const calls = sendToSession.mock.calls;
+    expect(calls[0]).toEqual([expect.objectContaining({ providerId: 'second' })]);
+    for (const [request] of calls.slice(1) as unknown as [object][]) {
+      expect(request).not.toHaveProperty('providerId');
+    }
+  });
+
   // Unit contract: task host and provider location are independent; conflicting aliases
   // must fail before host dispatch, and uncertain creation returns an address to inspect.
   it('routes creation locations independently and preserves a recovery address', async () => {

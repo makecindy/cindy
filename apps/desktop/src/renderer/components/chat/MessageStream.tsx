@@ -8,7 +8,7 @@ import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { botProcessItems, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
+import { botProcessItems, botTimeGroupRows, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
@@ -3115,6 +3115,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   compact,
   companionAvatar,
   startsUnread = false,
+  groupTimestamp,
 }: {
   item: Extract<RenderItem, { type: 'work_group' }>;
   context: WorkGroupRenderContext;
@@ -3122,6 +3123,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   /** 伙伴聊天：同一轮开头显示头像，后续行仅保留正文列缩进。 */
   companionAvatar?: ReactNode;
   startsUnread?: boolean;
+  groupTimestamp?: number;
 }) {
   // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
   // 具体折叠 / 直接详情逻辑全部复用 WorkGroupBlock。
@@ -3188,7 +3190,9 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       className="scroll-mt-20"
       data-message-client-ids={collectWorkGroupClientIds(item.children).join(' ')}
     >
-      {startsUnread ? <BotMessageTimelineHeader startsUnread /> : null}
+      {startsUnread || groupTimestamp !== undefined ? (
+        <BotMessageTimelineHeader startsUnread={startsUnread} groupTimestamp={groupTimestamp} />
+      ) : null}
       {companionAvatar ? withAssistantAvatar(companionAvatar, block) : block}
     </div>
   );
@@ -3753,6 +3757,10 @@ export function MessageStream({
   // Resolve the owner inside the stable render window, not the viewport-mounted
   // subset. A cropped process falls back to its reply instead of losing NEW;
   // scrolling within the same window must not move the boundary.
+  const botTimeGroupsByRow = useMemo(
+    () => botTimeGroupRows(visibleRenderItems, botMessageTimeGroups, botContinuationKeys),
+    [visibleRenderItems, botMessageTimeGroups, botContinuationKeys],
+  );
   const botUnreadBoundaryKey = useMemo(
     () => botUnreadBoundaryItemKey(visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys),
     [visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys],
@@ -7012,6 +7020,7 @@ export function MessageStream({
                           item={item}
                           context={workGroupRenderContext}
                           startsUnread={botUnreadBoundaryKey === item.key}
+                          groupTimestamp={botTimeGroupsByRow.get(item.key)}
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
                           // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
@@ -7161,7 +7170,7 @@ export function MessageStream({
                       const groupTimestamp =
                         msg.systemCardType === 'voice-call'
                           ? undefined
-                          : botMessageTimeGroups.get(msg.clientId);
+                          : botTimeGroupsByRow.get(item.key);
                       const startsUnread = botUnreadBoundaryKey === item.key;
                       return (
                         <div

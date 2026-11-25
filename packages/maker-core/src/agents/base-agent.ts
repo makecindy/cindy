@@ -317,6 +317,16 @@ export interface PiNativeProvidersResult {
   env: Record<string, string>;
 }
 
+/** The selected BYOM source was absent from Pi's native route set at startup.
+ * The host must separately verify whether the saved connection still exists.
+ */
+export class PiByomRouteAbsentError extends Error {
+  constructor(readonly providerId: string, message: string) {
+    super(message);
+    this.name = 'PiByomRouteAbsentError';
+  }
+}
+
 /**
  * The host could not construct the first-party Pi provider because its local
  * compatibility proxy is not ready. This is a fatal startup condition for
@@ -1066,6 +1076,9 @@ export interface AgentDeps {
     modelId: string,
     signal?: AbortSignal,
   ) => CodexLocalAuthPolicyResolution | Promise<CodexLocalAuthPolicyResolution>;
+
+  /** Whether the selected local route adds a Fast declaration to its native catalog. */
+  needsCodexFastCatalog?: (providerId: string | null | undefined, modelId: string) => boolean;
 
   /**
    * Per-model requested context window (user override first, explicit provider default second).
@@ -2584,6 +2597,8 @@ export interface AgentMcpServerToolsReport {
 }
 
 export interface AgentSessionHandle {
+  /** The sharing computer confirmed that it reclaimed this idle native run. */
+  hasReclaimedSharedRun?(): boolean;
   /** Canonical physical Skill identities frozen at native runtime startup. */
   readonly disabledSkillPaths?: readonly string[];
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
@@ -2757,6 +2772,8 @@ export interface AgentSessionHandle {
   getUsageSnapshot(): UsageSnapshot;
   /** Replayable authoritative usage for Host-synthesized terminal events. */
   getPendingTurnUsage?(): Record<string, unknown> | undefined;
+  /** True only while a delivered reply is waiting for automatic compaction. */
+  isCompactingDeliveredReply?(): boolean;
 
   /** Structured context usage breakdown. Only Claude Code implements this today. */
   getContextUsage?(): Promise<ContextUsageData>;

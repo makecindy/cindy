@@ -138,7 +138,7 @@ export function createHostService(deps) {
         return { status: 201, body: await deps.createSession(body) };
     }
     if (url.pathname === '/api/sessions/update') {
-        return { status: 200, body: await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {}) };
+        return { status: 200, body: await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {}, body.deleteTarget !== undefined ? { deleteTarget: body.deleteTarget } : undefined) };
     }
     if (url.pathname === '/api/sessions/set-effort') {
       // The desktop's set-effort, set-fast-mode and set-thinking-enabled, with their IPC arguments.

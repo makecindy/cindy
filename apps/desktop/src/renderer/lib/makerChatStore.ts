@@ -5233,6 +5233,8 @@ function applyInputProjection(
     const authRetryProjectionError =
       s._authRetryPersistOnProjectionError &&
       projection.error &&
+      // A cold queue snapshot can describe a previous refusal without a new send.
+      !(projection.queuePaused && projection.error === '[REMOTE_COMPAT_MODE_UNSUPPORTED]') &&
       projection.pendingQueue.some(
         (q) => q.clientId === s._authRetryPersistOnProjectionError!.clientId,
       )

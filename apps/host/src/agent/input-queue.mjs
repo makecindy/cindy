@@ -472,6 +472,7 @@ export function createInputQueue(deps) {
         getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
       }),
       isTurnRunning: executor.isRunning,
+      isTurnRecovering: executor.isRecovering,
       /** Closes a task's idle runtime with the executor letting go of it first (turn-executor.mjs). */
       closeRuntime: id => { assertCurrent(); return executor.closeRuntime(id); },
       /** This runtime's context recovery rollover (null when recovery is not assembled). */
