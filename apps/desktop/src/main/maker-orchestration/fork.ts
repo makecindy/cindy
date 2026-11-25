@@ -456,8 +456,54 @@ async function resolveForkNativeSource(
       ))
   ) {
     const parsed = parsedNextSwitch;
-    if (!parsed?.fromSdkSessionId) {
+    if (!parsed) {
       throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话不可用');
+    }
+    // Harness 切换边界可能没有留下可恢复的原生会话编号，例如旧版本
+    // 创建的边界、会话迁移或引擎从未真正启动的片段。可见消息仍然是完整的，
+    // 这时复制历史并在新任务中重建交接，比直接让用户无法 fork 更可靠。
+    if (!parsed.fromSdkSessionId) {
+      const model = parsed.fromModel ?? source.model;
+      let providerId: string | null;
+      if (Object.hasOwn(parsed, 'fromProviderId')) {
+        providerId = parsed.fromProviderId ?? null;
+      } else {
+        const previousSwitch = await client.queryOne<{ content: string }>(
+          `SELECT content FROM messages
+            WHERE session_id = ?
+              AND role = 'agent_switch'
+              AND rewind_at IS NULL
+              AND (created_at < ? OR (created_at = ? AND rowid < ?))
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT 1`,
+          positionParams,
+        );
+        const previousBoundary = previousSwitch
+          ? parseAgentSwitchBoundary(previousSwitch.content)
+          : null;
+        if (
+          previousBoundary?.toAgentKind === parsed.fromAgentKind &&
+          Object.hasOwn(previousBoundary, 'toProviderId')
+        ) {
+          providerId = previousBoundary.toProviderId ?? null;
+        } else if (parsed.fromAgentKind === normalizeDbAgentKind(source.agentKind)) {
+          providerId = source.providerId;
+        } else if (parsed.fromAgentKind === 'codex') {
+          providerId = inferProviderIdForModel(model, 'codex');
+        } else {
+          providerId = null;
+        }
+      }
+      return {
+        agentKind: parsed.fromAgentKind,
+        agentDeviceId,
+        sdkSessionId: null,
+        model,
+        providerId,
+        nextSwitch: { createdAt: nextSwitch.created_at, rowid: nextSwitch.rowid },
+        reuseVendorSession: false,
+        rebuildReason: 'native-session-recovery',
+      };
     }
     const model = parsed.fromModel ?? source.model;
     let providerId: string | null;

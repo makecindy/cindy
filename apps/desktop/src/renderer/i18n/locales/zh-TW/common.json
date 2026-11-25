@@ -6823,6 +6823,7 @@
           "guide": {
             "usageLabel": "怎麼用",
             "usageBody": "在 X 上發一則推文 @askmycindy，任務就會派到這臺裝置上執行，結論會以回覆傳回給你。",
+            "usageBodyOnDevice": "在 X 上發一則推文 @askmycindy，任務就會派到「{{device}}」上執行，結論會以回覆傳回給你。",
             "riskLabel": "回覆是公開的",
             "riskPublicBody": "回覆是公開推文，任何人都能看到。適合公開提問、解決問題；不適合處理私事，以免暴露隱私。",
             "riskWorkdirBody": "X 任務都落在 X 連線設定裡的預設專案，Agent 能讀寫其中檔案，而結論會公開回覆 —— 預設專案指到私密儲存庫時，檔案內容可能隨之公開。",
@@ -9182,6 +9183,7 @@
         "taskWorkdirBoundary": "工作目錄沿用目標電腦的設定，請在目標電腦修改。",
         "configurationLoading": "正在讀取設定…",
         "configurationReadFailed": "未能讀取設定。",
+        "settingsWriteUnconfirmed": "無法確認儲存結果。請重新整理設定，確認後再決定是否重試。",
         "refreshConfiguration": "重新整理設定",
         "enableBeforeConfigure": "插件已停用，請先開啟上方開關，再進行設定。",
         "settingsPageUnavailable": "請在 {{device}} 的 Cindy 中開啟此插件的設定頁，目標電腦目前版本暫不支援遠端顯示。",
@@ -12530,6 +12532,12 @@
       "arrivingLater": "{{name}} 已換到這台電腦，還在準備中，稍後會出現在夥伴列表裡",
       "arrivalPermissions": "{{name}} 已依這台電腦的預設權限運作。",
       "arrivalModel": "{{name}} 先前選的模型在這台電腦上無法使用，已改用這台電腦的預設模型。",
+      "arrivalModelSetup": "{{name}} 已來到這台電腦，但還沒有可用模型。請連接模型供應商，或在這位夥伴的「設定 → 模型」選擇模型。",
+      "arrivalPartialContent": "{{name}} 已來到這台電腦，部分雲端內容未能恢復，原內容仍保留在雲端。",
+      "missingProfileTitle": "用初始資料繼續 {{name}}？",
+      "missingProfileDescription": "原主力電腦還沒上傳 {{name}} 的人設與簡介。如果原電腦已重裝或無法恢復，可以在這台電腦用初始資料繼續，已同步到雲端的對話和內容仍會保留。",
+      "missingProfileConfirm": "用初始資料繼續",
+      "missingProfileFailed": "{{name}} 的資料尚未上傳到雲端",
       "busyTitle": "{{name}} 還在回覆",
       "busyDescription": "可以等這一輪結束後再換到「{{device}}」，也可以停止這一輪馬上換。",
       "busyWait": "等回覆完再換",
@@ -15512,6 +15520,7 @@
       "modelCatalogUnconfirmed": "暫時無法確認模型清單。已保留你選擇的模型，可重新整理模型清單後重試。",
       "actionScheduled": "這次操作的任務授權已失效。下一輪仍會按計畫執行。",
       "actionExpired": "這次操作的任務授權已失效。請查看自動化最近一次執行的結果。",
+      "modelRebuildRetry": "指令尚未傳送。請在電腦上開啟自動化，選擇「立即執行」重試。",
       "actionRecovered": "這次操作的授權已失效。同一自動化後來已成功執行。",
       "text": "先前有自動執行失敗。",
       "prCheck_dns": "{{device}} 無法解析 {{host}}。若問題持續，請檢查這台裝置的網路或 DNS。已連續失敗 {{failures}} 次。自 {{retry}} 起，定期檢查可自動重試。",
@@ -17880,7 +17889,7 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動化未執行，因為繫結的任務使用插件引擎。請將任務切回內建引擎，或將自動化重新繫結到使用內建引擎的任務。",
+      "boundPluginEngineRecovery": "自動化未執行。繫結到插件引擎任務的自動化會沿用任務自己的模型，並在這台電腦上執行。如果自動化裡指定了模型，請先移除，再重新執行。",
       "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",
@@ -18232,6 +18241,7 @@
       "timingMode": {
         "cron": "Cron 定時",
         "interval": "相對間隔",
+        "label": "計時方式",
         "cronHint": "按照日曆時鐘的固定時間槽位執行。",
         "intervalHint": "上一次執行完成後，再等待指定時長。",
         "intervalUnsupportedHint": "當前精確間隔會原樣保留；選擇分鐘或小時預設後才會替換。",
