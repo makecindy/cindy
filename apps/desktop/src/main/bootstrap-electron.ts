@@ -5403,11 +5403,11 @@ const registerIpcHandlers = () => {
     clearTimeout(summaryTimer);
     stopIslandUpdates();
   });
-  setSessionsSubscribedListener((controllerDeviceId) => {
+  setSessionsSubscribedListener((controllerDeviceId, sessionId) => {
     publishHostTaskActivity(readHostActivity, controllerDeviceId);
     getAgentIslandService()?.replaySessionActivity((payload) => {
       pushSessionActivityToController(controllerDeviceId, payload);
-    });
+    }, sessionId);
   });
 
   // macOS 菜单栏余量:原生 helper 在 Agent Island 之后启动,复用它的任务活动订阅。
