@@ -263,6 +263,159 @@ describe('a queued operation stopped before it was written', () => {
   });
 });
 
+// Maintainer review 10:36 #1: a result belongs to the account, computer and operation, not to the connection epoch.
+// Going offline and coming back are separate events inserted between a request's enqueue, its last check before the
+// write (dequeue), the write and its reply, for every kind of operation:
+// - never written (stopped at the dequeue check because the computer went offline while it was queued): a begin fails
+//   and frees the management slot; an answer or cancel leaves its operation as the computer reports it; a lookup that
+//   lands later never turns it back into an unknown result;
+// - written, reply lost: unknown, looked up only, never sent again.
+// Minimal failing input: enqueue → offline → dequeue refused → reconnect (b93ba486..51996243 kept the slot taken).
+// The begin orders fail before this change; the answer and cancel orders also pass on the old code (existing behaviour).
+// Tier: unit (in-memory Host, every valid order enumerated).
+describe('offline and reconnect between enqueue, dequeue, write and reply', () => {
+  type Target = 'begin' | 'answer' | 'cancel';
+  type Step = 'offline' | 'online' | 'dequeue' | 'reply' | 'query';
+  const lost = () => { const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no reply after first socket write'); error.inFlight = true; return error; };
+  const notFound = () => Object.assign(new Error('forgotten'), { code: 'NOT_FOUND' });
+  const orderings = (items: Step[]): Step[][] => items.length <= 1 ? [items]
+    : items.flatMap((first, index) => orderings([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [first, ...rest]));
+  const at = (order: Step[], step: Step) => order.indexOf(step);
+  // Never written: offline comes before the dequeue check; the reconnect's lookup comes after the reconnect.
+  const refusedOrders = orderings(['offline', 'online', 'dequeue', 'query'])
+    .filter((o) => at(o, 'offline') < at(o, 'dequeue') && at(o, 'offline') < at(o, 'online') && at(o, 'online') < at(o, 'query'));
+  // Written: the dequeue check passes first, then the reply is lost somewhere among going offline and coming back.
+  const writtenOrders = orderings(['reply', 'offline', 'online', 'query'])
+    .filter((o) => at(o, 'offline') < at(o, 'online') && at(o, 'online') < at(o, 'query')).map((o): Step[] => ['dequeue', ...o]);
+  function rig(target: Target, lookup: () => unknown) {
+    const written: string[] = [];
+    const gates = new Map<string, ReturnType<typeof deferred<void>>>();
+    const gate = (name: string) => { if (!gates.has(name)) gates.set(name, deferred<void>()); return gates.get(name)!; };
+    let holding = false;
+    const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+      options?.preSend?.();
+      const request = args?.[0] as Envelope | undefined;
+      const held = holding && request?.actionId === `management:${target}`;
+      const query = holding && request?.actionId === 'management:operation';
+      if (held) await gate('dequeue').promise;
+      options?.preSend?.();
+      options?.onRequestWritten?.();
+      if (channel.endsWith(':manifest')) return capability;
+      written.push(request!.actionId);
+      if (held) { await gate('reply').promise; throw lost(); }
+      if (query) { await gate('query').promise; return { effects: [], result: lookup() }; }
+      if (request!.actionId === 'management:snapshot') return { effects: [], result: snapshot() };
+      if (request!.actionId === 'management:market-detail') return { effects: [], result: detail };
+      if (request!.actionId === 'management:begin') return { effects: [], result: target === 'answer' ? confirmation() : target === 'cancel' ? receipt('running') : receipt('succeeded') };
+      if (request!.actionId === 'management:cancel') return { effects: [], result: receipt('cancelled') };
+      return { effects: [], result: receipt('succeeded') };
+    }) as unknown as PluginManagementInvoke;
+    const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }),
+      { createOperationId: () => 'operation-1', pollIntervalMs: 60_000 });
+    controllers.push(c);
+    const flush = async () => { for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+    const run = async (order: Step[]) => {
+      for (const step of order) {
+        if (step === 'offline') c.setOnline(false);
+        else if (step === 'online') c.setOnline(true);
+        else if (step === 'dequeue') gate('dequeue').resolve();
+        else if (step === 'reply') gate('reply').resolve();
+        else gate('query').resolve();
+        await flush();
+      }
+    };
+    return { c, written, run, hold: (value: boolean) => { holding = value; }, flush,
+      count: (action: string) => written.filter((id) => id === `management:${action}`).length };
+  }
+  const begins = [
+    ['disable', (c: ReturnType<typeof createPluginManagementController>) => c.setEnabled(plugin, false)],
+    ['uninstall', (c: ReturnType<typeof createPluginManagementController>) => c.uninstall(plugin)],
+    ['update', (c: ReturnType<typeof createPluginManagementController>) => c.install(detail, plugin)],
+  ] as const;
+  describe.each(begins)('begin (%s)', (_kind, startOperation) => {
+    it.each(refusedOrders.map((o) => [o.join(' → '), o] as const))('never written: %s', async (_label, order) => {
+      const r = rig('begin', () => { throw notFound(); });
+      await r.c.refresh();
+      r.hold(true);
+      void startOperation(r.c);
+      await r.flush();
+      await r.run(order);
+      expect(r.count('begin')).toBe(0);
+      expect(r.c.getState()).toMatchObject({ outcome: 'failed', busy: false });
+      // The slot is free: the next operation starts and is written once.
+      r.hold(false);
+      await startOperation(r.c);
+      expect(r.count('begin')).toBe(1);
+      expect(r.c.getState().outcome).toBe('succeeded');
+    });
+    it.each(writtenOrders.map((o) => [o.join(' → '), o] as const))('written, reply lost: %s', async (_label, order) => {
+      const r = rig('begin', () => { throw notFound(); });
+      await r.c.refresh();
+      r.hold(true);
+      void startOperation(r.c);
+      await r.flush();
+      await r.run(order);
+      expect(r.count('begin')).toBe(1);
+      expect(r.c.getState()).toMatchObject({ outcome: 'unknown', operationId: 'operation-1' });
+      // Held as unknown: another start sends nothing; the reconnect only looked the operation up.
+      await startOperation(r.c);
+      expect(r.count('begin')).toBe(1);
+      expect(r.count('operation')).toBeGreaterThan(0);
+    });
+  });
+  describe('answer', () => {
+    it.each(refusedOrders.map((o) => [o.join(' → '), o] as const))('never written: %s', async (_label, order) => {
+      // The computer still waits for the answer; its lookup returns the consent.
+      const r = rig('answer', () => confirmation());
+      await r.c.refresh(); await r.c.install(detail, plugin);
+      expect(r.c.getState().outcome).toBe('confirmation');
+      r.hold(true);
+      void r.c.answer(true);
+      await r.flush();
+      await r.run(order);
+      expect(r.count('answer')).toBe(0);
+      expect(r.c.getState()).toMatchObject({ outcome: 'confirmation', busy: false });
+      r.hold(false);
+      await r.c.answer(true);
+      expect(r.count('answer')).toBe(1);
+      expect(r.c.getState().outcome).toBe('succeeded');
+    });
+    it.each(writtenOrders.map((o) => [o.join(' → '), o] as const))('written, reply lost: %s', async (_label, order) => {
+      const r = rig('answer', () => receipt('running'));
+      await r.c.refresh(); await r.c.install(detail, plugin);
+      r.hold(true);
+      void r.c.answer(true);
+      await r.flush();
+      await r.run(order);
+      expect(r.count('answer')).toBe(1);
+      expect(r.c.getState()).toMatchObject({ outcome: 'running', busy: false });
+    });
+  });
+  describe('cancel', () => {
+    it.each(refusedOrders.map((o) => [o.join(' → '), o] as const))('never written: %s', async (_label, order) => {
+      const r = rig('cancel', () => receipt('running'));
+      await r.c.refresh(); await r.c.uninstall(plugin);
+      expect(r.c.getState().outcome).toBe('running');
+      r.hold(true);
+      void r.c.cancel();
+      await r.flush();
+      await r.run(order);
+      expect(r.count('cancel')).toBe(0);
+      expect(r.c.getState()).toMatchObject({ outcome: 'running', busy: false });
+    });
+    it.each(writtenOrders.map((o) => [o.join(' → '), o] as const))('written, reply lost: %s', async (_label, order) => {
+      const r = rig('cancel', () => receipt('cancelled'));
+      await r.c.refresh(); await r.c.uninstall(plugin);
+      r.hold(true);
+      void r.c.cancel();
+      await r.flush();
+      await r.run(order);
+      expect(r.count('cancel')).toBe(1);
+      expect(r.c.getState()).toMatchObject({ outcome: 'cancelled', busy: false });
+    });
+  });
+});
+
 describe('mobile management transactions', () => {
   it('submits only the active consent request and preserves Host failure receipts', async () => {
     const h = host((r) => r.actionId === 'management:begin' ? confirmation() : { ...receipt('failed'), errorCode: 'PACKAGE_CHANGED' });
@@ -312,7 +465,9 @@ describe('mobile management transactions', () => {
     expect(c.getState().outcome).toBe('confirmation');
     h.setFacts(snapshot([{ ...plugin, approval: { state: 'invalid' } }]));
     await c.answer(true);
-    expect(c.getState()).toMatchObject({ outcome: 'unknown', errorCode: 'PLUGIN_INSTALL_CHANGED' });
+    // Allow was never written, so the operation still waits on the computer: the consent stays (Reject still works)
+    // with the reason, instead of an unknown result (maintainer review 10:36: an unwritten request releases its hold).
+    expect(c.getState()).toMatchObject({ outcome: 'confirmation', busy: false, errorCode: 'PLUGIN_INSTALL_CHANGED' });
     expect(h.requests.some((r) => r.actionId === 'management:answer')).toBe(false);
   });
   it('preserves committed success when cancellation races the original begin response', async () => {
@@ -337,7 +492,10 @@ describe('mobile management transactions', () => {
     await c.cancel();
     expect(() => preSend()).toThrow('PLUGIN_MANAGEMENT_STALE');
     queued.reject(new Error('cancelled before send')); await start;
-    expect(c.getState().outcome).toBe('running');
+    // The begin was never written (no write receipt), so the operation never existed on the computer: whatever the
+    // cancel reply said, it ends as a plain failure and frees the slot (maintainer review 10:36).
+    expect(c.getState()).toMatchObject({ outcome: 'failed', busy: false });
+    expect(h.requests.some((r) => r.actionId === 'management:begin')).toBe(false);
   });
   it.each(['begin', 'answer', 'cancel'] as const)('permanently fences queued %s across offline and online epochs', async (action) => {
     const queued = deferred<unknown>(); let preSend!: () => void;

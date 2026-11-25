@@ -132,6 +132,16 @@
     | 首次写出前过期（`BACKPRESSURE`） | 0 次 | 不调用 | 失败，可重试 |
     | 写出后回包超时或断线 | 1 次 | 调用 | 结果未知，只查原操作 |
     | 写出后重发前校验拦下 | 1 次 | 调用 | 结果未知，只查原操作 |
+    | 排队中电脑离线，出队前校验拦下，之后重连（维护者 10:36 #1） | 0 次 | 不调用 | begin：失败、放开管理位置；answer / cancel：操作保持电脑上的状态 |
+    | 写出后离线、回包超时、重连 | 1 次 | 调用 | 结果未知，只查原操作 |
+
+  - 结论属于「账号 + 电脑 + 操作号」，不属于连接代次（维护者 10:36）：离线或重连推进的 `epoch` 只拦旧请求的读取结果，
+    不丢弃同一操作的确定结论。controller 的 `undecided(id)` 判断「还是这台电脑、这个账号、这个操作且尚无最终结论」：
+    确定没写出的 begin 跨在线状态变化也结束为失败；answer / cancel 没写出时只放开忙碌状态，操作状态以电脑为准（重连时
+    查询）。操作一旦有最终结论（成功、取消、失败），之后迟到的查询、回执或失败都不再改动它。只有换账号、换目标电脑、
+    销毁 controller 或开始另一个操作才丢弃旧结论。`pluginManagement.test.ts`「offline and reconnect between enqueue,
+    dequeue, write and reply」把离线、重连作为独立事件插进 begin（停用、卸载、升级）、answer、cancel 的入队、出队、
+    写出、回包之间，枚举全部合法顺序。
 
 - 确认面板（全新安装与升级共用 `PluginManagementConfirmation(.ios).tsx`，文字由 `pluginConsentPresentation.ts`
   统一给出，提案实现，待维护者确认）：

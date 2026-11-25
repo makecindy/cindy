@@ -67,6 +67,16 @@ export function createPluginManagementController(client: PluginManagementClient,
   const listeners = new Set<() => void>();
   const current = (token: number) => !disposed && epoch === token && client.isCurrent();
   /**
+   * A result about operation `id` belongs to this account, computer and operation, not to a connection epoch: going
+   * offline (or coming back) between a request and its result must not discard it. Only a changed account or target
+   * (client.isCurrent), disposal, or another operation drops it. Once the operation has a final outcome, nothing later
+   * (a late query, receipt or failure) changes it again.
+   */
+  const undecided = (id: string | null) => !disposed && client.isCurrent() && !!id && state.operationId === id
+    && !['succeeded', 'cancelled', 'failed'].includes(state.outcome);
+  /** The request was definitely never written (the transport reported no write): its operation did not change. */
+  const notWritten = (error: unknown) => error instanceof PluginManagementRequestError && !error.outcomeUnknown;
+  /**
    * Set while an unknown result's receipt is gone (NOT_FOUND): every installed snapshot that lands afterwards and is
    * the newest read issued becomes the facts for that result. A newer read replaces older facts (so a market check
    * still reading on them stops), and while the newest read is in flight no facts are published.
@@ -137,7 +147,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     return snapshot;
   }
   async function acceptReceipt(receipt: PluginManagementReceipt, token: number) {
-    if (!current(token) || receipt.operationId !== state.operationId) return;
+    if (!current(token) || !undecided(receipt.operationId)) return;
     const consumed = receipt.phase === 'succeeded' && uiConsentOperation ? receiver : undefined;
     // Keep only the latest in-flight display read displaced by this successful
     // receipt. It is a fallback for failed readback, never a new remote request.
@@ -216,7 +226,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (state.busy || (state.operationId && !['succeeded', 'cancelled', 'failed'].includes(state.outcome))) return;
     if (state.capability !== 'supported') { publish({ errorCode: state.capability === 'unsupported' ? 'PLUGIN_MANAGEMENT_UNSUPPORTED' : 'PLUGIN_MANAGEMENT_NOT_READY' }); return; }
     const token = ++epoch;
-    let began = false;
+    let began = false, operationId: string | null = null;
     publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle', approval: null,
       expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null });
     const installed = intent.installed;
@@ -252,15 +262,24 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (!receiverCurrent(snapshot)) throw new Error('PLUGIN_INSTALL_CHANGED');
       if ((intent.kind === 'approve-ui' || intent.kind === 'defer-ui') && !snapshot.uiCapabilityApproval)
         throw new PluginManagementRequestError('PLUGIN_UI_APPROVAL_UNSUPPORTED');
-      const operationId = (options.createOperationId ?? randomUUID)();
+      operationId = (options.createOperationId ?? randomUUID)();
       publish({ operationId, outcome: 'running' });
       began = true;
       await acceptReceipt(await client.begin({ ...request, operationId,
         ...(snapshot.uiCapabilityApproval ? { uiConsentVersion: 1 } : {}) }, () => current(token)
         && state.online && !!facts && receiverCurrent(facts)), token);
     } catch (error) {
+      // Maintainer review 10:36 #1: a begin stopped before it was written (for example by the last check after the
+      // computer went offline while it was queued) is a plain failure of this operation, even though going offline
+      // moved the epoch and marked it unknown meanwhile; it frees the management slot, and a later query cannot
+      // turn it back into an unknown result.
+      if (began && notWritten(error) && undecided(operationId)) {
+        publish({ busy: false, outcome: 'failed', errorCode: pluginManagementErrorCode(error) });
+        return;
+      }
       if (!current(token)) return;
-      const unknown = began && (!(error instanceof PluginManagementRequestError) || error.outcomeUnknown);
+      if (began && !undecided(operationId)) return;
+      const unknown = began && !notWritten(error);
       publish({ busy: false, outcome: unknown ? 'unknown' : 'failed', errorCode: pluginManagementErrorCode(error) });
     }
   }
@@ -276,7 +295,8 @@ export function createPluginManagementController(client: PluginManagementClient,
     publish({ busy: true, missingReceiptFacts: null });
     try { await acceptReceipt(await client.operation(id), token); }
     catch (error) {
-      if (!current(token)) return;
+      // A late lookup never reopens an operation that has a final outcome meanwhile (see `undecided`).
+      if (!current(token) || !undecided(id)) return;
       // NOT_FOUND can mean Host restart or its 15-minute memory expiry. Never infer rollback or send begin again.
       const code = pluginManagementErrorCode(error);
       const gone = code === 'NOT_FOUND';
@@ -329,7 +349,10 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (current(token)) await acceptReceipt(await client.answer(receipt.operationId, receipt.consent.requestId, confirmed,
         () => current(token) && state.online && (!confirmed || (!!facts && receiverCurrent(facts))), recordApproval), token);
     } catch (error) {
-      if (current(token)) publish({ busy: false, outcome: 'unknown', errorCode: pluginManagementErrorCode(error) });
+      // Never written: the operation still waits for this answer on the computer, unchanged. Release busy and keep
+      // its state (the consent, or unknown if the computer went offline meanwhile, which the reconnect looks up).
+      if (notWritten(error) && undecided(receipt.operationId)) { publish({ busy: false, errorCode: pluginManagementErrorCode(error) }); return; }
+      if (current(token) && undecided(receipt.operationId)) publish({ busy: false, outcome: 'unknown', errorCode: pluginManagementErrorCode(error) });
     }
   }
   async function cancel() {
@@ -340,7 +363,15 @@ export function createPluginManagementController(client: PluginManagementClient,
     stopPolling();
     publish({ busy: true, errorCode: null });
     try { await acceptReceipt(await client.cancel(id, () => current(token) && state.online), token); }
-    catch (error) { if (current(token)) publish({ busy: false, outcome: 'unknown', errorCode: pluginManagementErrorCode(error) }); }
+    catch (error) {
+      // Never written: the operation runs on as before (same rule as an unwritten answer).
+      if (notWritten(error) && undecided(id)) {
+        publish({ busy: false, errorCode: pluginManagementErrorCode(error) });
+        schedulePoll();
+        return;
+      }
+      if (current(token) && undecided(id)) publish({ busy: false, outcome: 'unknown', errorCode: pluginManagementErrorCode(error) });
+    }
   }
   const unsubscribeOwner = subscribeMobileAuthOwner(() => {
     if (client.isCurrent()) return;
