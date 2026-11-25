@@ -48,6 +48,8 @@ export interface ExtractedStep {
   signIn?: boolean;
   /** Keys (`hiddenFieldKeys`) of shrunken fields this step took in; passed back to keep them once focus moves. */
   hiddenFields?: string[];
+  /** Tree places of those shrunken fields in this read, to tell them from the step's ordinary fields. */
+  hiddenRefs?: string[];
 }
 
 /** Keep verified page metadata even when its controls cannot form a complete step. */
@@ -229,7 +231,8 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
   const documents = snapshot.nodes.filter((node) => node.role === 'AXWebArea').sort((a, b) => b.ref.length - a.ref.length);
   const documentOf = (node: NativeAxNode) => {
     const area = documents.find((candidate) => isWithin(node.ref, candidate.ref));
-    return area ? area.url ?? `ref:${area.ref}` : '';
+    // A frame that only rewrites its fragment (`#sent`) is still the same document.
+    return area ? area.url?.split('#')[0] ?? `ref:${area.ref}` : '';
   };
   const keysOf = (node: NativeAxNode) => hiddenFieldKeys(node, documentOf(node));
   // Taken in by the hidden-field rule itself: focused now, or found focused earlier in this step.
@@ -237,7 +240,8 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
     (!!node.focused || keysOf(node).some((key) => confirmedHidden?.has(key)));
   const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb, takenHidden)) : pageMissing ? [] : nodes;
   // Only fields the hidden-field rule took in are remembered, never zero-size fields kept for the viewport edge.
-  const hiddenFields = scoped.filter((node) => !visible(node, []) && takenHidden(node)).flatMap(keysOf);
+  const hiddenNodes = scoped.filter((node) => !visible(node, []) && takenHidden(node));
+  const hiddenFields = hiddenNodes.flatMap(keysOf);
 
   // Modal sheets take over the window.
   const sheet = scoped.find((node) => node.role === 'AXSheet');
@@ -474,7 +478,7 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
     ...(deviceCode ? { deviceCode } : {}),
     ...(pageMissing ? { pageMissing } : {}),
     ...(signIn ? { signIn } : {}),
-    ...(hiddenFields.length ? { hiddenFields } : {}),
+    ...(hiddenFields.length ? { hiddenFields, hiddenRefs: hiddenNodes.map((node) => node.ref) } : {}),
   };
 }
 

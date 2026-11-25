@@ -35,10 +35,12 @@ describe('InputHandoffSession', () => {
   // code (tree positions shift); `trap` drops a line so a never-focused 1x1 field of the same kind takes the code
   // field's old place; `frame` holds the code in a frame and adds a line above the frame. `staleOnce`: the first
   // native fill of the code reports the element stale, as after a re-render.
-  type PayLayout = 'focus' | 'insert' | 'trap' | 'frame';
+  // `fragment`: the code's frame only rewrites its address fragment once the phone is typed. `twoSteps`: confirming
+  // moves to a password step on the same address that remounts a never-focused 1x1 field with the code's id.
+  type PayLayout = 'focus' | 'insert' | 'trap' | 'frame' | 'fragment' | 'twoSteps';
   function payPage(options: { layout?: PayLayout; staleOnce?: boolean } = {}) {
     const layout = options.layout ?? 'focus';
-    const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce };
+    const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce, secondStep: false };
     const acts: Array<{ kind: string; ref?: string }> = [];
     const chrome = { pid: 20, app: 'Google Chrome', bundleId: 'com.google.Chrome' };
     const n = (ref: string, role: string, extra: Record<string, unknown> = {}) =>
@@ -47,14 +49,21 @@ describe('InputHandoffSession', () => {
       const out = [n('0', 'AXWebArea', { url: 'https://secure.example.test/pay', frame: [0, 60, 1200, 840] })];
       let i = 0;
       const next = () => `0.${++i}`;
+      if (state.secondStep) {
+        out.push(n(next(), 'AXTextField', { title: 'Password', secure: true, frame: [460, 300, 260, 30], focused: state.focus === 'password' }));
+        out.push(n(next(), 'AXTextField', { domId: 'sms-code', frame: [460, 440, 1, 1] }));
+        out.push(n(next(), 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }));
+        return out;
+      }
       out.push(n(next(), 'AXTextField', { title: 'Phone', frame: [460, 300, 260, 30], focused: state.focus === 'phone' }));
-      const note = layout === 'trap' ? !state.phoneTyped : layout !== 'focus' && state.phoneTyped;
+      const note = layout === 'trap' ? !state.phoneTyped : ['insert', 'frame'].includes(layout) && state.phoneTyped;
       if (note) out.push(n(next(), 'AXStaticText', { value: 'Check the phone number', frame: [460, 340, 200, 16] }));
       out.push(n(next(), 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }));
       const code = { domId: 'sms-code', frame: [460, 440, 1, 1], focused: state.focus === 'code' };
-      if (layout === 'frame') {
+      if (layout === 'frame' || layout === 'fragment') {
         const frameRef = next();
-        out.push(n(frameRef, 'AXWebArea', { url: 'https://secure.example.test/sms', frame: [440, 400, 320, 120] }));
+        const address = layout === 'fragment' && state.phoneTyped ? 'https://secure.example.test/sms#sent' : 'https://secure.example.test/sms';
+        out.push(n(frameRef, 'AXWebArea', { url: address, frame: [440, 400, 320, 120] }));
         out.push(n(`${frameRef}.1`, 'AXTextField', code));
       } else out.push(n(next(), 'AXTextField', code));
       if (layout === 'trap') out.push(n(next(), 'AXTextField', { domId: 'bot-trap', frame: [460, 460, 1, 1] }));
@@ -71,7 +80,11 @@ describe('InputHandoffSession', () => {
         const ref = (request as { ref?: string }).ref;
         acts.push({ kind: request.kind, ref });
         if (request.kind === 'text') {
-          if (ref === '0.1') { state.focus = 'phone'; state.phoneTyped = true; } else if (state.stale) { state.stale = false; return { error: 'stale' }; } else state.focus = 'code';
+          if (state.secondStep) state.focus = 'password';
+          else if (ref === '0.1') { state.focus = 'phone'; state.phoneTyped = true; } else if (state.stale) { state.stale = false; return { error: 'stale' }; } else state.focus = 'code';
+        } else if (layout === 'twoSteps' && !state.secondStep) {
+          state.secondStep = true;
+          state.focus = 'none';
         }
         return { ok: true };
       },
@@ -90,6 +103,7 @@ describe('InputHandoffSession', () => {
     { name: 'another hidden field takes its old place', layout: 'trap' as const, typed: ['0.1', '0.3'] },
     { name: 'its frame moves down the tree', layout: 'frame' as const, typed: ['0.1', '0.4.1'] },
     { name: 'the fill finds it stale once', layout: 'focus' as const, staleOnce: true, typed: ['0.1', '0.3', '0.3'] },
+    { name: 'its frame rewrites the address fragment', layout: 'fragment' as const, typed: ['0.1', '0.3.1'] },
   ])('types a hidden code field found focused after an earlier field ($name)', async ({ layout, staleOnce, typed }) => {
     const page = payPage({ layout, staleOnce });
     const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
@@ -102,6 +116,23 @@ describe('InputHandoffSession', () => {
     expect(page.acts.filter((act) => act.kind === 'text').map((act) => act.ref)).toEqual(typed);
     // Then the step is confirmed (the page's button or Return), as after any complete form.
     expect(['press', 'key']).toContain(page.acts.at(-1)?.kind);
+    session.cancel();
+  });
+
+  // PR #12780 review (codex r4692932785): the keys were kept for the whole address, so the next form on the same
+  // address inherited them: a never-focused 1x1 field it remounted with the code's id joined the password step.
+  // Entry: session.submit of the first step, then the next card. Unit tier.
+  it('does not carry a hidden code field over to the next form on the same address', async () => {
+    const page = payPage({ layout: 'twoSteps' });
+    const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
+    await session.start();
+    const first = latest();
+    const texts = first.controls.filter((control) => control.kind === 'text');
+    const values = Object.fromEntries(texts.map((control, i) => [control.id, i === 0 ? '18600000000' : '123456']));
+    await session.submit({ expectedRevision: first.revision, values, action: { kind: 'submit' } });
+    expect(page.state.secondStep).toBe(true);
+    const second = latest();
+    expect(second.controls.filter((control) => control.kind === 'text').map((control) => control.kind === 'text' && control.contentType)).toEqual(['password']);
     session.cancel();
   });
 

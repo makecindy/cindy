@@ -306,9 +306,6 @@ export class InputHandoffSession {
   private fieldPlanRetired = false;
   /** The owner has been asked something, so a screen with nothing to ask means they finished it. */
   private asked = false;
-  /** Shrunken code fields the current step took in while focused; every later read of the step keeps them. */
-  private confirmedHidden = new Set<string>();
-  private confirmedHiddenUrl: string | undefined;
   /** The asked fields went away without an answer through the card: the owner did it on the window. */
   private doneOutside = false;
   private ambiguousTitles: string[] | undefined;
@@ -1301,13 +1298,11 @@ export class InputHandoffSession {
     this.unreadablePage = null;
     let step: ExtractedStep;
     try {
-      // The owner clicking another field of the page moves the focus off a hidden code field; it is still there.
-      step = extractStep(raw as NativeAxSnapshot, this.confirmedHidden);
-      // Fields taken in on another page say nothing about this one.
-      if (this.confirmedHidden.size && step.url !== this.confirmedHiddenUrl) {
-        this.confirmedHidden = new Set();
-        step = extractStep(raw as NativeAxSnapshot);
-      }
+      step = extractStep(raw as NativeAxSnapshot);
+      // The owner clicking another field moves the focus off a hidden code field of the step on the card; it is
+      // still that step's while the page still shows the step's other fields. Another form never inherits it.
+      const kept = this.keptHidden(step);
+      if (kept) step = extractStep(raw as NativeAxSnapshot, kept);
     } catch (error) {
       if (error instanceof IncompleteFormError) {
         this.unreadablePage = error.page;
@@ -1315,8 +1310,6 @@ export class InputHandoffSession {
       }
       throw error;
     }
-    this.confirmedHiddenUrl = step.url;
-    for (const key of step.hiddenFields ?? []) this.confirmedHidden.add(key);
     if (this.options.fields && !this.fieldPlanRetired && step.shown.length) {
       const surface = JSON.stringify([raw.pid, raw.window.title, step.url]);
       this.fieldPlanSurface ??= surface;
@@ -1348,6 +1341,26 @@ export class InputHandoffSession {
     return step;
   }
 
+  /**
+   * The hidden code fields of the step on the card, when a fresh read (taking in only focused ones) is still that
+   * step: same page, and exactly the same ordinary fields. A different form, even one that adds a field, starts
+   * without any.
+   */
+  private keptHidden(fresh: ExtractedStep): ReadonlySet<string> | undefined {
+    const current = this.step;
+    if (!current?.hiddenFields?.length) return undefined;
+    const page = (url: string | undefined) => url?.split('#')[0];
+    if (page(fresh.url) !== page(current.url)) return undefined;
+    const ordinary = (step: ExtractedStep) => {
+      const hidden = new Set(step.hiddenRefs ?? []);
+      return [...step.bindings.values()]
+        .filter((binding) => binding.kind === 'text' && !hidden.has(binding.ref))
+        .map((binding) => binding.identity)
+        .sort();
+    };
+    return JSON.stringify(ordinary(fresh)) === JSON.stringify(ordinary(current)) ? new Set(current.hiddenFields) : undefined;
+  }
+
   /** A browser showing no page, or a page whose address went missing for now. */
   private pageUnknown(step: ExtractedStep): boolean {
     return !!step.pageMissing || (!step.url && isBrowserBundle(this.target?.bundleId ?? ''));
@@ -1372,7 +1385,7 @@ export class InputHandoffSession {
       if ('error' in fresh) return false;
       const matches = binding.kind === 'text'
         // The same hidden code fields stay part of the step here as on every other read of it.
-        ? [...extractStep(fresh, this.confirmedHidden).bindings.values()].filter(candidate => candidate.kind === 'text' &&
+        ? [...extractStep(fresh, new Set(this.step?.hiddenFields ?? [])).bindings.values()].filter(candidate => candidate.kind === 'text' &&
           candidate.identity === binding.identity && candidate.secure === (binding.nativeSecure ?? binding.secure))
         : fresh.nodes.filter((node) => node.fp === binding.fp);
       if (matches.length !== 1 || this.ended) return false;
@@ -1411,7 +1424,7 @@ export class InputHandoffSession {
       JSON.stringify([field.identity, field.nativeSecure ?? field.secure]);
     const expected = fields(step);
     // Typing into an earlier field moves the focus off a hidden code field found focused: it is still this step's.
-    const current = extractStep(raw, new Set([...this.confirmedHidden, ...(step.hiddenFields ?? [])]));
+    const current = extractStep(raw, new Set(step.hiddenFields ?? []));
     if (raw.window.title !== this.target.window.title || current.source.origin !== step.source.origin || current.url !== step.url) return 'origin_changed';
     const actual = fields(current);
     const byIdentity = new Map(actual.map(field => [identity(field), field]));
