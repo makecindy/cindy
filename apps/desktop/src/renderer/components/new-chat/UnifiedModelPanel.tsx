@@ -417,22 +417,25 @@ export interface UnifiedModelPanelProps {
  */
 export function UnifiedModelPanel(props: UnifiedModelPanelProps) {
   const { t } = useTranslation();
-  const placeholder = useRef<HTMLDivElement>(null);
-  const ready = useInitialPaint(() => {
+  const panelRoot = useRef<HTMLDivElement>(null);
+  // The first provider snapshot can arrive while the opening morph is still
+  // transparent. Track the shell's paint independently of the initial catalog.
+  const painted = useInitialPaint(() => true, panelRoot);
+  if (!painted) {
     const localRows = props.providers.reduce((count, provider) =>
       count + Object.values(provider.models).reduce((sum, models) => sum + models.length, 0), 0);
     const remoteRows = props.remoteSources?.groups.reduce((count, group) => count + group.entries.length, 0) ?? 0;
-    return localRows + remoteRows >= 80;
-  }, placeholder);
-  if (!ready) {
-    return <div ref={placeholder} role="status" style={{ height: props.listMaxHeight ?? 428 }} className="flex min-h-0 shrink items-center justify-center px-3 text-13 text-[var(--text-tertiary)]">
-      {t('newChat.modelSelector.trigger.loading')}
-    </div>;
+    if (localRows + remoteRows >= 80) {
+      return <div ref={panelRoot} role="status" style={{ height: props.listMaxHeight ?? 428 }} className="flex min-h-0 shrink items-center justify-center px-3 text-13 text-[var(--text-tertiary)]">
+        {t('newChat.modelSelector.trigger.loading')}
+      </div>;
+    }
   }
-  return <UnifiedModelPanelContent {...props} />;
+  return <UnifiedModelPanelContent {...props} panelRoot={panelRoot} />;
 }
 
 function UnifiedModelPanelContent({
+  panelRoot,
   pinnedTop,
   pinnedTopHasRows = false,
   modelGroupsView,
@@ -493,7 +496,7 @@ function UnifiedModelPanelContent({
   catalogNotice,
   emptyCatalogNotice,
   remoteSources,
-}: UnifiedModelPanelProps) {
+}: UnifiedModelPanelProps & { panelRoot: React.RefObject<HTMLDivElement | null> }) {
   const { t } = useTranslation();
   const [thinkingMemoryVersion, refreshThinkingMemory] = useState(0);
   const storedFavorites = useModelFavorites();
@@ -1585,6 +1588,7 @@ function UnifiedModelPanelContent({
 
   const panelContent = (
     <div
+      ref={panelRoot}
       className="flex min-h-0 min-w-0 shrink"
       style={{ height: `${listMaxHeight ?? 428}px` }}
     >
