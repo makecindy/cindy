@@ -350,6 +350,45 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
     ]);
   });
 
+  // 依据：GLB/GLTF 预览图点开走 3D 查看器，不是看图器；进画廊会让翻页翻到一张静态海报。
+  // 缺口：工具产出与插件卡片回锚两条收集路径此前都不看 modelFile。
+  it('3D 模型预览图不进任务画廊，非 GLB/GLTF 模型的预览图照常进', () => {
+    const model = (format: string) => ({
+      provider: 'cindy' as const,
+      url: `cindy-media://blobs/${'9'.repeat(64)}.glb`,
+      format,
+    });
+    const modelItems: RenderItem[] = [
+      {
+        type: 'tool_media',
+        key: 'm-model',
+        items: [
+          { kind: 'image', url: 'xdt-image://sess/plain.png' },
+          { kind: 'image', url: 'xdt-image://sess/glb-poster.png', modelFile: model('glb') },
+          { kind: 'image', url: 'xdt-image://sess/fbx-poster.png', modelFile: model('FBX') },
+        ],
+      },
+      {
+        type: 'ghost_card',
+        key: 'ghostcard-model',
+        callId: 'card-model',
+        ghostId: 'cindy-art',
+        tool: 'generate',
+        toolCall: { clientId: 'tool-model', role: 'assistant', content: '' } as never,
+        settled: true,
+        media: [
+          { kind: 'image', url: 'xdt-image://sess/gltf-poster.png', modelFile: model('GLTF') },
+          { kind: 'image', url: 'xdt-image://sess/card-plain.png' },
+        ],
+      },
+    ];
+    expect(collectSessionImageSrcs(modelItems, undefined).map((g) => g.src)).toEqual([
+      'xdt-image://sess/plain.png',
+      'xdt-image://sess/fbx-poster.png',
+      'xdt-image://sess/card-plain.png',
+    ]);
+  });
+
   it('回复正文图进入跨回合任务画廊，点开落在对应位置', () => {
     const blob = (char: string) => `cindy-media://blobs/${char.repeat(64)}.png`;
     const [uploaded, before, after, example, live] = ['1', '2', '3', '4', '5'].map(blob);

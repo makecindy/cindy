@@ -378,7 +378,7 @@ import {
   collectGhostCardGalleryImages,
   createGhostCardSpawnIndex,
 } from '@/cindy-brain/ghostCardGallery';
-import { ChatImageView } from './ChatImageView';
+import { ChatImageView, opensModelViewer } from './ChatImageView';
 import {
   galleryImagePreviewItem,
   ImageGalleryContext,
@@ -1459,7 +1459,7 @@ export function collectSessionImageSrcs(
       continue;
     } else if (item.type === 'tool_media') {
       for (const m of item.items) {
-        if (m.kind === 'image' && m.url) push(m.url);
+        if (m.kind === 'image' && m.url && !opensModelViewer(m.modelFile)) push(m.url);
       }
     } else if (item.type === 'ghost_card') {
       if (ghostCards) {
@@ -1474,7 +1474,7 @@ export function collectSessionImageSrcs(
       }
       // 回锚媒体渲染在卡片及其衍生卡之后，画廊顺序必须与 DOM 一致。
       for (const media of item.media ?? []) {
-        if (media.kind === 'image' && media.url) push(media.url);
+        if (media.kind === 'image' && media.url && !opensModelViewer(media.modelFile)) push(media.url);
       }
     } else if (item.type === 'message') {
       const msg = item.message;

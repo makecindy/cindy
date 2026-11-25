@@ -50,6 +50,11 @@ import { isRemoteMediaUrl } from '../../../shared/remoteMediaUrl';
 import { useImageLoadFailure } from './useImageLoadFailure';
 import type { ToolMediaModelFile } from './AgentActionRow';
 
+/** A preview poster that opens the 3D viewer instead of the image viewer (not a gallery image). */
+export function opensModelViewer(modelFile: ToolMediaModelFile | undefined): boolean {
+  return Boolean(modelFile && ['GLB', 'GLTF'].includes(modelFile.format.toUpperCase()));
+}
+
 export type ChatImageVariant = 'user-attached' | 'tool-output';
 
 interface ChatImageViewProps {
@@ -249,11 +254,8 @@ export function ChatImageView({
           // 3D 模型预览图 → 弹 ModelLightbox 直接渲真模型;普通图 → 走 ImageLightbox。
           // model-viewer 只原生支持 glTF/GLB,非此两者退回 2D 预览,
           // 用户仍可右键 "打开模型" 用系统程序打开。
-          onClick={(e) => {
-            const next =
-              modelFile && ['GLB', 'GLTF'].includes(modelFile.format.toUpperCase())
-                ? 'model'
-                : 'image';
+          onClick={() => {
+            const next = opensModelViewer(modelFile) ? 'model' : 'image';
             // 打 image lightbox 前,在被点的这张图上做个临时标记,让 lightbox
             // 精确定位到用户点的这张(而不是按 src 搜到的第一张)。model 路径
             // 不进 gallery,不标记。
