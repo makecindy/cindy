@@ -2739,6 +2739,8 @@ interface ResolvedMcpGatewayCall {
   parsedFromString?: boolean;
   /** 信封被平铺(顶层 name + 顶层 args), 已重建回 {name, args}。 */
   rebuiltEnvelope?: boolean;
+  /** 撞名的内层工具代拉之后仍判不了: 执行与审批两条路径都拒收, 不猜层数(值是内层工具名)。 */
+  unresolvedCollision?: string;
 }
 
 class McpBridgeError extends Error {
@@ -3357,6 +3359,16 @@ interface GatewayArgsResolution {
    * 调用方必须拒收, 不能按普通工具转发(见 callInputError)。
    */
   indeterminateEnvelope?: boolean;
+  /**
+   * 撞名的内层工具代拉之后仍判不了(服务端内层列表没有 schema, 或代拉失败): 两种读法发出去的
+   * 层数不同, 不猜 —— 调用方拒收并指路(见 callInputError 的撞名分支)。值是内层工具名, 供回执点名。
+   */
+  unresolvedCollision?: string;
+  /**
+   * args 与 arguments 两个容器同时给出且不一致(或有一份形态不可用): 发哪份结果不同, 不猜 ——
+   * 调用方拒收(见 callInputError 的双容器分支)。
+   */
+  dualContainers?: boolean;
 }
 
 function parseJsonObject(value: string): Record<string, unknown> | null {
@@ -3368,6 +3380,32 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * 双容器裁决用的规范化序列化: 键序不参与相等判定({a,b} 与 {b,a} 是同一份参数), 深度封顶
+ * 防深嵌套递归。返回 null 表示超深(按「两份不一致」处理, 交回拒收)。
+ */
+function canonicalArgsJson(value: unknown, depth = 0): string | null {
+  if (depth > 32) return null;
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) {
+    const parts: string[] = [];
+    for (const item of value) {
+      const rendered = canonicalArgsJson(item, depth + 1);
+      if (rendered === null) return null;
+      parts.push(rendered);
+    }
+    return '[' + parts.join(',') + ']';
+  }
+  const parts: string[] = [];
+  const entries = Object.keys(value as Record<string, unknown>).sort();
+  for (const key of entries) {
+    const rendered = canonicalArgsJson((value as Record<string, unknown>)[key], depth + 1);
+    if (rendered === null) return null;
+    parts.push(JSON.stringify(key) + ':' + rendered);
+  }
+  return '{' + parts.join(',') + '}';
 }
 
 /** 组合 schema 遍历的预算: 节点数与深度封顶 —— 循环引用、超大 schema 都不能拖住同步路径。 */
@@ -3658,6 +3696,13 @@ interface EnvelopeGroup {
 
 /** 判属性类型时最多看多少个节点: 组合声明可能有环, 也可能很宽。 */
 const SCHEMA_PROPERTY_TYPE_MAX_NODES = 32;
+/**
+ * enum / const 值检查的个数上限。枚举值不占类型判据的节点预算, 也不占声明面的 512 名额 ——
+ * 不单独封顶的话, 服务端给一个上百 KB 的选择器枚举, 权限/执行两条路径上每次类型探测都要
+ * 同步扫完整个数组(Codex P2 on #10908 第 14 轮)。上限与声明面的名字名额(SCHEMA_NAMES_MAX)
+ * 同一量级: 前段看不完的按「看不完」处理, 不假装看完了。
+ */
+const SCHEMA_ENUM_VALUES_MAX = 512;
 
 /**
  * 属性类型判据的三态结论: 容得下(admits)、确认容不下(not)、看不完(exhausted)。
@@ -3680,10 +3725,13 @@ function propertyAdmitsType(root: Record<string, unknown>, property: unknown, ex
     remaining--;
     const type = node.type;
     if (type === expected || (Array.isArray(type) && type.includes(expected))) return 'admits';
-    if (schemaAdmitsTypeByValues(node, expected)) return 'admits';
+    let exhausted = false;
+    // 枚举值检查超预算: 类型证据没看全, 与预算用尽同类 —— 不与「确认容不下」混同。
+    const valuesVerdict = schemaAdmitsTypeByValues(node, expected);
+    if (valuesVerdict === 'admits') return 'admits';
+    exhausted = exhausted || valuesVerdict === 'exhausted';
     // 任一分支容得下就是容得下; 只有「确认容不下」的分支才允许被别的分支翻案,
     // 「看不完」记下来但不能掩盖后面可能存在的容得下。
-    let exhausted = false;
     if (typeof node.$ref === 'string') {
       const resolved = resolveLocalSchemaRef(root, node.$ref);
       if (resolved) {
@@ -3719,14 +3767,19 @@ function propertyAdmitsType(root: Record<string, unknown>, property: unknown, ex
 /**
  * enum / const 不写 type 也把基本类型定死(JSON Schema 语义): 值全是字符串的 enum 就是 string,
  * 对象值的 const / enum 就是 object(Codex P1 on #10908)。混型不推断 —— 字符串里混数字、对象里
- * 混 null 都判不出「像不像」, 当不像处理。
+ * 混 null 都判不出「像不像」, 当不像处理。返回值沿用类型判据的三态: 值检查个数超过
+ * SCHEMA_ENUM_VALUES_MAX 时只看前段, 前段全容得下但还有剩余 → 'exhausted'(类型证据没看全),
+ * 调用方按「表态不完整」处理; 前段里已见不容 → 确认容不下('not')。
  */
-function schemaAdmitsTypeByValues(node: Record<string, unknown>, expected: 'string' | 'object'): boolean {
+function schemaAdmitsTypeByValues(node: Record<string, unknown>, expected: 'string' | 'object'): PropertyTypeVerdict {
   const values = node.const !== undefined ? [node.const] : Array.isArray(node.enum) ? node.enum : null;
-  if (!values || values.length === 0) return false;
-  return values.every((value) => expected === 'string'
-    ? typeof value === 'string'
-    : isPlainRecord(value));
+  if (!values || values.length === 0) return 'not';
+  const limit = Math.min(values.length, SCHEMA_ENUM_VALUES_MAX);
+  for (let index = 0; index < limit; index++) {
+    const value = values[index];
+    if (!(expected === 'string' ? typeof value === 'string' : isPlainRecord(value))) return 'not';
+  }
+  return values.length > SCHEMA_ENUM_VALUES_MAX ? 'exhausted' : 'admits';
 }
 
 /**
@@ -3758,7 +3811,21 @@ function declaredEnvelopeSignals(
     if (argsVerdict === 'admits') signals |= ENVELOPE_ARGS_IS_OBJECT;
   }
   const required = node.required;
-  if (Array.isArray(required) && required.includes('name')) signals |= ENVELOPE_NAME_REQUIRED;
+  if (Array.isArray(required)) {
+    // required 的扫描与声明面同一个上限: 数组长过上限且前段没有 name 时, 这份表态不完整
+    // —— 记截断, 不做整段扫描(Codex P2 on #10908 第 14 轮)。信封的 name 是选择器, 必填时
+    // 都写在 required 前段; 长尾 required 的工具按「判不了」处理, 不假装看完了。
+    const limit = Math.min(required.length, SCHEMA_NAMES_MAX);
+    for (let index = 0; index < limit; index++) {
+      if (required[index] === 'name') {
+        signals |= ENVELOPE_NAME_REQUIRED;
+        break;
+      }
+    }
+    if ((signals & ENVELOPE_NAME_REQUIRED) === 0 && required.length > SCHEMA_NAMES_MAX) {
+      surface.truncated = true;
+    }
+  }
   return signals;
 }
 
@@ -4093,7 +4160,9 @@ function setOwnArgument(target: Record<string, unknown>, key: string, value: unk
  * 同一个参数在顶层与 args 里各给了一份时以 args 为准, 顶层那份记进 shadowed —— 它不出现在
  * 转发的参数里, 不点名就没有人知道服务端为什么按 args 里那个值执行。
  *
- * args/arguments 只有两种形态可用: 对象, 或能解析成对象的 JSON 字符串。
+ * args/arguments 只有两种形态可用: 对象, 或能解析成对象的 JSON 字符串。两个容器同时给出且
+ * 内容不一致(或有一份形态不可用)时整笔调用拒收 —— 容器键不进 shadowed/unmapped, 静默只认
+ * args 等于把 arguments 丢了(见 callInputError 的双容器分支)。
  * 「没传这个键」与「显式传 null」必须分开: 后者是模型给了一个用不了的形态,
  * 静默发 arguments: {} 只会让服务端按缺省值兜底并返回成功。
  */
@@ -4108,6 +4177,23 @@ function normalizeGatewayArgs(
   lookupInnerTool?: InnerToolLookup,
 ): GatewayArgsResolution {
   const provided = record.args !== undefined || record.arguments !== undefined;
+  // 两个容器同时给出: args/arguments 都是网关自留键, 归一化只认 args, 另一份既不进 shadowed
+  // 也不进 unmapped(那两个数组记的是参数键, 不记容器键), 静默丢掉它模型无从知晓 —— 两份
+  // 内容不同时服务端按 args 执行, 模型以为发的是 arguments(实测弱模型会把同一组参数的两个
+  // 别名都填上, 各写一个值)。两份解析后一致时发哪份结果都相同, 不拦; 不一致或有一份形态
+  // 不可用, 这个调用本身有歧义 —— 不猜, 标出来交回给调用方拒收(Codex P1 on #10908 第 14 轮)。
+  let dualContainers = false;
+  if (record.args !== undefined && record.arguments !== undefined) {
+    const usableContainer = (value: unknown): Record<string, unknown> | null => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+      return typeof value === 'string' ? parseJsonObject(value) : null;
+    };
+    const left = usableContainer(record.args);
+    const right = usableContainer(record.arguments);
+    const leftJson = left ? canonicalArgsJson(left) : null;
+    const rightJson = right ? canonicalArgsJson(right) : null;
+    dualContainers = leftJson === null || rightJson === null || leftJson !== rightJson;
+  }
   const raw = record.args !== undefined ? record.args : record.arguments;
   let params: Record<string, unknown> = {};
   let malformed = false;
@@ -4170,9 +4256,11 @@ function normalizeGatewayArgs(
   // 参数对象 —— 内层名恰好与选择器撞名而已。三态判据(与执行前双包裁决同一判据、同一来源):
   // - true  内层确实声明了 args → 容器是内层工具自己的参数对象, 两层都留;
   // - false 内层确实没有 args   → 容器只能是重复信封, 剥一层;
-  // - null  查不到内层 / 判不了 → 照旧剥一层(判不出就按实测撞出来的形状走), 同时把「要不要问
-  //        服务端那份 schema」标出来: 调用方代拉一次内层列表再判一次, 判据按真实 schema 定,
-  //        审批框与真正发出去的参数才一致(Codex P1 on #10908 第 12 轮, 4094 行)。
+  // - null  查不到内层 / 判不了 → 先标「要不要问服务端那份 schema」: 调用方代拉一次内层列表
+  //        再判一次, 判据按真实 schema 定, 审批框与真正发出去的参数才一致(Codex P1 on #10908
+  //        第 12 轮, 4094 行)。代拉之后仍判不了(服务端内层列表没有 schema / 代拉失败)就不再
+  //        照旧剥一层 —— 两种读法发出去的层数不同, 猜层数等于替模型赌; 标 unresolvedCollision
+  //        拒收并指路(Codex P1 on #10908 第 14 轮, 见 resolveInnerSchema)。
   const innerTool = containerLooksEnvelope && lookupInnerTool
     ? lookupInnerTool(params.name as string)
     : null;
@@ -4212,6 +4300,7 @@ function normalizeGatewayArgs(
   if (indeterminateEnvelope) {
     return {
       args: params, provided, malformed, folded, shadowed, unmapped, parsedFromString, indeterminateEnvelope: true,
+      ...(dualContainers ? { dualContainers: true } : {}),
     };
   }
   const flattenedEnvelope = envelopeSchema
@@ -4261,6 +4350,7 @@ function normalizeGatewayArgs(
     shadowed,
     unmapped,
     parsedFromString,
+    ...(dualContainers ? { dualContainers: true } : {}),
     ...(flattenedEnvelope || flattenedEnvelopeNoContainer ? { rebuiltEnvelope: true } : {}),
     ...(innerSchemaPending ? { innerSchemaPending } : {}),
   };
@@ -4501,6 +4591,13 @@ class CindyMcpGateway {
       ? this.tools.get(mcpGatewayKey(server, record.tool)) : undefined;
     if (!tool) return null;
     const resolution = normalizeGatewayArgs(record, tool, this.innerToolLookup(tool));
+    if (resolution.dualContainers) {
+      // 双容器且两份不一致(或有一份用不了): 发哪份结果不同, 不猜。点名只发一份, 消歧义。
+      return 'Invalid ' + tool.serverName + '/' + tool.name + ' parameters: args and arguments were both'
+        + ' provided but do not carry the same contents, and Cindy forwards args — it will not guess which'
+        + ' one the model meant. Send exactly one of args/arguments with the selected tool parameters in it.'
+        + ' Expected args schema: ' + schemaHint(tool.inputSchema);
+    }
     if (resolution.malformed) {
       // 参数放在一个用不了的地方: 原样转发只会让服务端按缺省值静默兜底。
       // 显式传 null 与「没传这个键」不是一回事, 所以单独点名, 让模型知道要省略这个键。
@@ -4596,8 +4693,16 @@ class CindyMcpGateway {
     innerName: string,
     signal?: AbortSignal,
   ): Promise<GatewayArgsResolution> {
-    await this.probeInnerToolSchema(tool, innerName, signal);
-    return normalizeGatewayArgs(record, tool, this.innerToolLookup(tool));
+    const probed = await this.probeInnerToolSchema(tool, innerName, signal);
+    const resolution = normalizeGatewayArgs(record, tool, this.innerToolLookup(tool));
+    // 代拉了仍判不了(服务端内层列表只有类目没有 schema, 或代拉失败): 两种读法发出去的层数
+    // 不同, 照旧剥一层就是把层数猜出来 —— 内层工具自己声明 name + args 时(run 这类), 它的
+    // 参数会被剥掉, 服务端按缺省值执行还返回成功。不猜, 标出来交回给调用方拒收并指路
+    // (Codex P1 on #10908 第 14 轮)。代拉失败不缓存, 重试同一调用会再问一次。
+    if (resolution.innerSchemaPending && (probed === 'schemaless' || probed === null)) {
+      return { ...resolution, unresolvedCollision: innerName };
+    }
+    return resolution;
   }
 
   private resolveCallParts(input: unknown): {
@@ -4640,7 +4745,24 @@ class CindyMcpGateway {
       ...(resolution.unmapped.length > 0 ? { unmapped: resolution.unmapped } : {}),
       ...(resolution.parsedFromString ? { parsedFromString: true } : {}),
       ...(resolution.rebuiltEnvelope ? { rebuiltEnvelope: true } : {}),
+      ...(resolution.unresolvedCollision ? { unresolvedCollision: resolution.unresolvedCollision } : {}),
     };
+  }
+
+  /**
+   * 撞名撞到代拉也判不了: 与信封判不了(indeterminateEnvelope)同款拒收 —— 点名两种读法,
+   * 给出两种读法都走得通的形状, 不替模型猜层数。
+   */
+  private unresolvedCollisionError(call: ResolvedMcpGatewayCall): string {
+    const innerName = call.unresolvedCollision ?? '';
+    return 'Invalid ' + call.tool.serverName + '/' + call.tool.name + ' parameters: the top-level name ("'
+      + innerName + '") repeats inside args as another {"name", "args"} envelope, and the schema of "'
+      + innerName + '" is not available (the server\'s inner tool list carries no schemas, or Cindy could not'
+      + ' fetch it), so Cindy cannot tell whether that inner layer is the tool\'s own parameters or a duplicated'
+      + ' envelope, and will not guess — guessing wrong drops its declared parameters or wraps them twice.'
+      + ' Keep exactly one level: {"name": <inner tool>, "args": {<its parameters>}}.'
+      + ' If the server was unreachable, retrying the same call may resolve the schema.'
+      + ' Expected args schema: ' + schemaHint(call.tool.inputSchema);
   }
 
   private resolveServerName(requested: string): string | null {
@@ -5207,8 +5329,18 @@ class CindyMcpGateway {
     if (toolCallId) this.approvedCalls.delete(toolCallId);
     // 归一化要等内层 schema 定下来: 剥不剥那一层按服务端那份真实 schema 判, 审批框显示的
     // 那份与真正发出去的那份必须是同一份(pi-harness §4.12)。
-    const resolved = approvedCall ?? await this.resolveCallAsync(params, signal);
+    let resolved = approvedCall ?? await this.resolveCallAsync(params, signal);
     if (!resolved) throw new Error(this.callInputError(params) ?? this.unknownCallMessage(params));
+    // 审批快照里的 tool 是审批时那份定义: 定义在这之后被替换(目录刷新、重连发现)时, 披露门
+    // 与变更防护都必须对着**当前注册的**那份判 —— 拿老指纹去对披露账, 会把「首次调用路标」
+    // 误抛出来, 盖住真正的 tool definition changed(pi-mcp-client r4411121969)。快照要保住的
+    // 是归位后的 args(审批框显示的那份), 不是审批时的 tool 对象。
+    const currentTool = this.tools.get(mcpGatewayKey(resolved.tool.serverName, resolved.tool.name));
+    if (currentTool && currentTool !== resolved.tool) resolved = { ...resolved, tool: currentTool };
+    // 撞名且代拉之后仍判不了: 不猜层数, 拒收并指路(审批 hook 已把这次标成没问过权限,
+    // 这里直接把回执递给模型)。在双包裁决之前拦 —— 那条路对这种形状只会给出另一条
+    // 「nested twice」, 点不到真正的歧义。
+    if (resolved.unresolvedCollision) throw new McpBridgeError(this.unresolvedCollisionError(resolved));
     if (approvedDefinition !== undefined && this.approvalDefinition(resolved) !== approvedDefinition) {
       throw new McpBridgeError('tool definition changed; inspect it with cindy_mcp_list_tools and call again');
     }
@@ -6665,6 +6797,12 @@ export default async function cindyBridge(piApi: any) {
       && !gatewayCall
     ) {
       if (event.toolName === CINDY_MCP_CALL_TOOL) mcpGateway.markPermissionSkipped(event.toolCallId);
+      return;
+    }
+    // 撞名代拉之后仍判不了: 不弹框(没有可审批的那一份), 交回给 execute 拒收并指路,
+    // 与非法入参同一处理。
+    if (event.toolName === CINDY_MCP_CALL_TOOL && gatewayCall?.unresolvedCollision) {
+      mcpGateway.markPermissionSkipped(event.toolCallId);
       return;
     }
     // 披露门必须判在**发起权限询问之前**：pi 的权限询问由本 hook 发起，若等到工具实现

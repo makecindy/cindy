@@ -3265,20 +3265,21 @@ it('keeps both name layers when the flattened inner tool has a name parameter of
   expect(requests[1].params).toEqual({
     name: 'call_tool', arguments: { name: 'run', args: { name: 'target', args: { cwd: '/work' } } },
   });
-  // 同一个内层工具名写了两遍(顶层 + args 里的信封)不再包一层; 顶层填的是入口工具名也一样。
-  await gateway.executeCall({
+  // 同一个内层工具名写了两遍(顶层 + args 里的信封), 且内层工具(memory_write)不在本地工具表里:
+  // 剥不剥这一层要按服务端那份 schema 定, 网关会代拉一次内层列表 —— 这个假 client 连内层列表
+  // 都给不出(不是合法 JSON), 代拉之后仍判不了就不再照旧剥一层: 两种读法发出去的层数不同,
+  // 拒收并指路(Codex P1 on #10908 第 14 轮)。
+  await expect(gateway.executeCall({
     server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { name: 'memory_write', args: { type: 'project' } },
-  });
+  })).rejects.toThrow(/Keep exactly one level/);
+  // 顶层填的是入口工具名(call_tool): 不经过撞名裁决(selector === 入口工具名), 照旧剥一层放行。
   await gateway.executeCall({
     server: 'cindy_memory', tool: 'call_tool', name: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } },
   });
-  // 撞名的内层工具(memory_write)不在本地工具表里: 剥不剥这一层要按服务端那份 schema 定, 网关
-  // 会代拉一次内层列表(下面那次 list_tools 就是这次代拉; 拉不到就照旧剥一层)。
   const calls = requests
     .filter(request => (request.params as { name?: unknown } | undefined)?.name === 'call_tool')
     .map(request => request.params);
   expect(calls.slice(2)).toEqual([
-    { name: 'call_tool', arguments: { name: 'memory_write', args: { type: 'project' } } },
     { name: 'call_tool', arguments: { name: 'memory_write', args: { type: 'project' } } },
   ]);
 });
@@ -5051,7 +5052,8 @@ it('marks the surface truncated when the property type walk runs out of budget',
 // 选择器写了两遍」与「args 容器正是内层工具自己的参数对象」。按「没声明」折叠, registry 剥掉
 // 信封后内层工具只拿到 {cwd}, 自己声明的 name/args 没了; 剥完之后形状里没有嵌套 args, 后面
 // 那条代拉服务端内层列表的探测也根本够不着。改成: 查不到就两层都留着, 由执行前的双包裁决按
-// 服务端那份 schema 判(判不出来才照旧剥一层)(Codex P1 on #10908 第 12 轮, 4094 行)。
+// 服务端那份 schema 判; 第 14 轮起, 代拉之后仍判不了的拒收并指路, 不再照旧剥一层
+// (Codex P1 on #10908 第 12 轮, 4094 行)。
 //
 // - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数(两层都在)。
 // - Bug 依据:codex 对 #10908 第 12 轮的 P1。
@@ -5299,5 +5301,242 @@ it('does not probe the inner list of a third-party tool that is not an envelope'
   expect(requests).toHaveLength(1);
   expect(requests[0].params).toEqual({
     name: 'search', arguments: { name: 'lookup', args: { query: 'x' } },
+  });
+});
+
+// 评审 P1(代拉判不了仍按猜测折叠): registry 只暴露 call_tool/list_tools 时, 撞名的内层工具不在
+// 本地工具表里, 归一化先标「要不要问服务端那份 schema」; 但代拉回来的内层列表只有类目、没有
+// 工具 schema(真实 Cindy registry 形状), 重新归一化仍判不了 —— 旧实现照旧剥一层, 等于把层数
+// 猜出来: 内层工具自己声明 name + args 参数时(run 这类), 它声明的参数会被剥掉, 服务端按缺省值
+// 执行还返回成功。代拉之后仍判不了就拒收并指路, 与信封判不了(indeterminateEnvelope)同一处理;
+// 代拉失败不缓存, 重试同一调用会再问一次, 服务端恢复后按真实 schema 裁决(Codex P1 on #10908
+// 第 14 轮, 4600 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 拒收(不发猜出来的层数), 回执点名两种读法
+//   与唯一说得通的形状; 撞名消失后同一 server 的规范信封照常放行。
+// - Bug 依据:codex 对 #10908 第 14 轮的 P1。
+// - 覆盖缺口:第 12/13 轮只盖了「代拉能判出来」的两侧(声明 args → 两层都留 / 明确没有 → 剥),
+//   旧用例把「拉不到就照旧剥一层」钉成了行为。
+// - 最小失败输入:call_tool 信封 + 撞名 {name:'run', args:{name:'run', args:{cwd}}}
+//   + list_tools 只回类目(无 schema)。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('rejects a same-name collision that stays unresolved after probing the inner list', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    // 真实 Cindy registry 形状: 不传 category 只有类目概览, 无工具 schema。
+    if ((params as { name?: unknown } | undefined)?.name === 'list_tools') {
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, categories: [{ name: 'read', tool_count: 4 }] }) }] };
+    }
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  const collision = { server: 'cindy_memory', tool: 'call_tool', name: 'run', args: { name: 'run', args: { cwd: '/work' } } };
+  await expect(gateway.executeCall(collision)).rejects.toThrow(
+    /cannot tell whether that inner layer .* Keep exactly one level/);
+  // 只发过一次代拉(结果按 server 缓存), 没有把猜出来的层数发给服务端。
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({ name: 'list_tools', arguments: {} });
+  // 缓存后同一 server 的重试不再发请求, 结论仍是拒收(不是间歇性的)。
+  await expect(gateway.executeCall(collision)).rejects.toThrow(/Keep exactly one level/);
+  expect(requests).toHaveLength(1);
+  // 判不了 ≠ 全拦: 没有撞名的规范信封照常放行。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { name: 'architecture', type: 'project' },
+  });
+  expect(requests).toHaveLength(2);
+});
+
+// 同一条 P1 的另一半: 代拉请求失败(网络断/超时)同样判不了 —— 拒收; 失败不缓存, 重试会再问
+// 一次, 服务端恢复后按真实 schema 裁决(内层确实没有 args → 照旧剥一层)。
+it('rejects an unresolved collision on a failed probe and re-probes on retry', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  let serverUp = false;
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    if ((params as { name?: unknown } | undefined)?.name === 'list_tools') {
+      if (!serverUp) throw new Error('ECONNRESET');
+      return { structuredContent: { tools: [{ name: 'run', inputSchema: { type: 'object', properties: { cwd: { type: 'string' } } } }] } };
+    }
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_registry', client, [
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_registry', tool: 'call_tool' });
+  const collision = { server: 'cindy_registry', tool: 'call_tool', name: 'run', args: { name: 'run', args: { cwd: '/work' } } };
+  await expect(gateway.executeCall(collision)).rejects.toThrow(/Keep exactly one level/);
+  expect(requests).toHaveLength(1);
+  // 失败不缓存: 重试再问一次; 服务端恢复了, 这次判据按真实 schema 定(内层没有 args → 剥一层),
+  // 归位后的调用本身是第三个请求。
+  serverUp = true;
+  await gateway.executeCall(collision);
+  expect(requests).toHaveLength(3);
+  expect(requests[2].params).toEqual({
+    name: 'call_tool', arguments: { name: 'run', args: { cwd: '/work' } },
+  });
+});
+
+// 评审 P1(args/arguments 双容器静默丢一份): args 与 arguments 都是网关自留键, 归一化只认 args,
+// 另一份既不进 shadowed 也不进 unmapped(那两个数组记参数键, 不记容器键), 回执里也没有转发出参
+// 的回显 —— 两份内容不同时, 服务端按 args 执行而模型以为发的是 arguments(行 1 vs 行 10)。
+// 两份解析后一致时发哪份结果都相同, 不拦; 不一致或有一份形态不可用, 整笔调用拒收
+// (Codex P1 on #10908 第 14 轮, 4111 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 拒收(一个请求都不发), 回执点名
+//   「只发 args、两份不一致」; 两份一致(键序不同也算一致)时照常放行。
+// - Bug 依据:codex 对 #10908 第 14 轮的 P1。
+// - 覆盖缺口:别名机制本身(args 缺席时认 arguments)早有用例; 双容器同时给出的形状没有。
+// - 最小失败输入:{args: {row: 1}, arguments: {row: 10}}。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('rejects a call that supplies both args and arguments containers', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_sheets', client, [{
+    name: 'status',
+    inputSchema: { type: 'object', properties: { row: { type: 'number' }, note: { type: 'string' } } },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_sheets', tool: 'status' });
+  await expect(gateway.executeCall({
+    server: 'cindy_sheets', tool: 'status', args: { row: 1 }, arguments: { row: 10 },
+  })).rejects.toThrow(/args and arguments were both provided .* forwards args/);
+  expect(requests).toHaveLength(0);
+  // 一份形态不可用同样算「不一致」: 拒收, 不静默只认 args。
+  await expect(gateway.executeCall({
+    server: 'cindy_sheets', tool: 'status', args: { row: 1 }, arguments: null,
+  })).rejects.toThrow(/args and arguments were both provided/);
+  // 两份内容一致(键序不同也算一致)时发哪份都一样: 不拦。
+  await gateway.executeCall({
+    server: 'cindy_sheets', tool: 'status', args: { row: 1, note: 'x' }, arguments: { note: 'x', row: 1 },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({ name: 'status', arguments: { row: 1, note: 'x' } });
+  // 顶层平铺键不是歧义、双容器才是: 平铺 + 双容器同样拒收。
+  await expect(gateway.executeCall({
+    server: 'cindy_sheets', tool: 'status', args: { row: 1 }, arguments: { row: 2 }, note: 'y',
+  })).rejects.toThrow(/args and arguments were both provided/);
+  expect(requests).toHaveLength(1);
+});
+
+// 评审 P2(信封判据里的枚举扫描无界): enum 值不占类型判据的 32 节点预算、也不占声明面的
+// 512 名额 —— 服务端给一个上百 KB 的选择器枚举(不写 type, 全靠值定类型), 权限/执行两条
+// 路径上每次类型探测都要同步扫完整个数组, 已公布的预算形同虚设。给值检查单独封顶: 前段
+// 已见不容 → 确认容不下; 前段全容得下但还有剩余 → 按「看不完」记截断, 信封判据随之按
+// 表态不完整走(与信封兼容的平铺调用拒收并指路)(Codex P2 on #10908 第 14 轮, 3729 行)。
+//
+// - 生产入口与可观察结果:超大枚举下 executeCall 即时返回; 枚举超出上限的平铺调用不再被
+//   重建转发, 而是按截断政策拒收; 上限内的枚举不受影响(照常重建转发)。
+// - Bug 依据:codex 对 #10908 第 14 轮的 P2。
+// - 覆盖缺口:类型判据的节点预算(第 13 轮)只盖了组合分支, 没盖「单个属性拖一个巨型枚举」。
+// - 最小失败输入:properties.name = {enum: [4 万个工具名字符串]}(不写 type) + 平铺调用。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('bounds the enum scan used for envelope detection', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  const enumSchema = (count: number) => ({
+    type: 'object',
+    properties: { name: { enum: Array.from({ length: count }, (_, index) => 'tool_' + index) }, args: { type: 'object' } },
+    required: ['name'],
+  });
+  gateway.add('cindy_big', client, [
+    { name: 'call_tool', inputSchema: enumSchema(40_000) },
+    { name: 'call_tool_small', inputSchema: enumSchema(3) },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_big', tool: 'call_tool' });
+  await gateway.listResult({ server: 'cindy_big', tool: 'call_tool_small' });
+  // 枚举超出上限: 类型证据看不完 → 截断 → 与信封兼容的平铺调用拒收并指路, 不重建也不照发。
+  const started = performance.now();
+  await expect(gateway.executeCall({
+    server: 'cindy_big', tool: 'call_tool', name: 'tool_1', args: { cwd: '/work' },
+  })).rejects.toThrow(/could not read the schema of this tool in full/);
+  expect(performance.now() - started).toBeLessThan(1000);
+  expect(requests).toHaveLength(0);
+  // 上限内的枚举不受影响: 照常认出信封、重建平铺调用并转发。
+  await gateway.executeCall({
+    server: 'cindy_big', tool: 'call_tool_small', name: 'tool_1', args: { cwd: '/work' },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool_small', arguments: { name: 'tool_1', args: { cwd: '/work' } },
+  });
+});
+
+// 评审 P2(required 数组的 includes 扫描无界): collectDeclaredNames 在 512 名额处停下并标记
+// 截断, 但信封判据里 required.includes('name') 仍整段扫一遍 —— 名字名额拦住了声明面, 拦不住
+// 一个上千条的 required 数组, 权限/执行两条路径上反复同步 O(required 长度)。扫描与声明面用
+// 同一个上限: 前段没有 name 且数组超长 → 记截断, 信封判据按表态不完整走(Codex P2 on #10908
+// 第 14 轮, 3761 行)。
+//
+// 这里用「重复的 required 键」把扫描上限从收集名额里剥出来: 已收过的名字不占名额
+// (collectDeclaredNames), 所以整份 schema 的声明面没截断 —— 截断**只能**来自扫描封顶本身,
+// 行为差异(重建转发 vs 拒收)就是封顶是否生效的直接证据。JSON Schema 校验器接受重复键。
+//
+// - 生产入口与可观察结果:超长 required(前段没有 name)下 executeCall 即时返回; 「name 在长尾」
+//   的信封不再被认出(平铺调用按截断政策拒收); name 在上限内靠后时照常认出并重建转发。
+// - Bug 依据:codex 对 #10908 第 14 轮的 P2。
+// - 覆盖缺口:名字名额(512)只盖了 collectDeclaredNames, 没盖 required 的整段扫描。
+// - 最小失败输入:required = ['args' × 1500, 'name'](name 在第 1500 位) + 平铺调用。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('bounds the required-array scan used for envelope detection', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  const requiredSchema = (required: string[]) => ({
+    type: 'object',
+    properties: { name: { type: 'string' }, args: { type: 'object' } },
+    required,
+  });
+  // name 排在第 1500 位、前段全是已收过的 args(不占名额): 声明面没截断, 扫描前段(512)看不到
+  // name → 记截断 → 与信封兼容的平铺调用拒收并指路。
+  const longRequired = Array.from({ length: 1501 }, () => 'args');
+  longRequired[1500] = 'name';
+  // name 在第 400 位: 上限内靠后但够得着 → 照常认出信封。
+  const inCapRequired = Array.from({ length: 401 }, () => 'args');
+  inCapRequired[400] = 'name';
+  gateway.add('cindy_req', client, [
+    { name: 'call_tool', inputSchema: requiredSchema(longRequired) },
+    { name: 'call_tool_incap', inputSchema: requiredSchema(inCapRequired) },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_req', tool: 'call_tool' });
+  await gateway.listResult({ server: 'cindy_req', tool: 'call_tool_incap' });
+  const started = performance.now();
+  await expect(gateway.executeCall({
+    server: 'cindy_req', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  })).rejects.toThrow(/could not read the schema of this tool in full/);
+  expect(performance.now() - started).toBeLessThan(1000);
+  expect(requests).toHaveLength(0);
+  // required 在上限内、name 靠后但够得着: 照常认出信封、重建平铺调用并转发。
+  await gateway.executeCall({
+    server: 'cindy_req', tool: 'call_tool_incap', name: 'memory_write', args: { type: 'project' },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool_incap', arguments: { name: 'memory_write', args: { type: 'project' } },
   });
 });
