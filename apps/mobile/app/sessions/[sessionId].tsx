@@ -351,6 +351,7 @@ import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from '@/sess
 import { useComposerPendingImagePreview } from '@/session/useComposerPendingImagePreview';
 import { useSlowSendVisible, type SlowSendPhase } from '@/session/SlowSendNotice';
 import { ComposerActivityPill, composerActivityPillOverlayColor, makeComposerActivityPillStyles } from '@/session/ComposerActivityPill';
+import { SessionBackgroundActivityStatus } from '@/session/SessionBackgroundActivityStatus';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import { ImageLightbox } from '@/session/ImageLightbox';
 import { pickWriteFields, retryPatchWhileLatest, writeGuardFields } from '@/session/swipeRowRegistry';
@@ -11789,6 +11790,19 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                       generationActive={remoteSessionRunStatus.generationActive}
                       visible={showComposerActivity}
                       slowSendPhase={creationSlowPhase}
+                    />
+                  ) : Platform.OS === 'android' && liveScreensFocused && appStateActive
+                    && !!deviceId && !!sessionId && !isScopedPeer(deviceId)
+                    && remoteHistoryAvailable && !isDeviceAccessRevoked && !isDeviceUnresponsive
+                    && !isScheduleDetail && !sessionManagedByHost && !remoteSessionRunStatus.isRunning
+                    && !showComposerActivity && !pendingRecoveryStatus && currentSession
+                    && (currentSession.source == null || currentSession.source === 'desktop' || currentSession.source === 'mobile')
+                    && !(syncingWhileEmpty && !hasRenderedMessages) ? (
+                    <SessionBackgroundActivityStatus
+                      key={JSON.stringify([auth.accountGeneration, deviceId, sessionId, connectionEpoch])}
+                      deviceId={deviceId}
+                      sessionId={sessionId}
+                      invoke={invoke}
                     />
                   ) : null}
                 </View>

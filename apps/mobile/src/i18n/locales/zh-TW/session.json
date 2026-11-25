@@ -302,6 +302,7 @@
     }
   },
   "screen": {
+    "backgroundTasksRunning": "背景任務執行中（{{taskCount}} 項）…",
     "thinking": "思考中…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",

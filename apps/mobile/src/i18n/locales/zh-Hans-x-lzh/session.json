@@ -302,6 +302,7 @@
     }
   },
   "screen": {
+    "backgroundTasksRunning": "后台诸务运行中（{{taskCount}} 项）…",
     "thinking": "容吾思之…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",

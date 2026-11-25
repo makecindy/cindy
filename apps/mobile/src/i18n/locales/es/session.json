@@ -302,6 +302,7 @@
     }
   },
   "screen": {
+    "backgroundTasksRunning": "En ejecución en segundo plano ({{taskCount}})…",
     "thinking": "Pensando…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",

@@ -302,6 +302,7 @@
     }
   },
   "screen": {
+    "backgroundTasksRunning": "백그라운드에서 실행 중 ({{taskCount}}개)…",
     "thinking": "생각 중…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
