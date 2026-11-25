@@ -55,7 +55,7 @@ function ConsentSection({ title, items, countLabel, change }: {
         <span>{title}</span>
         {countLabel ? <span className="text-12 tabular-nums text-[var(--text-secondary)]">{countLabel}</span> : null}
       </h3>
-      <PluginPermissionList items={displayFacts} change={change} />
+      <PluginPermissionList items={displayFacts} change={change} showAll />
     </section>
   );
 }

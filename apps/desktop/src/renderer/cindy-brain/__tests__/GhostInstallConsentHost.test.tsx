@@ -352,6 +352,26 @@ describe('GhostInstallConsentHost', () => {
     expect(request.facts).toEqual(original);
   });
 
+  it.each(['install', 'update'] as const)('shows every permission before %s consent', (kind) => {
+    const permissions = (group: string) => Array.from({ length: 6 }, (_, index) => ({
+      key: `${group}-${index}`,
+      kind: 'panel' as const,
+      labelKey: 'uiHost',
+      detail: `${group} permission ${index + 1}`,
+    }));
+    const base = { ghostId: 'board', name: 'Board', version: '2' };
+    const added = permissions('Added');
+    const removed = permissions('Removed');
+    const facts = kind === 'install'
+      ? { ...base, kind, permissions: added }
+      : { ...base, kind, previousVersion: '1', added, removed, unchangedCount: 0, builtinOauthClientChanged: false };
+    render(<GhostInstallConsentContent facts={facts} />);
+
+    for (const permission of kind === 'install' ? added : [...added, ...removed]) {
+      expect(screen.getByText(permission.detail)).toBeTruthy();
+    }
+  });
+
   it('shows first-use capability consent without claiming a package update or source', async () => {
     render(<GhostInstallConsentHost />);
     await act(async () => push?.({
