@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import sharp from 'sharp';
 import type { SessionPathAuthorization } from '@cindy/mcps';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
 import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.js';
@@ -65,8 +66,6 @@ async function readFile(file: string): Promise<HandoffPictureRead> {
   }
   if (!isWebp(bytes)) return { ok: true, bytes };
   try {
-    // Loaded on demand: most screenshots are PNG, and the native image library is heavy at startup.
-    const { default: sharp } = await import('sharp');
     return { ok: true, bytes: await sharp(bytes, { limitInputPixels: 40_000_000 }).png().toBuffer() };
   } catch {
     return notAnImage();
