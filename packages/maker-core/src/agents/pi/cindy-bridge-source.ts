@@ -3615,6 +3615,14 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
       if (resolved) signals |= walk(resolved, depth + 1, group);
       else surface.truncated = true;
     }
+    // 2020-12 的动态引用: 本地能解析(指向本 schema 里的 $dynamicAnchor), 但解析规则是
+    // 运行时顺着调用栈找锚点 —— 与 $ref 的静态解析不是一回事, 解析不了时那边的声明同样
+    // 看不到(Codex P1 on #10908 第 15 轮)。本地能解析就照常走, 解析不了记截断。
+    if (typeof node.$dynamicRef === 'string') {
+      const resolved = resolveLocalSchemaRef(schema, node.$dynamicRef);
+      if (resolved) signals |= walk(resolved, depth + 1, group);
+      else surface.truncated = true;
+    }
     for (const keyword of SCHEMA_COMBINATORS) {
       const branches = node[keyword];
       if (!Array.isArray(branches) || branches.length === 0) continue;
@@ -3633,6 +3641,9 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
         continue;
       }
       // 多分支的 anyOf / oneOf: 每个分支只在一个条件下生效, 各自另起一组、接在出发点那一组后面。
+      // 恒假分支(false)永远选不中, 不能参与「每条路径都必填」的判定 —— 它零信号, every 会把它
+      // 当成「这条路径没要求 name」的证据(Codex P1 on #10908 第 15 轮)。true 分支照常, 它不约束
+      // 任何字段, 但仍是可选路径, 信号并入父组即可, 不必单独成组。
       const alternatives: EnvelopeGroup[] = [];
       group.alternatives.push(alternatives);
       for (const branch of branches) {
@@ -3640,6 +3651,7 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
           surface.truncated = true;
           break;
         }
+        if (branch === false) continue; // 永不可行的分支: 零信号但不占位。
         const nested = branchGroup(group);
         alternatives.push(nested);
         walk(branch, depth + 1, nested);
@@ -4118,7 +4130,10 @@ function schemaKeyStatus(
     }
     patternBudget.remaining -= estimate;
     try {
-      if (new RegExp(pattern).test(key)) return 'accepted';
+      // JSON Schema 的 ECMA-262 语义是 Unicode 模式: ^.$ 对一个码点的星号位字符(😀)算
+      // 一个字符、匹配; 无 u 标志的 JS 正则把它当两个 UTF-16 单元、不匹配, 键被误判成
+      // 「schema 不收」而丢掉(Codex P2 on #10908 第 15 轮)。用 u 模式跑, 与服务端一致。
+      if (new RegExp(pattern, 'u').test(key)) return 'accepted';
     } catch {
       // 非法正则: 这一条判不了, 继续看后面的模式。
       skipped = true;
@@ -4324,8 +4339,10 @@ function normalizeGatewayArgs(
       shadowed.push(key);
       continue;
     }
-    if (flattenedEnvelopeNoContainer) {
-      // 内层参数: 外层 schema 判不了, 也不该丢 —— 交给内层工具自己校验。
+    if (flattenedEnvelope || flattenedEnvelopeNoContainer) {
+      // 信封被平铺时顶层兄弟键是内层工具的参数, 外层信封 schema 判不了它们 —— 与整个摊平
+      // 同一处理: 整体收进内层 args, 交给内层工具自己校验。信封只有一半(name + args 都在顶层,
+      // args 容器里另有内层参数)同样适用: 兄弟键按外层 schema 判就丢了(Codex P1 on #10908 第 15 轮)。
       setOwnArgument(params, key, value);
       folded.push(key);
       continue;

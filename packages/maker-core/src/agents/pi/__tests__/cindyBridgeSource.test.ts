@@ -5540,3 +5540,171 @@ it('bounds the required-array scan used for envelope detection', async () => {
     name: 'call_tool_incap', arguments: { name: 'memory_write', args: { type: 'project' } },
   });
 });
+
+// 评审 P1(信封只有一半: 顶层给了 name 和 args 容器, 但顶层还散落着内层参数):
+// {name:'schedule_list', args:{}, status:'active'} —— flattenedEnvelope 认出来要重建
+// {name, args}, 但 flattenedEnvelopeNoContainer 是 false, status 仍按外层信封 schema
+// 判 → unmapped, 发出的 {name:'schedule_list', args:{}} 让内层工具按缺省过滤执行
+// (列出全部而不是 active)。信封兄弟键按外层 schema 判是错的: 它们属于内层工具,
+// 与 flattenedEnvelopeNoContainer 同一处理 —— 整体收进内层 args(Codex P1 on #10908
+// 第 15 轮, 4335 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 #10908 第 15 轮的 P1。
+// - 覆盖缺口:信封平铺只盖了「完全摊平」和「完全嵌套」两种形态, 半平铺(顶层有
+//   name + args 容器 + 兄弟键)漏了。
+// - 最小失败输入:信封 + 顶层 name + 顶层 args:{} + 顶层兄弟键 status。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('folds flat siblings into the args container when an envelope is rebuilt', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_scheduler', client, [{
+    name: 'call_tool',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_scheduler', tool: 'call_tool' });
+  // 顶层 name 是信封层选择器, args:{} 是空容器, status 是内层工具参数 —— 全部收进
+  // 内层 args, 发出的 {name:'schedule_list', args:{status:'active'}} 才是正确的那一份。
+  await gateway.executeCall({
+    server: 'cindy_scheduler', tool: 'call_tool', name: 'schedule_list', args: {}, status: 'active',
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'schedule_list', args: { status: 'active' } },
+  });
+});
+
+// 评审 P1($dynamicRef 被静默跳过): 2020-12 的 $dynamicRef 本地能解析(指向本 schema
+// 里的 $dynamicAnchor), 但旧 walker 只认 $ref, 遇到 $dynamicRef 既不跟也不记截断,
+// surface 看起来完整普通 → 信封判据按普通工具走, 平铺调用按外层 schema 丢参数。
+// 本地能解析的动态引用照常跟(声明能看到), 解析不了的记截断(Codex P1 on #10908
+// 第 15 轮, 3612 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 #10908 第 15 轮的 P1。
+// - 覆盖缺口:引用只盖了 $ref(静态), $dynamicRef / $dynamicAnchor 没有。
+// - 最小失败输入:$defs.env = {properties:{name,args},required:['name']}, $dynamicRef:'#/defs/env'。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('follows local $dynamicRef references when building the surface', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    // 2020-12: 信封声明藏在 $dynamicRef 指向的 $defs 里。
+    inputSchema: {
+      type: 'object',
+      $defs: { env: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+      $dynamicRef: '#/$defs/env',
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 顶层 name 是信封层选择器: 认出信封、重建平铺调用并转发。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+// 评审 P1(anyOf:[false,envelope] 被判成普通工具): anyOf 的每个分支另起一组,
+// false 分支(永远选不中)起一个零信号组, every 见零信号就把「每条路径都必填 name」
+// 判成 false → surface.envelope=false → 真信封按普通工具判, 平铺调用按外层 schema
+// 丢参数。永不可行的分支不参与「每条路径」判定(Codex P1 on #10908 第 15 轮, 3645 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 #10908 第 15 轮的 P1。
+// - 覆盖缺口:组合分支只盖了 allOf/anyOf/oneOf 的合取, 没盖布尔分支。
+// - 最小失败输入:anyOf:[false, {properties:{name,args},required:['name']}]。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('skips impossible boolean alternatives when detecting envelopes', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    // 恒假分支 + 真信封分支: false 永远选不中, 不该把「每条路径都必填 name」判成 false。
+    inputSchema: {
+      type: 'object',
+      anyOf: [
+        false,
+        { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] },
+      ],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 顶层 name 是信封层选择器: 认出信封、重建平铺调用并转发。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+// 评审 P2(模式不用 Unicode 标志 → 星号位键被误判): JSON Schema 的 ECMA-262 语义是
+// Unicode 模式: `^.$` 对一个码点的星号位字符(😀)算一个字符、匹配; 无 u 标志的 JS
+// 正则把它当两个 UTF-16 单元、不匹配 → `schemaKeyStatus` 返回 'rejected', 平铺的
+// 动态参数被丢。pattern 要用 u 模式跑, 与服务端一致(Codex P2 on #10908 第 15 轮,
+// 4121 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数(键
+//   照常折进 args, 不被丢)。
+// - Bug 依据:codex 对 #10908 第 15 轮的 P2。
+// - 覆盖缺口:模式键都是 ASCII, 没盖星号位字符。
+// - 最小失败输入:closed schema + patternProperties {'^.$': {type:'string'}} + 顶层键 '😀'。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('evaluates pattern properties against keys in Unicode mode', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_emoji', client, [{
+    name: 'tag',
+    // closed schema: 只声明 file_id, 加一个只收「一个码点」的模式。'😀' 在 Unicode 语义下
+    // 是一个字符、命中; 无 u 标志是 2 个 UTF-16 单元、不命中。
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' } },
+      required: ['file_id'],
+      patternProperties: { '^.$': { type: 'string' } },
+      additionalProperties: false,
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_emoji', tool: 'tag' });
+  // 星号位键在 Unicode 语义下命中 '^.$' → 是声明过的动态参数, 折进 args 转发, 不丢。
+  await gateway.executeCall({
+    server: 'cindy_emoji', tool: 'tag', args: { file_id: 'doc-1' }, '😀': 'one code point',
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'tag',
+    arguments: { file_id: 'doc-1', '😀': 'one code point' },
+  });
+});
