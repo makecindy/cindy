@@ -1,6 +1,7 @@
 import type { PluginNoticeProps } from './PluginNotice';
 import type { PluginManagementController, PluginManagementState } from './pluginManagementController';
 import { pluginNeedsUiApproval, type ManagedPlugin, type PluginUiConsentItem } from './pluginManagementTypes';
+import { pluginOperationHold, type PluginManagementSlot } from './pluginManagementSlot';
 
 /** The Host snapshot is the authority for approval and cross-controller deferral. */
 export function pluginUiApprovalNotice(
@@ -9,13 +10,16 @@ export function pluginUiApprovalNotice(
   controller: PluginManagementController | null,
   t: (key: string, args?: Record<string, unknown>) => string,
   proactive = false,
-  /** Another management operation on this screen holds the slot (for example a market install). */
-  locked = false,
+  /**
+   * The plugins page's management slot: Enable takes it when pressed (and does nothing if it cannot), and the
+   * operation holds it until it is over. Its holder is only shown here (an unavailable button).
+   */
+  slot?: PluginManagementSlot,
 ): PluginNoticeProps | undefined {
   if (!plugin || !state || !controller || ('manifest' in plugin && !pluginNeedsUiApproval(plugin))) return;
   const supported = state.snapshot?.uiCapabilityApproval === true || state.uiConsent?.uiCapabilityApproval === true;
   if (proactive && (!supported || ('manifest' in plugin && plugin.uiPromptSuppressed))) return;
-  const pending = locked || state.busy || ['running', 'confirmation', 'unknown'].includes(state.outcome);
+  const pending = !!slot?.holder() || state.busy || ['running', 'confirmation', 'unknown'].includes(state.outcome);
   return {
     testID: 'plugins.uiApproval',
     title: t('plugins.uiApproval.title', { name: 'manifest' in plugin ? plugin.manifest.name : plugin.name }),
@@ -25,8 +29,15 @@ export function pluginUiApprovalNotice(
       label: t('plugins.uiApproval.enable'),
       testID: 'plugins.uiApproval.enable',
       disabled: pending || !state.online,
-      // A press delivered after the slot was taken (a stale render) does nothing.
-      onPress: () => { if (!pending && state.online) void ('manifest' in plugin ? controller.approveUi(plugin) : controller.approveUiFromConsent(plugin)); },
+      // On the page the slot decides (a press from a stale render, or a second press in the same frame, cannot take
+      // it); elsewhere the rendered state does, as before.
+      onPress: () => {
+        if (!slot) { if (!pending && state.online) void ('manifest' in plugin ? controller.approveUi(plugin) : controller.approveUiFromConsent(plugin)); return; }
+        if (!('manifest' in plugin)) return;
+        const token = slot.tryAcquire('page-approval', plugin.manifest.name);
+        if (!token) return;
+        void controller.approveUi(plugin, pluginOperationHold(slot, token));
+      },
     }, ...(proactive ? [{
       label: t('plugins.uiApproval.later'),
       testID: 'plugins.uiApproval.later',

@@ -325,7 +325,7 @@
     },
     "highRiskTitle": "リスクの高い権限",
     "highRiskTitleCount": "{{title}} · {{count}} 件",
-    "highRiskMore": "上の枠内をスクロールすると、リスクの高い権限をすべて確認できます",
+    "highRiskMore": "スクロールすると、リスクの高い権限をすべて確認できます",
     "listMore": "上にスクロールすると、すべての権限を確認できます"
   },
   "notice": {

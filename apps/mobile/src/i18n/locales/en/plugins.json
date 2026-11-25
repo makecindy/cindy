@@ -325,7 +325,7 @@
     },
     "highRiskTitle": "High-risk permissions",
     "highRiskTitleCount": "{{title}} · {{count}}",
-    "highRiskMore": "Scroll in the box above to see every high-risk permission",
+    "highRiskMore": "Scroll to see every high-risk permission",
     "listMore": "Scroll up to see every permission"
   },
   "notice": {

@@ -87,8 +87,8 @@ it('supplies valid demo plugin projections and confirms enable/disable through t
   const link = mock.createVisualMockDeviceLinkContext();
   const host = { deviceId: mock.VISUAL_MOCK_DEVICE_ID, deviceName: mock.VISUAL_MOCK_DEVICE_NAME };
   const items = normalizeRemoteCollectionItems(await listRemoteCollection(link.invoke, host, PLUGIN_COLLECTION), PLUGIN_COLLECTION);
-  // 28 teammate/demo plugins plus the seven market demos pre-installed at an older version (update consent).
-  expect(items).toHaveLength(35);
+  // 28 teammate/demo plugins plus the eight market demos pre-installed at an older version (update consent).
+  expect(items).toHaveLength(36);
   expect(items.filter(item => item.display.badges?.length)).toHaveLength(2);
   const ref = items[0].ref;
   await invokePlugin(link.invoke, host.deviceId, ref.id, 'disable');
@@ -460,6 +460,13 @@ it('serves the market demo consents in the Host shape, including updates that ad
   const movedFolder = (await consentOf('demo-market/demo-moved-folder', '_root__demo-moved-folder')).consent;
   expect(movedFolder).toMatchObject({ origin: 'custom-market', originSource: { kind: 'local' }, originSourceChanged: true, facts: { kind: 'install' } });
   expect(pluginConsentPresentation(movedFolder, (key: string) => key).originSourceChanged).toBe('plugins.notice.consentSource.sourceChangedIsolated');
+  // Compact sheet check (maintainer review 16:48): long repository with a ref, the source-change notice, five high-risk classes.
+  const movedLong = (await consentOf('demo-market/demo-moved-long-repo', '_root__demo-moved-long-repo')).consent;
+  expect(movedLong).toMatchObject({ origin: 'custom-market', originSourceChanged: true, facts: { kind: 'install' },
+    originSource: { kind: 'git', ref: 'release/2026-11' } });
+  const movedLongView = pluginConsentPresentation(movedLong, (key: string) => key);
+  expect(movedLongView.originSourceChanged).toBe('plugins.notice.consentSource.originSourceChanged');
+  expect(movedLongView.highRisk!.lines).toHaveLength(5);
   const reading = await consentOf('demo-market/demo-reading-list', '_root__demo-reading-list');
   expect(keys((reading.consent.facts as any).added)).toEqual(['notify']);
   // Allowing the update commits the new version on the mock computer.

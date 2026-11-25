@@ -327,7 +327,7 @@
     },
     "highRiskTitle": "Permissões de alto risco",
     "highRiskTitleCount": "{{title}} · {{count}}",
-    "highRiskMore": "Deslize no quadro acima para ver todas as permissões de alto risco",
+    "highRiskMore": "Deslize para ver todas as permissões de alto risco",
     "listMore": "Deslize para cima para ver todas as permissões"
   },
   "notice": {

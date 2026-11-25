@@ -16,7 +16,7 @@ import {
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
 import { useState } from "react";
-import { layoutConsentSheet, pluginConsentPresentation } from "./pluginConsentPresentation";
+import { planConsentSheet, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -25,11 +25,11 @@ export function PluginManagementConfirmation(
   const { consent, visible, answer } = usePluginConsent(props);
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
   const { height: windowHeight, fontScale } = useWindowDimensions();
-  // The sheet (at most 85% of the window) shares its height between the identity block at the top of the list and
-  // the pinned summary by one rule (`layoutConsentSheet`, the same as iOS): the summary keeps its heading and two full
-  // lines, the identity block (titles, computer, source, repository, source notes) comes next, the rest of the summary
-  // last. Every part is measured on screen; what does not fit scrolls, with a hint below the summary or the list.
-  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0, hint: 0, listHint: 0 });
+  // Two layouts by one rule (`planConsentSheet`, the same as iOS), from measured content heights only: regular, with the
+  // summary pinned above the buttons, when the identity block (titles, computer, source, repository, source notes) and
+  // the summary's heading with two items fit; compact otherwise, with everything in one scroll area above fixed buttons.
+  // The "keep scrolling" hints float over a scroll area's lower edge and never take room (they cannot change the plan).
+  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0 });
   const [lineHeights, setLineHeights] = useState<number[]>([]);
   const measure = (key: keyof typeof measured) => (event: { nativeEvent: { layout: { height: number } } }) => {
     const height = Math.ceil(event.nativeEvent.layout.height);
@@ -41,18 +41,29 @@ export function PluginManagementConfirmation(
   };
   const sheetPadding = spacing.lg + spacing.xs;
   const lineCount = info?.highRisk?.lines.length ?? 0;
-  // The list scrolls under the summary; its hint shows while the list is longer than its room, until its end is reached.
-  const [list, setList] = useState({ content: 0, atEnd: false });
-  const allocation = layoutConsentSheet({
+  const plan = planConsentSheet({
     available: Math.floor(windowHeight * 0.85) - sheetPadding * 2 - spacing.md /* list bottom padding */
       - (info?.highRisk ? spacing.md * 2 + spacing.xs : 0) /* summary padding, gap under its heading */ - measured.actions,
-    identity: measured.identity, heading: measured.heading, lines: Array.from({ length: lineCount }, (_, index) => lineHeights[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
-    summaryHint: measured.hint, listHint: measured.listHint, hintGap: spacing.xs,
-    listContent: Math.max(0, list.content - spacing.md /* its bottom padding, already counted */),
+    identity: measured.identity, heading: measured.heading,
+    lines: Array.from({ length: lineCount }, (_, index) => lineHeights[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
   });
-  const listClipped = allocation.listClipped && !list.atEnd;
+  const compact = plan.mode === "compact";
+  const list = useScrollOverflow(), summary = useScrollOverflow();
   // Large text: the buttons stack so each label shows in full (as the plugin notices do).
   const stacked = fontScale > 1.2;
+  const heading = info?.highRisk ? (
+    // The heading wraps rather than truncates.
+    <Text testID="plugins.management.highRiskTitle" style={styles.highRiskTitle} onLayout={measure("heading")}>{info.highRisk.title}</Text>
+  ) : null;
+  const summaryLines = info?.highRisk?.lines.map((line, index) => (
+    <Text key={index} style={styles.highRiskBody} onLayout={measureLine(index)}>{line}</Text>
+  ));
+  const moreHint = (testID: string, key: string) => (
+    // Floats over the scroll area's lower edge: takes no room, and says the area scrolls (read by screen readers too).
+    <View pointerEvents="none" style={styles.hintOverlay}>
+      <Text testID={testID} style={styles.hint}>{t(key)}</Text>
+    </View>
+  );
   return (
     <SheetModal
       nativePresentation
@@ -61,66 +72,70 @@ export function PluginManagementConfirmation(
       onBackdropPress={() => answer(false)}
     >
       <View style={styles.sheet} testID="plugins.managementConfirmation">
-        <ScrollView contentContainerStyle={styles.content} testID="plugins.management.list"
-          onContentSizeChange={(_width, height) => { const content = Math.ceil(height); setList((current) => current.content === content ? current : { ...current, content }); }}
-          onScroll={(event) => {
-            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-            const atEnd = contentOffset.y + layoutMeasurement.height >= contentSize.height - 2;
-            setList((current) => current.atEnd === atEnd ? current : { ...current, atEnd });
-          }}
-          scrollEventThrottle={64}>
-          {/* The identity block: where it goes and where it comes from first, in primary text, kept in view with the
-              pinned summary on short screens (measured for its bound); the explanations follow in secondary text. */}
-          <View testID="plugins.management.identity" style={styles.identity} onLayout={measure("identity")}>
-            <Text style={styles.title}>
-              {t("plugins.notice.title.confirmation")}
-            </Text>
-            <Text style={styles.title}>{info?.title}</Text>
-            {[info?.device, info?.origin, info?.repository, info?.originSourceChanged, info?.sourceChanged, info?.trust]
+        <View style={styles.listArea}>
+          <ScrollView contentContainerStyle={styles.content} testID="plugins.management.list"
+            onLayout={list.onLayout} onContentSizeChange={list.onContentSizeChange} onScroll={list.onScroll}
+            scrollEventThrottle={64}>
+            {/* The identity block: where it goes and where it comes from first, in primary text; the first thing shown
+                in either layout. The explanations follow in secondary text. */}
+            <View testID="plugins.management.identity" style={styles.identity} onLayout={measure("identity")}>
+              <Text style={styles.title}>
+                {t("plugins.notice.title.confirmation")}
+              </Text>
+              <Text style={styles.title}>{info?.title}</Text>
+              {[info?.device, info?.origin, info?.repository, info?.originSourceChanged, info?.sourceChanged, info?.trust]
+                .filter(Boolean)
+                .map((text, index) => (
+                  <Text key={"lead" + index} style={styles.lead}>
+                    {text}
+                  </Text>
+                ))}
+            </View>
+            {/* Compact: the whole summary right after the identity block, in the same scroll area. */}
+            {compact && info?.highRisk ? (
+              <View testID="plugins.management.highRisk" style={[styles.highRisk, styles.highRiskInline]}>
+                {heading}
+                <View style={styles.highRiskLines}>{summaryLines}</View>
+              </View>
+            ) : null}
+            {[info?.sourceNotice, info?.version, info?.identity]
               .filter(Boolean)
               .map((text, index) => (
-                <Text key={"lead" + index} style={styles.lead}>
+                <Text key={"note" + index} style={styles.body}>
                   {text}
                 </Text>
               ))}
-          </View>
-          {[info?.sourceNotice, info?.version, info?.identity]
-            .filter(Boolean)
-            .map((text, index) => (
-              <Text key={"note" + index} style={styles.body}>
+            {info?.permissions.map((permission, index) => (
+              <View key={index} style={styles.permission}>
+                <Text style={styles.label}>{permission.title}</Text>
+                {permission.detail ? (
+                  <Text style={styles.body}>{permission.detail}</Text>
+                ) : null}
+              </View>
+            ))}
+            {[info?.unchanged, info?.oauth].filter(Boolean).map((text, index) => (
+              <Text key={index} style={styles.body}>
                 {text}
               </Text>
             ))}
-          {info?.permissions.map((permission, index) => (
-            <View key={index} style={styles.permission}>
-              <Text style={styles.label}>{permission.title}</Text>
-              {permission.detail ? (
-                <Text style={styles.body}>{permission.detail}</Text>
-              ) : null}
-            </View>
-          ))}
-          {[info?.unchanged, info?.oauth].filter(Boolean).map((text, index) => (
-            <Text key={index} style={styles.body}>
-              {text}
-            </Text>
-          ))}
-        </ScrollView>
-        {listClipped ? <Text testID="plugins.management.listMore" style={[styles.hint, styles.listHint]} onLayout={measure("listHint")}>{t("plugins.management.listMore")}</Text> : null}
-        {/* Outside the scroll area: always visible above the buttons, even on short screens. */}
-        {info?.highRisk ? (
-          // Bounded summary: every line in full, scrolling inside its share; full details are in the scrolled list.
+          </ScrollView>
+          {list.more ? moreHint("plugins.management.listMore", "plugins.management.listMore") : null}
+        </View>
+        {/* Regular: outside the scroll area, always visible above the buttons. */}
+        {!compact && info?.highRisk ? (
           <View testID="plugins.management.highRisk" style={styles.highRisk}>
-            {/* The heading wraps rather than truncates. */}
-            <Text testID="plugins.management.highRiskTitle" style={styles.highRiskTitle} onLayout={measure("heading")}>{info.highRisk.title}</Text>
-            {/* Scrolls inside its share; the bar stays visible and a hint says so when lines are hidden. */}
-            <ScrollView testID="plugins.management.highRiskScroll" nestedScrollEnabled persistentScrollbar
-              style={{ maxHeight: allocation.summaryLines }}
-              contentContainerStyle={styles.highRiskLines}>
-              {info.highRisk.lines.map((line, index) => (
-                <Text key={index} style={styles.highRiskBody} onLayout={measureLine(index)}>{line}</Text>
-              ))}
-            </ScrollView>
-            {allocation.clipped ? <Text testID="plugins.management.highRiskMore" style={styles.hint} onLayout={measure("hint")}>{t("plugins.management.highRiskMore")}</Text> : null}
+            {heading}
+            <View>
+              {/* Scrolls inside its height; the bar stays visible and a floating hint says so while items are hidden. */}
+              <ScrollView testID="plugins.management.highRiskScroll" nestedScrollEnabled persistentScrollbar
+                style={{ maxHeight: plan.mode === "regular" ? plan.summaryLines : undefined }}
+                onLayout={summary.onLayout} onContentSizeChange={summary.onContentSizeChange} onScroll={summary.onScroll}
+                scrollEventThrottle={64}
+                contentContainerStyle={styles.highRiskLines}>
+                {summaryLines}
+              </ScrollView>
+              {summary.more ? moreHint("plugins.management.highRiskMore", "plugins.management.highRiskMore") : null}
+            </View>
           </View>
         ) : null}
         <View testID="plugins.management.actions" style={[styles.actions, stacked && styles.stackedActions]} onLayout={measure("actions")}>
@@ -145,6 +160,26 @@ export function PluginManagementConfirmation(
       </View>
     </SheetModal>
   );
+}
+/** Whether a scroll area has more below what it shows (from its own scroll metrics; display only). */
+function useScrollOverflow() {
+  const [area, setArea] = useState({ visible: 0, content: 0, atEnd: false });
+  return {
+    more: area.content > area.visible + 1 && !area.atEnd,
+    onLayout: (event: { nativeEvent: { layout: { height: number } } }) => {
+      const visible = Math.ceil(event.nativeEvent.layout.height);
+      setArea((current) => current.visible === visible ? current : { ...current, visible });
+    },
+    onContentSizeChange: (_width: number, height: number) => {
+      const content = Math.ceil(height);
+      setArea((current) => current.content === content ? current : { ...current, content });
+    },
+    onScroll: (event: { nativeEvent: { contentOffset: { y: number }; contentSize: { height: number }; layoutMeasurement: { height: number } } }) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const atEnd = contentOffset.y + layoutMeasurement.height >= contentSize.height - 2;
+      setArea((current) => current.atEnd === atEnd ? current : { ...current, atEnd });
+    },
+  };
 }
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
@@ -206,11 +241,20 @@ const makeStyles = (c: ThemeColors) =>
     // Large text: Allow first, each button the full width, labels wrapping instead of truncating.
     stackedActions: { flexDirection: "column-reverse" },
     stackedButton: { flex: 0, paddingVertical: spacing.sm },
-    listHint: { marginTop: spacing.xs },
+    // The list takes what the pinned summary and the buttons leave; hints float over its lower edge.
+    listArea: { flexShrink: 1 },
+    hintOverlay: { position: "absolute", right: 0, bottom: spacing.xs, alignItems: "flex-end" },
+    // Compact: the summary inside the scroll area, separated by the same hairline.
+    highRiskInline: { paddingBottom: 0 },
     hint: {
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
       color: c.textSecondary,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 2,
+      borderRadius: radius.pill,
+      overflow: "hidden",
+      backgroundColor: c.surfaceChip,
     },
     unavailable: { opacity: 0.5 },
     button: {

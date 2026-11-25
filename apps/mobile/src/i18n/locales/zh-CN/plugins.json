@@ -325,7 +325,7 @@
     },
     "highRiskTitle": "高风险权限",
     "highRiskTitleCount": "{{title}} · {{count}} 项",
-    "highRiskMore": "在上面的框内滑动查看全部高风险权限",
+    "highRiskMore": "滑动查看全部高风险权限",
     "listMore": "向上滑动查看全部权限说明"
   },
   "notice": {

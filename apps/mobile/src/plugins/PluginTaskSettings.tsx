@@ -1,3 +1,4 @@
+import { usePluginManagementSlot } from "./pluginManagementSlot";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -42,15 +43,9 @@ import { invokePlugin } from "./pluginClient";
 export function PluginTaskSettings({
   deviceId,
   pluginId,
-  blocked = false,
-  onSavingChange,
 }: {
   deviceId: string;
   pluginId: string;
-  /** Another management entry on the screen holds the slot: saving waits (plugin-mobile-implementation.md). */
-  blocked?: boolean;
-  /** A save holds the screen's management slot from its write until it settles, even if this view closes meanwhile. */
-  onSavingChange?: (saving: boolean) => void;
 }) {
   const { t } = useTranslation(),
     { invoke } = useDeviceLink(),
@@ -64,12 +59,12 @@ export function PluginTaskSettings({
     [busy, setBusy] = useState(false);
   const [capabilities, setCapabilities] =
     useState<MobileAgentCapabilities | null>(null);
-  const blockedRef = useRef(blocked),
-    savingChangeRef = useRef(onSavingChange);
-  blockedRef.current = blocked;
-  savingChangeRef.current = onSavingChange;
+  // The page's one management slot (pluginManagementSlot.ts): a save takes it when pressed and releases it with its
+  // own token when the write settles, even if this form was closed or mounted again meanwhile; while anyone holds
+  // it (another save, an install, an update…) the controls are unavailable.
+  const { slot, holder } = usePluginManagementSlot();
+  const blocked = !!holder;
   const alive = useRef(true),
-    lock = useRef(false),
     owner = useRef(getMobileAuthOwner()).current;
   const current = () => alive.current && isMobileAuthOwnerCurrent(owner);
   const call = <T,>(action: string, input: Record<string, unknown> = {}) =>
@@ -129,11 +124,10 @@ export function PluginTaskSettings({
     };
   }, [picker, maker, agent]);
   const save = async (patch: Record<string, unknown>) => {
-    if (!preferences || lock.current || blockedRef.current || !current()) return false;
-    lock.current = true;
+    if (!preferences || !current()) return false;
+    const token = slot.tryAcquire("task-settings");
+    if (!token) return false;
     setBusy(true);
-    const savingChange = savingChangeRef.current;
-    savingChange?.(true);
     try {
       const value = await call<PluginTaskPreferences>("task-settings:set", {
         expectedRevision: preferences.revision,
@@ -151,8 +145,7 @@ export function PluginTaskSettings({
       // Unknown receipt is read back only; configuration writes are never automatically replayed.
       return false;
     } finally {
-      lock.current = false;
-      savingChange?.(false);
+      slot.release(token);
       if (current()) setBusy(false);
     }
   };

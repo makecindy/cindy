@@ -6,7 +6,8 @@ import { PluginUiEnablePrompt } from "@/plugins/PluginUiEnablePrompt";
 import { DeviceLinkError, sharedTaskHostPeer, providerShareHostPeer } from "@cindy/device-link";
 import PluginsScreen from "@/plugins/PluginsScreen";
 import { pluginConsentPresentation } from "@/plugins/pluginConsentPresentation";
-import { usePluginManagement } from "@/plugins/usePluginManagement";
+import { usePluginManagement, __retainedForTests } from "@/plugins/usePluginManagement";
+import { __testing as slotTesting, pluginManagementSlotFor } from "@/plugins/pluginManagementSlot";
 import { createPluginPromptReads } from "@/plugins/pluginPromptReads";
 
 const fixture = vi.hoisted(() => ({
@@ -49,6 +50,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("@/plugins/usePluginManagement", async (importOriginal) => {
   const actual = await importOriginal<any>();
   return ({
+  __retainedForTests: actual.__retainedForTests,
   usePluginManagement: (...args: any[]) => {
     // The market's install controller is keyed "plugin-market:<attempt>"; keep it apart from the detail's.
     if (String(args[3] ?? "").startsWith("plugin-market")) {
@@ -292,6 +294,9 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: ReturnType<typeof createRoot>;
 let element: HTMLDivElement;
 beforeEach(() => {
+  // The page slot and retained controllers live per account in modules; every test starts with none.
+  slotTesting.reset();
+  __retainedForTests?.clear();
   fixture.props.clear();
   fixture.originalSettingsMounts = 0;
   fixture.realManagement = false;
@@ -848,9 +853,11 @@ function managedScreen() {
     ghosts: [plugin],
     market: { items: [market], unavailableCustomSourceNames: [] },
   };
+  // A stand-in operation is over at once: it gives back the page slot it was handed (as the real controller does).
+  const settleHold = async (...args: any[]) => { args.find((arg) => arg && typeof arg.onSettled === "function")?.onSettled(); };
   const controller = {
-    uninstall: vi.fn(),
-    install: vi.fn(),
+    uninstall: vi.fn(settleHold),
+    install: vi.fn(settleHold),
     refresh: vi.fn().mockResolvedValue(undefined),
     getState: () => fixture.management.state,
   };
@@ -877,12 +884,12 @@ it("binds update and uninstall to the selected physical installation", async () 
   // The computer's label for the action ("Update to v{{version}}").
   expect(menu.actions[0].title).toBe("plugins.management.updateTo");
   await act(async () => menu.onAction("update"));
-  expect(controller.install).toHaveBeenCalledWith(market, plugin);
+  expect(controller.install).toHaveBeenCalledWith(market, plugin, expect.objectContaining({ guard: expect.any(Function) }));
   await act(async () => menu.onAction("uninstall"));
   const buttons = fixture.alert.mock.calls.at(-1)![2];
   expect(controller.uninstall).not.toHaveBeenCalled();
   await act(async () => buttons[1].onPress());
-  expect(controller.uninstall).toHaveBeenCalledWith(plugin);
+  expect(controller.uninstall).toHaveBeenCalledWith(plugin, expect.objectContaining({ guard: expect.any(Function) }));
   expect(fixture.props.get("managementScope")[0]).toBe("mac");
 });
 // Preflight can fail before an operation ID exists; the removed status strip must not swallow that failure.
@@ -1095,32 +1102,41 @@ it("holds the management slot while an update reads its market detail, so the ma
   // Only the update reaches begin.
   expect(begins().map((request) => request.input.pluginId)).toEqual([market.pluginId]);
 });
-// Maintainer review 13:41: the slot missed "disable first, then install from the market" (the switch used its own lock
-// and request) and the task settings save. Every entry that writes to the Host or opens a confirmation, on either side of
-// the wide screen, holds the one management slot while its request is in flight (table in plugin-mobile-implementation.md).
-// For every ordered pair: while the first entry's request is held, the second is unavailable and trying it sends
-// nothing. Minimal failing input: a held disable, then an install from the market (e46ff0aa sent it). Tier: unit.
-describe("one management slot for every entry, both directions", () => {
+/* 测试价值（维护者 15:37 复审第 1、2 条；调度要求的结构性收口）
+ * - 生产入口与可观察结果：真实 PluginsScreen、真实 PluginTaskSettings 表单、真实 usePluginMarket 与管理
+ *   client / controller，只替换设备互联的传输；观察写向 Host 的请求（market-detail、begin、开关、task-settings:set）
+ *   与各入口显示是否可用。
+ * - 依据：页面只有一个同步占用（pluginManagementSlot.ts）：按下即 tryAcquire，只有持有者的凭据能释放，卸载 / 重新
+ *   挂载不释放也不重置；各入口的「不可用」只是它的投影。
+ * - 缺口：入口各自用渲染态、ref 或表单本地锁判断；同一次渲染的两个回调、重新挂载的表单都能再写一次。
+ * - 最小失败输入：任务设置保存挂起时换详情再保存（第二笔写出）；同一个 act 里先后交付市场安装与页面批准（两条
+ *   begin）。tier: unit；每个用例只渲染一次页面，传输为同步替身。
+ */
+describe("one page slot for every entry (real components, three ways of delivering the second press)", () => {
   const entries = ["market install", "update", "uninstall", "enable switch", "page approval", "task settings"] as const;
   type Entry = typeof entries[number];
-  const findTaskSettings = (node: any): any => {
-    if (!node || typeof node !== "object") return undefined;
-    if (Array.isArray(node)) { for (const child of node) { const hit = findTaskSettings(child); if (hit) return hit; } return undefined; }
-    if (node.props?.onSavingChange) return node;
-    return findTaskSettings(node.props?.children);
-  };
+  /** Which entry a request written to the Host belongs to. */
+  const owner = (request: string): Entry => request === "market-detail:other" || request === "begin:install:market/other" ? "market install"
+    : request === "market-detail:update" || request === "begin:install:market/demo" ? "update"
+      : request === "begin:uninstall" ? "uninstall" : request === "begin:approve-ui" ? "page approval"
+        : request === "switch" ? "enable switch" : "task settings";
   async function screen() {
     const { plugin, snapshot, market } = realManagementHost();
     Object.assign(plugin.manifest, { tools: [{ name: "open" }], mcpApps: { ui: { resources: [{ uri: "ui://form", file: "ui/form.html" }], tools: { open: { resourceUri: "ui://form" } } } } });
     Object.assign(snapshot, { uiCapabilityApproval: true });
-    fixture.blocks = [{ id: "capabilities", data: { tasks: true } }];
-    fixture.stubTaskSettings = true;
+    // A second installed plugin, to switch the detail away and back (remounting the detail, its form and controller).
+    const second = { ...plugin, instanceKey: "demo-b", manifest: { ...plugin.manifest, id: "demo-b", name: "Demo B" } };
+    snapshot.ghosts.push(second as any);
+    fixture.extraRows = [{ ...row(), key: "mac:plugin-b", item: { ...row().item, ref: { collectionId: "plugins", kind: "plugin", id: "demo-b" }, display: { title: "Demo B" } } }];
+    fixture.blocks = [{ id: "capabilities", primitive: "plugin-capabilities", data: { tasks: true } }];
     fixture.width = 900;
     const other = { ...marketItem("other", "Other"), pluginId: "market/other" };
-    const hold = { other: false, update: false, begin: false, toggle: false };
+    // Every first request of an entry waits here until `release`; afterwards operations end at once (cancelled).
+    let holding = true;
     const gates: Array<() => void> = [];
-    const held = () => new Promise<void>((resolve) => { gates.push(resolve); });
+    const held = () => holding ? new Promise<void>((resolve) => { gates.push(resolve); }) : Promise.resolve();
     const writes: string[] = [];
+    const preferences = { revision: "tasks-1", config: {}, permissionModes: ["ask"], defaultPermissionMode: "ask" };
     fixture.wire.mockImplementation(async (_host: string, channel: string, args: any[], options: any) => {
       options?.preSend?.(); options?.onRequestWritten?.();
       if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
@@ -1133,66 +1149,275 @@ describe("one management slot for every entry, both directions", () => {
       if (request.actionId === "management:market-detail") {
         const isOther = request.input?.pluginId === other.pluginId;
         writes.push(isOther ? "market-detail:other" : "market-detail:update");
-        if (isOther ? hold.other : hold.update) await held();
+        await held();
         return { result: isOther ? { ...other, manifest: { schemaVersion: 3, id: "other", name: "Other", version: "1" } } : market };
       }
       if (request.actionId === "management:begin") {
-        writes.push(`begin:${request.input.kind}`);
-        if (hold.begin) await held();
-        return { result: { operationId: request.input.operationId, phase: "running" } };
+        writes.push(`begin:${request.input.kind}${request.input.kind === "install" ? ":" + request.input.pluginId : ""}`);
+        await held();
+        return { result: { operationId: request.input.operationId, phase: "cancelled" } };
       }
-      if (request.actionId === "management:operation") return { result: { operationId: request.input.operationId, phase: "running" } };
+      if (request.actionId === "management:operation") return { result: { operationId: request.input.operationId, phase: "cancelled" } };
+      if (request.actionId === "management:cancel") return { result: { operationId: request.input.operationId, phase: "cancelled" } };
       throw new Error("Unexpected action " + request.actionId);
     });
-    fixture.invoke.mockImplementation(async (..._args: any[]) => { writes.push("switch"); if (hold.toggle) await held(); return {}; });
+    fixture.invoke.mockImplementation(async (_invoke: unknown, _device: string, _plugin: string, action: string) => {
+      if (action === "task-settings:get") return preferences;
+      if (action === "task-settings:set") { writes.push("task-settings"); await held(); return preferences; }
+      writes.push("switch"); await held(); return {};
+    });
+    const openOn = async (id: "demo" | "demo-b") => {
+      const target = id === "demo" ? row() : fixture.extraRows[0];
+      await act(async () => fixture.props.get("directory").onDetail(target));
+      await settle(8);
+    };
     await openDetail();
+    await settle(8);
     await act(async () => fixture.props.get("directory").onSegmentChange("market"));
     await settle(14);
     const menu = (id: string) => fixture.props.get("header").rightToolbar.props.actions.find((action: any) => action.id === id);
     const approval = () => fixture.props.get("detail").uiApprovalNotice?.actions?.[0];
-    const taskSettings = () => findTaskSettings(fixture.props.get("detail").settingsContent);
+    const modelButton = () => [...element.querySelectorAll("button")].find((button) => button.textContent?.includes("plugins.taskModel"));
     const available: Record<Entry, () => boolean> = {
       "market install": () => shownMarket().canInstall === true,
       update: () => !!menu("update") && !menu("update").disabled,
       uninstall: () => !!menu("uninstall") && !menu("uninstall").disabled,
       "enable switch": () => fixture.props.get("detail").busy === false,
       "page approval": () => approval()?.disabled === false,
-      "task settings": () => !!taskSettings() && taskSettings().props.blocked === false,
+      "task settings": () => !!modelButton() && !(modelButton() as HTMLButtonElement).disabled,
     };
-    // Starting an entry: what a tap does. `keep` holds its request in flight.
-    const start = async (entry: Entry, keep: boolean) => {
-      if (entry === "market install") { hold.other = keep; await act(async () => { void shownMarket().install(shownMarket().items[0]); }); }
-      if (entry === "update") { hold.update = keep; await act(async () => { void fixture.props.get("header").rightToolbar.props.onAction("update"); }); }
-      if (entry === "uninstall") {
-        hold.begin = keep;
-        const alerts = fixture.alert.mock.calls.length;
-        await act(async () => { void fixture.props.get("header").rightToolbar.props.onAction("uninstall"); });
-        if (fixture.alert.mock.calls.length > alerts) await act(async () => { void fixture.alert.mock.calls.at(-1)![2][1].onPress(); });
+    const choice = { agent: "codex", providerId: "host-provider", modelId: "host-model", effort: "high", fast: false };
+    /** What a press does, bound to the current render (it may be delivered later, from a stale render). */
+    const press = async (entry: Entry): Promise<() => void> => {
+      if (entry === "market install") { const m = shownMarket(); return () => { void m.install(m.items[0]); }; }
+      if (entry === "update" || entry === "uninstall") {
+        const toolbar = fixture.props.get("header").rightToolbar.props;
+        return () => {
+          const alerts = fixture.alert.mock.calls.length;
+          void toolbar.onAction(entry);
+          // The uninstall alert's destructive button, pressed right away.
+          if (entry === "uninstall" && fixture.alert.mock.calls.length > alerts) void fixture.alert.mock.calls.at(-1)![2][1].onPress();
+        };
       }
-      if (entry === "enable switch") { hold.toggle = keep; await act(async () => { void fixture.props.get("detail").onEnabledChange(false); }); }
-      if (entry === "page approval") { hold.begin = keep; await act(async () => { approval()?.onPress(); }); }
-      if (entry === "task settings") await act(async () => { taskSettings()?.props.onSavingChange(true); });
-      await settle(6);
+      if (entry === "enable switch") { const detail = fixture.props.get("detail"); return () => { void detail.onEnabledChange(false); }; }
+      if (entry === "page approval") { const action = approval(); return () => { action?.onPress(); }; }
+      // Task settings: open the model picker (sends nothing); choosing saves.
+      const button = modelButton();
+      if (!button) return () => {};
+      await act(async () => button.click());
+      const picker = fixture.props.get("taskModelPicker");
+      return () => { void picker.unified.onSelect(choice, undefined); };
     };
-    const release = async (entry: Entry) => {
-      if (entry === "task settings") await act(async () => { taskSettings()?.props.onSavingChange(false); });
+    const release = async () => {
+      holding = false;
       await act(async () => { gates.splice(0).forEach((open) => open()); });
+      await settle(20);
+    };
+    /** The holder's views go away and come back: another plugin's detail and back, narrow and wide again. */
+    const remount = async () => {
+      await openOn("demo-b");
+      fixture.width = 400;
+      await act(async () => root.render(createElement(PluginsScreen)));
+      fixture.width = 900;
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await openOn("demo");
+      await act(async () => fixture.props.get("directory").onSegmentChange("installed"));
+      await act(async () => fixture.props.get("directory").onSegmentChange("market"));
       await settle(14);
     };
-    return { available, start, release, writes };
+    return { available, press, release, remount, writes, openOn };
   }
-  it.each(entries.flatMap((holder) => entries.filter((other) => other !== holder).map((other) => [holder, other] as const)))(
-    "while %s is in flight, %s is unavailable and sends nothing", async (holder, other) => {
+  const pairs = entries.flatMap((first) => entries.map((second) => [first, second] as const));
+  const third = (first: Entry, second: Entry) => entries.find((entry) => entry !== first && entry !== second)!;
+  const ownersAfter = (writes: string[], from: number) => [...new Set(writes.slice(from).map(owner))];
+  it.each(pairs.filter(([first, second]) => first !== second))(
+    "① while %s is in flight, %s pressed (fresh or stale) sends nothing", async (first, second) => {
       const s = await screen();
-      for (const entry of [holder, other]) expect(s.available[entry](), `${entry} before`).toBe(true);
-      await s.start(holder, true);
-      expect(s.available[other](), `${other} while ${holder}`).toBe(false);
-      const sent = [...s.writes];
-      await s.start(other, false);
-      // Only the holder's own request; the second entry sent nothing.
-      expect(s.writes.slice(sent.length)).toEqual([]);
-      await s.release(holder);
+      for (const entry of [first, second]) expect(s.available[entry](), `${entry} before`).toBe(true);
+      const stale = await s.press(second);
+      (await s.press(first))();
+      await settle(10);
+      expect(s.available[second](), `${second} while ${first}`).toBe(false);
+      expect(s.available[third(first, second)](), `third entry while ${first}`).toBe(false);
+      const sent = s.writes.length;
+      await act(async () => stale());
+      await act(async () => (await s.press(second))());
+      await settle(10);
+      expect(ownersAfter(s.writes, sent)).toEqual([]);
+      expect(ownersAfter(s.writes, 0)).toEqual([first]);
+      await s.release();
+      expect(s.available[third(first, second)](), `third entry after ${first}`).toBe(true);
     });
+  it.each(pairs)("② %s and %s pressed in the same act: only the first starts", async (first, second) => {
+    const s = await screen();
+    const a = await s.press(first), b = await s.press(second);
+    await act(async () => { a(); b(); });
+    await settle(10);
+    expect(ownersAfter(s.writes, 0)).toEqual([first]);
+    // Pressed twice: still one request of its own.
+    if (first === second) expect(s.writes.filter((write) => owner(write) === first && !write.startsWith("market-detail")).length
+      + s.writes.filter((write) => write.startsWith("market-detail")).length).toBe(1);
+    await s.release();
+  });
+  it.each(pairs)("③ %s in flight, its views mounted again, then %s pressed: nothing sent", async (first, second) => {
+    const s = await screen();
+    (await s.press(first))();
+    await settle(10);
+    const sent = s.writes.length;
+    await s.remount();
+    expect(s.available[second](), `${second} after remounting`).toBe(false);
+    await act(async () => (await s.press(second))());
+    await settle(10);
+    expect(ownersAfter(s.writes, sent)).toEqual([]);
+    await s.release();
+    expect(s.available[third(first, second === first ? third(first, first) : second)]()).toBe(true);
+  });
+  // The maintainer's own steps: plugin A's task settings save is in flight; switch to plugin B and save there.
+  it("keeps a second task settings save from another plugin's form while the first is in flight", async () => {
+    const s = await screen();
+    (await s.press("task settings"))();
+    await settle(10);
+    await s.openOn("demo-b");
+    expect(s.available["task settings"]()).toBe(false);
+    await act(async () => (await s.press("task settings"))());
+    await settle(10);
+    expect(s.writes.filter((write) => write === "task settings" || write === "task-settings")).toEqual(["task-settings"]);
+    // The market stays unavailable until the first save is over, then comes back.
+    expect(shownMarket().canInstall).toBe(false);
+    await s.release();
+    expect(shownMarket().canInstall).toBe(true);
+  });
+});
+/* 测试价值（调度要求：释放路径逐条列出并测；规则表见 plugin-mobile-implementation.md）
+ * - 生产入口与可观察结果：真实 PluginsScreen + 管理 client / controller（传输替身），从已装详情的「更新」进入；
+ *   观察页面占用的持有者。
+ * - 依据：占用只由持有者释放；结束、失败、拒绝、预检拒绝都释放；断线转入「结果待确认」时，自动查询还能得到结果或
+ *   结果仍在界面上可核实时保持，离开且再无自动进展时放开；离开页面时操作跟到结束再释放；换账号时释放。
+ * - 缺口：漏释放会永久锁死其它入口；提前释放会让第二项在第一项结束前写出。
+ * - 最小失败输入：每条路径各一次。tier: unit。
+ */
+describe("page slot release paths", () => {
+  const holder = () => pluginManagementSlotFor().holder();
+  async function updateScreen(host: { begin?: (request: any) => unknown; operation?: (request: any) => unknown; answer?: (request: any) => unknown;
+    detail?: () => unknown }) {
+    const { snapshot, market } = realManagementHost();
+    fixture.width = 900;
+    const requests: string[] = [];
+    fixture.wire.mockImplementation(async (_host: string, channel: string, args: any[], options: any) => transportSend(options, async () => {
+      if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
+      const request = args[0];
+      requests.push(request.actionId);
+      if (request.actionId === "management:snapshot") return { result: snapshot };
+      if (request.actionId === "management:market-detail") return { result: host.detail ? host.detail() : market };
+      const respond = request.actionId === "management:begin" ? host.begin : request.actionId === "management:operation" ? host.operation
+        : request.actionId === "management:answer" ? host.answer : undefined;
+      if (!respond) throw new Error("Unexpected action " + request.actionId);
+      return { result: await respond(request) };
+    }));
+    await openDetail();
+    await settle(8);
+    const update = async () => { await act(async () => { void fixture.props.get("header").rightToolbar.props.onAction("update"); }); await settle(14); };
+    return { update, requests, market };
+  }
+  const receiptOf = (request: any, phase: string, extra: Record<string, unknown> = {}) => ({ operationId: request.input.operationId, phase, ...extra });
+  it("releases it when the update succeeds", async () => {
+    const s = await updateScreen({ begin: (request) => receiptOf(request, "succeeded") });
+    await s.update();
+    expect(holder()).toBeNull();
+  });
+  it("releases it when the update fails on the computer", async () => {
+    const s = await updateScreen({ begin: (request) => receiptOf(request, "failed", { errorCode: "PACKAGE_CHANGED" }) });
+    await s.update();
+    expect(holder()).toBeNull();
+  });
+  it("releases it when the person rejects the confirmation", async () => {
+    const s = await updateScreen({ begin: (request) => ({ ...demoConsent(request), consent: { ...demoConsent(request).consent, facts: {
+      kind: "update", ghostId: "demo", name: "Demo", version: "2", previousVersion: "1", added: [], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } } }),
+      answer: (request) => receiptOf(request, "cancelled") });
+    await s.update();
+    expect(holder()).toMatchObject({ entry: "update" });
+    await act(async () => { await fixture.props.get("observedManagement").controller.answer(false); });
+    await settle(14);
+    expect(holder()).toBeNull();
+  });
+  it("releases it at once when the preflight read refuses the update, sending nothing", async () => {
+    const s = await updateScreen({ detail: () => ({ ...realManagementHost().market, releaseId: "r3" }) });
+    await s.update();
+    expect(s.requests).not.toContain("management:begin");
+    expect(holder()).toBeNull();
+  });
+  it("keeps it while an unknown result can still settle by itself, and releases it when it does", async () => {
+    let settled = false;
+    const s = await updateScreen({
+      begin: () => { throw new Error("[TIMEOUT] remote invoke timed out"); },
+      operation: (request) => receiptOf(request, settled ? "succeeded" : "running"),
+    });
+    await s.update();
+    expect(fixture.props.get("observedManagement").state.outcome).toBe("unknown");
+    expect(holder()).toMatchObject({ entry: "update" });
+    settled = true;
+    await act(async () => { await fixture.props.get("observedManagement").controller.reconcile(); });
+    await settle(14);
+    expect(holder()).toBeNull();
+  });
+  it("keeps it while a stopped unknown result is shown, and lets it go once that view is gone", async () => {
+    const s = await updateScreen({
+      begin: () => { throw new Error("[TIMEOUT] remote invoke timed out"); },
+      operation: () => { throw new Error("[INVALID_RESPONSE] nonsense"); },
+    });
+    await s.update();
+    await act(async () => { await fixture.props.get("observedManagement").controller.reconcile(); });
+    await settle(14);
+    expect(fixture.props.get("observedManagement").controller.lookupsStopped()).toBe(true);
+    // Still shown: "Check result" is right there, so the slot stays with it.
+    expect(holder()).toMatchObject({ entry: "update" });
+    await act(async () => root.render(createElement("div")));
+    await settle(6);
+    expect(holder()).toBeNull();
+  });
+  it("follows an update to its end after the page is left, then releases it", async () => {
+    let finish!: () => void;
+    const s = await updateScreen({ begin: (request) => new Promise((resolve) => { finish = () => resolve(receiptOf(request, "succeeded")); }) });
+    await s.update();
+    expect(s.requests).toContain("management:begin");
+    await act(async () => root.render(createElement("div")));
+    await settle(6);
+    // Left the page: the operation is still under way and keeps the slot.
+    expect(holder()).toMatchObject({ entry: "update" });
+    await act(async () => { finish(); });
+    await settle(14);
+    expect(holder()).toBeNull();
+  });
+  // Switching accounts: covered with the real account owner in pluginManagement.test.ts ("page management slot").
+  // Self-check (same method as the maintainer: production client / controller, another order of events): leaving an
+  // unanswered confirmation for another plugin's detail cancels it, as leaving always did, and the slot stays with it
+  // until that cancel is over; nothing else starts meanwhile.
+  it("cancels an unanswered confirmation left for another plugin's detail, and keeps the slot until the cancel settles", async () => {
+    let finishCancel!: () => void;
+    const s = await updateScreen({ begin: (request) => ({ ...demoConsent(request), consent: { ...demoConsent(request).consent, facts: {
+      kind: "update", ghostId: "demo", name: "Demo", version: "2", previousVersion: "1", added: [], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } } }) });
+    fixture.extraRows = [{ ...row(), key: "mac:plugin-b", item: { ...row().item, ref: { collectionId: "plugins", kind: "plugin", id: "demo-b" }, display: { title: "Demo B" } } }];
+    const wire = fixture.wire.getMockImplementation()!;
+    fixture.wire.mockImplementation(async (host: string, channel: string, args: any[], options: any) => {
+      if (args?.[0]?.actionId === "management:cancel") {
+        s.requests.push("management:cancel");
+        options?.preSend?.(); options?.onRequestWritten?.();
+        await new Promise<void>((resolve) => { finishCancel = resolve; });
+        return { result: { operationId: args[0].input.operationId, phase: "cancelled" } };
+      }
+      return wire(host, channel, args, options);
+    });
+    await s.update();
+    expect(fixture.props.get("observedManagement").state.outcome).toBe("confirmation");
+    await act(async () => fixture.props.get("directory").onDetail(fixture.extraRows[0]));
+    await settle(10);
+    expect(s.requests).toContain("management:cancel");
+    expect(holder()).toMatchObject({ entry: "update" });
+    await act(async () => { finishCancel(); });
+    await settle(14);
+    expect(holder()).toBeNull();
+    expect(s.requests.filter((request) => request === "management:begin")).toHaveLength(1);
+  });
 });
 // Codex review of b93ba486: on a wide screen the market sits beside an installed detail. While a market install was
 // still in its preflight, the installed detail's page approval stayed available, so two controllers could each reach a
@@ -1534,13 +1759,13 @@ it('offers UI consent in plugin details even when the Host has suppressed its ta
   Object.assign(plugin.manifest, { tools: [{ name: 'open' }], mcpApps: { ui: { resources: [{ uri: 'ui://form', file: 'ui/form.html' }], tools: { open: { resourceUri: 'ui://form' } } } } });
   Object.assign(plugin, { uiPromptSuppressed: true });
   Object.assign(snapshot, { uiCapabilityApproval: true });
-  const approveUi = vi.fn();
+  const approveUi = vi.fn(async (_plugin: unknown, hold?: { onSettled(): void }) => hold?.onSettled());
   Object.assign(controller, { approveUi });
   await openDetail();
   const notice = fixture.props.get('detail').uiApprovalNotice;
   expect(notice.title).toBe('plugins.uiApproval.title');
   await act(async () => notice.actions[0].onPress());
-  expect(approveUi).toHaveBeenCalledWith(plugin);
+  expect(approveUi).toHaveBeenCalledWith(plugin, expect.objectContaining({ guard: expect.any(Function) }));
   Object.assign(plugin, { uiCapabilityApproved: true });
   await act(async () => root.render(createElement(PluginsScreen)));
   expect(fixture.props.get('detail').uiApprovalNotice).toBeUndefined();

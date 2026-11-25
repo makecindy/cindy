@@ -13,7 +13,7 @@ import { PluginTaskPickerView } from "@/plugins/PluginTaskPickerView.ios";
 import { PluginTaskPickerView as AndroidTaskPickerView } from "@/plugins/PluginTaskPickerView";
 import { pluginDetailModel } from "@/plugins/pluginDetailModel";
 import { palettes } from "@/theme/tokens";
-import { allocateConsentSheet, layoutConsentSheet } from "@/plugins/pluginConsentPresentation";
+import { planConsentSheet } from "@/plugins/pluginConsentPresentation";
 import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation.ios";
 import { PluginManagementConfirmation as AndroidManagementConfirmation } from "@/plugins/PluginManagementConfirmation";
 import { PluginModelPicker } from '@/plugins/PluginModelPicker';
@@ -1528,11 +1528,28 @@ describe("pinned high-risk permission", () => {
   const geometry = (id: string, height: number) => act(() => {
     bridge.props.get(id).modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 390, height });
   });
-  // Layout re-checks (d81200da): one sharing rule for both platforms (`allocateConsentSheet`, its matrix is in
-  // pluginManagement.test.ts). Here: the sheets feed it what they measure and use its result; the heading wraps and
-  // says how many classes follow; a hint shows when lines are hidden; at large text the buttons stack, Allow first.
-  it("iOS shows every pinned line in full and shares the sheet by the measured parts", () => {
-    bridge.fontScale = 2.4;
+  /* 测试价值（维护者 16:48 复审；两档布局）
+   * - 生产入口与可观察结果：两端真实确认面板组件；观察渲染树里滚动容器的个数、摘要所在位置、分给摘要的高度。
+   * - 依据：放得下「身份块 + 摘要标题 + 前两项」时摘要固定在按钮上方；放不下时只有一个滚动区（身份块 → 全部摘要 →
+   *   完整说明），按钮固定在外；「继续滑动」提示浮在滚动区边缘，不占正文高度。
+   * - 缺口：矮屏大字号时两条提示把摘要压到 0 高度，允许按钮仍可用。
+   * - 最小失败输入：可分配 100、身份块 384、标题 40、五项 [36, 48, 40, 40, 48]。tier: unit。
+   */
+  const findIn = (node: any, testID: string): boolean => {
+    if (!node || typeof node !== "object") return false;
+    if (Array.isArray(node)) return node.some((child) => findIn(child, testID));
+    if (node.props?.testID === testID) return true;
+    return findIn(node.props?.children, testID);
+  };
+  const scrollCount = (node: any): number => {
+    if (!node || typeof node !== "object") return 0;
+    if (Array.isArray(node)) return node.reduce((sum: number, child: any) => sum + scrollCount(child), 0);
+    const self = node.type?.name === "ScrollView" || node.props?.["data-native"] === "ScrollView" ? 1 : 0;
+    return self + scrollCount(node.props?.children);
+  };
+  const reviewLines = [36, 48, 40, 40, 48];
+  it("iOS pins the summary above the buttons when the identity block and two items fit", () => {
+    bridge.fontScale = 1;
     mount(PluginManagementConfirmation, props(allFive));
     const scroll = () => bridge.props.get("plugins.management.highRiskScroll");
     const lines = () => (Array.isArray(scroll().children.props.children) ? scroll().children.props.children : [scroll().children.props.children]).flat();
@@ -1540,79 +1557,89 @@ describe("pinned high-risk permission", () => {
     for (const line of lines()) expect(line.props.modifiers.some((m: any) => "lineLimit" in m)).toBe(false);
     expect(bridge.props.get("plugins.management.highRiskTitle").modifiers.some((m: any) => "lineLimit" in m)).toBe(false);
     expect(scroll().modifiers).toContainEqual({ scrollIndicators: "visible" });
-    // The window (844 pt, no insets here) minus the sheet header at this text size, the fixed footer spacing and the buttons.
-    const header = Math.ceil(64 * 2) + 10, chrome = 8 * 2 + 8 * 4 + 4 + 12;
-    const height = () => scroll().modifiers.find((m: any) => m.frame)?.frame.height;
-    expect(height()).toBe(Math.floor((844 - header - chrome) * 0.25)); // not measured yet: a conservative share
-    geometry("plugins.management.identity", 360);
-    geometry("plugins.management.actions", 96);
-    geometry("plugins.management.highRiskTitle", 30);
-    lines().forEach((line: any) => act(() => line.props.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 300, height: 40 })));
-    const share = allocateConsentSheet({ available: 844 - header - chrome - 96, identity: 360, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4 });
-    expect(share).toMatchObject({ identity: 360, clipped: true });
-    // The hint takes room too once it shows.
-    geometry("plugins.management.highRiskMore", 20);
-    const hinted = allocateConsentSheet({ available: 844 - header - chrome - 96 - 20 - 8, identity: 360, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4 });
-    expect(height()).toBe(hinted.summaryLines);
-    expect(hinted.summaryLines).toBeGreaterThanOrEqual(2 * 40 + 4);
-    expect(bridge.props.has("plugins.management.listMore")).toBe(false);
-    // An identity block taller than its share: the list hint says to scroll up, and takes room from the summary.
-    geometry("plugins.management.identity", 520);
-    expect(bridge.props.has("plugins.management.listMore")).toBe(true);
-    geometry("plugins.management.listMore", 20);
-    const tall = layoutConsentSheet({ available: 844 - header - chrome - 96, identity: 520, heading: 30, lines: [40, 40, 40, 40, 40],
-      gap: 4, summaryHint: 20, listHint: 20, hintGap: 8, listContent: 520 });
-    expect(tall.listClipped).toBe(true);
-    expect(height()).toBe(tall.summaryLines);
-    // Large text: the buttons stack (a VStack), Allow first.
-    const actions = bridge.props.get("plugins.management.actions");
-    const order = (Array.isArray(actions.children) ? actions.children : [actions.children]).flat().map((child: any) => child.props.testID);
-    expect(order).toEqual(["plugins.management.allow", "plugins.management.reject"]);
+    const header = Math.ceil(64 * 1) + 10, chrome = 8 * 2 + 8 * 3 + 4 + 12;
+    geometry("plugins.management.identity", 200);
+    geometry("plugins.management.actions", 44);
+    geometry("plugins.management.highRiskTitle", 20);
+    lines().forEach((line: any) => act(() => line.props.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 300, height: 20 })));
+    const plan = planConsentSheet({ available: 844 - header - chrome - 44, identity: 200, heading: 20, lines: [20, 20, 20, 20, 20], gap: 4 });
+    expect(plan).toEqual({ mode: "regular", summaryLines: 5 * 20 + 4 * 4, clipped: false });
+    expect(scroll().modifiers.find((m: any) => m.frame)?.frame.height).toBe(plan.mode === "regular" && plan.summaryLines);
+    // Pinned: in the footer, with the buttons; no "keep scrolling" text takes room on iOS.
+    const footer = bridge.props.get("plugins.managementConfirmation").footer;
+    expect(findIn(footer, "plugins.management.highRisk")).toBe(true);
+    expect(findIn(footer, "plugins.management.actions")).toBe(true);
+    expect(bridge.props.has("plugins.management.listMore") || bridge.props.has("plugins.management.highRiskMore")).toBe(false);
   });
-  it("Android shows every pinned line in full and shares the sheet by the measured parts", () => {
+  it("iOS puts everything in one scrolled list above fixed buttons when they do not fit (maintainer's numbers)", () => {
+    bridge.fontScale = 2.4;
+    const { container } = mount(PluginManagementConfirmation, props(allFive));
+    const header = Math.ceil(64 * 2) + 10, chrome = 8 * 2 + 8 * 3 + 4 + 12;
+    // The buttons take what makes 100 pt of room for the rest.
+    geometry("plugins.management.actions", 844 - header - chrome - 100);
+    geometry("plugins.management.identity", 384);
+    geometry("plugins.management.highRiskTitle", 40);
+    const items = () => [...bridge.props.values()].filter((p: any) => fiveLines.includes(p.children));
+    items().forEach((item: any, index: number) => act(() => item.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 300, height: reviewLines[index] })));
+    const sheet = bridge.props.get("plugins.managementConfirmation");
+    // Compact: the summary is in the list (children), not in the footer, and it has no scroll area of its own.
+    expect(findIn(sheet.footer, "plugins.management.highRisk")).toBe(false);
+    expect(findIn(sheet.children, "plugins.management.highRisk")).toBe(true);
+    expect(findIn(sheet.footer, "plugins.management.actions")).toBe(true);
+    expect(findIn(sheet.children, "plugins.management.highRiskScroll") || findIn(sheet.footer, "plugins.management.highRiskScroll")).toBe(false);
+    // The source line and every high-risk item are there to read; the identity block comes first.
+    expect(container.textContent).toContain("plugins.notice.consentSource.market");
+    for (const line of fiveLines) expect(container.textContent).toContain(line);
+    expect(findIn(sheet.children, "plugins.management.identity")).toBe(true);
+  });
+  it("Android pins the summary above the buttons when the identity block and two items fit", () => {
     bridge.fontScale = 2;
-    mount(AndroidManagementConfirmation, props(allFive));
+    const { container } = mount(AndroidManagementConfirmation, props(allFive));
     const scroll = () => bridge.props.get("plugins.management.highRiskScroll");
     const lines = () => (Array.isArray(scroll().children) ? scroll().children : [scroll().children]).flat().filter(Boolean);
     expect(lines().map((line: any) => line.props.children)).toEqual(fiveLines);
     for (const line of lines()) expect(line.props.numberOfLines).toBeUndefined();
-    const heading = () => (bridge.props.get("plugins.management.highRisk").children as any[]).flat().find((child: any) => child?.props?.testID === "plugins.management.highRiskTitle");
-    expect(heading().props.numberOfLines).toBeUndefined();
     expect(scroll().persistentScrollbar).toBe(true);
     const chrome = 20 * 2 + 12 + 12 * 2 + 4;
-    // Before measuring: a conservative quarter of the sheet (85% of 844, minus its padding).
-    expect(scroll().style).toMatchObject({ maxHeight: Math.floor((Math.floor(844 * 0.85) - chrome) * 0.25) });
     const layout = (id: string, height: number) => act(() => bridge.props.get(id).onLayout({ nativeEvent: { layout: { height } } }));
+    const heading = () => (bridge.props.get("plugins.management.highRisk").children as any[]).flat().find((child: any) => child?.props?.testID === "plugins.management.highRiskTitle");
+    expect(heading().props.numberOfLines).toBeUndefined();
     layout("plugins.management.identity", 380);
     layout("plugins.management.actions", 104);
     act(() => heading().props.onLayout({ nativeEvent: { layout: { height: 30 } } }));
     lines().forEach((line: any) => act(() => line.props.onLayout({ nativeEvent: { layout: { height: 40 } } })));
     const available = Math.floor(844 * 0.85) - chrome - 104;
-    expect(allocateConsentSheet({ available, identity: 380, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4 })).toMatchObject({ identity: 380, clipped: true });
-    const hint = (bridge.props.get("plugins.management.highRisk").children as any[]).flat().find((child: any) => child?.props?.testID === "plugins.management.highRiskMore");
-    act(() => hint.props.onLayout({ nativeEvent: { layout: { height: 20 } } }));
-    const hinted = allocateConsentSheet({ available: available - 20 - 4, identity: 380, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4 });
-    expect(scroll().style.maxHeight).toBe(hinted.summaryLines);
-    expect(hinted.summaryLines).toBeGreaterThanOrEqual(2 * 40 + 4);
-    // The list is longer than the room left to it: its hint shows and takes its own room from the summary's share.
-    const listMore = () => (bridge.props.get("plugins.managementConfirmation").children as any[]).flat()
-      .find((child: any) => child?.props?.testID === "plugins.management.listMore");
-    expect(listMore()).toBeUndefined();
+    const plan = planConsentSheet({ available, identity: 380, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4 });
+    expect(plan).toMatchObject({ mode: "regular", clipped: true });
+    expect(scroll().style.maxHeight).toBe(plan.mode === "regular" && plan.summaryLines);
+    // The list grows longer than its room: the hint floats over it and no height changes.
+    act(() => bridge.props.get("plugins.management.list").onLayout({ nativeEvent: { layout: { height: 300 } } }));
     act(() => bridge.props.get("plugins.management.list").onContentSizeChange(390, 1200));
-    expect(listMore()).toBeDefined();
-    act(() => listMore().props.onLayout({ nativeEvent: { layout: { height: 20 } } }));
-    const withList = layoutConsentSheet({ available, identity: 380, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4,
-      summaryHint: 20, listHint: 20, hintGap: 4, listContent: 1200 - 12 });
-    expect(withList.listClipped).toBe(true);
-    expect(scroll().style.maxHeight).toBe(withList.summaryLines);
-    expect(withList.summaryLines).toBeLessThan(hinted.summaryLines);
-    // Scrolled to the end: the hint goes, the room stays (nothing jumps under the finger).
-    act(() => bridge.props.get("plugins.management.list").onScroll({ nativeEvent: { contentOffset: { y: 900 },
-      contentSize: { height: 1200 }, layoutMeasurement: { height: 300 } } }));
-    expect(listMore()).toBeUndefined();
-    expect(scroll().style.maxHeight).toBe(withList.summaryLines);
+    expect(container.textContent).toContain("plugins.management.listMore");
+    expect(scroll().style.maxHeight).toBe(plan.mode === "regular" && plan.summaryLines);
     // Large text: the buttons stack, Allow on top (column-reverse), labels wrapping.
     expect(bridge.props.get("plugins.management.actions").style).toContainEqual({ flexDirection: "column-reverse" });
+  });
+  it("Android puts everything in one scroll area above fixed buttons when they do not fit (maintainer's numbers)", () => {
+    bridge.fontScale = 2;
+    const { container } = mount(AndroidManagementConfirmation, props(allFive));
+    const chrome = 20 * 2 + 12 + 12 * 2 + 4;
+    const layout = (id: string, height: number) => act(() => bridge.props.get(id).onLayout({ nativeEvent: { layout: { height } } }));
+    layout("plugins.management.actions", Math.floor(844 * 0.85) - chrome - 100);
+    layout("plugins.management.identity", 384);
+    const summary = () => bridge.props.get("plugins.management.highRisk");
+    const parts = () => (summary().children as any[]).flat(3).filter(Boolean);
+    act(() => parts().find((child: any) => child?.props?.testID === "plugins.management.highRiskTitle").props.onLayout({ nativeEvent: { layout: { height: 40 } } }));
+    const items = () => parts().flatMap((child: any) => child?.props?.children ? [child.props.children].flat() : [child]).filter((child: any) => fiveLines.includes(child?.props?.children));
+    const lines = items().length ? items() : (bridge.props.get("plugins.management.highRiskScroll")?.children ?? []);
+    [lines].flat().forEach((line: any, index: number) => act(() => line.props.onLayout({ nativeEvent: { layout: { height: reviewLines[index] } } })));
+    // One scroll area (the list) holding the identity block and the whole summary; the buttons sit outside it.
+    expect(container.querySelector('[data-testid="plugins.management.list"] [data-testid="plugins.management.highRisk"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="plugins.management.list"] [data-testid="plugins.management.identity"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="plugins.management.list"] [data-testid="plugins.management.actions"]')).toBeNull();
+    expect(container.querySelector('[data-testid="plugins.management.highRiskScroll"]')).toBeNull();
+    expect(container.textContent).toContain("plugins.notice.consentSource.market");
+    for (const line of fiveLines) expect(container.textContent).toContain(line);
   });
   it("Android shows no pinned area when nothing is high risk", () => {
     const { container } = mount(AndroidManagementConfirmation, props(installOf([notify])));

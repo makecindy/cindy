@@ -136,10 +136,11 @@ pnpm mobile:sim:whoami -- --mock --json
   Demo Legacy Tools（Demo Legacy Market，模拟不提供仓库身份的旧 Host：行内与详情的「安装」不可点并说明原因）、
   Demo Long Repository Tools（长仓库名带 ref 的自定义市场，五类高风险同时出现，看仓库一行与固定摘要的换行）、
   Demo Folder Tools（本地文件夹市场，确认面板显示「本地文件夹」）。已安装列表里预置
-  Demo Weather Board、Demo Secret Sync、Demo Vault Upgrade、Demo Moved Source、Demo Moved Folder、Demo Reading List 与 Demo Legacy Sync 的 1.3.0，详情里「管理插件 → 更新到 v版本」会出现更新确认：
+  Demo Weather Board、Demo Secret Sync、Demo Vault Upgrade、Demo Moved Source、Demo Moved Folder、Demo Moved Long Repository、Demo Reading List 与 Demo Legacy Sync 的 1.3.0，详情里「管理插件 → 更新到 v版本」会出现更新确认：
   Weather Board 新增运行 Node 程序、Secret Sync 已有 Node 只新增凭证绑定（两者都显示高风险固定段）、Vault Upgrade 是升级版的极端情况（新增五类高风险、
   4 个凭证绑定 × 16 个方法）、Moved Source 的升级来源与已装实例不同（回执带 `originSourceChanged`，按首装给出完整权限，含两类高风险；Git 来源，提示句请用户核对上面显示的仓库）、
-  Moved Folder 是本地文件夹市场的同类换源（不显示仓库，提示句不提仓库）、Reading List 只新增通知
+  Moved Folder 是本地文件夹市场的同类换源（不显示仓库，提示句不提仓库）、Moved Long Repository 用来稳定触发确认面板紧凑档（长仓库名带 ref、换来源提示、五类高风险；
+  在最矮屏加最大辅助字号下更新它，应为一个滚动区加固定按钮，打开时第一屏是身份块开头）、Reading List 只新增通知
   （没有固定段）、Legacy Sync 来自旧 Host 的自定义市场（没有来源，手机上不能更新：已装详情点「更新到 v版本」后提示先在电脑上更新 Cindy 并刷新市场、仍不行就在电脑上更新这个插件）。
   市场详情与电脑一致：Demo Shift Calendar（公开的社区作者插件）显示社区声明、不显示作者；官方插件的「来源」为「公开市场」，团队共享插件为「组织」，
   版本带 v。

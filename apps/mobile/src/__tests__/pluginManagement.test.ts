@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { allocateConsentSheet, isPinnedHighRiskPermission, layoutConsentSheet, PINNED_HIGH_RISK_MIN_HEIGHT, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
+import { isPinnedHighRiskPermission, PINNED_HIGH_RISK_MIN_HEIGHT, planConsentSheet, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
 import { DeviceLinkError, sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
-import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { createPluginManagementClient, type PluginManagementInvoke } from '@/plugins/pluginManagementClient';
 import { createPluginPromptReads } from '@/plugins/pluginPromptReads';
 import { pluginUiApprovalNotice } from '@/plugins/pluginUiApprovalNotice';
@@ -13,6 +13,7 @@ import { createPluginManagementController } from '@/plugins/pluginManagementCont
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
   parsePluginUiConsent, samePluginMarketSourceIdentity, isPluginMarketSourceIdentity, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
+import { createPluginManagementSlot, pluginManagementSlotFor, pluginOperationHold } from '@/plugins/pluginManagementSlot';
 import { parsePluginMarketPage, pluginMarketFacts, pluginMarketIconUri, pluginMarketShowsCommunityNotice, pluginMarketSourceUnverified,
   pluginMarketSubtitle } from '@/plugins/pluginMarketCatalog';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -773,10 +774,20 @@ describe('progress only moves forward and never stops', () => {
     void r.c.install(detail, plugin);
     await flush();
     const counts: Record<string, number> = {}, shown = { rank: -1 };
+    // ⑨ pace: within lookups that bring nothing new from the Host, the delay never shrinks (see the controller's pace).
+    const sig = () => { const st = r.c.getState(); return JSON.stringify([st.receipt?.phase, st.receipt?.consent?.requestId]); };
+    let pace: { delay: number; sig: string } | null = null;
     for (let i = 0; i < events.length; i++) {
       const lostLookup = events[i].startsWith('lose#')
         && r.pending.some((entry) => entry.kind === 'operation' && `lose#${entry.seq}` === events[i]);
       const snapshotsBefore = r.sent.snapshots;
+      if (['online', 'offline', 'check', 'allow', 'reject'].includes(events[i])) pace = null;
+      if (events[i] === 'tick' && r.timers.length) {
+        const delay = r.timers[0].delayMs, now = sig();
+        if (pace && pace.sig === now && delay < pace.delay)
+          return { violation: `⑨ lookup delay shrank ${pace.delay} → ${delay} without progress (${events.slice(0, i + 1).join(' → ')})`, r, counts, next: [] as string[] };
+        pace = { delay, sig: now };
+      }
       await step(r, events[i], counts);
       const path = events.slice(0, i + 1).join(' → ');
       // ⑨ Automatic lookups are bounded by the timer firings (plus reconnects and taps); a failed lookup reads no snapshot.
@@ -892,6 +903,62 @@ describe('progress only moves forward and never stops', () => {
     await run(r, ['offline', 'online']);
     expect(r.sent.lookups).toBe(6);
   });
+  /* 测试价值（维护者 15:37 复审第 3 条；调度要求的统一节奏）
+   * - 生产入口与可观察结果：真实 controller + client 接隔离传输；观察自动查询的间隔、答复写出次数。
+   * - 依据：只有观察到的进展（回执的秩上升）重置节奏；同一个已答复的确认、同一个进行中状态都算没有进展，按同一规则
+   *   翻倍、封顶（进行中 5 秒，其余 30 秒），同一段里间隔不减；成功但没有进展的查询不停，速率由封顶限制。
+   * - 缺口：写出 Allow 后回包丢失，Host 一直返回同一个确认时，每秒查一次、无界。
+   * - 最小失败输入：Allow 写出、回包丢失，十次查询都返回原 requestId。tier: unit。
+   */
+  it('backs off while the Host keeps showing the consent this phone already answered', async () => {
+    const r = rig({ promptOnAccept: true });
+    await r.c.refresh(); void r.c.install(detail, plugin); await flush();
+    await run(r, ['dequeue#1', 'arrive#1', 'deliver#1']);       // the Host shows the consent
+    expect(r.c.getState().outcome).toBe('confirmation');
+    void r.c.answer(true); await flush();
+    const answer = r.pending.find((entry) => entry.kind === 'answer')!;
+    // Written, but it never reaches the Host and its reply is lost: the Host keeps showing the same consent.
+    await run(r, [`dequeue#${answer.seq}`, `lose#${answer.seq}`]);
+    expect(r.c.getState()).toMatchObject({ outcome: 'unknown', answerHeld: 'consent-1' });
+    const delays: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      delays.push(r.timers[0].delayMs);
+      await run(r, ['tick']);
+      const lookup = r.pending.find((entry) => entry.kind === 'operation')!;
+      await run(r, [`dequeue#${lookup.seq}`, `arrive#${lookup.seq}`, `deliver#${lookup.seq}`]);
+      expect(r.c.getState()).toMatchObject({ outcome: 'unknown', answerHeld: 'consent-1' });
+    }
+    expect(r.host.answersWritten).toBe(1);
+    expect(delays).toEqual([POLL, 2 * POLL, 4 * POLL, 8 * POLL, 16 * POLL, 30_000, 30_000, 30_000, 30_000, 30_000]);
+    // Still looked up (bounded rate), and "Check result" stays available without a second answer.
+    expect(r.timers.map((timer) => timer.delayMs)).toEqual([30_000]);
+    void r.c.reconcile(); await flush();
+    expect(r.pending.filter((entry) => entry.kind === 'answer')).toHaveLength(0);
+  });
+  it('backs off while the Host keeps reporting the same running state, and starts over on progress', async () => {
+    const r = rig();
+    await r.c.refresh(); void r.c.install(detail, plugin); await flush();
+    await run(r, ['dequeue#1', 'arrive#1', 'deliver#1']);       // running; the Host stays there (slow download)
+    expect(r.c.getState().outcome).toBe('running');
+    const delays: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      delays.push(r.timers[0].delayMs);
+      await run(r, ['tick']);
+      const lookup = r.pending.find((entry) => entry.kind === 'operation')!;
+      await run(r, [`dequeue#${lookup.seq}`, `arrive#${lookup.seq}`, `deliver#${lookup.seq}`]);
+    }
+    expect(delays).toEqual([POLL, 2 * POLL, 4 * POLL, 5_000, 5_000, 5_000]);
+    // Progress (the Host now shows its consent): the pace starts over once the person answered.
+    await run(r, ['host', 'tick']);
+    const lookup = r.pending.find((entry) => entry.kind === 'operation')!;
+    await run(r, [`dequeue#${lookup.seq}`, `arrive#${lookup.seq}`, `deliver#${lookup.seq}`]);
+    expect(r.c.getState().outcome).toBe('confirmation');
+    void r.c.answer(true); await flush();
+    const answer = r.pending.find((entry) => entry.kind === 'answer')!;
+    await run(r, [`dequeue#${answer.seq}`, `arrive#${answer.seq}`, `deliver#${answer.seq}`]);
+    expect(r.c.getState().outcome).toBe('running');
+    expect(r.timers.map((timer) => timer.delayMs)).toEqual([POLL]);
+  });
   it('stops automatic lookups at once on a protocol error and keeps "Check result"', async () => {
     const r = rig({ lookupInvalid: true });
     await r.c.refresh(); void r.c.install(detail, plugin); await flush();
@@ -901,6 +968,80 @@ describe('progress only moves forward and never stops', () => {
     expect(r.c.getState()).toMatchObject({ outcome: 'unknown', errorCode: 'INVALID_RESPONSE', busy: false });
     expect(r.timers).toHaveLength(0);
     expect(r.sent.lookups).toBe(1);
+  });
+});
+
+/* 测试价值（维护者 15:37 复审；页面占用的凭据语义）
+ * - 生产入口与可观察结果：pluginManagementSlot 与真实 controller（传输替身）；观察占用的持有者与写出。
+ * - 依据：只有持有者的凭据能释放；同一个凭据可能经两条路径释放（市场安装的行结束、它交给的 controller 结束），晚到的
+ *   那次不能放掉别人此后拿到的占用。
+ * - 缺口：渲染态或布尔 saving 由任意一方清零，第一笔结束就让第三个入口恢复。
+ * - 最小失败输入：凭据 1 已被行结束释放、凭据 2 已拿到时，持有凭据 1 的 controller 被释放。tier: unit。
+ */
+describe('page management slot', () => {
+  it('lets only the holder release it, once, and refuses a second taker', () => {
+    const slot = createPluginManagementSlot();
+    const first = slot.tryAcquire('update')!;
+    expect(slot.tryAcquire('market-install')).toBeNull();
+    expect(slot.tryAcquire('update')).toBeNull();
+    expect(slot.release({ id: first.id + 1, entry: 'update' })).toBe(false);
+    expect(slot.holds(first)).toBe(true);
+    expect(slot.release(first)).toBe(true);
+    const second = slot.tryAcquire('enable')!;
+    // A late release of the earlier token (a second path ending the same entry) leaves the new holder alone.
+    expect(slot.release(first)).toBe(false);
+    expect(slot.holder()).toBe(second);
+  });
+  it('keeps a later holder when the controller of an earlier one goes after the entry already released it', async () => {
+    const slot = createPluginManagementSlot();
+    const requests: string[] = [];
+    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+      options?.preSend?.(); options?.onRequestWritten?.();
+      if (channel.endsWith(':manifest')) return capability;
+      const action = (args?.[0] as Envelope).actionId.replace('management:', '');
+      requests.push(action);
+      if (action === 'snapshot') return { effects: [], result: snapshot() };
+      if (action === 'market-detail') return { effects: [], result: detail };
+      return new Promise(() => {});                       // begin stays in flight
+    }) as unknown as PluginManagementInvoke;
+    const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }), { createOperationId: () => 'operation-1' });
+    controllers.push(c);
+    await c.refresh();
+    const first = slot.tryAcquire('market-install')!;
+    void c.install(detail, plugin, pluginOperationHold(slot, first));
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    expect(requests).toContain('begin');
+    // The market row settled this attempt on its own (for example from the computer's facts) and released it…
+    slot.release(first);
+    const second = slot.tryAcquire('update')!;
+    // …then the controller that still held the first token goes.
+    c.dispose();
+    expect(slot.holder()).toBe(second);
+  });
+  it('gives the next account a free slot, and releases the previous account\'s', async () => {
+    const owner = getMobileAuthOwner();
+    const previous = pluginManagementSlotFor(owner);
+    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+      options?.preSend?.(); options?.onRequestWritten?.();
+      if (channel.endsWith(':manifest')) return capability;
+      const action = (args?.[0] as Envelope).actionId.replace('management:', '');
+      if (action === 'snapshot') return { effects: [], result: snapshot() };
+      if (action === 'market-detail') return { effects: [], result: detail };
+      return new Promise(() => {});
+    }) as unknown as PluginManagementInvoke;
+    // As usePluginManagement builds it: current only while the account is the same.
+    const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke,
+      isCurrent: () => isMobileAuthOwnerCurrent(owner) }), { createOperationId: () => 'operation-1' });
+    controllers.push(c);
+    await c.refresh();
+    const token = previous.tryAcquire('update')!;
+    void c.install(detail, plugin, pluginOperationHold(previous, token));
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    setMobileAuthOwner('another-account-for-slot');
+    try {
+      expect(pluginManagementSlotFor().holder()).toBeNull();
+      expect(previous.holder()).toBeNull();
+    } finally { setMobileAuthOwner(owner.accountId || null); }
   });
 });
 
@@ -1661,75 +1802,61 @@ describe('confirmation sheet wording', () => {
       expect(strings.nodeSecretCount.startsWith(receiver)).toBe(true);
     }
   });
-  // Layout re-checks (iOS and Android, d81200da): on short screens the summary still took four or five lines while the
-  // identity block lost its repository line, source note or third-party line. One rule for both platforms: the summary
-  // keeps its heading and two full lines, the identity block gets what it needs next, the rest of the summary last;
-  // both floors not fitting share the room in proportion; normal sizes are unchanged. Matrix of measured heights
-  // (dp/pt) for Chinese / English / German × default and short screens × normal and large text (Demo Long Repository
-  // Tools: five classes, each line 20 or 26 high).
-  it('shares a confirmation sheet between the identity block and the summary by one rule', () => {
-    const gap = 4;
-    const cases = [
-      // [case, available (sheet minus padding and buttons), identity, heading, line height]
-      ['zh default normal', 640, 210, 20, 20], ['zh default large', 640, 300, 26, 26],
-      ['zh short normal', 400, 230, 20, 20], ['zh short large', 400, 300, 26, 26],
-      ['en default normal', 640, 230, 20, 20], ['en default large', 640, 340, 26, 26],
-      ['en short normal', 400, 250, 20, 20], ['en short large', 400, 340, 26, 26],
-      ['de default normal', 640, 250, 20, 20], ['de default large', 640, 370, 26, 26],
-      ['de short normal', 400, 270, 20, 20], ['de short large', 400, 370, 26, 26],
-    ] as const;
-    for (const [name, available, identity, heading, line] of cases) {
-      const lines = [line, line, line, line, line];
-      const full = 5 * line + 4 * gap, floor = 2 * line + gap;
-      const share = allocateConsentSheet({ available, identity, heading, lines, gap });
-      const room = available - heading;
-      expect(share.identity + share.summaryLines, name).toBeLessThanOrEqual(room);
-      if (identity + full <= room) {
-        // Room for everything: nothing changes.
-        expect(share, name).toEqual({ identity, summaryLines: full, clipped: false });
-      } else if (identity + floor <= room) {
-        // The identity block is complete; the summary keeps at least its two lines.
-        expect(share.identity, name).toBe(identity);
-        expect(share.summaryLines, name).toBeGreaterThanOrEqual(floor);
-        expect(share.clipped, name).toBe(true);
-      } else {
-        // Both floors do not fit: in proportion.
-        expect(Math.abs(share.identity / (share.identity + share.summaryLines) - identity / (identity + floor)), name).toBeLessThan(0.01);
-        expect(share.clipped, name).toBe(true);
-      }
-    }
-    // The Android short-screen numbers (Demo Long Repository Tools): before, the summary kept 107–140 dp and the
-    // repository line was cut; now the identity block comes first and the summary keeps two lines.
-    const shortZh = allocateConsentSheet({ available: 332, identity: 230, heading: 25, lines: [20, 20, 20, 20, 20], gap });
-    expect(shortZh).toEqual({ identity: 230, summaryLines: 77, clipped: true });
-    // Before measuring: a conservative quarter of the sheet.
-    expect(allocateConsentSheet({ available: 700, identity: 0, heading: 0, lines: [], gap })).toEqual({ identity: 0, summaryLines: 175, clipped: false });
-    expect(allocateConsentSheet({ available: 100, identity: 0, heading: 0, lines: [], gap }).summaryLines).toBe(PINNED_HIGH_RISK_MIN_HEIGHT);
+  /* 测试价值（维护者 16:48 复审；两档布局的不变量）
+   * - 生产入口与可观察结果：两端面板共用的 `planConsentSheet`（纯函数）。
+   * - 依据：放得下「身份块完整 + 摘要标题 + 前两项（不足两项则全部）」才固定摘要；否则单一滚动区；提示不参与。
+   * - 缺口：两条提示测得后，摘要分到 0 高度。
+   * - 最小失败输入：可分配 100、身份块 384、标题 40、五项 [36, 48, 40, 40, 48]。tier: unit；约一万个组合，纯计算。
+   */
+  it('never squeezes a text area to nothing: compact when the identity block and two items do not fit (maintainer numbers)', () => {
+    expect(planConsentSheet({ available: 100, identity: 384, heading: 40, lines: [36, 48, 40, 40, 48], gap: 4 })).toEqual({ mode: 'compact' });
+    // Room for everything: nothing changes.
+    expect(planConsentSheet({ available: 640, identity: 210, heading: 20, lines: [20, 20, 20, 20, 20], gap: 4 }))
+      .toEqual({ mode: 'regular', summaryLines: 116, clipped: false });
+    // The identity block and two items fit, the rest scrolls inside the summary.
+    expect(planConsentSheet({ available: 332, identity: 230, heading: 25, lines: [20, 20, 20, 20, 20], gap: 4 }))
+      .toEqual({ mode: 'regular', summaryLines: 77, clipped: true });
   });
-  // The hints below the summary and the list take room too (self-check of the layout batch: without it the list hint
-  // pushed the identity block under the summary on short screens). Both are decided from measured content only, so
-  // showing a hint never changes whether it shows (no back-and-forth between frames). Tier: unit.
-  it('reserves room for the summary and list hints, decided from content only', () => {
-    const base = { available: 400, identity: 230, heading: 20, lines: [20, 20, 20, 20, 20], gap: 4, hintGap: 4 };
-    const sizes = [0, 18, 40];
-    for (const summaryHint of sizes) for (const listHint of sizes) for (const listContent of [0, 150, 230, 600]) {
-      const name = `summaryHint=${summaryHint} listHint=${listHint} listContent=${listContent}`;
-      const layout = layoutConsentSheet({ ...base, summaryHint, listHint, listContent });
-      const used = base.heading + layout.summaryLines + (layout.clipped ? summaryHint + base.hintGap : 0)
-        + (layout.listClipped ? listHint + base.hintGap : 0);
-      // The summary, its hint and the list hint leave the identity share in view.
-      expect(used + layout.identity, name).toBeLessThanOrEqual(base.available);
-      // Whether the list hint shows does not depend on the hint's own height.
-      expect(layout.listClipped, name).toBe(layoutConsentSheet({ ...base, summaryHint, listHint: 0, listContent }).listClipped);
-      // Not measured: no hint.
-      if (listContent === 0) expect(layout.listClipped, name).toBe(false);
-    }
-    // Room for everything: no hints, the summary complete.
-    expect(layoutConsentSheet({ ...base, available: 800, summaryHint: 18, listHint: 18, listContent: 300 }))
-      .toEqual({ identity: 230, summaryLines: 5 * 20 + 4 * 4, clipped: false, listClipped: false });
-    // No summary: the list hint alone, when the list is longer than the sheet.
-    expect(layoutConsentSheet({ ...base, heading: 0, lines: [], summaryHint: 0, listHint: 18, listContent: 500 }).listClipped).toBe(true);
-    expect(layoutConsentSheet({ ...base, heading: 0, lines: [], summaryHint: 0, listHint: 18, listContent: 300 }).listClipped).toBe(false);
+  it('keeps the two-layout invariants for every height, text size and item count', () => {
+    const availables = [0, 1, 10, 43, 44, 88, 100, 200, 320, 480, 640, 900];
+    const identities = [0, 40, 120, 230, 384, 600];
+    const headings = [0, 20, 40, 60];
+    const patterns = [[20], [36, 48, 40], [48]];
+    let checked = 0;
+    for (const gap of [4, 8]) for (const available of availables) for (const identity of identities) for (const heading of headings)
+      for (let count = 0; count <= 6; count++) for (const pattern of patterns) {
+        const lines = Array.from({ length: count }, (_, index) => pattern[index % pattern.length]);
+        const input = { available, identity, heading, lines, gap };
+        const name = JSON.stringify(input);
+        const plan = planConsentSheet(input);
+        checked += 1;
+        // ⑥ The same input always plans the same way (nothing to oscillate on).
+        expect(planConsentSheet({ ...input, lines: [...lines] }), name).toEqual(plan);
+        // ⑤ Hints are not an input: whatever their heights, measured or not, the plan is the same.
+        expect(planConsentSheet({ ...input, summaryHint: 48, listHint: 48 } as typeof input), name).toEqual(plan);
+        if (count === 0) { expect(plan, name).toEqual({ mode: 'regular', summaryLines: 0, clipped: false }); continue; }
+        const measured = identity > 0 && heading > 0;
+        const sum = (n: number) => lines.slice(0, n).reduce((total, line) => total + line, 0) + Math.max(0, Math.min(n, count) - 1) * gap;
+        const floor = sum(Math.min(2, count)), full = sum(count);
+        if (plan.mode === 'compact') {
+          // ③ Compact only when the regular layout's floor does not fit (or nothing is measured and even one line would not).
+          if (measured) expect(identity + heading + floor, name).toBeGreaterThan(available);
+          continue;
+        }
+        // ① A pinned summary always gets a real height, and so does the list above it.
+        expect(plan.summaryLines, name).toBeGreaterThan(0);
+        if (measured) {
+          // ② At least the heading's two items (all, if fewer); never more than all of them.
+          expect(plan.summaryLines, name).toBeGreaterThanOrEqual(floor);
+          expect(plan.summaryLines, name).toBeLessThanOrEqual(full);
+          expect(plan.clipped, name).toBe(plan.summaryLines < full);
+          // ④ Within the room, with the identity block in full above it.
+          expect(identity + heading + plan.summaryLines, name).toBeLessThanOrEqual(available);
+        } else {
+          expect(plan.summaryLines + PINNED_HIGH_RISK_MIN_HEIGHT, name).toBeLessThanOrEqual(available);
+        }
+      }
+    expect(checked).toBe(2 * availables.length * identities.length * headings.length * 7 * patterns.length);
   });
   it('orders the pinned classes the same way whatever order the package declares them in', () => {
     const resident = item('node:resident', 'node', 'nodeResident', 'nodeResidentDetail');

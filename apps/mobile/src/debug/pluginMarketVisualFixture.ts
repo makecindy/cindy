@@ -151,6 +151,13 @@ const DEMOS: DemoPlugin[] = [
     description: "Installed from another folder than the market now points to. Its update says the source changed.",
     tools: ["demo_moved_folder"], permissions: [nodeExecute(), network("folder.example.com")], installedVersion: "1.3.0",
     update: { added: [], removed: [], unchangedCount: 1 } },
+  // Compact sheet check (maintainer review 16:48): a long repository with a ref, a source-change notice and all five
+  // high-risk classes, so the shortest screen at the largest text size puts everything in one scroll area above the
+  // buttons. Installed from another source; its update is confirmed like a first install.
+  { ghostId: "demo-moved-long-repo", name: "Demo Moved Long Repository", publisher: "custom", author: null, market: "long", sourceMoved: true,
+    description: "Installed from another repository than this long-named market. Its update asks for every high-risk class.",
+    tools: ["demo_moved_long"], permissions: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand, network("long.example.com")],
+    installedVersion: "1.3.0", update: { added: [], removed: [], unchangedCount: 1 } },
   // Older Host: a custom market without a repository identity. A new install is not offered on the phone.
   { ghostId: "demo-legacy-tools", name: "Demo Legacy Tools", publisher: "custom", author: null, legacySource: true,
     description: "From a custom market on an older computer version that does not name its repository.",

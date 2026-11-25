@@ -1,6 +1,7 @@
 import { randomUUID } from 'expo-crypto';
 import type { PluginPromptDisplay } from './pluginPromptReads';
 import { subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import type { PluginOperationHold } from './pluginManagementSlot';
 import { PluginManagementRequestError, pluginManagementErrorCode,
   type PluginManagementBegin, type PluginManagementClient } from './pluginManagementClient';
 import { marketItemMatchesPlugin, pluginApprovalToken, samePluginMarketSourceIdentity, type ManagedMarketDetail, type ManagedPlugin,
@@ -51,6 +52,9 @@ type BeginIntent = PluginManagementBegin extends infer T ? T extends PluginManag
 type ConsentIntent = { kind: 'approve-ui' | 'defer-ui'; installed: PluginUiConsentItem };
 const terminal = (receipt: PluginManagementReceipt) => ['succeeded', 'cancelled', 'failed'].includes(receipt.phase);
 const AUTO_LOOKUP_FAILURES = 4;
+/** Cap of the automatic lookup delay: the Host reports the operation running (work under way, a result soon). */
+const AUTO_LOOKUP_RUNNING_MAX_DELAY_MS = 5_000;
+/** Cap otherwise: failed lookups, an answered consent the Host still shows, any other result still unknown. */
 const AUTO_LOOKUP_MAX_DELAY_MS = 30_000;
 /** Lookup failures a later automatic lookup can get past (the link or the computer was slow or briefly away). */
 const TRANSIENT_LOOKUP_ERRORS = new Set(['INVOKE_TIMEOUT', 'TIMEOUT', 'DEVICE_OFFLINE', 'NOT_CONNECTED', 'LINK_NOT_OPEN',
@@ -68,14 +72,30 @@ export function createPluginManagementController(client: PluginManagementClient,
   const scheduler = options.scheduler ?? { set: (run: () => void, delayMs: number) => setTimeout(run, delayMs),
     clear: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
   /**
-   * Automatic lookups after a failed one back off (maintainer review 14:18): the delay doubles per consecutive failure
-   * up to AUTO_LOOKUP_MAX_DELAY_MS, and after AUTO_LOOKUP_FAILURES failures, or one that retrying cannot fix (a protocol
-   * error such as INVALID_RESPONSE), they stop: the result waits for "Check result" (still something to do). A
-   * successful lookup, coming back online or to the foreground, and a new operation start over.
+   * Automatic lookups, one rule (maintainer reviews 14:18 and 15:37): only progress the phone observes resets the
+   * pace, meaning a receipt ranked above what is shown (see `rankOf`: a new phase, a new consent, the answer's
+   * outcome, a final result). Every lookup that brings nothing new counts as one without progress: a failed lookup,
+   * the same answered consent again, the same running state again, an older receipt. Each doubles the delay from the
+   * poll interval, up to AUTO_LOOKUP_RUNNING_MAX_DELAY_MS while the Host reports the operation running and
+   * AUTO_LOOKUP_MAX_DELAY_MS otherwise; within one run of lookups without progress the delay never shrinks (the cap
+   * reached stays). Lookups without progress that succeed never stop (the operation may really be slow, or wait for
+   * someone at the computer): their rate is bounded by the cap. Failed lookups stop after AUTO_LOOKUP_FAILURES in a
+   * row, or at once for an error retrying cannot fix (a protocol error such as INVALID_RESPONSE): the result waits for
+   * "Check result". Progress, coming back online or to the foreground, and a new operation start over.
    */
   let lookupFailures = 0, autoLookupStopped = false;
+  let quietLookups = 0, quietDelay = 0, quietCap = 0;
+  const resetPace = () => { quietLookups = 0; quietDelay = 0; quietCap = 0; };
   let receiver: ManagedPlugin | undefined;
   let uiConsentOperation = false;
+  /**
+   * The page slot held for this operation (maintainer review 15:37), if its entry gave one: every write of the
+   * operation (begin, Allow / Reject, cancel) first checks the slot is still held, and the slot is released once, when
+   * the operation is over (a final result, or stopped before begin), or when the controller goes.
+   */
+  let opHold: PluginOperationHold | null = null;
+  const opGuard = () => opHold?.guard() ?? true;
+  const settleHold = () => { const hold = opHold; opHold = null; hold?.onSettled(); };
   let installDetail: ManagedMarketDetail | undefined;
   const listeners = new Set<() => void>();
   const current = (token: number) => !disposed && epoch === token && client.isCurrent();
@@ -162,6 +182,9 @@ export function createPluginManagementController(client: PluginManagementClient,
       state.missingReceiptFacts = null;
       missingReceipt = null;
     }
+    // The held slot goes once the operation is over: nothing in flight, and a final result or no operation at all.
+    if (opHold && !state.busy && (state.operationId ? ['succeeded', 'cancelled', 'failed'].includes(state.outcome)
+      : state.outcome !== 'running')) settleHold();
     options.onChange?.(state);
     listeners.forEach((listener) => listener());
     ensureProgress();
@@ -187,10 +210,11 @@ export function createPluginManagementController(client: PluginManagementClient,
       return;
     }
     if (state.outcome === 'unknown' && (missingReceipt || autoLookupStopped)) return;
+    if (timer !== undefined) return;
     const interval = Math.max(250, options.pollIntervalMs ?? 1000);
-    const delay = state.outcome === 'running' && lookupFailures === 0 ? interval
-      : Math.min(interval * 2 ** lookupFailures, AUTO_LOOKUP_MAX_DELAY_MS);
-    if (timer === undefined) timer = scheduler.set(() => { timer = undefined; void reconcile(); }, delay);
+    quietCap = Math.max(quietCap, state.outcome === 'running' ? AUTO_LOOKUP_RUNNING_MAX_DELAY_MS : AUTO_LOOKUP_MAX_DELAY_MS);
+    quietDelay = Math.max(quietDelay, Math.min(interval * 2 ** quietLookups, quietCap));
+    timer = scheduler.set(() => { timer = undefined; void reconcile(); }, quietDelay);
   }
   function matchesReceiver(live: ManagedPlugin): boolean {
     return !!receiver && live.instanceKey === receiver.instanceKey
@@ -246,6 +270,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (!undecided(receipt.operationId)) { drop(holder); return; }
     const rank = rankOf(receipt, issuedAt);
     if (rank < shownRank) { drop(holder); return; }
+    if (rank > shownRank) resetPace();
     shownRank = rank;
     appliedReceiptAt = ++receiptClock;
     // The Host still shows a consent this phone already answered (written, reply lost): never offer it again; the
@@ -324,16 +349,20 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (current(token) && sequence === refreshSequence) publish({ errorCode: pluginManagementErrorCode(error) });
     }
   }
-  async function start(intent: BeginIntent | ConsentIntent) {
-    if (disposed || !client.isCurrent()) return;
-    if (!state.online) { publish({ errorCode: 'DEVICE_OFFLINE' }); return; }
-    if (state.busy || (state.operationId && !['succeeded', 'cancelled', 'failed'].includes(state.outcome))) return;
-    if (state.capability !== 'supported') { publish({ errorCode: state.capability === 'unsupported' ? 'PLUGIN_MANAGEMENT_UNSUPPORTED' : 'PLUGIN_MANAGEMENT_NOT_READY' }); return; }
+  async function start(intent: BeginIntent | ConsentIntent, slotHold?: PluginOperationHold) {
+    // Not started (nothing sent): the entry's slot goes at once.
+    const refuse = (patch?: Partial<PluginManagementState>) => { if (patch) publish(patch); slotHold?.onSettled(); };
+    if (disposed || !client.isCurrent() || (slotHold && !slotHold.guard())) { refuse(); return; }
+    if (!state.online) { refuse({ errorCode: 'DEVICE_OFFLINE' }); return; }
+    if (state.busy || (state.operationId && !['succeeded', 'cancelled', 'failed'].includes(state.outcome))) { refuse(); return; }
+    if (state.capability !== 'supported') { refuse({ errorCode: state.capability === 'unsupported' ? 'PLUGIN_MANAGEMENT_UNSUPPORTED' : 'PLUGIN_MANAGEMENT_NOT_READY' }); return; }
+    settleHold();
+    opHold = slotHold ?? null;
     const token = ++epoch;
     let began = false, operationId: string | null = null;
     const holder = hold();
     answers.clear(); cancelling = null; consentOrder.length = 0; answerSentAt.clear(); shownRank = -1;
-    lookupFailures = 0; autoLookupStopped = false;
+    lookupFailures = 0; autoLookupStopped = false; resetPace();
     publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle',
       expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null });
     const installed = intent.installed;
@@ -375,7 +404,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       const issuedAt = ++receiptClock;
       const reply = await tracked(() => client.begin({ ...request, operationId: operationId!,
         ...(snapshot.uiCapabilityApproval ? { uiConsentVersion: 1 } : {}) }, () => current(token)
-        && state.online && !!facts && receiverCurrent(facts)));
+        && state.online && opGuard() && !!facts && receiverCurrent(facts)));
       await acceptReceipt(reply, token, holder, issuedAt);
     } catch (error) {
       // Maintainer review 10:36 #1: a begin stopped before it was written (for example by the last check after the
@@ -415,6 +444,9 @@ export function createPluginManagementController(client: PluginManagementClient,
     try {
       const reply = await tracked(() => client.operation(id));
       lookupFailures = 0; autoLookupStopped = false;
+      const shownBefore = shownRank;
+      // No progress unless the receipt ranks above what was shown (acceptReceipt resets the pace then).
+      if (rankOf(reply, lookupAt) <= shownBefore) quietLookups += 1;
       await acceptReceipt(reply, token, holder, lookupAt);
     } catch (error) {
       // A late lookup never reopens an operation that has a final outcome meanwhile (see `undecided`), and a lookup
@@ -426,7 +458,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (!gone) {
         // A failed lookup says nothing about the computer's plugins: no snapshot is read here (only after NOT_FOUND,
         // when the facts settle a result whose receipt is gone). The next automatic lookup backs off, or stops.
-        lookupFailures += 1;
+        lookupFailures += 1; quietLookups += 1;
         if (!TRANSIENT_LOOKUP_ERRORS.has(code) || lookupFailures >= AUTO_LOOKUP_FAILURES) autoLookupStopped = true;
         release(holder, { outcome: 'unknown', errorCode: code, missingReceiptFacts: null });
         return;
@@ -452,7 +484,7 @@ export function createPluginManagementController(client: PluginManagementClient,
   }
   async function answer(confirmed: boolean) {
     const receipt = state.receipt;
-    if (!receipt?.consent || state.outcome !== 'confirmation' || !state.online || state.busy || disposed || !client.isCurrent()) return;
+    if (!receipt?.consent || state.outcome !== 'confirmation' || !state.online || state.busy || disposed || !client.isCurrent() || !opGuard()) return;
     // One answer per consent request: none while another is in flight or was written (maintainer review 11:45).
     const requestId = receipt.consent.requestId;
     if (answers.has(requestId)) return;
@@ -487,7 +519,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       sentAt = ++receiptClock;
       answerSentAt.set(requestId, sentAt);
       const reply = await tracked(() => client.answer(receipt.operationId, requestId, confirmed,
-        () => current(token) && state.online && (!confirmed || (!!facts && receiverCurrent(facts)))));
+        () => current(token) && state.online && opGuard() && (!confirmed || (!!facts && receiverCurrent(facts)))));
       answers.set(requestId, 'written');
       // The answer's own reply describes the Host after it took this answer.
       await acceptReceipt(reply, token, holder, ++receiptClock);
@@ -511,7 +543,7 @@ export function createPluginManagementController(client: PluginManagementClient,
   }
   async function cancel() {
     const id = state.operationId;
-    if (!id || !state.online || disposed || !client.isCurrent() || ['succeeded', 'cancelled', 'failed'].includes(state.outcome)) return;
+    if (!id || !state.online || disposed || !client.isCurrent() || !opGuard() || ['succeeded', 'cancelled', 'failed'].includes(state.outcome)) return;
     // Cancellation may race a queued/read request. Its newer result invalidates that request's late response.
     const token = ++epoch, holder = hold();
     stopPolling();
@@ -519,7 +551,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     publish({ busy: true, errorCode: null });
     const sentAt = ++receiptClock;
     try {
-      const reply = await tracked(() => client.cancel(id, () => current(token) && state.online));
+      const reply = await tracked(() => client.cancel(id, () => current(token) && state.online && opGuard()));
       cancelling = 'written';
       await acceptReceipt(reply, token, holder, sentAt);
     } catch (error) {
@@ -547,19 +579,26 @@ export function createPluginManagementController(client: PluginManagementClient,
     currentMissingReceiptFacts,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     refresh,
-    install: (detail: ManagedMarketDetail, installed?: ManagedPlugin) => start({ kind: 'install', detail, installed }),
-    uninstall: (installed: ManagedPlugin) => start({ kind: 'uninstall', installed }),
+    install: (detail: ManagedMarketDetail, installed?: ManagedPlugin, slotHold?: PluginOperationHold) => start({ kind: 'install', detail, installed }, slotHold),
+    uninstall: (installed: ManagedPlugin, slotHold?: PluginOperationHold) => start({ kind: 'uninstall', installed }, slotHold),
     setEnabled: (installed: ManagedPlugin, enabled: boolean) => start({ kind: enabled ? 'enable' : 'disable', installed }),
-    approveUi: (installed: ManagedPlugin) => start({ kind: 'approve-ui', installed }),
+    approveUi: (installed: ManagedPlugin, slotHold?: PluginOperationHold) => start({ kind: 'approve-ui', installed }, slotHold),
     deferUi: (installed: ManagedPlugin) => start({ kind: 'defer-ui', installed }),
     approveUiFromConsent: (installed: PluginUiConsentItem) => start({ kind: 'approve-ui', installed }),
     deferUiFromConsent: (installed: PluginUiConsentItem) => start({ kind: 'defer-ui', installed }),
     answer, cancel, reconcile,
+    /** An operation is under way: neither final nor stopped before begin (see usePluginManagement's retention). */
+    hasOpenOperation: () => !disposed && (state.busy || (!!state.operationId && !['succeeded', 'cancelled', 'failed'].includes(state.outcome))),
+    /**
+     * Nothing moves an unknown result on by itself anymore: automatic lookups stopped, or the receipt is gone and the
+     * result is being settled from the computer's facts by whoever shows it.
+     */
+    lookupsStopped: () => autoLookupStopped || !!missingReceipt || !!state.missingReceiptFacts,
     setOnline(online: boolean) {
       if (disposed || state.online === online) return;
       ++epoch; stopPolling(); busyHolder = 0;
       // Back online or in the foreground: automatic lookups start over.
-      if (online) { lookupFailures = 0; autoLookupStopped = false; }
+      if (online) { lookupFailures = 0; autoLookupStopped = false; resetPace(); }
       const active = state.operationId && !['succeeded', 'cancelled', 'failed'].includes(state.outcome);
       publish({ online, busy: false, ...(active ? { outcome: 'unknown' as const } : {}) });
       if (online) void reconcile();
@@ -570,6 +609,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       const active = id && !['succeeded', 'cancelled', 'failed'].includes(state.outcome);
       disposed = true; ++epoch; stopPolling(); unsubscribeOwner(); listeners.clear();
       if (active && state.online) void client.cancelForCleanup(id).catch(() => {});
+      settleHold();
     },
   };
 }

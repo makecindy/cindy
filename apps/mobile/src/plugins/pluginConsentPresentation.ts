@@ -28,74 +28,50 @@ export function isPinnedHighRiskPermission(item: Pick<PluginPermissionItem, "key
 }
 
 /**
- * How a confirmation sheet shares its height between the identity block at the top of the scrolled list (name, target
- * computer, source, repository, source notes) and the pinned high-risk summary above the buttons (one rule for iOS and
- * Android). Everything is measured on screen.
- * - Both fit: nothing changes, the summary shows every line.
- * - Otherwise the summary keeps its floor (its heading and its first two lines, in full), the identity block gets what
- *   is left up to its full height, and only what remains after that goes to the rest of the summary.
- * - Both floors do not fit (very large text on a short screen): they share the room in proportion.
- * The summary lines beyond their share scroll inside it, and so does the list beyond the identity block; `clipped`
- * says the summary hides lines (its hint shows). Before the parts are measured, a conservative quarter of the sheet.
+ * How a confirmation sheet lays out the identity block at the top of the list (name, target computer, source,
+ * repository, source notes) and the high-risk summary, from measured content heights and the available height only
+ * (one rule for iOS and Android; maintainer reviews of d81200da and 256d5af5):
+ * - Regular, when the identity block in full and the summary's heading with its first two items (all, if fewer) fit:
+ *   the summary stays pinned above the buttons and gets what is left after the identity block, up to all its items;
+ *   items beyond its height scroll inside it.
+ * - Compact, otherwise: one scroll area with the identity block, the whole summary and the full permission list, the
+ *   buttons fixed below it. No text area gets a fixed height, so none can be squeezed to nothing.
+ * The "keep scrolling" hints never take part: they float over the edge of a scroll area (or are not shown), so
+ * whether they show cannot change any height, and the mode cannot flip between frames because of them. The sheet
+ * plans again whenever the available height or text size changes (rotation, split screen, system text size).
+ * `available`: the sheet's height minus its fixed padding, the summary's padding and gaps, and the buttons.
  */
 export const PINNED_HIGH_RISK_MIN_HEIGHT = 44;
 export interface ConsentSheetMeasures {
-  /** Height the sheet can use, minus its fixed padding and the buttons. */
   available: number;
   identity: number;
   heading: number;
-  /** Each summary line's height, in order, and the gap between lines. */
+  /** Each summary item's height, in order (0 = not measured yet), and the gap between items. */
   lines: number[];
   gap: number;
 }
-export function allocateConsentSheet(sheet: ConsentSheetMeasures): { identity: number; summaryLines: number; clipped: boolean } {
-  const linesHeight = (count: number) => sheet.lines.slice(0, count).reduce((sum, line) => sum + line, 0)
-    + Math.max(0, Math.min(count, sheet.lines.length) - 1) * sheet.gap;
-  const full = linesHeight(sheet.lines.length);
-  if (sheet.identity <= 0 || sheet.heading <= 0 || sheet.lines.length === 0 || sheet.lines.some((line) => line <= 0)) {
-    const lines = Math.max(PINNED_HIGH_RISK_MIN_HEIGHT, Math.floor(sheet.available * 0.25));
-    return { identity: 0, summaryLines: lines, clipped: false };
+export type ConsentSheetPlan =
+  | { mode: "regular"; summaryLines: number; clipped: boolean }
+  | { mode: "compact" };
+export function planConsentSheet(sheet: ConsentSheetMeasures): ConsentSheetPlan {
+  if (sheet.lines.length === 0) return { mode: "regular", summaryLines: 0, clipped: false };
+  const available = Math.max(0, Math.floor(sheet.available));
+  const measured = sheet.identity > 0 && sheet.heading > 0 && sheet.lines.every((line) => line > 0);
+  if (!measured) {
+    // First frame, before anything is measured: a conservative share of the sheet, or one scroll area when even that
+    // would not hold one line.
+    const share = Math.floor(available * 0.25);
+    return share >= PINNED_HIGH_RISK_MIN_HEIGHT && share + PINNED_HIGH_RISK_MIN_HEIGHT <= available
+      ? { mode: "regular", summaryLines: share, clipped: false } : { mode: "compact" };
   }
-  const floorLines = linesHeight(2);
-  const room = Math.max(0, sheet.available - sheet.heading);
-  if (sheet.identity + full <= room) return { identity: sheet.identity, summaryLines: Math.ceil(full), clipped: false };
-  if (sheet.identity + floorLines <= room)
-    return { identity: sheet.identity, summaryLines: Math.floor(room - sheet.identity), clipped: true };
-  const identity = Math.floor(room * sheet.identity / (sheet.identity + floorLines));
-  const summaryLines = Math.max(0, Math.floor(room - identity));
-  return { identity, summaryLines, clipped: summaryLines < full };
-}
-
-export interface ConsentSheetHints {
-  /** Measured heights of the summary's hint and the list's hint (0 until shown), and the space above each. */
-  summaryHint: number;
-  listHint: number;
-  hintGap: number;
-  /** Height of what the scrolled list must show without scrolling: its whole content (Android), or the identity block (iOS). */
-  listContent: number;
-}
-export interface ConsentSheetLayout { identity: number; summaryLines: number; clipped: boolean; listClipped: boolean }
-/**
- * `allocateConsentSheet` plus the two hints, which take room too: the summary's when it hides lines, the list's when
- * the list is longer than the room it is left. Both are decided from measured content, never from what this layout
- * itself produced on screen, so showing a hint cannot make it disappear again (no back-and-forth between frames).
- */
-export function layoutConsentSheet(sheet: ConsentSheetMeasures & ConsentSheetHints): ConsentSheetLayout {
-  const hasSummary = sheet.lines.length > 0;
-  const share = (available: number) => {
-    if (!hasSummary) return { identity: sheet.identity, summaryLines: 0, clipped: false, listRoom: available };
-    const unhinted = allocateConsentSheet({ ...sheet, available });
-    const allocation = unhinted.clipped
-      ? allocateConsentSheet({ ...sheet, available: available - sheet.summaryHint - sheet.hintGap }) : unhinted;
-    const summary = sheet.heading + allocation.summaryLines + (allocation.clipped ? sheet.summaryHint + sheet.hintGap : 0);
-    return { ...allocation, listRoom: available - summary };
-  };
-  const plain = share(sheet.available);
-  // Not measured yet (the conservative share gives no room for the list): no list hint.
-  const measured = sheet.listContent > 0 && (!hasSummary || plain.identity > 0);
-  const strip = ({ listRoom: _room, ...rest }: ReturnType<typeof share>) => rest;
-  if (!measured || sheet.listContent <= plain.listRoom + 1) return { ...strip(plain), listClipped: false };
-  return { ...strip(share(sheet.available - sheet.listHint - sheet.hintGap)), listClipped: true };
+  const itemsHeight = (count: number) => sheet.lines.slice(0, count).reduce((sum, line) => sum + line, 0)
+    + Math.max(0, Math.min(count, sheet.lines.length) - 1) * sheet.gap;
+  const full = Math.ceil(itemsHeight(sheet.lines.length));
+  const floor = Math.ceil(itemsHeight(Math.min(2, sheet.lines.length)));
+  const room = available - Math.ceil(sheet.heading) - Math.ceil(sheet.identity);
+  if (room < floor) return { mode: "compact" };
+  const summaryLines = Math.min(full, Math.floor(room));
+  return { mode: "regular", summaryLines, clipped: summaryLines < full };
 }
 
 /** Fixed order of the pinned classes, whatever order the package declares them in. */

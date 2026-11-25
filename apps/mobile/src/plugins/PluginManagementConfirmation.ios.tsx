@@ -21,7 +21,7 @@ import {
 import { useState } from "react";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { layoutConsentSheet, pluginConsentPresentation } from "./pluginConsentPresentation";
+import { planConsentSheet, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -31,14 +31,15 @@ export function PluginManagementConfirmation(
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
   const { height: windowHeight, fontScale } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  // The sheet shares its height between the identity block at the top of the list and the pinned summary by one rule
-  // (`layoutConsentSheet`, the same as Android): the summary keeps its heading and two full lines, the identity block
-  // (title, computer, source, repository, source notes) comes next, the rest of the summary last. Every part is
-  // measured; lines beyond the summary's share scroll inside it, with a hint below. The usable height is the window
-  // minus the top inset and the sheet's own header (title row and drag handle, which grow with text size).
-  // A SwiftUI ScrollView takes all the height it is offered, so it gets an explicit height: the measured content
-  // height, capped by its share.
-  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0, hint: 0, listHint: 0 });
+  // Two layouts by one rule (`planConsentSheet`, the same as Android), from measured content heights only: regular,
+  // with the summary pinned in the footer above the buttons, when the identity block (title, computer, source,
+  // repository, source notes) and the summary's heading with two items fit; compact otherwise, with the whole summary in
+  // the scrolled list right after the identity block and only the buttons in the footer. The usable height is the
+  // window minus the top inset and the sheet's own header (title row and drag handle, which grow with text size).
+  // No "keep scrolling" text on iOS: the scroll indicators stay visible instead, so nothing takes room from the text.
+  // A SwiftUI ScrollView takes all the height it is offered, so the pinned summary gets an explicit height: its
+  // measured content height, capped by the plan.
+  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0 });
   const [lineHeights, setLineHeights] = useState<number[]>([]);
   const measure = (key: keyof typeof measured) => (size: { height: number }) => {
     const height = Math.ceil(size.height);
@@ -50,16 +51,14 @@ export function PluginManagementConfirmation(
   };
   const sheetHeader = Math.ceil(64 * Math.min(Math.max(fontScale, 1), 2)) + 10;
   const lineCount = info?.highRisk?.lines.length ?? 0;
-  const allocation = layoutConsentSheet({
+  const plan = planConsentSheet({
     available: Math.floor(windowHeight - insets.top - sheetHeader) - spacing.sm * 2 /* list padding */
-      - spacing.sm * 4 /* footer spacing */ - spacing.xs - 12 /* footer bottom */ - insets.bottom - measured.actions,
-    identity: measured.identity, heading: measured.heading, lines: Array.from({ length: lineCount }, (_, index) => lineHeights[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
-    summaryHint: measured.hint, listHint: measured.listHint, hintGap: spacing.sm,
-    // The list must show the identity block without scrolling; its hint says when it cannot.
-    listContent: measured.identity,
+      - spacing.sm * 3 /* footer spacing */ - spacing.xs - 12 /* footer bottom */ - insets.bottom - measured.actions,
+    identity: measured.identity, heading: measured.heading,
+    lines: Array.from({ length: lineCount }, (_, index) => lineHeights[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
   });
+  const compact = plan.mode === "compact";
   const [summaryHeight, setSummaryHeight] = useState(0);
-  const listClipped = allocation.listClipped;
   // Large text: the buttons stack so each label shows in full (as the plugin notices do).
   const stacked = fontScale > 1.2;
   const body = (text?: string, lead = false) =>
@@ -101,6 +100,34 @@ export function PluginManagementConfirmation(
       </Text>
     </Button>
   );
+  const summaryHeading = info?.highRisk ? (
+    <Text
+      testID="plugins.management.highRiskTitle"
+      modifiers={[
+        // Same size as the list's permission titles, one step heavier.
+        font({ textStyle: "subheadline", weight: "semibold" }),
+        foregroundStyle(colors.textPrimary),
+        // Wraps rather than truncates.
+        fixedSize({ horizontal: false, vertical: true }),
+        onGeometryChange(measure("heading")),
+      ]}
+    >
+      {info.highRisk.title}
+    </Text>
+  ) : null;
+  const summaryItems = info?.highRisk?.lines.map((line, index) => (
+    <Text
+      key={index}
+      modifiers={[
+        font({ textStyle: "footnote" }),
+        foregroundStyle(colors.textPrimary),
+        fixedSize({ horizontal: false, vertical: true }),
+        onGeometryChange(measureLine(index)),
+      ]}
+    >
+      {line}
+    </Text>
+  ));
   return (
     <ComposerSheet
       visible={visible}
@@ -114,58 +141,21 @@ export function PluginManagementConfirmation(
       footer={
         // The pinned high-risk text lives in the footer, which stays visible at the medium detent too.
         <VStack alignment="leading" spacing={spacing.sm}>
-          {/* A separator between the scrolled list and the pinned summary, so a list title resting right above
-              the summary does not read as a repeat. */}
-          {listClipped ? (
-            <Text testID="plugins.management.listMore" modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary),
-              fixedSize({ horizontal: false, vertical: true }), onGeometryChange(measure("listHint"))]}>
-              {t("plugins.management.listMore")}
-            </Text>
-          ) : null}
-          {info?.highRisk ? <Divider /> : null}
-          {info?.highRisk ? (
-            // Bounded summary: every line in full, scrolling inside its height bound; full details are in the scrolled list.
+          {/* Regular: a separator, then the pinned summary (every item in full, scrolling inside its height with the
+              indicator visible; full details are in the scrolled list). Compact: only the buttons stay here. */}
+          {!compact && info?.highRisk ? <Divider /> : null}
+          {!compact && info?.highRisk ? (
             <VStack testID="plugins.management.highRisk" alignment="leading" spacing={spacing.xs}>
-              <Text
-                testID="plugins.management.highRiskTitle"
-                modifiers={[
-                  // Same size as the list's permission titles, one step heavier.
-                  font({ textStyle: "subheadline", weight: "semibold" }),
-                  foregroundStyle(colors.textPrimary),
-                  // Wraps rather than truncates.
-                  fixedSize({ horizontal: false, vertical: true }),
-                  onGeometryChange(measure("heading")),
-                ]}
-              >
-                {info.highRisk.title}
-              </Text>
-              {/* Scrolls inside its bound; the indicator stays visible so the hidden lines are discoverable. */}
+              {summaryHeading}
               <ScrollView testID="plugins.management.highRiskScroll"
-                modifiers={[frame({ height: Math.min(allocation.summaryLines, summaryHeight || allocation.summaryLines) }), scrollIndicators("visible")]}>
+                modifiers={[frame({ height: plan.mode === "regular" ? Math.min(plan.summaryLines, summaryHeight || plan.summaryLines) : undefined }),
+                  scrollIndicators("visible")]}>
                 <VStack alignment="leading" spacing={spacing.xs}
                   modifiers={[frame({ maxWidth: Infinity, alignment: "leading" }),
                     onGeometryChange((size) => { if (size.height > 0) setSummaryHeight(size.height); })]}>
-                  {info.highRisk.lines.map((line, index) => (
-                    <Text
-                      key={index}
-                      modifiers={[
-                        font({ textStyle: "footnote" }),
-                        foregroundStyle(colors.textPrimary),
-                        fixedSize({ horizontal: false, vertical: true }),
-                        onGeometryChange(measureLine(index)),
-                      ]}
-                    >
-                      {line}
-                    </Text>
-                  ))}
+                  {summaryItems}
                 </VStack>
               </ScrollView>
-              {allocation.clipped ? (
-                <Text testID="plugins.management.highRiskMore" modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary),
-                  fixedSize({ horizontal: false, vertical: true }), onGeometryChange(measure("hint"))]}>
-                  {t("plugins.management.highRiskMore")}
-                </Text>
-              ) : null}
             </VStack>
           ) : null}
           {stacked ? (
@@ -204,6 +194,14 @@ export function PluginManagementConfirmation(
           {body(info?.sourceChanged, true)}
           {body(info?.trust, true)}
         </VStack>
+        {/* Compact: the whole summary right after the identity block, in the same scrolled list. */}
+        {compact && info?.highRisk ? <Divider /> : null}
+        {compact && info?.highRisk ? (
+          <VStack testID="plugins.management.highRisk" alignment="leading" spacing={spacing.xs}>
+            {summaryHeading}
+            {summaryItems}
+          </VStack>
+        ) : null}
         {body(info?.sourceNotice)}
         {body(info?.version)}
         {body(info?.identity)}

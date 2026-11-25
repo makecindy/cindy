@@ -89,6 +89,7 @@ import {
   type PluginDirectorySegment,
 } from "./PluginDirectoryView";
 import { usePluginMarket } from "./usePluginMarket";
+import { pluginOperationHold, usePluginManagementSlot, type PluginSlotToken } from "./pluginManagementSlot";
 import { PluginMarketSection } from "./PluginMarketSection";
 import { PluginMarketDetailView } from "./PluginMarketDetailView";
 import { FileBrowserSegmentedControl } from "@/session/FileBrowserSegmentedControl";
@@ -168,7 +169,8 @@ function PluginDirectory() {
   const [readmeOpen, setReadmeOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const enableLock = useRef(false);
+  // The enable / disable write in flight (its token in the page slot): the detail is not read again meanwhile.
+  const toggleToken = useRef<PluginSlotToken | null>(null);
   const [taskPicker, setTaskPicker] = useState(false);
   const [pageTitle, setPageTitle] = useState("");
   const liveSelection = useRef({
@@ -205,20 +207,16 @@ function PluginDirectory() {
         marketItemMatchesPlugin(item, managed),
       )
     : undefined;
-  // An installed-plugin update reads its market detail before the controller starts; that preparation already
-  // holds the one management slot, so a market install cannot start beside it.
-  const [updatePreparing, setUpdatePreparing] = useState(false);
+  // This detail's own management operation (shown in its sheet and notices).
   const managementPending =
-    updatePreparing ||
-    (!!management.state &&
-      (management.state.busy ||
-        ["running", "confirmation", "unknown"].includes(
-          management.state.outcome,
-        )));
-  // The enable / disable switch (its write and read-back) and a task settings save hold the slot too (maintainer
-  // review 13:41: a pending disable let the market start an install beside it).
-  const [toggling, setToggling] = useState(false);
-  const [taskSettingsSaving, setTaskSettingsSaving] = useState(false);
+    !!management.state &&
+    (management.state.busy ||
+      ["running", "confirmation", "unknown"].includes(management.state.outcome));
+  // The page's one management slot (pluginManagementSlot.ts; maintainer review 15:37): the six entries (market
+  // install, update, uninstall, enable switch, page approval, task settings save) take it synchronously when pressed
+  // and only the holder's token releases it. Whether an entry may start is decided by `slot.tryAcquire`; the
+  // unavailable buttons below only show `holder`. The table of holders and releases is in plugin-mobile-implementation.md.
+  const { slot, holder } = usePluginManagementSlot();
   // Market browsing and installs live in usePluginMarket; this screen only routes views.
   const market = usePluginMarket({
     visible: focused && (segment === "market" || !!query.trim()) && (wide || !selected),
@@ -227,7 +225,6 @@ function PluginDirectory() {
     isOnline: list.isOnline,
     installedDeviceId: deviceId,
     query,
-    blocked: managementPending || toggling || taskSettingsSaving,
     onInstalled: (host, instanceKey, item) => {
       void list.refresh();
       // Same as the computer: a fresh install opens its installed detail.
@@ -244,17 +241,8 @@ function PluginDirectory() {
         });
     },
   });
-  const liveMarketBusy = useRef(market.installBusy);
-  liveMarketBusy.current = market.installBusy;
-  // One management slot for the whole screen (Codex review of b93ba486, maintainer review 13:41): every entry that writes
-  // to the Host or opens a confirmation holds it while its request (and read-back) is in flight, and each entry is
-  // unavailable while another holds it. Holders: the market install, the management controller (update, uninstall,
-  // page approval), the enable / disable switch and a task settings save. The table is in plugin-mobile-implementation.md.
-  type SlotHolder = "controller" | "toggle" | "taskSettings";
-  const slotHeldOutside = (self: SlotHolder) => market.installBusy || (self !== "controller" && managementPending)
-    || (self !== "toggle" && toggling) || (self !== "taskSettings" && taskSettingsSaving);
-  // The controller's own operation (or update preparation) also keeps its other entries unavailable.
-  const managementLocked = managementPending || slotHeldOutside("controller");
+  // Shown unavailable while anyone holds the slot, or this detail's own operation is still open.
+  const managementLocked = !!holder || managementPending;
   const managementReady =
     management.state?.capability === "supported" &&
     !management.state.errorCode &&
@@ -493,7 +481,7 @@ function PluginDirectory() {
       selected &&
       detailOpen &&
       selectedOnline &&
-      !enableLock.current &&
+      !toggleToken.current &&
       (returned || reconnected || (!detailLoading && !detail && !detailFailed))
     )
       void showDetail(selected.row);
@@ -817,14 +805,7 @@ function PluginDirectory() {
       </View>
     );
   const enable = async (enabled: boolean) => {
-    if (
-      !selected ||
-      !detail ||
-      enableLock.current ||
-      slotHeldOutside("toggle") ||
-      !list.isOnline(selected.row.host)
-    )
-      return;
+    if (!selected || !detail || !list.isOnline(selected.row.host)) return;
     const actionId = enabled ? "enable" : "disable";
     if (
       !selected.row.item.actions?.some(
@@ -838,8 +819,10 @@ function PluginDirectory() {
     const current = () =>
       generation === detailGeneration.current &&
       isMobileAuthOwnerCurrent(owner);
-    enableLock.current = true;
-    setToggling(true);
+    // The slot decides: a second tap, or a tap while another entry holds it, does nothing.
+    const token = slot.tryAcquire("enable");
+    if (!token) return;
+    toggleToken.current = token;
     setBusy(true);
     try {
       await invokePlugin(invoke, row.host.deviceId, row.item.ref.id, actionId);
@@ -848,8 +831,8 @@ function PluginDirectory() {
     } finally {
       // A failed reply may follow an applied write; confirm by reading, never replaying it.
       if (current()) await showDetail(row);
-      enableLock.current = false;
-      setToggling(false);
+      if (toggleToken.current === token) toggleToken.current = null;
+      slot.release(token);
       if (isMobileAuthOwnerCurrent(owner)) setBusy(false);
       void list.refresh();
     }
@@ -921,6 +904,7 @@ function PluginDirectory() {
     };
     if (action === "uninstall" && managed) {
       const plugin = managed;
+      if (slot.holder()) return;
       Alert.alert(
         t("plugins.management.uninstallTitle", { name: plugin.manifest.name }),
         t("plugins.management.uninstallBody", { device: row.host.deviceName }),
@@ -931,7 +915,10 @@ function PluginDirectory() {
             style: "destructive",
             onPress: async () => {
               if (!current()) return;
-              await controller.uninstall(plugin);
+              // Taken when the person confirms; the alert itself sends nothing.
+              const token = slot.tryAcquire("uninstall", plugin.manifest.name);
+              if (!token) return;
+              await controller.uninstall(plugin, pluginOperationHold(slot, token));
               reportPreflightFailure();
             },
           },
@@ -939,9 +926,12 @@ function PluginDirectory() {
       );
     } else if (action === "update" && marketItem && managed) {
       const displayed = marketItem;
-      // A market install that started anyway (same frame) wins; this update then stops before begin.
-      const updateCurrent = () => current() && !liveMarketBusy.current;
-      setUpdatePreparing(true);
+      // The slot is taken now, before the preparing read: another entry pressed in the same frame cannot start.
+      const token = slot.tryAcquire("update", managed.manifest.name);
+      if (!token) return;
+      const hold = pluginOperationHold(slot, token);
+      let handedOver = false;
+      const updateCurrent = () => current() && hold.guard();
       try {
         const client = createPluginManagementClient({
           invoke,
@@ -966,15 +956,14 @@ function PluginDirectory() {
             return;
           }
         }
-        // The controller is busy from here on; the preparation flag can be released once it has started.
-        const started = controller.install(next, managed);
-        setUpdatePreparing(false);
-        await started;
+        // From here the controller holds the slot for this update and releases it when the update is over.
+        handedOver = true;
+        await controller.install(next, managed, hold);
         reportPreflightFailure();
       } catch {
         if (current()) Alert.alert(t("plugins.management.state.readFailed"), undefined, [{ text: t("plugins.gotIt") }]);
       } finally {
-        setUpdatePreparing(false);
+        if (!handedOver) hold.onSettled();
       }
     }
   };
@@ -1110,7 +1099,7 @@ function PluginDirectory() {
         instanceId: managed.instanceKey,
         expectedInstalledApproval: pluginApprovalToken(managed),
       }}
-      active={focused && online && detailOpen && !managementPending && !market.installBusy && !toggling && !taskSettingsSaving}
+      active={focused && online && detailOpen && !managementPending && !holder}
       onNotice={(notice) => {
         if (
           renderedGeneration === detailGeneration.current &&
@@ -1124,15 +1113,15 @@ function PluginDirectory() {
   ) : undefined;
   const taskSettingsAvailable = model?.taskPreferences && managed?.approval.state === "approved" &&
     managed.enabled && enabled && online && focused && detailOpen && !busy &&
-    managementReady && !slotHeldOutside("taskSettings") && !detailLoading && !detailFailed;
+    managementReady && (!holder || holder.entry === "task-settings") && !detailLoading && !detailFailed;
   const detailView =
     selected && model ? (
       <PluginDetailView
         row={selected.row}
         enabled={enabled}
-        busy={busy || detailLoading || slotHeldOutside("toggle")}
+        busy={busy || detailLoading || !!holder || managementPending}
         statusRecoveryBusy={busy || detailLoading}
-        uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t, false, managementLocked)}
+        uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t, false, slot)}
         managementNotice={management.state?.outcome === "unknown" ? {
           testID: "plugins.managementUnknown",
           title: t("plugins.notice.title.resultUnknown"),
@@ -1159,8 +1148,6 @@ function PluginDirectory() {
                   key={JSON.stringify(["tasks", selected.row.host.deviceId, managed.instanceKey, pluginApprovalToken(managed), connectionEpoch])}
                   deviceId={selected.row.host.deviceId}
                   pluginId={managed.instanceKey}
-                  blocked={slotHeldOutside("taskSettings")}
-                  onSavingChange={setTaskSettingsSaving}
                 />
               ) : null}
               {originalSettingsContent}

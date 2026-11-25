@@ -14,6 +14,7 @@ import {
   pluginMarketRequest, pluginMarketSourceUnverified, type PluginMarketCounts, type PluginMarketFilter, type PluginMarketPage,
 } from "./pluginMarketCatalog";
 import { usePluginManagement } from "./usePluginManagement";
+import { pluginOperationHold, usePluginManagementSlot, type PluginSlotToken } from "./pluginManagementSlot";
 import type { PluginManagementState } from "./pluginManagementController";
 
 /** Same freshness window as the computer's market browser; pull-to-refresh always re-reads. */
@@ -52,6 +53,8 @@ interface CatalogList {
 interface CountsEntry { key: string; deviceId: string; counts: PluginMarketCounts | null; customSourceNames: string[]; at: number }
 interface InstallAttempt {
   id: number;
+  /** The page's management slot, taken when Install was pressed (see pluginManagementSlot.ts). */
+  token: PluginSlotToken;
   target: RemoteResourceHostTarget;
   item: ManagedMarketItem;
   detail?: ManagedMarketDetail;
@@ -75,8 +78,6 @@ export interface UsePluginMarketOptions {
   /** Installed-tab computer filter; empty means all computers. */
   installedDeviceId: string;
   query: string;
-  /** Another management write on this screen (e.g. an update) owns the consent sheet; new installs wait. */
-  blocked?: boolean;
   /** Called once per successful install; instanceKey is absent only if the Host readback failed. */
   onInstalled(target: RemoteResourceHostTarget, instanceKey: string | undefined, item: ManagedMarketItem): void;
 }
@@ -428,24 +429,33 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   // Installs only start after the paged-catalog probe, so the Host also accepts the light installed read.
   const management = usePluginManagement(install?.target.deviceId, install ? isOnline(install.target) : false,
     focused, install ? `plugin-market:${install.id}` : "plugin-market", false, "installed");
-  const blocked = !!options.blocked;
-  // Checked when a press arrives too: another management entry may have taken the slot since the last render.
-  const liveBlocked = useRef(blocked);
-  liveBlocked.current = blocked;
+  // The page's one management slot decides whether Install may start: taken synchronously on the press (a second
+  // press, a press from a stale render or from another entry in the same frame cannot take it), released by this
+  // attempt's token when it ends, or by the controller once the install it was handed over to is over.
+  const { slot, holder } = usePluginManagementSlot();
+  const handedOver = useRef(0);
   const startInstall = useCallback((item: ManagedMarketItem, known?: ManagedMarketDetail) => {
-    if (installRef.current || blocked || liveBlocked.current || !target || !online || probeStatus !== "supported" || item.installState !== "not-installed"
+    if (installRef.current || !target || !online || probeStatus !== "supported" || item.installState !== "not-installed"
       || pluginMarketSourceUnverified(known ?? item)) return;
+    const token = slot.tryAcquire("market-install", item.name);
+    if (!token) return;
     setRowErrors(({ [errorKey(target.deviceId, item.pluginId)]: _removed, ...rest }) => rest);
-    const attempt = { id: ++attemptId.current, target, item, detail: known, started: false, confirmed: false };
+    const attempt = { id: ++attemptId.current, token, target, item, detail: known, started: false, confirmed: false };
     installRef.current = attempt;
     setInstall(attempt);
-  }, [target, online, probeStatus, blocked]);
+  }, [target, online, probeStatus, slot]);
+  // Leaving the page before the controller took the install over: nothing was sent, the slot goes.
+  useEffect(() => () => {
+    const attempt = installRef.current;
+    if (attempt && handedOver.current !== attempt.id) slot.release(attempt.token);
+  }, [slot]);
   const finish = useCallback((attempt: InstallAttempt, messageKey?: string) => {
     if (installRef.current?.id !== attempt.id) return;
     installRef.current = null;
+    slot.release(attempt.token);
     setInstall(null);
     if (messageKey) setRowErrors((current) => ({ ...current, [errorKey(attempt.target.deviceId, attempt.item.pluginId)]: messageKey }));
-  }, []);
+  }, [slot]);
   /**
    * The plugins on one computer changed (an install here, an uninstall or update in the installed detail, or a
    * `plugins` change notification from that computer): its cached lists and counts no longer describe it. Reads
@@ -502,7 +512,9 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     const started = { ...attempt, started: true };
     installRef.current = started;
     setInstall(started);
-    const current = () => installRef.current?.id === attempt.id;
+    // This attempt is still the one on screen; writing also needs the slot still held by it.
+    const mine = () => installRef.current?.id === attempt.id;
+    const current = () => mine() && slot.holds(attempt.token);
     void (async () => {
       let value = attempt.detail;
       if (!value) {
@@ -524,14 +536,15 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
         finish(attempt, "plugins.market.sourceChanged");
         return;
       }
-      await controller.install(value);
+      handedOver.current = attempt.id;
+      await controller.install(value, undefined, pluginOperationHold(slot, attempt.token));
       // The controller returns quietly when its connection generation changed or it only published
       // an error (offline, not ready). Nothing was sent, so release this attempt instead of waiting.
       const after = controller.getState();
-      if (current() && !after.operationId && after.outcome === "idle")
+      if (mine() && !after.operationId && after.outcome === "idle")
         finish(attempt, pluginMarketErrorKey(after.errorCode ?? "PLUGIN_MANAGEMENT_STALE"));
     })();
-  }, [install, management.state, management.controller, finish, invoke]);
+  }, [install, management.state, management.controller, finish, invoke, slot]);
   /**
    * Settle an install whose original receipt the Host no longer has (NOT_FOUND), from the facts the
    * controller read right after that answer (missingReceiptFacts), never from an earlier snapshot.
@@ -654,7 +667,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     },
     rowState,
     installBusy: !!install,
-    canInstall: online && probeStatus === "supported" && !install && !blocked,
+    canInstall: online && probeStatus === "supported" && !install && !holder,
     install: startInstall,
     checkResult,
     detail, openDetail, closeDetail,
