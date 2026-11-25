@@ -12272,8 +12272,8 @@
       "footnote": "這段內容會進入夥伴的身分上下文；快速性格設定會單獨保存，修改這裡不會覆蓋它。"
     },
     "welcome": {
-      "generic": "嗨，我是{{name}}。以後有事直接跟我說，我先熟悉一下這裡。",
-      "withRole": "嗨，我是{{name}}——{{description}}。有事直接跟我說。"
+      "generic": "嗨，我是{{name}}。有事直接跟我說。",
+      "withUser": "嗨，{{userName}}，我是{{name}}。有事直接跟我說。"
     },
     "invitation": {
       "title": "準備見面",
