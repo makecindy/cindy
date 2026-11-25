@@ -75,7 +75,7 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 
 企业内测使用中国区账号体系。用开发环境的桌面渲染产物构建 Host 时，在 `--region cn` 后加 `--dev-endpoints`，并通过 `--web-dir` 指定 dev 渲染目录。构建器将发布仓提供的 `config/endpoint.dev.json` 装入中国区配置，同时核对渲染环境以及认证、设备、模型和 CDN 的独立 HTTPS 地址。
 
-用企业账号登录时，执行 `cindy-host login --org=<企业标识>`，会同时在国内区和国际区查找 SSO。已知企业区域时，可以加 `--region=cn` 或 `--region=global` 只查指定区域。用源码启动时，把相同参数加在上方 `login` 后，换掉个人账号示例里的 `--method=google`。详见[登录流程](architecture-and-status.md#登录流程阶段-2)。
+用企业账号登录时，执行 `cindy-host login --org=<企业标识>`，会同时在国内区和国际区查找 SSO。一侧请求失败或超时、另一侧找到企业时，命令会说明本次使用的区域。两区都找到企业时，命令会提示加 `--region=cn` 或 `--region=global` 重试。已知企业区域时，可以直接指定，只查该区。用源码启动时，把相同参数加在上方 `login` 后，换掉个人账号示例里的 `--method=google`。详见[登录流程](architecture-and-status.md#登录流程阶段-2)。
 
 ## Linux 发布包
 

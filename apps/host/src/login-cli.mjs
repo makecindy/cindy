@@ -13,7 +13,7 @@ import path from 'node:path';
 
 
 
-import { CindyAuthClient, discoverSsoOrgRealm, parseAuthSessionRecord } from '@cindy/auth-client';
+import { AuthApiError, CindyAuthClient, discoverSsoOrgRealm, parseAuthSessionRecord } from '@cindy/auth-client';
 
 import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { runHostLogin } from './auth/login.mjs';
@@ -136,7 +136,19 @@ export async function runLoginCommand(argv, io = {}) {
   if (organization && explicitRegion === undefined) {
     const cn = createRealm('cn');
     const global = createRealm('global');
-    const selected = await discoverSsoOrgRealm(organization, { cn: cn.client, global: global.client }, { allowPartialSuccess: true });
+    const regionFlags = '--region=cn or --region=global';
+    const selected = await discoverSsoOrgRealm(
+      organization, { cn: cn.client, global: global.client }, { allowPartialSuccess: true },
+    ).catch(error => {
+      if (error instanceof AuthApiError && error.code === 'ORG_REALM_AMBIGUOUS') {
+        throw new AuthApiError(error.code, error.statusCode, `${error.message}. Rerun with ${regionFlags}.`);
+      }
+      throw error;
+    });
+    if (selected.unconfirmedRegion) {
+      err(`Warning: Could not confirm the ${selected.unconfirmedRegion} auth region. Using ${selected.region}. `
+        + `If this is not the correct region, rerun with ${regionFlags}.`);
+    }
     region = selected.region;
     realm = region === 'cn' ? cn : global;
     organizationDiscovery = selected.discovery;

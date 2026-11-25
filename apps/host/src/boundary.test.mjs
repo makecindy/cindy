@@ -353,6 +353,10 @@ async function fakeLoginAuth({ region = 'global', discoveryStatus = 404 } = {}) 
     const membership = { id: member, kind, role: 'owner', displayName: 'Fixture', email: null, orgId: null, orgName: null };
     if (request.url === '/api/auth/providers') return json({ region, attribution: 'email', email: true, phone: false, social: ['google'] });
     if (request.url === '/api/auth/sso/discovery') {
+      if (discoveryStatus === 404) {
+        return response.writeHead(404, { 'content-type': 'application/json' })
+          .end(JSON.stringify({ error: { code: 'ORG_SSO_NOT_FOUND', message: 'Not found' } }));
+      }
       if (discoveryStatus !== 200) return response.writeHead(discoveryStatus).end('{}');
       return json({ region, orgName: 'Fixture Org',
         connections: [{ protocol: 'oidc', connectionId: `sso-${region}`, connectionName: 'SSO' }] });
@@ -388,12 +392,13 @@ async function loginEnvironment(t, root, profile, port) {
   const store = { read: (key) => records.get(key) ?? null, write: (key, value) => records.set(key, value), remove: (key) => records.delete(key) };
   const { runLoginCommand } = await import('./login-cli.mjs');
   const { CindyAuthClient } = await import('@cindy/auth-client');
-  const login = (deps = {}, stdout = () => {}, argv = []) => runLoginCommand(['--no-open', ...argv], { stdout, stderr: () => {}, deps: {
+  const diagnostics = [];
+  const login = (deps = {}, stdout = () => {}, argv = []) => runLoginCommand(['--no-open', ...argv], { stdout, stderr: line => diagnostics.push(line), deps: {
     store, readStatus: async () => ({ running: false }), scanDesktops: async () => [],
     // The manifest must be https (endpoints.mjs); the fake server listens on plain loopback HTTP.
     createAuthClient: (options) => new CindyAuthClient({ ...options, fetch: (input, init) => fetch(String(input).replace(/^https:/, 'http:'), init) }),
     ...deps } });
-  return { login, records };
+  return { login, records, diagnostics };
 }
 
 /*
@@ -401,8 +406,8 @@ async function loginEnvironment(t, root, profile, port) {
  * - Entry: runLoginCommand with real auth-client requests to two loopback servers.
  * - Regression: CLI sent an explicit enterprise identifier to the build region
  *   only. One valid CN discovery plus an unavailable global realm must sign in.
- * - Gap: auth-client tests cover selection in isolation, not the CLI callback,
- *   token exchange, saved realm, or explicit --region bypass.
+ * - Gap: auth-client tests cover selection in isolation, not the CLI warning and
+ *   retry instructions, callback, saved realm, or explicit --region bypass.
  * - Tier: unit with isolated profile, loopback and in-memory credentials.
  */
 test('enterprise login uses the discovered realm once and respects an explicit region', async t => {
@@ -413,31 +418,51 @@ test('enterprise login uses the discovered realm once and respects an explicit r
   t.after(global.close);
   cn.setKind('org');
   global.setKind('org');
-  const { login, records } = await loginEnvironment(t, root, profile, { cn: cn.port, global: global.port });
+  const { login, records, diagnostics } = await loginEnvironment(t, root, profile, { cn: cn.port, global: global.port });
   const { AUTH_SESSION_KEY } = await import('../../desktop/src/main/authCredentialKeys.ts');
   const { parseAuthSessionRecord } = await import('@cindy/auth-client');
   const org = '--org=fixture-org';
   const discover = '/api/auth/sso/discovery';
   const signIn = [discover, '/api/auth/desktop/callback/poll', '/api/auth/token'];
+  const profileLine = `Profile: ${profile}`;
 
-  const selected = await login({}, undefined, [org]);
-  assert.equal(selected.realm, 'cn');
-  assert.equal(selected.method, 'sso-cn');
-  assert.deepEqual(cn.hits.splice(0), signIn);
-  assert.deepEqual(global.hits.splice(0), [discover]);
-  assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY)).realm, 'cn');
+  await t.test('warns when the other region is unavailable and stays quiet on a confirmed miss', async () => {
+    const selected = await login({}, undefined, [org]);
+    assert.equal(selected.realm, 'cn');
+    assert.equal(selected.method, 'sso-cn');
+    assert.deepEqual(cn.hits.splice(0), signIn);
+    assert.deepEqual(global.hits.splice(0), [discover]);
+    assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY)).realm, 'cn');
+    assert.deepEqual(diagnostics.splice(0), [
+      'Warning: Could not confirm the global auth region. Using cn. If this is not the correct region, rerun with --region=cn or --region=global.',
+      profileLine,
+    ]);
 
-  global.setDiscoveryStatus(200);
-  await assert.rejects(login({}, undefined, [org]), { code: 'ORG_REALM_AMBIGUOUS' });
-  assert.deepEqual(cn.hits.splice(0), [discover]);
-  assert.deepEqual(global.hits.splice(0), [discover]);
-  assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY)).realm, 'cn', 'ambiguous discovery does not change the saved session');
+    global.setDiscoveryStatus(404);
+    assert.equal((await login({}, undefined, [org])).realm, 'cn');
+    assert.deepEqual(diagnostics.splice(0), [profileLine], 'a confirmed miss does not need a warning');
+    assert.deepEqual(cn.hits.splice(0), signIn);
+    assert.deepEqual(global.hits.splice(0), [discover]);
+  });
 
-  const forced = await login({}, undefined, [org, '--region=global']);
-  assert.equal(forced.realm, 'global');
-  assert.deepEqual(cn.hits, []);
-  assert.deepEqual(global.hits, signIn);
-  assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY)).realm, 'global');
+  await t.test('explains how to retry a dual hit and respects the explicit region', async () => {
+    global.setDiscoveryStatus(200);
+    await assert.rejects(login({}, undefined, [org]), {
+      code: 'ORG_REALM_AMBIGUOUS',
+      statusCode: 409,
+      message: 'Enterprise identifier exists in both auth regions. Rerun with --region=cn or --region=global.',
+    });
+    assert.deepEqual(cn.hits.splice(0), [discover]);
+    assert.deepEqual(global.hits.splice(0), [discover]);
+    assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY)).realm, 'cn', 'ambiguous discovery does not change the saved session');
+
+    const forced = await login({}, undefined, [org, '--region=global']);
+    assert.equal(forced.realm, 'global');
+    assert.deepEqual(diagnostics, [profileLine], 'an explicit region does not need a warning');
+    assert.deepEqual(cn.hits, []);
+    assert.deepEqual(global.hits, signIn);
+    assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY)).realm, 'global');
+  });
 });
 
 test('25b: cindy-host login publishes the owner that serve then reads as stable, and sweeps the previous account', async (t) => {
