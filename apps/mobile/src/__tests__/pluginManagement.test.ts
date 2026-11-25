@@ -62,6 +62,15 @@ const receipt = (phase: PluginManagementReceipt['phase'] = 'running'): PluginMan
 const confirmation = (): PluginManagementReceipt => ({ ...receipt('confirmation'), consent: { requestId: 'consent-1',
   initiator: 'user', origin: 'market', facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '2', permissions: [] } } });
 const capability = { protocolVersion: 1, collections: [{ id: 'plugins', actions: [{ id: 'management:snapshot', label: 'Manage' }] }] };
+/** Like vi.waitFor, without its 50 ms polling: retries the assertion while promises settle (file performance budget). */
+async function eventually(assertion: () => void) {
+  let last: unknown;
+  for (let i = 0; i < 400; i++) {
+    try { assertion(); return; } catch (error) { last = error; }
+    await (i < 300 ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, 0)));
+  }
+  throw last;
+}
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void;
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 type Envelope = { actionId: string; input: Record<string, unknown>; resourceRef?: { id: string } };
@@ -267,7 +276,7 @@ describe('a queued operation stopped before it was written', () => {
     await c.refresh();
     hold = new Promise((resolve) => { release = resolve; });
     const disabling = c.setEnabled(plugin, false);
-    await vi.waitFor(() => expect(c.getState()).toMatchObject({ busy: true, outcome: 'running', operationId: 'operation-1' }));
+    await eventually(() => expect(c.getState()).toMatchObject({ busy: true, outcome: 'running', operationId: 'operation-1' }));
     facts = snapshot([]);
     await c.refresh();
     release();
@@ -337,7 +346,9 @@ describe('offline and reconnect between enqueue, dequeue, write and reply', () =
     const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }),
       { createOperationId: () => 'operation-1', pollIntervalMs: 60_000 });
     controllers.push(c);
-    const flush = async () => { for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+    // Every reply here settles through promises only (no timers: polling is 60 s away), so draining the microtask queue
+    // is enough; a timer tick per step only cost time (file performance budget).
+    const flush = async () => { for (let i = 0; i < 200; i++) await Promise.resolve(); };
     const run = async (order: Step[]) => {
       for (const step of order) {
         if (step === 'offline') c.setOnline(false);
@@ -1233,7 +1244,7 @@ describe('mobile management transactions', () => {
     const h = host((r) => r.actionId === 'management:begin' ? begin.promise : receipt('succeeded'));
     const c = controller(h.client); await c.refresh();
     const start = c.uninstall(plugin);
-    await vi.waitFor(() => expect(c.getState().operationId).toBe('operation-1'));
+    await eventually(() => expect(c.getState().operationId).toBe('operation-1'));
     await c.cancel(); begin.resolve(receipt('running')); await start;
     expect(c.getState().outcome).toBe('running');
     await c.reconcile();
@@ -1249,7 +1260,7 @@ describe('mobile management transactions', () => {
     }) as PluginManagementInvoke;
     const c = controller(createPluginManagementClient({ invoke, deviceId: 'host-1' })); await c.refresh();
     const start = c.uninstall(plugin);
-    await vi.waitFor(() => expect(preSend).toBeTypeOf('function'));
+    await eventually(() => expect(preSend).toBeTypeOf('function'));
     await c.cancel();
     expect(() => preSend()).not.toThrow();
     queued.resolve({ effects: [], result: receipt('succeeded') }); await start;
@@ -1268,9 +1279,9 @@ describe('mobile management transactions', () => {
     let pending: Promise<void>;
     if (action === 'begin') pending = c.install(detail, plugin);
     else { await c.install(detail, plugin); pending = action === 'answer' ? c.answer(true) : c.cancel(); }
-    await vi.waitFor(() => expect(preSend).toBeTypeOf('function'));
+    await eventually(() => expect(preSend).toBeTypeOf('function'));
     c.setOnline(false); c.setOnline(true);
-    await vi.waitFor(() => expect(c.getState().busy).toBe(false));
+    await eventually(() => expect(c.getState().busy).toBe(false));
     expect(c.getState().online).toBe(true);
     // The queued write's last check refuses it after the reconnect; like the real transport, a refused request never
     // gets a reply, it fails as never written.
@@ -1300,13 +1311,13 @@ describe('mobile management transactions', () => {
     const begin = deferred<PluginManagementReceipt>();
     const h = host((r) => r.actionId === 'management:begin' ? begin.promise : receipt('cancelled'));
     const c = controller(h.client); await c.refresh(); const start = c.uninstall(plugin);
-    await vi.waitFor(() => expect(c.getState().operationId).toBe('operation-1'));
+    await eventually(() => expect(c.getState().operationId).toBe('operation-1'));
     // The written begin's reply is the Host's state of this operation: it lands by operation id even though the
     // computer went offline meanwhile (maintainer reviews 10:36 and 11:45: results belong to the operation).
     c.setOnline(false); begin.resolve(receipt('succeeded')); await start;
     expect(c.getState()).toMatchObject({ online: false, outcome: 'succeeded' });
     c.setOnline(true);
-    await vi.waitFor(() => expect(c.getState().busy).toBe(false));
+    await eventually(() => expect(c.getState().busy).toBe(false));
     // A final outcome is never changed by the reconnect, and nothing is sent again.
     expect(c.getState().outcome).toBe('succeeded');
     expect(h.requests.filter((r) => r.actionId === 'management:begin')).toHaveLength(1);
@@ -1595,17 +1606,22 @@ describe('shared chat plugin hints', () => {
     expect(h.requests).toHaveLength(1);
   });
   it('rejects invalidated in-flight replies and retries after a read failure', async () => {
-    const h = host(); const pending = deferred<unknown>();
-    const invoke = vi.fn().mockReturnValueOnce(pending.promise).mockImplementation(h.invoke) as PluginManagementInvoke;
-    const reads = createPluginPromptReads(invoke, () => true);
-    const first = reads.read('host-1');
-    const rejection = expect(first).rejects.toThrow('PLUGIN_MANAGEMENT_STALE');
-    await Promise.resolve(); reads.invalidate(); pending.resolve(capability); await rejection;
-    await expect(reads.read('host-1')).resolves.toMatchObject({ capability: 'supported' });
-    reads.invalidate();
-    vi.mocked(invoke).mockRejectedValueOnce(new Error('offline'));
-    await expect(reads.read('host-1')).rejects.toThrow('offline');
-    await expect(reads.read('host-1')).resolves.toMatchObject({ capability: 'supported' });
+    // The reads wait out a 250 ms notification window after an invalidation; fake timers step over it (performance budget).
+    vi.useFakeTimers();
+    try {
+      const h = host(); const pending = deferred<unknown>();
+      const invoke = vi.fn().mockReturnValueOnce(pending.promise).mockImplementation(h.invoke) as PluginManagementInvoke;
+      const reads = createPluginPromptReads(invoke, () => true);
+      const settled = async <T,>(assertion: Promise<T>) => { await vi.advanceTimersByTimeAsync(300); return assertion; };
+      const first = reads.read('host-1');
+      const rejection = expect(first).rejects.toThrow('PLUGIN_MANAGEMENT_STALE');
+      await Promise.resolve(); reads.invalidate(); pending.resolve(capability); await rejection;
+      await settled(expect(reads.read('host-1')).resolves.toMatchObject({ capability: 'supported' }));
+      reads.invalidate();
+      vi.mocked(invoke).mockRejectedValueOnce(new Error('offline'));
+      await settled(expect(reads.read('host-1')).rejects.toThrow('offline'));
+      await settled(expect(reads.read('host-1')).resolves.toMatchObject({ capability: 'supported' }));
+    } finally { vi.useRealTimers(); }
   });
   it('rechecks live facts before a mutation even when the display was shared', async () => {
     const h = host(); const reads = createPluginPromptReads(h.invoke, () => true);
