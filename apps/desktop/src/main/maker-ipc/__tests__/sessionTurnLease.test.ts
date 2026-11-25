@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
+import { createDbTransportError, DB_TRANSPORT_OUTCOME_UNKNOWN } from '../../localDb/client/DbTransport.js';
 import { tx as runDbTx } from '../../localDb/worker/opHandlers/tx.js';
 import {
   readPersistedSessionTurnLeases,
@@ -309,6 +310,61 @@ describe('shared-process session turn lease', () => {
       expect(warn).toHaveBeenCalledTimes(1);
     },
   );
+
+  it('dispatches a same-generation retry once after a committed insert loses its reply', async () => {
+    const { first, second } = setup();
+    let loseReply = true;
+    const client: typeof first = {
+      ...first,
+      tx: async (name: string, args: unknown) => {
+        const result = await first.tx(name, args);
+        if (loseReply) {
+          loseReply = false;
+          throw createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'lost insert reply');
+        }
+        return result;
+      },
+    };
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => client, owner: { instanceId: 'local', processId: 101 },
+      createTurnId: () => 'fallback', now: () => 1,
+    });
+    let stop!: () => void;
+    const stopped = new Promise<void>(resolve => { stop = resolve; });
+    const send = vi.fn(async () => {});
+    const handle = {
+      id: 'runtime', agentKind: 'pi', send, isTurnRunning: () => false,
+      setInteractionResolver() {}, close: async () => stop(), async *events() { await stopped; },
+    } as unknown as AgentSessionHandle;
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const session = new Session({ id: 'source-1', agentKind: 'pi', workDir: '/repo', handle,
+      capabilities: {} as never, logger, turnStallMs: 0 });
+    const turnId = (generation: number) => `${session.instanceId}:${generation}`;
+    session.setTurnLifecycleObserver({
+      beforeProviderStart: generation => tracker.markTurnStarted(session.id, turnId(generation)),
+      onUndispatched: generation => tracker.markTurnEnded(session.id, turnId(generation)),
+      onTerminal() {},
+    });
+    try {
+      await expect(session.send('work')).rejects.toMatchObject({ code: DB_TRANSPORT_OUTCOME_UNKNOWN });
+      expect(send).toHaveBeenCalledTimes(0);
+      const committed = await readPersistedSessionTurnLeases(second, session.id);
+      expect(committed).toHaveLength(1);
+      const retry = await Promise.allSettled([session.send('work')]);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(retry[0].status).toBe('fulfilled');
+      const current = turnId(session.getTurnGeneration());
+      expect(committed[0].lease?.turnId).toBe(current);
+      expect(await readPersistedSessionTurnLeases(second, session.id)).toEqual(committed);
+      await tracker.markTurnStarted(session.id, 'successor');
+      expect(await tracker.markTurnEndedAndCheckIdle(session.id, current)).toBe(false);
+      expect(await readPersistedSessionTurnLeases(second, session.id)).toMatchObject([
+        { lease: { turnId: 'successor' } },
+      ]);
+    } finally {
+      await session.close();
+    }
+  });
 
   it('ignores a delayed tracker terminal after a newer generation replaces it', async () => {
     const { first } = setup();
