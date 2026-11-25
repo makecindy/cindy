@@ -1,4 +1,4 @@
-import { Button, Text, VStack, HStack } from "@expo/ui/swift-ui";
+import { Button, Divider, Text, VStack, HStack } from "@expo/ui/swift-ui";
 import {
   buttonStyle,
   disabled,
@@ -47,12 +47,16 @@ export function PluginManagementConfirmation(
       footer={
         // The pinned high-risk text lives in the footer, which stays visible at the medium detent too.
         <VStack alignment="leading" spacing={spacing.sm}>
+          {/* A separator between the scrolled list and the pinned summary, so a list title resting right above
+              the summary does not read as a repeat. */}
+          {info?.highRisk ? <Divider /> : null}
           {info?.highRisk ? (
             // Bounded summary (a heading and at most five two-line items); full details are in the scrolled list.
             <VStack testID="plugins.management.highRisk" alignment="leading" spacing={spacing.xs}>
               <Text
                 modifiers={[
-                  font({ textStyle: "footnote", weight: "semibold" }),
+                  // Same size as the list's permission titles, one step heavier.
+                  font({ textStyle: "subheadline", weight: "semibold" }),
                   foregroundStyle(colors.textPrimary),
                   lineLimit(1),
                 ]}

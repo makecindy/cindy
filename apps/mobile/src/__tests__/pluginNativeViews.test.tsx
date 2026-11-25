@@ -1406,6 +1406,24 @@ describe("pinned high-risk permission", () => {
     expect(children.length).toBeLessThanOrEqual(6);
     for (const child of children) expect(child.props.numberOfLines).toBeGreaterThan(0);
   });
+  // Android re-check of the pinned area: without a separator, a list title resting right above the summary read
+  // as a repeat; the summary heading was smaller than the list's permission titles.
+  it("iOS separates the pinned summary from the scrolled list and titles it like the list", () => {
+    const { container } = mount(PluginManagementConfirmation, props(installOf([errand, background])));
+    const pinned = container.querySelector('[data-testid="plugins.management.highRisk"]')!;
+    expect(pinned.previousElementSibling?.getAttribute("data-native")).toBe("Divider");
+    const heading = bridge.props.get("plugins.management.highRisk");
+    const title = (Array.isArray(heading.children) ? heading.children.flat() : [heading.children]).filter(Boolean)[0];
+    expect(title.props.modifiers).toContainEqual({ font: { textStyle: "subheadline", weight: "semibold" } });
+  });
+  it("Android separates the pinned summary from the scrolled list and titles it like the list", () => {
+    mount(AndroidManagementConfirmation, props(installOf([errand, background])));
+    const pinned = bridge.props.get("plugins.management.highRisk");
+    expect(pinned.style).toMatchObject({ borderTopColor: palettes.light.border });
+    expect("borderTopWidth" in pinned.style).toBe(true);
+    const title = (Array.isArray(pinned.children) ? pinned.children.flat() : [pinned.children]).filter(Boolean)[0];
+    expect(title.props.style).toMatchObject({ fontSize: 15, fontWeight: "600" });
+  });
   it("Android shows no pinned area when nothing is high risk", () => {
     const { container } = mount(AndroidManagementConfirmation, props(installOf([notify])));
     expect(container.querySelector('[data-testid="plugins.management.highRisk"]')).toBeNull();

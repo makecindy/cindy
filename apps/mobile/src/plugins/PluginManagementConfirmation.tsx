@@ -132,10 +132,19 @@ const makeStyles = (c: ThemeColors) =>
       lineHeight: lineHeight.caption,
       color: c.textPrimary,
     },
-    highRisk: { gap: spacing.xs, paddingBottom: spacing.md },
+    // A hairline separates the scrolled list from the pinned summary, so a list title resting right above it
+    // does not read as a repeat.
+    highRisk: {
+      gap: spacing.xs,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.md,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.border,
+    },
+    // Same size as the list's permission titles, one step heavier.
     highRiskTitle: {
-      fontSize: typeScale.footnote,
-      lineHeight: lineHeight.caption,
+      fontSize: typeScale.bodySmall,
+      lineHeight: lineHeight.bodySmall,
       fontWeight: fontWeight.semibold,
       color: c.textPrimary,
     },
