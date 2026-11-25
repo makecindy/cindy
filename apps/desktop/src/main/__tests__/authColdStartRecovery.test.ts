@@ -222,6 +222,13 @@ function setup(random = 0) {
     getAccessToken: () => null,
     saved,
     vault,
+    // An ordinary Desktop has no managed-instance config, so the
+    // managed-instance branches of initialize/refresh must never run here.
+    getInstanceConfig: () => null,
+    instanceAuthReady: () => { throw new Error('managed instance path'); },
+    authenticateManagedInstance: () => { throw new Error('managed instance path'); },
+    // Sign-in entries guard managed-instance accounts; an ordinary Desktop always passes.
+    assertInstanceAuthMutationAllowed: () => {},
     onStartupFallback: vi.fn(),
     transactAuthAccountVault: transaction,
     accountVaultKey,

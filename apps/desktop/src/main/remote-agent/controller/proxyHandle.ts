@@ -249,7 +249,7 @@ export function fixedRemoteAgentLink(client: RemoteAgentRunClient): RemoteAgentL
 
 export interface SharedReconnectSendEvidence {
   handedToTransport: boolean;
-  failure?: { kind: 'rejected' | 'not-written' | 'unconfirmed'; error: unknown };
+  failure?: { kind: 'preparation' | 'rejected' | 'not-written' | 'unconfirmed'; error: unknown };
 }
 
 export interface RemoteHandleDeps {
@@ -447,6 +447,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         return block;
       });
     };
+    const evidence = method === 'send' ? deps.sharedReconnectSendEvidence?.() : undefined;
     let client: RemoteAgentRunClient;
     try {
       client = await link.ensure();
@@ -460,6 +461,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       // instead schedules a continuation and would repeat the full handshake.
       if (method !== 'send' || opts?.origin?.kind === 'goal' || !isRetryableLinkError(error)
         || (error instanceof RemoteAgentRemoteError && error.phase === 'start')) throw error;
+      // Session converts this exception to a generic non-dispatch result. Keep
+      // the link error for the captured input's existing failure settlement.
+      if (evidence) evidence.failure = { kind: 'preparation', error };
       deps.log?.warn('remote agent: connection preparation failed before turn dispatch', { error: String(error) });
       throw new TurnDispatchRejectedError(error instanceof Error ? error.message : String(error), { cause: error });
     }
@@ -497,7 +501,6 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       terminalEventDelivered = false;
       activeTurn = true;
     }
-    const evidence = method === 'send' ? deps.sharedReconnectSendEvidence?.() : undefined;
     try {
       // Keep Session cancellation and delivery evidence local.
       await client.callWithId(callId, method, [wireMessage, encoded.wire], opts?.signal,

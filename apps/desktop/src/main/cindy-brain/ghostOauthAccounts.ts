@@ -46,6 +46,7 @@ import {
   type GhostOauthClientConfig,
   type GhostOauthFlowError,
   type GhostOauthLogger,
+  type StartGhostOauthFlowOptions,
 } from './ghostOauthFlow.js';
 import { tokenBrokerIssuesClientId } from './ghostOauthBroker.js';
 import {
@@ -125,6 +126,11 @@ export interface GhostOauthAccountManagerDeps {
   fetchImpl: typeof fetch;
   /** 拉起系统浏览器(仅 connect 用;生产注入 shell.openExternal)。 */
   openExternal(url: string): void | Promise<void>;
+  /**
+   * 设备码登录需要用户手输验证码时的本机展示(如复制到剪贴板);返回本单结束时的
+   * 清理函数。未注入时只拉起确认页。远程单由控制端展示,不经这里。
+   */
+  presentDeviceUserCode?: StartGhostOauthFlowOptions['presentDeviceUserCode'];
   /** XDT server token broker 调用器(tokenBroker 声明的意识用;接线处注入并核验企业绑定)。 */
   broker?: GhostOauthBrokerClient;
   /**
@@ -793,6 +799,9 @@ export class GhostOauthAccountManager {
       ...(clientSecret ? { clientSecret } : {}),
       ...(decl.redirectPort !== undefined ? { redirectPort: decl.redirectPort } : {}),
       ...(decl.tokenBroker !== undefined ? { tokenBroker: decl.tokenBroker } : {}),
+      ...(decl.deviceAuthorizationUrl !== undefined
+        ? { deviceAuthorizationUrl: decl.deviceAuthorizationUrl }
+        : {}),
       ...(publicRedirectUri !== null ? { publicRedirectUri } : {}),
       ...(decl.brokerBounce !== undefined ? { callbackPath: decl.brokerBounce.callbackPath } : {}),
     };
@@ -1112,6 +1121,7 @@ export class GhostOauthAccountManager {
       config,
       remote: opts?.remote,
       openExternal: (url) => { opts?.onAuthorizationUrl?.(url); return this.deps.openExternal(url); },
+      ...(this.deps.presentDeviceUserCode ? { presentDeviceUserCode: this.deps.presentDeviceUserCode } : {}),
       fetchImpl: this.deps.fetchImpl,
       broker: this.deps.broker,
       brandName: this.deps.brandName,
