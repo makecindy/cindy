@@ -3116,8 +3116,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
           : schedule.prompt,
       origin,
       onPreparing: async () => {
-        this.assertQueuedModelSelection(this.deps.maker.getSession(sessionId), routingBaseline.resolvedSelection);
-        this.assertQueuedExplicitRoute(this.deps.maker.getSession(sessionId), routingBaseline.explicitRoute);
+        const preparingSession = this.deps.maker.getSession(sessionId);
+        // provider-thread-relink can leave no live instance between close and
+        // replacement. Let the accepted boundary validate the replacement,
+        // while still rejecting an actually changed route when an instance is
+        // available here.
+        this.assertQueuedModelSelection(preparingSession, routingBaseline.resolvedSelection, true);
+        this.assertQueuedExplicitRoute(preparingSession, routingBaseline.explicitRoute, true);
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {
           const override = hasScheduledModelOverride(schedule);
           await this.deps.prepareModelPreferences(sessionId, override);
@@ -3610,13 +3615,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
   private assertQueuedModelSelection(
     live: ReturnType<Maker['getSession']>,
     selection: ScheduledModelSelection | undefined,
+    allowRebuildingSession = false,
   ): void {
     if (!selection) return;
     // Provider/model IDs are only unique within an Agent location. Check the
     // actual runtime at both queue boundaries, after pending user switches.
-    if (!live || live.agentKind !== selection.agentKind ||
+    if ((!live && !allowRebuildingSession) || (live && (live.agentKind !== selection.agentKind ||
       (live.agentDeviceId ?? null) !== (selection.agentDeviceId ?? null) ||
-      live.model !== selection.model || getSessionProvider(live.id) !== selection.providerId) {
+      live.model !== selection.model || getSessionProvider(live.id) !== selection.providerId))) {
       throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
     }
   }
@@ -3633,9 +3639,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
   private assertQueuedExplicitRoute(
     live: ReturnType<Maker['getSession']>,
     route: { agentKind: EngineKind; model: string; providerId: string | null } | undefined,
+    allowRebuildingSession = false,
   ): void {
     if (!route) return;
-    if (!live || live.agentKind !== route.agentKind || live.agentDeviceId || live.remoteHostId) {
+    if ((!live && !allowRebuildingSession) || (live &&
+      (live.agentKind !== route.agentKind || live.agentDeviceId || live.remoteHostId))) {
       throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
     }
   }
