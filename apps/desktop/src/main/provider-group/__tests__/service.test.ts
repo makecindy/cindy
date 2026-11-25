@@ -1857,7 +1857,7 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
       model: MODEL,
       providerId: 'alice-anthropic',
       agentDeviceId: SHARE_ROUTE,
-    }, { isCurrent: expect.any(Function), relocate: true });
+    }, { isCurrent: expect.any(Function), relocate: true, recoveryToken: 7 });
     // 交接时重新打开带上凭证(这里交接是假的，凭证仍在等打开)。
     expect(h.guestSwitch.takeForOpen('s1')).toBe('token-aaaaaaaaaaaaaaaa');
     expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({

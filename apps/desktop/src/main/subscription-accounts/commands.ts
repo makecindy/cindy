@@ -113,6 +113,10 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
     return { action: 'login', providerId, accountId, loginKey, ...pluginLoginFields(value, providerId) };
   if (value.action === 'remove' && accountIdValid(accountId))
     return { action: 'remove', providerId, accountId };
+  if (value.action === 'reorder' && Array.isArray(value.accountIds) && value.accountIds.length > 1
+    && value.accountIds.length <= 512 && value.accountIds.every(accountIdValid)
+    && new Set(value.accountIds).size === value.accountIds.length)
+    return { action: 'reorder', providerId, accountIds: value.accountIds };
   if (value.action === 'configure') {
     if (
       value.strategy !== undefined &&
@@ -142,9 +146,6 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       (value.paused !== undefined || value.limit !== undefined || value.weight !== undefined)
     )
       throwIpcError('INVALID_PARAMS', 'Account required');
-    if (value.order !== undefined && (!Array.isArray(value.order) || value.order.length > 64
-      || !value.order.every(accountIdValid) || new Set(value.order).size !== value.order.length))
-      throwIpcError('INVALID_PARAMS', 'Invalid account order');
     return {
       action: 'configure',
       providerId,
@@ -154,7 +155,6 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       paused: value.paused,
       limit: value.limit,
       weight: value.weight,
-      ...(value.order !== undefined ? { order: value.order } : {}),
     } as SubscriptionAccountCommand;
   }
   throwIpcError('INVALID_PARAMS', 'Invalid account command');

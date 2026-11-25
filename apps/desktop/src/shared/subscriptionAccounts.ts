@@ -1,6 +1,7 @@
 import type { GhostHarnessAccountMethod, GhostHarnessUsage } from '@cindy/plugin-protocol';
 import type { RouteStrategy } from './routeStrategy.js';
 import type { ClaudeSubscriptionUsageSnapshot } from './claudeSubscriptionUsage.js';
+import type { OpenAiGroupAccount } from './openAiAccountGroup.js';
 
 export const SUBSCRIPTION_ACCOUNTS_CHANNEL = 'maker:subscription-accounts';
 export const SUBSCRIPTION_ACCOUNTS_CHANGED = 'subscription-accounts:changed';
@@ -88,6 +89,7 @@ export interface SubscriptionAccountUsage {
   };
 }
 export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity'> {
+  apiKey?: { connectionId: string; checks: NonNullable<OpenAiGroupAccount['checks']> };
   /** Owner-only verified account/workspace digest, for duplicate quota presentation. */
   accountKey?: string;
   legacy?: boolean;
@@ -170,6 +172,7 @@ export type SubscriptionAccountCommand =
   | { action: 'login'; providerId: string; accountId: string; loginKey: string; methodId?: string; secret?: string }
   | { action: 'cancel'; providerId: string; loginKey: string }
   | { action: 'remove'; providerId: string; accountId: string }
+  | { action: 'reorder'; providerId: string; accountIds: string[] }
   | {
       action: 'configure';
       providerId: string;
@@ -179,11 +182,6 @@ export type SubscriptionAccountCommand =
       /** null clears the setting: unlimited concurrency. */
       limit?: number | null;
       weight?: number;
-      /**
-       * The provider's accounts (ids as read) in the order the user wants: "in order" uses the first that can run,
-       * "by weight" lists them in this order. Accounts of other providers keep their places. Older hosts ignore it.
-       */
-      order?: string[];
     };
 
 /**

@@ -133,7 +133,7 @@ function AccountsRouteRow({ provider, plain = null }: { provider: Provider; plai
     order.splice(index + delta, 0, item!);
     setSaving(true);
     try {
-      await window.electronAPI.subscriptionAccounts.command({ action: 'configure', providerId: provider.id, order });
+      await window.electronAPI.subscriptionAccounts.command({ action: 'reorder', providerId: provider.id, accountIds: order });
       await read();
     } catch {
       toast.error(t('modelGroups.settings.saveFailed'));

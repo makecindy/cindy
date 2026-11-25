@@ -1433,6 +1433,9 @@
     "ENDPOINT_NOT_FOUND": "Endpoint não encontrado (404). Verifique o URL base",
     "CONTEXT_TOO_LONG": "O contexto excede o limite de comprimento do modelo",
     "WIRE_INCOMPATIBLE": "O endpoint não é totalmente compatível com este protocolo (campos de pedido não reconhecidos)",
+    "INVALID_PROBE_RESPONSE": "O serviço do modelo devolveu uma resposta vazia ou inválida",
+    "PROBE_NO_OUTPUT": "O teste de ligação não conseguiu confirmar que o modelo gerou conteúdo",
+    "PROBE_REFUSED": "O serviço do modelo recusou ou bloqueou o pedido de teste",
     "UPSTREAM_ERROR": "Erro do servidor a montante (5xx). Tente novamente mais tarde",
     "UPSTREAM_UNREACHABLE": "Não é possível contactar o endpoint. Verifique a rede e o URL base",
     "TIMEOUT": "O tempo de ligação esgotou-se. Verifique a rede e o URL base",
@@ -2747,6 +2750,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "Número de telemóvel para iniciar sessão",
+        "rowHint": "Usado para iniciar sessão e receber códigos de verificação",
+        "change": "Alterar número",
+        "verifyTitle": "Verificar o número atual",
+        "introDescription": "Para proteger a sua conta, verifique primeiro o seu número de telemóvel atual.",
+        "newTitle": "Introduza o novo número",
+        "newDescription": "Após a alteração, inicie sessão com o novo número. O número antigo deixará de poder iniciar sessão nesta conta.",
+        "inputLabel": "Novo número de telemóvel",
+        "placeholder": "Introduzir o seu número de telemóvel",
+        "success": "Número de telemóvel alterado para {{target}}"
+      },
+      "email": {
+        "rowTitle": "Email para iniciar sessão",
+        "rowHint": "Usado para iniciar sessão e receber códigos de verificação",
+        "change": "Alterar email",
+        "verifyTitle": "Verificar o email atual",
+        "introDescription": "Para proteger a sua conta, verifique primeiro o seu email atual.",
+        "newTitle": "Introduza o novo email",
+        "newDescription": "Após a alteração, inicie sessão com o novo email. O email antigo deixará de poder iniciar sessão nesta conta.",
+        "inputLabel": "Novo endereço de email",
+        "placeholder": "Introduza o seu endereço de email",
+        "success": "Email alterado para {{target}}"
+      },
+      "codeSent": "Enviámos um código de verificação para {{target}}",
+      "codeLabel": "Código de verificação",
+      "codePlaceholder": "Código de 6 dígitos",
+      "sendCode": "Enviar código",
+      "next": "Seguinte",
+      "confirm": "Confirmar alteração",
+      "cancel": "Cancelar",
+      "resend": "Reenviar código",
+      "resendIn": "Reenviar dentro de {{seconds}} s",
+      "errors": {
+        "INVALID_CODE": "O código de verificação está incorreto ou expirou.",
+        "CODE_ATTEMPTS_EXCEEDED": "Demasiadas tentativas incorretas. Peça um novo código.",
+        "CONTACT_TAKEN": "Este número de telemóvel ou email já está associado a outra conta.",
+        "CONTACT_UNCHANGED": "É igual ao seu número de telemóvel ou email atual.",
+        "CONTACT_CHANGE_TICKET_INVALID": "A verificação expirou. Verifique novamente o seu número de telemóvel ou email atual.",
+        "AUTH_FLOW_SUPERSEDED": "O seu início de sessão mudou. Comece de novo.",
+        "CONTACT_CHANGE_UNAVAILABLE": "Esta conta não pode alterar o método de início de sessão aqui.",
+        "CONTACT_CHANGE_BUSY": "O passo anterior ainda está a ser processado.",
+        "RATE_LIMITED": "Demasiadas tentativas. Aguarde um momento e tente novamente.",
+        "RATE_LIMITED_UNTIL": "Demasiadas tentativas. Tente novamente após as {{time}} (hora local).",
+        "INVALID_PARAMS": "O formato é inválido. Verifique e tente novamente.",
+        "EMAIL_DOMAIN_BLOCKED": "Este email não pode ser usado. Experimente outro.",
+        "EMAIL_PATTERN_BLOCKED": "Este email não pode ser usado. Experimente outro.",
+        "ACCOUNT_DELETION_PENDING": "Esta conta aguarda eliminação e não pode ser alterada.",
+        "NETWORK_ERROR": "Falha na ligação de rede. Verifique a sua rede e tente novamente.",
+        "REQUEST_TIMEOUT": "O pedido excedeu o tempo limite. Tente novamente.",
+        "fallback": "Algo correu mal. Tente novamente mais tarde."
+      }
+    },
     "help": {
       "title": "Ajuda",
       "description": "Saiba como trabalhar com {{appName}}.",
@@ -3030,7 +3087,12 @@
         "reconcileButton": "Verificar",
         "reconcileFailed": "A verificação falhou",
         "reconcileHealthy": "O registo e o disco correspondem. Não foram encontrados problemas.",
-        "reconcileIssues": "Problemas encontrados: {{orphans}} ficheiros não registados ({{orphanSize}}), {{missing}} ficheiros em falta, {{stray}} entradas não reconhecidas. Consulte o registo da aplicação para ver a lista completa."
+        "reconcileIssues": "Problemas encontrados: {{orphans}} ficheiros não registados ({{orphanSize}}), {{missing}} ficheiros em falta, {{stray}} entradas não reconhecidas. Consulte o registo da aplicação para ver a lista completa.",
+        "buddyWorkspaceDirectoryTitle": "Espaço de trabalho dos amigos",
+        "buddyWorkspaceDirectoryDescription": "Pasta onde os novos amigos criam o seu espaço de trabalho. Os amigos existentes mantêm-se onde estão e podem ser movidos individualmente na configuração avançada.",
+        "buddyWorkspaceDirectoryDetails": "A Cindy cria aqui uma subpasta específica da conta para os novos espaços de trabalho, mantendo a ligação no caminho original.",
+        "buddyWorkspaceDirectoryChoose": "Alterar diretório",
+        "buddyWorkspaceDirectoryFailed": "Não foi possível atualizar a pasta do espaço de trabalho dos amigos."
       },
       "piKernel": {
         "manage": "Gerir versão do Pi",
@@ -10133,6 +10195,18 @@
       "title": "Falha na atualização automática",
       "description": "Não foi possível iniciar o atualizador, possivelmente devido à política de segurança do sistema. Transfira manualmente o instalador mais recente.",
       "confirm": "Transferir"
+    },
+    "workspaceMigration": {
+      "title": "A mover o espaço de trabalho",
+      "progressLabel": "Progresso da movimentação do espaço de trabalho",
+      "safetyHint": "A copiar e verificar ficheiros antes de trocar a localização. Mantenha a Cindy aberta até terminar.",
+      "phase": {
+        "preparing": "A preparar",
+        "copying": "A copiar ficheiros",
+        "verifying": "A verificar ficheiros",
+        "switching": "A trocar localização",
+        "cleaning": "A limpar cópia de segurança"
+      }
     }
   },
   "welcome": {
@@ -11477,6 +11551,69 @@
           "corrections": "As suas correções",
           "routines": "Rotinas a rever",
           "upgrade": "Não transferido automaticamente"
+        }
+      },
+      "workspaceLocation": {
+        "title": "Localização do espaço de trabalho",
+        "description": "Mova o espaço de trabalho deste amigo para outro disco local para libertar espaço no disco do sistema. A Cindy mantém uma ligação no caminho original para que tarefas, automações e scripts continuem a funcionar.",
+        "movedDescription": "As tarefas e os scripts existentes continuam a usar o caminho original.",
+        "chooseDialogTitle": "Escolher pasta de destino para o espaço de trabalho",
+        "fullPath": "Caminho completo",
+        "targetPathLabel": "Pasta de destino",
+        "currentPathLabel": "Pasta atual",
+        "defaultPathLabel": "Pasta de destino (predefinida)",
+        "logicalPathLabel": "Caminho original ligado",
+        "copyPath": "Copiar caminho",
+        "pathCopied": "Caminho copiado",
+        "pathCopyFailed": "Não foi possível copiar o caminho",
+        "openTarget": "Abrir pasta",
+        "moveAction": "Mover espaço de trabalho",
+        "moveBackAction": "Voltar ao local predefinido",
+        "chooseAnother": "Escolher outra pasta",
+        "restartNow": "Reiniciar agora",
+        "restartAndMove": "Reiniciar e mover",
+        "scheduleNextRestart": "Mover no próximo reinício",
+        "cancel": "Cancelar",
+        "dismissFailed": "Fechar",
+        "scheduledToast": "Movimentação agendada para o próximo reinício da Cindy",
+        "cancelledToast": "Movimentação cancelada",
+        "previewTitle": "Pronto para mover o espaço de trabalho",
+        "previewSummary": "Tamanho dos ficheiros: {{size}}",
+        "previewNotice": "Antes de reiniciar, fecha as aplicações e os scripts que utilizam este espaço de trabalho.",
+        "previewClaudeSkillsNotice": "Se o espaço de trabalho não tiver um repositório Git próprio, o Claude Code poderá encontrar competências nas pastas superiores da nova localização. Para evitar isso, escolhe uma localização sem competências do Claude Code nas pastas superiores.",
+        "pendingHint": "Feche programas externos que utilizem esta pasta e reinicie a Cindy para iniciar a movimentação.",
+        "unavailableTitle": "Espaço de trabalho movido indisponível",
+        "unavailableDescription": "A Cindy não conseguiu aceder a {{target}}. Volte a ligar o disco ou restaure a pasta; a Cindy não criará uma pasta vazia por cima.",
+        "errorTitle": "Não foi possível mover o espaço de trabalho",
+        "failedTitle": "A movimentação anterior falhou",
+        "interruptedTitle": "A movimentação precisa de recuperação",
+        "backupRemainingHint": "Cópia de segurança original mantida para revisão em: {{backup}}",
+        "personalPreviewHint": "Feche as instâncias de pré-visualização pessoal e inicie a versão principal da Cindy para agendar ou executar movimentações.",
+        "status": {
+          "default": "Predefinida",
+          "pending": "A aguardar reinício",
+          "moved": "Movido",
+          "failed": "Falhou",
+          "interrupted": "Recuperação necessária",
+          "unavailable": "Indisponível"
+        },
+        "warnings": {
+          "waitingExclusive": "A aguardar arranque exclusivo. Feche outras instâncias da Cindy que partilhem este perfil e reinicie.",
+          "receiptUpdateFailed": "O espaço de trabalho está utilizável, mas falhou a atualização do registo e será tentada no próximo reinício."
+        },
+        "errors": {
+          "insufficientSpace": "O disco de destino não tem espaço livre suficiente.",
+          "overlapsCindyData": "Escolha uma pasta fora dos dados da Cindy e fora do espaço de trabalho atual.",
+          "localDiskRequired": "Escolha uma pasta num disco local em vez de uma partilha de rede.",
+          "unsupportedFileOrHardLink": "Este espaço de trabalho contém ligações físicas ou ficheiros especiais que não podem ser movidos com segurança.",
+          "alreadyRedirected": "A Cindy não reconhece a ligação à pasta deste espaço de trabalho. Mantém a ligação e os ficheiros como estão.",
+          "botHomeRedirected": "A pasta principal deste amigo foi redirecionada manualmente e não pode ser movida automaticamente.",
+          "targetExists": "A pasta de destino já existe. Escolha outra localização.",
+          "workspaceChanged": "Os ficheiros mudaram durante a verificação. Feche programas externos e tente novamente.",
+          "backupRetained": "A movimentação foi concluída, mas a cópia de segurança diferia e foi mantida por segurança.",
+          "backupCleanupIncomplete": "A movimentação foi concluída, mas a limpeza da cópia temporária será tentada no próximo reinício.",
+          "cutoverInterrupted": "A troca anterior foi interrompida e o original foi restaurado. Escolha uma nova pasta vazia para tentar novamente.",
+          "generic": "Não foi possível concluir o pedido de movimentação. Tente novamente."
         }
       }
     },
@@ -13654,6 +13791,7 @@
         },
         "slash": {
           "detachFailed": "❌ Não foi possível terminar a tomada de controlo: {{error}}",
+          "pluginEngineModelsUnavailable": "O motor de plugin desta tarefa não está disponível de momento, pelo que não é possível listar os modelos.",
           "companionManaged": "🧭 Esta ligação foi entregue a um amigo, pelo que o modelo, as permissões e o diretório de trabalho seguem as definições do amigo. Altere-os nas definições do amigo no Cindy."
         },
         "turn": {
@@ -22745,6 +22883,19 @@
     "rendered": "Ver documento",
     "wrap": "Moldar linhas",
     "lineNumbers": "Números de linha"
+  },
+  "openAiAccountGroup": {
+    "strategy": "Estratégia do grupo de contas",
+    "leastHint": "Dar prioridade à ligação com menos tarefas em execução",
+    "quotaHint": "Quando há dados de utilização das subscrições, a Cindy filtra as ligações pela utilização antes de aplicar a estratégia do grupo.",
+    "removeDescription": "Esta ligação deixará de receber novas tarefas do grupo. As tarefas em execução permanecerão nesta ligação.",
+    "mergeDescription": "As novas tarefas iniciadas em {{target}} podem usar os dois fornecedores. As sessões iniciadas, chaves e tarefas existentes mantêm-se. A Cindy testará a chave de API de {{apiKey}} antes de ligar os fornecedores.",
+    "modelUnavailable": "Esta ligação não pode usar o modelo escolhido para o teste. Um novo teste pode experimentar outro modelo.",
+    "noTestModel": "Nenhum modelo configurado está disponível para teste. Verifique os modelos permitidos no seu projeto da OpenAI e atualize ou edite a lista de modelos desta ligação.",
+    "billingPaused": "Atribuição em pausa por saldo insuficiente ou limite de faturação.",
+    "title": "Grupo de contas",
+    "testPassed": "Teste concluído com sucesso",
+    "refresh": "Atualizar quota"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

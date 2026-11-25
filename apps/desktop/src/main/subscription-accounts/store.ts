@@ -230,14 +230,18 @@ export async function writeAccountBindings(
   accountId: string,
   /** The provider the task named (placement.ts); omitted for the built-in provider. */
   via?: string,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const through = via && via !== providerId ? { via } : {};
-  await store.updateAtomic(({ value }) => ({
-    bindings: {
-      ...value.bindings,
-      ...Object.fromEntries(
-        keys.filter(Boolean).map((key) => [`${providerId}:${key}`, { providerId, accountId, ...through }]),
-      ),
-    },
-  }));
+  await store.updateAtomic(({ value }) => {
+    assertCurrent?.();
+    return {
+      bindings: {
+        ...value.bindings,
+        ...Object.fromEntries(
+          keys.filter(Boolean).map((key) => [`${providerId}:${key}`, { providerId, accountId, ...through }]),
+        ),
+      },
+    };
+  });
 }

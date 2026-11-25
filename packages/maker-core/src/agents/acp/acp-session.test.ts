@@ -35,7 +35,7 @@ import {
   formatPluginEngineSkillList,
   renderPluginEngineCapabilityBriefing,
 } from './briefing.js';
-import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '../base-agent.js';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError, TurnPermissionPolicyUnsupportedError, type SendOptions } from '../base-agent.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import type { Logger } from '../../interfaces/logger.js';
 import { Session } from '../../session.js';
@@ -660,6 +660,19 @@ describe('AcpSession permissions', () => {
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
     const answer = await agent.requestPermission({ toolCall: { toolCallId: 't1', title: 'Write' }, options: PERMISSION_OPTIONS });
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+  });
+
+  // Security review on #12820: IM group turns carry a per-turn policy that requires the owner's
+  // confirmation. A plugin's agent can act without asking Cindy, so the turn must be refused before
+  // any prompt reaches the agent, in every mode. Minimal input: send with turnPermissionPolicy.
+  it.each(['ask', 'bypassPermissions'] as const)('refuses a turn that carries a per-turn permission policy (%s)', async (mode) => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent, { permissionMode: mode });
+    const policy = { evaluate: () => ({ kind: 'confirm' }) } as unknown as NonNullable<SendOptions['turnPermissionPolicy']>;
+    expect(() => session.validateSendOptions({ turnPermissionPolicy: policy })).toThrow(TurnPermissionPolicyUnsupportedError);
+    await expect(session.send({ type: 'user', content: 'go' }, { turnPermissionPolicy: policy }))
+      .rejects.toMatchObject({ code: 'TURN_PERMISSION_POLICY_UNSUPPORTED', agentKind: 'acp' });
+    expect(agent.prompts).toHaveLength(0);
   });
 
   it('does not convert allow once into persistent permission when the agent only offers the latter', async () => {

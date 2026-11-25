@@ -221,6 +221,10 @@ beforeEach(() => {
     }),
   ];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    providerGroup: {
+      command: vi.fn(async ({ action }: { action: string }) => action === 'account-detail' ? { accounts: [] } : {}),
+      onChanged: vi.fn(() => () => undefined),
+    },
     subscriptionAccounts: {
       command: vi.fn(async ({ providerId }: { providerId: string }) => ({
         providerId, configured: false, strategy: 'expiring', accounts: [],
@@ -1150,6 +1154,10 @@ describe('ProvidersSection — 深链定位', () => {
       }),
     ];
     (window as unknown as { electronAPI: unknown }).electronAPI = {
+      providerGroup: {
+        command: vi.fn(async ({ action }: { action: string }) => action === 'account-detail' ? { accounts: [] } : {}),
+        onChanged: vi.fn(() => () => undefined),
+      },
       maker: {
         listProviders: vi.fn(async () => ({ providers: providersState.providers, dataOwnerId: 'owner', ownerGeneration: 1 })),
       setProviderPresentation: vi.fn(async () => ({ ok: true })),

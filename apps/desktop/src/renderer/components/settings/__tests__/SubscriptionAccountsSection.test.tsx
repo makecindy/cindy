@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from '@/lib/toast';
 import type { SubscriptionPoolView } from '../../../../shared/subscriptionAccounts';
 
+const confirmPlacement = vi.hoisted(() => vi.fn<(options: unknown) => Promise<boolean>>(async () => true));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     i18n: { language: 'en', resolvedLanguage: 'en' },
@@ -15,10 +16,11 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
+  useConfirmDialog: () => ({ confirm: confirmPlacement }),
 }));
 
 import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from '../SubscriptionAccountsSection';
+import { MergeProviderButton } from '../SubscriptionPlacement';
 
 /* 测试价值：多账号设置页曾给每个账号另画一条周用量条，又在底部重复原用量卡，且漏掉
  * 5 小时与分模型周窗口。经真实组件验证：默认账号行放原用量卡，其他账号用同一张卡显示
@@ -56,6 +58,7 @@ const view: SubscriptionPoolView = {
 };
 
 beforeEach(() => {
+  confirmPlacement.mockClear();
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     subscriptionAccounts: {
       command: vi.fn(async () => view),
@@ -64,6 +67,58 @@ beforeEach(() => {
     // Providers an account may move to (2026-11-13); none of the same kind unless a test adds them.
     maker: { listProviders: vi.fn(async () => ({ providers: [] })) },
   };
+});
+
+// Unit through the real placement controls with IPC fixtures. The mixed
+// command must follow source → destination and retain the existing login and
+// whole-subscription commands, which have different persistence effects.
+it.each(['subscription', 'apiKey'] as const)('merges from %s through the existing provider menu', async kind => {
+  const fromSubscription = kind === 'subscription';
+  const subscriptionId = fromSubscription ? 'openai-sub-12345678' : 'openai';
+  const source = fromSubscription ? subscriptionId : 'fixture-key';
+  const target = fromSubscription ? 'fixture-key' : 'openai';
+  const accounts = [
+    { id: subscriptionId, name: 'Fixture subscription', kind: 'subscription', connected: true },
+    { id: 'fixture-key', name: 'Fixture key', kind: 'apiKey', connected: true },
+  ].map(account => ({ ...account, kind: account.kind as 'subscription' | 'apiKey', included: account.id === source,
+    ...(account.id === target ? { mergeTarget: true as const } : {}) }));
+  const command = vi.fn(async () => ({ ok: true }));
+  Object.assign(window.electronAPI, { providerGroup: { command } });
+  render(fromSubscription
+    ? <SubscriptionAccountsSection providerId={source} openAiAccounts={accounts} />
+    : <MergeProviderButton kind={null} providerId={source} providerName="Fixture key" openAiAccounts={accounts} />);
+  if (fromSubscription) {
+    fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.add' }));
+    await waitFor(() => expect(window.electronAPI.subscriptionAccounts.command).toHaveBeenCalledWith({
+      action: 'add', providerId: source, loginKey: expect.any(String),
+    }));
+    expect(command).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'subscriptionAccounts.add' })).toBeTruthy());
+  } else {
+    expect(screen.queryByRole('button', { name: 'subscriptionAccounts.add' })).toBeNull();
+  }
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'subscriptionAccounts.placement.mergeInto' }),
+    { button: 0, ctrlKey: false, pointerType: 'mouse' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: fromSubscription ? 'Fixture key' : 'Fixture subscription' }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith({
+    action: 'account-merge', providerId: source, targetProviderId: target,
+  }));
+  expect(confirmPlacement).toHaveBeenCalledWith(expect.objectContaining({ description: 'openAiAccountGroup.mergeDescription' }));
+  expect(window.electronAPI.subscriptionAccounts.command).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'merge' }));
+});
+
+it('continues to use the subscription placement command for same-kind providers', async () => {
+  vi.mocked(window.electronAPI.maker.listProviders).mockResolvedValue({ providers: [
+    { id: 'openai', name: 'Existing subscription', connected: true },
+  ] } as Awaited<ReturnType<typeof window.electronAPI.maker.listProviders>>);
+  render(<SubscriptionAccountsSection providerId="other-openai" kind="openai" />);
+  fireEvent.pointerDown(await screen.findByRole('button', { name: 'subscriptionAccounts.placement.mergeInto' }),
+    { button: 0, ctrlKey: false, pointerType: 'mouse' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Existing subscription' }));
+  await waitFor(() => expect(window.electronAPI.subscriptionAccounts.command).toHaveBeenCalledWith({
+    action: 'merge', providerId: 'other-openai', target: 'openai',
+  }));
+  expect(confirmPlacement).toHaveBeenCalledWith(expect.objectContaining({ description: 'subscriptionAccounts.placement.mergeDescription' }));
 });
 
 describe('SubscriptionAccountsSection usage', () => {
@@ -78,6 +133,27 @@ describe('SubscriptionAccountsSection usage', () => {
       action: 'remove', providerId: 'anthropic', accountId: 'default',
     }));
   });
+  // Unit: a target's own API Key is a permanent part of this source. Only
+  // another, merged connection should offer the remove command.
+  it('keeps testing but hides the impossible remove action on the target Key', async () => {
+    const providerId = 'target-key-fixture';
+    const apiAccount = (id: string, connectionId: string) => ({
+      ...view.accounts[0]!, id, identity: connectionId, usage: undefined,
+      apiKey: { connectionId, checks: [{ agent: 'pi' as const }] },
+    });
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      providerId, configured: true, strategy: 'expiring',
+      accounts: [apiAccount('key-target', providerId), apiAccount('key-member', 'other-key-fixture')],
+    });
+    render(<SubscriptionAccountsSection providerId={providerId} kind="openai" />);
+    const [own, merged] = await screen.findAllByTestId('subscription-account');
+    expect(within(own).getByRole('button', { name: /settings.providers.custom.test.button/ })).toBeTruthy();
+    expect(within(own).queryByRole('button', { name: 'providerGroup.member.moreAria' })).toBeNull();
+    fireEvent.pointerDown(within(merged).getByRole('button', { name: 'providerGroup.member.moreAria' }),
+      { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    expect(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.remove' })).toBeTruthy();
+  });
+
   // Unit regression: the real second-account row must expose the shared reset UI
   // and send its own scope/key. Previously only the supplied default card had it.
   it.each([true, false])('shows and saves second-account reset preferences with quota present=%s', async hasQuota => {

@@ -978,20 +978,22 @@ export async function runPluginEngineAccountCommand(
       void clearPluginEngineAccountCooling(ref.engineKey, command.accountId);
       return readPluginEnginePoolView(command.providerId);
     }
+    case 'reorder': {
+      // 账号的先后(与订阅账号池同一个命令)：只在这些账号占着的位置里重排，别的账号原地不动。
+      const pool = effectivePluginEnginePool(ref.engineKey);
+      for (const id of command.accountIds) requireAccount(pool, ref, id);
+      const order = command.accountIds;
+      await withPool(ref, current => {
+        const moving = new Set(order);
+        const byId = new Map(current.accounts.map(entry => [entry.id, entry]));
+        let next = 0;
+        return { ...current, accounts: current.accounts.map(entry => (moving.has(entry.id) ? byId.get(order[next++]!) ?? entry : entry)) };
+      });
+      return readPluginEnginePoolView(command.providerId);
+    }
     case 'configure': {
       const pool = effectivePluginEnginePool(ref.engineKey);
       if (command.accountId !== undefined) requireAccount(pool, ref, command.accountId);
-      // 账号的先后(与订阅账号池同一个命令字段)：只在这些账号占着的位置里重排，别的账号原地不动。
-      for (const id of command.order ?? []) requireAccount(pool, ref, id);
-      if (command.order?.length) {
-        const order = command.order;
-        await withPool(ref, current => {
-          const moving = new Set(order);
-          const byId = new Map(current.accounts.map(entry => [entry.id, entry]));
-          let next = 0;
-          return { ...current, accounts: current.accounts.map(entry => (moving.has(entry.id) ? byId.get(order[next++]!) ?? entry : entry)) };
-        });
-      }
       await withPool(ref, current => ({
         ...current,
         ...(command.strategy && ref.suffix === null ? { strategy: command.strategy } : {}),

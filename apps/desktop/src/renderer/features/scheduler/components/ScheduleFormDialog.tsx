@@ -1054,8 +1054,7 @@ export function ScheduleFormDialog({
                                     onChangeDestination={setDestination}
                                   />
                                 )}
-                                {/* 插件引擎任务不用 worktree(引擎只拿到任务工作目录)。 */}
-                                {!hideWorkspaceFields && form.workspaceKind === 'project' && !pluginEngineChoice && (
+                                {!hideWorkspaceFields && form.workspaceKind === 'project' && (
                                   <>
                                     <div className="w-0.5 shrink-0" aria-hidden />
                                     <ScheduleSettingsButton

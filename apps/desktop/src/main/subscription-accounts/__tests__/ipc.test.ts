@@ -79,7 +79,9 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
           if (next.providers) h.created = next.providers;
         },
       }
-    : {
+    : options.label === 'subscription-api-key-members'
+      ? { invalidateIfChanged: () => {}, read: () => ({ members: {}, order: {} }) }
+      : {
         invalidateIfChanged: () => {},
         isUnreadable: () => h.poolUnreadable,
         read: () => ({ bindings: h.bindings, pools: h.pools }),
