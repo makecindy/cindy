@@ -6,6 +6,7 @@ import {
   setSessionProvider,
 } from '../../maker-host/session-provider-store.js';
 import { applyRuntimeSetModelChange, type RuntimeSetModelMaker } from '../runtimeSetModel.js';
+import { isUserCodexSourceSwitch } from '../sessionRuntimeSelectionApply.js';
 
 const sessionProviderWriteObserver = vi.hoisted(() => ({
   current: null as ((sessionId: string, providerId: string | null) => void) | null,
@@ -119,6 +120,43 @@ describe('Codex writer decision freshness', () => {
       .resolves.toEqual({ status: 'applied' });
     expect(relink).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('cprov-target');
+  });
+
+  // 旧账号已失效 + 旧线程仍被另一个进程加载：这就是实测里换源被挡住的组合。
+  // 交接改由发送前完成，入口不去 fork，也就不再向旧账号申请权限；旧的 fork 若被调用会抛错。
+  it('does not need the old account when the loaded thread belongs to the source being left', async () => {
+    const sessionId = rememberSession('user-source-switch-broken-old-login');
+    setSessionProvider(sessionId, 'cprov-source');
+    const relink = vi.fn(async () => { throw new Error('the old account requires sign-in'); });
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({ agentKind: 'codex', model: 'source', setModel: vi.fn(),
+        requiresModelSwitchRebuild: async () => true }),
+      listActiveSessions: () => [{ id: sessionId, agentKind: 'codex', isTurnRunning: () => false }],
+      closeSession,
+    };
+    await expect(applyRuntimeSetModelChange({ maker, sessionId, model: 'target', providerId: 'cprov-target',
+      handOffCodexThread: true, requiresCodexThreadRelink: async () => true, relinkCodexThread: relink }))
+      .resolves.toEqual({ status: 'applied', retiredRuntime: true });
+    expect(relink).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('cprov-target');
+  });
+
+  it('keeps failing closed on the old account when the switch is not a user source switch', async () => {
+    const sessionId = rememberSession('non-user-source-switch-broken-old-login');
+    setSessionProvider(sessionId, 'cprov-source');
+    const relink = vi.fn(async () => { throw new Error('the old account requires sign-in'); });
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({ agentKind: 'codex', model: 'source', setModel: vi.fn(),
+        requiresModelSwitchRebuild: async () => true }),
+      listActiveSessions: () => [{ id: sessionId, agentKind: 'codex', isTurnRunning: () => false }],
+      closeSession: async () => {},
+    };
+    await expect(applyRuntimeSetModelChange({ maker, sessionId, model: 'target', providerId: 'cprov-target',
+      requiresCodexThreadRelink: async () => true, relinkCodexThread: relink }))
+      .rejects.toThrow('the old account requires sign-in');
+    expect(relink).toHaveBeenCalledOnce();
+    expect(getSessionProvider(sessionId)).toBe('cprov-source');
   });
 
   it.each([false, true])('rechecks after asynchronous model inspection with busy=%s', async (busy) => {
@@ -351,5 +389,21 @@ describe.each(routeCases)('Codex route: $sourceModel → $targetModel', (route) 
     expect(relinkCodexThread).toHaveBeenCalledOnce();
     expect(getSessionProvider(sessionId)).toBe(sourceProvider);
     expect(wakeSessionInputQueue).not.toHaveBeenCalled();
+  });
+});
+
+// 入口判定：只有「用户、codex、本机、目标有账号池、来源确实变了」才算换源交接。
+describe('isUserCodexSourceSwitch', () => {
+  const base = { source: 'user', agentKind: 'codex', currentProviderId: 'openai-old',
+    nextProviderId: 'openai', local: true, handoffPool: true };
+  it.each([
+    ['user codex switch with a pool', base, true],
+    ['model-only selection', { ...base, nextProviderId: 'openai-old' }, false],
+    ['agent picked the source', { ...base, source: 'agent' }, false],
+    ['non-codex task', { ...base, agentKind: 'claude-code' }, false],
+    ['remote or other-computer task', { ...base, local: false }, false],
+    ['destination without a pool', { ...base, handoffPool: false }, false],
+  ] as const)('%s', (_label, input, expected) => {
+    expect(isUserCodexSourceSwitch(input)).toBe(expected);
   });
 });

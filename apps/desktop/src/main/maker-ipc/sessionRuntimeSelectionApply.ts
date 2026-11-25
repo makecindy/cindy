@@ -201,6 +201,26 @@ type BuiltinSessionsMaker = {
   getSessionMeta(sessionId: string): Promise<(SessionMeta & { agentKind: AgentKind }) | null>;
 } & Maker;
 
+/**
+ * The user moved this codex task to another source that has a local account pool. Its native
+ * thread belongs to the source being left, so the next start hands the transcript over instead of
+ * forking it into the destination first — that fork would have to authorize the old account,
+ * which is exactly what the user is leaving, so a broken old login would block the switch before
+ * anything is recorded. Ordinary resumes, model-only changes, other engines, remote or
+ * other-computer tasks and destinations without a pool keep the fork path.
+ */
+export function isUserCodexSourceSwitch(input: {
+  source: string;
+  agentKind?: string | null;
+  currentProviderId?: string | null;
+  nextProviderId?: string | null;
+  local: boolean;
+  handoffPool: boolean;
+}): boolean {
+  return input.source === 'user' && input.agentKind === 'codex' && input.local && input.handoffPool
+    && (input.nextProviderId ?? null) !== (input.currentProviderId ?? null);
+}
+
 export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPorts) {
   const handleSetModel = async (
     sessionId: unknown,
@@ -842,13 +862,14 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         internalOptions.configStaged === true &&
         (runtimeAgentKind === 'claude-code' || runtimeAgentKind === 'codex');
       const targetRouteProviderId = targetProviderId;
-      // The user picked another source for this task. Its native thread belongs to the source
-      // being left, so the next start hands the transcript over instead of forking it into the
-      // destination first (that fork would have to authorize the old account, which is exactly
-      // what the user is leaving). Ordinary resumes never reach this.
-      const userSourceSwitch = internalOptions.source === 'user' && runtimeAgentKind === 'codex'
-        && targetRouteProviderId !== currentProviderId && !runtimeStatus.remoteHostId && !runtimeStatus.agentDeviceId
-        && hasCodexHandoffPool?.(targetRouteProviderId) === true;
+      const userSourceSwitch = isUserCodexSourceSwitch({
+        source: internalOptions.source,
+        agentKind: runtimeAgentKind,
+        currentProviderId,
+        nextProviderId: targetRouteProviderId,
+        local: !runtimeStatus.remoteHostId && !runtimeStatus.agentDeviceId,
+        handoffPool: hasCodexHandoffPool?.(targetRouteProviderId) === true,
+      });
       let currentRuntimeModel = liveSessionBeforeRouteChange?.model ??
         internalOptions.previousPiRoute?.model ?? persistedSessionMeta?.model;
       let runtimeRouteChanged =
