@@ -17029,6 +17029,7 @@ function stopSession(
         costUsd: s.agentStatus.costUsd,
         contextTokens: s.agentStatus.contextTokens,
         contextWindow: s.agentStatus.contextWindow,
+        contextWindowFromRuntime: s.agentStatus.contextWindowFromRuntime,
         isRunning: false,
         startedAt: null,
         ...stoppedTurnClock(s.agentStatus),
