@@ -62,6 +62,8 @@ export function FileLightbox({
   const name = fileName ?? filePath.split(/[\\/]/).pop() ?? filePath;
   const kind = attachmentPreviewKind(filePath);
   const downloadOnly = isSafetyDowngradedAttachment({ name, path: filePath });
+  // 远程来源:预览读的是取回后的本地副本,刷新必须先重新取回,再读新的副本。
+  const rereadLocal = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!remote) {
       setLocal(filePath);
@@ -69,13 +71,18 @@ export function FileLightbox({
     }
     let cancelled = false;
     setFailed(false);
-    setLocal(null);
+    // 刷新时保留旧副本,避免面板闪一帧空白;首次进入才回到加载态。
+    if (refreshToken === 0) setLocal(null);
     void fetchChatFileToCache(remote, ctx.workingDir, filePath)
       .then((result) => {
-        if (!cancelled) {
-          if (result.ok) setLocal(result.cachePath);
-          else setFailed(true);
+        if (cancelled) return;
+        if (!result.ok) {
+          setFailed(true);
+          return;
         }
+        setLocal(result.cachePath);
+        // 取回完成后再读一次:不重读的话,面板还是旧副本的内容。
+        if (refreshToken > 0) rereadLocal.current?.();
       })
       .catch(() => {
         if (!cancelled) setFailed(true);
@@ -83,7 +90,7 @@ export function FileLightbox({
     return () => {
       cancelled = true;
     };
-  }, [remote, ctx.workingDir, filePath, retry]);
+  }, [remote, ctx.workingDir, filePath, retry, refreshToken]);
   const close = useCallback(() => {
     onClose();
     triggerRef?.current?.focus({ preventScroll: true });
@@ -109,10 +116,15 @@ export function FileLightbox({
   const fileLocation =
     local && !['image', 'video', 'audio', 'model'].includes(kind) ? splitLocalPath(local) : null;
   const { content, refresh } = useFileContent(fileLocation?.workdir ?? '', fileLocation?.relPath ?? '');
-  // 「文件已变更」提示被点掉后重新读一次内容(issue #12851)。
   useEffect(() => {
-    if (refreshToken > 0) refresh();
-  }, [refreshToken, refresh]);
+    rereadLocal.current = refresh;
+  }, [refresh]);
+  // 「文件已变更」提示被点掉后重新读一次内容(issue #12851)。
+  // 本地来源直接重读磁盘;远程来源由上面的取回流程在取回完成后重读 —— 边下载边读
+  // 会读到写了一半的副本。
+  useEffect(() => {
+    if (refreshToken > 0 && !remote) refresh();
+  }, [refreshToken, refresh, remote]);
   // 打不开的文件(压缩包、可执行文件等)只有文件信息和打开方式,用小窗,不占大半个窗口。
   const unrenderable =
     content.kind === 'binary' &&

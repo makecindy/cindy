@@ -96,7 +96,8 @@ export function collectLastTurnPaths(
   workdir: string | null,
   platform = defaultPlatform(),
 ): Set<string> {
-  if (!workdir) return new Set();
+  const paths = new Set<string>();
+  if (!workdir) return paths;
   let start = 0;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (messages[i].role === 'user') {
@@ -104,44 +105,38 @@ export function collectLastTurnPaths(
       break;
     }
   }
-  return collectEditedPaths(messages.slice(start), workdir, platform);
-}
-
-/**
- * 一批消息里被编辑过的文件(工作目录相对路径)。
- *
- * 不切轮次边界 —— 范围由调用方给:「本轮」看最近一轮,「预览期间」看打开预览
- * 之后新增的那批。
- */
-export function collectEditedPaths(
-  messages: readonly ChatMessage[],
-  workdir: string | null,
-  platform = defaultPlatform(),
-): Set<string> {
-  const paths = new Set<string>();
-  if (!workdir) return paths;
-  for (const message of messages) {
-    for (const filePath of extractToolFilePaths(message)) {
-      const rel = toolPathToWorkdirRelative(filePath, workdir, platform);
-      if (rel) paths.add(rel);
-    }
+  for (let i = start; i < messages.length; i += 1) {
+    for (const rel of editedPathsOfToolCall(messages[i], workdir, platform)) paths.add(rel);
   }
   return paths;
 }
 
-/** 目标文件是否在这批消息里被编辑过。 */
-export function wasFileChangedInMessages(
-  messages: readonly ChatMessage[],
-  workdir: string,
-  absoluteFilePath: string,
+/**
+ * 一条工具调用消息触碰的文件(工作目录相对路径)。
+ *
+ * 不是编辑工具 / 路径不在 workdir 内 → 空数组。
+ */
+export function editedPathsOfToolCall(
+  message: ChatMessage,
+  workdir: string | null,
+  platform = defaultPlatform(),
+): string[] {
+  if (!workdir) return [];
+  const paths: string[] = [];
+  for (const filePath of extractToolFilePaths(message)) {
+    const rel = toolPathToWorkdirRelative(filePath, workdir, platform);
+    if (rel) paths.push(rel);
+  }
+  return paths;
+}
+
+/** 两个工作目录相对路径是否指向同一个文件(按平台做大小写归一)。 */
+export function isSameWorkdirPath(
+  a: string,
+  b: string,
   platform = defaultPlatform(),
 ): boolean {
-  const target = absoluteToWorkdirRelative(absoluteFilePath, workdir, platform);
-  if (!target) return false;
-  const normalizedTarget = normalizeForCompare(target, platform);
-  return [...collectEditedPaths(messages, workdir, platform)].some(
-    (path) => normalizeForCompare(path, platform) === normalizedTarget,
-  );
+  return normalizeForCompare(a, platform) === normalizeForCompare(b, platform);
 }
 
 export function wasFileChangedInLastTurn(

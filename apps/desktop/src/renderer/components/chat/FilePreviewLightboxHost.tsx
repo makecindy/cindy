@@ -11,6 +11,10 @@
  * 「文件已变更」角标也挂在同一个宿主:Agent 在预览期间改了正在看的文件时只提示,
  * 不自动换内容(正在读的内容不该被突然替换),用户点一下才重新读。
  *
+ * 提示只在编辑**执行完**之后出现:工具调用(tool_use)发出时文件还没写,权限确认或
+ * 慢执行都可能拖很久,那时提示「文件已变更」会让用户读到旧内容;等对应的执行结果
+ * (tool_result)到达才算这次编辑落地。
+ *
  * 图片预览(ImageLightbox)不在这里:它依赖按消息项挂载的 ImageGalleryContext
  * (会话里翻看同一张消息的图片),提升到会话级会丢掉这个上下文,留在原处。
  */
@@ -30,7 +34,11 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
-import { wasFileChangedInMessages } from '@/features/right-sidebar/lib/lastTurnChangedFiles';
+import {
+  absoluteToWorkdirRelative,
+  editedPathsOfToolCall,
+  isSameWorkdirPath,
+} from '@/features/right-sidebar/lib/lastTurnChangedFiles';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 
 import { useChatSessionFile } from './ChatSessionFileContext';
@@ -120,8 +128,18 @@ export function FilePreviewLightboxProvider({ children }: { children?: ReactNode
   useEffect(() => {
     const sessionId = preview?.sessionId;
     if (!sessionId || !documentPath) return;
-    // 打开瞬间已存在的消息不算「预览期间的改动」。
-    const known = new Set(makerChatStore.getSnapshot(sessionId).messages.map((m) => m.clientId));
+    const target = absoluteToWorkdirRelative(documentPath, workingDir);
+    if (!target) return;
+
+    // 打开预览时已经在执行的编辑:先记下,等执行结果到达(文件真的写完)再提示。
+    const inFlight = new Map<string, string[]>();
+    const known = new Set<string>();
+    for (const message of makerChatStore.getSnapshot(sessionId).messages) {
+      known.add(message.clientId);
+      const paths = editedPathsOfToolCall(message, workingDir);
+      if (paths.length && message.toolUseId) inFlight.set(message.toolUseId, paths);
+    }
+
     const check = () => {
       const messages = makerChatStore.getSnapshot(sessionId).messages;
       // 流式期间新消息追加在尾部:从尾往前扫到已知 id 为止,只看新增量。
@@ -130,11 +148,26 @@ export function FilePreviewLightboxProvider({ children }: { children?: ReactNode
         const message = messages[i]!;
         if (known.has(message.clientId)) break;
         fresh.push(message);
+        known.add(message.clientId);
       }
       if (fresh.length === 0) return;
-      for (const message of fresh) known.add(message.clientId);
       fresh.reverse();
-      if (wasFileChangedInMessages(fresh, workingDir, documentPath)) setChanged(true);
+      let changed = false;
+      for (const message of fresh) {
+        if (message.role === 'tool_use') {
+          // 编辑工具发起了,但文件还没写完(权限确认 / 慢执行都可能拖很久)。
+          const paths = editedPathsOfToolCall(message, workingDir);
+          if (paths.length && message.toolUseId) inFlight.set(message.toolUseId, paths);
+          continue;
+        }
+        // 编辑完成的信号是执行结果(tool_result):Claude / PI 都在执行结束时才发它。
+        if (message.role !== 'tool_result' || !message.toolUseId) continue;
+        const paths = inFlight.get(message.toolUseId);
+        if (!paths) continue;
+        inFlight.delete(message.toolUseId);
+        if (paths.some((path) => isSameWorkdirPath(path, target))) changed = true;
+      }
+      if (changed) setChanged(true);
     };
     return makerChatStore.subscribe(sessionId, check);
   }, [preview?.sessionId, documentPath, workingDir]);
