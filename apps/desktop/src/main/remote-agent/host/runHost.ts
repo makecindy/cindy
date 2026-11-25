@@ -875,13 +875,31 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   let guestIndexWrite: Promise<void> = Promise.resolve();
   const runStarts = new WeakMap<Run, Promise<void>>();
   const runDisposals = new Map<Run, Promise<void>>();
-  const directGuestLocks = new Map<string, {
-    tail: Promise<void>;
+  type DirectGuestOutcome = { ok: true; value: unknown } | { ok: false; error: unknown };
+  interface DirectGuestOperation {
+    ready: boolean;
+    run(): Promise<unknown>;
+    settle(outcome: DirectGuestOutcome): void;
+  }
+  interface DirectGuestQueue {
+    waiting: DirectGuestOperation[];
+    running?: DirectGuestOperation;
     pending: Map<string, Promise<unknown>>;
     mutationEpoch: number;
     allocation?: { key: string; work: Promise<unknown> };
-  }>();
+  }
+  const directGuestLocks = new Map<string, DirectGuestQueue>();
   let directGuestOperations = 0;
+
+  function drainDirectGuestQueue(queue: DirectGuestQueue): void {
+    if (queue.running || !queue.waiting[0]?.ready) return;
+    const operation = queue.waiting.shift()!;
+    queue.running = operation;
+    void Promise.resolve().then(() => operation.run()).then(
+      value => operation.settle({ ok: true, value }),
+      error => operation.settle({ ok: false, error }),
+    );
+  }
 
   /** M serializes direct mutations per local account + guest, never across relay scopes.
    * O's device identity stays in the ownership check and dedupe key: another O
@@ -889,13 +907,17 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
    * work is bounded even when a native startup or filesystem operation stalls.
    */
   function withDirectGuestLock(peer: string, fn: () => Promise<unknown>,
-    dedupe?: { kind: 'forget' | 'revoke' | 'allocate'; key: string }): Promise<unknown> {
+    dedupe?: { kind: 'forget' | 'revoke' | 'allocate'; key: string },
+    preparation?: Promise<boolean>): Promise<unknown> {
+    // Admission may fail synchronously while decoding continues independently.
+    // Its caller observes the decode result; do not leave this derived promise unhandled.
+    void preparation?.catch(() => undefined);
     const ownerScope = deps.directGuestExecution?.ownerScope();
     if (!ownerScope) fail('REMOTE_AGENT_INVALID', 'direct guest account is unavailable');
     const scope = JSON.stringify([ownerScope, peer]);
     const previous = directGuestLocks.get(scope);
-    const queue: NonNullable<typeof previous> = previous
-      ?? { tail: Promise.resolve(), pending: new Map<string, Promise<unknown>>(), mutationEpoch: 0 };
+    const queue: DirectGuestQueue = previous
+      ?? { waiting: [], pending: new Map<string, Promise<unknown>>(), mutationEpoch: 0 };
     // A grant/open between two revokes is an ordering boundary: the later
     // revoke must not borrow an ACK from before the intervening mutation.
     const allocationKey = dedupe?.kind === 'allocate' ? dedupe.key : undefined;
@@ -904,29 +926,56 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     const duplicate = allocationKey ? queue.allocation?.key === allocationKey ? queue.allocation.work : undefined
       : dedupeKey ? queue.pending.get(dedupeKey) : undefined;
     if (duplicate) return duplicate;
-    if (directGuestOperations >= 256) fail('REMOTE_AGENT_BUSY', 'too many pending shared task operations');
     // Only adjacent identical in-flight allocations join. A different model,
     // task, grant, open or revoke must fence the old allocation's receipt.
+    // Fence even a refused reservation: decoded relay opens bypass this budget.
     queue.allocation = undefined;
     if (dedupe?.kind !== 'revoke') queue.mutationEpoch += 1;
+    if (directGuestOperations >= 256) fail('REMOTE_AGENT_BUSY', 'too many pending shared task operations');
     const owner = deps.captureOwner();
     directGuestOperations += 1;
-    const work = queue.tail.then(() => {
-      if (disposed || !deps.isOwnerCurrent(owner) || deps.directGuestExecution?.ownerScope() !== ownerScope) {
-        fail('REMOTE_AGENT_UNAVAILABLE', 'direct guest account changed');
-      }
-      return fn();
-    });
-    const tail = work.then(() => undefined, () => undefined).finally(() => {
-      directGuestOperations -= 1;
-      if (dedupeKey && queue.pending.get(dedupeKey) === work) queue.pending.delete(dedupeKey);
-      if (queue.allocation?.work === work) queue.allocation = undefined;
-      if (queue.tail === tail) directGuestLocks.delete(scope);
-    });
-    queue.tail = tail;
+    let resolve!: (value: unknown) => void;
+    let reject!: (error: unknown) => void;
+    const work = new Promise<unknown>((yes, no) => { resolve = yes; reject = no; });
+    let settled = false;
+    const operation: DirectGuestOperation = {
+      ready: preparation === undefined,
+      run: async () => {
+        if (disposed || !deps.isOwnerCurrent(owner) || deps.directGuestExecution?.ownerScope() !== ownerScope) {
+          fail('REMOTE_AGENT_UNAVAILABLE', 'direct guest account changed');
+        }
+        return fn();
+      },
+      settle: outcome => {
+        if (settled) return;
+        settled = true;
+        // A failed decode or confirmed relay retires before earlier work ends.
+        // Removing the entry avoids retaining an unbounded chain of dead slots.
+        const index = queue.waiting.indexOf(operation);
+        if (index >= 0) queue.waiting.splice(index, 1);
+        if (queue.running === operation) queue.running = undefined;
+        directGuestOperations -= 1;
+        if (dedupeKey && queue.pending.get(dedupeKey) === work) queue.pending.delete(dedupeKey);
+        if (queue.allocation?.work === work) queue.allocation = undefined;
+        if (!queue.running && queue.waiting.length === 0) directGuestLocks.delete(scope);
+        if (outcome.ok) resolve(outcome.value);
+        else reject(outcome.error);
+        drainDirectGuestQueue(queue);
+      },
+    };
+    queue.waiting.push(operation);
     if (dedupeKey) queue.pending.set(dedupeKey, work);
     if (allocationKey) queue.allocation = { key: allocationKey, work };
     directGuestLocks.set(scope, queue);
+    if (preparation) {
+      // Only preparation may retire a queued item early. A running mutation
+      // owns its slot until its actual result, including rejection, settles.
+      void preparation.then(needed => {
+        if (!needed) operation.settle({ ok: true, value: undefined });
+        else { operation.ready = true; drainDirectGuestQueue(queue); }
+      }, error => operation.settle({ ok: false, error }));
+    }
+    drainDirectGuestQueue(queue);
     return work;
   }
 
@@ -3997,10 +4046,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           const prepared = resolvePayload(controller, request.payload).then(decodeOpenPayload);
           const opening = (async () => withDirectGuestLock(controller, async () => {
             const decoded = await prepared;
-            if (decoded.relay) return;
             if (!deps.isOwnerCurrent(openOwner)) fail('REMOTE_AGENT_UNAVAILABLE', 'direct guest account changed');
             return handleRequest(controller, { ...request, payload: { json: decoded } }, signal, true);
-          }))();
+          }, undefined, prepared.then(decoded => !decoded.relay)))();
           // A relay does not await this provisional slot. Observe failures even
           // when it bypasses a full or retired direct queue.
           void opening.catch(() => undefined);

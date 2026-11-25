@@ -1322,6 +1322,84 @@ describe('provider group relay for shared users', () => {
     } finally { release(); await opening; await host.abortAll(); await host.dispose(); }
   });
 
+  // Host.handle unit: completed preparation failures must not remain charged
+  // behind a slow mutation. The single-invalid-open case only checked order
+  // after releasing the head, missing exhausted admission for another guest.
+  it.each(['gzip', 'json'] as const)('retires failed %s preparations while a prior mutation is still running', async mode => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const other = providerShareGuestPeer('share', 'member', 'other');
+    const host = fakeAgentHost(`failed-preparation-${mode}`, [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner',
+      allocate: async controller => { if (controller === peer) { enter(); await gate; } return null; },
+      status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+      delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => false,
+    } });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const head = host.handle(peer, request);
+    const uploadId = '33333333-3333-4333-8333-333333333333';
+    const bytes = mode === 'gzip' ? Buffer.from('invalid gzip') : gzipSync(Buffer.from('{'));
+    try {
+      await entered;
+      for (let i = 0; i < 255; i++) {
+        await host.handle(peer, { op: 'upload', uploadId, index: 0, data: bytes.toString('base64') });
+        await expect(host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+          payload: { uploadId, chunks: 1, bytes: bytes.length } })).rejects.toThrow();
+      }
+      await expect(host.handle(other, request)).resolves.toBeNull();
+    } finally { release(); await head; await host.abortAll(); await host.dispose(); }
+  });
+
+  // Host.handle unit: the relay bypass remains usable at capacity, but is still
+  // an allocation boundary. Previously only the non-full bypass was covered.
+  it('fences allocation receipts when a relay open bypasses the full direct queue', async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const other = providerShareGuestPeer('share', 'member', 'other');
+    let first = true;
+    const allocate = vi.fn(async (controller: string) => {
+      if (first) { first = false; enter(); await gate; }
+      else if (controller === other) await gate;
+      return null;
+    });
+    const host = fakeAgentHost('full-relay-boundary', [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner', allocate, status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+      delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => false,
+    } });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const head = host.handle(peer, request);
+    let fillers: Promise<unknown[]> | undefined;
+    let later: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      // The distinct operations are real admitted work, not duplicate waiters.
+      fillers = Promise.all(Array.from({ length: 255 }, (_, i) => host.handle(other, { ...request, sessionId: `queued-${i}` })));
+      const uploadId = '33333333-3333-4333-8333-333333333333';
+      const bytes = Buffer.from('invalid gzip');
+      await host.handle(peer, { op: 'upload', uploadId, index: 0, data: bytes.toString('base64') });
+      // A refused reservation still owns observation of its late decode failure.
+      await expect(host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { uploadId, chunks: 1, bytes: bytes.length } })).rejects.toThrow();
+      await host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { json: openPayload('relay-task', { relay: relayKeyFor(GUEST_A) }) } });
+      later = Promise.allSettled([host.handle(peer, request)]);
+      release(); await head; await fillers;
+      expect(await later).toEqual([expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({
+        message: expect.stringContaining('too many pending shared task operations'),
+      }) })]);
+      await expect(host.handle(peer, request)).resolves.toBeNull();
+      expect(allocate).toHaveBeenCalledTimes(257);
+    } finally { release(); await head; await fillers; await later; await host.abortAll(); await host.dispose(); }
+  });
+
   it.each(['direct-release', 'direct-switch', 'standby-prepare'] as const)(
     'does not borrow an allocation receipt across a service-serialized %s', async op => {
       let enter!: () => void;
