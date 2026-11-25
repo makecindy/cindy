@@ -1300,7 +1300,7 @@ import {
   prependHandoffToUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
-import { readMessageSourcePluginRelay, sanitizeSourceName } from '@cindy/maker-shared/message-source';
+import { messageSourceSenderFromMeta, readMessageSourcePluginRelay, sanitizeSourceName, type MessageSourcePluginReply } from '@cindy/maker-shared/message-source';
 import { registerSessionHandoffIpc } from './sessionHandoffIpc.js';
 import {
   installLocalAgentVisibleSessionHost,
@@ -6169,6 +6169,12 @@ function notePluginTaskLifecycle(operation: (service: PluginTaskService) => Prom
   if (!pluginTaskServiceForCurrentOwner) return;
   try { void operation(pluginTaskServiceForCurrentOwner()).catch(() => log.warn('Plugin task receipt update failed')); }
   catch { /* Database is unavailable during logout/startup; never switch to another owner. */ }
+}
+/** Awaited plugin follow-up bookkeeping; a failure is logged and never fails the hand-off itself. */
+async function withPluginTaskService<T>(operation: (service: PluginTaskService) => Promise<T>): Promise<T | undefined> {
+  if (!pluginTaskServiceForCurrentOwner) return undefined;
+  try { return await operation(pluginTaskServiceForCurrentOwner()); }
+  catch { log.warn('Plugin follow-up bookkeeping failed'); return undefined; }
 }
 
 function isCurrentProductTurnFailureOwner(owner: ProductTurnFailureOwner): boolean {
@@ -12421,6 +12427,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
      * reconcileCreateOptsAgainstDb 再读当前落库档位,不使用入队时的旧快照。
      */
     resumeWithStoredPermissionMode?: boolean;
+    /** Host-stamped by sendToSession only: a plugin follows this word back (origin.pluginReply). */
+    pluginReply?: MessageSourcePluginReply;
   }, hostDispatch?: 'bot' | 'group' | 'group-assistant', localSessionTool = false): Promise<SendToSessionInternalResult> {
     await assertTaskActionCurrent();
     if (hasTaskActionAuthorization()) params = { ...params, forceQueue: true };
@@ -12447,6 +12455,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ...(await readSenderIdentity(origin ? undefined : dispatcherSessionId)),
       message,
       explicitOrigin: origin,
+      ...(params.pluginReply ? { pluginReply: params.pluginReply } : {}),
     });
     const inputAgentMeta: AgentMeta | undefined = queuedOrigin || params.sourcePlugin || params.autoReviewUserText !== undefined
       ? {
@@ -14534,6 +14543,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pluginTaskEpoch = snapshot;
     pluginTasks = createPluginTaskService({
       store: createPluginTaskStore(snapshot.client), assertCurrent, assertAuthorized: assertPlugin, resolveRoute,
+      // The relay the Host stamped on a stored input: a plugin message's own, or the one a follow-up carries on.
+      readInputRelay: async (taskId, inputClientIds) => {
+        if (!inputClientIds.length) return undefined;
+        const rows = await snapshot.client.drizzle.select({ agentMeta: messages.agentMeta }).from(messages)
+          .where(and(eq(messages.sessionId, taskId), eq(messages.role, 'user'), inArray(messages.clientId, [...inputClientIds])))
+          .limit(inputClientIds.length);
+        assertCurrent();
+        for (const row of rows) {
+          let meta: unknown = row.agentMeta;
+          if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { continue; } }
+          const sender = messageSourceSenderFromMeta(meta);
+          const relay = sender?.kind === 'plugin' ? sender.relay : sender?.kind === 'session' ? sender.pluginReply?.relay : undefined;
+          if (relay) return relay;
+        }
+        return undefined;
+      },
       resolveImProjectPermission: async (pluginId, project) => {
         const { alias, target } = await resolveImProjectTarget(pluginId, project);
         target.assertCurrent();
@@ -17957,6 +17982,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? maker.getSession(params.dispatcherSessionId) : undefined;
       const localSessionTool = dispatcher?.getStatus() === 'active' && !dispatcher.remoteHostId;
       const pluginSource = !params.dispatcherSessionId ? hostPluginInputSource() : undefined;
+      // A task this turn opens is remembered for the plugin run that started the turn (follow-ups):
+      // read the opener's inputs now, before any await can let the turn move on.
+      const openerId = fromSessionTool && !params.targetSessionId && !isDeviceLinkInvoke() ? params.dispatcherSessionId : undefined;
+      const opener = openerId ? maker.getSession(openerId) : undefined;
+      const openerInputs = openerId && opener?.getStatus() === 'active' && !opener.remoteHostId
+        ? getSessionActiveInputClientIds(openerId) : [];
       let projectFromWorkingDir = false;
       if (!params.targetSessionId && !params.createDefaults) {
         if (!params.dispatcherSessionId) {
@@ -17982,19 +18013,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) {
         return { ok: false, errorCode: 'AGENT_NOT_READY', message: 'Data owner changed before delivery.' };
       }
-      const sent = await sendToSessionInternal({
-        ...params,
-        ...(pluginSource ? { sourcePlugin: pluginSource, inheritTargetPlanMode: true, resumeWithStoredPermissionMode: true } : {}),
-        ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
-        autoReviewUserText: pluginSource ? params.message : request.autoReviewUserText,
-        ...(params.targetSessionId && params[AUTO_REVIEW_DELEGATED_CONTINUATION] ? {
-          autoReviewUserText: { ...request.autoReviewUserText, kind: 'delegated-continuation' as const },
-          // Use the durable path for idle and busy targets alike. It restores the
-          // target's user intent and current permission mode at dispatch time.
-          forceQueue: true,
-          resumeWithStoredPermissionMode: true,
-        } : {}),
-      }, undefined, localSessionTool);
+      // Word back from a task a plugin run opened: the plugin follows the turn it starts and delivers
+      // its answer where that run's request came from. Only that task's word counts (the owner's own
+      // turns and other tasks' messages never do); it waits in the queue so it is a turn of its own.
+      const followUp = localSessionTool && params.targetSessionId && params.dispatcherSessionId && !params.deliveryClientId
+        ? await withPluginTaskService(service => service.openFollowUp(params.dispatcherSessionId!, params.targetSessionId!))
+        : undefined;
+      const followUpName = followUp ? sanitizeSourceName(getInstalledGhostName(followUp.pluginId)) : undefined;
+      let sent: SendToSessionInternalResult;
+      try {
+        sent = await sendToSessionInternal({
+          ...params,
+          ...(pluginSource ? { sourcePlugin: pluginSource, inheritTargetPlanMode: true, resumeWithStoredPermissionMode: true } : {}),
+          ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
+          autoReviewUserText: pluginSource ? params.message : request.autoReviewUserText,
+          ...(params.targetSessionId && params[AUTO_REVIEW_DELEGATED_CONTINUATION] ? {
+            autoReviewUserText: { ...request.autoReviewUserText, kind: 'delegated-continuation' as const },
+            // Use the durable path for idle and busy targets alike. It restores the
+            // target's user intent and current permission mode at dispatch time.
+            forceQueue: true,
+            resumeWithStoredPermissionMode: true,
+          } : {}),
+          ...(followUp ? { clientId: followUp.clientId, forceQueue: true, pluginReply: { pluginId: followUp.pluginId,
+            ...(followUpName ? { name: followUpName } : {}), ...(followUp.relay ? { relay: followUp.relay } : {}) } } : {}),
+        }, undefined, localSessionTool);
+      } catch (error) {
+        if (followUp) await withPluginTaskService(service => service.abandonFollowUp(followUp.runId));
+        throw error;
+      }
+      if (followUp && !sent.ok) await withPluginTaskService(service => service.abandonFollowUp(followUp.runId));
+      // Saved before the tool returns, so the opened task's word back can never arrive first.
+      if (sent.ok && sent.wakeKind === 'created' && openerId && openerInputs.length) {
+        const openedTaskId = sent.targetSessionId;
+        await withPluginTaskService(service => service.noteOpenedTask(openerId, openerInputs, openedTaskId));
+      }
       return sent.ok && projectFromWorkingDir ? { ...sent, projectFromWorkingDir: true } : sent;
     },
     enableOrca: enableOrcaInternal,
