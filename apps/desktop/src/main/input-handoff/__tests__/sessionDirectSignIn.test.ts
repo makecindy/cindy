@@ -3,6 +3,7 @@ import type { InputHandoffSnapshot } from '@cindy/device-link';
 import type { HandoffDriver } from '../macDriver.js';
 import { InputHandoffSession, type HandoffCompletionHints, type HandoffResult, type HandoffTargetSpec } from '../session.js';
 import type { HandoffFieldPlan, NativeAxNode } from '../types.js';
+import { desktopInputRevision } from '../../remote-desktop/inputOwnership.js';
 
 const node = (ref: string, role: string, extra: Partial<NativeAxNode> = {}): NativeAxNode => ({
   ref,
@@ -519,19 +520,33 @@ describe('a waiting card watching its window', () => {
   // Minimal failing input: hint urlContains=app.example.com, password page -> blank page at the same address.
   it('keeps waiting while fields are gone but the agent\'s completion hint is not met yet', async () => {
     const { driver, state } = desktop('password');
-    // PR #12766 review (codex, r4691679719): the repeated scan check while waiting must not raise the window.
+    // PR #12766 review (codex, r4691679719 / r4692101054 / r4692101068): the repeated scan check while waiting
+    // must not raise the window, must not take the desktop from other tasks, and looks only at the focused target.
     const qr = vi.fn(async (_target: unknown, _frame: number[] | null) => null);
     driver.qr = qr;
+    let targetFocused = false;
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = targetFocused ? w.title === 'Sign in' : w.title !== 'Sign in';
+      return windows;
+    };
     const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
     await run.session.start();
     const raisedAtStart = state.raised;
     state.screen = 'blank';
+    await settle();
+    // Another window of the browser is the focused one: no look at all.
+    expect(qr).not.toHaveBeenCalled();
+    targetFocused = true;
+    const inputRevision = desktopInputRevision();
     await settle();
     await settle();
     expect(run.finished).toEqual([]);
     expect(qr.mock.calls.length).toBeGreaterThan(1);
     expect(qr.mock.calls.every(([, frame]) => Array.isArray(frame))).toBe(true);
     expect(state.raised).toBe(raisedAtStart);
+    expect(desktopInputRevision()).toBe(inputRevision);
     expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toContain('password');
     state.screen = 'password';
     await settle();

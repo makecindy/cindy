@@ -815,14 +815,16 @@ export class InputHandoffSession {
    * is one, makes it this step. Works on any app or page; nothing product-specific.
    */
   /**
-   * `frame`: the window's place from a window list. Looking there does not bring the window forward, which a card
-   * that keeps watching must not do; without it the window is raised once to be looked at.
+   * `frame`: the target's place from a window list, read while it is the focused window in front. Looking there
+   * neither brings it forward nor takes the desktop from other tasks, as `checkQr` does; a card that keeps watching
+   * must do neither. Without a frame the window is raised once, under the desktop turn, to be looked at.
    */
   private async showQr(frame: number[] | null = null): Promise<boolean> {
     const driver = this.options.driver;
     const target = this.target;
     if (!target || !driver.qr || this.pictureChosen) return false;
-    const found = await withDesktopTurn(() => driver.qr!(target, frame)).catch(() => null);
+    const look = () => driver.qr!(target, frame);
+    const found = await (frame ? look() : withDesktopTurn(look)).catch(() => null);
     if (!found || 'error' in found) return false;
     const qr = qrContent(found.text);
     if (!qr || this.ended) {
@@ -1201,8 +1203,15 @@ export class InputHandoffSession {
     if (!this.hintsMet(step)) {
       const asked = this.step;
       this.step = step;
-      // The window watch never brings the window forward: look where the window list says it is.
-      const scanning = await this.showQr(window.frame?.length === 4 ? window.frame : null);
+      // Waiting for the agent's hint repeats this look: only a passive one, and only at the target while it is the
+      // focused window in front (another window of the same app may sit at the same place). Otherwise the one look
+      // before handing back raises the window, as before.
+      const waiting = this.hintsPending(step);
+      const scanning = !waiting
+        ? await this.showQr()
+        : list.frontmost === target.pid && window.focused && window.frame?.length === 4
+          ? await this.showQr(window.frame)
+          : false;
       // The owner may have ended it or started answering meanwhile.
       if (this.ended || this.busy || this.phase !== 'ready') return;
       if (scanning) {
