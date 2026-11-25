@@ -4045,10 +4045,10 @@ async function createCodexProxyHandle(
       }
       if (!decision?.localHandler && guestProviderId && (isOpenAiSubscriptionProviderId(guestProviderId) || guestAccount?.sharedProviderId === guestProviderId))
         return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
-      if (decision?.localHandler || !isXaiUpstream(decision?.upstreamOverride ?? '')
-        || ctx.method !== 'POST' || !ctx.url.split('?', 1)[0]?.endsWith('/responses')) return decision;
-      // The observer receives raw wire bytes. Negotiate plaintext so the execution-price
-      // receipt is recorded synchronously before Codex can emit the corresponding usage.
+      if (decision?.localHandler || ctx.method !== 'POST' || !ctx.url.split('?', 1)[0]?.endsWith('/responses')) return decision;
+      if (!isXaiUpstream(decision?.upstreamOverride ?? '') && !localCustomResponses.has(ctx.headers)) return decision;
+      // Response observers receive raw wire bytes. Negotiate plaintext for every routed
+      // Responses request so capacity errors cannot be hidden by gzip or brotli framing.
       return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
     };
     const decision = route(body, ctx);

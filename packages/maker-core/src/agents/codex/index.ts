@@ -9199,6 +9199,7 @@ assertRouteCurrent();
     let reconnectStallTurnGeneration = 0;
     let reconnectStallErrorStatus: number | undefined;
     let reconnectStallCapacitySignal: CodexUpstreamCapacitySignal | null = null;
+    let upstreamCapacityIgnoredThrough = 0;
     let reconnectStallCapacityNoticeEmitted = false;
     let reconnectStallTimeoutBudgetMs = CODEX_RECONNECT_STALL_TIMEOUT_MS;
     let unsubscribeUpstreamCapacity: (() => void) | null = null;
@@ -9252,6 +9253,15 @@ assertRouteCurrent();
       reconnectStallTimeoutBudgetMs = CODEX_RECONNECT_STALL_TIMEOUT_MS;
       reconnectStallRemainingMs = 0;
       reconnectStallSliceStartedAt = 0;
+    }
+
+    function consumeObservedCapacityAfterRecovery(): void {
+      if (reconnectStallCapacitySignal) {
+        upstreamCapacityIgnoredThrough = Math.max(
+          upstreamCapacityIgnoredThrough,
+          reconnectStallCapacitySignal.observedAt,
+        );
+      }
     }
     /**
      * Adopt a root turn exactly once, regardless of whether the turn/start RPC
@@ -9577,6 +9587,8 @@ assertRouteCurrent();
       turnId: string,
       turnGeneration: number,
       remainingMs: number,
+      capacitySignal: CodexUpstreamCapacitySignal | null = null,
+      timeoutBudgetMs = CODEX_RECONNECT_STALL_TIMEOUT_MS,
     ): void {
       if (reconnectStallTimer || reconnectStallRemainingMs > 0) return;
       if (
@@ -9589,9 +9601,11 @@ assertRouteCurrent();
       ) return;
       reconnectStallTurnId = turnId;
       reconnectStallTurnGeneration = turnGeneration;
+      reconnectStallCapacitySignal = capacitySignal;
+      reconnectStallTimeoutBudgetMs = timeoutBudgetMs;
       reconnectStallRemainingMs = Math.max(
         1,
-        Math.min(remainingMs, CODEX_RECONNECT_STALL_TIMEOUT_MS),
+        Math.min(remainingMs, timeoutBudgetMs),
       );
       armReconnectStallSlice();
     }
@@ -9662,6 +9676,7 @@ assertRouteCurrent();
         return;
       }
       if (isReconnectRecoveryEvent(event)) {
+        consumeObservedCapacityAfterRecovery();
         clearReconnectStall();
         // Descendant/background events are filtered by the queue probe. Real
         // root-turn progress starts a new retry episode within the same turn.
@@ -13962,7 +13977,8 @@ assertRouteCurrent();
             ?? (!opts.remoteHostId && sid
               ? (() => {
                 const latest = this.deps.getObservedCodexUpstreamCapacity?.(sid, threadId);
-                return latest && latest.observedAt >= turnStartedAt - 5_000 ? latest : null;
+                return latest && latest.observedAt >= turnStartedAt - 5_000
+                  && latest.observedAt > upstreamCapacityIgnoredThrough ? latest : null;
               })()
               : null)
             ?? (parseOverloadError(
@@ -15304,6 +15320,8 @@ assertRouteCurrent();
           : null;
         const reconnectGenerationAtStop = reconnectStallTurnGeneration;
         const reconnectErrorStatusAtStop = reconnectStallErrorStatus;
+        const reconnectCapacitySignalAtStop = reconnectStallCapacitySignal;
+        const reconnectTimeoutBudgetAtStop = reconnectStallTimeoutBudgetMs;
         let watchdogActivityVersionAtStop = 0;
         let watchdogsRestored = false;
         const restoreWatchdogsIfStillRunning = (): void => {
@@ -15331,6 +15349,8 @@ assertRouteCurrent();
               turnId,
               reconnectGenerationAtStop,
               reconnectRemainingAtStop,
+              reconnectCapacitySignalAtStop,
+              reconnectTimeoutBudgetAtStop,
             );
             if (reconnectStallTurnId === turnId) reconnectStallErrorStatus = reconnectErrorStatusAtStop;
           }
