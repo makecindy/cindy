@@ -1794,7 +1794,9 @@ describe("market install recovery", () => {
           if (request.input?.read === "catalog") return marketPage([item]);
           return managementSnapshot(options.installed?.() ?? false);
         case "management:market-detail":
-          return options.detail ? options.detail() : { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+          // Like the Host: installState comes from the market-source record of this exact plugin.
+          return options.detail ? options.detail() : { ...item, installState: options.installed?.() ? "installed" : "not-installed",
+            manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
         case "management:begin": return options.begin!();
         case "management:operation": return options.operation!();
         default: throw new Error("unexpected " + request.actionId);
@@ -1841,6 +1843,35 @@ describe("market install recovery", () => {
     if (messageKey) expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey });
     else expect(fixture.read).toHaveBeenLastCalledWith(fixture.wire, expect.anything(), expect.objectContaining({ id: "_root__demo" }), "en", ["plugin-capabilities"]);
     // Never a second begin: the unknown result is only looked up, never replayed.
+    expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+  });
+  // Review (2026-11-25): with the receipt gone, a local package sharing the ghost id and namespace was taken
+  // as the market install and its detail opened.
+  it.each([
+    ["a local package with the same id (market facts say conflict)", "conflict", "demo@1"],
+    ["the market plugin at another release", "update-available", "demo@2"],
+  ])("keeps the result unconfirmed when the computer only has %s", async (_name, installState, releaseId) => {
+    let sameIdOnComputer = false;
+    const requests = installWire({
+      begin: () => { sameIdOnComputer = true; throw new Error("[TIMEOUT] remote invoke timed out"); },
+      operation: () => { throw hostError("NOT_FOUND"); },
+      installed: () => sameIdOnComputer,
+      detail: () => ({ ...item, installState: sameIdOnComputer ? installState : "not-installed",
+        releaseId: sameIdOnComputer ? releaseId : item.releaseId,
+        manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } }),
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    await act(async () => { await shownMarket().checkResult(); });
+    await settle(14);
+    expect(shownMarket()).toMatchObject({ installBusy: true });
+    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
+    expect(fixture.read).not.toHaveBeenCalledWith(fixture.wire, expect.anything(), expect.objectContaining({ id: "_root__demo" }),
+      "en", ["plugin-capabilities"]);
+    // The market facts were read for the original plugin id only; nothing was replayed.
+    expect(requests.filter((request) => request.actionId === "management:market-detail")
+      .every((request) => request.input.pluginId === "market/demo")).toBe(true);
     expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
   });
 });
@@ -1949,6 +1980,139 @@ it("keeps the market on the installing computer and records its failure for that
   await act(async () => shownMarket().selectDevice("mac"));
   await settle();
   expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.errors.downloadFailed" });
+});
+/* 测试价值（PR 评审：两台电脑的市场缓存与续读，2026-11-25）
+ * - 生产入口与可观察结果：真实 PluginsScreen + usePluginMarket，观察切换电脑后显示的市场状态、条目与发往电脑的读取。
+ * - 依据：remote-and-mobile-adaptation.md 旧响应不落地也不能让页面卡住；server-channel-review.md 不服务当前页面的读取不发。
+ * - 缺口：已有用例只覆盖迟到分页不落地，不覆盖丢弃后的缓存状态、跨电脑的安装后清理、离开后的续读与搜索续读。
+ * - 最小失败输入：A 的首页 / 下一页在切到 B 后才返回再切回 A；先浏览 B 再在 A 装同一插件；空发布者页返回前离开市场；
+ *   默认官方筛选下搜索到一页社区插件；偏好读取慢于市场打开。
+ * - tier: unit（jsdom，内存 Host）。
+ */
+describe("market caches across two computers", () => {
+  const twoComputers = () => { fixture.extraDevices = [{ deviceId: "pc", name: "PC", platform: "win32", remoteControlEnabled: true }]; };
+  it.each(["first page", "next page"])("reads again when returning to a computer whose %s reply was dropped", async (which) => {
+    twoComputers();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let macPages = 0;
+    const requests = marketWire(async (request) => {
+      if (request.input?.read === "capabilities") return { catalogPaging: true };
+      if (request.input?.query?.counts) return { ...marketPage([]), counts: null };
+      if (request.device !== "mac") return marketPage([marketItem("pc-only", "PC only")]);
+      const index = ++macPages;
+      const heldIndex = which === "first page" ? 1 : 2;
+      if (index === heldIndex) await held;
+      return { ...marketPage([marketItem(`mac-${index}`, `Mac ${index}`)]), nextCursor: index === 1 ? "cursor-1" : null };
+    });
+    await openMarket();
+    if (which === "next page") {
+      expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Mac 1"]);
+      await act(async () => shownMarket().loadMore());
+      await settle();
+    }
+    await act(async () => shownMarket().selectDevice("pc"));
+    await settle();
+    await act(async () => { release(); });
+    await settle();
+    await act(async () => shownMarket().selectDevice("mac"));
+    await settle(14);
+    expect(shownMarket()).toMatchObject({ status: "ready", loadingMore: false });
+    if (which === "first page") {
+      expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Mac 2"]);
+      expect(requests.filter((request) => request.device === "mac" && request.input?.read === "catalog"
+        && !request.input.query.counts)).toHaveLength(2);
+    } else expect(shownMarket()).toMatchObject({ hasMore: true, items: [expect.objectContaining({ name: "Mac 1" })] });
+  });
+  it("removes an installed plugin only from the computer it was installed on", async () => {
+    twoComputers();
+    const item = marketItem("demo", "Demo"), other = marketItem("other", "Other");
+    let installed = false;
+    marketWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return marketPage(request.device === "mac" && installed ? [other] : [item, other]);
+          return managementSnapshot(request.device === "mac" && installed);
+        case "management:market-detail": return { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+        case "management:begin": return { operationId: request.input.operationId, phase: "confirmation", consent: {
+          requestId: "consent", initiator: "user", origin: "market",
+          facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } };
+        case "management:answer": installed = true; return { operationId: request.input.operationId, phase: "succeeded" };
+        default: return {};
+      }
+    });
+    await openMarket();
+    await act(async () => shownMarket().selectDevice("pc"));
+    await settle();
+    expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Demo", "Other"]);
+    await act(async () => shownMarket().selectDevice("mac"));
+    await settle();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    await act(async () => fixture.props.get("confirmation").controller.answer(true));
+    await settle(14);
+    expect(fixture.props.get("header").title).toBe("Demo");
+    await act(async () => fixture.props.get("header").onBack());
+    await settle();
+    // Within the reuse window the PC list is not re-read, so it must still hold the PC's own facts.
+    await act(async () => shownMarket().selectDevice("pc"));
+    await settle();
+    expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Demo", "Other"]);
+  });
+  it("stops chaining empty publisher pages once the market is left", async () => {
+    const community = { ...marketItem("community", "Community"), publisherKind: "personal" };
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let page = 0;
+    const requests = marketWire(async (request) => {
+      if (request.input?.read === "capabilities") return { catalogPaging: true };
+      if (request.input?.query?.counts) return { ...marketPage([]), counts: null };
+      if (++page === 1) await held;
+      return { ...marketPage([{ ...community, pluginId: `market/c${page}`, ghostId: `c${page}` }]), nextCursor: `cursor-${page}` };
+    });
+    await openMarket();
+    await act(async () => fixture.props.get("directory").onSegmentChange("installed"));
+    await act(async () => { release(); });
+    await settle(20);
+    expect(requests.filter((request) => request.input?.read === "catalog" && !request.input.query.counts)).toHaveLength(1);
+  });
+  it("judges search pages by every source, so community results do not trigger extra reads", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const community = { ...marketItem("community", "Community"), publisherKind: "personal" };
+      const requests = marketWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true }
+        : request.input?.query?.counts ? { ...marketPage([]), counts: null }
+          : { ...marketPage([community]), nextCursor: "cursor-more" });
+      await openMarket();
+      const before = requests.filter((request) => request.input?.read === "catalog" && !request.input.query.counts).length;
+      await act(async () => fixture.props.get("stack").headerSearchBarOptions.onChangeText({ nativeEvent: { text: "comm" } }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      await settle(20);
+      const searches = requests.slice(0).filter((request) => request.input?.read === "catalog" && !request.input.query.counts
+        && request.input.query.query === "comm");
+      expect(before).toBeGreaterThan(0);
+      expect(searches).toHaveLength(1);
+      expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Community"]);
+    } finally { vi.useRealTimers(); }
+  });
+  it("waits for the remembered market computer before picking one automatically", async () => {
+    twoComputers();
+    let releaseStored!: () => void;
+    const stored = new Promise<void>((resolve) => { releaseStored = resolve; });
+    fixture.storage.set("cindy.pluginMarketDevice.v1.demo", "pc");
+    fixture.getStored.mockImplementation(async (key: string) => {
+      if (key === "cindy.pluginMarketDevice.v1.demo") await stored;
+      return fixture.storage.get(key) ?? null;
+    });
+    const requests = marketWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true } : marketPage([]));
+    await openMarket();
+    expect(shownMarket().status).toBe("loading");
+    await act(async () => { releaseStored(); });
+    await settle();
+    expect(shownMarket().target.deviceId).toBe("pc");
+    expect(requests.filter((request) => request.device === "mac" && request.input?.read)).toEqual([]);
+  });
 });
 // Review F2 (2026-11-25): an offline remembered computer should not cost an extra step; explicit choices stay.
 describe("market computer choice", () => {

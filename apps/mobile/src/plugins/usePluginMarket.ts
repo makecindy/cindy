@@ -30,6 +30,8 @@ export type PluginMarketRowState =
   | { kind: "installed" };
 interface CatalogList {
   key: string;
+  /** The computer these rows describe; an install on one computer never edits another's list. */
+  deviceId: string;
   status: "loading" | "ready" | "failed";
   items: ManagedMarketItem[];
   nextCursor: string | null;
@@ -37,7 +39,7 @@ interface CatalogList {
   meta: Omit<PluginMarketPage, "items" | "nextCursor" | "counts"> | null;
   at: number;
 }
-interface CountsEntry { key: string; counts: PluginMarketCounts | null; customSourceNames: string[]; at: number }
+interface CountsEntry { key: string; deviceId: string; counts: PluginMarketCounts | null; customSourceNames: string[]; at: number }
 interface InstallAttempt {
   id: number;
   target: RemoteResourceHostTarget;
@@ -111,11 +113,13 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const [choice, setChoice] = useState<string>();
   const [remembered, setRemembered] = useState<string>();
   const [pinned, setPinned] = useState<string>();
+  /** The automatic pick waits for the stored preference, so a slow read cannot pin another computer first. */
+  const [preferenceRead, setPreferenceRead] = useState(false);
   useEffect(() => {
     let disposed = false;
     void AsyncStorage.getItem(storageKey).then((value) => {
       if (!disposed && isMobileAuthOwnerCurrent(owner) && typeof value === "string" && value.length <= 256) setRemembered(value);
-    }).catch(() => { /* Optional local preference. */ });
+    }).catch(() => { /* Optional local preference. */ }).finally(() => { if (!disposed) setPreferenceRead(true); });
     return () => { disposed = true; };
   }, [storageKey, owner]);
   useEffect(() => { if (installedDeviceId) setChoice(undefined); }, [installedDeviceId]);
@@ -126,12 +130,11 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   };
   const autoPick = onlineId(remembered) ? remembered : targets.find((host) => isOnline(host))?.deviceId;
   useEffect(() => { if (!visible) setPinned(undefined); }, [visible]);
-  useEffect(() => { if (visible && !has(pinned) && autoPick) setPinned(autoPick); }, [visible, pinned, autoPick, targets]);
+  useEffect(() => { if (visible && preferenceRead && !has(pinned) && autoPick) setPinned(autoPick); }, [visible, preferenceRead, pinned, autoPick, targets]);
   const automatic = has(pinned) ? pinned! : autoPick ?? (has(remembered) ? remembered! : targets[0]?.deviceId);
-  const deviceId = install ? install.target.deviceId
-    : has(choice) ? choice!
-      : has(installedDeviceId) ? installedDeviceId
-        : automatic;
+  const explicit = install ? install.target.deviceId : has(choice) ? choice! : has(installedDeviceId) ? installedDeviceId : undefined;
+  // Until the preference is read, an automatic pick has no computer yet (the market shows loading, reads nothing).
+  const deviceId = explicit ?? (preferenceRead ? automatic : undefined);
   const target = install ? install.target : targets.find((host) => host.deviceId === deviceId);
   const online = !!target && isOnline(target);
 
@@ -150,6 +153,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     ? createPluginManagementClient({ invoke, deviceId, isCurrent: () => liveScope.current === scope })
     : null, [deviceId, invoke, scope]);
   const active = visible && focused && online && !!client;
+  const activeRef = useRef(active);
+  activeRef.current = active;
 
   const [probe, setProbe] = useState<{ scope: string; status: "loading" | "supported" | "outdated" | "failed" }>();
   const readProbe = useCallback(async () => {
@@ -186,6 +191,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const request = pluginMarketRequest(filter, debouncedQuery);
   const listKey = JSON.stringify([scope, request.scope, debouncedQuery]);
   const countsKey = JSON.stringify([scope, debouncedQuery]);
+  const liveListKey = useRef(listKey);
+  liveListKey.current = listKey;
+  /** A search shows every source, so its pages are judged against "all", not the hidden source filter. */
+  const publisher: PluginMarketFilter = debouncedQuery ? "all" : filter;
   const lists = useRef(new Map<string, CatalogList>());
   const counts = useRef(new Map<string, CountsEntry>());
   const chain = useRef(0);
@@ -197,10 +206,17 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     if (!client) return;
     const readScope = scope;
     const current = () => liveScope.current === readScope && lists.current.get(list.key) === list;
+    // A reply dropped because the view moved to another computer or connection leaves no request in
+    // charge of this entry. Release it so returning here reads again instead of waiting forever.
+    const abandon = () => {
+      if (lists.current.get(list.key) !== list) return;
+      if (cursor) list.loadingMore = false;
+      else if (list.status === "loading") { list.status = list.items.length ? "ready" : "failed"; list.at = 0; }
+    };
     try {
       const page = await client.catalog({ query: debouncedQuery, scope: request.scope, cursor, limit: request.limit,
         excludeInstalled: true, counts: false });
-      if (!current()) return;
+      if (!current()) { abandon(); return; }
       // A first-page read replaces the list; only later pages are de-duplicated against it.
       const known = new Set(cursor ? list.items.map((item) => item.pluginId) : []);
       const fresh = page.items.filter((item) => !known.has(item.pluginId) && item.installState !== "installed"
@@ -217,13 +233,13 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       // A publisher tab may find nothing on a public page; continue a few pages, never unbounded.
       const contributed = fresh.filter((item) => pluginMarketMatchesFilter(item, publisher)).length;
       if (page.nextCursor && contributed === 0 && (publisher === "official" || publisher === "community")
-        && chain.current < MAX_EMPTY_CHAIN) {
+        && chain.current < MAX_EMPTY_CHAIN && activeRef.current && liveListKey.current === list.key) {
         chain.current += 1;
         list.loadingMore = true;
         await readPage(list, page.nextCursor, publisher);
       } else chain.current = 0;
     } catch (error) {
-      if (!current()) return;
+      if (!current()) { abandon(); return; }
       if (cursor) list.loadingMore = false; else list.status = "failed";
       chain.current = 0;
       rerender();
@@ -236,32 +252,34 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       remember(lists.current, listKey, existing);
       return Promise.resolve();
     }
-    const list: CatalogList = { key: listKey, status: "loading", items: existing?.items ?? [], nextCursor: null,
+    if (!deviceId) return Promise.resolve();
+    const list: CatalogList = { key: listKey, deviceId, status: "loading", items: existing?.items ?? [], nextCursor: null,
       loadingMore: false, meta: existing?.meta ?? null, at: 0 };
     remember(lists.current, listKey, list);
     chain.current = 0;
     rerender();
-    return readPage(list, null, filter);
-  }, [listKey, readPage, filter]);
+    return readPage(list, null, publisher);
+  }, [listKey, deviceId, readPage, publisher]);
   const readCounts = useCallback(async (force: boolean) => {
-    if (!client) return;
+    if (!client || !deviceId) return;
     const existing = counts.current.get(countsKey);
     if (existing && !force && Date.now() - existing.at < MARKET_REFRESH_MS) return;
-    const entry: CountsEntry = { key: countsKey, counts: existing?.counts ?? null,
+    const entry: CountsEntry = { key: countsKey, deviceId, counts: existing?.counts ?? null,
       customSourceNames: existing?.customSourceNames ?? [], at: Date.now() };
     remember(counts.current, countsKey, entry);
     const readScope = scope;
     try {
       // The same light count read as the computer: scope all, one item, counts only.
       const page = await client.catalog({ query: debouncedQuery, scope: "all", limit: 1, excludeInstalled: true, counts: true });
-      if (counts.current.get(countsKey) !== entry || liveScope.current !== readScope) return;
+      if (counts.current.get(countsKey) !== entry) return;
+      if (liveScope.current !== readScope) { entry.at = 0; return; }
       entry.counts = page.counts; entry.customSourceNames = page.customSourceNames;
       rerender();
     } catch {
       // Counts never hide usable rows; a later visit may retry.
       if (counts.current.get(countsKey) === entry) entry.at = 0;
     }
-  }, [client, countsKey, debouncedQuery, scope]);
+  }, [client, deviceId, countsKey, debouncedQuery, scope]);
   const ready = active && probeStatus === "supported";
   // Bumped after an install so the visible source counts are read again (stale entries are at 0).
   const [countsTick, setCountsTick] = useState(0);
@@ -285,7 +303,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const items = settled ? (list?.items ?? []).filter((item) => pluginMarketMatchesFilter(item, effectiveFilter)) : [];
   const total = !settled ? undefined : searching ? marketCounts?.all : marketCounts?.[filter];
 
-  const status: PluginMarketStatus = !targets.length ? "noComputer" : !online ? "offline"
+  const status: PluginMarketStatus = !targets.length ? "noComputer" : !deviceId ? "loading" : !online ? "offline"
     : probeStatus === "outdated" ? "outdated" : probeStatus === "failed" ? "failed"
       : probeStatus === "loading" || !settled || !list || (list.status === "loading" && !list.items.length) ? "loading"
         : list.status === "failed" && !list.items.length ? "failed" : "ready";
@@ -294,8 +312,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     if (!ready || !current || current.status !== "ready" || current.loadingMore || !current.nextCursor) return;
     current.loadingMore = true;
     rerender();
-    void readPage(current, current.nextCursor, filter);
-  }, [ready, listKey, readPage, filter]);
+    void readPage(current, current.nextCursor, publisher);
+  }, [ready, listKey, readPage, publisher]);
   const refresh = useCallback(async () => {
     if (!active) return;
     if (probeStatus !== "supported") { await readProbe(); return; }
@@ -347,8 +365,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const complete = useCallback((attempt: InstallAttempt, instanceKey: string | undefined) => {
     if (installRef.current?.id !== attempt.id) return;
     finish(attempt);
-    for (const entry of lists.current.values()) entry.items = entry.items.filter((item) => item.pluginId !== attempt.item.pluginId);
-    for (const entry of counts.current.values()) entry.at = 0;
+    const installedOn = attempt.target.deviceId;
+    for (const entry of lists.current.values())
+      if (entry.deviceId === installedOn) entry.items = entry.items.filter((item) => item.pluginId !== attempt.item.pluginId);
+    for (const entry of counts.current.values()) if (entry.deviceId === installedOn) entry.at = 0;
     setCountsTick((tick) => tick + 1);
     setDetail((current) => current?.item.pluginId === attempt.item.pluginId ? null : current);
     onInstalled.current(attempt.target, instanceKey, attempt.item);
@@ -389,6 +409,27 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
         finish(attempt, pluginMarketErrorKey(after.errorCode ?? "PLUGIN_MANAGEMENT_STALE"));
     })();
   }, [install, management.state, management.controller, finish, invoke]);
+  /**
+   * Without the original operation's receipt, a same-id plugin in the snapshot is not proof: a local
+   * package can share the ghost id and namespace. Settle as installed only when the computer's market
+   * facts for this exact plugin say it is installed from this source at the release we asked for.
+   * Conflict, another source or another release keeps the result unconfirmed; nothing unrelated opens.
+   * One market-detail read per fresh snapshot.
+   */
+  const verifiedSnapshot = useRef<unknown>(undefined);
+  const confirmUnknown = useCallback(async (attempt: InstallAttempt, snapshot: unknown, instanceKey: string) => {
+    if (verifiedSnapshot.current === snapshot) return;
+    verifiedSnapshot.current = snapshot;
+    const current = () => installRef.current?.id === attempt.id;
+    try {
+      const facts = await createPluginManagementClient({ invoke, deviceId: attempt.target.deviceId, isCurrent: current })
+        .detail(attempt.item.pluginId);
+      if (current() && facts.installState === "installed" && facts.releaseId === attempt.item.releaseId)
+        complete(attempt, instanceKey);
+    } catch {
+      // Still unconfirmed; "Check result" reads again with the next fresh snapshot.
+    }
+  }, [invoke, complete]);
   useEffect(() => {
     const attempt = install, state = management.state;
     if (!attempt?.started || !state) return;
@@ -399,9 +440,9 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     } else if (state.outcome === "failed") finish(attempt, pluginMarketErrorKey(state.errorCode));
     else if (state.outcome === "cancelled") finish(attempt);
     else if (state.outcome === "unknown" && !state.busy) {
-      // A later read that names the instance settles an unknown result as installed (it was absent before begin).
+      // A later read that names a same-id instance is only a lead; the market facts decide (see confirmUnknown).
       const installed = state.snapshot?.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
-      if (installed) complete(attempt, installed.instanceKey);
+      if (installed) void confirmUnknown(attempt, state.snapshot, installed.instanceKey);
     } else if (state.outcome === "succeeded" && !state.busy) {
       // Wait for the controller's post-commit readback; it locates the new physical instance.
       const installed = state.snapshot?.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
@@ -410,7 +451,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       const timer = setTimeout(() => complete(attempt, undefined), 5_000);
       return () => clearTimeout(timer);
     }
-  }, [install, management.state, finish, complete]);
+  }, [install, management.state, finish, complete, confirmUnknown]);
   const rowState = (item: ManagedMarketItem): PluginMarketRowState => {
     if (install?.item.pluginId === item.pluginId && install.target.deviceId === deviceId) {
       const outcome = management.state?.outcome;
@@ -425,11 +466,12 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     return { kind: "idle" };
   };
   /**
-   * "Check result" only looks up the original operation (never a second begin). If the Host no longer
-   * knows it (restart, 15-minute receipt expiry, or begin never arrived), the reconcile's fresh read of
-   * the computer decides: installed → settle as installed; absent → release the row and say we could not
-   * confirm and it is not installed now. That reports a current fact; it does not claim a rollback, and
-   * any new install stays the user's explicit choice.
+   * "Check result" only looks up the original operation (never a second begin); a receipt it finds
+   * settles the attempt. If the Host no longer knows it (restart, 15-minute receipt expiry, or begin never
+   * arrived), the reconcile's fresh read of the computer decides: a same-id instance is checked against
+   * the market facts (confirmUnknown); absent → release the row and say we could not confirm and it is
+   * not installed now. That reports a current fact; it does not claim a rollback, and any new install
+   * stays the user's explicit choice.
    */
   const checkResult = useCallback(async () => {
     const attempt = installRef.current, controller = management.controller;
@@ -441,9 +483,9 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     const fresh = state.snapshot !== before ? state.snapshot : null;
     if (!fresh) return;
     const installed = fresh.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
-    if (installed) complete(attempt, installed.instanceKey);
+    if (installed) await confirmUnknown(attempt, fresh, installed.instanceKey);
     else if (state.errorCode === "NOT_FOUND") finish(attempt, "plugins.market.unconfirmedNotInstalled");
-  }, [management.controller, complete, finish]);
+  }, [management.controller, confirmUnknown, finish]);
 
   return {
     target, online, targets, selectDevice,
