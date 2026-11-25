@@ -34,6 +34,7 @@
  */
 
 import { CredentialModeSwitchBusyError } from '../maker-host/credentialSwitchError.js';
+import { PROVIDER_GROUP_SUPERSEDED_ERROR } from '../provider-group/failurePolicy.js';
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import {
   CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
@@ -263,6 +264,9 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   ): Promise<{ deferred: boolean; superseded?: boolean }>;
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
+  /** Retire this task's uncompleted remote startup after an authorized manual
+   * choice, before waiting for the send lock held by its historical probe. */
+  cancelPendingRemoteStart?(sessionId: string, reason?: Error): void;
   /**
    * 停用轴的边界裁决(生产 = register.ts 的 assertModelRouteUsable,内核纯逻辑在
    * model-route-guard.ts)。跨引擎切换是新的路由选择,目标 (agent, model, 来源) 被
@@ -791,6 +795,49 @@ function bootstrapSwitchedSessionWithThinking(
     : deps.bootstrapSwitchedSession(sessionId, { thinkingEnabled });
 }
 
+function validateAgentSwitchRequest(params: {
+  sessionId: unknown;
+  targetAgentKind: unknown;
+  model: unknown;
+  providerId?: unknown;
+  confirmedContextWindow?: unknown;
+  agentDeviceId?: unknown;
+}) {
+  const { sessionId, targetAgentKind, model, providerId, confirmedContextWindow, agentDeviceId } = params;
+  if (confirmedContextWindow !== undefined &&
+      (typeof confirmedContextWindow !== 'number' || !Number.isSafeInteger(confirmedContextWindow) || confirmedContextWindow <= 0)) {
+    throwIpcError('INVALID_PARAMS', 'confirmedContextWindow must be a positive integer');
+  }
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    throwIpcError('INVALID_PARAMS', 'sessionId required');
+  }
+  if (targetAgentKind !== 'claude-code' && targetAgentKind !== 'codex' && targetAgentKind !== 'pi' && targetAgentKind !== 'acp') {
+    throwIpcError('INVALID_PARAMS', 'targetAgentKind must be claude-code | codex | pi | acp');
+  }
+  if (typeof model !== 'string' || model.length === 0) {
+    throwIpcError('INVALID_PARAMS', 'model required');
+  }
+  if (providerId !== undefined && providerId !== null && typeof providerId !== 'string') {
+    throwIpcError('INVALID_PARAMS', 'providerId must be string | null');
+  }
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)由 providerId 指出是哪一个；内置引擎的分支只拿到内置值。
+  const builtinTarget: AgentKind | null = targetAgentKind === 'acp' ? null : targetAgentKind;
+  if (!builtinTarget && !pluginEngineKeyFromProviderId(typeof providerId === 'string' ? providerId.trim() : null)) {
+    throwIpcError('INVALID_PARAMS', 'a plugin engine target needs providerId acp-plugin:<plugin>:<harness>');
+  }
+  if (
+    agentDeviceId !== undefined &&
+    agentDeviceId !== null &&
+    (typeof agentDeviceId !== 'string' || !AGENT_DEVICE_ID_PATTERN.test(agentDeviceId))
+  ) {
+    throwIpcError('INVALID_PARAMS', 'agentDeviceId must be a device id or null');
+  }
+  return {
+    sessionId, targetAgentKind: targetAgentKind as SessionAgentSwitchResult['agentKind'],
+    model, providerId, confirmedContextWindow, builtinTarget, agentDeviceId,
+  };
+}
+
 /** 业务体(纯依赖注入,单测直接调):校验 → 交接 → 提交 → 重建。 */
 export async function performSessionAgentSwitch(
   deps: MakerSessionAgentSwitchHandlerDeps,
@@ -856,42 +903,14 @@ export async function performSessionAgentSwitch(
   },
 ): Promise<SessionAgentSwitchResult> {
   const ownerGeneration = deps.readOwnerGeneration?.();
-  const { sessionId, targetAgentKind, model, providerId, signal } = params;
+  const { signal } = params;
   // Pi 跨引擎重建时同样要带上思考开关意图：不传就容易落到被控端镜像/默认值，
   // 与用户在意图期内刚改的开关不一致（device-link 远程场景最明显）。
   const thinkingEnabled = typeof params.thinking === 'boolean' ? params.thinking : undefined;
   throwIfAgentSwitchAborted(signal);
-  const confirmedContextWindow = params.confirmedContextWindow;
-  if (confirmedContextWindow !== undefined &&
-      (typeof confirmedContextWindow !== 'number' || !Number.isSafeInteger(confirmedContextWindow) || confirmedContextWindow <= 0)) {
-    throwIpcError('INVALID_PARAMS', 'confirmedContextWindow must be a positive integer');
-  }
-  if (typeof sessionId !== 'string' || sessionId.length === 0) {
-    throwIpcError('INVALID_PARAMS', 'sessionId required');
-  }
-  if (targetAgentKind !== 'claude-code' && targetAgentKind !== 'codex' && targetAgentKind !== 'pi' && targetAgentKind !== 'acp') {
-    throwIpcError('INVALID_PARAMS', 'targetAgentKind must be claude-code | codex | pi | acp');
-  }
-  if (typeof model !== 'string' || model.length === 0) {
-    throwIpcError('INVALID_PARAMS', 'model required');
-  }
-  if (providerId !== undefined && providerId !== null && typeof providerId !== 'string') {
-    throwIpcError('INVALID_PARAMS', 'providerId must be string | null');
-  }
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)由 providerId 指出是哪一个；内置引擎的分支只拿到内置值。
-  const builtinTarget: AgentKind | null = targetAgentKind === 'acp' ? null : targetAgentKind;
-  if (!builtinTarget && !pluginEngineKeyFromProviderId(typeof providerId === 'string' ? providerId.trim() : null)) {
-    throwIpcError('INVALID_PARAMS', 'a plugin engine target needs providerId acp-plugin:<plugin>:<harness>');
-  }
-  const rawAgentDeviceId = params.agentDeviceId;
-  if (
-    rawAgentDeviceId !== undefined &&
-    rawAgentDeviceId !== null &&
-    (typeof rawAgentDeviceId !== 'string' || !AGENT_DEVICE_ID_PATTERN.test(rawAgentDeviceId))
-  ) {
-    throwIpcError('INVALID_PARAMS', 'agentDeviceId must be a device id or null');
-  }
-  let requestedAgentDeviceId = rawAgentDeviceId as string | null | undefined;
+  const { sessionId, targetAgentKind, model, providerId, confirmedContextWindow, builtinTarget, agentDeviceId } =
+    validateAgentSwitchRequest(params);
+  let requestedAgentDeviceId = agentDeviceId;
   // 必须在第一个 await 前快照：跨窗口 / 跨设备写入即使 set→clear 回到同值，修订号也会变化。
   const pendingRevisionAtStart = deps.pendingSwitches?.revision?.(sessionId);
   let normalizedProviderId =
@@ -1919,11 +1938,12 @@ export function readSwitchOptionsAgentDeviceId(options: unknown): unknown {
 export function registerMakerSessionAgentSwitchHandler(
   registry: IpcHandlerRegistry,
   deps: MakerSessionAgentSwitchHandlerDeps,
+  onUserSwitchRequested?: (event: unknown, sessionId: string) => void,
 ): void {
   registry.handle(
     MAKER_INVOKE.SWITCH_SESSION_AGENT,
     async (
-      _e,
+      event,
       sessionId: unknown,
       targetAgentKind: unknown,
       model: unknown,
@@ -1948,7 +1968,7 @@ export function registerMakerSessionAgentSwitchHandler(
         throwIpcError('UNSUPPORTED_CAPABILITY', 'shared task guests cannot move the agent to another computer');
       }
       const guard = createSharedTaskSettingGuard(context?.sharedTask, String(sessionId), context?.sharedTaskSetting ?? { admitted: false });
-      const run = () => performSessionAgentSwitch(deps, {
+      const request = {
         sessionId,
         targetAgentKind,
         model,
@@ -1959,7 +1979,18 @@ export function registerMakerSessionAgentSwitchHandler(
         ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
         thinking,
         assertSelectionCurrent: guard.admit,
-      });
+      };
+      if (onUserSwitchRequested) {
+        const valid = validateAgentSwitchRequest(request);
+        // Check permission without admitting the actual mutation, which must
+        // still recheck access after waiting for the lock.
+        guard();
+        // An authorized manual choice supersedes recovery even if locked admission later rejects it.
+        onUserSwitchRequested(event, valid.sessionId);
+        deps.cancelPendingRemoteStart?.(valid.sessionId,
+          new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
+      }
+      const run = () => performSessionAgentSwitch(deps, request);
       return typeof sessionId === 'string' && sessionId && deps.withSessionLock
         ? deps.withSessionLock(sessionId, run)
         : run();

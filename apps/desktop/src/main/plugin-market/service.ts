@@ -1,3 +1,5 @@
+import { assertConfirmedGhostUninstallOwner } from '../cindy-brain/confirmedGhostUninstall.js';
+import type { ConfirmedGhostUninstall } from '../../shared/ghost.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -1503,12 +1505,20 @@ export class PluginMarketService {
       customSourceNames, unavailableCustomSourceNames: discovery.unavailableSourceNames, organizationAccessError };
   }
 
-  async recommendations(): Promise<PluginMarketItem[]> {
+  async recommendations(pluginIds?: unknown): Promise<PluginMarketItem[]> {
+    const renewalIds = Array.isArray(pluginIds) ? pluginIds : null;
+    if (pluginIds !== undefined && (!renewalIds || renewalIds.length > 3 || !renewalIds.every(isValidPluginResourceId))) {
+      throwIpcError('INVALID_PARAMS', 'Invalid recommendation Plugin IDs');
+    }
+    if (renewalIds?.length === 0) return [];
     if (!getClientEndpoint('pluginApiBaseUrl')) return [];
     const owner = canCaptureMarketOwner() ? captureMarketOwner() : null;
     const key = owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl');
     try {
-      const response = await this.api.recommendations();
+      const plugins = renewalIds
+        ? (await this.api.resolve([...new Set<string>(renewalIds)].map((pluginId, index) => ({ key: String(index), pluginId })))).results
+          .flatMap(row => row.status === 'available' && row.plugin.scope === 'public' && row.plugin.publisherKind === 'official' ? [row.plugin] : [])
+        : (await this.api.recommendations()).plugins;
       if (owner) requireSameMarketOwner(owner);
       else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) return [];
       if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
@@ -1516,8 +1526,11 @@ export class PluginMarketService {
       if (owner) requireSameMarketOwner(owner);
       else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) return [];
       if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
-      return response.plugins.map(plugin => this.toItem(plugin, local));
-    } catch { return []; }
+      return plugins.map(plugin => this.toItem(plugin, local));
+    } catch (error) {
+      if (renewalIds) throw error;
+      return [];
+    }
   }
 
   /**
@@ -2290,6 +2303,7 @@ export class PluginMarketService {
           prompt: context.consent.prompt,
           initiator: context.consent.initiator,
           origin: 'market',
+          communityMarket: plugin.scope === 'public' && plugin.publisherKind === 'personal' ? true : undefined,
         },
         beforeCommitInLock: assertCurrent,
         assertCurrent: assertScope,
@@ -2310,7 +2324,7 @@ export class PluginMarketService {
     );
   }
 
-  async uninstall(pluginId: string): Promise<{ ok: true }> {
+  async uninstall(pluginId: string, confirmed?: ConfirmedGhostUninstall): Promise<{ ok: true }> {
     // 自定义市场插件的卸载走同一账本路径，仅跳过服务端 CUID 形状校验。
     if (!parseCustomMarketPluginId(pluginId) && !isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
@@ -2319,6 +2333,7 @@ export class PluginMarketService {
     const ledger = this.ledgerForOwner(owner);
     return this.withMutation(pluginId, async () => {
       requireSameMarketOwner(owner);
+      if (confirmed) assertConfirmedGhostUninstallOwner(confirmed);
       const data = ledger.read();
       const record = Object.values(data.installations).find(
         (candidate) => candidate.pluginId === pluginId && candidate.installed,
@@ -2334,7 +2349,10 @@ export class PluginMarketService {
       if (installed) {
         await uninstallGhostAndCleanup(installedGhostPhysicalRelId(installed), {
           skipMarketLedger: true,
+          ...(confirmed ? { confirmed } : {}),
         });
+      } else if (confirmed) {
+        throwIpcError('PRECONDITION_FAILED', 'The confirmed plugin installation changed');
       }
       // The package removal is already complete at this point. The session may
       // have changed while the runtime was stopping, so ledger reconciliation

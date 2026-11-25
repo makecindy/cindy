@@ -3,11 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { setTimeout as yieldToIo } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import ts from 'typescript';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import { HOST_ONLY_AGENT_PREFIX, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 const avatarUpload = vi.hoisted(() => vi.fn());
+const videoPut = vi.hoisted(() => vi.fn());
 vi.mock('../../ossPublicUpload.js', () => ({ uploadPublicAsset: avatarUpload }));
 const fixture = vi.hoisted(() => ({ upload: vi.fn<(...args: Parameters<ReturnType<typeof import('../chatServerMedia.js').createChatMedia>['upload']>) => Promise<unknown[]>>(async () => []), download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[], token: 'isolated-test-token', refresh: vi.fn(async () => true), requests: [] as Array<{ url: string; token: string; actor?: string }> }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => fixture.token, refresh: fixture.refresh }));
@@ -15,7 +17,10 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 const replyFiles = vi.hoisted(() => ({ prepare: vi.fn(async (text: string, _sessionId?: string, _assertCurrent?: () => void, _fallbackId?: string | null, _omitOutsideWorkingDir?: boolean): Promise<{ text: string; attachments: unknown[]; omittedFiles?: number }> => ({ text, attachments: [] })) }));
 vi.mock('../chatServerReplyFiles.js', () => ({ prepareChatReplyFiles: replyFiles.prepare }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: fixture.upload, download: fixture.download }) }));
-const replyImages = vi.hoisted(() => vi.fn(async (text: string): Promise<{ text: string; attachments: import('../chatServerMedia.js').ChatUploadAttachment[] }> => ({ text, attachments: [] })));
+const replyImages = vi.hoisted(() => vi.fn<typeof import('../chatServerReplyImages.js').prepareChatReplyImages>(async text => ({ text, attachments: [] })));
+vi.mock('../../cindy-media/taskImageDelivery.js', () => ({ materializeTaskImageTextResult: vi.fn() }));
+vi.mock('../../device-link/remoteMediaPersistentCache.js', () => ({ captureRemoteMediaCacheValidity: () => () => {}, remoteMediaCacheGeneration: () => 0 }));
+vi.mock('../botGroupAttachments.js', () => ({ safeAttachmentFileName: (name: string) => name }));
 vi.mock('../chatServerReplyImages.js', () => ({ prepareChatReplyImages: replyImages }));
 // This computer's group settings; each test starts with none.
 const workspaceSettings = vi.hoisted(() => new Map<string, unknown>());
@@ -43,7 +48,7 @@ vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({
 beforeEach(() => { sendJournal.enabled = false; sendJournal.rows.clear(); });
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: migration.read, save: migration.save }) }));
-vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' },
+vi.mock('electron', () => ({ net: { fetch: videoPut }, app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' },
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }) } }));
 // The real filesystem, except an `lstat` failure a test injects for a delivery file.
 const fsFault = vi.hoisted(() => ({ lstat: null as Error | null }));
@@ -318,6 +323,67 @@ describe('Chat Server result delivery and refresh', () => {
       expect(migration.save).toHaveBeenLastCalledWith(archived, { roomId: archived, sequence: 0, version: 2 });
     } finally {
       mockDb.mockRestore();
+    }
+  });
+
+  it('retries a rate-limited group creation once with the original operation', async () => {
+    const posts: unknown[] = [];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route !== '/conversations' || method !== 'POST') return response(route);
+      posts.push(body);
+      return posts.length === 1
+        ? { status: 429, headers: { 'retry-after': '3' }, body: { error: { code: 'RATE_LIMITED' } } }
+        : { status: 201, body: { id: roomId } };
+    });
+    const result = service.createGroup({ name: 'Fixture group', botIds: [] });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(posts).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toEqual({ ok: true, groupId: roomId });
+    expect(posts).toEqual([expect.objectContaining({ operationId: expect.any(String) }), posts[0]]);
+  });
+
+  it('cancels a pending creation when the owning chat service is disposed', async () => {
+    const posts = vi.fn(() => ({ status: 429, headers: { 'retry-after': '5' }, body: { error: { code: 'RATE_LIMITED' } } }));
+    fixture.handle.mockImplementation((route, method) => route === '/conversations' && method === 'POST' ? posts() : response(route));
+    const result = service.createGroup({ name: 'Fixture group', botIds: [] });
+    await vi.advanceTimersByTimeAsync(10);
+    service.dispose();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect((await result).ok).toBe(false);
+    expect(posts).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves room access denial from optional metadata', async () => {
+    fixture.handle.mockImplementation(route => route.endsWith('/executions')
+      ? { status: 403, body: { error: { code: 'ROLE_REQUIRED' } } } : response(route));
+    expect(await service.getGroup(roomId)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+  });
+
+  it.each(['executions', 'plans', 'execution-failures'])('keeps cold history visible during a %s rate limit', async resource => {
+    let metadataReads = 0;
+    const started = Date.now();
+    const message = { id: execution.source_message_id, seq: '1', content: [{ type: 'text', text: 'Saved message' }],
+      authorId: botId, author: { kind: 'bot' }, createdAt: '2026-10-03T00:00:00Z' };
+    fixture.handle.mockImplementation(route => {
+      if (route.includes('/messages?')) return { body: [message] };
+      if (route.split('?')[0] === `/conversations/${roomId}/${resource}` && ++metadataReads === 1)
+        return { status: 429, headers: { 'retry-after': '3' }, body: { error: { code: 'RATE_LIMITED' } } };
+      return response(route);
+    });
+    const partial = await service.getGroup(roomId);
+    expect(partial).toMatchObject({ ok: true, group: { metadataRetryAt: started + 3_000, messages: [{ id: message.id }] } });
+    vi.setSystemTime(started + 2_999);
+    expect((await service.getGroup(roomId)).ok).toBe(true);
+    expect(metadataReads).toBe(1);
+    vi.setSystemTime(started + 3_000);
+    const complete = await service.getGroup(roomId);
+    expect(complete.ok && complete.group.messages).toMatchObject([{ id: message.id }]);
+    expect(complete.ok && complete.group).not.toHaveProperty('metadataRetryAt');
+    expect(metadataReads).toBe(2);
+    expect(fixture.handle.mock.calls.filter(([route]) => route.startsWith(`/conversations/${roomId}/messages?`))).toHaveLength(1);
+    for (const other of ['executions', 'plans', 'execution-failures'].filter(name => name !== resource)) {
+      expect(fixture.handle.mock.calls.filter(([route]) => route.split('?')[0] === `/conversations/${roomId}/${other}`)).toHaveLength(1);
     }
   });
 
@@ -1286,6 +1352,36 @@ describe('Chat Server result delivery and refresh', () => {
       .toMatchObject({ ok: false, errorCode: 'SERVICE_ERROR' });
     expect(deps.log.warn).toHaveBeenCalledWith('Chat request failed', expect.objectContaining({ route: '/conversations/:id/messages', status: 500, code: 'UPSTREAM_FAILED' }));
     expect(JSON.stringify(vi.mocked(deps.log.warn).mock.calls)).not.toMatch(/private body|secret text/);
+  });
+
+  it.each([
+    { header: '12', delay: 12_000 },
+    { header: 'Mon, 23 Nov 2026 07:00:12 GMT', delay: 12_000 },
+    { header: '0', delay: 1_000 },
+    { header: undefined, delay: 5_000 },
+  ])('passes the HTTP 429 send deadline to the outbox (Retry-After: $header)', async ({ header, delay }) => {
+    vi.setSystemTime(new Date('2026-11-23T07:00:00Z'));
+    let refused = true;
+    fixture.handle.mockImplementation((route, method) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') return refused ? {
+        status: 429, ...(header ? { headers: { 'retry-after': header } } : {}),
+        body: { error: { code: 'RATE_LIMITED' } },
+      } : { body: { id: 'sent-after-429' } };
+      return response(route);
+    });
+    const input = { groupId: roomId, text: 'hello', clientId: 'send-429-test', mentions: { all: false, botIds: [] } };
+    const posts = () => fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST');
+    expect(await service.sendMessage(input)).toMatchObject({ ok: false, retryAt: Date.now() + delay, postRateLimited: true });
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]?.[2]).toMatchObject({ operationId: input.clientId });
+    vi.setSystemTime(Date.now() + delay);
+    refused = false;
+    const sent = await service.sendMessage(input);
+    expect(sent).toEqual({ ok: true, messageId: 'sent-after-429' });
+    expect(await service.sendMessage(input)).toEqual(sent);
+    expect(posts()).toHaveLength(2);
+    expect(posts()[1]?.[2]).toEqual(posts()[0]?.[2]);
   });
 
   describe('引用回复', () => {
@@ -2652,7 +2748,7 @@ describe('Chat Server result delivery and refresh', () => {
       expect(fixture.urls.some(url => url.includes('/mask/'))).toBe(false);
       expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Group chat·Cindy · Room', projectDir: null });
       const [input] = dispatched();
-      expect(input).toMatchObject({ targetSessionId: 'group-task-1', resumeWithStoredPermissionMode: true,
+      expect(input).toMatchObject({ groupAssistantTask: true, targetSessionId: 'group-task-1', resumeWithStoredPermissionMode: true,
         message: `@Cindy please fix it\n\n${t('bots.groupChat.assistant.groupRecent')}\nAnn：The build is red again`,
         origin: { kind: 'session', senderSessionId: '', groupRequest: { groupId: roomId, groupName: 'Room', speakerId: selfId, speakerName: 'Chris' } } });
       expect(input!.persistedContent).toBe(input!.message);
@@ -3146,6 +3242,65 @@ describe('Chat Server result delivery and refresh', () => {
     });
     await start();
   }
+
+  // #11712, unit: real settlement, reply preparation and upload with a playable repository MP4.
+  // Isolate storage and transport. Both supported reply forms must seal the original bytes as video.
+  it.each(['component', 'file', 'revoked'] as const)('checks delivery of a playable MP4 (%s)', async form => {
+    const file = fileURLToPath(new URL('../../../renderer/assets/wallpapers/cindy-studio.mp4', import.meta.url));
+    const bytes = await realReplyFs.readFile(file);
+    const { createHash } = await import('node:crypto');
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const url = 'cindy-media://blobs/' + hash + '.mp4';
+    const rich = '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'clip', kind: 'video', props: { src: url } }) + '\n```';
+    const resultText = form === 'file' ? '[Clip](./cindy-studio.mp4)' : rich;
+    const actual = await vi.importActual<typeof import('../chatServerReplyImages.js')>('../chatServerReplyImages.js');
+    const blob = await import('../../cindy-media/blobStore.desktop.js');
+    const ledger = await import('../../cindy-media/ledger.js');
+    const canRead = vi.spyOn(ledger, 'sessionCanRead').mockResolvedValue(true);
+    const resolve = vi.spyOn(blob, 'resolveSafe').mockReturnValue({ absPath: file, mimeType: 'video/mp4', hash });
+    const read = vi.spyOn(blob, 'readFile').mockResolvedValue({ buffer: bytes, mimeType: 'video/mp4' });
+    const memberRoot = await realReplyFs.mkdtemp(path.join(os.tmpdir(), 'group-video-member-'));
+    const ownerRoot = vi.spyOn(await import('../../appSessionState.js'), 'ownerScopedUserDataPath').mockReturnValue(memberRoot);
+    try {
+      replyScope.snapshot = { client: { drizzle: { select: () => ({ from: () => ({ where: () => ({
+        limit: async () => [{ workingDir: path.dirname(file), remoteHostId: null, status: 'active', clearedAt: null }],
+      }) }) }) } } };
+      replyFiles.prepare.mockImplementation((text, sessionId, check) => realReplyFiles.prepareChatReplyFiles(text, sessionId!, check!));
+      replyImages.mockImplementation(actual.prepareChatReplyImages);
+      const { createChatMedia } = await vi.importActual<typeof import('../chatServerMedia.js')>('../chatServerMedia.js');
+      const api = vi.fn().mockResolvedValueOnce({ id: 'clip', uploadUrl: 'https://upload.example.test/clip' }).mockResolvedValueOnce({});
+      videoPut.mockResolvedValueOnce(new Response(null, { status: 200 }));
+      fixture.upload.mockImplementation(createChatMedia(api, () => true, 'https://chat.example.test').upload);
+      await startFileReply();
+      if (form === 'revoked') {
+        const previous = fixture.handle.getMockImplementation()!;
+        fixture.handle.mockImplementation((route, method, body) => route.endsWith('/members')
+          ? { body: [] } : previous(route, method, body));
+      }
+      await service.settleLaneTurn({ ...terminal, resultText });
+      if (form === 'revoked') {
+        expect(deliveries()).toHaveLength(0);
+        expect(read).not.toHaveBeenCalled();
+        expect(api).not.toHaveBeenCalled();
+        return;
+      }
+      expect(api.mock.calls[0]?.[2]).toMatchObject({ type: 'video/mp4', size: bytes.length });
+      const uploaded = new Uint8Array(videoPut.mock.lastCall?.[1].body);
+      expect(Buffer.from(uploaded).equals(bytes)).toBe(true);
+      expect(deliveries()[0]?.[2].content).toContainEqual({ type: 'media', mediaId: 'clip', caption: 'cindy-studio.mp4' });
+      const memberApi = vi.fn().mockResolvedValue({ name: 'cindy-studio.mp4', type: 'video/mp4', size: uploaded.length, url: 'https://download.example.test/clip' });
+      videoPut.mockResolvedValueOnce(new Response(uploaded));
+      const received = await createChatMedia(memberApi, () => true, 'https://chat.example.test').download('room', 'clip');
+      expect(memberApi).toHaveBeenCalledWith('/conversations/room/media/clip');
+      expect(received.mimeType).toBe('video/mp4');
+      expect((await realReplyFs.readFile(received.path!)).equals(bytes)).toBe(true);
+    } finally {
+      replyScope.snapshot = null;
+      canRead.mockRestore(); resolve.mockRestore(); read.mockRestore(); videoPut.mockReset();
+      ownerRoot.mockRestore();
+      await realReplyFs.rm(memberRoot, { recursive: true, force: true });
+    }
+  });
 
   it('delivers a PDF reply and retries a lost completion ACK without another upload', async () => {
     const file = { id: 'pdf', name: 'report.pdf', category: 'file', mimeType: 'application/pdf', size: 0, path: null, url: null };
@@ -4962,6 +5117,53 @@ describe('Chat Server result delivery and refresh', () => {
     expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'ack', scope: `conversation:${roomId}`, cursor: '43' }));
   });
 
+  it.each([
+    { header: '20', delay: 20_000 },
+    { header: undefined, delay: 15_000 },
+  ])('coalesces snapshot reads and parks a throttled room reset (Retry-After: $header)', async ({ header, delay }) => {
+    expect((await service.getGroup(roomId)).ok).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const socket = fixture.sockets[0]!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
+    const close = vi.spyOn(socket, 'close');
+    const snapshotReads: string[] = [];
+    let rejectRead = true;
+    fixture.handle.mockImplementation(route => {
+      if (!route.endsWith('/snapshot')) return response(route);
+      snapshotReads.push(route);
+      return rejectRead
+        ? { status: 429, ...(header ? { headers: { 'retry-after': header } } : {}), body: { error: { code: 'RATE_LIMITED' } } }
+        : { body: { ...response(route).body, cursor: '42' } };
+    });
+    const emitReset = () => socket.emit('message', JSON.stringify({
+      type: 'scope_error', scope: `conversation:${roomId}`, error: { code: 'RESET_REQUIRED' },
+    }));
+    const scope = `/conversations/${roomId}/snapshot`;
+    const detailReads = Promise.all(Array.from({ length: 20 }, () => service.getGroup(roomId)));
+    emitReset();
+    expect((await detailReads).every(result => !result.ok)).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(snapshotReads).toEqual([scope]);
+
+    emitReset();
+    const before = fixture.handle.mock.calls.length;
+    expect((await service.getGroup(roomId)).ok).toBe(false);
+    expect(fixture.handle.mock.calls.slice(before).filter(([route]) => route.startsWith(`/conversations/${roomId}/`))).toEqual([]);
+    expect((await service.getGroup('80000000-0000-4000-8000-000000000003')).ok).toBe(false);
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(snapshotReads).toHaveLength(1);
+    expect(close).not.toHaveBeenCalled();
+
+    rejectRead = false;
+    await vi.advanceTimersByTimeAsync(1);
+    expect(snapshotReads).toEqual([scope, scope]);
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `conversation:${roomId}`, after: '42' }));
+    expect(close).not.toHaveBeenCalled();
+    expect(fixture.sockets).toEqual([socket]);
+  });
+
   it.each(['before-commit', 'after-commit'])('retries an identical result after a lost response (%s) without rerunning the Agent', async loss => {
     const committed = new Map<string, unknown>();
     let attempts = 0;
@@ -5255,6 +5457,56 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(150);
     expect(deps.onChanged).toHaveBeenCalledWith({ groupId: roomId, change: 'messages' }, undefined);
     expect(deps.onChanged).toHaveBeenCalledWith({ groupId: '', change: 'messages' }, undefined);
+  });
+
+  it('keeps the ready socket and delays passive reads after a throttled list sync', async () => {
+    const syncs: number[] = [];
+    fixture.handle.mockImplementation(route => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { conversationListStateVersion: 1 } } };
+      if (route.startsWith('/conversation-list-state?')) {
+        syncs.push(Date.now());
+        if (syncs.length === 1) return { status: 429, headers: { 'retry-after': '120' }, body: { error: { code: 'RATE_LIMITED' } } };
+        return { body: [] };
+      }
+      if (route.startsWith('/conversations?')) return { body: [] };
+      return response(route);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    const socket = fixture.sockets[0]!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    const close = vi.spyOn(socket, 'close');
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncs).toHaveLength(1);
+    expect(await service.listGroups()).toMatchObject({ ok: false });
+    await vi.advanceTimersByTimeAsync(119999);
+    expect(syncs).toHaveLength(1);
+    expect(close).not.toHaveBeenCalled();
+    expect(fixture.sockets).toEqual([socket]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(syncs).toHaveLength(2);
+    expect(await service.listGroups()).toMatchObject({ ok: true });
+  });
+
+  it('backs off successive sidebar reads when an individual room summary is throttled', async () => {
+    let attempts = 0;
+    fixture.handle.mockImplementation(route => {
+      if (route.startsWith('/conversations?')) return { body: [room(roomId)] };
+      if (route.endsWith('/executions') && ++attempts === 1)
+        return { status: 429, body: { error: { code: 'RATE_LIMITED' } } };
+      return response(route);
+    });
+    expect(await service.listGroups()).toMatchObject({ ok: false });
+    const listReads = () => fixture.handle.mock.calls.filter(([route]) => route.startsWith('/conversations?')).length;
+    expect(await service.listGroups()).toMatchObject({ ok: false });
+    await vi.advanceTimersByTimeAsync(59999);
+    expect(await service.listGroups()).toMatchObject({ ok: false });
+    expect(listReads()).toBe(1);
+    expect(attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await service.listGroups()).toMatchObject({ ok: true });
+    expect(listReads()).toBe(2);
+    expect(attempts).toBe(2);
   });
 
   it('reads subsequent group pages even when the first page contains only invitations', async () => {

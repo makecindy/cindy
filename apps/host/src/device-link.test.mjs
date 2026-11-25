@@ -123,6 +123,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   });
   await once(wss, 'listening');
   const url = `ws://127.0.0.1:${wss.address().port}`;
+  const closedSessions = [];
+  const metaPatches = [];
   const service = createHostService({
     profileHold: () => held,
     // One USD and one CNY quote: the device-link v1 projection keeps only USD (usageHandlers.ts).
@@ -138,6 +140,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     setSessionPlanMode: async () => ({}),
     listSessions: options => readHostSessionList(db.drizzle, options),
     getSession: id => readHostSession(db.drizzle, id),
+    updateSession: async (id, patch, options) => { metaPatches.push({ id, patch, options }); return { id, ...patch }; },
     messagesList: (id, limit) => readMessagesList(id, { limit }),
     setSessionModel: async (id, model) => {
       if (model === 'release-refusal') throw holdError(releaseFailure());
@@ -145,7 +148,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       modelChoices.push({ id, model, origin: readDeviceLinkModelSelectionOrigin() });
       return { deferred: true };
     },
-    input: { enqueue: async (sessionId, item) => {
+    input: {
+      projection: async sessionId => ({ sessionId, pendingQueue: [], turnInProgress: false, clearBoundaryMs: null }),
+      enqueue: async (sessionId, item) => {
       writes++; source = readDeviceLinkInvokeSourceDevice();
       await hold;
       const projection = { sessionId, pendingQueue: [item], turnInProgress: false };
@@ -159,7 +164,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     worktreeCreates.push({ request, options });
     return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
   } };
-  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', getWsUrl: () => url,
+  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
     send: async (sessionId, message, createOpts, sendOpts) => ({ accepted: true, sessionId, message, createOpts, sendOpts }),
@@ -180,6 +185,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       created++;
       throw new Error('Not part of this transport test');
     },
+    closeRuntimeSession: async id => { closedSessions.push(id); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
     profileHold: () => held,
     isSessionClaimed: async sessionId => {
@@ -267,6 +273,29 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(sent.result.message, 'hello');
   assert.equal(sent.result.sendOpts.expectedClearBoundaryMs, null);
   assert.equal(sent.result.sendOpts.expectedInputGeneration, 0);
+  const inTurn = await clients[0].invoke('host', { channel: 'maker:session-in-turn', args: ['task'] });
+  assert.equal(inTurn.ok, true, JSON.stringify(inTurn));
+  assert.equal(inTurn.result, false);
+  const projection = await clients[0].invoke('host', { channel: 'maker:input:get-projection', args: ['task'] });
+  assert.equal(projection.ok, true, JSON.stringify(projection));
+  assert.equal(projection.result.sessionId, 'task');
+  assert.equal(projection.result.turnInProgress, false);
+  assert.equal(projection.result.inputDeliveryVersion, undefined);
+  const removalPreview = await clients[0].invoke('host', { channel: 'worktree:removal-preview', args: ['task'] });
+  assert.deepEqual(removalPreview, { ok: true, result: { hasWorktree: false, dirty: false } });
+  const closed = await clients[0].invoke('host', { channel: 'maker:close-session', args: ['task'] });
+  assert.equal(closed.ok, true, JSON.stringify(closed));
+  assert.deepEqual(closedSessions, ['task']);
+  const archived = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'archived', pinnedAt: null }] });
+  assert.deepEqual(archived, { ok: true, result: { id: 'task', status: 'archived', pinnedAt: null } });
+  assert.deepEqual(metaPatches.at(-1), { id: 'task', patch: { status: 'archived', pinnedAt: null }, options: undefined });
+  const deleted = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'deleted', deleteTarget: 'task' }] });
+  assert.deepEqual(deleted, { ok: true, result: { id: 'task', status: 'deleted' } });
+  assert.deepEqual(metaPatches.at(-1), { id: 'task', patch: { status: 'deleted' }, options: { deleteTarget: 'task' } });
+  const badField = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { workingDir: '/tmp' }] });
+  assert.equal(badField.ok, false);
+  const badDiscard = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'archived', discardWorktreeChanges: true }] });
+  assert.equal(badDiscard.ok, false);
   const chosen = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-draft-pref', args: [{
     agent: 'pi', providerId: 'inferx', modelId: 'kimi-k3.1-pro', active: true,
     markModelChoice: true, selectDraftAgent: true, effort: 'max', fast: true, thinking: false,
@@ -638,11 +667,12 @@ test('Host device-link refuses provider-share guests and the platform features i
   });
   await once(wss, 'listening');
   const url = `ws://127.0.0.1:${wss.address().port}`;
-  host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => url,
+  host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async route => { reached.push(route); return { status: 404, body: { message: `unexpected ${route}` } }; },
     subscribe: () => () => {},
     createRuntimeSession: async () => { throw new Error('Not part of this test'); },
+    closeRuntimeSession: async () => { throw new Error('Not part of this test'); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
   });
   await host.setEnabled(true);
@@ -754,10 +784,10 @@ test('keeps compatibility app callers alive when only the Agent-Net connection d
   let primary, compatibility;
   t.mock.method(AgentNetWorkerSocket, 'open', async () => (primary = wire()));
   const host = createHostDeviceLink({
-    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
-    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
     createWebSocket: () => (compatibility = wire()),
     releaseAuthCaller: caller => releasedAuth.push(caller),
     mcpApps: { invoke: async caller => caller, releaseCaller: async caller => { releasedApps.push(caller); } },
@@ -832,10 +862,10 @@ test('Agent-Net control refuses profile hold and rechecks the owner inside the s
   let held = holdMessage;
   let canRegister = false;
   const host = createHostDeviceLink({
-    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => null, canRegister: () => canRegister, profileHold: () => held,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
-    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
     agentNet: { base: () => null, subject: () => null, deviceId: () => null },
   });
   const server = createHostServer({ instanceId: 'fixture', token: 'fake-token',
@@ -905,7 +935,7 @@ test('cindy-host remote rejoin reports why it could not rejoin, and asks the off
     profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => null, canRegister: () => true, profileHold: () => held,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
-    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
     agentNet: { base: () => null, subject: () => null, deviceId: () => null },
     officialDeviceLinkFetch: async (route, opts) => { requests.push([route, opts]); return answer(); },
   });

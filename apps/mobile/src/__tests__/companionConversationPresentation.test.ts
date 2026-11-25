@@ -2,7 +2,8 @@ import { redactMessageRowForSharedGuest } from '../../../desktop/src/main/device
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
 import { expect, it } from 'vitest';
 import { buildMobileMessageRenderItems } from '../session/messageRenderModel';
-import { companionConversationItems } from '../session/companionConversationPresentation';
+import { companionConversationItems, companionProcessItems } from '../session/companionConversationPresentation';
+import { findMobileRenderItemKeyByClientId } from '../session/messageScroll';
 import type { RemoteMessage } from '../session/types';
 const row = (id: string, role: RemoteMessage['role'], content: unknown, agentMeta: RemoteMessage['agentMeta'] = null): RemoteMessage => ({
   id, clientId: id, sessionId: 'chat', role, content, agentMeta, toolUseId: null, createdAt: new Date(1000 + Number(id.replace(/\D/g, '') || 0)).toISOString(),
@@ -11,6 +12,32 @@ const bodies = (messages: RemoteMessage[], running: boolean) => companionConvers
 const base = [row('u0', 'user', 'Help'), row('a1', 'assistant', 'Public progress'),
   row('t2', 'tool_use', { toolName: 'Read', toolUseId: 't', input: { path: 'private' } }),
   row('r3', 'tool_result', { toolUseId: 't', result: 'technical details' })];
+
+// Unit regression for #7594: two persisted idle-gap rows suffice to make an expanded
+// work group show duplicates. Exercise normalization, projection and focus lookup.
+it('folds repeated legacy recovery cards and preserves each source as a focus target', () => {
+  const card = (id: string, handoff = 'Same handoff', reason = 'idle-gap', coverage = 'complete') =>
+    row(id, 'assistant', '', { contextRebuild: { reason, handoff, handoffCoverage: coverage } });
+  const lateCard = { ...card('late9'), createdAt: new Date(1010 + HISTORY_GAP_SPLIT_MS).toISOString() };
+  const source = [
+    card('old1'), card('old2'), row('u3', 'user', 'New topic'),
+    card('old4'), card('old5'), card('old6', 'Different handoff'),
+    card('old7', 'Different handoff', 'idle-gap', 'condensed'),
+    card('old8', 'Different handoff', 'context-overflow', 'condensed'),
+    card('old9'), lateCard,
+  ];
+  const raw = buildMobileMessageRenderItems(source);
+  const items = companionProcessItems(raw, false);
+  const children = items.flatMap(item => item.type === 'work_group' ? item.children : []);
+  expect(children.flatMap(item => item.type === 'message' ? [item.message.source.clientId] : []))
+    .toEqual(['old2', 'old5', 'old6', 'old7', 'old8', 'old9', 'late9']);
+  expect(items.filter(item => item.type === 'work_group')).toHaveLength(3);
+  expect(items.some(item => item.type === 'message' && item.message.body === 'New topic')).toBe(true);
+  expect(findMobileRenderItemKeyByClientId(items, 'old1')).toBe(findMobileRenderItemKeyByClientId(items, 'old2'));
+  expect(findMobileRenderItemKeyByClientId(items, 'old2')).not.toBeNull();
+  expect(findMobileRenderItemKeyByClientId(items, 'old4')).toBe(findMobileRenderItemKeyByClientId(items, 'old5'));
+  expect(raw.filter(item => item.type === 'message' && item.message.systemCardType === 'context-rebuild')).toHaveLength(9);
+});
 // B2B host metadata must survive native history projection without exposing internal prose.
 it.each([true, false])('keeps internal B2B prose hidden in streaming and reloaded companion history (%s)', running => {
   const internal = row('a1', 'assistant', 'Internal reply', { botPrivateReply: true, turnCompleted: true });

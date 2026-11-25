@@ -38,7 +38,7 @@ import {
   type MenubarView,
 } from '../../shared/menubarQuota.js';
 
-export type MenubarHarness = 'claude-code' | 'codex' | 'pi';
+export type MenubarHarness = 'claude-code' | 'codex' | 'pi' | 'acp';
 export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go' | 'zhipu' | 'plugin' | 'shared';
 
 export interface MenubarWindowInput {
@@ -1205,6 +1205,7 @@ class Builder {
   }
 
   private harnessName(harness: MenubarHarness): string {
+    if (harness === 'acp') return 'ACP';
     return this.t(`harness.${harness}`);
   }
 

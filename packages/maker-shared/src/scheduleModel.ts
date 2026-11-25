@@ -617,6 +617,8 @@ export interface FailedScheduleRunSnapshot {
   finishedAt?: number;
   scheduleId?: string;
   failureKind?: ScheduleFailureKind;
+  /** Only set when a stored hook result confirms that the run was blocked before execution. */
+  preRunBlocked?: true;
   /** Optional on older hosts; error content is only disclosed on demand. */
   errorMsg?: string;
   /** The check script belongs to a plugin that is not installed or not enabled. */

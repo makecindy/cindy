@@ -28,6 +28,10 @@ export interface CodexRateLimitAccountIdentity {
 /** Host callbacks required by the Codex reset-credit control-plane service. */
 export interface CodexRateLimitResetServiceDeps {
   readRateLimits(): Promise<AccountRateLimitsResponse>;
+  readAccountAndRateLimits?(): Promise<{
+    identity: CodexRateLimitAccountIdentity;
+    response: AccountRateLimitsResponse;
+  } | undefined>;
   consumeResetCredit(
     params: ConsumeAccountRateLimitResetCreditParams,
     identity?: CodexRateLimitAccountIdentity,
@@ -40,7 +44,7 @@ export interface CodexRateLimitResetServiceDeps {
 
 /** Read/consume façade exposed to IPC; one instance owns the bounded offer registry. */
 export interface CodexRateLimitResetService {
-  read(): Promise<MobileCodexRateLimitsResult>;
+  read(automatic?: boolean): Promise<MobileCodexRateLimitsResult>;
   consume(idempotencyKey: string, stillAuthorized?: () => boolean): Promise<MobileCodexRateLimitResetResult>;
 }
 
@@ -218,12 +222,13 @@ export function createCodexRateLimitResetService(
     }
   };
 
-  const read = async (): Promise<MobileCodexRateLimitsResult> => {
+  const read = async (automatic = false): Promise<MobileCodexRateLimitsResult> => {
     pruneOffers();
     // Auth may be replaced while app-server is answering. Bracket the RPC with identity
     // reads so an old-account snapshot can never be labelled or offered as the new account.
-    const identityBeforeRead = await deps.readAccountIdentity();
-    const response = await deps.readRateLimits();
+    const combined = automatic ? await deps.readAccountAndRateLimits?.() : undefined;
+    const identityBeforeRead = combined ? combined.identity : await deps.readAccountIdentity();
+    const response = combined ? combined.response : await deps.readRateLimits();
     const identity = await deps.readAccountIdentity();
     if (!sameAccount(identityBeforeRead, identity)) {
       throw new CodexRateLimitResetRejectedError(

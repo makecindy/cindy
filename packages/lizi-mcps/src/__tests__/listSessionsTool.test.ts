@@ -24,6 +24,7 @@ function historyWithSessions(): XdtHelperHistoryDeps {
           {
             id: "session-1",
             title: "Busy",
+            pinnedAt: 1,
             workingDir: "/repo",
             agentKind: "codex",
             workspaceKind: "project",
@@ -40,6 +41,7 @@ function historyWithSessions(): XdtHelperHistoryDeps {
           {
             id: "session-2",
             title: "Idle",
+            pinnedAt: null,
             workingDir: "/repo",
             agentKind: "cc",
             workspaceKind: "project",
@@ -101,8 +103,8 @@ describe("list_sessions queuedCount", () => {
     expect(payload).toMatchObject({
       ok: true,
       sessions: [
-        { id: "session-1", messageCount: 3, queuedCount: 2 },
-        { id: "session-2", messageCount: 1, queuedCount: 0 },
+        { id: "session-1", messageCount: 3, queuedCount: 2, pinned: true },
+        { id: "session-2", messageCount: 1, queuedCount: 0, pinned: false },
       ],
     });
     expect(sessionQueue.listSessionQueuedCounts).toHaveBeenCalledWith([

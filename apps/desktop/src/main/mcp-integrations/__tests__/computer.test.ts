@@ -11,6 +11,7 @@ import { readForRecovery } from '../../../../../../packages/lizi-mcps/src/comput
 import { HumanDesktopInput, HUMAN_INPUT_QUIET_MS } from '../../remote-desktop/inputOwnership';
 import * as inputOwnership from '../../remote-desktop/inputOwnership';
 import { runPluginHostToolCall } from '../hostToolCaller.js';
+import { readComputerStatusForSettings } from '../../maker-ipc/computerStatusHandler.js';
 
 const {
   existsSyncMock,
@@ -158,6 +159,7 @@ interface MockSpawnOptions {
   exitCode?: number;
   error?: Error;
   stdinError?: Error;
+  keepOutputOpen?: boolean;
 }
 
 const driverStdinWrites: string[] = [];
@@ -172,8 +174,8 @@ function mockDriverSpawn(options: MockSpawnOptions) {
       unref: ReturnType<typeof vi.fn>;
     };
     child.stdin = new PassThrough();
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
     child.kill = vi.fn();
     child.unref = vi.fn();
     child.stdin.on('data', (chunk: Buffer) => {
@@ -190,7 +192,8 @@ function mockDriverSpawn(options: MockSpawnOptions) {
       }
       if (options.stdout) child.stdout.emit('data', Buffer.from(options.stdout));
       if (options.stderr) child.stderr.emit('data', Buffer.from(options.stderr));
-      child.emit('close', options.exitCode ?? 0, null);
+      child.emit('exit', options.exitCode ?? 0, null);
+      if (!options.keepOutputOpen) child.emit('close', options.exitCode ?? 0, null);
     });
 
     return child;
@@ -344,6 +347,56 @@ function mockWorkspaceRootExists(workspaceRoot: string): void {
 }
 
 describe('computer mcp integration', () => {
+  // #12173, unit tier through the Settings status handler. Existing fixtures
+  // close with the driver; a descendant can hold the pipes after a zero exit.
+  const runningStatus = 'Cua Driver daemon is running\r\n  socket: \\\\.\\pipe\\cua-driver\r\n  pid: 4242\r\n';
+  const statusWithDetails = runningStatus + [
+    '  permission mode: standard (built_in_default)',
+    '  user policy: configured=false, active=false, valid=false',
+    '  managed policy: configured=false, active=false, valid=false',
+    '  authorization host: unavailable (unavailable)',
+    '  capability manifest: configured=false, approved_at_startup=false, valid=false',
+    '',
+  ].join('\r\n');
+  it.each([
+    { scenario: 'valid status after exit', stdout: runningStatus, exitCode: 0, running: true },
+    { scenario: 'status with complete diagnostics after exit', stdout: statusWithDetails, exitCode: 0, running: true },
+    { scenario: 'status with incomplete diagnostics after exit', stdout: statusWithDetails.slice(0, -4), exitCode: 0, running: false },
+    { scenario: 'short status after exit', stdout: 'Cua Driver daemon is running\n', exitCode: 0, running: false },
+    { scenario: 'corrupt status after exit', stdout: runningStatus.replace('4242', 'broken'), exitCode: 0, running: false },
+    { scenario: 'nonzero exit with running text', stdout: runningStatus, exitCode: 1, running: false },
+    { scenario: 'live driver with running text', stdout: runningStatus, running: false },
+    { scenario: 'version pipe held open', stdout: 'cua-driver 0.54.0\n', exitCode: 0, running: false, version: true },
+  ])('handles $scenario at the original probe deadline', async ({ stdout, exitCode, running, version }) => {
+    vi.useFakeTimers();
+    try {
+      if (!version) mockDriverSpawn({ stdout: 'cua-driver 0.54.0\n' });
+      if (exitCode === undefined) {
+        mockNeverSettlingSpawn();
+      } else {
+        mockDriverSpawn({ stdout, exitCode, keepOutputOpen: true });
+      }
+      const pending = readComputerStatusForSettings({ skipPermissionProbe: true }, {
+        getStatus: getComputerDriverStatus,
+        refreshPermissionGuide: vi.fn(),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const child = spawnMock.mock.results.at(-1)?.value;
+      if (exitCode === undefined) child.stdout.emit('data', Buffer.from(stdout));
+      await vi.advanceTimersByTimeAsync(3_000);
+      const result = await pending;
+      expect(result).toMatchObject({ installed: !version, daemonRunning: running });
+      if (version) {
+        expect(result.error).toContain('timed out after 3000ms');
+      } else {
+        expect(result.daemonStatus).toBe(running ? stdout.trim() : 'cua-driver timed out after 3000ms');
+      }
+      if (exitCode === undefined) expect(child.kill).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // #9887: window-bound tokens cannot address status items. Tier unit: exercise
   // production dispatch with desktop captures, which existing window tests lack.
   it('requires fresh desktop evidence and yields after other input or failed capture', async () => {
