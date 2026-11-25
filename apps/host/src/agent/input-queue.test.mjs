@@ -4271,6 +4271,15 @@ const deviceLinkCreate = (r, groups = {}, stored = {}) => {
 test('route admission: a Device Link create is refused before its row, or created on the rerouted copy', { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
   const { ports, rows, started, input } = deviceLinkCreate(r);
+  // Real Device Link create entry, unit fixture: with no installed Agent
+  // graph the phone receives the existing precondition envelope, before
+  // model admission or any task row. The other cases have a running graph.
+  await assert.rejects(createHostRuntimeSession({ ...ports, getAgentGraph: () => null }, input('prov-a')), {
+    code: 'PRECONDITION_FAILED',
+    message: /^\[PRECONDITION_FAILED\] binary_not_ready: No Agent engine is available/,
+  });
+  assert.deepEqual(rows, []);
+  assert.deepEqual(started, []);
   r.views.current = withDisabledCopy(r.views.current, 'claude-code', 'prov-a', 'big');
   await assert.rejects(createHostRuntimeSession(ports, input('prov-a')), /\[INVALID_PARAMS\] provider "prov-a" is disabled for model "big"/);
   assert.equal(rows.length, 0, 'no task row');
@@ -4327,6 +4336,30 @@ test('Device Link create: a provider group task is refused with no task row and 
     { message: '[UNSUPPORTED_CAPABILITY] Host does not yet support provider groups' });
   assert.equal(rows.length, 0, 'no task row');
   assert.equal(started.length, 0, 'no runtime');
+});
+
+// Unit through Device Link create with owner-scoped pool fixtures: the desktop's
+// canonical mixed group can lack an outer group row. Starting it on Host would
+// otherwise silently choose a different credential from the bound Key.
+test('Device Link create refuses an OpenAI account pool and a detached Key history before start', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const key = 'fork-host-fixture-key';
+  const group = 'fork-host-fixture-group';
+  const { apiKeyMemberForConnection, saveApiKeyPoolMembers, restoreStandaloneApiKeyMember } =
+    await import('../../../desktop/src/main/subscription-accounts/apiKeyMembers.ts');
+  const { writeAccountBindings } = await import('../../../desktop/src/main/subscription-accounts/store.ts');
+  const { ports, rows, started, input } = deviceLinkCreate(r);
+  await saveApiKeyPoolMembers(group, [{ connectionId: key }], () => {});
+  await assert.rejects(createHostRuntimeSession(ports, input(group)), /UNSUPPORTED_CAPABILITY/);
+  const member = apiKeyMemberForConnection(key);
+  await restoreStandaloneApiKeyMember(member, () => {});
+  await writeAccountBindings(['native:detached-pool-history'], 'openai', member.id, group);
+  const detached = deviceLinkCreate(r, {}, { 'detached-old': { status: 'active', workingDir: process.cwd(),
+    agentKind: 'cc', model: 'big', providerId: group, sdkSessionId: 'detached-pool-history' } });
+  await assert.rejects(createHostRuntimeSession(detached.ports, { ...input('prov-a'), id: 'detached-old' }),
+    /UNSUPPORTED_CAPABILITY/);
+  assert.deepEqual([rows.length, started.length, detached.rows.length, detached.started.length], [0, 0, 0, 0]);
+  assert.doesNotThrow(() => ports.assertProviderExecutionSupported('fresh-direct', key));
 });
 
 // Rule (sessionAgentSwitchHandler.ts: a switch back to an engine whose native session is parked starts

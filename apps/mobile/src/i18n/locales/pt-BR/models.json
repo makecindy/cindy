@@ -160,7 +160,6 @@
     "genericName": "Mecanismo de plugin",
     "defaultModel": "Modelo padrão",
     "unavailable": "{{engine}} está indisponível",
-    "unavailableWithHint": "{{engine}} está indisponível: {{hint}}",
-    "worktreeUnsupported": "Os mecanismos de plugins ainda não conseguem iniciar tarefas em uma Worktree. Desative a Worktree para enviar."
+    "unavailableWithHint": "{{engine}} está indisponível: {{hint}}"
   }
 }

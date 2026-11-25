@@ -654,6 +654,8 @@ function snoozeLabel(until: number): string {
  * Inbox never uses unread as a settled marker. Automation runs are individually actionable.
  * A teammate's main conversation is one row placed by whose turn it is and left out while idle
  * and read (2026-11-20 user decision); teammate rows lead their section, most recent first.
+ * Tasks within a section follow time alone, newest activity first: unread or waiting decides the
+ * section, never the order inside it (2026-11-25 user decision). Snoozed rows wake soonest first.
  */
 export function buildInboxHomeSections(
   home: MobileHomePresentation,
@@ -699,7 +701,8 @@ export function buildInboxHomeSections(
     data.sort((a, b) => a.kind === 'session' && b.kind === 'session'
       ? group === 'snoozed'
         ? taskSnoozeUntil(a.item.session) - taskSnoozeUntil(b.item.session)
-        : compareSessionItemsByPriority(a.item, b.item, ctx)
+        : activityMsFromIso(b.item.lastActivityAt) - activityMsFromIso(a.item.lastActivityAt)
+          || compareSessionListStrings(a.item.session.id, b.item.session.id)
       : 0);
     const listed = teammates.filter(entry => teammateInboxSection(entry.status, entry.snooze, nowMs) === group)
       .sort((a, b) => (group === 'snoozed' ? taskSnoozeUntil(a.snooze ?? {}) - taskSnoozeUntil(b.snooze ?? {}) : 0)

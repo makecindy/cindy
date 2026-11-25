@@ -290,14 +290,22 @@ export class NativeTransport implements Transport {
     this.candidateList = next;
     for (const channel of this.channels.values()) channel.announceCandidates();
   }
-  async configureUdpServer(server: string): Promise<void> {
+  async configureUdpServer(server: string, extraStunServers: readonly string[] = []): Promise<void> {
     if (this.closed || !this.enhanced) return;
     this.relayUdpServer = server;
     // The next poll hands the engine the relay's UDP credentials: now, not when the engine next has something for JS.
     this.wake();
-    await this.startStun([server]);
+    await this.configureStunServers([server, ...extraStunServers]);
   }
-  private async startStun(servers = (this.options.stunServers ?? []).slice(0, MAX_STUN_SERVERS)): Promise<void> {
+  async configureStunServers(servers: readonly string[]): Promise<void> {
+    if (this.closed || !this.enhanced) return;
+    const unique = [...new Set(servers.map(s => s.trim()).filter(Boolean))].slice(0, MAX_STUN_SERVERS);
+    if (!unique.length) return;
+    this.stunServers = unique;
+    await this.startStun(unique);
+  }
+  private stunServers: string[] | null = null;
+  private async startStun(servers = (this.stunServers ?? this.options.stunServers ?? []).slice(0, MAX_STUN_SERVERS)): Promise<void> {
     if (!servers.length || !this.identity.udpPort || !this.supports('stun')) return;
     await this.call({ op: 'stun', servers }).catch(() => undefined);
   }

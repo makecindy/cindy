@@ -127,7 +127,9 @@ export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorit
       // An idle, read teammate stays in the teammate section, outside the inbox.
       if (section) result.get(section)!.push({ kind: 'teammate', entry });
     }
-    for (const session of sortSessionsForMainList([...sessions], 'priority', inboxContext)) {
+    // Within a section rows follow time alone, newest activity first: unread or waiting decides the
+    // section, never the order inside it (2026-11-25 user decision).
+    for (const session of sortSessionsForMainList([...sessions], 'recency')) {
       if (session.status === 'deleted') continue;
       const section = taskInboxSection(
         session,
