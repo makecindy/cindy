@@ -100,13 +100,26 @@ describe('session state queries', () => {
     },
   );
 
-  it('does not distinguish missing sessions from worker, Lead, automation, SSH or remote-agent sessions', async () => {
+  it('returns identical receipts for ineligible local rows and the same ids missing from this device', async () => {
     const { query, getDbClient } = fixture();
-    const ids = ['worker', 'lead', 'automation', 'ssh-session', 'remote-agent', 'missing', 'worker'];
-    expect(await query(ids)).toStrictEqual({
+    const ids = ['worker', 'lead', 'automation', 'missing', 'worker'];
+    const receipt = await query(ids);
+    expect(receipt).toStrictEqual({
       ok: true, sessions: ids.map(sessionId => ({ sessionId, status: 'out_of_scope' })),
     });
     expect(getDbClient).toHaveBeenCalledTimes(1);
+    sqlite.prepare("DELETE FROM sessions WHERE id IN ('worker', 'lead', 'automation')").run();
+    expect(JSON.stringify(await query(ids))).toBe(JSON.stringify(receipt));
+  });
+
+  it.each([
+    ['ssh-session', 'deleted'],
+    ['remote-agent', 'archived'],
+  ])('returns the durable local state for %s regardless of execution location', async (sessionId, status) => {
+    const { query } = fixture();
+    expect(await query([sessionId])).toStrictEqual({
+      ok: true, sessions: [{ sessionId, status }],
+    });
   });
 
   it.each([

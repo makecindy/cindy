@@ -417,8 +417,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 Desktop 电子脑可用 `cindy.sessionStates({ sessionIds })`（`session-state-request`）补查生命周期。
 仅当前账号下已安装、已启用、整体安装批准有效且声明 `session` 的实例可查；回包前复核
 owner、电子脑和安装批准代次。不新增权限组或批准记录，不改变事件投递。按
-`did-session-created`／`did-session-archived` 的会话资格筛选，再排除 SSH 远端执行（`remote_host_id`）
-和 Agent 在同账号另一台电脑执行（`agent_device_id`）的任务；即使记录在本机也不返回状态，只查本机库。
+`did-session-created`／`did-session-archived` 的会话资格筛选，只查当前账号的本机库。SSH 或同账号
+跨设备执行不改变已在本机落库的会话资格；本机没有记录的 id 不向其它设备查找。
 每请求 1–100 个 id，仅做一次按 id 批量读取，不写库或轮询。回包每项仅 `sessionId`、
 `status`（`active`／`archived`／`deleted`／`out_of_scope`）；范围外与不存在不可区分。
 失败不返回会话数据，错误码为 `PERMISSION_DENIED`、`INVALID_REQUEST`、`HOST_NOT_READY`、
