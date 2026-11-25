@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
+import { COMPANION_CLOUD_VERSION, DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import type { CompanionCloudActionResult } from '../../../shared/companionCloud.js';
 import { createCompanionHomeRegistry } from '../homes.js';
 import { restoreCloudAvatar } from '../avatarRestore.js';
 import { readTranscriptPage } from '../room.js';
-import { askCompanionHome, startCompanionCloud, type CompanionCloudHost, type CompanionDeviceDirectory, type CompanionHomeAnswer, type CompanionHomeProbeOutcome, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
+import { askCompanionHome, companionHomeProbe, startCompanionCloud, type CompanionCloudHost, type CompanionDeviceDirectory, type CompanionHomeAnswer, type CompanionHomeProbeOutcome, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
 import type { CompanionApi } from '../types.js';
 import { createWorkRequestGate, WorkRequestDeferred } from '../../maker-ipc/chatWorkPolling.js';
 import { fakeApi, fakeLocal, memoryState, rejection, type ApiHandler } from './fakes.js';
@@ -1322,7 +1322,8 @@ describe('switch home from any computer', () => {
   // A probe step as the transport reports it; an Error is a probe that rejected outright.
   type ProbeStep = CompanionHomeProbeOutcome | Error;
   const answer = (version: number): ProbeStep => ({ kind: 'answer', version });
-  const refused = (code: string): ProbeStep => ({ kind: 'refused', code });
+  const refused = (code: string, message?: string): ProbeStep => ({ kind: 'refused', code, ...(message ? { message } : {}) });
+  const OLDER_CINDY = "channel 'maker:companion-cloud:caps' not allowed remotely";
   const thrown = (code?: string): ProbeStep => (code ? { kind: 'thrown', code } : { kind: 'thrown' });
   const scripted = (steps: readonly ProbeStep[], asked: number[] = []) => async (timeoutMs: number) => {
     const step = steps[asked.push(timeoutMs) - 1]!;
@@ -1335,7 +1336,9 @@ describe('switch home from any computer', () => {
   it.each([
     ['answers on the longer retry', [thrown(), answer(4)], 4, [8_000, 15_000]],
     ['link still connecting, then answers', [thrown('NOT_CONNECTED'), answer(2)], 2, [8_000, 15_000]],
-    ['an older Cindy without the channel', [refused('CHANNEL_NOT_ALLOWED')], 0, [8_000]],
+    ['an older Cindy without the channel', [refused('CHANNEL_NOT_ALLOWED', OLDER_CINDY)], 0, [8_000]],
+    // The same code from the routing layer, or without the dispatcher's own answer, proves nothing (zqchris, 11-25).
+    ['refused by the routing layer with the same code', [refused('CHANNEL_NOT_ALLOWED', 'Encrypted transport required'), refused('CHANNEL_NOT_ALLOWED')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
     ['answering that same-account control is off', [refused('REMOTE_DISABLED')], 0, [8_000]],
     ['published as control off through the relay', [thrown('REMOTE_DISABLED')], 0, [8_000]],
     // Also the local offline gate and Agent-Net cancelling queued calls on a dropped session (Greptile P1).
@@ -1420,6 +1423,8 @@ describe('switch home from any computer', () => {
     ['the directory read times out', async (): Promise<CompanionDeviceDirectory> => { throw Object.assign(new Error('directory read timed out'), { name: 'TimeoutError' }); }],
     ['a partial directory misses the home', async (): Promise<CompanionDeviceDirectory> => ({ devices: [hereRow], partial: true })],
     ['a stale directory marks the home offline', async (): Promise<CompanionDeviceDirectory> => ({ devices: [device('laptop', { online: false }), hereRow], stale: true })],
+    // A partial read is merged over the last complete one: an old offline row may survive (zqchris, 11-25).
+    ['a partial directory keeps an old offline row', async (): Promise<CompanionDeviceDirectory> => ({ devices: [device('laptop', { online: false }), hereRow], partial: true })],
     ['a fresh directory does not list the home', async (): Promise<CompanionDeviceDirectory> => ({ devices: [hereRow] })],
     ['there is no directory', null],
   ] as const)('asks the home itself when %s, and writes nothing without its answer or a force', async (_, directory) => {
@@ -1460,11 +1465,47 @@ describe('switch home from any computer', () => {
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
   });
 
-  // The explicit states still take it over without a force: a fresh directory row saying offline, and the
-  // home's own refusal (kept from the original design).
+  // The probe adapter on the answers as device-link really shapes them (#11999 review, zqchris 11-25): only the
+  // home dispatcher's own «not allowed remotely» for this channel means an older Cindy. The same code from the
+  // routing layer (`Encrypted transport required`), another gate, a local transport policy or a handler error
+  // is not a refusal: no main computer change is written without the owner's force.
+  it.each([
+    ['refused by the routing layer (encrypted transport required)', 'unconfirmed',
+      async (): Promise<InvokeResultPayload> => ({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'Encrypted transport required' } })],
+    ['refused by another gate with the same code', 'unconfirmed',
+      async (): Promise<InvokeResultPayload> => ({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: "channel 'maker:companion-cloud:caps' not allowed" } })],
+    ["blocked by this computer's transport policy", 'unconfirmed',
+      async (): Promise<InvokeResultPayload> => { throw new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'Untrusted transport mode'); }],
+    ['failing in its handler', 'unconfirmed',
+      async (): Promise<InvokeResultPayload> => ({ ok: false, error: { code: 'IPC_ERROR', message: '[CHANNEL_NOT_ALLOWED] handler failed' } })],
+    ['an older Cindy without the channel', 'refused',
+      async (): Promise<InvokeResultPayload> => ({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: OLDER_CINDY } })],
+    ['answering that same-account control is off', 'refused',
+      async (): Promise<InvokeResultPayload> => ({ ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } })],
+    ['answering its version', 'answered',
+      async (): Promise<InvokeResultPayload> => ({ ok: true, result: { companionCloud: COMPANION_CLOUD_VERSION } })],
+  ] as const)('reads the real probe answer when the home is %s', async (_, expected, invoke) => {
+    const homeLink = { ...link(2), homeStatus: vi.fn(() => askCompanionHome(companionHomeProbe(invoke))) };
+    const t = setup({ home: 'laptop', devices: [device('laptop'), hereRow], homeLink });
+    const result = await t.runtime.switchHome('bot_mia', 'desk');
+    const patch = t.calls.find(call => call.method === 'PATCH');
+    if (expected === 'unconfirmed') {
+      expect(result).toMatchObject({ ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop' });
+      expect(patch).toBeUndefined();
+    } else if (expected === 'refused') {
+      expect(result).toEqual({ ok: true });
+      expect(patch).toMatchObject({ data: { homeDeviceId: 'desk', expectedHomeDeviceId: 'laptop' } });
+    } else {
+      expect(result).toEqual({ ok: true });
+      expect(homeLink.handOver).toHaveBeenCalledWith('laptop', 'bot_mia', 'desk', undefined);
+      expect(patch).toBeUndefined();
+    }
+  });
+
+  // The explicit states still take it over without a force: a complete, fresh directory row saying
+  // offline, and the home's own refusal (kept from the original design).
   it.each([
     ['a fresh directory row says the home is offline', { devices: [device('laptop', { online: false }), hereRow] }, link(2)],
-    ['a partial directory row says the home is offline', { devices: [device('laptop', { online: false }), hereRow], partial: true }, link(2)],
     ['the home refuses (control off)', { devices: [device('laptop'), hereRow] }, link(0)],
   ] as Array<[string, CompanionDeviceDirectory, ReturnType<typeof link>]>)('takes it over when %s', async (_, directory, homeLink) => {
     const t = setup({ home: 'laptop', homeLink, directory: async () => directory });

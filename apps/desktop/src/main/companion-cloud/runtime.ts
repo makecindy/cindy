@@ -5,7 +5,8 @@
  */
 import type { DeliverToCanonical } from './directRoom.js';
 import { randomUUID } from 'node:crypto';
-import { COMPANION_CLOUD_LEGACY_SKILL_MAX_BODY_BYTES, COMPANION_CLOUD_SKILL_SOURCE_VERSION, type CompanionOversizedSkill } from '@cindy/device-link';
+import { COMPANION_CLOUD_CAPS_CHANNEL, COMPANION_CLOUD_LEGACY_SKILL_MAX_BODY_BYTES, COMPANION_CLOUD_SKILL_SOURCE_VERSION, DeviceLinkError,
+  companionCloudCapsVersion, type CompanionOversizedSkill, type InvokeResultPayload } from '@cindy/device-link';
 import { parseBotSkillFile } from '../maker-ipc/botSkillStore.js';
 import { correctedProfile, profileRepairFields, profileRepairVersion, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
 import type {
@@ -259,15 +260,22 @@ export type CompanionTakeOverInternalOptions = CompanionTakeOverOptions & { expe
 
 export type CompanionHomeProbeOutcome =
   | { kind: 'answer'; version: number }
-  | { kind: 'refused'; code: string }
+  | { kind: 'refused'; code: string; message?: string }
   | { kind: 'thrown'; code?: string };
 
 /**
  * The only failures that let a home listed online be taken over without the owner forcing it
- * (allow-list, cloud-companions.md §3.1): what the home itself answered, an older Cindy without the
- * channel, its same-account control off, or this computer's access revoked.
+ * (allow-list, cloud-companions.md §3.1), as the home's own dispatcher answers them: its same-account
+ * control off, or this computer's access revoked. An older Cindy without the channel is recognised by
+ * the exact answer its dispatcher gives for this channel (below), not by the code alone.
  */
-const HOME_EXPLICIT_REFUSALS = new Set(['CHANNEL_NOT_ALLOWED', 'REMOTE_DISABLED', 'ACCESS_REVOKED']);
+const HOME_EXPLICIT_REFUSALS = new Set(['REMOTE_DISABLED', 'ACCESS_REVOKED']);
+/**
+ * What the home's dispatcher answers for a channel it does not have (unchanged since the first
+ * open-source release). The same code also comes from the routing layer before any handler runs
+ * (`Encrypted transport required`) or from other gates: those prove nothing about the home's version.
+ */
+const OLDER_CINDY_ANSWER = `channel '${COMPANION_CLOUD_CAPS_CHANNEL}' not allowed remotely`;
 /**
  * Thrown without the home's own answer but still published by the target (through the relay or the
  * device directory): its control turned off, or this computer's access revoked. A locally thrown
@@ -280,7 +288,8 @@ const HOME_PROBE_WAITS_MS = [8_000, 15_000];
 /** The version a probe outcome confirms (0 = the home explicitly cannot hand over), or null when nothing was confirmed. */
 function confirmedHomeVersion(outcome: CompanionHomeProbeOutcome): number | null {
   if (outcome.kind === 'answer') return outcome.version >= 1 ? outcome.version : null;
-  if (outcome.kind === 'refused') return HOME_EXPLICIT_REFUSALS.has(outcome.code) ? 0 : null;
+  if (outcome.kind === 'refused') return HOME_EXPLICIT_REFUSALS.has(outcome.code)
+    || (outcome.code === 'CHANNEL_NOT_ALLOWED' && outcome.message === OLDER_CINDY_ANSWER) ? 0 : null;
   return outcome.code && HOME_TARGET_PUBLISHED.has(outcome.code) ? 0 : null;
 }
 
@@ -297,8 +306,30 @@ export interface CompanionDeviceDirectory {
   devices: DeviceLinkDeviceView[];
   /** The bounded last-known snapshot, not a fresh answer: its rows are marked offline. */
   stale?: boolean;
-  /** Only one directory leg answered: the rows are fresh, but a missing row proves nothing. */
+  /** Only one directory leg answered, merged over the last complete read: neither a row nor its absence is authoritative. */
   partial?: boolean;
+}
+
+/**
+ * One caps probe of a companion's home through `invoke` (the device-link call), keeping apart what the
+ * home itself answered (a version, or its own error code and message) from a call that failed without
+ * its answer (thrown locally, by the relay or by the transport, or timed out after `timeoutMs`).
+ * `askCompanionHome` decides which of these may count as a refusal.
+ */
+export function companionHomeProbe(invoke: () => Promise<InvokeResultPayload>) {
+  return async (timeoutMs: number): Promise<CompanionHomeProbeOutcome> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        invoke(),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('caps probe timed out')), timeoutMs); }),
+      ]);
+      return result.ok ? { kind: 'answer', version: companionCloudCapsVersion(result.result) }
+        : { kind: 'refused', code: result.error.code, message: result.error.message };
+    } catch (error) {
+      return error instanceof DeviceLinkError ? { kind: 'thrown', code: error.code } : { kind: 'thrown' };
+    } finally { clearTimeout(timer); }
+  };
 }
 
 /**
@@ -1038,10 +1069,10 @@ export function startCompanionCloud(input: {
     const takeOver = (basis: HomeDecision['basis'], reason?: 'HOME_UNRESPONSIVE'): HomeDecision =>
       ({ basis, choices: { homeDeviceId: home, homeName, mode: 'takeOver', ...(reason ? { reason } : {}), targets: [here] } });
     if (!home) return takeOver('no-home');
-    // The directory confirms the home offline only with its own fresh row saying so. A failed read, a
-    // stale snapshot (it marks rows offline) or a missing row (partial, or not listed) confirms nothing:
-    // the home is then asked by its id like one listed online.
-    if (directory && !directory.stale && homeRow?.online === false) return takeOver('offline');
+    // The directory confirms the home offline only with its own row in a complete, fresh read. A failed
+    // read, a stale snapshot (it marks rows offline), a partial one (it keeps rows of an earlier complete
+    // read, an old offline row included) or a missing row confirms nothing: the home is asked by its id.
+    if (directory && !directory.stale && !directory.partial && homeRow?.online === false) return takeOver('offline');
     const link = input.host.homeLink;
     const answer: CompanionHomeAnswer = link ? await link.homeStatus(home).catch((): CompanionHomeAnswer => ({ kind: 'unconfirmed' }))
       : { kind: 'unconfirmed' };

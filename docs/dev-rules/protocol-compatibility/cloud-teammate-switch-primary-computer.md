@@ -14,12 +14,14 @@
 Mobile 仍通过既有换主力流程发起请求，不改原生指纹。
 
 2026-11-21：发起方读主力电脑版本时，`maker:companion-cloud:caps` 的请求与回包不变，只改本机对「没有回包」的解读：
-设备列表显示主力电脑在线时按白名单判定：只有主力电脑回包里的版本（≥ 1），或主力电脑自己答复的 `CHANNEL_NOT_ALLOWED`
-（旧版没有该通道）、`REMOTE_DISABLED`、`ACCESS_REVOKED`（后两项也认经中转 / 设备目录发布的同一状态）算明确答复，
+设备列表显示主力电脑在线时按白名单判定：只有主力电脑回包里的版本（≥ 1），或主力电脑分发层答复的 `CHANNEL_NOT_ALLOWED`
+且正文正是分发层对未知通道的原话 `channel 'maker:companion-cloud:caps' not allowed remotely`（旧版没有该通道；路由层同码的
+`Encrypted transport required` 等不算）、`REMOTE_DISABLED`、`ACCESS_REVOKED`（后两项也认经中转 / 设备目录发布的同一状态）算明确答复，
 后者仍记为版本 0、照旧直接接管；其余一律「不可确认」——超时、链路未就绪、`DEVICE_OFFLINE`、本机抛出的
 `CHANNEL_NOT_ALLOWED`、没有错误码的异常、不认识或新增的错误码、没带版本的回包——放宽等待重试一次，仍不可确认
 则给本机界面 `HOME_UNRESPONSIVE`，不自动接管。为区分「对端答复的错误」与「本机 / 中转抛出的错误」，这条探测直接读
-`remoteInvoke` 的回包，不经把两者合并成 `[CODE]` 文本的 `invokeDeviceValue`。设备列表说离线时不探测，照旧直接接管。
+`remoteInvoke` 的回包（保留错误正文），不经把两者合并成 `[CODE]` 文本的 `invokeDeviceValue`。只有完整且新鲜的设备目录
+（非 partial、非 stale）里主力电脑那一行说离线时不探测、照旧直接接管；目录读取失败、过期、不完整或缺行都按主力电脑 ID 探测。
 不新增错误码，不改变发给对端的内容。`HOME_UNRESPONSIVE` 与 `CompanionSwitchOptions.force` / `forceHomeDeviceId`
 只在同一 Desktop 的 `:home-choices` / `:switch-home` 本机 IPC 中使用；`maker:companion-cloud:hand-over` 仍只转发
 `whenBusy`，`force` 不进 device-link，也不进远程交出的选项解析。不新增 channel、帧或服务端接口，手机与旧版对端不受影响。
