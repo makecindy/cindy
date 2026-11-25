@@ -1208,9 +1208,24 @@ describe('Bot canonical Session lifecycle', () => {
       try {
         await expect(createMain()).rejects.toThrow('请先连接模型供应商或选择伙伴模型');
         await expect(createMain()).rejects.toThrow('请先连接模型供应商或选择伙伴模型');
+        // Host-only explicit take-over path creates the canonical session with missingModel so cloud history
+        // can be imported and demotion lifted even before the owner picks a default model; IPC stays strict.
+        const { ensureBotCanonicalSession } = await import('../../../maker-ipc/botCanonicalSessionEnsure');
+        const ensured = await ensureBotCanonicalSession('bot-follow', { allowMissingModel: true });
+        expect(ensured).toMatchObject({ ok: true, missingModel: true });
+        // #12777 integration: retry after history import failed after creating the task.
+        // Reusing the same task must still guide the owner until their model becomes usable.
+        const retry = () => ensureBotCanonicalSession('bot-follow', { allowMissingModel: true });
+        await expect(retry()).resolves.toEqual(ensured);
+        // Creating a second bot confirms the IPC path still rejects until the owner picks a default model.
+        await invoke('local-db:bots:create', { id: 'bot-follow-ipc', name: 'Cindy 2', capabilities: {} });
+        const createIpcMain = () => invoke('local-db:bots:create-canonical-session', {
+          botId: 'bot-follow-ipc', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+        await expect(createIpcMain()).rejects.toThrow('请先连接模型供应商或选择伙伴模型');
         await invoke('local-db:bots:model-chain-settings-set', { modelChain: [
           { harness: 'pi', providerId: 'custom-gateway', model: 'custom-model', effort: '', fastMode: false }] });
-        await expect(createMain()).resolves.toMatchObject({ created: true, session: { model: 'custom-model' } });
+        await expect(createIpcMain()).resolves.toMatchObject({ created: true, session: { model: 'custom-model' } });
+        await expect(retry()).resolves.toEqual({ ok: true, sessionId: ensured.ok ? ensured.sessionId : undefined });
       } finally { await modelSettings.resetBotModelChainSettings(); }
     });
 

@@ -148,7 +148,7 @@ export function registerInputHandoffTool(
         contentType: z.enum(['text', 'username', 'password', 'one-time-code']),
         targets: z.array(z.object({ label: STRING(300), length: z.number().int().min(1).max(64).optional() }).strict()).min(1).max(32),
       }).strict()).min(1).max(40).optional().describe('Logical fields for this screen only. Group split codes into one field, with targets in typing order and a length for every segment. Include every editable field; do not include values. Omit when structure cannot be identified; the owner can use the original window.'),
-      complete_when: HANDOFF_COMPLETE_WHEN.optional().describe('Optional signs that the step is done. Cindy also detects completion itself.'),
+      complete_when: HANDOFF_COMPLETE_WHEN.optional().describe('Optional signs that the step is done. Cindy also detects completion itself; with text_appears or url_contains it waits for them, so fields that vanish (a scan tab, a slider check) do not end the handoff.'),
       timeout_minutes: HANDOFF_TIMEOUT.optional(),
     },
     handler: async ({ purpose, note, target, image, fields, complete_when, timeout_minutes }) => {

@@ -164,7 +164,7 @@ async function readSkillContent(botId: string, slug: string): Promise<string | n
 type MaterializeLocal = Omit<CompanionMaterializeHost, 'latestRows'>;
 
 function createMaterializer(input: {
-  ensureCanonicalSession: (botId: string) => Promise<string>;
+  ensureCanonicalSession: (botId: string, options?: { allowMissingModel?: boolean }) => Promise<string | { sessionId: string; missingModel?: boolean }>;
   /** False when the task's queue could not be read. */
   discardInvitationWelcome?: (sessionId: string) => Promise<boolean>;
   rebuildContext: (sessionId: string) => Promise<'rebuilt' | 'busy'>;
@@ -214,9 +214,9 @@ function createMaterializer(input: {
     },
     findConflictingCindy,
     // Normal creation path: no invitation, no generated persona, the new home's default model.
-    createProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
+    createProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId, fallbackOnTransient }, fence) => {
       await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
-      const restored = await restoreCloudAvatar(avatar, fence.signal);
+      const restored = await restoreCloudAvatar(avatar, fence.signal, { fallbackOnTransient });
       fence.assertCurrent();
       try {
         await createBotProfile({ id, name: name.slice(0, 200), description, identitySource, userContextSource,
@@ -231,9 +231,9 @@ function createMaterializer(input: {
         throw error;
       }
     },
-    updateProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
+    updateProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId, fallbackOnTransient }, fence) => {
       await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
-      const restored = await restoreCloudAvatar(avatar, fence.signal);
+      const restored = await restoreCloudAvatar(avatar, fence.signal, { fallbackOnTransient });
       fence.assertCurrent();
       try {
         await updateBotProfile({ id, name: name.slice(0, 200), enabled: true,
@@ -327,7 +327,7 @@ function createMaterializer(input: {
     removeSkill: async (botId, slug) => { await deleteBotSkillForBot(botId, slug); },
     readSkillFiles: (botId, slug) => readBotSkillFilesForBot(botId, slug),
     applySkillFiles: (botId, slug, files, fetch, options) => applyBotSkillFilesForBot(botId, slug, files, fetch, options),
-    ensureCanonicalSession: botId => input.ensureCanonicalSession(botId),
+    ensureCanonicalSession: (botId, _fence, options) => input.ensureCanonicalSession(botId, options),
     // Rewound and deleted rows are included (`removed`): removed here means never re-imported.
     localMessageTimes: async (sessionId, fromMs) => (await getDbClient().drizzle
       .select({ role: messages.role, createdAt: messages.createdAt, clientId: messages.clientId, rewindAt: messages.rewindAt }).from(messages)
@@ -433,7 +433,7 @@ async function companionSessionIds(botId: string): Promise<string[]> {
 
 export function createCompanionCloudHost(input: {
   deliverToCanonical: CompanionCloudHost['deliverToCanonical'];
-  ensureCanonicalSession: (botId: string) => Promise<string>;
+  ensureCanonicalSession: (botId: string, options?: { allowMissingModel?: boolean }) => Promise<string | { sessionId: string; missingModel?: boolean }>;
   /** Remove the greeting request an unfinished meeting queued in this task (cloud-companions.md §6); false when its queue is unreadable. */
   discardInvitationWelcome?: (sessionId: string) => Promise<boolean>;
   rebuildContext: (sessionId: string) => Promise<'rebuilt' | 'busy'>;

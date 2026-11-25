@@ -15,6 +15,7 @@ import { isRemoteResourceUnread, subscribeRemoteResourceCache, remoteResourceCac
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 import { useMinuteNow } from '@/utils/useMinuteNow';
 import { BotGroupDuoAvatar, useBotGroupIdentities } from './BotGroupAvatars';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { botGroupMemberLinks } from './botGroupRemote';
 import { CompanionListRow } from './CompanionListRow';
 import { parseMobileMarkdownInlines } from './messageMarkdown';
@@ -45,10 +46,11 @@ export function BotGroupListRow({ row, online, last = false, onPress }: {
     identityFor(member.botId, member.label, row.groupMembers?.find(identity => identity.botId === member.botId)));
   const time = display.timestamp !== undefined && Number.isFinite(new Date(display.timestamp).getTime())
     ? formatRemoteSessionSidebarTime(new Date(display.timestamp).toISOString(), now) : '';
+  const isExternal = display.badges?.some((badge) => badge.tone === 'external') === true;
   const offline = online ? '' : t('devices.resources.hostOffline');
   return <CompanionListRow
     testID={`botGroups.item.${row.host.deviceId}.${row.item.ref.id}`}
-    accessibilityLabel={[title, unread ? t('devices.companions.unread') : '', status !== 'idle' ? t(`devices.companions.avatarStatus.${status}`) : '', offline, summary, time]
+    accessibilityLabel={[title, isExternal ? t('groupChat.externalBadge') : '', unread ? t('devices.companions.unread') : '', status !== 'idle' ? t(`devices.companions.avatarStatus.${status}`) : '', offline, summary, time]
       .filter(Boolean).join(', ')}
     avatar={<View>
       <View style={offline ? { opacity: OFFLINE_AVATAR_OPACITY } : undefined}>
@@ -57,6 +59,7 @@ export function BotGroupListRow({ row, online, last = false, onPress }: {
       <TeammateStatusDot status={status} />
     </View>}
     title={title}
+    titleBadge={isExternal ? <BotGroupExternalBadge /> : undefined}
     trailing={{ kind: 'time', text: time }}
     preview={offline ? `${offline} · ${summary}` : summary}
     previewTone={offline ? 'tertiary' : 'secondary'}

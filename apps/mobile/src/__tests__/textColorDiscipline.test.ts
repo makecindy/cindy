@@ -64,6 +64,8 @@ const REGISTERED_TEXT_COLOR_USES = new Set([
   'src/session/UnifiedModelPickerView.ios.tsx foregroundStyle quotaBarCrit',
   // DESIGN.md §14.5: user aligned sent group mentions with PC on 2026-11-04.
   'src/session/BotGroupMessageText.tsx mention groupMentionText',
+  // DESIGN.md §2 / mobile-design-guide.md §3: enterprise-viewer External group/member badge reuses groupMentionText.
+  'src/session/BotGroupExternalBadge.tsx label groupMentionText',
   // mobile-design-guide.md §3 登记例外 / DESIGN.md Mobile thread new-reply divider:话题内「New」分界标签与横线同色。
   'src/session/BotGroupChatScreen.tsx newReplyDivider threadUnreadDivider',
 ]);

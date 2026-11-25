@@ -609,7 +609,7 @@ import {
   stopAllPiSubagentRunsForExit,
 } from '@cindy/maker-core/pi-subagent-runs';
 
-import { onQuit, installQuitHandler } from './lifecycle';
+import { onQuit, installQuitHandler, trackMainWindow } from './lifecycle';
 import { initStartupDiagnostics, noteSystemResume, noteSystemSuspend } from './startup-diagnostics';
 import { isRunningUnderArm64Translation } from './arm64Translation';
 import { createStartupGateStallReporter } from './startupGateStallReport';
@@ -3187,7 +3187,18 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
   scheduleNativeHistoryBackupCleanup();
-  if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
+  if (getMakerIfReady()) {
+    refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
+  } else if (dataOwnerId !== null && makerProviderRefreshConfigured) {
+    // Login can discard Maker before residents resume. The normal constructor
+    // registers this owner's Host tools, even before post-DB initialization.
+    try {
+      getMakerCore();
+    } catch {
+      // Keep the existing post-DB fallback without logging initialization data.
+      ownerBackgroundLog.warn('Host tool registration before resident plugin startup failed');
+    }
+  }
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
     const outcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
@@ -4782,6 +4793,7 @@ const createWindow = () => {
   installSelectionContextMenu(mainWindow);
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;
+  trackMainWindow(mainWindow, () => isQuitting);
   applyMainWindowBackgroundThrottling();
   applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
   mainWindow.webContents.on('did-finish-load', () => {
@@ -5403,11 +5415,11 @@ const registerIpcHandlers = () => {
     clearTimeout(summaryTimer);
     stopIslandUpdates();
   });
-  setSessionsSubscribedListener((controllerDeviceId) => {
+  setSessionsSubscribedListener((controllerDeviceId, sessionId) => {
     publishHostTaskActivity(readHostActivity, controllerDeviceId);
     getAgentIslandService()?.replaySessionActivity((payload) => {
       pushSessionActivityToController(controllerDeviceId, payload);
-    });
+    }, sessionId);
   });
 
   // macOS 菜单栏余量:原生 helper 在 Agent Island 之后启动,复用它的任务活动订阅。
