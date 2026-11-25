@@ -120,10 +120,8 @@ function VolumeChip({ path, emphasized = false }: { path: string; emphasized?: b
   return (
     <span
       className={cn(
-        'inline-flex h-5 shrink-0 items-center gap-1 rounded px-1.5 font-mono text-11 font-medium',
-        emphasized
-          ? 'bg-[var(--accent-soft)] text-[var(--accent-emphasis)]'
-          : 'bg-[var(--surface-chip)] text-[var(--text-secondary)]',
+        'inline-flex h-5 shrink-0 items-center gap-1 rounded bg-[var(--surface-chip)] px-1.5 font-mono text-11 font-medium',
+        emphasized ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]',
       )}
       aria-hidden
     >
