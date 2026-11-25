@@ -15681,6 +15681,7 @@
       "modelCatalogUnconfirmed": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
       "actionScheduled": "La autorización para esta acción caducó. La próxima ejecución sigue programada.",
       "actionExpired": "La autorización de la sesión para esta acción ha caducado. Consulta la última ejecución de la automatización.",
+      "modelRebuildRetry": "No se envió la instrucción. Abre la automatización en tu ordenador y selecciona «Ejecutar ahora» para volver a intentarlo.",
       "actionRecovered": "La autorización para esta acción caducó. La misma automatización se ejecutó correctamente más tarde.",
       "text": "Error en la ejecución automática.",
       "prCheck_dns": "{{device}} no pudo resolver {{host}}. Si el problema persiste, comprueba la red o el DNS de ese dispositivo. Fallos consecutivos: {{failures}}. Las comprobaciones programadas podrán reintentarse a partir de {{retry}}.",

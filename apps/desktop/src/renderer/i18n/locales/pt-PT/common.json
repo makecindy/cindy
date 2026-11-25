@@ -15681,6 +15681,7 @@
       "modelCatalogUnconfirmed": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualiza a lista de modelos e tenta novamente.",
       "actionScheduled": "A autorização para esta ação expirou. A próxima execução continua agendada.",
       "actionExpired": "A autorização da sessão para esta ação expirou. Consulte a execução mais recente da automatização.",
+      "modelRebuildRetry": "A instrução não foi enviada. Abra a automatização no computador e selecione «Executar agora» para tentar novamente.",
       "actionRecovered": "A autorização para esta ação expirou. A mesma automatização foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
       "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS nesse dispositivo. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
