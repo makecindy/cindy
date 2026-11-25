@@ -43,21 +43,25 @@ const OSS_REF_2 = 'cindy-oss-attach://m/def456';
 function makeFsDeps(overrides: Partial<SentAttachmentThumbFsDeps> = {}) {
   const copies: Array<{ from: string; to: string }> = [];
   const removed: string[] = [];
-  let dirFiles: string[] = [];
+  const files = new Set<string>();
   let index: string | null = null;
   const deps: SentAttachmentThumbFsDeps = {
     documentDirectory: async () => DOC_DIR,
     copy: async (from, to) => {
       copies.push({ from, to });
+      files.add(to);
     },
     remove: async (uri) => {
       removed.push(uri);
+      files.delete(uri);
     },
-    readDirectory: async (dir) => dir === LEGACY_THUMB_DIR ? dirFiles : [],
+    readDirectory: async (dir) => [...files]
+      .filter(uri => uri.startsWith(`${dir}/`))
+      .map(uri => uri.slice(dir.length + 1)),
     readIndex: async () => index,
     writeIndex: async (_dir, text) => { index = text; },
     makeDirectory: async () => undefined,
-    statSize: async () => 1000,
+    statSize: async (uri) => files.has(uri) ? 1000 : 0,
     ...overrides,
   };
   return {
@@ -65,8 +69,8 @@ function makeFsDeps(overrides: Partial<SentAttachmentThumbFsDeps> = {}) {
     copies,
     removed,
     indexText: () => index,
-    setDirFiles(files: string[]) {
-      dirFiles = files;
+    addFiles(dir: string, ...names: string[]) {
+      for (const name of names) files.add(`${dir}/${name}`);
     },
   };
 }
@@ -244,8 +248,8 @@ describe('sentAttachmentThumbStore', () => {
       { ossRef: OSS_REF, file: 'thumb-fresh.jpg', at: now - 1000, accountKey: getMobileAuthOwner().accountKey },
       { ossRef: OSS_REF_2, file: 'thumb-stale.jpg', at: now - 30 * 24 * 60 * 60 * 1000, accountKey: getMobileAuthOwner().accountKey },
     ]));
-    const { deps, removed, setDirFiles } = makeFsDeps();
-    setDirFiles(['thumb-fresh.jpg', 'thumb-stale.jpg', 'thumb-orphan.jpg']);
+    const { deps, removed, addFiles } = makeFsDeps();
+    addFiles(LEGACY_THUMB_DIR, 'thumb-fresh.jpg', 'thumb-stale.jpg', 'thumb-orphan.jpg');
 
     await ensureSentAttachmentThumbsHydrated(deps);
 
@@ -265,8 +269,8 @@ describe('sentAttachmentThumbStore', () => {
   // Existing hydration coverage only exercises successful reads. A rejected read
   // must retain old image bytes while new registrations survive process restart.
   it('retains old copies and persists new registrations when the legacy read fails', async () => {
-    const { deps, removed, setDirFiles } = makeFsDeps();
-    setDirFiles(['thumb-legacy.jpg']);
+    const { deps, removed, addFiles } = makeFsDeps();
+    addFiles(LEGACY_THUMB_DIR, 'thumb-legacy.jpg');
     const error = new Error('Row too big to fit into CursorWindow');
     vi.mocked(AsyncStorage.getItem).mockRejectedValueOnce(error);
 
@@ -281,6 +285,38 @@ describe('sentAttachmentThumbStore', () => {
     await expect(resolveSentAttachmentThumb(OSS_REF, deps)).resolves.toMatchObject({ uri, size: 1000 });
     expect(removed).toEqual([]);
   });
+
+  // Unit regression for #5588: the old fixture listed no files in the new directory.
+  // Restart through the public resolver with a registered copy and one unlisted
+  // file. Only a complete index can establish that the latter is an orphan.
+  it.each(['complete', 'unreadable', 'incomplete'] as const)(
+    'cleans the new directory only with a complete index (%s)',
+    async (indexState) => {
+      const { deps, copies, addFiles } = makeFsDeps();
+      await registerSentAttachmentThumb(OSS_REF, 'file:///cache/upload.png', deps);
+      await __testing.flushPersist();
+      const [{ to: registeredUri }] = copies;
+      const orphan = 'thumb-unlisted.png';
+      addFiles(THUMB_DIR, orphan);
+
+      if (indexState === 'unreadable') {
+        vi.spyOn(deps, 'readIndex').mockRejectedValueOnce(new Error('read failed'));
+      }
+      if (indexState === 'incomplete') {
+        const records = JSON.parse((await deps.readIndex(DOC_DIR))!);
+        records.push({ ossRef: OSS_REF_2, file: orphan, at: 1 });
+        await deps.writeIndex(DOC_DIR, JSON.stringify(records));
+      }
+
+      __testing.reset();
+      const hit = await resolveSentAttachmentThumb(OSS_REF, deps);
+      expect(hit?.uri ?? null).toBe(indexState === 'unreadable' ? null : registeredUri);
+      const registeredName = registeredUri.slice(THUMB_DIR.length + 1);
+      expect(await deps.readDirectory(THUMB_DIR)).toEqual(
+        indexState === 'complete' ? [registeredName] : [registeredName, orphan],
+      );
+    },
+  );
 
   it('损坏的持久化内容按空映射处理', async () => {
     storage.set(__testing.storageKey, 'not-json{');
