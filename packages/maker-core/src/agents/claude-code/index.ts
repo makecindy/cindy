@@ -804,6 +804,38 @@ const CC_UPSTREAM_IDLE_SLICE_MS = 60_000;
 const CC_UPSTREAM_IDLE_SUSPEND_GAP_MS = 30_000;
 
 
+/**
+ * Per-model usage from a CLI result (`modelUsage` covers every model call in the
+ * query); falls back to the main-loop `usage` under the requested model.
+ */
+async function reportNativeTextUsage(
+  message: { modelUsage?: Record<string, { inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>; usage?: { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } },
+  requestedModel: string,
+  onUsage: NativeSubscriptionTextOptions['onUsage'],
+  log: { warn(message: string): void },
+): Promise<void> {
+  if (!onUsage) return;
+  const perModel = Object.entries(message.modelUsage ?? {}).map(([model, usage]) => ({
+    model,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadInputTokens,
+    cacheCreateTokens: usage.cacheCreationInputTokens,
+  }));
+  const entries = perModel.length > 0 ? perModel : message.usage ? [{
+    model: requestedModel,
+    inputTokens: message.usage.input_tokens ?? undefined,
+    outputTokens: message.usage.output_tokens ?? undefined,
+    cacheReadTokens: message.usage.cache_read_input_tokens ?? undefined,
+    cacheCreateTokens: message.usage.cache_creation_input_tokens ?? undefined,
+  }] : [];
+  for (const usage of entries) {
+    const { model, ...tokens } = usage;
+    if (!Object.values(tokens).some((value) => typeof value === 'number' && value > 0)) continue;
+    try { await onUsage(usage); } catch { log.warn('usage observer failed'); }
+  }
+}
+
 function mapAnthropicError(err: unknown): OneShotError {
   if (err instanceof APIError) {
     if (err.status === 401 || err.status === 403) {
@@ -1475,6 +1507,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           continue;
         }
         if (message.type !== 'result') continue;
+        // Report what was consumed even when the turn failed; a crashed start reports zeros.
+        await reportNativeTextUsage(message, model, opts.onUsage, log);
         if (message.subtype !== 'success' || message.is_error) {
           throw new OneShotError('network', `Claude subscription request ended: ${message.subtype}`);
         }

@@ -3123,6 +3123,64 @@ describe('utility one-shot candidates', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    // Greptile P1(PR #12756):独立 Claude 订阅连接曾按内置 anthropic 取账号,丢掉任务绑定。
+    it('独立 Claude 订阅连接在该连接内取账号,取不到账号时不借用默认登录', async () => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'claude-team', name: 'Claude Team', source: 'builtin', subscriptionPool: 'anthropic',
+          agents: ['claude-code'], auth: { method: 'oauth' },
+          routing: { 'claude-code': { upstream: 'https://anthropic.example/api/v1', authStrategy: 'oauth-passthrough' } },
+          models: { 'claude-code': [{ id: 'claude-opus-4-5', name: 'Opus', contextWindow: 200_000 }] },
+        }],
+      } as never);
+      const account = { id: 'team-acct', configDir: '/tmp/team-acct', assertCurrent: vi.fn(), readState: vi.fn() };
+      const lease = {
+        account, accountId: 'team-acct', pinned: true, assertDispatchable: vi.fn(), running: vi.fn(), release: vi.fn(),
+        observeFailure: vi.fn(), changeModel: vi.fn(), bind: vi.fn(), reserveForTask: vi.fn(),
+      };
+      const seen: unknown[] = [];
+      const runner = vi.fn(async (_prompt: string, opts: import('@cindy/maker-core').NativeSubscriptionTextOptions) => {
+        seen.push(opts[NATIVE_SUBSCRIPTION_ACCOUNT]);
+        return 'ok';
+      });
+      setNativeSubscriptionTextRunner(runner);
+      const request = () => requestExplicitUtilityText('hello', {
+        sessionId: 'companion-task', providerId: 'claude-team', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true,
+      });
+
+      acquireAccount.mockResolvedValueOnce(lease as never);
+      expect(await request()).toMatchObject({ ok: true, text: 'ok', providerId: 'claude-team' });
+      expect(acquireAccount).toHaveBeenCalledWith('claude-team', 'claude-opus-4-5', ['task:companion-task'], false, { resuming: false });
+      expect(seen).toEqual([account]);
+
+      acquireAccount.mockResolvedValueOnce(null);
+      expect(await request()).toMatchObject({ ok: false });
+      expect(runner).toHaveBeenCalledTimes(1);
+    });
+
+    // Greptile P2(PR #12756):CLI 作答的用量曾被丢弃,不进辅助用量账本。
+    it('CLI 报告的用量按调用方来源和任务记入用量账本', async () => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      setNativeSubscriptionTextRunner(async (_prompt, opts) => {
+        await opts.onUsage?.({ model: 'claude-opus-4-5', inputTokens: 12, outputTokens: 7, cacheReadTokens: 3 });
+        return 'ok';
+      });
+
+      expect(await requestExplicitUtilityText('hello', {
+        source: 'voice-dialogue', sessionId: 'companion-task', providerId: 'anthropic', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true,
+      })).toMatchObject({ ok: true });
+      expect(usageSink.record).toHaveBeenCalledWith(
+        expect.objectContaining({ inputTokens: 12, outputTokens: 7, cacheReadTokens: 3 }),
+        expect.objectContaining({
+          source: 'voice-dialogue', sessionId: 'companion-task', providerId: 'anthropic',
+          model: 'claude-opus-4-5', transport: 'claude-code-cli',
+        }),
+      );
+      expect(usageSink.close).toHaveBeenCalledOnce();
+    });
+
     it('有账号池时使用伙伴任务绑定的账号,账号失效则不派发', async () => {
       activeCatalog.mockReturnValue(subscriptionCatalog);
       const account = { id: 'acct-1', configDir: '/tmp/acct-1', assertCurrent: vi.fn(), readState: vi.fn() };

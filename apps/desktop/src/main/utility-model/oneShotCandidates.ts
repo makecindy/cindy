@@ -80,15 +80,27 @@ const desktopOneShot = createOneShotCandidates({
   isAuxiliaryModelTemporarilyUnavailable,
   captureAuxiliaryHealthObserver,
   reportAuxiliaryChainOutcome: (...args) => reportAuxiliaryChainOutcome(...args),
-  requestNativeSubscriptionText: async ({ prompt, sessionId, ...request }) => {
+  requestNativeSubscriptionText: async ({ prompt, sessionId, providerId, ...request }) => {
     const run = nativeSubscriptionTextRunner;
     if (!run) throw new Error('Claude Code is not ready');
-    // Follow the companion task's bound Claude account when the user has several;
-    // without an account pool the CLI uses its default login. Read-only: no binding.
+    // Pick within the selected provider (built-in or an independent Claude connection),
+    // following the companion task's bound account. Read-only: no binding is written.
     const lease = await acquireSubscriptionAccount(
-      'anthropic', request.model, sessionId ? [`task:${sessionId}`] : [], false, { resuming: false },
+      providerId, request.model, sessionId ? [`task:${sessionId}`] : [], false, { resuming: false },
     );
+    // Without a pool only the built-in provider may use the CLI's default login; an
+    // independent connection must never be answered by another account.
+    if (!lease && providerId !== 'anthropic') throw new Error('No subscription account is available');
     try {
+      // A one-shot keeps the provider it was leased for, like the OpenAI path above.
+      const membership = lease && accountProviderId('anthropic', lease.accountId);
+      const dispatchable = () => {
+        if (!lease) return true;
+        try {
+          lease.assertDispatchable();
+          return accountProviderId('anthropic', lease.accountId) === membership;
+        } catch { return false; }
+      };
       if (lease) {
         lease.assertDispatchable();
         lease.running(true);
@@ -96,7 +108,7 @@ const desktopOneShot = createOneShotCandidates({
       return await run(prompt, {
         ...request,
         beforeDispatch: async () => {
-          try { lease?.assertDispatchable(); } catch { return false; }
+          if (!dispatchable()) return false;
           return request.beforeDispatch ? request.beforeDispatch() : true;
         },
         ...(lease ? { [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account } : {}),

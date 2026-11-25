@@ -169,16 +169,24 @@ describe('ClaudeCodeAgent.nativeSubscriptionText(订阅登录的无状态文本�
     const q = fakeTextQuery([
       { type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '{"say":' } } },
       { type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '"hi"}' } } },
-      { type: 'result', subtype: 'success', is_error: false, result: ' {"say":"hi"} ' },
+      {
+        type: 'result', subtype: 'success', is_error: false, result: ' {"say":"hi"} ',
+        modelUsage: { 'claude-opus-4-5': { inputTokens: 40, outputTokens: 9, cacheReadInputTokens: 5, cacheCreationInputTokens: 0 } },
+      },
     ]);
     sdkMock.query.mockReturnValue(q);
     const { agent, getState } = createAgent(true);
     const onText = vi.fn();
     const beforeDispatch = vi.fn(async () => true);
+    const onUsage = vi.fn();
 
     await expect(agent.nativeSubscriptionText('user words', {
-      model: 'claude-opus-4-5', systemPrompt: 'call rules', disableReasoning: true, onText, beforeDispatch,
+      model: 'claude-opus-4-5', systemPrompt: 'call rules', disableReasoning: true, onText, beforeDispatch, onUsage,
     })).resolves.toBe('{"say":"hi"}');
+    // Greptile P2 (PR #12756): the CLI's token usage reaches the host ledger.
+    expect(onUsage).toHaveBeenCalledWith({
+      model: 'claude-opus-4-5', inputTokens: 40, outputTokens: 9, cacheReadTokens: 5, cacheCreateTokens: 0,
+    });
 
     expect(getState).toHaveBeenCalledWith({ credentialMode: 'oauth-bearer' });
     expect(beforeDispatch).toHaveBeenCalledTimes(1);
@@ -216,12 +224,18 @@ describe('ClaudeCodeAgent.nativeSubscriptionText(订阅登录的无状态文本�
   });
 
   it('CLI 以错误结果结束时抛 OneShotError,不返回空文本', async () => {
-    const q = fakeTextQuery([{ type: 'result', subtype: 'error_during_execution', is_error: true }]);
+    const q = fakeTextQuery([{
+      type: 'result', subtype: 'error_during_execution', is_error: true,
+      usage: { input_tokens: 30, output_tokens: 0, cache_read_input_tokens: null, cache_creation_input_tokens: null },
+    }]);
     sdkMock.query.mockReturnValue(q);
     const { agent } = createAgent(true);
+    const onUsage = vi.fn();
 
-    await expect(agent.nativeSubscriptionText('x', { model: 'claude-opus-4-5' }))
+    await expect(agent.nativeSubscriptionText('x', { model: 'claude-opus-4-5', onUsage }))
       .rejects.toMatchObject({ name: 'OneShotError', reason: 'network' });
+    // Tokens already consumed by a failed turn are still reported (main-loop usage fallback).
+    expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-opus-4-5', inputTokens: 30 }));
     expect(q.close).toHaveBeenCalledTimes(1);
   });
 });

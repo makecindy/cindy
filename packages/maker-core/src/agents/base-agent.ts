@@ -1727,6 +1727,11 @@ export interface NativeSubscriptionTextOptions {
   onText?: (text: string) => void;
   /** Ownership/configuration fence checked right before the CLI is started. */
   beforeDispatch?: () => boolean | Promise<boolean>;
+  /**
+   * Token usage the CLI reported for this request, once per model it used. The host
+   * records it in its own ledger; observer failures never fail the request.
+   */
+  onUsage?: (usage: OneShotUsage) => void | Promise<void>;
   /** Host-selected account home when the user has several subscription accounts. */
   [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
 }

@@ -2,7 +2,7 @@ import { auxiliaryNoticeOperation, type AuxiliaryNoticeOperation } from '../../s
 import { attachUpstreamMessage, extractUpstreamMessage, errorFrames, copyUpstreamDetail } from './auxiliaryUpstreamError.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
-import { parseAuxiliaryTokens, parseAuxiliaryResponse, type AuxiliaryUsageRecorder, type AuxiliaryAttribution } from '../../shared/auxiliaryUsage.js';
+import { parseAuxiliaryTokens, parseAuxiliaryResponse, type AuxiliaryUsageRecorder, type AuxiliaryAttribution, type AuxiliaryTokens } from '../../shared/auxiliaryUsage.js';
 /**
  * Direct one-shot text requests (the auxiliary-model chain and the dedicated Auto-review
  * candidates), shared by Desktop and the Node Host. Moved verbatim from oneShotCandidates.ts,
@@ -225,6 +225,8 @@ export interface OneShotCandidatesPorts {
    */
   requestNativeSubscriptionText?: (input: {
     prompt: string;
+    /** The selected catalog provider: built-in `anthropic` or an independent Claude connection. */
+    providerId: string;
     model: string;
     sessionId?: string;
     systemPrompt?: string;
@@ -233,6 +235,8 @@ export interface OneShotCandidatesPorts {
     disableReasoning?: boolean;
     onText?: (text: string) => void;
     beforeDispatch?: () => Promise<boolean>;
+    /** Tokens the CLI reported, per model; recorded in the auxiliary usage ledger. */
+    onUsage?: (usage: AuxiliaryTokens & { model?: string }) => Promise<void>;
   }) => Promise<string>;
 }
 
@@ -345,6 +349,9 @@ function metered<Args extends unknown[], Result>(fn: (...args: Args) => Promise<
     return usageContext.run({ record, route }, () => fn(...args)).finally(() => { try { record.close(); } catch { log.warn('auxiliary usage recorder cleanup failed'); } });
   };
 }
+
+/** Usage-ledger transport label for subscription text answered by the Claude Code CLI. */
+const NATIVE_SUBSCRIPTION_CLI_TRANSPORT = 'claude-code-cli';
 
 const XD_UTILITY_ROUTE_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
@@ -1560,6 +1567,7 @@ async function requestBuiltinProviderText(
         const guard = requestOpts?.beforeDispatch;
         return requestNative({
           prompt: text,
+          providerId: input.provider.id,
           model: input.model,
           sessionId: input.sessionId,
           systemPrompt: requestOpts?.systemPrompt,
@@ -1575,6 +1583,8 @@ async function requestBuiltinProviderText(
               model: input.model,
             }))
             && (input.routeStillCurrent?.() ?? true),
+          // Runs inside the metered context: keeps the caller's source and task.
+          onUsage: ({ model, ...tokens }) => recordUsage(tokens, NATIVE_SUBSCRIPTION_CLI_TRANSPORT, input.model, model),
         });
       },
     }], prompt, [], input);
