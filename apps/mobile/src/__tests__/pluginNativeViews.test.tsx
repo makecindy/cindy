@@ -22,6 +22,7 @@ const bridge = vi.hoisted(() => ({
   props: new Map<string, any>(),
   ownerCurrent: true,
   keyboardVisible: false,
+  fontScale: 1,
   mode: "light" as "light" | "dark",
 }));
 vi.mock("@/hooks/useReduceMotion", () => ({ useReduceMotionEnabled: () => false }));
@@ -165,7 +166,7 @@ vi.mock("react-native", () => ({
   Alert: { alert: vi.fn() },
   PlatformColor: (name: string) => name,
   Keyboard: { addListener: () => ({ remove() {} }) },
-  useWindowDimensions: () => ({ width: 390, height: 844, fontScale: 1 }),
+  useWindowDimensions: () => ({ width: 390, height: 844, fontScale: bridge.fontScale }),
   Image: () => null,
   View: (p: any) => {
     if (p.testID) bridge.props.set(p.testID, p);
@@ -304,6 +305,7 @@ afterEach(() => {
   bridge.mode = "light";
   bridge.ownerCurrent = true;
   bridge.keyboardVisible = false;
+  bridge.fontScale = 1;
 });
 function mount(component: any, props: any) {
   const container = document.createElement("div");
@@ -402,6 +404,22 @@ it("switches to the native market segment and routes row taps to detail, install
   rerender({ ...p, segment: "market", market: { ...market, rowState: () => ({ kind: "waiting" }) } });
   expect(bridge.props.has("plugins.market.install.market/demo")).toBe(false);
   expect(container.querySelector('[data-testid="plugins.market.progress.market/demo"]')?.textContent).toContain("plugins.market.waiting");
+});
+// iOS re-check (accessibility-large): the waiting row's trailing status squeezed a long name and the "Official"
+// label wrapped onto two lines. At large sizes the status moves under the name and the label never wraps.
+it("keeps market row names readable at accessibility sizes while waiting", () => {
+  bridge.fontScale = 2;
+  const item = { pluginId: "market/demo", ghostId: "demo", name: "Market Demo With A Long Name", description: "From the market",
+    publisherKind: "official", scope: "public", sourceType: "server", installState: "not-installed", icon: null };
+  const market = marketModel({ items: [item], rowState: () => ({ kind: "waiting" }) });
+  const { container } = mount(PluginDirectoryView, { ...directory(), market, segment: "market" });
+  const progress = container.querySelector('[data-testid="plugins.market.progress.market/demo"]')!;
+  expect(progress.textContent).not.toContain("plugins.market.waiting");
+  expect(bridge.props.get("plugins.market.progress.market/demo").modifiers).toContainEqual({ accessibilityLabel: "plugins.market.waiting" });
+  expect(container.querySelector('[data-testid="plugins.market.row.market/demo"]')?.textContent).toContain("plugins.market.waiting");
+  const badge = bridge.props.get("plugins.market.badge.market/demo");
+  expect(badge.modifiers).toContainEqual({ lineLimit: 1 });
+  expect(badge.modifiers).toContainEqual({ fixedSize: { horizontal: true, vertical: false } });
 });
 it("uses a scrolling native title row without a separator or sticky section header", () => {
   const p = directory();
@@ -1380,6 +1398,14 @@ describe("pinned high-risk permission", () => {
       expect(pinned.textContent).not.toContain(detail);
       expect(container.textContent).toContain(detail);
     }
+  });
+  // iOS re-check of f22c9858: at the medium detent the list could not be scrolled to its end (the swipe expanded
+  // the sheet). With high-risk items the sheet opens large; without them it keeps the default detents.
+  it("iOS opens the confirmation large only when it has high-risk items", () => {
+    mount(PluginManagementConfirmation, props(installOf([notify, node])));
+    expect(bridge.props.get("plugins.managementConfirmation").largeOnly).toBe(true);
+    mount(PluginManagementConfirmation, props(installOf([notify])));
+    expect(bridge.props.get("plugins.managementConfirmation").largeOnly).toBe(false);
   });
   it("iOS shows no pinned text when nothing is high risk", () => {
     const { container } = mount(PluginManagementConfirmation, props(installOf([notify])));

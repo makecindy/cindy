@@ -43,6 +43,9 @@ export function PluginManagementConfirmation(
       onClose={() => answer(false)}
       title={t("plugins.notice.title.confirmation")}
       nativeContent
+      // With high-risk items the whole list must be reachable before Allow; at the medium detent an upward swipe
+      // expands the sheet instead of scrolling, so open large.
+      largeOnly={!!info?.highRisk}
       testID="plugins.managementConfirmation"
       footer={
         // The pinned high-risk text lives in the footer, which stays visible at the medium detent too.

@@ -7,6 +7,12 @@ export interface ComposerSheetProps {
   nativeList?: boolean;
   /** Set edit mode on the containing SwiftUI list so its reorder handles appear. */
   nativeEditMode?: boolean;
+  /**
+   * Open at the large detent only (iOS). For content that must be read to the end before acting: at the medium
+   * detent an upward swipe expands the sheet instead of scrolling, so content below the fold reads as unreachable.
+   * Default false keeps medium and large.
+   */
+  largeOnly?: boolean;
   /** Protect an unsaved or in-flight form; explicit Back/Save remains available. */
   preventDismiss?: boolean;
   nativeHeader?: ReactNode;

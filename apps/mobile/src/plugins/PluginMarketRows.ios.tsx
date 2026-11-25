@@ -20,6 +20,7 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { fontScale } = useWindowDimensions();
+  const largeType = fontScale > 1.3;
   const device = market.target?.deviceName ?? "";
   // Standalone text actions keep a 44×44pt hit target (ios-native-design §5), whatever their label size.
   const textButton = (label: string, onPress: () => void, testID?: string) => (
@@ -100,15 +101,19 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
   })();
   const trailing = (item: ManagedMarketItem) => {
     const state = market.rowState(item);
-    if (state.kind === "waiting" || state.kind === "installing")
+    if (state.kind === "waiting" || state.kind === "installing") {
+      const progress = t(state.kind === "waiting" ? "plugins.market.waiting" : "plugins.market.installing");
+      // At accessibility sizes the status moves into the row's text column (see `line`), so the name keeps its width.
       return (
-        <HStack spacing={spacing.xs} testID={`plugins.market.progress.${item.pluginId}`}>
+        <HStack spacing={spacing.xs} testID={`plugins.market.progress.${item.pluginId}`}
+          modifiers={largeType ? [accessibilityLabel(progress)] : []}>
           <ProgressView />
-          <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), lineLimit(2)]}>
-            {t(state.kind === "waiting" ? "plugins.market.waiting" : "plugins.market.installing")}
-          </Text>
+          {largeType ? null : (
+            <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), lineLimit(2)]}>{progress}</Text>
+          )}
         </HStack>
       );
+    }
     if (state.kind === "conflict" || state.kind === "installed") return null;
     const label = state.kind === "unknown" ? t("plugins.management.checkResult")
       : state.kind === "failed" ? t("plugins.retry") : t("plugins.market.install");
@@ -125,7 +130,9 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
   const row = (item: ManagedMarketItem, first: boolean) => {
     const state = market.rowState(item);
     const origin = pluginMarketOrigin(item);
-    const line = state.kind === "failed" ? t(state.messageKey)
+    const line = largeType && state.kind === "waiting" ? t("plugins.market.waiting")
+      : largeType && state.kind === "installing" ? t("plugins.market.installing")
+      : state.kind === "failed" ? t(state.messageKey)
       : state.kind === "conflict" ? t("plugins.market.conflict")
         : state.kind === "sourceUnverified" ? t("plugins.market.sourceUnverifiedShort")
         : state.kind === "installed" ? t("plugins.market.alreadyInstalled")
@@ -142,9 +149,12 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
             <VStack alignment="leading" spacing={3} modifiers={[frame({ maxWidth: Infinity, alignment: "leading" })]}>
               <HStack spacing={6}>
                 {/* Larger accessibility sizes keep a second line for the name, like the installed rows that wrap. */}
-                <Text modifiers={[font({ textStyle: "body" }), lineLimit(fontScale > 1.3 ? 2 : 1)]}>{item.name}</Text>
+                <Text modifiers={[font({ textStyle: "body" }), lineLimit(largeType ? 2 : 1)]}>{item.name}</Text>
                 {origin ? (
-                  <Text modifiers={[font({ textStyle: "caption2", weight: "semibold" }), foregroundStyle(colors.textSecondary),
+                  // The source label never wraps; the name gives way instead.
+                  <Text testID={`plugins.market.badge.${item.pluginId}`}
+                    modifiers={[font({ textStyle: "caption2", weight: "semibold" }), foregroundStyle(colors.textSecondary),
+                    lineLimit(1), fixedSize({ horizontal: true, vertical: false }),
                     padding({ horizontal: spacing.sm, vertical: 2 }), background(colors.surfaceChip), clipShape("capsule")]}>
                     {t("plugins.market.filter." + origin)}
                   </Text>

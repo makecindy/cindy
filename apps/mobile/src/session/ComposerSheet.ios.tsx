@@ -68,6 +68,7 @@ export function ComposerSheet({
   nativeHeader,
   nativeRoot,
   preventDismiss = false,
+  largeOnly: largeOnlyRequested = false,
 }: ComposerSheetProps) {
   const { mode, colors } = useTheme();
   const { t } = useTranslation();
@@ -78,7 +79,7 @@ export function ComposerSheet({
   const landscape = width > height;
   // The hosted RN tree keeps its first detent's layout, so a pinned footer is pushed below a
   // medium sheet or under the home indicator after resizing. Such sheets always open large.
-  const largeOnly = landscape || (!!contentScrolls && !!footer);
+  const largeOnly = landscape || largeOnlyRequested || (!!contentScrolls && !!footer);
   const editModeModifiers = nativeEditMode === undefined
     ? []
     : [environment('editMode', nativeEditMode ? 'active' : 'inactive')];
