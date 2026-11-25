@@ -12,6 +12,7 @@ export async function openPluginUiView(
   viewId: string,
   sessionId: string | null,
   input?: Record<string, unknown>,
+  workingDir?: string,
   options: { userInitiated?: boolean } = {},
 ): Promise<void> {
   // 缺省是用户点菜单/面板里的入口；MCP App 自己调 cindy.ui.open 时必须传 false，
@@ -34,5 +35,6 @@ export async function openPluginUiView(
     return;
   }
   if (!sessionId) throw new Error('MCP_APP_TASK_REQUIRED');
-  await openPluginTaskTab(sessionId, instanceId, { resourceViewId: viewId, userInitiated, resourceInput: input });
+  const resourceWorkingDir = getApprovedGhostHostUi(ghost)?.capabilities?.includes('context') ? workingDir : undefined;
+  await openPluginTaskTab(sessionId, instanceId, { resourceViewId: viewId, userInitiated, resourceInput: input, resourceWorkingDir });
 }

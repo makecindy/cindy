@@ -319,22 +319,38 @@ export class HistoryViewController<T extends HistoryMessageSource> {
   }
 
   setExpanded(key: string, expanded: boolean): void {
-    if (this.state.expanded.has(key) === expanded) return;
-    const next = new Set(this.state.expanded);
-    if (expanded) next.add(key); else next.delete(key);
-    let details = this.state.details;
     if (!expanded) {
-      this.detailRuns.delete(key);
-      details = this.trimCollapsedDetails(next);
-      const detail = details.get(key);
-      // Cancellation invalidates late replies, so they cannot clear this flag.
-      // Stop the indicator now while retaining any warm body for reopening.
-      if (detail?.loading) details = new Map(details).set(key, { ...detail, loading: false });
+      this.collapseDetails([key]);
+      return;
     }
-    this.publish({ expanded: next, details });
+    if (this.state.expanded.has(key)) return;
+    this.publish({ expanded: new Set(this.state.expanded).add(key) });
     this.sendIntent();
     const summary = historyWorkSummaries(this.state.items).find((value) => value.key === key);
-    if (expanded && summary) void this.loadDetails(summary);
+    if (summary) void this.loadDetails(summary);
+  }
+
+  private collapseDetails(keys: readonly string[]): void {
+    const collapsed = keys.filter(key => this.state.expanded.has(key));
+    if (!collapsed.length) return;
+
+    const next = new Set(this.state.expanded);
+    for (const key of collapsed) {
+      next.delete(key);
+      this.detailRuns.delete(key);
+    }
+    // Apply the warm-cache budget to the final collapsed set, after cancelling
+    // all of its pending reads so they cannot pin a body or publish a late reply.
+    const trimmed = this.trimCollapsedDetails(next);
+    let settled: Map<string, HistoryWorkDetailState<T>> | undefined;
+    for (const key of collapsed) {
+      const detail = trimmed.get(key);
+      if (detail?.loading) {
+        (settled ??= new Map(trimmed)).set(key, { ...detail, loading: false });
+      }
+    }
+    this.publish({ expanded: next, details: settled ?? trimmed });
+    this.sendIntent();
   }
 
   private trimCollapsedDetails(expanded: ReadonlySet<string>, items = this.state.items) {
@@ -369,6 +385,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     return () => {
       if (released) return;
       released = true;
+      const collapsed: string[] = [];
       for (const key of keys) {
         const holds = (this.expandedHolds.get(key) ?? 1) - 1;
         if (holds > 0) {
@@ -376,8 +393,9 @@ export class HistoryViewController<T extends HistoryMessageSource> {
           continue;
         }
         this.expandedHolds.delete(key);
-        this.setExpanded(key, false);
+        collapsed.push(key);
       }
+      this.collapseDetails(collapsed);
     };
   }
 

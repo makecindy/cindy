@@ -186,6 +186,12 @@ Claude Code 的 `upstream-idle-watchdog.test.ts` 与 desktop 的 `tool-loop-revi
 
 ## 上下文已满时的引擎边界
 
+Claude Code 切换模型／供应商时，当前或目标窗口、占用读数缺失不作为拒绝选择的理由：
+保留原生历史并尝试所选路由，真实超限沿用已有 overflow 恢复。目标窗口与占用已知且达到
+交接阈值时，按目标压力交接，不要求旧模型窗口可查，也不要求目标比旧窗口更小。
+主人从另一设备控制任务电脑不等于 SSH 执行：任务电脑能本地完成交接时直接准备并续接，
+不因控制入口来自远端报“不支持重建”。SSH 执行与 Pi 运行时核验边界保持各自语义。
+
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；
 Desktop 的压缩比例按供应商与模型统一（默认 90%），所有 Harness 共用，旧全局偏好不再生效。
 Pi 在启动或恢复时将模型比例写成原生 `compaction.reserveTokens` / `modelOverrides`，由 Pi 按
@@ -194,6 +200,10 @@ Pi 在启动或恢复时将模型比例写成原生 `compaction.reserveTokens` /
 UI、usage 与 digest 投影，不再向 Pi 注入 host 自动 compact RPC。
 
 ### 重放预算
+
+容量元数据回查与选模共用已声明的 wire 前缀／桥接名称候选，精确条目优先；来源推断、
+容量上限和任务预算收敛采用同一匹配。匹配仍限于指定供应商与 Harness，不剥 `[1m]`
+合并不同窗口商品；重复或多来源候选保持未知，显示兜底值不因此变成已核实容量。
 
 宿主按实际目标 Harness、模型、供应商和执行电脑核实窗口。目录条目须标记 `contextWindowVerified: true`，
 任务和模型级工作预算只在已核实路由上参与窗口收敛。旧版目录缺字段、供应商未申报窗口、远程目录只剩缓存、

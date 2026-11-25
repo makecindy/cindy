@@ -81,12 +81,27 @@ describe('openPluginTaskTab', () => {
           host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' },
             { id: 'panel', title: 'Panel', resourceUri: 'ui://panel', scope: 'task' }] } } } };
     installed.ghosts = [ghost];
-    await openPluginUiView('sim', 'board', null, undefined, { userInitiated: false });
+    await openPluginUiView('sim', 'board', null, undefined, undefined, { userInitiated: false });
     expect(visibility).toHaveBeenCalledWith('open', { userInitiated: false });
     // 任务页同一条来源：只落页签，不把弹出窗口叫到前台。
-    await openPluginUiView('sim', 'panel', 'task-1', undefined, { userInitiated: false });
+    await openPluginUiView('sim', 'panel', 'task-1', undefined, undefined, { userInitiated: false });
     expect(routeSidebarCommand).toHaveBeenLastCalledWith({ type: 'open-plugin-task', sessionId: 'task-1',
       instanceId: 'sim', resourceViewId: 'panel' }, { userInitiated: false });
+  });
+  // PR #12676: the selected worktree may differ from the task's original /repo.
+  // Exercise the sidebar router and tab state; static input is readable without context approval.
+  it.each([true, false])('opens the selected worktree only with task context permission (%s)', async allowed => {
+    installed.ghosts = [{ enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' },
+      manifest: { schemaVersion: 3, id: 'sim', name: 'Sim', kind: 'chip', entry: 'main.js', version: '1',
+        mcpApps: { ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+          host: { capabilities: allowed ? ['context'] : [], views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'task' }] } } } }];
+    await openPluginUiView('sim', 'board', 'task-1', { label: 'open' }, '/repo/worktrees/selected');
+    const expected = { instanceId: 'sim', resourceViewId: 'board', resourceInput: { label: 'open' },
+      ...(allowed ? { resourceWorkingDir: '/repo/worktrees/selected' } : {}) };
+    expect(taskTabs('task-1')).toEqual([expected]);
+    expect(routeSidebarCommand).toHaveBeenLastCalledWith({ type: 'open-plugin-task', sessionId: 'task-1', ...expected }, { userInitiated: true });
+    await openPluginUiView('sim', 'board', 'task-1');
+    expect(taskTabs('task-1')).toEqual([{ instanceId: 'sim', resourceViewId: 'board', resourceInput: {} }]);
   });
   // 同一实例的不同资源有独立身份；重复打开沿原任务桶更新参数，不产生新页。
   it('opens named task resources through the original owner and updates their input in place', async () => {

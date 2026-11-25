@@ -1234,6 +1234,8 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 
 随包作者手册只描述随包版本的当前能力，不写发布状态或首个可用版本；用到新能力时，`minCindyVersion` 填开发测试所用的 Cindy 版本。
 
+本机工作目录菜单的 `workdir.menu` 复用原生菜单动作与具名页面。该位置沿用安装批准、任务归属和页面上下文边界，状态栏按钮的字号仅影响排版。旧端忽略新位置，存量插件无需重装或迁移。
+
 插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
 MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 能力以整版安装/更新
 批准有效、已启用及 manifest 声明为准，不另存分项批准。旧 receipt 的 `approvedHostUi` 残留字段

@@ -1254,7 +1254,7 @@ interface ElectronAPI {
   windowSidebarSettle?: () => Promise<void>;
   onSidebarWindowUserResize?: (callback: () => void) => () => void;
   windowExitFullscreen: () => void;
-  windowClose: () => void;
+  windowClose: (once?: 'quit' | 'tray' | 'minimize') => void;
   /**
    * 手动窗口拖拽(no-drag 元素上"按住拖动移动窗口"):start 后 main 用光标
    * 位置驱动本窗口跟随,直到 stop。renderer 侧统一经 useManualWindowDrag
@@ -6422,7 +6422,8 @@ interface ElectronAPI {
     }>;
 
     listAgentSkills: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      /** `acp`: a plugin-engine task's `/` menu (the Skills that engine expands). */
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
       params: {
         workingDir?: string;
         remoteHostId?: string;

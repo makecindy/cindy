@@ -92,6 +92,7 @@ export function PluginUiHost() {
             // App 自己请求开页，不是用户手势：只落页签与可见性，不拉宽主窗口（userInitiated:false）。
             await openPluginUiView(action.instanceId, action.viewId, typeof action.sessionId === 'string' ? action.sessionId : null,
               action.input && typeof action.input === 'object' && !Array.isArray(action.input) ? action.input as Record<string, unknown> : undefined,
+              undefined,
               { userInitiated: false });
             result = { opened: true };
           } else if (action.kind === 'draft' && typeof action.sessionId === 'string' && typeof action.text === 'string') {
