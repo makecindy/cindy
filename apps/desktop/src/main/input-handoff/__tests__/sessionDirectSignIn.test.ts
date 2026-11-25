@@ -614,6 +614,29 @@ describe('a waiting card watching its window', () => {
 
   // PR #12766 review (codex r4692520499): the sign-in page turns into a device-code page before the hint shows.
   // The wait kept the password step, so the code and its link never reached the card. Entry: window watch. Unit tier.
+  // PR #12766 review (codex r4692756395): past the sign-in the page shows its own reply box while the hint is pending.
+  // The wait judged the raw read (a field, so not waiting) and looked for a code by raising the window, then
+  // present() dropped the reply box and kept the asked step, so every third read raised it again.
+  // Entry: window watch. Unit tier. Minimal failing input: password page -> page with only a Reply field.
+  it('does not raise the window over a page whose only field is past the sign-in while the hint is pending', async () => {
+    const { driver, state } = desktop('password');
+    const qr = vi.fn(async (_target: unknown, _frame: number[] | null) => null);
+    driver.qr = qr;
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com/done' });
+    await run.session.start();
+    const raisedAtStart = state.raised;
+    const inputRevision = desktopInputRevision();
+    state.screen = 'signedIn';
+    await settle();
+    await settle();
+    expect(run.finished).toEqual([]);
+    expect(qr.mock.calls.some(([, frame]) => frame === null)).toBe(false);
+    expect(state.raised).toBe(raisedAtStart);
+    expect(desktopInputRevision()).toBe(inputRevision);
+    expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toContain('password');
+    run.session.cancel();
+  });
+
   it('shows a device code that replaces the sign-in fields while the completion hint is pending', async () => {
     const { driver, state } = desktop('password');
     let deviceCode = false;

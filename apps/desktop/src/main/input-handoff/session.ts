@@ -728,8 +728,7 @@ export class InputHandoffSession {
     this.fieldsGoneReads = 0;
     if (read.signIn) this.signInMode = true;
     // Past a sign-in, a page's own fields (a reply box) are not its next step.
-    const signInOver = this.signInMode && !read.signIn && !this.pageUnknown(read) && !read.deviceCode && !hasSecretField(read);
-    const step = signInOver ? { ...read, shown: [] } : read;
+    const step = this.shownStep(read);
     // The owner has not answered through the card and the agent's completion hint is not met: a page that swapped
     // its fields away (a slider check, a scan tab) is mid-way. Whoever read it, the window watch or a refresh after
     // the live view closed, keeps the asked step instead of handing back as done outside.
@@ -762,6 +761,12 @@ export class InputHandoffSession {
       return;
     }
     this.publish('ready');
+  }
+
+  /** What the card would show for a read: past a sign-in, a page's own fields (a reply box) are not its next step. */
+  private shownStep(read: ExtractedStep): ExtractedStep {
+    const signInOver = this.signInMode && !read.signIn && !this.pageUnknown(read) && !read.deviceCode && !hasSecretField(read);
+    return signInOver ? { ...read, shown: [] } : read;
   }
 
   /** The agent said what the end looks like, and this screen shows it. */
@@ -1214,7 +1219,8 @@ export class InputHandoffSession {
       // focused window in front (another window of the same app may sit at the same place). Otherwise the one look
       // before handing back raises the window, as before.
       // A step the card can show by itself (a device code) is presented, not waited over.
-      const waiting = this.hintsPending(step) && !actionable(step);
+      // Judged on what the card would show, as present() does: a reply box on a page past the sign-in is no step.
+      const waiting = this.hintsPending(step) && !actionable(this.shownStep(step));
       const scanning = !waiting
         ? await this.showQr()
         : list.frontmost === target.pid && window.focused && window.frame?.length === 4
