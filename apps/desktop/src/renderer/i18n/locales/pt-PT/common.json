@@ -8564,7 +8564,8 @@
         "otherCopies": "Existem {{count}} outras cópias deste plugin. Permanecerão instaladas e manterão o estado de ativação atual. Uma cópia separada necessita das suas próprias ligações a contas.",
         "originRepository": "Repositório {{repository}}",
         "originRepositoryRef": "Repositório {{repository}} ({{ref}})",
-        "originLocalFolder": "Pasta local"
+        "originLocalFolder": "Pasta local",
+        "originSourceChanged": "Esta atualização vem de uma origem diferente da versão instalada. Continue apenas se confiar no repositório indicado acima."
       },
       "trust": {
         "official": "Plugin oficial de Cindy",

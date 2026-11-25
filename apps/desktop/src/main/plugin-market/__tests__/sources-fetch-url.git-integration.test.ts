@@ -4,7 +4,8 @@
  * - 缺口：sources-manager.test.ts 用 fake 执行器模拟 git，不能证明真实 git 会按 insteadOf / includeIf 改写，
  *   也不能证明上游停在祖先时 pull --ff-only 的真实行为。
  * - 最小失败输入：url.<mirror>.insteadOf 改写到另一仓库；只注入凭证的改写；只对缓存仓库路径生效的
- *   includeIf；只在初始分支上生效的 onbranch 规则；同一配置改写到落后于缓存的仓库 B 后刷新。
+ *   includeIf；只在初始分支上生效的 onbranch 规则；同一配置改写到落后于缓存的仓库 B 后刷新；初始分支（main）
+ *   与远端默认分支（master）不同时，onbranch 规则只在 clone 中途生效（Codex P1）。
  * - tier：git-integration（真实 git，隔离的全局配置，不联网，不读本机 git 配置）。
  */
 import { execFile } from 'node:child_process';
@@ -16,7 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { marketSourceKey, pluginMarketRepositoryFromUrl } from '../../../shared/pluginMarket';
 import { MarketSourceManager, marketCloneSlug } from '../sources/index';
-import { resolveFetchUrl, type GitExecutor } from '../sources/git';
+import { cloneMarketplace, hasBranchConditionalConfig, resolveFetchUrl, type GitExecutor } from '../sources/git';
 import { MarketSourceStore } from '../sources/store';
 
 const roots: string[] = [];
@@ -104,6 +105,41 @@ describe('fetch address context and refresh target with real git', () => {
     expect(pluginMarketRepositoryFromUrl(await resolveFetchUrl('origin', executor, repo))).toBe('mirror.example.test/tenant/plugins');
     await git(['checkout', '-q', '--detach']);
     expect(pluginMarketRepositoryFromUrl(await resolveFetchUrl('origin', executor, repo))).toBe('origin.example.test/acme/plugins');
+  });
+
+  // Codex P1 on PR #12731: git clone fetches while the new repository is on its initial branch (init.defaultBranch)
+  // and switches to the remote's default branch before returning, so no sample taken afterwards can see a rule that
+  // only applied mid-clone. The manager therefore refuses to verify a clone whenever such rules exist.
+  it('cannot see an onbranch rewrite that applied only mid-clone, but detects that such a rule exists', async () => {
+    const { executor, root, setConfig } = isolatedGit('');
+    const git = (args: string[], cwd?: string) => executor(args, { ...(cwd ? { cwd } : {}), timeoutMs: 30_000 });
+    for (const name of ['a', 'b']) {
+      const work = path.join(root, `work-${name}`);
+      await git(['init', '-q', '-b', 'master', work]);
+      fs.writeFileSync(path.join(work, 'marker'), name);
+      await git(['add', '-A'], work);
+      await git(['commit', '-q', '-m', name], work);
+      await git(['clone', '-q', '--bare', work, path.join(root, `${name}.git`)]);
+    }
+    const configured = `file://${path.join(root, 'a.git')}`;
+    fs.writeFileSync(path.join(root, 'inner.gitconfig'),
+      `[url "file://${path.join(root, 'b.git')}"]\n\tinsteadOf = ${configured}\n`);
+    setConfig(`[includeIf "onbranch:main"]\n\tpath = ${path.join(root, 'inner.gitconfig')}\n`);
+
+    const samples = [await resolveFetchUrl(configured, executor)];
+    const dest = path.join(root, 'sources', 'clone');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    await cloneMarketplace({ url: configured, sparsePaths: [] }, dest, executor, async (repoDir) => {
+      samples.push(await resolveFetchUrl('origin', executor, repoDir));
+    });
+    samples.push(await resolveFetchUrl(configured, executor));
+    // Every sample names A, yet the content came from B.
+    expect(new Set(samples)).toEqual(new Set([configured]));
+    expect(fs.readFileSync(path.join(dest, 'marker'), 'utf8')).toBe('b');
+    expect(await hasBranchConditionalConfig(executor)).toBe(true);
+    expect(await hasBranchConditionalConfig(executor, dest)).toBe(true);
+    setConfig('');
+    expect(await hasBranchConditionalConfig(executor)).toBe(false);
   });
 
   it('clones afresh when the rewritten repository is behind the cached commit', async () => {

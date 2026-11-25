@@ -183,6 +183,22 @@ function throwListedPluginUnavailable(
 }
 
 class SilentUpgradeBusyError extends Error {}
+
+/**
+ * 自定义市场的实际来源已变：已装实例与这次候选的来源标识都可核实且不相等（例如同一配置被 Git 改写到另一个
+ * 仓库）。后台更新不能沿用旧来源的批准静默装入，按「等待用户确认」暂停（与权限变多同一套暂停机制），用户
+ * 显式更新时强制弹出确认并提示来源已变。
+ */
+class CustomSourceSwitchConsentRequiredError extends Error {
+  constructor() {
+    super('The marketplace source changed since the installed version and requires user confirmation');
+  }
+}
+
+/** 已装来源与候选来源都可核实且不相等。任一缺省（旧记录、无法核实的缓存）都不拦，保持既有行为。 */
+function isCustomSourceSwitch(installedSourceId: string | null, candidateSourceId: string | null): boolean {
+  return Boolean(installedSourceId && candidateSourceId && installedSourceId !== candidateSourceId);
+}
 class SilentDefaultInstallCancelledError extends Error {}
 class SilentOrganizationDefaultTakeoverSupersededError extends Error {}
 
@@ -2628,6 +2644,12 @@ export class PluginMarketService {
         if (existing && !matchesSelectedRoute && options.allowSourceReplacement !== true) {
           throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
         }
+        // 同一路由（同一配置）下实际来源是否已变：已装实例的标识取自安装记录，候选取自这份打包所用的缓存版本。
+        const installedSourceIdAtReview = matchesSelectedRoute && currentRecord
+          ? installedSourceIdOf(currentRecord, (key) => manager.localSourceIdOf(key))
+          : null;
+        const sourceSwitch = isCustomSourceSwitch(installedSourceIdAtReview, discovered.sourceId);
+        if (automatic && sourceSwitch) throw new CustomSourceSwitchConsentRequiredError();
         const assertCustomApprovalStateUnchanged = (installedNow: InstalledGhost | null): void => {
           if (!installedNow) return;
           if (options.expectedInstalledApproval === undefined) {
@@ -2665,6 +2687,7 @@ export class PluginMarketService {
           sourceIdentity: discovered.sourceIdentity,
           // 同一份配置与缓存版本的来源标识；落位后与这份包的 raw manifest 摘要一起写进账本。
           sourceId: discovered.sourceId,
+          sourceSwitch,
           assertCustomApprovalStateUnchanged,
         };
       });
@@ -2680,6 +2703,7 @@ export class PluginMarketService {
           sourceType,
           sourceIdentity,
           sourceId,
+          sourceSwitch,
           assertCustomApprovalStateUnchanged,
         } = packedAttempt;
         // 来源只决定后台更新路由，不是 ghostId 的永久所有权。只有详情页明确
@@ -2694,7 +2718,13 @@ export class PluginMarketService {
             ? { mode: 'unprompted' }
             : await obtainGhostInstallConsent(
                 consent.mode === 'prompt'
-                  ? { ...consent, trust: packed.inspected.trust.level, originSource: sourceIdentity ?? undefined }
+                  ? {
+                      ...consent,
+                      trust: packed.inspected.trust.level,
+                      originSource: sourceIdentity ?? undefined,
+                      // 换源必须显式确认：即使权限没有变多也弹出确认，并提示来源与已安装时不同。
+                      ...(sourceSwitch ? { force: true, originSourceChanged: true as const } : {}),
+                    }
                   : consent,
                 installedGhostMatchingMarketPluginNow(plugin),
                 packed.inspected.manifest,
@@ -2759,6 +2789,15 @@ export class PluginMarketService {
               currentIdentity && verifyInstalledMarketManifest(record, currentIdentity));
             if (current && !routeStillMatches && options.allowSourceReplacement !== true) {
               throwIpcError('PRECONDITION_FAILED', 'Installed Plugin source changed');
+            }
+            // 提交前再按现读的安装记录比较实际来源：后台路径一律不换源；显式路径只放行确认时已提示过的换源。
+            if (
+              routeStillMatches && record &&
+              isCustomSourceSwitch(installedSourceIdOf(record, (key) => manager.localSourceIdOf(key)), sourceId) &&
+              (automatic || !sourceSwitch)
+            ) {
+              if (automatic) throw new CustomSourceSwitchConsentRequiredError();
+              throwIpcError('PRECONDITION_FAILED', 'The installed Plugin came from another source');
             }
             sourceChanged = Boolean(current && !routeStillMatches);
           },
@@ -3025,6 +3064,8 @@ export class PluginMarketService {
       verifyInstalledMarketManifest(record, identity)
       ? installedSourceIdOf(record, entry.localSourceIdOf)
       : null;
+    // 同一路由下候选的实际来源与已装的不同（两边都可核实）：不作为可静默套用的更新，标成等待用户确认。
+    const sourceSwitch = matchesUpdateRoute && isCustomSourceSwitch(installedSourceId, entry.sourceId);
     return {
       pluginId,
       ghostId: plugin.ghostId,
@@ -3055,6 +3096,7 @@ export class PluginMarketService {
       // 远程控制端发起安装时记下它，回执过期后按它核对仍是同一个来源。
       ...(sourceIdentity ? { sourceIdentity } : {}),
       ...(installedSourceId ? { installedSourceId } : {}),
+      ...(installState === 'update-available' && sourceSwitch ? { updateRequiresConsent: true as const } : {}),
     };
   }
 
@@ -4543,6 +4585,8 @@ export class PluginMarketService {
       const installed = snapshotGhost(local, projected);
       if (
         projected.installState !== 'update-available' ||
+        // 实际来源已变（见 customToItem）：等用户显式确认换源，后台不尝试。
+        projected.updateRequiresConsent === true ||
         isPluginDowngrade(entry.plugin.version, installed) ||
         isGhostBusy(projected, local.ghosts) ||
         installed?.approval.state !== 'approved' ||
@@ -4568,7 +4612,14 @@ export class PluginMarketService {
         requireSameMarketOwner(owner);
         this.clearAutomaticUpgradeFailure(retryKey, releaseKey);
       } catch (error) {
-        if (isGhostInstallConsentRequiredError(error)) {
+        if (error instanceof CustomSourceSwitchConsentRequiredError) {
+          this.holdAutomaticUpgradeForConsent(retryKey, releaseKey, contentKey);
+          log.info('automatic custom Plugin update awaits user confirmation of a source change', {
+            pluginId: projected.pluginId,
+            market: entry.config.name,
+            releaseId: releaseKey,
+          });
+        } else if (isGhostInstallConsentRequiredError(error)) {
           this.holdAutomaticUpgradeForConsent(retryKey, releaseKey, contentKey);
           log.info('automatic custom Plugin update awaits user confirmation of new permissions', {
             pluginId: projected.pluginId,

@@ -903,9 +903,13 @@ describe('MarketSourceManager source identity', () => {
   /**
    * git 的 fake：clone 写出市场与 .git 目录；`ls-remote --get-url` 按 resolve(cwd) 当下的返回模拟 insteadOf
    * （cwd 有值即在某个仓库的上下文里解析，可模拟只对缓存仓库生效的 includeIf）；`rev-parse` 默认 HEAD 与
-   * 获取目标一致，upstream() 可让上游停在别处。
+   * 获取目标一致，upstream() 可让上游停在别处；`config --list --name-only` 返回 configNames(cwd)（null 即读不到）。
    */
-  function rewritingGit(resolve: (cwd?: string, calls?: string[][]) => string | null, upstream: () => string = () => 'abc123') {
+  function rewritingGit(
+    resolve: (cwd?: string, calls?: string[][]) => string | null,
+    upstream: () => string = () => 'abc123',
+    configNames: (cwd?: string) => string | null = () => '',
+  ) {
     const calls: string[][] = [];
     const executor: GitExecutor = async (args, options) => {
       calls.push([...args]);
@@ -924,11 +928,22 @@ describe('MarketSourceManager source identity', () => {
       if (args[0] === 'rev-parse') {
         return { stdout: `${String(args[args.length - 1]).startsWith('@{u}') ? upstream() : 'abc123'}\n`, stderr: '' };
       }
+      if (args[0] === 'config' && args.includes('--list')) {
+        const names = configNames(options.cwd);
+        if (names === null) throw new Error('fatal: bad config line 1');
+        return { stdout: names, stderr: '' };
+      }
       return { stdout: '', stderr: '' };
     };
     return { executor, calls, clones: () => calls.filter((call) => call[0] === 'clone').length };
   }
   const SOURCE_ID = /^[A-Za-z0-9_-]{22}$/;
+  /** 生产里 MarketSourceManager 在发现与取包前调用 prepare()；直接用计算器的用例同样先备好密钥。 */
+  async function preparedSourceIdOf(keyPath: string) {
+    const sourceIdOf = createMarketSourceIdOf(keyPath);
+    await sourceIdOf.prepare?.();
+    return sourceIdOf;
+  }
 
   it('gives two local folders different source ids and keeps them stable', async () => {
     const root = makeRoot();
@@ -946,9 +961,9 @@ describe('MarketSourceManager source identity', () => {
     expect((await identityManager(root).discoverSource('lib-a')).sourceIdentity).toEqual(a);
   });
 
-  it('gives two ports of one host different source ids', () => {
+  it('gives two ports of one host different source ids', async () => {
     const root = makeRoot();
-    const sourceIdOf = createMarketSourceIdOf(path.join(root, 'source-id.key'));
+    const sourceIdOf = await preparedSourceIdOf(path.join(root, 'source-id.key'));
     const sourceKey = marketSourceKey({ type: 'git', url: 'https://git.example.test/acme/plugins.git', sparsePaths: [] });
     const at = (port: number) => sourceIdOf({ kind: 'git', sourceKey,
       address: pluginMarketFetchAddress(`https://git.example.test:${port}/acme/plugins.git`)! });
@@ -956,27 +971,58 @@ describe('MarketSourceManager source identity', () => {
     expect(at(8443)).not.toBe(at(9443));
   });
 
-  it('keeps the key on this computer and rebuilds it only when missing or damaged', () => {
+  // PR #12731 maintainer review (06:33, item 1): on a plain SSH server the same host and relative path
+  // resolve per login user, so the user is part of the source (only inside the local HMAC input).
+  it('gives the same relative scp path under two SSH users different source ids', async () => {
+    const root = makeRoot();
+    const sourceIdOf = await preparedSourceIdOf(path.join(root, 'source-id.key'));
+    const sourceKey = marketSourceKey({ type: 'git', url: 'https://origin.example.test/acme/plugins.git', sparsePaths: [] });
+    const as = (url: string) => sourceIdOf({ kind: 'git', sourceKey, address: pluginMarketFetchAddress(url)! });
+    expect(as('alice@git.example.test:plugins.git')).toMatch(SOURCE_ID);
+    expect(as('alice@git.example.test:plugins.git')).not.toBe(as('bob@git.example.test:plugins.git'));
+    expect(as('ssh://alice@git.example.test/srv/plugins.git')).not.toBe(as('ssh://bob@git.example.test/srv/plugins.git'));
+    // HTTPS credentials are not identity: rotating them keeps the same id.
+    expect(as('https://ghp_ONE@git.example.test/acme/plugins.git')).toBe(as('https://ghp_TWO@git.example.test/acme/plugins.git'));
+  });
+
+  it('keeps an SSH login user out of the fetch record and the identity', async () => {
+    const root = makeRoot();
+    const manager = identityManager(root, rewritingGit(() => 'alice@git.example.test:acme/plugins.git').executor);
+    await manager.addSource({ source: 'https://origin.example.test/acme/plugins.git' });
+    const { sourceIdentity } = await manager.discoverSource('hub');
+    expect(sourceIdentity).toMatchObject({ kind: 'git', repository: 'git.example.test/acme/plugins' });
+    const records = fs.readdirSync(path.join(root, 'sources'), { recursive: true })
+      .map(String).filter((file) => file.endsWith('cindy-fetch-identity.json'))
+      .map((file) => fs.readFileSync(path.join(root, 'sources', file), 'utf8'));
+    expect(records).toHaveLength(1);
+    expect(`${JSON.stringify(sourceIdentity)}${records.join('')}`).not.toContain('alice');
+  });
+
+  it('keeps the key on this computer and rebuilds it only when missing or damaged', async () => {
     const root = makeRoot();
     const keyPath = path.join(root, 'plugin-market', 'source-id.key');
     const key = marketSourceKey({ type: 'local', path: path.join(root, 'a') });
-    const first = createMarketSourceIdOf(keyPath)({ kind: 'local', sourceKey: key });
+    // Reads are asynchronous (IPC read paths must not block the main thread): before prepare() there is no id
+    // and nothing is touched on disk.
+    expect(createMarketSourceIdOf(keyPath)({ kind: 'local', sourceKey: key })).toBeNull();
+    expect(fs.existsSync(keyPath)).toBe(false);
+    const first = (await preparedSourceIdOf(keyPath))({ kind: 'local', sourceKey: key });
     if (process.platform !== 'win32') expect(fs.statSync(keyPath).mode & 0o777).toBe(0o600);
     // Lost or damaged key: a new one is written and read back; old ids no longer match (controllers stay
     // "unconfirmed"), and the rebuilt key is stable for later operations.
     fs.rmSync(keyPath);
-    const second = createMarketSourceIdOf(keyPath)({ kind: 'local', sourceKey: key });
+    const second = (await preparedSourceIdOf(keyPath))({ kind: 'local', sourceKey: key });
     expect(second).toMatch(SOURCE_ID);
     expect(second).not.toBe(first);
     fs.writeFileSync(keyPath, 'damaged');
-    const third = createMarketSourceIdOf(keyPath)({ kind: 'local', sourceKey: key });
+    const third = (await preparedSourceIdOf(keyPath))({ kind: 'local', sourceKey: key });
     expect(third).toMatch(SOURCE_ID);
     expect(third).not.toBe(second);
-    expect(createMarketSourceIdOf(keyPath)({ kind: 'local', sourceKey: key })).toBe(third);
+    expect((await preparedSourceIdOf(keyPath))({ kind: 'local', sourceKey: key })).toBe(third);
     // A key that exists but cannot be read is left alone: no ids this time.
     const lockedPath = path.join(root, 'locked', 'source-id.key');
     fs.mkdirSync(lockedPath, { recursive: true });
-    expect(createMarketSourceIdOf(lockedPath)({ kind: 'local', sourceKey: key })).toBeNull();
+    expect((await preparedSourceIdOf(lockedPath))({ kind: 'local', sourceKey: key })).toBeNull();
     expect(fs.statSync(lockedPath).isDirectory()).toBe(true);
   });
 
@@ -1038,6 +1084,27 @@ describe('MarketSourceManager source identity', () => {
     const manager = identityManager(root, git.executor);
     await manager.addSource({ source: 'https://origin.example.test/acme/plugins.git', ref: 'v1.0.0' });
     expect((await manager.discoverSource('hub')).sourceIdentity).toBeNull();
+  });
+
+  /* PR #12731 Codex P1（init.defaultBranch 与远端默认分支不同）：git clone 在初始分支 main 上取包，返回前已切到
+   * master，`includeIf "onbranch:main"` 的改写在四次采样里都看不到。配置里只要有按分支生效的条件包含（无仓库
+   * 上下文或 staging 仓库里），就不核实；读不到配置同样不核实；无关的条件包含不受影响。
+   * 最小失败输入：staging 仓库上下文里有 includeif.onbranch 键，四次采样都给出同一个地址。 */
+  it('does not verify a clone when a branch-conditional include could have applied mid-clone', async () => {
+    const onbranch = 'user.name\nincludeif.onbranch:main.path\n';
+    for (const [label, names, verified] of [
+      ['rule only in the new repository', (cwd?: string) => (cwd ? onbranch : 'user.name\n'), false],
+      ['rule in the global context', () => onbranch, false],
+      ['config unreadable', () => null, false],
+      ['only an unrelated includeIf', () => 'includeif.gitdir:~/work/.path\n', true],
+    ] as const) {
+      const root = makeRoot();
+      const git = rewritingGit(() => 'https://origin.example.test/acme/plugins.git', undefined, names);
+      const manager = identityManager(root, git.executor);
+      await manager.addSource({ source: 'https://origin.example.test/acme/plugins.git' });
+      const { sourceIdentity } = await manager.discoverSource('hub');
+      expect(sourceIdentity === null, label).toBe(!verified);
+    }
   });
 
   it('leaves the identity unverified when the fetch address changes around the clone', async () => {

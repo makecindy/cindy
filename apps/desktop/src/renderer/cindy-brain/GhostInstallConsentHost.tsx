@@ -254,6 +254,8 @@ export function GhostInstallConsentHost() {
                 content: <>
                   {pluginSourceWarningKey(request.installationSource) && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
                     <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t(pluginSourceWarningKey(request.installationSource)!)}</p>}
+                  {request.origin === 'custom-market' && request.originSourceChanged && facts.kind === 'update' &&
+                    <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t('settings.ghosts.installConsent.originSourceChanged')}</p>}
                   {request.target && <div className="mb-3 space-y-2 text-13 leading-5 text-[var(--confirm-desc)]">
                     <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace === 'local' ? t('settings.ghosts.installConsent.localTarget') : request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
                     {request.target.organizationIdentityUnavailable && <p>{t('settings.ghosts.installConsent.localOidcUnavailable')}</p>}

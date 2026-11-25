@@ -57,7 +57,14 @@ import {
   settleCachePathRemovals,
 } from './cacheLease.js';
 import { discoverMarketplace, type DiscoveredMarketplace, type DiscoverError } from './discover.js';
-import { MarketGitError, cloneMarketplace, fetchMarketplace, resolveFetchUrl, type GitExecutor } from './git.js';
+import {
+  MarketGitError,
+  cloneMarketplace,
+  fetchMarketplace,
+  hasBranchConditionalConfig,
+  resolveFetchUrl,
+  type GitExecutor,
+} from './git.js';
 import { fetchedSourceId, readFetchIdentity, writeFetchIdentity } from './fetchIdentity.js';
 import type { MarketSourceIdOf } from './sourceId.js';
 import { checkGitPreflight as checkGitPreflightImpl } from './preflight.js';
@@ -618,7 +625,8 @@ export class MarketSourceManager {
             const before = await resolveFetchUrl('origin', this.deps.gitExecutor, fastForwardDir);
             // 实际地址相对上一版本的记录变了（改写目标变了，或上一版本没有可核实记录而这次有）：不在旧来源的
             // 历史上快进，回落到全新克隆。
-            if (fetchedSourceId(before, sourceKey, this.deps.sourceIdOf) !== (readFetchIdentity(current)?.sourceId ?? null)) {
+            await this.deps.sourceIdOf?.prepare?.();
+            if (fetchedSourceId(before, sourceKey, this.deps.sourceIdOf) !== ((await readFetchIdentity(current))?.sourceId ?? null)) {
               throw new Error('The fetch address changed since the cached version');
             }
             revision = await fetchMarketplace(
@@ -629,7 +637,7 @@ export class MarketSourceManager {
             );
             const after = await resolveFetchUrl('origin', this.deps.gitExecutor, fastForwardDir);
             // 复制来的旧记录必须被重写或清掉；清不掉时抛出，回落到全新克隆。
-            writeFetchIdentity(fastForwardDir, {
+            await writeFetchIdentity(fastForwardDir, {
               resolved: before && before === after ? before : null,
               revision,
               sourceKey,
@@ -709,7 +717,10 @@ export class MarketSourceManager {
     return this.deps.store.get(name);
   }
 
-  /** 本地文件夹来源的不透明标识（旧账本记录没有存标识时，按记录的来源指纹现算）。 */
+  /**
+   * 本地文件夹来源的不透明标识（旧账本记录没有存标识时，按记录的来源指纹现算）。同步计算，只用本实例里
+   * 已异步读好的密钥（任何一次发现都会先备好）；还没备好时返回 null，即「无法核实」，不回退到同步读盘。
+   */
   localSourceIdOf(sourceKey: string): string | null {
     return this.deps.sourceIdOf?.({ kind: 'local', sourceKey }) ?? null;
   }
@@ -718,11 +729,13 @@ export class MarketSourceManager {
    * 在读取租约内为这份市场根目录生成来源身份与标识。Git 来源都取该缓存版本的取包记录（仓库是实际取包
    * 地址，标识含实际地址部件），不取配置字符串；本地来源的标识由来源指纹直接算。
    */
-  private sourceFactsAt(
+  private async sourceFactsAt(
     config: MarketSourceConfig,
     root: string,
-  ): Pick<DiscoveredSource, 'sourceIdentity' | 'sourceId'> {
-    const record = config.source.type === 'git' ? readFetchIdentity(root) : null;
+  ): Promise<Pick<DiscoveredSource, 'sourceIdentity' | 'sourceId'>> {
+    // 密钥先异步备好：本地来源的标识、以及之后安装路径里的同步核对（localSourceIdOf）都用它。
+    await this.deps.sourceIdOf?.prepare?.();
+    const record = config.source.type === 'git' ? await readFetchIdentity(root) : null;
     const sourceId = config.source.type === 'local'
       ? this.localSourceIdOf(marketSourceKey(config.source))
       : record?.sourceId ?? null;
@@ -743,6 +756,8 @@ export class MarketSourceManager {
    * 的条件规则会随状态变化（`includeIf "gitdir:…"` 看仓库路径，`includeIf "onbranch:…"` 看当前分支，检出
    * `--detach` 后即失效）。所以克隆前（无仓库）、克隆刚完成时与检出完成后（staging 仓库里）、克隆后（无仓库）
    * 各解析一次，全部一致才算核实，否则只记「无法核实」。
+   * `includeIf "onbranch:…"` 还可能只在克隆中途的初始分支上生效（clone 返回前已切走），四次采样都看不到；
+   * 所以克隆前（无仓库）与克隆刚完成时（staging 仓库里）只要配置里有按分支生效的条件包含，就不核实。
    */
   private async cloneWithFetchIdentity(
     source: Extract<MarketSource, { type: 'git' }>,
@@ -750,6 +765,7 @@ export class MarketSourceManager {
   ): Promise<string> {
     const executor = this.deps.gitExecutor;
     const samples: Array<string | null> = [await resolveFetchUrl(source.url, executor)];
+    let branchConditional = await hasBranchConditionalConfig(executor);
     const revision = await cloneMarketplace(
       {
         url: source.url,
@@ -758,19 +774,27 @@ export class MarketSourceManager {
       },
       dest,
       executor,
-      async (repoDir) => {
+      async (repoDir, phase) => {
         samples.push(await resolveFetchUrl('origin', executor, repoDir));
+        if (phase === 'cloned' && !branchConditional) branchConditional = await hasBranchConditionalConfig(executor, repoDir);
       },
     );
     samples.push(await resolveFetchUrl(source.url, executor));
     const [first] = samples;
-    this.recordFetchIdentity(dest, source, first && samples.every((sample) => sample === first) ? first : null, revision);
+    const verified = !branchConditional && first && samples.every((sample) => sample === first) ? first : null;
+    await this.recordFetchIdentity(dest, source, verified, revision);
     return revision;
   }
 
-  private recordFetchIdentity(dir: string, source: MarketSource, resolved: string | null, revision: string): void {
+  private async recordFetchIdentity(
+    dir: string,
+    source: MarketSource,
+    resolved: string | null,
+    revision: string,
+  ): Promise<void> {
     try {
-      writeFetchIdentity(dir, { resolved, revision, sourceKey: marketSourceKey(source), sourceIdOf: this.deps.sourceIdOf });
+      await this.deps.sourceIdOf?.prepare?.();
+      await writeFetchIdentity(dir, { resolved, revision, sourceKey: marketSourceKey(source), sourceIdOf: this.deps.sourceIdOf });
     } catch {
       // 记录缺失即身份缺省；不记录错误详情（可能含改写注入的地址）。
     }
@@ -803,7 +827,7 @@ export class MarketSourceManager {
       const discovered = await discoverMarketplace(root);
       return fn({
         config: config!,
-        ...this.sourceFactsAt(config!, root),
+        ...(await this.sourceFactsAt(config!, root)),
         result: discovered.ok
           ? { ok: true, marketplace: discovered.marketplace }
           : {
@@ -861,7 +885,7 @@ export class MarketSourceManager {
         const discovered = await discoverMarketplace(root);
         await fn({
           config,
-          ...this.sourceFactsAt(config, root),
+          ...(await this.sourceFactsAt(config, root)),
           result: discovered.ok
             ? { ok: true, marketplace: discovered.marketplace }
             : {
@@ -892,7 +916,7 @@ export class MarketSourceManager {
         const discovered = await discoverMarketplace(root);
         results.push({
           config,
-          ...this.sourceFactsAt(config, root),
+          ...(await this.sourceFactsAt(config, root)),
           result: discovered.ok
             ? { ok: true, marketplace: discovered.marketplace }
             : {

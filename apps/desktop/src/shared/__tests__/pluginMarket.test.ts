@@ -38,7 +38,7 @@ describe('Plugin Market shared contract', () => {
  * - 依据：PR #12684／#12731 维护者评审（2026-11-25）：目标 Host 生成去敏的仓库身份与不透明来源标识；
  *   credentials-and-local-storage.md：凭证只留在系统 git，不进任何投影。
  * - 现有覆盖缺口：此前没有来源身份投影，来源地址只在 Main 内使用。
- * - 最小失败输入：内嵌令牌、user:pass、query、fragment、端口；手工改坏的配置（非字符串、双向控制符、
+ * - 最小失败输入：内嵌令牌、user:pass、端口；带 `?` / `#` 的地址（PR #12731 Codex P1：会被 URL 解析器截掉，git 却取另一个仓库）；手工改坏的配置（非字符串、双向控制符、
  *   百分号编码、`..` 路径段、不合法 ref）；缺来源标识或取包记录。函数新增之前这些用例全部失败。
  * - tier：unit（纯函数，node 环境）。
  */
@@ -67,12 +67,10 @@ describe('pluginMarketRepositoryFromUrl', () => {
     expect(added('https://gitlab.example.com/group/sub/plugins.git')).toBe('gitlab.example.com/group/sub/plugins');
   });
 
-  it('never carries credentials, query strings, fragments or ports into the repository', () => {
+  it('never carries credentials or ports into the repository', () => {
     for (const url of [
       'https://ghp_SECRET@github.com/acme/plugins.git',
       'https://user:pass@github.com/acme/plugins.git',
-      'https://github.com/acme/plugins.git?access_token=SECRET',
-      'https://github.com/acme/plugins.git#SECRET',
       'https://github.com:8443/acme/plugins.git',
       'ssh://git@github.com:2222/acme/plugins.git',
       'ssh://git:SECRET@github.com/acme/plugins.git',
@@ -86,6 +84,9 @@ describe('pluginMarketRepositoryFromUrl', () => {
   it('fails closed for addresses it cannot reduce to the repository git really fetches', () => {
     for (const url of [
       '', '   ', 'github.com', 'https://github.com/only-owner', 'https://github.com/a/b/c/d/e',
+      // Git sends these suffixes as part of the path (ssh, git) or the request (http); a URL parser drops them.
+      'https://github.com/acme/plugins.git?access_token=SECRET', 'https://github.com/acme/plugins.git#SECRET',
+      'ssh://git@github.com/acme/plugins.git?other', 'ssh://git@github.com/acme/plugins.git#other',
       // URL parsing would normalise these into a different path than the one git requests.
       'https://github.com/acme/x/../plugins', 'https://github.com/acme/./plugins', 'https://github.com/acme/x/%2e%2e/plugins',
       'https://github.com/acme/plu%67ins.git', 'https://github.com//acme/plugins',
@@ -104,12 +105,23 @@ describe('pluginMarketRepositoryFromUrl', () => {
 describe('pluginMarketFetchAddress', () => {
   // Parts that feed the source id: scheme, host and port distinguish endpoints; credentials never appear.
   it('keeps the endpoint parts that tell sources apart and drops credentials', () => {
-    expect(pluginMarketFetchAddress('https://ghp_SECRET@Git.Example.test:8443/acme/plugins.git?x=1#y'))
-      .toEqual({ scheme: 'https', host: 'git.example.test', port: '8443', path: '/acme/plugins.git' });
-    expect(pluginMarketFetchAddress('ssh://git@git.example.test:2222/acme/plugins.git'))
-      .toEqual({ scheme: 'ssh', host: 'git.example.test', port: '2222', path: '/acme/plugins.git' });
+    expect(pluginMarketFetchAddress('https://ghp_SECRET@Git.Example.test:8443/acme/plugins.git'))
+      .toEqual({ scheme: 'https', user: '', host: 'git.example.test', port: '8443', path: '/acme/plugins.git' });
+    // PR #12731 Codex P1: `?…` / `#…` would be cut off by a URL parser while git fetches a different repository
+    // (`plugins.git?other` is another path on an SSH server), so such addresses have no endpoint at all.
+    for (const suffix of ['?other', '#other']) {
+      expect(pluginMarketFetchAddress(`ssh://git@git.example.test/acme/plugins.git${suffix}`)).toBeNull();
+      expect(pluginMarketFetchAddress(`git://git.example.test/acme/plugins.git${suffix}`)).toBeNull();
+      expect(pluginMarketFetchAddress(`https://git.example.test/acme/plugins.git${suffix}`)).toBeNull();
+    }
+    // SSH login users are part of the source (same host and path can resolve per user); https userinfo is a
+    // credential and is never read.
+    expect(pluginMarketFetchAddress('ssh://deploy@git.example.test:2222/acme/plugins.git'))
+      .toEqual({ scheme: 'ssh', user: 'deploy', host: 'git.example.test', port: '2222', path: '/acme/plugins.git' });
     expect(pluginMarketFetchAddress('git@git.example.test:acme/plugins.git'))
-      .toEqual({ scheme: 'scp', host: 'git.example.test', port: '', path: 'acme/plugins.git' });
+      .toEqual({ scheme: 'scp', user: 'git', host: 'git.example.test', port: '', path: 'acme/plugins.git' });
+    expect(pluginMarketFetchAddress('ssh://git:SECRET@git.example.test/acme/plugins.git')).toMatchObject({ user: 'git' });
+    expect(JSON.stringify(pluginMarketFetchAddress('ssh://git:SECRET@git.example.test/acme/plugins.git'))).not.toContain('SECRET');
     // Paths the display identity rejects (e.g. a `.github` repository) still identify a source.
     expect(pluginMarketFetchAddress('https://github.com/acme/.github')).toMatchObject({ path: '/acme/.github' });
     expect(pluginMarketRepositoryFromUrl('https://github.com/acme/.github')).toBeNull();

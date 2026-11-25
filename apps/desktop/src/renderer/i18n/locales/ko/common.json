@@ -8447,7 +8447,8 @@
         "otherCopies": "같은 이름의 플러그인이 {{count}}개 더 있습니다. 덮어쓰거나 비활성화하지 않습니다. 별도 사본에는 독립적인 계정 연결이 필요합니다.",
         "originRepository": "저장소 {{repository}}",
         "originRepositoryRef": "저장소 {{repository}} ({{ref}})",
-        "originLocalFolder": "로컬 폴더"
+        "originLocalFolder": "로컬 폴더",
+        "originSourceChanged": "이 업데이트는 설치된 버전과 다른 소스에서 가져옵니다. 위에 표시된 저장소를 신뢰하는 경우에만 계속하세요."
       },
       "trust": {
         "official": "Cindy 공식 플러그인",

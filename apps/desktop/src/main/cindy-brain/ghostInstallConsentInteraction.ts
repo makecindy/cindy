@@ -123,6 +123,7 @@ export function renderGhostInstallConsentText(
     consentText(translate, 'updateMeta', { from: facts.previousVersion, to: facts.version, source }),
   );
   lines.push(...targetLines);
+  if (request.origin === 'custom-market' && request.originSourceChanged) lines.push(consentText(translate, 'originSourceChanged'));
   lines.push(consentText(translate, 'updateDescription'));
   if (facts.builtinOauthClientChanged) lines.push(consentText(translate, 'oauthClientChanged'));
   if (facts.added.length > 0) {

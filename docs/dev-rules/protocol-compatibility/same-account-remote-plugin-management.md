@@ -93,19 +93,31 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
      IM 卡与官方 hook 卡的参数预览去掉 `source.sourceId`，仓库名本来就在说明里。
 - **`sourceId`**（`^[A-Za-z0-9_-]{22}$`）：
   - 算法：`HMAC-SHA256(K, input)` 的前 16 字节，base64url。`input` 是带域名与版本的 JSON 数组：
-    - 本地：`["cindy.plugin-market.source-id", 1, "local", marketSourceKey]`；
-    - Git：`["cindy.plugin-market.source-id", 1, "git", marketSourceKey, scheme, host, port, path]`，后四项是
-      **实际取包地址**的白名单部件，不含用户名、密码、令牌、查询串、片段。
+    - 本地：`["cindy.plugin-market.source-id", 2, "local", marketSourceKey]`；
+    - Git：`["cindy.plugin-market.source-id", 2, "git", marketSourceKey, scheme, user, host, port, path]`，后五项是
+      **实际取包地址**的白名单部件，不含密码、令牌。URL 形式的地址带 `?` 或 `#` 时不生成：URL 解析器会把它们当作
+      查询串、片段截掉，git 却把它们当作仓库路径的一部分（ssh、git）或拼进请求（http），截掉会把不同仓库认成同一个。
+  - 用户名的取舍：`ssh://` 与 scp 形式（`user@host:path`）的登录用户算身份。普通 SSH 服务上，同主机同路径（尤其
+    scp 相对路径）可随登录用户解析到不同家目录和仓库；`ssh://` 带绝对路径时也一律纳入，结果只会更保守。
+    https / http / git 的 userinfo（含 `https://TOKEN@host` 单段令牌）算凭证，一律不读取，轮换凭证不改变标识。
+    登录用户只进本机 HMAC 输入，不进取包记录、展示、回执或日志；不合常见账户名字符集时整个标识缺省。
   - 区分能力：不同本地目录、同主机不同端口、不同协议写法、不同稀疏路径、配置相同但被改写到不同实际地址，
-    `sourceId` 都不同。只改变认证信息（例如改写注入的令牌不同）时不变。
+    `sourceId` 都不同；同主机、同路径但 SSH 登录用户不同，`sourceId` 也不同。只改变 https 认证信息（例如改写
+    注入的令牌不同）时不变。
   - 用 HMAC 而不是裸哈希，是因为本地路径与仓库地址可被穷举反推。
   - 密钥 K 每个数据所有者一把，见[凭证与本地存储](../credentials-and-local-storage.md)的路径表。
+  - 密钥与取包记录的读写都是异步的（市场列表、详情、远程目录这些 IPC 读路径会读到），同步计算只用已读好的
+    密钥，没读好时标识缺省，不回退到同步读盘。
   - 实现：`apps/desktop/src/main/plugin-market/sources/sourceId.ts`。
 - **实际取包地址**：`url.*.insteadOf` 可以把配置地址改写到另一个仓库，按仓库路径加载的
   `includeIf "gitdir:…"` / `includeIf "onbranch:…"` 也可以只在缓存仓库或某个分支状态下生效。所以地址在取包实际发生的仓库上下文里用
   `git ls-remote --get-url` 采集（与取包同一执行环境，不联网）：
   - clone：克隆前（无仓库）、`git clone` 刚完成时与检出完成后（都在 staging 仓库里，前者覆盖 `includeIf "onbranch:…"`
     这类随检出状态失效的规则）、克隆后（无仓库）各解析一次，全部一致才算核实。
+  - `git clone` 在初始分支（`init.defaultBranch`）上取包，返回前已切到远端默认分支；两者不同时，只在初始分支上
+    生效的 `includeIf "onbranch:…"` 事后的任何采样都看不到。所以克隆前（无仓库）与克隆刚完成时（staging 仓库里）
+    只要配置里有按分支生效的条件包含（`git config --list --name-only` 里出现 `includeif.onbranch:` 键，只列键名
+    不含值），或读不到配置，就不核实这次克隆。
   - 快进刷新：在 fetch 发生的暂存仓库里前后各解析一次。若这次地址对应的 `sourceId` 与上一版本记录的不同，
     不在旧来源的历史上快进，改走全新克隆。
   - 落位前确认检出的 HEAD 就是本次获取的目标提交（无 ref 与 `@{u}` 比，有 ref 与 `FETCH_HEAD` 比），对不上即
@@ -115,6 +127,16 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     不进错误详情；git 子进程的输出由 `resolveFetchUrl` 读取后只交给白名单函数，失败时丢弃不记录。
   - 快进刷新复制旧版本后必须重写或删除记录；删除失败时放弃这份暂存目录、改走全新克隆。
   - 实现：`sources/fetchIdentity.ts`、`sources/git.ts`。
+- **实际来源变化时的更新**（同一路由、两边都可核实且 `sourceId` 不同，例如同一配置被改写到另一个仓库）：
+  - 市场投影：该条目若为 `update-available`，同时带既有字段 `updateRequiresConsent: true`（与权限变多时同一字段、
+    同一暂停机制），后台自动更新不尝试。
+  - 实际取包（来源租约内）与提交前：后台路径一律拒绝换源并按「等待用户确认」暂停；显式更新强制弹出确认（即使
+    权限没有变多），确认请求带 `originSourceChanged: true`，确认框与任务卡提示「来源与已安装的版本不同」。
+  - 用户确认后安装记录改绑新来源，之后不再反复询问。旧记录没有绑定或候选身份缺省时不拦，保持既有行为（第一次
+    后台更新会写入绑定，之后才开始比较），升级后不会让所有自定义市场插件集体暂停更新。服务端市场与本地来源
+    （配置不变即同一来源）不受影响。
+  - 控制端：确认回执的 `consent.originSourceChanged?: true` 为可选新字段，可据此提示来源已变；条目的
+    `updateRequiresConsent` 是既有字段，现在也可能因来源变化置位。
 - **账本**（存量兼容）：
   - 自定义市场安装记录（`custom-ledger.v1.json`）只增一个可选字段 `sourceIdBinding:
     {sourceId, sourceKey, rawManifestSha256}`。显式安装、后台自动更新、换源都经 `customInstall` 整条重写，
@@ -127,7 +149,7 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     此字段的记录，结果是缺省；旧版本的卸载标记、摘要补写保留字段，但不改来源与包摘要，绑定仍然成立。
 - **白名单与缺省**：
   - `repository` 只含小写 host 加 2–4 段路径，整体匹配 `PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN`；用户名、密码、
-    令牌、端口、查询串与片段一律不读取。含空白、控制符、零宽或双向控制符、反斜杠、百分号编码、原始
+    令牌、端口一律不读取。URL 形式带 `?` 或 `#` 的地址不生成（见上）。含空白、控制符、零宽或双向控制符、反斜杠、百分号编码、原始
     `.` / `..` 路径段或多个 `@` 的地址不生成。
   - 未配置 ref（缺省键、null、空串）时不给 `ref`；配置了但不合法时整个身份不生成。
   - 以下情况整个身份缺省，不给部分值：密钥不可用；版本目录没有可核实的取包记录（升级前取的旧缓存，下次刷新

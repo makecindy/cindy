@@ -133,6 +133,22 @@ describe('plugin install confirmation card', () => {
     ]);
   });
 
+  // PR #12731 maintainer review (06:33, item 2): an update whose actual source changed is confirmed
+  // explicitly; the task / IM card says so even when no permission was added.
+  it('says the source changed on a custom-market update confirmed for a source switch', () => {
+    const text = renderGhostInstallConsentText({
+      initiator: 'user', origin: 'custom-market', originLabel: 'Acme', originSourceChanged: true,
+      originSource: { kind: 'git', repository: 'github.com/acme/plugins', sourceId: SOURCE_ID },
+      facts: { kind: 'update', ghostId: 'weather-chip', name: 'Weather', version: '2.0.0', previousVersion: '1.0.0',
+        added: [], removed: [], unchangedCount: 1, builtinOauthClientChanged: false },
+    }, (key) => key === 'settings.ghosts.installConsent.originSourceChanged' ? 'Source changed.' : translate(key));
+    expect(text.description.split('\n').slice(0, 3)).toEqual([
+      'v1.0.0 → v2.0.0 · From custom market Acme · Repository github.com/acme/plugins',
+      'Source changed.',
+      'Needs more permissions.',
+    ]);
+  });
+
   it('includes host detail keys and author detail such as OAuth scopes', () => {
     const text = renderGhostInstallConsentText(
       {

@@ -58,8 +58,9 @@ export interface PluginMarketItem {
    */
   installedSourceId?: string;
   /**
-   * 新版本比已装版本权限变多，后台更新已暂停、等待用户确认。只在 Main 按真实包
-   * 判定过后出现；缺省表示未知或无需确认，不能据此推断可以静默更新。
+   * 新版本比已装版本权限变多，或（自定义市场）实际来源与已装版本不同，后台更新已暂停、
+   * 等待用户确认。只在 Main 按真实包与来源记录判定过后出现；缺省表示未知或无需确认，
+   * 不能据此推断可以静默更新。
    */
   updateRequiresConsent?: true;
 }
@@ -249,12 +250,21 @@ const SOURCE_IDENTITY_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
 const SOURCE_IDENTITY_UNSAFE_CHARS = /[\s\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\\%]/;
 const SOURCE_IDENTITY_URL_SCHEME = /^(https?|ssh|git):\/\//i;
 /** scp 形式 `user@host:owner/repo`：冒号前不能有 `/`，路径不能以 `/` 开头。 */
-const SOURCE_IDENTITY_SCP = /^[^@/:]+@([^@/:]+):(?!\/)(.+)$/;
+const SOURCE_IDENTITY_SCP = /^([^@/:]+)@([^@/:]+):(?!\/)(.+)$/;
+/** SSH 登录用户：只进本机 HMAC 输入，字符集限制在常见账户名内，其它一律按无法核实处理。 */
+const SOURCE_IDENTITY_SSH_USER = /^[A-Za-z0-9._-]{1,128}$/;
 
 /** 实际取包地址按白名单取出的部件（不含用户名、密码、令牌、查询串、片段），只用于生成 sourceId。 */
 export interface PluginMarketFetchAddress {
   /** 小写协议；scp 形式记作 `scp`。 */
   scheme: 'https' | 'http' | 'ssh' | 'git' | 'scp';
+  /**
+   * SSH 登录用户（仅 `ssh` / `scp`；其它协议为空串）。在普通 SSH 服务上，同一主机、同一路径（尤其 scp 的
+   * 相对路径、`~user/…`）可随登录用户解析到不同家目录和仓库，所以它是来源身份的一部分；ssh:// 带绝对路径时
+   * 也一律纳入，结果只会更保守。只进本机 HMAC 输入，不进展示、记录、回执或日志。https / http / git 的
+   * userinfo（含 `https://TOKEN@host` 单段令牌）是凭证，一律不读取，凭证轮换不改变来源标识。
+   */
+  user: string;
   /** 小写 host。 */
   host: string;
   /** 端口，缺省为空串。 */
@@ -266,8 +276,10 @@ export interface PluginMarketFetchAddress {
 /**
  * 把一个 Git 地址（配置地址，或 git 解析出的实际取包地址）白名单拆成部件，解析不了返回 null：
  * - 只接受 `https` / `http` / `ssh` / `git` 与 `user@host:path` 的 scp 形式；
- * - 只读取协议、host、端口、路径；用户名、密码（含 `https://TOKEN@host` 这类单段令牌，例如 `insteadOf`
- *   改写注入的）、查询串、片段一律不读取；
+ * - 只读取协议、SSH 登录用户（仅 ssh / scp）、host、端口、路径；https / http / git 的用户名与密码（含
+ *   `https://TOKEN@host` 这类单段令牌，例如 `insteadOf` 改写注入的）与任何密码一律不读取；
+ * - URL 形式里带 `?` 或 `#` 时不生成：URL 解析器会把它们当成查询串、片段截掉，git 却把它们当成仓库路径
+ *   的一部分（ssh / git）或拼进请求（http），截掉会把不同仓库认成同一个；
  * - 含不安全字符、原始 `.` / `..` 路径段、多个 `@`、空路径时不生成。
  * 输入按不可信处理（手工改过的配置、git 解析出的改写地址）。结果不写日志。
  */
@@ -281,6 +293,7 @@ export function pluginMarketFetchAddress(value: unknown): PluginMarketFetchAddre
     const authority = rest.split('/', 1)[0] ?? '';
     // 多个 `@` 时各解析器对 host 的认定可能不同；`.`/`..` 段会被 URL 归一掉。
     if (authority.split('@').length > 2 || /\/\.{1,2}(?=[/?#]|$)/.test(rest.slice(authority.length))) return null;
+    if (/[?#]/.test(rest)) return null;
     let parsed: URL;
     try {
       parsed = new URL(url);
@@ -289,8 +302,13 @@ export function pluginMarketFetchAddress(value: unknown): PluginMarketFetchAddre
     }
     const host = parsed.hostname.toLowerCase();
     if (!host || host.length > 253 || !SOURCE_IDENTITY_HOST.test(host) || !/^\/./.test(parsed.pathname)) return null;
+    const protocol = scheme[1]!.toLowerCase() as PluginMarketFetchAddress['scheme'];
+    // 只有 ssh 的用户名是身份；其它协议的 userinfo 是凭证，不读取。
+    const user = protocol === 'ssh' ? parsed.username : '';
+    if (user && !SOURCE_IDENTITY_SSH_USER.test(user)) return null;
     return {
-      scheme: scheme[1]!.toLowerCase() as PluginMarketFetchAddress['scheme'],
+      scheme: protocol,
+      user,
       host,
       port: parsed.port,
       path: parsed.pathname,
@@ -298,9 +316,10 @@ export function pluginMarketFetchAddress(value: unknown): PluginMarketFetchAddre
   }
   const scp = SOURCE_IDENTITY_SCP.exec(url);
   if (!scp) return null;
-  const host = scp[1]!.toLowerCase();
-  if (host.length > 253 || !SOURCE_IDENTITY_HOST.test(host)) return null;
-  return { scheme: 'scp', host, port: '', path: scp[2]! };
+  const user = scp[1]!;
+  const host = scp[2]!.toLowerCase();
+  if (!SOURCE_IDENTITY_SSH_USER.test(user) || host.length > 253 || !SOURCE_IDENTITY_HOST.test(host)) return null;
+  return { scheme: 'scp', user, host, port: '', path: scp[3]! };
 }
 
 /**

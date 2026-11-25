@@ -8447,7 +8447,8 @@
         "otherCopies": "还有 {{count}} 份该插件的其他副本；它们会继续保留，启用状态不变。另装的副本需要单独连接账号。",
         "originRepository": "仓库 {{repository}}",
         "originRepositoryRef": "仓库 {{repository}}（{{ref}}）",
-        "originLocalFolder": "本地文件夹"
+        "originLocalFolder": "本地文件夹",
+        "originSourceChanged": "这次更新的来源与已安装的版本不同。请确认你信任上面显示的仓库后再继续。"
       },
       "trust": {
         "official": "Cindy 官方插件",
