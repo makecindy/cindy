@@ -59,6 +59,7 @@ import {
   resetGuestProviderRoutesForTest,
   restrictCodexRoutesToGuestProvider,
 } from '../guest-provider-route-store';
+import * as providerRoutes from '../provider-route';
 import {
   setCustomProviderKeyReader,
   setPendingCredentialSwitchReader,
@@ -360,6 +361,76 @@ describe('Claude proxy routing for shared-provider guests', () => {
       expect(await statusOf(await request(wire))).toBe(403);
       if (trust === 'guest') expect(await statusOf(await request(wire, 'shared-a', 'guest-child'))).toBe(403);
     } finally { lease(); dispose(); disposeChild(); grant.release(); }
+  });
+
+  // Unit / PR #12818: inspect the dispatch gate returned for a normal hosted
+  // Pi request. Admission checks alone do not cover changes after routing.
+  // Only change in-memory state and call the gate; never forward a stale request.
+  it.each([
+    'token closed', 'token replaced', 'token provider changed',
+    'grant revoked', 'grant replaced', 'model permission removed',
+    'reservation released', 'reservation replaced', 'member no longer dispatchable',
+    'existing decision rejects',
+  ])('rechecks a previously admitted hosted Pi pool decision when %s', async change => {
+    const session = 'pool-pi-dispatch';
+    const wireModel = 'shared-model';
+    const logicalModel = 'chatgpt/shared-model';
+    let piProvider = 'shared-a';
+    let modelAllowed = true;
+    let memberAvailable = true;
+    const allowsModel = (provider: string, model: string) =>
+      modelAllowed && provider === 'openai' && model === logicalModel;
+    const grant = bindHostedSessionProvider(session, 'openai', allowsModel);
+    const register = () => registerPiProxySession(session, 'live-token', () => piProvider);
+    const disposeToken = register();
+    const reserve = () => bindPoolExecutionRoute(session, {
+      providerId: 'openai',
+      connectionId: 'shared-a',
+      logicalModel: () => logicalModel,
+      assertCurrent: () => { if (!memberAvailable) throw Error('fixture reservation no longer dispatchable'); },
+      captureTurnRejection: () => undefined,
+    });
+    const releaseReservation = reserve();
+    let originalDecisionAllowed = true;
+    const resolve = providerRoutes.resolveProviderRouteDecision;
+    const routeSpy = change === 'existing decision rejects'
+      ? vi.spyOn(providerRoutes, 'resolveProviderRouteDecision').mockImplementation(async (...args) => {
+        const resolved = await resolve(...args);
+        if (!resolved?.decision) return resolved;
+        const originalDecision = resolved.decision;
+        return { ...resolved, decision: { ...originalDecision, dispatchGenerationValid: () =>
+          originalDecisionAllowed && originalDecision.dispatchGenerationValid?.() !== false } };
+      }) : undefined;
+    const request = () => transform({ model: wireModel }, ctxWith({
+      'x-cindy-pi-session-id': session,
+      'x-cindy-pi-session-token': 'live-token',
+      'x-cindy-pi-provider-id': 'shared-a',
+    }));
+    let cleanupChange: (() => void) | undefined;
+    try {
+      const decision = await request();
+      expect(decision?.upstreamOverride).toBe(SHARED_UPSTREAM);
+      expect(decision?.dispatchGenerationValid?.()).toBe(true);
+      switch (change) {
+        case 'token closed': disposeToken(); break;
+        case 'token replaced': cleanupChange = register(); break;
+        case 'token provider changed': piProvider = 'other-b'; break;
+        case 'grant revoked': grant.release(); break;
+        case 'grant replaced': cleanupChange = bindHostedSessionProvider(session, 'openai', allowsModel).release; break;
+        case 'model permission removed': modelAllowed = false; break;
+        case 'reservation released': releaseReservation(); break;
+        case 'reservation replaced': cleanupChange = reserve(); break;
+        case 'member no longer dispatchable': memberAvailable = false; break;
+        case 'existing decision rejects': originalDecisionAllowed = false; break;
+      }
+      expect(decision?.dispatchGenerationValid?.()).toBe(false);
+    } finally {
+      routeSpy?.mockRestore();
+      cleanupChange?.();
+      releaseReservation();
+      disposeToken();
+      grant.release();
+    }
   });
 
   // A loopback mismatch alone is not evidence of shared scope. Only a live
