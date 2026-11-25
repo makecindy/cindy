@@ -498,19 +498,23 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  // Schedules do not run plugin-engine (ACP) tasks (docs/plans/acp-plugin-bridge.md, 排除范围).
-  // A bound one must fail visibly before restore or any engine switch, never run on a built-in
-  // engine. Minimal input: target row agent_kind='acp'. Unit fixture.
-  it('refuses a target task that runs on a plugin engine before restoring or switching it', async () => {
-    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'archived', agentKind: 'acp' });
+  // A plugin-engine (ACP) task runs a linked automation only on its own engine and model, on this
+  // computer (docs/plans/acp-plugin-bridge.md). Any other shape must fail visibly before restore or
+  // any engine switch, never run on a built-in engine. Minimal input: target row agent_kind='acp'
+  // with a model chosen, or on another computer. Unit fixture.
+  it.each([
+    [{}, {}, 'uses the task\'s own model'],
+    [{ model: undefined }, { agentDeviceId: 'other-computer' }, 'must run on this computer'],
+  ] as const)('refuses an unsupported plugin-engine target before restoring or switching it', async (scheduleOverrides, rowOverrides, reason) => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'archived', agentKind: 'acp', ...rowOverrides });
     const h = createSessionHarness(async () => ({ accepted: true }));
     const acquirePendingAgentSwitch = vi.fn();
     const { runner, maker, notifier } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
-    const error = await runner.fire(baseSchedule({ targetSessionId: h.session.id }), createFireContext())
+    const error = await runner.fire(baseSchedule({ targetSessionId: h.session.id, ...scheduleOverrides }), createFireContext())
       .catch((refusal: unknown) => refusal);
     expect(error).toMatchObject({
       code: 'PLUGIN_ENGINE_UNSUPPORTED',
-      message: expect.stringContaining('Switch the linked task back to a built-in engine or link the automation to a task that uses one.'),
+      message: expect.stringContaining(reason),
     });
     expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: (error as Error).message });
     expect(mocks.restoreArchivedSessionForSend).not.toHaveBeenCalled();

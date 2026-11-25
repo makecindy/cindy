@@ -332,6 +332,17 @@ export function normalizePermissionOptions(raw: unknown): AcpPermissionOption[] 
   });
 }
 
+/** Extracts slash-command names from `available_commands_update.availableCommands`. */
+export function normalizeAvailableCommandNames(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const names: string[] = [];
+  for (const entry of raw) {
+    const name = asNonEmptyString(asRecord(entry).name)?.trim().replace(/^\/+/, '');
+    if (name) names.push(name);
+  }
+  return names;
+}
+
 const STOP_REASONS: ReadonlySet<string> = new Set(['end_turn', 'max_tokens', 'max_turn_requests', 'refusal', 'cancelled']);
 
 /** Unknown stop reasons are treated as a normal end of turn rather than an error. */

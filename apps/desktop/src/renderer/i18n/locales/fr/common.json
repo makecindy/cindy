@@ -6935,6 +6935,7 @@
           "guide": {
             "usageLabel": "Comment l'utiliser",
             "usageBody": "Publiez sur X en mentionnant @askmycindy : la tâche est transmise à cet appareil pour y être exécutée, et le résultat revient sous forme de réponse.",
+            "usageBodyOnDevice": "Publiez sur X en mentionnant @askmycindy : la tâche est transmise à {{device}} pour y être exécutée, et le résultat revient sous forme de réponse.",
             "riskLabel": "Les réponses sont publiques",
             "riskPublicBody": "Les réponses sont publiques et visibles par tous. Utilisez cette fonction pour des questions et problèmes publics, pas pour des sujets privés qui pourraient exposer votre vie privée.",
             "riskWorkdirBody": "Chaque tâche X s'exécute dans le projet par défaut défini dans les paramètres de connexion X. L'Agent peut y lire et écrire des fichiers, et sa conclusion est rendue publique : si ce projet pointe vers un dépôt privé, le contenu des fichiers peut le devenir aussi.",
@@ -9299,6 +9300,7 @@
         "taskWorkdirBoundary": "Le répertoire de travail reste sur l'ordinateur cible. Modifiez-le sur celui-ci.",
         "configurationLoading": "Chargement des paramètres…",
         "configurationReadFailed": "Impossible de charger les paramètres.",
+        "settingsWriteUnconfirmed": "L’enregistrement n’a pas pu être confirmé. Actualisez les paramètres pour vérifier avant de réessayer.",
         "refreshConfiguration": "Actualiser les paramètres",
         "enableBeforeConfigure": "Ce plugin est désactivé. Activez-le avec l'interrupteur ci-dessus avant de le configurer.",
         "settingsPageUnavailable": "Ouvrez Cindy sur {{device}} pour utiliser la page de paramètres de ce plugin. La version de l'ordinateur cible ne permet pas de l'afficher à distance.",
@@ -15681,6 +15683,7 @@
       "modelCatalogUnconfirmed": "Impossible de confirmer la liste des modèles. Votre modèle sélectionné a été conservé. Actualisez la liste des modèles et réessayez.",
       "actionScheduled": "L’autorisation pour cette action a expiré. La prochaine exécution reste programmée.",
       "actionExpired": "L’autorisation de la session pour cette action a expiré. Consultez la dernière exécution de l’automatisation.",
+      "modelRebuildRetry": "L’instruction n’a pas été envoyée. Ouvrez l’automatisation sur votre ordinateur et sélectionnez « Exécuter maintenant » pour réessayer.",
       "actionRecovered": "L’autorisation pour cette action a expiré. La même automatisation a ensuite réussi.",
       "text": "Une exécution automatique a échoué.",
       "prCheck_dns": "{{device}} ne peut pas résoudre {{host}}. Si le problème persiste, vérifiez le réseau ou le DNS sur cet appareil. Échecs consécutifs : {{failures}}. Les vérifications planifiées pourront reprendre à partir de {{retry}}.",
@@ -18122,7 +18125,7 @@
       "openWorkdirFailed": "Impossible d'ouvrir le dossier"
     },
     "runs": {
-      "boundPluginEngineRecovery": "L’automatisation ne s’est pas exécutée, car la tâche associée utilise un moteur de plugin. Repassez la tâche sur un moteur intégré ou associez l’automatisation à une tâche qui en utilise un.",
+      "boundPluginEngineRecovery": "L’automatisation ne s’est pas exécutée. Une automatisation associée à une tâche sur un moteur de plugin utilise le modèle de la tâche et s’exécute sur cet ordinateur. Si l’automatisation choisit un modèle, retirez-le, puis relancez-la.",
       "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
       "status": {
         "running": "En cours",
@@ -18474,6 +18477,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalle relatif",
+        "label": "Mode de planification",
         "cronHint": "S'exécute à des créneaux horaires du calendrier.",
         "intervalHint": "Attend ce délai après la fin de l'exécution précédente.",
         "intervalUnsupportedHint": "Cet intervalle exact est conservé. Choisir un préréglage en minutes ou en heures le remplacera.",

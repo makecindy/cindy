@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   canCoalesceRemoteListing,
+  isControllerCoalescibleListingChannel,
   isPeerResetRetryableReadChannel,
   isCompletedInvokeRetryableReadChannel,
+  normalizeRemoteListingArgsKey,
   resolveRemoteInvokeTimeoutMs,
   TASK_MIGRATION_CHANNEL,
 } from '../index.js';
@@ -112,5 +114,51 @@ describe('remote invoke policy boundaries', () => {
     expect(budget('receive')).toBe(30 * 60_000);
     expect(budget('status')).toBe(30_000);
     expect(budget('caps')).toBe(30_000);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：normalizeRemoteListingArgsKey / isControllerCoalescibleListingChannel / resolveMaxControllerInvokeWaitMs。
+  //   同义默认参数合并为同一键、fresh 标记单独提取而不拆裂缓存键，不同 limit / status / includePinned / tagCatalog / 未知选项严格隔离。
+  // - Bug／规则依据：64 帧可靠窗口积压事故（6 条重复 sessions:list 大结果占 1385 KiB）；protocol-compatibility.md 与参数语义隔离。
+  // - 现有覆盖缺口：旧测试只测布尔 canCoalesceRemoteListing，未覆盖参数规范化、wire 编码位隔离与跨平台最大等待上限。
+  // - 最小失败输入：等价默认参数 [20,'all',{includePinned:false}] vs []，以及仅差 includePinned / status / limit / tagCatalog 的参数对。
+  // - tier：unit（纯函数表驱动，<5ms）。
+  it('normalizes equivalent session listing args while isolating distinct filters and wire flags', () => {
+    expect(isControllerCoalescibleListingChannel('local-db:sessions:list')).toBe(true);
+    expect(isControllerCoalescibleListingChannel('maker:schedule:list-sidebar-index-runs')).toBe(true);
+    expect(isControllerCoalescibleListingChannel('maker:provider:list')).toBe(false);
+
+    const base = normalizeRemoteListingArgsKey('local-db:sessions:list', []);
+    expect(base).toEqual({ key: 'local-db:sessions:list\u0000[20,"all",false]', fresh: false });
+    expect(normalizeRemoteListingArgsKey('local-db:sessions:list', [20, 'all', { includePinned: false }])).toEqual(base);
+    expect(normalizeRemoteListingArgsKey('local-db:sessions:list', [null, null, { tagCatalog: 1 }])).toEqual(base);
+    expect(normalizeRemoteListingArgsKey('local-db:sessions:list', [20, 'all', { fresh: true }])).toEqual({
+      key: base!.key,
+      fresh: true,
+    });
+
+    const withWire = normalizeRemoteListingArgsKey(
+      'local-db:sessions:list',
+      [20, 'all', { tagCatalog: 1, fresh: true }],
+      { preserveWireEncodingFlags: true },
+    );
+    const withWireNonFresh = normalizeRemoteListingArgsKey(
+      'local-db:sessions:list',
+      [undefined, undefined, { tagCatalog: 1 }],
+      { preserveWireEncodingFlags: true },
+    );
+    expect(withWire).toEqual({ key: withWireNonFresh!.key, fresh: true });
+    expect(withWire!.key).not.toBe(base!.key);
+
+    const distinctCases: unknown[][] = [
+      [50, 'all', { includePinned: false }],
+      [20, 'active', { includePinned: false }],
+      [20, 'archived', { includePinned: false }],
+      [20, 'all', { includePinned: true }],
+      [20, 'all', { includePinned: false, workdir: '/repo-a' }],
+    ];
+    const keys = new Set(distinctCases.map((args) => normalizeRemoteListingArgsKey('local-db:sessions:list', args)?.key));
+    expect(keys.size).toBe(distinctCases.length);
+    expect(keys.has(base!.key)).toBe(false);
   });
 });

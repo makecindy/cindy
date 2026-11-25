@@ -214,18 +214,23 @@ describe.each<RealtimeProtocol>(['openai-realtime', 'qwen-audio-realtime'])(
         content_index: 0,
         delta: Buffer.alloc(48_000).toString('base64'),
       });
-      await f.flush();
+      // Wait for the client to consume the audio before acknowledging playback.
+      await vi.waitFor(() => {
+        expect(f.events).toContainEqual({ type: 'realtime-audio', itemId: 'answer' });
+      });
       f.session.interrupt({ itemId: 'answer', playedMs: 250 });
       f.send({ type: 'response.done', response: { id: 'response', status: 'cancelled' } });
-      await f.flush();
       expect((await f.session.read('answer')).pcm.byteLength).toBe(0);
-      expect(f.received).toContainEqual(
-        expect.objectContaining(
-          protocol === 'openai-realtime'
-            ? { type: 'conversation.item.truncate', item_id: 'answer', audio_end_ms: 250 }
-            : { type: 'conversation.item.delete', item_id: 'answer' },
-        ),
-      );
+      // Qwen deletes only after response.done; also wait for the return trip.
+      await vi.waitFor(() => {
+        expect(f.received).toContainEqual(
+          expect.objectContaining(
+            protocol === 'openai-realtime'
+              ? { type: 'conversation.item.truncate', item_id: 'answer', audio_end_ms: 250 }
+              : { type: 'conversation.item.delete', item_id: 'answer' },
+          ),
+        );
+      });
     });
 
     it('keeps question answers out of task handoff and drops all output after ownership changes', async () => {

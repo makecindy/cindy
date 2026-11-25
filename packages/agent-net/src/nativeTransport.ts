@@ -830,6 +830,7 @@ class NativeChannel implements PeerChannel {
         this.bodyHandler = handler;
         for (const [key, bytes] of this.earlyBodies.splice(0)) handler(key, bytes);
       },
+      onDrain: (handler) => this.onDrain(handler),
     };
   }
   /** Session v2: bodies count like their lanes, on the control and normal lanes with what the core still buffers. */

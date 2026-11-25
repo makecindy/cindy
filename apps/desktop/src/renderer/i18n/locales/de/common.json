@@ -6866,6 +6866,7 @@
           "guide": {
             "usageLabel": "So funktioniert’s",
             "usageBody": "Erwähne @askmycindy in einem Beitrag auf X – die Aufgabe wird dann an dieses Gerät gesendet und hier ausgeführt; das Ergebnis kommt als Antwort zurück.",
+            "usageBodyOnDevice": "Erwähne @askmycindy in einem Beitrag auf X – die Aufgabe wird dann an {{device}} gesendet und dort ausgeführt; das Ergebnis kommt als Antwort zurück.",
             "riskLabel": "Antworten sind öffentlich",
             "riskPublicBody": "Antworten sind öffentlich und für alle sichtbar. Nutze diese Funktion für öffentliche Fragen und Probleme, nicht für private Angelegenheiten, die deine Privatsphäre gefährden könnten.",
             "riskWorkdirBody": "Jede X-Aufgabe wird im Standardprojekt ausgeführt, das in den X-Verbindungseinstellungen festgelegt ist. Der Agent kann dort Dateien lesen und schreiben. Sein Ergebnis wird öffentlich gepostet – wenn dieses Projekt auf ein privates Repository verweist, können dabei auch Dateiinhalte öffentlich werden.",
@@ -9225,6 +9226,7 @@
         "taskWorkdirBoundary": "Das Arbeitsverzeichnis bleibt auf dem Zielcomputer. Ändere es dort.",
         "configurationLoading": "Einstellungen werden geladen…",
         "configurationReadFailed": "Einstellungen konnten nicht geladen werden.",
+        "settingsWriteUnconfirmed": "Das Speichern konnte nicht bestätigt werden. Aktualisiere die Einstellungen und prüfe sie vor einem erneuten Versuch.",
         "refreshConfiguration": "Einstellungen aktualisieren",
         "enableBeforeConfigure": "Dieses Plugin ist deaktiviert. Aktiviere es vor der Konfiguration mit dem Schalter oben.",
         "settingsPageUnavailable": "Öffne Cindy auf {{device}}, um die Einstellungsseite dieses Plugins zu verwenden. Die Version auf dem Zielcomputer kann sie nicht aus der Ferne anzeigen.",
@@ -15541,6 +15543,7 @@
       "modelCatalogUnconfirmed": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
       "actionScheduled": "Die Berechtigung für diese Aktion ist abgelaufen. Der nächste Lauf ist weiterhin geplant.",
       "actionExpired": "Die Sitzungsberechtigung für diese Aktion ist abgelaufen. Prüfe den letzten Lauf der Automatisierung.",
+      "modelRebuildRetry": "Die Anweisung wurde nicht gesendet. Öffne die Automatisierung auf deinem Computer und wähle „Jetzt ausführen“, um es erneut zu versuchen.",
       "actionRecovered": "Die Berechtigung für diese Aktion ist abgelaufen. Dieselbe Automatisierung wurde später erfolgreich ausgeführt.",
       "text": "Ein automatischer Durchlauf ist fehlgeschlagen.",
       "prCheck_dns": "{{device}} konnte {{host}} nicht auflösen. Prüfe bei anhaltenden Problemen Netzwerk und DNS auf diesem Gerät. Fehlversuche in Folge: {{failures}}. Planmäßige Prüfungen sind ab {{retry}} wieder möglich.",
@@ -17954,7 +17957,7 @@
       "openWorkdirFailed": "Ordner konnte nicht geöffnet werden"
     },
     "runs": {
-      "boundPluginEngineRecovery": "Die Automatisierung wurde nicht ausgeführt, weil die verknüpfte Aufgabe eine Plug-in-Engine verwendet. Stelle die Aufgabe auf eine integrierte Engine zurück oder verknüpfe die Automatisierung mit einer Aufgabe, die eine integrierte Engine nutzt.",
+      "boundPluginEngineRecovery": "Die Automatisierung wurde nicht ausgeführt. Eine Automatisierung, die mit einer Aufgabe auf einer Plug-in-Engine verknüpft ist, nutzt das Modell der Aufgabe und läuft auf diesem Computer. Wenn in der Automatisierung ein Modell gewählt ist, entferne es und führe sie erneut aus.",
       "queueWaitTimeoutRecovery": "Die Wartezeit ist abgelaufen, bevor die Eingabe gesendet wurde. Sobald die Zielsitzung frei ist, wähle {{action}}, um sie auszuführen.",
       "status": {
         "running": "Wird ausgeführt",
@@ -18306,6 +18309,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Relatives Intervall",
+        "label": "Zeitsteuerung",
         "cronHint": "Wird zu festen Kalenderzeiten ausgeführt.",
         "intervalHint": "Wartet nach Ende der vorherigen Ausführung so lange.",
         "intervalUnsupportedHint": "Dieses exakte Intervall bleibt erhalten. Eine Minuten- oder Stundenvorgabe ersetzt es.",

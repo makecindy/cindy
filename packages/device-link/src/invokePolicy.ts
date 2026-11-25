@@ -315,6 +315,106 @@ const COALESCIBLE_LISTING_CHANNELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Controller-side single-flight coalescing targets session and schedule index
+ * reads. Provider/capability reads already go through MetadataContinuityReader.
+ */
+export const CONTROLLER_COALESCIBLE_LISTING_CHANNELS: ReadonlySet<string> = new Set([
+  'local-db:sessions:list',
+  'maker:schedule:list-sidebar-index-runs',
+]);
+
+export function isControllerCoalescibleListingChannel(channel: string | undefined): boolean {
+  return channel !== undefined && CONTROLLER_COALESCIBLE_LISTING_CHANNELS.has(channel);
+}
+
+const MAX_LISTING_KEY_CHARS = 4 * 1024;
+const SESSION_LIST_DEFAULT_LIMIT = 20;
+const SESSION_LIST_MAX_LIMIT = 1_000;
+
+/**
+ * Normalize listing arguments so semantically identical reads share one key while
+ * distinct limits, status filters, pinned flags, cursors or extra options stay
+ * strictly isolated. When `preserveWireEncodingFlags` is true (transfer/delta
+ * caches), wire-shaping options such as `tagCatalog` remain part of the key.
+ */
+export function normalizeRemoteListingArgsKey(
+  channel: string | undefined,
+  args: readonly unknown[] | undefined,
+  options?: {
+    preserveWireEncodingFlags?: boolean;
+    allowedChannels?: ReadonlySet<string>;
+  },
+): { key: string; fresh: boolean } | null {
+  const allowed = options?.allowedChannels ?? COALESCIBLE_LISTING_CHANNELS;
+  if (!channel || !allowed.has(channel)) return null;
+  const rawArgs = args ?? [];
+  if (channel !== 'local-db:sessions:list') {
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(rawArgs);
+    } catch {
+      return null;
+    }
+    const key = `${channel}\u0000${serialized}`;
+    return key.length <= MAX_LISTING_KEY_CHARS ? { key, fresh: false } : null;
+  }
+
+  const rawLimit = rawArgs[0];
+  const rawStatus = rawArgs[1];
+  const rawOptions = rawArgs[2];
+  const validLimit = rawLimit === undefined || rawLimit === null || typeof rawLimit === 'number';
+  const validStatus = rawStatus === undefined || rawStatus === null || typeof rawStatus === 'string';
+  const plainOptions =
+    rawOptions === undefined || rawOptions === null
+      ? undefined
+      : typeof rawOptions === 'object' && !Array.isArray(rawOptions)
+        ? (rawOptions as Record<string, unknown>)
+        : null;
+  if (rawArgs.length > 3 || !validLimit || !validStatus || plainOptions === null) {
+    return null;
+  }
+
+  const limit =
+    rawLimit === undefined || rawLimit === null
+      ? SESSION_LIST_DEFAULT_LIMIT
+      : Number.isFinite(rawLimit) && rawLimit > 0
+        ? Math.min(Math.max(Math.floor(rawLimit), 1), SESSION_LIST_MAX_LIMIT)
+        : rawLimit;
+  const status =
+    rawStatus === 'active' || rawStatus === 'archived'
+      ? rawStatus
+      : rawStatus === undefined || rawStatus === null || rawStatus === 'all'
+        ? 'all'
+        : rawStatus;
+  const fresh = plainOptions?.fresh === true;
+  const includePinned = plainOptions?.includePinned === true;
+
+  const extraEntries: Array<[string, unknown]> = [];
+  if (plainOptions) {
+    for (const key of Object.keys(plainOptions).sort()) {
+      const value = plainOptions[key];
+      if (value === undefined) continue;
+      if (key === 'fresh' && typeof value === 'boolean') continue;
+      if (key === 'includePinned' && typeof value === 'boolean') continue;
+      if (!options?.preserveWireEncodingFlags && key === 'tagCatalog' && value === 1) continue;
+      extraEntries.push([key, value]);
+    }
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(
+      extraEntries.length > 0
+        ? [limit, status, includePinned, Object.fromEntries(extraEntries)]
+        : [limit, status, includePinned],
+    );
+  } catch {
+    return null;
+  }
+  const key = `${channel}\u0000${serialized}`;
+  return key.length <= MAX_LISTING_KEY_CHARS ? { key, fresh } : null;
+}
+
+/**
  * Read freshness is independent of retry safety and Host background admission.
  * sessions:get is a read-after-write recovery boundary, so it never shares an
  * earlier read. A fresh list likewise must not join a snapshot begun before a write.

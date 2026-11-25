@@ -1989,7 +1989,7 @@ describe('forkSessionAtMessage', () => {
     expect(remoteInvokeMock).not.toHaveBeenCalled();
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
   });
-  it('rejects a historical engine boundary without a parked native session id', async () => {
+  it('rebuilds a historical fork when the engine boundary has no parked native session id', async () => {
     const target = makeMessageRow({
       id: 'historical-assistant',
       clientId: 'historical-assistant-client',
@@ -2004,6 +2004,20 @@ describe('forkSessionAtMessage', () => {
       }),
     ]);
     selectQueue.push([target]);
+    selectQueue.push([]); // no user message after the assistant target
+    selectQueue.push([
+      makeMessageRow({ role: 'user', createdAt: 2000 }),
+      target,
+    ]); // visible history copied into the fork
+    selectQueue.push([
+      makeSourceRow({
+        id: 'forked-id',
+        agentKind: 'cc',
+        model: 'claude-sonnet-4-6',
+        sdkSessionId: null,
+        parentSessionId: 'src-session',
+      }),
+    ]);
     queryOneMock.mockResolvedValueOnce(null).mockResolvedValueOnce({
       content: JSON.stringify({
         fromAgentKind: 'cc',
@@ -2013,14 +2027,26 @@ describe('forkSessionAtMessage', () => {
       }),
       created_at: 2800,
       rowid: 30,
+    }).mockResolvedValueOnce({
+      content: JSON.stringify({
+        fromAgentKind: 'codex',
+        toAgentKind: 'cc',
+        toProviderId: 'historical-cc-provider',
+      }),
+      created_at: 2000,
+      rowid: 10,
     });
 
-    await expect(
-      forkSessionAtMessage('src-session', 'historical-assistant-client'),
-    ).rejects.toMatchObject({ code: 'UNSUPPORTED_HISTORY' });
+    await forkSessionAtMessage('src-session', 'historical-assistant-client');
 
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
-    expect(txCalls).toHaveLength(0);
+    const txArgs = txCalls.find((call) => call.name === 'fork.session')!.args as {
+      newSession: Record<string, unknown>;
+    };
+    expect(txArgs.newSession.agentKind).toBe('cc');
+    expect(txArgs.newSession.providerId).toBe('historical-cc-provider');
+    expect(txArgs.newSession.sdkSessionId).toBeNull();
+    expect(commitContextRebuildMock).toHaveBeenCalled();
   });
 
   it.each([
