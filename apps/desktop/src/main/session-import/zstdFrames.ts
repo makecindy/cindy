@@ -5,6 +5,8 @@ import { createZstdDecompress, constants } from 'node:zlib';
 
 const MAX_FRAME = 1024 * 1024 * 1024;
 const MAX_OUTPUT = 1024 * 1024 * 1024;
+/** Compressed bytes handed to the decoder per write; also the read-ahead size. */
+const WRITE_CHUNK = 64 * 1024;
 
 export async function* readZstdFrames(file: string, onBytes?: (bytes: number) => void, signal?: AbortSignal): AsyncGenerator<Buffer> {
   const handle = await fs.open(file, 'r');
@@ -63,8 +65,20 @@ export async function* readZstdFrames(file: string, onBytes?: (bytes: number) =>
       // Feed the frame to the decoder block by block while validating it. Walking
       // the whole frame first would read every byte before producing the first
       // line, so a scan that only needs a prefix would pay for the entire frame.
+      // Coalesce consecutive blocks into bounded writes. A legal frame can hold
+      // hundreds of thousands of tiny or empty blocks, and one decoder write per
+      // block costs far more than the buffered reads that produce it.
       const feed = async function* (): AsyncGenerator<Buffer> {
-        yield Buffer.concat(headerBytes);
+        let pending: Buffer[] = [];
+        let pendingBytes = 0;
+        const push = (chunk: Buffer): void => { pending.push(chunk); pendingBytes += chunk.length; };
+        const take = (): Buffer => {
+          const out = Buffer.concat(pending, pendingBytes);
+          pending = [];
+          pendingBytes = 0;
+          return out;
+        };
+        push(Buffer.concat(headerBytes));
         let last = false;
         while (!last) {
           const header = (await read(3)).readUIntLE(0, 3);
@@ -74,16 +88,19 @@ export async function* readZstdFrames(file: string, onBytes?: (bytes: number) =>
           if (type === 3 || blockSize > 131072) throw new Error('Invalid Zstandard block');
           const payload = type === 1 ? 1 : blockSize;
           if (offset + payload > size || offset + payload - start > MAX_FRAME) throw new Error('Invalid or oversized Zstandard frame');
-          yield Buffer.from([header & 0xff, (header >>> 8) & 0xff, (header >>> 16) & 0xff]);
+          push(Buffer.from([header & 0xff, (header >>> 8) & 0xff, (header >>> 16) & 0xff]));
           let remaining = payload;
           while (remaining > 0) {
-            const chunk = await read(Math.min(remaining, 64 * 1024));
+            const chunk = await read(Math.min(remaining, WRITE_CHUNK));
             remaining -= chunk.length;
-            yield Buffer.from(chunk);
+            push(Buffer.from(chunk));
+            if (pendingBytes >= WRITE_CHUNK) yield take();
           }
+          if (pendingBytes >= WRITE_CHUNK) yield take();
         }
-        if (descriptor & 4) yield Buffer.from(await read(4));
+        if (descriptor & 4) push(Buffer.from(await read(4)));
         if (offset - start > MAX_FRAME) throw new Error('Oversized Zstandard frame');
+        if (pendingBytes > 0) yield take();
       };
       const raw = Readable.from(feed());
       const decoder = createZstdDecompress({ params: { [constants.ZSTD_d_windowLogMax]: 27 } });
