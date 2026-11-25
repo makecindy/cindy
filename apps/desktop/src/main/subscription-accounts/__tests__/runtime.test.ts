@@ -1153,6 +1153,15 @@ describe('owner-only subscription identity', () => {
     await refreshSubscriptionPoolCodexModels(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    // #12716: disagreement about an older model must not hide an addition
+    // reported by both model/list and this synthetic account directory's cache.
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: ['astra', 'sol', 'new-model', 'disk-only']
+      .map(slug => ({ slug, supported_in_api: true, visibility: 'list' })) }));
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }, { id: 'new-model' }] });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol', 'new-model']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
     h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: [{ slug: 'sol', supported_in_api: true, visibility: 'list' }] }));
     await refreshSubscriptionPoolCodexModels(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);

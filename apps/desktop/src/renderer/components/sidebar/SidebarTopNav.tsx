@@ -526,7 +526,7 @@ export function SidebarTopNav({
           )}
         />
         <span className="leading-none">{action.label}</span>
-        {action.showDot && <AttentionDot size={6} tone={action.dotTone} className="ml-auto mr-0.5" />}
+        {action.showDot && <AttentionDot size={6} tone={action.dotTone} className="ml-auto mr-px" />}
         <EntryCountBadge count={action.count} className="ml-auto" />
       </button>
     );
@@ -605,7 +605,7 @@ export function SidebarTopNav({
             onDone={() => setCustomizing(false)}
           />
         ) : !showSearch ? (
-          <div className="flex flex-col gap-0.5 pr-3 pl-3">
+          <div className="flex flex-col gap-0.5 pr-0 pl-3">
             {orderedNavigationRows}
             {pluginRows}
             {customizeRow}
@@ -613,11 +613,11 @@ export function SidebarTopNav({
         ) : (
           <>
             {searchIndex > 0 && (
-              <div className="flex flex-col gap-0.5 pr-3 pl-3">{rowsBeforeSearch}</div>
+              <div className="flex flex-col gap-0.5 pr-0 pl-3">{rowsBeforeSearch}</div>
             )}
             <div
               className={cn(
-                'shrink-0 px-3',
+                'shrink-0 pr-0 pl-3',
                 searchIndex > 0 && '-mt-1.5',
                 pinSearch && 'sticky top-0 z-page-overlay',
               )}
@@ -627,7 +627,7 @@ export function SidebarTopNav({
             </div>
             {/* Entries after Search stay reachable while a query is pinned; the
                 results follow them instead of replacing them. */}
-            <div className="-mt-1.5 flex flex-col gap-0.5 pr-3 pl-3">
+            <div className="-mt-1.5 flex flex-col gap-0.5 pr-0 pl-3">
               {rowsAfterSearch}
               {pluginRows}
                 {customizeRow}

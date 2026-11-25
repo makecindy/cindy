@@ -37,9 +37,6 @@
     "apps/desktop/src/main/__tests__/claudeOrphanReaper.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/main/__tests__/codexToolTreeReaper.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/main/__tests__/computerUsePluginIpc.test.ts": {
       "sourceReads": 9
     },

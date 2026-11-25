@@ -9192,6 +9192,7 @@
         "taskWorkdirBoundary": "工作目錄依目標之機所設，請於彼機改之。",
         "configurationLoading": "方讀規制…",
         "configurationReadFailed": "規制未能讀取。",
+        "settingsWriteUnconfirmed": "存錄是否得成，尚未可知。請重讀規制，驗明後再試。",
         "refreshConfiguration": "重整規制",
         "enableBeforeConfigure": "法器已停用，請先啟上方開關，再設之。",
         "settingsPageUnavailable": "請於 {{device}} 之 Cindy 中啟此法器之規制頁；目標之機今版尚不能遠端顯示。",
@@ -15534,6 +15535,7 @@
       "modelCatalogUnconfirmed": "模型清單暫未能核實。已保留所選模型，可刷新清單後重試。",
       "actionScheduled": "這次操作的任務授權已失效。下一輪仍會按計畫執行。",
       "actionExpired": "這次操作的任務授權已失效。請查看自動化最近一次執行的結果。",
+      "modelRebuildRetry": "指令未發。請於電腦開此自動化，擇「即行」以重試。",
       "actionRecovered": "這次操作的授權已失效。同一自動化後來已成功執行。",
       "text": "前有自運未成。",
       "prCheck_dns": "{{device}} 未能析 {{host}} 之址。若屢然，宜察此機之網路與 DNS。凡 {{failures}} 次未成。自 {{retry}} 始，循例可復檢。",
@@ -17910,7 +17912,7 @@
       "openWorkdirFailed": "啟卷匣未成"
     },
     "runs": {
-      "boundPluginEngineRecovery": "所繫之務用法器引擎，故自動之務未行。宜將所繫之務改回內建引擎，或改繫於用內建引擎之務。",
+      "boundPluginEngineRecovery": "自動之務未行。繫於法器引擎之務者，循其務之模型，行於此機。若自動之務另擇模型，宜去之，復行之。",
       "queueWaitTimeoutRecovery": "排候逾時，提示詞未發。待所繫任務閒，按「{{action}}」補行。",
       "status": {
         "running": "方行",
@@ -18262,6 +18264,7 @@
       "timingMode": {
         "cron": "Cron 定時",
         "interval": "相隔",
+        "label": "計時之法",
         "cronHint": "依曆鐘定刻而行，如晨鐘暮鼓。",
         "intervalHint": "前次行畢，再候所定之時長。",
         "intervalUnsupportedHint": "今之精確間隔照舊保留；擇分或時之預設，方易之。",

@@ -695,6 +695,8 @@ export function installQuitHandler(timeoutMs = 2000): void {
       );
       return;
     }
+    // A late notification can outlive the window; getType() then throws in Electron.
+    if (webContents.isDestroyed()) return;
     if (isGhostSandboxWebContentsId(webContents.id)) {
       log.warn(
         `ghost sandbox render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
