@@ -156,17 +156,22 @@ describe('claim reminder budget', () => {
     expect(consumeDispatchClaimReminder('lead-1', 4)).toBe(true);
   });
 
-  it('re-arms on every turn, so a later dispatch is still checked', () => {
-    expect(consumeDispatchClaimReminder('lead-1', 5)).toBe(true);
+  it('corrects a different claim on the next turn, so a later dispatch is still checked', () => {
+    expect(consumeDispatchClaimReminder('lead-1', 5, 'id:aaaaaaaaaaaa')).toBe(true);
     // 一轮里可派多次：按会话静默会把后来那几次的假凭据一起放过。
-    expect(consumeDispatchClaimReminder('lead-1', 6)).toBe(true);
-    // 下一轮又引用同一个假凭据是又一次坚持，该继续纠正而不是闭上嘴。
-    expect(consumeDispatchClaimReminder('lead-1', 7)).toBe(true);
+    expect(consumeDispatchClaimReminder('lead-1', 6, 'id:bbbbbbbbbbbb')).toBe(true);
+  });
+
+  it('corrects one claim once, even when a later turn restates it', () => {
+    expect(consumeDispatchClaimReminder('lead-1', 7, 'id:cccccccccccc')).toBe(true);
+    // 复述同一件事不是新问题：每轮都纠一遍就是「一单纠正四次」。
+    expect(consumeDispatchClaimReminder('lead-1', 8, 'id:cccccccccccc')).toBe(false);
+    expect(consumeDispatchClaimReminder('lead-1', 9, 'id:cccccccccccc')).toBe(false);
   });
 
   it('re-arms after the session instance restarts', () => {
-    expect(consumeDispatchClaimReminder('lead-1', 9)).toBe(true);
-    expect(consumeDispatchClaimReminder('lead-1', 9)).toBe(false);
+    expect(consumeDispatchClaimReminder('lead-1', 9, 'id:dddddddddddd')).toBe(true);
+    expect(consumeDispatchClaimReminder('lead-1', 9, 'id:dddddddddddd')).toBe(false);
 
     // 重建实例后轮次从 1 重来：旧实例的提醒额度不能压住新实例。
     expect(consumeDispatchClaimReminder('lead-1', 1)).toBe(true);

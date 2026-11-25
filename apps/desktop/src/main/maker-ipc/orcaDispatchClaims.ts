@@ -47,6 +47,8 @@ interface LeadLedger {
   facts: LeadDispatchFact[];
   /** 已经就哪一轮的不实凭据提醒过。同一轮只提醒一次，避免空转。 */
   remindedGeneration: number | null;
+  /** 已经提醒过的声称身份（假编号 / 被点名的 worker 批），避免一句复述每轮被纠一次。 */
+  remindedClaims: Map<string, number>;
   /** 账本属于哪个会话实例。换实例后旧账整体作废，新实例从第一条凭据重新记。 */
   instanceToken?: number;
 }
@@ -55,6 +57,9 @@ const ledgers = new Map<string, LeadLedger>();
 /** 派发凭据只在本轮有用，留一天足够覆盖跨重启的收口。 */
 const FACT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_FACTS = 200;
+/** 同一个声称只纠正一次的时间窗：复述同一件事不算新问题，换一件事才重新判。 */
+const CLAIM_REMINDER_RETENTION_MS = 30 * 60 * 1000;
+const MAX_REMINDED_CLAIMS = 32;
 
 function ledgerFor(leadSessionId: string): LeadLedger {
   let ledger = ledgers.get(leadSessionId);
@@ -63,6 +68,7 @@ function ledgerFor(leadSessionId: string): LeadLedger {
       turnGeneration: 0,
       facts: [],
       remindedGeneration: null,
+      remindedClaims: new Map(),
     };
     ledgers.set(leadSessionId, ledger);
   }
@@ -82,6 +88,7 @@ function observeGeneration(ledger: LeadLedger, turnGeneration: number): void {
 function ledgersReset(ledger: LeadLedger): void {
   ledger.facts = [];
   ledger.remindedGeneration = null;
+  ledger.remindedClaims.clear();
   ledger.instanceToken = undefined;
 }
 
@@ -175,20 +182,34 @@ export function findUnbackedDispatchClaim(
 }
 
 /**
- * 同一轮只提醒一次。返回 true 表示这次可以用掉提醒额度。
- * 换成 true 之后再调用同一轮会返回 false，避免模型坚持不改时来回空转。
+ * 额度分两层：同一轮一次；同一个声称在窗口内一次。
  *
- * 额度只按轮次：不绑会话、不用时间窗口。派单密集时一轮内就可能来好几次派发，
- * 按会话静默会把后来那几次的假凭据一起放过；而下一轮再引用同一个假凭据，
- * 是模型的又一次坚持，该继续纠正而不是闭嘴。
+ * 同一轮只提醒一次，避免模型坚持不改时来回空转。同一个声称（同一条假编号、
+ * 同一批被点名的 worker）在窗口内也只提醒一次——改成「每轮都提醒」会让一句
+ * 复述在接下来每一轮都被纠正一遍，那正是「一单纠正四次」的形态。
+ *
+ * claimKey 省略时只做按轮去重：调用点还没算出身份时不能凭轮次冒充身份。
  */
 export function consumeDispatchClaimReminder(
   leadSessionId: string,
   turnGeneration: number,
+  claimKey?: string,
 ): boolean {
   const ledger = ledgerFor(leadSessionId);
   observeGeneration(ledger, turnGeneration);
   if (ledger.remindedGeneration === turnGeneration) return false;
+  if (claimKey) {
+    const now = Date.now();
+    for (const [key, at] of ledger.remindedClaims) {
+      if (now - at > CLAIM_REMINDER_RETENTION_MS) ledger.remindedClaims.delete(key);
+    }
+    if (ledger.remindedClaims.has(claimKey)) return false;
+    if (ledger.remindedClaims.size >= MAX_REMINDED_CLAIMS) {
+      const oldest = ledger.remindedClaims.keys().next().value;
+      if (oldest !== undefined) ledger.remindedClaims.delete(oldest);
+    }
+    ledger.remindedClaims.set(claimKey, now);
+  }
   ledger.remindedGeneration = turnGeneration;
   return true;
 }

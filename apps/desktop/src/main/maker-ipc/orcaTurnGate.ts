@@ -436,7 +436,13 @@ export async function evaluateTurnGate(input: {
 
   const claim = findUnbackedDispatchClaim(input.leadSessionId, text);
   if (claim) {
-    if (!consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration)) {
+    if (
+      !consumeDispatchClaimReminder(
+        input.leadSessionId,
+        input.turnGeneration,
+        `${claim.kind}:${claim.token}`,
+      )
+    ) {
       return undefined;
     }
     return unbackedClaimReason(claim);
@@ -462,7 +468,14 @@ export async function evaluateTurnGate(input: {
     priorDispatches: describePriorDispatches(input),
   });
   if (verdict !== 'claim') return undefined;
-  if (!consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration)) {
+  // 身份 = 它点名的 worker 名单：同一批人再说一遍是复述，换人则是一次新声称。
+  // 只按轮次去重的话，一句被纠正过的复述会在接下来每一轮都被再纠一遍。
+  const namedWorkers = input.workers
+    .map((worker) => worker.label)
+    .filter((label) => text.includes(label))
+    .sort();
+  const claimKey = `spoken:${namedWorkers.join('|') || 'unnamed'}`;
+  if (!consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration, claimKey)) {
     return undefined;
   }
   return JUDGED_CLAIM_REASON;
