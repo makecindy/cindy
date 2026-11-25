@@ -119,7 +119,14 @@ describe('native usage currency upgrade', () => {
       db.prepare(`INSERT INTO daily_model_usage VALUES
         (date(? / 1000,'unixepoch','localtime'),'codex','projected-model#billing=subscription','CNY',6.7,0,1,3,4,0,0,?),
         (date(? / 1000,'unixepoch','localtime'),'codex','projected-model#billing=subscription','USD',2,0,1,2,1,0,0,?)`).run(at,at,at,at);
-      const replay = () => runMigrationReplay(db, {drizzleDir: drizzleDir(), currentVersion: 158});
+      // Replay the currency repair twice, not every independent DDL migration added after it.
+      const currencyMigrations = path.join(path.dirname(db.name), 'currency-repair');
+      mkdirSync(path.join(currencyMigrations, 'scripts'), { recursive: true });
+      for (const migration of listMigrations(drizzleDir()).filter(m => m.seq === 159 || m.seq === 160)) {
+        copyFileSync(migration.sqlPath, path.join(currencyMigrations, migration.fileName));
+        if (migration.tsScriptPath) copyFileSync(migration.tsScriptPath, path.join(currencyMigrations, 'scripts', path.basename(migration.tsScriptPath)));
+      }
+      const replay = () => runMigrationReplay(db, {drizzleDir: currencyMigrations, currentVersion: 158});
       replay();
       const read = (id: string) => JSON.parse(db.prepare('SELECT agent_meta FROM messages WHERE id=?').pluck().get(id) as string);
       const restored = {currency: 'USD',amount: 1,kind: 'value-estimate'};
@@ -198,6 +205,10 @@ describeMigrationReplay('existing side-chat teams', () => {
         '0160_native_usage_amount_metadata.sql',
         '0161_schedule_model_group.sql',
         '0162_schedule_mr_observation.sql',
+        '0163_dag_history_edits.sql',
+      ]);
+      expect(columnNames(db, 'dag_history_edits')).toEqual([
+        'id', 'session_id', 'client_id', 'action', 'state', 'undo_data', 'fingerprint', 'created_at',
       ]);
       expect(columnNames(db, 'schedules')).toContain('model_group');
       expect(columnNames(db, 'schedules')).toContain('primary_host_key');
@@ -430,7 +441,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162,
+          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -610,7 +621,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。

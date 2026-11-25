@@ -10,6 +10,8 @@ import type {
 } from '@cindy/maker-core';
 import { assertTaskActionCurrent, bindTaskActionInput, captureTaskActionGuard, captureTaskActionDeliveryGuard, combineInputGuards, hasTaskActionAuthorization } from './taskActionAuthorization.js';
 import { revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
+import { createHash } from 'node:crypto';
+import { dagQueueRecallContent } from '../../shared/dagQueueRecall.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type {
@@ -258,6 +260,17 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       });
     },
 
+    /** Trusted local renderer only. cancel() compares this same native row again at removal. */
+    recallLocalComposerItem(sessionId: string, queuedMessageId: string, digest: string, beforeMutation: () => Promise<void>) {
+      return queueControl.cancel({ sessionId, queuedMessageId, beforeMutation, authorize(item) {
+        if (item.sourceDevice || item.fromDeviceLinkClient || item.fromMobileClient || item.sharedTaskAuthor || item.origin ||
+            item.botTaskCoordination || item.sourcePlugin || item.originalSyntheticTrigger || item.autoResume || item.retrySourceClientId ||
+            item.orcaReportDelivery || item.taskActionRequiresAuthorization || item.chatMessage.clientId !== queuedMessageId ||
+            item.chatMessage.role !== 'user' || createHash('sha256').update(dagQueueRecallContent(item)).digest('hex') !== digest)
+          return { ok: false, message: '待发内容或来源已变化，未撤回。' };
+        return { ok: true };
+      } });
+    },
     async cancelQueuedMessage(params: {
       callerSessionId?: string;
       targetSessionId: string;

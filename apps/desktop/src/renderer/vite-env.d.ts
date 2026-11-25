@@ -6787,8 +6787,9 @@ interface ElectronAPI {
       enqueue: (
         sessionId: string,
         item: import('../shared/agentInputQueue').AgentInputQueuedMessage,
-        opts?: { sendAtMs?: number; expectedClearBoundaryMs?: number | null },
+        opts?: { sendAtMs?: number; expectedClearBoundaryMs?: number | null; expectedDagTip?: import('../shared/dagTip').ExpectedDagTip },
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
+      dagTipAdmissionVersion?: 1;
       compact: (
         sessionId: string,
         createOpts: import('../shared/agentInputQueue').AgentInputCreateOpts,
@@ -7417,6 +7418,8 @@ interface ElectronAPI {
      *        NO_PRIOR_ASSISTANT / SESSION_RUNNING / NO_LIVE_QUERY
      */
     rewindPreview: (sessionId: string, clientId: string) => Promise<RewindFilesResultPayload>;
+    dagHistory?: import('../shared/dagHistoryEdit').DagHistoryEditApi;
+    dagRecallQueued?: import('../shared/dagQueueRecall').DagQueueRecallApi;
     /**
      * 真执行 rewind: SDK 文件回滚 + 关 query + 设 pendingRewindTo + DB 软删 messages。
      * 三件套 (resume + resumeSessionAt + forkSession) 重启在用户下一次 send 时由

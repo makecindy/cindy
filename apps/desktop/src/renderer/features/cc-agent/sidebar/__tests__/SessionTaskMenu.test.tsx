@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { Profiler, useRef, useState } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
+import { buildSessionDagIndex, SidebarDagBranches } from '../../lib/sessionDagRows';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
@@ -49,12 +50,16 @@ vi.mock('@/features/device-link/JoinSharedTaskDialog', () => ({
 }));
 
 const session = { id: 'task', title: 'Task', status: 'active' } as Session;
-function Harness({ target = session, blocked = false, snooze = false }: { target?: Session; blocked?: boolean; snooze?: boolean }) {
+function LocationProbe() {
+  const location = useLocation();
+  return <output>{location.pathname}{location.search}</output>;
+}
+function Harness({ target = session, blocked = false, snooze = false, traceRoute = false }: { target?: Session; blocked?: boolean; snooze?: boolean; traceRoute?: boolean }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const slot = (text: string) => <DropdownMenuItem>{text}</DropdownMenuItem>;
   return (
-    <MemoryRouter><div onClick={state.rowClick}>
+    <MemoryRouter>{traceRoute && <LocationProbe />}<div onClick={state.rowClick}>
       <DropdownMenu open={open} onOpenChange={setOpen}>
         <DropdownMenuTrigger ref={trigger}>More</DropdownMenuTrigger>
         <SessionTaskMenu
@@ -115,6 +120,20 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+// Unit: exercise the real menu + router. A hidden pinned fork outside the root's
+// page must remain directly navigable even without any projectable message cards.
+it.each([undefined, 'peer-1'])('opens the exact native fork on %s without activating the root row', async device => {
+  const root = { ...session, userId: '', deviceLinkDeviceId: device, deviceLinkConnectionStatus: 'connected' as const };
+  const fork = { ...root, id: 'fork#1', parentSessionId: root.id, title: 'Child', pinnedAt: 'now' };
+  const index = buildSessionDagIndex([fork, root], 'all', () => device);
+  render(<SidebarDagBranches.Provider value={index}><Harness target={root} traceRoute /></SidebarDagBranches.Provider>);
+  openMenu();
+  fireEvent.keyDown(await screen.findByRole('menuitem', { name: 'sessionBranches' }), { key: 'ArrowRight' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Child' }));
+  expect(screen.getByRole('status').textContent).toBe(`/cc-agent/fork%231${device ? '?device=peer-1' : ''}`);
+  expect(state.rowClick).not.toHaveBeenCalled();
+});
 
 // Unit, production menu/dialog: #9803 added an entry to every local task even
 // without a relevant plugin. A saved selection must remain clearable after uninstall.

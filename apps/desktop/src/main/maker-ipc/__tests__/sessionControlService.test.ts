@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { dagQueueRecallContent } from '../../../shared/dagQueueRecall.js';
 import { formatForwardedRequest } from '../../../shared/forwardedRequest.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createXdtHelperMcpServer } from '@cindy/mcps';
@@ -257,6 +259,20 @@ describe('session control domain service', () => {
     expect(deps.runSessionAction).toHaveBeenCalledWith(expect.objectContaining({
       targetSessionId: 'pi-task', action: 'compact', instructions: 'Keep decisions',
     }));
+  });
+
+  // Unit: the DAG can restore only the exact original content, not a newer edit with the same clientId.
+  it.each(['unchanged', 'edit', 'source', 'consuming', 'late-edit'])('DAG recall validates %s at the native removal boundary', async condition => {
+    const original = item(), digest = createHash('sha256').update(dagQueueRecallContent(original)).digest('hex');
+    const target = condition === 'edit' ? { ...original, chatMessage: { ...original.chatMessage, content: 'new text' } } : original;
+    if (condition === 'source') target.sourcePlugin = { pluginId: 'external' };
+    const { deps, service } = setup({queueItem:target});
+    if (condition === 'consuming') deps.getQueueSnapshot.mockResolvedValue({ pendingQueue:[target], consumingClientIds:[target.clientId] });
+    if (condition === 'late-edit') deps.removeQueuedMessage.mockReturnValue(false);
+    const result = await service.recallLocalComposerItem('target', target.clientId, digest, async () => {});
+    expect(result.ok).toBe(condition === 'unchanged');
+    if (condition === 'unchanged' || condition === 'late-edit') expect(deps.removeQueuedMessage).toHaveBeenCalledWith('target', target.clientId, target);
+    else expect(deps.removeQueuedMessage).not.toHaveBeenCalled();
   });
 
   // UI parity: machine-generated rows are not editable, even with plugin control.

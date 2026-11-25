@@ -2881,12 +2881,23 @@ describe('forkSessionAtMessage', () => {
     expect(txCalls).toHaveLength(0);
   });
 
-  it('throws NO_PRIOR_ASSISTANT when target user msg has no preceding assistant with uuid', async () => {
+  it('starts a new local Claude transcript only when the first user has a strictly empty prefix', async () => {
+    const first = makeMessageRow({ clientId: 'first-user', role: 'user', rowid: 3 });
+    selectQueue.push([makeSourceRow()], [first], [], [makeSourceRow({ id:'child' })]);
+    await forkSessionAtMessage('src-session', 'first-user');
+    expect(txCalls).toEqual([{name:'fork.session', args:expect.objectContaining({
+      emptyUserAnchor:'first-user', targetCreatedAt:first.createdAt, targetRowid:3, newMessageIds:[],
+      newSession:expect.objectContaining({sdkSessionId:null, parentSessionId:'src-session', forkedAtMessageId:'first-user'}),
+    })}]);
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('throws NO_PRIOR_ASSISTANT when a nonempty user prefix has no assistant with uuid', async () => {
     const target = makeMessageRow({ id: 'first-user', role: 'user', createdAt: 1500 });
 
     selectQueue.push([makeSourceRow()]); // source
     selectQueue.push([target]); // target
-    selectQueue.push([]); // prior assistants — empty
+    selectQueue.push([makeMessageRow({ id:'earlier-input', createdAt:1200 })]); // Nonempty history must not silently disappear.
 
     await expect(forkSessionAtMessage('src-session', 'first-user')).rejects.toMatchObject({
       code: 'NO_PRIOR_ASSISTANT',

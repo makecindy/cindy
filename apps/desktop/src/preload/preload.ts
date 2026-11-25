@@ -8601,9 +8601,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       enqueue: (
         sessionId: string,
         item: import('../shared/agentInputQueue').AgentInputQueuedMessage,
-        opts?: { sendAtMs?: number; expectedClearBoundaryMs?: number | null },
+        opts?: { sendAtMs?: number; expectedClearBoundaryMs?: number | null; expectedDagTip?: import('../shared/dagTip').ExpectedDagTip },
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
-        ipcRenderer.invoke('maker:input:enqueue', sessionId, item, opts),
+        ipcRenderer.invoke(opts?.expectedDagTip ? 'dag:input:enqueue-at-tip:v1' : 'maker:input:enqueue', sessionId, item, opts),
+      dagTipAdmissionVersion: 1 as const,
       compact: (
         sessionId: string,
         createOpts: import('../shared/agentInputQueue').AgentInputCreateOpts,
@@ -8795,6 +8796,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('maker:write-plan-file', params),
 
+    dagRecallQueued: ((sid, cid, digest, stamp) => ipcRenderer.invoke('dag-history:recall-queued', sid, cid, digest, stamp)) satisfies import('../shared/dagQueueRecall').DagQueueRecallApi,
+    dagHistory: {
+      onChanged: listener => {
+        const handler = (_: Electron.IpcRendererEvent, change: import('../shared/dagHistoryEdit').DagHistoryChange) => listener(change);
+        ipcRenderer.on('dag-history:changed', handler);
+        return () => { ipcRenderer.removeListener('dag-history:changed', handler); };
+      },
+      preview: (sid, cid, action, ownerScope) => ipcRenderer.invoke('dag-history:preview', sid, cid, action, ownerScope),
+      commit: (id, ownerScope) => ipcRenderer.invoke('dag-history:commit', id, ownerScope),
+      undo: (id, ownerScope) => ipcRenderer.invoke('dag-history:undo', id, ownerScope),
+      status: (id, ownerScope) => ipcRenderer.invoke('dag-history:status', id, ownerScope),
+    } satisfies import('../shared/dagHistoryEdit').DagHistoryEditApi,
     // Stage 2 C2: rewind / fork (前身 cc-agent:rewind:* + local-db:sessions:fork)
     // SDK 调用全部走 maker-core; main/maker-orchestration/{rewind,fork}.ts 只剩 DB 业务编排。
     rewindPreview: (

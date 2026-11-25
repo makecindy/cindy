@@ -1116,6 +1116,19 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(deps.interactions.resumeTimeout).not.toHaveBeenCalled();
   });
 
+  // Unit / reversible DAG history: an input must not be queued to a disappearing branch.
+  it('refuses concurrent DAG history input before enqueue deduplication or dispatch', async () => {
+    const h = createHarness(), sid = 'history-edit-target';
+    const item = makeItem('do-not-consume', 'must not be sent');
+    h.coordinator.setDagHistoryWriteFence(sid, true);
+    expect(() => h.coordinator.enqueue(sid, item)).toThrow('未接收');
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    h.coordinator.setDagHistoryWriteFence(sid, false);
+    h.coordinator.enqueue(sid, item); await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
   // Unit / shared Pi retry: distinguish an idle task from an admitted recovery.
   it('does not enqueue or dispatch a Pi control retry without recoverable input', async () => {
     const h = createHarness(), sid = 'pi-control-retry-noop';

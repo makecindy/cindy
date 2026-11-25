@@ -1,0 +1,110 @@
+/* The same three surfaces serve historical turns, editors and projected drafts. */
+.dag-card {
+  --dag-paper: var(--surface-card-ivory);
+  --dag-ink: var(--text-primary);
+  --dag-question: color-mix(in srgb, var(--msg-user-text) 8%, var(--msg-user-bg));
+  --dag-gutter: 12px;
+  --dag-type: 13px;
+  --dag-leading: 20px;
+  border-radius: 10px;
+  background: var(--dag-paper);
+  color: var(--dag-ink);
+  font-size: var(--dag-type);
+  line-height: var(--dag-leading);
+  font-weight: 400;
+}
+.dag-card-name {
+  position: absolute;
+  z-index: 1;
+  inset-inline-start: calc(var(--dag-gutter) - 3px);
+  inset-block-start: 0;
+  max-width: calc(100% - 52px);
+  transform: translateY(-60%);
+}
+.dag-card-name [data-dag-summary] {
+  padding-inline: 3px;
+  border: 0;
+  border-radius: 0;
+  /* Mask only the hairline behind the name, not a badge-shaped area. */
+  background: linear-gradient(to bottom, hsl(var(--background)) 60%, var(--dag-question) 60%);
+  color: var(--text-secondary);
+  font: inherit;
+}
+.dag-card-name [data-dag-summary]:enabled:hover { color: var(--dag-ink); text-decoration: underline; }
+.dag-card .dag-question-surface {
+  padding: 8px var(--dag-gutter) 6px;
+  background: var(--dag-question);
+  color: var(--msg-user-text);
+  font: inherit;
+  font-weight: 600;
+}
+.dag-card textarea.dag-question-input {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  min-height: var(--dag-leading);
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  outline-offset: 1px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  resize: none;
+}
+.dag-draft > .dag-question-surface,
+.dag-placeholder .dag-question-surface { border-radius: 9px 9px 0 0; }
+.dag-placeholder { overscroll-behavior: contain; }
+.dag-compose { max-height: calc(100% - 35px); }
+.dag-compose textarea { width: auto; }
+.dag-draft-actions { padding: 4px var(--dag-gutter) 7px; }
+.dag-status, .dag-meta { padding: 4px var(--dag-gutter); }
+.dag-status { color: var(--text-secondary); }
+.dag-answer {
+  padding: 7px var(--dag-gutter) 9px;
+  background: var(--dag-paper);
+  color: color-mix(in srgb, var(--dag-ink) 87%, var(--dag-paper));
+  overflow-wrap: anywhere;
+}
+.dag-answer:empty { padding: 0; }
+.dag-answer, .dag-answer * { font-size: var(--dag-type); line-height: var(--dag-leading); }
+.dag-answer > * + * { margin-block-start: 5px; }
+.dag-answer p { white-space: pre-line; }
+.dag-answer :is(h1, h2, h3, h4, h5, h6, strong, b, th) { font-weight: 600; color: var(--dag-ink); }
+.dag-answer > * + :is(h1, h2, h3, h4, h5, h6) { margin-block-start: 9px; }
+.dag-answer > :is(h1, h2, h3, h4, h5, h6) + * { margin-block-start: 3px; }
+.dag-answer :is(ul, ol) { padding-inline-start: 1.45em; }
+.dag-answer ul { list-style: disc; }
+.dag-answer ol { list-style: decimal; }
+.dag-answer blockquote { border-inline-start: 2px solid var(--border-default); padding-inline-start: 8px; }
+.dag-answer pre { max-width: 100%; overflow-x: auto; white-space: pre; padding: 4px 8px; }
+.dag-answer :is(pre, :not(pre) > code) { background: var(--msg-code-block-bg); }
+.dag-answer :not(pre) > code { padding-inline: 2px; }
+.dag-answer table { border-collapse: collapse; }
+.dag-answer :is(td, th) { border: 1px solid var(--border-default); padding: 2px 7px; text-align: start; }
+.dag-answer a { text-decoration: underline; text-underline-offset: 2px; }
+.dag-card .dag-manage {
+  position: absolute;
+  right: 7px;
+  top: 0;
+  transform: translateY(-70%);
+  height: 24px;
+  color: var(--text-secondary);
+  background: hsl(var(--background));
+}
+@media (hover: hover) {
+  .dag-card:not(:hover):not(:focus-within) .dag-manage:not([data-state='open']) { opacity: 0; }
+}
+.dag-failure {
+  position: absolute;
+  inset: auto var(--dag-gutter) 0;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--border-default);
+}
+.dag-failure [data-dag-retry-failed] {
+  min-height: 24px; height: 24px; padding: 0 3px; border: none; background: transparent;
+  color: var(--dag-ink); font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px;
+}

@@ -809,7 +809,7 @@ async function loadCodexRewindNativeBoundary(
  * 没有回复的消息)只存在于即将放弃的原生会话里。把它们做成交接写进隐藏标记，
  * 下次任意入口发送时注入全新原生会话；没有 user 历史时交接为空，不注入。
  */
-async function buildNativeContextReset(
+export async function buildNativeContextReset(
   sessionId: string,
   ctx: Pick<RewindContext, 'targetClientId' | 'agentKind'>,
 ): Promise<NonNullable<RewindCommitArgs['nativeContextReset']>> {

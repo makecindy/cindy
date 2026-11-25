@@ -1136,6 +1136,7 @@ import { registerHelpFeedbackIpc } from './maker-ipc/help-feedback.js';
 import { registerMyIssuesIpc } from './maker-ipc/my-issues.js';
 import { registerMakerPlanWriteIpc } from './maker-ipc/plan-write.js';
 import { registerMakerRewindIpc } from './maker-ipc/rewind.js';
+import { registerDagHistoryEditIpc } from './maker-ipc/dagHistoryEditIpc.js';
 import { registerMakerForkIpc } from './maker-ipc/fork.js';
 import { registerMakerAuthIpc } from './maker-ipc/auth.js';
 import { registerMakerStatusIpc } from './maker-ipc/status.js';
@@ -7530,6 +7531,7 @@ const registerIpcHandlers = () => {
       registerHelpFeedbackIpc();
       registerMakerPlanWriteIpc();
       registerMakerRewindIpc();
+      registerDagHistoryEditIpc();
       registerMakerForkIpc();
       registerMakerAuthIpc(ipcMaker);
       registerMakerStatusIpc(ipcMaker);

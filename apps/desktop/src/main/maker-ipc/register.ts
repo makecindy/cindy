@@ -548,6 +548,7 @@ import { allocateDialogueRecoveryWorkspace, findDialogueRecoveryWorkspace, requi
 import { workdirDiagnosticContext, workdirDiagnosticErrorCode } from '../workdirDiagnostics.js';
 import { statWorkingDirectory, mkdirWorkingDirectory, realpathWorkingDirectory, findSimilarWorkingDirectory } from '../workdir-probe-host/index.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
+import { admitAtDagTip, readExpectedDagTip, rejectDagTip } from './dagTipAdmission.js';
 import {
   awaitAgentInputQueueSnapshotPersistence as awaitQueuedSnapshotWrite,
   loadAgentInputQueueSnapshotState,
@@ -4952,6 +4953,33 @@ export async function releaseSessionAfterHistoryAction(
   opts?: { rewindCommitted?: boolean },
 ) {
   await sessionActionRuntime?.release(sessionId, opts);
+}
+
+/** Protect a reversible history edit without stopping or consuming any input. */
+export async function withIdleDagInputFence<T>(sessionIds: string[], operation: () => Promise<T>): Promise<T> {
+  const coordinator = agentInputCoordinatorHolder;
+  if (!coordinator) throw new Error('输入协调器尚未就绪。');
+  const ids = [...new Set(sessionIds)].sort();
+  const locked: string[] = [];
+  const key = `dag-history:${crypto.randomUUID()}`;
+  for (const id of ids) await coordinator.ensureQueueRestored(id);
+  try {
+    for (const id of ids) {
+      if (!coordinator.isQueueRestored(id) || rewindInputSessions.has(id) || coordinator.hasActiveTurnForRewind(id) ||
+          coordinator.hasPendingQueuedWork(id) || coordinator.hasQueuedItemWhere(id, () => true, {includeRecovery:true}) ||
+          coordinator.isAutoResumePending(id) || coordinator.hasQueuedAutoResume(id) || coordinator.getAutoResumeAttemptToken(id) !== null)
+        throw new Error('会话有运行、排队或恢复中的输入，未修改。');
+      coordinator.setDagHistoryWriteFence(id, true);
+      locked.push(id);
+      coordinator.setInteractionLock(id, key, true);
+    }
+    return await operation();
+  } finally {
+    for (const id of locked) {
+      coordinator.setDagHistoryWriteFence(id, false);
+      coordinator.setInteractionLock(id, key, false);
+    }
+  }
 }
 
 /**
@@ -21578,9 +21606,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // device-link 出方向:远程入队消息的 OSS 引用(files[] + persistedContent)在入队前一次性物化成本地
   // 临时文件(共用下载、用后删 OSS),保证喂 agent 的 files[] 与落库的 persistedContent 都是本地路径。
   // 本机会话无 OSS 引用 → materializeQueuedOssAttachmentsDeferred 原样返回,零开销。
-  ipcMain.handle(
+  for (const channel of [
     MAKER_INVOKE.INPUT_ENQUEUE,
+    'dag:input:enqueue-at-tip:v1', // Local preload only. Never add to the device-link allowlist.
+  ]) ipcMain.handle(channel,
     async (event, sessionId: unknown, item: unknown, opts?: unknown) => {
+      const tip = channel === MAKER_INVOKE.INPUT_ENQUEUE ? null : readExpectedDagTip((opts as {expectedDagTip?: unknown} | undefined)?.expectedDagTip);
+      if (tip && isDeviceLinkInvoke()) return rejectDagTip();
       const sid = requireSessionId(sessionId);
       await assertReviewExternalInputAllowed(sid);
       const deviceLinkInvoke = isDeviceLinkInvoke();
@@ -21735,7 +21767,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         };
         let projection: ReturnType<typeof enqueueInput> | undefined;
-        if (queued.text === CONTINUE_AFTER_APP_EXIT_PROMPT
+        if (tip) {
+          // A literal DAG question must not execute the special scheduler-resume path below.
+          if (queued.text === CONTINUE_AFTER_APP_EXIT_PROMPT) return rejectDagTip();
+          projection = await withSendToSessionLock(sid, async () => {
+            await drainPersistQueue();
+            const idle = () => {
+              const p = inputCoordinator.getProjection(sid);
+              return inputOwner === getCurrentDbClientSnapshot() && isCurrentInputGeneration() &&
+                inputCoordinator.isQueueRestored(sid) && !rewindInputSessions.has(sid) &&
+                !isSessionInTurn(sid) && !isSessionTurnPendingCompletion(sid) && !maker.getSession(sid)?.isTurnRunning() &&
+                !inputCoordinator.hasActiveTurnForRewind(sid) && !p.turnInProgress && !p.pendingQueue.length &&
+                !p.queuePaused && !p.queueAbortPending && !p.queueInteractionLocks.length && !p.queueEditLocks.length &&
+                !p.error && !p.recovery && !p.autoResumePending && !p.credentialSwitchWait && !p.usageLimitWait;
+            };
+            return admitAtDagTip(inputOwner.client, sid, tip, idle, () => enqueueInput(queued));
+          });
+        }
+        if (!tip && queued.text === CONTINUE_AFTER_APP_EXIT_PROMPT
           && !(deviceLinkInvoke && isAutomaticInputOriginKind(parsed.origin?.kind))) {
           assertCurrentInputGeneration();
           if (inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
@@ -21812,7 +21861,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
         sendTrace?.stage('snapshot');
         sendTrace?.finish('accepted');
-        return projection;
+        // The v1 local RPC confirms the exact accepted input even if drain already
+        // popped it out of the returned projection. The regular wire stays unchanged.
+        return tip ? { ...projection, dagAcceptedClientId: queued.clientId } : projection;
       } catch (err) {
         if (!acceptedByCoordinator) {
           await materialized.cleanupBeforeAcceptance?.();
@@ -22231,6 +22282,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
+  // Local-only DAG control. Do not register on the device-link or plugin tool allowlists.
+  ipcMain.handle('dag-history:recall-queued', async (event, sessionId: unknown, clientId: unknown, digest: unknown, stamp: unknown) => {
+    const sid = requireSessionId(sessionId), cid = requireClientId(clientId);
+    if (typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) throwIpcError('INVALID_ARGUMENT', '无法核对待发内容');
+    const { gateDagHistoryEdit } = await import('./dagHistoryEditIpc.js');
+    const owner = await gateDagHistoryEdit(event, stamp);
+    const check = async () => {
+      await assertReviewExternalInputAllowed(sid);
+      const [meta] = await getDbClient().drizzle.select({ source:sessions.source, status:sessions.status, remoteHostId:sessions.remoteHostId,
+        hiddenAt:sessions.hiddenAt, orcaRole:sessions.orcaRole, remoteLead:sessions.orcaRemoteLead }).from(sessions).where(eq(sessions.id, sid)).limit(1);
+      if (!meta || meta.hiddenAt || meta.orcaRole || meta.remoteLead || (meta.source && meta.source !== 'desktop' && meta.source !== 'side-chat') || meta.remoteHostId ||
+          meta.status !== 'active' || activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending())
+        throwIpcError('PRECONDITION_FAILED', '当前任务已无法撤回');
+      const state = inputCoordinator.getProjection(sid);
+      if (state.queueEditLocks.includes(cid) || state.steeringQueueClientIds.includes(cid)) throwIpcError('PRECONDITION_FAILED', '排队项正在编辑或投递');
+    };
+    await check();
+    const result = await sessionControlService.recallLocalComposerItem(sid, cid, digest, check);
+    if (!result.ok) return { ok: false, reason: result.message };
+    await awaitAgentInputQueueSnapshotPersistence(sid);
+    if (!inputCoordinator.hasPendingQueuedWork(sid)) getAgentIslandService()?.notifyQueueEmptied(sid);
+    return { ok: true, sessionId: sid, clientId: cid };
+  });
   ipcMain.handle(
     MAKER_INVOKE.INPUT_REMOVE,
     async (_e, sessionId: unknown, clientId: unknown, opts?: unknown) => {

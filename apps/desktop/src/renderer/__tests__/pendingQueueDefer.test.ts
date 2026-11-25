@@ -110,6 +110,7 @@ const cleanupCachedImages = vi.fn(async () => undefined);
 const cleanupStagedChatAttachments = vi.fn(async () => undefined);
 
 const input = {
+  dagTipAdmissionVersion: 1,
   getProjection: vi.fn(async (sessionId: string) => projection(sessionId)),
   enqueue: vi.fn(async (
     sessionId: string,
@@ -320,6 +321,55 @@ describe('renderer input queue facade', () => {
     expect(snap.pendingQueue.map((q) => q.text)).toEqual(['hello']);
     expect(snap.messages).toHaveLength(0);
     expect(snap.isFirstMessage).toBe(false);
+  });
+
+  // Unit: ordinary enqueue tests cannot distinguish a guarded rejection from a lost
+  // acknowledgement. Retrying the latter could duplicate a question already admitted.
+  it.each(['accepted', 'rejected', 'missing receipt', 'wrong receipt', 'transport failure', 'legacy', 'remote'])('distinguishes DAG tip delivery: %s', async mode => {
+    const sid = `dag-${mode}`;
+    const expectedDagTip = { answerId: 'answer', userMessageId: 'question' };
+    if (mode === 'remote') remoteProjectsStore.setDeviceSessions('other-device', 'Other', [{ id: sid } as never]);
+    if (mode === 'legacy') input.dagTipAdmissionVersion = 0;
+    if (mode === 'accepted' || mode === 'wrong receipt') input.enqueue.mockImplementationOnce(async (id, item) => ({
+      ...projection(id), dagAcceptedClientId: mode === 'accepted' ? item.clientId : 'different-input',
+    }));
+    if (mode === 'rejected') input.enqueue.mockRejectedValueOnce(new Error('DAG_TIP_REJECTED'));
+    if (mode === 'transport failure') input.enqueue.mockRejectedValueOnce(new Error('IPC disconnected'));
+    try {
+      const sent = makerChatStore.sendMessage(sid, 'next', MODEL, EFFORT, PERM, WD, undefined, undefined, { expectedDagTip });
+      if (['missing receipt', 'wrong receipt', 'transport failure'].includes(mode)) await expect(sent).rejects.toThrow();
+      else await expect(sent).resolves.toBe(mode === 'accepted');
+      if (mode === 'legacy' || mode === 'remote') expect(input.enqueue).not.toHaveBeenCalled();
+      else {
+        expect(input.enqueue).toHaveBeenCalledTimes(1);
+        expect(input.enqueue).toHaveBeenCalledWith(sid, expect.objectContaining({ text: 'next' }), expect.objectContaining({ expectedDagTip }));
+      }
+      expect(remoteInvoke).not.toHaveBeenCalled();
+      if (mode !== 'accepted') {
+        expect(makerChatStore.getSnapshot(sid)).toMatchObject({ messages: [], pendingQueue: [], isFirstMessage: true });
+        expect(generateTitle).not.toHaveBeenCalled();
+      }
+    } finally { input.dagTipAdmissionVersion = 1; }
+  });
+
+  it('accepts sibling questions while another branch is still waiting for its native receipt', async () => {
+    // Unit: a blocked first IPC must not serialize other branches in the send facade.
+    let release!: () => void;
+    input.enqueue.mockImplementationOnce((id, item) => new Promise(resolve => {
+      release = () => resolve({ ...projection(id), dagAcceptedClientId: item.clientId } as AgentInputProjection);
+    }));
+    const send = (id: string) => makerChatStore.sendMessage(id, 'advance', MODEL, EFFORT, PERM, WD, undefined, undefined, {
+      expectedDagTip: { answerId: `${id}-a`, userMessageId: `${id}-q` },
+    });
+    const first = send('guarded-branch-1');
+    try {
+      const siblings = ['guarded-branch-2', 'guarded-branch-3'].map(id => {
+        input.enqueue.mockImplementationOnce(async (target, item) => ({ ...projection(target), dagAcceptedClientId: item.clientId }));
+        return send(id);
+      });
+      expect(input.enqueue).toHaveBeenCalledTimes(3);
+      await expect(Promise.all(siblings)).resolves.toEqual([true, true]);
+    } finally { release(); await first; }
   });
 
   it('clears first-message state when main broadcasts the persisted user row', () => {

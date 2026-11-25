@@ -170,7 +170,11 @@ function mentionWireText(mention: AgentInputMention): string {
   return `@${formatMentionRef(mention.path)}`;
 }
 
-function collectInlineReplacements(entry: QueuedMessage, text: string): InlineReplacement[] {
+type ComposerInput = Pick<QueuedMessage, 'mentions' | 'agentReferences'> & {
+  chatMessage: Pick<QueuedMessage['chatMessage'], 'quotesEncoded' | 'agentReferences' | 'pastedTextRanges'>;
+};
+
+function collectInlineReplacements(entry: ComposerInput, text: string): InlineReplacement[] {
   const replacements: InlineReplacement[] = [];
   const agentReferences = readAgentInputReferences(
     entry.chatMessage.agentReferences?.length
@@ -277,7 +281,7 @@ function textSegmentNodes(
 
 const LIST_ROW_MARKER_RE = /^(?:[-+*•][ \t]+|[1-9]\d{0,8}[.)][ \t]+|[1-9]\d{0,8}、[ \t]*)/;
 
-function structuredQueueDocument(entry: QueuedMessage, text: string): JSONContent | null {
+export function structuredQueueDocument(entry: ComposerInput, text: string): JSONContent | null {
   if (!text) return null;
   const segments = entry.chatMessage.quotesEncoded
     ? parseChatQuoteSegments(text)

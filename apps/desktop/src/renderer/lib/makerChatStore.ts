@@ -194,7 +194,7 @@ import {
 import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
-import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
+import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch, emitRefresh } from '@/lib/sessionsBus';
 import { clearSessionStarting, markSessionStarting, noteStartingTerminal } from '@/lib/sessionStartingStore';
 import { createLogger } from '@/lib/logger';
 import {
@@ -8544,6 +8544,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
   if (globalListenersInitialized) return; // idempotent for StrictMode / HMR
   globalListenersInitialized = true;
   const ownsRemoteAuthRetry = options.ownsRemoteAuthRetry !== false;
+  window.electronAPI?.maker?.dagHistory?.onChanged?.(change => {
+    if (!isDataOwnerPushStampCurrent(change.owner)) return;
+    for (const id of new Set(change.ids)) if (sessions.has(id)) reloadMessages(id);
+    emitRefresh();
+    window.dispatchEvent(new CustomEvent('dag-family-history-changed', {detail:change.ids}));
+  });
 
   // ── Maker 主事件流: 一根管子接所有 vendor → maker AgentEvent ──
   // 老链路是 8 个独立 IPC channel; 新链路一个 maker:event 通道,按 event.type 分发。
@@ -15889,6 +15895,7 @@ function maybeAutoNameUnnamedSession(
  * 不能丢)。
  */
 type SendMessageOpts = {
+  expectedDagTip?: import('../../shared/dagTip').ExpectedDagTip;
   /** Reuse the bubble already displayed during remote creation. */
   firstMessageIdentity?: { clientId: string; createdAt: string };
   vendorOptions?: Record<string, unknown>;
@@ -15999,6 +16006,9 @@ function sendMessage(
   opts?: SendMessageOpts,
 ): Promise<boolean> {
   if (!sessionId) return Promise.resolve(false);
+  // Never send a guarded append to a remote outbox or an older preload: either
+  // could accept it as an unconditional new input. No optimistic state yet.
+  if (opts?.expectedDagTip && (isRemoteMediaSession(sessionId) || window.electronAPI?.maker?.input?.dagTipAdmissionVersion !== 1)) return Promise.resolve(false);
   // Allow send if there is text OR files
   if ((!text.trim() && (!files || files.length === 0)) || !workingDir)
     return Promise.resolve(false);
@@ -16270,22 +16280,23 @@ async function sendMessageCore(
   // 消息已过完所有本端拒绝点(clear/scope/beforeEnqueue),之后一定交给 coordinator 或
   // 远程 outbox:之后落库的错误属于这次发送,不再代关掉的那次错误补标。被拒的发送不作废,
   // 否则关掉的错误随后落库时补标不了。
-  _disposedLiveErrorIntents.delete(sessionId);
+  if (!opts?.expectedDagTip) _disposedLiveErrorIntents.delete(sessionId);
 
   // 一次性契约收口(bot review P2):计划勾选在**点击发送**时消耗——本条消息的计划
   // 意图已定格在行内快照(createOpts.planMode,派发时经 SendOptions.planMode 权威
   // 生效),这里立即熄灭 store/DB/runtime 的勾选,会话忙时连续排队的后续消息不再
   // 重复携带计划意图。(steer 插话不走此消耗:它并入 in-flight turn,勾选留给
   // 下一个真正的新 turn。)
-  if (queued.createOpts.planMode === true) {
-    void setPlanMode(sessionId, false).catch(() => {
-      /* setPlanMode 内部已记日志 */
+  const consumePlan = () => {
+    if (queued.createOpts.planMode === true) void setPlanMode(sessionId, false).catch(() => {
+      /* setPlanMode handles logging. */
     });
-  }
+  };
+  if (!opts?.expectedDagTip) consumePlan();
 
   // Renderer 只做 UI 乐观排序；DB user_send_at 和队列事务都由 main coordinator
   // 在 enqueue intent 内处理。这里不再本地 mutate pendingQueue，也不再触发 drain。
-  touchSessionUserSend(sessionId, workingDir, wasFirst, queued.clientId);
+  if (!opts?.expectedDagTip) touchSessionUserSend(sessionId, workingDir, wasFirst, queued.clientId);
 
   // Auto-naming (F-CHAT-2) — only fires for the first message in the session,
   // and that is by definition not busy (queue would have been dispatched on a
@@ -16315,7 +16326,7 @@ async function sendMessageCore(
   };
   if (materializationPending && remoteRecord) {
     remoteRecord.onMaterializationReady = commitAutoTitle;
-  } else {
+  } else if (!opts?.expectedDagTip) {
     commitAutoTitle();
   }
 
@@ -16330,9 +16341,29 @@ async function sendMessageCore(
   }
 
   const operation = beginInputProjectionOperation(sessionId);
+  const guarded = opts?.expectedDagTip;
+  const undoGuardedOptimism = () => {
+    if (!isDataOwnerGenerationCurrent(starPromptOwner) || !sessions.has(sessionId)) return;
+    setState(sessionId, s => ({ ...s,
+      pendingQueue: s.pendingQueue.filter(item => !(item.clientId === queued.clientId && item.isPendingEnqueue)),
+      messages: s.messages.filter(item => !(item.clientId === queued.clientId && item.isPendingPersist)),
+    }));
+  };
+  if (guarded && (!isDataOwnerGenerationCurrent(starPromptOwner) || operation.origin || isRemoteMediaSession(sessionId))) {
+    undoGuardedOptimism(); return false;
+  }
   return operation.api.input
-    .enqueue(sessionId, queued, { sendAtMs: Date.now() })
+    .enqueue(sessionId, queued, { sendAtMs: Date.now(), ...(guarded && { expectedDagTip: guarded }) })
     .then((projection) => {
+      if (guarded) {
+        const ack = projection as AgentInputProjection & { dagAcceptedClientId?: string };
+        if (ack.sessionId !== sessionId || ack.dagAcceptedClientId !== queued.clientId || !isDataOwnerGenerationCurrent(operation.dataOwner))
+          throw new Error('未收到本条续推问题的受理回执。');
+        _disposedLiveErrorIntents.delete(sessionId);
+        consumePlan();
+        touchSessionUserSend(sessionId, workingDir, wasFirst, queued.clientId);
+        commitAutoTitle();
+      }
       if (opts?.authRetryPersistOnProjectionError) {
         setState(sessionId, (s) => ({
           ...s,
@@ -16358,6 +16389,12 @@ async function sendMessageCore(
       return true;
     })
     .catch((err) => {
+      if (guarded) {
+        // Don't clear a genuine recovery banner for an unrelated failed comparison.
+        undoGuardedOptimism();
+        if (String(err).includes('DAG_TIP_REJECTED')) return false;
+        throw err; // transport loss is not evidence of rejection
+      }
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
       // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
       // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
@@ -17277,7 +17314,8 @@ function clearError(sessionId: string): void {
   });
 }
 
-function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientId: string; expectedSwitchRevision: number }): Promise<void> {
+function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientId: string; expectedSwitchRevision: number },
+  onProjection?: (projection: AgentInputProjection) => void): Promise<void> {
   if (!sessionId) return Promise.resolve();
   disposeLiveErrorPersist(sessionId);
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
@@ -17376,6 +17414,7 @@ function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientI
       ) {
         unmarkLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
       }
+      onProjection?.(projection);
     },
     (err) => {
       // IPC 失败：本次点击没有产生任何效果，清意图 + 回滚 queue-head 预登记。
