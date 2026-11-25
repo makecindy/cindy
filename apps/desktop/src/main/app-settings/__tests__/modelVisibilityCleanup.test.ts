@@ -100,6 +100,22 @@ describe('model visibility override cleanup', () => {
     expect(manageAppPreferences).not.toHaveBeenCalled();
   });
 
+  it('refuses an orphan key the mirror projection spells under the first agent', async () => {
+    configureModelSettingsActions({
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      list: async () => ({ providers: [{ id: 'custom:xai', agents: ['codex', 'pi'], models: { codex: [], pi: [] },
+        imageModels: [{ id: 'foo', name: 'Foo Image', defaultEnabled: true, sourceAgent: 'pi' }] }],
+        modelVisibilityOverrides: { 'codex:custom:xai:foo': false } }),
+    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
+
+    // The legacy snapshot projects media under the first agent (codex), so that key belongs
+    // to the media route even though the viewer reads it through `pi`.
+    await expect(manageAppModels({ operation: 'set',
+      target: { providerId: 'custom', agent: 'codex', modelId: 'xai:foo' },
+      change: { setting: 'visible', value: null } }, async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
+    expect(manageAppPreferences).not.toHaveBeenCalled();
+  });
+
   it('still clears an orphan key no media entry spells', async () => {
     configureModelSettingsActions({
       owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),

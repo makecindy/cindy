@@ -23,18 +23,20 @@ function visibilityKey(target: { agent: string; providerId: string; modelId: str
  * another model's stored preference.
  */
 /**
- * Agents whose visibility override a media entry reads. Mirrors
- * `isCatalogMediaModelVisible` (cindy-brain/mediaDisplayVisibility.ts): an explicit source
- * wins, then the provider's first agent. Media entries are not in the chat selector, but they
- * read the same flat key, so they can spell a key another target appears to own.
+ * Agents whose visibility override a media entry can be stored under. `isCatalogMediaModelVisible`
+ * (cindy-brain/mediaDisplayVisibility.ts) reads the explicit source when there is one, while the
+ * mirror's legacy projection writes every media entry under the provider's first agent
+ * (maker-host/model-visibility-mirror.ts). Media entries are not in the chat selector, but both
+ * spellings use the same flat key, so either can collide with a chat target.
  */
 function mediaEntryAgents(
   provider: CatalogProviders[number],
   entry: { sourceAgent?: string; sourceAgents?: readonly string[] },
 ): string[] {
-  if (entry.sourceAgents?.length) return [...entry.sourceAgents];
-  if (entry.sourceAgent) return [entry.sourceAgent];
-  return [provider.agents[0] ?? 'claude-code'];
+  const agents = new Set<string>([provider.agents[0] ?? 'claude-code']);
+  if (entry.sourceAgents?.length) for (const agent of entry.sourceAgents) agents.add(agent);
+  else if (entry.sourceAgent) agents.add(entry.sourceAgent);
+  return [...agents];
 }
 
 function visibilityKeyIsUnambiguous(
