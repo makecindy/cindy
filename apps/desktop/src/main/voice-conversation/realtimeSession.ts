@@ -59,6 +59,7 @@ export class RealtimeVoiceSession {
     { text?: string; committed?: boolean; suppressed: boolean; question: boolean }
   >();
   private readonly outputs = new Map<string, Output>();
+  private pendingUntaggedTool?: Tool;
   private readonly tools = new Map<string, Tool>();
   private readonly resultIds = new Set<string>();
   private readonly cancellationEvents = new Set<string>();
@@ -260,7 +261,7 @@ export class RealtimeVoiceSession {
         this.speakingInput = null;
         // A suppressed GLM input will never queue its own reply on commit.
         const resumeResult = this.adapter.requestsUserResponses && this.pendingContinuation && this.inputs.get(id)?.suppressed;
-        if (this.queuedReply?.inputId === id || resumeResult) this.continueResponse();
+        if ((this.queuedReply && this.inputs.get(id)?.committed) || resumeResult) this.continueResponse();
       }
     } else if (type === 'input_audio_buffer.committed' && id) {
       if (!this.inputs.has(id)) {
@@ -470,9 +471,11 @@ export class RealtimeVoiceSession {
     if (this.stopped || tool.handled) return;
     if (!this.canAnswerTool(tool)) {
       clearTimeout(tool.timer);
+      if (this.pendingUntaggedTool === tool) this.pendingUntaggedTool = undefined;
       tool.handled = true;
       return;
     }
+    if (this.adapter.untaggedToolResults) this.pendingUntaggedTool = tool;
     const input = tool.inputId ? this.inputs.get(tool.inputId) : undefined;
     if (input && input.text === undefined) {
       tool.timer ??= setTimeout(() => {
@@ -493,6 +496,7 @@ export class RealtimeVoiceSession {
         !input.suppressed &&
         !this.question &&
         (await this.deps.handoff(id, tool.supplement));
+      if (this.pendingUntaggedTool === tool) this.pendingUntaggedTool = undefined;
       if (!this.stopped && this.canAnswerTool(tool)) this.functionResult(tool.wireId, accepted);
     } catch {
       if (!this.stopped) this.fail();
@@ -533,6 +537,8 @@ export class RealtimeVoiceSession {
   private continueResponse(): void {
     if (
       (!this.pendingContinuation && !this.queuedReply) ||
+      // A background reply would supersede the GLM call awaiting its transcript or handoff receipt.
+      (this.pendingUntaggedTool && this.canAnswerTool(this.pendingUntaggedTool)) ||
       this.response ||
       this.awaitingResponse ||
       this.speakingInput ||

@@ -438,3 +438,63 @@ it.each(['before stop', 'after stop'] as const)(
     expect(f.turns.some(([, role]) => role === 'user')).toBe(false);
   },
 );
+
+it('waits for the GLM handoff receipt before generating a pending background reply', async () => {
+  const f = await fixture('glm-realtime');
+  const requests = () => f.received.filter(e => e.type === 'response.create');
+  let accept!: (accepted: boolean) => void;
+  f.handoff.mockImplementationOnce(() => new Promise(resolve => { accept = resolve; }));
+  f.send({ type: 'input_audio_buffer.committed', item_id: 'new-request' });
+  f.send({ type: 'response.created', response: { id: 'tool-reply' } });
+  f.send({ type: 'response.function_call_arguments.done', response_id: 'tool-reply', output_index: 0,
+    name: 'handoff_task', arguments: '{"supplement":"context"}' });
+  f.send({ type: 'response.done', response: { id: 'tool-reply', status: 'completed' } });
+  await f.drainEvents();
+  f.session.deliverResult('earlier-task', 'finished');
+  await f.drainEvents();
+  expect(requests()).toHaveLength(1);
+
+  f.send({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'new-request', transcript: 'start this task' });
+  await f.drainEvents();
+  expect(f.handoff).toHaveBeenCalledExactlyOnceWith('new-request', 'context');
+  expect(requests()).toHaveLength(1);
+  accept(true);
+  await f.drainEvents();
+  const output = f.received.filter(e => e.item?.type === 'function_call_output');
+  expect(output).toHaveLength(1);
+  expect(JSON.parse(output[0].item.output)).toEqual({ status: 'accepted' });
+  expect(requests()).toHaveLength(2);
+  expect(f.received.indexOf(output[0])).toBeLessThan(f.received.indexOf(requests()[1]));
+  f.send({ type: 'response.created', response: { id: 'continuation' } });
+  f.send({ type: 'response.done', response: { id: 'continuation', status: 'completed' } });
+  await f.drainEvents();
+  expect(requests()).toHaveLength(2);
+});
+
+it('starts one merged GLM reply when the final committed speaker stops after response.done', async () => {
+  const f = await fixture('glm-realtime');
+  const requests = () => f.received.filter(e => e.type === 'response.create');
+  f.send({ type: 'input_audio_buffer.committed', item_id: 'first' });
+  f.send({ type: 'response.created', response: { id: 'busy' } });
+  for (const id of ['second', 'third']) {
+    f.send({ type: 'input_audio_buffer.speech_started', item_id: id });
+    f.send({ type: 'input_audio_buffer.committed', item_id: id });
+    f.send({ type: 'conversation.item.input_audio_transcription.completed', item_id: id, transcript: id });
+    if (id === 'second') f.send({ type: 'input_audio_buffer.speech_stopped', item_id: id });
+  }
+  f.send({ type: 'response.done', response: { id: 'busy', status: 'completed' } });
+  await f.drainEvents();
+  expect(requests()).toHaveLength(1);
+  f.send({ type: 'input_audio_buffer.speech_stopped', item_id: 'third' });
+  await f.drainEvents();
+  expect(requests()).toHaveLength(2);
+
+  f.send({ type: 'response.created', response: { id: 'merged' } });
+  f.send({ type: 'response.function_call_arguments.done', response_id: 'merged', output_index: 0,
+    name: 'handoff_task', arguments: '{"supplement":"ambiguous"}' });
+  f.send({ type: 'response.done', response: { id: 'merged', status: 'completed' } });
+  await f.drainEvents();
+  expect(f.handoff).not.toHaveBeenCalled();
+  expect(f.received.find(e => e.item?.type === 'function_call_output')?.item.output)
+    .toBe(JSON.stringify({ status: 'not_accepted' }));
+});
