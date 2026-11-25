@@ -188,6 +188,7 @@ export class RelayUdpPath {
   private healthySince: number | null = null;
   private lastHealthyProgressAt = Number.NEGATIVE_INFINITY;
   private healthyProgressWindows = 0;
+  private lastHealthyPeerAt = Number.NEGATIVE_INFINITY;
   private unackedStreakAt = Number.NEGATIVE_INFINITY;
   private readonly sendSamples: (SendCounters & { at: number; received: number })[] = [];
 
@@ -381,6 +382,12 @@ export class RelayUdpPath {
   /** 端到端发现疑似第 1 跳故障：支持满尺寸探测时先直接测本机 ↔ 中转，避免替抖动/离线对端背锅。 */
   private reportAnomaly(reason: Exclude<RelayUdpSuspension['reason'], 'probe-failed'>, now: number): void {
     if (!this.probeSupported) {
+      // 旧中继下：如果最近一个采样窗内有其他走中转的对端在正常确认字节，说明本机第 1 跳健康，
+      // 单个对端的请求超时不连坐整机。
+      if (reason === 'request-timeouts' && now - this.lastHealthyPeerAt <= RETRANSMIT_WINDOW_MS) {
+        this.stalls = [];
+        return;
+      }
       this.suspend(reason, now);
       return;
     }
@@ -521,6 +528,7 @@ export class RelayUdpPath {
     const sent = counters.sent - first.sent;
     const acked = counters.acknowledgedBytes - first.acknowledgedBytes;
     const anotherPeerHealthy = this.hasHealthyRelayedPeer(first.peers, counters.peers);
+    if (anotherPeerHealthy) this.lastHealthyPeerAt = now;
     const highRetransmit = retransmitted >= RETRANSMIT_MIN_SEGMENTS && retransmitted >= RETRANSMIT_MIN_SHARE * Math.max(sent, 1);
     if (highRetransmit && !anotherPeerHealthy) {
       if (acked === 0) {
@@ -580,6 +588,7 @@ export class RelayUdpPath {
 
   private resetSendWindow(): void {
     this.sendSamples.length = 0;
+    this.lastHealthyPeerAt = Number.NEGATIVE_INFINITY;
     this.unackedStreakAt = Number.NEGATIVE_INFINITY;
     this.clearHealthyProgress();
   }

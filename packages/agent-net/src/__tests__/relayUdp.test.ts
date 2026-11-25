@@ -577,6 +577,12 @@ it('does not suspend legacy relay UDP when one peer stalls while another relayed
   expect(path.suspension).toBeNull();
   expect(path.send('member', new Uint8Array(100))).toBe(true);
 
+  // Even two request timeouts on the dying peer must not suspend legacy relay UDP while the healthy peer is acknowledging.
+  path.noteStall();
+  path.noteStall();
+  expect(path.suspension).toBeNull();
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+
   // Both peers stop acknowledging (real hop-1 outage) -> suspends after 5s window.
   for (let i = 0; i < 6; i++) {
     step(1_000);

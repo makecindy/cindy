@@ -238,6 +238,10 @@ impl NativeEngine {
                 Ok(Value::Null)
             },
             "relayUdp" => self.configure_relay_udp(command),
+            "relayStalled" => {
+                if let Some(relay) = &mut self.relay_udp && let Some(socket) = &self.udp { relay.note_stall(self.now, socket); }
+                Ok(Value::Null)
+            },
             "poll" => self.poll(),
             _ => Err("UNKNOWN_NATIVE_OPERATION"),
         }
@@ -397,7 +401,15 @@ impl NativeEngine {
                     Err(_) => break,
                 }
             }
-            if let Some(relay) = &mut self.relay_udp { relay.tick(now, socket); }
+            if let Some(relay) = &mut self.relay_udp {
+                relay.tick(now, socket);
+                let send_stats: Vec<(u32, bool, u64, u64, u64)> = self.endpoint.ids().filter_map(|id| {
+                    let is_relay = matches!(self.endpoint.peer_addr(id), Some(Address::Link(_)));
+                    let stats = self.endpoint.connection(id)?.stats();
+                    Some((id, is_relay, stats.retransmitted_segments, stats.packets_sent, stats.acknowledged_bytes))
+                }).collect();
+                relay.observe_relayed_sends(now, socket, &send_stats);
+            }
             if let Some(stun) = &mut self.stun { stun.tick(now, socket, NativeCrypto::random::<12>); }
         }
         self.endpoint.tick(now);

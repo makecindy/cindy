@@ -396,6 +396,11 @@ export class NativeTransport implements Transport {
       this.updateCandidates();
     }).catch(() => undefined).finally(() => { this.refreshingAddresses = false; });
   }
+  relayStalled(): void {
+    if (this.closed || !this.enhanced || !this.supports('relay-udp-v2')) return;
+    void this.call({ op: 'relayStalled' }).catch(() => undefined);
+    this.wake();
+  }
   reserve(bytes: number): void {
     if (this.pendingBytes + bytes > MAX_PENDING) throw new Error('NATIVE_TRANSPORT_BACKPRESSURE');
     this.pendingBytes += bytes;

@@ -180,6 +180,11 @@ const PROBE_FRESH_US: u64 = 3_000_000;
 const DATA_SILENCE_US: u64 = 4_000_000;
 const DATA_SILENCE_MIN_RESENDS: u32 = 3;
 const DATA_SILENCE_MIN_SPAN_US: u64 = 1_000_000;
+const STALL_WINDOW_US: u64 = 60_000_000;
+const STALL_COUNT: usize = 2;
+const RETRANSMIT_SAMPLE_US: u64 = 1_000_000;
+const RETRANSMIT_WINDOW_US: u64 = 5_000_000;
+const RETRANSMIT_MIN_SEGMENTS: u64 = 6;
 const PROBE_COOLDOWNS_US: [u64; 4] = [15_000_000, 30_000_000, 60_000_000, 120_000_000];
 const MAX_PENDING_REGISTRATIONS: usize = 16;
 
@@ -271,6 +276,25 @@ fn verify_probe_ack(packet: &[u8], credentials: &Credentials) -> Option<u64> {
 
 pub(crate) enum Intercepted<'a> { NotRelay, Consumed, Deliver([u8; HASH_BYTES], &'a [u8]) }
 
+#[derive(Clone, Copy)]
+struct PeerRelayTrack {
+    relay: bool,
+    last_retrans: u64,
+    last_sent: u64,
+    last_acked: u64,
+    relay_retrans: u64,
+    relay_sent: u64,
+    relay_acked: u64,
+}
+
+struct SendWindowSample {
+    at: u64,
+    retransmitted: u64,
+    sent: u64,
+    acked: u64,
+    peers: BTreeMap<u32, (u64, u64, u64)>,
+}
+
 pub(crate) struct RelayUdp {
     pub(crate) server_name: String,
     host: String,
@@ -298,6 +322,14 @@ pub(crate) struct RelayUdp {
     silent_since: Option<u64>,
     silent_resends: u32,
     silent_last_send: Option<u64>,
+    stalls: Vec<u64>,
+    peer_tracks: BTreeMap<u32, PeerRelayTrack>,
+    total_relay_retrans: u64,
+    total_relay_sent: u64,
+    total_relay_acked: u64,
+    send_samples: Vec<SendWindowSample>,
+    last_sample_at: Option<u64>,
+    unacked_streak_at: Option<u64>,
     suspended_until: Option<u64>,
     suspensions: usize,
     resolved_at: Option<u64>,
@@ -311,7 +343,9 @@ impl RelayUdp {
         Some(Self { server_name: server_name.to_owned(), host, port, lookup: None, server: None, credentials: None, counter: 0, up_counter: 0,
             probe_counter: 0, cookie: None, pending: BTreeMap::new(), pending_probes: BTreeMap::new(), acked_at: None, proven_address: false,
             probe_verified: false, probe_acked_at: None, probe_started_at: None, probe_last_sent_at: None, unacked_since: None, registered_at: None,
-            sent_at: None, silent_since: None, silent_resends: 0, silent_last_send: None, suspended_until: None, suspensions: 0,
+            sent_at: None, silent_since: None, silent_resends: 0, silent_last_send: None, stalls: Vec::new(), peer_tracks: BTreeMap::new(),
+            total_relay_retrans: 0, total_relay_sent: 0, total_relay_acked: 0, send_samples: Vec::new(), last_sample_at: None,
+            unacked_streak_at: None, suspended_until: None, suspensions: 0,
             resolved_at: None, next_resolve_at: 0, resolve_retry_us: RESOLVE_RETRY_FIRST_US })
     }
 
@@ -334,6 +368,8 @@ impl RelayUdp {
         self.silent_since = None;
         self.silent_resends = 0;
         self.silent_last_send = None;
+        self.stalls.clear();
+        self.reset_send_window();
         self.proven_address = false;
         self.probe_verified = false;
         self.probe_acked_at = None;
@@ -351,6 +387,105 @@ impl RelayUdp {
         self.silent_resends = 0;
     }
 
+    /// Session request to a relayed peer timed out; two within 60 s trigger an on-demand hop-1 full-size probe even when downlink keeps arriving.
+    pub(crate) fn note_stall(&mut self, now: u64, socket: &UdpSocket) {
+        if !self.probe_supported() || !self.up(now) { return; }
+        self.stalls.retain(|at| now.saturating_sub(*at) < STALL_WINDOW_US);
+        self.stalls.push(now);
+        if self.stalls.len() >= STALL_COUNT {
+            self.stalls.clear();
+            self.trigger_hop1_probe(now, socket);
+        }
+    }
+
+    /// Watches per-connection relay-path retransmissions so a broken uplink triggers a full-size hop-1 probe even when downlink packets keep arriving.
+    pub(crate) fn observe_relayed_sends(&mut self, now: u64, socket: &UdpSocket, connections: &[(u32, bool, u64, u64, u64)]) {
+        if !self.probe_supported() || !self.up(now) {
+            self.reset_send_window();
+            return;
+        }
+        if self.last_sample_at.is_some_and(|at| now.saturating_sub(at) < RETRANSMIT_SAMPLE_US) { return; }
+        self.last_sample_at = Some(now);
+        let mut active_ids = BTreeMap::new();
+        let mut peers = BTreeMap::new();
+        for &(id, relay, retrans, sent, acked) in connections {
+            active_ids.insert(id, ());
+            let entry = self.peer_tracks.entry(id).or_insert(PeerRelayTrack {
+                relay, last_retrans: retrans, last_sent: sent, last_acked: acked,
+                relay_retrans: 0, relay_sent: 0, relay_acked: 0,
+            });
+            if entry.relay && relay {
+                let d_retrans = retrans.saturating_sub(entry.last_retrans);
+                let d_sent = sent.saturating_sub(entry.last_sent);
+                let d_acked = acked.saturating_sub(entry.last_acked);
+                self.total_relay_retrans = self.total_relay_retrans.saturating_add(d_retrans);
+                self.total_relay_sent = self.total_relay_sent.saturating_add(d_sent);
+                self.total_relay_acked = self.total_relay_acked.saturating_add(d_acked);
+                entry.relay_retrans = entry.relay_retrans.saturating_add(d_retrans);
+                entry.relay_sent = entry.relay_sent.saturating_add(d_sent);
+                entry.relay_acked = entry.relay_acked.saturating_add(d_acked);
+            }
+            entry.relay = relay;
+            entry.last_retrans = retrans;
+            entry.last_sent = sent;
+            entry.last_acked = acked;
+            if relay { peers.insert(id, (entry.relay_retrans, entry.relay_sent, entry.relay_acked)); }
+        }
+        self.peer_tracks.retain(|id, _| active_ids.contains_key(id));
+        if self.send_samples.last().is_some_and(|last| now.saturating_sub(last.at) >= RETRANSMIT_WINDOW_US) {
+            self.reset_send_window();
+        }
+        self.send_samples.push(SendWindowSample {
+            at: now, retransmitted: self.total_relay_retrans, sent: self.total_relay_sent, acked: self.total_relay_acked, peers,
+        });
+        while self.send_samples.len() > 1 && now.saturating_sub(self.send_samples[1].at) >= RETRANSMIT_WINDOW_US {
+            self.send_samples.remove(0);
+        }
+        let first = &self.send_samples[0];
+        if now.saturating_sub(first.at) < RETRANSMIT_WINDOW_US { return; }
+        let retrans = self.total_relay_retrans.saturating_sub(first.retransmitted);
+        let sent = self.total_relay_sent.saturating_sub(first.sent);
+        let acked = self.total_relay_acked.saturating_sub(first.acked);
+        let last = self.send_samples.last().expect("pushed above");
+        let another_peer_healthy = last.peers.len() >= 2 && last.peers.iter().any(|(id, &(r, s, a))| {
+            first.peers.get(id).is_some_and(|&(pr, ps, pa)| {
+                let da = a.saturating_sub(pa);
+                if da == 0 { return false; }
+                let dr = r.saturating_sub(pr);
+                let ds = s.saturating_sub(ps);
+                !(dr >= RETRANSMIT_MIN_SEGMENTS && dr.saturating_mul(4) >= ds.max(1))
+            })
+        });
+        let high_retransmit = retrans >= RETRANSMIT_MIN_SEGMENTS && retrans.saturating_mul(4) >= sent.max(1);
+        if high_retransmit && !another_peer_healthy {
+            if acked == 0 {
+                self.reset_send_window();
+                self.trigger_hop1_probe(now, socket);
+            } else if self.unacked_streak_at.is_none() {
+                self.unacked_streak_at = Some(now);
+            } else if self.unacked_streak_at.is_some_and(|at| now.saturating_sub(at) >= RETRANSMIT_WINDOW_US) {
+                self.reset_send_window();
+                self.trigger_hop1_probe(now, socket);
+            }
+        } else {
+            self.unacked_streak_at = None;
+        }
+    }
+
+    fn trigger_hop1_probe(&mut self, now: u64, socket: &UdpSocket) {
+        self.silent_since = None;
+        self.silent_resends = 0;
+        if self.probe_acked_at.is_none_or(|at| now.saturating_sub(at) >= PROBE_FRESH_US) && self.probe_started_at.is_none() {
+            self.start_probe(now, socket);
+        }
+    }
+
+    fn reset_send_window(&mut self) {
+        self.send_samples.clear();
+        self.last_sample_at = None;
+        self.unacked_streak_at = None;
+    }
+
     fn reset_registration(&mut self) {
         self.cookie = None;
         self.proven_address = false;
@@ -366,6 +501,8 @@ impl RelayUdp {
         self.silent_since = None;
         self.silent_resends = 0;
         self.silent_last_send = None;
+        self.stalls.clear();
+        self.reset_send_window();
     }
 
     /// Both directions work: registration fresh, not suspended, and full-size probe verified when supported.
@@ -439,6 +576,8 @@ impl RelayUdp {
         self.suspensions = 0;
         self.silent_since = None;
         self.silent_resends = 0;
+        self.stalls.clear();
+        self.reset_send_window();
         if !was_up && self.up(now) { self.register(now, socket); }
     }
 
@@ -469,6 +608,8 @@ impl RelayUdp {
         self.pending_probes.clear();
         self.silent_since = None;
         self.silent_resends = 0;
+        self.stalls.clear();
+        self.reset_send_window();
         self.register(now, socket);
     }
 
@@ -582,12 +723,14 @@ mod tests {
     }
 
     // Regression (2026-11-25): Mobile native RelayUdp must gate admission on a full-size 1350B probe when the relay
-    // supports udp-relay-probe-v1, stay on UDP when data-silence is cleared by a passing hop-1 probe, and fall back
-    // to WebSocket when full-size probes drop (VPN/MTU blackhole), recovering immediately on network_changed.
+    // supports udp-relay-probe-v1, stay on UDP when data-silence / uplink retransmits / stalls are cleared by a passing
+    // hop-1 probe, fall back to WebSocket when full-size probes drop (even while downlink keeps arriving), and recover
+    // immediately on network_changed.
     #[test]
     fn full_size_probe_gates_admission_handles_blackhole_and_recovers_on_network_change() {
         let relay_sock = UdpSocket::bind("127.0.0.1:0").expect("bind relay");
-        relay_sock.set_nonblocking(true).expect("nonblocking");
+        // Short read timeout (instead of nonblocking) so macOS BSD loopback netisr finishes delivering queued datagrams.
+        relay_sock.set_read_timeout(Some(std::time::Duration::from_millis(20))).expect("timeout");
         let relay_addr = relay_sock.local_addr().expect("addr");
         let client_sock = UdpSocket::bind("127.0.0.1:0").expect("bind client");
         client_sock.set_nonblocking(true).expect("nonblocking");
@@ -634,7 +777,6 @@ mod tests {
         now += 500_000;
         relay.network_changed(now, &client_sock);
         let _ = pump(&mut relay, now, true);
-        let _ = pump(&mut relay, now, true);
         assert!(relay.up(now));
         assert!(relay.send(now, &client_sock, &[9; HASH_BYTES], &[0u8; 64]));
 
@@ -648,14 +790,35 @@ mod tests {
         }
         assert!(relay.up(now));
 
-        // 4. Data silence when hop-1 probe fails -> suspends back to WebSocket.
+        // 4. Downlink keeps arriving (clearing silent_since) while uplink breaks (retransmits with 0 ACK) ->
+        //    observe_relayed_sends triggers 1350B probe; probe failure suspends back to WebSocket.
         now += PROBE_FRESH_US + 1_000_000;
-        for _ in 0..4 {
-            let _ = relay.send(now, &client_sock, &[9; HASH_BYTES], &[0u8; 64]);
-            now += 1_500_000;
+        let (mut retrans, mut sent) = (0u64, 0u64);
+        for _ in 0..7 {
+            relay.note_inbound();
+            retrans += 2;
+            sent += 4;
+            relay.observe_relayed_sends(now, &client_sock, &[(1, true, retrans, sent, 0)]);
+            now += 1_000_000;
             relay.tick(now, &client_sock);
             let _ = pump(&mut relay, now, false);
         }
+        now += PROBE_TIMEOUT_US + 100_000;
+        relay.tick(now, &client_sock);
+        let _ = pump(&mut relay, now, false);
+        assert!(!relay.up(now));
+
+        // 5. Recover on network_changed, then verify note_stall triggers probe even while downlink keeps arriving.
+        now += 500_000;
+        relay.network_changed(now, &client_sock);
+        let _ = pump(&mut relay, now, true);
+        assert!(relay.up(now));
+        now += PROBE_FRESH_US + 1_000_000;
+        relay.note_inbound();
+        relay.note_stall(now, &client_sock);
+        relay.note_stall(now, &client_sock);
+        let seen = pump(&mut relay, now, false);
+        assert!(seen.iter().any(|&(kind, len)| kind == UDP_RELAY_PROBE && len == PROBE_BYTES));
         now += PROBE_TIMEOUT_US + 100_000;
         relay.tick(now, &client_sock);
         assert!(!relay.up(now));
