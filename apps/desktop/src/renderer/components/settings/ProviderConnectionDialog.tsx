@@ -195,6 +195,7 @@ interface ProviderConnectionDialogProps {
   /** Stable fallback for transitions whose immediate opener unmounts before this dialog mounts. */
   returnFocusRef?: RefObject<HTMLElement | null>;
   focusAgent?: AgentKind;
+  openAiApiCredentialRevision?: number;
   onSaved: () => void;
   onClose: () => void;
 }
@@ -203,6 +204,7 @@ interface ImageGenerationReloadConfirmation {
   config: CustomProviderConfig;
   keys: RuntimeKeys;
   openAiApiUltrafastConfirmed?: boolean;
+  openAiApiCredentialRevision?: number;
   busyCount: number;
 }
 
@@ -485,6 +487,7 @@ export function ProviderConnectionDialog({
   existingIds,
   returnFocusRef,
   focusAgent,
+  openAiApiCredentialRevision,
   onSaved: notifySaved,
   onClose: notifyClosed,
 }: ProviderConnectionDialogProps) {
@@ -1498,7 +1501,8 @@ export function ProviderConnectionDialog({
     ? resolveProviderConnectionProbeRoute(activeTab, f, presets)?.baseUrl ?? f.baseUrl : f.baseUrl;
   const canShowImageGenerationAdvanced =
     activeTab === 'codex' && canRuntimeUseNativeImageGeneration(f);
-  const canConfirmUltrafast = editing && activeTab === 'codex' && authMode === 'apiKey' &&
+  const canConfirmUltrafast = editing && openAiApiCredentialRevision !== undefined &&
+    activeTab === 'codex' && authMode === 'apiKey' &&
     keyHydrationReady && !keyHydrationFailed.codex && !!f.apiKey.trim() &&
     keyEditRevisionRef.current.codex === 0 &&
     isOpenAiApiResponsesEndpoint(f.baseUrl.trim(), f.wireProtocol, f.requestPath.trim());
@@ -2259,11 +2263,14 @@ export function ProviderConnectionDialog({
           ? ultrafastConfirmation : undefined;
         const result = await updateCustomProvider(config, keys, {
           source: 'manual-settings',
-          ...(confirmUltrafast !== undefined ? { openAiApiUltrafastConfirmed: confirmUltrafast } : {}),
+          ...(confirmUltrafast !== undefined ? {
+            openAiApiUltrafastConfirmed: confirmUltrafast, openAiApiCredentialRevision,
+          } : {}),
         });
         if (result?.ok === false) {
           setImageGenerationReloadConfirmation({
-            config, keys, openAiApiUltrafastConfirmed: confirmUltrafast, busyCount: result.busyCount,
+            config, keys, openAiApiUltrafastConfirmed: confirmUltrafast, openAiApiCredentialRevision,
+            busyCount: result.busyCount,
           });
           savingRef.current = false;
           setSaving(false);
@@ -2310,6 +2317,7 @@ export function ProviderConnectionDialog({
     keyHydrationFailed,
     showAdvanced,
     ultrafastConfirmation,
+    openAiApiCredentialRevision,
     savedBaselineFor,
     t,
   ]);
@@ -2325,7 +2333,8 @@ export function ProviderConnectionDialog({
           source: 'manual-settings' as const,
           codexImageGenerationRestartPolicy: policy,
           ...(pending.openAiApiUltrafastConfirmed !== undefined
-            ? { openAiApiUltrafastConfirmed: pending.openAiApiUltrafastConfirmed } : {}),
+            ? { openAiApiUltrafastConfirmed: pending.openAiApiUltrafastConfirmed,
+              openAiApiCredentialRevision: pending.openAiApiCredentialRevision } : {}),
         };
         const result = editing
           ? await updateCustomProvider(pending.config, pending.keys, options)

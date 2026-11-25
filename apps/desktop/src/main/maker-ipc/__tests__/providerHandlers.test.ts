@@ -1884,10 +1884,12 @@ describe('provider:custom:* CRUD handlers', () => {
     mountDb();
     const harness = new IpcHarness();
     const keys = new Map<string, string>();
-    registerProviderHandlers(harness, makeDeps({
+    const deps = makeDeps({
+      beginRouteMutation: beginProviderRouteMutation,
       readCustomProviderKeyForMutation: id => keys.get(id) ?? null,
       storeCustomProviderKey: (id, _agent, key) => { keys.set(id, key); return true; },
-    }));
+    });
+    registerProviderHandlers(harness, deps);
     const config: CustomProviderConfig = {
       id: 'official-api-ultrafast',
       name: 'OpenAI API',
@@ -1901,13 +1903,24 @@ describe('provider:custom:* CRUD handlers', () => {
     await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, { codex: 'fixture-old-key' });
     expect(await isConfirmed()).toBeUndefined();
 
-    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, {}, {
-      source: 'manual-settings', openAiApiUltrafastConfirmed: true,
+    const confirmation = (revision: number) => ({
+      source: 'manual-settings', openAiApiUltrafastConfirmed: true, openAiApiCredentialRevision: revision,
     });
+    const firstRevision = getProviderRouteCredentialRevision(config.id);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, { codex: 'fixture-current-key' });
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, {}, confirmation(firstRevision)))
+      .rejects.toThrow('credentials changed');
+    expect(await isConfirmed()).toBeUndefined();
+
+    const saved = confirmation(getProviderRouteCredentialRevision(config.id));
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, {}, saved);
     expect(await isConfirmed()).toBe(true);
+    expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+    expect(deps.finalizeCodexCustomProviderHostChange).toHaveBeenCalledOnce();
 
     await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, { codex: 'fixture-new-key' });
     expect(await isConfirmed()).toBeUndefined();
+    expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledTimes(2);
     await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, {});
     expect(await isConfirmed()).toBeUndefined();
   });

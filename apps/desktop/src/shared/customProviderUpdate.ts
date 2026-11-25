@@ -8,6 +8,7 @@ export interface CustomProviderUpdateOptions {
   source?: 'manual-settings';
   /** The user confirmed or revoked Ultrafast for the saved OpenAI API connection. */
   openAiApiUltrafastConfirmed?: boolean;
+  openAiApiCredentialRevision?: number;
   /** Local Settings additions, merged against the latest connection in Main. */
   appendSpeechModelsOnly?: true;
   /** Successful manual discovery routes; Main classifies the merged config before filling a reference. */

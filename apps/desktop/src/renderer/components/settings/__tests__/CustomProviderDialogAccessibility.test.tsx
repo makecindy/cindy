@@ -80,7 +80,7 @@ it('confirms Ultrafast from the saved OpenAI API connection dialog', async () =>
       models: [{ id: 'gpt-6.2-sol', name: 'GPT-6.2 Sol' }] } },
   };
   customProviderMocks.readCustomProviderKey.mockResolvedValue('fake-openai-key');
-  render(<ProviderConnectionDialog initial={initial} onClose={vi.fn()} onSaved={vi.fn()} />);
+  render(<ProviderConnectionDialog initial={initial} openAiApiCredentialRevision={7} onClose={vi.fn()} onSaved={vi.fn()} />);
   await waitForInitialDialogFocus();
   await screen.findByText('settings.providers.custom.fields.apiKeySaved');
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.advanced.label' }));
@@ -91,7 +91,7 @@ it('confirms Ultrafast from the saved OpenAI API connection dialog', async () =>
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
   await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledWith(
     expect.objectContaining({ id: initial.id }), {},
-    { source: 'manual-settings', openAiApiUltrafastConfirmed: true },
+    { source: 'manual-settings', openAiApiUltrafastConfirmed: true, openAiApiCredentialRevision: 7 },
   ));
 });
 
