@@ -239,23 +239,30 @@ export function filterResultsByRequestFilters(
   response: ConversationSearchResponse,
   request: Pick<ConversationSearchRequest, 'filters'>,
 ): ConversationSearchResponse {
-  const filters = request.filters ?? {};
+  const matches = createConversationSearchSessionFilter(request.filters);
+  return { ...response, results: response.results.filter((item) => matches(item.session)) };
+}
+
+export function createConversationSearchSessionFilter(
+  filters: ConversationSearchRequest['filters'] = {},
+  now = Date.now(),
+) {
   const allowedDirs = normalizeWorkingDirSet(filters.workingDirs);
-  const activityCutoff = cutoffForLastActivity(filters.lastActivity ?? 'all');
+  const activityCutoff = cutoffForLastActivity(filters.lastActivity ?? 'all', now);
   const status = filters.status ?? 'all';
   const agentKind = filters.agentKind ?? 'all';
-  return {
-    ...response,
-    results: response.results.filter((item) => {
-      if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) return false;
-      if (!matchesWorkingDirSet(sessionTaskProjectDirectory(item.session), allowedDirs)) return false;
-      if (!matchesStatus(item.session.status, status)) return false;
-      if (agentKind !== 'all' && item.session.agentKind !== agentKind) return false;
-      if (activityCutoff !== null && sessionActivityMs(item.session) < activityCutoff) {
-        return false;
-      }
-      return true;
-    }),
+  return (session: Parameters<typeof sessionTaskProjectDirectory>[0] & {
+    source?: string | null;
+    status: string;
+    agentKind: string;
+    userSendAt?: string | null;
+    updatedAt: string;
+  }): boolean => {
+    if (!CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) return false;
+    if (!matchesWorkingDirSet(sessionTaskProjectDirectory(session), allowedDirs)) return false;
+    if (!matchesStatus(session.status, status)) return false;
+    if (agentKind !== 'all' && session.agentKind !== agentKind) return false;
+    return activityCutoff === null || sessionActivityMs(session) >= activityCutoff;
   };
 }
 
@@ -316,13 +323,13 @@ function matchesStatus(
   return status === filter;
 }
 
-function cutoffForLastActivity(lastActivity: ConversationSearchLastActivityFilter): number | null {
+function cutoffForLastActivity(lastActivity: ConversationSearchLastActivityFilter, now: number): number | null {
   if (lastActivity === 'all') return null;
-  return Date.now() - LAST_ACTIVITY_DAY_COUNTS[lastActivity] * DAY_MS;
+  return now - LAST_ACTIVITY_DAY_COUNTS[lastActivity] * DAY_MS;
 }
 
 function sessionActivityMs(
-  session: Pick<ConversationSearchSessionSummary, 'userSendAt' | 'updatedAt'>,
+  session: { userSendAt?: string | null; updatedAt: string },
 ): number {
   return Math.max(parseActivityMs(session.userSendAt), parseActivityMs(session.updatedAt));
 }

@@ -6,6 +6,7 @@
  */
 import {
   conversationSearchResultKey,
+  createConversationSearchSessionFilter,
   emptyConversationSearchResponse,
   filterResultsByRequestFilters,
   mergeConversationSearchFanout,
@@ -35,6 +36,7 @@ import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { deviceMirrorCleanupDisposition } from '@/device-link/presenceDevices';
+import type { MobileHomeSessionLike } from '@cindy/maker-shared/mobile-home';
 import type { RemoteSession } from '@/session/types';
 
 export const CONVERSATION_SEARCH_LIMIT = 24;
@@ -496,6 +498,20 @@ export function scopedConversationSearchOrigins(
     if (!dirs?.length) return [];
     return [{ ...origin, workingDirs: dirs }];
   });
+}
+
+export function createHomeSearchSessionFilter(
+  origins: readonly ConversationSearchDeviceOrigin[],
+  filters: Pick<NonNullable<ConversationSearchRequest['filters']>, 'agentKind' | 'lastActivity' | 'status'>,
+  now: number,
+): (session: MobileHomeSessionLike) => boolean {
+  const filtersByDevice = new Map(origins.map(({ deviceId, workingDirs }) => [
+    deviceId, createConversationSearchSessionFilter({ ...filters, workingDirs }, now),
+  ]));
+  return (session) => {
+    const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId;
+    return deviceId != null && filtersByDevice.get(deviceId)?.(session) === true;
+  };
 }
 
 export function listConversationSearchProjects(

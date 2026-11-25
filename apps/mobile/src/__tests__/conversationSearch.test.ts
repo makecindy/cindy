@@ -5,6 +5,7 @@ import {
   conversationSearchAllowsLocalWrites,
   conversationSearchOriginsFromDeviceModels,
   conversationSearchSessionCacheKey,
+  createHomeSearchSessionFilter,
   isConversationSearchChannelNotAllowed,
   listConversationSearchProjects,
   nextConversationSearchProjectSelection,
@@ -19,6 +20,7 @@ import {
   type ConversationSearchInvoke,
 } from '@/session/conversationSearch';
 import type { ConversationSearchRequest, ConversationSearchResponse } from '@cindy/maker-shared/conversation-search';
+import { buildMobileHomePresentation } from '@/session/mobileHome';
 import type { RemoteSession } from '@/session/types';
 
 function session(partial: Partial<RemoteSession> & Pick<RemoteSession, 'id' | 'title'>): RemoteSession {
@@ -116,6 +118,30 @@ const studio: ConversationSearchDeviceOrigin = {
   deviceName: 'Studio',
   reachable: true,
 };
+
+// #4605: the grouped Home projection must apply search filters before any
+// text exists. Indexed/cached search tests alone cannot catch this unit regression.
+it('keeps only the matching sessions in grouped Home with an empty search field', () => {
+  const sessions = [
+    session({ id: 'match', title: 'Needle task', agentKind: 'codex' }),
+    session({ id: 'engine', title: 'Needle other engine' }),
+    session({ id: 'project', title: 'Needle other project', agentKind: 'codex', workingDir: '/other' }),
+    session({ id: 'status', title: 'Needle archived', agentKind: 'codex', status: 'archived' }),
+    session({ id: 'scope', title: 'Needle other device', agentKind: 'codex', deviceLinkDeviceId: 'dev-b' }),
+  ];
+  const origin = { deviceId: 'dev-a', deviceName: 'Studio', reachable: false, workingDirs: ['/repo'] };
+  const filters = { agentKind: 'codex', status: 'active' } as const;
+  const options = { sessions, statusFilter: 'all', searchQuery: '' } as const;
+  const result = buildMobileHomePresentation({
+    ...options,
+    sessionFilter: createHomeSearchSessionFilter([origin], filters, Date.now()),
+  });
+  expect(result.projects.map((project) => project.sessions.map((item) => item.session.id))).toEqual([['match']]);
+  expect(searchCachedDeviceSessions(origin, {
+    query: 'needle', filters: { ...filters, workingDirs: origin.workingDirs },
+  }, sessions).results.map((item) => item.session.id)).toEqual(['match']);
+  expect(buildMobileHomePresentation(options).overview.all).toBe(sessions.length);
+});
 
 describe('searchConversationsAcrossDevices', () => {
   // Test value (unit): the production fan-out must publish completed devices while
