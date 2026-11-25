@@ -640,7 +640,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 aria-expanded={!collapsed}
                 aria-label={toggleGroupLabel}
                 className={cn(
-                  'flex size-5 shrink-0 items-center justify-center rounded-md',
+                  'flex size-5 shrink-0 items-center justify-center rounded-lg',
                   hasActiveHidden
                     ? 'hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
                     : 'hover:bg-sidebar-item-hover',
@@ -793,7 +793,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                             }}
                             aria-label={t('ccAgent.sidebar.automationGroup.menu.runNow')}
                             className={cn(
-                              'flex size-5 shrink-0 items-center justify-center rounded-md',
+                              'flex size-5 shrink-0 items-center justify-center rounded-lg',
                               'transition-colors',
                               actionButtonToneClassName,
                             )}
@@ -819,7 +819,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                                 onPointerDown={(event) => event.stopPropagation()}
                                 aria-label={t('ccAgent.sidebar.automationGroup.menu.more')}
                                 className={cn(
-                                  'flex size-5 shrink-0 items-center justify-center rounded-md',
+                                  'flex size-5 shrink-0 items-center justify-center rounded-lg',
                                   'transition-colors',
                                   actionButtonToneClassName,
                                 )}

@@ -9239,6 +9239,7 @@
         "taskWorkdirBoundary": "Das Arbeitsverzeichnis bleibt auf dem Zielcomputer. Ändere es dort.",
         "configurationLoading": "Einstellungen werden geladen…",
         "configurationReadFailed": "Einstellungen konnten nicht geladen werden.",
+        "settingsWriteUnconfirmed": "Das Speichern konnte nicht bestätigt werden. Aktualisiere die Einstellungen und prüfe sie vor einem erneuten Versuch.",
         "refreshConfiguration": "Einstellungen aktualisieren",
         "enableBeforeConfigure": "Dieses Plugin ist deaktiviert. Aktiviere es vor der Konfiguration mit dem Schalter oben.",
         "settingsPageUnavailable": "Öffne Cindy auf {{device}}, um die Einstellungsseite dieses Plugins zu verwenden. Die Version auf dem Zielcomputer kann sie nicht aus der Ferne anzeigen.",
@@ -17969,7 +17970,7 @@
       "openWorkdirFailed": "Ordner konnte nicht geöffnet werden"
     },
     "runs": {
-      "boundPluginEngineRecovery": "Die Automatisierung wurde nicht ausgeführt, weil die verknüpfte Aufgabe eine Plug-in-Engine verwendet. Stelle die Aufgabe auf eine integrierte Engine zurück oder verknüpfe die Automatisierung mit einer Aufgabe, die eine integrierte Engine nutzt.",
+      "boundPluginEngineRecovery": "Die Automatisierung wurde nicht ausgeführt. Eine Automatisierung, die mit einer Aufgabe auf einer Plug-in-Engine verknüpft ist, nutzt das Modell der Aufgabe und läuft auf diesem Computer. Wenn in der Automatisierung ein Modell gewählt ist, entferne es und führe sie erneut aus.",
       "queueWaitTimeoutRecovery": "Die Wartezeit ist abgelaufen, bevor die Eingabe gesendet wurde. Sobald die Zielsitzung frei ist, wähle {{action}}, um sie auszuführen.",
       "status": {
         "running": "Wird ausgeführt",
@@ -18321,6 +18322,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Relatives Intervall",
+        "label": "Zeitsteuerung",
         "cronHint": "Wird zu festen Kalenderzeiten ausgeführt.",
         "intervalHint": "Wartet nach Ende der vorherigen Ausführung so lange.",
         "intervalUnsupportedHint": "Dieses exakte Intervall bleibt erhalten. Eine Minuten- oder Stundenvorgabe ersetzt es.",

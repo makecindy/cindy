@@ -9239,6 +9239,7 @@
         "taskWorkdirBoundary": "The working directory stays on the target computer. Change it there.",
         "configurationLoading": "Loading settings…",
         "configurationReadFailed": "Could not load settings.",
+        "settingsWriteUnconfirmed": "Save result could not be confirmed. Refresh settings to check before retrying.",
         "refreshConfiguration": "Refresh Settings",
         "enableBeforeConfigure": "This plugin is disabled. Enable it with the switch above before configuring.",
         "settingsPageUnavailable": "Open Cindy on {{device}} to use this plugin’s settings page. This version of the target computer cannot display it remotely.",
@@ -17969,7 +17970,7 @@
       "openWorkdirFailed": "Failed to open folder"
     },
     "runs": {
-      "boundPluginEngineRecovery": "This automation didn’t run because its linked task uses a plugin engine. Switch the task back to a built-in engine or link the automation to a task that uses one.",
+      "boundPluginEngineRecovery": "This automation didn’t run. An automation linked to a plugin engine task uses the task’s own model and runs on this computer. If the automation chooses a model, remove it, then run it again.",
       "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
       "status": {
         "running": "Running",
@@ -18321,6 +18322,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Relative interval",
+        "label": "Timing mode",
         "cronHint": "Runs at calendar clock slots.",
         "intervalHint": "Waits this long after the previous run finishes.",
         "intervalUnsupportedHint": "This exact interval is preserved. Choosing a minute or hour preset will replace it.",

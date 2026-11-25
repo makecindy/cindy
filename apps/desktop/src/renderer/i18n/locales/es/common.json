@@ -9313,6 +9313,7 @@
         "taskWorkdirBoundary": "El directorio de trabajo permanece en la computadora de destino. Cámbialo allí.",
         "configurationLoading": "Cargando configuración…",
         "configurationReadFailed": "No se pudo cargar la configuración.",
+        "settingsWriteUnconfirmed": "No se pudo confirmar el guardado. Actualiza la configuración para comprobarlo antes de reintentar.",
         "refreshConfiguration": "Actualizar configuración",
         "enableBeforeConfigure": "Este complemento está desactivado. Actívalo con el interruptor de arriba antes de configurarlo.",
         "settingsPageUnavailable": "Abre Cindy en {{device}} para usar la página de configuración de este complemento. Esta versión de la computadora de destino no permite mostrarla de forma remota.",
@@ -18137,7 +18138,7 @@
       "openWorkdirFailed": "No se pudo abrir la carpeta"
     },
     "runs": {
-      "boundPluginEngineRecovery": "La automatización no se ejecutó porque la tarea vinculada usa un motor de complemento. Vuelve a usar un motor integrado en esa tarea o vincula la automatización a una tarea que lo utilice.",
+      "boundPluginEngineRecovery": "La automatización no se ejecutó. Una automatización vinculada a una tarea con motor de complemento usa el modelo de la propia tarea y se ejecuta en este equipo. Si la automatización elige un modelo, quítalo y vuelve a ejecutarla.",
       "queueWaitTimeoutRecovery": "La espera en cola venció antes de enviar el mensaje. Cuando la sesión de destino esté libre, elige {{action}} para ejecutarlo.",
       "status": {
         "running": "En ejecución",
@@ -18489,6 +18490,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalo relativo",
+        "label": "Modo de programación",
         "cronHint": "Se ejecuta en horarios fijos del calendario.",
         "intervalHint": "Espera este tiempo después de que finalice la ejecución anterior.",
         "intervalUnsupportedHint": "Se conserva este intervalo exacto. Si eliges una opción predefinida de minutos u horas, lo reemplazarás.",

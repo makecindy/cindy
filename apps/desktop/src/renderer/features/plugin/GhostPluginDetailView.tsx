@@ -905,6 +905,7 @@ function SectionTextAction({
       type="button"
       aria-expanded={expanded}
       onClick={onClick}
+      // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
       className="shrink-0 rounded-md px-1 py-0.5 text-13 text-[var(--text-secondary)] transition-colors duration-150 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
     >
       {children}
@@ -1120,8 +1121,6 @@ export function DetailsSection({
   );
   // 用户拖过 / 弹过 / 已套过默认边:给「恢复默认位置」。
   const canResetPlacement = hasPluginPlacementMemory(detail.id);
-  const placementActionClass =
-    'shrink-0 rounded-md px-2 py-1 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
   const facts: Array<{
     key: string;
     label: string;
@@ -1188,26 +1187,30 @@ export function DetailsSection({
             action: (
               <span className="flex shrink-0 items-center gap-1">
                 {detail.enabled && !inSidebar && (
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    tone="quiet"
+                    size="xs"
+                    compact
                     onClick={() => {
                       if (installedGhost) void openPluginInSidebar(installedGhost, 'panel');
                     }}
-                    className={placementActionClass}
                   >
                     {t('settings.ghosts.detail.openInSidebar')}
-                  </button>
+                  </Button>
                 )}
                 {canResetPlacement && (
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    tone="quiet"
+                    size="xs"
+                    compact
                     onClick={() => {
                       if (installedGhost) void resetPluginPlacementAndReturn(installedGhost);
                     }}
-                    className={placementActionClass}
                   >
                     {t('settings.ghosts.detail.resetPlacement')}
-                  </button>
+                  </Button>
                 )}
               </span>
             ),
@@ -1233,7 +1236,7 @@ export function DetailsSection({
                   }}
                   title={t('settings.ghosts.detail.copyLocation')}
                   aria-label={t('settings.ghosts.detail.copyLocation')}
-                  className="grid size-7 shrink-0 place-items-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  className="grid size-7 shrink-0 place-items-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                 >
                   <Copy size={14} aria-hidden="true" />
                 </button>
@@ -1252,7 +1255,7 @@ export function DetailsSection({
                   }}
                   title={t('settings.ghosts.detail.openLocation')}
                   aria-label={t('settings.ghosts.detail.openLocation')}
-                  className="grid size-7 shrink-0 place-items-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  className="grid size-7 shrink-0 place-items-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                 >
                   <FolderOpen size={14} aria-hidden="true" />
                 </button>

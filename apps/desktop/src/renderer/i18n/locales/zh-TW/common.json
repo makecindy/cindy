@@ -9196,6 +9196,7 @@
         "taskWorkdirBoundary": "工作目錄沿用目標電腦的設定，請在目標電腦修改。",
         "configurationLoading": "正在讀取設定…",
         "configurationReadFailed": "未能讀取設定。",
+        "settingsWriteUnconfirmed": "無法確認儲存結果。請重新整理設定，確認後再決定是否重試。",
         "refreshConfiguration": "重新整理設定",
         "enableBeforeConfigure": "插件已停用，請先開啟上方開關，再進行設定。",
         "settingsPageUnavailable": "請在 {{device}} 的 Cindy 中開啟此插件的設定頁，目標電腦目前版本暫不支援遠端顯示。",
@@ -17895,7 +17896,7 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動化未執行，因為繫結的任務使用插件引擎。請將任務切回內建引擎，或將自動化重新繫結到使用內建引擎的任務。",
+      "boundPluginEngineRecovery": "自動化未執行。繫結到插件引擎任務的自動化會沿用任務自己的模型，並在這台電腦上執行。如果自動化裡指定了模型，請先移除，再重新執行。",
       "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",
@@ -18247,6 +18248,7 @@
       "timingMode": {
         "cron": "Cron 定時",
         "interval": "相對間隔",
+        "label": "計時方式",
         "cronHint": "按照日曆時鐘的固定時間槽位執行。",
         "intervalHint": "上一次執行完成後，再等待指定時長。",
         "intervalUnsupportedHint": "當前精確間隔會原樣保留；選擇分鐘或小時預設後才會替換。",

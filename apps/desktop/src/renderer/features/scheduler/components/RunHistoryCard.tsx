@@ -116,7 +116,7 @@ function PreRunHookResultDetails({ result }: { result: NonNullable<ScheduleRun['
                 {t(`scheduler.runs.preRun.${section.key}`)}
                 {section.truncated ? ` · ${t('scheduler.runs.preRun.truncated')}` : ''}
               </span>
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[var(--cmd-palette-border)] p-2 font-mono text-11">
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--cmd-palette-border)] p-2 font-mono text-11">
                 {section.value}
               </pre>
             </section>
@@ -343,7 +343,7 @@ export function RunHistoryCard({
                     type="button"
                     aria-label={t('scheduler.runs.moreAria')}
                     className={cn(
-                      'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
+                      'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg',
                       'text-[var(--cmd-palette-item-meta)] transition-opacity',
                       'opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100',
                       'hover:bg-[var(--chat-input-chip-bg)] hover:text-[var(--msg-assistant-text)]',

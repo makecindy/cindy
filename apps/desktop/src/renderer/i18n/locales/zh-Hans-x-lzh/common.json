@@ -9182,6 +9182,7 @@
         "taskWorkdirBoundary": "工作目录依目标之机所设，请于彼机改之。",
         "configurationLoading": "方读规制…",
         "configurationReadFailed": "规制未能读取。",
+        "settingsWriteUnconfirmed": "存录是否得成，尚未可知。请重读规制，验明后再试。",
         "refreshConfiguration": "重整规制",
         "enableBeforeConfigure": "法器已禁用，请先启上方开关，再设之。",
         "settingsPageUnavailable": "请于 {{device}} 之 Cindy 中启此法器之规制页；目标之机今版尚不能远程显示。",
@@ -17895,7 +17896,7 @@
       "openWorkdirFailed": "启卷匣未成"
     },
     "runs": {
-      "boundPluginEngineRecovery": "所系之务用法器引擎，故自动之务未行。宜将所系之务改回内置引擎，或改系于用内置引擎之务。",
+      "boundPluginEngineRecovery": "自动之务未行。系于法器引擎之务者，循其务之模型，行于此机。若自动之务另择模型，宜去之，复行之。",
       "queueWaitTimeoutRecovery": "排候逾时，提示词未发。待所系任务闲，按「{{action}}」补行。",
       "status": {
         "running": "方行",
@@ -18247,6 +18248,7 @@
       "timingMode": {
         "cron": "Cron 定时",
         "interval": "相隔",
+        "label": "计时之法",
         "cronHint": "依历钟定刻而行，如晨钟暮鼓。",
         "intervalHint": "前次行毕，再候所定之时长。",
         "intervalUnsupportedHint": "今之精确间隔照旧保留；择分或时之预设，方易之。",
