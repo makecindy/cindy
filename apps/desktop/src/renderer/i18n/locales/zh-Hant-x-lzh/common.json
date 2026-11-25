@@ -1416,6 +1416,9 @@
     "ENDPOINT_NOT_FOUND": "端點不存（404），請察基礎 URL",
     "CONTEXT_TOO_LONG": "上下文逾模型長度之限",
     "WIRE_INCOMPATIBLE": "端點與此協議不盡相容（有不可辨之請求欄位）",
+    "INVALID_PROBE_RESPONSE": "模型服務傳回空白或無效的回應",
+    "PROBE_NO_OUTPUT": "連線測試未能確認模型已產生內容",
+    "PROBE_REFUSED": "模型服務拒絕或攔截了測試請求",
     "UPSTREAM_ERROR": "上游服務謬誤（5xx），請稍後再試",
     "UPSTREAM_UNREACHABLE": "不能連端點，請察網路與基礎 URL",
     "TIMEOUT": "連線逾時，請察網路與基礎 URL",
@@ -2693,6 +2696,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "登入手機號碼",
+        "rowHint": "用以登入並收驗證碼",
+        "change": "更換手機號碼",
+        "verifyTitle": "驗現繫之手機號碼",
+        "introDescription": "為護帳號安全，更換之前須先驗現繫之手機號碼。",
+        "newTitle": "書新手機號碼",
+        "newDescription": "更換之後，請以新號登入；舊號不復能登入此帳號。",
+        "inputLabel": "新手機號碼",
+        "placeholder": "請書手機號碼",
+        "success": "手機號碼已更為 {{target}}"
+      },
+      "email": {
+        "rowTitle": "登入電子郵件",
+        "rowHint": "用以登入並收驗證碼",
+        "change": "更換電子郵件",
+        "verifyTitle": "驗現繫之電子郵件",
+        "introDescription": "為護帳號安全，更換之前須先驗現繫之電子郵件。",
+        "newTitle": "書新電子郵件",
+        "newDescription": "更換之後，請以新郵件登入；舊郵件不復能登入此帳號。",
+        "inputLabel": "新電子郵件地址",
+        "placeholder": "請書電子郵件地址",
+        "success": "電子郵件已更為 {{target}}"
+      },
+      "codeSent": "驗證碼已遣至 {{target}}",
+      "codeLabel": "驗證碼",
+      "codePlaceholder": "6 位驗證碼",
+      "sendCode": "遣驗證碼",
+      "next": "次步",
+      "confirm": "確認更換",
+      "cancel": "罷",
+      "resend": "重遣驗證碼",
+      "resendIn": "{{seconds}} 秒後可重遣",
+      "errors": {
+        "INVALID_CODE": "驗證碼有誤或已過期",
+        "CODE_ATTEMPTS_EXCEEDED": "驗證碼誤輸過多，請重取",
+        "CONTACT_TAKEN": "此手機號碼或電子郵件已繫他帳號",
+        "CONTACT_UNCHANGED": "與現繫之手機號碼或電子郵件相同",
+        "CONTACT_CHANGE_TICKET_INVALID": "驗證已過期，請重驗現繫之手機號碼或電子郵件",
+        "AUTH_FLOW_SUPERSEDED": "登入狀態已變，請重新開始",
+        "CONTACT_CHANGE_UNAVAILABLE": "此帳號不可於此更換登入方式",
+        "CONTACT_CHANGE_BUSY": "前一步猶在處理",
+        "RATE_LIMITED": "操作過頻，請稍後再試。",
+        "RATE_LIMITED_UNTIL": "操作過頻，請於 {{time}}（本機時間）之後再試。",
+        "INVALID_PARAMS": "格式不合，請檢查後再試",
+        "EMAIL_DOMAIN_BLOCKED": "此電子郵件暫不可用，請易之",
+        "EMAIL_PATTERN_BLOCKED": "此電子郵件暫不可用，請易之",
+        "ACCOUNT_DELETION_PENDING": "帳號待刪除，不可更換",
+        "NETWORK_ERROR": "網路連線失敗，請檢查網路後再試",
+        "REQUEST_TIMEOUT": "請求逾時，請再試",
+        "fallback": "操作未成，請稍後再試"
+      }
+    },
     "help": {
       "title": "求助",
       "description": "知如何以 {{appName}} 成事",
@@ -2976,7 +3033,12 @@
         "reconcileButton": "體察",
         "reconcileFailed": "體察未成",
         "reconcileHealthy": "帳實相符，未見異狀。",
-        "reconcileIssues": "見異狀：無帳之卷 {{orphans}} 個({{orphanSize}})、缺失之卷 {{missing}} 個、不可識者 {{stray}} 個。詳錄見應用日誌。"
+        "reconcileIssues": "見異狀：無帳之卷 {{orphans}} 個({{orphanSize}})、缺失之卷 {{missing}} 個、不可識者 {{stray}} 個。詳錄見應用日誌。",
+        "buddyWorkspaceDirectoryTitle": "同伴工坊",
+        "buddyWorkspaceDirectoryDescription": "新立同伴之工坊皆置於此。舊有同伴仍居故址，可於其進階之設中各自遷徙。",
+        "buddyWorkspaceDirectoryDetails": "Cindy 將於此目錄下為本號別立子目錄以置新伴工坊，並留連結於舊徑。",
+        "buddyWorkspaceDirectoryChoose": "易目錄",
+        "buddyWorkspaceDirectoryFailed": "未能更易同伴工坊目錄。"
       },
       "piKernel": {
         "manage": "理 Pi 版本",
@@ -10033,6 +10095,18 @@
       "title": "自動更新未成",
       "description": "更新程式無法啟動，或為系統安全策略所攔。請手動下載最新版安裝包以完成更新。",
       "confirm": "往取之"
+    },
+    "workspaceMigration": {
+      "title": "方遷同伴工坊",
+      "progressLabel": "夥伴工坊遷徙之進",
+      "safetyHint": "方抄錄校驗諸卷，未畢前不動故本，切勿強閉 Cindy。",
+      "phase": {
+        "preparing": "備遷",
+        "copying": "抄錄諸卷",
+        "verifying": "校驗諸卷",
+        "switching": "易徑",
+        "cleaning": "清舊備"
+      }
     }
   },
   "welcome": {
@@ -11364,6 +11438,69 @@
           "routines": "例行之務待查",
           "upgrade": "升級時未能自攜者"
         }
+      },
+      "workspaceLocation": {
+        "title": "工坊所在",
+        "description": "可遷此伴工坊於本機他盤，以寬系統盤之餘地。Cindy 仍留連結於舊徑，諸務與腳本皆如常無礙。",
+        "movedDescription": "現有任務與腳本仍循原路徑。",
+        "chooseDialogTitle": "擇同伴工坊遷往之所",
+        "fullPath": "全徑",
+        "targetPathLabel": "新址目錄",
+        "currentPathLabel": "現目錄",
+        "defaultPathLabel": "所遷目錄（預設處）",
+        "logicalPathLabel": "舊徑連結",
+        "copyPath": "錄其徑",
+        "pathCopied": "已錄其徑",
+        "pathCopyFailed": "未能錄徑",
+        "openTarget": "啟其目錄",
+        "moveAction": "遷徙工坊",
+        "moveBackAction": "遷回預設處",
+        "chooseAnother": "另擇目錄",
+        "restartNow": "即刻重啟",
+        "restartAndMove": "重啟並遷",
+        "scheduleNextRestart": "俟後啟再遷",
+        "cancel": "罷之",
+        "dismissFailed": "闔舊錄",
+        "scheduledToast": "已登遷徙之約，俟下次重啟 Cindy 行之",
+        "cancelledToast": "已罷工坊遷徙",
+        "previewTitle": "工坊遷徙已備",
+        "previewSummary": "檔案大小：{{size}}",
+        "previewNotice": "重啟前，請關閉正用此工作區之應用及腳本。",
+        "previewClaudeSkillsNotice": "若工作區無自有 Git 儲存庫，遷後 Claude Code 或見新處上層目錄之技能。若不欲引入，請擇上層未設 Claude Code 技能之處。",
+        "pendingHint": "請先息佔此目錄之外程式，再重啟 Cindy 以行遷徙。",
+        "unavailableTitle": "已遷工坊今不可達",
+        "unavailableDescription": "Cindy 未能及 {{target}}。請復接磁碟或復其目錄；Cindy 不另立空目錄覆之。",
+        "errorTitle": "工坊未能遷徙",
+        "failedTitle": "前番工坊遷徙未成",
+        "interruptedTitle": "工坊遷徙待復",
+        "backupRemainingHint": "舊本仍留以備覆核：{{backup}}",
+        "personalPreviewHint": "請先退共享資料之個人試版，改以主版 Cindy 登記或行遷徙。",
+        "status": {
+          "default": "故址",
+          "pending": "待重啟",
+          "moved": "已遷",
+          "failed": "未成",
+          "interrupted": "待復",
+          "unavailable": "不可達"
+        },
+        "warnings": {
+          "waitingExclusive": "方候獨啟。請閉同享此號資料之餘 Cindy 實例，再重啟以遷。",
+          "receiptUpdateFailed": "工坊尚可用，然遷錄未得更，俟下次重啟自修。"
+        },
+        "errors": {
+          "insufficientSpace": "新盤餘量不足，未能容此工坊。",
+          "overlapsCindyData": "請擇 Cindy 資料與今工坊之外地。",
+          "localDiskRequired": "請擇本機磁碟之目錄，不納網路共享徑。",
+          "unsupportedFileOrHardLink": "工坊內含硬鏈或異卷，暫未便徑遷。",
+          "alreadyRedirected": "Cindy 未能辨識此工作區之目錄連結，請保全連結及檔案。",
+          "botHomeRedirected": "此伴主舍既經手轉，未便自遷其工坊。",
+          "targetExists": "新址既在，請另擇空地。",
+          "workspaceChanged": "校驗之際工坊有變，請閉外佔程式再試。",
+          "backupRetained": "遷徙既成，然舊備有異，已留存以防失遺。",
+          "backupCleanupIncomplete": "遷徙既成，暫備未盡除，俟後啟再清。",
+          "cutoverInterrupted": "前番易徑中輟，已復故工坊。請另擇空目錄重行。",
+          "generic": "工坊遷徙未竟，請復試之。"
+        }
       }
     },
     "profile": {
@@ -12308,7 +12445,8 @@
         "dissolved": "群議已散，仍可覽有權存取之舊訊。",
         "failed": "操作未竟，請再試。",
         "lastOwner": "請先轉讓群主或解散群議，再退出。"
-      }
+      },
+      "externalBadge": "外部"
     },
     "joined": {
       "today": "今日入列",
@@ -13508,6 +13646,7 @@
         },
         "slash": {
           "detachFailed": "❌ 結束接管未成：{{error}}",
+          "pluginEngineModelsUnavailable": "此務之法器引擎今不可用，暫不能列其模型。",
           "companionManaged": "🧭 此連線已付同伴，模型、權柄與工作目錄皆從同伴之規制。請於 Cindy 同伴規制中更之。"
         },
         "turn": {
@@ -22459,6 +22598,19 @@
       "description": "重覽識 Cindy、自舊電腦遷移、連模型與納已有之物的引導。",
       "open": "開啟引導"
     }
+  },
+  "openAiAccountGroup": {
+    "strategy": "帳號組策略",
+    "leastHint": "優先分配給執行任務最少的連線",
+    "quotaHint": "能讀取訂閱用量時，會先按用量篩選連線，再按組策略分配。",
+    "removeDescription": "此連線將不再接收組內的新任務。正在執行的任務仍留在原連線。",
+    "mergeDescription": "從 {{target}} 新建的任務可以使用這兩個供應商。登入、金鑰和既有任務保留在原處。建立調度關係前，Cindy 會測試 {{apiKey}} 的 API Key。",
+    "modelUnavailable": "此連線無法呼叫本次自動選擇的模型。再次測試可嘗試其他候選。",
+    "noTestModel": "目前的連線沒有可用於測試的模型。請確認 OpenAI 專案可呼叫哪些模型，再重新整理或更新此連線的模型清單。",
+    "billingPaused": "餘款不足或已達計費之限，暫停組內分派。",
+    "title": "帳號組",
+    "testPassed": "測試成功",
+    "refresh": "更新額度"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

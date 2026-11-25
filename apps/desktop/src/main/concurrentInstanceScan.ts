@@ -46,8 +46,10 @@ const log = createLogger('ownerNamespaceMigration');
 // sampling skew): a large window would permanently classify a PID reused
 // shortly after the record was written as the old Cindy process.
 const PID_REUSE_TOLERANCE_MS = 2_000;
-const STALE_PROCESS_PROOF_TTL_MS = 10_000;
+const STALE_PROCESS_PROOF_TTL_MS = 60_000;
+const MAX_TRACKED_STALE_PROOFS = 256;
 const staleProcessProofs = new Map<string, number>();
+const loggedStaleProcessProofs = new Set<string>();
 
 export function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -103,8 +105,39 @@ export function processProofKey(
   return `${path.resolve(userDataDir)}\u0000${kind}\u0000${fingerprint}`;
 }
 
-function rememberStaleProcessProof(key: string): void {
-  staleProcessProofs.set(key, Date.now() + STALE_PROCESS_PROOF_TTL_MS);
+function pruneExpiredStaleProcessProofs(now: number): void {
+  for (const [key, expiresAt] of staleProcessProofs) {
+    if (expiresAt <= now) staleProcessProofs.delete(key);
+  }
+}
+
+/** Records a fresh stale-PID proof and returns true only the first time this fingerprint is logged. */
+function rememberStaleProcessProof(key: string): boolean {
+  const now = Date.now();
+  pruneExpiredStaleProcessProofs(now);
+  staleProcessProofs.delete(key);
+  staleProcessProofs.set(key, now + STALE_PROCESS_PROOF_TTL_MS);
+  while (staleProcessProofs.size > MAX_TRACKED_STALE_PROOFS) {
+    const oldest = staleProcessProofs.keys().next().value;
+    if (oldest === undefined) break;
+    staleProcessProofs.delete(oldest);
+    loggedStaleProcessProofs.delete(oldest);
+  }
+  if (loggedStaleProcessProofs.has(key)) return false;
+  loggedStaleProcessProofs.add(key);
+  while (loggedStaleProcessProofs.size > MAX_TRACKED_STALE_PROOFS) {
+    const oldest = loggedStaleProcessProofs.keys().next().value;
+    if (oldest === undefined) break;
+    loggedStaleProcessProofs.delete(oldest);
+  }
+  return true;
+}
+
+function forgetStaleProcessProof(key: string, observedLiveIdentity: boolean): void {
+  staleProcessProofs.delete(key);
+  // Keep log dedup intact across `() => null` discovery passes (for example Host's two-pass scan);
+  // clear it only when an actual live process identity is observed for this key.
+  if (observedLiveIdentity) loggedStaleProcessProofs.delete(key);
 }
 
 export function hasFreshStaleProcessProof(key: string): boolean {
@@ -288,12 +321,11 @@ export async function findConcurrentLiveInstancePids(
   const pids: number[] = [];
   for (const candidate of candidates) {
     const identity = identities.get(candidate.pid) ?? null;
+    const proofKey = processProofKey(userDataDir, 'registry', `${candidate.fileName}\u0000${candidate.raw}`);
     if (recordedPidMayStillBeLive(candidate.recordedAtMs, candidate.rootDir, identity)) {
+      forgetStaleProcessProof(proofKey, identity !== null);
       pids.push(candidate.pid);
-    } else {
-      rememberStaleProcessProof(
-        processProofKey(userDataDir, 'registry', `${candidate.fileName}\u0000${candidate.raw}`),
-      );
+    } else if (rememberStaleProcessProof(proofKey)) {
       log.info('ignoring stale instance registry record after PID reuse', { pid: candidate.pid });
     }
   }
@@ -326,12 +358,11 @@ export async function findConcurrentLiveInstancePids(
       }
       const identity =
         (await readProcessIdentitiesForPids([lockPid], readProcessIdentity)).get(lockPid) ?? null;
+      const proofKey = processProofKey(userDataDir, 'singleton-lock', `${lockTarget}\u0000${lockMtimeMs}`);
       if (recordedPidMayStillBeLive(lockMtimeMs, undefined, identity)) {
+        forgetStaleProcessProof(proofKey, identity !== null);
         pids.push(lockPid);
-      } else {
-        rememberStaleProcessProof(
-          processProofKey(userDataDir, 'singleton-lock', `${lockTarget}\u0000${lockMtimeMs}`),
-        );
+      } else if (rememberStaleProcessProof(proofKey)) {
         log.info('ignoring stale SingletonLock after PID reuse', { pid: lockPid });
       }
     }

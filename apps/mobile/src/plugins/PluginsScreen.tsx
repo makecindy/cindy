@@ -400,6 +400,17 @@ function PluginDirectory() {
   const scopedItems = list.items.filter(
     ({ host }) => !deviceId || host.deviceId === deviceId,
   );
+  // A device can remain in the picker without having returned a plugin list.
+  const androidDirectoryUnconfirmed =
+    Platform.OS === "android" &&
+    !scopedItems.length &&
+    targets.some(
+      (host) => (!deviceId || host.deviceId === deviceId) && !list.isOnline(host),
+    );
+  const androidDirectoryLoading =
+    directoryLoading || (androidDirectoryUnconfirmed && list.syncing);
+  const androidListFailed =
+    listFailed || (androidDirectoryUnconfirmed && !androidDirectoryLoading);
   const items = sortPluginItems(
     scopedItems.filter(({ item }) =>
       `${text(item.display.title)} ${item.display.subtitle ? text(item.display.subtitle) : ""}`
@@ -646,7 +657,7 @@ function PluginDirectory() {
   const showMarket = !!query.trim() || segment === "market";
   const installedDirectory = (
     <>
-      {directoryLoading && !items.length ? (
+      {androidDirectoryLoading && !items.length ? (
         <ActivityIndicator color={colors.textSecondary} />
       ) : null}
       <View style={styles.inline}>
@@ -655,7 +666,7 @@ function PluginDirectory() {
         </Text>
       </View>
       <View style={styles.groupCard}>{items.map(renderRow)}</View>
-      {!directoryLoading && !listFailed && !items.length ? (
+      {!androidDirectoryLoading && !androidListFailed && !items.length ? (
         <View style={styles.empty}>
           <Puzzle size={iconSize.xl} color={colors.textTertiary} />
           <Text style={styles.preview}>
@@ -679,7 +690,7 @@ function PluginDirectory() {
           ) : null}
         </View>
       ) : null}
-      {listFailed ? (
+      {androidListFailed ? (
         <View>
           <Text style={styles.note}>
             {t(
@@ -688,7 +699,7 @@ function PluginDirectory() {
                 : "plugins.listLoadFailed",
             )}
           </Text>
-          {!items.length && !directoryLoading ? (
+          {!items.length && !androidDirectoryLoading ? (
             <Pressable
               accessibilityRole="button"
               style={styles.button}

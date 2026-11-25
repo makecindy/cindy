@@ -65,7 +65,37 @@ describe('native declarations for verified catalog identities', () => {
 describe("canonical model APIs in registry v3", () => {
   it("covers every maintained model route without relying on Pi runtime data", () => {
     const bundled = BUNDLED_CATALOG.modelRegistry!;
-    for (const entry of bundled.models) {
+    const priceRoutes = bundled.models.filter(
+      (entry) =>
+        entry.nativeApi === undefined &&
+        entry.nativeApis === undefined &&
+        entry.routes.length === 1 &&
+        entry.routes.every(
+          (route) =>
+            ["volcengine-api", "tokenrhythm"].includes(route.providerId) &&
+            route.referencePrices?.length &&
+            entry.id === `${route.providerId}/${route.modelId}`,
+        ),
+    );
+    const beforePriceSync = {
+      ...bundled,
+      models: bundled.models.filter((entry) => !priceRoutes.includes(entry)),
+    };
+    for (const entry of priceRoutes) {
+      const [route] = entry.routes;
+      const resolvedBefore = resolveModelNativeApi(
+        beforePriceSync, route.providerId, route.modelId,
+      );
+      expect(
+        resolveModelNativeApi(bundled, route.providerId, route.modelId),
+        entry.id,
+      ).toBe(resolvedBefore);
+      expect(
+        resolveCatalogModelNativeApi(bundled, entry.id),
+        entry.id,
+      ).toBe(resolveCatalogModelNativeApi(beforePriceSync, entry.id));
+    }
+    for (const entry of beforePriceSync.models) {
       if (entry.status === "retired") continue;
       expect(entry.nativeApi, entry.id).toBeTruthy();
       for (const route of entry.routes) {

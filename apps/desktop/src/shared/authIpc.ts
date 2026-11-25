@@ -148,6 +148,60 @@ export type DesktopAccountDeletionConfirmResult =
 export type DesktopAccountDeletionStatusResult =
   DesktopAccountDeletionResult<AccountDeletionStatus | null>;
 
+/**
+ * 换绑登录联系方式(国内版手机号、国际版邮箱)。changeTicket 与 account token 只留在
+ * Electron main;renderer 只拿到打码后的展示值与 auth-server 错误码。
+ */
+export type DesktopContactChangeType = 'phone' | 'email';
+
+export interface DesktopContactChangeAvailability {
+  available: boolean;
+  /** 本账号所在区域换绑的联系方式类型;不可用时为 null。 */
+  type: DesktopContactChangeType | null;
+}
+
+export interface DesktopContactChangeCodeSent {
+  channel: 'email' | 'sms';
+  maskedTarget: string;
+}
+
+export interface DesktopContactChangeVerified {
+  type: DesktopContactChangeType;
+}
+
+export interface DesktopContactChangeCompleted {
+  type: DesktopContactChangeType;
+  maskedValue: string;
+}
+
+/**
+ * 换绑一步的结果。失败时 `retryAt` 是服务端 Retry-After 给出的重试时刻(epoch ms),
+ * 只在仍处于冷却期时出现;冷却结束前 renderer 不再发起同类请求。
+ */
+export type DesktopContactChangeResult<T> =
+  | { success: true; value: T }
+  | { success: false; code: string; retryAt?: number };
+
+const MAX_CONTACT_VALUE_LENGTH = 254;
+
+/** 验证码输入:6 位数字。 */
+export function parseDesktopContactChangeCode(value: unknown): string | null {
+  return typeof value === 'string' && /^\d{6}$/.test(value) ? value : null;
+}
+
+/** 新联系方式输入:只做长度与形状的边界校验,规范化与归属判断以 auth-server 为准。 */
+export function parseDesktopContactChangeValue(
+  type: DesktopContactChangeType,
+  value: unknown,
+): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_CONTACT_VALUE_LENGTH) return null;
+  if (type === 'email') return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) ? trimmed : null;
+  const compact = trimmed.replace(/[\s-]/g, '');
+  return /^\+?\d{6,15}$/.test(compact) ? compact : null;
+}
+
 const MAX_IDENTIFIER_LENGTH = 320;
 const MAX_OPAQUE_ID_LENGTH = 256;
 const MAX_CODE_LENGTH = 32;
