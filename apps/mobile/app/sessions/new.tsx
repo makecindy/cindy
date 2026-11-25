@@ -142,7 +142,7 @@ import type {
   RemoteDirectoryDrive,
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
-import { describeAgentAuthError, describeAgentBinaryNotReadyError, formatRemoteError, humanizeRemoteError } from '@/device-link/remoteStatus';
+import { describeNewSessionError, formatRemoteError, humanizeRemoteError, type NewSessionError } from '@/device-link/remoteStatus';
 import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate';
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
@@ -651,11 +651,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const [createStartedAt, setCreateStartedAt] = useState<number | null>(null);
   const [createPhase, setCreatePhase] = useState<SlowSendPhase>('preparing');
   const waitForLeaveDecision = useConfirmLeaveWhileUploading(creating && createPhase === 'uploading');
-  const [error, setError] = useState<string | null>(() => {
+  const [error, setError] = useState<NewSessionError | null>(() => {
     const creationError = readRouteString(params.creationError);
-    return creationError ? t('session.screen.createFailedNotice', {
-      message: describeAgentBinaryNotReadyError(creationError) ?? creationError,
-    }) : null;
+    return creationError ? { creationError } : null;
   });
   const [capabilities, setCapabilities] = useState<MobileAgentCapabilities | null>(null);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
@@ -950,7 +948,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         { enabled: record.creation.planModeArm, restorePermissionMode: record.creation.restorePermissionMode },
         record.deviceId);
       if (record.creation.notice) setAttachmentError(record.creation.notice);
-      if (record.error) setError(t('session.screen.createFailedNotice', { message: record.error }));
+      if (record.error) setError({ creationError: record.error });
       setSelectedDeviceId(record.deviceId);
       setSelectedDeviceName(record.creation.deviceName);
     },
@@ -5776,7 +5774,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             ) : null}
 
             {error ? (
-              <ErrorNotice message={describeAgentAuthError(error) ?? describeAgentBinaryNotReadyError(error) ?? error} />
+              <ErrorNotice message={describeNewSessionError(error)} />
             ) : null}
             {/* 发送前鉴权提示:选中 agent 在被控端无已连接供应商时提前告知;
                 error 已展示(含被门禁拦截的同款文案)时不重复出现。 */}
