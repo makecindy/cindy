@@ -250,6 +250,19 @@ module.exports = (context = {}) => {
   for (const [key, value] of Object.entries(mobileBundleEnv)) {
     if (!process.env[key]?.trim()) process.env[key] = value;
   }
+  // Expo export can inherit public variables without going through the local
+  // release wrapper. Match the bundle's normalization when checking for a
+  // duplicate, so a trailing slash cannot send both realm probes to one URL.
+  const currentManifestBase = process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL;
+  const peerManifestBase = process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL;
+  if (
+    process.env.NODE_ENV === 'production' &&
+    region !== 'dev' &&
+    peerManifestBase.trim().replace(/\/+$/, '') === currentManifestBase.trim().replace(/\/+$/, '')
+  ) {
+    process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL =
+      mobileBundleEnv.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL;
+  }
   // 该值只允许由 CindyDev 构建从仓内 CN 清单派生。Dev 构建覆盖 runner
   // 残留值，CN / Global 构建主动清除，确保正式包不会误烘焙 Dev-only 配置。
   if (region === 'dev') {
