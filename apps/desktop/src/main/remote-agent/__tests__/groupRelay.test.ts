@@ -15,6 +15,8 @@ import { isProviderSharePeer, parseRemoteAgentPollResult, parseRemoteAgentStream
 import { AgentStartupStoppedError, TurnDispatchRejectedError, TurnDispatchUnconfirmedError, TurnPermissionPolicyUnsupportedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installExecutionReporting } from '../../usage/companyTokenFacts';
+import { createCompanyReportingRenewal } from '../controller/companyReportingRenewal';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay';
 import { createProviderGroupExternalLoad } from '../../provider-group/externalLoad';
 import type { ProviderGroupRouter } from '../../provider-group/router';
@@ -3395,4 +3397,43 @@ it('does not acknowledge a repeated direct fork whose native index write failed'
     await expect(fork()).resolves.toMatchObject({ newSdkSessionId: 'native-old-fork' });
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))[digest].nativeIds).toEqual(['native-old', 'native-old-fork']);
   } finally { spy.mockRestore(); await host.dispose(); }
+});
+
+it('pins the reporting grant to the selected execution device and records a relayed turn once', async () => {
+  const record = vi.fn();
+  const route: string[] = [];
+  const env = setup({ intercept: async (device, command, forward) => {
+    if (command.op === 'company-reporting-challenge' || command.op === 'company-reporting-grant') {
+      route.push(device + ':' + command.op);
+    }
+    return forward();
+  } });
+  const issue = vi.fn(async ({ nonce }: { nonce: string }) => 'fixture-' + nonce);
+  installExecutionReporting({
+    available: () => true, captureBoundary: () => () => true, direct: () => true, issue,
+    challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }),
+    redeem: async (nonce, grant) => grant === 'fixture-' + nonce ? { receipt: 'synthetic-receipt', record } : undefined,
+  });
+  const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+  try {
+    const run = guest.client.runId;
+    const renew = createCompanyReportingRenewal(([request]) => env.owner.handle(GUEST_A, request));
+    await renew(run, () => true);
+    await renew(run, () => true);
+    expect(await env.owner.handle(GUEST_B, { op: 'company-reporting-grant', runId: run, grant: 'unrelated' })).toEqual({});
+    await guest.client.call('send', [{ content: 'test turn' }, {}]);
+    env.memberStarted.mini[0]!.emit({ type: 'status', data: { isRunning: true, providerInitiatedTurn: true } } as AgentEvent);
+    env.memberStarted.mini[0]!.emit({ type: 'done', source: 'claude-code', data: { modelUsageCumulativeStartsAtZero: true,
+      modelUsage: { 'claude-opus-4-6': { inputTokens: 12, outputTokens: 3, costUSD: 0 } } } } as AgentEvent);
+    await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+    expect(route).toEqual(['mini:company-reporting-challenge', 'mini:company-reporting-grant']);
+    expect(issue).toHaveBeenCalledTimes(1);
+    expect(issue).toHaveBeenCalledWith({ nonce: expect.any(String), recipient: 'a'.repeat(64) });
+    expect(record.mock.calls).toEqual([[[{ model: 'claude-opus-4-6', input: 12, output: 3, cacheRead: 0, cacheWrite: 0 }]]]);
+  } finally {
+    await guest.client.close('close', 'navigation').catch(() => {});
+    await env.owner.dispose();
+    await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    installExecutionReporting(undefined);
+  }
 });

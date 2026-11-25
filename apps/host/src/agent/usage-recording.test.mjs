@@ -27,6 +27,9 @@ import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore.ts';
 import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
+import { bindHostCompanyReporting } from '../company-token-reporting.ts';
+import { companyExecutionReporting, startCompanyUsage } from '../../../desktop/src/main/usage/companyTokenFacts.ts';
+import { getActiveCatalog, setActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.ts';
 import { setSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import * as broadcastTap from '../../../desktop/src/main/device-link/broadcast-tap.ts';
 import { recordSessionTurnSpend } from '../../../desktop/src/main/sessionSpendBroadcasterCore.ts';
@@ -471,4 +474,93 @@ test('usage-recording: no per-party usage file was written', () => {
   } };
   walk(root);
   assert.deepEqual(found, []);
+});
+
+// An actual Host turn, SQLite and the disk outbox share the same synthetic owner. The only stub
+// outside the existing executor fixture is the authenticated policy/participation transport.
+test('Host reports the actual direct Codex route once and honors the active profile, consent and membership', async () => {
+  const dir = fs.mkdtempSync(path.join(root, 'enterprise-'));
+  const preference = path.join(dir, 'analytics-settings.json');
+  const outbox = path.join(dir, 'company-token-host', 'company-token-outbox.json');
+  const list = () => fs.existsSync(outbox) ? JSON.parse(fs.readFileSync(outbox, 'utf8')).rows : [];
+  const setConsent = enabled => fs.writeFileSync(preference, JSON.stringify({ privacyConsentAccepted: true, analyticsEnabled: enabled }));
+  const catalog = getActiveCatalog();
+  const sample = catalog.providers.find(provider => provider.id === 'openai');
+  const source = (id, endpoint, subscription) => ({ ...sample, id, name: id,
+    source: subscription ? 'organization' : 'user', access: { kind: subscription ? 'subscription' : 'api-key' },
+    routing: { codex: { upstream: endpoint, authStrategy: subscription ? 'oauth-passthrough' : 'api-key-header' } } });
+  const gateway = 'https://gateway.example.test';
+  const model = 'gpt-test';
+  const id = { orgId: 'org-test', member: 'usage-a', owner: 'test-originating-member', generation: 1,
+    base: 'https://auth.example.test', device: 'test-host', token: 'fixture' };
+  let owner = null;
+  let writable = true;
+  const calls = [];
+  const host = bindHostCompanyReporting({
+    directory: dir, identity: () => owner, reportBuild: true, canWrite: () => writable,
+    definitivelyInactive: () => false, gatewayEndpoint: () => gateway,
+    fetch: async (url, init) => {
+      calls.push({ url, body: init.body && JSON.parse(init.body) });
+      if (url === id.base + '/api/me') return Response.json({ passportId: 'fixture', identities: [],
+        membership: { id: id.member, orgId: id.orgId, kind: 'org', role: 'member', displayName: 'Fixture',
+          email: null, orgName: 'Synthetic', companyTokenReporting: { participating: true, models: [model], orgRevision: 1, memberRevision: 1 } } });
+      assert.equal(url, id.base + '/api/orgs/org-test/company-token-reporting/participation');
+      return Response.json({});
+    },
+  });
+  const wait = async predicate => {
+    const deadline = Date.now() + 5_000;
+    while (!predicate() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(predicate());
+  };
+  const turn = async (actualProvider, mode, remote = {}) => {
+    const h = harness({ agentKind: 'codex', provider: 'fixture-subscription' });
+    Object.assign(h.session, remote);
+    await h.begin();
+    h.emit({ type: 'status', source: 'codex', data: { isRunning: true } });
+    h.reply('host-reply');
+    h.emit({ type: 'done', source: 'codex', data: { usage: { promptTokens: 47, completionTokens: 8,
+      cachedTokens: 4, cacheCreationTokens: 2, execution: { providerId: actualProvider, credentialMode: mode, model } } } });
+    await h.settled();
+    return h.added();
+  };
+  try {
+    setActiveCatalog({ ...catalog, providers: [...catalog.providers,
+      source('fixture-subscription', 'https://sub.example.test', true),
+      source('fixture-byok', 'https://api.example.test', false),
+      source('fixture-gateway-alias', gateway + '/v1', false)] });
+    setConsent(true);
+    host.resume();
+    assert.deepEqual(calls, []);
+    assert.ok(!fs.existsSync(path.dirname(outbox)));
+    owner = id;
+    host.resume();
+    await wait(() => companyExecutionReporting()?.available() === true);
+    assert.deepEqual((await turn('fixture-byok', 'api-key')).model, { input: 47, output: 8 });
+    const expected = [{ model, day: new Date().toISOString().slice(0, 10), input: 47, output: 8, cacheRead: 4, cacheWrite: 2 }];
+    assert.deepEqual(list(), expected);
+    await turn('fixture-gateway-alias', 'api-key');
+    await turn('fixture-byok', 'gateway-key');
+    await turn('missing-provider', 'api-key');
+    await turn('fixture-byok', 'api-key', { remoteHostId: 'test-executor' });
+    await turn('fixture-byok', 'api-key', { agentDeviceId: 'test-executor' });
+    assert.deepEqual(list(), expected);
+    const prior = startCompanyUsage();
+    writable = false;
+    host.suspend();
+    assert.equal(startCompanyUsage(), undefined);
+    prior([{ model, input: 1, output: 0, cacheRead: 0, cacheWrite: 0 }]);
+    assert.deepEqual(list(), expected);
+    writable = true;
+    host.resume();
+    await wait(() => companyExecutionReporting()?.available() === true);
+    setConsent(false);
+    await wait(() => calls.some(call => call.body?.participating === false));
+    assert.deepEqual(list(), []);
+    assert.equal(startCompanyUsage(), undefined);
+    assert.ok(calls.every(call => call.url.endsWith('/api/me') || call.url.endsWith('/participation')));
+  } finally {
+    host.dispose();
+    setActiveCatalog(catalog);
+  }
 });

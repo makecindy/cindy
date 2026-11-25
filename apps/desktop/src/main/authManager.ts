@@ -2561,6 +2561,7 @@ async function withAccountFreeOwnerCommit(opts: {
   authAlreadyCleared?: boolean;
   validateBeforeCommit?: () => boolean;
   shouldClearOnFailure?: () => boolean;
+  savedLoginMayRecover?: boolean;
   /** 本次收敛是冷启动启动闸超时兜底;转发给 clearAuth 以便同步登记兜底代际。 */
   coldStartTimeoutRecovery?: boolean;
   /** Retain consumed-token evidence during local startup failure cleanup. */
@@ -2591,6 +2592,7 @@ async function withAccountFreeOwnerCommit(opts: {
         preservePersistedRefreshToken: true,
         credentialStoreUnavailable: opts.credentialStoreUnavailable,
         deferSessionCommit: true,
+        savedLoginMayRecover: opts.savedLoginMayRecover,
         coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
         preserveResourceRefreshUncertainty: opts.preserveResourceRefreshUncertainty,
       });
@@ -2642,6 +2644,7 @@ async function withAccountFreeOwnerCommit(opts: {
             preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
             credentialStoreUnavailable: opts.credentialStoreUnavailable,
             deferSessionCommit: true,
+            savedLoginMayRecover: opts.savedLoginMayRecover,
             coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
             preserveResourceRefreshUncertainty: opts.preserveResourceRefreshUncertainty,
           });
@@ -2668,6 +2671,7 @@ async function withAccountFreeOwnerCommit(opts: {
           preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
           credentialStoreUnavailable: opts.credentialStoreUnavailable,
           deferSessionCommit: true,
+          savedLoginMayRecover: opts.savedLoginMayRecover,
           coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
           preserveResourceRefreshUncertainty: opts.preserveResourceRefreshUncertainty,
         });
@@ -2708,10 +2712,14 @@ async function recoverAccountFreeOwnerAtStartup(
    * 兜底代际要在推进代际的同一同步时刻登记,不能等本函数返回(PR #6273 review P1)。
    * 本地提交失败仅保留轮换证据,不把清理代际当作超时兜底接续。
    */
-  opts: { coldStartTimeoutRecovery?: boolean; preserveResourceRefreshUncertainty?: boolean } = {},
+  opts: { coldStartTimeoutRecovery?: boolean; preserveResourceRefreshUncertainty?: boolean; savedLoginMayRecover?: boolean } = {},
 ): Promise<void> {
   const ownerId = mode === 'local' ? LOCAL_DATA_OWNER_ID : null;
+  const mayRecover = mode === 'signed-out' && !!(
+    opts.savedLoginMayRecover || opts.coldStartTimeoutRecovery || opts.preserveResourceRefreshUncertainty
+  );
   if (isGhostSkillProjectionBoundaryStableForOwner(ownerId)) {
+    savedLoginMayRecover = mayRecover;
     if (credentialStoreUnavailable) credentialStoreHealth.noteStartupFailure();
     if (getActiveAppSession().mode !== mode || getActiveAppSession().dataOwnerId !== ownerId) {
       if (isPassiveSharedUserDataInstance()) {
@@ -2730,6 +2738,7 @@ async function recoverAccountFreeOwnerAtStartup(
     notify: false,
     clearOnFailure: mode === 'signed-out',
     preservePersistedRefreshToken: true,
+    savedLoginMayRecover: mayRecover,
     coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
     preserveResourceRefreshUncertainty: opts.preserveResourceRefreshUncertainty,
   });
@@ -2958,7 +2967,7 @@ async function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): Pr
 async function finishColdStartSignedOut(
   reason: string,
   credentialStoreUnavailable = false,
-  opts: { preserveResourceRefreshUncertainty?: boolean } = {},
+  opts: { preserveResourceRefreshUncertainty?: boolean; savedLoginMayRecover?: boolean } = {},
 ): Promise<AuthState> {
   await recoverAccountFreeOwnerAtStartup('signed-out', reason, credentialStoreUnavailable, opts);
   return snapshotLoggedOutAuthState();
@@ -3451,6 +3460,12 @@ function scheduleNonXdOrgBetaDefault(input: {
 let coldStartAuthInFlight: Promise<AuthState> | null = null;
 // A newly mounted window must not restart recovery after the user took over.
 let coldStartRecoveryStopped = false;
+// Until the saved login is resolved, owner-scoped outboxes must remain dormant on disk.
+let savedLoginMayRecover = true;
+export function isSavedLoginRecoveryPending(): boolean {
+  return savedLoginMayRecover && (!accessToken || !currentUser) &&
+    !passiveLocalSignOut && !foreignDeviceLocalSignOut;
+}
 // The saved credential owns the deadline, not the login page/recovery invocation.
 // Returning to the page must keep both Retry-After and its random spread.
 type ColdStartRetryState = {
@@ -4130,11 +4145,13 @@ function clearAuth(
      * 见 authStartupGate 的 ColdStartAuthFallbackRegistry。
      */
     coldStartTimeoutRecovery?: boolean;
+    savedLoginMayRecover?: boolean;
     /** Local startup cleanup must retain evidence of a possibly consumed token. */
     preserveResourceRefreshUncertainty?: boolean;
   } = {},
 ): void {
   const notify = opts.notify ?? true;
+  savedLoginMayRecover = opts.savedLoginMayRecover === true;
   const epochBeforeClear = authStateEpoch;
   authStateEpoch += 1; // 迟到的冷启动流程从此作废(见 authStateEpoch 注释)
   // 必须与上一行同步记录:兜底流程外层还有 await commit / 释放锁 / 多层异步返回,
@@ -5211,6 +5228,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
         error instanceof AuthApiError &&
         error.code === 'CREDENTIAL_STORE_UNAVAILABLE' &&
         hasPotentiallyPersistedAuthCredentials(),
+      { savedLoginMayRecover: true },
     );
   }
   if (!persistedSession) {
@@ -5622,7 +5640,9 @@ async function runColdStartRefreshFlow(
           `cold-start refresh still failing after ${attempts} attempt(s) — keeping refresh token, starting logged out`,
         );
       }
-      return finishColdStartSignedOut(`cold-start-refresh-${action.kind}`);
+      return finishColdStartSignedOut(`cold-start-refresh-${action.kind}`, false, {
+        savedLoginMayRecover: action.kind === 'transient-failure' || action.kind === 'replacement-retry',
+      });
     }
 
     const refreshData = refreshResult.data as RefreshResponse;

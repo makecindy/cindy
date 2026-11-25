@@ -99,7 +99,7 @@ describe('authManager credential-store escalation wiring', () => {
 
   it('keeps explicit login available for corrupt vaults when encryption is healthy', () => {
     const expression = authSource.match(
-      /'cold-start-credential-reconcile-unavailable',\s*([\s\S]*?),\s*\);/,
+      /'cold-start-credential-reconcile-unavailable',\s*([\s\S]*?hasPotentiallyPersistedAuthCredentials\(\)),/,
     )?.[1];
     if (!expression) throw new Error('Credential reconciliation classifier was not found');
     class AuthApiError extends Error {

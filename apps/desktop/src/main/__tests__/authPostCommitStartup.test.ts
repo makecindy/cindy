@@ -53,6 +53,8 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
     getActiveAppSession: () => state,
     isOwnerChangeShellPending: () => !stable,
     isGhostSkillProjectionBoundaryStableForOwner: () => stable,
+    passiveLocalSignOut: false,
+    foreignDeviceLocalSignOut: false,
     accessToken: mode === 'cloud' ? 'test-only-token' : null,
     currentUser: mode === 'cloud' ? { id: 'owner' } : null,
     LOCAL_DATA_OWNER_ID: 'owner',
@@ -66,18 +68,22 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
   const compiled = transpileModule(
     [
       productionFunction('requestStableOwnerPostCommit'),
+      'let savedLoginMayRecover = true;',
+      productionFunction('isSavedLoginRecoveryPending'),
       productionFunction('recoverAccountFreeOwnerAtStartup'),
       productionFunction('initialize'),
       `let authStateEpoch = 0;
        let settledLoginCommitCount = 0;
        ${productionFunction('initialize')}`,
-      'return { initialize, recoverAccountFreeOwnerAtStartup, requestStableOwnerPostCommit };',
+      'return { initialize, recoverAccountFreeOwnerAtStartup, requestStableOwnerPostCommit, isSavedLoginRecoveryPending };',
     ].join('\n'),
     { compilerOptions: { target: ScriptTarget.ES2022 } },
   ).outputText;
   const entrypoints = new Function(...Object.keys(deps), compiled)(...Object.values(deps)) as {
     initialize(): Promise<unknown>;
-    recoverAccountFreeOwnerAtStartup(mode: string, reason: string): Promise<void>;
+    recoverAccountFreeOwnerAtStartup(mode: string, reason: string, unavailable?: boolean,
+      options?: { coldStartTimeoutRecovery?: boolean; savedLoginMayRecover?: boolean }): Promise<void>;
+    isSavedLoginRecoveryPending(): boolean;
     requestStableOwnerPostCommit(reason: string): void;
   };
   return {
@@ -94,6 +100,16 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
 }
 
 describe('authentication does not wait for optional plugin provisioning', () => {
+  it('marks a stable signed-out projection as recoverable only until a definitive startup outcome', async () => {
+    const run = setup('signed-out');
+    await run.recoverAccountFreeOwnerAtStartup('signed-out', 'timeout', false, { coldStartTimeoutRecovery: true });
+    expect(run.isSavedLoginRecoveryPending()).toBe(true);
+    await run.recoverAccountFreeOwnerAtStartup('signed-out', 'no-saved-login');
+    expect(run.isSavedLoginRecoveryPending()).toBe(false);
+    await run.recoverAccountFreeOwnerAtStartup('signed-out', 'credential-read-failed', false, { savedLoginMayRecover: true });
+    expect(run.isSavedLoginRecoveryPending()).toBe(true);
+  });
+
   it('commits cloud login without requiring local asset adoption', async () => {
     // Unit, #10357 rollback: a failed asset handoff used to reject an already
     // committed login and skip native provider binding. Existing startup cases

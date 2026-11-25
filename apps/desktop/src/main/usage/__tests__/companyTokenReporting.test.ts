@@ -10,6 +10,7 @@ const ports = vi.hoisted(() => ({
   getPath: vi.fn(),
   getAuthState: vi.fn(),
   token: vi.fn(),
+  recovering: vi.fn(),
   allowed: vi.fn(),
   subscribe: vi.fn(),
 }));
@@ -18,6 +19,7 @@ vi.mock('electron', () => ({ app: { getPath: ports.getPath }, net: { fetch: port
 vi.mock('../../authManager.js', () => ({
   getActiveAuthRealm: () => 'cn',
   getAuthState: ports.getAuthState,
+  isSavedLoginRecoveryPending: () => ports.recovering() === true,
   getAccessToken: ports.token,
   onAuthStateChange: ports.subscribe,
 }));
@@ -66,6 +68,7 @@ beforeEach(() => {
   dir = mkdtempSync(path.join(os.tmpdir(), 'cindy-company-test-'));
   ports.getPath.mockReturnValue(dir);
   ports.getAuthState.mockReturnValue(state);
+  ports.recovering.mockReturnValue(false);
   ports.token.mockReturnValue('test');
   ports.subscribe.mockReturnValue(() => undefined);
   service = createCompanyTokenReporting(subscribeSettings);
@@ -389,7 +392,7 @@ it('reports only confirmed Pi root requests even when a Gateway child used the s
   expect(record.mock.calls).toEqual([[[sample, sample]]]);
 });
 
-it('coalesces remote renewals and reauthorizes after midnight or a long idle period', async () => {
+it('coalesces remote renewals and reauthorizes on an executor switch, UTC midnight or long idle', async () => {
   const { createCompanyReportingRenewal } = await import('../../remote-agent/controller/companyReportingRenewal');
   const { installExecutionReporting } = await import('../companyTokenFacts');
   const issue = vi.fn().mockResolvedValue('grant');
@@ -403,11 +406,14 @@ it('coalesces remote renewals and reauthorizes after midnight or a long idle per
     await Promise.all([renew('run', () => true), renew('run', () => true)]);
     await renew('run', () => true);
     expect(issue).toHaveBeenCalledTimes(1);
+    await renew('run', () => true, true);
+    await renew('run', () => true);
+    expect(issue).toHaveBeenCalledTimes(2);
     now.mockReturnValue(Date.parse('2026-11-19T00:00:01Z'));
     await renew('run', () => true);
     now.mockReturnValue(Date.parse('2026-11-19T01:30:00Z'));
     await renew('run', () => true);
-    expect(issue).toHaveBeenCalledTimes(3);
+    expect(issue).toHaveBeenCalledTimes(4);
   } finally {
     now.mockRestore();
     installExecutionReporting(undefined);
@@ -440,4 +446,38 @@ it('keeps one slow handshake in flight, then backs off failed sends for 30 secon
     now.mockRestore();
     installExecutionReporting(undefined);
   }
+});
+
+it('delivers the original UTC day once after the same member recovers from an offline restart', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    vi.setSystemTime(new Date('2026-01-02T12:00:00Z'));
+    const batches: unknown[] = [];
+    ports.fetch.mockImplementation(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/api/me')) return Response.json(me(true));
+      expect(url).toBe('https://tenant.invalid/api/orgs/org1/company-token-reporting/batches');
+      batches.push(JSON.parse(String(init.body)));
+      return Response.json({});
+    });
+    service.refresh();
+    await vi.waitFor(() => expect(startCompanyUsage()).toBeTypeOf('function'));
+    startCompanyUsage()!([{ model: 'gpt-5', ...counts }]);
+    service.dispose();
+    const queuePath = path.join(dir, 'company-token-outbox.json');
+    vi.setSystemTime(new Date('2026-01-07T20:00:00Z'));
+    ports.getAuthState.mockReturnValue({ ...state, mode: 'signed-out', isAuthenticated: false, user: null, canEnterApp: false });
+    ports.recovering.mockReturnValue(true);
+    ports.fetch.mockClear();
+    service = createCompanyTokenReporting(subscribeSettings);
+    service.refresh();
+    expect(startCompanyUsage()).toBeUndefined();
+    expect(existsSync(queuePath)).toBe(true);
+    expect(ports.fetch).not.toHaveBeenCalled();
+    ports.getAuthState.mockReturnValue(state);
+    ports.recovering.mockReturnValue(false);
+    service.refresh();
+    await vi.waitFor(() => expect(existsSync(queuePath)).toBe(false));
+    expect(batches).toEqual([{ batchId: expect.any(String), orgRevision: 2, memberRevision: 1,
+      rows: [{ day: '2026-01-02', model: 'gpt-5', ...counts }] }]);
+  } finally { vi.useRealTimers(); }
 });

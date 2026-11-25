@@ -117,6 +117,8 @@ export interface RemoteAgentRunHandlers {
   /** 本机还有这个任务的工作在进行、对方看不到(拉取时报 hold，对方不按闲置收回)。 */
   holdsRemote?(): boolean;
   onSend?(): void;
+  /** A provider group replaced the executor of an already open run. */
+  onExecutorReplaced?(): void;
   recoverAuthorization?(): Promise<void>;
 }
 
@@ -480,7 +482,8 @@ export class RemoteAgentRunClient implements PolledRun {
   private dispatch(item: RemoteAgentStreamItem): void {
     switch (item.t) {
       case 'started':
-        this.started?.resolve(item.handle);
+        if (this.started) this.started.resolve(item.handle);
+        else this.handlers.onExecutorReplaced?.();
         this.started = null;
         return;
       case 'start-failed':

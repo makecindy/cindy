@@ -56,7 +56,7 @@ function makeHost(
     directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
     forkHosted?: Parameters<typeof createRemoteAgentHost>[0]['forkHosted'];
     purge?: (ids: readonly string[], nativeIds: readonly string[]) => Promise<void>;
-    events?: AgentEvent[];
+    events?: AgentEvent[] | AsyncIterable<AgentEvent>;
     recordGuestUsage?: Parameters<typeof createRemoteAgentHost>[0]['recordGuestUsage'];
     recordOwnerUsage?: Parameters<typeof createRemoteAgentHost>[0]['recordOwnerUsage'];
     /** 任务开始时的账号是否仍是当前账号(缺省一直是)。 */
@@ -103,6 +103,7 @@ function makeHost(
         },
         // 先吐出预置事件，之后一直挂起：任务保持运行，直到测试结束它。
         events: () => {
+          if (options.events && !Array.isArray(options.events)) return options.events;
           const queued = [...(options.events ?? [])];
           return {
             [Symbol.asyncIterator]: (): AsyncIterator<AgentEvent> => ({
@@ -1199,5 +1200,85 @@ describe('#6479 bounded resume projection', () => {
         }
       }
     });
+  }
+});
+
+it.each([true, false])('records a running turn on late authorization only while its original owner is still current (%s)', async (keepOwner) => {
+  let release!: () => void;
+  const terminal = new Promise<void>(resolve => { release = resolve; });
+  const exposed = { current: true };
+  const record = vi.fn();
+  const ledger = vi.fn();
+  async function* turn() {
+    yield { type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } } as AgentEvent;
+    await terminal;
+    yield { type: 'done', source: 'claude-code', data: { modelUsageCumulativeStartsAtZero: true,
+      modelUsage: { 'claude-opus-4-6': { inputTokens: 12, outputTokens: 3, costUSD: 0 } } } } as AgentEvent;
+  }
+  installExecutionReporting({
+    available: () => true, captureBoundary: () => () => exposed.current, direct: () => true,
+    challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }), issue: async () => null,
+    redeem: async () => ({ receipt: RUN_1, record }),
+  });
+  const host = makeHost([], { events: turn(), recordGuestUsage: ledger });
+  try {
+    await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('late-usage', {}) } });
+    await waitForStarted(host, GUEST, RUN_1);
+    await vi.waitFor(async () => {
+      const polled = await host.handle(GUEST, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: { data?: string }[] };
+      expect(Buffer.from(polled.runs[0]?.data ?? '', 'base64').toString()).toContain('"isRunning":true');
+    });
+    exposed.current = keepOwner;
+    await host.handle(GUEST, { op: 'company-reporting-challenge', runId: RUN_1 });
+    await host.handle(GUEST, { op: 'company-reporting-grant', runId: RUN_1, grant: 'opaque-test-grant' });
+    release();
+    await vi.waitFor(() => expect(ledger.mock.calls.some(([, sample]) =>
+      sample.samples.some((row: { inputTokens: number }) => row.inputTokens === 12))).toBe(true));
+    if (keepOwner) {
+      expect(record.mock.calls).toEqual([[[{ model: 'claude-opus-4-6', input: 12, output: 3, cacheRead: 0, cacheWrite: 0 }]]]);
+    } else {
+      expect(record).not.toHaveBeenCalled();
+    }
+  } finally {
+    release();
+    await host.dispose();
+    installExecutionReporting(undefined);
+  }
+});
+
+it.each([
+  ['provider-oauth', 'byok', true],
+  ['gateway-key', 'byok', false],
+  ['provider-oauth', 'gateway-alias', false],
+  ['provider-oauth', 'unconfirmed', false],
+] as const)('uses final Codex route for a hosted turn (%s, %s)', async (credentialMode, providerId, accepted) => {
+  const record = vi.fn();
+  const model = 'gpt-test';
+  const events = [
+    { type: 'text', source: 'codex', data: { text: 'working' } },
+    { type: 'status', source: 'codex', data: { requestUsage: {
+      epoch: 'process', models: [{ model, inputTokens: 47, outputTokens: 8, cacheReadTokens: 4, cacheCreateTokens: 2 }],
+    } } },
+    { type: 'done', source: 'codex', data: { usage: { execution: { providerId, credentialMode, model },
+      promptTokens: 47, completionTokens: 8, cachedTokens: 4, cacheCreationTokens: 2 } } },
+  ] as AgentEvent[];
+  installExecutionReporting({
+    available: () => true, direct: id => id === 'shared-provider' || id === 'byok',
+    challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }), issue: async () => null,
+    redeem: async () => ({ receipt: RUN_1, record }),
+  });
+  const host = makeHost([], { events });
+  try {
+    await host.handle(GUEST, { op: 'company-reporting-challenge', runId: RUN_1 });
+    await host.handle(GUEST, { op: 'company-reporting-grant', runId: RUN_1, grant: 'fixture' });
+    await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'codex', payload: { json: openPayload('remote-codex') } });
+    await vi.waitFor(async () => {
+      const poll = await host.handle(GUEST, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: { data?: string }[] };
+      expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString()).toContain('"type":"done"');
+    });
+    expect(record.mock.calls).toEqual(accepted ? [[[{ model, input: 47, output: 8, cacheRead: 4, cacheWrite: 2 }]]] : []);
+  } finally {
+    await host.dispose();
+    installExecutionReporting(undefined);
   }
 });

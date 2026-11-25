@@ -97,7 +97,7 @@
 - 显式登出时的订阅池，随 M2 的供应商视图；
 - 作废后“需要恢复”的账号接口确认（`verifyRecoveryWithAccountRpc`），随 2e（第 13 行）。
 
-第 13 行补充：企业按日用量当前由桌面的 `usage/companyTokenReporting.desktop.ts` 装配。共用计量代码的 `installCompanyUsageCapture` 和 `installExecutionReporting` 已进入 Host 的加载图，Host 尚待接入组织策略、使用统计同意状态及区域上报服务，再绑定这两个端口。未绑定时企业用量捕获和执行授权返回空结果，Host 仍记录原有的个人用量。两项在 `desktop-module-setters.ts` 标为待接入，随第 13 行的企业统计能力一起验收。
+第 13 行补充：桌面和独立 Host 共用企业按日上报逻辑。Host 在持有执行权、已确认当前企业成员、本机使用统计已获同意且企业策略允许时采集，按设备错峰上传。远程执行按服务端授权回执归属发起成员。桌面接管执行或身份待恢复时暂停，确认退出或切换成员后清理原成员的待发数据。
 
 ## 二、与桌面不同（已知差异）
 

@@ -100,6 +100,7 @@ import { createLogger, initLogger, setCcDebugTailingEnabled } from '../../deskto
 import { reapCodexToolTreesSync } from '../../desktop/src/main/codex-tool-tree-reaper.js';
 import { createHostIpcRoute } from './ipc-route.mjs';
 import { createHostIpcBindings } from './ipc-bindings/index.js';
+import { bindHostCompanyReporting } from './company-token-reporting.js';
 import { projectHostAuthState } from './auth-state.js';
 import { createHostModelAccess } from './agent/model-access.js';
 import { createHostUsagePricing } from './agent/usage-pricing.ts';
@@ -425,13 +426,17 @@ function startProfileCoexistence(dataDir: string, scan: () => Promise<number[]>)
     message: profileInUseMessage(), isCurrent: () => coexistenceMonitor === monitor,
     input: {
       isHeldForDesktop: () => inputQueue.isHeldForDesktop(),
-      holdForDesktop: message => inputQueue.holdForDesktop(message),
+      holdForDesktop: message => {
+        companyReporting.suspend();
+        return inputQueue.holdForDesktop(message);
+      },
       releaseDesktopHold: () => inputQueue.releaseDesktopHold(),
     },
     getPlugins: () => plugins, refreshPlugins: () => pluginGateway?.refresh(),
     setState: state => { runtime.coexistence = state; },
     onInputReleased() {
       // A Pi receipt retry held while the desktop used the profile runs now (agent/usage-recording.ts).
+      companyReporting.resume();
       usageRecording.onProfileReleased();
       void resumeGeneratedImageRecovery();
       hostLog.info('the desktop left this profile; sends are accepted again');
@@ -491,6 +496,7 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
   }
   if (expectedOwner && expectedOwner !== membership.id) throw new HostAccountMismatchError();
   currentSessionToken = sessionToken;
+  reportEndpoint = { realm, base: endpoints.authApiBaseUrl };
   if (process.platform==='linux' && endpoints.modelAccessApiBaseUrl) {
     const base=endpoints.modelAccessApiBaseUrl;
     confirmCloudGuestWhenOnline(() => base, () => currentSessionToken, hostAuthFetch);
@@ -503,6 +509,7 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
 /** Real account profile from the adopted session; null until it resolves. */
 let accountUser: AccountUser | null = null;
 let currentSessionToken: string | null = null;
+let reportEndpoint: { realm: string; base: string } | null = null;
 let remoteIdentityReady = false;
 let currentDeviceId: string | null = null;
 let deviceLink: ReturnType<typeof createHostDeviceLink> | null = null;
@@ -586,6 +593,7 @@ async function performAuthRefresh(): Promise<boolean> {
     if (user) {
       accountUser = user;
       account = { authenticated: true, realm: account.realm ?? resolveHostRegion() };
+      if (runtime.state === 'ready') companyReporting.resume();
       eventHub.publish({ type: 'auth_changed', ...projectAuthState() });
       scheduleAuthRefresh(epoch);
       return true;
@@ -615,10 +623,12 @@ function invalidateHostSession(_reason: string): Promise<void> {
   // the first await below runs before this returns: the boundary is raised synchronously, as before.
   invalidation = runOwnerBoundary(ownerBoundary, {
     beforeDispose: async () => {
+      companyReporting.signOut();
       release = beginAppSessionBoundary();
       account = { authenticated: false, realm: account.realm, error: 'Sign in again with cindy-host login' };
       endAuthRefreshes();
       currentSessionToken = null;
+    reportEndpoint = null;
       remoteIdentityReady = false;
       // A refresh that called this belongs to an admitted request: let it unwind before the drain.
       await Promise.resolve();
@@ -726,6 +736,25 @@ let hostConfirmations: ReturnType<typeof createHostConfirmations> | null = null;
 let availabilityPolicy: ReturnType<typeof createAvailabilityPolicy> | null = null;
 let modelAccess: ReturnType<typeof createHostModelAccess> | null = null;
 const currentGateway = () => modelAccess?.gateway.credential && modelAccess.gateway.endpoint ? modelAccess.gateway : null;
+const companyReporting = bindHostCompanyReporting({
+  directory: profileDir,
+  reportBuild: layout.packaged || process.env.XDT_TAPDB_DEV === '1',
+  canWrite: () => runtime.state === 'ready' && !isAppSessionBoundaryPending() && !inputQueue.isHeldForDesktop(),
+  definitivelyInactive: () => account.authenticated && accountUser?.membershipKind === 'personal',
+  identity() {
+    if (runtime.state !== 'ready' || !runtime.owner || !account.authenticated || !accountUser ||
+        accountUser.id !== runtime.owner || accountUser.membershipKind !== 'org' || !accountUser.orgId ||
+        !currentSessionToken || !currentDeviceId || isAppSessionBoundaryPending() || inputQueue.isHeldForDesktop()) return null;
+    const realm = account.realm;
+    if (!reportEndpoint || reportEndpoint.realm !== realm) return null;
+    return { owner: JSON.stringify([realm, accountUser.orgId, accountUser.id]), member: accountUser.id,
+      orgId: accountUser.orgId, generation: getActiveAppSession().generation, base: reportEndpoint.base,
+      device: currentDeviceId, token: currentSessionToken };
+  },
+  gatewayEndpoint: () => modelAccess?.gateway.endpoint ?? null,
+  fetch: hostAuthFetch,
+});
+
 /** Owner-scoped Maker Memory; null until the runtime owns an account. */
 let makerMemory: ReturnType<typeof createHostMemoryManager> | null = null;
 /** Non-secret projection of the adopted Desktop login; never tokens. */
@@ -1165,6 +1194,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   startProfileCoexistence(dataDir, scanProfile);
   runtime.state = 'ready';
   runtime.unavailable = null;
+  companyReporting.resume();
 }
 
 const eventHub = createEventHub();
@@ -1650,6 +1680,7 @@ const serverDeps = {
   },
   logout: async () => {
     await startup;
+    companyReporting.signOut();
     authClosed = true;
     const outgoingOwner = activeOwner;
     // Read before the runtime is disposed (disposal releases the hold with the input queue).
@@ -2115,6 +2146,7 @@ function projectAuthState() {
 
 /** Ordered disposal also runs after partial startup or a failed sign-out. */
 async function disposeOwnerRuntime(): Promise<void> {
+  companyReporting.suspend();
   const remote = deviceLink;
   deviceLink = null;
   remoteIdentityReady = false;
@@ -2188,6 +2220,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     activeOwner = null;
     accountUser = null;
     currentSessionToken = null;
+    reportEndpoint = null;
     currentDeviceId = null;
     claudeState = null;
     account = { authenticated: false, realm: account.realm };
@@ -2460,6 +2493,7 @@ server.listen(PORT, '127.0.0.1', () => {
     account = { authenticated: false, realm: state.realm };
     // A renewal that succeeds schedules the next one; one that fails for now retries with backoff.
     if (state.authenticated) await refreshAuthSession();
+    else companyReporting.signOut();
   })().catch(async (error: unknown) => {
     const blocked = runtime.state === 'blocked';
     try { await disposeOwnerRuntime(); }
@@ -2485,6 +2519,7 @@ const stop = () => {
   // synchronously here, in the previous order.
   const boundary = runOwnerBoundary(ownerBoundary, {
     beforeDispose: async () => {
+      companyReporting.dispose();
       const requestsDrained = server.stopAccepting();
       releaseOwnerBoundary = beginAppSessionBoundary();
       // As the desktop's quit ('reap-codex-tool-trees', a sync step before the Maker shutdown):

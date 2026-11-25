@@ -54,6 +54,7 @@ const source = ts.createSourceFile(
 const names = new Set([
   'apiFetch',
   'clearAuth',
+  'isSavedLoginRecoveryPending',
   'finishColdStartSignedOut',
   'recoverActiveResourceSession',
   'readStoredRefreshTokenCandidates',
@@ -107,7 +108,7 @@ const uncertainResourceRefreshTokens = new Map();
 const pendingResourcePassportRecoveries = new Map();
 const passportAccountRefreshFlights = new Map();
 const pendingPassportAccountRotations = new Map();
-let passiveLocalSignOut = false;
+let passiveLocalSignOut = false, savedLoginMayRecover = true;
 const settledLoginCommitCount = 0;
 const API_FETCH_TIMEOUT_MS = 15000;
 const AUTH_REGION = 'global';
@@ -130,6 +131,7 @@ const recoverAccountFreeOwnerAtStartup = async (mode, reason, unavailable, optio
   // Exercise the real cleanup reached by the production owner transition. Its
   // timeout flag must preserve uncertainty while the minute-long retry waits.
   clearAuth({ notify: false, nextMode: mode, preservePersistedRefreshToken: true,
+    savedLoginMayRecover: !!(options.savedLoginMayRecover || options.coldStartTimeoutRecovery || options.preserveResourceRefreshUncertainty),
     coldStartTimeoutRecovery: options.coldStartTimeoutRecovery,
     preserveResourceRefreshUncertainty: options.preserveResourceRefreshUncertainty });
 };
@@ -144,6 +146,7 @@ return {
   fetch: apiFetch, start: initialize, dispatchLoginAction, enterLocalMode, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
+  recoveryPending: isSavedLoginRecoveryPending,
   useProductionCandidates: () => { readStoredRefreshTokenCandidates = productionReadStoredRefreshTokenCandidates; },
   useProductionPassport: () => { refreshPassportSessionSingleFlight = productionRefreshPassportSessionSingleFlight; },
   vaultRecovery: () => runColdStartRefreshFlow('test-refresh', 'global', {
@@ -351,8 +354,10 @@ describe('saved login recovery after startup network failure', () => {
 
   it('keeps slowly retrying beyond three failures and restores the original account after the startup fallback', async () => {
     const h = setup();
+    expect(h.recoveryPending()).toBe(true);
     const pending = h.start();
     await vi.advanceTimersByTimeAsync(20_000);
+    expect(h.recoveryPending()).toBe(true);
     expect(h.deps.confirmCloudGuestWhenOnline).not.toHaveBeenCalled();
     await expect(pending).resolves.toMatchObject({ isAuthenticated: false });
     await vi.advanceTimersByTimeAsync(400_000);
@@ -362,8 +367,19 @@ describe('saved login recovery after startup network failure', () => {
     h.request.mockResolvedValue(h.ok);
     await vi.advanceTimersByTimeAsync(300_000);
     expect(h.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    expect(h.recoveryPending()).toBe(false);
     expect(h.saved.session.refreshToken).toBe('test-rotated');
     expect(h.deps.notifyAuthListeners).toHaveBeenCalled();
+  });
+
+  it('distinguishes a confirmed account-free startup or runtime sign-out from pending recovery', async () => {
+    const h = setup();
+    h.saved.session = null;
+    await h.start();
+    expect(h.recoveryPending()).toBe(false);
+    const active = setup();
+    active.clearRuntimeAuth();
+    expect(active.recoveryPending()).toBe(false);
   });
 
   // Standard tier: a saved enterprise session in another realm must confirm against that realm after recovery.

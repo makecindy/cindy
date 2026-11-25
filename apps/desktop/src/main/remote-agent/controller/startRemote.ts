@@ -814,6 +814,7 @@ async function prepareAndStartRemoteAgentSession(
     };
     const client: RemoteAgentRunClient = new RemoteAgentRunClient(runId, poller, {
       onSend: reporting ? () => { void syncReporting(runId, isCurrent); } : undefined,
+      onExecutorReplaced: reporting ? () => { if (opened && isCurrent()) void syncReporting(runId, isCurrent, true); } : undefined,
       onEvent: (event) => {
         if (!isCurrent()) return;
         touch();
@@ -978,6 +979,9 @@ async function prepareAndStartRemoteAgentSession(
       linkState = 'connected';
       idleReclaimedByHost = false;
       lastStarted = started;
+      // The remote open has resolved its actual executor (direct or a group member).
+      // Overlap the handshake with the remaining link setup, without delaying model execution.
+      if (reporting && companyExecutionReporting()?.available()) void syncReporting(client.runId, isCurrent);
       onOpened(started);
       clearInterval(reportingTimer);
       if (reporting && companyExecutionReporting()?.available()) {
@@ -1201,12 +1205,7 @@ async function prepareAndStartRemoteAgentSession(
       await timing.measure('connection-slot', async () => deps.pool?.beforeOpen(member));
       requireOpen();
       const reporting = caps.companyTokenReporting === true && companyExecutionReporting()?.available() === true;
-      const reserveRun = () => {
-        const id = deps.newId();
-        if (reporting) syncReporting(id, () => stateNow() !== 'closed');
-        return id;
-      };
-      const firstRun = reserveRun();
+      const firstRun = deps.newId();
       const payload = await buildPayload(reconnect, timing, caps);
       requireOpen();
       try {
@@ -1218,7 +1217,7 @@ async function prepareAndStartRemoteAgentSession(
       } catch (error) {
         if (!deps.pool || linkState === 'closed' || !isRemoteRunLimitError(error) || !await deps.pool.releaseForRetry(member)) throw error;
         const client = await timing.measure('remote-open', () =>
-          openRun(payload, reconnect, onOpened, reporting, reserveRun()),
+          openRun(payload, reconnect, onOpened, reporting, deps.newId()),
         );
         status = 'ok';
         return client;

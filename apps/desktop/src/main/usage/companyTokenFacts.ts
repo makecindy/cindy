@@ -43,10 +43,20 @@ export interface CompanyExecutionChallenge {
   nonce: string;
   recipient: string;
 }
+export function readCompanyExecutionChallenge(value: unknown): CompanyExecutionChallenge | null {
+  if (!value || typeof value !== 'object') return null;
+  const { nonce, recipient } = value as Partial<CompanyExecutionChallenge>;
+  if (typeof nonce !== 'string' || !/^[0-9a-f-]{36}$/.test(nonce) ||
+      typeof recipient !== 'string' || !/^[0-9a-f]{64}$/.test(recipient)) return null;
+  return { nonce, recipient };
+}
+
 type CompanyAgent = 'claude-code' | 'codex' | 'pi';
-interface ExecutionReporting {
+export interface CompanyExecutionReporting {
   direct(providerId: string, kind: CompanyAgent): boolean;
   available(): boolean;
+  /** A live receipt may arrive during an already admitted turn. This guard pins its reporting boundary. */
+  captureBoundary?(): (() => boolean) | undefined;
   challenge(nonce: string): CompanyExecutionChallenge | null;
   issue(challenge: CompanyExecutionChallenge): Promise<string | null>;
   redeem(
@@ -54,8 +64,8 @@ interface ExecutionReporting {
     grant: string,
   ): Promise<{ receipt: string; record: CaptureCompanyUsage } | undefined>;
 }
-let execution: ExecutionReporting | undefined;
-export function installExecutionReporting(service: ExecutionReporting | undefined) {
+let execution: CompanyExecutionReporting | undefined;
+export function installExecutionReporting(service: CompanyExecutionReporting | undefined) {
   execution = service;
 }
 export function companyExecutionReporting() {

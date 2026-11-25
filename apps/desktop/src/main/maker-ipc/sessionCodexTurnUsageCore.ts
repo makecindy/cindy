@@ -1,4 +1,5 @@
-import { companyModelTokens, takeCompanyTurn } from '../usage/companyTokenFacts.js';
+import { codexTurnSegments, recordCompanyCodexTokens } from '../usage/companyCodexTokens.js';
+import { companyExecutionReporting, takeCompanyTurn } from '../usage/companyTokenFacts.js';
 import { captureTurnUsageContext, tokenAttribution, turnBillingSource, type TurnUsageContext } from './turnUsageContextCore.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
@@ -21,9 +22,7 @@ import {
 import { codexApiUsageModelKey, codexSubscriptionUsageModelKey } from '../usage/usageModelKeys.js';
 import {
   computePriceQuoteTurnMoney,
-  normalizeTurnUsageSegments,
   normalizeModelIdForPricing,
-  sumTurnUsageSegments,
 } from '../usage/turnCostCalculator.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { isCodexGatewayWireModel } from '@cindy/model-providers';
@@ -100,14 +99,9 @@ export function recordSessionCodexTurnUsage(
       const completionTokens = Number(u.completionTokens) || 0;
       const cachedTokens = Number(u.cachedTokens) || 0;
       const cacheCreationTokens = Number(u.cacheCreationTokens) || 0;
-      const codexUsageSegments = normalizeTurnUsageSegments(u.segments);
-      const codexSegmentTotals = sumTurnUsageSegments(codexUsageSegments);
-      const codexSegmentsReliable =
-        codexUsageSegments.length > 0 &&
-        codexSegmentTotals.inputTokens === promptTokens &&
-        codexSegmentTotals.outputTokens === completionTokens &&
-        codexSegmentTotals.cacheReadTokens === cachedTokens &&
-        codexSegmentTotals.cacheCreateTokens === cacheCreationTokens;
+      const counts = { input: promptTokens, output: completionTokens, cacheRead: cachedTokens, cacheWrite: cacheCreationTokens };
+      const parts = codexTurnSegments(u.segments, counts);
+      const { segments: codexUsageSegments, reliable: codexSegmentsReliable } = parts;
       void recordSessionTurnTokens(session.id, promptTokens + completionTokens + cachedTokens + cacheCreationTokens);
       // 先落 daily_model_usage token 行, 再等价格表补 API cost。首页 usage push 会在
       // ~2s 后刷新, 不能让冷价格表 / 离线 fetch 把模型 token 行延后到刷新之后。
@@ -161,12 +155,11 @@ export function recordSessionCodexTurnUsage(
         if (!isRemoteCodexSession && execution?.credentialMode !== 'gateway-key' &&
             !hasEffectiveGatewayRoute && sessionProvider !== 'xd' &&
             (isCodexSubscriptionAccessRoute || codexAuthInjection === 'oauth-bearer' || isCustomProviderRoute)) {
-          const record = takeCompanyTurn(turnContext);
-          if (record && codexSegmentsReliable) {
-            record(codexUsageSegments.flatMap(segment => segment.model
-              ? [companyModelTokens(normalizeModelIdForPricing(segment.model), segment)] : []));
-          } else if (record && execution?.model && u.segments === undefined) {
-            record([{ model: pricingModel, input: promptTokens, output: completionTokens, cacheRead: cachedTokens, cacheWrite: cacheCreationTokens }]);
+          // The reservation belongs to the turn (not to a replacement provider context).
+          // Recheck the actual tenant-specific route before using that reservation.
+          const record = takeCompanyTurn(capturedContext);
+          if (record && (!sessionProvider || companyExecutionReporting()?.direct(sessionProvider, 'codex'))) {
+            recordCompanyCodexTokens(record, parts, counts, u.segments === undefined ? execution?.model : undefined);
           }
         }
         // Keep unknown remote routes token-only, without a billing suffix that

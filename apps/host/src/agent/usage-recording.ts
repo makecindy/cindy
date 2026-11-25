@@ -17,6 +17,7 @@ import { recordCodexTurnUsage, recordModelTurnUsage, recordTurnSpend } from '../
 import { recordSessionClaudeTurnUsage } from '../../../desktop/src/main/maker-ipc/sessionClaudeTurnUsageCore.ts';
 import { recordSessionCodexTurnUsage } from '../../../desktop/src/main/maker-ipc/sessionCodexTurnUsageCore.ts';
 import { recordSessionPiTurnUsage } from '../../../desktop/src/main/maker-ipc/sessionPiTurnUsageCore.ts';
+import { beginCompanyTurn } from '../../../desktop/src/main/usage/companyTokenFacts.js';
 import { captureTurnUsageContext, type TurnUsageContext } from '../../../desktop/src/main/maker-ipc/turnUsageContextCore.ts';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from '../../../desktop/src/main/maker-ipc/piUsageReceiptsCore.ts';
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from '../../../desktop/src/main/maker-ipc/turnWallClock.ts';
@@ -251,10 +252,9 @@ export function createHostUsageRecording(options: HostUsageRecordingOptions) {
       }
       if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code')
         && (!wasInTurn || !turnUsageContextBySession.has(session.id))) {
-        turnUsageContextBySession.set(
-          session.id,
-          captureTurnUsageContext(session.id, undefined, event.source, session.model),
-        );
+        const context = captureTurnUsageContext(session.id, undefined, event.source, session.model);
+        if (!session.remoteHostId && !session.agentDeviceId) beginCompanyTurn(context, context.providerId, event.source);
+        turnUsageContextBySession.set(session.id, context);
       }
     },
 
