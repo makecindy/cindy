@@ -4850,6 +4850,40 @@ export default async function cindyBridge(piApi: any) {
     ? createCindyGuestToolGate(piApi, [${JSON.stringify(CINDY_SUBAGENT_TOOL_NAME)}])
     : null;
   const pi = guestToolGate ? guestToolGate.pi : piApi;
+  if (process.env.CINDY_PI_TURN_TOOL_POLICY && !CINDY_HOSTED && !localHostToolsOnly
+    && !currentPermissionState().reviewOnly) {
+    let currentTurn: { messageTimestamp: number; localTime: string } | undefined;
+    pi.on('before_agent_start', () => { currentTurn = undefined; });
+    pi.on('message_start', (event: any) => {
+      if (event.message.role !== 'user') return;
+      const now = new Date();
+      const offsetMinutes = -now.getTimezoneOffset();
+      const offset = Math.abs(offsetMinutes);
+      const hours = String(Math.floor(offset / 60)).padStart(2, '0');
+      const minutes = String(offset % 60).padStart(2, '0');
+      const localTime = new Date(now.getTime() + offsetMinutes * 60_000).toISOString().slice(0, 19);
+      currentTurn = {
+        messageTimestamp: event.message.timestamp,
+        localTime: localTime + (offsetMinutes < 0 ? '-' : '+') + hours + ':' + minutes,
+      };
+    });
+    pi.on('agent_settled', () => { currentTurn = undefined; });
+    pi.on('context_with_system', (event: any) => {
+      if (!currentTurn) return;
+      const index = event.messages.findLastIndex((message: any) => message.role === 'user');
+      const user = event.messages[index];
+      if (!user || user.timestamp !== currentTurn.messageTimestamp) return;
+      // Add the live time to the provider's copy only. Pi can resume or replay
+      // the original transcript without carrying a stale "current" timestamp.
+      const messages = [...event.messages];
+      const content = typeof user.content === 'string' ? [{ type: 'text', text: user.content }] : user.content;
+      messages[index] = {
+        ...user,
+        content: [...content, { type: 'text', text: 'Current local time at the start of this turn: ' + currentTurn.localTime }],
+      };
+      return { messages };
+    });
+  }
   const taskSystemPromptFile = process.env.CINDY_PI_TASK_SYSTEM_PROMPT_FILE;
   // switch_session reloads extensions. Keep the launch path in this Pi only;
   // shell environments and independent subagents strip it before spawning.
