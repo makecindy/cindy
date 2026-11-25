@@ -82,6 +82,15 @@ function visit(node: ts.Node) {
       callbacks[name] = node.initializer.arguments[0];
     }
   }
+  if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'CreateWorkerPopover') {
+    for (const prop of node.attributes.properties) {
+      if (!ts.isJsxAttribute(prop) || !prop.initializer || !ts.isJsxExpression(prop.initializer)) continue;
+      const name = prop.name.getText(source);
+      if (prop.initializer.expression && ['onCreate', 'pluginEnginesEnabled'].includes(name)) {
+        callbacks[name] = prop.initializer.expression;
+      }
+    }
+  }
   ts.forEachChild(node, visit);
 }
 visit(source);
@@ -811,6 +820,24 @@ describe('homepage submission to Main admission and first-message handoff', () =
     const result = await submit({ deviceId: 'host-b', agentDeviceId: selected.effectiveAgentDeviceId });
     expect(result.errors).toEqual([]);
     expect(result.invokeRemote).toHaveBeenCalledWith('host-b', 'maker:create-session', [expect.objectContaining({ agentDeviceId: 'source-a' })]);
+  });
+  // Unit regression: the draft hid the engine picker and converted its ACP form
+  // to Claude. Exercise the popover bindings and first-send callback up to IPC.
+  it('offers local plugin engines and starts the first Worker with the selected agy model', async () => {
+    const enabled = executable('pluginEnginesEnabled');
+    for (const [device, ssh, expected] of [[null, null, true], ['peer', null, false], [null, 'host', false]] as const) {
+      expect(runInNewContext(enabled, { effectiveDeviceLinkDeviceId: device, effectiveRemoteHostId: ssh })).toBe(expected);
+    }
+    const patchCollab = vi.fn<(draft: CollabDraft) => void>();
+    const { engine, modelId } = syntheticPluginEngine;
+    runInNewContext(executable('onCreate'), { patchCollab, setCreateWorkerOpen: vi.fn() })({
+      role: 'developer', agent: 'acp', providerId: engine.providerId, model: modelId,
+    });
+    const result = await submit({ entry: 'send', collab: patchCollab.mock.calls[0]![0] });
+    expect(result.errors).toEqual([]);
+    expect(result.enableOrca).toHaveBeenCalledExactlyOnceWith('created', expect.objectContaining({
+      workerAgent: 'acp', providerId: engine.providerId, model: modelId,
+    }));
   });
   // PR #6787, unit: the form stored both computers but the real draft builder
   // dropped the model computer. Existing route tests stubbed that builder. Use

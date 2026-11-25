@@ -524,9 +524,24 @@ function draftEnableOrcaOptions(
   deferDelegateTask = false,
   /** `providers` 是哪一处的目录(Agent 所在位置)；null = 任务所在电脑。 */
   providersAgentDeviceId: string | null = null,
-) {
-  const preferredAgent: 'claude-code' | 'codex' | 'pi' =
-    collab.worker === 'codex' ? 'codex' : collab.worker === 'pi' ? 'pi' : 'claude-code';
+): Parameters<typeof window.electronAPI.maker.enableOrca>[1] {
+  const cfg = collab.workerConfig;
+  // Plugin engines own their catalog; built-in provider fallback would replace the selection.
+  if (collab.worker === 'acp') {
+    return {
+      workerAgent: 'acp',
+      role: cfg?.role,
+      label: cfg && createWorkerLabel(cfg.role, []),
+      providerId: cfg?.providerId ?? undefined,
+      model: cfg?.model,
+      effort: cfg?.effort as Parameters<typeof window.electronAPI.maker.enableOrca>[1]['effort'],
+      agentDeviceId: null,
+      delegateTask: cfg?.initialTask,
+      workerPermissionMode: cfg?.workerPermissionMode,
+      ...(deferDelegateTask ? { deferDelegateTask: true } : {}),
+    };
+  }
+  const preferredAgent = collab.worker === 'cc' ? 'claude-code' : collab.worker;
   // Worker 类型也是**设备作用域**的(codex review P2):在只连了 Codex 的设备 A 选了 Codex
   // Worker,切到只连 Claude 的设备 B 时,workerConfig 虽然被清了,collab.worker 仍是 codex,
   // 透传过去必撞被控端的 NO_PROVIDER_FOR_AGENT 预检,协同又静默降级成单会话。
@@ -543,7 +558,6 @@ function draftEnableOrcaOptions(
     );
     return fallback ?? preferredAgent;
   })();
-  const cfg = collab.workerConfig;
   if (!cfg) return { workerAgent };
   if (cfg.modelGroup) {
     return {
@@ -3710,7 +3724,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         // createSession 后立刻 enableOrca 拉起 Worker;失败 toast 但保留
         // Lead 会话继续 navigate (用户可继续单 session, 不阻断)。
         let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
-        if (effectiveCollab.enabled) {
+        if (effectiveCollab.enabled && effectiveCollab.worker !== 'acp') {
           try {
             const result = await window.electronAPI.maker.enableOrca(
               newSession.id,
@@ -8434,7 +8448,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           onCreate={(form: CreateWorkerForm) => {
             patchCollab({
               enabled: true,
-              worker: form.agent === 'codex' ? 'codex' : form.agent === 'pi' ? 'pi' : 'cc',
+              worker: form.agent === 'claude-code' ? 'cc' : form.agent,
               workerConfig: {
                 role: form.role,
                 model: form.model,
@@ -8460,6 +8474,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           submitLabel={t('orca.createWorker.enableCollabSubmit')}
           requireWorkerPermissionModeSupport
           deviceId={effectiveDeviceLinkDeviceId ?? undefined}
+          pluginEnginesEnabled={!effectiveDeviceLinkDeviceId && !effectiveRemoteHostId}
           // SSH 远程草稿(draft.remoteHostId):worker 在远端 spawn,模型清单按 SSH
           // 口径过滤,与本路由 ChatInput 候选及 main 侧 remote-worker guard 同口径。
           sshRemote={!!effectiveRemoteHostId}

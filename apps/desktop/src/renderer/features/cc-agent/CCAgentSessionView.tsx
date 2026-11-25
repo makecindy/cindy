@@ -126,6 +126,7 @@ import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { isOverloadErrorMessage } from '@/utils/overloadError';
+import type { CollabWorkerKind } from '@/components/new-chat/ExtraDirsButton';
 import { ChatInput, type SessionModelPick } from '@/components/new-chat/ChatInput';
 import { PluginUiSlot, PluginUiWorkdirButton, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
 import {
@@ -3456,7 +3457,7 @@ function CCAgentSessionContent({
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
   // 切换协同走 IPC enableOrca / disableOrca,失败时 toast。
-  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi'>('codex');
+  const [collabWorker, setCollabWorker] = useState<CollabWorkerKind>('codex');
   // enableBusy 只盖"开启协同"路径;关闭走 useStopOrcaCollab hook 自己管 busy。
   const [enableBusy, setEnableBusy] = useState(false);
   const [createWorkerOpen, setCreateWorkerOpen] = useState(false);
