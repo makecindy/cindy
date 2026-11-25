@@ -17877,6 +17877,7 @@
       "openWorkdirFailed": "폴더를 열지 못했습니다"
     },
     "runs": {
+      "boundPluginEngineRecovery": "연결된 작업이 플러그인 엔진을 사용해 자동화가 실행되지 않았습니다. 작업을 내장 엔진으로 되돌리거나 내장 엔진을 사용하는 작업에 자동화를 다시 연결하세요.",
       "queueWaitTimeoutRecovery": "대기 시간이 초과되어 프롬프트가 전송되지 않았습니다. 대상 세션이 유휴 상태가 되면 {{action}}을 선택하여 실행하세요.",
       "status": {
         "running": "실행 중",

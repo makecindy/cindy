@@ -1,7 +1,7 @@
 import type { MakerMemoryManager } from '@cindy/maker-core';
 import { z } from 'zod';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import type { AppSettingsSection } from './service.js';
+import type { AppSettingsSection, AppSettingsWriteGuard } from './service.js';
 import type { MemorySettings, writeMemorySetting } from '../maker-host/memory-settings-store.js';
 import type { MemoryChangeParts } from '../maker-ipc/deferredCodexRestart.js';
 
@@ -15,12 +15,14 @@ interface Deps {
 }
 
 /** One persisted native-memory intent and one Codex idle-boundary callback. */
-export async function updateMakerMemorySettings(enabled: boolean, nativePatch: NativeMemoryPatch, deps: Deps) {
+export async function updateMakerMemorySettings(enabled: boolean, nativePatch: NativeMemoryPatch, deps: Deps, guard?: AppSettingsWriteGuard) {
   const { makerMemory, maker, writeMemorySetting } = deps;
   const wasEnabled = makerMemory.isEnabled();
   let persistedSettings: MemorySettings | null = null;
   return deps.applyChange({
     persist: async () => {
+      // A settings save based on an earlier read must not replace a newer one.
+      guard?.assertUnchanged();
       // Save the native fields from this same request before capturing the
       // maker toggle's runtime callback. Never push Codex mid-turn here.
       for (const key of ['claudeCode', 'codex', 'pi'] as const) {
@@ -69,8 +71,8 @@ interface MemorySectionDeps {
   read(): object;
   readState(): { value: MemorySettings };
   isMakerEnabled(): boolean | null;
-  updateMaker(enabled: unknown, patch: NativeMemoryPatch): Promise<unknown>;
-  updateNative(kind: 'claude-code' | 'codex' | 'pi', enabled: unknown): Promise<unknown>;
+  updateMaker(enabled: unknown, patch: NativeMemoryPatch, guard?: AppSettingsWriteGuard): Promise<unknown>;
+  updateNative(kind: 'claude-code' | 'codex' | 'pi', enabled: unknown, guard?: AppSettingsWriteGuard): Promise<unknown>;
   reset(): Promise<unknown>;
 }
 
@@ -82,7 +84,7 @@ export function createMemorySettingsSection(deps: MemorySectionDeps): AppSetting
     schema: z.strictObject({ maker: z.boolean().optional(), claudeCode: z.boolean().optional(),
       codex: z.boolean().optional(), pi: z.boolean().optional() }),
     read: () => ({ ...deps.read(), runtime: { maker: deps.isMakerEnabled() } }),
-    update: async patch => {
+    update: async (patch, guard) => {
       const next = { ...deps.readState().value, ...patch };
       // Preserve the Settings policy even for explicit false values: while
       // Cindy memory owns native memory, those fields cannot be changed here.
@@ -100,11 +102,14 @@ export function createMemorySettingsSection(deps: MemorySectionDeps): AppSetting
         for (const key of ['claudeCode', 'codex', 'pi'] as const) {
           if (typeof patch[key] === 'boolean') nativePatch[key] = patch[key];
         }
-        return deps.updateMaker(patch.maker, nativePatch);
+        return deps.updateMaker(patch.maker, nativePatch, guard);
       }
+      // Only the first write is checked against the read; the later ones follow this save's own.
+      let firstWrite = guard;
       for (const key of ['claudeCode', 'codex', 'pi'] as const) {
         if (patch[key] !== undefined) {
-          await deps.updateNative(key === 'claudeCode' ? 'claude-code' : key, patch[key]);
+          await deps.updateNative(key === 'claudeCode' ? 'claude-code' : key, patch[key], firstWrite);
+          firstWrite = undefined;
           if (deps.readState().value[key] !== patch[key]) throwIpcError('INTERNAL', 'memory setting was not persisted');
         }
       }

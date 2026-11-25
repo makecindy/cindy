@@ -18119,6 +18119,7 @@
       "openWorkdirFailed": "Falha ao abrir pasta"
     },
     "runs": {
+      "boundPluginEngineRecovery": "A automação não foi executada porque a tarefa vinculada usa um mecanismo de plug-in. Volte a usar um mecanismo integrado nessa tarefa ou vincule a automação a uma tarefa que use um mecanismo integrado.",
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes do envio da mensagem. Quando a sessão de destino estiver livre, escolha {{action}} para executá-la.",
       "status": {
         "running": "Em execução",

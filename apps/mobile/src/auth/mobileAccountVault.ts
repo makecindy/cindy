@@ -63,13 +63,21 @@ export function emptyMobileAccountVault(): MobileAccountVault {
   return { version: 1, activeAccountKey: null, resources: {}, passports: {} };
 }
 
+export class InvalidMobileAccountVaultError extends Error {}
+
 function parseMobileAccountVaultRecord(
   raw: string | null,
   options: { allowInvalidChildren?: boolean } = {},
 ): MobileAccountVault {
   if (raw === null) return emptyMobileAccountVault();
-  const value = JSON.parse(raw) as Partial<MobileAccountVault>;
+  let value: Partial<MobileAccountVault> | null;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new InvalidMobileAccountVaultError('Saved account credentials are not valid JSON');
+  }
   if (
+    !value ||
     value.version !== 1 ||
     !value.resources ||
     typeof value.resources !== 'object' ||
@@ -78,13 +86,13 @@ function parseMobileAccountVaultRecord(
     typeof value.passports !== 'object' ||
     Array.isArray(value.passports)
   ) {
-    throw new Error('Saved account credentials could not be read safely');
+    throw new InvalidMobileAccountVaultError('Saved account credentials could not be read safely');
   }
   const resources: Record<string, MobileStoredResourceSession> = {};
   for (const [key, candidate] of Object.entries(value.resources)) {
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
       if (options.allowInvalidChildren) continue;
-      throw new Error('Saved resource credential could not be read safely');
+      throw new InvalidMobileAccountVaultError('Saved resource credential could not be read safely');
     }
     const item = candidate as Partial<MobileStoredResourceSession>;
     if (
@@ -95,7 +103,7 @@ function parseMobileAccountVaultRecord(
       typeof item.lastUsedAt !== 'number'
     ) {
       if (options.allowInvalidChildren) continue;
-      throw new Error('Saved resource credential could not be read safely');
+      throw new InvalidMobileAccountVaultError('Saved resource credential could not be read safely');
     }
     resources[key] = item as MobileStoredResourceSession;
   }
@@ -103,7 +111,7 @@ function parseMobileAccountVaultRecord(
   for (const [key, candidate] of Object.entries(value.passports)) {
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
       if (options.allowInvalidChildren) continue;
-      throw new Error('Saved Passport credential could not be read safely');
+      throw new InvalidMobileAccountVaultError('Saved Passport credential could not be read safely');
     }
     const item = candidate as Partial<MobileStoredPassportSession>;
     if (
@@ -114,14 +122,14 @@ function parseMobileAccountVaultRecord(
       !Array.isArray(item.memberships)
     ) {
       if (options.allowInvalidChildren) continue;
-      throw new Error('Saved Passport credential could not be read safely');
+      throw new InvalidMobileAccountVaultError('Saved Passport credential could not be read safely');
     }
     const memberships = item.memberships.filter(isStoredAccountMetadata);
     if (
       !options.allowInvalidChildren &&
       memberships.length !== item.memberships.length
     ) {
-      throw new Error('Saved Passport membership could not be read safely');
+      throw new InvalidMobileAccountVaultError('Saved Passport membership could not be read safely');
     }
     passports[key] = {
       realm: item.realm,
@@ -152,10 +160,10 @@ export function parseMobileAccountVault(raw: string | null): MobileAccountVault 
   }
 }
 
-export async function readMobileAccountVault(): Promise<MobileAccountVault> {
+export async function readMobileAccountVault(options: { strict?: boolean } = {}): Promise<MobileAccountVault> {
   await mutation;
   const raw = await getSecureItem(MOBILE_ACCOUNT_VAULT_KEY);
-  return parseMobileAccountVault(raw);
+  return options.strict ? parseMobileAccountVaultRecord(raw) : parseMobileAccountVault(raw);
 }
 
 async function writeMobileAccountVault(vault: MobileAccountVault): Promise<void> {

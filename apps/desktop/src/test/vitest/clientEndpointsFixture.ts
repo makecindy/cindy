@@ -29,6 +29,8 @@ export const TEST_CLIENT_ENDPOINTS: ClientEndpointMap = {
   chatApiBaseUrl: 'https://chat.test.invalid',
   deviceLinkApiBaseUrl: 'https://device.test.invalid',
   agentNetApiBaseUrl: '',
+  // 未配置的旧实例不应因统一测试 fixture 而自动启用设置上报。
+  cloudInstanceApiBaseUrl: '',
   oauthBrokerApiBaseUrl: 'https://oauth.test.invalid',
   ossApiBaseUrl: 'https://oss.test.invalid',
   heartbeatUrl: 'https://heartbeat.test.invalid',
