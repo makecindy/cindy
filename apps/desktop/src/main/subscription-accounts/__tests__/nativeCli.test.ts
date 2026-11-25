@@ -351,8 +351,10 @@ describe('official Codex profiles', () => {
       const second = await readNativeCodexTokens(dir);
       expect(second.chatgptAccountId).toBe('fixture-account-b');
       await writeFile(authPath, JSON.stringify({ tokens: { access_token: 'fixture-token-only' } }));
-      expect((await readCodexWebTokens(dir)).chatgptAccountId).toBeNull();
+      expect((await readCodexWebTokens(dir))?.chatgptAccountId).toBeNull();
       await expect(readNativeCodexTokens(dir)).rejects.toThrow('authentication bridge');
+      await writeFile(authPath, JSON.stringify({ OPENAI_API_KEY: 'fixture-key' }));
+      await expect(readCodexWebTokens(dir)).resolves.toBeNull();
       await rm(authPath);
       expect(second.canDispatch()).toBe(false);
     } finally {

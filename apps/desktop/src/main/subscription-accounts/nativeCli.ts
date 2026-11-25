@@ -219,7 +219,7 @@ export async function readNativeCodexTokens(directory: string, refresh = false) 
     }
   }
   const tokens = await readCodexTokenFile(directory, false);
-  if (tokens.chatgptAccountId === null) throw new Error('Codex account authentication bridge is unavailable');
+  if (!tokens || tokens.chatgptAccountId === null) throw new Error('Codex account authentication bridge is unavailable');
   return { ...tokens, chatgptAccountId: tokens.chatgptAccountId };
 }
 
@@ -250,12 +250,9 @@ async function readCodexTokenFile(directory: string, webUsage: boolean) {
         return false;
       }
     };
-    if (
-      !sameFile(before, after) ||
-      !canDispatch() ||
-      typeof raw.tokens?.access_token !== 'string' || !raw.tokens.access_token
-    )
+    if (!sameFile(before, after) || !canDispatch())
       throw new Error('Codex account authentication bridge is unavailable');
+    if (typeof raw.tokens?.access_token !== 'string' || !raw.tokens.access_token) return null;
     return {
       accessToken: raw.tokens.access_token as string,
       chatgptAccountId: webUsage ? codexWorkspaceIdFromTokens(raw.tokens)

@@ -80,8 +80,9 @@ export async function readCodexWebUsageCredentials(
     const home = await detachedDefaultCodexHome();
     if (readPool('openai')?.disconnected) return null;
     if (home) {
-      const tokens = await readCodexWebTokens(home).catch(() => null);
+      const tokens = await readCodexWebTokens(home).catch(() => undefined);
       if (await detachedDefaultCodexHome() !== home) continue;
+      if (tokens === null) return null;
       if (!tokens?.canDispatch()) continue;
       return { accessToken: tokens.accessToken, accountId: tokens.chatgptAccountId };
     }

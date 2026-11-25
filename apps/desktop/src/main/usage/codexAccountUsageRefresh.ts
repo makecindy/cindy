@@ -56,9 +56,10 @@ export function createCodexAccountUsageSnapshotReader(
     }
   }
 
-  async function isRefreshStillCurrent(accessToken: string, accountId: string | null): Promise<boolean> {
+  async function isRefreshStillCurrent(accessToken: string, accountId: string | null, clearDisconnected = false): Promise<boolean> {
     try {
       const current = await deps.readCredentials();
+      if (current === null && clearDisconnected) await clearCachedSnapshot();
       return current?.accessToken === accessToken && current.accountId === accountId;
     } catch (err) {
       deps.onRefreshError(err);
@@ -127,7 +128,7 @@ export function createCodexAccountUsageSnapshotReader(
     }
     const { accessToken, accountId } = credentials;
     const cachedSnapshot = await deps.readCachedSnapshot();
-    if (!await isRefreshStillCurrent(accessToken, accountId)) return null;
+    if (!await isRefreshStillCurrent(accessToken, accountId, true)) return null;
     const cachedAccountId = cachedSnapshot?.accountId ?? null;
     if (cachedSnapshot && (cachedAccountId !== accountId
       || (accountId === null && lastUnknownAccountSnapshotAccessToken !== accessToken))) {
