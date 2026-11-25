@@ -79,6 +79,19 @@ describe('repoAccountResolver', () => {
     expect(listLogins).toHaveBeenCalledTimes(2);
   });
 
+  it('复核没查成时不留任何缓存结论', async () => {
+    // 预检遇到限流/超时:repoAccess 返回 'unknown',既不能当「读不到」也不能当「读得到」。
+    const listLogins = vi.fn(async () => ({ logins: ['work'], complete: true }));
+    const repoAccess = vi.fn(async (): Promise<boolean | 'unknown'> => 'unknown');
+    const resolver = createRepoAccountResolver(deps({ listLogins, repoAccess }));
+
+    expect(await resolver.recover(PR, 'active-token')).toBeNull();
+    // 不换账号、不写 miss,也不去列账号。
+    expect(listLogins).not.toHaveBeenCalled();
+    expect(await resolver.recover(PR, 'active-token')).toBeNull();
+    expect(repoAccess).toHaveBeenCalledTimes(2);
+  });
+
   it('PR 编号写错时先复核刚被拒的凭证,不因此换账号', async () => {
     // 活跃账号能读仓库,只是这条 PR 不存在:PR 接口 404 不等于仓库没权限。
     const repoAccess = vi.fn(async (token: string) => token === 'active-token');

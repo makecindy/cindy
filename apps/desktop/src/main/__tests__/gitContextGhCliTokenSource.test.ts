@@ -115,6 +115,17 @@ describe('createGhCliTokenSource', () => {
     expect(execFileFn).toHaveBeenCalledTimes(1);
   });
 
+  it('没有 github.com 账号时返回完整的空列表', async () => {
+    // 未登录任何账号时 gh 输出 `{"hosts":{}}` 并正常退出:这是「确实没有」,不是读不到。
+    const execFileFn = vi.fn(
+      (_file: string, _args: string[], _opts: { timeout: number }, cb: ExecCb) =>
+        cb(null, JSON.stringify({ hosts: {} }), ''),
+    );
+    const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
+
+    expect(await src.listLogins()).toEqual({ logins: [], complete: true });
+  });
+
   it('零退出但带 state=error 的账号时保留可用账号并标记列表不完整', async () => {
     // `gh auth status --json` 在个别账号校验失败时仍以 0 退出,只把那个账号标成 error。
     // 读得到的账号必须照样探测(否则一个无关坏账号会永久拦住恢复);

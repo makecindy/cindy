@@ -111,11 +111,16 @@ export interface GhCliLoginList {
 /** `null` = 账号列表没读准(探测失败、输出形状不对),不能当成「没有备用账号」。 */
 function parseLogins(stdout: string): GhCliLoginList | null {
   try {
-    const hosts = (JSON.parse(stdout) as { hosts?: Record<string, unknown> }).hosts?.['github.com'];
-    if (!Array.isArray(hosts)) return null;
+    const { hosts } = JSON.parse(stdout) as { hosts?: unknown };
+    if (!hosts || typeof hosts !== 'object') return null;
+    const entries = (hosts as Record<string, unknown>)['github.com'];
+    // 没有任何 github.com 账号时 gh 输出 `{"hosts":{}}` 并正常退出:这是「确实没有」,
+    // 不是读不到。
+    if (entries === undefined) return { logins: [], complete: true };
+    if (!Array.isArray(entries)) return null;
     const logins: string[] = [];
     let complete = true;
-    for (const entry of hosts) {
+    for (const entry of entries) {
       const { login, state } = (entry ?? {}) as { login?: unknown; state?: unknown };
       // `gh auth status --json` 在个别账号校验失败时仍以 0 退出,只把那个账号标成 error。
       // 读得到的账号照样可用,但这时的列表不完整:不能因为它的存在得出「没有账号能读」。
