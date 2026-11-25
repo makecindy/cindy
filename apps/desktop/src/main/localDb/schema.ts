@@ -1666,7 +1666,8 @@ export const sessionGoals = sqliteTable(
     /** usageLimited 时记录的限额重置时刻(unix ms);到点自动续跑。其它状态为 null。 */
     usageResetAt: integer('usage_reset_at'),
     lastReason: text('last_reason'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    // 'acp' = plugin engine (docs/plans/acp-plugin-bridge.md); TS-only enum, no CHECK constraint.
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }).notNull(),
     startedAt: integer('started_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

@@ -133,27 +133,27 @@ describe('Goal dormant session restore', () => {
     );
   });
 
-  // Goals do not run plugin-engine (ACP) tasks (docs/plans/acp-plugin-bridge.md): a dormant one
-  // must not be resumed at all, and never on a built-in engine. Goal creation then reports the
-  // restore failure. Minimal input: persisted meta agentKind 'acp'. Unit fixture.
-  it('refuses a dormant plugin-engine task instead of resuming it', async () => {
+  // Goals run on plugin engine (ACP) tasks too (docs/plans/acp-plugin-bridge.md, 2026-11-25): a dormant
+  // one resumes on its own engine and source, never on a built-in engine. Before, it was refused and
+  // Goal creation failed. Minimal input: persisted meta agentKind 'acp' with its plugin source. Unit.
+  it('resumes a dormant plugin-engine task on its own engine', async () => {
+    const provider = 'acp-plugin:_ns__local__dsh-acp:dsh';
+    const pluginSession = { ...fakeSession(), agentKind: 'acp' } as unknown as Session;
     const deps = baseDeps({
       maker: {
         getSession: vi.fn(),
-        getSessionMeta: vi.fn().mockResolvedValue({ ...META, agentKind: 'acp' }),
-        createSession: vi.fn().mockResolvedValue(fakeSession()),
+        getSessionMeta: vi.fn().mockResolvedValue({ ...META, agentKind: 'acp', model: 'deepseek-v4' }),
+        createSession: vi.fn().mockResolvedValue(pluginSession),
       },
+      getSessionRow: vi.fn().mockResolvedValue({ providerId: provider }),
     });
 
-    await expect(restoreSessionForGoal('session-1', deps)).resolves.toBeUndefined();
+    await expect(restoreSessionForGoal('session-1', deps)).resolves.toBe(pluginSession);
 
-    expect(deps.maker.createSession).not.toHaveBeenCalled();
-    expect(deps.prepareOrcaStart).not.toHaveBeenCalled();
-    expect(deps.hydrateProvider).not.toHaveBeenCalled();
-    expect(deps.wireSession).not.toHaveBeenCalled();
-    expect(deps.warn).toHaveBeenCalledWith(
-      '[goal-host] goals are not available for plugin-engine tasks',
-      { sessionId: 'session-1' },
-    );
+    expect(deps.maker.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', providerId: provider, model: 'deepseek-v4', resumeSessionId: 'thread-1',
+    }));
+    expect(deps.wireSession).toHaveBeenCalledWith(pluginSession);
+    expect(deps.warn).not.toHaveBeenCalled();
   });
 });

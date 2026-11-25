@@ -8,7 +8,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import type { AgentKind, EngineKind, Maker } from '@cindy/maker-core';
+import type { AgentKind, Maker } from '@cindy/maker-core';
 
 import { accountUsageLimitFromExhaustedResets } from '../../shared/accountUsageLimit.js';
 import { isOpenCodeGoProvider, opencodeGoUsageEndpoint } from '../../shared/opencodeGoUsage.js';
@@ -27,7 +27,6 @@ import {
 } from '../maker-ipc/register.js';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { createMessage } from '../localDb/ipc/messages.js';
-import { isPluginEngineTask } from '../maker-host/engineKind.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
 import { getSessionRowSnapshot, touchSessionActivityInDb } from '../localDb/ipc/sessions.js';
 import {
@@ -56,13 +55,6 @@ export interface StartGoalControllerDeps {
   onUndispatchedUserTurn?: (sessionId: string) => void;
 }
 
-/** Goals do not run on plugin engines; every other live session keeps its Goal path. */
-function isGoalEngineSession<T extends { readonly agentKind: EngineKind }>(
-  session: T,
-): session is T & { readonly agentKind: AgentKind } {
-  return !isPluginEngineTask(session);
-}
-
 let _controller: GoalController | null = null;
 // Reuse the bounded startup gate, with one instance per controller lifetime.
 let _controllerReady = createMakerStartupGate();
@@ -80,11 +72,8 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
   const storage = new GoalStorage(deps.getDb);
   const controller = new GoalController({
     storage,
-    // Goal 只跑在内置引擎上;插件引擎任务的 live 会话不当作 Goal 会话(sessionRestore 同口径拒绝)。
-    getSession: (id): SessionLike | undefined => {
-      const session = deps.maker.getSession(id);
-      return session && isGoalEngineSession(session) ? session : undefined;
-    },
+    // 插件引擎任务同样跑 Goal(docs/plans/acp-plugin-bridge.md,2026-11-25 用户决定)。
+    getSession: (id): SessionLike | undefined => deps.maker.getSession(id),
     // 确保会话活着:已活直接返回;未活按存档 SessionMeta resume(spawn agent),
     // 仿 scheduler 心跳。修"开了对话没发消息 → goal 发不出第一轮"的根因。
     ensureSession: (id): Promise<SessionLike | undefined> =>
@@ -133,7 +122,11 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       });
     },
     // 按实际订阅账号处理限额错误与重置时刻；其它订阅保留主动配额检测。
-    getAccountLimit: async (agentKind, sessionId, turnError) => {
+    getAccountLimit: async (engineKind, sessionId, turnError) => {
+      // A plugin engine signs in on its own: Cindy holds no snapshot of that account. Its usage-limit
+      // errors carry their reset time (structured), which the controller reads before asking here.
+      if (engineKind === 'acp') return null;
+      const agentKind: AgentKind = engineKind;
       const row = await getSessionRowSnapshot(sessionId);
       const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
       const provider = providerId && getActiveCatalog().providers.find(p => p.id === providerId);
