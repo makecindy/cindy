@@ -54,11 +54,12 @@ export function BotSettingsDrawer() {
     ? bot.id
     : undefined;
   const rulesSessionId = rulesBotId && bot ? canonicalBotSessionId(bot) : undefined;
+  const [rulesCheck, setRulesCheck] = useState(0);
   const [rulesAction, setRulesAction] = useState<{
     botId: string;
     sessionId: string;
     routeKey: string;
-    open: () => Promise<void>;
+    open?: () => Promise<void>;
   } | null>(null);
 
   const requestedPage = searchParams.get('settingsPage');
@@ -79,6 +80,10 @@ export function BotSettingsDrawer() {
     let active = true;
     let opening = false;
     const isCurrent = () => active && isDataOwnerGenerationCurrent(owner);
+    const target = { botId: rulesBotId, sessionId: rulesSessionId, routeKey: location.key };
+    const markUnavailable = () => {
+      if (isCurrent()) setRulesAction(target);
+    };
     const isReady = async () => {
       const [workspace, session] = await Promise.all([
         workspaceApi.getStatus(rulesBotId),
@@ -87,22 +92,24 @@ export function BotSettingsDrawer() {
       return workspace.workspaceAvailable && session.status === 'active' &&
         session.source === 'bot' && session.workspaceKind === 'project' &&
         session.companion?.id === rulesBotId && session.companion.role === 'canonical' &&
-        !session.remoteHostId && !session.agentDeviceId && !session.worktreePath &&
+        !session.remoteHostId && !session.worktreePath &&
         session.workingDir === workspace.source;
     };
     void isReady().then((ready) => {
-      if (!ready || !isCurrent()) return;
+      if (!isCurrent()) return;
+      if (!ready) {
+        markUnavailable();
+        return;
+      }
       setRulesAction({
-        botId: rulesBotId,
-        sessionId: rulesSessionId,
-        routeKey: location.key,
+        ...target,
         open: async () => {
           if (opening || !isCurrent()) return;
           opening = true;
           try {
             if (!(await beforeCloseRef.current?.() ?? true) || !isCurrent()) return;
             if (!await isReady()) {
-              if (isCurrent()) setRulesAction(null);
+              markUnavailable();
               return;
             }
             if (!isCurrent()) return;
@@ -110,15 +117,19 @@ export function BotSettingsDrawer() {
             navigate(`/bots/${rulesBotId}/session/${rulesSessionId}`, { replace: true, flushSync: true });
             await openFileInSidebarFileBrowser(rulesSessionId, 'AGENTS.md');
           } catch {
-            if (isCurrent()) setRulesAction(null);
+            markUnavailable();
           } finally {
             opening = false;
           }
         },
       });
-    }, () => undefined);
+    }, markUnavailable);
     return () => { active = false; };
-  }, [location.key, navigate, rulesBotId, rulesSessionId]);
+  }, [location.key, navigate, rulesBotId, rulesSessionId, rulesCheck]);
+  const currentRulesAction = rulesAction?.botId === rulesBotId &&
+    rulesAction?.sessionId === rulesSessionId && rulesAction?.routeKey === location.key
+    ? rulesAction
+    : null;
   const blocker = useBlocker(({ currentLocation, nextLocation }) => {
     if (allowNavigation.current) {
       allowNavigation.current = false;
@@ -249,9 +260,9 @@ export function BotSettingsDrawer() {
                   beforeCloseRef={beforeCloseRef}
                   bot={bot}
                   onBack={performClose}
-                  onOpenWorkRules={rulesAction && rulesAction.botId === rulesBotId
-                    && rulesAction.sessionId === rulesSessionId && rulesAction.routeKey === location.key
-                    ? rulesAction.open
+                  onOpenWorkRules={currentRulesAction?.open}
+                  onRetryWorkRules={currentRulesAction && !currentRulesAction.open
+                    ? () => setRulesCheck((value) => value + 1)
                     : undefined}
                   onOpenSession={(sessionId, searchJump) => {
                     navigate(standardSessionRoute(sessionId), { state: searchJump ? { searchJump } : undefined });

@@ -6,7 +6,7 @@ import { BOT_PROFILE_SOURCE_MAX_LENGTH } from '../../../shared/botProfileSources
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { MainViewHistoryContext } from '@/contexts/MainViewHistoryContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { BotPortraitPicker } from './BotPortraitPicker';
@@ -109,6 +109,7 @@ export function BotSettings({
   onBack,
   onOpenSession,
   onOpenWorkRules,
+  onRetryWorkRules,
   beforeCloseRef,
   initialPage = 'home',
 }: {
@@ -118,6 +119,7 @@ export function BotSettings({
   onBack: () => void;
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
   onOpenWorkRules?: () => Promise<void>;
+  onRetryWorkRules?: () => void;
 }) {
   const { t } = useBotTranslation();
   const { confirm } = useConfirmDialog();
@@ -531,28 +533,36 @@ export function BotSettings({
             ) : null}
             <div className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
               {settingsRows.map(([next, Icon, title]) => (
-                <button
-                  key={next}
-                  ref={(node) => {
-                    if (node) settingsRowRefs.current.set(next, node);
-                    else settingsRowRefs.current.delete(next);
-                  }}
-                  type="button"
-                  disabled={next === 'workRules' && !onOpenWorkRules}
-                  onClick={() => next === 'workRules' ? void onOpenWorkRules?.() : go(next)}
-                  className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-default)] px-4 py-3 text-left text-14 text-[var(--text-primary)] outline-none last:border-b-0 enabled:hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
-                >
-                  <Icon size={18} className="shrink-0 text-[var(--text-secondary)]" />
-                  <span className="min-w-0 flex-1">
-                    {title}
-                    {next === 'workRules' || (next === 'personality' && !isRemote && bot.capabilities.projectMode) ? (
-                      <span className="mt-0.5 block text-12 leading-5 text-[var(--text-secondary)]">
-                        {t(next === 'workRules' ? 'bots.profile.workRulesHint' : 'bots.profile.personalityHint')}
-                      </span>
-                    ) : null}
-                  </span>
-                  <ChevronRight size={14} className="shrink-0 text-[var(--text-tertiary)]" />
-                </button>
+                <Fragment key={next}>
+                  <button
+                    ref={(node) => {
+                      if (node) settingsRowRefs.current.set(next, node);
+                      else settingsRowRefs.current.delete(next);
+                    }}
+                    type="button"
+                    disabled={next === 'workRules' && !onOpenWorkRules}
+                    onClick={() => next === 'workRules' ? void onOpenWorkRules?.() : go(next)}
+                    className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-default)] px-4 py-3 text-left text-14 text-[var(--text-primary)] outline-none last:border-b-0 enabled:hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
+                  >
+                    <Icon size={18} className="shrink-0 text-[var(--text-secondary)]" />
+                    <span className="min-w-0 flex-1">
+                      {title}
+                      {next === 'workRules' || (next === 'personality' && !isRemote && bot.capabilities.projectMode) ? (
+                        <span className="mt-0.5 block text-12 leading-[1.667] text-[var(--text-secondary)]">
+                          {t(next === 'workRules' ? 'bots.profile.workRulesHint' : 'bots.profile.personalityHint')}
+                        </span>
+                      ) : null}
+                    </span>
+                    <ChevronRight size={14} className="shrink-0 text-[var(--text-tertiary)]" />
+                  </button>
+                  {next === 'workRules' && onRetryWorkRules ? (
+                    <div className="flex justify-end border-b border-[var(--border-default)] px-4 py-2">
+                      <Button variant="secondary" size="sm" compact onClick={onRetryWorkRules}>
+                        {t('commonUi.retry')}
+                      </Button>
+                    </div>
+                  ) : null}
+                </Fragment>
               ))}
             </div>
             {!isRemote ? (
