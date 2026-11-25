@@ -108,6 +108,7 @@ export function BotSettings({
   bot,
   onBack,
   onOpenSession,
+  onOpenWorkRules,
   beforeCloseRef,
   initialPage = 'home',
 }: {
@@ -116,6 +117,7 @@ export function BotSettings({
   beforeCloseRef?: { current: (() => Promise<boolean>) | null };
   onBack: () => void;
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
+  onOpenWorkRules?: () => Promise<void>;
 }) {
   const { t } = useBotTranslation();
   const { confirm } = useConfirmDialog();
@@ -455,6 +457,7 @@ export function BotSettings({
   const settingsRows = ([
     ['profile', botSettingsIcons.profile, t('bots.profile.title')],
     ['personality', botSettingsIcons.personality, t('bots.profile.personality')],
+    ['workRules', botSettingsIcons.workRules, t('bots.profile.workRules')],
     ['memory', botSettingsIcons.memory, t('bots.memory.title')],
     ['projects', botSettingsIcons.projects, t('bots.projects.title')],
     // A V2 teammate's automations are its project's own (2026-11-10).
@@ -466,7 +469,9 @@ export function BotSettings({
     ['history', botSettingsIcons.history, t('bots.historySearch.title')],
     // The Home folder is a path on the teammate's own computer.
     ['advanced', botSettingsIcons.advanced, t('bots.homeFolder.title')],
-  ] as const).filter(([id]) => target.pages.has(id) && (id !== 'automations' || capabilities.projectMode === true));
+  ] as const).filter(([id]) => id === 'workRules'
+    ? !isRemote && bot.capabilities.projectMode === true
+    : target.pages.has(id) && (id !== 'automations' || capabilities.projectMode === true));
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8">
       <div className="mx-auto w-full max-w-xl">
@@ -533,11 +538,19 @@ export function BotSettings({
                     else settingsRowRefs.current.delete(next);
                   }}
                   type="button"
-                  onClick={() => void go(next)}
-                  className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-default)] px-4 py-3 text-left text-14 text-[var(--text-primary)] outline-none last:border-b-0 hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
+                  disabled={next === 'workRules' && !onOpenWorkRules}
+                  onClick={() => next === 'workRules' ? void onOpenWorkRules?.() : go(next)}
+                  className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-default)] px-4 py-3 text-left text-14 text-[var(--text-primary)] outline-none last:border-b-0 enabled:hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
                 >
                   <Icon size={18} className="shrink-0 text-[var(--text-secondary)]" />
-                  <span className="min-w-0 flex-1">{title}</span>
+                  <span className="min-w-0 flex-1">
+                    {title}
+                    {next === 'workRules' || (next === 'personality' && !isRemote && bot.capabilities.projectMode) ? (
+                      <span className="mt-0.5 block text-12 leading-5 text-[var(--text-secondary)]">
+                        {t(next === 'workRules' ? 'bots.profile.workRulesHint' : 'bots.profile.personalityHint')}
+                      </span>
+                    ) : null}
+                  </span>
                   <ChevronRight size={14} className="shrink-0 text-[var(--text-tertiary)]" />
                 </button>
               ))}

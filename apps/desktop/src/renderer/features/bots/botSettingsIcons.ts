@@ -1,9 +1,10 @@
-import { AudioLines, Brain, Clock3, FolderOpen, History, Info, MessageCircle, Settings2, Sparkles, UserRound, type LucideIcon } from 'lucide-react';
+import { AudioLines, Brain, Clock3, FileText, FolderOpen, History, Info, MessageCircle, Settings2, Sparkles, UserRound, type LucideIcon } from 'lucide-react';
 
 /** One icon per teammate-settings entry; the settings list and the Bot Market detail modules draw from this table. */
 export const botSettingsIcons = {
   profile: Info,
   personality: UserRound,
+  workRules: FileText,
   memory: Brain,
   projects: FolderOpen,
   model: Sparkles,
