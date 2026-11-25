@@ -15,6 +15,7 @@ import {
   SHARED_TASK_RELAY_CAPABILITY,
   type Envelope,
   type InvokePayload,
+  type InvokeResultPayload,
   type LinkAcceptPayload,
 } from '../protocol.js';
 import {
@@ -206,6 +207,53 @@ describe('host transport policy', () => {
 });
 
 describe('outbound invoke admission', () => {
+  // Unit: group settings and authorized share insights previously filled all 12
+  // ordinary slots. Exercise actual wire admission, including two scoped shares;
+  // task preparation/poll and Stop must still dispatch without a display reply.
+  it('keeps group and shared quota displays behind task traffic on the same physical host', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const pending: Promise<unknown>[] = [];
+    const peers = ['dev-b', providerShareHostPeer('share-a', 'dev-b'), providerShareHostPeer('share-b', 'dev-b')];
+    const displays: { peer: string; payload: InvokePayload }[] = [
+      { peer: peers[0], payload: { channel: 'provider-group:remote', args: [{ action: 'view', providerId: 'openai', display: 'roster' }] } },
+      { peer: peers[1], payload: { channel: 'provider-share:insights:v1', args: [{ version: 1, includeUsage: false }] } },
+      { peer: peers[2], payload: { channel: 'provider-share:insights:v1', args: [{ version: 1, includeUsage: true }] } },
+      { peer: peers[0], payload: { channel: 'provider-group:remote', args: [{ action: 'manage-share', command: { action: 'quota-account', providerId: 'openai' } }] } },
+    ];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack(['provider-share-v1']);
+      for (let n = 0; n < 12; n++) {
+        const display = displays[n % displays.length];
+        pending.push(h.client.invoke(display.peer, display.payload, 30_000).catch(e => e));
+      }
+      const task = h.client.invoke('dev-b', { channel: REMOTE_AGENT_CHANNEL, args: [{ op: 'poll', runs: [{ runId: 'run', cursor: 0 }] }] });
+      const stop = h.client.invoke(peers[1], { channel: REMOTE_AGENT_CHANNEL, args: [{ op: 'call', runId: 'run', method: 'abort' }] });
+      pending.push(task.catch(e => e), stop.catch(e => e));
+      await vi.advanceTimersByTimeAsync(0);
+      const frames = h.current().sent.filter(frame => frame.kind === 'invoke');
+      expect(frames.filter(frame => (frame.payload as InvokePayload).channel !== REMOTE_AGENT_CHANNEL)).toHaveLength(4);
+      const taskFrames = frames.filter(frame => (frame.payload as InvokePayload).channel === REMOTE_AGENT_CHANNEL);
+      expect(taskFrames).toHaveLength(2);
+      const answer = (frame: Envelope, result: unknown) => h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: frame.id, src: frame.dst, dst: 'dev-self',
+        ...(frame.providerShare ? { providerShare: { ...frame.providerShare, source: { role: 'host' }, target: { role: 'guest', memberId: 'member' } } } : {}),
+        payload: { ok: true, result } });
+      for (const frame of taskFrames) answer(frame, {});
+      await expect(Promise.all([task, stop])).resolves.toEqual([{ ok: true, result: {} }, { ok: true, result: {} }]);
+      // Simulate slow management replies: task/Stop already completed before
+      // advancing the wire by 10s. Then drain all 12 reads in bounded batches.
+      const answered = new Set(taskFrames.map(frame => frame.id));
+      for (let batch = 0; batch < 3; batch++) {
+        await vi.advanceTimersByTimeAsync(batch === 0 ? 10_000 : 0);
+        const ready = h.current().sent.filter(frame => frame.kind === 'invoke' && !answered.has(frame.id));
+        expect(ready).toHaveLength(4);
+        for (const frame of ready) { answered.add(frame.id); answer(frame, { display: 'x'.repeat(80_000) }); }
+      }
+      expect((await Promise.all(pending)).every(result => (result as InvokeResultPayload).ok)).toBe(true);
+      expect(h.current().sent.filter(frame => frame.kind === 'invoke')).toHaveLength(14);
+    } finally { h.client.stop(); await Promise.allSettled(pending); vi.useRealTimers(); }
+  });
+
   // Unit regression #11345: catalog/capability preloads still occupied all 12
   // ordinary slots after controls gained headroom. Hold 12 metadata replies at
   // the real client boundary: navigation/model writes must still reach the wire,

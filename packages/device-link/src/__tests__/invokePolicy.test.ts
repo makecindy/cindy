@@ -5,9 +5,26 @@ import {
   isCompletedInvokeRetryableReadChannel,
   resolveRemoteInvokeTimeoutMs,
   TASK_MIGRATION_CHANNEL,
+  resolveInvokePriority,
 } from '../index.js';
 
 describe('remote invoke policy boundaries', () => {
+  // Group display hints cannot alter task/permission RPC priority or retry safety.
+  it('demotes only explicit group display reads without changing live routing and mutation semantics', () => {
+    for (const request of [
+      { action: 'view', display: 'roster' }, { action: 'view', display: { memberKey: 'member', details: true } },
+      { action: 'manage-share', command: { action: 'quota-account' } },
+    ]) {
+      expect(resolveInvokePriority('provider-group:remote', undefined, [request])).toBe('background');
+      expect(canCoalesceRemoteListing({ channel: 'provider-group:remote', args: [request] })).toBe(false);
+    }
+    for (const request of [
+      { action: 'view' }, { action: 'pick', display: 'roster' }, { action: 'leases' },
+      { action: 'manage-share', command: { action: 'set-visibility' } },
+    ]) expect(resolveInvokePriority('provider-group:remote', undefined, [request])).toBe('foreground');
+    expect(isPeerResetRetryableReadChannel('provider-share:insights:v1')).toBe(false);
+  });
+
   it.each(['desktop', 'mobile'] as const)('allows a repository clone to finish on %s without replaying project creation', (platform) => {
     const channel = 'sidebar-settings:set-project-info';
     expect(resolveRemoteInvokeTimeoutMs(channel, [{ create: true, repositoryUrl: 'https://gitlab.com/a/b' }], platform)).toBe(360_000);
