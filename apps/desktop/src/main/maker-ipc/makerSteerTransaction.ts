@@ -1,6 +1,6 @@
 import { FORWARDED_REQUEST_RECEIPT, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import { MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from '../mcp-apps/message.js';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS } from '@cindy/maker-core';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, defusePluginEngineWireEnvelope } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewSteerIntent } from './autoReviewUserIntent.js';
 import { type MainOwnedSendContext } from '@cindy/maker-core';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -236,6 +236,9 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
       : undefined;
     if (appContext?.text) {
       steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, appContext.text);
+    }
+    if (sess.agentKind === 'acp') {
+      steerPayload = defusePluginEngineWireEnvelope(steerPayload as HandoffWireMessage, normalized as HandoffWireMessage);
     }
     try {
       assertInputCurrent(sessionId, sendOpts);

@@ -315,6 +315,18 @@ describe('shouldPrependMobileClientPromptNote(内置命令旁路)', () => {
     expect(shouldPrependMobileClientPromptNote('/compact', 'pi')).toBe(false);
     expect(shouldPrependMobileClientPromptNote('/compact', 'codex')).toBe(true);
   });
+
+  it('ACP 插件引擎的句首斜杠指令保持在消息开头，多段文件路径不受影响', () => {
+    expect(shouldPrependMobileClientPromptNote('/plan', 'acp')).toBe(false);
+    expect(shouldPrependMobileClientPromptNote('/plan 重构登录流程', 'acp')).toBe(false);
+    expect(shouldPrependMobileClientPromptNote('/skill:learn', 'acp')).toBe(false);
+    expect(shouldPrependMobileClientPromptNote(
+      { type: 'user', content: [{ type: 'text', text: '/compact\n保留接口契约' }] },
+      'acp',
+    )).toBe(false);
+    expect(shouldPrependMobileClientPromptNote('/tmp/build.log 为什么失败', 'acp')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote('排查一下 /learn 为什么自动触发', 'acp')).toBe(true);
+  });
 });
 
 describe('stampMobileClientOrigin(IPC 边界盖章)', () => {

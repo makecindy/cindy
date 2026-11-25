@@ -28,6 +28,11 @@ import {
   mapEffortValues,
 } from './capabilities.js';
 import { AcpConnection, AcpConnectionClosedError, AcpRpcError, methodNotFound } from './connection.js';
+import {
+  defusePluginEngineHandoffPrefix,
+  defusePluginEngineSlashMentions,
+  isLeadingSlashCommand,
+} from './briefing.js';
 import type { AcpLineTransport, AcpTransportClosed } from './line-transport.js';
 import {
   ACP_ERROR_AUTH_REQUIRED,
@@ -39,6 +44,7 @@ import {
   readAcpCindyError,
   type AcpCindyError,
   asRecord,
+  normalizeAvailableCommandNames,
   normalizeConfigOptions,
   normalizeInitializeResult,
   normalizePermissionOptions,
@@ -136,6 +142,8 @@ export interface OpenAcpSessionOptions {
   briefing?: string | ((acceptedMcpServers: readonly string[]) => string);
   /** Current companion settings for the first prompt after restoring the native conversation. */
   resumedCompanionBriefing?: string;
+  /** Lowercase Skill names discovered for this session, so host briefings defuse `/skill` mentions. */
+  skillCommandNames?: readonly string[];
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
@@ -406,6 +414,8 @@ export class AcpSession {
   private readonly pendingPrompts: AcpContentBlock[][] = [];
   /** Sent once, ahead of the first prompt of a new session. */
   private pendingBriefing: string | null;
+  /** Slash-command names advertised by Skills or `available_commands_update`. */
+  private readonly commandNames = new Set<string>();
   private sendChain: Promise<void> = Promise.resolve();
   private stopGeneration = 0;
   private readonly permissionControllers = new Set<AbortController>();
@@ -452,6 +462,10 @@ export class AcpSession {
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
     const briefing = init.resumeOutcome === 'new' ? init.briefing : init.options.resumedCompanionBriefing;
     this.pendingBriefing = briefing?.trim() ? briefing : null;
+    for (const name of init.options.skillCommandNames ?? []) {
+      const trimmed = name.trim().replace(/^\/+/, '').toLowerCase();
+      if (trimmed) this.commandNames.add(trimmed);
+    }
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
@@ -533,8 +547,9 @@ export class AcpSession {
       if (this.ended || this.closing) throw new Error('ACP session is closed');
       // Stop also discards messages that were still being prepared, like queued ones.
       if (generation !== this.stopGeneration) return;
-      if (this.pendingBriefing) {
-        prompt.unshift({ type: 'text', text: this.pendingBriefing });
+      const firstText = prompt.find((block): block is Extract<AcpContentBlock, { type: 'text' }> => block.type === 'text')?.text ?? '';
+      if (this.pendingBriefing && !isLeadingSlashCommand(firstText)) {
+        prompt.unshift({ type: 'text', text: defusePluginEngineSlashMentions(this.pendingBriefing, this.commandNames) });
         this.pendingBriefing = null;
       }
       this.pendingPrompts.push(prompt);
@@ -722,6 +737,11 @@ export class AcpSession {
         if (modeId) this.applyCurrentModeUpdate(modeId);
         return;
       }
+      case 'available_commands_update':
+        for (const name of normalizeAvailableCommandNames(update.availableCommands)) {
+          this.commandNames.add(name.toLowerCase());
+        }
+        return;
       default:
         if (STATE_UPDATES.has(update.sessionUpdate)) return;
         this.emit(this.translator.handleUpdate(update));
@@ -971,7 +991,9 @@ export class AcpSession {
 
   private async toPrompt(message: UserMessage): Promise<AcpContentBlock[]> {
     if (typeof message.content === 'string') {
-      return message.content.length > 0 ? [{ type: 'text', text: message.content }] : [];
+      return message.content.length > 0
+        ? [{ type: 'text', text: defusePluginEngineHandoffPrefix(message.content, this.commandNames) }]
+        : [];
     }
     const blocks: AcpContentBlock[] = [];
     for (const block of message.content) blocks.push(await this.toContentBlock(block));
@@ -981,7 +1003,7 @@ export class AcpSession {
   private async toContentBlock(block: UserContentBlock): Promise<AcpContentBlock> {
     switch (block.type) {
       case 'text':
-        return { type: 'text', text: block.text };
+        return { type: 'text', text: defusePluginEngineHandoffPrefix(block.text, this.commandNames) };
       case 'image': {
         const mimeType = block.mimeType ?? IMAGE_MIME_BY_EXTENSION[extname(block.path).toLowerCase()];
         if (this.initializeResult.agentCapabilities.promptCapabilities.image && mimeType) {

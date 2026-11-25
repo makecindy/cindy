@@ -18,6 +18,7 @@ import {
   ASYNC_QUESTION_ANSWER,
   PINNED_SKILL_INVOCATION,
   LIBRARY_READ_ROOT,
+  defusePluginEngineWireEnvelope,
   type AgentKind,
   type EngineKind,
   type MainOwnedSendContext,
@@ -1767,6 +1768,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           const code = error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED';
           return toCompatibleMakerSendResult(createHostSendFailure(code, 'The selected runtime plugin stopped this reply.'));
         }
+      }
+      if (sess.agentKind === 'acp') {
+        outgoing = defusePluginEngineWireEnvelope(outgoing as HandoffWireMessage, normalized as HandoffWireMessage);
       }
       const assertAppCurrent = so[MCP_APP_MESSAGE_GUARD] || appContext?.text
         ? async () => {
