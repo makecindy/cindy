@@ -95,10 +95,13 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
           <PluginToolChips key={item.pluginId} tools={tools} expanded={toolsExpanded} onOverflowChange={setToolsOverflow} />
         </View>
       ) : null}
-      <View style={styles.section}>
-        <Text style={styles.heading}>{t("plugins.market.securityTitle")}</Text>
-        <View style={styles.card}><Text style={styles.note}>{t("plugins.market.securityBody")}</Text></View>
-      </View>
+      {/* "After you tap Install…" does not apply while Install is unavailable here (the note above says why). */}
+      {state.kind !== "sourceUnverified" ? (
+        <View style={styles.section} testID="plugins.market.security">
+          <Text style={styles.heading}>{t("plugins.market.securityTitle")}</Text>
+          <View style={styles.card}><Text style={styles.note}>{t("plugins.market.securityBody")}</Text></View>
+        </View>
+      ) : null}
       <View style={styles.section} testID="plugins.market.facts">
         <Text style={styles.heading}>{t("plugins.detail.details")}</Text>
         {pluginMarketFacts(item, t).map((fact) => (

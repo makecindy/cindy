@@ -28,10 +28,21 @@ export function isPinnedHighRiskPermission(item: Pick<PluginPermissionItem, "key
 }
 
 /**
- * The pinned summary's share of the window height. Every line is shown in full (no per-line truncation); when the
- * summary is taller, it scrolls inside this bound, so the information above it and the buttons always stay in view.
+ * Height bound of the pinned summary's lines. Every line is shown in full (no per-line truncation); beyond the bound
+ * the lines scroll inside it. The bound is what is left of the sheet after the parts that must stay in view without
+ * scrolling: the identity block at the top of the list (name, target computer, source, repository, source notes),
+ * the summary heading and the buttons, all measured on screen, plus fixed padding. Before those are measured, a
+ * conservative share of the sheet is used. Never below a floor that keeps one line visible and scrollable.
  */
-export const PINNED_HIGH_RISK_MAX_HEIGHT_RATIO = 0.3;
+export const PINNED_HIGH_RISK_MIN_HEIGHT = 44;
+export function pinnedHighRiskMaxHeight(sheet: { available: number; chrome: number; identity: number; heading: number; actions: number }): number {
+  if (sheet.identity <= 0 || sheet.actions <= 0) return Math.max(PINNED_HIGH_RISK_MIN_HEIGHT, Math.floor(sheet.available * 0.25));
+  const room = sheet.available - sheet.chrome - sheet.identity - sheet.heading - sheet.actions;
+  return Math.max(PINNED_HIGH_RISK_MIN_HEIGHT, Math.floor(room));
+}
+
+/** Fixed order of the pinned classes, whatever order the package declares them in. */
+const HIGH_RISK_CLASS_ORDER = ["node:execute", "node:secret", "node:resident", "agent:background", "agent:errand"];
 
 /** Same wording as the computer's install dialog (ghostInstallConsentSourceLabel). */
 function sourceLabel(consent: Consent, t: Translate): string {
@@ -115,10 +126,12 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
     ...item.labelArgs,
     defaultValue: item.kind,
   });
-  // Pinned above the buttons: one short fixed line per high-risk class, in the Host's order, so its height stays
+  // Pinned above the buttons: one short fixed line per high-risk class, in a fixed class order, so its height stays
   // bounded however many bindings or methods a package declares and however long their names are. Credential
   // bindings use a fixed line (one, or a count); the full list is in the scrolled permissions.
-  const pinned = granted.filter(isPinnedHighRiskPermission);
+  const classOf = (item: PluginPermissionItem) => item.key.startsWith("node:secret:") ? "node:secret" : item.key;
+  const pinned = granted.filter(isPinnedHighRiskPermission)
+    .sort((a, b) => HIGH_RISK_CLASS_ORDER.indexOf(classOf(a)) - HIGH_RISK_CLASS_ORDER.indexOf(classOf(b)));
   const secretCount = pinned.filter((item) => item.key.startsWith("node:secret:")).length;
   const highRiskLines: string[] = [];
   const seenClasses = new Set<string>();

@@ -465,5 +465,6 @@
     "sourceUnverified": "This computer hasn’t shared the repository for this marketplace yet, so it can’t be installed from your phone. Refresh this marketplace on the computer and try again; if Cindy on the computer is older, update it first, or install on the computer.",
     "sourceUnverifiedShort": "This computer hasn’t shared the repository yet. Refresh this marketplace on the computer and try again, or install there.",
     "sourceChanged": "This marketplace’s source just changed. Choose the plugin to install again."
-  }
+  },
+  "gotIt": "Got it"
 }

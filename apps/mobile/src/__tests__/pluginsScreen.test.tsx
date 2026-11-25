@@ -550,7 +550,7 @@ it.each(["reconnect", "return"])(
       model: { status: "disabled", canUseTasks: false },
     });
     expect(fixture.invoke).toHaveBeenCalledTimes(1);
-    expect(fixture.alert).toHaveBeenCalledWith("plugins.actionFailed");
+    expect(fixture.alert).toHaveBeenCalledWith("plugins.actionFailed", undefined, [{ text: "plugins.gotIt" }]);
   },
 );
 it("offers only a read retry when both the write reply and confirmation read fail", async () => {
@@ -591,7 +591,7 @@ it("locks duplicate taps, and a rejected write keeps the previous state without 
     enabled: true,
     busy: false,
   });
-  expect(fixture.alert).toHaveBeenCalledWith("plugins.actionFailed");
+  expect(fixture.alert).toHaveBeenCalledWith("plugins.actionFailed", undefined, [{ text: "plugins.gotIt" }]);
   expect(fixture.invoke).toHaveBeenCalledTimes(1);
 });
 it("does not change a plugin when its computer is offline", async () => {
@@ -781,7 +781,7 @@ it("guides setup to PC without opening configuration or creating a task", async 
   expect(detail.model.canUseTasks).toBe(true);
   expect(detail.children).toBeUndefined();
   await act(async () => detail.onResolveStatus());
-  expect(fixture.alert).toHaveBeenCalledWith("plugins.detail.computerSettings");
+  expect(fixture.alert).toHaveBeenCalledWith("plugins.detail.computerSettings", undefined, [{ text: "plugins.gotIt" }]);
   expect(fixture.push).not.toHaveBeenCalled();
   expect(fixture.invoke).not.toHaveBeenCalled();
 });
@@ -882,7 +882,7 @@ it.each(["update", "uninstall"])("reports %s preflight failure without an operat
   await openDetail();
   await act(async () => fixture.props.get("header").rightToolbar.props.onAction(action));
   if (action === "uninstall") await act(async () => fixture.alert.mock.calls.at(-1)![2][1].onPress());
-  expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed");
+  expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed", undefined, [{ text: "plugins.gotIt" }]);
 });
 it("discards an uninstall confirmation after navigating to another plugin", async () => {
   const { controller } = managedScreen();
@@ -911,7 +911,7 @@ it("requires an explicit review when the release changed before installing", asy
   expect(controller.install).not.toHaveBeenCalled();
   expect(controller.refresh).toHaveBeenCalled();
   expect(fixture.alert).toHaveBeenCalledWith(
-    "plugins.management.releaseChanged",
+    "plugins.management.releaseChanged", undefined, [{ text: "plugins.gotIt" }],
   );
 });
 it("mounts original settings with Host approval and retains the old-Host fallback", async () => {
@@ -1090,6 +1090,8 @@ describe("installed custom-market update and its source", () => {
     await act(async () => fixture.props.get("header").rightToolbar.props.onAction("update"));
     await settle(14);
     expect(fixture.wire.mock.calls.some((call) => call[2]?.[0]?.actionId === "management:begin")).toBe(false);
+    // Android layout re-check: the alert's button is localized (RN's default "OK" showed in English).
+    for (const call of fixture.alert.mock.calls) expect(call[2]).toEqual([{ text: "plugins.gotIt" }]);
     return fixture.alert.mock.calls.map((call) => call[0]);
   };
   it.each([
@@ -1219,7 +1221,7 @@ it("silently reads uncertain configuration once without clearing the detail or r
 it("reports a failed management operation once without a permanent refresh card", async () => {
   fixture.management = { state: { outcome: "failed", operationId: "failed-once", busy: false, capability: "supported", online: true, snapshot: null }, controller: null };
   await openDetail();
-  expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed");
+  expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed", undefined, [{ text: "plugins.gotIt" }]);
   await act(async () => root.render(createElement(PluginsScreen)));
   expect(fixture.alert).toHaveBeenCalledTimes(1);
   expect(fixture.invoke).not.toHaveBeenCalled();

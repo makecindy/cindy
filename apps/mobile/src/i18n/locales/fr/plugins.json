@@ -467,5 +467,6 @@
     "sourceUnverified": "Cet ordinateur n’a pas encore indiqué le dépôt de ce marketplace : l’installation depuis le téléphone n’est pas possible. Actualisez ce marketplace sur l’ordinateur puis réessayez ; si Cindy y est plus ancienne, mettez-la d’abord à jour, ou installez depuis l’ordinateur.",
     "sourceUnverifiedShort": "Cet ordinateur n’a pas encore indiqué le dépôt. Actualisez le marketplace sur l’ordinateur puis réessayez, ou installez depuis celui-ci.",
     "sourceChanged": "La source de ce marketplace vient de changer. Choisissez à nouveau le plugin à installer."
-  }
+  },
+  "gotIt": "Compris"
 }

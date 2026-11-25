@@ -68,6 +68,14 @@ it('serves showcase files without replacing legacy Markdown and media regression
   }
 });
 
+// Layout demo: an Agent-initiated plugin install from a custom market, as the Host's task card carries it.
+it('serves an Agent plugin install task card with the Host-generated source', async () => {
+  const mock = await import('@/debug/visualMock');
+  const link = mock.createVisualMockDeviceLinkContext();
+  const pending = await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'maker:get-pending-interactions', ['visual-plugin-install-card']) as any[];
+  expect(pending[0].request).toMatchObject({ toolName: 'cindy.plugin.install',
+    input: { operation: 'install', origin: 'custom-market', source: { kind: 'git', sourceId: 'DemoLongMarketSource01' } } });
+});
 it('supplies valid demo plugin projections and confirms enable/disable through the real client', async () => {
   const mock = await import('@/debug/visualMock');
   const link = mock.createVisualMockDeviceLinkContext();
@@ -402,6 +410,11 @@ it('serves the market demo consents in the Host shape, including updates that ad
   const custom = await consentOf('demo-market/demo-repo-tools');
   expect(custom.consent).toMatchObject({ origin: 'custom-market', originLabel: 'Demo Git Market', trust: 'unverified',
     installationSource: { kind: 'third-party' }, originSource: { kind: 'git', repository: 'github.com/demo-org/demo-git-market' } });
+  // Layout demos: a long repository name with a ref and all five high-risk classes; a local-folder market.
+  const longRepo = (await consentOf('demo-market/demo-long-repo-tools')).consent;
+  expect(longRepo.originSource).toMatchObject({ kind: 'git', ref: 'release/2026-11' });
+  expect(pluginConsentPresentation(longRepo, (key: string) => key).highRisk!.lines).toHaveLength(5);
+  expect((await consentOf('demo-market/demo-folder-tools')).consent.originSource).toEqual({ kind: 'local', sourceId: 'DemoFolderMarketSrc001' });
   // Older Host demos: no repository identity on the new-install item, nor on the installed plugin's update consent.
   expect((await client.detail('demo-market/demo-legacy-tools')).sourceIdentity).toBeUndefined();
   const legacyUpdate = await consentOf('demo-market/demo-legacy-sync', '_root__demo-legacy-sync');
@@ -423,8 +436,8 @@ it('serves the market demo consents in the Host shape, including updates that ad
   expect(vault.permissions.filter((entry: any) => entry.key.startsWith('node:secret:'))).toHaveLength(4);
   expect(vault.permissions[1].detail.split('\n')).toHaveLength(16);
   const vaultSummary = pluginConsentPresentation(vaultConsent, (key: string) => key).highRisk!;
-  expect(vaultSummary.lines).toEqual(['plugins.management.permissions.nodeResident', 'plugins.management.permissions.nodeSecretCount',
-    'plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
+  expect(vaultSummary.lines).toEqual(['plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.nodeSecretCount',
+    'plugins.management.permissions.nodeResident', 'plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
   // The same extreme case as an update: only added items, all five classes and 4 × 16 methods.
   const vaultUpgrade = (await consentOf('demo-market/demo-vault-upgrade', '_root__demo-vault-upgrade')).consent;
   expect(vaultUpgrade.facts).toMatchObject({ kind: 'update', previousVersion: '1.3.0' });

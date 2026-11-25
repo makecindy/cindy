@@ -9,6 +9,7 @@ import {
   lineLimit,
   onGeometryChange,
   padding,
+  scrollIndicators,
   tint,
 } from "@expo/ui/swift-ui/modifiers";
 import { useTranslation } from "react-i18next";
@@ -20,7 +21,8 @@ import {
 } from "./usePluginConsent";
 import { useState } from "react";
 import { useWindowDimensions } from "react-native";
-import { PINNED_HIGH_RISK_MAX_HEIGHT_RATIO, pluginConsentPresentation } from "./pluginConsentPresentation";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { pinnedHighRiskMaxHeight, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -28,11 +30,23 @@ export function PluginManagementConfirmation(
     { colors } = useTheme();
   const { consent, visible, answer } = usePluginConsent(props);
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
-  const { height: windowHeight } = useWindowDimensions();
-  // The summary's lines are shown in full; it takes their height up to its bound and scrolls inside beyond that.
+  const { height: windowHeight, fontScale } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // The summary's lines are shown in full; beyond its bound they scroll inside. The bound keeps the identity block
+  // (title, computer, source, repository, source notes), the summary heading and the buttons in view without
+  // scrolling, from their measured heights. The sheet opens large when it has a summary: the window minus the top
+  // inset and the sheet's own header (title row and drag handle, which grow with text size).
   // A SwiftUI ScrollView takes all the height it is offered, so it gets an explicit height: the measured content
   // height, capped by the bound.
-  const summaryCap = Math.round(windowHeight * PINNED_HIGH_RISK_MAX_HEIGHT_RATIO);
+  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0 });
+  const measure = (key: keyof typeof measured) => (size: { height: number }) => {
+    const height = Math.ceil(size.height);
+    if (height > 0) setMeasured((current) => current[key] === height ? current : { ...current, [key]: height });
+  };
+  const sheetHeader = Math.ceil(64 * Math.min(Math.max(fontScale, 1), 2)) + 10;
+  const summaryCap = pinnedHighRiskMaxHeight({ available: Math.floor(windowHeight - insets.top - sheetHeader),
+    chrome: spacing.sm * 2 /* list padding */ + spacing.sm * 3 /* footer spacing */ + spacing.xs + 12 /* footer bottom */ + insets.bottom,
+    ...measured });
   const [summaryHeight, setSummaryHeight] = useState(0);
   const body = (text?: string, lead = false) =>
     text ? (
@@ -71,12 +85,14 @@ export function PluginManagementConfirmation(
                   font({ textStyle: "subheadline", weight: "semibold" }),
                   foregroundStyle(colors.textPrimary),
                   lineLimit(1),
+                  onGeometryChange(measure("heading")),
                 ]}
               >
                 {info.highRisk.title}
               </Text>
+              {/* Scrolls inside its bound; the indicator stays visible so the hidden lines are discoverable. */}
               <ScrollView testID="plugins.management.highRiskScroll"
-                modifiers={[frame({ height: Math.min(summaryCap, summaryHeight || summaryCap) })]}>
+                modifiers={[frame({ height: Math.min(summaryCap, summaryHeight || summaryCap) }), scrollIndicators("visible")]}>
                 <VStack alignment="leading" spacing={spacing.xs}
                   modifiers={[frame({ maxWidth: Infinity, alignment: "leading" }),
                     onGeometryChange((size) => { if (size.height > 0) setSummaryHeight(size.height); })]}>
@@ -96,7 +112,7 @@ export function PluginManagementConfirmation(
               </ScrollView>
             </VStack>
           ) : null}
-          <HStack spacing={spacing.md}>
+          <HStack testID="plugins.management.actions" spacing={spacing.md} modifiers={[onGeometryChange(measure("actions"))]}>
             {[false, true].map((accept) => (
               <Button
                 key={String(accept)}
@@ -131,22 +147,25 @@ export function PluginManagementConfirmation(
         spacing={spacing.md}
         modifiers={[padding({ vertical: spacing.sm })]}
       >
-        <Text
-          modifiers={[
-            font({ textStyle: "headline" }),
-            foregroundStyle(colors.textPrimary),
-          ]}
-        >
-          {info?.title ?? ""}
-        </Text>
-        {/* Where it goes and where it comes from first, in primary text, so they stay in view with the
-            pinned high-risk summary at the medium detent; the explanations follow in secondary text. */}
-        {body(info?.device, true)}
-        {body(info?.origin, true)}
-        {body(info?.repository, true)}
-        {body(info?.originSourceChanged, true)}
-        {body(info?.sourceChanged, true)}
-        {body(info?.trust, true)}
+        {/* The identity block: where it goes and where it comes from first, in primary text, kept in view with the
+            pinned summary (measured for its bound); the explanations follow in secondary text. */}
+        <VStack testID="plugins.management.identity" alignment="leading" spacing={spacing.md}
+          modifiers={[onGeometryChange(measure("identity"))]}>
+          <Text
+            modifiers={[
+              font({ textStyle: "headline" }),
+              foregroundStyle(colors.textPrimary),
+            ]}
+          >
+            {info?.title ?? ""}
+          </Text>
+          {body(info?.device, true)}
+          {body(info?.origin, true)}
+          {body(info?.repository, true)}
+          {body(info?.originSourceChanged, true)}
+          {body(info?.sourceChanged, true)}
+          {body(info?.trust, true)}
+        </VStack>
         {body(info?.sourceNotice)}
         {body(info?.version)}
         {body(info?.identity)}

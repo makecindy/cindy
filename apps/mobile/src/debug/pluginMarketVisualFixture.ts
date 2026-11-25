@@ -49,6 +49,8 @@ interface DemoPlugin {
   legacySource?: true;
   /** Installed from another source than the market's current one: its update consent says the source changed. */
   sourceMoved?: true;
+  /** Custom markets other than Demo Git Market: a long repository name with a ref, or a local folder. */
+  market?: "long" | "folder";
 }
 type DemoPermission = { key: string; kind: string; labelKey: string; labelArgs?: Record<string, string>; detailKey?: string; detail?: string };
 // Same keys, kinds and copy keys as the Host's ghostPermissionItems; node:execute is the one it calls high risk.
@@ -129,6 +131,14 @@ const DEMOS: DemoPlugin[] = [
   { ghostId: "demo-auto-agent", name: "Demo Auto Agent", publisher: "official", author: "Cindy",
     description: "Start Agent work in the background and hand errands to an Agent.", tools: ["demo_start_errand"],
     permissions: [agentErrand, agentBackground, agentUserAction, notify] },
+  // Layout check: a custom market with a long repository name and ref, and all five high-risk classes.
+  { ghostId: "demo-long-repo-tools", name: "Demo Long Repository Tools", publisher: "custom", author: null, market: "long",
+    description: "From a custom market whose repository name is long. Asks for every high-risk class.", tools: ["demo_long_tools"],
+    permissions: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand, network("long.example.com")] },
+  // A market added from a local folder on the computer: the consent says "Local folder".
+  { ghostId: "demo-folder-tools", name: "Demo Folder Tools", publisher: "custom", author: null, market: "folder",
+    description: "From a marketplace in a local folder on the computer.", tools: ["demo_folder_tools"],
+    permissions: [nodeExecute(), network("folder.example.com")] },
   // An update whose source differs from the installed instance's (the computer forces the consent and says so).
   { ghostId: "demo-moved-source", name: "Demo Moved Source", publisher: "custom", author: null, sourceMoved: true,
     description: "Installed from another repository than the market now points to. Its update says the source changed.",
@@ -138,7 +148,8 @@ const DEMOS: DemoPlugin[] = [
   { ghostId: "demo-legacy-tools", name: "Demo Legacy Tools", publisher: "custom", author: null, legacySource: true,
     description: "From a custom market on an older computer version that does not name its repository.",
     tools: ["demo_legacy_check"], permissions: [nodeExecute(), network("legacy.example.com")] },
-  // Older Host, already installed: the update stays allowed and says where to check the source on the computer.
+  // Older Host, already installed: without a source the update cannot be allowed on the phone; the installed
+  // detail's update stops before begin and says to refresh or update on the computer.
   { ghostId: "demo-legacy-sync", name: "Demo Legacy Sync", publisher: "custom", author: null, legacySource: true,
     description: "Installed from a custom market on an older computer version. Its update adds notifications.",
     tools: ["demo_legacy_sync"], permissions: [network("legacy.example.com"), notify], installedVersion: "1.3.0",
@@ -158,7 +169,17 @@ const CUSTOM_MARKET = "Demo Git Market";
 const CUSTOM_MARKET_SOURCE = { kind: "git" as const, repository: "github.com/demo-org/demo-git-market", sourceId: "DemoGitMarketSource001" };
 const OFFLINE_MARKET = "Demo Offline Market";
 const LEGACY_MARKET = "Demo Legacy Market";
-const marketName = (demo: DemoPlugin) => demo.legacySource ? LEGACY_MARKET : CUSTOM_MARKET;
+const LONG_MARKET = "Demo Long Repository Market";
+const FOLDER_MARKET = "Demo Folder Market";
+const LONG_MARKET_SOURCE = { kind: "git" as const, ref: "release/2026-11",
+  repository: "github.com/demo-organization-with-a-long-name/demo-plugin-marketplace-with-a-very-long-repository-name",
+  sourceId: "DemoLongMarketSource01" };
+const FOLDER_MARKET_SOURCE = { kind: "local" as const, sourceId: "DemoFolderMarketSrc001" };
+const marketName = (demo: DemoPlugin) => demo.legacySource ? LEGACY_MARKET
+  : demo.market === "long" ? LONG_MARKET : demo.market === "folder" ? FOLDER_MARKET : CUSTOM_MARKET;
+const marketSource = (demo: DemoPlugin) => demo.market === "long" ? LONG_MARKET_SOURCE
+  : demo.market === "folder" ? FOLDER_MARKET_SOURCE : CUSTOM_MARKET_SOURCE;
+const CUSTOM_SOURCE_NAMES = [CUSTOM_MARKET, LEGACY_MARKET, LONG_MARKET, FOLDER_MARKET];
 const installed = new Map<string, { demo: DemoPlugin; enabled: boolean; version: string }>();
 const operations = new Map<string, { kind: "install" | "update" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled" }>();
 const instanceKey = (ghostId: string) => `_root__${ghostId}`;
@@ -182,11 +203,11 @@ function marketItem(demo: DemoPlugin): ManagedMarketItem {
     releaseId: `${demo.ghostId}@${RELEASE}`, version: RELEASE, publishedAt: "2026-11-01T00:00:00.000Z", icon: null,
     installState: demo.conflict ? "conflict" : !entry ? "not-installed" : entry.version === RELEASE ? "installed" : "update-available",
     enabled: entry?.enabled ?? null,
-    sourceType: server ? "server" : "git-market", sourceMarketName: server ? null : marketName(demo),
-    ...(server || demo.legacySource ? {} : { sourceIdentity: CUSTOM_MARKET_SOURCE }),
+    sourceType: server ? "server" : demo.market === "folder" ? "local-market" : "git-market", sourceMarketName: server ? null : marketName(demo),
+    ...(server || demo.legacySource ? {} : { sourceIdentity: marketSource(demo) }),
     // The installed instance came from this item's source (newer Hosts only).
     ...(entry && !server && !demo.legacySource
-      ? { installedSourceId: demo.sourceMoved ? "DemoOldMarketSource001" : CUSTOM_MARKET_SOURCE.sourceId } : {}),
+      ? { installedSourceId: demo.sourceMoved ? "DemoOldMarketSource001" : marketSource(demo).sourceId } : {}),
     ...(entry && entry.version !== RELEASE ? { updateRequiresConsent: true as const } : {}),
   };
 }
@@ -222,7 +243,7 @@ function catalog(query: Record<string, unknown> = {}) {
   return {
     items: page,
     unavailableReason: scenario === "unavailable" ? "MARKET_UNAVAILABLE" : null,
-    customSourceNames: scenario === "customPartial" ? [CUSTOM_MARKET, LEGACY_MARKET, OFFLINE_MARKET] : [CUSTOM_MARKET, LEGACY_MARKET],
+    customSourceNames: scenario === "customPartial" ? [...CUSTOM_SOURCE_NAMES, OFFLINE_MARKET] : CUSTOM_SOURCE_NAMES,
     unavailableCustomSourceNames: scenario === "customPartial" ? [OFFLINE_MARKET] : [],
     organizationAccessError: scenario === "organization" ? "PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE" : null,
     nextCursor: offset + page.length < inScope.length ? String(offset + page.length) : null,
@@ -235,7 +256,7 @@ function ghost(key: string, entry: { demo: DemoPlugin; enabled: boolean; version
 }
 function snapshot() {
   return { version: 1, ghosts: [...installed].map(([key, entry]) => ghost(key, entry)),
-    market: { items: DEMOS.map(marketItem), unavailableReason: null, customSourceNames: [CUSTOM_MARKET, LEGACY_MARKET],
+    market: { items: DEMOS.map(marketItem), unavailableReason: null, customSourceNames: CUSTOM_SOURCE_NAMES,
       unavailableCustomSourceNames: [] } };
 }
 function receipt(operationId: string) {
@@ -249,7 +270,7 @@ function receipt(operationId: string) {
   const entry = installed.get(instanceKey(demo.ghostId));
   if (!op.answered) return { operationId, phase: "confirmation", consent: {
     requestId: `demo-consent-${operationId}`, initiator: "user", origin: demo.publisher === "custom" ? "custom-market" : "market",
-    ...(demo.publisher === "custom" ? { originLabel: marketName(demo), ...(demo.legacySource ? {} : { originSource: CUSTOM_MARKET_SOURCE }) } : {}),
+    ...(demo.publisher === "custom" ? { originLabel: marketName(demo), ...(demo.legacySource ? {} : { originSource: marketSource(demo) }) } : {}),
     // Host: an update from another (verifiable) source than the installed instance's carries originSourceChanged.
     ...(demo.sourceMoved && op.kind === "update" ? { originSourceChanged: true as const } : {}),
     // The Host marks a verified public community publisher; the phone shows the community notice.

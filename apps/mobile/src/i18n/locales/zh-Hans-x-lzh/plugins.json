@@ -463,5 +463,6 @@
     "sourceUnverified": "此机暂未示此坊之库，暂不能自手机纳之。请于电脑刷新此坊再试；若电脑之 Cindy 旧，请先更新，或径于电脑纳之。",
     "sourceUnverifiedShort": "此机暂未示库。请于电脑刷新此坊再试，或于电脑纳之。",
     "sourceChanged": "此坊之源方易，请复择所欲纳之法器。"
-  }
+  },
+  "gotIt": "知矣"
 }

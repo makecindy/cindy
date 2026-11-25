@@ -15,7 +15,8 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { PINNED_HIGH_RISK_MAX_HEIGHT_RATIO, pluginConsentPresentation } from "./pluginConsentPresentation";
+import { useState } from "react";
+import { pinnedHighRiskMaxHeight, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -24,8 +25,18 @@ export function PluginManagementConfirmation(
   const { consent, visible, answer } = usePluginConsent(props);
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
   const { height: windowHeight } = useWindowDimensions();
-  // The summary's lines are shown in full; beyond its bound it scrolls inside (a ScrollView hugs shorter content).
-  const summaryCap = Math.round(windowHeight * PINNED_HIGH_RISK_MAX_HEIGHT_RATIO);
+  // The summary's lines are shown in full; beyond its bound they scroll inside (a ScrollView hugs shorter content).
+  // The bound keeps the identity block (titles, computer, source, repository, source notes) and the buttons in view
+  // without scrolling, from their measured heights; the sheet itself is at most 85% of the window.
+  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0 });
+  const measure = (key: keyof typeof measured) => (event: { nativeEvent: { layout: { height: number } } }) => {
+    const height = Math.ceil(event.nativeEvent.layout.height);
+    setMeasured((current) => current[key] === height ? current : { ...current, [key]: height });
+  };
+  const sheetPadding = spacing.lg + spacing.xs;
+  const summaryCap = pinnedHighRiskMaxHeight({ available: Math.floor(windowHeight * 0.85),
+    chrome: sheetPadding * 2 + spacing.md /* list bottom padding */ + spacing.md * 2 + spacing.xs /* summary padding, gap */,
+    ...measured });
   return (
     <SheetModal
       nativePresentation
@@ -35,19 +46,21 @@ export function PluginManagementConfirmation(
     >
       <View style={styles.sheet} testID="plugins.managementConfirmation">
         <ScrollView contentContainerStyle={styles.content}>
-          <Text style={styles.title}>
-            {t("plugins.notice.title.confirmation")}
-          </Text>
-          <Text style={styles.title}>{info?.title}</Text>
-          {/* Where it goes and where it comes from first, in primary text, so they stay in view with the
-              pinned high-risk summary on short screens; the explanations follow in secondary text. */}
-          {[info?.device, info?.origin, info?.repository, info?.originSourceChanged, info?.sourceChanged, info?.trust]
-            .filter(Boolean)
-            .map((text, index) => (
-              <Text key={"lead" + index} style={styles.lead}>
-                {text}
-              </Text>
-            ))}
+          {/* The identity block: where it goes and where it comes from first, in primary text, kept in view with the
+              pinned summary on short screens (measured for its bound); the explanations follow in secondary text. */}
+          <View testID="plugins.management.identity" style={styles.identity} onLayout={measure("identity")}>
+            <Text style={styles.title}>
+              {t("plugins.notice.title.confirmation")}
+            </Text>
+            <Text style={styles.title}>{info?.title}</Text>
+            {[info?.device, info?.origin, info?.repository, info?.originSourceChanged, info?.sourceChanged, info?.trust]
+              .filter(Boolean)
+              .map((text, index) => (
+                <Text key={"lead" + index} style={styles.lead}>
+                  {text}
+                </Text>
+              ))}
+          </View>
           {[info?.sourceNotice, info?.version, info?.identity]
             .filter(Boolean)
             .map((text, index) => (
@@ -73,8 +86,10 @@ export function PluginManagementConfirmation(
         {info?.highRisk ? (
           // Bounded summary: every line in full, scrolling inside its height bound; full details are in the scrolled list.
           <View testID="plugins.management.highRisk" style={styles.highRisk}>
-            <Text numberOfLines={1} style={styles.highRiskTitle}>{info.highRisk.title}</Text>
-            <ScrollView testID="plugins.management.highRiskScroll" nestedScrollEnabled style={{ maxHeight: summaryCap }}
+            <Text numberOfLines={1} style={styles.highRiskTitle} onLayout={measure("heading")}>{info.highRisk.title}</Text>
+            {/* Scrolls inside its bound; the bar stays visible so the hidden lines are discoverable. */}
+            <ScrollView testID="plugins.management.highRiskScroll" nestedScrollEnabled persistentScrollbar
+              style={{ maxHeight: summaryCap }}
               contentContainerStyle={styles.highRiskLines}>
               {info.highRisk.lines.map((line, index) => (
                 <Text key={index} style={styles.highRiskBody}>{line}</Text>
@@ -82,7 +97,7 @@ export function PluginManagementConfirmation(
             </ScrollView>
           </View>
         ) : null}
-        <View style={styles.actions}>
+        <View testID="plugins.management.actions" style={styles.actions} onLayout={measure("actions")}>
           {[false, true].map((accept) => (
             <Pressable
               key={String(accept)}
@@ -115,6 +130,7 @@ const makeStyles = (c: ThemeColors) =>
       padding: spacing.lg + spacing.xs,
     },
     content: { gap: spacing.md, paddingBottom: spacing.md },
+    identity: { gap: spacing.md },
     permission: { gap: spacing.xs },
     title: {
       fontSize: typeScale.body,

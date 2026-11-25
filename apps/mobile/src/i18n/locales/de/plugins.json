@@ -465,5 +465,6 @@
     "sourceUnverified": "Dieser Computer hat das Repository dieses Marktplatzes noch nicht angegeben. Installieren vom Handy ist daher nicht möglich. Aktualisiere den Marktplatz am Computer und versuche es erneut; ist Cindy dort älter, aktualisiere Cindy zuerst oder installiere am Computer.",
     "sourceUnverifiedShort": "Dieser Computer hat das Repository noch nicht angegeben. Aktualisiere den Marktplatz am Computer und versuche es erneut oder installiere dort.",
     "sourceChanged": "Die Quelle dieses Marktplatzes hat sich gerade geändert. Wähle das Plugin erneut aus."
-  }
+  },
+  "gotIt": "Verstanden"
 }

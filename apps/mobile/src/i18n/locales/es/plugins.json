@@ -467,5 +467,6 @@
     "sourceUnverified": "Este ordenador aún no ha indicado el repositorio de este mercado, así que no se puede instalar desde el teléfono. Actualiza este mercado en el ordenador y vuelve a intentarlo; si Cindy en el ordenador es más antigua, actualízala primero o instala allí.",
     "sourceUnverifiedShort": "Este ordenador aún no ha indicado el repositorio. Actualiza el mercado en el ordenador y vuelve a intentarlo, o instala allí.",
     "sourceChanged": "El origen de este mercado acaba de cambiar. Vuelve a elegir el complemento que quieres instalar."
-  }
+  },
+  "gotIt": "Entendido"
 }

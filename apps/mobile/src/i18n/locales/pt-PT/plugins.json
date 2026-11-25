@@ -467,5 +467,6 @@
     "sourceUnverified": "Este computador ainda não indicou o repositório deste mercado, por isso não é possível instalar a partir do telemóvel. Atualize este mercado no computador e tente novamente; se a Cindy no computador for mais antiga, atualize-a primeiro ou instale a partir dele.",
     "sourceUnverifiedShort": "Este computador ainda não indicou o repositório. Atualize o mercado no computador e tente novamente, ou instale a partir dele.",
     "sourceChanged": "A origem deste mercado acabou de mudar. Escolha novamente o plugin a instalar."
-  }
+  },
+  "gotIt": "Compreendido"
 }

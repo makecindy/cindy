@@ -106,6 +106,9 @@ const codexFormQuestions = () => [
 const codexQuestionIds = [0, 1].map((i) => JSON.stringify(['request_user_input_async', 'visual-codex', i]));
 let codexQuestionAnswers: Record<string, string> | null = null;
 let codexUrlCompleted = false;
+// Agent-initiated plugin install from a custom market (Host-owned confirmation task card, cindy.plugin.install).
+const pluginInstallCardSession = 'visual-plugin-install-card';
+let pluginInstallCardAnswered = false;
 const codexQuestions = () => codexQuestionIds.map((id) => ({ id, question: '验收结果？', options: [{ label: 'A' }, { label: 'B' }] }));
 const NOW = Date.parse('2026-07-18T08:00:00.000Z');
 const ISO_NOW = new Date(NOW).toISOString();
@@ -426,6 +429,11 @@ async function visualMockInvoke<T = unknown>(
       String((args[0] as { url?: string })?.url ?? ""),
     );
     if (fixture) return fixture as T;
+  }
+  if (channel === 'maker:resolve-interaction' && args[0] === 'visual-plugin-install-card-request') {
+    pluginInstallCardAnswered = true;
+    remoteSessionStore.setPendingInteractions(pluginInstallCardSession, []);
+    return { accepted: true } as T;
   }
   if (channel === 'maker:resolve-interaction' && ['visual-codex-question-request', 'visual-codex-url-request', 'visual-codex-form-request'].includes(String(args[0]))) {
     const decision = args[1] as { kind?: string; answers?: Record<string, string>; behavior?: string; inProgress?: boolean };
@@ -837,6 +845,7 @@ function visualMockSession(id: string): RemoteSession {
   if (id === codexQuestionSession || id === codexUrlSession || id === codexFormSession) return { ...visualMockSession('ui-mock-rich-answer'), id,
     title: id === codexFormSession ? 'Codex 表单验收' : id === codexQuestionSession ? 'Codex 提问验收' : 'Codex 链接确认验收', agentKind: 'codex', _count: { messages: 3 } };
   if (id.startsWith('visual-entry-replay-')) return { ...visualMockSession('ui-mock-rich-answer'), id, title: id, _count: { messages: 0 } };
+  if (id === pluginInstallCardSession) return { ...visualMockSession('ui-mock-rich-answer'), id, title: 'Agent 安装插件确认', _count: { messages: 1 } };
   if (id === 'visual-teammate-b2b') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 内部通讯',
     companion: { id: 'visual-bot-b2b', role: 'canonical' } };
   if (id === 'visual-teammate-process') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' } };
@@ -882,6 +891,8 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
   if (sessionId === codexUrlSession) return [message(sessionId, 'codex-url-context', 'assistant',
     codexUrlCompleted ? '链接请求已回传。' : '服务请求你打开链接，完成后再确认。', -1000)];
   if (sessionId.startsWith('visual-entry-replay-')) return entryReplayMessages(sessionId);
+  if (sessionId === pluginInstallCardSession) return [message(sessionId, 'plugin-install-card-context', 'assistant',
+    pluginInstallCardAnswered ? '已回传安装决定。' : '需要安装一个插件来继续，请确认。', -1000)];
   if (sessionId === 'visual-teammate-b2b') {
     const trace = (direction: 'received' | 'sent', sequence: number) => ({ botDirectMessage: {
       v: 1, threadId: 'visual-b2b-thread', viewerBotId: 'visual-bot-b2b', peerBotId: 'visual-bot-lizi',
@@ -1043,6 +1054,15 @@ function visualMockPendingInteractions(sessionId: string): PendingInteraction[] 
   if (sessionId === codexQuestionSession) return codexQuestionAnswers === null ? [{ persistId: 'codex-ask', request: {
     kind: 'ask_user_question', requestId: 'visual-codex-question-request', delivery: 'async', questions: codexQuestions(),
   } }] : [];
+  // Same input shape as the Host's buildGhostInstallConsentInteraction (origin and the Host-generated source).
+  if (sessionId === pluginInstallCardSession) return pluginInstallCardAnswered ? [] : [{ request: {
+    kind: 'permission', requestId: 'visual-plugin-install-card-request', toolName: 'cindy.plugin.install',
+    metadata: { hostOwnedConfirmation: 'plugin_install' },
+    description: '安装插件 Demo Long Repository Tools 1.4.2\n来自自定义市场「Demo Long Repository Market」\n这个插件会获得以下权限：\n- 运行随包 Node 程序\n- 本机 Node 程序可获得已保存凭证',
+    input: { ghost_id: 'demo-long-repo-tools', version: '1.4.2', operation: 'install', origin: 'custom-market',
+      source: { kind: 'git', ref: 'release/2026-11', sourceId: 'DemoLongMarketSource01',
+        repository: 'github.com/demo-organization-with-a-long-name/demo-plugin-marketplace-with-a-very-long-repository-name' } },
+  } }];
   if (sessionId === codexUrlSession) return codexUrlCompleted ? [] : [{ request: {
     kind: 'permission', requestId: 'visual-codex-url-request', toolName: 'mcp_url',
     description: '在网页完成操作后返回并确认。', input: { url: 'https://example.com/connect', serverName: 'Example' },

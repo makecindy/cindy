@@ -156,6 +156,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
       "pickerStyle",
       "refreshable",
       "scrollContentBackground",
+      "scrollIndicators",
       "scrollDismissesKeyboard",
       "tag",
       "tint",
@@ -404,7 +405,9 @@ it("switches to the native market segment and routes row taps to detail, install
   bridge.props.clear();
   rerender({ ...p, segment: "market", market: { ...market, rowState: () => ({ kind: "waiting" }) } });
   expect(bridge.props.has("plugins.market.install.market/demo")).toBe(false);
-  expect(container.querySelector('[data-testid="plugins.market.progress.market/demo"]')?.textContent).toContain("plugins.market.waiting");
+  // The status is written under the name (as on Android); the spinner keeps the spoken label.
+  expect(container.querySelector('[data-testid="plugins.market.row.market/demo"]')?.textContent).toContain("plugins.market.waiting");
+  expect(bridge.props.get("plugins.market.progress.market/demo").modifiers).toContainEqual({ accessibilityLabel: "plugins.market.waiting" });
 });
 // iOS re-check (accessibility-large): the waiting row's trailing status squeezed a long name and the "Official"
 // label wrapped onto two lines. At large sizes the status moves under the name and the label never wraps.
@@ -1370,6 +1373,8 @@ describe("older Host without a repository identity", () => {
       expect(disabled("plugins.market.detailInstall")).toBe(true);
       // The full note (not the short row text); this test's Android Text stand-in keeps no testID.
       expect(container.textContent).toMatch(/plugins\.market\.sourceUnverified(?!Short)/);
+      // Android layout re-check: "After you tap Install…" does not apply while Install is unavailable.
+      expect(container.textContent).not.toContain("plugins.market.securityBody");
     });
 });
 
@@ -1452,7 +1457,7 @@ describe("pinned high-risk permission", () => {
   });
   it("Android keeps the pinned area within its height bound for the largest permission list", () => {
     mount(AndroidManagementConfirmation, props(manyBindings));
-    expect(bridge.props.get("plugins.management.highRiskScroll").style).toMatchObject({ maxHeight: Math.round(844 * 0.3) });
+    expect(bridge.props.get("plugins.management.highRiskScroll").style.maxHeight).toBeLessThanOrEqual(Math.floor(844 * 0.85 * 0.25));
   });
   // Android re-check of the pinned area: without a separator, a list title resting right above the summary read
   // as a repeat; the summary heading was smaller than the list's permission titles.
@@ -1472,32 +1477,48 @@ describe("pinned high-risk permission", () => {
     const title = (Array.isArray(pinned.children) ? pinned.children.flat() : [pinned.children]).filter(Boolean)[0];
     expect(title.props.style).toMatchObject({ fontSize: 15, fontWeight: "600" });
   });
-  // iOS layout re-check (3587f6ca, accessibility-large): rows capped at one or two lines cut the end of every summary
-  // line. Now every line is shown in full and the summary scrolls inside a bound of 30% of the window height (844 pt
-  // in this stand-in), so the information above and the buttons stay in view.
+  // iOS / Android layout re-checks (3587f6ca, accessibility-large and English short screen): capped rows cut the end
+  // of every line, and an unbounded summary pushed the computer and source out of view. Every line is shown in full,
+  // in a fixed class order, and scrolls inside a bound computed from the measured identity block, heading and buttons.
   const resident = { key: "node:resident", kind: "node", labelKey: "nodeResident", detailKey: "nodeResidentDetail" };
   const allFive = installOf([resident, secret, node, background, errand]);
-  const fiveLines = ["plugins.management.permissions.nodeResident", "plugins.management.permissions.nodeSecretOne",
-    "plugins.management.permissions.nodeRuntime", "plugins.management.permissions.agentBackground", "plugins.management.permissions.agentErrand"];
-  it("iOS shows every pinned line in full inside a bounded scroll area", () => {
+  const fiveLines = ["plugins.management.permissions.nodeRuntime", "plugins.management.permissions.nodeSecretOne",
+    "plugins.management.permissions.nodeResident", "plugins.management.permissions.agentBackground", "plugins.management.permissions.agentErrand"];
+  const geometry = (id: string, height: number) => act(() => {
+    bridge.props.get(id).modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 390, height });
+  });
+  it("iOS shows every pinned line in full and bounds it by the measured identity block and buttons", () => {
     bridge.fontScale = 2.4;
     mount(PluginManagementConfirmation, props(allFive));
-    const scroll = bridge.props.get("plugins.management.highRiskScroll");
-    const height = scroll.modifiers.find((m: any) => m.frame)?.frame.height;
-    expect(height).toBeGreaterThan(0);
-    expect(height).toBeLessThanOrEqual(Math.round(844 * 0.3));
-    const lines = (Array.isArray(scroll.children.props.children) ? scroll.children.props.children : [scroll.children.props.children]).flat();
+    const scroll = () => bridge.props.get("plugins.management.highRiskScroll");
+    const lines = (Array.isArray(scroll().children.props.children) ? scroll().children.props.children : [scroll().children.props.children]).flat();
     expect(lines.map((line: any) => line.props.children)).toEqual(fiveLines);
     for (const line of lines) expect(line.props.modifiers.some((m: any) => "lineLimit" in m)).toBe(false);
+    expect(scroll().modifiers).toContainEqual({ scrollIndicators: "visible" });
+    // The window (844 pt, no insets here) minus the sheet header at this text size is what the large sheet offers.
+    const available = 844 - (Math.ceil(64 * 2) + 10);
+    const height = () => scroll().modifiers.find((m: any) => m.frame)?.frame.height;
+    expect(height()).toBe(Math.floor(available * 0.25)); // not measured yet: a conservative share
+    geometry("plugins.management.identity", 360);
+    geometry("plugins.management.actions", 96);
+    const chrome = 8 * 2 + 8 * 3 + 4 + 12;
+    expect(height()).toBe(Math.max(44, available - chrome - 360 - 96));
   });
-  it("Android shows every pinned line in full inside a bounded scroll area", () => {
+  it("Android shows every pinned line in full and bounds it by the measured identity block and buttons", () => {
     bridge.fontScale = 2;
     mount(AndroidManagementConfirmation, props(allFive));
-    const scroll = bridge.props.get("plugins.management.highRiskScroll");
-    expect(scroll.style).toMatchObject({ maxHeight: Math.round(844 * 0.3) });
-    const lines = (Array.isArray(scroll.children) ? scroll.children : [scroll.children]).flat().filter(Boolean);
+    const scroll = () => bridge.props.get("plugins.management.highRiskScroll");
+    const lines = (Array.isArray(scroll().children) ? scroll().children : [scroll().children]).flat().filter(Boolean);
     expect(lines.map((line: any) => line.props.children)).toEqual(fiveLines);
     for (const line of lines) expect(line.props.numberOfLines).toBeUndefined();
+    expect(scroll().persistentScrollbar).toBe(true);
+    // Before measuring: a conservative quarter of the sheet (85% of 844).
+    expect(scroll().style).toMatchObject({ maxHeight: Math.floor(Math.floor(844 * 0.85) * 0.25) });
+    // English, short screen, larger text: a tall identity block leaves the summary only what is left.
+    act(() => bridge.props.get("plugins.management.identity").onLayout({ nativeEvent: { layout: { height: 330 } } }));
+    act(() => bridge.props.get("plugins.management.actions").onLayout({ nativeEvent: { layout: { height: 52 } } }));
+    const chrome = 20 * 2 + 12 + 12 * 2 + 4;
+    expect(scroll().style.maxHeight).toBe(Math.max(44, Math.floor(844 * 0.85) - chrome - 330 - 52));
   });
   it("Android shows no pinned area when nothing is high risk", () => {
     const { container } = mount(AndroidManagementConfirmation, props(installOf([notify])));

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { isPinnedHighRiskPermission, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
+import { isPinnedHighRiskPermission, PINNED_HIGH_RISK_MIN_HEIGHT, pinnedHighRiskMaxHeight, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
 import { sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
@@ -831,7 +831,7 @@ describe('confirmation sheet wording', () => {
     const view = pluginConsentPresentation(install({}, [item('notify', 'notify', 'notify', 'notifyDetail'), secret, nodeExecute('nodeMcp')]), t, 'Mac');
     // Pinned above the buttons: a heading and one short line per high-risk class, in the Host's order.
     expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitle',
-      lines: ['plugins.management.permissions.nodeSecretOne', 'plugins.management.permissions.nodeMcp'] });
+      lines: ['plugins.management.permissions.nodeMcp', 'plugins.management.permissions.nodeSecretOne'] });
     // The scrolled list keeps every full explanation (credential names and methods included), high-risk items first.
     expect(view.permissions.map((row) => [row.title, row.detail])).toEqual([
       ['plugins.management.permissions.nodeSecret(name=API token)', 'plugins.management.permissions.nodeSecretDetail\n\nrun'],
@@ -852,8 +852,8 @@ describe('confirmation sheet wording', () => {
     const view = pluginConsentPresentation(install({}, [...bindings, item('node:resident', 'node', 'nodeResident', 'nodeResidentDetail'),
       nodeExecute(), item('agent:background', 'agent', 'agentBackground', 'agentBackgroundDetail'),
       item('agent:errand', 'agent', 'agentErrand', 'agentErrandDetail')]), t, 'Mac');
-    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.nodeSecretCount(count=4)', 'plugins.management.permissions.nodeResident',
-      'plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
+    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.nodeSecretCount(count=4)',
+      'plugins.management.permissions.nodeResident', 'plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
     expect(JSON.stringify(view.highRisk)).not.toMatch(/method_|Token \d/);
     const scrolled = view.permissions.map((row) => `${row.title}\n${row.detail}`).join('\n');
     for (let index = 0; index < 4; index++) expect(scrolled).toContain(`Token ${index}`);
@@ -868,6 +868,37 @@ describe('confirmation sheet wording', () => {
       expect(strings.nodeSecretOne.startsWith(receiver)).toBe(true);
       expect(strings.nodeSecretCount.startsWith(receiver)).toBe(true);
     }
+  });
+  // Layout re-checks (3587f6ca): the summary's bound must leave the identity block (name, computer, source,
+  // repository, source notes), its heading and the buttons in view without scrolling. Matrix of measured heights
+  // (dp/pt) for Chinese / English / German × default (914) and short (610) screens × normal and large text.
+  it('bounds the pinned summary so the identity block and buttons always stay in view', () => {
+    const chrome = 80;
+    const cases = [
+      // [case, available, identity, heading, actions]
+      ['zh default normal', 777, 170, 20, 48], ['zh default large', 777, 230, 26, 60],
+      ['zh short normal', 518, 170, 20, 48], ['zh short large', 518, 230, 26, 60],
+      ['en default normal', 777, 190, 20, 48], ['en default large', 777, 300, 26, 60],
+      ['en short normal', 518, 190, 20, 48], ['en short large', 518, 300, 26, 60],
+      ['de default normal', 777, 210, 20, 48], ['de default large', 777, 330, 26, 60],
+      ['de short normal', 518, 210, 20, 48], ['de short large', 518, 330, 26, 60],
+    ] as const;
+    for (const [name, available, identity, heading, actions] of cases) {
+      const cap = pinnedHighRiskMaxHeight({ available, chrome, identity, heading, actions });
+      expect(cap, name).toBeGreaterThanOrEqual(PINNED_HIGH_RISK_MIN_HEIGHT);
+      // Whatever the summary takes, the identity block still fits above it, unless only the one-line floor is left.
+      if (cap > PINNED_HIGH_RISK_MIN_HEIGHT) expect(available - chrome - heading - actions - cap, name).toBeGreaterThanOrEqual(identity);
+    }
+    // Before measuring: a conservative quarter of the sheet.
+    expect(pinnedHighRiskMaxHeight({ available: 700, chrome, identity: 0, heading: 0, actions: 0 })).toBe(175);
+  });
+  it('orders the pinned classes the same way whatever order the package declares them in', () => {
+    const resident = item('node:resident', 'node', 'nodeResident', 'nodeResidentDetail');
+    const errand = item('agent:errand', 'agent', 'agentErrand', 'agentErrandDetail');
+    const background = item('agent:background', 'agent', 'agentBackground', 'agentBackgroundDetail');
+    const view = pluginConsentPresentation(install({}, [errand, resident, background, nodeExecute()]), t, 'Mac');
+    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.nodeResident',
+      'plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
   });
   it('pins an update that only adds a credential binding to an approved Node plugin', () => {
     const secret = { ...item('node:secret:token:worker.cjs:run', 'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name: 'API token' }, detail: 'run' };
@@ -895,7 +926,7 @@ describe('confirmation sheet wording', () => {
   it('pins Agent high-risk permissions in a first install without Node', () => {
     const view = pluginConsentPresentation(install({}, [item('agent:errand', 'agent', 'agentErrand', 'agentErrandDetail'),
       item('agent:background', 'agent', 'agentBackground', 'agentBackgroundDetail'), item('agent:user-action', 'agent', 'agentUserAction', 'agentUserActionDetail')]), t, 'Mac');
-    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.agentErrand', 'plugins.management.permissions.agentBackground']);
+    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
     expect(view.permissions[2]).toEqual({ title: 'plugins.management.permissions.agentUserAction', detail: 'plugins.management.permissions.agentUserActionDetail' });
   });
 

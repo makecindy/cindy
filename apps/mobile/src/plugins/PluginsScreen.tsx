@@ -829,7 +829,7 @@ function PluginDirectory() {
     try {
       await invokePlugin(invoke, row.host.deviceId, row.item.ref.id, actionId);
     } catch {
-      if (current()) Alert.alert(t("plugins.actionFailed"));
+      if (current()) Alert.alert(t("plugins.actionFailed"), undefined, [{ text: t("plugins.gotIt") }]);
     } finally {
       // A failed reply may follow an applied write; confirm by reading, never replaying it.
       if (current()) await showDetail(row);
@@ -900,9 +900,9 @@ function PluginDirectory() {
       if (!current() || state.outcome !== "failed" || state.operationId) return;
       // The controller's last detail read before begin: a source not named (refresh or update on the computer) is
       // told apart from a source that really changed.
-      if (state.errorCode === "PLUGIN_SOURCE_UNVERIFIED") Alert.alert(t("plugins.management.sourceUnverified"));
-      else if (state.errorCode === "PLUGIN_SOURCE_CHANGED") Alert.alert(t("plugins.management.sourceChanged"));
-      else Alert.alert(t("plugins.notice.title.managementFailed"));
+      if (state.errorCode === "PLUGIN_SOURCE_UNVERIFIED") Alert.alert(t("plugins.management.sourceUnverified"), undefined, [{ text: t("plugins.gotIt") }]);
+      else if (state.errorCode === "PLUGIN_SOURCE_CHANGED") Alert.alert(t("plugins.management.sourceChanged"), undefined, [{ text: t("plugins.gotIt") }]);
+      else Alert.alert(t("plugins.notice.title.managementFailed"), undefined, [{ text: t("plugins.gotIt") }]);
     };
     if (action === "uninstall" && managed) {
       const plugin = managed;
@@ -937,17 +937,17 @@ function PluginDirectory() {
         if (!updateCurrent()) return;
         if (next.releaseId !== displayed.releaseId) {
           await controller.refresh();
-          if (current()) Alert.alert(t("plugins.management.releaseChanged"));
+          if (current()) Alert.alert(t("plugins.management.releaseChanged"), undefined, [{ text: t("plugins.gotIt") }]);
           return;
         }
         if (next.sourceType !== "server") {
           // No source named (older Host, or a Git market not refreshed since the Host was updated): the consent could
           // not be tied to a source, so the update continues on the computer.
-          if (!next.sourceIdentity) { Alert.alert(t("plugins.management.sourceUnverified")); return; }
+          if (!next.sourceIdentity) { Alert.alert(t("plugins.management.sourceUnverified"), undefined, [{ text: t("plugins.gotIt") }]); return; }
           // The plugin's market now points to another source than the one listed here: not the same update.
           if (displayed.sourceIdentity && !samePluginMarketSourceIdentity(next.sourceIdentity, displayed.sourceIdentity)) {
             await controller.refresh();
-            if (current()) Alert.alert(t("plugins.management.sourceChanged"));
+            if (current()) Alert.alert(t("plugins.management.sourceChanged"), undefined, [{ text: t("plugins.gotIt") }]);
             return;
           }
         }
@@ -957,7 +957,7 @@ function PluginDirectory() {
         await started;
         reportPreflightFailure();
       } catch {
-        if (current()) Alert.alert(t("plugins.management.state.readFailed"));
+        if (current()) Alert.alert(t("plugins.management.state.readFailed"), undefined, [{ text: t("plugins.gotIt") }]);
       } finally {
         setUpdatePreparing(false);
       }
@@ -1042,7 +1042,7 @@ function PluginDirectory() {
     const key = JSON.stringify([selected.row.key, auth.accountGeneration, connectionEpoch, state.operationId]);
     if (failedOperationNotice.current === key) return;
     failedOperationNotice.current = key;
-    Alert.alert(t("plugins.notice.title.managementFailed"));
+    Alert.alert(t("plugins.notice.title.managementFailed"), undefined, [{ text: t("plugins.gotIt") }]);
   }, [management.state?.outcome, management.state?.operationId, selected?.row.key, focused, auth.accountGeneration, connectionEpoch]);
   const newTask = () => {
     if (!selected || !model || busy || !online || !detail || !enabled) return;
@@ -1079,7 +1079,7 @@ function PluginDirectory() {
       case "reconnect":
       case "settings":
         if (originalSettings) setSettingsOpen(true);
-        else Alert.alert(t("plugins.detail.computerSettings"));
+        else Alert.alert(t("plugins.detail.computerSettings"), undefined, [{ text: t("plugins.gotIt") }]);
         break;
     }
   };

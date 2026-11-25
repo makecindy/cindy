@@ -7,7 +7,6 @@ import {
   background, clipShape,
 } from "@expo/ui/swift-ui/modifiers";
 import type { ReactNode } from "react";
-import { useWindowDimensions } from "react-native";
 import { useTranslation } from "react-i18next";
 import { iconSize, spacing, useTheme } from "@/theme";
 import { PluginMarketIcon } from "./PluginMarketIcon";
@@ -19,8 +18,6 @@ import type { PluginMarketRowsProps } from "./PluginMarketRows";
 export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRowsProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { fontScale } = useWindowDimensions();
-  const largeType = fontScale > 1.3;
   const device = market.target?.deviceName ?? "";
   // Standalone text actions keep a 44×44pt hit target (ios-native-design §5), whatever their label size.
   const textButton = (label: string, onPress: () => void, testID?: string) => (
@@ -103,14 +100,12 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
     const state = market.rowState(item);
     if (state.kind === "waiting" || state.kind === "installing") {
       const progress = t(state.kind === "waiting" ? "plugins.market.waiting" : "plugins.market.installing");
-      // At accessibility sizes the status moves into the row's text column (see `line`), so the name keeps its width.
+      // The status is written under the name (see `line`), as on Android, so the name keeps its width in narrow
+      // columns (iPad sidebar) and at large sizes; the spinner keeps the spoken label.
       return (
         <HStack spacing={spacing.xs} testID={`plugins.market.progress.${item.pluginId}`}
-          modifiers={largeType ? [accessibilityLabel(progress)] : []}>
+          modifiers={[accessibilityLabel(progress)]}>
           <ProgressView />
-          {largeType ? null : (
-            <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), lineLimit(2)]}>{progress}</Text>
-          )}
         </HStack>
       );
     }
@@ -130,8 +125,8 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
   const row = (item: ManagedMarketItem, first: boolean) => {
     const state = market.rowState(item);
     const origin = pluginMarketOrigin(item);
-    const line = largeType && state.kind === "waiting" ? t("plugins.market.waiting")
-      : largeType && state.kind === "installing" ? t("plugins.market.installing")
+    const line = state.kind === "waiting" ? t("plugins.market.waiting")
+      : state.kind === "installing" ? t("plugins.market.installing")
       : state.kind === "failed" ? t(state.messageKey)
       : state.kind === "conflict" ? t("plugins.market.conflict")
         : state.kind === "sourceUnverified" ? t("plugins.market.sourceUnverifiedShort")
@@ -149,7 +144,8 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
             <VStack alignment="leading" spacing={3} modifiers={[frame({ maxWidth: Infinity, alignment: "leading" })]}>
               <HStack spacing={6}>
                 {/* Larger accessibility sizes keep a second line for the name, like the installed rows that wrap. */}
-                <Text modifiers={[font({ textStyle: "body" }), lineLimit(largeType ? 2 : 1)]}>{item.name}</Text>
+                {/* Names may take two lines at any size (as on Android), so "Demo Repo…" no longer cuts a short name. */}
+                <Text modifiers={[font({ textStyle: "body" }), lineLimit(2)]}>{item.name}</Text>
                 {origin ? (
                   // The source label never wraps; the name gives way instead.
                   <Text testID={`plugins.market.badge.${item.pluginId}`}

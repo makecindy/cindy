@@ -149,13 +149,16 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
               </RNHostView>
             </VStack>
           ) : null}
-          <VStack alignment="leading" spacing={spacing.md} modifiers={quiet}>
-            {heading(t("plugins.market.securityTitle"))}
-            <VStack alignment="leading" modifiers={[frame({ maxWidth: Infinity, alignment: "leading" }),
-              padding({ all: spacing.lg }), background(colors.surfaceElevated), clipShape("roundedRectangle", radius.container)]}>
-              {text(t("plugins.market.securityBody"), "footnote")}
+          {/* "After you tap Install…" does not apply while Install is unavailable here (the note above says why). */}
+          {state.kind !== "sourceUnverified" ? (
+            <VStack testID="plugins.market.security" alignment="leading" spacing={spacing.md} modifiers={quiet}>
+              {heading(t("plugins.market.securityTitle"))}
+              <VStack alignment="leading" modifiers={[frame({ maxWidth: Infinity, alignment: "leading" }),
+                padding({ all: spacing.lg }), background(colors.surfaceElevated), clipShape("roundedRectangle", radius.container)]}>
+                {text(t("plugins.market.securityBody"), "footnote")}
+              </VStack>
             </VStack>
-          </VStack>
+          ) : null}
           <VStack alignment="leading" spacing={spacing.md} testID="plugins.market.facts" modifiers={quiet}>
             {heading(t("plugins.detail.details"))}
             <VStack alignment="leading" spacing={0}>

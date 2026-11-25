@@ -130,8 +130,13 @@
     64 字且可含换行的名称，插进两行摘要会把「本机 Node 程序」挤出视野），textPrimary，不用警示色；与滚动区之间用一条细分隔线（iOS 原生 `Divider`，Android 用 `border` token 的
     hairline 加留白），标题与列表里的权限标题同字号、加粗一档（iOS `subheadline` semibold，Android `bodySmall` semibold）。
     列表里的高风险项保留标题行（列表是完整清单，升级时带「新增 ·」前缀），靠分隔线避免看起来重复。
-    摘要高度只按字号决定（`pinnedHighRiskRows`，不做运行时测量）：普通字号最多五行、每行最多两行；辅助功能大字号
-    （fontScale > 1.3）最多三行、每行一行，超过时显示前两类加「另有 N 项高风险权限，完整说明见上方列表」。
+    摘要的每一行都完整显示，不按行截断，按固定的类别顺序排（运行 Node 程序、凭证、Node 常驻、后台 Agent、派活取件），
+    不随包内声明顺序变化。摘要行区的高度上限由 `pinnedHighRiskMaxHeight` 按实测高度算出：面板可用高度减去身份块（标题、
+    插件名、安装到、来源、仓库、来源变化提示、第三方来源提示）、摘要标题、按钮与固定留白，保证这些不滚动可见；未测得前用
+    面板的四分之一，最低保留一行（44）。超出上限时摘要区自身滚动，并常显滚动条（Android `persistentScrollbar`，iOS
+    `scrollIndicators("visible")`）。Android 面板最高为窗口的 85%；iOS 有摘要时只用大高度，可用高度取窗口减去顶部安全区
+    与面板标题栏（随字号增长）。iOS 的 SwiftUI ScrollView 会占满给它的高度，所以给它显式高度 = 实测内容高度与上限取小。
+    凭证那一行把接收方放在句首（「本机 Node 程序可获得 N 个已保存凭证」）。
     iOS 有高风险项时确认面板只用大高度（`ComposerSheet` 的可选 `largeOnly`，默认不变）：半高时向上滑是展开面板而不是
     滚动列表，列表下方的内容会像滚不到；`@expo/ui` 没有 `presentationContentInteraction`，无法改成先滚动。iOS 半高面板与 Android 矮屏都不用滚动
     就能看到，也不会把来源、说明和按钮挤掉。每项的完整说明（凭证名与允许的全部方法）留在可滚动的权限列表里，
