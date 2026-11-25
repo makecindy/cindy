@@ -2086,6 +2086,8 @@ export interface StartSessionOptions {
    * 暴露成模型或插件可控的工具参数。
    */
   sessionInstanceId?: string;
+  /** Maker can verify that this start has no existing task metadata. */
+  isNewMakerTask?: () => Promise<boolean>;
   workingDir: string;
   /**
    * Product workspace classification. `dialogue` sessions may still receive an
