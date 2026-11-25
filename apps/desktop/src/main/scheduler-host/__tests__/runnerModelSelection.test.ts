@@ -1506,7 +1506,7 @@ describe('MakerScheduleRunner model selection', () => {
     });
 
     // #12714, unit: only a verified cold resume may receive the one-shot prompt.
-    it.each(['resume', 'cancel', 'missing checkpoint', 'replacement', 'wrong model'] as const)(
+    it.each(['resume', 'cancel', 'missing checkpoint', 'replacement', 'wrong model', 'source mismatch', 'busy once', 'busy recurring'] as const)(
       'late Codex rebuild before dispatch: %s',
       async (scenario) => {
         mocks.getSessionProvider.mockReturnValue('mygpt');
@@ -1525,6 +1525,7 @@ describe('MakerScheduleRunner model selection', () => {
         h.setModel.mockImplementation(async () => {
           if (scenario === 'cancel') controller.abort();
           if (scenario === 'replacement') active = resumed.session;
+          if (scenario.startsWith('busy')) Object.assign(h.session, { isTurnRunning: () => true });
           throw rebuildError;
         });
         const resumed = createSessionHarness();
@@ -1558,9 +1559,9 @@ describe('MakerScheduleRunner model selection', () => {
         const run = harness.runner.fire(
           baseSchedule({
             agentKind: 'codex',
-            recurring: false,
+            recurring: scenario === 'busy recurring',
             model: 'gpt-5.6-sol',
-            providerId: 'mygpt',
+            providerId: scenario === 'source mismatch' ? undefined : 'mygpt',
             targetSessionId: 'scheduler-session',
           }),
           { ...createFireContext(), signal: controller.signal },
@@ -1576,9 +1577,12 @@ describe('MakerScheduleRunner model selection', () => {
             providerId: 'mygpt',
           });
         } else {
-          await expect(run).rejects.toThrow(
-            scenario === 'cancel' ? /abort/i : /instruction was not sent/,
-          );
+          if (scenario === 'busy recurring') {
+            await expect(run).resolves.toMatchObject({ sessionId: h.session.id, deferred: true });
+          } else {
+            const reason = scenario === 'cancel' ? /abort/i : scenario === 'busy once' ? /SESSION_RUNNING/ : /instruction was not sent/;
+            await expect(run).rejects.toThrow(reason);
+          }
           expect(resumed.send).not.toHaveBeenCalled();
           expect(mocks.backfillSessionMeta).not.toHaveBeenCalled();
           if (scenario !== 'wrong model') expect(harness.closeSession).not.toHaveBeenCalled();

@@ -1829,6 +1829,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // TOCTOU 窗口(判定后、createSession 前 session 恰好关闭)只会把 fresh spawn 误判
     // 成复用 → set 失败时多跳过一次落库 → 下次 fire 重试, 方向保守无害。
     let reusedLiveSession = this.deps.maker.isSessionAlive(sessionId);
+    let preflightProviderId: string | null = null;
     if (reusedLiveSession) {
       const liveSession = this.deps.maker.getSession(sessionId);
       if (liveSession?.agentKind === 'acp') throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
@@ -1841,6 +1842,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         reroutedProviderId ??
         materializedDefaultProviderId ??
         currentProviderId;
+      preflightProviderId = nextProviderId;
       const credentialSwitchInput = liveSession && !agentDeviceId
         ? {
             agentKind: liveSession.agentKind,
@@ -2098,6 +2100,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (
             !reusedLiveSession ||
             !holder.releaseAgentSwitchLock ||
+            preflightProviderId !== createSessionOpts.providerId ||
             session.agentKind !== 'codex' ||
             !resumeSessionId ||
             session.sdkSessionId !== resumeSessionId ||
@@ -2110,16 +2113,22 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
           // setModel refused before send. Keep the same send lease and native thread
           // through one cold resume. Never retry from the dispatch/completion path.
-          const { closedSessionIds } = await prepareLocalSessionCredentialModeSwitch({
-            maker: this.deps.maker,
-            sessionId,
-            isSessionInTurn: this.runtime.isSessionInTurn,
-            signal: ctx.signal,
-          });
+          try {
+            const { closedSessionIds } = await prepareLocalSessionCredentialModeSwitch({
+              maker: this.deps.maker,
+              sessionId,
+              isSessionInTurn: this.runtime.isSessionInTurn,
+              signal: ctx.signal,
+            });
+            if (!closedSessionIds.includes(sessionId)) throw unsafeResume;
+          } catch (closeError) {
+            if (closeError instanceof CredentialModeSwitchBusyError)
+              return this.failOrDeferSessionRunning(schedule, ctx, sessionId, isHeartbeat);
+            throw closeError;
+          }
           throwIfFireAborted(ctx.signal, 'model switch rebuild');
           holder.assertOwner?.();
-          if (!closedSessionIds.includes(sessionId) || this.deps.maker.getSession(sessionId))
-            throw unsafeResume;
+          if (this.deps.maker.getSession(sessionId)) throw unsafeResume;
           const resumedOpts = { ...createSessionOpts };
           const resumed = await this.createSession(resumedOpts, ctx.signal, holder.assertOwner);
           throwIfFireAborted(ctx.signal, 'model switch rebuild');
