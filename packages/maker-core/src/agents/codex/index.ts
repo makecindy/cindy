@@ -75,7 +75,7 @@ import {
   botRuntimeSkillPolicy,
   isolatedBotProfile,
 } from '../base-agent.js';
-import { canonicalSkillPath, skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
+import { canonicalSkillPathAsync, skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
 import { snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import type { AgentCredentialMode } from '../../interfaces/auth-adapter.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
@@ -7197,6 +7197,7 @@ assertRouteCurrent();
 
       try {
         rejectIfCancelled(sendOpts, action);
+        const skillDeadline = Date.now() + CRITICAL_THREAD_RPC_TIMEOUT_MS;
         const { skills } = localSource === undefined
           ? await this.listSkillsForCwd(opts.workingDir, false)
           : await awaitCodexRouteSelection(
@@ -7208,9 +7209,23 @@ assertRouteCurrent();
           guestSkillAllowed ? skills.filter((candidate) => guestSkillAllowed(candidate.path, candidate.scope)) : skills,
           slash.name,
         );
-        if (!skill || (localSource !== undefined && disabledSkillSnapshot.length > 0
-          && disabledSkillSnapshot.includes(canonicalSkillPath(skill.path)))) {
-          return toAppServerInput(content, opts.workingDir);
+        if (!skill) return toAppServerInput(content, opts.workingDir);
+        if (localSource !== undefined && disabledSkillSnapshot.length > 0) {
+          rejectIfCancelled(sendOpts, action);
+          // The filesystem check shares the lookup deadline. A late result
+          // cannot publish a Skill after the input has fallen back or stopped.
+          const remaining = skillDeadline - Date.now();
+          const timeoutError = new Error('Codex Skill path resolution timed out');
+          if (remaining <= 0) throw timeoutError;
+          const timeout = new AbortController();
+          const signal = sendOpts?.signal ? AbortSignal.any([sendOpts.signal, timeout.signal]) : timeout.signal;
+          const timer = setTimeout(() => timeout.abort(timeoutError), remaining);
+          try {
+            const identity = await awaitCodexRouteSelection(canonicalSkillPathAsync(skill.path), signal);
+            if (disabledSkillSnapshot.includes(identity)) return toAppServerInput(content, opts.workingDir);
+          } finally {
+            clearTimeout(timer);
+          }
         }
 
         const inputs: UserInput[] = [{ type: 'skill', name: skill.name, path: skill.path }];

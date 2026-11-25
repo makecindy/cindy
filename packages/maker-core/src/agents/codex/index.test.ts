@@ -9054,13 +9054,14 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
-  // #7903: the successful lookup cases do not cover a transport that stays open
-  // without replying to an explicit slash command's skills/list. Unit tier:
-  // real Host and RPC timers under a fake clock, checking turn/start and turn/steer.
+  // #7903: lookup can stall at skills/list or while resolving the selected
+  // path. Unit tier: real dispatch and deadlines under a fake clock.
   it.each([
-    ['send', false], ['send', true], ['steer', false], ['steer', true],
-  ] as const)('bounds a silent local skills/list during %s (cancel=%s)', async (method, cancel) => {
-    const agent = new CodexAgent(createDeps());
+    ['send', false, 'rpc'], ['send', true, 'rpc'], ['steer', false, 'rpc'], ['steer', true, 'rpc'],
+    ['send', false, 'path'], ['send', true, 'path'], ['steer', false, 'path'], ['steer', true, 'path'],
+  ] as const)('bounds a local skill lookup during %s (cancel=%s, stage=%s)', async (method, cancel, stage) => {
+    MockCodexTransport.userAgent = 'mock-codex/0.167.2';
+    const agent = new CodexAgent({ ...createDeps(), getDisabledSkillPaths: () => stage === 'path' ? ['/repo/disabled'] : [] });
     const handle = await agent.startSession({ sessionId: 'silent-skill-list', model: 'gpt-5.4', workingDir: '/repo' });
     const transport = createdTransports[0];
     transport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'probe-turn' } } });
@@ -9071,9 +9072,19 @@ describe('CodexAgent MCP thread context hooks', () => {
     const abort = new AbortController();
     const raw = '/probe 参数';
     const wire = `[UI language] English\n\n${raw}`;
+    const skillPath = path.resolve('/repo/probe/SKILL.md');
+    const realpath = fs.realpath;
+    const delayedPath = vi.spyOn(fs, 'realpath').mockImplementation(async (source, options) => {
+      if (stage !== 'path' || source !== skillPath) return realpath(source, options);
+      await reply.promise;
+      return skillPath;
+    });
     try {
       if (method === 'steer') await handle.send({ type: 'user', content: 'Start a turn' });
-      MockCodexTransport.beforeSkillsListResponse = () => reply.promise;
+      if (stage === 'rpc') MockCodexTransport.beforeSkillsListResponse = () => reply.promise;
+      else transport.setMockResponse(Method.SkillsList, { result: { data: [{ cwd: '/repo', errors: [], skills: [
+        { name: 'probe', path: skillPath, enabled: true, scope: 'repo' },
+      ] }] } });
       vi.useFakeTimers();
       let result: string | undefined;
       const pending = handle[method]({ type: 'user', content: wire }, {
@@ -9082,6 +9093,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       }).then(() => { result = 'accepted'; }, error => { result = String(error); });
       await vi.advanceTimersByTimeAsync(0);
       expect(requests().filter(request => request.method === Method.SkillsList)).toHaveLength(1);
+      if (stage === 'path') expect(delayedPath).toHaveBeenCalledWith(skillPath);
       expect(requests().some(request => request.method === dispatchRpc)).toBe(false);
       if (cancel) {
         abort.abort();
@@ -9101,6 +9113,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(transport.closed).toBe(false);
     } finally {
       reply.resolve();
+      delayedPath.mockRestore();
       vi.useRealTimers();
       await handle.close();
       await agent.dispose();
