@@ -158,7 +158,7 @@ import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useLocalNetworkStatus } from '@/device-link/localNetworkStatus';
 import { subscribeSessionCredentialSwitchNotices } from '@/session/credentialSwitchOutcome';
-import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
+import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useSharedTaskAccess } from '@/device-link/useSharedTaskAccess';
 import { useLeaveSharedTask } from '@/device-link/useLeaveSharedTask';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
@@ -1106,6 +1106,15 @@ function composerDraftScopeKey(sessionId: string, routeDraft: string | null): st
 // Sidebar and task metadata can update independently of the conversation content.
 // Keep the keyed task lifetime, but skip parent-only rerenders of the heavy detail.
 const MemoizedSessionScreenContent = memo(SessionScreenContent);
+
+// A reopened composer must reconcile the original send before it can send the
+// same draft again. The key includes the owner generation and destination.
+const pendingPlainTextSends = new Map<string, Promise<void>>();
+
+function pendingPlainTextSendKey(deviceId: string, sessionId: string): string {
+  const owner = getMobileAuthOwner();
+  return JSON.stringify([owner.accountKey, owner.generation, deviceId, sessionId]);
+}
 
 export default function SessionScreen() {
   return (
@@ -3750,12 +3759,16 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? Promise.resolve()
       : hydrateQuotes(sessionId);
 
-    void reconcileMobileOutboxDrafts(sessionId).then(() => Promise.all([
+    const pendingSend = pendingPlainTextSends.get(pendingPlainTextSendKey(deviceIdRef.current, sessionId));
+    const readDrafts = () => reconcileMobileOutboxDrafts(sessionId).then(() => Promise.all([
       quoteHydration,
       readComposerDocumentDraft(sessionId),
       readComposerDraft(sessionId),
-    ])).then(([, storedDocument, storedDraft]) => {
-      if (cancelled || appliedRouteDraftRef.current !== key) return;
+    ]));
+    const draftsAfterSend = pendingSend ? pendingSend.then(() => cancelled ? undefined : readDrafts()) : readDrafts();
+    void draftsAfterSend.then((stored) => {
+      if (!stored || cancelled || appliedRouteDraftRef.current !== key) return;
+      const [, storedDocument, storedDraft] = stored;
       const hydratedQuotes = [...getQuotes(sessionId)];
       const fallbackText = storedDraft ?? routeDraft ?? '';
       const ordered = resolveOrderedQuoteDraft(sessionId, fallbackText, hydratedQuotes);
@@ -6750,7 +6763,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         : reconcileComposerProjectedText(composerDocumentRef.current, options.draftOverride)));
       return;
     }
-    if (sendInFlightRef.current || sending) return;
+    const pendingSendKey = pendingPlainTextSendKey(deviceId, sessionId);
+    if (sendInFlightRef.current || sending || pendingPlainTextSends.has(pendingSendKey)) return;
+    let finishPendingSend: (() => void) | undefined;
     sendInFlightRef.current = true;
     setSending(true);
     const messageWorkLease = remoteSessionStore.acquireSessionMessageWork(sessionId, true);
@@ -6959,9 +6974,56 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       && !currentTurnStreaming
       && !isRemoteSessionMissing(readSessionRowNow())
     ) {
+      const ownerAtRebalance = getMobileAuthOwner();
+      const permissionModeAtSend = permissionModeOrAsk(currentSession.permissionMode);
+      const plainTextCanOutlivePage = Platform.OS === 'ios' && AppState.currentState === 'active'
+        && !!ownerAtRebalance.accountKey && !!text && !independent
+        && !options.messageEditResend && options.draftOverride === undefined && options.documentOverride === undefined
+        && !willHaveAttachments && !hasPastePlaceholders() && !replyQuoteAtSend
+        && sessionRefsAtSend.length === 0 && !pastedTextRangesAtSend?.length
+        && documentAtSend.nodes.every(node => node.type === 'text' && !node.slashCommand)
+        && !body.startsWith('/') && !planModeAtSend && permissionModeAtSend !== 'plan'
+        && !!currentSession.workingDir && !sessionManagedByHost
+        && (currentSession.source === null || currentSession.source === 'desktop') && !currentSession.companion && !currentSession.orcaRole
+        && !readRouteParam(params.resourceKind) && !isScopedPeer(deviceId)
+        && remoteSessionStore.getSessionDeviceId(sessionId) === deviceId;
+      if (plainTextCanOutlivePage) {
+        pendingPlainTextSends.set(pendingSendKey, new Promise<void>(resolve => { finishPendingSend = resolve; }));
+      }
       await offerMobileSessionRebalance({ invoke, hostDeviceId: deviceId, sessionId, clientId: outboxClientId!, ask: askMobileSessionRebalance });
-      // 弹窗期间离开了这个任务：草稿还没清空，留在原处，不发。
-      if (outboxSessionAliveRef.current !== sessionId) return;
+      if (plainTextCanOutlivePage && !isMobileAuthOwnerCurrent(ownerAtRebalance)) return;
+      if (outboxSessionAliveRef.current !== sessionId) {
+        const latest = readSessionRowNow();
+        if (!plainTextCanOutlivePage || AppState.currentState !== 'active'
+          || revokedDevicesStore.has(deviceId) || remoteSessionStore.getSessionDeviceId(sessionId) !== deviceId
+          || latest?.status !== 'active' || latest.pendingLocalCreation || latest.cacheSeeded
+          || latest.clearedAt !== currentSession.clearedAt || latest.workingDir !== currentSession.workingDir
+          || latest.permissionMode !== currentSession.permissionMode || latest.planModeEnabled !== currentSession.planModeEnabled
+          || latest.source !== currentSession.source || latest.companion || latest.orcaRole) return;
+        const clearedAt = currentSession.clearedAt ? Date.parse(currentSession.clearedAt) : NaN;
+        try {
+          await mobileDurableOutbox.add({
+            version: 1,
+            accountId: ownerAtRebalance.accountKey,
+            deviceId,
+            item: buildOutboxItem({
+              clientId: outboxClientId!, sessionId, text, permissionModeAtSend, planModeAtSend,
+              readyAttachments: [], readyPreviews: [], claimedUploads: [],
+            }),
+            createdAt: Date.now(),
+            state: 'queued',
+            uploads: [],
+            clearBoundaryMs: Number.isFinite(clearedAt) ? clearedAt : null,
+            draftHandoff: { before: documentAtSend, after: emptyComposerDocument() },
+          });
+          return true;
+        } catch (error) {
+          if (isMobileAuthOwnerCurrent(ownerAtRebalance)) {
+            Alert.alert(currentSession.title || t('session.screen.operationFailed'), formatRemoteError(error));
+          }
+          return;
+        }
+      }
     }
     if (!independent) {
       pendingSkillSelectionRef.current = null;
@@ -7637,6 +7699,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     } finally {
       sendInFlightRef.current = false;
       setSending(false);
+      if (finishPendingSend) {
+        pendingPlainTextSends.delete(pendingSendKey);
+        finishPendingSend();
+      }
       messageWorkLease.release();
     }
     return messageAccepted;
