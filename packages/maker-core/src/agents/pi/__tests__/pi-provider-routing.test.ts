@@ -337,6 +337,40 @@ describe("Pi provider-aware model routing", () => {
     }
   });
 
+  // #12920, unit: the existing switch tests only cover a running task. At
+  // startup an inherited Codex model missing from both Pi catalogs must fail
+  // before spawning Pi, while the same saved route may still open.
+  it('rejects an unsupported inherited model only for a new Maker task', async () => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'openai-codex', sourceProviderId: 'openai', name: 'OpenAI',
+          baseUrl: 'http://127.0.0.1:9', api: 'openai-codex-responses',
+          models: [{ id: 'gpt-6-sol' }],
+        }],
+        env: {},
+      }),
+    });
+    const options = { workingDir: cwd, model: 'chatgpt/gpt-6.2-sol', providerId: 'openai' };
+
+    await expect(agent.startSession({ ...options, isNewMakerTask: async () => true }))
+      .rejects.toThrow("Model 'chatgpt/gpt-6.2-sol' is unavailable in the current Pi catalog.");
+    expect(captured.spawnBinaryPath).toBeUndefined();
+
+    const existing = await agent.startSession({ ...options, isNewMakerTask: async () => false });
+    await existing.close();
+  });
+
   // Standard: the actual Pi launch passes the host account to auth and both authenticated proxy scopes.
   it('binds the selected subscription account to the root and same-provider child proxy tokens', async () => {
     const account: NativeSubscriptionAccount = { id: 'fixture-b', configDir: '/fixture/.codex-b',
