@@ -2088,24 +2088,68 @@ export class MakerScheduleRunner implements ScheduleRunner {
           await session.setModel(model);
         }
       } catch (err) {
-        if (reusedLiveSession) modelSwitchApplied = false;
         if (isModelSwitchRebuildRequiredError(err)) {
-          // preflight 与 setModel 都会动态解析目录身份；配置若在两者之间变化，最终
-          // guard 必须 fail-closed，不能落回下面的旧模型 non-fatal 路径。
-          throw new Error(
-            `schedule model switch requires rebuilding the session before dispatch (model "${model}")`,
+          const unsafeResume = new Error(
+            `Scheduled instruction was not sent: cannot safely resume the bound Codex task with model "${model}"`,
             { cause: err },
           );
-        }
-        if (mustSyncReusedPiRoute) {
+          throwIfFireAborted(ctx.signal, 'model switch rebuild');
+          holder.assertOwner?.();
+          if (
+            !reusedLiveSession ||
+            !holder.releaseAgentSwitchLock ||
+            session.agentKind !== 'codex' ||
+            !resumeSessionId ||
+            session.sdkSessionId !== resumeSessionId ||
+            agentDeviceId ||
+            session.agentDeviceId ||
+            session.remoteHostId ||
+            this.deps.maker.getSession(sessionId) !== session
+          ) {
+            throw unsafeResume;
+          }
+          // setModel refused before send. Keep the same send lease and native thread
+          // through one cold resume. Never retry from the dispatch/completion path.
+          const { closedSessionIds } = await prepareLocalSessionCredentialModeSwitch({
+            maker: this.deps.maker,
+            sessionId,
+            isSessionInTurn: this.runtime.isSessionInTurn,
+            signal: ctx.signal,
+          });
+          throwIfFireAborted(ctx.signal, 'model switch rebuild');
+          holder.assertOwner?.();
+          if (!closedSessionIds.includes(sessionId) || this.deps.maker.getSession(sessionId))
+            throw unsafeResume;
+          const resumedOpts = { ...createSessionOpts };
+          const resumed = await this.createSession(resumedOpts, ctx.signal, holder.assertOwner);
+          throwIfFireAborted(ctx.signal, 'model switch rebuild');
+          holder.assertOwner?.();
+          if (
+            resumed === session ||
+            resumed.id !== sessionId ||
+            resumed.sdkSessionId !== resumeSessionId ||
+            resumed.agentKind !== 'codex' ||
+            resumed.model !== model ||
+            resumed.agentDeviceId ||
+            resumed.remoteHostId ||
+            resumedOpts.providerId !== createSessionOpts.providerId ||
+            this.deps.maker.getSession(sessionId) !== resumed
+          ) {
+            throw unsafeResume;
+          }
+          session = resumed;
+          reusedLiveSession = false;
+        } else if (mustSyncReusedPiRoute) {
           // 对 Pi 而言失败后来源未知；继续 send 可能把内容发给旧 BYOM endpoint，
           // 不能沿用 Claude/Codex 的 non-fatal 模型切换降级。
           throw new Error(
             `schedule Pi route sync failed before dispatch (model "${model}", provider "${reusedPiRouteProviderId ?? 'cindy'}"): ${err instanceof Error ? err.message : String(err)}`,
             { cause: err },
           );
+        } else {
+          if (reusedLiveSession) modelSwitchApplied = false;
+          this.deps.logger.warn?.('[runner] heartbeat setModel failed (non-fatal)', err);
         }
-        this.deps.logger.warn?.('[runner] heartbeat setModel failed (non-fatal)', err);
       }
     }
     // runtimeModel:本次实际会运行的模型 —— effort 必须按它 clamp。**复用会话一律以 live
@@ -4687,6 +4731,7 @@ type FireAbortStage =
   | 'session creation'
   | 'agent turn dispatch'
   | 'credential switch setup'
+  | 'model switch rebuild'
   | 'credential mode switch';
 
 function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
