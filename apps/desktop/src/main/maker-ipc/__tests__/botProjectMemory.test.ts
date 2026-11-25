@@ -116,4 +116,21 @@ it('writes and removes safe portable markdown memories while rejecting unsafe fi
   await removeRawTeammateMemoryFile(dir, 'daily_2026-11-24.md');
   await removeRawTeammateMemoryFile(dir, 'daily_2026-11-24.md');
   expect(await readTeammateMemories([dir])).toEqual([{ filename: 'project_MyNotes.md', content: 'upper case ok' }]);
+
+  // #12621 review P1: long UTF-8 filenames (80 Han chars + `.md` = 83 chars / 243 bytes <= 255)
+  // must write via a short temp name without hitting ENAMETOOLONG; >255 UTF-8 bytes are rejected.
+  const longValid = `${'记'.repeat(80)}.md`;
+  const tooManyBytes = `${'记'.repeat(85)}.md`;
+  expect(Buffer.byteLength(longValid, 'utf8')).toBe(243);
+  expect(Buffer.byteLength(tooManyBytes, 'utf8')).toBe(258);
+  expect(isSafeTeammateMemoryFilename(longValid)).toBe(true);
+  expect(isSafeTeammateMemoryFilename(tooManyBytes)).toBe(false);
+  await expect(writeRawTeammateMemoryFile(dir, tooManyBytes, 'too long')).rejects.toThrow('[INVALID_PARAMS] Invalid memory');
+  await writeRawTeammateMemoryFile(dir, longValid, 'long utf-8 ok');
+  expect(await readTeammateMemories([dir])).toEqual([
+    { filename: 'project_MyNotes.md', content: 'upper case ok' },
+    { filename: longValid, content: 'long utf-8 ok' },
+  ]);
+  await removeRawTeammateMemoryFile(dir, longValid);
+  expect(await readTeammateMemories([dir])).toEqual([{ filename: 'project_MyNotes.md', content: 'upper case ok' }]);
 });

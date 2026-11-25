@@ -127,6 +127,7 @@ const h = await vi.hoisted(async () => {
   listProviders: vi.fn(async (): Promise<ProviderView[]> => h.providers),
   ownerScopeKey: 'owner-a:1',
   ownerBoundaryPending: false,
+  makerMemory: undefined as { getStore: (scopeKey: string, opts?: { skipDisabledCheck?: boolean }) => Promise<unknown> } | undefined,
   showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] as string[] })),
 });
 });
@@ -219,6 +220,7 @@ vi.mock('../../../maker-host/index.js', () => ({
     isSessionAlive: h.isSessionAlive,
     closeSession: h.closeSession,
     getSession: h.getSession,
+    makerMemory: h.makerMemory,
   }),
 }));
 vi.mock('../../../worktree/index.js', () => ({
@@ -1256,6 +1258,42 @@ describe('Bot canonical Session lifecycle', () => {
         expect(await host.materializer!.readMemory(id, 'daily_2026-11-24.md')).toBe('# Notes\nhello from mac');
         await host.materializer!.removeMemory(id, 'daily_2026-11-24.md', fence);
         expect(await host.materializer!.readMemory(id, 'daily_2026-11-24.md')).toBeNull();
+
+        // #12621 review P1: store-named memory without YAML frontmatter restored via raw fallback
+        // (e.g. oversized native edit) must also survive subsequent cloud updates (`memory:invalid-frontmatter`
+        // on existing disk read, malformed YAML) and tombstone removal (`removeRaw`), while non-schema
+        // failures (like `MAKER_MEMORY_NOT_READY`) still throw instead of silently falling back.
+        await expect(host.materializer!.restoreMemory(id, 'user_notes.md', 'hello', fence))
+          .rejects.toThrow('MAKER_MEMORY_NOT_READY');
+        const { MakerMemoryStore } = await import('@cindy/maker-core');
+        const { ownerScopedUserDataPath } = await import('../../../appSessionState.js');
+        const { teammateStoreMemoryDirs } = await import('../../../companion-cloud/projectHost.js');
+        const [memoryDir] = await teammateStoreMemoryDirs(ownerScopedUserDataPath(), id);
+        const memDb = new Database(':memory:');
+        const memStore = new MakerMemoryStore({
+          storageDir: memoryDir!,
+          absWorkdir: memoryDir!,
+          db: memDb,
+          logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+        });
+        await memStore.init();
+        h.makerMemory = { getStore: async () => memStore };
+        try {
+          const rawV1 = `# Raw Notes\n${'a'.repeat(9000)}`;
+          const rawV2 = '# Raw Notes v2\nupdated from another computer';
+          const rawBrokenYaml = '---\ntitle: [broken\n---\nkept verbatim';
+          await host.materializer!.restoreMemory(id, 'user_notes.md', rawV1, fence);
+          expect(await host.materializer!.readMemory(id, 'user_notes.md')).toBe(rawV1);
+          await host.materializer!.restoreMemory(id, 'user_notes.md', rawV2, fence);
+          expect(await host.materializer!.readMemory(id, 'user_notes.md')).toBe(rawV2);
+          await host.materializer!.restoreMemory(id, 'user_notes.md', rawBrokenYaml, fence);
+          expect(await host.materializer!.readMemory(id, 'user_notes.md')).toBe(rawBrokenYaml);
+          await host.materializer!.removeMemory(id, 'user_notes.md', fence);
+          expect(await host.materializer!.readMemory(id, 'user_notes.md')).toBeNull();
+        } finally {
+          h.makerMemory = undefined;
+          memDb.close();
+        }
       } finally {
         vi.mocked(control.validateTaskModel).mockResolvedValue(true);
       }

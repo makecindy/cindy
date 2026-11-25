@@ -66,6 +66,20 @@ import {
   type CompanionPreferenceValue,
 } from './uploader.js';
 
+const MEMORY_SCHEMA_FALLBACK_ERROR_RE =
+  /memory:(?:shard-too-large|invalid-frontmatter|description-too-long|title-too-long|description-has-newline)\b|Invalid memory content/;
+
+/**
+ * Schema/format rejections from MakerMemoryStore or gray-matter that should fall back to
+ * verbatim raw Markdown writes; real I/O (`memory:io-error`), symlink/boundary (`not-ready`),
+ * version conflicts and owner errors must keep throwing.
+ */
+function isMemorySchemaFallbackError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === 'YAMLException') return true;
+  return MEMORY_SCHEMA_FALLBACK_ERROR_RE.test(error.message);
+}
+
 function profileTemplateId(capabilitiesJson: string | null, identitySource: string): string | null {
   try {
     const value = (JSON.parse(capabilitiesJson ?? '{}') as { templateId?: unknown }).templateId;
@@ -351,10 +365,10 @@ function createMaterializer(input: {
           return;
         } catch (error) {
           // Native file tools in V2 `.cindy/memory/` can create valid-named Markdown files larger
-          // than curated shard limits or with empty/frontmatter-only bodies. Preserve them verbatim
-          // instead of stranding take-over on a schema limit; real I/O or owner errors still fail.
-          const message = error instanceof Error ? error.message : '';
-          if (!/memory:shard-too-large|Invalid memory content/.test(message)) throw error;
+          // than curated shard limits, without YAML frontmatter, or with empty/malformed headers.
+          // Preserve them verbatim (both on initial restore and subsequent cloud updates when the
+          // existing on-disk file lacks frontmatter); real I/O, symlink (`not-ready`) or owner errors still fail.
+          if (!isMemorySchemaFallbackError(error)) throw error;
         }
       }
       const [primaryDir] = await teammateStoreMemoryDirs(ownerScopedUserDataPath(), botId);

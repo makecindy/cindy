@@ -26,6 +26,7 @@ export { TEAMMATE_PROJECT_MEMORY_SEGMENTS };
 /** Derived files beside the records: USER.md travels inside the profile, MEMORY.md is a rebuilt index. */
 const DERIVED_MEMORY_FILES = new Set(['user.md', 'memory.md', 'readme.md']);
 const MAX_MEMORY_FILENAME_LENGTH = 160;
+const MAX_MEMORY_FILENAME_BYTES = 255;
 const WINDOWS_FORBIDDEN_CHARS = /[<>:"|?*]/;
 const RESERVED_WINDOWS_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i;
 
@@ -45,6 +46,7 @@ export function isStoreCompatibleMemoryFilename(filename: unknown): filename is 
 export function isSafeTeammateMemoryFilename(filename: unknown): filename is string {
   if (typeof filename !== 'string') return false;
   if (!filename || filename.length > MAX_MEMORY_FILENAME_LENGTH) return false;
+  if (Buffer.byteLength(filename, 'utf8') > MAX_MEMORY_FILENAME_BYTES) return false;
   if (!filename.endsWith('.md') || filename.startsWith('.')) return false;
   if (DERIVED_MEMORY_FILES.has(filename.toLowerCase())) return false;
   if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) return false;
@@ -208,7 +210,7 @@ export async function writeRawTeammateMemoryFile(
   if (existing && (existing.isSymbolicLink() || !existing.isFile())) {
     throw new MemoryError('not-ready', 'refusing to overwrite a non-file memory target');
   }
-  const tmp = path.join(dir, `.${filename}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+  const tmp = path.join(dir, `.cindy-mem-${process.pid}-${randomBytes(6).toString('hex')}.tmp`);
   assertCurrent?.();
   await fs.writeFile(tmp, content, { encoding: 'utf8', flag: 'wx' });
   try {
