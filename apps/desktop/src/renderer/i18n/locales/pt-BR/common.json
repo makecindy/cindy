@@ -2761,6 +2761,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "Número de celular para login",
+        "rowHint": "Usado para fazer login e receber códigos de verificação",
+        "change": "Alterar número",
+        "verifyTitle": "Verificar o número atual",
+        "introDescription": "Para proteger sua conta, verifique primeiro seu número de celular atual.",
+        "newTitle": "Digite o novo número",
+        "newDescription": "Após a alteração, faça login com o novo número. O número antigo não poderá mais fazer login nesta conta.",
+        "inputLabel": "Novo número de celular",
+        "placeholder": "Digite seu número de celular",
+        "success": "Número de celular alterado para {{target}}"
+      },
+      "email": {
+        "rowTitle": "E-mail para login",
+        "rowHint": "Usado para fazer login e receber códigos de verificação",
+        "change": "Alterar e-mail",
+        "verifyTitle": "Verificar o e-mail atual",
+        "introDescription": "Para proteger sua conta, verifique primeiro seu e-mail atual.",
+        "newTitle": "Digite o novo e-mail",
+        "newDescription": "Após a alteração, faça login com o novo e-mail. O e-mail antigo não poderá mais fazer login nesta conta.",
+        "inputLabel": "Novo endereço de e-mail",
+        "placeholder": "Digite seu endereço de e-mail",
+        "success": "E-mail alterado para {{target}}"
+      },
+      "codeSent": "Enviamos um código de verificação para {{target}}",
+      "codeLabel": "Código de verificação",
+      "codePlaceholder": "Código de 6 dígitos",
+      "sendCode": "Enviar código",
+      "next": "Avançar",
+      "confirm": "Confirmar alteração",
+      "cancel": "Cancelar",
+      "resend": "Reenviar código",
+      "resendIn": "Reenviar em {{seconds}} s",
+      "errors": {
+        "INVALID_CODE": "O código de verificação está incorreto ou expirou.",
+        "CODE_ATTEMPTS_EXCEEDED": "Muitas tentativas incorretas. Solicite um novo código.",
+        "CONTACT_TAKEN": "Este número de celular ou e-mail já está vinculado a outra conta.",
+        "CONTACT_UNCHANGED": "É igual ao seu número de celular ou e-mail atual.",
+        "CONTACT_CHANGE_TICKET_INVALID": "A verificação expirou. Verifique novamente seu número de celular ou e-mail atual.",
+        "AUTH_FLOW_SUPERSEDED": "Seu login mudou. Comece de novo.",
+        "CONTACT_CHANGE_UNAVAILABLE": "Esta conta não pode alterar o método de login aqui.",
+        "CONTACT_CHANGE_BUSY": "A etapa anterior ainda está em andamento.",
+        "RATE_LIMITED": "Muitas tentativas. Aguarde um momento e tente novamente.",
+        "RATE_LIMITED_UNTIL": "Muitas tentativas. Tente novamente após {{time}} (horário local).",
+        "INVALID_PARAMS": "O formato é inválido. Verifique e tente novamente.",
+        "EMAIL_DOMAIN_BLOCKED": "Este e-mail não pode ser usado. Tente outro.",
+        "EMAIL_PATTERN_BLOCKED": "Este e-mail não pode ser usado. Tente outro.",
+        "ACCOUNT_DELETION_PENDING": "Esta conta está aguardando exclusão e não pode ser alterada.",
+        "NETWORK_ERROR": "Falha na conexão de rede. Verifique sua rede e tente novamente.",
+        "REQUEST_TIMEOUT": "A solicitação expirou. Tente novamente.",
+        "fallback": "Algo deu errado. Tente novamente mais tarde."
+      }
+    },
     "help": {
       "title": "Ajuda",
       "description": "Aprenda a realizar tarefas com {{appName}}.",

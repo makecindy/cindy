@@ -2761,6 +2761,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "Número de telemóvel para iniciar sessão",
+        "rowHint": "Usado para iniciar sessão e receber códigos de verificação",
+        "change": "Alterar número",
+        "verifyTitle": "Verificar o número atual",
+        "introDescription": "Para proteger a sua conta, verifique primeiro o seu número de telemóvel atual.",
+        "newTitle": "Introduza o novo número",
+        "newDescription": "Após a alteração, inicie sessão com o novo número. O número antigo deixará de poder iniciar sessão nesta conta.",
+        "inputLabel": "Novo número de telemóvel",
+        "placeholder": "Introduzir o seu número de telemóvel",
+        "success": "Número de telemóvel alterado para {{target}}"
+      },
+      "email": {
+        "rowTitle": "Email para iniciar sessão",
+        "rowHint": "Usado para iniciar sessão e receber códigos de verificação",
+        "change": "Alterar email",
+        "verifyTitle": "Verificar o email atual",
+        "introDescription": "Para proteger a sua conta, verifique primeiro o seu email atual.",
+        "newTitle": "Introduza o novo email",
+        "newDescription": "Após a alteração, inicie sessão com o novo email. O email antigo deixará de poder iniciar sessão nesta conta.",
+        "inputLabel": "Novo endereço de email",
+        "placeholder": "Introduza o seu endereço de email",
+        "success": "Email alterado para {{target}}"
+      },
+      "codeSent": "Enviámos um código de verificação para {{target}}",
+      "codeLabel": "Código de verificação",
+      "codePlaceholder": "Código de 6 dígitos",
+      "sendCode": "Enviar código",
+      "next": "Seguinte",
+      "confirm": "Confirmar alteração",
+      "cancel": "Cancelar",
+      "resend": "Reenviar código",
+      "resendIn": "Reenviar dentro de {{seconds}} s",
+      "errors": {
+        "INVALID_CODE": "O código de verificação está incorreto ou expirou.",
+        "CODE_ATTEMPTS_EXCEEDED": "Demasiadas tentativas incorretas. Peça um novo código.",
+        "CONTACT_TAKEN": "Este número de telemóvel ou email já está associado a outra conta.",
+        "CONTACT_UNCHANGED": "É igual ao seu número de telemóvel ou email atual.",
+        "CONTACT_CHANGE_TICKET_INVALID": "A verificação expirou. Verifique novamente o seu número de telemóvel ou email atual.",
+        "AUTH_FLOW_SUPERSEDED": "O seu início de sessão mudou. Comece de novo.",
+        "CONTACT_CHANGE_UNAVAILABLE": "Esta conta não pode alterar o método de início de sessão aqui.",
+        "CONTACT_CHANGE_BUSY": "O passo anterior ainda está a ser processado.",
+        "RATE_LIMITED": "Demasiadas tentativas. Aguarde um momento e tente novamente.",
+        "RATE_LIMITED_UNTIL": "Demasiadas tentativas. Tente novamente após as {{time}} (hora local).",
+        "INVALID_PARAMS": "O formato é inválido. Verifique e tente novamente.",
+        "EMAIL_DOMAIN_BLOCKED": "Este email não pode ser usado. Experimente outro.",
+        "EMAIL_PATTERN_BLOCKED": "Este email não pode ser usado. Experimente outro.",
+        "ACCOUNT_DELETION_PENDING": "Esta conta aguarda eliminação e não pode ser alterada.",
+        "NETWORK_ERROR": "Falha na ligação de rede. Verifique a sua rede e tente novamente.",
+        "REQUEST_TIMEOUT": "O pedido excedeu o tempo limite. Tente novamente.",
+        "fallback": "Algo correu mal. Tente novamente mais tarde."
+      }
+    },
     "help": {
       "title": "Ajuda",
       "description": "Saiba como trabalhar com {{appName}}.",

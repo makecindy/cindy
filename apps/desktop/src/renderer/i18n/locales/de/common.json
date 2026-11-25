@@ -2723,6 +2723,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "Telefonnummer für die Anmeldung",
+        "rowHint": "Für die Anmeldung und den Empfang von Bestätigungscodes",
+        "change": "Telefonnummer ändern",
+        "verifyTitle": "Aktuelle Telefonnummer bestätigen",
+        "introDescription": "Zum Schutz deines Kontos bestätigst du vor der Änderung deine aktuelle Telefonnummer.",
+        "newTitle": "Neue Telefonnummer eingeben",
+        "newDescription": "Melde dich nach der Änderung mit der neuen Nummer an. Mit der alten Nummer kannst du dich dann nicht mehr bei diesem Konto anmelden.",
+        "inputLabel": "Neue Telefonnummer",
+        "placeholder": "Gib deine Telefonnummer ein",
+        "success": "Telefonnummer in {{target}} geändert"
+      },
+      "email": {
+        "rowTitle": "E-Mail-Adresse für die Anmeldung",
+        "rowHint": "Für die Anmeldung und den Empfang von Bestätigungscodes",
+        "change": "E-Mail-Adresse ändern",
+        "verifyTitle": "Aktuelle E-Mail-Adresse bestätigen",
+        "introDescription": "Zum Schutz deines Kontos bestätigst du vor der Änderung deine aktuelle E-Mail-Adresse.",
+        "newTitle": "Neue E-Mail-Adresse eingeben",
+        "newDescription": "Melde dich nach der Änderung mit der neuen E-Mail-Adresse an. Mit der alten Adresse kannst du dich dann nicht mehr bei diesem Konto anmelden.",
+        "inputLabel": "Neue E-Mail-Adresse",
+        "placeholder": "Gib deine E-Mail-Adresse ein",
+        "success": "E-Mail-Adresse in {{target}} geändert"
+      },
+      "codeSent": "Ein Bestätigungscode wurde an {{target}} gesendet",
+      "codeLabel": "Bestätigungscode",
+      "codePlaceholder": "6-stelliger Code",
+      "sendCode": "Code senden",
+      "next": "Weiter",
+      "confirm": "Änderung bestätigen",
+      "cancel": "Abbrechen",
+      "resend": "Code erneut senden",
+      "resendIn": "Erneut senden in {{seconds}} s",
+      "errors": {
+        "INVALID_CODE": "Der Bestätigungscode ist falsch oder abgelaufen.",
+        "CODE_ATTEMPTS_EXCEEDED": "Zu viele falsche Versuche. Fordere einen neuen Code an.",
+        "CONTACT_TAKEN": "Diese Telefonnummer oder E-Mail-Adresse ist bereits mit einem anderen Konto verknüpft.",
+        "CONTACT_UNCHANGED": "Das ist deine aktuelle Telefonnummer oder E-Mail-Adresse.",
+        "CONTACT_CHANGE_TICKET_INVALID": "Die Bestätigung ist abgelaufen. Bestätige deine aktuelle Telefonnummer oder E-Mail-Adresse erneut.",
+        "AUTH_FLOW_SUPERSEDED": "Deine Anmeldung hat sich geändert. Beginne von vorn.",
+        "CONTACT_CHANGE_UNAVAILABLE": "Für dieses Konto lässt sich die Anmeldemethode hier nicht ändern.",
+        "CONTACT_CHANGE_BUSY": "Der vorherige Schritt wird noch verarbeitet.",
+        "RATE_LIMITED": "Zu viele Versuche. Warte kurz und versuche es erneut.",
+        "RATE_LIMITED_UNTIL": "Zu viele Versuche. Versuche es nach {{time}} (Ortszeit) erneut.",
+        "INVALID_PARAMS": "Das Format ist ungültig. Prüfe die Eingabe und versuche es erneut.",
+        "EMAIL_DOMAIN_BLOCKED": "Diese E-Mail-Adresse kann nicht verwendet werden. Versuche eine andere.",
+        "EMAIL_PATTERN_BLOCKED": "Diese E-Mail-Adresse kann nicht verwendet werden. Versuche eine andere.",
+        "ACCOUNT_DELETION_PENDING": "Dieses Konto ist zur Löschung vorgemerkt und kann nicht geändert werden.",
+        "NETWORK_ERROR": "Netzwerkverbindung fehlgeschlagen. Prüfe dein Netzwerk und versuche es erneut.",
+        "REQUEST_TIMEOUT": "Zeitüberschreitung der Anfrage. Versuche es erneut.",
+        "fallback": "Etwas ist schiefgelaufen. Versuche es später erneut."
+      }
+    },
     "help": {
       "title": "Hilfe",
       "description": "Erfahre, wie du mit {{appName}} Aufgaben erledigst.",

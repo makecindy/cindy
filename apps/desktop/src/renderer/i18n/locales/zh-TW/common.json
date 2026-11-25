@@ -2693,6 +2693,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "登入手機號碼",
+        "rowHint": "用於登入和接收驗證碼",
+        "change": "更換手機號碼",
+        "verifyTitle": "驗證目前的手機號碼",
+        "introDescription": "為保護帳號安全，更換前需要先驗證目前繫結的手機號碼。",
+        "newTitle": "輸入新的手機號碼",
+        "newDescription": "更換後請使用新的手機號碼登入，原手機號碼將無法再登入此帳號。",
+        "inputLabel": "新的手機號碼",
+        "placeholder": "請輸入手機號碼",
+        "success": "手機號碼已更換為 {{target}}"
+      },
+      "email": {
+        "rowTitle": "登入電子郵件",
+        "rowHint": "用於登入和接收驗證碼",
+        "change": "更換電子郵件",
+        "verifyTitle": "驗證目前的電子郵件",
+        "introDescription": "為保護帳號安全，更換前需要先驗證目前繫結的電子郵件。",
+        "newTitle": "輸入新的電子郵件",
+        "newDescription": "更換後請使用新的電子郵件登入，原電子郵件將無法再登入此帳號。",
+        "inputLabel": "新的電子郵件地址",
+        "placeholder": "請輸入電子郵件地址",
+        "success": "電子郵件已更換為 {{target}}"
+      },
+      "codeSent": "驗證碼已傳送至 {{target}}",
+      "codeLabel": "驗證碼",
+      "codePlaceholder": "6 位驗證碼",
+      "sendCode": "傳送驗證碼",
+      "next": "下一步",
+      "confirm": "確認更換",
+      "cancel": "取消",
+      "resend": "重新傳送驗證碼",
+      "resendIn": "{{seconds}} 秒後可重新傳送",
+      "errors": {
+        "INVALID_CODE": "驗證碼錯誤或已過期",
+        "CODE_ATTEMPTS_EXCEEDED": "驗證碼錯誤次數過多，請重新取得",
+        "CONTACT_TAKEN": "此手機號碼或電子郵件已繫結其他帳號",
+        "CONTACT_UNCHANGED": "與目前繫結的手機號碼或電子郵件相同",
+        "CONTACT_CHANGE_TICKET_INVALID": "驗證已過期，請重新驗證目前的手機號碼或電子郵件",
+        "AUTH_FLOW_SUPERSEDED": "登入狀態已變更，請重新開始",
+        "CONTACT_CHANGE_UNAVAILABLE": "目前帳號不支援在這裡更換登入方式",
+        "CONTACT_CHANGE_BUSY": "上一步仍在處理中",
+        "RATE_LIMITED": "操作過於頻繁，請稍後再試。",
+        "RATE_LIMITED_UNTIL": "操作過於頻繁，請在 {{time}}（本機時間）之後重試。",
+        "INVALID_PARAMS": "格式不正確，請檢查後重試",
+        "EMAIL_DOMAIN_BLOCKED": "此電子郵件暫不支援使用，請換一個",
+        "EMAIL_PATTERN_BLOCKED": "此電子郵件暫不支援使用，請換一個",
+        "ACCOUNT_DELETION_PENDING": "帳號正在等待刪除，無法更換",
+        "NETWORK_ERROR": "網路連線失敗，請檢查網路後重試",
+        "REQUEST_TIMEOUT": "請求逾時，請重試",
+        "fallback": "操作失敗，請稍後重試"
+      }
+    },
     "help": {
       "title": "幫助",
       "description": "瞭解如何用 {{appName}} 完成工作",

@@ -2761,6 +2761,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "Numéro de téléphone de connexion",
+        "rowHint": "Sert à vous connecter et à recevoir les codes de vérification",
+        "change": "Changer de numéro",
+        "verifyTitle": "Vérifier le numéro actuel",
+        "introDescription": "Pour protéger votre compte, vérifiez d'abord votre numéro de téléphone actuel.",
+        "newTitle": "Saisir le nouveau numéro",
+        "newDescription": "Après la modification, connectez-vous avec le nouveau numéro. L'ancien numéro ne permettra plus de vous connecter à ce compte.",
+        "inputLabel": "Nouveau numéro de téléphone",
+        "placeholder": "Saisissez votre numéro de téléphone",
+        "success": "Numéro de téléphone remplacé par {{target}}"
+      },
+      "email": {
+        "rowTitle": "Adresse e-mail de connexion",
+        "rowHint": "Sert à vous connecter et à recevoir les codes de vérification",
+        "change": "Changer d'adresse e-mail",
+        "verifyTitle": "Vérifier l'adresse e-mail actuelle",
+        "introDescription": "Pour protéger votre compte, vérifiez d'abord votre adresse e-mail actuelle.",
+        "newTitle": "Saisir la nouvelle adresse e-mail",
+        "newDescription": "Après la modification, connectez-vous avec la nouvelle adresse. L'ancienne adresse ne permettra plus de vous connecter à ce compte.",
+        "inputLabel": "Nouvelle adresse e-mail",
+        "placeholder": "Saisissez votre adresse e-mail",
+        "success": "Adresse e-mail remplacée par {{target}}"
+      },
+      "codeSent": "Un code de vérification a été envoyé à {{target}}",
+      "codeLabel": "Code de vérification",
+      "codePlaceholder": "Code à 6 chiffres",
+      "sendCode": "Envoyer le code",
+      "next": "Suivant",
+      "confirm": "Confirmer la modification",
+      "cancel": "Annuler",
+      "resend": "Renvoyer le code",
+      "resendIn": "Renvoyer dans {{seconds}} s",
+      "errors": {
+        "INVALID_CODE": "Le code de vérification est incorrect ou a expiré.",
+        "CODE_ATTEMPTS_EXCEEDED": "Trop de tentatives incorrectes. Demandez un nouveau code.",
+        "CONTACT_TAKEN": "Ce numéro de téléphone ou cette adresse e-mail est déjà associé à un autre compte.",
+        "CONTACT_UNCHANGED": "C'est déjà votre numéro de téléphone ou votre adresse e-mail actuel.",
+        "CONTACT_CHANGE_TICKET_INVALID": "La vérification a expiré. Vérifiez à nouveau votre numéro de téléphone ou votre adresse e-mail actuel.",
+        "AUTH_FLOW_SUPERSEDED": "Votre connexion a changé. Recommencez.",
+        "CONTACT_CHANGE_UNAVAILABLE": "Ce compte ne peut pas modifier son mode de connexion ici.",
+        "CONTACT_CHANGE_BUSY": "L'étape précédente est encore en cours.",
+        "RATE_LIMITED": "Trop de tentatives. Patientez un instant, puis réessayez.",
+        "RATE_LIMITED_UNTIL": "Trop de tentatives. Réessayez après {{time}} (heure locale).",
+        "INVALID_PARAMS": "Le format n'est pas valide. Vérifiez et réessayez.",
+        "EMAIL_DOMAIN_BLOCKED": "Cette adresse e-mail ne peut pas être utilisée. Essayez-en une autre.",
+        "EMAIL_PATTERN_BLOCKED": "Cette adresse e-mail ne peut pas être utilisée. Essayez-en une autre.",
+        "ACCOUNT_DELETION_PENDING": "Ce compte est en attente de suppression et ne peut pas être modifié.",
+        "NETWORK_ERROR": "Échec de la connexion réseau. Vérifiez votre réseau et réessayez.",
+        "REQUEST_TIMEOUT": "La requête a expiré. Réessayez.",
+        "fallback": "Une erreur s'est produite. Réessayez plus tard."
+      }
+    },
     "help": {
       "title": "Aide",
       "description": "Découvrez comment accomplir votre travail avec {{appName}}.",

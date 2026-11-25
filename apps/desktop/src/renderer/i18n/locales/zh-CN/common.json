@@ -2693,6 +2693,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "登录手机号",
+        "rowHint": "用于登录和接收验证码",
+        "change": "更换手机号",
+        "verifyTitle": "验证当前手机号",
+        "introDescription": "为保护账号安全，更换前需要先验证当前绑定的手机号。",
+        "newTitle": "输入新手机号",
+        "newDescription": "更换后请使用新手机号登录，原手机号将不能再登录此账号。",
+        "inputLabel": "新手机号",
+        "placeholder": "请输入手机号",
+        "success": "手机号已更换为 {{target}}"
+      },
+      "email": {
+        "rowTitle": "登录邮箱",
+        "rowHint": "用于登录和接收验证码",
+        "change": "更换邮箱",
+        "verifyTitle": "验证当前邮箱",
+        "introDescription": "为保护账号安全，更换前需要先验证当前绑定的邮箱。",
+        "newTitle": "输入新邮箱",
+        "newDescription": "更换后请使用新邮箱登录，原邮箱将不能再登录此账号。",
+        "inputLabel": "新邮箱",
+        "placeholder": "请输入邮箱",
+        "success": "邮箱已更换为 {{target}}"
+      },
+      "codeSent": "验证码已发送至 {{target}}",
+      "codeLabel": "验证码",
+      "codePlaceholder": "6 位验证码",
+      "sendCode": "发送验证码",
+      "next": "下一步",
+      "confirm": "确认更换",
+      "cancel": "取消",
+      "resend": "重新发送验证码",
+      "resendIn": "{{seconds}} 秒后可重新发送",
+      "errors": {
+        "INVALID_CODE": "验证码错误或已过期",
+        "CODE_ATTEMPTS_EXCEEDED": "验证码错误次数过多，请重新获取",
+        "CONTACT_TAKEN": "该手机号或邮箱已绑定其他账号",
+        "CONTACT_UNCHANGED": "与当前绑定的手机号或邮箱相同",
+        "CONTACT_CHANGE_TICKET_INVALID": "验证已过期，请重新验证当前手机号或邮箱",
+        "AUTH_FLOW_SUPERSEDED": "登录状态已变化，请重新开始",
+        "CONTACT_CHANGE_UNAVAILABLE": "当前账号不支持在这里更换登录方式",
+        "CONTACT_CHANGE_BUSY": "上一步仍在处理中",
+        "RATE_LIMITED": "操作过于频繁，请稍后再试。",
+        "RATE_LIMITED_UNTIL": "操作过于频繁，请在 {{time}}（本机时间）之后重试。",
+        "INVALID_PARAMS": "格式不正确，请检查后重试",
+        "EMAIL_DOMAIN_BLOCKED": "该邮箱暂不支持使用，请换一个",
+        "EMAIL_PATTERN_BLOCKED": "该邮箱暂不支持使用，请换一个",
+        "ACCOUNT_DELETION_PENDING": "账号正在等待注销，无法更换",
+        "NETWORK_ERROR": "网络连接失败，请检查网络后重试",
+        "REQUEST_TIMEOUT": "请求超时，请重试",
+        "fallback": "操作失败，请稍后重试"
+      }
+    },
     "help": {
       "title": "帮助",
       "description": "了解如何用 {{appName}} 完成工作",
