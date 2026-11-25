@@ -15584,6 +15584,7 @@
       "modelCatalogUnconfirmed": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
       "actionScheduled": "Authorization expired for this action. The next run is still scheduled.",
       "actionExpired": "Task authorization expired for this action. Check the latest automation run.",
+      "modelRebuildRetry": "The instruction was not sent. Open the automation on your computer and choose “Run now” to retry.",
       "actionRecovered": "Authorization expired for this action. A later run of the same automation succeeded.",
       "text": "An automatic run failed.",
       "prCheck_dns": "{{device}} could not resolve {{host}}. Check the network or DNS on that device if this persists. Consecutive failures: {{failures}}. Scheduled checks can retry at or after {{retry}}.",
@@ -17960,7 +17961,7 @@
       "openWorkdirFailed": "Failed to open folder"
     },
     "runs": {
-      "boundPluginEngineRecovery": "This automation didn’t run because its linked task uses a plugin engine. Switch the task back to a built-in engine or link the automation to a task that uses one.",
+      "boundPluginEngineRecovery": "This automation didn’t run. An automation linked to a plugin engine task uses the task’s own model and runs on this computer. If the automation chooses a model, remove it, then run it again.",
       "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
       "status": {
         "running": "Running",
@@ -18312,6 +18313,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Relative interval",
+        "label": "Timing mode",
         "cronHint": "Runs at calendar clock slots.",
         "intervalHint": "Waits this long after the previous run finishes.",
         "intervalUnsupportedHint": "This exact interval is preserved. Choosing a minute or hour preset will replace it.",

@@ -15687,6 +15687,7 @@
       "modelCatalogUnconfirmed": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualize a lista de modelos e tente novamente.",
       "actionScheduled": "A autorização para esta ação expirou. A próxima execução continua agendada.",
       "actionExpired": "A autorização da sessão para esta ação expirou. Confira a execução mais recente da automação.",
+      "modelRebuildRetry": "A instrução não foi enviada. Abra a automação no computador e selecione “Executar agora” para tentar novamente.",
       "actionRecovered": "A autorização para esta ação expirou. A mesma automação foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
       "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS desse dispositivo. Falhas consecutivas: {{failures}}. As verificações agendadas poderão ser retomadas a partir de {{retry}}.",
@@ -18128,7 +18129,7 @@
       "openWorkdirFailed": "Falha ao abrir pasta"
     },
     "runs": {
-      "boundPluginEngineRecovery": "A automação não foi executada porque a tarefa vinculada usa um mecanismo de plug-in. Volte a usar um mecanismo integrado nessa tarefa ou vincule a automação a uma tarefa que use um mecanismo integrado.",
+      "boundPluginEngineRecovery": "A automação não foi executada. Uma automação vinculada a uma tarefa com mecanismo de plug-in usa o modelo da própria tarefa e é executada neste computador. Se a automação escolher um modelo, remova-o e execute-a novamente.",
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes do envio da mensagem. Quando a sessão de destino estiver livre, escolha {{action}} para executá-la.",
       "status": {
         "running": "Em execução",
@@ -18480,6 +18481,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalo relativo",
+        "label": "Modo de agendamento",
         "cronHint": "Executa nos horários definidos no calendário.",
         "intervalHint": "Aguarda este intervalo após o término da execução anterior.",
         "intervalUnsupportedHint": "Este intervalo exato é preservado. Escolher uma predefinição de minutos ou horas irá substituí-lo.",
