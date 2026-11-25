@@ -546,6 +546,42 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
     expect(screen.getByText('2 / 2')).toBeTruthy();
   });
 
+  // PR #12724 review：收进已完成工作时间线的回复被插件卡片替换后，卡片仍在时间线里显示，
+  // 卡片图要进任务画廊、被替换的正文图不进。最小失败输入：画廊为空（卡片图漏收）。
+  it('工作时间线里替换回复的插件卡片图进任务画廊', () => {
+    const cardImage = `cindy-media://blobs/${'c'.repeat(64)}.png`;
+    const replyImage = `cindy-media://blobs/${'r'.repeat(64)}.png`;
+    const ghostCards: GhostCardSnapshot = {
+      version: 1,
+      liveCards: [],
+      byCallId: new Map([
+        ['a1', { status: 'ready', ghostId: 'cindy-art', html: `<img src="${cardImage}">`, height: 200 }],
+      ]),
+    };
+    const group = {
+      type: 'work_group',
+      key: 'wg',
+      isStreaming: false,
+      children: [
+        { type: 'message', key: 'a1', message: { clientId: 'a1', role: 'assistant', content: `![r](${replyImage})` } },
+      ],
+    } as unknown as RenderItem;
+    const gallery = collectTaskImageGallery(
+      [group],
+      new Map([[group.key, collectSessionImageSrcs([group], undefined, ghostCards)]]),
+      {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: false,
+      },
+      ghostCards,
+    );
+    expect(gallery.map((image) => image.src)).toEqual([cardImage]);
+  });
+
   // PR #12724 review：画廊只收回复实际显示的图。伙伴开场选项列表显示成按钮、不渲染正文，
   // 其中的图片语法不进画廊。最小失败输入：选项 `![hidden](B)` 让画廊多出 B。
   it('回复里显示层剥离的内容不进任务画廊', () => {

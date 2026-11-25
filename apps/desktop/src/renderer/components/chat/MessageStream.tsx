@@ -1461,6 +1461,11 @@ export function collectSessionImageSrcs(
       for (const m of item.items) {
         if (m.kind === 'image' && m.url) push(m.url);
       }
+    } else if (item.type === 'work_group') {
+      // A finished work timeline still renders its replies' replacement cards.
+      out.push(
+        ...collectSessionImageSrcs(item.children as RenderItem[], mediaOrigin, ghostCards, isSessionStreaming),
+      );
     } else if (item.type === 'ghost_card') {
       if (ghostCards) {
         for (const image of collectGhostCardGalleryImages(
