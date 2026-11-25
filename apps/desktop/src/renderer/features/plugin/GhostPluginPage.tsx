@@ -2631,18 +2631,19 @@ function MarketRecommendationFace({
   const { t } = useTranslation();
   const icon = usePluginMarketIcon(item, { deferUntilVisible: false });
   const origin = pluginPresentationOrigin(item);
+  const publisherFilter = publicPublisherFilter(item);
   return <div className="plugin-recommendation-face" data-recommendation-layer={layer}
     hidden={!layer} inert={moving || undefined} aria-hidden={layer !== 'current' || undefined}>
     {detailButton}
     <div className="plugin-recommendation-head pointer-events-none flex min-w-0 items-center gap-3">
       <GhostPluginIcon size={featured ? 'detail' : 'sm'} iconContainerRef={icon.containerRef} iconDataUrl={icon.iconDataUrl}
-        iconId={item.ghostId} iconName={item.name} onIconLoad={icon.onIconLoad}
+        iconId={item.ghostId} iconName={item.name} officialCatalog={publisherFilter === 'official'} onIconLoad={icon.onIconLoad}
         onIconLoadError={() => icon.onIconLoadError(onIconLoadError)} />
       {layer ? <div className="plugin-recommendation-content min-w-0 flex-1">
         <div className="plugin-catalog-name-group flex min-w-0 items-center gap-2">
           <p className={cn('plugin-catalog-name font-medium text-[var(--text-primary)]', featured ? 'text-20' : 'text-15')} title={item.name}>{item.name}</p>
           <PluginPublisherBadge origin={origin} kind={item.publisherKind}
-            sourceLabel={origin === 'public' && publicPublisherFilter(item) === null ? t('mcpApps.source.market') : undefined} />
+            sourceLabel={origin === 'public' && publisherFilter === null ? t('mcpApps.source.market') : undefined} />
         </div>
         {layer === 'current' ? <div className="sr-only">{metadata}</div> : null}
       </div> : null}
@@ -2736,7 +2737,8 @@ export function MarketPluginCard({
     onFocusCapture: schedulePrefetch,
     onBlurCapture: cancelPrefetch,
   };
-  const showOrigin = publicPublisherFilter(item) === null;
+  const publisherFilter = publicPublisherFilter(item);
+  const showOrigin = publisherFilter === null;
   const sourceMark = <PluginPublisherBadge origin={origin} kind={item.publisherKind}
     sourceLabel={origin === 'public' && showOrigin ? t('mcpApps.source.market') : undefined} />;
   const metadata = <>
@@ -2810,6 +2812,7 @@ export function MarketPluginCard({
           iconDataUrl={rowIconUrl}
           iconId={item.ghostId}
           iconName={item.name}
+          officialCatalog={publisherFilter === 'official'}
           onIconLoad={() => {
             marketIcon.onIconLoad();
             if (rowIcon && rowIconUrl) loadedMarketRowIcons.set(rowIcon, rowIconUrl);

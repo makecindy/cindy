@@ -7,6 +7,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { ANTIGRAVITY_MARK_PATH } from '@cindy/maker-shared/branding';
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
@@ -358,6 +359,17 @@ describe('More plugins', () => {
 });
 
 describe('MarketPluginDetailView', () => {
+  // Unit / #12735: the real catalog detail receives an official legacy ID with
+  // no artwork. Previously the displayed icon was generic. A community item
+  // of the same name must still show its own icon rather than the official mark.
+  it.each([['official', true], ['personal', false]] as const)(
+    'uses the legacy Antigravity mark only for the official detail (%s)',
+    (publisherKind, expected) => {
+      const { container } = renderDetail({ ghostId: 'engine', name: 'Antigravity', publisherKind });
+      expect(Boolean(container.querySelector(`path[d="${ANTIGRAVITY_MARK_PATH}"]`))).toBe(expected);
+    },
+  );
+
   // Unit / §7: a verified manifest with a pending README must fit the real
   // detail body immediately. Existing collapsed-README cases use height zero.
   it('fits the detail immediately and keeps the disclosure stable when README arrives', () => {

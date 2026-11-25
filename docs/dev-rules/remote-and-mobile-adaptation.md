@@ -7,6 +7,53 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 可靠窗口防积压：列表读单飞、增量基准保留与过期只读回包退役（2026-11-25）
+
+慢网或对端暂停确认时，单条对端的 64 帧可靠发送窗口不再被高频自动化推送与重复大列表回包联手堵死：
+
+- **控制端列表读单飞与每位调用者剩余预算续读**：`DeviceLinkClient` 与 `AgentNetSessionLinks` 共用
+  `RemoteListingReadCoalescer`（`packages/device-link/src/listingReadCoalescer.ts`），对同连接代次、
+  同对端、规范化参数相同的 `local-db:sessions:list` 与 `maker:schedule:list-sidebar-index-runs`
+  合并单飞；在途期间涌入的多笔 `fresh: true` 刷新折叠为最多一笔紧随其后的串行读取（直接复用前序读取刚落库的
+  `ifNoneMatch` 标签换 `notModified` 或小增量）。每位调用者始终持有自身 `callDeadlineAt = enqueuedAt + timeoutMs`：
+  若前序较短预算读取先超时，仍有剩余预算的同乘调用者按精确剩余时长（`callDeadlineAt - now`，无加入时差启发式、
+  无延长调用期限的下限）自动续读；不同 `limit`、`status`、`includePinned`、跨账号 scoped 对端与各调用方的
+  `preSend`／`beforeDispatch` 严格隔离。排队期间无法共享已有准入期限的调用方独立排队；备用会话可用与无备用会话的调用分槽隔离，底层传输在零分片写出前让路（`DeviceLinkUnsentInvokeError`，`inFlight=false`）时按每位调用者克隆保留该类型以切到备用 Agent-Net 会话，无备用会话的发送前拥塞与已写出（`inFlight=true`）失败则保留原 `DeviceLinkError` 与错误实例隔离、不重放已发请求。Agent-Net 的共享预算调用者由会话层按正文流
+  进展决定超时；需要更早截止的调用者单独结算。合并层放弃最后一位调用者时，通过会话层已有的取消帧停止底层请求。
+- **弱网滞后期的列表增量基准保留**：`InvokeDeltaBases` 按 `(src, requestKey)` 同时保留控制端已确认持有的
+  基准（`confirmed`）与最新发出的快照（`latest`），且 `local-db:sessions:list` 的缓存键与基准键忽略布尔型
+  `fresh` 标记（保留 `tagCatalog` 等改变 wire 形状的标志），避免中间回包仍在慢队列排队时后续读取退回连续发送
+  200+ KiB 全量快照。
+- **已放弃或协商到期只读大回包原位退役**：控制端因超时或 `PEER_RESET` 放弃幂等只读请求后，随下一笔同对端请求捎带
+  `transfer.retired`（最多 8 个请求 ID）；双方均声明 `read-deadline-v1` 且本次调用超时预算在 wire 可表示范围内
+  （`1..3_600_000ms`）时，控制端在可靠请求帧元数据上附带真实剩余等待期限（`ReliableTransportMeta.deadlineMs`；超出 wire
+  上限的超长自定义调用自动省略 `deadlineMs`，仅凭明确 `transfer.retired` 退役）。被控端在收到携带 `meta.deadlineMs`
+  的帧（单帧或分片第 0 片）时按**该帧自身到达本机的单调时刻**立即折算为单调不减的绝对截止上界（重复重传第 0 片或后片先到、
+  第 0 片后到的乱序重组绝不叠加到更早分片的接收时刻），且**仅**在请求被 `transfer.retired` 明确放弃或超过该可信协商上界时
+  退役只读回包——旧控制端、未携带 `deadlineMs` 的请求与一切写操作永不按默认猜测上限提前退役。
+  明确 `transfer.retired` 的请求在入队前直接跳过编码并清理同对端 `remoteInvokeResultOutbox` 中的对应只读条目；已在可靠队列
+  `peer.pending` 中积压的只读大回包在命中 `transfer.retired` 或超过协商 `deadlineMs` 时原位替换为同 `seq` 的 `transport-skip`
+  占位，释放数百 KiB 缓冲而不制造可靠序号空洞；写操作与其它对端条目永不退役。
+- **调度事件拥塞期有界保序、权威状态补读与停滞退避**：远程端不消费的 `silenced`／`notified` 提醒事件归入 `LatestStatePushStage`
+  按 `scheduleId` 覆盖；驱动刷新的 `maker:schedule:event` 在对端窗口健康（`< SESSION_ACTIVITY_WINDOW_SOFT_CAP`）
+  时保持 0ms 直发，越过软上限时进入有界的 `ScheduleEventPushStage`（上限 64 条／16 KiB）：未超限时按到达因果顺序折叠投影等价
+  中间运行态，超限时绝不静默删终态，而是以 `O(1)` 汇总折叠为 `{ type: 'resync' }` 权威全量补读事件 + 最新会话绑定／已读槽位，
+  让控制端重拉权威调度列表、运行索引和未读汇总。新版手机首页收到 `resync` 时直接请求补齐会话列表，
+  旧版首页仍可借保留的会话绑定或后续全量同步补齐。两个暂存队列（`ScheduleEventPushStage` 与 `LatestStatePushStage`）的
+  可写唤醒（`nudge()`）只提前、绝不延后已排期的 drain，避免持续 ACK 令已可写队列饥饿；`routeSessionPeers` 合并转发
+  `DeviceLinkClient` 与 `AgentNetSessionLinks` 的 `onPeerSendProgress`：对确定性 ACK 通知的 Device Link 对端在无进展达上限后
+  0 定时器挂起，对队列深度来自 `bufferedAmount`（静默排空未必触发 `onDrain`）的 Agent-Net 会话对端保留 5s 低频兜底并在清空后停表，
+  保证最后一项必达且退订 `sessions` 或断链离线时同步清空。
+
+故障半径三问：① 证据是单个控制端对端的可靠窗口积压或单笔幂等只读请求已明确超时，不代表共享中转连接或其它对端失效；
+② 仅折叠该拥塞对端尚未发出的调度推送（超限转权威全量补读）、合并同参数列表读并将该对端明确已放弃或协商期限已到的只读回包
+原位换成同 `seq` 的 `transport-skip`，不重置共享连接、不跳过可靠流序号、不提前退役旧端或超长自定义超时请求、不丢弃或重放任何
+写操作结果；③ 健康的其它控制端仍保持 0ms 即时推送与独立缓冲，不同过滤参数、跨账号分享对端与写请求互不影响。
+
+自建中转兼容：全部改动复用既有 `invoke`／`invoke-result`／`push` 信封与 `transport-skip` 占位帧；`transfer.retired`
+与能力门控的 `read-deadline-v1`（`meta.deadlineMs`）均位于端到端载荷内，新旧控制端与被控端混合连接时自动降级互通，
+`packages/device-link-relay` 透传无感知，已部署自建中转无需修改或升级。
+
 ## 桌面后台只读通道的缺失回执
 
 桌面控制端按窗口、对端和通道记住只读接口的明确缺失，不记业务结果，不用版本号猜能力。
@@ -576,13 +623,15 @@ Device Link 按原 seq 重放，重放沿用原有预算；③ `packages/device-
 [协议记录](protocol-compatibility/agent-net-udp-relay.md)。设备侧 `packages/agent-net/src/relayUdp.ts`，中继侧
 `packages/agent-net-relay/src/server.ts`。
 
-故障半径三问：① 证据是这条中继会话自己的 UDP 登记有没有被确认：一次登记 4 秒没确认就算不通，与其它会话、其它对端
-无关；② 只切换这条会话上数据报走哪条路：设备不再经 UDP 发，下一次登记告诉中继「收不到」，中继对这台设备退回
-WebSocket；不关 WebSocket、不复位对端、不清队列，切换期间丢的数据报由传输核心重发；登记一直不通时每秒一次、
-10 秒后每 5 秒一次，每次几十字节；设备的 UDP 上行也断了、发不出「收不到」时，中继 30 秒没收到登记自行退回；
-③ `packages/agent-net/src/__tests__/relayUdp.test.ts` 验证确认中断 4 秒内退回 WebSocket 并告诉中继、恢复后切回，
-`packages/agent-net-relay/src/__tests__/relay.integration.test.ts` 用真实中继套接字验证报「收不到」后改走 WebSocket；
-两条用例去掉修复时都失败。
+故障半径三问：① 证据是这条中继会话自己的 UDP 登记与满尺寸第 1 跳探针（`0xE5`/`0xE6`，支持 `udp-relay-probe-v1` 时直测本机 ↔ 中转
+1350B 双向可达；无探针的旧中继下仅当所有经中转对端均无健康确认推进时才触发），与其它会话、以及单个抖动或离线对端无关；
+② 只切换这条会话上数据报走哪条路：设备不再经 UDP 发，下一次登记告诉中继「收不到」，中继对这台设备退回 WebSocket；
+不关 WebSocket、不复位对端、不清队列，切换期间丢的数据报由传输核心重发；登记一直不通时每秒一次、10 秒后每 5 秒一次，每次几十字节；
+探针停用期间按 15s → 30s → 60s → 120s 在 WebSocket 保护下主动发单包探针（换网时立即清冷却重探），通了才切回 UDP；
+设备的 UDP 上行也断了、发不出「收不到」时，中继 30 秒没收到登记自行退回；
+③ `packages/agent-net/src/__tests__/relayUdp.test.ts` 验证确认中断 4 秒内退回 WebSocket、满尺寸探针准入/复核/换网恢复、以及旧中继下的
+单对端隔离与间歇流量退避清零，`packages/agent-net-relay/src/__tests__/relay.integration.test.ts` 用真实中继套接字验证报「收不到」退回
+WebSocket 及满尺寸探针防放大/防重放，`packages/agent-net-native/src/udp_paths.rs` 验证手机原生同一探针状态机；去掉修复时对应回归均失败。
 
 ### Agent-Net 关闭时告诉直连的对端
 

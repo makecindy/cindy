@@ -3293,7 +3293,7 @@ async function companionCloudPeerVersion(deviceId: string): Promise<number> {
   } catch { return 0; } finally { clearTimeout(timer); }
 }
 const COMPANION_FAILURE_CODES: ReadonlySet<CompanionCloudFailureCode> = new Set<CompanionCloudFailureCode>(
-  ['HOME_CONFLICT', 'LOCAL_CINDY_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED', 'SKILL_TARGET_OUTDATED']);
+  ['HOME_CONFLICT', 'LOCAL_CINDY_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED', 'SKILL_TARGET_OUTDATED', 'PROFILE_SNAPSHOT_MISSING']);
 /** Kept and merged Cindy ids from a request (local IPC or another computer). */
 function companionMergeIds(keepBotId: unknown, fromBotIds: unknown): { keep: string; from: string[] } {
   if (typeof keepBotId !== 'string' || !keepBotId || keepBotId.length > 200) throwIpcError('INVALID_PARAMS', 'keepBotId required');
@@ -3311,8 +3311,15 @@ function companionMergeResult(value: unknown): CompanionMergeResult {
 }
 /** What a move does while the companion is still working; anything else is the default (fail as busy). */
 function companionSwitchOptions(value: unknown): CompanionSwitchOptions | undefined {
-  const whenBusy = value && typeof value === 'object' ? (value as { whenBusy?: unknown }).whenBusy : undefined;
-  return whenBusy === 'wait' || whenBusy === 'stop' ? { whenBusy } : undefined;
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as { whenBusy?: unknown; allowMissingProfile?: unknown };
+  const whenBusy = record.whenBusy === 'wait' || record.whenBusy === 'stop' ? record.whenBusy : undefined;
+  const allowMissingProfile = record.allowMissingProfile === true ? true : undefined;
+  return whenBusy || allowMissingProfile ? { ...(whenBusy ? { whenBusy } : {}), ...(allowMissingProfile ? { allowMissingProfile } : {}) } : undefined;
+}
+function companionTakeOverOptions(value: unknown): import('../../shared/companionCloud.js').CompanionTakeOverOptions | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  return (value as { allowMissingProfile?: unknown }).allowMissingProfile === true ? { allowMissingProfile: true } : undefined;
 }
 /** A failure code answered by another computer; unknown codes (newer versions) are plain failures. */
 function companionFailureCode(code: string): CompanionCloudFailureCode {
@@ -13890,10 +13897,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     companionCloud: createCompanionCloudHost({
       log,
-      ensureCanonicalSession: async (botId) => {
-        const ensured = await ensureBotCanonicalSession(botId, { onCreated: broadcastSessionCreated });
+      ensureCanonicalSession: async (botId, options) => {
+        const ensured = await ensureBotCanonicalSession(botId, {
+          onCreated: broadcastSessionCreated,
+          ...(options?.allowMissingModel ? { allowMissingModel: true } : {}),
+        });
         if (!ensured.ok) throw new Error(ensured.errorCode);
-        return ensured.sessionId;
+        return ensured.missingModel ? { sessionId: ensured.sessionId, missingModel: true } : ensured.sessionId;
       },
       discardInvitationWelcome: async (sessionId) => (await discardQueuedInvitationWelcomes(inputCoordinator, sessionId)) !== null,
       // Cloud history was added: rebuild like a restart, but never interrupt a turn.
@@ -14229,13 +14239,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return value;
   };
   const companionNotEnabled: CompanionCloudActionResult = { ok: false, code: 'NOT_ENABLED' };
-  ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_TAKE_OVER, async (event, botId: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_TAKE_OVER, async (event, botId: unknown, options?: unknown) => {
     assertTrustedAppRendererEvent(event);
     const id = companionBotId(botId);
     const mock = companionProfileUiMock();
     if (mock?.botId === id) return mock.takeOver();
     currentCompanionHomes();
-    return activeCompanionCloud()?.takeOver(id) ?? companionNotEnabled;
+    return activeCompanionCloud()?.takeOver(id, companionTakeOverOptions(options)) ?? companionNotEnabled;
   });
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_REPAIR_PROFILE, async (event, botId: unknown, request: unknown) => {
     assertTrustedAppRendererEvent(event);

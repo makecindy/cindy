@@ -16,7 +16,7 @@ import type { PluginMarketDetail, PluginMarketItem } from '../../../shared/plugi
 import { cn } from '@/lib/utils';
 import { PluginPublisherDescription } from './PluginPublisherBadge';
 import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
-import { pluginPresentationAuthor, pluginPresentationOrigin } from './lib/pluginMarketPresentation';
+import { pluginPresentationAuthor, pluginPresentationOrigin, publicPublisherFilter } from './lib/pluginMarketPresentation';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 import { PLUGIN_MANAGEMENT_FRAME_CLASS } from './PluginManagementLayout';
 import { PluginInstallRing } from './PluginInstallRing';
@@ -146,6 +146,7 @@ export function MarketPluginDetailView({
           publisherKind={detail.publisherKind}
           iconContainerRef={marketIcon.containerRef}
           iconDataUrl={marketIcon.iconDataUrl}
+          officialCatalog={publicPublisherFilter(detail) === 'official'}
           onIconLoad={marketIcon.onIconLoad}
           onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
           sourceNotice={isCommunityPlugin ? (

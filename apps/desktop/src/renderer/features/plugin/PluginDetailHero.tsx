@@ -29,6 +29,7 @@ export interface PluginDetailHeroProps {
   installationPending?: boolean;
   iconContainerRef?: Ref<HTMLSpanElement>;
   iconDataUrl?: string;
+  officialCatalog?: boolean;
   onIconLoad?: () => void;
   onIconLoadError?: () => void;
   actions?: ReactNode;
@@ -49,6 +50,7 @@ export function PluginDetailHero({
   installationPending,
   iconContainerRef,
   iconDataUrl,
+  officialCatalog,
   onIconLoad,
   onIconLoadError,
   actions,
@@ -116,6 +118,7 @@ export function PluginDetailHero({
         <div className="plugin-detail-identity-icon">
           <GhostPluginIcon iconId={id} iconName={name} size="detail"
             iconContainerRef={iconContainerRef} iconDataUrl={iconDataUrl}
+            officialCatalog={officialCatalog}
             onIconLoad={onIconLoad}
             onIconLoadError={onIconLoadError} />
         </div>
