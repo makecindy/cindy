@@ -120,6 +120,16 @@ function registerHandler(channel: string, impl: (...args: unknown[]) => unknown)
 }
 
 describe('device-link host dispatch (runInvoke) — real gate + async fs guard + routing', () => {
+  // The desktop assembly does not supply the registry-presence port. This allowlisted,
+  // unregistered channel reaches the original IPC dispatcher in the existing unit fixture.
+  it('preserves the desktop IPC error when the local handler is missing', async () => {
+    const channel = 'model-groups:get';
+    expect(await runInvoke(SRC, { channel, args: [] })).toEqual({
+      ok: false,
+      error: { code: 'IPC_ERROR', message: `[NOT_FOUND] no local IPC handler for channel '${channel}'` },
+    });
+  });
+
   // #7117:生产 runInvoke 必须把 SSH 的 POSIX 路径交给对应主机,而非 Windows fs。
   // 既有覆盖只有本机路径;最小失败输入为不存在于本机的路径 + remoteHostId。
   // tier:unit,SSH/数据库用内存依赖,dispatch 与目录守卫使用真实生产入口。
