@@ -298,7 +298,7 @@ export function CatalogTargetControls({
   projectLabel?: string;
 }) {
   const { t } = useTranslation();
-  if (!computer && !project) return null;
+  if ((!computer || computer.fixed) && !project) return null;
   return (
     <div
       role="group"

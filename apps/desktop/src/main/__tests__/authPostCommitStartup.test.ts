@@ -47,6 +47,8 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
   const deps = {
     authRefreshOverride: null,
     stableOwnerPostCommitCoordinator: coordinator,
+    // Not a managed instance, so initialize keeps the ordinary path.
+    getInstanceConfig: () => null,
     isPassiveSharedUserDataInstance: () => passive,
     getActiveAppSession: () => state,
     isOwnerChangeShellPending: () => !stable,
