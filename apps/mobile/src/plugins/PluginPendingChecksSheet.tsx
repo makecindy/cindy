@@ -1,11 +1,11 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { SheetModal } from "@/session/SheetModal";
 import { Text } from "@/components/AppText";
 import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, type ThemeColors } from "@/theme";
 import type { PluginSlotEntry, PluginSlotHolder } from "./pluginManagementSlot";
-import type { PluginCheckConclusion, PluginPendingCheck } from "./usePluginManagement";
+import { retryPluginCheckReadback, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
 
 /** One line of the list: an operation holding its computer's slot, a pending check, or both (the same operation). */
 export interface PluginOperationLine {
@@ -26,18 +26,25 @@ const KIND: Record<PluginSlotEntry, string> = {
  * things the person can do: look up the original operation ("Check result", unavailable while its computer is
  * offline, with the reason), or stop following it on this phone (nothing is sent to the computer).
  */
-export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline, onClose, onOpenInstalled }: {
+export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline, canOpen, onDecide, onClose, onOpenInstalled }: {
   visible: boolean;
   lines: PluginOperationLine[];
   conclusions: PluginCheckConclusion[];
   isOnline(deviceId: string): boolean;
+  /** The computer is still listed for this account (only there can an instance be opened). */
+  canOpen(deviceId: string): boolean;
+  /** "View and decide": opens the consent once its operation holds the computer's slot; false when it cannot. */
+  onDecide(operationId: string): boolean;
   onClose(): void;
   onOpenInstalled(who: PluginSlotHolder, instanceKey: string): void;
 }) {
   const { t } = useTranslation(), styles = useThemedStyles(makeStyles);
   // Lines seen while open stay until it closes, so a check that ends here shows how it ended.
   const seen = useRef(new Map<string, PluginOperationLine>());
+  // A consent that could not be opened (another operation holds the computer's slot), per operation.
+  const [blocked, setBlocked] = useState<string[]>([]);
   if (!visible) seen.current.clear();
+  useEffect(() => { if (!visible) setBlocked([]); }, [visible]);
   for (const line of lines) seen.current.set(line.key, line);
   const shown = [...seen.current.values()];
   const live = new Set(lines.map((line) => line.key));
@@ -45,22 +52,39 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
     const check = line.check;
     if (!check) return t("plugins.checks.status.preparing");
     if (!isOnline(line.who.deviceId)) return t("plugins.checks.status.offline", { device: line.who.deviceName });
+    if (check.awaitingYou) return t("plugins.checks.status.awaitingYou");
     if (check.state.busy && check.state.outcome === "unknown") return t("plugins.checks.status.checking");
     if (check.waiting || check.state.outcome === "unknown") return t("plugins.checks.status.waiting");
     return t(check.state.outcome === "confirmation" ? "plugins.checks.status.confirmation" : "plugins.checks.status.running");
   };
-  const ended = (line: PluginOperationLine) => {
+  /**
+   * How a line that left the list ended (dispatcher L-1, L-3): a success says whether the list's own read of the
+   * computer found the instance (only then "Open", and only on a computer still listed), is still reading, did not find
+   * it, or failed to read ("Read again"); an uninstall has nothing to open.
+   */
+  const ended = (line: PluginOperationLine): { text: string; open?: string; readAgain?: string; openUnavailable?: boolean } => {
     const conclusion = line.check ? conclusions.find((item) => item.operationId === line.check!.operationId) : undefined;
     if (!conclusion) return { text: t(line.check ? "plugins.checks.result.untracked" : "plugins.checks.result.ended") };
-    const text = conclusion.result === "notInstalled" ? t("plugins.market.unconfirmedNotInstalled")
-      : conclusion.result === "mismatch" ? t("plugins.market.unconfirmedMismatch")
-        : t("plugins.checks.result." + conclusion.result);
-    return { text, instanceKey: conclusion.result === "installed" || conclusion.result === "succeeded" ? conclusion.instanceKey : undefined };
+    if (conclusion.result === "notInstalled") return { text: t("plugins.market.unconfirmedNotInstalled") };
+    if (conclusion.result === "mismatch") return { text: t("plugins.market.unconfirmedMismatch") };
+    if (conclusion.result !== "succeeded" && conclusion.result !== "installed") return { text: t("plugins.checks.result." + conclusion.result) };
+    if (conclusion.entry === "uninstall") return { text: t("plugins.checks.result.uninstalled") };
+    const done = t("plugins.checks.result." + conclusion.result);
+    switch (conclusion.readback) {
+      case "verified":
+        return canOpen(conclusion.who.deviceId) ? { text: done, open: conclusion.instanceKey }
+          : { text: done, openUnavailable: true };
+      case "pending": return { text: t("plugins.checks.result.readingBack") };
+      case "missing": return { text: t("plugins.checks.result.succeededMissing") };
+      case "failed": return { text: t("plugins.checks.result.succeededUnread"), readAgain: conclusion.operationId };
+      default: return { text: done };
+    }
   };
   return (
     <SheetModal nativePresentation visible={visible} onRequestClose={onClose} onBackdropPress={onClose}>
       {visible ? <View style={styles.sheet} testID="plugins.checks">
-        <Text style={styles.title} accessibilityRole="header">{t("plugins.checks.title")}</Text>
+        {/* Says what is in it: unfinished operations while any is listed, how they ended once none is (dispatcher N-6). */}
+        <Text style={styles.title} accessibilityRole="header">{t(live.size ? "plugins.checks.title" : "plugins.checks.titleEnded")}</Text>
         <ScrollView contentContainerStyle={styles.list}>
           {shown.map((line) => {
             const check = live.has(line.key) ? line.check : undefined;
@@ -74,13 +98,23 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
                 {check ? (
                   <>
                     <View style={styles.actions}>
-                      <Pressable testID="plugins.checks.verify" accessibilityRole="button"
-                        disabled={!online || check.state.busy}
-                        accessibilityState={{ disabled: !online || check.state.busy }}
-                        onPress={() => { void check.verify(); }}
-                        style={[styles.button, styles.primary, (!online || check.state.busy) && styles.unavailable]}>
-                        <Text style={[styles.label, styles.primaryText]}>{t("plugins.management.checkResult")}</Text>
-                      </Pressable>
+                      {check.awaitingYou ? (
+                        // Read-only until the person opens it: the same confirmation sheet, after taking the slot.
+                        <Pressable testID="plugins.checks.decide" accessibilityRole="button" disabled={!online || check.state.busy}
+                          accessibilityState={{ disabled: !online || check.state.busy }}
+                          onPress={() => { if (!onDecide(check.operationId)) setBlocked((current) => [...current, check.operationId]); }}
+                          style={[styles.button, styles.primary, (!online || check.state.busy) && styles.unavailable]}>
+                          <Text style={[styles.label, styles.primaryText]}>{t("plugins.checks.decide")}</Text>
+                        </Pressable>
+                      ) : (
+                        <Pressable testID="plugins.checks.verify" accessibilityRole="button"
+                          disabled={!online || check.state.busy}
+                          accessibilityState={{ disabled: !online || check.state.busy }}
+                          onPress={() => { void check.verify(); }}
+                          style={[styles.button, styles.primary, (!online || check.state.busy) && styles.unavailable]}>
+                          <Text style={[styles.label, styles.primaryText]}>{t("plugins.management.checkResult")}</Text>
+                        </Pressable>
+                      )}
                       <Pressable testID="plugins.checks.stop" accessibilityRole="button" disabled={!check.canStop}
                         accessibilityState={{ disabled: !check.canStop }}
                         onPress={() => { check.stop(); }}
@@ -88,15 +122,27 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
                         <Text style={styles.label}>{t("plugins.checks.stop")}</Text>
                       </Pressable>
                     </View>
+                    {blocked.includes(check.operationId) && check.awaitingYou
+                      ? <Text testID="plugins.checks.decideBlocked" style={styles.status}>{t("plugins.checks.decideBlocked")}</Text> : null}
                     <Text style={styles.hint}>{t("plugins.checks.stopHint")}</Text>
                   </>
-                ) : over?.instanceKey ? (
+                ) : over?.open || over?.readAgain ? (
                   <View style={styles.actions}>
-                    <Pressable testID="plugins.checks.open" accessibilityRole="button"
-                      onPress={() => onOpenInstalled(line.who, over.instanceKey!)} style={[styles.button, styles.primary]}>
-                      <Text style={[styles.label, styles.primaryText]}>{t("plugins.checks.open")}</Text>
-                    </Pressable>
+                    {over.open ? (
+                      <Pressable testID="plugins.checks.open" accessibilityRole="button"
+                        onPress={() => onOpenInstalled(line.who, over.open!)} style={[styles.button, styles.primary]}>
+                        <Text style={[styles.label, styles.primaryText]}>{t("plugins.checks.open")}</Text>
+                      </Pressable>
+                    ) : (
+                      <Pressable testID="plugins.checks.readAgain" accessibilityRole="button" disabled={!online}
+                        accessibilityState={{ disabled: !online }}
+                        onPress={() => retryPluginCheckReadback(over.readAgain!)} style={[styles.button, !online && styles.unavailable]}>
+                        <Text style={styles.label}>{t("plugins.checks.readAgain")}</Text>
+                      </Pressable>
+                    )}
                   </View>
+                ) : over?.openUnavailable ? (
+                  <Text testID="plugins.checks.openUnavailable" style={styles.hint}>{t("plugins.checks.openUnavailable", { device: line.who.deviceName })}</Text>
                 ) : null}
               </View>
             );

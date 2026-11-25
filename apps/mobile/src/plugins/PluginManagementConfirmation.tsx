@@ -16,7 +16,8 @@ import {
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
 import { useState } from "react";
-import { CONSENT_SIDE_BY_SIDE_MIN_WIDTH, planConsentSheet, pluginConsentPresentation } from "./pluginConsentPresentation";
+import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentSummaryFadeAllowed, planConsentSheet,
+  pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -139,7 +140,7 @@ export function PluginManagementConfirmation(
                 contentContainerStyle={styles.highRiskLines}>
                 {summaryLines}
               </ScrollView>
-              {summary.more ? fade("plugins.management.highRiskFade") : null}
+              {summary.more && consentSummaryFadeAllowed(plan) ? fade("plugins.management.highRiskFade") : null}
             </View>
           </View>
         ) : null}
@@ -166,7 +167,7 @@ export function PluginManagementConfirmation(
     </SheetModal>
   );
 }
-const FADE_HEIGHT = 24;
+const FADE_HEIGHT = CONSENT_FADE_HEIGHT;
 const FADE_STEPS = [0.15, 0.35, 0.6, 0.85];
 /** Whether a scroll area has more below what it shows (from its own scroll metrics; display only). */
 function useScrollOverflow() {

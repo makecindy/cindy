@@ -488,6 +488,7 @@
   },
   "checks": {
     "title": "Operaciones de complementos sin terminar",
+    "titleEnded": "Resultados de las operaciones de complementos",
     "many": "{{count}} operaciones de complementos no han terminado",
     "waitingOne": "Hay que comprobar el resultado de «{{name}}» en «{{device}}»",
     "kind": {
@@ -504,7 +505,8 @@
       "confirmation": "Esperando confirmación",
       "checking": "Comprobando el resultado",
       "waiting": "Resultado sin confirmar. Compruébalo otra vez o deja de seguirlo.",
-      "offline": "«{{device}}» no está conectado. Conéctalo para comprobar el resultado."
+      "offline": "«{{device}}» no está conectado. Conéctalo para comprobar el resultado.",
+      "awaitingYou": "El ordenador espera tu confirmación"
     },
     "stop": "Dejar de seguir",
     "stopHint": "Solo este teléfono deja de seguirla. La operación del ordenador no se cancela.",
@@ -514,9 +516,17 @@
       "failed": "No completado",
       "cancelled": "Cancelado",
       "untracked": "Ya no se sigue",
-      "ended": "Terminado"
+      "ended": "Terminado",
+      "readingBack": "Hecho. Comprobando el complemento en el ordenador…",
+      "succeededMissing": "Hecho, pero no se encontró este complemento en el ordenador.",
+      "succeededUnread": "Hecho, pero no se pudieron leer los complementos del ordenador.",
+      "uninstalled": "Desinstalado"
     },
     "open": "Abrir complemento",
-    "close": "Listo"
+    "close": "Listo",
+    "decide": "Ver y decidir",
+    "decideBlocked": "Otra operación en este ordenador no ha terminado. Decide cuando termine.",
+    "readAgain": "Volver a leer",
+    "openUnavailable": "«{{device}}» ya no está entre los ordenadores de esta cuenta, así que no se puede abrir desde aquí."
   }
 }

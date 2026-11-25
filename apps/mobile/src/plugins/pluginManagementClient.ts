@@ -11,7 +11,7 @@ import { parsePluginMarketPage, pluginMarketQueryInput, type PluginMarketPage, t
 
 /** Use DeviceLinkContext.invoke directly; preserve its final, synchronous queue fence. */
 export type PluginManagementInvoke = <T = unknown>(deviceId: string, channel: string, args?: unknown[],
-  options?: { preSend?: () => void; background?: boolean; onRequestWritten?: () => void }) => Promise<T>;
+  options?: { preSend?: () => void; background?: boolean; onRequestWritten?: () => void; onNotSent?: () => void }) => Promise<T>;
 export interface PluginManagementClientOptions {
   invoke: PluginManagementInvoke;
   deviceId: string;
@@ -47,13 +47,16 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
   const isOwnerCurrent = () => !owner.switching && isMobileAuthOwnerCurrent(owner);
   const isCurrent = () => isOwnerCurrent() && (options.isCurrent?.() ?? true);
   /**
-   * Whether a request was written is decided by the transport only, never by `preSend` (which is only a check, run at
-   * several points before the write; see plugin-mobile-implementation.md): DeviceLinkContext.invoke calls
-   * `onRequestWritten` at the first write of this request itself (a link handshake's writes never count).
-   * - written: a reply came back, or `onRequestWritten` ran before the failure;
-   * - not written: the call failed and `onRequestWritten` never ran (refused by a check, the queue or the route,
-   *   a handshake that failed, or expired before writing): a plain failure, safe to try again.
-   * A mutation that was written but whose result is lost is an unknown outcome: it is looked up, never replayed.
+   * Whether a failed request was written is decided from evidence, three ways (dispatcher N-1; see
+   * plugin-mobile-implementation.md, "written or not"):
+   * - written: a reply came back, or the transport's `onRequestWritten` ran (DeviceLinkContext.invoke calls it at the
+   *   first write of this request itself; a link handshake's writes never count);
+   * - not written: positive evidence it never left: this client's own check refused it (`preSend`), or the transport
+   *   said so (`onNotSent`: the computer unavailable, the link never ready, link recovery failed, its check refused it
+   *   before the write); a plain failure, safe to try again;
+   * - neither (a transport that reports nothing, a failure whose source is unclear): possibly written. A mutation is
+   *   then an unknown outcome, looked up and never replayed, exactly as a written one whose result is lost; it never
+   *   shows "failed, try again", which would invite a second begin.
    */
   async function call<T>(channel: string, payload: unknown, parse: (value: unknown) => T, mutation = false, guard?: () => boolean, cleanup = false): Promise<T> {
     const requestCurrent = () => (cleanup ? isOwnerCurrent() : isCurrent()) && (!guard || guard());
@@ -61,14 +64,17 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
       if (isSharedTaskPeer(options.deviceId) || isProviderSharePeer(options.deviceId)) localError('PLUGIN_MANAGEMENT_OWNER_ONLY');
       if (!requestCurrent()) localError('PLUGIN_MANAGEMENT_STALE'); };
     assertRequestCurrent();
-    let written = false;
+    let written = false, refused = false;
     const onRequestWritten = () => { written = true; };
+    const onNotSent = () => { if (!written) refused = true; };
+    const preSend = () => { try { assertRequestCurrent(); } catch (error) { onNotSent(); throw error; } };
     let response: unknown;
     try {
-      response = await options.invoke(options.deviceId, channel, [payload], { preSend: assertRequestCurrent, onRequestWritten });
+      response = await options.invoke(options.deviceId, channel, [payload], { preSend, onRequestWritten, onNotSent });
     } catch (error) {
-      if (error instanceof PluginManagementRequestError && (!mutation || !written)) throw error;
-      throw new PluginManagementRequestError(pluginManagementErrorCode(error), mutation && written);
+      const notWritten = !written && refused;
+      if (error instanceof PluginManagementRequestError && (!mutation || notWritten)) throw error;
+      throw new PluginManagementRequestError(pluginManagementErrorCode(error), mutation && !notWritten);
     }
     try {
       // A write's reply is the Host's state of its operation: once written, only a changed account or target drops it

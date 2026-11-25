@@ -1,4 +1,5 @@
 import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
+import { formatPluginVersion } from './pluginMarketCatalog';
 import {
   samePluginMarketSourceIdentity,
   type PluginManagementReceipt,
@@ -53,10 +54,20 @@ export interface ConsentSheetMeasures {
   gap: number;
 }
 export type ConsentSheetPlan =
-  | { mode: "regular"; summaryLines: number; clipped: boolean }
+  /** `guaranteed`: the height of the heading's first two items (all, if fewer), always shown in full. */
+  | { mode: "regular"; summaryLines: number; clipped: boolean; guaranteed: number }
   | { mode: "compact" };
+/** Height of the text-free fade over a scroll area's lower edge (both sheets). */
+export const CONSENT_FADE_HEIGHT = 24;
+/**
+ * Whether the pinned summary may show its fade (dispatcher N-3): only over items beyond the two it guarantees, so the
+ * fade never dims them; when what shows beyond them is shorter than the fade, the scrollbar alone says there is more.
+ */
+export function consentSummaryFadeAllowed(plan: ConsentSheetPlan): boolean {
+  return plan.mode === "regular" && plan.clipped && plan.summaryLines - CONSENT_FADE_HEIGHT >= plan.guaranteed;
+}
 export function planConsentSheet(sheet: ConsentSheetMeasures): ConsentSheetPlan {
-  if (sheet.lines.length === 0) return { mode: "regular", summaryLines: 0, clipped: false };
+  if (sheet.lines.length === 0) return { mode: "regular", summaryLines: 0, clipped: false, guaranteed: 0 };
   const available = Math.max(0, Math.floor(sheet.available));
   const measured = sheet.identity > 0 && sheet.heading > 0 && sheet.lines.every((line) => line > 0);
   if (!measured) {
@@ -64,7 +75,7 @@ export function planConsentSheet(sheet: ConsentSheetMeasures): ConsentSheetPlan 
     // would not hold one line.
     const share = Math.floor(available * 0.25);
     return share >= PINNED_HIGH_RISK_MIN_HEIGHT && share + PINNED_HIGH_RISK_MIN_HEIGHT <= available
-      ? { mode: "regular", summaryLines: share, clipped: false } : { mode: "compact" };
+      ? { mode: "regular", summaryLines: share, clipped: false, guaranteed: share } : { mode: "compact" };
   }
   const itemsHeight = (count: number) => sheet.lines.slice(0, count).reduce((sum, line) => sum + line, 0)
     + Math.max(0, Math.min(count, sheet.lines.length) - 1) * sheet.gap;
@@ -73,7 +84,7 @@ export function planConsentSheet(sheet: ConsentSheetMeasures): ConsentSheetPlan 
   const room = available - Math.ceil(sheet.heading) - Math.ceil(sheet.identity);
   if (room < floor) return { mode: "compact" };
   const summaryLines = Math.min(full, Math.floor(room));
-  return { mode: "regular", summaryLines, clipped: summaryLines < full };
+  return { mode: "regular", summaryLines, clipped: summaryLines < full, guaranteed: floor };
 }
 
 /** Fixed order of the pinned classes, whatever order the package declares them in. */
@@ -198,7 +209,7 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
         : t("plugins.management.permissions.nodeSecretOne"));
   }
   return {
-    title: facts.name + " · " + facts.version,
+    title: facts.name + " · " + formatPluginVersion(facts.version),
     /**
      * New installs say where the plugin goes; updates keep the computer name only. A source switch updates the plugin
      * already there (confirmed like a first install), so it keeps the computer name too.
@@ -234,11 +245,11 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
     version:
       facts.kind === "update"
         ? t("plugins.management.versionChange", {
-            previous: facts.previousVersion,
-            next: facts.version,
+            previous: formatPluginVersion(facts.previousVersion),
+            next: formatPluginVersion(facts.version),
           })
         // A source switch replaces the installed plugin with this version (dispatcher J-4): say which one.
-        : consent.originSourceChanged === true ? t("plugins.management.switchVersion", { version: facts.version })
+        : consent.originSourceChanged === true ? t("plugins.management.switchVersion", { version: formatPluginVersion(facts.version) })
         : undefined,
     permissions:
       facts.kind === "install"

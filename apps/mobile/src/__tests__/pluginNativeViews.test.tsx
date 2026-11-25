@@ -17,6 +17,7 @@ import { planConsentSheet } from "@/plugins/pluginConsentPresentation";
 import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation.ios";
 import { PluginManagementConfirmation as AndroidManagementConfirmation } from "@/plugins/PluginManagementConfirmation";
 import { PluginModelPicker } from '@/plugins/PluginModelPicker';
+import { usePluginPrompt } from "@/plugins/usePluginPrompt.ios";
 
 const bridge = vi.hoisted(() => ({
   maker: { getCapabilities: async () => ({ availableModels: [], effortLevels: [], permissionModes: [] }) },
@@ -134,6 +135,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
       "accessibilityHidden",
       "accessibilityHint",
       "opacity",
+      "layoutPriority",
       "clipped",
       "clipShape",
       "onGeometryChange",
@@ -1118,7 +1120,7 @@ it("shows full consent facts in a separate sheet and rejects stale owner or requ
   const { container, rerender } = mount(PluginManagementConfirmation, props);
   expect(bridge.props.get("plugins.managementConfirmation").visible).toBe(true);
   // The custom market name is interpolated into the source line (pluginManagement.test.ts checks the text).
-  for (const fact of ["Plugin · 2", "plugin-id", "plugins.notice.consentSource.customMarket", "Full local access risk", "Removed host access", "plugins.management.permissions.nodeRuntimeDetail", "plugins.management.oauthChanged"]) expect(container.textContent).toContain(fact);
+  for (const fact of ["Plugin · v2", "plugin-id", "plugins.notice.consentSource.customMarket", "Full local access risk", "Removed host access", "plugins.management.permissions.nodeRuntimeDetail", "plugins.management.oauthChanged"]) expect(container.textContent).toContain(fact);
   const allow = bridge.props.get("plugins.management.allow").onPress;
   state.online = false;
   rerender({ ...props, active: false });
@@ -1574,7 +1576,7 @@ describe("pinned high-risk permission", () => {
     geometry("plugins.management.highRiskTitle", 20);
     lines().forEach((line: any) => act(() => line.props.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 300, height: 20 })));
     const plan = planConsentSheet({ available: 844 - header - chrome - 44, identity: 200, heading: 20, lines: [20, 20, 20, 20, 20], gap: 4 });
-    expect(plan).toEqual({ mode: "regular", summaryLines: 5 * 20 + 4 * 4, clipped: false });
+    expect(plan).toEqual({ mode: "regular", summaryLines: 5 * 20 + 4 * 4, clipped: false, guaranteed: 2 * 20 + 4 });
     expect(scroll().modifiers.find((m: any) => m.frame)?.frame.height).toBe(plan.mode === "regular" && plan.summaryLines);
     // Pinned: in the footer, with the buttons; no "keep scrolling" text takes room on iOS.
     const footer = bridge.props.get("plugins.managementConfirmation").footer;
@@ -1728,6 +1730,27 @@ describe("pinned high-risk permission", () => {
     expect(shown()).toBe(0);
     expect(sheet().nativeContentOverlay.props.modifiers).toContainEqual({ accessibilityHidden: true });
   });
+  // Dispatcher N-3: in the regular layout the fade covered half of the second guaranteed item (Chinese, short screen,
+  // 1.3×). The fade is drawn only over what shows below the two guaranteed items, when that is at least its height.
+  it.each([["10 pt below the two items", 10, false], ["60 pt below the two items", 60, true]] as const)(
+    "Android draws the summary fade only below its guaranteed items: %s", (_name, extra, fades) => {
+      const { container } = mount(AndroidManagementConfirmation, props(allFive));
+      const chrome = 20 * 2 + 12 + 12 * 2 + 4;
+      const layout = (id: string, height: number) => act(() => bridge.props.get(id).onLayout({ nativeEvent: { layout: { height } } }));
+      const scroll = () => bridge.props.get("plugins.management.highRiskScroll");
+      const heading = () => (bridge.props.get("plugins.management.highRisk").children as any[]).flat().find((child: any) => child?.props?.testID === "plugins.management.highRiskTitle");
+      const lines = () => (Array.isArray(scroll().children) ? scroll().children : [scroll().children]).flat().filter(Boolean);
+      const two = 40 + 4 + 40;
+      layout("plugins.management.actions", 100);
+      act(() => heading().props.onLayout({ nativeEvent: { layout: { height: 30 } } }));
+      lines().forEach((line: any) => act(() => line.props.onLayout({ nativeEvent: { layout: { height: 40 } } })));
+      // The identity block takes what leaves exactly `extra` below the two items.
+      layout("plugins.management.identity", Math.floor(844 * 0.85) - chrome - 100 - 30 - two - extra);
+      expect(scroll().style.maxHeight).toBe(two + extra);
+      act(() => scroll().onLayout({ nativeEvent: { layout: { height: two + extra } } }));
+      act(() => scroll().onContentSizeChange(390, 5 * 40 + 4 * 4));
+      expect(!!container.querySelector('[data-testid="plugins.management.highRiskFade"]')).toBe(fades);
+    });
   it("Android shows no pinned area when nothing is high risk", () => {
     const { container } = mount(AndroidManagementConfirmation, props(installOf([notify])));
     expect(container.querySelector('[data-testid="plugins.management.highRisk"]')).toBeNull();
@@ -1764,4 +1787,52 @@ it("offers every market source and every computer in the Android choice sheet", 
   for (const host of targets) expect(bridge.props.has(`plugins.market.computer.${host.deviceId}`)).toBe(true);
   act(() => bridge.props.get("plugins.market.computer.pc-4").onPress());
   expect(market.selectDevice).toHaveBeenCalledWith("pc-4");
+});
+
+/* 测试价值（调度要求 M-2：插件页提示在最大字号下按钮被裁）
+ * - 生产入口与可观察结果：iOS 插件页提示（usePluginPrompt.ios，原生面板）；观察标题与说明是否在滚动内容里、按钮是否在
+ *   固定页脚里且页脚取理想高度、单按钮与两按钮、确认动作的时机。
+ * - 依据：与确认面板同一原则：按钮区按实测高度固定，说明在按钮上方滚动；系统 Alert 在 AX5 下裁掉按钮。
+ * - 缺口：旧 Host 更新提示与卸载确认在 SE AX5 上按钮被裁。
+ * - 最小失败输入：一条长说明的单按钮提示；一条破坏性确认。tier: unit。
+ */
+describe("iOS plugin prompts", () => {
+  const findIn = (node: any, testID: string): boolean => {
+    if (!node || typeof node !== "object") return false;
+    if (Array.isArray(node)) return node.some((child) => findIn(child, testID));
+    if (node.props?.testID === testID) return true;
+    return findIn(node.props?.children, testID);
+  };
+
+  function Harness({ request, onResult }: { request: any; onResult(value: boolean): void }) {
+    const prompt = usePluginPrompt();
+    return createElement("div", null,
+      createElement("button", { "data-testid": "open", onClick: () => { void prompt.confirm(request).then(onResult); } }), prompt.dialog);
+  }
+  it("puts the title and the message in the scrolled content and the buttons in a footer of its full height", async () => {
+    const results: boolean[] = [];
+    const { container } = mount(Harness, { request: { title: "Short title", message: "A long explanation. ".repeat(30), confirmLabel: "Got it" },
+      onResult: (value: boolean) => results.push(value) });
+    await act(async () => (container.querySelector('[data-testid="open"]') as HTMLButtonElement).click());
+    const sheet = bridge.props.get("plugins.prompt");
+    expect(sheet.visible).toBe(true);
+    expect(sheet.title).toBe("");
+    expect(findIn(sheet.children, "plugins.prompt.title")).toBe(true);
+    expect(findIn(sheet.children, "plugins.prompt.message")).toBe(true);
+    expect(findIn(sheet.footer, "plugins.prompt.actions")).toBe(true);
+    expect(findIn(sheet.children, "plugins.prompt.actions")).toBe(false);
+    expect(sheet.footer.props.modifiers).toContainEqual({ fixedSize: { horizontal: false, vertical: true } });
+    expect(bridge.props.has("plugins.prompt.cancel")).toBe(false);
+    await act(async () => bridge.props.get("plugins.prompt.confirm").onPress());
+    expect(results).toEqual([true]);
+  });
+  it("runs onConfirm in the tap that confirms a destructive confirmation", async () => {
+    const order: string[] = [];
+    const { container } = mount(Harness, { request: { title: "Uninstall Demo?", message: "Removes it.", cancelLabel: "Cancel", confirmLabel: "Uninstall",
+      destructive: true, onConfirm: () => order.push("confirm") }, onResult: () => order.push("settled") });
+    await act(async () => (container.querySelector('[data-testid="open"]') as HTMLButtonElement).click());
+    expect(bridge.props.has("plugins.prompt.cancel")).toBe(true);
+    await act(async () => { bridge.props.get("plugins.prompt.confirm").onPress(); order.push("tap"); });
+    expect(order).toEqual(["confirm", "tap", "settled"]);
+  });
 });

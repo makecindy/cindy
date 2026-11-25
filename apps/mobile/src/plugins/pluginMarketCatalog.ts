@@ -274,7 +274,7 @@ export function pluginMarketFacts(item: ManagedMarketItem, t: Translate): Array<
   return [
     // Same facts and labels as the computer's market detail: version with v, author when shown, the source as public
     // market or organization; a custom market keeps its own name (more telling than "Custom" on a small screen).
-    { key: "version", title: t("plugins.detail.version"), value: item.version ? "v" + item.version : "" },
+    { key: "version", title: t("plugins.detail.version"), value: formatPluginVersion(item.version) },
     { key: "author", title: t("plugins.detail.author"), value: pluginMarketAuthor(item) ?? "" },
     { key: "source", title: t("plugins.market.source"),
       value: item.sourceType !== "server" ? item.sourceMarketName ?? t("plugins.market.filter.custom")
@@ -282,4 +282,14 @@ export function pluginMarketFacts(item: ManagedMarketItem, t: Translate): Array<
           : t("plugins.market.scope." + (item.scope === "organization" ? "organization" : "local")) },
     { key: "identifier", title: t("plugins.detail.identifier"), value: item.ghostId },
   ].filter((fact) => fact.value);
+}
+
+/**
+ * The one way a plugin version is shown on the phone (dispatcher M-4), as the computer shows it: "v1.4.2". Empty for no
+ * version; a version that already starts with "v" is left as it is. The one exception is the update action's label,
+ * the computer's own string copied verbatim ("Update to v{{version}}"), which carries the "v" itself.
+ */
+export function formatPluginVersion(version: string | null | undefined): string {
+  const value = (version ?? "").trim();
+  return !value ? "" : /^v/i.test(value) ? value : "v" + value;
 }

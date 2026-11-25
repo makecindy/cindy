@@ -42,6 +42,7 @@ import { ComposerNativeRow } from "@/session/ComposerNativeRow";
 import { iconSize, radius, spacing, useTheme } from "@/theme";
 import type { PluginDirectoryViewProps } from "./PluginDirectoryView";
 import { PluginMarketRows } from "./PluginMarketRows";
+import { PluginNativeNotice } from "./PluginNotice.ios";
 
 export function PluginDirectoryView(p: PluginDirectoryViewProps) {
   const { t, i18n } = useTranslation();
@@ -304,6 +305,12 @@ export function PluginDirectoryView(p: PluginDirectoryViewProps) {
         ]}
         testID="plugins.list"
       >
+        {p.pageNotice ? (
+          <VStack modifiers={[listRowBackground(colors.surface), listRowSeparator("hidden"), listRowInsets({
+            leading: spacing.lg + spacing.xs, trailing: spacing.lg + spacing.xs, top: spacing.sm, bottom: 0 })]}>
+            <PluginNativeNotice {...p.pageNotice} />
+          </VStack>
+        ) : null}
         {!searching ? (
           // Native segmented control as an ordinary list row, like the computer range row.
           <Picker

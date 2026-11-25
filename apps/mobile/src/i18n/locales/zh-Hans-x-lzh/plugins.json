@@ -486,6 +486,7 @@
   },
   "checks": {
     "title": "未竟之法器事",
+    "titleEnded": "法器之事之果",
     "many": "法器之事未竟者 {{count}}",
     "waitingOne": "「{{name}}」于「{{device}}」之果待核",
     "kind": {
@@ -502,7 +503,8 @@
       "confirmation": "待确",
       "checking": "方核其果",
       "waiting": "果未确。可复核之，或不复随之。",
-      "offline": "「{{device}}」未连，连之乃可核果。"
+      "offline": "「{{device}}」未连，连之乃可核果。",
+      "awaitingYou": "彼机待汝确之"
     },
     "stop": "不复随之",
     "stopHint": "唯此手机不复随之，不废彼机之事。",
@@ -512,9 +514,17 @@
       "failed": "未成",
       "cancelled": "已罢",
       "untracked": "已不复随之",
-      "ended": "已终"
+      "ended": "已终",
+      "readingBack": "已成，方核彼机之法器…",
+      "succeededMissing": "已成，然彼机未见此法器。",
+      "succeededUnread": "已成，然未能读彼机之法器。",
+      "uninstalled": "已卸"
     },
     "open": "启法器",
-    "close": "毕"
+    "close": "毕",
+    "decide": "观而决之",
+    "decideBlocked": "此机另有一事未竟，竟后再决。",
+    "readAgain": "复读",
+    "openUnavailable": "「{{device}}」已不在此号之机列，不能自此启之。"
   }
 }

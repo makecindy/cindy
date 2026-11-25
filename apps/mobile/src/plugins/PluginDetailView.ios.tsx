@@ -221,6 +221,9 @@ export function PluginDetailView(p: PluginDetailViewProps) {
                 {note(p.previewLabel)}
               </VStack>
             ) : null}
+            {p.pageNotice ? (
+              <VStack modifiers={[listRowSeparator("hidden")]}><PluginNativeNotice {...p.pageNotice} /></VStack>
+            ) : null}
             {status}
             {p.uiApprovalNotice ? (
               <VStack modifiers={[listRowSeparator("hidden")]}><PluginNativeNotice {...p.uiApprovalNotice} /></VStack>

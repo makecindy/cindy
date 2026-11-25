@@ -25,6 +25,7 @@ import {
   pluginVisualScenario,
 } from "@/debug/pluginVisualFixture";
 import { setPluginMarketVisualScenario } from "@/debug/pluginMarketVisualFixture";
+import { seedPluginChecksForVisualMock } from "@/debug/pluginChecksVisualFixture";
 import type { SearchBarCommands } from "react-native-screens";
 import { goBackGuarded } from "@/utils/backGuard";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -76,7 +77,7 @@ import { PluginReadmePage } from "./PluginReadmePage";
 import { usePluginManagement } from "./usePluginManagement";
 import { PluginManagementMenu } from "./PluginManagementMenu";
 import { PluginManagementConfirmation } from "./PluginManagementConfirmation";
-import { PluginNotice } from "./PluginNotice";
+import { PluginNotice, type PluginNoticeProps } from "./PluginNotice";
 import { createPluginManagementClient } from "./pluginManagementClient";
 import {
   marketItemMatchesPlugin,
@@ -92,7 +93,7 @@ import { usePluginMarket } from "./usePluginMarket";
 import { pluginOperationHold, samePluginSlotHolder, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
 import { usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
 import { PluginPendingChecksSheet, type PluginOperationLine } from "./PluginPendingChecksSheet";
-import { useSharedTaskConfirmation } from "@/session/useSharedTaskConfirmation";
+import { usePluginPrompt } from "./usePluginPrompt";
 import { PluginMarketSection } from "./PluginMarketSection";
 import { PluginMarketDetailView } from "./PluginMarketDetailView";
 import { FileBrowserSegmentedControl } from "@/session/FileBrowserSegmentedControl";
@@ -111,9 +112,10 @@ function PluginDirectory() {
     router = useRouter(),
     focused = useIsFocused();
   const { t, i18n } = useTranslation();
-  const { preview, market: marketPreview } = useLocalSearchParams<{
+  const { preview, market: marketPreview, checks: checksPreview } = useLocalSearchParams<{
     preview?: string;
     market?: string;
+    checks?: string;
   }>();
   const previewSelection = useRef<string | undefined>(undefined);
   const { invoke, connectionEpoch } = useDeviceLink();
@@ -222,9 +224,10 @@ function PluginDirectory() {
   // pending checks is in plugin-mobile-implementation.md.
   const { slot, holders, holderOn } = usePluginManagementSlot();
   const holder = holderOn(selected?.row.host.deviceId);
-  // The app's two-mode prompt (dispatcher J-2): the system alert on iOS, the themed card on Android (light and dark
-  // follow the app's theme). A short title; the full explanation, when there is one, as its message.
-  const { confirm: prompt, dialog: promptDialog } = useSharedTaskConfirmation();
+  // The page's prompts (dispatcher J-2, M-2): the app's themed card on Android, a native sheet on iOS (buttons of their
+  // own height, the text scrolling above them at any size); light and dark follow the app's theme. A short title; the
+  // full explanation, when there is one, as its message.
+  const { confirm: prompt, dialog: promptDialog } = usePluginPrompt();
   const tell = (title: string, message?: string) => { void prompt({ title: t(title), message: message ? t(message) : undefined, confirmLabel: t("plugins.gotIt") }); };
   // Who an installed-detail entry holds the slot for (shown after the page is mounted again; see the notice at the top).
   const slotHolderOf = (row: HostedRemoteCollectionItem, name?: string): PluginSlotHolder => ({
@@ -664,6 +667,38 @@ function PluginDirectory() {
       </Pressable>
     </View>
   );
+  // Unfinished operations (maintainer reviews 17:43, 18:45): every computer's slot holder and every pending check, one
+  // line per operation, in a notice at the top while any is open. Only the line of the installed detail on screen is
+  // left out (that detail shows its own operation). "View" opens their list, drawn from what each kept, never from
+  // the directory or the market (PluginPendingChecksSheet).
+  const targetOnline = (id: string) => { const host = targets.find((candidate) => candidate.deviceId === id); return !!host && list.isOnline(host); };
+  const checks = usePluginPendingChecks(targetOnline, focused);
+  const conclusions = usePluginCheckConclusions();
+  const [checksOpen, setChecksOpen] = useState(false);
+  const operationLines: PluginOperationLine[] = [
+    ...checks.map((check) => ({ key: check.operationId, entry: check.entry, who: check.who, check })),
+    ...holders.filter((token) => !checks.some((check) => samePluginSlotHolder(check.who, token.who)))
+      .map((token) => ({ key: "slot:" + token.id, entry: token.entry, who: token.who })),
+  ];
+  // Every line, also the one of the plugin on screen (dispatcher N-2: the page went unavailable with nothing saying why).
+  const noticeLines = operationLines;
+  const lone = noticeLines.length === 1 ? noticeLines[0] : undefined;
+  const loneWaits = !!lone?.check && (lone.check.waiting || lone.check.state.outcome === "unknown");
+  const holderNoticeProps: PluginNoticeProps | undefined = noticeLines.length ? {
+    testID: "plugins.slotHolder", icon: "info", compact: true,
+    title: !lone ? t("plugins.checks.many", { count: noticeLines.length })
+      : t(loneWaits ? "plugins.checks.waitingOne" : "plugins.slot.holder", { name: lone.who.name, device: lone.who.deviceName }),
+    actions: [{ label: t("plugins.slot.show"), testID: "plugins.slotHolder.show", onPress: () => setChecksOpen(true) }],
+  } : undefined;
+  // Wide screens (both platforms) and Android: above both panes. A narrow iOS screen: as the first row of the native
+  // list on screen (`pageNotice`), where the navigation bar and the search field never cover it (dispatcher M-1).
+  const noticeInList = Platform.OS === "ios" && !wide;
+  const holderNotice = holderNoticeProps && !noticeInList ? (
+    <View style={[styles.holderNotice, wide && styles.holderNoticeWide]}>
+      <PluginNotice {...holderNoticeProps} />
+    </View>
+  ) : null;
+  const pageNotice = noticeInList ? holderNoticeProps : undefined;
   const showInstalled = !!query.trim() || segment === "installed";
   const showMarket = !!query.trim() || segment === "market";
   const installedDirectory = (
@@ -750,6 +785,7 @@ function PluginDirectory() {
           segment={segment}
           onSegmentChange={setSegment}
           market={marketView}
+          pageNotice={pageNotice}
         />
       </View>
     ) : (
@@ -896,52 +932,61 @@ function PluginDirectory() {
     }).catch(() => { /* Existing author page stays usable; an uncertain background read needs no second notice. */ });
   }, [uncertainConfiguration, selected?.row.key, focused, online, detailLoading, detailFailed, connectionEpoch, auth.accountGeneration]);
   const renderedGeneration = detailGeneration.current;
-  // Unfinished operations (maintainer reviews 17:43, 18:45): every computer's slot holder and every pending check, one
-  // line per operation, in a notice at the top while any is open. Only the line of the installed detail on screen is
-  // left out (that detail shows its own operation). "View" opens their list, drawn from what each kept, never from
-  // the directory or the market (PluginPendingChecksSheet).
-  const targetOnline = (id: string) => { const host = targets.find((candidate) => candidate.deviceId === id); return !!host && list.isOnline(host); };
-  const checks = usePluginPendingChecks(targetOnline, focused);
-  const conclusions = usePluginCheckConclusions();
-  const [checksOpen, setChecksOpen] = useState(false);
-  const operationLines: PluginOperationLine[] = [
-    ...checks.map((check) => ({ key: check.operationId, entry: check.entry, who: check.who, check })),
-    ...holders.filter((token) => !checks.some((check) => samePluginSlotHolder(check.who, token.who)))
-      .map((token) => ({ key: "slot:" + token.id, entry: token.entry, who: token.who })),
-  ];
-  const onScreen = (line: PluginOperationLine) => !!selected && detailOpen && selected.row.host.deviceId === line.who.deviceId
-    && !!line.who.instanceKey && selected.row.item.ref.id === line.who.instanceKey;
-  const noticeLines = operationLines.filter((line) => !onScreen(line));
-  const lone = noticeLines.length === 1 ? noticeLines[0] : undefined;
-  const loneWaits = !!lone?.check && (lone.check.waiting || lone.check.state.outcome === "unknown");
-  const holderNotice = noticeLines.length ? (
-    <View style={[styles.holderNotice, wide && styles.holderNoticeWide]}>
-      <PluginNotice testID="plugins.slotHolder" icon="info" compact
-        title={!lone ? t("plugins.checks.many", { count: noticeLines.length })
-          : t(loneWaits ? "plugins.checks.waitingOne" : "plugins.slot.holder", { name: lone.who.name, device: lone.who.deviceName })}
-        actions={[{ label: t("plugins.slot.show"), testID: "plugins.slotHolder.show", onPress: () => setChecksOpen(true) }]} />
-    </View>
-  ) : null;
+  // "Open" from the list of checks (dispatcher L-3): only the instance the list's own read found, and only on that
+  // computer: one no longer listed for this account cannot be opened (the panel says so instead).
+  const knownTarget = (deviceId: string) => targets.some((candidate) => candidate.deviceId === deviceId);
   const openInstalled = (who: PluginSlotHolder, instanceKey: string) => {
+    const host = targets.find((candidate) => candidate.deviceId === who.deviceId);
+    if (!host) return;
     setChecksOpen(false);
-    const host = targets.find((candidate) => candidate.deviceId === who.deviceId) ?? { deviceId: who.deviceId, deviceName: who.deviceName };
     void showDetail({ key: JSON.stringify([who.deviceId, "plugins", "plugin", instanceKey]), host,
       item: { ref: { collectionId: "plugins", kind: "plugin", id: instanceKey }, revision: "", links: [], display: { title: who.name } } } as HostedRemoteCollectionItem);
   };
   // A market install's pending check settled as installed while this page is open: the same as an install finished
-  // here (the list read again; its detail opened, as on the computer). Only conclusions reached after mounting.
-  const knownConclusions = useRef<Set<string> | undefined>(undefined);
-  knownConclusions.current ??= new Set(conclusions.map((item) => item.operationId));
+  // here (the list read again; its detail opened, as on the computer), once the list's own read found the instance.
+  // Only conclusions reached after mounting.
+  const knownConclusions = useRef<{ refreshed: Set<string>; opened: Set<string> } | undefined>(undefined);
+  knownConclusions.current ??= { refreshed: new Set(conclusions.map((item) => item.operationId)), opened: new Set(conclusions.map((item) => item.operationId)) };
   useEffect(() => {
+    const known = knownConclusions.current!;
     for (const conclusion of conclusions) {
-      if (knownConclusions.current!.has(conclusion.operationId)) continue;
-      knownConclusions.current!.add(conclusion.operationId);
-      if (conclusion.shown) continue;
-      void list.refresh();
+      if (conclusion.shown) { known.refreshed.add(conclusion.operationId); known.opened.add(conclusion.operationId); continue; }
+      if (!known.refreshed.has(conclusion.operationId)) { known.refreshed.add(conclusion.operationId); void list.refresh(); }
+      if (known.opened.has(conclusion.operationId) || conclusion.readback === "pending") continue;
+      known.opened.add(conclusion.operationId);
       if (conclusion.entry === "market-install" && (conclusion.result === "installed" || conclusion.result === "succeeded")
-        && conclusion.instanceKey && focused && !checksOpen) openInstalled(conclusion.who, conclusion.instanceKey);
+        && conclusion.readback === "verified" && conclusion.instanceKey && focused && !checksOpen) openInstalled(conclusion.who, conclusion.instanceKey);
     }
   }, [conclusions]);
+  // "View and decide" (dispatcher L-2): a consent a lookup found that this phone never showed opens in the same
+  // confirmation sheet, after its operation took its computer's slot; while it is open the check counts as shown.
+  const [deciding, setDeciding] = useState<string | null>(null);
+  const decidingCheck = deciding ? checks.find((check) => check.operationId === deciding) : undefined;
+  useEffect(() => {
+    if (!decidingCheck) { if (deciding) setDeciding(null); return; }
+    return decidingCheck.view();
+  }, [decidingCheck?.operationId]);
+  useEffect(() => {
+    if (decidingCheck && decidingCheck.state.outcome !== "confirmation" && !decidingCheck.state.busy) setDeciding(null);
+  }, [decidingCheck?.state.outcome, decidingCheck?.state.busy]);
+  // DEV visual mock only: cindy://plugins?checks=<state> opens the list of pending checks in that state.
+  useEffect(() => {
+    if (!checksPreview || !pluginVisualDemosEnabled()) return;
+    let live = true;
+    void seedPluginChecksForVisualMock(checksPreview).then((after) => {
+      if (!live || !after) return;
+      setChecksOpen(true);
+      setTimeout(() => { if (live) after(); }, 400);
+    });
+    return () => { live = false; };
+  }, [checksPreview]);
+  const decide = (operationId: string) => {
+    const check = checks.find((item) => item.operationId === operationId);
+    if (!check || !check.decide()) return false;
+    setChecksOpen(false);
+    setDeciding(operationId);
+    return true;
+  };
   const manageAction = async (action: string) => {
     if (
       !managementAvailable ||
@@ -1188,6 +1233,7 @@ function PluginDirectory() {
         enabled={enabled}
         busy={busy || detailLoading || !!holder || managementPending}
         statusRecoveryBusy={busy || detailLoading}
+        pageNotice={pageNotice}
         uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t, false,
           { slot, who: slotHolderOf(selected.row, managed?.manifest.name) })}
         managementNotice={management.state?.outcome === "unknown" ? {
@@ -1341,7 +1387,17 @@ function PluginDirectory() {
       {/* Above both panes (a row on wide screens): one line across, never a column of its own. */}
       {holderNotice}
       {promptDialog}
+      {decidingCheck ? (
+        <PluginManagementConfirmation
+          key={JSON.stringify(["check", decidingCheck.operationId, auth.accountGeneration, connectionEpoch])}
+          state={decidingCheck.state}
+          controller={decidingCheck.controller}
+          deviceName={decidingCheck.who.deviceName}
+          active={focused && decidingCheck.state.online}
+        />
+      ) : null}
       <PluginPendingChecksSheet visible={checksOpen} lines={operationLines} conclusions={conclusions} isOnline={targetOnline}
+        canOpen={knownTarget} onDecide={decide}
         onClose={() => setChecksOpen(false)} onOpenInstalled={openInstalled} />
       <View style={styles.layout}>
         {wide || (!selected && !marketDetail) ? directory : null}
@@ -1377,6 +1433,7 @@ function PluginDirectory() {
                         key={marketDetail.item.pluginId}
                         detail={marketDetail}
                         market={marketView}
+                        pageNotice={pageNotice}
                       />
                     )
                   : detailView

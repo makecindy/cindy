@@ -129,7 +129,9 @@ pnpm mobile:sim:whoami -- --mock --json
   mock provider 保持远程桌面请求等待，真实页面展示连接中、等待较久及原有超时状态，供返回按钮与明暗主题截图；不连接真实电脑。
 - 插件市场：插件页切到「插件市场」即读模拟电脑上的虚构 Demo 市场（`apps/mobile/src/debug/pluginMarketVisualFixture.ts`），
   走真实的分页、详情、确认面板与安装回执；Demo Glossary Translate 演示下载失败，Demo Uncertain Sync 演示结果待确认（安装后
-  离开插件页再回来，或在「安装到」切到另一台电脑，顶部一直有待核实提示，「查看」打开记录面板：核实结果、不再跟踪），
+  离开插件页再回来，或在「安装到」切到另一台电脑，顶部一直有待核实提示，「查看」打开记录面板：核实结果、不再跟踪；
+  配合 `market=lateConsent` 它在 begin 回包丢失、第一次查询协议错误后交给记录，核实时出现「电脑正在等你确认 · 查看并决定」；
+  `market=lateResult` 核实出成功并出现「打开」；`market=unreadResult` 核实出成功但第一次已装读取失败，出现「重新读取」），
   Demo Notes 是同标识冲突。确认面板的对照：Demo Device Simulator（官方，有高风险 `node:execute`）、Demo Agenda
   （官方，无高风险）、Demo Shift Calendar（社区，回执带 `communityMarket`）、Demo Repo Tools（Demo Git Market 自定义市场，
   可正常安装，有高风险，确认面板显示仓库 github.com/demo-org/demo-git-market）、Demo Auto Agent（官方，没有 Node，但有后台 Agent 与派活取件两项高风险）、
@@ -153,6 +155,28 @@ pnpm mobile:sim:whoami -- --mock --json
   `normal` 回到默认。插件页已打开时再发带不同 `market` 参数的深链，场景已经切换，但要在插件页下拉刷新一次
   才会重新读取（twoComputers / offline 改的是电脑列表，同样下拉刷新）。
   装好或升级后的 Demo 插件只在本次进程内保留，可在详情里卸载；不连接真实电脑或市场。
+- 插件页待核实记录与管理提示，状态 → 入口（开发构建，打开即处于该态，不依赖时序或手速）：
+
+  | 状态 | 入口 |
+  | --- | --- |
+  | 进行中（顶部「…操作还没结束」） | `cindy://plugins?checks=running` |
+  | 结果待核实（「核实结果」可点） | `cindy://plugins?checks=waiting` |
+  | 待核实 + 电脑离线（「核实结果」不可点并写原因） | `cindy://plugins?checks=offline`（记录在不在账号列表里的 CINDY Away Mock Mac 上） |
+  | 电脑正在等你确认（「查看并决定」） | `cindy://plugins?checks=awaitingYou` |
+  | 成功 + 打开 | `cindy://plugins?checks=succeeded` |
+  | 成功但实例未核实（「重新读取」） | `cindy://plugins?checks=unread` |
+  | 失败 | `cindy://plugins?checks=failed` |
+  | 已不再跟踪 | `cindy://plugins?checks=untracked` |
+  | 多条记录（「2 项插件操作还没结束」） | `cindy://plugins?checks=many` |
+  | 来源变化（更新预检） | `cindy://plugins?market=updateSourceChanged`，已安装里 Demo Moved Source 详情「管理插件 → 更新到 v版本」 |
+  | 版本变化（更新预检） | `cindy://plugins?market=updateReleaseChanged`，已安装里 Demo Weather Board 详情「更新到 v版本」 |
+  | 读取失败（更新预检） | `cindy://plugins?market=updateReadFailed`，同上 |
+  | 在电脑上完成配置 | `cindy://plugins?preview=1`（Missing API key），点状态行的「去设置」 |
+  | 进行中停住（其它入口不可用） | `cindy://plugins?market=hold`，安装或更新并允许后停在「进行中」 |
+  | 资料值折两行 | 市场里 Demo Long Repository Tools 详情的「作者」 |
+
+  `checks=` 用真实 controller 在模拟电脑上发起操作（按操作号预设回答），交给待核实记录后打开记录面板；成功、读取失败、失败、
+  不再跟踪这几态在面板打开后才发生，面板里看得到结束的那一条。宽屏下任务设置保存、页面批准两个入口的模拟数据还没有。
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
   地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。
 - 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。

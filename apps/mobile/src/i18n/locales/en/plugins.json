@@ -486,6 +486,7 @@
   },
   "checks": {
     "title": "Unfinished plugin operations",
+    "titleEnded": "Plugin operation results",
     "many": "{{count}} plugin operations aren’t finished",
     "waitingOne": "The result for “{{name}}” on “{{device}}” needs checking",
     "kind": {
@@ -502,7 +503,8 @@
       "confirmation": "Waiting for confirmation",
       "checking": "Checking the result",
       "waiting": "Result unconfirmed. Check it again, or stop tracking.",
-      "offline": "“{{device}}” isn’t connected. Connect it to check the result."
+      "offline": "“{{device}}” isn’t connected. Connect it to check the result.",
+      "awaitingYou": "The computer is waiting for you to confirm"
     },
     "stop": "Stop tracking",
     "stopHint": "Only this phone stops tracking. The operation on the computer isn’t cancelled.",
@@ -512,9 +514,17 @@
       "failed": "Not completed",
       "cancelled": "Cancelled",
       "untracked": "No longer tracked",
-      "ended": "Finished"
+      "ended": "Finished",
+      "readingBack": "Done. Checking the plugin on the computer…",
+      "succeededMissing": "Done, but this plugin wasn’t found on the computer.",
+      "succeededUnread": "Done, but the plugins on the computer couldn’t be read.",
+      "uninstalled": "Uninstalled"
     },
     "open": "Open plugin",
-    "close": "Done"
+    "close": "Done",
+    "decide": "View and decide",
+    "decideBlocked": "Another operation on this computer isn’t finished. Decide once it is.",
+    "readAgain": "Read again",
+    "openUnavailable": "“{{device}}” is no longer in this account’s computers, so it can’t be opened from here."
   }
 }

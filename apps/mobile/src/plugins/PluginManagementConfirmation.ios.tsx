@@ -25,7 +25,8 @@ import {
 import { useState } from "react";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { CONSENT_SIDE_BY_SIDE_MIN_WIDTH, planConsentSheet, pluginConsentPresentation } from "./pluginConsentPresentation";
+import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentSummaryFadeAllowed, planConsentSheet,
+  pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -66,7 +67,7 @@ export function PluginManagementConfirmation(
   const fade = (testID: string, shown: boolean) => (
     <Rectangle testID={testID} modifiers={[
       foregroundStyle({ type: "linearGradient", colors: ["transparent", colors.surfaceElevated], startPoint: { x: 0.5, y: 0 }, endPoint: { x: 0.5, y: 1 } }),
-      frame({ height: 24 }), opacity(shown ? 1 : 0), accessibilityHidden(true),
+      frame({ height: CONSENT_FADE_HEIGHT }), opacity(shown ? 1 : 0), accessibilityHidden(true),
     ]} />
   );
   const lineCount = info?.highRisk?.lines.length ?? 0;
@@ -184,7 +185,7 @@ export function PluginManagementConfirmation(
                     {summaryItems}
                   </VStack>
                 </ScrollView>
-                <Overlay.Content>{fade("plugins.management.highRiskFade", more.summary)}</Overlay.Content>
+                <Overlay.Content>{fade("plugins.management.highRiskFade", more.summary && consentSummaryFadeAllowed(plan))}</Overlay.Content>
               </Overlay>
             </VStack>
           ) : null}

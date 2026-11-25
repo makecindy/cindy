@@ -5,7 +5,7 @@ import { Text } from "@/components/AppText";
 import {
   fontWeight, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors,
 } from "@/theme";
-import { PluginNotice } from "./PluginNotice";
+import { PluginNotice, type PluginNoticeProps } from "./PluginNotice";
 import { PluginMarketIcon } from "./PluginMarketIcon";
 import { PluginToolChips } from "./PluginToolChips";
 import { PluginToolsDisclosure } from "./PluginDetailView";
@@ -17,6 +17,8 @@ import type { PluginMarketDetailState, PluginMarketModel } from "./usePluginMark
 export interface PluginMarketDetailViewProps {
   detail: PluginMarketDetailState;
   market: PluginMarketModel;
+  /** iOS: the page's notice of unfinished plugin operations, as this native list's first row (see PluginDetailView). */
+  pageNotice?: PluginNoticeProps;
 }
 
 /** Android market detail: the installed detail's hierarchy, with Install in place of the switch. */

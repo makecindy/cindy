@@ -486,6 +486,7 @@
   },
   "checks": {
     "title": "還沒結束的插件操作",
+    "titleEnded": "插件操作的結果",
     "many": "{{count}} 項插件操作還沒結束",
     "waitingOne": "「{{name}}」在「{{device}}」上的結果待核實",
     "kind": {
@@ -502,7 +503,8 @@
       "confirmation": "等待確認",
       "checking": "正在核實結果",
       "waiting": "結果待確認。可以再核實一次，或不再追蹤。",
-      "offline": "「{{device}}」未連線，連線後才能核實結果。"
+      "offline": "「{{device}}」未連線，連線後才能核實結果。",
+      "awaitingYou": "電腦正在等你確認"
     },
     "stop": "不再追蹤",
     "stopHint": "只是這台手機不再追蹤，不會取消電腦上的操作。",
@@ -512,9 +514,17 @@
       "failed": "沒有完成",
       "cancelled": "已取消",
       "untracked": "已不再追蹤",
-      "ended": "已結束"
+      "ended": "已結束",
+      "readingBack": "已完成，正在確認電腦上的插件…",
+      "succeededMissing": "已完成，但電腦上沒有找到這個插件。",
+      "succeededUnread": "已完成，但沒能讀取電腦上的插件。",
+      "uninstalled": "已解除安裝"
     },
     "open": "開啟插件",
-    "close": "完成"
+    "close": "完成",
+    "decide": "查看並決定",
+    "decideBlocked": "這台電腦上另一項操作還沒結束，結束後再決定。",
+    "readAgain": "重新讀取",
+    "openUnavailable": "「{{device}}」已不在這個帳號的電腦清單裡，無法從這裡開啟。"
   }
 }

@@ -9,9 +9,30 @@ import type { ManagedMarketItem, ManagedPlugin } from "@/plugins/pluginManagemen
  */
 export type PluginMarketVisualScenario =
   | "normal" | "outdated" | "unavailable" | "organization" | "customPartial" | "empty" | "readFailed"
-  | "twoComputers" | "offline" | "hold";
+  | "twoComputers" | "offline" | "hold" | "lateConsent" | "lateResult" | "unreadResult"
+  | "updateReleaseChanged" | "updateSourceChanged" | "updateReadFailed";
 const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavailable", "organization", "customPartial", "empty",
-  "readFailed", "twoComputers", "offline", "hold"];
+  "readFailed", "twoComputers", "offline", "hold", "lateConsent", "lateResult", "unreadResult",
+  "updateReleaseChanged", "updateSourceChanged", "updateReadFailed"];
+/**
+ * Scripted operations for the list of pending checks (`cindy://plugins?checks=<state>`, see pluginChecksVisualFixture):
+ * how the mock computer answers lookups of one operation id. `waiting`: a protocol error every time (lookups stop);
+ * `consent`, `succeeded`, `unread`, `failed`: a protocol error first, then a consent this phone never showed, a success,
+ * a success whose first installed read fails, a failure; `running`: still under way.
+ */
+export type VisualCheckBehavior = "running" | "waiting" | "consent" | "succeeded" | "unread" | "failed";
+const scripted = new Map<string, { behavior: VisualCheckBehavior; lookups: number }>();
+export function scriptVisualCheckOperation(operationId: string, behavior: VisualCheckBehavior) {
+  scripted.set(operationId, { behavior, lookups: 0 });
+}
+/**
+ * Demo Uncertain Sync in the pending-check scenarios (begin's reply is lost; the first lookup hits a protocol error, so
+ * the attempt becomes a pending check): `lateConsent` then shows a consent this phone never showed ("The computer is
+ * waiting for you"), `lateResult` a success ("Open"), `unreadResult` a success whose first installed read fails
+ * ("Read again").
+ */
+const PENDING_CHECK_SCENARIOS: PluginMarketVisualScenario[] = ["lateConsent", "lateResult", "unreadResult"];
+let failInstalledRead = false, failInstalledReadOnCommit = false;
 /** A second online mock computer for the twoComputers scenario (same demo market, shared process state). */
 export const PLUGIN_MARKET_VISUAL_SECOND_DEVICE_ID = "cindy-visual-mock-second-mac";
 /** Device-list adjustments for the market scenarios; other scenarios keep the mock computers unchanged. */
@@ -132,7 +153,9 @@ const DEMOS: DemoPlugin[] = [
     description: "Start Agent work in the background and hand errands to an Agent.", tools: ["demo_start_errand"],
     permissions: [agentErrand, agentBackground, agentUserAction, notify] },
   // Layout check: a custom market with a long repository name and ref, and all five high-risk classes.
-  { ghostId: "demo-long-repo-tools", name: "Demo Long Repository Tools", publisher: "custom", author: null, market: "long",
+  { ghostId: "demo-long-repo-tools", name: "Demo Long Repository Tools", publisher: "custom",
+    // A long author: the market detail's facts show a value on two lines.
+    author: "Cindy Demo Publisher With A Rather Long Name", market: "long",
     description: "From a custom market whose repository name is long. Asks for every high-risk class.", tools: ["demo_long_tools"],
     permissions: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand, network("long.example.com")] },
   // A market added from a local folder on the computer: the consent says "Local folder".
@@ -278,7 +301,18 @@ function receipt(operationId: string) {
   if (!op) throw failure("NOT_FOUND");
   op.polls += 1;
   const demo = DEMOS.find((item) => item.ghostId === op.ghostId)!;
+  const script = scripted.get(operationId);
+  if (script && !op.done) {
+    script.lookups += 1;
+    if (script.behavior === "running") return { operationId, phase: "running" };
+    if (script.behavior === "waiting" || script.lookups === 1) throw failure("INVALID_RESPONSE");
+    if (script.behavior === "failed") op.done = "failed";
+    else if (script.behavior === "consent" && !op.answered) op.answered = false;
+    else { op.polls = 3; op.answered = true; if (script.behavior === "unread") failInstalledReadOnCommit = true; }
+  }
   if (op.done) return { operationId, phase: op.done, ...(op.done === "failed" ? { errorCode: "GHOST_DOWNLOAD_FAILED" } : {}) };
+  const pendingCheck = op.kind === "install" && demo.outcome === "uncertain" && PENDING_CHECK_SCENARIOS.includes(scenario);
+  if (pendingCheck && op.polls === 1) throw failure("INVALID_RESPONSE");
   if (op.kind === "uninstall") { installed.delete(instanceKey(op.ghostId)); op.done = "succeeded"; return { operationId, phase: "succeeded" }; }
   if (demo.outcome === "downloadFailed") { op.done = "failed"; return receipt(operationId); }
   const entry = installed.get(instanceKey(demo.ghostId));
@@ -303,8 +337,10 @@ function receipt(operationId: string) {
       : { kind: "install", ghostId: demo.ghostId, name: demo.name, version: RELEASE, permissions: demo.permissions ?? [] } } };
   // Two polls of "installing" after consent, then the install commits. `hold`: it stays in progress (for screenshots of
   // an operation under way: other entries unavailable, the notice at the top), until another scenario is chosen.
-  if (op.polls < 3 || scenario === "hold") return { operationId, phase: "running" };
+  if ((op.polls < 3 && !pendingCheck) || scenario === "hold")
+    return { operationId, phase: "running" };
   installed.set(instanceKey(demo.ghostId), { demo, enabled: entry?.enabled ?? true, version: RELEASE });
+  if (scenario === "unreadResult" || failInstalledReadOnCommit) { failInstalledRead = true; failInstalledReadOnCommit = false; }
   op.done = "succeeded";
   return { operationId, phase: "succeeded" };
 }
@@ -319,11 +355,21 @@ export function pluginMarketVisualManagement(actionId: string | undefined, input
       if (input.read === "capabilities") return result({ catalogPaging: true });
       if (input.read === "catalog") return result(catalog(input.query as Record<string, unknown>));
       if (input.read === "recommendations") return result([]);
+      if (failInstalledRead) { failInstalledRead = false; throw failure("TIMEOUT"); }
       return result(snapshot());
     case "management:market-detail": {
       const demo = demoFor(input.pluginId);
       if (!demo) throw failure("NOT_FOUND");
-      return result({ ...marketItem(demo), manifest: manifest(demo) });
+      // Update preflight prompts (installed detail → "Update to v…"): the release or the source changed since the list
+      // was read, or the read fails. Only plugins with an update are affected.
+      const entry = installed.get(instanceKey(demo.ghostId));
+      const updating = !!entry && entry.version !== RELEASE;
+      if (updating && scenario === "updateReadFailed") throw failure("TIMEOUT");
+      const item = marketItem(demo);
+      if (updating && scenario === "updateReleaseChanged") return result({ ...item, releaseId: `${demo.ghostId}@9.9.9`, version: "9.9.9", manifest: manifest(demo, "9.9.9") });
+      if (updating && scenario === "updateSourceChanged" && item.sourceIdentity)
+        return result({ ...item, sourceIdentity: { ...item.sourceIdentity, sourceId: "DemoChangedMarketSource01" }, manifest: manifest(demo) });
+      return result({ ...item, manifest: manifest(demo) });
     }
     case "management:begin": {
       const operationId = String(input.operationId);
@@ -343,7 +389,9 @@ export function pluginMarketVisualManagement(actionId: string | undefined, input
         return result({ operationId, phase: "running" });
       }
       if (demo.conflict || installed.has(instanceKey(demo.ghostId))) throw failure("ALREADY_EXISTS");
-      operations.set(operationId, { kind: "install", ghostId: demo.ghostId, answered: demo.outcome === "uncertain", polls: 2 });
+      operations.set(operationId, { kind: "install", ghostId: demo.ghostId,
+        answered: demo.outcome === "uncertain" && scenario !== "lateConsent",
+        polls: demo.outcome === "uncertain" && PENDING_CHECK_SCENARIOS.includes(scenario) ? 0 : 2 });
       // Simulate a reply lost after the Host accepted the install; Check result reads the original operation.
       if (demo.outcome === "uncertain") throw failure("TIMEOUT");
       return result({ operationId, phase: "running" });

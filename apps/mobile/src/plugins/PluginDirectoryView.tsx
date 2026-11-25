@@ -3,6 +3,7 @@ import type {
   RemoteResourceHostTarget,
 } from "@/device-link/remoteResources";
 import type { PluginMarketModel } from "./usePluginMarket";
+import type { PluginNoticeProps } from "./PluginNotice";
 
 export interface PluginDirectoryViewProps {
   targets: readonly RemoteResourceHostTarget[];
@@ -22,6 +23,8 @@ export interface PluginDirectoryViewProps {
   segment: PluginDirectorySegment;
   onSegmentChange(value: PluginDirectorySegment): void;
   market: PluginMarketModel;
+  /** iOS: the page's notice of unfinished plugin operations, as this native list's first row (see PluginDetailView). */
+  pageNotice?: PluginNoticeProps;
 }
 export type PluginDirectorySegment = "installed" | "market";
 

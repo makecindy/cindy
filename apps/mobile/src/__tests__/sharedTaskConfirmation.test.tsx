@@ -101,3 +101,15 @@ it('runs onConfirm in the tap that confirms, before the promise settles', async 
   await act(async () => { host.querySelector<HTMLButtonElement>('[data-testid="sharedTask.confirmAccept"]')!.click(); order.push('tap'); });
   expect(order).toEqual(['confirm', 'tap', 'settled']);
 });
+
+// Dispatcher M-2 (plugin page prompts use this card on Android): at the largest text sizes the text scrolls and the
+// buttons stay whole below it, outside the scroll area.
+it('keeps the buttons outside the scrolled text', async () => {
+  h.request = { title: 'Short title', message: 'A long explanation. '.repeat(40), confirmLabel: 'Got it' };
+  await click('open');
+  const card = host.querySelector('[data-testid="sharedTask.confirmDialog"]')!;
+  const [scrolled, actions] = [...card.children];
+  expect(scrolled.textContent).toContain('A long explanation.');
+  expect(scrolled.querySelector('button')).toBeNull();
+  expect(actions.querySelector('[data-testid="sharedTask.confirmAccept"]')).not.toBeNull();
+});

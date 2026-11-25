@@ -326,10 +326,18 @@ async function visualMockInvoke<T = unknown>(
   _deviceId: string,
   channel: string,
   args: unknown[] = [],
+  opts?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void },
 ): Promise<T> {
-  // The offline mock computer never answers, including in the market's offline scenario.
-  if (_deviceId === VISUAL_MOCK_OFFLINE_DEVICE_ID && pluginMarketVisualDeviceScenario() === 'offline')
+  // The offline mock computer never answers, including in the market's offline scenario: refused before sending, as
+  // DeviceLinkContext.invoke refuses an unavailable computer.
+  if (_deviceId === VISUAL_MOCK_OFFLINE_DEVICE_ID && pluginMarketVisualDeviceScenario() === 'offline') {
+    opts?.onNotSent?.();
     throw Object.assign(new Error('DEVICE_OFFLINE'), { code: 'DEVICE_OFFLINE' });
+  }
+  // Same order as DeviceLinkContext.invoke: the caller's last check, then the request is written (its write receipt),
+  // then the mock computer answers (dispatcher N-1: without the receipt a lost reply looked like a refused request).
+  try { opts?.preSend?.(); } catch (error) { opts?.onNotSent?.(); throw error; }
+  opts?.onRequestWritten?.();
   if (channel === DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL && _deviceId === VISUAL_MOCK_DEVICE_ID) {
     const now = new Date();
     const readings = [

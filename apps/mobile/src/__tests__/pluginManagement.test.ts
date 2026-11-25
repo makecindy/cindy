@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { isPinnedHighRiskPermission, PINNED_HIGH_RISK_MIN_HEIGHT, planConsentSheet, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
+import { CONSENT_FADE_HEIGHT, consentSummaryFadeAllowed, isPinnedHighRiskPermission, PINNED_HIGH_RISK_MIN_HEIGHT, planConsentSheet, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
 import { DeviceLinkError, sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
@@ -20,6 +20,15 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 /** The computer a test's slot belongs to (one slot per account and computer). */
 const SLOT_WHO = { name: 'Demo', deviceId: 'host-1', deviceName: 'Host' };
+/**
+ * The leave-cancel as the product reaches it: only for the consent the confirmation sheet put on screen (dispatcher
+ * L-2), so a test of the cancel's own mechanics first shows that consent, as the sheet does.
+ */
+function shownCancel(c: { getState(): { receipt: { consent?: { requestId: string } } | null }; markConsentShown(id: string): void; cancel(): Promise<void> }) {
+  const requestId = c.getState().receipt?.consent?.requestId;
+  if (requestId) c.markConsentShown(requestId);
+  return c.cancel();
+}
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'operation-1' }));
 const appState = vi.hoisted(() => ({ currentState: 'active', listeners: new Set<(state: string) => void>() }));
@@ -79,7 +88,7 @@ type Envelope = { actionId: string; input: Record<string, unknown>; resourceRef?
 function host(handler?: (request: Envelope) => unknown | Promise<unknown>, marketDetail: ManagedMarketDetail = detail) {
   const requests: Envelope[] = [];
   let facts = snapshot();
-  const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+  const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
     options?.preSend?.();
     // Like the transport: the request is written once its last check passed; a handler that throws lost the reply.
     options?.onRequestWritten?.();
@@ -212,6 +221,9 @@ describe('what counts as written', () => {
     ['refused at the last check before the write (it was never written)', 'dequeue', false],
     ['expired before the first write (BACKPRESSURE, not in flight)', 'expired', false],
     ['failed in the link handshake after the handshake was written (in flight, but not this request)', 'handshake', false],
+    // Dispatcher N-1: a transport that reports neither a write nor a refusal says nothing: possibly written, so a
+    // lost begin is looked up, never shown as "failed, try again" (which would invite a second begin).
+    ['failed with no evidence either way (a transport that reports nothing)', 'silent', true],
     ['written, then the reply was lost (in flight)', 'lost', true],
     ['written, then refused at a later check (a resend after the first write)', 'resend', true],
   ] as const)('classifies a write %s', async (_name, end, unknown) => {
@@ -219,10 +231,12 @@ describe('what counts as written', () => {
     const invoke = vi.fn(async (_d, _c, _a, opts) => {
       if (end === 'entry') active = false;
       opts!.preSend!();
-      if (end === 'handshake') throw handshakeTimeout();
+      // As DeviceLinkContext.invoke reports them: link recovery that failed, the client's own "never written" mark.
+      if (end === 'handshake') { opts!.onNotSent!(); throw handshakeTimeout(); }
+      if (end === 'silent') throw new Error('transport failed');
       if (end === 'dequeue') active = false;
       opts!.preSend!();
-      if (end === 'expired') { const error = new DeviceLinkError('BACKPRESSURE', 'expired before socket write'); error.inFlight = false; throw error; }
+      if (end === 'expired') { const error = new DeviceLinkError('BACKPRESSURE', 'expired before socket write'); error.inFlight = false; opts!.onNotSent!(); throw error; }
       opts!.onRequestWritten!();
       if (end === 'resend') { active = false; opts!.preSend!(); }
       const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no reply after first socket write'); error.inFlight = true; throw error;
@@ -237,7 +251,7 @@ describe('what counts as written', () => {
     await expect(createPluginManagementClient({ invoke: refused, deviceId: 'host-1', isCurrent: () => active })
       .answer('operation-1', 'consent-1', true)).rejects.toMatchObject({ outcomeUnknown: false });
     // Only the handshake was written and timed out: not written.
-    const handshake = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); throw handshakeTimeout(); }) as PluginManagementInvoke;
+    const handshake = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.onNotSent!(); throw handshakeTimeout(); }) as PluginManagementInvoke;
     await expect(createPluginManagementClient({ invoke: handshake, deviceId: 'host-1' })
       .answer('operation-1', 'consent-1', true)).rejects.toMatchObject({ outcomeUnknown: false });
     // Written, reply lost: unknown.
@@ -262,7 +276,7 @@ describe('a queued operation stopped before it was written', () => {
     let release!: () => void;
     const requests: Envelope[] = [];
     // Production order: the check at entry, the queue, the last check, then the write.
-    const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+    const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
       options?.preSend?.();
       const request = args?.[0] as Envelope;
       if (!channel.endsWith(':manifest') && request.actionId === 'management:begin' && hold) await hold;
@@ -326,7 +340,7 @@ describe('offline and reconnect between enqueue, dequeue, write and reply', () =
     const gates = new Map<string, ReturnType<typeof deferred<void>>>();
     const gate = (name: string) => { if (!gates.has(name)) gates.set(name, deferred<void>()); return gates.get(name)!; };
     let holding = false;
-    const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+    const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
       options?.preSend?.();
       const request = args?.[0] as Envelope | undefined;
       const held = holding && request?.actionId === `management:${target}`;
@@ -435,7 +449,7 @@ describe('offline and reconnect between enqueue, dequeue, write and reply', () =
       await r.c.refresh(); await r.c.uninstall(plugin);
       expect(r.c.getState().outcome).toBe('confirmation');
       r.hold(true);
-      void r.c.cancel();
+      void shownCancel(r.c);
       await r.flush();
       await r.run(order);
       expect(r.count('cancel')).toBe(0);
@@ -447,7 +461,7 @@ describe('offline and reconnect between enqueue, dequeue, write and reply', () =
       const r = rig('cancel', () => receipt('cancelled'));
       await r.c.refresh(); await r.c.uninstall(plugin);
       r.hold(true);
-      void r.c.cancel();
+      void shownCancel(r.c);
       await r.flush();
       await r.run(order);
       expect(r.count('cancel')).toBe(1);
@@ -481,7 +495,7 @@ describe('busy belongs to one request; one answer per consent', () => {
       if (item.kind === 'answer' && host.phase === 'confirmation') host.phase = item.confirmed ? 'running' : 'cancelled';
       if (item.kind === 'cancel' && (host.phase === 'confirmation' || host.phase === 'running')) host.phase = 'cancelled';
     };
-    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
       options?.preSend?.();
       const request = args?.[0] as Envelope | undefined;
       const action = request?.actionId;
@@ -565,7 +579,7 @@ describe('busy belongs to one request; one answer per consent', () => {
       else if (name === 'online') { online += 1; r.toggle(); r.c.setOnline(true); }
       else if (name === 'allow' || name === 'reject') { taps += 1; void r.c.answer(name === 'allow'); }
       else if (name === 'check') { checks += 1; void r.c.reconcile(); }
-      else if (name === 'cancel') { cancels += 1; void r.c.cancel(); }
+      else if (name === 'cancel') { cancels += 1; void shownCancel(r.c); }
       else if (name === 'dequeue') item!.dequeue();
       else if (name === 'deliver') item!.deliver!();
       else if (name === 'reply') item!.reply!();
@@ -615,7 +629,7 @@ describe('busy belongs to one request; one answer per consent', () => {
   it('keeps the reconnect lookup holding busy when an old cancel is stopped at its last check', async () => {
     const r = rig();
     await r.c.refresh(); await r.c.install(detail, plugin);
-    void r.c.cancel(); await flush();                            // cancel queued (sent as an operation-scoped request)
+    void shownCancel(r.c); await flush();                            // cancel queued (sent as an operation-scoped request)
     r.toggle(); r.c.setOnline(false); await flush();
     r.toggle(); r.c.setOnline(true); await flush();              // the reconnect lookup is queued
     const lookups = () => r.pending.filter((item) => item.kind === 'operation');
@@ -662,8 +676,10 @@ describe('progress only moves forward and never stops', () => {
     const sent = { lookups: 0, snapshots: 0 };
     // Every management request written, in order, and every request asked for (written or not).
     const writes: string[] = [], asked: string[] = [];
+    // Consents the view put on screen, and the consent each cancel was asked for (⑫).
+    const shown = new Set<string>(), cancelledConsents: Array<string | undefined> = [];
     const settle = (item: Item) => { const index = pending.indexOf(item); if (index >= 0) pending.splice(index, 1); };
-    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
       options?.preSend?.();
       const request = args?.[0] as Envelope | undefined;
       const action = request?.actionId?.replace('management:', '');
@@ -675,6 +691,7 @@ describe('progress only moves forward and never stops', () => {
         throw new Error('unexpected ' + action);
       }
       if (action === 'operation') sent.lookups += 1;
+      if (action === 'cancel') cancelledConsents.push(c.getState().receipt?.consent?.requestId);
       asked.push(action!);
       return new Promise((resolve, reject) => {
         let reply: (() => void) | undefined;
@@ -705,7 +722,7 @@ describe('progress only moves forward and never stops', () => {
           deliver: () => { settle(item); reply!(); },
           lose: () => { settle(item); reject(lostError()); },
           // Refused before its first write (the link said no): never written.
-          refuse: () => { settle(item); reject(new Error('refused before the first write')); },
+          refuse: () => { settle(item); options?.onNotSent?.(); reject(new Error('refused before the first write')); },
         };
         pending.push(item);
       });
@@ -730,7 +747,7 @@ describe('progress only moves forward and never stops', () => {
       }
       else if (next === 'cancel') { view.steps.push('cancel'); void c.cancel(); }
     };
-    return { c, host, pending, transit, timers, sent, writes, asked, slot, token, hold, view,
+    return { c, host, pending, transit, timers, sent, writes, asked, slot, token, hold, view, shown, cancelledConsents,
       consentless: hostOptions.consent === false, toggle: () => { connection += 1; }, connection: () => connection,
       leave: () => { view.detached = true; stopReview = c.subscribe(review); review(); },
       back: () => { view.detached = false; stopReview?.(); stopReview = undefined; },
@@ -748,7 +765,7 @@ describe('progress only moves forward and never stops', () => {
     if (name === 'offline') { r.toggle(); r.c.setOnline(false); }
     else if (name === 'online') { r.toggle(); r.c.setOnline(true); }
     else if (name === 'allow' || name === 'reject') void r.c.answer(name === 'allow');
-    else if (name === 'check') void r.c.reconcile();
+    else if (name === 'check' || name === 'recordCheck') void r.c.reconcile();
     else if (name === 'host') {
       if (r.host.phase === 'accepted') r.host.phase = r.consentless ? 'succeeded' : 'confirmation';
       else if (r.host.phase === 'running') r.host.phase = r.host.allowed ? 'succeeded' : 'cancelled';
@@ -761,6 +778,9 @@ describe('progress only moves forward and never stops', () => {
     else if (name === 'deliver') item!.deliver();
     else item!.lose();
     await flush();
+    // A view on screen shows the consent it has (the sheet marks it); a view gone shows nothing.
+    const consent = r.c.getState().receipt?.consent?.requestId;
+    if (!r.view.detached && !r.view.gone && r.c.getState().outcome === 'confirmation' && consent) { r.c.markConsentShown(consent); r.shown.add(consent); }
   }
   function enabled(r: R, counts: Record<string, number>): string[] {
     const st = r.c.getState(), list: string[] = [];
@@ -769,6 +789,9 @@ describe('progress only moves forward and never stops', () => {
     // Taps need the view on screen.
     if (!r.view.detached && tappable(r) && (counts.allow ?? 0) + (counts.reject ?? 0) < 2) list.push('allow', 'reject');
     if (!r.view.detached && st.outcome === 'unknown' && st.online && !st.busy && !counts.check) list.push('check');
+    // Maintainer review 20:45: "Check result" from the list of pending checks, the view gone (it may find a consent nobody
+    // saw, for example after begin's reply was lost and the lookups stopped).
+    if (r.view.detached && !r.view.gone && st.outcome === 'unknown' && st.online && !st.busy && !counts.recordCheck) list.push('recordCheck');
     if ((r.host.phase === 'accepted' || r.host.phase === 'running') && (counts.host ?? 0) < 3) list.push('host');
     if (r.timers.length > 0 && (counts.tick ?? 0) < 3) list.push('tick');
     const firstQueued = r.pending.find((entry) => entry.stage === 'queued');
@@ -799,6 +822,10 @@ describe('progress only moves forward and never stops', () => {
     if (!slotHeld && r.pending.some((entry) => entry.kind !== 'operation'))
       return `⑩ slot released with a ${r.pending.find((entry) => entry.kind !== 'operation')!.kind} in flight (${path})`;
     if (r.view.gone && slotHeld) return `⑩ slot held by a controller that was let go (${path})`;
+    // ⑫ (maintainer review 20:45, dispatcher L-2) Nothing the list of pending checks or a gone view drives writes: a
+    // cancel is only ever asked for a consent the view showed; an answer only comes from a tap on a view on screen.
+    const unseen = r.cancelledConsents.find((id) => !id || !r.shown.has(id));
+    if (r.cancelledConsents.length && unseen !== undefined) return `⑫ cancel of a consent never shown (${path})`;
     // ⑪ (maintainer review 18:45) An operation whose begin was written keeps a pending check until its final result,
     // whatever happens to its view or the connection (offline, leaving, lookups stopped, the receipt gone): it is never
     // let go before that. While the check waits for the person, the computer's slot is free; while the operation moves
@@ -888,7 +915,7 @@ describe('progress only moves forward and never stops', () => {
   const fingerprint = (r: R, counts: Record<string, number>) => JSON.stringify([r.host, r.c.getState().outcome, r.c.getState().busy,
     r.c.getState().answerHeld, r.c.getState().online, r.c.getState().receipt?.phase, r.timers.length,
     r.pending.map((entry) => [entry.kind, entry.stage, entry.arrived, entry.confirmed, entry.epoch === r.connection()]),
-    r.transit.map((entry) => [entry.kind, entry.confirmed]), r.view.detached, r.view.gone, r.c.cancelPhase(), r.writes, counts]);
+    r.transit.map((entry) => [entry.kind, entry.confirmed]), r.view.detached, r.view.gone, r.c.cancelPhase(), r.writes, counts, [...r.shown]]);
   // The maintainer's orders, as plain regressions (each fails on ea3874b2 and e46ff0aa).
   const run = async (r: R, events: string[]) => { const counts = {}; for (const event of events) await step(r, event, counts); };
   it('A: a late begin consent after Allow already ran neither goes back nor stops the polling', async () => {
@@ -1119,7 +1146,7 @@ describe('progress only moves forward and never stops', () => {
     expect(c.getState()).toMatchObject({ outcome: 'confirmation', answerHeld: null });
     expect(nextDetachedStep(c)).toBe('letGo');
     expect(c.mayCancel()).toBe(false);
-    await c.cancel();
+    await shownCancel(c);
     expect(h.requests.map((request) => request.actionId).filter((id) => id !== 'management:snapshot' && id !== 'management:market-detail'))
       .toEqual(['management:begin', 'management:answer']);
   });
@@ -1159,7 +1186,7 @@ describe('page management slot', () => {
   it('keeps a later holder when the controller of an earlier one goes after the entry already released it', async () => {
     const slot = createPluginManagementSlot();
     const requests: string[] = [];
-    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
       options?.preSend?.(); options?.onRequestWritten?.();
       if (channel.endsWith(':manifest')) return capability;
       const action = (args?.[0] as Envelope).actionId.replace('management:', '');
@@ -1185,7 +1212,7 @@ describe('page management slot', () => {
   it('gives the next account a free slot, and releases the previous account\'s', async () => {
     const owner = getMobileAuthOwner();
     const previous = pluginManagementSlotFor(owner);
-    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
       options?.preSend?.(); options?.onRequestWritten?.();
       if (channel.endsWith(':manifest')) return capability;
       const action = (args?.[0] as Envelope).actionId.replace('management:', '');
@@ -1277,7 +1304,7 @@ describe('mobile management transactions', () => {
     const c = controller(h.client); await c.refresh();
     const start = c.uninstall(plugin);
     await eventually(() => expect(c.getState().operationId).toBe('operation-1'));
-    await c.cancel(); begin.resolve(receipt('running')); await start;
+    await shownCancel(c); begin.resolve(receipt('running')); await start;
     expect(c.getState().outcome).toBe('running');
     await c.reconcile();
     expect(c.getState().outcome).toBe('succeeded');
@@ -1293,7 +1320,7 @@ describe('mobile management transactions', () => {
     const c = controller(createPluginManagementClient({ invoke, deviceId: 'host-1' })); await c.refresh();
     const start = c.uninstall(plugin);
     await eventually(() => expect(preSend).toBeTypeOf('function'));
-    await c.cancel();
+    await shownCancel(c);
     expect(() => preSend()).not.toThrow();
     queued.resolve({ effects: [], result: receipt('succeeded') }); await start;
     expect(c.getState()).toMatchObject({ outcome: 'succeeded', busy: false });
@@ -1310,7 +1337,7 @@ describe('mobile management transactions', () => {
     const c = controller(createPluginManagementClient({ invoke, deviceId: 'host-1' })); await c.refresh();
     let pending: Promise<void>;
     if (action === 'begin') pending = c.install(detail, plugin);
-    else { await c.install(detail, plugin); pending = action === 'answer' ? c.answer(true) : c.cancel(); }
+    else { await c.install(detail, plugin); pending = action === 'answer' ? c.answer(true) : shownCancel(c); }
     await eventually(() => expect(preSend).toBeTypeOf('function'));
     c.setOnline(false); c.setOnline(true);
     await eventually(() => expect(c.getState().busy).toBe(false));
@@ -1981,10 +2008,10 @@ describe('confirmation sheet wording', () => {
     expect(planConsentSheet({ available: 100, identity: 384, heading: 40, lines: [36, 48, 40, 40, 48], gap: 4 })).toEqual({ mode: 'compact' });
     // Room for everything: nothing changes.
     expect(planConsentSheet({ available: 640, identity: 210, heading: 20, lines: [20, 20, 20, 20, 20], gap: 4 }))
-      .toEqual({ mode: 'regular', summaryLines: 116, clipped: false });
+      .toEqual({ mode: 'regular', summaryLines: 116, clipped: false, guaranteed: 44 });
     // The identity block and two items fit, the rest scrolls inside the summary.
     expect(planConsentSheet({ available: 332, identity: 230, heading: 25, lines: [20, 20, 20, 20, 20], gap: 4 }))
-      .toEqual({ mode: 'regular', summaryLines: 77, clipped: true });
+      .toEqual({ mode: 'regular', summaryLines: 77, clipped: true, guaranteed: 44 });
   });
   it('keeps the two-layout invariants for every height, text size and item count', () => {
     const availables = [0, 1, 10, 43, 44, 88, 100, 200, 320, 480, 640, 900];
@@ -2003,7 +2030,7 @@ describe('confirmation sheet wording', () => {
         expect(planConsentSheet({ ...input, lines: [...lines] }), name).toEqual(plan);
         // ⑤ Hints are not an input: whatever their heights, measured or not, the plan is the same.
         expect(planConsentSheet({ ...input, summaryHint: 48, listHint: 48 } as typeof input), name).toEqual(plan);
-        if (count === 0) { expect(plan, name).toEqual({ mode: 'regular', summaryLines: 0, clipped: false }); continue; }
+        if (count === 0) { expect(plan, name).toEqual({ mode: 'regular', summaryLines: 0, clipped: false, guaranteed: 0 }); continue; }
         const measured = identity > 0 && heading > 0;
         const sum = (n: number) => lines.slice(0, n).reduce((total, line) => total + line, 0) + Math.max(0, Math.min(n, count) - 1) * gap;
         const floor = sum(Math.min(2, count)), full = sum(count);
@@ -2021,6 +2048,11 @@ describe('confirmation sheet wording', () => {
           expect(plan.clipped, name).toBe(plan.summaryLines < full);
           // ④ Within the room, with the identity block in full above it.
           expect(identity + heading + plan.summaryLines, name).toBeLessThanOrEqual(available);
+          // ⑦ (dispatcher N-3) The fade over the pinned summary never reaches its guaranteed two items: drawn only when
+          // what shows below them is at least the fade's height (otherwise only the scrollbar says there is more).
+          expect(plan.guaranteed, name).toBe(floor);
+          if (consentSummaryFadeAllowed(plan)) expect(plan.summaryLines - CONSENT_FADE_HEIGHT, name).toBeGreaterThanOrEqual(plan.guaranteed);
+          if (plan.clipped && plan.summaryLines - plan.guaranteed < CONSENT_FADE_HEIGHT) expect(consentSummaryFadeAllowed(plan), name).toBe(false);
         } else {
           expect(plan.summaryLines + PINNED_HIGH_RISK_MIN_HEIGHT, name).toBeLessThanOrEqual(available);
         }

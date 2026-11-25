@@ -129,8 +129,12 @@ export function PluginMarketSection({ market, onConnectComputer }: {
               <Text numberOfLines={2} style={styles.rowTitle}>{item.name}</Text>
               {origin ? <Text style={styles.badge}>{t("plugins.market.filter." + origin)}</Text> : null}
             </View>
-            {/* Every state keeps the same two-line description slot, so rows never change height. */}
-            <View testID={`plugins.market.line.${item.pluginId}`}>
+            {/* Every changing state keeps the same two-line description slot, so rows never change height while an install
+                moves on. A plugin that cannot be installed from the phone stays so: its note takes the lines it needs
+                (up to three), so a long translation is never cut (dispatcher N-5). */}
+            {state.kind === "sourceUnverified" ? (
+              <Text testID={`plugins.market.line.${item.pluginId}`} numberOfLines={3} style={styles.note}>{line}</Text>
+            ) : <View testID={`plugins.market.line.${item.pluginId}`}>
               {/* Two invisible lines of the taller description style reserve the height at any font scale. */}
               <View style={styles.reserve} pointerEvents="none" accessibilityElementsHidden
                 importantForAccessibility="no-hide-descendants">
@@ -138,7 +142,7 @@ export function PluginMarketSection({ market, onConnectComputer }: {
               </View>
               {line ? <Text numberOfLines={2}
                 style={[state.kind === "idle" ? styles.preview : styles.note, styles.lineOverlay]}>{line}</Text> : null}
-            </View>
+            </View>}
           </View>
         </Pressable>
         {trailing(item)}

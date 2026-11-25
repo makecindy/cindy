@@ -486,6 +486,7 @@
   },
   "checks": {
     "title": "还没结束的插件操作",
+    "titleEnded": "插件操作的结果",
     "many": "{{count}} 项插件操作还没结束",
     "waitingOne": "「{{name}}」在「{{device}}」上的结果待核实",
     "kind": {
@@ -502,7 +503,8 @@
       "confirmation": "等待确认",
       "checking": "正在核实结果",
       "waiting": "结果未确认。可以再核实一次，或不再跟踪。",
-      "offline": "「{{device}}」未连接，连接后才能核实结果。"
+      "offline": "「{{device}}」未连接，连接后才能核实结果。",
+      "awaitingYou": "电脑正在等你确认"
     },
     "stop": "不再跟踪",
     "stopHint": "只是这台手机不再跟踪，不会取消电脑上的操作。",
@@ -512,9 +514,17 @@
       "failed": "没有完成",
       "cancelled": "已取消",
       "untracked": "已不再跟踪",
-      "ended": "已结束"
+      "ended": "已结束",
+      "readingBack": "已完成，正在确认电脑上的插件…",
+      "succeededMissing": "已完成，但电脑上没有找到这个插件。",
+      "succeededUnread": "已完成，但没能读取电脑上的插件。",
+      "uninstalled": "已卸载"
     },
     "open": "打开插件",
-    "close": "完成"
+    "close": "完成",
+    "decide": "查看并决定",
+    "decideBlocked": "这台电脑上另一项操作还没结束，结束后再决定。",
+    "readAgain": "重新读取",
+    "openUnavailable": "「{{device}}」已不在这个账号的电脑列表里，不能从这里打开。"
   }
 }

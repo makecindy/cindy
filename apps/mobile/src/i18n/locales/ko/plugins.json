@@ -486,6 +486,7 @@
   },
   "checks": {
     "title": "끝나지 않은 플러그인 작업",
+    "titleEnded": "플러그인 작업 결과",
     "many": "플러그인 작업 {{count}}개가 끝나지 않았습니다",
     "waitingOne": "“{{device}}”의 “{{name}}” 결과를 확인해야 합니다",
     "kind": {
@@ -502,7 +503,8 @@
       "confirmation": "확인 대기 중",
       "checking": "결과 확인 중",
       "waiting": "결과가 확인되지 않았습니다. 다시 확인하거나 추적을 중지하세요.",
-      "offline": "“{{device}}”이(가) 연결되어 있지 않습니다. 연결하면 결과를 확인할 수 있습니다."
+      "offline": "“{{device}}”이(가) 연결되어 있지 않습니다. 연결하면 결과를 확인할 수 있습니다.",
+      "awaitingYou": "컴퓨터가 확인을 기다리고 있습니다"
     },
     "stop": "추적 중지",
     "stopHint": "이 휴대폰에서만 추적을 멈춥니다. 컴퓨터의 작업은 취소되지 않습니다.",
@@ -512,9 +514,17 @@
       "failed": "완료되지 않음",
       "cancelled": "취소됨",
       "untracked": "추적하지 않음",
-      "ended": "종료됨"
+      "ended": "종료됨",
+      "readingBack": "완료. 컴퓨터의 플러그인을 확인하는 중…",
+      "succeededMissing": "완료되었지만 컴퓨터에서 이 플러그인을 찾지 못했습니다.",
+      "succeededUnread": "완료되었지만 컴퓨터의 플러그인을 읽지 못했습니다.",
+      "uninstalled": "제거됨"
     },
     "open": "플러그인 열기",
-    "close": "닫기"
+    "close": "닫기",
+    "decide": "보고 결정하기",
+    "decideBlocked": "이 컴퓨터의 다른 작업이 끝나지 않았습니다. 끝난 뒤 결정하세요.",
+    "readAgain": "다시 읽기",
+    "openUnavailable": "“{{device}}”이(가) 더 이상 이 계정의 컴퓨터 목록에 없어 여기서 열 수 없습니다."
   }
 }

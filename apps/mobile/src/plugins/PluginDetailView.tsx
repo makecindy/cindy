@@ -45,6 +45,12 @@ export interface PluginDetailViewProps {
   settingsContent?: ReactNode;
   managementNotice?: PluginNoticeProps;
   uiApprovalNotice?: PluginNoticeProps;
+  /**
+   * iOS: the page's notice of unfinished plugin operations, as the first row of this native list (dispatcher M-1): rows
+   * here get the navigation bar and search field insets, so the notice is never under the search field at any text
+   * size. Android shows it above the panes instead.
+   */
+  pageNotice?: PluginNoticeProps;
   onEnabledChange(enabled: boolean): void;
   onOpen(surface: PluginPageSurface): void;
   /** Opens the detailed introduction; omitted when the Host declared none. */

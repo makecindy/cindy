@@ -14,9 +14,14 @@ export function PluginNativeNotice({ title, detail, icon = "info", testID, actio
   // Keep native button labels intact on narrow screens and with larger accessibility text.
   const stackedActions = (actions?.length ?? 0) > 1 || (!unavailable && !!detail) || availableWidth < 340 || fontScale > 1.2;
   const systemImage = icon === "offline" ? "desktopcomputer.trianglebadge.exclamationmark" : icon === "warning" ? "exclamationmark.circle" : "info.circle";
+  // Beside the text a button keeps its one-line width; stacked under it (narrow, large text) it may wrap within the
+  // notice instead, so a long label at the largest sizes (German "Erneut versuchen") never pushes the notice past the
+  // screen edge (dispatcher M-3).
   const buttons = actions?.map((action) => <Button
     key={action.label} label={action.label} testID={action.testID} onPress={action.onPress}
-    modifiers={[buttonStyle("bordered"), controlSize("small"), fixedSize({ horizontal: true, vertical: false }), frame({ minHeight: 44 }), disabled(Boolean(action.disabled))]}
+    modifiers={[buttonStyle("bordered"), controlSize("small"),
+      fixedSize(stackedActions ? { horizontal: false, vertical: true } : { horizontal: true, vertical: false }),
+      frame({ minHeight: 44 }), disabled(Boolean(action.disabled))]}
   />);
   return <VStack testID={testID} alignment="leading" spacing={spacing.sm}
     modifiers={[

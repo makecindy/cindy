@@ -486,6 +486,7 @@
   },
   "checks": {
     "title": "Nicht abgeschlossene Plugin-Vorgänge",
+    "titleEnded": "Ergebnisse der Plugin-Vorgänge",
     "many": "{{count}} Plugin-Vorgänge sind nicht abgeschlossen",
     "waitingOne": "Das Ergebnis für „{{name}}“ auf „{{device}}“ muss geprüft werden",
     "kind": {
@@ -502,7 +503,8 @@
       "confirmation": "Wartet auf Bestätigung",
       "checking": "Ergebnis wird geprüft",
       "waiting": "Ergebnis unbestätigt. Prüfe es erneut oder verfolge es nicht weiter.",
-      "offline": "„{{device}}“ ist nicht verbunden. Verbinde ihn, um das Ergebnis zu prüfen."
+      "offline": "„{{device}}“ ist nicht verbunden. Verbinde ihn, um das Ergebnis zu prüfen.",
+      "awaitingYou": "Der Computer wartet auf deine Bestätigung"
     },
     "stop": "Nicht mehr verfolgen",
     "stopHint": "Nur dieses Handy verfolgt den Vorgang nicht mehr. Auf dem Computer wird nichts abgebrochen.",
@@ -512,9 +514,17 @@
       "failed": "Nicht abgeschlossen",
       "cancelled": "Abgebrochen",
       "untracked": "Wird nicht mehr verfolgt",
-      "ended": "Beendet"
+      "ended": "Beendet",
+      "readingBack": "Erledigt. Das Plugin auf dem Computer wird geprüft…",
+      "succeededMissing": "Erledigt, aber dieses Plugin wurde auf dem Computer nicht gefunden.",
+      "succeededUnread": "Erledigt, aber die Plugins auf dem Computer konnten nicht gelesen werden.",
+      "uninstalled": "Deinstalliert"
     },
     "open": "Plugin öffnen",
-    "close": "Fertig"
+    "close": "Fertig",
+    "decide": "Ansehen und entscheiden",
+    "decideBlocked": "Ein anderer Vorgang auf diesem Computer ist nicht abgeschlossen. Entscheide danach.",
+    "readAgain": "Erneut lesen",
+    "openUnavailable": "„{{device}}“ gehört nicht mehr zu den Computern dieses Kontos und kann hier nicht geöffnet werden."
   }
 }

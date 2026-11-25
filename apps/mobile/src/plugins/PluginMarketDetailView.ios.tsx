@@ -3,7 +3,7 @@ import {
   Button, Divider, HStack, Host, List, ProgressView, RNHostView, Section, Text, VStack,
 } from "@expo/ui/swift-ui";
 import {
-  accessibilityLabel, background, buttonStyle, clipShape, contentShape, disabled, fixedSize, font, foregroundStyle,
+  accessibilityLabel, background, buttonStyle, clipShape, contentShape, disabled, fixedSize, font, foregroundStyle, layoutPriority,
   frame, lineLimit, listRowBackground, listRowInsets, listRowSeparator, listRowSeparatorTint, listStyle, padding,
   scrollContentBackground, shapes,
 } from "@expo/ui/swift-ui/modifiers";
@@ -20,7 +20,7 @@ import {
 import type { PluginMarketDetailViewProps } from "./PluginMarketDetailView";
 
 /** iOS market detail: same native List hierarchy as the installed detail, with Install in place of the toggle. */
-export function PluginMarketDetailView({ detail, market }: PluginMarketDetailViewProps) {
+export function PluginMarketDetailView({ detail, market, pageNotice }: PluginMarketDetailViewProps) {
   const { t } = useTranslation();
   const { mode, colors } = useTheme();
   const { width } = useWindowDimensions();
@@ -56,6 +56,7 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
         background(colors.surface), listRowSeparatorTint(colors.border)]}>
         <Section modifiers={[listRowBackground(colors.surface), listRowInsets({ leading: spacing.lg + spacing.xs,
           trailing: spacing.lg + spacing.xs, top: spacing.md, bottom: spacing.md })]}>
+          {pageNotice ? <VStack modifiers={quiet}><PluginNativeNotice {...pageNotice} /></VStack> : null}
           {!online ? (
             <VStack modifiers={quiet}>
               <PluginNativeNotice icon="offline" testID="plugins.market.detailOffline" title={t("plugins.market.offline", { device })} />
@@ -82,7 +83,9 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
               </VStack>
               <VStack alignment="leading" spacing={spacing.xs} modifiers={[frame({ maxWidth: Infinity, alignment: "leading" })]}>
                 <HStack spacing={spacing.sm}>
-                  <Text modifiers={[font({ textStyle: "title2", weight: "semibold" }), lineLimit(2)]}>{item.name}</Text>
+                  {/* The full name, on as many lines as it needs (dispatcher M-6: "Demo Team She…" on a small screen). */}
+                  <Text modifiers={[font({ textStyle: "title2", weight: "semibold" }), fixedSize({ horizontal: false, vertical: true }),
+                    layoutPriority(1)]}>{item.name}</Text>
                   {origin ? (
                     <Text modifiers={[font({ textStyle: "caption2", weight: "semibold" }), foregroundStyle(colors.textSecondary),
                       padding({ horizontal: spacing.sm, vertical: 2 }), background(colors.surfaceChip), clipShape("capsule")]}>

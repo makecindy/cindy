@@ -26,9 +26,12 @@ export function usePluginConsent({
   const consent = state.receipt?.consent;
   const requestId = consent?.requestId;
   const operationId = state.operationId;
+  const visible = active && state.outcome === "confirmation" && Boolean(consent);
+  // This consent is on screen now: only a consent the person saw may be cancelled by leaving it (dispatcher L-2).
+  useEffect(() => { if (visible && requestId) controller.markConsentShown?.(requestId); }, [visible, requestId, controller]);
   return {
     consent,
-    visible: active && state.outcome === "confirmation" && Boolean(consent),
+    visible,
     answer: (accepted: boolean) => {
       const current = controller.getState();
       if (

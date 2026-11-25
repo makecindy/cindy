@@ -103,6 +103,9 @@ vi.mock("@/plugins/PluginManagementConfirmation", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/plugins/PluginManagementConfirmation")>();
   return { PluginManagementConfirmation: (p: any) => {
     fixture.props.set("confirmation", p);
+    // Like the real sheet: a consent shown while active is marked as seen (only that one may be cancelled by leaving).
+    const requestId = p.state?.receipt?.consent?.requestId;
+    useEffect(() => { if (!fixture.realConfirmation && p.active && p.state?.outcome === "confirmation" && requestId) p.controller?.markConsentShown?.(requestId); });
     return fixture.realConfirmation ? createElement(actual.PluginManagementConfirmation, p) : null;
   } };
 });
@@ -112,12 +115,13 @@ vi.mock("@/session/useSharedTaskConfirmation", () => ({ useSharedTaskConfirmatio
     ? [{ style: "cancel", text: request.cancelLabel, onPress: () => resolve(false) },
       { style: request.destructive ? "destructive" : "default", text: request.confirmLabel, onPress: () => { request.onConfirm?.(); resolve(true); } }]
     : [{ text: request.confirmLabel, onPress: () => { request.onConfirm?.(); resolve(true); } }])) }) }));
-vi.mock("@/plugins/PluginNotice", () => ({ PluginNotice: (p: any) => {
+/** A notice as the real component shows it: its title and its action buttons (tests press them by test id). */
+function noticeElement(p: any) {
   fixture.props.set(p.testID ?? "notice", p);
-  // Its title and its real action buttons (tests press them by test id).
   return createElement("span", { "data-testid": p.testID }, p.title, ...(p.actions ?? []).map((action: any) =>
     createElement("button", { key: action.label, onClick: action.onPress, disabled: action.disabled, "data-testid": action.testID }, action.label)));
-} }));
+}
+vi.mock("@/plugins/PluginNotice", () => ({ PluginNotice: (p: any) => noticeElement(p) }));
 vi.mock("react-native", async () => {
   const React = await import("react");
   const view = ({ children, testID }: any) =>
@@ -272,16 +276,17 @@ vi.mock("@/platform/chrome/NativeSwitch", () => ({
     return null;
   },
 }));
+// iOS draws the page's notice as the first row of these native lists (`pageNotice`): rendered here the same way.
 vi.mock("@/plugins/PluginDirectoryView", () => ({
   PluginDirectoryView: (p: any) => {
     fixture.props.set("directory", p);
-    return null;
+    return p.pageNotice ? noticeElement(p.pageNotice) : null;
   },
 }));
 vi.mock("@/plugins/PluginDetailView", () => ({
   PluginDetailView: (p: any) => {
     fixture.props.set("detail", p);
-    return createElement("div", null, p.settingsContent);
+    return createElement("div", null, p.pageNotice ? noticeElement(p.pageNotice) : null, p.settingsContent);
   },
 }));
 vi.mock("@/plugins/PluginTaskPicker", () => ({
@@ -1360,14 +1365,20 @@ describe("one page slot for every entry (real components, three ways of deliveri
 describe("page slot release paths", () => {
   const holder = () => (pluginManagementSlotFor().holders()[0] ?? null);
   async function updateScreen(host: { begin?: (request: any) => unknown; operation?: (request: any) => unknown; answer?: (request: any) => unknown;
-    detail?: () => unknown; cancel?: (request: any) => unknown; refuseCancel?: () => boolean }) {
-    const { snapshot, market } = realManagementHost();
+    detail?: () => unknown; cancel?: (request: any) => unknown; refuseCancel?: () => boolean; ui?: boolean }) {
+    const { snapshot, market, plugin } = realManagementHost();
+    if (host.ui) {
+      // A plugin with pages waiting for approval, on a Host that approves them (the page approval entry).
+      Object.assign(plugin.manifest, { tools: [{ name: "open" }], mcpApps: { ui: { resources: [{ uri: "ui://form", file: "ui/form.html" }], tools: { open: { resourceUri: "ui://form" } } } } });
+      Object.assign(snapshot, { uiCapabilityApproval: true });
+    }
     fixture.width = 900;
     const requests: string[] = [], asked: string[] = [];
     fixture.wire.mockImplementation(async (_host: string, channel: string, args: any[], options: any) => {
       if (args?.[0]?.actionId) asked.push(args[0].actionId);
       // Refused before its first write (no write receipt): never written.
-      if (args?.[0]?.actionId === "management:cancel" && host.refuseCancel?.()) throw new Error("refused before the first write");
+      // Refused before the first write, reported the way DeviceLinkContext.invoke reports it (`onNotSent`).
+      if (args?.[0]?.actionId === "management:cancel" && host.refuseCancel?.()) { options?.onNotSent?.(); throw new Error("refused before the first write"); }
       return transportSend(options, async () => {
       if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
       const request = args[0];
@@ -1450,6 +1461,86 @@ describe("page slot release paths", () => {
     expect(holder()).toBeNull();
     expect(__retainedForTests.size()).toBe(1);
     expect(pluginManagementSlotFor().available(same)).toBe(false);
+  });
+  // Dispatcher N-2: while an operation of the plugin on screen is under way the page went unavailable with no notice.
+  // The notice shows whenever anything is unfinished: above both panes on a wide screen; on a narrow iOS screen as the
+  // first row of the detail on screen; on Android above the page.
+  it.each([["wide", 900, "ios"], ["narrow iOS", 390, "ios"], ["narrow Android", 390, "android"]] as const)(
+    "shows the notice while the plugin on screen has an operation under way (%s)", async (_name, width, platform) => {
+      const s = await updateScreen({ begin: (request) => receiptOf(request, "running"), operation: (request) => receiptOf(request, "running") });
+      // The detail is open (selected through the iOS directory); then the platform and width under test.
+      fixture.platform = platform;
+      fixture.width = width;
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await settle(6);
+      expect(fixture.props.has("plugins.slotHolder")).toBe(false);
+      if (platform === "ios") await s.update();
+      else { await act(async () => { void fixture.props.get("header").right.props.onAction("update"); }); await settle(14); }
+      expect(holder()).toMatchObject({ entry: "update" });
+      expect(fixture.props.get("plugins.slotHolder")).toMatchObject({ title: "plugins.slot.holder" });
+      if (platform === "ios" && width < 768) expect(fixture.props.get("detail").pageNotice).toMatchObject({ title: "plugins.slot.holder" });
+    });
+  // Dispatcher L-1 / L-4, the success rows of the other entries: an update, an uninstall and a page approval followed to
+  // their end from the list of checks after their view went away (another plugin's detail opened). The list reads the
+  // computer itself; "Open" only for the instance that read found; an uninstall keeps no instance id and has no "Open".
+  describe("succeeded from the list of checks, per entry", () => {
+    const byId = (id: string) => element.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
+    const press = async (id: string) => {
+      const control = byId(id);
+      expect(control, `${id} is on screen`).not.toBeNull();
+      await act(async () => control!.click());
+      await settle(14);
+    };
+    it.each(["update", "uninstall"] as const)("%s", async (entry) => {
+      let done = false;
+      const s = await updateScreen({ begin: (request) => receiptOf(request, "running"), operation: (request) => receiptOf(request, done ? "succeeded" : "running") });
+      if (entry === "update") await s.update();
+      else if (entry === "uninstall") {
+        await act(async () => { void fixture.props.get("header").rightToolbar.props.onAction("uninstall"); });
+        await act(async () => fixture.alert.mock.calls.at(-1)![2][1].onPress());
+        await settle(14);
+      }
+      expect(s.writes()).toEqual(["management:begin"]);
+      await act(async () => root.render(createElement("div")));
+      await settle(6);
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await settle(14);
+      done = true;
+      await press("plugins.slotHolder.show");
+      await press("plugins.checks.verify");
+      expect(s.writes()).toEqual(["management:begin", "management:operation"]);
+      const text = byId("plugins.checks")?.textContent ?? "";
+      if (entry === "uninstall") {
+        expect(text).toContain("plugins.checks.result.uninstalled");
+        expect(byId("plugins.checks.open")).toBeNull();
+      } else {
+        expect(text).toContain("plugins.checks.result.succeeded");
+        fixture.read.mockClear();
+        await press("plugins.checks.open");
+        expect(fixture.read).toHaveBeenCalledWith(fixture.wire, expect.objectContaining({ deviceId: "mac" }),
+          expect.objectContaining({ id: "demo" }), "en", ["plugin-capabilities"]);
+      }
+    });
+    it("page approval", async () => {
+      let done = false;
+      const s = await updateScreen({ begin: (request) => receiptOf(request, "running"), operation: (request) => receiptOf(request, done ? "succeeded" : "running"), ui: true });
+      await act(async () => { fixture.props.get("detail").uiApprovalNotice.actions[0].onPress(); });
+      await settle(14);
+      expect(s.writes()).toEqual(["management:begin"]);
+      await act(async () => root.render(createElement("div")));
+      await settle(6);
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await settle(14);
+      done = true;
+      await press("plugins.slotHolder.show");
+      await press("plugins.checks.verify");
+      expect(s.writes()).toEqual(["management:begin", "management:operation"]);
+      expect(byId("plugins.checks")?.textContent).toContain("plugins.checks.kind.pageApproval");
+      fixture.read.mockClear();
+      await press("plugins.checks.open");
+      expect(fixture.read).toHaveBeenCalledWith(fixture.wire, expect.objectContaining({ deviceId: "mac" }),
+        expect.objectContaining({ id: "demo" }), "en", ["plugin-capabilities"]);
+    });
   });
   it("follows an update to its end after the page is left, then releases it", async () => {
     let finish!: () => void;
@@ -2763,6 +2854,276 @@ describe("market install recovery", () => {
       await click("plugins.market.filter");
       await click("plugins.market.filter.custom");
       expect(byId(`plugins.market.install.${custom.pluginId}`)?.disabled).toBe(false);
+    });
+  });
+  /* 测试价值（维护者 20:45 两条；调度要求 L-1、L-4：待核实记录的状态表逐行一条）
+   * - 生产入口与可观察结果：真实 PluginsScreen（Android 渲染）+ usePluginMarket + 待核实记录 + 管理 client / controller，
+   *   只替换传输；只点渲染出来的控件（市场行、顶部提示「查看」、记录面板「核实结果」「查看并决定」「打开」「重新读取」、
+   *   确认面板「允许」）；观察每一步发往电脑的 management:* 写入与查询（带原操作号）、面板上的状态与按钮、打开的电脑与实例。
+   * - 依据：docs/dev-rules/plugin-mobile-implementation.md「待核实记录的状态表」：记录驱动的步骤只读、零 begin / answer /
+   *   cancel；写入只来自用户在当前画面上的点按；「打开」只给记录自己按账号与电脑回读核实过的实例。
+   * - 缺口：核实时首次发现的确认被后台立刻取消；后台核实出成功后实例回读随 controller 销毁失效，面板没有「打开」。
+   * - 最小失败输入：begin 回包丢失、查询停在协议错误后交给记录，再按「核实结果」；表中每行一个 Host 回答。tier: integration。
+   */
+  describe("pending check state table, through the panel's own controls", () => {
+    const byId = (id: string) => element.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
+    async function click(id: string) {
+      const control = byId(id);
+      expect(control, `${id} is on screen`).not.toBeNull();
+      expect(control!.disabled, `${id} is available`).toBe(false);
+      await act(async () => control!.click());
+      await settle(14);
+    }
+    type World = { operation: () => unknown; installed: boolean; installedBy?: string; snapshotFails?: number; answer?: () => unknown };
+    const consentOf = (requestId = "consent") => ({ operationId: "screen-operation", phase: "confirmation", consent: {
+      requestId, initiator: "user", origin: "market", facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } });
+    const receipt = (phase: string, extra: object = {}) => ({ operationId: "screen-operation", phase, ...extra });
+    function tableWire(world: World) {
+      return marketWire((request) => {
+        switch (request.actionId) {
+          case "management:snapshot":
+            if (request.input?.read === "capabilities") return { catalogPaging: true };
+            if (request.input?.read === "catalog") return marketPage(world.installed ? [] : [item]);
+            if (world.snapshotFails) { world.snapshotFails -= 1; throw hostError("TIMEOUT"); }
+            return managementSnapshot(world.installed);
+          case "management:market-detail": return { ...item, installState: world.installed ? "installed" : "not-installed",
+            ...(world.installedBy ? { installedOperationId: world.installedBy } : {}), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+          case "management:begin": throw new Error("[TIMEOUT] remote invoke timed out");    // written; the reply is lost
+          case "management:answer": return world.answer ? world.answer() : receipt("running");
+          case "management:operation": return world.operation();
+          case "management:cancel": return receipt("cancelled");
+          default: throw new Error("unexpected " + request.actionId);
+        }
+      });
+    }
+    const writes = (requests: MarketWireRequest[]) => requests
+      .filter((request) => ["management:begin", "management:answer", "management:cancel", "management:operation"].includes(request.actionId!))
+      .map((request) => request.actionId!.replace("management:", "") + ":" + request.input?.operationId);
+    /**
+     * The maintainer's start: Install on the market row, begin's reply lost; "Check result" on the row hits a protocol
+     * error, so automatic lookups stop and the attempt is handed to its pending check while the person stays on the
+     * market; then the notice's "View" opens the list of checks.
+     */
+    async function toPanel(world: World) {
+      fixture.platform = "android";
+      fixture.realConfirmation = true;
+      const requests = tableWire(world);
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await act(async () => fixture.props.get("segment").onChange("market"));
+      await settle(14);
+      await click(`plugins.market.install.${item.pluginId}`);
+      world.operation = () => { throw hostError("INVALID_RESPONSE"); };
+      await click(`plugins.market.install.${item.pluginId}`);              // the row's "Check result"
+      expect(writes(requests)).toEqual(["begin:screen-operation", "operation:screen-operation"]);
+      await click("plugins.slotHolder.show");
+      expect(byId("plugins.checks")?.textContent).toContain("Demo");
+      return requests;
+    }
+    /** "Check result" in the list: one lookup of the original operation, then nothing written by the list. */
+    async function verifyFrom(requests: MarketWireRequest[]) {
+      const before = requests.length;
+      await click("plugins.checks.verify");
+      return () => writes(requests.slice(before));
+    }
+    const status = () => byId("plugins.checks")?.textContent ?? "";
+    it("a consent first found by Check result stays read-only; only View and decide → Allow writes, once (maintainer 20:45 #1)", async () => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      world.operation = () => consentOf();
+      const sent = await verifyFrom(requests);
+      expect(sent()).toEqual(["operation:screen-operation"]);
+      await settle(14);
+      expect(sent()).toEqual(["operation:screen-operation"]);           // no cancel behind the panel
+      expect(status()).toContain("plugins.checks.status.awaitingYou");
+      expect(byId("plugins.checks.verify")).toBeNull();
+      await click("plugins.checks.decide");
+      // The same confirmation sheet; only the person's Allow writes the answer.
+      expect(sent()).toEqual(["operation:screen-operation"]);
+      await click("plugins.management.allow");
+      expect(sent()).toEqual(["operation:screen-operation", "answer:screen-operation"]);
+      expect(writes(requests).filter((write) => write.startsWith("cancel") || write.startsWith("begin"))).toEqual(["begin:screen-operation"]);
+    });
+    it("leaving a consent the sheet showed cancels it once (the one write a gone view makes)", async () => {
+      fixture.platform = "android";
+      fixture.realConfirmation = true;
+      const world: World = { operation: () => consentOf(), installed: false };
+      const requests = marketWire((request) => request.actionId === "management:begin" ? consentOf()
+        : request.actionId === "management:cancel" ? receipt("cancelled")
+          : request.actionId === "management:snapshot" ? (request.input?.read === "capabilities" ? { catalogPaging: true }
+            : request.input?.read === "catalog" ? marketPage([item]) : managementSnapshot(false))
+            : request.actionId === "management:market-detail" ? { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } }
+              : world.operation());
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await act(async () => fixture.props.get("segment").onChange("market"));
+      await settle(14);
+      await click(`plugins.market.install.${item.pluginId}`);
+      expect(byId("plugins.management.allow")).not.toBeNull();             // on screen
+      await act(async () => root.render(createElement("div")));
+      await settle(14);
+      expect(writes(requests)).toEqual(["begin:screen-operation", "cancel:screen-operation"]);
+    });
+    it("an Allow written whose consent the computer still shows: only looks up, never answers again", async () => {
+      const world: World = { operation: () => receipt("running"), installed: false, answer: () => { throw new Error("[TIMEOUT] remote invoke timed out"); } };
+      const requests = await toPanel(world);
+      world.operation = () => consentOf();
+      const sent = await verifyFrom(requests);
+      await click("plugins.checks.decide");
+      await click("plugins.management.allow");                            // written, reply lost
+      await click("plugins.slotHolder.show");
+      const after = requests.length;
+      await click("plugins.checks.verify");
+      expect(writes(requests.slice(after))).toEqual(["operation:screen-operation"]);
+      expect(byId("plugins.checks.decide")).toBeNull();
+      expect(sent().filter((write) => write.startsWith("answer"))).toEqual(["answer:screen-operation"]);
+    });
+    it("a new consent (another request id) found by a check is read-only until the person opens it", async () => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      world.operation = () => consentOf("consent-2");
+      const sent = await verifyFrom(requests);
+      expect(sent()).toEqual(["operation:screen-operation"]);
+      expect(status()).toContain("plugins.checks.status.awaitingYou");
+      expect(byId("plugins.checks.decide")).not.toBeNull();
+    });
+    it("running: says the computer is working on it, writes nothing", async () => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      world.operation = () => receipt("running");
+      const sent = await verifyFrom(requests);
+      expect(sent()).toEqual(["operation:screen-operation"]);
+      expect(status()).toContain("plugins.checks.status.running");
+    });
+    it("succeeded: the list reads the computer, then Open opens that instance on that computer (maintainer 20:45 #2)", async () => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      world.operation = () => receipt("succeeded");
+      world.installed = true;
+      const sent = await verifyFrom(requests);
+      expect(sent()).toEqual(["operation:screen-operation"]);
+      expect(status()).toContain("plugins.checks.result.succeeded");
+      fixture.read.mockClear();
+      await click("plugins.checks.open");
+      expect(fixture.read).toHaveBeenCalledWith(fixture.wire, expect.objectContaining({ deviceId: "mac" }),
+        expect.objectContaining({ id: "_root__demo" }), "en", ["plugin-capabilities"]);
+    });
+    it("succeeded but the computer could not be read: no Open until Read again finds the instance", async () => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      world.operation = () => receipt("succeeded");
+      world.installed = true;
+      world.snapshotFails = 5;
+      await verifyFrom(requests);
+      expect(status()).toContain("plugins.checks.result.succeededUnread");
+      expect(byId("plugins.checks.open")).toBeNull();
+      world.snapshotFails = 0;
+      await click("plugins.checks.readAgain");
+      expect(byId("plugins.checks.open")).not.toBeNull();
+    });
+    it("succeeded but the instance is not on the computer: says so, no Open", async () => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      world.operation = () => receipt("succeeded");
+      await verifyFrom(requests);
+      expect(status()).toContain("plugins.checks.result.succeededMissing");
+      expect(byId("plugins.checks.open")).toBeNull();
+    });
+    it.each([["failed", "plugins.checks.result.failed"], ["cancelled", "plugins.checks.result.cancelled"]])(
+      "%s (here or by another controller): says how it ended, writes nothing", async (phase, text) => {
+        const world: World = { operation: () => receipt("running"), installed: false };
+        const requests = await toPanel(world);
+        world.operation = () => receipt(phase, phase === "failed" ? { errorCode: "GHOST_DOWNLOAD_FAILED" } : {});
+        const sent = await verifyFrom(requests);
+        expect(sent()).toEqual(["operation:screen-operation"]);
+        expect(status()).toContain(text);
+        expect(byId("plugins.checks.open")).toBeNull();
+      });
+    it.each([
+      ["installed, its operation id recorded", true, "screen-operation", "plugins.checks.result.installed", true],
+      ["installed by another operation", true, "computer-update-0001", "plugins.market.unconfirmedMismatch", false],
+      ["not installed", false, undefined, "plugins.market.unconfirmedNotInstalled", false],
+    ] as const)("NOT_FOUND, %s: settles from the computer's facts, writes nothing", async (_name, installed, installedBy, text, opens) => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      world.operation = () => { throw hostError("NOT_FOUND"); };
+      world.installed = installed;
+      world.installedBy = installedBy;
+      const sent = await verifyFrom(requests);
+      expect(sent()).toEqual(["operation:screen-operation"]);
+      expect(status()).toContain(text);
+      expect(!!byId("plugins.checks.open")).toBe(opens);
+    });
+    it.each([["a retryable failure", "TIMEOUT"], ["a protocol error", "INVALID_RESPONSE"]])(
+      "lookup fails with %s: stays unconfirmed, Check result stays, nothing written", async (_name, code) => {
+        const world: World = { operation: () => receipt("running"), installed: false };
+        const requests = await toPanel(world);
+        world.operation = () => { throw hostError(code); };
+        const sent = await verifyFrom(requests);
+        expect(sent()).toEqual(["operation:screen-operation"]);
+        expect(status()).toContain("plugins.checks.status.waiting");
+        expect(byId("plugins.checks.verify")).not.toBeNull();
+      });
+    // Dispatcher N-1, found while verifying on the mock: "no write receipt" was taken as "never written", so a begin
+    // that reached the computer but whose reply was lost read "failed, try again" on a transport that does not report
+    // writes, and a second tap sent a second begin. Now only positive evidence of a refusal makes it a plain failure.
+    function silentWire(begin: "silent" | "refused") {
+      fixture.realManagement = true;
+      const requests: MarketWireRequest[] = [];
+      fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => {
+        if (channel.endsWith(":manifest"))
+          return { protocolVersion: 1, collections: [{ id: "plugins", actions: [{ id: "management:snapshot", label: "Manage" }] }] };
+        const envelope = args?.[0] ?? {};
+        const request = { device, actionId: envelope.actionId, input: envelope.input, resourceRef: envelope.resourceRef };
+        requests.push(request);
+        options?.preSend?.();
+        if (request.actionId === "management:begin") {
+          // `silent`: a transport that reports neither the write nor a refusal; `refused`: refused before the write, said so.
+          if (begin === "refused") options?.onNotSent?.();
+          throw new Error("[TIMEOUT] remote invoke timed out");
+        }
+        options?.onRequestWritten?.();
+        if (request.actionId === "management:operation") return { effects: [], result: receipt("running") };
+        if (request.actionId === "management:market-detail") return { effects: [], result: { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } } };
+        if (request.input?.read === "capabilities") return { effects: [], result: { catalogPaging: true } };
+        if (request.input?.read === "catalog") return { effects: [], result: marketPage([item]) };
+        return { effects: [], result: managementSnapshot(false) };
+      });
+      return requests;
+    }
+    async function pressInstall() {
+      fixture.platform = "android";
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await act(async () => fixture.props.get("segment").onChange("market"));
+      await settle(14);
+      await click(`plugins.market.install.${item.pluginId}`);
+    }
+    const lineOf = () => byId(`plugins.market.line.${item.pluginId}`)?.textContent ?? "";
+    it("a begin that fails on a transport that reports nothing is a result to check, never a failure to retry", async () => {
+      const requests = silentWire("silent");
+      await pressInstall();
+      expect(lineOf()).toContain("plugins.market.resultUnknownDetail");
+      expect(lineOf()).not.toContain("plugins.actionFailed");
+      await click(`plugins.market.install.${item.pluginId}`);              // the row now says "Check result"
+      expect(writes(requests)).toEqual(["begin:screen-operation", "operation:screen-operation"]);
+    });
+    it("a begin refused before the write (said so by the transport) is a plain failure that may be tried again", async () => {
+      const requests = silentWire("refused");
+      await pressInstall();
+      expect(lineOf()).not.toContain("plugins.market.resultUnknownDetail");
+      expect(byId(`plugins.market.install.${item.pluginId}`)?.textContent).toContain("plugins.retry");
+      await click(`plugins.market.install.${item.pluginId}`);
+      expect(writes(requests)).toEqual(["begin:screen-operation", "begin:screen-operation"]);
+    });
+    it("offline: readable, Check result unavailable with the reason, nothing sent", async () => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      fixture.online = false;
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await settle(14);
+      const before = requests.length;
+      if (!byId("plugins.checks")) await click("plugins.slotHolder.show");
+      expect(byId("plugins.checks.verify")?.disabled).toBe(true);
+      expect(status()).toContain("plugins.checks.status.offline");
+      expect(writes(requests.slice(before))).toEqual([]);
     });
   });
   it("releases the row when the install never started because the computer went away mid-preparation", async () => {

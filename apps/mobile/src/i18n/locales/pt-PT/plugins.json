@@ -488,6 +488,7 @@
   },
   "checks": {
     "title": "Operações de plugins por concluir",
+    "titleEnded": "Resultados das operações de plugins",
     "many": "{{count}} operações de plugins ainda não foram concluídas",
     "waitingOne": "É preciso verificar o resultado de «{{name}}» em «{{device}}»",
     "kind": {
@@ -504,7 +505,8 @@
       "confirmation": "A aguardar confirmação",
       "checking": "A verificar o resultado",
       "waiting": "Resultado não confirmado. Verifique novamente ou deixe de acompanhar.",
-      "offline": "«{{device}}» não está ligado. Ligue-o para verificar o resultado."
+      "offline": "«{{device}}» não está ligado. Ligue-o para verificar o resultado.",
+      "awaitingYou": "O computador está a aguardar a sua confirmação"
     },
     "stop": "Deixar de acompanhar",
     "stopHint": "Só este telemóvel deixa de acompanhar. A operação no computador não é cancelada.",
@@ -514,9 +516,17 @@
       "failed": "Não concluído",
       "cancelled": "Cancelado",
       "untracked": "Já não é acompanhado",
-      "ended": "Terminado"
+      "ended": "Terminado",
+      "readingBack": "Concluído. A verificar o plugin no computador…",
+      "succeededMissing": "Concluído, mas este plugin não foi encontrado no computador.",
+      "succeededUnread": "Concluído, mas não foi possível ler os plugins do computador.",
+      "uninstalled": "Desinstalado"
     },
     "open": "Abrir plugin",
-    "close": "OK"
+    "close": "OK",
+    "decide": "Ver e decidir",
+    "decideBlocked": "Outra operação neste computador ainda não terminou. Decida quando terminar.",
+    "readAgain": "Ler novamente",
+    "openUnavailable": "«{{device}}» já não está entre os computadores desta conta, por isso não pode ser aberto a partir daqui."
   }
 }

@@ -174,8 +174,11 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
                   : <HStack testID={`plugins.market.titleRow.${item.pluginId}`} spacing={6}>{name}{badge}</HStack>;
               })()}
               {line ? (
+                // Its own lines in full, up to the limit (dispatcher M-5: without a fixed vertical size the row offered
+                // one line and German "… am Computer install…" was cut).
                 <Text modifiers={[font({ textStyle: state.kind === "idle" ? "subheadline" : "footnote" }),
-                  foregroundStyle(colors.textSecondary), lineLimit(state.kind === "idle" ? 2 : 3)]}>{line}</Text>
+                  foregroundStyle(colors.textSecondary), lineLimit(state.kind === "idle" ? 2 : 3),
+                  fixedSize({ horizontal: false, vertical: true })]}>{line}</Text>
               ) : null}
             </VStack>
           </HStack>

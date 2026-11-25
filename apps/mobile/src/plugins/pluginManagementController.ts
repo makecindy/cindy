@@ -111,6 +111,13 @@ export function createPluginManagementController(client: PluginManagementClient,
    * never written an answer to it (Allow or Reject, reply received or not). Disposing never writes anything.
    */
   let answerWrittenEver = false, cancelAttempted = false;
+  /**
+   * The consent request this phone actually put on screen (the confirmation sheet marks it when it shows it; dispatcher
+   * L-2). Leaving an unanswered consent cancels it only if it is this one: a consent found by a lookup the person never
+   * saw (a begin whose reply was lost, a check from the list of pending checks, a reattached view) is never cancelled
+   * by anything but the person; it stays read-only until they open it and answer.
+   */
+  let shownConsent: string | null = null;
   const opGuard = () => {
     if (!opHold && releasedHold && state.operationId) takeSlotBack();
     return opHold ? opHold.guard() : !releasedHold;
@@ -420,7 +427,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     let began = false, operationId: string | null = null;
     const holder = hold();
     answers.clear(); cancelling = null; consentOrder.length = 0; answerSentAt.clear(); shownRank = -1;
-    lookupFailures = 0; autoLookupStopped = false; resetPace(); answerWrittenEver = false; cancelAttempted = false;
+    lookupFailures = 0; autoLookupStopped = false; resetPace(); answerWrittenEver = false; cancelAttempted = false; shownConsent = null;
     publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle',
       expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null });
     const installed = intent.installed;
@@ -599,9 +606,14 @@ export function createPluginManagementController(client: PluginManagementClient,
       else conclude(holder, {});
     }
   }
-  /** A cancel is still allowed: a consent shown, no answer ever written or in flight, no cancel tried before. */
+  /**
+   * The one place deciding whether anything but the person's tap may write (dispatcher L-2): a cancel, and only of the
+   * consent this phone showed (`shownConsent`), never answered (no answer ever written or in flight), never cancelled
+   * before. Nothing else in a controller writes by itself: lookups, checks, reconnects and reattached views only read.
+   */
   function mayCancel() {
     return !!state.operationId && state.outcome === 'confirmation' && !cancelAttempted && !answerWrittenEver
+      && !!shownConsent && state.receipt?.consent?.requestId === shownConsent
       && ![...answers.values()].includes('pending') && !state.busy;
   }
   async function cancel() {
@@ -651,6 +663,21 @@ export function createPluginManagementController(client: PluginManagementClient,
     approveUiFromConsent: (installed: PluginUiConsentItem) => start({ kind: 'approve-ui', installed }),
     deferUiFromConsent: (installed: PluginUiConsentItem) => start({ kind: 'defer-ui', installed }),
     answer, cancel, reconcile, mayCancel,
+    /** The confirmation sheet put this consent on screen (see `shownConsent`). */
+    markConsentShown(requestId: string) {
+      if (!disposed && state.outcome === 'confirmation' && state.receipt?.consent?.requestId === requestId) shownConsent = requestId;
+    },
+    /** A consent is on the computer that this phone never showed (found by a lookup): the person has to open it. */
+    consentUnseen: () => state.outcome === 'confirmation' && !!state.receipt?.consent && state.receipt.consent.requestId !== shownConsent
+      && !state.answerHeld,
+    /**
+     * Before the person opens a consent from the list of pending checks (dispatcher L-2): the operation holds its
+     * computer's slot, taking it back if it went; false when someone else holds it (nothing may be answered then).
+     */
+    ensureHold(): boolean {
+      if (!opHold && releasedHold && state.operationId) takeSlotBack();
+      return opHold ? opHold.guard() : !releasedHold;
+    },
     /** The one cancel of this operation: not tried, in flight, or over (written or not). */
     cancelPhase: (): 'none' | 'inflight' | 'over' => !cancelAttempted ? 'none' : cancelling === 'pending' ? 'inflight' : 'over',
     /**
