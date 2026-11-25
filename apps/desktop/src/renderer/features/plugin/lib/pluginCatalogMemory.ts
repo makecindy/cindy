@@ -16,6 +16,8 @@ function emptyCatalogMemory() {
     installedGrid: { columns: 2, measurements: [] } as PluginGridCache, installedQuery: '',
     scroll: { offset: 0, anchor: null as { id: string; top: number } | null },
     todayPool: [] as PluginMarketItem[], consumedToday: new Set<string>(), todayLoaded: false,
+    recommendationOrder: { ids: [] as string[] },
+    recommendationBatch: [] as string[],
     snapshot: null as PluginMarketSnapshot | null,
     remoteSnapshot: null as PluginManagementSnapshot | null,
     catalogPaging: false,
@@ -45,7 +47,7 @@ export function pluginCatalogMemory(ownerKey: string, target: string): CatalogMe
   return memory;
 }
 
-export function usePluginCatalogState<K extends 'query' | 'catalogTab' | 'originFilter' | 'installedLimit' | 'marketTotal' | 'todayPool' | 'consumedToday' | 'todayLoaded' | 'snapshot' | 'remoteSnapshot' | 'catalogPaging' | 'catalogRevision'>(
+export function usePluginCatalogState<K extends 'query' | 'catalogTab' | 'originFilter' | 'installedLimit' | 'marketTotal' | 'todayPool' | 'consumedToday' | 'todayLoaded' | 'recommendationBatch' | 'snapshot' | 'remoteSnapshot' | 'catalogPaging' | 'catalogRevision'>(
   memory: CatalogMemory, key: K,
 ): [CatalogMemory[K], Dispatch<SetStateAction<CatalogMemory[K]>>] {
   const [state, setState] = useState({ memory, value: memory[key] });
