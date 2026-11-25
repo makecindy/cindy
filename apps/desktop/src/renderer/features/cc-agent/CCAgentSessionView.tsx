@@ -279,7 +279,7 @@ import {
 import { useTurnElapsed } from './hooks/useTurnElapsed';
 import { useSessionTurnActiveTruth } from '@/features/cc-agent/hooks/useSessionTurnActiveTruth';
 import { useHistoryRecoveryNavigation } from '@/features/cc-agent/hooks/useHistoryRecoveryNavigation';
-import { useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
+import { REMOTE_LOADING_DELAY_MS, useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
 import { RemoteSessionBanner } from './RemoteSessionBanner';
 import { AuxiliaryModelHealthBanner } from './AuxiliaryModelHealthBanner';
 import { WorkingDirectoryTip } from './WorkingDirectoryTip';
@@ -879,6 +879,19 @@ export function createWritableDirRemovalQueue() {
       });
     },
   };
+}
+
+function LocalHistoryLoading() {
+  const { t } = useTranslation();
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setVisible(true), REMOTE_LOADING_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  if (!visible) return null;
+  return <div role="status" className="pointer-events-none absolute inset-0 z-raised flex items-center justify-center gap-2 text-13 text-[var(--text-secondary)]">
+    <Spinner size={14} />{t('ccAgent.common.loading')}
+  </div>;
 }
 
 export function CCAgentSessionView(props: CCAgentSessionViewProps) {
@@ -6498,6 +6511,9 @@ function CCAgentSessionContent({
           <Button variant="secondary" onClick={creationPreview.editAfterFailure}>{t('ccAgent.draft.directoryRecovery.edit')}</Button>
         </div>}
         {remoteLoading === 'loading' && <RemoteSessionLoading />}
+        {sessionId && !remoteDeviceId && !botChatIdentity && !creationPreview && !historyLoaded && !messages.length && !pendingQueue.length && (
+          <LocalHistoryLoading key={sessionId} />
+        )}
         {remoteLoading === 'inline-syncing' && <RemoteSessionLoading compact />}
 
         {/* Full-area drop overlay.

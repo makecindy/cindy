@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { favoritesSyncFailureI18nKey } from './favoritesSyncFailure';
 import { Check, ChevronRight, Loader2, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useInitialPaint } from '@/hooks/useInitialPaint';
 
 import {
   unifiedModelEntries,
@@ -414,7 +415,23 @@ export interface UnifiedModelPanelProps {
  * 数据源:M1 的 `unifiedModelEntries`(纯逻辑,已按生效来源解析候选与能力)+ 调用方注入的
  * 可见性 / 排除谓词。本组件**不自己判定候选引擎或能力**,只做合成与呈现。
  */
-export function UnifiedModelPanel({
+export function UnifiedModelPanel(props: UnifiedModelPanelProps) {
+  const { t } = useTranslation();
+  const ready = useInitialPaint(() => {
+    const localRows = props.providers.reduce((count, provider) =>
+      count + Object.values(provider.models).reduce((sum, models) => sum + models.length, 0), 0);
+    const remoteRows = props.remoteSources?.groups.reduce((count, group) => count + group.entries.length, 0) ?? 0;
+    return localRows + remoteRows >= 80;
+  });
+  if (!ready) {
+    return <div role="status" className="flex flex-1 items-center justify-center px-3 py-6 text-13 text-[var(--text-tertiary)]">
+      {t('newChat.modelSelector.trigger.loading')}
+    </div>;
+  }
+  return <UnifiedModelPanelContent {...props} />;
+}
+
+function UnifiedModelPanelContent({
   pinnedTop,
   pinnedTopHasRows = false,
   modelGroupsView,
