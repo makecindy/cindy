@@ -605,7 +605,7 @@ export function SplashScreen() {
                   className="absolute overflow-hidden"
                   style={{
                     left: SPLASH_PANEL.progress.x,
-                    top: SPLASH_PANEL.databaseCleanup.progressY,
+                    top: SPLASH_PANEL.databaseCleanup.progressY + 14,
                     width: SPLASH_PANEL.progress.width,
                     height: SPLASH_PANEL.progress.height,
                     borderRadius: SPLASH_PANEL.progress.radius,
@@ -628,7 +628,7 @@ export function SplashScreen() {
                     className="absolute flex items-center justify-center tabular-nums"
                     style={{
                       left: SPLASH_PANEL.stats.x,
-                      top: SPLASH_PANEL.databaseCleanup.statsY,
+                      top: SPLASH_PANEL.databaseCleanup.statsY + 20,
                       width: SPLASH_PANEL.stats.width,
                       height: SPLASH_PANEL.stats.height,
                       fontSize: SPLASH_PANEL.stats.fontSize,
@@ -640,96 +640,23 @@ export function SplashScreen() {
                   </div>
                 ) : null}
                 <div
-                  data-testid="workspace-migration-steps"
-                  className="absolute flex items-center justify-center gap-4"
-                  style={{
-                    left: SPLASH_PANEL.databaseCleanup.hint.x,
-                    top: SPLASH_PANEL.databaseCleanup.actionY + 8,
-                    width: SPLASH_PANEL.databaseCleanup.hint.width,
-                    height: 36,
-                    fontSize: SPLASH_PANEL.databaseCleanup.hint.fontSize,
-                  }}
-                >
-                  {(
-                    [
-                      { key: 'copying', order: 1 },
-                      { key: 'verifying', order: 2 },
-                      { key: 'switching', order: 3 },
-                    ] as const
-                  ).map((step, stepIndex) => {
-                    const currentOrder =
-                      workspaceMigrationProgress.phase === 'preparing'
-                        ? 0
-                        : workspaceMigrationProgress.phase === 'copying'
-                          ? 1
-                          : workspaceMigrationProgress.phase === 'verifying'
-                            ? 2
-                            : 3;
-                    const done = currentOrder > step.order;
-                    const active = currentOrder === step.order;
-                    return (
-                      <div key={step.key} className="flex items-center gap-2.5">
-                        {stepIndex > 0 ? (
-                          <span
-                            aria-hidden
-                            style={{
-                              width: 24,
-                              height: 1,
-                              background: done || active
-                                ? LOGIN_COLORS.splashProgressFill
-                                : LOGIN_COLORS.splashProgressTrack,
-                              opacity: done || active ? 0.55 : 0.9,
-                            }}
-                          />
-                        ) : null}
-                        <span className="flex items-center gap-1.5">
-                          <span
-                            aria-hidden
-                            style={{
-                              width: 8,
-                              height: 8,
-                              borderRadius: 9999,
-                              background:
-                                done || active
-                                  ? LOGIN_COLORS.splashProgressFill
-                                  : LOGIN_COLORS.splashProgressTrack,
-                              opacity: done ? 0.65 : 1,
-                            }}
-                          />
-                          <span
-                            style={{
-                              color: active
-                                ? LOGIN_COLORS.titleText
-                                : LOGIN_COLORS.secondaryText,
-                              fontWeight: active ? 600 : 400,
-                              opacity: active ? 1 : done ? 0.8 : 0.55,
-                            }}
-                          >
-                            {t(`splash.workspaceMigration.phase.${step.key}`)}
-                          </span>
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div
                   data-testid="workspace-migration-safety-hint"
-                  className="absolute flex items-center justify-center text-center"
+                  className="absolute flex items-center justify-center text-center [text-wrap:pretty]"
                   style={{
                     left: SPLASH_PANEL.databaseCleanup.hint.x,
-                    top: SPLASH_PANEL.databaseCleanup.hint.y,
+                    top: 274,
                     width: SPLASH_PANEL.databaseCleanup.hint.width,
-                    height: SPLASH_PANEL.databaseCleanup.hint.height,
-                    fontSize: SPLASH_PANEL.databaseCleanup.hint.fontSize,
-                    lineHeight: `${SPLASH_PANEL.databaseCleanup.hint.lineHeight}px`,
+                    height: 104,
+                    fontSize: SPLASH_PANEL.stats.fontSize,
+                    lineHeight: 1.45,
                     color: LOGIN_COLORS.secondaryText,
                   }}
                 >
                   {t('splash.workspaceMigration.safetyHint')}
                 </div>
               </>
-            )}
-
+            )}
+
             {!workspaceMigrationProgress && dbCleanupProgress && (
               <>
                 <div

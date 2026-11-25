@@ -10029,7 +10029,7 @@
       "confirm": "Zum Download"
     },
     "workspaceMigration": {
-      "title": "Freund-Arbeitsbereich wird verschoben",
+      "title": "Arbeitsbereich wird verschoben",
       "progressLabel": "Fortschritt der Arbeitsbereich-Migration",
       "safetyHint": "Dateien werden vor dem Umschalten kopiert und geprüft. Lass Cindy bis zum Abschluss geöffnet.",
       "phase": {

@@ -51,13 +51,11 @@ export interface WorkspacePathFieldProps {
   onCopy: (value: string) => void | Promise<void>;
   onOpen?: () => void | Promise<void>;
   disabled?: boolean;
-  /** Optional extra attributes forwarded to interactive buttons (e.g. settings search attrs). */
-  controlProps?: Record<string, string | undefined>;
   className?: string;
 }
 
 /**
- * Tactile, scannable read-only path well for desktop storage/workspace settings.
+ * Tactile, scannable read-only path well for buddy workspace location settings.
  *
  * Anatomy (36px height = Input md):
  *   [ Drive badge / Folder ] [ Monospace path (opens Full Path Popover) ] | [ Copy ] [ Open ]
@@ -74,7 +72,6 @@ export function WorkspacePathField({
   onCopy,
   onOpen,
   disabled = false,
-  controlProps,
   className,
 }: WorkspacePathFieldProps) {
   const [copied, setCopied] = useState(false);
@@ -99,7 +96,7 @@ export function WorkspacePathField({
   return (
     <div
       className={cn(
-        'group flex h-9 min-w-0 items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-2.5 pr-1.5 transition-colors',
+        'group flex h-9 min-w-0 items-center gap-2 overflow-hidden rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-2.5 pr-1.5 transition-colors',
         'hover:border-[var(--text-tertiary)]/50 focus-within:border-[var(--focus-ring)]',
         className,
       )}
@@ -107,18 +104,14 @@ export function WorkspacePathField({
       <Popover>
         <PopoverTrigger asChild>
           <button
-            {...controlProps}
             type="button"
             aria-label={fullPathLabel}
             title={path}
-            className={cn(
-              'flex h-7 min-w-0 flex-1 items-center gap-2 rounded-lg px-1 text-left transition-colors',
-              'hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            )}
+            className="flex h-7 min-w-0 flex-1 items-center gap-2 px-1 text-left transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           >
             {driveBadge ? (
               <span
-                className="inline-flex h-5 shrink-0 items-center gap-1 rounded-[5px] bg-[var(--surface-chip)] px-1.5 font-mono text-11 font-medium text-[var(--text-primary)]"
+                className="inline-flex h-5 shrink-0 items-center gap-1 rounded bg-[var(--surface-chip)] px-1.5 font-mono text-11 font-medium text-[var(--text-primary)]"
                 aria-hidden
               >
                 <HardDrive size={11} className="text-[var(--text-secondary)]" />
@@ -146,18 +139,18 @@ export function WorkspacePathField({
               <p className="mb-1.5 text-11 font-medium text-[var(--text-secondary)]">
                 {primaryPathLabel ?? fullPathLabel}
               </p>
-              <p className="select-text break-all rounded-lg border border-[var(--border-default)] bg-[var(--surface-on-card)] px-3 py-2 font-mono text-12 leading-relaxed text-[var(--text-primary)]">
+              <p className="select-text break-all font-mono text-12 leading-relaxed text-[var(--text-primary)]">
                 {path}
               </p>
             </div>
 
             {linkedPath ? (
-              <div>
+              <div className="border-t border-[var(--border-default)] pt-3">
                 <p className="mb-1.5 flex items-center gap-1.5 text-11 font-medium text-[var(--text-secondary)]">
                   <Link2 size={12} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden />
                   {linkedPathLabel}
                 </p>
-                <p className="select-text break-all rounded-lg border border-[var(--border-default)] bg-[var(--surface-on-card)] px-3 py-2 font-mono text-12 leading-relaxed text-[var(--text-secondary)]">
+                <p className="select-text break-all font-mono text-12 leading-relaxed text-[var(--text-secondary)]">
                   {linkedPath}
                 </p>
               </div>
@@ -171,7 +164,6 @@ export function WorkspacePathField({
 
             <div className="flex items-center justify-end gap-2 pt-0.5">
               <Button
-                {...controlProps}
                 type="button"
                 variant="secondary"
                 size="sm"
@@ -195,44 +187,38 @@ export function WorkspacePathField({
 
       <div className="flex shrink-0 items-center gap-0.5">
         <Tip text={copyLabel}>
-          <button
-            {...controlProps}
+          <Button
             type="button"
+            variant="secondary"
+            tone="quiet"
+            size="sm"
+            className="w-7 px-0"
             disabled={disabled}
             aria-label={copyLabel}
             onClick={() => void handleCopy()}
-            className={cn(
-              'flex size-7 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors',
-              'enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-[var(--text-primary)]',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              'disabled:cursor-not-allowed disabled:opacity-50',
-            )}
           >
             {copied ? (
               <Check size={14} className="text-[var(--status-success)]" aria-hidden />
             ) : (
               <Copy size={14} aria-hidden />
             )}
-          </button>
+          </Button>
         </Tip>
 
         {onOpen && openLabel ? (
           <Tip text={openLabel}>
-            <button
-              {...controlProps}
+            <Button
               type="button"
+              variant="secondary"
+              tone="quiet"
+              size="sm"
+              className="w-7 px-0"
               disabled={disabled}
               aria-label={openLabel}
               onClick={() => void onOpen()}
-              className={cn(
-                'flex size-7 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors',
-                'enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-[var(--text-primary)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
             >
               <FolderOpen size={14} aria-hidden />
-            </button>
+            </Button>
           </Tip>
         ) : null}
       </div>
