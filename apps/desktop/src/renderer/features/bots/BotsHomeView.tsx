@@ -511,17 +511,19 @@ export function BotSettings({
         </div>
         {page === 'home' ? (
           <>
-            <div className="flex flex-col items-center pb-6 pt-2 text-center">
-              {avatarPicker}
-              <h1 className="mt-2 max-w-full break-words text-18 font-medium text-[var(--text-primary)]">
-                {displayName}
-              </h1>
-              {avatarError ? (
-                <p className="mt-2 text-12 text-[var(--text-danger)]" role="alert">
-                  {t('bots.profile.avatarFailed')}
-                </p>
-              ) : null}
-            </div>
+            {!invitationPending ? (
+              <div className="flex flex-col items-center pb-6 pt-2 text-center">
+                {avatarPicker}
+                <h1 className="mt-2 max-w-full break-words text-18 font-medium text-[var(--text-primary)]">
+                  {displayName}
+                </h1>
+                {avatarError ? (
+                  <p className="mt-2 text-12 text-[var(--text-danger)]" role="alert">
+                    {t('bots.profile.avatarFailed')}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
               {settingsRows.map(([next, Icon, title]) => (
                 <button
