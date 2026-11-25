@@ -308,6 +308,8 @@ export class InputHandoffSession {
   private asked = false;
   /** The last step that asked the owner for something: shown again while the agent's completion hint is pending. */
   private askedStep: ExtractedStep | null = null;
+  /** The page lost its fields before the agent's completion hint showed: the card keeps the asked step and waits. */
+  private awaitingHint = false;
   /** The asked fields went away without an answer through the card: the owner did it on the window. */
   private doneOutside = false;
   private ambiguousTitles: string[] | undefined;
@@ -734,9 +736,11 @@ export class InputHandoffSession {
     if (this.asked && this.submissions === 0 && this.askedStep && !actionable(step) && !step.pageMissing && this.hintsPending(step)) {
       this.step = this.askedStep;
       this.fieldsGoneReads = 0;
+      this.awaitingHint = true;
       this.publish('ready');
       return;
     }
+    this.awaitingHint = false;
     this.step = step;
     this.guardSignInPage(step);
     this.doneOutside = this.asked && this.submissions === 0 && !actionable(step) && !step.pageMissing;
@@ -1121,7 +1125,8 @@ export class InputHandoffSession {
     if (this.ended || this.busy || this.phase !== 'ready' || this.qrState || !this.target) return false;
     // Another device holding the card is answering a form, whose fields must not change under it; a sign-in on
     // the window has no form to protect, so taking it over does not stop the watching.
-    if (this.holder && !this.directSignInOffered()) return false;
+    // Holding the card while it only waits for the agent's completion hint is no form being typed: keep watching.
+    if (this.holder && !this.directSignInOffered() && !this.awaitingHint) return false;
     if (this.picture) return !this.pictureChosen;
     return !!this.step && actionable(this.step) && !this.step.deviceCode;
   }
@@ -1223,6 +1228,7 @@ export class InputHandoffSession {
       if (this.hintsPending(step)) {
         this.step = asked;
         this.fieldsGoneReads = 0;
+        this.awaitingHint = true;
         return;
       }
     }

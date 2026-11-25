@@ -583,6 +583,35 @@ describe('a waiting card watching its window', () => {
     expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0 });
   });
 
+  // PR #12766 review (codex r4692318185): a phone holding a form that is not a sign-in closes its live view while
+  // the fields are gone and the hint is pending. The card kept the asked step, but watching() stopped for a held
+  // card, so the hint showing up later was never seen. Entry: claim -> afterLiveView -> window watch. Unit tier.
+  it('keeps watching for the completion hint after a device holding a form closes its live view', async () => {
+    const { driver, state } = desktop('address');
+    // The form's window is the focused one, so the refresh re-reads it rather than following another window.
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    let done = false;
+    const read = driver.snapshot.bind(driver);
+    driver.snapshot = async (pid, window) => done
+      ? { pid, app: chrome.app, bundleId: chrome.bundleId, frontmost: true, window: { index: 1, title: 'Sign in', frame }, nodes: page('https://app.example.com/done', []) }
+      : read(pid, window);
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    state.screen = 'blank';
+    await run.session.afterLiveView();
+    await settle();
+    expect(run.finished).toEqual([]);
+    done = true;
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0 });
+  });
+
   it('shows a code to scan when the fields go away because a second factor needs scanning', async () => {
     const { driver, state } = desktop('password');
     driver.qr = async () => ({
