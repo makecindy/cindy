@@ -15642,7 +15642,7 @@
       "remoteCompactEncryptedContent": "A compactação do contexto falhou porque o modelo não conseguiu ler o histórico criptografado. A continuação automática não foi concluída. Tente novamente para recuperar.",
       "contextOverflow": "Esta mensagem sozinha excede a janela de contexto do modelo, então o Cindy não pode continuá-la em uma nova sessão do Agent. Reduza a entrada ou remova um anexo grande e tente novamente.",
       "attachmentAccessDeniedTitle": "O Cindy não consegue ler o anexo original; a mensagem não foi enviada.",
-      "attachmentSourceUnavailableNamed": "O anexo «{{name}}» não está mais disponível",
+      "attachmentSourceUnavailableNamed": "O anexo “{{name}}” não está mais disponível",
       "attachmentSourceUnavailable": "Um anexo não está mais disponível",
       "attachmentSourceUnavailableRecovery": "Remova o anexo ou adicione-o novamente antes de enviar a mensagem.",
       "attachmentAccessDeniedRecovery": "Salve uma cópia em Downloads ou em outra pasta acessível, remova o anexo original e adicione a cópia usando o botão de anexo antes de enviar novamente."
