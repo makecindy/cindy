@@ -28,6 +28,13 @@ export interface PluginManagementState {
    * name after the last detail read). Absent for server items and consents not started here.
    */
   expectedSource?: PluginMarketSourceIdentity | null;
+  /**
+   * Set when the phone hands Allow to the Host for this operation, with the source the consent named at that moment.
+   * A result whose receipt is later gone may be confirmed only from this: without it (rejected, never answered,
+   * consent never received, Allow unavailable) nothing on the computer counts as this attempt's result. Cleared by a
+   * new operation only.
+   */
+  approval?: { operationId: string; originSource?: PluginMarketSourceIdentity } | null;
 }
 export interface PluginManagementControllerOptions {
   /** Optional shared chat hint. Never used by readSnapshot or mutation validation. */
@@ -209,7 +216,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (state.capability !== 'supported') { publish({ errorCode: state.capability === 'unsupported' ? 'PLUGIN_MANAGEMENT_UNSUPPORTED' : 'PLUGIN_MANAGEMENT_NOT_READY' }); return; }
     const token = ++epoch;
     let began = false;
-    publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle',
+    publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle', approval: null,
       expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null });
     const installed = intent.installed;
     if (!installed && intent.kind !== 'install') { publish({ busy: false, outcome: 'failed', errorCode: 'PLUGIN_INSTALL_CHANGED' }); return; }
@@ -296,11 +303,23 @@ export function createPluginManagementController(client: PluginManagementClient,
     const token = epoch;
     publish({ busy: true, errorCode: null });
     try {
+      const consent = receipt.consent;
+      if (confirmed && consent.origin === 'custom-market') {
+        // Never allow a custom-market consent the phone cannot tie to the chosen source (the sheet already keeps
+        // Allow unavailable; this guards every caller).
+        if (!consent.originSource) { publish({ busy: false, errorCode: 'PLUGIN_SOURCE_UNVERIFIED' }); return; }
+        if (state.expectedSource && !samePluginMarketSourceIdentity(consent.originSource, state.expectedSource)) {
+          publish({ busy: false, errorCode: 'PLUGIN_SOURCE_CHANGED' });
+          return;
+        }
+      }
       if (confirmed) {
         const snapshot = await readSnapshot(token);
         if (!current(token)) return;
         if (!receiverCurrent(snapshot)) throw new PluginManagementRequestError('PLUGIN_INSTALL_CHANGED');
       }
+      // Record what is being approved before Allow leaves; only this can later confirm a result whose receipt is gone.
+      if (confirmed && current(token)) publish({ approval: { operationId: receipt.operationId, originSource: consent.originSource } });
       if (current(token)) await acceptReceipt(await client.answer(receipt.operationId, receipt.consent.requestId, confirmed,
         () => current(token) && state.online && (!confirmed || (!!facts && receiverCurrent(facts)))), token);
     } catch (error) {
@@ -320,7 +339,8 @@ export function createPluginManagementController(client: PluginManagementClient,
   const unsubscribeOwner = subscribeMobileAuthOwner(() => {
     if (client.isCurrent()) return;
     ++epoch; stopPolling();
-    publish({ capability: 'unknown', snapshot: null, uiConsent: null, receipt: null, operationId: null, busy: false, outcome: 'idle', errorCode: null });
+    publish({ capability: 'unknown', snapshot: null, uiConsent: null, receipt: null, operationId: null, busy: false, outcome: 'idle', errorCode: null,
+      approval: null });
   });
   return {
     getState: () => state,

@@ -1763,6 +1763,14 @@ const marketItem = (ghostId: string, name: string) => ({
   scope: "public", organizationId: null, defaultInstall: false, releaseId: `${ghostId}@1`, version: "1", publishedAt: "",
   icon: null, installState: "not-installed", enabled: null, sourceType: "server", sourceMarketName: null,
 });
+// An official-market consent for the demo plugin; tests that lose a result after approving answer it first.
+const demoConsent = (request: MarketWireRequest) => ({ operationId: request.input.operationId, phase: "confirmation", consent: {
+  requestId: "consent", initiator: "user", origin: "market", facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } });
+/** Allow from the phone (the Host then loses the reply in these tests). */
+async function approveOnPhone() {
+  await act(async () => { await fixture.props.get("confirmation").controller.answer(true); });
+  await settle(14);
+}
 const marketPage = (items: any[]) => ({ items, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [],
   nextCursor: null, counts: null });
 async function settle(rounds = 10) {
@@ -1977,7 +1985,7 @@ describe("older Host custom market without a repository identity", () => {
 
 describe("market install recovery", () => {
   const item = marketItem("demo", "Demo");
-  function installWire(options: { begin?: () => unknown; operation?: () => unknown; detail?: () => unknown; installed?: () => boolean }) {
+  function installWire(options: { begin?: () => unknown; answer?: () => unknown; operation?: () => unknown; detail?: () => unknown; installed?: () => boolean }) {
     return marketWire((request) => {
       switch (request.actionId) {
         case "management:snapshot":
@@ -1989,6 +1997,7 @@ describe("market install recovery", () => {
           return options.detail ? options.detail() : { ...item, installState: options.installed?.() ? "installed" : "not-installed",
             manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
         case "management:begin": return options.begin!();
+        case "management:answer": return options.answer!();
         case "management:operation": return options.operation!();
         default: throw new Error("unexpected " + request.actionId);
       }
@@ -2020,13 +2029,16 @@ describe("market install recovery", () => {
   ])("settles an unconfirmed install whose operation is gone when the plugin is %s", async (_name, installedAfter, messageKey) => {
     let installed = false;
     const requests = installWire({
-      begin: () => { installed = installedAfter; throw new Error("[TIMEOUT] remote invoke timed out"); },
+      begin: () => demoConsent({ input: { operationId: "screen-operation" } } as any),
+      // Allow reached the computer; its reply was lost.
+      answer: () => { installed = installedAfter; throw new Error("[TIMEOUT] remote invoke timed out"); },
       operation: () => { throw hostError("NOT_FOUND"); },
       installed: () => installed,
     });
     await openMarket();
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
+    await approveOnPhone();
     expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
     await act(async () => { await shownMarket().checkResult(); });
     await settle(14);
@@ -2148,6 +2160,63 @@ describe("market install recovery", () => {
     await settle(14);
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
+  });
+  // Maintainer review 07:23: a lost receipt may be confirmed only from what the person actually approved on the phone.
+  // In each case the computer later has the same plugin at the same release (from another operation); the receipt is
+  // gone. Nothing may be opened as this attempt's result, and nothing is sent again.
+  const folderA = { kind: "local", sourceId: "SourceA_0123456789abcd" }, folderB = { kind: "local", sourceId: "SourceB_0123456789abcd" };
+  it.each([
+    ["① the consent named another source than the one chosen (Allow unavailable)", "mismatch"],
+    ["② the person rejected and the reply was lost", "rejected"],
+    ["③ the consent was shown and never answered", "unanswered"],
+    ["④ begin was sent and the consent never arrived", "noConsent"],
+  ] as const)("keeps the result unconfirmed when nothing was approved: %s", async (_name, scenario) => {
+    const { publisherKind: _server, ...base } = marketItem("demo", "Demo");
+    const custom = scenario === "mismatch";
+    const shown = custom ? { ...base, pluginId: "custom:Team/demo", sourceType: "local-market", sourceMarketName: "Team", sourceIdentity: folderA } : item;
+    let onComputer = false, receiptGone = false;
+    const requests = marketWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return { ...marketPage(onComputer ? [] : [shown]), customSourceNames: custom ? ["Team"] : [] };
+          return managementSnapshot(onComputer);
+        case "management:market-detail":
+          return { ...shown, installState: onComputer ? "installed" : "not-installed",
+            ...(custom && onComputer ? { installedSourceId: folderB.sourceId } : {}),
+            manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+        case "management:begin":
+          if (scenario === "noConsent") { onComputer = true; throw new Error("[TIMEOUT] remote invoke timed out"); }
+          return custom ? { operationId: request.input.operationId, phase: "confirmation", consent: {
+            requestId: "consent", initiator: "user", origin: "custom-market", originLabel: "Team", originSource: folderB,
+            installationSource: { kind: "third-party" }, facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } }
+            : demoConsent(request);
+        case "management:answer": throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:operation":
+          if (receiptGone) throw hostError("NOT_FOUND");
+          return { operationId: request.input.operationId, phase: "confirmation" };
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    });
+    await openMarket();
+    if (custom) { await act(async () => shownMarket().setFilter("custom")); await settle(); }
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    const controller = fixture.props.get("confirmation").controller;
+    if (scenario === "mismatch") await act(async () => { await controller.answer(true); }); // refused: no answer is sent
+    if (scenario === "rejected") await act(async () => { await controller.answer(false); });
+    await settle(14);
+    // Meanwhile the same plugin appears on the computer (from another operation) and the receipt expires.
+    onComputer = true; receiptGone = true;
+    if (scenario === "unanswered" || scenario === "mismatch") await act(async () => { await controller.reconcile(); });
+    else await act(async () => { await shownMarket().checkResult(); });
+    await settle(14);
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    expect(shownMarket()).toMatchObject({ installBusy: false });
+    expect(shownMarket().rowState(shown)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
+    expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+    expect(requests.filter((request) => request.actionId === "management:answer"))
+      .toHaveLength(scenario === "rejected" ? 1 : 0);
   });
   // Maintainer review 05:55 #2: both detail reads show A, then the computer points the same-name market at folder B
   // (same id, release and manifest) and the Host packs B. The consent must be compared with the identity chosen.
@@ -2795,7 +2864,8 @@ describe("market read fences and lost-receipt facts", () => {
           if (request.input?.read === "catalog") return marketPage([item]);
           return managementSnapshot(verifying);
         case "management:market-detail": return { ...item, installState: verifying ? "installed" : "not-installed", manifest: demoManifest };
-        case "management:begin": verifying = true; throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:begin": return demoConsent(request);
+        case "management:answer": verifying = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
         default: throw new Error("unexpected " + request.actionId);
       }
@@ -2808,6 +2878,7 @@ describe("market read fences and lost-receipt facts", () => {
     await openMarket();
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
+    await approveOnPhone();
     await act(async () => { void shownMarket().checkResult(); });
     await settle(14);
     await act(async () => { void shownMarket().checkResult(); });
@@ -2835,7 +2906,8 @@ describe("market read fences and lost-receipt facts", () => {
           // A answers with the state at the time it was sent (before the instance appeared).
           return managementSnapshot(instancePresent && !(request as any).sentBeforeInstance);
         case "management:market-detail": return { ...item, installState: instancePresent ? "installed" : "not-installed", manifest: demoManifest };
-        case "management:begin": throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:begin": return demoConsent(request);
+        case "management:answer": throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
         default: throw new Error("unexpected " + request.actionId);
       }
@@ -2850,6 +2922,7 @@ describe("market read fences and lost-receipt facts", () => {
     await openMarket();
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
+    await approveOnPhone();
     holdNext = true;
     await act(async () => { void shownMarket().checkResult(); });
     await settle(6);
@@ -2875,7 +2948,8 @@ describe("market read fences and lost-receipt facts", () => {
           // A and B answer without the plugin; C answers with it installed.
           return managementSnapshot((request as any).read === "C");
         case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", manifest: demoManifest };
-        case "management:begin": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:begin": return demoConsent(request);
+        case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
         default: throw new Error("unexpected " + request.actionId);
       }
@@ -2891,6 +2965,7 @@ describe("market read fences and lost-receipt facts", () => {
     await openMarket();
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
+    await approveOnPhone();
     hold = "A";
     await act(async () => { void shownMarket().checkResult(); });
     await settle(6);
@@ -2924,7 +2999,8 @@ describe("market read fences and lost-receipt facts", () => {
           if (request.input?.read === "catalog") return marketPage([item]);
           return managementSnapshot(began && present);
         case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", manifest: demoManifest };
-        case "management:begin": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:begin": return demoConsent(request);
+        case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
         default: throw new Error("unexpected " + request.actionId);
       }
@@ -2938,6 +3014,7 @@ describe("market read fences and lost-receipt facts", () => {
     await openMarket();
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
+    await approveOnPhone();
     holdDetail = true;
     await act(async () => { void shownMarket().checkResult(); });
     await settle(14);
@@ -2979,7 +3056,8 @@ describe("market read fences and lost-receipt facts", () => {
             return managementSnapshot(began && (label === "A" ? true : label === "B" || bReturned ? bPresent : true));
           }
           case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", manifest: demoManifest };
-          case "management:begin": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
+          case "management:begin": return demoConsent(request);
+          case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
           case "management:operation": throw hostError("NOT_FOUND");
           default: throw new Error("unexpected " + request.actionId);
         }
@@ -2995,6 +3073,7 @@ describe("market read fences and lost-receipt facts", () => {
       await openMarket();
       await act(async () => shownMarket().install(shownMarket().items[0]));
       await settle(14);
+      await approveOnPhone();
       checking = true;
       await act(async () => { void shownMarket().checkResult(); });
       await settle(14);
@@ -3027,7 +3106,8 @@ describe("market read fences and lost-receipt facts", () => {
           // The first verification's facts said "installed"; the second (newer) says "conflict".
           if (!verifying) return { ...item, manifest: demoManifest };
           return { ...item, installState: (request as any).verification === 1 ? "installed" : "conflict", manifest: demoManifest };
-        case "management:begin": verifying = true; throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:begin": return demoConsent(request);
+        case "management:answer": verifying = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
         default: throw new Error("unexpected " + request.actionId);
       }
@@ -3043,6 +3123,7 @@ describe("market read fences and lost-receipt facts", () => {
     await openMarket();
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
+    await approveOnPhone();
     await act(async () => { void shownMarket().checkResult(); });
     await settle(14);
     await act(async () => { void shownMarket().checkResult(); });

@@ -55,8 +55,7 @@ interface InstallAttempt {
   detail?: ManagedMarketDetail;
   started: boolean;
   confirmed: boolean;
-  /** Custom markets: the source id of the consent the Host showed (`originSource.sourceId`); a later check must match it. */
-  originSourceId?: string;
+
 }
 export interface PluginMarketDetailState {
   item: ManagedMarketItem;
@@ -538,6 +537,15 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     };
     const instance = facts.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
     if (!instance) { conclude("notInstalled"); return; }
+    // Only what the person actually approved on the phone can be this attempt's result: Allow was handed to the Host for
+    // this operation and, for custom markets, the consent named exactly the source they chose. Rejected, never
+    // answered, consent never received or Allow unavailable: whatever is on the computer now came from elsewhere.
+    const state = controller?.getState();
+    const approval = state?.approval?.operationId === state?.operationId ? state?.approval : undefined;
+    const chosen = (attempt.detail ?? attempt.item).sourceIdentity;
+    const approvedSource = attempt.item.sourceType === "server" ? !!approval
+      : !!approval?.originSource && samePluginMarketSourceIdentity(approval.originSource, chosen);
+    if (!approvedSource) { conclude("mismatch"); return; }
     let market: ManagedMarketDetail;
     try {
       market = await createPluginManagementClient({ invoke, deviceId: attempt.target.deviceId, isCurrent: current })
@@ -547,10 +555,9 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     }
     // A custom market can be replaced by another repository or folder under the same name, with the same plugin id
     // and release: the Host's "installed" then describes the new source. The installed instance's source id must be
-    // exactly the one of the consent shown for this attempt; without either (older Host, consent never seen) the
-    // result stays unconfirmed.
+    // exactly the approved one; without it (installed by an older Host) the result stays unconfirmed.
     const sameSource = attempt.item.sourceType === "server"
-      || (!!attempt.originSourceId && market.installedSourceId === attempt.originSourceId);
+      || (!!approval?.originSource && market.installedSourceId === approval.originSource.sourceId);
     conclude(market.installState === "installed" && market.releaseId === attempt.item.releaseId && sameSource
       ? { installed: instance.instanceKey } : "mismatch");
   }, [invoke, complete, finish, management.controller]);
@@ -558,8 +565,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     const attempt = install, state = management.state;
     if (!attempt?.started || !state) return;
     if (state.outcome === "confirmation" && !attempt.confirmed) {
-      // Custom markets: record the source the Host packed from and showed, the only one a later check accepts.
-      const next = { ...attempt, confirmed: true, originSourceId: state.receipt?.consent?.originSource?.sourceId };
+      const next = { ...attempt, confirmed: true };
       installRef.current = next;
       setInstall(next);
     } else if (state.outcome === "failed") finish(attempt, pluginMarketErrorKey(state.errorCode));
