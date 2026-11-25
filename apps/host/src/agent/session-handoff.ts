@@ -75,7 +75,7 @@ export function createHostSessionHandoff(ports: {
         if (!isIpcError(error) && !(error instanceof Error && error.message.startsWith('[UNSUPPORTED_CAPABILITY]'))) throw error;
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: (error as Error).message };
       }
-      await ports.input.enqueue(id, { clientId, text: message }, {
+      const queued = await ports.input.enqueue(id, { clientId, text: message }, {
         ...params,
         taskActionDeliveryGuard: Object.assign(async () => {
           assertOwner();
@@ -83,6 +83,7 @@ export function createHostSessionHandoff(ports: {
           assertOwner();
         }, { onSettled: guard.onSettled }),
       });
+      if (queued?.ok === false) return queued;
       return { ok: true, agentKind, wakeKind: 'queued', targetTitle: row.title,
         targetLastUserSendAt: row.userSendAt == null ? null : new Date(row.userSendAt).toISOString() };
     });

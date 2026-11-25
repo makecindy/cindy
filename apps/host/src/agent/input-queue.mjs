@@ -89,7 +89,6 @@ function composeInput(item, stored, handoff) {
     result.origin = handoff.origin;
     result.sourcePlugin = handoff.sourcePlugin;
     result.createOpts = storedSessionOptions(stored);
-    bindTaskActionInput(stored.id, result, handoff.taskActionDeliveryGuard);
     return result;
   }
   // Only the in-process App service can mint this symbol. Wire JSON cannot
@@ -576,8 +575,14 @@ export function createInputQueue(deps) {
           const known = await deps.getPersistedClientIds?.(id, [item?.clientId]);
           if (known?.has(item?.clientId)) return api.projection(id);
           refuseWhileHeld();
-          const stored = await deps.readSession(id);
-          const prepared = await prepareAttachments(id, composeInput(item, stored, handoff), admission);
+          const stored = handoff ? await deps.readSession(id, { forHandoff: true }) : await deps.readSession(id);
+          if (handoff && !stored) {
+            assertCurrent();
+            return { ok: false, errorCode: 'NOT_FOUND', message: 'Session does not exist' };
+          }
+          const queued = composeInput(item, stored, handoff);
+          if (handoff) bindTaskActionInput(id, queued, handoff.taskActionDeliveryGuard);
+          const prepared = await prepareAttachments(id, queued, admission);
           if (handoff) {
             await handoff.taskActionDeliveryGuard();
             assertCurrent();

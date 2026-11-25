@@ -73,7 +73,10 @@ Node Host 在同账号 Device Link 注册同一组 `maker:session:handoff` 操�
 `ordinaryCreateVersion: 1` 和 `projectCatalogVersion: 1`。控制桌面沿用现有的能力探测和参数；
 未接入的旧 Host 仍拒绝此通道。Host 未声明 `ordinaryCreateAutoTitle`，控制端沿用生成短标题的兼容路径。
 回执复核沿原通道向发送电脑请求，使用现有后台链路，不订阅推送。关远控、撤权、换账号或换资料所有权后，
-先前入队的消息无法继续通过复核。
+先前入队的消息无法继续通过复核。目标在最终入队检查中已不存在或不可用时返回
+`NOT_FOUND`，并走原有未投递回执释放。
+Desktop 可向未被接管、可见的普通伙伴任务投递，内部群会话另有准入限制。
+Node Host 的伙伴执行链尚未接入，本阶段只对普通任务开放投递，伙伴目标返回 `NOT_FOUND`。
 
 `list_available_models(device)` 沿用 `maker:orca:remote-worker:models` 的请求和模型目录回包，
 只列 Host 已连接且能在本机执行的模型。Orca Worker 的能力探测、创建和桥接归独立的运行时接入，

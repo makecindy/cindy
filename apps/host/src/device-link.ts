@@ -223,6 +223,7 @@ const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUnt
 
 export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   const log = createLogger('host-device-link');
+  const deviceName = () => process.env.CINDY_HOST_DEVICE_NAME?.trim() || `${os.hostname()} · Cindy Host`;
   const policy = deps.availabilityPolicy ?? createAvailabilityPolicy(deps.disableShareAvailability);
   const settings = createDeviceLinkSettingsStore({ getUserDataDir: () => deps.profileDir, ...policy });
   const access = createRemoteControlAccess(settings);
@@ -402,7 +403,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     if (opening) return opening;
     const work = (async () => {
       const accepted = await client.openLink(peer, {
-        controllerName: os.hostname(),
+        controllerName: deviceName(),
         protocolVersion: 1,
         appVersion: deps.version,
         capabilities: linkOpenCapabilities([], false),
@@ -781,7 +782,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       if (issue === 'auth-failed') await deps.refreshToken?.();
       return current() && deps.canRegister() ? deps.getToken() : null;
     },
-    getHello: () => ({ platform: process.platform, deviceName: process.env.CINDY_HOST_DEVICE_NAME?.trim() || `${os.hostname()} · Cindy Host`,
+    getHello: () => ({ platform: process.platform, deviceName: deviceName(),
       appVersion: deps.version, remoteControlEnabled: current() && settings.readDeviceLinkSettings().remoteControlEnabled,
       busy: pending.size > 0, capabilities: [] }),
     transferCodec: desktopTransferCodec,

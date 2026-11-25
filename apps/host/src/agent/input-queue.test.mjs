@@ -739,6 +739,20 @@ test('a remote task handoff expires while queued and is discarded before executi
   assert.equal(h.persisted.some(row => row.clientId === clientId), false);
 });
 
+// Unit regression: the production handoff enqueue can race with a task disappearing
+// after the adapter looks it up. A missing row means definite refusal before any write.
+test('a remote task handoff returns NOT_FOUND if its target disappears before enqueue', async t => {
+  const h = createHarness({ readSession: async () => null });
+  t.after(() => h.queue.dispose());
+  const rejected = await h.queue.enqueue('missing-task', {
+    clientId: 'remote-task-action:missing-before-enqueue',
+    text: 'delegated follow-up',
+  }, { taskActionDeliveryGuard: async () => assert.fail('Missing target must not be admitted') });
+  assert.deepEqual(rejected, { ok: false, errorCode: 'NOT_FOUND', message: 'Session does not exist' });
+  assert.equal(h.queue.projection('missing-task').pendingQueue.length, 0);
+  assert.deepEqual(h.persisted, []);
+});
+
 test('valid App messages keep source metadata and escape native commands', async () => {
   const owner = {};
   const h = createHarness({ getOwner: () => owner, loadClearBoundary: async () => null });
