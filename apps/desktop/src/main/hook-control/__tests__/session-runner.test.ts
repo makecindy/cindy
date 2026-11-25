@@ -4944,3 +4944,95 @@ describe('hook turn change-set anchor', () => {
     );
   });
 });
+
+describe('official hook plugin engine (acp) sessions', () => {
+  // 回归：官方 hook(X/飞书/Slack/Discord/Telegram)会话切到插件引擎(acp)或默认配置为 acp 时，
+  // 此前会在 session-runner 抛出 PluginEngineUnsupportedError。现须支持冷恢复复用与新建 acp 会话。
+  // 最小失败输入与 tier：unit，冷恢复 agentKind='acp' 会话与默认配置 agentKind='acp' 新建会话。
+  it('cold-resumes an existing plugin engine (acp) hook session without rejecting or starting built-in change-set tracking', async () => {
+    const pluginProvider = 'acp-plugin:_ns__local__agy-acp:agy';
+    fakeMaker.getSession.mockReturnValueOnce(undefined);
+    fakeMaker.getSessionMeta.mockResolvedValueOnce({
+      workDir: 'D:/repo',
+      model: 'gemini-4-neon',
+      effort: 'high',
+      fastMode: false,
+      sdkSessionId: 'sdk-acp-1',
+      agentKind: 'acp' as never,
+      permissionMode: 'bypassPermissions',
+      agentDeviceId: 'mini',
+    });
+    const { getSessionRowSnapshot } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshot).mockResolvedValueOnce({
+      providerId: pluginProvider,
+      agentDeviceId: 'mini',
+    } as never);
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => ({
+      ...makeFakeSession(opts.id ?? 'sess-acp'),
+      agentKind: 'acp',
+    }));
+
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({ sessionId: 'sess-acp', isNew: false }));
+
+    expect(outcome.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'sess-acp',
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        providerId: pluginProvider,
+        agentDeviceId: 'mini',
+        resumeSessionId: 'sdk-acp-1',
+      }),
+    );
+    expect(h.beginTurnChangeSetAtDispatch).not.toHaveBeenCalled();
+  });
+
+  it('creates a new hook session directly on a plugin engine when IM default is acp', async () => {
+    const pluginProvider = 'acp-plugin:_ns__local__agy-acp:agy';
+    h.readImDefaultSettings.mockReturnValue({
+      ...IM_DEFAULT_SETTINGS,
+      agentKind: 'acp',
+      agents: {
+        ...IM_DEFAULT_SETTINGS.agents,
+        acp: {
+          providerId: pluginProvider,
+          model: 'gemini-4-neon',
+          effort: 'high',
+          agentDeviceId: 'mini',
+        },
+      },
+    });
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => ({
+      ...makeFakeSession(opts.id ?? 'sess-acp-new'),
+      agentKind: 'acp',
+    }));
+
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({}));
+
+    expect(outcome.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        providerId: pluginProvider,
+        agentDeviceId: 'mini',
+      }),
+    );
+    expect(h.beginTurnChangeSetAtDispatch).not.toHaveBeenCalled();
+
+    // createOnly (/new) 路径同样把 acp 与 agentDeviceId 落库
+    const createOnlyOutcome = await runner.run(baseReq({ sessionId: 'sess-acp-create-only', createOnly: true }));
+    expect(createOnlyOutcome.status).toBe('ok');
+    expect(h.createSessionRow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'sess-acp-create-only',
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        agentDeviceId: 'mini',
+      }),
+    );
+  });
+});

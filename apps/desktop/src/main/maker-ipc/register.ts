@@ -4852,7 +4852,12 @@ type CompanionSessionRouteSelection = Omit<SessionRouteSelection, 'agentKind'> &
 let readPendingAgentSwitchRouteHolder:
   ((sessionId: string) => PendingAgentSwitchRouteRead | undefined) | null = null;
 let applySessionRouteUnderSendLockHolder:
-  ((sessionId: string, route: SessionRouteSelection | null, currentAgentKind: AgentKind) => Promise<'applied' | 'staged'>) | null = null;
+  ((
+    sessionId: string,
+    route: CompanionSessionRouteSelection | null,
+    currentAgentKind: EngineKind,
+    currentProviderId?: string | null,
+  ) => Promise<'applied' | 'staged'>) | null = null;
 /**
  * 切换引擎后重建会话时补回渠道专属 vendorOptions(IM 的会话 id / 对端等)。
  * 切换建会话只读 DB 行, 不补的话 IM 任务切完引擎会悄悄丢掉 bot 专属工具。
@@ -5281,7 +5286,7 @@ export async function acquirePendingAgentSwitchForImSend(
 }
 
 /** 会话上待应用的切换意图目标(用户挑的或系统登记的)读回投影。 */
-export interface PendingAgentSwitchRouteRead extends Omit<SessionRouteSelection, 'fastMode'> {
+export interface PendingAgentSwitchRouteRead extends Omit<CompanionSessionRouteSelection, 'fastMode'> {
   /**
    * 意图在 pending 注册表的修订号(set / clear 都推进)。与跟随记录里的 pendingRev
    * 相等 = 同一次登记; 用户重新挑过(哪怕选了同值)会换号, 据此不把用户选择
@@ -5308,12 +5313,13 @@ export function readPendingAgentSwitchRoute(
  */
 export async function applySessionRouteUnderSendLock(
   sessionId: string,
-  route: SessionRouteSelection | null,
-  currentAgentKind: AgentKind,
+  route: CompanionSessionRouteSelection | null,
+  currentAgentKind: EngineKind,
+  currentProviderId?: string | null,
 ): Promise<'applied' | 'staged'> {
   const apply = applySessionRouteUnderSendLockHolder;
   if (!apply) throw new Error('Session route selection is not initialized');
-  return apply(sessionId, route, currentAgentKind);
+  return apply(sessionId, route, currentAgentKind, currentProviderId);
 }
 
 /** 注册切换后重建会话用的 vendorOptions 解析器; 返回注销函数。 */
@@ -14592,7 +14598,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         const config = await resolveSharedImProjectConfig(alias, log);
         target.assertCurrent();
-        if (!config.providerId || !(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(config.permissionMode))
+        if (config.agentKind === 'acp' || !config.providerId || !(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(config.permissionMode))
           throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected project configuration is unavailable');
         return { ...target,
           permissionMode: config.permissionMode as GhostErrandPermissionMode,
@@ -17614,8 +17620,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   readPendingAgentSwitchRouteHolder = (sessionId) => {
     const intent = agentSwitchPending.get(sessionId);
-    // 只给 IM 默认路由同步读；IM 任务不能切到插件引擎，插件引擎意图按「没有」处理。
-    return intent && intent.targetAgentKind !== 'acp'
+    return intent
       ? {
           agentKind: intent.targetAgentKind,
           model: intent.model,
@@ -17626,12 +17631,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       : undefined;
   };
-  applySessionRouteUnderSendLockHolder = async (sessionId, route, currentAgentKind) => {
+  applySessionRouteUnderSendLockHolder = async (sessionId, route, currentAgentKind, currentProviderId) => {
     // route=null: 只应用此前已登记(且仍在)的意图。
     let staged = agentSwitchPending.get(sessionId);
     try {
       if (route) {
-        await stageSessionRouteSelection(sessionId, route, currentAgentKind);
+        await stageSessionRouteSelection(sessionId, route, currentAgentKind, currentProviderId);
         // 登记时系统可能改道来源; 按登记后的意图对象认「自己的」, 不按字段比较。
         staged = agentSwitchPending.get(sessionId);
       }

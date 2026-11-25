@@ -21,7 +21,15 @@ import {
   connectedProvidersForAgent,
   getModel,
   isModelVisible,
+  type ProviderSection,
 } from '@cindy/model-providers';
+import {
+  PLUGIN_ENGINES_INVOKE,
+  isPluginEngineModelDisabled,
+  parseOfferedPluginEngines,
+  pluginEngineKeyFromProviderId,
+} from '../../../shared/pluginEngines';
+import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc';
 import { createLogger } from '../../logger';
 
 import { resetImSessionToChannelDefaults } from './channelDefaultRouteSync';
@@ -380,36 +388,74 @@ export function createSlashHandlers(
         // 可见性过滤复用 renderer 镜像到 main 的 override(modelVisibilityMirror)+ 目录 defaultEnabled,
         // 保证 IM 列表与应用内逐模型一致。currentProviderId 优先取会话持久化的 providerId。
         const agentKind = row.agentKind;
-        const currentProviderId = getSessionProvider(row.id) ?? row.providerId;
-        const providers = row.agentDeviceId
-          ? await readDeviceProviderViews((await import('../../device-link')).remoteBackgroundInvoke, row.agentDeviceId)
-          : await getDesktopProviderService().listProviders({ allowSideEffects: true });
-        if (!row.agentDeviceId) await waitForModelVisibilityMirror();
-        const connected = connectedProvidersForAgent(providers, agentKind);
-        const sections = buildProviderSections({
-          providers: connected,
-          agent: agentKind,
-          selectedModelId: row.model,
-          selectedProviderId: currentProviderId,
-          isVisible: (pid, mid) => {
-            const provider = connected.find((p) => p.id === pid);
-            const model = provider ? getModel(provider, mid, agentKind) : undefined;
-            return isModelVisible(
-              row.agentDeviceId ? undefined : getModelVisibilityOverride(agentKind, pid, mid),
-              model?.defaultEnabled,
-            );
-          },
-        });
+        const currentProviderId = agentKind === 'acp' ? row.providerId : (getSessionProvider(row.id) ?? row.providerId);
+        let sections: ProviderSection[];
+        if (agentKind === 'acp') {
+          const engines = row.agentDeviceId
+            ? await (async () => {
+                const { remoteBackgroundInvoke } = await import('../../device-link');
+                const reply = await remoteBackgroundInvoke(row.agentDeviceId!, PLUGIN_ENGINES_INVOKE.LIST, []);
+                return reply.ok ? parseOfferedPluginEngines(reply.result) : [];
+              })().catch(() => [])
+            : listPluginEngineViews();
+          const key = pluginEngineKeyFromProviderId(currentProviderId);
+          const engine = key ? engines.find((item) => item.key === key) : undefined;
+          sections = engine
+            ? [
+                {
+                  provider: {
+                    id: engine.providerId,
+                    name: engine.name,
+                    source: 'user',
+                    connected: true,
+                    auth: { method: 'none' },
+                    agents: [],
+                    models: {},
+                    routing: {},
+                  },
+                  models: engine.models
+                    .filter((m) => !isPluginEngineModelDisabled(m.id, engine.disabledModels?.map((d) => d.id)))
+                    .map((m) => ({
+                      id: m.id,
+                      displayName: m.displayName,
+                      efforts: m.efforts ?? [],
+                      defaultEffort: m.defaultEffort ?? null,
+                      contextWindow: 0,
+                    })),
+                },
+              ]
+            : [];
+        } else {
+          const providers = row.agentDeviceId
+            ? await readDeviceProviderViews((await import('../../device-link')).remoteBackgroundInvoke, row.agentDeviceId)
+            : await getDesktopProviderService().listProviders({ allowSideEffects: true });
+          if (!row.agentDeviceId) await waitForModelVisibilityMirror();
+          const connected = connectedProvidersForAgent(providers, agentKind);
+          sections = buildProviderSections({
+            providers: connected,
+            agent: agentKind,
+            selectedModelId: row.model,
+            selectedProviderId: currentProviderId,
+            isVisible: (pid, mid) => {
+              const provider = connected.find((p) => p.id === pid);
+              const model = provider ? getModel(provider, mid, agentKind) : undefined;
+              return isModelVisible(
+                row.agentDeviceId ? undefined : getModelVisibilityOverride(agentKind, pid, mid),
+                model?.defaultEnabled,
+              );
+            },
+          });
+        }
         const spec = cards.buildModelPickerCard({
           sessionId: row.id,
           agentKind,
           sections,
           currentModelId: row.model,
           currentProviderId,
-          currentEffort: row.effort,
-          defaultEffortByModel: target.attached
+          currentEffort: row.effort || null,
+          defaultEffortByModel: target.attached || agentKind === 'acp'
             ? Object.fromEntries(
-                sections.flatMap((s) => s.models.map((m) => [m.id, m.defaultEffort ?? row.effort])),
+                sections.flatMap((s) => s.models.map((m) => [m.id, m.defaultEffort ?? (agentKind === 'acp' ? '' : row.effort)])),
               )
             : undefined,
         });

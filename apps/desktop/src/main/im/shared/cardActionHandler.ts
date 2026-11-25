@@ -20,8 +20,8 @@ import fs from 'node:fs';
 import type { ChannelIM, IMCardActionEvent } from '@cindy/im';
 import {
   hasSessionPermissionUpdates,
-  type AgentKind,
   type Effort,
+  type EngineKind,
   type InteractionDecision,
   type PermissionMode,
 } from '@cindy/maker-core';
@@ -29,7 +29,6 @@ import {
 import { createLogger } from '../../logger';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import { getMaker } from '../../maker-host';
-import { PluginEngineUnsupportedError } from '../../maker-host/engineKind';
 import {
   resolveLenientSessionRoute,
   resolveNewTaskDefaultModelRoute,
@@ -109,9 +108,6 @@ import type { ImChannelAdapter } from './types';
 function pickRandom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
-
-/** 插件引擎任务第一期不接 IM 渠道(docs/plans/acp-plugin-bridge.md)。 */
-const IM_CHANNEL_FEATURE = 'IM channels';
 
 /** 桌面偏好还没推过来时的兜底;模型不写死,按新建任务口径实时解析。 */
 const DESKTOP_CC_DEFAULTS: Omit<DesktopCcPrefs, 'model' | 'providerId'> = {
@@ -357,11 +353,9 @@ export function createCardActionHandler(
       const liveBeforePick = turnRunner.getMakerSessionById(sessionId);
       const sessionAgentKind = liveBeforePick?.agentKind ??
         (await getMaker().getSessionMeta?.(sessionId))?.agentKind;
-      // 插件引擎任务不接 IM 渠道(docs/plans/acp-plugin-bridge.md):切模型卡明确失败,
-      // 不按内置引擎的路由去改。
-      if (sessionAgentKind === 'acp') return new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE).message;
+      const isPluginEngineSession = sessionAgentKind === 'acp';
       const isPiSession = sessionAgentKind === 'pi';
-      if (previousRoute?.agentDeviceId && sessionAgentKind) {
+      if (previousRoute?.agentDeviceId && sessionAgentKind && !isPluginEngineSession) {
         try {
           await readImRemoteProviderRoute({
             agentDeviceId: previousRoute.agentDeviceId,
@@ -388,7 +382,7 @@ export function createCardActionHandler(
         }
       };
       const rollbackRuntimeChange = async (reason: string): Promise<void> => {
-        setSessionProvider(sessionId, previousProviderId);
+        if (!isPluginEngineSession) setSessionProvider(sessionId, previousProviderId);
         const liveForRollback = turnRunner.getMakerSessionById(sessionId);
         if (!previousRoute) return;
         try {
@@ -400,7 +394,7 @@ export function createCardActionHandler(
               providerId: previousRoute.providerId,
             });
           }
-          if (liveForRollback && effort) {
+          if (liveForRollback && effort && previousRoute.effort) {
             await liveForRollback.setEffort(previousRoute.effort);
           }
         } catch (rollbackErr) {
@@ -413,7 +407,8 @@ export function createCardActionHandler(
       // 持久化与运行态切换必须和 send / agent switch 共用 session 锁，保证后选覆盖先选。
       if (!isPiSession) {
         try {
-          await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
+          const nextEffort = isPluginEngineSession ? (effort ?? previousRoute?.effort ?? '') : (effort ?? 'high');
+          await updateModelEffort(sessionId, modelId, nextEffort, isPluginEngineSession ? undefined : providerId);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`model:pick DB update failed: ${msg}`);
@@ -432,7 +427,13 @@ export function createCardActionHandler(
       try {
         const runtimeChange = isPiSession
           ? await applyPiImModelSelectionUnderLock(sessionId, modelId, providerId, previousRoute)
-          : await applyRuntimeSetModelChange({
+          : isPluginEngineSession
+            ? await (async () => {
+                const live = turnRunner.getMakerSessionById(sessionId);
+                if (live) await live.setModel(modelId);
+                return { status: 'applied' as const };
+              })()
+            : await applyRuntimeSetModelChange({
           maker: getMaker(),
           sessionId,
           model: modelId,
@@ -531,8 +532,14 @@ export function createCardActionHandler(
     const sessionId = String(event.payload.sessionId ?? '');
     const mode = String(event.payload.mode ?? '') as PermissionMode;
     const modeLabel = String(event.payload.modeLabel ?? mode);
-    const agentKind: AgentKind =
-      event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
+    const agentKind: EngineKind =
+      event.payload.agentKind === 'codex'
+        ? 'codex'
+        : event.payload.agentKind === 'pi'
+          ? 'pi'
+          : event.payload.agentKind === 'acp'
+            ? 'acp'
+            : adapter.config.agentKind;
 
     if (event.buttonId === 'permmode:confirm-full-access' && mode !== 'bypassPermissions') {
       log.warn(`permmode:confirm-full-access received non-full mode=${mode} — ignoring`);
@@ -541,10 +548,18 @@ export function createCardActionHandler(
 
     // Validate against the bound agent's actual capabilities — single source of
     // truth is the agent module (e.g. claude-code/index.ts CLAUDE_PERMISSION_MODES).
+    const modes =
+      agentKind === 'acp'
+        ? (turnRunner.getPermissionModes?.('acp') ?? [
+            { id: 'ask' as PermissionMode, label: 'Ask' },
+            { id: 'auto' as PermissionMode, label: 'Auto' },
+            { id: 'bypassPermissions' as PermissionMode, label: 'Full access' },
+          ])
+        : getMaker().getCapabilities(agentKind).permissionModes;
     const result = await changeSessionPermissionMode({
       sessionId,
       mode,
-      modes: getMaker().getCapabilities(agentKind).permissionModes,
+      modes,
       confirmedFullAccess: event.buttonId === 'permmode:confirm-full-access',
       readPreviousMode: () => readPermissionMode(sessionId),
       getLiveSession: () => turnRunner.getMakerSessionById(sessionId),
@@ -639,12 +654,26 @@ export function createCardActionHandler(
       log.warn('permissionMode:fix-auto missing sessionId/fixUi — ignoring');
       return;
     }
-    const agentKind: AgentKind =
-      event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
+    const agentKind: EngineKind =
+      event.payload.agentKind === 'codex'
+        ? 'codex'
+        : event.payload.agentKind === 'pi'
+          ? 'pi'
+          : event.payload.agentKind === 'acp'
+            ? 'acp'
+            : adapter.config.agentKind;
+    const modes =
+      agentKind === 'acp'
+        ? (turnRunner.getPermissionModes?.('acp') ?? [
+            { id: 'ask' as PermissionMode, label: 'Ask' },
+            { id: 'auto' as PermissionMode, label: 'Auto' },
+            { id: 'bypassPermissions' as PermissionMode, label: 'Full access' },
+          ])
+        : getMaker().getCapabilities(agentKind).permissionModes;
     const result = await changeSessionPermissionMode({
       sessionId,
       mode: 'auto',
-      modes: getMaker().getCapabilities(agentKind).permissionModes,
+      modes,
       confirmedFullAccess: false,
       readPreviousMode: () => readPermissionMode(sessionId),
       getLiveSession: () => turnRunner.getMakerSessionById(sessionId),

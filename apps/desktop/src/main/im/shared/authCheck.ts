@@ -6,11 +6,17 @@ import {
   nativeDefaultSourceId,
   type ProviderView,
 } from '@cindy/model-providers';
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, EngineKind } from '@cindy/maker-core';
 
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines.js';
 import type { ImSessionRow } from './sessionRepo';
 
 type AuthRow = Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId'>;
+type BuiltinAuthRow = Omit<AuthRow, 'agentKind'> & { agentKind: AgentKind };
+
+function isBuiltinAuthRow(row: AuthRow): row is BuiltinAuthRow {
+  return row.agentKind !== 'acp';
+}
 
 export type ImAuthMissing =
   'gateway-key' | 'agent-oauth' | 'provider-key' | 'provider-disconnected';
@@ -45,6 +51,12 @@ export async function checkImRouteAuth(
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
+  // 插件引擎(acp)不走内置供应商凭证/OAuth 链路，可用性与账号在准入和启动阶段由引擎侧核验。
+  if (!isBuiltinAuthRow(row)) {
+    return pluginEngineKeyFromProviderId(row.providerId)
+      ? { ok: true, missing: null }
+      : { ok: false, missing: 'provider-disconnected' };
+  }
   if (row.agentDeviceId) return checkRemoteAuth(row, deps);
   const resolution = resolveEffectiveProvider(
     row,
@@ -54,7 +66,7 @@ export async function checkImRouteAuth(
 }
 
 async function checkImRouteAuthWithResolution(
-  row: AuthRow,
+  row: BuiltinAuthRow,
   resolution: ProviderResolution,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
@@ -111,6 +123,15 @@ export async function checkImRouteAuthDetailed(
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthRouteStatus> {
+  if (!isBuiltinAuthRow(row)) {
+    const valid = Boolean(pluginEngineKeyFromProviderId(row.providerId));
+    return {
+      ok: valid,
+      missing: valid ? null : 'provider-disconnected',
+      providerId: row.providerId ?? null,
+      providerLabel: null,
+    };
+  }
   if (row.agentDeviceId) return checkRemoteAuth(row, deps);
   const providers =
     providerSnapshot === undefined ? await listProvidersForAuth(deps) : providerSnapshot;
@@ -128,7 +149,7 @@ export async function checkImRouteAuthDetailed(
   };
 }
 
-async function checkRemoteAuth(row: AuthRow, deps: ImAuthCheckDeps): Promise<ImAuthRouteStatus> {
+async function checkRemoteAuth(row: BuiltinAuthRow, deps: ImAuthCheckDeps): Promise<ImAuthRouteStatus> {
   try {
     if (!row.agentDeviceId || !deps.checkRemoteRoute) throw new Error('Remote route checker unavailable');
     const { provider } = await deps.checkRemoteRoute({ ...row, agentDeviceId: row.agentDeviceId });
@@ -176,6 +197,7 @@ export function resolveEffectiveProvider(
   row: AuthRow,
   providers: ProviderView[] | null,
 ): ProviderResolution {
+  if (!isBuiltinAuthRow(row)) return { kind: 'none' };
   if (!providers) return row.providerId ? { kind: 'explicit-invalid' } : { kind: 'none' };
   if (row.providerId) {
     // 显式 providerId 命中的这个具体来源上,当前 model id 必须真的是聊天模型才接受
@@ -203,11 +225,12 @@ export async function fallbackAuthForImRoute(
   row: AuthRow,
   deps: ImAuthCheckDeps,
 ): Promise<boolean> {
+  if (!isBuiltinAuthRow(row)) return Boolean(pluginEngineKeyFromProviderId(row.providerId));
   return (await fallbackAuthCheckForImRoute(row, deps)).ok;
 }
 
 async function fallbackAuthCheckForImRoute(
-  row: AuthRow,
+  row: BuiltinAuthRow,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
   const hasGatewayKey = Boolean(deps.readXdGatewayApiKey());

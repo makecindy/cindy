@@ -26,6 +26,7 @@ import {
   buildPluginEngineGroups,
   formatPluginEnginePickerQuota,
   getCachedPluginEngines,
+  isPluginEngineSwitchSourceAllowed,
   loadPluginEngines,
   normalizePluginEngines,
   pluginEngineExecutionDeviceId,
@@ -351,5 +352,29 @@ describe('a task running on a plugin engine', () => {
     });
 
     expect(formatPluginEnginePickerQuota(null, now, 'en-US', countdown)).toBeUndefined();
+  });
+
+  // 回归：Mobile 会话页的模型选择器需对 IM 与官方 hook 来源(x/feishu/telegram 等)开放插件引擎切换，
+  // 同时保持 review/learn/cindy-make/scheduler 关闭。最小失败输入：source='x' 或 'feishu' 被判 false。
+  it.each([
+    ['desktop', true],
+    ['bot', true],
+    ['x', true],
+    ['feishu', true],
+    ['telegram', true],
+    ['discord', true],
+    ['discord-hook', true],
+    ['slack', true],
+    ['wechat', true],
+    ['dingtalk', true],
+    ['wecom', true],
+    ['imessage', true],
+    [null, true],
+    ['review', false],
+    ['learn', false],
+    ['cindy-make', false],
+    ['scheduler', false],
+  ] as const)('switch source allowlist: %s -> %s', (source, allowed) => {
+    expect(isPluginEngineSwitchSourceAllowed(source)).toBe(allowed);
   });
 });

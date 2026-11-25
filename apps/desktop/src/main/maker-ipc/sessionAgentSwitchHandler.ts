@@ -64,7 +64,7 @@ import {
   normalizeDbAgentKind,
   type DbEngineKind,
 } from '../../shared/agentKindConversion.js';
-import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
+import { isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 
 function throwIfAgentSwitchAborted(signal: AbortSignal | undefined): void {
@@ -963,7 +963,7 @@ export async function performSessionAgentSwitch(
   const pluginTargetDeviceId = builtinTarget ? null : requestedAgentDeviceId ?? null;
   if (!builtinTarget || sourceIsPluginEngine) {
     // 从插件引擎换到内置引擎时目标位置照常：可以是另一台电脑或供应商组(下面按内置引擎换电脑裁决)。
-    if ((row.source && row.source !== 'desktop' && row.source !== 'bot') || row.orcaRole || parseOrcaRemoteLead(row.orcaRemoteLead)
+    if (!isPluginEngineSwitchSourceAllowed(row.source) || row.orcaRole || parseOrcaRemoteLead(row.orcaRemoteLead)
       || getDeviceLinkInvokeContext()?.sharedTask) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }

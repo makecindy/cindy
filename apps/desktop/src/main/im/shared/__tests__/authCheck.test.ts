@@ -292,6 +292,25 @@ describe('checkImRouteAuth', () => {
     });
     await expect(hasAuthForImRoute(row(), providerSnapshot, authDeps)).resolves.toBe(true);
   });
+
+  // 回归：IM 插件引擎(acp)任务自有凭据由插件负责，authCheck 只需校验合法 acp-plugin: providerId，
+  // 不应走内置供应商列表导致「API Key 缺失」。最小失败输入与 tier：unit，agentKind='acp'。
+  it('passes valid plugin engine (acp) routes locally and remotely, and rejects missing engine identity', async () => {
+    const validLocal = row({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+      model: 'gemini-4-neon',
+    });
+    const validRemote = { ...validLocal, agentDeviceId: 'mini' };
+    const invalid = row({ agentKind: 'acp', providerId: null, model: 'gemini-4-neon' });
+
+    await expect(checkImRouteAuth(validLocal, [], deps())).resolves.toEqual({ ok: true, missing: null });
+    await expect(checkImRouteAuth(validRemote, [], deps())).resolves.toEqual({ ok: true, missing: null });
+    await expect(checkImRouteAuth(invalid, [], deps())).resolves.toEqual({
+      ok: false,
+      missing: 'provider-disconnected',
+    });
+  });
 });
 
 describe('resolveEffectiveProvider', () => {

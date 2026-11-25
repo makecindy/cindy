@@ -313,6 +313,26 @@ export function normalizePluginEngineSwitchIntent(value: unknown): MobilePluginE
   };
 }
 
+/** 任务来源是否允许在已有任务内切到 / 换出插件引擎（与 Desktop shared/pluginEngines 保持一致）。 */
+const PLUGIN_ENGINE_SWITCH_ALLOWED_SOURCES: ReadonlySet<string> = new Set([
+  'desktop',
+  'bot',
+  'x',
+  'feishu',
+  'telegram',
+  'discord',
+  'discord-hook',
+  'slack',
+  'wechat',
+  'dingtalk',
+  'wecom',
+  'imessage',
+]);
+
+export function isPluginEngineSwitchSourceAllowed(source: string | null | undefined): boolean {
+  return !source || PLUGIN_ENGINE_SWITCH_ALLOWED_SOURCES.has(source);
+}
+
 /** The pending target has priority over the saved execution location, including an explicit return home. */
 export function pluginEngineExecutionDeviceId(
   currentDeviceId: string | null | undefined,
