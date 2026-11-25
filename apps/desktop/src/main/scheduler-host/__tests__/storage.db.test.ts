@@ -8,10 +8,11 @@ import type { DbTransport } from '../../localDb/client/DbTransport';
  */
 
 import type { CreateScheduleInput, Schedule, ScheduleRun, Scheduler } from '@cindy/maker-scheduler';
+import { createConsoleLogger, Maker } from '@cindy/maker-core';
 import Database from 'better-sqlite3';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as schema from '../../localDb/schema';
 import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
@@ -19,8 +20,8 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/c
 import { recordScheduleRunCostDirect, applyScheduleRunCostMetaChange } from '../runCostLedger';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
 import { createSchedulerHost } from '../index';
-import type { MakerScheduleRunner } from '../runner';
-import type { ScriptScheduleRunner } from '../script-runner';
+import { MakerScheduleRunner } from '../runner';
+import { ScriptScheduleRunner } from '../script-runner';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
   return {
@@ -309,18 +310,46 @@ describe('scheduler host ACP binding saves', () => {
     run: (scheduler: Scheduler, storage: DrizzleScheduleStorage) => Promise<void>,
   ) {
     const harness = createStorageHarness();
-    const runner = {
-      attachScheduler() {},
-      async validateModelSelection() {},
-      async fire() { throw new Error('Save must not fire the scheduler'); },
+    const maker = new Maker({
+      agents: {},
+      storage: {
+        create: vi.fn(), get: vi.fn(), list: vi.fn(), update: vi.fn(),
+        compareAndClearSdkSessionId: vi.fn(), delete: vi.fn(),
+      },
+      logger: createConsoleLogger('scheduler-save-test'),
+    });
+    const getDb = () => harness.db;
+    const notifier = { async notify() {} };
+    const unexpectedDispatch = () => { throw new Error('Save must not call a dispatch dependency'); };
+    const targets = {
+      isManagedScheduledTarget: unexpectedDispatch,
+      restoreScheduledTarget: unexpectedDispatch,
     };
+    const promptRunner = new MakerScheduleRunner({ maker, getDb, notifier, logger: {} }, {
+      ...targets,
+      shouldApplyExclusiveProviderRerouteLive: unexpectedDispatch,
+      createMessage: unexpectedDispatch,
+      rewindPersistedUserMessageAfterClear: unexpectedDispatch,
+      getSessionRowSnapshot: unexpectedDispatch,
+      getSessionFsSnapshot: unexpectedDispatch,
+      touchUserSendInDb: unexpectedDispatch,
+      wireSessionToIpc: unexpectedDispatch,
+      isSessionInTurn: unexpectedDispatch,
+      noteSilentStopUserSend: unexpectedDispatch,
+      onSilentStopSettled: unexpectedDispatch,
+      agentHandoffPending: { peek: unexpectedDispatch, consume: unexpectedDispatch },
+      resolveWorkingDir: unexpectedDispatch,
+      releaseWorktree: unexpectedDispatch,
+    });
+    const scriptRunner = new ScriptScheduleRunner({
+      broker: { call: unexpectedDispatch }, logger: {},
+    }, targets);
+    const unexpectedFire = async () => { throw new Error('Save must not fire the scheduler'); };
+    vi.spyOn(promptRunner, 'fire').mockImplementation(unexpectedFire);
+    vi.spyOn(scriptRunner, 'fire').mockImplementation(unexpectedFire);
     const host = createSchedulerHost({
       createStorage: () => harness.storage,
-      createRunners: () => ({
-        notifier: { async notify() {} },
-        promptRunner: runner as MakerScheduleRunner,
-        scriptRunner: runner as ScriptScheduleRunner,
-      }),
+      createRunners: () => ({ notifier, promptRunner, scriptRunner }),
       isPassive: () => true,
       dialogueWorkspaceRoots: () => [],
       onStarted() {},
@@ -329,7 +358,7 @@ describe('scheduler host ACP binding saves', () => {
     try {
       harness.sqlite.exec(`INSERT INTO sessions (id, title, agent_kind)
         VALUES ('native', 'Native task', 'cc'), ('plugin', 'Plugin task', 'acp')`);
-      const scheduler = await host.startScheduler({ maker: {} as never, getDb: () => harness.db, logger: {} });
+      const scheduler = await host.startScheduler({ maker, getDb, logger: {} });
       await run(scheduler, harness.storage);
     } finally {
       await host.resetScheduler();
