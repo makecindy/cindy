@@ -508,11 +508,23 @@ function notifyFatalShutdown(reason: string): void {
   }
 }
 
-function isolatedRendererDescription(
-  contents: Electron.WebContents,
-  isCurrentMainRenderer?: (contents: Electron.WebContents) => boolean,
-): string | undefined {
-  if (isCurrentMainRenderer?.(contents)) return;
+const mainRenderers = new WeakSet<Electron.WebContents>();
+let currentMainRenderer: WeakRef<Electron.WebContents> | undefined;
+
+export function trackMainWindow(window: BrowserWindow, isQuitting: () => boolean): void {
+  const contents = window.webContents;
+  mainRenderers.add(contents);
+  currentMainRenderer = new WeakRef(contents);
+  // A normal close request can hide the window. Only a close during app quit
+  // retires it. An unexpected 'closed' can precede the global crash event.
+  window.on('close', () => {
+    if (isQuitting() && currentMainRenderer?.deref() === contents) currentMainRenderer = undefined;
+  });
+}
+
+function isolatedRendererDescription(contents: Electron.WebContents): string | undefined {
+  if (currentMainRenderer?.deref() === contents) return;
+  if (mainRenderers.has(contents)) return 'retired main renderer render-process-gone (isolated, no shutdown)';
   if (isCaptureWindowWebContents(contents)) return 'capture transport render-process-gone (isolated, no shutdown)';
 
   // The JS wrapper can outlive the native WebContents. Without metadata or
@@ -573,10 +585,7 @@ function beginShutdown(timeoutMs: number, reason: string): Promise<void> {
   return _disposeStarted;
 }
 
-export function installQuitHandler(
-  timeoutMs = 2000,
-  isCurrentMainRenderer?: (contents: Electron.WebContents) => boolean,
-): void {
+export function installQuitHandler(timeoutMs = 2000): void {
   if (_installed) return;
   _installed = true;
 
@@ -720,7 +729,7 @@ export function installQuitHandler(
   // 例外 4:资源用量窗是预热复用的辅助 renderer；Controller 会有限重建，崩溃不影响主界面。
   // 隐藏传输窗口也有自己的失败清理；其 renderer 崩溃只撤下对应传输，不能关闭 device-link。
   app.on('render-process-gone', (_event, webContents, details) => {
-    const isolated = isolatedRendererDescription(webContents, isCurrentMainRenderer);
+    const isolated = isolatedRendererDescription(webContents);
     if (isolated) {
       log.warn(`${isolated}: reason=${details.reason} exitCode=${details.exitCode}`);
       return;
