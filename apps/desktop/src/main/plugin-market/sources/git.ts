@@ -349,9 +349,10 @@ export async function currentRevision(
 }
 
 /**
- * 当前配置上下文里有没有按分支生效的条件包含（`includeIf "onbranch:…"`）。`git clone` 在返回前会从初始分支
- * （`init.defaultBranch`）切到远端默认分支或检出目标，这类规则在取包当时与事后可能不同，事后解析还原不了
- * 取包时的上下文；有这类规则时调用方不核实来源。只列键名（不含值），不联网；读不到配置也按「有」处理。
+ * 当前配置上下文里有没有按分支生效的条件包含（`includeIf "onbranch:…"`）。部分 git 版本（如 2.43）的
+ * `git clone` 在初始分支（`init.defaultBranch`）上取包，返回前再切到远端默认分支或检出目标，这类规则在取包
+ * 当时与事后可能不同，事后解析还原不了取包时的上下文；有这类规则时调用方不核实来源。只列键名（不含值），
+ * 不联网；读不到配置也按「有」处理。
  */
 export async function hasBranchConditionalConfig(
   executor: GitExecutor = defaultExecutor,

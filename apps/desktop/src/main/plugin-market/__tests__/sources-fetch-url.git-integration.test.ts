@@ -107,9 +107,9 @@ describe('fetch address context and refresh target with real git', () => {
     expect(pluginMarketRepositoryFromUrl(await resolveFetchUrl('origin', executor, repo))).toBe('origin.example.test/acme/plugins');
   });
 
-  // Codex P1 on PR #12731: git clone fetches while the new repository is on its initial branch (init.defaultBranch)
-  // and switches to the remote's default branch before returning, so no sample taken afterwards can see a rule that
-  // only applied mid-clone. The manager therefore refuses to verify a clone whenever such rules exist.
+  // Codex P1 on PR #12731: some git versions fetch while the new repository is on its initial branch
+  // (init.defaultBranch) and switch to the remote's default branch before returning, so no sample taken afterwards
+  // can see a rule that only applied mid-clone. The manager therefore refuses to verify a clone whenever such rules exist.
   it('cannot see an onbranch rewrite that applied only mid-clone, but detects that such a rule exists', async () => {
     const { executor, root, setConfig } = isolatedGit('');
     const git = (args: string[], cwd?: string) => executor(args, { ...(cwd ? { cwd } : {}), timeoutMs: 30_000 });
@@ -133,9 +133,11 @@ describe('fetch address context and refresh target with real git', () => {
       samples.push(await resolveFetchUrl('origin', executor, repoDir));
     });
     samples.push(await resolveFetchUrl(configured, executor));
-    // Every sample names A, yet the content came from B.
+    // Every sample names A. Which repository the clone actually fetched depends on the git version (2.43 applies the
+    // rule on the initial branch and fetches B; 2.56 fetches A), so the samples cannot tell; only detecting the rule
+    // makes the result safe on every version.
     expect(new Set(samples)).toEqual(new Set([configured]));
-    expect(fs.readFileSync(path.join(dest, 'marker'), 'utf8')).toBe('b');
+    expect(['a', 'b']).toContain(fs.readFileSync(path.join(dest, 'marker'), 'utf8'));
     expect(await hasBranchConditionalConfig(executor)).toBe(true);
     expect(await hasBranchConditionalConfig(executor, dest)).toBe(true);
     setConfig('');

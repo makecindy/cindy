@@ -114,7 +114,7 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   `git ls-remote --get-url` 采集（与取包同一执行环境，不联网）：
   - clone：克隆前（无仓库）、`git clone` 刚完成时与检出完成后（都在 staging 仓库里，前者覆盖 `includeIf "onbranch:…"`
     这类随检出状态失效的规则）、克隆后（无仓库）各解析一次，全部一致才算核实。
-  - `git clone` 在初始分支（`init.defaultBranch`）上取包，返回前已切到远端默认分支；两者不同时，只在初始分支上
+  - 部分 git 版本（如 2.43；2.56 不会）的 `git clone` 在初始分支（`init.defaultBranch`）上取包，返回前已切到远端默认分支；两者不同时，只在初始分支上
     生效的 `includeIf "onbranch:…"` 事后的任何采样都看不到。所以克隆前（无仓库）与克隆刚完成时（staging 仓库里）
     只要配置里有按分支生效的条件包含（`git config --list --name-only` 里出现 `includeif.onbranch:` 键，只列键名
     不含值），或读不到配置，就不核实这次克隆。
