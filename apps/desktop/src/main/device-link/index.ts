@@ -2879,10 +2879,7 @@ export async function remoteBackgroundInvoke(
     if (!current()) throw error;
     if (error instanceof DeviceLinkError && isProviderShareRefusal(error.code, error.message)) {
       noteProviderShareAccessFailure(refusedOwnerShare);
-      const message = channel === 'maker:remote-agent:v1' && error.code === 'IPC_ERROR'
-        ? `${PROVIDER_SHARE_UNAVAILABLE_MESSAGE}\n[REMOTE_AGENT_PROVIDER_NOT_ALLOWED]`
-        : PROVIDER_SHARE_UNAVAILABLE_MESSAGE;
-      throw Object.assign(new Error(message), { code: error.code });
+      throw Object.assign(new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE), { code: error.code });
     }
     if (isTemporaryProviderMetadataFailure(error)) {
       const fallback = await readStandbyCatalog();

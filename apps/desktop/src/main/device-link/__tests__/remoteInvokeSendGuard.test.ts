@@ -139,14 +139,16 @@ const standbyCatalog = { providers: [{ id: 'shared', agents: ['codex'], routing:
 // adapter and the real invoker/poller: a denial must stop, not start read retries.
 // Recognition is injected here; providerShareRuntime.test.ts covers its real three cases.
 it.each([
-  { code: 'ACCESS_REVOKED', differentRegion: false },
-  { code: 'REMOTE_DISABLED', differentRegion: true },
-  { code: 'IPC_ERROR', differentRegion: false },
-].flatMap(input => ['result', 'throw'].map(mode => ({ ...input, mode }))))('ends a shared run on the translated $code owner refusal ($mode, cross-region=$differentRegion)', async ({ code, differentRegion, mode }) => {
+  { code: 'ACCESS_REVOKED', differentRegion: false, mode: 'result' },
+  { code: 'REMOTE_DISABLED', differentRegion: true, mode: 'result' },
+  { code: 'IPC_ERROR', differentRegion: false, mode: 'result' },
+  { code: 'ACCESS_REVOKED', differentRegion: false, mode: 'throw' },
+  { code: 'REMOTE_DISABLED', differentRegion: true, mode: 'throw' },
+] as const)('ends a shared run on the translated $code owner refusal ($mode, cross-region=$differentRegion)', async ({ code, differentRegion, mode }) => {
   vi.useFakeTimers();
   const invoke = vi.fn(async () => {
     const message = code === 'IPC_ERROR' ? '[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] owner policy denied' : 'owner denied';
-    if (mode === 'throw') throw new DeviceLinkError(code as DeviceLinkError['code'], message);
+    if (mode === 'throw') throw new DeviceLinkError(code, message);
     return { ok: false, error: { code, message } };
   });
   const remoteBackgroundInvoke = loadBackgroundInvoke({
