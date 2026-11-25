@@ -14717,27 +14717,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Confirmer à chaque fois",
+            "label": "Autorisations par défaut",
             "description": "Vous confirmez quand l’Agent demande une autorisation. Cindy ne peut pas bloquer les actions pour lesquelles l’Agent ne demande rien."
           },
           "default": {
-            "label": "Par défaut",
+            "label": "Autorisations par défaut",
             "description": "L’Agent fonctionne à sa manière par défaut ; vous confirmez ses demandes d’autorisation."
           },
           "acceptEdits": {
-            "label": "Accepter les modifications",
+            "label": "Modifications acceptées",
             "description": "L’Agent modifie les fichiers directement ; vous confirmez ses autres demandes d’autorisation."
           },
           "auto": {
-            "label": "Automatique",
+            "label": "Revue auto",
             "description": "L’Agent décide de ce qui nécessite une confirmation ; vous confirmez les demandes qu’il fait."
           },
           "plan": {
-            "label": "Planifier uniquement",
+            "label": "Mode plan",
             "description": "L’Agent analyse et planifie seulement ; il ne modifie aucun fichier."
           },
           "bypassPermissions": {
-            "label": "Tout autoriser",
+            "label": "Accès complet",
             "description": "Toutes les autorisations demandées par l’Agent sont accordées automatiquement."
           }
         }

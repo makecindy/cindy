@@ -813,12 +813,12 @@ describe('newMakerDraft store', () => {
     switchVendor('codex');
     const d = getDraft();
     expect(d.vendor).toBe('codex');
-    // 旧 vendor(cc)的 prefs 被落地为传入的值
+    // 旧 vendor(cc)的 prefs 被落地为传入的值，且新建任务的权限选择跨 Harness 沿用
     expect(d.lastByVendor.cc.model).toBe('claude-opus-4-7');
     expect(d.lastByVendor.cc.effort).toBe('high');
     expect(d.lastByVendor.cc.permissionMode).toBe('bypassPermissions');
-    // 新 vendor(codex)的 prefs 不变(等待用户在 codex 下继续操作)
-    expect(d.lastByVendor.codex.permissionMode).toBe('auto');
+    expect(d.permissionMode).toBe('bypassPermissions');
+    expect(d.lastByVendor.codex.permissionMode).toBe('bypassPermissions');
   });
 
   it('switchVendor:选中的引擎跨重启保留(模拟 app 重启后仍是上次选的)', async () => {
@@ -2176,25 +2176,70 @@ describe('newMakerDraft agent computer', () => {
   });
 });
 
-// Standard: the new-task preference must survive owner reload without becoming a picker override.
-it('persists the default, preserves explicit permissions, isolates owners and restores auto', async () => {
+// Standard: the new-task preference must survive owner reload without becoming a picker override,
+// while explicit picker choices carry across built-in harnesses and plugin engines.
+it('persists the default, carries explicit permissions across harnesses, isolates owners and restores auto', async () => {
   const m = await loadModule();
   m.setNewMakerDraftOwner('permission-owner');
-  m.patchVendorPrefs('cc', { permissionMode: 'acceptEdits' });
   m.setNewChatDefaultPermissionMode('bypassPermissions');
-  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('bypassPermissions');
   expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('bypassPermissions');
+  expect(m.getDraftPermissionPreference(m.getDraft())).toBe('bypassPermissions');
   m.setNewMakerDraftOwner('another-owner');
   expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
   m.setNewMakerDraftOwner('permission-owner');
   expect(m.getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
   m.setNewChatDefaultPermissionMode(null);
   expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  m.patchVendorPrefs('cc', { permissionMode: 'acceptEdits' });
+  m.setNewChatDefaultPermissionMode('bypassPermissions');
+  // Explicit picker choice is preserved across owners and resolves safely per harness.
+  expect(m.getDraft().permissionMode).toBe('acceptEdits');
   expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('ask');
   m.setNewMakerDraftOwner('another-owner');
   m.setNewMakerDraftOwner('permission-owner');
+  expect(m.getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
+  expect(m.getDraft().permissionMode).toBe('acceptEdits');
+  m.setNewChatDefaultPermissionMode(null);
   expect(m.getDraft().newChatDefaultPermissionMode).toBeNull();
-  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+});
+
+// Unit: unified new-task permission memory across built-in harnesses and plugin engines.
+// Gap: switching from Claude/Codex/Pi (bypassPermissions) to a plugin engine (Antigravity) previously dropped
+// permissionMode to undefined and fell back to the engine's 'default' mode.
+// Minimum failing input: setDraftPermissionMode('bypassPermissions') -> applyPluginEngineDraftRoute -> reload.
+describe('unified new-task permission across harnesses and plugin engines', () => {
+  it('carries the last selected permission across built-in vendors, plugin engines and reload', async () => {
+    const m1 = await loadModule();
+    m1.setDraftPermissionMode('bypassPermissions');
+    expect(m1.getDraft().permissionMode).toBe('bypassPermissions');
+    expect(m1.getDraft().lastByVendor.cc.permissionMode).toBe('bypassPermissions');
+    expect(m1.getDraft().lastByVendor.codex.permissionMode).toBe('bypassPermissions');
+    expect(m1.getDraft().lastByVendor.pi.permissionMode).toBe('bypassPermissions');
+    expect(m1.applyPluginEngineDraftRoute({ providerId: 'acp-plugin:agy:agy', modelId: 'gemini-4-neon' })).toBe(true);
+    expect(m1.getDraft().pluginEngine?.permissionMode).toBe('bypassPermissions');
+
+    // Switching permission while on a plugin engine updates built-in harnesses too (default <-> ask).
+    m1.setDraftPermissionMode('default');
+    expect(m1.getDraft().permissionMode).toBe('default');
+    expect(m1.getDraft().pluginEngine?.permissionMode).toBe('default');
+    expect(m1.getDraft().lastByVendor.cc.permissionMode).toBe('ask');
+    expect(m1.getDraft().lastByVendor.codex.permissionMode).toBe('ask');
+
+    const m2 = await reloadModule();
+    expect(m2.getDraft().permissionMode).toBe('default');
+    expect(m2.getDraft().lastByVendor.cc.permissionMode).toBe('ask');
+  });
+
+  it('preserves un-clamped mode intent across harnesses that do not support it', async () => {
+    const m = await loadModule();
+    m.setDraftPermissionMode('acceptEdits');
+    expect(m.resolveBuiltinVendorPermissionMode('cc', m.getDraftPermissionPreference(m.getDraft()))).toBe('acceptEdits');
+    expect(m.resolveBuiltinVendorPermissionMode('codex', m.getDraftPermissionPreference(m.getDraft()))).toBe('ask');
+    expect(m.getDraft().permissionMode).toBe('acceptEdits');
+  });
 });
 
 // #10731 review: unit，真实 store + 内存存储。旧覆盖缺少临时引擎、无关写入与重启的组合。
