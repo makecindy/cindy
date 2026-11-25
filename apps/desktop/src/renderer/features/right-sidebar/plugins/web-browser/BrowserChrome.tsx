@@ -357,7 +357,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
                   moreMenuPointerFocusRef.current = null;
                 }}
                 className={cn(
-                  'flex size-6 shrink-0 items-center justify-center rounded-md transition-colors',
+                  'flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors',
                   'text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
                   'data-[state=open]:bg-sidebar-item-active data-[state=open]:text-sidebar-item-active-foreground',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
@@ -459,7 +459,7 @@ function ChromeIconButton({
       aria-hidden={disabled ? true : undefined}
       aria-busy={spinning || undefined}
       className={cn(
-        'flex shrink-0 items-center justify-center rounded-md transition-colors',
+        'flex shrink-0 items-center justify-center rounded-lg transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         inlinePill ? 'size-[18px]' : 'size-6',
         disabled
@@ -499,7 +499,7 @@ function ChromeIconButton({
           onMouseDown={(event) => event.preventDefault()}
           aria-label={accessibleLabel}
           tabIndex={0}
-          className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="inline-flex rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
           {button}
         </span>

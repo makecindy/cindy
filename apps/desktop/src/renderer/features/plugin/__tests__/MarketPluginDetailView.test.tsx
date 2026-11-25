@@ -7,6 +7,7 @@
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { ANTIGRAVITY_MARK_PATH } from '@cindy/maker-shared/branding';
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
@@ -73,6 +74,17 @@ const renderDetail = (overrides: Partial<PluginMarketDetail> = {}) =>
   );
 
 describe('MarketPluginDetailView', () => {
+  // Unit / #12735: the real catalog detail receives an official legacy ID with
+  // no artwork. Previously the displayed icon was generic. A community item
+  // of the same name must still show its own icon rather than the official mark.
+  it.each([['official', true], ['personal', false]] as const)(
+    'uses the legacy Antigravity mark only for the official detail (%s)',
+    (publisherKind, expected) => {
+      const { container } = renderDetail({ ghostId: 'engine', name: 'Antigravity', publisherKind });
+      expect(Boolean(container.querySelector(`path[d="${ANTIGRAVITY_MARK_PATH}"]`))).toBe(expected);
+    },
+  );
+
   // Unit / user-feedback-1: actual rendered markup is compiled with the same
   // Tailwind dependency, then measured via computed style. The old loading test
   // only checked identity/buttons and missed a reserved height after completion.

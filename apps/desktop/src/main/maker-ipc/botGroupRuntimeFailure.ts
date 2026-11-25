@@ -1,6 +1,11 @@
 import { isBotGroupClientId, isBotGroupInTaskClientId, isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode } from '../../shared/botGroupChat.js';
 import { isPiImageInputUnsupportedError, isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
-import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
+import {
+  extractNonSecretErrorSignals,
+  isProviderSafetyRefusalError,
+  matchesDeterministicUsageExhaustionText,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+} from '@cindy/maker-shared/error-redaction';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
 import { parseOverloadError, UPSTREAM_OVERLOAD_REASON } from '@cindy/maker-core';
@@ -22,9 +27,20 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
   // Codex translators publish the stable tag even when message text is redacted.
   if (data?.codexErrorInfo === 'usageLimitExceeded' || data?.codexErrorInfo === 'sessionBudgetExceeded') return 'QUOTA_EXCEEDED';
   if (data?.codexErrorInfo === 'unauthorized') return 'AUTH_REQUIRED';
+  if (
+    data?.codexErrorInfo === 'cyberPolicy' ||
+    data?.codexErrorInfo === 'misalignmentPolicyViolation' ||
+    data?.reason === PROVIDER_SAFETY_REFUSAL_REASON
+  ) {
+    return 'RUNTIME_ERROR';
+  }
   if (data?.reason === 'pi-prompt-timeout' || isPiPromptRpcTimeoutError(data ?? { message: error })
     || (typeof data?.reason === 'string' && /^(?:bridge_)?(?:turn_no_event_timeout|upstream_response_idle_timeout)$/.test(data.reason))) return 'RUNTIME_TIMEOUT';
-  const text = values.filter((value): value is string => typeof value === 'string').join('\n');
+  const stringValues = values.filter((value): value is string => typeof value === 'string');
+  if (stringValues.some((value) => isProviderSafetyRefusalError(value, data?.reason))) {
+    return 'RUNTIME_ERROR';
+  }
+  const text = stringValues.join('\n');
   const remoteLimit = remoteAgentLimitErrorKey(text);
   if (remoteLimit === 'chat.remoteError.REMOTE_AGENT_DEVICE_LIMIT') return 'REMOTE_DEVICE_LIMIT';
   if (remoteLimit === 'chat.remoteError.REMOTE_AGENT_TOTAL_LIMIT') return 'REMOTE_TOTAL_LIMIT';
@@ -41,7 +57,7 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
     || parseOverloadError(text, status, typeof data?.codexErrorInfo === 'string' ? data.codexErrorInfo : undefined)) return 'UPSTREAM_OVERLOADED';
   if (status === 402 || matchesDeterministicUsageExhaustionText(text) || /\b(?:QUOTA_EXCEEDED|USAGE_LIMIT_EXCEEDED|INSUFFICIENT_BALANCE|insufficient_quota|billing_error|provider_quota_limit|usageLimitExceeded|sessionBudgetExceeded)\b/i.test(text)) return 'QUOTA_EXCEEDED';
   // usageLimit also accompanies temporary rate limits; an explicit rate signal wins.
-  if (/\b(?:RATE_LIMITED|RATE_LIMIT_EXCEEDED|rate_limit_error|rate_limit|provider_rate_limit)\b|rate limit(?:ed|ing)?|too many requests/i.test(text)) return 'RATE_LIMITED';
+  if (data?.codexErrorInfo === 'rateLimitExceeded' || /\b(?:RATE_LIMITED|RATE_LIMIT_EXCEEDED|rate_limit_error|rate_limit|provider_rate_limit)\b|rate limit(?:ed|ing)?|too many requests/i.test(text)) return 'RATE_LIMITED';
   if (data?.usageLimit === true) return 'QUOTA_EXCEEDED';
   if (status === 429) return 'RATE_LIMITED';
   // Codex tags every non-2xx HTTP response as httpConnectionFailed. An explicit

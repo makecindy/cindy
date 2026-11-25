@@ -1381,6 +1381,7 @@
     "openPermissionInNewWindow": "Ouvrir dans une autre fenêtre"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Une autre instance de Cindy sur cet ordinateur utilise la connexion à distance. Fermez-la et cette instance prendra automatiquement le relais.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Cette tâche SSH ne peut pas changer de Harness. Choisissez un modèle dans son Harness actuel, ou créez une nouvelle tâche SSH avec le Harness souhaité.",
@@ -6934,6 +6935,7 @@
           "guide": {
             "usageLabel": "Comment l'utiliser",
             "usageBody": "Publiez sur X en mentionnant @askmycindy : la tâche est transmise à cet appareil pour y être exécutée, et le résultat revient sous forme de réponse.",
+            "usageBodyOnDevice": "Publiez sur X en mentionnant @askmycindy : la tâche est transmise à {{device}} pour y être exécutée, et le résultat revient sous forme de réponse.",
             "riskLabel": "Les réponses sont publiques",
             "riskPublicBody": "Les réponses sont publiques et visibles par tous. Utilisez cette fonction pour des questions et problèmes publics, pas pour des sujets privés qui pourraient exposer votre vie privée.",
             "riskWorkdirBody": "Chaque tâche X s'exécute dans le projet par défaut défini dans les paramètres de connexion X. L'Agent peut y lire et écrire des fichiers, et sa conclusion est rendue publique : si ce projet pointe vers un dépôt privé, le contenu des fichiers peut le devenir aussi.",
@@ -8856,6 +8858,7 @@
             "message_body": "corps du message",
             "tool_body": "résultat de l’outil",
             "sidebar_navigation": "navigation latérale",
+            "workdir_menu": "menu du répertoire de travail",
             "session_menu": "menu de la tâche",
             "settings_section": "page des paramètres",
             "composer_completion": "saisie semi-automatique",
@@ -9297,6 +9300,7 @@
         "taskWorkdirBoundary": "Le répertoire de travail reste sur l'ordinateur cible. Modifiez-le sur celui-ci.",
         "configurationLoading": "Chargement des paramètres…",
         "configurationReadFailed": "Impossible de charger les paramètres.",
+        "settingsWriteUnconfirmed": "L’enregistrement n’a pas pu être confirmé. Actualisez les paramètres pour vérifier avant de réessayer.",
         "refreshConfiguration": "Actualiser les paramètres",
         "enableBeforeConfigure": "Ce plugin est désactivé. Activez-le avec l'interrupteur ci-dessus avant de le configurer.",
         "settingsPageUnavailable": "Ouvrez Cindy sur {{device}} pour utiliser la page de paramètres de ce plugin. La version de l'ordinateur cible ne permet pas de l'afficher à distance.",
@@ -12418,8 +12422,8 @@
       "footnote": "Ce texte est intégré au contexte d'identité de l’ami. Les réglages rapides de personnalité sont stockés séparément et sont conservés lorsque ce texte change."
     },
     "welcome": {
-      "generic": "Bonjour, je suis {{name}}. Dites-moi désormais tout ce dont vous avez besoin ; je prends mes repères en attendant.",
-      "withRole": "Bonjour, je suis {{name}} : {{description}}. Dites-moi simplement ce dont vous avez besoin."
+      "generic": "Bonjour, je suis {{name}}. Dites-moi ce dont vous avez besoin.",
+      "withUser": "Bonjour {{userName}}, je suis {{name}}. Dites-moi ce dont vous avez besoin."
     },
     "invitation": {
       "title": "Préparation de la rencontre",
@@ -12674,6 +12678,12 @@
       "arrivingLater": "{{name}} a été déplacé vers cet ordinateur et est encore en cours de préparation. Il apparaîtra bientôt dans vos amis",
       "arrivalPermissions": "{{name}} utilise désormais les autorisations par défaut de cet ordinateur.",
       "arrivalModel": "Le modèle enregistré de {{name}} n'est pas disponible sur cet ordinateur ; il utilise donc le modèle par défaut de cet ordinateur.",
+      "arrivalModelSetup": "{{name}} est sur cet ordinateur, mais aucun modèle n’est encore disponible. Connectez un fournisseur de modèles ou choisissez un modèle dans les réglages de cet ami, à la rubrique Modèle.",
+      "arrivalPartialContent": "{{name}} fonctionne désormais sur cet ordinateur, mais certains éléments synchronisés n’ont pas pu être restaurés. Leurs copies dans le cloud restent intactes.",
+      "missingProfileTitle": "Continuer avec {{name}} et un profil par défaut ?",
+      "missingProfileDescription": "L’ordinateur principal d’origine n’a pas encore envoyé le profil de {{name}}. Si cet ordinateur a été réinstallé ou ne peut pas être récupéré, vous pouvez continuer ici avec un profil par défaut tout en conservant les conversations et contenus déjà synchronisés.",
+      "missingProfileConfirm": "Continuer avec le profil par défaut",
+      "missingProfileFailed": "Le profil de {{name}} n’a pas encore été envoyé dans le cloud",
       "busyTitle": "{{name}} est encore en train de répondre",
       "busyDescription": "Déplacez-le vers « {{device}} » une fois cette réponse terminée, ou arrêtez la réponse et déplacez-le maintenant.",
       "busyWait": "Déplacer une fois terminé",
@@ -15465,6 +15475,7 @@
       "label_many": "{{count}} nouveaux messages"
     },
     "messageNavRail": {
+      "you": "Vous",
       "aria": "Navigation entre les prompts",
       "jumpAria": "Aller au prompt {{index}} : {{preview}}",
       "attachmentOnly_one": "{{count}} pièce jointe",
@@ -15622,6 +15633,7 @@
       "gatewayProxyTokenInvalid": "Les identifiants Cindy AI ne sont plus valides. Cliquez sur Réessayer. Si le problème se reproduit, déconnectez-vous puis reconnectez-vous",
       "gatewayProxyTokenInvalidNoRetry": "Les identifiants Cindy AI ne sont plus valides. Si le problème se reproduit, déconnectez-vous puis reconnectez-vous",
       "modelAccessDenied": "Le compte en amont ne peut pas accéder à ce modèle. Sélectionnez un autre modèle ou vérifiez l'accès auprès du fournisseur",
+      "providerSafetyRefusal": "La politique de sécurité du fournisseur du modèle a bloqué cette réponse. Modifiez votre demande avant de la renvoyer",
       "silentStopContinue": "Continuer",
       "silentStopContinueTitle": "Continuer la tâche en cours",
       "piTransportClosed": "Connexion Pi distante interrompue (canal SSH fermé). La tâche distante est toujours en cours d'exécution : reconnectez-vous pour continuer.",
@@ -15677,6 +15689,7 @@
       "modelCatalogUnconfirmed": "Impossible de confirmer la liste des modèles. Votre modèle sélectionné a été conservé. Actualisez la liste des modèles et réessayez.",
       "actionScheduled": "L’autorisation pour cette action a expiré. La prochaine exécution reste programmée.",
       "actionExpired": "L’autorisation de la session pour cette action a expiré. Consultez la dernière exécution de l’automatisation.",
+      "modelRebuildRetry": "L’instruction n’a pas été envoyée. Ouvrez l’automatisation sur votre ordinateur et sélectionnez « Exécuter maintenant » pour réessayer.",
       "actionRecovered": "L’autorisation pour cette action a expiré. La même automatisation a ensuite réussi.",
       "text": "Une exécution automatique a échoué.",
       "prCheck_dns": "{{device}} ne peut pas résoudre {{host}}. Si le problème persiste, vérifiez le réseau ou le DNS sur cet appareil. Échecs consécutifs : {{failures}}. Les vérifications planifiées pourront reprendre à partir de {{retry}}.",
@@ -18118,7 +18131,7 @@
       "openWorkdirFailed": "Impossible d'ouvrir le dossier"
     },
     "runs": {
-      "boundPluginEngineRecovery": "L’automatisation ne s’est pas exécutée, car la tâche associée utilise un moteur de plugin. Repassez la tâche sur un moteur intégré ou associez l’automatisation à une tâche qui en utilise un.",
+      "boundPluginEngineRecovery": "L’automatisation ne s’est pas exécutée. Une automatisation associée à une tâche sur un moteur de plugin utilise le modèle de la tâche et s’exécute sur cet ordinateur. Si l’automatisation choisit un modèle, retirez-le, puis relancez-la.",
       "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
       "status": {
         "running": "En cours",
@@ -18470,6 +18483,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalle relatif",
+        "label": "Mode de planification",
         "cronHint": "S'exécute à des créneaux horaires du calendrier.",
         "intervalHint": "Attend ce délai après la fin de l'exécution précédente.",
         "intervalUnsupportedHint": "Cet intervalle exact est conservé. Choisir un préréglage en minutes ou en heures le remplacera.",

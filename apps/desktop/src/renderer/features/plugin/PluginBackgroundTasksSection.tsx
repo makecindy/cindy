@@ -92,7 +92,7 @@ function PluginBackgroundTasksSectionInner({ ghostId, hiddenTasksDeclared }: Plu
           type="button"
           onClick={() => void refresh()}
           aria-label={t('settings.ghosts.backgroundTasks.refresh')}
-          className="shrink-0 rounded-md p-1 text-[var(--text-secondary)] transition-colors duration-150 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="shrink-0 rounded-lg p-1 text-[var(--text-secondary)] transition-colors duration-150 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
           <RefreshCw size={14} aria-hidden="true" />
         </button>

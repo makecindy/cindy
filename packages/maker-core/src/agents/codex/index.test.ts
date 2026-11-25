@@ -1,3 +1,4 @@
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
@@ -53,7 +54,7 @@ type LooseThreadEventHandlers = {
   [K in keyof ThreadEventHandlers]?: (...args: any[]) => any;
 };
 
-const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoisted(() => {
+const { MockCodexTransport, createdTransports, createdStdioOptions, spawnedChildren } = vi.hoisted(() => {
   type LineHandler = (line: string) => void;
   type StderrHandler = (line: string) => void;
   type CloseHandler = (info: { reason: string }) => void;
@@ -277,22 +278,26 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
   }
 
   const createdTransports: MockCodexTransport[] = [];
+  const spawnedChildren: ChildProcessWithoutNullStreams[] = [];
   const createdStdioOptions: Array<{
     extraArgs?: string[];
     env?: Record<string, string>;
-    onProcessSpawned?: (pid: number) => void | (() => void);
+    onProcessSpawned?: (pid: number, child: ChildProcessWithoutNullStreams) => void | (() => void);
   }> = [];
-  return { MockCodexTransport, createdTransports, createdStdioOptions };
+  return { MockCodexTransport, createdTransports, createdStdioOptions, spawnedChildren };
 });
 
 vi.mock('./app-server/stdioTransport.js', () => ({
   createStdioTransport: (opts: {
     extraArgs?: string[];
     env?: Record<string, string>;
-    onProcessSpawned?: (pid: number) => void | (() => void);
+    onProcessSpawned?: (pid: number, child: ChildProcessWithoutNullStreams) => void | (() => void);
   }) => {
     createdStdioOptions.push(opts);
-    opts.onProcessSpawned?.(7_000 + createdStdioOptions.length);
+    const pid = 7_000 + createdStdioOptions.length;
+    const child = { pid } as ChildProcessWithoutNullStreams;
+    spawnedChildren.push(child);
+    opts.onProcessSpawned?.(pid, child);
     const transport = new MockCodexTransport(opts.extraArgs);
     createdTransports.push(transport);
     return transport;
@@ -303,6 +308,7 @@ beforeEach(() => {
   MockCodexTransport.userAgent = 'mock-codex';
   createdTransports.length = 0;
   createdStdioOptions.length = 0;
+  spawnedChildren.length = 0;
   MockCodexTransport.threadSeq = 1;
   MockCodexTransport.failThreadStart = false;
   MockCodexTransport.dropThreadUnsubscribe = false;
@@ -5715,8 +5721,8 @@ describe('CodexAgent.refreshLocalModels', () => {
 
     expect(createdTransports).toHaveLength(2);
     expect(registerLocalCodexAppServerProcess.mock.calls).toEqual([
-      [{ pid: 7_001, role: 'task-host' }],
-      [{ pid: 7_002, role: 'control-plane-service' }],
+      [{ pid: 7_001, child: spawnedChildren[0], role: 'task-host' }],
+      [{ pid: 7_002, child: spawnedChildren[1], role: 'control-plane-service' }],
     ]);
     expect(createdTransports[0].closed).toBe(false);
     expect(prepareCodexLocalCredentialModeSwitch).not.toHaveBeenCalled();
@@ -9131,10 +9137,11 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(createdTransports).toHaveLength(1);
     expect(registerLocalCodexAppServerProcess).toHaveBeenCalledWith({
       pid: 7_001,
+      child: spawnedChildren[0],
       role: 'control-plane-service',
     });
     // transport 在进程退出时调用该 disposer 注销登记。
-    expect(createdStdioOptions[0]?.onProcessSpawned?.(7_001)).toBe(disposeRegistration);
+    expect(createdStdioOptions[0]?.onProcessSpawned?.(7_001, spawnedChildren[0])).toBe(disposeRegistration);
     expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
       remoteHostId: undefined,
       credentialMode: 'oauth-bearer',
@@ -37336,11 +37343,22 @@ describe('Codex native manual compaction', () => {
     await waitForExpectation(() => expect(events.some(e => e.type === 'status' && e.data.isRunning === true)).toBe(true));
     // Desktop ignores background running frames. Stop must be available even
     // before the daemon produces its first turn/item notification.
-    expect(events.find(e => e.type === 'status' && e.data.isRunning === true)?.turnScope).not.toBe('background');
+    const startingStatus = events.find(e => e.type === 'status' && e.data.isRunning === true);
+    expect(startingStatus?.turnScope).not.toBe('background');
+    expect(startingStatus?.data).toMatchObject({ manualCompact: true });
     expect(host.request).toHaveBeenCalledWith(Method.ThreadCompactStart, { threadId: handle.id });
     await expect(handle.send({ type: 'user', content: 'do not race' })).rejects.toThrow('compacting');
     await expect(handle.compactSession!()).rejects.toThrow('active');
-    started(); boundary();
+    started();
+    host.getThreadHandlers()!.itemStarted!({
+      threadId: handle.id, turnId: 'manual-turn', item: { id: 'manual-boundary', type: 'contextCompaction' },
+    });
+    boundary();
+    await waitForExpectation(() => {
+      const statuses = events.filter(e => e.type === 'status' && e.data.isRunning === true);
+      expect(statuses.length).toBeGreaterThan(1);
+      expect(statuses.every(e => e.data.manualCompact === true)).toBe(true);
+    });
     expect(resolved).toBe(false);
     completed();
     await expect(result).resolves.toEqual({ tokensBefore: 0, estimatedTokensAfter: undefined });

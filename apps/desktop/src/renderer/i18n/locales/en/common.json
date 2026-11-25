@@ -1363,6 +1363,7 @@
     "openPermissionInNewWindow": "Open in a new window"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
@@ -6865,6 +6866,7 @@
           "guide": {
             "usageLabel": "How to Use It",
             "usageBody": "Post on X mentioning @askmycindy and the task is dispatched to this device to run here; the result comes back as a reply.",
+            "usageBodyOnDevice": "Post on X mentioning @askmycindy and the task is dispatched to {{device}} to run there; the result comes back as a reply.",
             "riskLabel": "Replies Are Public",
             "riskPublicBody": "Replies are public and visible to anyone. Use this for public questions and problems, not for private matters that could expose personal information.",
             "riskWorkdirBody": "Every X task runs in the default project set in X connection settings. The Agent can read and write files there, and its conclusion is posted publicly — if that project points at a private repository, file contents may become public with it.",
@@ -8782,6 +8784,7 @@
             "message_body": "message body",
             "tool_body": "tool result",
             "sidebar_navigation": "sidebar navigation",
+            "workdir_menu": "working directory menu",
             "session_menu": "task menu",
             "settings_section": "settings page",
             "composer_completion": "input completion",
@@ -9223,6 +9226,7 @@
         "taskWorkdirBoundary": "The working directory stays on the target computer. Change it there.",
         "configurationLoading": "Loading settings…",
         "configurationReadFailed": "Could not load settings.",
+        "settingsWriteUnconfirmed": "Save result could not be confirmed. Refresh settings to check before retrying.",
         "refreshConfiguration": "Refresh Settings",
         "enableBeforeConfigure": "This plugin is disabled. Enable it with the switch above before configuring.",
         "settingsPageUnavailable": "Open Cindy on {{device}} to use this plugin’s settings page. This version of the target computer cannot display it remotely.",
@@ -12317,8 +12321,8 @@
       "footnote": "This enters the buddy's identity context. Quick personality settings are stored separately and are preserved when this text changes."
     },
     "welcome": {
-      "generic": "Hi, I'm {{name}}. Tell me anything you need from now on — I will get my bearings in the meantime.",
-      "withRole": "Hi, I'm {{name}} — {{description}}. Just tell me what you need."
+      "generic": "Hi, I’m {{name}}. Just tell me what you need.",
+      "withUser": "Hi {{userName}}, I’m {{name}}. Just tell me what you need."
     },
     "invitation": {
       "title": "Getting ready to meet",
@@ -12573,6 +12577,12 @@
       "arrivingLater": "{{name}} moved to this computer and is still getting ready. It will appear in your buddies soon",
       "arrivalPermissions": "{{name}} now uses this computer’s default permissions.",
       "arrivalModel": "{{name}}’s saved model isn’t available on this computer, so it follows this computer’s default model.",
+      "arrivalModelSetup": "{{name}} is on this computer, but no model is available yet. Connect a model provider or choose a model in this buddy’s settings under Model.",
+      "arrivalPartialContent": "{{name}} now runs on this computer, though some synced items couldn’t be restored. Their cloud copies remain intact.",
+      "missingProfileTitle": "Start {{name}} with default profile?",
+      "missingProfileDescription": "The original main computer hasn’t uploaded {{name}}’s persona or description yet. If that computer was reinstalled or can’t be recovered, you can continue here with a default profile while keeping any synced conversations and content.",
+      "missingProfileConfirm": "Continue with default profile",
+      "missingProfileFailed": "{{name}} hasn’t uploaded its profile to the cloud yet",
       "busyTitle": "{{name}} is still replying",
       "busyDescription": "Move it to “{{device}}” once this reply finishes, or stop the reply and move it now.",
       "busyWait": "Move When Done",
@@ -15373,6 +15383,7 @@
       "label_other": "{{count}} new messages"
     },
     "messageNavRail": {
+      "you": "You",
       "aria": "Prompt navigation",
       "jumpAria": "Jump to prompt {{index}}: {{preview}}",
       "attachmentOnly_one": "{{count}} attachment",
@@ -15524,6 +15535,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI credentials are no longer valid. Click Retry. If it happens again, sign out and sign back in.",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI credentials are no longer valid. If it happens again, sign out and sign back in.",
       "modelAccessDenied": "The upstream account cannot access this model. Select another model or check its access with the provider",
+      "providerSafetyRefusal": "The model provider's safety policy blocked this response. Adjust your request before sending again.",
       "silentStopContinue": "Continue",
       "silentStopContinueTitle": "Continue the current task",
       "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
@@ -15574,6 +15586,7 @@
       "modelCatalogUnconfirmed": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
       "actionScheduled": "Authorization expired for this action. The next run is still scheduled.",
       "actionExpired": "Task authorization expired for this action. Check the latest automation run.",
+      "modelRebuildRetry": "The instruction was not sent. Open the automation on your computer and choose “Run now” to retry.",
       "actionRecovered": "Authorization expired for this action. A later run of the same automation succeeded.",
       "text": "An automatic run failed.",
       "prCheck_dns": "{{device}} could not resolve {{host}}. Check the network or DNS on that device if this persists. Consecutive failures: {{failures}}. Scheduled checks can retry at or after {{retry}}.",
@@ -17950,7 +17963,7 @@
       "openWorkdirFailed": "Failed to open folder"
     },
     "runs": {
-      "boundPluginEngineRecovery": "This automation didn’t run because its linked task uses a plugin engine. Switch the task back to a built-in engine or link the automation to a task that uses one.",
+      "boundPluginEngineRecovery": "This automation didn’t run. An automation linked to a plugin engine task uses the task’s own model and runs on this computer. If the automation chooses a model, remove it, then run it again.",
       "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
       "status": {
         "running": "Running",
@@ -18302,6 +18315,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Relative interval",
+        "label": "Timing mode",
         "cronHint": "Runs at calendar clock slots.",
         "intervalHint": "Waits this long after the previous run finishes.",
         "intervalUnsupportedHint": "This exact interval is preserved. Choosing a minute or hour preset will replace it.",

@@ -80,6 +80,7 @@
     "modelCatalogUnconfirmed": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
     "actionScheduled": "Authorization expired for this action. The next run is still scheduled.",
     "actionExpired": "Task authorization expired for this action. Check the latest automation run.",
+    "modelRebuildRetry": "The instruction was not sent. Open the automation on your computer and choose “Run now” to retry.",
     "actionRecovered": "Authorization expired for this action. A later run of the same automation succeeded.",
     "text": "An automatic run failed.",
     "prCheck_dns": "{{device}} could not resolve {{host}}. Check the network or DNS on that device if this persists. Consecutive failures: {{failures}}. Scheduled checks can retry at or after {{retry}}.",

@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "在新窗口打开"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "本机另一 Cindy 实例正在使用远程连接。关闭它后，本实例会自动接管。",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
@@ -6822,6 +6823,7 @@
           "guide": {
             "usageLabel": "怎么用",
             "usageBody": "在 X 上发一条推文 @askmycindy，任务就会派到这台设备上执行，结论以回帖发回给你。",
+            "usageBodyOnDevice": "在 X 上发一条推文 @askmycindy，任务就会派到「{{device}}」上执行，结论以回帖发回给你。",
             "riskLabel": "回帖是公开的",
             "riskPublicBody": "回复是公开推文，任何人都能看到。适合公开提问、解决问题；不适合处理私事，以免暴露隐私。",
             "riskWorkdirBody": "X 任务都落在 X 连接设置里的默认项目，Agent 能读写其中文件，而结论会公开回帖 —— 默认项目指到私密仓库时，文件内容可能随之公开。",
@@ -8739,6 +8741,7 @@
             "message_body": "消息正文",
             "tool_body": "工具结果",
             "sidebar_navigation": "侧边导航栏",
+            "workdir_menu": "工作目录菜单",
             "session_menu": "任务菜单",
             "settings_section": "设置页面",
             "composer_completion": "输入补全入口",
@@ -9180,6 +9183,7 @@
         "taskWorkdirBoundary": "工作目录沿用目标电脑的设置，请在目标电脑修改。",
         "configurationLoading": "正在读取设置…",
         "configurationReadFailed": "未能读取设置。",
+        "settingsWriteUnconfirmed": "未能确认保存结果。请刷新设置，核对后再决定是否重试。",
         "refreshConfiguration": "刷新设置",
         "enableBeforeConfigure": "插件已停用，请先打开上方开关，再进行配置。",
         "settingsPageUnavailable": "请在 {{device}} 的 Cindy 中打开此插件的设置页，目标电脑当前版本暂不支持远程显示。",
@@ -12272,8 +12276,8 @@
       "footnote": "这段内容会进入伙伴的身份上下文；快速性格设置单独保存，修改这里不会覆盖它。"
     },
     "welcome": {
-      "generic": "嗨，我是{{name}}。以后有事直接跟我说，我先熟悉一下这儿。",
-      "withRole": "嗨，我是{{name}}——{{description}}。有事直接跟我说。"
+      "generic": "嗨，我是{{name}}。有事直接跟我说。",
+      "withUser": "嗨，{{userName}}，我是{{name}}。有事直接跟我说。"
     },
     "invitation": {
       "title": "准备见面",
@@ -12528,6 +12532,12 @@
       "arrivingLater": "{{name}} 已换到这台电脑，还在准备中，稍后会出现在伙伴列表里",
       "arrivalPermissions": "{{name}} 已按这台电脑的默认权限运行。",
       "arrivalModel": "{{name}} 之前选的模型在这台电脑上不可用，已改用这台电脑的默认模型。",
+      "arrivalModelSetup": "{{name}} 已来到这台电脑，但还没有可用模型。请连接模型供应商，或打开这位伙伴的「设置 → 模型」选择模型。",
+      "arrivalPartialContent": "{{name}} 已来到这台电脑，部分云端内容未能恢复，原内容仍保留在云端。",
+      "missingProfileTitle": "用初始资料继续 {{name}}？",
+      "missingProfileDescription": "原主力电脑还没上传 {{name}} 的人设和简介。如果原电脑已重装或无法恢复，可以在这台电脑用初始资料继续，已同步到云端的对话和内容仍会保留。",
+      "missingProfileConfirm": "用初始资料继续",
+      "missingProfileFailed": "{{name}} 的资料尚未上传到云端",
       "busyTitle": "{{name}} 还在回复",
       "busyDescription": "可以等这一轮结束后再换到「{{device}}」，也可以停止这一轮马上换。",
       "busyWait": "等回复完再换",
@@ -15312,6 +15322,7 @@
       "label_other": "{{count}} 条新消息"
     },
     "messageNavRail": {
+      "you": "你",
       "aria": "提问导航",
       "jumpAria": "跳转到第 {{index}} 条提问：{{preview}}",
       "attachmentOnly_one": "附件 {{count}} 件",
@@ -15459,6 +15470,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI 凭据已失效。请点击「重试」。若仍失败，请退出后重新登录",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 凭据已失效。若后续仍失败，请退出后重新登录",
       "modelAccessDenied": "当前上游账号无权访问此模型。请切换模型，或向供应商确认模型访问权限",
+      "providerSafetyRefusal": "模型供应商的安全策略拦截了本次回复。如需继续，请调整请求内容后再发送",
       "silentStopContinue": "继续",
       "silentStopContinueTitle": "继续当前任务",
       "piTransportClosed": "远端 Pi 连接已中断（SSH 通道关闭）。远端任务仍在运行，重新连接后可以继续。",
@@ -15509,6 +15521,7 @@
       "modelCatalogUnconfirmed": "暂时无法确认模型列表。已保留你选择的模型，可刷新模型列表后重试。",
       "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
+      "modelRebuildRetry": "指令未发送。请在电脑端打开自动化，选择「立即运行」重试。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "此前有自动运行失败。",
       "prCheck_dns": "{{device}} 无法解析 {{host}}。如果问题持续，请检查这台设备的网络或 DNS。已连续失败 {{failures}} 次。从 {{retry}} 起，定时检查可自动重试。",
@@ -17876,7 +17889,7 @@
       "openWorkdirFailed": "打开文件夹失败"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自动化未运行，因为绑定的任务使用了插件引擎。请将任务切回内置引擎，或将自动化改绑到使用内置引擎的任务。",
+      "boundPluginEngineRecovery": "自动化未运行。绑定到插件引擎任务的自动化会沿用任务自己的模型，并在这台电脑上运行。如果自动化里指定了模型，请先去掉，再重新运行。",
       "queueWaitTimeoutRecovery": "排队等待超时，提示词未发送。目标任务空闲后可点击「{{action}}」补跑。",
       "status": {
         "running": "运行中",
@@ -18228,6 +18241,7 @@
       "timingMode": {
         "cron": "Cron 定时",
         "interval": "相对间隔",
+        "label": "计时方式",
         "cronHint": "按照日历时钟的固定时间槽位运行。",
         "intervalHint": "上一次运行完成后，再等待指定时长。",
         "intervalUnsupportedHint": "当前精确间隔会原样保留；选择分钟或小时预设后才会替换。",

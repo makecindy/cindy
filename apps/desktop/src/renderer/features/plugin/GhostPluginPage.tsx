@@ -2542,7 +2542,8 @@ export function MarketPluginCard({
     onFocusCapture: schedulePrefetch,
     onBlurCapture: cancelPrefetch,
   };
-  const showOrigin = publicPublisherFilter(item) === null;
+  const publisherFilter = publicPublisherFilter(item);
+  const showOrigin = publisherFilter === null;
   const metadata = <>
     {showOrigin ? <span className={compact ? undefined : 'shrink-0'}>{t(origin === 'public'
       ? 'mcpApps.source.market' : `settings.ghosts.page.origin.${origin}`)}</span> : null}
@@ -2556,7 +2557,7 @@ export function MarketPluginCard({
       disabled={unavailable} onClick={onSelect} aria-label={item.name} aria-describedby={metadataId} />
     <div className="pointer-events-none flex min-w-0 items-start gap-3">
       <GhostPluginIcon size="sm" iconContainerRef={marketIcon.containerRef} iconDataUrl={marketIcon.iconDataUrl}
-        iconId={item.ghostId} iconName={item.name} onIconLoad={marketIcon.onIconLoad}
+        iconId={item.ghostId} iconName={item.name} officialCatalog={publisherFilter === 'official'} onIconLoad={marketIcon.onIconLoad}
         onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
@@ -2612,6 +2613,7 @@ export function MarketPluginCard({
           iconDataUrl={marketIcon.iconDataUrl}
           iconId={item.ghostId}
           iconName={item.name}
+          officialCatalog={publisherFilter === 'official'}
           onIconLoad={marketIcon.onIconLoad}
           onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
         />

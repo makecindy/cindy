@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "새 윈도우에서 열기"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "이 컴퓨터의 다른 Cindy 인스턴스가 원격 연결을 사용하고 있습니다. 그것을 닫으면 이 인스턴스가 자동으로 이어받습니다.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
@@ -6822,6 +6823,7 @@
           "guide": {
             "usageLabel": "사용 방법",
             "usageBody": "X에서 @askmycindy를 멘션해 게시글을 쓰면 작업이 이 기기로 전달되어 여기서 실행되고, 결과가 답장으로 돌아옵니다.",
+            "usageBodyOnDevice": "X에서 @askmycindy를 멘션해 게시글을 쓰면 작업이 {{device}}(으)로 전달되어 그곳에서 실행되고, 결과가 답장으로 돌아옵니다.",
             "riskLabel": "답장은 공개됩니다",
             "riskPublicBody": "답장은 누구나 볼 수 있는 공개 게시글입니다. 공개 질문과 문제 해결에 적합하며, 사적인 일은 개인정보가 노출될 수 있어 부적합합니다.",
             "riskWorkdirBody": "모든 X 작업은 X 연결 설정에서 지정한 기본 프로젝트에서 실행됩니다. Agent는 그 안의 파일을 읽고 쓸 수 있으며, 결론은 공개로 답장됩니다 — 기본 프로젝트가 비공개 리포지터리를 가리키면 파일 내용도 함께 공개될 수 있습니다.",
@@ -8739,6 +8741,7 @@
             "message_body": "메시지 본문",
             "tool_body": "도구 결과",
             "sidebar_navigation": "사이드바 탐색",
+            "workdir_menu": "작업 디렉터리 메뉴",
             "session_menu": "작업 메뉴",
             "settings_section": "설정 페이지",
             "composer_completion": "입력 자동 완성",
@@ -9180,6 +9183,7 @@
         "taskWorkdirBoundary": "작업 디렉터리는 대상 컴퓨터의 설정을 유지합니다. 대상 컴퓨터에서 변경하세요.",
         "configurationLoading": "설정을 불러오는 중…",
         "configurationReadFailed": "설정을 불러오지 못했습니다.",
+        "settingsWriteUnconfirmed": "저장 결과를 확인할 수 없습니다. 다시 시도하기 전에 설정을 새로고침하여 확인하세요.",
         "refreshConfiguration": "설정 새로고침",
         "enableBeforeConfigure": "이 플러그인은 비활성화되어 있습니다. 설정하려면 위의 스위치를 켜세요.",
         "settingsPageUnavailable": "{{device}}의 Cindy에서 이 플러그인의 설정 페이지를 열어 주세요. 대상 컴퓨터의 현재 버전은 원격 표시를 지원하지 않습니다.",
@@ -12272,8 +12276,8 @@
       "footnote": "이 내용은 동반자의 정체성 문맥에 포함됩니다. 빠른 성격 설정은 별도로 저장되며 여기를 바꿔도 유지됩니다."
     },
     "welcome": {
-      "generic": "안녕하세요, 저는 {{name}}입니다. 앞으로 필요한 게 있으면 바로 말씀하세요. 그동안 여기부터 익혀 둘게요.",
-      "withRole": "안녕하세요, 저는 {{name}}입니다 — {{description}}. 필요한 게 있으면 바로 말씀하세요."
+      "generic": "안녕하세요, 저는 {{name}}입니다. 필요한 게 있으면 바로 말씀하세요.",
+      "withUser": "안녕하세요, {{userName}}님. 저는 {{name}}입니다. 필요한 게 있으면 바로 말씀하세요."
     },
     "invitation": {
       "title": "만날 준비 중",
@@ -12528,6 +12532,12 @@
       "arrivingLater": "{{name}}이(가) 이 컴퓨터로 옮겨졌고 아직 준비 중입니다. 곧 동반자 목록에 표시됩니다",
       "arrivalPermissions": "{{name}}은(는) 이 컴퓨터의 기본 권한으로 실행됩니다.",
       "arrivalModel": "{{name}}에 저장된 모델을 이 컴퓨터에서 사용할 수 없어 이 컴퓨터의 기본 모델을 사용합니다.",
+      "arrivalModelSetup": "{{name}}이(가) 이 컴퓨터로 옮겨졌지만 아직 사용할 수 있는 모델이 없습니다. 모델 제공자를 연결하거나 이 동반자의 ‘설정 → 모델’에서 모델을 선택하세요.",
+      "arrivalPartialContent": "{{name}}이(가) 이제 이 컴퓨터에서 실행되지만 일부 동기화된 항목은 복원하지 못했습니다. 클라우드의 원본은 그대로 유지됩니다.",
+      "missingProfileTitle": "기본 프로필로 {{name}}을(를) 계속할까요?",
+      "missingProfileDescription": "기존 주 컴퓨터에서 {{name}}의 프로필이 아직 업로드되지 않았습니다. 기존 컴퓨터를 재설치했거나 복구할 수 없다면 여기서 기본 프로필로 계속할 수 있으며, 클라우드에 동기화된 대화와 내용은 그대로 유지됩니다.",
+      "missingProfileConfirm": "기본 프로필로 계속하기",
+      "missingProfileFailed": "{{name}}의 프로필이 아직 클라우드에 업로드되지 않았습니다",
       "busyTitle": "{{name}}이(가) 아직 답장 중입니다",
       "busyDescription": "이번 답장이 끝난 뒤 “{{device}}”(으)로 옮기거나, 답장을 멈추고 바로 옮길 수 있습니다.",
       "busyWait": "끝나면 옮기기",
@@ -15312,6 +15322,7 @@
       "label_other": "새 메시지 {{count}}개"
     },
     "messageNavRail": {
+      "you": "나",
       "aria": "질문 탐색",
       "jumpAria": "{{index}}번째 질문으로 이동: {{preview}}",
       "attachmentOnly_one": "첨부파일 {{count}}개",
@@ -15459,6 +15470,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 다시 시도를 클릭하세요. 반복되면 로그아웃 후 다시 로그인하세요",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 반복되면 로그아웃 후 다시 로그인하세요",
       "modelAccessDenied": "연결된 서비스 계정에 이 모델의 접근 권한이 없습니다. 다른 모델로 전환하거나 제공자에게 모델 접근 권한을 확인하세요",
+      "providerSafetyRefusal": "모델 제공자의 안전 정책에 의해 이번 응답이 차단되었습니다. 계속하려면 요청 내용을 수정한 뒤 다시 보내세요",
       "silentStopContinue": "계속",
       "silentStopContinueTitle": "현재 작업 계속",
       "piTransportClosed": "원격 Pi 연결이 끊어졌습니다(SSH 채널 닫힘). 원격 작업은 계속 실행 중입니다. 다시 연결하면 계속할 수 있습니다.",
@@ -15509,6 +15521,7 @@
       "modelCatalogUnconfirmed": "모델 목록을 확인할 수 없습니다. 선택한 모델은 유지됩니다. 모델 목록을 새로 고친 후 다시 시도하세요.",
       "actionScheduled": "이 동작에 대한 세션 권한이 만료되었습니다. 다음 실행은 예정대로 진행됩니다.",
       "actionExpired": "이 동작에 대한 세션 권한이 만료되었습니다. 자동화의 최근 실행 결과를 확인하세요.",
+      "modelRebuildRetry": "지시가 전송되지 않았습니다. 컴퓨터에서 자동화를 열고 ‘지금 실행’을 선택해 다시 시도하세요.",
       "actionRecovered": "이 동작의 권한이 만료되었습니다. 이후 같은 자동화가 성공적으로 실행되었습니다.",
       "text": "실패한 자동 실행이 있습니다.",
       "prCheck_dns": "{{device}}에서 {{host}}의 주소를 찾을 수 없습니다. 문제가 계속되면 이 기기의 네트워크나 DNS를 확인하세요. 연속 실패 횟수는 {{failures}}회입니다. {{retry}}부터 정기 확인을 다시 시도할 수 있습니다.",
@@ -17876,7 +17889,7 @@
       "openWorkdirFailed": "폴더를 열지 못했습니다"
     },
     "runs": {
-      "boundPluginEngineRecovery": "연결된 작업이 플러그인 엔진을 사용해 자동화가 실행되지 않았습니다. 작업을 내장 엔진으로 되돌리거나 내장 엔진을 사용하는 작업에 자동화를 다시 연결하세요.",
+      "boundPluginEngineRecovery": "자동화가 실행되지 않았습니다. 플러그인 엔진 작업에 연결된 자동화는 작업 자체의 모델을 사용하며 이 컴퓨터에서 실행됩니다. 자동화에서 모델을 지정했다면 제거한 뒤 다시 실행하세요.",
       "queueWaitTimeoutRecovery": "대기 시간이 초과되어 프롬프트가 전송되지 않았습니다. 대상 세션이 유휴 상태가 되면 {{action}}을 선택하여 실행하세요.",
       "status": {
         "running": "실행 중",
@@ -18228,6 +18241,7 @@
       "timingMode": {
         "cron": "Cron 일정",
         "interval": "상대 간격",
+        "label": "타이밍 방식",
         "cronHint": "달력 시계의 고정 시간대에 실행합니다.",
         "intervalHint": "이전 실행이 끝난 뒤 지정된 시간만큼 기다립니다.",
         "intervalUnsupportedHint": "현재 정확한 간격은 그대로 유지됩니다. 분 또는 시간 프리셋을 선택하면 대체됩니다.",

@@ -272,6 +272,44 @@ describe('shared-process session turn lease', () => {
     ]);
   });
 
+  it.each(['own-row-missing', 'active-turn-conflict', 'exact-release-missed'] as const)(
+    'reports %s without logging lease data or changing the retry outcome',
+    async (reason) => {
+      const { first, raw } = setup();
+      const owner = { instanceId: 'private-owner', processId: 101 };
+      const requested = 'private-requested-turn';
+      const persisted = reason === 'active-turn-conflict' ? requested : 'private-stale-turn';
+      if (reason === 'own-row-missing') {
+        raw.exec('CREATE TEMP TRIGGER miss BEFORE INSERT ON messages BEGIN SELECT RAISE(IGNORE); END');
+      } else {
+        await tryAcquireSessionTurnLease(first, {
+          sessionId: 'source-1', turnId: persisted, owner, createdAt: 1,
+        });
+        if (reason === 'exact-release-missed') {
+          raw.exec('CREATE TEMP TRIGGER miss BEFORE DELETE ON messages BEGIN SELECT RAISE(IGNORE); END');
+        }
+      }
+      const warn = vi.fn();
+      const tracker = new SessionTurnLeaseTracker({
+        getDbClient: () => first, owner, createTurnId: () => requested, now: () => 2, warn,
+      });
+
+      await expect(tracker.markTurnStarted('source-1')).rejects.toThrow(
+        'could not replace the previous turn lease',
+      );
+      expect(warn.mock.calls).toEqual([['session turn lease replacement failed', { reason }]]);
+      const rows = await readPersistedSessionTurnLeases(first, 'source-1');
+      expect(rows.map(row => row.lease?.turnId)).toEqual(reason === 'own-row-missing' ? [] : [persisted]);
+
+      raw.exec('DROP TRIGGER IF EXISTS miss');
+      await tracker.markTurnStarted('source-1', 'retry');
+      await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toMatchObject([
+        { lease: { turnId: 'retry' } },
+      ]);
+      expect(warn).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('ignores a delayed tracker terminal after a newer generation replaces it', async () => {
     const { first } = setup();
     const tracker = new SessionTurnLeaseTracker({

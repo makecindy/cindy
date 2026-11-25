@@ -6802,6 +6802,8 @@ describe("Pi provider-aware model routing", () => {
       model: "local-model",
       providerId: "native-a",
     });
+    await expect(handle.previewModelSwitch!("ghost-model", { providerId: "native-a" }))
+      .resolves.toMatchObject({ action: "unavailable", modelNotOffered: true });
     await expect(
       handle.setModel!("ghost-model", { providerId: "native-a" }),
     ).rejects.toThrow(/does not offer model 'ghost-model'/);
