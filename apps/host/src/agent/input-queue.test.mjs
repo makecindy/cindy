@@ -4338,6 +4338,30 @@ test('Device Link create: a provider group task is refused with no task row and 
   assert.equal(started.length, 0, 'no runtime');
 });
 
+// Unit through Device Link create with owner-scoped pool fixtures: the desktop's
+// canonical mixed group can lack an outer group row. Starting it on Host would
+// otherwise silently choose a different credential from the bound Key.
+test('Device Link create refuses an OpenAI account pool and a detached Key history before start', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const key = 'fork-host-fixture-key';
+  const group = 'fork-host-fixture-group';
+  const { apiKeyMemberForConnection, saveApiKeyPoolMembers, restoreStandaloneApiKeyMember } =
+    await import('../../../desktop/src/main/subscription-accounts/apiKeyMembers.ts');
+  const { writeAccountBindings } = await import('../../../desktop/src/main/subscription-accounts/store.ts');
+  const { ports, rows, started, input } = deviceLinkCreate(r);
+  await saveApiKeyPoolMembers(group, [{ connectionId: key }], () => {});
+  await assert.rejects(createHostRuntimeSession(ports, input(group)), /UNSUPPORTED_CAPABILITY/);
+  const member = apiKeyMemberForConnection(key);
+  await restoreStandaloneApiKeyMember(member, () => {});
+  await writeAccountBindings(['native:detached-pool-history'], 'openai', member.id, group);
+  const detached = deviceLinkCreate(r, {}, { 'detached-old': { status: 'active', workingDir: process.cwd(),
+    agentKind: 'cc', model: 'big', providerId: group, sdkSessionId: 'detached-pool-history' } });
+  await assert.rejects(createHostRuntimeSession(detached.ports, { ...input('prov-a'), id: 'detached-old' }),
+    /UNSUPPORTED_CAPABILITY/);
+  assert.deepEqual([rows.length, started.length, detached.rows.length, detached.started.length], [0, 0, 0, 0]);
+  assert.doesNotThrow(() => ports.assertProviderExecutionSupported('fresh-direct', key));
+});
+
 // Rule (sessionAgentSwitchHandler.ts: a switch back to an engine whose native session is parked starts
 // that engine at once to see whether the resume holds, through agentSwitchDeps.bootstrapSwitchedSession;
 // the handoff then carries only what happened while it was away): switching back resumes the parked

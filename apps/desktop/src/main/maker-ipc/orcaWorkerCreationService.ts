@@ -238,7 +238,7 @@ export interface OrcaWorkerCreateParams {
   role: string;
   /**
    * 'acp' = 本机插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)：providerId 必为 acp-plugin:<插件>:<引擎>，
-   * 只在本机运行，不用 worktree，不走内置模型目录与来源路由。
+   * 只在本机运行，不走内置模型目录与来源路由；可用 worktree。
    */
   agent: EngineKind;
   label: string;
@@ -1175,13 +1175,10 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
     if (params.agent === 'acp') {
       // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：只在本机运行(Lead 不在 SSH、Worker 不换电脑、不在
-      // 另一台电脑执行)，不用 worktree；引擎按本机此刻提供的准入，不走内置模型目录与来源路由。
+      // 另一台电脑执行)；引擎按本机此刻提供的准入，不走内置模型目录与来源路由。
       if (lead.remoteHostId || params.executionDeviceId !== undefined || workerLocation.agentDeviceId) {
         return { ok: false, errorCode: 'INVALID_PARAMS',
           message: 'plugin engines run on this computer only; create the Worker locally (agent_device_id "local", no execution_device_id)' };
-      }
-      if (params.worktree !== undefined) {
-        return { ok: false, errorCode: 'INVALID_PARAMS', message: 'plugin engine Workers cannot use a worktree' };
       }
       if (!deps.admitPluginEngineWorker) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'plugin engine Workers are not available here' };
@@ -1209,8 +1206,22 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           return { ok: false, errorCode: 'INVALID_PARAMS', message: 'working_dir is unavailable or collaboration is disabled for that directory; no Worker was started' };
         }
       }
+      // worktree 与内置 Worker 同一套(Lead 在本机项目里时由 finishWorkerCreation 检出)。
+      let pluginWorktreeSource: string | undefined;
+      let pluginWorktreeSelection: WorkerWorktreeSourceSelection | undefined;
+      if (params.worktree) {
+        try {
+          const source = await deps.resolveWorkerWorktreeSource!(pluginWorkingDir, params.worktree.sourceBranch, lead.workingDir);
+          pluginWorktreeSelection = typeof source === 'string'
+            ? { sourceBranch: source, source: params.worktree.sourceBranch ? 'explicit' : 'current' } : source;
+          pluginWorktreeSource = pluginWorktreeSelection.sourceBranch;
+        } catch (error) {
+          return { ok: false, errorCode: 'INVALID_PARAMS', message: error instanceof Error ? error.message : 'Worker worktree target is unavailable' };
+        }
+      }
       return finishWorkerCreation({
         workingDir: pluginWorkingDir,
+        ...(pluginWorktreeSource ? { worktreeSource: pluginWorktreeSource, worktreeSourceSelection: pluginWorktreeSelection } : {}),
         workerAgentDeviceId: null,
         resolved: {
           model: admitted.model,
