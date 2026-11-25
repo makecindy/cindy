@@ -1,3 +1,4 @@
+import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -5,6 +6,7 @@ import { appLabel, platformLabel, relativeTime } from '@/components/settings/dev
 import { Tooltip } from '@/components/ui/tooltip';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
+import { DeviceCardHeading } from '@/features/remote-connection-v2/DeviceCardHeading';
 import { derivePeerNode } from '@/features/remote-connection-v2/topologyModel';
 import {
   formatRtt,
@@ -111,14 +113,14 @@ export function SessionDeviceIndicator({
         <Tooltip.Content
           side="bottom"
           align="start"
-          className="w-64 max-w-[calc(100vw-1rem)] border-[var(--border-default)] bg-[var(--surface)] p-3 text-[var(--text-primary)]"
+          className="w-72 break-normal max-w-[calc(100vw-1rem)] border-[var(--border-default)] bg-[var(--surface)] p-3 text-[var(--text-primary)]"
         >
-          <div className="break-words text-sm font-medium">{name}</div>
-          {hardware && (
-            <div className="mt-0.5 break-words text-12 text-[var(--text-secondary)]">
-              {hardware}
-            </div>
-          )}
+          <DeviceCardHeading
+            name={name}
+            sub={hardware}
+            platform={device?.platform ?? null}
+            isMobile={isMobilePlatform(device?.platform)}
+          />
           {rows.some(([, value]) => value) && (
             <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t border-[var(--border-default)] pt-2 text-12">
               {rows.map(

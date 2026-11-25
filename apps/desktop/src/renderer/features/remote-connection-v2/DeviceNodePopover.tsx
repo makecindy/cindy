@@ -32,7 +32,7 @@ import {
   type RemoteSwitchStep,
   type RemoteSwitchTarget,
 } from './agentNetRemoteSwitch';
-import { PlatformGlyph } from './PlatformGlyph';
+import { DeviceCardHeading } from './DeviceCardHeading';
 import type { TopologyModel, TopologyNode } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
 import {
@@ -129,46 +129,6 @@ function RouteOptionRow({
       >
         {rttText}
       </span>
-    </div>
-  );
-}
-
-function Heading({
-  name,
-  sub,
-  platform,
-  isMobile,
-}: {
-  name: string;
-  sub: string;
-  platform: string | null;
-  isMobile: boolean;
-}) {
-  return (
-    <div className="flex min-w-0 items-start gap-2.5">
-      {/* 与拓扑同一套外形:电脑方块,手机带「灵动岛」的竖条 */}
-      <span className="flex size-8 shrink-0 items-center justify-center" aria-hidden>
-        <span
-          className={cn(
-            'rcv2-tile relative flex items-center justify-center rounded-lg border',
-            isMobile ? 'h-8 w-5' : 'size-8',
-          )}
-          data-form={isMobile ? 'phone' : undefined}
-        >
-          {isMobile ? <span className="rcv2-island" /> : null}
-          <PlatformGlyph platform={platform} isMobile={isMobile} size={isMobile ? 12 : 15} />
-        </span>
-      </span>
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <span className="break-words text-13 font-medium leading-[1.35] text-[var(--text-primary)]" title={name}>
-          {name}
-        </span>
-        {sub ? (
-          <span className="break-words text-12 leading-[1.35] text-[var(--text-secondary)]" title={sub}>
-            {sub}
-          </span>
-        ) : null}
-      </div>
     </div>
   );
 }
@@ -375,7 +335,7 @@ export function DeviceNodePopover({
     node.status !== 'offline' && isCindyApp(node.app) && !node.isMobile && node.remoteControlEnabled && node.controlEnabled && !running;
   return (
     <div className="flex flex-col gap-3">
-      <Heading name={deviceLabel(node, t)} sub={sub} platform={node.platform} isMobile={node.isMobile} />
+      <DeviceCardHeading name={deviceLabel(node, t)} sub={sub} platform={node.platform} isMobile={node.isMobile} />
       <div className="flex flex-col gap-1.5">
         {/* 与拓扑同一套颜色:要处理是红、忙碌是心动橙(卡片在 Popover 里,拿不到拓扑容器上的变量,直接用全局 token) */}
         <Row label={t('settings.remoteControl.v2.popover.status')} value={statusText} valueClassName={statusClass} />
@@ -520,7 +480,7 @@ export function HubNodePopover({
   ].filter(Boolean).join(' · ');
   return (
     <div className="flex flex-col gap-3">
-      <Heading
+      <DeviceCardHeading
         name={model.self?.name || t('settings.devices.thisDevice')}
         sub={platformLabel(model.self?.platform ?? null)}
         platform={model.self?.platform ?? null}
