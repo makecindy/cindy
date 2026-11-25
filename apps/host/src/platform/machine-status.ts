@@ -1,9 +1,24 @@
 import { execFile } from 'node:child_process';
+import os from 'node:os';
 import { promisify } from 'node:util';
+import { buildDeviceInfo } from '../../../desktop/src/main/device-link/deviceInfoCore.js';
 import { readLocalMachineStatusCore } from '../../../desktop/src/main/machines/localStatusCore.js';
 
 const run = promisify(execFile);
 const probe = { timeout: 2_000, maxBuffer: 256 * 1024, env: { LC_ALL: 'C' } };
+
+export async function readHostDeviceInfo() {
+  let version = os.release();
+  if (process.platform === 'darwin') {
+    try {
+      const { stdout } = await run('/usr/bin/sw_vers', ['-productVersion'], probe);
+      version = stdout.trim() || version;
+    } catch {
+      // Use the kernel release if the product version is unavailable.
+    }
+  }
+  return buildDeviceInfo(version);
+}
 
 async function readMacIdleSeconds(): Promise<number | null> {
   const { stdout } = await run('/usr/sbin/ioreg', ['-r', '-l', '-c', 'IOHIDSystem', '-d', '1'], probe);

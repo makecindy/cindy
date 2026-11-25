@@ -655,7 +655,7 @@ test('Host device-link refuses provider-share guests and the platform features i
     disk: { freeBytes: 512, totalBytes: 1024 },
     idleSeconds: 25, onBattery: false, runningTasks: 1,
   };
-  let host, desktop, guest;
+  let host, desktop, guest, hostDeviceInfo;
   t.after(async () => {
     desktop?.stop(); guest?.stop();
     await host?.stop();
@@ -672,6 +672,7 @@ test('Host device-link refuses provider-share guests and the platform features i
     socket.on('message', raw => {
       const frame = JSON.parse(raw.toString());
       if (frame.kind === 'hello') {
+        if (id === 'host') hostDeviceInfo = frame.payload.deviceInfo;
         socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
           serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: `synthetic-${id === 'guest' ? 'other' : 'same'}-user`,
           capabilities: [PROVIDER_SHARE_RELAY_CAPABILITY],
@@ -700,6 +701,9 @@ test('Host device-link refuses provider-share guests and the platform features i
   });
   await host.setEnabled(true);
   await waitFor(() => host.state().status === 'online');
+  // The directory gets hardware and OS labels from hello, before it requests live status.
+  assert.ok(hostDeviceInfo?.osVersion, 'the Host hello must include the OS version');
+  if (os.cpus()[0]?.model.trim()) assert.ok(hostDeviceInfo.cpuLabel, 'the Host hello must include the CPU label');
   const client = id => {
     const value = new DeviceLinkClient({ getWsUrl: () => url, getToken: async () => `synthetic-${id}`,
       getHello: () => ({ deviceName: id, platform: 'darwin', appVersion: 'test', remoteControlEnabled: false }),

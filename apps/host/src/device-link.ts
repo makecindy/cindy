@@ -4,7 +4,7 @@ import { holdError, type ProfileHold } from './agent/profile-hold.js';
 import os from 'node:os';
 import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } from '../../desktop/src/main/plugin-oauth/runtime.js';
 import WebSocket from 'ws';
-import { CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, MACHINE_STATUS_CHANNEL, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload, type MachineStatus } from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, MACHINE_STATUS_CHANNEL, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceInfo, type DeviceLinkClientOptions, type LinkAcceptPayload, type MachineStatus } from '@cindy/device-link';
 import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
 import { rejoinRemovedDevice } from '../../desktop/src/main/device-link/deviceRejoin.js';
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
@@ -56,6 +56,7 @@ import { registerPrecreatedWorktreeDiscardHandler } from '../../desktop/src/main
 import type { IpcHandlerRegistry } from '../../desktop/src/main/maker-ipc/ipcHandlerRegistry.js';
 import type { CreateWorktreeReq } from '../../desktop/src/main/worktree/types.js';
 import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.js';
+import { readHostDeviceInfo } from './platform/machine-status.js';
 
 /**
  * What each port the Host hands the shared inbound dispatch (dispatch.ts InboundDispatchPorts) can do
@@ -688,16 +689,24 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     return checkRemoteWorkingDir(dir);
   });
   const lookup = createDnsFallbackLookup({ log });
+  let deviceInfo: DeviceInfo | undefined;
+  let deviceInfoReady: Promise<void> | undefined;
+  const prepareDeviceInfo = () => deviceInfoReady ??= readHostDeviceInfo().then(
+    info => { deviceInfo = info; },
+    () => undefined, // The directory accepts hello without these optional facts.
+  );
+  const readRelayToken = async (connectionIssue: string | null) => {
+    if (!current() || !deps.canRegister()) return null;
+    if (connectionIssue === 'auth-failed') await deps.refreshToken?.();
+    await prepareDeviceInfo();
+    return current() && deps.canRegister() ? deps.getToken() : null;
+  };
   const relayOptions: DeviceLinkClientOptions = {
     getWsUrl: deps.getWsUrl,
-    getToken: async () => {
-      if (!current() || !deps.canRegister()) return null;
-      if (issue === 'auth-failed') await deps.refreshToken?.();
-      return current() && deps.canRegister() ? deps.getToken() : null;
-    },
+    getToken: () => readRelayToken(issue),
     getHello: () => ({ platform: process.platform, deviceName: process.env.CINDY_HOST_DEVICE_NAME?.trim() || `${os.hostname()} · Cindy Host`,
       appVersion: deps.version, remoteControlEnabled: current() && settings.readDeviceLinkSettings().remoteControlEnabled,
-      busy: pending.size > 0, capabilities: [] }),
+      busy: pending.size > 0, capabilities: [], deviceInfo }),
     transferCodec: desktopTransferCodec,
     peerResetReadRetry: true,
     timing: { pingIntervalMs: 15_000 },
@@ -736,6 +745,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
         await Promise.race([node.prepareTransportStatement(), new Promise<void>((resolve) => {
           setTimeout(resolve, TRANSPORT_STATEMENT_WAIT_MS).unref?.();
         })]);
+        if (current() && deps.canRegister()) await prepareDeviceInfo();
         return node.active() ? (current() && deps.canRegister() ? 'agent-net-local-node' : null) : relayOptions.getToken();
       },
       createWebSocket: async (url, headers) => {
@@ -755,11 +765,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       options: { ...relayOptions, transportCapabilities: () => (node.active() ? ['agent-net-node-v2'] : []),
         transportAttestation: node.transportAttestation, verifyTransportAttestation: node.verifyTransportAttestation,
         // Its own rejection decides its refresh (`issue` is the main connection's, which runs on the node with no token).
-        getToken: async () => {
-          if (!current() || !deps.canRegister()) return null;
-          if (compatibilityIssue === 'auth-failed') await deps.refreshToken?.();
-          return current() && deps.canRegister() ? deps.getToken() : null;
-        } },
+        getToken: () => readRelayToken(compatibilityIssue) },
     });
     compatibility.watch = (cb) => routed.onLegacyConnectionIssue(cb);
     let facade: PeerLinks | null = null;
