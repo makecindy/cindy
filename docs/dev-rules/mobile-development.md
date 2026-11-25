@@ -194,7 +194,7 @@ iOS 18 起同一活动另外声明 `.small` 尺寸，配对的 Apple Watch（wat
 前台摘要带有伙伴身份时（所选任务属于伙伴且等你处理或有新回复，见
 [任务汇总与 ActivityKit Push](protocol-compatibility/task-activity-summary-activitykit-push.md)），收起、最小、展开、
 锁屏与手表视图把角色换成伙伴头像（图片或底色加 emoji／首字，色板与 macOS 实时活动一致），并始终带状态色圆点；
-运行中、缺少伙伴身份或 APNs 更新的内容仍显示 Cindy。
+运行中、缺少伙伴身份或 APNs 更新的内容仍显示 Cindy；系统按锁屏隐私遮盖敏感内容（`redactionReasons` 含 `.privacy`）时同样回退 Cindy，与标题的 `privacySensitive()` 同一边界。
 Android 与没有此模块的旧安装包不调用 ActivityKit。
 
 推送权限与实时活动权限分开：ActivityKit 读取系统 `areActivitiesEnabled`，不读取普通通知
