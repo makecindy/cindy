@@ -37,7 +37,7 @@ export default {
       await page.getByRole('menuitem', { name: await ui.t('bots.voiceMode.realtime.add'), exact: true }).click();
       const model = page.getByRole('checkbox', { name: /qwen-audio-3.0-realtime-plus/ });
       await model.waitFor();
-      assert.equal(await model.getAttribute('aria-checked'), 'false');
+      assert.equal(await model.isChecked(), false);
       await model.click();
       if (ui.case === 'realtime-token-plan') assert.equal(await page.getByRole('checkbox', { name: /qwen-audio-3.1/ }).count(), 0);
       await ui.capture('realtime-models');
