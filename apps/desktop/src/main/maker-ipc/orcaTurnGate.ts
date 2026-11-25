@@ -17,8 +17,18 @@ const log = createLogger('orca-turn-gate');
  */
 const JUDGE_TIMEOUT_MS = 10_000;
 const JUDGE_MAX_TOKENS = 8;
-/** 只判断尾,长回复的结论都在末尾。 */
-const JUDGE_TEXT_CHARS = 2000;
+/**
+ * 判官必须看到**整段**回复：要么全文，要么不判。
+ *
+ * 这里不能取窗口，也不能切块。取末尾 2000 字押「结论在末尾」；取首尾两段押
+ * 「声称在两端」；切块押「切点不落在句子中间」——三种都是赌位置，而声称可以
+ * 出现在任何地方（先跑测试、中途派单、再收尾一大段）。切成两半的「没有派单」
+ * 还可能被读成声称，把真话纠一遍。所以判据只有一条：送全文。
+ *
+ * 超过上限时不抽样、不推断，按不可用放行并在日志里留下长度——让「没读」是
+ * 可见的事实，而不是悄悄变成 quiet。
+ */
+const JUDGE_TEXT_LIMIT = 48_000;
 const MAX_TRACKED_TURNS = 512;
 
 type TurnKey = `${string}:${number}`;
@@ -300,6 +310,16 @@ function judgePrompt(
   ].join('\n');
 }
 
+/** 缓存键：整段文本的指纹。同一回合两次判同一段结论相同，不同文本不能共用。 */
+function fingerprint(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let at = 0; at < text.length; at += 1) {
+    hash ^= text.charCodeAt(at);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${text.length}.${hash.toString(16)}`;
+}
+
 export type DispatchClaimVerdict = 'claim' | 'quiet' | 'unavailable';
 /**
  * 只剩「纯口语声称已派」这一格需要语义判定:凭据(L0)已经由账本比对处理。
@@ -315,26 +335,39 @@ export async function judgeDispatchClaim(params: {
   const text = params.finalText.trim();
   if (!text) return 'quiet';
 
-  const key = `${turnKey(params.leadSessionId, params.turnGeneration)}:${text.length}:${text.slice(-64)}`;
+  const key = `${turnKey(params.leadSessionId, params.turnGeneration)}:${fingerprint(text)}`;
   const cached = judgedByTurn.get(key);
   if (cached) return cached;
 
-  let verdict: DispatchClaimVerdict = 'unavailable';
+  if (text.length > JUDGE_TEXT_LIMIT) {
+    // 宁可放过，不拿半段文本下结论：抽样恰好漏掉声称比不判更坏。
+    log.info('orca turn gate skipped an oversized turn', { chars: text.length });
+    return 'unavailable';
+  }
+
+  const verdict = await judgeOneText({ ...params, text, timeoutMs: JUDGE_TIMEOUT_MS });
+
+  judgedByTurn.set(key, verdict);
+  trimTracked(judgedByTurn, MAX_TRACKED_TURNS);
+  return verdict;
+}
+
+/** 判一次：送整段文本，一次调用出结论。 */
+async function judgeOneText(params: {
+  workerLabels?: string[];
+  priorDispatches?: string[];
+  text: string;
+  timeoutMs: number;
+}): Promise<DispatchClaimVerdict> {
   try {
-    // 整个判定必须在一个截止时间内完成:辅助链有多候选模型,单次请求的超时
-    // 挡不住「第一个耗尽后换下一个」,那样收口会被拖到几十秒。
-    // 动态取 maker:静态 import 会把整棵 maker-host 模块图拉进任何间接引用
-    // 本模块的测试里(它们的 orcaTeamStore mock 不全),collect 阶段就会失败。
+    // 动态取 maker：静态 import 会把整棵 maker-host 模块图拉进任何间接引用
+    // 本模块的测试里（它们的 orcaTeamStore mock 不全），collect 阶段就会失败。
     const { getMaker } = await import('../maker-host/index.js');
     const result = await requestUtilityTextWithinTimeout(
       (signal) =>
         requestUtilityText(
           getMaker(),
-          judgePrompt(
-            params.workerLabels,
-            params.priorDispatches ?? [],
-            text.slice(-JUDGE_TEXT_CHARS),
-          ),
+          judgePrompt(params.workerLabels, params.priorDispatches ?? [], params.text),
           {
             source: 'orca-turn-gate',
             maxTokens: JUDGE_MAX_TOKENS,
@@ -342,25 +375,22 @@ export async function judgeDispatchClaim(params: {
             signal,
           },
         ),
-      JUDGE_TIMEOUT_MS,
+      params.timeoutMs,
       undefined,
       () => ({ ok: false, reason: 'timeout', attempts: [] }),
     );
     // 只接受单值回答：`no claim`、`claim or quiet` 这类都不是结论，按不可用放行。
-    if (result.ok) {
-      const answer = result.text.trim().replace(/^[`'"*]+|[`'"*.]+$/g, '').toLowerCase();
-      if (answer === 'claim') verdict = 'claim';
-      else if (answer === 'quiet') verdict = 'quiet';
-    }
+    if (!result.ok) return 'unavailable';
+    const answer = result.text.trim().replace(/^[`'"*]+|[`'"*.]+$/g, '').toLowerCase();
+    if (answer === 'claim') return 'claim';
+    if (answer === 'quiet') return 'quiet';
+    return 'unavailable';
   } catch (error) {
     log.info('orca turn gate judge unavailable', {
       error: error instanceof Error ? error.message : String(error),
     });
+    return 'unavailable';
   }
-
-  judgedByTurn.set(key, verdict);
-  trimTracked(judgedByTurn, MAX_TRACKED_TURNS);
-  return verdict;
 }
 
 /** 拦下收口时回灌给模型的说明。L0 与 L1 用同一段结构，只有第一句不同。 */

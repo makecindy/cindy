@@ -131,6 +131,41 @@ describe('dispatch claim judge', () => {
     expect(prompt).not.toContain('  (none)');
   });
 
+  it('judges a claim that sits in the middle of a long turn', async () => {
+    // 一轮真实形态：先跑一堆测试、中途派单、再收尾一大段。凭据在中段，任何窗口都会漏。
+    requestUtilityText.mockImplementation((_maker: unknown, prompt: string) =>
+      Promise.resolve({ ok: true, text: prompt.includes('已派给 research 了') ? 'claim' : 'quiet' }),
+    );
+    const filler = '测试输出行\n\n'.repeat(400);
+    const verdict = await judgeDispatchClaim({
+      ...base,
+      finalText: `${filler}已派给 research 了，凭据如下。\n\n${filler}`,
+    });
+    expect(verdict).toBe('claim');
+  });
+
+  it('sends the whole turn to the judge in one call', async () => {
+    const marks = ['MARK-ALPHA', 'MARK-BRAVO', 'MARK-CHARLIE', 'MARK-DELTA', 'MARK-ECHO'];
+    const filler = '无关明细。\n\n'.repeat(200);
+    const text = marks.map((mark) => `${mark}\n\n${filler}`).join('');
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'quiet' });
+    await judgeDispatchClaim({ ...base, finalText: text });
+
+    // 不取窗口、不切块：一次调用就要把全文送进去，位置不参与判定。
+    expect(requestUtilityText.mock.calls).toHaveLength(1);
+    const prompt = String(requestUtilityText.mock.calls[0]?.[1] ?? '');
+    for (const mark of marks) expect(prompt).toContain(mark);
+  });
+
+  it('passes instead of sampling when the turn is too long to read whole', async () => {
+    // 抽样可能恰好漏掉声称，比不判更坏；超过上限就不判，并在日志里留下长度。
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'quiet' });
+    await expect(
+      judgeDispatchClaim({ ...base, finalText: '无关。'.repeat(20_000) }),
+    ).resolves.toBe('unavailable');
+    expect(requestUtilityText).not.toHaveBeenCalled();
+  });
+
   it('treats an ambiguous answer as unavailable instead of guessing', async () => {
     requestUtilityText.mockResolvedValue({ ok: true, text: 'no claim' });
     await expect(judgeDispatchClaim({ ...base, finalText: '修完了。' })).resolves.toBe(
