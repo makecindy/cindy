@@ -608,6 +608,9 @@ importers:
       '@types/sortablejs':
         specifier: ^1.15.8
         version: 1.15.9
+      '@types/ssh2':
+        specifier: ^1.15.0
+        version: 1.15.5
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -653,6 +656,9 @@ importers:
       remark-parse:
         specifier: 11.0.0
         version: 11.0.0
+      ssh2:
+        specifier: ^1.16.0
+        version: 1.17.0
       tailwindcss:
         specifier: ^3.4.17
         version: 3.4.19(tsx@4.23.1)(yaml@2.9.0)

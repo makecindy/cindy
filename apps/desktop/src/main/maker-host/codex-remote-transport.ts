@@ -35,6 +35,8 @@ import path from 'node:path';
 import type { RemoteHost, ExecStreamHandle } from '@cindy/maker-remote-ssh';
 import { REMOTE_INSTALL_ROOT } from '@cindy/maker-remote-ssh';
 
+import { newSshChannelTraceId, withSshChannelTrace } from './sshChannelTrace.js';
+
 // ws lib doesn't export Receiver / Sender from its main entry — they live as
 // internal classes under ws/lib/. The package's `exports` field also
 // blocks subpath require()s ('./lib/receiver' is not whitelisted), so a
@@ -234,6 +236,9 @@ exec "$CODEX" "$@"
   let channel: ExecStreamHandle | null = null;
   let receiver: WsReceiver | null = null;
   let sender: WsSender | null = null;
+  /** 通道级匿名标识(#12571):proxy 通道打开时生成,关闭时随日志清零。 */
+  let proxyTraceId: string | null = null;
+  let proxyOpenedAt = 0;
   /** During handshake we accumulate HTTP response bytes until \r\n\r\n. */
   let handshakeBuf = Buffer.alloc(0);
   let expectedAccept = '';
@@ -253,6 +258,16 @@ exec "$CODEX" "$@"
     channel = null;
     receiver = null;
     sender = null;
+    if (proxyTraceId) {
+      logger.info('ssh channel close', {
+        traceId: proxyTraceId,
+        hostId: opts.remoteHost.id,
+        purpose: 'codex app-server proxy',
+        reason,
+        aliveMs: Date.now() - proxyOpenedAt,
+      });
+      proxyTraceId = null;
+    }
     const info: TransportCloseInfo = { reason };
     for (const cb of closeHandlers) {
       try { cb(info); } catch { /* handler should not throw */ }
@@ -396,9 +411,21 @@ exec "$CODEX" "$@"
 
     // 2) Open the proxy as a long-lived ssh exec channel.
     // Quote socketPath defensively (POSIX) — daemon may put it in a path with spaces.
-    const cmd = codexCmd(['app-server', 'proxy', '--sock', socketPath]);
+    // 通道级匿名标识(#12571):本地开/关日志与远端进程环境变量用同一个 id。
+    const traceId = newSshChannelTraceId();
+    const cmd = withSshChannelTrace(
+      codexCmd(['app-server', 'proxy', '--sock', socketPath]),
+      traceId,
+    );
     const ch = await opts.remoteHost.execStream(cmd);
+    proxyTraceId = traceId;
+    proxyOpenedAt = Date.now();
     channel = ch;
+    logger.info('ssh channel open', {
+      traceId: proxyTraceId,
+      hostId: opts.remoteHost.id,
+      purpose: 'codex app-server proxy',
+    });
 
     ch.onStderr((s) => {
       // Proxy 一般不打 stderr; 真打了多半是错误, 升级成 warn 让 host 看到。

@@ -55,6 +55,7 @@ import type { RemoteHost, ExecStreamHandle } from '@cindy/maker-remote-ssh';
 
 import { createLogger } from '../logger.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
+import { newSshChannelTraceId, withSshChannelTrace } from './sshChannelTrace.js';
 
 const log = createLogger('cc-manager-client');
 
@@ -339,9 +340,33 @@ export async function openCcManagerSession(opts: {
   // 下来的同款), 已经在 REMOTE_XDT_NODE_PATH; cc-mgr.mjs 也已经在 REMOTE_BUNDLE,
   // 两个都不依赖远端系统额外软件。比 `nc -U` 多 1 个 node 启动开销 (~30ms),
   // 换"任意 Linux 镜像都能跑"的稳定性。
+  // 通道级匿名标识(#12571):本地开/关日志与远端进程环境变量用同一个 id,
+  // 现场能把「同一条 SSH 连接下挂着的 bridge 进程」对回客户端的持有者。
+  const traceId = newSshChannelTraceId();
+  const traceOpenedAt = Date.now();
   const handle = await opts.host.execStream(
-    `"${REMOTE_NODE}" "${REMOTE_BUNDLE}" bridge --socket "${REMOTE_SOCK}"`,
+    withSshChannelTrace(
+      `"${REMOTE_NODE}" "${REMOTE_BUNDLE}" bridge --socket "${REMOTE_SOCK}"`,
+      traceId,
+    ),
   );
+  log.info('ssh channel open', {
+    traceId,
+    hostId: opts.host.id,
+    sessionId: opts.sessionId,
+    purpose: 'cc-mgr bridge',
+  });
+  handle.onClose(({ code, signal }) => {
+    log.info('ssh channel close', {
+      traceId,
+      hostId: opts.host.id,
+      sessionId: opts.sessionId,
+      purpose: 'cc-mgr bridge',
+      code,
+      signal,
+      aliveMs: Date.now() - traceOpenedAt,
+    });
+  });
   const duplex = bridgeStreamToDuplex(handle);
   const client = new RpcClient(duplex);
 

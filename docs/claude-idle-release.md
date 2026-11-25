@@ -29,6 +29,10 @@ Orca workers/active leads, bots, unfinished Goals, hidden tasks, non-Desktop
 sources, tasks executed on another computer and SSH runtimes retain their existing
 lifecycle. Mobile/device-link controllers of an
 eligible Desktop task share its normal resume path; no new wire API is introduced.
+For SSH channel diagnostics (pairing local open/close logs with remote bridge
+processes), Claude Code manager bridges and Codex proxies carry an anonymous id
+in the remote process environment (`CINDY_SSH_CHANNEL_ID`, see
+`maker-host/sshChannelTrace.ts`).
 
 Codex and plugin engine (ACP) tasks use the same watcher, scope and gates with a
 fixed 30 minutes and no override; both also wait for `hasLiveBackgroundWork` to

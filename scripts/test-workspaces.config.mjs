@@ -431,6 +431,7 @@ export default {
             'src/main/maker-host/__tests__/codexSmartNamespace.integration.test.ts',
             'src/main/maker-host/__tests__/codexHostedModelRefusal.integration.test.ts',
             'src/main/maker-host/__tests__/hostPiPackagesParity.integration.test.ts',
+            'src/main/maker-host/__tests__/sshChannelLifecycle.integration.test.ts',
             desktopCredentialCompatibilityTest,
           ],
         },

@@ -1728,7 +1728,28 @@ export function getMaker(): Maker {
         const appliedFingerprintToWrite =
           mcpInjectFingerprint ?? (ccMissingDesiredStale ? CC_MCP_DISABLED_FINGERPRINT : undefined);
         if (appliedFingerprintToWrite) {
-          writeCcAppliedFingerprint(sessionId, appliedFingerprintToWrite);
+          try {
+            writeCcAppliedFingerprint(sessionId, appliedFingerprintToWrite);
+          } catch (err) {
+            // 指纹落盘是同步 fs 写,可能抛(磁盘满/权限/rename EBUSY)。此刻桥
+            // 已开好而 factory 要失败 — 不 detach,这条 SSH 通道、RpcClient 与
+            // 远端 bridge 进程就逃逸了(#12571)。detach 保留可能已存在的远端会话。
+            desktopMakerLogger.warn('cc applied fingerprint write failed; detaching opened bridge', {
+              sessionId,
+              message: err instanceof Error ? err.message : String(err),
+            });
+            try {
+              mcpCleanup();
+            } catch {
+              /* cleanup 失败不掩盖原始错误 */
+            }
+            try {
+              await detach();
+            } catch {
+              /* detach 内部已是 best-effort */
+            }
+            throw err;
+          }
         }
 
         // 把 ssh transport disposer 串进 remoteQuery.close — maker-core 不知道

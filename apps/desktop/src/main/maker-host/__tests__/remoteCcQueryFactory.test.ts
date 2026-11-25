@@ -14,7 +14,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  newSshChannelTraceId,
+  sshChannelTraceExport,
+  withSshChannelTrace,
+} from '../sshChannelTrace';
 
 const sourcePath = resolve(__dirname, '..', 'index.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
@@ -53,6 +59,26 @@ describe('remoteCcQueryFactory cleanup wiring', () => {
     const dispose = source.indexOf('await dispose();', disposeFn);
     expect(cleanup).toBeGreaterThan(disposeFn);
     expect(dispose).toBeGreaterThan(cleanup);
+  });
+
+  // #12571 unit: execute the actual factory slice with injected ports. A failed
+  // fingerprint write after open must detach even if MCP cleanup also fails,
+  // and propagate the original error; the old structural tests cannot show this.
+  it('detaches the opened bridge when the applied-fingerprint write throws', async () => {
+    const start = source.indexOf('if (appliedFingerprintToWrite) {');
+    const end = source.indexOf('// 把 ssh transport disposer', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const run = new Function('writeCcAppliedFingerprint', 'sessionId', 'appliedFingerprintToWrite',
+      'mcpCleanup', 'detach', 'desktopMakerLogger',
+      `return (async () => { ${source.slice(start, end)} })();`);
+    const original = new Error('disk full');
+    const write = vi.fn(() => { throw original; });
+    const cleanup = vi.fn(() => { throw new Error('cleanup failed'); });
+    const detach = vi.fn(async () => {});
+    await expect(run(write, 'session', 'fingerprint', cleanup, detach, { warn: vi.fn() })).rejects.toBe(original);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(detach).toHaveBeenCalledOnce();
   });
 
   it('threads session vendorOptions into buildCcRemoteHttpMcpServers (worker bootstrap race)', () => {
@@ -175,6 +201,34 @@ describe('cc-manager-client forced-fresh kill settle (Greptile R22/R23 P1)', () 
     expect(client).not.toContain('still-terminating');
     // 错误信息必须带可操作指引 (重试 / 重启远端 cc-mgr)。
     expect(client).toContain('restart the remote');
+  });
+});
+
+// sshChannelTrace 纯函数(#12571)。生产入口:cc-manager-client 的 bridge
+// execStream 与 codex-remote-transport 的 proxy execStream 都经
+// withSshChannelTrace 给远端命令加通道标识。覆盖缺口:此前没有标识拼接的
+// 约束 — 拼错(把 shell 元字符带进 id)会直接注入远端命令行。最小失败输入:
+// 带空格/引号/分号的 id 必须被拒。tier: standard。
+describe('sshChannelTrace helpers', () => {
+  it('emits a plain POSIX export for a valid trace id', () => {
+    expect(sshChannelTraceExport('a1b2c3d4e5f6')).toBe('export CINDY_SSH_CHANNEL_ID=a1b2c3d4e5f6;');
+  });
+
+  it('prefixes the export onto the channel command so children inherit it', () => {
+    const cmd = withSshChannelTrace(`bash -c 'echo hi' _ proxy`, '0123456789ab');
+    expect(cmd.startsWith('export CINDY_SSH_CHANNEL_ID=0123456789ab; bash -c')).toBe(true);
+  });
+
+  it('rejects ids that could splice shell metacharacters into the remote command', () => {
+    for (const bad of ['', 'abc', `a1b2';rm -rf /;:'`, 'a1b2 c3d4', 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a']) {
+      expect(() => sshChannelTraceExport(bad)).toThrow(/unexpected trace id/);
+    }
+  });
+
+  it('generates 12-hex-char ids that pass the export validator', () => {
+    const id = newSshChannelTraceId();
+    expect(id).toMatch(/^[0-9a-f]{12}$/);
+    expect(() => sshChannelTraceExport(id)).not.toThrow();
   });
 });
 
