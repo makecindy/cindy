@@ -6225,6 +6225,12 @@ function CCAgentSessionContent({
       key={sessionId}
       sessionId={sessionId}
       sessionTitle={session?.title ?? null}
+      toolDiffPreviewScope={
+        sessionId && session && viewVisible && !readOnly
+          && rightSidebarDeviceLinkDeviceId === null && !session.remoteHostId
+          ? JSON.stringify([sessionId, session.permissionMode, session.workingDir, session.extraDirs, session.writableDirs])
+          : undefined
+      }
       // 透传 agentKind 让 UserMessage 能按 capabilities.fork / rewind 决定
       // 消息下方 Fork / Rewind icon 的显示 (Codex rewind=false → 隐藏)。
       agentKind={session?.agentKind}

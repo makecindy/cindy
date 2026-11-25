@@ -389,6 +389,7 @@ import {
 } from './ImageGalleryContext';
 import { replyGalleryImages, type ReplyGalleryOptions, type ReplyImageCache } from './replyGalleryImages';
 import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCard';
+import { ChatToolDiffPreviewProvider } from './ChatToolDiffPreview';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
@@ -460,6 +461,8 @@ import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
+  /** Viewer scope for a diff snapshot opened in the task conversation. */
+  toolDiffPreviewScope?: string;
   pendingMessages?: readonly ChatMessage[];
   renderPendingMessage?: (message: ChatMessage, pluginUi: PluginUiMessageCandidates) => ReactNode;
   /** Content before history, sharing its scrolling and measured content height. */
@@ -3291,6 +3294,7 @@ export function MessageStream({
   isLocalUserSend,
   ownsHardwareScrollActions = true,
   onInlinePlanVisibilityChange,
+  toolDiffPreviewScope,
 }: MessageStreamProps) {
   const { i18n, t } = useTranslation();
   const pluginUi = usePluginUiMessageCandidates(sessionId);
@@ -6868,7 +6872,7 @@ export function MessageStream({
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
-        <>
+        <ChatToolDiffPreviewProvider scope={toolDiffPreviewScope}>
           <div className="relative h-full w-full">
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
@@ -7334,7 +7338,7 @@ export function MessageStream({
                 chipSlot,
               )}
           </div>
-        </>
+        </ChatToolDiffPreviewProvider>
       </GhostFulfillmentContext.Provider>
     </ChatSessionFileProvider>
   );

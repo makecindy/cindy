@@ -46,6 +46,7 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  */
 
 import {
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -108,7 +109,8 @@ import {
 } from './activityRowChrome';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './lazyPreviewLightboxes';
-import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
+import { ToolPayloadLightbox } from './ToolPayloadLightbox';
+import { ChatToolDiffPreviewContext, type ToolDiffPayload } from './ChatToolDiffPreview';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import {
@@ -621,7 +623,7 @@ function buildDiffPayload(
   descriptor: ToolUseDescriptor,
   inp: Record<string, unknown> | null,
   analysis?: ToolDiffDetails | null,
-): ToolPayloadMode | null {
+): ToolDiffPayload | null {
   const detailByKey = new Map(analysis?.segments.map((segment) => [segment.key, segment.details]));
   if (descriptor.kind === 'fileChange') {
     return {
@@ -762,7 +764,7 @@ type LightboxState =
   | { kind: 'none' }
   | { kind: 'file'; path: string; name: string }
   | { kind: 'image'; src: string }
-  | { kind: 'payload'; payload: ToolPayloadMode };
+  | { kind: 'payload'; payload: ToolDiffPayload };
 
 function fileChangeVerbKey(descriptor: FileChangeDescriptor): string {
   if (descriptor.changes.length !== 1) return 'chat.agentActionRow.verb.updated';
@@ -953,6 +955,7 @@ export function AgentActionRow({
   // v10:命令类工具走就地展开；Claude/Codex 文件编辑统一走 diff lightbox。
   const isInlineExpand = !isFilePathTool && !isFileChange;
 
+  const openChatDiff = useContext(ChatToolDiffPreviewContext);
   const [lightbox, setLightbox] = useState<LightboxState>({ kind: 'none' });
   const [expanded, setExpanded] = useState(false);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -971,8 +974,12 @@ export function AgentActionRow({
     }
     const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
     if (diffPayload) {
-      triggerRef.current = anchor;
-      setLightbox({ kind: 'payload', payload: diffPayload });
+      if (openChatDiff) {
+        openChatDiff(diffPayload, anchor);
+      } else {
+        triggerRef.current = anchor;
+        setLightbox({ kind: 'payload', payload: diffPayload });
+      }
       return;
     }
     if (isInlineExpand) {
