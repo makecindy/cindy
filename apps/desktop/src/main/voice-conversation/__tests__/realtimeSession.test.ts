@@ -407,3 +407,34 @@ it('requests one GLM response for speech and an already delivered task result, r
   await vi.waitFor(() => expect(requests()).toHaveLength(2));
   expect(f.handoff).toHaveBeenCalledExactlyOnceWith('current-input', 'follow up');
 });
+
+it.each(['before stop', 'after stop'] as const)(
+  'resumes a pending GLM task result once when muted speech ends (commit %s)', async commitOrder => {
+    const f = await fixture('glm-realtime');
+    const requests = () => f.received.filter(e => e.type === 'response.create');
+    const input = 'muted-input';
+    const commit = () => f.send({ type: 'input_audio_buffer.committed', item_id: input });
+    f.send({ type: 'input_audio_buffer.speech_started', item_id: input });
+    await f.drainEvents();
+
+    f.session.deliverResult('earlier-task', 'Earlier task completed');
+    f.session.setMuted(true);
+    if (commitOrder === 'before stop') commit();
+    await f.drainEvents();
+    expect(requests()).toHaveLength(0);
+
+    f.send({ type: 'input_audio_buffer.speech_stopped', item_id: input });
+    await f.drainEvents();
+    expect(requests()).toHaveLength(1);
+
+    if (commitOrder === 'after stop') commit();
+    f.send({ type: 'conversation.item.input_audio_transcription.completed', item_id: input, transcript: 'muted speech' });
+    f.send({ type: 'response.created', response: { id: 'task-result' } });
+    f.send({ type: 'response.audio.delta', response_id: 'task-result', item_id: 'answer', delta: Buffer.alloc(48).toString('base64') });
+    f.send({ type: 'response.done', response: { id: 'task-result', status: 'completed' } });
+    await f.drainEvents();
+    expect(requests()).toHaveLength(1);
+    expect(f.events).toContainEqual({ type: 'realtime-audio', itemId: 'answer' });
+    expect(f.turns.some(([, role]) => role === 'user')).toBe(false);
+  },
+);

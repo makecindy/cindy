@@ -258,7 +258,9 @@ export class RealtimeVoiceSession {
     } else if (type === 'input_audio_buffer.speech_stopped') {
       if (this.speakingInput === id) {
         this.speakingInput = null;
-        if (this.queuedReply?.inputId === id) this.continueResponse();
+        // A suppressed GLM input will never queue its own reply on commit.
+        const resumeResult = this.adapter.requestsUserResponses && this.pendingContinuation && this.inputs.get(id)?.suppressed;
+        if (this.queuedReply?.inputId === id || resumeResult) this.continueResponse();
       }
     } else if (type === 'input_audio_buffer.committed' && id) {
       if (!this.inputs.has(id)) {
