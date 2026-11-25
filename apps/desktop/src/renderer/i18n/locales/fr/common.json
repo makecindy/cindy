@@ -1607,6 +1607,7 @@
       "kimiMonthCode": "Codage mensuel",
       "session": "{{hours}} heures",
       "week": "Hebdomadaire",
+      "weekShort": "Semaine",
       "scoped": "{{model}} hebdomadaire"
     },
     "headline": {

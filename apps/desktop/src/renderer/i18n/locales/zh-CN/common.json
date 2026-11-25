@@ -1561,6 +1561,7 @@
       "kimiMonthCode": "每月编程配额",
       "session": "{{hours}} 小时",
       "week": "本周",
+      "weekShort": "本周",
       "scoped": "{{model}} 本周"
     },
     "headline": {

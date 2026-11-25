@@ -1561,6 +1561,7 @@
       "kimiMonthCode": "每月程式開發配額",
       "session": "{{hours}} 小時",
       "week": "本週",
+      "weekShort": "本週",
       "scoped": "{{model}} 本週"
     },
     "headline": {

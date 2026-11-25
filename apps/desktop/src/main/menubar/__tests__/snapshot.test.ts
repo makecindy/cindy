@@ -590,6 +590,81 @@ describe('plugin engine menubar and widget projection', () => {
     expect(detail(fast, 'claude')).toMatchObject({ sayPrimary: 'On pace.', saySecondary: expect.stringContaining('Week window refreshes') });
   });
 
+  function viewWithPools(groups: (string | undefined)[], family: MenubarSubscriptionInput['family'] = 'plugin') {
+    const windows: MenubarSubscriptionInput['windows'] = groups.map((group, i) => ({
+      kind: 'custom', label: `Quota · ${i}`, windowMinutes: i % 2 ? 300 : 10_080,
+      usedPercent: i + 1, resetsAtMs: NOW + (i + 1) * HOUR, ...(group ? { group } : {}),
+    }));
+    return buildMenubarView(input([codex('source', 0, { family, windows })]));
+  }
+
+  // #12709: an oversized pool cannot fit in the two-ring detail. Its windows must all
+  // survive on the legacy path, including at the protocol limit of 24.
+  it('retains the complete ungrouped view for incomplete, oversized and unsupported pool layouts', () => {
+    const pairs = (perPool: number) => Array.from({ length: 2 * perPool }, (_, i) => i < perPool ? 'A' : 'B');
+    for (const groups of [
+      [undefined, undefined], ['A', 'A'], ['A', 'B', 'C'], ['A', 'B', undefined],
+      ['A', 'A', 'A', 'B'], ['A', 'B', 'B', 'B'], pairs(5), pairs(12),
+    ]) {
+      const legacy = viewWithPools(groups.map(() => undefined));
+      expect(legacy.details.source).not.toHaveProperty('groups');
+      expect(JSON.stringify(viewWithPools(groups))).toBe(JSON.stringify(legacy));
+    }
+    expect(JSON.stringify(viewWithPools(['A', 'B', 'A', 'B'], 'claude')))
+      .toBe(JSON.stringify(viewWithPools(Array(4).fill(undefined), 'claude')));
+  });
+
+  it.each([
+    { groups: ['A', 'B'], colors: [['poolBlue'], ['poolRed']] },
+    { groups: ['A', 'B', 'B'], colors: [['poolBlue'], ['poolRed', 'poolRed2']] },
+    { groups: ['A', 'B', 'A'], colors: [['poolBlue', 'poolBlue2'], ['poolRed']] },
+  ])('gives each pool one ring per reported window: $groups', ({ groups, colors }) => {
+    const detail = viewWithPools(groups).details.source;
+    expect(detail.groups?.map(group => group.rings.map(ring => ring.color))).toEqual(colors);
+    expect(detail.rings).toHaveLength(groups.length);
+  });
+
+  // #12709: in German the full weekly label would truncate the percentage in the
+  // two-pool legend. The caption, reset tiles and legacy legend still have room.
+  it('uses the German short week label only in the two-pool legend', () => {
+    const detail = (secondPool: string) => {
+      const windows: MenubarSubscriptionInput['windows'] = ['First', secondPool].map(group => ({
+        kind: 'custom', group, label: group + ' · Wöchentlich', windowMinutes: 10_080,
+        usedPercent: 12, resetsAtMs: NOW + DAY,
+      }));
+      return buildMenubarView(input([codex('source', 0, { family: 'plugin', windows })], { locale: 'de' })).details.source;
+    };
+    const grouped = detail('Second');
+    expect(grouped.legend.map(entry => entry.label)).toEqual(['First Woche 88%', 'Second Woche 88%']);
+    for (const group of grouped.groups!) {
+      expect(group.bigCaption).toBe('Wöchentlich übrig');
+      expect(group.facts[0].label).toBe('Wöchentlich wird zurückgesetzt');
+    }
+    const singlePool = detail('First');
+    expect(singlePool.groups).toBeUndefined();
+    expect(singlePool.legend.map(entry => entry.label)).toEqual(['First · Wöchentlich 88%', 'First · Wöchentlich 88%']);
+  });
+
+  // #12709: custom periods have no sortable duration, and balances belong to the account.
+  it('keeps unknown periods last and account facts outside the quota pools', () => {
+    const window = (group: string, label: string, windowMinutes: number) =>
+      ({ group, label, windowMinutes, kind: 'custom' as const, usedPercent: 20, resetsAtMs: NOW + HOUR });
+    const source = codex('source', 0, { family: 'plugin', balances: [{ currency: 'USD', amount: 5 }],
+      windows: [window('First', 'First · monthly', 0), window('Second', 'Custom', 0),
+        window('First', 'Week', 10_080), window('Second', 'Session', 300)] });
+    const detail = buildMenubarView(input([source])).details.source;
+    const [first, second] = detail.groups!;
+    expect(first.legend.map(entry => [entry.label, entry.color])).toEqual([
+      ['First Weekly 80%', 'poolBlue'], ['First monthly 80%', 'poolBlue2'],
+    ]);
+    expect(first.facts.map(fact => fact.label)).toEqual(['Weekly resets', 'monthly resets']);
+    expect(second.legend.map(entry => entry.label)).toEqual(['Second 5-hour 80%', 'Second Custom 80%']);
+    expect(second.facts.map(fact => fact.label)).toEqual(['5-hour resets', 'Custom resets']);
+    const amount = expect.objectContaining({ value: '$5.00' });
+    expect(detail.facts).toContainEqual(amount);
+    expect(first.facts.concat(second.facts)).not.toContainEqual(amount);
+  });
+
   it('renders a balance-only plugin engine as a filled tube and keeps it in widgets and low-quota checks', () => {
     const positive: MenubarSubscriptionInput = {
       kind: 'subscription',

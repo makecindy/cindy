@@ -1561,6 +1561,7 @@
       "kimiMonthCode": "월간 코딩",
       "session": "{{hours}}시간",
       "week": "이번 주",
+      "weekShort": "이번 주",
       "scoped": "{{model}} 이번 주"
     },
     "headline": {

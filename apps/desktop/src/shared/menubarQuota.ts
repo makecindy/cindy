@@ -54,6 +54,10 @@ export type MenubarColor =
   | 'claude'
   | 'claude2'
   | 'claude3'
+  | 'poolBlue'
+  | 'poolBlue2'
+  | 'poolRed'
+  | 'poolRed2'
   | 'codex'
   | 'pi';
 
@@ -111,7 +115,10 @@ export type MenubarDetailAction =
   | { kind: 'open-app' }
   | { kind: 'none' };
 
+export type MenubarRingGroup = Pick<MenubarDetail, 'title' | 'rings' | 'bigValue' | 'bigUnit' | 'bigCaption' | 'legend' | 'facts'>;
+
 export interface MenubarDetail {
+  groups?: MenubarRingGroup[];
   id: string;
   logoSvg: string;
   title: string;

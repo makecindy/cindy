@@ -1561,6 +1561,7 @@
       "kimiMonthCode": "月编程限额",
       "session": "{{hours}} 时",
       "week": "是周",
+      "weekShort": "是周",
       "scoped": "{{model}} 是周"
     },
     "headline": {

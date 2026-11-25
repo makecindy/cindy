@@ -247,7 +247,16 @@ export interface GhostHarnessUsage {
    * window's length, which lets Cindy prefer the account whose quota expires soonest; absent =
    * the window only marks an account as used up.
    */
-  windows?: { label: string; remainingPercent: number; resetsAt?: number; windowMinutes?: number; models?: string[] }[];
+  windows?: {
+    label: string;
+    remainingPercent: number;
+    resetsAt?: number;
+    windowMinutes?: number;
+    models?: string[];
+    /** Display name of the quota pool and its optional legend label. */
+    group?: string;
+    groupShort?: string;
+  }[];
   balances?: { currency: string; amount: string }[];
 }
 
@@ -264,6 +273,8 @@ export function parseGhostHarnessUsage(raw: unknown): GhostHarnessUsage | undefi
     usage.windows = [];
     for (const row of raw.windows) {
       if (!isRecord(row) || !plainText(row.label, 120)
+        || (row.group !== undefined && !plainText(row.group, 60))
+        || (row.groupShort !== undefined && !plainText(row.groupShort, 24))
         || typeof row.remainingPercent !== 'number' || !Number.isFinite(row.remainingPercent)
         || row.remainingPercent < 0 || row.remainingPercent > 100
         || (row.resetsAt !== undefined && !validTimestamp(row.resetsAt))) return undefined;
@@ -273,6 +284,8 @@ export function parseGhostHarnessUsage(raw: unknown): GhostHarnessUsage | undefi
       usage.windows.push({ label: row.label, remainingPercent: row.remainingPercent,
         ...(row.resetsAt !== undefined ? { resetsAt: row.resetsAt as number } : {}),
         ...(row.windowMinutes !== undefined ? { windowMinutes: row.windowMinutes as number } : {}),
+        ...(row.group !== undefined ? { group: row.group as string } : {}),
+        ...(row.groupShort !== undefined ? { groupShort: row.groupShort as string } : {}),
         ...(models ? { models } : {}) });
     }
   }

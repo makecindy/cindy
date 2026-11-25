@@ -26,6 +26,7 @@ import {
   type MenubarGate,
   type MenubarLevel,
   type MenubarManageRow,
+  type MenubarRingGroup,
   type MenubarModelUsage,
   type MenubarSettings,
   type MenubarSourceCell,
@@ -45,6 +46,8 @@ export interface MenubarWindowInput {
   kind: 'session' | 'week' | 'scoped' | 'period' | 'custom';
   /** Model name for scoped windows ("Fable"), or plugin-provided label for custom windows. */
   label?: string | null;
+  group?: string;
+  groupShort?: string;
   /** 0...100 used. */
   usedPercent: number;
   resetsAtMs: number | null;
@@ -969,6 +972,49 @@ class Builder {
     };
   }
 
+  private poolWindowLabel(window: MenubarWindowInput): string {
+    const minutes = window.windowMinutes;
+    if (minutes === 10_080) return this.t('window.week');
+    if (minutes > 0 && minutes % 60 === 0) return this.t('window.session', { hours: minutes / 60 });
+    return this.windowLabel(window).split(' · ').at(-1)!;
+  }
+
+  private poolLegendWindowLabel(window: MenubarWindowInput): string {
+    return window.windowMinutes === 10_080 ? this.t('window.weekShort') : this.poolWindowLabel(window);
+  }
+
+  private poolGroups(windows: WindowState[]): MenubarRingGroup[] | undefined {
+    if (windows.length < 2 || windows.length > 4) return undefined;
+    const pools = new Map<string, WindowState[]>();
+    for (const state of windows) {
+      const title = state.window.group;
+      if (!title) return undefined;
+      const pool = pools.get(title);
+      if (pool) pool.push(state);
+      else pools.set(title, [state]);
+    }
+    if (pools.size !== 2 || [...pools.values()].some(pool => pool.length > 2)) return undefined;
+    return Array.from(pools, ([title, members], poolIndex) => {
+      const colors: [MenubarColor, MenubarColor] = poolIndex === 0 ? ['poolBlue', 'poolBlue2'] : ['poolRed', 'poolRed2'];
+      const short = members[0]!.window.groupShort ?? title;
+      const longestFirst = [...members].sort((a, b) => b.window.windowMinutes - a.window.windowMinutes);
+      const rings = longestFirst.map(({ remaining }, i) => ({ fraction: remaining / 100, color: colors[i === 0 ? 0 : 1] }));
+      const tightest = members.reduce((lowest, state) => state.remaining < lowest.remaining ? state : lowest);
+      const legend = longestFirst.map((state, i) => ({
+        label: `${short} ${this.poolLegendWindowLabel(state.window)} ${Math.round(state.remaining)}%`, color: rings[i]!.color,
+      }));
+      const facts = members.filter(({ window }) => window.resetsAtMs !== null)
+        .sort((a, b) => (a.window.windowMinutes || Infinity) - (b.window.windowMinutes || Infinity))
+        .map(({ window, leftMs }) => ({
+          label: this.t('fact.windowResets', { window: this.poolWindowLabel(window) }),
+          value: this.at(window.resetsAtMs!),
+          sub: this.t('fact.timeLeft', { duration: this.duration(leftMs) }),
+        }));
+      return { title, rings, bigValue: String(Math.round(tightest.remaining)), bigUnit: '%',
+        bigCaption: this.t('detail.windowLeft', { window: this.poolWindowLabel(tightest.window) }), legend, facts };
+    });
+  }
+
   private subscriptionDetail(source: MenubarSubscriptionInput): MenubarDetail {
     const state = this.state(source);
     const ownerName = this.sharedIdentity(source)?.ownerName;
@@ -1036,14 +1082,18 @@ class Builder {
     const level = levelOf(remaining);
     const colors = FAMILY_COLORS[source.family];
     const multi = state.windows.length > 1;
+    const limits = state.windows.filter((window) => window.window.kind !== 'scoped');
+    const groups = source.family === 'plugin' ? this.poolGroups(limits) : undefined;
     const ringColor = levelColor(level) ?? colors[0]!;
-    const rings = multi
+    const rings = groups?.flatMap(group => group.rings) ?? (multi
       ? state.windows.map((window, index) => ({
           fraction: clamp(window.remaining / 100, 0, 1),
           color: colors[index % colors.length]!,
         }))
-      : [{ fraction: clamp(remaining / 100, 0, 1), color: ringColor }];
-    const limits = state.windows.filter((window) => window.window.kind !== 'scoped');
+      : [{ fraction: clamp(remaining / 100, 0, 1), color: ringColor }]);
+    const poolName = groups ? limits.find(({ window }) => window.group === limit.window.group)?.window : undefined;
+    const limitingLabel = poolName
+      ? `${poolName.groupShort ?? poolName.group} ${this.poolWindowLabel(limit.window)}` : this.windowLabel(limit.window);
     const refreshList = source.family === 'plugin' ? '' : limits
       .filter((window) => window.window.resetsAtMs !== null)
       .map((window) => this.t('say.windowRefresh', { window: this.windowLabel(window.window), at: this.at(window.window.resetsAtMs!) }))
@@ -1054,7 +1104,7 @@ class Builder {
     let sayPrimary: string;
     let saySecondary: string | null = null;
     if (remaining <= 0) {
-      sayPrimary = this.t('say.usedUp', { window: this.windowLabel(limit.window) });
+      sayPrimary = this.t('say.usedUp', { window: limitingLabel });
       if (source.creditsUnlimited || credits > 0) {
         saySecondary = resetAt
           ? this.t('say.usedUpWithCredits', { at: resetAt, credits: creditsLabel })
@@ -1074,7 +1124,7 @@ class Builder {
       sayPrimary = this.t('say.full');
       saySecondary = refreshList ? this.t('headline.sentence', { text: refreshList }) : null;
     } else if (source.family === 'plugin') {
-      const window = this.windowLabel(limit.window);
+      const window = limitingLabel;
       if (limit.pace === null) {
         sayPrimary = this.t('say.tightest', { window });
         saySecondary = resetAt ? this.t('say.refillsAt', { at: resetAt }) : null;
@@ -1089,35 +1139,37 @@ class Builder {
       sayPrimary = this.t('say.onPace');
       saySecondary = refreshList ? this.t('headline.sentence', { text: refreshList }) : null;
     }
-    const facts: MenubarFact[] = [];
-    for (const window of limits) {
-      if (window.window.resetsAtMs === null) continue;
-      facts.push({
-        label: window.remaining <= 0 ? this.t('fact.resetsFull') : this.t('fact.windowResets', { window: this.windowLabel(window.window) }),
-        value: this.at(window.window.resetsAtMs),
-        sub: this.t('fact.timeLeft', { duration: this.duration(window.leftMs) }),
-      });
-    }
-    for (const window of state.windows.filter((entry) => entry.window.kind === 'scoped')) {
-      facts.push({
-        label: this.windowLabel(window.window),
-        value: this.t('fact.remainingPercent', { n: Math.round(window.remaining) }),
-        sub: this.t('fact.perModel'),
-      });
-    }
-    if (limit.pace !== null) {
-      facts.push({
-        label: this.t('fact.pace'),
-        value:
-          Math.abs(limit.pace) < 3
-            ? this.t('fact.paceNormal')
-            : limit.pace > 0
-              ? this.t('fact.paceAhead', { n: Math.round(limit.pace) })
-              : this.t('fact.paceReserve', { n: Math.round(-limit.pace) }),
-        sub: this.t('fact.paceSub', { n: Math.round(100 - limit.expected) }),
-      });
-    } else if (remaining <= 0) {
-      facts.push({ label: this.t('fact.pace'), value: this.t('fact.paceUsedUp'), sub: this.t('fact.paceWaiting') });
+    const facts: MenubarFact[] = groups?.flatMap(group => group.facts) ?? [];
+    if (!groups) {
+      for (const window of limits) {
+        if (window.window.resetsAtMs === null) continue;
+        facts.push({
+          label: window.remaining <= 0 ? this.t('fact.resetsFull') : this.t('fact.windowResets', { window: this.windowLabel(window.window) }),
+          value: this.at(window.window.resetsAtMs),
+          sub: this.t('fact.timeLeft', { duration: this.duration(window.leftMs) }),
+        });
+      }
+      for (const window of state.windows.filter((entry) => entry.window.kind === 'scoped')) {
+        facts.push({
+          label: this.windowLabel(window.window),
+          value: this.t('fact.remainingPercent', { n: Math.round(window.remaining) }),
+          sub: this.t('fact.perModel'),
+        });
+      }
+      if (limit.pace !== null) {
+        facts.push({
+          label: this.t('fact.pace'),
+          value:
+            Math.abs(limit.pace) < 3
+              ? this.t('fact.paceNormal')
+              : limit.pace > 0
+                ? this.t('fact.paceAhead', { n: Math.round(limit.pace) })
+                : this.t('fact.paceReserve', { n: Math.round(-limit.pace) }),
+          sub: this.t('fact.paceSub', { n: Math.round(100 - limit.expected) }),
+        });
+      } else if (remaining <= 0) {
+        facts.push({ label: this.t('fact.pace'), value: this.t('fact.paceUsedUp'), sub: this.t('fact.paceWaiting') });
+      }
     }
     if (source.family === 'codex') {
       facts.push({
@@ -1157,13 +1209,14 @@ class Builder {
       bigUnit: '%',
       bigColor: null,
       bigCompact: multi,
-      bigCaption: this.t('detail.windowLeft', { window: this.windowLabel(limit.window) }),
-      legend: multi
+      bigCaption: this.t('detail.windowLeft', { window: limitingLabel }),
+      ...(groups ? { groups } : {}),
+      legend: groups?.flatMap(group => group.legend) ?? (multi
         ? state.windows.map((window, index) => ({
             label: `${this.windowLabel(window.window)} ${Math.round(window.remaining)}%`,
             color: colors[index % colors.length]!,
           }))
-        : [],
+        : []),
       sayPrimary,
       saySecondary: source.shared?.note ?? saySecondary,
       facts,

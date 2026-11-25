@@ -1580,6 +1580,7 @@
       "kimiMonthCode": "Monthly Coding",
       "session": "{{hours}}-hour",
       "week": "Weekly",
+      "weekShort": "Weekly",
       "scoped": "{{model}} weekly"
     },
     "headline": {

@@ -1,3 +1,4 @@
+import { parseGhostHarnessUsage } from '@cindy/plugin-protocol';
 import type { ProviderView } from '@cindy/model-providers';
 import { codexAccountDisplayKey } from '../../maker-host/codex-auth-identity';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -220,6 +221,55 @@ describe('collectMenubarInputs', () => {
     expect(detail.rings.map(ring => ring.fraction)).toEqual(fills.length ? fills : [0]);
     expect(detail.facts.filter(fact => fact.label.includes('resets')).map(fact => fact.label).sort()).toEqual(resets);
     expect(view.sources[0]?.resetsAtMs ?? null).toBe(resets.length ? glmQuota.weekly?.resetsAt : null);
+  });
+
+  // #12709: cross the plugin protocol, collector and panel builder together. Interleaving
+  // two pools and reporting short windows first catches lost fields and both sorting mistakes.
+  it('keeps the rings, legends and reset times of both pools on one plugin subscription', async () => {
+    const engine = {
+      key: 'agy-acp:agy', providerId: 'acp-plugin:agy-acp:agy', ghostId: 'agy-acp', harnessId: 'agy',
+      name: 'Antigravity', reportsUsage: true as const, availability: { state: 'available' as const },
+      models: [], permissionModes: [], defaultPermissionMode: 'ask' as const,
+    };
+    const window = (group: string, groupShort: string, period: string, windowMinutes: number, remainingPercent: number, leftMin: number) =>
+      ({ group, groupShort, label: `${group} · ${period}`, windowMinutes, remainingPercent, resetsAt: NOW + leftMin * 60_000 });
+    const usage = parseGhostHarnessUsage({ updatedAt: NOW, windows: [
+      window('Gemini Models', 'Gemini', '5h', 300, 97, 19),
+      window('Claude and GPT models', 'Claude/GPT', '5h', 300, 71, 297),
+      window('Gemini Models', 'Gemini', 'weekly', 10_080, 99, 9_799),
+      window('Claude and GPT models', 'Claude/GPT', 'weekly', 10_080, 88, 10_077),
+    ] });
+    const view = await panel(deps({
+      listProviders: async () => [],
+      listPluginEngines: () => [engine],
+      readPluginEngineUsage: async () => usage ?? null,
+      readCachedPluginEngineDefaultPlan: () => 'Ultra',
+    }));
+    expect(Object.keys(view.details)).toEqual([engine.providerId]);
+    const detail = view.details[engine.providerId]!;
+    const facts = (short: string, week: string) => [
+      { label: '5-hour resets', value: expect.any(String), sub: short },
+      { label: 'Weekly resets', value: expect.any(String), sub: week },
+    ];
+    expect(detail.groups).toEqual([
+      {
+        title: 'Gemini Models', bigValue: '97', bigUnit: '%', bigCaption: '5-hour left',
+        rings: [{ fraction: 0.99, color: 'poolBlue' }, { fraction: 0.97, color: 'poolBlue2' }],
+        legend: [{ label: 'Gemini Weekly 99%', color: 'poolBlue' }, { label: 'Gemini 5-hour 97%', color: 'poolBlue2' }],
+        facts: facts('19 minutes left', '6d 19h left'),
+      },
+      {
+        title: 'Claude and GPT models', bigValue: '71', bigUnit: '%', bigCaption: '5-hour left',
+        rings: [{ fraction: 0.88, color: 'poolRed' }, { fraction: 0.71, color: 'poolRed2' }],
+        legend: [{ label: 'Claude/GPT Weekly 88%', color: 'poolRed' }, { label: 'Claude/GPT 5-hour 71%', color: 'poolRed2' }],
+        facts: facts('4h 57m left', '6d 23h left'),
+      },
+    ]);
+    expect(detail).toMatchObject({ plan: 'Ultra', bigValue: '71', bigUnit: '%', bigCompact: true,
+      sayPrimary: 'Claude/GPT 5-hour is lowest; ', saySecondary: `refills ${detail.groups![1]!.facts[0]!.value}.` });
+    for (const key of ['rings', 'legend', 'facts'] as const) {
+      expect(detail[key]).toEqual([...detail.groups![0]![key], ...detail.groups![1]![key]]);
+    }
   });
 
   it('falls back to the 5-hour GLM quota if weekly resets during collection', async () => {

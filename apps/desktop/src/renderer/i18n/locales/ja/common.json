@@ -1561,6 +1561,7 @@
       "kimiMonthCode": "月間コーディング",
       "session": "{{hours}} 時間",
       "week": "今週",
+      "weekShort": "今週",
       "scoped": "{{model}} 今週"
     },
     "headline": {

@@ -84,7 +84,24 @@ struct MBDetail: Decodable, Equatable {
   let facts: [MBFact]
   let actionLabel: String
   let action: MBAction
+  /// A subscription with separate quota pools (Antigravity: Gemini models, and Claude and GPT
+  /// models) sends one group per pool. With two groups the page draws the first pool's rings
+  /// large and the second's small, and lists the facts per pool under its title.
+  let groups: [MBRingGroup]?
 }
+
+struct MBRingGroup: Decodable, Equatable, Hashable {
+  let title: String
+  /// Outermost first, like `MBDetail.rings`.
+  let rings: [MBRing]
+  let bigValue: String
+  let bigUnit: String?
+  let bigCaption: String
+  let legend: [MBLegend]
+  let facts: [MBFact]
+}
+
+extension MBRing: Hashable {}
 
 struct MBTask: Decodable, Identifiable, Equatable {
   var id: String { sessionId }
@@ -306,6 +323,14 @@ enum Palette {
   static var claude3: Color { shared("claude3", Color(nsColor: hex(0xF2C9B6))) }
   static var codex: Color { shared("codex", Color(nsColor: hex(0x7A9DFF))) }
   static var pi: Color { shared("pi", dynamic(hex(0x14B8A6), hex(0x2DD4BF))) }
+  /// The two quota pools of one subscription, toned to the Claude card's own steps (OKLab):
+  /// the weekly ring takes `claude`'s lightness and chroma (L 0.672, C 0.131), the 5-hour ring
+  /// the midpoint of `claude2` and `claude3` (L 0.819, C 0.074). The blue leans azure to stay
+  /// clear of `codex`; the red keeps Cindy red's hue with a little more chroma so it reads as red.
+  static var poolBlue: Color { shared("poolBlue", Color(nsColor: hex(0x479CE1))) }
+  static var poolBlue2: Color { shared("poolBlue2", Color(nsColor: hex(0x9DC9F1))) }
+  static var poolRed: Color { shared("poolRed", Color(nsColor: hex(0xE36C66))) }
+  static var poolRed2: Color { shared("poolRed2", Color(nsColor: hex(0xF9ADA6))) }
 
   static func named(_ name: String?) -> Color {
     switch name {
@@ -319,6 +344,10 @@ enum Palette {
     case "claude3": return claude3
     case "codex": return codex
     case "pi": return pi
+    case "poolBlue": return poolBlue
+    case "poolBlue2": return poolBlue2
+    case "poolRed": return poolRed
+    case "poolRed2": return poolRed2
     default: return ink
     }
   }
@@ -3132,6 +3161,9 @@ struct DetailPage: View {
         VStack(alignment: .leading, spacing: 0) {
 
         let ring: CGFloat = store.short ? PanelDesign.metric("ringShort", 160) : PanelDesign.metric("ringTall", 188)
+        if let groups = detail.groups, groups.count == 2 && groups.allSatisfy({ (1...2).contains($0.rings.count) }) {
+          PoolRings(store: store, large: groups[0], small: groups[1], ring: ring)
+        } else {
         ZStack {
           RingsView(rings: detail.rings, fillToken: store.fillToken, size: ring)
           VStack(spacing: 3) {
@@ -3168,6 +3200,7 @@ struct DetailPage: View {
           .padding(.horizontal, 16)
           .padding(.top, 10)
         }
+        }
 
         sayText
           .font(.system(size: 15.5, weight: .semibold))
@@ -3176,12 +3209,34 @@ struct DetailPage: View {
           .fixedSize(horizontal: false, vertical: true)
           .padding(EdgeInsets(top: 14, leading: 20, bottom: 0, trailing: 20))
 
+        if let groups = detail.groups, groups.count == 2 && groups.allSatisfy({ (1...2).contains($0.rings.count) }) {
+          // One titled pair of tiles per pool; the title names the pool, so the tiles only
+          // name the window.
+          VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
+              Text(group.title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .tracking(-0.1)
+                .lineLimit(1)
+                .padding(EdgeInsets(top: index == 0 ? PoolRings.groupTitleTop - PoolRings.sayDescent : PoolRings.groupTitleTop,
+                                    leading: 20, bottom: PoolRings.groupTitleBottom, trailing: 20))
+              LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(group.facts, id: \.self) { fact in
+                  FactCard(fact: fact)
+                }
+              }
+              .padding(.horizontal, 14)
+            }
+          }
+          .padding(.bottom, 14)
+        } else {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
           ForEach(detail.facts, id: \.self) { fact in
             FactCard(fact: fact)
           }
         }
         .padding(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14))
+        }
 
         }
         .frame(width: store.narrowWidth, alignment: .leading)
@@ -3241,6 +3296,113 @@ struct FactCard: View {
     .padding(EdgeInsets(top: 9, leading: 11, bottom: 9, trailing: 11))
     .background(RoundedRectangle(cornerRadius: 12, style: .circular).fill(Palette.tile))
     .overlay(RoundedRectangle(cornerRadius: 12, style: .circular).strokeBorder(Palette.line, lineWidth: 0.5))
+  }
+}
+
+/// Two quota pools side by side: the first pool's rings large on the left, all legends at the
+/// top right and the second pool's rings small below them, at the bottom right. Both use the
+/// detail page's own `RingsView`, so stroke width, round caps, gaps and the fill animation
+/// follow the single-ring page.
+struct PoolRings: View {
+  @ObservedObject var store: MenubarStore
+  let large: MBRingGroup
+  let small: MBRingGroup
+  let ring: CGFloat
+  /// Measured height of the legend block; the small rings take what is left of the column.
+  @State private var legendHeight: CGFloat = 57
+
+  /// `RingsView` draws its outer ring 3pt inside its frame.
+  private static let ringInset: CGFloat = 3
+  private static let largeShare: CGFloat = 0.86
+  private static let smallShare: CGFloat = 0.47
+  private static let minGap: CGFloat = 8
+  /// Space above and below each pool title in the facts list.
+  static let groupTitleTop: CGFloat = 10
+  static let groupTitleBottom: CGFloat = 6
+  /// The sentence above the first title ends its line box about 2pt below its glyphs; the
+  /// first title gives that back so both titles sit the same visible distance below what is above.
+  static let sayDescent: CGFloat = 2
+
+  var body: some View {
+    let big = (ring * PoolRings.largeShare).rounded()
+    // The right column spans exactly the large rings' height: the legend starts level with
+    // the large rings' top edge and the small rings end on their bottom edge.
+    let room = big - PoolRings.ringInset - legendHeight - PoolRings.minGap
+    let little = min((ring * PoolRings.smallShare).rounded(), room.rounded(.down))
+    HStack(alignment: .top, spacing: 8) {
+      pool(large, size: big)
+      VStack(alignment: .leading, spacing: 0) {
+        legend
+          .background(GeometryReader { g in
+            Color.clear
+              .onAppear { legendHeight = g.size.height }
+              .onChange(of: g.size.height) { _, h in legendHeight = h }
+          })
+          .padding(.top, PoolRings.ringInset)
+        Spacer(minLength: PoolRings.minGap)
+        pool(small, size: little)
+          .frame(maxWidth: .infinity, alignment: .center)
+      }
+      .frame(maxWidth: .infinity, maxHeight: big, alignment: .leading)
+      .frame(height: big)
+    }
+    .padding(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 12))
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  /// The single-ring page's legend style one step smaller (10pt, 6pt dots), one entry per line.
+  private var legend: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      ForEach(large.legend + small.legend, id: \.self) { item in
+        HStack(spacing: 4) {
+          Circle().fill(Palette.named(item.color)).frame(width: 6, height: 6)
+          Text(item.label).lineLimit(1).minimumScaleFactor(0.8)
+        }
+      }
+    }
+    .font(.system(size: 10))
+    .foregroundStyle(Palette.ink2)
+    .monospacedDigit()
+  }
+
+  /// The single-ring page's center, scaled with the ring. Text widths come from the innermost
+  /// ring's inner edge (same geometry as `RingsView`), so the caption shrinks instead of
+  /// running into the ring on small sizes.
+  private func pool(_ group: MBRingGroup, size: CGFloat) -> some View {
+    let compact = size < 120
+    let line = (size * (group.rings.count > 1 ? 0.06 : 0.068)).rounded()
+    let inner = size / 2 - 3 - CGFloat(max(0, group.rings.count - 1)) * (line + 3) - line
+    // The caption's lower corners sit about 16pt below the center at these sizes; keep them
+    // inside the inner ring with a few points to spare.
+    let captionWidth = max(0, 2 * (max(0, inner * inner - 256)).squareRoot() - 6)
+    return ZStack {
+      RingsView(rings: group.rings, fillToken: store.fillToken, size: size)
+      VStack(spacing: compact ? 1 : 3) {
+        HStack(alignment: .firstTextBaseline, spacing: 2) {
+          CountUpText(text: group.bigValue, font: NumFont.font(48 * size / 188, .medium), replayToken: store.fillToken)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+          if let unit = group.bigUnit {
+            Text(unit).font(NumFont.font(24 * size / 188, .medium)).foregroundStyle(Palette.ink3)
+          }
+        }
+        .monospacedDigit()
+        .foregroundStyle(Palette.ink)
+        // Below about 34pt the caption would need a size under 7pt; the legend names the
+        // window, so the number stands alone.
+        if captionWidth >= 34 {
+          Text(group.bigCaption)
+            .font(.system(size: compact ? 9.5 : 11))
+            .foregroundStyle(Palette.ink3)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(maxWidth: captionWidth)
+        }
+      }
+      .frame(maxWidth: 2 * inner - 8)
+    }
+    .frame(width: size, height: size)
+    .accessibilityElement(children: .combine)
   }
 }
 

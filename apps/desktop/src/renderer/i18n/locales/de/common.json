@@ -1580,6 +1580,7 @@
       "kimiMonthCode": "Programmierung pro Monat",
       "session": "{{hours}} Stunden",
       "week": "Wöchentlich",
+      "weekShort": "Woche",
       "scoped": "{{model}} wöchentlich"
     },
     "headline": {

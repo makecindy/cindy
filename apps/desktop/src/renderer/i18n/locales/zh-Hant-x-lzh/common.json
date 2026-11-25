@@ -1561,6 +1561,7 @@
       "kimiMonthCode": "月編程限額",
       "session": "{{hours}} 時",
       "week": "是週",
+      "weekShort": "是週",
       "scoped": "{{model}} 是週"
     },
     "headline": {
