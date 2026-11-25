@@ -58,6 +58,15 @@ const NORMAL_COOLDOWN_MS = 30_000;
 const FAILURE_BACKOFF_BASE_MS = 60_000;
 const FAILURE_BACKOFF_MAX_MS = 15 * 60_000;
 
+/** Routine subscription pool `usage`/`load` events must not clear failure backoff for another failing provider. */
+export function shouldResetCodexAutoUseBackoffForAccountChange(
+  provider: string,
+  resetAccountId?: string,
+  change?: 'usage' | 'load',
+): boolean {
+  return provider === 'openai' && (Boolean(resetAccountId) || change === undefined);
+}
+
 /** One in-flight check per owner/account. Consumption itself shares the manual reset service's lock and key. */
 export class CodexResetAutoUse {
   private readonly pending = new Map<string, Promise<void>>();

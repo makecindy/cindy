@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
-import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE, type CodexResetAutoUseDeps } from '../codexResetAutoUse';
+import {
+  CodexResetAutoUse,
+  DEFAULT_CODEX_RESET_AUTO_USE,
+  shouldResetCodexAutoUseBackoffForAccountChange,
+  type CodexResetAutoUseDeps,
+} from '../codexResetAutoUse';
 
 // Tier unit: observable redemption/resume boundaries. Fake time and RPC, never real credits.
 const NOW = 1_800_000_000_000;
@@ -164,5 +169,14 @@ describe('automatic Codex reset', () => {
     await h.engine.check('openai');
     expect(h.deps.read).toHaveBeenCalledTimes(3); // failed read + recovery read + post-reset refresh
     expect(h.deps.consume).toHaveBeenCalledOnce();
+  });
+  it.each([
+    ['openai account mutation', 'openai', undefined, undefined, true],
+    ['openai reset completion', 'openai', 'acct-1', undefined, true],
+    ['openai routine usage update', 'openai', undefined, 'usage' as const, false],
+    ['openai task load update', 'openai', undefined, 'load' as const, false],
+    ['non-openai account mutation', 'anthropic', undefined, undefined, false],
+  ])('decides whether subscription change clears failure backoff: %s', (_label, provider, resetId, change, expected) => {
+    expect(shouldResetCodexAutoUseBackoffForAccountChange(provider, resetId, change)).toBe(expected);
   });
 });
