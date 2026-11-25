@@ -1238,6 +1238,7 @@ import {
 } from './orcaManualInterrupt.js';
 import { tryInjectProjectContext } from './projectContextInject.js';
 import { registerMakerSessionCreateHandler } from './sessionCreateHandler.js';
+import { createSessionStartTimer, logSessionStartTiming, type SessionStartOutcome } from './sessionStartTiming.js';
 import {
   createOrcaRemoteWorkerHost,
   createOrcaRemoteWorkerSessionOpener,
@@ -9264,6 +9265,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
     };
     creationSignal?.addEventListener('abort', closeCancelled, { once: true });
+    const startTimer = createSessionStartTimer({
+      agentKind: o.agentKind,
+      start: reconnect ? 'reconnect' : o.resumeSessionId || nativeHistoryResume ? 'resume' : 'new',
+    });
+    let startOutcome: SessionStartOutcome = 'failed';
     try {
     // 入口按模式选好来源后随建任务参数交来的凭据：这个任务第一轮派发时结算(model-groups/sessionStart.ts)。
     const modelGroupStart = o.modelGroupStart;
@@ -9283,7 +9289,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (agentDeviceId) o.agentDeviceId = agentDeviceId;
     }
     assertAccess?.();
+    startTimer.lap('prepare');
     let providerGroupStart = await applyProviderGroupAssignment(o);
+    startTimer.lap('providerGroup');
     assertAccess?.();
     // 模型与供应商来自那台电脑(由那台按它自己的目录校验)，本机目录里没有它们。
     const agentOnOtherDevice = Boolean(o.agentDeviceId) && !o.remoteHostId;
@@ -9303,10 +9311,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
     // 托管云实例用实例自己保存的个性化正文，不用控制端传来的副本。
     if (getInstanceConfig()) await captureHostPersonalization(o);
+    startTimer.lap('workdir');
     assertAccess?.();
     // Plugin engines bring their own models and sign-in: never wait on (or fail with) the Cindy
     // account's provider catalog, same as the maker-host lifecycle hook.
     if (o.agentKind !== 'acp') await options.waitForAccountProviderModelsReady();
+    startTimer.lap('accountModels');
     assertAccess?.();
     // 供应商组分配到另一台电脑(或经另一台电脑的组改到这里)时，来源由那次分配决定：选中的那台上这个
     // 供应商的 id 可能与原来不同，不让临时调整盖掉。留在本机的照旧按临时调整。
@@ -9329,6 +9339,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     const didInjectProjectContext =
       o.reviewMode === true ? false : await applyProjectContextInjection(o);
+    startTimer.lap('instructions');
 
     const usingFallback = !!o.id && !!o.workingDir && !o.remoteHostId &&
       workingDirectoryRecovery.isFallback(o.id, o.workingDir);
@@ -9348,6 +9359,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (existing) await persistSessionFields(sessionId, patch);
       },
     });
+    startTimer.lap('directoryGrants');
 
     assertAccess?.();
     await hydrateProviderIdBeforeSessionStart(o);
@@ -9363,13 +9375,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       assertAccess?.();
       if (provider) o.providerId = provider;
     }
+    startTimer.lap('providerSource');
     /** 本机运行时的启动准入(Agent 在另一台电脑运行时由那台按它自己的目录裁决)。 */
     const admitLocalRoute = (): Promise<void> => admitLocalSessionRoute(o);
     if (!agentOnOtherDevice) await admitLocalRoute();
+    startTimer.lap('admit');
     assertAccess?.();
     let nativeRelocation: Awaited<ReturnType<typeof relocateForFreshStart>> | undefined;
     while (!session) {
       assertAccess?.();
+      startTimer.attempt();
       try {
         if (reconnect) {
           // The failed reconnect already tried native resume. Submit that
@@ -9534,6 +9549,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertAccess?.();
       }
     }
+    startTimer.lap('agentStart');
     await markProjectContextIfNeeded(session.id, didInjectProjectContext);
     assertAccess?.();
     // New tasks persist providerId in the same INSERT as their model. Existing
@@ -9660,6 +9676,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
 
     assertAccess?.();
+    startTimer.lap('finalize');
+    startOutcome = 'started';
     return { session, didInjectOrcaInstructions, didInjectProjectContext };
     } catch (error) {
       if (reconnectHandoff?.to !== undefined && reconnectId) {
@@ -9680,6 +9698,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       throw error;
     } finally {
+      logSessionStartTiming(startTimer.finish(startOutcome));
       creationSignal?.removeEventListener('abort', closeCancelled);
       // A stopped or superseded handoff must not arm a later send.
       if (o.id && claimedReconnectToken && getProviderGroupGuestSwitch().takeForOpen(o.id) === claimedReconnectToken) {

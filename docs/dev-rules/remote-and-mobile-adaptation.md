@@ -223,6 +223,20 @@ RPC 准入不计模型任务席位。调度中保留完整 peer 身份，取消�
 截短的请求 id 与设备引用，不含参数或结果内容；③ 慢阈值沿用既有 `slow execution`，不新增高频
 日志。自建中转只转发原消息，不需升级。验证入口：Device Link `invokePolicy.test.ts`。
 
+### 手机新建任务首条消息的分段计时（2026-11-26）
+
+用户反馈手机新任务点发送后二三十秒才发出去，现有日志只有 `maker:create-session` 的总时长，
+分不清卡在建链、查模型、电脑建会话还是交出首条消息。两端各补一条分段计时，只记录、不改行为：
+
+- 手机：`new-session` 的 `creation timing`（`session/newSessionCreationTiming.ts`），
+  每次管线收口写一条，含点发送到管线开始的 `prepareMs`、各阶段 `stagesMs`、失败那一步的
+  `restMs` 与首条消息 clientId 末 8 位。发件箱路径交出后，送达电脑的耗时看同一 clientId 的
+  `send accepted`。只进用户开启的本机诊断录制。
+- 电脑：`session-start-timing` 的 `session start timing`（`maker-ipc/sessionStartTiming.ts`），
+  `bootstrapSession` 每次结束写一条，分供应商组选电脑、等账号模型目录、目录授权、Agent 启动等
+  阶段。该 scope 已精确加入上传白名单，只有固定阶段名、Agent 种类枚举与毫秒数。Codex 内部
+  app-server 启动与 `thread/start` 的拆分仍看本机任务日志的 `startSession` 与 `thread/start ok`。
+
 ## 弱网下的备用截图与视频恢复（2026-11-15）
 
 备用截图仍走原有远程桌面请求，发送端将 JPEG 压到 64 KiB 以内；base64 与回复包装
