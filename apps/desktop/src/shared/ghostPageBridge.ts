@@ -112,7 +112,8 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     async (req: Record<string, unknown> = {}): Promise<unknown> => {
       const result = await ports.send({ ...req, type: 'targets-request', kind });
       if (result?.ok === true) return result.data;
-      throw Object.assign(new Error(result?.error?.message ?? 'Target request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY' });
+      // Electron's contextBridge drops custom properties on Error instances.
+      throw { code: result?.error?.code ?? 'HOST_NOT_READY', message: result?.error?.message ?? 'Target request failed' };
     },
   ])),
   observe: Object.fromEntries([['projectTasks', 'project-tasks'], ['openTask', 'open-task']].map(([name, kind]) => [name,
