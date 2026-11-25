@@ -37,7 +37,7 @@ import { resolveExecutorShell } from '../executor/shell';
 import { describePermissionAction } from '@cindy/maker-shared';
 import { isProviderShareCredentialSessionApproval } from '../../../shared/providerShareCredentialConsent';
 import { encodeSendOptions, encodeUserMessage } from '../wire';
-import { RemoteAgentRemoteError, type RemoteAgentRunClient } from './runClient';
+import { isRetryableLinkError, RemoteAgentRemoteError, type RemoteAgentRunClient } from './runClient';
 import { localPlanReview, RemoteEventProjection } from './eventProjection';
 import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
 
@@ -249,7 +249,7 @@ export function fixedRemoteAgentLink(client: RemoteAgentRunClient): RemoteAgentL
 
 export interface SharedReconnectSendEvidence {
   handedToTransport: boolean;
-  failure?: { kind: 'rejected' | 'not-written' | 'unconfirmed'; error: unknown };
+  failure?: { kind: 'preparation' | 'rejected' | 'not-written' | 'unconfirmed'; error: unknown };
 }
 
 export interface RemoteHandleDeps {
@@ -447,7 +447,26 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         return block;
       });
     };
-    const client = await link.ensure();
+    const evidence = method === 'send' ? deps.sharedReconnectSendEvidence?.() : undefined;
+    let client: RemoteAgentRunClient;
+    try {
+      client = await link.ensure();
+    } catch (error) {
+      // A caps/open/restore RPC can be in flight without this input ever reaching
+      // callWithId below. Do not let Session fence/close this handle as though
+      // the send had an ambiguous tail. Only reclassify link failures: quota,
+      // auth and compatibility errors must reach their existing owners intact.
+      // Main's stopped-open offer is keyed by the exact startup error object.
+      // Goal already blocks preparation errors; its provider-rejection result
+      // instead schedules a continuation and would repeat the full handshake.
+      if (method !== 'send' || opts?.origin?.kind === 'goal' || !isRetryableLinkError(error)
+        || (error instanceof RemoteAgentRemoteError && error.phase === 'start')) throw error;
+      // Session converts this exception to a generic non-dispatch result. Keep
+      // the link error for the captured input's existing failure settlement.
+      if (evidence) evidence.failure = { kind: 'preparation', error };
+      deps.log?.warn('remote agent: connection preparation failed before turn dispatch', { error: String(error) });
+      throw new TurnDispatchRejectedError(error instanceof Error ? error.message : String(error), { cause: error });
+    }
     // Check the actual executor after reconnect, before either send or steer.
     // Older hosts silently drop this origin and would execute without its policy.
     const origins = [opts?.turnPermissionPolicy?.origin, opts?.[MAIN_OWNED_SEND_CONTEXT]?.origin];
@@ -482,7 +501,6 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       terminalEventDelivered = false;
       activeTurn = true;
     }
-    const evidence = method === 'send' ? deps.sharedReconnectSendEvidence?.() : undefined;
     try {
       // Keep Session cancellation and delivery evidence local.
       await client.callWithId(callId, method, [wireMessage, encoded.wire], opts?.signal,
