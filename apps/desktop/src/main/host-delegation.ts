@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { IpcMainInvokeEvent } from 'electron';
+import { PROJECT_SETTINGS_SET_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
 import { HOST_CONTRACT_CHANNELS, type HostChannelDef } from '@cindy/maker-shared/host-channel-contract';
 import { createIpcError } from '../shared/ipc-errors.js';
 import { guardIpcRegistration, type IpcChannelUsage } from './ipcChannelUsage';
@@ -26,8 +27,9 @@ export interface HostDelegationConfig {
   readonly instanceId?: string;
 }
 
-/** Env var that enables client mode; the value is the loopback base URL. */
-export const HOST_DELEGATION_ENV = 'CINDY_HOST_API';
+import { HOST_DELEGATION_ENV } from './hostDelegationEnv.js';
+
+export { HOST_DELEGATION_ENV };
 
 /**
  * Resolve the delegation target. Returns null when disabled, and throws when
@@ -176,6 +178,7 @@ export function claimProxiedChannels(
 }
 
 export interface HostDelegatedIpcDeps {
+  readonly forwardProjectWrite?: (client: HostClient, event: IpcMainInvokeEvent, input: unknown) => Promise<unknown>;
   readonly assertTrusted?: (event: IpcMainInvokeEvent) => void;
   readonly client: HostClient;
   /** Newly delegated approval paths require the real registered top-level window. */
@@ -216,6 +219,10 @@ export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
       if (entry.trustedRenderer) {
         if (!deps.assertTrusted) throw new Error('Trusted renderer admission is required');
         deps.assertTrusted(event);
+      }
+      if (entry.channel === PROJECT_SETTINGS_SET_CHANNEL) {
+        if (!deps.forwardProjectWrite) throw createIpcError('PERMISSION_DENIED', 'Project window unavailable');
+        return deps.forwardProjectWrite(deps.client, event, args[0]);
       }
       if (['ghosts:request-task-approval', 'ghosts:confirm:resolve', 'ghosts:install-consent:resolve'].includes(entry.channel)
         && deps.authorizePluginApproval?.(event, entry.channel, args) !== true)
@@ -342,7 +349,7 @@ export interface HostEventBridgeInput {
   readonly onErrorPersisted?: (event: unknown) => void;
   readonly onRightSidebarTabsChanged?: (event: unknown) => void;
   readonly onSubagentRunsChanged?: (event: unknown) => void;
-  readonly onProjectAliasesChanged?: () => void;
+  readonly onProjectAliasesChanged?: (event: { catalogChanged?: boolean }) => void;
   readonly onInputProjection?: (projection: unknown) => void;
   readonly onInteractionRequest?: (payload: unknown) => void;
   readonly onInteractionDismissed?: (payload: unknown) => void;
@@ -395,7 +402,7 @@ export function startHostEventBridge(input: HostEventBridgeInput): (() => void) 
       } else if (payload?.type === 'subagent_runs_changed') {
         input.onSubagentRunsChanged?.(payload);
       } else if (payload?.type === 'project_aliases_changed') {
-        input.onProjectAliasesChanged?.();
+        input.onProjectAliasesChanged?.(payload);
       } else {
         input.broadcast(payload);
       }

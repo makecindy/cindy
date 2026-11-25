@@ -6,6 +6,7 @@ import { type MainOwnedSendContext } from '@cindy/maker-core';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { noteInteractionRouteSteer } from './interactionRouter.js';
 import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
+import { prependPrivateChatContext } from './privateChatContext.js';
 import { prependNoteToWireUserMessage, type HandoffWireMessage } from './agentHandoff.js';
 import { REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
 import { isMobileControllerInvoke } from '../device-link/invoke-context.js';
@@ -15,6 +16,7 @@ import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
 import { buildUiLanguageErrorNote, turnClassicalStyleFromSendOpts, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
 
 import type { Session } from '@cindy/maker-core';
+import type { AgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 import type { MakerSendTransactionDeps } from './makerSendTransaction.js';
 import type { createWireNoteMemory } from './wireNoteMemory.js';
 
@@ -168,10 +170,13 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
           autoReviewUserText: so[FORWARDED_REQUEST_RECEIPT],
           sourcePlugin: so.sourcePlugin,
           sharedTaskAuthor: so.sharedTaskAuthor,
+        }, {
+          sendToSession: (sess as Session & { sendToSessionHint?: AgentSendToSessionHint }).sendToSessionHint,
         })
       : null;
     const withSteerReplyQuoteNote = steerReplyQuoteNote
-      ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerReplyQuoteNote)
+      ? await prependPrivateChatContext(normalized as HandoffWireMessage, steerReplyQuoteNote, sessionId,
+        (id, input) => prepareUserMessageForAgent(id, input, 'steer'))
       : normalized;
     const withSteerSourceNote = steerSourceNote
       ? prependNoteToWireUserMessage(withSteerReplyQuoteNote as HandoffWireMessage, steerSourceNote)

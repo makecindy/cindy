@@ -12,6 +12,7 @@ import { readTurnUsageResetAt } from '../../goal-host/usageLimit';
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue';
 import type { ProviderView } from '@cindy/model-providers';
 import { resolveSessionUsageReset, type SessionUsageRoute, type SessionUsageResetDeps } from '../sessionUsageReset';
+import { createAutomaticContinueEligibility } from '../automaticContinueEligibility';
 
 const NOW = 1_000_000;
 const RESET_AT = NOW + 60 * 60 * 1000;
@@ -33,6 +34,35 @@ function remoteResetHarness() {
   } satisfies SessionUsageResetDeps;
   return { provider, route, deps, changeOwner: () => { owner = 'new-owner'; } };
 }
+
+// Unit regression: real eligibility + quota timer. Existing tests stubbed eligibility,
+// missing a remote companion's real Schedule run. Ordinary wakes have no quota owner.
+describe('remote companion scheduled quota wait', () => {
+  it.each(['resume', 'pause', 'takeover', 'shared', 'owner', 'local', 'no-run'] as const)('%s', async action => {
+    let paused = false; let owns = action !== 'no-run'; let shared = false; let owner = 'a';
+    const eligibility = createAutomaticContinueEligibility({
+      ownerEpoch: () => owner, isPaused: () => paused,
+      readSession: async () => ({ source: 'bot', status: 'active', agentDeviceId: action === 'local' ? null : 'remote' }),
+      isShared: () => shared, goalOwnsRecovery: async () => false,
+      readCompanion: async () => ({ role: 'canonical', profileStatus: 'active', hiddenAt: null, shadowed: false }),
+      ownsCompanionInput: () => false, ownsScheduledQuotaInput: () => owns,
+    });
+    const h = harness({ isEligible: eligibility.usageLimit });
+    expect(await h.guard.onTurnError('s', LIMIT)).toBe(action !== 'local' && action !== 'no-run');
+    if (action === 'local' || action === 'no-run') { expect(h.timers).toHaveLength(0); return; }
+    if (action === 'pause') paused = true;
+    if (action === 'takeover') owns = false;
+    if (action === 'shared') shared = true;
+    if (action === 'owner') { owner = 'b'; owns = false; }
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(action === 'resume' ? 1 : 0);
+    expect(await eligibility.providerGroup('s', { kind: 'before-send', clientId: 'retry', scheduled: true }))
+      .toBe(action === 'resume');
+    // A live, owned schedule checks its selected group before delayed waiting.
+    expect(await eligibility.providerGroup('s', { kind: 'failure', token: 1 }))
+      .toBe(action === 'resume');
+  });
+});
 
 function harness(overrides: Partial<UsageLimitAutoResumeDeps> = {}) {
   const timers: Array<{ fn: () => void; delayMs: number; cleared: boolean }> = [];
@@ -454,5 +484,46 @@ describe('UsageLimitAutoResume', () => {
       await h.flush();
       expect(h.deps.arm).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('Gemini paid input tokens per minute (#11719)', () => {
+  const metric = 'generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count';
+  const error = { code: 429, status: 'RESOURCE_EXHAUSTED',
+    message: `Quota exceeded for metric: ${metric}, limit: 2000000. Generate content input tokens per minute limit exceeded on Tier 1. Please retry in 56.598211013s.`,
+    details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '56s' }] };
+  const message = JSON.stringify({ error: { message: JSON.stringify({ error }) } });
+
+  // Unit: tasks sharing Google's retry boundary must not all spend their only retry together.
+  it('staggers minute-limit waits and preserves future deadlines across restart', async () => {
+    const random = vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(0.5).mockReturnValue(0.25);
+    const h = harness({ random });
+    await Promise.all(['first', 'second'].map(id => h.guard.onTurnError(id, { message })));
+    expect(h.timers.map(timer => timer.delayMs)).toEqual([56_599, 71_599]);
+    expect(h.deps.arm).toHaveBeenCalledWith('second', 2, NOW + 71_599);
+    h.guard.suspend();
+    expect(h.guard.restore('second', 3, NOW + 71_599, 0, false, true)).toBe(true);
+    expect(h.guard.restore('first', 4, NOW - 1, 0, false, true)).toBe(true);
+    expect(h.timers.slice(-2).map(timer => timer.delayMs)).toEqual([71_599, 7_500]);
+  });
+
+  it('uses the later Google hint, bypasses subscription checks and retries once', async () => {
+    const h = harness();
+    expect(await h.guard.onTurnError('api', { message })).toBe(true);
+    expect(h.deps.resolveResetAt).not.toHaveBeenCalled();
+    expect(h.timers[0]?.delayMs).toBe(56_599);
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledWith('api', 1, expect.objectContaining({ attempt: 1, maxAttempts: 1 }));
+    expect(await h.guard.onTurnError('api', { message })).toBe(false);
+    expect(h.timers).toHaveLength(1);
+  });
+
+  it('invalidates a due callback when the user takes over', async () => {
+    const h = harness();
+    await h.guard.onTurnError('api', { message });
+    h.guard.noteUserAction('api');
+    h.timers[0]!.fn();
+    await h.flush();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
   });
 });

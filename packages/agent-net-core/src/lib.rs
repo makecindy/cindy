@@ -31,4 +31,4 @@ pub use crypto::{Crypto, HASH_LEN, PUBLIC_KEY_LEN, TAG_LEN};
 pub use endpoint::{Endpoint, EndpointStats, PathAddress};
 pub use noise::HandshakeError;
 pub use secure::{Incoming, SecureConnection, SecurityStats, destination_id, is_cookie_reply, is_initiation, max_handshake_payload};
-pub use stream::{DEFAULT_STREAM, Priority, StreamEvent};
+pub use stream::{DEFAULT_STREAM, PRIORITY_LEVELS, Priority, SendProgress, StreamEvent, StreamProgress};

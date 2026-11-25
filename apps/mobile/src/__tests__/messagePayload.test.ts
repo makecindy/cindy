@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import {
   buildAttachmentPayload,
+  buildFilePayload,
   resolveAttachmentPreviewSource,
   buildDiffPayload,
   buildMediaPayload,
@@ -17,6 +18,13 @@ import {
   summarizeMessagePayloadBody,
   summarizeMessagePayloadPreview,
 } from '@/session/messagePayload';
+import { ComposerAttachmentPreview } from '@/session/ComposerAttachmentPreview';
+import { resolveMobileRemoteMedia, type ResolveRemoteMediaFn } from '@/session/remoteMedia';
+
+// Keep the real composer callback; native viewer leaves are outside this unit tier.
+vi.mock('@/session/ImageLightbox', () => ({ ImageLightbox: () => null }));
+vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
@@ -276,5 +284,59 @@ describe('attachment preview source', () => {
     const payload = buildMediaPayload({ kind: 'audio', url: 'xdt-file://open?path=%2Fclip.mp3', previewable: false }, 'clip.mp3');
     await expect(resolveAttachmentPreviewSource(payload, resolve, signal)).resolves.toBe(resolved);
     expect(resolve).toHaveBeenCalledExactlyOnceWith({ kind: 'file', url: payload.media.url, previewable: false }, { front: true, signal });
+  });
+});
+
+// #8804/#8607 unit regression: existing tests fake the preview resolver and miss
+// the real remote-media whitelist. Assert fetch protocol/result at both entry points;
+// network and native preview/share are outside this in-memory fixture.
+describe('Windows attachment fetching', () => {
+  it('fetches message and draft documents through the host-file protocol', async () => {
+    const fetchRemoteMedia = vi.fn(async () => ({ ossKey: 'fixture/document', mimeType: 'text/plain', size: 20 }));
+    const presignGet = vi.fn(async () => ({ getUrl: 'https://fixture.invalid/document', expiresAt: '2099-01-01T00:00:00Z' }));
+    const resolve: ResolveRemoteMediaFn = (media, opts) => resolveMobileRemoteMedia(media, { fetchRemoteMedia, presignGet }, opts);
+    const signal = new AbortController().signal;
+    // Remote host paths are protocol inputs, independent of the test runner OS.
+    for (const extension of ['pdf', 'md', 'txt', 'html', 'json', 'csv']) {
+      for (const source of [`D:\\Cindy 附件\\sample.${extension}`, `d:/Cindy 附件/sample.${extension}`]) {
+        const message = () => resolveAttachmentPreviewSource(buildFilePayload(`sample.${extension}`, source), resolve, signal);
+        const draft = ComposerAttachmentPreview({
+          attachments: [{ id: 'doc', name: `sample.${extension}`, path: source, ext: extension, size: 20, category: 'text', mimeType: 'text/plain' }],
+          images: [], selectedId: 'doc', annotation: { submitLabel: 'Save', onSubmit() {} }, resolveRemoteMedia: resolve, onClose() {},
+        })!;
+        for (const fetch of [message, () => draft.props.children.props.resolve(signal)]) {
+          fetchRemoteMedia.mockClear();
+          await expect(fetch()).resolves.toMatchObject({ url: 'https://fixture.invalid/document' });
+          expect(fetchRemoteMedia).toHaveBeenCalledExactlyOnceWith(
+            `xdt-file://open?path=${encodeURIComponent(source)}`, { signal },
+          );
+        }
+      }
+    }
+  });
+
+  it('preserves existing URI sources and POSIX paths, and allows a failed fetch to retry', async () => {
+    const signal = new AbortController().signal;
+    const fetchRemoteMedia = vi.fn(async () => ({ ossKey: 'fixture/document', mimeType: 'text/plain', size: 20 }));
+    const presignGet = vi.fn(async () => ({ getUrl: 'https://fixture.invalid/document', expiresAt: '2099-01-01T00:00:00Z' }));
+    const resolve: ResolveRemoteMediaFn = (media, opts) => resolveMobileRemoteMedia(media, { fetchRemoteMedia, presignGet }, opts);
+    for (const source of ['/home/cindy/report.txt', 'xdt-file://open?path=D%3A%2Freport.txt', 'cindy-media://blobs/aa11bb22.txt']) {
+      fetchRemoteMedia.mockClear();
+      await expect(resolveAttachmentPreviewSource(buildFilePayload('report.txt', source), resolve, signal))
+        .resolves.toMatchObject({ url: 'https://fixture.invalid/document' });
+      expect(fetchRemoteMedia).toHaveBeenCalledExactlyOnceWith(
+        source.startsWith('/') ? 'xdt-file://open?path=%2Fhome%2Fcindy%2Freport.txt' : source, { signal },
+      );
+    }
+    const failure = new Error('host offline');
+    fetchRemoteMedia.mockRejectedValueOnce(failure);
+    const payload = buildFilePayload('report.txt', 'C:/report.txt');
+    await expect(resolveAttachmentPreviewSource(payload, resolve, signal)).rejects.toBe(failure);
+    await expect(resolveAttachmentPreviewSource(payload, resolve, signal)).resolves.toMatchObject({ url: 'https://fixture.invalid/document' });
+    const passthrough = vi.fn();
+    for (const source of ['https://fixture.invalid/a.txt', 'data:text/plain;base64,YQ==', 'custom:opaque']) {
+      await resolveAttachmentPreviewSource(buildFilePayload('report.txt', source), passthrough, signal);
+      expect(passthrough).toHaveBeenLastCalledWith({ kind: 'file', url: source, previewable: false }, { front: true, signal });
+    }
   });
 });

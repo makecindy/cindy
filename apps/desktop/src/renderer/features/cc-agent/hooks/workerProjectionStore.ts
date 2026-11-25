@@ -16,7 +16,9 @@ export interface WorkerInfo {
   workerId: string;
   sessionId: string;
   role: string;
-  agent: 'claude-code' | 'codex' | 'pi';
+  /** 'acp' = 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)；providerId 指出是哪一个引擎。 */
+  agent: 'claude-code' | 'codex' | 'pi' | 'acp';
+  providerId?: string;
   model: string;
   effort: string | null;
   label: string | null;
@@ -188,7 +190,12 @@ function mapWorkerRecord(raw: Record<string, unknown>): WorkerInfo {
     sessionId: raw.sessionId as string,
     role: (raw.role as string) ?? 'developer',
     agent:
-      session?.agentKind === 'codex' ? 'codex' : session?.agentKind === 'pi' ? 'pi' : 'claude-code',
+      session?.agentKind === 'codex' ? 'codex'
+        : session?.agentKind === 'pi' ? 'pi'
+          : session?.agentKind === 'acp' ? 'acp' : 'claude-code',
+    ...(session?.agentKind === 'acp' && typeof session.providerId === 'string'
+      ? { providerId: session.providerId }
+      : {}),
     model: (session?.model as string) ?? 'claude-sonnet-4-6',
     effort: (session?.effort as string | null) ?? null,
     label: (raw.label as string | null) ?? null,

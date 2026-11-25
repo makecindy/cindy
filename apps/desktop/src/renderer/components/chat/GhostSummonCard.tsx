@@ -373,7 +373,7 @@ export function GhostSummonCard({
             (在 overflow-hidden 里随高度动画),挂载/卸载瞬间零跳变。 */}
         <Collapse open={expanded} className="-mt-1.5" innerClassName="pt-1.5">
           <div
-            className="max-w-full rounded-[12px] border px-3 py-2"
+            className="max-w-full rounded-xl border px-3 py-2"
             style={{ borderColor: 'var(--border-default)' }}
           >
             <div className="mb-1.5 text-xs leading-[1.5]" style={{ color: 'var(--text-tertiary)' }}>
@@ -506,14 +506,14 @@ export function GhostSummonCard({
       </button>
       <Collapse open={expanded}>
         <div
-          className="mt-2 rounded-[12px] border px-3 py-2.5"
+          className="mt-2 rounded-xl border px-3 py-2.5"
           style={{ borderColor: 'var(--border-default)' }}
         >
           {(badgeCommand || versionLabel) && (
             <div className="mb-2 flex items-center gap-2">
               {badgeCommand && (
                 <span
-                  className="shrink-0 rounded-full px-2 py-[2px] font-mono text-11 leading-none"
+                  className="shrink-0 rounded-full px-2 py-0.5 font-mono text-11 leading-none"
                   style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
                 >
                   ${badgeCommand}

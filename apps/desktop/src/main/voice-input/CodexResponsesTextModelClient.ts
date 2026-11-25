@@ -1,3 +1,5 @@
+import { createAuxiliaryUsageRecorder } from '../usage/auxiliaryUsage.js';
+import { parseAuxiliaryTokens, type AuxiliaryTokens } from '../../shared/auxiliaryUsage.js';
 import { createHash } from 'node:crypto';
 
 import { fetch as undiciFetch, type Agent } from 'undici';
@@ -221,6 +223,8 @@ export class CodexResponsesTextModelClient implements TextModelClient {
     const sendStart = performance.now();
     let firstByteAt: number | null = null;
     let lastTextSnapshot = '';
+    const record = createAuxiliaryUsageRecorder({ source: 'voice-refinement', model: input.model,
+      providerId: 'openai', transport: 'responses' });
     try {
       const response = await undiciFetch(this.baseUrl, {
         method: 'POST',
@@ -234,6 +238,8 @@ export class CodexResponsesTextModelClient implements TextModelClient {
       if (!response.ok) {
         const raw = await response.text().catch(() => '');
         const parsed = tryParseJsonObject(raw);
+        const tokens = parseAuxiliaryTokens(parsed, 'responses');
+        if (tokens) await record(tokens);
         const message = textModelErrorMessage(parsed, raw, response.status);
         const authInvalidationReason = this.notifyAuthInvalidatedFromError(message, response.status, parsed);
         throw new Error(authInvalidationReason ? `${authInvalidationReason}: ${message}` : message);
@@ -250,6 +256,14 @@ export class CodexResponsesTextModelClient implements TextModelClient {
       let usageKeys: string[] | undefined;
       let streamErr: string | null = null;
       let streamErrData: unknown = null;
+      let observed: AuxiliaryTokens | null = null;
+      let servedModel: string | undefined;
+      const observe = (body: unknown) => {
+        const tokens = parseAuxiliaryTokens(body, 'responses');
+        if (tokens) observed = { ...observed, ...Object.fromEntries(Object.entries(tokens).filter(([, value]) => value !== undefined)) };
+        const response = isRecord(body) && isRecord(body.response) ? body.response : body;
+        if (isRecord(response) && typeof response.model === 'string') servedModel = response.model;
+      };
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -263,6 +277,7 @@ export class CodexResponsesTextModelClient implements TextModelClient {
             buf = buf.slice(idx + 2);
             const event = parseSseBlock(block);
             if (event) {
+              observe(event.data);
               if (event.type === 'response.output_text.delta') {
                 const delta = isRecord(event.data) && typeof event.data.delta === 'string'
                   ? event.data.delta
@@ -306,7 +321,10 @@ export class CodexResponsesTextModelClient implements TextModelClient {
       } finally {
         // Always release the reader so the underlying connection can be
         // returned to the keepalive pool, even on parse errors below.
-        reader.releaseLock();
+        const tail = parseSseBlock(buf);
+        if (tail) observe(tail.data);
+        try { if (observed) await record(observed, servedModel ? { model: servedModel } : {}); }
+        finally { reader.releaseLock(); }
       }
       const bodyAt = performance.now();
 
@@ -361,6 +379,7 @@ export class CodexResponsesTextModelClient implements TextModelClient {
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
+      record.close();
     }
   }
 

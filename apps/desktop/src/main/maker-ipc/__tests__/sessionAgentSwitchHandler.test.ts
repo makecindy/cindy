@@ -12,15 +12,21 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
   type PendingAgentSwitchIntent,
 } from '../sessionAgentSwitchHandler';
-import { createAgentHandoffPendingRegistry } from '../agentHandoff';
+import { createAgentHandoffPendingRegistry, prependHandoffToUserMessage } from '../agentHandoff';
 import { MAKER_INVOKE } from '../channels';
 import { remoteAgentLinkError } from '../../remote-agent/controller/runClient';
 import { IpcHarness } from './helpers/ipcHarness';
 import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
-import { applyScheduledModelSelection, type ScheduledModelSelection } from '../scheduledModelSelection';
+import {
+  applyScheduledModelSelection,
+  reconcileScheduledModelRouteBeforeBaseline,
+  type ScheduledModelSelection,
+} from '../scheduledModelSelection';
 import { authorizeSharedTaskOperation } from '@cindy/device-link';
 import type { SharedTaskPeerCapture } from '../../device-link/sharedTaskDispatch';
 import { createSharedTaskSettingGuard } from '../sharedTaskSetting';
+import { isTrustedAppRendererEventForLocation } from '../../security/trustedAppRenderer';
+import { throwIpcError } from '../../utils/ipcValidate';
 
 function makeRow(overrides: Partial<AgentSwitchSessionRow> = {}): AgentSwitchSessionRow {
   return {
@@ -42,7 +48,6 @@ function makeDeps(overrides: Partial<MakerSessionAgentSwitchHandlerDeps> = {}): 
 } {
   const calls: string[] = [];
   const deps: MakerSessionAgentSwitchHandlerDeps = {
-    confirmNativeHistoryFallback: vi.fn(async () => true),
     getSessionRow: vi.fn(async () => makeRow()),
     getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
     closeSession: vi.fn(async () => {
@@ -84,6 +89,54 @@ const validParams = {
   model: 'gpt-5.5',
   providerId: null,
 };
+
+describe('manual SWITCH_SESSION_AGENT takeover', () => {
+  // Unit, PR #12422: the registered IPC handler must retire a reconnect before
+  // it can run while the picker waits on the send lock. Existing validation
+  // tests never admitted a request. Either valid selection alone is enough.
+  it.each([
+    { selection: 'engine-only', options: undefined },
+    { selection: 'computer', options: { agentDeviceId: 'another-computer' } },
+  ])('notifies recovery before waiting for the send lock for a manual $selection selection', async ({ options }) => {
+    const order: string[] = [];
+    const afterLock = new Error('locked route application');
+    const withSessionLock = vi.fn(async () => { order.push('lock'); throw afterLock; });
+    const { deps } = makeDeps({ withSessionLock });
+    const notify = vi.fn(() => { order.push('takeover'); });
+    const ipc = new IpcHarness();
+    registerMakerSessionAgentSwitchHandler(ipc, deps, notify);
+
+    await expect(ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', 'gpt-5.5', null,
+      undefined, undefined, options)).rejects.toBe(afterLock);
+
+    expect(notify).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 's1');
+    expect(withSessionLock).toHaveBeenCalledExactlyOnceWith('s1', expect.any(Function));
+    expect(order).toEqual(['takeover', 'lock']);
+  });
+
+  // Unit, PR #12422: an otherwise valid local invoke without a trusted frame
+  // must fail at the Desktop sender gate, before cancelling recovery or locking.
+  it('rejects a frame-less local caller before it can supersede recovery', async () => {
+    const withSessionLock = vi.fn(async () => { throw new Error('unexpected lock'); });
+    const cancelStart = vi.fn();
+    const { deps } = makeDeps({ withSessionLock, cancelPendingRemoteStart: cancelStart });
+    const noteUserAction = vi.fn();
+    const ipc = new IpcHarness();
+    registerMakerSessionAgentSwitchHandler(ipc, deps, (event, sessionId) => {
+      if (!isTrustedAppRendererEventForLocation(event as Parameters<typeof isTrustedAppRendererEventForLocation>[0],
+        { devServerUrl: null, packagedRendererFile: '/app/index.html' })) {
+        throwIpcError('PERMISSION_DENIED', 'untrusted sender');
+      }
+      noteUserAction(sessionId);
+    });
+
+    await expect(ipc.invokeFrom(42, MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', 'gpt-5.5', null))
+      .rejects.toThrow('PERMISSION_DENIED');
+    expect(noteUserAction).not.toHaveBeenCalled();
+    expect(cancelStart).not.toHaveBeenCalled();
+    expect(withSessionLock).not.toHaveBeenCalled();
+  });
+});
 
 // #10893, unit: same-device group members are distinct provider connections.
 // The old same-engine no-op retained the old provider/native session. Exercise
@@ -139,47 +192,46 @@ it('rejects an unavailable same-device connection before closing or changing the
   expect(deps.bootstrapSwitchedSession).not.toHaveBeenCalled();
 });
 
-it('keeps the source connection when same-device quota balancing summary is declined', async () => {
+it('automatically replays history when same-device quota balancing changes connections', async () => {
   const row = makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId: 'mini', providerId: 'openai-sub-aaaaaaaa' });
-  const { deps } = makeDeps({
-    getSessionRow: vi.fn(async () => row),
-    confirmNativeHistoryFallback: vi.fn(async () => false),
-  });
-  await expect(performSessionAgentSwitch(deps, {
+  const { deps } = makeDeps({ getSessionRow: vi.fn(async () => row) });
+  await performSessionAgentSwitch(deps, {
     ...validParams, agentDeviceId: 'mini', providerId: 'openai-sub-bbbbbbbb', applyNow: true,
     providerGroupRelocation: true, providerGroupSwitchReason: 'quota-rebalance',
-  })).rejects.toThrow('NATIVE_HISTORY_FALLBACK_DECLINED');
-  expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledWith('s1', 'mini');
-  expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
-  expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
-  expect(deps.setSessionProvider).not.toHaveBeenCalled();
-  expect(deps.bootstrapSwitchedSession).not.toHaveBeenCalled();
+  });
+  expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
+    handoffCoverage: 'complete',
+    toProviderId: 'openai-sub-bbbbbbbb',
+  }));
 });
 
+
 describe('same-harness native relocation', () => {
-  // Quota balancing is now automatic only while native context survives. Exercise the
-  // real switch entry: refusal after a failed resume must restore the original route.
-  it.each(['missing', 'rejected', 'silent'] as const)('asks before summary fallback after %s native history and preserves the source on refusal', async failure => {
+  // Unit: native failure must restore the source before committing a fresh
+  // target and publish the same replay to DB and the next send.
+  it.each(['missing', 'rejected', 'silent'] as const)('automatically replays after %s native history', async failure => {
     let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native', agentDeviceId: null });
     const original = { ...row };
     const { deps } = makeDeps({
       getSessionRow: vi.fn(async () => ({ ...row })),
       relocateNativeHistory: vi.fn(async () => failure === 'missing' ? null : 'transferred'),
       closeSession: vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error('DEVICE_LINK_NOT_CONNECTED')),
-      applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => {
+        if (patch.agentDeviceId === 'mini' && patch.sdkSessionId === null) {
+          expect(row).toMatchObject({ sdkSessionId: original.sdkSessionId, agentDeviceId: original.agentDeviceId });
+        }
+        row = { ...row, ...patch, providerId: patch.providerId ?? null };
+      }),
       getLiveSession: () => ({ isTurnRunning: () => false, sdkSessionId: failure === 'silent' ? 'fresh' : row.sdkSessionId ?? undefined }),
       bootstrapSwitchedSession: vi.fn(async () => { if (failure === 'rejected') throw new Error('cannot resume'); }),
-      confirmNativeHistoryFallback: vi.fn(async () => {
-        expect(row).toMatchObject({ sdkSessionId: original.sdkSessionId, agentDeviceId: original.agentDeviceId, providerId: original.providerId });
-        return false;
-      }),
     });
-    await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
-      applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' })).rejects.toThrow('NATIVE_HISTORY_FALLBACK_DECLINED');
-    expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledOnce();
-    expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
-    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
-    expect(row.sdkSessionId).toBe('source-native');
+    await performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
+      applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' });
+    expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
+      nativeHistory: 'fallback', handoffCoverage: 'complete', handoff: expect.stringContaining('你好'),
+    }));
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
+    expect(row).toMatchObject({ sdkSessionId: null, agentDeviceId: 'mini' });
   });
 
   // A target that cannot take the task (full, unreachable, model not offered) is not a
@@ -206,13 +258,12 @@ describe('same-harness native relocation', () => {
     await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
       applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' })).rejects.toThrow(message);
     expect(deps.bootstrapSwitchedSession).toHaveBeenCalledOnce();
-    expect(deps.confirmNativeHistoryFallback).not.toHaveBeenCalled();
     expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
     expect(deps.setPendingHandoff).not.toHaveBeenCalled();
     expect(row).toEqual(original);
   });
 
-  it.each([false, true])('publishes an automatic native switch without asking, or a confirmed summary (%s)', async resumeFails => {
+  it.each([false, true])('publishes an automatic native switch or replay fallback (%s)', async resumeFails => {
     let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native' });
     const { deps } = makeDeps({
       getSessionRow: vi.fn(async () => ({ ...row })),
@@ -223,7 +274,6 @@ describe('same-harness native relocation', () => {
     });
     await performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
       applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' });
-    expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledTimes(resumeFails ? 1 : 0);
     expect(deps.bootstrapSwitchedSession).toHaveBeenCalledOnce();
     expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ nativeHistory: resumeFails ? 'fallback' : 'restored' }));
     expect(row.agentDeviceId).toBe('mini');
@@ -243,7 +293,6 @@ describe('same-harness native relocation', () => {
       applyNow: true, providerGroupSwitchReason: 'quota-rebalance', signal: controller.signal })).rejects.toThrow();
     expect(row.sdkSessionId).toBe('source-native');
     expect(row.agentDeviceId).toBeNull();
-    expect(deps.confirmNativeHistoryFallback).not.toHaveBeenCalled();
   });
 
   it.each(['closed', 'close-rejected', 'account-changed', 'history-cleared'] as const)('rolls back a successful quota probe when the final route write fails (%s)', async state => {
@@ -277,7 +326,6 @@ describe('same-harness native relocation', () => {
     expect(live).toBe(false);
     expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
     expect(deps.setPendingHandoff).not.toHaveBeenCalled();
-    expect(deps.confirmNativeHistoryFallback).not.toHaveBeenCalled();
     if (state === 'account-changed' || state === 'history-cleared') {
       expect(deps.applyAgentSwitchToDb).toHaveBeenCalledTimes(2);
       expect(deps.setSessionProvider).toHaveBeenCalledTimes(1);
@@ -405,6 +453,87 @@ describe('same-harness native relocation', () => {
       resumed: false, nativeHistory: 'fallback', handoff: expect.stringContaining('你好'),
     }));
     expect(deps.setPendingHandoff).toHaveBeenLastCalledWith('s1', expect.stringContaining('你好'), undefined);
+  });
+
+  // 价值门槛：这条用例走真实的会话切换事务，而不是直接调用交接构造器，
+  // 锁住用户输入从生产换引擎入口进入 handoff 后仍保留附件引用。它覆盖现场
+  // 图片地址落库但图片字节不应被读取的最小失败输入，并防止后续调用方绕过统一构造器。
+  it('replays user attachment references through the real session-agent-switch handoff', async () => {
+    const history = [
+      {
+        role: 'user',
+        content: {
+          text: '这个改服务端能兼容吗',
+          images: [{
+            originalName: 'clipboard-shot.png',
+            url: 'cindy-media://blobs/abc.png',
+            // A byte-like field must never be inspected or copied into handoff.
+            data: 'base64-should-not-be-read',
+          }],
+          files: [],
+        },
+        createdAt: 1,
+      },
+    ];
+    const { deps } = makeDeps({
+      listMessagesForHandoff: vi.fn(async () => history),
+    });
+
+    await performSessionAgentSwitch(deps, {
+      ...validParams,
+      targetAgentKind: 'claude-code',
+      agentDeviceId: 'mini',
+      applyNow: true,
+    });
+
+    const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0]![1];
+    expect(boundary.handoff).toContain('[User]');
+    expect(boundary.handoff).toContain('这个改服务端能兼容吗');
+    expect(boundary.handoff).toContain('clipboard-shot.png');
+    expect(boundary.handoff).toContain('cindy-media://blobs/abc.png');
+    expect(boundary.handoff).toContain('resolve_local_path');
+    expect(boundary.handoff).not.toContain('base64-should-not-be-read');
+  });
+
+  // Unit: a shared relocation sends the file name while keeping the local
+  // path out of the pending handoff that will be sent to the replacement.
+  it('keeps attachment names without local paths in shared relocation', async () => {
+    const inside = '/guest/project/draft;  [v2]/spec.md';
+    const outside = '/guest/elsewhere/raw; [v1].txt';
+    const aliased = '/guest/extra/draft; [v3]/report.md';
+    const { deps } = makeDeps({
+      getSessionRow: vi.fn(async () => makeRow({ agentDeviceId: 'share:owner', providerId: 'anthropic' })),
+      listMessagesForHandoff: vi.fn(async () => [{
+        role: 'user',
+        content: {
+          text: '请看附件',
+          images: [{ originalName: 'screen.png', url: 'cindy-media://blobs/guest-hash.png' }],
+          files: [
+            { name: 'spec.md', path: inside },
+            { name: 'raw.txt', filePath: outside },
+            { name: 'report.md', localPath: aliased },
+          ],
+        },
+        createdAt: 1,
+      }]),
+    });
+
+    await relocateForFreshStart(deps, {
+      sessionId: 's1',
+      agentDeviceId: 'share:owner',
+      providerId: 'anthropic',
+      from: { agentDeviceId: 'share:owner', providerId: 'anthropic' },
+      sharedRelocation: true,
+    });
+
+    const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0]![1];
+    const pending = vi.mocked(deps.setPendingHandoff).mock.calls[0]![1];
+    expect(pending).toBe(boundary.handoff);
+    const next = prependHandoffToUserMessage({ type: 'user', content: '继续' }, pending);
+    if (typeof next === 'string' || typeof next.content !== 'string') throw new Error('expected a text send');
+    for (const name of ['spec.md', 'raw.txt', 'report.md']) expect(next.content).toContain('file ' + name);
+    for (const path of [inside, outside, aliased]) expect(next.content).not.toContain(path);
+    expect(next.content).toContain('screen.png · cindy-media://blobs/guest-hash.png');
   });
 
   // #9973, unit: ordinary and Orca Lead switches must deliver early constraints
@@ -593,6 +722,32 @@ describe('same-engine selection at send', () => {
       expect(h.pending.get('s1')).toBeUndefined();
     });
     expect(h.apply).toHaveBeenCalledOnce();
+  });
+
+  // Unit: selection cancels an in-flight recovery before taking the lock.
+  // A guest or malformed request must leave recovery untouched, with or without a location.
+  it('rejects unauthorized or malformed switch requests before notifying recovery', async () => {
+    const h = sharedSelectionHarness();
+    const withSessionLock = vi.fn(async () => { throw new Error('unexpected lock'); });
+    h.deps.withSessionLock = withSessionLock;
+    const cancelStart = vi.fn();
+    h.deps.cancelPendingRemoteStart = cancelStart;
+    const ipc = new IpcHarness();
+    const onUserSwitchRequested = vi.fn();
+    registerMakerSessionAgentSwitchHandler(ipc, h.deps, onUserSwitchRequested);
+    const select = (agentDeviceId?: string, model = 'gpt-6-astra') => ipc.invoke(
+      MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', model, 'openai', undefined, undefined,
+      agentDeviceId === undefined ? undefined : { agentDeviceId },
+    );
+    await expect(runDeviceLinkInvokeContext(h.context, () => select('another-computer')))
+      .rejects.toThrow('shared task guests cannot move');
+    await expect(runDeviceLinkInvokeContext(h.context, () => select())).rejects.toThrow('PERMISSION_DENIED');
+    await expect(select('invalid device!')).rejects.toThrow('INVALID_PARAMS');
+    await expect(select(undefined, '')).rejects.toThrow('INVALID_PARAMS');
+    expect(h.context.sharedTaskSetting.admitted).toBe(false);
+    expect(onUserSwitchRequested).not.toHaveBeenCalled();
+    expect(cancelStart).not.toHaveBeenCalled();
+    expect(withSessionLock).not.toHaveBeenCalled();
   });
 
   it.each(['revoked', 'other-task', 'during-preflight'] as const)(
@@ -1201,6 +1356,21 @@ describe('performSessionAgentSwitch', () => {
 });
 
 describe('deferred switch (turn running)', () => {
+  // Unit: two successful switch receipts for one task must not grant the first
+  // controller permission to apply the second controller's selection at send.
+  it('refuses to apply a newer intent using an older switch receipt', async () => {
+    const pendingSwitches = createPendingAgentSwitchRegistry();
+    const { deps } = makeDeps({ pendingSwitches });
+    const first = await performSessionAgentSwitch(deps, validParams);
+    const second = await performSessionAgentSwitch(deps, { ...validParams, effort: 'high' });
+    expect(first.pendingSwitchRevision).toBe(1);
+    expect(second.pendingSwitchRevision).toBe(2);
+    expect(() => applyPendingAgentSwitchIfIdle(deps, 's1', { expectedRevision: first.pendingSwitchRevision }))
+      .toThrow('HARNESS_SWITCH_NOT_READY');
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(pendingSwitches.get('s1')?.effort).toBe('high');
+  });
+
   function makeDepsWithPending(overrides: Partial<MakerSessionAgentSwitchHandlerDeps> = {}) {
     const base = makeDeps(overrides);
     const store = new Map<string, PendingAgentSwitchIntent>();
@@ -1723,6 +1893,37 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
 
 describe('settleSystemRouteSwitchIntent', () => {
   const intent = { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' };
+
+  // #9642 / PR #11375 P1, unit: exercise the real pending apply's fail-continue
+  // branch. A throwing apply stub misses a model disabled after registration.
+  it('reports a swallowed cross-engine apply failure during scheduled baseline preparation', async () => {
+    const pending = createPendingAgentSwitchRegistry();
+    const assertModelRouteUsable = vi.fn(async () => undefined);
+    const { deps } = makeDeps({ pendingSwitches: pending, assertModelRouteUsable });
+    await performSessionAgentSwitch(deps, validParams);
+    const staged = pending.get('s1');
+    expect(staged).toBeDefined();
+    assertModelRouteUsable.mockRejectedValueOnce(new Error('target model disabled'));
+    await expect(reconcileScheduledModelRouteBeforeBaseline({
+      reconcile: async () => {},
+      hasPendingRoute: () => !!pending.get('s1'),
+      hasPendingSwitch: () => !!pending.get('s1'),
+      isIdle: () => true,
+      applyPendingSwitch: async () => {
+        const stagedIntent = pending.get('s1');
+        await applyPendingAgentSwitchIfIdle(deps, 's1', { bootstrapAfterSwitch: true });
+        return settleSystemRouteSwitchIntent({
+          stagedIntent, remainingIntent: pending.get('s1'), sessionIdle: true,
+        });
+      },
+    })).rejects.toMatchObject({ code: 'HARNESS_SWITCH_NOT_READY' });
+    expect(pending.get('s1')).toBe(staged);
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      'agent-switch: pending apply failed; intent retained for next send',
+      expect.objectContaining({ err: 'target model disabled' }),
+    );
+  });
 
   it('reports applied once the intent is gone', () => {
     expect(

@@ -1,8 +1,10 @@
+import { primaryHostTargetIsRemote, withPluginAutomationHost } from './pluginAutomationHostGuard.js';
 /** Shared scheduler startup, target validation, locking and account-bound teardown. */
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { Scheduler, type Logger, type FireContext, type PreRunPluginConfig, type Schedule, type ScheduleRunner, type Notifier } from '@cindy/maker-scheduler';
+import { isGitlabMrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
 import type { Maker } from '@cindy/maker-core';
 import type { GhostControlPointResult, GhostScheduleRunPointData } from '../../shared/ghost.js';
 import type { DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
@@ -22,6 +24,8 @@ import { withScheduleLock } from './scheduleLock';
 import { runSchedulerStartup } from './scheduler-startup-lifecycle';
 
 export interface SchedulerHostStartDeps {
+  /** Reconcile a timed PR check through this host’s status observer. */
+  refreshSchedulePr?(url: string, schedule?: Schedule): Promise<void>;
   maker: Maker;
   getDb: () => SchedulerDrizzleDb;
   logger: Logger;
@@ -51,6 +55,7 @@ export interface SchedulerHostRuntime<Deps extends SchedulerHostStartDeps> {
   onStarted(scheduler: Scheduler, deps: Deps, passive: boolean): void;
   /** Wraps the runner, e.g. to skip a teammate project's automations on a computer it was handed away from. */
   wrapRunner?(runner: ScheduleRunner): ScheduleRunner;
+  automationAccount?: Parameters<typeof withPluginAutomationHost>[1];
   captureFireContext?: () => () => void;
   /** Existing teammate projects sync directly; deleted ones cannot be recreated by late writes. */
   getTeammateProjectState?(workingDir: string): Promise<TeammateProjectState | null>;
@@ -99,6 +104,15 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
       fire: (schedule, ctx) =>
         withScheduleLock(schedule.id, ctx.signal, async () => {
           ctx.assertFireContext?.();
+          // A timed reconciliation samples the same observer as App and foreground updates.
+          // GitHub follow scripts already do their own polling. MR timers sample status
+          // even with a pre-run hook; the hook runs when the observer dispatches work.
+          const trigger = schedule.prTrigger;
+          if (ctx.timed && trigger && (isGitlabMrTriggerUrl(trigger.url) || trigger.change !== 'any' || !schedule.preRunHook)) {
+            if (!deps.refreshSchedulePr) throw new Error('PR status lookup is unavailable on this host');
+            await deps.refreshSchedulePr(trigger.url, schedule);
+            return { sessionId: '', skipped: true };
+          }
           // 所有定时任务(Agent / 脚本)的唯一入口：插件前置检查放在检查脚本、建任务之前。
           const stopped = deps.screenControlPoint
             ? await screenScheduleRun(deps.screenControlPoint, schedule, ctx, (errorMsg) => notifyPluginStop(schedule, ctx, errorMsg))
@@ -110,7 +124,8 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
             : promptRunner.fire(schedule, ctx);
         }),
     };
-    const runner = runtime.wrapRunner ? runtime.wrapRunner(baseRunner) : baseRunner;
+    const primaryGuard = withPluginAutomationHost(baseRunner, runtime.automationAccount);
+    const runner = runtime.wrapRunner ? runtime.wrapRunner(primaryGuard) : primaryGuard;
 
     // 双开让位开关:同一台机器同时跑 dev + release(共用同一 userData/DB)时,
     // 给其中一个实例(通常 dev)设 XDT_SCHEDULER_PASSIVE=1 → 本实例不参与自动触发
@@ -154,8 +169,15 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
           .from(sessions)
           .where(eq(sessions.id, targetSessionId))
           .limit(1);
+        if (primaryHostTargetIsRemote(selection, row)) {
+          throw new Error('The persistent task must run on the selected automation computer.');
+        }
         if (isReviewSessionSource(row?.source)) {
           throw new Error('Review tasks cannot be targets of scheduled automations');
+        }
+        // 插件引擎只用于每次新建任务的自动任务(docs/plans/acp-plugin-bridge.md)，不能绑定已有任务。
+        if (selection.modelAgentKind === 'acp') {
+          throw new Error('A plugin engine schedule starts a new task each run');
         }
         assertScheduledHarnessSupported(row ? {
           ...row, agentKind: dbToMakerAgentKind(row.agentKind),
@@ -221,9 +243,9 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
   ) {
     const runner = _promptRunner;
     if (!_scheduler || !runner) return null;
-    return _scheduler.resumeInterruptedRun(sessionId, {
+    return _scheduler.resumeInterruptedRun(sessionId, withPluginAutomationHost({
       fire: (schedule, ctx) => runner.fireManualContinuation(schedule, ctx, enqueuePrompt),
-    });
+    }, runtime.automationAccount));
   }
 
   /** Cold-start probe for callers that own a durable deferred queue. */

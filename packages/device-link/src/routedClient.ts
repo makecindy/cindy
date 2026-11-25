@@ -6,8 +6,8 @@
  * 事件从两条连接汇总;官方线路下专用连接不启动,全部调用落回基类,行为不变。
  *
  * 已验证的 V2 分享按资源安装独立连接,优先于兼容线路,撤下后也不回落。
- * 各条连接的故障互不牵连:状态、连接问题与 presence 只反映主连接;host 要看承载某个 peer 的
- * 连接时用 `connectionFor` / `crossAccountConnection`。
+ * 各条连接的故障互不牵连:状态与连接问题只反映主连接;同账号 presence 取承载该设备的连接。
+ * host 要看承载某个 peer 的连接时用 `connectionFor` / `crossAccountConnection`。
  */
 import {
   DeviceLinkClient,
@@ -15,6 +15,7 @@ import {
   type DeviceLinkConnectionIssue,
   type DeviceLinkPeerRouteStateChanged,
   type DeviceLinkPeerTransportReset,
+  type DeviceLinkReplacedEvent,
   type DeviceLinkStatus,
   type InboundFrameHandler,
 } from './client.js';
@@ -61,6 +62,13 @@ export interface LegacyPeerConnectionOptions {
   primaryCapability?: string;
   /** The host verifies the attestation in the base client before this classifier runs. */
   prefersPrimary?(payload: unknown): boolean;
+  /**
+   * After a probe found that the peer prefers the main connection, how to re-open it there. Absent: the main connection's own
+   * link-open, as before. A host with its own channel to that peer (Agent-Net sessions) may open it there, and calls
+   * `primary` otherwise.
+   */
+  openOnPrimary?(peer: string, payload: unknown, timeoutMs: number | undefined,
+    primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload>;
   options: DeviceLinkClientOptions;
 }
 
@@ -183,6 +191,38 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     return this.routed(peer) ?? this;
   }
 
+  /**
+   * The compatibility connection while it runs (the newer transport is the main connection and older connections are
+   * allowed); null otherwise. For what only it reaches, such as phones that never registered on the newer transport.
+   */
+  legacyConnection(): DeviceLinkClient | null {
+    return this.legacyRunning ? this.legacy : null;
+  }
+
+  /**
+   * The compatibility connection's own connection problems (a rejected token there, for example); the main connection's go to
+   * onConnectionIssue. A host without a separate cross-account connection watches this, or a token rejected on the
+   * compatibility connection is never refreshed and the devices only it reaches stay away (2026-11-17: Node Host).
+   */
+  onLegacyConnectionIssue(cb: (issue: DeviceLinkConnectionIssue | null) => void): () => void {
+    return this.legacy?.onConnectionIssue(cb) ?? (() => undefined);
+  }
+
+  /**
+   * The cross-account and compatibility connections register the same device identity on the official relay, so another
+   * computer with that identity replaces them too. Both the signal and the host's cool-down cover every such connection.
+   */
+  override onReplaced(cb: (event: DeviceLinkReplacedEvent, onOfficialCrossAccount?: boolean) => void): () => void {
+    const offs = [super.onReplaced(cb), this.crossAccount?.onReplaced((event) => cb(event, true)), this.legacy?.onReplaced(cb)];
+    return () => { for (const off of offs) off?.(); };
+  }
+
+  override setDuplicateIdentityCooldown(active: boolean): void {
+    super.setDuplicateIdentityCooldown(active);
+    this.crossAccount?.setDuplicateIdentityCooldown(active);
+    this.legacy?.setDuplicateIdentityCooldown(active);
+  }
+
   override crossAccountConnection(): DeviceLinkClient {
     if (this.primaryScopedPreference()) return this;
     if (this.legacyRunning && this.crossAccountUsesLegacy()) return this.legacy!;
@@ -249,8 +289,12 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     for (const connection of this.extraScopedConnections()) connection.notifyNetworkChanged(options);
   }
 
-  override restartConnections(reason?: string): void {
-    this.restartConnection(reason);
+  /**
+   * `keepPrimary`：主连接是 Agent-Net 时由 host 传入（手机换网）。它自己从新地址继续发、在内部重连中转
+   * （AgentNetSocket），在这里重建只会关掉所有会话再从头连；其余走 Device Link 中转的连接照旧重建。
+   */
+  override restartConnections(reason?: string, options?: { keepPrimary?: boolean }): void {
+    if (!options?.keepPrimary) this.restartConnection(reason);
     if (this.crossAccountRunning) this.crossAccount?.restartConnection(reason);
     if (this.legacyRunning) this.legacy?.restartConnection(reason);
     for (const connection of this.extraScopedConnections()) connection.restartConnection(reason);
@@ -320,9 +364,11 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     });
     connection.onStatusChange((status) => {
       if (status !== 'online') {
+        const lost = connection === this ? [] : [...cache.values()];
         cache.clear();
-        // host 在主连接断开时清空自己的在线视图;重连后承载连接上仍有效的快照要重新交一次。
+        // The host clears its online view when the primary disconnects. Replay any still-valid legacy snapshots on reconnect.
         if (connection === this) for (const subscriber of this.presenceSubscribers) subscriber.delivered.clear();
+        if (this.started) for (const snap of lost) this.routePresence(snap.deviceId, snap);
         return;
       }
       for (const peer of this.presencePeers()) this.routePresence(peer);
@@ -336,12 +382,14 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
   }
 
   /** 把承载该 peer 的连接上的最新快照交给 host;承载连接还没有快照时不猜测。 */
-  private routePresence(peer: string): void {
+  private routePresence(peer: string, lost?: PresenceSnapshot): void {
     const carrier = this.connectionFor(peer);
-    const snap = this.presenceByConnection.get(carrier)?.get(peer);
-    if (!snap) return;
+    const current = this.presenceByConnection.get(carrier)?.get(peer);
+    const offline = lost?.online ? { ...lost, online: false, busy: false, remoteControlEnabled: false } : undefined;
     for (const subscriber of this.presenceSubscribers) {
-      if (subscriber.delivered.get(peer) === snap) continue;
+      const delivered = subscriber.delivered.get(peer);
+      const snap = current ?? (delivered === lost ? offline : undefined);
+      if (!snap || delivered === snap) continue;
       subscriber.delivered.set(peer, snap);
       try {
         subscriber.cb(snap);
@@ -470,7 +518,8 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
         if (this.legacyOptions?.prefersPrimary?.(accepted) ?? (this.legacyOptions?.primaryCapability && accepted.capabilities?.includes(this.legacyOptions.primaryCapability))) {
           this.legacyRoutes.delete(dst); this.legacyPrefersPrimary.add(dst);
           this.routePresence(dst);
-          return super.openLink(dst, payload, timeoutMs);
+          const primary = () => super.openLink(dst, payload, timeoutMs);
+          return this.legacyOptions?.openOnPrimary ? this.legacyOptions.openOnPrimary(dst, payload, timeoutMs, primary) : primary();
         }
         this.legacyPrefersPrimary.delete(dst); this.legacyRoutes.add(dst);
         this.routePresence(dst);
@@ -490,7 +539,7 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     dst: string,
     payload: InvokePayload,
     timeoutMs?: number,
-    options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
+    options?: Parameters<DeviceLinkClient['invoke']>[3],
   ): Promise<InvokeResultPayload> {
     return this.routed(dst)?.invoke(dst, payload, timeoutMs, options) ?? super.invoke(dst, payload, timeoutMs, options);
   }

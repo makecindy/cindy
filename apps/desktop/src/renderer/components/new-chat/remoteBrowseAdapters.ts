@@ -71,9 +71,9 @@ export function sshBrowseAdapter(hostId: string): RemoteBrowseAdapter {
 }
 
 /** device-link 被控设备适配器。childPath / parent 直接用被控端 handler 回传的 native 路径。 */
-export function deviceLinkBrowseAdapter(deviceId: string): RemoteBrowseAdapter {
+export function deviceLinkBrowseAdapter(deviceId: string, canonicalDirectory = false): RemoteBrowseAdapter {
   const invoke = <T>(channel: string, path: string): Promise<T> =>
-    window.electronAPI.deviceLink.invoke(deviceId, channel, [{ path }]) as Promise<T>;
+    window.electronAPI.deviceLink.invoke(deviceId, channel, [canonicalDirectory ? { path, canonicalDirectory } : { path }]) as Promise<T>;
   return {
     async listDir(path) {
       const res = await invoke<{

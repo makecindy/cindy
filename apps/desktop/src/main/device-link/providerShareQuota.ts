@@ -8,6 +8,7 @@ import {
   MAX_SUBSCRIPTION_ACCOUNTS,
 } from '../../shared/subscriptionAccounts.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getAuthState } from '../authManager.js';
@@ -140,6 +141,7 @@ async function readAccount(provider: ProviderView): Promise<ProviderShareQuotaAc
 export async function readProviderShareQuotaAccount(
   providerId: string,
 ): Promise<ProviderShareQuotaAccount> {
+  if (pluginEngineKeyFromProviderId(providerId)) return empty('unsupported');
   const assertCurrent = captureProviderManagementScope();
   const provider = (
     await getDesktopProviderService().listProviders({ allowSideEffects: false })

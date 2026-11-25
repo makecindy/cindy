@@ -13,7 +13,7 @@ import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
  * 服务器的回复到了原地替换；失败撤掉、文字放回，原因写在输入框上方。
  */
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Bell, BellRing, Check, CornerDownRight, MessageSquareShare } from 'lucide-react';
+import { Bell, BellRing, CornerDownRight, MessageSquareShare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -31,6 +31,7 @@ import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGro
 import { refreshBotGroups } from './botGroupStore';
 import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
+import { focusBotGroupComposer } from './botGroupTextInput';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
 import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import {
@@ -48,6 +49,7 @@ import { chatErrorKey, messageReactionRevision } from './ChatServerControls';
 import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 import { ThreadMessageWindow } from './ThreadMessageWindow';
+import { Checkbox } from '@/components/ui/checkbox';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
 /** Unconfirmed rich replies keep their operation id across panel remounts, isolated by account. */
@@ -215,11 +217,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const processScroll = useProcessDisclosureScroll(scrollRef, contentRef, stickToBottomRef, STICK_TO_BOTTOM_PX);
   const { resumeFollow } = processScroll;
   const panelRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const panel = panelRef.current;
-    // The entrance is translated outside its clipped slot; focus must not scroll that ancestor.
-    (panel?.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)') ?? panel?.querySelector<HTMLButtonElement>('header button'))?.focus({ preventScroll: true });
-  }, []);
+  useEffect(() => focusBotGroupComposer(panelRef.current), []);
   useEffect(() => {
     shareSelectionStore.exitIfNotSession(shareScope);
     return () => { if (shareSelectionStore.isActive(shareScope)) shareSelectionStore.exit(); };
@@ -235,6 +233,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const revisionRef = useRef(initial?.revision);
   const historyEpochRef = useRef(0);
   const latestReadRef = useRef(0);
+  const [hasRead, setHasRead] = useState(false);
   const [root, setRoot] = useState<BotGroupMessageView | null>(initial?.root ?? null);
   const [executionFailures, setExecutionFailures] = useState<BotGroupExecutionFailureView[]>(initial?.executionFailures ?? []);
   const [replies, setReplies] = useState<BotGroupMessageView[]>(initial?.replies ?? []);
@@ -278,6 +277,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
 
   const clearHistory = useCallback((wholeRoom = true) => {
     historyEpochRef.current++;
+    setHasRead(false);
     queuedSourcesRef.current.clear();
     changedRepliesRef.current.clear();
     for (const key of windows().keys())
@@ -342,6 +342,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       }
       if (!stalePage) setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
       setError('');
+      setHasRead(true);
       const floor = result.replies.reduce((min, reply) => Math.min(min, reply.sequence), Number.POSITIVE_INFINITY);
       // A latest page that neither overlaps nor directly adjoins the shown replies may leave a gap:
       // start over from it, as on first load, so 「查看更早」 reads on from right below it.
@@ -512,20 +513,27 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       ? previous.map((send) => (send.clientId === clientId ? { ...send, messageId: outcome.messageId } : send))
       : previous.filter((send) => send.clientId !== clientId));
   }, []);
-  // A share opened this thread: find its reply, reading back a few pages if needed.
+  // A share or sidebar preview opened this thread: find its reply, reading back a few pages if needed.
   const focusSearch = useRef<{ nonce: number; pages: number } | null>(null);
   useEffect(() => {
-    if (!focus || !replies.length) return;
+    if (!focus || !root) return;
     if (focusSearch.current?.nonce !== focus.nonce) focusSearch.current = { nonce: focus.nonce, pages: 0 };
     const search = focusSearch.current;
     if (search.pages < 0) return;
     // Loaded targets are revealed by the DOM window, even when they are currently unmounted.
-    if (root?.id === focus.messageId || replies.some(reply => reply.id === focus.messageId)) return;
-    if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) { search.pages = -1; return; }
+    if (root.id === focus.messageId || replies.some(reply => reply.id === focus.messageId)) return;
+    // Cached replies can be located while refresh waits or fails. Only a successful
+    // read can justify paging further or reporting that the reply is unavailable.
+    if (error || !hasRead) return;
+    if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) {
+      search.pages = -1;
+      toast.info(t(key('thread.replyNotFound')));
+      return;
+    }
     // A push refresh may overtake this page; then its replies trigger the next attempt, and
     // only a page that was merged counts against the limit.
     void readRef.current(replies[0]?.sequence, false, () => { search.pages += 1; });
-  }, [focus, replies, hasMore, root]);
+  }, [focus, replies, hasMore, root, error, hasRead, t]);
   const onLocated = useCallback((messageId: string, target: HTMLElement) => {
     stickToBottomRef.current = false;
     flashThreadTarget(target);
@@ -750,7 +758,10 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         </div>
         {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
           getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 400} /> : <>
-          {error && <p role="alert" className="px-4 pt-3 text-13 text-[var(--error-fg)]">{error}</p>}
+          {error && <div role="alert" className="flex items-center gap-2 px-4 pt-3 text-13 text-[var(--error-fg)]">
+            <span className="min-w-0 flex-1">{error}</span>
+            <Button variant="secondary" size="sm" compact onClick={() => refreshRef.current()}>{t('commonUi.retry')}</Button>
+          </div>}
           {/* Kept apart from read errors: a thread refresh must not hide the retry. */}
           {unposted.size > 0 && <div role="alert" className="mb-2 px-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-13 text-[var(--error-fg)]">
             <span className="min-w-0">{t(key('thread.alsoSendFailed'), { count: unposted.size })}</span>
@@ -767,15 +778,12 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
               running={false}
               disabled={readOnly}
               footerStart={sending => (
-                <button type="button" role="checkbox" aria-checked={alsoSend} disabled={sending || readOnly}
-                  onClick={() => setAlsoSend(value => !value)}
-                  className="-ml-1.5 inline-flex min-h-7 min-w-0 select-none items-center gap-2 rounded-full px-1.5 text-13 text-[var(--text-secondary)] outline-none transition-colors duration-[var(--motion-fast)] enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50">
-                  <span aria-hidden className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors duration-[var(--motion-fast)]',
-                    alsoSend ? 'bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]' : 'border border-[var(--border-default)]')}>
-                    {alsoSend ? <Check size={10} strokeWidth={3} /> : null}
-                  </span>
+                // Applied with the next reply: shared Checkbox in a label row (DESIGN.md §4, B-10).
+                <label className={cn('inline-flex min-h-7 min-w-0 select-none items-center gap-2 text-13 text-[var(--text-secondary)] transition-colors duration-[var(--motion-fast)]',
+                  sending || readOnly ? 'opacity-50' : 'cursor-pointer hover:text-[var(--text-primary)]')}>
+                  <Checkbox checked={alsoSend} disabled={sending || readOnly} onChange={event => setAlsoSend(event.currentTarget.checked)} />
                   <span className="min-w-0 truncate" title={t(key('thread.alsoSend'))}>{t(key('thread.alsoSend'))}</span>
-                </button>
+                </label>
               )}
               sendReply={sendReply}
               onSendStart={onSendStart}

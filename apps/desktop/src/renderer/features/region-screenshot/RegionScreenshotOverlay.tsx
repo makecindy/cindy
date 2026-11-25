@@ -49,6 +49,7 @@ import {
   DEFAULT_ANNOTATION_COLOR,
   DEFAULT_MARKER_COLOR,
   drawAnnotations,
+  previewCanvasOptions,
   isMeaningfulAnnotation,
   moveAnnotation,
   nextStepNumber,
@@ -63,7 +64,7 @@ import {
   type ShapeAnnotation,
   type TextAnnotation,
 } from './annotations';
-import { bitmapToImageData, cropOpaqueImageDataToBitmap, imageDataToBitmap, type RegionScreenshotOverlayBridge } from './bridge';
+import { bitmapToImageData, cropOpaqueImageDataToBitmap, imageDataToBitmap, profiledDesktopBitmap, type RegionScreenshotOverlayBridge } from './bridge';
 import { colorHex, colorRgb, Magnifier, type PixelColor } from './Magnifier';
 import { ScreenshotAiMenu, ScreenshotModeBar, ScreenshotStyleBar, ScreenshotToolbar, TOOL_SHORTCUTS, type ScreenshotMode } from './ScreenshotToolbar';
 import { SCREENSHOT_INK, SCREENSHOT_OVERLAY, type ScreenshotInk } from './screenshotColors';
@@ -90,6 +91,7 @@ interface ActiveSession {
   lastRegion: RegionRect | null;
   frameSize: RegionSize;
   frameData: ImageData;
+  preview?: HTMLImageElement;
   /** 界面元素可用区域: 避开菜单栏、刘海与 Dock / 任务栏。 */
   safeArea: RegionRect;
 }
@@ -168,6 +170,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const modLabel = isMac ? '⌘' : 'Ctrl+';
   const rootRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLCanvasElement>(null);
+  const pixelSampler = useRef<OffscreenCanvasRenderingContext2D | null>(null);
   const annotationCanvasRef = useRef<HTMLCanvasElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -247,6 +250,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const elementsRef = useRef<{
     inFlight: boolean;
     pending: RegionPoint | null;
+    selectAfterHit?: (point: RegionPoint, hit: RegionScreenshotHit | null) => void;
     cache: { point: RegionPoint; hit: RegionScreenshotHit } | null;
     defaults: Map<number, RegionRect[]>;
   }>({ inFlight: false, pending: null, cache: null, defaults: new Map() });
@@ -286,7 +290,16 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   }, []);
 
   useEffect(() => {
-    const offBegin = bridge.onBegin((payload: RegionScreenshotBegin) => {
+    let generation = 0;
+    let previewUrl: string | undefined;
+    const releasePreview = () => {
+      generation++;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = undefined;
+    };
+    const offBegin = bridge.onBegin(async (payload: RegionScreenshotBegin) => {
+      releasePreview();
+      const currentGeneration = generation;
       if (payload.locale && i18n.language !== payload.locale) void i18n.changeLanguage(payload.locale);
       // 隐藏期间用户可能改了主题; 每次截图按当前设置重新套用。
       themeService.applyTheme(getInitialThemeVariant().theme);
@@ -300,6 +313,14 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       initialCursorRef.current = payload.cursor ?? null;
       // 各工具上次用的颜色 / 粗细跨截图保留 (浮层复用, 本次运行内有效)。
       const frameData = bitmapToImageData(payload.frame);
+      let preview: HTMLImageElement | undefined;
+      if (payload.previewProfile) {
+        previewUrl = URL.createObjectURL(profiledDesktopBitmap(payload.frame, payload.previewProfile));
+        preview = new Image();
+        preview.src = previewUrl;
+        try { await preview.decode(); } catch { preview = undefined; }
+        if (generation !== currentGeneration) return;
+      }
       // The layout effect writes the frozen frame once after React has mounted
       // its canvas (including the independent editor's first image).
       setSession({
@@ -310,11 +331,13 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
         lastRegion: payload.lastRegion,
         frameSize: { width: payload.frame.width, height: payload.frame.height },
         frameData,
+        preview,
         safeArea: payload.safeArea ?? { x: 0, y: 0, width: payload.viewport.width, height: payload.viewport.height },
       });
       // 窗口显示后才会合成新帧: 等两帧再报告已绘制, main 随即淡入。
       if (!imageEditor) requestAnimationFrame(() =>
         requestAnimationFrame(() => {
+          if (generation !== currentGeneration) return;
           bridge.painted(payload.token);
           if (document.hasFocus()) bridge.focused(payload.token);
         }),
@@ -330,6 +353,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       if (i18n.language !== locale) void i18n.changeLanguage(locale);
     });
     const offEnd = bridge.onEnd(() => {
+      releasePreview();
       resetInteraction();
       setActiveDisplay(false);
       setSession(null);
@@ -363,6 +387,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     bridge.abandon();
     bridge.shellReady();
     return () => {
+      releasePreview();
       offBegin();
       offEnd();
       offClear();
@@ -410,7 +435,8 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       canvas.width = width;
       canvas.height = height;
     }
-    const ctx = canvas.getContext('2d');
+    const preview = !longResultRef.current && session?.preview;
+    const ctx = canvas.getContext('2d', preview ? previewCanvasOptions : undefined);
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, width, height);
@@ -418,7 +444,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     if (!source) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const visible = annotations.filter((a) => !(editing?.id && a.id === editing.id));
-    drawAnnotations(ctx, draft ? [...visible, draft] : visible, source);
+    drawAnnotations(ctx, draft ? [...visible, draft] : visible, preview ? { ...source, frame: preview, profiledPreview: true } : source);
   }, [annotations, draft, editing?.id, viewport.width, viewport.height, annotationSource, session, imageEditor]);
 
   // ── 撤销 / 重做 ────────────────────────────────────────────────────────
@@ -543,8 +569,11 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       tracker.inFlight = true;
       void bridge
         .elementsAt(current.token, window.id, point.x, point.y)
+        .catch(() => null)
         .then((hit) => {
-          if (state.current.session?.token !== current.token || elementsRef.current !== tracker || !hit) return;
+          if (state.current.session?.token !== current.token || elementsRef.current !== tracker) return;
+          tracker.selectAfterHit?.(point, hit);
+          if (!hit) return;
           const latest = state.current.pointer;
           if (latest && latest.x === point.x && latest.y === point.y && !state.current.selection && !state.current.drag) {
             // Some browsers have no content HWND. Learn their document regions
@@ -608,22 +637,25 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       // Unedited, pixel-aligned captures already have their pixels in memory.
       // Avoid an extra canvas backing store and GPU readback. Resizing,
       // annotations and alpha compositing retain the existing canvas path.
-      let image = list.length === 0 && crop.width === output.width && crop.height === output.height
+      // Device RGB needs the embedded ICC transform before sRGB export.
+      const profiledFrame = long ? undefined : current.preview;
+      let image = !profiledFrame && list.length === 0 && crop.width === output.width && crop.height === output.height
         ? cropOpaqueImageDataToBitmap(current.frameData, crop)
         : null;
       if (!image) {
         const canvas = document.createElement('canvas');
         canvas.width = output.width;
         canvas.height = output.height;
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const ctx = canvas.getContext('2d', { colorSpace: 'srgb', willReadFrequently: true });
         if (!ctx) return;
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(frame, crop.x, crop.y, crop.width, crop.height, 0, 0, output.width, output.height);
+        const exportFrame = profiledFrame ?? frame;
+        ctx.drawImage(exportFrame, crop.x, crop.y, crop.width, crop.height, 0, 0, output.width, output.height);
         const sx = output.width / rect.width;
         const sy = output.height / rect.height;
         ctx.setTransform(sx, 0, 0, sy, -rect.x * sx, -rect.y * sy);
-        drawAnnotations(ctx, list, source);
+        drawAnnotations(ctx, list, { ...source, frame: exportFrame });
         image = imageDataToBitmap(ctx.getImageData(0, 0, output.width, output.height));
       }
       busyRef.current = true;
@@ -664,6 +696,16 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     if (rect && !rectContains(rect, point)) return null;
     const x = Math.min(frameSize.width - 1, Math.max(0, Math.floor(((point.x - (rect?.x ?? 0)) * frameSize.width) / (rect?.width ?? size.width))));
     const y = Math.min(frameSize.height - 1, Math.max(0, Math.floor(((point.y - (rect?.y ?? 0)) * frameSize.height) / (rect?.height ?? size.height))));
+    if (current.preview && !longResultRef.current) {
+      // Sample in the same output color space as the exported selection.
+      const ctx = pixelSampler.current ??= new OffscreenCanvas(1, 1).getContext('2d', {
+        colorSpace: 'srgb', willReadFrequently: true,
+      });
+      if (!ctx) return null;
+      ctx.drawImage(current.preview, x, y, 1, 1, 0, 0, 1, 1);
+      const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+      return { r, g, b };
+    }
     const index = (y * frameSize.width + x) * 4;
     return { r: frameData.data[index], g: frameData.data[index + 1], b: frameData.data[index + 2] };
   }, []);
@@ -692,6 +734,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     const s = state.current;
     if (!s.session || busyRef.current) return;
     if (event.button !== 0) return;
+    elementsRef.current.selectAfterHit = undefined;
     const point = localPoint(event);
     if (s.aiMenuOpen) {
       setAiMenuOpen(false);
@@ -755,7 +798,8 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     state.current.pointer = point;
     const current = s.drag;
     if (!current) {
-      if (!s.selection) {
+      // Keep the keypress point in the native query queue until its result arrives.
+      if (!s.selection && !elementsRef.current.selectAfterHit) {
         refreshHover(point);
         requestElements(point);
       }
@@ -964,9 +1008,29 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       }
       const rect = s.selection;
       if (!rect) {
-        if (key === ' ') {
+        if (key === ' ' && !s.drag && !(event.target instanceof HTMLElement && event.target.closest('button, input, select, textarea'))) {
           event.preventDefault();
-          selectRegion({ x: 0, y: 0, ...s.session.viewport });
+          const screenRect = { x: 0, y: 0, ...s.session.viewport };
+          const point = s.pointer;
+          const tracker = elementsRef.current;
+          if (tracker.selectAfterHit) return;
+          const cache = tracker.cache;
+          if (!point || !topWindowAt(s.session.windows, point)) {
+            selectRegion(screenRect);
+          } else if (!tracker.inFlight && cache?.point.x === point.x && cache.point.y === point.y) {
+            selectRegion(cache.hit.window?.rect ?? screenRect);
+          } else {
+            // Reuse the native query for this pointer position, including a queued query.
+            tracker.selectAfterHit = (queried, hit) => {
+              if (queried.x !== point.x || queried.y !== point.y) return;
+              tracker.selectAfterHit = undefined;
+              const latest = state.current;
+              if (!latest.drag && !latest.selection) {
+                selectRegion(hit?.window?.rect ?? screenRect);
+              }
+            };
+            if (!tracker.inFlight) requestElements(point);
+          }
         } else if (key.toLowerCase() === 'r' && !mod && s.session.lastRegion) {
           event.preventDefault();
           selectRegion(s.session.lastRegion);
@@ -1044,7 +1108,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [bridge, cancel, colorAt, commitAnnotations, commitEditing, isMac, redo, runAction, selectRegion, undo]);
+  }, [bridge, cancel, colorAt, commitAnnotations, commitEditing, isMac, redo, requestElements, runAction, selectRegion, undo]);
 
   // 编辑文字时把焦点交给输入框。
   useEffect(() => {
@@ -1248,7 +1312,9 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       onContextMenu={onContextMenu}
     >
       <canvas ref={frameRef} className={longResult ? 'absolute block' : 'absolute inset-0 block h-full w-full'} style={longResult && selection ? { left: selection.x, top: selection.y, width: selection.width, height: selection.height } : undefined} />
-      <canvas ref={annotationCanvasRef} className="pointer-events-none absolute inset-0 block h-full w-full" />
+      {session?.preview && !longResult && <img alt="" draggable={false} src={session.preview.src}
+        className="pointer-events-none absolute inset-0 block h-full w-full" />}
+      <canvas key={session?.preview && !longResult ? 'profiled' : 'raw'} ref={annotationCanvasRef} className="pointer-events-none absolute inset-0 block h-full w-full" />
       {session && !imageEditor &&
         (highlight ? (
           <div
@@ -1333,7 +1399,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
           }}
         />
       )}
-      {session && !imageEditor && activeDisplay && <div className="absolute z-20 w-max -translate-x-1/2" style={{ left: modeBarCenter ?? safe.x + safe.width / 2, top: safe.y + 12, maxWidth: safe.width - 24 }} onPointerEnter={() => setOverToolbar(true)} onPointerLeave={() => setOverToolbar(false)}>
+      {session && !imageEditor && activeDisplay && <div className="absolute z-page-float w-max -translate-x-1/2" style={{ left: modeBarCenter ?? safe.x + safe.width / 2, top: safe.y + 12, maxWidth: safe.width - 24 }} onPointerEnter={() => setOverToolbar(true)} onPointerLeave={() => setOverToolbar(false)}>
         <ScreenshotModeBar mode={captureMode} finished={!!longResult} canAsk={isSelected && !dragging} aiMenuOpen={aiMenuOpen}
           {...translationProps}
           area={safe} onPositionChange={setModeBarCenter}
@@ -1344,7 +1410,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
 
       {showMagnifier && pointer && session && (
         <Magnifier
-          frame={frameRef.current}
+          frame={session.preview ?? frameRef.current}
           frameSize={session.frameSize}
           point={pointer}
           viewport={viewport}

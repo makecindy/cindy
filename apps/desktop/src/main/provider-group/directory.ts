@@ -25,7 +25,7 @@ import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { isSameProvider } from './matching.js';
-import type { ProviderGroupCodexUsageSnapshot, ProviderGroupUsageInvalidation } from './usage.js';
+import type { ProviderGroupCodexUsageSnapshot, ProviderGroupShareQuotaSnapshot, ProviderGroupUsageInvalidation } from './usage.js';
 
 export interface ProviderGroupDirectoryDeps {
   /** 本机供应商(含未连接 / 停用的，便于给出原因)。 */
@@ -41,6 +41,13 @@ export interface ProviderGroupDirectoryDeps {
     Promise<{ views: ProviderView[]; stale: boolean; remainingMs?: number }>;
   listReceivedShares(): readonly ProviderShareReceived[];
   isMobilePlatform(platform: string | null): boolean;
+  /** Captures the owner and service endpoint for the entire add-computer query. */
+  captureCandidateScope?(): () => boolean;
+  /** The add-computer list left this computer out because its directory could not be read. */
+  onCandidateReadFailed?(agentDeviceId: string, error: unknown): void;
+  /** Captures the user's link-close generation; the returned check is false once that link was closed
+   *  (or when a live retry should not be tried for this target at all). */
+  captureLinkCloseEpoch?(agentDeviceId: string): () => boolean;
   /** 本机这个供应商正在运行一轮的任务数(localLoad.ts)；不提供或读不到时为 null。 */
   localRunning?(providerId: string): Promise<number | null>;
   /** Same-account subscription snapshots only; absence/failure keeps the member usable. */
@@ -48,6 +55,11 @@ export interface ProviderGroupDirectoryDeps {
   readCodexUsage?(member: ProviderGroupMember): Promise<ProviderGroupCodexUsageSnapshot | null>;
   /** At the quick-pick deadline, include completed sources without waiting for a pending sibling. */
   peekCodexUsage?(member: ProviderGroupMember): ProviderGroupCodexUsageSnapshot | null;
+  /**
+   * 分享来的电脑：分享者开放「允许查看剩余额度」时经该分享自己的授权读到的额度(provider-groups.md §5「分享边界」)。
+   * 未开放、读不到、超时为 null，按读不到用量处理。
+   */
+  readShareQuota?(member: ProviderGroupMember): Promise<ProviderGroupShareQuotaSnapshot | null>;
   invalidateUsage?(scope?: ProviderGroupUsageInvalidation): void;
   now(): number;
   /** Monotonic clock paired with now() for bounded budgets and cache deadlines. */
@@ -85,6 +97,8 @@ export interface ResolvedProviderGroupMember {
   /** Internal only: never included in the group wire projection or shared with guests. */
   claudeUsage?: ClaudeSubscriptionUsageSnapshot | null;
   codexUsage?: ProviderGroupCodexUsageSnapshot | null;
+  /** Internal only, like the snapshots above: guests and the group wire view never receive it. */
+  shareQuota?: ProviderGroupShareQuotaSnapshot | null;
   /**
    * 选电脑时到点还没读完(那台慢或不响应)：这次按不能用算，不代表读到了离线；读取照常在后台完成、留在缓存里。
    */
@@ -92,6 +106,8 @@ export interface ResolvedProviderGroupMember {
 }
 
 export interface ResolveMembersOptions {
+  /** Read base availability before fetching optional quota for the settings row. */
+  skipUsage?: boolean;
   /**
    * 最多等多久：到点已经有一台 `enough` 的电脑就不再等其余的(没读完的标 `pending`)；一台都还没有时照旧等全部读完。
    * 不给 = 等全部读完。
@@ -147,6 +163,15 @@ export interface ProviderGroupDirectory {
   offlineForMs?(agentDeviceId: string): Promise<number | null>;
   /** 忘掉缓存(换账号、组内电脑失败后需要现读)。 */
   invalidate(agentDeviceId?: string, options?: Omit<ProviderGroupUsageInvalidation, 'agentDeviceId'>): void;
+}
+
+/**
+ * A read that may answer if asked again live: its metadata scope moved while it was in flight
+ * (device-link/providerMetadataContinuity.ts), or a directory snapshot was not ready or ran out.
+ */
+function isInterruptedCatalogRead(error: unknown): boolean {
+  const row = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown } : {};
+  return row.message === 'Metadata scope changed' || row.code === 'MODEL_VISIBILITY_NOT_READY';
 }
 
 export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): ProviderGroupDirectory {
@@ -402,10 +427,15 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
         if (member.kind === 'share') return resolveShare(member);
         return deviceListPromise.then((deviceList) => resolveDevice(member, deviceList));
       });
+      if (options?.skipUsage) return Promise.all(partialReads);
       const reads = partialReads.map(async (read, index) => {
         const member = config.members[index]!;
         const resolved = await read;
-        if (member.kind === 'share' || resolved.state !== 'ok' || !resolved.view?.auth) return resolved;
+        if (member.kind === 'share') {
+          return resolved.state === 'ok' && deps.readShareQuota
+            ? { ...resolved, shareQuota: await deps.readShareQuota(member).catch(() => null) } : resolved;
+        }
+        if (resolved.state !== 'ok' || !resolved.view?.auth) return resolved;
         const source = providerWeeklyQuotaSource(resolved.view);
         if (source === 'codex' && deps.readCodexUsage) {
           return { ...resolved, codexUsage: await deps.readCodexUsage(member).catch(() => null) };
@@ -436,13 +466,33 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     },
 
     async listCandidates(providerId, config) {
+      const isCurrent = deps.captureCandidateScope?.() ?? (() => true);
       const local = await localGroupProvider(providerId);
-      if (!local) return [];
+      if (!local || !isCurrent()) return [];
       const memberKeys = new Set(config?.members.map((m) => m.key) ?? []);
       const candidates: ProviderGroupCandidate[] = [];
+      // The quick read answers from its last snapshot after 2s, but fails outright when that
+      // computer's metadata scope moved meanwhile, or when the snapshot budget ran out. Listing is
+      // an explicit user action: on exactly those failures ask that computer once more, live, so a
+      // computer that could join never silently disappears (2026-11-17 field report: a computer
+      // with a 3–7s directory read was missing on every attempt). Refusals and timeouts are final;
+      // a link the user closed meanwhile is not reopened (device-link/index.ts closeRemoteLink).
+      const candidateCatalog = (agentDeviceId: string) => {
+        const linkStillOpen = deps.captureLinkCloseEpoch?.(agentDeviceId) ?? (() => true);
+        return readCatalog(agentDeviceId)
+          .catch((error: unknown) => {
+            if (!isCurrent() || !isInterruptedCatalogRead(error) || !linkStillOpen()) throw error;
+            return readCatalog(agentDeviceId, true);
+          })
+          .catch((error: unknown) => {
+            if (isCurrent()) deps.onCandidateReadFailed?.(agentDeviceId, error);
+            return [] as ProviderView[];
+          });
+      };
       const deviceList = await readDevices().catch(() => [] as readonly DeviceLinkDeviceView[]);
+      if (!isCurrent()) return [];
       const deviceReads = deviceList.filter(isControllable).map(async (device) => {
-        const views = await readCatalog(device.deviceId).catch(() => [] as ProviderView[]);
+        const views = await candidateCatalog(device.deviceId);
         for (const view of views) {
           if (!view.connected || view.suspended || !isSameProvider(local, view)) continue;
           const key = providerGroupMemberKey(device.deviceId, view.id);
@@ -477,12 +527,13 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
           return;
         }
         if (share.status !== 'active' || !share.hostOnline) return;
-        const views = await readCatalog(agentDeviceId).catch(() => [] as ProviderView[]);
+        const views = await candidateCatalog(agentDeviceId);
         const view = views.find((v) => v.id === share.providerId);
         if (!view || !view.connected || view.suspended || !isSameProvider(local, view)) return;
         candidates.push({ ...base, providerName: view.name });
       });
       await Promise.all([...deviceReads, ...shareReads]);
+      if (!isCurrent()) return [];
       // 同账号电脑在前，分享来的在后；各自按名称排序，结果稳定。
       return candidates.sort((a, b) =>
         a.kind === b.kind ? a.label.localeCompare(b.label) : a.kind === 'device' ? -1 : 1);

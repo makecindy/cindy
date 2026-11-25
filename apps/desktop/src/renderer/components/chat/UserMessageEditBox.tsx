@@ -325,7 +325,7 @@ export function UserMessageEditBox({
   return (
     <div
       className={cn(
-        'w-full rounded-[12px]',
+        'w-full rounded-xl',
         'border border-[var(--msg-user-border)]',
         'bg-[var(--msg-user-bg)]',
         'px-4 pt-3 pb-2.5',

@@ -29,11 +29,12 @@ export function createHomeContentFilter(
   filters: HomeContentFilters,
   nowMs: number,
 ): ((item: RemoteSessionListItem) => RemoteSessionListItem | null) | null {
-  if (filters.vendor === 'all' && filters.lastActivity === 'all' && (!filters.teammates || filters.teammates === 'all')) return null;
+  if (!filters.hideAutomations && filters.vendor === 'all' && filters.lastActivity === 'all' && (!filters.teammates || filters.teammates === 'all')) return null;
   const cutoff = filters.lastActivity === 'all'
     ? null
     : nowMs - LAST_ACTIVITY_DAYS[filters.lastActivity] * DAY_MS;
   const keep = (item: RemoteSessionListItem): boolean => {
+    if (filters.hideAutomations && item.session.source === 'scheduler') return false;
     if (filters.teammates === 'none') {
       if (filters.teammateKey?.(item)) return false;
     } else if (filters.teammates && filters.teammates !== 'all'

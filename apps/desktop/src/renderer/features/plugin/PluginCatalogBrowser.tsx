@@ -7,15 +7,16 @@ import { Spinner } from '@/components/ui/spinner';
 import { extractIpcError } from '@/utils/ipcError';
 import type { PluginMarketCounts, PluginMarketItem, PluginMarketPage, PluginMarketQuery } from '../../../shared/pluginMarket';
 import type { InstalledGhost } from '../../../shared/ghost';
-import { marketItemMatchesInstalledGhost } from './lib/pluginMarketPresentation';
+import { marketItemMatchesInstalledGhost, publicPublisherFilter, type PluginCatalogFilter } from './lib/pluginMarketPresentation';
 import { PluginVirtualGrid } from './PluginVirtualGrid';
 import { pluginMarketOrganizationAccessErrorKey } from './lib/pluginMarketErrorKey';
-import { emptyPluginBrowserCache, mergePluginItems, pluginBrowserKey, samePluginValue,
-  PLUGIN_PAGE_SIZE, PLUGIN_CATALOG_REFRESH_MS, type PluginBrowserCache } from './lib/pluginBrowserCache';
+import { emptyPluginBrowserCache, mergePluginItems, pluginBrowserKey, pluginCatalogPageLimit, pluginPageSize, samePluginValue,
+  PLUGIN_CACHED_PAGES, PLUGIN_CATALOG_REFRESH_MS, type PluginBrowserCache } from './lib/pluginBrowserCache';
 export { emptyPluginBrowserCache, PLUGIN_PAGE_SIZE, type PluginBrowserCache } from './lib/pluginBrowserCache';
 import { readPluginCatalogAnchor, restorePluginCatalogAnchor, type PluginCatalogAnchor } from './lib/pluginCatalogAnchor';
 import { useDelayedPluginLoading } from './lib/useDelayedPluginLoading';
 import { mergePluginSnapshot } from './lib/pluginCatalogMemory';
+import { readReusedMarketIcon, type MarketIconCache } from './lib/pluginBrowserCache';
 
 function dedupeCachedPages(cache: PluginBrowserCache): boolean {
   const seen = new Set<string>();
@@ -26,7 +27,7 @@ function dedupeCachedPages(cache: PluginBrowserCache): boolean {
       seen.add(item.pluginId); return true;
     });
     if (unique.length === items.length) continue;
-    cache.pages.set(index, unique); cache.sizes.set(index, unique.length); changed = true;
+    cache.pages.set(index, unique); cache.sizes.set(index, pluginPageSize(unique)); changed = true;
   }
   return changed;
 }
@@ -38,8 +39,8 @@ const CatalogCard = memo(function CatalogCard({ item, renderItem }: {
 }, (previous, next) => previous.item === next.item && previous.renderRevision === next.renderRevision);
 
 /** Cursor metadata survives detail navigation; only six pages of summaries stay resident. */
-export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey = '', installedItems, installedGhosts, query, scope, onScope, showOrganization, prewarm = false,
-  visible, scrollRef, loadPage, renderItem, renderRevision, onCounts, filterHost }: {
+export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey = '', installedItems, installedGhosts, query, scope: filter, onScope, showOrganization, prewarm = false,
+  visible, scrollRef, loadPage, renderItem, renderRevision, onCounts, filterHost, iconCache }: {
   cacheRef: RefObject<PluginBrowserCache>;
   ownerKey: string;
   revision: string;
@@ -47,8 +48,8 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
   installedItems?: PluginMarketItem[];
   installedGhosts?: readonly InstalledGhost[];
   query: string;
-  scope: NonNullable<PluginMarketQuery['scope']>;
-  onScope(scope: NonNullable<PluginMarketQuery['scope']>): void;
+  scope: PluginCatalogFilter;
+  onScope(scope: PluginCatalogFilter): void;
   showOrganization: boolean;
   prewarm?: boolean;
   visible: boolean;
@@ -58,9 +59,13 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
   renderRevision?: unknown;
   onCounts?(counts: PluginMarketCounts | null): void;
   filterHost?: RefObject<HTMLDivElement | null>;
+  iconCache?: MarketIconCache;
 }) {
   const { t } = useTranslation();
   const [, rerender] = useReducer(n => n + 1, 0);
+  const publisher = filter === 'official' || filter === 'community' ? filter : undefined;
+  const scope = filter === 'official' || filter === 'community' ? 'public' : filter;
+  const pageLimit = pluginCatalogPageLimit(scope, query);
   const countsKey = JSON.stringify([ownerKey, catalogKey, query.trim()]);
   const key = pluginBrowserKey(ownerKey, catalogKey, query, scope);
   const partitionKey = JSON.stringify([ownerKey, catalogKey]);
@@ -76,6 +81,11 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     countsFlight: sameCountsKey ? previousCache.countsFlight : undefined,
   };
   cache.partitionKey = partitionKey; cache.variants = variants;
+  if (cache.gridPublisher !== publisher) {
+    delete cache.grid.restore;
+    delete cache.grid.offset;
+    cache.gridPublisher = publisher;
+  }
   if (sameCountsKey && previousCache.countsAt > cache.countsAt) {
     cache.counts = previousCache.counts; cache.countsAt = previousCache.countsAt;
   }
@@ -119,7 +129,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
       for (const [index, items] of resident.pages) {
         const next = items.filter(item => !isInstalled.current(item));
         if (next.length === items.length) continue;
-        resident.pages.set(index, next); resident.sizes.set(index, next.length); removed = true;
+        resident.pages.set(index, next); resident.sizes.set(index, pluginPageSize(next)); removed = true;
       }
       if (removed) {
         if (saved) resident.grid.restore = { anchor: saved };
@@ -152,30 +162,30 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         if (!alive.current || cacheRef.current !== current) return;
         requestedRevision = latestRevision.current;
         const response = await (index === 0 && current.firstPageFlight ? current.firstPageFlight : loader.current({ query: query.trim().slice(0, 100), scope,
-          cursor: current.cursors.get(index), limit: PLUGIN_PAGE_SIZE, excludeInstalled: true,
+          cursor: current.cursors.get(index), limit: pageLimit, excludeInstalled: true,
           counts: false }));
         if (index === 0) current.firstPageFlight = undefined;
         if (!alive.current || cacheRef.current !== current || requestedRevision !== latestRevision.current) return;
         const initial = current.metadata === null;
         const prior = current.pages.get(index);
         const page = { ...response, items: mergePluginSnapshot(prior && current.metadata ? { ...current.metadata, items: prior } : null,
-          response).items.filter(item => !isInstalled.current(item)) };
+          response, Boolean(iconCache)).items.filter(item => !isInstalled.current(item)) };
         const previousItems = current.pages.get(index) ?? (index === 0 && displayed.current.partitionKey === partitionKey
           ? [...displayed.current.pages.values()].flat() : []);
         current.pages.delete(index);
-        current.pages.set(index, mergePluginItems(previousItems, page.items));
+        current.pages.set(index, mergePluginItems(previousItems, page.items, false, iconCache));
         if (scope === 'custom') {
           let previous = current.lastSource.get(index - 1) ?? null;
           let start = 0;
-          for (let page = 0; page < index; page++) start += current.sizes.get(page) ?? 0;
+          for (let page = 0; page < index; page++) start += current.sizes.get(page)?.all ?? 0;
           page.items.forEach((item, offset) => {
             if (item.sourceMarketName && item.sourceMarketName !== previous) current.groups.set(start + offset, item.sourceMarketName);
             previous = item.sourceMarketName;
           });
           current.lastSource.set(index, previous);
         }
-        while (current.pages.size > 6) current.pages.delete(current.pages.keys().next().value!);
-        current.sizes.set(index, page.items.length);
+        while (current.pages.size > PLUGIN_CACHED_PAGES) current.pages.delete(current.pages.keys().next().value!);
+        current.sizes.set(index, pluginPageSize(page.items));
         if (index >= current.last) { current.last = index; current.hasNext = page.nextCursor !== null; }
         if (page.nextCursor) current.cursors.set(index + 1, page.nextCursor);
         if (page.counts) { current.counts = page.counts; countListener.current?.(page.counts); }
@@ -204,13 +214,15 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     readQueue.current = request;
     inFlight.current.set(flightKey, { cache: current, promise: request });
     return request;
-  }, [cacheRef, query, scope, partitionKey]);
+  }, [cacheRef, query, scope, partitionKey, pageLimit, iconCache]);
   useEffect(() => {
     alive.current = true;
     if (!visible && !prewarm) return () => { alive.current = false; };
     if (!cacheRef.current.metadata) {
       countListener.current?.(cacheRef.current.counts);
-      const timer = setTimeout(() => { void read(0); rerender(); }, query.trim() ? 250 : 0);
+      const timer = setTimeout(() => {
+        if (!cacheRef.current.metadata) { void read(0); rerender(); }
+      }, query.trim() ? 250 : 0);
       return () => { clearTimeout(timer); alive.current = false; };
     }
     countListener.current?.(cacheRef.current.counts);
@@ -238,7 +250,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     countQueue.current = flight;
     await flight;
   }, [cache, cacheRef, countsKey, query]);
-  const refreshFlight = useRef<{ cache: PluginBrowserCache; revision: string; promise: Promise<void> } | null>(null);
+  const refreshFlight = useRef<{ cache: PluginBrowserCache; revision: string; promise: Promise<void>; renewIcons: boolean } | null>(null);
   useEffect(() => {
     if (!visible && !prewarm) return;
     let active = true;
@@ -247,15 +259,12 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
       if (!current()) return;
       const pending = refreshFlight.current;
       if (pending?.cache === cache) {
+        if (options?.renewIcons) pending.renewIcons = true;
         await pending.promise;
         // Reuse the flight as the queue: only invalidations newer than that
         // read need a follow-up. Concurrent callers join that one latest read.
         if (current() && pending.revision !== latestRevision.current && cache.refreshedRevision !== latestRevision.current) {
           await refresh({ ...options, force: true });
-        } else if (current() && options?.renewIcons) {
-          for (const [index, items] of cache.pages)
-            cache.pages.set(index, items.map(item => item.icon ? { ...item, icon: { ...item.icon } } : item));
-          rerender();
         }
         return;
       }
@@ -268,11 +277,11 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         if (!cache.metadata) { if (cache.error === null || options?.force) await read(0); return; }
         const coversRevision = () => current() && requestedRevision === latestRevision.current;
         const pages = new Map<number, PluginMarketPage>();
-        const rebuiltSizes = new Map<number, number>();
+        const rebuiltSizes: PluginBrowserCache['sizes'] = new Map();
         const rebuiltCursors = new Map<number, string | null>([[0, null]]);
         const previousPages = new Map(cache.pages);
         const previousOffsets = [0];
-        for (let index = 0; index <= cache.last; index++) previousOffsets.push(previousOffsets[index] + (cache.sizes.get(index) ?? 0));
+        for (let index = 0; index <= cache.last; index++) previousOffsets.push(previousOffsets[index] + (cache.sizes.get(index)?.all ?? 0));
         let rebuilt = false;
         let rebuiltHasNext = false;
         try {
@@ -282,7 +291,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           for (const index of [...cache.pages.keys()].sort((a, b) => a - b)) {
             if (!coversRevision()) return;
             pages.set(index, await loader.current({ query: query.trim().slice(0, 100), scope,
-              cursor: cache.cursors.get(index), limit: PLUGIN_PAGE_SIZE, excludeInstalled: true, counts: false }));
+              cursor: cache.cursors.get(index), limit: pageLimit, excludeInstalled: true, counts: false }));
             if (!coversRevision()) return;
           }
         } catch (error) {
@@ -295,7 +304,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           const retainVisiblePages = () => {
             const first = firstVisiblePage();
             const last = first + visiblePages.current.last - visiblePages.current.first;
-            while (pages.size > 6) {
+            while (pages.size > PLUGIN_CACHED_PAGES) {
               const distance = (index: number) => Math.max(first - index, index - last, 0);
               const farthest = [...pages.keys()].reduce((a, b) => distance(a) > distance(b) ? a : b);
               pages.delete(farthest);
@@ -307,12 +316,12 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           for (let index = 0; index <= cache.last + 1; index++) {
             if (!coversRevision()) return;
             const page = await loader.current({ query: query.trim().slice(0, 100), scope,
-              cursor, limit: PLUGIN_PAGE_SIZE, excludeInstalled: true, counts: false });
+              cursor, limit: pageLimit, excludeInstalled: true, counts: false });
             if (!coversRevision()) return;
             pages.set(index, page); cursor = page.nextCursor;
             rebuiltHasNext = cursor !== null;
             if (page.items.some(item => item.pluginId === anchor.current?.id)) anchorPage = index;
-            rebuiltSizes.set(index, page.items.length);
+            rebuiltSizes.set(index, pluginPageSize(page.items.filter(item => !isInstalled.current(item))));
             if (cursor) rebuiltCursors.set(index + 1, cursor);
             retainVisiblePages();
             if (!cursor) break;
@@ -325,7 +334,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
             if (!coversRevision()) return;
             if (pages.has(index) || !rebuiltCursors.has(index)) continue;
             pages.set(index, await loader.current({ query: query.trim().slice(0, 100), scope,
-              cursor: rebuiltCursors.get(index), limit: PLUGIN_PAGE_SIZE, excludeInstalled: true, counts: false }));
+              cursor: rebuiltCursors.get(index), limit: pageLimit, excludeInstalled: true, counts: false }));
             if (!coversRevision()) return;
             retainVisiblePages();
           }
@@ -340,16 +349,17 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           cache.hasNext = rebuiltHasNext;
           cache.pages.clear(); restartCursors.current = false; changed = true;
         }
+        const renewIcons = refreshFlight.current?.cache === cache && refreshFlight.current.renewIcons;
         for (const [index, page] of pages) {
           const previous = previousPages.get(index) ?? [];
           const next = mergePluginSnapshot(cache.metadata ? { ...cache.metadata, items: previous } : null,
-            page, options?.renewIcons).items.filter(item => !isInstalled.current(item));
-          const merged = mergePluginItems(previous, next, options?.renewIcons);
-          if (rebuilt || merged !== previous) { cache.pages.set(index, merged); cache.sizes.set(index, merged.length); changed = true; }
+            page, renewIcons || Boolean(iconCache)).items.filter(item => !isInstalled.current(item));
+          const merged = mergePluginItems(previous, next, renewIcons, iconCache);
+          if (rebuilt || merged !== previous) { cache.pages.set(index, merged); cache.sizes.set(index, pluginPageSize(merged)); changed = true; }
           if (page.nextCursor) cache.cursors.set(index + 1, page.nextCursor);
           if (index === cache.last && cache.hasNext !== (page.nextCursor !== null)) { cache.hasNext = page.nextCursor !== null; changed = true; }
         }
-        while (cache.pages.size > 6) cache.pages.delete(cache.pages.keys().next().value!);
+        while (cache.pages.size > PLUGIN_CACHED_PAGES) cache.pages.delete(cache.pages.keys().next().value!);
         if (dedupeCachedPages(cache)) changed = true;
         const fresh = pages.values().next().value;
         if (fresh && cache.metadata) {
@@ -361,7 +371,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         }
         if (scope === 'custom') {
           const offsets = [0];
-          for (let index = 0; index <= cache.last; index++) offsets.push(offsets[index] + (cache.sizes.get(index) ?? 0));
+          for (let index = 0; index <= cache.last; index++) offsets.push(offsets[index] + (cache.sizes.get(index)?.all ?? 0));
           const groups = new Map<number, string>();
           for (const [index, name] of cache.groups) {
             let low = 0, high = previousOffsets.length - 2;
@@ -386,19 +396,25 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           if (anchor.current) {
             let offset = 0;
             for (let page = 0; page <= cache.last; page++) {
-              const index = cache.pages.get(page)?.findIndex(item => item.pluginId === anchor.current!.id) ?? -1;
+              const items = cache.pages.get(page);
+              const visibleItems = cache.gridPublisher ? items?.filter(item => publicPublisherFilter(item) === cache.gridPublisher) : items;
+              const index = visibleItems?.findIndex(item => item.pluginId === anchor.current!.id) ?? -1;
               if (index >= 0) { cache.grid.restore = { anchor: anchor.current, index: offset + index }; break; }
-              offset += cache.sizes.get(page) ?? 0;
+              offset += cache.sizes.get(page)?.[cache.gridPublisher ?? 'all'] ?? 0;
             }
           }
           rerender();
         }
       })().catch(() => undefined).finally(() => { if (refreshFlight.current?.promise === flight) refreshFlight.current = null; });
-      refreshFlight.current = { cache, revision: latestRevision.current, promise: flight };
+      refreshFlight.current = { cache, revision: latestRevision.current, promise: flight, renewIcons: options?.renewIcons === true };
       await flight;
     };
     if (cache.metadata && cache.refreshedRevision !== latestRevision.current) { cache.countsAt = 0; cache.countsFlight = undefined; }
-    cache.refresh = async options => { await Promise.all([refresh(options), Date.now() - cache.countsAt >= PLUGIN_CATALOG_REFRESH_MS ? count() : Promise.resolve()]); };
+    cache.refresh = async options => {
+      // Signed image URLs can expire independently of the catalog counts.
+      const refreshCounts = !options?.renewIcons && Date.now() - cache.countsAt >= PLUGIN_CATALOG_REFRESH_MS;
+      await Promise.all([refresh(options), refreshCounts ? count() : Promise.resolve()]);
+    };
     const timer = setTimeout(() => {
       if (cache.countsFlight || cache.countsKey !== countsKey || Date.now() - cache.countsAt >= PLUGIN_CATALOG_REFRESH_MS) void count();
       void refresh();
@@ -408,7 +424,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
       clearTimeout(timer); cache.refresh = undefined;
       if (refreshFlight.current?.cache === cache) refreshFlight.current = null;
     };
-  }, [cache, countsKey, query, scope, visible, prewarm, count, scrollRef, read]);
+  }, [cache, countsKey, query, scope, pageLimit, visible, prewarm, count, scrollRef, read, iconCache]);
   const previousRevision = useRef(revision);
   useEffect(() => {
     if (previousRevision.current === revision) return;
@@ -417,18 +433,28 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     if (visible || prewarm) void cache.refresh?.({ force: true });
   }, [revision, cache, visible, prewarm]);
   const sentinel = useRef<HTMLDivElement>(null);
+  const publicTotal = cache.counts?.public;
+  const hasPublisherCounts = cache.counts?.official !== undefined && cache.counts?.community !== undefined;
   useEffect(() => {
     if (!visible || !cache.hasNext || cache.error !== null || !sentinel.current || !scrollRef.current) return;
+    // Older servers omit the breakdown. Finish only small legacy results in the existing cache.
+    const nextPage = cache.last + 1;
+    if (!hasPublisherCounts && scope === 'public' && !query.trim() && publicTotal !== undefined && publicTotal > 0 &&
+        publicTotal <= pageLimit && nextPage < PLUGIN_CACHED_PAGES && !cache.metadata?.unavailableReason) {
+      const timer = setTimeout(() => { if (cacheRef.current === cache) void read(nextPage); }, 0);
+      return () => clearTimeout(timer);
+    }
     const observer = new IntersectionObserver(entries => {
       if (entries.some(entry => entry.isIntersecting)) { void read(cache.last + 1); rerender(); }
     }, { root: scrollRef.current, rootMargin: '80px' });
     observer.observe(sentinel.current);
     return () => observer.disconnect();
-  }, [visible, cache.hasNext, cache.last, cache.error, scrollRef, read]);
+  }, [visible, scope, query, publicTotal, hasPublisherCounts, pageLimit, cache, cacheRef, cache.hasNext, cache.last, cache.error, cache.metadata?.unavailableReason, scrollRef, read]);
   // Filtering installed matches can leave short or empty cursor pages.
   const offsets = [0];
-  for (let page = 0; page <= display.last; page++) offsets.push(offsets[page] + (display.sizes.get(page) ?? 0));
+  for (let page = 0; page <= display.last; page++) offsets.push(offsets[page] + (display.sizes.get(page)?.[publisher ?? 'all'] ?? 0));
   const itemCount = offsets[display.last + 1];
+  const publisherPages = new Map<number, PluginMarketItem[]>();
   const pageAt = (index: number) => {
     let low = 0, high = display.last;
     while (low < high) {
@@ -438,13 +464,24 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     }
     return low;
   };
-  const filters = (['all', 'public', ...(showOrganization ? ['organization'] : []),
-    ...((cache.metadata ?? display.metadata)?.customSourceNames.length ? ['custom'] : [])] as NonNullable<PluginMarketQuery['scope']>[]);
-  const filtersView = <SegmentedControl value={scope} onValueChange={onScope} height={32} optionHeight={28}
+  const filters: PluginCatalogFilter[] = ['all', 'official', 'community'];
+  if (showOrganization) filters.push('organization');
+  if ((cache.metadata ?? display.metadata)?.customSourceNames.length) filters.push('custom');
+  // A complete cached catalog can also supply exact totals for older servers.
+  const complete = ['public', 'all'].map(source => variants.get(pluginBrowserKey(ownerKey, catalogKey, query, source)))
+    .find(entry => entry?.metadata && !entry.hasNext && entry.error === null && !entry.metadata.unavailableReason && entry.refreshedRevision === revision);
+  function filterCount(value: PluginCatalogFilter) {
+    const count = cache.counts?.[value];
+    if (count !== undefined || (value !== 'official' && value !== 'community')) return count;
+    if (!complete) return cache.counts?.public === 0 ? 0 : undefined;
+    return Array.from(complete.sizes.values()).reduce((total, size) => total + size[value], 0);
+  }
+  const filtersView = <SegmentedControl value={filter} onValueChange={onScope} height={32} optionHeight={28}
         aria-label={t('settings.ghosts.page.filtersAria')}
-        options={filters.map(filter => ({ value: filter, label: <>{filter === 'all'
-          ? t('settings.ghosts.page.filterAll') : t(`settings.ghosts.page.origin.${filter}`)}
-          <span className="ml-1.5 inline-block min-w-[3ch] text-right tabular-nums text-[var(--text-tertiary)]">{cache.counts?.[filter] ?? '\u00a0'}</span></> }))} />;
+        options={filters.map(value => ({ value, label: <>{value === 'all'
+          ? t('settings.ghosts.page.filterAll') : value === 'official' || value === 'community'
+            ? t(`settings.ghosts.market.publisherKind.${value}`) : t(`settings.ghosts.page.origin.${value}`)}
+          <span className="ml-1.5 inline-block min-w-[3ch] text-right tabular-nums text-[var(--text-tertiary)]">{filterCount(value) ?? '\u00a0'}</span></> }))} />;
   return <section hidden={!visible} className="mt-6 min-w-0">
     {!query.trim() && filterHost?.current ? visible ? createPortal(filtersView, filterHost.current) : null : query.trim() ? (
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -473,15 +510,21 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         }
       }} renderItem={index => {
         const page = pageAt(index);
-        const item = display.pages.get(page)?.[index - offsets[page]];
-        return item ? <CatalogCard item={item} renderItem={renderItem} renderRevision={renderRevision} />
+        const items = display.pages.get(page);
+        let rows = items;
+        if (publisher && items) {
+          if (!publisherPages.has(page)) publisherPages.set(page, items.filter(row => publicPublisherFilter(row) === publisher));
+          rows = publisherPages.get(page);
+        }
+        const item = rows?.[index - offsets[page]];
+        return item ? <CatalogCard item={iconCache ? readReusedMarketIcon(iconCache, item) : item} renderItem={renderItem} renderRevision={renderRevision} />
           : <div className="h-36 rounded-xl bg-[var(--surface-elevated)]" aria-hidden="true" />;
       }} />
     <div ref={sentinel} className="flex min-h-12 items-center justify-center gap-3 text-12 text-[var(--text-tertiary)]" aria-live="polite">
       {cache.error !== null ? <><span>{t('settings.ghosts.market.unavailable')}</span>
         <Button size="sm" onClick={() => { void read(cache.error!); rerender(); }}>{t('commonUi.retry')}</Button></>
         : !cache.metadata ? showLoading ? <><Spinner /><span>{t(query.trim() ? 'settings.ghosts.page.searching' : 'ccAgent.common.loading')}</span></> : null
-          : itemCount === 0 ? cache.metadata?.organizationAccessError || cache.metadata?.unavailableCustomSourceNames.length ? null : <span>{t('settings.ghosts.page.emptyFiltered')}</span>
+          : itemCount === 0 ? (publisher && cache.hasNext) || cache.metadata?.organizationAccessError || cache.metadata?.unavailableCustomSourceNames.length ? null : <span>{t('settings.ghosts.page.emptyFiltered')}</span>
             : !cache.hasNext ? <span>{t('settings.ghosts.page.allLoaded', { count: itemCount })}</span> : null}
     </div>
   </section>;

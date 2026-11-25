@@ -1,3 +1,9 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DEFAULT_MEMORY_CONFIG, MemoryStorage, type MakerMemoryStore } from '@cindy/maker-core';
+import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
+import { importBotSkillDirectory, listBotSkillSources, readBotSkillSource, saveBotSkillSource, setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
 import { describe, expect, it, vi } from 'vitest';
 import { materializeCompanion } from '../materialize.js';
 import { createCompanionStore, storedValueHash } from '../store.js';
@@ -22,6 +28,56 @@ function cloud(prefs: Array<{ key: string; value: unknown }>, room: unknown[] = 
 const profilePref = { key: 'companion.profile.v1', value: { name: 'Mia', description: 'helper', soul: 'I am Mia', systemPrompt: 'custom', user: 'Owner likes tea' } };
 
 describe('materializeCompanion', () => {
+  // #12112: fakeLocal.saveSkill accepts bodies the real writer rejected. Unit tier:
+  // restore a 71,560-byte imported skill from the store into a persisted failed takeover,
+  // with both layouts and an existing identical copy (which must still apply enabled).
+  it.each([false, true])('recovers a failed takeover with an imported oversized skill (project=%s)', async project => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-skill-takeover-'));
+    const sourceDir = path.join(dir, 'source');
+    const targetDir = path.join(dir, 'target');
+    const raw = `---\r\nname: brew\r\ndescription: Imported skill\r\nallowed-tools: Bash\r\n---\r\n\r\n${'x'.repeat(71_560)}\r\n`;
+    try {
+      setBotProjectSkillsDir(targetDir, actor.externalId, project);
+      const importInto = (root: string) => importBotSkillDirectory(root, actor.externalId, 'brew',
+        temporary => fs.writeFile(path.join(temporary, 'SKILL.md'), raw), () => {});
+      await importInto(sourceDir);
+      if (project) await importInto(targetDir);
+      const [skill] = await listBotSkillSources(sourceDir, actor.externalId);
+      const key = 'companion.skill.v1:brew';
+      const value = { slug: skill!.slug, content: skill!.source, enabled: false };
+      const { api } = fakeApi((route, method) => {
+        if (route === '/preferences' && method === 'GET') return [{ ...profilePref, revision: 1 }];
+        if (route.startsWith('/companion-store/changes')) return { entries: [{ key, revision: 1, cursor: '1', hash: valueHash(value), size: Buffer.byteLength(raw), deleted: false, value }], cursor: '1', hasMore: false };
+        if (route.startsWith(`/conversations/${ROOM}/messages?`)) return [];
+        throw new Error(`unexpected ${method} ${route}`);
+      });
+      const local = fakeLocal({
+        backupHome: vi.fn(async () => '/backup'),
+        readSkill: (id, slug) => readBotSkillSource(targetDir, id, slug),
+        saveSkill: (id, slug, content, enabled) => saveBotSkillSource(targetDir, id, slug, content, { enabled }),
+      });
+      // A previous attempt created the profile but never finished restoring content.
+      local.setProfile({ status: 'active', displayName: 'Mia', description: 'helper' });
+      const saved = memoryState();
+      saved.state.update(actor.externalId, actor.id, entry => { entry.demoted = true; entry.backedUp = true; });
+      const { state } = memoryState(saved.files.get('state.json'));
+      expect(state.isDemoted(actor.externalId)).toBe(true);
+      const store = createCompanionStore(api, { enabled: () => true });
+      const retry = () => materializeCompanion({ api, store, state, host: local.host, actor, roomId: async () => ROOM });
+      await retry();
+      expect(state.isDemoted(actor.externalId)).toBe(false);
+      expect(await listBotSkillSources(targetDir, actor.externalId)).toEqual([{ ...skill, enabled: false }]);
+      expect(await readBotSkillSource(targetDir, actor.externalId, 'brew')).toBe(raw);
+      expect(local.host.backupHome).not.toHaveBeenCalled();
+      await retry();
+      expect(state.isDemoted(actor.externalId)).toBe(false);
+      expect(await listBotSkillSources(targetDir, actor.externalId)).toEqual([{ ...skill, enabled: false }]);
+    } finally {
+      setBotProjectSkillsDir(targetDir, actor.externalId, false);
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // The new local identity lookup is asynchronous: losing the account while it reads must
   // stop before a backup, profile write or history import (cloud-companions.md §6, unit tier).
   it('fences a local identity check that finishes after the account changed', async () => {
@@ -60,6 +116,55 @@ describe('materializeCompanion', () => {
     expect(result).toEqual({ created: true, inserted: 0, rebuild: 'skipped', notices: ['permissions'] });
     expect(state.bot('bot_mia')?.demoted).toBeUndefined();
     expect(local.host.rebuildContext).not.toHaveBeenCalled();
+  });
+
+  // #9339: existing fakeLocal.restoreMemory accepts every filename, hiding the
+  // digest rejection. Unit tier: real materialize -> service -> isolated storage;
+  // one storage-generated digest plus a curated control must clear demotion.
+  it('completes takeover with a storage-generated digest and a curated memory', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-digest-takeover-'));
+    try {
+      const source = new MemoryStorage(path.join(dir, 'source'), DEFAULT_MEMORY_CONFIG);
+      const destination = new MemoryStorage(path.join(dir, 'destination'), DEFAULT_MEMORY_CONFIG);
+      await source.init(dir);
+      await destination.init(dir);
+      const prefs: Array<{ key: string; value: unknown }> = [profilePref];
+      for (const type of ['digest', 'user'] as const) {
+        await source.write({ type, name: 'takeover', title: type, description: 'takeover fixture', body: `${type} body` });
+        const filename = `${type}_takeover.md`;
+        prefs.push({ key: `companion.memory.v1:${filename}`, value: {
+          filename, content: await fs.readFile(path.join(dir, 'source', filename), 'utf8'),
+        } });
+      }
+      const service = createBotMemoryService({
+        getStore: async () => destination as unknown as MakerMemoryStore,
+        readBot: async () => ({ canonicalSessionId: null }),
+        requestRefresh: async () => undefined,
+      });
+      const local = fakeLocal({
+        readMemory: (_id, filename) => fs.readFile(path.join(dir, 'destination', filename), 'utf8').catch(error => {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        }),
+        restoreMemory: (id, filename, raw) => service.restoreRaw(id, filename, raw),
+        removeMemory: (id, filename) => service.removeRaw(id, filename),
+      });
+      const { api } = cloud(prefs);
+      const { state } = memoryState();
+      state.update(actor.externalId, actor.id, entry => { entry.demoted = true; });
+      const run = () => materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM });
+      await run();
+      expect(state.isDemoted(actor.externalId)).toBe(false);
+      expect((await destination.read('digest_takeover.md')).body).toBe('digest body');
+      expect((await destination.read('user_takeover.md')).body).toBe('user body');
+      expect(await destination.getIndex()).not.toContain('digest_takeover.md');
+      expect(await destination.getIndex()).toContain('user_takeover.md');
+      await run();
+      expect(state.isDemoted(actor.externalId)).toBe(false);
+      expect((await destination.read('digest_takeover.md')).body).toBe('digest body');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('updates an existing companion from the cloud; a tombstone deletes the local file whatever it holds', async () => {

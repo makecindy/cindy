@@ -44,8 +44,6 @@ export interface DeviceLinkSettings {
   controlledBy: ActiveController[];
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单)。 */
   revokedControllers: string[];
-  /** 单独关掉「用本机模型」的同账号电脑 deviceId 列表。 */
-  modelUseRevokedControllers: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   listError: string | null;
@@ -63,8 +61,10 @@ export interface DeviceLinkSettings {
   restore: (deviceId: string) => Promise<void>;
   /** 控制端本地偏好:是否允许本机主动控制某个目标设备。 */
   setDeviceControlEnabled: (deviceId: string, enabled: boolean) => Promise<void>;
-  /** 单独开关某台电脑的「用本机模型」。 */
-  setModelUse: (deviceId: string, allowed: boolean) => Promise<void>;
+  /** 本机被移除后「重新加入」进行中。 */
+  rejoining: boolean;
+  /** 本机被移除后「重新加入」(官方网络;结果与失败原因已内部 toast)。 */
+  rejoin: () => Promise<void>;
 }
 
 const POLL_INTERVAL_MS = 30_000;
@@ -82,10 +82,10 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const [devices, setDevices] = useState<DeviceLinkDeviceView[] | null>(null);
   const [controlledBy, setControlledBy] = useState<ActiveController[]>([]);
   const [revokedControllers, setRevokedControllers] = useState<string[]>([]);
-  const [modelUseRevokedControllers, setModelUseRevokedControllers] = useState<string[]>([]);
   const [disabledControlDeviceIds, setDisabledControlDeviceIds] = useState<string[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [rejoining, setRejoining] = useState(false);
   const mounted = useRef(true);
   const refreshGeneration = useRef(0);
   // 最近一次已返回（成功或失败）的刷新代次；与 refreshGeneration 不同说明还有刷新在途。
@@ -180,7 +180,6 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         }
         if (controllerRevision === 0) setControlledBy(s.controlledBy ?? []);
         setRevokedControllers(s.revokedControllers ?? []);
-        setModelUseRevokedControllers(s.modelUseRevokedControllers ?? []);
         applyDisabledControlDeviceIds(s.disabledControlDeviceIds ?? []);
       })
       .catch((err) => log.warn('getState failed', err));
@@ -368,22 +367,6 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     [revokedControllers, t],
   );
 
-  const setModelUse = useCallback(
-    async (deviceId: string, allowed: boolean) => {
-      const prev = modelUseRevokedControllers;
-      setModelUseRevokedControllers((r) => allowed ? r.filter((id) => id !== deviceId) : r.includes(deviceId) ? r : [...r, deviceId]);
-      try {
-        await window.electronAPI.deviceLink.setModelUse(deviceId, allowed);
-        toast.success(t(allowed ? 'settings.remoteControl.toast.modelUseRestored' : 'settings.remoteControl.toast.modelUseRevoked'));
-      } catch (err) {
-        log.warn('setModelUse failed', err);
-        setModelUseRevokedControllers(prev);
-        toast.error(t('settings.remoteControl.toast.modelUseFailed'));
-      }
-    },
-    [modelUseRevokedControllers, t],
-  );
-
   const setDeviceControlEnabled = useCallback(
     async (deviceId: string, next: boolean) => {
       const prev = disabledControlDeviceIdsRef.current;
@@ -420,6 +403,35 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     [applyDisabledControlDeviceIds, t],
   );
 
+  const rejoinInFlight = useRef(false);
+  const rejoin = useCallback(async () => {
+    if (rejoinInFlight.current) return;
+    rejoinInFlight.current = true;
+    setRejoining(true);
+    try {
+      const result = await window.electronAPI.deviceLink.rejoin();
+      toast.success(
+        t(result.agentNet === 'failed' ? 'settings.devices.rejoin.doneWithoutAgentNet' : 'settings.devices.rejoin.done'),
+      );
+      if (mounted.current) void refresh();
+    } catch (err) {
+      log.warn('rejoin failed', err);
+      const code = extractIpcError(err)?.code;
+      toast.error(
+        t(
+          code === 'NOT_FOUND'
+            ? 'settings.devices.rejoin.unsupported'
+            : code === 'PRECONDITION_FAILED'
+              ? 'settings.devices.rejoin.agentNetFailed'
+              : 'settings.devices.rejoin.failed',
+        ),
+      );
+    } finally {
+      rejoinInFlight.current = false;
+      if (mounted.current) setRejoining(false);
+    }
+  }, [refresh, t]);
+
   return {
     enabled,
     linkStatus,
@@ -428,7 +440,6 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     devices,
     controlledBy,
     revokedControllers,
-    modelUseRevokedControllers,
     disabledControlDeviceIds,
     listError,
     refreshing,
@@ -440,6 +451,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     revoke,
     restore,
     setDeviceControlEnabled,
-    setModelUse,
+    rejoining,
+    rejoin,
   };
 }

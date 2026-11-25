@@ -222,6 +222,8 @@ export function appendSpeechModels(
   current: CustomProviderConfig,
   request: CustomProviderConfig,
   presets: ProviderPreset[] = [],
+  mode: 'audio_speech' | 'realtime' = 'audio_speech',
+  registry = BUNDLED_CATALOG.modelRegistry,
 ): CustomProviderConfig {
   if ((current.auth?.method ?? 'apiKey') !== 'apiKey')
     throw new Error('api_key_connection_required');
@@ -249,11 +251,26 @@ export function appendSpeechModels(
     )
       throw new Error('connection_changed');
     for (const model of draft.models) {
-      if (!isSpeechModel(model)) throw new Error('speech_model_required');
+      if (mode === 'audio_speech' ? !isSpeechModel(model) : !isRealtimeModel(model, registry)) throw new Error('speech_model_required');
       if (known.has(model.id)) continue;
       runtime.models.push(structuredClone(model));
       known.add(model.id);
     }
   }
   return next;
+}
+
+export function isRealtimeModel(
+  model: { id: string; mode?: string; discoveredMetadata?: ModelMetadata },
+  registry = BUNDLED_CATALOG.modelRegistry,
+): boolean {
+  return (model.mode ?? model.discoveredMetadata?.mode ?? findBaseModel(registry, model.id)?.defaults.mode) === 'realtime';
+}
+
+export function providerRealtimeSetup(provider: ProviderView): { agent: AgentKind } | undefined {
+  if (provider.source !== 'user' || provider.suspended || provider.auth.native || provider.auth.method !== 'apiKey') return;
+  for (const agent of ['codex', 'pi', 'claude-code'] as const) {
+    const route = provider.routing[agent];
+    if (route && !route.disabled && route.authStrategy === 'api-key-header') return { agent };
+  }
 }

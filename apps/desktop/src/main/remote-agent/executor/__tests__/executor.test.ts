@@ -26,7 +26,13 @@ let opaque: number;
 
 function makeExecutor(
   mode: ReturnType<typeof executorGateModeFor> = 'normal',
-  extra: { aliases?: Array<{ from: string; to: string }>; now?: () => number; extractPdfText?: PdfTextExtractor; webFetch?: GuardedFetch } = {},
+  extra: {
+    aliases?: Array<{ from: string; to: string }>;
+    now?: () => number;
+    extractPdfText?: PdfTextExtractor;
+    webFetch?: GuardedFetch;
+    confirm?: RemoteExecutorOptions['confirm'];
+  } = {},
 ) {
   const workspace = new ExecutorWorkspace({ workingDir: project, aliases: extra.aliases });
   const gate = new ExecutorGate(workspace, mode, extra.now);
@@ -37,6 +43,7 @@ function makeExecutor(
     tempDir: path.join(root, 'tmp'),
     ...(extra.extractPdfText ? { extractPdfText: extra.extractPdfText } : {}),
     ...(extra.webFetch ? { webFetch: extra.webFetch } : {}),
+    ...(extra.confirm ? { confirm: extra.confirm } : {}),
     capture: {
       beforeWrite: async (p) => {
         captured.push(p);
@@ -363,19 +370,107 @@ describe('Claude Code style file tools', () => {
     expect(notebook.cells[0].outputs).toEqual([]);
   });
 
+  // PR #11758 / unit: prior coverage changed either the path or access mode.
+  // Two Write calls to the same sensitive file require separate fallback decisions.
+  it('does not reuse a local Write approval for a second call on the same file', async () => {
+    const confirm = vi.fn<NonNullable<RemoteExecutorOptions['confirm']>>()
+      .mockResolvedValueOnce(true).mockResolvedValue(false);
+    const { executor } = makeExecutor('normal', { confirm });
+    const file = path.join(project, '.env');
+    try {
+      expect((await executor.callTool('Write', { file_path: file, content: 'VALUE=first' })).isError).not.toBe(true);
+      expect((await executor.callTool('Write', { file_path: file, content: 'VALUE=second' })).isError).toBe(true);
+      expect(confirm).toHaveBeenCalledTimes(2);
+      expect(fs.readFileSync(file, 'utf8')).toBe('VALUE=first');
+    } finally {
+      await executor.close();
+    }
+  });
+
+  // PR #11758 / unit: confirm and check mirror the relay handoff before dispatch.
+  // A distinct request for the same file cannot use a pending approval checked first.
+  it('binds a fallback file approval to the relay action that asked', async () => {
+    const { executor } = makeExecutor('normal', { confirm: async () => true });
+    const action: ExecutorAction = { kind: 'write', path: path.join(project, '.env') };
+    try {
+      expect(await executor.confirm(action)).toBe(true);
+      expect(executor.check({ ...action }).ok).toBe(false);
+      expect(executor.check(action).ok).toBe(true);
+      expect(executor.check(action).ok).toBe(false);
+    } finally {
+      await executor.close();
+    }
+  });
+
   it('refuses credential files until confirmed on this computer', async () => {
     const { executor, gate } = makeExecutor();
     const env = path.join(project, '.env');
     fs.writeFileSync(env, 'TOKEN=1');
     const denied = await executor.callTool('Read', { file_path: env });
     expect(denied.isError).toBe(true);
-    expect(text(denied)).toContain('needs the user\'s confirmation');
+    expect(text(denied)).toContain('did not allow');
     gate.recordApproval({ kind: 'read', path: env });
     expect(text(await executor.callTool('Read', { file_path: env }))).toBe('1\tTOKEN=1');
   });
 });
 
 describe.runIf(posix)('Claude Code style Bash', () => {
+  it('asks on this computer before refusing an ordinary operation the Agent computer did not ask about', async () => {
+    // 回归(2026-11-20)：「自动」档下 Agent 所在电脑的自动审查放行了 `grep -rn`，没有弹卡；本机上限
+    // 却按「必问」直接拒绝，用户找不到任何可点的确认。现在上限拦下的普通操作也在本机补问一次。
+    let answer: ExecutorConfirmation = true;
+    const asked: ExecutorAction[] = [];
+    const { executor } = makeExecutor('normal', {
+      confirm: async (action) => {
+        asked.push(action);
+        return answer;
+      },
+    });
+    fs.writeFileSync(path.join(project, 'a.txt'), 'needle');
+    const search = { command: 'grep -rn needle .' };
+    try {
+      expect(text(await executor.callTool('Bash', search))).toContain('a.txt:1:needle');
+      expect(asked).toEqual([{ kind: 'exec', command: search.command, cwd: project }]);
+      // 只放行这一次；用户不允许时如实说明，不让 Agent 去找不存在的确认。
+      answer = false;
+      const denied = await executor.callTool('Bash', search);
+      expect(denied.isError).toBe(true);
+      expect(text(denied)).toContain('did not allow');
+      expect(asked).toHaveLength(2);
+      // 区外写同样补问，允许后写入。
+      answer = true;
+      const target = path.join(outside, 'x.txt');
+      expect((await executor.callTool('Write', { file_path: target, content: 'x' })).isError).not.toBe(true);
+      expect(fs.readFileSync(target, 'utf8')).toBe('x');
+      // 上限本就放行的操作不弹卡。
+      asked.length = 0;
+      expect(text(await executor.callTool('Bash', { command: 'cat a.txt' }))).toBe('needle');
+      expect(asked).toEqual([]);
+    } finally {
+      await executor.close();
+    }
+  });
+
+  // PR #11758 / unit: Bash can change directories while a relative command awaits approval.
+  // The existing cwd test only runs commands sequentially. The approved command must run in its shown directory.
+  it('executes an approved relative Bash command in the directory shown before another call changed it', async () => {
+    const sub = path.join(project, 'sub');
+    fs.mkdirSync(sub);
+    fs.writeFileSync(path.join(project, 'a.txt'), 'needle');
+    const { executor } = makeExecutor('normal', {
+      confirm: async (action) => {
+        expect(action).toMatchObject({ kind: 'exec', cwd: project });
+        expect(text(await executor.callTool('Bash', { command: 'cd sub && pwd' }))).toBe(sub);
+        return true;
+      },
+    });
+    try {
+      expect(text(await executor.callTool('Bash', { command: 'grep -rn needle .' }))).toContain('a.txt:1:needle');
+    } finally {
+      await executor.close();
+    }
+  });
+
   it('keeps the working directory between calls, but resets it when it leaves the project', async () => {
     const { executor } = makeExecutor();
     fs.mkdirSync(path.join(project, 'sub'));
@@ -447,6 +542,48 @@ describe.runIf(posix)('Claude Code style Bash', () => {
 });
 
 describe('raw operations for Pi', () => {
+  // #11497: existing shell tests use Git Bash/POSIX and miss cmd's disabled cwd search.
+  // Unit smoke through production exec.run/Bash: real Windows cmd must execute the
+  // wrapper with NoDefaultCurrentDirectoryInExePath set, preserving cwd and status.
+  it.runIf(process.platform === 'win32')('runs cmd wrappers when current-directory executable search is disabled', async () => {
+    const exists = fs.existsSync.bind(fs);
+    const probe = vi.spyOn(fs, 'existsSync').mockImplementation((file) =>
+      /[/\\]bash\.exe$/i.test(String(file)) ? false : exists(file));
+    vi.stubEnv('NoDefaultCurrentDirectoryInExePath', '1');
+    const spaced = path.join(project, 'with spaces');
+    fs.mkdirSync(spaced);
+    fs.writeFileSync(path.join(spaced, 'marker.txt'), 'target-cwd');
+    const { executor } = makeExecutor('normal', { aliases: [{ from: '/agent/project', to: project }] });
+    try {
+      const hello = await executor.handle('exec.run', { command: 'echo hello', cwd: '/agent/project/with spaces' }) as { output: string; exitCode: number };
+      expect(Buffer.from(hello.output, 'base64').toString().trim()).toBe('hello');
+      expect(hello.exitCode).toBe(0);
+      const failed = await executor.handle('exec.run', {
+        command: 'type marker.txt\r\necho %NoDefaultCurrentDirectoryInExePath%\r\nexit /b 7', cwd: '/agent/project/with spaces',
+      }) as { output: string; exitCode: number };
+      expect(Buffer.from(failed.output, 'base64').toString().trim()).toBe('target-cwd1');
+      expect(failed.exitCode).toBe(7);
+      const foreground = await executor.callTool('Bash', { command: 'echo foreground' });
+      expect(foreground.isError).toBeFalsy();
+      expect(text(foreground)).toBe('foreground');
+      const started = await executor.callTool('Bash', { command: 'echo background\r\nexit /b 7', run_in_background: true });
+      expect(started.isError).toBeFalsy();
+      const id = /ID: (bash_[0-9a-f]+)/.exec(text(started))?.[1];
+      expect(id).toBeTruthy();
+      let output = '';
+      await vi.waitFor(async () => {
+        const result = await executor.callTool('BashOutput', { bash_id: id });
+        output += text(result);
+        expect(text(result)).toContain('<status>completed</status>');
+        expect(text(result)).toContain('<exit_code>7</exit_code>');
+      });
+      expect(output).toContain('background');
+    } finally {
+      await executor.close();
+      probe.mockRestore();
+    }
+  });
+
   it('reads, writes, lists, stats and detects image types', async () => {
     const { executor } = makeExecutor();
     await executor.handle('fs.mkdir', { path: 'src' });
@@ -567,7 +704,7 @@ describe('cindy_exec MCP endpoint', () => {
 
     const denied = await executor.callTool('WebFetch', { url: 'http://10.0.0.5/wiki' });
     expect(denied.isError).toBe(true);
-    expect(text(denied)).toContain('needs the user\'s confirmation');
+    expect(text(denied)).toContain('did not allow');
     expect(calls).toHaveLength(1);
     gate.recordApproval({ kind: 'fetch', url: 'http://10.0.0.5/wiki' });
     expect((await executor.callTool('WebFetch', { url: 'http://10.0.0.5/wiki' })).isError).toBeUndefined();
@@ -640,9 +777,10 @@ describe('shared provider credentials', () => {
     confirm?: RemoteExecutorOptions['confirm'],
     gitCredentials?: GitCredentialHistory,
     credentialGrant?: RemoteExecutorOptions['credentialGrant'],
+    now = Date.now,
   ) {
     const workspace = new ExecutorWorkspace({ workingDir: project });
-    const gate = new ExecutorGate(workspace, mode, Date.now, { confirmCredentials: true });
+    const gate = new ExecutorGate(workspace, mode, now, { confirmCredentials: true });
     const executor = new RemoteExecutor({
       workspace,
       gate,
@@ -789,7 +927,7 @@ describe('shared provider credentials', () => {
     try {
       expect(gate.authorize(action).ok).toBe(false);
       expect(await executor.confirm(action)).toBe(false);
-      expect(asked).toHaveBeenCalledExactlyOnceWith(action, expect.any(AbortSignal));
+      expect(asked).toHaveBeenCalledExactlyOnceWith(action, expect.any(AbortSignal), true);
       expect(gate.authorize(action).ok).toBe(false);
     } finally {
       await executor.close();
@@ -814,7 +952,7 @@ describe('shared provider credentials', () => {
       const denied = await executor.callTool('Bash', { command: action.command });
       expect(denied.isError).toBe(true);
       expect(text(denied)).not.toContain('PRIVATE_FIXTURE=changed-target');
-      expect(asked).toHaveBeenCalledExactlyOnceWith(action, expect.any(AbortSignal));
+      expect(asked).toHaveBeenCalledExactlyOnceWith(action, expect.any(AbortSignal), true);
     } finally {
       await executor.close();
     }
@@ -840,7 +978,7 @@ describe('shared provider credentials', () => {
     gate.recordCredentialExemption(compound);
     try {
       expect(await executor.confirm(compound)).toBe(false);
-      expect(asked).toHaveBeenCalledExactlyOnceWith(compound, expect.any(AbortSignal));
+      expect(asked).toHaveBeenCalledExactlyOnceWith(compound, expect.any(AbortSignal), true);
       expect(gate.authorize(compound).ok).toBe(false);
       expect(gate.authorize(ordinary).ok).toBe(false);
     } finally {
@@ -917,26 +1055,19 @@ describe('shared provider credentials', () => {
     expect(text(await executor.callTool('Read', { file_path: env }))).toBe('1\tTOKEN=1');
     expect(asked).toEqual([{ kind: 'read', path: env }]);
 
+    // PR #11758 / unit: a local Read confirmation must never authorize Write.
     answer = false;
+    expect((await executor.callTool('Write', { file_path: env, content: 'TOKEN=changed' })).isError).toBe(true);
+    expect(asked.at(-1)).toEqual({ kind: 'write', path: env });
+    expect(fs.readFileSync(env, 'utf8')).toBe('TOKEN=1');
+
     const production = path.join(project, '.env.production');
     fs.writeFileSync(production, 'TOKEN=2');
     const denied = await executor.callTool('Read', { file_path: production });
     expect(denied.isError).toBe(true);
-    expect(text(denied)).toContain('needs the user\'s confirmation');
+    expect(text(denied)).toContain('did not allow');
     await expect(executor.handle('fs.read', { path: production })).rejects.toMatchObject({ code: 'EACCES' });
-    expect(asked).toHaveLength(3);
-  });
-
-  it('does not ask about operations that are not credentials', async () => {
-    const asked: ExecutorAction[] = [];
-    const { executor } = sharedExecutor('normal', async (action) => {
-      asked.push(action);
-      return true;
-    });
-    // 区外写在普通档要本机批准，但不是凭证类：不在这里补问，照旧拒绝。
-    const result = await executor.callTool('Write', { file_path: path.join(outside, 'x.txt'), content: 'x' });
-    expect(result.isError).toBe(true);
-    expect(asked).toEqual([]);
+    expect(asked).toHaveLength(4);
   });
 
   it('remembers an explicit credential grant across different operations only in this task', async () => {
@@ -1000,7 +1131,7 @@ describe('shared provider credentials', () => {
       else resolve(answer);
       expect(await Promise.all(pending)).toEqual([answer === true, false]);
       expect(confirm).toHaveBeenCalledTimes(2);
-      expect(confirm).toHaveBeenNthCalledWith(2, second, expect.any(AbortSignal));
+      expect(confirm).toHaveBeenNthCalledWith(2, second, expect.any(AbortSignal), true);
       expect(executor.check(first).ok).toBe(answer === true);
       expect(executor.check(first).ok).toBe(false);
       expect(executor.check(second).ok).toBe(false);
@@ -1056,7 +1187,7 @@ describe('shared provider credentials', () => {
       answers[0](true);
       expect(await pending[0]).toBe(true);
       await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
-      expect(confirm).toHaveBeenNthCalledWith(2, third, expect.any(AbortSignal));
+      expect(confirm).toHaveBeenNthCalledWith(2, third, expect.any(AbortSignal), true);
       answers[1](true);
       expect(await pending[2]).toBe(true);
     } finally {
@@ -1078,7 +1209,7 @@ describe('shared provider credentials', () => {
       expect(confirm).toHaveBeenCalledTimes(1);
       abort.abort();
       await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
-      expect(confirm).toHaveBeenNthCalledWith(2, second, expect.any(AbortSignal));
+      expect(confirm).toHaveBeenNthCalledWith(2, second, expect.any(AbortSignal), true);
       // 已取消请求的卡片之后再回答，不建立任务授权。
       answers[0]('session');
       expect(await pending[0]).toBe(false);
@@ -1106,8 +1237,10 @@ describe('shared provider credentials', () => {
       expect(await other.confirm(first)).toBe(false);
       expect(otherConfirm).toHaveBeenCalledTimes(1);
       answer('session');
-      expect(await Promise.all(pending)).toEqual([true, true]);
-      expect(confirm).toHaveBeenCalledTimes(1);
+      // 任务级凭证授权不放宽计划模式：排在后面的写入改问普通确认，用户不允许就不放行。
+      await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
+      answer(false);
+      expect(await Promise.all(pending)).toEqual([true, false]);
       expect(executor.check(first).ok).toBe(true);
       expect(executor.check(second).ok).toBe(false);
       expect(other.check(first).ok).toBe(false);
@@ -1150,8 +1283,9 @@ describe('shared provider credentials', () => {
     const unrelated: ExecutorAction = { kind: 'write', path: path.join(outside, 'plain.txt') };
     try {
       expect(text(await executor.callTool('Read', { file_path: env }))).toBe('1\tTOKEN=1');
-      expect(executor.check(write).ok).toBe(true);
       // Session consent is already active when these approvals are recorded.
+      gate.recordApproval(write);
+      expect(executor.check(write).ok).toBe(true);
       gate.recordApproval(command);
       gate.recordApproval(unrelated);
       executor.setGateMode(mode === 'normal' ? 'plan' : 'normal');
@@ -1264,15 +1398,58 @@ describe('shared provider credentials', () => {
     const action: ExecutorAction = { kind: 'exec', command: 'git remote show origin', cwd: project };
     try {
       expect(gate.authorize(action).ok).toBe(false);
-      expect(await executor.confirm(action)).toBe(true);
+      // 核实只免掉凭证确认：计划模式仍要本机批准，于是弹普通确认卡，用户不允许就不放行。
+      expect(await executor.confirm(action)).toBe(false);
+      expect(asked).toHaveBeenCalledExactlyOnceWith(action, expect.any(AbortSignal), false);
       expect(gate.authorize(action).ok).toBe(false);
-      expect(asked).not.toHaveBeenCalled();
-      gate.recordApproval(action);
+      asked.mockResolvedValueOnce('session');
+      expect(await executor.confirm(action)).toBe(true);
       expect(gate.authorize(action).ok).toBe(true);
+      expect(gate.authorize({ kind: 'read', path: path.join(project, '.env') }).ok).toBe(false);
     } finally {
       await executor.close();
     }
   });
+
+  // PR #11758 / unit: confirm + check is the production handoff used by the executor and relay.
+  // Earlier coverage answered immediately. A safe plan-mode Git command approved after the
+  // exemption TTL must run once, use a credential card if it now needs one, or stop on cancellation.
+  it.each(['still safe', 'credential refused', 'credential allowed', 'cancelled'] as const)(
+    'rechecks a Git exemption after a delayed ordinary approval: %s',
+    async (outcome) => {
+      let now = 0;
+      const abort = new AbortController();
+      const provesSafe = vi.fn<GitCredentialHistory['provesSafe']>()
+        .mockResolvedValueOnce(true)
+        .mockImplementationOnce(async () => {
+          if (outcome === 'cancelled') abort.abort();
+          return outcome === 'still safe' || outcome === 'cancelled';
+        });
+      const asked = vi.fn<NonNullable<RemoteExecutorOptions['confirm']>>()
+        .mockImplementationOnce(async () => {
+          now += EXECUTOR_APPROVAL_TTL_MS + 1000;
+          return true;
+        })
+        .mockResolvedValueOnce(outcome === 'credential allowed');
+      const { executor } = sharedExecutor(
+        'plan', asked, { provesSafe } as unknown as GitCredentialHistory, undefined, () => now,
+      );
+      const action: ExecutorAction = { kind: 'exec', command: 'git remote show origin', cwd: project };
+      const allowed = outcome === 'still safe' || outcome === 'credential allowed';
+      try {
+        expect(executor.check(action).ok).toBe(false);
+        expect(await executor.confirm(action, abort.signal)).toBe(allowed);
+        expect(executor.check({ ...action }).ok).toBe(false);
+        expect(executor.check(action).ok).toBe(allowed);
+        expect(executor.check(action).ok).toBe(false);
+        expect(asked.mock.calls.map(([, , credential]) => credential)).toEqual(
+          outcome.startsWith('credential') ? [false, true] : [false],
+        );
+      } finally {
+        await executor.close();
+      }
+    },
+  );
 
   it('lets a new request ask right away after the permission mode changed under an open card', async () => {
     const answers: Array<(result: ExecutorConfirmation) => void> = [];
@@ -1287,7 +1464,7 @@ describe('shared provider credentials', () => {
       // 旧卡还没回答：切换权限档后的新请求不必等它。
       fresh = executor.confirm(production);
       await vi.waitFor(() => expect(asked).toHaveBeenCalledTimes(2));
-      expect(asked).toHaveBeenNthCalledWith(2, production, expect.any(AbortSignal));
+      expect(asked).toHaveBeenNthCalledWith(2, production, expect.any(AbortSignal), true);
       // 旧卡之后再回答，不建立授权。
       answers[0]('session');
       expect(await stale).toBe(false);
@@ -1342,7 +1519,7 @@ describe('shared provider credentials', () => {
     try {
       expect(await executor.confirm(git)).toBe(true);
       expect(asked).toHaveBeenCalledTimes(1);
-      expect(asked).toHaveBeenCalledWith(env, expect.any(AbortSignal));
+      expect(asked).toHaveBeenCalledWith(env, expect.any(AbortSignal), true);
       answer(true);
       expect(await pending).toBe(true);
     } finally {

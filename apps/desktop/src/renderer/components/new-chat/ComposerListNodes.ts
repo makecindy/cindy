@@ -14,10 +14,14 @@ import { canJoin, ReplaceAroundStep } from '@tiptap/pm/transform';
 import type { EditorView } from '@tiptap/pm/view';
 import type { ComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import { applyListContinuation } from '@/lib/composerListContinuation';
+import { hasUserVisibleText } from '../../../shared/visibleText';
 
 const BULLET_MARKER_RE = /^([-+*•])([ \t]+)$/;
 const ORDERED_MARKER_RE = /^([1-9]\d{0,8})([.)])([ \t]+)$/;
-const CJK_ORDERED_MARKER_RE = /^([1-9]\d{0,8})(、)$/;
+// The ideographic comma needs no trailing separator, so the ordinal itself is
+// the only thing telling a list marker from an ID in running text. Ordinals
+// stop at 99; longer digit runs stay editable text.
+const CJK_ORDERED_MARKER_RE = /^([1-9]\d{0,1})(、)$/;
 
 type BulletMarker = '-' | '+' | '*' | '•';
 type OrderedMarker = '.' | ')' | '、';
@@ -29,8 +33,6 @@ interface OrderedListAttrs {
 }
 
 interface SelectedTaskPrefix {
-  from: number;
-  to: number;
   bodyIsEmpty: boolean;
   caretAtOrAfterPrefix: boolean;
   caretAtParagraphEnd: boolean;
@@ -100,17 +102,19 @@ function plainListParagraphMarker(text: string): PlainListParagraphMarker | null
       attrs: { start: Number(ordered[1]), marker: ordered[2], separator: ordered[3] },
     };
   }
-  const cjkOrdered = text.match(/^([1-9]\d{0,8})(、)([ \t]*)/);
-  if (cjkOrdered) {
-    return {
-      kind: 'ordered',
-      // Keep optional spacing in the item body so direct transactions and
-      // normalized documents serialize CJK markers identically.
-      prefixLength: cjkOrdered[1].length + cjkOrdered[2].length,
-      attrs: { start: Number(cjkOrdered[1]), marker: '、' },
-    };
-  }
+  // Non-Markdown CJK ordinals are never promoted here: paste, IME and
+  // dictation land here with text the user did not type as a list marker.
   return null;
+}
+
+function followingHardBreakOffset(paragraph: PMNode, from: number): number | undefined {
+  if (from >= paragraph.content.size) return undefined;
+  let offset: number | undefined;
+  paragraph.nodesBetween(from, paragraph.content.size, (node, pos) => {
+    if (offset === undefined && node.type.name === 'hardBreak') offset = pos;
+    return false;
+  });
+  return offset;
 }
 
 function hardBreakListInputRule(
@@ -144,23 +148,29 @@ function hardBreakListInputRule(
       if (documentFenceStateBefore(state.doc, $markerStart.before(1))) return null;
 
       const before = paragraph.content.cut(0, markerOffset - hardBreak.nodeSize);
-      const after = paragraph.content.cut(range.to - paragraphStart);
+      const markerEnd = range.to - paragraphStart;
+      const followingBreak = followingHardBreakOffset(paragraph, markerEnd);
+      const itemContent = paragraph.content.cut(markerEnd, followingBreak);
       const paragraphType = state.schema.nodes.paragraph;
       const itemType = state.schema.nodes.listItem;
       if (!paragraphType || !itemType) return null;
 
       const leadingParagraph = paragraph.type.create(paragraph.attrs, before, paragraph.marks);
-      const listParagraph = paragraph.type.create(paragraph.attrs, after, paragraph.marks);
+      const listParagraph = paragraph.type.create(paragraph.attrs, itemContent, paragraph.marks);
       const list = type.create(
         (match.data?.attributes as Record<string, unknown> | undefined) ?? {},
         itemType.create(null, listParagraph),
       );
       const paragraphPosition = $markerStart.before(1);
-      const replacement = Fragment.fromArray([leadingParagraph, list]);
+      const blocks = [leadingParagraph, list];
+      if (followingBreak !== undefined) {
+        const rest = paragraph.content.cut(followingBreak + 1);
+        blocks.push(paragraph.copy(rest));
+      }
       const tr = state.tr.replaceWith(
         paragraphPosition,
         paragraphPosition + paragraph.nodeSize,
-        replacement,
+        Fragment.fromArray(blocks),
       );
       const listPosition = paragraphPosition + leadingParagraph.nodeSize;
       tr.setSelection(TextSelection.create(tr.doc, listPosition + 3));
@@ -181,6 +191,21 @@ function fenceAwareWrappingInputRule(
         documentFenceStateBefore(props.state.doc, $markerStart.before(1))
       ) {
         return null;
+      }
+      if ($markerStart.parent.type.name === 'paragraph') {
+        const paragraphStart = $markerStart.start();
+        const followingBreak = followingHardBreakOffset(
+          $markerStart.parent,
+          props.range.to - paragraphStart,
+        );
+        // Wrap only the row containing the marker, even on the paragraph's first row.
+        if (followingBreak !== undefined) {
+          const position = paragraphStart + followingBreak;
+          const tr = props.state.tr.delete(position, position + 1).split(position);
+          if (position === props.range.to) {
+            tr.setSelection(TextSelection.create(tr.doc, position));
+          }
+        }
       }
       return rule.handler(props);
     },
@@ -357,7 +382,7 @@ function selectedListItemIsEmpty(view: EditorView, depth: number): boolean {
   return (
     item.childCount === 1 &&
     paragraph?.type.name === 'paragraph' &&
-    paragraph.content.content.every((node) => node.isText && !(node.text ?? '').trim())
+    paragraph.content.content.every((node) => node.isText && !hasUserVisibleText(node.text))
   );
 }
 
@@ -433,30 +458,10 @@ function selectedTaskPrefix(view: EditorView): SelectedTaskPrefix | null {
   const match = text.match(/^\[[ xX]\](?:[ \t]+|$)/);
   if (!match) return null;
   return {
-    from: $from.start(),
-    to: $from.start() + match[0].length,
-    bodyIsEmpty: text.slice(match[0].length).trim().length === 0,
+    bodyIsEmpty: !hasUserVisibleText(text.slice(match[0].length)),
     caretAtOrAfterPrefix: $from.parentOffset >= match[0].length,
     caretAtParagraphEnd: $from.parentOffset === paragraph.content.size,
   };
-}
-
-function clearTaskPrefixAndLift(
-  view: EditorView,
-  itemDepth: number,
-  taskPrefix: SelectedTaskPrefix,
-): boolean {
-  if (
-    !taskPrefix.bodyIsEmpty ||
-    !taskPrefix.caretAtParagraphEnd ||
-    !selectedListItemIsOnlyTaskParagraph(view, itemDepth)
-  ) {
-    return false;
-  }
-  view.dispatch(view.state.tr.delete(taskPrefix.from, taskPrefix.to));
-  const itemType = view.state.schema.nodes.listItem;
-  if (itemType) liftComposerListItem(view, itemType);
-  return true;
 }
 
 function backspaceAfterStructuredList(view: EditorView): boolean {
@@ -499,7 +504,7 @@ export function handleStructuredListBreak(view: EditorView): boolean {
     taskPrefix.caretAtParagraphEnd
   ) {
     if (!selectedListItemIsOnlyTaskParagraph(view, itemDepth)) return false;
-    return clearTaskPrefixAndLift(view, itemDepth, taskPrefix);
+    return liftEmptyStructuredListItem(view, itemType);
   }
   if (selectedListItemIsEmpty(view, itemDepth)) {
     return liftEmptyStructuredListItem(view, itemType);
@@ -602,7 +607,6 @@ export function handleStructuredListBackspace(view: EditorView): boolean {
   ) {
     return false;
   }
-  if (taskPrefix) return clearTaskPrefixAndLift(view, itemDepth, taskPrefix);
   return liftEmptyStructuredListItem(view, itemType);
 }
 

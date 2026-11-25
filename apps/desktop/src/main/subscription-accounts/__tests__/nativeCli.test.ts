@@ -2,7 +2,7 @@
  * Protects profile separation, bounded subprocess lifetime and sanitized errors, without real credentials.
  */
 import { EventEmitter } from 'node:events';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   binary: '/fixture/codex' as string | null,
   spawn: vi.fn(),
   error: false,
+  errorMessage: 'fixture-secret-must-not-leak',
   hold: false,
   accountResult: undefined as unknown,
   oldAuthenticated: false,
@@ -40,13 +41,41 @@ vi.mock('../../maker-host/claude-native-cli.desktop.js', () => ({
 import {
   codexAccountRpc,
   readNativeAccount,
+  readNativeCodexAccountAndRateLimits,
   readNativeAccountUsage,
   loginNativeAccount,
   readNativeCodexTokens,
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
 } from '../nativeCli.js';
-import { refreshClaudeCliLoginStatus, runClaudeCliLogin } from '../../maker-host/claude-native-cli.desktop.js';
+import { isAccountServiceUnreachable } from '../accountServiceError.js';
+import { readClaudeCliPlanUsage, refreshClaudeCliLoginStatus, runClaudeCliLogin } from '../../maker-host/claude-native-cli.desktop.js';
+import { subscriptionUsageView } from '../usageView.js';
+
+// #12425, standard tier: the native reader previously discarded credits without a time window.
+it('retains an extra-usage-only reading without publishing a synthetic time window', async () => {
+  vi.mocked(readClaudeCliPlanUsage).mockResolvedValueOnce({
+    rateLimits: { extra_usage: { is_enabled: true, used_credits: 0 } },
+  });
+  const { claudeUsage } = await readNativeAccountUsage('anthropic', '/fixture/enterprise');
+  expect(claudeUsage).toMatchObject({
+    extraUsage: { isEnabled: true, usedCredits: 0, monthlyLimit: null, utilization: null },
+    fiveHour: null, sevenDay: null, scoped: [], updatedAt: expect.any(Number),
+  });
+  expect(subscriptionUsageView({
+    provider: 'anthropic', providerId: 'anthropic', accountId: 'fixture',
+    authenticated: true, usage: { claude: claudeUsage ?? undefined },
+  }, Date.now())).toMatchObject({ windows: [], updatedAt: null, usageStatus: 'unavailable' });
+});
+
+it.each([
+  { is_enabled: false, used_credits: 0 },
+  { is_enabled: true, monthly_limit: 10 },
+  { is_enabled: true, used_credits: false, utilization: [] },
+])('ignores disabled or missing standalone readings (%j)', async extra_usage => {
+  vi.mocked(readClaudeCliPlanUsage).mockResolvedValueOnce({ rateLimits: { extra_usage } });
+  await expect(readNativeAccountUsage('anthropic', '/fixture/enterprise')).resolves.toEqual({ claudeUsage: null });
+});
 
 const children: (EventEmitter & {
   stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
@@ -125,6 +154,7 @@ it('rejects a failed asynchronous proof without sending or exposing its error de
 beforeEach(() => {
   h.binary = '/fixture/codex';
   h.error = false;
+  h.errorMessage = 'fixture-secret-must-not-leak';
   h.hold = false;
   h.accountResult = undefined;
   h.oldAuthenticated = false;
@@ -152,9 +182,9 @@ beforeEach(() => {
               request.id === 1
                 ? { id: 1, result: {} }
                 : h.error
-                  ? { id: 2, error: { message: 'fixture-secret-must-not-leak' } }
+                  ? { id: request.id, error: { message: h.errorMessage } }
                   : {
-                      id: 2,
+                      id: request.id,
                       result: h.accountResult ?? {
                         account: {
                           type: 'chatgpt',
@@ -196,6 +226,40 @@ describe('Claude profile renewal', () => {
   });
 });
 describe('official Codex profiles', () => {
+  // #12390, standard: the automatic read used separate CLI startups for identity and
+  // quota. Exercise both writes on one control connection and replace auth between
+  // requests to verify that a connection carrying the earlier login cannot read quota.
+  it.each([false, true])('uses one bounded probe and rejects a replaced credential (%s)', async replace => {
+    const profile = await mkdtemp(path.join(tmpdir(), 'codex-reset-profile-'));
+    const authFile = path.join(profile, 'auth.json');
+    try {
+      await writeFile(authFile, JSON.stringify({
+        tokens: { access_token: 'invalid-fixture', account_id: 'fixture-account' },
+      }));
+      let checks = 0;
+      const read = readNativeCodexAccountAndRateLimits(profile, async () => {
+        if (++checks !== 3 || !replace) return;
+        const next = path.join(profile, 'auth-next.json');
+        await writeFile(next, JSON.stringify({
+          tokens: { access_token: 'invalid-replacement', account_id: 'other-account' },
+        }));
+        await rename(next, authFile);
+      });
+      if (replace) await expect(read).rejects.toThrow('changed before dispatch');
+      else await expect(read).resolves.toMatchObject({
+        identity: { email: profile + '@example.test', accountId: 'fixture-account' },
+      });
+      expect(children).toHaveLength(1);
+      const requests = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method);
+      expect(requests).toEqual(replace
+        ? ['initialize', 'initialized', 'account/read']
+        : ['initialize', 'initialized', 'account/read', 'account/rateLimits/read']);
+      expect(children[0].kill).toHaveBeenCalledOnce();
+    } finally {
+      await rm(profile, { recursive: true, force: true });
+    }
+  });
+
   // #10110 review, unit: legacy auth has no plan. Keep the plan returned by the
   // selected profile's quota RPC; the old test fixtures only read account/read.
   it('preserves the selected profile plan alongside its sanitized Codex quota', async () => {
@@ -316,14 +380,40 @@ describe('official Codex profiles', () => {
     );
     expect(children[0].kill).toHaveBeenCalledTimes(1);
   });
+  // 2026-11-18 user report, unit: Codex answered `workspace routing discovery timed out` because
+  // chatgpt.com resolved to a wrong address. It surfaced as a generic failure, so a valid login
+  // looked lost. The earlier case only covers a non-network error. Classify, never forward text.
+  it.each([
+    { message: 'workspace routing discovery timed out', unreachable: true },
+    { message: 'error sending request for url (https://chatgpt.com/backend-api/x)', unreachable: true },
+    { message: 'fixture-secret-must-not-leak', unreachable: false },
+  ])('classifies a CLI account error as unreachable=$unreachable', async ({ message, unreachable }) => {
+    h.error = true;
+    h.errorMessage = message;
+    const error = await codexAccountRpc('/fixture/second', 'account/read', {}).catch((e: unknown) => e);
+    expect(isAccountServiceUnreachable(error)).toBe(unreachable);
+    expect((error as Error).message).toBe('Codex account request failed');
+  });
+
+  // Same report: the browser login finished, then its confirming read hit the network failure and
+  // the whole sign-in was reported as failed. The caller re-reads and shows the account as unknown.
+  it('does not fail a finished browser login when only the confirming read is unreachable', async () => {
+    h.error = true;
+    h.errorMessage = 'workspace routing discovery timed out';
+    await expect(loginNativeAccount('openai', '/fixture/second', new AbortController().signal)).resolves.toBeUndefined();
+    h.errorMessage = 'fixture-secret-must-not-leak';
+    await expect(loginNativeAccount('openai', '/fixture/second', new AbortController().signal))
+      .rejects.toThrow('Codex account request failed');
+  });
+
   it('bounds a stalled CLI read and cancels a browser login without querying another profile', async () => {
     vi.useFakeTimers();
     h.hold = true;
-    const pending = expect(codexAccountRpc('/fixture/second', 'account/read', {})).rejects.toThrow(
-      'timed out',
-    );
+    const pending = codexAccountRpc('/fixture/second', 'account/read', {}).catch((e: unknown) => e);
     await vi.advanceTimersByTimeAsync(15_000);
-    await pending;
+    const stalled = await pending;
+    expect((stalled as Error).message).toMatch('timed out');
+    expect(isAccountServiceUnreachable(stalled)).toBe(true);
     const abort = new AbortController();
     const login = expect(
       loginNativeAccount('openai', '/fixture/second', abort.signal),

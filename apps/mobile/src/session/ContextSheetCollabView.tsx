@@ -109,7 +109,7 @@ export function OrcaWorkerFormView({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const [moreOpen, setMoreOpen] = useState(false);
-  const modelLabel = form.model?.id ?? `${orcaAgentLabel(form.agent)} · ${t('session.collab.modelDefault')}`;
+  const modelLabel = form.modelGroup?.name ?? form.model?.id ?? `${orcaAgentLabel(form.agent)} · ${t('session.collab.modelDefault')}`;
   const permission = permissionPresentation(form.permissionMode);
   const remoteDirInvalid = form.remoteDirMode === 'path' && !!form.remoteDir && !isAbsoluteOrcaWorkerDir(form.remoteDir);
   const executionDeviceMissing = !!form.executionDeviceId
@@ -204,7 +204,7 @@ export function OrcaWorkerFormView({
       {showMore ? (
         <>
           <ContextSheetGroup
-            footer={form.model ? null : t('session.collab.modelDefaultHint')}
+            footer={form.modelGroup || form.model ? null : t('session.collab.modelDefaultHint')}
             label={title(t('session.collab.agentLabel'))}
           >
             <ContextSheetChoiceRow
@@ -352,7 +352,8 @@ export function OrcaTeamPanelView({
                     ? [t('session.collab.deviceUnreachable')]
                     : [orcaAgentLabel(worker.agentKind), worker.model]),
                 ]
-              : [orcaAgentLabel(worker.agentKind), worker.model]
+              // 插件引擎 Worker 只在被控电脑本机运行；显示通用的插件引擎名，不显示占位 Harness。
+              : [worker.pluginEngineProviderId ? t('models.pluginEngines.genericName') : orcaAgentLabel(worker.agentKind), worker.model]
             ).filter(Boolean).join(' · ')}
             disabled={busy}
             icon={<WorkerStatusDot status={worker.status} />}

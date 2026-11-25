@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import {
   botReadIdentityKey,
+  effectiveBotReadAt,
   type BotReadIdentity,
   type BotReadOwner,
   type BotReadPosition,
@@ -39,6 +41,23 @@ const cursorSchema = z.object({
 const digest = (identity: BotReadIdentity) => createHash('sha256').update(botReadIdentityKey(identity)).digest('hex');
 const yieldToMain = () => new Promise<void>(resolve => setImmediate(resolve));
 
+async function readOptional(file: string): Promise<string | null> {
+  try {
+    return await readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return null;
+  }
+}
+
+function decodePosition(raw: string | null, name: string): BotReadPosition | null {
+  if (raw === null) return null;
+  if (Buffer.byteLength(raw, 'utf8') > MAX_RECORD_BYTES) throw new Error('record too large');
+  const { position } = recordSchema.parse(JSON.parse(raw));
+  if (digest(position.identity) !== name) throw new Error('identity mismatch');
+  return position;
+}
+
 interface Partition {
   root: string;
   revision: number;
@@ -51,8 +70,8 @@ export interface BotReadStateStorageDependencies {
   currentOwner: () => { dataOwnerId: string | null; generation: number };
   boundaryPending: () => boolean;
   ownerRoot: () => string;
-  /** The adapter delivers invalidations only to this owner's trusted complete app windows. */
-  publish?: (event: BotReadStateChanged) => void;
+  /** The identity stays in Main; windows get only the versioned invalidation. */
+  publish?: (event: BotReadStateChanged, identity: BotReadIdentity) => void;
 }
 
 /**
@@ -89,13 +108,7 @@ export function createBotReadStateStorage(deps: BotReadStateStorageDependencies)
     if (partition.records.has(name)) return partition.records.get(name)!;
     let position: BotReadPosition | null;
     try {
-      const raw = readAtomicFileSync(path.join(partition.root, `${name}.json`));
-      if (raw === null) position = null;
-      else {
-        if (Buffer.byteLength(raw, 'utf8') > MAX_RECORD_BYTES) throw new Error('record too large');
-        position = recordSchema.parse(JSON.parse(raw)).position;
-        if (digest(position.identity) !== name) throw new Error('identity mismatch');
-      }
+      position = decodePosition(readAtomicFileSync(path.join(partition.root, `${name}.json`)), name);
     } catch {
       // An unreadable/invalid record is not an empty position that a later seed may overwrite.
       throwIpcError('INTERNAL', 'BOT_READ_STATE_READ_FAILED');
@@ -136,7 +149,7 @@ export function createBotReadStateStorage(deps: BotReadStateStorageDependencies)
     partition.records.set(name, next);
     partition.names?.add(name);
     partition.revision += 1;
-    try { deps.publish?.({ owner: { ...owner }, instanceId, revision: partition.revision }); }
+    try { deps.publish?.({ owner: { ...owner }, instanceId, revision: partition.revision }, incoming.identity); }
     catch { /* Notification loss must not turn a durable commit into a reported save failure. */ }
     return next;
   }
@@ -190,12 +203,35 @@ export function createBotReadStateStorage(deps: BotReadStateStorageDependencies)
     return { ...version(), positions };
   }
 
+  function enqueue<T>(run: () => Promise<T>): Promise<T> {
+    const operation = chain.then(run);
+    chain = operation.catch(() => undefined);
+    return operation;
+  }
+
   return {
+    /** Main-only read of the same committed position the windows use. */
+    readPosition(owner: BotReadOwner, identity: BotReadIdentity): Promise<number | undefined> {
+      return enqueue(async () => {
+        const partition = partitionFor(owner);
+        const name = digest(identity);
+        let position = partition.records.get(name);
+        if (position === undefined) {
+          const file = path.join(partition.root, `${name}.json`);
+          const main = await readOptional(file);
+          checkOwner(owner);
+          const backup = main === null ? await readOptional(`${file}.bak`) : null;
+          checkOwner(owner);
+          position = decodePosition(main ?? backup, name);
+          // Leave backup recovery to the existing window/storage path.
+          if (backup === null) partition.records.set(name, position);
+        }
+        return position ? effectiveBotReadAt(position) : undefined;
+      });
+    },
     /** Queue before parsing/capturing any owner path; queued old-account commands still fail closed. */
     access(input: unknown): Promise<BotReadStateResult> {
-      const operation = chain.then(() => run(input));
-      chain = operation.catch(() => undefined);
-      return operation;
+      return enqueue(() => run(input));
     },
   };
 }

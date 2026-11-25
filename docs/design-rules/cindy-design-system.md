@@ -4,7 +4,7 @@
 > 设计类 `.md` 一律放本目录，并在下表登记；规范正文不要写进本文件。
 
 
-DS-6 已随 [#4135](https://github.com/makecindy/cindy/pull/4135) 合入（head `62472f559c` / merge `6559d2610a`）。表单贡献入口：先读 [DESIGN §4](./DESIGN.md#inputs--forms)，在真实字段中复用 [FormField](../../apps/desktop/src/renderer/components/ui/form-field.tsx) 与 [SettingsTextInput](../../apps/desktop/src/renderer/components/settings/SettingsTextInput.tsx)（普通域用 Input）；保存反馈用 [Button loading](../../apps/desktop/src/renderer/components/ui/button.tsx)。业务校验、请求与焦点由表单持有；首消费者为 [CustomProviderDialog](../../apps/desktop/src/renderer/components/settings/ProviderConnectionDialog.tsx)，第二消费者为 [McpServerDialog](../../apps/desktop/src/renderer/components/settings/McpServerDialog.tsx)。[证据与未验收项](../design-evidence/2026-09-08/ds6-forms.md) 区分组件/整页/人工/G2，settings 仍是 pilot。
+DS-6 已随 [#4135](https://github.com/makecindy/cindy/pull/4135) 合入（head `62472f559c` / merge `6559d2610a`）。表单贡献入口：先读 [DESIGN §4](./DESIGN.md#inputs--forms)，在真实字段中复用 [FormField](../../apps/desktop/src/renderer/components/ui/form-field.tsx) 与 [SettingsTextInput](../../apps/desktop/src/renderer/components/settings/SettingsTextInput.tsx)（普通域用 Input）；保存反馈用 [Button loading](../../apps/desktop/src/renderer/components/ui/button.tsx)。业务校验、请求与焦点由表单持有；首消费者为 [ProviderConnectionDialog](../../apps/desktop/src/renderer/components/settings/ProviderConnectionDialog.tsx)，第二消费者为 [McpServerDialog](../../apps/desktop/src/renderer/components/settings/McpServerDialog.tsx)。[证据与未验收项](../design-evidence/2026-09-08/ds6-forms.md) 区分组件/整页/人工/G2，settings 仍是 pilot。
 
 DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)。入口：[规则范围与回退](./design-governance.md#8-治理接线纪律)、[固定历史回放、注入和接线证据](../design-evidence/2026-09-10/ds7-guards.md)。新增颜色可用 `pnpm check:design-colors --base-ref <基线> --worktree` 检查；只报告用 `pnpm report:design-colors`。main 已启用该接线；历史采证版本与最终合并事实见治理 §8。
 
@@ -22,16 +22,17 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 | [`login-flow.md`](./login-flow.md) | 登录链路（§16，编号不变），含生成的登录色表 | `DESIGN.md` 专题，规范效力相同 |
 | [`message-link-clickability.md`](./message-link-clickability.md) | 聊天正文的链接操作与可点性信号（§14.5） | `DESIGN.md` 专题，规范效力相同 |
 | [`container-transform.md`](./container-transform.md) | 输入框工具栏的容器形变与工具栏分档（§14.4） | `DESIGN.md` 专题，规范效力相同 |
+| [`feature-introduction.md`](./feature-introduction.md) | 功能介绍：第一次用到某个功能时带小动画的一页引导（§4、§14.4） | `DESIGN.md` 专题，规范效力相同 |
 | [`wallpaper.md`](./wallpaper.md) | 应用壁纸（§2） | `DESIGN.md` 专题，规范效力相同 |
 | [`macos-menu-bar-quota.md`](./macos-menu-bar-quota.md) | macOS 菜单栏额度面板（§4） | `DESIGN.md` 专题，规范效力相同 |
 | [`attachment-preview.md`](./attachment-preview.md) | 附件预览的结构与交互 | 专题补充 |
 | [`usage-history-charts.md`](./usage-history-charts.md) | 用量历史图表与日期选择 | 专题补充 |
 | [`design-governance.md`](./design-governance.md) | 设计系统治理合同：管道与记账（§1.1）、四种真相边界、Token 层级与现行 §10 三档的映射、兼容红线、工具单选、两级证据合同、PR 风险分类、治理接线纪律、待裁决登记、存量门禁处置表、实施路线图、已知边界（§13） | **治理正本**（管流程；视觉规则仍以 `DESIGN.md` 为准） |
 | [`design-inventory.md`](./design-inventory.md) | Cindy Desktop / Mobile 生产可达 UI 台账：GENERATED 登记事实（稳定 ID / 平台 / 标题 / 入口 / 路由覆盖）+ 人工迁移状态；组件、样式来源与 Token / 裸值统计不入库 | **台账正本**（schema 见 [`design-governance.md`](./design-governance.md) §2.1；生成 `pnpm design:inventory`，校验 `pnpm check:design-inventory`，统计报告 `pnpm design:inventory:report`） |
-| [`desktop-bot-list-status.md`](./desktop-bot-list-status.md) | Desktop 伙伴与群列表状态、未读提示、时间保留和收起头像选中态 | 平台补充（由 DESIGN §15.14 授权） |
+| [`desktop-bot-list-status.md`](./desktop-bot-list-status.md) | Desktop 伙伴与群列表状态、未读提示、时间保留和收起头像选中态 | 平台补充（由 DESIGN §2 Thinking Orange / Bot Unread Badge 与 §5 伙伴列表指针授权） |
 | [`ios-native-design.md`](./ios-native-design.md) | iOS 导航、原生面板与分组、玻璃材质、任务详情、紧凑搜索及触控验收；附当前迁移审查 | 平台补充（由 DESIGN Mobile 节授权） |
 | [Token README](../../packages/design-tokens/README.md) | Desktop DTCG 生产生成、维护/回退、实际接管与保留项，Mobile 待新方案共同确认 | **Token 合同入口**（构建期接管 Desktop，运行时只读生成子集） |
-| [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `login-flow.md §16.1` + `colors.ts` 为准） |
+| [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（数值以 `packages/design-tokens`（DTCG）与 `cindyDecisionData.ts` 为准，登录链路规则见 `login-flow.md §16.1`） |
 | [`design-decision-log.md`](./design-decision-log.md) | 全局设计决策史台账：被推翻的方案、勘误过程、backlog（已收录原 `DESIGN.md §13` G1–G4 归档与 §15 决策史全量） | 决策台账（只增不改；与 `DESIGN.md` 冲突时以 `DESIGN.md` 为准） |
 | [`desktop-bot-delegation-status.md`](./desktop-bot-delegation-status.md) | 桌面 Bot 与群委派卡片状态裁决（2026-11-03）：状态色、呼吸动效与范围；2026-11-08 起伙伴旧任务卡只读 | Desktop 裁决记录 |
 | [`README.md`](./README.md) | 本目录使用规则 | 说明 |

@@ -68,8 +68,10 @@ Use for the UI surfaces and interactions the plugin actually exposes; mobile pag
 - [插件轻提示与未读角标 notify / badge（§4.9）](references/plugin-notifications.md)
 - [插件目录选择 pick（§4.14）](references/plugin-directory-picker.md)
 - [插件面板预览 preview（§4.15）](references/plugin-panel-preview.md)
+- [插件接管打开的文件类型 fileOpener（§4.25）](references/plugin-file-opener.md)
 - [插件随包浏览器扩展 browserExtension（§4.24）](references/plugin-browser-extension.md)
 - [插件确认弹窗 confirm（§4.18）](references/plugin-confirm-dialog.md)
+- [插件表单弹窗 form（§4.19）](references/plugin-form-dialog.md)
 - [插件推荐任务（§4.21）](references/plugin-recommendations.md)
 
 ### 插件事件与任务协作
@@ -82,8 +84,11 @@ Use when the plugin listens for events, screens automation runs or interacts wit
 - [插件处理 Agent 回复的消息钩子（§4.6.1）](references/plugin-message-hooks.md)
 - [插件控制节点：自动化运行前、新任务选模型时先问插件（§4.6.2）](references/plugin-control-points.md)
 - [给模型选择器提供模型 models（§4.6.3）](references/plugin-models.md)
+- [提供任务执行引擎 harnesses（ACP Agent，§4.6.4）](references/plugin-harnesses.md)
 - [插件发起 Agent 任务、请求自动化与查看伙伴（§4.11）](references/plugin-agent-tasks.md)
 - [插件调用与 Agent 共用的宿主工具 cindy.host.call](references/plugin-host-tools.md)
+- [插件管理所有来源的输入队列与共享运行控制](references/plugin-queue-control.md)
+- [读取与修改原生工具目录](references/plugin-native-tool-catalog.md)
 - [读取工具历史、自动化 Webhook 与 Node HTTP 示例](references/plugin-history-and-http.md)
 - [插件读取当前任务上下文 sessionContext（§4.13）](references/plugin-session-context.md)
 - [插件创建工作区任务入口 workspace（§4.17）](references/plugin-workspace-sessions.md)

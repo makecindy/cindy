@@ -1,5 +1,5 @@
 import type { Schedule, ScheduleWebhookEvent } from '@cindy/maker-scheduler';
-import { prFollowCommand } from '../../git-context/prFollowWatch';
+import { schedulePrTriggers } from '@cindy/maker-scheduler';
 
 export const GITHUB_WATCH_SCHEDULE = '__github_pr_watch__';
 export const GITHUB_EVENT_CACHE_TTL_MS = 5 * 60_000;
@@ -7,6 +7,8 @@ export interface GithubPrRefresh {
   reason: 'event' | 'overflow' | 'reconnect';
   /** Comments can change without changing the PR summary. CI uses the status observer. */
   notify: readonly string[];
+  reviews?: readonly string[];
+  closed?: readonly string[];
 }
 export interface GithubAppStatus {
   available: boolean;
@@ -16,6 +18,7 @@ export interface GithubAppStatus {
   repositories?: string[];
   unavailable?: string[];
   /** Optional capabilities; absent on older servers. */
+  userAuthorization?: boolean;
   prSubscriptions?: boolean;
   dailyQuotaExempt?: boolean;
   automationSubscriptions?: boolean;
@@ -28,12 +31,9 @@ export interface GithubAppStatus {
 export function followedGithubPrs(schedules: readonly Schedule[]): string[] {
   const urls = new Set<string>();
   for (const schedule of schedules) {
-    if (schedule.status !== 'active' || !schedule.recurring || schedule.manual) continue;
-    // Explicit App tasks own their repository/event filters and do not also
-    // subscribe through the implicit PR-follow observer.
-    if (schedule.webhookTrigger?.source?.preset === 'github-app') continue;
-    for (const match of prFollowCommand(schedule).matchAll(/https:\/\/github\.com\/([a-z\d-]+\/[a-z\d_.-]+)\/pull\/(\d+)(?![a-z\d])/gi)) {
-      urls.add(`https://github.com/${match[1]}/pull/${match[2]}`);
+    if (schedule.status !== 'active') continue;
+    for (const trigger of schedulePrTriggers(schedule)) {
+      if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(trigger.url)) urls.add(trigger.url);
     }
   }
   return [...urls];

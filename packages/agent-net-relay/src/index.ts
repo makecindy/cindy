@@ -7,5 +7,6 @@ export { createMemoryRelayCluster } from './memoryCluster.js';
 export * from './identity.js';
 export { createPrivateNetwork } from './bootstrap.js';
 export { DatagramSendQueue, MAX_DATAGRAM_QUEUE_DELAY_MS, type DatagramQueueReport } from './datagramQueue.js';
+export * from './udpRelay.js';
 export type { AgentNetSharingOptions, SharingActor } from './sharing.js';
 export * from '@cindy/agent-net-protocol';

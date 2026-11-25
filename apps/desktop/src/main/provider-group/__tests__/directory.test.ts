@@ -12,6 +12,9 @@ import { createProviderGroupDirectory, type ProviderGroupDirectoryDeps } from '.
 import { providerGroupCodexUsageSnapshot } from '../usage';
 import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog';
 import { createProviderGroupRouter } from '../router';
+import { createProviderGroupRemoteClient } from '../remoteClient';
+import { handleProviderGroupRemote } from '../remoteHandler';
+import { createProviderGroupExternalLoad } from '../externalLoad';
 
 // Isolate the catalog reader's local preference port; never read the test runner's owner profile.
 vi.mock('../../maker-host/model-disable-store.js', () => ({
@@ -139,6 +142,35 @@ describe('listCandidates', () => {
     expect((await directory.listCandidates('openai', null)).map((c) => c.providerId)).toEqual([accounts[0].id]);
   });
 
+  // 2026-11-17 field report, unit: a computer whose quick directory read was interrupted (fenced at
+  // the 2s snapshot fallback while its 3–7s read was in flight) was left out of the add-computer list
+  // on every attempt, with no trace. Real directory; one computer per row. Review findings: only an
+  // interrupted read is asked again, never a refusal, and never over a link the user just closed.
+  it.each([
+    ['asks an interrupted read again live', new Error('Metadata scope changed'), true, ['mini'], [false, true]],
+    ['treats a refusal as final', new Error('[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] not offered'), true, [], [false]],
+    ['does not reopen a link closed meanwhile', new Error('Metadata scope changed'), false, [], [false]],
+  ] as const)('%s before leaving a computer out of the add-computer list', async (_name, quickError, linkStaysOpen, listed, expectedReads) => {
+    const reads: boolean[] = [];
+    let closeEpoch = 0;
+    const failed = vi.fn();
+    const directory = createProviderGroupDirectory(deps({
+      listDevices: async () => [device('mini')],
+      listReceivedShares: () => [],
+      readDeviceProviders: async (_id, options) => {
+        reads.push(options?.live === true);
+        if (options?.live) return [view('anthropic-1a2b3c4d', 'Claude')];
+        if (!linkStaysOpen) closeEpoch += 1;
+        throw quickError;
+      },
+      captureLinkCloseEpoch: () => { const seen = closeEpoch; return () => closeEpoch === seen; },
+      onCandidateReadFailed: failed,
+    }));
+    expect((await directory.listCandidates('anthropic', null)).map((c) => c.agentDeviceId)).toEqual(listed);
+    expect(reads).toEqual(expectedReads);
+    expect(failed).toHaveBeenCalledTimes(listed.length ? 0 : 1);
+  });
+
   it('lists same-account computers and received shares offering the same provider', async () => {
     const directory = createProviderGroupDirectory(deps());
     const candidates = await directory.listCandidates('anthropic', null);
@@ -172,6 +204,43 @@ describe('listCandidates', () => {
 });
 
 describe('resolveMembers', () => {
+  // Unit regression: the settings roster and a fast member must be observable while a
+  // sibling's directory and the fast member's quota are pending. Full-view tests awaited both.
+  it('returns the roster and individual base status before slow directory and quota reads', async () => {
+    let releaseDirectory!: () => void;
+    let releaseQuota!: () => void;
+    const catalog = new Promise<void>(resolve => { releaseDirectory = resolve; });
+    const quota = new Promise<void>(resolve => { releaseQuota = resolve; });
+    const config = normalizeProviderGroupConfig({ members: [
+      { kind: 'local' }, { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' },
+    ] }, 'anthropic')!;
+    const directory = createProviderGroupDirectory(deps({
+      readDeviceProviders: async () => { await catalog; return [view('anthropic', 'Claude', { remoteInvocationEnabled: true })]; },
+      readClaudeUsage: async () => { await quota; return { updatedAt: 1_000, fiveHour: { utilization: 100 } }; },
+    }));
+    const router = createProviderGroupRouter({ directory, readGroup: () => config,
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000, random: () => 0 });
+    const externalLoad = createProviderGroupExternalLoad({ now: () => 1_000 });
+    const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
+      ok: true,
+      result: await handleProviderGroupRemote({
+        scope: () => ({ router, externalLoad, isCurrent: () => true }), readGroup: () => config,
+        isRemoteAllowed: () => true, now: () => 1_000, replaceReportedUsage: vi.fn(), sessionGroup: async () => null,
+      }, 'viewer', args[0]),
+    }));
+    expect(await client.view('owner', 'anthropic', { display: 'roster' }))
+      .toMatchObject({ config, rosterOnly: true, members: [] });
+    const [fast, slow] = config.members;
+    const slowRead = client.view('owner', 'anthropic', { display: { memberKey: slow.key } });
+    const enriched = client.view('owner', 'anthropic', { display: { memberKey: fast.key, details: true } });
+    expect((await client.view('owner', 'anthropic', { display: { memberKey: fast.key } })).members)
+      .toMatchObject([{ key: fast.key, state: 'available' }]);
+    releaseDirectory();
+    expect((await slowRead).members).toMatchObject([{ key: slow.key, state: 'available' }]);
+    releaseQuota();
+    expect((await enriched).members).toMatchObject([{ key: fast.key, state: 'cooling', usageLimit: { resetAtMs: null } }]);
+  });
+
   it('uses actual local and advertised device versions, including offline devices; never invents a share version', async () => {
     const directory = createProviderGroupDirectory(deps({ localAppVersion: () => '0.1.104-beta' }));
     const members: ProviderGroupConfig['members'] = [

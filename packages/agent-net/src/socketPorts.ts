@@ -4,8 +4,11 @@ export interface SocketUplink {
   readonly kind: 'agent-net';
   readonly devices: DeviceView[];
   readonly notifications?: boolean;
+  probeRelay?(): void;
   readonly delegations?: Delegation[];
   readonly delegationRequests?: DelegationRequest[];
+  /** This session's UDP relay credentials when the relay offered them (over TLS); null or absent keeps WebSocket. */
+  readonly udp?: { session: Uint8Array; key: Uint8Array } | null;
   send(deviceId: string, data: Uint8Array): void;
   presence(enabled: boolean, capabilities: readonly string[], metadata?: import('@cindy/agent-net-protocol').DeviceMetadata): void;
   onDatagram(receive: (deviceId: string, data: Uint8Array) => void): void;
@@ -23,6 +26,14 @@ export interface SocketClient {
   directory?(): Promise<DeviceView[]>;
 }
 export interface SocketDiscovery { start(): void; close(): void; }
+/**
+ * The host's own rule for which members of this account's directory to accept (`AgentNetSocket.restrictPeers`): only
+ * `allowed` ones (null: every member), never `refused` ones.
+ */
+export interface PeerRule {
+  allowed: readonly string[] | null;
+  refused: readonly string[];
+}
 export interface DiscoveryOptions {
   networkId: string;
   port: number;
@@ -38,10 +49,22 @@ export interface PortableSocketOptions {
   scoped?: boolean;
   cachedDirectory?: DeviceView[];
   directoryExpiresAt?: number;
+  /** Verified direct UDP addresses from the previous socket on the same local network, tried first on open. */
+  initialCandidates?: ReadonlyMap<string, { address: string; port: number }>;
+  /** Saved per-device path preferences (`auto` / `direct` / `relay`) applied as peers connect. */
+  initialPeerPathPreferences?: Readonly<Record<string, import('./types.js').PathPreference>>;
+  /** Resolve `openWithBindings` as soon as the local transport is ready while the initial relay handshake finishes in the background. */
+  deferRelay?: boolean;
+  /** Which directory members to accept from the start (see `AgentNetSocket.restrictPeers`). */
+  peerRule?: PeerRule;
   onDirectory?(directory: DeviceView[]): void;
+  onRelayReplaced?(): void;
   onDelegationRequests?(requests: DelegationRequest[]): void;
   onDelegations?(delegations: Delegation[]): void;
   onPathChanged?(deviceId: string, path: 'direct' | 'relay' | null): void;
+  onDirectAddress?(deviceId: string, address: { address: string; port: number }): void;
+  /** Called before closing with 4410 when the Agent-Net relay refuses this identity; true closes with retryable 1006 for Device Link fallback. */
+  onIdentityRefused?(reason: string): boolean;
   bindings: {
     notify?(recipient: DeviceView, payload: import('@cindy/device-link-protocol').NotifyPayload, signal: AbortSignal, client: SocketClient): Promise<void>;
     verifyCertificate(rootPublicKey: string, certificate: DeviceCertificate, now?: number): boolean;

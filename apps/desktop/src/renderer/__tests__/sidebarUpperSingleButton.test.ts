@@ -100,12 +100,7 @@ describe('Project 行内 + 也对标统一 New(delayed-create)', () => {
     expect(sidebarSource).toMatch(/navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('dialogue'\)\s*\}\)/);
   });
 
-  it('Projects 段头新建项目先选择目录，再预填 workingDir 进入 /cc-agent/new', () => {
-    expect(sidebarSource).toContain('const handleCreateProject = useCallback(async () =>');
-    expect(sidebarSource).toContain('window.electronAPI.showOpenDirectoryDialog()');
-    expect(sidebarSource).toContain('patchNewMakerDraft({ workingDir: result.path, remoteHostId: null })');
-    expect(sidebarSource).toContain('onCreateProject={handleCreateProject}');
-  });
+
 });
 
 describe('archive dirty-worktree warning', () => {

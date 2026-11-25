@@ -21,12 +21,15 @@ import toolObservation from '../../../resources/system-skills/cindy-plugin-creat
 import messageHooks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-message-hooks.md?raw';
 import controlPoints from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-control-points.md?raw';
 import pluginModels from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-models.md?raw';
+import pluginHarnesses from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-harnesses.md?raw';
 import network from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-network.md?raw';
 import settings from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-settings.md?raw';
 import notifications from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-notifications.md?raw';
 import filesAndLibrary from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-files-and-library.md?raw';
 import agentTasks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-agent-tasks.md?raw';
 import hostTools from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md?raw';
+import queueControl from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-queue-control.md?raw';
+import nativeToolCatalog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-native-tool-catalog.md?raw';
 import historyAndHttp from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-history-and-http.md?raw';
 import interactivePages from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-interactive-pages.md?raw';
 import hostUi from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md?raw';
@@ -34,10 +37,12 @@ import nodeWorker from '../../../resources/system-skills/cindy-plugin-creator/re
 import sessionContext from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-session-context.md?raw';
 import directoryPicker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-directory-picker.md?raw';
 import panelPreview from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-panel-preview.md?raw';
+import fileOpener from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-file-opener.md?raw';
 import browserExtension from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-browser-extension.md?raw';
 import bundledSkills from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-bundled-skills.md?raw';
 import workspaceSessions from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-workspace-sessions.md?raw';
 import confirmDialog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-confirm-dialog.md?raw';
+import formDialog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-form-dialog.md?raw';
 import mainView from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-main-view.md?raw';
 import taskView from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-task-view.md?raw';
 import recommendations from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-recommendations.md?raw';
@@ -70,21 +75,26 @@ export const FORGE_GUIDE = [
   messageHooks,
   controlPoints,
   pluginModels,
+  pluginHarnesses,
   network,
   settings,
   notifications,
   filesAndLibrary,
   agentTasks,
   hostTools,
+  queueControl,
+  nativeToolCatalog,
   historyAndHttp,
   nodeWorker,
   sessionContext,
   directoryPicker,
   panelPreview,
+  fileOpener,
   browserExtension,
   bundledSkills,
   workspaceSessions,
   confirmDialog,
+  formDialog,
   mainView,
   taskView,
   recommendations,

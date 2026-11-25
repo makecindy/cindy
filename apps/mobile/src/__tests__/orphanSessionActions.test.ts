@@ -182,7 +182,7 @@ describe('orphan task status actions', () => {
     const request = patch(session, { status: 'archived' }, async () => true);
     await tick();
     expect(prior.isLatest()).toBe(false);
-    expect(f.store.applySessionPatch).toHaveBeenCalledWith('shard', 's1', { status: 'archived' });
+    expect(f.store.applySessionPatch).toHaveBeenCalledWith('shard', 's1', { status: 'archived', snoozedUntil: null, snoozedAt: null });
     f.reject(new Error('network unavailable'));
     await expect(request).rejects.toThrow('network unavailable');
     expect(f.store.upsertDeviceSession).toHaveBeenCalledWith('shard', 'PC', updatedRow);

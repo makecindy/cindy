@@ -1,5 +1,6 @@
 {
   "permission": {
+    "install": "Installer",
     "mcpComplete": "Terminé",
     "mcpCancel": "Annuler",
     "mode": {
@@ -295,7 +296,7 @@
       "expired": "Transfert de saisie terminé après une attente trop longue."
     },
     "failure": {
-      "permission": "Cindy ne peut pas lire l'écran de cet ordinateur. Autorisez Cindy dans Accessibilité, dans les Réglages Système.",
+      "permission": "Cindy ne peut pas lire l’interface de ce Mac. Vérifiez l’autorisation de contrôle de la copie de Cindy en cours d’exécution. Sous macOS 27.3 ou ultérieur, l’autorisation de contrôle se trouve dans « System & App Protection Override ». Sur les versions antérieures, ouvrez Accessibilité. Si Cindy ne peut contrôler que certaines apps, ajoutez aussi celle-ci.",
       "target_gone": "La fenêtre cible a été fermée.",
       "unreadable": "Cet écran ne peut pas être lu. Vous pouvez terminer sur l'ordinateur hôte, puis rendre la main à l'Agent.",
       "action_failed": "Cette action n'a pas eu d'effet. Vérifiez l'écran et réessayez.",

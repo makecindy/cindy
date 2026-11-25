@@ -83,6 +83,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
   modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
   bindGuestProviderRoute?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
+  log?: Parameters<typeof createRemoteAgentHost>[0]['log'];
 }) {
   return createRemoteAgentHost({
     ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
@@ -161,6 +162,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
     ...(options.groupRelay ? { groupRelay: options.groupRelay } : {}),
     ...(options.directGuestExecution ? { directGuestExecution: options.directGuestExecution } : {}),
     ...(options.reshare ? { reshare: options.reshare } : {}),
+    ...(options.log ? { log: options.log } : {}),
     captureOwner: options.captureOwner ?? (() => 'owner'),
     isOwnerCurrent: () => true,
     runsRoot: path.join(root, name),
@@ -264,6 +266,7 @@ function setup(options: {
   mini?: { failStart?: boolean; endImmediately?: boolean; onSend?: (record: Started) => void | Promise<void>;
     validateSendOptions?: AgentSessionHandle['validateSendOptions'];
     isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
+    log?: Parameters<typeof createRemoteAgentHost>[0]['log'];
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
@@ -275,7 +278,8 @@ function setup(options: {
     prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
     modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
     directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
-    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
+    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'];
+    log?: Parameters<typeof createRemoteAgentHost>[0]['log'] };
   /** 截住组所在电脑发给组内电脑的请求(模拟回包丢失、应答慢)。 */
   intercept?: (agentDeviceId: string, request: Record<string, unknown>, forward: () => Promise<unknown>) => Promise<unknown>;
 } = {}) {
@@ -322,6 +326,7 @@ function setup(options: {
     trust: (controller) => (controller.startsWith('share-') || isProviderSharePeer(controller) ? 'guest' : 'owner'),
     purge: async () => undefined,
     groupRelay: relay,
+    ...(options.owner?.log ? { log: options.owner.log } : {}),
     ...options.owner,
   });
   return { owner, members, memberStarted, ownerStarted, relay };
@@ -888,6 +893,15 @@ describe('provider group relay for shared users', () => {
 
     const none = setup({ plans: [{ kind: 'unavailable' }] });
     await expect(openAsGuest(none, GUEST_A, openPayload(SESSION))).rejects.toThrow(/REMOTE_AGENT_UNAVAILABLE/);
+
+    const unavailable = setup({ plans: [
+      { kind: 'unavailable', full: true },
+      { kind: 'unavailable', usageLimit: { resetAtMs: 1794978600000 } },
+    ] });
+    await expect(openAsGuest(unavailable, GUEST_A, openPayload(SESSION))).rejects.toThrow('[REMOTE_AGENT_GROUP_FULL]');
+    await expect(openAsGuest(unavailable, GUEST_B, openPayload(SESSION)))
+      .rejects.toThrow(/^\[REMOTE_AGENT_GROUP_USAGE_LIMIT\].*resets_at: 1794978600000$/);
+    expect(unavailable.ownerStarted).toHaveLength(0);
   });
 
   it('asks the computer to forget a removed shared user, and the computer clears only that user', async () => {
@@ -1146,6 +1160,87 @@ describe('provider group relay for shared users', () => {
       await host.abortAll();
       host.dispose();
     }
+  });
+
+  // Unit, #12552: real Host.handle(delegate) queue admission. Existing forget
+  // deduplication missed repeated revokes while native cleanup was pending;
+  // 256 copies could consume the shared mutation budget and refuse another peer.
+  it.each([false, true])('coalesces pending revocation retries without consuming other peers admission (failure=%s)', async failFirst => {
+    let release!: () => void;
+    let enter!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let firstAttempt = true;
+    const delegate = vi.fn(async (_owner: string, request: { sessionId: string }) => {
+      if (request.sessionId === 'blocked' && firstAttempt) {
+        firstAttempt = false;
+        enter(); await gate;
+        if (failFirst) throw new Error('native cleanup failed');
+      }
+      return false;
+    });
+    const host = fakeAgentHost('revoke-queue', [], { trust: () => 'owner', directGuestExecution: {
+      ownerScope: () => 'owner', allocate: async () => null, status() {}, release: async () => {},
+      switch: async () => ({}), usage() {}, delegate, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+    } });
+    const revoke = { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+      providerId: 'provider', model: 'model', sessionId: 'blocked', generation: '11111111-1111-4111-8111-111111111111' };
+    const first = host.handle(OWNER_DEVICE, revoke);
+    const firstResult = Promise.allSettled([first]);
+    let duplicates: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      duplicates = Promise.allSettled(Array.from({ length: 255 }, () => host.handle(OWNER_DEVICE, revoke)));
+      await expect(host.handle(OWNER_DEVICE, { ...revoke, guestDeviceId: 'other-guest', sessionId: 'other-task' })).resolves.toEqual({});
+      release();
+      const results = [...await firstResult, ...await duplicates];
+      expect(results.every(result => result.status === (failFirst ? 'rejected' : 'fulfilled'))).toBe(true);
+      expect(delegate).toHaveBeenCalledTimes(2);
+      // A failed close must remain retryable; dedupe lasts only while pending.
+      await expect(host.handle(OWNER_DEVICE, revoke)).resolves.toEqual({});
+      expect(delegate).toHaveBeenCalledTimes(3);
+    } finally { release(); await firstResult; await duplicates; await host.dispose(); }
+  });
+
+  it('keeps later revocations behind a grant and never shares another owners acknowledgment', async () => {
+    let release!: () => void;
+    let enter!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const leases = new Set(['blocked']);
+    let first = true;
+    const host = fakeAgentHost('revoke-grant-queue', [], { trust: () => 'owner', directGuestExecution: {
+      ownerScope: () => 'owner', allocate: async () => null, status() {}, release: async () => {},
+      switch: async () => ({}), usage() {}, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+      delegate: async (owner, request) => {
+        if (owner !== OWNER_DEVICE) throw new Error('foreign owner');
+        if (first) { first = false; enter(); await gate; }
+        if (request.action === 'revoke') leases.delete(request.sessionId);
+        else leases.add(request.sessionId);
+        return false;
+      },
+    } });
+    const request = { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+      providerId: 'provider', model: 'model', sessionId: 'blocked', generation: '11111111-1111-4111-8111-111111111111' };
+    const head = host.handle(OWNER_DEVICE, request);
+    let result: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      result = Promise.allSettled([
+        host.handle(OWNER_DEVICE, { ...request, action: 'grant' }),
+        host.handle(OWNER_DEVICE, request),
+        host.handle('other-owner', request),
+      ]);
+      release();
+      await head;
+      expect(await result).toEqual([
+        { status: 'fulfilled', value: {} }, { status: 'fulfilled', value: {} },
+        expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({ message: 'foreign owner' }) }),
+      ]);
+      expect(leases.size).toBe(0);
+    } finally { release(); await head; await result; await host.dispose(); }
   });
 
   // Host.handle regression (unit): sequential forget coverage missed F1/F2
@@ -1743,7 +1838,7 @@ describe('provider group "switch to another computer" for shared users', () => {
   // once, with a fresh isolated native session. Empty exclusions are a valid
   // token, not a missing token; it must still retire the old durable direct pin.
   it('accepts an account-handoff token with no excluded machines once per round', async () => {
-    const switched = vi.fn(async () => {});
+    const switched = vi.fn(async () => true).mockResolvedValueOnce(false);
     const env = setup({ owner: { directGuestExecution: { switched, ownerScope: () => 'owner',
       sessionAllowed: () => true, sessionDelegated: () => false } as never } });
     const guest = providerShareGuestPeer('share', 'member', 'laptop');
@@ -1751,7 +1846,15 @@ describe('provider group "switch to another computer" for shared users', () => {
     const token = env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded, true);
     expect(token).toBeTruthy();
     expect(env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded, true)).toBeNull();
-    const opened = await openAsGuest(env, guest, openPayload(SESSION, { acceptsGroupSwitch: true, groupSwitchToken: token }));
+    const payload = (groupSwitchToken: string) => openPayload(SESSION, {
+      acceptsGroupSwitch: true, groupSwitchToken, requireGroupSwitchToken: true,
+    });
+    await expect(openAsGuest(env, guest, payload('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')))
+      .rejects.toThrow('standby task handoff has expired or is no longer authorized');
+    expect(switched).not.toHaveBeenCalled();
+    await expect(openAsGuest(env, guest, payload(token!))).rejects.toThrow('standby task handoff could not be confirmed');
+    expect(env.relay.plan).not.toHaveBeenCalled();
+    const opened = await openAsGuest(env, guest, payload(token!));
     try {
       expect(switched).toHaveBeenCalledWith(guest, SESSION, token);
       expect(env.relay.plan).toHaveBeenCalledWith(expect.objectContaining({ exclude: new Set() }));
@@ -2151,6 +2254,42 @@ describe('provider group "switch to another computer" for shared users', () => {
     expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set([MEMBER_MINI.memberKey]) }));
     expect(env.memberStarted.studio).toHaveLength(1);
     await reopened.client.close('close', 'navigation');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Host → relay → guest 事件流；失败时日志能说明稳定错误码和凭证是否发出。
+  // - Bug／规则依据：任务 A 的远程换号诊断；现场只有 start-failed，无法判断是否收到换号凭证。
+  // - 现有覆盖缺口：相邻用例只断言事件顺序和凭证值，不检查结构化日志或敏感字段边界。
+  // - 最小失败输入：一台组内电脑产生一次 usage-limit 终态并有可用替代电脑。
+  // - tier：unit；单进程 fake transport 仍走生产 Host/relay 入口。
+  it('records a stable switch decision without token or account details', async () => {
+    const logs: Array<{ message: string; meta?: Record<string, unknown> }> = [];
+    const env = setup({
+      plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }],
+      owner: { log: {
+        debug: () => undefined,
+        info: (message, meta) => logs.push({ message, meta }),
+        warn: (message, meta) => logs.push({ message, meta }),
+      } },
+    });
+    const task = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      // Pi puts the upstream error text into sdkError; it must not reach the decision log.
+      env.memberStarted.mini[0].emit({ type: 'error', data: { message: 'You have hit your usage limit', isTerminal: true,
+        usageLimit: true, sdkError: 'upstream body quoting private-notes.md from the chat' } } as AgentEvent);
+      await waitFor(() => switchTokenIn(task.stream) !== undefined);
+      const decision = logs.find(item => item.message === 'remote agent group switch decision');
+      expect(decision?.meta).toMatchObject({ cause: 'usage-limit', outcome: 'issued', reason: 'replacement-available' });
+      const serialized = JSON.stringify(logs);
+      expect(serialized).not.toContain('usage limit');
+      expect(serialized).not.toContain('providerId');
+      expect(serialized).not.toContain('token');
+      expect(serialized).not.toContain('private-notes');
+    } finally {
+      await task.client.close('close', 'navigation');
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    }
   });
 
   it.each([

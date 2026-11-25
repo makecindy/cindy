@@ -21,10 +21,12 @@ import {
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getAuthState, getDeviceId } from '../authManager.js';
 import { createLogger } from '../logger.js';
+import { isPluginEngineOfferedToGuests } from '../maker-host/pluginEngineRemoteUse.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { providerShareApi, providerShareOwnerKey } from './providerShareApi.js';
-import { delegatedProviderShareGuestAccess } from './providerShareDelegatedAccess.js';
+import { delegatedProviderShareGuestAccess, locallyProvenProviderShareDelegation } from './providerShareDelegatedAccess.js';
 import {
   PROVIDER_SHARE_REMOTE_LINK_WINDOW_MS,
   readProviderShareApprovalWindows,
@@ -498,7 +500,7 @@ export async function verifyProviderShareMemberGeneration(member: ProviderShareM
   if (!rt || !current(rt)) throw new Error('Provider share owner changed');
   const shares = await providerShareApi.listOwned();
   if (!current(rt)) throw new Error('Provider share owner changed');
-  if (shares.unavailableShareIds?.includes(member.shareId)) throw new Error('Provider share authority unavailable');
+  if (shares.unavailableShareIds?.includes(member.shareId)) throw new Error('[SERVICE_UNAVAILABLE] Provider share authority unavailable');
   const saved = shares.find((share) => share.shareId === member.shareId && share.hostDeviceId === getDeviceId())
     ?.members.find((entry) => entry.memberId === member.memberId);
   if (!saved || saved.status !== 'active' || saved.joinedAt !== member.joinedAt) {
@@ -616,7 +618,11 @@ function checkGuestAccess(controller: string): GuestAccessCheck {
     return { denied: 'member-cleanup-pending' };
   }
   if (!readDeviceLinkSettings().remoteControlEnabled) return { denied: 'remote-control-off' };
-  if (!isRemoteProviderInvocationAllowed(share.providerId)) return { denied: 'provider-not-remote' };
+  if (pluginEngineKeyFromProviderId(share.providerId)
+    ? !isPluginEngineOfferedToGuests(share.providerId)
+    : !isRemoteProviderInvocationAllowed(share.providerId)) {
+    return { denied: 'provider-not-remote' };
+  }
   return { access: { shareId: share.shareId, memberId: member.memberId, providerId: share.providerId } };
 }
 
@@ -644,7 +650,7 @@ export function providerShareGuestDenial(controller: string): ProviderShareGuest
 /** 不认识的受邀者连进来：可能是刚同意的成员，按需立即拉一次(限频)。 */
 export async function ensureProviderSharePeerKnown(controller: string): Promise<void> {
   const rt = runtime;
-  if (!rt || ownedProviderShareGuestAccess(controller)) return;
+  if (!rt || ownedProviderShareGuestAccess(controller) || locallyProvenProviderShareDelegation(controller)) return;
   // A second task may arrive on an already admitted executor connection.
   try { await prepareShareAvailability(controller); } catch { /* Old server or no registered standby: retain the existing owner path. */ }
   if (providerShareGuestAccess(controller)) return;

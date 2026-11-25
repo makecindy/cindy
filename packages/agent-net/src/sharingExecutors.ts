@@ -75,5 +75,5 @@ export async function checkAgentNetSharingExecutor(options: Options, input: Shar
     || api.identity.deviceId !== d.hostDeviceId && (api.identity.deviceId !== input.executorDeviceId
       || api.identity.signingKey !== executor.certificate.signingKey || api.identity.transportKey !== executor.certificate.transportKey))
     throw new Error('UNTRUSTED_AGENT_NET_EXECUTOR');
-  return { active: true as const, ownerDeviceId: d.hostDeviceId, generation: executor.generation, expiresAt: executor.expiresAt };
+  return { active: true as const, ownerDeviceId: d.hostDeviceId, generation: executor.generation, expiresAt: executor.expiresAt, proofId: d.id };
 }
