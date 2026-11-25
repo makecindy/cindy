@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { cleanup, render } from '@testing-library/react';
+import ReactMarkdown from 'react-markdown';
+import rehypeSlug from 'rehype-slug';
 import type { Element, Root } from 'hast';
 import type { Plugin, PluggableList } from 'unified';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -119,8 +121,14 @@ describe('splitStreamingMarkdownChunks', () => {
     }
   });
 
-  it('多个标题或块级 HTML 出现时保留整篇解析上下文', () => {
-    for (const headings of ['# Same\n\nbody\n\n# same', '# foo\n\nbody\n\n# foo!']) {
+  it('标题源码无法可靠还原显示文本或出现块级 HTML 时保留整篇解析上下文', () => {
+    // 链接、下划线强调与 Setext 标题的显示文本不能从源码逐行还原：回退整篇，
+    // 保证 rehype-slug 的去重 id 与终版一致。
+    for (const headings of [
+      '# [Guide](https://example.com)\n\nbody\n\n# Guide',
+      '# snake_case\n\nbody\n\n# snake_case',
+      'Title\n=====\n\nbody\n\n# Title',
+    ]) {
       expect(splitStreamingMarkdownChunks(headings)).toEqual([
         { start: 0, content: headings },
       ]);
@@ -151,6 +159,47 @@ function treeText(node: Root | Element): string {
 }
 
 describe('StreamingMarkdownChunk', () => {
+  // 回归：多标题长文曾因标题 id 需要全文上下文而整篇重解析，每个 token 都重跑
+  // 全文 Markdown，长回答越写越卡（2026-11-25 黑盒基准 long 场景）。现在分片
+  // 只重解析尾块，但标题 id（含重复标题的 -1/-2 后缀）必须与整篇解析一致，
+  // 否则文内锚点链接在流式期间跳错位置。
+  it('多标题长文分片解析，标题 id 与整篇解析一致', () => {
+    const markdown = [
+      '# Same', 'body', '## **Bold** `code` heading', 'body', '# same', 'body',
+      '# Same', 'body', '## Bold code heading', 'tail',
+    ].join('\n\n');
+    const chunks = splitStreamingMarkdownChunks(markdown);
+    expect(chunks.length).toBeGreaterThan(1);
+
+    const ids = (root: ParentNode) =>
+      Array.from(root.querySelectorAll('h1, h2'), (heading) => heading.id);
+    const whole = render(<ReactMarkdown rehypePlugins={[rehypeSlug]}>{markdown}</ReactMarkdown>);
+    const expected = ids(whole.container);
+    expect(expected).toEqual(['same', 'bold-code-heading', 'same-1', 'same-2', 'bold-code-heading-1']);
+    whole.unmount();
+
+    const chunked = render(
+      <div>
+        {chunks.map((chunk) => (
+          <StreamingMarkdownChunk
+            key={chunk.start}
+            sourceKey={String(chunk.start)}
+            content={chunk.content}
+            remarkPlugins={[]}
+            rehypePlugins={[rehypeSlug]}
+            components={{}}
+            wordFadeState={createWordFadeState()}
+            emitSourceLines={false}
+            headingSeed={chunk.headingSeed}
+          />
+        ))}
+      </div>,
+    );
+    expect(ids(chunked.container)).toEqual(expected);
+    // 占位标题只用于计数，不进入 DOM。
+    expect(chunked.container.querySelectorAll('h1, h2')).toHaveLength(expected.length);
+  });
+
   it('增长尾部重解析时保留稳定前缀的解析结果与 DOM', () => {
     const parsed: string[] = [];
     const countParses: Plugin<[], Root> = () => (tree) => {
@@ -254,7 +303,8 @@ describe('StreamingMarkdownChunk', () => {
     expect(state.sourceStateByKey.size).toBeGreaterThan(1);
     for (const key of completedKeys) state.timeline.settled.add(key);
 
-    view.rerender(<Harness markdown={`${initial}\n\n# Second`} />);
+    // 引用式链接定义会反向影响前文，晚到时整篇回退解析。
+    view.rerender(<Harness markdown={`${initial}\n\n[guide]: https://example.com\n\nSecond`} />);
 
     const secondFrame = Array.from(
       view.container.querySelectorAll<HTMLSpanElement>('[data-wf-key]'),

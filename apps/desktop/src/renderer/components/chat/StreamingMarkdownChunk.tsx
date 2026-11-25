@@ -1,7 +1,7 @@
 import { memo, useLayoutEffect, useMemo } from 'react';
 import ReactMarkdown, { type Components, type UrlTransform } from 'react-markdown';
-import type { Element } from 'hast';
-import type { PluggableList } from 'unified';
+import type { Element, Root } from 'hast';
+import type { Plugin, PluggableList } from 'unified';
 
 import {
   commitWordFadeCandidate,
@@ -25,7 +25,37 @@ interface StreamingMarkdownChunkProps {
   wordFadeState: WordFadeState | null;
   emitSourceLines: boolean;
   wholeDocument?: boolean;
+  /** 前序分片的标题文本（JSON 数组），见 StreamingMarkdownChunk.headingSeed。 */
+  headingSeed?: string;
 }
+
+const HEADING_SEED = 'cindyHeadingSeed';
+
+/**
+ * 在分片 hast 开头插入前序标题的占位 h1，让紧随其后的 rehype-slug 用同一个
+ * slugger 先为它们计数：本分片的标题 id 因而与整篇解析的去重结果一致。
+ * 占位节点在全部 rehype 插件之后、淡入与块缓存之前移除，不进入 DOM。
+ */
+function rehypeSeedHeadingSlugs(texts: readonly string[]): Plugin<[], Root> {
+  return () => (tree) => {
+    tree.children.unshift(
+      ...texts.map((text): Element => ({
+        type: 'element',
+        tagName: 'h1',
+        properties: {},
+        data: { [HEADING_SEED]: true } as Element['data'],
+        children: [{ type: 'text', value: text }],
+      })),
+    );
+  };
+}
+
+const rehypeRemoveHeadingSeeds: Plugin<[], Root> = () => (tree) => {
+  tree.children = tree.children.filter(
+    (node) =>
+      !(node.type === 'element' && (node.data as Record<string, unknown> | undefined)?.[HEADING_SEED]),
+  );
+};
 
 function sourceLineAttr(node?: Element): { 'data-source-line'?: number } {
   const line = node?.position?.start.line;
@@ -46,7 +76,13 @@ export const StreamingMarkdownChunk = memo(function StreamingMarkdownChunk({
   wordFadeState,
   emitSourceLines,
   wholeDocument = false,
+  headingSeed,
 }: StreamingMarkdownChunkProps) {
+  const seededRehypePlugins = useMemo<PluggableList>(() => {
+    if (!headingSeed) return rehypePlugins;
+    const texts = JSON.parse(headingSeed) as string[];
+    return [rehypeSeedHeadingSlugs(texts), ...rehypePlugins, rehypeRemoveHeadingSeeds];
+  }, [headingSeed, rehypePlugins]);
   const sourceWordFadeState = useMemo(
     () =>
       wordFadeState ? getOrCreateWordFadeSourceState(wordFadeState, sourceKey) : null,
@@ -62,13 +98,13 @@ export const StreamingMarkdownChunk = memo(function StreamingMarkdownChunk({
     return {
       candidate,
       plugins: [
-        ...rehypePlugins,
+        ...seededRehypePlugins,
         blocks.capture,
         [rehypeStreamWordFade, candidate],
         blocks.wrap,
       ] as PluggableList,
     };
-  }, [content, rehypePlugins, sourceWordFadeState, wholeDocument, wordFadeState]);
+  }, [content, seededRehypePlugins, sourceWordFadeState, wholeDocument, wordFadeState]);
 
   useLayoutEffect(() => {
     if (sourceWordFadeState && wordFade) {
@@ -105,7 +141,7 @@ export const StreamingMarkdownChunk = memo(function StreamingMarkdownChunk({
   return (
     <ReactMarkdown
       remarkPlugins={remarkPlugins}
-      rehypePlugins={wordFade?.plugins ?? rehypePlugins}
+      rehypePlugins={wordFade?.plugins ?? seededRehypePlugins}
       components={cachedComponents}
       urlTransform={urlTransform}
       skipHtml

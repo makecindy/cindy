@@ -54,11 +54,8 @@ import {
 } from './rehypeStreamWordFade';
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
 import { StreamingMarkdownChunk } from './StreamingMarkdownChunk';
-import {
-  getStreamingMarkdownThrottleInterval,
-  splitStreamingMarkdownChunks,
-  STREAMING_MARKDOWN_THROTTLE_BASE_MS,
-} from './streamingMarkdownChunks';
+import { splitStreamingMarkdownChunks } from './streamingMarkdownChunks';
+import { useStreamingReveal } from './streamingReveal';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { isHomePath, resolveRemoteHomePath, useRemoteHomePath } from '@/hooks/useRemoteHomePath';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
@@ -451,90 +448,6 @@ function parseSessionCardHref(href: string): {
   } catch {
     return null;
   }
-}
-
-/**
- * Throttle a rapidly-changing string to at most one render per adaptive
- * interval. Caps react-markdown re-parse + rehype-highlight CPU
- * during SDK streaming, where text deltas can land 30-60 times/s even
- * after the main-process IPC batcher.
- *
- * - `enabled=false`  → returns `value` directly each call (no setState
- *   loop, no timer overhead, identical behavior to passing through).
- * - `enabled=true`   → rate-limits via setTimeout; the trailing edge is
- *   guaranteed (no-token-lost). Switching back to false flushes the
- *   latest value synchronously.
- */
-function useStreamingThrottle(value: string, enabled: boolean): string {
-  const intervalMs = enabled
-    ? getStreamingMarkdownThrottleInterval(value)
-    : STREAMING_MARKDOWN_THROTTLE_BASE_MS;
-  const [throttled, setThrottled] = useState(value);
-  const throttledRef = useRef(value);
-  const latestRef = useRef(value);
-  const lastEmitRef = useRef(0);
-  const timerRef = useRef<number | null>(null);
-
-  const emit = useCallback((nextValue: string, now: number) => {
-    lastEmitRef.current = now;
-    if (throttledRef.current === nextValue) return;
-    throttledRef.current = nextValue;
-    setThrottled(nextValue);
-  }, []);
-
-  useEffect(() => {
-    latestRef.current = value;
-
-    if (!enabled) {
-      if (timerRef.current != null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-      // Stream just ended — flush whatever the most recent value is so
-      // the final frame is never the last throttled snapshot.
-      if (throttledRef.current !== value) {
-        throttledRef.current = value;
-        setThrottled(value);
-      }
-      // A new stream should get a leading frame even if it starts shortly
-      // after the previous one ended.
-      lastEmitRef.current = 0;
-      return;
-    }
-
-    const now = performance.now();
-    const elapsed = now - lastEmitRef.current;
-    if (elapsed >= intervalMs) {
-      if (timerRef.current != null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-      emit(value, now);
-      return;
-    }
-
-    // Re-arm on every update so an interval bucket change cannot leave a
-    // timer using the previous (shorter) delay. The latest ref keeps the
-    // trailing edge lossless even when several batches arrive in between.
-    if (timerRef.current != null) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(
-      () => {
-        timerRef.current = null;
-        emit(latestRef.current, performance.now());
-      },
-      Math.max(0, intervalMs - elapsed),
-    );
-  }, [emit, value, enabled, intervalMs]);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current != null) window.clearTimeout(timerRef.current);
-    };
-  }, []);
-
-  // useEffect 在 paint 后才执行。流式结束时本次 render 直接返回最新原文，
-  // effect 只负责同步内部 state，供未来可能的新流式周期使用。
-  return enabled ? throttled : value;
 }
 
 /**
@@ -1865,10 +1778,10 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   emitSourceLines = false,
 }: MarkdownRendererProps) {
   const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
-  // Cap markdown re-parse + syntax highlight cost during streaming.
-  // Static callers (TextLightbox) leave isStreaming undefined → false,
-  // so the throttle is fully bypassed — same behavior as before.
-  const throttledContent = useStreamingThrottle(content, isStreaming);
+  // 流式节奏由外层 MarkdownRenderer 的 useStreamingReveal 统一负责（匀速放出 +
+  // 按渲染耗时退避，DESIGN.md §14.4 Stream pacing）。这里不再叠加固定节流：
+  // 叠加会把逐帧放出重新压回 ~10Hz 的成块跳变。
+  const throttledContent = content;
   // 流式逐词淡入（DESIGN.md §14.4）：消息级 state 跨 parse / remount 保留，
   // 各稳定 Markdown 分片只维护自己的内容匹配状态，但共享同一条连续时间线。
   // isStreaming 翻 false 时整段回落到普通 Markdown，终版没有流式 span 包装。
@@ -2156,6 +2069,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             wordFadeState={wordFadeState}
             emitSourceLines={emitSourceLines}
             wholeDocument={streamingChunks.length === 1}
+            headingSeed={chunk.headingSeed}
           />
         ))
       ) : (
@@ -2195,10 +2109,22 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
 });
 
 /** Assistant-only envelope decoding, before Markdown chunking or repairs. */
-export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRendererProps) {
+export const MarkdownRenderer = memo(function MarkdownRenderer(incoming: MarkdownRendererProps) {
   const instanceKey = useId();
   const sessionFileCtx = useChatSessionFile();
-  const source = useStreamingThrottle(props.content, props.isStreaming ?? false);
+  const streaming = incoming.isStreaming ?? false;
+  // 匀速放出与淡入共用同一开关：关闭回复动效或系统减弱动态效果时只保留
+  // 按渲染耗时退避的发布节奏，不缓冲、不延迟。
+  const reducedMotion = useReducedMotion();
+  const streamFadeEnabled = useStreamFadeEnabled();
+  const reveal = useStreamingReveal(incoming.content, streaming, !reducedMotion && streamFadeEnabled);
+  const source = reveal.text;
+  // 流式结束后的 ≤150ms 收尾期间继续按流式渲染（淡入、分片），放完再切终版，
+  // 剩余积压不会在最后一帧整段跳出。
+  const props = useMemo(
+    () => (reveal.draining ? { ...incoming, isStreaming: true } : incoming),
+    [incoming, reveal.draining],
+  );
   const renderMedia = (node: RichNode) => {
     if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} />;
     const raw = richMediaSource(node);
@@ -2226,7 +2152,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     );
   };
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);
-  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} />;
+  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} content={source} />;
   return <div className="rich-answer-body">{parts.map(part => part.kind === 'rich'
     ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
         stateKey={`${props.streamFadeKey ?? instanceKey}:${part.key}`}
