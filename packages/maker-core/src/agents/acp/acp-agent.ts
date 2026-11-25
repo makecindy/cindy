@@ -24,6 +24,7 @@ import {
   type PiExtraSpawnConfig,
   type StartSessionOptions,
 } from '../base-agent.js';
+import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import { buildAcpCapabilities } from './capabilities.js';
 import { renderPluginEngineCapabilityBriefing, type PluginEngineBriefingSkill } from './briefing.js';
 import { expandPluginEngineSkillInvocation } from './skill-invocation.js';
@@ -101,10 +102,11 @@ export interface AcpAgentDeps extends AgentDeps {
   /** Remembers what the agent offered so pickers can show it before the next start. */
   onSessionCapabilities?: (harnessKey: string, capabilities: Capabilities) => void;
   /**
-   * The Skills a task in this directory can use, for the briefing ahead of the first message (the
-   * same discovery and enablement as the built-in Pi engine). A failure only leaves the list out.
+   * The Skills a task in this directory can use (the same discovery and enablement as the built-in Pi
+   * engine): the briefing ahead of the first message, `/<skill>` expansion and the `/` menu. A failure
+   * only leaves the list out of the briefing and leaves messages unexpanded.
    */
-  listSessionSkills?: (ctx: { workingDir: string }) => Promise<readonly PluginEngineBriefingSkill[]>;
+  listSessionSkills?: (ctx: { workingDir?: string }) => Promise<readonly PluginEngineBriefingSkill[]>;
 }
 
 const NO_INIT = buildAcpCapabilities(
@@ -193,6 +195,27 @@ export class AcpAgent extends BaseAgent {
     // declared entry. BaseAgent requires a value, so name the source instead.
     super({ ...deps, binaryPath: deps.binaryPath || ACP_PLUGIN_BINARY_PLACEHOLDER });
     this.acpDeps = deps;
+  }
+
+  /**
+   * The `/` menu of a plugin-engine task: the list its `/<skill>` messages are expanded from, so the menu
+   * offers exactly the Skills that reach the engine as instructions, whether or not the built-in Pi engine
+   * is available on this computer. SSH workspaces are not offered to plugin engines.
+   */
+  override async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
+    if (opts.remoteHostId || !this.acpDeps.listSessionSkills) return { skills: [] };
+    const skills = await this.acpDeps.listSessionSkills({ workingDir: opts.workingDir });
+    return {
+      skills: skills.flatMap((skill) => skill.path ? [{
+        kind: 'agent-skill' as const,
+        name: skill.name,
+        ...(skill.description ? { description: skill.description } : {}),
+        source: 'skill' as const,
+        path: skill.path,
+        scope: skill.scope ?? 'user',
+        enabled: true,
+      }] : []),
+    };
   }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {

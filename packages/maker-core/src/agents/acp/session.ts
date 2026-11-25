@@ -981,9 +981,11 @@ export class AcpSession {
       return message.content.length > 0 ? [{ type: 'text', text: await this.expandText(message.content) }] : [];
     }
     const blocks: AcpContentBlock[] = [];
+    // Only the message's opening text can be a slash invocation: its first text block, the same text
+    // the host keeps its notes off (desktop `shouldPrependMobileClientPromptNote`).
+    const opening = message.content.findIndex((block) => block.type === 'text');
     for (const [index, block] of message.content.entries()) {
-      // Only the message's opening text can be a slash invocation.
-      blocks.push(index === 0 && block.type === 'text'
+      blocks.push(index === opening && block.type === 'text'
         ? { type: 'text', text: await this.expandText(block.text) }
         : await this.toContentBlock(block));
     }

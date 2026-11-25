@@ -6421,7 +6421,8 @@ interface ElectronAPI {
     }>;
 
     listAgentSkills: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      /** `acp`: a plugin-engine task's `/` menu (the Skills that engine expands). */
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
       params: {
         workingDir?: string;
         remoteHostId?: string;

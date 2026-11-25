@@ -7576,7 +7576,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:list-agent-commands', agentKind, params),
 
     listAgentSkills: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      /** `acp`: a plugin-engine task's `/` menu (the Skills that engine expands). */
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
       params: {
         workingDir?: string;
         remoteHostId?: string;

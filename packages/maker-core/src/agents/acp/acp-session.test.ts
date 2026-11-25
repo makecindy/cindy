@@ -1091,7 +1091,7 @@ describe('AcpAgent (the acp engine)', () => {
     endpoints: { connect: async () => agent.transport },
     preparePiExtraSpawnConfig: async () => ({ mcpBridge: { token: 't', servers: [{ name: 'cindy', url: 'http://127.0.0.1:9/mcp/cindy' }] } }),
     getGhostRosterPrompt: roster as unknown as (ctx: { workingDir?: string }) => string,
-    listSessionSkills: skills as unknown as (ctx: { workingDir: string }) => Promise<Array<{ name: string; description?: string; path?: string }>>,
+    listSessionSkills: skills as unknown as (ctx: { workingDir?: string }) => Promise<Array<{ name: string; description?: string; path?: string }>>,
   });
   const skillList = [
     { name: 'cindy-plugin-github:pr', description: 'Carry a GitHub pull request\n from start to merge.', path: '/skills/pr/SKILL.md' },
@@ -1214,12 +1214,38 @@ describe('AcpAgent (the acp engine)', () => {
         expect(agent.prompts[index]!.params.prompt).toEqual([{ type: 'text', text: received }]);
         agent.prompts[index]!.settle.resolve({ stopReason: 'end_turn' });
       }
+      // Review (#12732)：带图片的消息以第一段文字为开头，与宿主不加说明的判定同一段（mobileClientPromptNote.ts）。
+      await handle.send({ type: 'user', content: [{ type: 'image', path: '/repo/shot.png' }, { type: 'text', text: '/pr look' }] });
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(cases.length + 1));
+      expect(agent.prompts[cases.length]!.params.prompt).toEqual([
+        expect.objectContaining({ type: 'resource_link', name: 'shot.png' }),
+        { type: 'text', text: `${block}\n\nlook` },
+      ]);
       // Only messages that start with `/` look the Skills up.
-      expect(skills).toHaveBeenCalledTimes(4);
+      expect(skills).toHaveBeenCalledTimes(5);
       expect(skills).toHaveBeenCalledWith({ workingDir: '/repo' });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // Review (#12732, Codex P2)：插件引擎任务的 `/` 菜单此前借内置 Pi 的清单，本机 Pi 不可用（未注册）时请求失败、菜单为空，
+  // 而展开照样能用。生产入口 Maker.listAgentSkills('acp') → 本方法，读展开用的同一份清单。覆盖缺口：此前插件引擎没有自己的
+  // 菜单清单。最小失败输入：一个项目 Skill、一个托管 Skill、一个没有 SKILL.md 的项（展开不了，不列）；SSH 任务不列（unit）。
+  it('lists for the `/` menu the Skills its `/<skill>` messages expand from', async () => {
+    const skills = vi.fn(async () => [
+      { name: 'deploy', description: 'Ship it.', path: '/repo/.agents/skills/deploy/SKILL.md', scope: 'repo' },
+      { name: 'pr', path: '/managed/pr/SKILL.md' },
+      { name: 'no-file' },
+    ]);
+    const engine = briefingEngine(createFakeAgent(), vi.fn(() => ''), skills);
+    expect(await engine.listAgentSkills({ workingDir: '/repo' })).toEqual({ skills: [
+      { kind: 'agent-skill', name: 'deploy', description: 'Ship it.', source: 'skill', path: '/repo/.agents/skills/deploy/SKILL.md', scope: 'repo', enabled: true },
+      { kind: 'agent-skill', name: 'pr', source: 'skill', path: '/managed/pr/SKILL.md', scope: 'user', enabled: true },
+    ] });
+    expect(skills).toHaveBeenCalledWith({ workingDir: '/repo' });
+    expect(await engine.listAgentSkills({ workingDir: '/repo', remoteHostId: 'ssh-1' })).toEqual({ skills: [] });
+    expect(skills).toHaveBeenCalledTimes(1);
   });
 
   // 第三期(2026-11-20，docs/plans/acp-plugin-bridge.md)：任务的文件与命令在同账号另一台电脑上。插件引擎自带的

@@ -87,27 +87,21 @@ describe('loadAllCommands Learn fallback', () => {
 
 // 用户要求（2026-11-25）：插件引擎任务的 `/` 也列出 Cindy Skill，由执行电脑上的引擎按人名展开
 // （maker-core acp/skill-invocation.ts）。覆盖缺口：此前插件引擎直接跳过 Skill 清单。
-// 最小失败输入：草稿仍是 Claude 身份的插件引擎；清单里有 Pi 别名、尚未被 Pi 加载的项目 Skill、Pi 包 Skill。
+// Review (#12732, Codex P2)：清单向插件引擎自己要（`acp`），不借 Pi 的清单；本机 Pi 不可用时 Pi 那份会失败而菜单为空。
+// 最小失败输入：草稿仍是 Claude 身份的插件引擎，引擎返回一个项目 Skill（unit）。
 describe('plugin engine Skills', () => {
-  it('lists the Pi-scope Skills by their human name, ready to send, without Pi package Skills', async () => {
+  it('asks the plugin engine for its Skills and lists them by their human name, ready to send', async () => {
     const path = '/repo/.agents/skills/deploy/SKILL.md';
-    stubCommandLists({
-      success: true,
-      skills: [
-        skill({ name: 'deploy', scope: 'repo', path, runtimeStatus: 'discovered', runtimeCommandName: 'skill:deploy' }),
-        skill({ name: 'pkg', origin: 'package', runtimeCommandName: 'skill:pkg' }),
-      ],
-    });
+    stubCommandLists({ success: true, skills: [skill({ name: 'deploy', scope: 'repo', path })] });
 
     const commands = await loadAllCommands('claude-code', '/repo', { skipAgentCommands: true, pluginEngineSkills: true });
 
-    expect(vi.mocked(window.electronAPI.maker.listAgentSkills)).toHaveBeenCalledWith('pi', { workingDir: '/repo' });
+    expect(vi.mocked(window.electronAPI.maker.listAgentSkills)).toHaveBeenCalledWith('acp', { workingDir: '/repo' });
     expect(vi.mocked(window.electronAPI.maker.listAgentCommands)).not.toHaveBeenCalled();
     const deploy = commands.find((command) => command.name === 'deploy');
     expect(deploy).toEqual({ kind: 'agent-skill', name: 'deploy', source: 'skill', scope: 'repo', path });
     expect(isSlashCommandUnavailable(deploy!)).toBe(false);
     expect(rewriteAgentSkillInvocationForDispatch('/deploy now', deploy)).toBe('/deploy now');
-    expect(commands.map((command) => command.name)).not.toContain('pkg');
   });
 });
 
