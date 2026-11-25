@@ -1199,6 +1199,7 @@ import {
 } from './windowsTrayLifecycle.js';
 import { createLinuxTrayController } from './linuxTrayLifecycle.js';
 import {
+  applyCloseOnce,
   applyLinuxMainWindowCloseBehavior,
   cancelPendingWindowHide,
   createCloseBehaviorPromptFallbackController,
@@ -4176,6 +4177,7 @@ const windowsClosePromptFallback = createCloseBehaviorPromptFallbackController(
     },
     showNativePrompt: showNativeWindowsCloseBehaviorPrompt,
     persistBehavior: writeWindowsCloseBehavior,
+    onPersistFailure: () => windowsTrayLog.warn('Windows close behavior could not be saved'),
     applyBehavior: (behavior) => {
       const mainWindow = mainWindowRef;
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -4203,6 +4205,7 @@ const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
     },
     showNativePrompt: showNativeLinuxCloseBehaviorPrompt,
     persistBehavior: writeLinuxCloseBehavior,
+    onPersistFailure: () => linuxTrayLog.warn('Linux close behavior could not be saved'),
     applyBehavior: (behavior) => {
       const mainWindow = mainWindowRef;
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -6523,8 +6526,21 @@ const registerIpcHandlers = () => {
   //    等都收掉;否则 voice overlay 这种 hidden BrowserWindow 还活着,window-all-closed
   //    不 fire,残留进程。
   //  - 「在新窗口打开」的副窗: 只关自己, 不退出 app(会话活在主进程, 不受影响)。
-  ipcMain.on('window-close', (event) => {
+  ipcMain.on('window-close', (event, once: unknown) => {
     const win = BrowserWindow.fromWebContents(event.sender);
+    if (once !== undefined) {
+      applyCloseOnce(win, once, {
+        platform: process.platform,
+        isMainWindow: (window) => window === mainWindowRef,
+        isTrustedSender: () => isTrustedAppRendererEvent(event),
+        isWindowsBehavior: isWindowsCloseBehavior,
+        isLinuxBehavior: isLinuxCloseBehavior,
+        applyWindows: (window, behavior) => applyWindowsCloseBehavior(window, behavior),
+        applyLinux: (window, behavior) =>
+          applyLinuxMainWindowCloseBehavior(window, behavior, () => app.quit(), () => minimizeWindow(window)),
+      });
+      return;
+    }
     if (!win || win === mainWindowRef) {
       if (process.platform === 'win32' && win) {
         win.close();

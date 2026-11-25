@@ -7268,6 +7268,7 @@ export function MessageStream({
                 bottomOffset={resolvedBottomPadding}
                 onJump={handleNavRailJump}
                 onNavCoverageChange={setNavRailCoversNav}
+                sessionId={sessionId}
                 resetKey={sessionId}
               />
             )}
