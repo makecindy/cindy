@@ -508,6 +508,34 @@ function notifyFatalShutdown(reason: string): void {
   }
 }
 
+function isolatedRendererDescription(
+  contents: Electron.WebContents,
+  isCurrentMainRenderer?: (contents: Electron.WebContents) => boolean,
+): string | undefined {
+  if (isCurrentMainRenderer?.(contents)) return;
+  if (isCaptureWindowWebContents(contents)) return 'capture transport render-process-gone (isolated, no shutdown)';
+
+  // The JS wrapper can outlive the native WebContents. Without metadata or
+  // positive main-window identity, this event must not shut down the app.
+  let id: number;
+  let type: string;
+  try {
+    if (contents.isDestroyed()) return 'unidentified render-process-gone (isolated, no shutdown)';
+    id = contents.id;
+    type = contents.getType();
+  } catch {
+    return 'unidentified render-process-gone (isolated, no shutdown)';
+  }
+  if (isGhostSandboxWebContentsId(id)) return 'ghost sandbox render-process-gone (isolated, no shutdown)';
+  if (type === 'webview') return 'webview guest render-process-gone (isolated, no shutdown)';
+  if (isRsbNativePopupWebContentsId(id)) return 'native popup render-process-gone (isolated, no shutdown)';
+  if (isResourceUsageWebContentsId(id) || isRemoteDesktopViewer(id) || isCloudLoginWindow(id)) {
+    return 'resource usage render-process-gone (isolated, no shutdown)';
+  }
+  if (isRsbWindowWebContentsId(id)) return 'right sidebar render-process-gone (isolated, no shutdown)';
+  if (isReviewArtifactConfirmWebContentsId(id)) return 'Review artifact consent render-process-gone (isolated, access denied)';
+}
+
 /**
  * 幂等启动 disposer chain: 第一次调用真的跑, 后续调用复用同一个 Promise。
  * 返回的 Promise 在 sync + async + post-async 三阶段都跑完 (或 async 超时) 后 resolve。
@@ -545,7 +573,10 @@ function beginShutdown(timeoutMs: number, reason: string): Promise<void> {
   return _disposeStarted;
 }
 
-export function installQuitHandler(timeoutMs = 2000): void {
+export function installQuitHandler(
+  timeoutMs = 2000,
+  isCurrentMainRenderer?: (contents: Electron.WebContents) => boolean,
+): void {
   if (_installed) return;
   _installed = true;
 
@@ -689,46 +720,9 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // 例外 4:资源用量窗是预热复用的辅助 renderer；Controller 会有限重建，崩溃不影响主界面。
   // 隐藏传输窗口也有自己的失败清理；其 renderer 崩溃只撤下对应传输，不能关闭 device-link。
   app.on('render-process-gone', (_event, webContents, details) => {
-    if (isCaptureWindowWebContents(webContents)) {
-      log.warn(
-        `capture transport render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isGhostSandboxWebContentsId(webContents.id)) {
-      log.warn(
-        `ghost sandbox render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (webContents.getType() === 'webview') {
-      log.warn(
-        `webview guest render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isRsbNativePopupWebContentsId(webContents.id)) {
-      log.warn(
-        `native popup render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isResourceUsageWebContentsId(webContents.id) || isRemoteDesktopViewer(webContents.id) || isCloudLoginWindow(webContents.id)) {
-      log.warn(
-        `resource usage render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isRsbWindowWebContentsId(webContents.id)) {
-      log.warn(
-        `right sidebar render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isReviewArtifactConfirmWebContentsId(webContents.id)) {
-      log.warn(
-        `Review artifact consent render-process-gone (isolated, access denied): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
+    const isolated = isolatedRendererDescription(webContents, isCurrentMainRenderer);
+    if (isolated) {
+      log.warn(`${isolated}: reason=${details.reason} exitCode=${details.exitCode}`);
       return;
     }
     // arm-first(review P1):所有可隔离恢复的 renderer 分支在上面已 return,

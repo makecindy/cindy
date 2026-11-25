@@ -3790,6 +3790,7 @@ function isPathAllowed(filePath: string): boolean {
 // BrowserWindow，[0] 拿到它再 .focus() 等于啥也没干，用户视觉上以为
 // "双击启动不了"。
 let mainWindowRef: BrowserWindow | null = null;
+let mainRenderer: Electron.WebContents | null = null;
 const personalLoadFailures = new WeakMap<BrowserWindow, number>();
 let mainWindowMaximizeRecoveryController: MainWindowMaximizeRecoveryController | null = null;
 // 端点清单阻断门:ready 流程走到正常 createWindow() 前置 true。在此之前
@@ -4782,6 +4783,7 @@ const createWindow = () => {
   installSelectionContextMenu(mainWindow);
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;
+  mainRenderer = mainWindow.webContents;
   applyMainWindowBackgroundThrottling();
   applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
   mainWindow.webContents.on('did-finish-load', () => {
@@ -4807,7 +4809,10 @@ const createWindow = () => {
     cloudLoginWindowLifecycle.destroy();
     rsbWindowController.destroyWindow();
     sidebarTabWindowsController.destroyAllWindows();
-    if (mainWindowRef === mainWindow) mainWindowRef = null;
+    if (mainWindowRef === mainWindow) {
+      mainWindowRef = null;
+      mainRenderer = null;
+    }
     setDeepLinkMainWindow(null);
   });
   // Main-window close policy is explicit because hidden utility windows (for
@@ -11670,7 +11675,7 @@ onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
 // A display restore may join an in-flight native mode write (5s), restore the
 // original mode (5s), then await Electron geometry (5s). Keep a margin before
 // the existing 20s hard-exit watchdog; completed disposers never wait this long.
-installQuitHandler(16000);
+installQuitHandler(16000, (contents) => contents === mainRenderer);
 if (!app.isPackaged && process.platform === 'win32') {
   const stopQuitRequests = enableDesktopDevQuitRequests(() => app.quit());
   onQuit('dev-quit-requests', stopQuitRequests);
