@@ -2093,7 +2093,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       } catch (err) {
         if (isModelSwitchRebuildRequiredError(err)) {
           const unsafeResume = new Error(
-            `Scheduled instruction was not sent: cannot safely resume the bound Codex task with model "${model}"`,
+            `schedule model switch requires rebuilding the session before dispatch (model "${model}")` +
+            (!schedule.recurring ? '. The prompt was not sent. Use Run now to retry the automation.' : ''),
             { cause: err },
           );
           throwIfFireAborted(ctx.signal, 'model switch rebuild');

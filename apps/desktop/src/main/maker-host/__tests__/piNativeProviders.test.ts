@@ -2231,12 +2231,13 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     }
   });
 
-  it('keeps ChatGPT aliases pointed at namespaced spec ids, not bare wire ids', () => {
+  // #12651, unit: both catalog spellings must resolve the saved ChatGPT selection.
+  it.each(['chatgpt/gpt-5.7', 'gpt-5.7'])('routes ChatGPT aliases to the subscription catalog id %s', (id) => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
     openai.models.pi = [
       {
-        id: 'chatgpt/gpt-5.7',
+        id,
         name: 'GPT-5.7',
         contextWindow: 272_000,
         efforts: [],
@@ -2250,8 +2251,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       new Map(),
     ).providers.find((candidate) => candidate.id === 'openai-codex');
     expect(provider?.modelIdAliases).toMatchObject({
-      'chatgpt/gpt-5.7': 'chatgpt/gpt-5.7',
-      'gpt-5.7': 'chatgpt/gpt-5.7',
+      'chatgpt/gpt-5.7': id,
+      'gpt-5.7': id,
     });
   });
 

@@ -265,7 +265,11 @@ import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } fro
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
-import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
+import {
+  extractNonSecretErrorSignals,
+  isProviderSafetyRefusalError,
+  matchesDeterministicUsageExhaustionText,
+} from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, CodexNativeInitializationStoppedError, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
 import { AppServerRequestTimeoutError, type RequestProgressDeadline } from './app-server/client.js';
 import { useCodexHistoryHome, type CodexExternalAuth } from './app-server/external-auth.js';
@@ -2017,7 +2021,7 @@ export class CodexAgent extends BaseAgent {
             ...(this.deps.disableCodexPluginRuntime ? ['--disable', 'plugins', '--disable', 'remote_plugin'] : []),
             '-c', 'cli_auth_credentials_store="ephemeral"',
           ],
-          onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({ pid, role: 'control-plane-service' }),
+          onProcessSpawned: (pid, child) => this.deps.registerLocalCodexAppServerProcess?.({ pid, child, role: 'control-plane-service' }),
         }),
         requireEphemeralAuth: true,
         logger: this.deps.logger,
@@ -3398,8 +3402,8 @@ assertRouteCurrent();
           : extraArgs,
         // 必须把注销函数交回 transport：进程退出后登记要随之移除，
         // 退出回收（codex-tool-tree-reaper）据此认领 PID，残留登记遇 PID 复用会误杀。
-        onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({
-          pid,
+        onProcessSpawned: (pid, child) => this.deps.registerLocalCodexAppServerProcess?.({
+          pid, child,
           role:
             hostPurpose === 'control-plane'
               ? 'control-plane-service'
@@ -11372,9 +11376,19 @@ assertRouteCurrent();
         typeof error?.additionalDetails === 'string' ? error.additionalDetails : null;
       if (!message && !additionalDetails) return null;
       const classifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
+      const tag = codexErrorInfoTag(error?.codexErrorInfo);
       // 远端 compact 密文 400 是 Codex 内部硬失败，HTTP 剥密文跳过 compaction blob，
       // 重投必再 400。不得当推理密文 400 去 arm WS→HTTP recovery。
-      if (isRemoteCompactEncryptedContentError(classifyText)) return null;
+      // 供应商安全策略拦截同理：保留上游决定，不做传输切换重投。
+      if (
+        tag === 'cyberPolicy' ||
+        tag === 'misalignmentPolicyViolation' ||
+        isProviderSafetyRefusalError(message) ||
+        (additionalDetails !== null && isProviderSafetyRefusalError(additionalDetails)) ||
+        isRemoteCompactEncryptedContentError(classifyText)
+      ) {
+        return null;
+      }
       try {
         return this.deps.armCodexHttpRecovery({
           sessionId: sid,
@@ -11532,8 +11546,24 @@ assertRouteCurrent();
       // Try the same model/account summary once; explicit exhausted quota stays terminal.
       const compactRateLimit = isTerminalRateLimitRetryExhaustion(text, signals.errorStatus, error?.codexErrorInfo);
       const tag = codexErrorInfoTag(error?.codexErrorInfo);
-      if (tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded' || tag === 'unauthorized' || tag === 'cyberPolicy') return false;
-      if (/\b(?:content_policy_violation|request_too_large)\b/i.test(text)) return false;
+      if (
+        tag === 'usageLimitExceeded' ||
+        tag === 'sessionBudgetExceeded' ||
+        tag === 'unauthorized' ||
+        tag === 'cyberPolicy' ||
+        tag === 'misalignmentPolicyViolation'
+      ) {
+        return false;
+      }
+      const rawErrMsg = typeof error?.message === 'string' ? error.message : '';
+      const rawErrDetails = typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+      if (
+        isProviderSafetyRefusalError(rawErrMsg) ||
+        isProviderSafetyRefusalError(rawErrDetails) ||
+        /\b(?:content_policy_violation|request_too_large)\b/i.test(text)
+      ) {
+        return false;
+      }
       // Preserve the existing capacity backoff and SDK-owned overload handling.
       if (parseOverloadError(text, signals.errorStatus, tag)) return false;
       // A terminal turn alone does not prove an upstream compact request failed:
@@ -13924,8 +13954,17 @@ assertRouteCurrent();
           tryTakeOverTerminalRateLimit: () => {
             // willRetry=true 仍归 daemon 自己退避，绝不叠第二层。这里只接它已经明确
             // 耗尽内部 retry budget 的终态 429；usageLimitExceeded 由判定器排除。
-            if (params.willRetry === true || isCodexAccessRejectedError(effectiveParams.error, downshiftRejection)) return null;
+            const errTag = codexErrorInfoTag(effectiveParams.error?.codexErrorInfo);
+            if (
+              params.willRetry === true ||
+              errTag === 'cyberPolicy' ||
+              errTag === 'misalignmentPolicyViolation' ||
+              isCodexAccessRejectedError(effectiveParams.error, downshiftRejection)
+            ) {
+              return null;
+            }
             const rawMessage = effectiveParams.error?.message ?? '';
+            if (isProviderSafetyRefusalError(rawMessage)) return null;
             const signals = extractNonSecretErrorSignals(rawMessage);
             if (
               !isTerminalRateLimitRetryExhaustion(

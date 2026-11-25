@@ -115,7 +115,7 @@ function botTaskDispatchSlice(): string {
   const sendWithBaseline = slice('async function sendUserMessageWithAwaitedGitBaseline(', '\n  /**\n   * 来源标签用的发送方身份快照');
   const dispatchBotSessionMessage = slice(
     'const dispatchBotSessionMessage = async (params: {',
-    '\n  setBotInvitationWelcomeDispatch(',
+    '\n  setVoiceTaskDispatch(',
   );
   const groupDispatch = slice(
     'dispatch: (',
@@ -200,6 +200,8 @@ function botTaskDispatchHarness(
   const dbClient = { drizzle: { select: () => dbChain } };
   const stubs: Record<string, unknown> = {
     getPluginHostToolCaller: () => undefined,
+    getSessionActiveInputClientIds: () => [],
+    withPluginTaskService: asyncNoop,
     sanitizeSourceName,
     getInstalledGhostName: () => 'Dashboard',
     captureDataOwnerBroadcastScope: () => ({}),
@@ -702,7 +704,15 @@ describe('idle forwarded request authorization', () => {
     const broadcast = vi.fn();
     const refineTitle = vi.fn();
     const row = { id: 'new-child', permissionMode: 'auto', planModeEnabled: false };
-    const enqueue = vi.fn(async (input: { onAccepted?: () => Promise<void> }) => { await input.onAccepted?.(); });
+    const events: string[] = [];
+    const beforeLocalTaskDispatch = vi.fn(async () => {
+      await Promise.resolve();
+      events.push('linked');
+    });
+    const enqueue = vi.fn(async (input: { onAccepted?: () => Promise<void> }) => {
+      events.push('queued');
+      await input.onAccepted?.();
+    });
     const h = botTaskDispatchHarness({ 'new-child': row }, {}, {
       openSession: async (_input: unknown, create: (row: object, guard: () => Promise<void>) => Promise<unknown>) =>
         ({ row, value: await create(row, async () => {}) }),
@@ -712,9 +722,11 @@ describe('idle forwarded request authorization', () => {
     });
     const receipt = { kind: 'agent-request', request: {
       userText: 'Inspect fixtures', sessionId: 'owner', clientId: 'u1', ownerVerified: true } };
-    expect(await h.sendToSessionInternal({ message: 'envelope', autoReviewUserText: receipt,
+    expect(await h.sendToSessionInternal({ message: 'envelope', autoReviewUserText: receipt, beforeLocalTaskDispatch,
       createDefaults: { agentKind: 'codex', model: 'fixture', workingDir: '/tmp/fixture', permissionMode: 'auto' },
     })).toMatchObject({ ok: true, targetSessionId: 'new-child', wakeKind: 'created' });
+    expect(beforeLocalTaskDispatch).toHaveBeenCalledExactlyOnceWith('new-child');
+    expect(events).toEqual(['linked', 'queued']);
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'new-child', autoReviewUserText: receipt }));
     expect(refineTitle).toHaveBeenCalledExactlyOnceWith('new-child', 'envelope', { initialTitle: 'envelope' });
     expect(h.sendOptions).toHaveLength(0);
