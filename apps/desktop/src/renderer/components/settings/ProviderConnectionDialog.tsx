@@ -60,13 +60,11 @@ import {
 } from '@/components/settings/CustomProviderRuntimeFillOverlay';
 import { extractIpcError } from '@/utils/ipcError';
 import {
-  createCustomProvider,
   customProviderWireProtocolForSave,
   piCatalogProviderIdAfterRouteEdit,
-  readCustomProviderKey,
-  updateCustomProvider,
   type RuntimeKeys,
 } from '@/lib/customProviders';
+import { localProviderSetup, useProviderSetupSource } from './providerSetupSource';
 import type { CodexImageGenerationRestartPolicy } from '@/../shared/customProviderUpdate';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import { modelsAfterProviderEndpointEdit } from '@/lib/customProviderEndpointEdit';
@@ -490,6 +488,8 @@ export function ProviderConnectionDialog({
   onClose: notifyClosed,
 }: ProviderConnectionDialogProps) {
   const { t, i18n } = useTranslation();
+  // The cloud instance settings page supplies its instance; otherwise this computer.
+  const api = useProviderSetupSource() ?? localProviderSetup;
   const dialog = useDialogExit(returnFocusRef);
   const suspendedRef = useRef(suspended);
   useLayoutEffect(() => { suspendedRef.current = suspended; }, [suspended]);
@@ -956,7 +956,7 @@ export function ProviderConnectionDialog({
   // 按实际构建区域排序，不随 UI 语言变化（只排序不过滤，可达性由测试连接实测裁决）。
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.maker
+    void api
       .listProviderPresets()
       .then((r) => {
         if (!cancelled) setPresets(sortPresetsForRegion(r.presets, CURRENT_CINDY_REGION));
@@ -1134,13 +1134,13 @@ export function ProviderConnectionDialog({
             preset.runtimes[a] && followsDefaultConnection(a, rtRef.current[a], fields));
           if (!fetchAgent) return { preset: undefined, catalog: undefined };
           const runtime = preset.runtimes[fetchAgent]!;
-          const catalog = await window.electronAPI.maker.fetchProviderModels({ ...spec, agent: fetchAgent,
+          const catalog = await api.fetchProviderModels({ ...spec, agent: fetchAgent,
             allowEmpty: true, redirect: 'error',
             baseUrl: runtime.baseUrl, modelsUrl: fields.modelsUrl.trim() || runtime.modelsUrl, wireProtocol: runtime.wireProtocol ?? defaultWireFor(fetchAgent),
             headers: { ...runtime.headers, ...headers } });
           return { preset, catalog };
         }
-        const result = await window.electronAPI.maker.detectProvider?.({ ...spec, requestId });
+        const result = await api.detectProvider?.({ ...spec, requestId });
         const preset = result?.candidates.length === 1 ? all.find(p => p.id === result.candidates[0]) : undefined;
         return { preset: preset && bindAddPageProvider(preset, spec.baseUrl), catalog: result?.catalog, ambiguous: result?.reason === 'conflict' };
       })().catch(() => ({ preset: undefined, catalog: undefined, ambiguous: false }));
@@ -1176,7 +1176,7 @@ export function ProviderConnectionDialog({
     return () => {
       live = false;
       clearTimeout(timer);
-      void window.electronAPI.maker.detectProvider?.({ requestId, cancel: true }).catch(() => undefined);
+      void api.detectProvider?.({ requestId, cancel: true }).catch(() => undefined);
     };
     // A model selection/name change is not a new connection or a reason to restart detection.
   }, [detectionSignature, presets, editing, authMode, saving, dialog.open, !!onDetected, setRtSynced]);
@@ -1209,7 +1209,7 @@ export function ProviderConnectionDialog({
         if (!initial.runtimes[a]) continue;
         let k: string | null = null;
         try {
-          k = await readCustomProviderKey(initial.id, a);
+          k = await api.readCustomProviderKey(initial.id, a);
         } catch {
           failed[a] = true;
         }
@@ -1515,7 +1515,7 @@ export function ProviderConnectionDialog({
     const current = connectionTestRef.current;
     if (!current) return;
     connectionTestRef.current = null;
-    void window.electronAPI.maker.testProviderConnection({ kind: 'cancel', requestId: current.id }).catch(() => undefined);
+    void api.testProviderConnection({ kind: 'cancel', requestId: current.id }).catch(() => undefined);
   }, []);
   useLayoutEffect(() => {
     const current = connectionTestRef.current;
@@ -1588,7 +1588,7 @@ export function ProviderConnectionDialog({
     }
     setTest((prev) => ({ ...prev, [agent]: { status: 'testing' } }));
     try {
-      const result = await window.electronAPI.maker.testProviderConnection(
+      const result = await api.testProviderConnection(
         useSaved
           ? { kind: 'saved', providerId: initial!.id, agent }
           : {
@@ -1733,7 +1733,7 @@ export function ProviderConnectionDialog({
       const cached = !editing ? discoveryCache.current.get(agent) : undefined;
       const cachedResult = cached?.signature === `${agent}:${requestSig}` ? await cached.promise : undefined;
       if (providerModelFetchRequestSignature(rtRef.current[agent], authModeRef.current) !== requestSig) return;
-      const result = cachedResult?.ok ? cachedResult : await window.electronAPI.maker.fetchProviderModels({
+      const result = cachedResult?.ok ? cachedResult : await api.fetchProviderModels({
         allowEmpty: !editing,
         agent,
         baseUrl,
@@ -1985,7 +1985,7 @@ export function ProviderConnectionDialog({
     if (initial?.auth?.native) {
       setSaving(true);
       try {
-        await updateCustomProvider({ ...initial, name: trimmedName }, {});
+        await api.updateCustomProvider({ ...initial, name: trimmedName }, {});
         onSaved();
       } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
       finally { setSaving(false); }
@@ -2264,7 +2264,7 @@ export function ProviderConnectionDialog({
     setSaving(true);
     try {
       if (editing) {
-        const result = await updateCustomProvider(config, keys, { source: 'manual-settings' });
+        const result = await api.updateCustomProvider(config, keys, { source: 'manual-settings' });
         if (result?.ok === false) {
           setImageGenerationReloadConfirmation({ config, keys, busyCount: result.busyCount });
           savingRef.current = false;
@@ -2273,7 +2273,7 @@ export function ProviderConnectionDialog({
         }
         toast.success(t('settings.providers.custom.toast.updated'));
       } else {
-        const result = await createCustomProvider(config, keys, { source: 'manual-settings' });
+        const result = await api.createCustomProvider(config, keys, { source: 'manual-settings' });
         if (result?.ok === false) {
           setImageGenerationReloadConfirmation({ config, keys, busyCount: result.busyCount });
           savingRef.current = false;
@@ -2327,8 +2327,8 @@ export function ProviderConnectionDialog({
           codexImageGenerationRestartPolicy: policy,
         };
         const result = editing
-          ? await updateCustomProvider(pending.config, pending.keys, options)
-          : await createCustomProvider(pending.config, pending.keys, options);
+          ? await api.updateCustomProvider(pending.config, pending.keys, options)
+          : await api.createCustomProvider(pending.config, pending.keys, options);
         if (result.ok === false) {
           const next = { ...pending, busyCount: result.busyCount };
           imageGenerationReloadConfirmationRef.current = next;
