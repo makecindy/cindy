@@ -49,7 +49,7 @@ struct AccountEntity: AppEntity {
   static var defaultQuery = AccountQuery()
 
   var displayRepresentation: DisplayRepresentation {
-    let image = key.logo.map { DisplayRepresentation.Image(named: "logo-\($0)") }
+    let image = widgetDisplayLogo(id: key.id, logo: key.logo).map { DisplayRepresentation.Image(named: "logo-\($0)") }
     return DisplayRepresentation(title: "\(key.name)", image: image)
   }
 }

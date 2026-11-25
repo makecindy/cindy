@@ -5,6 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
+import { ANTIGRAVITY_MARK_PATH, isAntigravityPluginId } from '@cindy/maker-shared/branding';
 import {
   CalendarDays,
   Code2,
@@ -106,7 +107,11 @@ export function GhostPluginIcon({
         CONTAINER_CLASSES[size],
       )}
     >
-      {resolvedIconDataUrl ? (
+      {isAntigravityPluginId(iconId) ? (
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden className={SVG_ICON_CLASSES[size]}>
+          <path d={ANTIGRAVITY_MARK_PATH} />
+        </svg>
+      ) : resolvedIconDataUrl ? (
         <img
           src={resolvedIconDataUrl}
           alt=""

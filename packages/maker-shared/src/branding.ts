@@ -16,3 +16,19 @@
 
 /** 产品对用户 / LLM 展示的品牌名（唯一规范写法，不要再派生其它变体）。 */
 export const BRAND_NAME = 'Cindy';
+
+/** Monochrome silhouette of the Antigravity plugin icon (source blob 99877890). */
+export const ANTIGRAVITY_MARK_PATH = 'M12 3.2c2.8 0 4 3.1 5 6.1 1.4 4.2 2.5 7.6 5.4 10.4h-1.5c-2.9 0-4.6-3.1-6.2-5.8-.9-1.4-1.7-2.1-2.7-2.1s-1.8.7-2.7 2.1c-1.6 2.7-3.3 5.8-6.2 5.8H1.6C4.5 16.9 5.6 13.5 7 9.3c1-3 2.2-6.1 5-6.1Z';
+
+export function isAntigravityPluginId(id: string | null | undefined): boolean {
+  return /^(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity)$/i.test(id ?? '');
+}
+
+/** Accept local and remote quota source IDs, scoped plugin instances and extracted providers. */
+export function isAntigravityProviderId(id: string | null | undefined): boolean {
+  return /(?:^|:)acp-plugin:(?:_ns__[^:]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity):(?:agy|antigravity)(?:~[^:]+)?$/i.test(id ?? '');
+}
+
+export const ANTIGRAVITY_MARK_DATA_URL = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="${ANTIGRAVITY_MARK_PATH}"/></svg>`,
+);

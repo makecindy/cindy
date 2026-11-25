@@ -1,3 +1,4 @@
+import { isAntigravityPluginId, isAntigravityProviderId } from '@cindy/maker-shared/branding';
 import { isZhipuCodingPlanRoute, type ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
 import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
@@ -955,7 +956,8 @@ export function pluginEngineSource(
     id: engine.providerId,
     providerId: engine.providerId,
     family: 'plugin',
-    logoSvg: engine.ghostId === 'agy-acp' ? ANTIGRAVITY_LOGO : monogramLogo(engine.name),
+    logoSvg: isAntigravityPluginId(engine.ghostId) || isAntigravityProviderId(engine.providerId) || /^antigravity$/i.test(engine.name.trim())
+      ? ANTIGRAVITY_LOGO : monogramLogo(engine.name),
     brand: engine.name,
     account: null,
     plan: null,

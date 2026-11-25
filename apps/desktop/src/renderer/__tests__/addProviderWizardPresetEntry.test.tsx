@@ -1,3 +1,4 @@
+import { ANTIGRAVITY_MARK_PATH } from '@cindy/maker-shared/branding';
 // @vitest-environment jsdom
 
 /**
@@ -805,7 +806,9 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(screen.getByText('DeepSeek')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.retryPlugin' }));
     fireEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.contribution.loadMore' }));
-    await screen.findByText('Antigravity');
+    // The official catalog may omit artwork or provide a different listing ID.
+    const antigravity = await screen.findByRole('button', { name: /Antigravity/ });
+    expect(antigravity.querySelector('svg path')?.getAttribute('d')).toBe(ANTIGRAVITY_MARK_PATH);
     expect(screen.queryByText('settings.ghosts.market.unavailable')).toBeNull();
     const search = screen.getByRole('textbox', { name: 'settings.providers.wizard.searchPlaceholder' });
     fireEvent.change(search, { target: { value: 'deepseek' } });

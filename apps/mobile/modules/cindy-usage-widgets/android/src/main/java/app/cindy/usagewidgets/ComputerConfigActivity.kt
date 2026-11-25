@@ -189,7 +189,7 @@ class ComputerConfigActivity : Activity() {
       accountsBox.addView(header(text("configPinned")))
       pinned.forEachIndexed { index, encoded ->
         val key = AccountKey.decode(encoded)
-        accountsBox.addView(row(key.logo, key.name) {
+        accountsBox.addView(row(widgetDisplayLogo(key.id, key.logo), key.name) {
           addView(glyphButton("↑", text("configMoveUp"), index > 0) { move(index, -1) })
           addView(glyphButton("↓", text("configMoveDown"), index < pinned.size - 1) { move(index, 1) })
           addView(glyphButton("✕", text("configRemove"), true) {
@@ -229,7 +229,7 @@ class ComputerConfigActivity : Activity() {
             if (checked) hidden.add(AccountKey(source).encoded)
           }
         }
-        accountsBox.addView(row(source.logo, source.name) { addView(switch) })
+        accountsBox.addView(row(source.displayLogo, source.name) { addView(switch) })
       }
     }
 

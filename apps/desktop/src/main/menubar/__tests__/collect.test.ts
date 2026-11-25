@@ -22,7 +22,7 @@ import {
 } from '../collect';
 import { readRemoteSubscriptions, retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen, type RemoteSubscriptionDeps } from '../remoteSubscriptions';
 import { buildMenubarView, topModels, type MenubarSubscriptionInput } from '../snapshot';
-import { MENUBAR_HARNESS_LOGOS } from '../logos';
+import { ANTIGRAVITY_LOGO, MENUBAR_HARNESS_LOGOS, monogramLogo } from '../logos';
 import { buildMenubarUiStrings, createMenubarTranslate } from '../strings';
 import { mainStringKeysUnder, rawMainString } from '../../i18n.desktop';
 import { DEFAULT_MENUBAR_SETTINGS } from '../../../shared/menubarQuota';
@@ -902,6 +902,17 @@ describe('plugin engine quota collection', () => {
       balances: [{ currency: 'USD', amount: 9.25 }],
     });
     expect(collected.sources.map((s) => s.id)).toEqual([dsh.providerId, gemini.providerId]);
+  });
+
+  // Unit: quota cards must keep the Antigravity silhouette across installed,
+  // scoped and older catalog identities, and preserve other engines' monograms.
+  it.each([
+    ['agy', 'acp-plugin:agy:agy', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:_ns__local__agy-acp:agy~second', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:legacy:cli', 'Antigravity', ANTIGRAVITY_LOGO],
+    ['other', 'acp-plugin:other:cli', 'Another engine', monogramLogo('Another engine')],
+  ])('uses the correct quota card logo for %s / %s', (ghostId, providerId, name, logoSvg) => {
+    expect(pluginEngineSource({ key: providerId, providerId, ghostId, name }, null, NOW).logoSvg).toBe(logoSvg);
   });
 
   it('keeps distinct plugin engines separate even with identical window percentages and collects remote offered engines', async () => {

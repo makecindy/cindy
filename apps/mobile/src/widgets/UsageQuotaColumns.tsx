@@ -1,5 +1,7 @@
 import { useEffect, useId, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityProviderId } from '@cindy/maker-shared/branding';
+import { PluginEngineMark } from '@/session/PluginEngineMark';
 import Svg, { ClipPath, Defs, G, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { useTranslation } from 'react-i18next';
 import type { MobileUsageWidgetSnapshot, MobileUsageWidgetSource as Source } from '@cindy/maker-shared/device-link-contract';
@@ -107,8 +109,10 @@ export function UsageQuotaColumns({ sources, strings, compact = false, stale = f
         {hasCreditUnit && <Text numberOfLines={1} style={s.unit}>{source.reserve ? unit : ' '}</Text>}
         <QuotaTube source={source} small={compact} stale={stale || !!source.stale} panel={palette === 'panel'} opening={opening ? index : undefined} />
         <View style={[s.identity, compact && s.stackedIdentity]}>
-          <MobileProviderMark name={source.monogram || source.name} color={colors.textPrimary}
-            logoKind={source.logo ? providerMarks[source.logo] : undefined} providerId={source.logo === 'kimi' ? 'kimi-coding' : undefined} />
+          {isAntigravityProviderId(source.id)
+            ? <PluginEngineMark iconDataUrl={ANTIGRAVITY_MARK_DATA_URL} tint={colors.textPrimary} />
+            : <MobileProviderMark name={source.monogram || source.name} color={colors.textPrimary}
+                logoKind={source.logo ? providerMarks[source.logo] : undefined} providerId={source.logo === 'kimi' ? 'kimi-coding' : undefined} />}
           <Text numberOfLines={compact ? 1 : 2} style={[s.name, compact && s.centerName]}>{source.name}</Text>
         </View>
         {!!when && <Text numberOfLines={compact ? 1 : 2} style={[s.when, level === 'crit' && s.quotaResetCrit, level === 'warn' && s.quotaResetWarn]}>{when}</Text>}

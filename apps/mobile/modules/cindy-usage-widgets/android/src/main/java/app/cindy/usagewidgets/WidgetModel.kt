@@ -12,11 +12,20 @@ import java.util.Locale
 // Mirrors `UsageWidgetStore` / `MobileUsageWidgetSnapshot` in the app (TypeScript) and the iOS
 // widget model. The app writes the store into the app's files directory; the providers read it.
 
+private val antigravitySourceId = Regex(
+  "(?:^|:)acp-plugin:(?:_ns__[^:]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity):(?:agy|antigravity)(?:~[^:]+)?$",
+  RegexOption.IGNORE_CASE,
+)
+
+fun widgetDisplayLogo(id: String, logo: String?): String? =
+  if (antigravitySourceId.containsMatchIn(id)) "antigravity" else logo
+
 class WidgetSource(json: JSONObject) {
   val id: String = json.getString("id")
   val kind: String = json.getString("kind")
   val name: String = json.getString("name")
   val logo: String? = json.nullableString("logo")
+  val displayLogo: String? get() = widgetDisplayLogo(id, logo)
   val monogram: String = json.optString("monogram")
   val value: String? = json.nullableString("value")
   val unit: String? = json.nullableString("unit")

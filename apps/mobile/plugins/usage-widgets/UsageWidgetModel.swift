@@ -3,11 +3,17 @@ import Foundation
 // Mirrors `UsageWidgetState` / `MobileUsageWidgetSnapshot` in the app (TypeScript). The app
 // writes it into the shared App Group; this extension only reads and renders.
 
+/// Recognize the existing provider ID without changing the saved account key.
+func widgetDisplayLogo(id: String, logo: String?) -> String? {
+  id.range(of: #"(?:^|:)acp-plugin:(?:_ns__[^:]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity):(?:agy|antigravity)(?:~[^:]+)?$"#, options: [.regularExpression, .caseInsensitive]) != nil ? "antigravity" : logo
+}
+
 struct WidgetSource: Decodable, Identifiable {
   let id: String
   let kind: String
   let name: String
   let logo: String?
+  var displayLogo: String? { widgetDisplayLogo(id: id, logo: logo) }
   let monogram: String
   let value: String?
   let unit: String?
