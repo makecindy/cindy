@@ -1266,6 +1266,8 @@ export interface AgentDeps {
     threadId: string,
     expectedSessionInstanceId?: string,
   ) => void;
+  /** Release instance-owned MCP transports on handle termination, not on thread replacement. */
+  closeCodexMcpSessionInstance?: (sessionInstanceId: string) => void;
 
   /**
    * Codex 专用:为远端机器构造一个 codex app-server transport。
