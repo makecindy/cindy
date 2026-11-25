@@ -281,8 +281,8 @@ export interface PluginHarnessRegistry {
 
 ## 第一期明确不支持（遇到即明确拒绝，不回落到内置引擎）
 
-（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn、目标与 IM 渠道
-见「与内置引擎一致（2026-11-25）」。）分叉、回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、共享任务、
+（换引擎、定时任务、协同 Worker 与本机插件引擎当协同 Lead（要求引擎支持 HTTP MCP）已在第二期支持，见下面几节；标题、send_to_session、/learn、目标与 IM 渠道
+见「与内置引擎一致（2026-11-25）」。）分叉、回退、移到另一台电脑或 SSH、共享任务、
 上下文溢出后的重放、Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
 
 伙伴的后续支持范围见[模型候选链](../product-rules/cindy-bots-runtime.md#5-模型候选链)。伙伴可以在设置中选择所在电脑的插件模型，主聊天按所选模型运行。
