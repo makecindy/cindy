@@ -124,11 +124,14 @@ describe('Codex writer decision freshness', () => {
       listActiveSessions: () => [],
       closeSession: async () => {},
     };
+    sourceSwitchRecords.mockClear();
     await expect(applyRuntimeSetModelChange({ maker, sessionId, model: 'target', providerId: 'cprov-target',
       handOffCodexThread: true, requiresCodexThreadRelink: async () => true, relinkCodexThread: relink }))
       .resolves.toEqual({ status: 'applied' });
     expect(relink).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('cprov-target');
+    // 冷任务换源同样要记下来：没有 live handle 时也必须能在重启后交接。
+    expect(sourceSwitchRecords).toHaveBeenCalledExactlyOnceWith(sessionId, 'cprov-target');
   });
 
   // 不在交接范围内的换源（BYOK→BYOK、订阅→BYOK 等目标没有本机账号池）照旧先迁移线程：

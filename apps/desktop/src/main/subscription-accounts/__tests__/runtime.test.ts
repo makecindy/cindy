@@ -7161,6 +7161,16 @@ describe('unbound Codex history account recovery', () => {
     expect(start.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/second');
     await handle.close();
   });
+  // 交接已经提交后，清记录失败不能反过来把这次发送判成失败：记录留着，下一次幂等重消费。
+  it('keeps the committed handoff when the record cannot be cleared', async () => {
+    const { row, deps } = fixture();
+    deps.matchesSourceSwitch.mockReturnValue(true);
+    deps.consumeSourceSwitch.mockRejectedValueOnce(new Error('record file is locked'));
+    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(true);
+    expect(deps.rebuild).toHaveBeenCalledOnce();
+    expect(row.sdkSessionId).toBeNull();
+  });
+
   // 目标来源当下没有能服务该模型的账号：保持旧上下文与记录，等真有账号的那次发送再接手。
   it('keeps the context and the record while the destination cannot serve the model yet', async () => {
     const { row, deps } = fixture();

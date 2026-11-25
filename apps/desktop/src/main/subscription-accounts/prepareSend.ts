@@ -82,7 +82,16 @@ export async function prepareSubscriptionAccountForSend(
       });
     }
     await clearAccountBindings([`task:${sessionId}`], 'openai');
-    await deps.consumeSourceSwitch?.();
+    // The handoff is already committed. A record that cannot be cleared only means the next send
+    // consumes it again (idempotent); it must not turn the committed switch into a send failure.
+    try {
+      await deps.consumeSourceSwitch?.();
+    } catch (error) {
+      deps.log?.('subscription account handoff: source switch record was not cleared', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return true;
   }
   let historyAccountId: string | undefined;
