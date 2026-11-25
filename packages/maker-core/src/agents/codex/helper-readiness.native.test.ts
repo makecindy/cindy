@@ -13,7 +13,7 @@ import { expect, it, vi } from 'vitest';
 import { CodexAgent } from './index.js';
 import { AppServerHost } from './app-server/host.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
-import { readCodexThreadMcpServerTools } from './mcp-server-tools.js';
+import { readCodexThreadMcpServerTools, readCodexThreadMcpServersTools } from './mcp-server-tools.js';
 import type { AgentDeps, AgentSessionHandle } from '../base-agent.js';
 import type { AgentEvent } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
@@ -28,7 +28,7 @@ const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {
 // Minimal failure: a healthy helper and a sibling that stalls only new discovery.
 it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP clients or probing a sibling', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-helper-status-'));
-  const initializes = { helper: 0, sibling: 0 };
+  const initializes = { helper: 0, gateway: 0, sibling: 0 };
   let stallNewSibling = false;
   let nativePid: number | undefined;
   const server = createServer(async (req, res) => {
@@ -36,7 +36,7 @@ it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP client
     let raw = '';
     for await (const chunk of req) raw += chunk;
     const q = JSON.parse(raw);
-    const name = req.url === '/helper' ? 'helper' : 'sibling';
+    const name = req.url === '/helper' ? 'helper' : req.url === '/gateway' ? 'gateway' : 'sibling';
     if (q.method === 'initialize') {
       initializes[name]++;
       if (name === 'sibling' && stallNewSibling) return;
@@ -60,19 +60,21 @@ it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP client
         env: { PATH: process.env.PATH ?? '', HOME: root, USERPROFILE: root, CODEX_HOME: root,
           ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) },
         extraArgs: ['-c', `mcp_servers.cindy_helper.url="${endpoint}/helper"`,
+          '-c', `mcp_servers.cindy.url="${endpoint}/gateway"`,
           '-c', `mcp_servers.cindy_docs.url="${endpoint}/docs"`,
           '-c', 'mcp_servers.cindy_docs.startup_timeout_sec=2'],
       }),
     });
     const started = await host.request<{ thread: { id: string } }>('thread/start', { cwd: root });
     const threadId = started.thread.id;
-    // Establish the control: both actual thread clients are ready before the
+    // Establish the control: all actual thread clients are ready before the
     // sibling becomes unavailable to new discovery. No model request is sent.
-    for (const serverName of ['cindy_helper', 'cindy_docs']) {
+    for (const serverName of ['cindy_helper', 'cindy', 'cindy_docs']) {
       await host.request('mcpServerStatus/list', { threadId, serverName, detail: 'toolsAndAuthOnly' });
     }
     const before = { ...initializes };
     expect(before.helper).toBeGreaterThan(0);
+    expect(before.gateway).toBeGreaterThan(0);
     expect(before.sibling).toBeGreaterThan(0);
     stallNewSibling = true;
     const activeHost = host;
@@ -81,6 +83,15 @@ it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP client
     );
     expect(report.state).toBe('connected');
     expect(report.tools.map(tool => tool.name).sort()).toEqual(['call_tool', 'list_tools']);
+    expect(initializes).toEqual(before);
+    // #12646: the single-service control cannot catch unscoped discovery
+    // when two gateways are requested. The slow sibling is outside that set.
+    const reports = await readCodexThreadMcpServersTools(
+      (method, params, options) => activeHost.request(method, params, options), threadId, ['cindy_helper', 'cindy'], 500,
+    );
+    expect([...reports].map(([name, result]) => [name, result.state])).toEqual([
+      ['cindy_helper', 'connected'], ['cindy', 'connected'],
+    ]);
     expect(initializes).toEqual(before);
   } finally {
     await stopWindowsFixtureTree(nativePid);
