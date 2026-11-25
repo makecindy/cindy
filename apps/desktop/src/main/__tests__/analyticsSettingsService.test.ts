@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** 广播到 renderer 的 payload 序列 —— 本地模式的 opt-out 必须真的被重播出去。 */
 const broadcasts: Array<Record<string, unknown>> = [];
+const migrationClosedAtBroadcast: boolean[] = [];
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/analytics-service-test' },
   ipcMain: { handle: vi.fn() },
@@ -25,6 +26,7 @@ vi.mock('electron', () => ({
         webContents: {
           send: (_channel: string, payload: Record<string, unknown>) => {
             broadcasts.push(payload);
+            migrationClosedAtBroadcast.push(fakeSettings.legacyConsentMigrationClosed);
           },
         },
       },
@@ -433,11 +435,19 @@ describe('local-mode reporting gate', () => {
     hasNoPersistedAuthCredentials.mockReturnValue(false);
     const service = await importService();
     service.initAnalyticsSettingsService();
+    broadcasts.length = 0;
+    migrationClosedAtBroadcast.length = 0;
+    hasNoPersistedAuthCredentials.mockClear();
 
     isLocalMode.mockReturnValue(true);
     authStateListener?.();
 
     expect(fakeSettings.legacyConsentMigrationClosed).toBe(true);
+    expect(hasNoPersistedAuthCredentials).not.toHaveBeenCalled();
+    // Observe the persisted verdict at broadcast time, independently of function names.
+    expect(migrationClosedAtBroadcast).toEqual([true]);
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]).toMatchObject({ allowed: false, privacyConsentAccepted: false });
 
     // 之后从本地模式走免协议 SSO,下一次冷启动恢复出真实账号:不得写入同意。
     isLocalMode.mockReturnValue(false);
