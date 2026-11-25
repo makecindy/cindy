@@ -22,6 +22,8 @@ import {
   extractNonSecretErrorSignals,
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
   isCindyGatewayProxyTokenInvalidError,
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
 import {
@@ -2243,8 +2245,10 @@ function handleResult(
       trackerTurn.cacheRead === 0 &&
       trackerTurn.cacheCreate === 0;
   }
+  const isRefusalStop = msg.stop_reason === 'refusal';
   const isEmptyResponseTurn =
     !msg.is_error &&
+    !isRefusalStop &&
     !ctx.turn.sawCompactBoundary &&
     emitted.length === 0 &&
     full.length === 0 &&
@@ -2448,6 +2452,7 @@ function handleResult(
   // silentStop 标记交给 host 的自动续跑守卫决策; WARN 日志保留作 dev 排查。
   const isSilentStopTurn =
     !msg.is_error &&
+    !isRefusalStop &&
     !ctx.turn.interruptRequested &&
     !ctx.turn.sawCompactBoundary &&
     !isEmptyResponseTurn &&
@@ -2518,17 +2523,35 @@ function handleResult(
   // 后 drain 出的 error_during_execution result 不是上游失败, 补 error 会把"用户点
   // 停止"误报成"执行失败"、并让 watchdog 场景双发 banner(见 TurnState 字段注释)。
   let modelAccessMessage: string | undefined;
+  if (!msg.is_error && !ctx.turn.interruptRequested && isRefusalStop
+    && ctx.turn.uiEmittedText.length === 0 && fallbackTail.length === 0) {
+    queue.push({
+      type: 'error',
+      data: {
+        message: 'The model provider blocked this response under its safety policy.',
+        isTerminal: true,
+        reason: PROVIDER_SAFETY_REFUSAL_REASON,
+      },
+      source: 'claude-code',
+    });
+  }
   if (msg.is_error && !ctx.turn.interruptRequested) {
     const pendingApiError = ctx.turn.pendingApiError;
     const rawResult = typeof msg.result === 'string' ? msg.result.trim() : '';
     const resultSignals = extractNonSecretErrorSignals(rawResult);
     const errDetail = redactSensitiveText(rawResult);
     const errorStatus = resultSignals.errorStatus ?? pendingApiError?.errorStatus;
-    const usageLimit = pendingApiError?.usageLimit === true || resultSignals.usageLimit;
+    const isSafetyRefusal =
+      isRefusalStop ||
+      [rawResult, errDetail, pendingApiError?.message].some((candidate) =>
+        Boolean(candidate && isProviderSafetyRefusalError(candidate)),
+      );
+    const usageLimit =
+      !isSafetyRefusal && (pendingApiError?.usageLimit === true || resultSignals.usageLimit);
     // 多个窗口同时被拒时取最晚的重置,早醒只会再撞一次限额。已过点也照带:
     // 下游按零延迟立即续跑,丢掉反而只能等手动恢复。但过点的只用一次——到点后
     // 仍被本地短路拒绝时不会有新事件,反复带同一个过期时刻会让下游无限立即重试。
-    const rejectedResets = [...ctx.rt.rateLimitRejectedResetAtMs.values()];
+    const rejectedResets = isSafetyRefusal ? [] : [...ctx.rt.rateLimitRejectedResetAtMs.values()];
     const usageReset = rejectedResets.length > 0
       ? { usageResetAt: Math.max(...rejectedResets) }
       : {};
@@ -2539,8 +2562,10 @@ function handleResult(
     const errorMessage = pendingApiError?.agentMeta
       ? pendingApiError.message
       : errDetail || pendingApiError?.message;
-    const modelAccessDenied = pendingApiError?.modelAccessDenied === true
-      || isModelAccessDenied(rawResult, errorStatus ?? undefined);
+    const modelAccessDenied = !isSafetyRefusal && (
+      pendingApiError?.modelAccessDenied === true ||
+      isModelAccessDenied(rawResult, errorStatus ?? undefined)
+    );
     // Keep the terminal/usage event order, but omit the SDK's misleading
     // authentication advice and the upstream model list from terminal events.
     const modelAccessError = modelAccessDenied ? {
@@ -2553,14 +2578,16 @@ function handleResult(
     // 上下文超限带稳定 reason key(判定在上方 endTurn 前已算好): renderer 靠它
     // 隐藏必败的 Retry(原样重发必然再撞同一个 4xx)并给出压缩 / 新开会话入口;
     // 文案匹配仅作历史持久化错误行的兜底(overload reason 同款分层)。
-    const classifiedReason = isContextOverflowTurn
-      ? { reason: CONTEXT_OVERFLOW_REASON }
-      : isCindyGatewayProxyTokenInvalidError({
-            providerId: ctx.getProviderId?.() ?? null,
-            message: [errorMessage, errDetail, pendingApiError?.message].filter(Boolean).join('\n'),
-          })
-        ? { reason: GATEWAY_PROXY_TOKEN_INVALID_REASON }
-        : {};
+    const classifiedReason = isSafetyRefusal
+      ? { reason: PROVIDER_SAFETY_REFUSAL_REASON }
+      : isContextOverflowTurn
+        ? { reason: CONTEXT_OVERFLOW_REASON }
+        : isCindyGatewayProxyTokenInvalidError({
+              providerId: ctx.getProviderId?.() ?? null,
+              message: [errorMessage, errDetail, pendingApiError?.message].filter(Boolean).join('\n'),
+            })
+          ? { reason: GATEWAY_PROXY_TOKEN_INVALID_REASON }
+          : {};
     queue.push({
       type: 'error',
       data: pendingApiError
@@ -2592,6 +2619,12 @@ function handleResult(
           }
         // reason 是稳定 key, renderer 按它走 i18n(规则 18); message 仅作非
         // renderer 消费方(IM/orca)的兜底文案。
+        : isSafetyRefusal
+        ? {
+            message: 'The model provider blocked this response under its safety policy.',
+            isTerminal: true,
+            reason: PROVIDER_SAFETY_REFUSAL_REASON,
+          }
         : { message: '任务执行失败（模型未返回错误详情）。', isTerminal: true, reason: 'turn-failed' },
       source: 'claude-code',
       // ResultMessage terminates the whole query. A child API envelope can

@@ -1,3 +1,6 @@
+import { inspectSettingsJson, isSettingsRecord } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
+import path from 'node:path';
 /**
  * User preferences for plugin-created ordinary tasks. The legacy errand adapter
  * consumes these same preferences; it does not own the model/permission policy.
@@ -164,6 +167,22 @@ function createStore() {
 
 let store = createStore();
 
+/** Saved Host choices only, never starts an errand or resolves its model connection. */
+export function inspectGhostErrandPrefs(root: string) {
+  return inspectSettingsJson(path.join(root, 'ghost-errand-prefs.json'), raw => {
+    validateOptionalSettingsFields(raw, { errand: isSettingsRecord });
+    if (isSettingsRecord(raw.errand)) for (const config of Object.values(raw.errand)) {
+      if (!isSettingsRecord(config)) throw new Error('invalid errand preferences');
+      const normalized = normalizeConfig(config);
+      for (const key of ['agentKind', 'model', 'effort', 'fastMode', 'providerId', 'permissionMode', 'workingDir']) {
+        if (Object.hasOwn(config, key) && !Object.hasOwn(normalized, key)) throw new Error('invalid errand preference');
+      }
+    }
+    // Session mappings are runtime association data, not configuration to inspect.
+    return normalize({ errand: raw.errand });
+  });
+}
+
 // Register owns the runtime catalog; configuration persistence never builds another picker.
 let validateSelection: ((config: PluginTaskConfig) => Promise<void>) | null = null;
 export function setPluginTaskConfigValidator(validator: (config: PluginTaskConfig) => Promise<void>): void {
@@ -315,3 +334,4 @@ export const __testing = {
   sessionMapKey,
   resetLegacyPinMigration: () => legacyPinMigrationDone.clear(),
 };
+export const getHostPluginErrandStore = () => store;

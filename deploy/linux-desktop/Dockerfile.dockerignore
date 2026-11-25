@@ -1,0 +1,10 @@
+*
+!source/
+!source/**
+!recipe/
+!recipe/**
+!build-recipe/
+!build-recipe/**
+**/node_modules
+**/.git
+**/__pycache__

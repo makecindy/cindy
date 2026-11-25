@@ -55,6 +55,19 @@ describe('model switch gate input', () => {
   // verified. The refusal names the first failing check so the user can tell an unset model window
   // from a Pi that merely cannot hot-switch.
   describe('model window gate refusal', () => {
+    // Regression: a remote owner's Claude switch after quota exhaustion must not
+    // be rejected merely because the old provider lacks window metadata (unit).
+    it.each([
+      { verifiedCurrentWindow: undefined },
+      { targetContextWindow: undefined },
+      { contextTokensKnown: false },
+    ])('allows Claude to try the selected route with incomplete metadata: %j', missing => {
+      expect(describeModelWindowGateFailure({
+        contextTokensKnown: true, verifiedCurrentWindow: 200_000, targetContextWindow: 128_000,
+        runtimeAgentKind: 'claude-code', model: 'next', targetRouteProviderId: 'provider',
+        rebuildLiveOrcaWorker: false, piPreview: undefined, ...missing,
+      })).toBeNull();
+    });
     const base = {
       contextTokensKnown: true, verifiedCurrentWindow: 250_000, targetContextWindow: 1_000_000,
       runtimeAgentKind: 'pi', model: 'deepseek-v4.1-flash', targetRouteProviderId: 'opencode-go',

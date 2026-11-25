@@ -3,6 +3,9 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import ts from 'typescript';
 import { i18n } from '@/i18n';
+import { applyRemoteScheduleTimingsToIndex, type RemoteScheduleTimingPatch } from '@/scheduler/remoteScheduleEvents';
+import { replaceSessionScheduleIndexEntries } from '@/session/scheduleIndex';
+import type { RemoteSessionScheduleInfo } from '@/session/sessionList';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
 import { resolveConnectionBannerSyncActionVisibility, resolveConnectionBannerVisibility, resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
 import { connectionHealthCopy, describeRemoteError } from '@/device-link/remoteStatus';
@@ -1038,6 +1041,39 @@ describe('Home list sync wiring', () => {
     const focus = source.slice(source.indexOf('useFocusEffect(\n    useCallback(() => {\n      // The focus event'));
     expect(focus.indexOf('screenFocusedRef.current = true;')).toBeLessThan(focus.indexOf('refreshHomeScheduleIndexes('));
     expect(focus).toContain('const scheduleDirty = new Set(homeScheduleIndexDirtyRef.current.keys());');
+  });
+
+  // Unit: an index read launched by fired returns after the skipped patch.
+  it('keeps the newer skipped timing when the in-flight Home index read arrives', async () => {
+    const refresh = source.slice(source.indexOf('const refreshDeviceScheduleIndex = useCallback('), source.indexOf('const hydrateDeviceSessionsOnce = useCallback('));
+    const code = ts.transpileModule(refresh, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const timing = new Map<string, RemoteScheduleTimingPatch>();
+    const stale = new Map<string, RemoteSessionScheduleInfo>([
+      ['s1', { scheduleId: 'sched', scheduleName: 'Heartbeat', running: true, latestRunAt: 60_000, unreadRunIds: [], unreadCount: 0 }],
+    ]);
+    let index = new Map<string, RemoteSessionScheduleInfo>();
+    let finish!: (value: typeof stale) => void;
+    const load = new Promise<typeof stale>((resolve) => { finish = resolve; });
+    const bindings = {
+      useCallback: (fn: unknown) => fn,
+      accountGeneration: 1, homeAccountGenerationRef: { current: 1 },
+      homeSyncTargetDeviceIdsRef: { current: new Set(['dev']) },
+      homeSyncGenerationByDeviceRef: { current: new Map([['dev', 1]]) },
+      screenFocusedRef: { current: true }, AppState: { currentState: 'active' },
+      markHomeScheduleIndexDirty: () => 1, homeScheduleIndexDirtyRef: { current: new Map() },
+      isCurrentHomeSyncTarget: () => true, getScheduleIndexInvalidationVersion: () => 0,
+      homeDeviceSyncLimiterRef: { current: { run: (task: () => Promise<unknown>) => task() } },
+      loadDeviceSessionScheduleIndex: () => load, invoke: vi.fn(),
+      remoteScheduleEventStore: { getSnapshot: () => ({ scheduleTimings: timing }) },
+      applyRemoteScheduleTimingsToIndex, replaceSessionScheduleIndexEntries,
+      setScheduleIndex: (apply: (value: typeof index) => typeof index) => { index = apply(index); },
+    };
+    const run = new Function(...Object.keys(bindings), code + '; return refreshDeviceScheduleIndex;')(...Object.values(bindings));
+    run('dev', ['s1']);
+    timing.set('sched', { scheduleId: 'sched', lastFinishedAt: 61_000, nextFireAt: 120_000 });
+    finish(stale);
+    await vi.waitFor(() => expect(index.get('s1')).toMatchObject({ running: false, nextFireAt: 120_000 }));
+    expect(bindings.invoke).not.toHaveBeenCalled();
   });
 
   it('keeps automation badge refreshes pending until one is applied', () => {

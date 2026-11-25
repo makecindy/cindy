@@ -95,6 +95,10 @@ export function describeModelWindowGateFailure(input: {
   rebuildLiveOrcaWorker: boolean;
   piPreview: { action?: string; reason?: string } | null | undefined;
 }): { category: string; detail: string } | null {
+  // Claude can try the selected route with its existing native history. Missing
+  // catalog metadata is not evidence of overflow; the shared pressure planner
+  // and the existing overflow recovery handle an actual capacity problem.
+  if (input.runtimeAgentKind !== 'pi') return null;
   const route = input.targetRouteProviderId ? `${input.targetRouteProviderId}/${input.model}` : input.model;
   if (!input.contextTokensKnown) {
     return { category: 'context-usage-unknown', detail: 'the task has no context usage reading' };
@@ -105,7 +109,6 @@ export function describeModelWindowGateFailure(input: {
   if (!input.targetContextWindow) {
     return { category: 'target-window-unverified', detail: `target model ${route} has no verified context window` };
   }
-  if (input.runtimeAgentKind !== 'pi') return null;
   if (input.rebuildLiveOrcaWorker) {
     return { category: 'orca-worker-rebuild', detail: 'a live Orca worker would have to be rebuilt' };
   }

@@ -61,7 +61,7 @@ export interface PreRunHookStdinPayload {
    * Present when host code started this run early instead of the cron or a user, for example
    * `{ kind: 'watch', source: 'pr-status', detail: <PR URL> }` when a watched PR's status changed.
    */
-  trigger?: { kind: 'watch'; source: string; detail?: string };
+  trigger?: { kind: 'watch'; source: string; detail?: string; reason?: 'reconcile' };
 }
 
 export interface PreRunHookInput {

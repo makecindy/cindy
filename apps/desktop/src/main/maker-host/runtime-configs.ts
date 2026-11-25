@@ -12,6 +12,7 @@ import type { AgentRuntimeConfig } from '@cindy/maker-core';
 import { app } from 'electron';
 import path from 'node:path';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { withCloudPluginOauthPrompt } from '../plugin-oauth/prompt.js';
 
 export { claudeUpstreamEndpoint } from './runtimeConfigsCore.js';
 
@@ -48,8 +49,8 @@ export function ensureBundledRipgrepReady(): void {
 
 /** Claude runtime config; `endpointFn` is read on every spawn (see runtimeConfigsCore.ts). */
 export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string, resolveLocalEndpoint?: () => Promise<string>): AgentRuntimeConfig {
-  return desktopRuntimeConfigs.buildClaudeRuntimeConfig(endpointFn, resolveLocalEndpoint);
+  return withCloudPluginOauthPrompt(desktopRuntimeConfigs.buildClaudeRuntimeConfig(endpointFn, resolveLocalEndpoint));
 }
 
 /** Codex runtime config, built once at module load as before. */
-export const desktopCodexRuntimeConfig: AgentRuntimeConfig = desktopRuntimeConfigs.buildCodexRuntimeConfig();
+export const desktopCodexRuntimeConfig: AgentRuntimeConfig = withCloudPluginOauthPrompt(desktopRuntimeConfigs.buildCodexRuntimeConfig());
