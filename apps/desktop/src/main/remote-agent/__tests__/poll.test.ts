@@ -608,6 +608,7 @@ describe('link errors', () => {
     ['INVOKE_TIMEOUT', 'no invoke-result within 30000ms after first socket write', 'REMOTE_AGENT_TIMEOUT', true],
     ['TIMEOUT', 'request timed out', 'REMOTE_AGENT_TIMEOUT', true],
     ['BACKPRESSURE', 'request expired before socket write within 10000ms', 'REMOTE_AGENT_LINK_BUSY', true],
+    ['BACKPRESSURE', '[REMOTE_AGENT_SHARE_UNAVAILABLE] shared request failed before socket write', 'REMOTE_AGENT_LINK_BUSY', true],
     ['DEVICE_UNRESPONSIVE', 'target device host is unresponsive (circuit open)', 'REMOTE_AGENT_UNRESPONSIVE', true],
     ['DEVICE_OFFLINE', 'target device is offline', 'REMOTE_AGENT_OFFLINE', true],
     ['ACCESS_REVOKED', 'access revoked', 'REMOTE_AGENT_ACCESS_DENIED', false],

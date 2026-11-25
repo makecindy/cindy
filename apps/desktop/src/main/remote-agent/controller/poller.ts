@@ -320,10 +320,12 @@ export class RemoteAgentPoller {
     const shareRefusal = (code: unknown) => code === 'ACCESS_REVOKED' || code === 'REMOTE_AGENT_SHARE_UNAVAILABLE';
     const code = (error as { code?: unknown })?.code;
     const reportedCode = remoteAgentErrorFrom(error).code;
+    const ownerRefused = code === 'REMOTE_DISABLED'
+      || /\[REMOTE_AGENT_PROVIDER_NOT_ALLOWED\]/.test(error instanceof Error ? error.message : String(error));
     const shareRefused = shareRefusal(reportedCode) || shareRefusal(code);
     const temporaryShareUnavailable = (reportedCode === 'REMOTE_AGENT_SHARE_UNAVAILABLE' || code === 'REMOTE_AGENT_SHARE_UNAVAILABLE')
       && (code === undefined || code === 'IPC_ERROR' || code === 'REMOTE_AGENT_SHARE_UNAVAILABLE');
-    if (shareRefused ? this.unreachableSince === null && !temporaryShareUnavailable : !isRetryableLinkError(error)) {
+    if (ownerRefused || (shareRefused ? this.unreachableSince === null && !temporaryShareUnavailable : !isRetryableLinkError(error))) {
       // 对方拒绝整个 poll(远程控制已关、版本不支持等)：涉及的任务都无法继续。
       const info = remoteAgentErrorFrom(error);
       for (const { runId } of wanted) {

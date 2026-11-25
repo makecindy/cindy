@@ -5,8 +5,7 @@ import { expect, it, vi } from 'vitest';
 import { DeviceLinkError, FILE_PEER_CHANNEL, ProviderShareScopeChangedError, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
 import { ServerApiError } from '../../serverApiClient';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery } from '../linkRecovery';
-import { RemoteAgentRunClient, remoteAgentInvoker } from '../../remote-agent/controller/runClient';
-import type { RemoteAgentPoller } from '../../remote-agent/controller/poller';
+import { RemoteAgentRunClient, RemoteAgentPoller, remoteAgentInvoker } from '../../remote-agent/controller/runClient';
 import { isTemporaryProviderMetadataFailure } from '../providerMetadataContinuity';
 import { isShareAvailabilityRead, projectShareAvailabilityRead } from '../providerShareAvailabilityModels';
 
@@ -134,6 +133,49 @@ const sharePeer = providerShareHostPeer('share', 'host');
 const receivedShare = { shareId: 'share', hostDeviceId: 'host', status: 'active', hostOnline: true, standbyOnline: true };
 const standbyCatalog = { providers: [{ id: 'shared', agents: ['codex'], routing: {}, source: 'user',
   models: { codex: [{ id: 'model', name: 'Model', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high', supportsFastMode: true }] } }] };
+
+// #12686 / unit: raw-code poller tests missed the production adapter translating
+// authoritative owner refusals into IPC_ERROR + SHARE_UNAVAILABLE. Execute that
+// adapter and the real invoker/poller: a denial must stop, not start read retries.
+// Recognition is injected here; providerShareRuntime.test.ts covers its real three cases.
+it.each([
+  { code: 'ACCESS_REVOKED', differentRegion: false },
+  { code: 'REMOTE_DISABLED', differentRegion: true },
+  { code: 'IPC_ERROR', differentRegion: false },
+].flatMap(input => ['result', 'throw'].map(mode => ({ ...input, mode }))))('ends a shared run on the translated $code owner refusal ($mode, cross-region=$differentRegion)', async ({ code, differentRegion, mode }) => {
+  vi.useFakeTimers();
+  const invoke = vi.fn(async () => {
+    const message = code === 'IPC_ERROR' ? '[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] owner policy denied' : 'owner denied';
+    if (mode === 'throw') throw new DeviceLinkError(code as DeviceLinkError['code'], message);
+    return { ok: false, error: { code, message } };
+  });
+  const remoteBackgroundInvoke = loadBackgroundInvoke({
+    getReceivedShares: () => [receivedShare], isProviderShareRefusal: () => true,
+    PROVIDER_SHARE_UNAVAILABLE_MESSAGE: '[REMOTE_AGENT_SHARE_UNAVAILABLE] the shared provider is not available right now',
+    client: { invoke }, crossRegionInvoke: invoke, isCrossRegionProviderShareTarget: () => differentRegion,
+  });
+  const run = { runId: randomUUID(), onData: vi.fn(), onLost: vi.fn(), recoverAuthorization: vi.fn(async () => {}) };
+  const poller = new RemoteAgentPoller(remoteAgentInvoker(sharePeer, remoteBackgroundInvoke));
+  try {
+    poller.register(run);
+    await vi.advanceTimersByTimeAsync(130_000);
+    expect(run.onLost).toHaveBeenCalledExactlyOnceWith('read-failed', expect.objectContaining({
+      message: expect.stringContaining('[REMOTE_AGENT_SHARE_UNAVAILABLE]'),
+    }));
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(run.recoverAuthorization).not.toHaveBeenCalled();
+    expect(run.onData).not.toHaveBeenCalled();
+    expect(poller.size).toBe(0);
+    const catalog = remoteBackgroundInvoke(sharePeer, 'maker:get-capabilities', []);
+    const message = '[REMOTE_AGENT_SHARE_UNAVAILABLE] the shared provider is not available right now';
+    if (mode === 'throw') await expect(catalog).rejects.toMatchObject({ code, message });
+    else await expect(catalog).resolves.toEqual({ ok: false, error: { code: 'IPC_ERROR', message } });
+  } finally {
+    poller.unregister(run.runId);
+    vi.useRealTimers();
+  }
+});
+
 it.each(['result', 'throw', 'cross-region'])(
   'reads the authorized standby catalog after an online owner transport failure (%s)', async mode => {
     const failure = new DeviceLinkError('DEVICE_OFFLINE', 'unreachable');

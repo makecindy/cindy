@@ -2865,12 +2865,24 @@ export async function remoteBackgroundInvoke(
       return readStandbyCatalog().then(fallback => fallback ?? result);
     }
     noteProviderShareAccessFailure(refusedOwnerShare);
-    return { ok: false, error: { code: 'IPC_ERROR', message: PROVIDER_SHARE_UNAVAILABLE_MESSAGE } };
+    // Agent recovery needs the owner's denial; catalog readers retain their
+    // existing refusal envelope. IPC_ERROR here is a provider-policy refusal;
+    // retain only its fixed code, never the owner's raw diagnostic/identity.
+    const retainCause = channel === 'maker:remote-agent:v1';
+    return { ok: false, error: {
+      code: retainCause ? result.error.code : 'IPC_ERROR',
+      message: retainCause && result.error.code === 'IPC_ERROR'
+        ? `${PROVIDER_SHARE_UNAVAILABLE_MESSAGE}\n[REMOTE_AGENT_PROVIDER_NOT_ALLOWED]`
+        : PROVIDER_SHARE_UNAVAILABLE_MESSAGE,
+    } };
   } catch (error) {
     if (!current()) throw error;
     if (error instanceof DeviceLinkError && isProviderShareRefusal(error.code, error.message)) {
       noteProviderShareAccessFailure(refusedOwnerShare);
-      throw Object.assign(new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE), { code: error.code });
+      const message = channel === 'maker:remote-agent:v1' && error.code === 'IPC_ERROR'
+        ? `${PROVIDER_SHARE_UNAVAILABLE_MESSAGE}\n[REMOTE_AGENT_PROVIDER_NOT_ALLOWED]`
+        : PROVIDER_SHARE_UNAVAILABLE_MESSAGE;
+      throw Object.assign(new Error(message), { code: error.code });
     }
     if (isTemporaryProviderMetadataFailure(error)) {
       const fallback = await readStandbyCatalog();
