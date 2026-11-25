@@ -14,6 +14,21 @@ export interface SegmentedOption<T extends string> {
   'aria-controls'?: string;
 }
 
+/**
+ * Scene density presets (owner decision #8, 2026-11-23): track / option height in px.
+ * xs = compact Diff, sm = dense lists and cards, md = settings default, lg = page navigation.
+ */
+export type SegmentedDensity = 'xs' | 'sm' | 'md' | 'lg';
+
+export const SEGMENTED_DENSITY: Readonly<
+  Record<SegmentedDensity, { height: number; optionHeight: number }>
+> = {
+  xs: { height: 24, optionHeight: 18 },
+  sm: { height: 28, optionHeight: 24 },
+  md: { height: 32, optionHeight: 28 },
+  lg: { height: 38, optionHeight: 32 },
+};
+
 interface SegmentedControlProps<T extends string> {
   'data-setting-id'?: string;
   value: T | null;
@@ -25,8 +40,14 @@ interface SegmentedControlProps<T extends string> {
   className?: string;
   optionClassName?: string;
   style?: CSSProperties;
-  /** Scene density only; all variants share the same selection and interaction. */
+  /** Scene density only; all variants share the same selection and interaction. Default `md`. */
+  density?: SegmentedDensity;
+  /**
+   * @deprecated Use `density`. Kept only for scenes whose size is not one of the four presets
+   * yet (listed in DESIGN.md §4 Desktop segmented controls); overrides the preset.
+   */
   height?: number;
+  /** @deprecated Use `density`; see `height`. */
   optionHeight?: number;
   fullWidth?: boolean;
   prefix?: ReactNode;
@@ -46,8 +67,9 @@ export function SegmentedControl<T extends string>({
   className,
   optionClassName,
   style,
-  height = 32,
-  optionHeight = 28,
+  density = 'md',
+  height = SEGMENTED_DENSITY[density].height,
+  optionHeight = SEGMENTED_DENSITY[density].optionHeight,
   fullWidth = false,
   prefix,
   preserveMouseFocus = false,

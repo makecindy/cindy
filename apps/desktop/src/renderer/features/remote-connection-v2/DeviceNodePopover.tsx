@@ -440,8 +440,7 @@ export function DeviceNodePopover({
             <SegmentedControl<DeviceLinkPeerPathPreference>
               value={selectedPref}
               aria-label={t('settings.remoteControl.v2.popover.routePreference')}
-              height={28}
-              optionHeight={24}
+              density="sm"
               fullWidth
               options={[
                 { value: 'auto', label: t('settings.remoteControl.v2.popover.routeAuto') },

@@ -447,7 +447,7 @@ const inlineSizeDebt = (file: string, counts: Record<string, number>): Exemption
 
 const INLINE_SIZE_DEBT: Exemption[] = [
   inlineSizeDebt('src/renderer/features/skillhub/SkillhubMarketListView.tsx', {
-    'fontSize …13': 2,
+    'fontSize …13': 1,
     'fontSize …12': 2,
     'fontSize …11': 1,
   }),

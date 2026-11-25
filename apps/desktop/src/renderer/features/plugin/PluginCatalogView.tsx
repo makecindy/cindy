@@ -122,8 +122,7 @@ function PluginCatalogList({ catalog, aside, overlay }: {
           <div className="sticky top-0 z-raised flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] app-wallpaper-surface bg-[var(--surface)] py-3">
             <SegmentedControl<CatalogTab>
               role="tablist"
-              height={38}
-              optionHeight={32}
+              density="lg"
               optionClassName="plugin-management-tab min-w-[88px] px-4 text-13"
               value={tab}
               onValueChange={value => {

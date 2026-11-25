@@ -150,8 +150,7 @@ export function PluginManagementHeader({
       role="tablist"
       aria-label={t('sidebar.horizontalTabbarAria')}
       style={WINDOW_NO_DRAG_STYLE}
-      height={38}
-      optionHeight={32}
+      density="lg"
       optionClassName="plugin-management-tab min-w-[88px] px-4 text-13"
       value={activeTab}
       onValueChange={(tab) =>

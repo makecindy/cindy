@@ -476,7 +476,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     if (!complete) return cache.counts?.public === 0 ? 0 : undefined;
     return Array.from(complete.sizes.values()).reduce((total, size) => total + size[value], 0);
   }
-  const filtersView = <SegmentedControl value={filter} onValueChange={onScope} height={32} optionHeight={28}
+  const filtersView = <SegmentedControl value={filter} onValueChange={onScope}
         aria-label={t('settings.ghosts.page.filtersAria')}
         options={filters.map(value => ({ value, label: <>{value === 'all'
           ? t('settings.ghosts.page.filterAll') : value === 'official' || value === 'community'

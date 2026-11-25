@@ -23,9 +23,10 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { Check, Info, Search } from 'lucide-react';
+import { Check, Info } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -1733,21 +1734,12 @@ export function AddProviderWizard({
             <>
               {/* Keep the input's outer focus ring inside the clipped body. */}
               <div className="px-4 pb-3 pt-1">
-                <div className="relative">
-                  <SettingsTextInput
-                    surface="ivory"
-                    value={query}
-                    onChange={setQuery}
-                    ariaLabel={t('settings.providers.wizard.searchPlaceholder')}
-                    placeholder={t('settings.providers.wizard.searchPlaceholder')}
-                    inputClassName="pl-9"
-                  />
-                  <Search
-                    size={14}
-                    aria-hidden="true"
-                    className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
-                  />
-                </div>
+                <SearchInput
+                  value={query}
+                  onChange={setQuery}
+                  ariaLabel={t('settings.providers.wizard.searchPlaceholder')}
+                  placeholder={t('settings.providers.wizard.searchPlaceholder')}
+                />
               </div>
 
               {/* 目录:单列列表(2026-07 定稿,替代三列卡片宫格),唯一的滚动区。 */}
