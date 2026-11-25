@@ -16,6 +16,7 @@ interface Snapshot {
   teammatesCollapsed: boolean;
   showCollapsedTeammateAvatars: boolean;
   inboxShowCollapsedTeammateAvatars: boolean;
+  taskSuggestionFooterDismissed?: true;
 }
 const initial: Snapshot = { hydrated: false, lastTeammate: null, teammatesCollapsed: false, showCollapsedTeammateAvatars: true, inboxShowCollapsedTeammateAvatars: true };
 type NavigationPatch = Partial<Omit<Snapshot, 'hydrated'>>;
@@ -75,7 +76,8 @@ export function useHomeMode(mode: 'tasks' | 'inbox' = 'tasks') {
   const setTeammatesCollapsed = useCallback((teammatesCollapsed: boolean) => update({ teammatesCollapsed }), [update]);
   const avatarKey = mode === 'inbox' ? 'inboxShowCollapsedTeammateAvatars' : 'showCollapsedTeammateAvatars';
   const setShowCollapsedTeammateAvatars = useCallback((enabled: boolean) => update({ [avatarKey]: enabled }), [avatarKey, update]);
-  return { ...snapshot, showCollapsedTeammateAvatars: snapshot[avatarKey], owner, selectTeammate, setTeammatesCollapsed, setShowCollapsedTeammateAvatars };
+  const dismissTaskSuggestionFooter = useCallback(() => update({ taskSuggestionFooterDismissed: true }), [update]);
+  return { ...snapshot, showCollapsedTeammateAvatars: snapshot[avatarKey], owner, selectTeammate, setTeammatesCollapsed, setShowCollapsedTeammateAvatars, dismissTaskSuggestionFooter };
 }
 
 /** Hold the startup splash until the home's teammate section knows its stored collapse state. */

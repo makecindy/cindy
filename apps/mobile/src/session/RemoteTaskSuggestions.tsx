@@ -43,16 +43,19 @@ export function RemoteTaskSuggestions({
   mode,
   onNewSession,
   onSelect,
+  onDismiss,
 }: {
   mode: "empty" | "footer";
   onNewSession(): void;
   onSelect(id: RemoteTaskSuggestionId): void;
+  onDismiss?(): void;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [batch, setBatch] = useState(0);
   const empty = mode === "empty";
+  const dismiss = empty ? undefined : onDismiss;
   return (
     <View style={styles.root} testID={`home.taskSuggestions.${mode}`}>
       {empty ? (
@@ -80,30 +83,42 @@ export function RemoteTaskSuggestions({
           style={styles.newTask}
         />
       ) : null}
-      <View style={styles.heading}>
+      <View style={[styles.heading, dismiss && styles.dismissibleHeading]}>
         <Text style={styles.caption}>
           {t("devices.list.taskSuggestions.tryThese")}
         </Text>
-        <MainWindowRowButton
-          accessibilityLabel={t("devices.list.taskSuggestions.shuffle")}
-          onPress={() =>
-            setBatch(
-              (current) =>
-                (current + 1) % REMOTE_TASK_SUGGESTION_BATCHES.length,
-            )
-          }
-          style={styles.shuffle}
-          testID="home.taskSuggestions.shuffle"
-        >
-          <Shuffle
-            color={colors.textSecondary}
-            size={iconSize.sm}
-            strokeWidth={iconStroke.regular}
-          />
-          <Text style={styles.caption}>
-            {t("devices.list.taskSuggestions.shuffle")}
-          </Text>
-        </MainWindowRowButton>
+        <View style={styles.headingActions}>
+          <MainWindowRowButton
+            accessibilityLabel={t("devices.list.taskSuggestions.shuffle")}
+            onPress={() =>
+              setBatch(
+                (current) =>
+                  (current + 1) % REMOTE_TASK_SUGGESTION_BATCHES.length,
+              )
+            }
+            style={styles.shuffle}
+            testID="home.taskSuggestions.shuffle"
+          >
+            <Shuffle
+              color={colors.textSecondary}
+              size={iconSize.sm}
+              strokeWidth={iconStroke.regular}
+            />
+            <Text style={styles.caption}>
+              {t("devices.list.taskSuggestions.shuffle")}
+            </Text>
+          </MainWindowRowButton>
+          {dismiss ? (
+            <MainWindowRowButton
+              accessibilityLabel={t("devices.list.taskSuggestions.dismiss")}
+              onPress={dismiss}
+              style={styles.shuffle}
+              testID="home.taskSuggestions.dismiss"
+            >
+              <Text style={styles.caption}>{t("devices.list.taskSuggestions.dismiss")}</Text>
+            </MainWindowRowButton>
+          ) : null}
+        </View>
       </View>
       {REMOTE_TASK_SUGGESTION_BATCHES[batch].map((id) => {
         const Icon = ICONS[id];
@@ -184,6 +199,15 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       justifyContent: "space-between",
       marginTop: spacing.lg,
+    },
+    dismissibleHeading: {
+      flexWrap: "wrap",
+    },
+    headingActions: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      justifyContent: "flex-end",
+      marginLeft: "auto",
     },
     shuffle: {
       width: "auto",

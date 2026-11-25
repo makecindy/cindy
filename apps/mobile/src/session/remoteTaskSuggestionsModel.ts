@@ -40,13 +40,15 @@ export function remoteTaskSuggestionsMode({
   totalSessionCount,
   ready,
   hasSearchOrFilter,
+  footerDismissed,
 }: {
   sessionCount: number;
   totalSessionCount: number;
   ready: boolean;
   hasSearchOrFilter: boolean;
+  footerDismissed?: boolean;
 }): RemoteTaskSuggestionsMode {
   if (!ready || sessionCount > 3) return null;
-  if (sessionCount > 0) return "footer";
+  if (sessionCount > 0) return footerDismissed ? null : "footer";
   return totalSessionCount === 0 && !hasSearchOrFilter ? "empty" : null;
 }

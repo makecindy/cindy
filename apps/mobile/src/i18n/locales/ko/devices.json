@@ -280,6 +280,7 @@
       "newTask": "새 세션",
       "tryThese": "이런 작업을 해 보세요",
       "shuffle": "다른 추천",
+      "dismiss": "다시 표시하지 않기",
       "syncHint": "컴퓨터에서 시작한 세션도 여기에 표시됩니다.",
       "items": {
         "findFile": {

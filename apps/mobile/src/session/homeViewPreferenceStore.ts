@@ -328,6 +328,7 @@ export interface HomeNavigationPreferences {
   /** Explicit account override; absent defaults to showing the collapsed avatar strip. */
   showCollapsedTeammateAvatars?: boolean;
   inboxShowCollapsedTeammateAvatars?: boolean;
+  taskSuggestionFooterDismissed?: true;
 }
 const NAVIGATION_PREFIX = 'cindy.mobile.home.navigation.v1.';
 
@@ -342,6 +343,7 @@ export function normalizeHomeNavigationPreferences(value: unknown): HomeNavigati
   return {
     ...(typeof record.inboxShowCollapsedTeammateAvatars === 'boolean' ? { inboxShowCollapsedTeammateAvatars: record.inboxShowCollapsedTeammateAvatars } : {}),
     ...(typeof record.showCollapsedTeammateAvatars === 'boolean' ? { showCollapsedTeammateAvatars: record.showCollapsedTeammateAvatars } : {}),
+    ...(record.taskSuggestionFooterDismissed === true ? { taskSuggestionFooterDismissed: true } : {}),
     ...(typeof record.teammatesCollapsed === 'boolean' ? { teammatesCollapsed: record.teammatesCollapsed } : {}),
     ...(validLast ? { lastTeammate: {
       deviceId: last!.deviceId as string,

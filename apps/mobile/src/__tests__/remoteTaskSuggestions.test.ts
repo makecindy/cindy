@@ -47,6 +47,11 @@ describe("remote task suggestions visibility", () => {
       ),
     ).toEqual(["footer", "footer", "footer", null, null, "footer"]);
   });
+  // Unit: the saved footer override must not suppress the zero-task welcome.
+  it("applies a saved dismissal only to the footer", () => {
+    expect([0, 1, 2, 3, 4].map((count) => mode(count, { footerDismissed: true })))
+      .toEqual(["empty", null, null, null, null]);
+  });
   it("does not offer tasks on an unavailable or unsettled device", () => {
     for (const count of [0, 1, 3, 4])
       expect(mode(count, { ready: false })).toBeNull();

@@ -283,6 +283,7 @@
       "newTask": "Nouvelle session",
       "tryThese": "Essayer une nouvelle tâche",
       "shuffle": "Afficher d'autres idées",
+      "dismiss": "Ne plus afficher",
       "syncHint": "Les sessions démarrées sur votre ordinateur apparaîtront aussi ici.",
       "items": {
         "findFile": {
