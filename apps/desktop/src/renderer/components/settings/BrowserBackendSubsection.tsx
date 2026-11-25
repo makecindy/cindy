@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Button } from '@/components/ui/button';
 import { SettingsBlock, SettingsRow } from '@/components/ui/settings-rows';
+import { withDefaultOverride, type DefaultOverrideReset } from './DefaultOverrideControls';
 import type {
   BrowserBackendHealth,
   BrowserBackendHealthReason,
@@ -32,6 +33,8 @@ interface BrowserBackendSubsectionProps {
   health: BrowserBackendHealth | null;
   onSelect: (kind: BackendKind) => void;
   onRecover: () => void;
+  /** Optional: a saved override and how to clear it (the cloud page). */
+  reset?: DefaultOverrideReset;
   /**
    * 推荐的页面控制插件在本机的状态,决定第 1 步写「安装」「启用」还是「更新」:
    * 只在未声明页面控制能力时提示更新。
@@ -96,6 +99,7 @@ export function BrowserBackendSubsection({
   userBrowserPluginState = 'not-installed',
   onSetUpUserBrowser,
   userBrowserSetupBusy = false,
+  reset,
 }: BrowserBackendSubsectionProps) {
   const { t } = useTranslation();
   const setting = useSettingDefinition(additionalSettings.browserTarget);
@@ -123,7 +127,7 @@ export function BrowserBackendSubsection({
         title={setting.title}
         // 选中哪个就介绍哪个,切换时一起变。
         hint={<span aria-live="polite">{selectedOption ? t(selectedOption.descriptionKey) : null}</span>}
-        trailing={
+        trailing={withDefaultOverride(
           <SegmentedControl<BackendKind>
             {...setting.controlProps}
             value={active}
@@ -131,8 +135,9 @@ export function BrowserBackendSubsection({
             onValueChange={onSelect}
             aria-label={setting.title}
             options={setting.options}
-          />
-        }
+          />,
+          reset,
+        )}
       />
       {embeddedHealth ? (
         <SettingsBlock className="flex flex-wrap items-center justify-between gap-3">

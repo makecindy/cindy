@@ -3394,6 +3394,31 @@ describe('provider:custom:* CRUD handlers', () => {
     expect((await listCustomProviders())[0]?.auth).toEqual(oauthConfig.auth);
   });
 
+  it('cloud credential replacement keeps newer configuration committed by the native queue', async () => {
+    mountDb(); const harness = new IpcHarness();
+    const config = imageProviderConfig('cloud-fixture');
+    await createCustomProvider(config);
+    let replace!: import('../ipcHandlerRegistry.js').IpcHandler;
+    let release!: () => void; const blocked = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void; const preparing = new Promise<void>(resolve => { entered = resolve; });
+    let preparations = 0;
+    const storeKey = vi.fn(() => true);
+    registerProviderHandlers(harness, makeDeps({
+      registerCloudCredentialReplacement: handler => { replace = handler; },
+      prepareCodexCustomProviderHostChange: vi.fn(async () => { if (++preparations === 1) { entered(); await blocked; } }),
+      storeCustomProviderKey: storeKey,
+    }));
+    const newer = { ...config, name: 'Native edit', runtimes: { ...config.runtimes, codex: { ...config.runtimes.codex!, baseUrl: 'https://new.example.test/v1' } } };
+    const update = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, newer);
+    await preparing;
+    const replacement = replace({}, config.id, { codex: 'fixture-key' });
+    await new Promise(resolve => setTimeout(resolve, 0)); release();
+    await expect(update).resolves.toMatchObject({ok:true});
+    await expect(replacement).resolves.toMatchObject({ok:true});
+    expect(await getCustomProvider(config.id)).toMatchObject({name:'Native edit',runtimes:{codex:{baseUrl:'https://new.example.test/v1'}}});
+    expect(storeKey).toHaveBeenCalledWith(config.id, 'codex', 'fixture-key');
+  });
+
   it('serializes provider updates so a failed write restores credentials before the next edit', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -4864,7 +4889,8 @@ describe('provider:oauth mutation ordering', () => {
         discoveredSource: { kind: 'magpie', providerId: 'New account' } }], 'pi', 'fixture-request');
     });
     const broadcastToAllWindows = vi.fn();
-    const bindings = { subscriptionAccountKind: () => null, isCodexAccountProvider: () => false,
+    // The closure first checks for a cloud settings call; none is running here.
+    const bindings = { cloudManagementExecution: () => null, subscriptionAccountKind: () => null, isCodexAccountProvider: () => false,
       getActiveCatalog: () => catalog, storedCustomProviderId, runGenericOAuthLogin,
       broadcastToAllWindows, MAKER_PUSH, deriveModelsDiscoveryUrl, discoverGenericOAuthModels,
       getCustomProvider, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged,
