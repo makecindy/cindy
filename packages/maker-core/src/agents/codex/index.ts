@@ -42,7 +42,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { structuredPatch } from 'diff';
 import { syncCodexArchiveState } from './archive-state.js';
-import { readCodexThreadMcpServerTools, readCodexThreadMcpServersTools } from './mcp-server-tools.js';
+import { readCodexThreadMcpServerTools } from './mcp-server-tools.js';
 import { CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS, readAccountRateLimitsWithRefresh } from './app-server/account-rate-limits.js';
 
 import {
@@ -7420,55 +7420,48 @@ assertRouteCurrent();
     };
 
     // Configuration proves intent, not that this native thread completed MCP
-    // startup. Observe only explicitly provisioned host gateways, after capability
+    // startup. Observe only explicitly provisioned helpers, after capability
     // isolation/disabled overrides; never probe the shared host catalog.
-    let expectedMcpNeedsRecheck = false;
-    let mcpRecoveryAttempts = 0;
-    let mcpRecoveryNotBefore = 0;
-    let mcpRecoveryAbort: AbortController | undefined;
-    let mcpRecoveryPending: Promise<void> | null = null;
+    let helperNeedsRecheck = false;
+    let helperRecoveryAttempts = 0;
+    let helperRecoveryNotBefore = 0;
+    let helperRecoveryAbort: AbortController | undefined;
+    let helperRecoveryPending: Promise<void> | null = null;
     let reportedHelperState: string | undefined;
-    const expectedGatewayNames = ['cindy_helper', 'cindy'];
-    const expectedRuntimeMcpConfig = (): Record<string, unknown> | null => {
+    const expectedHelperConfig = (): Record<string, unknown> | null => {
       const config = currentThreadWorkspaceConfig().config;
-      if (!config || reviewMode) return null;
-      const expected = expectedGatewayNames.filter(name => config[`mcp_servers.${name}.enabled`] !== false
-        && ['url', 'command'].some(key => {
-          const value = config[`mcp_servers.${name}.${key}`];
+      if (!config || reviewMode || config['mcp_servers.cindy_helper.enabled'] === false
+        || !['url', 'command'].some(key => {
+          const value = config?.[`mcp_servers.cindy_helper.${key}`];
           return typeof value === 'string' && value.trim().length > 0;
-        }));
-      if (!expected.length) return null;
-      return Object.fromEntries(Object.entries(config).filter(([key]) => expected.some(name => key.startsWith(`mcp_servers.${name}.`))));
+        })) return null;
+      return Object.fromEntries(Object.entries(config).filter(([key]) => key.startsWith('mcp_servers.cindy_helper.')));
     };
-    const readExpectedMcpTools = (config: Record<string, unknown>) => readCodexThreadMcpServersTools(
-      (method, params, requestOpts) => host.request(method, params, requestOpts), threadId,
-      expectedGatewayNames.filter(name => Object.keys(config).some(key => key.startsWith(`mcp_servers.${name}.`))),
-    );
-    const reportExpectedRuntimeMcpAvailability = async (
-      knownReports?: Awaited<ReturnType<typeof readExpectedMcpTools>>, signal?: AbortSignal,
+    const reportExpectedHelperAvailability = async (
+      knownReport?: Awaited<ReturnType<typeof readCodexThreadMcpServerTools>>, signal?: AbortSignal,
     ): Promise<void> => {
-      const mcpConfig = expectedRuntimeMcpConfig();
-      if (!mcpConfig) { expectedMcpNeedsRecheck = false; reportedHelperState = undefined; return; }
+      const helperConfig = expectedHelperConfig();
+      if (!helperConfig) { helperNeedsRecheck = false; reportedHelperState = undefined; return; }
       const checkedThreadId = threadId;
-      let reports: Awaited<ReturnType<typeof readExpectedMcpTools>> | undefined;
+      let state: string;
+      let ready = false;
       try {
-        reports = knownReports ?? await awaitCodexRouteSelection(readExpectedMcpTools(mcpConfig), signal);
+        const report = knownReport ?? await awaitCodexRouteSelection(readCodexThreadMcpServerTools(
+          (method, params, requestOpts) => host.request(method, params, requestOpts),
+          checkedThreadId, 'cindy_helper',
+        ), signal);
+        ready = report.state === 'connected' && ['list_tools', 'call_tool'].every(name => report.tools.some(tool => tool.name === name));
+        state = report.state;
       } catch {
         signal?.throwIfAborted();
         // A failed probe is not proof of missing tools. Keep that distinction,
         // and never expose transport errors containing endpoints/credentials.
+        state = 'unverified';
       }
       if (closed || threadId !== checkedThreadId || !isCurrentHost()
-        || JSON.stringify(expectedRuntimeMcpConfig()) !== JSON.stringify(mcpConfig)) return;
-      expectedMcpNeedsRecheck = !reports || [...reports.values()].some(report => report.state === 'failed' || report.state === 'pending');
-      // A healthy helper does not prove that the plugin gateway initialized.
-      // Keep its independently failed client eligible for the same cold resume.
-      const helperExpected = Object.keys(mcpConfig).some(key => key.startsWith('mcp_servers.cindy_helper.'));
-      if (!helperExpected) { reportedHelperState = undefined; return; }
-      const report = reports?.get('cindy_helper');
-      const state = report?.state ?? 'unverified';
-      const ready = report?.state === 'connected' && ['list_tools', 'call_tool'].every(name => report.tools.some(tool => tool.name === name));
-      if (ready) { reportedHelperState = undefined; return; }
+        || JSON.stringify(expectedHelperConfig()) !== JSON.stringify(helperConfig)) return;
+      if (ready) { helperNeedsRecheck = false; reportedHelperState = undefined; return; }
+      helperNeedsRecheck = state === 'failed' || state === 'pending' || state === 'unverified';
       // Optional native servers can still be starting; do not turn async
       // discovery into an outage or restart an in-flight initialization.
       if (state === 'pending') return;
@@ -8102,7 +8095,7 @@ assertRouteCurrent();
           ? replacementProfileFingerprint
           : null;
         threadMayHaveRollout = retainHistory;
-        await reportExpectedRuntimeMcpAvailability();
+        await reportExpectedHelperAvailability();
         log.debug('thread replaced with workspace permission profile', {
           previousThreadId,
           threadId,
@@ -8180,7 +8173,7 @@ assertRouteCurrent();
             ? resumeProfileFingerprint
             : null;
           threadMayHaveRollout = true;
-          await reportExpectedRuntimeMcpAvailability();
+          await reportExpectedHelperAvailability();
           log.debug('workspace permission profile restored before turn/start', {
             threadId,
             referenceRoots: mutableExtraDirs.length,
@@ -8191,7 +8184,7 @@ assertRouteCurrent();
 
     // Loaded-thread resume ignores arbitrary config. Release only this thread,
     // then cold-resume its intact rollout before accepting another turn.
-    const ensureContextLimitForNextTurn = (signal?: AbortSignal, forceMcpRefresh = false, reportMcpReadiness = true): Promise<void> | null => {
+    const ensureContextLimitForNextTurn = (signal?: AbortSignal, forceMcpRefresh = false, reportHelperReadiness = true): Promise<void> | null => {
       const desired = currentContextLimit();
       if (desired === appliedContextLimit && !forceMcpRefresh) return null;
       return (async () => {
@@ -8239,7 +8232,7 @@ assertRouteCurrent();
             subscription = host.subscribeThread(threadId, handlers, threadOwner);
             registerRootCodexMcpContext();
             resetAcceptedUsageCursors('context settings refresh');
-            if (reportMcpReadiness) await reportExpectedRuntimeMcpAvailability();
+            if (reportHelperReadiness) await reportExpectedHelperAvailability();
           } catch (error) {
             // A timed-out resume can still complete later. Close this handle so a
             // retry cannot use that loaded thread with an unconfirmed budget. The
@@ -8255,67 +8248,66 @@ assertRouteCurrent();
       })();
     };
 
-    // Native reload is process-wide. Recover only a positively failed gateway,
+    // Native reload is process-wide. Recover only a positively failed helper,
     // at the next ordinary send boundary, using the existing single-thread cold
     // resume. No user/tool input has been dispatched here, so none is replayed.
-    const ensureExpectedMcpForNextTurn = (signal?: AbortSignal): Promise<void> | null => {
-      if (mcpRecoveryPending) return mcpRecoveryPending;
-      if (!expectedMcpNeedsRecheck || !threadMayHaveRollout || mcpRecoveryAttempts >= 2
-        || Date.now() < mcpRecoveryNotBefore || !expectedRuntimeMcpConfig()) return null;
+    const ensureExpectedHelperForNextTurn = (signal?: AbortSignal): Promise<void> | null => {
+      if (helperRecoveryPending) return helperRecoveryPending;
+      if (!helperNeedsRecheck || !threadMayHaveRollout || helperRecoveryAttempts >= 2
+        || Date.now() < helperRecoveryNotBefore || !expectedHelperConfig()) return null;
       const pending = (async () => {
         const abort = new AbortController();
-        mcpRecoveryAbort = abort;
+        helperRecoveryAbort = abort;
         const recoverySignal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
         const recoveringThread = threadId;
-        const mcpConfig = JSON.stringify(expectedRuntimeMcpConfig());
+        const helperConfig = JSON.stringify(expectedHelperConfig());
         const assertRecoveryCurrent = () => {
           recoverySignal.throwIfAborted();
-          assertCurrentHost('MCP recovery');
+          assertCurrentHost('helper recovery');
           nativeSubscriptionAccount?.assertCurrent();
-          if (closed || threadId !== recoveringThread || JSON.stringify(expectedRuntimeMcpConfig()) !== mcpConfig) {
-            throw new Error('Codex MCP recovery cancelled because the task configuration changed');
+          if (closed || threadId !== recoveringThread || JSON.stringify(expectedHelperConfig()) !== helperConfig) {
+            throw new Error('Codex helper recovery cancelled because the task configuration changed');
           }
         };
         try {
           assertRecoveryCurrent();
-          let reports;
+          let report;
           try {
-            reports = await awaitCodexRouteSelection(readExpectedMcpTools(expectedRuntimeMcpConfig()!), recoverySignal);
+            report = await awaitCodexRouteSelection(readCodexThreadMcpServerTools(
+              (method, params, requestOpts) => host.request(method, params, requestOpts), threadId, 'cindy_helper',
+            ), recoverySignal);
           } catch { assertRecoveryCurrent(); return; }
           assertRecoveryCurrent();
-          await reportExpectedRuntimeMcpAvailability(reports, recoverySignal);
+          await reportExpectedHelperAvailability(report, recoverySignal);
           assertRecoveryCurrent();
-          if (![...reports.values()].some(report => report.state === 'failed')) return;
+          if (report.state !== 'failed') return;
           // Unloading a thread also stops native children/terminals. Leave those
           // intact, and unknown background state is busy, just as idle cleanup.
           if (await awaitCodexRouteSelection(handle.hasLiveBackgroundWork!().catch(() => true), recoverySignal)) return;
           assertRecoveryCurrent();
-          mcpRecoveryAttempts++;
-          mcpRecoveryNotBefore = Date.now() + 30_000 * mcpRecoveryAttempts;
-          log.info('recovering failed Codex task MCP', {
-            threadId, attempt: mcpRecoveryAttempts,
-            servers: [...reports].filter(([, report]) => report.state === 'failed').map(([name]) => name),
-          });
+          helperRecoveryAttempts++;
+          helperRecoveryNotBefore = Date.now() + 30_000 * helperRecoveryAttempts;
+          log.info('recovering failed Codex task helper', { threadId, attempt: helperRecoveryAttempts });
           await withMcpDiscoveryContext(async () => {
             assertRecoveryCurrent();
             await ensureContextLimitForNextTurn(recoverySignal, true, false);
           });
           assertRecoveryCurrent();
-          await reportExpectedRuntimeMcpAvailability(undefined, recoverySignal);
+          await reportExpectedHelperAvailability(undefined, recoverySignal);
         } catch (error) {
           // Probe cancellation is proven pre-dispatch. Let Session retire its
           // reservation without an ambiguous provider-error drain. A cancelled
           // cold resume closes the handle and keeps its existing failure fence.
           if (!closed && recoverySignal.aborted) {
-            throw new TurnDispatchRejectedError('Codex MCP recovery cancelled before acceptance');
+            throw new TurnDispatchRejectedError('Codex helper recovery cancelled before acceptance');
           }
           throw error;
         } finally {
-          if (mcpRecoveryAbort === abort) mcpRecoveryAbort = undefined;
+          if (helperRecoveryAbort === abort) helperRecoveryAbort = undefined;
         }
       })();
-      mcpRecoveryPending = pending;
-      const clearPending = () => { if (mcpRecoveryPending === pending) mcpRecoveryPending = null; };
+      helperRecoveryPending = pending;
+      const clearPending = () => { if (helperRecoveryPending === pending) helperRecoveryPending = null; };
       void pending.then(clearPending, clearPending);
       return pending;
     };
@@ -14016,7 +14008,7 @@ assertRouteCurrent();
         return;
       }
       closed = true;
-      mcpRecoveryAbort?.abort();
+      helperRecoveryAbort?.abort();
       finishManualCompact(new Error('Codex session closed during compaction'));
       cancelInteractionContinuation('session_closed', true);
       translatorRt.samplingSegments.clear();
@@ -14210,7 +14202,7 @@ assertRouteCurrent();
           if (profileRefresh) await profileRefresh;
           const environmentRepair = repairHostedEnvironmentIfDisconnected();
           if (environmentRepair) await environmentRepair;
-          const helperRecovery = isContinuation ? null : ensureExpectedMcpForNextTurn(sendOpts?.signal);
+          const helperRecovery = isContinuation ? null : ensureExpectedHelperForNextTurn(sendOpts?.signal);
           if (helperRecovery) await helperRecovery;
           turnWorkspaceConfig = currentTurnWorkspaceConfig();
           // A stale-daemon retry must hydrate the exact thread-level profile
@@ -14778,7 +14770,7 @@ assertRouteCurrent();
               // every thread on the daemon shares the same process-level
               // cumulative usage source.
               resetAcceptedUsageCursors('thread/resume after stale daemon');
-              await reportExpectedRuntimeMcpAvailability();
+              await reportExpectedHelperAvailability();
               if (collaborationMode?.mode === 'default') {
                 planModeDefaultMarkerNeeded = true;
                 if (turnParams.collaborationMode?.mode === 'default') {
@@ -15167,8 +15159,8 @@ assertRouteCurrent();
       },
 
       async abort() {
-        const pendingHelperRecovery = mcpRecoveryPending;
-        mcpRecoveryAbort?.abort();
+        const pendingHelperRecovery = helperRecoveryPending;
+        helperRecoveryAbort?.abort();
         // Probe RPCs may outlive Stop. Their aborted wait must release the send
         // reservation before abort returns so the next input can start afresh.
         if (pendingHelperRecovery) await pendingHelperRecovery.catch(() => {});
@@ -15726,7 +15718,7 @@ assertRouteCurrent();
           refreshCodexAutoReviewerRoute(threadId);
           registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
-          await reportExpectedRuntimeMcpAvailability();
+          await reportExpectedHelperAvailability();
         } else {
           sdkSessionId = threadId;
           threadMayHaveRollout = true;
@@ -15843,7 +15835,7 @@ assertRouteCurrent();
       const schedulerRefresh = ensureSchedulerMcpForResumedThread();
       if (schedulerRefresh) await schedulerRefresh;
     }
-    await reportExpectedRuntimeMcpAvailability();
+    await reportExpectedHelperAvailability();
     return handle;
   }
 
