@@ -54,6 +54,12 @@
     "reset": "Repor predefinição"
   },
   "appearance": {
+    "chatReadingSize": {
+      "title": "Tamanho do texto da conversa",
+      "default": "Predefinido",
+      "smaller": "Menor",
+      "saveFailed": "Não foi possível guardar o tamanho do texto da conversa."
+    },
     "title": "Aspeto",
     "modeLabel": "Modo de aspeto",
     "options": {

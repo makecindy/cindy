@@ -54,6 +54,12 @@
     "reset": "恢復預設"
   },
   "appearance": {
+    "chatReadingSize": {
+      "title": "聊天字級",
+      "default": "預設",
+      "smaller": "較小",
+      "saveFailed": "無法儲存聊天字級。"
+    },
     "title": "外觀",
     "modeLabel": "顯示模式",
     "options": {

@@ -54,6 +54,12 @@
     "reset": "初期設定に戻す"
   },
   "appearance": {
+    "chatReadingSize": {
+      "title": "チャットの文字サイズ",
+      "default": "標準",
+      "smaller": "小さめ",
+      "saveFailed": "チャットの文字サイズを保存できませんでした。"
+    },
     "title": "外観",
     "modeLabel": "表示モード",
     "options": {

@@ -54,6 +54,12 @@
     "reset": "恢复默认"
   },
   "appearance": {
+    "chatReadingSize": {
+      "title": "聊天字号",
+      "default": "默认",
+      "smaller": "较小",
+      "saveFailed": "无法保存聊天字号。"
+    },
     "title": "外观",
     "modeLabel": "显示模式",
     "options": {

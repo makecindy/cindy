@@ -1,4 +1,5 @@
 import type { ComponentProps } from 'react';
+import { ChatReadingSizeContext, useChatReadingSize } from '@/settings/chatReadingSize';
 import { useCompanionThreads } from './CompanionThreads';
 import { MessageRenderer } from './MessageRenderer';
 import { useMessageHistoryActive } from './messageHistoryActivity';
@@ -11,5 +12,10 @@ export function SessionMessageHistory({ companionThreadOptions, ...props }: Omit
 }) {
   const active = useMessageHistoryActive();
   const companionThreads = useCompanionThreads({ ...companionThreadOptions, active });
-  return <MessageRenderer {...props} companionThreads={companionThreads} />;
+  const readingSize = useChatReadingSize(!props.companion);
+  return (
+    <ChatReadingSizeContext.Provider value={readingSize}>
+      <MessageRenderer {...props} companionThreads={companionThreads} />
+    </ChatReadingSizeContext.Provider>
+  );
 }

@@ -88,6 +88,7 @@ import {
 import { buildMobileVoiceDictionaryEntryViews } from '@/session/mobileVoiceDictionaryView';
 import { AppIconSettings, useAppIconChoice } from '@/settings/AppIconSettings';
 import { UserBubbleSettings } from '@/settings/UserBubbleSettings';
+import { CHAT_READING_SIZES, saveChatReadingSize, useChatReadingSize } from '@/settings/chatReadingSize';
 import { PromptRecommendationSettings } from '@/settings/PromptRecommendationSettings';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
 import { isGooglePlayInstallation } from '@/update/androidInstallSource';
@@ -187,6 +188,9 @@ export default function SettingsScreen() {
   const [languagePickerSnap, setLanguagePickerSnap] = useState<ContextSheetSnap>('half');
   const [classicalPicker, setClassicalPicker] = useState<ClassicalPicker | null>(null);
   const [classicalPickerSnap, setClassicalPickerSnap] = useState<ContextSheetSnap>('half');
+  const readingSize = useChatReadingSize();
+  const [readingSizePickerOpen, setReadingSizePickerOpen] = useState(false);
+  const [readingSizePickerSnap, setReadingSizePickerSnap] = useState<ContextSheetSnap>('half');
   const [appearancePickerOpen, setAppearancePickerOpen] = useState(false);
   const [appearancePickerSnap, setAppearancePickerSnap] = useState<ContextSheetSnap>('half');
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
@@ -991,6 +995,18 @@ export default function SettingsScreen() {
             testID="settings.wallpaper.open"
           />}
           <UserBubbleSettings />
+          {Platform.OS === 'android' ? (
+            <ChoicePickerRow
+              expanded={readingSizePickerOpen}
+              label={t('settings.appearance.chatReadingSize.title')}
+              onPress={() => {
+                setReadingSizePickerSnap('half');
+                setReadingSizePickerOpen(true);
+              }}
+              testID="settings.chatReadingSize.open"
+              value={t(`settings.appearance.chatReadingSize.${readingSize}`)}
+            />
+          ) : null}
           {appIconChoice ? <AppIconSettings choice={appIconChoice} /> : null}
         </SettingsGroup>
 
@@ -1236,6 +1252,38 @@ export default function SettingsScreen() {
           />
         </SheetSurface>
       </SheetModal>
+      {Platform.OS === 'android' ? (
+        <SheetModal
+          nativePresentation
+          onBackdropPress={() => setReadingSizePickerOpen(false)}
+          onRequestClose={() => setReadingSizePickerOpen(false)}
+          visible={readingSizePickerOpen}
+        >
+          <SheetSurface
+            bottomInset={safeAreaInsets.bottom}
+            heights={choicePickerHeights}
+            onClose={() => setReadingSizePickerOpen(false)}
+            onSnapChange={setReadingSizePickerSnap}
+            snap={readingSizePickerSnap}
+            testID="settings.chatReadingSize.picker"
+            title={t('settings.appearance.chatReadingSize.title')}
+          >
+            <MobileChoicePickerList
+              activeId={readingSize}
+              onSelect={id => {
+                const next = CHAT_READING_SIZES.find(option => option === id);
+                if (!next) return;
+                setReadingSizePickerOpen(false);
+                void saveChatReadingSize(next).catch(() => {
+                  Alert.alert(t('settings.appearance.chatReadingSize.title'), t('settings.appearance.chatReadingSize.saveFailed'));
+                });
+              }}
+              options={CHAT_READING_SIZES.map(id => ({ id, label: t(`settings.appearance.chatReadingSize.${id}`) }))}
+              testID="settings.chatReadingSize.option"
+            />
+          </SheetSurface>
+        </SheetModal>
+      ) : null}
       <SheetModal
         backdropTestID="settings.languagePicker.backdrop"
         nativePresentation

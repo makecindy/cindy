@@ -54,6 +54,12 @@
     "reset": "Restablecer valor predeterminado"
   },
   "appearance": {
+    "chatReadingSize": {
+      "title": "Tamaño del texto del chat",
+      "default": "Predeterminado",
+      "smaller": "Más pequeño",
+      "saveFailed": "No se pudo guardar el tamaño del texto del chat."
+    },
     "title": "Apariencia",
     "modeLabel": "Modo de apariencia",
     "options": {

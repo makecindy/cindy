@@ -54,6 +54,12 @@
     "reset": "Auf Standard zurücksetzen"
   },
   "appearance": {
+    "chatReadingSize": {
+      "title": "Schriftgröße im Chat",
+      "default": "Standard",
+      "smaller": "Kleiner",
+      "saveFailed": "Die Schriftgröße im Chat konnte nicht gespeichert werden."
+    },
     "title": "Darstellung",
     "modeLabel": "Darstellung",
     "options": {
