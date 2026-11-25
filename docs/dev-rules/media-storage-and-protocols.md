@@ -524,6 +524,13 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 
 ## 多端与远程
 
+- `cindy-remote-media://` 的每个 OSS 流式响应由 `remoteMediaProtocol.ts` 持有独立
+  `AbortController`。读完、上游出错、消费者取消或调用方中止时，必须同时中止上游请求、
+  解除中止监听并成对释放缓存的 in-flight 计数；迟到的响应体不能再交给已取消的消费者。
+  Electron 42 的 `reader.cancel()` 不保证关闭原生 HTTP 连接，协议 `request.signal`
+  也不保证随下游取消而中止，不能只依赖二者释放连接。否则旧媒体流会占住同站连接池，
+  连带阻塞插件等其它 OSS 下载。回归入口为 `remoteMediaProtocol.test.ts`；同一视频的
+  并发 Range 请求独立取消，不重启共享网络进程，也不删除仍被其它消费者使用的 OSS 对象。
 - 将已有截图或本地图片保存为持久受管附件时，Agent 使用 Core `media(action: "import_image", path)`：Host
   按当前任务文件权限读取，在当前媒体仓入库并登记任务引用，再返回 `xdt_image_urls`。
   工作目录外路径复用现有授权，SSH 任务不得回退读取控制端同名文件。返回成功仅表示
