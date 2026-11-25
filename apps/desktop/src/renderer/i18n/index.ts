@@ -21,6 +21,7 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import enCommon from './locales/en/common.json';
 import enAiRename from './locales/en/aiRename.json';
+import { withCloudLoader, withEnglishCloudStrings } from './cloudStrings';
 import { GHOST_OFFICIAL_ID_PREFIX } from '../../shared/ghost';
 import { DEFAULT_LOCALE, type SupportedLocale } from '../../shared/locale';
 import { createLogger } from '../lib/logger';
@@ -125,7 +126,7 @@ const lazyLocaleBackend: BackendModule = {
   type: 'backend',
   init() {},
   read(language, namespace, callback) {
-    const load = LOCALE_LOADERS[language as LazyLocale]?.[namespace as Namespace];
+    const load = withCloudLoader(language, namespace, LOCALE_LOADERS[language as LazyLocale]?.[namespace as Namespace]);
     if (!load) {
       callback(null, {});
       return;
@@ -143,7 +144,7 @@ const initialize = () => i18n
   .init({
     resources: {
       en: {
-        common: withLocaleOverrides('en', 'common', enCommon),
+        common: withLocaleOverrides('en', 'common', withEnglishCloudStrings(enCommon)),
         aiRename: enAiRename,
       },
     },

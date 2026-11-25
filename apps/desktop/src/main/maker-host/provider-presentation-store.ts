@@ -1,3 +1,6 @@
+import path from 'node:path';
+import { inspectSettingsJson, isSettingsRecord } from './inspect-settings-json.js';
+import { validateOptionalSettingsFields } from './settings-inspection.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
@@ -19,13 +22,7 @@ function normalizePresentation(raw: unknown): ProviderPresentation {
     ...(typeof value.removed === 'boolean' ? { removed: value.removed } : {}),
   };
 }
-const log = desktopMakerLogger.child('provider-presentation');
-const store = createOverrideSettingsFile<PresentationFile>({
-  // Preserve the original OpenAI preferences without a migration or duplicate source of truth.
-  filePath: () => ownerScopedUserDataPath('local-codex-provider-prefs.json'),
-  scopeKey: activeOwnerScopeKey,
-  defaults: {},
-  normalize: (raw) => {
+function normalizeFile(raw: unknown): PresentationFile {
     const root = normalizePresentation(raw);
     const providers = (raw as PresentationFile | null)?.providers;
     if (!providers || typeof providers !== 'object' || Array.isArray(providers)) return root;
@@ -37,13 +34,37 @@ const store = createOverrideSettingsFile<PresentationFile>({
           .map(([id, value]) => [id, normalizePresentation(value)]),
       ),
     };
-  },
+}
+const log = desktopMakerLogger.child('provider-presentation');
+const store = createOverrideSettingsFile<PresentationFile>({
+  // Preserve the original OpenAI preferences without a migration or duplicate source of truth.
+  filePath: () => ownerScopedUserDataPath('local-codex-provider-prefs.json'),
+  scopeKey: activeOwnerScopeKey,
+  defaults: {},
+  normalize: normalizeFile,
   log,
   label: 'provider-presentation',
 });
-export function readProviderPresentation(providerId: string): ProviderPresentation {
-  store.invalidateIfChanged();
-  const { name, removed, providers } = store.read();
+export function inspectProviderPresentations(root: string) {
+  return inspectSettingsJson(path.join(root, 'local-codex-provider-prefs.json'), raw => {
+    const validators = { name: (value: unknown) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 128, removed: (value: unknown) => typeof value === 'boolean' };
+    validateOptionalSettingsFields(raw, { ...validators, providers: isSettingsRecord });
+    if (isSettingsRecord(raw.providers)) for (const value of Object.values(raw.providers)) {
+      if (!isSettingsRecord(value)) throw new Error('invalid provider presentation');
+      validateOptionalSettingsFields(value, validators);
+    }
+    return normalizeFile(raw);
+  });
+}
+
+export function readProviderPresentation(providerId: string, options?: { allowSideEffects?: boolean }): ProviderPresentation {
+  let value: PresentationFile;
+  if (options?.allowSideEffects === false) {
+    const state = store.inspect();
+    if (state.status !== 'ready') throw new Error('PROVIDER_PRESENTATION_UNREADABLE');
+    value = state.value;
+  } else { store.invalidateIfChanged(); value = store.read(); }
+  const { name, removed, providers } = value;
   return providerId === 'openai'
     ? { ...(name ? { name } : {}), ...(removed !== undefined ? { removed } : {}) }
     : (providers?.[providerId] ?? {});
@@ -62,6 +83,7 @@ export async function setProviderPresentation(providerId: string, patch: Provide
   });
 }
 export const readLocalCodexPresentation = () => readProviderPresentation('openai');
+export const getHostProviderPresentationStore = () => store;
 /** Login or disconnect is already committed; display preferences cannot reverse its result. */
 export async function retainProviderPresentationAfterAuthChange(providerId: string): Promise<void> {
   try {
