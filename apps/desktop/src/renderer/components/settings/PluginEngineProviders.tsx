@@ -455,6 +455,8 @@ function EngineModels({ engine }: { engine: PluginEngineView }) {
         <PluginModelAdvancedDialog
           key={currentModel.id}
           model={currentModel}
+          reported={engine.reportedModelDetails?.find(details => details.modelId === currentModel.id)}
+          antigravity={engine.ghostId === 'agy-acp'}
           providerName={engine.name}
           customized={Object.hasOwn(engine.modelEfforts ?? {}, currentModel.id)}
           enabled={Boolean(enabledModel)}

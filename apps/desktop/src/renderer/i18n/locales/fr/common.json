@@ -4383,6 +4383,7 @@
             "default": "{{pct}} % (par défaut)",
             "timing": "S'applique à tous les moteurs disponibles pour ce modèle et cette source lors des exécutions suivantes, sans interrompre une réponse."
           },
+          "antigravityHydrogenDescription": "Conçu pour le développement au quotidien et l’exécution rapide.",
           "contextLimitRoute": "Actuellement {{tokens}} jetons",
           "contextLimitOverWindow": "Supérieur à la fenêtre déclarée par le fournisseur ; les requêtes peuvent échouer.",
           "restoreDefault": "Réinitialiser",

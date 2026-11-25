@@ -4329,6 +4329,7 @@
             "default": "{{pct}}% (Default)",
             "timing": "Applies to all available engines for this model and source on subsequent runs, without interrupting a response."
           },
+          "antigravityHydrogenDescription": "Designed for everyday coding and fast execution.",
           "contextLimitRoute": "Current {{tokens}} tokens",
           "contextLimitOverWindow": "Above the provider’s declared window; requests may fail.",
           "restoreDefault": "Restore default",

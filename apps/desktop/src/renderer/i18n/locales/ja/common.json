@@ -4287,6 +4287,7 @@
             "default": "{{pct}}%（既定）",
             "timing": "この提供元のモデルで利用可能なすべてのエンジンに適用します。以降の実行で有効になり、生成中の応答は中断しません。"
           },
+          "antigravityHydrogenDescription": "日常のコーディングや素早い実行向け。",
           "contextLimitRoute": "現在 {{tokens}} tokens",
           "contextLimitOverWindow": "プロバイダーが宣言した上限を超えています。リクエストが失敗する可能性があります。",
           "restoreDefault": "既定に戻す",

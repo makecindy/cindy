@@ -4383,6 +4383,7 @@
             "default": "{{pct}}% (predefinição)",
             "timing": "Aplica-se a todos os motores disponíveis para este modelo e fonte nas execuções seguintes, sem interromper uma resposta."
           },
+          "antigravityHydrogenDescription": "Concebido para programação diária e execução rápida.",
           "contextLimitRoute": "Atual: {{tokens}} tokens",
           "contextLimitOverWindow": "Acima da janela declarada pelo fornecedor; os pedidos podem falhar.",
           "restoreDefault": "Repor predefinição",

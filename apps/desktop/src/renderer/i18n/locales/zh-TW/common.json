@@ -4287,6 +4287,7 @@
             "default": "{{pct}}%（預設）",
             "timing": "套用至此來源下該模型的所有可用引擎。後續執行生效，不中斷正在產生的內容。"
           },
+          "antigravityHydrogenDescription": "專為日常程式開發與快速執行設計。",
           "contextLimitRoute": "目前 {{tokens}} tokens",
           "contextLimitOverWindow": "已超過上游宣告的長度，可能導致請求失敗。",
           "restoreDefault": "恢復預設",

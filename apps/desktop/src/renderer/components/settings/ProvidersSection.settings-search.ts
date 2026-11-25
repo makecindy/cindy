@@ -110,6 +110,7 @@ export const providersSettings = defineSettings({
       'settings.providers.remote.rowLabel',
       'settings.providers.models.advanced.defaultEffort',
       'settings.providers.models.advanced.defaultEffortHint',
+      'settings.providers.models.advanced.antigravityHydrogenDescription',
       'settings.providers.models.advanced.providerLabel',
     ],
     aliases: [

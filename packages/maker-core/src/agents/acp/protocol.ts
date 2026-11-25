@@ -100,6 +100,8 @@ export interface AcpInitializeResult {
   protocolVersion: number;
   agentCapabilities: AcpAgentCapabilities;
   authMethods: AcpAuthMethod[];
+  /** Explicit handshake value, separately from ACP's default of false. */
+  reportedImageInput?: boolean;
   agentInfo?: { name: string; title?: string; version: string };
   /** The agent takes ACP_STEERING_METHOD (top-level `_meta.steering.supported`). */
   steering: boolean;
@@ -212,6 +214,7 @@ export function normalizeInitializeResult(raw: unknown): AcpInitializeResult {
         list: capabilityPresent(session.list),
       },
     },
+    ...(typeof prompt.image === 'boolean' ? { reportedImageInput: prompt.image } : {}),
     authMethods: Array.isArray(result.authMethods)
       ? result.authMethods.flatMap((entry) => {
           const method = asRecord(entry);

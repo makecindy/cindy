@@ -4383,6 +4383,7 @@
             "default": "{{pct}}% (padrão)",
             "timing": "Aplica-se a todos os mecanismos disponíveis para este modelo e fonte nas próximas execuções, sem interromper uma resposta."
           },
+          "antigravityHydrogenDescription": "Projetado para programação diária e execução rápida.",
           "contextLimitRoute": "Atual: {{tokens}} tokens",
           "contextLimitOverWindow": "Acima da janela declarada pelo provedor; as requisições podem falhar.",
           "restoreDefault": "Restaurar padrão",
