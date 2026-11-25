@@ -467,12 +467,32 @@ async function resolveForkNativeSource(
       let providerId: string | null;
       if (Object.hasOwn(parsed, 'fromProviderId')) {
         providerId = parsed.fromProviderId ?? null;
-      } else if (parsed.fromAgentKind === normalizeDbAgentKind(source.agentKind)) {
-        providerId = source.providerId;
-      } else if (parsed.fromAgentKind === 'codex') {
-        providerId = inferProviderIdForModel(model, 'codex');
       } else {
-        providerId = null;
+        const previousSwitch = await client.queryOne<{ content: string }>(
+          `SELECT content FROM messages
+            WHERE session_id = ?
+              AND role = 'agent_switch'
+              AND rewind_at IS NULL
+              AND (created_at < ? OR (created_at = ? AND rowid < ?))
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT 1`,
+          positionParams,
+        );
+        const previousBoundary = previousSwitch
+          ? parseAgentSwitchBoundary(previousSwitch.content)
+          : null;
+        if (
+          previousBoundary?.toAgentKind === parsed.fromAgentKind &&
+          Object.hasOwn(previousBoundary, 'toProviderId')
+        ) {
+          providerId = previousBoundary.toProviderId ?? null;
+        } else if (parsed.fromAgentKind === normalizeDbAgentKind(source.agentKind)) {
+          providerId = source.providerId;
+        } else if (parsed.fromAgentKind === 'codex') {
+          providerId = inferProviderIdForModel(model, 'codex');
+        } else {
+          providerId = null;
+        }
       }
       return {
         agentKind: parsed.fromAgentKind,
