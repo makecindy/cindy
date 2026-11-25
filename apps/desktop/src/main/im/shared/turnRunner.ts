@@ -248,6 +248,8 @@ interface TurnState {
   /** Direct Stop cancels this exact turn, independently of session disposal. */
   stopRequested?: boolean;
   userId: string;
+  /** 全响应·自主判断(ambient)轮次: 在模型输出非 NO_REPLY 真实正文前不推送过程帧。 */
+  ambient?: boolean;
   /** thread = session 模型的会话维度键(slack thread root ts);feishu undefined。 */
   scopeKey?: string;
   initialMessageText: string;
@@ -572,6 +574,8 @@ export interface ImRunAgentTurnArgs {
    */
   requesterIsOwner?: boolean;
   questionRespondentId?: string;
+  /** 全响应·自主判断(ambient)轮次: 真实正文出现前压制过程卡刷新, 避免 NO_REPLY 留撤回痕迹。 */
+  ambient?: boolean;
   /**
    * 这一轮的触发消息来自「禁止保存内容」的群。
    *
@@ -1321,6 +1325,7 @@ export function createTurnRunner(
       turnId: randomUUID(),
       questionRespondentId: args.questionRespondentId,
       userId,
+      ambient: args.ambient === true,
       scopeKey: target.scopeKey,
       initialMessageText: text,
       sourceDescription: args.sourceDescription ?? describeInteractionSource({
@@ -3454,10 +3459,18 @@ export function createTurnRunner(
     return final && !body.trim() && hasRichAnswer(source) ? t('richAnswer.incomplete') : body;
   }
 
+  /** ambient 轮次在尚无真实非 NO_REPLY 正文时, 不应因工具/重试过程文字提前建卡。 */
+  function isAmbientSilentDraft(turn: TurnState): boolean {
+    if (!turn.ambient) return false;
+    const trimmed = turn.presenter.wholeText().trim();
+    return trimmed === '' || 'NO_REPLY'.startsWith(trimmed);
+  }
+
   /** tool_use → 过程区时间线推进 + 卡片刷新(渠道 handle 自带节流兜底)。 */
   function handleToolUseEvent(turn: TurnState, event: AgentEvent): void {
     if (!turn.presenter.applyToolUse(event)) return;
     ensureActivityTicker(turn);
+    if (isAmbientSilentDraft(turn)) return;
     void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
@@ -3476,6 +3489,7 @@ export function createTurnRunner(
   function handleRetryNoticeEvent(turn: TurnState, event: AgentEvent): void {
     if (!turn.presenter.applyRetryNotice(event)) return;
     ensureActivityTicker(turn);
+    if (isAmbientSilentDraft(turn)) return;
     void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
@@ -3486,6 +3500,7 @@ export function createTurnRunner(
         clearActivityTicker(turn);
         return;
       }
+      if (isAmbientSilentDraft(turn)) return;
       // 只刷已存在的 handle — ticker 不该是创建卡片的理由
       turn.streamingHandle?.replace(composeStreamingView(turn));
     }, ACTIVITY_TICK_MS);
@@ -4127,6 +4142,7 @@ export function createTurnRunner(
     // deltas, 这时卡片会一直停在 "灵感正在路上..." placeholder 直到 done; done 之间
     // 几秒延迟里用户看着像 stuck。replace 一次保证用户即时看到回复内容。
     if (!turn.presenter.applyText(event)) return;
+    if (isAmbientSilentDraft(turn)) return;
     void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
@@ -4273,7 +4289,9 @@ export function createTurnRunner(
       }
     }
     // 所有渠道共用空成功结果语义；文本渠道仍须提交终态（微信持久任务依赖它）。
-    if (!turn.streamingHandle && turn.mediaAbsPaths.length > 0) {
+    // ambient 轮次在流式阶段可能压制了建卡(如全程工具调用后收口 NO_REPLY),
+    // 收口时补拿惰性句柄让渠道按 NO_REPLY 静默收口并清理回复锚点, 不落入 sendText 降级分支。
+    if (!turn.streamingHandle && (turn.mediaAbsPaths.length > 0 || (turn.ambient && !turn.streamingStartFailed))) {
       await ensureStreamingHandle(turn);
     }
     const finalView = composeStreamingView(turn);

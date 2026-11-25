@@ -581,15 +581,18 @@ function personalDeps(
     createCard: async (card) => (await sendCardRaw(openId, card, opts)).messageId,
     updateCard: (messageId, card) => patchCardRaw(messageId, card),
     async putFinalHead(messageId, card) {
-      if (messageId !== null) {
-        try {
-          await patchCardRaw(messageId, card);
-          return messageId;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`[feishu/streamingText] finalize patch failed: ${msg}`);
-          if (!isCurrent()) throw err;
-        }
+      if (messageId === null) {
+        // 惰性轮次首次直接发终稿(未建过中间卡): 必须推进轮次以领取本轮回复锚点,
+        // 避免沿用上一轮 held 锚点并把本轮锚点漏给下一轮。
+        return (await sendCardRaw(openId, card, opts)).messageId;
+      }
+      try {
+        await patchCardRaw(messageId, card);
+        return messageId;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`[feishu/streamingText] finalize patch failed: ${msg}`);
+        if (!isCurrent()) throw err;
       }
       // Preserve the full answer if the original card can no longer be edited.
       // Stay on this round's target and never recall the user's progress card.

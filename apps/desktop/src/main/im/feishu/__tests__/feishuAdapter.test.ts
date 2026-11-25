@@ -963,8 +963,15 @@ describe('feishu group lane adapter hooks', () => {
     await expect(ambientAdapter.ambientTurnGate?.(groupEvent({ ambient: undefined }))).resolves.toBe('proceed');
     expect(judge).not.toHaveBeenCalled();
 
-    // ambient 轮次注入 <ambient_mode> 且跳过历史附件下载
+    // ambient 轮次注入 <ambient_mode>、跳过历史附件下载，且复用 ambientTurnGate 已拉取的同一页历史（不重复请求飞书）
     downloadMessageAttachments.mockClear();
+    fetchChatHistoryPage.mockClear();
+    const reusedAmbEvent = groupEvent({
+      messageId: 'om_amb_reuse',
+      ambient: true,
+      invoked: false,
+      speaker: { id: 'ou_member', name: '成员', isOwner: false },
+    });
     fetchChatHistoryPage.mockResolvedValueOnce(
       historyPage([
         historyEntry({
@@ -972,7 +979,12 @@ describe('feishu group lane adapter hooks', () => {
         }),
       ]),
     );
-    const prepared = await ambientAdapter.prepareAgentTurnText?.(ambEvent);
+    judge.mockResolvedValueOnce('reply');
+    await expect(ambientAdapter.ambientTurnGate?.(reusedAmbEvent)).resolves.toBe('proceed');
+    expect(fetchChatHistoryPage).toHaveBeenCalledTimes(1);
+
+    const prepared = await ambientAdapter.prepareAgentTurnText?.(reusedAmbEvent);
+    expect(fetchChatHistoryPage).toHaveBeenCalledTimes(1);
     expect(prepared?.agentText).toContain('<ambient_mode>');
     expect(prepared?.agentText).toContain('NO_REPLY');
     expect(downloadMessageAttachments).not.toHaveBeenCalled();

@@ -430,6 +430,8 @@ describe('feishu streaming text', () => {
 
     expect(mocks.sendCardRaw).toHaveBeenCalledTimes(1);
     expect(markdownContent(mocks.sendCardRaw.mock.calls[0][1])).toBe('这里可以补充一点');
+    // 首次从无卡片状态直接发终稿必须推进轮次以领取当前回复锚点（不得传 advanceRound: false）
+    expect(mocks.sendCardRaw.mock.calls[0][2]).not.toHaveProperty('advanceRound', false);
     expect(mocks.discardReplyAnchor).not.toHaveBeenCalled();
   });
 });

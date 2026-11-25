@@ -564,6 +564,7 @@ export function createMessageHandler(
             }
           : {}),
         attachments: event.attachments,
+        ...(event.ambient === true ? { ambient: true } : {}),
         // 只取 adapter 实际交给模型的回复投影(可能已被过滤成占位), 不用 event 原值。
         ...(deliveredReply ? { replyContext: deliveredReply } : {}),
         // threadScoped 渠道: scopeKey = thread root ts(thread = session 路由键)

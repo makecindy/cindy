@@ -161,6 +161,23 @@ export function buildFeishuAdapter(
 ): ImChannelAdapter {
   const companion = Boolean(options.companionBotId);
   const isLark = () => feishuIm.getService() === 'lark';
+  // 同一条 ambient 消息在前置判定(ambientTurnGate)与紧随其后的上下文拼装
+  // (prepareAgentTurnText)之间复用原始历史页, 避免放行后重复请求飞书历史与展开合并转发。
+  const ambientHistoryPageCache = new Map<
+    string,
+    Awaited<ReturnType<FeishuIM['fetchChatHistoryPage']>>
+  >();
+  const AMBIENT_HISTORY_CACHE_MAX = 16;
+  const ambientHistoryKey = (
+    messageId: string,
+    args: Parameters<FeishuIM['fetchChatHistoryPage']>[0],
+  ): string => `${messageId}\0${args.chatId}\0${args.threadId ?? ''}\0${args.pageToken ?? ''}`;
+  const clearAmbientHistoryForMessage = (messageId: string): void => {
+    const prefix = `${messageId}\0`;
+    for (const key of ambientHistoryPageCache.keys()) {
+      if (key.startsWith(prefix)) ambientHistoryPageCache.delete(key);
+    }
+  };
   const channelLabel = () => isLark() ? 'Lark' : '飞书';
   const conversationPrefix = () => channelLabel() + ' · ';
   const groupPrefix = (threadId: string) =>
@@ -315,7 +332,16 @@ export function buildFeishuAdapter(
           question: event.text,
           excludeMessageId: event.replyContext?.messageId,
           deps: {
-            fetchPage: (args) => feishuIm.fetchChatHistoryPage(args),
+            fetchPage: async (args) => {
+              const page = await feishuIm.fetchChatHistoryPage(args);
+              const key = ambientHistoryKey(event.messageId, args);
+              if (ambientHistoryPageCache.size >= AMBIENT_HISTORY_CACHE_MAX) {
+                const oldest = ambientHistoryPageCache.keys().next().value;
+                if (oldest !== undefined) ambientHistoryPageCache.delete(oldest);
+              }
+              ambientHistoryPageCache.set(key, page);
+              return page;
+            },
             // 前置判定不下载群历史附件，也不向主人发缺权限私信提醒。
             download: async () => ({ attachments: [], unsupported: [] }),
             notifyFetchFailure: async () => undefined,
@@ -343,6 +369,7 @@ export function buildFeishuAdapter(
           : {}),
       });
       if (verdict === 'skip') {
+        clearAmbientHistoryForMessage(event.messageId);
         feishuIm.discardReplyAnchor(event.senderId, event.messageId);
         return 'skip';
       }
@@ -486,7 +513,17 @@ export function buildFeishuAdapter(
         reservedFiles: [...event.attachments, ...contextAttachments].filter((a) => a.kind !== 'image').length,
         reservedMessages: safeReply ? 1 : 0,
         deps: {
-          fetchPage: (args) => feishuIm.fetchChatHistoryPage(args),
+          fetchPage: async (args) => {
+            if (event.ambient) {
+              const key = ambientHistoryKey(event.messageId, args);
+              const cached = ambientHistoryPageCache.get(key);
+              if (cached) {
+                ambientHistoryPageCache.delete(key);
+                return cached;
+              }
+            }
+            return feishuIm.fetchChatHistoryPage(args);
+          },
           // ambient(全响应)轮次不下载群历史附件，避免每条普通群消息都拉音视频/图片。
           download: event.ambient
             ? async () => ({ attachments: [], unsupported: [] })
