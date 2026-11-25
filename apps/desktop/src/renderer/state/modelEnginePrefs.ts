@@ -396,6 +396,11 @@ export function hasModelEngineOverride(providerId: string, modelId: string): boo
   return getModelEngineOverride(providerId, modelId) !== undefined;
 }
 
+/** Every remembered engine of the current account, by `providerId:modelId`. */
+export function listModelEngineOverrides(): Record<string, ModelEngine> {
+  return Object.fromEntries(Object.entries(load()).map(([key, value]) => [key, value.agent]));
+}
+
 /** 当前账号是否存在任一显式 Harness 选择；用于旧草稿迁移时保护用户意图。 */
 export function hasAnyModelEngineOverride(): boolean {
   return Object.keys(load()).length > 0;
@@ -410,9 +415,12 @@ export function subscribeModelEnginePrefs(listener: () => void): () => void {
  * useSyncExternalStore 包装 —— 返回递增 version。组件把它当 useMemo 依赖,
  * override 变更(含其它窗口写入触发的 storage 事件)后自动重算。
  */
-export function useModelEnginePrefsVersion(): number {
-  return useSyncExternalStore(subscribe, getVersion, getVersion);
+export function useModelEnginePrefsVersion(enabled = true): number {
+  // Another computer's settings page keeps the hook order but never subscribes to this computer's store.
+  return useSyncExternalStore(enabled ? subscribe : subscribeNowhere, enabled ? getVersion : noVersion, enabled ? getVersion : noVersion);
 }
+const subscribeNowhere = (): (() => void) => () => undefined;
+const noVersion = (): number => 0;
 
 /**
  * 随当前数据归属账号切换持久化命名空间(与 setNewMakerDraftOwner 同形)。

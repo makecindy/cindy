@@ -1,3 +1,4 @@
+import { validateAdditionalSettingsOverrides } from '../shared/settingsEditableCatalog.js';
 /**
  * analytics-settings-store —— 使用统计(TapDB)的同意状态与开关。
  *
@@ -26,7 +27,18 @@ import {
   type OverrideSettingsState,
 } from './maker-host/override-settings-file.js';
 
+import { inspectSettingsFile } from './maker-host/settings-inspection.js';
+
 const log = desktopMakerLogger.child('analytics-settings-store');
+
+/** 不初始化统计、不求值同意门禁，也不修改启动探针的历史证据。 */
+export function inspectAnalyticsSettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize,
+    validate: (raw) => {
+      if (classifyAnalyticsContent(JSON.stringify(raw)) !== 'valid') throw new Error('Invalid setting');
+    },
+  });
+}
 
 export interface AnalyticsSettings {
   /** 用户是否已明示同意《隐私政策》。false = 一律不得初始化 TapDB。 */
@@ -78,6 +90,7 @@ function normalize(raw: unknown): AnalyticsSettings {
 }
 
 const store = createOverrideSettingsFile<AnalyticsSettings>({
+  validateOverrides: raw => validateAdditionalSettingsOverrides('privacy', raw),
   filePath: settingsFilePath,
   defaults: DEFAULTS,
   normalize,
@@ -408,3 +421,6 @@ export const __testing = {
   },
   probe: () => recordProbe,
 };
+
+/** Internal Host settings adapter; no new IPC or persistence location. */
+export function getAnalyticsSettingsStore() { return store; }
