@@ -75,14 +75,16 @@ export async function readCodexWebUsageCredentials(
         throw new Error('Default Codex usage credentials are unavailable');
       });
       if (await detachedDefaultCodexHome() !== home || !tokens.canDispatch()) {
-        throw new Error('Default Codex account changed');
+        return null;
       }
       return { accessToken: tokens.accessToken, accountId: tokens.chatgptAccountId };
     }
     if (readPool('openai')?.disconnected) return null;
   }
   const accessToken = await adapter.getAccessToken(providerId);
-  return accessToken ? { accessToken, accountId: await adapter.getAccountId(providerId) } : null;
+  const accountId = accessToken ? await adapter.getAccountId(providerId) : null;
+  if ((!providerId || providerId === 'openai') && readPool('openai')?.disconnected) return null;
+  return accessToken ? { accessToken, accountId } : null;
 }
 
 /** Identity of that home, with the credential guard used before a redemption. */

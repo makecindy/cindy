@@ -115,6 +115,14 @@ describe('built-in Codex quota target of the account pool default account', () =
       accessToken: 'obsolete-private-login', accountId: 'other-workspace',
     });
     expect(adapter.getAccessToken).toHaveBeenLastCalledWith('another-provider');
+
+    h.sharedSystemCredential = false;
+    adapter.getAccountId.mockImplementationOnce(async () => {
+      h.pool!.disconnected = true;
+      return 'other-workspace';
+    });
+    await expect(reader()).resolves.toBeNull();
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it('reads and redeems on the default account home when the built-in connection has no login', async () => {

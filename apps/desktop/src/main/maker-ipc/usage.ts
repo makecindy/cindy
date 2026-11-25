@@ -254,7 +254,7 @@ export function readCodexAccountUsageSnapshotWithWebRefresh(requestedProviderId?
     fetchWebUsageSnapshot: fetchCodexWebUsageSnapshot,
     recordSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
     clearSnapshot: () => scope === activeOwnerScopeKey() ? clearCodexAccountUsageSnapshot(providerId) : Promise.resolve(),
-    readCachedSnapshot: () => scope === activeOwnerScopeKey() ? readCodexAccountUsageSnapshot(providerId) : Promise.resolve(null),
+    readCachedSnapshot: () => !isAppSessionBoundaryPending() && scope === activeOwnerScopeKey() ? readCodexAccountUsageSnapshot(providerId) : Promise.resolve(null),
     now: () => Date.now(),
     isUnauthorizedError: (err) => err instanceof CodexWebUsageUnauthorizedError,
     onRefreshError: (err) => {

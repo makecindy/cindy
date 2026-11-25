@@ -120,7 +120,8 @@ export function createCodexAccountUsageSnapshotReader(
       credentials = await deps.readCredentials();
     } catch (err) {
       deps.onRefreshError(err);
-      return null;
+      // A temporary read failure keeps the warm cache, subject to the current owner guard.
+      return deps.readCachedSnapshot();
     }
     if (!credentials) {
       await clearCachedSnapshot();

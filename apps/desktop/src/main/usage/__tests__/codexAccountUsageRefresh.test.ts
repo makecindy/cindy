@@ -164,7 +164,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
       { throttleMs: 10_000 },
     );
 
-    await reader();
+    await expect(reader()).resolves.toEqual(makeSnapshot('cached'));
     await vi.waitFor(() => expect(onRefreshError).toHaveBeenCalledWith(expect.any(Error)));
     expect(fetchWebUsageSnapshot).not.toHaveBeenCalled();
 
