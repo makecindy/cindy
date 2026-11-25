@@ -1557,6 +1557,19 @@ describe('switch home from any computer', () => {
     expect(homeLink.handOver).not.toHaveBeenCalled();
   });
 
+  // #11999 review (zqchris 11-25 18:40Z): a reply's code is untrusted text (inbound validation only checks
+  // it is a string). A code named like an inherited object property is still an unknown code: retried,
+  // then unconfirmed, nothing written.
+  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf'])('never takes the home over on a reply with the code %s', async code => {
+    const invoke = vi.fn(async (): Promise<InvokeResultPayload> => ({ ok: false, error: { code: code as DeviceLinkErrorCode, message: '' } }));
+    const homeLink = { ...link(2), homeStatus: vi.fn(() => askCompanionHome(companionHomeProbe(invoke))) };
+    const t = setup({ home: 'laptop', homeLink, directory: async () => ({ devices: [device('laptop'), hereRow] }) });
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop', homeName: 'laptop' });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+    expect(homeLink.handOver).not.toHaveBeenCalled();
+  });
+
   // Replies that resolve but come from a gate in front of the home's dispatcher (its routing layer), or
   // that this computer builds for another channel: their content is not on the allow-list.
   it.each([

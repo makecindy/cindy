@@ -280,11 +280,13 @@ export type CompanionHomeRefusal = 'control-off' | 'access-revoked' | 'older-cin
  * cloud-companions.md §3.1), as the home's own dispatcher answers them: its same-account control off,
  * or this computer's access revoked. The routing gate on the home's side answers other codes
  * (`CHANNEL_NOT_ALLOWED` «Encrypted transport required», `BACKPRESSURE`), so it never reaches these.
+ * A `Map`: the code is untrusted text, and an object lookup would also find inherited properties
+ * (`constructor`, `__proto__`…) (#11999 review, zqchris 11-25).
  */
-const HOME_EXPLICIT_REFUSALS: Readonly<Record<string, CompanionHomeRefusal>> = {
-  REMOTE_DISABLED: 'control-off',
-  ACCESS_REVOKED: 'access-revoked',
-};
+const HOME_EXPLICIT_REFUSALS: ReadonlyMap<string, CompanionHomeRefusal> = new Map([
+  ['REMOTE_DISABLED', 'control-off'],
+  ['ACCESS_REVOKED', 'access-revoked'],
+]);
 /**
  * What the home's dispatcher answers for a channel it does not have (unchanged since the first
  * open-source release). The same code also comes from the routing layer before any handler runs
@@ -309,7 +311,7 @@ export type CompanionHomeAnswer =
 function confirmedHomeAnswer(outcome: CompanionHomeProbeOutcome): CompanionHomeAnswer | null {
   if (outcome.from !== 'peer') return null;
   if (outcome.kind === 'answer') return outcome.version >= 1 ? { kind: 'answered', version: outcome.version } : null;
-  const refusal = HOME_EXPLICIT_REFUSALS[outcome.code]
+  const refusal = HOME_EXPLICIT_REFUSALS.get(outcome.code)
     ?? (outcome.code === 'CHANNEL_NOT_ALLOWED' && outcome.message === OLDER_CINDY_ANSWER ? 'older-cindy' : undefined);
   return refusal ? { ...replyEvidence(outcome), kind: 'refused', refusal } : null;
 }
