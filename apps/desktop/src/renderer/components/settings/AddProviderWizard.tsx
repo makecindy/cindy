@@ -1,5 +1,5 @@
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
-import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityPluginId } from '@cindy/maker-shared/branding';
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityPluginId, isAntigravityPluginName } from '@cindy/maker-shared/branding';
 import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { BUNDLED_CATALOG, providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
@@ -1890,7 +1890,7 @@ export function AddProviderWizard({
                     {matchingPlugins.map(item => (
                       <ProviderRow
                         key={item.pluginId}
-                        icon={isAntigravityPluginId(item.ghostId) || /^antigravity$/i.test(item.name.trim())
+                        icon={isAntigravityPluginId(item.ghostId) || isAntigravityPluginName(item.name)
                           ? <PluginEngineIcon size={15} iconDataUrl={ANTIGRAVITY_MARK_DATA_URL} />
                           : cardIcon({ name: item.name })}
                         name={item.name}

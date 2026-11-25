@@ -956,7 +956,7 @@ export function pluginEngineSource(
     id: engine.providerId,
     providerId: engine.providerId,
     family: 'plugin',
-    logoSvg: isAntigravityPluginId(engine.ghostId) || isAntigravityProviderId(engine.providerId) || /^antigravity$/i.test(engine.name.trim())
+    logoSvg: isAntigravityPluginId(engine.ghostId) || isAntigravityProviderId(engine.providerId, engine.name)
       ? ANTIGRAVITY_LOGO : monogramLogo(engine.name),
     brand: engine.name,
     account: null,

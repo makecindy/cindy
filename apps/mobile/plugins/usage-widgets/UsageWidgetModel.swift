@@ -4,8 +4,12 @@ import Foundation
 // writes it into the shared App Group; this extension only reads and renders.
 
 /// Recognize the existing provider ID without changing the saved account key.
-func widgetDisplayLogo(id: String, logo: String?) -> String? {
-  id.range(of: #"(?:^|:)acp-plugin:(?:_root__|_ns__[a-z0-9-]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity):(?:agy|antigravity)(?:~[^:]+)?$"#, options: [.regularExpression, .caseInsensitive]) != nil ? "antigravity" : logo
+func widgetDisplayLogo(id: String, name: String, logo: String?, detailTitle: String? = nil) -> String? {
+  let options: String.CompareOptions = [.regularExpression, .caseInsensitive]
+  let knownId = id.range(of: #"(?:^|:)acp-plugin:(?:_root__|_ns__[a-z0-9-]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity):(?:agy|antigravity)(?:~[^:]+)?$"#, options: options) != nil
+  let legacy = [name, detailTitle].contains { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "antigravity" } &&
+    id.range(of: #"(?:^|:)acp-plugin:[^:]+:[^:~]+(?:~[^:]+)?$"#, options: options) != nil
+  return knownId || legacy ? "antigravity" : logo
 }
 
 struct WidgetSource: Decodable, Identifiable {
@@ -13,7 +17,7 @@ struct WidgetSource: Decodable, Identifiable {
   let kind: String
   let name: String
   let logo: String?
-  var displayLogo: String? { widgetDisplayLogo(id: id, logo: logo) }
+  var displayLogo: String? { widgetDisplayLogo(id: id, name: name, logo: logo, detailTitle: detail?.title) }
   let monogram: String
   let value: String?
   let unit: String?
@@ -183,8 +187,7 @@ enum WidgetState: Decodable {
   private static func matching(_ keys: [String], in sources: [WidgetSource]) -> [WidgetSource] {
     var found: [WidgetSource] = []
     for key in keys.map(AccountKey.init(encoded:)) {
-      let source = sources.first(where: { $0.id == key.id && $0.logo == key.logo && $0.name == key.name })
-        ?? sources.first(where: { $0.logo == key.logo && $0.name == key.name })
+      let source = key.match(in: sources)
       if let source, !found.contains(where: { $0.id == source.id }) { found.append(source) }
     }
     return found
@@ -214,6 +217,11 @@ struct AccountKey {
   }
 
   var encoded: String { [id, logo ?? "", name].joined(separator: String(Self.separator)) }
+
+  func match(in sources: [WidgetSource]) -> WidgetSource? {
+    sources.first(where: { $0.id == id && $0.logo == logo && $0.name == name })
+      ?? sources.first(where: { $0.logo == logo && $0.name == name })
+  }
 }
 
 /// `UsageWidgetStore` in the app: every computer's latest state and the automatic choice.

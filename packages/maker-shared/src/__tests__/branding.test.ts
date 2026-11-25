@@ -19,4 +19,11 @@ describe('Antigravity display identity', () => {
     expect(isAntigravityProviderId('acp-plugin:_ns__local__other:agy')).toBe(false);
     expect(isAntigravityProviderId('acp-plugin:_root__agy-plugin:other')).toBe(false);
   });
+
+  it('uses the exact legacy name only for plugin quota sources', () => {
+    expect(isAntigravityProviderId('acp-plugin:legacy:cli', 'Antigravity')).toBe(true);
+    expect(isAntigravityProviderId('remote:computer:acp-plugin:legacy:cli', ' ANTIGRAVITY ')).toBe(true);
+    expect(isAntigravityProviderId('acp-plugin:legacy:cli', 'Antigravity Preview')).toBe(false);
+    expect(isAntigravityProviderId('codex:account', 'Antigravity')).toBe(false);
+  });
 });

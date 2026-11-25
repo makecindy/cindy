@@ -24,10 +24,15 @@ export function isAntigravityPluginId(id: string | null | undefined): boolean {
   return /^(?:_root__|_ns__[a-z0-9-]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity)$/i.test(id ?? '');
 }
 
+export function isAntigravityPluginName(name: string | null | undefined): boolean {
+  return /^antigravity$/i.test(name?.trim() ?? '');
+}
+
 /** Accept local and remote quota source IDs, scoped plugin instances and extracted providers. */
-export function isAntigravityProviderId(id: string | null | undefined): boolean {
-  const match = /(?:^|:)acp-plugin:([^:]+):(?:agy|antigravity)(?:~[^:]+)?$/i.exec(id ?? '');
-  return isAntigravityPluginId(match?.[1]);
+export function isAntigravityProviderId(id: string | null | undefined, legacyName?: string): boolean {
+  const match = /(?:^|:)acp-plugin:([^:]+):([^:~]+)(?:~[^:]+)?$/i.exec(id ?? '');
+  return !!match && (isAntigravityPluginName(legacyName) ||
+    (isAntigravityPluginId(match[1]) && /^(?:agy|antigravity)$/i.test(match[2] ?? '')));
 }
 
 export const ANTIGRAVITY_MARK_DATA_URL = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(

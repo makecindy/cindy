@@ -109,7 +109,7 @@ export function UsageQuotaColumns({ sources, strings, compact = false, stale = f
         {hasCreditUnit && <Text numberOfLines={1} style={s.unit}>{source.reserve ? unit : ' '}</Text>}
         <QuotaTube source={source} small={compact} stale={stale || !!source.stale} panel={palette === 'panel'} opening={opening ? index : undefined} />
         <View style={[s.identity, compact && s.stackedIdentity]}>
-          {isAntigravityProviderId(source.id)
+          {isAntigravityProviderId(source.id, source.detail?.title) || isAntigravityProviderId(source.id, source.name)
             ? <PluginEngineMark iconDataUrl={ANTIGRAVITY_MARK_DATA_URL} tint={colors.textPrimary} />
             : <MobileProviderMark name={source.monogram || source.name} color={colors.textPrimary}
                 logoKind={source.logo ? providerMarks[source.logo] : undefined} providerId={source.logo === 'kimi' ? 'kimi-coding' : undefined} />}

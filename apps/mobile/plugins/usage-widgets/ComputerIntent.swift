@@ -42,6 +42,7 @@ struct ComputerQuery: EntityQuery {
 /// logo and name too (`AccountKey`), so a choice still finds the account on another computer.
 struct AccountEntity: AppEntity {
   let key: AccountKey
+  var sourceLogo: String? = nil
 
   var id: String { key.encoded }
 
@@ -49,7 +50,8 @@ struct AccountEntity: AppEntity {
   static var defaultQuery = AccountQuery()
 
   var displayRepresentation: DisplayRepresentation {
-    let image = widgetDisplayLogo(id: key.id, logo: key.logo).map { DisplayRepresentation.Image(named: "logo-\($0)") }
+    let logo = sourceLogo ?? widgetDisplayLogo(id: key.id, name: key.name, logo: key.logo)
+    let image = logo.map { DisplayRepresentation.Image(named: "logo-\($0)") }
     return DisplayRepresentation(title: "\(key.name)", image: image)
   }
 }
@@ -63,17 +65,25 @@ struct AccountQuery: EntityQuery {
   #endif
 
   func entities(for identifiers: [String]) async throws -> [AccountEntity] {
-    identifiers.map { AccountEntity(key: AccountKey(encoded: $0)) }
+    guard !identifiers.isEmpty else { return [] }
+    let sources = currentSources()
+    return identifiers.map {
+      let key = AccountKey(encoded: $0)
+      return AccountEntity(key: key, sourceLogo: key.match(in: sources)?.displayLogo)
+    }
   }
 
   func suggestedEntities() async throws -> [AccountEntity] {
+    currentSources().map { AccountEntity(key: AccountKey(source: $0), sourceLogo: $0.displayLogo) }
+  }
+
+  private func currentSources() -> [WidgetSource] {
     #if os(iOS)
     let computer = config?.computer.id
     #else
     let computer: String? = nil
     #endif
-    let sources = WidgetState.load(computer: computer).snapshot?.sources ?? []
-    return sources.map { AccountEntity(key: AccountKey(source: $0)) }
+    return WidgetState.load(computer: computer).snapshot?.sources ?? []
   }
 }
 
