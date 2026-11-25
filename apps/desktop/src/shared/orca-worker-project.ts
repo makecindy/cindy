@@ -33,3 +33,8 @@ export interface WorkerWorktreeSourceSelection {
   source: 'memory' | 'current' | 'explicit';
   fallbackReason?: string;
 }
+
+/** Local branch names that look like an origin shorthand need an explicit namespace. */
+export function qualifyLocalWorkerBranch(branch: string): string {
+  return branch.startsWith('origin/') ? `refs/heads/${branch}` : branch;
+}

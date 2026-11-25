@@ -24,6 +24,7 @@ struct MBSettings: Codable, Equatable {
   var lowAlert: Bool
   var privacy: Bool
   var scope: String
+  var currency: String?
 }
 
 struct MBCell: Decodable, Identifiable, Equatable {
@@ -146,8 +147,23 @@ struct MBManageRow: Decodable, Identifiable, Equatable {
   let hidden: Bool
 }
 
+struct MBPanelDesign: Decodable, Equatable {
+  let metrics: [String: Double]
+  let colors: [String: [String]]
+}
+
+/// Defaults keep older preview fixtures readable; production values arrive from shared/quotaPanelDesign.ts.
+enum PanelDesign {
+  static var current: MBPanelDesign?
+  static func metric(_ name: String, _ fallback: CGFloat) -> CGFloat {
+    current?.metrics[name].map { CGFloat($0) } ?? fallback
+  }
+}
+
 struct MBView: Decodable, Equatable {
+  let presentation: MBPanelDesign?
   let locale: String
+  let taskMoneySymbol: String?
   let moneySymbol: String
   let strings: [String: String]
   let statusTextByMode: [String: String?]
@@ -215,6 +231,20 @@ enum Palette {
     )
   }
 
+  private static func shared(_ name: String, _ fallback: Color) -> Color {
+    guard let pair = PanelDesign.current?.colors[name], pair.count == 2 else { return fallback }
+    func parse(_ text: String) -> NSColor? {
+      let raw = String(text.dropFirst())
+      guard (raw.count == 6 || raw.count == 8), let value = UInt32(raw, radix: 16) else { return nil }
+      let rgb = raw.count == 8 ? value >> 8 : value
+      let alpha = raw.count == 8 ? CGFloat(value & 255) / 255 : 1
+      return NSColor(srgbRed: CGFloat((rgb >> 16) & 255) / 255,
+        green: CGFloat((rgb >> 8) & 255) / 255, blue: CGFloat(rgb & 255) / 255, alpha: alpha)
+    }
+    guard let light = parse(pair[0]), let dark = parse(pair[1]) else { return fallback }
+    return dynamic(light, dark)
+  }
+
   private static func dynamic(_ light: NSColor, _ dark: NSColor) -> Color {
     Color(nsColor: NSColor(name: nil) { appearance in
       appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
@@ -231,51 +261,51 @@ enum Palette {
     dynamic(hex(warmBlack, light), hex(warmWhite, dark))
   }
   /// Titles and values: nearly opaque so they stay crisp.
-  static let ink = neutral(0.92, 0.94)
-  static let ink2 = neutral(0.60, 0.62)
+  static var ink: Color { shared("ink", neutral(0.92, 0.94)) }
+  static var ink2: Color { shared("ink2", neutral(0.60, 0.62)) }
   /// Times, units and captions.
-  static let ink3 = neutral(0.42, 0.42)
+  static var ink3: Color { shared("ink3", neutral(0.42, 0.42)) }
   /// Outlines and tube borders.
-  static let ink4 = neutral(0.14, 0.13)
+  static var ink4: Color { shared("ink4", neutral(0.14, 0.13)) }
   /// Faint fills: hover, ring tracks.
-  static let ink5 = neutral(0.05, 0.05)
-  static let line = neutral(0.08, 0.07)
-  static let tile = dynamic(NSColor(white: 1, alpha: 0.45), hex(warmWhite, 0.05))
-  static let edge = dynamic(NSColor(white: 1, alpha: 0.8), hex(warmWhite, 0.09))
+  static var ink5: Color { shared("ink5", neutral(0.05, 0.05)) }
+  static var line: Color { shared("line", neutral(0.08, 0.07)) }
+  static var tile: Color { shared("tile", dynamic(NSColor(white: 1, alpha: 0.45), hex(warmWhite, 0.05))) }
+  static var edge: Color { shared("edge", dynamic(NSColor(white: 1, alpha: 0.8), hex(warmWhite, 0.09))) }
   /// Solid fill for the primary pill: it is the one control that must read at full contrast.
-  static let cta = dynamic(hex(0x1F1E1C), hex(warmWhite))
+  static var cta: Color { shared("cta", dynamic(hex(0x1F1E1C), hex(warmWhite))) }
   // The liquid is the ink color at partial opacity, not a flat gray: the glass well shows
   // through, so it reads as water instead of paint, and it stays softer than text so seven
   // full tubes do not read as hard black or white bars.
   /// One flat tone, no gradient: warm black (Light) or warm white (Dark) at an opacity.
-  static let liquid = neutral(0.46, 0.72)
+  static var liquid: Color { shared("liquid", neutral(0.46, 0.72)) }
   /// Neutral ring arcs (Grok, a balance) share the liquid's color.
-  static let fill = neutral(0.42, 0.80)
+  static var fill: Color { shared("fill", neutral(0.42, 0.80)) }
   /// Text on an `ink` pill.
-  static let onInk = dynamic(hex(0xFFFFFF), hex(0x0E0E0D))
+  static var onInk: Color { shared("onInk", dynamic(hex(0xFFFFFF), hex(0x0E0E0D))) }
   /// Warm tint and glows laid over the popover material.
-  static let panelTint = dynamic(hex(0xF8F7F3, 0.5), hex(0x1A1918, 0.54))
-  static let panelGlow = dynamic(hex(0xEA6B17, 0.09), hex(0xEA6B17, 0.12))
-  static let panelGlow2 = dynamic(NSColor(white: 1, alpha: 0.55), hex(0xFFF4E4, 0.04))
+  static var panelTint: Color { shared("panelTint", dynamic(hex(0xF8F7F3, 0.5), hex(0x1A1918, 0.54))) }
+  static var panelGlow: Color { shared("panelGlow", dynamic(hex(0xEA6B17, 0.09), hex(0xEA6B17, 0.12))) }
+  static var panelGlow2: Color { shared("panelGlow2", dynamic(NSColor(white: 1, alpha: 0.55), hex(0xFFF4E4, 0.04))) }
   /// Glass well behind the liquid.
-  static let wellTop = dynamic(NSColor(white: 1, alpha: 0.7), hex(warmWhite, 0.07))
-  static let wellBottom = dynamic(NSColor(white: 1, alpha: 0.5), hex(warmWhite, 0.025))
-  static let wellShade = dynamic(NSColor(white: 0, alpha: 0.08), NSColor(white: 0, alpha: 0.5))
+  static var wellTop: Color { shared("wellTop", dynamic(NSColor(white: 1, alpha: 0.7), hex(warmWhite, 0.07))) }
+  static var wellBottom: Color { shared("wellBottom", dynamic(NSColor(white: 1, alpha: 0.5), hex(warmWhite, 0.025))) }
+  static var wellShade: Color { shared("wellShade", dynamic(NSColor(white: 0, alpha: 0.08), NSColor(white: 0, alpha: 0.5))) }
   /// Red of the Cindy logo's ">" mark (the logo red, not a state color).
-  static let brand = Color(nsColor: hex(0xF70121))
+  static var brand: Color { shared("brand", Color(nsColor: hex(0xF70121))) }
   /// Quota yellow (30% or less left, `@cindy/maker-shared/quota-level`); `error` is 10% or less.
-  static let warn = Color(nsColor: hex(0xF3A115))
+  static var warn: Color { shared("warn", Color(nsColor: hex(0xF3A115))) }
   /// Shared by the menu-bar dot and its explanation inside the panel.
   private static let remoteControlValue: UInt32 = 0xFF9F0A
   static let remoteControlHex = String(format: "#%06X", remoteControlValue)
   static let remoteControl = Color(nsColor: hex(remoteControlValue))
-  static let error = Color(nsColor: hex(0xEF4444))
+  static var error: Color { shared("error", Color(nsColor: hex(0xEF4444))) }
   static let focus = Color(nsColor: hex(0x417CDD))
-  static let claude = Color(nsColor: hex(0xD97757))
-  static let claude2 = Color(nsColor: hex(0xE8A184))
-  static let claude3 = Color(nsColor: hex(0xF2C9B6))
-  static let codex = Color(nsColor: hex(0x7A9DFF))
-  static let pi = dynamic(hex(0x14B8A6), hex(0x2DD4BF))
+  static var claude: Color { shared("claude", Color(nsColor: hex(0xD97757))) }
+  static var claude2: Color { shared("claude2", Color(nsColor: hex(0xE8A184))) }
+  static var claude3: Color { shared("claude3", Color(nsColor: hex(0xF2C9B6))) }
+  static var codex: Color { shared("codex", Color(nsColor: hex(0x7A9DFF))) }
+  static var pi: Color { shared("pi", dynamic(hex(0x14B8A6), hex(0x2DD4BF))) }
 
   static func named(_ name: String?) -> Color {
     switch name {
@@ -325,7 +355,10 @@ enum Fmt {
   /// Currency symbol of the usage ledger ($ on Global, ¥ in mainland China); set by main.
   @MainActor static var symbol = "$"
 
-  @MainActor static func money(_ value: Double) -> String {
+  @MainActor static var taskSymbol = "$"
+
+  @MainActor static func money(_ value: Double, symbol override: String? = nil) -> String {
+    let symbol = override ?? Self.symbol
     if value >= 10_000 { return symbol + String(format: "%.1fk", value / 1000) }
     if value >= 100 { return symbol + grouped(value.rounded()) }
     return symbol + String(format: "%.2f", value)
@@ -620,6 +653,8 @@ final class MenubarStore: ObservableObject {
 
   func apply(_ next: MBView) {
     Fmt.symbol = next.moneySymbol
+    Fmt.taskSymbol = next.taskMoneySymbol ?? next.moneySymbol
+    PanelDesign.current = next.presentation
     view = next
     if refreshing { refreshing = false }
     if let draft = draftOrder, draft == next.settings.order || draftMatches(next) {
@@ -635,9 +670,9 @@ final class MenubarStore: ObservableObject {
   /// fits the captions, task rows and the month card in every language.
   static func narrowWidth(tubes: Int) -> CGFloat {
     switch tubes {
-    case ...2: return 320
-    case 3: return 332
-    case 4: return 350
+    case ...2: return PanelDesign.metric("widthTwo", 320)
+    case 3: return PanelDesign.metric("widthThree", 332)
+    case 4: return PanelDesign.metric("widthFour", 350)
     default: return StatusController.narrowWidth
     }
   }
@@ -758,7 +793,7 @@ final class MenubarPanel: NSPanel {
 /// Rounded, frosted backing for the panel. Uses the system popover material so the panel
 /// reads like other menu bar extras in both appearances.
 final class PanelBackgroundView: NSVisualEffectView {
-  static let radius: CGFloat = 20
+  static var radius: CGFloat { PanelDesign.metric("panelRadius", 20) }
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -785,14 +820,14 @@ final class PanelBackgroundView: NSVisualEffectView {
 
 @MainActor
 final class StatusController: NSObject, NSWindowDelegate {
-  static let narrowWidth: CGFloat = 368
+  static var narrowWidth: CGFloat { PanelDesign.metric("widthMany", 368) }
   private static let screenGap: CGFloat = 6
   private static let sideMargin: CGFloat = 12
   /// Screens with less visible height than this get the short layout.
-  private static let shortScreenHeight: CGFloat = 1000
+  private static var shortScreenHeight: CGFloat { PanelDesign.metric("shortScreenHeight", 1000) }
   /// The panel never takes more than this share of the visible height, so it reads as a
   /// menu and not a window; anything longer scrolls between the fixed header and footer.
-  private static let heightShare: CGFloat = 0.86
+  private static var heightShare: CGFloat { PanelDesign.metric("heightShare", 0.86) }
   /// Preview mode only: forces the short layout regardless of the screen.
   var forceShort = false
   /// Preview mode only: focus moving to another app must not close the panel mid-snapshot.
@@ -1381,7 +1416,7 @@ struct PressScaleStyle: ButtonStyle {
 }
 
 struct Tile<Content: View>: View {
-  var radius: CGFloat = 14
+  var radius: CGFloat = PanelDesign.metric("tileRadius", 14)
   @ViewBuilder let content: Content
 
   var body: some View {
@@ -1821,7 +1856,7 @@ struct RemoteControlStatus: View {
           .accessibilityHidden(true)
       }
       .padding(10)
-      .background(RoundedRectangle(cornerRadius: 14, style: .circular).fill(hovering ? Palette.ink5 : .clear))
+      .background(RoundedRectangle(cornerRadius: PanelDesign.metric("tileRadius", 14), style: .circular).fill(hovering ? Palette.ink5 : .clear))
       .contentShape(Rectangle())
     }
     .buttonStyle(PressScaleStyle())
@@ -2165,7 +2200,7 @@ struct Cells: View {
   var body: some View {
     HStack(alignment: .top, spacing: cells.count > 6 ? 4 : 8) {
       ForEach(Array(cells.enumerated()), id: \.element.id) { index, cell in
-        CellView(cell: cell, index: index, fillToken: store.fillToken, tubeHeight: store.short ? 82 : 104) {
+        CellView(cell: cell, index: index, fillToken: store.fillToken, tubeHeight: store.short ? PanelDesign.metric("tubeShort", 82) : PanelDesign.metric("tubeTall", 104)) {
           store.go(.detail(cell.id))
         }
       }
@@ -2455,7 +2490,7 @@ struct TaskOverview: View {
           .padding(.horizontal, 10)
       } else {
         let rows = store.taskTab == .unread ? unread : ongoing
-        let limit = store.short ? 2 : 3
+        let limit = Int(store.short ? PanelDesign.metric("rowsShort", 2) : PanelDesign.metric("rowsTall", 3))
         let shown = store.tasksExpanded ? rows : Array(rows.prefix(limit))
         VStack(spacing: 0) {
           if rows.isEmpty {
@@ -2591,7 +2626,7 @@ struct TaskTotal: View {
           .foregroundStyle(Palette.ink3)
           .monospacedDigit()
       }
-      CountUpText(text: Fmt.money(money), font: NumFont.font(19), replayToken: replayToken)
+      CountUpText(text: Fmt.money(money, symbol: Fmt.taskSymbol), font: NumFont.font(19), replayToken: replayToken)
         .foregroundStyle(Palette.ink)
     }
     .lineLimit(1)
@@ -2607,7 +2642,7 @@ struct TaskList: View {
     let sorted = tasks.sorted { $0.value > $1.value }
     let total = max(0.0001, sorted.reduce(0) { $0 + $1.value })
     // A short screen keeps two rows; the rest are one click away on the usage page.
-    let shown = store.short ? 2 : 3
+    let shown = Int(store.short ? PanelDesign.metric("rowsShort", 2) : PanelDesign.metric("rowsTall", 3))
     let top = Array(sorted.prefix(shown))
     let rest = Array(sorted.dropFirst(shown))
     VStack(spacing: 0) {
@@ -2627,7 +2662,7 @@ struct TaskList: View {
       if !rest.isEmpty {
         MoreRow(
           label: store.s("moreTasks", ["n": String(rest.count)]),
-          value: Fmt.money(rest.reduce(0) { $0 + $1.value })
+          value: Fmt.money(rest.reduce(0) { $0 + $1.value }, symbol: Fmt.taskSymbol)
         ) {
           store.usageList = .tasks
           store.go(.usage)
@@ -2659,7 +2694,7 @@ struct TaskRow: View {
               .tracking(-0.1)
               .lineLimit(1)
               .frame(maxWidth: .infinity, alignment: .leading)
-            CountUpText(text: Fmt.money(task.value), font: NumFont.font(14), replayToken: store.fillToken, delay: 0.12)
+            CountUpText(text: Fmt.money(task.value, symbol: Fmt.taskSymbol), font: NumFont.font(14), replayToken: store.fillToken, delay: 0.12)
               .fixedSize()
           }
           HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -2681,7 +2716,7 @@ struct TaskRow: View {
     .buttonStyle(.plain)
     .onHover { hovering in withAnimation(.easeOut(duration: 0.15)) { self.hovering = hovering } }
     .help(task.title)
-    .accessibilityLabel("\(task.title), \(Fmt.money(task.value))")
+    .accessibilityLabel("\(task.title), \(Fmt.money(task.value, symbol: Fmt.taskSymbol))")
   }
 
   private var shareBar: some View {
@@ -2854,9 +2889,9 @@ struct MonthCard: View {
         .fixedSize()
       }
       .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
-      .background(RoundedRectangle(cornerRadius: 14, style: .circular).fill(Palette.tile))
-      .overlay(RoundedRectangle(cornerRadius: 14, style: .circular).strokeBorder(Palette.line, lineWidth: 0.5))
-      .contentShape(RoundedRectangle(cornerRadius: 14, style: .circular))
+      .background(RoundedRectangle(cornerRadius: PanelDesign.metric("tileRadius", 14), style: .circular).fill(Palette.tile))
+      .overlay(RoundedRectangle(cornerRadius: PanelDesign.metric("tileRadius", 14), style: .circular).strokeBorder(Palette.line, lineWidth: 0.5))
+      .contentShape(RoundedRectangle(cornerRadius: PanelDesign.metric("tileRadius", 14), style: .circular))
       .offset(y: hovering ? -1 : 0)
     }
     .buttonStyle(.plain)
@@ -3096,7 +3131,7 @@ struct DetailPage: View {
       TrackedScroll(offset: $offset, contentHeight: $contentHeight) {
         VStack(alignment: .leading, spacing: 0) {
 
-        let ring: CGFloat = store.short ? 160 : 188
+        let ring: CGFloat = store.short ? PanelDesign.metric("ringShort", 160) : PanelDesign.metric("ringTall", 188)
         ZStack {
           RingsView(rings: detail.rings, fillToken: store.fillToken, size: ring)
           VStack(spacing: 3) {
@@ -3483,7 +3518,7 @@ struct UsageTaskRow: View {
           Circle().fill(Palette.harness(task.harness)).frame(width: 6, height: 6)
         }
         Text(task.title).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
-        Text(Fmt.money(task.value)).fontWeight(.semibold)
+        Text(Fmt.money(task.value, symbol: Fmt.taskSymbol)).fontWeight(.semibold)
       }
       .font(.system(size: 12))
       .monospacedDigit()
@@ -3496,8 +3531,8 @@ struct UsageTaskRow: View {
     .onHover { hovering in withAnimation(Motion.quick) { self.hovering = hovering } }
     .help(task.title)
     .accessibilityLabel(task.running
-      ? "\(task.title), \(runningLabel), \(Fmt.money(task.value))"
-      : "\(task.title), \(Fmt.money(task.value))")
+      ? "\(task.title), \(runningLabel), \(Fmt.money(task.value, symbol: Fmt.taskSymbol))"
+      : "\(task.title), \(Fmt.money(task.value, symbol: Fmt.taskSymbol))")
   }
 }
 
@@ -3607,6 +3642,15 @@ struct ManagePage: View {
           settingRow(store.s("privacy"), nil) {
             Toggle("", isOn: Binding(get: { view.settings.privacy }, set: { Bridge.emitSettings(["privacy": $0]) }))
               .toggleStyle(.switch).controlSize(.small).labelsHidden()
+          }
+          Hairline()
+          settingRow(store.s("usageCurrency"), nil) {
+            Picker("", selection: Binding(get: { view.settings.currency ?? "auto" },
+                                         set: { Bridge.emitSettings(["currency": $0]) })) {
+              Text(store.s("automaticCurrency")).tag("auto")
+              Text("USD").tag("USD")
+              Text("CNY").tag("CNY")
+            }.pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
           }
           Hairline()
           // The picker moves under its title when the two labels don't fit beside it.
@@ -3890,8 +3934,8 @@ struct StatusPreview: View {
     }
     .frame(height: 68)
     .frame(maxWidth: .infinity)
-    .clipShape(RoundedRectangle(cornerRadius: 14, style: .circular))
-    .overlay(RoundedRectangle(cornerRadius: 14, style: .circular).strokeBorder(Palette.line, lineWidth: 0.5))
+    .clipShape(RoundedRectangle(cornerRadius: PanelDesign.metric("tileRadius", 14), style: .circular))
+    .overlay(RoundedRectangle(cornerRadius: PanelDesign.metric("tileRadius", 14), style: .circular).strokeBorder(Palette.line, lineWidth: 0.5))
     .animation(Motion.quick, value: text)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(text.isEmpty ? "Cindy" : "Cindy \(text)")

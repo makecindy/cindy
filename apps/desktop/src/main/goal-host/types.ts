@@ -246,7 +246,8 @@ export interface GoalControllerDeps {
    * 处理(ChatGPT / Claude / SuperGrok,见 usage/accountUsageLimit.ts)。ChatGPT 成功轮次
    * 不做缓存配额的主动检测,下一轮由上游判断准入;其它订阅仍主动读快照,非订阅的
    * Claude Code 会话退回 Cindy 网关预算快照。
-   * 被拒路径必须传本轮限额报错 `turnError`,否则 ChatGPT 会跳过重置时刻查询;
+   * 本机 OpenCode Go 只在本轮被拒后读取官方受限窗口。被拒路径必须传本轮限额报错
+   * `turnError`,否则 ChatGPT 与 OpenCode Go 都会跳过重置时刻查询;
    * 订阅账号优先用报错原文里写明的重置时刻,再回落到实际账号窗口。
    * 返回 null = 未提供账号限额信息(主动检测不阻止续轮;被动路径仍按限额错误停止)。
    */

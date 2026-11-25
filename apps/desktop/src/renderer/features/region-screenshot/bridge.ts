@@ -96,6 +96,29 @@ export function bitmapToImageData(bitmap: RegionScreenshotBitmap, reuse?: ImageD
   return image;
 }
 
+/** Wrap top-down BGRA in a BITMAPV5HEADER with an embedded monitor ICC profile.
+ * Chromium can then composite the frozen desktop in its source color space.
+ * Blob parts avoid a pixel shuffle or PNG compression on the first-paint path. */
+export function profiledDesktopBitmap(bitmap: RegionScreenshotBitmap, icc: Uint8Array<ArrayBuffer>): Blob {
+  const fileHeader = 14;
+  const dibHeader = 124;
+  const pixelsAt = fileHeader + dibHeader;
+  const header = new DataView(new ArrayBuffer(pixelsAt));
+  header.setUint16(0, 0x4d42, true); // BM
+  header.setUint32(2, pixelsAt + bitmap.data.byteLength + icc.byteLength, true);
+  header.setUint32(10, pixelsAt, true);
+  header.setUint32(fileHeader, dibHeader, true);
+  header.setInt32(fileHeader + 4, bitmap.width, true);
+  header.setInt32(fileHeader + 8, -bitmap.height, true);
+  header.setUint16(fileHeader + 12, 1, true);
+  header.setUint16(fileHeader + 14, 32, true);
+  header.setUint32(fileHeader + 56, 0x4d424544, true); // PROFILE_EMBEDDED
+  header.setUint32(fileHeader + 108, 4, true); // LCS_GM_IMAGES
+  header.setUint32(fileHeader + 112, dibHeader + bitmap.data.byteLength, true);
+  header.setUint32(fileHeader + 116, icc.byteLength, true);
+  return new Blob([header.buffer, bitmap.data, icc], { type: 'image/bmp' });
+}
+
 /** 画布像素 (RGBA) → Electron 位图 (BGRA), 原地交换后复用同一块内存。 */
 export function imageDataToBitmap(image: ImageData): RegionScreenshotBitmap {
   const data = new Uint8Array(image.data.buffer, image.data.byteOffset, image.data.byteLength);

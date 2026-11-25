@@ -14,18 +14,36 @@ export default {
     },
   },
   cases: {
+    'rename-self': { about: 'Renaming this computer updates its topology label and openable card, while its reported hostname stays the same', storage: V2_ON },
+    traffic: { about: 'Compare the two local transports over five minutes, one hour and one rolling day', storage: V2_ON },
     'app-nodes': { about: 'Friend, unknown App and offline Friend keep their App label and platform icon; no Cindy remote actions or control-off warning', storage: V2_ON },
     'app-nodes-list': { about: 'My devices labels other Apps without outbound computer actions; legacy Cindy stays unchanged' },
     default: {
       about: 'Eight other devices: direct (one exchanging messages), relay (receiving), not linked, needs attention and two folded offline',
       storage: V2_ON,
     },
-    fleet: { about: 'Same shape as a real account: 3 direct, 7 via relay, 15 folded offline; two links carrying messages', storage: V2_ON },
+    fleet: { about: 'Same shape as a real account: 3 direct, 7 via relay, 15 folded offline; two links carrying messages; the relay\'s UDP is blocked, so it reads Agent-Net · WS', storage: V2_ON },
     many: { about: 'Twenty other devices: dense rows, split direct group, folded offline', storage: V2_ON },
+    'split-direct': {
+      about: 'Nine direct devices split in two; the relay group sits below the second direct group, so its label goes under the relay point, clear of this computer’s name',
+      storage: V2_ON,
+    },
+    'self-device-link': {
+      about: 'Agent-Net switch on, but this computer runs on Device Link this time: Device Link under its name, in its card and on every peer',
+      storage: V2_ON,
+    },
+    'narrow-relay': {
+      about: 'One relay peer at the topology width of a minimum-width Settings window; its protocol and RTT clear the relay point',
+      storage: V2_ON,
+      viewport: { width: 520, height: 900 },
+    },
+    'narrow-fleet': {
+      about: 'Seven relay peers at the minimum Settings content width; their transport and RTT stay clear of the relay caption',
+      storage: V2_ON,
+      viewport: { width: 520, height: 900 },
+    },
     empty: { about: 'Only this computer, master switch off', storage: V2_ON },
     'legacy-off': { about: 'Agent-Net off: no topology; 我的设备 and the relay route are unchanged' },
-    'model-access-off': { about: '「让我的其他电脑用本机模型」 under the master switch, off by default; turning it on' },
-    'model-access-on': { about: 'Already turned on by the user' },
     'remote-switch': {
       about: 'Prototype: switch another computer between Device Link and Agent-Net from its topology card (switching, reverted, outdated, phone, control off, already Agent-Net)',
       storage: V2_ON,
@@ -42,9 +60,48 @@ export default {
       about: 'Controller requires Agent-Net: card and batch explain why it cannot switch a peer to Device Link',
       storage: V2_ON,
     },
+    'removed-rejoin': {
+      about: 'This computer was removed from the account on the official network: its card explains it and offers Rejoin, which runs once',
+      storage: V2_ON,
+    },
   },
   async check(page, ui) {
     await page.getByRole('switch', { name: await ui.t('settings.remoteControl.v2.switch.title') }).waitFor();
+    if (ui.case === 'removed-rejoin') {
+      // Removed from the account, this computer is off the device list; its own card still shows the removal.
+      await page.getByText(await ui.t('settings.devices.rejoin.hint'), { exact: true }).waitFor({ timeout: 3000 });
+      await ui.capture('removed');
+      await page.getByRole('button', { name: await ui.t('settings.devices.rejoin.action'), exact: true }).click();
+      await page.waitForFunction(() => window.__rejoinCalls === 1);
+      return;
+    }
+    if (ui.case === 'rename-self') {
+      const self = page.locator('[data-device-id="self"]');
+      await self.getByText('Office desktop', { exact: true }).waitFor({ timeout: 3000 });
+      await self.getByRole('button', { name: await ui.t('settings.devices.rename') }).click();
+      await self.getByRole('textbox').fill('XD-PC');
+      await self.getByRole('textbox').press('Enter');
+      await self.getByText('XD-PC', { exact: true }).waitFor();
+      const protocol = await ui.t('settings.remoteControl.v2.protocol.agentNet');
+      const hub = page.getByRole('button', { name: `XD-PC · ${protocol}`, exact: true });
+      await hub.waitFor({ timeout: 3000 });
+      assert.equal(await page.getByText('XD-PC', { exact: true }).count(), 2);
+      await ui.capture('renamed');
+      await hub.click();
+      await page.getByRole('dialog').getByText('XD-PC', { exact: true }).waitFor();
+      return;
+    }
+    const traffic = page.getByRole('region', { name: await ui.t('settings.remoteControl.v2.traffic.title') });
+    if (ui.case === 'traffic') {
+      const row = traffic.getByRole('row', { name: /Agent-Net/ });
+      await row.getByRole('cell', { name: '640.0 KB', exact: true }).waitFor();
+      for (const [range, total] of [['lastHour', '10.0 MB'], ['lastDay', '128.0 MB']]) {
+        await traffic.getByRole('radio', { name: await ui.t(`settings.remoteControl.v2.traffic.${range}`) }).click();
+        await row.getByRole('cell', { name: total, exact: true }).waitFor();
+      }
+      await ui.capture('day');
+      return;
+    }
     if (ui.case === 'app-nodes' || ui.case === 'app-nodes-list') {
       const friend = `${await ui.t('settings.devices.apps.cindyFriend')} · Friend Mac`;
       if (ui.case === 'app-nodes-list') {
@@ -72,19 +129,6 @@ export default {
         await ui.capture('unknown-app-card');
         await page.keyboard.press('Escape');
         await page.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} · Travel Mac`, { exact: true }).waitFor();
-      }
-      return;
-    }
-    if (ui.case === 'model-access-off' || ui.case === 'model-access-on') {
-      const card = page.getByTestId('own-computer-model-access');
-      await card.waitFor();
-      const toggle = card.getByRole('switch');
-      assert.equal(await toggle.getAttribute('aria-checked'), ui.case === 'model-access-on' ? 'true' : 'false');
-      await ui.capture('card');
-      if (ui.case === 'model-access-off') {
-        await toggle.click();
-        await page.waitForFunction(() => document.querySelector('[data-testid="own-computer-model-access"] [role="switch"]')?.getAttribute('aria-checked') === 'true');
-        await ui.capture('turned-on');
       }
       return;
     }
@@ -168,9 +212,105 @@ export default {
     }
     if (ui.case === 'legacy-off') {
       await page.getByRole('button', { name: new RegExp(`^${await ui.t('settings.remoteControl.sections.myDevices')}`) }).waitFor();
+      assert.equal(await traffic.count(), 0);
       return;
     }
-    await page.getByRole('button', { name: 'Studio Mac', exact: true }).waitFor();
+    // 这台电脑名字下面写它实际用的连接方式;读屏名字同样带上(用户要求 2026-11-18)。
+    const agentNet = await ui.t('settings.remoteControl.v2.protocol.agentNet');
+    const deviceLink = await ui.t('settings.remoteControl.v2.protocol.deviceLink');
+    const selfProtocol = ui.case === 'self-device-link' ? deviceLink : agentNet;
+    const hub = page.getByRole('button', { name: `Studio Mac · ${selfProtocol}`, exact: true });
+    await hub.waitFor();
+    const topology = page.locator('div.select-none').filter({ has: hub });
+    // 2026-11-18 用户反馈:中转站的字写在圆点下面、朝中间排开,和这台电脑的名字、连接方式挤成一团。
+    // 中转站的字要整个落在这台电脑的字与细环之外。
+    // 同日用户要求：中转站写出协议，以及经中转的数据走 UDP 还是 WS(Agent-Net 两种都可能,Device Link 只有 WS),
+    // 往返是那条路的。三行：名字 / 协议 /「UDP · 25 ms」;读屏名字是「名字 · 协议 · 走法 · 往返」。
+    const relayName = await ui.t('settings.remoteControl.v2.relay.official');
+    const relayRtt = await ui.t('settings.remoteControl.v2.ms', { value: ui.case === 'many' ? 22 : 25 });
+    const relayTransport = await ui.t(ui.case === 'self-device-link' || ui.case === 'fleet' || ui.case === 'narrow-fleet'
+      ? 'settings.remoteControl.v2.relayTransport.websocket' : 'settings.remoteControl.v2.relayTransport.udp');
+    const relayRoute = `${selfProtocol} · ${relayTransport}`;
+    if (ui.case !== 'empty') {
+      const relayDot = page.getByRole('img', { name: `${relayName} · ${relayRoute} · ${relayRtt}`, exact: true });
+      await relayDot.waitFor();
+      const hubBox = await hub.boundingBox();
+      const hubX = hubBox.x + hubBox.width / 2;
+      const below = async (text) => {
+        for (const el of await page.getByText(text, { exact: true }).all()) {
+          const box = await el.boundingBox();
+          // 连接方式那行的文字前面有 12px 图标,文字本身比圆盘中心偏右几像素。
+          if (box && box.y >= hubBox.y + hubBox.height && Math.abs(box.x + box.width / 2 - hubX) < 12) return box;
+        }
+        throw new Error(`no "${text}" under this computer in the topology`);
+      };
+      const dotBox = await relayDot.boundingBox();
+      const overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+      const dotX = dotBox.x + dotBox.width / 2;
+      const labels = [];
+      for (const el of await page.getByText(relayName, { exact: true }).all()) {
+        const label = el.locator('..');
+        const box = await label.boundingBox();
+        if (box && Math.abs(box.x + box.width / 2 - dotX) < 80 && Math.abs(box.y + box.height / 2 - dotBox.y) < 80) {
+          labels.push({ box, lines: [
+            await el.boundingBox(),
+            await label.getByText(selfProtocol, { exact: true }).boundingBox(),
+            await label.getByText(`${relayTransport} · ${relayRtt}`, { exact: true }).boundingBox(),
+          ] });
+        }
+      }
+      assert.equal(labels.length, 1, 'relay station label');
+      const [{ box: relayLabel, lines }] = labels;
+      // The full-size cases miss overlaps at the minimum Settings content width.
+      // One relay peer exercises the point; the narrow fleet exercises the station caption beside a neighboring peer.
+      if (ui.case === 'narrow-relay' || ui.case === 'narrow-fleet') {
+        const expected = ui.case === 'narrow-relay'
+          ? [[relayTransport, 24]]
+          : [[relayTransport, 194], [await ui.t('settings.remoteControl.v2.linkTransport.webrtc'), 38], ['', 316]];
+        for (const [transport, value] of expected) {
+          const peerRtt = await ui.t('settings.remoteControl.v2.ms', { value });
+          const pill = page.getByText(new RegExp(`^${transport}[\\s·]*${peerRtt}$`));
+          await pill.waitFor();
+          const pillBox = await pill.boundingBox();
+          assert.ok(pillBox && !overlaps(pillBox, dotBox), 'peer link label overlaps the relay point');
+          for (const line of lines) {
+            assert.ok(line && !overlaps(pillBox, line), 'peer link label overlaps the relay caption');
+          }
+          assert.ok(
+            await pill.evaluate((el) => [el, ...el.children].every((part) => part.scrollWidth <= part.clientWidth)),
+            `peer link label is truncated (${transport} ${peerRtt})`,
+          );
+        }
+        return;
+      }
+      // 名字、连接方式、往返三行都在，从上到下排着、不互相压住。
+      for (const [i, line] of lines.entries()) {
+        assert.ok(line, `relay label line ${i} is missing`);
+        if (i > 0) assert.ok(line.y >= lines[i - 1].y + lines[i - 1].height - 1, 'relay label lines overlap');
+      }
+      // 细环按圆算:字的每一行离圆心最近的点都要在环外。
+      const ringY = hubBox.y + hubBox.height / 2;
+      const inRing = (a) => Math.hypot(Math.min(Math.max(hubX, a.x), a.x + a.width) - hubX, Math.min(Math.max(ringY, a.y), a.y + a.height) - ringY) < 36;
+      const blockers = [['name', await below('Studio Mac')], ['protocol', await below(selfProtocol)], ['relay point', dotBox]];
+      for (const line of lines) {
+        assert.ok(!inRing(line), 'relay label overlaps the ring');
+        for (const [what, box] of blockers) assert.ok(!overlaps(line, box), `relay label overlaps ${what}`);
+      }
+      // 只有中转站整个落在这台电脑的字下面时(split-direct),字才写到圆点下面。
+      if (ui.case === 'split-direct') assert.ok(relayLabel.y >= dotBox.y + dotBox.height, 'relay label under the relay point');
+      else assert.ok(relayLabel.y + relayLabel.height <= dotBox.y, 'relay label above the relay point');
+    }
+    const hubCardStatus = `${await ui.t('settings.devices.linkStatus.online')} · ${relayTransport} · ${await ui.t('settings.remoteControl.v2.ms', { value: 25 })}`;
+    if (ui.case === 'self-device-link') {
+      assert.equal(await topology.getByText(agentNet, { exact: true }).count(), 0);
+      await hub.click();
+      const hubCard = page.getByRole('dialog');
+      await hubCard.getByText(deviceLink, { exact: true }).waitFor();
+      await hubCard.getByText(hubCardStatus, { exact: true }).waitFor();
+      await ui.capture('hub-card');
+      await page.keyboard.press('Escape');
+      return;
+    }
     if (ui.case === 'default' || ui.case === 'fleet') {
       // 默认截图是减弱动效(在用的线是略粗的绿色实线);这里放开动效,有消息的线变成流动的绿色虚线。
       // 隔半节虚线的时间再截一帧(flow-later),两帧的空隙应整体往消息方向挪了一点。
@@ -187,29 +327,61 @@ export default {
       await page.mouse.move(0, 0);
     }
     if (ui.case === 'default') {
-      // Fractional RTT samples must render as whole milliseconds in the topology and both cards.
-      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 3 }), { exact: true }).waitFor();
-      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 97 }), { exact: true }).waitFor();
-      const relayProtocol = await ui.t('settings.remoteControl.v2.protocol.agentNet');
-      const relayRtt = await ui.t('settings.remoteControl.v2.ms', { value: 25 });
-      await page.getByText(`${relayProtocol} · ${relayRtt}`, { exact: true }).waitFor();
+      // Fractional RTT samples must render as whole milliseconds alongside each link's actual transport protocol.
+      const udp = await ui.t('settings.remoteControl.v2.relayTransport.udp');
+      const webrtc = await ui.t('settings.remoteControl.v2.linkTransport.webrtc');
+      const labels = await Promise.all([[webrtc, 3], [udp, 1], [udp, 97]].map(async ([transport, value]) => ({
+        transport,
+        latency: await ui.t('settings.remoteControl.v2.ms', { value }),
+      })));
+      for (const { transport, latency } of labels) {
+        const pill = page.getByText(`${transport} · ${latency}`, { exact: true });
+        assert.ok(await pill.evaluate((el) => el.scrollWidth <= el.clientWidth), 'single-line peer label is fully visible');
+      }
+      await page.getByText(`${relayTransport} · ${relayRtt}`, { exact: true }).waitFor();
+      // Browser layout regression: the wide and minimum-width fixtures alone miss the
+      // intermediate width where WebRTC and UDP on opposite sides used different line counts.
+      const assertStackedLabels = async () => {
+        for (const { transport, latency } of labels) {
+          const pill = page.getByText(new RegExp(`^${transport}[\\s·]*${latency}$`));
+          const protocolBox = await pill.getByText(transport, { exact: true }).boundingBox({ timeout: 1000 });
+          const latencyBox = await pill.getByText(latency, { exact: true }).boundingBox({ timeout: 1000 });
+          assert.ok(protocolBox && latencyBox && latencyBox.y >= protocolBox.y + protocolBox.height, 'all peer labels stack');
+          assert.ok(await pill.evaluate((el) => [...el.children].every((line) => line.scrollWidth <= line.clientWidth)), 'both peer label lines are fully visible');
+        }
+      };
+      await page.setViewportSize({ ...ui.viewport, width: 860 });
+      await assertStackedLabels();
+      await ui.capture('stacked-links');
+      await page.setViewportSize(ui.viewport);
+      // The maximum UI font setting scales text-11 to 19px. It also needs a shared two-line layout.
+      const previousFontSize = await page.evaluate(() => {
+        const previous = document.body.style.getPropertyValue('--text-11');
+        document.body.style.setProperty('--text-11', '19px');
+        return previous;
+      });
+      await assertStackedLabels();
+      await page.evaluate((previous) => document.body.style.setProperty('--text-11', previous), previousFontSize);
       // Mixed real routes: both protocols share the topology, independently of direct/relay grouping.
-      await page.getByText(await ui.t('settings.remoteControl.v2.protocol.deviceLink'), { exact: true }).waitFor();
-      await page.getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).first().waitFor();
+      await topology.getByText(deviceLink, { exact: true }).first().waitFor();
+      await topology.getByText(agentNet, { exact: true }).first().waitFor();
       // 拓扑卡片只展示连接信息(本机的配置在上方「我的设备」的本机卡片,其它设备不再列出)。
       await page.getByRole('button', { name: /^Work PC/ }).click();
       await page.getByRole('dialog').waitFor();
+      await page.getByRole('dialog').getByText(`· ${webrtc}`, { exact: true }).waitFor();
       await page.getByRole('dialog').getByText(`${await ui.t('settings.remoteControl.v2.ms', { value: 3 })} · ${await ui.t('settings.remoteControl.v2.popover.rttNote')}`, { exact: true }).waitFor();
       await ui.capture('popover');
       await page.keyboard.press('Escape');
       await page.getByRole('button', { name: /^Home server/ }).click();
       await page.getByRole('dialog').getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).waitFor();
+      await page.getByRole('dialog').getByText(`· ${udp}`, { exact: true }).waitFor();
       await ui.capture('agent-net-card');
       await page.keyboard.press('Escape');
       // 这台电脑的卡只展示连接信息;本机设置直接使用同页上方的卡片。
-      await page.getByRole('button', { name: 'Studio Mac', exact: true }).click();
+      await hub.click();
       const hubCard = page.getByRole('dialog');
-      await hubCard.getByText(`${await ui.t('settings.devices.linkStatus.online')} · ${await ui.t('settings.remoteControl.v2.ms', { value: 25 })}`, { exact: true }).waitFor();
+      await hubCard.getByText(agentNet, { exact: true }).waitFor();
+      await hubCard.getByText(hubCardStatus, { exact: true }).waitFor();
       await ui.capture('hub-card');
       await page.keyboard.press('Escape');
       // 要处理的设备:点开卡片,「状态」用红字写原因(没有单独的「需要处理」卡片)。
@@ -222,6 +394,32 @@ export default {
       await page.getByRole('dialog').waitFor();
       await ui.capture('recent');
       await page.keyboard.press('Escape');
+      await page.getByRole('button', { name: await ui.t('settings.remoteControl.v2.offlineShow') }).last().click();
+      const offlineDevice = page.getByRole('button', { name: /^Old laptop/ });
+      await offlineDevice.click();
+      const remove = page.getByRole('dialog').getByRole('button', { name: await ui.t('settings.devices.delete'), exact: true });
+      assert.equal(await remove.count(), 1, 'offline device card offers deletion');
+      await ui.capture('offline-device');
+      await remove.focus();
+      await page.keyboard.down('Enter');
+      await page.getByText(await ui.t('settings.devices.deleteTitle', { name: 'Old laptop' }), { exact: true }).waitFor();
+      const cancel = page.getByRole('alertdialog').getByRole('button', { name: await ui.t('commonUi.confirmDialog.cancel') });
+      await cancel.and(page.locator(':focus')).waitFor();
+      // A held Enter must not confirm deletion with the next repeated keydown.
+      await page.keyboard.down('Enter');
+      await page.keyboard.up('Enter');
+      await offlineDevice.and(page.locator(':focus')).waitFor();
+      await offlineDevice.press('Enter');
+      await remove.click();
+      await cancel.and(page.locator(':focus')).waitFor();
+      await cancel.press('Escape');
+      await offlineDevice.and(page.locator(':focus')).waitFor();
+      await offlineDevice.click();
+      await remove.click();
+      await page.getByRole('button', { name: await ui.t('settings.devices.delete'), exact: true }).click();
+      await offlineDevice.waitFor({ state: 'detached' });
+      await page.getByRole('button', { name: /^Spare PC/ }).waitFor();
+      await hub.and(page.locator(':focus')).waitFor();
     }
   },
 };

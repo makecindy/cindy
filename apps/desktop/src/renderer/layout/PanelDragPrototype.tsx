@@ -343,7 +343,7 @@ export function PanelDragPrototype({
             node.style.transform = `translate3d(${pointRef.current.x}px, ${pointRef.current.y}px, 0)`;
           }
         }}
-        className="pointer-events-none fixed left-0 top-0 z-[9999] will-change-transform"
+        className="pointer-events-none fixed left-0 top-0 z-fullscreen will-change-transform"
       >
         <div
           className="h-[110px] w-[170px] rounded-xl border animate-fade-in"

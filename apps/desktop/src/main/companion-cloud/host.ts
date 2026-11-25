@@ -136,6 +136,12 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
   return values;
 }
 
+function skillSourceValue(skill: { slug: string; source: string; enabled: boolean }): CompanionPreferenceValue {
+  return { key: `${COMPANION_SKILL_PREFIX}${skill.slug}`, value: {
+    slug: skill.slug, content: skill.source, ...(skill.enabled ? {} : { enabled: false }),
+  } };
+}
+
 async function readMemoriesAndSkills(values: CompanionPreferenceValue[], userDataDir: string, botId: string, projectMode: boolean): Promise<void> {
   // A V2 teammate's memories are its project's (the same keys, so older computers still read them).
   // A read error aborts this cycle, so the uploader never tombstones memories it failed to read.
@@ -144,9 +150,7 @@ async function readMemoriesAndSkills(values: CompanionPreferenceValue[], userDat
   }
   // Strict too: a skill that cannot be read must not look deleted (the uploader would tombstone it).
   for (const skill of await listBotSkillSourcesForBot(botId)) {
-    values.push({ key: `${COMPANION_SKILL_PREFIX}${skill.slug}`, value: {
-      slug: skill.slug, content: skill.source, ...(skill.enabled ? {} : { enabled: false }),
-    } });
+    values.push(skillSourceValue(skill));
     const files = await listBotSkillFilesForBot(botId, skill.slug, skill.enabled);
     if (files.length) values.push({ key: `${COMPANION_SKILL_FILES_PREFIX}${skill.slug}`, value: null, localFiles: files });
   }
@@ -467,7 +471,9 @@ export function createCompanionCloudHost(input: {
         `${createHash('sha256').update(`${endpoint}\n${humanActorId}`).digest('hex')}.json`),
       current, log: input.log,
     }),
-    readValues: botId => readCompanionValues(botId, input.selfDeviceId?.() ?? null),
+    readValues: async (botId, scope) => scope === 'skills'
+      ? (await listBotSkillSourcesForBot(botId)).map(skillSourceValue)
+      : readCompanionValues(botId, input.selfDeviceId?.() ?? null),
     repairProfileSources: async (botId, fields, values, fence) => {
       fence.assertCurrent();
       const userDataDir = ownerScopedUserDataPath();

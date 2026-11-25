@@ -97,7 +97,7 @@ it('exposes header controls through the existing actions and removes the empty h
 // Unit, sidebar lifecycle: no page before expansion; close/revoke releases the View.
 // Existing popover tests cannot cover a persistent sidebar section. Empty directory
 // must keep the original aside with no native IPC. Frame protocol is tested separately.
-it('loads sidebar sections only on expansion and removes them after revocation', async () => {
+it('keeps the sidebar view through collapse and releases it immediately on revocation', async () => {
   const Sections = () => {
     const entries = readPluginUiEntries('sidebar.section');
     return <aside><span>Original sidebar</span>{entries.length > 0 && <PluginUiSidebarSections entries={entries} sessionId={null} />}</aside>;
@@ -115,12 +115,20 @@ it('loads sidebar sections only on expansion and removes them after revocation',
   installed.ghosts = [ghost];
   view.rerender(<PluginUiProvider><Sections /></PluginUiProvider>);
   expect(page.mounted).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Summary · Planner' }));
+  const toggle = screen.getByRole('button', { name: 'Summary · Planner' });
+  fireEvent.click(toggle);
   expect(await screen.findByText('Local page')).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Summary · Planner' }));
-  expect(screen.queryByText('Local page')).toBeNull(); expect(page.released).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole('button', { name: 'Summary · Planner' }));
+  fireEvent.click(toggle);
+  expect(screen.getByText('Local page')).toBeTruthy();
+  expect(page.released).not.toHaveBeenCalled();
+  fireEvent.click(toggle);
+  expect(page.mounted).toHaveBeenCalledTimes(1);
+  fireEvent.click(toggle);
+  await waitFor(() => expect(page.released).toHaveBeenCalledTimes(1));
+  expect(screen.queryByText('Local page')).toBeNull();
+  fireEvent.click(toggle);
   expect(await screen.findByText('Local page')).toBeTruthy();
+  fireEvent.click(toggle);
   installed.ghosts = [{ ...ghost, approval: { state: 'invalid' as const } }];
   view.rerender(<PluginUiProvider><Sections /></PluginUiProvider>);
   expect(screen.queryByRole('button', { name: 'Summary · Planner' })).toBeNull();

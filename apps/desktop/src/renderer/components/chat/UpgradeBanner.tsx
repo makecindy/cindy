@@ -256,9 +256,9 @@ export function UpgradeBanner({ hostId, agent, sessionId, className, style }: Up
       style={style}
     >
       {upgrading ? (
-        <Spinner size={14} className="mt-[2px] text-[var(--upgrade-banner-fg)]" />
+        <Spinner size={14} className="mt-0.5 text-[var(--upgrade-banner-fg)]" />
       ) : (
-        <ArrowUpCircle size={14} className="shrink-0 mt-[2px] text-[var(--upgrade-banner-fg)]" />
+        <ArrowUpCircle size={14} className="shrink-0 mt-0.5 text-[var(--upgrade-banner-fg)]" />
       )}
       <span className="text-xs text-[var(--upgrade-banner-fg)] flex-1 break-all">
         {upgrading

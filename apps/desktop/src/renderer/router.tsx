@@ -87,113 +87,117 @@ export const router = createHashRouter([
                 children: [
                   { index: true, element: <MainEntryRedirect /> },
                   {
-                    path: 'cc-agent',
                     element: <CCAgentFeatureLayout />,
                     children: [
-                      { index: true, element: <CCAgentIndexRedirect /> },
-                      // 「在新窗口打开」副窗的启动网关(静态段,必须在 :sessionId 之前匹配)。
-                      // 读 ?bootSession=<id> → resolveSessionRoute → navigate(replace),
-                      // 让 Orca lead/worker 副窗首屏即落到分屏路由,见 SecondaryWindowBootGate。
-                      { path: 'boot', element: <SecondaryWindowBootGate /> },
-                      // delayed-create: /cc-agent/new 是 transient draft 路由(无后端 session),
-                      // 必须在 :sessionId 之前匹配,否则会被当作 sessionId='new' 进入 SessionView。
-                      { path: 'new', element: <NewMakerDraftRoute /> },
-                      // 兼容旧 deep link:新建入口已收敛到同一个可切换 workspace 的创建页。
-                      { path: 'new-dialogue', element: <Navigate to="/cc-agent/new" replace /> },
-                      // Scheduled — 调度任务列表（与 new 同一层级，必须在 :sessionId 之前）
                       {
-                        path: 'scheduled',
-                        lazy: () => import('@/features/scheduler').then(({ SchedulerPage }) => ({ Component: SchedulerPage })),
+                        path: 'cc-agent',
+                        children: [
+                          { index: true, element: <CCAgentIndexRedirect /> },
+                          // 「在新窗口打开」副窗的启动网关(静态段,必须在 :sessionId 之前匹配)。
+                          // 读 ?bootSession=<id> → resolveSessionRoute → navigate(replace),
+                          // 让 Orca lead/worker 副窗首屏即落到分屏路由,见 SecondaryWindowBootGate。
+                          { path: 'boot', element: <SecondaryWindowBootGate /> },
+                          // delayed-create: /cc-agent/new 是 transient draft 路由(无后端 session),
+                          // 必须在 :sessionId 之前匹配,否则会被当作 sessionId='new' 进入 SessionView。
+                          { path: 'new', element: <NewMakerDraftRoute /> },
+                          // 兼容旧 deep link:新建入口已收敛到同一个可切换 workspace 的创建页。
+                          { path: 'new-dialogue', element: <Navigate to="/cc-agent/new" replace /> },
+                          // Scheduled — 调度任务列表（与 new 同一层级，必须在 :sessionId 之前）
+                          {
+                            path: 'scheduled',
+                            lazy: () => import('@/features/scheduler').then(({ SchedulerPage }) => ({ Component: SchedulerPage })),
+                            HydrateFallback: EmptyRouteFallback,
+                          },
+                          // Workdir File Browser — 文件树视图(vscode-style),sidebar 自动 swap。
+                          // 静态段 'files' 必须在 :sessionId 之前匹配。
+                          {
+                            path: 'files/:sessionId',
+                            lazy: () =>
+                              import('@/features/cc-agent/workdir-browse/WorkdirBrowseRoute').then(({ WorkdirBrowseRoute }) => ({
+                                Component: WorkdirBrowseRoute,
+                              })),
+                            HydrateFallback: EmptyRouteFallback,
+                          },
+                          { path: 'orca/new', element: <Navigate to="/cc-agent/new" replace /> },
+                          { path: 'orca/:sessionId', element: <OrcaWorkflowRoute /> },
+                          { path: ':sessionId', element: <CCAgentSessionView /> },
+                        ],
+                      },
+                      {
+                        path: 'bots',
+                        lazy: () => import('@/features/bots/BotsFeatureLayout').then(({ BotsFeatureLayout }) => ({ Component: BotsFeatureLayout })),
                         HydrateFallback: EmptyRouteFallback,
-                      },
-                      // Workdir File Browser — 文件树视图(vscode-style),sidebar 自动 swap。
-                      // 静态段 'files' 必须在 :sessionId 之前匹配。
-                      {
-                        path: 'files/:sessionId',
-                        lazy: () =>
-                          import('@/features/cc-agent/workdir-browse/WorkdirBrowseRoute').then(({ WorkdirBrowseRoute }) => ({
-                            Component: WorkdirBrowseRoute,
-                          })),
-                        HydrateFallback: EmptyRouteFallback,
-                      },
-                      { path: 'orca/new', element: <Navigate to="/cc-agent/new" replace /> },
-                      { path: 'orca/:sessionId', element: <OrcaWorkflowRoute /> },
-                      { path: ':sessionId', element: <CCAgentSessionView /> },
-                    ],
-                  },
-                  {
-                    path: 'bots',
-                    lazy: () => import('@/features/bots/BotsFeatureLayout').then(({ BotsFeatureLayout }) => ({ Component: BotsFeatureLayout })),
-                    HydrateFallback: EmptyRouteFallback,
-                    children: [
-                      {
-                        index: true,
-                        lazy: () => import('@/features/bots/BotsHomeView').then(({ BotsHomeView }) => ({ Component: BotsHomeView })),
-                      },
-                      {
-                        path: 'list',
-                        lazy: () => import('@/features/bots/BotsListView').then(({ BotsListView }) => ({ Component: BotsListView })),
-                      },
-                      // 阵容是主区的一页,不是浮在对话上的模态。静态段排在 :botId
-                      // 之前(React Router 也按静态优先定级),所以 /bots/roster 不会
-                      // 被当成一个叫 "roster" 的伙伴。
-                      {
-                        path: 'roster',
-                        lazy: () => import('@/features/bots/BotRosterView').then(({ BotRosterView }) => ({ Component: BotRosterView })),
-                      },
-                      {
-                        path: 'market/:packageId?',
-                        lazy: () => import('@/features/bots/BotMarketDialog').then(({ BotMarketRoute }) => ({ Component: BotMarketRoute })),
-                      },
-                      // 伙伴群聊是独立对象(不是某位伙伴的任务),静态段 'groups' 同样排在
-                      // :botId 之前,/bots/groups/<id> 不会被当成一个叫 "groups" 的伙伴。
-                      {
-                        path: 'groups/:groupId',
-                        lazy: () => import('@/features/bots/BotGroupChatView').then(({ BotGroupChatView }) => ({ Component: BotGroupChatView })),
-                      },
-                      {
-                        path: 'remote/:deviceId/:botId',
-                        lazy: () =>
-                          import('@/features/bots/RemoteBotSessionView').then(({ RemoteBotSessionView }) => ({
-                            Component: RemoteBotSessionView,
-                          })),
-                      },
-                      {
-                        path: 'remote/:deviceId/:botId/session/:sessionId',
-                        lazy: () =>
-                          import('@/features/bots/RemoteBotSessionView').then(({ RemoteBotSessionView }) => ({
-                            Component: RemoteBotSessionView,
-                          })),
-                      },
-                      {
-                        path: 'remote/:deviceId/:botId/history/:sessionId',
-                        lazy: () =>
-                          import('@/features/bots/BotHistorySessionView').then(({ BotHistorySessionView }) => ({
-                            Component: BotHistorySessionView,
-                          })),
-                      },
-                      // 伙伴私聊只从双方时间线里的消息入口打开，不出现在左侧伙伴列表。
-                      {
-                        path: ':botId/direct/:threadId',
-                        lazy: () =>
-                          import('@/features/bots/BotDirectMessageView').then(({ BotDirectMessageView }) => ({
-                            Component: BotDirectMessageView,
-                          })),
-                      },
-                      {
-                        path: ':botId',
-                        lazy: () => import('@/features/bots/BotsHomeView').then(({ BotsHomeView }) => ({ Component: BotsHomeView })),
-                      },
-                      {
-                        path: ':botId/session/:sessionId',
-                        lazy: () => import('@/features/bots/BotSessionView').then(({ BotSessionView }) => ({ Component: BotSessionView })),
-                      },
-                      {
-                        path: ':botId/history/:sessionId',
-                        lazy: () =>
-                          import('@/features/bots/BotHistorySessionView').then(({ BotHistorySessionView }) => ({
-                            Component: BotHistorySessionView,
-                          })),
+                        children: [
+                          {
+                            index: true,
+                            lazy: () => import('@/features/bots/BotsHomeView').then(({ BotsHomeView }) => ({ Component: BotsHomeView })),
+                          },
+                          {
+                            path: 'list',
+                            lazy: () => import('@/features/bots/BotsListView').then(({ BotsListView }) => ({ Component: BotsListView })),
+                          },
+                          // 阵容是主区的一页,不是浮在对话上的模态。静态段排在 :botId
+                          // 之前(React Router 也按静态优先定级),所以 /bots/roster 不会
+                          // 被当成一个叫 "roster" 的伙伴。
+                          {
+                            path: 'roster',
+                            lazy: () => import('@/features/bots/BotRosterView').then(({ BotRosterView }) => ({ Component: BotRosterView })),
+                          },
+                          {
+                            path: 'market/:packageId?',
+                            lazy: () => import('@/features/bots/BotMarketDialog').then(({ BotMarketRoute }) => ({ Component: BotMarketRoute })),
+                          },
+                          // 伙伴群聊是独立对象(不是某位伙伴的任务),静态段 'groups' 同样排在
+                          // :botId 之前,/bots/groups/<id> 不会被当成一个叫 "groups" 的伙伴。
+                          {
+                            path: 'groups/:groupId',
+                            lazy: () => import('@/features/bots/BotGroupChatView').then(({ BotGroupChatView }) => ({ Component: BotGroupChatView })),
+                          },
+                          {
+                            path: 'remote/:deviceId/:botId',
+                            lazy: () =>
+                              import('@/features/bots/RemoteBotSessionView').then(({ RemoteBotSessionView }) => ({
+                                Component: RemoteBotSessionView,
+                              })),
+                          },
+                          {
+                            path: 'remote/:deviceId/:botId/session/:sessionId',
+                            lazy: () =>
+                              import('@/features/bots/RemoteBotSessionView').then(({ RemoteBotSessionView }) => ({
+                                Component: RemoteBotSessionView,
+                              })),
+                          },
+                          {
+                            path: 'remote/:deviceId/:botId/history/:sessionId',
+                            lazy: () =>
+                              import('@/features/bots/BotHistorySessionView').then(({ BotHistorySessionView }) => ({
+                                Component: BotHistorySessionView,
+                              })),
+                          },
+                          // 伙伴私聊只从双方时间线里的消息入口打开，不出现在左侧伙伴列表。
+                          {
+                            path: ':botId/direct/:threadId',
+                            lazy: () =>
+                              import('@/features/bots/BotDirectMessageView').then(({ BotDirectMessageView }) => ({
+                                Component: BotDirectMessageView,
+                              })),
+                          },
+                          {
+                            path: ':botId',
+                            lazy: () => import('@/features/bots/BotsHomeView').then(({ BotsHomeView }) => ({ Component: BotsHomeView })),
+                          },
+                          {
+                            path: ':botId/session/:sessionId',
+                            lazy: () => import('@/features/bots/BotSessionView').then(({ BotSessionView }) => ({ Component: BotSessionView })),
+                          },
+                          {
+                            path: ':botId/history/:sessionId',
+                            lazy: () =>
+                              import('@/features/bots/BotHistorySessionView').then(({ BotHistorySessionView }) => ({
+                                Component: BotHistorySessionView,
+                              })),
+                          },
+                        ],
                       },
                     ],
                   },
@@ -265,6 +269,13 @@ export const router = createHashRouter([
                     ],
                   },
                   { path: 'settings', element: <SettingsView /> },
+                  {
+                    path: 'cloud-settings',
+                    lazy: () =>
+                      import('@/features/cloud-settings/CloudSettingsRoute').then(({ CloudSettingsRoute }) => ({
+                        Component: CloudSettingsRoute,
+                      })),
+                  },
                   {
                     path: 'plugins',
                     lazy: () => import('@/features/plugin/GhostPluginPage').then(({ GhostPluginPage }) => ({ Component: GhostPluginPage })),

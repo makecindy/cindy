@@ -39,6 +39,7 @@ export const EXT_TO_LANG: Record<string, string> = {
   rb: 'ruby',
   go: 'go',
   rs: 'rust',
+  sol: 'solidity',
   java: 'java',
   kt: 'kotlin',
   swift: 'swift',

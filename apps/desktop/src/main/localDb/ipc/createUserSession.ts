@@ -1,29 +1,40 @@
 /** Ordinary task creation, shared by local IPC and authenticated Host clients.
  * Entry adapters validate caller identity; this service owns identical task data,
  * draft lifecycle, directory grants and model admission on every launcher. */
+import { isAbsolute } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { getCurrentDbClientSnapshot } from '../client/current.js';
 import { sessions } from '../schema.js';
+import { projectForNewTask } from '../../mcp-integrations/projectManagementCore.js';
 import { openSession } from '../sessionOpening.js';
 import { sessionCreateToRow, sessionToCamel, normalizeRemoteHostId } from '../mapper.js';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace.js';
 import { resolveBusinessSessionId } from '../../sessionIds.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
 import { isRetainableProjectSession } from '../../../shared/sessionSource.js';
-import { throwIpcError } from '../../utils/ipcValidate.js';
+import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
+import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import { consumeWritableDirectoryPickerGrants, WritableDirectoryPickerGrantError } from '../../maker-ipc/writableDirectoryPickerGrant.js';
 import { forgetProvisionalSession, isProvisionalSession, markProvisionalSession } from '../provisionalSessions.js';
-import { upsertRecentWorkdir } from './recentWorkdirsCore.js';
+import { touchRecentWorkdir } from './recentWorkdirsCore.js';
 import { managedWorktreeRoot } from '../../worktree/managedResourcePath.js';
 import { withWorktreeResourceLocks } from '../../worktree/resourceLock.js';
 import { createLogger } from '../../logger.js';
+import { withSessionRouteLock } from '../sessionRouteLock.js';
+import type { CreateWorktreeReq, CreateWorktreeResp } from '../../worktree/types.js';
 
 const log = createLogger('local-db-sessions');
 export interface UserSessionCreatePorts {
   senderId: number;
   userDataDir: string;
   notifyPluginSessionCreated(input: { sessionId: string; workdir?: string }): void;
+  localPluginWorktrees?: {
+    create(request: CreateWorktreeReq, assertCurrent: () => void): Promise<CreateWorktreeResp>;
+    discard(sessionId: string, path: string, canRemove: () => Promise<boolean>): Promise<unknown>;
+  };
 }
 
 export async function withWorktreeMutation<T>(resources: string[], task: () => Promise<T>): Promise<T> {
@@ -52,7 +63,7 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     const id = resolveBusinessSessionId(bodyObj.id);
     // 未发送任务（新建页开始输入时先建出来，见 provisionalSessions.ts）：只给本机普通任务，
     // 延后的创建副作用在第一次发送转正时补做。
-    const { provisional: provisionalFlag, ...bodyWithoutProvisional } = bodyObj;
+    const { provisional: provisionalFlag, localPluginWorktree, ...sessionBody } = bodyObj;
     const provisional = provisionalFlag === true;
     if (provisional && (
       bodyObj.remoteHostId || bodyObj.agentDeviceId || bodyObj.orcaRole || bodyObj.source !== undefined
@@ -60,11 +71,29 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     )) {
       throwIpcError('INVALID_PARAMS', 'only ordinary local tasks can be opened before the first send');
     }
-    const createBody = bodyWithoutProvisional as Parameters<typeof sessionCreateToRow>[1];
+    const createBody = sessionBody as Parameters<typeof sessionCreateToRow>[1];
     // M16: agentKind 白名单校验（防止 renderer 传非法值）
-    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi']);
+    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi', 'acp']);
     if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
+    }
+    if (bodyObj.agentKind === 'acp') {
+      // Plugin engine tasks (docs/plans/acp-plugin-bridge.md): chosen at the computer the task is
+      // on, through the plugin harness id. The engine is this computer's, or one that another
+      // computer of the same account opened for remote use; never an SSH host or a shared provider.
+      if (isDeviceLinkInvoke()) throwIpcError('INVALID_PARAMS', 'plugin engine tasks can only be created on this computer');
+      if (!pluginEngineKeyFromProviderId(typeof bodyObj.providerId === 'string' ? bodyObj.providerId : null)) {
+        throwIpcError('INVALID_PARAMS', 'a plugin engine task needs providerId acp-plugin:<plugin>:<harness>');
+      }
+      if (bodyObj.remoteHostId) {
+        throwIpcError('INVALID_PARAMS', 'plugin engine tasks do not run in SSH workspaces');
+      }
+      if (bodyObj.agentDeviceId !== undefined && bodyObj.agentDeviceId !== null
+        && (typeof bodyObj.agentDeviceId !== 'string'
+          || isSharedTaskPeer(bodyObj.agentDeviceId)
+          || Boolean(parseProviderSharePeer(bodyObj.agentDeviceId)))) {
+        throwIpcError('INVALID_PARAMS', 'invalid agentDeviceId for plugin engine task');
+      }
     }
     if (
       bodyObj.title !== undefined &&
@@ -95,22 +124,44 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     ) {
       throwIpcError('INVALID_PARAMS', 'agentDeviceId must be a device id');
     }
-    const workspaceKind =
+    const requestedKind =
       (createBody?.workspaceKind as 'project' | 'dialogue' | undefined) ?? 'project';
     const explicitWorkingDir =
       normalizeWorkingDirForStorage(
         typeof createBody?.workingDir === 'string' ? createBody.workingDir : null,
       ) ?? undefined;
+    const worktrees = ports.localPluginWorktrees;
+    let worktreeRequest: CreateWorktreeReq | undefined;
+    if (localPluginWorktree !== undefined) {
+      if (!worktrees || bodyObj.agentKind !== 'acp' || requestedKind !== 'project' ||
+        provisional || bodyObj.source !== undefined || bodyObj.orcaRole || bodyObj.agentDeviceId ||
+        !explicitWorkingDir || !isAbsolute(explicitWorkingDir) || explicitWorkingDir.includes('\0') ||
+        explicitWorkingDir.length > 4096) {
+        throwIpcError('INVALID_PARAMS', 'Worktree creation requires an ordinary local plugin engine project task');
+      }
+      const request = requireObject(localPluginWorktree, 'localPluginWorktree');
+      const name = requireString(request.name, 'worktree.name');
+      const sourceBranch = requireString(request.sourceBranch, 'worktree.sourceBranch');
+      if (name.length > 20 || sourceBranch.length > 1024 || sourceBranch.startsWith('-') || sourceBranch.includes('\0')) {
+        throwIpcError('INVALID_PARAMS', 'Invalid worktree name or source branch');
+      }
+      worktreeRequest = { sessionId: id, baseRepo: explicitWorkingDir, name, sourceBranch };
+    }
     assertRendererSessionSourceAllowed({
       source: bodyObj.source,
       workingDir: explicitWorkingDir,
       remoteHostId: createBody?.remoteHostId,
       userData: ports.userDataDir,
     });
+    const membership = requestedKind === 'project' && !createBody?.remoteHostId
+      ? await projectForNewTask(explicitWorkingDir, createBody?.projectDir)
+      : requestedKind === 'dialogue' ? { projectDir: null, workspaceKind: 'dialogue' as const } : undefined;
+    assertOwner();
+    const workspaceKind = membership?.workspaceKind ?? requestedKind;
     const workingDir =
       workspaceKind === 'dialogue' && !explicitWorkingDir
         ? ensureDialogueWorkspaceDir(id, now)
-        : explicitWorkingDir;
+        : explicitWorkingDir ?? membership?.projectDir ?? undefined;
     if (workspaceKind === 'dialogue' && !explicitWorkingDir) {
       log.info('[localDb] allocated dialogue workspace', { sessionId: id, workingDir });
     }
@@ -155,9 +206,40 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     let row: typeof sessions.$inferSelect | undefined;
     try {
       ({ row: insertRow } = await openSession({ id, now, assertCurrent: assertOwner,
-        body: { ...createBody, workspaceKind, workingDir },
-        ...(provisional ? { deferGitInit: true } : {}),
+        body: { ...createBody, ...membership, workspaceKind, workingDir },
+        ...(provisional || worktreeRequest ? { deferGitInit: true } : {}),
       }, async (prepared, assertCurrent) => {
+        if (worktreeRequest && worktrees) {
+          // Do not publish a base-repo task while checkout is still in flight.
+          // Model admission is already complete, before the first Git write.
+          const request = worktreeRequest;
+          await withSessionRouteLock(id, async () => {
+            const isUnclaimed = async () => {
+              assertCurrent();
+              const [existing] = await db.select({ id: sessions.id }).from(sessions)
+                .where(eq(sessions.id, id)).limit(1);
+              assertCurrent();
+              return !existing;
+            };
+            if (!(await isUnclaimed())) throwIpcError('PRECONDITION_FAILED', 'The task already exists');
+            const result = await worktrees.create(request, assertCurrent);
+            if (!result.ok) throwIpcError('PRECONDITION_FAILED', 'Could not create the task worktree');
+            const worktreePath = normalizeWorkingDirForStorage(result.meta.path)!;
+            try {
+              await withWorktreeMutation([worktreePath], async () => {
+                assertCurrent();
+                await db.insert(sessions).values({ ...prepared, workingDir: worktreePath, worktreePath });
+              });
+            } catch (error) {
+              // A committed row or an unavailable owner/DB is never safe to discard.
+              await worktrees.discard(id, result.meta.path, isUnclaimed).catch(() => {
+                log.warn('Could not discard an unclaimed plugin task worktree', { sessionId: id });
+              });
+              throw error;
+            }
+          });
+          return;
+        }
         const resource = !prepared.remoteHostId && prepared.workingDir
           ? managedWorktreeRoot(prepared.workingDir) : null;
         const insert = async () => { assertCurrent(); await db.insert(sessions).values(prepared); };
@@ -189,7 +271,7 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
       !insertRow.remoteHostId &&
       isRetainableProjectSession(insertRow)
     ) {
-      void upsertRecentWorkdir(insertRow.projectDir ?? insertRow.workingDir, now);
+      void touchRecentWorkdir(insertRow.projectDir ?? insertRow.workingDir, now);
     }
     // 订阅槽①旁路通知(fire-and-forget,动态 import 防环):意识旁听会话创建。
     // 资格过滤(用户主会话)与订阅者快路径都在 cindy-brain 内部,这里零判断。

@@ -2,17 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { GhostManifest } from '../../../shared/ghost.js';
+import { ghostInstallApprovalToken, type ConfirmedGhostUninstall, type GhostManifest } from '../../../shared/ghost.js';
 import { GhostConnectionManager } from '../ghostConnections.js';
 import { GhostSavedCredentialManager } from '../ghostSavedCredentials.js';
 import { handleGhostSecretsRequest } from '../runtime/ghostSecretsEndpoint.js';
 import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../../shared/pluginAccountReuse.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { withGhostOauthMutationLock } from '../ghostOauthMutationLock.js';
+import { withGhostInstallLock } from '../ghostInstallLock.js';
+import { throwIpcError } from '../../utils/ipcValidate.js';
 
 const createReuseLifecycle = createGhostProductionCallbacks<{
   relocateGhostUserData(from: string, to: string): Promise<void>;
-  uninstallGhostAndCleanup(id: string): Promise<void>;
+  uninstallGhostAndCleanup(id: string, options?: { confirmed: ConfirmedGhostUninstall }): Promise<void>;
   relocateGhostAccountReuseReferences(from: string, to: string | null): Promise<void>;
 }>({ functions: ['relocateGhostUserData', 'uninstallGhostAndCleanup', 'relocateGhostAccountReuseReferences'] });
 
@@ -82,6 +84,38 @@ function lifecycle(h: ReturnType<typeof setup>) {
   });
   return entry;
 }
+
+// Unit: exercise the production uninstall wrapper with a real serialized install lock.
+it('keeps the replacement when the confirmed plugin changes while uninstall waits for the install lock', async () => {
+  const ghostId = 'confirmed-uninstall-fixture';
+  let ghost = { manifest: { version: '1.0.0' }, approval: { state: 'approved' as const, revision: 'first' } };
+  const remove = vi.fn(async () => {});
+  const entry = createReuseLifecycle({
+    parsePluginInstanceId: () => ({ ghostId }),
+    withGhostInstallLock,
+    findGhostForInstanceId: () => ghost,
+    assertConfirmedGhostUninstallOwner: () => {},
+    installedGhostPhysicalRelId: () => ghostId,
+    ghostInstallApprovalToken,
+    throwIpcError,
+    uninstallGhostAndCleanupLocked: remove,
+    beginGhostMutation: () => () => {},
+  });
+  const confirmed = {
+    owner: { dataOwnerId: 'owner', ownerGeneration: 1 },
+    physicalId: ghostId,
+    approval: ghostInstallApprovalToken(ghost.approval),
+    version: ghost.manifest.version,
+  };
+  const replace = withGhostInstallLock(ghostId, async () => {
+    ghost = { ...ghost, approval: { state: 'approved', revision: 'replacement' } };
+  });
+  const uninstall = entry.uninstallGhostAndCleanup(ghostId, { confirmed });
+  const rejected = expect(uninstall).rejects.toThrow('The confirmed plugin installation changed');
+  await replace;
+  await rejected;
+  expect(remove).not.toHaveBeenCalled();
+});
 
 describe('saved credential references', () => {
   // #10130 / 4560156890: resolve-only removal coverage missed reinstalling

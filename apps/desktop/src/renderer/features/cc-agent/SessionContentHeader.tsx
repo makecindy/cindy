@@ -1,4 +1,4 @@
-import { SessionProjectSettingsButton } from './sidebar/SessionProjectSettingsButton';
+import { SessionProjectMenuButton } from './sidebar/SessionProjectMenuButton';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
@@ -40,12 +40,14 @@ import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
 import {
   prefetchDirtyWorktreeForRemoval,
+  isDirtyWorktree,
   resolveWorktreeRemovalPreflight,
 } from '@/lib/worktreeRemovalWarning';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useConfirmTaskArchive } from './hooks/useConfirmTaskArchive';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { WINDOW_NO_DRAG_STYLE, useManualWindowDrag } from '@/components/layout/windowDrag';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
@@ -67,10 +69,7 @@ import { OrcaRemoteLeadBadge } from './OrcaRemoteLeadBadge';
 import { BotTaskOwnerChip } from '@/features/bots/BotTaskOwnerChip';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
-import {
-  archiveConfirmDescription,
-  loadActiveBoundScheduleNames,
-} from '@/features/scheduler/lib/archiveScheduleWarning';
+import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
 import { ScheduleBindingBadge } from './sidebar/ScheduleBindingBadge';
 import { RemoteProjectIcon } from './sidebar/RemoteProjectIcon';
 import { MENU_ITEM_CLASS } from './sidebar/menuStyles';
@@ -158,6 +157,7 @@ export function SessionContentHeader({
   // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）：回收后仍留历史路径、
   // 或存量半移动行的会话，不能靠 cwd 猜归属。
   const { confirm: confirmDialog } = useConfirmDialog();
+  const confirmTaskArchive = useConfirmTaskArchive();
   const { runSessionAction, unarchiveSession } = useSessionLifecycleActions();
 
   const isPinned = session.pinnedAt != null;
@@ -476,25 +476,13 @@ export function SessionContentHeader({
         // 免确认的判据是「**确认**干净」:worktree 脏、或预检失败拿不到结论('unknown')
         // 都要确认 —— 归档会顺带回收 worktree,不能静默带走改动(greptile review)。
         // 'unknown' 只弹普通归档确认,不摆 dirty 警告文案(那会谎称有未提交改动)。
-        if (preflight !== 'clean' || scheduleNames.length > 0) {
-          const ok = await confirmDialog({
-            title: t('ccAgent.sidebar.confirmArchive.title'),
-            description: archiveConfirmDescription(t, {
-              dirtyWorktree: preflight === 'dirty',
-              scheduleNames,
-            }),
-            confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
-            cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
-          });
-          if (!ok) {
-            return false;
-          }
-        }
-        return true;
+        return preflight === 'clean' && scheduleNames.length === 0
+          ? true
+          : confirmTaskArchive(preflight, scheduleNames);
       },
     });
   }, [
-    confirmDialog,
+    confirmTaskArchive,
     remoteWritesBlocked,
     runSessionAction,
     runningSessionIds,
@@ -520,7 +508,7 @@ export function SessionContentHeader({
     // P1 预检:worktree 有未提交更改时确认文案追加警告。删除始终弹确认框,所以
     // 用不到三态 —— 预检失败时少一行警告文案,不会变成静默放行。
     const dirtyWorktree =
-      (await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId)) === 'dirty';
+      isDirtyWorktree(await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId));
     const ok = await confirmDialog({
       title: t('ccAgent.sidebar.confirmDelete.title'),
       description:
@@ -528,6 +516,7 @@ export function SessionContentHeader({
         (dirtyWorktree ? ' ' + t('ccAgent.sidebar.confirmDelete.dirtyWorktreeWarning') : ''),
       confirmText: t('ccAgent.sidebar.confirmDelete.confirm'),
       cancelText: t('ccAgent.sidebar.confirmDelete.cancel'),
+      confirmVariant: 'destructive',
     });
     if (!ok) return;
     const visibleSessionIds = getVisibleSidebarSessionIds();
@@ -545,6 +534,7 @@ export function SessionContentHeader({
     await runSessionAction(session.id, 'delete', {
       activeSessionId: session.id,
       deleteRedirectRoute,
+      deleteTarget: session.sideChatPromoted ? 'task' : session.source === 'side-chat' ? 'side-chat' : undefined,
     });
   }, [
     confirmDialog,
@@ -552,6 +542,8 @@ export function SessionContentHeader({
     routeSessionById,
     runSessionAction,
     session.id,
+    session.sideChatPromoted,
+    session.source,
     showRemoteWriteBlockedToast,
     t,
   ]);
@@ -560,7 +552,7 @@ export function SessionContentHeader({
     <div className="flex min-w-0 items-center gap-0.5 pl-1">
       <PluginUiSlot position="session.header" sessionId={session.id} disabled={!!session.remoteHostId || !!session.deviceLinkDeviceId} />
       {!session.remoteHostId && !session.deviceLinkDeviceId && <PluginUiMenu sessionId={session.id} />}
-      {session.source === 'side-chat' && session.parentSessionId && (
+      {!session.sideChatPromoted && session.source === 'side-chat' && session.parentSessionId && (
         <Tip text={t('chat.sideChat.returnMain')}>
           <Button variant="secondary" tone="quiet" size="sm" className="w-7 p-0" style={WINDOW_NO_DRAG_STYLE}
             aria-label={t('chat.sideChat.returnMain')}
@@ -607,7 +599,7 @@ export function SessionContentHeader({
           <MessagesSquare size={16} strokeWidth={1.75} />
         </span>
       ) : !sharedGuest && sessionProjectDirectory(session) ? (
-        <SessionProjectSettingsButton
+        <SessionProjectMenuButton
           key={`${session.deviceLinkDeviceId ?? ''}:${session.remoteHostId ?? ''}:${sessionProjectDirectory(session)}`}
           session={session} disabled={remoteWritesBlocked}
         />

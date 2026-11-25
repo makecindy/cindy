@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { prepareCodexDesktopInputRules } from './codexDesktopInputRules.js';
 import type { AgentDeps } from '@cindy/maker-core';
 import type { ProviderView, Catalog } from '@cindy/model-providers';
 import type { createCodexProxyHost } from './codex-proxy-host.js';
@@ -12,6 +13,7 @@ import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { prepareCodexBrowserCompanion, resolveCodexBrowserCompanionSpawnConfig } from './codex-browser-companion.js';
 import { getActiveCatalog, getActiveCatalogRevision } from './active-catalog.js';
 import { prepareCodexCustomContextCatalog, prepareCodexGuestModelCatalog } from './codex-custom-context-catalog.js';
+import { needsOpenAiApiCodexFastDeclaration } from './codex-api-model-capabilities.js';
 import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { resolveModelDefaultContextWindow } from './catalog-to-descriptors.js';
 
@@ -64,7 +66,15 @@ export function createCodexSpawnConfig(ports: {
           (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
           throw error;
         }
-        const effectiveCodexHome = ctx.codexHome ?? getCodexHome();
+        const appHome = getCodexHome();
+        const effectiveCodexHome = ctx.codexHome ?? appHome;
+        if (!isControlPlane && !ctx.nativeStorageOnly && !guestProviderId) {
+          try {
+            await prepareCodexDesktopInputRules(ctx.runtimeCodexHome ?? effectiveCodexHome, appHome);
+          } catch (cause) {
+            throw Object.assign(new Error('Could not prepare Codex desktop input rules', { cause }), { codexSpawnConfigFatal: true });
+          }
+        }
         let mcpExtraArgs: string[] = [];
         let mcpExtraEnv: Record<string, string> = {};
         let buildSessionMcpConfig:
@@ -221,48 +231,53 @@ export function createCodexSpawnConfig(ports: {
             );
           }
         }
+        let contextProviderModels: string[] | undefined;
         let customContextCatalogArgs: string[] = [];
         let customContextCatalogPath: string | undefined;
-        if (isCustomContext) {
-          const modelId = ctx.customContextModel?.trim();
+        const guestModelIds = ctx.deviceHostedGuestModelIds ?? [];
+        const requestedCatalogModel = ctx.customContextModel?.trim();
+        if (isCustomContext || (isReview && requestedCatalogModel)) {
           const contextWindow = ctx.customContextWindow;
           try {
-            if (
-              !modelId ||
-              typeof contextWindow !== 'number' ||
-              !Number.isFinite(contextWindow) ||
-              contextWindow <= 0
-            ) {
+            if (!requestedCatalogModel || (isCustomContext &&
+                (typeof contextWindow !== 'number' || !Number.isFinite(contextWindow) || contextWindow <= 0))) {
               throw new Error('custom-context Codex host is missing its model or context window');
             }
             const catalog = getDesktopSelectableCatalog();
-            const source = resolveDesktopModelContextProviderId(catalog, 'codex', ctx.customContextProviderId, modelId);
-            const customCatalog = await prepareCodexCustomContextCatalog({
-              binaryPath: ports.binaryPath,
-              codexHome: effectiveCodexHome,
-              modelId,
-              contextWindow,
-              modelIds: catalog.providers.find(provider => provider.id === source)?.models.codex?.map(model => model.id),
-              resolveCompactionPct: (id) => resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, id),
-              resolveContextWindow: (nativeModelId) => {
-                return (source ? readModelContextLimit('codex', source, nativeModelId) : null)
-                  ?? resolveModelDefaultContextWindow(catalog, 'codex', source, nativeModelId);
-              },
-              ...(smartSubagentConfig
-                ? { baseCatalog: smartSubagentConfig.modelCatalog }
-                : {}),
-            });
-            customContextCatalogPath = customCatalog.catalogPath;
-            if (smartSubagentConfig) {
-              smartSubagentConfig = {
-                ...smartSubagentConfig,
-                catalogPath: customCatalog.catalogPath,
-              };
-            } else {
-              customContextCatalogArgs = customCatalog.extraArgs;
+            const source = resolveDesktopModelContextProviderId(catalog, 'codex', ctx.customContextProviderId, requestedCatalogModel);
+            const provider = catalog.providers.find(provider => provider.id === source);
+            const declareFastMode = needsOpenAiApiCodexFastDeclaration(provider, requestedCatalogModel) &&
+              (!guestProviderId || (source === guestProviderId && guestModelIds.includes(requestedCatalogModel)));
+            if (isCustomContext) contextProviderModels = provider?.models.codex?.map(model => model.id) ?? [];
+            if (isCustomContext || declareFastMode) {
+              const budgets = isCustomContext ? {
+                contextWindow,
+                modelIds: contextProviderModels,
+                resolveCompactionPct: (id: string) => resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, id),
+                resolveContextWindow: (nativeModelId: string) => {
+                  return (source ? readModelContextLimit('codex', source, nativeModelId) : null)
+                    ?? resolveModelDefaultContextWindow(catalog, 'codex', source, nativeModelId);
+                },
+              } : {};
+              const customCatalog = await prepareCodexCustomContextCatalog({
+                binaryPath: ports.binaryPath,
+                codexHome: effectiveCodexHome,
+                modelId: requestedCatalogModel,
+                declareFastMode,
+                ...budgets,
+                ...(smartSubagentConfig
+                  ? { baseCatalog: smartSubagentConfig.modelCatalog }
+                  : {}),
+              });
+              customContextCatalogPath = customCatalog.catalogPath;
+              if (smartSubagentConfig) {
+                smartSubagentConfig = { ...smartSubagentConfig, catalogPath: customCatalog.catalogPath };
+              } else {
+                customContextCatalogArgs = customCatalog.extraArgs;
+              }
             }
           } catch (error) {
-            await releaseCodexCustomContextProxy(scopedProxyKey);
+            if (usesScopedProxy) await releaseCodexCustomContextProxy(scopedProxyKey);
             const fatal = error instanceof Error ? error : new Error(String(error));
             (fatal as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
             throw fatal;
@@ -270,9 +285,10 @@ export function createCodexSpawnConfig(ports: {
         }
         if (guestProviderId) {
           try {
+            contextProviderModels = contextProviderModels?.filter(model => guestModelIds.includes(model));
             const guestCatalog = await prepareCodexGuestModelCatalog({
               binaryPath: ports.binaryPath, codexHome: effectiveCodexHome,
-              modelIds: ctx.deviceHostedGuestModelIds ?? [],
+              modelIds: guestModelIds,
               ...(customContextCatalogPath ? { baseCatalog: JSON.parse(await fs.readFile(customContextCatalogPath, 'utf8')) } : {}),
             });
             customContextCatalogArgs = guestCatalog.extraArgs;
@@ -307,6 +323,7 @@ export function createCodexSpawnConfig(ports: {
             ? { smartSubagentRoutes: smartSubagentConfig.routes }
             : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
+          contextProviderModels,
           codexProxyActive: ready,
           codexDefaultModelProviderId: CODEX_GATEWAY_PROVIDER_ID,
           codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,

@@ -24,7 +24,7 @@ const routes = [
   { setter: 'setGhostOauthHandler', method: 'PUT', pathname: '/oauth/oauth_key/client', body: '{"clientId":"fake-old-client"}', status: 204 },
   { setter: 'setGhostConnectionsHandler', method: 'POST', pathname: '/connections/api', body: '{"host":"api.example.com","token":"fake-old-token"}', status: 200 },
 ] as const;
-type Route = typeof routes[number];
+type Route = Omit<typeof routes[number], 'method' | 'pathname'> & { method: string; pathname: string };
 
 function loadCallback(setter: string, deps: Record<string, unknown>, omitGuard = false): Callback {
   return createGhostProductionCallbacks<{ handler: Callback }>({
@@ -186,7 +186,7 @@ describe('Credential protocol wiring through actual index callbacks', () => {
   });
 
   it('forwards the original guard after the Secrets callback awaits its host credential probe', async () => {
-    const target = harness(routes[0], { githubProbe: true });
+    const target = harness({ ...routes[0], method: 'GET', pathname: '/secrets' }, { githubProbe: true });
     const probe = deferred<boolean>();
     target.probeAvailability.mockReturnValueOnce(probe.promise);
     const readBodyText = vi.fn(async () => routes[0].body);

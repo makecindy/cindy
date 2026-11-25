@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 /**
  * 测试价值
  * - 生产入口与可观察结果:页签拖拽落点的纯判定(computeChatEdgeZones / pickTabDropZone);
@@ -9,13 +11,17 @@
  * - tier:unit。
  */
 
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render } from '@testing-library/react';
+import { createElement } from 'react';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   computeChatEdgeZones,
   isPointerOutsideWindow,
   pickTabDropZone,
+  TabDragController,
 } from '../TabDragController';
+import { getTabGroup, setTabGroup } from '../tabGroups';
 
 describe('computeChatEdgeZones / pickTabDropZone', () => {
   const chat = { left: 100, top: 50, width: 1000, height: 800 };
@@ -50,4 +56,46 @@ describe('computeChatEdgeZones / pickTabDropZone', () => {
     expect(isPointerOutsideWindow(0, 0, 800, 600)).toBe(false);
     expect(isPointerOutsideWindow(799, 599, 800, 600)).toBe(false);
   });
+});
+
+// 回归（unit）：经 TabDragController 实际拖放，断言亮区和页签归属。纯边带用例
+// 不涵盖已展开面板；最小场景为左侧一个页签、右侧有页签，松手点位于右侧内容区。
+it('右侧还有页签时，可将左侧对话拖回右侧栏正文', () => {
+  const { container, queryByTestId, unmount } = render(
+    createElement(TabDragController, { enabled: true, sessionId: null }),
+  );
+  container.innerHTML = `
+    <div data-tab-group-strip="left"><button data-tab-pill="side-a">对话 A</button></div>
+    <main data-panel-drag-root="chat-main"></main>
+    <aside data-panel-drag-root="right-tabs">
+      <div data-tab-group-strip="right"><button data-tab-pill="side-b">对话 B</button></div>
+    </aside>
+  `;
+  const measure = (selector: string, x: number, y: number, width: number, height: number) => {
+    vi.spyOn(container.querySelector(selector)!, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(x, y, width, height),
+    );
+  };
+  measure('[data-tab-group-strip="left"]', 0, 0, 240, 40);
+  measure('[data-panel-drag-root="chat-main"]', 240, 0, 480, 600);
+  measure('[data-panel-drag-root="right-tabs"]', 720, 0, 280, 600);
+  measure('[data-tab-group-strip="right"]', 720, 0, 280, 40);
+  setTabGroup('side-a', 'left');
+  try {
+    fireEvent.pointerDown(container.querySelector('[data-tab-pill="side-a"]')!, {
+      button: 0,
+      clientX: 100,
+      clientY: 20,
+    });
+    fireEvent.pointerMove(document, { clientX: 480, clientY: 300 });
+    fireEvent.pointerMove(document, { clientX: 860, clientY: 300 });
+    const highlighted = queryByTestId('tab-drop-zone') !== null;
+    fireEvent.pointerUp(document, { clientX: 860, clientY: 300 });
+    expect(getTabGroup('side-a')).toBe('right');
+    expect(getTabGroup('side-b')).toBe('right');
+    expect(highlighted).toBe(true);
+  } finally {
+    unmount();
+    setTabGroup('side-a', 'right');
+  }
 });

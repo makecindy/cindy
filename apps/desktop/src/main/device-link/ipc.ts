@@ -22,6 +22,7 @@ import { t } from '../i18n.desktop';
 import { createHash, randomBytes } from 'node:crypto';
 import { ipcMain, shell, clipboard, dialog, BrowserWindow } from 'electron';
 import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
+import { PLUGIN_ENGINES_INVOKE, parseOfferedPluginEngines } from '../../shared/pluginEngines.js';
 import { currentOauthIdentityScope, trustOauthPeer } from '../plugin-oauth/desktopIdentity.js';
 import { RemotePluginOauthUnsupportedError, resolveOauthPeerIdentity } from '../plugin-oauth/identityResolver.js';
 import { getDeviceId } from '../authManager.js';
@@ -40,7 +41,8 @@ import {
   type LinkAcceptPayload,
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
-import { ServerApiError } from '../serverApiClient.desktop';
+import { ServerApiError, serverApiFetch } from '../serverApiClient.desktop';
+import { getClientEndpoint } from '../clientEndpointsService.js';
 import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
 import {
   __resetDirectoryThrottleForTests,
@@ -52,16 +54,18 @@ import {
 } from './directoryThrottle.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
-import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
+import { createIpcError, isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
 import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization.js';
 import { decodeRemoteHistory } from '../../shared/remoteHistoryCache';
 import {
   DEVICE_LINK_INVOKE,
   DEVICE_LINK_PUSH,
   type DeviceLinkDeviceView,
+  type DeviceLinkPeerPathPreference,
   type DeviceLinkState,
   type DeviceLinkPeerLinksSnapshot,
 } from '../../shared/deviceLinkIpc';
+import type { AgentNetRejoinOutcome } from './deviceRejoin.js';
 import {
   getDeviceLinkStatus,
   getDirectDataDeviceIds,
@@ -73,10 +77,13 @@ import {
   forgetPeerControlState,
   getDeviceLinkConnectionIssue,
   isDeviceLinkStandby,
+  getDeviceIdentityConflict,
+  replaceDeviceIdentityAndRestart,
   getUnresponsiveDeviceIds,
   clearDeviceResponsiveness,
   setRemoteControlEnabled,
   setKeepAwakeEnabled,
+  rejoinThisDevice,
   openRemoteLink,
   closeRemoteLink,
   remoteInvoke,
@@ -86,7 +93,6 @@ import {
   disconnectAllControllers,
   revokeController,
   restoreController,
-  setControllerModelUse,
   broadcast,
   applyControllerDisplayNameListSnapshot,
   applyControllerPresenceListSnapshot,
@@ -106,6 +112,7 @@ import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
 import { tryUploadPeerAttachment } from './filePeer';
 import { withAgentNetMediaTarget } from './agentNetMediaRouting.js';
 import { withSourceFileAccessRecovery, releaseSourceFileAccessUploads } from './sourceFileAccessRecovery';
+import { resolveSendScopeReason, sendScopeReasonI18nKey } from './sendScopeGuard';
 import { parseSharedTaskPeer, scrubSharedProviderCatalog } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import {
@@ -130,7 +137,9 @@ import {
   readLastKnownDeviceNames,
   rememberLastKnownDeviceName,
   setDeviceControlEnabled,
+  setPeerPathPreference,
 } from './settings-store.desktop';
+import { setAgentNetPeerPathPreference } from './agentNetRuntime.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import { setDirectoryThrottleOwnerSource } from './directoryThrottle.js';
 
@@ -186,12 +195,18 @@ export interface DeviceLinkIpcDeps {
   getState(): DeviceLinkState;
   /** 远程连接拓扑:本机链路快照(只读) */
   getPeerLinks(): DeviceLinkPeerLinksSnapshot;
+  /** 远程连接拓扑:持久化并立即应用单台设备的 Agent-Net 选路偏好 */
+  setPeerPathPreference?(deviceId: string, preference: DeviceLinkPeerPathPreference): Promise<void>;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
+  /** 本机被移除后「重新加入」(deviceRejoin.ts)。 */
+  rejoin?(): Promise<{ agentNet: AgentNetRejoinOutcome }>;
   /** `signal` 是调用方的期限信号:目录读用它把「fetch + 刷新等待 + 重试」一起框住。 */
   apiFetch<T>(path: string, opts?: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal }): Promise<T>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
+  /** 设备身份冲突时用户确认换身份；只在已确认冲突时成功，随后应用重启。 */
+  replaceDeviceIdentity?(): { restarting: true };
   invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean; diagnosticSource?: 'renderer' }): Promise<InvokeResultPayload>;
   /** 分享者电脑的只读请求：先建后台链路再发(relay 只在建链时登记受邀者的电脑)。缺省时用 invoke。 */
   invokeProviderShareHost?(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
@@ -200,7 +215,6 @@ export interface DeviceLinkIpcDeps {
   disconnectAll(): void;
   revoke(deviceId: string): Promise<void>;
   restore(deviceId: string): Promise<void>;
-  setModelUse(deviceId: string, allowed: boolean): Promise<void>;
   setDeviceControlEnabled(deviceId: string, enabled: boolean): Promise<string[]>;
   /** 清理本机禁用目标的响应性熔断状态。 */
   clearDeviceResponsiveness?(deviceId: string): void;
@@ -250,20 +264,26 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         directDataDeviceIds: getDirectDataDeviceIds(),
         connectionIssue: getDeviceLinkConnectionIssue(),
         standby: isDeviceLinkStandby(),
+        identityConflict: getDeviceIdentityConflict(),
         controlledBy: getActiveControllers(),
         revokedControllers: s.revokedControllers,
-        modelUseRevokedControllers: s.modelUseRevokedControllers,
         disabledControlDeviceIds: s.disabledControlDeviceIds,
         unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
     },
-    getPeerLinks: getDeviceLinkPeerLinks,
+    getPeerLinks: () => getDeviceLinkPeerLinks(true),
+    setPeerPathPreference: async (deviceId: string, preference: DeviceLinkPeerPathPreference) => {
+      await setPeerPathPreference(deviceId, preference);
+      setAgentNetPeerPathPreference(deviceId, preference);
+    },
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
+    rejoin: rejoinThisDevice,
     // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
     apiFetch: (path, opts) => deviceLinkApiFetch(path, opts),
     openLink: (deviceId: string) => openRemoteLink(deviceId),
     closeLink: closeRemoteLink,
+    replaceDeviceIdentity: () => replaceDeviceIdentityAndRestart(),
     invoke: (...args) => {
       requireDeviceLinkCapability();
       return remoteInvoke(...args);
@@ -274,7 +294,6 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     disconnectAll: disconnectAllControllers,
     revoke: revokeController,
     restore: restoreController,
-    setModelUse: setControllerModelUse,
     setDeviceControlEnabled,
     clearDeviceResponsiveness,
     broadcast,
@@ -366,6 +385,19 @@ export function handleGetPeerLinks(deps: DeviceLinkIpcDeps): DeviceLinkPeerLinks
   return deps.getPeerLinks();
 }
 
+export async function handleSetPeerPathPreference(
+  deps: DeviceLinkIpcDeps,
+  deviceId: unknown,
+  preference: unknown,
+): Promise<{ deviceId: string; preference: DeviceLinkPeerPathPreference }> {
+  const id = requireString(deviceId, 'deviceId');
+  if (preference !== 'auto' && preference !== 'direct' && preference !== 'relay') {
+    throwIpcError('INVALID_PARAMS', 'preference must be auto, direct, or relay');
+  }
+  await deps.setPeerPathPreference?.(id, preference);
+  return { deviceId: id, preference };
+}
+
 export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
   const state = deps.getState();
   if (getAppCapabilities().canUseDeviceLink) return state;
@@ -381,7 +413,6 @@ export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
     standby: false,
     controlledBy: [],
     revokedControllers: [],
-    modelUseRevokedControllers: [],
     disabledControlDeviceIds: [],
     unresponsiveDeviceIds: [],
   };
@@ -407,6 +438,22 @@ export async function handleSetKeepAwake(
   }
   await deps.setKeepAwake(enabled);
   return { keepAwake: enabled };
+}
+
+/** 本机被移除后「重新加入」(deviceRejoin.ts):失败按界面要告诉用户的情况归类。 */
+export async function handleRejoin(deps: DeviceLinkIpcDeps): Promise<{ agentNet: AgentNetRejoinOutcome }> {
+  if (!deps.rejoin) throwIpcError('INTERNAL', 'rejoin unavailable');
+  try {
+    return await deps.rejoin();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    // 服务端还没有这个接口:界面改为提示在本设备退出后重新登录。
+    if (message === 'DEVICE_REJOIN_UNSUPPORTED') throwIpcError('NOT_FOUND', message);
+    // 「仅使用 Agent-Net」而 Agent-Net 没能回来;Device Link 的登记已经恢复。
+    if (message === 'AGENT_NET_REJOIN_FAILED') throwIpcError('PRECONDITION_FAILED', message);
+    log.warn('rejoin failed', error);
+    throwIpcError('INTERNAL', 'rejoin failed');
+  }
 }
 
 export async function handleSetDeviceControlEnabled(
@@ -1048,10 +1095,15 @@ export async function handleInvoke(
        if (err instanceof ReviewArtifactAuthorizationError) {
          throwIpcError('PERMISSION_DENIED', err.message);
        }
-       throwIpcError(
+       // 包装会丢掉中止的 name/code(#10906 review P2):作用域作废掐断在途传输时,
+       // readFile 的 signal 中止被包成这层之后消息里一个标记都不剩。原错误挂到 cause,
+       // 让「这是不是作用域拆坏的症状」能按结构化判据认出来,而不是猜文案。
+       const transferFailure = createIpcError(
          'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
          err instanceof Error ? err.message : String(err),
-      );
+       );
+       transferFailure.cause = err;
+       throw transferFailure;
     }
     assertControlTargetEnabled(deps, normalizedDeviceId);
   }
@@ -1087,11 +1139,16 @@ const PROVIDER_SHARE_RENDERER_CHANNELS: ReadonlySet<string> = new Set([
   'maker:get-capabilities',
   'maker:list-available-agents',
   'maker:agent:status',
+  PLUGIN_ENGINES_INVOKE.LIST,
+  PLUGIN_ENGINES_INVOKE.REFRESH,
 ]);
 
 function projectProviderShareResult(channel: string, value: unknown): unknown {
   // 分享者电脑已去掉账号身份；受邀者这边再过一遍，旧版本分享者也不会把登录邮箱带进界面。
   if (channel === 'maker:provider:list') return scrubSharedProviderCatalog(value);
+  if (channel === PLUGIN_ENGINES_INVOKE.LIST) {
+    return parseOfferedPluginEngines(value).map(({ reportsUsage: _reportsUsage, ...rest }) => rest);
+  }
   if (channel === 'maker:agent:status') {
     // 只认 Agent 是否装好：就绪以分享的模型目录为准，不带对方的登录状态、本机路径与身份。
     const status = value && typeof value === 'object' ? value as { binaryReady?: unknown } : {};
@@ -1136,9 +1193,11 @@ export async function handleProviderShareInvoke(
   const callArgs = Array.isArray(args) ? args : [];
   let result: InvokeResultPayload;
   try {
-    result = isCrossRegionProviderShareTarget(target)
-      ? await crossRegionInvoke(target, channel, callArgs)
-      : await (deps.invokeProviderShareHost ?? deps.invoke)(target, channel, callArgs);
+    result = deps.invokeProviderShareHost
+      ? await deps.invokeProviderShareHost(target, channel, callArgs)
+      : isCrossRegionProviderShareTarget(target)
+        ? await crossRegionInvoke(target, channel, callArgs)
+        : await deps.invoke(target, channel, callArgs);
   } catch (err) {
     logProviderShareReadFailure(
       agentDeviceId,
@@ -1966,6 +2025,13 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     const p = (payload ?? {}) as { deviceId?: unknown; enabled?: unknown };
     return handleSetDeviceControlEnabled(deps, p.deviceId, p.enabled);
   });
+  ipcMain.handle(DEVICE_LINK_INVOKE.CLOUD_COMPUTER_ENTRY, async event => {
+    assertTrustedAppRendererEvent(event);
+    return serverApiFetch<unknown>('/api/model-access/personal/cloud-computer/entry', {
+      baseUrl:() => getClientEndpoint('modelAccessApiBaseUrl'), cache:'no-store',
+      timeoutMs:5000, redactErrorDetails:true, expectedErrors:[{status:403},{status:404}],
+    });
+  });
   ipcMain.handle(
     DEVICE_LINK_INVOKE.LIST_DEVICES,
     gated(() => handleListDevices(deps)),
@@ -1975,15 +2041,34 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     assertTrustedAppRendererEvent(e);
     return gated(() => handleGetPeerLinks(deps))();
   });
+  ipcMain.handle(DEVICE_LINK_INVOKE.SET_PEER_PATH_PREFERENCE, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { deviceId?: unknown; preference?: unknown };
+    return handleSetPeerPathPreference(deps, p.deviceId, p.preference);
+  });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; name?: unknown };
     return handleRenameDevice(deps, p.deviceId, p.name);
   });
+  ipcMain.handle(DEVICE_LINK_INVOKE.REJOIN, (e) => {
+    // Brings this device back into the account's network: only the local app page may ask.
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    return handleRejoin(deps);
+  });
   ipcMain.handle(DEVICE_LINK_INVOKE.DELETE_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleDeleteDevice(deps, p.deviceId);
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.REPLACE_DEVICE_IDENTITY, (e) => {
+    // 改的是本机身份并重启应用：只接受应用自己的页面，且只在已确认冲突时生效(由 deps 校验)。
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    if (!deps.replaceDeviceIdentity) throwIpcError('PRECONDITION_FAILED', 'Device identity replacement is unavailable');
+    return deps.replaceDeviceIdentity();
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.OPEN_LINK, (e, payload: unknown) => {
     requireDeviceLinkCapability();
@@ -2021,11 +2106,35 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       const targetWindow = BrowserWindow.fromWebContents(e.sender);
       const assertCurrent = () => {
         const current = getActiveAppSession();
-        if (transfer.signal.aborted || isAppSessionBoundaryPending() || !owner.dataOwnerId
-          || current.dataOwnerId !== owner.dataOwnerId || current.generation !== owner.generation
-          || e.sender.isDestroyed() || !frame || frame.detached || e.sender.mainFrame !== frame
-          || !targetWindow || targetWindow.isDestroyed()) {
-          throwIpcError('PERMISSION_DENIED', 'Attachment confirmation is no longer current');
+        // 命中条件要能从日志反推(#10852 P1):守卫覆盖所有前台发送通道,
+        // 不能再说「附件确认」——没有附件确认的发送也会走到这里。
+        // sender 已销毁就不再读 frame / window:原来的 `||` 链在 isDestroyed()
+        // 处就停住,销毁后再读 detached / mainFrame / isDestroyed() 可能直接抛
+        // Electron 的「对象已失效」,把一次中止变成莫名失败(#10906 review)。
+        // 这些条件在 resolveSendScopeReason 里都排在上面的项目之后,跳过不改变命中项。
+        const senderDestroyed = e.sender.isDestroyed();
+        const reason = resolveSendScopeReason({
+          aborted: transfer.signal.aborted,
+          boundaryPending: isAppSessionBoundaryPending(),
+          ownerDataOwnerId: owner.dataOwnerId,
+          ownerGeneration: owner.generation,
+          currentDataOwnerId: current.dataOwnerId,
+          currentGeneration: current.generation,
+          senderDestroyed,
+          frameMissing: !frame,
+          frameDetached: senderDestroyed ? false : frame?.detached ?? false,
+          frameIsMainFrame: senderDestroyed || !frame ? false : e.sender.mainFrame === frame,
+          windowMissing: !targetWindow,
+          windowDestroyed: senderDestroyed ? false : targetWindow?.isDestroyed() ?? false,
+        });
+        if (reason) {
+          log.warn('device-link send scope is no longer current', {
+            reason,
+            channel: String(p.channel),
+          });
+          // 文案走 i18n(#10906 review P1):渲染层对未登记的码只能回落原文,硬编码英文
+          // 会让所有语言都看到英文。命中条件仍只进上面的日志。
+          throwIpcError('PERMISSION_DENIED', t(sendScopeReasonI18nKey(reason)));
         }
         assertTrustedAppRendererEvent(e);
       };
@@ -2118,16 +2227,6 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleRevoke(deps, p.deviceId);
-  });
-  ipcMain.handle(DEVICE_LINK_INVOKE.SET_MODEL_USE, async (e, payload: unknown) => {
-    assertTrustedAppRendererEvent(e);
-    requireDeviceLinkCapability();
-    const p = (payload ?? {}) as { deviceId?: unknown; allowed?: unknown };
-    if (typeof p.deviceId !== 'string' || !p.deviceId.trim() || typeof p.allowed !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'deviceId and allowed are required');
-    }
-    await deps.setModelUse(p.deviceId, p.allowed);
-    return { ok: true };
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.RESTORE, (e, payload: unknown) => {
     assertTrustedAppRendererEvent(e);

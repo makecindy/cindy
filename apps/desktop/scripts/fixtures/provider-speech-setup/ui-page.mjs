@@ -7,6 +7,8 @@ export default {
   notCovered:
     'Live credentials, manual refresh orchestration (covered by ProvidersSection unit tests), provider network calls, OS safe storage, Settings owner changes, OAuth login and actual synthesis; host catalog/save responses are scenario data',
   cases: {
+    'realtime-bailian': { about: 'Add native realtime to an existing workspace without replacing its chat model' },
+    'realtime-token-plan': { about: 'Token Plan includes its discovered realtime model only' },
     default: { about: 'Existing API-key connection adds speech without replacing its chat model' },
     empty: { about: 'An empty API-key connection keeps manual speech addition in Management' },
     minimax: {
@@ -23,13 +25,28 @@ export default {
     },
     'token-plan': { about: 'Token Plan recommends Qwen-Audio instead of workspace CosyVoice' },
     'token-plan-existing': { about: 'Existing Token Plan uses the same Qwen-Audio recommendation' },
-    'speech-visibility': { about: 'Previously hidden speech can be shown and hidden through model management' },
+    'speech-visibility': { about: 'Speech hidden by the old visibility switch reads as off, turns on, and turning it off again disables it' },
     subscription: { about: 'Existing OpenAI subscription has no speech-add button or menu item' },
   },
   async ready(page) {
     await page.getByTestId('provider-model-toolbar').waitFor();
   },
   async check(page, ui) {
+    if (ui.case.startsWith('realtime-')) {
+      await page.getByRole('button', { name: await ui.t('settings.providers.models.manage.menu'), exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('bots.voiceMode.realtime.add'), exact: true }).click();
+      const model = page.getByRole('checkbox', { name: /qwen-audio-3.0-realtime-plus/ });
+      await model.waitFor();
+      assert.equal(await model.getAttribute('aria-checked'), 'false');
+      await model.click();
+      if (ui.case === 'realtime-token-plan') assert.equal(await page.getByRole('checkbox', { name: /qwen-audio-3.1/ }).count(), 0);
+      await ui.capture('realtime-models');
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.addManualModel'), exact: true }).click();
+      await page.getByTestId('saved').waitFor();
+      const saved = await page.getByTestId('saved').textContent();
+      assert.ok(saved.includes('qwen-plus') && saved.includes('qwen-audio-3.0-realtime-plus'));
+      return;
+    }
     if (ui.case === 'speech-visibility') {
       const toggle = page.getByRole('switch', { name: 'MiniMax Speech 2.8 HD', exact: true });
       await toggle.waitFor();
@@ -40,8 +57,11 @@ export default {
       await page.getByTestId('speech-visible').filter({ hasText: 'true' }).waitFor({ state: 'attached' });
       assert.equal(await toggle.getAttribute('aria-checked'), 'true');
       await ui.capture('shown-speech');
+      // Function-type models have one enable switch: off is a disable write, not a visibility one.
       await toggle.click();
-      await page.getByTestId('speech-visible').filter({ hasText: 'false' }).waitFor({ state: 'attached' });
+      await page.waitForFunction(() => window.speechDisableWrites?.some(write => write.kind === 'model' && write.disabled === true));
+      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+      assert.equal(await page.getByTestId('speech-visible').textContent(), 'true', 'the old visibility record is no longer what turns it off');
       return;
     }
     const existing = ['default', 'empty', 'bailian-existing', 'token-plan-existing'].includes(ui.case);

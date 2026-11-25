@@ -45,6 +45,7 @@ import {
   buildRemoteCreateSessionOptions,
   normalizeCreateSessionResult,
   resolveStartedDowngradeOrCommit,
+  resolveNewSessionSkillDraft,
   sessionFromCreateResult,
   type NewSessionDraft,
 } from '@/session/newSession';
@@ -135,6 +136,11 @@ export interface NewSessionCreationParams {
   transport: NewSessionCreationTransport;
   /** 退避 / 轮询的 sleep 注入点(单测替换为立即返回;对齐 resolveInteractionResilient 的 opts.sleep 模式)。 */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * 会话在被控电脑上建成后调用一次(重跑管线不再调用)：经模型组选的来源要请那台记下任务用着谁、
+   * 提交选路记录并在任务里写说明(model-groups.md §6.3)。抛错不影响创建。
+   */
+  onSessionCreated?: (sessionId: string) => void;
 }
 
 export interface NewSessionCreationTask {
@@ -173,6 +179,8 @@ interface InternalTask extends NewSessionCreationTask {
   error: string | null;
   firstMessageSessionRefs: MobileSessionReference[];
   precreatedWorktreeSessionCreateStarted: boolean;
+  /** onSessionCreated 已经调用过(重试同一个任务时不再调用)。 */
+  sessionCreatedNotified?: boolean;
   params: NewSessionCreationParams;
 }
 
@@ -308,6 +316,7 @@ function synthesizeSession(params: NewSessionCreationParams, draftOverride?: New
       ...draft,
       attachments: params.attachments,
     }),
+    ...(params.precreatedWorktree ? { projectDir: params.precreatedWorktree.originalWorkingDir } : {}),
     pendingLocalCreation: true,
   };
 }
@@ -996,7 +1005,7 @@ async function createSessionIdempotent(
   // 状态(UI 快照保持提交时语义)。precreated 分支在 persist started 后重验并
   // 重建(见下),其余路径直接使用本初值。
   let createOpts = {
-    ...buildRemoteCreateSessionOptions(effectiveDraft),
+    ...buildRemoteCreateSessionOptions(effectiveDraft, task.precreatedWorktree?.originalWorkingDir),
     id: task.sessionId,
   };
 
@@ -1073,7 +1082,7 @@ async function createSessionIdempotent(
         if (patch) {
           effectiveDraft = { ...effectiveDraft, ...patch };
           createOpts = {
-            ...buildRemoteCreateSessionOptions(effectiveDraft),
+            ...buildRemoteCreateSessionOptions(effectiveDraft, task.precreatedWorktree?.originalWorkingDir),
             id: task.sessionId,
           };
         }
@@ -1312,7 +1321,12 @@ async function runPipeline(task: InternalTask): Promise<void> {
     const finalDraft: NewSessionDraft = draftPatch ? { ...task.draft, ...draftPatch } : task.draft;
 
     phase('creating');
-    const createOutcome = await createSessionIdempotent(task, finalDraft);
+    // The durable outbox resolves when preparing delivery, including cold recovery.
+    // Direct enqueue resolves after openLink, before creating any host session.
+    const creationDraft = params.transport.handoffFirstMessage ? finalDraft
+      : await resolveNewSessionSkillDraft(finalDraft, params.deviceId, maker);
+    assertTaskOwnerCurrent(task);
+    const createOutcome = await createSessionIdempotent(task, creationDraft);
     // started 写盘后二次重验可能修正草稿(codex review P2:将 started 后修正的
     // 草稿传给排队消息)——createOpts 用修正版创建,排队消息合成也必须用同一
     // 修正版:否则 getSession 弱网失败时 sessionForQueue 按旧 finalDraft 合成,
@@ -1324,6 +1338,14 @@ async function runPipeline(task: InternalTask): Promise<void> {
     // 也不应把它当作可补偿回收的孤儿记录。冷启动时的 ownership 查询仍
     // 作为 AsyncStorage 写入失败/进程中断的最后兜底。
     forgetPrecreatedRecoveryRecord(task);
+    if (params.onSessionCreated && !task.sessionCreatedNotified) {
+      task.sessionCreatedNotified = true;
+      try {
+        params.onSessionCreated(sessionId);
+      } catch {
+        // 只影响模型组的记录与说明，任务照常进行。
+      }
+    }
 
     // 权威会话刷新(dialogue 会话此刻才拿到被控端分配的 workingDir);失败不阻断,
     // 排队 createOpts 用合成行兜底(project 会话字段本就齐全)。

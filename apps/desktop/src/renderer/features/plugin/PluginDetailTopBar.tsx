@@ -40,6 +40,27 @@ export function usePluginDetailScrolled(): {
   return { scrolled, onScroll };
 }
 
+/** The installed detail frame also hosts the read-only projection from older computers. */
+export function PluginInstalledDetailFrame({ label, onBack, actions, children }: {
+  label: string;
+  onBack: () => void;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  const { scrolled, onScroll } = usePluginDetailScrolled();
+  return (
+    <main
+      className="app-wallpaper-surface plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
+      onScroll={onScroll}
+    >
+      <PluginDetailTopBar label={label} onBack={onBack} scrolled={scrolled} actions={actions} />
+      <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
+        {children}
+      </article>
+    </main>
+  );
+}
+
 /**
  * 详情页顶行:返回入口 + mac 侧的窗口拖拽区。
  *
@@ -109,7 +130,7 @@ export function PluginDetailTopBar({
     <div
       data-testid="plugin-detail-top-bar"
       className={cn(
-        'sticky top-0 z-20 w-full',
+        'sticky top-0 z-page-float w-full',
         'transition-[background-color] duration-[var(--motion-fast,150ms)] motion-reduce:transition-none',
         scrolled ? 'bg-[var(--surface)]' : 'bg-transparent',
         isMac && [

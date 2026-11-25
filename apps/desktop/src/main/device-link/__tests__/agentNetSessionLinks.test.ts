@@ -14,16 +14,16 @@
  *   对端此刻在 Agent-Net 上在线、还没有连接（本机刚启动，2026-11-17 真机）时先连上再等，不在线的不拨、当场交给 Device Link，
  *   拨不了的不等满；对端在中转上签名说开着 Agent-Net、Device Link 要改到主连接重开时，等它的会话再在会话上开；
  *   跨账号（供应商分享）的受邀者第一次建链：分享连接用到时才拨，先连上再等会话，线上编码和 Device Link 给跨账号的一样不压缩、
- *   不做增量，按对端取连接拿到的是那条分享连接，离线事件带它的代次（业务按这个代次丢弃过期事件）。
+ *   不做增量，按对端取连接拿到的是那条分享连接，离线事件带它的代次（业务按这个代次丢弃过期事件）；
+ *   请求超时而对端走中转时报给连接判断中转 UDP（2026-11-22：VPN 代理下中转 UDP 只通登记，几个小时不退回 WebSocket），直连的不报。
  * - tier：unit，两个真实的 SessionPeer 在内存里相连，真实的 Node 压缩编码器。 */
 import { describe, expect, it, vi } from 'vitest';
-import { SessionPeer, type SessionLane } from '@cindy/agent-net';
-import { DeviceLinkError, providerShareGuestPeer, providerShareHostPeer, type DeviceLinkClient, type DeviceLinkPeerRouteStateChanged, type Envelope,
-  type InvokeResultPayload } from '@cindy/device-link';
+import { AgentNetSessionLinks, SESSION_INVOKE_REPLAY, SessionPeer, agentNetSessionLane, routeSessionPeers, type AgentNetSessionLinksOptions, type SessionLane } from '@cindy/agent-net';
+import { DeviceLinkError, DeviceLinkUnsentInvokeError, REMOTE_DESKTOP_CHANNEL, REMOTE_RESOURCE_LIST_CHANNEL, providerShareGuestPeer, providerShareHostPeer, DeviceLinkClient, type DeviceLinkPeerRouteStateChanged, type Envelope,
+  type InvokePayload, type InvokeResultPayload } from '@cindy/device-link';
+import WebSocket from 'ws';
+import { createRelayFixture } from '../../../../../../scripts/device-link/relayFixture';
 import { desktopTransferCodec } from '../transferCodec';
-import { AgentNetSessionLinks, agentNetSessionLane, type AgentNetSessionLinksOptions } from '../agentNetSessionLinks';
-import { routeSessionPeers } from '../agentNetSessionRouting';
-import { SESSION_INVOKE_REPLAY } from '../peerLinks';
 
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 const openPayload = { controllerName: 'test', protocolVersion: 1, appVersion: 'test' };
@@ -34,7 +34,8 @@ const openPayload = { controllerName: 'test', protocolVersion: 1, appVersion: 't
  */
 function pair(options: { connected?: boolean; connectedAt?(id: string): number | null; hostKey?: string; controllerKey?: string;
   connect?(id: string): Promise<boolean>; agentNetPeer?(id: string): 'online' | 'offline' | null; controllerEpoch?(id: string): number;
-  reopenLink?(id: string): void; hostInvokeEpoch?(id: string): string | null; controllerLog?: AgentNetSessionLinksOptions['log'] } = {}) {
+  reopenLink?(id: string): void; hostInvokeEpoch?(id: string): string | null; controllerLog?: AgentNetSessionLinksOptions['log'];
+  controllerPath?(id: string): 'direct' | 'relay' | null; onRelayStall?(id: string): void; requestTimeoutMs?: number } = {}) {
   const hostKey = options.hostKey ?? 'a-host', controllerKey = options.controllerKey ?? 'b-controller';
   const sessions: Record<'host' | 'controller', SessionPeer | null> = { host: null, controller: null };
   const bytes = { toHost: 0, toController: 0 };
@@ -45,7 +46,8 @@ function pair(options: { connected?: boolean; connectedAt?(id: string): number |
       selfDeviceId: () => 'a-host', transferCodec: desktopTransferCodec, invokeEpoch: options.hostInvokeEpoch, log: quiet }),
     controller: new AgentNetSessionLinks({ session: (id) => (id === hostKey ? sessions.controller : null), connectionEpoch: options.controllerEpoch ?? (() => 3),
       selfDeviceId: () => 'b-controller', transferCodec: desktopTransferCodec, connectedAt: options.connectedAt, connect: options.connect,
-      agentNetPeer: options.agentNetPeer, reopenLink: options.reopenLink, log: options.controllerLog ?? quiet }),
+      agentNetPeer: options.agentNetPeer, reopenLink: options.reopenLink, log: options.controllerLog ?? quiet,
+      path: options.controllerPath, onRelayStall: options.onRelayStall, requestTimeoutMs: options.requestTimeoutMs }),
   };
   const receivers: Record<'host' | 'controller', ((lane: SessionLane, data: Uint8Array) => void) | null> = { host: null, controller: null };
   const wire = (side: 'host' | 'controller') => ({
@@ -100,6 +102,133 @@ function listResult(rows: number, changed = -1) {
 }
 
 describe('AgentNetSessionLinks', () => {
+  it.each([['relay', ['a-host']], ['direct', []]] as const)(
+    'reports a timed-out request to a peer on the %s path to its connection only when relayed', async (path, stalled) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+      try {
+        const reported: string[] = [];
+        const { links } = pair({ controllerPath: () => path, onRelayStall: (id) => reported.push(id), requestTimeoutMs: 1_000 });
+        // The host accepts the link but never answers the call (its replies are lost on the way back).
+        links.host.onFrame((env) => {
+          if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+        });
+        const opened = links.controller.openLink('a-host', openPayload);
+        await vi.advanceTimersByTimeAsync(0);
+        await opened;
+        const call = links.controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [] }).catch((error) => error);
+        await vi.advanceTimersByTimeAsync(1_500);
+        expect(await call).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+        expect(reported).toEqual(stalled);
+      } finally { vi.useRealTimers(); }
+    });
+
+  // Unit #11345: sharing uses the session adapter too. Earlier saturation tests
+  // reserved only control slots; 12 held metadata reads still blocked ordinary
+  // model/context calls. Exercise both actual admission and SessionPeer lanes
+  // with the existing scoped pair, without importing the renderer or real I/O.
+  it('keeps shared catalog preloads inside background capacity while model calls proceed', async () => {
+    const hostKey = providerShareHostPeer('share', 'host'), controllerKey = providerShareGuestPeer('share', 'member', 'controller');
+    const { links, controllerLanes } = pair({ hostKey, controllerKey });
+    const metadata = ['maker:provider:list', 'maker:get-capabilities', 'maker:list-available-agents', 'maker:agent:status'];
+    const held: Envelope[] = [], visible: string[] = [];
+    const pending: Promise<unknown>[] = [];
+    links.host.onFrame(env => {
+      if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke') return;
+      const channel = (env.payload as { channel: string }).channel;
+      if (metadata.includes(channel)) held.push(env);
+      else {
+        visible.push(((env.payload as { args: [{ method: string }] }).args[0]).method);
+        links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'visible' });
+      }
+    });
+    await links.controller.openLink(hostKey, openPayload);
+    controllerLanes.length = 0;
+    for (let n = 0; n < 12; n++) pending.push(links.controller.invoke(hostKey, { channel: metadata[n % metadata.length], args: [] }).catch(error => error));
+    const reads = ['setModel', 'getContextUsage'].map(method => links.controller.invoke(hostKey, {
+      channel: 'maker:remote-agent:v1', args: [{ op: 'call', method }],
+    }));
+    pending.push(...reads.map(request => request.catch(error => error)));
+    for (let n = 0; n < 20; n++) await Promise.resolve();
+    try {
+      expect(held).toHaveLength(4);
+      expect(visible).toEqual(['setModel', 'getContextUsage']);
+      expect(controllerLanes.slice(0, 4)).toEqual(['background', 'background', 'background', 'background']);
+      await expect(Promise.all(reads)).resolves.toEqual([{ ok: true, result: 'visible' }, { ok: true, result: 'visible' }]);
+    } finally {
+      links.controller.closeLink(hostKey, 'user');
+      for (const env of held) links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: null });
+      await Promise.allSettled(pending);
+      links.controller.stop(); links.host.stop();
+    }
+    expect(held).toHaveLength(4);
+  });
+
+  // Unit #11345: the session route must execute the dispatch-only guard after
+  // admission, never after a result. Twelve polls + one cancelled queued poll
+  // cover the boundary without changing admission constants or real-time waits.
+  it('drops a cancelled queued invoke and preserves an already dispatched result', async () => {
+    const { links } = pair();
+    const sent: Envelope[] = [];
+    links.host.onFrame(env => {
+      if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') sent.push(env);
+    });
+    await links.controller.openLink('a-host', openPayload);
+    const payload = { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] };
+    let cancelled = false;
+    const guard = () => { if (cancelled) throw new DOMException('cancelled', 'AbortError'); };
+    const active = Array.from({ length: 12 }, () => links.controller.invoke('a-host', payload, undefined, { beforeDispatch: guard }));
+    await vi.waitFor(() => expect(sent).toHaveLength(12));
+    const queued = links.controller.invoke('a-host', payload, undefined, { beforeDispatch: guard }).catch(error => error);
+    cancelled = true;
+    try {
+      for (const env of sent) links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'accepted' });
+      expect(await queued).toMatchObject({ name: 'AbortError' });
+      expect(await Promise.all(active)).toEqual(Array.from({ length: 12 }, () => ({ ok: true, result: 'accepted' })));
+      expect(sent).toHaveLength(12);
+    } finally { links.controller.stop(); links.host.stop(); await Promise.allSettled([...active, queued]); }
+  });
+
+  // Unit regression #11345: DeviceLinkClient admission coverage did not exercise
+  // the Agent-Net route or its wire lane. With 12 polls pending + a full bounded
+  // queue, two controls must reach the host on control, the third must fail, and
+  // closing must cancel queued uploads without dispatching them on a later link.
+  it('admits remote agent controls on their wire lane under bounded saturation', async () => {
+    const { links, controllerLanes } = pair();
+    const held: Envelope[] = [];
+    const controls: Envelope[] = [];
+    links.host.onFrame(env => {
+      if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke') return;
+      const request = (env.payload as { args: [{ op: string }] }).args[0];
+      if (request.op === 'call') controls.push(env);
+      else held.push(env);
+    });
+    await links.controller.openLink('a-host', openPayload);
+    const channel = 'maker:remote-agent:v1';
+    const active = Array.from({ length: 12 }, () => links.controller.invoke('a-host', { channel, args: [{ op: 'poll' }] }));
+    await vi.waitFor(() => expect(held).toHaveLength(12));
+    const queued = Array.from({ length: 128 }, () => links.controller.invoke('a-host', { channel, args: [{ op: 'upload' }] }).catch(error => error));
+    controllerLanes.length = 0;
+    const control = () => links.controller.invoke('a-host', { channel, args: [{ op: 'call', method: 'abort' }] });
+    const admitted = [control(), control()];
+    // Flush only microtasks; failing classification must not turn into a real 30s wait.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    try {
+      expect(controls).toHaveLength(2);
+      expect(controllerLanes).toEqual(['control', 'control']);
+      await expect(control()).rejects.toMatchObject({ code: 'BACKPRESSURE' });
+    } finally {
+      links.controller.closeLink('a-host', 'user');
+      for (const env of [...held, ...controls]) links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: null });
+      await Promise.allSettled([...active, ...admitted, ...queued]);
+      links.controller.stop(); links.host.stop();
+    }
+    expect(held).toHaveLength(12);
+    expect(await Promise.all(queued)).toEqual(Array.from({ length: 128 }, () => expect.objectContaining({ code: 'LINK_NOT_OPEN' })));
+  });
+
   it('opens a control link and reads a list through the same result compression and delta as Device Link', async () => {
     const { links, bytes } = pair();
     let result: unknown = listResult(200);
@@ -270,6 +399,118 @@ describe('AgentNetSessionLinks', () => {
     await expect(links.controller.openLink('a-host', openPayload)).rejects.toMatchObject({ code: 'REMOTE_DISABLED' });
   });
 
+  // Integration tier: both facades use real Device Link sockets and SessionPeers.
+  // Lose one direction's reliable pushes. After the window drains the old transport must
+  // deliver its 27 messages and never deliver the desktop start a second time.
+  it('opens a desktop once over the peer session while a ready loopback Device Link has 27 unacknowledged frames', async () => {
+    const relay = await createRelayFixture();
+    const client = (id: string) => new DeviceLinkClient({
+      getWsUrl: () => relay.url, getToken: async () => 'fixture-' + id,
+      getHello: () => ({ deviceName: id, platform: 'darwin', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (url, headers) => new WebSocket(url, { headers }),
+      timing: { transportRetryIntervalMs: 100 }, logger: quiet,
+    });
+    const host = client('a-host');
+    const viewer = client('b-controller');
+    const { links } = pair();
+    const receiver = routeSessionPeers(host, links.host);
+    const sender = routeSessionPeers(viewer, links.controller);
+    const received: string[] = [];
+    const pushes: number[] = [];
+    receiver.onFrame(env => {
+      if (env.kind === 'link-open') receiver.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind === 'push') {
+        const push = env.payload as { channel: string; payload: number };
+        if (push.channel === 'maker:event') pushes.push(push.payload);
+      }
+      if (env.kind !== 'invoke') return;
+      const { channel, args } = env.payload as InvokePayload;
+      const op = channel === REMOTE_DESKTOP_CHANNEL ? (args[0] as { op: string }).op : channel;
+      received.push((links.host.ownsRequest(env.src!, env.id!) ? 'session:' : 'device-link:') + op);
+      receiver.sendInvokeResult(env.src!, env.id!, { ok: true, result: op === 'start' ? { lease: 'test-lease' } : op });
+    });
+    try {
+      host.start();
+      viewer.start();
+      await vi.waitFor(() => expect(host.getStatus() === 'online' && viewer.getStatus() === 'online').toBe(true));
+      await viewer.openLink('a-host', openPayload);
+      relay.dropFrames(env => env.src === 'b-controller' && env.dst === 'a-host' && env.kind === 'push');
+      for (let i = 0; i < 27; i++) viewer.sendPush('a-host', 'maker:event', i);
+      expect(viewer.isLinkReady('a-host')).toBe(true);
+      expect(viewer.getReliableSendQueueDepth('a-host')).toBe(27);
+      await sender.invoke('a-host', { channel: REMOTE_RESOURCE_LIST_CHANNEL, args: [] });
+      await sender.invoke('a-host', { channel: REMOTE_DESKTOP_CHANNEL, args: [{ op: 'start', displayId: '1' }] });
+      relay.dropFrames(() => false);
+      await vi.waitFor(() => {
+        expect(pushes).toHaveLength(27);
+        expect(viewer.getReliableSendQueueDepth('a-host')).toBe(0);
+      }, { timeout: 4000 });
+      await sender.invoke('a-host', { channel: REMOTE_DESKTOP_CHANNEL, args: [{ op: 'heartbeat', lease: 'test-lease' }] });
+      expect(received).toEqual(['session:' + REMOTE_RESOURCE_LIST_CHANNEL, 'session:start', 'session:heartbeat']);
+      expect(pushes).toEqual(Array.from({ length: 27 }, (_, i) => i));
+    } finally {
+      viewer.stop();
+      host.stop();
+      await relay.close();
+    }
+  });
+
+  // Mac Studio -> MacBook: the old link stays ready with 27 queued frames. Follow a fresh
+  // desktop lease through start, input and stop, and distinguish a local withdrawal from errors on the wire.
+  it('moves an unwritten negotiation and keeps only the granted desktop lease on its session', async () => {
+    const { links, connect } = pair();
+    const seen: string[] = [];
+    links.host.onFrame(env => {
+      if (env.kind !== 'invoke') return;
+      const { channel, args } = env.payload as InvokePayload;
+      const op = channel === REMOTE_DESKTOP_CHANNEL ? (args?.[0] as { op: string }).op : channel;
+      seen.push(op);
+      links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: op === 'start' ? { lease: 'new' } : 'session' });
+    });
+    const old = idleDeviceLink([]);
+    old.isLinkReady = () => true;
+    old.isOutboundExplicitlyClosed = () => false;
+    old.getReliableSendQueueDepth = () => 27;
+    let failure: DeviceLinkError | undefined;
+    old.invoke = vi.fn(async (_dst, _payload, _timeout, options) => {
+      if (failure) throw failure;
+      if (options?.canRerouteBeforeWrite?.()) throw new DeviceLinkUnsentInvokeError();
+      return { ok: true as const, result: 'device-link' };
+    });
+    const router = routeSessionPeers(old, links.controller);
+    const desktop = (op: string, lease?: string) => router.invoke('a-host', { channel: REMOTE_DESKTOP_CHANNEL,
+      args: [{ op, ...(lease ? { lease } : { displayId: '1' }) }] });
+    await expect(router.invoke('a-host', { channel: REMOTE_RESOURCE_LIST_CHANNEL, args: [] })).resolves.toMatchObject({ result: 'session' });
+    await expect(desktop('capabilities')).resolves.toMatchObject({ result: 'session' });
+    const cancelled = () => { throw new Error('viewer closed'); };
+    await expect(router.invoke('a-host', { channel: REMOTE_DESKTOP_CHANNEL, args: [{ op: 'start' }] },
+      1_000, { beforeDispatch: cancelled })).rejects.toThrow('viewer closed');
+    await expect(desktop('start')).resolves.toMatchObject({ result: { lease: 'new' } });
+    await expect(desktop('input', 'old')).resolves.toMatchObject({ result: 'device-link' });
+    const calls = vi.mocked(old.invoke).mock.calls.length;
+    await expect(desktop('input', 'new')).resolves.toMatchObject({ result: 'session' });
+    await expect(desktop('stop', 'new')).resolves.toMatchObject({ result: 'session' });
+    expect(old.invoke).toHaveBeenCalledTimes(calls);
+    await expect(desktop('input', 'new')).resolves.toMatchObject({ result: 'device-link' });
+    await expect(router.invoke('other-host', { channel: REMOTE_RESOURCE_LIST_CHANNEL, args: [] })).resolves.toMatchObject({ result: 'device-link' });
+    failure = new DeviceLinkError('BACKPRESSURE', 'peer reported backpressure');
+    await expect(desktop('start')).rejects.toBe(failure);
+    failure = new DeviceLinkError('INVOKE_TIMEOUT', 'already written');
+    failure.inFlight = true;
+    await expect(desktop('start')).rejects.toBe(failure);
+    failure = undefined;
+    await desktop('start');
+    connect();
+    await expect(desktop('input', 'new')).rejects.toMatchObject({ code: 'LINK_NOT_OPEN' });
+    old.invoke = async (_dst, _payload, _timeout, options) => {
+      expect(options?.canRerouteBeforeWrite?.()).toBe(true);
+      connect(); // New authenticated session before the async rejection reaches the router.
+      throw new DeviceLinkUnsentInvokeError();
+    };
+    await expect(desktop('start')).rejects.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+    expect(seen).toEqual([REMOTE_RESOURCE_LIST_CHANNEL, 'capabilities', 'start', 'input', 'stop', 'start']);
+  });
+
   it('routes a peer to the session unless a Device Link link is up or waiting to recover, and replies on the path a request came by', async () => {
     const { links } = pair();
     links.host.onFrame((env) => {
@@ -278,13 +519,15 @@ describe('AgentNetSessionLinks', () => {
     });
     const calls: string[] = [];
     let deviceLinkRecovering = true;
+    let queued = 64;
+    let pending = true;
     const deviceLink = {
       onPresenceChanged: () => () => {},
       isLinkReady: () => false,
       needsLinkRecovery: () => deviceLinkRecovering,
       // 列表这类不需要链路的请求还在途：不挡会话。
-      hasPendingRequestsTo: () => true,
-      getReliableSendQueueDepth: () => 0,
+      hasPendingRequestsTo: () => pending,
+      getReliableSendQueueDepth: () => queued,
       openLink: async () => { calls.push('device-link:openLink'); return { appVersion: 'dl', allowlistHash: 'dl' }; },
       invoke: async () => { calls.push('device-link:invoke'); return { ok: true, result: 'device-link' }; },
       sendInvokeResult: () => { calls.push('device-link:sendInvokeResult'); },
@@ -296,6 +539,12 @@ describe('AgentNetSessionLinks', () => {
     expect(controller.crossAccountConnection()).toBe(controller);
     await expect(controller.invoke('a-host', { channel: 'device-link:remote-desktop:v1', args: [] })).resolves.toEqual({ ok: true, result: 'device-link' });
     await expect(controller.openLink('a-host', openPayload)).resolves.toMatchObject({ appVersion: 'dl' });
+    // A fresh read bypasses the 64-frame backlog. New writes stay on the old transport.
+    await expect(controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'session' });
+    queued = 0;
+    pending = false;
+    await expect(controller.openLink('a-host', openPayload)).resolves.toMatchObject({ appVersion: 'host' });
+    await expect(controller.invoke('a-host', { channel: 'device-link:subscribe', args: [] })).resolves.toEqual({ ok: true, result: 'session' });
     deviceLinkRecovering = false;
     // 还没建链的调用也走会话。
     await expect(controller.invoke('a-host', { channel: 'device-link:remote-desktop:v1', args: [] })).resolves.toEqual({ ok: true, result: 'session' });
@@ -355,7 +604,9 @@ describe('AgentNetSessionLinks', () => {
     answerOnSession(links.host);
     const calls: string[] = [];
     const controller = routeSessionPeers(idleDeviceLink(calls), links.controller);
-    await expect(controller.openLink('a-host', openPayload)).resolves.toMatchObject({ appVersion: 'host' });
+    const opens = await Promise.all(Array.from({ length: 4 }, () => controller.openLink('a-host', { ...openPayload })));
+    expect(opens.map(accepted => accepted.appVersion)).toEqual(['host', 'host', 'host', 'host']);
+    expect(links.controller.getPeerLinkGeneration('a-host')).toBe(1);
     await expect(controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'session' });
     expect(dialed).toEqual(['a-host']);
     expect(calls).toEqual([]);
@@ -370,6 +621,31 @@ describe('AgentNetSessionLinks', () => {
     await expect(controller.openLink('d-gone', openPayload)).resolves.toMatchObject({ appVersion: 'dl' });
     expect(performance.now() - goneAt).toBeLessThan(500);
     expect(dialed).toEqual(['a-host', 'd-gone']);
+  });
+
+  // Unit: an expired dial finishing during the next foreground attempt must
+  // not send that attempt down the older carrier before the session arrives.
+  it('keeps the next wait alive when a previous dial fails late', async () => {
+    vi.useFakeTimers();
+    try {
+      const dials: ((connected: boolean) => void)[] = [];
+      const { links, connect } = pair({ connected: false, agentNetPeer: () => 'online',
+        connect: () => new Promise<boolean>(resolve => dials.push(resolve)) });
+      answerOnSession(links.host);
+      const calls: string[] = [];
+      const client = routeSessionPeers(idleDeviceLink(calls), links.controller);
+      const first = client.openLink('a-host', openPayload);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(first).resolves.toMatchObject({ appVersion: 'dl' });
+      const second = client.openLink('a-host', openPayload);
+      expect(dials).toHaveLength(2);
+      dials[0](false);
+      await vi.advanceTimersByTimeAsync(0);
+      connect();
+      dials[1](true);
+      await expect(second).resolves.toMatchObject({ appVersion: 'host' });
+      expect(calls).toEqual(['device-link:openLink:a-host']);
+    } finally { vi.useRealTimers(); }
   });
 
   // 同日真机：Host 重启时先连上 Device Link 中转，0.7 秒后才上 Agent-Net；控制端在这段时间里重试建链，中转上的探测拿到它
@@ -449,6 +725,20 @@ describe('AgentNetSessionLinks', () => {
     await Promise.all([write(0, 1_398_104), write(1, 1_398_104), write(2, 4_096)]);
     expect(order).toEqual([0, 1, 2]);
     expect([...new Set(controllerLanes)]).toEqual(['background']);
+  });
+
+  // 2026-11-19 公网对照（xdt-server 中转，250 KB/s、往返 220 ms）：远程任务启动时上传块一次 2～4 块在途，走普通通道时停止要排在它们后面，
+  // 往返从 0.4 秒涨到 1.3 秒，64 KB/s 时到 5.5 秒。上传块走后台通道，同一任务的其他远程任务调用照旧走普通通道。
+  it('sends remote-agent upload chunks on the background lane and the other remote-agent calls on the normal lane', async () => {
+    const { links, controllerLanes } = pair();
+    answerOnSession(links.host);
+    await links.controller.openLink('a-host', openPayload);
+    controllerLanes.length = 0;
+    await links.controller.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'upload', uploadId: 'u1', index: 0, data: 'AAAA' }] });
+    expect(controllerLanes).toEqual(['background']);
+    controllerLanes.length = 0;
+    await links.controller.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll', runs: [], waitMs: 0 }] });
+    expect(controllerLanes).toEqual(['normal']);
   });
 
   // 2026-11-17 排查：会话上的建链总报同一个流标识，共享任务的主人电脑重启后来源代次不前进，界面把新推送当旧的丢掉；会话断开时先清链路

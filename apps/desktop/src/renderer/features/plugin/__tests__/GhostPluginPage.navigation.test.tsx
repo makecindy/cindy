@@ -17,6 +17,7 @@ import {
   type PluginSuggestionRequest,
 } from '@/features/cc-agent/pendingPluginSuggestion';
 import { GhostPluginPage } from '../GhostPluginPage';
+import { __resetPluginInstallProgressForTest } from '../lib/pluginInstallProgress';
 import { pluginCatalogMemory, pluginCatalogOwnerKey, resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
@@ -79,6 +80,7 @@ const detail: PluginMarketDetail = {
   name: 'Navigation Plugin',
   description: 'Navigation regression fixture',
   author: 'Cindy',
+  publisherKind: 'official',
   scope: 'public',
   organizationId: null,
   defaultInstall: false,
@@ -158,6 +160,8 @@ beforeEach(() => {
       onRecentUsageChanged: () => () => {},
     },
     pluginMarket: {
+      // Market installs bracket a progress ring; these navigation cases push no steps.
+      onInstallProgress: () => () => undefined,
       recommendations: async () => [],
       query: async (input: { query?: string; cursor?: string | null }) => {
         const snapshot = await window.electronAPI.pluginMarket.snapshot();
@@ -185,6 +189,8 @@ it('opens a shared package before the selected remote plugin catalogue', async (
 });
 
 afterEach(() => {
+  // Install progress is window-level; an install a case leaves running must not leak into the next.
+  act(() => __resetPluginInstallProgressForTest());
   vi.useRealTimers();
   cleanup();
   clearDraft(NEW_MAKER_DRAFT_KEY);
@@ -259,7 +265,9 @@ describe('market action feedback', () => {
     expect(install).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('keeps explicit installation loading across detail and install with compact=%s', async compact => {
+  // The ring replaces the install button from the click through detail and install; after a
+  // failure it stays with the reason and the button returns as a retry.
+  it.each([false, true])('keeps install progress across detail and install and offers a retry with compact=%s', async compact => {
     let finishDetail!: (value: PluginMarketDetail) => void;
     let failInstall!: (error: Error) => void;
     loadDetail.mockImplementationOnce(() => new Promise(resolve => { finishDetail = resolve; }));
@@ -269,18 +277,23 @@ describe('market action feedback', () => {
     const { body, card } = await openCard(compact);
     const action = card.getByRole('button', { name: 'settings.ghosts.page.installAria' });
     fireEvent.click(action);
-    expect(action.getAttribute('aria-busy')).toBe('true');
+    const ring = () => card.getByRole('progressbar', { name: 'settings.ghosts.page.installAria' });
+    expect(ring().textContent).toBe('downloadProgress.phase.preparing');
+    expect(action.getAttribute('aria-hidden')).toBe('true');
     expect(card.queryByRole('status')).toBeNull();
     expect(install).not.toHaveBeenCalled();
     await act(async () => { finishDetail(detail); });
     expect(install).toHaveBeenCalledTimes(1);
-    expect(action.getAttribute('aria-busy')).toBe('true');
+    expect(ring().textContent).toBe('downloadProgress.phase.preparing');
     fireEvent.click(body);
     fireEvent.click(action);
     expect(loadDetail).toHaveBeenCalledTimes(1);
     await act(async () => { failInstall(new Error('Installation failed')); });
-    expect(action.getAttribute('aria-busy')).not.toBe('true');
-    expect((action as HTMLButtonElement).disabled).toBe(false);
+    expect(ring().textContent).toBe('settings.ghosts.installProgress.installFailed');
+    // The install button gives way to a square retry icon button with the same accessible name.
+    const retry = card.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+    expect(retry.textContent).toBe('');
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('shows failed detail in the page and allows a fresh explicit install after returning', async () => {
@@ -300,8 +313,10 @@ describe('market action feedback', () => {
     fireEvent.click(action);
     expect(action.getAttribute('aria-busy')).toBe('true');
     await act(async () => { fail(new Error('Details unavailable')); });
-    expect(action.getAttribute('aria-busy')).not.toBe('true');
-    expect((action as HTMLButtonElement).disabled).toBe(false);
+    // The failed card offers a fresh attempt through its retry button (same accessible name).
+    const retry = screen.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+    expect(retry.getAttribute('aria-busy')).not.toBe('true');
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
   });
 
   it.each(['owner', 'mode'] as const)('retires detail feedback on %s change without clearing a newer install', async change => {
@@ -328,8 +343,9 @@ describe('market action feedback', () => {
     expect(action.getAttribute('aria-busy')).toBe('true');
     expect(install).not.toHaveBeenCalled();
     await act(async () => { failNew(new Error('Details unavailable')); });
-    expect(action.getAttribute('aria-busy')).not.toBe('true');
-    expect((action as HTMLButtonElement).disabled).toBe(false);
+    const retry = screen.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+    expect(retry.getAttribute('aria-busy')).not.toBe('true');
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
   });
 });
 
@@ -347,6 +363,7 @@ it('defers local catalog prewarming and hidden revisions until activation', asyn
   const warm = render(view(true));
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   expect(query.mock.calls.some(([input]) => input.counts)).toBe(true);
+  expect(query.mock.calls.filter(([input]) => !input.counts).map(([input]) => input.scope)).toEqual(['public']);
   const memory = pluginCatalogMemory(pluginCatalogOwnerKey('local', auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
   const pages = memory.browser.current.pages;
   warm.unmount();
@@ -364,8 +381,16 @@ it('defers local catalog prewarming and hidden revisions until activation', asyn
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   expect(query.mock.calls.filter(([input]) => !input.counts)).toHaveLength(1);
   expect(query.mock.calls.filter(([input]) => input.counts)).toHaveLength(1);
+  const reads = query.mock.calls.length;
   fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
   expect(screen.getByRole('button', { name: detail.name })).toBeTruthy();
+  expect(screen.getByRole('radio', { name: /publisherKind.official/ }).textContent).toMatch(/1$/);
+  const community = screen.getByRole('radio', { name: /publisherKind.community/ });
+  expect(community.textContent).toMatch(/0$/);
+  fireEvent.click(community);
+  expect(community.getAttribute('aria-checked')).toBe('true');
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(query).toHaveBeenCalledTimes(reads);
 });
 
 it('restores tab, search, source and scroll together after leaving the plugin route', async () => {
@@ -374,13 +399,13 @@ it('restores tab, search, source and scroll together after leaving the plugin ro
   await screen.findByRole('button', { name: detail.name });
   const search = screen.getByRole('textbox');
   fireEvent.change(search, { target: { value: 'Navigation' } });
-  fireEvent.click(screen.getByRole('radio', { name: /settings.ghosts.page.origin.public/ }));
+  fireEvent.click(screen.getByRole('radio', { name: /settings.ghosts.market.publisherKind.official/ }));
   await screen.findByRole('button', { name: detail.name });
   fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 640 } });
   mounted.unmount();
   render(page('/plugins'));
   expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Navigation');
-  expect(screen.getByRole('radio', { name: /settings.ghosts.page.origin.public/ }).getAttribute('aria-checked')).toBe('true');
+  expect(screen.getByRole('radio', { name: /settings.ghosts.market.publisherKind.official/ }).getAttribute('aria-checked')).toBe('true');
   expect(screen.getByRole('main').scrollTop).toBe(640);
   expect(screen.getByRole('button', { name: detail.name })).toBeTruthy();
 });
@@ -1147,11 +1172,42 @@ describe('plugin page return navigation', () => {
       }));
       expect(screen.getByRole('main')).toBe(marketPage);
       expect(screen.getByRole('heading', { level: 1, name: detail.name })).toBeTruthy();
+      // "Updated" holds the button's place briefly (timing covered in pluginInstallProgress.test).
+      expect(screen.getByRole('progressbar', { name: detail.name }).textContent).toBe(
+        'settings.ghosts.updateAll.statusDone',
+      );
+      act(() => __resetPluginInstallProgressForTest());
       expect((screen.getByRole('button', {
         name: 'settings.ghosts.market.installed',
       }) as HTMLButtonElement).disabled).toBe(true);
     },
   );
+
+  it('shows only the update action for a market update requiring consent on the installed card', async () => {
+    const installed: InstalledGhost = {
+      manifest: { ...detail.manifest, version: '0.9.0' },
+      dir: path.join('plugins', detail.ghostId), namespace: null, namespaceState: 'confirmed', enabled: true,
+      publishingSource: { kind: 'public-market', pluginId: detail.pluginId },
+      approval: { state: 'approved', revision: 'installed-revision' },
+    };
+    const update: PluginMarketDetail = { ...detail, namespace: null, installState: 'update-available', updateRequiresConsent: true };
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    const snapshot = await window.electronAPI.pluginMarket.snapshot();
+    window.electronAPI.pluginMarket.snapshot = async () => ({ ...snapshot, items: [update] });
+    loadDetail.mockResolvedValue(update);
+    const install = vi.fn().mockResolvedValue({ ghost: { ...installed, manifest: update.manifest } });
+    Object.assign(window.electronAPI.pluginMarket, { install });
+
+    render(page('/plugins'));
+    const card = within(await screen.findByRole('button', { name: detail.name }));
+    const button = await card.findByRole('button', { name: 'settings.ghosts.page.updateAria' });
+    expect(button.textContent).toBe('settings.ghosts.installConsent.confirmUpdate');
+    expect(card.queryByText('settings.ghosts.installConsent.updateNeedsConsent')).toBeNull();
+    fireEvent.click(button);
+    await waitFor(() => expect(install).toHaveBeenCalledWith(update.pluginId, expect.objectContaining({
+      expectedReleaseId: update.releaseId, expectedInstalledApproval: 'approved:installed-revision',
+    })));
+  });
 
   it.each([
     { state: 'installed', author: 'Published nickname', installedAuthor: undefined, expected: null },
@@ -1168,16 +1224,39 @@ describe('plugin page return navigation', () => {
     };
     window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
     window.electronAPI.pluginMarket.snapshot = async () => ({
-      items: [{ ...detail, namespace: null, installState: state, author, installedAuthor,
+      items: [{ ...detail, namespace: null, publisherKind: null, installState: state, author, installedAuthor,
         version: state === 'update-available' ? '1.1.0' : detail.version }],
       unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [],
     });
     render(page('/plugins'));
     const card = screen.getByRole('button', { name: detail.name });
-    await within(card).findByText('settings.ghosts.detail.publicInstall');
+    await within(card).findByText('mcpApps.source.market');
     if (expected) expect(within(card).getByText(expected)).toBeTruthy();
     if (author !== expected && author) expect(within(card).queryByText(author)).toBeNull();
     expect(within(card).queryByText('Package author must not leak')).toBeNull();
+  });
+
+  it('shows the publisher from the recorded market listing after the package ID changes', async () => {
+    const installed: InstalledGhost = {
+      manifest: { ...detail.manifest, id: 'cindy-simulator', name: 'Simulator' },
+      dir: '/plugins/cindy-simulator',
+      namespace: null, namespaceState: 'confirmed', enabled: true,
+      publishingSource: { kind: 'public-market', pluginId: detail.pluginId },
+      approval: { state: 'approved', revision: 'revision' },
+    };
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    window.electronAPI.pluginMarket.snapshot = async () => ({
+      items: [
+        { ...detail, ghostId: 'baguette-simulator', namespace: null, installState: 'installed' },
+        { ...detail, ghostId: 'cindy-simulator', pluginId: 'other-listing',
+          namespace: null, publisherKind: 'personal', installState: 'conflict' },
+      ],
+      unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [],
+    });
+    render(page('/plugins'));
+    const card = screen.getByRole('button', { name: 'Simulator' });
+    await within(card).findByText('settings.ghosts.market.publisherKind.official');
+    expect(within(card).queryByText('settings.ghosts.market.publisherKind.community')).toBeNull();
   });
 
   it.each(['local', 'public-market'] as const)('keeps the original local author fallback without exposing an unconfirmed public author (%s)', async (kind) => {
@@ -1196,7 +1275,7 @@ describe('plugin page return navigation', () => {
     });
     render(page('/plugins'));
     const card = screen.getByRole('button', { name: detail.name });
-    await within(card).findByText(`settings.ghosts.detail.${kind === 'local' ? 'localDevelopment' : 'publicInstall'}`);
+    await within(card).findByText(kind === 'local' ? 'settings.ghosts.detail.localDevelopment' : 'mcpApps.source.market');
     expect(Boolean(within(card).queryByText('Local package author'))).toBe(kind === 'local');
   });
 
@@ -1447,6 +1526,21 @@ describe('retirement migration from the original plugin', () => {
     });
     return bridge;
   }
+
+  // Unit: ordinary plugin details already restore the list. A retirement notice
+  // has its own Back and Later controls; both should return to the original card.
+  it.each(['settings.ghosts.title', 'settings.ghosts.retirement.later'])(
+    'restores the catalog when leaving a retirement notice via %s', async (action) => {
+      installFixture([old]);
+      render(page('/settings?tab=ghosts'));
+      const card = await screen.findByRole('button', { name: 'Legacy Simulator' });
+      fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 640 } });
+      fireEvent.click(card);
+      fireEvent.click(await screen.findByRole('button', { name: action }));
+      const list = await screen.findByRole('main');
+      expect(list.scrollTop).toBe(640);
+    },
+  );
 
   it('exits market details and acknowledges the notice only after it is rendered', async () => {
     const bridge = installFixture([old]);
@@ -2031,7 +2125,8 @@ it.each([[120, 50], [-50, 0]])('keeps the source switch viewport appropriate at 
   render(page('/plugins'));
   fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
   await screen.findByRole('button', { name: detail.name });
-  const radio = screen.getByRole('radio', { name: /settings.ghosts.page.origin.public/ });
+  expect(screen.getByRole('radio', { name: /settings.ghosts.market.publisherKind.official/, checked: true })).toBeTruthy();
+  const radio = screen.getByRole('radio', { name: /settings.ghosts.market.publisherKind.community/ });
   const sticky = radio.closest('[role="radiogroup"]')!.parentElement!.parentElement!;
   const marker = sticky.previousElementSibling!;
   const root = screen.getByRole('main');

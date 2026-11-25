@@ -8,8 +8,7 @@ import { Select } from '@/components/ui/select';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { subscribeDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviderBorrow, type BorrowedProviderCatalog } from '@/hooks/useProviderBorrow';
-import { useOwnComputerModelUse } from '@/hooks/useOwnComputerModelUse';
-import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
+import { useRemoteControlAllowed } from '@/hooks/useRemoteControlAllowed';
 import {
   RUN_LOCATION_LOCAL,
   type RunLocationCandidate,
@@ -60,7 +59,8 @@ function ProviderRunLocationPicker({
         label={t('settings.providers.detail.runLocation.label')}
         value={location}
         truncateOptions
-        className="-my-1 h-6 w-fit max-w-[200px] gap-1 rounded-lg px-1.5 text-13"
+        size="inline"
+        className="-my-1 max-w-[200px] text-13"
         contentClassName="w-72 max-w-[var(--radix-select-content-available-width)]"
         groups={[{
           label: hint,
@@ -173,17 +173,13 @@ export function ProviderRunLocationSubtitle({ provider, subtitle }: { provider: 
 
 /**
  * 供应商详情头的第三行，只是状态：自己的其他电脑现在能用这个供应商——这台电脑允许同账号设备控制，
- * 且这个供应商单独打开了「允许被远程调用」，或「远程连接」里打开了「让我的其他电脑用本机模型」
- * (建了供应商组的不随这个开关打开)。这里没有开关。
+ * 且这个供应商打开了「允许被远程调用」(2026-11-18 起唯一的开关)。这里没有开关。
  */
 export function ProviderOwnComputersStatus({ provider }: { provider: ProviderView }) {
   const { t } = useTranslation();
   const { borrowed } = useProviderBorrow(provider);
-  const own = useOwnComputerModelUse();
-  const groups = useLocalProviderGroupsState();
-  const grouped = !groups.ready || Boolean(groups.groups[provider.id]);
-  const open = provider.remoteInvocationEnabled === true || (own.allProviders && !grouped);
-  if (!own.remoteControl || !open || borrowed || !provider.connected || provider.suspended || provider.agents.length === 0) return null;
+  const remoteControl = useRemoteControlAllowed();
+  if (!remoteControl || provider.remoteInvocationEnabled !== true || borrowed || !provider.connected || provider.suspended || provider.agents.length === 0) return null;
   return (
     <span data-testid="provider-own-computers" className="min-w-0 truncate text-12 leading-tight">
       {t('settings.providers.detail.ownComputersCanUse')}

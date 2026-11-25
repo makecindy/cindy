@@ -1,5 +1,6 @@
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { getDbClient } from './client/current.js';
+import { getSilentContinuationTiming } from './sessionActiveTurn.js';
 import { botProfiles, botSessionLinks, messages, sessions } from './schema.js';
 import { isTopLevelTitleAssistant } from './latestMessageText.logic.js';
 import { extractText } from '../sessionTaskSummary.logic.js';
@@ -19,7 +20,8 @@ export interface SessionNotificationPreview {
 
 /** Use the durable current turn, never the previous answer or an internal task receipt. */
 export async function readSessionNotificationPreview(sessionId: string, includeReply = true, includeAvatar = includeReply): Promise<SessionNotificationPreview> {
-  const db = getDbClient().drizzle;
+  const client = getDbClient();
+  const db = client.drizzle;
   const rows = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
   const current = rows[0];
   if (!current) return {};
@@ -31,10 +33,12 @@ export async function readSessionNotificationPreview(sessionId: string, includeR
     teammateName: profile.name, teammateBotId: profile.id,
     ...(avatar ? { teammateAvatar: avatar } : {}),
   } : {};
+  // Use the original product turn while the durable start matches this continuation.
+  const timing = getSilentContinuationTiming(sessionId, current.activeTurnStartedAt, client);
+  const startedAt = (timing ? timing.startedAt : current.activeTurnStartedAt) ?? 0;
+  const endedAt = (timing ? timing.endedAt : current.lastTurnEndedAt) ?? 0;
   // A delayed idle event may arrive after the next input has already started.
   // Do not notify that unfinished turn or reuse a pre-upgrade historical final.
-  const startedAt = current.activeTurnStartedAt ?? 0;
-  const endedAt = current.lastTurnEndedAt ?? 0;
   if (startedAt > endedAt) return { ...teammate, suppress: true };
   if (startedAt <= 0) return teammate;
   // Stable across preview readiness: a retry after a fallback must not notify twice.

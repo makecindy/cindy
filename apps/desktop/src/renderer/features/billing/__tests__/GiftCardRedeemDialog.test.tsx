@@ -23,8 +23,10 @@ const card: BillingGiftCard = {
   status: 'AVAILABLE',
   amount: '20',
   faceCode: 'cindy',
+  face: null,
   senderName: 'Cindy Team',
   message: 'Enjoy',
+  destination: 'PROMOTIONAL',
   claimDeadline: '2026-12-31T16:00:00.000Z',
   validityDays: 90,
   claimedAt: null,
@@ -33,15 +35,17 @@ const card: BillingGiftCard = {
 function open(initialCode: string | null = null) {
   const onClose = vi.fn();
   const onRedeemed = vi.fn();
+  const onCodeUnusable = vi.fn();
   render(
     <GiftCardRedeemDialog
       open
       initialCode={initialCode}
       onClose={onClose}
       onRedeemed={onRedeemed}
+      onCodeUnusable={onCodeUnusable}
     />,
   );
-  return { onClose, onRedeemed };
+  return { onClose, onRedeemed, onCodeUnusable };
 }
 
 const click = (name: string) => fireEvent.click(screen.getByRole('button', { name }));
@@ -78,10 +82,84 @@ describe('GiftCardRedeemDialog', () => {
 
     await screen.findByText(/^billing\.giftCard\.doneTitle/);
     expect(api.redeemGiftCard).toHaveBeenCalledWith(CODE);
-    expect(onRedeemed).toHaveBeenCalledOnce();
+    // 带上领取的码（规范写法），计费页据此清掉「我买的礼品卡」里缓存的这张卡的码。
+    expect(onRedeemed).toHaveBeenCalledExactlyOnceWith(CODE);
     expect(onClose).not.toHaveBeenCalled();
     click('billing.giftCard.done');
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  // 用户自己买的卡进充值余额、永久有效：不能照搬后台卡「有效 N 天 / 领取截止 / 赠送余额」的条款。
+  it('states top-up balance and no expiry for a card someone bought', async () => {
+    const purchased: BillingGiftCard = {
+      ...card, destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+    };
+    api.previewGiftCard.mockResolvedValue({ ok: true, card: purchased });
+    api.redeemGiftCard.mockResolvedValue({
+      ok: true,
+      card: { ...purchased, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T12:00:00.000Z' },
+      credit: { state: 'APPLIED', amount: '20', expiresAt: null },
+    });
+    open(CODE);
+
+    await screen.findByText('billing.giftCard.confirmTitle');
+    expect(screen.getByText('billing.balance.purchased')).toBeTruthy();
+    expect(screen.getByText('billing.giftCard.fields.validityPermanent')).toBeTruthy();
+    expect(screen.queryByText('billing.giftCard.fields.claimBy')).toBeNull();
+    expect(screen.queryByText('billing.balance.promotional')).toBeNull();
+
+    click('billing.giftCard.confirmAction');
+    await screen.findByText('billing.giftCard.doneDescriptionPurchased');
+  });
+
+  // 买来的卡作废可能只是退款或拒付还在处理，之后还会恢复：只说目前不能领取，不说已作废。
+  it('tells the recipient a voided bought card cannot be redeemed right now', async () => {
+    const purchased: BillingGiftCard = {
+      ...card, destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+    };
+    api.previewGiftCard.mockResolvedValue({ ok: true, card: { ...purchased, status: 'VOIDED' } });
+    open(CODE);
+    await screen.findByText('billing.giftCard.errors.voidedPurchased');
+    expect(screen.queryByText('billing.giftCard.errors.voided')).toBeNull();
+  });
+
+  it('says so when a bought card is voided while the recipient confirms', async () => {
+    api.previewGiftCard.mockResolvedValue({
+      ok: true, card: { ...card, destination: 'PURCHASED', claimDeadline: null, validityDays: null },
+    });
+    api.redeemGiftCard.mockResolvedValue({ ok: false, reason: 'VOIDED' });
+    open(CODE);
+    await screen.findByText('billing.giftCard.confirmTitle');
+    click('billing.giftCard.confirmAction');
+    await screen.findByText('billing.giftCard.errors.voidedPurchased');
+  });
+
+  // 评审发现（PR #11412）：买家缓存过码的卡在别处兑换后，查询结果「已是你的」也要让计费页清掉缓存的码
+  // 并重读列表；被别人领走、作废、过期（查询或领取时）同样。
+  it.each([
+    ['already yours', { ok: true, card: { ...card, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T08:00:00.000Z' } }],
+    ['claimed by someone else', { ok: true, card: { ...card, status: 'CLAIMED' } }],
+    ['voided', { ok: true, card: { ...card, status: 'VOIDED' } }],
+    ['reported as already claimed', { ok: false, reason: 'ALREADY_CLAIMED' }],
+  ])('reports a code that can no longer be used when the preview says it is %s', async (_label, preview) => {
+    api.previewGiftCard.mockResolvedValue(preview);
+    const { onCodeUnusable, onRedeemed } = open(CODE);
+    await waitFor(() => expect(onCodeUnusable).toHaveBeenCalledExactlyOnceWith(CODE));
+    expect(onRedeemed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ALREADY_CLAIMED', 'billing.giftCard.errors.alreadyClaimed', true],
+    ['RATE_LIMITED', 'billing.giftCard.errors.rateLimited', false],
+  ] as const)('reports a code that fails to redeem with %s only when it can no longer be used', async (reason, text, unusable) => {
+    api.previewGiftCard.mockResolvedValue({ ok: true, card });
+    api.redeemGiftCard.mockResolvedValue({ ok: false, reason });
+    const { onCodeUnusable } = open(CODE);
+    await screen.findByText('billing.giftCard.confirmTitle');
+    click('billing.giftCard.confirmAction');
+    await screen.findByText(text);
+    if (unusable) expect(onCodeUnusable).toHaveBeenCalledExactlyOnceWith(CODE);
+    else expect(onCodeUnusable).not.toHaveBeenCalled();
   });
 
   it('goes straight to confirmation for a code handed over by an app link', async () => {
@@ -110,6 +188,35 @@ describe('GiftCardRedeemDialog', () => {
 
     const face = await screen.findByRole('img', { name: /^billing\.giftCard\.cardLabel/ });
     expect(face.querySelectorAll('[data-gift-card-amount] path')).toHaveLength(3);
+  });
+
+  // 卡面由服务端下发：新卡面（本版本没有内置图）用服务端底图与印法画；底图到之前只留占位，
+  // 取不到时整张退回内置默认卡面（图与印法同一来源），不出现破图或服务端印法配内置图。
+  it('draws a card face the server added, and falls back whole when its image cannot load', async () => {
+    const snow = {
+      code: 'snow',
+      names: { en: 'Snow · Night' },
+      imageUrl: 'https://model-access.example.com/api/public/gift-cards/faces/snow.webp?v=0123456789ab',
+      amount: { x: 600, baseline: 300, size: 228, maxWidth: 480, color: '#112233' },
+    };
+    api.previewGiftCard.mockResolvedValue({ ok: true, card: { ...card, faceCode: 'snow', face: snow } });
+    open(CODE);
+
+    const face = await screen.findByRole('img', { name: /^billing\.giftCard\.cardLabel/ });
+    const remote = () => face.querySelector(`img[src="${snow.imageUrl}"]`);
+    const amount = () => face.querySelector('[data-gift-card-amount] g');
+    expect(face.querySelectorAll('img')).toHaveLength(1);
+    expect(amount()).toBeNull();
+
+    fireEvent.load(remote()!);
+    expect(amount()?.getAttribute('fill')).toBe('#112233');
+    expect(amount()?.getAttribute('transform')).toMatch(/^translate\(600 300\)/);
+
+    fireEvent.error(remote()!);
+    expect(remote()).toBeNull();
+    expect(face.querySelectorAll('img')).toHaveLength(1);
+    expect(amount()?.getAttribute('fill')).toBe('#F3EDE2');
+    expect(amount()?.getAttribute('transform')).toMatch(/^translate\(80 372\)/);
   });
 
   it('explains which edition a card belongs to and keeps the input for another try', async () => {

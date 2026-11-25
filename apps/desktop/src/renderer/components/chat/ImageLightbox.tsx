@@ -42,6 +42,7 @@ import { usePreviewFocusReturn } from './PreviewChrome';
  *   `data-gallery-active` 定位，细节见 `collectGallery` / `resolveStartIndexInFull`。
  */
 
+import { saveImageAs } from './DownloadImageMenuItem';
 import { useImageClipboard } from './useImageClipboard';
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -130,6 +131,7 @@ import {
   previewPanelSize,
 } from './PreviewChrome';
 import { previewAdjacentIndex, previewSourceName } from '@cindy/maker-shared/attachment-preview';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 /** 图片不允许缩得比"适配窗口"更小,所以下限是 1 而不是共享常量的 0.2。 */
 const IMAGE_MIN_SCALE = 1;
@@ -1239,17 +1241,8 @@ function ImageLightboxContent({
       if (strokesRef.current.length > 0) {
         const { blob } = await materializeAnnotatedImage();
         saveUrl = await blobToDataUrl(blob);
-      } else if (
-        /^data:image\//i.test(currentSrc) &&
-        !/^data:image\/[a-z0-9+.-]+;base64,/i.test(currentSrc)
-      ) {
-        // main 的 save-as 只认无参数的 `data:image/...;base64,` 形式:URL-encoded
-        // 或带 MIME 参数(`;charset=utf-8` 等)的 data: 先经字节层归一化(字节层
-        // 保证输出无参数 mime),否则按钮可见却必抛 INVALID_PARAMS(review P2)。
-        const { base64, mimeType } = await loadImageSourceBase64(currentSrc);
-        saveUrl = `data:${mimeType};base64,${base64}`;
       }
-      const res = await window.electronAPI.saveMediaAs({ url: saveUrl });
+      const res = await saveImageAs(saveUrl);
       // 用户在系统对话框里取消不是错误,也不需要 toast。
       if (!res.canceled) toast.success(t('chat.media.imageSaved'));
     } catch (err) {
@@ -1450,7 +1443,7 @@ function ImageLightboxContent({
       className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,
-        zIndex: 9999,
+        zIndex: Z_INDEX_LAYERS.fullscreen,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -1648,9 +1641,6 @@ function ImageLightboxContent({
           <DropdownMenuContent
             align="start"
             sideOffset={2}
-            // lightbox overlay 是 z-9999；默认 DropdownMenuContent(z-50) 会被遮住,
-            // 这里提升到 overlay 上方。
-            className="z-[10000]"
           >
             {canAnnotate && !isAnnotating ? (
               <DropdownMenuItem
@@ -1736,7 +1726,7 @@ function ImageLightboxContent({
                 %
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent className="z-[10002]">
+            <DropdownMenuContent>
               <DropdownMenuItem onClick={resetViewport}>
                 {t('attachmentPreview.fit')}
               </DropdownMenuItem>
@@ -1843,7 +1833,7 @@ function ImageLightboxContent({
             {index + 1} / {galleryItems.length}
           </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent className="z-[10002] max-h-72 overflow-auto">
+                <DropdownMenuContent className="max-h-72 overflow-auto">
                   {galleryItems.map((item, itemIndex) => (
                     <DropdownMenuItem
                       key={item.galleryId ?? `${itemIndex}:${item.src}`}

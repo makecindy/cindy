@@ -28,9 +28,14 @@ export function taskTeammateOptions(rows: readonly HostedRemoteCollectionItem[],
   return [...options.values()];
 }
 
+/** The teammate a task belongs to: the one test shared by the teammate filter and the inbox. */
+export function taskTeammateId(session: Pick<RemoteSession, 'taskTeammate' | 'companion'>): string | undefined {
+  return session.taskTeammate?.id ?? session.companion?.id ?? undefined;
+}
+
 export function isTeammateTask(session: Pick<RemoteSession, 'source' | 'companion'>): boolean {
   return session.source === 'bot' && !!session.companion?.id
-    && (session.companion.role === 'routine' || session.companion.role === 'channel' || (session.companion.role === 'group' && !!session.companion.taskProjectDir));
+    && (session.companion.role === 'routine' || session.companion.role === 'channel' || session.companion.role === 'group');
 }
 
 export function parseTaskCompanion(value: unknown): TaskCompanion | undefined {

@@ -1078,12 +1078,12 @@ function devScriptForMode(mode) {
   return mode === 'local' ? 'dev:desktop' : 'dev:desktop:remote';
 }
 
-function packageManagerCommand(mode) {
+function packageManagerCommand(mode, startupArgs = []) {
   const runnerPath = path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs');
   if (process.platform === 'win32') {
-    return `${cmdDoubleQuote(process.execPath)} ${cmdDoubleQuote(runnerPath)} ${mode}`;
+    return `${cmdDoubleQuote(process.execPath)} ${cmdDoubleQuote(runnerPath)} ${mode}${startupArgs.map((arg) => ` ${cmdDoubleQuote(arg)}`).join('')}`;
   }
-  return `${shellSingleQuote(process.execPath)} ${shellSingleQuote(runnerPath)} ${shellSingleQuote(mode)}`;
+  return `${shellSingleQuote(process.execPath)} ${shellSingleQuote(runnerPath)} ${shellSingleQuote(mode)}${startupArgs.map((arg) => ` ${shellSingleQuote(arg)}`).join('')}`;
 }
 
 function darwinEnvPrefix() {
@@ -1187,6 +1187,7 @@ function devEnvEntries(env) {
     ['CINDY_PERSONAL_MONITOR_DIR', env.CINDY_PERSONAL_MONITOR_DIR],
     ['CINDY_PERSONAL_GENERATION', env.CINDY_PERSONAL_GENERATION],
     ['CINDY_PERSONAL_FIXED_APP', env.CINDY_PERSONAL_FIXED_APP],
+    ['CINDY_PERSONAL_ASSET_DIGEST', env.CINDY_PERSONAL_ASSET_DIGEST],
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
     // IPC 通道调用计数报告（ipcChannelUsage.ts，仅源码运行）：Host 通道覆盖排行用。
@@ -1219,9 +1220,9 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     .join(' ') + ' ';
 }
 
-function launchInSystemTerminal(mode) {
+function launchInSystemTerminal(mode, startupArgs) {
   if (process.platform === 'win32') {
-    const command = `cd /d ${cmdDoubleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode)}`;
+    const command = `cd /d ${cmdDoubleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode, startupArgs)}`;
     const script = [
       "Start-Process -FilePath 'cmd.exe'",
       `-ArgumentList @('/c', ${psSingleQuote(command)})`,
@@ -1243,7 +1244,7 @@ function launchInSystemTerminal(mode) {
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     fs.rmSync(logPath, { force: true });
     fs.rmSync(`${logPath}.fifo`, { force: true });
-    const command = `${darwinEnvPrefix()}${darwinStaleDevEnvUnset()}cd ${shellSingleQuote(rootDir)} && ${darwinTerminalLoggedCommand(packageManagerCommand(mode), logPath, { envPrefix: devEnvPrefix() })}; exitCode=$?; exit $exitCode`;
+    const command = `${darwinEnvPrefix()}${darwinStaleDevEnvUnset()}cd ${shellSingleQuote(rootDir)} && ${darwinTerminalLoggedCommand(packageManagerCommand(mode, startupArgs), logPath, { envPrefix: devEnvPrefix() })}; exitCode=$?; exit $exitCode`;
     const { scriptPath, args } = prepareDarwinTerminalLaunch(command);
     // osascript 在 do script 之前失败（自动化权限被拒、脚本错误）时临时脚本不会被 source，
     // 首行自删不会发生；按失败退出尽力删除，避免留下含开发环境变量的文件。
@@ -1277,17 +1278,17 @@ function launchInSystemTerminal(mode) {
   return null;
 }
 
-function startDesktopDev(mode, reuseTerminal = false) {
+function startDesktopDev(mode, reuseTerminal = false, startupArgs = []) {
   console.log(`==> Starting desktop ${mode} dev...`);
 
   if (!reuseTerminal && !hasInteractiveTty() && (process.platform === 'win32' || process.platform === 'darwin')) {
-    return launchInSystemTerminal(mode) ?? null;
+    return launchInSystemTerminal(mode, startupArgs) ?? null;
   }
 
   const logPath = reuseTerminal ? desktopDevTerminalLogPath() : null;
   const child = reuseTerminal
-    ? launchDarwinDevInCurrentTerminal(packageManagerCommand(mode), logPath)
-    : spawn(process.execPath, [path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs'), mode], {
+    ? launchDarwinDevInCurrentTerminal(packageManagerCommand(mode, startupArgs), logPath)
+    : spawn(process.execPath, [path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs'), mode, ...startupArgs], {
     cwd: rootDir,
     stdio: 'inherit',
     windowsHide: false,
@@ -1351,10 +1352,29 @@ function attachStartupFailure(error, status) {
   return error;
 }
 
-export async function waitForDesktopStartup(statusPath, timeoutMs = startupReadyTimeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+export function resolveDesktopLaunchPolicy(argv, {
+  env = process.env, platform = process.platform, stdoutIsTTY = process.stdout.isTTY,
+} = {}) {
+  const reuseRequested = argv.includes('--reuse-terminal');
+  const supervised = platform === 'darwin' && reuseRequested &&
+    Boolean(env.CINDY_PERSONAL_MONITOR_DIR && env.CINDY_PERSONAL_GENERATION);
+  // The unattended shared launcher can have a tty on stdin that is already at EOF.
+  // Give the long-lived Forge process its own Terminal instead of that descriptor.
+  const needsOwnTerminal = supervised && argv.includes('--shared') && env.CINDY_PERSONAL_FIXED_APP && !stdoutIsTTY;
+  return { reuseTerminal: reuseRequested && !needsOwnTerminal, coldBuildTimeoutMs: supervised ? 600_000 : null };
+}
+
+export async function waitForDesktopStartup(statusPath, timeoutMs = startupReadyTimeoutMs, {
+  coldBuildTimeoutMs = null, now = Date.now, wait = sleep,
+} = {}) {
+  let waitingForWindow = coldBuildTimeoutMs !== null;
+  let deadline = now() + (coldBuildTimeoutMs ?? timeoutMs);
+  while (now() < deadline) {
     const status = readDesktopStartupStatus(statusPath);
+    if (waitingForWindow && status?.state === 'window-ready') {
+      waitingForWindow = false;
+      deadline = now() + timeoutMs;
+    }
     if (status?.state === 'ready') {
       console.log(`==> Desktop dev is ready (window + auth/local database, pid ${status.pid ?? 'unknown'}).`);
       fs.rmSync(statusPath, { force: true });
@@ -1369,21 +1389,16 @@ export async function waitForDesktopStartup(statusPath, timeoutMs = startupReady
         status,
       );
     }
-    await sleep(pollIntervalMs);
+    await wait(pollIntervalMs);
   }
-  // Keep a tombstone so a late Electron startup signal cannot recreate a stale
-  // status file after this waiter has already reported timeout to its caller.
-  writeDesktopStartupStatus(statusPath, { state: 'abandoned', at: Date.now() });
-  throw attachStartupFailure(
-    new Error(
-      `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s. Check the dev terminal and apps/desktop/logs/.`,
-    ),
-    {
-      state: 'failed',
-      code: 'STARTUP_TIMEOUT',
-      message: `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s.`,
-    },
-  );
+  // A late Electron signal must not recreate the status file after a timeout.
+  writeDesktopStartupStatus(statusPath, { state: 'abandoned', at: now() });
+  const phase = waitingForWindow ? 'cold build and first window'
+    : coldBuildTimeoutMs !== null ? 'auth/database startup after window-ready' : 'window/auth/database startup';
+  const limit = waitingForWindow ? coldBuildTimeoutMs : timeoutMs;
+  const message = `Desktop dev did not finish ${phase} within ${Math.round(limit / 1000)}s.`;
+  throw attachStartupFailure(new Error(`${message} Check the dev terminal and apps/desktop/logs/.`),
+    { state: 'failed', code: 'STARTUP_TIMEOUT', message });
 }
 
 /**
@@ -1437,7 +1452,7 @@ async function main() {
   }
   const killOnly = argv.includes('--kill-only');
   const waitReady = argv.includes('--wait-ready');
-  const reuseTerminal = argv.includes('--reuse-terminal');
+  const { reuseTerminal, coldBuildTimeoutMs } = resolveDesktopLaunchPolicy(argv);
   // Fail before the stop stage if the requested terminal has disappeared.
   if (reuseTerminal) currentDarwinTerminal();
   const preserveRunning = argv.includes('--preserve-running');
@@ -1813,7 +1828,10 @@ async function main() {
 
   if (killOnly) return;
 
-  if (!preserveRunning) clearDesktopDevCaches(rootDir);
+  if (process.env.CINDY_PERSONAL_ASSET_DIGEST && process.env.CINDY_PERSONAL_MONITOR_DIR && process.env.CINDY_PERSONAL_GENERATION) {
+    const { verifyInterface } = await import('./personal-build/interface-assets.mjs');
+    verifyInterface(rootDir, process.env.CINDY_PERSONAL_ASSET_DIGEST);
+  } else if (!preserveRunning) clearDesktopDevCaches(rootDir);
 
   let startupStatusPath = null;
   if (waitReady) {
@@ -1827,7 +1845,12 @@ async function main() {
       isolationName: process.env.XDT_ISOLATED_NAME || '',
     });
   }
-  const terminalLogPath = startDesktopDev(mode, reuseTerminal);
+  // Re-pass the explicit file as CLI intent: the child wrapper must still ignore
+  // unrelated inherited XDT_ENDPOINT_MANIFEST_FILE values.
+  const startupArgs = argv.some((arg) => arg === '--endpoints-file' || arg.startsWith('--endpoints-file='))
+    ? [`--endpoints-file=${path.resolve(rootDir, startupConfig.endpointManifestFile)}`]
+    : [];
+  const terminalLogPath = startDesktopDev(mode, reuseTerminal, startupArgs);
   // 所有非 ready 的结论（启动失败、超时、ready 后进程退出导致的 WHOAMI_MISMATCH）
   // 都先打印终端日志末尾，并在 verdict 里带上 log=。
   const printFailedVerdict = (verdict) => {
@@ -1840,7 +1863,7 @@ async function main() {
   };
   if (startupStatusPath) {
     try {
-      await waitForDesktopStartup(startupStatusPath);
+      await waitForDesktopStartup(startupStatusPath, startupReadyTimeoutMs, { coldBuildTimeoutMs });
       const report = collectDesktopWhoamiReport({
         rootDir,
         userDataDir: process.env.XDT_USER_DATA_DIR,

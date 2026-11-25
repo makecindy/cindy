@@ -204,6 +204,13 @@ export interface BotGroupMemberView {
   status: BotGroupMemberStatus;
 }
 
+/** One Stop targets the same attempt before and after its queued input is claimed. */
+export function botGroupStopRunEpoch(execution: { epoch?: number; status: string }): number | undefined {
+  const epoch = execution.epoch;
+  if (typeof epoch !== 'number' || !Number.isSafeInteger(epoch) || epoch < 0) return undefined;
+  return execution.status === 'queued' ? epoch + 1 : epoch;
+}
+
 /** Group roles never confer control of another account's execution. */
 export function canStopBotGroupWork(member: Pick<BotGroupMemberView, 'assistant' | 'isOwned'> | undefined, isSelfRequested: boolean): boolean {
   return !!member && (member.assistant === true ? isSelfRequested : member.isOwned === true);
@@ -539,6 +546,10 @@ export function isBotGroupPlanOpen(status: BotGroupPlanStatus): boolean {
 }
 
 export interface BotGroupLastMessage {
+  /** Optional on older hosts. Identifies the previewed message, not a quoted/shared source. */
+  messageId?: string;
+  /** The previewed message belongs to this topic; absent/null means the main chat. */
+  threadRootId?: string | null;
   isSelf?: boolean;
   authorKind: BotGroupAuthorKind;
   authorName: string;
@@ -560,6 +571,8 @@ export interface BotGroupSpeaker {
   threadRootId?: string | null;
   /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
   executionId?: string;
+  /** Exact persisted input locator from the execution host; absent on older hosts. */
+  inputClientId?: string;
   /** Stable history position (e.g. server enqueue time), independent of elapsed work. */
   timelineAt?: number;
   /** Authenticated projection of requester identity; absence on old hosts grants no control. */
@@ -634,6 +647,8 @@ export interface BotGroupSummary {
    * and arranges turns itself; no speaking modes (bot-group-chat.md §4).
    */
   singleSpeaker?: boolean;
+  /** Ordinary group messages start independent replies, including while a legacy plan is open. */
+  independentReplies?: boolean;
   /** A single-speaker group whose computer arranges 「安排分工」 (older computers answered it as a queue). */
   supportsDivision?: boolean;
   selfActorId?: string;
@@ -685,6 +700,8 @@ export interface BotGroupSummary {
 }
 
 export interface BotGroupDetail extends BotGroupSummary {
+  /** Timeline is readable. Retry incomplete execution or plan information at this deadline. */
+  metadataRetryAt?: number;
   /** Durable cache generation. A changed value discards pages from a previous history/permission boundary. */
   historyRevision?: string;
   /** Current authorized versions of already displayed messages, including deletion tombstones. */
@@ -759,7 +776,7 @@ export interface BotGroupFailure {
 }
 
 export type BotGroupListResult = { ok: true; groups: BotGroupSummary[] } | BotGroupFailure;
-export type BotGroupGetResult = { ok: true; group: BotGroupDetail } | BotGroupFailure;
+export type BotGroupGetResult = { ok: true; group: BotGroupDetail } | (BotGroupFailure & { retryAt?: number });
 export type BotGroupCreateResult = { ok: true; groupId: string } | BotGroupFailure;
 export type BotGroupMutationResult = {
   ok: true;
@@ -984,6 +1001,11 @@ export function isChatOnlyGroupLane(routeKey: string | null | undefined): boolea
   return /^group:[^:]+:access:chat:[1-9][0-9]*(?::mask:[^:]+)?(?::plan:[^:]+|:thread:[^:]+|:talk:[^:]+|:personal-digest)?$/.test(routeKey ?? '');
 }
 
+/** Only an explicit member mask can use a tools grant in a group. */
+export function groupLaneUsesChatWorkspace(routeKey: string): boolean {
+  return isChatOnlyGroupLane(routeKey) || /^group:[^:]+:access:tools:[1-9][0-9]*(?::(?:plan|thread|talk):[^:]+|:personal-digest)?$/.test(routeKey);
+}
+
 /**
  * A queue's own lane (bot-group-chat.md §7.0): one hidden Session per queue, grant and teammate,
  * so each turn reads only its card. It talks in the group lane's place, never a project folder.
@@ -1032,7 +1054,7 @@ export function parseBotGroupIdFromRouteKey(routeKey: string | null | undefined)
 
 /** Plan id of a 分工 Session route key, or null for lanes and other routes. */
 export function parseBotGroupPlanRouteKey(routeKey: string | null | undefined): { groupId: string; planId: string } | null {
-  const match = typeof routeKey === 'string' ? /^group:([^:]+)(?::access:(?:owner|tools|chat):[1-9][0-9]*)?:plan:([^:]+)$/.exec(routeKey) : null;
+  const match = typeof routeKey === 'string' ? /^group:([^:]+)(?::access:(?:owner|tools|chat):[1-9][0-9]*(?::mask:[^:]+)?)?:plan:([^:]+)$/.exec(routeKey) : null;
   return match ? { groupId: match[1]!, planId: match[2]! } : null;
 }
 

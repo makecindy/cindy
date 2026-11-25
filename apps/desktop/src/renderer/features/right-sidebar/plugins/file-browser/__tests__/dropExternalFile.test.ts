@@ -15,7 +15,7 @@ describe('file-browser external drop helpers', () => {
     expect(isDroppedFilePreviewSupported('/tmp/spec.pdf')).toBe(true);
     expect(isDroppedFilePreviewSupported('/tmp/diagram.drawio')).toBe(true);
     expect(isDroppedFilePreviewSupported('/tmp/archive.zip')).toBe(false);
-    expect(isDroppedFilePreviewSupported('/tmp/movie.mp4')).toBe(false);
+    expect(isDroppedFilePreviewSupported('/tmp/movie.mp4')).toBe(true);
   });
 
   it('splits native absolute paths into a workdir and basename relPath', () => {

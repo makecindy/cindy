@@ -101,9 +101,32 @@ export function isPluginTeamPlanWithinBudget(plan: unknown): boolean {
     return typeof json === 'string' && json.length <= PLUGIN_TEAM_PLAN_MAX_JSON_CHARS;
   } catch { return false; }
 }
+/**
+ * A plugin's own setting for one IM conversation, on top of the shared IM project settings
+ * (capabilities().imProjectOverrides). Omitted fields follow the project. The directory always
+ * follows the project; a permission looser than the project's needs a Host confirmation grant.
+ */
+export interface PluginImProjectOverride {
+  route?: PluginTaskRoute;
+  permissionMode?: PluginTaskPermissionMode;
+  /** Opaque id returned by confirmImPermission; only meaningful for this plugin and project. */
+  permissionGrant?: string;
+}
+/** Display label the plugin shows in Cindy's confirmation; never an identity or a grant. */
+export const PLUGIN_IM_CONVERSATION_LABEL_MAX_CHARS = 120;
 export type PluginTaskRequest = (
   | { type: 'tasks-request'; kind: 'capabilities' | 'models' | 'imProjects' }
-  | { type: 'tasks-request'; kind: 'followImProject'; taskId: string; expectedRevision: number; imProject: string }
+  /** Current shared settings of one project, i.e. what "follow IM" resolves to now. */
+  | { type: 'tasks-request'; kind: 'imProjectConfig'; imProject: string }
+  /** Cindy's own dialog; a plugin page cannot draw or click it. Required only to loosen. */
+  | {
+      type: 'tasks-request';
+      kind: 'confirmImPermission';
+      imProject: string;
+      permissionMode: PluginTaskPermissionMode;
+      conversation: { label: string; kind: 'group' | 'direct' };
+    }
+  | { type: 'tasks-request'; kind: 'followImProject'; taskId: string; expectedRevision: number; imProject: string; imOverride?: PluginImProjectOverride }
   | { type: 'tasks-request'; kind: 'setModel'; taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }
   | {
       type: 'tasks-request';
@@ -116,6 +139,8 @@ export type PluginTaskRequest = (
       autoTitle?: boolean;
       /** Shared IM project: chat or a directory returned by imProjects. Requires agent.targets. */
       imProject?: string;
+      /** Only with imProject; this conversation's own model and permission. */
+      imOverride?: PluginImProjectOverride;
       route?: PluginTaskRoute;
       /** New task only; the plugin's Host card ceiling applies only when enabled. */
       permissionMode?: PluginTaskPermissionMode;
@@ -132,7 +157,7 @@ export type PluginTaskRequest = (
   | { type: 'tasks-request'; kind: 'setTeamPlan'; taskId: string; plan: PluginTeamPlan }
   | { type: 'tasks-request'; kind: 'releaseWorker'; taskId: string; workerId: string; completedAt: number }
   | { type: 'tasks-request'; kind: 'requestWriteAccess'; taskId: string; mode?: 'acceptEdits' | 'auto' }
-  | { type: 'tasks-request'; kind: 'readMessages'; taskId: string; after?: string; limit?: number }
+  | { type: 'tasks-request'; kind: 'readMessages'; taskId: string; progressForRun?: string; after?: string; limit?: number }
   | {
       type: 'tasks-request';
       kind: 'send';

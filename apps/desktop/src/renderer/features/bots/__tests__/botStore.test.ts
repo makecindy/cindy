@@ -156,6 +156,33 @@ describe('bot profile store', () => {
     }
   });
 
+  // Every Bot change notification re-reads the roster, and each read used to replace
+  // the array and every row, re-rendering all useBotProfiles() subscribers (sidebar,
+  // MainLayout, ...). Unit: two identical list reads, then one changed row.
+  it('keeps unchanged rows and the roster array by identity across refreshes', async () => {
+    const previousOwner = getDataOwnerGeneration();
+    setDataOwnerGeneration('roster-identity-owner');
+    // Main always sends createdAt; without it normalization stamps Date.now() per read.
+    let rows: unknown[] = [{ id: 'a', name: 'A', createdAt: 1, sessions: [] }, { id: 'b', name: 'B', createdAt: 1, sessions: [] }];
+    const list = vi.fn(async () => rows);
+    vi.stubGlobal('window', {
+      electronAPI: { localDb: { bots: { list } } },
+      localStorage: { getItem: () => null, removeItem: () => undefined, length: 0, key: () => null },
+    });
+    try {
+      const first = await ensureBotProfilesLoaded(true);
+      expect(await ensureBotProfilesLoaded(true)).toBe(first);
+      rows = [{ id: 'a', name: 'A', createdAt: 1, sessions: [] }, { id: 'b', name: 'B renamed', createdAt: 1, sessions: [] }];
+      const changed = await ensureBotProfilesLoaded(true);
+      expect(changed).not.toBe(first);
+      expect(changed[0]).toBe(first[0]);
+      expect(changed[1]?.name).toBe('B renamed');
+      expect(list).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.unstubAllGlobals(); setDataOwnerGeneration(previousOwner.dataOwnerId, previousOwner.generation);
+    }
+  });
+
   it('creates a Bot profile without a fake Session projection', () => {
     const bot = addBotProfile({
       name: 'Telegram release helper',

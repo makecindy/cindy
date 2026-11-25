@@ -233,8 +233,12 @@ function loadNative(): NativeDesktopWidgets | null {
  * Feeds the desktop widgets when this app was built with them (macOS only). Returns the stop
  * function, or null when there is nothing to feed.
  */
-export function startDesktopWidgets(overview: QuotaOverviewService): (() => void) | null {
+export function startDesktopWidgets(overview: DesktopWidgetsDeps['overview']): (() => void) | null {
   if (process.platform !== 'darwin') return null;
+  // The Swift addon targets macOS 14 (Darwin 23). An unavailable symbol aborts the
+  // main process, so check before loading it, even when no widgets have been placed.
+  const darwinMajor = Number(os.release().split('.')[0]);
+  if (!Number.isInteger(darwinMajor) || darwinMajor < 23) return null;
   const native = loadNative();
   if (!native) return null;
   let dataPath: string | null | undefined;

@@ -32,12 +32,7 @@ import {
   hostIpcFingerprint,
   isHostIpcOwnerStamp,
 } from '@cindy/maker-shared/host-ipc-registry';
-
-const CODED_ERROR = /^\[([A-Z][A-Z0-9_]*)\] ([\s\S]*)$/;
-const STATUS_BY_CODE = {
-  INVALID_PARAMS: 400, PERMISSION_DENIED: 403, NOT_FOUND: 404, PRECONDITION_FAILED: 409,
-  OWNER_CHANGED: 409, UNSUPPORTED_CAPABILITY: 501,
-};
+import { parseTypedError, typedErrorStatus } from './typed-error.mjs';
 
 const reject = (status, code, message) => ({ status, body: { ok: false, error: { code, message } } });
 
@@ -50,9 +45,8 @@ const sameOwner = (a, b) => a.dataOwnerId === b.dataOwnerId && a.ownerGeneration
 
 /** Typed `[CODE] message` errors keep their contract; anything else is not serialised. */
 function handlerFailure(error) {
-  const code = typeof error?.code === 'string' ? error.code : null;
-  const match = error instanceof Error ? CODED_ERROR.exec(error.message) : null;
-  if (code && match && match[1] === code) return reject(STATUS_BY_CODE[code] ?? 500, code, match[2]);
+  const typed = parseTypedError(error);
+  if (typed) return { status: typedErrorStatus(typed.code) ?? 500, body: { ok: false, error: typed } };
   return reject(500, 'INTERNAL', 'Host handler failed');
 }
 
