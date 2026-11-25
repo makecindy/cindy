@@ -1,4 +1,6 @@
 import { refineCreatedTaskTitle } from '../../maker-ipc/createdTaskTitles.js';
+import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import { captureChannelAccount } from './openChannelSession';
 import { beginTemporaryImPermission } from './temporaryTurnPermission';
 import { imText } from './imText';
@@ -703,7 +705,10 @@ export interface ImTurnRunner {
    */
   vendorOptionsForSession(sessionId: string): Record<string, unknown> | undefined;
   /** Permission choices exposed by the session's concrete Agent implementation. */
-  getPermissionModes(agentKind: EngineKind): PermissionModeDescriptor[];
+  getPermissionModes(
+    agentKind: EngineKind,
+    sessionContext?: { sessionId?: string; providerId?: string | null },
+  ): PermissionModeDescriptor[];
   changePermissionMode(args: {
     sessionId: string;
     mode: PermissionMode;
@@ -5123,8 +5128,24 @@ export function createTurnRunner(
     companionBotIdFor,
     rotateCompanionLane,
     peekCompanionRouteTarget,
-    getPermissionModes: (agentKind) => {
-      if (agentKind === 'acp') return [...ACP_FALLBACK_PERMISSION_MODES];
+    getPermissionModes: (agentKind, sessionContext) => {
+      if (agentKind === 'acp') {
+        const live = sessionContext?.sessionId ? getMakerSessionById(sessionContext.sessionId) : undefined;
+        const liveModes = live?.capabilities?.permissionModes;
+        if (liveModes && liveModes.length > 0) return [...liveModes];
+        const key = pluginEngineKeyFromProviderId(sessionContext?.providerId ?? null);
+        if (key) {
+          const view = listPluginEngineViews().find((item) => item.key === key);
+          if (view?.permissionModes?.length) {
+            return view.permissionModes.map((mode) => ({
+              id: mode.id,
+              displayName: mode.displayName,
+              description: mode.description,
+            }));
+          }
+        }
+        return [...ACP_FALLBACK_PERMISSION_MODES];
+      }
       return getMaker().getCapabilities(agentKind).permissionModes;
     },
     changePermissionMode: (args) =>

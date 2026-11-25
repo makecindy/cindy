@@ -355,9 +355,16 @@ async function resolveNewSessionConfig(
     selectedAgent === 'acp' || (selectedBuiltinAgent === null && imDefaults.agentKind === 'acp');
   if (wantsPluginEngine) {
     const acp = imDefaults.agents.acp;
-    const providerId = workdirRoute?.providerId ?? acp?.providerId ?? null;
-    const model = mergedOverrides.model ?? acp?.model ?? '';
-    const agentDeviceId = workdirRoute ? workdirRoute.agentDeviceId : (acp?.agentDeviceId ?? null);
+    // 项目切回跟随默认时可能仍残留旧内置供应商的 workdirRoute；只有显式选了 acp 且该路由本身带
+    // 合法插件引擎标识时才采用 workdirRoute，否则整体沿用全局 ACP 默认的 (providerId, model, agentDeviceId)。
+    const explicitAcp = selectedAgent === 'acp';
+    const acpWorkdirRoute =
+      explicitAcp && workdirRoute && pluginEngineKeyFromProviderId(workdirRoute.providerId)
+        ? workdirRoute
+        : null;
+    const providerId = acpWorkdirRoute?.providerId ?? acp?.providerId ?? null;
+    const model = (explicitAcp ? mergedOverrides.model : null) ?? acp?.model ?? '';
+    const agentDeviceId = acpWorkdirRoute ? acpWorkdirRoute.agentDeviceId : (acp?.agentDeviceId ?? null);
     if (!pluginEngineKeyFromProviderId(providerId) || !model.trim()) {
       throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} plugin engine route is incomplete${routeReselectHint()}`);
     }

@@ -705,10 +705,30 @@ export function createSlashHandlers(
           return true;
         }
         const { row } = target;
+        let permissionModes = turnRunner.getPermissionModes(row.agentKind, {
+          sessionId: row.id,
+          providerId: row.providerId,
+        });
+        if (row.agentKind === 'acp' && row.agentDeviceId && !turnRunner.getMakerSessionById(row.id)) {
+          const remoteEngines = await (async () => {
+            const { remoteBackgroundInvoke } = await import('../../device-link');
+            const reply = await remoteBackgroundInvoke(row.agentDeviceId!, PLUGIN_ENGINES_INVOKE.LIST, []);
+            return reply.ok ? parseOfferedPluginEngines(reply.result) : [];
+          })().catch(() => []);
+          const key = pluginEngineKeyFromProviderId(row.providerId);
+          const remoteEngine = key ? remoteEngines.find((item) => item.key === key) : undefined;
+          if (remoteEngine?.permissionModes?.length) {
+            permissionModes = remoteEngine.permissionModes.map((mode) => ({
+              id: mode.id,
+              displayName: mode.displayName,
+              description: mode.description,
+            }));
+          }
+        }
         const context = permissionModeCommandContext(
           row.id,
           row.permissionMode,
-          turnRunner.getPermissionModes(row.agentKind),
+          permissionModes,
         );
         if (!richIm) {
           const requested = commandArgs[0];

@@ -5035,4 +5035,49 @@ describe('official hook plugin engine (acp) sessions', () => {
       }),
     );
   });
+
+  // 回归(PR #12927 P1)：项目恢复跟随全局默认后可能残留旧内置供应商 workdirRoute(如 openai)；
+  // 全局默认切到 acp 时不能误用残留内置来源导致 "plugin engine route is incomplete"。
+  // 最小失败输入与 tier：unit，workdirRoute.providerId='openai' + imDefaults.agentKind='acp'。
+  it('ignores a stale built-in workdirRoute when a workspace inherits a global acp default', async () => {
+    const pluginProvider = 'acp-plugin:_ns__local__agy-acp:agy';
+    h.getWorkspaceProviderSource.mockReturnValue('openai');
+    h.readImDefaultSettings.mockReturnValue({
+      ...IM_DEFAULT_SETTINGS,
+      agentKind: 'acp',
+      agents: {
+        ...IM_DEFAULT_SETTINGS.agents,
+        acp: {
+          providerId: pluginProvider,
+          model: 'gemini-4-neon',
+          effort: 'high',
+          agentDeviceId: 'mini',
+        },
+      },
+    });
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => ({
+      ...makeFakeSession(opts.id ?? 'sess-acp-stale-workdir'),
+      agentKind: 'acp',
+    }));
+
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(
+      baseReq({
+        sessionId: 'sess-acp-stale-workdir',
+        source: { im: 'slack', channelId: 'C1' } as never,
+        workspaceAlias: 'proj-stale',
+      } as never),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'sess-acp-stale-workdir',
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        providerId: pluginProvider,
+        agentDeviceId: 'mini',
+      }),
+    );
+  });
 });
