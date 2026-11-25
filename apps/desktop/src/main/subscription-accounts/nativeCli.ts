@@ -3,6 +3,7 @@ import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { codexWorkspaceIdFromTokens } from '../maker-host/codex-auth-identity.js';
 import { open } from 'node:fs/promises';
 import { statSync, type Stats } from 'node:fs';
 import { cleanProcessEnv, type AccountRateLimitsResponse, type AuthState } from '@cindy/maker-core';
@@ -217,6 +218,17 @@ export async function readNativeCodexTokens(directory: string, refresh = false) 
       if (codexRefreshes.get(directory) === pending) codexRefreshes.delete(directory);
     }
   }
+  const tokens = await readCodexTokenFile(directory, false);
+  if (tokens.chatgptAccountId === null) throw new Error('Codex account authentication bridge is unavailable');
+  return { ...tokens, chatgptAccountId: tokens.chatgptAccountId };
+}
+
+/** WHAM can read usage without a workspace header; the external-auth bridge requires one. */
+export function readCodexWebTokens(directory: string) {
+  return readCodexTokenFile(directory, true);
+}
+
+async function readCodexTokenFile(directory: string, webUsage: boolean) {
   const authPath = path.join(directory, 'auth.json');
   const file = await open(authPath, 'r');
   const sameFile = (a: Stats, b: Stats) =>
@@ -241,13 +253,13 @@ export async function readNativeCodexTokens(directory: string, refresh = false) 
     if (
       !sameFile(before, after) ||
       !canDispatch() ||
-      typeof raw.tokens?.access_token !== 'string' ||
-      typeof raw.tokens?.account_id !== 'string'
+      typeof raw.tokens?.access_token !== 'string' || !raw.tokens.access_token
     )
       throw new Error('Codex account authentication bridge is unavailable');
     return {
       accessToken: raw.tokens.access_token as string,
-      chatgptAccountId: raw.tokens.account_id as string,
+      chatgptAccountId: webUsage ? codexWorkspaceIdFromTokens(raw.tokens)
+        : typeof raw.tokens.account_id === 'string' ? raw.tokens.account_id as string : null,
       canDispatch,
     };
   } finally {

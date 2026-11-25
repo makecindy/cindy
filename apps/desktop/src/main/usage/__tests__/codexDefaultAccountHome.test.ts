@@ -41,6 +41,7 @@ vi.mock('../../subscription-accounts/nativeCli.js', () => ({
   readNativeAccount: h.readNativeAccount,
   // The real token reader parses auth.json; the fake only proves the guard is consulted.
   readNativeCodexTokens: h.readNativeCodexTokens,
+  readCodexWebTokens: h.readNativeCodexTokens,
 }));
 
 import { createCodexRateLimitResetService } from '../codexRateLimitReset.js';

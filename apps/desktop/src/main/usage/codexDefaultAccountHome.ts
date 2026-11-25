@@ -22,6 +22,7 @@ import {
   readNativeAccount,
   readNativeCodexAccountAndRateLimits,
   readNativeCodexTokens,
+  readCodexWebTokens,
 } from '../subscription-accounts/nativeCli.js';
 
 type ResetTarget = Pick<
@@ -71,12 +72,10 @@ export async function readCodexWebUsageCredentials(
     const home = await detachedDefaultCodexHome();
     if (home) {
       // Read the token and workspace from one file generation. Neither leaves main.
-      const tokens = await readNativeCodexTokens(home).catch(() => {
-        throw new Error('Default Codex usage credentials are unavailable');
-      });
-      if (await detachedDefaultCodexHome() !== home || !tokens.canDispatch()) {
-        return null;
-      }
+      const tokens = await readCodexWebTokens(home).catch(() => null);
+      if (await detachedDefaultCodexHome() !== home) return null;
+      if (!tokens) throw new Error('Default Codex usage credentials are unavailable');
+      if (!tokens.canDispatch()) return null;
       return { accessToken: tokens.accessToken, accountId: tokens.chatgptAccountId };
     }
     if (readPool('openai')?.disconnected) return null;

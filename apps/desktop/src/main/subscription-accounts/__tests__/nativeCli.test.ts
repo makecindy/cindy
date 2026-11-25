@@ -45,6 +45,7 @@ import {
   readNativeAccountUsage,
   loginNativeAccount,
   readNativeCodexTokens,
+  readCodexWebTokens,
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
 } from '../nativeCli.js';
@@ -349,6 +350,9 @@ describe('official Codex profiles', () => {
       expect(first.canDispatch()).toBe(false);
       const second = await readNativeCodexTokens(dir);
       expect(second.chatgptAccountId).toBe('fixture-account-b');
+      await writeFile(authPath, JSON.stringify({ tokens: { access_token: 'fixture-token-only' } }));
+      expect((await readCodexWebTokens(dir)).chatgptAccountId).toBeNull();
+      await expect(readNativeCodexTokens(dir)).rejects.toThrow('authentication bridge');
       await rm(authPath);
       expect(second.canDispatch()).toBe(false);
     } finally {
