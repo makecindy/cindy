@@ -450,6 +450,7 @@
     "securityBody": "Al tocar Instalar, el ordenador descarga y comprueba el paquete y luego te muestra los permisos que necesita para que los confirmes. No se instala nada antes de tu confirmación. Una vez instalado, se activa automáticamente y puedes desactivarlo o desinstalarlo cuando quieras.",
     "resultUnknownDetail": "Aún no se ha confirmado si esta instalación terminó.",
     "unconfirmedNotInstalled": "No se pudo confirmar el resultado de esta instalación. El complemento no está en este ordenador ahora mismo.",
-    "alreadyInstalled": "Este complemento ya está instalado en este ordenador."
+    "alreadyInstalled": "Este complemento ya está instalado en este ordenador.",
+    "unconfirmedMismatch": "No se pudo confirmar el resultado de esta instalación. El complemento con el mismo identificador en este ordenador puede venir de un archivo local, de otra versión o de otro origen. Compruébalo en el ordenador."
   }
 }

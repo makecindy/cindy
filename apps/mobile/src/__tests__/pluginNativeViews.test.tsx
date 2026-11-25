@@ -1245,39 +1245,57 @@ it.each([PluginDetailView, AndroidDetailView])("keeps unknown-result recovery re
  * - 最小失败输入：新装含 node:execute；对照组不含。tier: unit。
  */
 describe("pinned high-risk permission", () => {
-  const consentState = (permissions: any[]) => ({ outcome: "confirmation", online: true, busy: false, receipt: { consent: {
-    requestId: "request", origin: "market", initiator: "user",
-    facts: { kind: "install", ghostId: "runner", name: "Runner", version: "1", permissions },
-  } } }) as any;
+  const consentState = (facts: any) => ({ outcome: "confirmation", online: true, busy: false, receipt: { consent: {
+    requestId: "request", origin: "market", initiator: "user", facts } } }) as any;
+  const installOf = (permissions: any[]) => ({ kind: "install", ghostId: "runner", name: "Runner", version: "1", permissions });
   const node = { key: "node:execute", kind: "node", labelKey: "nodeRuntime", detailKey: "nodeRuntimeDetail" };
   const notify = { key: "notify", kind: "notify", labelKey: "notify", detailKey: "notifyDetail" };
-  const risk = "plugins.management.permissions.nodeRuntimeDetail";
-  const props = (permissions: any[]) => { const state = consentState(permissions);
+  const secret = { key: "node:secret:token:worker.cjs:run", kind: "node", labelKey: "nodeSecret", labelArgs: { name: "API token" },
+    detailKey: "nodeSecretDetail", detail: "upload_with_token" };
+  const background = { key: "agent:background", kind: "agent", labelKey: "agentBackground", detailKey: "agentBackgroundDetail" };
+  const errand = { key: "agent:errand", kind: "agent", labelKey: "agentErrand", detailKey: "agentErrandDetail" };
+  const secretOnlyUpdate = { kind: "update", ghostId: "runner", name: "Runner", version: "2", previousVersion: "1", added: [secret],
+    removed: [], unchangedCount: 2, builtinOauthClientChanged: false };
+  const props = (facts: any) => { const state = consentState(facts);
     return { state, controller: { getState: () => state, answer: vi.fn() } as any, active: true, deviceName: "Mac" }; };
+  // The maintainer's two cases plus the original Node case; each pinned explanation must sit next to the buttons.
+  const cases = [
+    ["a first install with Node", installOf([notify, node]), ["plugins.management.permissions.nodeRuntimeDetail"]],
+    ["an update that only adds a credential binding", secretOnlyUpdate, ["plugins.management.permissions.nodeSecretDetail", "upload_with_token"]],
+    ["a first install without Node but with Agent high-risk items", installOf([errand, background, notify]),
+      ["plugins.management.permissions.agentErrandDetail", "plugins.management.permissions.agentBackgroundDetail"]],
+  ] as const;
 
-  it("iOS shows it in the footer beside the buttons, not in the scrolled content", () => {
-    const { container } = mount(PluginManagementConfirmation, props([notify, node]));
+  it.each(cases)("iOS shows %s in the footer beside the buttons, not in the scrolled content", (_name, facts, texts) => {
+    const { container } = mount(PluginManagementConfirmation, props(facts));
     const pinned = container.querySelector('[data-testid="plugins.management.highRisk"]')!;
-    expect(pinned.textContent).toBe(risk);
     expect(pinned.parentElement!.querySelector('[data-testid="plugins.management.allow"]')).not.toBeNull();
-    expect(container.textContent!.split(risk)).toHaveLength(2);
-    expect(container.textContent).toContain("plugins.market.installTo");
+    for (const text of texts) {
+      expect(pinned.textContent).toContain(text);
+      // Only once on the sheet: the scrolled row keeps its title only.
+      expect(container.textContent!.split(text).length - 1).toBe(1);
+    }
   });
   it("iOS shows no pinned text when nothing is high risk", () => {
-    const { container } = mount(PluginManagementConfirmation, props([notify]));
+    const { container } = mount(PluginManagementConfirmation, props(installOf([notify])));
     expect(container.querySelector('[data-testid="plugins.management.highRisk"]')).toBeNull();
   });
-  it("Android keeps it outside the scroll area, after the scrolled content and before the buttons", () => {
-    const { container, rerender } = mount(AndroidManagementConfirmation, props([notify, node]));
+  it.each(cases)("Android keeps %s outside the scroll area, after the scrolled content and before the buttons", (_name, facts, texts) => {
+    const { container } = mount(AndroidManagementConfirmation, props(facts));
     const sheet = container.querySelector('[data-testid="plugins.managementConfirmation"]')!;
     const scroll = sheet.firstElementChild!;
-    expect(scroll.textContent).not.toContain(risk);
-    expect(scroll.textContent).toContain("plugins.management.permissions.nodeRuntime");
+    const pinned = sheet.querySelector('[data-testid="plugins.management.highRisk"]')!;
+    expect(scroll.contains(pinned)).toBe(false);
     const text = sheet.textContent!;
-    expect(text.indexOf(risk)).toBeGreaterThanOrEqual(scroll.textContent!.length);
-    expect(text.indexOf(risk)).toBeLessThan(text.indexOf("plugins.management.allow"));
-    rerender(props([notify]));
-    expect(sheet.textContent).not.toContain(risk);
+    for (const value of texts) {
+      expect(scroll.textContent).not.toContain(value);
+      expect(text.indexOf(value)).toBeGreaterThanOrEqual(scroll.textContent!.length);
+      expect(text.indexOf(value)).toBeLessThan(text.indexOf("plugins.management.allow"));
+    }
+  });
+  it("Android shows no pinned area when nothing is high risk", () => {
+    const { container } = mount(AndroidManagementConfirmation, props(installOf([notify])));
+    expect(container.querySelector('[data-testid="plugins.management.highRisk"]')).toBeNull();
   });
 });
 

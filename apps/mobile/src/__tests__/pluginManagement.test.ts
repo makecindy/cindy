@@ -821,22 +821,43 @@ describe('confirmation sheet wording', () => {
   const install = (consent: Record<string, unknown>, permissions: any[]) => ({ requestId: 'r', initiator: 'user', origin: 'market',
     ...consent, facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions } }) as any;
 
-  it('pins only the item the Host itself marks as high risk, whatever protocol label it carries', () => {
-    expect(isPinnedHighRiskPermission(nodeExecute('nodeRuntime'))).toBe(true);
-    expect(isPinnedHighRiskPermission(nodeExecute('nodeMcp'))).toBe(true);
-    // Other node items are not called high risk by the Host; kind alone must not decide.
-    for (const key of ['node:secret:token:worker.cjs:run', 'node:resident', 'node:child-spawn', 'harnesses', 'fs', 'notify'])
+  it('pins the Host items it treats as high risk, by their stable keys', () => {
+    for (const key of ['node:execute', 'node:secret:token:worker.cjs:run', 'node:resident', 'agent:background', 'agent:errand'])
+      expect(isPinnedHighRiskPermission({ key })).toBe(true);
+    // Lower-risk items share kinds with them; the kind alone must not decide.
+    for (const key of ['node:child-spawn', 'agent:user-action', 'agent:tasks', 'harnesses', 'fs', 'notify', 'code'])
       expect(isPinnedHighRiskPermission({ key })).toBe(false);
-    const secret = item('node:secret:token:worker.cjs:run', 'node', 'nodeSecret', 'nodeSecretDetail');
+    const secret = { ...item('node:secret:token:worker.cjs:run', 'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name: 'API token' }, detail: 'run' };
     const view = pluginConsentPresentation(install({}, [item('notify', 'notify', 'notify', 'notifyDetail'), secret, nodeExecute('nodeMcp')]), t, 'Mac');
-    expect(view.highRisk).toBe('plugins.management.permissions.nodeRuntimeDetail');
-    // The pinned item moves first and keeps only its title; the others keep their explanations.
+    // Pinned items show their title and full explanation (credential name and methods included) above the buttons.
+    expect(view.highRisk).toEqual([
+      { title: 'plugins.management.permissions.nodeSecret(name=API token)', detail: 'plugins.management.permissions.nodeSecretDetail\n\nrun' },
+      { title: 'plugins.management.permissions.nodeMcp', detail: 'plugins.management.permissions.nodeRuntimeDetail' },
+    ]);
+    // In the scrolled list pinned items move first and keep only their titles.
     expect(view.permissions.map((row) => [row.title, row.detail])).toEqual([
+      ['plugins.management.permissions.nodeSecret(name=API token)', ''],
       ['plugins.management.permissions.nodeMcp', ''],
       ['plugins.management.permissions.notify', 'plugins.management.permissions.notifyDetail'],
-      ['plugins.management.permissions.nodeSecret', 'plugins.management.permissions.nodeSecretDetail'],
     ]);
     expect(pluginConsentPresentation(install({}, [item('notify', 'notify', 'notify', 'notifyDetail')]), t).highRisk).toBeUndefined();
+  });
+
+  // Maintainer review (2026-11-25): an approved Node plugin whose update only adds a credential binding, and a
+  // first install without Node that asks for Agent high-risk permissions, both had no summary above the buttons.
+  it('pins an update that only adds a credential binding to an approved Node plugin', () => {
+    const secret = { ...item('node:secret:token:worker.cjs:run', 'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name: 'API token' }, detail: 'run' };
+    const view = pluginConsentPresentation({ requestId: 'r', initiator: 'user', origin: 'market',
+      facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [secret], removed: [],
+        unchangedCount: 3, builtinOauthClientChanged: false } } as any, t, 'Mac');
+    expect(view.highRisk).toEqual([{ title: 'plugins.management.permissions.nodeSecret(name=API token)',
+      detail: 'plugins.management.permissions.nodeSecretDetail\n\nrun' }]);
+  });
+  it('pins Agent high-risk permissions in a first install without Node', () => {
+    const view = pluginConsentPresentation(install({}, [item('agent:errand', 'agent', 'agentErrand', 'agentErrandDetail'),
+      item('agent:background', 'agent', 'agentBackground', 'agentBackgroundDetail'), item('agent:user-action', 'agent', 'agentUserAction', 'agentUserActionDetail')]), t, 'Mac');
+    expect(view.highRisk?.map((entry) => entry.title)).toEqual(['plugins.management.permissions.agentErrand', 'plugins.management.permissions.agentBackground']);
+    expect(view.permissions[2]).toEqual({ title: 'plugins.management.permissions.agentUserAction', detail: 'plugins.management.permissions.agentUserActionDetail' });
   });
 
   it('uses the computer\'s source line and source notices, and says which computer a new install goes to', () => {
@@ -861,7 +882,8 @@ describe('confirmation sheet wording', () => {
       facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added, removed,
         unchangedCount: 2, builtinOauthClientChanged: false } }) as any;
     const adds = pluginConsentPresentation(update([item('notify', 'notify', 'notify'), nodeExecute()], []), t, 'Mac');
-    expect(adds).toMatchObject({ device: 'Mac', sourceNotice: undefined, highRisk: 'plugins.management.permissions.nodeRuntimeDetail' });
+    expect(adds).toMatchObject({ device: 'Mac', sourceNotice: undefined,
+      highRisk: [{ title: 'plugins.management.permissions.nodeRuntime', detail: 'plugins.management.permissions.nodeRuntimeDetail' }] });
     expect(adds.permissions[0].title).toBe('plugins.management.permissions.added · plugins.management.permissions.nodeRuntime');
     const removes = pluginConsentPresentation(update([item('notify', 'notify', 'notify')], [nodeExecute()]), t, 'Mac');
     expect(removes.highRisk).toBeUndefined();

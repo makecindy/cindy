@@ -59,9 +59,14 @@ export function PluginManagementConfirmation(
         </ScrollView>
         {/* Outside the scroll area: always visible above the buttons, even on short screens. */}
         {info?.highRisk ? (
-          <Text testID="plugins.management.highRisk" style={styles.highRisk}>
-            {info.highRisk}
-          </Text>
+          <View testID="plugins.management.highRisk" style={styles.highRisk}>
+            {info.highRisk.map((item, index) => (
+              <View key={index} style={styles.permission}>
+                <Text style={styles.highRiskTitle}>{item.title}</Text>
+                {item.detail ? <Text style={styles.highRiskBody}>{item.detail}</Text> : null}
+              </View>
+            ))}
+          </View>
         ) : null}
         <View style={styles.actions}>
           {[false, true].map((accept) => (
@@ -113,12 +118,17 @@ const makeStyles = (c: ThemeColors) =>
       lineHeight: lineHeight.caption,
       color: c.textSecondary,
     },
-    highRisk: {
+    highRisk: { gap: spacing.sm, paddingBottom: spacing.md },
+    highRiskTitle: {
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
       color: c.textPrimary,
-      paddingBottom: spacing.md,
+    },
+    highRiskBody: {
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      color: c.textPrimary,
     },
     actions: { flexDirection: "row", gap: spacing.sm },
     button: {

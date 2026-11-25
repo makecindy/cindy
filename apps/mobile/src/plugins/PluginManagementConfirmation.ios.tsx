@@ -47,16 +47,32 @@ export function PluginManagementConfirmation(
         // The pinned high-risk text lives in the footer, which stays visible at the medium detent too.
         <VStack alignment="leading" spacing={spacing.sm}>
           {info?.highRisk ? (
-            <Text
-              testID="plugins.management.highRisk"
-              modifiers={[
-                font({ textStyle: "footnote", weight: "medium" }),
-                foregroundStyle(colors.textPrimary),
-                fixedSize({ horizontal: false, vertical: true }),
-              ]}
-            >
-              {info.highRisk}
-            </Text>
+            <VStack testID="plugins.management.highRisk" alignment="leading" spacing={spacing.xs}>
+              {info.highRisk.map((item, index) => (
+                <VStack key={index} alignment="leading" spacing={spacing.xs}>
+                  <Text
+                    modifiers={[
+                      font({ textStyle: "footnote", weight: "medium" }),
+                      foregroundStyle(colors.textPrimary),
+                      fixedSize({ horizontal: false, vertical: true }),
+                    ]}
+                  >
+                    {item.title}
+                  </Text>
+                  {item.detail ? (
+                    <Text
+                      modifiers={[
+                        font({ textStyle: "footnote" }),
+                        foregroundStyle(colors.textPrimary),
+                        fixedSize({ horizontal: false, vertical: true }),
+                      ]}
+                    >
+                      {item.detail}
+                    </Text>
+                  ) : null}
+                </VStack>
+              ))}
+            </VStack>
           ) : null}
           <HStack spacing={spacing.md}>
             {[false, true].map((accept) => (

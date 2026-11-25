@@ -446,6 +446,7 @@
     "securityBody": "点「纳」后，电脑先下载、检视其包，再列所需权柄请君确认。未确认则不纳；纳毕自启，可随时停之、去之。",
     "resultUnknownDetail": "此番纳器成否，尚未确认。",
     "unconfirmedNotInstalled": "此番纳器之果未能确认；今此机未有此法器。",
-    "alreadyInstalled": "此机已纳此法器。"
+    "alreadyInstalled": "此机已纳此法器。",
+    "unconfirmedMismatch": "此番纳器之果未能确认；此机同名之法器或出自本地之卷、他版或他源，请就机核之。"
   }
 }

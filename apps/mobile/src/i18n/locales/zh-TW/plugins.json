@@ -448,6 +448,7 @@
     "securityBody": "點「安裝」後，電腦會先下載並檢查安裝包，再把它需要的權限列給你確認。確認前不會安裝；裝好後自動啟用，可隨時停用或解除安裝。",
     "resultUnknownDetail": "尚未確認這次安裝是否完成。",
     "unconfirmedNotInstalled": "未能確認這次安裝的結果；目前這台電腦上沒有這個插件。",
-    "alreadyInstalled": "這台電腦已經安裝了這個插件。"
+    "alreadyInstalled": "這台電腦已經安裝了這個插件。",
+    "unconfirmedMismatch": "未能確認這次安裝的結果；這台電腦上同標識的插件可能來自本機檔案、其他版本或其他來源，請在電腦上核對。"
   }
 }

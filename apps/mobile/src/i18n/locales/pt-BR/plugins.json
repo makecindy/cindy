@@ -450,6 +450,7 @@
     "securityBody": "Ao tocar em Instalar, o computador baixa e verifica o pacote e depois mostra as permissões necessárias para você confirmar. Nada é instalado antes da sua confirmação. Depois de instalado, o plugin é ativado automaticamente e pode ser desativado ou desinstalado a qualquer momento.",
     "resultUnknownDetail": "Ainda não foi confirmado se esta instalação foi concluída.",
     "unconfirmedNotInstalled": "Não foi possível confirmar o resultado desta instalação. O plugin não está neste computador no momento.",
-    "alreadyInstalled": "Este plugin já está instalado neste computador."
+    "alreadyInstalled": "Este plugin já está instalado neste computador.",
+    "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um arquivo local, de outra versão ou de outra origem. Confira no computador."
   }
 }

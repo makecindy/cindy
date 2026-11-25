@@ -448,6 +448,7 @@
     "securityBody": "Nach dem Tippen auf Installieren lädt der Computer das Paket herunter, prüft es und zeigt dir die benötigten Berechtigungen zur Bestätigung. Vor deiner Bestätigung wird nichts installiert. Danach ist das Plugin automatisch aktiviert und lässt sich jederzeit deaktivieren oder deinstallieren.",
     "resultUnknownDetail": "Es ist noch nicht bestätigt, ob diese Installation abgeschlossen wurde.",
     "unconfirmedNotInstalled": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin ist derzeit nicht auf diesem Computer.",
-    "alreadyInstalled": "Dieses Plugin ist auf diesem Computer bereits installiert."
+    "alreadyInstalled": "Dieses Plugin ist auf diesem Computer bereits installiert.",
+    "unconfirmedMismatch": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin mit derselben Kennung auf diesem Computer stammt möglicherweise aus einer lokalen Datei, einer anderen Version oder einer anderen Quelle. Bitte prüfe es auf dem Computer."
   }
 }

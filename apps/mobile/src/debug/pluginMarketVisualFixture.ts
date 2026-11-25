@@ -46,7 +46,7 @@ interface DemoPlugin {
   /** The update's permission change versus the installed version. */
   update?: { added: DemoPermission[]; removed: DemoPermission[]; unchangedCount: number };
 }
-type DemoPermission = { key: string; kind: string; labelKey: string; labelArgs?: Record<string, string>; detailKey?: string };
+type DemoPermission = { key: string; kind: string; labelKey: string; labelArgs?: Record<string, string>; detailKey?: string; detail?: string };
 // Same keys, kinds and copy keys as the Host's ghostPermissionItems; node:execute is the one it calls high risk.
 const nodeExecute = (labelKey: "nodeRuntime" | "nodeMcp" = "nodeRuntime"): DemoPermission =>
   ({ key: "node:execute", kind: "node", labelKey, detailKey: "nodeRuntimeDetail" });
@@ -54,6 +54,12 @@ const network = (host: string): DemoPermission => ({ key: `network:${host}`, kin
 const notify: DemoPermission = { key: "notify", kind: "notify", labelKey: "notify", detailKey: "notifyDetail" };
 const badge: DemoPermission = { key: "badge", kind: "notify", labelKey: "badge", detailKey: "badgeDetail" };
 const fsWrite: DemoPermission = { key: "fs", kind: "fs", labelKey: "fsWrite", detailKey: "fsWriteDetail" };
+// Host shape of a credential binding: key names the binding, entry and methods; detail lists the methods.
+const nodeSecret: DemoPermission = { key: "node:secret:api-token:node/worker.cjs:sync", kind: "node", labelKey: "nodeSecret",
+  labelArgs: { name: "Demo API token" }, detailKey: "nodeSecretDetail", detail: "sync" };
+const agentUserAction: DemoPermission = { key: "agent:user-action", kind: "agent", labelKey: "agentUserAction", detailKey: "agentUserActionDetail" };
+const agentBackground: DemoPermission = { key: "agent:background", kind: "agent", labelKey: "agentBackground", detailKey: "agentBackgroundDetail" };
+const agentErrand: DemoPermission = { key: "agent:errand", kind: "agent", labelKey: "agentErrand", detailKey: "agentErrandDetail" };
 const RELEASE = "1.4.2";
 const DEMOS: DemoPlugin[] = [
   { ghostId: "demo-device-simulator", name: "Demo Device Simulator", publisher: "official", author: "Cindy",
@@ -90,6 +96,15 @@ const DEMOS: DemoPlugin[] = [
     description: "Show forecasts for saved places. Its update adds a bundled Node program.", tools: ["demo_forecast"],
     permissions: [nodeExecute(), network("weather.example.com"), notify], installedVersion: "1.3.0",
     update: { added: [nodeExecute(), notify], removed: [badge], unchangedCount: 1 } },
+  // An update that keeps the approved Node program and only adds a credential binding (pinned).
+  { ghostId: "demo-secret-sync", name: "Demo Secret Sync", publisher: "official", author: "Cindy",
+    description: "Sync notes with a service. Its update hands a saved API token to the bundled Node program.", tools: ["demo_sync_notes"],
+    permissions: [nodeExecute(), nodeSecret, network("sync.example.com")], installedVersion: "1.3.0",
+    update: { added: [nodeSecret], removed: [], unchangedCount: 2 } },
+  // A first install without Node that still asks for Agent high-risk permissions (pinned).
+  { ghostId: "demo-auto-agent", name: "Demo Auto Agent", publisher: "official", author: "Cindy",
+    description: "Start Agent work in the background and hand errands to an Agent.", tools: ["demo_start_errand"],
+    permissions: [agentErrand, agentBackground, agentUserAction, notify] },
   { ghostId: "demo-reading-list", name: "Demo Reading List", publisher: "official", author: "Cindy",
     description: "Save articles to read later. Its update only adds notifications.", tools: ["demo_save_article"],
     permissions: [network("reader.example.com"), notify], installedVersion: "1.3.0",

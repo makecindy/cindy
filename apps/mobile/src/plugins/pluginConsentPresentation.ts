@@ -8,19 +8,21 @@ type Consent = NonNullable<PluginManagementReceipt["consent"]>;
 type Translate = (key: string, args?: Record<string, unknown>) => string;
 
 /**
- * The one permission the phone pins above the confirm buttons.
+ * Permissions the phone pins above the confirm buttons, outside the scroll area.
  *
- * This is not a phone-side risk grading. The Host's user-facing permission copy marks exactly one
- * class as high risk: running the bundled Node program (`nodeRuntimeDetail` begins with "High risk: …").
- * The Host builds that item for every manifest that declares `node`, always under the stable diff key
- * `node:execute` (label `nodeRuntime` or `nodeMcp` depending on the protocol), so the key is the signal:
- * label/detail keys are copy that may be reworded, and `kind === 'node'` also covers other items.
- * The Host's source comments also call `agent:background`, `agent:errand`, the resident Node lifecycle
- * and Node credential injection "high risk" add-ons, but nothing machine-readable marks them and their
- * copy does not say so; they are not pinned unless the maintainers decide otherwise. No grading here.
+ * Not a phone-side grading: these are the Host permission items the Host itself treats as high risk
+ * (stable diff keys from ghostPermissionItems).
+ * - `node:execute`: its user-facing detail begins with "High risk: …".
+ * - `node:secret:<binding>`: a saved credential handed to the Node program in plain text.
+ * - `node:resident`: the Node program keeps running.
+ * - `agent:background`: starts Agent turns without a click.
+ * - `agent:errand`: hands tasks to an Agent and reads the result.
+ * The last four are called high-risk add-ons in the Host's source, and maintainers asked for them here.
+ * Keys are the signal: label/detail keys are copy that may be reworded, and `kind` covers lower-risk items too.
  */
 export function isPinnedHighRiskPermission(item: Pick<PluginPermissionItem, "key">): boolean {
-  return item.key === "node:execute";
+  return item.key === "node:execute" || item.key.startsWith("node:secret:") || item.key === "node:resident"
+    || item.key === "agent:background" || item.key === "agent:errand";
 }
 
 /** Same wording as the computer's install dialog (ghostInstallConsentSourceLabel). */
@@ -78,7 +80,11 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
   const granted = facts.kind === "install" ? facts.permissions : facts.added;
   const highRiskFirst = (items: PluginPermissionItem[]) =>
     [...items.filter(isPinnedHighRiskPermission), ...items.filter((item) => !isPinnedHighRiskPermission(item))];
-  const highRisk = granted.filter(isPinnedHighRiskPermission).map(detailOf).filter(Boolean);
+  const titleOf = (item: PluginPermissionItem) => t("plugins.management.permissions." + item.labelKey, {
+    ...item.labelArgs,
+    defaultValue: item.kind,
+  });
+  const highRisk = granted.filter(isPinnedHighRiskPermission).map((item) => ({ title: titleOf(item), detail: detailOf(item) }));
   return {
     title: facts.name + " · " + facts.version,
     /** New installs say where the plugin goes; updates keep the computer name only. */
@@ -110,7 +116,7 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
             ...permissions(facts.removed, "removed", false),
           ],
     /** Pinned above the confirm buttons, outside the scroll area, so it is read before allowing. */
-    highRisk: highRisk.length ? highRisk.join("\n\n") : undefined,
+    highRisk: highRisk.length ? highRisk : undefined,
     unchanged:
       facts.kind === "update"
         ? t("plugins.management.permissions.unchanged", {

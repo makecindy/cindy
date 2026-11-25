@@ -1906,14 +1906,34 @@ describe("market install recovery", () => {
     await settle(14);
     await act(async () => { await shownMarket().checkResult(); });
     await settle(14);
-    expect(shownMarket()).toMatchObject({ installBusy: true });
-    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
+    // Maintainer review (2026-11-25): once the Host has no receipt and its facts are read, the row keeps the
+    // unconfirmed note and the market and other management actions are released (no endless installBusy).
+    expect(shownMarket()).toMatchObject({ installBusy: false, canInstall: true });
+    expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
     expect(fixture.read).not.toHaveBeenCalledWith(fixture.wire, expect.anything(), expect.objectContaining({ id: "_root__demo" }),
       "en", ["plugin-capabilities"]);
     // The market facts were read for the original plugin id only; nothing was replayed.
     expect(requests.filter((request) => request.actionId === "management:market-detail")
       .every((request) => request.input.pluginId === "market/demo")).toBe(true);
     expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+  });
+  it("stays unconfirmed while the original operation may still exist on an unreachable computer", async () => {
+    let sameIdOnComputer = false;
+    installWire({
+      begin: () => { sameIdOnComputer = true; throw new Error("[TIMEOUT] remote invoke timed out"); },
+      // Not NOT_FOUND: the Host may still hold the receipt, so nothing is concluded yet.
+      operation: () => { throw new Error("[TIMEOUT] remote invoke timed out"); },
+      installed: () => sameIdOnComputer,
+      detail: () => ({ ...item, installState: sameIdOnComputer ? "conflict" : "not-installed",
+        manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } }),
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    await act(async () => { await shownMarket().checkResult(); });
+    await settle(14);
+    expect(shownMarket()).toMatchObject({ installBusy: true });
+    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
   });
 });
 // iOS simulator report (2026-11-25): back from the new installed detail after the 30 s window showed an empty market.
@@ -2200,6 +2220,29 @@ describe("market reads that outlive their purpose", () => {
     await settle(14);
     expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Other"]);
   });
+  // Maintainer review (2026-11-25): official and community share the public list key, and the debounced query
+  // lags the typed one; a follow-up page must still serve what is on screen now.
+  it.each(["switching from official to community", "typing a new search before it is debounced"])(
+    "stops chaining an empty official page after %s", async (change) => {
+      const community = { ...marketItem("community", "Community"), publisherKind: "personal" };
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let page = 0;
+      const requests = marketWire(async (request) => {
+        if (request.input?.read === "capabilities") return { catalogPaging: true };
+        if (request.input?.query?.counts) return { ...marketPage([]), counts: null };
+        if (++page === 1) await held;
+        return { ...marketPage([{ ...community, pluginId: `market/c${page}`, ghostId: `c${page}` }]), nextCursor: `cursor-${page}` };
+      });
+      await openMarket();
+      if (change.startsWith("switching")) await act(async () => shownMarket().setFilter("community"));
+      else await act(async () => fixture.props.get("stack").headerSearchBarOptions.onChangeText({ nativeEvent: { text: "rota" } }));
+      await act(async () => { release(); });
+      await settle(20);
+      // Only the original page was read for the empty query; no follow-up page for the stale official view.
+      expect(requests.filter((request) => request.input?.read === "catalog" && !request.input.query.counts
+        && !request.input.query.query)).toHaveLength(1);
+    });
   it("stops chaining empty publisher pages once the plugins page is unmounted", async () => {
     const community = { ...marketItem("community", "Community"), publisherKind: "personal" };
     let release!: () => void;

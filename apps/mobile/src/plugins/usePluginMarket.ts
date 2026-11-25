@@ -199,6 +199,12 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const countsKey = JSON.stringify([scope, debouncedQuery]);
   const liveListKey = useRef(listKey);
   liveListKey.current = listKey;
+  // Official and community share the public list; a follow-up page must still serve the filter and the
+  // typed (not yet debounced) search the person is looking at now.
+  const liveFilter = useRef(filter);
+  liveFilter.current = filter;
+  const liveQuery = useRef("");
+  liveQuery.current = options.query.trim().slice(0, PLUGIN_MARKET_QUERY_MAX);
   /** A search shows every source, so its pages are judged against "all", not the hidden source filter. */
   const publisher: PluginMarketFilter = debouncedQuery ? "all" : filter;
   const lists = useRef(new Map<string, CatalogList>());
@@ -240,7 +246,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       // A publisher tab may find nothing on a public page; continue a few pages, never unbounded.
       const contributed = fresh.filter((item) => pluginMarketMatchesFilter(item, publisher)).length;
       if (page.nextCursor && contributed === 0 && (publisher === "official" || publisher === "community")
-        && chain.current < MAX_EMPTY_CHAIN && mounted.current && activeRef.current && liveListKey.current === list.key) {
+        && chain.current < MAX_EMPTY_CHAIN && mounted.current && activeRef.current && liveListKey.current === list.key
+        && liveFilter.current === publisher && liveQuery.current === debouncedQuery) {
         chain.current += 1;
         list.loadingMore = true;
         await readPage(list, page.nextCursor, publisher, token);
@@ -434,19 +441,25 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
    * One market-detail read per fresh snapshot.
    */
   const verifiedSnapshot = useRef<unknown>(undefined);
-  const confirmUnknown = useCallback(async (attempt: InstallAttempt, snapshot: unknown, instanceKey: string) => {
+  const confirmUnknown = useCallback(async (attempt: InstallAttempt, snapshot: unknown, instanceKey: string, receiptGone: boolean) => {
     if (verifiedSnapshot.current === snapshot) return;
     verifiedSnapshot.current = snapshot;
     const current = () => installRef.current?.id === attempt.id;
+    let facts: ManagedMarketDetail;
     try {
-      const facts = await createPluginManagementClient({ invoke, deviceId: attempt.target.deviceId, isCurrent: current })
+      facts = await createPluginManagementClient({ invoke, deviceId: attempt.target.deviceId, isCurrent: current })
         .detail(attempt.item.pluginId);
-      if (current() && facts.installState === "installed" && facts.releaseId === attempt.item.releaseId)
-        complete(attempt, instanceKey);
     } catch {
-      // Still unconfirmed; "Check result" reads again with the next fresh snapshot.
+      return; // Facts not read: still unconfirmed; "Check result" reads again with the next fresh snapshot.
     }
-  }, [invoke, complete]);
+    if (!current()) return;
+    if (facts.installState === "installed" && facts.releaseId === attempt.item.releaseId) { complete(attempt, instanceKey); return; }
+    // The Host no longer knows the original operation and its facts do not show this install: the same-id
+    // plugin is something else (local package, another version or source). Keep the unconfirmed note on
+    // this row only and release the market and the other management actions. The original operation is
+    // never sent again; a new install stays the person's explicit choice.
+    if (receiptGone) finish(attempt, "plugins.market.unconfirmedMismatch");
+  }, [invoke, complete, finish]);
   useEffect(() => {
     const attempt = install, state = management.state;
     if (!attempt?.started || !state) return;
@@ -459,7 +472,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     else if (state.outcome === "unknown" && !state.busy) {
       // A later read that names a same-id instance is only a lead; the market facts decide (see confirmUnknown).
       const installed = state.snapshot?.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
-      if (installed) void confirmUnknown(attempt, state.snapshot, installed.instanceKey);
+      if (installed) void confirmUnknown(attempt, state.snapshot, installed.instanceKey, state.errorCode === "NOT_FOUND");
     } else if (state.outcome === "succeeded" && !state.busy) {
       // Wait for the controller's post-commit readback; it locates the new physical instance.
       const installed = state.snapshot?.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
@@ -486,9 +499,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
    * "Check result" only looks up the original operation (never a second begin); a receipt it finds
    * settles the attempt. If the Host no longer knows it (restart, 15-minute receipt expiry, or begin never
    * arrived), the reconcile's fresh read of the computer decides: a same-id instance is checked against
-   * the market facts (confirmUnknown); absent → release the row and say we could not confirm and it is
-   * not installed now. That reports a current fact; it does not claim a rollback, and any new install
-   * stays the user's explicit choice.
+   * the market facts (confirmUnknown) and either settles as installed or, not matching, releases the row
+   * with an unconfirmed note; absent → release the row and say we could not confirm and it is not installed
+   * now. That reports a current fact; it does not claim a rollback, and any new install stays the user's
+   * explicit choice. While the computer is only unreachable (no NOT_FOUND), the result stays unconfirmed.
    */
   const checkResult = useCallback(async () => {
     const attempt = installRef.current, controller = management.controller;
@@ -500,7 +514,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     const fresh = state.snapshot !== before ? state.snapshot : null;
     if (!fresh) return;
     const installed = fresh.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
-    if (installed) await confirmUnknown(attempt, fresh, installed.instanceKey);
+    if (installed) await confirmUnknown(attempt, fresh, installed.instanceKey, state.errorCode === "NOT_FOUND");
     else if (state.errorCode === "NOT_FOUND") finish(attempt, "plugins.market.unconfirmedNotInstalled");
   }, [management.controller, confirmUnknown, finish]);
 

@@ -448,6 +448,7 @@
     "securityBody": "After you tap Install, the computer downloads and checks the package, then lists the permissions it needs for you to confirm. Nothing is installed before you confirm. Once installed, it’s enabled automatically, and you can disable or uninstall it anytime.",
     "resultUnknownDetail": "It’s not confirmed yet whether this installation finished.",
     "unconfirmedNotInstalled": "Couldn’t confirm the result of this installation. The plugin isn’t on this computer right now.",
-    "alreadyInstalled": "This computer already has this plugin installed."
+    "alreadyInstalled": "This computer already has this plugin installed.",
+    "unconfirmedMismatch": "Couldn’t confirm the result of this installation. The plugin with the same ID on this computer may come from a local file, another version or another source. Check it on the computer."
   }
 }

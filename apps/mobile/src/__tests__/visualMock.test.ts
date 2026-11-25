@@ -72,8 +72,8 @@ it('supplies valid demo plugin projections and confirms enable/disable through t
   const link = mock.createVisualMockDeviceLinkContext();
   const host = { deviceId: mock.VISUAL_MOCK_DEVICE_ID, deviceName: mock.VISUAL_MOCK_DEVICE_NAME };
   const items = normalizeRemoteCollectionItems(await listRemoteCollection(link.invoke, host, PLUGIN_COLLECTION), PLUGIN_COLLECTION);
-  // 28 teammate/demo plugins plus the two market demos pre-installed at an older version (update consent).
-  expect(items).toHaveLength(30);
+  // 28 teammate/demo plugins plus the three market demos pre-installed at an older version (update consent).
+  expect(items).toHaveLength(31);
   expect(items.filter(item => item.display.badges?.length)).toHaveLength(2);
   const ref = items[0].ref;
   await invokePlugin(link.invoke, host.deviceId, ref.id, 'disable');
@@ -406,6 +406,11 @@ it('serves the market demo consents in the Host shape, including updates that ad
   const weather = await consentOf('demo-market/demo-weather-board', '_root__demo-weather-board');
   expect(weather.consent.facts).toMatchObject({ kind: 'update', previousVersion: '1.3.0', version: '1.4.2', unchangedCount: 1 });
   expect(keys((weather.consent.facts as any).added)).toEqual(['node:execute', 'notify']);
+  // Maintainer cases: an approved Node plugin whose update only adds a credential binding; Agent high risk without Node.
+  const secretSync = await consentOf('demo-market/demo-secret-sync', '_root__demo-secret-sync');
+  expect(keys((secretSync.consent.facts as any).added)).toEqual(['node:secret:api-token:node/worker.cjs:sync']);
+  expect(keys(((await consentOf('demo-market/demo-auto-agent')).consent.facts as any).permissions))
+    .toEqual(['agent:errand', 'agent:background', 'agent:user-action', 'notify']);
   const reading = await consentOf('demo-market/demo-reading-list', '_root__demo-reading-list');
   expect(keys((reading.consent.facts as any).added)).toEqual(['notify']);
   // Allowing the update commits the new version on the mock computer.
