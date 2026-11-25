@@ -12530,7 +12530,7 @@
       "arrivingLater": "{{name}} 已换到这台电脑，还在准备中，稍后会出现在伙伴列表里",
       "arrivalPermissions": "{{name}} 已按这台电脑的默认权限运行。",
       "arrivalModel": "{{name}} 之前选的模型在这台电脑上不可用，已改用这台电脑的默认模型。",
-      "arrivalModelSetup": "{{name}} 已来到这台电脑，但当前还没有可用模型。请前往「设置」连接模型供应商或选择伙伴默认模型。",
+      "arrivalModelSetup": "{{name}} 已来到这台电脑，但还没有可用模型。请连接模型供应商，或打开这位伙伴的「设置 → 模型」选择模型。",
       "arrivalPartialContent": "{{name}} 已来到这台电脑，部分云端内容未能恢复，原内容仍保留在云端。",
       "missingProfileTitle": "用初始资料继续 {{name}}？",
       "missingProfileDescription": "原主力电脑还没上传 {{name}} 的人设和简介。如果原电脑已重装或无法恢复，可以在这台电脑用初始资料继续，已同步到云端的对话和内容仍会保留。",

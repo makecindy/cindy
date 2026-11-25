@@ -365,7 +365,7 @@ Desktop `runtime.transcript()` 经注入的 Chat History 读取，首次按现�
     - **同机重装（`homeDeviceId === selfDeviceId`）**：直接跳过快照缺失拦截，复用本机已有资料或默认模板（Cindy 沿用 `cindy` 预设）加云端名字与头像拉回、认领安装、导入已有云端历史与其余内容，解除降级后立即上传资料快照（不绕过 `LOCAL_CINDY_CONFLICT`）；
     - **异机接管（`homeDeviceId !== selfDeviceId`）**：首次返回 `PROFILE_SNAPSHOT_MISSING` 且不改主力电脑，界面经二次确认后带 `allowMissingProfile: true` 以初始资料拉回并保留已同步的云端对话与内容。
   - **本机尚无可用伙伴默认模型**：显式接管经仅宿主可传入的 `allowMissingModel` 建立本机主任务、导入历史并解除降级，同时写入 `model_setup` 到达提示，用户进入伙伴后再连接供应商或选择模型；普通 IPC `local-db:bots:create-canonical-session` 仍按原规则要求可用模型（回归见 `botCanonicalSession.test.ts` 与 `control.test.ts`）。
-  - **局部内容与头像韧性**：显式接管时，头像下载遇到暂时性失败改用带本地隔离标记（`avatarFallback: true`）的默认头像完成拉回、不回写覆盖云端头像；记忆／技能／规则／自动化／关联项目中个别条目落盘失败时，跳过该项（不写入 `applied`，避免后续误写云端墓碑）、写入 `partial_content` 到达提示并放行拉回。后台自动接管保留原有严格重试语义。
+  - **局部内容与头像韧性**：显式接管时，头像下载遇到暂时性失败改用带本地隔离标记（`avatarFallback: true`）的默认头像完成拉回、不回写覆盖云端头像；记忆／技能／规则／自动化／关联项目中个别条目落盘失败时，跳过该项并在本机记下失败的云端 key，恢复完成前既不上传本机旧值，也不因本机缺失写入删除标记。写入 `partial_content` 到达提示并放行拉回。后台自动接管保留原有严格重试语义。
   - 实现见 `companion-cloud/runtime.ts`、`materialize.ts`、`avatarRestore.ts`、`host.ts`、`localDb/ipc/bots.ts`、`maker-ipc/botCanonicalSessionEnsure.ts`；回归见 `control.test.ts`、`materialize.test.ts`、`avatarRestore.test.ts`、`botCanonicalSession.test.ts` 与 `companionCloudUi.test.tsx`。
 - 已知限制：交出伙伴时，对话导入完成之后产生的对话，以及最后一轮上传之后、服务器改主力电脑的请求返回之前（一次请求往返）
   写入的资料或记忆不会上传，只留在原电脑的本机副本里；不为此冻结伙伴的本机写入。原主力电脑仍在线时被别处「在这台电脑继续」接走，

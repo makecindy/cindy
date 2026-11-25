@@ -40,6 +40,8 @@ const bot = z.object({
   /** The same per value for the companion store (store.ts), whose revisions are its own. */
   stored: z.record(z.string(), pref).optional(),
   storeSeeded: z.boolean().optional(),
+  /** Local restore failed for these cloud keys. No local value or deletion may replace them. */
+  restoreBlockedKeys: z.array(z.string()).optional(),
   /** This computer gave the companion away; never re-register it as home here. */
   demoted: z.boolean().optional(),
   /** Cloud history was added while the canonical Session was busy; rebuild at the next idle point. */

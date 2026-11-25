@@ -36,7 +36,7 @@ import { importCloudHistory } from './materialize.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, isUnreachable, type CompanionApi, type CompanionLog } from './types.js';
 import { createCompanionStore, readCompanionRestoreValue, readPreference, type CompanionStoreTransfer } from './store.js';
-import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_SKILL_PREFIX, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
+import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
 
 /** Electron/database side of the feature, wired in register.ts. */
 export interface CompanionCloudHost {
@@ -280,26 +280,38 @@ export function startCompanionCloud(input: {
   const roomName = (botId: string) => input.bots().find(bot => bot.botId === botId)?.name ?? '';
   const store = input.store ? createCompanionStore(input.api, input.store) : undefined;
   const uploader = createCompanionUploader({ api: input.api, state, log: input.log, store,
-    readValues: async (botId, actorId) => resolveCompanionSkillFiles(await input.host.readValues(botId), {
-      known: sha256 => state.bot(botId)?.skillFileMedia?.[sha256],
-      gaps: state.bot(botId)?.skillFileGaps ?? {},
-      ...(input.media ? { upload: async file => {
-        const roomId = await mirror.ensureRoom(botId, actorId, roomName(botId));
-        // As the owner: a room file with no message is readable only by whoever uploaded it.
-        const [block] = await input.media!.upload(roomId, `skill-file:${file.sha256}`, [{ id: file.sha256, name: file.name, category: 'file',
-          mimeType: 'application/octet-stream', size: file.size, url: null, path: file.path }], input.humanActorId);
-        if (!block?.mediaId) throw new Error('ATTACHMENT_UNAVAILABLE');
-        return block.mediaId;
-      } } : {}),
-      retain: (media, gaps, preserveExisting) => {
-        const known = state.bot(botId);
-        const nextMedia = preserveExisting ? { ...known?.skillFileMedia, ...media } : media;
-        const nextGaps = preserveExisting ? known?.skillFileGaps ?? {} : gaps;
-        if (canonicalJson([nextMedia, nextGaps]) === canonicalJson([known?.skillFileMedia ?? {}, known?.skillFileGaps ?? {}])) return;
-        state.update(botId, actorId, entry => { entry.skillFileMedia = nextMedia; entry.skillFileGaps = nextGaps; });
-      },
-      ...(input.log ? { log: input.log } : {}),
-    }),
+    readValues: async (botId, actorId) => {
+      const localValues = await input.host.readValues(botId);
+      const entry = state.bot(botId);
+      const blocked = new Set(entry?.actorId === actorId ? entry.restoreBlockedKeys : undefined);
+      // Skip protected attachments before the resolver can send their stale files to room storage.
+      const blockedFiles = [...blocked].filter(key => key.startsWith(COMPANION_SKILL_FILES_PREFIX));
+      return resolveCompanionSkillFiles(localValues.filter(value => !blocked.has(value.key)), {
+        known: sha256 => state.bot(botId)?.skillFileMedia?.[sha256],
+        gaps: state.bot(botId)?.skillFileGaps ?? {},
+        ...(input.media ? { upload: async file => {
+          const roomId = await mirror.ensureRoom(botId, actorId, roomName(botId));
+          // As the owner: a room file with no message is readable only by whoever uploaded it.
+          const [block] = await input.media!.upload(roomId, `skill-file:${file.sha256}`, [{ id: file.sha256, name: file.name, category: 'file',
+            mimeType: 'application/octet-stream', size: file.size, url: null, path: file.path }], input.humanActorId);
+          if (!block?.mediaId) throw new Error('ATTACHMENT_UNAVAILABLE');
+          return block.mediaId;
+        } } : {}),
+        retain: (media, gaps, preserveExisting) => {
+          const known = state.bot(botId);
+          const nextMedia = preserveExisting || blockedFiles.length ? { ...known?.skillFileMedia, ...media } : media;
+          const nextGaps = preserveExisting ? known?.skillFileGaps ?? {} : { ...gaps };
+          if (!preserveExisting) for (const key of blockedFiles) {
+            const slug = key.slice(COMPANION_SKILL_FILES_PREFIX.length);
+            const gap = known?.skillFileGaps?.[slug];
+            if (gap) nextGaps[slug] = gap;
+          }
+          if (canonicalJson([nextMedia, nextGaps]) === canonicalJson([known?.skillFileMedia ?? {}, known?.skillFileGaps ?? {}])) return;
+          state.update(botId, actorId, entry => { entry.skillFileMedia = nextMedia; entry.skillFileGaps = nextGaps; });
+        },
+        ...(input.log ? { log: input.log } : {}),
+      });
+    },
     confirmHome: async (_botId, actorId) => {
       const actors = await input.api<CompanionRuntimeActor[]>('/actors');
       return actors.find(actor => actor.id === actorId)?.homeDeviceId === input.selfDeviceId;

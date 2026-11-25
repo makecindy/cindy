@@ -12575,7 +12575,7 @@
       "arrivingLater": "{{name}} moved to this computer and is still getting ready. It will appear in your buddies soon",
       "arrivalPermissions": "{{name}} now uses this computer’s default permissions.",
       "arrivalModel": "{{name}}’s saved model isn’t available on this computer, so it follows this computer’s default model.",
-      "arrivalModelSetup": "{{name}} now runs on this computer, but no model is available yet. Connect a model provider or choose a default buddy model in Settings.",
+      "arrivalModelSetup": "{{name}} is on this computer, but no model is available yet. Connect a model provider or choose a model in this buddy’s settings under Model.",
       "arrivalPartialContent": "{{name}} now runs on this computer, though some synced items couldn’t be restored. Their cloud copies remain intact.",
       "missingProfileTitle": "Start {{name}} with default profile?",
       "missingProfileDescription": "The original main computer hasn’t uploaded {{name}}’s persona or description yet. If that computer was reinstalled or can’t be recovered, you can continue here with a default profile while keeping any synced conversations and content.",

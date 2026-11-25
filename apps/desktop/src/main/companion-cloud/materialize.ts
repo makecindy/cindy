@@ -286,11 +286,11 @@ export async function materializeCompanion(input: {
   const applied = new Map<string, { hash: string; revision: number }>();
   const profileRow = prefs.get(COMPANION_PROFILE_KEY);
   if (profileRow && profile) applied.set(COMPANION_PROFILE_KEY, { hash: valueHash(profileRow.value), revision: profileRow.revision });
-  let failures = 0;
-  const apply = async (kind: string, run: () => Promise<void>) => {
+  const failedKeys = new Set<string>();
+  const apply = async (kind: string, keys: readonly string[], run: () => Promise<void>) => {
     try { await run(); } catch (error) {
       if (errorCode(error) === 'OWNER_CHANGED') throw error;
-      failures += 1;
+      for (const key of keys) failedKeys.add(key);
       log?.warn('Companion content could not be restored', { actorId: actor.id, kind, code: errorCode(error) });
     }
   };
@@ -301,7 +301,7 @@ export async function materializeCompanion(input: {
     if (key.startsWith(COMPANION_MEMORY_PREFIX)) {
       const filename = key.slice(COMPANION_MEMORY_PREFIX.length);
       const content = text(record(value)?.content);
-      await apply('memory', async () => {
+      await apply('memory', [key], async () => {
         const current = await host.readMemory(botId, filename);
         if (value === null) {
           if (current !== null) await step(() => host.removeMemory(botId, filename, fence));
@@ -315,7 +315,7 @@ export async function materializeCompanion(input: {
     } else if (key.startsWith(COMPANION_SKILL_PREFIX)) {
       const slug = key.slice(COMPANION_SKILL_PREFIX.length);
       const content = text(record(value)?.content);
-      await apply('skill', async () => {
+      await apply('skill', [key], async () => {
         const current = await host.readSkill(botId, slug);
         if (value === null) {
           if (current !== null) await step(() => host.removeSkill(botId, slug, fence));
@@ -338,7 +338,7 @@ export async function materializeCompanion(input: {
       const slug = key.slice(COMPANION_SKILL_FILES_PREFIX.length);
       const list = row.value === null ? { files: [], omitted: [], truncated: false } : parseCompanionSkillFiles(row.value);
       if (!list) continue;
-      await apply('skill-files', async () => {
+      await apply('skill-files', [key], async () => {
         const fetch = companionSkillFileFetch(await step(() => input.roomId()), list.files, input.download!, log);
         const missing = await step(() => host.applySkillFiles!(botId, slug, list.files, fetch, { removeOthers: !list.truncated, keep: list.omitted }, fence));
         const held = missing.length && host.readSkillFiles ? await step(() => host.readSkillFiles!(botId, slug)) : [];
@@ -364,7 +364,7 @@ export async function materializeCompanion(input: {
   const capabilitiesRow = prefs.get(COMPANION_CAPABILITIES_KEY);
   const capabilities = capabilitiesRow ? parseCompanionCapabilities(capabilitiesRow.value) : null;
   if (capabilitiesRow && capabilities && host.applyCapabilities) {
-    await apply('capabilities', async () => {
+    await apply('capabilities', [COMPANION_CAPABILITIES_KEY], async () => {
       for (const notice of await step(() => host.applyCapabilities!(botId, capabilities, fence))) {
         if (!notices.includes(notice)) notices.push(notice);
       }
@@ -383,7 +383,7 @@ export async function materializeCompanion(input: {
   for (const batch of batches) {
     const rows = [...prefs].filter(([key]) => key.startsWith(batch.prefix));
     if (!rows.length || !batch.run) continue;
-    await apply(batch.kind, async () => {
+    await apply(batch.kind, rows.map(([key]) => key), async () => {
       const values = rows.flatMap(([, row]) => (row.value === null ? [] : [row.value]));
       const removed = batch.removes ? rows.flatMap(([key, row]) => (row.value === null ? [key.slice(batch.prefix.length)] : [])) : [];
       await step(() => batch.run!(botId, values, removed, fence));
@@ -395,7 +395,7 @@ export async function materializeCompanion(input: {
   const rulesRow = prefs.get(COMPANION_PROJECT_RULES_KEY);
   const rules = rulesRow ? text(record(rulesRow.value)?.content) : undefined;
   if (rulesRow && host.applyProjectRules && (rules !== undefined || rulesRow.value === null)) {
-    await apply('project-rules', async () => {
+    await apply('project-rules', [COMPANION_PROJECT_RULES_KEY], async () => {
       // Removed on the home is not removed here: a project always keeps its rules file.
       if (rules !== undefined) await step(() => host.applyProjectRules!(botId, rules, fence));
       applied.set(COMPANION_PROJECT_RULES_KEY, { hash: rulesRow.value === null ? TOMBSTONE_HASH : valueHash(rulesRow.value), revision: rulesRow.revision });
@@ -404,7 +404,7 @@ export async function materializeCompanion(input: {
   const carryoverRow = prefs.get(COMPANION_PROJECT_CARRYOVER_KEY);
   const carryover = carryoverRow ? text(record(carryoverRow.value)?.content) : undefined;
   if (carryoverRow && host.applyProjectCarryover && (carryover !== undefined || carryoverRow.value === null)) {
-    await apply('project-carryover', async () => {
+    await apply('project-carryover', [COMPANION_PROJECT_CARRYOVER_KEY], async () => {
       // Removed on the home is not removed here: the owner may still need it.
       if (carryover !== undefined) await step(() => host.applyProjectCarryover!(botId, carryover, fence));
       applied.set(COMPANION_PROJECT_CARRYOVER_KEY, { hash: carryoverRow.value === null ? TOMBSTONE_HASH : valueHash(carryoverRow.value), revision: carryoverRow.revision });
@@ -412,7 +412,7 @@ export async function materializeCompanion(input: {
   }
   const automationRows = [...prefs].filter(([key]) => key.startsWith(COMPANION_AUTOMATION_PREFIX));
   if (automationRows.length && host.applyAutomations) {
-    await apply('automation', async () => {
+    await apply('automation', automationRows.map(([key]) => key), async () => {
       await step(() => host.applyAutomations!(botId, automationRows.map(([key, row]) => ({ id: key.slice(COMPANION_AUTOMATION_PREFIX.length), value: row.value })), fence));
       for (const [key, row] of automationRows) applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
     });
@@ -423,13 +423,13 @@ export async function materializeCompanion(input: {
   const workbench = prefs.get(COMPANION_WORKBENCH_KEY);
   const replaceWorkbench = !!knownPrefs[COMPANION_WORKBENCH_KEY] || (known?.actorId === actor.id && !!known.stored?.[COMPANION_WORKBENCH_KEY]);
   if (workbench && host.applyWorkbench && (workbench.value !== null || replaceWorkbench)) {
-    await apply('workbench', async () => {
+    await apply('workbench', [COMPANION_WORKBENCH_KEY], async () => {
       await step(() => host.applyWorkbench!(botId, workbench.value, fence, { replace: replaceWorkbench }));
       applied.set(COMPANION_WORKBENCH_KEY, { hash: workbench.value === null ? TOMBSTONE_HASH : valueHash(workbench.value), revision: workbench.revision });
     });
   }
 
-  if (failures > 0) {
+  if (failedKeys.size > 0) {
     if (!input.resilient) {
       // Keep what was restored (so the retry does not back the copy up again) and stay demoted.
       state.update(botId, actor.id, entry => {
@@ -439,7 +439,6 @@ export async function materializeCompanion(input: {
       });
       throw new Error('RESTORE_INCOMPLETE');
     }
-    // Failed items were not recorded in `applied`, so the uploader never tombstones their cloud originals.
     if (!notices.includes('partial_content')) notices.push('partial_content');
   }
 
@@ -465,6 +464,12 @@ export async function materializeCompanion(input: {
     entry.prefsSeeded = false;
     entry.storeSeeded = false;
     for (const [key, value] of applied) remember(entry, key, value);
+    // Omission from applied alone is not enough: old ownership can still produce a
+    // tombstone, and stale local data can still produce an overwrite.
+    const blocked = new Set(entry.restoreBlockedKeys);
+    for (const key of applied.keys()) blocked.delete(key);
+    for (const key of failedKeys) blocked.add(key);
+    if (blocked.size) entry.restoreBlockedKeys = [...blocked]; else delete entry.restoreBlockedKeys;
     if (!keepCursor) entry.mirror = { sessionId, ...cursor };
     if (needsRebuild) entry.pendingRebuild = true;
     if (notices.length) entry.arrivalNotices = notices; else delete entry.arrivalNotices;

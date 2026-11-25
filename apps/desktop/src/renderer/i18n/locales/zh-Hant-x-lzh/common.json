@@ -12530,7 +12530,7 @@
       "arrivingLater": "{{name}} 已移至此機，方在籌備，稍後將現於同伴錄中",
       "arrivalPermissions": "{{name}} 已依此機預設權柄運作。",
       "arrivalModel": "{{name}} 前所選之模型此機不可用，已改用此機預設模型。",
-      "arrivalModelSetup": "{{name}} 已至此機，然此機尚無可用模型。請赴設定連結模型供方，或擇同伴預設模型。",
+      "arrivalModelSetup": "{{name}} 已至此機，然尚無可用模型。請連結模型供方，或於此同伴之「設定 → 模型」擇一模型。",
       "arrivalPartialContent": "{{name}} 已至此機，部分雲端所存未能復原，原物仍留於雲端。",
       "missingProfileTitle": "以初設資料續 {{name}} 乎？",
       "missingProfileDescription": "原主力電腦尚未傳 {{name}} 之人設與簡介。若原機已重裝或不可復，可於此機以初設資料續之，已同步雲端之對話與所存仍保留。",
