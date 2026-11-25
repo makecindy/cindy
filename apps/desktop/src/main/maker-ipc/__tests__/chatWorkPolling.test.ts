@@ -114,6 +114,48 @@ it('applies the longest restriction immediately across scans, claims and probes 
   expect(() => f.gate.check()).toThrow(WorkRequestDeferred);
 });
 
+it('bounds a broad claim wake and lets only one request through after a 429 cooldown', async () => {
+  const f = fixture(24); f.legacy();
+  const attempts: Array<ReturnType<typeof deferred<Execution | null>>> = [];
+  f.claim.mockImplementation(() => {
+    const attempt = deferred<Execution | null>();
+    attempts.push(attempt);
+    return attempt.promise;
+  });
+  f.poller.wake();
+  await vi.advanceTimersByTimeAsync(250);
+  expect(attempts).toHaveLength(4);
+  attempts[0]!.reject({ status: 429, retryAt: Date.now() + 120_000 });
+  for (const attempt of attempts.slice(1)) attempt.resolve(null);
+  f.poller.wake();
+  await vi.advanceTimersByTimeAsync(119_999);
+  expect(attempts).toHaveLength(4);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(attempts).toHaveLength(5);
+
+  // Repeated wakes and ticks cannot send another claim while the account is testing recovery.
+  f.poller.wake();
+  await vi.advanceTimersByTimeAsync(3_000);
+  expect(attempts).toHaveLength(5);
+  attempts[4]!.reject({ status: 429 });
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(attempts).toHaveLength(5);
+});
+
+it('keeps confirmed work from a batched probe queued when claim slots are full', async () => {
+  const f = fixture(12);
+  const first = deferred<Execution | null>();
+  f.probe.mockImplementation(async ids => ids.map(botId => ({ botId, pending: true, enabled: true })));
+  f.claim.mockImplementationOnce(() => first.promise);
+  f.poller.tick();
+  await vi.advanceTimersByTimeAsync(10);
+  expect(f.probe).toHaveBeenCalledOnce();
+  expect(new Set(f.claim.mock.calls.map(([id]) => id)).size).toBe(12);
+  first.resolve({ actor: 'actor-0' });
+  await vi.advanceTimersByTimeAsync(2);
+  expect(f.accept).toHaveBeenCalledExactlyOnceWith({ actor: 'actor-0' });
+});
+
 it('backs off a broken probe independently while a work notice can still claim', async () => {
   const f = fixture(2);
   f.probe.mockRejectedValue({ status: 503 });

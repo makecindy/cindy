@@ -10,6 +10,8 @@ import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
 import { activeGhostHarnesses, parseGhostHarnesses, type GhostHarnessDecl } from '@cindy/plugin-protocol';
+import { ghostFileOpenerWithinCap, parseGhostFileOpener, type GhostFileOpenerDecl } from '@cindy/plugin-protocol';
+export type { GhostFileOpenerDecl } from '@cindy/plugin-protocol';
 export type { GhostHarnessDecl } from '@cindy/plugin-protocol';
 export type { GhostModelRoute } from '@cindy/plugin-protocol';
 import type { GhostModelRoute } from '@cindy/plugin-protocol';
@@ -1090,6 +1092,16 @@ export interface GhostSecretOauthDecl {
   /** code / refresh token 交换端点(https;域名必须命中 hosts——clientSecret 只流向用户同意过的域名)。 */
   tokenUrl: string;
   /**
+   * 可选:设备码授权端点(RFC 8628 Device Authorization Grant,https;域名必须命中
+   * hosts)。声明后主机改走「设备码登录」:向本端点申请 user_code 与确认页,
+   * 拉起确认页(远程时交给控制端展示验证码),再按服务商给的间隔轮询 tokenUrl
+   * (grant_type=urn:ietf:params:oauth:grant-type:device_code),无需 loopback 回调,
+   * 服务商后台也不用登记重定向 URL。令牌保管、刷新与注入与授权码模式完全一致。
+   * authorizeUrl 仍必填:不认识本字段的旧主机会忽略它,退回授权码 + loopback 流程。
+   * 与 tokenBroker / brokerBounce 互斥(broker 只承接授权码交换)。
+   */
+  deviceAuthorizationUrl?: string;
+  /**
    * 可选:作者内置的 OAuth 客户端 ID(2026-07-13 Lizi 定案,filo-google
    * 开箱即用前置)。声明后用户零配置即可点"连接账号";用户在设置页自填的
    * client 凭证**覆盖**内置值(清除自填 = 回落内置)。桌面应用的 client
@@ -1894,6 +1906,12 @@ export interface GhostManifest {
    */
   harnesses?: GhostHarnessDecl[];
   /**
+   * 插件接管打开的文件类型(v3 only,须同时声明 node)。用户在 Cindy 里用系统默认应用打开
+   * 本机文件时,Host 先交给声明了该扩展名、已启用且用户没关掉的插件;插件逻辑页拿到绝对
+   * 路径并回报是否打开,失败或超时回落系统默认应用。安装/更新确认单列 `file-opener` 权限项。
+   */
+  fileOpener?: GhostFileOpenerDecl;
+  /**
    * 网络能力与范围。
    * 域名白名单 + 凭证声明,插件详情逐项展示,运行期主机代发并守门。
    */
@@ -2030,6 +2048,13 @@ export function isGhostInstallApprovalToken(value: unknown): value is string {
   );
 }
 
+export interface ConfirmedGhostUninstall {
+  owner: import('./dataOwnerPush').DataOwnerPushStamp;
+  physicalId: string;
+  approval: string;
+  version: string;
+}
+
 /** Public attribution requires a server projection; other installs retain their package attribution. */
 export function ghostFallbackDisplayAuthor(ghost: Pick<InstalledGhost, 'manifest' | 'publishingSource'>): string | null {
   return ghost.publishingSource?.kind === 'public-market' ? null : ghost.manifest.author ?? null;
@@ -2070,6 +2095,8 @@ export interface InstalledGhost {
    * knew the field never starts silently after an upgrade.
    */
   approvedHarnesses?: string[];
+  /** File extensions granted by the host install or update confirmation. */
+  approvedFileOpenerExtensions?: string[];
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2090,6 +2117,8 @@ export interface InstalledGhost {
   enabled: boolean;
   /** Host 是否持有一次明确安装/更新确认形成的批准快照。 */
   approval: GhostInstallApproval;
+  /** Digest of the installed package, when available in the Host receipt. */
+  installedPackageSha256?: string;
   /** Host-owned approval-revision snapshot root for approved skill directories. */
   approvedSkillRoot?: string;
   /** 安装时由主机验出的来源/签名等级；作者清单不能自报。 */
@@ -2252,7 +2281,8 @@ export interface GhostPermissionItem {
     | 'browser-extension'
     | 'skill'
     | 'workspace'
-    | 'live-screen';
+    | 'live-screen'
+    | 'file-opener';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -2648,9 +2678,12 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       // OAuth 凭证:展示授权域名 + scopes 全量如实列出(通用声明式的知情
       // 同意面——平台不预设 provider,用户看到的就是全部授权事实)。detail
       // 用作者声明的 scope 原文,不翻译不加工。
-      let authorizeHost = secret.oauth.authorizeUrl;
+      // 设备码登录时用户在设备码端点所属服务确认授权,展示该域名;未声明时
+      // 仍展示 authorizeUrl,存量插件的权限投影保持不变。
+      const authorizeEndpoint = secret.oauth.deviceAuthorizationUrl ?? secret.oauth.authorizeUrl;
+      let authorizeHost = authorizeEndpoint;
       try {
-        authorizeHost = new URL(secret.oauth.authorizeUrl).hostname;
+        authorizeHost = new URL(authorizeEndpoint).hostname;
       } catch {
         /* 校验已保证合法,防御性兜底原文 */
       }
@@ -2758,6 +2791,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       labelKey: 'preview',
       detailKey: 'previewDetail',
       detail: manifest.preview.hosts.join('\n'),
+    });
+  }
+  // fileOpener:接管打开的扩展名如实列出。插件会拿到用户所开文件的完整路径。
+  if (manifest.fileOpener) {
+    items.push({
+      key: 'file-opener',
+      kind: 'file-opener',
+      labelKey: 'fileOpener',
+      detailKey: 'fileOpenerDetail',
+      detail: manifest.fileOpener.extensions.join(' '),
     });
   }
   // browserExtension 槽:允许连接的扩展 id 逐行列出;实现页面控制契约的扩展
@@ -3115,6 +3158,10 @@ function compareGhostPermissionItems(
       } else unchanged.push(item);
       continue;
     }
+    if (item.key === 'file-opener' && ghostFileOpenerWithinCap(next.fileOpener, prev.fileOpener)) {
+      unchanged.push(item);
+      continue;
+    }
     if (!prevKeys.has(item.key)) {
       added.push(item);
     } else if (ghostPermissionProjectionKey(item) !== prevProjectionByKey.get(item.key)) {
@@ -3128,6 +3175,8 @@ function compareGhostPermissionItems(
       if (!nextKeys.has(item.key) || added.some(nextItem => nextItem.key === item.key)) removed.push(item);
       continue;
     }
+    if (item.key === 'file-opener' && next.fileOpener &&
+        ghostFileOpenerWithinCap(next.fileOpener, prev.fileOpener)) continue;
     if (!nextKeys.has(item.key)) {
       removed.push(item);
     } else if (ghostPermissionProjectionKey(item) !== nextProjectionByKey.get(item.key)) {
@@ -3197,6 +3246,8 @@ export function diffInstalledGhostPermissionItems(
       subscribe: withoutUnapprovedControlPoints(installed),
       tools: withoutUnapprovedAutoTools(installed),
       harnesses: withoutUnapprovedHarnesses(installed),
+      fileOpener: installed.approvedFileOpenerExtensions?.length
+        ? { extensions: installed.approvedFileOpenerExtensions } : undefined,
     };
     // Host declarations belong to the installed version, even when the legacy
     // page grant is absent and its UI resources are omitted from that baseline.
@@ -3306,6 +3357,10 @@ export function unreviewedGhostPermissionItems(
   const previewApproved =
     previewWithinCap(reviewed) ||
     (previouslyInstalled !== undefined && previewWithinCap(previouslyInstalled));
+  const fileOpenerApproved =
+    ghostFileOpenerWithinCap(actual.fileOpener, reviewed.fileOpener) ||
+    (previouslyInstalled !== undefined &&
+      ghostFileOpenerWithinCap(actual.fileOpener, previouslyInstalled.fileOpener));
   const browserExtensionApproved =
     ghostBrowserExtensionWithinCap(reviewed, actual) ||
     (previouslyInstalled !== undefined && ghostBrowserExtensionWithinCap(previouslyInstalled, actual));
@@ -3335,6 +3390,8 @@ export function unreviewedGhostPermissionItems(
       // preview 的展示 detail 包含完整 hosts；真实包删减 host 是收权，不应因
       // detail 字符串变化被反判成新增能力。新增或替换 host 仍会保留为未审查项。
       !(item.key === 'preview' && previewApproved) &&
+      // fileOpener 的展示 detail 是完整扩展名清单;删减扩展名是收权,新增仍保留为未审查项。
+      !(item.key === 'file-opener' && fileOpenerApproved) &&
       // browserExtension 的展示 detail 是完整 id 清单；删减 id、去掉页面控制或
       // 去掉 native host 都是收权，新增 id、新增页面控制仍保留为未审查项。
       !(item.key === 'browser-extension' && browserExtensionApproved) &&
@@ -3698,6 +3755,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'routineEvents',
   'models',
   'harnesses',
+  'fileOpener',
   'systemPrompt',
   'schemaVersion',
   'id',
@@ -5616,6 +5674,14 @@ function validateGhostManifestInput(
     if (parsed.ok) harnesses = parsed.harnesses;
     else if (!preserveHistoricalParameterSize) return { ok: false, reason: parsed.reason };
   }
+  // 插件接管打开的文件类型(v3 only;v2 slots 不映射)。与协议正本同一解析器;已存 Release
+  // 与已装快照里在本 Host 认识该字段之前写下、但不合规的值只丢弃。
+  let fileOpener: GhostFileOpenerDecl | undefined;
+  if (prepared.schemaVersion === 3 && raw.fileOpener !== undefined) {
+    const parsed = parseGhostFileOpener(raw.fileOpener, node);
+    if (parsed.ok) fileOpener = parsed.fileOpener;
+    else if (!preserveHistoricalParameterSize) return { ok: false, reason: parsed.reason };
+  }
 
   // preview 槽详单:与 slots 含 'preview' **严格成对**(有槽必有详单——域名
   // 范围是本能力的全部知情面,不允许"先装后说");域名语法与 network 白名单
@@ -6302,6 +6368,19 @@ function validateGhostManifestInput(
           if (!authorizeParsed.ok) return authorizeParsed;
           const tokenParsed = parseHostBoundUrl(oa.tokenUrl, 'tokenUrl');
           if (!tokenParsed.ok) return tokenParsed;
+          let deviceAuthorizationUrl: string | undefined;
+          if (oa.deviceAuthorizationUrl !== undefined) {
+            const deviceParsed = parseHostBoundUrl(oa.deviceAuthorizationUrl, 'deviceAuthorizationUrl');
+            if (!deviceParsed.ok) return deviceParsed;
+            if (oa.tokenBroker !== undefined || oa.brokerBounce !== undefined) {
+              return {
+                ok: false,
+                reason:
+                  'network.secrets[].oauth.deviceAuthorizationUrl 与 tokenBroker / brokerBounce 互斥(broker 只承接授权码交换)',
+              };
+            }
+            deviceAuthorizationUrl = deviceParsed.url;
+          }
           // 内置 client 凭证(可选,成对语义:secret 不许孤儿声明)。
           if (oa.clientId !== undefined) {
             if (
@@ -6603,6 +6682,7 @@ function validateGhostManifestInput(
           oauth = {
             authorizeUrl: authorizeParsed.url,
             tokenUrl: tokenParsed.url,
+            ...(deviceAuthorizationUrl !== undefined ? { deviceAuthorizationUrl } : {}),
             ...(oa.clientId !== undefined ? { clientId: oa.clientId as string } : {}),
             ...(oaClientIdAlternatives !== undefined
               ? { clientIdAlternatives: oaClientIdAlternatives }
@@ -7111,6 +7191,7 @@ function validateGhostManifestInput(
       ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(models !== undefined ? { models } : {}),
       ...(harnesses !== undefined ? { harnesses } : {}),
+      ...(fileOpener !== undefined ? { fileOpener } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(preview !== undefined ? { preview } : {}),
@@ -7966,6 +8047,21 @@ export interface GhostPipeBrowserExtensionRelay {
  */
 export type GhostPipeTaskViewResult =
   | { ok: true; sessionId: string; focusRequested?: true }
+  | {
+      ok: false;
+      errorCode: 'PERMISSION_DENIED' | 'INVALID_REQUEST' | 'HOST_NOT_READY' | 'INTERNAL';
+      message: string;
+    };
+
+export interface GhostPipeSessionStateRequest {
+  type: 'session-state-request';
+  sessionIds: string[];
+}
+
+export type GhostSessionState = 'active' | 'archived' | 'deleted' | 'out_of_scope';
+
+export type GhostPipeSessionStateResult =
+  | { ok: true; sessions: Array<{ sessionId: string; status: GhostSessionState }> }
   | {
       ok: false;
       errorCode: 'PERMISSION_DENIED' | 'INVALID_REQUEST' | 'HOST_NOT_READY' | 'INTERNAL';
@@ -9534,6 +9630,18 @@ export type GhostPipeEventPush =
       data: GhostControlPointData;
     }
   | {
+      /**
+       * 用户在 Cindy 里用系统默认应用打开本机文件,且扩展名命中本插件 `fileOpener`。
+       * 插件在 deadline 前回 `file-open-result`;不回、回 ok:false 都回落系统默认应用。
+       */
+      type: 'event';
+      name: 'open-file';
+      requestId: string;
+      ts: number;
+      deadline: number;
+      data: { path: string };
+    }
+  | {
       /** 随包 Node 进程发来的 JSON-RPC notification / MCP 进度事件。 */
       type: 'event';
       name: 'node-notification';
@@ -9616,6 +9724,13 @@ export type GhostPipeEventPush =
  * 主机只等它把裁决返回。整块承载 UI(脚标/身份头/查看原文)主机绘制,意识
  * 只供 text/reason/html。
  */
+/** 插件对 `open-file` 事件的回执:ok=true 表示已由插件打开,Host 不再交给系统默认应用。 */
+export interface GhostPipeFileOpenResult {
+  type: 'file-open-result';
+  requestId: string;
+  ok: boolean;
+}
+
 export interface GhostPipeEventVerdict {
   type: 'event-verdict';
   hookId: string;

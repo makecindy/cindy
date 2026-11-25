@@ -11,6 +11,7 @@ import { clientMigrationContract } from './client-migration-contract.mjs';
 import { runLegacyPluginMigrationPreflight } from './plugins/legacy-approvals.js';
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
 import { createHostPlatformTools } from './platform/tools.js';
+import { readHostDeviceName, readHostMachineStatus } from './platform/machine-status.js';
 import { createHostCodexRuntime, createHostSubscriptionFastPolicies } from './agent/codex-runtime.js';
 import type { EngineKind } from '@cindy/maker-core';
 import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
@@ -33,8 +34,11 @@ import { mapMembershipToAuthUser, type User as AccountUser } from '../../desktop
 import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-identity.mjs';
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
+import { AGENT_NET_UDP_PORT_ENV, parseAgentNetUdpPort } from '../../desktop/src/main/device-link/agentNetStunDiscovery.js';
+import { createHostSessionHandoff } from './agent/session-handoff.js';
 import { createHostService } from './service.mjs';
-import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
+import { holdError } from './agent/profile-hold.js';
+import { createHostRuntimeSession, throwAgentBinaryNotReady, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
 import {
   createHostProfileCoexistenceMonitor, createDesktopScanner, HOST_PROFILE_IN_USE_BY_DESKTOP, HostProfileInUseError,
   type CoexistenceMonitor, type CoexistenceState,
@@ -402,6 +406,11 @@ const harnessBinaries = createHostHarnessBinaries({
   harnessRoot: () => hostRuntimeLayout().harnessRoot,
   onUnavailable: (kind, error) => hostLog.warn('harness binary unavailable', { kind, error }),
 });
+
+function warnIfNoAgentBinaries(binaries: Record<string, string | boolean | null>) {
+  if (Object.values(binaries).some(Boolean)) return;
+  hostLog.warn('No Agent engines are available. Install an engine and restart Cindy.', { missing: Object.keys(binaries) });
+}
 
 /** The refusal a new send gets while a desktop uses this profile, in the system language. */
 const profileInUseMessage = () => `${HOST_PROFILE_IN_USE_BY_DESKTOP}: ${
@@ -854,6 +863,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined });
   // The engine binaries this owner runtime uses, read once (the model settings use the same ones).
   const harnessBinaryPaths = await harnessBinaries.resolve();
+  warnIfNoAgentBinaries(harnessBinaryPaths);
   providerConfig = createHostProviderConfig({ profileDir: dataDir, ownerId, credentials,
     // Coexistence plan A: the xAI login is neither renewed nor signed out while held (agent/xai-held-login.ts).
     isProfileHeld: () => inputQueue.isHeldForDesktop(),
@@ -1205,14 +1215,16 @@ const hostProviderGroups = createProviderGroupStore({
 const hostProviderBindings = createProviderGroupBindings(hostProviderGroups);
 // The send path and the Device Link create entry refuse provider group tasks with this one check.
 const assertProviderExecutionSupported = createHostProviderExecutionCheck({ hostProviderBindings, hostProviderGroups });
-const readSessionForRun = async (sessionId: string) => {
+const readSessionForRun = async (sessionId: string, { forHandoff = false } = {}) => {
   const db = getDbClient();
   const rows = await db.drizzle.select().from(sessionTable)
     .where(eq(sessionTable.id, sessionId)).limit(1);
   const row = rows[0];
+  if (forHandoff && (!row || row.status !== 'active' || row.hiddenAt != null || row.source === 'bot')) return null;
   if (!row || row.status !== 'active') throw new Error('session is not active');
   const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
     .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
+  if (forHandoff && botLink) return null;
   const storedKind = requireBuiltinAgentKind(row.agentKind as EngineKind, 'Host task execution');
   const agentKind: 'claude-code' | 'codex' | 'pi' = storedKind === 'codex' ? 'codex' : storedKind === 'pi' ? 'pi' : 'claude-code';
   return {
@@ -1771,14 +1783,35 @@ const serverDeps = {
       activity: row.lastToolUse?.toolName ?? null,
     }));
   },
-  updateSession: lockSessionRoute(createHostSessionUpdate({
-    restoreTaskToActive: taskRestore.restoreTaskToActive,
-    publish: event => eventHub.publish(event),
-    setModel: (sessionId, model, providerId, revision, selection) =>
-      runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
-    persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
-    move: sessionMove.move,
-  })),
+  updateSession: (() => {
+    const run = createHostSessionUpdate({
+      restoreTaskToActive: taskRestore.restoreTaskToActive,
+      publish: event => eventHub.publish(event),
+      setModel: (sessionId, model, providerId, revision, selection) =>
+        runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
+      persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
+      move: sessionMove.move,
+      onSoftDelete: async sessionId => {
+        await inputQueue.disposeSession(sessionId);
+        runtimeSelection.clearIntent(sessionId);
+        void recoverGeneratedImagesForHistory(sessionId).catch(() => undefined);
+        try { removeSessionModelInterface(sessionId); } catch (error) {
+          hostLog.warn('session interface snapshot cleanup failed', { sessionId, error: String(error) });
+        }
+        void removeTurnChangeSetsForSession(sessionId).catch(error =>
+          hostLog.warn('turn change-set cleanup failed', { sessionId, err: error instanceof Error ? error.message : String(error) }));
+        forgetProvisionalSession(sessionId);
+      },
+    });
+    return (sessionId: string, patch: Record<string, unknown>, options?: { deleteTarget?: 'side-chat' | 'task' }) => {
+      const owner = activeOwnerScopeKey();
+      return run(sessionId, patch, options, () => {
+        const held = inputQueue.profileHoldReason();
+        if (held) throw holdError(held);
+        if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('[NOT_FOUND] Host account changed');
+      });
+    };
+  })(),
   /**
    * Register a switch under the route lock for enqueue or the dispatch boundary.
    */
@@ -1902,6 +1935,7 @@ const serverDeps = {
     committed: await commitProvisionalSession(sessionId, sessionDraftPorts),
   }),
   createSession: async (input: Record<string, unknown>) => {
+    if (!agentGraph && sessionStorage && runtime.state === 'ready') throwAgentBinaryNotReady();
     if (!agentGraph || !sessionStorage) throw new Error('agent runtime is not ready');
     const allowed: Record<string, true> = {
       id: true, title: true, workingDir: true, model: true, effort: true, permissionMode: true,
@@ -2213,11 +2247,14 @@ function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentN
   const credentials = () => (store ??= createCredentialStore({ userDataDir: resolveHostDataDir(),
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined }).catch((error: unknown) => { store = null; throw error; }));
   let core: Promise<WebAssembly.Module> | null = null;
+  const agentNetLog = createLogger('agent-net');
+  const fixedUdpPort = parseAgentNetUdpPort(process.env[AGENT_NET_UDP_PORT_ENV], agentNetLog);
   return {
     base: () => base,
     subject: () => accountUser?.id ?? null,
     deviceId: () => currentDeviceId,
-    deviceName: () => process.env.CINDY_HOST_DEVICE_NAME?.trim() || `${os.hostname()} · Cindy Host`,
+    deviceName: readHostDeviceName,
+    bindPort: () => fixedUdpPort,
     readSecret: async key => (await credentials()).read(key),
     writeSecret: async (key, value) => { (await credentials()).write(key, value); },
     enroll: (url, body) => serverApi('/api/agent-net/enroll', { baseUrl: url, method: 'POST', body, timeoutMs: 10_000, cache: 'no-store',
@@ -2243,7 +2280,7 @@ function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentN
       const scope = createHash('sha256').update(JSON.stringify([base, subject])).digest('hex').slice(0, 32);
       return path.join(resolveHostDataDir(), 'agent-net', scope, 'directory.json');
     },
-    log: createLogger('agent-net'),
+    log: agentNetLog,
   };
 }
 
@@ -2298,7 +2335,15 @@ function startDeviceLink(): void {
     void worktree.reconcilePendingSafeDirectoryCleanups().catch(error =>
       hostLog.warn('deferred Worktree safe.directory cleanup failed', { error }));
   }
+  const sessionHandoff = (isSelfDeviceId: (id: string) => boolean) => createHostSessionHandoff({
+    input: inputQueue, worktree, isSelfDeviceId, assertProviderExecutionSupported,
+    readProviders: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
+    agents: () => agentGraph?.agents ?? [],
+    hasCindyAiApiKey: () => currentGateway() !== null,
+    broadcastCreated: sessionDraftPorts.emitSessionCreated,
+  });
   deviceLink = createHostDeviceLink({
+    sessionHandoff,
     profileDir, worktree, version: layout.version,
     mcpApps: pluginGateway ?? undefined,
     releaseAuthCaller: caller => agentAuth?.releaseCaller(caller),
@@ -2310,8 +2355,22 @@ function startDeviceLink(): void {
     // 「重新加入」 (`cindy-host remote rejoin`): the same official Device Link service and account token as the device list.
     officialDeviceLinkFetch: (route, opts) => serverApi(route, { ...opts, baseUrl: endpoint, cache: 'no-store', redactErrorDetails: true }),
     invoke: service, subscribe: eventHub.subscribe,
+    readMachineStatus: () => readHostMachineStatus(() =>
+      agentGraph?.maker.listActiveSessions().filter(session => session.isTurnRunning()).length ?? 0),
     isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
       || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
+    sessionInTurn: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
+      || inputQueue.isTurnRunning(id) || inputQueue.isTurnRecovering(id),
+    closeRuntimeSession: id => {
+      const owner = activeOwnerScopeKey();
+      return withSendToSessionLock(id, async () => {
+        const held = inputQueue.profileHoldReason();
+        if (held) throw holdError(held);
+        if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('[NOT_FOUND] Host account changed');
+        await agentGraph?.maker.closeSession(id);
+        interactions.detach(id, 'session_closed');
+      });
+    },
     onProjectTaskStatus: (sessionId, status) => {
       eventHub.publish({ type: 'session_changed', sessionId, status, patch: { status } });
     },
@@ -2408,7 +2467,11 @@ server.listen(PORT, '127.0.0.1', () => {
         const state = await readAdoptedSessionState({ userDataDir: resolveHostDataDir() });
         account = { authenticated: false, realm: state.realm };
         if (state.authenticated) initialUser = await resolveAccountUser();
-        if (!initialUser) { runtime.detail = discovered.reason ?? 'owner is unknown'; return; }
+        if (!initialUser) {
+          warnIfNoAgentBinaries(harnessBinaries.status());
+          runtime.detail = discovered.reason ?? 'owner is unknown';
+          return;
+        }
         owner = initialUser.id;
       }
     }

@@ -56,6 +56,34 @@ afterEach(() => {
 });
 
 describe('useAutomationScheduleSessionIndex silence events', () => {
+  it('reads the committed skipped timing and ignores an earlier index response', async () => {
+    const previous = {
+      runId: 'r-old', scheduleId: 'schedule-1', scheduleName: 'PR check',
+      scheduleStatus: 'active', sessionId: 'session-1', status: 'success',
+      firedAt: 100, nextFireAt: 200,
+    };
+    const olderRead = Promise.withResolvers<{ runs: Array<typeof previous> }>();
+    const listSidebarIndexRuns = vi.mocked(window.electronAPI.maker.schedule.listSidebarIndexRuns);
+    listSidebarIndexRuns
+      .mockResolvedValueOnce({ runs: [previous] })
+      .mockReturnValueOnce(olderRead.promise)
+      .mockResolvedValueOnce({ runs: [{ ...previous, nextFireAt: 400 }] });
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => expect(result.current.get('session-1')?.nextFireAt).toBe(200));
+
+    act(() => scheduleEventListener?.({ type: 'changed', scheduleId: 'schedule-1' }));
+    await act(async () => {
+      scheduleEventListener?.({
+        type: 'skipped', scheduleId: 'schedule-1', runId: 'r-skip', sessionId: '',
+        lastFiredAt: 200, lastFinishedAt: 210, nextFireAt: 400,
+      });
+    });
+    expect(result.current.get('session-1')?.nextFireAt).toBe(400);
+    await act(async () => olderRead.resolve({ runs: [previous] }));
+    expect(result.current.get('session-1')?.nextFireAt).toBe(400);
+    expect(listSidebarIndexRuns).toHaveBeenCalledTimes(3);
+  });
+
   it('marks a bound scheduler session as owning its terminal notification', () => {
     renderHook(() => useAutomationScheduleSessionIndex());
 

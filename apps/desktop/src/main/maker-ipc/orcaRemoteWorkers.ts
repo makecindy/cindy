@@ -375,6 +375,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
                   platform: device.platform,
                   supported: supported[index] !== false,
                   ...((supported[index] as OrcaRemoteWorkerCaps)?.agentDevice === true ? { supportsAgentDevice: true } : {}),
+                  ...((supported[index] as OrcaRemoteWorkerCaps)?.modelGroup === true ? { supportsModelGroup: true } : {}),
                 },
               ],
         )
@@ -433,6 +434,10 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
           message: `${name} 需要更新后才能为跨设备 Worker 选择 Agent 所在电脑。` };
       }
+      if (input.modelGroup && supported.modelGroup !== true) {
+        return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+          message: 'The execution computer does not support Worker model groups' };
+      }
       const remoteSessionId = createId();
       let opened: DeviceOpenResult | undefined;
       let uncertainOpen = false;
@@ -445,6 +450,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
             sessionId: remoteSessionId,
             agentKind: input.agent,
             ...(input.model ? { model: input.model } : {}),
+            ...(input.modelGroup ? { modelGroup: input.modelGroup } : {}),
             ...(input.providerId ? { providerId: input.providerId } : {}),
             ...(input.agentDeviceId !== undefined ? { agentDeviceId: input.agentDeviceId } : {}),
             ...(input.effort ? { effort: input.effort } : {}),

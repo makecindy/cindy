@@ -447,7 +447,7 @@ export interface BuildUserProviderOptions {
     agent: AgentKind,
     model: ProviderRuntimeModelConfig,
     routing: RoutingDescriptor,
-  ) => ModelMetadata | undefined;
+  ) => (ModelMetadata & Pick<CatalogModel, 'supportsUltrafastMode'>) | undefined;
 }
 
 /**
@@ -672,8 +672,18 @@ export function buildUserProvider(
         // Reused adapter data is a fallback, not a configured route default.
         defaultEffort: m.discoveredMetadata?.defaultEffort,
       }) : undefined;
+      // Pi's language-model catalog describes text execution. A realtime session
+      // uses the model's published audio capabilities on its separate voice endpoint.
+      const baseDefaults = (imported || catalogDefaults)
+        ? findBaseModel(options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry, m.id)?.defaults
+        : undefined;
       const defaults = imported || catalogDefaults || presetDefaults
-        ? mergeModelMetadata(imported && !imported.inheritedFrom ? providerModelMetadata(imported) : exactRelayDefaults, catalogDefaults, presetDefaults)
+        ? mergeModelMetadata(
+            imported && !imported.inheritedFrom ? providerModelMetadata(imported) : exactRelayDefaults,
+            catalogDefaults,
+            baseDefaults?.mode === 'realtime' ? { modalities: baseDefaults.modalities } : undefined,
+            presetDefaults,
+          )
         : undefined;
       // A verified catalog identity can reuse the manufacturer's declaration.
       // Execution protocols and prices still belong to this exact connection.
@@ -684,6 +694,7 @@ export function buildUserProvider(
         return routeNativeApi !== undefined ? routeNativeApi
           : resolveCatalogModelNativeApi(source, baseModel?.id ?? m.id, projected.mode);
       };
+      const liveMetadata = options.getDiscoveredModelMetadata?.(agent, m, routing[agent]!);
       const projected = toCatalogModel(
         m,
         m.selectedInterface?.providerId ?? (followsPreset && sameRoute ? preset!.id : config.id),
@@ -692,7 +703,7 @@ export function buildUserProvider(
         defaults,
         nativeCodex ? 'openai' : undefined,
         generationDefaults,
-        options.getDiscoveredModelMetadata?.(agent, m, routing[agent]!),
+        liveMetadata,
       );
       const currentDeclaration = resolveDeclaration(registry);
       // Apply current Server identity after capability projection, including an
@@ -716,10 +727,13 @@ export function buildUserProvider(
         ...(m.interfaceUnavailable ? { interfaceUnavailable: true, availableInterfaces: m.availableInterfaces } : {}),
         ...(m.selectedInterface ? { selectedInterface: { ...m.selectedInterface, defaults: catalogModelMetadata(projected) }, availableInterfaces: m.availableInterfaces,
           ...(m.selectedInterface.nativeApis !== undefined ? { nativeApis: m.selectedInterface.nativeApis } : {}) } : {}),
-        // Only this native account's latest discovery grants Ultrafast. Public
-        // defaults, same-name API connections and other engines cannot inherit it.
-        ...(nativeCodex && agent === 'codex'
-          ? { supportsUltrafastMode: storedModel.supportsUltrafastMode === true } : {}),
+        // Account discovery stays bound to its native Codex account. For API
+        // connections, only the host's exact-route capability can enable the tier.
+        ...(agent === 'codex' && nativeCodex
+          ? { supportsUltrafastMode: storedModel.supportsUltrafastMode === true }
+          : agent === 'codex' && liveMetadata?.supportsUltrafastMode !== undefined
+            ? { supportsUltrafastMode: projected.supportsFastMode === true && liveMetadata.supportsUltrafastMode }
+            : {}),
         ...(nativeApi !== undefined ? { nativeApi } : {}),
         // Projection is not a user edit. Save only the original configuration.
         userModelConfig: structuredClone(storedModel),

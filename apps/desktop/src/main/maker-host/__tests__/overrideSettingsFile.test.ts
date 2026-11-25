@@ -24,6 +24,8 @@ function createTempStore(
     logReadErrorDetails?: boolean;
     maxBytes?: number;
     preserveUnreadableFile?: boolean;
+    scopeKey?: () => string;
+    validateOverrides?: (raw: Record<string, unknown>) => void;
   } = {},
 ) {
   const dir = existing?.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-override-settings-'));
@@ -61,10 +63,171 @@ function createTempStore(
     preserveUnreadableFile: options.preserveUnreadableFile,
     logLoadedValue: options.logLoadedValue,
     logReadErrorDetails: options.logReadErrorDetails,
+    scopeKey: options.scopeKey,
+    validateOverrides: options.validateOverrides,
   });
 
   return { dir, file, store, log };
 }
+
+describe('host settings CAS and pure inspection', () => {
+  it('preserves unreadable bytes without logging or silently supplying defaults', async () => {
+    const { dir, file, store, log } = createTempStore();
+    try {
+      fs.writeFileSync(file, '{private-invalid');
+      expect(store.inspect()).toEqual({ status: 'unreadable', revision: null });
+      await expect(store.commitAtomic({ set: { limit: 7 } })).rejects.toMatchObject({ code: 'UNREADABLE' });
+      expect(fs.readFileSync(file, 'utf8')).toBe('{private-invalid');
+      expect(log.info).not.toHaveBeenCalled();
+      expect(log.warn).not.toHaveBeenCalled();
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('keeps explicit default values and clears individual keys with same-lock CAS', async () => {
+    const first = createTempStore();
+    const second = createTempStore(first);
+    try {
+      const initial = first.store.inspect();
+      if (initial.status !== 'ready') throw new Error('test setup');
+      const results = await Promise.allSettled([
+        first.store.commitAtomic({ set: { enabled: true } }, { expectedRevision: initial.revision }),
+        second.store.commitAtomic({ set: { limit: 9 } }, { expectedRevision: initial.revision }),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+      const state = await first.store.commitAtomic({ set: { enabled: true, limit: 9 } });
+      expect(state.customizedKeys).toEqual(expect.arrayContaining(['enabled', 'limit']));
+      const cleared = await first.store.commitAtomic({ clear: ['enabled'] }, { expectedRevision: state.revision });
+      expect(cleared.customizedKeys).toEqual(['limit']);
+    } finally { fs.rmSync(first.dir, { recursive: true, force: true }); }
+  });
+
+  it('rechecks the owner and caller inside the write lock and notifies only saved writes', async () => {
+    let owner = 'owner-a:1';
+    const { dir, file, store } = createTempStore(undefined, { scopeKey: () => owner });
+    const listener = vi.fn();
+    const unsubscribe = store.onChanged(listener);
+    try {
+      const write = store.commitAtomic({ set: { limit: 7 } });
+      owner = 'owner-b:2';
+      await expect(write).rejects.toMatchObject({ code: 'SCOPE_CHANGED' });
+      expect(fs.existsSync(file)).toBe(false);
+      expect(listener).not.toHaveBeenCalled();
+      const assertCurrent = vi.fn();
+      await store.commitAtomic({ set: { limit: 7 } }, { assertCurrent });
+      expect(assertCurrent).toHaveBeenCalledTimes(3);
+      expect(listener).toHaveBeenCalledTimes(1);
+      unsubscribe();
+      await store.writePatchAtomic({ limit: 8 });
+      expect(listener).toHaveBeenCalledTimes(1);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('shared final validation and bounded inspection', () => {
+  it.each(['sync', 'atomic', 'update'] as const)('keeps the opted-in validator off ordinary %s writes; only cloud commits check it', async (kind) => {
+    const validateOverrides = vi.fn((raw: Record<string, unknown>) => {
+      if (raw.limit !== undefined && (typeof raw.limit !== 'number' || raw.limit > 10)) throw new Error('invalid limit');
+    });
+    const { dir, store } = createTempStore(undefined, { validateOverrides });
+    try {
+      store.writePatch({ limit: 7 });
+      if (kind === 'sync') store.writePatch({ limit: 99 });
+      else if (kind === 'atomic') await store.writePatchAtomic({ limit: 99 });
+      else await store.updateAtomic(() => ({ limit: 99 }));
+      expect(store.read()).toMatchObject({ limit: 99 });
+      await expect(store.commitAtomic({ set: { limit: 100 } })).rejects.toThrow();
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+  it('does not add validation constraints to stores that did not opt in', async () => {
+    const { dir, file, store } = createTempStore();
+    try {
+      await store.writePatchAtomic({ limit: 123.5 });
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ limit: 123.5 });
+      expect(store.inspect()).toMatchObject({ status: 'ready', value: { limit: 123.5 } });
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it.each(['null', '[1]', '{bad-json', '{"limit":123456789}'])('rejects malformed or oversized bytes %s without repair', (raw) => {
+    const { dir, file, store, log } = createTempStore(undefined, { maxBytes: 16 });
+    try {
+      fs.writeFileSync(file, raw);
+      expect(store.inspect()).toEqual({ status: 'unreadable', revision: null });
+      expect(fs.readFileSync(file, 'utf8')).toBe(raw);
+      expect(fs.readdirSync(dir)).toEqual(['settings.json']);
+      expect(log.info).not.toHaveBeenCalled(); expect(log.warn).not.toHaveBeenCalled();
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('distinguishes a missing file from a permission failure without an unbounded read', () => {
+    const { dir, file, store } = createTempStore();
+    try {
+      expect(store.inspect()).toMatchObject({ status: 'ready', value: DEFAULTS, customizedKeys: [] });
+      fs.writeFileSync(file, '{"limit":7}');
+      const open = vi.spyOn(fs, 'openSync').mockImplementationOnce(() => {
+        throw Object.assign(new Error('private directory'), { code: 'EACCES' });
+      });
+      const unbounded = vi.spyOn(fs, 'readFileSync');
+      try {
+        expect(store.inspect()).toEqual({ status: 'unreadable', revision: null });
+        expect(unbounded).not.toHaveBeenCalled();
+      } finally { open.mockRestore(); unbounded.mockRestore(); }
+      expect(fs.readFileSync(file, 'utf8')).toBe('{"limit":7}');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('rejects a symbolic-link settings file without changing the link or target', ({ skip }) => {
+    const { dir, file, store } = createTempStore();
+    const target = path.join(dir, 'target.json');
+    try {
+      fs.writeFileSync(target, '{"limit":7}');
+      try { fs.symlinkSync(target, file, 'file'); }
+      catch (error) {
+        if (['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) { skip(); return; }
+        throw error;
+      }
+      expect(store.inspect()).toEqual({ status: 'unreadable', revision: null });
+      expect(fs.lstatSync(file).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(file)).toBe(target);
+      expect(fs.readFileSync(target, 'utf8')).toBe('{"limit":7}');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('rejects a directory without trying to read it as settings', () => {
+    const { dir, file, store } = createTempStore();
+    try {
+      fs.mkdirSync(file);
+      expect(store.inspect()).toEqual({ status: 'unreadable', revision: null });
+      expect(fs.statSync(file).isDirectory()).toBe(true);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('bounds allocation and discards a file that grows after its handle stat', () => {
+    const { dir, file, store } = createTempStore(undefined, { maxBytes: 32 });
+    const original = '{"limit":7}'; const appended = ' '.repeat(1024);
+    fs.writeFileSync(file, original);
+    const actualFstat = fs.fstatSync;
+    let grew = false;
+    const fstat = vi.spyOn(fs, 'fstatSync').mockImplementation((...args) => {
+      const stat = Reflect.apply(actualFstat, fs, args);
+      if (!grew) { grew = true; fs.appendFileSync(file, appended); }
+      return stat;
+    });
+    const read = vi.spyOn(fs, 'readSync');
+    const unbounded = vi.spyOn(fs, 'readFileSync');
+    try {
+      expect(store.inspect()).toEqual({ status: 'unreadable', revision: null });
+      expect(unbounded).not.toHaveBeenCalled();
+      expect(read).toHaveBeenCalled();
+      for (const call of read.mock.calls) expect((call[1] as NodeJS.ArrayBufferView).byteLength).toBeLessThanOrEqual(32);
+      fstat.mockRestore(); read.mockRestore(); unbounded.mockRestore();
+      expect(fs.readFileSync(file, 'utf8')).toBe(original + appended);
+    } finally {
+      fstat.mockRestore(); read.mockRestore(); unbounded.mockRestore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('createOverrideSettingsFile', () => {
   it('uses defaults and reports no customization when the file is missing', () => {

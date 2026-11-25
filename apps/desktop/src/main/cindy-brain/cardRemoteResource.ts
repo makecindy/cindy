@@ -1,3 +1,4 @@
+import { cardPrSlotKey as prSlotKey, cardPrLinkKey as githubPrKey } from '@cindy/maker-shared';
 import { GHOST_CARD_ACTION_ID_RE, isGhostCardLinkAllowed, isGhostCardModelSelection, type GhostCardModelSelection } from '../../shared/ghost.js';
 import { readMailCard, readGhostCardSupersededBy, isLegacyMailCard, readGhostCardFormChange, readGhostCardForm, parseGhostCardFormValues, omitGhostCardFormPreview, ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import type { GhostCardRow } from './cardService.js';
@@ -133,12 +134,6 @@ function cardLines(fragment: string): string[] {
   return cardText(fragment, true).split('\n').map((line) => line.trim()).filter(Boolean);
 }
 
-/** `owner/repo#N` → prStatusKey form (owner/repo lowercased); null when malformed. */
-function prSlotKey(value: string): string | null {
-  const m = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/.exec(value);
-  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : null;
-}
-
 /**
  * Parts marked `data-ghost-pr-open-only="owner/repo#N"` only hold while that PR is open (following,
  * its buttons, "open"). Once the task's title-bar status says it was merged or closed, they leave the
@@ -243,11 +238,6 @@ export interface RemotePluginCardAction {
   prState?: PrStatusKind;
 }
 
-/** owner/repo#N key for a GitHub pull request page, matching `data-ghost-pr-status`. */
-function githubPrKey(url: string): string | undefined {
-  const m = /^https:\/\/(?:www\.)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)(?:[/?#]|$)/.exec(url);
-  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : undefined;
-}
 /** Input is already sanitizer-owned HTML. Only declared inert controls are projected. */
 export function projectGhostCardActions(
   html: string,
