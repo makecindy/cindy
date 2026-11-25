@@ -13640,6 +13640,7 @@
         },
         "slash": {
           "detachFailed": "❌ 引き継ぎを終了できませんでした: {{error}}",
+          "pluginEngineModelsUnavailable": "このタスクのプラグインエンジンは現在利用できないため、モデルを一覧表示できません。",
           "companionManaged": "🧭 この接続は仲間に任されているため、モデル・権限・作業ディレクトリは仲間の設定に従います。Cindy の仲間の設定で変更してください。"
         },
         "turn": {

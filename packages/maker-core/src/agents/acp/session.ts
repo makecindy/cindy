@@ -12,7 +12,7 @@ import { readFile as fsReadFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Logger } from '../../interfaces/logger.js';
-import type { AgentSessionHandle } from '../base-agent.js';
+import { TurnPermissionPolicyUnsupportedError, type AgentSessionHandle, type SendOptions } from '../base-agent.js';
 import { NotSupportedError, type Capabilities } from '../../types/capabilities.js';
 import type { Effort, PermissionMode, UserContentBlock, UserMessage } from '../../types/common.js';
 import type { AgentEvent, InteractionRequest, InteractionResolver, UsageSnapshot } from '../../types/events.js';
@@ -550,8 +550,21 @@ export class AcpSession {
     this.resolver = resolver;
   }
 
+  /**
+   * AgentSessionHandle: refuses a turn that carries a per-turn permission policy (IM group turns that
+   * require the owner's confirmation). A plugin's agent can run tools without asking Cindy first, so
+   * no permission mode can enforce such a policy; fail closed like built-in engines do in the modes
+   * that bypass their approval hook, rather than presenting a confirmation promise Cindy cannot keep.
+   */
+  validateSendOptions(opts: SendOptions): void {
+    if (opts.turnPermissionPolicy) {
+      throw new TurnPermissionPolicyUnsupportedError('acp', this.permissionMode);
+    }
+  }
+
   /** Starts a turn, or queues it behind the running one (ACP allows one prompt per session). */
-  async send(message: UserMessage): Promise<void> {
+  async send(message: UserMessage, opts?: SendOptions): Promise<void> {
+    if (opts) this.validateSendOptions(opts);
     if (this.ended || this.closing) throw new Error('ACP session is closed');
     // Attachments are read asynchronously; chain conversions so turns keep the order they were sent in.
     const generation = this.stopGeneration;

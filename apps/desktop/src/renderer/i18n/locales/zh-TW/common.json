@@ -13640,6 +13640,7 @@
         },
         "slash": {
           "detachFailed": "❌ 結束接管失敗：{{error}}",
+          "pluginEngineModelsUnavailable": "這個任務的插件引擎目前無法使用，暫時無法列出模型。",
           "companionManaged": "🧭 這個連線已交給夥伴，模型、權限和工作目錄跟隨夥伴設定。請在 Cindy 的夥伴設定裡修改。"
         },
         "turn": {

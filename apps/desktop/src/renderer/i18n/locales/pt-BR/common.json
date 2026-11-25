@@ -13804,6 +13804,7 @@
         },
         "slash": {
           "detachFailed": "❌ Não foi possível encerrar o controle: {{error}}",
+          "pluginEngineModelsUnavailable": "O motor de plugin desta tarefa não está disponível agora, então não é possível listar os modelos.",
           "companionManaged": "🧭 Esta conexão foi entregue a um amigo, então o modelo, as permissões e o diretório de trabalho seguem as configurações do amigo. Altere-os nas configurações do amigo no Cindy."
         },
         "turn": {

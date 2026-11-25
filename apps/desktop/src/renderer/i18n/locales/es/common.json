@@ -13804,6 +13804,7 @@
         },
         "slash": {
           "detachFailed": "❌ No se pudo terminar el control: {{error}}",
+          "pluginEngineModelsUnavailable": "El motor de plugin de esta tarea no está disponible ahora, así que no se pueden mostrar sus modelos.",
           "companionManaged": "🧭 Esta conexión se cedió a un amigo, así que el modelo, los permisos y el directorio de trabajo siguen su configuración. Cámbialos en la configuración del amigo en Cindy."
         },
         "turn": {

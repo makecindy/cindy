@@ -13640,6 +13640,7 @@
         },
         "slash": {
           "detachFailed": "❌ 結束接管未成：{{error}}",
+          "pluginEngineModelsUnavailable": "此務之法器引擎今不可用，暫不能列其模型。",
           "companionManaged": "🧭 此連線已付同伴，模型、權柄與工作目錄皆從同伴之規制。請於 Cindy 同伴規制中更之。"
         },
         "turn": {
