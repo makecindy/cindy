@@ -29,6 +29,7 @@ export interface PluginManagementSnapshot {
   /** The Host can install an authenticated immutable local-package share. */
   localShares?: true;
   uiCapabilityApproval?: true;
+  communityPublication?: true;
 }
 export interface PluginManagementReceipt {
   operationId: string;
@@ -36,3 +37,7 @@ export interface PluginManagementReceipt {
   consent?: GhostInstallConsentRequest;
   errorCode?: string;
 }
+
+export type RemotePluginPublicationStatus =
+  | { stage: 'pending' | 'submitted' }
+  | { stage: 'failed'; errorCode: string };

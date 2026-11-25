@@ -20,7 +20,8 @@ import type {
   StartSessionOptions,
   UserMessage,
 } from '@cindy/maker-core';
-import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
+import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Maker, Session,
+  type CreateSessionOptions, type SessionMeta } from '@cindy/maker-core';
 import { createServer } from 'node:http';
 import { isProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,9 +38,14 @@ import { createNativeHistoryTransfer, NATIVE_HISTORY_CHECKPOINT } from '../nativ
 import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
-import { ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, providerGroupFailureSignals, ProviderGroupUsageLimitError,
+  PROVIDER_GROUP_SUPERSEDED_ERROR } from '../../provider-group/failurePolicy';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
-import { relocateForFreshStart } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { createPendingAgentSwitchRegistry, registerMakerSessionAgentSwitchHandler, relocateForFreshStart,
+  type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
+import { MAKER_INVOKE } from '../../maker-ipc/channels';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
@@ -1149,6 +1155,59 @@ describe('remote agent round trip', () => {
       host.dispose();
     }
   });
+  it('asks on this computer when the Agent computer forwards a gated operation it did not ask about', async () => {
+    // 回归(2026-11-20)：同账号的远程供应商在「自动」档下由对方的自动审查放行、没有发确认；本机执行器
+    // 拦下后不弹卡直接拒绝，用户找不到任何可点的确认。现在经同一条确认通道在本机补问。
+    const env = path.join(project, '.env');
+    const production = path.join(project, '.env.production');
+    fs.writeFileSync(env, 'TOKEN=one');
+    fs.writeFileSync(production, 'TOKEN=two');
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input, [env, production]),
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const opts = { sessionId: 'gated-auto', workingDir: project, model: 'm', permissionMode: 'auto' as const };
+    const asked: InteractionRequest[] = [];
+    const handle = await startRemoteAgentSession('pi', opts, makeDeps(host));
+    const run = async () => {
+      const reader = (async () => {
+        const results: string[] = [];
+        for await (const event of handle.events()) {
+          if (event.type === 'text') results.push((event.data as { text: string }).text);
+          if (event.type === 'done') return results;
+        }
+        return results;
+      })();
+      await handle.send({ type: 'user', content: 'read it' });
+      return reader;
+    };
+    try {
+      // 允许第一个文件，不允许第二个。
+      handle.setInteractionResolver(async (request) => {
+        if (request.requestId === 'forged') return { kind: 'permission', behavior: 'deny' };
+        asked.push(request);
+        return { kind: 'permission', behavior: asked.length === 1 ? 'allow' : 'deny' };
+      });
+      const results = await run();
+      expect(results[0]).toBe('credential:200');
+      expect(results[1]).not.toBe('credential:200');
+      expect(asked).toMatchObject([
+        { kind: 'permission', toolName: 'Read', input: { file_path: env } },
+        { kind: 'permission', toolName: 'Read', input: { file_path: production } },
+      ]);
+      // 普通确认卡：不是分享凭证卡，也不带会话级授权。
+      expect(asked[0]).toHaveProperty('metadata.permissionScope', 'once');
+      expect(asked[0]).not.toHaveProperty('metadata.hostOwnedConfirmation');
+      expect(asked[0]).not.toHaveProperty('suggestions');
+    } finally {
+      await handle.close({ reason: 'navigation' });
+      host.dispose();
+    }
+  });
   it('keeps a shared-provider credential grant on this computer across turns and resets it on reopen', async () => {
     const env = path.join(project, '.env');
     const production = path.join(project, '.env.production');
@@ -1295,7 +1354,10 @@ describe('remote agent round trip', () => {
       const handle = await startRemoteAgentSession('pi', opts, depsFor(deviceId));
       try {
         handle.setInteractionResolver(async (request) => {
-          if (request.requestId !== 'forged') localConfirmations += 1;
+          // 只数分享凭证卡：普通档下 .env 另要普通批准，那张卡与任务级凭证授权无关。
+          if (request.requestId !== 'forged'
+            && request.kind === 'permission'
+            && request.metadata?.hostOwnedConfirmation === 'shared_provider_credential') localConfirmations += 1;
           return { kind: 'permission', behavior: 'allow', permissionUpdates: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL] };
         });
         const reader = (async () => {
@@ -1372,7 +1434,8 @@ describe('remote agent round trip', () => {
     const requests: InteractionRequest[] = [];
     handle.setInteractionResolver(async (request): Promise<InteractionDecision> => {
       requests.push(request);
-      return { kind: 'permission', behavior: 'allow' };
+      // 对方没问就发来的危险命令由本机补问；这里不允许它，只允许对方随后正式发来的确认。
+      return { kind: 'permission', behavior: request.requestId === 'r1' ? 'allow' : 'deny' };
     });
     const entries: string[] = [];
     const png = path.join(project, 'shot.png');
@@ -1404,7 +1467,10 @@ describe('remote agent round trip', () => {
       expect(execExits.at(-1)).toBe(0);
       expect(fs.existsSync(path.join(root, 'victim'))).toBe(false);
     }
-    expect(requests).toHaveLength(1);
+    expect(requests).toMatchObject([
+      { kind: 'permission', toolName: 'Bash', input: { command: `rm -rf ${path.join(root, 'victim')}` } },
+      { kind: 'permission', requestId: 'r1' },
+    ]);
     expect(entries).toEqual(['entry-42']);
 
     // 图片字节随消息带到对方，换成对方本机路径；Symbol 证明在对方重新附上。
@@ -1614,6 +1680,34 @@ describe('remote agent round trip', () => {
         } });
         expect(ghostRosterPrompt, name).toHaveBeenCalledTimes(readsRoster ? 1 : 0);
         expect(hostedStartOptions(hostInputs.at(-1)!).ghostRosterSnapshot, name).toBe(expected);
+        await handle.close({ reason: 'navigation' });
+      }
+    } finally { await host.dispose(); }
+  });
+
+  // 跨电脑执行时 MCP 桥由本机准备：V2 伙伴的 MCP 白名单只作快照(目录读不出时为空)，不能把普通任务的 MCP 过滤掉；
+  // 隔离运行的伙伴仍按白名单。
+  it('prepares the ordinary MCP bridge for V2 teammates on another computer', async () => {
+    const host = createHost();
+    const invoke = makeDeps(host).invoke;
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    try {
+      for (const [name, botRuntimeProfile, filtered] of [
+        ['v2-project', teammateProfile(true), false],
+        ['isolated-teammate', teammateProfile(false), true],
+      ] as const) {
+        const prepareMcpBridge = vi.fn(async () => null);
+        const start = createDeviceAgentStarter({
+          remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
+          rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge, makerMemory: () => undefined,
+          captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
+        });
+        const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
+          sessionId: `mcp-${name}`, workingDir: project, model: 'm', botRuntimeProfile,
+        } });
+        expect(prepareMcpBridge, name).toHaveBeenCalledTimes(1);
+        const ctx = (prepareMcpBridge.mock.calls[0] as unknown[])[2] as { botMcpPolicy?: unknown };
+        expect(ctx.botMcpPolicy, name).toEqual(filtered ? botRuntimeProfile.mcpPolicy : undefined);
         await handle.close({ reason: 'navigation' });
       }
     } finally { await host.dispose(); }
@@ -1993,6 +2087,7 @@ describe('shared startup lease budget', () => {
     const pendingClose = deferred();
     const prepare = deferred();
     const allocation = deferred();
+    const capsReply = deferred();
     let allocations = 0;
     const renewals = new Map<string, number>();
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
@@ -2000,7 +2095,8 @@ describe('shared startup lease budget', () => {
       startFailure: '', startFailureName: 'AgentStartupStoppedError', startedId: undefined as string | undefined, localFailure: '',
       startupEnd: undefined as { reason: string; idleReclaimed?: true } | undefined,
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
-      blockClose: false, failClose: false, maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
+      blockClose: false, failClose: false, blockCleanup: false, failCleanup: false, blockAgentCaps: false,
+      maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
       blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false,
       directStatusBatch: false, agentNetStandby: false, authorityOffline: false, localFirst: false, loseOpenAck: false, rejectHandoff: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
@@ -2051,6 +2147,10 @@ describe('shared startup lease budget', () => {
       if (request.op === 'standby-prepare') return { ok: true, result: { deviceId: 'executor-m', generation, standby: true, leaseDurationMs: 120_000 } };
       if (request.op === 'standby-admit') return { ok: true, result: { generation: request.admissionId, leaseDurationMs: 360_000 } };
       if (request.op === 'caps') {
+        if (state.blockAgentCaps && state.preparing && device === target) {
+          await capsReply.promise;
+          throw Object.assign(new Error('fixture no invoke-result'), { code: 'INVOKE_TIMEOUT' });
+        }
         if (state.delayCaps) { const ms = state.delayCaps; state.delayCaps = 0; await vi.advanceTimersByTimeAsync(ms); }
         return { ok: true, result: { version: 1, maxRuns: state.maxRuns, idleReclaimMinutes: state.idleReclaimMinutes, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
           virtualWorkspace: true, directGuestExecution: true, ...(state.agentNetStandby ? { directGuestStandby: true } : {}),
@@ -2087,10 +2187,15 @@ describe('shared startup lease budget', () => {
       rgPath: () => RG, codexPath: () => 'fixture-never-spawned', mcpProviders: () => [],
       prepareMcpBridge: async (_providers, _logger, ctx) => {
         if (state.localFailure) throw new Error(state.localFailure);
+        const blockCleanup = state.blockCleanup, failCleanup = state.failCleanup;
         state.preparing = true;
         if (state.blockPrepare) await prepare.promise;
         return { mcpBridge: { servers: [{ name: 'fixture', url: 'http://fixture.invalid/' }] },
-          disposeSessionCtx: () => { disposed.push(ctx.sessionId!); },
+          disposeSessionCtx: async () => {
+            disposed.push(ctx.sessionId!);
+            if (blockCleanup) await pendingClose.promise;
+            if (failCleanup) throw new Error('fixture local cleanup failed');
+          },
           closeSessionInstance: () => { mcpSessions.delete(ctx.sessionId!); },
         } as never;
       },
@@ -2103,7 +2208,7 @@ describe('shared startup lease budget', () => {
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
     return { owner, target, generation, state, calls, runs, disposed, mcpSessionCount: (sessionId = 'historical') => Number(mcpSessions.has(sessionId)),
-      pendingClose, prepare, allocation, emit, started, guestSwitch, renewals,
+      pendingClose, prepare, allocation, capsReply, emit, started, guestSwitch, renewals, start,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
@@ -2720,6 +2825,151 @@ describe('shared startup lease budget', () => {
     expect(f.calls.some(call => call.op === 'call')).toBe(false);
     await outcome.handle.close({ reason: 'navigation' });
   });
+
+  // #11644 / unit: prior cancellation cases called the terminal hook directly.
+  // An authorized picker must release historical startup's real send lock, both
+  // in executor backoff and with an RPC in flight. Late success must not open or
+  // send the old native history; a sibling and the next startup stay usable.
+  it.each([
+    { target: null, stage: 'backoff' }, { target: 'another-computer', stage: 'backoff' },
+    { target: null, stage: 'in-flight' }, { target: 'another-computer', stage: 'in-flight' },
+    { target: null, stage: 'caps' }, { target: 'another-computer', stage: 'caps' },
+    { target: null, stage: 'agent-caps-timeout' }, { target: 'another-computer', stage: 'agent-caps-timeout' },
+  ])('stages a manual move to $target during historical executor $stage', async ({ target, stage }) => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
+    const sibling = await f.open('sibling', 'ordinary-device');
+    f.state.preparing = false;
+    f.state.blockAgentCaps = stage === 'agent-caps-timeout';
+    const late = stage === 'agent-caps-timeout' ? f.capsReply : deferred();
+    const invoke = historyInvoke.getMockImplementation()!;
+    if (stage === 'caps') historyInvoke.mockImplementation(async (...args) => {
+      const response = invoke(...args);
+      if (args[0] === f.target && (args[2] as { op: string }[])[0]?.op === 'caps') await late.promise;
+      return response;
+    });
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer !== f.target || stage === 'caps' || stage === 'agent-caps-timeout') return;
+      if (stage === 'in-flight') return late.promise;
+      throw Object.assign(new Error('executor restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const pending = createPendingAgentSwitchRegistry();
+    const deps: MakerSessionAgentSwitchHandlerDeps = {
+      cancelPendingRemoteStart, pendingSwitches: pending, withSessionLock: withSendToSessionLock,
+      getSessionRow: async () => ({ id: 'historical', agentKind: 'codex', model: 'm', providerId: null,
+        status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: 'native-only-on-m', agentDeviceId: f.owner }),
+      getLiveSession: () => null,
+      closeSession: vi.fn(async () => {}), listMessagesForHandoff: async () => [],
+      applyAgentSwitchToDb: vi.fn(async () => {}), setSessionProvider: () => {},
+      insertBoundaryMessage: async () => 'unused', applyResumeFallbackAtomically: async () => {},
+      setPendingHandoff: () => {}, bootstrapSwitchedSession: async () => {},
+      withCloseSuppressed: (_id, run) => run(), log: historyLogger,
+    };
+    const opening = withSendToSessionLock('historical', () =>
+      f.open('historical', f.owner, 'm', 'native-only-on-m')).catch(error => error);
+    let selecting: Promise<unknown> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(historyOpenLink).toHaveBeenCalledWith(f.target);
+      if (stage === 'agent-caps-timeout') {
+        expect(f.calls.filter(call => call.device === f.target && call.op === 'caps')).toHaveLength(2);
+      }
+      const ipc = new IpcHarness();
+      registerMakerSessionAgentSwitchHandler(ipc, deps, () => {});
+      let staged = false;
+      selecting = ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT, 'historical', 'codex', 'm', null,
+        undefined, undefined, { agentDeviceId: target }).then(result => { staged = true; return result; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(staged).toBe(true);
+      const failure = await opening;
+      expect(decideProviderGroupFailure(providerGroupFailureSignals(failure), 'start'))
+        .toEqual({ action: 'stay', why: 'user' });
+      expect(pending.get('historical')).toMatchObject({ targetAgentDeviceId: target });
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+      const probes = historyOpenLink.mock.calls.length;
+      const capsCalls = f.calls.filter(call => call.op === 'caps').length;
+      late.resolve();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(historyOpenLink).toHaveBeenCalledTimes(probes);
+      expect(f.calls.filter(call => call.op === 'caps')).toHaveLength(capsCalls);
+      expect(f.calls.filter(call => call.op === 'open')).toEqual([expect.objectContaining({ device: 'ordinary-device' })]);
+      expect(f.calls.some(call => call.op === 'call')).toBe(false);
+      await sibling.setModel!('still-live');
+      const next = await f.open('historical', 'ordinary-device');
+      await next.close();
+    } finally {
+      cancelPendingRemoteStart('historical'); late.resolve();
+      await opening; await selecting;
+      await sibling.close();
+    }
+  });
+
+  // #12566 reviews / unit: real Maker -> device starter cancellation must notify
+  // the captured startup lease after cleanup, not the replacement's lease. Prior
+  // picker tests bypassed Maker and could not observe a leaked worktree heartbeat.
+  // Gates cover pre-runtime probe/MCP, unfinished/failed local disposal, and
+  // cancellation during a prepared handle's early renewal (#12566 review).
+  it.each(['executor', 'MCP', 'cleanup', 'failed-cleanup', 'renewal', 'renewal-failed-cleanup'] as const)(
+    'retires only the cancelled startup lease after %s cleanup', async stage => {
+      const renewal = stage === 'renewal' || stage === 'renewal-failed-cleanup';
+      const failedCleanup = stage === 'failed-cleanup' || stage === 'renewal-failed-cleanup';
+      const f = fixture(); f.state.duration = renewal ? undefined : 120_000;
+      f.state.blockPrepare = !renewal && stage !== 'executor';
+      f.state.blockCleanup = stage === 'cleanup' || stage === 'failed-cleanup';
+      f.state.failCleanup = failedCleanup;
+      const probe = deferred();
+      if (stage === 'executor') historyOpenLink.mockImplementation(peer => peer === f.target ? probe.promise : Promise.resolve());
+      const leased = new Set<CreateSessionOptions>();
+      const rows = new Map<string, SessionMeta>();
+      const maker = new Maker({ agents: { codex: { kind: 'codex', capabilities: { rewind: { supported: false } },
+        dispose: async () => {} } as never }, logger: historyLogger, startDeviceAgentSession: f.start,
+        storage: {
+          create: async meta => { const row = { ...meta, createdAt: Date.now(), updatedAt: Date.now() }; rows.set(row.id, row); return row; },
+          get: async id => rows.get(id) ?? null, list: async () => [...rows.values()],
+          update: async (id, patch) => { const row = { ...rows.get(id)!, ...patch }; rows.set(id, row); return row; },
+          compareAndClearSdkSessionId: async () => false, delete: async id => { rows.delete(id); },
+        }, lifecycleHooks: {
+          prepareStartOptions: (_id, options) => { leased.add(options); },
+          onStartFailed: ({ options, runtimeMayBeAlive }) => { if (!runtimeMayBeAlive) leased.delete(options); },
+          onStartCleanupSucceeded: (_id, options) => { leased.delete(options); },
+          onClose: (_id, options) => { leased.delete(options); },
+        } });
+      const old = maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm',
+        agentDeviceId: f.owner, ...(renewal ? {} : { resumeSessionId: 'native-only-on-m' }) }).catch(error => error);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(leased.size).toBe(1);
+        if (renewal) {
+          await vi.waitFor(() => expect(f.runs.size).toBe(1), { interval: 1 });
+          await vi.advanceTimersByTimeAsync(20 * 60_000 + 1);
+          f.state.blockAllocation = true;
+          f.started([...f.runs.values()][0]!); await flush();
+          expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+        }
+        cancelPendingRemoteStart('historical', new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
+        expect(String(await old)).toContain(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        f.state.blockPrepare = false; f.state.ready = true;
+        f.state.blockCleanup = false; f.state.failCleanup = false; f.state.blockAllocation = false;
+        await maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm', agentDeviceId: 'ordinary-device' });
+        const replacement = [...leased].at(-1)!;
+        expect(leased.size).toBe(2);
+        if (renewal) expect(f.disposed).toEqual(['historical']);
+        probe.resolve(); f.prepare.resolve(); f.allocation.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        if (stage === 'cleanup' || stage === 'failed-cleanup') expect(leased.size).toBe(2);
+        f.pendingClose.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(leased.size).toBe(failedCleanup ? 2 : 1);
+        expect(leased.has(replacement)).toBe(true);
+        expect(f.calls.some(call => call.op === 'call' && call.method === 'send')).toBe(false);
+      } finally {
+        cancelPendingRemoteStart('historical');
+        probe.resolve(); f.prepare.resolve(); f.pendingClose.resolve(); f.allocation.resolve();
+        f.state.blockClose = false; f.state.failClose = false;
+        await old; await maker.shutdown();
+      }
+    },
+  );
 
   it.each(['cancel', 'permission', 'link-generation', 'lease-expiry'] as const)('stops a delayed executor recovery after %s', async boundary => {
     const f = fixture(); f.state.ready = true; f.state.duration = 120_000;

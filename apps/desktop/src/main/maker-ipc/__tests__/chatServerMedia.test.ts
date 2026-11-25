@@ -12,6 +12,7 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzl
 vi.mock('../../appSessionState.js', () => ({ ownerScopedUserDataPath: () => '/unused-test-owner' }));
 vi.mock('../botGroupAttachments.js', () => ({ safeAttachmentFileName: (name: string) => name }));
 import { createChatMedia } from '../chatServerMedia.js';
+import { chatRetryDeadline } from '../chatServerErrors.js';
 import type { ChatApi } from '../chatServerMigration.js';
 import type { BotGroupAttachment } from '../../../shared/botGroupChat.js';
 import { startCompanionCloud } from '../../companion-cloud/runtime.js';
@@ -47,6 +48,35 @@ function uploadServer() {
 }
 
 describe('media prepare conflict recovery', () => {
+  // #7401 / unit: the signed PUT uses a separate HTTP client from prepare and seal.
+  // A 503 with Retry-After must carry its deadline to the caller and skip sealing.
+  it.each([429, 503])('preserves a signed PUT retry deadline on %s', async status => {
+    const t = uploadServer();
+    const retryAt = Math.ceil(Date.now() / 1_000) * 1_000 + 600_000;
+    f.fetch.mockResolvedValueOnce(new Response(null, { status, headers: { 'Retry-After': new Date(retryAt).toUTCString() } }));
+    await expect(t.media().upload('room', 'source', [t.file], 'actor')).rejects.toMatchObject({
+      message: 'MEDIA_UPLOAD_FAILED', status, retryAt,
+    });
+    expect(t.sealed.size).toBe(0);
+  });
+
+  // #7401 / unit: a later file can report a cooldown even though an earlier file
+  // owns the error returned by the real concurrent upload entry point.
+  it('keeps the later signed PUT deadline when the first attachment fails without one', async () => {
+    const t = uploadServer();
+    const media = t.media();
+    const retryAt = Math.ceil(Date.now() / 1_000) * 1_000 + 600_000;
+    f.fetch.mockImplementation(async (url: string) => url.endsWith('/file-0')
+      ? new Response(null, { status: 500 })
+      : new Response(null, { status: 503, headers: { 'Retry-After': new Date(retryAt).toUTCString() } }));
+    const files = [t.file, { ...t.file, id: 'second-file' }];
+    const attempt = media.upload('room', 'source', files, 'actor');
+    await expect(attempt).rejects.toMatchObject({ message: 'MEDIA_UPLOAD_FAILED', status: 500 });
+    const error = await attempt.catch((error: unknown) => error);
+    expect(chatRetryDeadline(error)).toBe(retryAt);
+    expect(t.sealed.size).toBe(0);
+  });
+
   it('recovers changed metadata once and reuses both old and recovered receipts after restart', async () => {
     const t = uploadServer();
     const original = await t.media().upload('room', 'source', [t.file], 'actor');

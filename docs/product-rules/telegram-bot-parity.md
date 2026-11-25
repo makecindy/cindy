@@ -104,6 +104,9 @@ ID 分开保存。官方在入队前组装引用，沿用既有任务持久化�
 机器人」重新选择模型的指引，失败原因写入主日志。服务端快照（主动推送与重连镜像）改动某目录
 的 Agent 或模型时，同键的配对来源一并清除；多个 Slack team 共用的 null-team 兜底来源不因
 单个 team 改路由被清，以免其它 team 静默改走默认来源。
+云实例授权窗口：官方 Telegram、Slack、X、飞书在云实例中使用专用 Chromium 授权窗口，绑定完成、取消或过期
+（最长 15 分钟）后回收；回收不撤销绑定，也不关闭用户另外打开的页面。普通 Desktop 仍用系统浏览器
+（`main/instance-runtime/hook-authorization-windows.ts`）。
 
 > 这张表存在的理由与 `botCommands.ts` 注册表一样：把「散落两个仓、谁也不知道差在哪」
 > 变成「表里显式登记」。**新增或修改任一 bot 的用户可见行为时，必须同步更新本表对应
@@ -162,7 +165,7 @@ App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` �
 | 能力 | 单一真相源 | 共享到什么程度 |
 |---|---|---|
 | 子代理输出隔离 | `im/shared/agentEventScope.ts` + `maker-core/agents/claude-code/translator.ts` | 官方 `hook-control/turnObserver` 与个人 `im/shared/turnRunner` 在消费实时事件前过滤带 `agentMeta.parentUuid` 的子代理事件。内部正文、工具/思考、媒体旁路和终态不进入主任务的 IM 回帖，也不影响主任务收口；个人侧自动任务转播同样适用。Claude translator 为子代理工具结果保留归属，主代理流式事件不继承子代理元数据；主任务正文统计和最后消息的实质内容判定只消费主代理，子代理完整消息与流式增量都不阻断主任务 result 截断补发，也不覆盖 silent-stop 判定。整轮失败即使由子代理 API 错误引起，仍按主任务失败收口。主代理主动引用的成果正常发送，桌面完整记录不变。 |
-| 普通工具权限的多处确认 | `maker-ipc/interactionRouter.ts` + `sharedPermission.ts` | IM 与 Cindy 共用一个决定，首次有效回答生效，桌面/手机与渠道同步收口。来源正文由 `im/shared/interactionSource.ts` 构造；个人富卡与官方 Hook 分别负责各自载体更新。供应商分享的本机凭证确认卡共用 `interactionCardModel.ts` 回传当前任务的凭证授权标记；个人卡片点击从 pending 保存的原请求恢复作用域，不转换成通用工具允许规则。未来渠道复用同一注册接口，详见 [共享合同](im-permission-confirmation.md)。 |
+| 普通工具权限的多处确认 | `maker-ipc/interactionRouter.ts` + `sharedPermission.ts` | IM 与 Cindy 共用一个决定，首次有效回答生效，桌面/手机与渠道同步收口。来源正文由 `im/shared/interactionSource.ts` 构造；个人富卡与官方 Hook 分别负责各自载体更新。远程执行器补弹的普通确认卡只提供单次允许和拒绝。供应商分享的本机凭证确认卡共用 `interactionCardModel.ts` 回传当前任务的凭证授权标记；个人卡片点击从 pending 保存的原请求恢复作用域，不转换成通用工具允许规则。未来渠道复用同一注册接口，详见 [共享合同](im-permission-confirmation.md)。 |
 | 代输入指引（2026-10-13） | `im/shared/inputHandoffChannelNotice.ts` | 任务开出代输入卡时，在驱动该任务的聊天里发**一行固定文字**「🔐 需要你帮忙输入：<任务名> · 在 Cindy 中打开」，每个请求一次。个人 bot 由 `turnRunner` 在 `beforeProviderStart` 绑定 `im.sendText`；官方 bot 由 `session-runner` 绑定与运行时回收提示同一条独立发送（`onRuntimeRecovery`，需协商 `msg-op-v1`，未协商时不发）。卡片、界面内容与主人填写的值**两侧都不进 Telegram**——这是有意的产品边界（值只走 Cindy 加密通道），不是缺口。详见 [代输入](input-handoff.md)。 |
 | 远程与分享供应商的新任务路由 | `im/remoteProviderRoute.ts` + `im/shared/openChannelSession.ts` | 两侧均可在 Cindy 的 bot 模型设置选择同账号其他电脑或分享供应商，按授权目录校验并保存 `agentDeviceId`；新建、`/new` 与冷恢复沿用该执行位置，所选位置不可用时不回落本机。个人渠道默认与官方工作目录默认仍各自保存。详见 [供应商分享 §5.2](provider-sharing.md#52-供应商设置)。 |
 | 本机模型列表的开关就绪 | `maker-host/model-visibility-mirror.ts` | 个人 `/model` 与官方 `listAgentModels` 的本机目录均等待当前账号配置同步；超时返回错误，不把未同步当成全部关闭或回退出厂开关。个人分享任务的 `/model` 读取分享方授权目录，不套用本机同名供应商的开关。 |
@@ -565,6 +568,11 @@ bot 身份按入站使用的稳定 ID 校验；Discord 取 gateway application i
 - 呈现大脑：`apps/desktop/src/main/im/shared/turnPresenter.ts`
 - 呈现能力契约：`packages/lizi-im/src/telegram/presentationCapabilities.ts`
 - 任务 / 对话 / 消息的用词：`docs/product-rules/task-and-conversation-naming.md`
+
+### 云实例设置入口
+
+云实例设置页复用本地个人 Telegram 的表单与人设 / 行为 / 群激活组件，读写目标实例；官方 Telegram 走独立作用域，
+不能经个人行为域修改。见 [云实例](../cloud-instances.md)。
 
 ## 按消息号读取群历史图片（2026-10-29）
 

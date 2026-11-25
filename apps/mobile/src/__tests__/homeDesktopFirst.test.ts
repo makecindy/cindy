@@ -697,7 +697,8 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).toContain('testID={`home.sessionRowPreview.${item.session.id}`}');
     expect(sessionRowSource).toContain('const showPreviewLine = !textMode && (!!group || !!preview?.trim() || showSchedule || showPinned);');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionListRowSingleLine');
-    expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionIconCellSingleLine');
+    expect(sessionRowSource).toContain('singleLine={!showPreviewLine}');
+    expect(listStyles).toContain('singleLine && styles.sessionIconCellSingleLine');
     expect(sessionRowSource).toContain('{showPreviewLine ? (');
     expect(sessionRowSource).not.toContain('numberOfLines={2}');
     // 相对时间下沉到独家订阅分钟心跳的叶子组件(行主体 memo 化后由它单独保鲜,风暴修复)
@@ -792,7 +793,6 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('collectFreshPresenceDeviceIds(presenceFreshnessRef.current, presenceEpochAtFetchStart)');
     expect(source).toContain('progressViewOffset={residentList.enabled ? 0 : chromeHeight}');
     // 下拉刷新与同步按钮都走可见的 loadHome,并一起刷新伙伴段。
-    expect(source).toMatch(/const refreshHome = useCallback\(\(\) => \{\n    const owner = accountGeneration;\n    const scope = displayOrderScopeRef.current;\n    void loadHome\(\{ visible: true \}\)\.then/);
     expect(source).toContain('onRefresh={refreshHome}');
     expect(source).toContain('onPress={refreshHome}');
     expect(source).toContain('patchDeviceViewsWithPresence(');

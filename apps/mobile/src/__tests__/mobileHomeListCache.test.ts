@@ -251,6 +251,8 @@ describe('mobileHomeListCache', () => {
       makeSession('s-long', 'dev-a', {
         title: 'T'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3),
         preview: 'P'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3),
+        pinnedAt: isoAt(1),
+        summary: 'S'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3),
         workingDir: `/repo/${'d'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3)}`,
       }),
     ]);
@@ -258,6 +260,7 @@ describe('mobileHomeListCache', () => {
     const cached = (await getCachedHomeListSnapshot(USER_ID))[0].sessions[0];
     expect(cached.title).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
     expect(cached.preview).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
+    expect(cached.summary).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
     expect(cached.workingDir).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
   });
 

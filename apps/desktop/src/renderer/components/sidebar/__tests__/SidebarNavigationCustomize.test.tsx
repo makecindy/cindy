@@ -99,7 +99,7 @@ describe('sidebar navigation customization', () => {
   it('applies a finished drag and saves only explicit overrides', () => {
     render(<SidebarNavigationCustomize onDone={() => {}} />);
     // Rows drag from anywhere except the checkbox, which stays a plain toggle.
-    expect(sortableMock.props?.filter).toBe("[role='checkbox']");
+    expect(sortableMock.props?.filter).toBe("input[type='checkbox']");
     act(() => sortableMock.props!.onReorder(['plugins', 'search', 'automations']));
     expect(order()).toEqual([
       'sidebar.navigation.items.plugins',
@@ -216,9 +216,9 @@ describe('sidebar navigation customization', () => {
       '站点',
     ]);
     const sites = screen.getByRole('checkbox', { name: '站点' });
-    expect(sites.getAttribute('aria-checked')).toBe('true');
+    expect((sites as HTMLInputElement).checked).toBe(true);
     fireEvent.click(sites);
-    expect(sites.getAttribute('aria-checked')).toBe('false');
+    expect((sites as HTMLInputElement).checked).toBe(false);
     fireEvent.keyDown(
       screen.getByRole('button', { name: 'sidebar.navigation.customize.reorder: 站点' }),
       { key: 'ArrowUp' },
@@ -239,9 +239,7 @@ describe('sidebar navigation customization', () => {
     mainViewsMock.routeCapable = [SITES];
     mainViewsMock.sidebarVisible = [SITES];
     render(<SidebarNavigationCustomize onDone={() => {}} />);
-    expect(screen.getByRole('checkbox', { name: '站点' }).getAttribute('aria-checked')).toBe(
-      'false',
-    );
+    expect((screen.getByRole('checkbox', { name: '站点' }) as HTMLInputElement).checked).toBe(false);
   });
   it.each([
     { label: 'short', namespace: 'acme' },
@@ -256,8 +254,8 @@ describe('sidebar navigation customization', () => {
     setSidebarNavigationPrefs(OWNER, { order: [...savedOrder], visible: [...defaults().visible],
       appsAtTop: ['app:_root__xd-sites'] });
     render(<SidebarNavigationCustomize onDone={() => {}} />);
-    expect(screen.getByRole('checkbox', { name: 'Root sites' }).getAttribute('aria-checked')).toBe('true');
-    expect(screen.getByRole('checkbox', { name: 'Enterprise sites' }).getAttribute('aria-checked')).toBe('false');
+    expect((screen.getByRole('checkbox', { name: 'Root sites' }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: 'Enterprise sites' }) as HTMLInputElement).checked).toBe(false);
     fireEvent.click(screen.getByRole('checkbox', { name: 'Root sites' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Enterprise sites' }));
     fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
@@ -290,13 +288,9 @@ describe('sidebar navigation customization', () => {
       appsAtTop: ['app:xd-sites', 'app:off'],
     });
     render(<SidebarNavigationCustomize onDone={() => {}} />);
-    expect(screen.getByRole('checkbox', { name: '站点' }).getAttribute('aria-checked')).toBe(
-      'true',
-    );
+    expect((screen.getByRole('checkbox', { name: '站点' }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.reset' }));
-    expect(screen.getByRole('checkbox', { name: '站点' }).getAttribute('aria-checked')).toBe(
-      'false',
-    );
+    expect((screen.getByRole('checkbox', { name: '站点' }) as HTMLInputElement).checked).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
     expect(getSidebarNavigationPrefs(OWNER)).toEqual({
       order: ['automations', 'plugins', 'search'],
@@ -320,25 +314,25 @@ describe('sidebar navigation customization', () => {
   it('toggles from anywhere in the row except the drag handle', () => {
     render(<SidebarNavigationCustomize onDone={() => {}} />);
     const plugins = screen.getByRole('checkbox', { name: 'sidebar.navigation.items.plugins' });
-    expect(plugins.getAttribute('aria-checked')).toBe('true');
+    expect((plugins as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByText('sidebar.navigation.items.plugins'));
-    expect(plugins.getAttribute('aria-checked')).toBe('false');
+    expect((plugins as HTMLInputElement).checked).toBe(false);
     fireEvent.click(plugins.parentElement!);
-    expect(plugins.getAttribute('aria-checked')).toBe('true');
+    expect((plugins as HTMLInputElement).checked).toBe(true);
     fireEvent.click(plugins);
-    expect(plugins.getAttribute('aria-checked')).toBe('false');
+    expect((plugins as HTMLInputElement).checked).toBe(false);
     fireEvent.click(
       screen.getByRole('button', {
         name: 'sidebar.navigation.customize.reorder: sidebar.navigation.items.plugins',
       }),
     );
-    expect(plugins.getAttribute('aria-checked')).toBe('false');
+    expect((plugins as HTMLInputElement).checked).toBe(false);
   });
   it('shows each entry with the icon it uses in the sidebar', () => {
     mainViewsMock.routeCapable = [SITES];
     mainViewsMock.sidebarVisible = [SITES];
     render(<SidebarNavigationCustomize onDone={() => {}} />);
-    const rowOf = (name: string) => screen.getByRole('checkbox', { name }).parentElement!;
+    const rowOf = (name: string) => screen.getByRole('checkbox', { name }).closest('div')!;
     expect(
       rowOf('sidebar.navigation.items.automations').querySelector('.lucide-timer'),
     ).not.toBeNull();

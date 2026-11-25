@@ -22,7 +22,9 @@ import { BotAvatar } from './BotAvatar';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotSessionContentHeaderRegistration, type BotChatIdentity } from './BotSessionContentHeader';
 import { ensureBotProfilesLoaded } from './botStore';
-import { companionCloudApi, refreshCompanionCloud } from './companionCloudStore';
+import { companionCloudApi, refreshCompanionCloud, useCompanionCloud } from './companionCloudStore';
+import { localCompanionNeedsRecovery } from './companionCloudPresentation';
+import { CompanionShadowBanner } from './CompanionShadowBanner';
 import { CompanionProfileRepairDialog } from './CompanionProfileRepairDialog';
 
 export interface CloudCompanionOfflineViewProps {
@@ -57,6 +59,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
   const navigate = useNavigate();
   const conflict = useCompanionCindyConflictAction();
   const devices = useDeviceLinkDeviceList();
+  const recoveryHere = localCompanionNeedsRecovery(useCompanionCloud(), botId);
   const device = deviceName.trim() || t('bots.cloud.unknownDevice');
   const identity = useMemo<BotChatIdentity>(() => ({ id: botId, deviceId, deviceName: device, name, avatar, avatarColor, sessionId: null }),
     [botId, deviceId, device, name, avatar, avatarColor]);
@@ -190,7 +193,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
         actions={<><CompanionCindyConflictAction action={conflict.action} />
           {typeof companionCloudApi()?.repairCompanionProfile === 'function' && <Button variant="primary" size="md" disabled={state.kind === 'running'} onClick={() => setRepairOpen(true)}>{t('bots.cloud.repair.action')}</Button>}
           <Button variant="secondary" size="md" loading={state.kind === 'running'} disabled={state.kind === 'running'} onClick={() => void takeOver()}>{t('bots.retry')}</Button></>}
-      /> : <section
+      /> : recoveryHere ? <CompanionShadowBanner botId={botId} name={name} /> : <section
         role="status"
         className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
       >

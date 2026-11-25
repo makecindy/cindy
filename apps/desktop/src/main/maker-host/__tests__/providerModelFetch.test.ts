@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { acceptsModelSourceSnapshot, modelSourceRequestSignature } from '../model-source-snapshots.js';
 
 import {
@@ -86,6 +87,61 @@ it.each(['https://api.individual.githubcopilot.com.evil.test', 'https://custom.e
   const request = buildModelsFetchRequest(spec({ baseUrl }));
   expect(request.url).toBe(`${baseUrl}/v1/models`);
   expect(new Headers(request.init.headers).has('copilot-integration-id')).toBe(false);
+});
+
+describe('Token Rhythm discovery reads', () => {
+  it('shares only the equivalent Codex/Pi HTTP read while issuing independent agent receipts', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'tokenrhythm')!;
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const requests = agents.map(agent => spec({ ...preset.runtimes[agent], agent }));
+    const transport = vi.fn<typeof fetch>(async () => fakeResponse(200, JSON.stringify({ data: [{
+      id: 'future-model', owned_by: 'fake-source', magpie_label: 'Model · fake-source',
+    }] })));
+    const results = await Promise.all(requests.map(request => fetchProviderModels(request, transport)));
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(transport.mock.calls.map(([, init]) => new Headers(init?.headers).has('anthropic-version')).sort()).toEqual([false, true]);
+    const snapshots = new Set<string>();
+    results.forEach((result, index) => {
+      expect(result.ok).toBe(true);
+      const model = result.models![0];
+      snapshots.add(model.discoverySnapshotId!);
+      const { url, init } = buildModelsFetchRequest(requests[index]);
+      const signature = modelSourceRequestSignature(url, init);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agents[index], signature)).toBe(true);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agents[(index + 1) % agents.length], signature)).toBe(false);
+    });
+    expect(snapshots.size).toBe(3);
+    expect(results[1].models).not.toBe(results[2].models);
+    await fetchProviderModels(requests[2], transport);
+    expect(transport).toHaveBeenCalledTimes(3);
+  });
+
+  it('separates credentials, effective headers, redirect policies and owner transports', async () => {
+    const request = spec({ agent: 'pi', baseUrl: 'https://tokenrhythm.studio/v1',
+      modelsUrl: 'https://tokenrhythm.studio/v1/models', wireProtocol: 'openai-chat' });
+    const transport = vi.fn<typeof fetch>(async () => fakeResponse(200, '{"data":[{"id":"future-model"}]}'));
+    const otherOwner = vi.fn<typeof fetch>(async () => fakeResponse(200, '{"data":[{"id":"future-model"}]}'));
+    const results = await Promise.all([
+      fetchProviderModels(request, transport),
+      fetchProviderModels({ ...request, agent: 'codex', wireProtocol: 'openai-responses' }, transport),
+      fetchProviderModels({ ...request, apiKey: 'other-fake-key' }, transport),
+      fetchProviderModels({ ...request, headers: { 'X-Account': 'other' } }, transport),
+      fetchProviderModels({ ...request, redirect: 'error' }, transport),
+      fetchProviderModels(request, otherOwner),
+    ]);
+    expect(results.every(result => result.ok)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(4);
+    expect(otherOwner).toHaveBeenCalledOnce();
+  });
+
+  it.each(['https://tokenrhythm.studio/v1/models?view=chat', 'https://tokenrhythm.studio.evil.test/v1/models',
+    'https://custom.example/v1/models'])('does not merge a custom or filtered view at %s', async modelsUrl => {
+    const request = spec({ agent: 'pi', baseUrl: new URL(modelsUrl).origin + '/v1', modelsUrl, wireProtocol: 'openai-chat' });
+    const transport = vi.fn<typeof fetch>(async () => fakeResponse(200, '{"data":[{"id":"future-model"}]}'));
+    expect((await Promise.all([fetchProviderModels(request, transport), fetchProviderModels(request, transport)]))
+      .every(result => result.ok)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('import discovery limits', () => {

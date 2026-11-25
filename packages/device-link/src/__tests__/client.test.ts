@@ -7,7 +7,7 @@ import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-prot
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
 import { REMOTE_AGENT_CHANNEL, REMOTE_AGENT_READ_WAIT_MS } from '../remoteAgent.js';
-import { DeviceLinkClient, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
+import { DeviceLinkClient, DeviceLinkUnsentInvokeError, DeviceLinkRegistrationRemovedError, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
@@ -127,6 +127,7 @@ function makeHarness(opts?: {
   invokeMetrics?: ConstructorParameters<typeof DeviceLinkClient>[0]['invokeMetrics'];
   frameAuth?: ConstructorParameters<typeof DeviceLinkClient>[0]['frameAuth'];
   transportAllowed?: () => boolean;
+  beforeSocket?: () => void;
 }): Harness {
   const sockets: FakeWs[] = [];
   const client = new DeviceLinkClient({
@@ -141,6 +142,7 @@ function makeHarness(opts?: {
       busy: false,
     }),
     createWebSocket: () => {
+      opts?.beforeSocket?.();
       const ws = new FakeWs();
       sockets.push(ws);
       return ws;
@@ -1855,6 +1857,38 @@ describe('DeviceLinkClient', () => {
       await assertion;
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(`request=${sent.id?.slice(0, 8)}`));
       expect(JSON.stringify(warn.mock.calls)).not.toContain('PRIVATE_ARGUMENT');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // #11644: six remote-agent timeouts were indistinguishable from body sends.
+  // Unit, real client timeout/INFO evidence; unknown op/method and payload stay private.
+  it.each([
+    [{ op: 'caps' }, 'caps'],
+    [{ op: 'open' }, 'open'],
+    [{ op: 'call', method: 'send' }, 'call:send'],
+    [{ op: 'call', method: 'PRIVATE_METHOD' }, 'call:other'],
+    [{ op: 'PRIVATE_OPERATION' }, 'other-remote-agent'],
+  ] as const)('identifies remote-agent %j without retaining input in timeout evidence', async (command, operation) => {
+    vi.useFakeTimers();
+    const info = vi.fn(), warn = vi.fn();
+    const h = makeHarness({ logger: { info, warn, debug: vi.fn(), error: vi.fn() },
+      timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack(['provider-share-v1']);
+      const peer = command.op === 'caps' ? providerShareHostPeer('PRIVATE_SHARE', 'abcdef1234567890') : 'abcdef12';
+      const pending = h.client.invoke(peer, { channel: 'maker:remote-agent:v1',
+        args: [{ ...command, payload: { json: 'PRIVATE_BODY' }, token: 'PRIVATE_TOKEN' }] }, 1000);
+      const rejected = expect(pending).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT', inFlight: true });
+      const sent = h.current().sent.find(frame => frame.kind === 'invoke')!;
+      await vi.advanceTimersByTimeAsync(1000); await rejected;
+      const records = info.mock.calls.filter(([line]) => line.startsWith('device-link diagnostic '))
+        .map(([line]) => JSON.parse(line.slice('device-link diagnostic '.length)));
+      expect(records).toContainEqual(expect.objectContaining({ stage: 'request',
+        request: sent.id?.slice(0, 8), channel: 'maker:remote-agent:v1', operation,
+        firstWriteWaitMs: 0, outcome: 'timeout' }));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`operation=${operation}`));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('dst=abcdef12'));
+      expect(JSON.stringify([info.mock.calls, warn.mock.calls])).not.toContain('PRIVATE_');
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
@@ -4217,7 +4251,10 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('peer reset 后幂等读请求立即返回 PEER_RESET，交给 host 做一次重开重试', async () => {
+  it.each([
+    { channel: 'local-db:sessions:list', args: [] },
+    { channel: 'worktree:restore-status', args: ['session-1'] },
+  ])('peer reset 后 $channel 立即返回 PEER_RESET，交给 host 做一次重开重试', async (request) => {
     const logs: unknown[][] = [];
     const h = makeHarness({
       peerResetReadRetry: true,
@@ -4253,7 +4290,7 @@ describe('DeviceLinkClient', () => {
     });
     await open;
 
-    const invoke = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+    const invoke = h.client.invoke('dev-b', request);
     const sent = h.current().sent.find((env) => env.kind === 'invoke')!;
     h.current().push({
       v: PROTOCOL_VERSION,
@@ -6838,6 +6875,79 @@ describe('DeviceLinkClient', () => {
     expect(h.sockets.length).toBe(2);
     await vi.waitFor(() => expect(h.sockets).toHaveLength(3));
     h.client.stop();
+  });
+
+  // 2026-11-23 现场：两台 Windows 共用 MachineGuid → 同一设备身份，各自在线约 15 秒就被对方以
+  // 4409 或 1012「connection no longer current」顶掉；15 秒跨过 10 秒稳定窗，退避每次归零，
+  // 3 小时互踢 318 次。最小失败输入：在线 15 秒后被顶替，修复前任何情况都约 1 秒后重连。
+  // 不变量：宿主没确认冲突时行为与修复前完全一致；确认后才逐次拉长，且网络变化不能提前重连。
+  it('被同一设备身份的另一条连接顶替：宿主确认冲突前照旧立即重连，确认后逐次拉长等待', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.9999);
+    const h = makeHarness({
+      timing: {
+        reconnectBaseMs: 1_000,
+        reconnectMaxMs: 30_000,
+        reconnectStableResetMs: 10_000,
+        // 假 socket 不回 pong；心跳拉长到用例之外，只看被顶替的重连。
+        pingIntervalMs: 60_000,
+        duplicateIdentityCooldownBaseMs: 5_000,
+        duplicateIdentityCooldownMaxMs: 60_000,
+        duplicateIdentityStreakResetMs: 5 * 60_000,
+      },
+    });
+    const replaced: Array<{ closeCode: number; onlineForMs: number | null }> = [];
+    h.client.onReplaced(({ closeCode, onlineForMs }) => replaced.push({ closeCode, onlineForMs }));
+    const kickedAfterOnline = async (code: number, reason: string) => {
+      h.current().ack();
+      await vi.advanceTimersByTimeAsync(15_000);
+      h.current().emit('close', code, reason);
+    };
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 未确认：与修复前一致，约 1 秒后重连。
+      await kickedAfterOnline(4409, 'replaced by new connection');
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sockets).toHaveLength(2);
+
+      // 确认后：1012「connection no longer current」同样算被顶替，至少等 5 秒，
+      // 期间网络变化触发的立即重连被挡住。
+      h.client.setDuplicateIdentityCooldown(true);
+      await kickedAfterOnline(1012, 'connection no longer current');
+      await vi.advanceTimersByTimeAsync(4_000);
+      h.client.connectNow('network-change');
+      expect(h.sockets).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(h.sockets).toHaveLength(3);
+
+      // 第二次连续被顶替：至少 10 秒。
+      await kickedAfterOnline(4409, 'replaced by new connection');
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(h.sockets).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(h.sockets).toHaveLength(4);
+
+      // 服务重启的 1012 不是被顶替。
+      h.current().ack();
+      h.current().emit('close', 1012, 'service restart');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(h.sockets).toHaveLength(5);
+
+      // 撤销冷却后回到原来的立即重连。
+      h.client.setDuplicateIdentityCooldown(false);
+      await kickedAfterOnline(4409, 'replaced by new connection');
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sockets).toHaveLength(6);
+
+      expect(replaced.map((event) => event.closeCode)).toEqual([4409, 1012, 4409, 4409]);
+      expect(replaced[0]?.onlineForMs).toBe(15_000);
+    } finally {
+      h.client.stop();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('断线时在途请求全部 NOT_CONNECTED', async () => {
@@ -10456,6 +10566,48 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     }, { pingIntervalMs: 600_000 });
   });
 
+  // The MacBook incident had a ready reliable stream and 27 older frames. A new negotiation
+  // may yield before its first byte, without consuming another sequence or disturbing the backlog.
+  it('yields an unsent invoke on a ready, backlogged peer without replaying it after drain', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const socket = h.current();
+      socket.bufferedAmount = 700 * 1024;
+      for (let i = 0; i < 27; i++) h.client.sendPush('dev-b', 'maker:event', { i });
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(27);
+      const request = { channel: 'device-link:remote-desktop:v1', args: [{ op: 'start', displayId: '1' }] };
+      await expect(h.client.invoke('dev-b', request, 10_000, { canRerouteBeforeWrite: () => true }))
+        .rejects.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(h.client.hasPendingRequestsTo('dev-b')).toBe(false);
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(27);
+      socket.bufferedAmount = 0;
+      await advance(1_000);
+      expect(socket.sent.some(env => env.kind === 'invoke')).toBe(false);
+      expect(socket.sent.some(env => env.kind === 'push')).toBe(true);
+    }, { pingIntervalMs: 600_000 });
+  });
+
+  it('retires the reserved sequence before yielding a request held by a direct buffer', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const frames: Envelope[] = [];
+      let buffered = DIRECT_PATH_HIGH_WATER_BYTES;
+      const direct = h.client.attachDirectPath('dev-b', {
+        get bufferedAmount() { return buffered; },
+        send: data => frames.push(JSON.parse(data)), close() {},
+      });
+      const request = { channel: 'device-link:remote-desktop:v1', args: [{ op: 'start', displayId: '1' }] };
+      await expect(h.client.invoke('dev-b', request, 10_000, { canRerouteBeforeWrite: () => true }))
+        .rejects.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(h.client.hasPendingRequestsTo('dev-b')).toBe(false);
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(1);
+      buffered = 0;
+      direct!.drained();
+      await advance(250);
+      const commands = frames.filter(env => env.kind === 'invoke');
+      expect(commands.length).toBeGreaterThan(0);
+      expect(commands.every(env => isTransportSkipPayload(JSON.parse(parseTransportPayload(env.payload)!.data)))).toBe(true);
+    }, { pingIntervalMs: 600_000 });
+  });
+
   it.each(['stop', 'closeLink'] as const)('reports partial writes separately from unsent commands on %s', async (action) => {
     await withFakeTimers(async (h, advance) => {
       const socket = h.current();
@@ -10465,8 +10617,8 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
         if (JSON.parse(data).kind === 'invoke' && ++chunks === 2) throw new Error('socket write interrupted');
         send(data);
       });
-      const written = h.client.invoke('dev-b', { channel: 'maker:send', args: ['x'.repeat(200 * 1024)] }, 12_000)
-        .catch((error: unknown) => error);
+      const written = h.client.invoke('dev-b', { channel: 'maker:send', args: ['x'.repeat(200 * 1024)] }, 12_000,
+        { canRerouteBeforeWrite: () => true }).catch((error: unknown) => error);
       expect(chunks).toBe(2);
       expect(socket.sent.filter(env => env.kind === 'invoke')).toHaveLength(1);
       writer.mockRestore();
@@ -12342,21 +12494,27 @@ describe('host-triggered recovery of previously reliable links', () => {
   });
 });
 
-it('stops automatic reconnect after device removal and permits a new login lifecycle', async () => {
-  const h = makeHarness();
+// The same recovery entry must be visible when an official refusal happens before a socket exists.
+it.each(['socket close', 'factory refusal'])('stops automatic reconnect after device removal (%s)', async (source) => {
+  let removed = source === 'factory refusal';
+  const h = makeHarness({ beforeSocket: () => { if (removed) throw new DeviceLinkRegistrationRemovedError(); } });
   h.client.start();
   await tick();
-  h.current().ack();
-  h.current().emit('close', 4410, 'device removed');
+  if (source === 'socket close') {
+    h.current().ack();
+    h.current().emit('close', 4410, 'device removed');
+  }
+  const initialSockets = h.sockets.length;
   expect(h.client.getStatus()).toBe('stopped');
   expect(h.client.getConnectionIssue()?.kind).toBe('device-removed');
   h.client.connectNow('foreground');
   h.client.restartConnection('token-refresh');
   await tick(50);
-  expect(h.sockets).toHaveLength(1);
+  expect(h.sockets).toHaveLength(initialSockets);
+  removed = false;
   h.client.start();
   await tick();
-  expect(h.sockets).toHaveLength(2);
+  expect(h.sockets).toHaveLength(initialSockets + 1);
   h.current().ack();
   expect(h.client.getStatus()).toBe('online');
   expect(h.client.getConnectionIssue()).toBeNull();

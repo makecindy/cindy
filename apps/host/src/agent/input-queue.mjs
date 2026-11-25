@@ -1,3 +1,4 @@
+import { holdError, releaseFailure } from './profile-hold.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
@@ -16,8 +17,9 @@ import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskAct
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
 import { isSessionErrorSuppressed } from '../../../desktop/src/main/maker-ipc/sessionErrorSuppression.ts';
-import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
 import { createIpcError } from '../../../desktop/src/shared/ipc-errors.ts';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
+import { normalizeAgentInputClearBoundaryMs } from '../../../desktop/src/shared/agentInputQueue.ts';
 
 const settlementLog = createLogger('host-turn-settlement');
 const attachmentLog = createLogger('host-attachments');
@@ -109,6 +111,7 @@ function composeInput(item, stored) {
 export function createInputQueue(deps) {
   // Coexistence plan A: null, or the refusal a new send gets while a desktop uses this profile.
   let profileHold = null;
+  let drainingHold = null;
   let ownerStopping = false;
   let runtime = createRuntime();
 
@@ -116,7 +119,7 @@ export function createInputQueue(deps) {
     // A blocked route probe must hit Maker's native metadata fence even if its
     // adapter is still starting. This signal never aborts an admitted turn.
     const routeStartup = new AbortController();
-    if (profileHold) routeStartup.abort(createIpcError('PRECONDITION_FAILED', profileHold.message));
+    if (profileHold) routeStartup.abort(holdError(profileHold.reason));
     const states = new Map();
     const schedulePreparations = new Map();
     const scheduleDiscardWatchers = new Map();
@@ -177,7 +180,7 @@ export function createInputQueue(deps) {
     }
     /** A new send while the profile is held: refused, typed, before anything is written. */
     function refuseWhileHeld() {
-      if (profileHold) throwIpcError('PRECONDITION_FAILED', profileHold.message);
+      if (profileHold) throw holdError(profileHold.reason);
     }
     function holdIfHeld(id) {
       if (profileHold) holdTaskForProfile(coordinator, id);
@@ -193,7 +196,12 @@ export function createInputQueue(deps) {
     }
     function project(value) {
       const error = states.get(value.sessionId)?.persistenceError;
-      return error ? { ...value, error, queuePaused: true } : value;
+      if (!error) return value;
+      // A drain can publish before releaseDesktopHold has received its rejection.
+      const releaseError = profileHold && !ownerStopping &&
+        (profileHold === drainingHold || typeof profileHold.reason !== 'string');
+      const message = releaseError ? releaseFailure().message : error;
+      return { ...value, error: message, queuePaused: true };
     }
     function publish(value) {
       if (isCurrent()) deps.hub?.publish({ type: 'input_projection', sessionId: value.sessionId, projection: project(value) });
@@ -419,12 +427,15 @@ export function createInputQueue(deps) {
         assertCurrent,
         replay: (...args) => executor.replay(...args),
         drainHistories: () => executor.drainHistories(),
+        behindDurableWrites: (...args) => executor.behindDurableWrites(...args),
         resetWireNotes: id => executor.resetWireNotes(id),
         readAutoReviewHistory: id => executor.readAutoReviewHistory(id),
         noteRebuilt: id => executor.noteRecoveryRebuilt(id),
         coordinator: {
           hasPendingQueuedWork: id => coordinator.hasPendingQueuedWork(id),
           getInputAbortSignal: id => coordinator.getInputAbortSignal(id),
+          skippedOversizedInputClientId: (id, claim) =>
+            closing || stateFor(id).closed || !isCurrent() ? undefined : coordinator.skippedOversizedInputClientId(id, claim),
           // As the desktop (contextRecoveryRebuilt): the coordinator's clear, synchronously. A
           // context overflow's error is not in the queue snapshot, so the clear writes nothing.
           // Nothing changes once the runtime is closing, the task is closed or the owner changed.
@@ -461,6 +472,7 @@ export function createInputQueue(deps) {
         getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
       }),
       isTurnRunning: executor.isRunning,
+      isTurnRecovering: executor.isRecovering,
       /** Closes a task's idle runtime with the executor letting go of it first (turn-executor.mjs). */
       closeRuntime: id => { assertCurrent(); return executor.closeRuntime(id); },
       /** This runtime's context recovery rollover (null when recovery is not assembled). */
@@ -569,6 +581,43 @@ export function createInputQueue(deps) {
           }
         });
       },
+      /**
+       * Capture the input epoch before any asynchronous preparation. The stamp is
+       * attached by the Device Link adapter and checked again by the turn executor.
+       */
+      assertRemoteInputControlBoundary(id, opts) {
+        const expectedInputGeneration = coordinator.getGeneration(id);
+        const hasExpectedBoundary = opts && typeof opts === 'object'
+          && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
+        const expectedBoundary = hasExpectedBoundary
+          ? normalizeAgentInputClearBoundaryMs(opts.expectedClearBoundaryMs)
+          : undefined;
+        if (hasExpectedBoundary && expectedBoundary === undefined) {
+          throwIpcError('INVALID_PARAMS', 'expectedClearBoundaryMs must be null or a non-negative finite number');
+        }
+        return command(id, () => {
+          if (!coordinator.isGenerationCurrent(id, expectedInputGeneration)) {
+            throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
+          }
+          const currentBoundary = coordinator.getClearBoundaryMs(id);
+          if (hasExpectedBoundary && expectedBoundary !== currentBoundary) {
+            throwIpcError('PRECONDITION_FAILED',
+              `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expectedBoundary ?? 'null'}; currentClearBoundaryMs=${currentBoundary ?? 'null'}`);
+          }
+          return {
+            expectedClearBoundaryMs: currentBoundary,
+            expectedInputGeneration,
+            inputAbortSignal: coordinator.getInputAbortSignal(id, expectedInputGeneration),
+          };
+        });
+      },
+      /** The desktop-compatible direct maker:send path, using the full turn executor transaction. */
+      send(id, message, createOpts, sendOpts) {
+        return command(id, () => {
+          refuseWhileHeld();
+          return executor.send(id, message, createOpts, sendOpts);
+        });
+      },
       stop,
       async resume(id) {
         if (stateFor(id).closed) return api.projection(id);
@@ -662,7 +711,7 @@ export function createInputQueue(deps) {
       startIdleRelease: () => { if (!closing) idleRelease?.start(); },
       /** Hold every task this runtime knows (the profile hold started; later tasks are held as they are read). */
       holdKnownTasks() {
-        routeStartup.abort(createIpcError('PRECONDITION_FAILED', profileHold.message));
+        routeStartup.abort(holdError(profileHold.reason));
         for (const id of states.keys()) holdTaskForProfile(coordinator, id);
         deps.holdTurnSettlements?.(states.keys());
       },
@@ -748,14 +797,14 @@ export function createInputQueue(deps) {
   let profileHoldGeneration = 0;
   api.holdForDesktop = message => {
     const first = profileHold === null;
-    profileHold = { message };
+    profileHold = { reason: message };
     if (first) {
       profileHoldGeneration++;
       runtime.holdKnownTasks();
     }
   };
   api.isHeldForDesktop = () => profileHold !== null;
-  api.profileHoldMessage = () => profileHold?.message ?? null;
+  api.profileHoldReason = () => profileHold?.reason ?? null;
   api.profileHoldGeneration = () => profileHoldGeneration;
   /**
    * The desktop is gone: open again only once no turn runs (false: still held, ask again later). The
@@ -768,12 +817,15 @@ export function createInputQueue(deps) {
     if (ownerStopping || runtime.hasRunningTurns()) return false;
     // Keep the old executor and its failed history writes until the next clean scan can drain them.
     const released = profileHold;
+    drainingHold = released;
     const sameHold = () => !ownerStopping && profileHold === released;
     try {
       await runtime.dispose(sameHold);
     } catch (error) {
-      if (sameHold()) released.message = errorText(error instanceof AggregateError ? error.errors[0] ?? error : error);
+      if (sameHold()) released.reason = releaseFailure();
       throw error;
+    } finally {
+      drainingHold = null;
     }
     // A desktop that came back meanwhile replaced the hold: that one stays.
     if (sameHold()) profileHold = null;

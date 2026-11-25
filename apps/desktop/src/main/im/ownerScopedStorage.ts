@@ -5,6 +5,7 @@
  * reaches it. Local mode never scans or moves legacy data.
  */
 import { app, safeStorage } from 'electron';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -19,10 +20,12 @@ import {
 } from '../appSessionState.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 import { createLogger } from '../logger.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 
 const log = createLogger('im/owner-scoped-storage');
 const LEGACY_OWNER_MARKER = 'im-legacy-owner.json';
 const SAFE_SECRET_NAME = /^[A-Za-z0-9_-]+$/;
+const SECRET_REVISION = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 type ImSecrets = IMHost['secrets'];
 
@@ -151,17 +154,36 @@ function scopedSecretPath(name: string): string | null {
   return path.join(safeStorageDir(), `im_owner_${ownerKey}_${name}.enc`);
 }
 
-/** Non-secret binding generation for durable IM output. Never reads or returns credential bytes. */
+interface SecretFile {
+  version: 2;
+  revision: string;
+  encrypted: string;
+}
+
+function readSecretFile(contents: string): { encrypted: string; versioned: boolean } {
+  // Legacy files are base64 ciphertext: "{" cannot be its first character.
+  // A file-level envelope cannot collide with any arbitrary decrypted secret.
+  if (!contents.startsWith('{')) return { encrypted: contents, versioned: false };
+  const value = JSON.parse(contents) as Partial<SecretFile> | null;
+  if (value?.version !== 2 || typeof value.revision !== 'string' || !SECRET_REVISION.test(value.revision)
+    || typeof value.encrypted !== 'string' || !value.encrypted) throw new Error('IM_SECRET_FILE_INVALID');
+  return { encrypted: value.encrypted, versioned: true };
+}
+
+/** Non-secret binding generation for durable IM output. Never returns credential bytes. */
 export function ownerScopedImSecretRevision(name: string): string {
   const target = scopedSecretPath(name);
   if (!target) throw new Error('IM_ACCOUNT_SCOPE_UNAVAILABLE');
-  try {
+  const encrypted = readAtomicFileSync(target);
+  if (encrypted === null) return 'missing';
+  if (!readSecretFile(encrypted).versioned) {
+    // An unchanged pre-upgrade credential must still match its persisted
+    // outbox authorization. Do not rewrite the file or reauthorize entries:
+    // the next successful write installs the random revision atomically.
     const stat = fs.statSync(target, { bigint: true });
     return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
-    throw error;
   }
+  return `sha256:${crypto.createHash('sha256').update(encrypted).digest('hex')}`;
 }
 
 function prepareSecretPath(name: string): string | null {
@@ -177,10 +199,11 @@ function readSecretResult(name: string): IMSecretReadResult {
     if (!safeStorage.isEncryptionAvailable()) return { kind: 'error' };
     const target = prepareSecretPath(name);
     if (!target) return { kind: 'error' };
-    const encrypted = fs.readFileSync(target, 'utf-8');
+    const encrypted = readAtomicFileSync(target);
+    if (encrypted === null) return { kind: 'missing' };
     return {
       kind: 'value',
-      value: safeStorage.decryptString(Buffer.from(encrypted, 'base64')),
+      value: safeStorage.decryptString(Buffer.from(readSecretFile(encrypted).encrypted, 'base64')),
     };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
@@ -189,6 +212,14 @@ function readSecretResult(name: string): IMSecretReadResult {
 }
 
 /** @cindy/im secret adapter whose logical keys follow the active data owner. */
+/** Explicit preference reset needs a durable outcome instead of best-effort cleanup. */
+export function removeOwnerScopedImSecretStrict(name: string): void {
+  const target = prepareSecretPath(name);
+  if (!target) throw new Error('IM owner is unavailable');
+  try { fs.unlinkSync(target); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+}
+
 export const ownerScopedImSecrets: ImSecrets = {
   isAvailable: () => safeStorage.isEncryptionAvailable() && scopedSecretPath('probe') !== null,
   write(name, plaintext) {
@@ -197,7 +228,9 @@ export const ownerScopedImSecrets: ImSecrets = {
       const target = prepareSecretPath(name);
       if (!target) return false;
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, safeStorage.encryptString(plaintext).toString('base64'), 'utf-8');
+      const contents: SecretFile = { version: 2, revision: crypto.randomUUID(),
+        encrypted: safeStorage.encryptString(plaintext).toString('base64') };
+      atomicWriteFileSync(target, JSON.stringify(contents));
       return true;
     } catch {
       return false;
@@ -211,7 +244,12 @@ export const ownerScopedImSecrets: ImSecrets = {
   remove(name) {
     try {
       const target = prepareSecretPath(name);
-      if (target) fs.unlinkSync(target);
+      if (target) {
+        try { fs.unlinkSync(`${target}.bak`); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        fs.unlinkSync(target);
+      }
     } catch {
       // Missing credentials are already removed.
     }

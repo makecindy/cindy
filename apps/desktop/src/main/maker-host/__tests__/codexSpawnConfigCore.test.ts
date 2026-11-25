@@ -267,6 +267,59 @@ describe('Codex launch requires its local route', () => {
     await config.onHostRetired?.();
   });
 
+  // #12423 unit: verify the shared Desktop/Host launch boundary propagates
+  // Fast for the selected official connection, including a guest whose grant covers it.
+  it.each([
+    { official: true, expected: true },
+    { official: false, expected: false },
+    { official: true, grant: 'matching', expected: true },
+    { official: true, grant: 'different-connection', expected: false },
+    { official: true, grant: 'different-model', expected: false },
+    { official: true, review: true, expected: true },
+    { official: false, review: true, expected: false },
+  ])('limits the native Fast declaration to the selected route and guest grant (%j)', async ({ official, grant, review, expected }) => {
+    const f = routeFixture();
+    f.ready();
+    const modelId = 'gpt-6.2-sol';
+    const selectedProvider = buildUserProvider({ id: 'fixture-fast-api', name: 'API connection', runtimes: { codex: {
+      baseUrl: official ? 'https://api.openai.com/v1' : 'https://relay.example/v1',
+      wireProtocol: 'openai-responses',
+      models: [{ id: modelId, name: modelId, supportsFastMode: true }],
+    } } });
+    const prepare = createCodexSpawnConfig({
+      ...f.ports,
+      getDesktopSelectableCatalog: () => ({ ...BUNDLED_CATALOG, providers: [selectedProvider] }),
+      resolveDesktopModelContextProviderId: () => selectedProvider.id,
+    });
+    const catalogPath = path.join(scratch, 'fixture-catalog.json');
+    const extraArgs = ['-c', 'model_catalog_json=' + JSON.stringify(catalogPath)];
+    vi.mocked(prepareCodexCustomContextCatalog).mockReset();
+    await fs.writeFile(catalogPath, JSON.stringify({ models: [] }));
+    vi.mocked(prepareCodexCustomContextCatalog).mockResolvedValueOnce({ catalogPath, extraArgs });
+    const config = await prepare([], {
+      hostPurpose: review ? 'review' : 'custom-context', customContextHostKey: 'fast-fixture',
+      customContextProviderId: selectedProvider.id, customContextModel: modelId,
+      ...(!review ? { customContextWindow: 272_000 } : {}),
+      ...(grant ? {
+        deviceHostedGuestProviderId: grant === 'different-connection' ? provider.id : selectedProvider.id,
+        deviceHostedGuestSessionId: 'guest-fast-fixture',
+        deviceHostedGuestModelIds: [grant === 'different-model' ? 'fixture-model' : modelId],
+      } : {}),
+    });
+    if (review && !official) {
+      expect(prepareCodexCustomContextCatalog).not.toHaveBeenCalled();
+    } else {
+      expect(prepareCodexCustomContextCatalog).toHaveBeenLastCalledWith(expect.objectContaining({ modelId, declareFastMode: expected }));
+      if (review) {
+        const [options] = vi.mocked(prepareCodexCustomContextCatalog).mock.lastCall!;
+        expect(options.contextWindow).toBeUndefined();
+        expect(options.resolveContextWindow).toBeUndefined();
+      }
+      if (!grant) expect(config.extraArgs).toEqual(expect.arrayContaining(extraArgs));
+    }
+    await config.onHostRetired?.();
+  });
+
   it('leaves remote materialization independent of the local proxy', async () => {
     const f = routeFixture();
     expect(await f.prepare([], { remoteHostId: 'remote-fixture', credentialMode: 'gateway-key' })).toEqual({ extraArgs: ['remote'], extraEnv: {} });

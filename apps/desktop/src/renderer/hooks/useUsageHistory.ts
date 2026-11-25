@@ -28,6 +28,7 @@ import {
   normalizeRegionalMoney,
   usdMoney,
   zeroUsageMoney,
+  type MoneyCurrency,
   type RegionalMoney,
 } from '../../shared/regionalMoney';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
@@ -35,7 +36,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { onPatch as onSessionPatch } from '@/lib/sessionsBus';
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp' | 'media' | 'auxiliary';
   model: string;
   money: RegionalMoney;
   estimatedMoney: RegionalMoney | null;
@@ -51,7 +52,7 @@ export interface UsageHistoryModelDay {
   providerId?: string;
   requestCount?: number;
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: UsageHistoryModel['agentKind'];
   model: string;
   money: RegionalMoney;
   apiMoney: RegionalMoney;
@@ -84,6 +85,7 @@ const DEVICE_STATUSES = new Set<UsageHistoryDevice['status']>([
 ]);
 
 export interface UsageHistoryPayload {
+  currencies?: MoneyCurrency[];
   generatedAt: number;
   todayKey: string;
   stale?: boolean;
@@ -144,7 +146,7 @@ const STALE_RETRY_DELAY_MS = 800;
 const STALE_RETRY_MAX_DELAY_MS = 30_000;
 // v2 后缀:币种语义改为跟随来源(默认 USD)后,旧构建快照里的金额可能带错标
 // CNY——直接换 key 让旧快照失效,首帧宁可空态也不闪现错单位;旧 key 顺手清理。
-const SNAPSHOT_STORAGE_KEY = 'homeUsageDashboard.lastPayload.v2';
+const SNAPSHOT_STORAGE_KEY = 'homeUsageDashboard.lastPayload.v3';
 const LEGACY_SNAPSHOT_STORAGE_KEY = 'homeUsageDashboard.lastPayload';
 const DEFAULT_SCOPE_KEY = 'anonymous';
 
@@ -193,6 +195,7 @@ interface StoredUsageHistoryModel {
 }
 
 interface StoredUsageHistoryPayload {
+  currencies?: unknown;
   generatedAt?: unknown;
   todayKey?: unknown;
   stale?: unknown;
@@ -211,7 +214,8 @@ function finiteNumber(value: unknown, fallback = 0): number {
 }
 
 function isAgentKind(value: unknown): value is UsageHistoryModel['agentKind'] {
-  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'media' || value === 'auxiliary';
+  return value === 'claude-code' || value === 'codex' || value === 'pi' ||
+    value === 'acp' || value === 'media' || value === 'auxiliary';
 }
 
 function parseDevices(value: unknown): UsageHistoryDevice[] | undefined {
@@ -361,6 +365,7 @@ function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
 
     const devices = parseDevices(parsed.devices);
     return {
+      ...(Array.isArray(parsed.currencies) ? { currencies: parsed.currencies.filter((v): v is MoneyCurrency => v === 'USD' || v === 'CNY') } : {}),
       ...(devices ? { devices } : {}),
       generatedAt: finiteNumber(parsed.generatedAt, Date.now()),
       todayKey: typeof parsed.todayKey === 'string' ? parsed.todayKey : '',
@@ -421,6 +426,7 @@ interface UsageHistoryScopeState {
 }
 
 interface UsageHistoryRequest {
+  currency?: MoneyCurrency;
   days: number | 'all';
   modelDays: number | 'all';
   allowPendingEstimates: boolean;
@@ -502,6 +508,7 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
   setRefreshing(scope, true);
   scope.inflight = window.electronAPI.maker.usage
     .getHistory({
+      ...(scope.request.currency ? { currency: scope.request.currency } : {}),
       days: scope.request.days,
       modelDays: scope.request.modelDays,
       ...(scope.request.device === 'local' ? {} : { device: scope.request.device }),
@@ -588,17 +595,18 @@ function scopeKeyForRequest(scopeKey: string, request: UsageHistoryRequest): str
     request.modelDays === MODEL_WINDOW_DAYS &&
     !request.allowPendingEstimates &&
     request.device === 'local' &&
-    !request.includeTasks
+    !request.includeTasks && !request.currency
   ) {
     return scopeKey;
   }
   // 'local' 沿用旧 key, 升级后已有的本机快照照常 hydrate。
   const deviceSuffix = request.device === 'local' ? '' : `|device=${encodeURIComponent(request.device)}`;
   const taskSuffix = request.includeTasks ? '|tasks=1' : '';
-  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}${deviceSuffix}${taskSuffix}`;
+  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}${deviceSuffix}${taskSuffix}${request.currency ? '|currency=' + request.currency : ''}`;
 }
 
 export function useUsageHistory(opts?: {
+  currency?: MoneyCurrency;
   paused?: boolean;
   userId?: string | null;
   days?: UsageHistoryWindow;
@@ -617,6 +625,7 @@ export function useUsageHistory(opts?: {
   const paused = opts?.paused ?? false;
   const scopeKey = normalizeScopeKey(opts?.userId);
   const request: UsageHistoryRequest = {
+    currency: opts?.currency,
     days: normalizeWindow(opts?.days, HISTORY_WINDOW_DAYS),
     modelDays: normalizeWindow(opts?.modelDays, MODEL_WINDOW_DAYS),
     allowPendingEstimates: opts?.allowPendingEstimates ?? false,

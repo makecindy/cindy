@@ -16,7 +16,11 @@ import fsp from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { isProviderSharePeer, parseProviderSharePeer, providerShareGuestPeer, REMOTE_AGENT_KINDS, REMOTE_AGENT_PLUGIN_ENGINE_KIND, type RemoteAgentRequest } from '@cindy/device-link';
-import { isPluginEngineOfferedRemotely, isPluginEngineOfferedToGuests } from '../../maker-host/pluginEngineRemoteUse.js';
+import {
+  isPluginEngineModelTurnedOff,
+  isPluginEngineOfferedRemotely,
+  isPluginEngineOfferedToGuests,
+} from '../../maker-host/pluginEngineRemoteUse.js';
 import type { Maker, StartSessionOptions } from '@cindy/maker-core';
 import { LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
 
@@ -1017,6 +1021,8 @@ export function installRemoteAgentHost(options: {
       },
       isOffered: (providerId, controller, model) => {
         if (!isControllerAuthorized(controller)) return false;
+        // A model the user turned off here (Settings → Model providers) is off for everyone.
+        if (isPluginEngineModelTurnedOff(providerId, model)) return false;
         if (isProviderSharePeer(controller)) {
           const access = ownedProviderShareGuestAccess(controller);
           return !!access
@@ -1277,6 +1283,7 @@ export function installRemoteAgentHost(options: {
           : retained ? { agentDeviceId: old.executorDeviceId, providerId: old.providerId,
           memberKey: old.memberKey, sameAccount: true }
           : await groupRelay.plan({ kind: request.agentKind, model: request.model,
+            direct: true,
             providerId: access.providerId,
             exclude: request.op === 'standby-prepare' ? new Set(group!.members.filter(member =>
               member.kind !== 'device' || member.agentDeviceId === request.excludeExecutorDeviceId).map(member => member.key))

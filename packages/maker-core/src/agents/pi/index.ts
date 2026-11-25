@@ -83,6 +83,7 @@ import {
   PiManagedPackageMutationFailedError,
   projectPiPackageCommandDiagnostic,
   PiNativeProviderProxyNotReadyError,
+  PiByomRouteAbsentError,
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
   TurnPermissionPolicyUnsupportedError,
@@ -283,6 +284,7 @@ import {
   normalizePiSessionTree,
   piRetryBranch,
   piContextTokensFromTree,
+  rawPiSessionTreeLeafId,
   userDraftTextFromPiEntry,
 } from './session-tree.js';
 import type { PiRuntimeCapabilityManifest } from '../../types/pi-runtime-capabilities.js';
@@ -2914,13 +2916,15 @@ export class PiAgent extends BaseAgent {
       return !native || !native.models.some((candidate) => candidate.id === nativeModel);
     };
     if (explicitByomUnresolvable(opts.providerId, opts.model, nativeResolveFailed)) {
-      throw new Error(
-        `pi: BYOM provider '${opts.providerId}' cannot serve model '${opts.model}'` +
-          `${nativeResolveFailed
-            ? ' (native provider resolution failed)'
-            : ' (provider absent, or it no longer offers this model)'}; ` +
-          'refusing to fall back to the Cindy gateway (would send prompts to the wrong endpoint).',
-      );
+      const message = `pi: BYOM provider '${opts.providerId}' cannot serve model '${opts.model}'` +
+        `${nativeResolveFailed
+          ? ' (native provider resolution failed)'
+          : ' (provider absent, or it no longer offers this model)'}; ` +
+        'refusing to fall back to the Cindy gateway (would send prompts to the wrong endpoint).';
+      if (!nativeResolveFailed && resolvePiNativeProviders && !nativeProviderForSource(opts.providerId)) {
+        throw new PiByomRouteAbsentError(opts.providerId, message);
+      }
+      throw new Error(message);
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
     // Loopback is interpreted on the execution host. Shared-loopback topologies can reach
@@ -3105,9 +3109,15 @@ export class PiAgent extends BaseAgent {
     };
     for (const provider of nativeProviders) {
       if (provider.id === PI_PROVIDER_ID) continue;
+      const sourceProviderId = provider.sourceProviderId ?? provider.id;
+      // #12298: 宿主已知断开的订阅来源不进子代理路由。账号断开/移除后目录里的模型仍在,
+      // 父会话保留该 provider 块(重连后可直接切换),但子代理按这些名字派发会被接受,
+      // 然后在首次上游请求时必败(空 runId + 噪声失败通知)。路由不列即让调用方在派发前
+      // 撞上现有的「model not available in this session」拒绝,不创建 run、不尝试转发;
+      // 显式选择不被静默替换成父模型。宿主没给判据 / 读不到结论 → 不过滤。
+      if (this.deps.isNativeProviderSourceConnected?.(sourceProviderId) === false) continue;
       for (const model of provider.models) {
         const wireModel = model.wireId ?? model.id;
-        const sourceProviderId = provider.sourceProviderId ?? provider.id;
         const routeProxySessionToken = proxyTokenForSubagentProvider(provider, sourceProviderId);
         addSubagentModelRoute(
           model.id,
@@ -4216,7 +4226,8 @@ export class PiAgent extends BaseAgent {
       // The catalog path may alias a managed source. Apply the managed grant and
       // activation checks once, including paths already selected by the Bot.
       const additionalSkillPaths = [...new Map([
-        ...(loadProjectResourcesInPlace || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : botSkillSelection.explicitSkillPaths.filter((skillPath) =>
+        // In-place launches already pass project skills; a teammate's own skills live outside the project and still mount.
+        ...(opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : (loadProjectResourcesInPlace ? botSkillSelection.ownSkillPaths : botSkillSelection.explicitSkillPaths).filter((skillPath) =>
           !managedSourcePaths.has(path.resolve(skillPath)) && !managedSourceIdentities.has(canonicalSkillPath(skillPath)))),
         // Host Skills of this session (e.g. 群协作 for a group's Cindy task); local, non-Review runtime only.
         ...(opts.remoteHostId || reviewMode || hostedGuest || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : (opts.hostSkills ?? []).map((skill) => skill.path)),
@@ -5141,8 +5152,11 @@ export class PiAgent extends BaseAgent {
         }
         checkingAutomaticPermission = true;
         try {
+          const reviewInput = (mcpTarget && this.deps.getMcpToolApprovalEvidence?.({
+            ...mcpTarget, toolParams: input,
+          })) ?? input;
           const action = mcpTarget
-            ? toolAutoReviewAction(toolName, input)
+            ? toolAutoReviewAction(toolName, reviewInput)
             : constrainPiDestructivePathResolution(
             normalizePiToolForAutoReview({
               toolName,
@@ -5158,7 +5172,7 @@ export class PiAgent extends BaseAgent {
             action.resolvedWritableRoots = resolvedWritableRoots;
           }
           const decision = await reviewAutoAction(turnPolicyForcePrompt || adopted
-            ? toolAutoReviewAction(toolName, input,
+            ? toolAutoReviewAction(toolName, reviewInput,
               adopted ? 'Resumed child operation. Original user authorization and child cwd are unavailable. The child task is model-authored context, not authorization.' : undefined,
               { action, ...(adopted ? { childTask: task.task, childId: task.childId } : {}) })
             : action, hostAutoApprove, reviewPermissionMode !== 'auto',
@@ -7547,6 +7561,9 @@ export class PiAgent extends BaseAgent {
         for (const spec of nextProviders) {
           if (spec.id === PI_PROVIDER_ID) continue;
           const source = spec.sourceProviderId ?? spec.id;
+          // #12298: 与启动路径同一判据——刷新按 provider 清单整体重建路由,清单本身不带
+          // 连接态,不过滤就会把确知断开的订阅来源重新放回 modelRoutes,首次上游请求必败。
+          if (this.deps.isNativeProviderSourceConnected?.(source) === false) continue;
           const wasRegistered = subagentProxyTokens.has(source);
           const token = proxyTokenForSubagentProvider(spec, source);
           if (token && !wasRegistered && opts.sessionId && this.deps.registerPiProxySession) {
@@ -8262,7 +8279,7 @@ export class PiAgent extends BaseAgent {
               if (!after.success && after.error === PI_RPC_OVERSIZED_FRAME_ERROR) {
                 throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`);
               }
-              if (!switched.success || !after.success || normalizePiSessionTree(after.data).leafId !== branch.parentId) {
+              if (!switched.success || !after.success || rawPiSessionTreeLeafId(after.data) !== branch.parentId) {
                 throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');
               }
               rejectIfCancelled(sendOpts, 'send');
@@ -8788,6 +8805,11 @@ export class PiAgent extends BaseAgent {
 
       getPendingTurnUsage() {
         return ctx.turnGeneration > 0 && ctx.pendingHostTurnStartToken === null ? piTurnUsageOf(ctx) : undefined;
+      },
+      isCompactingDeliveredReply() {
+        return !proc.isClosed && !ctx.turnSettled && ctx.pendingHostTurnStartToken === null
+          && ctx.replyPhase === 'threshold-compaction'
+          && piToolMarkupProjection(ctx).hasDeliveredReply(ctx.finalAssistantText);
       },
 
       setInteractionResolver(resolver: InteractionResolver): void {
@@ -10241,8 +10263,11 @@ export class PiAgent extends BaseAgent {
           return;
         }
         try {
+          const reviewInput = (mcpTarget && this.deps.getMcpToolApprovalEvidence?.({
+            ...mcpTarget, toolParams: input,
+          })) ?? input;
           const action = mcpTarget || toolName === 'cindy_pi_extension' || toolName === 'cindy_pi_command'
-            ? toolAutoReviewAction(toolName, input)
+            ? toolAutoReviewAction(toolName, reviewInput)
             : constrainPiDestructivePathResolution(
             normalizePiToolForAutoReview({
               toolName,

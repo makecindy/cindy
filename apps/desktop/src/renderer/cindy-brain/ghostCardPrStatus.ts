@@ -13,7 +13,7 @@
  * 整个任务关联的 PR 都确认已合并时才露出；快照、未知状态和关闭未合并均不算完成。
  */
 import { Check, CircleMinus, CircleX, Clock, type LucideIcon } from 'lucide-react';
-import { parseSessionPrUrl, prStatusItemKeys, type PrStatusItemKey, type PrStatusItemTone } from '@cindy/maker-shared';
+import { cardPrLinkKey, cardPrSlotKey, prStatusItemKeys, type PrStatusItemKey, type PrStatusItemTone } from '@cindy/maker-shared';
 import type { PrStatusResult } from '@/lib/gitContext.types';
 import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
 import type { GhostCardTaskAutoArchiveState } from './ghostCardTaskArchive';
@@ -23,16 +23,11 @@ const SLOT_SELECTOR = 'div[data-ghost-pr-status]';
 const SLOT_ATTR_RE = / data-ghost-(?:pr-status|pr-open-only|task-archive)="([^"]+)"/;
 const OPEN_ONLY_SELECTOR = '[data-ghost-pr-open-only]';
 const TASK_ARCHIVE_SELECTOR = 'button[data-ghost-task-archive]';
-const SLOT_VALUE_RE = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/;
-
 type Tone = PrStatusItemTone;
 type Label = (key: string, options?: Record<string, unknown>) => string;
 
 /** 状态位的值 → prStatusKey 形式(owner/repo 小写)。不合格返回 null。 */
-export function prStatusSlotKey(value: string): string | null {
-  const m = SLOT_VALUE_RE.exec(value.trim());
-  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : null;
-}
+export const prStatusSlotKey = cardPrSlotKey;
 
 /** 从净化后的卡片 html 里取第一个状态位或 open-only 标记的 key(订阅用;都没有返回 null)。 */
 export function readPrStatusSlotKey(html: string): string | null {
@@ -110,9 +105,8 @@ function fillPrHeaderTiles(doc: Document, lookup: (key: string) => PrStatusResul
 
     const title = tile.nextElementSibling?.querySelector('[data-ghost-copy-link], a[data-ghost-link], a[href]');
     const url = title?.getAttribute('data-ghost-copy-link') ?? title?.getAttribute('data-ghost-link') ?? title?.getAttribute('href');
-    const ref = url && parseSessionPrUrl(url);
-    if (!ref || ref.provider !== 'github') continue;
-    const key = `${ref.owner}/${ref.repo}#${ref.prNumber}`;
+    const key = url && cardPrLinkKey(url);
+    if (!key) continue;
     const marker = card.querySelector('[data-ghost-pr-status], [data-ghost-task-archive], [data-ghost-pr-open-only]');
     if (prStatusSlotKey(marker?.getAttribute('data-ghost-pr-status') ?? marker?.getAttribute('data-ghost-task-archive') ??
       marker?.getAttribute('data-ghost-pr-open-only') ?? '') !== key) continue;
