@@ -6684,6 +6684,20 @@
         "ssh": "SSH-Remote-Hosts",
         "hook": "Cindy-IM-Bots"
       },
+      "cloudComputer": {
+        "title": "Cloud-Computer",
+        "hint": {
+          "addCloud": "Richte einen Cloud-Computer mit vorinstalliertem Cindy ein. Sobald er bereit ist, erscheint er in deiner Geräteliste.",
+          "preparingCloud": "Dein Cloud-Computer wird vorbereitet. Sobald er bereit ist, erscheint er in deiner Geräteliste.",
+          "manageCloud": "Starten, Stoppen, Verlängern, Neuinstallieren und Löschen erledigst du im Web."
+        },
+        "actions": {
+          "addCloud": "Cloud-Computer hinzufügen",
+          "preparingCloud": "Fortschritt ansehen",
+          "manageCloud": "Cloud-Computer verwalten"
+        },
+        "openFailed": "Die Cloud-Computer-Seite konnte nicht geöffnet werden. Prüfe die Einstellungen deines Standardbrowsers."
+      },
       "hook": {
         "description": "Verbinde Slack, Telegram, Feishu / Lark und weitere Kanäle mit derselben Cindy. Nachrichten werden an dieses Gerät weitergeleitet und nutzen dessen Projektliste und Sitzungsausführung; Modell und Berechtigungen eines Projekts gelten für alle Kanäle gemeinsam, nur die Kontoverknüpfung bleibt je Kanal getrennt.",
         "slackDescription": "Verknüpfe Slack-Workspaces und übergib Cindy Aufgaben aus Slack.",
@@ -6866,6 +6880,7 @@
           "guide": {
             "usageLabel": "So funktioniert’s",
             "usageBody": "Erwähne @askmycindy in einem Beitrag auf X – die Aufgabe wird dann an dieses Gerät gesendet und hier ausgeführt; das Ergebnis kommt als Antwort zurück.",
+            "usageBodyOnDevice": "Erwähne @askmycindy in einem Beitrag auf X – die Aufgabe wird dann an {{device}} gesendet und dort ausgeführt; das Ergebnis kommt als Antwort zurück.",
             "riskLabel": "Antworten sind öffentlich",
             "riskPublicBody": "Antworten sind öffentlich und für alle sichtbar. Nutze diese Funktion für öffentliche Fragen und Probleme, nicht für private Angelegenheiten, die deine Privatsphäre gefährden könnten.",
             "riskWorkdirBody": "Jede X-Aufgabe wird im Standardprojekt ausgeführt, das in den X-Verbindungseinstellungen festgelegt ist. Der Agent kann dort Dateien lesen und schreiben. Sein Ergebnis wird öffentlich gepostet – wenn dieses Projekt auf ein privates Repository verweist, können dabei auch Dateiinhalte öffentlich werden.",
@@ -8197,6 +8212,11 @@
         "installedExpand": "Alle {{count}} installierten Plugins anzeigen",
         "installedCollapse": "Weitere installierte Plugins ausblenden",
         "recommendedSection": "Empfohlen",
+        "allPlugins": "Alle Plugins",
+        "searchResults": "Suchergebnisse",
+        "marketSort": {
+          "label": "Sortierung"
+        },
         "todayRecommendations": "Heutige Empfehlungen",
         "marketSection": "Plugin-Marktplatz",
         "browseMarket": "Plugin-Marktplatz durchsuchen",
@@ -8677,6 +8697,7 @@
         "libraryPersist": "Kann eine dauerhafte Bibliothek nutzen (große Dateien und Datenbanken)",
         "libraryPersistDetail": "Erhält einen von Cindy verwalteten Speicherbereich für deine Arbeit (Zeichenflächen, Bilder, Datenbanken) ohne das übliche Speicherlimit für Plugin-Daten. Alle Datei- und Datenbankoperationen werden vom Host ausgeführt. Das Plugin verwendet nur relative Pfade innerhalb seiner eigenen Bibliothek und kann nicht auf deine anderen Dateien zugreifen. Es kann Cindy außerdem bitten, eine Bibliotheksdatei im Finder oder Explorer anzuzeigen oder den Systemdialog „Speichern unter“ zu öffnen, damit du den Speicherort einer Kopie wählst. Wenn du „Speichern unter“ abbrichst, wird nichts kopiert. Es kann auch ohne Bestätigungsdialog ein PNG-Bitmap in die Systemzwischenablage schreiben; dabei wird der aktuelle Inhalt der Zwischenablage überschrieben. Bei der Deinstallation des Plugins werden diese Daten nicht gelöscht. Das Löschen erfordert eine separate Bestätigung in den Cindy-Einstellungen.",
         "networkHost": "Greift auf das Netzwerkziel {{host}} zu",
+        "networkHosts": "Netzwerkziele",
         "networkSecret": "Benötigt Zugangsdaten von dir: „{{name}}“",
         "networkSecretGhostInputDetail": "Wird über die eigene Einstellungsoberfläche dieses Plugins erfasst – die Plugin-Seite sieht den Wert bei der Eingabe. Anschließend wird er in einem Schritt zur verschlüsselten Speicherung an den Host übergeben. Nach dem Speichern kann das Plugin ihn nie wieder auslesen, und der Host fügt ihn nur für die vom Plugin deklarierten Domains ein.",
         "networkSecretIdentity": "Verwendet deine Anmelde-E-Mail als Zugangsdaten „{{name}}“",
@@ -8883,6 +8904,8 @@
         "dangerTitle": "Plugin deinstallieren",
         "infoContents": "Enthält",
         "infoVersion": "Version",
+        "infoPackageSize": "Paketgröße",
+        "infoPackageSizeWithVersion": "{{size}} ({{version}})",
         "updateTitle": "Version aktualisieren",
         "updateDesc": "Wähle eine neue .cindy-Datei, um die installierte Version direkt zu ersetzen. Aktivierungsstatus und Panelposition bleiben erhalten.",
         "errandPrefs": {
@@ -8905,11 +8928,26 @@
           "restoreModel": "Modell zurücksetzen"
         },
         "toolsTitle": "Tools",
+        "toolCount_one": "{{count}} Tool",
+        "toolCount_other": "{{count}} Tools",
         "permissionsTitle": "Berechtigungen",
         "infoDescription": "Beschreibung",
         "customSlotAsleep": "Dieses Plugin ist deaktiviert. Aktiviere es, um hier seine Einstellungen zu sehen.",
         "descriptionExpand": "Mehr anzeigen",
         "descriptionCollapse": "Weniger anzeigen",
+        "recentUpdates": "Letzte Updates",
+        "olderUpdates": "Frühere Updates",
+        "collapseOlderUpdates": "Frühere Updates ausblenden",
+        "includesHighRisk": "Hohes Risiko",
+        "heroDownloads": "Downloads gesamt",
+        "heroUsage": "Nutzungen gesamt",
+        "heroWeeklyUsage": "Nutzungen in 7 Tagen",
+        "heroWeeklyUsageExplanation": "Werkzeugaufrufe über alle Versionen im aktuellen Freigabebereich in den letzten 7 Tagen.",
+        "heroInstalledVersion": "Installierte Version",
+        "heroListedVersion": "Veröffentlichte Version",
+        "heroLatestUpdate": "Letzte Aktualisierung",
+        "morePlugins": "Weitere Plugins",
+        "morePluginsHint": "Zufällig ausgewählt. Die Auswahl spiegelt keine Präferenz von Cindy wider.",
         "readmeTitle": "Über",
         "useAction": "Plugin verwenden",
         "chatAction": "Chat",
@@ -8948,6 +8986,7 @@
         "portReclaimMessage": "„{{name}}“ benötigt Port {{port}}. Das folgende Programm beenden?",
         "portReclaimDetail": "Dadurch können Arbeit unterbrochen und ungespeicherte Daten verloren gehen. Du kannst abbrechen und das Programm selbst schließen.",
         "configurationTitle": "Konfiguration",
+        "recordTitle": "Plugin-Informationen",
         "sidebarEntryTitle": "Navigationseintrag",
         "showInSidebar": "In der linken Navigation anzeigen",
         "fileOpenerTitle": "Dateien mit diesem Plugin öffnen",
@@ -8958,6 +8997,7 @@
         "viewAllTools": "Alle anzeigen",
         "collapseTools": "Tools einklappen",
         "viewAllPermissions": "Alle anzeigen",
+        "remainingPermissions": "{{count}} weitere anzeigen",
         "permissionsDialogDescription": "Alle {{count}} von diesem Plugin angeforderten Berechtigungen",
         "closeDialog": "Dialog schließen",
         "resetPlacement": "Auf Standardposition zurücksetzen"
@@ -9276,6 +9316,7 @@
         "anonymousUnavailable": "Autoreneinstellungen nicht verfügbar",
         "anonymousUpdateFailed": "Es konnte nicht bestätigt werden, dass die Anonymitätseinstellung gespeichert wurde. Aktualisiere die Ansicht, bevor du es erneut versuchst.",
         "myPlugins": "Plugin veröffentlichen",
+        "backToPublish": "Zurück zur Plugin-Veröffentlichung",
         "publish": "Zur Prüfung einreichen",
         "submitUpdate": "Neue Version zur Prüfung einreichen",
         "publishHint": "Veröffentliche nur Plugins, für deren Veröffentlichung du berechtigt bist. Für die Aufnahme in die Community-Liste ist eine manuelle Freigabe erforderlich.",
@@ -9315,6 +9356,7 @@
         "publishedContentUnavailable": "Beschreibung und Versionshinweise der aktuell veröffentlichten Version sind vorübergehend nicht verfügbar.",
         "currentSubmission": "Aktuelle Einreichung",
         "localState": {
+          "installed": "Lokale Version {{version}}",
           "missing": "Nicht auf diesem Computer installiert",
           "unavailable": "Lokale Version vorübergehend nicht verfügbar"
         },
@@ -9327,7 +9369,7 @@
         "publishing": "Veröffentlichung",
         "latestSubmission": "Letzte Einreichung",
         "noSubmission": "Noch keine Einreichungen",
-        "marketVersion": "Veröffentlicht · {{version}}",
+        "marketVersion": "Veröffentlicht {{version}}",
         "market": {
           "not_listed": "Nicht gelistet",
           "disabled": "Ausgelistet",
@@ -9337,7 +9379,7 @@
         "review": {
           "pending": "Prüfung ausstehend",
           "approved": "Freigegeben",
-          "rejected": "Zurückgegeben",
+          "rejected": "Abgelehnt",
           "published": "Veröffentlicht",
           "superseded": "Durch eine spätere Einreichung ersetzt",
           "legacy_unverified": "Frühere Revision nicht verfügbar",
@@ -9345,9 +9387,12 @@
           "cancelled": "Abgebrochen"
         },
         "reason": "Grund",
+        "rejectionReason": "Ablehnungsgrund",
+        "rejectionReasonLine": "<reasonLabel>Ablehnungsgrund:</reasonLabel> <reasonText />",
         "submittedContent": "Eingereichter Inhalt",
         "snapshotUnavailable": "Der ursprüngliche Inhalt wurde nicht aufbewahrt oder kann nicht mehr überprüft werden.",
         "history": "Veröffentlichungsverlauf",
+        "marketChanges": "Änderungen im Marktplatz",
         "loadMore": "Mehr laden",
         "loadMoreHistory": "Weiteren Verlauf laden",
         "releaseId": "Release-ID",
@@ -9362,7 +9407,7 @@
           "submitted": "Eingereicht",
           "metadata_updated": "Anzeigeinformationen aktualisiert",
           "approved": "Freigegeben",
-          "rejected": "Zurückgegeben",
+          "rejected": "Abgelehnt",
           "enabled": "Veröffentlicht",
           "disabled": "Ausgelistet",
           "archived": "Archiviert",
@@ -9444,6 +9489,8 @@
         "notApproved": "Noch nicht genehmigt",
         "timeUnavailable": "Nicht erfasst",
         "releaseNotes": "Versionshinweise",
+        "expandReleaseNotes": "Alles anzeigen",
+        "noReleaseNotes": "Keine Versionshinweise angegeben.",
         "versionUpdates": "Versionen & Updates",
         "versionManagement": "Versionen verwalten",
         "versionContent": "Versionsinhalt",
@@ -9460,7 +9507,6 @@
         "cancelled": "Abgebrochen",
         "cancelReviewCompleted": "Prüfung abgebrochen. Die aktuell gelistete Version bleibt unverändert.",
         "cancelReviewAlreadyFinal": "Die Prüfung war bereits abgeschlossen und wurde daher nicht abgebrochen. Das tatsächliche Ergebnis wird unten angezeigt.",
-        "viewPendingVersion": "Version in Prüfung ansehen",
         "submitFailed": "Einreichung fehlgeschlagen",
         "viewDetails": "Details ansehen"
       },
@@ -12576,6 +12622,12 @@
       "arrivingLater": "{{name}} wurde auf diesen Computer verschoben und wird noch vorbereitet. Der Freund erscheint bald in deiner Liste",
       "arrivalPermissions": "{{name}} nutzt jetzt die Standardberechtigungen dieses Computers.",
       "arrivalModel": "Das für {{name}} gespeicherte Modell ist auf diesem Computer nicht verfügbar. Daher wird das Standardmodell dieses Computers verwendet.",
+      "arrivalModelSetup": "{{name}} ist jetzt auf diesem Computer, aber noch ohne verfügbares Modell. Verbinde einen Modellanbieter oder wähle unter „Modell“ in den Einstellungen dieses Freundes ein Modell aus.",
+      "arrivalPartialContent": "{{name}} läuft jetzt auf diesem Computer, aber einige synchronisierte Inhalte konnten nicht wiederhergestellt werden. Die Cloud-Kopien bleiben erhalten.",
+      "missingProfileTitle": "{{name}} mit Standardprofil starten?",
+      "missingProfileDescription": "Der ursprüngliche Hauptcomputer hat Persönlichkeit und Beschreibung von {{name}} noch nicht hochgeladen. Wenn dieser Computer neu installiert wurde oder nicht mehr erreichbar ist, kannst du hier mit einem Standardprofil fortfahren. Bereits synchronisierte Unterhaltungen und Inhalte bleiben erhalten.",
+      "missingProfileConfirm": "Mit Standardprofil fortfahren",
+      "missingProfileFailed": "Das Profil von {{name}} wurde noch nicht in die Cloud hochgeladen",
       "busyTitle": "{{name}} antwortet noch",
       "busyDescription": "Verschiebe den Freund nach dieser Antwort auf „{{device}}“ oder stoppe die Antwort und verschiebe ihn jetzt.",
       "busyWait": "Nach Abschluss verschieben",

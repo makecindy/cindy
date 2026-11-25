@@ -155,8 +155,10 @@ async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind 
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
-  // Plugin-engine tasks have no built-in engine to generate titles with.
-  if (!row || row.status === 'deleted' || row.agentKind === 'acp') return null;
+  if (!row || row.status === 'deleted') return null;
+  if (row.agentKind === 'acp') {
+    throwIpcError('TITLE_PROVIDER_UNSUPPORTED', 'The current provider does not support AI naming');
+  }
   return dbToMakerAgentKind(row.agentKind);
 }
 

@@ -6641,6 +6641,20 @@
         "ssh": "SSH リモートホスト",
         "hook": "Cindy IM ボット"
       },
+      "cloudComputer": {
+        "title": "クラウドマシン",
+        "hint": {
+          "addCloud": "Cindy をインストール済みのクラウドマシンを用意します。準備ができるとデバイス一覧に表示されます。",
+          "preparingCloud": "クラウドマシンを準備しています。準備ができるとデバイス一覧に表示されます。",
+          "manageCloud": "起動・停止、更新、再インストール、削除は Web で行います。"
+        },
+        "actions": {
+          "addCloud": "クラウドマシンを追加",
+          "preparingCloud": "進捗を見る",
+          "manageCloud": "クラウドマシンを管理"
+        },
+        "openFailed": "クラウドマシンのページを開けませんでした。既定のブラウザの設定を確認してください。"
+      },
       "hook": {
         "description": "Slack、Telegram、Feishu / Lark などを同じ Cindy に接続します。メッセージはこのデバイスに送られ、プロジェクト一覧とセッション実行基盤を共有します。各プロジェクトのモデルと権限は全チャンネル共通で、アカウント連携だけがチャンネルごとに分かれます。",
         "slackDescription": "Slack ワークスペースを連携し、Slack から Cindy にタスクを依頼できます。",
@@ -6823,6 +6837,7 @@
           "guide": {
             "usageLabel": "使い方",
             "usageBody": "X で @askmycindy をメンションしてポストすると、タスクがこの端末に届いてここで実行され、結果が返信として戻ります。",
+            "usageBodyOnDevice": "X で @askmycindy をメンションしてポストすると、タスクが {{device}} に届いてそこで実行され、結果が返信として戻ります。",
             "riskLabel": "返信は公開されます",
             "riskPublicBody": "返信は誰でも見られる公開ポストです。公開の質問や問題解決向けで、プライバシーに関わる私的な用件には不向きです。",
             "riskWorkdirBody": "X のタスクはすべて X 連携設定で指定した既定のプロジェクトで実行されます。Agent はその中のファイルを読み書きでき、結論は公開で返信されます —— 既定のプロジェクトが非公開リポジトリを指している場合、ファイルの内容も公開される可能性があります。",
@@ -8154,6 +8169,11 @@
         "installedExpand": "インストール済みプラグイン {{count}} 件をすべて表示",
         "installedCollapse": "追加のインストール済みプラグインを隠す",
         "recommendedSection": "おすすめ",
+        "allPlugins": "すべてのプラグイン",
+        "searchResults": "検索結果",
+        "marketSort": {
+          "label": "並べ替え"
+        },
         "todayRecommendations": "今日のおすすめ",
         "marketSection": "プラグインマーケット",
         "browseMarket": "プラグインマーケットを見る",
@@ -8634,6 +8654,7 @@
         "libraryPersist": "永続ライブラリを使用可能(大量のファイルとデータベース)",
         "libraryPersistDetail": "Cindy が管理する独立した保存領域を取得し、作品データ(キャンバス、画像、データベースなど)を保存します。通常のプラグインデータのクォータ制限を受けません。ファイルとデータベースの操作はすべてホストが代行実行し、プラグインはライブラリ内の相対パスのみを使用して、他のファイルに触れることはできません。ライブラリ内のファイルをシステムのフォルダで表示したり、システムの名前を付けて保存ダイアログを開いてコピー先を選ばせることもできます。キャンセルすれば何もコピーされません。確認ダイアログなしで PNG ビットマップをシステムクリップボードに書き込むこともでき、その場合は現在のクリップボード内容が上書きされます。プラグインをアンインストールしてもこのデータは削除されず、削除には Cindy 設定での個別確認が必要です。",
         "networkHost": "ネットワーク接続先 {{host}} にアクセス",
+        "networkHosts": "ネットワーク接続先",
         "networkSecret": "認証情報「{{name}}」の入力が必要",
         "networkSecretGhostInputDetail": "この認証情報はプラグイン自身の設定画面で入力を受け付けるため、入力時にはプラグインのページを経由します。その後ホストへ一度だけ渡されて暗号化保存され、保存後はプラグインから読み出せません。注入は宣言されたドメインへのリクエスト時のみホストが行います。",
         "networkSecretIdentity": "ログインメールアドレスを認証情報「{{name}}」として使用します",
@@ -8840,6 +8861,8 @@
         "dangerTitle": "プラグインをアンインストール",
         "infoContents": "内容",
         "infoVersion": "バージョン",
+        "infoPackageSize": "パッケージサイズ",
+        "infoPackageSizeWithVersion": "{{size}}（{{version}}）",
         "updateTitle": "バージョン更新",
         "updateDesc": "新しい .cindy ファイルを選んでその場で置き換えます。有効状態とパネル位置は保持されます。",
         "errandPrefs": {
@@ -8862,11 +8885,25 @@
           "restoreModel": "モデルをリセット"
         },
         "toolsTitle": "Tools",
+        "toolCount_other": "{{count}}件",
         "permissionsTitle": "権限",
         "infoDescription": "説明",
         "customSlotAsleep": "このプラグインは無効です。有効化すると、ここに設定画面が表示されます。",
         "descriptionExpand": "もっと見る",
         "descriptionCollapse": "折りたたむ",
+        "recentUpdates": "最近の更新",
+        "olderUpdates": "以前の更新",
+        "collapseOlderUpdates": "以前の更新を閉じる",
+        "includesHighRisk": "高リスクあり",
+        "heroDownloads": "累計ダウンロード",
+        "heroUsage": "累計利用回数",
+        "heroWeeklyUsage": "過去7日間の利用",
+        "heroWeeklyUsageExplanation": "現在の共有範囲における、全バージョンの過去7日間のツール呼び出し回数です。",
+        "heroInstalledVersion": "インストール済みバージョン",
+        "heroListedVersion": "公開中のバージョン",
+        "heroLatestUpdate": "最終更新",
+        "morePlugins": "ほかのプラグイン",
+        "morePluginsHint": "無作為に選ばれており、Cindy の意向を示すものではありません。",
         "readmeTitle": "紹介",
         "useAction": "プラグインを使用",
         "chatAction": "会話",
@@ -8905,6 +8942,7 @@
         "portReclaimMessage": "「{{name}}」にはポート {{port}} が必要です。次のプログラムを終了しますか？",
         "portReclaimDetail": "作業が中断され、未保存のデータが失われる場合があります。キャンセルして自分で終了することもできます。",
         "configurationTitle": "設定",
+        "recordTitle": "プラグイン情報",
         "sidebarEntryTitle": "ナビゲーション項目",
         "showInSidebar": "左側ナビゲーションに表示",
         "fileOpenerTitle": "このプラグインでファイルを開く",
@@ -8915,6 +8953,7 @@
         "viewAllTools": "さらに表示",
         "collapseTools": "Tool を折りたたむ",
         "viewAllPermissions": "さらに表示",
+        "remainingPermissions": "残り {{count}} 件を表示",
         "permissionsDialogDescription": "このプラグインが要求する全 {{count}} 項目の権限",
         "closeDialog": "ダイアログを閉じる",
         "resetPlacement": "既定の位置に戻す"
@@ -9233,6 +9272,7 @@
         "anonymousUnavailable": "作者設定を取得できません",
         "anonymousUpdateFailed": "匿名設定が保存されたか確認できません。更新してから再試行してください。",
         "myPlugins": "プラグインを公開",
+        "backToPublish": "プラグインの公開に戻る",
         "publish": "審査に提出",
         "submitUpdate": "新しいバージョンを審査に提出",
         "publishHint": "公開する権限のあるプラグインのみ対象です。審査の承認後にコミュニティで公開されます。",
@@ -9272,6 +9312,7 @@
         "publishedContentUnavailable": "現在の公開版の説明と更新内容を読み込めません。",
         "currentSubmission": "現在の提出",
         "localState": {
+          "installed": "ローカル版 {{version}}",
           "missing": "このコンピューターには未インストール",
           "unavailable": "ローカル版を読み込めません"
         },
@@ -9284,7 +9325,7 @@
         "publishing": "公開管理",
         "latestSubmission": "最新の提出",
         "noSubmission": "まだ提出されていません",
-        "marketVersion": "公開中 · {{version}}",
+        "marketVersion": "公開中 {{version}}",
         "market": {
           "not_listed": "未公開",
           "disabled": "公開停止中",
@@ -9294,7 +9335,7 @@
         "review": {
           "pending": "審査待ち",
           "approved": "承認済み",
-          "rejected": "差し戻し",
+          "rejected": "却下",
           "published": "公開中",
           "superseded": "後の提出に置き換え済み",
           "legacy_unverified": "過去の改訂を確認できません",
@@ -9302,9 +9343,12 @@
           "cancelled": "取り消し済み"
         },
         "reason": "理由",
+        "rejectionReason": "却下理由",
+        "rejectionReasonLine": "<reasonLabel>却下理由:</reasonLabel> <reasonText />",
         "submittedContent": "提出した内容",
         "snapshotUnavailable": "元の提出内容が保存されていないか、確認できなくなっています。",
         "history": "公開履歴",
+        "marketChanges": "公開状態の変更",
         "loadMore": "さらに表示",
         "loadMoreHistory": "履歴をさらに表示",
         "releaseId": "リリース ID",
@@ -9319,7 +9363,7 @@
           "submitted": "提出済み",
           "metadata_updated": "表示情報を更新済み",
           "approved": "承認済み",
-          "rejected": "差し戻し",
+          "rejected": "却下",
           "enabled": "公開を開始",
           "disabled": "公開を停止",
           "archived": "アーカイブ済み",
@@ -9401,6 +9445,8 @@
         "notApproved": "未承認",
         "timeUnavailable": "記録なし",
         "releaseNotes": "更新内容",
+        "expandReleaseNotes": "すべて展開",
+        "noReleaseNotes": "更新内容は記載されていません。",
         "versionUpdates": "バージョンと更新",
         "versionManagement": "バージョン管理",
         "versionContent": "バージョンの内容",
@@ -9417,7 +9463,6 @@
         "cancelled": "取り消し済み",
         "cancelReviewCompleted": "審査を取り消しました。公開中のバージョンに影響はありません。",
         "cancelReviewAlreadyFinal": "審査は完了しているため取り消されませんでした。実際の結果を下に表示します。",
-        "viewPendingVersion": "審査中のバージョンを表示",
         "submitFailed": "提出に失敗",
         "viewDetails": "詳細を見る"
       },
@@ -12531,6 +12576,12 @@
       "arrivingLater": "{{name}} はこのパソコンに移り、準備中です。まもなく仲間一覧に表示されます",
       "arrivalPermissions": "{{name}} はこのパソコンの既定の権限で動作します。",
       "arrivalModel": "{{name}} の保存済みモデルはこのパソコンでは使えないため、このパソコンの既定モデルを使います。",
+      "arrivalModelSetup": "{{name}} はこのパソコンに移りましたが、使えるモデルがまだありません。モデルプロバイダーを接続するか、この仲間の「設定 → モデル」でモデルを選んでください。",
+      "arrivalPartialContent": "{{name}} はこのパソコンで動作するようになりましたが、一部の同期データは復元できませんでした。クラウド上の元データはそのまま残っています。",
+      "missingProfileTitle": "初期プロフィールで {{name}} を続けますか？",
+      "missingProfileDescription": "元のメインコンピューターから {{name}} のプロフィールがまだアップロードされていません。元のパソコンを再インストールした場合や復旧できない場合は、初期プロフィールでこのパソコンから続けられます。クラウドに同期済みの会話や内容はそのまま残ります。",
+      "missingProfileConfirm": "初期プロフィールで続ける",
+      "missingProfileFailed": "{{name}} のプロフィールはまだクラウドにアップロードされていません",
       "busyTitle": "{{name}} はまだ返信中です",
       "busyDescription": "この返信が終わってから「{{device}}」に移すか、返信を止めてすぐに移せます。",
       "busyWait": "終わってから移す",
