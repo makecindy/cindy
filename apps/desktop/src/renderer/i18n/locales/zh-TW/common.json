@@ -22611,7 +22611,8 @@
       "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。",
       "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。",
       "mergedLabel": "{{name}} · 路由（{{count}} 個來源）",
-      "routeDecides": "這次用哪個來源由路由「{{name}}」決定"
+      "routeDecides": "這次用哪個來源由路由「{{name}}」決定",
+      "quotaOf": "額度：{{name}}"
     },
     "why": {
       "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",

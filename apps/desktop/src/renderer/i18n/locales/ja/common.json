@@ -22612,7 +22612,8 @@
       "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
       "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。",
       "mergedLabel": "{{name}} · ルート（ソース {{count}} 件）",
-      "routeDecides": "このタスクで使うソースはルート「{{name}}」が決めます"
+      "routeDecides": "このタスクで使うソースはルート「{{name}}」が決めます",
+      "quotaOf": "クォータ：{{name}}"
     },
     "why": {
       "expiringQuota": "残り {{left}}%、{{reset}} にリセットされるため先に使用",

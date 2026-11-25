@@ -4040,6 +4040,7 @@ function ModelSelectorContentView({
             deviceId={deviceId}
             providerUsage={providerUsageScope}
             providerGroupUsage={providerGroupUsage}
+            routeUsageMember={sourceRoutes.usageMember}
             providers={providers}
             // 等价来源从来源栏与模型分组收起；收藏和最近仍按完整目录解析。
             {...((!remoteAgent || !deviceId || (homeDeviceId && !remoteBrowse)) && runLocationFold.hiddenLocal.size > 0

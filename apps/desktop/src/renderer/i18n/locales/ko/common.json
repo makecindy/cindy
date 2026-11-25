@@ -22612,7 +22612,8 @@
       "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다.",
       "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다.",
       "mergedLabel": "{{name}} · 라우트(소스 {{count}}개)",
-      "routeDecides": "이 작업에 쓸 소스는 라우트 “{{name}}”이(가) 정합니다"
+      "routeDecides": "이 작업에 쓸 소스는 라우트 “{{name}}”이(가) 정합니다",
+      "quotaOf": "한도: {{name}}"
     },
     "why": {
       "expiringQuota": "할당량이 {{left}}% 남았고 {{reset}}에 초기화되어 먼저 사용",

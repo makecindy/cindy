@@ -22917,7 +22917,8 @@
       "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo.",
       "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó.",
       "mergedLabel": "{{name}} · ruta ({{count}} fuentes)",
-      "routeDecides": "La ruta «{{name}}» decide qué fuente usa esta tarea"
+      "routeDecides": "La ruta «{{name}}» decide qué fuente usa esta tarea",
+      "quotaOf": "Cuota: {{name}}"
     },
     "why": {
       "expiringQuota": "Le queda un {{left}}% de cuota y se restablece el {{reset}}, así que va primero",

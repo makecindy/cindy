@@ -36,6 +36,11 @@ export interface SourceRouteProviders {
   shownAs(providerId: string | null | undefined, activeRouteId?: string | null, agentDeviceId?: string | null): string | null;
   /** 别的位置上的这个供应商已经并进某个合并后的条目：面板里不再单列它那一格。 */
   hidesRemote(agentDeviceId: string, providerId: string): boolean;
+  /**
+   * 合并后的条目在侧栏显示谁的额度：排在最前、没停用的那个成员(按路由的先后；2026-11-26 用户反馈合并后看不到用量)。
+   * 不是合并条目或成员都停用了返回 null。
+   */
+  usageMember(providerId: string): { provider: ProviderView; agentDeviceId: string | null } | null;
 }
 
 const agentOf = (kind: ModelGroupCandidate['agentKind']): AgentKind => (kind === 'cc' ? 'claude-code' : kind);
@@ -55,13 +60,14 @@ export function withSourceRouteProviders(
   label?: (name: string, members: number) => string,
 ): SourceRouteProviders {
   const routes = (config?.sourceRoutes ?? []).filter((route) => !route.hidden);
-  const none: SourceRouteProviders = { providers, hit: () => null, shownAs: () => null, hidesRemote: () => false };
+  const none: SourceRouteProviders = { providers, hit: () => null, shownAs: () => null, hidesRemote: () => false, usageMember: () => null };
   if (!config || routes.length === 0) return none;
   const viewsAt = (agentDeviceId: string | undefined) => (agentDeviceId ? remote?.get(agentDeviceId) ?? [] : providers);
   const hits = new Map<string, SourceRouteHit>();
   const memberOf = new Map<string, string>();
   const byRoute = new Map<string, string>();
   const virtual: { entry: ProviderView }[] = [];
+  const usageMembers = new Map<string, { provider: ProviderView; agentDeviceId: string | null }>();
   for (const route of routes) {
     const members = route.sources.flatMap((source) => viewsAt(source.agentDeviceId)
       .filter((provider) => provider.id === source.providerId)
@@ -86,6 +92,9 @@ export function withSourceRouteProviders(
     const agents = Object.keys(models) as AgentKind[];
     if (members.length === 0 || agents.length === 0) continue;
     const base = members[0].provider;
+    const lead = members.find((member) => !route.sources.find((source) => source.providerId === member.provider.id
+      && (source.agentDeviceId ?? null) === (member.agentDeviceId ?? null))?.off);
+    if (lead) usageMembers.set(id, { provider: lead.provider, agentDeviceId: lead.agentDeviceId ?? null });
     // 以第一个成员为底：品牌、接入方式、图标都沿用它；模型与各引擎的路由信息取全部成员的。
     virtual.push({
       entry: {
@@ -118,6 +127,7 @@ export function withSourceRouteProviders(
     shownAs: (providerId, activeRouteId, agentDeviceId) =>
       (activeRouteId && byRoute.get(activeRouteId)) || (providerId ? memberOf.get(memberKey(agentDeviceId, providerId)) ?? null : null),
     hidesRemote: (agentDeviceId, providerId) => memberOf.has(memberKey(agentDeviceId, providerId)),
+    usageMember: (providerId) => usageMembers.get(providerId) ?? null,
   };
 }
 

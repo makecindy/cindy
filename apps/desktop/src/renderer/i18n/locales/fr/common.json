@@ -22917,7 +22917,8 @@
       "switchUnavailable": "« {{name}} » n'a pour l'instant aucune source utilisable par cette tâche. Le modèle n'a pas changé.",
       "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : elle n’a pas été choisie.",
       "mergedLabel": "{{name}} · route ({{count}} sources)",
-      "routeDecides": "La route « {{name}} » décide de la source utilisée par cette tâche"
+      "routeDecides": "La route « {{name}} » décide de la source utilisée par cette tâche",
+      "quotaOf": "Quota : {{name}}"
     },
     "why": {
       "expiringQuota": "Il lui reste {{left}} % de quota, réinitialisé le {{reset}} : elle passe en premier",

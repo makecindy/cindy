@@ -22917,7 +22917,8 @@
       "switchUnavailable": "«{{name}}» não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
       "chooseUnavailable": "«{{name}}» não tem agora nenhuma fonte utilizável, por isso não foi selecionada.",
       "mergedLabel": "{{name}} · rota ({{count}} fontes)",
-      "routeDecides": "A rota «{{name}}» decide que fonte esta tarefa usa"
+      "routeDecides": "A rota «{{name}}» decide que fonte esta tarefa usa",
+      "quotaOf": "Quota: {{name}}"
     },
     "why": {
       "expiringQuota": "Restam {{left}}% da quota, que é reposta {{reset}}, por isso vai primeiro",

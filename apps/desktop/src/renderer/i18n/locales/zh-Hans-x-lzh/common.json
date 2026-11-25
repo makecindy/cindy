@@ -22612,7 +22612,8 @@
       "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
       "chooseUnavailable": "「{{name}}」今无可用之源，未取之。",
       "mergedLabel": "{{name}} · 路（{{count}} 源）",
-      "routeDecides": "此番用何源，由路「{{name}}」定之"
+      "routeDecides": "此番用何源，由路「{{name}}」定之",
+      "quotaOf": "额度：{{name}}"
     },
     "why": {
       "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
