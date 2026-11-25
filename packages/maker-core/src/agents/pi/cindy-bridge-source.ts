@@ -2723,6 +2723,8 @@ interface ResolvedMcpGatewayCall {
   tool: ConnectedMcpTool;
   /** 归一化时从顶层折进 args 的键(模型把参数平铺在顶层)。 */
   folded?: string[];
+  /** 顶层有、args 容器里已有同名参数、因而没有采用的键(同名以 args 为准)。 */
+  shadowed?: string[];
   /** 顶层有、但工具 schema 不认、因而没有转发的键。 */
   unmapped?: string[];
   /** args 以 JSON 字符串形态给出, 已被解析成对象。 */
@@ -3287,12 +3289,20 @@ interface GatewayArgsResolution {
   malformed: boolean;
   /** 从顶层折进 args 的键(模型把参数平铺在顶层)。 */
   folded: string[];
+  /** 顶层有、args 容器里也有同名参数、因而没有采用的键(同名以 args 为准)。 */
+  shadowed: string[];
   /** 顶层有、但这个工具的 schema 不认、因而没有转发的键。 */
   unmapped: string[];
   /** args 以 JSON 字符串形态给出, 已被解析成对象。 */
   parsedFromString: boolean;
   /** 信封被平铺(顶层 name + 顶层 args), 已重建回 {name, args}。 */
   rebuiltEnvelope?: boolean;
+  /**
+   * 信封判不了: 工具 schema 没能看完(预算截断 / 解析不了的引用), 但已看到的部分就是 {name, args} 信封的
+   * 样子, 而顶层又给了 name。它是信封层的内层工具名, 还是这个工具自己的 name 参数, 网关分不清 ——
+   * 调用方必须拒收, 不能按普通工具转发(见 callInputError)。
+   */
+  indeterminateEnvelope?: boolean;
 }
 
 function parseJsonObject(value: string): Record<string, unknown> | null {
@@ -3314,8 +3324,12 @@ const SCHEMA_COMBINATORS = ['allOf', 'anyOf', 'oneOf'];
 const SCHEMA_CONDITIONAL_KEYWORDS = ['if', 'then', 'else'];
 /** 依赖分支: dependentSchemas(2020-12)与 schema 形态的 dependencies(draft-07)里声明的字段同样算数。 */
 const SCHEMA_DEPENDENCY_KEYWORDS = ['dependentSchemas', 'dependencies'];
-/** 按属性点名「有它就必须带上这些字段」的写法: dependentRequired(2019-09)与数组形态的 dependencies(draft-07)。 */
-const SCHEMA_DEPENDENT_NAME_KEYWORDS = ['dependentRequired', 'dependencies'];
+/**
+ * 「有它就必须带上这些字段」的三种写法: dependentRequired(2019-09)与数组形态的 dependencies(draft-07)
+ * 的值是被点名的字段, dependentSchemas(2020-12)与 schema 形态的 dependencies 的值是子 schema(另走)。
+ * 三者的键都是触发字段 —— 服务端按它的有无提要求, 它就是认的参数。
+ */
+const SCHEMA_DEPENDENT_KEYWORDS = ['dependentRequired', 'dependentSchemas', 'dependencies'];
 /** 放开额外字段的两种写法: additionalProperties(draft-07)与 unevaluatedProperties(2019-09 起)。 */
 const SCHEMA_DYNAMIC_KEYWORDS = ['additionalProperties', 'unevaluatedProperties'];
 
@@ -3366,7 +3380,7 @@ function resolveLocalSchemaRef(root: Record<string, unknown>, ref: string): Reco
  * 指针)同样算不完整。
  */
 interface SchemaParameterSurface {
-  /** 走到的节点声明过的参数名(properties 的键, 以及 required / dependentRequired / 数组形态 dependencies 点名的字段)。 */
+  /** 走到的节点声明过的参数名(properties 的键、required 点名的字段、依赖写法里的触发字段与被点名的字段)。 */
   names: Set<string>;
   /** 有没有节点声明过属性名(properties 里至少有一个键)。 */
   declaresProperties: boolean;
@@ -3406,29 +3420,39 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
   };
   // 返回这个节点沿合取边连起来的信号; 分支(anyOf / oneOf / 条件 / 依赖)的信号记在各自的分支组里。
   const walk = (node: unknown, depth: number, group: EnvelopeGroup): number => {
-    if (!isPlainRecord(node)) return 0;
-    if (visited.has(node)) {
+    if (isPlainRecord(node) && visited.has(node)) {
       const known = closure.get(node) ?? 0;
       group.own |= known;
       return known;
     }
-    if (depth > SCHEMA_WALK_MAX_DEPTH || remainingNodes <= 0) {
+    // 第一次看到的节点一律占预算, 不是对象的分支(true / false)与超深的节点也不例外: 它们不占的话
+    // 预算永远用不完, 多大的分支数组都要逐个进一次 walk、各起一个分支组。
+    if (remainingNodes <= 0) {
       // 预算用尽: 剩下的声明我们看不到, 这份表态不完整。
       surface.truncated = true;
       return 0;
     }
-    visited.add(node);
     remainingNodes--;
+    if (!isPlainRecord(node)) return 0;
+    if (depth > SCHEMA_WALK_MAX_DEPTH) {
+      // 超深: 下面的声明同样看不到。
+      surface.truncated = true;
+      return 0;
+    }
+    visited.add(node);
     const propertyNames = isPlainRecord(node.properties) ? Object.keys(node.properties) : [];
     if (propertyNames.length > 0) surface.declaresProperties = true;
     for (const name of propertyNames) surface.names.add(name);
     // required 可以列出 properties 里没有的字段(合法写法): 服务端既然校验它必填, 它就是认的参数。
-    // 「有 tag 就必须带 file_id」(dependentRequired, draft-07 的数组形态 dependencies)同理。
     collectDeclaredNames(node.required, surface.names);
-    for (const keyword of SCHEMA_DEPENDENT_NAME_KEYWORDS) {
+    // 「有 tag 就必须带 file_id」: 触发的 tag 与被点名的 file_id 同理, 都不在 properties 里时也算声明过。
+    for (const keyword of SCHEMA_DEPENDENT_KEYWORDS) {
       const dependents = node[keyword];
       if (!isPlainRecord(dependents)) continue;
-      for (const names of Object.values(dependents)) collectDeclaredNames(names, surface.names);
+      for (const [trigger, names] of Object.entries(dependents)) {
+        surface.names.add(trigger);
+        collectDeclaredNames(names, surface.names);
+      }
     }
     let signals = declaredEnvelopeSignals(schema, node);
     for (const keyword of SCHEMA_DYNAMIC_KEYWORDS) {
@@ -3628,27 +3652,36 @@ function settleEnvelope(groups: EnvelopeGroup[]): boolean {
 }
 
 /**
+ * 这份表态「就是信封的样子」: 凑齐三个信号、恰好声明 name / args 两个字段、不放开动态字段。
+ *
+ * 多一个兄弟字段、或放开 additionalProperties / patternProperties 的工具(name/args 是它自己的参数,
+ * 不是信封)不能被当成信封 —— 否则平铺调用会把兄弟字段挪进 args 里, 在服务端校验之前就改错了层级
+ * (Codex P1 on #10908)。真实的注册表入口(call_tool)声明的就是 name + args 两个字段。兄弟字段与动态
+ * 字段可以藏在组合声明里, 所以按整份表态判, 不能只看根层。
+ *
+ * 表态完不完整(truncated)不在这里判: 「看到的部分是不是信封的样子」与「有没有看到全部」是两件事。
+ */
+function resemblesNameEnvelope(surface: SchemaParameterSurface): boolean {
+  return Boolean(surface.envelope)
+    && surface.names.size === 2
+    && surface.names.has('name')
+    && surface.names.has('args')
+    && !surface.additionalAllowed
+    && surface.patterns.length === 0;
+}
+
+/**
  * 这个工具的 schema 是不是 Cindy 通用 call_tool 的 {name, args} 信封形状。
  *
- * 信封形状(name 在每条路径上都必填, 且有一条路径凑齐三个信号, 见 settleEnvelope)之外, 还要求
- * **恰好声明这两个字段**、且不放开动态字段: 多一个兄弟字段、或放开 additionalProperties /
- * patternProperties 的工具(name/args 是它自己的参数, 不是信封)不能被当成信封 —— 否则平铺
- * 调用会把兄弟字段挪进 args 里, 在服务端校验之前就改错了层级(Codex P1 on #10908)。真实的
- * 注册表入口(call_tool)声明的就是 name + args 两个字段。兄弟字段与动态字段可以藏在组合声明里,
- * 所以按整份表态判, 不能只看根层。
+ * 信封形状(见 settleEnvelope)之外, 还要求表态完整: 没看到的那部分可能还有兄弟字段, 看不全就不下
+ * 结论。判不了的那一类(看不全、但已看到的部分就是信封的样子)由 normalizeGatewayArgs 另行处理。
  */
 function isNameEnvelopeSchema(schema: unknown, surface?: SchemaParameterSurface | null): boolean {
   const root = isPlainRecord(schema) ? schema : null;
   if (!root) return false;
   const resolved = surface === undefined ? schemaParameterSurface(root) : surface;
   if (!resolved) return false;
-  return Boolean(resolved.envelope)
-    && !resolved.truncated
-    && resolved.names.size === 2
-    && resolved.names.has('name')
-    && resolved.names.has('args')
-    && !resolved.additionalAllowed
-    && resolved.patterns.length === 0;
+  return !resolved.truncated && resemblesNameEnvelope(resolved);
 }
 
 /**
@@ -3888,6 +3921,10 @@ function setOwnArgument(target: Record<string, unknown>, key: string, value: unk
  * 给出 {server, tool, name: <内层工具>, args: <内层参数>}。这时顶层 name 是**信封层**
  * 的内层工具名, 不是内层参数 —— 把它折进参数容器, 信封的 args 层就没了, 服务端收到的
  * 不是 {name, args}, 内层工具会被按空参数调用。这种形态重建回 {name, args}。
+ * 工具 schema 看不全、判不了是不是信封时(indeterminateEnvelope)不猜: 交给调用方拒收。
+ *
+ * 同一个参数在顶层与 args 里各给了一份时以 args 为准, 顶层那份记进 shadowed —— 它不出现在
+ * 转发的参数里, 不点名就没有人知道服务端为什么按 args 里那个值执行。
  *
  * args/arguments 只有两种形态可用: 对象, 或能解析成对象的 JSON 字符串。
  * 「没传这个键」与「显式传 null」必须分开: 后者是模型给了一个用不了的形态,
@@ -3930,6 +3967,7 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
   // 那类静默错误); 多转一个键最坏是服务端一条校验错误, 看得见。
   const incomplete = Boolean(surface?.truncated);
   const folded: string[] = [];
+  const shadowed: string[] = [];
   const unmapped: string[] = [];
   // 信封被平铺: 顶层 name 是信封层的内层工具名(选择器), args 容器是内层工具自己的参数。
   // 内层工具自己常有 name 参数(memory_write 的记忆名、schedule_create 的展示名), 所以「args 里
@@ -3944,6 +3982,17 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
     && Object.prototype.hasOwnProperty.call(params, 'args')
     && (params.name === selector || selector === tool.name);
   const envelopeSchema = isNameEnvelopeSchema(schema, surface);
+  // 信封判不了: schema 看不全, 但已看到的部分就是信封的样子, 而顶层给了 name。它可能是信封层的
+  // 内层工具名 —— 按普通工具折进参数容器, 服务端拿到的是 {name, <内层参数>}: 没有 args 层, 内层
+  // 工具被按空参数调用还返回成功(Codex P1 on #10908)。也可能就是这个工具自己的 name 参数,
+  // 包一层同样是错的。两种都走得通的形状只有一个 —— 全部放进 args, 由 callInputError 拒收并指路。
+  const indeterminateEnvelope = selector !== undefined && surface !== null
+    && surface.truncated && resemblesNameEnvelope(surface);
+  if (indeterminateEnvelope) {
+    return {
+      args: params, provided, malformed, folded, shadowed, unmapped, parsedFromString, indeterminateEnvelope: true,
+    };
+  }
   const flattenedEnvelope = envelopeSchema
     && provided
     && selector !== undefined
@@ -3960,7 +4009,11 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
     if (GATEWAY_OWN_KEYS.has(key)) continue;
     if ((flattenedEnvelope || flattenedEnvelopeNoContainer) && key === 'name') continue; // 信封层, 不是内层参数。
     if (flattenedEnvelopeNoContainer && (key === 'args' || key === 'arguments')) continue;
-    if (Object.prototype.hasOwnProperty.call(params, key)) continue;
+    if (Object.prototype.hasOwnProperty.call(params, key)) {
+      // 同名以 args 为准。顶层的值没有采用, 也不在转发的参数里: 记下来, 回执里点名(Codex P1 on #10908)。
+      shadowed.push(key);
+      continue;
+    }
     if (flattenedEnvelopeNoContainer) {
       // 内层参数: 外层 schema 判不了, 也不该丢 —— 交给内层工具自己校验。
       setOwnArgument(params, key, value);
@@ -3984,6 +4037,7 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
     provided,
     malformed,
     folded,
+    shadowed,
     unmapped,
     parsedFromString,
     ...(flattenedEnvelope || flattenedEnvelopeNoContainer ? { rebuiltEnvelope: true } : {}),
@@ -4206,6 +4260,16 @@ class CindyMcpGateway {
         + ' (the model sent ' + sent + '). Put the selected tool parameters directly in gateway args.'
         + ' Expected args schema: ' + schemaHint(tool.inputSchema);
     }
+    if (resolution.indeterminateEnvelope) {
+      // 信封判不了(见 normalizeGatewayArgs): 按普通工具转发, 内层工具会被按空参数调用还返回成功。
+      // 拒收并指出两种工具都走得通的形状 —— 全部放进 args(审批与执行两条路径同一条消息)。
+      return 'Invalid ' + tool.serverName + '/' + tool.name + ' parameters: Cindy could not read the schema'
+        + ' of this tool in full (too large, or a reference it cannot resolve), so it cannot tell whether the'
+        + ' top-level name is the inner tool of a {"name", "args"} envelope or a parameter of this tool, and will'
+        + ' not guess — guessing wrong calls the inner tool with empty arguments. Put everything in args; for an'
+        + ' envelope tool that is {"name": <inner tool>, "args": {<its parameters>}}.'
+        + ' Expected args schema: ' + schemaHint(tool.inputSchema);
+    }
     // Only the host plugin gateway is in scope. Other MCP tools retain their
     // server-owned validation and the generic call_tool envelope diagnostics:
     // 桥不替第三方工具判必填, 只保证它发出的参数不被改写、不被丢掉。
@@ -4251,6 +4315,7 @@ class CindyMcpGateway {
       args: resolution.args,
       tool,
       ...(resolution.folded.length > 0 ? { folded: resolution.folded } : {}),
+      ...(resolution.shadowed.length > 0 ? { shadowed: resolution.shadowed } : {}),
       ...(resolution.unmapped.length > 0 ? { unmapped: resolution.unmapped } : {}),
       ...(resolution.parsedFromString ? { parsedFromString: true } : {}),
       ...(resolution.rebuiltEnvelope ? { rebuiltEnvelope: true } : {}),
@@ -4471,12 +4536,13 @@ class CindyMcpGateway {
    *
    * 判据必须用**形状指纹**而不是名字或单个字段：Pi 也接入用户自接的第三方 MCP，它们可能
    * 同样叫 call_tool（但信封是 {tool_name, arguments}），也可能有个叫 name 的必填字符串
-   * 参数却是文件名（配 content 直传）。所以要求三个信号同时成立 —— properties.name 是
-   * string、properties.args 是 object、且 required 含 name —— 才认定是 Cindy 的信封。
-   * 少一个都不套用这条自纠错说明，让调用按检视到的 schema 原样走到服务端，由服务端报它
-   * 真实的参数要求：普通工具缺字段时不能被引向错误的嵌套形状。
+   * 参数却是文件名（配 content 直传）。所以要求三个信号同时成立 —— name 是 string、args 是
+   * object、且 name 在每条路径上都必填（信号可以分散在组合声明的几个节点里）—— 才认定是
+   * Cindy 的信封。少一个都不套用这条自纠错说明，让调用按检视到的 schema 原样走到服务端，
+   * 由服务端报它真实的参数要求：普通工具缺字段时不能被引向错误的嵌套形状。
    *
-   * 判据本体在 isNameEnvelopeSchema: 归一化(平铺信封重建)与这里必须同源。
+   * 判据本体在 isNameEnvelopeSchema: 归一化(平铺信封重建)与这里必须同源。schema 看不全、
+   * 判不了的那种不在这里拦 —— 它由 callInputError 在更早一步拒收。
    */
   private requiresNameEnvelope(tool: ConnectedMcpTool): boolean {
     return isNameEnvelopeSchema(tool.inputSchema);
@@ -4684,10 +4750,12 @@ class CindyMcpGateway {
    */
   private normalizationNote(call: ResolvedMcpGatewayCall): string | null {
     const folded = call.folded ?? [];
+    const shadowed = call.shadowed ?? [];
     const unmapped = call.unmapped ?? [];
     const parsedFromString = call.parsedFromString === true;
     const rebuiltEnvelope = call.rebuiltEnvelope === true;
-    if (folded.length === 0 && unmapped.length === 0 && !parsedFromString && !rebuiltEnvelope) return null;
+    if (folded.length === 0 && shadowed.length === 0 && unmapped.length === 0
+      && !parsedFromString && !rebuiltEnvelope) return null;
     const parts: string[] = [];
     if (parsedFromString) {
       // 字符串形态也是一种归一化动作: 参数被解析成了对象, 用户与模型看到的必须
@@ -4701,6 +4769,11 @@ class CindyMcpGateway {
     if (folded.length > 0) {
       parts.push('Cindy moved these top-level parameters into args before forwarding: '
         + folded.join(', ') + '.');
+    }
+    if (shadowed.length > 0) {
+      // 顶层的值没有采用、也不在转发的参数里: 不点名, 模型就看不出服务端为什么按 args 里那个值执行。
+      parts.push('These top-level parameters were not forwarded because args already has a key of the same name'
+        + ' (args wins): ' + shadowed.join(', ') + '.');
     }
     if (unmapped.length > 0) {
       parts.push('These top-level parameters were not forwarded because the tool schema does '
