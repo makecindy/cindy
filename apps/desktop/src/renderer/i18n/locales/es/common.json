@@ -11988,7 +11988,7 @@
           "soleOwnerHint": "Eres el único miembro que queda. Archiva este grupo para conservar su historial y restaurarlo más adelante.",
           "archive": "Archivar grupo",
           "archiveHint": "Al archivar este grupo, se deshabilita para todos los miembros y se detienen los mensajes nuevos y las ejecuciones de los amigos. El historial se conserva. Busca el grupo para ver su historial o desarchivarlo.",
-          "confirm": "Permitir herramientas",
+          "confirm": "Continuar",
           "lastOwner": "Transfiere la propiedad a otro miembro antes de salir o quitar al propietario actual.",
           "conflict": "Alguien actualizó este grupo. Actualiza y vuelve a intentarlo.",
           "unarchive": "Desarchivar grupo",

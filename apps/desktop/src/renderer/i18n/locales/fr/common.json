@@ -11988,7 +11988,7 @@
           "soleOwnerHint": "Vous êtes le dernier membre. Archivez ce groupe pour conserver son historique et le restaurer plus tard.",
           "archive": "Archiver le groupe",
           "archiveHint": "L'archivage désactive ce groupe pour tous les membres, ce qui bloque les nouveaux messages et les exécutions des amis. L'historique est conservé. Recherchez le groupe pour consulter son historique ou le désarchiver.",
-          "confirm": "Autoriser les outils",
+          "confirm": "Continuer",
           "lastOwner": "Transférez la propriété à un autre membre avant de quitter le groupe ou de retirer le propriétaire actuel.",
           "conflict": "Quelqu'un a modifié ce groupe. Actualisez et réessayez.",
           "unarchive": "Désarchiver le groupe",

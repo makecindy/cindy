@@ -588,7 +588,7 @@
     "removeOwnHint": "{{name}} 동반자가 “{{group}}” 메시지를 더 이상 받지 않습니다. 기록은 유지되며 다른 그룹과 개인 채팅에는 영향을 주지 않습니다.",
     "removeOwnActiveHint": "이 그룹에서 진행 중인 요청이 중지됩니다. 별도로 시작한 작업은 계속 실행됩니다.",
     "stopAndRemove": "중지 후 내보내기",
-    "confirm": "삭제",
+    "confirm": "도구 사용 허용",
     "inviteTitle": "그룹에 초대",
     "reusableLink": "만료 없음 · 여러 사람이 반복 사용 가능",
     "singleUseUntil": "한 번만 사용 가능 · {{date}}에 만료",

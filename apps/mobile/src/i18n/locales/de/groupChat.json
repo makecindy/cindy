@@ -588,7 +588,7 @@
     "removeOwnHint": "{{name}} erhält keine Nachrichten mehr aus „{{group}}“. Der Verlauf bleibt erhalten; andere Gruppen und private Chats sind nicht betroffen.",
     "removeOwnActiveHint": "Aktive Anfragen dieses Freundes in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
     "stopAndRemove": "Stoppen und entfernen",
-    "confirm": "Entfernen",
+    "confirm": "Tools erlauben",
     "inviteTitle": "Zur Gruppe einladen",
     "reusableLink": "Kein Ablaufdatum · Für mehrere Personen wiederverwendbar",
     "singleUseUntil": "Einmalig nutzbar · Läuft am {{date}} ab",

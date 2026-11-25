@@ -596,7 +596,7 @@
     "removeOwnHint": "{{name}} deixará de receber mensagens de «{{group}}». O histórico é mantido; os outros grupos e conversas privadas não são afetados.",
     "removeOwnActiveHint": "Os pedidos ativos neste grupo serão interrompidos. As tarefas iniciadas de forma independente continuarão em execução.",
     "stopAndRemove": "Parar e remover",
-    "confirm": "Remover",
+    "confirm": "Permitir ferramentas",
     "inviteTitle": "Convidar para o grupo",
     "reusableLink": "Sem expiração · Reutilizável por várias pessoas",
     "singleUseUntil": "Utilização única · Expira em {{date}}",

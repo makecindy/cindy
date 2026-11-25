@@ -588,7 +588,7 @@
     "removeOwnHint": "{{name}} will no longer receive messages from “{{group}}”. Message history stays; other groups and private chats are unaffected.",
     "removeOwnActiveHint": "Removing this companion stops its active requests in this group. Tasks opened independently keep running.",
     "stopAndRemove": "Stop and remove",
-    "confirm": "Remove",
+    "confirm": "Allow tools",
     "inviteTitle": "Invite to group",
     "reusableLink": "No expiration · Reusable by multiple people",
     "singleUseUntil": "Single use · Expires {{date}}",

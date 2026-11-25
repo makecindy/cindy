@@ -588,7 +588,7 @@
     "removeOwnHint": "{{name}} 将不再接收「{{group}}」的消息。历史消息会保留，其他群和私聊不受影响。",
     "removeOwnActiveHint": "移出会停止它在本群的活跃请求。已独立开启的任务继续运行。",
     "stopAndRemove": "停止并移出",
-    "confirm": "移除",
+    "confirm": "允许使用工具",
     "inviteTitle": "邀请加入群聊",
     "reusableLink": "长期有效 · 多人可重复使用",
     "singleUseUntil": "只能使用一次 · {{date}} 到期",
