@@ -27,6 +27,9 @@ export function beginDeviceDirectoryMutation(deviceId: string): () => void {
   return () => {
     if (released) return;
     released = true;
+    // Advance on completion too so directory reads started *during* a dual-write
+    // cannot backfill a torn V1/V2 snapshot after the mutation finishes.
+    mutationSequence += 1;
     const count = (activeMutations.get(deviceId) ?? 1) - 1;
     if (count <= 0) activeMutations.delete(deviceId);
     else activeMutations.set(deviceId, count);

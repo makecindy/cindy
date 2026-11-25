@@ -222,3 +222,35 @@ it('drains in-flight backfill and synchronizes official V1 on mobile PATCH', asy
     'legacy-patch',
   ]);
 });
+
+// A directory read started *while* a PATCH { name: null } is mid-flight can observe
+// cleared V2 + stale V1; advancing mobileMutationSeq on mutation completion ensures
+// that torn snapshot never triggers a backfill after the PATCH finishes.
+it('does not backfill a torn snapshot from a read started during an in-flight PATCH', async () => {
+  let finishLegacyPatch!: () => void;
+  let finishReadLegacy!: (value: { devices: DeviceView[] }) => void;
+  fake.directory.mockResolvedValue([{ ...encryptedDevice('work-pc', true), name: 'WORK-HOST', selfName: 'WORK-HOST' }]);
+  fake.mutation.mockResolvedValue({ name: 'WORK-HOST' });
+  fake.legacy
+    .mockImplementationOnce(() => new Promise(resolve => {
+      finishLegacyPatch = () => resolve({ deviceId: 'work-pc', name: 'WORK-HOST' });
+    }))
+    .mockImplementationOnce(() => new Promise<{ devices: DeviceView[] }>(resolve => {
+      finishReadLegacy = resolve;
+    }));
+
+  const patchPromise = request('/api/device-link/devices/work-pc', { method: 'PATCH', body: { name: null } });
+  await vi.waitFor(() => expect(finishLegacyPatch).toBeTypeOf('function'));
+
+  const readDuringPatch = request();
+  await vi.waitFor(() => expect(finishReadLegacy).toBeTypeOf('function'));
+
+  finishLegacyPatch();
+  await patchPromise;
+  expect(fake.mutation).toHaveBeenCalledTimes(1);
+
+  finishReadLegacy({ devices: [{ ...legacyDevice('work-pc'), name: '旧自定义名', selfName: 'WORK-HOST' }] });
+  await readDuringPatch;
+  await Promise.resolve();
+  expect(fake.mutation).toHaveBeenCalledTimes(1);
+});
