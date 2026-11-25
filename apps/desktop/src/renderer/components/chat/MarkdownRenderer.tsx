@@ -46,7 +46,7 @@ import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_IMAGE_SRC_PROP,
   RAW_LOCAL_LINK_HREF_PROP,
 } from './remarkPreserveRawLocalDestinations';
-import type { GalleryOccurrence } from './ImageGalleryContext';
+import { replySectionId, type GalleryOccurrence } from './ImageGalleryContext';
 import { markdownImageOccurrence } from './markdownImageTargets';
 import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
@@ -379,6 +379,13 @@ const allowlistedImageUrlTransform: UrlTransform = (url, key) => {
 
 interface MarkdownRendererProps {
   renderRichAnswers?: boolean;
+  /**
+   * The reply's client id. With it, an image shown more than once in the reply
+   * opens the task image gallery at the copy that was clicked (replySectionId).
+   */
+  galleryMessageKey?: string;
+  /** Internal: replySectionId of the part / component node this renderer shows. */
+  gallerySection?: string;
   /** F1: session cwd used to resolve relative paths in markdown links.
    *  Stable per-session — only changes on session switch (parent remount). */
   workingDir: string;
@@ -1893,6 +1900,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   allowPrivilegedLinks = true,
   resolveImageSrc,
   emitSourceLines = false,
+  gallerySection,
 }: MarkdownRendererProps) {
   const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
   // Cap markdown re-parse + syntax highlight cost during streaming.
@@ -1945,13 +1953,13 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   } | null>(null);
   // Links and chips open a single image; only embedded reply images carry a gallery target.
   const setLightboxSrc = useCallback((src: string | null) => setLightbox(src ? { src } : null), []);
-  // Which repeat of an image was clicked, in the section the gallery lists it under
-  // (this renderer's text). Read at click time: positions refer to the rendered text.
-  const occurrenceSourceRef = useRef({ section: content, rendered: repairedContent });
-  occurrenceSourceRef.current = { section: content, rendered: repairedContent };
+  // Which repeat of an image was clicked, in the reply section the gallery lists it
+  // under. Read at click time: positions refer to the rendered text.
+  const occurrenceSourceRef = useRef({ section: gallerySection, rendered: repairedContent });
+  occurrenceSourceRef.current = { section: gallerySection, rendered: repairedContent };
   const clickedOccurrence = useCallback((target: string, offset: number | undefined) => {
-    if (offset === undefined) return undefined;
     const { section, rendered } = occurrenceSourceRef.current;
+    if (offset === undefined || section === undefined) return undefined;
     const index = markdownImageOccurrence(rendered, target, offset);
     return index === undefined ? undefined : { section, index };
   }, []);
@@ -2268,8 +2276,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
   const instanceKey = useId();
   const sessionFileCtx = useChatSessionFile();
   const source = useStreamingThrottle(props.content, props.isStreaming ?? false);
-  const renderMedia = (node: RichNode) => {
-    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} />;
+  const section = (partKey: number, nodeId?: string) =>
+    props.galleryMessageKey === undefined ? undefined : replySectionId(props.galleryMessageKey, partKey, nodeId);
+  const renderMediaFor = (partKey: number) => (node: RichNode) => {
+    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} gallerySection={section(partKey, node.id)} />;
     const raw = richMediaSource(node);
     if (!raw) return null;
     if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
@@ -2295,10 +2305,11 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     );
   };
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);
-  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} />;
+  // A reply without component blocks is one plain part starting at offset 0.
+  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} gallerySection={section(0)} />;
   return <div className="rich-answer-body">{parts.map(part => part.kind === 'rich'
-    ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
+    ? <RichAnswer renderMedia={renderMediaFor(part.key)} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
         stateKey={`${props.streamFadeKey ?? instanceKey}:${part.key}`}
-        renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} />} />
-    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} mediaStreaming={props.isStreaming ?? false} streamFadeKey={`${props.streamFadeKey}:${part.key}`} />)}</div>;
+        renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} gallerySection={section(part.key, id)} />} />
+    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} mediaStreaming={props.isStreaming ?? false} streamFadeKey={`${props.streamFadeKey}:${part.key}`} gallerySection={section(part.key)} />)}</div>;
 });

@@ -4,7 +4,7 @@
  * (`extractMarkdownGalleryImages`) and address derivation
  * (`markdownImageAddress`) the reply renderer uses, so code examples never count
  * and a clicked image is found among the entries by its destination as written
- * (plus which repeat of it, within the text section that rendered it).
+ * (plus which repeat of it, within the reply section that rendered it).
  */
 import {
   RichAnswerStream,
@@ -13,15 +13,15 @@ import {
   type RichDocument,
 } from '@cindy/maker-shared/rich-answer';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
-import type { GalleryImage } from './ImageGalleryContext';
+import { replySectionId, type GalleryImage } from './ImageGalleryContext';
 import { markdownImageAddress, type MarkdownImageAddressOptions } from './MarkdownRenderer';
 import { extractMarkdownGalleryImages } from './markdownImageTargets';
 import { peekWorkspaceMediaSrc, usesWorkspaceLookup } from './useWorkspaceMediaPath';
 
-/** One image a reply renders, located in the text section the renderer receives. */
+/** One image a reply renders, located in the reply section the renderer receives. */
 export interface ReplyImageRef {
   target: string;
-  /** Markdown text of the section (a plain part, or one component node) showing it. */
+  /** Section id (replySectionId): a plain-text part, or one component node. */
   section: string;
   /** Which repeat of `target` within `section` (0 for the first). */
   occurrence: number;
@@ -47,8 +47,8 @@ function rendersAsImage(target: string): boolean {
 }
 
 /** Rich component order follows the layout tree, not creation order. */
-function richImageMarkdown(doc: RichDocument): string[] {
-  const out: string[] = [];
+function richImageMarkdown(doc: RichDocument): { id: string; markdown: string }[] {
+  const out: { id: string; markdown: string }[] = [];
   const seen = new Set<string>();
   const visit = (id: string) => {
     const node = doc.nodes.get(id);
@@ -56,7 +56,7 @@ function richImageMarkdown(doc: RichDocument): string[] {
     seen.add(id);
     if (node.kind === 'image' || node.kind === 'markdown') {
       const markdown = richMarkdown(node);
-      if (markdown) out.push(markdown);
+      if (markdown) out.push({ id, markdown });
     }
     for (const child of node.children) visit(child);
   };
@@ -64,9 +64,9 @@ function richImageMarkdown(doc: RichDocument): string[] {
   return out;
 }
 
-function sectionImages(section: string): ReplyImageRef[] {
+function sectionImages(markdown: string, section: string): ReplyImageRef[] {
   const seen = new Map<string, number>();
-  return extractMarkdownGalleryImages(section).map(({ target }) => {
+  return extractMarkdownGalleryImages(markdown).map(({ target }) => {
     const occurrence = seen.get(target) ?? 0;
     seen.set(target, occurrence + 1);
     return { target, section, occurrence };
@@ -74,33 +74,34 @@ function sectionImages(section: string): ReplyImageRef[] {
 }
 
 /** Images a completed reply renders, in order, with their destinations as written. */
-export function replyImages(content: string): ReplyImageRef[] {
+export function replyImages(content: string, messageKey: string): ReplyImageRef[] {
   if (!content.includes('![') && !/<img/i.test(content) && !content.includes('cindy-ui')) return [];
   const images: ReplyImageRef[] = [];
   for (const part of splitRichAnswer(content)) {
     if (part.kind === 'markdown') {
-      images.push(...sectionImages(part.source));
+      images.push(...sectionImages(part.source, replySectionId(messageKey, part.key)));
       continue;
     }
     // A finished reply renders an unclosed component block as complete too.
     const doc = new RichAnswerStream().update(part.source, true);
-    for (const markdown of richImageMarkdown(doc)) images.push(...sectionImages(markdown));
+    for (const { id, markdown } of richImageMarkdown(doc))
+      images.push(...sectionImages(markdown, replySectionId(messageKey, part.key, id)));
   }
   return images;
 }
 
-function cachedReplyImages(content: string, cache: ReplyImageCache, cacheKey: string): ReplyImageRef[] {
-  const cached = cache.get(cacheKey);
+function cachedReplyImages(content: string, cache: ReplyImageCache, messageKey: string): ReplyImageRef[] {
+  const cached = cache.get(messageKey);
   if (cached?.content === content) return cached.images;
-  const images = replyImages(content);
-  cache.set(cacheKey, { content, images });
+  const images = replyImages(content, messageKey);
+  cache.set(messageKey, { content, images });
   return images;
 }
 
-/** Gallery entries for one completed reply. */
+/** Gallery entries for one completed reply; `messageKey` is the reply's client id. */
 export function replyGalleryImages(
   content: string,
-  cacheKey: string,
+  messageKey: string,
   scope: string,
   options: ReplyGalleryOptions,
 ): GalleryImage[] {
@@ -109,7 +110,7 @@ export function replyGalleryImages(
     return normalized ? rewriteToRemoteMediaOrigin(normalized, mediaOrigin) : undefined;
   };
   const images: GalleryImage[] = [];
-  for (const { target, section, occurrence } of cachedReplyImages(content, options.cache, cacheKey)) {
+  for (const { target, section, occurrence } of cachedReplyImages(content, options.cache, messageKey)) {
     if (!rendersAsImage(target)) continue;
     const src = address(peekWorkspaceMediaSrc(target, options.workingDir, options.resolveInWorkspace));
     if (!src) continue;

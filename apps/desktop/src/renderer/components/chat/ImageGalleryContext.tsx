@@ -42,8 +42,19 @@ export interface GalleryImage {
 }
 
 export interface GalleryOccurrence {
+  /** Section of a reply (see replySectionId) that renders the image. */
   section: string;
+  /** Which repeat of the destination within that section (0 for the first). */
   index: number;
+}
+
+/**
+ * Identity of one rendered section of a reply: a plain-text part (by its source
+ * offset) or one component node inside a component block. The gallery and the
+ * reply renderer derive it the same way, so identical text in two sections stays apart.
+ */
+export function replySectionId(messageKey: string, partKey: number, nodeId?: string): string {
+  return nodeId === undefined ? `${messageKey}\u0000${partKey}` : `${messageKey}\u0000${partKey}\u0000${nodeId}`;
 }
 
 export interface GalleryWorkspacePath {

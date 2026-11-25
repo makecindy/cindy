@@ -457,6 +457,7 @@ export const AssistantMessage = memo(function AssistantMessage({
               content={displayContent}
               isStreaming={isStreaming}
               streamFadeKey={streamFadeKey}
+              galleryMessageKey={messageClientId}
               localFileRefs={localFileRefs}
               currentSessionId={currentSessionId}
               currentSessionTitle={currentSessionTitle}

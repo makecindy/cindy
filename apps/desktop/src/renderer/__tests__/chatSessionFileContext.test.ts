@@ -486,7 +486,8 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
 
   // PR #12724 review：同一回复里重复出现的图要从点开的那一处开始；查看器里一张还没写出
   // 的相对路径图，文件写到原位置后要重新加载，不能停在失败态。最小失败输入：回复依次
-  // 是 A、B、A，点最后的 A 显示「1 / 3」；`out/c.png` 加载失败后文件出现，失败提示不消失。
+  // 是 A、B、A，点最后的 A 显示「1 / 3」；两个相同的组件图块点第二个显示「1 / 2」；
+  // `out/c.png` 加载失败后文件出现，失败提示不消失。
   it('重复图从点开处开始，查看器里后写出的文件会重新加载', async () => {
     const blob = (char: string) => `cindy-media://blobs/${char.repeat(64)}.png`;
     const [a, b] = ['a', 'b'].map(blob);
@@ -525,12 +526,24 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
                   content,
                   workingDir: '/work',
                   currentSessionId: 'task',
+                  // As AssistantMessage passes the reply's client id.
+                  galleryMessageKey: 'r',
                 }),
               ),
             ),
           }),
         );
       };
+
+      // Two component blocks with the identical image node: same text, different sections.
+      const imageBlock = (src: string) =>
+        '```cindy-ui\n' +
+        JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'pic', kind: 'image', props: { src, alt: 'same' } }) +
+        '\n```';
+      const blocks = mount(`${imageBlock(a)}\n\nbetween\n\n${imageBlock(a)}`);
+      fireEvent.click(screen.getAllByRole('button', { name: 'same' })[1]!);
+      expect(screen.getByText('2 / 2')).toBeTruthy();
+      blocks.unmount();
 
       const first = mount(repeated);
       fireEvent.click(screen.getByRole('button', { name: 'again' }));
