@@ -334,7 +334,7 @@ export class InputHandoffService {
     }
     if (found && 'error' in found) {
       return found.error === 'not_image'
-        ? { ok: false, errorCode: 'NOT_AN_IMAGE', message: 'That file is not a picture Cindy can read (use PNG or JPEG).' }
+        ? { ok: false, errorCode: 'NOT_AN_IMAGE', message: 'That file is not a picture Cindy can read (use PNG, JPEG or WebP).' }
         : { ok: false, errorCode: 'QR_UNREADABLE', message: 'Cindy could not read that picture right now. Tell the owner what is needed instead.' };
     }
     const qr = found ? qrContent(found.text) : null;

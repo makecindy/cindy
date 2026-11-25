@@ -5,17 +5,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter, once } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
-  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, MACHINE_STATUS_CHANNEL, parseMachineStatus,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
+  ORCA_REMOTE_WORKER_CAPS_CHANNEL, MACHINE_STATUS_CHANNEL, parseMachineStatus,
   PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
 import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { createHostDeviceLink, HOST_DISPATCH_PORTS_WHILE_HELD } from './device-link.ts';
+import { createHostSessionHandoff } from './agent/session-handoff.ts';
+import { setSessionOpeningModelAdmission } from '../../desktop/src/main/localDb/sessionOpening.ts';
+import { readChatHistoryMessages } from '../../desktop/src/main/mcp-integrations/remoteChatHistory.ts';
+import { createRemoteSessionHandoff } from '../../desktop/src/main/mcp-integrations/sessionHandoffRemote.ts';
+import { validateRemoteTaskActionReceipt } from '../../desktop/src/main/maker-ipc/remoteTaskActionReceipt.ts';
 import { createHostWorktreeLifecycle } from './agent/worktree-lifecycle.ts';
 import { createHostService } from './service.mjs';
 import { createHostServer } from './server.mjs';
@@ -28,7 +35,7 @@ import { getCurrentDbClientSnapshot, setCurrentDbClient, clearCurrentDbClient } 
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { messageToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { startHostEventBridge } from '../../desktop/src/main/host-delegation.ts';
-import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles } from '../../desktop/src/main/localDb/schema.ts';
+import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles, recentWorkdirs, projectAliases } from '../../desktop/src/main/localDb/schema.ts';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { publishAgentEvent } from './agent/turn-executor.mjs';
 import { createHostContextRecoveryRollover } from './agent/context-recovery-assembly.ts';
@@ -50,11 +57,18 @@ const waitFor = async condition => {
 // relay authenticates synthetic tokens and stamps src; it is NOT official-relay
 // or physical iOS/Android acceptance, and does not make a model call.
 test('headless dispatcher serves multiple clients and enforces owner and per-device revocation', async t => {
+  const previousDeviceName = process.env.CINDY_HOST_DEVICE_NAME;
+  const deviceName = 'Fixture cloud computer';
+  process.env.CINDY_HOST_DEVICE_NAME = `  ${deviceName}  `;
+  t.after(() => {
+    if (previousDeviceName === undefined) delete process.env.CINDY_HOST_DEVICE_NAME;
+    else process.env.CINDY_HOST_DEVICE_NAME = previousDeviceName;
+  });
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-remote-'));
   configureAppDataDir(profile);
   configureHostOwner({ userDataDir: profile, ownerId: 'test-headless-owner' });
   const sqlite = new Database(':memory:');
-  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles]) {
+  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles, recentWorkdirs, projectAliases]) {
     sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
   }
   sqlite.exec(`CREATE TABLE im_bindings (target_session_id TEXT);
@@ -80,6 +94,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   const clients = [];
   let host, hold, release, writes = 0, duplicateNext = false;
+  let hostHello;
   let source;
   // Coexistence plan A: the refusal while a desktop uses the profile (null: not held).
   let held = null;
@@ -104,6 +119,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     socket.on('message', raw => {
       const frame = JSON.parse(raw.toString());
       if (frame.kind === 'hello') {
+        if (id === 'host') hostHello = frame.payload;
         platforms.set(id, frame.payload.platform);
         socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
           serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: 'synthetic-user', capabilities: [],
@@ -169,8 +185,34 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     worktreeCreates.push({ request, options });
     return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
   } };
+  const handoffQueue = [];
+  const handoffProviders = [{
+    id: 'fixture-provider', name: 'Fixture provider', connected: true, source: 'user', agents: ['claude-code'],
+    routing: { 'claude-code': { authStrategy: 'api-key' } },
+    models: { 'claude-code': [{ id: 'fixture-model', name: 'Fixture model', efforts: [] }] },
+  }, {
+    id: 'selected-provider', name: 'Selected provider', connected: true, source: 'user', agents: ['claude-code'],
+    routing: { 'claude-code': { authStrategy: 'api-key' } },
+    models: { 'claude-code': [{ id: 'fixture-model', name: 'Fixture model', efforts: [] }] },
+  }];
+  // Model-service IO is synthetic. The Host adapter still performs repository
+  // model checks, real session opening, SQLite writes and queue admission.
+  setSessionOpeningModelAdmission(async body => body);
   host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
+    sessionHandoff: isSelfDeviceId => createHostSessionHandoff({
+      input: {
+        profileHoldReason: () => held, profileHoldGeneration: () => 0,
+        enqueue: async (id, item, handoff) => {
+          await handoff.taskActionDeliveryGuard();
+          handoffQueue.push({ id, item, handoff });
+        },
+      },
+      worktree: worktreeLifecycle, isSelfDeviceId, readProviders: async () => handoffProviders,
+      agents: () => ['claude-code'], hasCindyAiApiKey: () => false,
+      assertProviderExecutionSupported() {},
+      broadcastCreated: sessionId => hub.publish({ type: 'session_changed', action: 'create', sessionId }),
+    }),
     invoke: service, subscribe: hub.subscribe,
     send: async (sessionId, message, createOpts, sendOpts) => ({ accepted: true, sessionId, message, createOpts, sendOpts }),
     assertRemoteInputControlBoundary: async () => ({ expectedClearBoundaryMs: null, expectedInputGeneration: 0 }),
@@ -591,6 +633,114 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       ['local-db:messages:created', 'other-task'],
     ]);
   });
+  /*
+   * Test value (engineering-conventions §3.2)
+   * Production entry: desktop createRemoteSessionHandoff → real Device Link → Node Host
+   * registry and session opener. Earlier relay tests only covered direct controller
+   * sends and returned CHANNEL_NOT_ALLOWED for a desktop capability probe.
+   * Contract: cross-computer-task-action-receipt.md. Minimal input is that probe;
+   * create, jump, revoked receipt and catalogs each have a different observable result.
+   * Tier: integration, using the existing loopback relay and synthetic owner DB.
+   */
+  await t.test('desktop handoff negotiates catalogs, creates and queues with a live reverse receipt', async () => {
+    const desktop = clients[2];
+    const off = desktop.onFrame(frame => {
+      if (frame.kind === 'link-open') desktop.sendLinkAccept(frame.src, frame.id, {
+        appVersion: 'test', allowlistHash: 'test', capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
+      });
+      if (frame.kind !== 'invoke' || frame.payload.channel !== DL_SESSION_HANDOFF_CHANNEL) return;
+      const [input] = frame.payload.args;
+      assert.equal(input.action, 'validate-task-action');
+      void validateRemoteTaskActionReceipt(frame.src, input).then(valid => {
+        desktop.sendInvokeResult(frame.src, frame.id, {
+          ok: true, result: { valid, ...(input.release ? { released: valid } : {}) },
+        });
+      });
+    });
+    try {
+      const handoff = args => desktop.invoke('host', { channel: DL_SESSION_HANDOFF_CHANNEL, args });
+      const support = await handoff([{ action: 'task-action-capability' }]);
+      assert.equal(support.ok, true, JSON.stringify(support));
+      assert.equal(support.result.ordinaryCreateVersion, 1);
+      assert.equal(support.result.projectCatalogVersion, 1);
+      assert.equal(support.result.taskActionVersion, 1);
+
+      await db.drizzle.insert(recentWorkdirs).values({ path: profile, lastUsedAt: 1 }).run();
+      const projects = await handoff([{ action: 'list-projects', options: { limit: 1 } }]);
+      assert.equal(projects.result?.projects?.[0]?.workingDir, profile, JSON.stringify(projects));
+      const models = await desktop.invoke('host', { channel: ORCA_REMOTE_WORKER_MODELS_CHANNEL, args: [{ agent: 'claude-code' }] });
+      assert.equal(models.result?.claude_code?.[0]?.id, 'fixture-model', JSON.stringify(models));
+      const worker = await desktop.invoke('host', { channel: ORCA_REMOTE_WORKER_CAPS_CHANNEL, args: [] });
+      assert.equal(worker.error?.code, 'CHANNEL_NOT_ALLOWED');
+
+      let lastWrite;
+      const send = createRemoteSessionHandoff({
+        captureAccess: () => () => {},
+        invoke: (_id, channel, args) => {
+          if (args[0].taskActionReceipt) lastWrite = args[0];
+          return desktop.invoke('host', { channel, args });
+        },
+      });
+      const id = randomUUID();
+      const sender = async () => ({ sessionId: 'source-task', title: 'Desktop task' });
+      // Integration regression: when two connected sources serve the same model,
+      // the persisted draft's provider must win over the catalog's default.
+      const draft = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-draft-pref', args: [{
+        agent: 'claude-code', providerId: 'selected-provider', modelId: 'fixture-model',
+        active: true, markModelChoice: true, selectDraftAgent: true,
+      }] });
+      assert.equal(draft.ok, true, JSON.stringify(draft));
+      const create = await send({ deviceId: 'host', sessionId: id }, {
+        sender, message: 'First delegated message',
+        create: async () => ({ permissionMode: 'ask', projectDir: null }),
+      });
+      assert.equal(create.ok, true, JSON.stringify(create));
+      assert.equal(create.wakeKind, 'created');
+      assert.equal(hostHello?.deviceName, deviceName);
+      assert.ok(hostHello?.deviceInfo?.osVersion);
+      const [stored] = await db.drizzle.select().from(sessions).where(eq(sessions.id, id));
+      assert.equal(stored.permissionMode, 'ask');
+      assert.equal(stored.model, 'fixture-model');
+      assert.equal(stored.providerId, 'selected-provider');
+      assert.equal(create.providerId, 'selected-provider');
+      const jump = await send({ deviceId: 'host', sessionId: id }, { sender, message: 'Follow-up message' });
+      assert.equal(jump.wakeKind, 'queued', JSON.stringify(jump));
+      assert.deepEqual(handoffQueue.map(({ id, item, handoff }) => [id, item.text, handoff.origin.senderSessionId]), [
+        [id, 'First delegated message', 'desktop::source-task'], [id, 'Follow-up message', 'desktop::source-task'],
+      ]);
+      // Cross-device history is the read-only recovery path after DELIVERY_UNKNOWN.
+      // Direct renderer history above does not exercise the MCP request, cursors,
+      // or qualified IDs. One production sender read on a stored reply reproduces
+      // the old CHANNEL_NOT_ALLOWED with this same loopback relay (integration tier).
+      await db.drizzle.insert(messages).values([
+        { id: 'handoff-user', sessionId: id, role: 'user', content: JSON.stringify('First delegated message'), createdAt: 10 },
+        { id: 'handoff-reply', sessionId: id, role: 'assistant', content: JSON.stringify('Result from the Host'), createdAt: 10 },
+      ]).run();
+      const readHistory = (sessionId, cursor = null) => readChatHistoryMessages({
+        sessionIds: [`host::${sessionId}`], workdir: null, fromMs: null, toMs: null, agentKind: null,
+        roles: ['user', 'assistant'], includeRewound: false, limit: 1, cursor, order: 'asc',
+      }, {
+        invokeRemote: (deviceId, channel, args) => desktop.invoke(deviceId, { channel, args }),
+        readLocal: () => assert.fail('A qualified ID must not fall back to local history'),
+      });
+      const firstPage = await readHistory(id);
+      assert.equal(firstPage.ok, true, JSON.stringify(firstPage));
+      assert.equal(firstPage.page.hasMore, true);
+      assert.deepEqual(firstPage.page.items.map(row => [row.sessionId, row.role, row.content]),
+        [[`host::${id}`, 'user', 'First delegated message']]);
+      const secondPage = await readHistory(id, firstPage.page.nextCursor);
+      assert.equal(secondPage.ok, true, JSON.stringify(secondPage));
+      assert.equal(secondPage.page.hasMore, false);
+      assert.deepEqual(secondPage.page.items.map(row => [row.sessionId, row.role, row.content]),
+        [[`host::${id}`, 'assistant', 'Result from the Host']]);
+      assert.equal((await readHistory('missing')).errorCode, 'NOT_FOUND');
+
+      await handoffQueue[1].handoff.taskActionDeliveryGuard.onSettled();
+      await assert.rejects(handoffQueue[1].handoff.taskActionDeliveryGuard(), /TASK_ACTION_AUTHORIZATION_EXPIRED/);
+      assert.equal((await handoff([lastWrite])).result?.errorCode, 'UNSUPPORTED_CAPABILITY');
+      assert.equal(handoffQueue.length, 2);
+    } finally { off(); }
+  });
   await host.revoke('ios');
   const denied = await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] }).catch(error => ({ denied: error }));
   assert.ok(denied.denied || denied.ok === false);
@@ -747,7 +897,8 @@ test('Host device-link refuses provider-share guests and the platform features i
   assert.equal(remoteDesktop.error.code, 'IPC_ERROR');
   assert.match(remoteDesktop.error.message, /^\[NOT_SUPPORTED\] requestRemoteDesktop /);
 
-  for (const channel of [REMOTE_AGENT_CHANNEL, MACHINE_STATUS_CHANNEL, 'local-db:sessions:list', 'host:execute-arbitrary']) {
+  for (const channel of [REMOTE_AGENT_CHANNEL, MACHINE_STATUS_CHANNEL, DL_HISTORY_MESSAGES_CHANNEL,
+    'local-db:sessions:list', 'host:execute-arbitrary']) {
     const reply = await guest.invoke(hostKey, { channel, args: [] });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
     assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);

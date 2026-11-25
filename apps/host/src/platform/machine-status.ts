@@ -7,6 +7,10 @@ import { readLocalMachineStatusCore } from '../../../desktop/src/main/machines/l
 const run = promisify(execFile);
 const probe = { timeout: 2_000, maxBuffer: 256 * 1024, env: { LC_ALL: 'C' } };
 
+export function readHostDeviceName(): string {
+  return process.env.CINDY_HOST_DEVICE_NAME?.trim() || `${os.hostname()} · Cindy Host`;
+}
+
 export async function readHostDeviceInfo() {
   let version = os.release();
   if (process.platform === 'darwin') {

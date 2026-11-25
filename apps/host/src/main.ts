@@ -11,7 +11,7 @@ import { clientMigrationContract } from './client-migration-contract.mjs';
 import { runLegacyPluginMigrationPreflight } from './plugins/legacy-approvals.js';
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
 import { createHostPlatformTools } from './platform/tools.js';
-import { readHostMachineStatus } from './platform/machine-status.js';
+import { readHostDeviceName, readHostMachineStatus } from './platform/machine-status.js';
 import { createHostCodexRuntime, createHostSubscriptionFastPolicies } from './agent/codex-runtime.js';
 import type { EngineKind } from '@cindy/maker-core';
 import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
@@ -34,6 +34,7 @@ import { mapMembershipToAuthUser, type User as AccountUser } from '../../desktop
 import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-identity.mjs';
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
+import { createHostSessionHandoff } from './agent/session-handoff.js';
 import { createHostService } from './service.mjs';
 import { holdError } from './agent/profile-hold.js';
 import { createHostRuntimeSession, throwAgentBinaryNotReady, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
@@ -1213,14 +1214,16 @@ const hostProviderGroups = createProviderGroupStore({
 const hostProviderBindings = createProviderGroupBindings(hostProviderGroups);
 // The send path and the Device Link create entry refuse provider group tasks with this one check.
 const assertProviderExecutionSupported = createHostProviderExecutionCheck({ hostProviderBindings, hostProviderGroups });
-const readSessionForRun = async (sessionId: string) => {
+const readSessionForRun = async (sessionId: string, { forHandoff = false } = {}) => {
   const db = getDbClient();
   const rows = await db.drizzle.select().from(sessionTable)
     .where(eq(sessionTable.id, sessionId)).limit(1);
   const row = rows[0];
+  if (forHandoff && (!row || row.status !== 'active' || row.hiddenAt != null || row.source === 'bot')) return null;
   if (!row || row.status !== 'active') throw new Error('session is not active');
   const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
     .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
+  if (forHandoff && botLink) return null;
   const storedKind = requireBuiltinAgentKind(row.agentKind as EngineKind, 'Host task execution');
   const agentKind: 'claude-code' | 'codex' | 'pi' = storedKind === 'codex' ? 'codex' : storedKind === 'pi' ? 'pi' : 'claude-code';
   return {
@@ -2247,7 +2250,7 @@ function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentN
     base: () => base,
     subject: () => accountUser?.id ?? null,
     deviceId: () => currentDeviceId,
-    deviceName: () => process.env.CINDY_HOST_DEVICE_NAME?.trim() || `${os.hostname()} · Cindy Host`,
+    deviceName: readHostDeviceName,
     readSecret: async key => (await credentials()).read(key),
     writeSecret: async (key, value) => { (await credentials()).write(key, value); },
     enroll: (url, body) => serverApi('/api/agent-net/enroll', { baseUrl: url, method: 'POST', body, timeoutMs: 10_000, cache: 'no-store',
@@ -2328,7 +2331,15 @@ function startDeviceLink(): void {
     void worktree.reconcilePendingSafeDirectoryCleanups().catch(error =>
       hostLog.warn('deferred Worktree safe.directory cleanup failed', { error }));
   }
+  const sessionHandoff = (isSelfDeviceId: (id: string) => boolean) => createHostSessionHandoff({
+    input: inputQueue, worktree, isSelfDeviceId, assertProviderExecutionSupported,
+    readProviders: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
+    agents: () => agentGraph?.agents ?? [],
+    hasCindyAiApiKey: () => currentGateway() !== null,
+    broadcastCreated: sessionDraftPorts.emitSessionCreated,
+  });
   deviceLink = createHostDeviceLink({
+    sessionHandoff,
     profileDir, worktree, version: layout.version,
     mcpApps: pluginGateway ?? undefined,
     releaseAuthCaller: caller => agentAuth?.releaseCaller(caller),
