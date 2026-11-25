@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "在新窗口打开"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "本机另一 Cindy 实例正在使用远程连接。关闭它后，本实例会自动接管。",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",

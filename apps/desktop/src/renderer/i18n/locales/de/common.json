@@ -1363,6 +1363,7 @@
     "openPermissionInNewWindow": "In neuem Fenster öffnen"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Eine andere Cindy-Instanz auf diesem Computer verwendet die Remote-Verbindung. Schließe sie, damit diese Instanz automatisch übernimmt.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",

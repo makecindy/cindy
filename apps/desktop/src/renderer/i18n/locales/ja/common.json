@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "新しいウインドウで開く"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "このパソコンの別の Cindy インスタンスがリモート接続を使用しています。それを閉じると、このインスタンスが自動的に引き継ぎます。",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
