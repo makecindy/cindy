@@ -459,6 +459,19 @@ function ImageLightboxContent({
   // index effect 里(挂载首帧由 initialStrokes 承担)。
   const currentItem = galleryItems[index] ?? { src };
   const captionRef = useRef<HTMLParagraphElement>(null);
+  const [captionFooterHeight, setCaptionFooterHeight] = useState(0);
+  const hasCaption = Boolean(currentItem.caption);
+  const imageBottomInset = hasCaption ? Math.max(0, captionFooterHeight + 8 - 80) : 0;
+  useLayoutEffect(() => {
+    const footer = captionRef.current?.closest('footer');
+    if (!hasCaption || !footer) return;
+    const measure = () => setCaptionFooterHeight(footer.offsetHeight);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(footer, { box: 'border-box' });
+    return () => observer.disconnect();
+  }, [hasCaption]);
   // 已确认加载失败(被清理)的未烧录原图:该项退回烧录图 + 空笔迹。
   const [failedAnnotationSources, setFailedAnnotationSources] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -568,7 +581,7 @@ function ImageLightboxContent({
     ? containImageSize(
         { width: currentNaturalSize.w, height: currentNaturalSize.h },
         viewportSize.width - 80,
-        viewportSize.height - 160,
+        viewportSize.height - 160 - imageBottomInset,
       )
     : null;
 
@@ -818,10 +831,9 @@ function ImageLightboxContent({
       }
       const rect = overlay.getBoundingClientRect();
       const point = {
-        // 光标相对 overlay 中心的坐标。图片由 flex 居中,其盒中心与 overlay 中心
-        // 重合,而 transform-origin 是图片中心,所以这就是焦点缩放的参考系。
+        // Use the center of the padded image area as the wheel-zoom origin.
         cx: e.clientX - rect.left - rect.width / 2,
-        cy: e.clientY - rect.top - rect.height / 2,
+        cy: e.clientY - rect.top - (rect.height - imageBottomInset) / 2,
       };
       const next = zoomAtPoint(
         current,
@@ -837,7 +849,7 @@ function ImageLightboxContent({
     };
     overlay.addEventListener('wheel', onWheel, { passive: false });
     return () => overlay.removeEventListener('wheel', onWheel);
-  }, [applyViewport, markWheeling]);
+  }, [applyViewport, imageBottomInset, markWheeling]);
 
   /** 放大状态下开始拖拽平移(适配态没有可平移的范围,不响应)。 */
   function startPan(clientX: number, clientY: number) {
@@ -1506,6 +1518,7 @@ function ImageLightboxContent({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
+        paddingBottom: imageBottomInset || undefined,
         transition: 'opacity 200ms ease',
         opacity: isVisible ? 1 : 0,
         cursor: 'default',
@@ -1629,7 +1642,7 @@ function ImageLightboxContent({
             width: fittedImageSize?.width,
             height: fittedImageSize?.height,
             maxWidth: 'calc(var(--preview-width) - 80px)',
-            maxHeight: 'calc(var(--preview-height) - 160px)',
+            maxHeight: `calc(var(--preview-height) - ${160 + imageBottomInset}px)`,
             objectFit: 'contain',
             userSelect: 'none',
           }}
