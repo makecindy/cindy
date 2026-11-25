@@ -126,6 +126,32 @@ describe('pluginMarketFetchAddress', () => {
     for (const raw of ['https://git.example.test/acme/plugins', 'https://git.example.test/acme/plugins.git/']) {
       expect(pluginMarketRepositoryFromUrl(raw)).toBe('git.example.test/acme/plugins');
     }
+    // PR #12731 maintainer review 6054636680: a `?` or `#` before the first path slash ends the authority for
+    // libcurl and git, but a greedy userinfo match swallowed it and reported another host. The whole string is
+    // rejected before it is split, and so is every other shape on which parsers can disagree.
+    for (const raw of [
+      'https://git.example.test?@evil.example/acme/plugins.git',
+      'https://git.example.test#@evil.example/acme/plugins.git',
+      'https://user@git.example.test@evil.example/acme/plugins.git',
+      'https://a/b@evil.example/acme/plugins.git',
+      'https://@git.example.test/acme/plugins.git',
+      'https://[::1]/acme/plugins.git',
+      'https://git.example.test:abc/acme/plugins.git',
+      'https://git.example.test:0443/acme/plugins.git',
+      'https://git.example.test:70000/acme/plugins.git',
+      'https://git.example.test:/acme/plugins.git',
+      'https://git.example.test//acme/plugins.git',
+      'https://git.example.test/acme//plugins.git',
+      'https://git.example.test./acme/plugins.git',
+      'ssh://-oProxyCommand@git.example.test/acme/plugins.git',
+      'ssh://git@git.example.test:22:23/acme/plugins.git',
+      'git@git.example.test:acme/plugins.git:x',
+      'git@git.example.test:acme//plugins.git',
+      'git@git.example.test:../plugins.git',
+    ]) {
+      expect(pluginMarketFetchAddress(raw), raw).toBeNull();
+      expect(pluginMarketRepositoryFromUrl(raw), raw).toBeNull();
+    }
     // PR #12731 Codex P1: `?…` / `#…` would be cut off by a URL parser while git fetches a different repository
     // (`plugins.git?other` is another path on an SSH server), so such addresses have no endpoint at all.
     for (const suffix of ['?other', '#other']) {

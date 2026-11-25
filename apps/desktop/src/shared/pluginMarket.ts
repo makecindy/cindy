@@ -249,14 +249,21 @@ const SOURCE_IDENTITY_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
 // eslint-disable-next-line no-control-regex
 const SOURCE_IDENTITY_UNSAFE_CHARS = /[\s\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\\%]/;
 /**
- * URL 形式按原始字节拆分（不经 WHATWG URL：它会做 IDNA、去掉默认端口、对不同协议的 host 大小写处理不一），
- * `scheme://[userinfo@]host[:port]/path`。userinfo 与 host 里都不能有 `@`，多个 `@` 时整体不匹配。
+ * 只接受「最无争议的形状」，任何一处可能让 git（libcurl / ssh）与这里认定的主机、端口、路径不同就整体不生成：
+ * - 整串先拒绝 `?` `#` `[` `]`（再加上 SOURCE_IDENTITY_UNSAFE_CHARS 的空白、控制符、`\`、`%`），在拆分之前；
+ * - userinfo 非空、只含 RFC 3986 的 unreserved / sub-delims 与 `:`，不含 `@` `/`；
+ * - host 是严格的 ASCII DNS 名（不收 IPv6 方括号）；端口是不带前导零的十进制；
+ * - 路径各段只含 `A-Za-z0-9._~+-`，没有空段与 `.` / `..` 段，可带一个结尾斜杠。
  */
-const SOURCE_IDENTITY_URL = /^(https?|ssh|git):\/\/(?:([^@/]*)@)?([^@/:]+)(?::([0-9]{1,5}))?(\/.*)$/i;
-/** scp 形式 `user@host:owner/repo`：冒号前不能有 `/`，路径不能以 `/` 开头。 */
-const SOURCE_IDENTITY_SCP = /^([^@/:]+)@([^@/:]+):(?!\/)(.+)$/;
+const SOURCE_IDENTITY_URL_AMBIGUOUS = /[?#[\]]/;
+const SOURCE_IDENTITY_URL =
+  /^(https?|ssh|git):\/\/(?:([A-Za-z0-9._~!$&'()*+,;=:-]+)@)?([A-Za-z0-9.-]+)(?::([1-9][0-9]{0,4}))?((?:\/[A-Za-z0-9._~+-]+)+\/?)$/i;
+const SOURCE_IDENTITY_PATH_DOT_SEGMENT = /(?:^|\/)\.{1,2}(?=\/|$)/;
+const SOURCE_IDENTITY_DEFAULT_PORT: Record<string, string> = { http: '80', https: '443' };
+/** scp 形式 `user@host:owner/repo`：用户、主机、路径都按严格字符集；路径不能以 `/` 开头，没有空段。 */
+const SOURCE_IDENTITY_SCP = /^([A-Za-z0-9._-]+)@([A-Za-z0-9.-]+):([A-Za-z0-9._~+-]+(?:\/[A-Za-z0-9._~+-]+)*\/?)$/;
 /** SSH 登录用户：只进本机 HMAC 输入，字符集限制在常见账户名内，其它一律按无法核实处理。 */
-const SOURCE_IDENTITY_SSH_USER = /^[A-Za-z0-9._-]{1,128}$/;
+const SOURCE_IDENTITY_SSH_USER = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
 
 /** 实际取包地址按白名单取出的部件（不含用户名、密码、令牌、查询串、片段），只用于生成 sourceId。 */
 export interface PluginMarketFetchAddress {
@@ -290,35 +297,68 @@ export interface PluginMarketFetchAddress {
  * - 只接受 `https` / `http` / `ssh` / `git` 与 `user@host:path` 的 scp 形式；
  * - 只读取协议、SSH 登录用户（仅 ssh / scp）、host、端口、路径；https / http / git 的用户名与密码（含
  *   `https://TOKEN@host` 这类单段令牌，例如 `insteadOf` 改写注入的）与任何密码一律不读取；
- * - URL 形式里带 `?` 或 `#` 时不生成：URL 解析器会把它们当成查询串、片段截掉，git 却把它们当成仓库路径
- *   的一部分（ssh / git）或拼进请求（http），截掉会把不同仓库认成同一个；
- * - 含不安全字符、原始 `.` / `..` 路径段、多个 `@`、空路径时不生成。
+ * - 整串含 `?` `#` `[` `]` 时在拆分之前就不生成：URL 解析器会把 `?`/`#` 当成查询串、片段截掉（出现在
+ *   userinfo 一段时还会改变 libcurl 认定的主机），git 却把它们当成仓库路径的一部分（ssh / git）或拼进请求；
+ * - 只接受最无争议的形状（见 SOURCE_IDENTITY_URL / SOURCE_IDENTITY_SCP），并与 WHATWG URL 的解析结果交叉核对，
+ *   任何分歧都不生成；宁可多拒绝（身份缺省，控制端按无法核实处理），不给出可能与实际取包主机不同的身份。
  * 输入按不可信处理（手工改过的配置、git 解析出的改写地址）。结果不写日志。
  */
 export function pluginMarketFetchAddress(value: unknown): PluginMarketFetchAddress | null {
   if (typeof value !== 'string') return null;
   const url = value;
-  if (!url || url.length > 2048 || SOURCE_IDENTITY_UNSAFE_CHARS.test(url)) return null;
+  if (
+    !url ||
+    url.length > 2048 ||
+    SOURCE_IDENTITY_UNSAFE_CHARS.test(url) ||
+    SOURCE_IDENTITY_URL_AMBIGUOUS.test(url)
+  ) {
+    return null;
+  }
   const parsed = SOURCE_IDENTITY_URL.exec(url);
   if (parsed) {
-    const [, rawScheme, userinfo, rawHost, port = '', path] = parsed as unknown as [string, string, string | undefined, string, string | undefined, string];
-    // URL 解析器会把 `?`/`#` 当查询串、片段截掉，git 却当路径的一部分（ssh、git）或拼进请求（http）；`.`/`..` 段
-    // 与空段在不同实现里归一方式不同：一律不生成。
-    if (/[?#]/.test(path) || /\/\.{1,2}(?=\/|$)/.test(path) || /\/\//.test(path) || !/^\/./.test(path)) return null;
+    const [, rawScheme, userinfo, rawHost, port = '', path] =
+      parsed as unknown as [string, string, string | undefined, string, string | undefined, string];
+    if (SOURCE_IDENTITY_PATH_DOT_SEGMENT.test(path) || Number(port || '0') > 65535) return null;
     const host = rawHost.toLowerCase();
     if (host.length > 253 || !SOURCE_IDENTITY_HOST.test(host)) return null;
     const protocol = rawScheme.toLowerCase() as PluginMarketFetchAddress['scheme'];
     // 只有 ssh 的用户名是身份；其它协议的 userinfo 是凭证，不读取。ssh 的 `user:password` 只取用户名。
     const user = protocol === 'ssh' && userinfo ? userinfo.split(':', 1)[0]! : '';
-    if (user && !SOURCE_IDENTITY_SSH_USER.test(user)) return null;
+    if (protocol === 'ssh' && userinfo !== undefined && !SOURCE_IDENTITY_SSH_USER.test(user)) return null;
+    // 交叉核对：与 WHATWG URL 解析的主机、端口、路径、ssh 用户名逐项一致才接受，任何分歧都按无法核实处理。
+    let whatwg: URL;
+    try {
+      whatwg = new URL(url);
+    } catch {
+      return null;
+    }
+    const expectedPort = SOURCE_IDENTITY_DEFAULT_PORT[protocol] === port ? '' : port;
+    if (
+      whatwg.hostname.toLowerCase() !== host ||
+      whatwg.port !== expectedPort ||
+      whatwg.pathname !== path ||
+      (protocol === 'ssh' && whatwg.username !== user)
+    ) {
+      return null;
+    }
     return { scheme: protocol, user, host, port, path };
   }
+  // 带 `://` 却不合上面的严格形状：不能再当 scp 形式解读。
+  if (url.includes('://')) return null;
   const scp = SOURCE_IDENTITY_SCP.exec(url);
   if (!scp) return null;
   const user = scp[1]!;
   const host = scp[2]!.toLowerCase();
-  if (!SOURCE_IDENTITY_SSH_USER.test(user) || host.length > 253 || !SOURCE_IDENTITY_HOST.test(host)) return null;
-  return { scheme: 'scp', user, host, port: '', path: scp[3]! };
+  const path = scp[3]!;
+  if (
+    !SOURCE_IDENTITY_SSH_USER.test(user) ||
+    host.length > 253 ||
+    !SOURCE_IDENTITY_HOST.test(host) ||
+    SOURCE_IDENTITY_PATH_DOT_SEGMENT.test(path)
+  ) {
+    return null;
+  }
+  return { scheme: 'scp', user, host, port: '', path };
 }
 
 /**
