@@ -4,6 +4,8 @@ import path from 'node:path';
 import {
   createOverrideSettingsFile,
   type OverrideSettingsState,
+  type OverrideSettingsMutation,
+  type OverrideSettingsCommitOptions,
 } from './maker-host/override-settings-file.js';
 import { createLogger } from './logger.js';
 import { throwIpcError } from './utils/ipcValidate.js';
@@ -91,7 +93,21 @@ const store = createOverrideSettingsFile<DatabaseSizeWarningSettings>({
   normalize,
   log,
   label: 'database-size-warning',
+  // Cloud settings commits only (inspect / commitAtomic); their caller checks the owner on each
+  // step, so ordinary writes are unchanged, without a store-wide scope.
+  validateOverrides: (raw) => {
+    if (Object.keys(raw).length === 0) return;
+    if (Object.keys(raw).some((key) => key !== 'thresholdGiB' && key !== 'disabled')
+      || 'error' in parseDatabaseSizeWarningSettingsPatch(raw)) throw new Error('invalid database warning settings');
+  },
 });
+
+export const inspectDatabaseSizeWarningSettings = store.inspect;
+export const onDatabaseSizeWarningSettingsChanged = store.onChanged;
+export function commitDatabaseSizeWarningSettings(
+  mutation: OverrideSettingsMutation<DatabaseSizeWarningSettings>,
+  options?: OverrideSettingsCommitOptions,
+) { return store.commitAtomic(mutation, options); }
 
 export function readDatabaseSizeWarningSettings(): DatabaseSizeWarningSettings {
   store.invalidateIfChanged();

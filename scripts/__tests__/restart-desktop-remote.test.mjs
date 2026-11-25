@@ -2059,3 +2059,13 @@ test('isolated preview refuses a shared instance in its checkout before stopping
  assert.throws(()=>assertNoRestartTargets(dev,root,[root]),/occupied checkout/);
  assert.doesNotThrow(()=>assertNoRestartTargets(processes,'/tmp/another-candidate',[root,'/tmp/another-candidate']));
 });
+
+// An ambiguous endpoint source must not stop the currently running dev client.
+test("desktop restart rejects conflicting private endpoint flags before process control", () => {
+  const steps = [];
+  assert.throws(() => runDesktopRestart(
+    ["--region=cn", "--endpoints-file=/private/cloud test/endpoint.json", "--endpoints-cdn"],
+    "/repo/cindy", (step) => steps.push(step), () => {},
+  ), /cannot be combined/);
+  assert.deepEqual(steps, []);
+});

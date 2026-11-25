@@ -69,7 +69,7 @@ const MOTION_LITERAL_DEBT: Record<string, number> = {
   'components/settings/ComputerPermissionGuideWindow.tsx': 2,
   'components/settings/ComputerUseSection.tsx': 1,
   'components/settings/RelayServicePanel.tsx': 1,
-  'components/settings/SettingsView.tsx': 1,
+  'components/settings/SettingsSidebar.tsx': 1,
   'components/settings/UnifiedModelList.tsx': 2,
   'components/settings/VoiceSpeakerEnrollmentDialog.tsx': 1,
   'components/sidebar/GhostMainViewNavEntries.tsx': 1,
