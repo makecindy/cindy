@@ -17,7 +17,7 @@ import { kimiSource } from './collect.js';
  * while, marked with when it was seen, instead of disappearing: `retainRemoteSubscriptions`.
  */
 
-import { parseGhostHarnessUsage } from '@cindy/plugin-protocol';
+import { isGhostHarnessAccountPlan, parseGhostHarnessUsage } from '@cindy/plugin-protocol';
 import type { ProviderView } from '@cindy/model-providers';
 import type { ClaudeSubscriptionUsageSnapshot, XaiSubscriptionUsageSnapshot } from '@cindy/maker-shared/subscription-usage';
 import { parseOpenCodeGoAccountUsageResult } from '../../shared/providerAccountUsage.js';
@@ -208,15 +208,17 @@ async function readDevice(
       pluginEngines.map(async (engine): Promise<MenubarSubscriptionInput | null> => {
         const key = `remote:${device.id}:${engine.providerId}`;
         try {
-          const response = await deps.invoke(device.id, PLUGIN_ENGINES_INVOKE.USAGE, [engine.key]);
+          const response = await deps.invoke(device.id, PLUGIN_ENGINES_INVOKE.USAGE, [engine.key, { includePlan: true }]);
           if (!response.ok) {
             if (response.error.code === 'CHANNEL_NOT_ALLOWED') return null;
             throw Object.assign(new Error(response.error.message), { code: response.error.code });
           }
-          const usage = parseGhostHarnessUsage(response.result);
+          const raw = response.result;
+          const usage = parseGhostHarnessUsage(raw);
           if (!usage) return null;
+          const plan = isRecord(raw) && isGhostHarnessAccountPlan(raw.plan) ? raw.plan : null;
           return {
-            ...pluginEngineSource(engine, usage, deps.nowMs, device.id),
+            ...pluginEngineSource(engine, usage, deps.nowMs, device.id, plan),
             id: key,
             device,
           };

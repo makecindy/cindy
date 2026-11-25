@@ -858,6 +858,7 @@ describe('plugin engine quota collection', () => {
       nowMs: NOW,
       listProviders: async () => [],
       listPluginEngines: () => [dsh, gemini, silent, suspended],
+      readCachedPluginEngineDefaultPlan: (key) => key === dsh.key ? 'Google AI Ultra' : null,
       readPluginEngineUsage: async (key) => {
         if (key === 'dsh:dsh') {
           return {
@@ -891,6 +892,7 @@ describe('plugin engine quota collection', () => {
       kind: 'subscription',
       family: 'plugin',
       brand: 'DeepSeek Harness',
+      plan: 'Google AI Ultra',
       consuming: true,
       windows: [
         { kind: 'custom', label: 'Weekly', usedPercent: 28, resetsAtMs: NOW + 86_400_000, windowMinutes: 10_080 },
@@ -902,6 +904,7 @@ describe('plugin engine quota collection', () => {
       kind: 'subscription',
       family: 'plugin',
       brand: 'Gemini CLI',
+      plan: null,
       windows: [],
       balances: [{ currency: 'USD', amount: 9.25 }],
     });
@@ -939,7 +942,7 @@ describe('plugin engine quota collection', () => {
       'remote:desk-2:acp-plugin:c:eng',
     ]);
 
-    const read = await readRemoteSubscriptions({
+    const readPeer = (plan?: string) => readRemoteSubscriptions({
       nowMs: NOW,
       listDevices: async () => ({
         devices: [{
@@ -959,20 +962,29 @@ describe('plugin engine quota collection', () => {
           };
         }
         if (channel === 'maker:get-plugin-engine-usage' && args[0] === 'dsh:dsh') {
-          return { ok: true, result: { updatedAt: NOW, windows: [{ label: 'Pro', remainingPercent: 60, resetsAt: NOW + 7200_000 }] } };
+          expect(args[1]).toEqual({ includePlan: true });
+          return { ok: true, result: { updatedAt: NOW, ...(plan === undefined ? {} : { plan }), windows: [{ label: 'Pro', remainingPercent: 60, resetsAt: NOW + 7200_000 }] } };
         }
         return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } };
       },
     } as RemoteSubscriptionDeps);
 
+    const read = await readPeer('Work Pro');
     expect(read.sources).toHaveLength(1);
     expect(read.sources[0]).toMatchObject({
       id: 'remote:desk-2:acp-plugin:dsh:dsh',
       family: 'plugin',
       brand: 'DeepSeek Harness',
+      plan: 'Work Pro',
       device: { id: 'desk-2', name: 'Office Mac' },
       windows: [{ kind: 'custom', label: 'Pro', usedPercent: 40 }],
     });
+
+    // Older hosts omit the plan. A malformed remote plan must likewise leave its valid usage intact.
+    for (const plan of [undefined, 'a'.repeat(65)]) {
+      const fallback = await readPeer(plan);
+      expect(fallback.sources[0]).toEqual({ ...read.sources[0], plan: null });
+    }
 
     // Regression (#12247 review): transient plugin-list failure must retain previously seen remote
     // plugin quota and mark the read incomplete instead of treating the error as an empty list.

@@ -1630,6 +1630,9 @@
       "full": "가득 찼어요.",
       "relaxed": "속도에 여유가 있어요.",
       "onPace": "속도가 적당해요.",
+      "tightest": "{{window}} 구간의 잔여량이 가장 적어요. ",
+      "refillsAt": "{{at}}에 다시 가득 차요.",
+      "tightestRefills": "{{window}} 구간은 {{at}}에 다시 가득 차요.",
       "windowRefresh": "{{window}} 구간은 {{at}}에 갱신",
       "usedUpWithResets_other": "초기화를 {{n}}회 더 쓸 수 있어요. 쓰면 바로 다시 채워져요."
     },

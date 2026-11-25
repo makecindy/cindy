@@ -236,6 +236,13 @@ export function displayIdentity(status: GhostHarnessAccountStatus | null | undef
   return status?.identity?.email ?? status?.identity?.name ?? status?.identity?.detail;
 }
 
+/** The engine-level usage reader uses the original login (no account directory). */
+export function readCachedPluginEngineDefaultPlan(engineKey: string): string | null {
+  if (!runtime || runtime.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return null;
+  const status = runtime.status.get(accountKey(engineKey, 'default'))?.status;
+  return status?.state === 'signed-in' ? status.plan ?? null : null;
+}
+
 async function readStatus(
   state: RuntimeState,
   ref: { engineKey: string; ghostId: string; harnessId: string },

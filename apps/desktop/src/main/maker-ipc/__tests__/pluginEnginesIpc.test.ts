@@ -39,7 +39,7 @@ vi.mock('../../ownerContext.js', () => ({
 vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
   getPluginHarnessRegistry: () => ({ list: () => host.harnesses, onChange: () => () => {} }),
   requestPluginHarnessRefresh: () => {},
-  readPluginHarnessUsage: () => null,
+  readPluginHarnessUsage: vi.fn(async () => null),
 }));
 vi.mock('../../maker-host/acp-host.js', () => ({
   getCachedPluginHarnessModels: () => [],
@@ -75,6 +75,7 @@ import {
   pluginEngineRemoteUse,
   setPluginEngineRemoteUse,
 } from '../../maker-host/pluginEngineRemoteUse.js';
+import { readPluginHarnessUsage } from '../../cindy-brain/pluginHarnesses.js';
 import { pluginEngineDescriptors, pluginEngineSettingsOf, registerPluginEnginesIpc } from '../pluginEnginesIpc.js';
 
 const KEY = '_ns__local__dsh-acp:dsh';
@@ -349,6 +350,7 @@ describe('plugin engines with accounts', () => {
       settings: { read: readPluginEnginePrefs, update: updatePluginEnginePrefs, onChange: onPluginEnginePrefsChanged },
       accountProviders: { list: () => [{ suffix: 'ab12cd34', identity: 'b@example.com' }], onChange: () => () => {} },
       readTaskUsage,
+      readCachedPluginEngineDefaultPlan: (key) => key === KEY ? 'Original plan' : null,
     }));
     await setPluginEngineRemoteUse(KEY, true);
     const list = () => handlers.get(PLUGIN_ENGINES_INVOKE.LIST)!({}) as PluginEngineView[];
@@ -385,5 +387,12 @@ describe('plugin engines with accounts', () => {
     deviceLink = false;
     expect(await usage({}, KEY)).toBeNull();
     expect(readTaskUsage).toHaveBeenCalledTimes(2);
+
+    // Only a peer explicitly requesting the original account's plan gets it alongside normal usage.
+    const reported = { updatedAt: 1, balances: [{ currency: 'CNY', amount: '1.00' }] };
+    vi.mocked(readPluginHarnessUsage).mockResolvedValueOnce(reported).mockResolvedValueOnce(reported);
+    deviceLink = true;
+    expect(await usage({}, KEY)).toEqual(reported);
+    expect(await usage({}, KEY, { includePlan: true })).toEqual({ ...reported, plan: 'Original plan' });
   });
 });

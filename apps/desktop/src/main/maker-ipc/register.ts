@@ -13,7 +13,7 @@ import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot, schedulerFailu
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
 import { canSwitchPluginEngineTaskAccount, preparePluginEngineAccountForSend } from '../plugin-engine-accounts/failover.js';
-import { listPluginEngineSeparateProviders, onPluginEngineAccountsChanged, readPluginEngineTaskUsage } from '../plugin-engine-accounts/runtime.js';
+import { listPluginEngineSeparateProviders, onPluginEngineAccountsChanged, readCachedPluginEngineDefaultPlan, readPluginEngineTaskUsage } from '../plugin-engine-accounts/runtime.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { prepareRestoredOrcaReportAcceptance } from '../maker-host/index.js';
 import { createSessionControlRuntimeWriter } from './sessionControlRuntimeWriter.js';
@@ -6905,6 +6905,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       onChange: onPluginEnginePrefsChanged,
     },
     readTaskUsage: readPluginEngineTaskUsage,
+    readCachedPluginEngineDefaultPlan,
     // Providers taken out of plugin engines (subscription-account-pools.md 插件引擎的账号).
     accountProviders: {
       list: listPluginEngineSeparateProviders,

@@ -96,6 +96,7 @@ export interface MenubarCollectDeps {
   listPluginEngines?(): Promise<readonly PluginEngineView[]> | readonly PluginEngineView[];
   /** Reads one plugin engine's current account usage; null when unreadable or empty. */
   readPluginEngineUsage?(key: string): Promise<GhostHarnessUsage | null>;
+  readCachedPluginEngineDefaultPlan?(key: string): string | null;
   /** Subscriptions on the user's other computers, already read and mapped. */
   readRemoteSubscriptions?(): Promise<MenubarSubscriptionInput[]>;
   /** Null when the account has no Cindy balance (organization accounts, signed out). */
@@ -198,7 +199,7 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
         if (engine.suspended || engine.availability.state === 'unavailable' || engine.reportsUsage !== true) return null;
         const usage = await safe(`plugin:${engine.key}`, () => deps.readPluginEngineUsage!(engine.key), null);
         if (!usage) return null;
-        return pluginEngineSource(engine, usage, deps.nowMs);
+        return pluginEngineSource(engine, usage, deps.nowMs, 'local', deps.readCachedPluginEngineDefaultPlan?.(engine.key));
       })
     : [];
   for (const source of [...(await Promise.all(subscriptionReads)).flat(), ...(await Promise.all(pluginEngineReads))]) {
@@ -936,6 +937,7 @@ export function pluginEngineSource(
   usage: GhostHarnessUsage | null,
   nowMs: number,
   scopeKey = 'local',
+  plan: string | null = null,
 ): MenubarSubscriptionInput {
   const windows: MenubarWindowInput[] = (usage?.windows ?? [])
     .filter((row) => row.resetsAt === undefined || row.resetsAt > nowMs)
@@ -958,7 +960,7 @@ export function pluginEngineSource(
     logoSvg: engine.ghostId === 'agy-acp' ? ANTIGRAVITY_LOGO : monogramLogo(engine.name),
     brand: engine.name,
     account: null,
-    plan: null,
+    plan,
     windows,
     ...(balances.length > 0 ? { balances } : {}),
     credits: null,

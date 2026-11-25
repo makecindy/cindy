@@ -336,6 +336,7 @@ export interface RegisterPluginEnginesIpcOpts {
    * no account yet (or the engine keeps none). Absent = every read is the engine's original login.
    */
   readTaskUsage?(key: string, sessionId: string, options: { fallbackToOriginal: boolean }): Promise<unknown>;
+  readCachedPluginEngineDefaultPlan?(key: string): string | null;
   isCurrentOwner?(stamp: DataOwnerPushStamp): boolean;
 }
 
@@ -382,7 +383,7 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     }
     requestPluginHarnessRefresh(Date.now(), targetGhostId);
   });
-  opts.handle(PLUGIN_ENGINES_INVOKE.USAGE, (event, key, task) => {
+  opts.handle(PLUGIN_ENGINES_INVOKE.USAGE, async (event, key, task) => {
     const isRemote = remote();
     if (!isRemote) opts.assertTrusted(event);
     if (typeof key !== 'string') return null;
@@ -394,7 +395,11 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
       const engine = getPluginHarnessRegistry().list().find((item) => item.key === key.replace(/~[a-z0-9]{8}$/, ''));
       if (engine?.accounts?.methods.length) return opts.readTaskUsage(key, sessionId, { fallbackToOriginal: isRemote });
     }
-    return readPluginHarnessUsage(key, undefined, { reportWorkerFailure: isRemote });
+    const includePlan = isRemote && task && typeof task === 'object' && 'includePlan' in task && task.includePlan === true
+      && sessionId === undefined;
+    const plan = includePlan ? opts.readCachedPluginEngineDefaultPlan?.(key) : null;
+    const usage = await readPluginHarnessUsage(key, undefined, { reportWorkerFailure: isRemote });
+    return usage && plan ? { ...usage, plan } : usage;
   });
   // Opening this computer to the owner's other computers is decided at this computer only.
   opts.handle(PLUGIN_ENGINES_INVOKE.SET_REMOTE_USE, async (event, input) => {

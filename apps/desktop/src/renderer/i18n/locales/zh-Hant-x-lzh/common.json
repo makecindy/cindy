@@ -1630,6 +1630,9 @@
       "full": "盈矣。",
       "relaxed": "步調從容。",
       "onPace": "步調如常。",
+      "tightest": "{{window}}所餘最少，",
+      "refillsAt": "{{at}} 復滿。",
+      "tightestRefills": "{{window}} {{at}} 復滿。",
       "windowRefresh": "{{window}}之期，{{at}}更新",
       "usedUpWithResets_other": "尚有 {{n}} 次限額重置可用，用之即刻回滿。"
     },

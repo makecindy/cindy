@@ -29,16 +29,17 @@ import {
  *   实测耗时：< 2s。
  */
 const h = vi.hoisted(() => ({
+  ownerScope: 'owner-a:1',
   root: '',
   files: new Map<string, unknown>(),
   cooling: {} as Record<string, Record<string, unknown>>,
-  status: new Map<string, { state: 'signed-in' | 'signed-out'; identity?: { email?: string }; fingerprint?: string; models?: string[] }>(),
+  status: new Map<string, { state: 'signed-in' | 'signed-out'; identity?: { email?: string }; plan?: string; fingerprint?: string; models?: string[] }>(),
   login: vi.fn(),
   harnesses: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('../../appSessionState.js', () => ({
-  activeOwnerScopeKey: () => 'owner-a:1',
+  activeOwnerScopeKey: () => h.ownerScope,
   isAppSessionBoundaryPending: () => false,
   getActiveAppSession: () => ({ dataOwnerId: 'owner-a' }),
   ownerScopedUserDataPath: (...parts: string[]) => path.join(h.root, ...parts),
@@ -77,7 +78,7 @@ vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
   cancelPluginHarnessAccountLogin: async () => undefined,
 }));
 
-const { acquirePluginEngineAccount, runPluginEngineAccountCommand, resetPluginEngineAccountsRuntimeForTests } =
+const { acquirePluginEngineAccount, readCachedPluginEngineDefaultPlan, runPluginEngineAccountCommand, resetPluginEngineAccountsRuntimeForTests } =
   await import('../runtime.js');
 const { withPluginEngineAccounts } = await import('../agent.js');
 const { preparePluginEngineAccountForSend } = await import('../failover.js');
@@ -95,6 +96,7 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
+  h.ownerScope = 'owner-a:1';
   if (!h.root) h.root = mkdtempSync(path.join(tmpdir(), 'plugin-engine-accounts-'));
   h.files.clear();
   h.cooling = {};
@@ -113,6 +115,20 @@ beforeEach(async () => {
 });
 
 describe('plugin engine account pool', () => {
+  // #12709: the menu bar reads the original login's cached plan, without querying an account.
+  // The settings read fills the real cache; another engine or a switch of Cindy owner must miss it.
+  it('only shows a cached plan for the original account and current owner', async () => {
+    h.status.set('default', { state: 'signed-in', plan: 'Original plan' });
+    h.status.set(A, { state: 'signed-in', plan: 'Other account plan' });
+    expect(readCachedPluginEngineDefaultPlan(ENGINE)).toBeNull();
+    await runPluginEngineAccountCommand({ action: 'read', providerId: PROVIDER });
+    h.status.clear();
+    expect(readCachedPluginEngineDefaultPlan(ENGINE)).toBe('Original plan');
+    expect(readCachedPluginEngineDefaultPlan('other:engine')).toBeNull();
+    h.ownerScope = 'owner-b:2';
+    expect(readCachedPluginEngineDefaultPlan(ENGINE)).toBeNull();
+  });
+
   it('spreads new tasks over signed-in accounts, keeps a bound task on its account and stops at the limit', async () => {
     const first = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t1']);
     const second = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t2']);
