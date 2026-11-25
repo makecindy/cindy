@@ -42,7 +42,7 @@ import {
 import { app, powerMonitor } from 'electron';
 import { requireAppCapability } from '../appCapabilities.js';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
-import { readUsageDeviceRows } from '../usage/usageDeviceRows.js';
+import { createUsageTaskDeltaCache, readUsageDeviceRows } from '../usage/usageDeviceRows.js';
 import {
   configurePeerUsageSync,
   peerUsageCacheFilePath,
@@ -410,6 +410,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
   app.once('will-quit', () => { clearInterval(timer); unobserve(); unobservePool(); powerMonitor.removeListener('resume', checkEnabled); });
   checkEnabled();
 
+  const usageTaskDeltaCache = createUsageTaskDeltaCache();
   setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
   registerMakerUsageHandlers(cloudManagementProviderRegistry(createElectronIpcHandlerRegistry()), {
     readAgentTodayUsage,
@@ -466,6 +467,8 @@ export function registerMakerUsageIpc(maker: Maker): void {
             return new Set(ids.filter((id) => (access.get(id) ?? 'hidden') !== 'hidden'));
           },
           todayKey: () => localDayKey(),
+          taskDeltaCache: usageTaskDeltaCache,
+          scopeKey: activeOwnerScopeKey,
         },
         request,
       ),
