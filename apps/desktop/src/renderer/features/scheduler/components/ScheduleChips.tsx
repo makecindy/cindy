@@ -1314,6 +1314,10 @@ export function ThreadPickerInline({ value, onSelect, onOpen, reference }: {
     };
   }, []);
 
+  const titlesById = useMemo(
+    () => new Map(sessions.map((session) => [session.id, session.title.trim()])),
+    [sessions],
+  );
   const hasRealValue = !!value && value !== PENDING_SESSION_ID;
   const referenceUnavailable =
     reference?.state === 'deleted' || reference?.state === 'missing';
@@ -1355,11 +1359,15 @@ export function ThreadPickerInline({ value, onSelect, onOpen, reference }: {
                     })}
               </option>
             )}
-            {sessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title} · {s.agentKind === 'cc' ? 'Claude Code' : s.agentKind === 'pi' ? 'Pi' : 'Codex'}
-              </option>
-            ))}
+            {sessions.map((s) => {
+              const leadTitle = s.orcaLeadSessionId ? titlesById.get(s.orcaLeadSessionId) : undefined;
+              const engine = s.agentKind === 'cc' ? 'Claude Code' : s.agentKind === 'pi' ? 'Pi' : 'Codex';
+              return (
+                <option key={s.id} value={s.id}>
+                  {s.title} · {engine}{leadTitle && ` · ${leadTitle}`}
+                </option>
+              );
+            })}
           </select>
           {onOpen && hasRealValue && !referenceUnavailable && (
             <Button
