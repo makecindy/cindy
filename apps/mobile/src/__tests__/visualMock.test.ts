@@ -73,8 +73,8 @@ it('supplies valid demo plugin projections and confirms enable/disable through t
   const link = mock.createVisualMockDeviceLinkContext();
   const host = { deviceId: mock.VISUAL_MOCK_DEVICE_ID, deviceName: mock.VISUAL_MOCK_DEVICE_NAME };
   const items = normalizeRemoteCollectionItems(await listRemoteCollection(link.invoke, host, PLUGIN_COLLECTION), PLUGIN_COLLECTION);
-  // 28 teammate/demo plugins plus the four market demos pre-installed at an older version (update consent).
-  expect(items).toHaveLength(32);
+  // 28 teammate/demo plugins plus the five market demos pre-installed at an older version (update consent).
+  expect(items).toHaveLength(33);
   expect(items.filter(item => item.display.badges?.length)).toHaveLength(2);
   const ref = items[0].ref;
   await invokePlugin(link.invoke, host.deviceId, ref.id, 'disable');
@@ -425,6 +425,10 @@ it('serves the market demo consents in the Host shape, including updates that ad
   const vaultSummary = pluginConsentPresentation(vaultConsent, (key: string) => key).highRisk!;
   expect(vaultSummary.lines).toEqual(['plugins.management.permissions.nodeResident', 'plugins.management.permissions.nodeSecretCount',
     'plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
+  // The same extreme case as an update: only added items, all five classes and 4 × 16 methods.
+  const vaultUpgrade = (await consentOf('demo-market/demo-vault-upgrade', '_root__demo-vault-upgrade')).consent;
+  expect(vaultUpgrade.facts).toMatchObject({ kind: 'update', previousVersion: '1.3.0' });
+  expect(pluginConsentPresentation(vaultUpgrade, (key: string) => key).highRisk!.lines).toEqual(vaultSummary.lines);
   const reading = await consentOf('demo-market/demo-reading-list', '_root__demo-reading-list');
   expect(keys((reading.consent.facts as any).added)).toEqual(['notify']);
   // Allowing the update commits the new version on the mock computer.

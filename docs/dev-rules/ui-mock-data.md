@@ -134,8 +134,9 @@ pnpm mobile:sim:whoami -- --mock --json
   可正常安装，有高风险，确认面板显示仓库 github.com/demo-org/demo-git-market）、Demo Auto Agent（官方，没有 Node，但有后台 Agent 与派活取件两项高风险）、
   Demo Vault Bridge（官方，五类高风险同时出现：Node 常驻、4 个凭证绑定（每个 16 个方法，摘要合成一行）、运行 Node 程序、后台 Agent、派活取件，用来看高风险摘要的高度上限和滚动区里的完整方法列表）、
   Demo Legacy Tools（Demo Legacy Market，模拟不提供仓库身份的旧 Host：行内与详情的「安装」不可点并说明原因）。已安装列表里预置
-  Demo Weather Board、Demo Secret Sync、Demo Reading List 与 Demo Legacy Sync 的 1.3.0，详情里「管理插件 → 更新」会出现升级确认：
-  Weather Board 新增运行 Node 程序、Secret Sync 已有 Node 只新增凭证绑定（两者都显示高风险固定段）、Reading List 只新增通知
+  Demo Weather Board、Demo Secret Sync、Demo Vault Upgrade、Demo Reading List 与 Demo Legacy Sync 的 1.3.0，详情里「管理插件 → 更新」会出现升级确认：
+  Weather Board 新增运行 Node 程序、Secret Sync 已有 Node 只新增凭证绑定（两者都显示高风险固定段）、Vault Upgrade 是升级版的极端情况（新增五类高风险、
+  4 个凭证绑定 × 16 个方法）、Reading List 只新增通知
   （没有固定段）、Legacy Sync 来自旧 Host 的自定义市场（仓库行显示核实路径，「允许」照常可点）。
   整页状态用 `cindy://plugins?market=<场景>`：`outdated`（电脑版本太旧）、`unavailable`、
   `organization`、`customPartial`、`empty`、`readFailed`（首次读取失败，重试恢复）、`twoComputers`（多一台在线的

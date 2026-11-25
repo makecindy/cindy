@@ -116,6 +116,13 @@ const DEMOS: DemoPlugin[] = [
     description: "Bridge several saved tokens into a bundled Node program. Shows every high-risk class and the largest permission list.",
     tools: ["demo_vault_sync"],
     permissions: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand, network("vault.example.com")] },
+  // The same extreme case as an update: an approved plugin whose update adds every high-risk class at once.
+  { ghostId: "demo-vault-upgrade", name: "Demo Vault Upgrade", publisher: "official", author: "Cindy",
+    description: "Installed at an older version. Its update adds every high-risk class and the largest permission list.",
+    tools: ["demo_vault_upgrade"],
+    permissions: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand, network("vault.example.com")],
+    installedVersion: "1.3.0",
+    update: { added: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand], removed: [], unchangedCount: 1 } },
   // A first install without Node that still asks for Agent high-risk permissions (pinned).
   { ghostId: "demo-auto-agent", name: "Demo Auto Agent", publisher: "official", author: "Cindy",
     description: "Start Agent work in the background and hand errands to an Agent.", tools: ["demo_start_errand"],
