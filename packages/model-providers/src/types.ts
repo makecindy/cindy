@@ -210,6 +210,8 @@ export interface RoutingDescriptor {
    * 缺省按 false 处理；它与模型图片输入能力独立，也不得从模型名推断。
    */
   supportsImageGeneration?: boolean;
+  /** Local confirmation that this OpenAI API connection can use the Ultrafast tier. */
+  openAiApiUltrafastConfirmed?: boolean;
   /** Explicit standalone image API; independent of chat wire and Codex hosted tools. */
   imageApi?: "openai-images";
   /** Explicit standalone async video API, independent of the chat protocol. */
@@ -860,6 +862,8 @@ export interface CustomProviderRuntimeConfig {
   requestPath?: string;
   /** Codex Responses runtime 是否支持原生图片生成与编辑；缺省为 false。 */
   supportsImageGeneration?: boolean;
+  /** Local confirmation for the current Codex API connection, cleared on credential changes. */
+  openAiApiUltrafastConfirmed?: boolean;
   /** Opt-in to standalone OpenAI Images generation/edits on this runtime's connection. */
   imageApi?: "openai-images";
   videoApi?: ProviderVideoApi;

@@ -490,6 +490,9 @@ export function buildUserProvider(
       rt.piCatalogProviderId,
       rt.supportsImageGeneration,
     );
+    if (agent === "codex" && !native && !isOAuth && rt.openAiApiUltrafastConfirmed === true) {
+      routing[agent]!.openAiApiUltrafastConfirmed = true;
+    }
     if (rt.imageApi === "openai-images") routing[agent]!.imageApi = rt.imageApi;
     if (isProviderVideoApi(rt.videoApi)) routing[agent]!.videoApi = rt.videoApi;
     const followsPreset =

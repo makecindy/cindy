@@ -140,6 +140,9 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
       ...(agent === 'codex' && routing?.supportsImageGeneration === true
         ? { supportsImageGeneration: true }
         : {}),
+      ...(agent === 'codex' && routing?.openAiApiUltrafastConfirmed === true
+        ? { openAiApiUltrafastConfirmed: true }
+        : {}),
       ...(routing?.imageApi ? { imageApi: routing.imageApi } : {}),
       ...(routing?.videoApi ? { videoApi: routing.videoApi } : {}),
       models: models.map((model) => customProviderModelConfigFromCatalogModel(model, agent)),

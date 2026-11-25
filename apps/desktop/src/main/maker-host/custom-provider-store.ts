@@ -225,6 +225,10 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (r.requestPath !== undefined && !isProviderRequestPath(r.requestPath)) {
     return invalid(`runtime '${agent}' requestPath invalid`);
   }
+  if (r.openAiApiUltrafastConfirmed !== undefined &&
+      (agent !== 'codex' || typeof r.openAiApiUltrafastConfirmed !== 'boolean')) {
+    return invalid(`runtime '${agent}' openAiApiUltrafastConfirmed requires a Codex boolean`);
+  }
   if (r.supportsImageGeneration !== undefined && typeof r.supportsImageGeneration !== 'boolean') {
     return invalid(`runtime '${agent}' supportsImageGeneration must be a boolean`);
   }
@@ -651,6 +655,9 @@ function normalizeRuntime(
     ...(rt.catalogPresetId ? { catalogPresetId: rt.catalogPresetId } : {}),
   };
   if (rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
+  if (agent === 'codex' && rt.openAiApiUltrafastConfirmed === true) {
+    out.openAiApiUltrafastConfirmed = true;
+  }
   if (agent === 'codex' && rt.supportsImageGeneration === true) {
     out.supportsImageGeneration = true;
   }
@@ -734,6 +741,7 @@ function invalidateEditedProviderMetadata(
       JSON.stringify([runtime.baseUrl, runtime.modelsUrl, runtime.headers, runtime.wireProtocol, runtime.requestPath,
         auth?.method === 'apiKey' || !auth ? null : auth]);
     if (context(before, previous.auth) !== context(after, next.auth)) {
+      delete after.openAiApiUltrafastConfirmed;
       // A different endpoint is a different catalog: drop source receipts and the
       // #11298 upstream-listing marker so its absences are never offered as withdrawals.
       after.models = after.models.map(({ discoveredSource: _source, listedUpstream: _listed, missingUpstream: _missing, ...model }) => model);
@@ -950,6 +958,9 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       // 历史持久化记录时把旧语义物化，避免运行时重新猜测或按供应商穷举兼容。
       entry.wireProtocol = 'openai-chat';
     }
+    if (agent === 'codex' && r.openAiApiUltrafastConfirmed === true) {
+      entry.openAiApiUltrafastConfirmed = true;
+    }
     if (agent === 'codex' && r.supportsImageGeneration === true) {
       entry.supportsImageGeneration = true;
     }
@@ -1019,6 +1030,8 @@ export async function createCustomProvider(
   now: number = Date.now(),
 ): Promise<CustomProviderConfig> {
   const c = normalizeConfig(config);
+  // Imported/new connections must confirm their own project in Settings.
+  if (c.runtimes.codex) delete c.runtimes.codex.openAiApiUltrafastConfirmed;
   const db = getDbClient().drizzle;
   const rows = await db.select({ sortOrder: customProviders.sortOrder }).from(customProviders);
   const nextOrder = rows.reduce((max, r) => Math.max(max, r.sortOrder), -1) + 1;

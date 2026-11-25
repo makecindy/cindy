@@ -1878,6 +1878,40 @@ describe('provider:custom:* CRUD handlers', () => {
     }
   });
 
+  // #12423 unit: trusted Settings save is the local project confirmation entry.
+  // Catalog tests cover projection, but cannot catch a stale grant surviving a key replacement.
+  it('confirms Ultrafast for a saved OpenAI connection and clears it on key replacement', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<string, string>();
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: id => keys.get(id) ?? null,
+      storeCustomProviderKey: (id, _agent, key) => { keys.set(id, key); return true; },
+    }));
+    const config: CustomProviderConfig = {
+      id: 'official-api-ultrafast',
+      name: 'OpenAI API',
+      runtimes: { codex: {
+        baseUrl: 'https://api.openai.com/v1',
+        models: [{ id: 'gpt-6.2-sol', name: 'GPT-6.2 Sol' }],
+        openAiApiUltrafastConfirmed: true,
+      } },
+    };
+    const isConfirmed = async () => (await getCustomProvider(config.id))?.runtimes.codex?.openAiApiUltrafastConfirmed;
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, { codex: 'fixture-old-key' });
+    expect(await isConfirmed()).toBeUndefined();
+
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, {}, {
+      source: 'manual-settings', openAiApiUltrafastConfirmed: true,
+    });
+    expect(await isConfirmed()).toBe(true);
+
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, { codex: 'fixture-new-key' });
+    expect(await isConfirmed()).toBeUndefined();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, {});
+    expect(await isConfirmed()).toBeUndefined();
+  });
+
   it('requires confirmation before a busy manual create and persists nothing when cancelled', async () => {
     mountDb();
     const harness = new IpcHarness();

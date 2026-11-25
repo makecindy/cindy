@@ -38,6 +38,7 @@ import {
   mergeDiscoveredRuntimeModels,
   isByokProviderId,
   isLoopbackProviderUrl,
+  isOpenAiApiResponsesEndpoint,
   isProviderRequestPath,
   runtimeCustomProviderId,
   storedCustomProviderId,
@@ -235,10 +236,13 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
     return creating && Object.keys(input).length === 1 && input.bindGeminiImages === true ? { bindGeminiImages: true } : null;
   }
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
+  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts' && key !== 'openAiApiUltrafastConfirmed'))
     return null;
   const source = (input as Record<string, unknown>).source;
   if (source !== undefined && source !== 'manual-settings') return null;
+  const ultrafastConfirmed = (input as Record<string, unknown>).openAiApiUltrafastConfirmed;
+  if (ultrafastConfirmed !== undefined &&
+      (creating || source !== 'manual-settings' || typeof ultrafastConfirmed !== 'boolean')) return null;
   const policy = (input as Record<string, unknown>).codexImageGenerationRestartPolicy;
   const append = (input as Record<string, unknown>).appendSpeechModelsOnly;
   const refreshAgents = (input as Record<string, unknown>).speechReferenceRefreshAgents;
@@ -265,6 +269,7 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
       || typeof value !== 'string' || !value || value.length > 128))) return null;
   return {
     ...(source === 'manual-settings' ? { source } : {}),
+    ...(typeof ultrafastConfirmed === 'boolean' ? { openAiApiUltrafastConfirmed: ultrafastConfirmed } : {}),
     ...(policy ? { codexImageGenerationRestartPolicy: policy } : {}),
     ...(append ? { appendSpeechModelsOnly: true as const } : {}),
     ...(refreshAgents ? { speechReferenceRefreshAgents: refreshAgents as AgentKind[] } : {}),
@@ -2767,6 +2772,21 @@ export function registerProviderHandlers(
           headerMutations.some((mutation) => mutation.agent === 'codex') ||
           authMethodChanged ||
           (config.auth?.method === 'oauth' && oauthBindingChanged);
+        const codexRuntime = separated.config.runtimes.codex;
+        const previousCodex = previous.runtimes.codex;
+        if (codexRuntime) {
+          // Apply an explicit Settings action to the saved connection. A field
+          // echoed by an older form or an import cannot restore a stale grant.
+          delete codexRuntime.openAiApiUltrafastConfirmed;
+          const projectConfirmed = options.openAiApiUltrafastConfirmed ?? previousCodex?.openAiApiUltrafastConfirmed;
+          if (projectConfirmed && !codexCredentialGenerationChanged && previousCodex &&
+              (config.auth?.method ?? 'apiKey') === 'apiKey' &&
+              isOpenAiApiResponsesEndpoint(previousCodex.baseUrl, previousCodex.wireProtocol, previousCodex.requestPath) &&
+              isOpenAiApiResponsesEndpoint(codexRuntime.baseUrl, codexRuntime.wireProtocol, codexRuntime.requestPath)) {
+            const key = deps.readCustomProviderKeyForMutation(config.id, 'codex');
+            if (typeof key === 'string' && key.trim()) codexRuntime.openAiApiUltrafastConfirmed = true;
+          }
+        }
         const previousCodexConfigSignature =
           deps.codexCustomProviderConfigSignature?.(previous) ?? '';
         const targetCodexConfigSignature =

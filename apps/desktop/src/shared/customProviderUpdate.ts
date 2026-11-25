@@ -6,6 +6,8 @@ export interface CustomProviderUpdateOptions {
   /** Explicit opt-in from the Google Gemini API add wizard, on create only. */
   bindGeminiImages?: true;
   source?: 'manual-settings';
+  /** The user confirmed or revoked Ultrafast for the saved OpenAI API connection. */
+  openAiApiUltrafastConfirmed?: boolean;
   /** Local Settings additions, merged against the latest connection in Main. */
   appendSpeechModelsOnly?: true;
   /** Successful manual discovery routes; Main classifies the merged config before filling a reference. */
