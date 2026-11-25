@@ -3740,6 +3740,34 @@ const sameEngineLandingFailure = async (r, id) => {
   return projection;
 };
 
+// #12771, DB tier: a picked Pi model disappears before the queued send. A valid
+// replacement on another connection must unblock that same input exactly once.
+test('Pi reselects a withdrawn model before retrying the queued input', async t => {
+  const r = await modelChangeRuntime(t, { agent: 'pi' });
+  const id = 'pi-reselect';
+  await r.createTask(id);
+  await r.runTurn(id, 'initial');
+  const target = { ...switchViews('pi')[0], id: 'prov-b', models: { pi: [switchModel('small')] } };
+  r.views.current = [{ ...switchViews('pi')[0], models: { pi: [switchModel('big')] } }, target];
+  await r.selection.setModel(id, 'small', 'prov-b');
+  assert.deepEqual([r.selection.projectIntent(id).providerId, r.selection.projectIntent(id).model], ['prov-b', 'small']);
+  target.models.pi = [switchModel('big-alternate')];
+  await r.h.queue.enqueue(id, { clientId: 'next', text: 'next' });
+  await waitFor(() => r.h.queue.projection(id).error);
+  assert.match(r.h.queue.projection(id).error, /MODEL_SELECTION_UNAVAILABLE/);
+  assert.deepEqual(r.h.queue.projection(id).recovery, { kind: 'queue-head', clientId: 'next' });
+  assert.equal(r.userRows(id).length, 1);
+  const live = r.h.maker.getSession(id);
+  live.getUsageSnapshot = () => ({ contextTokens: 0, contextWindow: SWITCH_WINDOWS[live.model] });
+  live.previewModelSwitch = async () => ({ action: 'hot', windowVerified: true, targetContextWindow: 300_000 });
+  await r.selection.setModel(id, 'big-alternate', 'prov-b');
+  await r.h.queue.retryLastError(id);
+  await waitFor(() => r.userRows(id).length === 2 || r.h.queue.projection(id).error);
+  assert.equal(r.h.queue.projection(id).error ?? null, null);
+  assert.deepEqual([r.row(id).provider_id, r.row(id).model], ['prov-b', 'big-alternate']);
+  assert.equal(r.h.maker.getSession(id).sent.length, 2);
+});
+
 test('model change at send: a same-engine landing failure keeps the input at the queue head and the pick pending; switching back and retrying sends it', { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
   await sameEngineLandingFailure(r, 'land-back');

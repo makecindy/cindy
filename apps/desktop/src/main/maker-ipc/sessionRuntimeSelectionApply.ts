@@ -601,7 +601,8 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         });
         if ((!provider?.connected && routeExplicit) || !catalogModel) {
           throwIpcError(
-            'INVALID_PARAMS',
+            runtimeAgentKind === 'pi' && provider?.connected && !catalogModel
+              ? 'MODEL_SELECTION_UNAVAILABLE' : 'INVALID_PARAMS',
             `model "${model}" is unavailable from provider "${actualProviderId ?? 'default'}"`,
           );
         }
