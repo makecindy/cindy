@@ -837,10 +837,13 @@ export class InputHandoffSession {
     // A passive look runs while the card stays open: the owner may move on through it before the look returns.
     const step = this.step;
     const submissions = this.submissions;
+    const picture = this.picture;
     const found = await (frame ? look() : withDesktopTurn(look)).catch(() => null);
     if (!found || 'error' in found) return false;
     const qr = qrContent(found.text);
-    const moved = !!frame && (this.step !== step || this.submissions !== submissions || this.busy || this.phase !== 'ready');
+    // Whoever looked, an owner who chose the window picture (or got another view) meanwhile keeps it.
+    const moved = this.pictureChosen || this.picture !== picture ||
+      (!!frame && (this.step !== step || this.submissions !== submissions || this.busy || this.phase !== 'ready'));
     if (!qr || this.ended || moved) {
       found.capture.jpeg.fill(0);
       return false;

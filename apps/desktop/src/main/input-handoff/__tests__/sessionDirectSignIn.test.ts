@@ -711,6 +711,41 @@ describe('a waiting card watching its window', () => {
   // PR #12766 review (codex r4693526385): the same race with a look that finds nothing: it set the wait back on for the
   // step the owner had already left, so the next form was swapped under the phone when the page added a field.
   // Entry: window watch with session.submit. Unit tier.
+  // PR #12766 review (codex r4693769193): the owner switched to the window picture while a passive look was out; the
+  // late code replaced the picture with the old scan, clearing what the phone had open.
+  // Entry: window watch with session.decide('picture'). Unit tier.
+  it('drops a passive look for a code once the owner switched to the window picture', async () => {
+    const { driver, state } = desktop('password');
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    driver.capture = async () => ({ jpeg: Buffer.from('window'), width: 800, height: 1000, area: frame, windowFrame: frame });
+    const releases: Array<() => void> = [];
+    const qr = vi.fn(() => new Promise<Awaited<ReturnType<NonNullable<HandoffDriver['qr']>>>>((resolve) => {
+      releases.push(() => resolve({
+        text: 'weixin://dl/login?x=1',
+        capture: { jpeg: Buffer.from('jpeg'), width: 8, height: 8, area: frame, windowFrame: frame },
+      }));
+    }));
+    driver.qr = qr;
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    state.screen = 'blank';
+    await vi.waitFor(() => expect(qr).toHaveBeenCalled());
+    expect(await run.session.decide({ kind: 'input_handoff', action: 'picture', expectedRevision: run.latest().revision })).toBe(true);
+    expect(run.latest().qr).toBeUndefined();
+    const revision = run.latest().revision;
+    releases.splice(0).forEach((release) => release());
+    await settle();
+    expect(run.latest().qr).toBeUndefined();
+    expect(run.latest().revision).toBe(revision);
+    run.session.cancel();
+    releases.splice(0).forEach((release) => release());
+  });
+
   it('does not wait over the next step after a passive look that started on the earlier one', async () => {
     const { driver, state } = desktop('address');
     const list = driver.windows.bind(driver);
