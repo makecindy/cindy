@@ -9,6 +9,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import { useResendCountdown } from '@/components/login/useResendCountdown';
 import type { DesktopContactChangeType } from '../../../shared/authIpc';
+import { generalSettings } from './GeneralSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 
 type Step = 'intro' | 'current-code' | 'new-value' | 'new-code';
 
@@ -33,6 +35,7 @@ const NEW_VALUE_CODES = new Set([
  */
 export function ContactChangeSection() {
   const { t } = useTranslation();
+  const setting = useSettingDefinition(generalSettings.contactChange);
   const { user, mode } = useAuth();
   const currentUserId = user?.id ?? null;
   const [type, setType] = useState<DesktopContactChangeType | null>(null);
@@ -203,10 +206,12 @@ export function ContactChangeSection() {
     <>
       <SettingsCard className="mt-3">
         <SettingsRow
+          {...setting.anchorProps}
           title={t(`settings.contactChange.${type}.rowTitle`)}
           hint={t(`settings.contactChange.${type}.rowHint`)}
           trailing={
             <Button
+              {...setting.controlProps}
               variant="secondary"
               size="md"
               compact
@@ -241,6 +246,7 @@ export function ContactChangeSection() {
           <div className="flex flex-col gap-3">
             {step === 'new-value' && (
               <Input
+                data-settings-search-action="Enter the new sign-in phone number or email inside the contact change dialog"
                 autoFocus
                 type={type === 'phone' ? 'tel' : 'email'}
                 inputMode={type === 'phone' ? 'tel' : 'email'}
@@ -256,6 +262,7 @@ export function ContactChangeSection() {
             {(step === 'current-code' || step === 'new-code') && (
               <>
                 <Input
+                  data-settings-search-action="Enter the verification code inside the contact change dialog"
                   autoFocus
                   type="text"
                   inputMode="numeric"
@@ -269,6 +276,7 @@ export function ContactChangeSection() {
                   placeholder={t('settings.contactChange.codePlaceholder')}
                 />
                 <Button
+                  data-settings-search-action="Resend the verification code inside the contact change dialog"
                   variant="secondary"
                   size="md"
                   compact
@@ -285,7 +293,7 @@ export function ContactChangeSection() {
               </>
             )}
             {errorMessage && (
-              <p role="alert" className="text-12 leading-5 text-[var(--error-fg)]">
+              <p role="alert" className="text-12 leading-[1.667] text-[var(--error-fg)]">
                 {errorMessage}
               </p>
             )}
