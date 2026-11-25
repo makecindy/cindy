@@ -229,6 +229,7 @@ import {
 } from '@/cindy-brain/ghostCommand';
 import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import { filterGhostsForWorkdir, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
+import { pluginSuggestionComposerText } from '@/features/cc-agent/pluginHomeSuggestions';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
@@ -3295,14 +3296,25 @@ export function ChatInput({
   // 输入框并聚焦,只填不发。发送中 / 语音占用时与键盘输入同锁,静默忽略。
   useEffect(() => {
     if (!editor || !sessionId) return;
-    return subscribePromptInsert(sessionId, ({ targetSessionId, text }) => {
-      if (targetSessionId !== sessionId || editor.isDestroyed) return false;
-      if (composerMutationLockedRef.current) return false;
-      insertPromptIntoEditor(editor.chain(), { isEmpty: editor.isEmpty, text });
+    return subscribePromptInsert(sessionId, (request) => {
+      if (request.targetSessionId !== sessionId || editor.isDestroyed) return false;
+      if (composerMutationLockedRef.current || !editor.isEditable) return false;
+      if ('pluginInstanceId' in request) {
+        const roster = composerGhostsRef.current;
+        const ghost = findInstalledGhostByInstanceId(roster, request.pluginInstanceId);
+        if (!ghost?.enabled) return false;
+        if (ghost.manifest.command) return placeGhostAtComposerStart(editor, ghost, roster);
+        const prompt = pluginSuggestionComposerText('', ghost, t, roster).trim();
+        const chain = editor.chain().focus('end');
+        if (!editor.isEmpty) chain.splitBlock();
+        chain.insertContent({ type: 'text', text: prompt }).run();
+      } else {
+        insertPromptIntoEditor(editor.chain(), { isEmpty: editor.isEmpty, text: request.text });
+      }
       lastComposerSelectionFromRef.current = editor.state.selection.from;
       return true;
     });
-  }, [editor, sessionId]);
+  }, [editor, sessionId, t]);
 
   const handleSavePastedText = useCallback(
     (text: string) => {
@@ -4747,7 +4759,7 @@ export function ChatInput({
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
   const paletteAgentKind = runtimeAgentKind ?? agentKind ?? 'claude-code';
-  // 插件引擎任务没有内置 Harness 身份(runtimeAgentKind 为 null)，它的命令清单只有桌面命令，随时可读。
+  // 插件引擎任务没有内置 Harness 身份(runtimeAgentKind 为 null)，它的命令清单不依赖 Harness，随时可读。
   const slashContextReady = !sessionId || runtimeAgentKind != null || !!pluginEngineSession;
   // Existing tasks use one authoritative snapshot. Mirrored composer state
   // catches up in an effect and otherwise scans the previous/global folder first.
@@ -4755,6 +4767,13 @@ export function ChatInput({
   // remote session:workingDir 是远端主机路径,不能按它扫本机 skills/files。
   // slash 退化为 desktop + agent-builtin(传 null),@ 文件面板直接关闭(见 atOpen)。
   const isRemoteSession = !!remoteHostId;
+  // 插件引擎在列清单的这台电脑上运行(本机，或正在远控的那台)时，`/` 列出它能展开的 Cindy 技能；
+  // Agent 在另一台电脑上的任务，引擎那边没有技能来源，与首轮技能清单一致不列。
+  const pluginEngineDeviceId = pluginEngineSession
+    ? pluginEngineSession.engine?.deviceId
+    : !sessionId ? pluginEngines?.active?.deviceId : undefined;
+  const pluginEngineSkillsListed = pluginEngineActive
+    && (!pluginEngineDeviceId || pluginEngineDeviceId === deviceLinkDeviceId);
   const slashCommandContextKey = JSON.stringify([
     slashWorkingDir ?? null,
     slashContextReady,
@@ -4762,8 +4781,8 @@ export function ChatInput({
     isRemoteSession,
     sessionId ?? null,
     deviceLinkDeviceId ?? null,
-    // 插件引擎只列 Cindy 自己的桌面命令(见下方 skipAgentCommands)；内置引擎时数组与之前逐项相同。
-    ...(pluginEngineActive ? ['plugin-engine'] : []),
+    // 插件引擎不列内置 Harness 的命令(见下方 skipAgentCommands)；内置引擎时数组与之前逐项相同。
+    ...(pluginEngineActive ? ['plugin-engine', pluginEngineSkillsListed] : []),
   ]);
   const [slashCommandLoadState, setSlashCommandLoadState] = useState<SlashCommandRosterState>({
     contextKey: '',
@@ -4811,9 +4830,9 @@ export function ChatInput({
         {
           ...opts,
           contextReady: slashContextReady,
-          // 插件引擎自己解释 `/…`：不列内置 Harness 的命令与技能。
-          skipAgentSkills: isRemoteSession || pluginEngineActive,
-          ...(pluginEngineActive ? { skipAgentCommands: true } : {}),
+          // 插件引擎不认内置 Harness 的命令；技能按引擎能展开的范围列出(见 pluginEngineSkillsListed)。
+          skipAgentSkills: isRemoteSession || (pluginEngineActive && !pluginEngineSkillsListed),
+          ...(pluginEngineActive ? { skipAgentCommands: true, pluginEngineSkills: true } : {}),
           sessionId,
           allowManagedPiPackagePreview: !isRemoteSession,
           onPiRuntimeStatus: (status) => {
@@ -4848,6 +4867,7 @@ export function ChatInput({
       deviceLinkDeviceId,
       slashCommandContextKey,
       pluginEngineActive,
+      pluginEngineSkillsListed,
     ],
   );
   useEffect(() => {
@@ -9931,7 +9951,7 @@ export function ChatInput({
                     'w-[calc(100%+11px)] -mr-[11px]',
                     // Disabled gets the same visual cue as the old textarea
                     composerMutationLocked && 'cursor-not-allowed opacity-60',
-                    voiceBusyOnCurrentComposer && 'cursor-default',
+                    voiceBusyOnCurrentComposer && 'cursor-default [&_.ProseMirror]:caret-transparent',
                   )}
                   data-voice-draft-active={
                     voiceBusyOnCurrentComposer && voiceInput.draftText ? 'true' : undefined

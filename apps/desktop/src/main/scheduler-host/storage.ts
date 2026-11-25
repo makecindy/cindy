@@ -110,6 +110,7 @@ export interface ScheduleSidebarIndexRun {
   firedAt?: number;
   finishedAt?: number;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
+  preRunBlocked?: true;
   errorMsg?: string;
   failureRecovered?: boolean;
   missingPlugin?: ScheduleMissingPlugin;
@@ -681,6 +682,15 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return rows.length > 0;
   }
 
+  async lastSuccessfulMrObservation(scheduleId: string) {
+    const [row] = await this.getDb().select({ observation: scheduleRuns.mrObservation })
+      .from(scheduleRuns).where(and(
+        eq(scheduleRuns.scheduleId, scheduleId), eq(scheduleRuns.status, 'success'),
+        eq(scheduleRuns.triggerSource, 'pr-status'), isNotNull(scheduleRuns.mrObservation),
+      )).orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id)).limit(1);
+    return row?.observation ?? null;
+  }
+
   async hasSuccessfulPrRunSince(scheduleId: string, since: number): Promise<boolean> {
     const rows = await this.getDb().select({ id: scheduleRuns.id }).from(scheduleRuns).where(and(
       eq(scheduleRuns.scheduleId, scheduleId), gte(scheduleRuns.firedAt, since),
@@ -845,6 +855,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
       errorMsg: scheduleRuns.errorMsg,
+      preRunBlocked: sql<number | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
+        THEN json_extract(schedule_runs.pre_run_hook_result, '$.decision') = 'block'
+          AND json_extract(schedule_runs.pre_run_hook_result, '$.status') IN ('failed', 'timed_out') END`,
       prCheckDiagnosis: sql<string | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
         THEN CASE WHEN json_type(schedule_runs.pre_run_hook_result, '$.prCheckDiagnosis') = 'object'
         THEN json_extract(schedule_runs.pre_run_hook_result, '$.prCheckDiagnosis') END END`,
@@ -929,6 +942,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         finishedAt: row.finishedAt ?? undefined,
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
+        ...(row.status === 'failed' && row.preRunBlocked === 1 ? { preRunBlocked: true as const } : {}),
         errorMsg: row.errorMsg ?? undefined,
         prCheckDiagnosis: row.prCheckDiagnosis ? readPrCheckDiagnosis(JSON.parse(row.prCheckDiagnosis)) : undefined,
         ...missingPluginField(row.missingPlugin),

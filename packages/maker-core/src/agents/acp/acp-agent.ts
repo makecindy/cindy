@@ -24,28 +24,47 @@ import {
   type PiExtraSpawnConfig,
   type StartSessionOptions,
 } from '../base-agent.js';
+import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import { buildAcpCapabilities } from './capabilities.js';
+import { renderPluginEngineCapabilityBriefing, type PluginEngineBriefingSkill } from './briefing.js';
+import { expandPluginEngineSkillInvocation } from './skill-invocation.js';
 import type { AcpLineTransport } from './line-transport.js';
 import type { AcpMcpServer } from './protocol.js';
 import {
   DEVICE_HOSTED_EXEC_MCP_SERVER,
+  deviceHostedGhostRoster,
   deviceHostedMcpUrl,
   deviceHostedPluginEngineMcpServers,
   deviceHostedPluginEngineNote,
 } from '../shared/device-hosted.js';
-import { openAcpSession, type AcpClientInfo, type AcpSession } from './session.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
+import {
+  AcpAccountError,
+  AcpAuthRequiredError,
+  openAcpSession,
+  type AcpClientInfo,
+  type AcpSession,
+} from './session.js';
 
 export const ACP_PLUGIN_PROVIDER_PREFIX = 'acp-plugin:';
 
 /** Never executed: AcpAgent only talks to transports the host opens for plugin entries. */
 const ACP_PLUGIN_BINARY_PLACEHOLDER = 'plugin-provided';
 
-/** `acp-plugin:<ghostId>:<harnessId>` → registry key `<ghostId>:<harnessId>`. */
+/**
+ * `acp-plugin:<ghostId>:<harnessId>` → registry key `<ghostId>:<harnessId>`. A provider the user
+ * took an account out into (`…:<harnessId>~<suffix>`, subscription-account-pools.md 插件引擎的账号)
+ * runs the same engine; harness ids never contain `~`.
+ */
 export function acpHarnessKeyFromProviderId(providerId: string | null | undefined): string | null {
   if (!providerId || !providerId.startsWith(ACP_PLUGIN_PROVIDER_PREFIX)) return null;
-  const key = providerId.slice(ACP_PLUGIN_PROVIDER_PREFIX.length);
-  const separator = key.lastIndexOf(':');
-  return separator > 0 && separator < key.length - 1 ? key : null;
+  const raw = providerId.slice(ACP_PLUGIN_PROVIDER_PREFIX.length);
+  const separator = raw.lastIndexOf(':');
+  if (separator <= 0 || separator >= raw.length - 1) return null;
+  const harness = raw.slice(separator + 1);
+  const tilde = harness.indexOf('~');
+  if (tilde < 0) return raw;
+  return tilde > 0 && /^[a-z0-9]{8}$/.test(harness.slice(tilde + 1)) ? raw.slice(0, separator + 1 + tilde) : null;
 }
 
 export function acpProviderIdForHarness(key: string): string {
@@ -64,6 +83,11 @@ export interface AcpEndpointConnectOptions {
    * guest-workspace mode and refuses an engine whose plugin has not declared guest isolation.
    */
   guestWorkspace?: boolean;
+  /**
+   * The task runs on one of the accounts Cindy added for this engine (not the agent's original
+   * login): the host starts the entry with that account's directory.
+   */
+  accountDir?: string;
 }
 
 /** Host side: starts the endpoint process for one task and adapts it to a line transport. */
@@ -77,6 +101,12 @@ export interface AcpAgentDeps extends AgentDeps {
   clientInfo: AcpClientInfo;
   /** Remembers what the agent offered so pickers can show it before the next start. */
   onSessionCapabilities?: (harnessKey: string, capabilities: Capabilities) => void;
+  /**
+   * The Skills a task in this directory can use (the same discovery and enablement as the built-in Pi
+   * engine): the briefing ahead of the first message, `/<skill>` expansion and the `/` menu. A failure
+   * only leaves the list out of the briefing and leaves messages unexpanded.
+   */
+  listSessionSkills?: (ctx: { workingDir?: string }) => Promise<readonly PluginEngineBriefingSkill[]>;
 }
 
 const NO_INIT = buildAcpCapabilities(
@@ -167,6 +197,27 @@ export class AcpAgent extends BaseAgent {
     this.acpDeps = deps;
   }
 
+  /**
+   * The `/` menu of a plugin-engine task: the list its `/<skill>` messages are expanded from, so the menu
+   * offers exactly the Skills that reach the engine as instructions, whether or not the built-in Pi engine
+   * is available on this computer. SSH workspaces are not offered to plugin engines.
+   */
+  override async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
+    if (opts.remoteHostId || !this.acpDeps.listSessionSkills) return { skills: [] };
+    const skills = await this.acpDeps.listSessionSkills({ workingDir: opts.workingDir });
+    return {
+      skills: skills.flatMap((skill) => skill.path ? [{
+        kind: 'agent-skill' as const,
+        name: skill.name,
+        ...(skill.description ? { description: skill.description } : {}),
+        source: 'skill' as const,
+        path: skill.path,
+        scope: skill.scope ?? 'user',
+        enabled: true,
+      }] : []),
+    };
+  }
+
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
     // SSH workspaces are not offered. Shared-user tasks require guest-workspace support, enforced
     // by the endpoint launcher against the plugin's live published capabilities.
@@ -231,18 +282,49 @@ export class AcpAgent extends BaseAgent {
         : '',
       opts.botUserProfilePrompt ?? '',
     ].filter((part) => part.trim()).join('\n\n') : '';
+    // The built-in engines learn the installed plugins and Skills from their system prompt and native
+    // Skill loading; a plugin engine is told in the briefing instead (user decision 2026-11-24). An
+    // isolated companion keeps its own frozen capability set and gets neither, as on the built-in
+    // engines (a project-context companion loads like any task). A task hosted for another computer
+    // gets that computer's roster snapshot, exactly as the built-in engines inject it
+    // (`deviceHostedGhostRoster`, only when the tunnel offers the gateway; this computer's plugins never
+    // enter it), and no Skill list: there is no cross-computer source for one. A resumed session already
+    // has the briefing, and resuming never falls back to a new session, so nothing is read for it.
+    const capabilities = isolatedBotProfile(opts.botRuntimeProfile) || opts.resumeSessionId ? null
+      : hosted ? { pluginRoster: deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, () => ''), skills: [] }
+      : {
+        pluginRoster: this.readPluginRoster(opts.workingDir, logger),
+        skills: await this.readSessionSkills(opts.workingDir, logger),
+      };
     // The workspace note comes first: without it the agent has no way to know where the project is.
-    const briefing = [
+    const briefing = (acceptedMcpServers: readonly string[]): string => [
       hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',
       companionBriefing,
+      capabilities ? renderPluginEngineCapabilityBriefing(capabilities, acceptedMcpServers) : '',
       opts.pluginEngineBriefing ?? '',
     ].filter((part) => part.trim()).join('\n\n');
+    // `/<skill>` from the composer: the Skill is read from the same list as the briefing, on every
+    // message that asks for one (resumed conversations included). Same exclusions as the Skill list:
+    // an isolated companion keeps its frozen capability set, and a task of another computer has no
+    // Skill source here.
+    const expandSlashInvocation = isolatedBotProfile(opts.botRuntimeProfile) || hosted ? undefined
+      : (text: string) => expandPluginEngineSkillInvocation(
+          text,
+          () => this.readSessionSkills(opts.workingDir, logger),
+          (message) => logger.warn('acp: Skill invocation left unexpanded', { message }),
+        );
+    // The host's account pool picked an account Cindy added (its own directory); the agent's
+    // original login runs exactly as before.
+    const account = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
+    const accountDir = account && !account.defaultProfile && account.configDir ? account.configDir : undefined;
+    const connectOptions: AcpEndpointConnectOptions = {
+      ...(hosted ? { remoteWorkspace: true } : {}),
+      ...(hosted?.guest ? { guestWorkspace: true } : {}),
+      ...(accountDir ? { accountDir } : {}),
+    };
     const open = async (): Promise<AcpSession> => {
-      const tracked = trackClose(hosted
-        ? await this.acpDeps.endpoints.connect(harnessKey, {
-            remoteWorkspace: true,
-            ...(hosted.guest ? { guestWorkspace: true } : {}),
-          })
+      const tracked = trackClose(Object.keys(connectOptions).length
+        ? await this.acpDeps.endpoints.connect(harnessKey, connectOptions)
         : await this.acpDeps.endpoints.connect(harnessKey));
       try {
         return await openAcpSession({
@@ -257,12 +339,18 @@ export class AcpAgent extends BaseAgent {
           ...(opts.botRuntimeProfile || hosted ? { requireSelectedModel: true } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
-          ...(briefing ? { briefing } : {}),
+          briefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
+          ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
           logger,
           onEnded: disposeBridge,
         });
       } catch (error) {
+        // The agent turned the session down because of its account (signed out, used up, busy): end
+        // this endpoint now so the host can prove it stopped and try another account right away.
+        if (!tracked.stopped() && (error instanceof AcpAuthRequiredError || error instanceof AcpAccountError)) {
+          await tracked.transport.close().catch(() => {});
+        }
         if (tracked.stopped()) throw new AgentStartupStoppedError(error);
         // The next send must obtain exit proof before it can start another endpoint.
         throw new AgentStartupCleanupPendingError(error instanceof Error ? error.message : String(error), {
@@ -281,6 +369,24 @@ export class AcpAgent extends BaseAgent {
     } catch (error) {
       disposeBridge();
       throw error;
+    }
+  }
+
+  private readPluginRoster(workingDir: string, logger: AgentDeps['logger']): string {
+    try {
+      return this.deps.getGhostRosterPrompt?.({ workingDir }) ?? '';
+    } catch (error) {
+      logger.warn('acp: plugin roster unavailable; starting without it', { message: String(error) });
+      return '';
+    }
+  }
+
+  private async readSessionSkills(workingDir: string, logger: AgentDeps['logger']): Promise<readonly PluginEngineBriefingSkill[]> {
+    try {
+      return await this.acpDeps.listSessionSkills?.({ workingDir }) ?? [];
+    } catch (error) {
+      logger.warn('acp: Skill list unavailable; starting without it', { message: error instanceof Error ? error.message : String(error) });
+      return [];
     }
   }
 }

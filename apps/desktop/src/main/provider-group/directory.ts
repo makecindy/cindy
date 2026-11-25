@@ -106,6 +106,8 @@ export interface ResolvedProviderGroupMember {
 }
 
 export interface ResolveMembersOptions {
+  /** Read base availability before fetching optional quota for the settings row. */
+  skipUsage?: boolean;
   /**
    * 最多等多久：到点已经有一台 `enough` 的电脑就不再等其余的(没读完的标 `pending`)；一台都还没有时照旧等全部读完。
    * 不给 = 等全部读完。
@@ -425,6 +427,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
         if (member.kind === 'share') return resolveShare(member);
         return deviceListPromise.then((deviceList) => resolveDevice(member, deviceList));
       });
+      if (options?.skipUsage) return Promise.all(partialReads);
       const reads = partialReads.map(async (read, index) => {
         const member = config.members[index]!;
         const resolved = await read;

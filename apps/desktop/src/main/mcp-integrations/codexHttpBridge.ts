@@ -19,7 +19,8 @@ import type { AddressInfo } from 'node:net';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createCatalogTransport } from './antigravityToolCatalog.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { runWithLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
@@ -93,7 +94,7 @@ export interface StartCodexHttpBridgeOptions {
    * MCP SDK 的 McpServer/Protocol 实例只能 connect 一个 transport，所以每个
    * streamable-http session 必须拿到独立实例。
    */
-  serverFactories: Record<string, () => McpServer>;
+  serverFactories: Record<string, (startupContext?: LiziMcpSessionContext) => McpServer>;
   /** Built-in plugin id for each policy-controlled MCP server. */
   pluginIdByServerName?: Record<string, string>;
   /**
@@ -115,6 +116,8 @@ interface DispatchOpts {
   createMcpServer: () => McpServer;
   transports: Map<string, SessionTransport>;
   serverName: string;
+  /** Every server this bridge offers; agy catalogs share one declaration budget across them. */
+  serverNames: readonly string[];
   log: Logger;
   threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>;
   toolCancellation: AppToolCancellation;
@@ -432,10 +435,11 @@ async function startCodexHttpBridge(
       // A process-wide daemon has no frozen mount policy. App facades
       // may attach upstream credentials only for an explicitly bound Session,
       // including Codex's short-lived discovery lease before thread/start returns.
-      const appContext = appServer
+      const boundContext = appServer || serverName === 'cindy'
         ? sessionTokenCtx ?? (instanceQuery === null ? undefined
           : threadContextStore.getContextForSessionInstanceId(instanceQuery) ?? discoveryContexts.get(instanceQuery))
         : undefined;
+      const appContext = appServer ? boundContext : undefined;
       if (appServer && (!appContext?.sessionId || (isScopedRemoteToken && !appContext.remoteHostId))) {
         res.statusCode = 401;
         res.end('MCP App server requires a bound Session');
@@ -473,9 +477,10 @@ async function startCodexHttpBridge(
         await dispatchToTransport({
           req,
           res,
-          createMcpServer,
+          createMcpServer: () => createMcpServer(serverName === 'cindy' ? boundContext : undefined),
           transports,
           serverName,
+          serverNames,
           log,
           threadContextStore,
           toolCancellation,
@@ -776,6 +781,14 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
       res.end('Unknown session');
       return;
     }
+    // A cindy transport created with a concrete task may expose its private
+    // startup catalog. The transport ID alone does not identify that task.
+    if (serverName === 'cindy' && existing.ownerSessionInstanceId &&
+        existing.ownerSessionInstanceId !== ownerSessionInstanceId) {
+      res.statusCode = 401;
+      res.end('Session instance mismatch');
+      return;
+    }
     let parsedBody: unknown;
     // per-session token (远端 cc) 命中即身份,优先于 _meta.threadId (codex) 路由。
     let activeContext: LiziMcpSessionContext | undefined = sessionTokenCtx;
@@ -886,7 +899,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
         sessionId: prefixId(blockedToolCall.context?.sessionId),
         workingDir: blockedToolCall.context?.workingDir,
       });
-      writeBlockedToolCallResponse(res, parsedBody, pluginId, blockedToolCall.reason);
+      writeBlockedToolCallResponse(res, parsedBody, pluginId, blockedToolCall);
       return;
     }
     if (activeContext) {
@@ -940,7 +953,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   // 新 session: 创建 transport + connect 到新的 mcp server (transport 跟 server 1:1
   // 绑定；McpServer/Protocol 实例不允许并发/重复 connect)。
   const mcpServer = createMcpServer();
-  const transport = new StreamableHTTPServerTransport({
+  const transport = createCatalogTransport(body.params.clientInfo.name, serverName, opts.serverNames, {
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
       transports.set(newId, { transport, mcpServer, ownerSessionId, ownerSessionInstanceId });
@@ -1098,10 +1111,14 @@ function writeBlockedToolCallResponse(
   res: http.ServerResponse,
   body: unknown,
   pluginId: string,
-  reason: BlockedToolCall['reason'],
+  { reason, context }: BlockedToolCall,
 ): void {
+  const disabledGuidance =
+    pluginId === 'browser' && context?.agentKind === 'codex' && !context.remoteHostId
+      ? 'Enable Browser in Settings → Tools → Built-in Tools → Agent session defaults. Wait for local Codex to finish any active turns, then retry in this task. If a project override disables Browser, enable Browser in Settings → Automation for that project and restart the agent session.'
+      : 'Enable it in Settings and start a new session to apply the change.';
   const message = reason === 'disabled'
-    ? `Built-in tool "${pluginId}" is disabled for this session. Enable it in Settings and start a new session to apply the change.`
+    ? `Built-in tool "${pluginId}" is disabled for this session. ${disabledGuidance}`
     : reason === 'ambiguous_thread_context'
       ? `Built-in tool "${pluginId}" received calls from more than one session in a single batch and cannot tell them apart. Retry the calls one session at a time.`
       : `Built-in tool "${pluginId}" could not bind this call to a verified Cindy session. This is a session-routing problem, not a plugin setup problem. Start a new task and try again.`;

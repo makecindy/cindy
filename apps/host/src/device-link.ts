@@ -6,6 +6,7 @@ import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } 
 import WebSocket from 'ws';
 import { CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
 import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
+import { rejoinRemovedDevice } from '../../desktop/src/main/device-link/deviceRejoin.js';
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contract';
 import type { TaskTagRequest } from '@cindy/maker-shared';
@@ -30,7 +31,7 @@ import { createInteractionProjection, projectInteractionDismissedForRemote } fro
 import { RECOVERY_CHECKPOINT_MARKER } from '../../desktop/src/main/maker-ipc/recoveryMarker.js';
 import { checkRemoteWorkingDir, remoteWorkingDirRejectionToIpcError } from '../../desktop/src/main/device-link/remote-workdir-guard.js';
 import { desktopTransferCodec } from '../../desktop/src/main/device-link/transferCodec.js';
-import { clearControllerPlatforms, setControllerPlatform } from '../../desktop/src/main/device-link/controllerPlatform.js';
+import { clearControllerPlatforms, isDesktopPlatform, setControllerPlatform } from '../../desktop/src/main/device-link/controllerPlatform.js';
 import { createHostWebSocketAgent } from './outbound.mjs';
 import { MESSAGE_METADATA_REFRESH } from './events.mjs';
 import { createDnsFallbackLookup } from '../../desktop/src/main/device-link/dnsFallbackLookup.js';
@@ -38,10 +39,23 @@ import { createLogger } from '../../desktop/src/main/logger.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
 import { MAKER_INVOKE, MAKER_PUSH } from '../../desktop/src/main/maker-ipc/channels.js';
 import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.js';
-import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.js';
+import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin, readDeviceLinkInvokeSourceDevice } from '../../desktop/src/main/device-link/invoke-context.js';
 import { explicitPorts } from './agent/explicit-ports.js';
 import { listDir, mkdirP, statPath } from '../../desktop/src/main/fsBrowse/core.js';
 import { requireObject, requireString } from '../../desktop/src/main/utils/ipcValidate.js';
+import { getHostNewMakerDefaults, getHostNewMakerDefaultsByVendor } from './agent/remote-draft-preferences.js';
+import { applyHostNewMakerDraftPref, applyHostNewMakerWorktreePref } from './agent/remote-draft-preferences.js';
+import { getNewMakerWorktreeBranchPreference, applyNewMakerWorktreeBranchPreference } from './agent/worktree-branch-preferences.js';
+import { readGitSafetySettingsState } from '../../desktop/src/main/maker-host/git-safety-settings-store.js';
+import { stampDirectSendSourceDevice } from '../../desktop/src/main/maker-ipc/mobileClientPromptNote.js';
+import type { MainOwnedInputBoundaryStamp } from '../../desktop/src/main/maker-ipc/mobileClientPromptNote.js';
+import { registerMakerSessionSendHandler } from '../../desktop/src/main/maker-ipc/sessionSendHandler.js';
+import type { HostWorktreeLifecycle } from './agent/worktree-lifecycle.js';
+import { registerNewMakerWorktreeBranchPreferenceHandler } from '../../desktop/src/main/maker-ipc/newMakerWorktreeBranchPreferenceHandler.js';
+import { registerPrecreatedWorktreeDiscardHandler } from '../../desktop/src/main/maker-ipc/precreatedWorktreeDiscardHandler.js';
+import type { IpcHandlerRegistry } from '../../desktop/src/main/maker-ipc/ipcHandlerRegistry.js';
+import type { CreateWorktreeReq } from '../../desktop/src/main/worktree/types.js';
+import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.js';
 
 /**
  * What each port the Host hands the shared inbound dispatch (dispatch.ts InboundDispatchPorts) can do
@@ -87,6 +101,7 @@ export const HOST_DISPATCH_PORTS_WHILE_HELD = Object.freeze({
   // The invoke registry: contract channels call the service (gated); maker:create-session and
   // MCP_APPS_INVOKE are refused where they are registered.
   dispatchLocalInvoke: 'service-gate',
+  hasLocalChannel: 'read',
   assertRemoteBotInvocationAllowed: 'read',
   projectRemoteSessionResult: 'read',
   projectRemoteBotPush: 'read',
@@ -132,6 +147,8 @@ type ServiceResult = { status: number; body: any };
 const TRANSPORT_STATEMENT_WAIT_MS = 2_000;
 export interface HostDeviceLinkPorts {
   profileDir: string;
+  /** Assembled by Host startup; Device Link only validates and forwards requests. */
+  worktree: HostWorktreeLifecycle;
   version: string;
   getWsUrl(): string;
   getToken(): Promise<string | null>;
@@ -140,9 +157,21 @@ export interface HostDeviceLinkPorts {
   invoke(path: string, body?: any, context?: { caller: string }): Promise<ServiceResult>;
   releaseAuthCaller?(caller: string): void;
   isBusyForProjectArchive(sessionId: string): boolean;
+  sessionInTurn(sessionId: string): boolean;
   onProjectTaskStatus(sessionId: string, status: 'active' | 'archived'): void;
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
+  closeRuntimeSession(sessionId: string, opts?: unknown): Promise<void>;
+  /** The desktop-compatible maker:send transaction (agent/input-queue.mjs). */
+  send(sessionId: string, message: unknown, createOpts?: unknown, sendOpts?: unknown): Promise<unknown>;
+  /** Captures the current clear boundary and input generation before a direct send. */
+  assertRemoteInputControlBoundary(sessionId: string, opts: unknown): Promise<MainOwnedInputBoundaryStamp>;
+  /** The desktop-compatible extra-directory grant flow, including validation and rollback. */
+  setExtraDirs(sessionId: string, dirs: string[]): Promise<string[] | { dirs: string[] } | void>;
+  /** Optional host event hub used to mirror draft and worktree preference changes. */
+  publish?(event: any): void;
+  /** A precreated Worktree is claimed as soon as its DB row or live runtime exists. */
+  isSessionClaimed(sessionId: string): Promise<boolean>;
   /** Coexistence plan A: the refusal while a desktop uses this profile, or null. */
   profileHold?(): ProfileHold | null;
   /** The remote plugin OAuth entry; the desktop's plugin-oauth runtime unless a test passes its own. */
@@ -164,7 +193,26 @@ export interface HostDeviceLinkPorts {
    * nothing here changes the Device Link client's behaviour.
    */
   agentNet?: Omit<AgentNetNodePorts, 'enabled' | 'current'>;
+  /**
+   * The official Device Link REST with this Host's account token, for 「重新加入」 (`POST /api/device-link/rejoin`, deviceRejoin.ts).
+   * Absent: `cindy-host remote rejoin` reports that this Host cannot rejoin.
+   */
+  officialDeviceLinkFetch?(path: string, opts: { method: 'POST'; body: Record<string, never>; timeoutMs: number }): Promise<unknown>;
 }
+
+function readGitSafetyWire() {
+  const state = readGitSafetySettingsState();
+  return {
+    mode: state.value.mode,
+    autoSnapshotEnabled: state.value.autoSnapshotEnabled,
+    autoInitProjectGit: state.value.autoInitProjectGit,
+    isCustomized: state.isCustomized,
+    defaultMode: state.defaults.mode,
+    defaultAutoSnapshotEnabled: state.defaults.autoSnapshotEnabled,
+  };
+}
+
+const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUntil', 'discardWorktreeChanges', 'deleteTarget', 'archiveSideChatParentId']);
 
 export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   const log = createLogger('host-device-link');
@@ -243,7 +291,232 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     assertCurrent();
     return result;
   });
-  registry.register('maker:create-session', ([input]) => { refuseWhileHeld(); return deps.createRuntimeSession(input); });
+  registry.register(MAKER_INVOKE.SESSION_IN_TURN, ([sessionId]) => {
+    assertCurrent();
+    if (typeof sessionId !== 'string' || !sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required');
+    return deps.sessionInTurn(sessionId);
+  });
+  registry.register(MAKER_INVOKE.INPUT_GET_PROJECTION, async ([sessionId]) => {
+    assertCurrent();
+    if (typeof sessionId !== 'string' || !sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required');
+    const projection = await call('/api/input/projection', { sessionId });
+    assertCurrent();
+    return projection;
+  });
+  // The remote project/draft flow reads the Host-owned persisted mirror. The getter
+  // hydrates the shared reader on first use after every Host restart.
+  registry.register('maker:get-new-maker-defaults', async ([agentKind]) => {
+    assertCurrent();
+    const kind = requireString(agentKind, 'agentKind');
+    if (kind !== 'claude-code' && kind !== 'codex' && kind !== 'pi') {
+      throwIpcError('INVALID_PARAMS', 'agentKind must be claude-code, codex or pi');
+    }
+    const defaults = await getHostNewMakerDefaults(kind);
+    assertCurrent();
+    return defaults;
+  });
+  const worktrees = deps.worktree;
+  registry.register('worktree:detect-cwd', async ([raw]) => {
+    assertCurrent();
+    const body = requireObject(raw);
+    try {
+      const result = await worktrees.detect(requireString(body.cwd, 'cwd'));
+      assertCurrent();
+      return result;
+    } catch {
+      throwIpcError('INTERNAL', 'Worktree directory probe failed');
+    }
+  });
+  registry.register('worktree:list-branches', async ([raw]) => {
+    assertCurrent();
+    const body = requireObject(raw);
+    const result = await worktrees.listBranches(requireString(body.baseRepo, 'baseRepo'));
+    assertCurrent();
+    return result;
+  });
+  registry.register('worktree:suggest-name', async ([raw]) => {
+    assertCurrent();
+    const body = requireObject(raw);
+    const name = await worktrees.suggestName(requireString(body.baseRepo, 'baseRepo'));
+    assertCurrent();
+    return { name };
+  });
+  registry.register('worktree:removal-preview', async ([sessionId]) => {
+    assertCurrent();
+    if (typeof sessionId !== 'string' || !sessionId) return { hasWorktree: false, dirty: false };
+    const result = await worktrees.getRemovalPreview(sessionId);
+    assertCurrent();
+    return result;
+  });
+  registry.register('worktree:create', async ([raw]) => {
+    refuseWhileHeld();
+    assertCurrent();
+    const body = requireObject(raw);
+    const request: CreateWorktreeReq = {
+      sessionId: requireString(body.sessionId, 'sessionId'),
+      baseRepo: requireString(body.baseRepo, 'baseRepo'),
+      name: requireString(body.name, 'name'),
+      sourceBranch: requireString(body.sourceBranch, 'sourceBranch'),
+      ...(body.recoveryKey !== undefined ? { recoveryKey: requireString(body.recoveryKey, 'recoveryKey') } : {}),
+      ...(body.ephemeral !== undefined ? { ephemeral: body.ephemeral === true } : {}),
+    };
+    const context = getDeviceLinkInvokeContext();
+    const result = await worktrees.createWorktree(request, {
+      // The controller starts the task in this directory right after the reply; on the Host nothing
+      // else waits for the background checkout, so answer only once the whole tree is written.
+      awaitFullCheckout: true,
+      // Experience routing only: mobile/unknown controllers keep using their local ref.
+      refreshDefaultSource: !context || isDesktopPlatform(context.controllerPlatform),
+      assertWriteAllowed: () => { refuseWhileHeld(); assertCurrent(); },
+    });
+    assertCurrent();
+    return result;
+  });
+  const ipcRegistry: IpcHandlerRegistry = {
+    handle: (channel, handler) => registry.register(channel, args => handler(undefined, ...args)),
+  };
+  registerPrecreatedWorktreeDiscardHandler(ipcRegistry, {
+    assertCaller: () => { refuseWhileHeld(); assertCurrent(); },
+    withSessionLock: (sessionId, task) => withSendToSessionLock(sessionId, async () => {
+      refuseWhileHeld();
+      assertCurrent();
+      return task();
+    }),
+    isSessionClaimed: async sessionId => {
+      refuseWhileHeld();
+      assertCurrent();
+      return deps.isSessionClaimed(sessionId);
+    },
+    discard: worktrees.discardPrecreatedWorktree,
+    discardByRecoveryKey: worktrees.discardPrecreatedWorktreeByRecoveryKey,
+    cancel: worktrees.cancelPrecreatedWorktree,
+  });
+  registerMakerSessionSendHandler(ipcRegistry, {
+    sendToAgentAccepted: async (sessionId, message, createOpts, sendOpts) => {
+      refuseWhileHeld();
+      if (!sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required');
+      const result = await deps.send(sessionId, message, createOpts,
+        stampDirectSendSourceDevice(sendOpts, readDeviceLinkInvokeSourceDevice()));
+      assertCurrent();
+      return result;
+    },
+    assertRemoteInputControlBoundary: (sessionId, opts) => deps.assertRemoteInputControlBoundary(sessionId, opts),
+  });
+  registry.register(MAKER_INVOKE.SET_EXTRA_DIRS, async ([sessionId, dirs]) => {
+    refuseWhileHeld();
+    if (typeof sessionId !== 'string' || !sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required');
+    if (!Array.isArray(dirs)) throwIpcError('INVALID_PARAMS', 'dirs must be an array');
+    const result = await deps.setExtraDirs(sessionId, dirs);
+    // The grant transaction exposes metadata internally; the wire contract is the applied subset.
+    const applied = Array.isArray(result) ? result : result?.dirs;
+    if (Array.isArray(applied)) {
+      dispatch.markRemoteSettingPersistedInsideHandler(applied);
+      return applied;
+    }
+    return result;
+  });
+  registry.register(MAKER_INVOKE.SET_EFFORT, ([sessionId, effort]) => call('/api/sessions/set-effort', { sessionId, effort }));
+  registry.register(MAKER_INVOKE.SET_PERMISSION_MODE, ([sessionId, mode]) => call('/api/sessions/set-permission-mode', { sessionId, mode }));
+  registry.register(MAKER_INVOKE.SET_PLAN_MODE, ([sessionId, enabled]) => call('/api/sessions/set-plan-mode', { sessionId, enabled }));
+  registry.register(MAKER_INVOKE.SET_FAST_MODE, ([sessionId, enabled]) => call('/api/sessions/set-fast-mode', { sessionId, enabled }));
+  registry.register(MAKER_INVOKE.SET_THINKING_ENABLED, ([sessionId, enabled]) => call('/api/sessions/set-thinking-enabled', { sessionId, enabled }));
+  // Both writes reply and push only after the file is replaced (no synchronous I/O on this event loop).
+  const publishDefaults = async () => {
+    deps.publish?.({ type: 'new_maker_defaults_changed', defaults: await getHostNewMakerDefaultsByVendor() });
+  };
+  registry.register(MAKER_INVOKE.APPLY_NEW_MAKER_DRAFT_PREF, async ([pref]) => {
+    refuseWhileHeld();
+    const result = await applyHostNewMakerDraftPref(pref);
+    assertCurrent();
+    await publishDefaults();
+    return result;
+  });
+  registry.register(MAKER_INVOKE.APPLY_NEW_MAKER_WORKTREE_PREF, async ([pref]) => {
+    refuseWhileHeld();
+    const result = await applyHostNewMakerWorktreePref(pref);
+    assertCurrent();
+    await publishDefaults();
+    return result;
+  });
+  registerNewMakerWorktreeBranchPreferenceHandler(ipcRegistry, {
+    isDeviceLinkInvoke,
+    assertTrustedCaller: () => throwIpcError('PERMISSION_DENIED', 'Trusted Cindy caller required'),
+    getPreference: async baseRepo => {
+      assertCurrent();
+      const preference = await getNewMakerWorktreeBranchPreference(baseRepo);
+      assertCurrent();
+      return preference;
+    },
+    applyPreference: async input => {
+      refuseWhileHeld();
+      assertCurrent();
+      const snapshot = await applyNewMakerWorktreeBranchPreference(input);
+      assertCurrent();
+      return snapshot;
+    },
+    broadcast: (_channel, snapshot) => deps.publish?.({ type: 'new_maker_worktree_branch_changed', snapshot }),
+  });
+  registry.register(MAKER_INVOKE.GIT_SAFETY_GET, () => {
+    assertCurrent();
+    return readGitSafetyWire();
+  });
+  registry.register('maker:create-session', async ([input]) => {
+    const body = requireObject(input);
+    const requestedId = typeof body.id === 'string' && body.id ? body.id : null;
+    const create = async () => {
+      refuseWhileHeld();
+      assertCurrent();
+      const result = await deps.createRuntimeSession(input) as { sessionId?: unknown };
+      if (typeof result?.sessionId === 'string') {
+        try { await worktrees.backfillWorktreePath(result.sessionId); }
+        catch (error) { log.warn('Worktree path backfill failed', error); }
+      }
+      assertCurrent();
+      return result;
+    };
+    // The precreated flow supplies its id up front. Serialize the DB/runtime
+    // claim and path backfill with discard/cancel's final ownership check.
+    return requestedId ? withSendToSessionLock(requestedId, create) : create();
+  });
+  registry.register(MAKER_INVOKE.CLOSE_SESSION, async ([sessionId, opts]) => {
+    assertCurrent();
+    if (typeof sessionId !== 'string' || !sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required');
+    refuseWhileHeld();
+    await deps.closeRuntimeSession(sessionId, opts);
+    assertCurrent();
+  });
+  registry.register('local-db:sessions:patch-meta', async ([id, rawPatch]) => {
+    assertCurrent();
+    const sessionId = requireString(id, 'id');
+    const raw = requireObject(rawPatch, 'patch');
+    for (const key of Object.keys(raw)) {
+      if (!REMOTE_EDITABLE_META.has(key)) throwIpcError('INVALID_PARAMS', `field not allowed in patch-meta: ${key}`);
+    }
+    const { discardWorktreeChanges, deleteTarget, archiveSideChatParentId, ...patch } = raw;
+    if ('archiveSideChatParentId' in raw) {
+      if (typeof archiveSideChatParentId !== 'string' || !archiveSideChatParentId
+        || patch.status !== 'archived' || Object.keys(raw).length !== 2) {
+        throwIpcError('INVALID_PARAMS', 'Invalid linked follow-up archive intent');
+      }
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Linked side-chat archive is not supported on the Node Host');
+    }
+    if (discardWorktreeChanges !== undefined) {
+      if (discardWorktreeChanges !== true || patch.status !== 'archived') {
+        throwIpcError('INVALID_PARAMS', 'discardWorktreeChanges requires status archived');
+      }
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Discarding worktree changes on archive is not supported on the Node Host');
+    }
+    if (deleteTarget !== undefined && ((deleteTarget !== 'side-chat' && deleteTarget !== 'task') || patch.status !== 'deleted')) {
+      throwIpcError('INVALID_PARAMS', 'deleteTarget requires status deleted');
+    }
+    if (patch.status !== undefined && patch.status !== 'active' && patch.status !== 'archived' && patch.status !== 'deleted') {
+      throwIpcError('INVALID_PARAMS', `invalid status: ${String(patch.status)}`);
+    }
+    if (patch.title !== undefined && typeof patch.title !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'title must be a string');
+    }
+    return call('/api/sessions/update', { sessionId, patch, ...(deleteTarget ? { deleteTarget } : {}) });
+  });
   registry.register(PROJECT_ARCHIVE_CHANNEL, ([input]) => {
     // The preview is a read. Like project-info writes at the service boundary,
     // apply is refused on entry and rechecked at the write boundary after waiting.
@@ -368,6 +641,9 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     noteControllerAccessDenied: access.noteControllerAccessDenied,
     syncRemoteControlAccessGeneration: access.syncRemoteControlAccessGeneration,
     dispatchLocalInvoke: invoke,
+    // Registration above is synchronous, before either link starts. A retiring owner
+    // leaves the verdict unknown, including for a late request after stop clears the registry.
+    hasLocalChannel: channel => current() ? registry.has(channel) : undefined,
     assertRemoteBotInvocationAllowed: botBoundary.assertRemoteBotInvocationAllowed,
     projectRemoteSessionResult: botBoundary.projectRemoteSessionResult,
     projectRemoteBotPush: botBoundary.projectRemoteBotPush,
@@ -574,6 +850,12 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
           emit('local-db:messages:created', { sessionId: id, message: event.message });
         }
         break;
+      case 'new_maker_defaults_changed':
+        emit(MAKER_PUSH.NEW_MAKER_DRAFT_CHANGED, event.defaults);
+        break;
+      case 'new_maker_worktree_branch_changed':
+        emit('maker:new-maker-worktree-branch:changed', event.snapshot);
+        break;
       case 'project_aliases_changed':
         emit('local-db:project-aliases:changed', {});
         if (event.catalogChanged === true) emit('local-db:recent-workdirs:changed', {});
@@ -625,6 +907,8 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       && settings.readDeviceLinkSettings().remoteControlEnabled && !settings.readDeviceLinkSettings().revokedControllers.includes(peer),
     state: () => ({ enabled: settings.readDeviceLinkSettings().remoteControlEnabled,
       status: client.getStatus(), issue: deps.canRegister() ? issue : 'host-login-required',
+      ...(deps.canRegister() && issue === 'device-removed' && deps.officialDeviceLinkFetch
+        ? { hint: 'This Host was removed from the account. Run cindy-host remote rejoin to bring it back.' } : {}),
       controllers: dispatch.getActiveControllers(),
       ...(agentNet ? { agentNet: { enabled: settings.readDeviceLinkSettings().agentNetEnabled === true, active: agentNet.active(),
         ...(agentNet.active() && compatibilityIssue ? { compatibilityIssue } : {}) } } : {}) }),
@@ -655,6 +939,47 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
         return enabled;
       });
       sync(); return this.state();
+    },
+    /**
+     * 「重新加入」 (`cindy-host remote rejoin`): this Host was removed from the account in Cindy and comes back without signing in
+     * again (the user's decision, 2026-11-23), in the Desktop's order (deviceRejoin.ts): the Device Link registration, then
+     * Agent-Net, then only this Host's own connection. Every outcome comes back as `rejoin` with a hint for the command line,
+     * which does not receive thrown messages from the control channel.
+     */
+    async rejoin() {
+      try {
+        assertCurrent();
+        refuseWhileHeld();
+        if (!deps.canRegister()) throw new Error('Sign in with cindy-host login to register an independent Host device.');
+        const officialFetch = deps.officialDeviceLinkFetch;
+        if (!officialFetch) throw new Error('This Host has no official Device Link service to rejoin.');
+        const { agentNet: agentNetOutcome } = await rejoinRemovedDevice({
+          // This launcher stays on the account's official service (agentNetNode.ts scope).
+          selfHostedRelaySelected: () => false,
+          officialFetch: (path, opts) => officialFetch(path, opts),
+          rejoinAgentNet: async () => (agentNet ? agentNet.rejoin() : 'skipped'),
+          // A refused Agent-Net identity always falls back to the Device Link relay on this launcher (agentNetNode.ts `refusedFor`).
+          agentNetRequired: () => false,
+          // Only the main connection stopped itself on 4410; sync starts it again while remote control is on, and leaves
+          // the connections of tasks shared from other accounts running (start is a no-op for those).
+          restartConnection: () => sync(),
+          // The Host's account may change while the requests are in flight: stop before touching the next one.
+          assertCurrent,
+          warn: (message, error) => log.warn(`${message}: ${error instanceof Error ? error.message : String(error)}`),
+        });
+        return { ...this.state(), rejoin: { result: 'rejoined' as const, agentNet: agentNetOutcome,
+          ...(agentNetOutcome === 'failed'
+            ? { hint: 'Rejoined on Device Link. Agent-Net could not be restored yet; run cindy-host remote rejoin again later.' } : {}) } };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // An older Cindy service has no rejoin endpoint: signing in again is the way back there, as before.
+        if (message === 'DEVICE_REJOIN_UNSUPPORTED') {
+          return { ...this.state(), rejoin: { result: 'unsupported' as const,
+            hint: 'The Cindy service does not support rejoining yet. Sign in again with cindy-host login.' } };
+        }
+        log.warn(`rejoin failed: ${message}`);
+        return { ...this.state(), rejoin: { result: 'failed' as const, hint: `Could not rejoin: ${message}` } };
+      }
     },
     async revoke(deviceId: string) {
       assertCurrent();

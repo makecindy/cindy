@@ -166,10 +166,15 @@ export function createImOrchestrator(
     projectSwitching: adapter.projectSwitching === true,
   });
   const cards = createCardBuilders(adapter.ui, repo.getDefaultEffortFor);
+  const routeOverrideFor = adapter.sessions.routeOverrideFor?.bind(adapter.sessions);
+  const laneProjectDefaultsFor = adapter.sessions.laneProjectDefaultsFor?.bind(adapter.sessions);
   const defaultRouteSync = createImChannelDefaultRouteSync({
     source: adapter.sessions.source,
     config: adapter.config,
     isRouteUsable: (route) => turnRunner.hasAuthForRoute(route),
+    // 个人飞书 bot 的按群设置: 群里仍跟随默认的任务跟随这个群固定的模型, 或群绑定项目的设置。
+    ...(routeOverrideFor ? { routeOverrideFor } : {}),
+    ...(laneProjectDefaultsFor ? { laneProjectDefaultsFor } : {}),
   });
   const turnRunner = createTurnRunner(adapter, repo, cards, {
     acquirePendingAgentSwitch: (sessionId, opts) =>

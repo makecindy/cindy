@@ -7,6 +7,7 @@ import type { DeviceLinkConnectionIssue, DeviceLinkConnectionIssueKind, DeviceLi
 import type { LocalNetworkStatus } from '@/device-link/localNetworkStatus';
 import { getActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import { i18n } from '@/i18n';
+import { isExpoAndroidDnsFailure } from '@/api/expoAndroidDnsFailure';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 
 export {
@@ -249,7 +250,9 @@ function localizedStableRemoteError(error: string): string | null {
     if (error.includes('OFFER_EXPIRED')) return i18n.t('deviceLink.remoteError.offerExpired');
     return i18n.t('deviceLink.remoteError.preconditionFailed');
   }
-  if (isTransientRemoteError(error)) return i18n.t('deviceLink.remoteError.transient');
+  if (isExpoAndroidDnsFailure(error) || isTransientRemoteError(error)) {
+    return i18n.t('deviceLink.remoteError.transient');
+  }
   if (/(^|\[|\s)NOT_FOUND(\]|\s|:|$)/.test(error)) return i18n.t('deviceLink.remoteError.notFound');
   if (error.includes('BAD_REQUEST') || error.includes('INTERNAL')) {
     return i18n.t('deviceLink.remoteError.callFailed', { error });

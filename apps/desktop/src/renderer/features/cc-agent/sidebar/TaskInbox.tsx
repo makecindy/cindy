@@ -244,7 +244,7 @@ export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorit
                 <div key={itemKey(item)} className="w-full">
                   <div className="min-w-0 flex-1">
                     {item.kind === 'teammate' ? (
-                      <TeammateInboxRow entry={item.entry} section={section} />
+                      <TeammateInboxRow entry={item.entry} section={section} sessionVariant={rows.sessionVariant} />
                     ) : (
                       <InboxSessionRow entry={item} rows={rows} onAction={handleAction} />
                     )}

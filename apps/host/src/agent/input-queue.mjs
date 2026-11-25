@@ -18,6 +18,8 @@ import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/mak
 import { createLogger } from '../../../desktop/src/main/logger.ts';
 import { isSessionErrorSuppressed } from '../../../desktop/src/main/maker-ipc/sessionErrorSuppression.ts';
 import { createIpcError } from '../../../desktop/src/shared/ipc-errors.ts';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
+import { normalizeAgentInputClearBoundaryMs } from '../../../desktop/src/shared/agentInputQueue.ts';
 
 const settlementLog = createLogger('host-turn-settlement');
 const attachmentLog = createLogger('host-attachments');
@@ -470,6 +472,7 @@ export function createInputQueue(deps) {
         getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
       }),
       isTurnRunning: executor.isRunning,
+      isTurnRecovering: executor.isRecovering,
       /** Closes a task's idle runtime with the executor letting go of it first (turn-executor.mjs). */
       closeRuntime: id => { assertCurrent(); return executor.closeRuntime(id); },
       /** This runtime's context recovery rollover (null when recovery is not assembled). */
@@ -576,6 +579,43 @@ export function createInputQueue(deps) {
           } finally {
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, item.clientId, prepared.ownerId);
           }
+        });
+      },
+      /**
+       * Capture the input epoch before any asynchronous preparation. The stamp is
+       * attached by the Device Link adapter and checked again by the turn executor.
+       */
+      assertRemoteInputControlBoundary(id, opts) {
+        const expectedInputGeneration = coordinator.getGeneration(id);
+        const hasExpectedBoundary = opts && typeof opts === 'object'
+          && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
+        const expectedBoundary = hasExpectedBoundary
+          ? normalizeAgentInputClearBoundaryMs(opts.expectedClearBoundaryMs)
+          : undefined;
+        if (hasExpectedBoundary && expectedBoundary === undefined) {
+          throwIpcError('INVALID_PARAMS', 'expectedClearBoundaryMs must be null or a non-negative finite number');
+        }
+        return command(id, () => {
+          if (!coordinator.isGenerationCurrent(id, expectedInputGeneration)) {
+            throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
+          }
+          const currentBoundary = coordinator.getClearBoundaryMs(id);
+          if (hasExpectedBoundary && expectedBoundary !== currentBoundary) {
+            throwIpcError('PRECONDITION_FAILED',
+              `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expectedBoundary ?? 'null'}; currentClearBoundaryMs=${currentBoundary ?? 'null'}`);
+          }
+          return {
+            expectedClearBoundaryMs: currentBoundary,
+            expectedInputGeneration,
+            inputAbortSignal: coordinator.getInputAbortSignal(id, expectedInputGeneration),
+          };
+        });
+      },
+      /** The desktop-compatible direct maker:send path, using the full turn executor transaction. */
+      send(id, message, createOpts, sendOpts) {
+        return command(id, () => {
+          refuseWhileHeld();
+          return executor.send(id, message, createOpts, sendOpts);
         });
       },
       stop,

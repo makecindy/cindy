@@ -36,7 +36,17 @@ class NetworkSocket extends EventEmitter {
   bufferedAmount = 0;
   constructor(url: string, headers: unknown) { super(); network.set(this.id, this); send({ type: 'ws-open', id: this.id, url, headers }); }
   send(data: unknown) { if (this.readyState === WebSocket.OPEN) send({ type: 'ws-send', id: this.id, data }); }
-  terminate() { this.readyState = WebSocket.CLOSED; network.delete(this.id); send({ type: 'ws-close', id: this.id }); }
+  /**
+   * Like `ws`, ends in 'close' (1006) on the next turn. This socket is forgotten here right away, so the close Main reports for
+   * it afterwards is dropped: without this event the uplink that ended its own relay connection (a frame it refused) never
+   * heard that it was gone, and the socket kept it as its relay connection and never reconnected (2026-11-25: 4.5 hours
+   * until the app was restarted).
+   */
+  terminate() {
+    if (this.readyState === WebSocket.CLOSED) return;
+    this.readyState = WebSocket.CLOSED; network.delete(this.id); send({ type: 'ws-close', id: this.id });
+    setImmediate(() => this.emit('close', 1006));
+  }
 }
 function client(value: any): AgentNetClient {
   return new AgentNetClient(value.base, value.identity, value.certificate, value.rootPublicKey, value.delegation, {
@@ -102,6 +112,8 @@ port.on('message', (message) => {
       onDelegationRequests(requests) { send({ type: 'delegation-requests', requests }); },
       onDelegations(delegations) { send({ type: 'delegations', delegations }); },
       onPathChanged(id, path) { ids.add(id); send({ type: 'path', id, path }); snapshot(); },
+      onRelayReplaced() { if (message.reportRelayReplacements) send({ type: 'relay-replaced' }); },
+      onRelayClosed(closeCode, reason) { send({ type: 'relay-closed', code: closeCode, reason }); },
       ...(message.tap ? { tap: (data, via) => send({ type: 'tap', data, via }) } : {}),
     }).then((value) => {
       socket = value;
@@ -130,6 +142,8 @@ port.on('message', (message) => {
     snapshot();
   }
   if (message.type === 'network-changed') socket.networkChanged();
+  if (message.type === 'duplicate-identity-cooldown') socket.setDuplicateIdentityCooldown(message.active === true);
   if (message.type === 'relay-stalled') socket.relayStalled();
+  if (message.type === 'relay-restart') socket.restartRelay();
   if (message.type === 'close') socket.close(message.code);
 });

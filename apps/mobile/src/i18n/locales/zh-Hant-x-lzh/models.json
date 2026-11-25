@@ -118,7 +118,10 @@
       "expiring": "將廢者先用",
       "order": "依序",
       "rotate": "輪值",
-      "cheapest": "最省"
+      "cheapest": "最省",
+      "drain": "盡而後易",
+      "headroom": "餘多者先",
+      "weighted": "依權"
     },
     "sourceOnDevice": "{{provider}} · {{device}}",
     "why": {
@@ -131,6 +134,11 @@
       "soonestUntil": "諸源限額皆盡，彼最先復（{{reset}}）",
       "cheapest": "標價最低",
       "cheapestFree": "訂閱尚有限額，不另費錢",
+      "drain": "續用之，待其限額盡",
+      "drainNext": "前源已盡或不可用，易至此",
+      "headroom": "餘額最多",
+      "headroomQuota": "限額尚餘 {{left}}%，多於諸源",
+      "weighted": "依權此番分至彼",
       "exceptionImage": "訊中有圖，唯於能觀圖之源中擇",
       "exceptionImageFallback": "訊中有圖，然無能觀圖之源，照常擇之",
       "exceptionHours": "此時段改行「{{name}}」",

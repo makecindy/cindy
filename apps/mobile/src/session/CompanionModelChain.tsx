@@ -30,7 +30,7 @@ import { useRemoteAgentCatalogs } from './useRemoteAgentCatalogs';
 export type { CompanionModelRoute } from '@cindy/maker-shared/model-route';
 /** 来源数 · 选法 · 推理强度，与 Desktop 选择器里模型组那一行同一写法。 */
 function modelGroupHint(group: CompanionModelGroup, t: TFunction): string {
-  return [t('models.modelGroups.sourceCount', { count: group.sources }), t(`models.modelGroups.strategy.${group.strategy}`),
+  return [t('models.modelGroups.sourceCount', { count: group.sources }), group.strategy ? t(`models.modelGroups.strategy.${group.strategy}`) : '',
     group.effort ? t(`models.options.effortLevels.${group.effort}`, { defaultValue: group.effort }) : ''].filter(Boolean).join(' · ');
 }
 export function readCompanionModelChain(value: unknown): CompanionModelRoute[] {

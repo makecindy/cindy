@@ -548,19 +548,19 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
         </section>
 
         <section className="flex flex-col gap-2">
-          <div className="overflow-hidden rounded-xl border border-[var(--border-default)]">
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() => void deleteGroup()}
-              className={cn(
-                'flex min-h-11 w-full items-center px-3 py-2 text-left text-13 font-medium text-[var(--text-danger)] outline-none transition-colors',
-                'enabled:hover:bg-[var(--danger-bg-soft)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)] disabled:opacity-60',
-              )}
-            >
-              {t('bots.groupChat.settings.delete')}
-            </button>
-          </div>
+          {/* Irreversible: shared Button danger tone (DESIGN.md §4 Destructive actions, C-07). */}
+          <Button
+            variant="secondary"
+            tone="danger"
+            size="md"
+            compact
+            disabled={busy !== null}
+            loading={busy === 'delete'}
+            onClick={() => void deleteGroup()}
+            className="self-start"
+          >
+            {t('bots.groupChat.settings.delete')}
+          </Button>
           <p className="text-12 leading-normal text-[var(--text-tertiary)]">
             {t('bots.groupChat.settings.deleteNote')}
           </p>
