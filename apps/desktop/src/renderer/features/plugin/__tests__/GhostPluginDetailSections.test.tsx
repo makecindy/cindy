@@ -656,6 +656,32 @@ describe('Ghost plugin detail sections', () => {
     expect(within(version).getByText('Only version changes')).toBeTruthy();
   });
 
+  // The route can replace an installed detail without unmounting the view.
+  it('shows exactly one set of release notes when switching between installed plugins', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const props = {
+      ghost: null, panelStatus: null, onBack: vi.fn(), onToggle: vi.fn(),
+      onUse: vi.fn(), onUpdate: vi.fn(), onUpdateFromFile: vi.fn(),
+      onUninstall: vi.fn(), toggleDisabled: false,
+    };
+    const view = (id: string, releaseNotes: string) =>
+      <GhostPluginDetailView {...props} detail={{ ...detail, id, name: id, releaseNotes }} />;
+    try {
+      const { rerender } = render(view('art', 'Art release notes'));
+      expect(screen.getByText('Art release notes')).toBeTruthy();
+      rerender(view('web-search', 'Search release notes'));
+      expect(screen.queryByText('Art release notes')).toBeNull();
+      expect(screen.getByText('Search release notes')).toBeTruthy();
+      rerender(view('art', 'Art release notes'));
+      expect(screen.queryByText('Search release notes')).toBeNull();
+      expect(screen.getAllByRole('heading', { name: /recentUpdates/ })).toHaveLength(1);
+      expect(screen.getAllByText('Art release notes')).toHaveLength(1);
+      expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key|duplicate key/i);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it.each(['Changes in the target release', undefined])('shows the version of the available notes when target notes are %j', updateNotes => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     render(<GhostPluginDetailView ghost={null} detail={{ ...detail, releaseNotes: 'Installed release notes' }} panelStatus={null}

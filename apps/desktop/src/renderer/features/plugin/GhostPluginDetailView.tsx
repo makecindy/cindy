@@ -513,7 +513,7 @@ export function GhostPluginDetailView({
           ) : null}
         </PluginDetailHeader>
 
-        <PluginRecentUpdates key={detail.id} updates={releaseUpdates} fallback={fallbackNotes ? {
+        <PluginRecentUpdates key={`updates:${detail.id}`} updates={releaseUpdates} fallback={fallbackNotes ? {
           version: noteVersion, releaseNotes: fallbackNotes,
           publishedAt: marketItem?.sourceType === 'server' && marketItem.version === noteVersion ? marketItem.publishedAt : undefined,
         } : undefined} />
@@ -722,7 +722,7 @@ export function GhostPluginDetailView({
 
         {publishingSection}
 
-        <PluginDetailRecord key={detail.id}>
+        <PluginDetailRecord key={`record:${detail.id}`}>
           <PluginPermissionSummary items={permissionFacts} />
           <DetailsSection
             detail={remote ? { ...detail, installDir: null } : detail}
