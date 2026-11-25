@@ -112,8 +112,8 @@ describe('buildHomeSections', () => {
 
   it('只有一个设备时不渲染设备分区标题', () => {
     const home = presentation({
-      deviceFilters: [{ deviceId: 'a', id: 'a', label: '电脑 A' }],
-      chats: [{ ...listItem('c1', '2026-06-01T00:00:00Z'), session: { id: 'c1', deviceLinkDeviceId: 'a' } }],
+      deviceFilters: [{ deviceId: 'a', id: 'a', label: '电脑 A' } as unknown as MobileHomePresentation['deviceFilters'][number]],
+      chats: [{ ...listItem('c1', '2026-06-01T00:00:00Z'), session: { id: 'c1', deviceLinkDeviceId: 'a' } as never }],
     });
     const [section] = buildHomeSections(home, false, false, { groupDevice: true });
     expect(section).toMatchObject({ key: 'device:a', title: null });
@@ -123,10 +123,10 @@ describe('buildHomeSections', () => {
     const home = presentation({
       selectedDeviceId: 'a',
       deviceFilters: [
-        { deviceId: 'a', id: 'a', label: '电脑 A' },
-        { deviceId: 'b', id: 'b', label: '电脑 B' },
+        { deviceId: 'a', id: 'a', label: '电脑 A' } as unknown as MobileHomePresentation['deviceFilters'][number],
+        { deviceId: 'b', id: 'b', label: '电脑 B' } as unknown as MobileHomePresentation['deviceFilters'][number],
       ],
-      chats: [{ ...listItem('c1', '2026-06-01T00:00:00Z'), session: { id: 'c1', deviceLinkDeviceId: 'a' } }],
+      chats: [{ ...listItem('c1', '2026-06-01T00:00:00Z'), session: { id: 'c1', deviceLinkDeviceId: 'a' } as never }],
     });
     const [section] = buildHomeSections(home, false, false, { groupDevice: true });
     expect(section).toMatchObject({ key: 'device:a', title: null });
