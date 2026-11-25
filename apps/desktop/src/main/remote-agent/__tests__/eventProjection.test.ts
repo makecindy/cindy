@@ -348,6 +348,7 @@ describe('remote file references on the task computer', () => {
     const unmapped = 'file:///Users/other/Application Support/untouched.cs';
     const reply = [
       `1. M1 ([CursorSystem_InputMode.cs](${spell('Client/CursorSystem_InputMode.cs')})、[Gamepad (1).cs](${spell('Client/Gamepad (1).cs')}#L10-L20))`,
+      `标题：[双引号](${spell('Client/CursorSystem_InputMode.cs')} "章节)说明")、[单引号](${spell('Client/CursorSystem_InputMode.cs')} '章节)说明')、[括号](${spell('Client/CursorSystem_InputMode.cs')} (报告标题))、[空白]( ${spell('Client/CursorSystem_InputMode.cs')} )`,
       `尖括号：[A](<${spell('Client/CursorSystem_InputMode.cs')}#L3>)`,
       `裸链接：${spell('Client/CursorSystem_InputMode.cs')}，保持：[原样](${unmapped})`,
     ].join('\n');
@@ -359,6 +360,7 @@ describe('remote file references on the task computer', () => {
     const projected = output.map(text).join('');
     expect(projected).toBe([
       `1. M1 ([CursorSystem_InputMode.cs](${encodeLink(fileA)})、[Gamepad (1).cs](${encodeLink(fileB, '#L10-L20')}))`,
+      `标题：[双引号](${encodeLink(fileA)} "章节)说明")、[单引号](${encodeLink(fileA)} '章节)说明')、[括号](${encodeLink(fileA)} (报告标题))、[空白]( ${encodeLink(fileA)} )`,
       `尖括号：[A](<${pathToFileURL(fileA).href}#L3>)`,
       `裸链接：${pathToFileURL(fileA).href}，保持：[原样](${unmapped})`,
     ].join('\n'));

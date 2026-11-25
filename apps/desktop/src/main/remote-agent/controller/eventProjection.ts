@@ -8,12 +8,109 @@ import { mapJsonPathText, pathTextContext, type ExecutorWorkspace, type PathText
 
 // 文件链接仍按 Markdown 分隔符与中文标点取路径；其它 URL 的括号、IPv6 方括号等属于地址，不能当成本机路径正文。
 const URL_TEXT = /(?:file|xdt-(?:file|audio|image)):\/\/[^\s\x60"'<>()[\]{}，。、；：！？（）【】《》「」『』“”‘’]+|[a-z][a-z0-9+.-]*:\/\/[^\s\x60"'<>]+/gi;
-/** Markdown 链接 `[名称](file:///绝对路径)` 与 `[名称](xdt-file:///绝对路径)`；括号内才是完整地址，路径可能带裸空格或成对括号。 */
-const MARKDOWN_FILE_LINK = /\]\(((?:file:\/\/|xdt-(?:file|image):\/\/\/)(?:[^()\r\n]|\([^()\r\n]*\))+)\)/gi;
+/** Markdown 链接 `[名称](file:///绝对路径)` 与 `[名称](xdt-file:///绝对路径)` 开头；支持前导水平空白。 */
+const MARKDOWN_FILE_LINK_OPEN = /\]\(([ \t]*(?:file:\/\/|xdt-(?:file|image):\/\/\/))/gi;
 const FILE_URL_SCHEME = /^(?:file|xdt-(?:file|audio|image)):\/\//i;
 const BARE_URL_HARD_STOP = /[\r\n\x60"'<>()[\]{}，。、；：！？（）【】《》「」『』“”‘’]/;
 const BARE_URL_STOP = /[\s\x60"'<>()[\]{}，。、；：！？（）【】《》「」『』“”‘’]/;
 const FILE_URL_PREFIX_BEFORE_PATH = /(?:file|xdt-(?:file|audio|image)):\/\/(?:localhost)?\/?$/i;
+
+/**
+ * 扫描 Markdown 链接 `](...)` 内容直到匹配的闭合 `)`；支持路径中的成对括号，并跳过空白后的引号标题
+ * (`"..."` / `'...'`) 内的括号。遇到换行或串尾仍未闭合时返回 -1。
+ */
+function findMarkdownLinkEnd(text: string, contentStart: number): number {
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+  for (let index = contentStart; index < text.length; index += 1) {
+    const ch = text[index];
+    if (ch === '\r' || ch === '\n') return -1;
+    if (quote) {
+      if (ch === '\\' && index + 1 < text.length) {
+        index += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if ((ch === '"' || ch === "'") && index > contentStart && /[ \t]/.test(text[index - 1])) {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(') depth += 1;
+    else if (ch === ')') {
+      if (depth === 0) return index;
+      depth -= 1;
+    }
+  }
+  return -1;
+}
+
+function fileUrlExistsLocally(urlValue: string, workspace: ExecutorWorkspace): boolean {
+  try {
+    const url = new URL(urlValue);
+    if (url.protocol !== 'file:' && url.protocol !== 'xdt-file:' && url.protocol !== 'xdt-image:') return false;
+    const remote = url.hostname
+      ? '//' + url.hostname + decodeURIComponent(url.pathname)
+      : decodeURIComponent(url.pathname).replace(/^\/(?=[A-Za-z]:[\\/])/, '');
+    const local = workspace.mapAlias(remote);
+    return local !== remote && fs.existsSync(local);
+  } catch {
+    return false;
+  }
+}
+
+/** 分离 Markdown 链接目标与尾部空白 / 三种合法标题定界形式（`"..."`、`'...'`、`(...)`）。 */
+function splitMarkdownLinkTarget(raw: string, workspace: ExecutorWorkspace): { target: string; suffix: string } {
+  const trimmedEnd = raw.replace(/[ \t]+$/, '');
+  const trailingSpace = raw.slice(trimmedEnd.length);
+  const lastChar = trimmedEnd.at(-1);
+  if (lastChar === '"' || lastChar === "'") {
+    for (let index = trimmedEnd.length - 2; index > 0; index -= 1) {
+      if (trimmedEnd[index] !== lastChar) continue;
+      let slashes = 0;
+      for (let back = index - 1; back >= 0 && trimmedEnd[back] === '\\'; back -= 1) slashes += 1;
+      if (slashes % 2 === 1) continue;
+      if (/[ \t]/.test(trimmedEnd[index - 1])) {
+        let sep = index - 1;
+        while (sep > 0 && /[ \t]/.test(trimmedEnd[sep - 1])) sep -= 1;
+        return { target: trimmedEnd.slice(0, sep), suffix: trimmedEnd.slice(sep) + trailingSpace };
+      }
+      break;
+    }
+  }
+  if (lastChar === ')') {
+    const parenTitle = /([ \t]+\([^()\r\n]*\))$/.exec(trimmedEnd);
+    if (parenTitle && !fileUrlExistsLocally(trimmedEnd.replace(/\s/g, encodeURIComponent), workspace)) {
+      return { target: trimmedEnd.slice(0, parenTitle.index), suffix: parenTitle[1] + trailingSpace };
+    }
+  }
+  return { target: trimmedEnd, suffix: trailingSpace };
+}
+
+function replaceMarkdownFileLinks(value: string, workspace: ExecutorWorkspace): string {
+  let result = '';
+  let last = 0;
+  for (const match of value.matchAll(MARKDOWN_FILE_LINK_OPEN)) {
+    const start = match.index!;
+    if (start < last) continue;
+    const contentStart = start + 2;
+    const close = findMarkdownLinkEnd(value, contentStart);
+    if (close < 0) continue;
+    const raw = value.slice(contentStart, close);
+    const body = raw.replace(/^[ \t]+/, '');
+    const leading = raw.slice(0, raw.length - body.length);
+    const { target, suffix } = splitMarkdownLinkTarget(body, workspace);
+    const encoded = target.replace(/\s/g, encodeURIComponent);
+    const local = localFileUrl(encoded, workspace);
+    if (local === encoded) continue;
+    // Markdown 链接目标里的括号需要编码，避免本机目录或文件名带括号时提前闭合链接。
+    const safe = local.replace(/\(/g, '%28').replace(/\)/g, '%29');
+    result += value.slice(last, start) + '](' + leading + safe + suffix + ')';
+    last = close + 1;
+  }
+  return last === 0 ? value : result + value.slice(last);
+}
 const TEXT_BOUNDARIES = new Set(['tool_use', 'tool_result', 'tool_result_full', 'interaction_request', 'done', 'error', 'compact_boundary']);
 const IDENTITY_FIELDS = new Set(['id', 'toolUseId', 'toolUseIds', 'agentMessageId', 'taskId', 'parentToolUseId', 'turnId', 'requestId', 'blockId', 'sessionId', 'sdkSessionId', 'toolName', 'lastToolName', 'model', 'providerId']);
 
@@ -124,17 +221,7 @@ export function localText(value: string, workspace: ExecutorWorkspace, context: 
     return local === remote ? literal : code !== undefined ? '\x60' + local + '\x60' : '<' + local + '>';
   });
   // URL 分词会在裸空格处截断路径，Markdown 文件链接先按括号取完整地址；未映射的保持原文。
-  value = value.replace(MARKDOWN_FILE_LINK, (link, rawTarget: string) => {
-    const titleMatch = /\s+(?:"[^"\r\n]*"|'[^'\r\n]*')$/.exec(rawTarget);
-    const target = titleMatch ? rawTarget.slice(0, titleMatch.index) : rawTarget;
-    const title = titleMatch ? titleMatch[0] : '';
-    const encoded = target.replace(/\s/g, encodeURIComponent);
-    const local = localFileUrl(encoded, workspace);
-    if (local === encoded) return link;
-    // Markdown 链接目标里的括号需要编码，避免本机目录或文件名带括号时提前闭合链接。
-    const safe = local.replace(/\(/g, '%28').replace(/\)/g, '%29');
-    return '](' + safe + title + ')';
-  });
+  value = replaceMarkdownFileLinks(value, workspace);
   // URL 单独解析；HTTP 与媒体仓标识不得被普通路径替换改写。
   const parts: string[] = [];
   let end = 0;
@@ -203,17 +290,7 @@ function pendingPrefixes(workspace: ExecutorWorkspace): PendingPrefix[] {
 }
 
 function hasClosingParen(suffix: string): boolean {
-  let depth = 0;
-  for (let index = 0; index < suffix.length; index += 1) {
-    const ch = suffix[index];
-    if (ch === '\r' || ch === '\n') return true;
-    if (ch === '(') depth += 1;
-    else if (ch === ')') {
-      if (depth === 0) return true;
-      depth -= 1;
-    }
-  }
-  return false;
+  return suffix.includes('\r') || suffix.includes('\n') || findMarkdownLinkEnd(suffix, 0) >= 0;
 }
 
 function isBareFileUrlEnded(suffix: string, workspace: ExecutorWorkspace): boolean {
@@ -253,8 +330,14 @@ function pendingPathIndex(text: string, workspace: ExecutorWorkspace): number {
       const tail = source.slice(start);
       const quote = text[start - 1];
       const closing = quote === '<' ? '>' : /["'\x60]/.test(quote ?? '') ? quote : undefined;
-      const markdownLink = isFileUrlScheme && start >= 2 && text[start - 2] === ']' && text[start - 1] === '(';
-      const openStart = markdownLink ? start - 2 : closing ? start - 1 : start;
+      let linkOpen = -1;
+      if (isFileUrlScheme && start >= 2) {
+        let before = start - 1;
+        while (before > 0 && (text[before] === ' ' || text[before] === '\t')) before -= 1;
+        if (before >= 1 && text[before - 1] === ']' && text[before] === '(') linkOpen = before - 1;
+      }
+      const markdownLink = linkOpen >= 0;
+      const openStart = markdownLink ? linkOpen : closing ? start - 1 : start;
       if (target.startsWith(tail)) {
         pending = Math.min(pending, openStart);
         continue;
@@ -278,7 +361,8 @@ function pendingPathIndex(text: string, workspace: ExecutorWorkspace): number {
   }
   // 引号或 Markdown 链接开括号可能独占一个 delta；保留它们，下一段路径才能按完整引用(含空格)解析。
   if (pending === text.length) {
-    if (text.endsWith('](')) pending = text.length - 2;
+    const openLink = /\]\([ \t]*$/.exec(text);
+    if (openLink) pending = openLink.index;
     else if (text.endsWith(']')) pending = text.length - 1;
     else {
       const trailing = text.at(-1);
