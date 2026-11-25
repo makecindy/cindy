@@ -173,11 +173,7 @@ export function finishSessionTerminalEvent(
   const { persistId, workerTerminalCapture, providerGroupHoldId } = delivery;
   // 收口闸门的单写点：每个事件都调一次（含无工具回合），判定在收口时做。
   if (typeof event.sessionTurnGeneration === 'number') {
-    noteTurnEvent(
-      session.id,
-      event.sessionTurnGeneration,
-      event.type === 'tool_use' ? (event.data as { toolName?: string }).toolName : undefined,
-    );
+    noteTurnEvent(session.id, event.sessionTurnGeneration);
   }
   const terminalOwner =
     event.type === 'done' || isTerminalTurnErrorEvent(event)

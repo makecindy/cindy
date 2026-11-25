@@ -19,6 +19,13 @@ export interface LeadDispatchFact {
   dispatchId: string;
   turnGeneration: number;
   delivery: OrcaDispatchDelivery;
+  /**
+   * 凭据落地时 Lead 已经收口过几次。
+   *
+   * 回合归属靠它，不靠代次：代次由事件推出来，Stop hook 可能在本轮事件投递前触发，
+   * 那时用代次比较会把本轮的派发漏掉，把一句真话判成假话。
+   */
+  settlesAtAccept?: number;
   queuedMessageId?: string;
   at: number;
   /**
@@ -75,13 +82,18 @@ function ledgerFor(leadSessionId: string): LeadLedger {
   return ledger;
 }
 
-/** 轮次回退 = 换了会话实例，旧账本不能继续用（否则上一实例的提醒状态会压住新实例）。 */
+/** 轮次回退 = 换了会话实例，只作废旧实例的提醒额度，凭据留着。 */
 function observeGeneration(ledger: LeadLedger, turnGeneration: number): void {
+  // 轮次未知（Stop hook 可能在本轮事件投递前触发）：既不算前进也不算回退。
+  if (turnGeneration <= 0) return;
   if (turnGeneration >= ledger.turnGeneration) {
     ledger.turnGeneration = turnGeneration;
     return;
   }
-  ledgersReset(ledger);
+  // 回退通常只是实例重建，凭据还在 Lead 自己的上下文里；跟着清掉的话，
+  // 它引用一个真实存在的编号就会被判成无中生有。只清额度。
+  ledger.remindedGeneration = null;
+  ledger.remindedClaims.clear();
   ledger.turnGeneration = turnGeneration;
 }
 
@@ -143,17 +155,24 @@ export interface UnbackedDispatchClaim {
 
 /** 派发结果值闭集：这些值只可能来自工具返回。 */
 const WAKE_KIND_PATTERN = /\bwake_kind\s*[=:]\s*`?([a-z][a-z-]{2,20})`?/i;
-/** 宿主签发编号的协议标签：只认这几个标签，不猜裸 id。 */
-const LABELED_ID_ALL_PATTERN =
-  /\b(queued_message_id|message_id|dispatch_id)\s*[=:]\s*`?([A-Za-z0-9_-]{8,64})`?/gi;
+
+/**
+ * 宿主会发出的 wake_kind 值（`send_to_worker` / `send_to_session` 的返回闭集）。
+ *
+ * 不在这个集合里的值不可能来自任何一次派发——账本里有多少条都一样。
+ */
+const ISSUED_WAKE_KINDS = new Set(['resumed', 'already-active', 'queued', 'created']);
+/** 宿主签发编号的协议标签：只认派发编号，不猜裸 id。入站排队编号由宿主自己印在输入里，拿来核对只会拦下真话。 */
+const LABELED_ID_ALL_PATTERN = /\b(dispatch_id)\s*[=:]\s*`?([A-Za-z0-9_-]{8,64})`?/gi;
 
 /**
  * 找出回复里「引用了宿主没有的派发凭据」的第一处。
  *
- * - `wake_kind=<值>` 断言了一次派发结果，而账本里一条凭据都没有 → 无中生有。
- * - `queued_message_id: <编号>` 等标签后的编号必须命中账本里某个派发/排队编号。
+ * - `wake_kind=<值>` 断言了一次派发结果：值不在协议闭集里，或账本里一条凭据都没有 → 无中生有。
+ * - `dispatch_id: <编号>` 必须命中账本里某个派发编号。`queued_message_id` / `message_id`
+ *   是**入站**回报的编号（宿主自己印进 Lead 输入），复述它们是正常行为，不核对。
  *
- * 账本非空时 `wake_kind` 不判：那时分不清它复述的是哪一次派发，误判代价高。
+ * 账本非空且 wake_kind 是合法值时不管：那时分不清它复述的是哪一次派发，误判代价高。
  */
 export function findUnbackedDispatchClaim(
   leadSessionId: string,
@@ -163,8 +182,11 @@ export function findUnbackedDispatchClaim(
   const facts = ledger ? ledger.facts : [];
 
   const wakeKind = text.match(WAKE_KIND_PATTERN);
-  if (wakeKind && facts.length === 0) {
-    return { kind: 'wake-kind', token: wakeKind[1]!, label: 'wake_kind' };
+  if (wakeKind) {
+    const token = wakeKind[1]!.toLowerCase();
+    // 协议里不存在的值，账本再多也证明不了它：先判这一条，与账本无关。
+    if (!ISSUED_WAKE_KINDS.has(token)) return { kind: 'wake-kind', token, label: 'wake_kind' };
+    if (facts.length === 0) return { kind: 'wake-kind', token, label: 'wake_kind' };
   }
 
   // 一条回复里可能列出多个编号：逐个核对，只要有一个查不到就拦住。
@@ -197,6 +219,8 @@ export function consumeDispatchClaimReminder(
 ): boolean {
   const ledger = ledgerFor(leadSessionId);
   observeGeneration(ledger, turnGeneration);
+  // 轮次未知时不能当作新的一轮：那会把同一句声称每轮纠一遍。
+  if (turnGeneration <= 0) return false;
   if (ledger.remindedGeneration === turnGeneration) return false;
   if (claimKey) {
     const now = Date.now();
