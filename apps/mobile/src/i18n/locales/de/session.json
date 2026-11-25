@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "Denkt nach…",
+    "replyStreaming": "Wird generiert…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} Token",
     "tokenRate": "{{rate}} tok/s",
