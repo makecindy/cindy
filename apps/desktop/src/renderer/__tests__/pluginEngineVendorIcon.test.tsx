@@ -459,6 +459,42 @@ describe('remote plugin engine icons in sidebar SessionStatusIcon', () => {
       expect(invoke.mock.calls).toEqual([['share:share-1', PLUGIN_ENGINES_INVOKE.LIST, []]]);
       expect(listPluginEngines).not.toHaveBeenCalled();
       expect(view.getAllByTitle('DeepSeek Harness')).toHaveLength(2);
+
+      // Going from online to offline keeps the cached icon visible without firing a doomed prefetch.
+      currentReceived = [{ ...baseShare, hostOnline: false }];
+      await act(async () => {
+        onReceivedChanged?.(currentReceived);
+        await Promise.resolve();
+      });
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(view.container.querySelectorAll('img[data-plugin-icon="original"]')).toHaveLength(2);
+
+      // Coming back online refreshes the stale catalogue once.
+      const refreshedIcon = 'data:image/png;base64,shared-whale-v2';
+      invoke.mockResolvedValueOnce([remoteEngine('dsh-plugin:dsh', 'DeepSeek Harness', refreshedIcon)]);
+      currentReceived = [{ ...baseShare, hostOnline: true }];
+      await act(async () => {
+        onReceivedChanged?.(currentReceived);
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        const imgs = view.container.querySelectorAll<HTMLImageElement>('img[data-plugin-icon="original"]');
+        expect(imgs).toHaveLength(2);
+        expect(imgs[0].getAttribute('src')).toBe(refreshedIcon);
+        expect(imgs[1].getAttribute('src')).toBe(refreshedIcon);
+      });
+      expect(invoke).toHaveBeenCalledTimes(2);
+
+      // Pausing the share evicts the cached icon without triggering a remote read.
+      currentReceived = [{ ...baseShare, status: 'paused', hostOnline: true }];
+      await act(async () => {
+        onReceivedChanged?.(currentReceived);
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(view.container.querySelector('img')).toBeNull();
+      });
+      expect(invoke).toHaveBeenCalledTimes(2);
     } finally {
       setDataOwnerGeneration(before.dataOwnerId, before.generation);
     }
