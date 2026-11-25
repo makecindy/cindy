@@ -618,11 +618,32 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
               return target.forkSdkSession(options);
             } else await writeAccountBindings([key], kind, 'default');
           }
-          const lease = await acquireSubscriptionAccount(provider, options.model, [key], true, { accountId: imported, resuming: true });
-          if (!lease) return target.forkSdkSession(options);
+          const pinned = readAccountBinding(key, kind);
+          const api = kind === 'openai' && pinned ? apiKeyPoolMember(pinned.accountId) : undefined;
+          const engine = target.kind === 'codex' || target.kind === 'pi' ? target.kind : undefined;
+          if (api && !engine)
+            throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task API key account is unavailable');
+          const lease = api
+            ? await acquireSubscriptionAccount(provider, options.model, [key], true, {
+              accountId: imported, resuming: true, includeApiKeys: true,
+              agent: engine,
+              remote: !!options.hostedForkAccess || !!options.hostedGuestHome,
+              ownComputer: options.hostedForkAccess?.ownComputer === true,
+              forkHistoryGuard: () => options.hostedForkAccess?.assertCurrent(),
+            })
+            : await acquireSubscriptionAccount(provider, options.model, [key], true, { accountId: imported, resuming: true });
+          if (!lease) {
+            if (api) throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task API key account is unavailable');
+            return target.forkSdkSession(options);
+          }
           try {
-            const result = await target.forkSdkSession(engineOptions(options, lease, target.kind));
-            await lease.bind([key, `native:${result.newSdkSessionId}`]);
+            const routed = engineOptions(options, lease, target.kind);
+            if (api) options.hostedForkAccess?.assertCurrent();
+            const result = await target.forkSdkSession(lease.apiConnectionId
+              ? { ...routed, providerId: lease.apiConnectionId,
+                model: routed.model?.replace(/^chatgpt\//, '') } : routed);
+            // A key's source affinity is an immutable record of where its history ran.
+            await lease.bind([...(api ? [] : [key]), `native:${result.newSdkSessionId}`]);
             return result;
           } finally {
             lease.release();

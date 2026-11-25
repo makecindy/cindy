@@ -3772,6 +3772,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
                 tailTurnsToDrop: request.tailTurnsToDrop,
                 forkAtTimestampMs: request.forkAtTimestampMs,
                 workingDir,
+                hostedForkAccess: { ownComputer: !guest, assertCurrent: assertProvider },
                 ...(guest ? { hostedGuestHome: guestHomeFor(scope) } : {}),
               });
             } catch (error) {

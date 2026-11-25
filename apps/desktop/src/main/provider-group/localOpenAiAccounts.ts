@@ -189,15 +189,23 @@ export function openAiGroupAccountResult(row: Provider): Pick<OpenAiGroupAccount
   return { checks };
 }
 
+function accountHasApiModel(account: Provider, modelId: string, agent: AgentKind): boolean {
+  const model = findCatalogModel(account, modelId, agent, { exact: true });
+  return !!model && isOpenAiGroupApiModel(account, agent, model);
+}
+
+export function hasOpenAiGroupApiModel(id: string, modelId: string, agent: AgentKind): boolean {
+  const account = provider(id);
+  return !!account && accountHasApiModel(account, modelId, agent);
+}
+
 export function isLocalOpenAiGroupAccountUsable(groupId: string, id: string, modelId: string, agent: AgentKind): boolean {
   const group = provider(groupId);
   const account = id === groupId ? group : provider(id);
   const kind = account && openAiAccountGroupKind(account);
   if (id !== groupId && (!group || !openAiAccountGroupKind(group) || !account || !kind)) return false;
   if (!account || kind !== 'apiKey') return true;
-  const model = findCatalogModel(account, modelId, agent, { exact: true });
-  if (!model || !isOpenAiGroupApiModel(account, agent, model)) return false;
-  return !isOpenAiGroupAccountUnavailable(id, agent);
+  return accountHasApiModel(account, modelId, agent) && !isOpenAiGroupAccountUnavailable(id, agent);
 }
 
 function holdVersions(scope: CredentialScope, health: Health): string {

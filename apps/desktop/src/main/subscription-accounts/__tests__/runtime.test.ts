@@ -145,6 +145,7 @@ vi.mock('../apiKeyMembers.js', () => ({
       - Number(h.apiMembers.some(member => member.id === a.id))) : accounts,
 }));
 vi.mock('../../provider-group/localOpenAiAccounts.js', () => ({
+  hasOpenAiGroupApiModel: (_id: string, model: string) => model === 'gpt-6',
   isLocalOpenAiGroupAccountUsable: () => h.apiAllowed,
   isOpenAiGroupAccountUnavailable: () => !h.apiAllowed,
   openAiGroupAccountResult: () => ({ checks: [] }),
@@ -246,7 +247,9 @@ vi.mock('../store.js', () => ({
     providerId: SubscriptionProvider,
     accountId: string,
     via?: string,
+    assertCurrent?: () => void,
   ) => {
+    assertCurrent?.();
     for (const key of keys) h.bindings.set(key, { providerId, accountId, ...(via && via !== providerId ? { via } : {}) });
   },
   updatePool: async (
@@ -507,6 +510,48 @@ it('keeps an existing local Key task on its native history after removal, but no
     expect(startSession.mock.lastCall?.[0].providerId).toBe(connection);
     expect(h.bindings.has('task:detached-new')).toBe(false);
     await explicit.close();
+  } finally {
+    setCustomProviderKeyReader(() => null);
+  }
+});
+
+// Unit through the production pool wrapper: a native history fork is pinned
+// and offline, even when the bound key is paused for new inference. The existing
+// native subscription fork tests never exercise a key account lease.
+it('forks pinned API key history without changing the source binding or selecting a new account', async () => {
+  const connection = 'fork-key-fixture';
+  const model = 'gpt-6';
+  const member = { ...account('fork-member'), connectionId: connection, providerId: 'openai', paused: true };
+  h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+  h.apiMembers = [member];
+  h.apiAllowed = false;
+  const binding = { providerId: 'openai' as const, accountId: member.id };
+  h.bindings.set('native:original-key-thread', binding);
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  const forkSdkSession = vi.fn<BaseAgent['forkSdkSession']>(async () => ({
+    newSdkSessionId: 'forked-key-thread', uuidMap: new Map<string, string>(),
+  }));
+  const startSession = vi.fn<BaseAgent['startSession']>(async () => ({
+    id: 'forked-key-thread', send: vi.fn(async () => {}), close: async () => {},
+  } as unknown as AgentSessionHandle));
+  const agent = withSubscriptionAccounts({ kind: 'codex', forkSdkSession, startSession } as unknown as BaseAgent);
+  const options = { providerId: 'openai', sourceSdkSessionId: 'original-key-thread', model, upToMessageId: undefined };
+  try {
+    const fork = await agent.forkSdkSession(options);
+    expect(forkSdkSession.mock.lastCall?.[0]).toMatchObject({ providerId: connection, model });
+    expect(h.bindings.get('native:original-key-thread')).toEqual(binding);
+    expect(h.bindings.get('native:forked-key-thread')).toEqual(binding);
+    expect(h.read).not.toHaveBeenCalled();
+    h.apiMembers = [{ ...member, paused: false, providerId: connection }];
+    h.apiAllowed = true;
+    const resumed = await agent.startSession({ providerId: 'openai', model, resumeSessionId: fork.newSdkSessionId } as StartSessionOptions);
+    expect(startSession.mock.lastCall?.[0]).toMatchObject({ providerId: connection, resumeSessionId: fork.newSdkSessionId });
+    await resumed.close();
+    await expect(agent.forkSdkSession({ ...options, hostedGuestHome: '/synthetic-guest' })).rejects.toThrow('unavailable');
+    await expect(agent.forkSdkSession({ ...options, model: 'model-not-on-key' })).rejects.toThrow('unavailable');
+    h.apiMembers = [];
+    await expect(agent.forkSdkSession(options)).rejects.toThrow('unavailable');
+    expect(forkSdkSession).toHaveBeenCalledTimes(1);
   } finally {
     setCustomProviderKeyReader(() => null);
   }

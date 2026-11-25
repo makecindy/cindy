@@ -106,7 +106,7 @@ import type { CodexModelListItem } from '@cindy/maker-core';
 import { readStoredAccountUsage, writeStoredAccountUsage } from '../usage/accountUsageStorage.js';
 import { subscriptionUsageView, SUBSCRIPTION_USAGE_TTL_MS } from './usageView.js';
 import { apiKeyMemberForConnection, apiKeyPoolAllowsAutoSwitch, apiKeyPoolMember, apiKeyPoolMembers, poolDispatchOrder, restoreStandaloneApiKeyMember, saveApiKeyPoolMembers } from './apiKeyMembers.js';
-import { isLocalOpenAiGroupAccountUsable, isOpenAiGroupAccountUnavailable, openAiGroupAccountResult } from '../provider-group/localOpenAiAccounts.js';
+import { hasOpenAiGroupApiModel, isLocalOpenAiGroupAccountUsable, isOpenAiGroupAccountUnavailable, openAiGroupAccountResult } from '../provider-group/localOpenAiAccounts.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { getProviderRouteCredentialRevision, hasCustomProviderKey } from '../maker-host/provider-route.js';
 
@@ -2555,6 +2555,8 @@ interface AccountAcquireOptions {
     ownComputer?: boolean;
     accountId?: string;
     resuming?: boolean;
+    /** A local history operation, never send admission or an unpinned pool pick. */
+    forkHistoryGuard?: () => void;
     /** Accounts already tried for this start (provider group: each member at most once per round). */
     exclude?: ReadonlySet<string>;
     /**
@@ -2598,9 +2600,10 @@ export async function acquireSubscriptionAccount(
   if (!pool) return null;
   const state = currentRuntime();
   const agent = options.agent ?? (model?.startsWith('chatgpt/') ? 'pi' : 'codex');
-  const apiAllowed = (id: string) => !control && !options.capability && !!model
+  const apiAllowed = (id: string, boundFork: boolean) => !options.capability && !!model
     && hasCustomProviderKey(id, agent)
-    && isLocalOpenAiGroupAccountUsable(id, id, model.replace(/^chatgpt\//, ''), agent)
+    && (boundFork ? hasOpenAiGroupApiModel(id, model.replace(/^chatgpt\//, ''), agent)
+      : !control && isLocalOpenAiGroupAccountUsable(id, id, model.replace(/^chatgpt\//, ''), agent))
     && subscriptionRouteAllowsModel(id, model.replace(/^chatgpt\//, ''), options);
   const accountsFor = (accounts: SubscriptionAccountConfig[], owner: string): SubscriptionAccountConfig[] => {
     const native = providerAccounts(provider, accounts, owner);
@@ -2636,6 +2639,11 @@ export async function acquireSubscriptionAccount(
   const pinnedKey = provider === 'openai' && pinnedTarget ? apiKeyPoolMember(pinnedTarget) : undefined;
   // An old group grant cannot follow a Key that has been restored to an
   // independent connection, even if that connection has its own valid grant.
+  const boundFork = control && options.forkHistoryGuard && pinnedKey && pinnedKey.id === binding?.accountId;
+  if (options.forkHistoryGuard && !boundFork)
+    throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task API key account is unavailable');
+  if (boundFork && options.remote && (selectionProvider !== ref.providerId || !subscriptionRouteAllowsModel(ref.providerId, model, options)))
+    throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task API key account is unavailable');
   if (options.remote && pinnedKey && pinnedKey.providerId === pinnedKey.connectionId
     && ref.providerId !== pinnedKey.connectionId)
     throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task API key account is unavailable');
@@ -2732,7 +2740,7 @@ export async function acquireSubscriptionAccount(
     const buildMembers = (rebind: boolean, credits: boolean) => group.map((a) => {
       const api = provider === 'openai' ? apiKeyPoolMember(a.id) : undefined;
       if (api) {
-        const usable = !planQuotaOnly && apiAllowed(api.connectionId);
+        const usable = !planQuotaOnly && apiAllowed(api.connectionId, !!boundFork && a.id === pinnedTarget);
         return { ...a, key: a.id, usable, auth: { authenticated: usable } as AuthState,
           unavailable: !usable, loggingIn: false, cooling: undefined,
           usage: providerGroupMemberUsageState({}, undefined, Date.now(), agent),
@@ -2939,6 +2947,15 @@ export async function acquireSubscriptionAccount(
     const current = readPool(provider);
     if (api) {
       const member = apiKeyPoolMember(selected);
+      if (boundFork) {
+        options.forkHistoryGuard!();
+        if (member?.providerId !== selectionProvider || !apiAllowed(api.connectionId, true)
+          || (options.remote && !subscriptionRouteAllowsModel(ref.providerId, currentModel, options))
+          || !keys.every(key => {
+            const current = readAccountBinding(key, provider);
+            return current?.accountId === selected && current.via === binding!.via;
+          })) throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task API key account is unavailable');
+      }
       // The owner can continue the exact native history on its bound Key
       // after removal. Never apply this exception to group grants or new picks.
       const detachedLocalBinding = !options.remote && member?.providerId === api.connectionId
@@ -3089,7 +3106,7 @@ export async function acquireSubscriptionAccount(
     },
     bind: async (ids) => {
       assertCurrent();
-      await writeAccountBindings(ids, provider, selected, ref.providerId);
+      await writeAccountBindings(ids, provider, selected, ref.providerId, boundFork ? () => assertCurrent() : undefined);
       assertCurrent();
     },
     reserveForTask: (taskId) => {
