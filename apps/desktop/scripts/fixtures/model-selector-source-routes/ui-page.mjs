@@ -25,6 +25,7 @@ export default {
     default: { about: 'Two providers of one brand: one merged entry, members not listed, a chosen row records member and route' },
     hidden: { about: 'The user hid the provider route: members are listed as before', data: { hidden: true } },
     shared: { about: 'Every member is a provider shared by someone else: choosing a model keeps the merged entry and the selection', data: { shared: true } },
+    running: { about: 'A running task: the merged entry is listed, and choosing its model asks the route instead of switching to a member', data: { running: true } },
   },
   async check(page, ui) {
     await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -36,6 +37,20 @@ export default {
     if (ui.case === 'hidden') {
       assert.deepEqual((await rail()).filter(key => key.startsWith('provider:')), ['provider:xd', 'provider:openai', 'provider:byok-1']);
       await ui.capture('members-listed');
+      return;
+    }
+    if (ui.case === 'running') {
+      // 2026-11-26 user report: a running task's picker listed the members separately and could not use the merged entry.
+      // Minimal failing input: members listed again; the click switches to a member first (unified call) before the route.
+      assert.deepEqual((await rail()).filter(key => key.startsWith('provider:')), ['provider:sroute:auto:openai', 'provider:xd']);
+      await page.locator('[data-rail-item="provider:sroute:auto:openai"]').click();
+      await page.getByRole('option').filter({ hasText: 'GPT-6-LUNA' }).first().getByText('GPT-6-LUNA', { exact: true }).click();
+      await page.waitForFunction(() => window.sourceRoutesFixture.calls.picked.length === 1);
+      const done = await calls();
+      assert.deepEqual(done.unified, []);
+      assert.deepEqual(done.picked[0].route, { type: 'route', id: 'src:luna' });
+      assert.equal(typeof done.picked[0].context, 'object');
+      await ui.capture('running-merged-entry');
       return;
     }
     if (ui.case === 'shared') {

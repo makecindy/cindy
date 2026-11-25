@@ -22748,15 +22748,15 @@
       "addModelHint": "獨添某供應商之某模型：擇此模式時依擇法於諸源擇其一。",
       "detailHint": "此模式合整供應商：擇模型時如一供應商，擇模型與思深如常。"
     },
-    "elsewhere": {
-      "title": "他處所用之模型",
-      "description": "此諸設定各在其頁，由此可逕往。",
-      "botsTitle": "夥伴",
-      "botsHint": "各夥伴用何模型、備何模型，於其自設中定之"
-    },
     "kinds": {
       "byModel": "依模型",
       "byProvider": "依供應商"
+    },
+    "buddies": {
+      "title": "夥伴",
+      "description": "諸夥伴常用何模型，有失則換何備。亦可擇智能之路，每番用何源由路定之。",
+      "saveFailed": "夥伴之模型未存，請再試",
+      "remoteHint": "在 {{device}}"
     }
   },
   "projectSettings": {

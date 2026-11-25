@@ -500,7 +500,8 @@ function SourceRouteName({ route, onCommit }: { route: ModelGroupSourceRoute; on
 }
 
 /**
- * 别处的模型设置入口：辅助模型、Subagent、伙伴各在自己的页面里设置，这里给出入口，让「模型相关的设置」从这一页都找得到。
+ * 其他地方用的模型：Subagent、辅助模型与每位伙伴的模型都直接在这一页改(OtherModelSettings)，不再是跳去别处的入口。
+ * 伙伴的模型编辑器带路由，需要在路由里渲染。
  */
 export function ModelSettingsElsewhere() {
   const routed = useInRouterContext();
@@ -508,19 +509,9 @@ export function ModelSettingsElsewhere() {
 }
 
 function ElsewhereRows() {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
   return (
-    <>
-      <Suspense fallback={null}>
-        <OtherModelSettings />
-      </Suspense>
-      <SettingsSection title={t('modelGroups.elsewhere.title')} description={t('modelGroups.elsewhere.description')} testId="model-settings-elsewhere">
-        <SettingsCard>
-          <SettingsRow data-model-settings-elsewhere="bots" title={t('modelGroups.elsewhere.botsTitle')} hint={t('modelGroups.elsewhere.botsHint')}
-            chevron onClick={() => navigate('/bots/list')} />
-        </SettingsCard>
-      </SettingsSection>
-    </>
+    <Suspense fallback={null}>
+      <OtherModelSettings />
+    </Suspense>
   );
 }

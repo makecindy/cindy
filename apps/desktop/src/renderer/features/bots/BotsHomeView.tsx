@@ -44,6 +44,7 @@ import {
   type BotProfile,
 } from './botStore';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
+import { capabilitiesFollowingDefault, capabilitiesWithModelChain, displayedModelChain } from './botModelChainPatch';
 import { BotRosterView } from './BotRosterView';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
@@ -139,10 +140,7 @@ export function BotSettings({
   // dirty autosave or overwrite a model override / pending text edits.
   const hiddenVendors = target.useHiddenVendors();
   const defaultModelChain = target.useDefaultModelChain();
-  const displayedModelChain =
-    capabilities.modelChainOverride === null
-      ? defaultModelChain
-      : capabilities.modelChain;
+  const shownModelChain = displayedModelChain(capabilities, defaultModelChain);
   const [page, setPage] = useState<
     | 'home'
     | 'profile'
@@ -633,37 +631,13 @@ export function BotSettings({
                 hiddenVendors={hiddenVendors}
                 deviceId={target.deviceId}
                 onRestoreDefault={() => {
-                  const modelChain = defaultModelChain;
-                  const primary = modelChain[0];
-                  setCapabilities((current) => ({
-                    ...current,
-                    ...(primary ?? { model: '', providerId: null, effort: '', fastMode: false }),
-                    ...((current.agentDeviceId != null || primary?.agentDeviceId != null)
-                      ? { agentDeviceId: primary?.agentDeviceId ?? null } : {}),
-                    modelOverride: null,
-                    modelChain,
-                    modelChainOverride: null,
-                  }));
+                  setCapabilities((current) => capabilitiesFollowingDefault(current, defaultModelChain));
                   autosave.onEdit('model');
                 }}
-                value={displayedModelChain}
+                value={shownModelChain}
                 onChange={(modelChain) => {
-                  const primary = modelChain[0];
-                  if (!primary) return;
-                  setCapabilities((current) => ({
-                    ...current,
-                    ...primary,
-                    ...((current.agentDeviceId != null || primary.agentDeviceId != null)
-                      ? { agentDeviceId: primary.agentDeviceId ?? null } : {}),
-                    modelChain,
-                    modelChainOverride: modelChain,
-                    modelOverride: {
-                      model: primary.model,
-                      providerId: primary.providerId,
-                      effort: primary.effort,
-                      fastMode: primary.fastMode,
-                    },
-                  }));
+                  if (!modelChain[0]) return;
+                  setCapabilities((current) => capabilitiesWithModelChain(current, modelChain) ?? current);
                   autosave.onEdit('model');
                 }}
               />

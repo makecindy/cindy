@@ -94,8 +94,8 @@ describe('auxiliary models that point at a smart route', () => {
     expect(options.map((option) => [option.id, option.providerId, option.available, option.route])).toEqual([
       ['route:src:auto:openai:luna', 'sroute:auto:openai', true, { kind: 'merged', name: 'OpenAI', members: 2 }],
       // 成员(Claude 的 haiku)此刻用不了：列着，但不能选。
-      ['route:r1', 'model-groups', false, { kind: 'route', name: '省钱', members: 1 }],
-      ['route:gone', 'model-groups', false, { kind: 'route', name: '', members: 0 }],
+      ['route:r1', 'sroute:mine', false, { kind: 'route', name: '省钱', members: 1 }],
+      ['route:gone', 'sroute:mine', false, { kind: 'route', name: '', members: 0 }],
     ]);
     expect(options[0]).toMatchObject({ modelName: 'GPT-6 Luna', subscription: true, modelId: 'gpt-6-luna' });
   });

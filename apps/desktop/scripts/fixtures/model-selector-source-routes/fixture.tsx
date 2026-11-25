@@ -49,8 +49,8 @@ const sharedConfig: ModelGroupsConfig = {
   })),
 };
 
-const calls: { unified: unknown[]; attached: ModelGroupSelection[]; cleared: number; attachedInSameClick: boolean[] } =
-  { unified: [], attached: [], cleared: 0, attachedInSameClick: [] };
+const calls: { unified: unknown[]; attached: ModelGroupSelection[]; cleared: number; attachedInSameClick: boolean[]; picked: unknown[] } =
+  { unified: [], attached: [], cleared: 0, attachedInSameClick: [], picked: [] };
 let choosing = false;
 const catalog = (providers: ProviderView[]) => ({ providers, providerOrder: providers.map(item => item.id), loading: false, error: null,
   unsupported: false, refetch: async () => {}, ownerGeneration: 1 });
@@ -63,7 +63,7 @@ Object.assign(window, { sourceRoutesFixture: {
 } });
 
 // Stands in for the new-task draft: it keeps the chosen model, effort and Fast, and separately which route decides the member.
-function Draft({ hidden, sharedMembers }: { hidden: boolean; sharedMembers: boolean }) {
+function Draft({ hidden, sharedMembers, running }: { hidden: boolean; sharedMembers: boolean; running: boolean }) {
   const [draft, setDraft] = useState({ providerId: 'xd', modelId: 'gpt-5.5', effort: 'medium', route: null as ModelGroupSelection | null,
     agentDeviceId: null as string | null });
   return (
@@ -87,11 +87,16 @@ function Draft({ hidden, sharedMembers }: { hidden: boolean; sharedMembers: bool
         modelGroups={{
           config: sharedMembers ? sharedConfig : config(hidden), active: draft.route,
           onSelect: (route) => setDraft((current) => ({ ...current, route })),
-          onAttach: (route) => {
-            calls.attached.push(route);
-            calls.attachedInSameClick.push(choosing);
-            setDraft((current) => ({ ...current, route }));
-          },
+          // A running task: the route picks the member where the task runs; the picker does not switch to a member first.
+          ...(running ? {
+            onPickMerged: (route: ModelGroupSelection, context: unknown) => { calls.picked.push({ route, context }); },
+          } : {
+            onAttach: (route: ModelGroupSelection) => {
+              calls.attached.push(route);
+              calls.attachedInSameClick.push(choosing);
+              setDraft((current) => ({ ...current, route }));
+            },
+          }),
         }} />
     </div>
   );
@@ -104,5 +109,5 @@ void mountPage({
     getCapabilities: async () => ({ hasFastMode: true, availableModels: [],
       effortLevels: EFFORTS.map(id => ({ id, displayName: id })), permissionModes: [{ id: 'default', displayName: 'Default' }] }),
   } },
-  render: ctx => <main className="flex h-screen items-end justify-end p-6"><Draft hidden={ctx.data.hidden === true} sharedMembers={ctx.data.shared === true} /></main>,
+  render: ctx => <main className="flex h-screen items-end justify-end p-6"><Draft hidden={ctx.data.hidden === true} sharedMembers={ctx.data.shared === true} running={ctx.data.running === true} /></main>,
 });

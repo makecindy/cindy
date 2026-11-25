@@ -26,6 +26,11 @@ export interface ModelGroupsPickerProps {
    * 思考深度与 Fast。传了它，面板就把供应商路由当成普通供应商列出来(sourceRouteProviders.ts)。
    */
   onAttach?(selection: ModelGroupSelection): void;
+  /**
+   * 进行中的任务才传(与 onAttach 二选一)：面板同样把供应商路由当成普通供应商列出来，但选中其中一个模型时不先换到某个成员，
+   * 而是交给这里——按路由在任务所在的位置挑成员再换，带上用户在那一行选的思考深度与 Fast。
+   */
+  onPickMerged?(selection: ModelGroupSelection, context: { effort?: string; fastMode?: true | 'ultrafast' }): void;
   /** 打开设置里的「模型组」。组属于另一台电脑(远程控制它的伙伴)时不传：这台电脑的设置管不到那边的组。 */
   onManage?(): void;
   /** 另一台电脑自己的模式，每台一格；只列有模式的电脑。选中的 selection 带上那台的 deviceId。 */

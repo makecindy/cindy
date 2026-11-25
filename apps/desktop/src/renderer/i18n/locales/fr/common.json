@@ -23062,15 +23062,15 @@
       "addModelHint": "Ajoutez un modèle d’un fournisseur. Choisir ce mode sélectionne l’une de ces sources selon la stratégie.",
       "detailHint": "Ce mode réunit des fournisseurs entiers. Dans le sélecteur, il fonctionne comme un fournisseur : choisissez le modèle et l’effort comme d’habitude."
     },
-    "elsewhere": {
-      "title": "Modèles utilisés ailleurs",
-      "description": "Ces réglages de modèle ont leurs propres pages. Accédez-y directement d’ici.",
-      "botsTitle": "Compagnons",
-      "botsHint": "Chaque compagnon choisit son modèle et ses secours dans ses réglages"
-    },
     "kinds": {
       "byModel": "Par modèle",
       "byProvider": "Par fournisseur"
+    },
+    "buddies": {
+      "title": "Compagnons",
+      "description": "Le modèle utilisé par chaque compagnon et les modèles de secours vers lesquels il bascule en cas de problème. Une route intelligente est aussi possible : elle choisit la source à chaque fois.",
+      "saveFailed": "Le modèle du compagnon n’a pas été enregistré. Réessayez.",
+      "remoteHint": "Sur {{device}}"
     }
   },
   "projectSettings": {

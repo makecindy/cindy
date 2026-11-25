@@ -1395,7 +1395,7 @@ function ModelSelectorContentView({
   modelAccessAccountTier: ModelAccessAccountTier | null;
 }) {
   // 草稿里供应商路由已经作为普通供应商列在侧栏(见下方 sourceRoutes)，「智能路由」一格只列用户按模型排的路由。
-  const modelGroups = useMemo(() => (modelGroupsProp?.onAttach
+  const modelGroups = useMemo(() => (modelGroupsProp?.onAttach || modelGroupsProp?.onPickMerged
     ? { ...modelGroupsProp, config: { ...modelGroupsProp.config, routes: modelGroupsProp.config.routes.filter((route) => !route.parent) } }
     : modelGroupsProp), [modelGroupsProp]);
   const confirmDialog = useOptionalConfirmDialog();
@@ -1585,7 +1585,7 @@ function ModelSelectorContentView({
     ? remoteCatalogProviders
     : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
   // 供应商路由在面板里就是一个普通供应商(sourceRouteProviders.ts)：只在新任务草稿、看本机目录时这样列。
-  const sourceRoutesListed = !!modelGroupsProp?.onAttach && !!onUnifiedSelectProp && !deviceId && !providersOverride && !sshCatalogProviders;
+  const sourceRoutesListed = (!!modelGroupsProp?.onAttach || !!modelGroupsProp?.onPickMerged) && !!onUnifiedSelectProp && !deviceId && !providersOverride && !sshCatalogProviders;
   const sourceRouteConfig = sourceRoutesListed ? modelGroupsProp?.config : null;
   // 成员可以在其他电脑上或是分享来的：读那些位置的目录(与下面列那台模型用的是同一份缓存，不多发请求)。
   const sourceRouteRemoteIds = useMemo(() => [...new Set((sourceRouteConfig?.sourceRoutes ?? []).filter((route) => !route.hidden)
@@ -1613,9 +1613,18 @@ function ModelSelectorContentView({
   const currentProviderId = sourceRoutes.shownAs(currentProviderIdProp, modelGroupsProp?.active?.id, remoteAgentDeviceId) ?? currentProviderIdProp;
   const activeSourceRoute = !!modelGroupsProp?.active && sourceRoutes.shownAs(null, modelGroupsProp.active.id) !== null;
   const attachSourceRoute = modelGroupsProp?.onAttach;
+  const pickMerged = modelGroupsProp?.onPickMerged;
   const onUnifiedSelect = useMemo<typeof onUnifiedSelectProp>(() => onUnifiedSelectProp && ((selection) => {
     const hit = sourceRoutes.hit(selection.providerId, selection.modelId);
     if (!hit) return onUnifiedSelectProp(selection);
+    // 进行中的任务：由路由在任务所在的位置挑成员，不先换到这一行背后的某个成员。
+    if (pickMerged) {
+      pickMerged({ type: 'route', id: hit.route.id }, {
+        ...(selection.effort ? { effort: selection.effort } : {}),
+        ...(selection.fast ? { fastMode: selection.fast === 'ultrafast' ? 'ultrafast' : true } : {}),
+      });
+      return true;
+    }
     // 草稿照常记下一个真实成员的模型(显示名、思考深度、Fast 都按它来)，再记下由哪条路由决定这次用哪个成员。
     // 那个成员在另一台电脑上或是分享来的：连同运行位置一起交给草稿，与在那台的格子里选这个模型相同。
     const location = hit.candidate.agentDeviceId;
@@ -1628,7 +1637,7 @@ function ModelSelectorContentView({
     const attach = (ok: void | boolean) => { if (ok !== false) attachSourceRoute?.({ type: 'route', id: hit.route.id }); };
     if (applied instanceof Promise) void applied.then(attach); else attach(applied);
     return applied;
-  }), [onUnifiedSelectProp, sourceRoutes, attachSourceRoute, remoteAgent?.devices]);
+  }), [onUnifiedSelectProp, sourceRoutes, attachSourceRoute, pickMerged, remoteAgent?.devices]);
   // SSH 目录里 Codex 来自远端主机：本机账号用量、本机供应商组都不能代表它。
   const sshCodexActive = sshCodex !== undefined;
   const mixedCatalog = !!providersOverride || sshCodexActive;

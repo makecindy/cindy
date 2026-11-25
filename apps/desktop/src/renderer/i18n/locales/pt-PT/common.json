@@ -23062,15 +23062,15 @@
       "addModelHint": "Adicione um modelo de um fornecedor. Ao escolher este modo, uma destas fontes é escolhida pela estratégia.",
       "detailHint": "Este modo combina fornecedores inteiros. No seletor funciona como um fornecedor: escolha modelo e esforço como habitualmente."
     },
-    "elsewhere": {
-      "title": "Modelos usados noutros locais",
-      "description": "Estas definições de modelo estão em páginas próprias. Aceda diretamente a partir daqui.",
-      "botsTitle": "Parceiros",
-      "botsHint": "Cada parceiro escolhe o seu modelo e reservas nas suas definições"
-    },
     "kinds": {
       "byModel": "Por modelo",
       "byProvider": "Por fornecedor"
+    },
+    "buddies": {
+      "title": "Parceiros",
+      "description": "Que modelo cada parceiro usa e para que modelos de reserva muda quando algo corre mal. Também pode escolher uma rota inteligente: decide a fonte de cada vez.",
+      "saveFailed": "O modelo do parceiro não foi guardado. Tente novamente.",
+      "remoteHint": "Em {{device}}"
     }
   },
   "projectSettings": {

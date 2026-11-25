@@ -22842,15 +22842,15 @@
       "addModelHint": "Add one model from one provider. Choosing this route picks one of these sources by its strategy.",
       "detailHint": "This route combines whole providers. In the model picker it works like one provider: pick a model and effort as usual and the route decides which member runs it."
     },
-    "elsewhere": {
-      "title": "Models used elsewhere",
-      "description": "A buddy’s model is set in its own settings; this takes you there.",
-      "botsTitle": "Buddies",
-      "botsHint": "Each buddy chooses its own model and backups in its settings"
-    },
     "kinds": {
       "byModel": "By model",
       "byProvider": "By provider"
+    },
+    "buddies": {
+      "title": "Buddies",
+      "description": "Which model each buddy uses, and which backups it switches to when something goes wrong. A smart route works too: it decides the source each time.",
+      "saveFailed": "The buddy’s model was not saved. Try again.",
+      "remoteHint": "On {{device}}"
     }
   },
   "projectSettings": {

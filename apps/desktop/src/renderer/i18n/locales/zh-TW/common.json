@@ -22748,15 +22748,15 @@
       "addModelHint": "只加某個供應商的某個模型：選這條路由時依選法在這些來源裡挑一個。",
       "detailHint": "這條路由合併的是整個供應商：選模型時它像一個供應商，照常選模型、思考深度，由路由決定這次用哪個成員。"
     },
-    "elsewhere": {
-      "title": "其他地方用的模型",
-      "description": "夥伴用哪個模型在它自己的設定裡改，從這裡可以直接過去。",
-      "botsTitle": "夥伴",
-      "botsHint": "每個夥伴用哪個模型、備用哪個，在夥伴自己的設定裡"
-    },
     "kinds": {
       "byModel": "按模型",
       "byProvider": "按供應商"
+    },
+    "buddies": {
+      "title": "夥伴",
+      "description": "每位夥伴平時用哪個模型、出問題時換到哪幾個備用。也能選智慧路由，由路由決定每次用哪個來源。",
+      "saveFailed": "夥伴的模型沒有儲存，請重試",
+      "remoteHint": "在 {{device}} 上"
     }
   },
   "projectSettings": {

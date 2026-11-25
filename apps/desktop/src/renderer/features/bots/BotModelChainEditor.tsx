@@ -256,6 +256,11 @@ export function BotModelChainEditor({
   };
   const pickSeq = useRef(0);
   /**
+   * 在合并整个供应商的路由下点了一个模型：面板先交来一个真实成员(onUnifiedSelect)，紧接着在同一次点击里补记路由(onAttach)。
+   * 两次改动之间链还没重新渲染，补记时把刚才那次改动一起带上，免得第二次改动用旧链盖掉第一次。
+   */
+  const lastUnified = useRef<{ index: number; patch: Partial<BotModelRoute> } | null>(null);
+  /**
    * 选中一个模型组：立刻记下(按钮马上显示组名，紧接着提交也带上组)，这一项暂以原来的模型作存下的具体模型；
    * 再按组的规则预览一次(不推进轮流)，把组此刻会选的来源换进来，旧版本和组被删掉时都按它运行。
    * 预览回来时这一项已不是「这个组 + 原来的模型」(选了普通模型、哪怕还是同一个，或又选了别的组)就作废。
@@ -398,8 +403,8 @@ export function BotModelChainEditor({
             },
           } : undefined}
           onUnifiedSelect={(selection) => {
-            if (!visibleVendors.includes(selection.engine)) return;
-            replace(index, {
+            if (!visibleVendors.includes(selection.engine)) return false;
+            const patch: Partial<BotModelRoute> = {
               harness: harnessFor(selection.engine),
               ...(route.agentDeviceId || selection.agentDevice ? { agentDeviceId: selection.agentDevice?.deviceId ?? null } : {}),
               providerId: selection.providerId,
@@ -407,7 +412,10 @@ export function BotModelChainEditor({
               effort: selection.effort ?? '',
               fastMode: selection.fast,
               modelGroup: undefined,
-            });
+            };
+            lastUnified.current = { index, patch };
+            replace(index, patch);
+            return true;
           }}
           {...(groupsAllowed ? {
             modelGroups: {
@@ -416,6 +424,15 @@ export function BotModelChainEditor({
                 ? { type: 'route' as const, id: route.modelGroup }
                 : null,
               onSelect: (selection: ModelGroupSelection) => { void pickGroup(index, selection); },
+              // 本机伙伴：合并整个供应商的路由像一个供应商列出来，选其中的模型 = 记下这个模型，由路由决定每次用哪个成员。
+              ...(localGroups ? {
+                onAttach: (selection: ModelGroupSelection) => {
+                  const last = lastUnified.current;
+                  lastUnified.current = null;
+                  if (last?.index !== index) return;
+                  replace(index, { ...last.patch, modelGroup: selection.id });
+                },
+              } : {}),
               // The editor also renders outside a router (tests, settings drawers); the app routes by hash.
               ...(localGroups ? { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } } : {}),
             },

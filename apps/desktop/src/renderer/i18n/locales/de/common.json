@@ -22842,15 +22842,15 @@
       "addModelHint": "Ein Modell eines Anbieters hinzufügen. Beim Wählen dieses Modus wird eine dieser Quellen nach der Strategie gewählt.",
       "detailHint": "Dieser Modus fasst ganze Anbieter zusammen. In der Modellauswahl verhält er sich wie ein Anbieter: Modell und Denktiefe wie gewohnt wählen."
     },
-    "elsewhere": {
-      "title": "Anderswo genutzte Modelle",
-      "description": "Diese Modelleinstellungen liegen auf eigenen Seiten. Von hier gelangst du direkt dorthin.",
-      "botsTitle": "Buddies",
-      "botsHint": "Jeder Buddy wählt sein Modell und seine Reserven in den eigenen Einstellungen"
-    },
     "kinds": {
       "byModel": "Nach Modell",
       "byProvider": "Nach Anbieter"
+    },
+    "buddies": {
+      "title": "Buddies",
+      "description": "Welches Modell jeder Buddy nutzt und auf welche Ersatzmodelle er bei Problemen wechselt. Auch eine smarte Route ist möglich: Sie bestimmt jedes Mal die Quelle.",
+      "saveFailed": "Das Modell des Buddys wurde nicht gespeichert. Versuche es erneut.",
+      "remoteHint": "Auf {{device}}"
     }
   },
   "projectSettings": {

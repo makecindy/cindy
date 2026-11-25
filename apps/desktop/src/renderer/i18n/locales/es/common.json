@@ -23062,15 +23062,15 @@
       "addModelHint": "Añade un modelo de un proveedor. Al elegir este modo se escoge una de estas fuentes según la estrategia.",
       "detailHint": "Este modo combina proveedores completos. En el selector funciona como un proveedor: elige modelo y esfuerzo como siempre."
     },
-    "elsewhere": {
-      "title": "Modelos usados en otros sitios",
-      "description": "Estos ajustes de modelo están en sus propias páginas. Ve directamente desde aquí.",
-      "botsTitle": "Compañeros",
-      "botsHint": "Cada compañero elige su modelo y sus reservas en sus ajustes"
-    },
     "kinds": {
       "byModel": "Por modelo",
       "byProvider": "Por proveedor"
+    },
+    "buddies": {
+      "title": "Compañeros",
+      "description": "Qué modelo usa cada compañero y a qué modelos de reserva cambia si algo falla. También puedes elegir una ruta inteligente: decide la fuente cada vez.",
+      "saveFailed": "No se guardó el modelo del compañero. Inténtalo de nuevo.",
+      "remoteHint": "En {{device}}"
     }
   },
   "projectSettings": {

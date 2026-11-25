@@ -16,6 +16,8 @@ import { activeOwnerScopeKey } from '../appSessionState.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
 
 const PREFERRED_TTL_MS = 30_000;
+/** 设置里选辅助模型时，自己排的那些路由合在一格里的格位标识。 */
+const MINE = 'sroute:mine';
 
 /** 智能路由的配置读不出来时按没有路由处理：辅助模型的设置与请求不因它失败。 */
 function routes(): ModelGroupRoute[] {
@@ -101,8 +103,8 @@ export function buildAuxiliaryRouteOptions(usable: ReadonlyMap<string, Auxiliary
       label: route.name,
       group: route.parent?.name ?? route.name,
       // 合并整个供应商的路由：与选模型面板同一个格位标识(sroute:<id>)，模型行是那个模型；
-      // 自己排的路由：都归在一格里，每条路由是一行。
-      providerId: route.parent ? `sroute:${route.parent.id}` : 'model-groups',
+      // 自己排的路由：都归在一格里(sroute:mine)，每条路由是一行。两种都带 sroute: 前缀，侧栏把它们排在最前并加路由角标。
+      providerId: route.parent ? `sroute:${route.parent.id}` : MINE,
       agentKind,
       modelId: route.parent ? head.model : route.id,
       modelName: route.parent ? (sample?.modelName ?? head.model) : route.name,
@@ -120,7 +122,7 @@ export function buildAuxiliaryRouteOptions(usable: ReadonlyMap<string, Auxiliary
   for (const ref of selected) {
     if (!ref.startsWith('route:') || options.some((option) => option.id === ref)) continue;
     options.push({
-      id: ref, label: '', group: '', providerId: 'model-groups', agentKind: 'codex', modelId: ref, modelName: '',
+      id: ref, label: '', group: '', providerId: MINE, agentKind: 'codex', modelId: ref, modelName: '',
       budget: false, subscription: false, agentSuffix: '', available: false,
       route: { kind: 'route', name: '', members: 0 },
     });
