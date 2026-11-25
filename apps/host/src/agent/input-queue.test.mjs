@@ -4271,6 +4271,15 @@ const deviceLinkCreate = (r, groups = {}, stored = {}) => {
 test('route admission: a Device Link create is refused before its row, or created on the rerouted copy', { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
   const { ports, rows, started, input } = deviceLinkCreate(r);
+  // Real Device Link create entry, unit fixture: with no installed Agent
+  // graph the phone receives the existing precondition envelope, before
+  // model admission or any task row. The other cases have a running graph.
+  await assert.rejects(createHostRuntimeSession({ ...ports, getAgentGraph: () => null }, input('prov-a')), {
+    code: 'PRECONDITION_FAILED',
+    message: /^\[PRECONDITION_FAILED\] binary_not_ready: No Agent engine is available/,
+  });
+  assert.deepEqual(rows, []);
+  assert.deepEqual(started, []);
   r.views.current = withDisabledCopy(r.views.current, 'claude-code', 'prov-a', 'big');
   await assert.rejects(createHostRuntimeSession(ports, input('prov-a')), /\[INVALID_PARAMS\] provider "prov-a" is disabled for model "big"/);
   assert.equal(rows.length, 0, 'no task row');
