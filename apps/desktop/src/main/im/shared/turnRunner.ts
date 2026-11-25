@@ -2139,7 +2139,7 @@ export function createTurnRunner(
                     effectiveTurnPolicy?.confirmationTimeoutMs,
                   ),
                   permissionGuard: (request) => {
-                    const guard = checkChannelDestructiveToolCall(request.toolName, request.input);
+                    const guard = checkChannelDestructiveToolCall(request.toolName, request.input, request.metadata);
                     return guard.destructive
                       ? { kind: 'permission', behavior: 'deny', reason: `[destructiveGuard] ${guard.reason}` }
                       : null;
@@ -4564,7 +4564,7 @@ export function createTurnRunner(
       if (output.kind === 'chunked-text') {
         if (adapter.handleTextInteraction) {
           if (req.kind === 'permission') {
-            const guard = checkChannelDestructiveToolCall(req.toolName, req.input);
+            const guard = checkChannelDestructiveToolCall(req.toolName, req.input, req.metadata);
             if (guard.destructive) {
               log.warn(`destructive tool blocked: ${req.toolName} (${guard.reason})`);
               return {
@@ -4605,7 +4605,7 @@ export function createTurnRunner(
       // Bash/PowerShell 命令含 rm/del/Remove-Item/find -delete/git clean -f 等。
       // 模型收到 deny 后通常会改用 AskUserQuestion 跟用户沟通。
       if (req.kind === 'permission') {
-        const guard = checkChannelDestructiveToolCall(req.toolName, req.input);
+        const guard = checkChannelDestructiveToolCall(req.toolName, req.input, req.metadata);
         if (guard.destructive) {
           log.warn(`destructive tool blocked: ${req.toolName} (${guard.reason})`);
           return {

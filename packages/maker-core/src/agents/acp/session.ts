@@ -996,22 +996,26 @@ export class AcpSession {
     const { events, toolCall } = this.translator.noteToolCall(fields ?? { toolCallId: `acp-permission-${this.permissionSeq + 1}` });
     this.emit(events);
     if (this.permissionMode === 'bypassPermissions') {
-      return selected(gate?.policy ? reject : allowOnce ?? reject);
+      return selected(allowOnce ?? reject);
     }
     const input = toolCall.rawInput;
     const hasInputRecord = input !== null && typeof input === 'object' && !Array.isArray(input);
     const requestInput = hasInputRecord ? input as AcpRecord : input === undefined ? {} : { value: input };
-    const policyToolName = gate?.policy && toolCall.kind && Object.hasOwn(ACP_KIND_POLICY_NAMES, toolCall.kind)
+    const policyToolName = toolCall.kind && Object.hasOwn(ACP_KIND_POLICY_NAMES, toolCall.kind)
       ? ACP_KIND_POLICY_NAMES[toolCall.kind]
       : undefined;
-    const toolName = policyToolName ?? acpToolDisplayName(toolCall);
+    const toolName = (gate?.policy ? policyToolName : undefined) ?? acpToolDisplayName(toolCall);
     // The channel must be able to classify the operation and its input before a routine call can run unasked.
     // A shell approval without a command would also leave the channel's destructive-command check blind.
     if (gate?.policy && toolCall.kind === 'execute'
       && (typeof requestInput.command !== 'string' || requestInput.command.trim() === '')) {
       return selected(reject);
     }
-    if (gate?.policy && policyToolName && hasInputRecord && requestGate.routine === true
+    // An IM policy can defer authorization to the normal approval chain, including the
+    // owner's review of guest writes. Only explicitly read-only kinds can skip that chain.
+    const canRunRoutine = gate?.policy?.origin.kind !== 'im'
+      || toolCall.kind === 'read' || toolCall.kind === 'search';
+    if (gate?.policy && canRunRoutine && policyToolName && hasInputRecord && requestGate.routine === true
       && !this.policyForcesConfirmation(gate.policy, policyToolName, requestInput)
       && (!toolCall.name || toolCall.name === policyToolName
         || !this.policyForcesConfirmation(gate.policy, toolCall.name, requestInput))) {
@@ -1035,6 +1039,8 @@ export class AcpSession {
       displayName: acpToolDisplayName(toolCall),
       metadata: {
         ...(toolCall.kind ? { acpToolKind: toolCall.kind } : {}),
+        ...(policyToolName ? { acpPolicyToolName: policyToolName } : {}),
+        ...(toolCall.name ? { acpReportedToolName: toolCall.name } : {}),
         ...(toolCall.locations?.length ? { acpLocations: toolCall.locations } : {}),
         acpOptions: options.map((option) => ({ name: option.name, kind: option.kind })),
       },

@@ -755,6 +755,28 @@ describe('AcpSession per-turn permission gate', () => {
     expect(agent.prompts).toHaveLength(1);
   });
 
+  // Unit: IM approval uses the resolver for file edits. An explicit mode switch applies to the active turn.
+  it('routes a routine IM edit to approval until the owner changes mode', async () => {
+    const { agent, session, asked } = await openGated();
+    const policy = { ...channelPolicy(() => false), autoReviewContext: { requesterAuthority: 'guest', source: 'group' } } as const;
+    await session.send({ type: 'user', content: 'update the note' }, { turnPermissionPolicy: policy });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    const edit = { kind: 'edit', rawInput: { path: 'notes.md' } };
+    const first = await agent.requestPermission({
+      toolCall: { toolCallId: 'first', ...edit }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0),
+    });
+    expect(first).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    expect(asked).toHaveLength(1);
+
+    await session.setPermissionMode('bypassPermissions');
+    const second = await agent.requestPermission({
+      toolCall: { toolCallId: 'second', ...edit }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0),
+    });
+    expect(second).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+    expect(asked).toHaveLength(1);
+  });
+
   it('refuses every tool call of a text-only turn, Full access included, and of the work it leaves running', async () => {
     const { agent, session, asked } = await openGated({ permissionMode: 'bypassPermissions' });
     await session.send({ type: 'user', content: 'say hello' }, { toolsDisabled: true });
@@ -787,16 +809,16 @@ describe('AcpSession per-turn permission gate', () => {
     expect(agent.methods()).not.toContain('_session/steering');
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
 
-    await session.send({ type: 'user', content: 'first sender' }, { turnPermissionPolicy: channelPolicy((name) => name === 'Bash') });
+    await session.send({ type: 'user', content: 'first sender' }, { turnPermissionPolicy: channelPolicy((name) => name === 'Read') });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
-    await session.steer({ type: 'user', content: 'second sender' }, { turnPermissionPolicy: channelPolicy((name) => name === 'Edit') });
-    const edit = await agent.requestPermission({ toolCall: { toolCallId: 'e1', kind: 'edit', rawInput: { path: 'a.ts' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
+    await session.steer({ type: 'user', content: 'second sender' }, { turnPermissionPolicy: channelPolicy((name) => name === 'Grep') });
     const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1', kind: 'read', rawInput: { path: 'a.ts' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
-    expect([edit, read]).toEqual([
+    const search = await agent.requestPermission({ toolCall: { toolCallId: 's1', kind: 'search', rawInput: { query: 'a' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
+    expect([read, search]).toEqual([
       { outcome: { outcome: 'selected', optionId: 'no' } },
-      { outcome: { outcome: 'selected', optionId: 'yes' } },
+      { outcome: { outcome: 'selected', optionId: 'no' } },
     ]);
-    expect(asked.map((request) => request.kind === 'permission' && request.toolName)).toEqual(['Edit']);
+    expect(asked.map((request) => request.kind === 'permission' && request.toolName)).toEqual(['Read', 'Grep']);
   });
 });
 
