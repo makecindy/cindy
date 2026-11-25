@@ -15,7 +15,7 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { pinnedHighRiskRows, pluginConsentPresentation } from "./pluginConsentPresentation";
+import { PINNED_HIGH_RISK_MAX_HEIGHT_RATIO, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -23,9 +23,9 @@ export function PluginManagementConfirmation(
     styles = useThemedStyles(makeStyles);
   const { consent, visible, answer } = usePluginConsent(props);
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
-  const { fontScale } = useWindowDimensions();
-  // Hard height bound for the pinned summary, by text size alone (see pinnedHighRiskRows).
-  const pinned = info?.highRisk ? pinnedHighRiskRows(info.highRisk.lines, fontScale, t) : undefined;
+  const { height: windowHeight } = useWindowDimensions();
+  // The summary's lines are shown in full; beyond its bound it scrolls inside (a ScrollView hugs shorter content).
+  const summaryCap = Math.round(windowHeight * PINNED_HIGH_RISK_MAX_HEIGHT_RATIO);
   return (
     <SheetModal
       nativePresentation
@@ -71,12 +71,15 @@ export function PluginManagementConfirmation(
         </ScrollView>
         {/* Outside the scroll area: always visible above the buttons, even on short screens. */}
         {info?.highRisk ? (
-          // Bounded summary (a heading and at most five two-line items); full details are in the scrolled list.
+          // Bounded summary: every line in full, scrolling inside its height bound; full details are in the scrolled list.
           <View testID="plugins.management.highRisk" style={styles.highRisk}>
             <Text numberOfLines={1} style={styles.highRiskTitle}>{info.highRisk.title}</Text>
-            {pinned!.rows.map((line, index) => (
-              <Text key={index} numberOfLines={pinned!.lineLimit} style={styles.highRiskBody}>{line}</Text>
-            ))}
+            <ScrollView testID="plugins.management.highRiskScroll" nestedScrollEnabled style={{ maxHeight: summaryCap }}
+              contentContainerStyle={styles.highRiskLines}>
+              {info.highRisk.lines.map((line, index) => (
+                <Text key={index} style={styles.highRiskBody}>{line}</Text>
+              ))}
+            </ScrollView>
           </View>
         ) : null}
         <View style={styles.actions}>
@@ -151,6 +154,7 @@ const makeStyles = (c: ThemeColors) =>
       fontWeight: fontWeight.semibold,
       color: c.textPrimary,
     },
+    highRiskLines: { gap: spacing.xs },
     highRiskBody: {
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,

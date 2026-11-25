@@ -29,7 +29,8 @@ export interface PluginManagementState {
    */
   expectedSource?: PluginMarketSourceIdentity | null;
   /**
-   * Set when the phone hands Allow to the Host for this operation, with the source the consent named at that moment.
+   * Set when Allow actually leaves the phone for this operation (the client's send callback), with the source the
+   * consent named at that moment; a queued Allow stopped before sending never sets it.
    * A result whose receipt is later gone may be confirmed only from this: without it (rejected, never answered,
    * consent never received, Allow unavailable) nothing on the computer counts as this attempt's result. Cleared by a
    * new operation only.
@@ -318,10 +319,15 @@ export function createPluginManagementController(client: PluginManagementClient,
         if (!current(token)) return;
         if (!receiverCurrent(snapshot)) throw new PluginManagementRequestError('PLUGIN_INSTALL_CHANGED');
       }
-      // Record what is being approved before Allow leaves; only this can later confirm a result whose receipt is gone.
-      if (confirmed && current(token)) publish({ approval: { operationId: receipt.operationId, originSource: consent.originSource } });
+      // The approval is recorded only when Allow actually leaves (the client's send callback, after the last checks):
+      // still queued or stopped by those checks (a refresh changed the facts, the computer went offline) is not an
+      // approval; sent with the result unknown (timeout, reply lost) may be, and only that can later confirm a result
+      // whose receipt is gone. One place writes it.
+      const recordApproval = () => {
+        if (confirmed && current(token)) publish({ approval: { operationId: receipt.operationId, originSource: consent.originSource } });
+      };
       if (current(token)) await acceptReceipt(await client.answer(receipt.operationId, receipt.consent.requestId, confirmed,
-        () => current(token) && state.online && (!confirmed || (!!facts && receiverCurrent(facts)))), token);
+        () => current(token) && state.online && (!confirmed || (!!facts && receiverCurrent(facts))), recordApproval), token);
     } catch (error) {
       if (current(token)) publish({ busy: false, outcome: 'unknown', errorCode: pluginManagementErrorCode(error) });
     }

@@ -1,4 +1,4 @@
-import { Button, Divider, Text, VStack, HStack } from "@expo/ui/swift-ui";
+import { Button, Divider, ScrollView, Text, VStack, HStack } from "@expo/ui/swift-ui";
 import {
   buttonStyle,
   disabled,
@@ -7,6 +7,7 @@ import {
   foregroundStyle,
   frame,
   lineLimit,
+  onGeometryChange,
   padding,
   tint,
 } from "@expo/ui/swift-ui/modifiers";
@@ -17,8 +18,9 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
+import { useState } from "react";
 import { useWindowDimensions } from "react-native";
-import { pinnedHighRiskRows, pluginConsentPresentation } from "./pluginConsentPresentation";
+import { PINNED_HIGH_RISK_MAX_HEIGHT_RATIO, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -26,9 +28,12 @@ export function PluginManagementConfirmation(
     { colors } = useTheme();
   const { consent, visible, answer } = usePluginConsent(props);
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
-  const { fontScale } = useWindowDimensions();
-  // Hard height bound for the pinned summary, by text size alone (see pinnedHighRiskRows).
-  const pinned = info?.highRisk ? pinnedHighRiskRows(info.highRisk.lines, fontScale, t) : undefined;
+  const { height: windowHeight } = useWindowDimensions();
+  // The summary's lines are shown in full; it takes their height up to its bound and scrolls inside beyond that.
+  // A SwiftUI ScrollView takes all the height it is offered, so it gets an explicit height: the measured content
+  // height, capped by the bound.
+  const summaryCap = Math.round(windowHeight * PINNED_HIGH_RISK_MAX_HEIGHT_RATIO);
+  const [summaryHeight, setSummaryHeight] = useState(0);
   const body = (text?: string, lead = false) =>
     text ? (
       <Text
@@ -58,7 +63,7 @@ export function PluginManagementConfirmation(
               the summary does not read as a repeat. */}
           {info?.highRisk ? <Divider /> : null}
           {info?.highRisk ? (
-            // Bounded summary (a heading and at most five two-line items); full details are in the scrolled list.
+            // Bounded summary: every line in full, scrolling inside its height bound; full details are in the scrolled list.
             <VStack testID="plugins.management.highRisk" alignment="leading" spacing={spacing.xs}>
               <Text
                 modifiers={[
@@ -70,18 +75,25 @@ export function PluginManagementConfirmation(
               >
                 {info.highRisk.title}
               </Text>
-              {pinned!.rows.map((line, index) => (
-                <Text
-                  key={index}
-                  modifiers={[
-                    font({ textStyle: "footnote" }),
-                    foregroundStyle(colors.textPrimary),
-                    lineLimit(pinned!.lineLimit),
-                  ]}
-                >
-                  {line}
-                </Text>
-              ))}
+              <ScrollView testID="plugins.management.highRiskScroll"
+                modifiers={[frame({ height: Math.min(summaryCap, summaryHeight || summaryCap) })]}>
+                <VStack alignment="leading" spacing={spacing.xs}
+                  modifiers={[frame({ maxWidth: Infinity, alignment: "leading" }),
+                    onGeometryChange((size) => { if (size.height > 0) setSummaryHeight(size.height); })]}>
+                  {info.highRisk.lines.map((line, index) => (
+                    <Text
+                      key={index}
+                      modifiers={[
+                        font({ textStyle: "footnote" }),
+                        foregroundStyle(colors.textPrimary),
+                        fixedSize({ horizontal: false, vertical: true }),
+                      ]}
+                    >
+                      {line}
+                    </Text>
+                  ))}
+                </VStack>
+              </ScrollView>
             </VStack>
           ) : null}
           <HStack spacing={spacing.md}>

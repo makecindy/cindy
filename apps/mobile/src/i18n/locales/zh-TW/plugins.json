@@ -306,8 +306,8 @@
       "mcpUi": "可在對話中顯示互動頁面",
       "mcpUiDomains": "頁面可連線網域：{{domains}}",
       "uiPageAccess": "頁面：{{pages}}\n頁面可連線網域：{{domains}}\n頁面可呼叫工具：{{tools}}",
-      "nodeSecretCount": "可將 {{count}} 個已儲存憑證提供給本機 Node 程式",
-      "nodeSecretOne": "可將 1 個已儲存憑證提供給本機 Node 程式"
+      "nodeSecretCount": "本機 Node 程式可取得 {{count}} 個已儲存憑證",
+      "nodeSecretOne": "本機 Node 程式可取得 1 個已儲存憑證"
     },
     "releaseChanged": "可用版本已變更，請查看更新後的版本，再選擇安裝。",
     "sourceUnverified": "這台電腦暫未提供這個市場的儲存庫資訊，無法從手機升級。請在電腦上重新整理這個市場後再試（Cindy 較舊時先更新），或在電腦上升級。",
@@ -322,8 +322,7 @@
       "verified-publisher": "發佈者已驗證",
       "unverified": "未驗證"
     },
-    "highRiskTitle": "高風險權限",
-    "highRiskMore": "另有 {{count}} 項高風險權限，完整說明見上方列表"
+    "highRiskTitle": "高風險權限"
   },
   "notice": {
     "title": {

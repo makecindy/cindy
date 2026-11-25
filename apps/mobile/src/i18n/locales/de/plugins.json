@@ -306,8 +306,8 @@
       "mcpUi": "Kann interaktive Seiten in Unterhaltungen anzeigen",
       "mcpUiDomains": "Domains, mit denen sich die Seiten verbinden können: {{domains}}",
       "uiPageAccess": "Seiten: {{pages}}\nDomains, mit denen sich die Seiten verbinden können: {{domains}}\nTools, die die Seiten aufrufen können: {{tools}}",
-      "nodeSecretCount": "Kann {{count}} gespeicherte Zugangsdaten dem lokalen Node-Programm bereitstellen",
-      "nodeSecretOne": "Kann gespeicherte Zugangsdaten dem lokalen Node-Programm bereitstellen"
+      "nodeSecretCount": "Lokales Node-Programm kann {{count}} gespeicherte Zugangsdaten erhalten",
+      "nodeSecretOne": "Lokales Node-Programm kann gespeicherte Zugangsdaten erhalten"
     },
     "releaseChanged": "Die verfügbare Version hat sich geändert. Prüfe die aktualisierte Version vor der Installation.",
     "sourceUnverified": "Dieser Computer hat das Repository dieses Marktplatzes noch nicht angegeben. Aktualisieren vom Handy ist daher nicht möglich. Aktualisiere den Marktplatz am Computer und versuche es erneut (bei älterem Cindy zuerst Cindy aktualisieren) oder aktualisiere am Computer.",
@@ -322,8 +322,7 @@
       "verified-publisher": "Verifizierter Herausgeber",
       "unverified": "Nicht verifiziert"
     },
-    "highRiskTitle": "Berechtigungen mit hohem Risiko",
-    "highRiskMore": "{{count}} weitere Berechtigungen mit hohem Risiko. Siehe die vollständige Liste oben."
+    "highRiskTitle": "Berechtigungen mit hohem Risiko"
   },
   "notice": {
     "title": {

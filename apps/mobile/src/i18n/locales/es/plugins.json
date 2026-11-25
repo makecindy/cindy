@@ -308,8 +308,8 @@
       "mcpUi": "Puede mostrar páginas interactivas en conversaciones.",
       "mcpUiDomains": "Dominios a los que se pueden conectar las páginas: {{domains}}",
       "uiPageAccess": "Páginas: {{pages}}\nDominios a los que se pueden conectar las páginas: {{domains}}\nHerramientas que las páginas pueden llamar: {{tools}}",
-      "nodeSecretCount": "Puede proporcionar credenciales almacenadas al programa local Node ({{count}})",
-      "nodeSecretOne": "Puede proporcionar una credencial almacenada al programa local Node"
+      "nodeSecretCount": "El programa local Node puede recibir {{count}} credenciales almacenadas",
+      "nodeSecretOne": "El programa local Node puede recibir una credencial almacenada"
     },
     "releaseChanged": "La versión disponible cambió. Revisa la versión actualizada antes de instalar.",
     "sourceUnverified": "Este ordenador aún no ha indicado el repositorio de este mercado, así que no se puede actualizar desde el teléfono. Actualiza el mercado en el ordenador y vuelve a intentarlo (si Cindy es más antigua, actualízala primero), o actualiza en el ordenador.",
@@ -324,8 +324,7 @@
       "verified-publisher": "Editor verificado",
       "unverified": "No verificado"
     },
-    "highRiskTitle": "Permisos de alto riesgo",
-    "highRiskMore": "{{count}} permisos de alto riesgo más. Consulta la lista completa arriba."
+    "highRiskTitle": "Permisos de alto riesgo"
   },
   "notice": {
     "title": {

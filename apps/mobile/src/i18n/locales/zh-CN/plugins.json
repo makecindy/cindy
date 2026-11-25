@@ -306,8 +306,8 @@
       "mcpUi": "可在对话中显示交互页面",
       "mcpUiDomains": "页面可连接域名：{{domains}}",
       "uiPageAccess": "页面：{{pages}}\n页面可连接域名：{{domains}}\n页面可调用工具：{{tools}}",
-      "nodeSecretCount": "可将 {{count}} 个已保存凭证提供给本机 Node 程序",
-      "nodeSecretOne": "可将 1 个已保存凭证提供给本机 Node 程序"
+      "nodeSecretCount": "本机 Node 程序可获得 {{count}} 个已保存凭证",
+      "nodeSecretOne": "本机 Node 程序可获得 1 个已保存凭证"
     },
     "releaseChanged": "可用版本已变化，请查看刷新后的版本，再选择安装。",
     "sourceUnverified": "这台电脑暂未提供这个市场的仓库信息，不能从手机升级。请在电脑上刷新这个市场后再试（Cindy 较旧时先更新），或在电脑上升级。",
@@ -322,8 +322,7 @@
       "verified-publisher": "发布者已验证",
       "unverified": "未验证"
     },
-    "highRiskTitle": "高风险权限",
-    "highRiskMore": "另有 {{count}} 项高风险权限，完整说明见上方列表"
+    "highRiskTitle": "高风险权限"
   },
   "notice": {
     "title": {

@@ -306,8 +306,8 @@
       "mcpUi": "会話にインタラクティブページを表示できる",
       "mcpUiDomains": "ページが接続できるドメイン：{{domains}}",
       "uiPageAccess": "ページ：{{pages}}\nページが接続できるドメイン：{{domains}}\nページが呼び出せるツール：{{tools}}",
-      "nodeSecretCount": "保存済みの認証情報 {{count}} 件をローカル Node プログラムに渡せます",
-      "nodeSecretOne": "保存済みの認証情報 1 件をローカル Node プログラムに渡せます"
+      "nodeSecretCount": "ローカル Node プログラムが保存済みの認証情報 {{count}} 件を受け取れます",
+      "nodeSecretOne": "ローカル Node プログラムが保存済みの認証情報 1 件を受け取れます"
     },
     "releaseChanged": "利用可能なバージョンが変更されました。更新後のバージョンを確認してからインストールしてください。",
     "sourceUnverified": "このコンピューターからこのマーケットのリポジトリ情報がまだ届いていないため、スマートフォンからはアップデートできません。コンピューターでマーケットを更新してから再試行するか（Cindy が古い場合は先に更新）、コンピューターでアップデートしてください。",
@@ -322,8 +322,7 @@
       "verified-publisher": "発行者確認済み",
       "unverified": "未確認"
     },
-    "highRiskTitle": "リスクの高い権限",
-    "highRiskMore": "ほかに高リスクの権限が {{count}} 件あります。詳しくは上の一覧をご覧ください。"
+    "highRiskTitle": "リスクの高い権限"
   },
   "notice": {
     "title": {

@@ -308,8 +308,8 @@
       "mcpUi": "Peut afficher des pages interactives dans les conversations",
       "mcpUiDomains": "Domaines auxquels les pages peuvent se connecter : {{domains}}",
       "uiPageAccess": "Pages : {{pages}}\nDomaines auxquels les pages peuvent se connecter : {{domains}}\nOutils que les pages peuvent appeler : {{tools}}",
-      "nodeSecretCount": "Peut fournir des identifiants enregistrés au programme Node local ({{count}})",
-      "nodeSecretOne": "Peut fournir un identifiant enregistré au programme Node local"
+      "nodeSecretCount": "Le programme Node local peut recevoir {{count}} identifiants enregistrés",
+      "nodeSecretOne": "Le programme Node local peut recevoir un identifiant enregistré"
     },
     "releaseChanged": "La version disponible a changé. Examinez la version actualisée avant de l'installer.",
     "sourceUnverified": "Cet ordinateur n’a pas encore indiqué le dépôt de ce marketplace : la mise à jour depuis le téléphone n’est pas possible. Actualisez le marketplace sur l’ordinateur puis réessayez (mettez d’abord Cindy à jour si elle est plus ancienne), ou mettez à jour depuis l’ordinateur.",
@@ -324,8 +324,7 @@
       "verified-publisher": "Éditeur vérifié",
       "unverified": "Non vérifié"
     },
-    "highRiskTitle": "Autorisations à haut risque",
-    "highRiskMore": "{{count}} autres autorisations à haut risque. Voir la liste complète ci-dessus."
+    "highRiskTitle": "Autorisations à haut risque"
   },
   "notice": {
     "title": {

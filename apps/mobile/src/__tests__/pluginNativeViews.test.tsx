@@ -88,6 +88,7 @@ vi.mock("@expo/ui/swift-ui", async () => {
         "Picker",
         "ProgressView",
         "RNHostView",
+        "ScrollView",
         "Section",
         "Spacer",
         "Text",
@@ -178,7 +179,7 @@ vi.mock("react-native", () => ({
   },
   Text: (p: any) => p.children,
   TextInput: () => null,
-  ScrollView: (p: any) => createElement("div", { "data-testid": p.testID }, p.children),
+  ScrollView: (p: any) => { if (p.testID) bridge.props.set(p.testID, p); return createElement("div", { "data-testid": p.testID }, p.children); },
   Pressable: (p: any) => { if (p.testID) bridge.props.set(p.testID, p); return createElement("div", { "data-testid": p.testID }, p.children); },
   ActivityIndicator: () => null,
   AccessibilityInfo: {
@@ -1449,12 +1450,9 @@ describe("pinned high-risk permission", () => {
       expect(scroll.textContent).toContain(detail);
     }
   });
-  it("Android caps each pinned line so the area stays within its height", () => {
+  it("Android keeps the pinned area within its height bound for the largest permission list", () => {
     mount(AndroidManagementConfirmation, props(manyBindings));
-    const pinned = bridge.props.get("plugins.management.highRisk");
-    const children = (Array.isArray(pinned.children) ? pinned.children.flat() : [pinned.children]).filter(Boolean);
-    expect(children.length).toBeLessThanOrEqual(6);
-    for (const child of children) expect(child.props.numberOfLines).toBeGreaterThan(0);
+    expect(bridge.props.get("plugins.management.highRiskScroll").style).toMatchObject({ maxHeight: Math.round(844 * 0.3) });
   });
   // Android re-check of the pinned area: without a separator, a list title resting right above the summary read
   // as a repeat; the summary heading was smaller than the list's permission titles.
@@ -1474,27 +1472,32 @@ describe("pinned high-risk permission", () => {
     const title = (Array.isArray(pinned.children) ? pinned.children.flat() : [pinned.children]).filter(Boolean)[0];
     expect(title.props.style).toMatchObject({ fontSize: 15, fontWeight: "600" });
   });
-  // iOS re-check of c8f5b2c4: at accessibility-large the pinned area squeezed the scrolled list to 0 pt. With all
-  // five classes the summary shows two one-line rows plus "N more"; everything else stays in the scrolled list.
+  // iOS layout re-check (3587f6ca, accessibility-large): rows capped at one or two lines cut the end of every summary
+  // line. Now every line is shown in full and the summary scrolls inside a bound of 30% of the window height (844 pt
+  // in this stand-in), so the information above and the buttons stay in view.
   const resident = { key: "node:resident", kind: "node", labelKey: "nodeResident", detailKey: "nodeResidentDetail" };
   const allFive = installOf([resident, secret, node, background, errand]);
-  it("iOS bounds the pinned summary at accessibility sizes", () => {
+  const fiveLines = ["plugins.management.permissions.nodeResident", "plugins.management.permissions.nodeSecretOne",
+    "plugins.management.permissions.nodeRuntime", "plugins.management.permissions.agentBackground", "plugins.management.permissions.agentErrand"];
+  it("iOS shows every pinned line in full inside a bounded scroll area", () => {
     bridge.fontScale = 2.4;
-    const { container } = mount(PluginManagementConfirmation, props(allFive));
-    const pinned = container.querySelector('[data-testid="plugins.management.highRisk"]')!;
-    const texts = [...pinned.querySelectorAll('[data-native="Text"]')];
-    expect(texts).toHaveLength(4); // heading + two rows + "N more"
-    expect(texts.at(-1)!.textContent).toBe("plugins.management.highRiskMore");
-    expect(container.textContent).toContain("plugins.management.permissions.agentErrandDetail");
+    mount(PluginManagementConfirmation, props(allFive));
+    const scroll = bridge.props.get("plugins.management.highRiskScroll");
+    const height = scroll.modifiers.find((m: any) => m.frame)?.frame.height;
+    expect(height).toBeGreaterThan(0);
+    expect(height).toBeLessThanOrEqual(Math.round(844 * 0.3));
+    const lines = (Array.isArray(scroll.children.props.children) ? scroll.children.props.children : [scroll.children.props.children]).flat();
+    expect(lines.map((line: any) => line.props.children)).toEqual(fiveLines);
+    for (const line of lines) expect(line.props.modifiers.some((m: any) => "lineLimit" in m)).toBe(false);
   });
-  it("Android bounds the pinned summary at accessibility sizes", () => {
+  it("Android shows every pinned line in full inside a bounded scroll area", () => {
     bridge.fontScale = 2;
     mount(AndroidManagementConfirmation, props(allFive));
-    const pinned = bridge.props.get("plugins.management.highRisk");
-    const children = (Array.isArray(pinned.children) ? pinned.children.flat() : [pinned.children]).filter(Boolean);
-    expect(children).toHaveLength(4);
-    for (const child of children.slice(1)) expect(child.props.numberOfLines).toBe(1);
-    expect(children.at(-1).props.children).toBe("plugins.management.highRiskMore");
+    const scroll = bridge.props.get("plugins.management.highRiskScroll");
+    expect(scroll.style).toMatchObject({ maxHeight: Math.round(844 * 0.3) });
+    const lines = (Array.isArray(scroll.children) ? scroll.children : [scroll.children]).flat().filter(Boolean);
+    expect(lines.map((line: any) => line.props.children)).toEqual(fiveLines);
+    for (const line of lines) expect(line.props.numberOfLines).toBeUndefined();
   });
   it("Android shows no pinned area when nothing is high risk", () => {
     const { container } = mount(AndroidManagementConfirmation, props(installOf([notify])));

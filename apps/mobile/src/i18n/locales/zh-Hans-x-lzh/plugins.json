@@ -304,8 +304,8 @@
       "mcpUi": "可于言谈中示交互之页",
       "mcpUiDomains": "页可连之网域：{{domains}}",
       "uiPageAccess": "页：{{pages}}\n页可连之网域：{{domains}}\n页可唤之工具：{{tools}}",
-      "nodeSecretCount": "可将已存之凭证 {{count}} 件交予本机 Node 程序",
-      "nodeSecretOne": "可将已存之凭证一件交予本机 Node 程序"
+      "nodeSecretCount": "本机 Node 程序可得已存之凭证 {{count}} 件",
+      "nodeSecretOne": "本机 Node 程序可得已存之凭证一件"
     },
     "releaseChanged": "可用之版已变，请观更新后之版，再择安装。",
     "sourceUnverified": "此机暂未示此坊之库，不能自手机升之。请于电脑刷新此坊再试（Cindy 旧则先更新），或于电脑升之。",
@@ -320,8 +320,7 @@
       "verified-publisher": "发布者已验",
       "unverified": "未验"
     },
-    "highRiskTitle": "险要之权",
-    "highRiskMore": "另有高险之权 {{count}} 项，详见上列"
+    "highRiskTitle": "险要之权"
   },
   "notice": {
     "title": {

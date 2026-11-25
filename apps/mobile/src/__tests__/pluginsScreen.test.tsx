@@ -3193,6 +3193,92 @@ describe("market read fences and lost-receipt facts", () => {
       });
     });
 
+    // Group 4 (maintainer review 08:15): Allow is queued; before it leaves, either a plugin-change refresh puts the
+    // same-id instance on the computer (the last send check then stops it) or Allow leaves first and its reply is lost.
+    // Events: "allow queued", "allow stopped" or "allow sent", "allow reply lost"; then the receipt expires.
+    // Only an Allow that actually left can confirm the result.
+    it.each(orderings(["refresh", "releaseAllow"]).map((order) => [order.join(" → "), order] as const))("allow queued, then %s", async (_label, order) => {
+      const g = gates();
+      let present = false, holdAllow = false, receiptGone = false;
+      const sent = queuedWire((request) => {
+        switch (request.actionId) {
+          case "management:snapshot":
+            if (request.input?.read === "capabilities") return { catalogPaging: true };
+            if (request.input?.read === "catalog") return marketPage([item]);
+            return managementSnapshot(present);
+          case "management:market-detail": return { ...item, installState: present ? "installed" : "not-installed", manifest: demoManifest };
+          case "management:begin": return demoConsent(request);
+          case "management:answer": present = true; throw new Error("[TIMEOUT] remote invoke timed out");
+          case "management:operation":
+            if (receiptGone) throw hostError("NOT_FOUND");
+            return { operationId: request.input.operationId, phase: "running" };
+          default: throw new Error("unexpected " + request.actionId);
+        }
+      }, (request) => request !== "manifest" && holdAllow && request.actionId === "management:answer" ? g.hold("allow") : undefined);
+      await openMarket();
+      await act(async () => shownMarket().install(shownMarket().items[0]));
+      await settle(14);
+      const controller = fixture.props.get("confirmation").controller;
+      holdAllow = true;
+      await act(async () => { void controller.answer(true); }); // "allow queued"
+      await settle(6);
+      for (const step of order) {
+        if (step === "refresh") { present = true; await act(async () => { await controller.refresh(); }); }
+        else g.release("allow");
+        await settle(14);
+      }
+      const allowSent = sent.some((request) => request.actionId === "management:answer");
+      expect(allowSent).toBe(order[0] === "releaseAllow");
+      receiptGone = true;
+      await act(async () => { await shownMarket().checkResult(); });
+      await settle(14);
+      // Sent with the reply lost: the result is confirmed from the computer. Stopped before sending: unconfirmed.
+      expect(opened()).toBe(allowSent);
+      if (!allowSent) expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
+      expect(sent.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+      expect(sent.filter((request) => request.actionId === "management:answer").length).toBeLessThanOrEqual(1);
+    });
+    // Group 4, disconnect path: Allow is queued, the computer goes offline before it leaves (stopped), comes back,
+    // and the receipt has expired while the plugin is on the computer from elsewhere.
+    it("allow queued, stopped by a disconnect, then the receipt expires", async () => {
+      const g = gates();
+      let present = false, holdAllow = false, receiptGone = false;
+      const sent = queuedWire((request) => {
+        switch (request.actionId) {
+          case "management:snapshot":
+            if (request.input?.read === "capabilities") return { catalogPaging: true };
+            if (request.input?.read === "catalog") return marketPage([item]);
+            return managementSnapshot(present);
+          case "management:market-detail": return { ...item, installState: present ? "installed" : "not-installed", manifest: demoManifest };
+          case "management:begin": return demoConsent(request);
+          case "management:answer": throw new Error("answer must not be sent");
+          case "management:operation":
+            if (receiptGone) throw hostError("NOT_FOUND");
+            return { operationId: request.input.operationId, phase: "confirmation" };
+          default: throw new Error("unexpected " + request.actionId);
+        }
+      }, (request) => request !== "manifest" && holdAllow && request.actionId === "management:answer" ? g.hold("allow") : undefined);
+      await openMarket();
+      await act(async () => shownMarket().install(shownMarket().items[0]));
+      await settle(14);
+      const controller = fixture.props.get("confirmation").controller;
+      holdAllow = true;
+      await act(async () => { void controller.answer(true); });
+      await settle(6);
+      await act(async () => controller.setOnline(false));
+      g.release("allow");
+      await settle(14);
+      expect(sent.some((request) => request.actionId === "management:answer")).toBe(false);
+      present = true; receiptGone = true;
+      await act(async () => controller.setOnline(true));
+      await settle(14);
+      await act(async () => { await controller.reconcile(); });
+      await settle(14);
+      expect(opened()).toBe(false);
+      expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
+      expect(sent.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+    });
+
     // Group 3 (03:54 #3): a next page N is queued by scrolling, then a new search is typed and settles; its first
     // page S and count C are held too. Every request that leaves must match the list and search on screen then.
     it.each(orderings(["N", "S", "C"]).map((order) => [order.join(" → "), order] as const))("scroll queued, then a new search: %s", async (_label, order) => {
