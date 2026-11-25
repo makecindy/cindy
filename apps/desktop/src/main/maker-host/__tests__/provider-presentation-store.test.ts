@@ -27,6 +27,16 @@ const {
 const { withCrossProcessLock } = await import('../../device-link/crossProcessLock.js');
 afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
+it('只读目录查询保留坏的展示配置并报告不可读，不走旧 read 自愈', () => {
+  owner = 'readonly-malformed';
+  const file = path.join(tmpDir, owner, 'local-codex-provider-prefs.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '{invalid');
+  try {
+    expect(() => readProviderPresentation('openai', { allowSideEffects: false })).toThrow('PROVIDER_PRESENTATION_UNREADABLE');
+    expect(fs.readFileSync(file, 'utf8')).toBe('{invalid');
+  } finally { owner = 'first'; }
+});
+
 it.each(['openai', 'anthropic', 'xai', 'google', 'generic-oauth'])('does not fail committed %s authentication when presentation cannot be written', async (id) => {
   owner = `failed-presentation-${id}`;
   const write = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => { throw new Error('test readonly disk'); });
