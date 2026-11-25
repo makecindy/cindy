@@ -322,7 +322,8 @@
       "verified-publisher": "发布者已验证",
       "unverified": "未验证"
     },
-    "highRiskTitle": "高风险权限"
+    "highRiskTitle": "高风险权限",
+    "highRiskMore": "另有 {{count}} 项高风险权限，完整说明见上方列表"
   },
   "notice": {
     "title": {

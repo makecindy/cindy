@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { isPinnedHighRiskPermission, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
+import { isPinnedHighRiskPermission, pinnedHighRiskRows, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
 import { sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
@@ -858,6 +858,16 @@ describe('confirmation sheet wording', () => {
     const scrolled = view.permissions.map((row) => `${row.title}\n${row.detail}`).join('\n');
     for (let index = 0; index < 4; index++) expect(scrolled).toContain(`Token ${index}`);
     for (const method of methods) expect(scrolled.split(method).length - 1).toBeGreaterThanOrEqual(4);
+  });
+  // iOS re-check of c8f5b2c4 (accessibility-large): the pinned area left the scrolled list 0 pt at the medium
+  // detent. Its height is bounded by text size alone: five two-line rows normally, three one-line rows at
+  // accessibility sizes (the last one counting the rest, which stay in the scrolled list).
+  it('bounds the pinned rows by text size alone', () => {
+    const lines = ['a', 'b', 'c', 'd', 'e'];
+    expect(pinnedHighRiskRows(lines, 1, t)).toEqual({ rows: lines, lineLimit: 2 });
+    expect(pinnedHighRiskRows(lines, 1.3, t)).toEqual({ rows: lines, lineLimit: 2 });
+    expect(pinnedHighRiskRows(lines, 2, t)).toEqual({ rows: ['a', 'b', 'plugins.management.highRiskMore(count=3)'], lineLimit: 1 });
+    expect(pinnedHighRiskRows(['a', 'b', 'c'], 3.1, t)).toEqual({ rows: ['a', 'b', 'c'], lineLimit: 1 });
   });
   it('pins an update that only adds a credential binding to an approved Node plugin', () => {
     const secret = { ...item('node:secret:token:worker.cjs:run', 'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name: 'API token' }, detail: 'run' };

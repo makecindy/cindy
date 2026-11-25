@@ -320,7 +320,8 @@
       "verified-publisher": "發佈者已驗",
       "unverified": "未驗"
     },
-    "highRiskTitle": "險要之權"
+    "highRiskTitle": "險要之權",
+    "highRiskMore": "另有高險之權 {{count}} 項，詳見上列"
   },
   "notice": {
     "title": {

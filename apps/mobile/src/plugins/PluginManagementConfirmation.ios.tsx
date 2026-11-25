@@ -17,7 +17,8 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { pluginConsentPresentation } from "./pluginConsentPresentation";
+import { useWindowDimensions } from "react-native";
+import { pinnedHighRiskRows, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -25,6 +26,9 @@ export function PluginManagementConfirmation(
     { colors } = useTheme();
   const { consent, visible, answer } = usePluginConsent(props);
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
+  const { fontScale } = useWindowDimensions();
+  // Hard height bound for the pinned summary, by text size alone (see pinnedHighRiskRows).
+  const pinned = info?.highRisk ? pinnedHighRiskRows(info.highRisk.lines, fontScale, t) : undefined;
   const body = (text?: string, lead = false) =>
     text ? (
       <Text
@@ -66,13 +70,13 @@ export function PluginManagementConfirmation(
               >
                 {info.highRisk.title}
               </Text>
-              {info.highRisk.lines.map((line, index) => (
+              {pinned!.rows.map((line, index) => (
                 <Text
                   key={index}
                   modifiers={[
                     font({ textStyle: "footnote" }),
                     foregroundStyle(colors.textPrimary),
-                    lineLimit(2),
+                    lineLimit(pinned!.lineLimit),
                   ]}
                 >
                   {line}

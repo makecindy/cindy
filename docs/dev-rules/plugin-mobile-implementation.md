@@ -127,6 +127,8 @@
     64 字且可含换行的名称，插进两行摘要会把「本机 Node 程序」挤出视野），textPrimary，不用警示色；与滚动区之间用一条细分隔线（iOS 原生 `Divider`，Android 用 `border` token 的
     hairline 加留白），标题与列表里的权限标题同字号、加粗一档（iOS `subheadline` semibold，Android `bodySmall` semibold）。
     列表里的高风险项保留标题行（列表是完整清单，升级时带「新增 ·」前缀），靠分隔线避免看起来重复。
+    摘要高度只按字号决定（`pinnedHighRiskRows`，不做运行时测量）：普通字号最多五行、每行最多两行；辅助功能大字号
+    （fontScale > 1.3）最多三行、每行一行，超过时显示前两类加「另有 N 项高风险权限，完整说明见上方列表」。
     iOS 有高风险项时确认面板只用大高度（`ComposerSheet` 的可选 `largeOnly`，默认不变）：半高时向上滑是展开面板而不是
     滚动列表，列表下方的内容会像滚不到；`@expo/ui` 没有 `presentationContentInteraction`，无法改成先滚动。iOS 半高面板与 Android 矮屏都不用滚动
     就能看到，也不会把来源、说明和按钮挤掉。每项的完整说明（凭证名与允许的全部方法）留在可滚动的权限列表里，

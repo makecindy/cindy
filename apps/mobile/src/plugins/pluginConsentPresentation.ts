@@ -27,6 +27,17 @@ export function isPinnedHighRiskPermission(item: Pick<PluginPermissionItem, "key
     || item.key === "agent:background" || item.key === "agent:errand";
 }
 
+/**
+ * The pinned summary's hard height bound, decided by the text size alone (no runtime measuring): up to five lines of
+ * at most two lines each; at accessibility sizes at most three one-line rows, the last one saying how many more
+ * classes are in the scrolled list. The full explanations always stay in the scrolled list.
+ */
+export function pinnedHighRiskRows(lines: string[], fontScale: number, t: Translate): { rows: string[]; lineLimit: number } {
+  if (fontScale <= 1.3) return { rows: lines.slice(0, 5), lineLimit: 2 };
+  if (lines.length <= 3) return { rows: lines, lineLimit: 1 };
+  return { rows: [...lines.slice(0, 2), t("plugins.management.highRiskMore", { count: lines.length - 2 })], lineLimit: 1 };
+}
+
 /** Same wording as the computer's install dialog (ghostInstallConsentSourceLabel). */
 function sourceLabel(consent: Consent, t: Translate): string {
   const origin =

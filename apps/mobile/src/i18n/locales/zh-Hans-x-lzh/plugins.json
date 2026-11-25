@@ -320,7 +320,8 @@
       "verified-publisher": "发布者已验",
       "unverified": "未验"
     },
-    "highRiskTitle": "险要之权"
+    "highRiskTitle": "险要之权",
+    "highRiskMore": "另有高险之权 {{count}} 项，详见上列"
   },
   "notice": {
     "title": {

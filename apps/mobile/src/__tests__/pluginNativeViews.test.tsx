@@ -1464,6 +1464,28 @@ describe("pinned high-risk permission", () => {
     const title = (Array.isArray(pinned.children) ? pinned.children.flat() : [pinned.children]).filter(Boolean)[0];
     expect(title.props.style).toMatchObject({ fontSize: 15, fontWeight: "600" });
   });
+  // iOS re-check of c8f5b2c4: at accessibility-large the pinned area squeezed the scrolled list to 0 pt. With all
+  // five classes the summary shows two one-line rows plus "N more"; everything else stays in the scrolled list.
+  const resident = { key: "node:resident", kind: "node", labelKey: "nodeResident", detailKey: "nodeResidentDetail" };
+  const allFive = installOf([resident, secret, node, background, errand]);
+  it("iOS bounds the pinned summary at accessibility sizes", () => {
+    bridge.fontScale = 2.4;
+    const { container } = mount(PluginManagementConfirmation, props(allFive));
+    const pinned = container.querySelector('[data-testid="plugins.management.highRisk"]')!;
+    const texts = [...pinned.querySelectorAll('[data-native="Text"]')];
+    expect(texts).toHaveLength(4); // heading + two rows + "N more"
+    expect(texts.at(-1)!.textContent).toBe("plugins.management.highRiskMore");
+    expect(container.textContent).toContain("plugins.management.permissions.agentErrandDetail");
+  });
+  it("Android bounds the pinned summary at accessibility sizes", () => {
+    bridge.fontScale = 2;
+    mount(AndroidManagementConfirmation, props(allFive));
+    const pinned = bridge.props.get("plugins.management.highRisk");
+    const children = (Array.isArray(pinned.children) ? pinned.children.flat() : [pinned.children]).filter(Boolean);
+    expect(children).toHaveLength(4);
+    for (const child of children.slice(1)) expect(child.props.numberOfLines).toBe(1);
+    expect(children.at(-1).props.children).toBe("plugins.management.highRiskMore");
+  });
   it("Android shows no pinned area when nothing is high risk", () => {
     const { container } = mount(AndroidManagementConfirmation, props(installOf([notify])));
     expect(container.querySelector('[data-testid="plugins.management.highRisk"]')).toBeNull();

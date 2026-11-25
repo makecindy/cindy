@@ -322,7 +322,8 @@
       "verified-publisher": "発行者確認済み",
       "unverified": "未確認"
     },
-    "highRiskTitle": "リスクの高い権限"
+    "highRiskTitle": "リスクの高い権限",
+    "highRiskMore": "ほかに高リスクの権限が {{count}} 件あります。詳しくは上の一覧をご覧ください。"
   },
   "notice": {
     "title": {

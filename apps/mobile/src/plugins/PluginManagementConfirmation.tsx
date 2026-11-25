@@ -1,4 +1,4 @@
-import { Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from "react-native";
 import { useTranslation } from "react-i18next";
 import { SheetModal } from "@/session/SheetModal";
 import { Text } from "@/components/AppText";
@@ -15,7 +15,7 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { pluginConsentPresentation } from "./pluginConsentPresentation";
+import { pinnedHighRiskRows, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -23,6 +23,9 @@ export function PluginManagementConfirmation(
     styles = useThemedStyles(makeStyles);
   const { consent, visible, answer } = usePluginConsent(props);
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
+  const { fontScale } = useWindowDimensions();
+  // Hard height bound for the pinned summary, by text size alone (see pinnedHighRiskRows).
+  const pinned = info?.highRisk ? pinnedHighRiskRows(info.highRisk.lines, fontScale, t) : undefined;
   return (
     <SheetModal
       nativePresentation
@@ -71,8 +74,8 @@ export function PluginManagementConfirmation(
           // Bounded summary (a heading and at most five two-line items); full details are in the scrolled list.
           <View testID="plugins.management.highRisk" style={styles.highRisk}>
             <Text numberOfLines={1} style={styles.highRiskTitle}>{info.highRisk.title}</Text>
-            {info.highRisk.lines.map((line, index) => (
-              <Text key={index} numberOfLines={2} style={styles.highRiskBody}>{line}</Text>
+            {pinned!.rows.map((line, index) => (
+              <Text key={index} numberOfLines={pinned!.lineLimit} style={styles.highRiskBody}>{line}</Text>
             ))}
           </View>
         ) : null}

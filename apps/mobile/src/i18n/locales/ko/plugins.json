@@ -322,7 +322,8 @@
       "verified-publisher": "게시자 인증됨",
       "unverified": "미인증"
     },
-    "highRiskTitle": "위험도가 높은 권한"
+    "highRiskTitle": "위험도가 높은 권한",
+    "highRiskMore": "고위험 권한이 {{count}}개 더 있습니다. 위 목록에서 자세히 확인하세요."
   },
   "notice": {
     "title": {
