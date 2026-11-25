@@ -242,6 +242,36 @@ describe('effort change coordinator', () => {
     expect(applyRuntime).not.toHaveBeenCalled();
   });
 
+  it('宿主已提交运行时档位时，先到的旧回显不会向宿主重复写入', async () => {
+    const coordinator = createEffortChangeCoordinator();
+    const persistGate = deferred();
+    let savedEffort: Effort = 'medium';
+    const applyRuntime = vi.fn(async (_sessionId: string, effort: Effort) => {
+      await persistGate.promise;
+      savedEffort = effort;
+    });
+    const pipeline = {
+      persist: async (sessionId: string, effort: Effort) => {
+        if (effort === 'high') {
+          // The first save's sessions:patched echo can be rendered during the second save.
+          coordinator.adoptExternalEffort(sessionId, 'medium', applyRuntime);
+        }
+        savedEffort = effort;
+      },
+      onCommitted: () => {},
+    };
+
+    await enqueueEffortChange(coordinator, 'session-a', 'low', pipeline);
+    const lastWrite = enqueueEffortChange(coordinator, 'session-a', 'high', pipeline);
+    await lastWrite;
+    persistGate.resolve();
+    await coordinator.awaitRuntimeSettled('session-a');
+
+    expect(applyRuntime).not.toHaveBeenCalled();
+    expect(savedEffort).toBe('high');
+    expect(coordinator.getCommittedEffort('session-a')).toBe('high');
+  });
+
   it('外部 session patch 会抢占旧 runtime attempt 并在其迟到完成后修复终态', async () => {
     const coordinator = createEffortChangeCoordinator();
     const attempts: Array<{ effort: Effort; gate: ReturnType<typeof deferred> }> = [];

@@ -56,6 +56,13 @@ import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { MorphPopover } from '@/components/ui/morph-popover';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
 import {
   COMPOSER_MENU_ROW,
@@ -938,6 +945,8 @@ export interface ModelSelectorBaseProps {
   visualVariant?: 'default' | 'create-agent';
   /** 仅普通 composer 显式开启 chip → panel 容器形变；设置页/worker 等维持 Radix。 */
   useMorphPopover?: boolean;
+  /** Let the current task change effort from the visible model-pill tail. */
+  showEffortShortcut?: boolean;
   /**
    * 指针关闭后的回焦目标(composer 输入框)。选完模型 / 点空白后立刻送回输入框;
    * Esc 仍回 pill(§14.2)。设置页等非 composer 入口不传。
@@ -4538,6 +4547,7 @@ export function ModelSelector({
   fieldPanelWidth = 'trigger',
   visualVariant = 'default',
   useMorphPopover = false,
+  showEffortShortcut = false,
   restoreFocusTarget,
   popoverSide = 'top',
   maxVisibleModelRows,
@@ -4926,10 +4936,12 @@ export function ModelSelector({
   const triggerProvider = actualRoute && routeProvider
     ? routeProvider
     : providers.find((provider) => provider.id === activeSourceId);
+  const triggerProviderModel = triggerProvider && currentAgentKind
+    ? getModel(triggerProvider, modelId, currentAgentKind)
+    : undefined;
   const activeThinkingToggle =
     currentAgentKind === 'pi' &&
-    !!triggerProvider &&
-    getModel(triggerProvider, modelId, currentAgentKind)?.thinkingToggle === true;
+    triggerProviderModel?.thinkingToggle === true;
   const showEffort =
     !fallbackOption?.active &&
     efforts.length > 0 &&
@@ -4955,10 +4967,7 @@ export function ModelSelector({
   const triggerActiveProvider = triggerProvider;
   // trigger 图标的统一规则:当前 (来源, 模型) 条目的 icon(AI Gateway / 目录设定)优先,
   // 缺省回落来源供应商标 —— 与列表行、手机版同一套口径(ModelIconMark)。
-  const triggerModelIcon =
-    triggerActiveProvider && currentAgentKind
-      ? getModel(triggerActiveProvider, modelId, currentAgentKind)?.icon
-      : undefined;
+  const triggerModelIcon = triggerProviderModel?.icon;
   const disconnectedProvider = currentProviderId
     ? providers.find((p) => p.id === currentProviderId)
     : undefined;
@@ -5212,6 +5221,19 @@ export function ModelSelector({
   // 保留 useMorphPopover 作用域开关(仅 composer 工具条 opt-in;settings/CreateWorker 用 Radix 回退),
   // 但去掉 !isCreateAgentVariant —— 新建对话框工具条也走脱身上浮 morph,与会话内统一(2026-07-22)。
   const morphEnabled = useMorphPopover && !isFieldTrigger && !isSettingsTrigger;
+  const shortcutEfforts = triggerProviderModel?.efforts ?? [];
+  const splitEffortTrigger = showEffortShortcut && morphEnabled && configurationEnabled &&
+    showTriggerTailContent && !!effortLabel && shortcutEfforts.length > 1 &&
+    shortcutEfforts.some((level) => level === effort) && !!triggerProvider?.connected &&
+    !triggerEngine && !activePluginModel && !activeModelGroupRow && !noSource && !showSourceIssue &&
+    !remoteModelLoading && !remoteModelLoadFailed;
+  const effortMenuLabel = t('newChat.modelSelector.effortLabel');
+  const effortShortcutLabel = `${effortMenuLabel} · ${fullEffortLabel}`;
+  const triggerAriaLabel = splitEffortTrigger
+    ? t('newChat.modelSelector.trigger.aria', { model: displayIdentityLabel })
+    : ariaLabel;
+  const toolbarPillChrome =
+    'rounded-full border border-transparent bg-transparent hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]';
   const budgetGradientStyle: CSSProperties | undefined = isBudget
     ? {
         background: 'var(--model-budget-gradient)',
@@ -5242,21 +5264,21 @@ export function ModelSelector({
               dense ? 'h-9' : 'h-10',
               'hover:bg-[var(--surface-hover-soft)]',
             )
-          : cn(
-              'rounded-full',
+          : splitEffortTrigger
+            ? 'h-full shrink overflow-hidden rounded-full pl-2.5 pr-0.5 hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]'
+            : cn(
               // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
               // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
               'max-w-full shrink px-2.5',
               isSettingsTrigger ? 'min-h-[30px] items-baseline py-1 text-left leading-5' : 'h-[30px] overflow-hidden',
               // 模型名按内容取宽，由工具行的剩余空间决定截断位置。
               isSettingsTrigger ? 'min-w-0' : 'min-w-[72px]',
-              'border border-transparent bg-transparent',
-              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
+              toolbarPillChrome,
             ),
         // device-link 远程切换 in-flight:置灰 + 禁用点击(复用本文件 disabled 行的 opacity-50 习惯)。
         (switching || disabled) && 'pointer-events-none opacity-50',
       )}
-      aria-label={ariaLabel}
+      aria-label={triggerAriaLabel}
     >
       {(triggerEngine ? triggerEngine.pending : agentIdentity?.state === 'pending') && (
         <Clock3 size={dense ? 11 : 12} data-model-selection-pending aria-hidden className="shrink-0 text-[var(--model-trigger-meta)]" />
@@ -5503,8 +5525,8 @@ export function ModelSelector({
           {/* 引擎小标 + 深度 = pill 的收尾身份组(新形态,见 engineMarkVendor)。
               旧形态没有 mark,深度前保留「·」分隔;有 mark 时图标本身就是分隔,再加点
               会读成「模型 · 引擎 · 深度」三段。 */}
-          {showTriggerTailContent && engineMarkNode}
-          {effortLabel && showTriggerTailContent && (
+          {showTriggerTailContent && !splitEffortTrigger && engineMarkNode}
+          {effortLabel && showTriggerTailContent && !splitEffortTrigger && (
             <>
               {/* 固定表单入口尾部没有引擎 mark 作视觉分隔时,
                   深度前补「·」—— 否则「名字 深度」贴着读会粘成一个词。 */}
@@ -5549,7 +5571,7 @@ export function ModelSelector({
               </span>
             </>
           )}
-          {triggerFastOn && showTriggerTailContent && (
+          {triggerFastOn && showTriggerTailContent && !splitEffortTrigger && (
             <SpeedIcon
               mode={triggerFastOn}
               size={isCreateAgentVariant ? 11 : dense ? 12 : 13}
@@ -5706,7 +5728,64 @@ export function ModelSelector({
         stickyWidth
         panelAriaLabel={ariaLabel}
         {...(restoreFocusTarget ? { restoreFocusTarget } : {})}
-        trigger={trigger}
+        trigger={splitEffortTrigger ? (
+          <span className={cn('inline-flex h-[30px] min-w-0 max-w-full items-center', toolbarPillChrome)}>
+            {trigger}
+            <DropdownMenu
+              modal={false}
+              onOpenChange={(next) => {
+                if (next && openRef.current) setOpenWithoutAutoRefresh(false);
+              }}
+            >
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  disabled={switching || disabled}
+                  aria-label={effortShortcutLabel}
+                  title={effortShortcutLabel}
+                  className={cn(
+                    'flex h-full shrink-0 items-center gap-1 rounded-full pr-2.5 pl-1',
+                    'text-[var(--text-primary)] hover:bg-[var(--surface-hover-soft)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)] disabled:opacity-50',
+                    dense ? 'text-12' : 'text-13',
+                  )}
+                >
+                  {engineMarkNode}
+                  {effortLabel}
+                  {triggerFastOn && (
+                    <SpeedIcon
+                      mode={triggerFastOn}
+                      size={dense ? 12 : 13}
+                      className="ml-0.5 shrink-0 text-[var(--composer-pill-icon)]"
+                    />
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+              {/* Release the menu layer immediately so it can reopen while a save is pending. */}
+              <DropdownMenuContent
+                side={popoverSide}
+                align="end"
+                aria-label={effortMenuLabel}
+                className="data-[state=closed]:animate-none"
+              >
+                <DropdownMenuRadioGroup value={effort}>
+                  {shortcutEfforts.map((level) => (
+                    <DropdownMenuRadioItem
+                      key={level}
+                      value={level}
+                      onSelect={() => {
+                        // The displayed effort may still be the old value while a write is queued.
+                        void onEffortChange(level);
+                      }}
+                    >
+                      {labelOf(level)}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        ) : trigger}
       >
         <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentSwitch}>
           {content}
