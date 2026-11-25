@@ -66,6 +66,8 @@ export interface TerminalBridge {
   dispose(id: string): Promise<void>;
   restart(id: string): Promise<TerminalCreateResult>;
   listAvailableShells(): Promise<AvailableShell[]>;
+  /** 本机用户主目录（群聊终端的起始目录）。 */
+  getHomeDir(): Promise<string>;
   getDefaultShellPref(): Promise<ShellId>;
   setDefaultShellPref(value: ShellId): Promise<void>;
   /** 订阅 PTY 输出。回调每条 onData 都会被调；renderer 自己按 id filter。 */

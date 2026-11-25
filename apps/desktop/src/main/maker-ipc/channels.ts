@@ -1140,6 +1140,8 @@ export const TERMINAL_INVOKE = {
   LIST_AVAILABLE_SHELLS: 'terminal:list-available-shells',
   GET_DEFAULT_SHELL_PREF: 'terminal:get-default-shell-pref',
   SET_DEFAULT_SHELL_PREF: 'terminal:set-default-shell-pref',
+  /** 本机用户主目录：群聊终端的起始目录（不依赖空 cwd 回退）。 */
+  GET_HOME_DIR: 'terminal:get-home-dir',
 } as const;
 
 /** PTY → renderer 单向推送（webContents.send）。 */

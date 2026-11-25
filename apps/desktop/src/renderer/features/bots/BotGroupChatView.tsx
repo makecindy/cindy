@@ -31,11 +31,11 @@ import { cn } from '@/lib/utils';
  * 与普通任务的整区拖入一致；消息上的图片与文件复用普通聊天用户气泡的图片视图与附件 chip。
  */
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent } from 'react';
-import { ArrowLeft, CircleAlert, RefreshCcw, Settings2 } from 'lucide-react';
+import { ArrowLeft, CircleAlert, RefreshCcw, Settings2, SquareTerminal } from 'lucide-react';
 import { useBotGroupWorkTargets } from './useBotGroupWorkTargets';
 import { useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 
 import { attachGhostMediaToSession, getGhostMediaHandoverFromDataTransfer } from '@/cindy-brain/ghostMediaHandover';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
@@ -859,6 +859,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   }, [focused, group?.serverBacked, threadRootId, closeThread, shareScope]);
 
   const settingsLabel = t('bots.groupChat.settings.open');
+  // 本机终端入口：与「打开终端」快捷键同一动作，只在本机打开，不进入群记录。
+  const openTerminal = useOutletContext<{ openTerminal?: () => boolean } | null>()?.openTerminal;
+  const terminalLabel = t('settings.shortcuts.items.open-terminal.label');
   const mainHeaderSpeakers = headerGroup?.round?.speakers.filter(speaker => speaker.threadRootId === null || (!speaker.sourceMessageId && !speaker.threadRootId));
   const headerStatus = headerGroup ? botGroupHeaderStatus(mainHeaderSpeakers ? { ...headerGroup,
     speakingBotIds: mainHeaderSpeakers.map(speaker => speaker.botId),
@@ -895,6 +898,20 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           {/* One 邀请 entry for every member; what each can use inside follows the server. */}
           {headerGroup.serverBacked && !direct && !headerGroup.dissolvedAt && !headerGroup.archived &&
             <ChatGroupInviteMenu key={headerGroup.id} group={{ id: headerGroup.id, members, canInvite: headerGroup.canInvite }} variant="icon" />}
+          {openTerminal && <Tip text={terminalLabel}>
+            <Button
+              variant="secondary"
+              tone="quiet"
+              size="sm"
+              className="w-7 shrink-0 px-0"
+              data-testid="bot-group-open-terminal"
+              onClick={() => { openTerminal(); }}
+              aria-label={terminalLabel}
+              style={WINDOW_NO_DRAG_STYLE}
+            >
+              <SquareTerminal size={15} />
+            </Button>
+          </Tip>}
           {!direct && <Tip text={settingsLabel}>
             <button
               type="button"
@@ -909,7 +926,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </div>
       </div>
     );
-  }, [direct, headerGroup?.name, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.dissolvedAt, headerGroup?.archived, members, headerStatus, openSettings, separator, settingsLabel, t]);
+  }, [direct, headerGroup?.name, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.dissolvedAt, headerGroup?.archived, members, headerStatus, openSettings, openTerminal, terminalLabel, separator, settingsLabel, t]);
   useRegisterContentHeader(header);
 
   // Group-level stopping remains available even when all visible work belongs to topics.

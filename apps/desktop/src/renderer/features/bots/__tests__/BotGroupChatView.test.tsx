@@ -41,6 +41,7 @@ vi.mock('@/components/chat/FileLightbox', () => ({
 }));
 
 const mocks = vi.hoisted(() => ({
+  openTerminal: vi.fn(() => true),
   voiceBusy: false,
   stopVoice: vi.fn(async () => {}),
   // Keep translation identity stable so attachment effects do not reload on every render.
@@ -98,6 +99,7 @@ vi.mock('react-router-dom', () => ({
   useLocation: () => ({ pathname: `/bots/groups/${mocks.groupId}`, search: mocks.locationSearch, key: mocks.locationKey, state: mocks.locationState }),
   useNavigate: () => mocks.navigate,
   useParams: () => ({ groupId: mocks.groupId }),
+  useOutletContext: () => ({ openTerminal: mocks.openTerminal }),
 }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
   getDataOwnerGeneration: () => mocks.ownerGeneration,
@@ -1288,7 +1290,7 @@ describe('BotGroupChatView', () => {
       button.focus();
       expect(panel.parentElement?.contains(button)).toBe(false);
       // Header icon buttons with a tooltip: its Escape closes the tooltip first.
-      if (button.getAttribute('aria-label') === 'bots.groupChat.settings.open' || button.dataset.testid === 'chat-group-invite') await screen.findByRole('tooltip');
+      if (button.getAttribute('aria-label') === 'bots.groupChat.settings.open' || button.dataset.testid === 'chat-group-invite' || button.dataset.testid === 'bot-group-open-terminal') await screen.findByRole('tooltip');
       fireEvent.keyDown(button, { key: 'Escape', isComposing: true, keyCode: 229 });
       const consumed = createEvent.keyDown(button, { key: 'Escape', bubbles: true, cancelable: true });
       consumed.preventDefault();
@@ -1735,6 +1737,9 @@ describe('BotGroupChatView', () => {
     expect(header.querySelector('button[title]')?.getAttribute('title')).toBe('咪咪bots.groupChat.memberSeparator小满');
     fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.settings.open' }));
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/groups/g1?groupSettings=1');
+    // #12409: the header terminal button runs the same local action as the open-terminal shortcut.
+    fireEvent.click(within(header).getByTestId('bot-group-open-terminal'));
+    expect(mocks.openTerminal).toHaveBeenCalledOnce();
   });
 
   it('continues only from the latest continuable round end', async () => {
