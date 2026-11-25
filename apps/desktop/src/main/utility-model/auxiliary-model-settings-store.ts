@@ -11,7 +11,7 @@
 // called, never when this module loads.
 import { createAuxiliaryModelSettingsStore } from './auxiliaryModelSettingsStoreCore.js';
 import { app } from 'electron';
-import { hasExclusiveSharedLegacyUserDataAccess, hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
+import { hasExclusiveSharedLegacyUserDataAccess, hasLegacyOwnerNamespaceClaim, isLegacyOwnerNamespaceClaimedByOtherOwner } from '../ownerNamespaceMigration.js';
 
 let modelsRead: ((models: readonly string[]) => void) | undefined;
 
@@ -56,3 +56,11 @@ export function writeAuxiliaryModelSettingsPatch(...args: Parameters<Instance['w
 export function resetAuxiliaryModelSettings(...args: Parameters<Instance['resetAuxiliaryModelSettings']>): ReturnType<Instance['resetAuxiliaryModelSettings']> {
   return desktopStore.resetAuxiliaryModelSettings(...args);
 }
+
+/** 只观察保存事实：不自动迁移，不加载环境 override、动态目录或凭据。 */
+export function inspectAuxiliaryModelSettings(options: { ownerRoot: string; userDataPath: string; ownerId: string }): ReturnType<Instance['inspectAuxiliaryModelSettings']> {
+  return desktopStore.inspectAuxiliaryModelSettings({ ...options, isLegacyOwnerNamespaceClaimedByOtherOwner: (...args) => isLegacyOwnerNamespaceClaimedByOtherOwner(...args) });
+}
+
+/** Internal Host settings adapter; uses the native persistence and revision lock. */
+export function getAuxiliaryModelSettingsStore() { return desktopStore.getAuxiliaryModelSettingsStore(); }

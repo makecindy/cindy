@@ -1,3 +1,10 @@
+import { configureCloudHookManagement } from '../host-settings/managementBots.js';
+import { registerCloudDomainCall } from '../host-settings/managementCalls.js';
+import { CLOUD_HOOK_PROVIDER_ACTION_URL } from '../../shared/cloudImSettings.js';
+import { getInstanceConfig } from '../instance-runtime/config.js';
+import { AuthorizationBrowser, launchAuthorizationBrowser } from '../instance-runtime/authorization-browser.js';
+import { HookAuthorizationWindows } from '../instance-runtime/hook-authorization-windows.js';
+import { onQuit } from '../lifecycle.js';
 import { registerGroupImageReader, fetchOfficialGroupImage } from './groupImageBridge.js';
 /**
  * hook-control/ipc.ts
@@ -60,6 +67,7 @@ import {
   isSharedPrefsAdopted,
   moveWorkspacePrefsToRenamed,
   noteSharedPrefEdited,
+  SHARED_PREFS_CHANNEL,
   type HookPrefsChannel,
 } from './workspacePrefsStore.js';
 import { createWorkspacePrefsMirror } from './workspacePrefsMirror.js';
@@ -97,6 +105,7 @@ import {
   HOOK_CONTROL_EVENT,
   HOOK_CONTROL_INVOKE,
   HOOK_WORKSPACE_ALIAS_RE,
+  HOOK_CHAT_WORKSPACE_ALIAS,
   HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES,
   type HookPrefsPatch,
   type HookWorkspacePrefs,
@@ -139,17 +148,28 @@ import { validateTelegramExternalUrl } from './telegramDeepLink.js';
 import { validateXExternalUrl } from './xDeepLink.js';
 import { validateFeishuExternalUrl } from './feishuDeepLink.js';
 import { validateDiscordExternalUrl } from './discordDeepLink.js';
+import { providerActionUrlFromIpc } from './providerActionUrlIpc.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { setLifecycleAnnouncementFromIpc } from './lifecycleAnnouncementIpc.js';
 import { setSlackCommunicationsFromIpc } from './slackCommunicationsIpc.js';
+import { inspectOfficialHookSettings } from './store.js';
 
 const log = createLogger('hook-control');
 
 let store: SlackHookStore | null = null;
 let manager: HookControlManager | null = null;
 let disposeAuthListener: (() => void) | null = null;
+let cloudAuthorizationBrowser: AuthorizationBrowser | null = null;
+let cloudAuthorizationWindows: HookAuthorizationWindows | null = null;
+let cloudAuthorizationTeardown: Promise<void> = Promise.resolve();
+function closeCloudAuthorizationWindows(): Promise<void> {
+  const closing = cloudAuthorizationWindows?.dispose();
+  cloudAuthorizationTeardown = Promise.all([cloudAuthorizationTeardown, closing]).then(() => {});
+  return cloudAuthorizationTeardown;
+}
+onQuit('cloud-authorization-windows', () => cloudAuthorizationTeardown, 'async');
 let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 function hookControlAvailable(): boolean {
   return getAppCapabilities().canUseCindyAccountServices;
@@ -186,6 +206,26 @@ function requireNeutralProvider(payload: unknown): NeutralHookProvider {
 
 function providerDisplayName(provider: NeutralHookProvider): string {
   return NEUTRAL_PROVIDER_DISPLAY_NAMES[provider];
+}
+
+/** Host assembly only: reuse the existing native instance, without creating a connection. */
+export function getHostHookPreferencesContext() {
+  if (!hookControlAvailable() || !store || !manager) return null;
+  const fingerprint = currentAccountFingerprint();
+  if (inspectOfficialHookSettings(ownerScopedUserDataPath('slack-hook.json'), fingerprint, ownerScopedUserDataPath('hook-connections.json')).status !== 'ready') return null;
+  // All official bots share one set of project settings (sharedProjectPrefs.ts).
+  const targets = [HOOK_CHAT_WORKSPACE_ALIAS, ...Object.keys(store.get().workspaces)].map((workspace) => ({
+    channel: SHARED_PREFS_CHANNEL as typeof SHARED_PREFS_CHANNEL, teamId: null, workspace,
+    label: workspace === HOOK_CHAT_WORKSPACE_ALIAS ? 'Cindy' : workspace,
+  }));
+  return { store, fingerprint,
+    targets,
+    refresh() { if (manager && !manager.refreshHello()) manager.sync(); },
+    preferencesChanged() {
+      broadcastSharedPrefs();
+      syncSharedProjectPrefs();
+    },
+  };
 }
 
 /** Local/signed-out sessions must not observe a previous cloud owner's config. */
@@ -278,6 +318,12 @@ function parseWorkspacePrefsWrite(payload: unknown): {
 }
 
 const remotePrefsSnapshotGenerations = new Map<HookPrefsChannel, number>();
+
+/** Host settings wrote the source table; shared rows edited there are no longer "adopted as is". */
+export function notifyHostWorkspaceProviderSourcesChanged(editedSharedWorkspaces: readonly string[] = []): void {
+  for (const workspace of editedSharedWorkspaces) noteSharedPrefEdited(workspace);
+  broadcastWorkspaceProviderSources(listWorkspaceProviderSources());
+}
 
 function broadcastWorkspaceProviderSources(entries: ReturnType<typeof listWorkspaceProviderSources>): void {
   // 多窗口同步(codex review): 会话副窗也能开设置页, 写后全窗口广播全量条目。
@@ -779,6 +825,12 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       telegramCommandMenus: () => buildOfficialBotCommandMenus((key, locale) => t(key, locale)),
       log,
     });
+    const instance = getInstanceConfig();
+    if (instance) {
+      cloudAuthorizationBrowser ??= new AuthorizationBrowser(() => launchAuthorizationBrowser(instance.userDataDir));
+      cloudAuthorizationWindows = new HookAuthorizationWindows(cloudAuthorizationBrowser,
+        () => log.warn('Cloud authorization window cleanup failed'));
+    }
     manager = createHookControlManager({
       store,
       isAvailable: hookControlAvailable,
@@ -806,7 +858,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // Only advertise runtimes that are actually registered on this build.
       // Pi is optional on unsupported/unprepared platforms.
       agents: getMaker().listAvailableAgents(),
-      notifyStatus: broadcastStatus,
+      notifyStatus: (view) => {
+        cloudAuthorizationWindows?.update(view);
+        broadcastStatus(view);
+      },
       notifyPrefs: (view) => {
         persistUnsolicitedServerPrefs('slack', view.prefs);
       },
@@ -864,18 +919,24 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       // 绑定授权链接: 用系统浏览器打开(远程控制时落被控机, 设置页另给复制链接)
       openExternalUrl: (url) => {
-        void shell.openExternal(url);
+        const opened = cloudAuthorizationWindows
+          ? cloudAuthorizationWindows.open('slack', url)
+          : shell.openExternal(url);
+        void opened.catch(() => log.warn('Slack authorization browser could not open'));
       },
       openTelegramUrl: (url) => {
         const safeUrl = validateTelegramExternalUrl(url);
+        if (cloudAuthorizationWindows?.pending('telegram')) return cloudAuthorizationWindows.open('telegram', safeUrl);
         return shell.openExternal(safeUrl);
       },
       openXUrl: (url) => {
         const safeUrl = validateXExternalUrl(url);
+        if (cloudAuthorizationWindows?.pending('x')) return cloudAuthorizationWindows.open('x', safeUrl);
         return shell.openExternal(safeUrl);
       },
       openFeishuUrl: (url) => {
         const safeUrl = validateFeishuExternalUrl(url);
+        if (cloudAuthorizationWindows?.pending('feishu')) return cloudAuthorizationWindows.open('feishu', safeUrl);
         return shell.openExternal(safeUrl);
       },
       openDiscordUrl: (url) => {
@@ -956,6 +1017,9 @@ type HookControlIpcHandler = (event: IpcMainInvokeEvent, ...args: unknown[]) => 
 
 /** Register one fixed hook-control channel with the shared sender guard. */
 function registerTrustedHookControlHandler(channel: string, handler: HookControlIpcHandler): void {
+  // The cloud settings page reaches the settings subset through its owner-checked channel;
+  // the handlers never read the event, and unlisted channels are not captured.
+  registerCloudDomainCall(channel, (...args) => handler(undefined as unknown as IpcMainInvokeEvent, ...args));
   ipcMain.handle(channel, (event, ...args) => {
     assertTrustedHookControlSender(event);
     return handler(event, ...args);
@@ -993,6 +1057,7 @@ export function readXCompanionSummary(): { available: boolean; visible: boolean;
 
 /** 注册 IPC 并按配置 + 登录态拉起连接。bootstrap 里调用一次。 */
 export function registerHookControlIpc(): void {
+  configureCloudHookManagement(() => { requireHookControl(); return ensureInstances().manager; });
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, async () => {
     if (!hookControlAvailable()) {
       const { workspaces } = await readPluginImProjectCatalog();
@@ -1108,6 +1173,13 @@ export function registerHookControlIpc(): void {
       );
     }
     return { hook: m.snapshot() };
+  });
+
+  // The cloud settings page opens provider links on the controller's computer, not here.
+  registerCloudDomainCall(CLOUD_HOOK_PROVIDER_ACTION_URL, (payload) => {
+    requireHookControl();
+    const provider = requireNeutralProvider(payload);
+    return providerActionUrlFromIpc(ensureInstances().manager, provider, requireObject(payload).action);
   });
 
   registerTrustedHookControlHandler(
@@ -1538,11 +1610,14 @@ export function startHookControlAccount(): void {
 
 /** Close hook ingress before the old account DB is disposed. */
 export async function stopHookControlAccount(): Promise<void> {
+  await closeCloudAuthorizationWindows();
   if (manager) await manager.deactivateAccount();
 }
 
 /** Stop and discard all state tied to the current data owner; IPC stays registered. */
 export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boolean }): void {
+  void closeCloudAuthorizationWindows();
+  cloudAuthorizationWindows = null;
   mirrorWorkspacePrefs.invalidateOwnerBoundary();
   mirrorRowsBeforeSnapshot.clear();
   unregisterSlackToolBridge();
