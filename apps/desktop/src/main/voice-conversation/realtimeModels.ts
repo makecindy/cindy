@@ -1,3 +1,5 @@
+import { GLM_API_BASE, GLM_REALTIME_FLASH, hasGlmFlashDiscovery, isGlmPresetRoute } from '../../shared/glmRealtimeDiscovery.js';
+import { realtimeSocketUrl, realtimeHeaders } from './realtimeProtocol.js';
 import { isLoopbackProviderUrl, isModelVisible } from '@cindy/model-providers';
 import {
   officialRealtimeProtocol,
@@ -57,65 +59,69 @@ function bindings(deps: SpeechCatalogDeps, selection?: RealtimeRoute) {
         (!media.modalities.input.includes('audio') || !media.modalities.output.includes('audio'))
       )
         continue;
-      const agent = media.sourceAgent;
-      if (!agent || (selection && (selection.agent !== agent || selection.modelId !== media.id)))
-        continue;
-      const route = provider.routing[agent];
-      const configured = provider.models[agent]?.find((m) => m.id === media.id);
-      if (
-        !route ||
-        route.disabled ||
-        route.headerOverrideState === 'unknown' ||
-        !configured ||
-        route.authStrategy !== 'api-key-header'
-      )
-        continue;
-      const owner = apiBase(route.upstream);
-      const base = apiBase(configured.route?.baseUrl ?? route.upstream);
-      if (!base || !owner || base.origin !== owner.origin) continue;
-      const fixed = officialRealtimeProtocol(base, media.id);
-      // Known official conversational models have documented audio I/O. Unknown
-      // proxies must explicitly declare both modalities as well as their protocol.
-      if (!fixed && !media.modalities) continue;
-      // Official services cannot be reinterpreted as compatible proxies. In particular
-      // Coding Plan, US/unsupported regions and Qwen Omni are not this adapter.
-      const official =
-        base.hostname === 'api.openai.com' || base.hostname.endsWith('.aliyuncs.com');
-      if (official && !fixed) continue;
-      const protocol = fixed ?? selection?.protocol;
-      const key = deps.readKey(provider.id, agent)?.trim();
-      if (!key) continue;
-      const headers: Record<string, string> = {};
-      const excluded =
-        /^(authorization|proxy-authorization|cookie|host|connection|content-type|content-length|upgrade|sec-websocket-.*|x-api-key|api-key|xi-api-key|openai-beta|chatgpt-account-id|openai-account-id|originator|session_id)$/i;
-      for (const [name, value] of Object.entries(route.headerOverride ?? {}))
-        if (!excluded.test(name)) headers[name.toLowerCase()] = value;
-      for (const name of route.headerDelete ?? []) delete headers[name.toLowerCase()];
-      headers.authorization = `Bearer ${key}`;
-      if (fixed === 'qwen-audio-realtime') base.pathname = '/api-ws/v1/realtime';
-      else base.pathname = `${base.pathname.replace(/\/+$/, '') || '/v1'}/realtime`;
-      base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
-      base.searchParams.set('model', media.id);
-      result.push({
-        model: {
-          id: media.id,
-          name: media.name,
-          providerId: provider.id,
-          providerName: provider.name,
-          agent,
-          protocol: fixed,
-          protocolLocked: !!fixed,
-          ...(fixed === 'qwen-audio-realtime' ? {
-            systemVoices: realtimeSystemVoices(fixed, media.id, base.href),
-            hasCustomVoiceCatalog: !base.hostname.startsWith('token-plan.'),
-          } : {}),
-          pickerVisible: isModelVisible(
-            deps.visibilityOverride?.(agent, provider.id, media.id),
-            media.defaultEnabled,
-          ),
-        },
-        connection: protocol ? { url: base.toString(), headers, protocol } : undefined,
-      });
+      const candidates = media.id === GLM_REALTIME_FLASH ? provider.agents : [media.sourceAgent];
+      for (const agent of candidates) {
+        if (!agent || (selection && (selection.agent !== agent || selection.modelId !== media.id)))
+          continue;
+        const route = provider.routing[agent];
+        const configured = provider.models[agent]?.find((m) => m.id === media.id);
+        if (
+          !route ||
+          route.disabled ||
+          route.headerOverrideState === 'unknown' ||
+          !configured ||
+          route.authStrategy !== 'api-key-header'
+        )
+          continue;
+        const owner = apiBase(route.upstream);
+        const base = apiBase(configured.route?.baseUrl ?? route.upstream);
+        if (!base || !owner || base.origin !== owner.origin) continue;
+        const glmPreset = media.id === GLM_REALTIME_FLASH && isGlmPresetRoute(owner.href, configured.catalogPresetId)
+          && isGlmPresetRoute(base.href, configured.catalogPresetId);
+        const voiceBase = glmPreset ? new URL(GLM_API_BASE) : base;
+        const fixed = officialRealtimeProtocol(voiceBase, media.id);
+        if (agent !== media.sourceAgent && fixed !== 'glm-realtime') continue;
+        if (fixed === 'glm-realtime' && (
+          (!glmPreset && officialRealtimeProtocol(owner, media.id) !== fixed) ||
+          (configured.catalogPresetId && configured.catalogPresetId !== 'zhipu-glm-cn') ||
+          configured.mode !== 'realtime' || (configured.availability && configured.availability !== 'available') ||
+          !hasGlmFlashDiscovery(configured.userModelConfig) || configured.userModelConfig?.missingUpstream
+        )) continue;
+        // Known official conversational models have documented audio I/O. Unknown
+        // proxies must explicitly declare both modalities as well as their protocol.
+        if (!fixed && !media.modalities) continue;
+        // Official services cannot be reinterpreted as compatible proxies. In particular
+        // Coding Plan, US/unsupported regions and Qwen Omni are not this adapter.
+        const official =
+          base.hostname === 'open.bigmodel.cn' || base.hostname === 'api.openai.com' || base.hostname.endsWith('.aliyuncs.com');
+        if (official && !fixed) continue;
+        const protocol = fixed ?? selection?.protocol;
+        if (protocol === 'glm-realtime' && !fixed) continue;
+        const key = deps.readKey(provider.id, agent)?.trim();
+        if (!key) continue;
+        const headers = realtimeHeaders(key, glmPreset ? undefined : route.headerOverride, route.headerDelete);
+        result.push({
+          model: {
+            id: media.id,
+            name: media.name,
+            providerId: provider.id,
+            providerName: provider.name,
+            agent,
+            protocol: fixed,
+            protocolLocked: !!fixed,
+            ...(fixed === 'qwen-audio-realtime' ? {
+              systemVoices: realtimeSystemVoices(fixed, media.id, base.href),
+              hasCustomVoiceCatalog: !base.hostname.startsWith('token-plan.'),
+            } : {}),
+            pickerVisible: isModelVisible(
+              deps.visibilityOverride?.(agent, provider.id, media.id),
+              agent === media.sourceAgent ? media.defaultEnabled : configured.defaultEnabled,
+            ),
+          },
+          connection: protocol ? { url: realtimeSocketUrl(voiceBase, media.id, fixed), headers, protocol } : undefined,
+        });
+        break;
+      }
     }
   }
   return result;

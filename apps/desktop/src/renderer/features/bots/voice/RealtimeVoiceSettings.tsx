@@ -9,7 +9,7 @@ import { voiceModelKey } from '@/../shared/voiceConversation';
 import {
   normalizeRealtimeVoiceSelection,
   realtimeSystemVoices,
-  REALTIME_PROTOCOLS,
+  COMPATIBLE_REALTIME_PROTOCOLS,
   type RealtimeVoiceModel,
   type RealtimeVoiceSelection,
 } from '@/../shared/realtimeVoice';
@@ -195,7 +195,7 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
                     {...control}
                     label={t('bots.voiceMode.protocol')}
                     value={selection.protocol}
-                    options={REALTIME_PROTOCOLS.map((p) => ({
+                    options={COMPATIBLE_REALTIME_PROTOCOLS.map((p) => ({
                       value: p,
                       label: p === 'openai-realtime' ? 'OpenAI Realtime' : 'Qwen-Audio Realtime',
                     }))}

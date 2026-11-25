@@ -1,3 +1,4 @@
+import { clearGlmFlashDiscovery } from '../../../shared/glmRealtimeDiscovery';
 import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 import { ProviderNameSearch } from './ProviderNameSearch';
@@ -1769,13 +1770,17 @@ export function ProviderConnectionDialog({
               : {}),
           }))
           .filter((m) => m.id.length > 0);
+        const glmFlashUnavailable = 'glmFlashProbe' in result && result.glmFlashProbe === 'unavailable';
         const currentById = new Map(current.map((m) => [m.id, m]));
         const fetchedIds = new Set(result.models.map((m) => m.id));
         // 行集合 = 表单已填但不在拉取结果里的（置顶保留）+ 拉取结果（撞 id 时保留用户显示名）。
         const rows: ModelRow[] = [
           ...current
             .filter((m) => !fetchedIds.has(m.id))
-            .map((m) => ({ ...m, name: m.name || m.id })),
+            .map((m) => ({
+              ...(glmFlashUnavailable ? clearGlmFlashDiscovery(m) : m),
+              name: m.name || m.id,
+            })),
           ...result.models.map((m) => {
             const cur = currentById.get(m.id);
             // contextWindow:表单已有的行以用户当前值为准——包括「显式清空」

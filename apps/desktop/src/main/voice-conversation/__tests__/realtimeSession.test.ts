@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket, { WebSocketServer } from 'ws';
 import { once } from 'node:events';
 import { VoiceCallContext } from '@cindy/maker-core';
-import { RealtimeVoiceSession, RealtimePcmResampler } from '../realtimeSession.js';
+import { RealtimeVoiceSession } from '../realtimeSession.js';
+import { RealtimePcmResampler } from '../realtimeProtocol.js';
 import type { RealtimeProtocol } from '../../../shared/realtimeVoice.js';
 
 vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({
@@ -43,7 +44,7 @@ async function fixture(protocol: RealtimeProtocol) {
       protocol,
       providerId: 'test',
       agent: 'codex',
-      modelId: protocol === 'openai-realtime' ? 'gpt-realtime-2' : 'qwen-audio-3.0-realtime-plus',
+      modelId: protocol === 'glm-realtime' ? 'glm-realtime-flash' : protocol === 'openai-realtime' ? 'gpt-realtime-2' : 'qwen-audio-3.0-realtime-plus',
       voice: 'voice',
     },
     connection: () => ({ protocol, url: `ws://127.0.0.1:${address.port}`, headers: {} }),
@@ -85,7 +86,7 @@ async function fixture(protocol: RealtimeProtocol) {
   };
 }
 
-describe.each<RealtimeProtocol>(['openai-realtime', 'qwen-audio-realtime'])(
+describe.each<RealtimeProtocol>(['openai-realtime', 'qwen-audio-realtime', 'glm-realtime'])(
   '%s real loopback WebSocket',
   (protocol) => {
     it('configures the native protocol and streams 24 kHz audio without TTS', async () => {
@@ -93,6 +94,10 @@ describe.each<RealtimeProtocol>(['openai-realtime', 'qwen-audio-realtime'])(
       const config = f.received[0].session;
       if (protocol === 'openai-realtime') {
         expect(config.audio.input.format.rate).toBe(24000);
+        expect(config.tools[0].name).toBe('handoff_task');
+      } else if (protocol === 'glm-realtime') {
+        expect(config).toMatchObject({ model: 'glm-realtime-flash', input_audio_format: 'pcm16',
+          output_audio_format: 'pcm', turn_detection: { type: 'server_vad', create_response: false } });
         expect(config.tools[0].name).toBe('handoff_task');
       } else {
         expect(config.input_audio_format).toBe('pcm');
@@ -177,7 +182,7 @@ describe.each<RealtimeProtocol>(['openai-realtime', 'qwen-audio-realtime'])(
         type: 'response.function_call_arguments.done',
         response_id: 'response',
         item_id: 'tool-item',
-        call_id: 'tool',
+        ...(protocol === 'glm-realtime' ? { output_index: 0 } : { call_id: 'tool' }),
         name: 'handoff_task',
         arguments: JSON.stringify({ supplement: 'model context', original: 'forged' }),
       };
@@ -195,6 +200,8 @@ describe.each<RealtimeProtocol>(['openai-realtime', 'qwen-audio-realtime'])(
       expect(f.turns).toContainEqual(['user-1', 'user', '实际用户原话']);
       expect(f.handoff).toHaveBeenCalledExactlyOnceWith('user-1', 'model context');
       expect(f.received.filter((e) => e.item?.type === 'function_call_output')).toHaveLength(1);
+      if (protocol === 'glm-realtime')
+        expect(f.received.find(e => e.item?.type === 'function_call_output').item).not.toHaveProperty('call_id');
       f.session.deliverResult('task-1', 'actual result');
       f.session.deliverResult('task-1', 'actual result');
       await f.flush();
@@ -332,4 +339,41 @@ it('resamples continuously across odd capture frame boundaries', () => {
     split.convert(Uint8Array.from(p).buffer),
   );
   expect(Buffer.concat(parts)).toEqual(full);
+});
+
+it.each(['cancelled', 'ambiguous', 'superseded'])('does not dispatch a %s untagged GLM tool', async scenario => {
+  const f = await fixture('glm-realtime');
+  f.send({ type: 'input_audio_buffer.committed', item_id: 'one' });
+  await vi.waitFor(() => expect(f.received.some(e => e.type === 'response.create')).toBe(true));
+  f.send({ type: 'response.created', response: { id: 'reply' } });
+  const tool = { type: 'response.function_call_arguments.done', response_id: 'reply',
+    name: 'handoff_task', arguments: '{"supplement":"one"}', output_index: 0 };
+  f.send(tool);
+  if (scenario === 'ambiguous') f.send({ ...tool, output_index: 1 });
+  if (scenario === 'superseded') f.send({ type: 'input_audio_buffer.committed', item_id: 'two' });
+  f.send({ type: 'response.done', response: { id: 'reply', status: scenario === 'cancelled' ? 'cancelled' : 'completed' } });
+  f.send({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'one', transcript: 'original' });
+  await f.flush();
+  expect(f.handoff).not.toHaveBeenCalled();
+});
+
+it('does not bind a GLM task to the last of two unanswered inputs', async () => {
+  const f = await fixture('glm-realtime');
+  const commit = (id: string) => {
+    f.send({ type: 'input_audio_buffer.committed', item_id: id });
+    f.send({ type: 'conversation.item.input_audio_transcription.completed', item_id: id, transcript: id });
+  };
+  commit('first');
+  f.send({ type: 'response.created', response: { id: 'busy' } });
+  commit('second');
+  commit('third');
+  f.send({ type: 'response.done', response: { id: 'busy', status: 'completed' } });
+  await vi.waitFor(() => expect(f.received.filter(e => e.type === 'response.create')).toHaveLength(2));
+  f.send({ type: 'response.created', response: { id: 'combined' } });
+  f.send({ type: 'response.function_call_arguments.done', response_id: 'combined', output_index: 0,
+    name: 'handoff_task', arguments: '{"supplement":"context"}' });
+  f.send({ type: 'response.done', response: { id: 'combined', status: 'completed' } });
+  await vi.waitFor(() => expect(f.received.find(e => e.item?.type === 'function_call_output')?.item.output)
+    .toBe(JSON.stringify({status: 'not_accepted'})));
+  expect(f.handoff).not.toHaveBeenCalled();
 });

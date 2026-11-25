@@ -2493,6 +2493,48 @@ it.each(['gpt-realtime-2.1-mini', 'gpt-realtime-2.1'])(
   },
 );
 
+it.each([true, false])('discovers mainland GLM realtime in the normal preset wizard (confirmed: %s)', async confirmed => {
+  const id = 'glm-realtime-flash';
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'zhipu-glm-cn')!);
+  for (const [agent, runtime] of Object.entries(preset.runtimes)) {
+    runtime.baseUrl = agent === 'codex' ? 'https://open.bigmodel.cn/api/coding/paas/v4' : 'https://open.bigmodel.cn/api/anthropic';
+  }
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  const fetch = vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async input => ({
+    ok: true, models: [{ id: 'glm-5', name: 'GLM-5' }, ...(confirmed && input.catalogPresetId === preset.id ? [{
+      id, name: id, discoverySnapshotId: 'proof-' + input.agent,
+      discoveredMetadata: { mode: 'realtime' as const, modalities: { input: ['audio' as const], output: ['audio' as const] } },
+    }] : [])],
+  }));
+  renderWizard(preset.id);
+  fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fixture-key' } });
+  await clickNext();
+  await screen.findByText('settings.providers.wizard.finish');
+  const queries = fetch.mock.calls.map(([input]) => input).filter(input => input.catalogPresetId === preset.id);
+  expect(queries.map(input => input.agent).sort()).toEqual(Object.keys(preset.runtimes).sort());
+  expect(new Set(queries.map(input => input.refreshBatch)).size).toBe(1);
+  expect(queries[0].refreshBatch).toBeTruthy();
+  if (!confirmed) {
+    expect(screen.queryByRole('region', { name: 'bots.voiceMode.realtime.title' })).toBeNull();
+    return;
+  }
+  const section = await screen.findByRole('region', { name: 'bots.voiceMode.realtime.title' });
+  expect(within(section).getByText('settings.providers.speechSetup.realtimeConfirmed')).toBeTruthy();
+  expect(within(section).queryByText('settings.providers.speechSetup.discoveryHint')).toBeNull();
+  expect(within(section).queryByText('bots.voiceMode.realtime.add')).toBeNull();
+  fireEvent.click(within(section).getByRole('checkbox', { name: new RegExp(id) }));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+  for (const [agent, runtime] of Object.entries(config.runtimes)) {
+    expect(runtime.models.find(model => model.id === id)).toMatchObject({ discoverySnapshotId: 'proof-' + agent, discoveredMetadata: { mode: 'realtime' } });
+  }
+  expect(realtimeModels({ catalog: { ...BUNDLED_CATALOG, providers: [buildUserProvider(config)] },
+    gatewayAllowed: false, gatewayConnection: () => { throw Error(); },
+    readKey: (_, agent) => keys[agent] ?? null, disabled: () => false,
+  })).toMatchObject([{ id, protocol: 'glm-realtime', pickerVisible: true }]);
+});
+
 // Previous tests asserted one brand-wide CosyVoice default; a public DashScope
 // URL is the smallest failing input. No live credentials or synthesis required.
 describe('Alibaba speech recommendations follow the actual endpoint', () => {

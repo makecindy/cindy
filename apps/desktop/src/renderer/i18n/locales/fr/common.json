@@ -4760,6 +4760,7 @@
         "discoveryHint": "Ces modèles ont été renvoyés par le catalogue du fournisseur. La synthèse vocale n'a pas été testée.",
         "saved": "Ajouté",
         "reference": "Référence",
+        "realtimeConfirmed": "Point de terminaison temps réel confirmé",
         "discovered": "Détecté",
         "more": "Plus de modèles vocaux ({{count}})",
         "manual": "Saisir un ID de modèle vocal",

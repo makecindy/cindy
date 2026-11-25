@@ -93,6 +93,7 @@ import { WithdrawnModelsDialog, type WithdrawnModelsReview } from './WithdrawnMo
 import { createLogger } from '@/lib/logger';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
+import { clearGlmFlashDiscovery, GLM_REALTIME_FLASH, isGlmApiBase, isGlmPresetRoute } from '../../../shared/glmRealtimeDiscovery';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import type {
   CustomProviderUpdateOptions,
@@ -3227,6 +3228,7 @@ export function ProvidersSection() {
         const absentByAgent = new Map<AgentKind, Set<string>>();
         // Main accepts new listing markers only with a receipt still matching this connection.
         const listingReceipts: Partial<Record<AgentKind, string>> = {};
+        const refreshBatch = crypto.randomUUID();
         const batch = await fetchCustomProviderModelsForRefresh(p, config);
         for (const agent of p.agents) {
           const rt = config.runtimes[agent];
@@ -3244,6 +3246,7 @@ export function ProvidersSection() {
             modelsUrl: rt.modelsUrl ?? null,
             apiKey,
             savedProviderId: p.id,
+            ...((isGlmApiBase(rt.baseUrl) || isGlmPresetRoute(rt.baseUrl, rt.catalogPresetId)) && { refreshBatch }),
           });
           if (!r.ok || !r.models) {
             // Prefer actionable authentication recovery when every runtime fails.
@@ -3263,7 +3266,7 @@ export function ProvidersSection() {
             ? (rt.modelsUrl ?? 'https://openrouter.ai/api/v1/models')
             : undefined;
           const merged = appendDiscoveredCustomProviderModels(
-            rt.models,
+            r.glmFlashProbe === 'unavailable' ? rt.models.map(clearGlmFlashDiscovery) : rt.models,
             r.models,
             openRouterCatalog,
           );
@@ -3272,7 +3275,10 @@ export function ProvidersSection() {
           if (r.complete !== true) {
             catalogsComplete = false;
           } else {
-            const result = findWithdrawnCustomProviderModels(merged.models, r.models);
+            const result = findWithdrawnCustomProviderModels(
+              r.glmFlashProbe === 'unknown' ? merged.models.filter(model => model.id !== GLM_REALTIME_FLASH) : merged.models,
+              r.models,
+            );
             withdrawnSuspicious ||= result.suspicious;
             absentByAgent.set(agent, new Set(result.withdrawn.map((model) => model.id)));
             for (const model of result.withdrawn) {

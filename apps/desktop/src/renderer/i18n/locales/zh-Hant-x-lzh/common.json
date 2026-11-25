@@ -4661,6 +4661,7 @@
         "discoveryHint": "下列型號由供方目錄傳回，尚未驗其語聲呼叫。",
         "saved": "已增",
         "reference": "參照型號",
+        "realtimeConfirmed": "即時端點已驗",
         "discovered": "目錄所回",
         "more": "餘語聲型號（{{count}}）",
         "manual": "親書語聲型號",

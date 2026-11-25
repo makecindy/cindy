@@ -4704,6 +4704,7 @@
         "discoveryHint": "Diese Modelle wurden vom Anbieterkatalog zurückgegeben. Die Sprachausführung wurde nicht getestet.",
         "saved": "Hinzugefügt",
         "reference": "Referenz",
+        "realtimeConfirmed": "Echtzeit-Endpunkt bestätigt",
         "discovered": "Erkannt",
         "more": "Weitere Sprachmodelle ({{count}})",
         "manual": "ID eines Sprachmodells eingeben",

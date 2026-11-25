@@ -4661,6 +4661,7 @@
         "discoveryHint": "제공자 카탈로그에서 반환된 모델입니다. 음성 실행은 아직 검증되지 않았습니다.",
         "saved": "추가됨",
         "reference": "참조 모델",
+        "realtimeConfirmed": "실시간 엔드포인트 확인됨",
         "discovered": "검색됨",
         "more": "음성 모델 더 보기 ({{count}})",
         "manual": "음성 모델 ID 직접 입력",

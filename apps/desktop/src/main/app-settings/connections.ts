@@ -1,3 +1,4 @@
+import { clearGlmFlashDiscovery } from '../../shared/glmRealtimeDiscovery.js';
 import { randomUUID } from 'node:crypto';
 import {
   isLoopbackProviderUrl,
@@ -257,7 +258,10 @@ export async function manageProviderConnection(
             name: model.name ?? runtime.models.find((old) => old.id === model.id)?.name ?? model.id,
             ...(model.name !== undefined ? { nameExplicit: true } : {}),
           }))
-        : mergeDiscoveredRuntimeModels(runtime.models, fetched?.models ?? []);
+        : mergeDiscoveredRuntimeModels(
+          fetched?.glmFlashProbe === 'unavailable' ? runtime.models.map(clearGlmFlashDiscovery) : runtime.models,
+          fetched?.models ?? [],
+        );
     return {
       ...current,
       runtimes: { ...current.runtimes, [change.agent]: { ...runtime, models } },

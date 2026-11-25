@@ -4661,6 +4661,7 @@
         "discoveryHint": "以下型號由供應商目錄傳回，尚未驗證語音呼叫。",
         "saved": "已新增",
         "reference": "參考型號",
+        "realtimeConfirmed": "即時端點已確認",
         "discovered": "目錄傳回",
         "more": "更多語音型號（{{count}}）",
         "manual": "手動輸入語音型號",

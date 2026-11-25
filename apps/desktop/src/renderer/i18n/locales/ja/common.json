@@ -4661,6 +4661,7 @@
         "discoveryHint": "以下はプロバイダーのカタログから取得したモデルです。音声の実行は未検証です。",
         "saved": "追加済み",
         "reference": "参考モデル",
+        "realtimeConfirmed": "リアルタイム接続先で確認済み",
         "discovered": "取得済み",
         "more": "その他の音声モデル（{{count}}）",
         "manual": "音声モデル ID を入力",

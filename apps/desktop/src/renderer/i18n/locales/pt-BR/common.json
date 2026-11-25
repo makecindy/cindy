@@ -4760,6 +4760,7 @@
         "discoveryHint": "Estes modelos foram retornados pelo catálogo do provedor. A execução de fala não foi testada.",
         "saved": "Adicionado",
         "reference": "Referência",
+        "realtimeConfirmed": "Endpoint em tempo real confirmado",
         "discovered": "Descoberto",
         "more": "Mais modelos de fala ({{count}})",
         "manual": "Insira um ID de modelo de fala",
