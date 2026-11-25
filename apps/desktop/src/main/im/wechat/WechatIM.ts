@@ -1524,7 +1524,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       const context = permissionModeCommandContext(
         target.row.id,
         target.row.permissionMode,
-        runtime.runner.getPermissionModes(target.row.agentKind),
+        runtime.runner.getPermissionModes(target.row.agentKind, { sessionId: target.row.id, providerId: target.row.providerId }),
       );
       const [, rawMode, rawConfirmation] = command.split(/\s+/);
       if (!rawMode) {

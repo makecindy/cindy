@@ -465,6 +465,19 @@ describe('MakerScheduleRunner model selection', () => {
       expect(admitPluginEngine).toHaveBeenCalledTimes(2);
     });
 
+    // 2026-11-25 用户要求插件引擎与内置引擎一样能用 worktree：本次运行先检出，再在检出目录里启动插件引擎。
+    // 最小失败输入：useWorktree=true 的插件引擎自动任务被准入拒绝，或在基础仓库 /repo 里启动。
+    it('runs a worktree plugin engine schedule inside the checked-out worktree', async () => {
+      const h = createSessionHarness();
+      mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/repo/.cindy-worktrees/daily' });
+      const admitPluginEngine = vi.fn((route: { model: string }) => ({ model: route.model, effort: '' }));
+      const harness = createRunnerHarness(h, null, { admitPluginEngine });
+      const opts = await fireToCompletion(harness, h, { ...pluginSchedule(), workspaceKind: 'project',
+        workingDir: '/repo', useWorktree: true });
+      expect(mocks.resolveWorkingDir).toHaveBeenCalled();
+      expect(opts).toMatchObject({ agentKind: 'acp', providerId: ENGINE, workingDir: '/repo/.cindy-worktrees/daily' });
+    });
+
     it('fails the run when the plugin was turned off instead of falling back to a built-in model', async () => {
       const h = createSessionHarness();
       const harness = createRunnerHarness(h, null, {

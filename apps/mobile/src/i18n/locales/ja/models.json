@@ -155,7 +155,6 @@
     "genericName": "プラグインエンジン",
     "defaultModel": "デフォルトモデル",
     "unavailable": "{{engine}} は利用できません",
-    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}",
-    "worktreeUnsupported": "プラグインエンジンはまだ worktree でタスクを開始できません。worktree をオフにしてから送信してください"
+    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}"
   }
 }

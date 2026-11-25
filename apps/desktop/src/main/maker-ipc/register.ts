@@ -2716,7 +2716,8 @@ function markTurnEndedAfterPersistDrain(
 // — 仅闭包捕获 holder 引用); 真正调用工具时 registerMakerIpc 早已执行完毕
 // 给 holder 赋值, requireOrcaCollabService() 能拿到 ready 的 service。
 type SendToSessionCreateDefaults = {
-  agentKind: AgentKind;
+  /** 'acp' = 来源任务跑在插件引擎上、新任务沿用同一个引擎(providerId 指出是哪一个)。 */
+  agentKind: EngineKind;
   model: string;
   providerId?: string | null;
   effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -12604,8 +12605,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             .where(eq(sessions.id, dispatcherSessionId))
             .limit(1);
           const sourceAgentDeviceId = meta.agentDeviceId && !meta.remoteHostId ? meta.agentDeviceId : null;
+          // 插件引擎来源(docs/plans/acp-plugin-bridge.md，2026-11-25)：不指定位置与执行配置时，新任务沿用同一个
+          // 插件引擎与模型(按在它上面新建任务的准入，openSession 判定)；指定了就必须点名内置 agent，按内置引擎解析。
+          const pluginEngineSource = meta.agentKind === 'acp';
+          const routeRequested = requestedAgentDeviceId !== undefined
+            || Object.values(executionOverrides ?? {}).some((value) => value !== undefined);
+          if (pluginEngineSource && routeRequested && !executionOverrides?.agentKind) {
+            return { ok: false, errorCode: 'INVALID_ARGS',
+              message: 'the source task runs on a plugin engine; to choose another location, model or source, also choose agent' };
+          }
           const inheritedBase: SendToSessionCreateDefaults = {
-            agentKind: requireBuiltinAgentKind(meta.agentKind, 'Creating tasks from a plugin-engine task'),
+            agentKind: pluginEngineSource
+              ? (routeRequested ? executionOverrides!.agentKind! : 'acp')
+              : meta.agentKind,
             workingDir: resolvedWorkDir,
             workspaceKind: params.projectDir === null ? 'dialogue'
               : params.projectDir !== undefined ? 'project' : (meta.workspaceKind ?? 'project'),
@@ -12622,42 +12634,56 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 ? permissionModeOrAsk(row?.permissionMode)
                 : 'bypassPermissions',
           };
-          const route = await resolveSendToSessionCreateRoute({
-            source: {
-              agentKind: inheritedBase.agentKind,
-              model: inheritedBase.model,
-              effort: inheritedBase.effort,
-              fastMode: (inheritedBase.fastMode ?? false),
-              providerId: inheritedBase.providerId,
-            },
-            sourceAgentDeviceId,
-            sourceIsSsh: Boolean(meta.remoteHostId),
-            ...(requestedAgentDeviceId !== undefined ? { requestedAgentDeviceId } : {}),
-            ...(executionOverrides ? { overrides: executionOverrides } : {}),
-          }, {
-            isSelfDeviceId: (deviceId) => deviceId === getSelfDeviceId(),
-            readLocalRouting: async (agentKind) => ({
-              availableModels: maker.getCapabilities(agentKind).availableModels,
-              providerRouting: await getProviderRoutingContext(),
-              hasCindyAiApiKey: readClaudeApiKey() != null,
-            }),
-            readDeviceRouting: async (deviceId, agentKind) => {
-              const deviceRouting = deviceWorkerRoutingContext(
-                await readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
-                agentKind,
-              );
-              return {
-                availableModels: deviceRouting.remoteCodexModels ?? maker.getCapabilities(agentKind).availableModels,
-                providerRouting: deviceRouting,
-                hasCindyAiApiKey: true,
-              };
-            },
-          });
-          if (!route.ok) {
-            return { ok: false, errorCode: route.errorCode, message: route.message };
+          if (pluginEngineSource) {
+            // Plugin engines have no Fast; a built-in route chosen here starts from the requested model.
+            inheritedBase.fastMode = false;
+            if (routeRequested) {
+              inheritedBase.model = executionOverrides?.model ?? '';
+              inheritedBase.providerId = undefined;
+            }
           }
-          inheritedAgentDeviceId = route.agentDeviceId ?? undefined;
-          inherited = { ...inheritedBase, ...route.config };
+          if (inheritedBase.agentKind === 'acp') {
+            // Same plugin engine, model and location as the source task.
+            inheritedAgentDeviceId = sourceAgentDeviceId ?? undefined;
+            inherited = inheritedBase;
+          } else {
+            const route = await resolveSendToSessionCreateRoute({
+              source: {
+                agentKind: inheritedBase.agentKind as AgentKind,
+                model: inheritedBase.model,
+                effort: inheritedBase.effort,
+                fastMode: (inheritedBase.fastMode ?? false),
+                providerId: inheritedBase.providerId,
+              },
+              sourceAgentDeviceId,
+              sourceIsSsh: Boolean(meta.remoteHostId),
+              ...(requestedAgentDeviceId !== undefined ? { requestedAgentDeviceId } : {}),
+              ...(executionOverrides ? { overrides: executionOverrides } : {}),
+            }, {
+              isSelfDeviceId: (deviceId) => deviceId === getSelfDeviceId(),
+              readLocalRouting: async (agentKind) => ({
+                availableModels: maker.getCapabilities(agentKind).availableModels,
+                providerRouting: await getProviderRoutingContext(),
+                hasCindyAiApiKey: readClaudeApiKey() != null,
+              }),
+              readDeviceRouting: async (deviceId, agentKind) => {
+                const deviceRouting = deviceWorkerRoutingContext(
+                  await readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
+                  agentKind,
+                );
+                return {
+                  availableModels: deviceRouting.remoteCodexModels ?? maker.getCapabilities(agentKind).availableModels,
+                  providerRouting: deviceRouting,
+                  hasCindyAiApiKey: true,
+                };
+              },
+            });
+            if (!route.ok) {
+              return { ok: false, errorCode: route.errorCode, message: route.message };
+            }
+            inheritedAgentDeviceId = route.agentDeviceId ?? undefined;
+            inherited = { ...inheritedBase, ...route.config };
+          }
           // 所有可能提前失败的 workingDir / 执行配置校验完成后才创建 worktree，
           // 避免非法 agent/model/effort/Fast 组合留下无主目录与 store 绑定。
           // useWorktree:为新 session 预建正规 session worktree(与 UI 新会话勾选
@@ -12891,16 +12917,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: `session ${targetSessionId} not found`,
         };
       }
-      // The group dispatcher owns the turn and publishes its reply from this group lane.
-      const managedGroupTurn = (hostDispatch === 'group' && dispatchCompanionLink?.role === 'group')
-        || (hostDispatch === 'group-assistant' && !dispatchCompanionLink);
-      if (meta.agentKind === 'acp' && params.origin?.kind !== 'orca' && !managedGroupTurn) {
-        return {
-          ok: false as const,
-          errorCode: 'UNSUPPORTED_CAPABILITY' as const,
-          message: `session ${targetSessionId} runs on a plugin engine; sending messages to it is not supported yet`,
-        };
-      }
+      // Plugin-engine targets (docs/plans/acp-plugin-bridge.md) take messages from other tasks like any
+      // task (2026-11-25): delivery is the same send path the user's own message and Orca dispatch use.
       const targetAgentKind: EngineKind = meta.agentKind;
       if (dbRow.status === 'archived') {
         return {
@@ -14417,7 +14435,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     void maker.getSessionMeta(taskId).then(meta => {
       if (!meta || !snapshot || snapshot !== getCurrentDbClientSnapshot()
         || revision !== pluginTaskAuthorizationRevision(pluginId) || !isPluginTaskAuthorized(pluginId)) return;
-      if (meta.agentKind !== 'acp') scheduleSessionAutoTitle({ sessionId: taskId, text, placeholderText, agentKind: meta.agentKind, isUserText: true });
+      // 插件引擎任务同样起名(只用辅助模型，见 getOverwritableAutoTitle)。
+      scheduleSessionAutoTitle({ sessionId: taskId, text, placeholderText,
+        agentKind: meta.agentKind === 'acp' ? null : meta.agentKind, isUserText: true });
     }).catch(() => log.warn('Plugin task automatic naming could not be scheduled'));
   };
   setGhostAgentTurnRunner(createGhostAgentTurnRunner({
@@ -17000,7 +17020,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ensureRemoteReadyForSessionStart: async (params) => {
       await ensureRemoteReadyForSessionStart({ createOpts: params.createOpts });
     },
-    // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)只有经下面的准入才会走到这里(本机、不用 worktree)。
+    // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)只有经下面的准入才会走到这里(本机运行)。
     bootstrapSession: (...args: Parameters<typeof bootstrapSession>) => bootstrapSession(...args),
     admitPluginEngineWorker: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
     addOrUpdateWorker: async (worker) => {

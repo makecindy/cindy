@@ -17,12 +17,12 @@ import { randomUUID } from 'node:crypto';
 
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { IdentityKey } from '@cindy/im';
-import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { AgentKind, EngineKind, Effort, PermissionMode } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 
 import { getDbClient } from '../../localDb/client/current';
-import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { makerToDbEngineKind } from '../../../shared/agentKindConversion';
 import { sessions } from '../../localDb/schema';
 import { withSessionRouteLock } from '../../localDb/sessionRouteLock';
 import { retireDeletedPiSubagentState } from '../../localDb/ipc/piSubagentDeletion';
@@ -44,9 +44,9 @@ export function toCoreAgentKind(kind: string): AgentKind {
   return kind === 'codex' || kind === 'pi' ? kind : 'claude-code';
 }
 
-/** core AgentKind → sessions.agentKind 列的 legacy 存储值。 */
-function toDbAgentKind(kind: AgentKind): string {
-  return normalizeDbAgentKind(kind);
+/** core engine kind → sessions.agentKind 列的存储值(插件引擎保持 'acp')。 */
+function toDbAgentKind(kind: EngineKind): string {
+  return makerToDbEngineKind(kind);
 }
 
 export interface ImSessionRow {
@@ -54,7 +54,8 @@ export interface ImSessionRow {
   initialTitle?: string;
   agentDeviceId?: string | null;
   id: string;
-  agentKind: AgentKind;
+  /** 'acp' = the task runs on a plugin engine (providerId names it, docs/plans/acp-plugin-bridge.md). */
+  agentKind: EngineKind;
   workingDir: string;
   model: string;
   /** Latest persisted effort (may be changed by user via /model card later). */
@@ -706,7 +707,8 @@ function rowFromDefaults(
 
 /** 按渠道默认建出 / 重置的行对应的跟随记录; 非默认来源的行返回 null。 */
 function defaultRouteRecordFor(row: ImSessionRow): string | null {
-  if (!row.defaultRouteFingerprint) return null;
+  // Channel defaults are built-in routes; a task on a plugin engine never follows them.
+  if (!row.defaultRouteFingerprint || row.agentKind === 'acp') return null;
   return buildImDefaultRouteRecord(row.defaultRouteFingerprint, {
     agentKind: row.agentKind,
     model: row.model,

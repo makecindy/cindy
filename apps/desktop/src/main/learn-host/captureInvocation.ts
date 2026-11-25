@@ -1,7 +1,6 @@
 import { promises as fs } from 'node:fs';
 
-import type { AgentKind, EngineKind, ListAgentSkillsResult } from '@cindy/maker-core';
-import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
+import type { EngineKind, ListAgentSkillsResult } from '@cindy/maker-core';
 
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import {
@@ -13,14 +12,15 @@ import { parseDirectLearnInvocation, type CindyLearnInvocationGrant } from './in
 interface LearnInvocationSession {
   id: string;
   instanceId: string;
-  agentKind: AgentKind;
+  /** 'acp' = plugin engine: its Skill list is the one its `/<skill>` messages expand from. */
+  agentKind: EngineKind;
   workDir: string;
   remoteHostId: string | null;
   getStatus?(): 'active' | 'aborting' | 'closed' | 'error';
 }
 
-/** A live session of any engine; plugin-engine tasks are never granted a /learn capture. */
-type AnyEngineLearnSession = Omit<LearnInvocationSession, 'agentKind'> & { agentKind: EngineKind };
+/** A live session of any engine. */
+type AnyEngineLearnSession = LearnInvocationSession;
 
 interface LearnInvocationCaptureDeps {
   // Compared by identity only.
@@ -38,8 +38,8 @@ export function createCindyLearnInvocationCapture(deps: LearnInvocationCaptureDe
     persistedContent: unknown,
     dispatchedText: string,
   ): Promise<CindyLearnInvocationGrant | null> => {
-    // /learn reads built-in engine skill catalogs (docs/plans/acp-plugin-bridge.md).
-    if (!hasBuiltinAgentKind(session)) return null;
+    // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-25) read the same Skill list their
+    // `/<skill>` messages are expanded from (AcpAgent.listAgentSkills), so the attested file is checked alike.
     const invocationText = visibleMessageTextForConversationSearch(
       'user',
       typeof persistedContent === 'string' ? persistedContent : JSON.stringify(persistedContent),

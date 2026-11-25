@@ -7318,7 +7318,8 @@ interface ElectronAPI {
     /** 输入框推荐提示词:turn 结束后预测用户下一步输入。 */
     predictNextPrompt: (request: {
       sessionId: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      /** 'acp' = plugin-engine task (auxiliary chain only). */
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
       messages: Array<{ role: string; content: string }>;
       workingDir?: string;
       turnGen: number;

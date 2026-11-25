@@ -155,7 +155,6 @@
     "genericName": "法器引擎",
     "defaultModel": "预设模型",
     "unavailable": "{{engine}} 暂不可用",
-    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}",
-    "worktreeUnsupported": "法器引擎尚不能于 worktree 中新建差事，请先取消勾选 worktree 再发"
+    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}"
   }
 }

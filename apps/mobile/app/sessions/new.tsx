@@ -1640,14 +1640,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     worktreeSourceBranch,
   ]);
   const selectedDraft = useMemo(() => applyPluginEnginePick(draft, pluginEnginePick), [draft, pluginEnginePick]);
-  const pluginEngineWorktreeUnsupported = Boolean(
-    pluginEnginePick && worktreeEnabled && draft.workspaceKind === 'project' && draft.workingDir.trim(),
-  );
   const createValidation = useMemo(() => {
-    if (pluginEngineWorktreeUnsupported) return t('models.pluginEngines.worktreeUnsupported');
     if (runtimePending) return t('session.new.modelLoading');
     return validateNewSessionDraft(selectedDraft, draftContent);
-  }, [pluginEngineWorktreeUnsupported, selectedDraft, draftContent, runtimePending, t]);
+  }, [selectedDraft, draftContent, runtimePending, t]);
   const composerHasMessage = draft.firstMessage.trim().length > 0;
   // 「按下即录」的乐观反馈(与会话页/桌面同款,详见 [sessionId].tsx 同名状态注释)。
   const voiceStartPendingSeqRef = useRef(0);
@@ -1687,7 +1683,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   );
   const canCreate = (!createValidation || (voiceIsListening && createValidationIsMissingPayload))
     && !runtimePending
-    && !pluginEngineWorktreeUnsupported
     && !creating
     && !voiceIsProcessing
     && !worktreeCreateBlocked;
@@ -4141,10 +4136,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     }
     // 模型仍是占位(最近任务 / 目录未到):不创建,按钮此时本就不可点,这里兜住其它提交入口。
     if (runtimePendingRef.current) return;
-    if (pluginEngineWorktreeUnsupported) {
-      setError(t('models.pluginEngines.worktreeUnsupported'));
-      return;
-    }
     // 旧协议 Plan 依赖会话级 permissionMode，不能安全进入断线创建 / 离线 FIFO。
     // 保留草稿与 Plan 选择，等 relay 和目标电脑恢复后再走原有在线兼容路径。
     if (
@@ -4546,7 +4537,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     worktreeBranchPreferenceSyncKey,
     worktreeCaptionKey,
     worktreeEnabled,
-    pluginEngineWorktreeUnsupported,
     prepareWorktreeCreateIntent,
     isWorktreeCreateIntentCurrent,
     resolveWorktreeCreateErrorKey,
@@ -4571,10 +4561,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     }
     if (!(pluginEnginePick?.model ?? draft.model).trim()) {
       setGoalError(t('session.new.enterModel'));
-      return;
-    }
-    if (pluginEngineWorktreeUnsupported) {
-      setGoalError(t('models.pluginEngines.worktreeUnsupported'));
       return;
     }
     if (!remoteAgentPick && !pluginEnginePick && deviceProvidersRef.current.ready && modelNeedsReselection(
@@ -5326,7 +5312,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     worktreeApplicable,
     worktreeEligibility,
     worktreeEnabled,
-    pluginEngineWorktreeUnsupported,
     prepareWorktreeCreateIntent,
     isWorktreeCreateIntentCurrent,
     resolveWorktreeCreateErrorKey,
@@ -6168,12 +6153,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         ) : (
           <ContextSheetGoalCreateForm
             busy={goalBusy}
-            disabled={worktreeCreateBlocked || runtimePending || pluginEngineWorktreeUnsupported}
+            disabled={worktreeCreateBlocked || runtimePending}
             disabledHint={runtimePending
               ? t('session.new.modelLoading')
-              : pluginEngineWorktreeUnsupported
-                ? t('models.pluginEngines.worktreeUnsupported')
-                : worktreeCreateBlocked && worktreeControlCaptionKey
+              : worktreeCreateBlocked && worktreeControlCaptionKey
                 ? t(worktreeControlCaptionKey)
                 : undefined}
             error={goalError}

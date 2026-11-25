@@ -712,7 +712,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
   /** 插件引擎自动任务的准入(见 deps.admitPluginEngine)；不可用时抛错，本次运行或保存明确失败。 */
   private admitScheduledPluginEngine(schedule: Schedule): { model: string; effort: string } {
     if (!this.deps.admitPluginEngine || schedule.agentKind !== 'acp' || schedule.modelAgentKind !== 'acp'
-      || schedule.targetSessionId || schedule.persistentSession || schedule.useWorktree
+      || schedule.targetSessionId || schedule.persistentSession
       || schedule.agentDeviceId || schedule.modelAgentDeviceId || schedule.executionMode === 'script') {
       throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
     }

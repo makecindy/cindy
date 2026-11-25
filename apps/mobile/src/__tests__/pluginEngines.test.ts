@@ -231,6 +231,15 @@ describe('creating a task on a plugin engine', () => {
     expect(opts).not.toHaveProperty('agentDeviceId');
   });
 
+  // 桌面对插件引擎隐藏额外目录、引擎也不接受；手机此前仍把记住的额外目录带进创建。最小失败输入：extraDirs=['/docs']。
+  it('does not send extra directories the engine cannot use', () => {
+    const opts = buildRemoteCreateSessionOptions(applyPluginEnginePick({ ...draft, extraDirs: ['/docs'] }, {
+      providerId: DSH, model: 'deepseek-v4', effort: '', permissionMode: 'default',
+    }));
+    expect(opts).not.toHaveProperty('extraDirs');
+    expect(buildRemoteCreateSessionOptions({ ...draft, extraDirs: ['/docs'] })).toMatchObject({ extraDirs: ['/docs'] });
+  });
+
   it('leaves the built-in options untouched when no engine is picked', () => {
     expect(buildRemoteCreateSessionOptions(applyPluginEnginePick(draft, null))).toMatchObject({
       agentKind: 'claude-code', providerId: 'xd', model: 'claude-fable-5', fastMode: true, agentDeviceId: 'mac-mini',
