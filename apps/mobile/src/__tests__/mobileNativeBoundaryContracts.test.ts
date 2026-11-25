@@ -145,6 +145,10 @@ describe('mobile native boundary contracts', () => {
     );
 
     expect(source).toContain('UIResponder.keyboardWillHideNotification');
+    // A SwiftUI sheet is registered as presented only by the time the keyboard
+    // has finished hiding, and it may be presented by a child hosting controller.
+    expect(source).toContain('UIResponder.keyboardDidHideNotification');
+    expect(source).toContain('pending.append(contentsOf: controller.children)');
     expect(source).toContain('guard editor.isFirstResponder, coveredByPresentation else { return }');
     expect(source).toContain('AsyncFunction("blur") { (view: CindyComposerView) in view.blur() }');
     expect(source).toContain('guard !releasingForPresentation else { return }');
