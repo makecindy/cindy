@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "新しいウインドウで開く"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "このパソコンの別の Cindy インスタンスがリモート接続を使用しています。それを閉じると、このインスタンスが自動的に引き継ぎます。",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
@@ -8739,6 +8740,7 @@
             "message_body": "メッセージの本文",
             "tool_body": "ツールの結果",
             "sidebar_navigation": "サイドバーナビゲーション",
+            "workdir_menu": "作業ディレクトリのメニュー",
             "session_menu": "タスクメニュー",
             "settings_section": "設定ページ",
             "composer_completion": "入力補完",
@@ -12272,8 +12274,8 @@
       "footnote": "この内容は仲間のアイデンティティのコンテキストに含まれます。クイック性格設定は別に保存され、ここを変更しても保持されます。"
     },
     "welcome": {
-      "generic": "こんにちは、{{name}} です。これから何かあれば遠慮なく言ってください。まずはこのあたりを把握しておきます。",
-      "withRole": "こんにちは、{{name}} です——{{description}}。何かあればそのまま言ってください。"
+      "generic": "こんにちは、{{name}}です。何かあれば気軽に声をかけてください。",
+      "withUser": "こんにちは、{{userName}}さん。{{name}}です。何かあれば気軽に声をかけてください。"
     },
     "invitation": {
       "title": "出会いの準備",
@@ -15313,6 +15315,7 @@
       "label_other": "{{count}} 件の新着"
     },
     "messageNavRail": {
+      "you": "あなた",
       "aria": "質問ナビゲーション",
       "jumpAria": "{{index}} 番目の質問へ移動：{{preview}}",
       "attachmentOnly_one": "添付ファイル {{count}} 件",
@@ -15460,6 +15463,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI の認証情報が無効になりました。「再試行」をクリックしてください。繰り返す場合はサインアウトしてから再ログインしてください",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI の認証情報が無効になりました。繰り返す場合はサインアウトしてから再ログインしてください",
       "modelAccessDenied": "接続先のアカウントにはこのモデルへのアクセス権限がありません。別のモデルに切り替えるか、プロバイダーにアクセス権限を確認してください",
+      "providerSafetyRefusal": "モデルプロバイダーの安全ポリシーにより、この応答はブロックされました。続行する場合は依頼内容を調整してから再送信してください",
       "silentStopContinue": "続行",
       "silentStopContinueTitle": "現在のタスクを続行",
       "piTransportClosed": "リモート Pi の接続が切断されました（SSH チャンネルが閉じました）。リモートのタスクは実行中のままです。再接続すると続行できます。",

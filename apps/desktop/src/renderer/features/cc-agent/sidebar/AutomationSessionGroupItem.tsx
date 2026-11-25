@@ -770,10 +770,10 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                     <div
                       className={cn(
                         'absolute right-0 top-0 flex h-6 items-center gap-0.5',
-                        'opacity-0 transition-opacity',
+                        'transition-opacity',
                         menuOpen
                           ? 'opacity-100'
-                          : 'group-hover:opacity-100 group-focus-within/slot:opacity-100',
+                          : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within/slot:pointer-events-auto group-focus-within/slot:opacity-100',
                       )}
                     >
                       {/* 高频 Run 继续直点;Edit/Pause/Resume/Delete 收进 More 菜单,避免 Edit

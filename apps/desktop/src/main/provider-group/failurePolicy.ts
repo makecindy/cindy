@@ -17,6 +17,10 @@
  * 对应「同一台连续失败才算」。
  */
 import { AgentNotAuthenticatedError, SESSION_CLOSED_MID_TURN_MESSAGE } from '@cindy/maker-core';
+import {
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+} from '@cindy/maker-shared/error-redaction';
 
 import type { AutoResumeAgentSwitchCause } from '../../shared/agentInputQueue.js';
 import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
@@ -180,6 +184,7 @@ const STAY_REASONS: ReadonlyMap<string, ProviderGroupStayReason> = new Map([
   ['context-overflow', 'context'],
   ['codex_history_oversized', 'context'],
   ['output-limit', 'context'],
+  [PROVIDER_SAFETY_REFUSAL_REASON, 'policy'],
   ['tool_use_loop_detected', 'tool-loop'],
   ['user-denied', 'user'],
   ['user_rejected', 'user'],
@@ -199,6 +204,7 @@ const STAY_CODEX_ERRORS: ReadonlyMap<string, ProviderGroupStayReason> = new Map(
   ['contextWindowExceeded', 'context'],
   ['badRequest', 'invalid-request'],
   ['cyberPolicy', 'policy'],
+  ['misalignmentPolicyViolation', 'policy'],
   ['sandboxError', 'local'],
 ]);
 
@@ -294,6 +300,9 @@ export function decideProviderGroupFailure(
   if (isContextOverflowErrorData(signals) || isOversizedHistoryErrorData(signals)) return { action: 'stay', why: 'context' };
   const codexStay = signals.codexErrorInfo ? STAY_CODEX_ERRORS.get(signals.codexErrorInfo) : undefined;
   if (codexStay) return { action: 'stay', why: codexStay };
+  if (signals.sdkError === 'content_filter' || isProviderSafetyRefusalError(message, reason)) {
+    return { action: 'stay', why: 'policy' };
+  }
 
   // ── 那台账号的问题：换，并记进组的状态 ──
   // Explicit upstream account denial is not a broken connection. Preserve the

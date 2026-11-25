@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "另啟一窗"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "此機另一 Cindy 例項方用遠端連線。闔之後，此例項將自行接管。",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暫不支援易 Harness。請擇今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
@@ -8705,6 +8706,7 @@
             "message_body": "訊息正文",
             "tool_body": "工具結果",
             "sidebar_navigation": "側邊導覽列",
+            "workdir_menu": "工作目錄選單",
             "session_menu": "任務選單",
             "settings_section": "設定頁面",
             "composer_completion": "輸入補全入口",
@@ -12272,8 +12274,8 @@
       "footnote": "此段將入同伴之身分上下文；速設之性情另行存之，改此處不致覆之。"
     },
     "welcome": {
-      "generic": "幸會，吾乃{{name}}。此後有事，逕與吾言；容吾先熟悉此間風物。",
-      "withRole": "幸會，吾乃{{name}}——{{description}}。有事逕與吾言。"
+      "generic": "幸會，吾乃{{name}}。有事逕與吾言。",
+      "withUser": "{{userName}}安好，吾乃{{name}}。有事逕與吾言。"
     },
     "invitation": {
       "title": "將與君相見",
@@ -15304,6 +15306,7 @@
       "label_other": "新訊 {{count}} 條"
     },
     "messageNavRail": {
+      "you": "君",
       "aria": "問目導覽",
       "jumpAria": "至第 {{index}} 問：{{preview}}",
       "attachmentOnly_one": "附卷 {{count}} 件",
@@ -15451,6 +15454,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI 憑據已失效。請點「再試」。若仍未成，請辭出後重新登入",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 憑據已失效。若此後仍未成，請辭出後重新登入",
       "modelAccessDenied": "今上游名籍無權存取此模型。請易模型，或向供方確認模型存取之權柄",
+      "providerSafetyRefusal": "供方安全規制攔阻此番回覆。若欲再請，請改易所求之辭後再發",
       "silentStopContinue": "續",
       "silentStopContinueTitle": "續此差事",
       "piTransportClosed": "遠端 Pi 連線已斷（SSH 通道已闔）。遠端差事仍在行，重連後可續。",

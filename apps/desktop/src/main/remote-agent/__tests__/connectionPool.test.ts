@@ -21,10 +21,13 @@ import {
 import { hostRewritesResumeId, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { ExecServerRelay } from '../controller/execServerRelay';
 import { RemoteAgentRunClient } from '../controller/runClient';
-import { decideProviderGroupFailure, providerGroupFailureSignals } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, providerGroupFailureSignals, ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
+import { holdsContextRecoveryBroadcast, isContextOverflowErrorData } from '../../maker-ipc/contextOverflowRollover';
 import { RemoteExecutor } from '../executor/executor';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
+import { GoalController } from '../../goal-host/controller';
+import type { GoalState } from '../../goal-host/types';
 
 // ─── 连接池本身 ────────────────────────────────────────────────────
 
@@ -929,7 +932,19 @@ describe('remote connection pool with a real host', () => {
     scenario.releaseHold?.();
   });
 
-  it.each(['missing', 'aborted', 'provider-restarting'] as const)('settles %s during the first turn once and reconnects the live Session', async reason => {
+  // #12558 integration: the restart branch must retain the received close reason
+  // and run correlation, not infer an OS process exit. Existing assertions only
+  // counted errors. Minimal input: an unfinished real Session + a missing run.
+  it.each([
+    { reason: 'missing' },
+    { reason: 'aborted' },
+    { reason: 'provider-restarting' },
+    { reason: 'provider-restarting', message: 'provider is shutting down' },
+    { reason: 'provider-restarting', message: '' },
+    { reason: 'provider-restarting', message: 'prompt is too long' },
+    { reason: 'provider-restarting', message: 'tool execution failed' },
+    { reason: 'aborted', message: 'user rejected the request' },
+  ])('settles $reason ($message) during the first turn once and reconnects the live Session', async ({ reason, message }) => {
     const clients: RemoteAgentRunClient[] = [];
     const onData = RemoteAgentRunClient.prototype.onData;
     const receive = vi.spyOn(RemoteAgentRunClient.prototype, 'onData').mockImplementation(function (this: RemoteAgentRunClient, data, done) {
@@ -942,7 +957,8 @@ describe('remote connection pool with a real host', () => {
       interrupt = false;
       return { runs: (request.runs as Array<{ runId: string; cursor: number }>).map(run => {
         if (reason === 'missing') return { ...run, missing: true };
-        const data = Buffer.from(JSON.stringify({ t: 'closed', reason }) + '\n');
+        const data = Buffer.from(JSON.stringify({ t: 'closed', reason,
+          ...(message !== undefined ? { error: { code: 'AGENT_ERROR', message } } : {}) }) + '\n');
         return { ...run, cursor: run.cursor + data.length, data: data.toString('base64'), done: true };
       }) };
     });
@@ -961,6 +977,21 @@ describe('remote connection pool with a real host', () => {
       await expect(sending).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => expect(seen.some(e => e.type === 'done')).toBe(true));
       expect(seen.filter(e => e.type === 'error')).toHaveLength(1);
+      const closedRunId = clients[0].runId;
+      const interruption = seen.find(e => e.type === 'error')!;
+      // #12605: a close detail must not select a second recovery owner. Exercise
+      // the actual projection plus the group's and context delivery's predicates.
+      expect(isContextOverflowErrorData(interruption.data)).toBe(false);
+      expect(holdsContextRecoveryBroadcast({ remoteHostId: null }, interruption)).toBe(false);
+      expect(decideProviderGroupFailure(providerGroupFailureSignals(interruption.data), 'run')).toMatchObject({
+        action: 'switch', connection: 'lost', cool: false,
+      });
+      expect(interruption.data).toMatchObject({
+        reason: 'remote_agent_restarted', isTerminal: true,
+        remoteCloseReason: reason, remoteRunId: closedRunId,
+        sdkError: `Remote agent stream closed (${reason}); runId: ${closedRunId}`,
+        message: '[REMOTE_AGENT_UNAVAILABLE] The remote run is no longer available; reconnecting to the original conversation.',
+      });
       expect(session.isTurnRunning()).toBe(false);
       await expect(session.send('continued')).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => expect(seen.some(e => e.type === 'text' && textOf(e) === 'ok:continued')).toBe(true));
@@ -1455,6 +1486,147 @@ describe('remote connection pool with a real host', () => {
     await expect(a.send({ type: 'user', content: 'lost' })).rejects.toThrow('offline');
     expect(await ask(a, events, 'again')).toBe('ok:again');
     expect(scenario.started).toHaveLength(2);
+  });
+
+  // #11644 unit: the old handle-only tests did not exercise Session's ambiguous
+  // tail fence. Six real starter caps attempts must never dispatch this input or
+  // close its reusable Session. No production network, model, or real 30s wait.
+  it('retains the Session after six caps timeouts and resumes the same history on explicit retry', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'caps-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      let caps = 0;
+      vi.useFakeTimers();
+      intercept = request => request.op !== 'caps' ? undefined : new Promise((_resolve, reject) => {
+        caps++;
+        setTimeout(() => reject(Object.assign(new Error('[INVOKE_TIMEOUT] no invoke-result'),
+          { code: 'INVOKE_TIMEOUT', inFlight: true })), 30_000);
+      });
+      const sending = session.send('not dispatched').catch(error => error);
+      await vi.advanceTimersByTimeAsync(190_000);
+      const result = await sending;
+      expect(caps).toBe(6);
+      expect(result).toMatchObject({ accepted: false, reason: 'provider-rejected-before-dispatch' });
+      expect(session.getStatus()).not.toBe('closed');
+      expect(opens).toBe(1);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+      vi.useRealTimers();
+      intercept = null;
+      expect(await session.send('not dispatched')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 2 }));
+      expect(scenario.started).toHaveLength(2);
+      expect(scenario.started[1].options.resumeSessionId).toBe(handle.id);
+      expect(scenario.calls.filter(call => call.method === 'send').map(call =>
+        (call.args[0] as { content: string }).content)).toEqual(['first', 'not dispatched']);
+    } finally {
+      vi.useRealTimers();
+      intercept = null;
+      await session.close();
+    }
+  });
+
+  // #12612 unit: a real starter converts IPC startup quota into a local typed
+  // error. A bare proxy/startup-envelope test misses that conversion. The queue
+  // needs this type and reset metadata, with no second body dispatch.
+  it.each([null, 5_000_000])('preserves group quota metadata on reconnect (reset=%s)', async resetAtMs => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'quota-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      const remoteQuota = Object.assign(new Error(new ProviderGroupUsageLimitError({ resetAtMs }).message),
+        { code: 'IPC_ERROR' });
+      intercept = request => {
+        if (request.op === 'open') throw remoteQuota;
+        return undefined;
+      };
+      const result = await session.send('not dispatched').catch(error => error);
+      expect(result).toBeInstanceOf(ProviderGroupUsageLimitError);
+      expect(result.limit).toEqual({ resetAtMs });
+      expect(opens).toBe(2);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+    } finally {
+      intercept = null;
+      await session.close();
+    }
+  });
+
+  // #12612 unit: Goal's provider-rejection backoff starts after preparation
+  // finishes. Exercise the actual Goal -> Session -> remote starter boundary:
+  // a three-minute caps failure must block, not begin another six RPCs.
+  it('blocks a Goal after six preparation timeouts without automatically starting another handshake', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'goal-caps-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    // Session also supports EngineKinds outside Goal's AgentKind contract.
+    const goalSession = {
+      id: session.id,
+      agentKind: 'claude-code' as const,
+      send: session.send.bind(session),
+      onEvent: session.onEvent.bind(session),
+      getStatus: session.getStatus.bind(session),
+      getTurnGeneration: session.getTurnGeneration.bind(session),
+      isTurnRunning: session.isTurnRunning.bind(session),
+      abort: session.abort.bind(session),
+    };
+    let goal: GoalState | null = null;
+    const controller = new GoalController({
+      storage: {
+        get: async () => goal,
+        upsert: async state => { goal = { ...state }; },
+        update: async (_id, patch) => goal ? (goal = { ...goal, ...patch }) : null,
+        clear: async () => { goal = null; },
+        listActive: async () => goal?.status === 'active' ? [goal] : [],
+        listUsageLimited: async () => [],
+      },
+      getSession: () => goalSession,
+      ensureSession: async () => goalSession,
+      isSessionInTurn: () => false,
+      stopActiveGoalTurn() {},
+      emitStatus() {},
+      getDefaults: () => ({ maxTurns: 20, budgetTokens: null, noProgressLimit: 3 }),
+      logger,
+    });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      let caps = 0;
+      vi.useFakeTimers();
+      intercept = request => request.op !== 'caps' ? undefined : new Promise((_resolve, reject) => {
+        caps++;
+        setTimeout(() => reject(Object.assign(new Error('[INVOKE_TIMEOUT] no invoke-result'),
+          { code: 'INVOKE_TIMEOUT', inFlight: true })), 30_000);
+      });
+      const setting = controller.setGoal({ sessionId: session.id, objective: 'continue the task' });
+      await vi.advanceTimersByTimeAsync(190_000);
+      await setting;
+      expect(goal).toMatchObject({ status: 'blocked', turnsUsed: 0 });
+      await vi.advanceTimersByTimeAsync(190_000);
+      expect(caps).toBe(6);
+      expect(opens).toBe(1);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+      intercept = null;
+      await session.close();
+    }
   });
 
   it('when a release close does not get through, makes room before opening instead of hitting the limit, then closes it', async () => {

@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "在新窗口打开"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "本机另一 Cindy 实例正在使用远程连接。关闭它后，本实例会自动接管。",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
@@ -8739,6 +8740,7 @@
             "message_body": "消息正文",
             "tool_body": "工具结果",
             "sidebar_navigation": "侧边导航栏",
+            "workdir_menu": "工作目录菜单",
             "session_menu": "任务菜单",
             "settings_section": "设置页面",
             "composer_completion": "输入补全入口",
@@ -12272,8 +12274,8 @@
       "footnote": "这段内容会进入伙伴的身份上下文；快速性格设置单独保存，修改这里不会覆盖它。"
     },
     "welcome": {
-      "generic": "嗨，我是{{name}}。以后有事直接跟我说，我先熟悉一下这儿。",
-      "withRole": "嗨，我是{{name}}——{{description}}。有事直接跟我说。"
+      "generic": "嗨，我是{{name}}。有事直接跟我说。",
+      "withUser": "嗨，{{userName}}，我是{{name}}。有事直接跟我说。"
     },
     "invitation": {
       "title": "准备见面",
@@ -15313,6 +15315,7 @@
       "label_other": "{{count}} 条新消息"
     },
     "messageNavRail": {
+      "you": "你",
       "aria": "提问导航",
       "jumpAria": "跳转到第 {{index}} 条提问：{{preview}}",
       "attachmentOnly_one": "附件 {{count}} 件",
@@ -15460,6 +15463,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI 凭据已失效。请点击「重试」。若仍失败，请退出后重新登录",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 凭据已失效。若后续仍失败，请退出后重新登录",
       "modelAccessDenied": "当前上游账号无权访问此模型。请切换模型，或向供应商确认模型访问权限",
+      "providerSafetyRefusal": "模型供应商的安全策略拦截了本次回复。如需继续，请调整请求内容后再发送",
       "silentStopContinue": "继续",
       "silentStopContinueTitle": "继续当前任务",
       "piTransportClosed": "远端 Pi 连接已中断（SSH 通道关闭）。远端任务仍在运行，重新连接后可以继续。",

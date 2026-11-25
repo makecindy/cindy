@@ -1381,6 +1381,7 @@
     "openPermissionInNewWindow": "Abrir en otra ventana"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Otra instancia de Cindy en esta computadora está usando la conexión remota. Ciérrala y esta instancia tomará el control automáticamente.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no permite cambiar de Harness. Elige un modelo en su Harness actual o crea otra tarea SSH con el Harness que necesitas.",
@@ -8856,6 +8857,7 @@
             "message_body": "cuerpo del mensaje",
             "tool_body": "resultado de la herramienta",
             "sidebar_navigation": "navegación lateral",
+            "workdir_menu": "menú del directorio de trabajo",
             "session_menu": "menú de la tarea",
             "settings_section": "página de ajustes",
             "composer_completion": "autocompletado de entrada",
@@ -12418,8 +12420,8 @@
       "footnote": "Esto se incorpora al contexto de identidad del amigo. Los ajustes rápidos de personalidad se guardan por separado y se conservan cuando cambia este texto."
     },
     "welcome": {
-      "generic": "Hola, soy {{name}}. Dime lo que necesites de ahora en adelante; mientras tanto, me iré ubicando.",
-      "withRole": "Hola, soy {{name}}: {{description}}. Solo dime qué necesitas."
+      "generic": "Hola, soy {{name}}. Dime lo que necesites.",
+      "withUser": "Hola, {{userName}}, soy {{name}}. Dime lo que necesites."
     },
     "invitation": {
       "title": "Preparándose para encontrarse",
@@ -15466,6 +15468,7 @@
       "label_many": "{{count}} nuevos mensajes"
     },
     "messageNavRail": {
+      "you": "Tú",
       "aria": "Navegación de prompts",
       "jumpAria": "Ir al prompt {{index}}: {{preview}}",
       "attachmentOnly_one": "{{count}} archivo adjunto",
@@ -15623,6 +15626,7 @@
       "gatewayProxyTokenInvalid": "Las credenciales de Cindy AI ya no son válidas. Haz clic en Reintentar. Si vuelve a ocurrir, cierra sesión y vuelve a iniciarla",
       "gatewayProxyTokenInvalidNoRetry": "Las credenciales de Cindy AI ya no son válidas. Si vuelve a ocurrir, cierra sesión y vuelve a iniciarla",
       "modelAccessDenied": "La cuenta del proveedor no puede acceder a este modelo. Selecciona otro modelo o verifica el acceso con el proveedor",
+      "providerSafetyRefusal": "La política de seguridad del proveedor del modelo bloqueó esta respuesta. Ajusta tu solicitud antes de volver a enviarla",
       "silentStopContinue": "Continuar",
       "silentStopContinueTitle": "Continuar la tarea actual",
       "piTransportClosed": "Se interrumpió la conexión con Pi remoto (se cerró el canal SSH). La tarea remota sigue en ejecución: vuelve a conectarte para continuar.",
