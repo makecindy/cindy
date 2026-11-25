@@ -3520,6 +3520,35 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
   });
 
+  // Unit, #4663: a newer maker turn transition must win over an explicit
+  // list-active row, just as it already wins over complete-list absence.
+  it.each([
+    { snapshotRunning: true, currentRunning: false },
+    { snapshotRunning: false, currentRunning: true },
+  ])('keeps newer running=$currentRunning across a delayed running=$snapshotRunning row', ({
+    snapshotRunning, currentRunning,
+  }) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    pushMakerStatus('s1', { isRunning: snapshotRunning });
+    const epoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+    if (currentRunning) {
+      pushMakerStatus('s1', { isRunning: true });
+    } else {
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1',
+        event: { type: 'done', data: {} },
+      });
+    }
+
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', {
+      format: 'active-sessions-v2',
+      sessions: [{ sessionId: 's1', isTurnRunning: snapshotRunning }],
+    }, epoch);
+
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(currentRunning);
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(currentRunning);
+  });
+
   it('clears a cached error when the host explicitly reports no remaining activity', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     remoteSessionStore.applySessionActivity('dev-1', {

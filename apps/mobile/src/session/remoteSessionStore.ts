@@ -4579,17 +4579,17 @@ export const remoteSessionStore = {
     }
     let changed = false;
     for (const [sessionId, { running, activityPhase, activityAttention }] of snapshotStates) {
+      // A maker push received during the read owns both activity and running state.
+      if ((sessionMakerActivityEpochs.get(sessionId) ?? 0) > activityEpochAtFetchStart) continue;
       acceptSessionStateSource(sessionId, deviceId, sessionRuntimeSources);
       if (!running) {
         changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
         changed = writeMakerTurnRunning(sessionId, false) || changed;
       }
       const current = readSessionRunStatus(sessionId);
-      const hasNewerMakerActivity = (sessionMakerActivityEpochs.get(sessionId) ?? 0)
-        > activityEpochAtFetchStart;
       // A fresh host snapshot can repair a missed activity clear while the phone was
       // backgrounded. Old hosts omit these optional fields, so keep their push-only path.
-      if (!hasNewerMakerActivity && typeof activityAttention === 'boolean'
+      if (typeof activityAttention === 'boolean'
         && (isRemoteSessionLiveActivityPhase(activityPhase) || activityPhase === 'idle')) {
         if (activityPhase === 'running' || activityPhase === 'needs-interaction'
           || (activityAttention && activityPhase !== 'idle')) {
@@ -4609,7 +4609,7 @@ export const remoteSessionStore = {
       const next = clearLiveGenerationOnWideRunStart(current, {
         ...current,
         isRunning: running,
-        reconnectAttempt: running && hasNewerMakerActivity ? current.reconnectAttempt : null,
+        reconnectAttempt: null,
         sideTaskRunning: running ? current.sideTaskRunning : false,
         startedAt: running ? (current.startedAt ?? Date.now()) : null,
       });
