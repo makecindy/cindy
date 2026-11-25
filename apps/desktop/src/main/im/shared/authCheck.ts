@@ -11,6 +11,12 @@ import type { AgentKind } from '@cindy/maker-core';
 import type { ImSessionRow } from './sessionRepo';
 
 type AuthRow = Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId'>;
+/** A conversation on a built-in engine: the only kind model providers route. */
+type BuiltinAuthRow = AuthRow & { agentKind: AgentKind };
+
+function isBuiltinRow(row: AuthRow): row is BuiltinAuthRow {
+  return row.agentKind !== 'acp';
+}
 
 export type ImAuthMissing =
   'gateway-key' | 'agent-oauth' | 'provider-key' | 'provider-disconnected';
@@ -28,7 +34,12 @@ export interface ImAuthCheckDeps {
   hasCustomProviderKey(providerId: string, agentKind: AgentKind): boolean;
   getAgentAuthState(agentKind: AgentKind): Promise<{ authenticated: boolean }>;
   listProviders(): Promise<ProviderView[]>;
-  checkRemoteRoute?(row: AuthRow & { agentDeviceId: string }): Promise<{ provider: ProviderView }>;
+  checkRemoteRoute?(row: BuiltinAuthRow & { agentDeviceId: string }): Promise<{ provider: ProviderView }>;
+  /**
+   * A plugin engine of this computer (row.agentKind 'acp'), checked with the same admission as a
+   * desktop task: its name if known, and why it cannot run the conversation now (null = it can).
+   */
+  checkPluginEngine?(row: AuthRow): { engineName: string | null; unavailable: string | null };
   warn(message: string): void;
 }
 
@@ -45,6 +56,10 @@ export async function checkImRouteAuth(
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
+  if (!isBuiltinRow(row)) {
+    const { ok, missing } = checkPluginEngineRoute(row, deps);
+    return { ok, missing };
+  }
   if (row.agentDeviceId) return checkRemoteAuth(row, deps);
   const resolution = resolveEffectiveProvider(
     row,
@@ -54,7 +69,7 @@ export async function checkImRouteAuth(
 }
 
 async function checkImRouteAuthWithResolution(
-  row: AuthRow,
+  row: BuiltinAuthRow,
   resolution: ProviderResolution,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
@@ -111,6 +126,7 @@ export async function checkImRouteAuthDetailed(
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthRouteStatus> {
+  if (!isBuiltinRow(row)) return checkPluginEngineRoute(row, deps);
   if (row.agentDeviceId) return checkRemoteAuth(row, deps);
   const providers =
     providerSnapshot === undefined ? await listProvidersForAuth(deps) : providerSnapshot;
@@ -128,7 +144,22 @@ export async function checkImRouteAuthDetailed(
   };
 }
 
-async function checkRemoteAuth(row: AuthRow, deps: ImAuthCheckDeps): Promise<ImAuthRouteStatus> {
+/**
+ * Plugin engines sign in with their own accounts, not a model provider's key: what matters is that
+ * the engine is offered here now. One on another computer is checked by that computer at start,
+ * like a desktop task on it, and its refusal comes back as the start error.
+ */
+function checkPluginEngineRoute(row: AuthRow, deps: ImAuthCheckDeps): ImAuthRouteStatus {
+  if (row.agentDeviceId) return { ok: true, missing: null, providerId: row.providerId, providerLabel: null };
+  const check = deps.checkPluginEngine?.(row) ?? { engineName: null, unavailable: 'Plugin engine check unavailable' };
+  const route = { providerId: row.providerId, providerLabel: check.engineName };
+  if (check.unavailable === null) return { ok: true, missing: null, ...route };
+  deps.warn(`plugin engine unavailable: ${check.unavailable}`);
+  // The fix is the same place as a provider's: Settings → Model providers lists plugin engines too.
+  return { ok: false, missing: 'provider-disconnected', ...route };
+}
+
+async function checkRemoteAuth(row: BuiltinAuthRow, deps: ImAuthCheckDeps): Promise<ImAuthRouteStatus> {
   try {
     if (!row.agentDeviceId || !deps.checkRemoteRoute) throw new Error('Remote route checker unavailable');
     const { provider } = await deps.checkRemoteRoute({ ...row, agentDeviceId: row.agentDeviceId });
@@ -173,7 +204,7 @@ export async function listProvidersForAuth(deps: ImAuthCheckDeps): Promise<Provi
 }
 
 export function resolveEffectiveProvider(
-  row: AuthRow,
+  row: BuiltinAuthRow,
   providers: ProviderView[] | null,
 ): ProviderResolution {
   if (!providers) return row.providerId ? { kind: 'explicit-invalid' } : { kind: 'none' };
@@ -200,14 +231,14 @@ export function resolveEffectiveProvider(
 }
 
 export async function fallbackAuthForImRoute(
-  row: AuthRow,
+  row: BuiltinAuthRow,
   deps: ImAuthCheckDeps,
 ): Promise<boolean> {
   return (await fallbackAuthCheckForImRoute(row, deps)).ok;
 }
 
 async function fallbackAuthCheckForImRoute(
-  row: AuthRow,
+  row: BuiltinAuthRow,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
   const hasGatewayKey = Boolean(deps.readXdGatewayApiKey());

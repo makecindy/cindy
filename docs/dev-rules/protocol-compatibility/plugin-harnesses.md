@@ -255,3 +255,25 @@ method-not-found 时本会话撤回插话能力，之后的插话排队。
 不新增 channel、中转帧或字段，自建中转原样转发，无需同步修改。
 实现见 desktop `maker-ipc/register.ts`、maker-core `agents/acp/acp-agent.ts`、host `agent/agent-skills.ts`；回归见
 `acp-session.test.ts`「lists for the `/` menu」、renderer `slashCommands.test.ts`「plugin engine Skills」与 host `boundary.test.mjs`「25b L1」。
+
+## 每轮权限闸（2026-11-25）
+
+IM 群聊、访客与个人微信的轮次带宿主的 `turnPermissionPolicy`（哪些工具调用必须由人确认）。内置引擎在执行前的审批点执行它；
+ACP Agent 不问就执行的调用 Cindy 看不到，所以 ACP wire 追加一个 Cindy 扩展（ACP v1 没有对应约定）：
+Agent 在 `initialize` 结果**顶层** `_meta.permissionGate.supported === true` 时，会话能力 `turnPermissionPolicy` 为支持，
+`unsupportedPermissionModes` 为 `['bypassPermissions']`（Cindy 的「全部允许」会自动同意请求）。带策略或只许文字回复
+（`toolsDisabled`）的轮次，`session/prompt` 参数追加 `_meta: { permissionGate: { scope: 'all-tool-calls' } }`，Agent 在这一轮
+及其答完后继续的工作里执行任何工具前都发 `session/request_permission`。请求顶层 `_meta.permissionGate.routine === true`
+表示 Agent 自己的规则本不会询问：策略不要求确认时 Cindy 直接选 `allow_once`；其余请求交给渠道确认，`toolName` 按
+`toolCall.name`、否则 ACP `kind` 映射的 Cindy 工具名（`execute` → `Bash`、`edit` → `Edit`、`delete` → `Delete` 等）给出，
+渠道的破坏性检查与确认卡按它判断；策略回调抛错按需要确认处理。`toolsDisabled` 轮次拒绝全部请求（「全部允许」也拒绝）。
+策略轮插话只进入同样带闸的轮次（运行中的轮次没带闸时回「没有进行中的回合」，宿主改为下一轮发送），并只叠加限制。
+没有声明的 Agent：策略轮在受理前以 `TurnPermissionPolicyUnsupportedError('acp', mode)` 拒绝，IM 按「当前引擎不支持」提示；
+`toolsDisabled` 轮次照旧运行（行为与本扩展之前相同）；没有策略的轮次不带 `_meta`。
+
+兼容：全部存量插件引擎不声明，行为只有「IM 策略轮被明确拒绝」这一处可见，此前这些任务整体不接 IM。不新增 manifest 字段、
+权限、批准、安装布局或包格式，已装插件无需重装或重新确认（存量插件影响：无）。远程与分享任务的能力沿用 `negotiatedCapabilities`
+带回控制端；控制端 IM 在插件引擎任务的能力未声明支持时于发送前拒绝策略轮，所以被控端仍是旧版（其 ACP 会话忽略发送选项）
+时 fail-closed，不会无闸运行。不新增 channel、中转帧或 IPC。实现见 maker-core `agents/acp/{protocol,capabilities,session}.ts`
+与 Desktop `im/shared/turnRunner.ts`；回归见 `acp-session.test.ts`「AcpSession per-turn permission gate」与
+`turnRunnerSendOutcome.test.ts`「on a plugin engine」。

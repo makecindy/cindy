@@ -16,6 +16,8 @@ import { getDesktopProviderService } from '../../maker-host/createDesktopProvide
 import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../../maker-host/model-visibility-mirror';
 import { getSessionProvider } from '../../maker-host/session-provider-store';
+import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import {
   buildProviderSections,
   connectedProvidersForAgent,
@@ -375,6 +377,38 @@ export function createSlashHandlers(
           return true;
         }
         const { row } = target;
+        if (row.agentKind === 'acp') {
+          // 插件引擎对话:只列这个引擎自己的模型(与应用内同一引擎内换模型一致,立即生效);
+          // 换到别的引擎在 Cindy 里做。
+          const key = pluginEngineKeyFromProviderId(row.providerId);
+          const engine = row.agentDeviceId ? undefined : listPluginEngineViews().find((item) => item.key === key);
+          const live = turnRunner.getMakerSessionById(row.id);
+          const models = engine
+            ? engine.models.filter((model) => !engine.disabledModels?.some((off) => off.id === model.id))
+            : (live?.capabilities.availableModels ?? []);
+          const spec = cards.buildModelPickerCard({
+            sessionId: row.id,
+            agentKind: 'acp',
+            sections: [{
+              provider: { id: row.providerId ?? '', name: engine?.name ?? row.providerId ?? '' },
+              models: models.map((model) => ({ id: model.id, displayName: model.displayName })),
+            }],
+            currentModelId: row.model,
+            currentProviderId: row.providerId,
+            currentEffort: row.effort || null,
+            defaultEffortByModel: Object.fromEntries(models.map((model) => [
+              model.id,
+              ('defaultEffort' in model ? model.defaultEffort : null) ?? '',
+            ])),
+          });
+          try {
+            await safeSendCard(ctx, spec);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`/model card send failed: ${msg}`);
+          }
+          return true;
+        }
         // 模型清单与应用内模型选择器**走同一个方法**:live providers(含自定义供应商 + 实时连接态)
         // → 仅已连接供应商 → buildProviderSections(每供应商各列其模型、每行 = (供应商, 模型))。
         // 可见性过滤复用 renderer 镜像到 main 的 override(modelVisibilityMirror)+ 目录 defaultEnabled,
@@ -662,7 +696,7 @@ export function createSlashHandlers(
         const context = permissionModeCommandContext(
           row.id,
           row.permissionMode,
-          turnRunner.getPermissionModes(row.agentKind),
+          turnRunner.getPermissionModes(row),
         );
         if (!richIm) {
           const requested = commandArgs[0];

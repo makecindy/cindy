@@ -13,7 +13,8 @@ import {
   type ImAuthCheckDeps,
 } from '../authCheck';
 
-type AuthRow = Parameters<typeof checkImRouteAuth>[0];
+/** A conversation on a built-in engine, the shape model providers route. */
+type AuthRow = Parameters<typeof resolveEffectiveProvider>[0];
 
 function deps(overrides: Partial<ImAuthCheckDeps> = {}): ImAuthCheckDeps {
   return {
@@ -291,6 +292,46 @@ describe('checkImRouteAuth', () => {
       missing: null,
     });
     await expect(hasAuthForImRoute(row(), providerSnapshot, authDeps)).resolves.toBe(true);
+  });
+});
+
+/**
+ * Plugin-engine conversations (docs/plans/acp-plugin-bridge.md「IM 渠道」): the engine signs in with
+ * its own accounts, so the check is the desktop admission (engine offered here now), not provider keys.
+ * Minimal failing input: an 'acp' row that the old code routed as Claude through provider lookup.
+ */
+describe('checkImRouteAuth for a plugin-engine conversation', () => {
+  const engineRow = (overrides: Partial<Parameters<typeof checkImRouteAuth>[0]> = {}) =>
+    ({ ...row(), agentKind: 'acp' as const, model: 'default', providerId: 'acp-plugin:dsh-1:dsh', ...overrides });
+
+  it('passes an engine this computer offers, named in the route, without provider or agent sign-in checks', async () => {
+    const checkPluginEngine = vi.fn(() => ({ engineName: 'DSH', unavailable: null }));
+    const d = deps({ checkPluginEngine });
+    await expect(checkImRouteAuthDetailed(engineRow(), undefined, d))
+      .resolves.toEqual({ ok: true, missing: null, providerId: 'acp-plugin:dsh-1:dsh', providerLabel: 'DSH' });
+    expect(checkPluginEngine).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'acp-plugin:dsh-1:dsh', model: 'default' }));
+    expect(d.listProviders).not.toHaveBeenCalled();
+    expect(d.getAgentAuthState).not.toHaveBeenCalled();
+  });
+
+  it('names the unavailable engine and points to the provider settings that list it', async () => {
+    const d = deps({ checkPluginEngine: () => ({ engineName: 'DSH', unavailable: 'DSH 已在「设置 → 模型供应商」中停用。' }) });
+    const status = await checkImRouteAuthDetailed(engineRow(), undefined, d);
+    expect(status).toEqual({ ok: false, missing: 'provider-disconnected', providerId: 'acp-plugin:dsh-1:dsh', providerLabel: 'DSH' });
+    const message = feishuUi.agent.authMissing?.({ ...status, agentKind: 'acp', model: 'default', attached: true });
+    expect(message).toContain('DSH');
+    expect(message).not.toContain('acp-plugin:');
+    // Fails closed when the host cannot check the engine at all.
+    await expect(checkImRouteAuth(engineRow(), undefined, deps())).resolves.toEqual({ ok: false, missing: 'provider-disconnected' });
+  });
+
+  it('leaves an engine on another computer to that computer, which refuses at start', async () => {
+    const checkPluginEngine = vi.fn(() => ({ engineName: null, unavailable: 'not installed here' }));
+    const checkRemoteRoute = vi.fn();
+    await expect(checkImRouteAuth(engineRow({ agentDeviceId: 'device-2' }), undefined, deps({ checkPluginEngine, checkRemoteRoute })))
+      .resolves.toMatchObject({ ok: true });
+    expect(checkPluginEngine).not.toHaveBeenCalled();
+    expect(checkRemoteRoute).not.toHaveBeenCalled();
   });
 });
 

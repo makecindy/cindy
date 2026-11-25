@@ -120,6 +120,7 @@ const NO_INIT = buildAcpCapabilities(
     },
     authMethods: [],
     steering: false,
+    permissionGate: false,
   },
   [],
 );

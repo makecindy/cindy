@@ -2450,7 +2450,7 @@ export class TurnPermissionPolicyUnsupportedError extends Error {
   readonly code = 'TURN_PERMISSION_POLICY_UNSUPPORTED';
 
   constructor(
-    readonly agentKind: AgentKind,
+    readonly agentKind: EngineKind,
     readonly permissionMode: PermissionMode,
   ) {
     super(

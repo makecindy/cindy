@@ -17,12 +17,12 @@ import { randomUUID } from 'node:crypto';
 
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { IdentityKey } from '@cindy/im';
-import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { AgentKind, EngineKind, Effort, PermissionMode } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 
 import { getDbClient } from '../../localDb/client/current';
-import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { makerToDbEngineKind, type DbEngineKind } from '../../../shared/agentKindConversion';
 import { sessions } from '../../localDb/schema';
 import { withSessionRouteLock } from '../../localDb/sessionRouteLock';
 import { retireDeletedPiSubagentState } from '../../localDb/ipc/piSubagentDeletion';
@@ -40,13 +40,28 @@ import type { ImOrchestratorConfig, ImSessionNamespace } from './types';
 
 const log = createLogger('im:repo');
 
-export function toCoreAgentKind(kind: string): AgentKind {
+/** sessions.agentKind → the engine an IM conversation runs on; a plugin engine stays 'acp'. */
+export function toCoreAgentKind(kind: string): EngineKind {
+  return kind === 'codex' || kind === 'pi' || kind === 'acp' ? kind : 'claude-code';
+}
+
+/** The built-in engine of a row that cannot be a plugin engine (callers check 'acp' first). */
+export function toBuiltinAgentKind(kind: string): AgentKind {
   return kind === 'codex' || kind === 'pi' ? kind : 'claude-code';
 }
 
-/** core AgentKind → sessions.agentKind 列的 legacy 存储值。 */
-function toDbAgentKind(kind: AgentKind): string {
-  return normalizeDbAgentKind(kind);
+/**
+ * The engine of a new conversation built from channel defaults. Defaults name only built-in
+ * engines; a plugin-engine conversation comes from a task the channel took over or a companion.
+ */
+function newConversationAgentKind(row: Pick<ImSessionRow, 'agentKind'>): AgentKind {
+  if (row.agentKind === 'acp') throw new Error('IM channel defaults cannot start a plugin-engine conversation');
+  return row.agentKind;
+}
+
+/** core engine kind → sessions.agentKind 列的 legacy 存储值('acp' 原样)。 */
+function toDbAgentKind(kind: EngineKind): DbEngineKind {
+  return makerToDbEngineKind(kind);
 }
 
 export interface ImSessionRow {
@@ -54,7 +69,8 @@ export interface ImSessionRow {
   initialTitle?: string;
   agentDeviceId?: string | null;
   id: string;
-  agentKind: AgentKind;
+  /** 'acp' = the conversation runs on a plugin engine (providerId names it). */
+  agentKind: EngineKind;
   workingDir: string;
   model: string;
   /** Latest persisted effort (may be changed by user via /model card later). */
@@ -450,7 +466,7 @@ export function createImSessionRepo(
       // 新插入的行写准入后的路由; 冲突分支(并发建出 / 残留行)照旧不碰路由列。
       let row = defaults;
       const persisted = await openChannelSession(defaults.id, {
-        agentKind: defaults.agentKind,
+        agentKind: newConversationAgentKind(defaults),
         model: defaults.model,
         providerId: defaults.providerId,
         agentDeviceId: defaults.agentDeviceId ?? null,
@@ -600,7 +616,7 @@ export function createImSessionRepo(
         }> =>
           // /new 建的是一条新任务: 同样经公共入口 openSession 准入, 轮换事务写准入后的路由。
           openChannelSession(fresh.id, {
-            agentKind: fresh.agentKind,
+            agentKind: newConversationAgentKind(fresh),
             model: fresh.model,
             providerId: fresh.providerId,
             agentDeviceId: fresh.agentDeviceId ?? null,
@@ -706,7 +722,8 @@ function rowFromDefaults(
 
 /** 按渠道默认建出 / 重置的行对应的跟随记录; 非默认来源的行返回 null。 */
 function defaultRouteRecordFor(row: ImSessionRow): string | null {
-  if (!row.defaultRouteFingerprint) return null;
+  // Only rows built from channel defaults (always built-in engines) carry a fingerprint.
+  if (!row.defaultRouteFingerprint || row.agentKind === 'acp') return null;
   return buildImDefaultRouteRecord(row.defaultRouteFingerprint, {
     agentKind: row.agentKind,
     model: row.model,
