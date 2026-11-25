@@ -576,7 +576,7 @@ describe('provider share usage store', () => {
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
 
-  // Unit: the shared entry awaited by Desktop quit and Host owner disposal. One accepted
+  // Unit: the shared entry awaited by Desktop quit. One accepted
   // receipt held at rename proves shutdown cannot finish before the real checkpoint.
   it('awaits the shared shutdown checkpoint and propagates failure without losing accepted usage', async () => {
     await flushProviderShareUsageStore(); // Partial startup need not have installed a ledger.
