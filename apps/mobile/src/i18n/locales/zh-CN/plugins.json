@@ -348,7 +348,7 @@
       "repository": "仓库 {{repository}}",
       "repositoryRef": "仓库 {{repository}}（{{ref}}）",
       "localFolder": "本地文件夹",
-      "repositoryMissingInstall": "这台电脑没有提供仓库信息，不能在手机上允许这次安装。请先更新电脑上的 Cindy，或在电脑上安装。",
+      "repositoryMissingInstall": "这台电脑没有提供仓库信息，不能在手机上允许这次安装。请在电脑上刷新这个市场后再试（Cindy 较旧时先更新），或在电脑上安装。",
       "repositoryMissingUpdate": "这台电脑没有提供仓库信息。如需核对来源，请在电脑设置的「已添加的市场」里查看这个市场。"
     },
     "sourceNotice": {
@@ -458,8 +458,8 @@
     "unconfirmedNotInstalled": "没能确认这次安装的结果；目前这台电脑上没有这个插件。",
     "alreadyInstalled": "这台电脑已经安装了这个插件。",
     "unconfirmedMismatch": "没能确认这次安装的结果；这台电脑上同标识的插件可能来自本地文件、其他版本或其他来源，请在电脑上核对。",
-    "sourceUnverified": "这台电脑上的 Cindy 版本不会告知这个市场来自哪个仓库，暂不能从手机安装。请先更新电脑上的 Cindy，或在电脑上安装。",
-    "sourceUnverifiedShort": "这台电脑未提供仓库信息，请在电脑上安装。",
+    "sourceUnverified": "这台电脑暂时没有提供这个市场的仓库信息，暂不能从手机安装。请在电脑上刷新这个市场后再试；如果电脑上的 Cindy 版本较旧，请先更新，或直接在电脑上安装。",
+    "sourceUnverifiedShort": "这台电脑暂未提供仓库信息。请在电脑上刷新这个市场后再试，或在电脑上安装。",
     "sourceChanged": "这个市场的来源刚刚有变化，请重新选择要安装的插件。"
   }
 }

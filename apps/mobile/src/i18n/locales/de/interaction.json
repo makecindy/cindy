@@ -1,7 +1,7 @@
 {
   "permission": {
     "install": "Installieren",
-    "installSourceUnverified": "Dein Handy kann die Quelle dieser Installation nicht prüfen (Cindy auf dem Computer ist älter oder hat das Repository nicht angegeben). Hier kannst du nur ablehnen. Zum Installieren bestätige am Computer.",
+    "installSourceUnverified": "Dein Handy kann die Quelle dieser Installation nicht prüfen (der Computer hat das Repository noch nicht angegeben oder Cindy ist dort älter). Hier kannst du nur ablehnen. Aktualisiere den Marktplatz am Computer und lass den Agent es erneut versuchen oder bestätige am Computer.",
     "mcpComplete": "Fertig",
     "mcpCancel": "Abbrechen",
     "mode": {

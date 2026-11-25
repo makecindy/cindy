@@ -346,7 +346,7 @@
       "repository": "库 {{repository}}",
       "repositoryRef": "库 {{repository}}（{{ref}}）",
       "localFolder": "本地之匣",
-      "repositoryMissingInstall": "此机未示库之所出，不能于手机许此纳。请先更新电脑之 Cindy，或于电脑纳之。",
+      "repositoryMissingInstall": "此机未示库之所出，不能于手机许此纳。请于电脑刷新此坊再试（Cindy 旧则先更新），或于电脑纳之。",
       "repositoryMissingUpdate": "此机未示库之所出。欲核其源，请于电脑设置「已增之坊」中观此坊。"
     },
     "sourceNotice": {
@@ -456,8 +456,8 @@
     "unconfirmedNotInstalled": "此番纳器之果未能确认；今此机未有此法器。",
     "alreadyInstalled": "此机已纳此法器。",
     "unconfirmedMismatch": "此番纳器之果未能确认；此机同名之法器或出自本地之卷、他版或他源，请就机核之。",
-    "sourceUnverified": "此机之 Cindy 不告此坊出自何库，暂不能自手机纳之。请先更新电脑之 Cindy，或于电脑纳之。",
-    "sourceUnverifiedShort": "此机未示库之所出，请于电脑纳之。",
+    "sourceUnverified": "此机暂未示此坊之库，暂不能自手机纳之。请于电脑刷新此坊再试；若电脑之 Cindy 旧，请先更新，或径于电脑纳之。",
+    "sourceUnverifiedShort": "此机暂未示库。请于电脑刷新此坊再试，或于电脑纳之。",
     "sourceChanged": "此坊之源方易，请复择所欲纳之法器。"
   }
 }

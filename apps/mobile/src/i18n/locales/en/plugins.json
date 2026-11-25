@@ -348,7 +348,7 @@
       "repository": "Repository {{repository}}",
       "repositoryRef": "Repository {{repository}} ({{ref}})",
       "localFolder": "Local folder",
-      "repositoryMissingInstall": "This computer didn’t share the repository, so this install can’t be allowed from your phone. Update Cindy on the computer, or install it there.",
+      "repositoryMissingInstall": "This computer didn’t share the repository, so this install can’t be allowed from your phone. Refresh this marketplace on the computer and try again (update Cindy first if it’s older), or install on the computer.",
       "repositoryMissingUpdate": "This computer didn’t share the repository. To check the source, look up this marketplace in Added Marketplaces in the computer’s settings."
     },
     "sourceNotice": {
@@ -458,8 +458,8 @@
     "unconfirmedNotInstalled": "Couldn’t confirm the result of this installation. The plugin isn’t on this computer right now.",
     "alreadyInstalled": "This computer already has this plugin installed.",
     "unconfirmedMismatch": "Couldn’t confirm the result of this installation. The plugin with the same ID on this computer may come from a local file, another version or another source. Check it on the computer.",
-    "sourceUnverified": "Cindy on this computer doesn’t say which repository this marketplace comes from, so it can’t be installed from your phone yet. Update Cindy on the computer, or install it there.",
-    "sourceUnverifiedShort": "This computer doesn’t share the repository. Install it on the computer.",
+    "sourceUnverified": "This computer hasn’t shared the repository for this marketplace yet, so it can’t be installed from your phone. Refresh this marketplace on the computer and try again; if Cindy on the computer is older, update it first, or install on the computer.",
+    "sourceUnverifiedShort": "This computer hasn’t shared the repository yet. Refresh this marketplace on the computer and try again, or install there.",
     "sourceChanged": "This marketplace’s source just changed. Choose the plugin to install again."
   }
 }

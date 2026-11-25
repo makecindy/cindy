@@ -131,7 +131,7 @@
     高风险项排在最前。Host 允许最多 4 个凭证绑定、每个 16 个方法，摘要高度不随数量增长。升级只看本次新增项。
   - 自定义市场的仓库：「来自 <市场名>」下方显示目标 Host 从本次实际取包的来源生成的去敏仓库标识（「仓库 host/owner/repo」，
     带 ref 时附上；本地文件夹市场显示「本地文件夹」）。字段约定见
-    `protocol-compatibility/same-account-remote-plugin-management.md`「自定义市场的来源身份」（随 Host 前置改动登记）。
+    `protocol-compatibility/same-account-remote-plugin-management.md`「自定义市场的来源身份」（由 Host 前置 PR #12731 登记）。
     形状按契约第 2 版：git `{kind, repository, ref?, sourceId}`、本地 `{kind, sourceId}`，`sourceId` 为 22 位 base64url，
     多键或缺键都算不合法。回执里 `originSource` 不合法时整份回执按无效处理；市场条目的 `sourceIdentity` 不合法时
     只丢掉该字段，`installedSourceId` 不合法时按缺省。比较来源时四个键都要相等，`sourceId` 不展示。
@@ -142,7 +142,8 @@
     缺 `source`（或形状不合法）只能拒绝，说明回电脑确认。升级卡不受影响。
   - 旧 Host 不提供仓库身份时（提案，待维护者确认）：
     - 全新安装不从手机发起：自定义市场条目缺 `sourceIdentity` 时行内与详情的「安装」不可点，行内写短说明、详情写完整
-      说明（更新电脑上的 Cindy，或在电脑上安装）；列表有、开始安装时读到的详情没有时，在 begin 之前停下并在这一行说明。
+      说明（在电脑上刷新这个市场后再试——Host 升级后、到该市场下一次刷新前 Git 来源的身份会暂时缺省；电脑上的
+      Cindy 较旧时先更新；或直接在电脑上安装）；列表有、开始安装时读到的详情没有时，在 begin 之前停下并在这一行说明。
       Agent 从电脑发起、手机上收到的确认缺 `originSource` 时，仓库行改为「这台电脑没有提供仓库信息……」，「允许」不可点、
       「拒绝」照常可点。理由：只能显示市场名时，两个同名仓库在手机上看起来完全一样，允许了也说不清允许的是哪个仓库。
     - 升级不拦：已装插件的升级确认缺 `originSource` 时，仓库行改为核实路径（在电脑设置的「已添加的市场」里查看这个市场），

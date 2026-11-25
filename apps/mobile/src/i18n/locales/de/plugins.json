@@ -348,7 +348,7 @@
       "repository": "Repository {{repository}}",
       "repositoryRef": "Repository {{repository}} ({{ref}})",
       "localFolder": "Lokaler Ordner",
-      "repositoryMissingInstall": "Dieser Computer hat das Repository nicht angegeben. Diese Installation kann nicht vom Handy aus erlaubt werden. Aktualisiere Cindy auf dem Computer oder installiere dort.",
+      "repositoryMissingInstall": "Dieser Computer hat das Repository nicht angegeben. Diese Installation kann nicht vom Handy aus erlaubt werden. Aktualisiere den Marktplatz am Computer und versuche es erneut (bei älterem Cindy zuerst Cindy aktualisieren) oder installiere am Computer.",
       "repositoryMissingUpdate": "Dieser Computer hat das Repository nicht angegeben. Um die Quelle zu prüfen, sieh dir diesen Marktplatz in den Einstellungen des Computers unter „Hinzugefügte Marktplätze“ an."
     },
     "sourceNotice": {
@@ -458,8 +458,8 @@
     "unconfirmedNotInstalled": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin ist derzeit nicht auf diesem Computer.",
     "alreadyInstalled": "Dieses Plugin ist auf diesem Computer bereits installiert.",
     "unconfirmedMismatch": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin mit derselben Kennung auf diesem Computer stammt möglicherweise aus einer lokalen Datei, einer anderen Version oder einer anderen Quelle. Bitte prüfe es auf dem Computer.",
-    "sourceUnverified": "Cindy auf diesem Computer gibt nicht an, aus welchem Repository dieser Marktplatz stammt. Installieren vom Handy ist daher noch nicht möglich. Aktualisiere Cindy auf dem Computer oder installiere dort.",
-    "sourceUnverifiedShort": "Dieser Computer gibt das Repository nicht an. Installiere am Computer.",
+    "sourceUnverified": "Dieser Computer hat das Repository dieses Marktplatzes noch nicht angegeben. Installieren vom Handy ist daher nicht möglich. Aktualisiere den Marktplatz am Computer und versuche es erneut; ist Cindy dort älter, aktualisiere Cindy zuerst oder installiere am Computer.",
+    "sourceUnverifiedShort": "Dieser Computer hat das Repository noch nicht angegeben. Aktualisiere den Marktplatz am Computer und versuche es erneut oder installiere dort.",
     "sourceChanged": "Die Quelle dieses Marktplatzes hat sich gerade geändert. Wähle das Plugin erneut aus."
   }
 }

@@ -350,7 +350,7 @@
       "repository": "Repositório {{repository}}",
       "repositoryRef": "Repositório {{repository}} ({{ref}})",
       "localFolder": "Pasta local",
-      "repositoryMissingInstall": "Este computador não informou o repositório, então esta instalação não pode ser permitida pelo celular. Atualize a Cindy no computador ou instale por lá.",
+      "repositoryMissingInstall": "Este computador não informou o repositório, então esta instalação não pode ser permitida pelo celular. Atualize o marketplace no computador e tente de novo (atualize a Cindy antes se for mais antiga), ou instale pelo computador.",
       "repositoryMissingUpdate": "Este computador não informou o repositório. Para conferir a origem, veja este marketplace em “Marketplaces adicionados” nas configurações do computador."
     },
     "sourceNotice": {
@@ -460,8 +460,8 @@
     "unconfirmedNotInstalled": "Não foi possível confirmar o resultado desta instalação. O plugin não está neste computador no momento.",
     "alreadyInstalled": "Este plugin já está instalado neste computador.",
     "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um arquivo local, de outra versão ou de outra origem. Confira no computador.",
-    "sourceUnverified": "A Cindy neste computador não informa de qual repositório vem este marketplace, então ainda não dá para instalar pelo celular. Atualize a Cindy no computador ou instale por lá.",
-    "sourceUnverifiedShort": "Este computador não informa o repositório. Instale pelo computador.",
+    "sourceUnverified": "Este computador ainda não informou o repositório deste marketplace, então não dá para instalar pelo celular. Atualize este marketplace no computador e tente de novo; se a Cindy no computador for mais antiga, atualize-a antes ou instale por lá.",
+    "sourceUnverifiedShort": "Este computador ainda não informou o repositório. Atualize o marketplace no computador e tente de novo, ou instale por lá.",
     "sourceChanged": "A origem deste marketplace acabou de mudar. Escolha de novo o plugin para instalar."
   }
 }

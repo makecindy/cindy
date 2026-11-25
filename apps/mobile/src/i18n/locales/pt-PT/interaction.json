@@ -1,7 +1,7 @@
 {
   "permission": {
     "install": "Instalar",
-    "installSourceUnverified": "O telemóvel não consegue verificar de onde vem esta instalação (a Cindy no computador é mais antiga ou não indicou o repositório), por isso aqui só pode recusar. Para instalar, confirme no computador.",
+    "installSourceUnverified": "O telemóvel não consegue verificar de onde vem esta instalação (o computador ainda não indicou o repositório ou a Cindy nele é mais antiga), por isso aqui só pode recusar. Atualize o mercado no computador e peça ao Agent para tentar novamente, ou confirme no computador.",
     "mcpComplete": "Concluído",
     "mcpCancel": "Cancelar",
     "mode": {

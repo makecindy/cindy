@@ -350,7 +350,7 @@
       "repository": "Dépôt {{repository}}",
       "repositoryRef": "Dépôt {{repository}} ({{ref}})",
       "localFolder": "Dossier local",
-      "repositoryMissingInstall": "Cet ordinateur n’a pas indiqué le dépôt : cette installation ne peut pas être autorisée depuis le téléphone. Mettez à jour Cindy sur l’ordinateur ou installez-le depuis celui-ci.",
+      "repositoryMissingInstall": "Cet ordinateur n’a pas indiqué le dépôt : cette installation ne peut pas être autorisée depuis le téléphone. Actualisez le marketplace sur l’ordinateur puis réessayez (mettez d’abord Cindy à jour si elle est plus ancienne), ou installez depuis l’ordinateur.",
       "repositoryMissingUpdate": "Cet ordinateur n’a pas indiqué le dépôt. Pour vérifier la source, retrouvez ce marketplace dans « Marketplaces ajoutés » dans les réglages de l’ordinateur."
     },
     "sourceNotice": {
@@ -460,8 +460,8 @@
     "unconfirmedNotInstalled": "Impossible de confirmer le résultat de cette installation. Le plugin n’est pas présent sur cet ordinateur pour le moment.",
     "alreadyInstalled": "Ce plugin est déjà installé sur cet ordinateur.",
     "unconfirmedMismatch": "Impossible de confirmer le résultat de cette installation. Le plugin portant le même identifiant sur cet ordinateur peut provenir d’un fichier local, d’une autre version ou d’une autre source. Vérifiez-le sur l’ordinateur.",
-    "sourceUnverified": "Cindy sur cet ordinateur n’indique pas de quel dépôt provient ce marketplace : l’installation depuis le téléphone n’est pas encore possible. Mettez à jour Cindy sur l’ordinateur ou installez-le depuis celui-ci.",
-    "sourceUnverifiedShort": "Cet ordinateur n’indique pas le dépôt. Installez-le sur l’ordinateur.",
+    "sourceUnverified": "Cet ordinateur n’a pas encore indiqué le dépôt de ce marketplace : l’installation depuis le téléphone n’est pas possible. Actualisez ce marketplace sur l’ordinateur puis réessayez ; si Cindy y est plus ancienne, mettez-la d’abord à jour, ou installez depuis l’ordinateur.",
+    "sourceUnverifiedShort": "Cet ordinateur n’a pas encore indiqué le dépôt. Actualisez le marketplace sur l’ordinateur puis réessayez, ou installez depuis celui-ci.",
     "sourceChanged": "La source de ce marketplace vient de changer. Choisissez à nouveau le plugin à installer."
   }
 }

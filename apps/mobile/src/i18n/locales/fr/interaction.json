@@ -1,7 +1,7 @@
 {
   "permission": {
     "install": "Installer",
-    "installSourceUnverified": "Le téléphone ne peut pas vérifier d’où vient cette installation (Cindy sur l’ordinateur est plus ancienne ou n’a pas indiqué le dépôt) : vous ne pouvez que la refuser ici. Pour installer, confirmez sur l’ordinateur.",
+    "installSourceUnverified": "Le téléphone ne peut pas vérifier d’où vient cette installation (l’ordinateur n’a pas encore indiqué le dépôt, ou Cindy y est plus ancienne) : vous ne pouvez que la refuser ici. Actualisez le marketplace sur l’ordinateur et demandez à l’Agent de réessayer, ou confirmez sur l’ordinateur.",
     "mcpComplete": "Terminé",
     "mcpCancel": "Annuler",
     "mode": {

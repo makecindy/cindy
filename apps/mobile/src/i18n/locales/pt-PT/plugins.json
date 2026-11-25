@@ -350,7 +350,7 @@
       "repository": "Repositório {{repository}}",
       "repositoryRef": "Repositório {{repository}} ({{ref}})",
       "localFolder": "Pasta local",
-      "repositoryMissingInstall": "Este computador não indicou o repositório, por isso esta instalação não pode ser permitida a partir do telemóvel. Atualize a Cindy no computador ou instale a partir dele.",
+      "repositoryMissingInstall": "Este computador não indicou o repositório, por isso esta instalação não pode ser permitida a partir do telemóvel. Atualize o mercado no computador e tente novamente (atualize primeiro a Cindy se for mais antiga), ou instale a partir do computador.",
       "repositoryMissingUpdate": "Este computador não indicou o repositório. Para verificar a origem, procure este mercado em “Mercados adicionados” nas definições do computador."
     },
     "sourceNotice": {
@@ -460,8 +460,8 @@
     "unconfirmedNotInstalled": "Não foi possível confirmar o resultado desta instalação. O plugin não está neste computador de momento.",
     "alreadyInstalled": "Este plugin já está instalado neste computador.",
     "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um ficheiro local, de outra versão ou de outra origem. Verifique no computador.",
-    "sourceUnverified": "A Cindy neste computador não indica de que repositório vem este mercado, por isso ainda não é possível instalar a partir do telemóvel. Atualize a Cindy no computador ou instale a partir dele.",
-    "sourceUnverifiedShort": "Este computador não indica o repositório. Instale a partir do computador.",
+    "sourceUnverified": "Este computador ainda não indicou o repositório deste mercado, por isso não é possível instalar a partir do telemóvel. Atualize este mercado no computador e tente novamente; se a Cindy no computador for mais antiga, atualize-a primeiro ou instale a partir dele.",
+    "sourceUnverifiedShort": "Este computador ainda não indicou o repositório. Atualize o mercado no computador e tente novamente, ou instale a partir dele.",
     "sourceChanged": "A origem deste mercado acabou de mudar. Escolha novamente o plugin a instalar."
   }
 }

@@ -348,7 +348,7 @@
       "repository": "儲存庫 {{repository}}",
       "repositoryRef": "儲存庫 {{repository}}（{{ref}}）",
       "localFolder": "本機資料夾",
-      "repositoryMissingInstall": "這台電腦沒有提供儲存庫資訊，無法在手機上允許這次安裝。請先更新電腦上的 Cindy，或在電腦上安裝。",
+      "repositoryMissingInstall": "這台電腦沒有提供儲存庫資訊，無法在手機上允許這次安裝。請在電腦上重新整理這個市場後再試（Cindy 較舊時先更新），或在電腦上安裝。",
       "repositoryMissingUpdate": "這台電腦沒有提供儲存庫資訊。如需核對來源，請在電腦設定的「已新增的市場」中查看這個市場。"
     },
     "sourceNotice": {
@@ -458,8 +458,8 @@
     "unconfirmedNotInstalled": "未能確認這次安裝的結果；目前這台電腦上沒有這個插件。",
     "alreadyInstalled": "這台電腦已經安裝了這個插件。",
     "unconfirmedMismatch": "未能確認這次安裝的結果；這台電腦上同標識的插件可能來自本機檔案、其他版本或其他來源，請在電腦上核對。",
-    "sourceUnverified": "這台電腦上的 Cindy 版本不會告知這個市場來自哪個儲存庫，暫時無法從手機安裝。請先更新電腦上的 Cindy，或在電腦上安裝。",
-    "sourceUnverifiedShort": "這台電腦未提供儲存庫資訊，請在電腦上安裝。",
+    "sourceUnverified": "這台電腦暫時沒有提供這個市場的儲存庫資訊，暫時無法從手機安裝。請在電腦上重新整理這個市場後再試；如果電腦上的 Cindy 版本較舊，請先更新，或直接在電腦上安裝。",
+    "sourceUnverifiedShort": "這台電腦暫未提供儲存庫資訊。請在電腦上重新整理這個市場後再試，或在電腦上安裝。",
     "sourceChanged": "這個市場的來源剛剛有變化，請重新選擇要安裝的插件。"
   }
 }
