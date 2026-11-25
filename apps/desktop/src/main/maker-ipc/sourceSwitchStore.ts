@@ -41,24 +41,30 @@ export function normalizeSourceSwitchFile(raw: unknown): SourceSwitchFile {
   return { switches: Object.fromEntries(kept) };
 }
 
-const file = createOverrideSettingsFile<SourceSwitchFile>({
-  filePath: () => ownerScopedUserDataPath('codex-source-switch.json'),
-  scopeKey: activeOwnerScopeKey,
-  defaults: { switches: {} },
-  normalize: normalizeSourceSwitchFile,
-  log: desktopMakerLogger,
-  label: 'codex-source-switch',
-  maxBytes: 1024 * 1024,
-  // Transient intent, not user settings: a damaged file is replaced, never kept in place.
-  preserveUnreadableFile: false,
-  logLoadedValue: false,
-});
+// Built on first use: importing this module must not require an owner-scoped userData directory
+// (tests and early bootstrap import the modules above without one).
+let fileStore: ReturnType<typeof createOverrideSettingsFile<SourceSwitchFile>> | undefined;
+function file(): ReturnType<typeof createOverrideSettingsFile<SourceSwitchFile>> {
+  fileStore ??= createOverrideSettingsFile<SourceSwitchFile>({
+    filePath: () => ownerScopedUserDataPath('codex-source-switch.json'),
+    scopeKey: activeOwnerScopeKey,
+    defaults: { switches: {} },
+    normalize: normalizeSourceSwitchFile,
+    log: desktopMakerLogger,
+    label: 'codex-source-switch',
+    maxBytes: 1024 * 1024,
+    // Transient intent, not user settings: a damaged file is replaced, never kept in place.
+    preserveUnreadableFile: false,
+    logLoadedValue: false,
+  });
+  return fileStore;
+}
 
 /** Remember the source the user picked, replacing this task's previous record. */
 export async function recordSourceSwitch(sessionId: string, providerId: string | null): Promise<void> {
   if (!SESSION_ID.test(sessionId) || !providerId || !PROVIDER_ID.test(providerId)) return;
   const atMs = Date.now();
-  await file.updateAtomic(({ value }) => ({
+  await file().updateAtomic(({ value }) => ({
     switches: { ...value.switches, [sessionId]: { providerId, atMs } },
   }));
 }
@@ -82,15 +88,16 @@ export async function recordSourceSwitchBestEffort(sessionId: string, providerId
 /** Whether this task still waits for the source the user picked; a stale record never matches. */
 export function matchesSourceSwitch(sessionId: string, providerId: string | null): boolean {
   if (!SESSION_ID.test(sessionId) || !providerId) return false;
-  file.invalidateIfChanged();
-  const recorded = file.read().switches[sessionId];
+  const store = file();
+  store.invalidateIfChanged();
+  const recorded = store.read().switches[sessionId];
   return recorded?.providerId === providerId && Date.now() - recorded.atMs < MAX_AGE_MS;
 }
 
 /** The handoff that protects the transcript committed; the record has no further use. */
 export async function consumeSourceSwitch(sessionId: string): Promise<void> {
   if (!SESSION_ID.test(sessionId)) return;
-  await file.updateAtomic(({ value }) => {
+  await file().updateAtomic(({ value }) => {
     if (!(sessionId in value.switches)) return null;
     const switches = { ...value.switches };
     delete switches[sessionId];
