@@ -198,14 +198,25 @@ export function ghostInstallConsentKey(
 }
 
 /**
- * 换源确认（`originSourceChanged`）的提示文案键（契约 V2.4b）。确认后旧实例归档、旧账号与数据隔离：自定义市场
- * 的文案同时提醒核对上面显示的仓库；服务端市场（显式替换为插件市场版本）用不提仓库的文案；其它来源不出现。
+ * 换源确认（`originSourceChanged`）的提示文案键（契约 V2.4b）。确认后旧实例归档、旧账号与数据隔离：
+ * - 服务端市场（显式替换为插件市场版本）：`marketSourceChanged`，不提仓库；
+ * - 自定义市场且确认里确实展示了仓库（`originSource` 是合形的 git 身份，与来源行同一判定）：`originSourceChanged`，
+ *   同时提醒核对上面显示的仓库；
+ * - 其余自定义市场（本地文件夹、身份缺省或形状不对）：`sourceChangedIsolated`，只说换源与数据隔离；
+ * - 其它来源不出现。
+ * 本机确认、电脑作远程端／分享替换、任务卡与 IM 卡都用这一处判定。
  */
 export function ghostInstallSourceChangedNoticeKey(
-  request: { origin?: GhostInstallConsentRequest['origin']; originSourceChanged?: GhostInstallConsentRequest['originSourceChanged'] },
+  request: {
+    origin?: GhostInstallConsentRequest['origin'];
+    originSource?: unknown;
+    originSourceChanged?: GhostInstallConsentRequest['originSourceChanged'];
+  },
 ): string | null {
   if (request.originSourceChanged !== true) return null;
-  if (request.origin === 'custom-market') return 'settings.ghosts.installConsent.originSourceChanged';
   if (request.origin === 'market') return 'settings.ghosts.installConsent.marketSourceChanged';
-  return null;
+  if (request.origin !== 'custom-market') return null;
+  return isPluginMarketSourceIdentity(request.originSource) && request.originSource.kind === 'git'
+    ? 'settings.ghosts.installConsent.originSourceChanged'
+    : 'settings.ghosts.installConsent.sourceChangedIsolated';
 }

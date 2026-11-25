@@ -110,7 +110,7 @@ function ConsentSection({ title, children }: { title: string; children: ReactNod
   );
 }
 
-export function GhostInstallConsentContent({ facts, origin, communityMarket, capabilityOnly = false, replacement = false, sourceChanged = false, originSourceChanged = false }: {
+export function GhostInstallConsentContent({ facts, origin, communityMarket, capabilityOnly = false, replacement = false, sourceChanged = false, originSourceChanged = false, originSource }: {
   facts: GhostInstallConsentFacts; origin?: GhostInstallConsentRequest['origin'];
   communityMarket?: GhostInstallConsentRequest['communityMarket'];
   capabilityOnly?: boolean; replacement?: boolean; sourceChanged?: boolean;
@@ -119,9 +119,13 @@ export function GhostInstallConsentContent({ facts, origin, communityMarket, cap
    * 分享替换共用这段内容，调用方必须原样传入请求里的 `originSourceChanged`，否则远程用户看不到在换源。
    */
   originSourceChanged?: boolean;
+  /** 确认里的来源身份：只有展示了仓库时，换源提示才提「上面显示的仓库」。 */
+  originSource?: GhostInstallConsentRequest['originSource'];
 }) {
   const { t } = useTranslation();
-  const sourceChangedNotice = ghostInstallSourceChangedNoticeKey({ origin, ...(originSourceChanged ? { originSourceChanged: true } : {}) });
+  const sourceChangedNotice = ghostInstallSourceChangedNoticeKey({
+    origin, originSource, ...(originSourceChanged ? { originSourceChanged: true } : {}),
+  });
   if (facts.kind === 'install') {
     const sourceNotice = ghostInstallSourceNoticeKey(origin, communityMarket);
     return (
@@ -275,7 +279,7 @@ export function GhostInstallConsentHost() {
                   </div>}
                   <GhostInstallConsentContent facts={facts} origin={request.origin} communityMarket={request.communityMarket} capabilityOnly={capabilityOnly}
                     replacement={replacement} sourceChanged={request.target?.sourceChanged}
-                    originSourceChanged={request.originSourceChanged === true} />
+                    originSourceChanged={request.originSourceChanged === true} originSource={request.originSource} />
                 </>,
                 maxWidth: 460,
                 // 来源行可能带最长 256 字符、无空格的仓库标识，必须可断行，不能撑宽弹窗。

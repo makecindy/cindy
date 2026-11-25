@@ -8566,6 +8566,7 @@
         "originRepositoryRef": "Dépôt {{repository}} ({{ref}})",
         "originLocalFolder": "Dossier local",
         "originSourceChanged": "Cette mise à jour provient d’une autre source que la version installée. Les comptes et données existants sont archivés séparément ; reconnectez vos comptes après la mise à jour. Continuez uniquement si vous faites confiance au dépôt indiqué ci-dessus.",
+        "sourceChangedIsolated": "Cette mise à jour provient d’une autre source que la version installée. Les comptes et données existants sont archivés séparément ; reconnectez vos comptes après la mise à jour.",
         "marketSourceChanged": "Cette mise à jour passe à la version du marketplace de plugins. Les comptes et données existants sont archivés séparément. Reconnectez vos comptes après la mise à jour."
       },
       "trust": {

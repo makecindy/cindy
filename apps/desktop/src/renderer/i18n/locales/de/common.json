@@ -8492,6 +8492,7 @@
         "originRepositoryRef": "Repository {{repository}} ({{ref}})",
         "originLocalFolder": "Lokaler Ordner",
         "originSourceChanged": "Dieses Update stammt aus einer anderen Quelle als die installierte Version. Bestehende Konten und Daten werden separat archiviert; verbinde deine Konten nach dem Update erneut. Fahre nur fort, wenn du dem oben angezeigten Repository vertraust.",
+        "sourceChangedIsolated": "Dieses Update stammt aus einer anderen Quelle als die installierte Version. Bestehende Konten und Daten werden separat archiviert; verbinde deine Konten nach dem Update erneut.",
         "marketSourceChanged": "Dieses Update wechselt zur Version aus dem Plugin-Marktplatz. Bestehende Konten und Daten werden separat archiviert. Verbinde deine Konten nach dem Update erneut."
       },
       "trust": {

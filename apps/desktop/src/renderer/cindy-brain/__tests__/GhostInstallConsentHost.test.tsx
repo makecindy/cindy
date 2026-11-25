@@ -405,3 +405,26 @@ describe('GhostInstallConsentHost', () => {
     await waitFor(() => expect(resolveInstallConsent).toHaveBeenCalledWith('consent-2', false));
   });
 });
+
+// PR #12731 maintainer review 6057084746 (unit, shared confirmation content): the source-change notice may only ask
+// the user to trust "the repository shown above" when a repository is shown. A local folder, a missing or malformed
+// identity and the official market each get wording that names no repository.
+describe('source-change notice wording', () => {
+  const facts = { kind: 'install' as const, ghostId: 'weather', name: 'Weather', version: '2.0.0', permissions: [] };
+  it.each([
+    ['a shown repository', 'custom-market' as const, { kind: 'git' as const, repository: 'github.com/acme/plugins', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' }, 'originSourceChanged'],
+    ['a local folder', 'custom-market' as const, { kind: 'local' as const, sourceId: 'AbCdEfGhIjKlMnOpQrStUv' }, 'sourceChangedIsolated'],
+    ['no source identity', 'custom-market' as const, undefined, 'sourceChangedIsolated'],
+    ['a malformed identity', 'custom-market' as const, { kind: 'git' } as never, 'sourceChangedIsolated'],
+    ['the official market', 'market' as const, undefined, 'marketSourceChanged'],
+  ])('uses the right notice for %s', (_label, origin, originSource, expected) => {
+    const view = render(<GhostInstallConsentContent facts={facts} origin={origin} originSourceChanged originSource={originSource} />);
+    const text = view.container.textContent ?? '';
+    expect(text).toContain(`settings.ghosts.installConsent.${expected}`);
+    for (const other of ['originSourceChanged', 'sourceChangedIsolated', 'marketSourceChanged'].filter((key) => key !== expected)) {
+      expect(text).not.toContain(`settings.ghosts.installConsent.${other}`);
+    }
+    view.unmount();
+  });
+});
+

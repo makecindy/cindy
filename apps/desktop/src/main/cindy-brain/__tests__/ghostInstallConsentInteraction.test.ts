@@ -243,6 +243,15 @@ describe('plugin install confirmation card', () => {
       originSourceChanged: true, facts: switched }, translate);
     expect(marketReplacement.input).toMatchObject({ operation: 'install', origin: 'market', originSourceChanged: true });
     expect(marketReplacement.description).toContain(translate('settings.ghosts.installConsent.marketSourceChanged'));
+    // Review 6057084746: a local-folder market (or a missing identity) shows no repository, so the card text must
+    // not ask to trust one; the input still flags the switch.
+    for (const originSource of [{ kind: 'local' as const, sourceId: SOURCE_ID }, undefined]) {
+      const card = buildGhostInstallConsentInteraction('req-9', { initiator: 'agent', origin: 'custom-market',
+        originLabel: 'Acme', ...(originSource ? { originSource } : {}), originSourceChanged: true, facts: switched }, translate);
+      expect(card.input).toMatchObject({ originSourceChanged: true });
+      expect(card.description).toContain(translate('settings.ghosts.installConsent.sourceChangedIsolated'));
+      expect(card.description).not.toContain(translate('settings.ghosts.installConsent.originSourceChanged'));
+    }
     const otherOrigin = buildGhostInstallConsentInteraction('req-8', { initiator: 'agent', origin: 'local-file',
       originSourceChanged: true, facts: update }, translate);
     expect(otherOrigin.input).not.toHaveProperty('originSourceChanged');

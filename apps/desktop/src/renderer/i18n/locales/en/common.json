@@ -8492,6 +8492,7 @@
         "originRepositoryRef": "Repository {{repository}} ({{ref}})",
         "originLocalFolder": "Local folder",
         "originSourceChanged": "This update comes from a different source than the installed version. Existing accounts and data are archived separately; connect your accounts again after updating. Continue only if you trust the repository shown above.",
+        "sourceChangedIsolated": "This update comes from a different source than the installed version. Existing accounts and data are archived separately; connect your accounts again after updating.",
         "marketSourceChanged": "This update switches to the version from the plugin market. Existing accounts and data are archived separately. Connect your accounts again after updating."
       },
       "trust": {

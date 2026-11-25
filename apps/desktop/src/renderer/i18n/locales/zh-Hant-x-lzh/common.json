@@ -8449,6 +8449,7 @@
         "originRepositoryRef": "儲存庫 {{repository}}（{{ref}}）",
         "originLocalFolder": "此機卷匣",
         "originSourceChanged": "此番更新所出之源，與已裝之版不同。舊名籍與資料隔離保留，須重新連接名籍。唯信上列之儲存庫，方可續之。",
+        "sourceChangedIsolated": "此番更新所出之源，與已裝之版不同。舊名籍與資料隔離保留，須重新連接名籍。",
         "marketSourceChanged": "此次更新將改為法器坊之版。舊名籍與資料隔離保留，須重新連接名籍。"
       },
       "trust": {

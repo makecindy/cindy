@@ -154,6 +154,11 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     版本时确认的 `origin` 是 `'market'`，同样带 `originSourceChanged: true`，提示文案不提仓库（「这次更新会改为插件
     市场里的版本……」）。提交锁内的判定与确认时不一致即拒绝（`PRECONDITION_FAILED`），不沿用任何一边。手机端与
     Agent 发起的安装不允许跨路由替换（`allowSourceReplacement: false`）。
+  - 换源提示的文案按确认里展示了什么来定（本机确认、电脑作远程端／分享替换、任务卡与 IM 卡共用
+    `ghostInstallSourceChangedNoticeKey`）：`origin === 'market'` → `marketSourceChanged`（「改为插件市场里的版本」）；
+    `origin === 'custom-market'` 且 `originSource` 是合形的 git 身份（确认里展示了仓库）→ `originSourceChanged`（提醒
+    核对上面显示的仓库）；其余自定义市场（本地文件夹、身份缺省或形状不对）→ `sourceChangedIsolated`（只说换源与
+    数据隔离，不提仓库）。三句都说明旧账号和数据隔离保存、需要重新连接账号。
   - 换源确认按首装展示：旧实例的批准（任务、页面、控制节点、执行引擎、免确认工具、文件打开方式、Cindy 模型）随
     旧来源归档、不继承，所以 `facts` 是 `kind: 'install'`，`permissions` 是新来源的完整权限（不是相对旧来源的差异），
     锁内复核与新 receipt 的各项授予都用同一份事实；确认键仍绑定实际的受体实例。提交时若已不再是换源，这份确认

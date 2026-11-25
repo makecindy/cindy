@@ -8449,6 +8449,7 @@
         "originRepositoryRef": "儲存庫 {{repository}}（{{ref}}）",
         "originLocalFolder": "本機資料夾",
         "originSourceChanged": "這次更新的來源與已安裝的版本不同。舊帳號和資料會隔離保留，需要重新連接帳號。請確認你信任上面顯示的儲存庫後再繼續。",
+        "sourceChangedIsolated": "這次更新的來源與已安裝的版本不同。舊帳號和資料會隔離保留，需要重新連接帳號。",
         "marketSourceChanged": "這次更新會改為插件市場裡的版本。舊帳號和資料會隔離保留，需要重新連接帳號。"
       },
       "trust": {

@@ -8566,6 +8566,7 @@
         "originRepositoryRef": "Repositorio {{repository}} ({{ref}})",
         "originLocalFolder": "Carpeta local",
         "originSourceChanged": "Esta actualización procede de un origen distinto al de la versión instalada. Las cuentas y los datos existentes se archivan por separado; vuelve a conectar tus cuentas después de actualizar. Continúa solo si confías en el repositorio que se muestra arriba.",
+        "sourceChangedIsolated": "Esta actualización procede de un origen distinto al de la versión instalada. Las cuentas y los datos existentes se archivan por separado; vuelve a conectar tus cuentas después de actualizar.",
         "marketSourceChanged": "Esta actualización cambia a la versión del mercado de complementos. Las cuentas y los datos existentes se archivan por separado. Vuelve a conectar tus cuentas después de actualizar."
       },
       "trust": {
