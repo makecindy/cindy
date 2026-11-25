@@ -50,6 +50,7 @@ const MCP_APP_SIDEBAR_LOADING_HEIGHT = 48;
 const MCP_APP_LOADING_INDICATOR_DELAY_MS = 400;
 const MCP_APP_HEIGHT_FALLBACK_DELAY_MS = 500;
 const MCP_APP_RESTORED_SHRINK_GRACE_MS = 2_000;
+const MCP_APP_INITIAL_TOOL_LAYOUT_LIMIT_MS = 15_000;
 // A history page can mount several cards in one React commit. Read all settled
 // column widths before React commits any of their restored heights.
 const pendingHeightRestores = new Set<() => void>();
@@ -306,7 +307,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     let restoredHeight = rememberLayout ? heights.get(heightKey, openingWidth) : undefined;
     let heightFallbackTimer: ReturnType<typeof setTimeout> | undefined;
     const adoptHeight = (height: number, remember = true) => {
-      if (initialized && restoredHeight !== undefined && measuredWidth === openingWidth && height < restoredHeight) return;
+      if (initialized && restoredHeight !== undefined && height < restoredHeight &&
+          (measuredWidth === openingWidth || heights.get(heightKey, measuredWidth) === restoredHeight)) return;
       restoredHeight = undefined;
       if (remember) {
         clearTimeout(heightFallbackTimer);
@@ -314,6 +316,26 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           heights.remember(heightKey, measuredWidth, height);
       }
       setHeight(height);
+    };
+    let revealedAt: number | undefined;
+    let initialToolActive = false;
+    let toolSettledAt: number | undefined;
+    const finishHeightFallback = () => {
+      restoredHeight = undefined;
+      if (disposed || fixedRef.current || latestHeight === undefined || measuredWidth !== element.clientWidth) return;
+      adoptHeight(latestHeight);
+    };
+    const scheduleRestoredShrink = () => {
+      if (restoredHeight === undefined || revealedAt === undefined) return;
+      const limit = revealedAt + MCP_APP_INITIAL_TOOL_LAYOUT_LIMIT_MS;
+      // The reply goes to the guest first. Give its promise handler and the SDK's
+      // layout observer time to report. If nothing changes, use the last report.
+      const deadline = initialToolActive ? limit : Math.min(limit, Math.max(
+        revealedAt + MCP_APP_RESTORED_SHRINK_GRACE_MS,
+        (toolSettledAt ?? -Infinity) + MCP_APP_HEIGHT_FALLBACK_DELAY_MS,
+      ));
+      clearTimeout(heightFallbackTimer);
+      heightFallbackTimer = setTimeout(finishHeightFallback, Math.max(0, deadline - performance.now()));
     };
     let handshakeStarted = false;
     let revealTimer: ReturnType<typeof setTimeout> | undefined;
@@ -418,6 +440,17 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     const receive = (event: MessageEvent) => {
       if (!frame || event.source !== frame.contentWindow) return;
       const message = event.data as AppRpc;
+      if (message?.method === 'ui/notifications/sandbox-initial-tool-active') {
+        const active = message.params?.active;
+        if (!disposed && deviceId === undefined && restoredHeight !== undefined &&
+            event.origin === `cindy-mcp-app://${localViewId}` && message.jsonrpc === '2.0' &&
+            typeof active === 'boolean' && active !== initialToolActive) {
+          initialToolActive = active;
+          if (!active) toolSettledAt = performance.now();
+          scheduleRestoredShrink();
+        }
+        return;
+      }
       if (message?.method === 'ui/notifications/sandbox-proxy-ready') {
         controller.sandboxReady(`cindy-mcp-app://${localViewId}-view/resource`);
       } else controller.receive(message);
@@ -425,6 +458,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     const reveal = () => {
       if (disposed || revealedFrame) return;
       revealedFrame = true;
+      revealedAt = performance.now();
       clearTimeout(revealTimer); clearTimeout(staticTimer); clearTimeout(maxTimer);
       clearTimeout(loadingTimer);
       if (frame) { frame.style.opacity = '1'; frame.style.pointerEvents = 'auto'; }
@@ -436,12 +470,9 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         restoredHeight = undefined;
       }
       if (!fixedRef.current && !initialized && latestHeight !== undefined) adoptHeight(latestHeight);
-      if (!fixedRef.current && initialized && (restoredHeight !== undefined || (!sizeDelivered && latestHeight !== undefined))) {
-        heightFallbackTimer = setTimeout(() => {
-          restoredHeight = undefined;
-          if (disposed || fixedRef.current || latestHeight === undefined || measuredWidth !== element.clientWidth) return;
-          adoptHeight(latestHeight);
-        }, restoredHeight !== undefined ? MCP_APP_RESTORED_SHRINK_GRACE_MS : MCP_APP_HEIGHT_FALLBACK_DELAY_MS);
+      if (restoredHeight !== undefined) scheduleRestoredShrink();
+      else if (!fixedRef.current && initialized && !sizeDelivered && latestHeight !== undefined) {
+        heightFallbackTimer = setTimeout(finishHeightFallback, MCP_APP_HEIGHT_FALLBACK_DELAY_MS);
       }
       // A sidebar already waiting on a reported size keeps its compact footprint.
       // Give pages with no size notification the standard viewport once visible.

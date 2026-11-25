@@ -56,6 +56,7 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
     resume = vi.fn(async () => {});
     context = vi.fn(async () => {});
     prepareNativeClose = vi.fn();
+    receive = vi.fn();
     displayMode = vi.fn(async (displayMode: string) => {
       this.message({ method: 'ui/notifications/host-context-changed', params: { displayMode } });
     });
@@ -628,6 +629,62 @@ it.each([false, true])('keeps a tall restored card through a slow initial render
     expect(frameRoot.style.height).toBe('1015px');
     await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 280 } }));
     expect(frameRoot.style.height).toBe('280px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+// Unit: original confirmation page reported 2px before its initial tool-result;
+// at 3.8s the layout appeared, after the old 2s fallback had persisted 80px.
+it.each(['unchanged', 'short', 'silent', 'unmount', 'hung'])('waits for a slow initial tool then settles the %s page', async outcome => {
+  let width = 912;
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width);
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  const key = JSON.stringify([null, 'slow-task', outcome]);
+  desktopMcpAppHeights.remember(key, 914, 1041);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="slow-task" clientId={outcome} title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const page = state.controllers[0], frame = container.querySelector('iframe')!, mount = frame.parentElement!;
+    const size = (height: number) => page.message({ method: 'ui/notifications/size-changed', params: { height } });
+    const activity = (active: boolean, origin = 'cindy-mcp-app://view-1') => window.dispatchEvent(new MessageEvent('message', {
+      source: frame.contentWindow, origin,
+      data: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-initial-tool-active', params: { active } },
+    }));
+    width = 914;
+    await act(async () => {
+      page.message({ method: 'ui/notifications/initialized' });
+      size(2);
+      page.message({ method: 'ui/notifications/sandbox-result-delivered' });
+      activity(true);
+      activity(false, 'cindy-mcp-app://view-1-view');
+    });
+    await act(() => vi.advanceTimersByTimeAsync(2_100));
+    if (outcome === 'short') await act(async () => size(55));
+    await act(() => vi.advanceTimersByTimeAsync(1_700));
+    expect(mount.style.height).toBe('1041px');
+    expect(desktopMcpAppHeights.get(key, width)).toBe(1041);
+    if (outcome === 'unmount') {
+      await act(async () => root.render(null));
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(desktopMcpAppHeights.get(key, width)).toBe(1041);
+      return;
+    }
+    if (outcome === 'hung') {
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(mount.style.height).toBe('80px');
+      return;
+    }
+    await act(async () => activity(false));
+    expect(mount.style.height).toBe('1041px');
+    const expected = outcome === 'unchanged' ? 1041 : outcome === 'short' ? 195 : 80;
+    if (outcome !== 'silent') await act(async () => size(expected));
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(mount.style.height).toBe(expected + 'px');
+    expect(desktopMcpAppHeights.get(key, width)).toBe(expected);
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
