@@ -1922,7 +1922,7 @@
       "imBot": "Bots de mensajería",
       "ghosts": "Complementos",
       "cindyMake": "Cindy Make",
-      "modelGroups": "Grupos de modelos"
+      "modelGroups": "Enrutamiento inteligente"
     },
     "sections": {
       "user": "Usuario",
@@ -18572,7 +18572,7 @@
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Intensidad de razonamiento",
         "boundLocationLocked": "Las tareas vinculadas siguen ejecutándose donde están. Elige un modelo de esa computadora.",
-        "modelGroupTitle": "Grupo de modelos «{{name}}»: elige una fuente al crear una tarea nueva"
+        "modelGroupTitle": "Enrutamiento inteligente «{{name}}»: elige una fuente cuando una ejecución inicia una tarea nueva"
       }
     },
     "toast": {
@@ -22872,10 +22872,10 @@
     "refreshFailed": "El tema se ha instalado, pero no se pudo actualizar la lista. Actualízala en los ajustes de apariencia."
   },
   "modelGroups": {
-    "title": "Grupos de modelos",
-    "description": "Combina varias fuentes que ya tienes en Proveedores en una sola opción. Elígela en «Grupos de modelos» del selector de modelos y Cindy decide qué fuente usar cada vez.",
-    "routes": "Modos",
-    "routesDescription": "Un modo contiene varias fuentes. Cada tarea nueva elige una según la regla del modo.",
+    "title": "Enrutamiento inteligente",
+    "description": "Combina fuentes que ya tienes en Proveedores de modelos en una sola opción. Elígela en «Enrutamiento inteligente» del selector de modelos y Cindy decide qué fuente usar.",
+    "routes": "Rutas",
+    "routesDescription": "Combina varias fuentes en una sola opción. Una fuente puede ser un proveedor completo (elige un modelo como siempre y la ruta decide cuál lo ejecuta) o un modelo concreto. Los proveedores de la misma marca se combinan automáticamente.",
     "sourceCount_one": "{{count}} fuente",
     "sourceCount_many": "{{count}} fuentes",
     "sourceCount_other": "{{count}} fuentes",
@@ -22886,7 +22886,7 @@
       },
       "order": {
         "title": "En orden",
-        "hint": "Pasa a la siguiente fuente solo cuando la anterior no se puede usar."
+        "hint": "Pasa a la siguiente fuente solo cuando la de arriba no se puede usar."
       },
       "rotate": {
         "title": "Por turnos",
@@ -22910,14 +22910,14 @@
       }
     },
     "picker": {
-      "empty": "Aún no hay grupos de modelos. Combina varias fuentes en un modo en Ajustes para elegirlo aquí.",
-      "manage": "Gestionar grupos de modelos",
-      "deviceTitle": "Grupos de modelos · {{device}}",
+      "empty": "Aún no hay enrutamiento inteligente. Combina varias fuentes en una ruta en Ajustes para elegirla aquí.",
+      "manage": "Gestionar enrutamiento inteligente",
+      "deviceTitle": "Enrutamiento inteligente · {{device}}",
       "switched": "«{{name}}» cambió esta tarea a {{model}}",
       "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo.",
       "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó.",
-      "mergedLabel": "{{name}} · modo ({{count}} fuentes)",
-      "routeDecides": "El modo «{{name}}» decide qué fuente usa esta tarea"
+      "mergedLabel": "{{name}} · ruta ({{count}} fuentes)",
+      "routeDecides": "La ruta «{{name}}» decide qué fuente usa esta tarea"
     },
     "why": {
       "expiringQuota": "Le queda un {{left}}% de cuota y se restablece el {{reset}}, así que va primero",
@@ -22929,7 +22929,7 @@
       "soonestUntil": "Todas las fuentes agotaron su cuota; esta se recupera antes ({{reset}})",
       "standby": "Esta vez no le toca",
       "standbyQuota": "Le queda un {{left}}% de cuota y no se restablece hasta el {{reset}}, así que se reserva",
-      "off": "Desactivada en este modo",
+      "off": "Desactivada en esta ruta",
       "unavailable": "Sin conexión, o este modelo no se puede elegir ahora",
       "limited": "Cuota agotada",
       "limitedUntil": "Cuota agotada hasta el {{reset}}",
@@ -22944,22 +22944,22 @@
       "noVision": "El mensaje tiene imágenes y esta fuente no puede verlas",
       "exceptionImage": "El mensaje tiene imágenes, así que solo se consideraron las fuentes que pueden verlas",
       "exceptionImageFallback": "El mensaje tiene imágenes, pero ninguna fuente puede verlas, así que se eligió como siempre",
-      "exceptionHours": "En este horario usa «{{name}}»",
+      "exceptionHours": "En este horario usa «{{name}}» en su lugar",
       "separator": "; "
     },
     "settings": {
       "autoSwitch": {
-        "title": "Cambiar de fuente automáticamente si falla",
-        "hint": "Cuando falla la fuente que usa este modo, pasar a la siguiente disponible y anotarlo bajo ese turno. Si está desactivado, solo se propone el cambio en el error."
+        "title": "Cambiar de fuente automáticamente si una falla",
+        "hint": "Cuando falla la fuente que usa esta ruta, pasar a la siguiente disponible y anotarlo bajo ese turno. Si está desactivado, solo se propone el cambio en el error."
       },
-      "newRoute": "Nuevo modo",
-      "newRouteName": "Nuevo modo",
-      "routesEmpty": "Aún no hay modos. Crea uno y añade varias fuentes.",
-      "scopeNote": "Los grupos de modelos se aplican a las tareas de este ordenador. Una tarea nueva elige una fuente al empezar. Si eliges uno en una tarea en curso, cambia una vez en ese momento y después no cambia por sí sola.",
-      "back": "Volver a grupos de modelos",
+      "newRoute": "Nueva ruta",
+      "newRouteName": "Nueva ruta",
+      "routesEmpty": "Aún no hay rutas. Crea una y añade varias fuentes.",
+      "scopeNote": "El enrutamiento inteligente se aplica a las tareas de este ordenador. Una tarea nueva elige una fuente al empezar. Si eliges una ruta en una tarea en curso, cambia una vez en ese momento y después no cambia por sí sola.",
+      "back": "Volver al enrutamiento inteligente",
       "name": "Nombre",
       "nameHint": "Se muestra en el selector de modelos.",
-      "routeShownAs": "Se muestra en «Grupos de modelos» del selector de modelos.",
+      "routeShownAs": "Se muestra en «Enrutamiento inteligente» del selector de modelos.",
       "pick": "Cuál usar",
       "effort": "Intensidad de razonamiento",
       "effortUnset": "Sin especificar",
@@ -22970,14 +22970,14 @@
       "sources": "Fuentes que puede usar",
       "sourcesHint": "Puede haber modelos distintos. La tarea indica cuál se usó.",
       "sourcesEmpty": "Aún no hay fuentes. Añade abajo un modelo conectado.",
-      "sourcesFull": "Un modo admite hasta {{count}} fuentes.",
+      "sourcesFull": "Una ruta admite hasta {{count}} fuentes.",
       "addSource": "Añadir fuente",
       "chooseModel": "Elegir un modelo",
       "notConnected": "Sin conexión",
       "moveUp": "Subir",
       "moveDown": "Bajar",
-      "remove": "Quitar de este modo",
-      "useSource": "Permitir que este modo use {{name}}",
+      "remove": "Quitar de esta ruta",
+      "useSource": "Permitir que esta ruta use {{name}}",
       "try": {
         "title": "Probar",
         "hint": "Mira qué fuente usaría ahora una tarea nueva. No se envía nada ni se gasta cuota.",
@@ -22985,11 +22985,11 @@
         "picked": "Usar esta",
         "standby": "En reserva",
         "skipped": "Omitida",
-        "unavailable": "Ninguna fuente de este modo se puede usar ahora. Una tarea nueva usará el modelo que tenías seleccionado."
+        "unavailable": "Ninguna fuente de esta ruta se puede usar ahora. Una tarea nueva usará el modelo que tenías seleccionado."
       },
-      "deleteRoute": "Eliminar este modo",
+      "deleteRoute": "Eliminar esta ruta",
       "deleteRouteConfirmTitle": "¿Eliminar «{{name}}»?",
-      "deleteRouteConfirmDescription": "Las excepciones por horario de otros modos que cambian a él también se eliminan. Las tareas ya iniciadas no se ven afectadas.",
+      "deleteRouteConfirmDescription": "Las excepciones por horario de otras rutas que cambian a ella también se eliminan. Las tareas ya iniciadas no se ven afectadas.",
       "delete": "Eliminar",
       "cancel": "Cancelar",
       "saveFailed": "No se pudo guardar. Inténtalo de nuevo.",
@@ -22998,8 +22998,8 @@
         "hint": "Se comprueban antes de la regla de elección, de arriba abajo.",
         "empty": "Aún no hay excepciones. Cada tarea nueva usa la regla de elección de arriba.",
         "imageRule": "Cuando el mensaje tenga imágenes, usar solo fuentes que puedan verlas",
-        "hoursRule": "{{from}}–{{to}}: usar «{{name}}»",
-        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar «{{name}}»",
+        "hoursRule": "{{from}}–{{to}}: usar «{{name}}» en su lugar",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar «{{name}}» en su lugar",
         "remove": "Quitar esta excepción",
         "add": "Añadir una excepción",
         "choose": "Elegir una situación",
@@ -23014,18 +23014,18 @@
         "addHours": "Añadir",
         "sameHour": "El inicio y el fin no pueden ser la misma hora.",
         "full": "Hasta {{count}} excepciones.",
-        "needOtherRoute": "Crea otro modo para poder cambiar a él por horario."
+        "needOtherRoute": "Crea otra ruta para poder cambiar a ella por horario."
       }
     },
     "overview": {
       "mapTitle": "Cómo eligen modelo las tareas nuevas",
-      "mapDescription": "De izquierda a derecha: el modo que sigue y la fuente a la que llega. Haz clic en un modo para cambiarlo.",
+      "mapDescription": "De izquierda a derecha: la ruta que sigue una tarea nueva y la fuente a la que llega. Haz clic en una ruta para cambiarla.",
       "columnSources": "Fuentes",
       "columnEmpty": "Aún no hay",
-      "openRoute": "Abrir el modo «{{name}}»",
+      "openRoute": "Abrir la ruta «{{name}}»",
       "recentTitle": "Elecciones recientes",
-      "recentEmpty": "Ninguna tarea ha usado aún un modo.",
-      "keptOriginal": "No había ningún modelo disponible, así que la tarea usó el modelo que habías elegido.",
+      "recentEmpty": "Ninguna tarea ha usado aún una ruta.",
+      "keptOriginal": "No había nada disponible en ella, así que la tarea mantuvo el modelo que habías elegido.",
       "keptOriginalShort": "Se mantuvo tu modelo",
       "latest": "El camino que siguió la última tarea"
     },
@@ -23043,7 +23043,7 @@
       "hiddenTag": "Oculto",
       "show": "Mostrar en el selector de modelos",
       "assignedBy": "Las tareas nuevas se asignan según «{{strategy}}»",
-      "adjust": "Ajustar en Grupos de modelos",
+      "adjust": "Ajustar en Enrutamiento inteligente",
       "quotaFirst": "Entre cuentas u ordenadores, sea cual sea la estrategia, si se puede leer el uso de la suscripción va primero la que tenga más cuota antes de su próximo reinicio; la estrategia decide entre las que están parecidas."
     },
     "sources": {
@@ -23052,15 +23052,15 @@
       "models_other": "{{count}} modelos",
       "autoTag": "Automático",
       "chooseProvider": "Elegir proveedor",
-      "removeAria": "Quitar {{name}} de este modo",
-      "note": "Los modos automáticos siguen tus proveedores conectados. No se pueden añadir ni quitar miembros, pero puedes reordenarlos, asignar pesos, desactivar uno, cambiar la estrategia u ocultar el modo.",
+      "removeAria": "Quitar {{name}} de esta ruta",
+      "note": "Las rutas automáticas siguen tus proveedores conectados. No se pueden añadir ni quitar miembros, pero puedes reordenarlos, asignar pesos, desactivar uno, cambiar la estrategia u ocultar la ruta.",
       "providers_one": "{{count}} proveedor",
       "providers_many": "{{count}} proveedores",
       "providers_other": "{{count}} proveedores",
       "addWhole": "Añadir un proveedor completo",
-      "addWholeHint": "Todos sus modelos entran en este modo. En el selector funciona como un proveedor: elige el modelo como siempre y el modo decide qué miembro lo ejecuta.",
-      "addModelHint": "Añade un modelo de un proveedor. Al elegir este modo se escoge una de estas fuentes según la estrategia.",
-      "detailHint": "Este modo combina proveedores completos. En el selector funciona como un proveedor: elige modelo y esfuerzo como siempre."
+      "addWholeHint": "Todos sus modelos entran en esta ruta. En el selector de modelos, la ruta funciona como un proveedor: elige el modelo como siempre y la ruta decide qué miembro lo ejecuta.",
+      "addModelHint": "Añade un modelo de un proveedor. Al elegir esta ruta se escoge una de estas fuentes según su estrategia.",
+      "detailHint": "Esta ruta combina proveedores completos. En el selector de modelos funciona como un proveedor: elige modelo e intensidad de razonamiento como siempre y la ruta decide qué miembro lo ejecuta."
     },
     "kinds": {
       "byModel": "Por modelo",

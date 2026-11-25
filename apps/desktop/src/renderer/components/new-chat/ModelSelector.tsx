@@ -134,6 +134,7 @@ import { isTemporaryCatalogFailure } from '@/lib/temporaryCatalogFailure';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
 import { modelCatalogKey, type ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
+import { RouteSourceMark } from '@/components/icons/RouteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
 import {
   collectRemoteProviderGroups,
@@ -5528,7 +5529,23 @@ export function ModelSelector({
           )}
           {/* 图标统一规则:模型条目 icon(AI Gateway / 目录设定)优先、缺省回落
               当前真正路由的来源标(activeSourceId)——客户端不按 model id 猜厂牌。 */}
-          {activeSourceId && agentDevice ? (
+          {activeSourceId && activeSourceRouteName ? (
+            // 选着合并整个供应商的路由下的模型：这次用哪个成员(在哪里运行)由路由决定，画路由角标，不画某个成员所在位置的信号波纹。
+            <span className={cn('mr-1.5 inline-flex', isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : 'text-[var(--model-trigger-text)]')}>
+              <RouteSourceMark markSize={14}>
+                <ModelIconMark
+                  icon={triggerModelIcon}
+                  providerId={activeSourceId}
+                  name={triggerActiveProvider?.name}
+                  routing={triggerActiveProvider?.routing}
+                  logoKind={triggerActiveProvider?.logoKind}
+                  customIcon={triggerActiveProvider?.customIcon}
+                  colorClass="text-current"
+                  withMargin={false}
+                />
+              </RouteSourceMark>
+            </span>
+          ) : activeSourceId && agentDevice ? (
             // Agent 在另一台电脑:Logo 原大小原位置不变，右上角外侧叠信号波纹。
             <RemoteSourceMark
               className={cn(

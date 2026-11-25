@@ -1854,7 +1854,7 @@
       "imBot": "IM 机器人",
       "ghosts": "法器",
       "cindyMake": "Cindy Make",
-      "modelGroups": "模型组"
+      "modelGroups": "智能路由"
     },
     "sections": {
       "user": "用者",
@@ -18328,7 +18328,7 @@
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "思之深浅",
         "boundLocationLocked": "所系差事仍于原机行之，请择彼机之模型。",
-        "modelGroupTitle": "模型组「{{name}}」：新立任务则依式择源"
+        "modelGroupTitle": "智能路由「{{name}}」：每行而起新任务，则择一源"
       }
     },
     "toast": {
@@ -22568,10 +22568,11 @@
     "refreshFailed": "主题已装入，清单未能更新，请于外观规制中重新整理"
   },
   "modelGroups": {
-    "title": "模型组",
-    "description": "合模型供方已有之数源为一项。择模型时于「模型组」取之，此番用何源，由 Cindy 定夺。",
-    "routes": "模式",
-    "routesDescription": "一模式纳数源，新差事起时，依择法取其一。",
+    "title": "智能路由",
+    "description": "合模型供方已有之数源为一项。择模型时于「智能路由」取之，此番用何源，由 Cindy 定夺。",
+    "routes": "路",
+    "routesDescription": "合数源为一项。源可为整供方（择模型如常，由路定用何者），亦可为某一模型。同家之数供方，自合之。",
+    "sourceCount_one": "{{count}} 源",
     "sourceCount_other": "{{count}} 源",
     "strategy": {
       "expiring": {
@@ -22604,14 +22605,14 @@
       }
     },
     "picker": {
-      "empty": "尚无模型组。于设定合数源为一模式，即可于此择之。",
-      "manage": "理模型组",
-      "deviceTitle": "模型组 · {{device}}",
+      "empty": "尚无智能路由。于设定合数源为一路，即可于此择之。",
+      "manage": "理智能路由",
+      "deviceTitle": "智能路由 · {{device}}",
       "switched": "「{{name}}」已将此差事易为 {{model}}",
       "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
       "chooseUnavailable": "「{{name}}」今无可用之源，未取之。",
-      "mergedLabel": "{{name}} · 模式（{{count}} 源）",
-      "routeDecides": "此番用何源，由模式「{{name}}」定之"
+      "mergedLabel": "{{name}} · 路（{{count}} 源）",
+      "routeDecides": "此番用何源，由路「{{name}}」定之"
     },
     "why": {
       "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
@@ -22623,7 +22624,7 @@
       "soonestUntil": "诸源限额皆尽，彼最先复（{{reset}}）",
       "standby": "此番未及",
       "standbyQuota": "限额尚余 {{left}}%，{{reset}} 方重设，姑留之",
-      "off": "已于此模式停用",
+      "off": "已于此路停用",
       "unavailable": "未连线，或此模型今不可择",
       "limited": "限额已尽",
       "limitedUntil": "限额已尽，{{reset}} 复",
@@ -22643,17 +22644,17 @@
     },
     "settings": {
       "autoSwitch": {
-        "title": "遇阻自换来源",
-        "hint": "此模式所用来源有阻，则自换次一可用者，并于该轮下书明。关之，则仅于出错时提议换源。"
+        "title": "遇阻自换源",
+        "hint": "此路所用之源有阻，则自换次一可用者，并于该轮下书明。关之，则仅于出错时提议换源。"
       },
-      "newRoute": "立模式",
-      "newRouteName": "新模式",
-      "routesEmpty": "尚无模式。立其一，纳数源于中。",
-      "scopeNote": "模型组用于此机之差事：起新差事时定一源；于行中之差事择之，即时易一次，此后不自易。",
-      "back": "归模型组",
+      "newRoute": "立新路",
+      "newRouteName": "新路",
+      "routesEmpty": "尚无路。立其一，纳数源于中。",
+      "scopeNote": "智能路由用于此机之差事：起新差事时定一源；于行中之差事择之，即时易一次，此后不自易。",
+      "back": "归智能路由",
       "name": "名",
       "nameHint": "择模型时显此名。",
-      "routeShownAs": "择模型时见于「模型组」。",
+      "routeShownAs": "择模型时见于「智能路由」。",
       "pick": "此番用何者",
       "effort": "思之深浅",
       "effortUnset": "不指定",
@@ -22664,14 +22665,14 @@
       "sources": "可用之源",
       "sourcesHint": "可纳不同模型；实用何者，书于差事之中。",
       "sourcesEmpty": "尚无源。于下增已连线之模型。",
-      "sourcesFull": "一模式至多 {{count}} 源。",
+      "sourcesFull": "一路至多 {{count}} 源。",
       "addSource": "增源",
       "chooseModel": "择一模型",
       "notConnected": "未连线",
       "moveUp": "上移",
       "moveDown": "下移",
-      "remove": "逐出此模式",
-      "useSource": "令此模式用 {{name}}",
+      "remove": "逐出此路",
+      "useSource": "令此路用 {{name}}",
       "try": {
         "title": "试之",
         "hint": "观今起新差事将用何者。不遣讯，不耗限额。",
@@ -22679,11 +22680,11 @@
         "picked": "用之",
         "standby": "备用",
         "skipped": "略过",
-        "unavailable": "此模式今无可用之源，新差事将用君原择之模型。"
+        "unavailable": "此路今无可用之源，新差事将用君原择之模型。"
       },
-      "deleteRoute": "删此模式",
+      "deleteRoute": "删此路",
       "deleteRouteConfirmTitle": "删「{{name}}」？",
-      "deleteRouteConfirmDescription": "他模式中改行此式之时段例外将一并删除。已起之差事不受影响。",
+      "deleteRouteConfirmDescription": "他路中改行此路之时段例外将一并删除。已起之差事不受影响。",
       "delete": "删除",
       "cancel": "罢",
       "saveFailed": "未能存之，请再试。",
@@ -22708,18 +22709,18 @@
         "addHours": "增",
         "sameHour": "起讫不可同时。",
         "full": "至多 {{count}} 条例外。",
-        "needOtherRoute": "再立一模式，方可依时段改行之。"
+        "needOtherRoute": "再立一路，方可依时段改行之。"
       }
     },
     "overview": {
       "mapTitle": "今如何行",
-      "mapDescription": "自左而右：行何模式，终落何源。点模式可修之。",
+      "mapDescription": "自左而右：行何路，终落何源。点路可修之。",
       "columnSources": "源",
       "columnEmpty": "尚无",
-      "openRoute": "启模式「{{name}}」",
+      "openRoute": "启路「{{name}}」",
       "recentTitle": "近日所择",
-      "recentEmpty": "尚无差事用过模式。",
-      "keptOriginal": "其中今无可用之模型，仍用原择之模型。",
+      "recentEmpty": "尚无差事用过路。",
+      "keptOriginal": "路中今无可用者，仍用原择之模型。",
       "keptOriginalShort": "仍用原模型",
       "latest": "近一差事所行之路"
     },
@@ -22727,26 +22728,30 @@
       "action": "易用 {{model}} 续之"
     },
     "auto": {
+      "accounts_one": "{{count}} 账号",
       "accounts_other": "{{count}} 账号",
+      "computers_one": "{{count}} 机",
       "computers_other": "{{count}} 机",
       "pickFor": "{{name}} 之择法",
       "hiddenTag": "已隐",
       "show": "择模型时列之",
-      "assignedBy": "新任务依「{{strategy}}」分之",
-      "adjust": "于模型组调之",
+      "assignedBy": "新差事依「{{strategy}}」分之",
+      "adjust": "于智能路由调之",
       "quotaFirst": "账号之间、诸机之间，无论何择法，能读订阅用量者，先用将复而余多者；相若乃依择法。"
     },
     "sources": {
+      "models_one": "{{count}} 模型",
       "models_other": "{{count}} 模型",
       "autoTag": "自成",
       "chooseProvider": "择供应商",
-      "removeAria": "自此模式去 {{name}}",
-      "note": "自成之模式随供应商之连接增减：其员不可增删，然可易其先后、定其权重、停其一，亦可易择法或隐之。",
+      "removeAria": "自此路去 {{name}}",
+      "note": "自成之路随供应商之连接增减：其员不可增删，然可易其先后、定其权重、停其一，亦可易择法或隐此路。",
+      "providers_one": "{{count}} 供应商",
       "providers_other": "{{count}} 供应商",
       "addWhole": "添整供应商",
-      "addWholeHint": "其诸模型皆入此模式：择模型时此模式如一供应商，择模型如常，由模式定用何员。",
-      "addModelHint": "独添某供应商之某模型：择此模式时依择法于诸源择其一。",
-      "detailHint": "此模式合整供应商：择模型时如一供应商，择模型与思深如常。"
+      "addWholeHint": "其诸模型皆入此路：择模型时此路如一供应商，择模型如常，由路定用何员。",
+      "addModelHint": "独添某供应商之某模型：择此路时依择法于诸源择其一。",
+      "detailHint": "此路合整供应商：择模型时如一供应商，择模型与思深如常，由路定用何员。"
     },
     "kinds": {
       "byModel": "依模型",
@@ -22754,7 +22759,7 @@
     },
     "buddies": {
       "title": "伙伴",
-      "description": "诸伙伴常用何模型，有失则换何备。亦可择智能之路，每番用何源由路定之。",
+      "description": "诸伙伴常用何模型，有失则换何备。亦可择智能路由之路，每番用何源由路定之。",
       "saveFailed": "伙伴之模型未存，请再试",
       "remoteHint": "在 {{device}}"
     }

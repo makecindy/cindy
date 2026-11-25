@@ -1884,7 +1884,7 @@
       "imBot": "IM-Bots",
       "ghosts": "Plugins",
       "cindyMake": "Cindy Make",
-      "modelGroups": "Modellgruppen"
+      "modelGroups": "Smartes Routing"
     },
     "sections": {
       "user": "Benutzer",
@@ -18403,7 +18403,7 @@
         "categoryListAria": "{{category}}-Modelle",
         "effortListAria": "Denkintensität",
         "boundLocationLocked": "Gebundene Aufgaben laufen weiterhin auf ihrem bisherigen Computer. Wähle ein Modell von diesem Computer.",
-        "modelGroupTitle": "Modellgruppe „{{name}}“: wählt eine Quelle, wenn eine neue Aufgabe erstellt wird"
+        "modelGroupTitle": "Smartes Routing „{{name}}“: wählt eine Quelle, wenn ein Lauf eine neue Aufgabe startet"
       }
     },
     "toast": {
@@ -22657,10 +22657,10 @@
     "refreshFailed": "Das Theme wurde installiert, aber die Liste konnte nicht aktualisiert werden. Aktualisiere sie in den Darstellungseinstellungen."
   },
   "modelGroups": {
-    "title": "Modellgruppen",
-    "description": "Fasse mehrere Quellen, die du unter Anbieter bereits hast, zu einer Auswahl zusammen. Wähle sie in der Modellauswahl unter „Modellgruppen“, und Cindy entscheidet, welche Quelle verwendet wird.",
-    "routes": "Modi",
-    "routesDescription": "Ein Modus enthält mehrere Quellen. Jede neue Aufgabe wählt eine nach der Regel des Modus.",
+    "title": "Smartes Routing",
+    "description": "Fasse Quellen, die du unter Modellanbieter bereits hast, zu einer Auswahl zusammen. Wähle sie in der Modellauswahl unter „Smartes Routing“, und Cindy entscheidet, welche Quelle verwendet wird.",
+    "routes": "Routen",
+    "routesDescription": "Fasse mehrere Quellen zu einer Auswahl zusammen. Eine Quelle kann ein ganzer Anbieter sein (du wählst wie gewohnt ein Modell, und die Route entscheidet, wer es ausführt) oder ein bestimmtes Modell. Anbieter derselben Marke werden automatisch zusammengefasst.",
     "sourceCount_one": "{{count}} Quelle",
     "sourceCount_other": "{{count}} Quellen",
     "strategy": {
@@ -22670,7 +22670,7 @@
       },
       "order": {
         "title": "Der Reihe nach",
-        "hint": "Wechselt erst zur nächsten Quelle, wenn die vorherige nicht nutzbar ist."
+        "hint": "Wechselt erst zur nächsten Quelle, wenn die darüber nicht nutzbar ist."
       },
       "rotate": {
         "title": "Abwechselnd",
@@ -22694,14 +22694,14 @@
       }
     },
     "picker": {
-      "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einem Modus zusammen, um ihn hier auszuwählen.",
-      "manage": "Modellgruppen verwalten",
-      "deviceTitle": "Modellgruppen · {{device}}",
+      "empty": "Noch kein smartes Routing. Fasse in den Einstellungen mehrere Quellen zu einer Route zusammen, um sie hier auszuwählen.",
+      "manage": "Smartes Routing verwalten",
+      "deviceTitle": "Smartes Routing · {{device}}",
       "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
       "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert.",
       "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt.",
-      "mergedLabel": "{{name}} · Modus ({{count}} Quellen)",
-      "routeDecides": "Der Modus „{{name}}“ bestimmt, welche Quelle diese Aufgabe nutzt"
+      "mergedLabel": "{{name}} · Route ({{count}} Quellen)",
+      "routeDecides": "Die Route „{{name}}“ bestimmt, welche Quelle diese Aufgabe nutzt"
     },
     "why": {
       "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
@@ -22713,7 +22713,7 @@
       "soonestUntil": "Alle Quellen haben ihr Kontingent aufgebraucht; diese erholt sich zuerst ({{reset}})",
       "standby": "Diesmal nicht an der Reihe",
       "standbyQuota": "Noch {{left}} % Kontingent, Zurücksetzung erst am {{reset}} – wird aufgespart",
-      "off": "In diesem Modus deaktiviert",
+      "off": "In dieser Route deaktiviert",
       "unavailable": "Nicht verbunden, oder dieses Modell ist gerade nicht wählbar",
       "limited": "Kontingent aufgebraucht",
       "limitedUntil": "Kontingent aufgebraucht bis {{reset}}",
@@ -22728,22 +22728,22 @@
       "noVision": "Die Nachricht enthält Bilder, und diese Quelle kann keine Bilder sehen",
       "exceptionImage": "Die Nachricht enthält Bilder, daher wurden nur Quellen berücksichtigt, die Bilder sehen können",
       "exceptionImageFallback": "Die Nachricht enthält Bilder, aber keine Quelle kann Bilder sehen – daher wie üblich gewählt",
-      "exceptionHours": "In diesem Zeitraum wird „{{name}}“ verwendet",
+      "exceptionHours": "In diesem Zeitraum wird stattdessen „{{name}}“ verwendet",
       "separator": "; "
     },
     "settings": {
       "autoSwitch": {
-        "title": "Bei Problemen automatisch die Quelle wechseln",
-        "hint": "Fällt die Quelle dieses Modus aus, zur nächsten nutzbaren wechseln und es unter dem Durchgang vermerken. Ausgeschaltet wird der Wechsel nur beim Fehler angeboten."
+        "title": "Quelle automatisch wechseln, wenn eine ausfällt",
+        "hint": "Fällt die Quelle aus, die diese Route gerade nutzt, wird zur nächsten nutzbaren gewechselt und das unter diesem Durchgang vermerkt. Ist die Option aus, wird ein Wechsel nur beim Fehler angeboten."
       },
-      "newRoute": "Neuer Modus",
-      "newRouteName": "Neuer Modus",
-      "routesEmpty": "Noch keine Modi. Erstelle einen und füge mehrere Quellen hinzu.",
-      "scopeNote": "Modellgruppen gelten für Aufgaben auf diesem Computer. Eine neue Aufgabe wählt beim Start eine Quelle. Wählst du eine in einer laufenden Aufgabe, wird sofort einmal gewechselt; danach wechselt sie nicht von selbst.",
-      "back": "Zurück zu Modellgruppen",
+      "newRoute": "Neue Route",
+      "newRouteName": "Neue Route",
+      "routesEmpty": "Noch keine Routen. Erstelle eine und füge mehrere Quellen hinzu.",
+      "scopeNote": "Smartes Routing gilt für Aufgaben auf diesem Computer. Eine neue Aufgabe wählt beim Start eine Quelle. Wählst du eine Route in einer laufenden Aufgabe, wird sofort einmal gewechselt; danach wechselt sie nicht von selbst.",
+      "back": "Zurück zum smarten Routing",
       "name": "Name",
       "nameHint": "Wird in der Modellauswahl angezeigt.",
-      "routeShownAs": "Wird in der Modellauswahl unter „Modellgruppen“ angezeigt.",
+      "routeShownAs": "Wird in der Modellauswahl unter „Smartes Routing“ angezeigt.",
       "pick": "Welche verwendet wird",
       "effort": "Denkintensität",
       "effortUnset": "Nicht festgelegt",
@@ -22754,14 +22754,14 @@
       "sources": "Nutzbare Quellen",
       "sourcesHint": "Verschiedene Modelle können nebeneinander stehen. Die Aufgabe zeigt, welches verwendet wurde.",
       "sourcesEmpty": "Noch keine Quellen. Füge unten ein verbundenes Modell hinzu.",
-      "sourcesFull": "Ein Modus fasst bis zu {{count}} Quellen.",
+      "sourcesFull": "Eine Route fasst bis zu {{count}} Quellen.",
       "addSource": "Quelle hinzufügen",
       "chooseModel": "Modell auswählen",
       "notConnected": "Nicht verbunden",
       "moveUp": "Nach oben",
       "moveDown": "Nach unten",
-      "remove": "Aus diesem Modus entfernen",
-      "useSource": "{{name}} in diesem Modus verwenden",
+      "remove": "Aus dieser Route entfernen",
+      "useSource": "Diese Route {{name}} verwenden lassen",
       "try": {
         "title": "Ausprobieren",
         "hint": "Sieh nach, welche Quelle eine neue Aufgabe jetzt verwenden würde. Es wird nichts gesendet und kein Kontingent verbraucht.",
@@ -22769,11 +22769,11 @@
         "picked": "Diese verwenden",
         "standby": "Reserve",
         "skipped": "Übersprungen",
-        "unavailable": "Keine Quelle dieses Modus ist gerade nutzbar. Eine neue Aufgabe verwendet das Modell, das du ausgewählt hattest."
+        "unavailable": "Keine Quelle dieser Route ist gerade nutzbar. Eine neue Aufgabe verwendet das Modell, das du ausgewählt hattest."
       },
-      "deleteRoute": "Diesen Modus löschen",
+      "deleteRoute": "Diese Route löschen",
       "deleteRouteConfirmTitle": "„{{name}}“ löschen?",
-      "deleteRouteConfirmDescription": "Tageszeit-Ausnahmen anderer Modi, die zu ihm wechseln, werden ebenfalls gelöscht. Bereits gestartete Aufgaben sind nicht betroffen.",
+      "deleteRouteConfirmDescription": "Tageszeit-Ausnahmen anderer Routen, die zu ihr wechseln, werden ebenfalls entfernt. Bereits gestartete Aufgaben sind nicht betroffen.",
       "delete": "Löschen",
       "cancel": "Abbrechen",
       "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
@@ -22782,8 +22782,8 @@
         "hint": "Werden vor der Auswahlregel geprüft, von oben nach unten.",
         "empty": "Noch keine Ausnahmen. Jede neue Aufgabe folgt der Auswahlregel oben.",
         "imageRule": "Wenn die Nachricht Bilder enthält, nur Quellen verwenden, die Bilder sehen können",
-        "hoursRule": "{{from}}–{{to}}: „{{name}}“ verwenden",
-        "hoursRuleDays": "{{days}} {{from}}–{{to}}: „{{name}}“ verwenden",
+        "hoursRule": "{{from}}–{{to}}: stattdessen „{{name}}“ verwenden",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: stattdessen „{{name}}“ verwenden",
         "remove": "Diese Ausnahme entfernen",
         "add": "Ausnahme hinzufügen",
         "choose": "Situation auswählen",
@@ -22798,17 +22798,17 @@
         "addHours": "Hinzufügen",
         "sameHour": "Beginn und Ende dürfen nicht gleich sein.",
         "full": "Bis zu {{count}} Ausnahmen.",
-        "needOtherRoute": "Erstelle einen weiteren Modus, um nach Tageszeit dorthin zu wechseln."
+        "needOtherRoute": "Erstelle eine weitere Route, um nach Tageszeit zu ihr zu wechseln."
       }
     },
     "overview": {
       "mapTitle": "So wählen neue Aufgaben ein Modell",
-      "mapDescription": "Von links nach rechts: der Modus und die Quelle, bei der es landet. Klicke auf einen Modus, um ihn zu ändern.",
+      "mapDescription": "Von links nach rechts: die Route, die eine neue Aufgabe nimmt, und die Quelle, bei der sie landet. Klicke auf eine Route, um sie zu ändern.",
       "columnSources": "Quellen",
       "columnEmpty": "Noch keine",
-      "openRoute": "Modus „{{name}}“ öffnen",
+      "openRoute": "Route „{{name}}“ öffnen",
       "recentTitle": "Letzte Auswahl",
-      "recentEmpty": "Noch keine Aufgabe hat einen Modus verwendet.",
+      "recentEmpty": "Noch keine Aufgabe hat eine Route verwendet.",
       "keptOriginal": "Darin war kein Modell verfügbar, daher blieb die Aufgabe beim Modell, das du gewählt hattest.",
       "keptOriginalShort": "Dein Modell wurde beibehalten",
       "latest": "Der Weg der letzten Aufgabe"
@@ -22825,7 +22825,7 @@
       "hiddenTag": "Ausgeblendet",
       "show": "In der Modellauswahl anzeigen",
       "assignedBy": "Neue Aufgaben werden nach „{{strategy}}“ verteilt",
-      "adjust": "In Modellgruppen anpassen",
+      "adjust": "Unter „Smartes Routing“ anpassen",
       "quotaFirst": "Zwischen Konten oder Computern gilt unabhängig von der Strategie: Lässt sich die Abo-Nutzung lesen, kommt zuerst, wer vor dem nächsten Zurücksetzen am meisten Kontingent übrig hat; bei ähnlichem Stand entscheidet die Strategie."
     },
     "sources": {
@@ -22833,14 +22833,14 @@
       "models_other": "{{count}} Modelle",
       "autoTag": "Automatisch",
       "chooseProvider": "Anbieter wählen",
-      "removeAria": "{{name}} aus diesem Modus entfernen",
-      "note": "Automatische Modi folgen deinen verbundenen Anbietern. Mitglieder lassen sich nicht hinzufügen oder entfernen, aber du kannst ihre Reihenfolge und Gewichte ändern, einzelne ausschalten, die Strategie ändern oder den Modus ausblenden.",
+      "removeAria": "{{name}} aus dieser Route entfernen",
+      "note": "Automatische Routen folgen deinen verbundenen Anbietern. Mitglieder lassen sich nicht hinzufügen oder entfernen, aber du kannst sie umsortieren, Gewichte festlegen, einzelne ausschalten, die Strategie ändern oder die Route ausblenden.",
       "providers_one": "{{count}} Anbieter",
       "providers_other": "{{count}} Anbieter",
       "addWhole": "Ganzen Anbieter hinzufügen",
-      "addWholeHint": "Alle seine Modelle gehören dann zu diesem Modus. In der Modellauswahl verhält er sich wie ein Anbieter: Modell wie gewohnt wählen, der Modus entscheidet, welches Mitglied es ausführt.",
-      "addModelHint": "Ein Modell eines Anbieters hinzufügen. Beim Wählen dieses Modus wird eine dieser Quellen nach der Strategie gewählt.",
-      "detailHint": "Dieser Modus fasst ganze Anbieter zusammen. In der Modellauswahl verhält er sich wie ein Anbieter: Modell und Denktiefe wie gewohnt wählen."
+      "addWholeHint": "Alle seine Modelle gehören dann zu dieser Route. In der Modellauswahl verhält sich die Route wie ein Anbieter: Wähle wie gewohnt ein Modell, und die Route entscheidet, welches Mitglied es ausführt.",
+      "addModelHint": "Füge ein Modell eines Anbieters hinzu. Wird diese Route gewählt, nimmt sie eine dieser Quellen nach ihrer Strategie.",
+      "detailHint": "Diese Route fasst ganze Anbieter zusammen. In der Modellauswahl verhält sie sich wie ein Anbieter: Wähle Modell und Denkintensität wie gewohnt, und die Route entscheidet, welches Mitglied es ausführt."
     },
     "kinds": {
       "byModel": "Nach Modell",
@@ -22848,7 +22848,7 @@
     },
     "buddies": {
       "title": "Buddies",
-      "description": "Welches Modell jeder Buddy nutzt und auf welche Ersatzmodelle er bei Problemen wechselt. Auch eine smarte Route ist möglich: Sie bestimmt jedes Mal die Quelle.",
+      "description": "Welches Modell jeder Buddy nutzt und auf welche Ersatzmodelle er bei Problemen wechselt. Auch eine Route aus dem smarten Routing ist möglich: Sie bestimmt jedes Mal die Quelle.",
       "saveFailed": "Das Modell des Buddys wurde nicht gespeichert. Versuche es erneut.",
       "remoteHint": "Auf {{device}}"
     }

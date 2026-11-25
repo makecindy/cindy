@@ -1922,7 +1922,7 @@
       "imBot": "Bots de mensagens",
       "ghosts": "Plugins",
       "cindyMake": "Cindy Make",
-      "modelGroups": "Grupos de modelos"
+      "modelGroups": "Roteamento inteligente"
     },
     "sections": {
       "user": "Usuário",
@@ -18572,7 +18572,7 @@
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Esforço de raciocínio",
         "boundLocationLocked": "As tarefas vinculadas continuam sendo executadas onde estão. Escolha um modelo desse computador.",
-        "modelGroupTitle": "Grupo de modelos “{{name}}”: escolhe uma fonte ao criar uma nova tarefa"
+        "modelGroupTitle": "Roteamento inteligente “{{name}}”: escolhe uma fonte quando uma execução inicia uma nova tarefa"
       }
     },
     "toast": {
@@ -22873,37 +22873,37 @@
     "refreshFailed": "O tema foi instalado, mas não foi possível atualizar a lista. Atualize-a nas configurações de aparência."
   },
   "modelGroups": {
-    "title": "Grupos de modelos",
-    "description": "Combine várias fontes que já tem em Provedores em uma única opção. Escolha-a em “Grupos de modelos” no seletor de modelos e a Cindy decide qual fonte usar.",
-    "routes": "Modos",
-    "routesDescription": "Um modo contém várias fontes. Cada nova tarefa escolhe uma segundo a regra do modo.",
+    "title": "Roteamento inteligente",
+    "description": "Combine fontes que você já tem em Provedores em uma única opção. Escolha-a em Roteamento inteligente no seletor de modelos e a Cindy decide qual fonte usar.",
+    "routes": "Rotas",
+    "routesDescription": "Combine várias fontes em uma única opção. Uma fonte pode ser um provedor inteiro (escolha um modelo como sempre e a rota decide qual deles o executa) ou um modelo específico. Provedores da mesma marca são combinados automaticamente.",
     "sourceCount_one": "{{count}} fonte",
     "sourceCount_many": "{{count}} fontes",
     "sourceCount_other": "{{count}} fontes",
     "strategy": {
       "expiring": {
         "title": "Primeiro o que expira",
-        "hint": "Usa primeiro a cota de assinatura que mais sobra e que está prestes a ser redefinida, para não a desperdiçar. As fontes sem cota legível ficam para depois."
+        "hint": "Usa primeiro a cota de assinatura que está sobrando e prestes a ser redefinida, para que nada seja desperdiçado. As fontes sem cota legível vêm depois."
       },
       "order": {
-        "title": "Por ordem",
-        "hint": "Só passa à fonte seguinte quando a anterior não pode ser usada."
+        "title": "Em ordem",
+        "hint": "Só passa para a próxima fonte quando a de cima não pode ser usada."
       },
       "rotate": {
         "title": "Em rodízio",
-        "hint": "Cada nova tarefa passa à fonte seguinte e reparte a carga."
+        "hint": "Cada nova tarefa vai para a próxima fonte, distribuindo a carga por igual."
       },
       "cheapest": {
         "title": "O mais barato",
         "hint": "Usa primeiro as assinaturas com cota disponível, sem custo adicional; o restante segue do menor para o maior preço de tabela, e as fontes sem preço ficam por último."
       },
       "drain": {
-        "title": "Esgotar e passar",
+        "title": "Usar até esgotar",
         "hint": "Continua usando a última fonte até ela ficar sem cota ou indisponível e só então passa para a próxima; não volta quando as anteriores se recuperam."
       },
       "headroom": {
         "title": "Mais cota restante",
-        "hint": "Usa primeiro a fonte com a maior proporção de cota restante (a semanal, se houver); fontes sem cota legível ficam por último."
+        "hint": "Usa a fonte com a maior proporção de cota restante (a cota semanal, se houver); fontes sem cota legível ficam por último."
       },
       "weighted": {
         "title": "Por peso",
@@ -22911,86 +22911,86 @@
       }
     },
     "picker": {
-      "empty": "Ainda não há grupos de modelos. Combine várias fontes em um modo nas Configurações para escolhê-lo aqui.",
-      "manage": "Gerenciar grupos de modelos",
-      "deviceTitle": "Grupos de modelos · {{device}}",
+      "empty": "Ainda não há roteamento inteligente. Combine algumas fontes em uma rota nas Configurações para escolhê-la aqui.",
+      "manage": "Gerenciar roteamento inteligente",
+      "deviceTitle": "Roteamento inteligente · {{device}}",
       "switched": "“{{name}}” trocou esta tarefa para {{model}}",
       "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
-      "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionado.",
-      "mergedLabel": "{{name}} · modo ({{count}} fontes)",
-      "routeDecides": "O modo “{{name}}” decide qual fonte esta tarefa usa"
+      "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionada.",
+      "mergedLabel": "{{name}} · rota ({{count}} fontes)",
+      "routeDecides": "A rota “{{name}}” decide qual fonte esta tarefa usa"
     },
     "why": {
-      "expiringQuota": "Restam {{left}}% da cota, redefinida a {{reset}}, por isso vai primeiro",
+      "expiringQuota": "Restam {{left}}% da cota, que é redefinida {{reset}}, por isso vai primeiro",
       "expiring": "Primeira pela cota",
       "order": "A primeira fonte disponível",
-      "rotate": "Desta vez é a vez dela",
+      "rotate": "Escolhida por rodízio",
       "only": "A única disponível agora",
-      "soonest": "Todas as fontes esgotaram a cota; esta recupera primeiro",
-      "soonestUntil": "Todas as fontes esgotaram a cota; esta recupera primeiro ({{reset}})",
-      "standby": "Desta vez não é a vez dela",
-      "standbyQuota": "Restam {{left}}% da cota, redefinida só a {{reset}}, por isso fica reservada",
-      "off": "Desativada neste modo",
+      "soonest": "Todas as fontes estão sem cota; esta se recupera primeiro",
+      "soonestUntil": "Todas as fontes estão sem cota; esta se recupera primeiro ({{reset}})",
+      "standby": "Não foi escolhida desta vez",
+      "standbyQuota": "Restam {{left}}% da cota, que só é redefinida {{reset}}, por isso fica reservada para depois",
+      "off": "Desativada nesta rota",
       "unavailable": "Sem conexão, ou este modelo não pode ser escolhido agora",
-      "limited": "Cota esgotada",
-      "limitedUntil": "Cota esgotada até {{reset}}",
+      "limited": "Sem cota",
+      "limitedUntil": "Sem cota até {{reset}}",
       "tight": "A cota de 5 horas está quase cheia, por isso é ignorada por agora",
       "cheapest": "Menor preço de tabela",
       "cheapestFree": "Ainda há cota de assinatura, sem custo adicional",
       "drain": "Continua em uso até a cota acabar",
       "drainNext": "A fonte anterior se esgotou ou ficou indisponível, então passou para esta",
-      "headroom": "Tem mais cota restante",
+      "headroom": "Mais cota restante",
       "headroomQuota": "Restam {{left}}% da cota, mais do que em qualquer outra fonte",
       "weighted": "É a vez dela pelo peso",
       "noVision": "A mensagem tem imagens e esta fonte não consegue vê-las",
       "exceptionImage": "A mensagem tem imagens, então só foram consideradas as fontes que conseguem vê-las",
       "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte consegue vê-las, então escolheu como de costume",
-      "exceptionHours": "Neste horário usa “{{name}}”",
+      "exceptionHours": "Neste horário, usa “{{name}}” no lugar",
       "separator": "; "
     },
     "settings": {
       "autoSwitch": {
-        "title": "Trocar de fonte automaticamente quando houver problema",
-        "hint": "Quando a fonte usada por este modo falhar, trocar para a próxima disponível e anotar abaixo daquela rodada. Desligado, a troca só é sugerida no erro."
+        "title": "Trocar de fonte automaticamente quando uma falhar",
+        "hint": "Quando a fonte que esta rota está usando falhar, trocar para a próxima utilizável e anotar isso abaixo daquela rodada. Desligado, a troca só é oferecida no erro."
       },
-      "newRoute": "Novo modo",
-      "newRouteName": "Novo modo",
-      "routesEmpty": "Ainda não há modos. Crie um e adicione várias fontes.",
-      "scopeNote": "Os grupos de modelos aplicam-se às tarefas deste computador. Uma nova tarefa escolhe uma fonte ao começar. Escolher um numa tarefa em andamento troca uma vez, na hora; depois ela não troca sozinha.",
-      "back": "Voltar aos grupos de modelos",
+      "newRoute": "Nova rota",
+      "newRouteName": "Nova rota",
+      "routesEmpty": "Ainda não há rotas. Crie uma e adicione algumas fontes.",
+      "scopeNote": "O roteamento inteligente se aplica às tarefas deste computador. Uma nova tarefa escolhe uma fonte ao começar. Escolher uma rota em uma tarefa já em andamento troca uma vez, na hora; depois ela não troca sozinha.",
+      "back": "Voltar ao roteamento inteligente",
       "name": "Nome",
       "nameHint": "Aparece no seletor de modelos.",
-      "routeShownAs": "Aparece em “Grupos de modelos” no seletor de modelos.",
+      "routeShownAs": "Aparece em Roteamento inteligente no seletor de modelos.",
       "pick": "Qual usar",
       "effort": "Esforço de raciocínio",
       "effortUnset": "Não definido",
-      "effortHint": "Se o modelo escolhido não oferecer suporte a este nível, roda com o seu padrão.",
+      "effortHint": "Se o modelo escolhido não oferecer suporte a este nível, ele roda com o próprio padrão.",
       "weight": "Peso",
       "weightAria": "Peso de “{{name}}”",
       "weightHint": "Com “Por peso”, um peso maior recebe mais tarefas novas. 1–1000.",
-      "sources": "Fontes que pode usar",
-      "sourcesHint": "Podem coexistir modelos diferentes. A tarefa indica qual foi usado.",
+      "sources": "Fontes que ela pode usar",
+      "sourcesHint": "Modelos diferentes podem ficar juntos. A tarefa mostra qual foi usado.",
       "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo conectado.",
-      "sourcesFull": "Um modo aceita até {{count}} fontes.",
+      "sourcesFull": "Uma rota aceita até {{count}} fontes.",
       "addSource": "Adicionar fonte",
       "chooseModel": "Escolher um modelo",
       "notConnected": "Sem conexão",
       "moveUp": "Mover para cima",
       "moveDown": "Mover para baixo",
-      "remove": "Remover deste modo",
-      "useSource": "Permitir que este modo use {{name}}",
+      "remove": "Remover desta rota",
+      "useSource": "Permitir que esta rota use {{name}}",
       "try": {
         "title": "Experimentar",
-        "hint": "Veja qual fonte uma nova tarefa usaria agora. Nada é enviado e não se gasta cota.",
+        "hint": "Veja qual fonte uma nova tarefa usaria agora. Nada é enviado e nenhuma cota é gasta.",
         "run": "Ver a escolha",
         "picked": "Usar esta",
         "standby": "De reserva",
         "skipped": "Ignorada",
-        "unavailable": "Nenhuma fonte deste modo pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado."
+        "unavailable": "Nenhuma fonte desta rota pode ser usada agora. Uma nova tarefa usará o modelo que você tinha selecionado."
       },
-      "deleteRoute": "Excluir este modo",
+      "deleteRoute": "Excluir esta rota",
       "deleteRouteConfirmTitle": "Excluir “{{name}}”?",
-      "deleteRouteConfirmDescription": "As exceções por horário de outros modos que mudam para ele também são excluídas. As tarefas já iniciadas não são afetadas.",
+      "deleteRouteConfirmDescription": "As exceções por horário de outras rotas que trocam para ela também são removidas. As tarefas já iniciadas não são afetadas.",
       "delete": "Excluir",
       "cancel": "Cancelar",
       "saveFailed": "Não foi possível salvar. Tente novamente.",
@@ -22999,8 +22999,8 @@
         "hint": "Verificadas antes da regra de escolha, de cima para baixo.",
         "empty": "Ainda não há exceções. Cada nova tarefa segue a regra de escolha acima.",
         "imageRule": "Quando a mensagem tiver imagens, usar apenas fontes que consigam vê-las",
-        "hoursRule": "{{from}}–{{to}}: usar “{{name}}”",
-        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar “{{name}}”",
+        "hoursRule": "{{from}}–{{to}}: usar “{{name}}” no lugar",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar “{{name}}” no lugar",
         "remove": "Remover esta exceção",
         "add": "Adicionar uma exceção",
         "choose": "Escolher uma situação",
@@ -23013,20 +23013,20 @@
         "daysHint": "Sem dias selecionados, vale para todos os dias. Um intervalo que passa da meia-noite conta para o dia em que começa.",
         "dayRange": "{{from}}–{{to}}",
         "addHours": "Adicionar",
-        "sameHour": "O início e o fim não podem ser a mesma hora.",
+        "sameHour": "O início e o fim não podem ser o mesmo horário.",
         "full": "Até {{count}} exceções.",
-        "needOtherRoute": "Crie outro modo para poder mudar para ele por horário."
+        "needOtherRoute": "Crie outra rota para poder trocar para ela por horário."
       }
     },
     "overview": {
       "mapTitle": "Como as novas tarefas escolhem um modelo",
-      "mapDescription": "Da esquerda para a direita: o modo que segue e a fonte em que termina. Clique em um modo para alterá-lo.",
+      "mapDescription": "Da esquerda para a direita: a rota que uma nova tarefa segue e a fonte em que ela termina. Clique em uma rota para alterá-la.",
       "columnSources": "Fontes",
-      "columnEmpty": "Nenhum ainda",
-      "openRoute": "Abrir o modo “{{name}}”",
+      "columnEmpty": "Nenhuma ainda",
+      "openRoute": "Abrir a rota “{{name}}”",
       "recentTitle": "Escolhas recentes",
-      "recentEmpty": "Nenhuma tarefa usou um modo ainda.",
-      "keptOriginal": "Não havia nenhum modelo disponível, então a tarefa manteve o modelo que você tinha escolhido.",
+      "recentEmpty": "Nenhuma tarefa usou uma rota ainda.",
+      "keptOriginal": "Nada nela estava disponível, então a tarefa manteve o modelo que você tinha escolhido.",
       "keptOriginalShort": "Seu modelo foi mantido",
       "latest": "O caminho que a última tarefa seguiu"
     },
@@ -23041,27 +23041,27 @@
       "computers_many": "{{count}} computadores",
       "computers_other": "{{count}} computadores",
       "pickFor": "Estratégia de {{name}}",
-      "hiddenTag": "Oculto",
+      "hiddenTag": "Oculta",
       "show": "Mostrar no seletor de modelos",
       "assignedBy": "Novas tarefas são atribuídas por “{{strategy}}”",
-      "adjust": "Ajustar em Grupos de modelos",
-      "quotaFirst": "Entre contas ou computadores, seja qual for a estratégia, quando o uso da assinatura pode ser lido vai primeiro quem tem mais cota antes da próxima renovação; a estratégia decide entre os que estão parecidos."
+      "adjust": "Ajustar em Roteamento inteligente",
+      "quotaFirst": "Entre contas ou computadores, seja qual for a estratégia, quando o uso da assinatura pode ser lido vai primeiro quem tem mais cota restante antes da próxima redefinição; a estratégia decide entre os que estão parecidos."
     },
     "sources": {
       "models_one": "{{count}} modelo",
       "models_many": "{{count}} modelos",
       "models_other": "{{count}} modelos",
-      "autoTag": "Automático",
-      "chooseProvider": "Escolher provedor",
-      "removeAria": "Remover {{name}} deste modo",
-      "note": "Os modos automáticos acompanham seus provedores conectados. Não é possível adicionar nem remover membros, mas você pode reordená-los, definir pesos, desativar um deles, mudar a estratégia ou ocultar o modo.",
+      "autoTag": "Automática",
+      "chooseProvider": "Escolher um provedor",
+      "removeAria": "Remover {{name}} desta rota",
+      "note": "As rotas automáticas acompanham seus provedores conectados. Não é possível adicionar nem remover membros, mas você pode reordená-los, definir pesos, desativar um deles, mudar a estratégia ou ocultar a rota.",
       "providers_one": "{{count}} provedor",
       "providers_many": "{{count}} provedores",
       "providers_other": "{{count}} provedores",
       "addWhole": "Adicionar um provedor inteiro",
-      "addWholeHint": "Todos os modelos dele entram neste modo. No seletor ele funciona como um provedor: escolha o modelo como sempre e o modo decide qual membro o executa.",
-      "addModelHint": "Adicione um modelo de um provedor. Ao escolher este modo, uma dessas fontes é escolhida pela estratégia.",
-      "detailHint": "Este modo combina provedores inteiros. No seletor ele funciona como um provedor: escolha modelo e esforço como sempre."
+      "addWholeHint": "Todos os modelos dele entram nesta rota. No seletor de modelos, a rota funciona como um provedor: escolha um modelo como sempre e a rota decide qual membro o executa.",
+      "addModelHint": "Adicione um modelo de um provedor. Ao escolher esta rota, uma dessas fontes é escolhida pela estratégia.",
+      "detailHint": "Esta rota combina provedores inteiros. No seletor de modelos, ela funciona como um provedor: escolha modelo e esforço como sempre e a rota decide qual membro o executa."
     },
     "kinds": {
       "byModel": "Por modelo",
@@ -23069,7 +23069,7 @@
     },
     "buddies": {
       "title": "Parceiros",
-      "description": "Qual modelo cada parceiro usa e para quais modelos reserva ele troca quando algo dá errado. Também dá para escolher uma rota inteligente: ela decide a fonte a cada vez.",
+      "description": "Qual modelo cada parceiro usa e para quais reservas ele troca quando algo dá errado. Uma rota inteligente também serve: ela decide a fonte a cada vez.",
       "saveFailed": "O modelo do parceiro não foi salvo. Tente novamente.",
       "remoteHint": "Em {{device}}"
     }
