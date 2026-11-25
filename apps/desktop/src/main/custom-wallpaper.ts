@@ -172,7 +172,7 @@ export async function revokePluginWallpaper(isCurrent: (source: PluginAppearance
 
 async function recycleUnusedWallpapers(): Promise<void> {
   try {
-    const keep = readReferencedClientWallpaperUrls();
+    const keep = await readReferencedClientWallpaperUrls();
     await recycleClientWallpapers(keep, '.webp');
     await recycleClientWallpapers(keep, '.mp4');
   } catch {

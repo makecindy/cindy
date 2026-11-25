@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
-import type { WallpaperId } from '@/../shared/appearanceSettings';
+import type { WallpaperId, WallpaperMotion } from '@/../shared/appearanceSettings';
 
 /**
  * A temporary, in-memory appearance for the current view, such as the theme and wallpaper
@@ -15,13 +15,16 @@ export interface AppearanceOverride {
   wallpaperId?: WallpaperId;
   /** Required with `wallpaperId: 'custom'`: the teammate's own image, never the global one. */
   customWallpaperUrl?: string;
+  /** Still or moving, for this view's wallpaper only; unset follows the saved setting. */
+  wallpaperMotion?: WallpaperMotion;
 }
 
 let current: { owner: symbol; value: AppearanceOverride } | null = null;
 const listeners = new Set<() => void>();
 
 function sameOverride(a: AppearanceOverride | null, b: AppearanceOverride | null): boolean {
-  return a?.familyId === b?.familyId && a?.wallpaperId === b?.wallpaperId && a?.customWallpaperUrl === b?.customWallpaperUrl;
+  return a?.familyId === b?.familyId && a?.wallpaperId === b?.wallpaperId && a?.customWallpaperUrl === b?.customWallpaperUrl
+    && a?.wallpaperMotion === b?.wallpaperMotion;
 }
 
 function notify(): void {
@@ -61,6 +64,10 @@ export function useAppearanceOverrideWallpaperId(): WallpaperId | null {
 
 export function useAppearanceOverrideCustomWallpaperUrl(): string | null {
   return useSyncExternalStore(onAppearanceOverrideChange, () => current?.value.customWallpaperUrl ?? null);
+}
+
+export function useAppearanceOverrideWallpaperMotion(): WallpaperMotion | null {
+  return useSyncExternalStore(onAppearanceOverrideChange, () => current?.value.wallpaperMotion ?? null);
 }
 
 export function __resetAppearanceOverrideForTest(): void {

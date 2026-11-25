@@ -10,7 +10,7 @@
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 
-import { WALLPAPER_IDS, type WallpaperId } from '@/../shared/appearanceSettings';
+import { WALLPAPER_IDS, type WallpaperId, type WallpaperMotion } from '@/../shared/appearanceSettings';
 import { setAppearanceOverride } from '@/appearance/appearanceOverride';
 
 export const BOT_APPEARANCE_STORAGE_KEY = 'bots.appearance';
@@ -20,6 +20,8 @@ export type BotWallpaperId = WallpaperId;
 export interface BotAppearance {
   familyId?: string;
   wallpaperId?: BotWallpaperId;
+  /** Still or moving for this teammate's own wallpaper; unset follows the app setting. */
+  wallpaperMotion?: WallpaperMotion;
 }
 
 type BotAppearanceMap = Record<string, BotAppearance>;
@@ -50,10 +52,13 @@ function parse(raw: string | null): BotAppearanceMap {
   const out: [string, BotAppearance][] = [];
   for (const [botId, entry] of Object.entries(value as Record<string, unknown>)) {
     if (!entry || typeof entry !== 'object') continue;
-    const { familyId, wallpaperId } = entry as Record<string, unknown>;
+    const { familyId, wallpaperId, wallpaperMotion } = entry as Record<string, unknown>;
     const next: BotAppearance = {};
     if (typeof familyId === 'string' && familyId) next.familyId = familyId;
-    if (isBotWallpaperId(wallpaperId)) next.wallpaperId = wallpaperId;
+    if (isBotWallpaperId(wallpaperId)) {
+      next.wallpaperId = wallpaperId;
+      if (wallpaperMotion === 'static' || wallpaperMotion === 'dynamic') next.wallpaperMotion = wallpaperMotion;
+    }
     if (next.familyId !== undefined || next.wallpaperId !== undefined) out.push([botId, Object.freeze(next)]);
   }
   // fromEntries defines own properties, so an ID such as "__proto__" stays plain data.
@@ -88,7 +93,7 @@ export function getBotAppearance(botId: string | null | undefined): BotAppearanc
 /** `null` 表示回到「跟随全局」，删除对应字段。 */
 export function setBotAppearance(
   botId: string,
-  patch: { familyId?: string | null; wallpaperId?: BotWallpaperId | null },
+  patch: { familyId?: string | null; wallpaperId?: BotWallpaperId | null; wallpaperMotion?: WallpaperMotion | null },
 ): void {
   const entries = new Map(Object.entries(readMap()));
   const next: BotAppearance = { ...entries.get(botId) };
@@ -100,6 +105,12 @@ export function setBotAppearance(
     if (patch.wallpaperId && isBotWallpaperId(patch.wallpaperId)) next.wallpaperId = patch.wallpaperId;
     else delete next.wallpaperId;
   }
+  if (patch.wallpaperMotion !== undefined) {
+    if (patch.wallpaperMotion) next.wallpaperMotion = patch.wallpaperMotion;
+    else delete next.wallpaperMotion;
+  }
+  // Motion belongs to the teammate's own wallpaper; without one there is nothing to move.
+  if (next.wallpaperId === undefined) delete next.wallpaperMotion;
   if (next.familyId === undefined && next.wallpaperId === undefined) entries.delete(botId);
   else entries.set(botId, next);
   const raw = JSON.stringify(Object.fromEntries(entries));
@@ -224,7 +235,8 @@ export function useBotAppearanceOverride(botId: string | null): void {
     const { wallpaperId, ...rest } = appearance;
     // Custom without its media (not loaded yet, or removed) shows the global wallpaper.
     if (wallpaperId === 'custom') {
-      setAppearanceOverride(owner, customUrl ? { ...rest, wallpaperId, customWallpaperUrl: customUrl } : rest);
+      if (customUrl) setAppearanceOverride(owner, { ...rest, wallpaperId, customWallpaperUrl: customUrl });
+      else setAppearanceOverride(owner, rest.familyId ? { familyId: rest.familyId } : null);
     } else {
       setAppearanceOverride(owner, appearance);
     }

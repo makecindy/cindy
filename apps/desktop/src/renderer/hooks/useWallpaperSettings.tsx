@@ -31,6 +31,7 @@ import { useReducedMotion } from './useReducedMotion';
 import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
 import {
   useAppearanceOverrideCustomWallpaperUrl,
+  useAppearanceOverrideWallpaperMotion,
   useAppearanceOverrideWallpaperId,
 } from '../appearance/appearanceOverride';
 import type { DownloadRetryReason } from '@/../shared/downloadProgress';
@@ -125,12 +126,14 @@ export function WallpaperSettingsProvider({
   // settings, and everything the settings page reads and writes, stay unchanged.
   const overrideWallpaperId = useAppearanceOverrideWallpaperId();
   const overrideCustomUrl = useAppearanceOverrideCustomWallpaperUrl();
+  const overrideMotion = useAppearanceOverrideWallpaperMotion();
   const shown = useMemo<WallpaperSettings>(() => {
     if (!overrideWallpaperId) return settings;
-    if (overrideWallpaperId !== 'custom') return { ...settings, wallpaperId: overrideWallpaperId };
+    const wallpaperMotion = overrideMotion ?? settings.wallpaperMotion;
+    if (overrideWallpaperId !== 'custom') return { ...settings, wallpaperId: overrideWallpaperId, wallpaperMotion };
     // A teammate's own image or video; never fall through to the global custom media.
-    return { ...settings, wallpaperId: 'custom', customWallpaperUrl: overrideCustomUrl ?? '', customWallpaperFallbackUrl: undefined };
-  }, [overrideWallpaperId, overrideCustomUrl, settings]);
+    return { ...settings, wallpaperId: 'custom', wallpaperMotion, customWallpaperUrl: overrideCustomUrl ?? '', customWallpaperFallbackUrl: undefined };
+  }, [overrideWallpaperId, overrideCustomUrl, overrideMotion, settings]);
   // Record the media that actually failed: a teammate's broken video must not mark the
   // global custom wallpaper as unplayable in settings.
   const onPlaybackFailure = useCallback(
@@ -390,9 +393,10 @@ export function useWallpaperSettings(): WallpaperSettingsContextValue {
 }
 
 /**
- * The media whose playback failed, for pages that show a view-scoped wallpaper's own error
- * (a teammate's video). Empty when nothing failed or the window has no wallpaper provider.
+ * For pages that show a view-scoped wallpaper's own state (a teammate's appearance page):
+ * the media whose playback failed, and the saved motion a view follows until it chooses its
+ * own. Undefined in a window without a wallpaper provider.
  */
-export function useWallpaperPlaybackFailedUrl(): string {
-  return useContext(WallpaperSettingsContext)?.playbackFailedUrl ?? '';
+export function useOptionalWallpaperSettings(): Pick<WallpaperSettingsContextValue, 'playbackFailedUrl' | 'wallpaperMotion'> | undefined {
+  return useContext(WallpaperSettingsContext);
 }

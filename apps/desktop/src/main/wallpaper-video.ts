@@ -157,9 +157,8 @@ async function ensureWallpaperAsset(
             buffer: bytes,
             mimeType: kind === 'image' ? 'image/webp' : 'video/mp4',
           });
-          await recycleClientWallpapers(readReferencedClientWallpaperUrls(), ext).catch(
-            () => undefined,
-          );
+          const keep = await readReferencedClientWallpaperUrls();
+          await recycleClientWallpapers(keep, ext).catch(() => undefined);
           return media.url;
         });
         reporter.setPhase('completed');

@@ -49,10 +49,36 @@ describe('teammate wallpaper references', () => {
     for (const spy of sync) expect(spy).not.toHaveBeenCalled();
   });
 
-  it('shows nothing for a missing or unreadable file and picks up later writes', async () => {
+  it('shows nothing for a missing file and picks up later writes', async () => {
     expect(await loadBotWallpapers()).toEqual({});
     await updateBotWallpapers((current) => ({ ...current, 'bot-2': url('b') }));
     expect(await loadBotWallpapers()).toEqual({ 'bot-2': url('b') });
+  });
+
+  // Review of 1cc6c34, engineering-conventions.md §8.4: a failed first read was cached as an
+  // empty table, so teammates fell back to the global wallpaper until restart even after the
+  // file became readable. Minimal input: unparseable file, then the same file repaired.
+  it('does not cache a failed read: the next load sees the repaired file', async () => {
+    const file = path.join(h.dir, 'bot-wallpapers.json');
+    fs.writeFileSync(file, '{broken');
+    expect(await loadBotWallpapers()).toEqual({});
+    fs.writeFileSync(file, JSON.stringify({ wallpapers: { 'bot-1': url('a') } }));
+    expect(await loadBotWallpapers()).toEqual({ 'bot-1': url('a') });
+  });
+
+  // Review of 1cc6c34, §8.5: import and removal run in IPC handlers, so the write
+  // transaction (strict read, atomic replace) must not block main with synchronous I/O.
+  it('writes without synchronous disk access', async () => {
+    await updateBotWallpapers(() => ({ 'bot-1': url('a') }));
+    const sync = [
+      vi.spyOn(fs, 'statSync'), vi.spyOn(fs, 'lstatSync'), vi.spyOn(fs, 'readFileSync'),
+      vi.spyOn(fs, 'existsSync'), vi.spyOn(fs, 'openSync'), vi.spyOn(fs, 'writeFileSync'),
+      vi.spyOn(fs, 'renameSync'), vi.spyOn(fs, 'mkdirSync'),
+    ];
+    await updateBotWallpapers((current) => ({ ...current, 'bot-2': url('b') }));
+    expect(JSON.parse(await fs.promises.readFile(path.join(h.dir, 'bot-wallpapers.json'), 'utf8')))
+      .toEqual({ wallpapers: { 'bot-1': url('a'), 'bot-2': url('b') } });
+    for (const spy of sync) expect(spy).not.toHaveBeenCalled();
   });
 
   // Review of 00481ae, engineering-conventions.md §8.2: the write path read the table

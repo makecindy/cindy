@@ -7,10 +7,17 @@ import { extractIpcError } from '@/utils/ipcError';
 
 import { Select } from '@/components/ui/select';
 import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
-import { useWallpaperPlaybackFailedUrl } from '@/hooks/useWallpaperSettings';
+import { useOptionalWallpaperSettings } from '@/hooks/useWallpaperSettings';
+import { SegmentedControl } from '@/components/ui/segmented-control';
+import { isSceneWallpaper } from '@/lib/wallpaper';
 import { getThemeFamilies, tryGetFamily, type ThemeFamily } from '@/themes/families';
 import { onLocalThemesChange } from '@/themes/local-themes';
-import { SELECTABLE_WALLPAPER_IDS, RETIRED_WALLPAPER_IDS } from '@/../shared/appearanceSettings';
+import {
+  SELECTABLE_WALLPAPER_IDS,
+  RETIRED_WALLPAPER_IDS,
+  isCustomWallpaperVideo,
+  type WallpaperMotion,
+} from '@/../shared/appearanceSettings';
 import { isLocalThemeId } from '../../../shared/local-themes';
 
 import { useBotTranslation } from './botPronounContext';
@@ -61,8 +68,15 @@ export function BotAppearanceSettings({ botId }: { botId: string }) {
   const working = useRef(false);
   // The drawer can move to another teammate without remounting this page.
   useEffect(() => setError(''), [botId]);
-  const failedUrl = useWallpaperPlaybackFailedUrl();
-  const playbackFailed = appearance.wallpaperId === 'custom' && !!customUrl && failedUrl === customUrl;
+  const wallpaper = useOptionalWallpaperSettings();
+  const playbackFailed =
+    appearance.wallpaperId === 'custom' && !!customUrl && wallpaper?.playbackFailedUrl === customUrl;
+  // Same rule as the app's wallpaper settings: only wallpapers with a video offer the choice.
+  const canMove = appearance.wallpaperId === 'custom'
+    ? !!customUrl && isCustomWallpaperVideo(customUrl)
+    : !!appearance.wallpaperId && isSceneWallpaper(appearance.wallpaperId);
+  // Follows the app's setting until chosen for this teammate.
+  const motion: WallpaperMotion = appearance.wallpaperMotion ?? wallpaper?.wallpaperMotion ?? 'static';
 
   const chooseImage = async () => {
     if (working.current) return;
@@ -156,6 +170,25 @@ export function BotAppearanceSettings({ botId }: { botId: string }) {
             />
           }
         />
+        {canMove && (
+          <SettingsRow
+            title={t('settings.appearance.wallpaper.motionLabel')}
+            hint={t('settings.appearance.wallpaper.motionHint')}
+            wrap
+            trailing={
+              <SegmentedControl
+                data-settings-search-action="Teammate appearance lives in its own settings drawer, outside the settings index"
+                aria-label={t('settings.appearance.wallpaper.motionLabel')}
+                value={motion}
+                onValueChange={(value: WallpaperMotion) => setBotAppearance(botId, { wallpaperMotion: value })}
+                options={[
+                  { value: 'static', label: t('settings.appearance.wallpaper.motionStatic') },
+                  { value: 'dynamic', label: t('settings.appearance.wallpaper.motionDynamic') },
+                ]}
+              />
+            }
+          />
+        )}
         <SettingsRow
           title={t('settings.appearance.wallpaper.options.custom')}
           hint={t('settings.appearance.wallpaper.customHint')}

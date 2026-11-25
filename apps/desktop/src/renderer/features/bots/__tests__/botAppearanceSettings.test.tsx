@@ -100,6 +100,30 @@ describe('teammate appearance page: own wallpaper media', () => {
     expect(wallpaper()).toHaveProperty('disabled', false);
   });
 
+  // Review of 1cc6c34, docs/design-rules/wallpaper.md (custom MP4 exposes Static / Dynamic):
+  // with the app wallpaper at its defaults (none, static) the app's own control is hidden,
+  // so a teammate video could never play. Minimal input: default app settings, teammate MP4.
+  it('offers still or moving for this teammate’s video without touching the app setting', async () => {
+    const setPatch = vi.fn();
+    stubBridge({ getSync: () => DEFAULT_APPEARANCE_SETTINGS, setPatch });
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    render(<WallpaperSettingsProvider><Page botId="bot-1" /></WallpaperSettingsProvider>);
+    const moving = await screen.findByRole('radio', { name: 'settings.appearance.wallpaper.motionDynamic' });
+    expect(play).not.toHaveBeenCalled();
+    fireEvent.click(moving);
+    expect(getBotAppearance('bot-1').wallpaperMotion).toBe('dynamic');
+    await waitFor(() => expect(play).toHaveBeenCalled());
+    expect(setPatch).not.toHaveBeenCalled();
+  });
+
+  it('offers no motion choice for a still image', async () => {
+    stubBridge({ getBotWallpapers: vi.fn().mockResolvedValue({ 'bot-1': videoUrl.replace('.mp4', '.webp') }) });
+    vi.stubGlobal('Image', class { src = ''; decode = async () => {}; });
+    render(<WallpaperSettingsProvider><Page botId="bot-1" /></WallpaperSettingsProvider>);
+    await screen.findByRole('button', { name: 'settings.appearance.wallpaper.customRemove' });
+    expect(screen.queryByRole('radio', { name: 'settings.appearance.wallpaper.motionDynamic' })).toBeNull();
+  });
+
   // Minimal input: the teammate's own MP4 fails to play while its page is open.
   it('reports that this teammate’s video cannot play', async () => {
     stubBridge({});

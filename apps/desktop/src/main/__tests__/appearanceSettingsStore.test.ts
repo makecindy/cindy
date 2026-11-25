@@ -198,7 +198,7 @@ describe('terminal appearance overrides', () => {
     expect(Object.isFrozen(snapshot.settings.reading)).toBe(true);
     const wallpaperUrl = snapshot.settings.customWallpaperUrl!;
     expect(snapshot.settings.wallpaperId).toBe('custom');
-    expect(readReferencedClientWallpaperUrls()).toContain(wallpaperUrl);
+    expect(await readReferencedClientWallpaperUrls()).toContain(wallpaperUrl);
     expect((await readClientWallpaperFile(wallpaperUrl)).mimeType).toBe('image/webp');
     // A corrupt unselected binary stays discoverable. Actual selection rejects
     // font/image/video corruption before writing settings or publishing defaults.

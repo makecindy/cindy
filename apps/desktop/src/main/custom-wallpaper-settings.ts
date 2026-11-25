@@ -41,7 +41,7 @@ export function readCustomWallpaperUrl(): string {
 }
 
 /** Custom media (global and per teammate) and optional official downloads own references in this scope. */
-export function readReferencedClientWallpaperUrls(): string[] {
+export async function readReferencedClientWallpaperUrls(): Promise<string[]> {
   // Display reads may fall back to defaults; recycling must never interpret a
   // corrupt/unreadable preference as permission to delete the user's video.
   let customUrl = '';
@@ -70,7 +70,7 @@ export function readReferencedClientWallpaperUrls(): string[] {
   return [
     customUrl,
     fallbackUrl,
-    ...readReferencedBotWallpaperUrls(),
+    ...(await readReferencedBotWallpaperUrls()),
     ...appearanceWallpaperReferences(),
     ...Object.values(manifest)
       .filter((item) => item.delivery === 'cdn')
