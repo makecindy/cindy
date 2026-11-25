@@ -3009,7 +3009,7 @@
         "buddyWorkspaceDirectoryTitle": "Freund-Arbeitsbereich",
         "buddyWorkspaceDirectoryDescription": "Speicherort für Arbeitsbereiche neu erstellter Freunde. Bestehende Freunde bleiben an ihrem Ort und können einzeln in der erweiterten Konfiguration verschoben werden.",
         "buddyWorkspaceDirectoryDetails": "Cindy legt hier einen kontospezifischen Unterordner für neue Freund-Arbeitsbereiche an und hält den ursprünglichen Pfad verknüpft.",
-        "buddyWorkspaceDirectoryChoose": "Ordner ändern",
+        "buddyWorkspaceDirectoryChoose": "Verzeichnis ändern",
         "buddyWorkspaceDirectoryFailed": "Der Ordner für Freund-Arbeitsbereiche konnte nicht aktualisiert werden."
       },
       "piKernel": {
@@ -11375,7 +11375,7 @@
       },
       "workspaceLocation": {
         "title": "Arbeitsbereich-Speicherort",
-        "description": "Verschiebe den Arbeitsbereich dieses Freunds auf ein anderes lokales Laufwerk, um Platz auf dem Systemlaufwerk zu sparen. Cindy behält am ursprünglichen Pfad eine Verknüpfung, damit Aufgaben, Automationen und Skripte weiter funktionieren.",
+        "description": "Verschiebe den Arbeitsbereich dieses Freundes auf ein anderes lokales Laufwerk, um Platz auf dem Systemlaufwerk zu sparen. Cindy behält am ursprünglichen Pfad eine Verknüpfung, damit Aufgaben, Automationen und Skripte weiter funktionieren.",
         "movedDescription": "Dieser Arbeitsbereich liegt im oben genannten Zielordner. Behalte sowohl den Zielordner als auch die Verknüpfung am ursprünglichen Pfad.",
         "chooseDialogTitle": "Zielordner für den Freund-Arbeitsbereich wählen",
         "fullPath": "Vollständiger Pfad",
@@ -11424,7 +11424,7 @@
           "localDiskRequired": "Wähle einen lokalen Datenträger statt einer Netzwerkfreigabe.",
           "unsupportedFileOrHardLink": "Der Arbeitsbereich enthält Hardlinks oder Spezialdateien und kann derzeit nicht sicher verschoben werden.",
           "alreadyRedirected": "Dieser Arbeitsbereich wurde bereits umgeleitet. Ein erneutes Verschieben wird noch nicht unterstützt.",
-          "botHomeRedirected": "Das Hauptverzeichnis dieses Freunds wurde manuell umgeleitet und kann nicht automatisch verschoben werden.",
+          "botHomeRedirected": "Das Hauptverzeichnis dieses Freundes wurde manuell umgeleitet und kann nicht automatisch verschoben werden.",
           "targetExists": "Der Zielordner existiert bereits. Wähle einen anderen Speicherort.",
           "workspaceChanged": "Dateien wurden während der Prüfung geändert. Schließe externe Programme und versuche es erneut.",
           "backupRetained": "Die Verschiebung war erfolgreich, aber die Sicherung wich ab und wurde zur Sicherheit behalten.",

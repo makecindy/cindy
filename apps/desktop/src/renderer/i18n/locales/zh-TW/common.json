@@ -2977,7 +2977,7 @@
         "reconcileHealthy": "帳實一致，沒有發現異常。",
         "reconcileIssues": "發現異常：無帳檔案 {{orphans}} 個（{{orphanSize}}）、缺失檔案 {{missing}} 個、無法識別 {{stray}} 個。詳細清單見應用程式日誌。",
         "buddyWorkspaceDirectoryTitle": "夥伴工作區",
-        "buddyWorkspaceDirectoryDescription": "新建夥伴的工作區預設存放於此目錄。既有夥伴維持原位，可在各自的高級設定中單獨遷移。",
+        "buddyWorkspaceDirectoryDescription": "新建夥伴的工作區預設存放於此目錄。既有夥伴維持原位，可在各自的進階設定中單獨遷移。",
         "buddyWorkspaceDirectoryDetails": "Cindy 會在此目錄下為目前帳號建立獨立子目錄存放新建夥伴的工作區，並在原路徑保留目錄連結。",
         "buddyWorkspaceDirectoryChoose": "變更目錄",
         "buddyWorkspaceDirectoryFailed": "無法更新夥伴工作區目錄。"

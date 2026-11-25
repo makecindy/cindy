@@ -3047,7 +3047,7 @@
         "buddyWorkspaceDirectoryTitle": "Espacio de trabajo de amigos",
         "buddyWorkspaceDirectoryDescription": "Carpeta donde los nuevos amigos crean su espacio de trabajo. Los amigos existentes permanecen en su ubicación y pueden moverse individualmente en su configuración avanzada.",
         "buddyWorkspaceDirectoryDetails": "Cindy crea aquí una subcarpeta por cuenta para los espacios de trabajo de nuevos amigos manteniendo enlazada la ruta original.",
-        "buddyWorkspaceDirectoryChoose": "Cambiar carpeta",
+        "buddyWorkspaceDirectoryChoose": "Cambiar directorio",
         "buddyWorkspaceDirectoryFailed": "No se pudo actualizar la carpeta de espacio de trabajo de amigos."
       },
       "piKernel": {

@@ -3047,7 +3047,7 @@
         "buddyWorkspaceDirectoryTitle": "Espace de travail des amis",
         "buddyWorkspaceDirectoryDescription": "Dossier où les nouveaux amis créent leur espace de travail. Les amis existants restent à leur emplacement et peuvent être déplacés individuellement dans leur configuration avancée.",
         "buddyWorkspaceDirectoryDetails": "Cindy crée ici un sous-dossier par compte pour les espaces de travail des nouveaux amis tout en gardant le chemin d'origine lié.",
-        "buddyWorkspaceDirectoryChoose": "Changer de dossier",
+        "buddyWorkspaceDirectoryChoose": "Changer de répertoire",
         "buddyWorkspaceDirectoryFailed": "Impossible de mettre à jour le dossier d'espace de travail des amis."
       },
       "piKernel": {
@@ -11461,7 +11461,7 @@
       },
       "workspaceLocation": {
         "title": "Emplacement de l'espace de travail",
-        "description": "Déplacez l'espace de travail de ce ami vers un autre disque local pour libérer le disque système. Cindy conserve un lien au chemin d'origine pour que tâches, automatisations et scripts continuent de fonctionner.",
+        "description": "Déplacez l'espace de travail de cet ami vers un autre disque local pour libérer le disque système. Cindy conserve un lien au chemin d'origine pour que tâches, automatisations et scripts continuent de fonctionner.",
         "movedDescription": "Cet espace de travail se trouve dans le dossier cible ci-dessus. Conservez à la fois le dossier cible et le lien au chemin d'origine.",
         "chooseDialogTitle": "Choisir le dossier de destination",
         "fullPath": "Chemin complet",
@@ -11510,7 +11510,7 @@
           "localDiskRequired": "Choisissez un dossier sur un disque local plutôt qu'un partage réseau.",
           "unsupportedFileOrHardLink": "Cet espace de travail contient des liens physiques ou fichiers spéciaux ne pouvant pas être déplacés en toute sécurité.",
           "alreadyRedirected": "Cet espace de travail est déjà redirigé. Un second déplacement n'est pas encore pris en charge.",
-          "botHomeRedirected": "Le dossier principal de ce ami a été redirigé manuellement et ne peut pas être déplacé automatiquement.",
+          "botHomeRedirected": "Le dossier principal de cet ami a été redirigé manuellement et ne peut pas être déplacé automatiquement.",
           "targetExists": "Le dossier cible existe déjà. Choisissez un autre emplacement.",
           "workspaceChanged": "Des fichiers ont changé pendant la vérification. Fermez les programmes externes et réessayez.",
           "backupRetained": "Le déplacement a réussi, mais la sauvegarde différait et a été conservée par sécurité.",

@@ -2977,9 +2977,9 @@
         "reconcileHealthy": "帳實相符，未見異狀。",
         "reconcileIssues": "見異狀：無帳之卷 {{orphans}} 個({{orphanSize}})、缺失之卷 {{missing}} 個、不可識者 {{stray}} 個。詳錄見應用日誌。",
         "buddyWorkspaceDirectoryTitle": "同伴工坊",
-        "buddyWorkspaceDirectoryDescription": "新立同伴之工坊皆置於此。舊有同伴仍居故址，可於其進階設定中各自遷徙。",
+        "buddyWorkspaceDirectoryDescription": "新立同伴之工坊皆置於此。舊有同伴仍居故址，可於其進階之設中各自遷徙。",
         "buddyWorkspaceDirectoryDetails": "Cindy 將於此目錄下為本號別立子目錄以置新伴工坊，並留連結於舊徑。",
-        "buddyWorkspaceDirectoryChoose": "易其目錄",
+        "buddyWorkspaceDirectoryChoose": "易目錄",
         "buddyWorkspaceDirectoryFailed": "未能更易同伴工坊目錄。"
       },
       "piKernel": {
@@ -9986,7 +9986,7 @@
       "confirm": "往取之"
     },
     "workspaceMigration": {
-      "title": "方遷夥伴工坊",
+      "title": "方遷同伴工坊",
       "progressLabel": "夥伴工坊遷徙之進",
       "safetyHint": "方抄錄校驗諸卷，未畢前不動故本，切勿強閉 Cindy。",
       "phase": {
@@ -11332,7 +11332,7 @@
         "title": "工坊所在",
         "description": "可遷此伴工坊於本機他盤，以寬系統盤之餘地。Cindy 仍留連結於舊徑，諸務與腳本皆如常無礙。",
         "movedDescription": "今工坊已置於上示新址。請並存新址與舊徑連結，庶免諸務讀寫受阻。",
-        "chooseDialogTitle": "擇夥伴工坊遷往之所",
+        "chooseDialogTitle": "擇同伴工坊遷往之所",
         "fullPath": "全徑",
         "targetPathLabel": "新址目錄",
         "logicalPathLabel": "舊徑連結",
