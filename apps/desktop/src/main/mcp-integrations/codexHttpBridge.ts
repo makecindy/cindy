@@ -20,11 +20,16 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createCatalogTransport } from './antigravityToolCatalog.js';
+import { createCatalogTransport, type ObservedMcpToolCallResult } from './antigravityToolCatalog.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { runWithLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
-import type { Logger } from '@cindy/maker-core';
+import {
+  createMcpToolResultBucket,
+  type Logger,
+  type McpToolResultBucket,
+  type TakeMcpToolResult,
+} from '@cindy/maker-core';
 import {
   createCodexMcpThreadContextStore,
   isSameCodexMcpSessionContext,
@@ -85,6 +90,14 @@ export interface CodexHttpBridge {
   unregisterSessionToken(sessionId: string, expectedToken?: string, generation?: number): void;
   /** 当前存活的 MCP streamable-http 会话数(诊断用,见 countLiveBridgeMcpSessions)。 */
   mcpSessionCount(): number;
+  /**
+   * Records Host MCP `tools/call` responses for one ACP session instance so empty ACP
+   * `tool_call_update` completions can backfill `tool_result_full` (cards, media tokens).
+   */
+  enableMcpToolResultRecording?(
+    sessionId: string,
+    sessionInstanceId?: string,
+  ): { take: TakeMcpToolResult; dispose: () => void };
   shutdown(): Promise<void>;
 }
 
@@ -137,6 +150,8 @@ interface DispatchOpts {
   isInstanceGenerationCurrent?: () => boolean;
   /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
   threadInstanceQuery: string | null;
+  /** Optional Host MCP `tools/call` output observer for opted-in ACP sessions. */
+  onToolCallResult?: (receipt: ObservedMcpToolCallResult) => void;
 }
 
 interface SessionTransport {
@@ -308,6 +323,14 @@ async function startCodexHttpBridge(
   // 用的 token 注销 → pi 的 bridge 请求全部 401。
   const sessionTokenBySessionId = new Map<string, { token: string; generation: number }>();
   let nextTokenGeneration = 0;
+  // Opt-in Host MCP `tools/call` output receipts for ACP sessions whose engine omits
+  // `content`/`rawOutput` on `tool_call_update`. Keyed by sessionId (+ instanceId when present).
+  const receiptBuckets = new Map<string, McpToolResultBucket>();
+  const receiptBucketKey = (sessionId: string, sessionInstanceId?: string): string =>
+    sessionInstanceId ? `${sessionId}\0${sessionInstanceId}` : sessionId;
+  const findReceiptBucket = (sessionId: string, sessionInstanceId?: string): McpToolResultBucket | undefined =>
+    receiptBuckets.get(receiptBucketKey(sessionId, sessionInstanceId))
+    ?? (sessionInstanceId ? receiptBuckets.get(sessionId) : undefined);
 
   const httpServer = http.createServer((req, res) => runTaskActionRequest(async () => {
     res.setHeader('Server', SERVER_HEADER);
@@ -495,6 +518,13 @@ async function startCodexHttpBridge(
           isInstanceGenerationCurrent: handshake ? () => handshake.generation === generation : undefined,
           threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
           remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
+          ...(sessionQuery && findReceiptBucket(sessionQuery, ownerSessionInstanceId)
+            ? {
+                onToolCallResult: (receipt: ObservedMcpToolCallResult) => {
+                  findReceiptBucket(sessionQuery, ownerSessionInstanceId)?.record(receipt);
+                },
+              }
+            : {}),
         });
       } finally {
         if (handshake && handshakeInstance !== undefined && --handshake.pending === 0) {
@@ -621,6 +651,9 @@ async function startCodexHttpBridge(
       activeTransports: countTransports(transportsByServer),
     });
 
+    for (const bucket of receiptBuckets.values()) bucket.clear();
+    receiptBuckets.clear();
+
     // 1. 关所有 mcp transport (会断 codex 端的长连接)
     for (const transports of transportsByServer.values()) {
       for (const session of transports.values()) {
@@ -704,6 +737,18 @@ async function startCodexHttpBridge(
       sessionTokenBySessionId.delete(sessionId);
     },
     mcpSessionCount: () => countTransports(transportsByServer),
+    enableMcpToolResultRecording: (sessionId, sessionInstanceId) => {
+      const key = receiptBucketKey(sessionId, sessionInstanceId);
+      const bucket = createMcpToolResultBucket();
+      receiptBuckets.set(key, bucket);
+      return {
+        take: (query) => bucket.take(query),
+        dispose: () => {
+          bucket.clear();
+          if (receiptBuckets.get(key) === bucket) receiptBuckets.delete(key);
+        },
+      };
+    },
     shutdown,
   };
   liveBridges.add(bridge);
@@ -959,7 +1004,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
       transports.set(newId, { transport, mcpServer, ownerSessionId, ownerSessionInstanceId });
       log.debug('mcp session initialized', { serverName, sessionId: newId });
     },
-  });
+  }, opts.onToolCallResult);
   transport.onclose = () => {
     if (transport.sessionId) {
       transports.delete(transport.sessionId);

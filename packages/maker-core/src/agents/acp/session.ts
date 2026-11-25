@@ -12,7 +12,7 @@ import { readFile as fsReadFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Logger } from '../../interfaces/logger.js';
-import type { AgentSessionHandle } from '../base-agent.js';
+import type { AgentSessionHandle, TakeMcpToolResult } from '../base-agent.js';
 import { NotSupportedError, type Capabilities } from '../../types/capabilities.js';
 import type { Effort, PermissionMode, UserContentBlock, UserMessage } from '../../types/common.js';
 import type { AgentEvent, InteractionRequest, InteractionResolver, UsageSnapshot } from '../../types/events.js';
@@ -147,6 +147,8 @@ export interface OpenAcpSessionOptions {
   expandSlashInvocation?: (text: string) => Promise<string | null>;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
+  /** Backfills empty MCP tool results from the host HTTP MCP bridge when the engine omits them. */
+  takeMcpToolResult?: TakeMcpToolResult;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
   openToolQuietCapMs?: number;
   now?: () => number;
@@ -331,15 +333,17 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       outcome = 'new';
     }
 
+    const acceptedMcpServers = accepted.map((server) => server.name);
     const session = new AcpSession({
       connection,
       init,
       sessionId,
       configOptions: normalizeConfigOptions(result.configOptions),
       resumeOutcome: outcome,
+      acceptedMcpServers,
       droppedMcpServers: dropped,
       briefing: outcome === 'new'
-        ? typeof opts.briefing === 'function' ? opts.briefing(accepted.map((server) => server.name)) : opts.briefing ?? ''
+        ? typeof opts.briefing === 'function' ? opts.briefing(acceptedMcpServers) : opts.briefing ?? ''
         : '',
       options: opts,
     });
@@ -364,6 +368,7 @@ interface AcpSessionInit {
   sessionId: string;
   configOptions: AcpConfigOption[];
   resumeOutcome: AcpResumeOutcome;
+  acceptedMcpServers: string[];
   droppedMcpServers: string[];
   /** Briefing for a new session, resolved against the accepted MCP servers. */
   briefing: string;
@@ -469,7 +474,11 @@ export class AcpSession {
       const trimmed = name.trim().replace(/^\/+/, '').toLowerCase();
       if (trimmed) this.commandNames.add(trimmed);
     }
-    this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
+    this.translator = new AcpUpdateTranslator({
+      blockIdPrefix: `acp-${init.sessionId}`,
+      ...(init.options.takeMcpToolResult ? { takeMcpToolResult: init.options.takeMcpToolResult } : {}),
+      mcpServerNames: init.acceptedMcpServers,
+    });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
     // Logical RPC closure cancels requests. Only an endpoint exit can end

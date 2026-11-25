@@ -27,6 +27,8 @@ import {
 } from '@cindy/maker-shared/error-redaction';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { AgentEvent } from '../../types/events.js';
+import type { TakeMcpToolResult } from '../base-agent.js';
+import { parseAcpMcpToolName } from './mcp-tool-result.js';
 import {
   asNonEmptyString,
   asRecord,
@@ -54,6 +56,10 @@ export interface AcpUpdateTranslatorOptions {
   /** Unique per session; keeps thinking block ids distinct. */
   blockIdPrefix: string;
   now?: () => number;
+  /** Host MCP result fallback for engines that omit MCP tool outputs on `tool_call_update`. */
+  takeMcpToolResult?: TakeMcpToolResult;
+  /** Accepted Host MCP server names for disambiguating server names that contain underscores. */
+  mcpServerNames?: readonly string[];
 }
 
 export type AcpTurnOutcome =
@@ -328,8 +334,23 @@ export class AcpUpdateTranslator {
 
   private settleTool(tool: ToolState, events: AgentEvent[], result: 'done' | 'failed' | 'interrupted'): void {
     tool.settled = true;
-    const isError = result !== 'done';
-    const rendered = renderAcpToolContent(tool.content, tool.rawOutput);
+    let isError = result !== 'done';
+    let rendered = renderAcpToolContent(tool.content, tool.rawOutput);
+    if (!rendered && result !== 'interrupted' && this.options.takeMcpToolResult) {
+      const parsed = (tool.name ? parseAcpMcpToolName(tool.name, this.options.mcpServerNames) : null)
+        ?? (tool.title ? parseAcpMcpToolName(tool.title, this.options.mcpServerNames) : null);
+      if (parsed) {
+        const receipt = this.options.takeMcpToolResult({
+          serverName: parsed.serverName,
+          toolName: parsed.toolName,
+          input: tool.rawInput,
+        });
+        if (receipt) {
+          rendered = clip(receipt.fullText);
+          if (receipt.isError) isError = true;
+        }
+      }
+    }
     const fullText = result === 'interrupted' && !rendered ? 'Interrupted before the tool finished.' : rendered;
     events.push({ type: 'tool_result_full', data: { toolUseId: tool.toolCallId, fullText, isError } });
     events.push({ type: 'tool_result', data: { summary: isError ? 'failed' : 'done', toolUseIds: [tool.toolCallId] } });
