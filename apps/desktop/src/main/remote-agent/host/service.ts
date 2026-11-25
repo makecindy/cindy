@@ -1798,7 +1798,7 @@ export function disposeRemoteAgentHost(): void {
   if (host) hostDisposal = Promise.all([hostDisposal, host.dispose()]).then(() => undefined);
   host = null;
   clearProviderShareDelegations();
-  void flushProviderShareUsage();
+  void flushProviderShareUsage().catch(() => log.warn('Provider share usage checkpoint failed during teardown'));
 }
 
 function flushProviderShareUsage(): Promise<void> {

@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createProviderShareUsageStore, providerShareUsageRangeStart } from '../providerShareUsageStore';
+import { createProviderShareUsageStore, flushProviderShareUsageStore, installProviderShareUsageStore, providerShareUsageRangeStart } from '../providerShareUsageStore';
 
 const sample = (model: string, input: number, output: number, turns = 1) => ({
   model, turns, inputTokens: input, outputTokens: output, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0,
@@ -574,6 +574,34 @@ describe('provider share usage store', () => {
       await store.flush();
       expect(rename).toHaveBeenCalledTimes(1); // No dirty state, no idle checkpoint.
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  // Unit: the shared entry awaited by Desktop quit and Host owner disposal. One accepted
+  // receipt held at rename proves shutdown cannot finish before the real checkpoint.
+  it('awaits the shared shutdown checkpoint and propagates failure without losing accepted usage', async () => {
+    await flushProviderShareUsageStore(); // Partial startup need not have installed a ledger.
+    const store = installProviderShareUsageStore(dir);
+    const file = path.join(dir, 'remote-agent', 'provider-share-usage.json');
+    const route = directRoute(Date.now());
+    await store.registerDirectReceiptRoute(route); await store.commitDirectReceiptRoute(route);
+    const receipt = { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 7, 3)] };
+    const record = (value = receipt) => store.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId, value);
+    expect(await record()).toBe(true);
+    let entered!: () => void; let release!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    const realRename = fsp.rename.bind(fsp);
+    vi.spyOn(fsp, 'rename').mockImplementationOnce(async (...args) => { entered(); await hold; return realRename(...args); });
+    let finished = false;
+    const pending = flushProviderShareUsageStore().then(() => { finished = true; });
+    try { await ready; expect(finished).toBe(false); }
+    finally { release(); await pending; }
+    expect(createProviderShareUsageStore(file).query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(7);
+    await record({ ...receipt, usageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' });
+    vi.mocked(fsp.rename).mockRejectedValueOnce(new Error('quit checkpoint denied'));
+    await expect(flushProviderShareUsageStore()).rejects.toThrow('quit checkpoint denied');
+    expect(store.query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(14);
+    await flushProviderShareUsageStore();
   });
 
   // Unit: memory ACK is explicitly not a disk promise. A failed checkpoint must retain

@@ -1048,3 +1048,8 @@ export function installProviderShareUsageStore(userDataDir: string): ProviderSha
 export function getProviderShareUsageStore(): ProviderShareUsageStore | null {
   return store;
 }
+
+/** Await after producers stop, before the normal quit/owner-disposal path closes storage. */
+export async function flushProviderShareUsageStore(): Promise<void> {
+  await store?.flush();
+}

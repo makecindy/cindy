@@ -16,6 +16,7 @@ import { createHostCodexRuntime, createHostSubscriptionFastPolicies } from './ag
 import type { EngineKind } from '@cindy/maker-core';
 import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
+import { flushProviderShareUsageStore } from '../../desktop/src/main/device-link/providerShareUsageStore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
 import { isDefinitiveRefreshError } from '../../desktop/src/main/authRefreshError.js';
 import type { HostStartFailureReason } from '../../desktop/src/shared/hostStartFailure.js';
@@ -2175,6 +2176,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     // The usage writes started for this owner finish in its database, and no new one starts
     // (agent/usage-recording.ts drain; the desktop flushes the Pi writes there, bootstrap-electron.ts :2639).
     await attempt(() => usageRecording.drain());
+    await attempt(flushProviderShareUsageStore);
     await attempt(() => closeStorage?.());
   } finally {
     platformTools = null;
