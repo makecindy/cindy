@@ -660,6 +660,29 @@ describe('PluginMarketLedger', () => {
     ]);
   });
 
+  /* 测试价值（PR #12731：账本只增可选字段 sourceIdBinding，存量兼容红线）
+   * - 生产入口与可观察结果：PluginMarketLedger 读写 custom-ledger.v1.json 后的记录。validRecord 与 main 相同
+   *   （未改），所以这里的行为也就是旧版本读到新字段时的行为。
+   * - 缺口：新字段若触发读取校验失败，整条安装记录会在下一次写入时被过滤掉，插件变成「本地冲突项」。
+   * - 最小失败输入：带 sourceIdBinding 的自定义记录；以及该字段形状损坏的记录。
+   * - tier：unit。
+   */
+  it('keeps custom records carrying the optional source id binding, well-formed or not, across a rewrite', () => {
+    const h = harness();
+    const customPath = path.join(path.dirname(h.filePath), 'custom-ledger.v1.json');
+    const binding = { sourceId: 'AbCdEfGhIjKlMnOpQrStUv', sourceKey: 'k', rawManifestSha256: 'c'.repeat(64) };
+    h.ledger.upsertInstallation(record({ ghostId: 'bound', pluginId: 'custom:team-lib/bound', source: 'local-market',
+      sourceKey: 'k', rawManifestSha256: 'c'.repeat(64), sourceIdBinding: binding }));
+    h.ledger.upsertInstallation(record({ ghostId: 'broken', pluginId: 'custom:team-lib/broken', source: 'git-market',
+      sourceKey: 'k2', sourceIdBinding: 42 as unknown as typeof binding }));
+    // An unrelated write rewrites both files; both records and the field survive as they were.
+    h.ledger.upsertInstallation(record({ ghostId: 'cindy-server', source: 'market' }));
+    const reread = new PluginMarketLedger(h.filePath);
+    expect(reread.installationForGhost('bound')).toMatchObject({ installed: true, sourceIdBinding: binding });
+    expect(reread.installationForGhost('broken')).toMatchObject({ installed: true, sourceIdBinding: 42 });
+    expect(Object.keys(JSON.parse(fs.readFileSync(customPath, 'utf8')).installations).sort()).toEqual(['bound', 'broken']);
+  });
+
   it('survives an old-version rewrite that drops unknown sources from the main ledger', () => {
     const h = harness();
     h.ledger.upsertInstallation(record({ ghostId: 'cindy-server', source: 'market' }));

@@ -1381,6 +1381,7 @@
     "openPermissionInNewWindow": "Abrir em outra janela"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Outra instância do Cindy neste computador está usando a conexão remota. Feche-a e esta instância assumirá automaticamente.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode trocar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness necessário.",
@@ -15626,6 +15627,7 @@
       "gatewayProxyTokenInvalid": "As credenciais do Cindy AI não são mais válidas. Clique em Tentar novamente. Se acontecer de novo, saia e entre novamente",
       "gatewayProxyTokenInvalidNoRetry": "As credenciais do Cindy AI não são mais válidas. Se acontecer de novo, saia e entre novamente",
       "modelAccessDenied": "A conta no serviço de origem não pode acessar este modelo. Selecione outro modelo ou verifique o acesso com o provedor",
+      "providerSafetyRefusal": "A política de segurança do provedor do modelo bloqueou esta resposta. Ajuste sua solicitação antes de enviar novamente",
       "silentStopContinue": "Continuar",
       "silentStopContinueTitle": "Continuar a tarefa atual",
       "piTransportClosed": "Conexão remota do Pi interrompida (canal SSH fechado). A tarefa remota continua em execução — reconecte para continuar.",

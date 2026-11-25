@@ -30,6 +30,7 @@ import type {
   InteractionRequest,
 } from '@cindy/maker-core';
 import { isProviderShareCredentialSessionApproval } from '../../../shared/providerShareCredentialConsent';
+import { GHOST_INSTALL_CONSENT_TOOL_NAME } from '../../../shared/ghostInstallConsent';
 
 export type SessionPermissionRequest = Pick<
   Extract<InteractionRequest, { kind: 'permission' }>,
@@ -275,6 +276,19 @@ export type InteractionModel =
   AskInteractionModel | PlanInteractionModel | PermissionInteractionModel;
 
 /**
+ * 卡片参数预览里的 input。插件安装确认卡（`cindy.plugin.install`）的 `source.sourceId` 只给控制端核实用，
+ * 不在 IM 与官方 hook 卡的参数预览里显示（仓库名已在说明文字里）；决策与回传仍用原始请求。
+ */
+function displayPermissionInput(toolName: string, input: Record<string, unknown>): Record<string, unknown> {
+  if (toolName !== GHOST_INSTALL_CONSENT_TOOL_NAME) return input;
+  const source = input.source;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return input;
+  const shown: Record<string, unknown> = { ...(source as Record<string, unknown>) };
+  delete shown.sourceId;
+  return { ...input, source: shown };
+}
+
+/**
  * InteractionRequest -> 语义模型。返回 null = 不出卡, 调用方按 kind 安全默认
  * 就地自决(ask 没有问题项, 或未来未知 kind)。
  *
@@ -379,7 +393,7 @@ export function composeInteractionModel(req: InteractionRequest): InteractionMod
       toolName: req.toolName,
       displayTitle: req.displayName ?? req.title ?? req.toolName,
       description: req.description ?? '',
-      input: req.input,
+      input: displayPermissionInput(req.toolName, req.input),
       choices: [
         {
           choiceId: 'permission:allow-once',

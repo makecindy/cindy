@@ -60,6 +60,7 @@ import type {
 import {
   customMarketPluginId,
   customMarketReleaseId,
+  isPluginMarketSourceId,
   marketSourceKey,
   parseCustomMarketPluginId,
   PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH,
@@ -606,14 +607,40 @@ function isGhostBusy(
 }
 
 /** 自定义市场发现到的单个插件条目（快照投影的原料）。 */
+/**
+ * 已装实例的来源标识，取自安装记录的 `sourceIdBinding`：绑定的 `sourceKey` 与 raw manifest 摘要必须仍等于
+ * 记录当前的值，否则缺省（防止某条写入保留了旧标识、来源或包却已变）。没有绑定的旧记录：本地来源由记录的
+ * 来源指纹现算（不涉及 git 改写，结果等价）；Git 来源缺省，控制端按未确认处理。
+ */
+function installedSourceIdOf(
+  record: PluginMarketInstallationRecord,
+  localSourceIdOf: (sourceKey: string) => string | null,
+): string | null {
+  const binding: unknown = record.sourceIdBinding;
+  if (binding !== undefined) {
+    if (!binding || typeof binding !== 'object' || Array.isArray(binding)) return null;
+    const value = binding as Record<string, unknown>;
+    return isPluginMarketSourceId(value.sourceId) &&
+      typeof record.sourceKey === 'string' && value.sourceKey === record.sourceKey &&
+      typeof record.rawManifestSha256 === 'string' && value.rawManifestSha256 === record.rawManifestSha256
+      ? value.sourceId
+      : null;
+  }
+  return record.source === 'local-market' && typeof record.sourceKey === 'string' && record.sourceKey
+    ? localSourceIdOf(record.sourceKey)
+    : null;
+}
+
 interface CustomMarketEntry {
   config: MarketSourceConfig;
   plugin: DiscoveredMarketPlugin;
   iconKey: string | null;
   /** 发现租约内由配置与当前缓存版本取包记录生成的来源身份（见 MarketSourceManager）。 */
   sourceIdentity: PluginMarketSourceIdentity | null;
-  /** 同一 owner 密钥的来源标识计算器；用于把账本里已装实例的来源指纹投影成 installedSourceId。 */
-  sourceIdOf: (sourceKey: string) => string | null;
+  /** 同一份配置与缓存版本的不透明来源标识（展示身份生成不出时仍可能有）。 */
+  sourceId: string | null;
+  /** 同一 owner 密钥的本地来源标识计算器；旧账本记录没有存标识时，本地来源按记录的来源指纹现算。 */
+  localSourceIdOf: (sourceKey: string) => string | null;
 }
 
 interface CustomMarketDiscovery {
@@ -2508,7 +2535,8 @@ export class PluginMarketService {
               config: discovered.config,
               plugin,
               sourceIdentity: discovered.sourceIdentity,
-              sourceIdOf: (sourceKey) => manager.sourceIdOf(sourceKey),
+              sourceId: discovered.sourceId,
+              localSourceIdOf: (sourceKey) => manager.localSourceIdOf(sourceKey),
               iconKey: await customMarketIconKey(
                 owner,
                 discovered.config,
@@ -2635,6 +2663,8 @@ export class PluginMarketService {
           // 不在确认前按市场名重读（可能已被同名来源替换）。beforeCommit 复核 sourceKey，来源被换即
           // 拒绝，所以确认展示的就是随后安装的来源。
           sourceIdentity: discovered.sourceIdentity,
+          // 同一份配置与缓存版本的来源标识；落位后与这份包的 raw manifest 摘要一起写进账本。
+          sourceId: discovered.sourceId,
           assertCustomApprovalStateUnchanged,
         };
       });
@@ -2649,6 +2679,7 @@ export class PluginMarketService {
           reviewInstalledIdentity,
           sourceType,
           sourceIdentity,
+          sourceId,
           assertCustomApprovalStateUnchanged,
         } = packedAttempt;
         // 来源只决定后台更新路由，不是 ghostId 的永久所有权。只有详情页明确
@@ -2806,6 +2837,11 @@ export class PluginMarketService {
                 // 安装返回的本地化 ghost.manifest；包被替换后不会被当成同源更新。
                 manifestDigest,
                 rawManifestSha256: evidence.rawManifestSha256,
+                // 这份包取自的来源标识（打包所在租约里的同一份配置与缓存版本）。显式安装、后台自动更新、
+                // 换源都经这里整条重写，标识随新包更新；绑定 sourceKey 与 raw 摘要，投影时对不上即缺省。
+                ...(sourceId
+                  ? { sourceIdBinding: { sourceId, sourceKey, rawManifestSha256: evidence.rawManifestSha256 } }
+                  : {}),
               });
             });
             replacedRoute = null;
@@ -2898,7 +2934,7 @@ export class PluginMarketService {
   ): Promise<CustomMarketDiscovery> {
     try {
       const manager = this.sourceManagerForOwner(owner);
-      await manager.forEachDiscoveredSource(async ({ config, result, sourceIdentity }) => {
+      await manager.forEachDiscoveredSource(async ({ config, result, sourceIdentity, sourceId }) => {
         if (!result.ok) {
           progress.unavailableSourceNames.add(config.name);
           progress.settledSourceNames.add(config.name);
@@ -2920,7 +2956,8 @@ export class PluginMarketService {
             config,
             plugin,
             sourceIdentity,
-            sourceIdOf: (sourceKey) => manager.sourceIdOf(sourceKey),
+            sourceId,
+            localSourceIdOf: (sourceKey) => manager.localSourceIdOf(sourceKey),
             iconKey: await customMarketIconKey(owner, config, plugin, iconProjectionGeneration),
           });
         }
@@ -2982,10 +3019,11 @@ export class PluginMarketService {
           : 'update-available';
     const iconKey = entry.iconKey;
     const { sourceIdentity } = entry;
-    // 已装实例的来源：由账本记录的来源指纹生成（与确认回执 originSource.sourceId 同一算法），只在
-    // 该实例确由本条目的 pluginId 装入时给出。控制端核实回执过期的安装时与原尝试的标识比对。
-    const installedSourceId = ghost && record?.installed && record.pluginId === pluginId && record.sourceKey
-      ? entry.sourceIdOf(record.sourceKey)
+    // 已装实例的来源：取自这份安装记录（落位时写下的来源标识），只在该实例确由本条目的 pluginId 装入、
+    // 且磁盘上的包仍是记录里那份时给出。控制端核实回执过期的安装时与原尝试的 originSource.sourceId 比对。
+    const installedSourceId = ghost && record?.installed && record.pluginId === pluginId && identity &&
+      verifyInstalledMarketManifest(record, identity)
+      ? installedSourceIdOf(record, entry.localSourceIdOf)
       : null;
     return {
       pluginId,

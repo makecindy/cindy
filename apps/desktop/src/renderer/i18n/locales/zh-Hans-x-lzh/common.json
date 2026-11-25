@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "另启一窗"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "此机另一 Cindy 实例方用远程连接。阖之后，此实例将自行接管。",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持易 Harness。请择今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
@@ -15454,6 +15455,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI 凭据已失效。请点「再试」。若仍未成，请辞出后重新登录",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 凭据已失效。若此后仍未成，请辞出后重新登录",
       "modelAccessDenied": "今上游名籍无权访问此模型。请易模型，或向供方确认模型访问之权柄",
+      "providerSafetyRefusal": "供方安全规制拦阻此番回复。若欲再请，请改易所求之辞后再发",
       "silentStopContinue": "续",
       "silentStopContinueTitle": "续此差事",
       "piTransportClosed": "远程 Pi 连接已断（SSH 通道已阖）。远程差事仍在行，重连后可续。",

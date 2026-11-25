@@ -241,12 +241,20 @@ export async function cloneMarketplace(
   input: { url: string; ref?: string; sparsePaths: readonly string[] },
   destPath: string,
   executor: GitExecutor = defaultExecutor,
+  /**
+   * 在 git 实际取包的那个仓库（staging 目录）里执行，用来采集实际取包地址（见 fetchIdentity.ts）：
+   * `'cloned'` 紧接 `git clone` 之后、任何 checkout 之前（取包时的分支状态，`includeIf "onbranch:…"` 这类
+   * 规则与取包时一致）；`'checked-out'` 在检出完成、落位之前（`includeIf "gitdir:…"` 与之后刷新的状态）。
+   * 调用方要求各次采集一致才记下地址。
+   */
+  inspect?: (repoDir: string, phase: 'cloned' | 'checked-out') => Promise<void>,
 ): Promise<string> {
   const stagingPath = `${destPath}.staging-${crypto.randomUUID()}`;
   const timeoutMs = GIT_OPERATION_TIMEOUT_MS;
   try {
     if (input.sparsePaths.length === 0) {
       await executor(['clone', input.url, stagingPath], { timeoutMs });
+      await inspect?.(stagingPath, 'cloned');
       if (input.ref) {
         // --branch 只支持 branch/tag;显式 checkout 同时覆盖可达的 commit SHA。
         // 必须带 --detach 消歧:`git checkout <ref>` 在 ref 不存在但仓库根恰有
@@ -260,6 +268,7 @@ export async function cloneMarketplace(
         ['clone', '--filter=blob:none', '--no-checkout', input.url, stagingPath],
         { timeoutMs },
       );
+      await inspect?.(stagingPath, 'cloned');
       // -- 终止选项解析：即使上游漏放了以 - 开头的值,也只被当作路径。
       await executor(['sparse-checkout', 'set', '--', ...input.sparsePaths], {
         cwd: stagingPath,
@@ -276,6 +285,7 @@ export async function cloneMarketplace(
         await executor(['checkout', target], { cwd: stagingPath, timeoutMs });
       }
     }
+    await inspect?.(stagingPath, 'checked-out');
     await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
     // Windows 上 AV/索引器/云同步会短暂占用刚 clone 出的文件,rename 抛
     // EBUSY/EACCES/EPERM;瞬时锁短退避重试。目标是全新 UUID 路径,不存在覆盖。
@@ -309,7 +319,19 @@ export async function fetchMarketplace(
     } else {
       await executor(['pull', '--ff-only'], { cwd: workDir, timeoutMs });
     }
-    return await currentRevision(workDir, executor);
+    const revision = await currentRevision(workDir, executor);
+    // 检出的 HEAD 必须就是本次获取的目标提交。远端（或 insteadOf 改写到的另一个仓库）停在本地 HEAD 的
+    // 祖先时，`pull --ff-only` 也会成功但保留领先的本地 HEAD；那样落位的包并不是这次取到的内容。
+    // 对不上就按刷新失败处理，由调用方回落到全新克隆。
+    // `^{commit}`：显式 ref 是附注标签时 FETCH_HEAD 指向标签对象，要剥到提交再比。
+    const { stdout } = await executor(['rev-parse', '--verify', `${ref ? 'FETCH_HEAD' : '@{u}'}^{commit}`], {
+      cwd: workDir,
+      timeoutMs: 10_000,
+    });
+    if (stdout.trim() !== revision) {
+      throw new Error('The checked-out commit is not the fetched target');
+    }
+    return revision;
   } catch (error) {
     throw classifyGitFailure(error, [workDir]);
   }

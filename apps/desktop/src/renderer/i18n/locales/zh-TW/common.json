@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "在新視窗開啟"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "本機另一個 Cindy 執行個體正在使用遠端連線。關閉它後，此執行個體會自動接管。",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
@@ -15462,6 +15463,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI 憑證已失效。請點「重試」。若仍失敗，請登出後重新登入",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 憑證已失效。若後續仍失敗，請登出後重新登入",
       "modelAccessDenied": "目前上游帳號無權存取此模型。請切換模型，或向供應商確認模型存取權限",
+      "providerSafetyRefusal": "模型供應商的安全政策攔截了本次回覆。如需繼續，請調整請求內容後再傳送",
       "silentStopContinue": "繼續",
       "silentStopContinueTitle": "繼續當前任務",
       "piTransportClosed": "遠端 Pi 連線已中斷（SSH 通道關閉）。遠端任務仍在執行，重新連線後可以繼續。",

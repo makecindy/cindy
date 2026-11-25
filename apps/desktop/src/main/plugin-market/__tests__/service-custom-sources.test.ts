@@ -850,6 +850,7 @@ describe('PluginMarketService 自定义市场图标', () => {
     };
     const discovered = {
       sourceIdentity: null,
+      sourceId: null,
       config,
       result: {
         ok: true as const,
@@ -1239,6 +1240,7 @@ describe('PluginMarketService 自定义市场图标', () => {
       .mockImplementationOnce(async (_name, consume) =>
         consume({
           sourceIdentity: null,
+          sourceId: null,
           config: {
             name: 'team-lib',
             source: { type: 'local', path: dir },
@@ -2254,6 +2256,48 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     // What a controller compares after A's receipt expired: B's copy is not A's result.
     expect(afterB.installedSourceId).not.toBe(attemptA);
     expect(JSON.stringify(afterB)).not.toContain(root);
+  });
+
+  /* 测试价值（PR #12731 第二轮评审第 1 条：已装来源的标识取自安装记录，且不能被保留旧值的写入误配）
+   * - 生产入口与可观察结果：PluginMarketService.install 写下的账本记录 sourceIdBinding；detail 的 installedSourceId。
+   * - 缺口：任何保留了旧绑定、来源或包却已变的写入（含旧版本的展开写法）都可能把旧标识当成当前已装来源。
+   * - 最小失败输入：安装后把记录的 sourceKey 或 raw 摘要换掉但保留绑定；没有绑定的旧本地记录。
+   * - tier：unit（临时目录，本地来源）。
+   */
+  it('binds the installed source id to the record it was written with', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    runtime.install.mockImplementation(async () => {
+      const ghost = installedGhost(root, 'alpha');
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    const detail = await h.service.detail(pluginId);
+    await h.service.install(pluginId, { expectedReleaseId: detail.releaseId, expectedManifest: detail.manifest }, TEST_INSTALL_CONTEXT);
+    const record = h.ledger.installationForGhost('alpha')!;
+    expect(record.sourceIdBinding).toEqual({
+      sourceId: detail.sourceIdentity?.sourceId, sourceKey: record.sourceKey, rawManifestSha256: record.rawManifestSha256,
+    });
+    expect((await h.service.detail(pluginId)).installedSourceId).toBe(detail.sourceIdentity?.sourceId);
+
+    // A write that keeps the old binding while the source changed: the stale id is not projected.
+    h.ledger.upsertInstallation({ ...record, sourceKey: marketSourceKey({ type: 'local', path: path.join(root, 'elsewhere') }) });
+    expect(await h.service.detail(pluginId)).not.toHaveProperty('installedSourceId');
+    // Same for a binding made for another package.
+    h.ledger.upsertInstallation({ ...record, sourceIdBinding: { ...record.sourceIdBinding!, rawManifestSha256: 'f'.repeat(64) } });
+    expect(await h.service.detail(pluginId)).not.toHaveProperty('installedSourceId');
+    // A malformed binding is treated as missing evidence, never as a reason to drop the record.
+    h.ledger.upsertInstallation({ ...record, sourceIdBinding: 'broken' as unknown as typeof record.sourceIdBinding });
+    expect(h.ledger.installationForGhost('alpha')).toMatchObject({ installed: true, pluginId });
+    expect(await h.service.detail(pluginId)).not.toHaveProperty('installedSourceId');
+    // A record from before this change (no binding) for a local folder: the id is recomputed from its source.
+    const legacy = { ...record };
+    delete legacy.sourceIdBinding;
+    h.ledger.upsertInstallation(legacy);
+    expect((await h.service.detail(pluginId)).installedSourceId).toBe(detail.sourceIdentity?.sourceId);
   });
 
   it('rejects the install when the source vanishes before the commit point', async () => {

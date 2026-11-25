@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "새 윈도우에서 열기"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "이 컴퓨터의 다른 Cindy 인스턴스가 원격 연결을 사용하고 있습니다. 그것을 닫으면 이 인스턴스가 자동으로 이어받습니다.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
@@ -15463,6 +15464,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 다시 시도를 클릭하세요. 반복되면 로그아웃 후 다시 로그인하세요",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 반복되면 로그아웃 후 다시 로그인하세요",
       "modelAccessDenied": "연결된 서비스 계정에 이 모델의 접근 권한이 없습니다. 다른 모델로 전환하거나 제공자에게 모델 접근 권한을 확인하세요",
+      "providerSafetyRefusal": "모델 제공자의 안전 정책에 의해 이번 응답이 차단되었습니다. 계속하려면 요청 내용을 수정한 뒤 다시 보내세요",
       "silentStopContinue": "계속",
       "silentStopContinueTitle": "현재 작업 계속",
       "piTransportClosed": "원격 Pi 연결이 끊어졌습니다(SSH 채널 닫힘). 원격 작업은 계속 실행 중입니다. 다시 연결하면 계속할 수 있습니다.",
