@@ -1429,8 +1429,8 @@ interface ElectronAPI {
     /** Main 已结算(超时、取消或账号切换)某次确认，窗口应收起对应确认框。 */
     onInstallConsentDismissed: (callback: (payload: { requestId: string }) => void) => () => void;
     resolveInstallConsent: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
-    /** Plugin 快捷行最近使用顺序(最新在前,首帧同步读取避免排序跳变)。 */
-    recentUsageSync: () => { ids: string[] };
+    /** 异步读取已安装插件的最近使用顺序，最新在前。 */
+    recentUsage: () => Promise<{ ids: string[] }>;
     /** 成功发送一次 Plugin 指令后记录最近使用。 */
     markUsed: (id: string) => Promise<{ ids: string[] }>;
     /**
@@ -1442,7 +1442,7 @@ interface ElectronAPI {
     /** 只列入口元数据，不运行插件工具；远程/device-link 不暴露。 */
     /** 用户选定一个入口后，按固定只读摘要契约搜索该插件。 */
     /** 最近使用顺序变化（发送 /卸载），多窗口同步。 */
-    onRecentUsageChanged: (callback: (payload: { ids: string[] }) => void) => () => void;
+    onRecentUsageChanged: (callback: (payload: { ids: string[] }, ownerStamp?: unknown) => void) => () => void;
     install: (
       lizFilePath: string,
       /** enable:装入后立即开启；缺省沉睡。 */

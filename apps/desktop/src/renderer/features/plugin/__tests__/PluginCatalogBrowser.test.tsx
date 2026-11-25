@@ -240,7 +240,28 @@ it.each(['legacy', 'custom', 'offline'] as const)('refreshes only six pages near
   expect(cache.current.pages.size).toBe(10);
 });
 
-it('publishes new logical offsets when only an evicted sorted page changes size', async () => {
+// Unit / §8.4: the legacy six-page budget test did not exercise a server
+// echo. Ten loaded batches must keep their sort and read only the near six.
+it('refreshes only six nearby pages with a live sort echo', async () => {
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(150);
+  const load = vi.fn(async (input: PluginMarketQuery) => ({
+    ...page(Number(input.cursor ?? 0)), ...sortedBy(input),
+  }));
+  const { cache, view } = fixture(load);
+  render(view());
+  await browseBatches(cache, 9);
+  act(() => readVisibleRange?.(90, 93));
+  const earlier = cache.current.pages.get(0);
+  load.mockClear();
+  await act(async () => { await cache.current.refresh!({ force: true }); });
+  const reads = load.mock.calls.map(([input]) => input).filter(input => !input.counts);
+  expect(reads.map(input => input.cursor)).toEqual(['40', '50', '60', '70', '80', '90']);
+  expect(reads.every(input => input.sort === 'updated')).toBe(true);
+  expect(cache.current.pages.get(0)).toBe(earlier);
+  expect(cache.current.metadata?.sort).toBe('updated');
+});
+
+it('publishes new logical offsets when a refreshed sorted page changes size', async () => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(150);
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(150);
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
@@ -252,7 +273,7 @@ it('publishes new logical offsets when only an evicted sorted page changes size'
   const load = vi.fn(async (input: PluginMarketQuery) => {
     const start = Number(input.cursor ?? 0);
     const batch = page(start, 330);
-    return { ...batch, ...sortedBy(input), items: filtered && start === 0 ? batch.items.slice(1) : batch.items };
+    return { ...batch, ...sortedBy(input), items: filtered && start === 300 ? batch.items.slice(1) : batch.items };
   });
   const { cache, view } = fixture(load);
   render(view());
@@ -263,17 +284,21 @@ it('publishes new logical offsets when only an evicted sorted page changes size'
   filtered = true;
   await act(async () => { await cache.current.refresh!({ force: true }); });
   expect([...cache.current.pages.keys()]).toEqual([...previous.keys()]);
-  for (const [index, batch] of previous) expect(cache.current.pages.get(index)).toBe(batch);
-  expect(cache.current.sizes.get(0)?.all).toBe(9);
+  for (const [index, batch] of previous) {
+    if (index !== 30) expect(cache.current.pages.get(index)).toBe(batch);
+  }
+  expect(cache.current.sizes.get(0)?.all).toBe(10);
+  expect(cache.current.sizes.get(30)?.all).toBe(9);
   expect(renderedGrid?.count).toBe(329);
   expect(restoredIndex).toBe(319);
   const shifted = renderedGrid?.renderItem(319);
   expect(isValidElement<{ item?: PluginMarketItem }>(shifted) && shifted.props.item?.pluginId).toBe('plugin-320');
 });
 
-it('reads an evicted page from the visible sorted list while the new first page is pending', async () => {
+it('reads an evicted page from the visible sorted list while bounded recovery is pending', async () => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(150);
   let rebuilding = false;
+  let rejectOldCursor = true;
   let finish!: (result: PluginMarketPage) => void;
   let finishOldPage!: (result: PluginMarketPage) => void;
   const head = new Promise<PluginMarketPage>(resolve => { finish = resolve; });
@@ -284,6 +309,10 @@ it('reads an evicted page from the visible sorted list while the new first page 
   };
   const load = vi.fn(async (input: PluginMarketQuery) => {
     if (rebuilding && !input.counts) {
+      if (rejectOldCursor) {
+        rejectOldCursor = false;
+        throw new Error('[PLUGIN_LIST_CHANGED] invalid cursor');
+      }
       if (input.cursor === null) return head;
       if (input.cursor === '20') return oldPage;
       if (input.cursor?.startsWith('fresh:')) return fresh(Number(input.cursor.slice(6)));
@@ -299,7 +328,7 @@ it('reads an evicted page from the visible sorted list while the new first page 
   load.mockClear();
   let refresh!: Promise<void>;
   await act(async () => { refresh = cache.current.refresh!({ force: true }); });
-  expect(load).toHaveBeenCalledWith(expect.objectContaining({ cursor: null, counts: false }));
+  await waitFor(() => expect(load).toHaveBeenCalledWith(expect.objectContaining({ cursor: null, counts: false })));
   await act(async () => {
     fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 1050 } });
     readVisibleRange?.(10, 13);
@@ -315,8 +344,9 @@ it('reads an evicted page from the visible sorted list while the new first page 
   expect(load).toHaveBeenCalledWith(expect.objectContaining({ cursor: '20', counts: false }));
   await act(async () => { finish(fresh(0)); await refresh; });
   expect(cache.current.cursors).not.toBe(oldCursors);
-  expect(cache.current.pages.has(2)).toBe(false);
-  act(() => readVisibleRange?.(20, 23));
+  expect(cache.current.last).toBe(5);
+  expect(cache.current.hasNext).toBe(true);
+  expect(cache.current.pages.get(2)?.[0]?.name).toBe('Tool 20');
   await act(async () => {
     finishOldPage({ ...page(20, 330), sort: 'updated', sorts: serverSorts, items: [{ ...item(20), name: 'Obsolete row' }] });
   });

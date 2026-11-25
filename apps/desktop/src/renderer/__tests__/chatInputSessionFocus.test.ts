@@ -433,8 +433,10 @@ describe('ChatInput session switch focus contract', () => {
 
   it('keeps MRU ordering scoped to the installed shortcut row and subscribes to updates', () => {
     expect(pluginPageSource).toContain(
-      'window.electronAPI.ghosts.onRecentUsageChanged(({ ids }) => {',
+      'window.electronAPI.ghosts.onRecentUsageChanged(({ ids }, ownerStamp) => {',
     );
+    expect(pluginPageSource).toContain('await window.electronAPI.ghosts.recentUsage()');
+    expect(pluginPageSource).not.toContain('recentUsageSync');
     // Ranking runs over the (searched) installed set, not the raw ghost list, and feeds
     // recent-use + unread signals into the shared pure sorter.
     expect(pluginPageSource).toMatch(/sortInstalledForDisplay\(searchedInstalledItems, \{/);

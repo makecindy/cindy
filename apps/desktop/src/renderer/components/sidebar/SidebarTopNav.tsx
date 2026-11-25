@@ -44,6 +44,7 @@ import { useGhostMainViews, type GhostMainViewItem } from '@/cindy-brain/ghostMa
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
+import { preloadPluginPage } from '@/features/plugin/GhostPluginRoute';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
 import { SidebarIconButton, SIDEBAR_RAIL_ICON_BUTTON_CLASS } from './SidebarIconButton';
 import { Tip } from '@/components/ui/tooltip';
@@ -105,6 +106,7 @@ export interface SidebarNavigationAction {
   label: string;
   icon: LucideIcon;
   onSelect: () => void;
+  onIntent?: () => void;
   active: boolean;
   showDot: boolean;
   dotTone?: DotTone;
@@ -141,6 +143,7 @@ function useSidebarNavigationActions(
       label: t('sidebar.tabs.plugins'),
       icon: SIDEBAR_NAVIGATION_ITEM_ICONS.plugins,
       onSelect: () => navigateToView('plugins'),
+      onIntent: preloadPluginPage,
       active: activeKey === 'plugins',
       showDot: hasGhostUnread || reviewUnread.length > 0,
       dotTone: reviewUnread.some(item => item.status !== 'approved' && item.status !== 'enabled') ? 'error' : hasRetirementUnread ? 'awaiting' : 'done',
@@ -293,7 +296,7 @@ function SidebarNavigationMoreMenu({
           if (!action) return null;
           const Icon = action.icon;
           return (
-            <DropdownMenuItem key={id} onSelect={action.onSelect} className="gap-2.5">
+            <DropdownMenuItem key={id} onSelect={action.onSelect} onMouseEnter={action.onIntent} onFocus={action.onIntent} className="gap-2.5">
               <Icon size={16} strokeWidth={1.8} />
               {action.label}
               {action.showDot && <AttentionDot size={6} tone={action.dotTone} className="ml-auto" />}
@@ -384,6 +387,8 @@ export function SidebarRailNavigation({
             dotTone={action.dotTone}
             badge={<EntryCountBadge count={action.count} />}
             onClick={action.onSelect}
+            onMouseEnter={action.onIntent}
+            onFocus={action.onIntent}
           />
         );
       })}
@@ -500,6 +505,8 @@ export function SidebarTopNav({
     return (
       <button
         onClick={action.onSelect}
+        onMouseEnter={action.onIntent}
+        onFocus={action.onIntent}
         className={cn(ROW_CLASS, action.active && ROW_ACTIVE_CLASS)}
         aria-label={action.label}
         aria-current={action.active ? 'page' : undefined}

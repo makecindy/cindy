@@ -2,7 +2,8 @@
  * Persists the most-recently-used Ghost ids for Plugin launcher ordering.
  *
  * The manifest remains publisher-owned; this host-owned interaction history lives in a
- * dedicated electron-store file shared by dev and packaged builds.
+ * dedicated electron-store file shared by dev and packaged builds. The Plugin
+ * page reads that file asynchronously without initializing or writing the store.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -10,12 +11,15 @@ import Store from 'electron-store';
 
 import { isArchiveInstanceKey, isGhostInstanceId } from '../../shared/pluginIdentity.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
 
 interface GhostRecentUsageShape {
   ids: string[];
 }
 
 const MAX_RECENT_GHOST_IDS = 100;
+const RECENT_USAGE_STORE_NAME = 'ghost-recent-usage';
+const MAX_RECENT_USAGE_FILE_BYTES = 64 * 1024;
 
 let storeInstance: Store<GhostRecentUsageShape> | null = null;
 let storePath: string | null = null;
@@ -24,7 +28,7 @@ function getStore(): Store<GhostRecentUsageShape> {
   const currentPath = ownerScopedUserDataPath();
   if (!storeInstance || storePath !== currentPath) {
     storeInstance = new Store<GhostRecentUsageShape>({
-      name: 'ghost-recent-usage',
+      name: RECENT_USAGE_STORE_NAME,
       cwd: currentPath,
       defaults: { ids: [] },
       schema: { ids: { type: 'array', items: { type: 'string' } } },
@@ -57,6 +61,19 @@ export function normalizeGhostRecentIds(value: unknown): string[] {
 
 export function loadGhostRecentIds(): string[] {
   return normalizeGhostRecentIds(getStore().get('ids', []));
+}
+
+export async function loadGhostRecentIdsAsync(): Promise<string[]> {
+  const file = ownerScopedUserDataPath(`${RECENT_USAGE_STORE_NAME}.json`);
+  const bytes = await readBoundedFileNoFollow(file, MAX_RECENT_USAGE_FILE_BYTES, { nonBlocking: true })
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+  if (!bytes) return [];
+  const parsed = JSON.parse(bytes.toString('utf8')) as { ids?: unknown } | null;
+  const ids = parsed?.ids;
+  return Array.isArray(ids) && ids.every(id => typeof id === 'string') ? normalizeGhostRecentIds(ids) : [];
 }
 
 /** Moves one installed Ghost to the front without accumulating duplicates. */

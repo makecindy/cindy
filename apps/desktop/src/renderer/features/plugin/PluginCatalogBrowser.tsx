@@ -391,6 +391,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         }
         return;
       }
+      let restartSorted = false;
       const flight = (async () => {
         await readQueue.current;
         if (!current()) return;
@@ -402,71 +403,115 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         const retainLimit = visible ? PLUGIN_VISIBLE_CACHED_PAGES : PLUGIN_CACHED_PAGES;
         if (sort && activeCatalogSort(cache.metadata, onlineRef.current)) {
           if (cache.restartAt !== undefined && cache.error !== null && !options?.retry) return;
+          const rebuilding = cache.restartAt !== undefined;
+          const refreshWindow = new Map(cache.pages);
+          trimPluginPages(refreshWindow, PLUGIN_CACHED_PAGES, visiblePages.current);
+          const indices = rebuilding
+            ? Array.from({ length: Math.min(PLUGIN_CACHED_PAGES, Math.max(cache.last, cache.restartAt ?? 0) + 1) }, (_, index) => index)
+            : [...refreshWindow.keys()].filter(index => cache.cursors.has(index)).sort((a, b) => a - b);
           const pages: PluginBrowserCache['pages'] = new Map();
           const sizes: PluginBrowserCache['sizes'] = new Map();
-          const cursors: PluginBrowserCache['cursors'] = new Map([[0, null]]);
+          const cursors: PluginBrowserCache['cursors'] = rebuilding ? new Map([[0, null]]) : new Map(cache.cursors);
           const pageByPlugin = new Map<string, number>();
-          const viewport = visiblePages.current;
           const root = visible ? scrollRef.current : null;
-          const startAnchor = root ? readPluginCatalogAnchor(root) : cache.grid.restore?.anchor;
           const unavailableSources = new Set<string>();
           let metadata = cache.metadata;
-          let cursor: string | null = null;
+          const effectiveSort = metadata.sort;
+          let truncateAfter: number | undefined;
+          let previousIndex: number | undefined;
           let index = 0;
           try {
-            // Only a confirmed sort needs a fresh chain. The live list can
-            // keep using its own cursor map until the new projection is ready.
-            for (; index <= Math.max(cache.last, cache.restartAt ?? 0); index++) {
+            for (const pageIndex of indices) {
+              index = pageIndex;
               if (!coversRevision() || !onlineRef.current) return;
+              const cursor = cursors.get(index);
+              if (cursor === undefined || (truncateAfter !== undefined && index !== truncateAfter + 1)) break;
               const page = await queryPage(cursor, cursor ? metadata.sort ?? DEFAULT_PLUGIN_MARKET_SORT : sort);
               if (!coversRevision() || !onlineRef.current) return;
               if (page.unavailableReason) {
-                cache.metadata = { ...cache.metadata, sort: undefined, sorts: undefined,
-                  unavailableReason: page.unavailableReason };
+                cache.metadata = { ...cache.metadata, sort: undefined, sorts: undefined, unavailableReason: page.unavailableReason };
                 if (cache.restartAt !== undefined) cache.error = cache.restartAt;
                 delete cache.restartAt;
                 rerender();
                 return;
               }
-              if (index === 0) metadata = { ...page, items: [] };
+              // Main can omit the echo for the custom-only tail of the all view.
+              const customTail = index > 0 && !page.sort && scope === 'all'
+                && page.items.every(item => item.sourceType !== 'server');
+              if (index > 0 && !customTail && page.sort !== metadata.sort) {
+                throw new Error('[PLUGIN_LIST_CHANGED] Plugin sort cursor changed');
+              }
+              metadata = { ...page, ...(customTail ? { sort: metadata.sort, sorts: metadata.sorts } : {}), items: [] };
               for (const name of page.unavailableCustomSourceNames) unavailableSources.add(name);
               const previous = cache.pages.get(index) ?? [];
               const renewIcons = refreshFlight.current?.cache === cache && refreshFlight.current.renewIcons;
               const merged = mergePluginSnapshot({ ...cache.metadata, items: previous }, page, renewIcons || Boolean(iconCache));
-              const items = uniquePageItems(pageByPlugin, index, merged.items.filter(item => !isInstalled.current(item)));
-              pages.set(index, mergePluginItems(previous, items, renewIcons, iconCache));
-              sizes.set(index, pluginPageSize(items));
-              const range = visiblePages.current;
-              const first = range === viewport && startAnchor ? pageByPlugin.get(startAnchor.id) ?? range.first : range.first;
-              const last = first + range.last - range.first;
-              trimPluginPages(pages, retainLimit, { first, last });
-              cursor = page.nextCursor;
-              if (!cursor) break;
-              cursors.set(index + 1, cursor);
+              pages.set(index, mergePluginItems(previous, merged.items.filter(item => !isInstalled.current(item)), renewIcons, iconCache));
+              previousIndex = index;
+              if (!page.nextCursor || (index === 0 && metadata.sort !== effectiveSort)) {
+                truncateAfter = index;
+              } else if (page.nextCursor !== cache.cursors.get(index + 1)) {
+                // Continue through the refreshed window with the new boundary.
+                // A matching downstream cursor proves the old tail can rejoin.
+                truncateAfter = index;
+              } else {
+                truncateAfter = undefined;
+              }
+              if (page.nextCursor) cursors.set(index + 1, page.nextCursor);
+              else cursors.delete(index + 1);
+              if (!page.nextCursor || (index === 0 && metadata.sort !== effectiveSort)) break;
             }
           } catch (error) {
-            if (coversRevision() && (cache.restartAt !== undefined || cursorRejected(error))) {
+            if (coversRevision() && (rebuilding || cursorRejected(error))) {
               cache.restartAt ??= index;
-              cache.error = index;
-              rerender();
+              if (rebuilding) {
+                cache.error = index;
+                rerender();
+              } else {
+                restartSorted = true;
+              }
             }
             return;
           }
+          if (previousIndex === undefined) return;
+          const last = rebuilding ? previousIndex : truncateAfter ?? cache.last;
+          const hasNext = rebuilding || truncateAfter !== undefined ? cursors.has(last + 1) : cache.hasNext;
+          if (!rebuilding) {
+            for (const [id, owner] of cache.pageByPlugin ?? []) {
+              if (owner <= last && !pages.has(owner)) pageByPlugin.set(id, owner);
+            }
+            for (const [page, size] of cache.sizes) {
+              if (page <= last && !pages.has(page)) sizes.set(page, size);
+            }
+          }
+          for (const [page, items] of pages) {
+            const unique = uniquePageItems(pageByPlugin, page, items);
+            pages.set(page, unique.length === items.length ? items : unique);
+            sizes.set(page, pluginPageSize(unique));
+          }
+          const publishedPages = rebuilding ? pages : new Map(cache.pages);
+          if (!rebuilding) {
+            for (const page of publishedPages.keys()) if (page > last) publishedPages.delete(page);
+            for (const [page, items] of pages) publishedPages.set(page, items);
+          }
+          for (const page of cursors.keys()) if (page > last + 1) cursors.delete(page);
+          trimPluginPages(publishedPages, retainLimit, visiblePages.current);
           const saved = root ? readPluginCatalogAnchor(root) : cache.grid.restore?.anchor;
           const anchorId = saved && [saved.id, ...(saved.following ?? [])].find(id => pageByPlugin.has(id));
           const anchorPage = anchorId ? pageByPlugin.get(anchorId) : undefined;
           let restore: PluginBrowserCache['grid']['restore'];
           if (saved && anchorPage !== undefined) {
             const publisher = cache.gridPublisher;
-            const visibleItems = publisher ? pages.get(anchorPage)?.filter(item => publicPublisherFilter(item) === publisher) : pages.get(anchorPage);
+            const anchorItems = publishedPages.get(anchorPage);
+            const visibleItems = publisher ? anchorItems?.filter(item => publicPublisherFilter(item) === publisher) : anchorItems;
             let offset = 0;
             for (let page = 0; page < anchorPage; page++) offset += sizes.get(page)?.[publisher ?? 'all'] ?? 0;
             const withinPage = visibleItems?.findIndex(item => item.pluginId === anchorId) ?? 0;
             restore = { anchor: saved, index: offset + Math.max(0, withinPage) };
           }
-          cache.pages = pages; cache.sizes = sizes; cache.cursors = cursors;
+          cache.pages = publishedPages; cache.sizes = sizes; cache.cursors = cursors;
           cache.pageByPlugin = pageByPlugin;
-          cache.last = sizes.size - 1; cache.hasNext = cursor !== null;
+          cache.last = last; cache.hasNext = hasNext;
           cache.metadata = { ...metadata, unavailableCustomSourceNames: [...unavailableSources] };
           cache.grid = { ...cache.grid, restore };
           delete cache.restartAt;
@@ -516,9 +561,10 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           };
           let cursor: string | null = null;
           let order = sort;
-          // Walk only as far as the user had loaded, plus the failed next page.
-          // Keep the display window resident while rebuilding cursor metadata.
+          // Legacy recovery can walk the loaded range. A newly echoed sort
+          // starts a fresh chain with the same six-page budget as sorted recovery.
           for (let index = 0; index <= cache.last + 1; index++) {
+            if (index >= PLUGIN_CACHED_PAGES && activeCatalogSort(headPage ?? null, onlineRef.current)) break;
             if (!coversRevision()) return;
             const page: PluginMarketPage = index === 0 && headPage?.sort && onlineRef.current && !headPage.unavailableReason
               ? headPage : await queryPage(cursor, order);
@@ -550,6 +596,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         if (rebuilt) {
           anchor.current ??= scrollRef.current ? readPluginCatalogAnchor(scrollRef.current) : null;
           cache.cursors = rebuiltCursors; cache.sizes = rebuiltSizes;
+          cache.pageByPlugin = undefined;
           cache.last = rebuiltSizes.size - 1;
           cache.hasNext = rebuiltHasNext;
           cache.pages.clear(); restartCursors.current = false; changed = true;
@@ -614,6 +661,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
       })().catch(() => undefined).finally(() => { if (refreshFlight.current?.promise === flight) refreshFlight.current = null; });
       refreshFlight.current = { cache, revision: latestRevision.current, promise: flight, renewIcons: options?.renewIcons === true };
       await flight;
+      if (restartSorted && current()) await refresh({ ...options, force: true });
     };
     if (cache.metadata && cache.refreshedRevision !== latestRevision.current) { cache.countsAt = 0; cache.countsFlight = undefined; }
     cache.refresh = async options => {
@@ -631,10 +679,12 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
       if (refreshFlight.current?.cache === cache) refreshFlight.current = null;
     };
   }, [cache, countsKey, query, scope, sort, visible, prewarm, count, scrollRef, read, queryPage, settleSort, iconCache]);
-  const previousRevision = useRef(revision);
+  const previousRevision = useRef({ cache, revision });
   useEffect(() => {
-    if (previousRevision.current === revision) return;
-    previousRevision.current = revision;
+    const previous = previousRevision.current;
+    previousRevision.current = { cache, revision };
+    // The activation effect already checks freshness for the selected cache.
+    if (previous.cache !== cache || previous.revision === revision) return;
     cache.countsAt = 0; cache.countsFlight = undefined;
     if (visible || prewarm) void cache.refresh?.({ force: true });
   }, [revision, cache, visible, prewarm]);

@@ -307,8 +307,7 @@ function installedGhostMatchingMarketPlugin(
     : isLegacySimulatorListing(plugin) ? findInstalledGhostByIdentity(ghosts, createPluginLogicalIdentity(null, SIMULATOR_ID)) : undefined);
 }
 
-/** Exact instance first; fall back to one explicit scan for install and mutation preflight. */
-export function installedGhostMatchingMarketPluginNow(
+function findCachedMarketInstallation(
   plugin: { ghostId: string; namespace?: string | null; scope?: string },
 ): InstalledGhost | undefined {
   const manager = getGhostManager();
@@ -328,7 +327,13 @@ export function installedGhostMatchingMarketPluginNow(
       if (exact && exact.namespace === expectedNamespace && exact.manifest.id === plugin.ghostId) return exact;
     }
   }
-  return installedGhostMatchingMarketPlugin(plugin, listMarketInstallations());
+}
+
+/** Exact instance first; fall back to one explicit scan for install and mutation preflight. */
+export function installedGhostMatchingMarketPluginNow(
+  plugin: { ghostId: string; namespace?: string | null; scope?: string },
+): InstalledGhost | undefined {
+  return findCachedMarketInstallation(plugin) ?? installedGhostMatchingMarketPlugin(plugin, listMarketInstallations());
 }
 
 
@@ -2083,8 +2088,13 @@ export class PluginMarketService {
       if (!compatible.ok) {
         throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
       }
+      const ledger = this.ledgerForOwner(owner);
+      const local = includeUpdates && !includeReadme
+        ? await this.recentUpdatesInstallSnapshot(owner, ledger, plugin)
+        : this.localInstallSnapshot(ledger);
+      requireSameMarketOwner(owner);
       return {
-        ...this.toItem(plugin, this.localInstallSnapshot(this.ledgerForOwner(owner))),
+        ...this.toItem(plugin, local),
         manifest: compatible.manifest,
         ...serverReadmeField(plugin, includeReadme),
         ...(includeUpdates ? { updates: plugin.updates ?? [] } : {}),
@@ -4620,6 +4630,30 @@ export class PluginMarketService {
           readInstalledMarketManifestIdentity(ghost.dir),
         ]),
       ));
+  }
+
+  private async recentUpdatesInstallSnapshot(
+    owner: ActiveAppSession,
+    ledger: PluginMarketLedger,
+    plugin: VisiblePluginSummary,
+  ): Promise<LocalInstallSnapshot> {
+    const counterpart = isSimulatorMigrationTarget(plugin) ? LEGACY_SIMULATOR_ID
+      : isLegacySimulatorListing(plugin) ? SIMULATOR_ID : undefined;
+    const exact = !(plugin.scope === 'organization' && !hasDeliveryNamespace(plugin))
+      ? findCachedMarketInstallation(plugin) : undefined;
+    // A cold or legacy registry can miss the exact key. Preserve the existing
+    // namespace and migration checks with asynchronous discovery in that case.
+    const ghosts = exact && exact.namespaceState !== 'pending' ? [exact]
+      : (await createMarketBackgroundRefresh().list()).filter((ghost) =>
+        ghost.manifest.id === plugin.ghostId || ghost.manifest.id === counterpart);
+    requireSameMarketOwner(owner);
+    const identities = new Map<string, InstalledMarketManifestIdentity | null>();
+    for (const ghost of ghosts) {
+      const result = await readInstalledGhostManifestSnapshotAsync(ghost.dir, GHOST_MANIFEST_MAX_BYTES);
+      requireSameMarketOwner(owner);
+      identities.set(installedGhostStoragePart(ghost), result.ok ? installedMarketManifestIdentity(result.snapshot) : null);
+    }
+    return this.projectLocalInstallSnapshot(ghosts, ledger.read().installations, identities);
   }
 
   private async localInstallSnapshotAsync(

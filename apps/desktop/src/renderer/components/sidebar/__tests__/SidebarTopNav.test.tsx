@@ -19,6 +19,8 @@ const mainViewsMock = vi.hoisted(() => ({
   sidebarVisible: [] as MainViewMock[],
 }));
 const authMock = vi.hoisted(() => ({ owner: 'owner-1' as string | null }));
+const preloadPluginPage = vi.hoisted(() => vi.fn());
+vi.mock('@/features/plugin/GhostPluginRoute', () => ({ preloadPluginPage }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: authMock.owner }) }));
 // A non-empty installed roster marks the plugin list as loaded (Main sends none mid-switch).
 const installedMock = vi.hoisted(() => ({ ghosts: [{ manifest: { id: 'bundled' } }] as unknown[] }));
@@ -68,6 +70,7 @@ function seedKnownPlugins(ids: string[]) {
   navigationTesting.resetArrivals();
 }
 beforeEach(() => {
+  preloadPluginPage.mockClear();
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   searchMock.query = '';
   searchMock.lockedProjectKey = null;
@@ -110,6 +113,18 @@ function Harness({ initialPath, owner = 'one' }: { initialPath: string; owner?: 
     </MainViewHistoryProvider>
   );
 }
+
+it('requests an early plugin load only on intent at the sidebar entry', () => {
+  render(<Harness initialPath="/cc-agent/session-1" />);
+  const plugins = screen.getByRole('button', { name: 'sidebar.tabs.plugins' });
+  expect(preloadPluginPage).not.toHaveBeenCalled();
+  fireEvent.focus(screen.getByRole('button', { name: 'ccAgent.layout.automations' }));
+  expect(preloadPluginPage).not.toHaveBeenCalled();
+  fireEvent.mouseEnter(plugins);
+  expect(preloadPluginPage).toHaveBeenCalledTimes(1);
+  fireEvent.focus(plugins);
+  expect(preloadPluginPage).toHaveBeenCalledTimes(2);
+});
 
 describe('Retirement attention across sidebar navigation placements', () => {
   it.each(['row', 'more', 'rail', 'rail-more'] as const)(

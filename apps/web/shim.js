@@ -465,7 +465,7 @@ import { installAnalyticsRegionGuard } from './analytics-region-guard.js';
     'voiceInput.onDataChanged': () => () => {},
     'accessibilitySupport.getSync': () => false,
     'ghosts.unreadSync': () => STATIC.ghostsUnread,
-    'ghosts.recentUsageSync': () => STATIC.ghostRecentUsage,
+    'ghosts.recentUsage': () => STATIC.ghostRecentUsage,
     'ghosts.noteSessionFocused': () => undefined,
     'ghosts.markUsed': () => undefined,
     'voiceInput.cancel': () => undefined,

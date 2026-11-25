@@ -56,9 +56,9 @@ class MarketDetailCache {
     this.entries.delete(id);
   }
 
-  prefetch(id: string, load: () => Promise<PluginMarketDetail>, isCurrent: () => boolean): void {
+  prefetch(id: string, load: () => Promise<PluginMarketDetail>, isCurrent: () => boolean, fields: DetailFields): void {
     if (this.prefetchPending || this.isFresh(id)) return;
-    const pending = this.load(id, load, 'prefetch', isCurrent).catch(() => undefined).finally(() => {
+    const pending = this.load(id, load, 'prefetch', isCurrent, fields).catch(() => undefined).finally(() => {
       if (this.prefetchPending === pending) this.prefetchPending = null;
     });
     this.prefetchPending = pending;

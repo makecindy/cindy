@@ -23,6 +23,7 @@ import type { GhostManifest } from '../../../../shared/ghost';
 import type { PluginMarketDetail, PluginMarketItem, PluginMarketPage, PluginMarketQuery } from '../../../../shared/pluginMarket';
 import { relatedPluginCatalogCache, removeUnavailableRelatedPlugin, type PluginRelatedCatalog } from '../PluginMoreDetails';
 import { marketDetailCacheFor, marketItemSummary } from '../lib/marketDetailCache';
+import { PLUGIN_CATALOG_REFRESH_MS } from '../lib/pluginBrowserCache';
 import {
   __resetPluginInstallProgressForTest,
   beginPluginInstallProgress,
@@ -258,6 +259,85 @@ describe('More plugins', () => {
     }
   });
 
+  it('caps the related directory at five pages', async () => {
+    const loadPage = vi.fn(async ({ cursor }: PluginMarketQuery) => {
+      const page = Number(cursor ?? '0') + 1;
+      return relatedPage([relatedItem(`Plugin ${page}`)], page < 7 ? String(page) : null);
+    });
+    render(detailWithRelated(detail, relatedCatalog(loadPage)));
+    await screen.findByRole('region', { name: title });
+    expect(loadPage).toHaveBeenCalledTimes(5);
+  });
+
+  it('stops chasing pages when the last detail leaves and resumes the saved cursor', async () => {
+    let finishFirst!: (page: PluginMarketPage) => void;
+    const loadPage = vi.fn(({ cursor }: PluginMarketQuery) => cursor
+      ? Promise.resolve(relatedPage([relatedItem('Second page')]))
+      : new Promise<PluginMarketPage>(resolve => { finishFirst = resolve; }));
+    const catalog = relatedCatalog(loadPage);
+    const view = render(detailWithRelated(detail, catalog));
+    expect(loadPage).toHaveBeenCalledTimes(1);
+    view.unmount();
+    await act(async () => { finishFirst(relatedPage([relatedItem('First page')], 'next')); });
+    expect(loadPage).toHaveBeenCalledTimes(1);
+    render(detailWithRelated(detail, catalog));
+    await screen.findByRole('region', { name: title });
+    expect(loadPage.mock.calls.map(([query]) => query.cursor)).toEqual([null, 'next']);
+  });
+
+  it('waits until the detail becomes visible before requesting the first page', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    const loadPage = vi.fn(async () => relatedPage([relatedItem('Available plugin')]));
+    try {
+      render(detailWithRelated(detail, relatedCatalog(loadPage)));
+      expect(loadPage).not.toHaveBeenCalled();
+      visibility.mockReturnValue('visible');
+      fireEvent(document, new Event('visibilitychange'));
+      await screen.findByRole('region', { name: title });
+      expect(loadPage).toHaveBeenCalledTimes(1);
+    } finally {
+      visibility.mockRestore();
+    }
+  });
+
+  it('keeps all three recommendation slots when the directory is refreshed after expiry', async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const candidates = ['A', 'B', 'C', 'D', 'E'].map(relatedId => relatedItem(relatedId));
+    const loadPage = vi.fn(async (_query: PluginMarketQuery) => relatedPage(candidates));
+    const catalog = relatedCatalog(loadPage);
+    try {
+      const visit = async () => {
+        const view = render(detailWithRelated(detail, catalog));
+        await screen.findByRole('region', { name: title });
+        const names = cardNames();
+        view.unmount();
+        return names;
+      };
+      const first = await visit();
+      expect(first).toEqual(['A', 'B', 'C']);
+      now += PLUGIN_CATALOG_REFRESH_MS - 1;
+      expect(await visit()).toEqual(first);
+      expect(loadPage).toHaveBeenCalledTimes(1);
+      now++;
+      random.mockReturnValue(0.99);
+      const refreshed = await visit();
+      expect(loadPage).toHaveBeenCalledTimes(2);
+      expect(refreshed).toEqual(first);
+      now += PLUGIN_CATALOG_REFRESH_MS;
+      loadPage.mockImplementation(async ({ cursor }) => relatedPage(candidates.slice(3), String(Number(cursor) + 1)));
+      expect(await visit()).toEqual(first);
+      expect(loadPage).toHaveBeenCalledTimes(7);
+      removeUnavailableRelatedPlugin(catalog.cache, 'B');
+      expect(await visit()).toEqual(['A', 'E', 'C']);
+      expect(loadPage).toHaveBeenCalledTimes(7);
+    } finally {
+      clock.mockRestore();
+      random.mockRestore();
+    }
+  });
+
   it('keeps a failed load invisible until the next visit, then shows the one available plugin', async () => {
     const survivor = relatedItem('Only available plugin');
     const loadPage = vi.fn(async () => relatedPage([survivor]));
@@ -278,6 +358,18 @@ describe('More plugins', () => {
 });
 
 describe('MarketPluginDetailView', () => {
+  it('keeps the detail article visible while waiting to measure a pending README', () => {
+    const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(800);
+    try {
+      const { container } = renderDetail({ manifest: { ...manifest, readme: { en: 'README.md' } } });
+      const article = container.querySelector('article');
+      expect(article?.classList.contains('invisible')).toBe(false);
+      expect(article?.getAttribute('data-plugin-detail-waiting')).toBe('true');
+      expect(screen.getByRole('heading', { name: detail.name })).toBeTruthy();
+    } finally {
+      height.mockRestore();
+    }
+  });
   // Unit / round2 §4.2: manifest readiness starts a bounded README wait.
   // Hold the body until just before or just after the deadline.
   it.each([149, 150])('uses only README content ready when fitting at %i ms', delay => {
@@ -296,14 +388,14 @@ describe('MarketPluginDetailView', () => {
     try {
       const { container, rerender } = render(<MarketPluginDetailView {...props} detail={marketItemSummary(detail)} />);
       const article = container.querySelector('article')!;
-      expect(article.classList.contains('invisible')).toBe(false);
+      expect(article.hasAttribute('data-plugin-detail-waiting')).toBe(false);
       rerender(<MarketPluginDetailView {...props} detail={declared} />);
-      expect(article.classList.contains('invisible')).toBe(true);
+      expect(article.getAttribute('data-plugin-detail-waiting')).toBe('true');
       act(() => { vi.advanceTimersByTime(delay); });
-      expect(article.classList.contains('invisible')).toBe(delay < 150);
+      expect(article.hasAttribute('data-plugin-detail-waiting')).toBe(delay < 150);
       rerender(<MarketPluginDetailView {...props} detail={{ ...declared,
         readme: { path: 'README.md', markdown: 'A visual guide', images: {} } }} />);
-      expect(article.classList.contains('invisible')).toBe(false);
+      expect(article.hasAttribute('data-plugin-detail-waiting')).toBe(false);
       const preview = article.querySelector('.plugin-detail-readme-preview');
       expect(Boolean(preview)).toBe(delay < 150);
       expect(screen.queryByText('A visual guide') !== null).toBe(delay < 150);

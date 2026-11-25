@@ -6886,6 +6886,27 @@ describe('organization default Plugin takeover', () => {
 });
 
 describe('market detail 响应身份绑定', () => {
+  it('reads recent updates without scanning other plugin installations', async () => {
+    const item = summary({ namespace: null });
+    const h = harness([item]);
+    const rawManifest = manifest(item.ghostId);
+    const dir = installRuntimeGhost(rawManifest);
+    runtime.ghosts.push(...Array.from({ length: 29 }, (_, index) => ghostEntry(`unrelated-${index}`)));
+    const installed = { ...runtime.ghosts[0], dir, namespace: null,
+      approval: { state: 'approved', revision: 'fixture' } } as unknown as InstalledGhost;
+    runtime.findInstalledInstance = vi.fn((id: string) => id === item.ghostId ? installed : undefined);
+    const updates = [{ version: '1.0.0', publishedAt: '2026-07-23T00:00:00.000Z', releaseNotes: 'Notes' }];
+    const response = { ...detail(item), updates };
+    h.api.detail.mockResolvedValueOnce(response);
+
+    const result = await h.service.detail(item.id, { includeUpdates: true });
+
+    expect(result.updates).toEqual(updates);
+    expect(h.api.resolve).toHaveBeenCalledTimes(1);
+    expect(h.api.detail).toHaveBeenCalledExactlyOnceWith(item.id, { includeUpdates: true });
+    expect(runtime.listScans).toBe(0);
+  });
+
   it('rejects a detail response that changes the default-install policy', async () => {
     const item = organizationDefaultSummary();
     const h = harness([item]);

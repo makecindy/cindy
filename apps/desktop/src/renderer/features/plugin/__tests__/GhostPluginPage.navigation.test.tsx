@@ -9,7 +9,9 @@ import type { PluginMarketDetail } from '../../../../shared/pluginMarket';
 import type { ContributionTransferView, MyPluginDetailView, MyPluginReleasePageView } from '../../../../shared/pluginContributions';
 import type { InstalledGhost } from '../../../../shared/ghost';
 import { __resetInstalledGhostsStoreForTest } from '@/cindy-brain/useInstalledGhosts';
+import { __testing as dataOwnerTesting, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { PluginReviewUpdatesProvider } from '@/contexts/PluginReviewUpdatesContext';
+import type { DataOwnerPushStamp } from '../../../../shared/dataOwnerPush';
 import {
   cancelPendingPluginSuggestion,
   getPendingPluginSuggestion,
@@ -196,7 +198,7 @@ beforeEach(() => {
     ghosts: {
       listSync: () => ({ ghosts: [] }),
       legacyRecoveryStatus: vi.fn().mockResolvedValue({ state: 'none' }),
-      recentUsageSync: () => ({ ids: [] }),
+      recentUsage: async () => ({ ids: [] }),
       onChanged: () => () => {},
       onRecentUsageChanged: () => () => {},
     },
@@ -270,6 +272,89 @@ function page(entry: string, withRetirementNavigation = false) {
     </MemoryRouter>
   );
 }
+
+describe('installed recent usage', () => {
+  type Listener = (payload: { ids: string[] }, stamp?: DataOwnerPushStamp) => void;
+  afterEach(() => dataOwnerTesting.reset());
+
+  function setupRecentUsage() {
+    const owner = { dataOwnerId: auth.dataOwnerId, ownerGeneration: auth.dataOwnerGeneration };
+    setDataOwnerGeneration(owner.dataOwnerId, owner.ownerGeneration);
+    const installed: InstalledGhost[] = ['alpha', 'beta'].map(id => ({
+      manifest: { ...detail.manifest, id, name: id }, dir: path.join('plugins', id), enabled: true,
+      approval: { state: 'approved', revision: 'recent-usage' },
+    }));
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: installed });
+    const pending: Array<{ resolve: (payload: { ids: string[] }) => void; reject: (error: Error) => void }> = [];
+    const recentUsage = vi.fn(() => new Promise<{ ids: string[] }>((resolve, reject) => { pending.push({ resolve, reject }); }));
+    const listeners = new Set<Listener>();
+    Object.assign(window.electronAPI.ghosts, {
+      recentUsage,
+      onRecentUsageChanged: (listener: Listener) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+    });
+    const readOrder = () => [...screen.getByRole('main').querySelectorAll<HTMLElement>('[data-plugin-id^="installed:"]')]
+      .map(row => row.dataset.pluginId);
+    return { pending, recentUsage, readOrder, owner,
+      push: (ids: string[], stamp = owner) => { listeners.forEach(listener => listener({ ids }, stamp)); } };
+  }
+
+  it('shows the installed list while the main process recent usage reply is still pending', async () => {
+    const { pending, recentUsage, readOrder } = setupRecentUsage();
+    render(page('/plugins'));
+    await screen.findByRole('button', { name: 'alpha' });
+    const scroller = screen.getByRole('main');
+    scroller.scrollTop = 24;
+    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
+    expect(recentUsage).toHaveBeenCalledOnce();
+    await act(async () => { pending[0]!.resolve({ ids: ['beta'] }); });
+    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
+    expect(screen.getByRole('main')).toBe(scroller);
+    expect(scroller.scrollTop).toBe(24);
+  });
+
+  it('discards recent usage that resolves between the owner fence and the new owner render', async () => {
+    const { pending, recentUsage, readOrder, push, owner } = setupRecentUsage();
+    const view = render(page('/plugins'));
+    await screen.findByRole('button', { name: 'alpha' });
+    expect(recentUsage).toHaveBeenCalledOnce();
+    const nextOwner = { dataOwnerId: 'recent-usage-next-owner', ownerGeneration: owner.ownerGeneration + 1 };
+    setDataOwnerGeneration(nextOwner.dataOwnerId, nextOwner.ownerGeneration);
+    await act(async () => { pending[0]!.resolve({ ids: ['beta'] }); });
+    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
+    Object.assign(auth, { dataOwnerId: nextOwner.dataOwnerId, dataOwnerGeneration: nextOwner.ownerGeneration });
+    view.rerender(page('/plugins'));
+    expect(recentUsage).toHaveBeenCalledTimes(2);
+    act(() => push(['beta'], owner));
+    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
+    await act(async () => { pending[1]!.resolve({ ids: ['beta'] }); });
+    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
+  });
+
+  it('keeps a recent usage push ahead of the older initial reply', async () => {
+    const { pending, recentUsage, readOrder, push } = setupRecentUsage();
+    render(page('/plugins'));
+    await screen.findByRole('button', { name: 'alpha' });
+    expect(recentUsage).toHaveBeenCalledOnce();
+    act(() => push(['beta']));
+    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
+    await act(async () => { pending[0]!.resolve({ ids: ['alpha'] }); });
+    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
+  });
+
+  it('keeps the installed page usable when the recent usage read fails', async () => {
+    const { pending, recentUsage, readOrder } = setupRecentUsage();
+    const error = vi.spyOn(toast, 'error');
+    render(page('/plugins'));
+    await screen.findByRole('button', { name: 'alpha' });
+    expect(recentUsage).toHaveBeenCalledOnce();
+    await act(async () => { pending[0]!.reject(new Error('Recent usage unavailable')); });
+    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
+    expect(error).not.toHaveBeenCalled();
+  });
+});
 
 describe('market action feedback', () => {
   // Unit, #10358: exercise the real page with one delayed detail response.
@@ -550,20 +635,29 @@ it('fills installed recommendation slots from the original pool and hides the in
   expect(recommendations).toHaveBeenCalledTimes(1);
 });
 
-it('searches globally and returns to the original market tab without rerolling recommendations', async () => {
+// Unit / §8.6: Escape through the real page must reuse the fresh list. The
+// recommendation-only assertion did not catch a second catalog read on exit.
+it('searches globally and reuses the original market tab without catalog reads on Escape', async () => {
   const pool = [0, 1, 2].map(index => ({ ...detail, pluginId: `today-${index}`, ghostId: `today-${index}`, name: `Today ${index}` }));
   const recommendations = vi.fn(async () => pool);
   window.electronAPI.pluginMarket.recommendations = recommendations;
+  const query = vi.spyOn(window.electronAPI.pluginMarket, 'query');
   render(page('/plugins'));
   fireEvent.click(await screen.findByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+  await screen.findByRole('button', { name: detail.name });
   const input = openPluginSearch();
   fireEvent.change(input, { target: { value: 'Navigation' } });
   expect(screen.queryByRole('tab', { name: /settings.ghosts.page.marketSection/ })).toBeNull();
   expect(screen.queryByText('settings.ghosts.page.todayRecommendations')).toBeNull();
-  await screen.findByRole('button', { name: detail.name });
-  fireEvent.change(input, { target: { value: '' } });
+  await waitFor(() => expect(query.mock.calls.filter(([input]) => input.query === 'Navigation')).toHaveLength(2));
+  query.mockClear();
+  await act(async () => { fireEvent.keyDown(input, { key: 'Escape' }); });
+  // Flush the zero-delay catalog activation, which could otherwise run after
+  // the synchronous tab restoration assertion.
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   expect(await screen.findByRole('tab', { name: /settings.ghosts.page.marketSection/, selected: true })).toBeTruthy();
   expect(recommendations).toHaveBeenCalledTimes(1);
+  expect(query).not.toHaveBeenCalled();
 });
 
 // Unit: PR #6433 reproduced a user Skill stealing the creation action when Claude
@@ -1117,7 +1211,7 @@ describe('plugin page return navigation', () => {
   // create network work, and an equal background response must not render detail.
   it('prefetches only a sustained hover, opens warm details and skips unchanged background renders', async () => {
     // Keep the signed URL valid past both foreground intervals and below the timer limit.
-    const warm = { ...detail, readme: null, icon: { mimeType: 'image/png', sha256: 'a'.repeat(64), sizeBytes: 42,
+    const warm = { ...detail, readme: null, updates: [], icon: { mimeType: 'image/png', sha256: 'a'.repeat(64), sizeBytes: 42,
       url: 'https://example.invalid/icon.png?signature=first', expiresAt: new Date(Date.now() + 5 * 60_000).toISOString() } };
     loadDetail.mockResolvedValue(warm);
     render(page('/plugins'));
@@ -1153,6 +1247,31 @@ describe('plugin page return navigation', () => {
     });
     expect(loadDetail).toHaveBeenCalledTimes(3);
     expect(detailRenders).toHaveBeenCalledTimes(beforeForeground);
+  });
+
+  // Unit / §8.1: click a real market card after its hover delay. Existing TTL
+  // and scroll-prefetch cases never opened the same live or warm request.
+  it.each(['pending', 'completed'] as const)('uses one full detail request after a %s hover prefetch', async phase => {
+    let finish = () => {};
+    loadDetail.mockImplementation(async (_id, options) => {
+      if (phase === 'pending' && loadDetail.mock.calls.length === 1) {
+        await new Promise<void>(resolve => { finish = resolve; });
+      }
+      return { ...detail, ...(options?.includeReadme ? { readme: null } : {}),
+        ...(options?.includeUpdates ? { updates: [{
+          version: detail.version, publishedAt: detail.publishedAt, releaseNotes: 'Prefetched update',
+        }] } : {}) };
+    });
+    render(page('/plugins'));
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+    const card = await screen.findByRole('button', { name: detail.name });
+    vi.useFakeTimers();
+    fireEvent.pointerEnter(card.closest('article')!);
+    await act(async () => { vi.advanceTimersByTime(250); });
+    expect(loadDetail).toHaveBeenCalledOnce();
+    await act(async () => { fireEvent.click(card); finish(); });
+    expect(loadDetail).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Prefetched update')).toBeTruthy();
   });
 
   it('uses the refreshed release and manifest for installation instead of cached confirmation data', async () => {
@@ -1538,7 +1657,7 @@ describe('plugin page return navigation', () => {
     expect(loadDetail).toHaveBeenCalledTimes(2);
   });
 
-  it('loads installed history after a market-card hover cached details without updates', async () => {
+  it('reuses installed history after a market-card hover', async () => {
     setupInstalledHistory();
     render(page('/plugins'));
     fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
@@ -1546,14 +1665,13 @@ describe('plugin page return navigation', () => {
     vi.useFakeTimers();
     fireEvent.pointerEnter(card.closest('article')!);
     await act(async () => { vi.advanceTimersByTime(250); });
-    expect(loadDetail.mock.calls).toEqual([[detail.pluginId]]);
+    expect(loadDetail).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.installedSection/ }));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: detail.name })); });
     expect(screen.getByText('Newest release notes')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'settings.ghosts.detail.olderUpdates 3' })).toBeTruthy();
     expect(loadDetail.mock.calls).toEqual([
-      [detail.pluginId],
-      [detail.pluginId, { includeUpdates: true, includeReadme: false }],
+      [detail.pluginId, { includeUpdates: true, includeReadme: true }],
     ]);
   });
 

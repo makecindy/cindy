@@ -56,7 +56,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAuth } from '@/contexts/AuthContext';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import { isDataOwnerGenerationCurrent, isDataOwnerPushCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { readInstalledGhostsSnapshot, useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -252,6 +252,7 @@ const RECOMMENDED_FILTERS: readonly PluginPresentationFilter[] = [
 const MAX_VISIBLE_INSTALLED_PLUGINS = PLUGIN_PAGE_SIZE;
 /** 折叠入口只预览前三个隐藏插件，避免头像堆叠反过来抢占操作文案。 */
 const MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS = 3;
+const EMPTY_RECENT_GHOST_IDS: readonly string[] = [];
 
 /**
  * 本期隐藏「我的发布」二级 tab，避免与「已安装」争抢顶层布局。
@@ -451,6 +452,10 @@ export const __installedPluginLayoutForTests = {
 /** 市场首装成功后打开已装详情；更新或来源替换继续停留在当前页面。 */
 export function shouldOpenInstalledDetailAfterMarketSuccess(isUpdate: boolean): boolean {
   return !isUpdate;
+}
+
+function marketDetailFields(item?: PluginMarketItem) {
+  return { includeUpdates: !item || item.sourceType === 'server', includeReadme: true };
 }
 
 function installedGhostMarketKeyFor(ghosts: readonly InstalledGhost[]): string {
@@ -690,8 +695,10 @@ function LocalPluginCatalogSource({
   const prefetchMarketDetail = useCallback((item: PluginMarketItem, isCurrent: () => boolean) => {
     const scrollStamp = lastDetailScrollRef.current;
     if (Date.now() - scrollStamp < 250) return;
-    detailCache.prefetch(item.pluginId, async () => retainMarketDetailIcon(await window.electronAPI.pluginMarket.detail(item.pluginId), item),
-      () => isCurrent() && lastDetailScrollRef.current === scrollStamp && activeDetailCacheRef.current === detailCache);
+    const fields = marketDetailFields(item);
+    detailCache.prefetch(item.pluginId,
+      async () => retainMarketDetailIcon(await window.electronAPI.pluginMarket.detail(item.pluginId, fields), item),
+      () => isCurrent() && lastDetailScrollRef.current === scrollStamp && activeDetailCacheRef.current === detailCache, fields);
   }, [detailCache]);
   const contributionViewKey = JSON.stringify([location.key, selectedId, marketDetail?.pluginId]);
   const contributionView = useRef({ key: contributionViewKey, token: {} });
@@ -849,9 +856,9 @@ function LocalPluginCatalogSource({
       scopeDir === null ? globallyEnabled : globallyEnabled && !projectDisabled.has(id),
     [projectDisabled, scopeDir],
   );
-  const [recentGhostIds, setRecentGhostIds] = useState(
-    () => window.electronAPI.ghosts.recentUsageSync().ids,
-  );
+  const [recentUsage, setRecentUsage] = useState<DataOwnerGeneration & { ids: string[] }>();
+  const recentGhostIds = recentUsage && recentUsage.dataOwnerId === dataOwnerId && recentUsage.generation === dataOwnerGeneration
+    ? recentUsage.ids : EMPTY_RECENT_GHOST_IDS;
   useEffect(() => window.electronAPI.ghosts.onWorkdirPrefsChanged?.((policy, ownerStamp) => {
     if (!scopeDirRef.current || !isDataOwnerPushCurrent(ownerStamp)) return;
     if (scopeKeyRef.current === undefined) { handlePickScope(scopeDirRef.current); return; }
@@ -873,13 +880,31 @@ function LocalPluginCatalogSource({
       }),
     [],
   );
-  useEffect(
-    () =>
-      window.electronAPI.ghosts.onRecentUsageChanged(({ ids }) => {
-        setRecentGhostIds(ids);
-      }),
-    [],
-  );
+  useEffect(() => {
+    if (!active) return;
+    const owner = { dataOwnerId, generation: dataOwnerGeneration };
+    let mounted = true;
+    let receivedPush = false;
+    const isCurrent = () => mounted && isDataOwnerGenerationCurrent(owner);
+    const apply = (ids: string[]) => setRecentUsage(ids.length ? { ...owner, ids } : undefined);
+    const unsubscribe = window.electronAPI.ghosts.onRecentUsageChanged(({ ids }, ownerStamp) => {
+      if (!isCurrent() || !isDataOwnerPushCurrent(ownerStamp)) return;
+      receivedPush = true;
+      apply(ids);
+    });
+    void (async () => {
+      try {
+        const { ids } = await window.electronAPI.ghosts.recentUsage();
+        if (isCurrent() && !receivedPush) apply(ids);
+      } catch {
+        if (isCurrent() && !receivedPush) apply([]);
+      }
+    })();
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, [active, dataOwnerId, dataOwnerGeneration]);
   useEffect(() => {
     legacyRecoveryStatusRequestRef.current += 1;
     legacyRecoveryRetryRequestRef.current += 1;
@@ -942,6 +967,11 @@ function LocalPluginCatalogSource({
     () => marketSnapshot?.customSourceNames ?? [],
     [marketSnapshot?.customSourceNames],
   );
+  const catalogDataRevision = useMemo(() => JSON.stringify([
+    catalogRevision, showEnterprise, user?.orgId, installedGhostMarketKey, customSourceNames,
+    marketSnapshot?.organizationAccessError ?? null, marketSnapshot?.unavailableCustomSourceNames ?? [],
+    marketSnapshot?.items.map(item => [item.pluginId, item.installState, item.releaseId, item.version]) ?? [],
+  ]), [catalogRevision, showEnterprise, user?.orgId, installedGhostMarketKey, customSourceNames, marketSnapshot]);
   const [addMarketplaceOpen, setAddMarketplaceOpen] = useState(false);
   const [githubInstallOwner, setGithubInstallOwner] = useState<string | null>(null);
   const githubUpdateByInstanceId = useMemo(
@@ -1013,11 +1043,7 @@ function LocalPluginCatalogSource({
         ? 'all'
         : originFilter;
 
-  // ── 已安装区排序:未读通知(新→旧) → 最近使用 → 基础序,实时计算 ──
-  // 反应式而非冻结快照:排序信号变化即重排。安全边界——`markUsed` 只在对话里
-  // 触发(ChatInput),插件页自身不打点,所以「最近使用」的变化只发生在离开本页
-  // 之后,回到页面即已重排,不会在用户眼皮下洗牌;后台到达的未读通知冒头则正是
-  // 目的所在。切账号/模式时 recentGhostIds 与未读表都会随 owner 快照整体作废。
+  // 未读通知优先；首屏先用基础序，最近使用返回后在同一列表应用一次排序。
   // marketUpdate 刻意不作排序键——更新已有统一横幅兜底,可被折叠。
   const unreadEntries = useGhostUnreadEntries();
   const unreadAtById = useMemo(
@@ -1636,7 +1662,7 @@ function LocalPluginCatalogSource({
       if (cached) setMarketDetail(cached);
       else if (preview) setMarketDetail(summary as PluginMarketItem);
       try {
-        const fields = { includeUpdates: !preview || preview.sourceType === 'server', includeReadme: true };
+        const fields = marketDetailFields(preview);
         const detail = await detailCache.load(pluginId,
           async () => retainMarketDetailIcon(await window.electronAPI.pluginMarket.detail(pluginId, fields), preview),
           'open', current, fields);
@@ -1697,7 +1723,7 @@ function LocalPluginCatalogSource({
     const current = () => contributionMounted.current && requestId === marketDetailRequestRef.current && contributionOwnerRef.current === owner && activeDetailCacheRef.current === detailCache;
     try {
       const cached = detailCache.peek(pluginId);
-      const fields = { includeUpdates: !cached || cached.sourceType === 'server', includeReadme: true };
+      const fields = marketDetailFields(cached);
       const detail = await detailCache.load(pluginId, () => window.electronAPI.pluginMarket.detail(pluginId, fields),
         background ? 'background' : 'refresh', current, fields);
       if (!current()) return;
@@ -2508,8 +2534,7 @@ function LocalPluginCatalogSource({
           iconCache: catalogMemory.marketIcons,
           prewarm: active && marketSnapshot !== null,
           catalogKey: marketLocale,
-          revision: JSON.stringify([customSourceNames, catalogRevision,
-            query.trim() ? [installedGhostMarketKey, marketSnapshot?.items.map(item => [item.pluginId, item.installState])] : null]),
+          revision: catalogDataRevision,
           installedItems: marketSnapshot?.items,
           installedGhosts: ghosts,
           scope: catalogTab === 'installed' && !query.trim() ? 'official' : effectiveOriginFilter,

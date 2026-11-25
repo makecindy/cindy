@@ -93,7 +93,7 @@ void mountPage({
       getCreditUsage: read({ available: '0', plan: creditPool, purchased: creditPool, promotional: creditPool, promotionalGrants: [], promotionalGrantsComplete: true, promotionalGrantConsistency: 'OBSERVED', ledgerUpdatedAt: null, scale: 9, observedAt: '2026-11-02T00:00:00Z' }),
     },
     sharedTask: { account: read([]) },
-    ghosts: { listSync: () => ({ ghosts: [] }), recentUsageSync: () => ({ ids: [] }), onChanged: subscription('ghosts'), onRecentUsageChanged: subscription('ghost-usage') },
+    ghosts: { listSync: () => ({ ghosts: [] }), recentUsage: read({ ids: [] }), onChanged: subscription('ghosts'), onRecentUsageChanged: subscription('ghost-usage') },
     pluginMarket: { snapshot: read({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] }), onUpdateConsentHoldsChanged: subscription('plugin-consent') },
     deviceLink: { getState: read({ remoteControlEnabled: Boolean(ctx.data.cloud), linkStatus: ctx.data.cloud ? 'online' : 'disconnected', controlledBy: [] }), onControlTargetChanged: subscription('control-target'), onOwnershipChanged: subscription('ownership'), onControlledState: subscription('controlled'), onConnectionIssue: subscription('connection-issue'), getSettings: read({}), getStatus: read({ connected: false }), listDevices: read({ devices: ctx.data.cloud ? [{ deviceId: 'fixture-pc', name: 'Preview PC', isSelf: true, online: true, platform: 'win32', remoteControlEnabled: true, controlEnabled: true }] : [] }), onPresenceChanged: subscription('presence'), onStatusChanged: subscription('device-status') },
     remoteDesktop: { state: read({ enabled: false }) },

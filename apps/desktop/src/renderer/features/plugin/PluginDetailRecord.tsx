@@ -2,7 +2,6 @@ import { ChevronRight, Shield, type LucideIcon } from 'lucide-react';
 import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SettingsCard } from '@/components/ui/settings-rows';
-import { cn } from '@/lib/utils';
 
 const steps = ['description', 'updates', 'readme', 'permissions', 'facts'] as const;
 type DetailBlock = typeof steps[number];
@@ -139,7 +138,9 @@ export function PluginDetailArticle({ layout, className, children }: {
 }) {
   return (
     <PluginDetailLayoutContext.Provider value={layout.context}>
-      <article ref={layout.article} className={cn(className, layout.waiting && 'invisible')}>{children}</article>
+      <article ref={layout.article} className={className} data-plugin-detail-waiting={layout.waiting || undefined}>
+        {children}
+      </article>
     </PluginDetailLayoutContext.Provider>
   );
 }

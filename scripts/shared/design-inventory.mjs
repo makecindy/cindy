@@ -709,9 +709,10 @@ export function catalogSurfaces() {
       id: 'desktop.plugins.installed',
       platform: 'desktop',
       title: '已装插件',
-      productionEntry: 'hash `/plugins`（GhostPluginPage）',
+      productionEntry: 'hash `/plugins`（GhostPluginRoute）',
       // 覆盖本机、远程管理与页面共用的菜单、详情及动效。
       reachableComponents: [
+        'GhostPluginRoute',
         'GhostPluginPage',
         'GhostPluginDetailView',
         'GhostPluginActions',
@@ -728,6 +729,7 @@ export function catalogSurfaces() {
         'UpdateAllDialog',
       ],
       styleRoots: [
+        'apps/desktop/src/renderer/features/plugin/GhostPluginRoute.tsx',
         'apps/desktop/src/renderer/features/plugin/GhostPluginPage.tsx',
         'apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx',
         'apps/desktop/src/renderer/features/plugin/GhostPluginActions.tsx',
@@ -746,7 +748,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/features/plugin/plugin-motion.css',
       ],
       routerPaths: ['/plugins'],
-      routeEntryComponents: { '/plugins': 'GhostPluginPage' },
+      routeEntryComponents: { '/plugins': 'GhostPluginRoute' },
     },
     {
       id: 'desktop.plugins.app-main',

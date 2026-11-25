@@ -4,11 +4,12 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import type { PluginMarketItem, PluginMarketPage, PluginMarketQuery } from '../../../shared/pluginMarket';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { PluginDetailSection } from './PluginDetailRecord';
 import { PluginPublisherBadge } from './PluginPublisherBadge';
-import { readReusedMarketIcon, type MarketIconCache } from './lib/pluginBrowserCache';
+import { PLUGIN_CATALOG_REFRESH_MS, readReusedMarketIcon, type MarketIconCache } from './lib/pluginBrowserCache';
 import { marketItemMatchesInstalledGhost, pluginPresentationOrigin, publicPublisherFilter, simulatorMigrationCounterpart } from './lib/pluginMarketPresentation';
 import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
 
@@ -27,9 +28,22 @@ export interface PluginRelatedCatalog {
 
 type RelatedDirectory = {
   items: Map<string, PluginMarketItem>;
-  selections: Map<string, Array<string | undefined>>;
+  nextCursor: string | null;
+  seenCursors: Set<string>;
+  pages: number;
+  updatedAt: number;
+  readers: number;
+  flight?: Promise<void>;
 };
-const directories = new WeakMap<object, Promise<RelatedDirectory>>();
+type RelatedCache = {
+  directory?: RelatedDirectory;
+  selections: Map<string, Array<PluginMarketItem | undefined>>;
+};
+const RELATED_PAGE_SIZE = 100;
+const RELATED_PAGE_LIMIT = 5;
+// A normal session stays below 500 detail views; opening more distinct plugins evicts the least recently visited selection, which is redrawn on return.
+const RELATED_SELECTION_LIMIT = 500;
+const relatedCaches = new WeakMap<object, RelatedCache>();
 let localOwner: { key: string; cache: object } | undefined;
 
 /** Keep the directory independent of the list, including when its locale changes. */
@@ -42,72 +56,118 @@ function canRecommend(item: PluginMarketItem) {
   return item.sourceType === 'server' && (item.scope === 'public' || item.scope === 'organization');
 }
 
-function readDirectory(cache: object, loadPage: PluginRelatedCatalog['loadPage']) {
+function getRelatedCache(key: object): RelatedCache {
+  const existing = relatedCaches.get(key);
+  if (existing) return existing;
+  // Selections belong to this account's running session and survive directory refreshes.
+  const cache: RelatedCache = { selections: new Map() };
+  relatedCaches.set(key, cache);
+  return cache;
+}
+
+function getDirectory(cache: RelatedCache): RelatedDirectory {
+  const previous = cache.directory;
+  if (previous && (previous.flight || previous.readers || Date.now() - previous.updatedAt < PLUGIN_CATALOG_REFRESH_MS)) return previous;
+  cache.directory = {
+    items: new Map(), nextCursor: null, seenCursors: new Set(),
+    pages: 0, updatedAt: Date.now(), readers: 0,
+  };
+  return cache.directory;
+}
+
+function readDirectory(cache: RelatedCache, directory: RelatedDirectory, loadPage: PluginRelatedCatalog['loadPage']) {
+  if (directory.flight) return directory.flight;
   const owner = getDataOwnerGeneration();
-  const request = (async (): Promise<RelatedDirectory> => {
-    const items = new Map<string, PluginMarketItem>();
-    const seenCursors = new Set<string>();
-    let cursor: string | null = null;
-    do {
-      const page: PluginMarketPage = await loadPage({ scope: 'all', limit: 100, counts: false, cursor });
+  // Draw uniformly from the complete directory when it fits in the budget.
+  // For larger catalogs, only candidates in the first five pages participate.
+  directory.flight = (async () => {
+    while (directory.readers && directory.pages < RELATED_PAGE_LIMIT &&
+      (directory.pages === 0 || directory.nextCursor !== null)) {
+      if (!isDataOwnerGenerationCurrent(owner)) throw new Error('Catalog unavailable');
+      const page = await loadPage({ scope: 'all', limit: RELATED_PAGE_SIZE, counts: false, cursor: directory.nextCursor });
       if (!isDataOwnerGenerationCurrent(owner) || page.unavailableReason) throw new Error('Catalog unavailable');
-      for (const item of page.items) {
-        if (canRecommend(item)) items.set(item.pluginId, item);
+      if (page.nextCursor && directory.seenCursors.has(page.nextCursor)) {
+        throw new Error('Catalog cursor did not advance');
       }
-      cursor = page.nextCursor;
-      if (cursor) {
-        if (seenCursors.has(cursor)) throw new Error('Catalog cursor did not advance');
-        seenCursors.add(cursor);
+      for (const item of page.items.filter(canRecommend).slice(0, RELATED_PAGE_SIZE)) {
+        directory.items.set(item.pluginId, item);
       }
-    } while (cursor);
-    return { items, selections: new Map() };
+      directory.pages++;
+      directory.nextCursor = page.nextCursor;
+      if (page.nextCursor) directory.seenCursors.add(page.nextCursor);
+      directory.updatedAt = Date.now();
+    }
   })().catch(error => {
-    directories.delete(cache);
+    // A failed cursor chain starts over on the next visit. A paused chain keeps its cursor.
+    if (cache.directory === directory) cache.directory = undefined;
     throw error;
+  }).finally(() => {
+    directory.flight = undefined;
   });
-  directories.set(cache, request);
-  return request;
+  return directory.flight;
 }
 
 /** Reuse a definitive refusal from the existing detail read, without a second request. */
 export function removeUnavailableRelatedPlugin(cache: object, pluginId: string) {
-  void directories.get(cache)?.then(directory => directory.items.delete(pluginId), () => undefined);
+  const related = relatedCaches.get(cache);
+  if (!related) return;
+  for (const slots of related.selections.values()) {
+    const slot = slots.findIndex(item => item?.pluginId === pluginId);
+    if (slot >= 0) slots[slot] = undefined;
+  }
+  const directory = related.directory;
+  if (directory) {
+    const remove = () => { directory.items.delete(pluginId); };
+    remove();
+    void directory.flight?.then(remove, remove);
+  }
 }
 
-function selectRelatedPlugins(directory: RelatedDirectory, detailId: string,
+function selectRelatedPlugins(directory: RelatedDirectory, selections: RelatedCache['selections'], detailId: string,
   liveItems: PluginRelatedCatalog['liveItems'], installedGhosts: PluginRelatedCatalog['installedGhosts']) {
   const liveById = new Map(liveItems?.map(item => [item.pluginId, item]));
-  const eligible = new Map<string, PluginMarketItem>();
-  for (const original of directory.items.values()) {
+  const eligibleItem = (original: PluginMarketItem): PluginMarketItem | undefined => {
     const live = liveById.get(original.pluginId);
     const item = live ?? original;
-    if (item.pluginId === detailId || !canRecommend(item)) continue;
+    if (item.pluginId === detailId || !canRecommend(item)) return;
     const counterpart = simulatorMigrationCounterpart(item);
     if (installedGhosts?.some(ghost =>
-      ghost.manifest.id === counterpart || marketItemMatchesInstalledGhost(item, ghost))) continue;
+      ghost.manifest.id === counterpart || marketItemMatchesInstalledGhost(item, ghost))) return;
 
-    // The once-per-run directory cannot report later uninstalls. Use its old
+    // The cached directory cannot report later uninstalls. Use its old
     // installed state only when neither the live catalog nor roster can replace it.
-    if (item.installState === 'not-installed') {
-      eligible.set(item.pluginId, item);
-    } else if (!live && installedGhosts !== undefined && item.installState !== 'conflict') {
-      eligible.set(item.pluginId, { ...item, installState: 'not-installed' });
+    if (item.installState === 'not-installed') return item;
+    if (!live && installedGhosts !== undefined && item.installState !== 'conflict') {
+      return { ...item, installState: 'not-installed' };
     }
+  };
+  const eligible = new Map<string, PluginMarketItem>();
+  for (const original of directory.items.values()) {
+    const item = eligibleItem(original);
+    if (item) eligible.set(item.pluginId, item);
   }
-  const previous = directory.selections.get(detailId);
+  const previous = selections.get(detailId);
   const slots = Array.from({ length: 3 }, (_, slot) => {
-    const id = previous?.[slot];
-    return id !== undefined && eligible.has(id) ? id : undefined;
+    const item = previous?.[slot];
+    if (!item) return;
+    // A budget-limited refresh can move an eligible choice past page five.
+    // Keep that choice until we have evidence it is unavailable or installed.
+    return eligible.get(item.pluginId) ??
+      (directory.nextCursor !== null && !directory.items.has(item.pluginId) ? eligibleItem(item) : undefined);
   });
-  const remaining = [...eligible.keys()].filter(id => !slots.includes(id));
+  const remaining = [...eligible.values()].filter(item => !slots.some(slot => slot?.pluginId === item.pluginId));
   for (let slot = 0; slot < slots.length && remaining.length; slot++) {
     if (slots[slot] === undefined) {
       const picked = Math.floor(Math.random() * remaining.length);
       slots[slot] = remaining.splice(picked, 1)[0];
     }
   }
-  directory.selections.set(detailId, slots);
-  return slots.flatMap(id => id === undefined ? [] : [eligible.get(id)!]);
+  selections.delete(detailId);
+  selections.set(detailId, slots);
+  if (selections.size > RELATED_SELECTION_LIMIT) {
+    selections.delete(selections.keys().next().value!);
+  }
+  return slots.filter(item => item !== undefined);
 }
 
 export function PluginMoreDetails({ detailId, catalog, onSelect }: {
@@ -126,20 +186,49 @@ function MorePlugins({ detailId, catalog, onSelect }: {
 }) {
   const { t } = useTranslation();
   const { cache, loadPage, online, liveItems, installedGhosts, iconCache } = catalog;
-  const visit = useRef<{ cache: object; request: Promise<RelatedDirectory> }>(undefined);
+  const visit = useRef<{ cache: object; directory: RelatedDirectory; failed: boolean }>(undefined);
   const [visible, setVisible] = useState<{ cache: object; items: PluginMarketItem[] }>();
 
   useEffect(() => {
     if (online === false) return;
-    // Keep a failed attempt attached to this visit. A later visit may start a new read.
-    const request = visit.current?.cache === cache
-      ? visit.current.request : directories.get(cache) ?? readDirectory(cache, loadPage);
-    visit.current = { cache, request };
-    let active = true;
-    void request.then(directory => {
-      if (active) setVisible({ cache, items: selectRelatedPlugins(directory, detailId, liveItems, installedGhosts) });
-    }, () => undefined);
-    return () => { active = false; };
+    let windowHidden = isWindowHidden();
+    let stopReading: (() => void) | undefined;
+    const syncReader = () => {
+      if (windowHidden || document.visibilityState === 'hidden') {
+        if (stopReading) {
+          stopReading();
+          stopReading = undefined;
+          visit.current = undefined;
+        }
+        return;
+      }
+      if (stopReading) return;
+      const related = getRelatedCache(cache);
+      if (visit.current?.cache !== cache) visit.current = { cache, directory: getDirectory(related), failed: false };
+      const current = visit.current;
+      if (current.failed) return;
+      const { directory } = current;
+      directory.readers++;
+      let active = true;
+      stopReading = () => {
+        active = false;
+        directory.readers--;
+      };
+      void readDirectory(related, directory, loadPage).then(() => {
+        if (active) setVisible({ cache, items: selectRelatedPlugins(directory, related.selections, detailId, liveItems, installedGhosts) });
+      }, () => { current.failed = true; });
+    };
+    syncReader();
+    document.addEventListener('visibilitychange', syncReader);
+    const offWindowHidden = window.electronAPI?.onWindowHiddenChange?.((hidden) => {
+      windowHidden = hidden;
+      syncReader();
+    });
+    return () => {
+      stopReading?.();
+      document.removeEventListener('visibilitychange', syncReader);
+      offWindowHidden?.();
+    };
   }, [cache, detailId, installedGhosts, liveItems, loadPage, online]);
 
   if (online === false || visible?.cache !== cache || !visible.items.length) return null;
