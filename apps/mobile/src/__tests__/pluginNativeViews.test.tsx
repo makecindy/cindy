@@ -1315,6 +1315,20 @@ describe("older Host without a repository identity", () => {
       // Rejecting stays possible, so the waiting install can be closed from the phone.
       expect(disabled("plugins.management.reject")).toBe(false);
     });
+  // Maintainer review 11:45: while an answer to this consent is in flight or written (answerHeld), neither button can be
+  // tapped, so one consent request never gets two answers; both come back once it is known the answer was not written.
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s keeps both answers unavailable while an answer to this consent is held", (_platform, Sheet) => {
+      const p = sheetProps({ origin: "market" }, installFacts);
+      p.state.answerHeld = "request";
+      mount(Sheet, p);
+      expect(disabled("plugins.management.allow")).toBe(true);
+      expect(disabled("plugins.management.reject")).toBe(true);
+      p.state.answerHeld = null;
+      mount(Sheet, p);
+      expect(disabled("plugins.management.allow")).toBe(false);
+      expect(disabled("plugins.management.reject")).toBe(false);
+    });
   // Maintainer review 05:55 #3 (contract #12731): an update from a custom market without a source is not allowed
   // here either; Reject stays available and the line says how to continue on the computer.
   it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(

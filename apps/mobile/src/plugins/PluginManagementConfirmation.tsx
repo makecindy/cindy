@@ -104,7 +104,7 @@ export function PluginManagementConfirmation(
               testID={"plugins.management." + (accept ? "allow" : "reject")}
               accessibilityRole="button"
               disabled={
-                !props.active || props.state.busy || !props.state.online
+                !props.active || props.state.busy || !!props.state.answerHeld || !props.state.online
                 || (accept && info?.allowBlocked === true)
               }
               onPress={() => answer(accept)}

@@ -416,6 +416,178 @@ describe('offline and reconnect between enqueue, dequeue, write and reply', () =
   });
 });
 
+// Maintainer review 11:45: an old answer or cancel stopped at its last check must not release the busy state a newer
+// request holds (two opposite answers were written for one consent), and a late, older lookup must not reopen a
+// consent the Host already moved past. Model check from a shown consent: every reachable sequence of events
+// (going offline or online; each request's dequeue check, its delivery or its lost reply; the person tapping Allow,
+// Reject or Check result whenever the screen lets them), with these invariants after every step:
+// ① Allow / Reject are tappable only when no request holds busy and no answer to this consent is in flight or written;
+// ② at most one answer is written per consent request; ③ at most one lookup is in flight on the current connection;
+// ④ once the Host's later phase was shown, the consent never shows again; ⑤ busy is never held with nothing in flight.
+// Minimal failing input (54a3e8db): Reject queued → offline → online → lookup → Allow written → old Reject refused.
+// Tier: unit (in-memory Host; bounded depth, every enabled event at every step).
+describe('busy belongs to one request; one answer per consent', () => {
+  type Pending = { kind: 'answer' | 'operation' | 'cancel'; confirmed?: boolean; stage: 'queued' | 'written'; epoch: number;
+    dequeue(): void; deliver?(): void; reply?(): void; lose(): void };
+  const lostError = () => { const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no reply after first socket write'); error.inFlight = true; return error; };
+  function rig() {
+    const host = { phase: 'confirmation' as 'confirmation' | 'running' | 'succeeded' | 'cancelled', answersWritten: 0 };
+    const hostReceipt = (): PluginManagementReceipt => host.phase === 'confirmation' ? confirmation() : receipt(host.phase);
+    const pending: Pending[] = [];
+    let connection = 0;
+    const settle = (item: Pending) => { const index = pending.indexOf(item); if (index >= 0) pending.splice(index, 1); };
+    // The Host applies a delivered answer or cancel once (a cancel ends anything not finished).
+    const apply = (item: Pending) => {
+      if (item.kind === 'answer' && host.phase === 'confirmation') host.phase = item.confirmed ? 'running' : 'cancelled';
+      if (item.kind === 'cancel' && (host.phase === 'confirmation' || host.phase === 'running')) host.phase = 'cancelled';
+    };
+    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+      options?.preSend?.();
+      const request = args?.[0] as Envelope | undefined;
+      const action = request?.actionId;
+      if (action !== 'management:answer' && action !== 'management:operation' && action !== 'management:cancel') {
+        options?.preSend?.(); options?.onRequestWritten?.();
+        if (channel.endsWith(':manifest')) return capability;
+        if (action === 'management:snapshot') return { effects: [], result: snapshot() };
+        if (action === 'management:market-detail') return { effects: [], result: detail };
+        if (action === 'management:begin') return { effects: [], result: confirmation() };
+        throw new Error('unexpected ' + action);
+      }
+      return new Promise((resolve, reject) => {
+        const item: Pending = { kind: action === 'management:answer' ? 'answer' : action === 'management:cancel' ? 'cancel' : 'operation',
+          stage: 'queued', epoch: connection,
+          confirmed: (request!.input as { confirmed?: boolean }).confirmed,
+          dequeue: () => {
+            try { options?.preSend?.(); } catch (error) { settle(item); reject(error); return; }
+            options?.onRequestWritten?.();
+            item.stage = 'written';
+            if (item.kind === 'answer') host.answersWritten += 1;
+            else { const captured = hostReceipt(); if (host.phase === 'running') host.phase = 'succeeded';
+              item.reply = () => { settle(item); resolve({ effects: [], result: captured }); }; }
+          },
+          deliver: () => {
+            settle(item);
+            apply(item);
+            resolve({ effects: [], result: hostReceipt() });
+          },
+          lose: () => {
+            settle(item);
+            apply(item);
+            reject(lostError());
+          },
+        };
+        pending.push(item);
+      });
+    }) as unknown as PluginManagementInvoke;
+    const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }),
+      { createOperationId: () => 'operation-1', pollIntervalMs: 3_600_000 });
+    controllers.push(c);
+    return { c, host, pending, toggle: () => { connection += 1; }, connection: () => connection };
+  }
+  // Every step settles on microtasks alone (the rig never uses timers), which keeps the exhaustive walk fast.
+  const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
+  type Event = string;
+  async function replay(events: Event[]) {
+    const r = rig();
+    await r.c.refresh(); await r.c.install(detail, plugin);
+    expect(r.c.getState().outcome).toBe('confirmation');
+    let hostPhaseShown = false, violation: string | null = null, offline = 0, online = 0, taps = 0, checks = 0, cancels = 0;
+    const tappable = () => { const st = r.c.getState(); return st.outcome === 'confirmation' && st.online && !st.busy && !st.answerHeld; };
+    const check = (step: string) => {
+      const st = r.c.getState();
+      const answering = r.pending.some((item) => item.kind === 'answer');
+      if (tappable() && (answering || r.host.answersWritten > 0)) violation ??= `① tappable while an answer is in flight or written (${step})`;
+      if (tappable() && r.host.phase !== 'confirmation' && r.pending.length === 0) violation ??= `④ consent tappable after the Host moved on (${step})`;
+      if (r.host.answersWritten > 1) violation ??= `② ${r.host.answersWritten} answers written (${step})`;
+      if (r.pending.filter((item) => item.kind === 'operation' && item.epoch === r.connection()).length > 1) violation ??= `③ two lookups in flight (${step})`;
+      if (st.outcome === 'running' || st.outcome === 'succeeded' || st.outcome === 'cancelled') hostPhaseShown = true;
+      if (hostPhaseShown && st.outcome === 'confirmation') violation ??= `④ consent reopened (${step})`;
+      if (st.busy && r.pending.length === 0) violation ??= `⑤ busy with nothing in flight (${step})`;
+    };
+    const enabled = (): Event[] => {
+      const st = r.c.getState(), list: Event[] = [];
+      if (st.online && offline === 0) list.push('offline');
+      if (!st.online && online === 0) list.push('online');
+      if (tappable() && taps < 2) list.push('allow', 'reject');
+      if (st.outcome === 'unknown' && st.online && !st.busy && checks < 2) list.push('check');
+      // Cancellation races queued and in-flight requests (the controller accepts it while busy).
+      if (cancels === 0 && st.online && st.operationId && !['succeeded', 'cancelled', 'failed'].includes(st.outcome)) list.push('cancel');
+      r.pending.forEach((item, index) => {
+        if (item.stage === 'queued') list.push(`dequeue#${index}`);
+        else { if (item.kind === 'operation') list.push(`reply#${index}`); else list.push(`deliver#${index}`); list.push(`lose#${index}`); }
+      });
+      return list;
+    };
+    for (const event of events) {
+      const [name, at] = event.split('#');
+      const item = at !== undefined ? r.pending[Number(at)] : undefined;
+      if (name === 'offline') { offline += 1; r.toggle(); r.c.setOnline(false); }
+      else if (name === 'online') { online += 1; r.toggle(); r.c.setOnline(true); }
+      else if (name === 'allow' || name === 'reject') { taps += 1; void r.c.answer(name === 'allow'); }
+      else if (name === 'check') { checks += 1; void r.c.reconcile(); }
+      else if (name === 'cancel') { cancels += 1; void r.c.cancel(); }
+      else if (name === 'dequeue') item!.dequeue();
+      else if (name === 'deliver') item!.deliver!();
+      else if (name === 'reply') item!.reply!();
+      else item!.lose();
+      await flush();
+      check(events.join(' → '));
+    }
+    return { violation, next: enabled() };
+  }
+  it('keeps the invariants after every step of every reachable sequence', async () => {
+    const violations = new Set<string>();
+    let paths = 0;
+    const explore = async (events: Event[]): Promise<void> => {
+      const { violation, next } = await replay(events);
+      if (violation) { violations.add(violation); return; }
+      if (!next.length || events.length >= 7) { paths += 1; return; }
+      for (const event of next) await explore([...events, event]);
+    };
+    await explore([]);
+    expect([...violations].slice(0, 10)).toEqual([]);
+    expect(paths).toBeGreaterThan(100);
+  }, 120_000);
+  // The two orders the maintainer reproduced, as plain regressions.
+  it('keeps a consent unanswerable while an old Reject is queued, then lets exactly one answer through', async () => {
+    const r = rig();
+    await r.c.refresh(); await r.c.install(detail, plugin);
+    void r.c.answer(false); await flush();                      // Reject queued
+    r.toggle(); r.c.setOnline(false); await flush();             // offline
+    r.toggle(); r.c.setOnline(true); await flush();              // online: the lookup is queued
+    const lookup = r.pending.find((item) => item.kind === 'operation')!;
+    lookup.dequeue(); await flush(); lookup.reply!(); await flush();
+    // The consent is back, but the old Reject may still leave: Allow and Reject stay unavailable.
+    expect(r.c.getState()).toMatchObject({ outcome: 'confirmation', answerHeld: 'consent-1' });
+    void r.c.answer(true); await flush();
+    expect(r.pending.filter((item) => item.kind === 'answer')).toHaveLength(1);
+    r.pending.find((item) => item.kind === 'answer')!.dequeue(); await flush(); // the old Reject is refused: never written
+    expect(r.c.getState()).toMatchObject({ outcome: 'confirmation', busy: false, answerHeld: null });
+    void r.c.answer(true); await flush();                        // Allow queued
+    const allow = r.pending.find((item) => item.kind === 'answer')!;
+    allow.dequeue(); await flush();                              // Allow written, waiting
+    expect(r.c.getState()).toMatchObject({ busy: true, answerHeld: 'consent-1' });
+    void r.c.answer(false); await flush();
+    expect(r.host.answersWritten).toBe(1);
+    allow.deliver!(); await flush();
+    expect(r.c.getState()).toMatchObject({ busy: false, outcome: 'running' });
+  });
+  it('keeps the reconnect lookup holding busy when an old cancel is stopped at its last check', async () => {
+    const r = rig();
+    await r.c.refresh(); await r.c.install(detail, plugin);
+    void r.c.cancel(); await flush();                            // cancel queued (sent as an operation-scoped request)
+    r.toggle(); r.c.setOnline(false); await flush();
+    r.toggle(); r.c.setOnline(true); await flush();              // the reconnect lookup is queued
+    const lookups = () => r.pending.filter((item) => item.kind === 'operation');
+    expect(lookups()).toHaveLength(1);
+    const old = r.pending.find((item) => item.kind === 'cancel');
+    old?.dequeue(); await flush();                               // the old cancel is refused
+    expect(r.c.getState().busy).toBe(true);
+    await r.c.reconcile(); await flush();                        // no second lookup while the first holds busy
+    expect(lookups()).toHaveLength(1);
+  });
+});
+
 describe('mobile management transactions', () => {
   it('submits only the active consent request and preserves Host failure receipts', async () => {
     const h = host((r) => r.actionId === 'management:begin' ? confirmation() : { ...receipt('failed'), errorCode: 'PACKAGE_CHANGED' });
@@ -512,10 +684,17 @@ describe('mobile management transactions', () => {
     c.setOnline(false); c.setOnline(true);
     await vi.waitFor(() => expect(c.getState().busy).toBe(false));
     expect(c.getState().online).toBe(true);
-    expect(() => preSend()).toThrow('PLUGIN_MANAGEMENT_STALE');
+    // The queued write's last check refuses it after the reconnect; like the real transport, a refused request never
+    // gets a reply, it fails as never written.
+    let refusal: unknown;
+    try { preSend(); } catch (error) { refusal = error; }
+    expect(refusal).toMatchObject({ message: 'PLUGIN_MANAGEMENT_STALE' });
     const recoveredOutcome = c.getState().outcome;
-    queued.resolve({ effects: [], result: receipt('succeeded') }); await pending;
-    expect(c.getState().outcome).toBe(recoveredOutcome);
+    queued.reject(refusal); await pending;
+    // An unwritten answer or cancel leaves the operation as the computer reported it; an unwritten begin means the
+    // operation never existed on the computer, so it ends as a plain failure.
+    expect(c.getState().outcome).toBe(action === 'begin' ? 'failed' : recoveredOutcome);
+    expect(h.requests.some((r) => r.actionId === `management:${action}`)).toBe(false);
   });
   it('still cancels the original operation when the view becomes stale before disposal', async () => {
     let alive = true;
@@ -544,10 +723,14 @@ describe('mobile management transactions', () => {
     const h = host((r) => r.actionId === 'management:begin' ? begin.promise : receipt('cancelled'));
     const c = controller(h.client); await c.refresh(); const start = c.uninstall(plugin);
     await vi.waitFor(() => expect(c.getState().operationId).toBe('operation-1'));
+    // The written begin's reply is the Host's state of this operation: it lands by operation id even though the
+    // computer went offline meanwhile (maintainer reviews 10:36 and 11:45: results belong to the operation).
     c.setOnline(false); begin.resolve(receipt('succeeded')); await start;
-    expect(c.getState()).toMatchObject({ online: false, outcome: 'unknown' });
+    expect(c.getState()).toMatchObject({ online: false, outcome: 'succeeded' });
     c.setOnline(true);
-    await vi.waitFor(() => expect(c.getState().outcome).toBe('cancelled'));
+    await vi.waitFor(() => expect(c.getState().busy).toBe(false));
+    // A final outcome is never changed by the reconnect, and nothing is sent again.
+    expect(c.getState().outcome).toBe('succeeded');
     expect(h.requests.filter((r) => r.actionId === 'management:begin')).toHaveLength(1);
   });
   it('polls only running receipts, stops at confirmation, and clears account data on owner switch', async () => {

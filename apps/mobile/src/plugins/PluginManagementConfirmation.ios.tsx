@@ -122,7 +122,7 @@ export function PluginManagementConfirmation(
                   buttonStyle(accept ? "borderedProminent" : "bordered"),
                   ...(accept ? [tint(colors.cta), foregroundStyle(colors.ctaText)] : []),
                   disabled(
-                    !props.active || props.state.busy || !props.state.online
+                    !props.active || props.state.busy || !!props.state.answerHeld || !props.state.online
                       || (accept && info?.allowBlocked === true),
                   ),
                   frame({ maxWidth: Infinity, minHeight: 44 }),

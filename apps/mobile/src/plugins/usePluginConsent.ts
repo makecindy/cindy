@@ -37,6 +37,7 @@ export function usePluginConsent({
         !isMobileAuthOwnerCurrent(owner) ||
         !current.online ||
         current.busy ||
+        !!current.answerHeld ||
         current.outcome !== "confirmation" ||
         current.operationId !== operationId ||
         current.receipt?.consent?.requestId !== requestId

@@ -74,7 +74,10 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
     }
     onWritten?.();
     try {
-      if (!requestCurrent()) throw new PluginManagementRequestError('PLUGIN_MANAGEMENT_STALE', mutation);
+      // A write's reply is the Host's state of its operation: once written, only a changed account or target drops it
+      // (the controller places it by operation id). The per-request guard fences sending only.
+      if (!(mutation ? (cleanup ? isOwnerCurrent() : isCurrent()) : requestCurrent()))
+        throw new PluginManagementRequestError('PLUGIN_MANAGEMENT_STALE', mutation);
       if (!isBoundedPluginResponse(response)) throw new Error('INVALID_RESPONSE');
       return parse(response);
     } catch (error) {
