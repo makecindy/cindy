@@ -279,6 +279,13 @@ const SOURCE_IDENTITY_SSH_USER = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
 
 /** 实际取包地址按白名单取出的部件（不含用户名、密码、令牌、查询串、片段），只用于生成 sourceId。 */
 export interface PluginMarketFetchAddress {
+  /**
+   * 来源标识（sourceId）的唯一输入：校验通过的原始地址字节串，**只**去掉 http / https / git 形式的 userinfo（凭证），
+   * 其余一字不改——ssh 与 scp 形式整串原样（含登录用户、主机原始大小写、端口、路径）。不经任何规整或按 URL 语义的
+   * 重组：OpenSSH 的 Host 别名区分大小写、登录名可含 `:` 等，git / ssh 实际怎么解释由它们决定，这里只会偏保守
+   * （同一仓库的不同写法得到不同标识），不会把两个不同端点并成一个。下面的拆分部件只用于拒绝与生成展示用仓库。
+   */
+  identity: string;
   /** 小写协议；scp 形式记作 `scp`。 */
   scheme: 'https' | 'http' | 'ssh' | 'git' | 'scp';
   /**
@@ -335,8 +342,9 @@ export function pluginMarketFetchAddress(value: unknown): PluginMarketFetchAddre
     if (host.length > 253 || !SOURCE_IDENTITY_HOST.test(host)) return null;
     const protocol = rawScheme.toLowerCase() as PluginMarketFetchAddress['scheme'];
     // 只有 ssh 的用户名是身份；其它协议的 userinfo 是凭证，不读取。ssh 的 `user:password` 只取用户名。
-    const user = protocol === 'ssh' && userinfo ? userinfo.split(':', 1)[0]! : '';
-    if (protocol === 'ssh' && userinfo !== undefined && !SOURCE_IDENTITY_SSH_USER.test(user)) return null;
+    // ssh 的 userinfo 是登录名：git 把 `git:tenant-a` 整串当登录名，不是「用户名:密码」，这里不猜，含 `:` 即拒绝。
+    if (protocol === 'ssh' && userinfo !== undefined && !SOURCE_IDENTITY_SSH_USER.test(userinfo)) return null;
+    const user = protocol === 'ssh' ? userinfo ?? '' : '';
     // 交叉核对：与 WHATWG URL 解析的主机、端口、路径、ssh 用户名逐项一致才接受，任何分歧都按无法核实处理。
     let whatwg: URL;
     try {
@@ -353,7 +361,9 @@ export function pluginMarketFetchAddress(value: unknown): PluginMarketFetchAddre
     ) {
       return null;
     }
-    return { scheme: protocol, user, host, port, path };
+    // http / https / git 的 userinfo 是凭证：只去掉这一段，轮换凭证不改变标识；ssh 整串原样。
+    const identity = protocol === 'ssh' || userinfo === undefined ? url : url.replace(`${userinfo}@`, '');
+    return { identity, scheme: protocol, user, host, port, path };
   }
   // 带 `://` 却不合上面的严格形状：不能再当 scp 形式解读。
   if (url.includes('://')) return null;
@@ -370,7 +380,7 @@ export function pluginMarketFetchAddress(value: unknown): PluginMarketFetchAddre
   ) {
     return null;
   }
-  return { scheme: 'scp', user, host, port: '', path };
+  return { identity: url, scheme: 'scp', user, host, port: '', path };
 }
 
 /**

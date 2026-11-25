@@ -3,14 +3,15 @@
  *
  * sourceId = base64url(HMAC-SHA256(K, input)) 的前 16 字节，input 是带域名与版本的 JSON 数组（数组元素
  * 有界，没有拼接歧义）：
- * - 本地文件夹：["cindy.plugin-market.source-id", 2, "local", marketSourceKey]
- * - Git：["cindy.plugin-market.source-id", 2, "git", marketSourceKey, scheme, user, host, port, path]，后五项是
- *   **实际取包地址**按白名单取出的部件（pluginMarketFetchAddress）：`user` 只是 ssh / scp 的登录用户（同主机
- *   同路径可随用户解析到不同仓库），https 等协议的 userinfo 是凭证、不读取；不含密码、令牌、查询串、片段。
+ * - 本地文件夹：["cindy.plugin-market.source-id", 3, "local", marketSourceKey]
+ * - Git：["cindy.plugin-market.source-id", 3, "git", marketSourceKey, identity]。`identity` 是**实际取包地址**校验通过
+ *   后的原始字节串，只去掉 http / https / git 形式的 userinfo（凭证），其余一字不改；ssh 与 scp 形式整串原样（登录
+ *   用户、主机原始大小写、端口、路径都在内）。见 pluginMarketFetchAddress。解析器只负责拒绝有歧义的地址与生成展示
+ *   用仓库，不参与标识，所以结果只会偏保守：同一仓库的不同写法得到不同标识（会多一次换源确认或「未确认」），
+ *   不会把两个不同端点并成一个。只换 https 凭证不改变标识。
+ *   Git 来源的 sourceId 在取包时算好，记在该缓存版本的取包记录里（见 fetchIdentity.ts）；原始地址与其中的 ssh
  *   登录用户只进这里的 HMAC 输入，不进取包记录、展示、回执或日志。
- *   Git 来源的 sourceId 在取包时算好，记在该缓存版本的取包记录里（见 fetchIdentity.ts）。
- * 于是不同本地目录、同主机不同端口、不同协议写法、不同稀疏路径、配置相同但被 insteadOf 改写到不同地址，
- * 都得到不同的标识。用 HMAC 而不是裸哈希：本地路径与仓库地址熵低，裸哈希可被穷举反推。
+ * 用 HMAC 而不是裸哈希：本地路径与仓库地址熵低，裸哈希可被穷举反推。
  *
  * 密钥 K：每个数据所有者一把，32 字节随机，按「代」存放：`owners/<账号>/plugin-market/source-id/v<N>/key`，用最高的
  * 那一代。
@@ -38,7 +39,7 @@ import { readPrivateFile } from './privateFile.js';
 /** 密钥目录（owner 的 plugin-market 目录下）。 */
 export const SOURCE_ID_KEY_DIR = 'source-id';
 const SOURCE_ID_DOMAIN = 'cindy.plugin-market.source-id';
-const SOURCE_ID_VERSION = 2;
+const SOURCE_ID_VERSION = 3;
 const KEY_ID_DOMAIN = 'cindy.plugin-market.source-id.key-id';
 /** 远程操作发起方（控制端设备身份）的本机不可逆标识，与 sourceId、keyId 域分隔。 */
 const CONTROLLER_DOMAIN = 'cindy.plugin-market.operation-controller';
@@ -142,17 +143,7 @@ export function createMarketSourceIdOf(keyDir: string): MarketSourceIdOf {
     if (!key) return null;
     const parts = input.kind === 'local'
       ? [SOURCE_ID_DOMAIN, SOURCE_ID_VERSION, 'local', input.sourceKey]
-      : [
-          SOURCE_ID_DOMAIN,
-          SOURCE_ID_VERSION,
-          'git',
-          input.sourceKey,
-          input.address.scheme,
-          input.address.user,
-          input.address.host,
-          input.address.port,
-          input.address.path,
-        ];
+      : [SOURCE_ID_DOMAIN, SOURCE_ID_VERSION, 'git', input.sourceKey, input.address.identity];
     return crypto.createHmac('sha256', key).update(JSON.stringify(parts)).digest().subarray(0, 16).toString('base64url');
   }) as MarketSourceIdOf;
   sourceIdOf.keyId = () => keyId;

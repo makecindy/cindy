@@ -983,6 +983,10 @@ describe('MarketSourceManager source identity', () => {
     expect(as('ssh://alice@git.example.test/srv/plugins.git')).not.toBe(as('ssh://bob@git.example.test/srv/plugins.git'));
     // HTTPS credentials are not identity: rotating them keeps the same id.
     expect(as('https://ghp_ONE@git.example.test/acme/plugins.git')).toBe(as('https://ghp_TWO@git.example.test/acme/plugins.git'));
+    // PR #12731 maintainer review 6055280843: OpenSSH Host aliases are case-sensitive and may point at different
+    // endpoints, so both SSH forms keep the host as written.
+    expect(as('git@Mirror:acme/plugins.git')).not.toBe(as('git@mirror:acme/plugins.git'));
+    expect(as('ssh://git@Mirror/acme/plugins.git')).not.toBe(as('ssh://git@mirror/acme/plugins.git'));
   });
 
   it('keeps an SSH login user out of the fetch record and the identity', async () => {

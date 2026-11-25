@@ -7,10 +7,12 @@ import { createGhostBackgroundRefresh } from '../../cindy-brain/ghostBackgroundR
 import { emptyPluginInstanceRegistry } from '../../cindy-brain/pluginInstanceRegistry.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
 
 const runtime = vi.hoisted(() => ({
+  /** 每个测试独立的 userData 目录（beforeEach 创建、afterEach 随 roots 回收），不用固定临时路径。 */
+  userDataRoot: '',
   ghosts: [] as Array<{
     manifest: Record<string, unknown>;
     dir: string;
@@ -68,7 +70,7 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: vi.fn(() => ({ ...runtime.session })),
   isAppSessionBoundaryPending: vi.fn(() => runtime.boundaryPending),
   ownerScopedUserDataPath: vi.fn((...parts: string[]) =>
-    path.join(os.tmpdir(), 'owners', runtime.session.dataOwnerId ?? 'local', ...parts),
+    path.join(runtime.userDataRoot, 'owners', runtime.session.dataOwnerId ?? 'local', ...parts),
   ),
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
@@ -182,6 +184,10 @@ import { createMarketSourceIdOf, SOURCE_ID_KEY_DIR } from '../sources/sourceId';
 import type { PluginMarketApi } from '../api';
 
 const roots: string[] = [];
+beforeEach(() => {
+  runtime.userDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-plugin-userdata-'));
+  roots.push(runtime.userDataRoot);
+});
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
 const APPROVED_INSTALL_TOKEN = 'approved:00000000-0000-4000-8000-000000000001';
 
@@ -2346,7 +2352,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
   /** 当前 owner 的来源标识密钥标识（与服务读的是同一个密钥目录）。 */
   async function currentSourceKeyId(): Promise<string> {
     const sourceIds = createMarketSourceIdOf(
-      path.join(os.tmpdir(), 'owners', runtime.session.dataOwnerId ?? 'local', 'plugin-market', SOURCE_ID_KEY_DIR),
+      path.join(runtime.userDataRoot, 'owners', runtime.session.dataOwnerId ?? 'local', 'plugin-market', SOURCE_ID_KEY_DIR),
     );
     await sourceIds.prepare!();
     return sourceIds.keyId()!;
@@ -2404,14 +2410,16 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(held.items[0]).toMatchObject({ installState: 'update-available', updateRequiresConsent: true,
       installedSourceId: 'AAAAAAAAAAAAAAAAAAAAAA' });
 
-    // Explicit update: the confirmation is forced even without new permissions and says the source changed.
+    // Explicit update: the confirmation is shown even without new permissions and says the source changed.
     const detail = await h.service.detail(pluginId);
     const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => true);
     await h.service.install(pluginId, { expectedReleaseId: detail.releaseId, expectedManifest: detail.manifest,
       expectedInstalledApproval: APPROVED_INSTALL_TOKEN }, { consent: { prompt, initiator: 'user' } });
     expect(prompt).toHaveBeenCalledTimes(1);
+    // The old instance is archived and its approvals are not inherited, so the switch is confirmed like a first
+    // install: the new source's full permissions (contract V2.4b).
     expect(prompt.mock.calls[0]?.[0]).toMatchObject({ origin: 'custom-market', originSourceChanged: true,
-      originSource: detail.sourceIdentity, facts: { kind: 'update', added: [] } });
+      originSource: detail.sourceIdentity, facts: { kind: 'install', version: '2.0.0' } });
     expect(runtime.install).toHaveBeenCalledTimes(1);
     // The confirmed switch reaches the runtime's source-change transaction (idle check, old accounts and data
     // archived for the replacement), not an in-place update.

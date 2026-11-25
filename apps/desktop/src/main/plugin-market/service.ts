@@ -2767,8 +2767,9 @@ export class PluginMarketService {
                       ...consent,
                       trust: packed.inspected.trust.level,
                       originSource: sourceIdentity ?? undefined,
-                      // 换源必须显式确认：即使权限没有变多也弹出确认，并提示来源与已安装时不同。
-                      ...(sourceSwitch ? { force: true, originSourceChanged: true as const } : {}),
+                      // 换源必须显式确认：即使权限没有变多也弹出确认，并提示来源与已安装时不同。旧实例的批准随旧来源
+                      // 归档、不继承，所以按首装展示新来源的完整权限，并按同一份事实授予（契约 V2.4b）。
+                      ...(sourceSwitch ? { force: true, freshGrant: true, originSourceChanged: true as const } : {}),
                     }
                   : consent,
                 installedGhostMatchingMarketPluginNow(plugin),
@@ -2842,6 +2843,10 @@ export class PluginMarketService {
             if (actualSourceSwitch && (automatic || !sourceSwitch)) {
               if (automatic) throw new CustomSourceSwitchConsentRequiredError();
               throwIpcError('PRECONDITION_FAILED', 'The installed Plugin came from another source');
+            }
+            // 用户确认的是换源（按首装授予、旧数据隔离）；提交时已不再是换源就不能套用这份确认。
+            if (sourceSwitch && current && routeStillMatches && !actualSourceSwitch) {
+              throwIpcError('PRECONDITION_FAILED', 'The installed Plugin source changed during the update');
             }
             // 换源事务（运行时的空闲检查、旧账号与数据隔离归档）：路由换了，或同一路由下这里核实到的实际换源
             // （用户已在确认里看到）。旧记录没有绑定、候选无法核实或密钥换过时 actualSourceSwitch 为 false，

@@ -105,6 +105,8 @@ export function renderGhostInstallConsentText(
   if (facts.kind === 'install') {
     lines.push(consentText(translate, 'installMeta', { version: facts.version, source }));
     lines.push(...targetLines);
+    // 换源确认按首装展示（契约 V2.4b）：完整权限之前先说明来源变了、旧账号与数据隔离。
+    if (request.origin === 'custom-market' && request.originSourceChanged) lines.push(consentText(translate, 'originSourceChanged'));
     lines.push(consentText(translate, 'installDescription'));
     const sourceNotice = ghostInstallSourceNoticeKey(request.origin, request.communityMarket);
     if (sourceNotice) lines.push(translate(sourceNotice));
@@ -167,8 +169,9 @@ export function buildGhostInstallConsentInteraction(
       ...(request.origin === 'custom-market' && isPluginMarketSourceIdentity(request.originSource)
         ? { source: request.originSource }
         : {}),
-      // 自定义市场更新的实际来源与已装的不同（确认后旧账号与数据隔离保存）：控制端据此在卡片收起时也能提示。
-      ...(request.origin === 'custom-market' && request.facts.kind === 'update' && request.originSourceChanged === true
+      // 自定义市场的实际来源与已装的不同（确认后旧账号与数据隔离保存）：控制端据此在卡片收起时也能提示。换源确认按
+      // 首装展示完整权限，所以这里的 operation 是 'install'（契约 V2.4b）。
+      ...(request.origin === 'custom-market' && request.originSourceChanged === true
         ? { originSourceChanged: true }
         : {}),
     },

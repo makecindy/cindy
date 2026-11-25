@@ -53,6 +53,11 @@ export type GhostInstallConsentPolicy =
       /** 仅 custom-market 生效；必须由打包所用的那份来源配置生成（见 PluginMarketService.customInstall）。 */
       originSource?: GhostInstallConsentRequest['originSource'];
       originSourceChanged?: GhostInstallConsentRequest['originSourceChanged'];
+      /**
+       * 换源（契约 V2.4b）：旧实例的批准随旧来源归档、不继承。按首装计事实——确认展示新来源的完整权限，
+       * 锁内复核与新 receipt 的各项授予用同一份事实；确认键仍绑定实际的受体实例。
+       */
+      freshGrant?: boolean;
       trust?: GhostInstallConsentRequest['trust'];
       target?: GhostInstallConsentRequest['target'];
       force?: boolean;
@@ -64,19 +69,27 @@ export type GhostInstallConsentPolicy =
 
 /** 求得的确认结论；随安装请求一路交到安装锁内复核。 */
 export type GhostInstallConsentDecision =
-  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true }
+  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true; freshGrant?: true }
   /** 求确认时判定无需确认；落位前必须仍然无需确认。 */
   | { mode: 'unprompted' }
   | { mode: 'exempt'; reason: 'server-default-install' };
 
 const pendingPromptAborts = new Set<AbortController>();
 
+/** 事实的基线：换源确认（freshGrant）按首装计，旧批准不继承；其余相对已装实例计。 */
+function consentBaseline(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+): InstalledGhost | null | undefined {
+  return decision.mode === 'confirmed' && decision.freshGrant ? null : installed;
+}
+
 /** Follow the control-point consent path: unknown declarations never become grants on upgrade. */
 export function confirmedCindyModelActions(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): GhostCindyModelsAction[] {
   const declared = declaredGhostCindyModelActions(next);
   if (decision.mode === 'exempt') return declared;
   if (decision.mode !== 'confirmed') return [];
-  const facts = evaluateGhostInstallConsent(installed, next);
+  const facts = evaluateGhostInstallConsent(consentBaseline(decision, installed), next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return declared.filter(action => shown?.some(item => item.key === `cindy:models.${action}`));
 }
@@ -88,7 +101,7 @@ export function confirmedTaskCapability(
   capability: PluginTaskCapability = 'tasks',
 ): true | undefined {
   if (decision.mode !== 'confirmed') return undefined;
-  const facts = evaluateGhostInstallConsent(installed, next);
+  const facts = evaluateGhostInstallConsent(consentBaseline(decision, installed), next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === `agent:${capability}`) ? true : undefined;
 }
@@ -105,7 +118,7 @@ export function confirmedControlPoints(
   const declared = declaredGhostControlPoints(next);
   if (decision.mode === 'exempt') return declared;
   if (decision.mode !== 'confirmed') return [];
-  const facts = evaluateGhostInstallConsent(installed, next);
+  const facts = evaluateGhostInstallConsent(consentBaseline(decision, installed), next);
   const shown = new Set((facts?.kind === 'install' ? facts.permissions : facts?.added ?? []).map(item => item.key));
   return declared.filter(point => shown.has(GHOST_CONTROL_POINTS[point].permissionKey));
 }
@@ -123,7 +136,7 @@ export function confirmedHarnesses(
   const declared = declaredGhostHarnesses(next).map((harness) => harness.id);
   if (decision.mode === 'exempt') return declared;
   if (decision.mode !== 'confirmed') return [];
-  const facts = evaluateGhostInstallConsent(installed, next);
+  const facts = evaluateGhostInstallConsent(consentBaseline(decision, installed), next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === 'harnesses') ? declared : [];
 }
@@ -137,7 +150,7 @@ export function confirmedFileOpenerExtensions(
   const declared = next.fileOpener?.extensions ?? [];
   if (decision.mode === 'exempt') return declared;
   if (decision.mode !== 'confirmed') return [];
-  const facts = evaluateGhostInstallConsent(installed, next);
+  const facts = evaluateGhostInstallConsent(consentBaseline(decision, installed), next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === 'file-opener') ? declared : [];
 }
@@ -154,7 +167,7 @@ export function confirmedAutoTools(
   const declared = declaredAutoApproveTools(next);
   if (decision.mode === 'exempt') return declared;
   if (decision.mode !== 'confirmed') return [];
-  const facts = evaluateGhostInstallConsent(installed, next);
+  const facts = evaluateGhostInstallConsent(consentBaseline(decision, installed), next);
   const shown = new Set((facts?.kind === 'install' ? facts.permissions : facts?.added ?? []).map(item => item.key));
   return declared.filter(tool => shown.has(`tool-auto:${tool}`));
 }
@@ -209,7 +222,8 @@ export async function obtainGhostInstallConsent(
 ): Promise<GhostInstallConsentDecision> {
   if (policy.mode === 'exempt') return { mode: 'exempt', reason: policy.reason };
   const forced = policy.mode === 'prompt' && policy.force === true;
-  const facts = evaluateGhostInstallConsent(installed, manifest, forced);
+  const freshGrant = policy.mode === 'prompt' && policy.freshGrant === true;
+  const facts = evaluateGhostInstallConsent(freshGrant ? null : installed, manifest, forced);
   if (!facts) return { mode: 'unprompted' };
   if (policy.mode === 'automatic') throw new GhostInstallConsentRequiredError(facts);
   let confirmed: boolean;
@@ -242,6 +256,7 @@ export async function obtainGhostInstallConsent(
     mode: 'confirmed',
     ...(policy.prompt.uiCapabilityApproval === false ? { uiCapabilityUnsupported: true as const } : {}),
     ...(forced ? { forced: true as const } : {}),
+    ...(freshGrant ? { freshGrant: true as const } : {}),
     key: ghostInstallConsentKey(
       facts,
       packageSha256,
@@ -261,7 +276,11 @@ export function assertGhostInstallConsent(
   packageSha256: string,
 ): void {
   if (decision.mode === 'exempt') return;
-  const facts = evaluateGhostInstallConsent(installedNow, manifest, decision.mode === 'confirmed' && decision.forced === true);
+  const facts = evaluateGhostInstallConsent(
+    consentBaseline(decision, installedNow),
+    manifest,
+    decision.mode === 'confirmed' && decision.forced === true,
+  );
   if (!facts) {
     // 只有原本判定无需确认的决策，才能在落位时仍然无需确认。用户确认过的更新
     // 若受体已被换成权限已覆盖候选包的版本，必须按过期拒绝，不能沿用这次确认。
@@ -289,7 +308,7 @@ export function confirmedUiCapability(decision: GhostInstallConsentDecision, ins
     return pluginHasToolUi(next) ? true : undefined;
   }
   if (decision.mode !== 'confirmed') return undefined;
-  const facts = evaluateGhostInstallConsent(installed, next);
+  const facts = evaluateGhostInstallConsent(consentBaseline(decision, installed), next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === 'ui:pages') ? decision.uiCapabilityUnsupported !== true : undefined;
 }

@@ -73,7 +73,6 @@ describe('pluginMarketRepositoryFromUrl', () => {
       'https://user:pass@github.com/acme/plugins.git',
       'https://github.com:8443/acme/plugins.git',
       'ssh://git@github.com:2222/acme/plugins.git',
-      'ssh://git:SECRET@github.com/acme/plugins.git',
     ]) {
       const repository = pluginMarketRepositoryFromUrl(url);
       expect(repository).toBe('github.com/acme/plugins');
@@ -106,7 +105,7 @@ describe('pluginMarketFetchAddress', () => {
   // Parts that feed the source id: scheme, host and port distinguish endpoints; credentials never appear.
   it('keeps the endpoint parts that tell sources apart and drops credentials', () => {
     expect(pluginMarketFetchAddress('https://ghp_SECRET@Git.Example.test:8443/acme/plugins.git'))
-      .toEqual({ scheme: 'https', user: '', host: 'git.example.test', port: '8443', path: '/acme/plugins.git' });
+      .toEqual({ identity: 'https://Git.Example.test:8443/acme/plugins.git', scheme: 'https', user: '', host: 'git.example.test', port: '8443', path: '/acme/plugins.git' });
     // PR #12731 Codex P1 (trailing whitespace) and the follow-up audit: the parts are the raw bytes git uses.
     // Nothing that could merge two different actual addresses is normalised: no trimming, no URL-parser
     // normalisation, path and port kept as written. Only the host (DNS) and the scheme are lower-cased.
@@ -162,11 +161,21 @@ describe('pluginMarketFetchAddress', () => {
     // SSH login users are part of the source (same host and path can resolve per user); https userinfo is a
     // credential and is never read.
     expect(pluginMarketFetchAddress('ssh://deploy@git.example.test:2222/acme/plugins.git'))
-      .toEqual({ scheme: 'ssh', user: 'deploy', host: 'git.example.test', port: '2222', path: '/acme/plugins.git' });
+      .toEqual({ identity: 'ssh://deploy@git.example.test:2222/acme/plugins.git', scheme: 'ssh', user: 'deploy', host: 'git.example.test', port: '2222', path: '/acme/plugins.git' });
     expect(pluginMarketFetchAddress('git@git.example.test:acme/plugins.git'))
-      .toEqual({ scheme: 'scp', user: 'git', host: 'git.example.test', port: '', path: 'acme/plugins.git' });
-    expect(pluginMarketFetchAddress('ssh://git:SECRET@git.example.test/acme/plugins.git')).toMatchObject({ user: 'git' });
-    expect(JSON.stringify(pluginMarketFetchAddress('ssh://git:SECRET@git.example.test/acme/plugins.git'))).not.toContain('SECRET');
+      .toEqual({ identity: 'git@git.example.test:acme/plugins.git', scheme: 'scp', user: 'git', host: 'git.example.test', port: '', path: 'acme/plugins.git' });
+    // PR #12731 Codex P1: git passes `git:tenant-a` to ssh as the whole login name, not user and password, so two
+    // tenants would merge if the suffix were dropped. Such SSH userinfo yields no identity.
+    expect(pluginMarketFetchAddress('ssh://git:tenant-a@git.example.test/acme/plugins.git')).toBeNull();
+    expect(pluginMarketRepositoryFromUrl('ssh://git:tenant-a@git.example.test/acme/plugins.git')).toBeNull();
+    // PR #12731 maintainer review 6055280843: OpenSSH Host aliases are case-sensitive, so the identity keeps the raw
+    // host; only http(s)/git userinfo (a credential) is removed. Display still normalises.
+    const identity = (raw: string) => pluginMarketFetchAddress(raw)?.identity;
+    expect(identity('ssh://git@Mirror/acme/plugins.git')).not.toBe(identity('ssh://git@mirror/acme/plugins.git'));
+    expect(identity('git@Mirror:acme/plugins.git')).not.toBe(identity('git@mirror:acme/plugins.git'));
+    expect(identity('https://ghp_ONE@git.example.test/acme/plugins.git')).toBe('https://git.example.test/acme/plugins.git');
+    expect(identity('https://ghp_TWO@git.example.test/acme/plugins.git')).toBe(identity('https://git.example.test/acme/plugins.git'));
+    expect(pluginMarketRepositoryFromUrl('git@Mirror:acme/plugins.git')).toBe(pluginMarketRepositoryFromUrl('git@mirror:acme/plugins.git'));
     // Paths the display identity rejects (e.g. a `.github` repository) still identify a source.
     expect(pluginMarketFetchAddress('https://github.com/acme/.github')).toMatchObject({ path: '/acme/.github' });
     expect(pluginMarketRepositoryFromUrl('https://github.com/acme/.github')).toBeNull();

@@ -124,6 +124,11 @@ export function GhostInstallConsentContent({ facts, origin, communityMarket, cap
     const sourceNotice = ghostInstallSourceNoticeKey(origin, communityMarket);
     return (
       <div>
+        {origin === 'custom-market' && originSourceChanged === true ? (
+          <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">
+            {t('settings.ghosts.installConsent.originSourceChanged')}
+          </p>
+        ) : null}
         <p className="text-13 leading-5 text-[var(--confirm-desc)]">
           {t('settings.ghosts.installConsent.installDescription')}
         </p>

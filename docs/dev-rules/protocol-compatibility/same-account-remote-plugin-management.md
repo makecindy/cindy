@@ -90,20 +90,24 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   3. Agent 发起的任务确认卡（`toolName:'cindy.plugin.install'`，`hostOwnedConfirmation:'plugin_install'`）的
      `input`：`{ghost_id, version, operation, origin, source?, originSourceChanged?}`。`source` 与同一次确认的
      `originSource` 相同，只在 `origin === 'custom-market'` 且能生成时给出；`originSourceChanged: true` 只在
-     custom-market 更新且这次确认带该字段时给出（见下文「实际来源变化时的更新」），其它情况缺省。卡输入不进模型上下文（宿主交互不是 Agent 的工具调用）；
+     custom-market 确认带该字段时给出（换源确认按首装展示，所以 `operation` 为 `'install'`；见下文「实际来源变化时
+     的更新」），其它情况缺省。卡输入不进模型上下文（宿主交互不是 Agent 的工具调用）；
      IM 卡与官方 hook 卡的参数预览去掉 `source.sourceId`，仓库名本来就在说明里。
 - **`sourceId`**（`^[A-Za-z0-9_-]{22}$`）：
   - 算法：`HMAC-SHA256(K, input)` 的前 16 字节，base64url。`input` 是带域名与版本的 JSON 数组：
-    - 本地：`["cindy.plugin-market.source-id", 2, "local", marketSourceKey]`；
-    - Git：`["cindy.plugin-market.source-id", 2, "git", marketSourceKey, scheme, user, host, port, path]`，后五项是
-      **实际取包地址**的白名单部件，不含密码、令牌。部件取自 git 实际使用的原始字节：`resolveFetchUrl` 只去掉 git
-      输出的行终止符，白名单不 trim、不经 URL 解析器归一，任何空白都不生成；端口与路径按原样（`plugins` 与
-      `plugins.git`、带不带结尾斜杠、`:443` 与缺省、路径大小写都得到不同标识），只有协议与 host 转小写（DNS 主机名
-      不区分大小写，大写协议在 git 里要么等同、要么取包失败）。展示用的 `repository` 仍可规整（去 `.git`、去结尾
-      斜杠、小写 host）。白名单只接受最无争议的形状：整串含 `?` `#` `[` `]` 时在拆分之前就不生成；userinfo 非空、不含
-      `@` `/`；host 是严格的 ASCII DNS 名；端口不带前导零；路径没有空段与 `.`/`..` 段；并与 WHATWG URL 的解析结果
-      逐项交叉核对，任何分歧都不生成（用例另与 git 自己解析出的主机对照）。URL 形式的地址带 `?` 或 `#` 时不生成：URL 解析器会把它们当作
-      查询串、片段截掉，git 却把它们当作仓库路径的一部分（ssh、git）或拼进请求（http），截掉会把不同仓库认成同一个。
+    - 本地：`["cindy.plugin-market.source-id", 3, "local", marketSourceKey]`；
+    - Git：`["cindy.plugin-market.source-id", 3, "git", marketSourceKey, identity]`。`identity` 是**实际取包地址**校验
+      通过后的原始字节串，**只**去掉 http / https / git 形式的 userinfo（凭证），其余一字不改；ssh 与 scp 形式整串
+      原样，包括登录用户、主机原始大小写（OpenSSH 的 Host 别名区分大小写）、端口、路径。不再按部件重组：任何在算
+      标识前做的规整或按 URL 语义的拆分，只要 git / ssh 实际不这样解释，就可能把两个不同端点并成一个。
+    - 解析器只负责两件事：拒绝有歧义的地址（整串含 `?` `#` `[` `]`、空白、控制符、`\`、`%` 时在拆分之前就不生成；
+      userinfo 非空、不含 `@` `/`，ssh 登录名不含 `:`——git 把 `git:tenant-a` 整串当登录名；host 是严格的 ASCII DNS
+      名；端口不带前导零；路径没有空段与 `.`/`..` 段；并与 WHATWG URL 的解析结果逐项交叉核对，用例另与 git 自己解析
+      出的主机对照），以及生成展示用的 `repository`（可规整：去 `.git`、去结尾斜杠、小写 host）。`resolveFetchUrl`
+      只去掉 git 输出的行终止符。
+    - 结果只会偏保守：同一仓库的不同写法（主机或路径大小写、`plugins` 与 `plugins.git`、结尾斜杠、`:443` 与缺省）
+      得到不同标识，会多一次换源确认（确认后旧账号与数据隔离）或「未确认」。这是用户显式确认过的，可以接受；只换
+      https 凭证不改变标识，不会触发。
   - 用户名的取舍：`ssh://` 与 scp 形式（`user@host:path`）的登录用户算身份。普通 SSH 服务上，同主机同路径（尤其
     scp 相对路径）可随登录用户解析到不同家目录和仓库；`ssh://` 带绝对路径时也一律纳入，结果只会更保守。
     https / http / git 的 userinfo（含 `https://TOKEN@host` 单段令牌）算凭证，一律不读取，轮换凭证不改变标识。
@@ -145,6 +149,10 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   - 实际取包（来源租约内）与提交前：后台路径一律拒绝换源并按「等待用户确认」暂停；显式更新强制弹出确认（即使
     权限没有变多），确认请求带 `originSourceChanged: true`，确认框与任务卡提示「这次更新的来源与已安装的版本
     不同，旧账号和数据会隔离保存，需要重新连接账号」，任务卡 `input` 同时带 `originSourceChanged: true`。
+  - 换源确认按首装展示：旧实例的批准（任务、页面、控制节点、执行引擎、免确认工具、文件打开方式、Cindy 模型）随
+    旧来源归档、不继承，所以 `facts` 是 `kind: 'install'`，`permissions` 是新来源的完整权限（不是相对旧来源的差异），
+    锁内复核与新 receipt 的各项授予都用同一份事实；确认键仍绑定实际的受体实例。提交时若已不再是换源，这份确认
+    作废（`PRECONDITION_FAILED`）。
   - 用户确认后，提交锁内再核实一次；仍是实际换源时按既有换源事务落位：运行时先做换源空闲检查，旧实例的账号、
     密钥、OAuth、KV 与私有数据按 `sourceStateArchiveId` 隔离归档，新来源读不到，归档可按既有流程恢复。安装记录
     改绑新来源，之后不再反复询问。同一来源的更新、只换凭证、本地来源、服务端市场都不走这个事务，数据照常保留。旧记录没有绑定或候选身份缺省时不拦，保持既有行为（第一次

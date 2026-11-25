@@ -213,10 +213,11 @@ describe('plugin install confirmation card', () => {
   // controller needs the source change as a field to show it without scrolling. Only a custom-market update
   // confirmed for a source change carries it; everything else omits it.
   // The phone uses this exact sample (byte for byte) in its own test of how it shows a Host-built card.
+  // A source switch is confirmed like a first install (full permissions, contract V2.4b), hence operation 'install'.
   const SOURCE_SWITCH_CARD_INPUT_SAMPLE = {
     ghost_id: 'weather-chip',
     version: '2.0.0',
-    operation: 'update',
+    operation: 'install',
     origin: 'custom-market',
     source: { kind: 'git', repository: 'github.com/acme/plugins', ref: 'main', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' },
     originSourceChanged: true,
@@ -227,8 +228,10 @@ describe('plugin install confirmation card', () => {
       kind: 'update' as const, ghostId: 'weather-chip', name: 'Weather', version: '2.0.0', previousVersion: '1.0.0',
       added: [], removed: [], unchangedCount: 1, builtinOauthClientChanged: false,
     };
+    const switched = { kind: 'install' as const, ghostId: 'weather-chip', name: 'Weather', version: '2.0.0', permissions: [] };
     const changed = buildGhostInstallConsentInteraction('req-5', { initiator: 'agent', origin: 'custom-market',
-      originLabel: 'Acme', originSource: source, originSourceChanged: true, facts: update }, translate);
+      originLabel: 'Acme', originSource: source, originSourceChanged: true, facts: switched }, translate);
+    expect(changed.description).toContain(translate('settings.ghosts.installConsent.originSourceChanged'));
     expect(changed.input).toEqual(SOURCE_SWITCH_CARD_INPUT_SAMPLE);
     expect(JSON.stringify(changed.input)).toBe(JSON.stringify(SOURCE_SWITCH_CARD_INPUT_SAMPLE));
     const sameSource = buildGhostInstallConsentInteraction('req-6', { initiator: 'agent', origin: 'custom-market',
