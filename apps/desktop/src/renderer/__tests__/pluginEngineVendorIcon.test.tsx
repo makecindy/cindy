@@ -6,15 +6,16 @@
  *
  * 测试价值
  * - 生产入口与可观察结果：VendorIcon(vendor 'acp') 与 SessionStatusIcon(经 usePluginEngineIdentity
- *   读 usePluginEngines 远端目录)；看空闲剪影/灰度、运行原色呼吸、远程侧栏多行共用一次
- *   maker:list-plugin-engines 拉取后从通用拼图切换成插件图标，以及断线不发、本机引擎走本地、
- *   共享任务不越权、撤权逐出丢弃迟到回包。
+ *   读 usePluginEngines 远端目录，及经 SharedPluginEngineVendorIcon 读共享插件引擎目录)；看空闲
+ *   剪影/灰度、运行原色呼吸、远程与共享插件侧栏多行共用一次 maker:list-plugin-engines 拉取后从通用
+ *   拼图切换成插件图标，以及断线/离线/暂停不发、本机引擎走本地、远控仅被控电脑收到的分享经
+ *   maker:model-catalog:read 路由读取、共享任务(含携带 share:id)不越权、撤权逐出丢弃迟到回包。
  * - 规则依据：VendorIcon 头注的插件引擎状态色规则(2026-11-19 用户裁决)、engineering-conventions.md
  *   §8.1/§8.3/§8.4 与 DESIGN.md 灰阶规则。
- * - 现有覆盖缺口：此前 usePluginEngineIdentity 未触发远端目录首次读取，侧栏查看另一台电脑的插件
- *   引擎任务时始终显示通用拼图；PluginEnginesSection.test 只覆盖显式 readOnEntry 的选择器路径。
- * - 最小失败输入：渲染远程设备上的 acp 任务 SessionStatusIcon(未打开会话/选择器)，旧实现零调用
- *   maker:list-plugin-engines 并永远停在通用拼图；本机提供引擎的远程任务误走 deviceLink.invoke。
+ * - 现有覆盖缺口：此前 SessionStatusIcon 把所有 share:<id> 过滤掉，使用别人分享的插件 Harness
+ *   且本机未装该插件时侧栏永远回落通用拼图，且远控场景未走 maker:model-catalog:read。
+ * - 最小失败输入：渲染 agentDeviceId='share:share-1' 的本机 acp 任务 SessionStatusIcon(未装本机
+ *   插件)，旧实现零调用 share:share-1 的 maker:list-plugin-engines 并停在通用拼图。
  * - tier：unit(jsdom 不能解码图片，测量结果用测试入口登记；远端调用用 stub electronAPI)。
  */
 import React from 'react';
@@ -35,11 +36,12 @@ vi.mock('@/contexts/AuthContext', () => ({
 vi.mock('@/hooks/useComposerDraftPresence', () => ({ useComposerDraftPresence: () => false }));
 vi.mock('@/hooks/useSessionPausedQueue', () => ({ useSessionPausedQueue: () => false }));
 
-import { sharedTaskHostPeer } from '@cindy/device-link';
+import { sharedTaskHostPeer, type ProviderShareReceived } from '@cindy/device-link';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import { isSilhouetteIcon, rememberPluginIconSilhouetteForTests } from '@/components/icons/pluginIconSilhouette';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { SessionStatusIcon } from '@/features/cc-agent/sidebar/SessionStatusIcon';
+import { resetProviderShareStoreForTests } from '@/features/provider-share/providerShareStore';
 import {
   DEVICE_PLUGIN_ENGINES_REREAD_MS,
   evictRemotePluginEngines,
@@ -48,6 +50,7 @@ import {
   resetPluginEnginesStoreForTests,
 } from '@/hooks/usePluginEngines';
 import type { Session } from '@/lib/ccAgent.types';
+import { CONTROLLED_MODEL_CATALOG_CHANNEL } from '../../shared/controlledModelCatalog';
 import { PLUGIN_ENGINES_INVOKE, type PluginEngineView } from '../../shared/pluginEngines';
 
 afterEach(() => {
@@ -55,6 +58,7 @@ afterEach(() => {
   mocks.selfDeviceId = 'device-self';
   vi.unstubAllGlobals();
   resetPluginEnginesStoreForTests();
+  resetProviderShareStoreForTests();
 });
 
 /** 4×4 RGBA pixels from an alpha map (row by row). */
@@ -351,13 +355,15 @@ describe('remote plugin engine icons in sidebar SessionStatusIcon', () => {
       expect(invoke).not.toHaveBeenCalled();
       ownEngine.unmount();
 
-      // A shared task peer must neither call maker:list-plugin-engines nor borrow this computer's local plugin icon.
+      // A shared task peer must neither call maker:list-plugin-engines nor borrow this computer's local plugin icon,
+      // even if the peer projects a share:<id> agentDeviceId.
       const shared = render(
         <SessionStatusIcon
           session={acpSession({
             id: 's-shared',
             deviceLinkDeviceId: sharedTaskHostPeer('share-1', 'host-device-1'),
             deviceLinkConnectionStatus: 'connected',
+            agentDeviceId: 'share:share-1',
           })}
           isRunning
           isAttached={false}
@@ -368,6 +374,157 @@ describe('remote plugin engine icons in sidebar SessionStatusIcon', () => {
       expect(invoke).not.toHaveBeenCalled();
       expect(shared.container.querySelector('img')).toBeNull();
       expect(shared.container.querySelector('svg')).not.toBeNull();
+    } finally {
+      setDataOwnerGeneration(before.dataOwnerId, before.generation);
+    }
+  });
+
+  it('loads and shares a single catalogue read for shared plugin harness tasks, skipping offline or paused shares', async () => {
+    const before = getDataOwnerGeneration();
+    const sharedIcon = 'data:image/png;base64,shared-whale';
+    const invoke = vi.fn(async () => [remoteEngine('dsh-plugin:dsh', 'DeepSeek Harness', sharedIcon)]);
+    const listPluginEngines = vi.fn(async () => []);
+    let onReceivedChanged: ((list: ProviderShareReceived[]) => void) | undefined;
+    const baseShare: ProviderShareReceived = {
+      shareId: 'share-1',
+      memberId: 'member-1',
+      providerId: 'acp-plugin:dsh-plugin:dsh',
+      providerLabel: 'DeepSeek Harness',
+      hostDeviceId: 'host-1',
+      deviceName: 'Shared',
+      owner: {
+        displayName: 'Magi',
+        avatarUrl: null,
+        region: 'cn',
+      },
+      status: 'active',
+      hostOnline: false,
+      hostCapable: true,
+    };
+    let currentReceived: ProviderShareReceived[] = [baseShare];
+    const command = vi.fn(async (req: { action: string }) => {
+      if (req.action === 'received') return currentReceived;
+      throw new Error('unsupported');
+    });
+    vi.stubGlobal('electronAPI', {
+      deviceLink: { invoke, onRemotePush: () => () => {} },
+      maker: { listPluginEngines, onPluginEnginesChanged: () => () => {} },
+      providerShare: {
+        command,
+        onReceivedChanged: (cb: (list: ProviderShareReceived[]) => void) => {
+          onReceivedChanged = cb;
+          return () => {};
+        },
+      },
+    });
+    setDataOwnerGeneration('acct-1');
+    try {
+      const view = render(
+        <>
+          <SessionStatusIcon
+            session={acpSession({ id: 's-share-1', agentDeviceId: 'share:share-1' })}
+            isRunning
+            isAttached={false}
+            hasAttentionNotification={false}
+            isActive={false}
+          />
+          <SessionStatusIcon
+            session={acpSession({ id: 's-share-2', agentDeviceId: 'share:share-1' })}
+            isRunning
+            isAttached={false}
+            hasAttentionNotification={false}
+            isActive={false}
+          />
+        </>,
+      );
+
+      // While host is offline, stay on generic fallback puzzle without firing remote reads.
+      await waitFor(() => expect(command).toHaveBeenCalled());
+      expect(invoke).not.toHaveBeenCalled();
+      expect(listPluginEngines).not.toHaveBeenCalled();
+      expect(view.container.querySelector('img')).toBeNull();
+
+      // Once the share host comes online, both rows share a single maker:list-plugin-engines read.
+      currentReceived = [{ ...baseShare, hostOnline: true }];
+      act(() => {
+        onReceivedChanged?.(currentReceived);
+      });
+
+      await waitFor(() => {
+        const imgs = view.container.querySelectorAll<HTMLImageElement>('img[data-plugin-icon="original"]');
+        expect(imgs).toHaveLength(2);
+        expect(imgs[0].getAttribute('src')).toBe(sharedIcon);
+        expect(imgs[1].getAttribute('src')).toBe(sharedIcon);
+      });
+      expect(invoke.mock.calls).toEqual([['share:share-1', PLUGIN_ENGINES_INVOKE.LIST, []]]);
+      expect(listPluginEngines).not.toHaveBeenCalled();
+      expect(view.getAllByTitle('DeepSeek Harness')).toHaveLength(2);
+    } finally {
+      setDataOwnerGeneration(before.dataOwnerId, before.generation);
+    }
+  });
+
+  it('routes shared plugin harness icon lookup through the controlled host when this computer did not receive that share', async () => {
+    const before = getDataOwnerGeneration();
+    const routedIcon = 'data:image/png;base64,routed-shared-whale';
+    const invoke = vi.fn(async () => [remoteEngine('dsh-plugin:dsh', 'DeepSeek Harness', routedIcon)]);
+    const command = vi.fn(async (req: { action: string }) => {
+      if (req.action === 'received') return [];
+      throw new Error('unsupported');
+    });
+    vi.stubGlobal('electronAPI', {
+      deviceLink: { invoke, onRemotePush: () => () => {} },
+      providerShare: {
+        command,
+        onReceivedChanged: () => () => {},
+      },
+    });
+    setDataOwnerGeneration('acct-1');
+    try {
+      const view = render(
+        <SessionStatusIcon
+          session={acpSession({
+            id: 's-routed-share',
+            deviceLinkDeviceId: 'device-b',
+            deviceLinkConnectionStatus: 'disconnected',
+            agentDeviceId: 'share:only-on-b',
+          })}
+          isRunning
+          isAttached={false}
+          hasAttentionNotification={false}
+          isActive={false}
+        />,
+      );
+
+      // Disconnected controlled host must not fire a routed read even after local received list loads.
+      await waitFor(() => expect(command).toHaveBeenCalled());
+      expect(invoke).not.toHaveBeenCalled();
+
+      view.rerender(
+        <SessionStatusIcon
+          session={acpSession({
+            id: 's-routed-share',
+            deviceLinkDeviceId: 'device-b',
+            deviceLinkConnectionStatus: 'connected',
+            agentDeviceId: 'share:only-on-b',
+          })}
+          isRunning
+          isAttached={false}
+          hasAttentionNotification={false}
+          isActive={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(view.container.querySelector('img[data-plugin-icon="original"]')?.getAttribute('src')).toBe(routedIcon);
+      });
+      expect(invoke.mock.calls).toEqual([
+        [
+          'device-b',
+          CONTROLLED_MODEL_CATALOG_CHANNEL,
+          [{ op: 'read', agentDeviceId: 'share:only-on-b', channel: PLUGIN_ENGINES_INVOKE.LIST, args: [] }],
+        ],
+      ]);
     } finally {
       setDataOwnerGeneration(before.dataOwnerId, before.generation);
     }
