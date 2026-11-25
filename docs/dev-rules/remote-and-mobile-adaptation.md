@@ -623,13 +623,15 @@ Device Link 按原 seq 重放，重放沿用原有预算；③ `packages/device-
 [协议记录](protocol-compatibility/agent-net-udp-relay.md)。设备侧 `packages/agent-net/src/relayUdp.ts`，中继侧
 `packages/agent-net-relay/src/server.ts`。
 
-故障半径三问：① 证据是这条中继会话自己的 UDP 登记有没有被确认：一次登记 4 秒没确认就算不通，与其它会话、其它对端
-无关；② 只切换这条会话上数据报走哪条路：设备不再经 UDP 发，下一次登记告诉中继「收不到」，中继对这台设备退回
-WebSocket；不关 WebSocket、不复位对端、不清队列，切换期间丢的数据报由传输核心重发；登记一直不通时每秒一次、
-10 秒后每 5 秒一次，每次几十字节；设备的 UDP 上行也断了、发不出「收不到」时，中继 30 秒没收到登记自行退回；
-③ `packages/agent-net/src/__tests__/relayUdp.test.ts` 验证确认中断 4 秒内退回 WebSocket 并告诉中继、恢复后切回，
-`packages/agent-net-relay/src/__tests__/relay.integration.test.ts` 用真实中继套接字验证报「收不到」后改走 WebSocket；
-两条用例去掉修复时都失败。
+故障半径三问：① 证据是这条中继会话自己的 UDP 登记与满尺寸第 1 跳探针（`0xE5`/`0xE6`，支持 `udp-relay-probe-v1` 时直测本机 ↔ 中转
+1350B 双向可达；无探针的旧中继下仅当所有经中转对端均无健康确认推进时才触发），与其它会话、以及单个抖动或离线对端无关；
+② 只切换这条会话上数据报走哪条路：设备不再经 UDP 发，下一次登记告诉中继「收不到」，中继对这台设备退回 WebSocket；
+不关 WebSocket、不复位对端、不清队列，切换期间丢的数据报由传输核心重发；登记一直不通时每秒一次、10 秒后每 5 秒一次，每次几十字节；
+探针停用期间按 15s → 30s → 60s → 120s 在 WebSocket 保护下主动发单包探针（换网时立即清冷却重探），通了才切回 UDP；
+设备的 UDP 上行也断了、发不出「收不到」时，中继 30 秒没收到登记自行退回；
+③ `packages/agent-net/src/__tests__/relayUdp.test.ts` 验证确认中断 4 秒内退回 WebSocket、满尺寸探针准入/复核/换网恢复、以及旧中继下的
+单对端隔离与间歇流量退避清零，`packages/agent-net-relay/src/__tests__/relay.integration.test.ts` 用真实中继套接字验证报「收不到」退回
+WebSocket 及满尺寸探针防放大/防重放，`packages/agent-net-native/src/udp_paths.rs` 验证手机原生同一探针状态机；去掉修复时对应回归均失败。
 
 ### Agent-Net 关闭时告诉直连的对端
 
