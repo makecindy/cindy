@@ -585,6 +585,243 @@ describe('busy belongs to one request; one answer per consent', () => {
   });
 });
 
+// Maintainer review 13:02 (liveness): a late write receipt and a reconnect lookup overwrote each other and verification
+// stopped (A: late begin consent after Allow already ran → unknown with no next poll; B: late begin `running` while a
+// lookup held busy, then the lookup's `succeeded` dropped → stuck in progress); an answer written with its reply lost,
+// after a later lookup still found the same consent, left both buttons disabled with nothing to tap or poll.
+// Model check from begin in flight, against a stand-in Host that moves on by itself (accepted → consent → after an
+// answer running → final). Events: going offline or online; each request's check before the write (in queue order,
+// as on one link), its delivery or lost reply (any order); the Host moving on; a poll timer firing; Allow, Reject or
+// Check result whenever tappable. States already seen are pruned, so deeper orders (about ten steps) are reached.
+// After every step: ①–⑤ as above, plus ⑥ a non-final operation with nothing in flight on an online computer has a
+// poll scheduled or a tappable consent; ⑦ the phase shown never goes back behind one the Host has reached and the
+// phone has shown. At every leaf, ⑧ after releasing everything in flight and letting polls run (no taps), the phone
+// shows the Host's real result. Minimal failing inputs: the two orders above and the stuck consent (ea3874b2).
+// Tier: unit (in-memory Host, fake timers).
+describe('progress only moves forward and never stops', () => {
+  type Kind = 'begin' | 'answer' | 'operation' | 'cancel';
+  type Item = { kind: Kind; seq: number; confirmed?: boolean; stage: 'queued' | 'written'; epoch: number; arrived: boolean;
+    dequeue(): void; arrive(): void; deliver(): void; lose(): void };
+  const lostError = () => { const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no reply after first socket write'); error.inFlight = true; return error; };
+  const notFound = () => Object.assign(new Error('[NOT_FOUND] gone'), { code: 'NOT_FOUND' });
+  const POLL = 1000;
+  // `promptOnAccept`: the Host shows the consent before answering begin; `consent: false`: an operation without one.
+  function rig(hostOptions: { promptOnAccept?: boolean; consent?: boolean } = {}) {
+    const host = { phase: 'none' as 'none' | 'accepted' | 'confirmation' | 'running' | 'succeeded' | 'cancelled', allowed: false, answersWritten: 0 };
+    const hostReceipt = (): PluginManagementReceipt | null => host.phase === 'none' ? null
+      : host.phase === 'confirmation' ? confirmation() : receipt(host.phase === 'accepted' ? 'running' : host.phase);
+    const pending: Item[] = [], transit: Item[] = [];
+    let connection = 0, seq = 0;
+    const settle = (item: Item) => { const index = pending.indexOf(item); if (index >= 0) pending.splice(index, 1); };
+    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+      options?.preSend?.();
+      const request = args?.[0] as Envelope | undefined;
+      const action = request?.actionId?.replace('management:', '');
+      if (!['begin', 'answer', 'operation', 'cancel'].includes(action ?? '')) {
+        options?.preSend?.(); options?.onRequestWritten?.();
+        if (channel.endsWith(':manifest')) return capability;
+        if (action === 'snapshot') return { effects: [], result: snapshot() };
+        if (action === 'market-detail') return { effects: [], result: detail };
+        throw new Error('unexpected ' + action);
+      }
+      return new Promise((resolve, reject) => {
+        let reply: (() => void) | undefined;
+        const item: Item = { kind: action as Kind, seq: ++seq, stage: 'queued', epoch: connection, arrived: false,
+          confirmed: (request!.input as { confirmed?: boolean }).confirmed,
+          dequeue: () => {
+            try { options?.preSend?.(); } catch (error) { settle(item); reject(error); return; }
+            options?.onRequestWritten?.();
+            item.stage = 'written';
+            if (item.kind === 'answer') host.answersWritten += 1;
+            // Written; it reaches the Host later (it may still arrive after its reply was given up on).
+            transit.push(item);
+          },
+          // The Host takes the request now and answers with its state at that moment.
+          arrive: () => {
+            transit.splice(transit.indexOf(item), 1);
+            item.arrived = true;
+            if (item.kind === 'begin' && host.phase === 'none') host.phase = hostOptions.promptOnAccept ? 'confirmation' : 'accepted';
+            if (item.kind === 'answer' && host.phase === 'confirmation') { host.phase = 'running'; host.allowed = !!item.confirmed; }
+            if (item.kind === 'cancel' && ['accepted', 'confirmation', 'running'].includes(host.phase)) host.phase = 'cancelled';
+            const captured = hostReceipt();
+            reply = () => { if (captured) resolve({ effects: [], result: captured }); else reject(notFound()); };
+          },
+          deliver: () => { settle(item); reply!(); },
+          lose: () => { settle(item); reject(lostError()); },
+        };
+        pending.push(item);
+      });
+    }) as unknown as PluginManagementInvoke;
+    const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }),
+      { createOperationId: () => 'operation-1', pollIntervalMs: POLL });
+    controllers.push(c);
+    return { c, host, pending, transit, consentless: hostOptions.consent === false, toggle: () => { connection += 1; }, connection: () => connection };
+  }
+  const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
+  type R = ReturnType<typeof rig>;
+  const finalOutcome = (o: string) => o === 'succeeded' || o === 'cancelled' || o === 'failed';
+  const tappable = (r: R) => { const st = r.c.getState(); return st.outcome === 'confirmation' && st.online && !st.busy && !st.answerHeld; };
+  async function step(r: R, event: string, counts: Record<string, number>) {
+    const [name, at] = event.split('#');
+    const item = at !== undefined ? [...r.pending, ...r.transit].find((entry) => entry.seq === Number(at)) : undefined;
+    counts[name] = (counts[name] ?? 0) + 1;
+    if (name === 'offline') { r.toggle(); r.c.setOnline(false); }
+    else if (name === 'online') { r.toggle(); r.c.setOnline(true); }
+    else if (name === 'allow' || name === 'reject') void r.c.answer(name === 'allow');
+    else if (name === 'check') void r.c.reconcile();
+    else if (name === 'host') {
+      if (r.host.phase === 'accepted') r.host.phase = r.consentless ? 'succeeded' : 'confirmation';
+      else if (r.host.phase === 'running') r.host.phase = r.host.allowed ? 'succeeded' : 'cancelled';
+    } else if (name === 'tick') await vi.advanceTimersByTimeAsync(POLL);
+    else if (name === 'dequeue') item!.dequeue();
+    else if (name === 'arrive') item!.arrive();
+    else if (name === 'deliver') item!.deliver();
+    else item!.lose();
+    await flush();
+  }
+  function enabled(r: R, counts: Record<string, number>): string[] {
+    const st = r.c.getState(), list: string[] = [];
+    if (st.online && !counts.offline) list.push('offline');
+    if (!st.online && !counts.online) list.push('online');
+    if (tappable(r) && (counts.allow ?? 0) + (counts.reject ?? 0) < 2) list.push('allow', 'reject');
+    if (st.outcome === 'unknown' && st.online && !st.busy && !counts.check) list.push('check');
+    if ((r.host.phase === 'accepted' || r.host.phase === 'running') && (counts.host ?? 0) < 3) list.push('host');
+    if (vi.getTimerCount() > 0 && (counts.tick ?? 0) < 3) list.push('tick');
+    const firstQueued = r.pending.find((entry) => entry.stage === 'queued');
+    if (firstQueued) list.push(`dequeue#${firstQueued.seq}`);
+    // Requests reach the Host in the order they were written; a reply comes only after that, a lost one any time.
+    if (r.transit.length) list.push(`arrive#${r.transit[0].seq}`);
+    for (const entry of r.pending) if (entry.stage === 'written') {
+      if (entry.arrived) list.push(`deliver#${entry.seq}`);
+      list.push(`lose#${entry.seq}`);
+    }
+    return list;
+  }
+  function check(r: R, shown: { rank: number }, path: string): string | null {
+    const st = r.c.getState();
+    if (tappable(r) && r.pending.some((entry) => entry.kind === 'answer')) return `① tappable while an answer is in flight (${path})`;
+    if (r.host.answersWritten > 1) return `② ${r.host.answersWritten} answers written (${path})`;
+    if (r.pending.filter((entry) => entry.kind === 'operation' && entry.epoch === r.connection()).length > 1) return `③ two lookups in flight (${path})`;
+    if (st.busy && r.pending.length === 0) return `⑤ busy with nothing in flight (${path})`;
+    const open = !!st.operationId && ['running', 'confirmation', 'unknown'].includes(st.outcome);
+    if (open && st.online && r.pending.length === 0 && !st.busy && !tappable(r) && vi.getTimerCount() === 0
+      && !(st.outcome === 'unknown' && st.missingReceiptFacts !== undefined && st.missingReceiptFacts !== null))
+      return `⑥ stuck: ${st.outcome}${st.answerHeld ? ' (answer held)' : ''} with nothing in flight and no poll (${path})`;
+    const rank = st.outcome === 'confirmation' ? 1 : st.outcome === 'running' ? (r.host.answersWritten > 0 && r.host.phase !== 'confirmation' ? 2 : 0)
+      : finalOutcome(st.outcome) ? 3 : -1;
+    if (rank >= 0 && rank < shown.rank) return `⑦ went back to ${st.outcome} (${path})`;
+    shown.rank = Math.max(shown.rank, rank);
+    return null;
+  }
+  async function drain(r: R) {
+    const counts: Record<string, number> = {};
+    for (let i = 0; i < 60; i++) {
+      if (!r.c.getState().online) { await step(r, 'online', counts); continue; }
+      const queued = r.pending.find((entry) => entry.stage === 'queued');
+      if (queued) { await step(r, `dequeue#${queued.seq}`, counts); continue; }
+      if (r.transit.length) { await step(r, `arrive#${r.transit[0].seq}`, counts); continue; }
+      const written = r.pending.find((entry) => entry.stage === 'written' && entry.arrived);
+      if (written) { await step(r, `deliver#${written.seq}`, counts); continue; }
+      if (r.host.phase === 'accepted' || r.host.phase === 'running') { await step(r, 'host', counts); continue; }
+      if (vi.getTimerCount() > 0) { await step(r, 'tick', counts); continue; }
+      break;
+    }
+    const st = r.c.getState();
+    if (r.host.phase === 'none') return st.outcome === 'failed' ? null : `⑧ Host never took the begin, phone shows ${st.outcome}`;
+    if (r.host.phase === 'confirmation') return tappable(r) ? null : `⑧ Host waits for an answer, phone shows ${st.outcome}${st.answerHeld ? ' (held)' : ''}`;
+    return st.outcome === r.host.phase ? null : `⑧ Host ${r.host.phase}, phone shows ${st.outcome}`;
+  }
+  async function replay(events: string[]) {
+    const r = rig();
+    await r.c.refresh();
+    void r.c.install(detail, plugin);
+    await flush();
+    const counts: Record<string, number> = {}, shown = { rank: -1 };
+    for (let i = 0; i < events.length; i++) {
+      await step(r, events[i], counts);
+      const violation = check(r, shown, events.slice(0, i + 1).join(' → '));
+      if (violation) return { violation, r, counts, next: [] as string[] };
+    }
+    return { violation: null, r, counts, next: enabled(r, counts) };
+  }
+  const fingerprint = (r: R, counts: Record<string, number>) => JSON.stringify([r.host, r.c.getState().outcome, r.c.getState().busy,
+    r.c.getState().answerHeld, r.c.getState().online, r.c.getState().receipt?.phase, vi.getTimerCount(),
+    r.pending.map((entry) => [entry.kind, entry.stage, entry.arrived, entry.confirmed, entry.epoch === r.connection()]),
+    r.transit.map((entry) => [entry.kind, entry.confirmed]), counts]);
+  // The maintainer's orders, as plain regressions (each fails on ea3874b2 and e46ff0aa).
+  const run = async (r: R, events: string[]) => { const counts = {}; for (const event of events) await step(r, event, counts); };
+  it('A: a late begin consent after Allow already ran neither goes back nor stops the polling', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = rig({ promptOnAccept: true });
+      await r.c.refresh(); void r.c.install(detail, plugin); await flush();
+      await run(r, ['dequeue#1', 'arrive#1', 'offline', 'online', 'dequeue#2', 'arrive#2', 'deliver#2']);
+      expect(r.c.getState().outcome).toBe('confirmation');
+      await run(r, ['allow', 'dequeue#3', 'arrive#3', 'deliver#3']);
+      expect(r.c.getState().outcome).toBe('running');
+      await run(r, ['deliver#1']);                                 // the begin's consent arrives late
+      expect(r.c.getState().outcome).toBe('running');
+      await run(r, ['host', 'tick']);                              // the Host finishes; the next poll shows it
+      const lookup = r.pending.find((entry) => entry.kind === 'operation')!;
+      await run(r, [`dequeue#${lookup.seq}`, `arrive#${lookup.seq}`, `deliver#${lookup.seq}`]);
+      expect(r.c.getState()).toMatchObject({ outcome: 'succeeded', busy: false });
+    } finally { vi.useRealTimers(); }
+  });
+  it('B: a final outcome from the reconnect lookup lands after a late begin running', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = rig({ consent: false });
+      await r.c.refresh(); void r.c.uninstall(plugin); await flush();
+      await run(r, ['dequeue#1', 'arrive#1', 'offline', 'online', 'host', 'dequeue#2', 'arrive#2', 'deliver#1', 'deliver#2']);
+      expect(r.c.getState()).toMatchObject({ outcome: 'succeeded', busy: false });
+    } finally { vi.useRealTimers(); }
+  });
+  it('a written answer whose reply is lost after a later lookup still found its consent becomes checkable, then settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = rig();
+      await r.c.refresh(); void r.c.install(detail, plugin); await flush();
+      await run(r, ['dequeue#1', 'arrive#1', 'deliver#1', 'host', 'tick', 'dequeue#2', 'arrive#2', 'deliver#2']);
+      expect(r.c.getState().outcome).toBe('confirmation');
+      await run(r, ['allow', 'dequeue#3', 'offline', 'online', 'dequeue#4', 'arrive#4', 'deliver#4']);
+      expect(r.c.getState()).toMatchObject({ outcome: 'confirmation', answerHeld: 'consent-1' });
+      await run(r, ['lose#3']);                                    // the answer's reply is lost
+      // Not a dead end: a checkable unknown result whose answer stays locked, looked up by itself.
+      expect(r.c.getState()).toMatchObject({ outcome: 'unknown', answerHeld: 'consent-1', busy: false });
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      await run(r, ['arrive#3', 'host', 'tick']);                  // the answer reached the Host after all; it finishes
+      const lookup = r.pending.find((entry) => entry.kind === 'operation')!;
+      await run(r, [`dequeue#${lookup.seq}`, `arrive#${lookup.seq}`, `deliver#${lookup.seq}`]);
+      expect(r.c.getState()).toMatchObject({ outcome: 'succeeded' });
+      expect(r.host.answersWritten).toBe(1);
+    } finally { vi.useRealTimers(); }
+  });
+  it('keeps every invariant after every step, and reaches the Host result without taps', async () => {
+    vi.useFakeTimers();
+    try {
+      const violations = new Set<string>(), seen = new Set<string>();
+      let leaves = 0;
+      const explore = async (events: string[]): Promise<void> => {
+        const { violation, r, counts, next } = await replay(events);
+        if (violation) { violations.add(violation); return; }
+        const key = fingerprint(r, counts);
+        if (seen.has(key)) return;
+        seen.add(key);
+        if (!next.length || events.length >= 10) {
+          leaves += 1;
+          const end = await drain(r);
+          if (end) violations.add(`${end} (${events.join(' → ')})`);
+          return;
+        }
+        for (const event of next) await explore([...events, event]);
+      };
+      await explore([]);
+      expect([...violations].slice(0, 8)).toEqual([]);
+      expect(leaves).toBeGreaterThan(200);
+    } finally { vi.useRealTimers(); }
+  }, 30_000);
+});
+
 describe('mobile management transactions', () => {
   it('submits only the active consent request and preserves Host failure receipts', async () => {
     const h = host((r) => r.actionId === 'management:begin' ? confirmation() : { ...receipt('failed'), errorCode: 'PACKAGE_CHANGED' });

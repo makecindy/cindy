@@ -89,6 +89,8 @@ export function createPluginManagementController(client: PluginManagementClient,
     publish({ ...patch, busy: false });
     return true;
   };
+  /** A request ended without a state change of its own: release its hold if it still has one, and check progress. */
+  const drop = (holder: number) => { if (!release(holder)) ensureProgress(); };
   /** Apply an operation result: with the release when `holder` holds busy, otherwise without touching busy. */
   const conclude = (holder: number, patch: Partial<PluginManagementState>) => { if (!release(holder, patch)) publish(patch); };
   /** Answers by consent request id: in flight, or written (the Host may have it). At most one per request id. */
@@ -96,12 +98,34 @@ export function createPluginManagementController(client: PluginManagementClient,
   /** A cancel of this operation in flight or written: the consent may be gone on the Host, so it is not offered. */
   let cancelling: 'pending' | 'written' | null = null;
   /**
-   * Lookups and receipts on one clock: a lookup's reply applies only while it is the newest lookup and no receipt was
-   * applied after it was sent, so a late, older reply never reopens a confirmation already left.
+   * The operation's progress on the Host only moves forward (maintainer review 13:02). Its receipt carries no sequence,
+   * so the phone ranks receipts by the operation's stages: running before the first consent < consent 1 < running after
+   * consent 1 was answered < consent 2 < … < a final outcome. A consent ranks by its order of first appearance. A
+   * `running` receipt ranks right after the newest consent this phone had already answered when the request was sent
+   * (the Host leaves a consent only through this phone's answer), otherwise below every consent. A receipt ranked below
+   * the progress already shown is older than it and never lands; a final outcome always does.
    */
-  let receiptClock = 0, newestLookup = 0, appliedReceiptAt = 0, mutationSentAt = 0;
-  /** A lookup sent before the newest receipt or the newest write (answer, cancel) no longer describes the operation. */
-  const lookupStale = (lookupAt: number) => lookupAt !== newestLookup || appliedReceiptAt > lookupAt || mutationSentAt > lookupAt;
+  let receiptClock = 0, shownRank = -1, appliedReceiptAt = 0;
+  const consentOrder: string[] = [];
+  const answerSentAt = new Map<string, number>();
+  const consentIndex = (requestId: string) => {
+    if (!consentOrder.includes(requestId)) consentOrder.push(requestId);
+    return consentOrder.indexOf(requestId);
+  };
+  function rankOf(receipt: PluginManagementReceipt, issuedAt: number): number {
+    if (terminal(receipt)) return Number.MAX_SAFE_INTEGER;
+    if (receipt.phase === 'confirmation' && receipt.consent) return 2 * consentIndex(receipt.consent.requestId) + 1;
+    let rank = 0;
+    for (const [requestId, sentAt] of answerSentAt) if (sentAt < issuedAt) rank = Math.max(rank, 2 * consentIndex(requestId) + 2);
+    return rank;
+  }
+  /** Requests to the Host for this operation still waiting for their result (see `ensureProgress`). */
+  let requestsInFlight = 0;
+  async function tracked<T>(request: () => Promise<T>): Promise<T> {
+    requestsInFlight += 1;
+    // Settled before the caller handles the result; the caller's next state change (or release) checks progress.
+    try { return await request(); } finally { requestsInFlight -= 1; }
+  }
   /** One lookup in flight at a time; a lookup asked for meanwhile runs once it settles. */
   let lookupInFlight = false, lookupWanted = false;
   /**
@@ -124,12 +148,30 @@ export function createPluginManagementController(client: PluginManagementClient,
     }
     options.onChange?.(state);
     listeners.forEach((listener) => listener());
+    ensureProgress();
   };
   const stopPolling = () => { if (timer !== undefined) clearTimeout(timer); timer = undefined; };
-  function schedulePoll() {
-    stopPolling();
-    if (state.online && state.operationId && state.outcome === 'running' && !state.busy && !disposed)
-      timer = setTimeout(() => { timer = undefined; void reconcile(); }, Math.max(250, options.pollIntervalMs ?? 1000));
+  /**
+   * Liveness, in one place (maintainer review 13:02), checked after every state change and when a request settles: an
+   * operation that is not final, with nothing in flight on an online computer, always has a way forward. Running, or an
+   * unknown result a lookup can settle: the next lookup is scheduled. A consent: Allow or Reject can be tapped, except
+   * when this phone already wrote its answer and lost the reply, which makes it an unknown result (the answer stays
+   * locked) that the next lookup settles. A result whose receipt the Host no longer has is settled from the computer's
+   * facts instead (missing receipt), and an offline computer is looked up on reconnect.
+   */
+  function ensureProgress() {
+    if (disposed || !client.isCurrent()) return;
+    const open = !!state.operationId && ['running', 'confirmation', 'unknown'].includes(state.outcome);
+    if (!open || !state.online) { stopPolling(); return; }
+    if (requestsInFlight > 0 || state.busy || lookupInFlight) return;
+    if (state.outcome === 'confirmation') {
+      // Held right now (the published `answerHeld` may predate a release still being handled).
+      const requestId = state.receipt?.consent?.requestId;
+      if (requestId && (answers.get(requestId) === 'written' || cancelling === 'written')) publish({ outcome: 'unknown' });
+      return;
+    }
+    if (state.outcome === 'unknown' && missingReceipt) return;
+    if (timer === undefined) timer = setTimeout(() => { timer = undefined; void reconcile(); }, Math.max(250, options.pollIntervalMs ?? 1000));
   }
   function matchesReceiver(live: ManagedPlugin): boolean {
     return !!receiver && live.instanceKey === receiver.instanceKey
@@ -176,16 +218,16 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (current(token) && sequence === snapshotSequence) publishSnapshot(sequence, token, snapshot, { uiConsent: null });
     return snapshot;
   }
-  /** `holder`: the request that got this receipt; `lookupAt`: set for a lookup's reply (see `receiptClock`). */
-  // A receipt is the Host's state of the operation: it lands by operation id even after the connection epoch moved
-  // (a cancel reply dropped for its epoch let an older lookup reopen a consent the Host had already cancelled).
-  async function acceptReceipt(receipt: PluginManagementReceipt, token: number, holder: number, lookupAt?: number) {
-    if (!undecided(receipt.operationId)
-      || (lookupAt !== undefined && lookupStale(lookupAt))) {
-      if (lookupAt !== undefined && undecided(receipt.operationId) && state.outcome === 'unknown') lookupWanted = true;
-      release(holder);
-      return;
-    }
+  /**
+   * `holder`: the request that got this receipt; `issuedAt`: when it was sent (see `rankOf`). A receipt is the Host's
+   * state of the operation: it lands by operation id even after the connection epoch moved, unless it is older than
+   * the progress already shown.
+   */
+  async function acceptReceipt(receipt: PluginManagementReceipt, token: number, holder: number, issuedAt: number) {
+    if (!undecided(receipt.operationId)) { drop(holder); return; }
+    const rank = rankOf(receipt, issuedAt);
+    if (rank < shownRank) { drop(holder); return; }
+    shownRank = rank;
     appliedReceiptAt = ++receiptClock;
     // The Host still shows a consent this phone already answered (written, reply lost): never offer it again; the
     // result stays unknown until the Host reports the answer's outcome.
@@ -229,7 +271,7 @@ export function createPluginManagementController(client: PluginManagementClient,
           } catch { /* Preserve the readback error; neither failed read retries itself. */ }
         }
       }
-    } else schedulePoll();
+    }
   }
   async function refresh() {
     if (disposed || !state.online || !client.isCurrent()) return;
@@ -271,7 +313,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     const token = ++epoch;
     let began = false, operationId: string | null = null;
     const holder = hold();
-    answers.clear(); cancelling = null;
+    answers.clear(); cancelling = null; consentOrder.length = 0; answerSentAt.clear(); shownRank = -1;
     publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle',
       expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null });
     const installed = intent.installed;
@@ -283,7 +325,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       let request: BeginIntent = intent as BeginIntent;
       if (intent.kind === 'install') {
         const detail = await client.detail(intent.detail.pluginId);
-        if (!current(token)) { release(holder); return; }
+        if (!current(token)) { drop(holder); return; }
         if (detail.releaseId !== intent.detail.releaseId || detail.namespace !== intent.detail.namespace
           || detail.sourceType !== intent.detail.sourceType || (detail.sourceType !== 'server'
             && JSON.stringify(detail.manifest) !== JSON.stringify(intent.detail.manifest))) throw new Error('PLUGIN_RELEASE_CHANGED');
@@ -298,7 +340,7 @@ export function createPluginManagementController(client: PluginManagementClient,
         request = { ...intent, detail };
       }
       const snapshot = await readSnapshot(token);
-      if (!current(token)) { release(holder); return; }
+      if (!current(token)) { drop(holder); return; }
       if (!receiver && installed && !('manifest' in installed)) {
         receiver = snapshot.ghosts.find(g => g.instanceKey === installed.instanceKey);
         if (!receiver || pluginApprovalToken(receiver) !== installed.approvalToken) throw new Error('PLUGIN_INSTALL_CHANGED');
@@ -310,9 +352,11 @@ export function createPluginManagementController(client: PluginManagementClient,
       operationId = (options.createOperationId ?? randomUUID)();
       publish({ operationId, outcome: 'running' });
       began = true;
-      await acceptReceipt(await client.begin({ ...request, operationId,
+      const issuedAt = ++receiptClock;
+      const reply = await tracked(() => client.begin({ ...request, operationId: operationId!,
         ...(snapshot.uiCapabilityApproval ? { uiConsentVersion: 1 } : {}) }, () => current(token)
-        && state.online && !!facts && receiverCurrent(facts)), token, holder);
+        && state.online && !!facts && receiverCurrent(facts)));
+      await acceptReceipt(reply, token, holder, issuedAt);
     } catch (error) {
       // Maintainer review 10:36 #1: a begin stopped before it was written (for example by the last check after the
       // computer went offline while it was queued) is a plain failure of this operation, even though going offline
@@ -322,7 +366,7 @@ export function createPluginManagementController(client: PluginManagementClient,
         conclude(holder, { outcome: 'failed', errorCode: pluginManagementErrorCode(error) });
         return;
       }
-      if (!current(token) || (began && !undecided(operationId))) { release(holder); return; }
+      if (!current(token) || (began && !undecided(operationId))) { drop(holder); return; }
       const unknown = began && !notWritten(error);
       release(holder, { outcome: unknown ? 'unknown' : 'failed', errorCode: pluginManagementErrorCode(error) });
     }
@@ -338,25 +382,21 @@ export function createPluginManagementController(client: PluginManagementClient,
     // A new verification round starts now: facts from an earlier round must not settle anything while its
     // operation query is still in flight.
     missingReceipt = null;
-    const holder = hold(), lookupAt = newestLookup = ++receiptClock;
+    const holder = hold(), lookupAt = ++receiptClock;
     lookupInFlight = true;
     publish({ busy: true, missingReceiptFacts: null });
     try { await lookup(id, token, holder, lookupAt); }
     finally {
       lookupInFlight = false;
-      if (lookupWanted) { lookupWanted = false; void reconcile(); }
+      if (lookupWanted) { lookupWanted = false; void reconcile(); } else ensureProgress();
     }
   }
   async function lookup(id: string, token: number, holder: number, lookupAt: number) {
-    try { await acceptReceipt(await client.operation(id), token, holder, lookupAt); }
+    try { await acceptReceipt(await tracked(() => client.operation(id)), token, holder, lookupAt); }
     catch (error) {
-      // A late lookup never reopens an operation that has a final outcome meanwhile (see `undecided`), and an older
-      // lookup or one overtaken by a receipt says nothing anymore.
-      if (!current(token) || !undecided(id) || lookupStale(lookupAt)) {
-        if (undecided(id) && lookupStale(lookupAt) && state.outcome === 'unknown') lookupWanted = true;
-        release(holder);
-        return;
-      }
+      // A late lookup never reopens an operation that has a final outcome meanwhile (see `undecided`), and a lookup
+      // overtaken by a receipt (the Host's newer state) says nothing anymore.
+      if (!current(token) || !undecided(id) || appliedReceiptAt > lookupAt) { drop(holder); return; }
       // NOT_FOUND can mean Host restart or its 15-minute memory expiry. Never infer rollback or send begin again.
       const code = pluginManagementErrorCode(error);
       const gone = code === 'NOT_FOUND';
@@ -377,7 +417,7 @@ export function createPluginManagementController(client: PluginManagementClient,
         if (facts) missingFactsSequence = snapshotSequence;
         conclude(holder, { missingReceiptFacts: facts });
       }
-      release(holder);
+      drop(holder);
     }
   }
   async function answer(confirmed: boolean) {
@@ -392,7 +432,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     publish({ busy: true, errorCode: null });
     // Stopped here before anything was sent: the consent can be answered again.
     const unsent = (patch: Partial<PluginManagementState> = {}) => {
-      if (answers.get(requestId) === 'pending') answers.delete(requestId);
+      if (answers.get(requestId) === 'pending') { answers.delete(requestId); answerSentAt.delete(requestId); }
       conclude(holder, patch);
     };
     try {
@@ -414,11 +454,13 @@ export function createPluginManagementController(client: PluginManagementClient,
       // A result whose receipt is later gone is confirmed from the Host's own evidence (contract V2.9:
       // `installedOperationId` equals this operation id), never from whether this Allow was written.
       if (!current(token)) { unsent(); return; }
-      sentAt = mutationSentAt = ++receiptClock;
-      const reply = await client.answer(receipt.operationId, requestId, confirmed,
-        () => current(token) && state.online && (!confirmed || (!!facts && receiverCurrent(facts))));
+      sentAt = ++receiptClock;
+      answerSentAt.set(requestId, sentAt);
+      const reply = await tracked(() => client.answer(receipt.operationId, requestId, confirmed,
+        () => current(token) && state.online && (!confirmed || (!!facts && receiverCurrent(facts)))));
       answers.set(requestId, 'written');
-      await acceptReceipt(reply, token, holder);
+      // The answer's own reply describes the Host after it took this answer.
+      await acceptReceipt(reply, token, holder, ++receiptClock);
     } catch (error) {
       // Never written: the operation still waits for this answer on the computer, unchanged; the consent can be
       // answered again. Only this request's own hold is released (a newer request may hold busy by now).
@@ -429,8 +471,11 @@ export function createPluginManagementController(client: PluginManagementClient,
       // Written, reply lost: this consent request is answered as far as the phone knows; it is never offered again, and
       // the operation's result is unknown whatever the connection epoch is now.
       answers.set(requestId, 'written');
-      // A receipt applied after this answer was sent (a newer lookup) already tells the operation's state.
-      if (undecided(receipt.operationId) && appliedReceiptAt < sentAt) conclude(holder, { outcome: 'unknown', errorCode: pluginManagementErrorCode(error) });
+      // Unknown unless a receipt applied after this answer was sent already tells the Host took it (running, or the
+      // next consent). A later lookup that still found this very consent does not: the answer may arrive yet, so the
+      // consent is not offered again and the result is looked up (maintainer review 13:02 #2).
+      const sameConsent = state.outcome === 'confirmation' && state.receipt?.consent?.requestId === requestId;
+      if (undecided(receipt.operationId) && (sameConsent || appliedReceiptAt < sentAt)) conclude(holder, { outcome: 'unknown', errorCode: pluginManagementErrorCode(error) });
       else conclude(holder, {});
     }
   }
@@ -442,18 +487,17 @@ export function createPluginManagementController(client: PluginManagementClient,
     stopPolling();
     cancelling = 'pending';
     publish({ busy: true, errorCode: null });
-    const sentAt = (mutationSentAt = ++receiptClock);
+    const sentAt = ++receiptClock;
     try {
-      const reply = await client.cancel(id, () => current(token) && state.online);
+      const reply = await tracked(() => client.cancel(id, () => current(token) && state.online));
       cancelling = 'written';
-      await acceptReceipt(reply, token, holder);
+      await acceptReceipt(reply, token, holder, sentAt);
     } catch (error) {
       // Never written: the operation runs on as before (same rule as an unwritten answer). Only while this cancel
       // still holds busy does it release it, set its error and resume polling.
       if (notWritten(error)) {
         if (cancelling === 'pending') cancelling = null;
-        if (release(holder, current(token) && undecided(id) ? { errorCode: pluginManagementErrorCode(error) } : {})) schedulePoll();
-        else publish({});
+        if (!release(holder, current(token) && undecided(id) ? { errorCode: pluginManagementErrorCode(error) } : {})) publish({});
         return;
       }
       // Written, reply lost: the Host may have cancelled it; the result is unknown whatever the epoch is now.
@@ -464,7 +508,7 @@ export function createPluginManagementController(client: PluginManagementClient,
   }
   const unsubscribeOwner = subscribeMobileAuthOwner(() => {
     if (client.isCurrent()) return;
-    ++epoch; stopPolling(); busyHolder = 0; answers.clear(); cancelling = null;
+    ++epoch; stopPolling(); busyHolder = 0; answers.clear(); cancelling = null; consentOrder.length = 0; answerSentAt.clear(); shownRank = -1;
     publish({ capability: 'unknown', snapshot: null, uiConsent: null, receipt: null, operationId: null, busy: false, outcome: 'idle', errorCode: null,
     });
   });
