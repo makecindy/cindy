@@ -31,6 +31,7 @@ import { LoginBrandStage } from '@/components/login/LoginBrandStage';
 import { StartupLogSupport } from '@/components/log-support/StartupLogSupport';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
+import { preloadPluginPage } from '@/features/plugin/GhostPluginRoute';
 import { schedulePluginCatalogPrewarm } from '@/features/plugin/lib/prewarmPluginCatalog';
 import { installGithubStarPrompt } from '@/lib/githubStarPrompt';
 import { createGithubStarPromptEnvironment } from '@/lib/githubStarPromptHost';
@@ -317,8 +318,10 @@ export function App() {
     return subscribeDraft(syncNewMakerPrefs);
   }, []);
 
-  // 文本／Mermaid 预览弹窗不进首屏;窗口可见、首帧稳定后空闲预取,首次点开不必等加载。
-  useEffect(() => schedulePreviewLightboxPreload(), []);
+  // 首帧稳定后空闲预取。插件页只在主窗口共用这个时机，保留独立分包。
+  useEffect(() => schedulePreviewLightboxPreload(
+    isSecondaryWindow() || isSidebarWindow() ? undefined : preloadPluginPage,
+  ), []);
 
   useModelFavoritesHost();
 

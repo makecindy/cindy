@@ -4,10 +4,13 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { createMemoryRouter, Outlet, RouterProvider, useLocation } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RouteErrorFallback } from '@/components/error/RouteErrorFallback';
+import { schedulePreviewLightboxPreload } from '@/components/chat/lazyPreviewLightboxes';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { createGhostPluginRoute } from '../GhostPluginRoute';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('@/components/chat/TextLightbox', () => ({ TextLightbox: () => null }));
+vi.mock('@/components/chat/MermaidLightbox', () => ({ MermaidLightbox: () => null }));
 
 function Shell() {
   const { activeKey, navigateToView } = useActiveMainView();
@@ -92,6 +95,44 @@ it('shows the delayed loading status on a direct plugin deep link and keeps the 
   await advance(300);
   expect(screen.getByText('Plugin page?ghost=example')).toBeTruthy();
   expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('warms the plugin page once after the visible first frame and opens without loading feedback', async () => {
+  const { importPage, preloadPluginPage, started, advance, open, resolvePage } = renderRoute();
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  const requestIdle = vi.fn((_callback: IdleRequestCallback) => 1);
+  vi.stubGlobal('requestIdleCallback', requestIdle);
+  vi.stubGlobal('cancelIdleCallback', vi.fn());
+  const stop = schedulePreviewLightboxPreload(preloadPluginPage);
+  try {
+    await advance(3_000);
+    expect(requestIdle).not.toHaveBeenCalled();
+    visibility.mockReturnValue('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    await advance(2_999);
+    expect(importPage).not.toHaveBeenCalled();
+    expect(requestIdle).not.toHaveBeenCalled();
+    await advance(1);
+    expect(requestIdle).toHaveBeenCalledTimes(1);
+    expect(importPage).not.toHaveBeenCalled();
+
+    const idle = requestIdle.mock.calls[0][0];
+    await act(async () => { idle({ didTimeout: false, timeRemaining: () => 50 }); });
+    await started.promise;
+    await act(async () => { resolvePage(); });
+    await open();
+    expect(screen.getByText('Plugin page')).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+    document.dispatchEvent(new Event('visibilitychange'));
+    await advance(3_000);
+    expect(requestIdle).toHaveBeenCalledTimes(1);
+    expect(importPage).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('status')).toBeNull();
+  } finally {
+    stop();
+    visibility.mockRestore();
+    vi.unstubAllGlobals();
+  }
 });
 
 it('shares a single intent load and shows a rejected import only after navigating', async () => {

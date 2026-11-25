@@ -43,17 +43,29 @@ const PRELOAD_IDLE_TIMEOUT_MS = 5_000;
  * 主窗口可见且首帧稳定后，在空闲时预取两个弹窗分包，让首次点开不必等加载。
  * 隐藏启动的窗口等到可见再开始计时。返回取消函数。
  */
-export function schedulePreviewLightboxPreload(): () => void {
+export function schedulePreviewLightboxPreload(onIdle?: () => void): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let idleId: number | null = null;
+  const cancelPending = () => {
+    if (timer !== null) clearTimeout(timer);
+    if (idleId !== null) window.cancelIdleCallback(idleId);
+    timer = null;
+    idleId = null;
+  };
   const preload = () => {
     idleId = null;
-    void loadTextLightbox().catch(() => undefined);
-    void loadMermaidLightbox().catch(() => undefined);
-  };
-  const start = () => {
     if (document.visibilityState !== 'visible') return;
     document.removeEventListener('visibilitychange', start);
+    void loadTextLightbox().catch(() => undefined);
+    void loadMermaidLightbox().catch(() => undefined);
+    onIdle?.();
+  };
+  const start = () => {
+    if (document.visibilityState !== 'visible') {
+      cancelPending();
+      return;
+    }
+    if (timer !== null || idleId !== null) return;
     timer = setTimeout(() => {
       timer = null;
       if (typeof window.requestIdleCallback === 'function') {
@@ -67,7 +79,6 @@ export function schedulePreviewLightboxPreload(): () => void {
   start();
   return () => {
     document.removeEventListener('visibilitychange', start);
-    if (timer !== null) clearTimeout(timer);
-    if (idleId !== null) window.cancelIdleCallback(idleId);
+    cancelPending();
   };
 }
