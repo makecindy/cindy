@@ -2651,6 +2651,8 @@ export interface SessionChatState {
    * 不能拿来给历史 error 行重新分类。
    */
   sessionProviderId?: string | null;
+  /** Execution device on the committed task route, separate from a pending selection. */
+  sessionAgentDeviceId?: string | null;
   /** Internal: prevents infinite auth-retry loops for remote sessions. */
   _authRetryInFlight?: boolean;
   /** Internal: clientId of the last user message that triggered auth-retry (prevents re-retrying same message). */
@@ -12842,6 +12844,10 @@ function ensureInitialMessages(sessionId: string): void {
         if (s.sessionProviderId !== nextSessionProviderId) {
           updates.sessionProviderId = nextSessionProviderId;
         }
+        const nextAgentDeviceId = session.agentDeviceId ?? null;
+        if (s.sessionAgentDeviceId !== nextAgentDeviceId) {
+          updates.sessionAgentDeviceId = nextAgentDeviceId;
+        }
         if (session.sdkSessionId && s.sdkSessionId !== session.sdkSessionId) {
           updates.sdkSessionId = session.sdkSessionId;
         }
@@ -12870,8 +12876,12 @@ function ensureInitialMessages(sessionId: string): void {
           updates.agentStatus = {
             ...s.agentStatus,
             costUsd: session.totalCostUsd ?? s.agentStatus.costUsd,
-            contextTokens: session.contextTokens || s.agentStatus.contextTokens,
-            contextWindow: session.contextWindow || s.agentStatus.contextWindow,
+            ...(isPluginEngineKind(session.agentKind) && s.agentStatus.contextWindowFromRuntime !== undefined
+              ? {}
+              : {
+                  contextTokens: session.contextTokens || s.agentStatus.contextTokens,
+                  contextWindow: session.contextWindow || s.agentStatus.contextWindow,
+                }),
             // Read projection can supply catalog metadata; only status events prove runtime origin.
           };
         }
@@ -19145,6 +19155,7 @@ function mirrorSessionFields(
         agentKind?: unknown;
         runtimeEffective?: unknown;
         providerId?: unknown;
+        agentDeviceId?: unknown;
         agentSwitchIntent?: unknown;
         agentSwitchIntentCanceled?: unknown;
       }
@@ -19162,6 +19173,10 @@ function mirrorSessionFields(
   // 新引擎的事件会被旧引擎 reducer 错误处理(2026-07-20 审计实锤)。随引擎翻转
   // 同步清 sdkSessionId(旧引擎的原生会话 id 对新引擎无意义,与 noteAgentSwitched
   // 口径一致)。幂等:发起窗口已 noteAgentSwitched → 同值 no-op。
+  const nextProviderId =
+    typeof patch.providerId === 'string' || patch.providerId === null ? patch.providerId : undefined;
+  const nextAgentDeviceId =
+    typeof patch.agentDeviceId === 'string' || patch.agentDeviceId === null ? patch.agentDeviceId : undefined;
   const pluginEngineFlip = isPluginEngineKind(patch.agentKind);
   if (patch.agentKind === 'cc' || patch.agentKind === 'codex' || patch.agentKind === 'pi' || pluginEngineFlip) {
     // 插件引擎任务的事件走 Claude Code 这套通用 reducer，与直接打开的插件引擎任务一致
@@ -19174,11 +19189,28 @@ function mirrorSessionFields(
       // an older switch to the same engine, not the user's latest model choice.
       const intentApplied = !('runtimeEffective' in patch) &&
         !('agentSwitchIntent' in patch) && s.agentSwitchIntent?.target === intentTarget;
-      if (s.agentKind === nextKind && !intentApplied) return s;
+      // ACP and Claude share a reducer kind, and two ACP plugins share both
+      // the reducer and DB kind. Use the committed provider and device too.
+      const pluginContextChanged = pluginEngineFlip && (
+        s.agentKind !== nextKind ||
+        (nextProviderId !== undefined && nextProviderId !== s.sessionProviderId) ||
+        (nextAgentDeviceId !== undefined && nextAgentDeviceId !== s.sessionAgentDeviceId)
+      );
+      if (s.agentKind === nextKind && !intentApplied && !pluginContextChanged) return s;
       return {
         ...s,
         agentKind: nextKind,
         sdkSessionId: null,
+        ...(pluginContextChanged ? {
+          agentStatus: {
+            ...s.agentStatus,
+            contextTokens: 0,
+            contextWindow: 0,
+            contextWindowFromRuntime: false,
+          },
+          ...(nextProviderId !== undefined ? { sessionProviderId: nextProviderId } : {}),
+          ...(nextAgentDeviceId !== undefined ? { sessionAgentDeviceId: nextAgentDeviceId } : {}),
+        } : {}),
         // 意图被真实切换消费 = 一次意图变更,推进修订号让在途读回作废。
         // 同时把目标 provider 写进 createOpts 快照,避免后续排队项仍带旧来源。
         ...(intentApplied
@@ -19191,18 +19223,13 @@ function mirrorSessionFields(
       };
     });
   }
-  if ('providerId' in patch) {
-    const nextProviderId =
-      typeof patch.providerId === 'string'
-        ? patch.providerId
-        : patch.providerId === null
-          ? null
-          : undefined;
-    if (nextProviderId !== undefined) {
-      setState(sessionId, (s) =>
-        s.sessionProviderId === nextProviderId ? s : { ...s, sessionProviderId: nextProviderId },
-      );
-    }
+  if (nextProviderId !== undefined || nextAgentDeviceId !== undefined) {
+    setState(sessionId, (s) => {
+      const providerId = nextProviderId === undefined ? s.sessionProviderId : nextProviderId;
+      const agentDeviceId = nextAgentDeviceId === undefined ? s.sessionAgentDeviceId : nextAgentDeviceId;
+      if (providerId === s.sessionProviderId && agentDeviceId === s.sessionAgentDeviceId) return s;
+      return { ...s, sessionProviderId: providerId, sessionAgentDeviceId: agentDeviceId };
+    });
   }
   if ((typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast')) {
     const next = patch.fastMode;
