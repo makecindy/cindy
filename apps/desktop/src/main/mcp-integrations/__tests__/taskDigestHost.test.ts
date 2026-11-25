@@ -54,6 +54,28 @@ describe('desktop task digest error sources', () => {
     state.stored.mockResolvedValue({ message: 'old failure', createdAt: 99 });
     expect(await read({ sessionId: 'task' })).toMatchObject({ ok: true, digest: { error: null } });
   });
+  // #8100, unit: an immediate error tail can have an earlier timestamp than the turn
+  // marker. The normal chronological fallback never exercised this cold digest path.
+  it.each([
+    { case: 'matching persisted terminal', source: 'persisted', terminalAt: 99, endedAt: 101, safety: true, error: 'provider-safety-refusal' },
+    { case: 'live activity', source: 'live', terminalAt: 99, endedAt: 101, safety: true, error: null },
+    { case: 'different tail', source: 'persisted', terminalAt: 98, endedAt: 101, safety: true, error: null },
+    { case: 'unsettled turn', source: 'persisted', terminalAt: 99, endedAt: 98, safety: true, error: null },
+    { case: 'ordinary failure', source: 'persisted', terminalAt: 99, endedAt: 101, safety: false, error: null },
+  ])('projects only the safe reason for an older error row with $case', async ({ source, terminalAt, endedAt, safety, error }) => {
+    const { host, read } = setup('error', null);
+    state.rows = [{ ...row, lastTurnEndedAt: endedAt }];
+    vi.mocked(host.getSessionRuntime).mockResolvedValue({
+      ok: true,
+      runtime: { phase: 'error', source, startedAtMs: 100, lastActivityAtMs: terminalAt },
+    });
+    state.stored.mockResolvedValue({
+      message: safety ? '{"error":{"code":"safety_violation","message":"Synthetic provider detail"}}' : 'Ordinary failure',
+      createdAt: 99,
+    });
+
+    expect(await read({ sessionId: 'task' })).toMatchObject({ ok: true, digest: { phase: 'errored', error } });
+  });
   it.each(['running', 'completed', 'needs-interaction'])('never reads stale details for %s', async (phase) => {
     const { read, host } = setup(phase);
     expect(await read({ sessionId: 'task' })).toMatchObject({ ok: true, digest: { error: null } });

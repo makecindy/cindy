@@ -8,6 +8,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 import type { InvokeResultPayload } from '@cindy/device-link';
 import type { HistoryDevice, TaskDigestRoute } from '@cindy/mcps';
+import { isProviderSafetyRefusalError, PROVIDER_SAFETY_REFUSAL_REASON } from '@cindy/maker-shared/error-redaction';
 import type { AgentKind } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
@@ -35,6 +36,7 @@ type Invoke = (deviceId: string, channel: string, args: unknown[]) => Promise<In
 
 interface RuntimeLike {
   phase?: unknown;
+  source?: unknown;
   interactionKind?: unknown;
   startedAtMs?: unknown;
   lastActivityAtMs?: unknown;
@@ -171,6 +173,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
             pinnedAt: sessions.pinnedAt,
             clearedAt: sessions.clearedAt,
             activeTurnStartedAt: sessions.activeTurnStartedAt,
+            lastTurnEndedAt: sessions.lastTurnEndedAt,
             status: sessions.status,
             source: sessions.source,
             agentKind: sessions.agentKind,
@@ -190,6 +193,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const runtime = result.runtime;
         return {
           phase: typeof runtime.phase === 'string' ? runtime.phase : 'idle',
+          source: typeof runtime.source === 'string' ? runtime.source : undefined,
           interactionKind: typeof runtime.interactionKind === 'string' ? runtime.interactionKind : null,
           startedAtMs: num(runtime.startedAtMs),
           lastActivityAtMs: num(runtime.lastActivityAtMs),
@@ -213,7 +217,21 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         }
         // This reader already enforces the tail, rewind and /clear boundaries.
         const stored = await readLatestWorkerTurnError(sessionId);
-        if (!stored || stored.createdAt < Math.max(facts.startedAtMs ?? 0, activity.startedAtMs ?? 0)) return null;
+        if (!stored) return null;
+        const startedAt = Math.max(facts.startedAtMs ?? 0, activity.startedAtMs ?? 0);
+        if (stored.createdAt < startedAt) {
+          // An immediate failure can be ordered after the input but dated before the
+          // turn marker. Only the confirmed persisted terminal of a settled turn can
+          // supply a safety reason here. Never return its provider text on this path.
+          const matchesSettledTerminal =
+            activity.source === 'persisted'
+            && activity.lastActivityAtMs === stored.createdAt
+            && facts.startedAtMs === activity.startedAtMs
+            && (facts.endedAtMs ?? 0) >= startedAt;
+          return matchesSettledTerminal && isProviderSafetyRefusalError(stored.message, stored.reason)
+            ? PROVIDER_SAFETY_REFUSAL_REASON
+            : null;
+        }
         return [stored.message, stored.sdkError].filter(Boolean).join(':\n').trim() || null;
       },
       readLastExchange: readSessionLastExchange,
