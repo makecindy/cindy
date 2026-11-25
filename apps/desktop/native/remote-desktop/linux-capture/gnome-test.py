@@ -7,8 +7,9 @@ so it never records or drives the user's real desktop.
 Covers: probes without creating a session, monitor enumeration, cursor-free
 monitor video (with an embedded-cursor control that must differ), cursor
 position/hotspot/shape from stream metadata, absolute pointer input, keyboard
-text, wheel, clean EOF teardown of both helpers, and helper exit when the
-compositor goes away.
+text, Chinese text pasted through the clipboard with the user's clipboard
+restored (also after the helper exits), wheel, clean EOF teardown of both
+helpers, and helper exit when the compositor goes away.
 """
 import base64
 import ctypes as C
@@ -18,6 +19,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from gi.repository import Gio, GLib
@@ -74,6 +76,48 @@ with tempfile.TemporaryDirectory(prefix='cindy-gnome-test-') as temp:
                                     input=b'f', capture_output=True, timeout=5)
             assert result.returncode == 2 and not result.stdout, (bad, result)
 
+        # Another application's clipboard, which pasting must leave in place.
+        RD = 'org.gnome.Mutter.RemoteDesktop'; RDS = RD + '.Session'
+        def rd(path, iface, method, args=None, fds=None):
+            if fds is not None:
+                return connection.call_with_unix_fd_list_sync(RD, path, iface, method, args,
+                                                              None, 0, -1, fds, None)
+            return connection.call_sync(RD, path, iface, method, args, None, 0, -1, None)
+        owner = rd('/org/gnome/Mutter/RemoteDesktop', RD, 'CreateSession').unpack()[0]
+        rd(owner, RDS, 'Start')
+        rd(owner, RDS, 'EnableClipboard', GLib.Variant('(a{sv})', ({},)))
+        def serve(conn, sender, path, iface, signal, params):
+            serial = params.unpack()[1]
+            reply, fds = rd(owner, RDS, 'SelectionWrite', GLib.Variant('(u)', (serial,)),
+                            Gio.UnixFDList.new())
+            fd = fds.get(reply.unpack()[0]); os.write(fd, 'copied before'.encode()); os.close(fd)
+            rd(owner, RDS, 'SelectionWriteDone', GLib.Variant('(ub)', (serial, True)))
+        connection.signal_subscribe(RD, RDS, 'SelectionTransfer', owner, None, 0, serve)
+        rd(owner, RDS, 'SetSelection', GLib.Variant('(a{sv})', (
+            {'mime-types': GLib.Variant('as', ['text/plain;charset=utf-8'])},)))
+        context = GLib.MainContext.default()
+        def pump(seconds):
+            end = time.monotonic() + seconds
+            while time.monotonic() < end:
+                while context.iteration(False): pass
+                time.sleep(0.005)
+        def clipboard():
+            reply, fds = rd(owner, RDS, 'SelectionRead',
+                            GLib.Variant('(s)', ('text/plain;charset=utf-8',)), Gio.UnixFDList.new())
+            fd = fds.get(reply.unpack()[0]); os.set_blocking(fd, False)
+            data, end = b'', time.monotonic() + 2
+            while time.monotonic() < end:
+                pump(0.02)
+                try:
+                    chunk = os.read(fd, 65536)
+                    if not chunk: break
+                    data += chunk
+                except BlockingIOError:
+                    pass
+            os.close(fd)
+            return data.decode()
+        pump(0.3)
+
         def start(*args):
             p = subprocess.Popen(list(args), env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
             helpers.append(p); return p
@@ -82,8 +126,12 @@ with tempfile.TemporaryDirectory(prefix='cindy-gnome-test-') as temp:
         def send(events):
             pointer.stdin.write((json.dumps(events, ensure_ascii=False) + '\n').encode())
             pointer.stdin.flush()
-            assert pointer.stdout.readline() == b'ok\n', events
-            time.sleep(0.3)  # one compositor frame for the cursor and damage
+            reply = []
+            reader = threading.Thread(target=lambda: reply.append(pointer.stdout.readline()))
+            reader.start()
+            while reader.is_alive(): pump(0.02)  # the clipboard owner keeps serving
+            assert reply == [b'ok\n'], events
+            pump(0.3)  # one compositor frame for the cursor and damage
         overlay = start(capture_binary, 'cursor-overlay', '1', '65', 'gnome:' + connector)
         embedded = start(capture_binary, 'video', '1', '65', 'gnome:' + connector)
         def frame(helper):
@@ -124,6 +172,13 @@ with tempfile.TemporaryDirectory(prefix='cindy-gnome-test-') as temp:
         send([{'kind': 'move', 'x': 0.5, 'y': 0.078}])
         assert frame(overlay)['cursor']['shape'] == 'text'
         send([{'kind': 'text', 'text': 'cindy'}])
+        _, typed = pixels(frame(overlay)['jpeg'])
+        send([{'kind': 'text', 'text': '中文'}])
+        _, pasted = pixels(frame(overlay)['jpeg'])
+        # The pasted glyphs appear right after "cindy" in the search entry.
+        assert region_difference(typed, pasted, 545, 52) > 60, 'Chinese text not pasted'
+        assert clipboard() == 'copied before', 'pasting replaced the clipboard'
+
         send([{'kind': 'button', 'x': 0.5, 'y': 0.5, 'button': 0, 'down': True},
               {'kind': 'button', 'x': 0.5, 'y': 0.5, 'button': 0, 'down': False},
               {'kind': 'scroll', 'dx': 0, 'dy': 80},
@@ -133,6 +188,8 @@ with tempfile.TemporaryDirectory(prefix='cindy-gnome-test-') as temp:
         for helper in (pointer, overlay, embedded):
             helper.stdin.close()
             assert helper.wait(timeout=5) == 0, 'EOF did not exit cleanly'
+        pump(1.0)
+        assert clipboard() == 'copied before', 'clipboard lost when the helper exited'
         # Without the compositor the helper exits instead of serving stale frames.
         orphan = start(capture_binary, 'cursor-overlay', '1', '65', 'gnome:' + connector)
         frame(orphan)
@@ -143,7 +200,8 @@ with tempfile.TemporaryDirectory(prefix='cindy-gnome-test-') as temp:
             pass
         assert orphan.wait(timeout=5) != 0, 'helper survived its compositor'
         print('PASS: probes, monitors, cursor-free video with embedded control, cursor '
-              'position/shape, pointer/text/wheel/keys, EOF teardown, compositor exit')
+              'position/shape, pointer/text/wheel/keys, Chinese paste with clipboard restored, '
+              'EOF teardown, compositor exit')
     finally:
         for p in helpers:
             if p.poll() is None: p.kill(); p.wait(timeout=3)

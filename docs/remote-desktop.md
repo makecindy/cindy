@@ -1660,10 +1660,22 @@ monitor (never read), evdev buttons and keycodes, 40-unit discrete wheel steps
 and keysym text. Each notification is a synchronous call, so a batch is
 acknowledged only after Mutter accepted it. GNOME shows its screen-sharing and
 remote-control indicators while sessions run, and closes them when the screen
-locks; the helpers then exit and the existing failure paths apply. Mutter
-types only characters present in the current keyboard layout: text outside it
-(for example Chinese) is not delivered on GNOME Wayland yet. Audio, resolution
-changes and Hyprland's window/workspace extras are not offered on GNOME.
+locks; the helpers then exit and the existing failure paths apply. Audio,
+resolution changes and Hyprland's window/workspace extras are not offered on
+GNOME.
+
+Mutter types only keysyms present in the current keyboard layout, and silently
+drops the rest. ASCII commits are therefore typed as keysyms, while a commit
+containing any other character (Chinese, emoji) is pasted whole through the
+session's clipboard (product decision 2026-11-26): the helper reads the current
+owner's offered types (up to 16 types and 8 MiB, memory only, skipping X11
+bookkeeping targets), offers the text, presses Shift+Insert (Ctrl+V is literal
+input in terminals), waits up to 1.5 s for the focused application's read, then
+offers the saved contents again. Mutter's clipboard manager keeps them after the
+session ends. A clipboard that was empty keeps the pasted text, since Mutter
+offers no way to clear it. Applications without a Shift+Insert paste binding
+do not receive such text. GNOME 46 sends `mime-types` wrapped as `(as)`; both
+forms are accepted.
 
 **Build and packaging.** JPEG encoding is resolved at runtime (`jpeg.h`):
 `libturbojpeg.so.0` when installed, otherwise gdk-pixbuf, which every GTK desktop
@@ -1679,7 +1691,9 @@ library can never stop the other capture helper from loading.
 `python3 linux-capture/gnome-test.py <gnome-capture> <input>` (private headless
 GNOME Shell 46 with the user's PipeWire). The GNOME test includes an
 embedded-cursor control stream that must differ, proving the comparison can
-see a pointer. `linux-capture/test.mjs` checks shape names and both JPEG
+see a pointer; it also pastes Chinese text into the Shell search entry while
+another session owns the clipboard, and checks that clipboard after the paste
+and after the helper exits. `linux-capture/test.mjs` checks shape names and both JPEG
 backends under ASan/UBSan. Checked on Ubuntu 24.04 (GNOME 46): both tests pass
 with gdk-pixbuf and libturbojpeg. Frame-rate cost on real desktops, a real
 monitor, a running Cindy build and a phone/Mac viewer remain for manual
