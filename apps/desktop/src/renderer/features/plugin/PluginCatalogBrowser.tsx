@@ -7,8 +7,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { extractIpcError } from '@/utils/ipcError';
 import { DEFAULT_PLUGIN_MARKET_SORT, type PluginMarketCounts, type PluginMarketItem, type PluginMarketMetric, type PluginMarketPage, type PluginMarketQuery } from '../../../shared/pluginMarket';
 import type { InstalledGhost } from '../../../shared/ghost';
-import { isLegacySimulatorListing, isSimulatorMigrationTarget, LEGACY_SIMULATOR_ID, SIMULATOR_ID } from '../../../shared/simulatorIdentityMigration';
-import { marketItemMatchesInstalledGhost, publicPublisherFilter, type PluginCatalogFilter } from './lib/pluginMarketPresentation';
+import { marketItemMatchesInstalledGhost, publicPublisherFilter, simulatorMigrationCounterpart, type PluginCatalogFilter } from './lib/pluginMarketPresentation';
 import { CatalogSectionHeader } from './PluginManagementLayout';
 import { PluginVirtualGrid } from './PluginVirtualGrid';
 import { pluginMarketOrganizationAccessErrorKey } from './lib/pluginMarketErrorKey';
@@ -178,12 +177,8 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     // Market snapshots can omit the entry once its local installation is removed.
     if (ghostsById.get(item.ghostId)?.some(candidate =>
       candidate.namespace === undefined || marketItemMatchesInstalledGhost(item, candidate))) return state;
-    if (item.sourceType === 'server' && (
-      (isSimulatorMigrationTarget(item) && ghostsById.has(LEGACY_SIMULATOR_ID)) ||
-      (isLegacySimulatorListing(item) && ghostsById.has(SIMULATOR_ID))
-    )) {
-      return state;
-    }
+    const counterpart = simulatorMigrationCounterpart(item);
+    if (counterpart && ghostsById.has(counterpart)) return state;
     return 'not-installed';
   };
   isInstalled.current = item => {

@@ -1038,7 +1038,9 @@ export function RemotePluginCatalogSource({
             const id = installedGhostStoragePart(installed);
             const item = { ...toGhostPluginListItem(effectiveGhost(installed)), canUse: false, tabPanel: false };
             const marketItem = snapshot?.market.items.find(entry => marketItemMatchesInstalledGhost(entry, installed));
-            const update = marketItem?.installState === 'update-available' ? marketItem : undefined;
+            const update = snapshot?.market.items.find(entry =>
+              entry.installState === 'update-available' && marketItemMatchesInstalledGhost(entry, installed),
+            );
             return <GhostPluginCard
               key={id}
               item={item}

@@ -8,6 +8,7 @@ import { resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { projectPluginUiConsent } from '../../../../shared/pluginUiConsent';
 import { ghostInstallApprovalToken, ghostPermissionItems } from '../../../../shared/ghost';
+import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 const { invoke, confirm, localGhosts, notices, directoryMode } = vi.hoisted(() => ({
   directoryMode: { real: false },
   notices: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warning: vi.fn(), dismiss: vi.fn() },
@@ -58,8 +59,16 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm }),
 }));
 vi.mock('../GhostPluginPage', () => ({
-  GhostPluginCard: ({ item, onManage }: { item: { name: string }; onManage(): void }) => (
-    <button onClick={onManage}>{item.name}</button>
+  GhostPluginCard: ({ item, onManage, updateVersion, onUpdate }: {
+    item: { name: string };
+    onManage(): void;
+    updateVersion?: string;
+    onUpdate?: () => void;
+  }) => (
+    <>
+      <button onClick={onManage}>{item.name}</button>
+      {updateVersion && onUpdate ? <button onClick={onUpdate}>Update to {updateVersion}</button> : null}
+    </>
   ),
   MarketPluginCard: ({ item }: { item: { name: string } }) => <output>{item.name}</output>,
 }));
@@ -216,6 +225,32 @@ function openSourceMenu() {
 }
 
 describe('selected plugin host', () => {
+  it('updates the installed row from its matching update after a conflicting custom market', async () => {
+    const normal = invoke.getMockImplementation()!;
+    const ownSnapshot = snapshot('Computer weather');
+    const conflict: PluginMarketItem = {
+      pluginId: 'conflicting-weather', ghostId: 'weather', namespace: null, name: 'Weather', description: null,
+      author: null, scope: 'public', organizationId: null, defaultInstall: false, releaseId: 'different-release',
+      version: '3.0.0', publishedAt: '2026-11-25T00:00:00Z', icon: null, installState: 'conflict',
+      sourceType: 'git-market', sourceMarketName: 'Other market', enabled: true,
+    };
+    const update: PluginMarketItem = {
+      ...conflict, pluginId: 'installed-weather-update', releaseId: 'matching-release',
+      version: '2.0.0', installState: 'update-available', sourceMarketName: 'Installed market',
+    };
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args?.[0]?.actionId === 'management:snapshot' && !args[0].input?.read) {
+        return { effects: [], result: { ...ownSnapshot, market: { ...ownSnapshot.market, items: [conflict, update] } } };
+      }
+      return normal(device, channel, args);
+    });
+    render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
+    await screen.findByText('Computer weather');
+    fireEvent.click(screen.getByRole('button', { name: 'Update to 2.0.0' }));
+    expect(invoke.mock.calls.filter(call => call[2]?.[0]?.actionId === 'management:market-detail')
+      .map(call => call[2][0].input.pluginId)).toEqual([update.pluginId]);
+  });
+
   it('previews the selected computer version and checks the original submission after a lost reply', async () => {
     const normal = invoke.getMockImplementation()!;
     const selectedVersion = '2.0.0';

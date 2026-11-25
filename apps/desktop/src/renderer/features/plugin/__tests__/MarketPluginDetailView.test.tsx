@@ -224,6 +224,21 @@ describe('More plugins', () => {
     expect(loadPage).toHaveBeenCalledTimes(1);
   });
 
+  it('excludes the public simulator migration when its legacy identity is installed', async () => {
+    const simulator = relatedItem('cindy-simulator', { name: 'Migrated simulator' });
+    const organizationCopy = relatedItem('organization-simulator', {
+      ghostId: simulator.ghostId, name: 'Team simulator', namespace: 'team',
+      scope: 'organization', organizationId: 'team',
+    });
+    const catalog = relatedCatalog(async () => relatedPage([simulator, organizationCopy, relatedItem('Reserve')]));
+    render(detailWithRelated(detail, {
+      ...catalog, installedGhosts: [{ manifest: { id: 'baguette-simulator' } }],
+    }));
+    await screen.findByRole('region', { name: title });
+    expect(cardNames()).toEqual(expect.arrayContaining(['Team simulator', 'Reserve']));
+    expect(cardNames()).not.toContain(simulator.name);
+  });
+
   it('reads through the last cursor before sampling, including a plugin after the first 100', async () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0.9999);
     try {

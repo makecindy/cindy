@@ -9,7 +9,7 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { PluginDetailSection } from './PluginDetailRecord';
 import { PluginPublisherBadge } from './PluginPublisherBadge';
 import { readReusedMarketIcon, type MarketIconCache } from './lib/pluginBrowserCache';
-import { marketItemMatchesInstalledGhost, pluginPresentationOrigin, publicPublisherFilter } from './lib/pluginMarketPresentation';
+import { marketItemMatchesInstalledGhost, pluginPresentationOrigin, publicPublisherFilter, simulatorMigrationCounterpart } from './lib/pluginMarketPresentation';
 import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
 
 export interface PluginRelatedCatalog {
@@ -81,8 +81,10 @@ function selectRelatedPlugins(directory: RelatedDirectory, detailId: string,
   for (const original of directory.items.values()) {
     const live = liveById.get(original.pluginId);
     const item = live ?? original;
-    if (item.pluginId === detailId || !canRecommend(item) ||
-        installedGhosts?.some(ghost => marketItemMatchesInstalledGhost(item, ghost))) continue;
+    if (item.pluginId === detailId || !canRecommend(item)) continue;
+    const counterpart = simulatorMigrationCounterpart(item);
+    if (installedGhosts?.some(ghost =>
+      ghost.manifest.id === counterpart || marketItemMatchesInstalledGhost(item, ghost))) continue;
 
     // The once-per-run directory cannot report later uninstalls. Use its old
     // installed state only when neither the live catalog nor roster can replace it.
