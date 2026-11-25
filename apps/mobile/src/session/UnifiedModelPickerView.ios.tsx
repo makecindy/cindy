@@ -78,6 +78,9 @@ function ProviderSourceMark({
 }: {
   filter: UnifiedMobilePickerViewProps["filters"][number] | undefined;
 }) {
+  if (filter?.pluginEngineMark) {
+    return <PluginEngineMark iconDataUrl={filter.pluginEngineMark.iconDataUrl} size={iconSize.action} />;
+  }
   return (
     <MobileProviderMark
       {...filter?.providerMark}
@@ -451,7 +454,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       selected={p.filter === item.id}
       selectionIcon={mark(Check)}
       leading={
-        item.providerMark ? (
+        item.providerMark || item.pluginEngineMark ? (
           <VStack spacing={2}>
             <NativeMark>
               <ProviderSourceMark filter={item} />

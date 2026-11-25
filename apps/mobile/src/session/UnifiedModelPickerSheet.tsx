@@ -22,6 +22,7 @@ import {
   buildPluginEngineGroups,
   formatPluginEnginePickerQuota,
   isPluginEngineProviderId,
+  pluginEngineSourceIconDataUrl,
   type MobilePluginEngine,
   type MobilePluginEngineSelection,
   type PluginEngineEffort,
@@ -272,6 +273,7 @@ export interface UnifiedMobilePickerViewProps {
     id: string;
     label: string;
     providerMark?: MobileProviderMarkProps;
+    pluginEngineMark?: { iconDataUrl?: string };
     quota?: UnifiedMobileQuota;
     sourceUnavailableReason?: string;
     /**
@@ -928,7 +930,7 @@ export function UnifiedModelPickerSheet(
       .map((group) => ({
         id: group.providerId,
         label: group.title,
-        providerMark: { name: group.title, providerId: group.providerId, customIcon: group.rows[0]?.iconDataUrl },
+        pluginEngineMark: { iconDataUrl: pluginEngineSourceIconDataUrl(group.rows[0]?.iconDataUrl) },
       }))
     : [];
   const pluginEngineFilter = pluginEngineSources.find((source) => source.id === filter);

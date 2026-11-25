@@ -75,6 +75,15 @@ export interface MobilePluginEngineSelection {
   effort?: PluginEngineEffort;
 }
 
+/** Source marks accept host-bounded bitmap data and the built-in vector mark. */
+export function pluginEngineSourceIconDataUrl(value?: string): string | undefined {
+  if (value === ANTIGRAVITY_MARK_DATA_URL) return value;
+  // Match the manifest's bitmap formats and the desktop remote icon budget.
+  if (!value || value.length > 64 * 1024) return undefined;
+  const bitmap = /^data:image\/(?:png|jpeg|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
+  return bitmap && bitmap[1]!.length % 4 === 0 ? value : undefined;
+}
+
 export function isPluginEngineEffort(value: unknown): value is PluginEngineEffort {
   return typeof value === 'string' && (PLUGIN_ENGINE_EFFORTS as readonly string[]).includes(value);
 }

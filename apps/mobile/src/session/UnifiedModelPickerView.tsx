@@ -312,6 +312,8 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       icon(LayoutGrid)
     ) : filter.id === "favorites" ? (
       icon(Star, selected || p.filter === "favorites")
+    ) : filter.pluginEngineMark ? (
+      <PluginEngineMark iconDataUrl={filter.pluginEngineMark.iconDataUrl} size={iconSize.action} />
     ) : filter.providerMark ? (
       <MobileProviderMark
         {...filter.providerMark}

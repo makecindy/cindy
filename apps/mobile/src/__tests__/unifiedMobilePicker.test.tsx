@@ -8,6 +8,7 @@ import {
   providerShareFavoriteWireKey,
   type ProviderShareFavoriteSource,
 } from '@cindy/device-link';
+import { ANTIGRAVITY_MARK_DATA_URL } from '@cindy/maker-shared/branding';
 import { resolveStoredModelEntry } from '@cindy/model-providers';
 import {
   __flushForTest as flushRemoteAgentModelMemory,
@@ -99,6 +100,33 @@ it('filters eligible plugin sources by provider ID and searches across them', as
   await act(async () => test.view.pluginEngines.onSelect(test.view.pluginEngines.groups[0].rows[0]));
   expect(selectPlugin).toHaveBeenCalledExactlyOnceWith({ providerId: first.providerId, modelId: 'gemini' });
   expect(onClose).toHaveBeenCalledOnce();
+});
+
+// #12452: the iOS source row rendered the provider initial for a valid PNG.
+// Tier: unit. Exercise the production sheet with one engine and verify which
+// icon reaches the source view for a bitmap, an arbitrary SVG, and no icon.
+it.each([
+  ['PNG', 'data:image/png;base64,iVBORw0KGgo=', 'data:image/png;base64,iVBORw0KGgo='],
+  ['built-in SVG', ANTIGRAVITY_MARK_DATA_URL, ANTIGRAVITY_MARK_DATA_URL],
+  ['SVG', 'data:image/svg+xml;base64,PHN2Zy8+', undefined],
+  ['malformed bitmap', 'data:image/png;base64,AA=', undefined],
+  ['URL', 'https://example.invalid/icon.png', undefined],
+  ['missing', undefined, undefined],
+])('routes a plugin %s icon separately from provider SVG', async (_kind, iconDataUrl, expected) => {
+  const providerId = 'acp-plugin:plugin:engine';
+  await mount(undefined, { unified: {
+    scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({}), onSelect: vi.fn(),
+    pluginEngines: {
+      engines: [{
+        providerId, name: 'Plugin', iconDataUrl, availability: { state: 'available' },
+        models: [{ id: 'gemini', displayName: 'Gemini', efforts: [] }],
+      }],
+      active: null, sourceFilter: true, onSelect: vi.fn(),
+    },
+  } });
+  const source = test.view.filters.find((item: { id: string }) => item.id === providerId);
+  expect(source.pluginEngineMark).toEqual({ iconDataUrl: expected });
+  expect(source.providerMark).toBeUndefined();
 });
 
 it('keeps the sheet and preferences unchanged after cancelled selection',async()=>{
