@@ -1,4 +1,3 @@
-import { isOpenAiApiResponsesEndpoint } from '@cindy/model-providers';
 import type {
   AgentKind, Catalog, CatalogModel, ModelMetadata, Provider, ProviderRuntimeModelConfig, RoutingDescriptor,
 } from '@cindy/model-providers';
@@ -47,11 +46,17 @@ function isOpenAiApiCodexRoute(
 ): boolean {
   if (agent !== 'codex' || routing.disabled || routing.authStrategy !== 'api-key-header') return false;
   const wire = model.route?.wireProtocol ?? routing.wireProtocol ?? 'openai-responses';
-  if (model.api && model.api !== 'openai-responses') return false;
+  if (wire !== 'openai-responses' || (model.api && model.api !== 'openai-responses')) return false;
   // Match providerRoutingForModel: a model route replaces the runtime path.
-  return isOpenAiApiResponsesEndpoint(
-    model.route?.baseUrl ?? routing.upstream, wire, model.route ? model.route.requestPath : routing.requestPath,
-  );
+  const requestPath = model.route ? model.route.requestPath : routing.requestPath;
+  if (requestPath && requestPath !== '/responses') return false;
+  try {
+    const url = new URL(model.route?.baseUrl ?? routing.upstream);
+    return url.origin === 'https://api.openai.com' && url.pathname.replace(/[/]+$/, '') === '/v1'
+      && !url.search && !url.hash && !url.username && !url.password;
+  } catch {
+    return false;
+  }
 }
 
 export function hasCodexApiConnections(catalog: Catalog): boolean {
@@ -70,10 +75,8 @@ export function codexApiModelMetadata(
   const supportsFastMode = report?.supportsFastMode ??
     (OFFICIAL_API_FAST_FALLBACK_MODELS.has(model.id) && model.discoveredMetadata?.supportsFastMode === undefined
       ? true : undefined);
-  // The app-server report is shared across API connections. The confirmation is local
-  // to the current connection, whose credential and project may have a different policy.
-  const supportsUltrafastMode = routing.openAiApiUltrafastConfirmed === true &&
-    OFFICIAL_API_ULTRAFAST_MODELS.has(model.id);
+  // Native Codex account discovery does not determine official API Ultrafast eligibility.
+  const supportsUltrafastMode = OFFICIAL_API_ULTRAFAST_MODELS.has(model.id);
   if (!report && supportsFastMode === undefined && !supportsUltrafastMode) return undefined;
   return {
     ...(report?.efforts !== undefined ? { efforts: report.efforts } : {}),
@@ -100,8 +103,7 @@ export function needsOpenAiApiCodexUltrafastDeclaration(
   provider: Provider | undefined,
   modelId: string,
 ): boolean {
-  return provider?.routing.codex?.openAiApiUltrafastConfirmed === true &&
-    OFFICIAL_API_ULTRAFAST_MODELS.has(modelId) &&
+  return OFFICIAL_API_ULTRAFAST_MODELS.has(modelId) &&
     needsOpenAiApiCodexFastDeclaration(provider, modelId) &&
     provider?.models.codex?.some(model => model.id === modelId && model.supportsUltrafastMode === true) === true;
 }

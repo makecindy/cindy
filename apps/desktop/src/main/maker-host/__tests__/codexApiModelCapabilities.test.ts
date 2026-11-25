@@ -20,7 +20,6 @@ import {
 import {
   hasCodexApiConnections,
   needsOpenAiApiCodexFastDeclaration,
-  needsOpenAiApiCodexUltrafastDeclaration,
   setCodexApiModelProbe,
   requestCodexApiModelProbe,
 } from '../codex-api-model-capabilities.js';
@@ -76,18 +75,8 @@ describe('Codex API engine capabilities', () => {
     expect(projected.filter(entry => entry.supportsFastMode).map(entry => entry.id)).toEqual(supportedIds);
     expect(projected.filter(entry => needsOpenAiApiCodexFastDeclaration(provider, entry.id)).map(entry => entry.id))
       .toEqual(supportedIds);
-    // The same four IDs must stay hidden until this connection is confirmed.
-    expect(projected.some(entry => entry.supportsUltrafastMode)).toBe(false);
-    const confirmed = structuredClone(stored);
-    confirmed.id = 'confirmed-openai-api';
-    confirmed.runtimes.codex!.openAiApiUltrafastConfirmed = true;
-    setCustomProviderConfigs([stored, confirmed]);
-    const eligible = getActiveCatalog().providers.find(entry => entry.id === confirmed.id)!;
-    const ultrafastIds = ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol'];
-    expect(eligible.models.codex!.filter(entry => entry.supportsUltrafastMode).map(entry => entry.id)).toEqual(ultrafastIds);
-    expect(eligible.models.codex!.filter(entry => needsOpenAiApiCodexUltrafastDeclaration(eligible, entry.id)).map(entry => entry.id))
-      .toEqual(ultrafastIds);
-    expect(model().supportsUltrafastMode).not.toBe(true);
+    expect(projected.filter(entry => entry.supportsUltrafastMode).map(entry => entry.id))
+      .toEqual(['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol']);
   });
 
   // #12423 unit: the installed Codex catalog can omit a known API model.
@@ -96,7 +85,6 @@ describe('Codex API engine capabilities', () => {
     const stored = config();
     const modelId = 'gpt-6.2-sol';
     stored.runtimes.codex!.models[0] = { id: modelId, name: modelId };
-    stored.runtimes.codex!.openAiApiUltrafastConfirmed = true;
     const relay = structuredClone(stored);
     relay.id = 'relay-same-model';
     relay.runtimes.codex!.baseUrl = 'https://relay.example/v1';
@@ -161,7 +149,7 @@ describe('Codex API engine capabilities', () => {
     expect(model()).toMatchObject({ efforts: [...efforts], supportsFastMode: true,
       defaultEffort: previous.defaultEffort, contextWindow: previous.contextWindow,
       userModelConfig: stored.runtimes.codex!.models[0] });
-    expect(model().supportsUltrafastMode).not.toBe(true);
+    expect(model().supportsUltrafastMode).toBe(true);
     expect(stored.runtimes.codex!.models[0]!.discoveredMetadata).toBeUndefined();
     expect(getActiveCatalog().providers.find(p => p.id === stored.id)!.models.codex!.map(m => m.id))
       .toEqual(['gpt-6.1-sol', 'private-alias']);

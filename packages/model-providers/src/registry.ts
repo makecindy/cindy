@@ -96,8 +96,6 @@ export type ModelDiscoveryFailureState = Partial<
 
 /** 供应商 + 连接状态。 */
 export interface ProviderView extends Provider {
-  /** Trusted local settings only. Guards saving a project confirmation from an older dialog. */
-  openAiApiCredentialRevision?: number;
   /** Same-account devices only: complete, host-verified subscription identity set. Display equality, never authorization. */
   subscriptionAccountKeys?: string[];
   /** Host observed a transient native-account read failure. Optional on older hosts; no credential data. */

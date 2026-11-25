@@ -40,7 +40,6 @@ import {
   mergeDiscoveredRuntimeModels,
   isByokProviderId,
   isLoopbackProviderUrl,
-  isOpenAiApiResponsesEndpoint,
   isProviderRequestPath,
   runtimeCustomProviderId,
   storedCustomProviderId,
@@ -238,17 +237,10 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
     return creating && Object.keys(input).length === 1 && input.bindGeminiImages === true ? { bindGeminiImages: true } : null;
   }
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'appendRealtimeModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts' && key !== 'openAiApiUltrafastConfirmed' && key !== 'openAiApiCredentialRevision'))
+  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'appendRealtimeModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
     return null;
   const source = (input as Record<string, unknown>).source;
   if (source !== undefined && source !== 'manual-settings') return null;
-  const ultrafastConfirmed = (input as Record<string, unknown>).openAiApiUltrafastConfirmed;
-  const ultrafastCredentialRevision = (input as Record<string, unknown>).openAiApiCredentialRevision;
-  if (ultrafastConfirmed !== undefined || ultrafastCredentialRevision !== undefined) {
-    if (creating || source !== 'manual-settings' || typeof ultrafastConfirmed !== 'boolean' ||
-        typeof ultrafastCredentialRevision !== 'number' ||
-        !Number.isSafeInteger(ultrafastCredentialRevision) || ultrafastCredentialRevision < 0) return null;
-  }
   const policy = (input as Record<string, unknown>).codexImageGenerationRestartPolicy;
   const append = (input as Record<string, unknown>).appendSpeechModelsOnly;
   const realtime = (input as Record<string, unknown>).appendRealtimeModelsOnly;
@@ -278,8 +270,6 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
       || typeof value !== 'string' || !value || value.length > 128))) return null;
   return {
     ...(source === 'manual-settings' ? { source } : {}),
-    ...(typeof ultrafastConfirmed === 'boolean' && typeof ultrafastCredentialRevision === 'number'
-      ? { openAiApiUltrafastConfirmed: ultrafastConfirmed, openAiApiCredentialRevision: ultrafastCredentialRevision } : {}),
     ...(policy ? { codexImageGenerationRestartPolicy: policy } : {}),
     ...(append ? { appendSpeechModelsOnly: true as const } : {}),
     ...(realtime ? { appendRealtimeModelsOnly: true as const } : {}),
@@ -1392,12 +1382,8 @@ export function registerProviderHandlers(
         ...(scope === 'available' ? { deferredProviderIds } : {}),
         providers: providers.map((provider) => {
           const safe = withoutProviderHeaderCredentials(provider);
-          const codexRoute = safe.routing?.codex;
           const view = {
             ...safe,
-            ...(trusted && !invokeContext && safe.source === 'user' && codexRoute?.authStrategy === 'api-key-header' &&
-              isOpenAiApiResponsesEndpoint(codexRoute.upstream, codexRoute.wireProtocol, codexRoute.requestPath)
-              ? { openAiApiCredentialRevision: getProviderRouteCredentialRevision(storedCustomProviderId(safe.id)) } : {}),
             ...(safe.id === 'gemini' && geminiImageSettingsConnectionId !== null
               ? { geminiImageSettingsConnectionId } : {}),
             ...(safe.models ? {
@@ -2791,32 +2777,11 @@ export function registerProviderHandlers(
           headerMutations.some((mutation) => mutation.agent === 'codex') ||
           authMethodChanged ||
           (config.auth?.method === 'oauth' && oauthBindingChanged);
-        const codexRuntime = separated.config.runtimes.codex;
-        const previousCodex = previous.runtimes.codex;
-        if (options.openAiApiUltrafastConfirmed !== undefined &&
-            options.openAiApiCredentialRevision !== getProviderRouteCredentialRevision(config.id)) {
-          throwIpcError('INVALID_PARAMS', 'The connection credentials changed. Reopen the connection settings to confirm Ultrafast.');
-        }
-        if (codexRuntime) {
-          // Apply an explicit Settings action to the saved connection. A field
-          // echoed by an older form or an import cannot restore a stale grant.
-          delete codexRuntime.openAiApiUltrafastConfirmed;
-          const projectConfirmed = options.openAiApiUltrafastConfirmed ?? previousCodex?.openAiApiUltrafastConfirmed;
-          if (projectConfirmed && !codexCredentialGenerationChanged && previousCodex &&
-              (config.auth?.method ?? 'apiKey') === 'apiKey' &&
-              isOpenAiApiResponsesEndpoint(previousCodex.baseUrl, previousCodex.wireProtocol, previousCodex.requestPath) &&
-              isOpenAiApiResponsesEndpoint(codexRuntime.baseUrl, codexRuntime.wireProtocol, codexRuntime.requestPath)) {
-            const key = deps.readCustomProviderKeyForMutation(config.id, 'codex');
-            if (typeof key === 'string' && key.trim()) codexRuntime.openAiApiUltrafastConfirmed = true;
-          }
-        }
         const previousCodexConfigSignature =
           deps.codexCustomProviderConfigSignature?.(previous) ?? '';
         const targetCodexConfigSignature =
           deps.codexCustomProviderConfigSignature?.(separated.config) ?? '';
-        const ultrafastChanged = (previousCodex?.openAiApiUltrafastConfirmed === true) !==
-          (codexRuntime?.openAiApiUltrafastConfirmed === true);
-        const codexHostChangeRequired = ultrafastChanged ||
+        const codexHostChangeRequired =
           previousCodexConfigSignature !== targetCodexConfigSignature ||
           (codexCredentialGenerationChanged &&
             (previousCodexConfigSignature.length > 0 || targetCodexConfigSignature.length > 0));
@@ -2885,7 +2850,7 @@ export function registerProviderHandlers(
         modelSourceConfigGenerations.set(config.id, Symbol(config.id));
         await afterChange(
           codexHostPrepared,
-          codexHostChangeRequired || codexCredentialGenerationChanged ? commitRouteMutation : undefined,
+          codexHostChangeRequired ? commitRouteMutation : undefined,
         );
         assertProviderMutationOwner(ownerAtIngress);
         return { ok: true, ...(speechReferenceAdded ? { speechReferenceAdded: true as const } : {}),
@@ -3438,8 +3403,7 @@ export function registerProviderHandlers(
       assertProviderMutationOwner(owner);
       if (!config || (config.auth && config.auth.method !== 'apiKey')) throwIpcError('INVALID_PARAMS', 'API connection required');
       const preparation = await prepareCodexCustomProviderChange(
-        config.runtimes.codex?.openAiApiUltrafastConfirmed === true ||
-          deps.hasAppliedCodexCustomProviderImageGeneration?.(id) === true, options, owner,
+        deps.hasAppliedCodexCustomProviderImageGeneration?.(id) === true, options, owner,
       );
       if (preparation.confirmation) return preparation.confirmation;
       try {
@@ -3473,13 +3437,6 @@ export function registerProviderHandlers(
         // Configuration and stable route ID remain available for reconnect. Publish even when
         // a later catalog refresh fails: the disconnected credential must never be reused.
         commitRouteMutation();
-        if (config.runtimes.codex?.openAiApiUltrafastConfirmed === true) {
-          const next = structuredClone(config);
-          delete next.runtimes.codex!.openAiApiUltrafastConfirmed;
-          if (!await updateCustomProviderIfUnchanged(id, config, next)) {
-            throwIpcError('INTERNAL', 'provider changed while clearing Ultrafast confirmation');
-          }
-        }
         await clearCredentialModelSources(id, () => providerMutationOwnerMatches(owner));
         await afterChange(preparation.prepared, commitRouteMutation);
         return { ok: true };

@@ -142,11 +142,9 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
       const capabilityProvider = buildUserProvider({
         id: provider.id, name: provider.name, runtimes: { codex: {
           baseUrl: 'https://api.openai.com/v1', models: [{ id: model, name: model }],
-          openAiApiUltrafastConfirmed: ultrafast,
         } },
       }, { getDiscoveredModelMetadata: (agent, configured, route) => codexApiModelMetadata([], agent, configured, route) });
       const declaresUltrafast = needsOpenAiApiCodexUltrafastDeclaration(capabilityProvider, model);
-      expect(declaresUltrafast).toBe(ultrafast);
       agent = new CodexAgent({ binaryPath: binary!, logger,
         auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }),
           logout: async () => {}, getAuthEnv: async () => env },
@@ -176,9 +174,11 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
       expect(await agent.refreshLocalModels({ credentialMode: 'provider-oauth',
         onModelsListed: models => { listed = models; } })).toBe(true);
       const discovered = listed.find(item => item.model === model);
-      if (!ultrafast && declareFastMode) {
+      if (ultrafast) {
+        expect(declaresUltrafast).toBe(true);
+      } else if (declareFastMode) {
         expect(discovered).toBeUndefined();
-      } else if (!declareFastMode) {
+      } else {
         expect(discovered?.supportedReasoningEfforts?.map(item => item.reasoningEffort)).toContain('ultra');
         expect(discovered?.additionalSpeedTiers).toContain('fast');
       }

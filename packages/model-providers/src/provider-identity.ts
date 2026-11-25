@@ -1,4 +1,4 @@
-import type { AgentKind, Provider, ProviderWireProtocol } from './types.js';
+import type { AgentKind, Provider } from './types.js';
 
 /**
  * Match the native SSH adapters; xAI forwarding remains available. The Claude subscription is
@@ -16,23 +16,6 @@ export function isLocalOnlyProviderForAgent(
     if (brand === 'xai') return agent !== 'pi';
   }
   return false;
-}
-
-/** The public OpenAI Responses API; excludes alternate origins and request paths. */
-export function isOpenAiApiResponsesEndpoint(
-  baseUrl: string,
-  wireProtocol: ProviderWireProtocol | undefined,
-  requestPath?: string,
-): boolean {
-  if ((wireProtocol ?? 'openai-responses') !== 'openai-responses' ||
-      (requestPath && requestPath !== '/responses')) return false;
-  try {
-    const url = new URL(baseUrl);
-    return url.origin === 'https://api.openai.com' && url.pathname.replace(/[/]+$/, '') === '/v1'
-      && !url.search && !url.hash && !url.username && !url.password;
-  } catch {
-    return false;
-  }
 }
 
 type SubscriptionIdentity = Pick<Provider, 'id' | 'auth'> & Pick<Partial<Provider>, 'subscriptionPool'>;

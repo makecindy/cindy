@@ -72,29 +72,6 @@ it('refreshes only the selected Token Rhythm runtime using that runtime stored k
   expect(new Headers(transport.mock.calls[0][1]?.headers).get('authorization')).toBe('Bearer fake-codex-key');
 });
 
-// #12423 unit: only a displayed, explicitly selected checkbox writes the project confirmation.
-it('confirms Ultrafast from the saved OpenAI API connection dialog', async () => {
-  const initial: CustomProviderConfig = {
-    id: 'openai-api', name: 'OpenAI API',
-    runtimes: { codex: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses',
-      models: [{ id: 'gpt-6.2-sol', name: 'GPT-6.2 Sol' }] } },
-  };
-  customProviderMocks.readCustomProviderKey.mockResolvedValue('fake-openai-key');
-  render(<ProviderConnectionDialog initial={initial} openAiApiCredentialRevision={7} onClose={vi.fn()} onSaved={vi.fn()} />);
-  await waitForInitialDialogFocus();
-  await screen.findByText('settings.providers.custom.fields.apiKeySaved');
-  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.advanced.label' }));
-  const choice = screen.getByRole<HTMLInputElement>('checkbox', { name: 'settings.providers.custom.fields.confirmOpenAiApiUltrafast' });
-  expect(choice.checked).toBe(false);
-  fireEvent.click(choice);
-  expect(customProviderMocks.updateCustomProvider).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
-  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledWith(
-    expect.objectContaining({ id: initial.id }), {},
-    { source: 'manual-settings', openAiApiUltrafastConfirmed: true, openAiApiCredentialRevision: 7 },
-  ));
-});
-
 // Model selection is now explicit; auth/metadata tests below still exercise their
 // original contract after choosing the fixture's models through the real picker.
 async function selectDiscoveredModels() {

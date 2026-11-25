@@ -3991,7 +3991,6 @@
           "minimaxVideosHint": "Utilise l'adresse et la clé API de cette connexion pour soumettre et suivre les tâches vidéo MiniMax, comme MiniMax-H3. Un fournisseur ne peut utiliser qu'une seule API vidéo. Ajoutez les ID de modèles manquants, puis déclarez leur capacité vidéo dans les détails du modèle.",
           "openaiVideos": "Utiliser une API Videos compatible OpenAI (/v1/videos)",
           "openaiVideosHint": "Utilise l'adresse et la clé API de cette connexion pour soumettre et suivre des tâches via POST /v1/videos, le format de la plupart des relais comme tu-zi ; des modèles comme MiniMax-H3 fonctionnent par ce biais. Un fournisseur ne peut utiliser qu'une seule API vidéo. Ajoutez les ID de modèles manquants, puis déclarez leur capacité vidéo dans les détails du modèle.",
-          "confirmOpenAiApiUltrafast": "Mon projet OpenAI autorise le mode ultrarapide",
           "runtimeSupportsImageGeneration": "Prend en charge la génération et la modification d'images",
           "runtimeSupportsImageGenerationHelpLabel": "À propos de la prise en charge de la génération et de la modification d'images",
           "runtimeSupportsImageGenerationConditionTitle": "Quand l'activer",

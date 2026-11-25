@@ -5,7 +5,7 @@ import { providerSearchChoices, type ProviderSearchTarget } from './providerSear
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata, type ProviderVideoApi } from '@cindy/model-providers';
-import { matchOfficialProviders, bindDetectedProvider, isAgentSelectableModel, isLoopbackProviderUrl, isOpenAiApiResponsesEndpoint } from '@cindy/model-providers';
+import { matchOfficialProviders, bindDetectedProvider, isAgentSelectableModel, isLoopbackProviderUrl } from '@cindy/model-providers';
 import type { ProviderConnectionTestResult } from '../../../shared/providerConnectionTest';
 import type { DetectedProviderDraft, DetectionCatalog } from '../../../shared/providerDetection';
 import { OFFICIAL_API_PRESETS } from './AddProviderWizard';
@@ -193,7 +193,6 @@ interface ProviderConnectionDialogProps {
   /** Stable fallback for transitions whose immediate opener unmounts before this dialog mounts. */
   returnFocusRef?: RefObject<HTMLElement | null>;
   focusAgent?: AgentKind;
-  openAiApiCredentialRevision?: number;
   onSaved: () => void;
   onClose: () => void;
 }
@@ -201,8 +200,6 @@ interface ProviderConnectionDialogProps {
 interface ImageGenerationReloadConfirmation {
   config: CustomProviderConfig;
   keys: RuntimeKeys;
-  openAiApiUltrafastConfirmed?: boolean;
-  openAiApiCredentialRevision?: number;
   busyCount: number;
 }
 
@@ -485,7 +482,6 @@ export function ProviderConnectionDialog({
   existingIds,
   returnFocusRef,
   focusAgent,
-  openAiApiCredentialRevision,
   onSaved: notifySaved,
   onClose: notifyClosed,
 }: ProviderConnectionDialogProps) {
@@ -607,7 +603,6 @@ export function ProviderConnectionDialog({
   });
   // OAuth 模式下模型 / 请求头收进默认折叠的「高级配置」——模型授权后自动发现,普通用户无需碰。
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [ultrafastConfirmation, setUltrafastConfirmation] = useState<boolean>();
   const [showImageGenerationAdvanced, setShowImageGenerationAdvanced] = useState(false);
   const [imageGenerationHelpPinned, setImageGenerationHelpPinned] = useState(false);
   const [imageGenerationHelpHovered, setImageGenerationHelpHovered] = useState(false);
@@ -1501,11 +1496,6 @@ export function ProviderConnectionDialog({
     ? resolveProviderConnectionProbeRoute(activeTab, f, presets)?.baseUrl ?? f.baseUrl : f.baseUrl;
   const canShowImageGenerationAdvanced =
     activeTab === 'codex' && canRuntimeUseNativeImageGeneration(f);
-  const canConfirmUltrafast = editing && openAiApiCredentialRevision !== undefined &&
-    activeTab === 'codex' && authMode === 'apiKey' &&
-    keyHydrationReady && !keyHydrationFailed.codex && !!f.apiKey.trim() &&
-    keyEditRevisionRef.current.codex === 0 &&
-    isOpenAiApiResponsesEndpoint(f.baseUrl.trim(), f.wireProtocol, f.requestPath.trim());
   useEffect(() => {
     if (canShowImageGenerationAdvanced && showImageGenerationAdvanced) return;
     resetImageGenerationHelp();
@@ -2258,20 +2248,9 @@ export function ProviderConnectionDialog({
     setSaving(true);
     try {
       if (editing) {
-        const confirmUltrafast = !keys.codex && authMode === 'apiKey' && runtimes.codex &&
-          isOpenAiApiResponsesEndpoint(runtimes.codex.baseUrl, runtimes.codex.wireProtocol, runtimes.codex.requestPath)
-          ? ultrafastConfirmation : undefined;
-        const result = await api.updateCustomProvider(config, keys, {
-          source: 'manual-settings',
-          ...(confirmUltrafast !== undefined ? {
-            openAiApiUltrafastConfirmed: confirmUltrafast, openAiApiCredentialRevision,
-          } : {}),
-        });
+        const result = await api.updateCustomProvider(config, keys, { source: 'manual-settings' });
         if (result?.ok === false) {
-          setImageGenerationReloadConfirmation({
-            config, keys, openAiApiUltrafastConfirmed: confirmUltrafast, openAiApiCredentialRevision,
-            busyCount: result.busyCount,
-          });
+          setImageGenerationReloadConfirmation({ config, keys, busyCount: result.busyCount });
           savingRef.current = false;
           setSaving(false);
           return;
@@ -2316,8 +2295,6 @@ export function ProviderConnectionDialog({
     onSaved,
     keyHydrationFailed,
     showAdvanced,
-    ultrafastConfirmation,
-    openAiApiCredentialRevision,
     savedBaselineFor,
     t,
   ]);
@@ -2332,9 +2309,6 @@ export function ProviderConnectionDialog({
         const options = {
           source: 'manual-settings' as const,
           codexImageGenerationRestartPolicy: policy,
-          ...(pending.openAiApiUltrafastConfirmed !== undefined
-            ? { openAiApiUltrafastConfirmed: pending.openAiApiUltrafastConfirmed,
-              openAiApiCredentialRevision: pending.openAiApiCredentialRevision } : {}),
         };
         const result = editing
           ? await api.updateCustomProvider(pending.config, pending.keys, options)
@@ -3186,16 +3160,6 @@ export function ProviderConnectionDialog({
                       </div>
                     ))}
                   </div>
-                )}
-
-                {canConfirmUltrafast && (
-                  <label className="flex min-h-11 cursor-pointer items-center gap-2 border-t border-[var(--border-default)] pt-3 text-13 text-[var(--settings-section-title)]">
-                    <Checkbox
-                      checked={ultrafastConfirmation ?? (initial?.runtimes.codex?.openAiApiUltrafastConfirmed === true)}
-                      onChange={event => setUltrafastConfirmation(event.currentTarget.checked)}
-                    />
-                    {t('settings.providers.custom.fields.confirmOpenAiApiUltrafast')}
-                  </label>
                 )}
 
                 {/* Codex Responses Provider 级能力。放在自定义请求头之后，默认收起；

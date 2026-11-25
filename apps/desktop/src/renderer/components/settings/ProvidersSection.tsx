@@ -2738,7 +2738,6 @@ export function ProvidersSection() {
         mode: 'edit';
         config: CustomProviderConfig;
         focusAgent?: AgentKind;
-        openAiApiCredentialRevision?: number;
       }
   >(null);
   const [focusedModel, setFocusedModel] = useState<{
@@ -3533,10 +3532,7 @@ export function ProvidersSection() {
         key={p.id}
         provider={p}
         onChanged={refetch}
-        onEdit={() => setDialog({
-          mode: 'edit', config: providerViewToCustomProviderConfig(p),
-          openAiApiCredentialRevision: p.openAiApiCredentialRevision,
-        })}
+        onEdit={() => setDialog({ mode: 'edit', config: providerViewToCustomProviderConfig(p) })}
         onDelete={() => void handleDelete(p)}
       />
     );
@@ -4288,7 +4284,6 @@ export function ProvidersSection() {
           suspended={dialog.mode === 'create' && !!wizard}
           onSelectProvider={dialog.mode === 'create' ? entry => setWizard({ entry }) : undefined}
           initial={dialog.mode === 'edit' ? dialog.config : undefined}
-          openAiApiCredentialRevision={dialog.mode === 'edit' ? dialog.openAiApiCredentialRevision : undefined}
           catalogModels={dialog.mode === 'edit' ? providers.find(p =>
             p.source === 'user' && storedCustomProviderId(p.id) === dialog.config.id)?.models : undefined}
           focusAgent={dialog.mode === 'edit' ? dialog.focusAgent : undefined}

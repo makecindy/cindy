@@ -271,14 +271,13 @@ describe('Codex launch requires its local route', () => {
   // Fast for the selected official connection, including a guest whose grant covers it.
   it.each([
     { official: true, expected: true },
-    { official: true, expected: true, unconfirmed: true },
     { official: false, expected: false },
     { official: true, grant: 'matching', expected: true },
     { official: true, grant: 'different-connection', expected: false },
     { official: true, grant: 'different-model', expected: false },
     { official: true, review: true, expected: true },
     { official: false, review: true, expected: false },
-  ])('limits the native Fast declaration to the selected route and guest grant (%j)', async ({ official, grant, review, expected, unconfirmed }) => {
+  ])('limits the native Fast declaration to the selected route and guest grant (%j)', async ({ official, grant, review, expected }) => {
     const f = routeFixture();
     f.ready();
     const modelId = 'gpt-6.2-sol';
@@ -286,7 +285,6 @@ describe('Codex launch requires its local route', () => {
       baseUrl: official ? 'https://api.openai.com/v1' : 'https://relay.example/v1',
       wireProtocol: 'openai-responses',
       models: [{ id: modelId, name: modelId, supportsFastMode: true }],
-      openAiApiUltrafastConfirmed: official && !unconfirmed,
     } } }, { getDiscoveredModelMetadata: () => ({ supportsUltrafastMode: official }) });
     const prepare = createCodexSpawnConfig({
       ...f.ports,
@@ -311,7 +309,7 @@ describe('Codex launch requires its local route', () => {
     if (review && !official) {
       expect(prepareCodexCustomContextCatalog).not.toHaveBeenCalled();
     } else {
-      expect(prepareCodexCustomContextCatalog).toHaveBeenLastCalledWith(expect.objectContaining({ modelId, declareFastMode: expected, declareUltrafastMode: expected && !unconfirmed }));
+      expect(prepareCodexCustomContextCatalog).toHaveBeenLastCalledWith(expect.objectContaining({ modelId, declareFastMode: expected, declareUltrafastMode: expected }));
       if (review) {
         const [options] = vi.mocked(prepareCodexCustomContextCatalog).mock.lastCall!;
         expect(options.contextWindow).toBeUndefined();

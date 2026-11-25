@@ -3942,7 +3942,6 @@
           "minimaxVideosHint": "Verwendet die Adresse und den API-Schlüssel dieser Verbindung, um MiniMax-Videoaufgaben wie MiniMax-H3 zu übermitteln und ihren Status abzufragen. Ein Anbieter kann nur eine Video-API verwenden. Fehlende Modell-IDs hinzufügen und dann in den Modelldetails die Videofunktion angeben.",
           "openaiVideos": "OpenAI-kompatible Videos API verwenden (/v1/videos)",
           "openaiVideosHint": "Verwendet die Adresse und den API-Schlüssel dieser Verbindung, um Aufgaben mit POST /v1/videos zu übermitteln und abzufragen – das Format der meisten Relays wie tu-zi; Modelle wie MiniMax-H3 funktionieren darüber. Ein Anbieter kann nur eine Video-API verwenden. Fehlende Modell-IDs hinzufügen und dann in den Modelldetails die Videofunktion angeben.",
-          "confirmOpenAiApiUltrafast": "Mein OpenAI-Projekt erlaubt den ultraschnellen Modus",
           "runtimeSupportsImageGeneration": "Unterstützt Bilderzeugung und -bearbeitung",
           "runtimeSupportsImageGenerationHelpLabel": "Info zur Unterstützung von Bilderzeugung und -bearbeitung",
           "runtimeSupportsImageGenerationConditionTitle": "Wann aktivieren",
