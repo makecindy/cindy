@@ -9533,6 +9533,26 @@ describe('CodexAgent MCP thread context hooks', () => {
     await b.close(); await agent.dispose();
   });
 
+  // Regression (2026-11-22, teammate iMessage lane): a subscription-account session's host key carries
+  // the account, the writer check did not, so the session's own host looked like another writer and every
+  // explicit route apply closed and relinked an unchanged session (provider-thread-relink, same provider).
+  it('treats the subscription account host of the same session as the target, not another writer', async () => {
+    const profile: NativeSubscriptionAccount = { id: 'pooled', configDir: '/fixture/.codex-pooled',
+      assertCurrent() {}, readState: async () => ({ authenticated: true }) };
+    const deps = createDeps();
+    deps.auth.getAuthEnv = async options => ({ CODEX_HOME: options?.nativeSubscriptionAccount?.configDir ?? '/fixture/legacy' });
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo', [NATIVE_SUBSCRIPTION_ACCOUNT]: profile });
+      createdTransports[0].setMockResponse('thread/loaded/list', { result: { data: [handle.id], nextCursor: null } });
+      const query = { sessionId: 'lane', threadId: handle.id, model: 'gpt-5.4', providerId: 'openai' };
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, [NATIVE_SUBSCRIPTION_ACCOUNT]: profile })).toBe(false);
+      // A route without that account still has to move the writer.
+      expect(await agent.requiresCodexThreadHostTransfer(query)).toBe(true);
+      await handle.close();
+    } finally { await agent.dispose(); }
+  });
+
   it('propagates account host shutdown failure before another account can resume its rollout', async () => {
     const agent = new CodexAgent(createDeps({}, { isCodexAccountProvider: (id) => id === 'account-a' }));
     const handle = await agent.startSession({ sessionId: 'account-close-failure', providerId: 'account-a', model: 'gpt-5.4', workingDir: '/repo' });
@@ -11762,7 +11782,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
       }
       if (method === Method.McpServerStatusList) {
-        expect(params).toMatchObject({ threadId, detail: 'toolsAndAuthOnly' });
+        expect(params).toMatchObject({ threadId, serverName: 'cindy_scheduler', detail: 'toolsAndAuthOnly' });
         return {
           data: resumeCount > 1 ? [{ name: 'cindy_scheduler', tools: { list_tools: {}, call_tool: {} } }] : [],
           nextCursor: null,
@@ -18881,6 +18901,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     if (scenario === 'user') expect(JSON.stringify(steers)).toContain('User denied this tool call via Cindy');
     if (scenario === 'system') {
       expect(JSON.stringify(steers)).toContain('Cindy could not approve');
+      // Native Codex calls every decline "user rejected"; the steer must say nobody answered in time.
+      expect(JSON.stringify(steers)).toContain('the user did not reject it');
       expect(JSON.stringify(steers)).not.toContain('User denied');
     }
     expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
@@ -29625,6 +29647,53 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
+  // #8309 / unit: notifications and failed completion snapshots share the
+  // diagnosis without adding turn/start calls. Existing tests only cover
+  // context overflow in the completion-only path, not nested exhausted 529.
+  it.each(['notification', 'completion-only'])('keeps nested overload terminal through %s', async delivery => {
+    vi.useFakeTimers();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnStart
+      ? { turn: { id: 'turn-1' } } : undefined);
+    const handle = await agent.startSession({ sessionId: `session-nested-overload-${delivery}`,
+      model: 'gpt-5.4', workingDir: '/repo' });
+    try {
+      const handlers = (host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>)[0]![1];
+      const events: AgentEvent[] = [];
+      void (async () => { for await (const event of handle.events()) events.push(event); })();
+      await handle.send({ type: 'user', content: 'check the workspace' });
+      const error = { message: 'stream disconnected before completion',
+        codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 529 } } as const,
+        additionalDetails: 'HTTP 529: server_is_overloaded' };
+      const turnId = handle.getCurrentTurnId?.() ?? 'turn-1';
+      if (delivery === 'notification') {
+        handlers.error?.({ threadId: 'start-thread-id', turnId, willRetry: false, error });
+      } else {
+        handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: turnId, status: 'failed', error } });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events.filter(event => event.type === 'error')).toEqual([expect.objectContaining({ type: 'error', data: expect.objectContaining({
+        reason: 'UPSTREAM_OVERLOADED', codexErrorInfo: 'responseTooManyFailedAttempts', isTerminal: true,
+      }) })]);
+      if (delivery === 'notification') {
+        expect(events.filter(event => event.type === 'status' &&
+          (event.data as { isRunning?: boolean }).isRunning === false)).toHaveLength(1);
+        // The notification settles the turn; its subsequent completion must not
+        // emit a second terminal error or restart the failed request.
+        handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: turnId, status: 'failed', error } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+      } else {
+        expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+      }
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    } finally {
+      await handle.close();
+      vi.useRealTimers();
+    }
+  });
+
   it('preserves structured Codex error info when failed turn only reports it on turn/completed', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -36430,6 +36499,23 @@ describe('CodexAgent custom provider context window override', () => {
     await handle.close();
   });
 
+  // #12423 unit: two connections share a model ID and window but carry different
+  // native catalog metadata. Exercise the public session model-switch gate.
+  it('rebuilds the local catalog when the same model and budget move to another connection', async () => {
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: () => 272_000,
+      needsCodexFastCatalog: providerId => providerId === 'cprov-openai',
+    }));
+    installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'connection-scoped-catalog', model: 'gpt-6.2-sol',
+      providerId: 'cprov-openai', workingDir: '/repo',
+    });
+    expect(await handle.requiresModelSwitchRebuild?.('gpt-6.2-sol', { providerId: 'cprov-openai' })).toBe(false);
+    expect(await handle.requiresModelSwitchRebuild?.('gpt-6.2-sol', { providerId: 'cprov-relay' })).toBe(true);
+    await handle.close();
+  });
+
   it('keeps the shared host when async catalog preflight rejects an unknown custom slug', async () => {
     const agent = new CodexAgent(createDeps({}, {
       resolveCodexThreadContextWindow: async () => null,
@@ -37662,22 +37748,35 @@ describe('unpublished Codex runtime cleanup', () => {
   });
 });
 
-describe('failed expected helper recovery', () => {
+// Plugin gateway outage: helper-only recovery missed an independently failed
+// cindy client. Exercise the same production send/Stop/owner fences for both
+// gateways (unit tier); the native fixture additionally checks ALL_TOOLS/calls.
+describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverName => {
   const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   async function setup(state: string | null | (() => string | null), background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
     const agent = new CodexAgent(createDeps());
     let resumes = 0;
-    const host = installFakeHost(agent, method => {
+    const host = installFakeHost(agent, (method, params) => {
       if (method === Method.ThreadResume) {
         resumes++;
         return { thread: { id: threadId }, model: 'gpt-5.4' };
       }
       if (method === Method.ThreadBackgroundTerminalsList) return background();
-      if (method === Method.McpServerStatusList) return { data: [{ name: 'cindy_helper', runtimeStatus: resumes > 1 && recover ? 'connected' : typeof state === 'function' ? state() : state,
-        tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
+      if (method === Method.McpServerStatusList) {
+        if ((params as { serverName?: string }).serverName === 'cindy_helper' && serverName === 'cindy') {
+          return { data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
+        }
+        return { data: [
+          { name: serverName, runtimeStatus: resumes > 1 && recover ? 'connected' : typeof state === 'function' ? state() : state,
+            tools: serverName === 'cindy' ? { ghost_info: {}, ghost_call: {} } : { list_tools: {}, call_tool: {} } },
+        ], nextCursor: null };
+      }
       if (method === Method.TurnStart) return { turn: { id: 'helper-turn' } };
       return undefined;
-    }, { buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_helper.command': 'fixture-helper' }) });
+    }, { buildSessionMcpConfig: () => ({
+      ...(serverName === 'cindy' ? { 'mcp_servers.cindy_helper.command': 'healthy-helper' } : {}),
+      [`mcp_servers.${serverName}.command`]: 'fixture-gateway',
+    }) });
     const handle = await agent.startSession({ sessionId: 'helper-recovery', sessionInstanceId: 'helper-instance',
       resumeSessionId: threadId, model: 'gpt-5.4', workingDir: '/repo' });
     return { agent, host, handle };
@@ -37700,7 +37799,7 @@ describe('failed expected helper recovery', () => {
       for await (const event of handle.events()) events.push(event);
       const notices = events.filter(event => event.type === 'error' || event.standaloneText);
       const unavailable = { code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE' };
-      expect(notices).toMatchObject(state === 'failed' ? [
+      expect(notices).toMatchObject(state === 'failed' && serverName === 'cindy_helper' ? [
         { type: 'error', data: unavailable },
         { type: 'text', standaloneText: true, data: unavailable },
       ] : []);
@@ -37721,7 +37820,7 @@ describe('failed expected helper recovery', () => {
     expect(sends).toHaveLength(1);
     expect(sends[0][1]).toMatchObject({ threadId, input: [{ type: 'text', text: 'continue the same task' }] });
     expect(host.retire).not.toHaveBeenCalled();
-    expect((await handle.readMcpServerTools?.('cindy_helper'))?.state).toBe('connected');
+    expect((await handle.readMcpServerTools?.(serverName))?.state).toBe('connected');
     await handle.close();
     await agent.dispose();
   });
@@ -37738,7 +37837,7 @@ describe('failed expected helper recovery', () => {
     await handle.send({ type: 'user', content: 'recover the failed helper' });
     expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadResume)).toHaveLength(2);
     expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(2);
-    expect((await handle.readMcpServerTools?.('cindy_helper'))?.state).toBe('connected');
+    expect((await handle.readMcpServerTools?.(serverName))?.state).toBe('connected');
     await handle.close();
     await agent.dispose();
   });
@@ -37767,7 +37866,7 @@ describe('failed expected helper recovery', () => {
     const rejected = expect(send).rejects.toThrow();
     await waitForExpectation(() => expect(host.request.mock.calls.some(([m]) => m === Method.ThreadBackgroundTerminalsList)).toBe(true));
     if (action === 'account-retired') host.getThreadHandlers()?.hostForcedRetire?.({ reason: 'account switched' });
-    else if (action === 'config-revoked') host.getSessionMcpConfig.mockReturnValue({ 'mcp_servers.cindy_helper.enabled': false });
+    else if (action === 'config-revoked') host.getSessionMcpConfig.mockReturnValue({ [`mcp_servers.${serverName}.enabled`]: false });
     else await handle[action]();
     resolve({ data: [] });
     await rejected;
@@ -37831,9 +37930,13 @@ describe('failed expected helper recovery', () => {
     const events = [];
     for await (const event of handle.events()) events.push(event);
     expect(events.filter(event => event.type === 'text' && event.standaloneText
-      && (event.data as { code?: string }).code === 'CINDY_EXPECTED_HELPER_UNAVAILABLE')).toHaveLength(1);
+      && (event.data as { code?: string }).code === 'CINDY_EXPECTED_HELPER_UNAVAILABLE')).toHaveLength(serverName === 'cindy_helper' ? 1 : 0);
     expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadResume)).toHaveLength(1);
-    expect(host.request.mock.calls.filter(([m]) => m === Method.McpServerStatusList)).toHaveLength(finalState === 'failed' ? 3 : 2);
+    const expectedProbes = finalState === 'failed' ? 3 : 2;
+    const statusCalls = host.request.mock.calls.filter(([m]) => m === Method.McpServerStatusList);
+    expect(statusCalls).toHaveLength(expectedProbes * (serverName === 'cindy' ? 2 : 1));
+    expect(statusCalls.filter(([, params]) => (params as { serverName?: string }).serverName === serverName))
+      .toHaveLength(expectedProbes);
     await agent.dispose();
   });
   it('backs off repeated failures and stops after two recovery attempts', async () => {

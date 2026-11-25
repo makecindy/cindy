@@ -123,7 +123,7 @@ describe('composer atomic chip presentation', () => {
     ]) {
       expect(gapSelectors).toContain(pill);
     }
-    expect(gapRule).toContain('margin-inline: 4px');
+    expect(gapRule).toContain('margin-inline: var(--space-1)');
   });
 
   it('gives every atom the shared pill and a non-selecting native drag handle', async () => {

@@ -3,7 +3,7 @@ import { mapMembershipToAuthUser, type User, type CurrentUser } from '../shared/
 import { HOST_NOT_STARTED, readHostUnavailableReason, type HostUnavailable } from '../shared/hostStartFailure.js';
 import { createIpcError } from '../shared/ipc-errors.js';
 export type { User } from '../shared/authUser.js';
-import { resolveRuntimeDeviceId } from './deviceId.js';
+import { resolveRuntimeDeviceIdentity, writeReplacementDeviceId } from './deviceId.js';
 /**
  * authManager.ts
  * ---------------------------------------------------------------------------
@@ -20,12 +20,20 @@ import { resolveRuntimeDeviceId } from './deviceId.js';
  */
 
 import { BrowserWindow, net, safeStorage, app, shell, powerMonitor } from 'electron';
+import { getInstanceConfig, instanceRefreshDelay } from './instance-runtime/config.js';
+import { managedAuthRetryEpoch } from './instance-runtime/authRetryEpoch.js';
+import { acknowledgeInstanceLogin, assertInstanceAuthMutationAllowed, getInstanceSession, instanceAuthReady } from './instance-runtime/host.js';
+import type { InstanceRecoveryOptions } from './instance-runtime/session.js';
+import { projectCommittedAuthIdentity, type CommittedAuthIdentity } from './authCommittedIdentity.js';
 import crypto from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
 import { machineIdSync } from 'node-machine-id';
+import { writeDeviceLinkSetting } from './device-link/settings-store.desktop';
+import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
+import { enrollTestCloudDesktop } from './cloudDesktopTestEnrollment';
 import {
   AuthApiError,
   CindyAuthClient,
@@ -367,8 +375,21 @@ function isOwnerChangeShellPending(): boolean {
  * dev-only 覆盖:设了 `XDT_DEVICE_ID_OVERRIDE` 则用它——用于在同一台机器上跑多个
  * desktop 实例模拟「多设备」(device-link 跨设备远程控制本地联调)。deviceId 只是
  * 同账号下区分设备的标识、非鉴权凭证(鉴权走 auth-server 签发的 JWT),覆盖无安全风险。
+ *
+ * 用户在设备身份冲突提示里给这台电脑换过身份时，用 profile 根下记录的新身份
+ * (deviceId.ts `DEVICE_IDENTITY_FILE`，只在原硬件身份上生效)。
  */
-const deviceId = resolveRuntimeDeviceId(machineIdSync);
+const deviceIdentity = resolveRuntimeDeviceIdentity(machineIdSync, undefined, profileDirForDeviceIdentity());
+const deviceId = deviceIdentity.deviceId;
+
+function profileDirForDeviceIdentity(): string | undefined {
+  try {
+    const dir = app.getPath('userData');
+    return typeof dir === 'string' && dir ? dir : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 // The offline entry is a renderer landing page, not an auth-server flow step.
 let loginFlowState: Exclude<DesktopLoginState, { step: 'entry' }> | null = null;
@@ -416,6 +437,8 @@ let confirmedAccountDeletionCredential: {
   realm: AuthRegion;
 } | null = null;
 
+const desktopAuthFetch: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init);
+
 function createAuthClient(
   realm: AuthRegion = pendingAuthRealm ?? activeAuthRealm,
 ): CindyAuthClient {
@@ -435,7 +458,7 @@ function createAuthClient(
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
     fetch: withProviderResponseDiagnostics(
-      scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
+      scenarioFetch ?? desktopAuthFetch,
       (diagnostic) => log.warn('login providers non-JSON response', diagnostic),
     ),
     onRequestError: (apiPath, status, error) => {
@@ -3186,6 +3209,10 @@ function scheduleRefresh(token: string): void {
     clearTimeout(refreshTimer);
     refreshTimer = null;
   }
+  if (getInstanceConfig()) {
+    refreshTimer = setTimeout(() => { void refresh(); }, instanceRefreshDelay(token));
+    return;
+  }
   // 续期节奏对 passive 实例不设闸门。本 PR 的契约是「passive 不写/不删共享的
   // auth 持久状态」;「谁负责续期」是正交问题,不在这里解决。让 passive 停止续期
   // 会让它的 access token 过期后再无替换途径(primary 的续期只更新磁盘 token,
@@ -4250,6 +4277,7 @@ async function expireRuntimeAuth(
  * racing teardown and local credential deletion.
  */
 export function invalidateSession(reason: string): Promise<void> {
+  if (getInstanceConfig() && reason !== 'instance-grant-invalid') return Promise.resolve();
   if (sessionInvalidationPromise) return sessionInvalidationPromise;
   if (authRefreshOverride !== null) {
     // A UI-only client holds no resource credential. Its incidental 401 cannot
@@ -4324,6 +4352,7 @@ export async function waitForSessionInvalidation(): Promise<void> {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 export function getAccessToken(): string | null {
+  if (getInstanceConfig() && !instanceAuthReady(accessToken)) return null;
   return accessToken;
 }
 
@@ -4346,6 +4375,11 @@ export function getCurrentUserId(): string | null {
   return currentUser?.id ?? null;
 }
 
+/** 只投影现有内存身份；不初始化鉴权、不读凭据，也不返回令牌或用户资料。 */
+export function peekCommittedAuthIdentity(): CommittedAuthIdentity | null {
+  return projectCommittedAuthIdentity(currentUser, accessToken);
+}
+
 /**
  * Public issue attribution may only use the raw auth membership display name.
  * UI fallbacks (`email` / "Cindy") are intentionally excluded for privacy.
@@ -4358,6 +4392,27 @@ export function getCurrentMembershipDisplayName(): string | undefined {
 /** SkillHub 跨设备识别：本机 deviceId（machineIdSync 结果），登录前后都可用 */
 export function getDeviceId(): string {
   return deviceId;
+}
+
+/**
+ * 这台电脑主动让出的设备身份，包括多次换身份时的旧设备号。
+ * 仅用于识别留在本地的旧记录，例如 Agent-Net 证书。
+ */
+export function getRetiredDeviceIds(): readonly string[] {
+  return deviceIdentity.retiredDeviceIds ?? [];
+}
+
+/**
+ * 设备身份冲突时，用户确认后给这台电脑换一个新身份，下次启动生效。不调用服务端登出：
+ * 旧身份的续期凭证与另一台电脑共用，作废它会把那台电脑一起登出。新身份首次续期得到
+ * DEVICE_MISMATCH 后按既有路径以未登录启动，用户重新登录。
+ */
+export function replaceDeviceIdentityForNextStart(): void {
+  const profileDir = profileDirForDeviceIdentity();
+  if (deviceIdentity.source === 'override' || !deviceIdentity.hardwareId || !profileDir) {
+    throw new Error('DEVICE_IDENTITY_NOT_REPLACEABLE');
+  }
+  writeReplacementDeviceId(profileDir, deviceIdentity.hardwareId, deviceId);
 }
 
 export function getAuthState(): AuthState {
@@ -4454,6 +4509,7 @@ export async function switchSavedAccount(
     validateBeforeCommit?: (loginEpoch: number) => void;
   } = {},
 ): Promise<void> {
+  assertInstanceAuthMutationAllowed();
   const switchLoginFlowEpoch = loginFlowEpoch;
   const parsedKey = parseDesktopAccountKey(rawAccountKey);
   if (!parsedKey) throw new AuthApiError('INVALID_AUTH_ACTION', 400, 'Invalid account key');
@@ -4559,6 +4615,7 @@ export async function switchSavedAccount(
 }
 
 export async function beginAddAccountLogin(): Promise<DesktopLoginActionResult> {
+  assertInstanceAuthMutationAllowed();
   if (isPassiveSharedUserDataInstance()) {
     throw new AuthApiError(
       'PASSIVE_AUTH_MUTATION_BLOCKED',
@@ -4618,6 +4675,7 @@ export function hasNoPersistedAuthCredentials(): boolean {
 /** Enter the account-free local session through the shared projection boundary. */
 export async function enterLocalMode(): Promise<AuthState> {
   if (hostNotStartedInClientMode()) throw createIpcError('PRECONDITION_FAILED', HOST_NOT_STARTED);
+  assertInstanceAuthMutationAllowed();
   stopColdStartRecovery();
   browserAuthorizationSlot.cancelActive();
   // Local mode has a different data owner. Drop process-local generic OAuth
@@ -4965,6 +5023,52 @@ export async function updateServerProfile(
   };
 }
 
+let enterpriseGuestSignIn: Promise<AuthState> | null = null;
+let cloudDesktopTestEnrollment: Promise<void> | null = null;
+let managedAuthFlight: Promise<void> | null = null;
+
+/** Only the Pod-local CIS control calls this; never exposed through account IPC. */
+export async function recoverManagedInstanceLogin(
+  requestId: string,
+  refreshToken: string,
+  options: InstanceRecoveryOptions = {},
+): Promise<void> {
+  if (!getInstanceConfig()) throw new Error('INSTANCE_NOT_CONFIGURED');
+  if (managedAuthFlight) await managedAuthFlight.catch(() => undefined);
+  if (managedAuthFlight) throw new Error('INSTANCE_RECOVERY_BUSY');
+  managedAuthFlight = (async () => {
+    const managed = getInstanceSession(authServerUrl(AUTH_REGION), AUTH_REGION, hasNoPersistedAuthCredentials);
+    const pair = await managed.recover(requestId, refreshToken, options);
+    await completeLogin({ status: 'ok', ...pair });
+  })().finally(() => { managedAuthFlight = null; });
+  return managedAuthFlight;
+}
+
+function authenticateManagedInstance(): Promise<void> {
+  if (managedAuthFlight) return managedAuthFlight;
+  managedAuthFlight = (async () => {
+    // Transient retries belong to the auth state that started this attempt.
+    const epoch = authStateEpoch;
+    let beforeCommit: number | null = null;
+    try {
+      const managed = getInstanceSession(authServerUrl(AUTH_REGION), AUTH_REGION, hasNoPersistedAuthCredentials);
+      const pair = await managed.rotate();
+      beforeCommit = authStateEpoch;
+      await completeLogin({ status: 'ok', ...pair });
+    } catch (error) {
+      if (error instanceof AuthApiError && [401, 403].includes(error.statusCode)) {
+        await invalidateSession('instance-grant-invalid');
+      } else {
+        scheduleRefreshRetryAfterTransientFailure(managedAuthRetryEpoch(epoch, beforeCommit, authStateEpoch));
+      }
+      const code = error instanceof Error && /^INSTANCE_[A-Z_]+$/.test(error.message) ? error.message : 'INSTANCE_AUTH_DEPENDENCY_FAILED';
+      log.warn('instance authentication not ready', { code });
+      throw new Error('INSTANCE_AUTH_NOT_READY');
+    }
+  })().finally(() => { managedAuthFlight = null; });
+  return managedAuthFlight;
+}
+
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
   if (authRefreshOverride) {
     receiveHostAuthState(await authRefreshOverride());
@@ -4978,6 +5082,14 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   if (isOwnerChangeShellPending()) {
     return snapshotLoggedOutAuthState(true);
   }
+  if (getInstanceConfig()) {
+    if (!instanceAuthReady(accessToken)) await authenticateManagedInstance();
+    return snapshotAuthState();
+  }
+  // A renderer can mount after the boundary-pending broadcast. Keep startup
+  // fail-closed until the serialized owner transition settles instead of
+  // restoring the outgoing owner's credentials and turns from disk.
+
   // Local mode is a committed account-free session. It must win before any
   // persisted cloud refresh token is inspected or any auth network call runs.
   if (getActiveAppSession().mode === 'local') {
@@ -5122,6 +5234,93 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     }
   }
   if (!persistedSession) {
+    if (process.platform === 'linux' && !isPassiveSharedUserDataInstance()) {
+      const guest=await readCloudGuest();
+      if (guest && !await cloudGuestSaved(guest)) {
+        if (!enterpriseGuestSignIn &&
+          (coldStartRecoveryStopped || authStateEpoch !== initializeStartEpoch || pendingAuthRealm || currentUser))
+          return snapshotAuthState();
+        enterpriseGuestSignIn ??= (async () => {
+          // Recover the account-free projection before exposing a sign-in screen.
+          await finishColdStartSignedOut('cold-start-cloud-guest');
+          if (coldStartRecoveryStopped || pendingAuthRealm || currentUser) return snapshotAuthState();
+          const epoch = loginFlowEpoch;
+          const authEpoch = authStateEpoch;
+          const superseded = () => coldStartRecoveryStopped || epoch !== loginFlowEpoch ||
+            authEpoch !== authStateEpoch || pendingAuthRealm || currentUser;
+          const store = {
+            read(key: string) {
+              const value = readAtomicSafe(key);
+              if (value === null && !isAtomicPersistedSecretAbsent(key))
+                throw new Error('Cloud guest credential storage is unavailable');
+              return value;
+            },
+            write(key: string, value: string) {
+              if (!writeAtomicSafe(key, value)) throw new Error('Cloud guest credential storage is unavailable');
+            },
+            remove: removeSafe,
+            withLock<T>(task: () => Promise<T>) {
+              return withCrossProcessLock(authAccountVaultLockPath(), { label: 'cloud-guest-pkce', waitMs: 5_000 }, async (lock) => {
+                if (!lock.held) throw accountVaultLockError(lock.reason);
+                return task();
+              });
+            },
+          };
+          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch);
+          if (superseded()) return snapshotAuthState();
+          const client = createAuthClient(AUTH_REGION);
+          const pair = await client.exchangeAuthorizationCode(grant.code, grant.verifier);
+          if (pair.status !== 'ok') throw new Error('Cloud guest sign-in did not complete');
+          if (pair.membership.kind !== 'org' || pair.membership.id !== guest.membershipId ||
+            pair.membership.orgId !== guest.organizationId || superseded()) {
+            await client.logout(pair.accessToken);
+            throw new Error('Cloud guest owner changed');
+          }
+          // The account owner chose a controllable desktop at checkout. Apply this on the freshly bound guest.
+          await writeDeviceLinkSetting('remoteControlEnabled', true);
+          await writeDeviceLinkSetting('remoteDesktopEnabled', true);
+          await completeLogin(pair, epoch);
+          await markCloudGuestSaved(guest, store);
+          confirmCloudGuestWhenOnline(
+            () => getClientEndpointForRealm(AUTH_REGION, 'modelAccessApiBaseUrl'), getAccessToken, desktopAuthFetch,
+          );
+          return snapshotAuthState();
+        })().catch(() => {
+          log.warn('Cloud guest sign-in did not complete');
+          return snapshotAuthState();
+        }).finally(() => { enterpriseGuestSignIn = null; });
+        const completion = enterpriseGuestSignIn;
+        return awaitWithStartupTimeout(completion, {
+          timeoutMs: COLD_START_AUTH_GATE_TIMEOUT_MS,
+          onTimeout: () => {
+            options.onColdStartPending?.(completion);
+            if (ownerChangeShellGate.isPending() || sealedLoginFlowCommitDepths.size > 0)
+              return snapshotLoggedOutAuthState(true);
+            return snapshotAuthState();
+          },
+        });
+      }
+    }
+    const socket = process.env.CINDY_CLOUD_DESKTOP_TEST_SOCKET;
+    if (socket && !app.isPackaged && process.platform === 'linux' && process.getuid && !isPassiveSharedUserDataInstance()) {
+      const epoch = loginFlowEpoch;
+      cloudDesktopTestEnrollment ??= enrollTestCloudDesktop(socket, process.getuid(), deviceId, async (code, verifier, id) => {
+        const client = createAuthClient(AUTH_REGION);
+        const pair = await client.exchangeAuthorizationCode(code, verifier);
+        if (pair.status !== 'ok') throw new Error('Cloud desktop authorization did not complete');
+        if (pair.membership.kind !== 'personal' || pair.membership.id !== id || pendingAuthRealm || currentUser) {
+          await client.logout(pair.accessToken);
+          throw new Error('Cloud desktop test identity changed');
+        }
+        await completeLogin(pair, epoch);
+      });
+      try {
+        await cloudDesktopTestEnrollment;
+        return snapshotAuthState();
+      } catch {
+        log.warn('Cloud desktop test enrollment unavailable');
+      }
+    }
     return finishColdStartSignedOut('cold-start-no-persisted-session');
   }
   const storedToken = persistedSession.refreshToken;
@@ -5505,6 +5704,14 @@ async function runColdStartRefreshFlow(
         clearReplacementIntegrationReloadTimers();
       },
     });
+    if (process.platform === 'linux' && refreshData.membership.kind === 'org' &&
+      activeAuthRealm === storedRealm && currentUser?.id === refreshData.membership.id) {
+      confirmCloudGuestWhenOnline(
+        () => getClientEndpointForRealm(storedRealm, 'modelAccessApiBaseUrl'),
+        () => activeAuthRealm === storedRealm ? getAccessToken() : null,
+        desktopAuthFetch,
+      );
+    }
     await migrateLocalProviderBindingsAfterCloudCommit(refreshData.membership.id);
     // Schedule with the epoch this flow actually commits under (flowAuthEpoch, which
     // moves forward when the flow accepts its own startup-gate fallback) — passing the
@@ -5671,6 +5878,7 @@ async function completeLogin(
     validateBeforeCommit?: (loginEpoch: number) => void;
   } = {},
 ): Promise<AuthFlowState> {
+  assertInstanceAuthMutationAllowed(outcome);
   assertLoginFlowCurrent(expectedLoginFlowEpoch);
   const loginEpoch = ++authStateEpoch;
   const deletionWasRestored =
@@ -5767,6 +5975,7 @@ async function completeLogin(
                 foreignDeviceLocalSignOut = false;
                 currentUser = nextUser;
                 credentialStoreHealth.noteRecovered();
+                acknowledgeInstanceLogin(outcome);
                 if (!isPassiveSharedUserDataInstance()) {
                   canaryFlagStore.clear();
                 }
@@ -6320,6 +6529,7 @@ async function runLoginAction(
 
 export async function dispatchLoginAction(action: unknown): Promise<DesktopLoginActionResult> {
   if (hostNotStartedInClientMode()) return { success: false, code: HOST_NOT_STARTED, state: loginFlowState };
+  assertInstanceAuthMutationAllowed();
   const dispatchLoginFlowEpoch = loginFlowEpoch;
   // Terminal logout clears credentials synchronously, then tears down the old
   // account boundary in the background so the rejecting request can unwind.
@@ -6382,6 +6592,14 @@ export async function refresh(options?: { serverRejectedToken?: boolean }): Prom
   if (authRefreshOverride !== null) {
     receiveHostAuthState(await authRefreshOverride(options));
     return delegatedAuthState!.isAuthenticated;
+  }
+  if (getInstanceConfig()) {
+    try {
+      await authenticateManagedInstance();
+      return true;
+    } catch {
+      return false;
+    }
   }
   if (getActiveAppSession().mode === 'local') {
     log.debug('runtime refresh skipped in local mode');
@@ -6759,6 +6977,7 @@ function revokeLoggedOutAccountBestEffort(input: {
 }
 
 export async function logout(): Promise<void> {
+  assertInstanceAuthMutationAllowed();
   if (isPassiveSharedUserDataInstance()) {
     throw new AuthApiError(
       'PASSIVE_AUTH_MUTATION_BLOCKED',

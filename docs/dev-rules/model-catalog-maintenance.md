@@ -177,7 +177,8 @@ Desktop 设置页模型详情有 `displayPricing.summary` 时优先按输入、�
 有 summary 且没有 notes；所有 item 都没有 tier，priceType 缺省或 exact；item 总数等于
 所有角色报价段数，且每个 item 能按 unit、quantity、price 一一匹配不同的摘要报价，
 匹配报价没有 maxPrice 或 tier。其余情况保留在摘要下方。设置页列表对带 displayPricing 的
-模型不显示价格；选择器、浮层和聊天价格档位逻辑保持原样。详情中的有效折扣仍单列显示。
+非对话模型不显示通用 token 价格档位；对话模型仍保留 token 价格档位与折扣表达。选择器、
+浮层和聊天价格档位逻辑保持原样。详情中的有效折扣仍单列显示。
 摘要的可选 `component` 标明收费项类别，与计价单位独立。格式为 `^[a-z][a-z0-9_]{0,31}$`；
 格式不合法只丢该字段，报价与摘要保留。合法但未知的类别保留在数据中，界面按缺失处理。
 已知类别为 text / image / audio / video：同一角色类别一致时显示「类别 + 方向」，混合类别时

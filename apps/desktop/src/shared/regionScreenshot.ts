@@ -159,6 +159,8 @@ export interface RegionScreenshotHit {
 }
 
 export interface RegionScreenshotBegin {
+  /** Source monitor ICC for displaying raw Windows GDI pixels. */
+  previewProfile?: Uint8Array<ArrayBuffer>;
   translationPreference?: ScreenshotTranslationPreference;
   /** 本次会话标识; 迟到的回调凭它与新会话区分。 */
   token: string;

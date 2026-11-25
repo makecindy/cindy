@@ -598,3 +598,88 @@ describe('mergeDiscoveredRuntimeModels 排序', () => {
     expect(merged.map((model) => model.id)).toEqual(['new-1', 'new-2', 'old-b', 'old-a']);
   });
 });
+
+// 回归价值：2026-11-19 #11456；Magpie 自定义 URL 此前漏解析 OpenRouter pricing 且刷新缺少 pricing 时
+// 残留旧 discoveredCost。最小失效输入：带 pricing 与无 pricing（混合分组）的 Magpie 清单及刷新快照。tier: unit。
+describe('Magpie discovery pricing and refresh cleanup', () => {
+  it.each([
+    'https://magpie.example/v1/models',
+    undefined,
+  ])('parses Magpie OpenRouter-format pricing into discoveredCost regardless of sourceUrl (%s)', (sourceUrl) => {
+    const models = parseModelsListResponse({
+      data: [
+        {
+          id: 'fixed-group',
+          magpie_label: 'Claude Sonnet · Channel A',
+          owned_by: 'anthropic',
+          pricing: {
+            prompt: '0.000003',
+            completion: '0.000015',
+            input_cache_read: '0.0000003',
+            input_cache_write: '0.00000375',
+          },
+        },
+        {
+          id: 'mixed-group',
+          magpie_label: 'Smart Routing · Mix',
+          owned_by: 'magpie',
+        },
+        {
+          id: 'invalid-group',
+          magpie_label: 'Broken · Channel B',
+          owned_by: 'openai',
+          pricing: { prompt: '', completion: '-1' },
+        },
+      ],
+    }, sourceUrl)!;
+
+    expect(models[0]).toMatchObject({
+      id: 'fixed-group',
+      opaqueModelId: true,
+      discoveredCost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    });
+    expect(models[1].opaqueModelId).toBe(true);
+    expect(models[1].discoveredCost).toBeUndefined();
+    expect(models[2].opaqueModelId).toBe(true);
+    expect(models[2].discoveredCost).toBeUndefined();
+  });
+
+  it('clears stale discoveredCost on refresh when pricing disappears while keeping unlisted models intact', () => {
+    const initial = mergeDiscoveredRuntimeModels([], parseModelsListResponse({
+      data: [
+        {
+          id: 'group-a',
+          magpie_label: 'Group A',
+          owned_by: 'anthropic',
+          pricing: { prompt: '0.000003', completion: '0.000015' },
+        },
+        {
+          id: 'group-unlisted',
+          magpie_label: 'Unlisted',
+          owned_by: 'openai',
+          pricing: { prompt: '0.000002', completion: '0.000008' },
+        },
+      ],
+    })!);
+    const refreshed = mergeDiscoveredRuntimeModels(initial, parseModelsListResponse({
+      data: [
+        {
+          id: 'group-a',
+          magpie_label: 'Group A (mixed)',
+          owned_by: 'magpie',
+        },
+      ],
+    })!);
+    const provider = buildUserProvider({
+      id: 'custom-magpie',
+      name: 'Magpie',
+      runtimes: { 'claude-code': { baseUrl: 'https://magpie.example', models: refreshed } },
+    });
+    const refreshedGroup = provider.models['claude-code']?.find((m) => m.id === 'group-a');
+    const unlistedGroup = provider.models['claude-code']?.find((m) => m.id === 'group-unlisted');
+    expect(refreshedGroup?.opaqueModelId).toBe(true);
+    expect(refreshedGroup?.cost).toBeUndefined();
+    expect(unlistedGroup?.cost).toEqual({ input: 2, output: 8 });
+  });
+});
+

@@ -296,7 +296,7 @@
       "expired": "候之过久，代书已终。"
     },
     "failure": {
-      "permission": "Cindy 无读此机界面之权柄。请于系统设置之辅助功能中许 Cindy。",
+      "permission": "Cindy 无法读取这台 Mac 的界面。请检查正在运行的这份 Cindy 的控制权限。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。若只允许 Cindy 控制部分 App，请把这个 App 也加进去。",
       "target_gone": "目标之窗已阖。",
       "unreadable": "此界面不可读。可于主机之上径自竟之，再交还 Agent。",
       "action_failed": "方才之举未生效，请察界面后再试。",

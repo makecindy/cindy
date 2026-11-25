@@ -1,7 +1,7 @@
 /** Text-only terminal delivery ledger. Unknown POST outcomes are held, never blindly retried. */
 import { createHash } from 'node:crypto';
 import { ConnectionRetry } from '../connectionRetry.js';
-import { chunkDiscordText } from './chunk.js';
+import { chunkDiscordFinalText } from './chunk.js';
 import { discordOperationFailure } from './operations.js';
 
 export interface DiscordFinalTextStorage {
@@ -15,6 +15,11 @@ export interface DiscordFinalTextStorage {
   credentialStamp?(): string;
 }
 interface Segment { text: string; state: 'pending' | 'sending' | 'sent' | 'uncertain' }
+// Old pending entries can contain blank chunks. Leave their indices intact
+// because the index contributes to the nonce of every nonblank POST.
+function isSettledSegment(segment: Segment): boolean {
+  return segment.state === 'sent' || (segment.state === 'pending' && !segment.text.trim());
+}
 interface Entry {
   key: string; identity: string; lane: string; createdAt: number; authorization: string;
   state: 'pending' | 'delivered' | 'uncertain' | 'cancelled' | 'expired'; segments: Segment[];
@@ -111,7 +116,7 @@ export class DiscordFinalTextOutbox {
     const key = this.key(requestId, lane);
     this.mutate(store, ledger => {
       if (ledger.entries.some(e => e.key === key)) return;
-      const segments: Segment[] = text.trim() ? chunkDiscordText(text).map(text => ({ text, state: 'pending' })) : [];
+      const segments: Segment[] = chunkDiscordFinalText(text).map(text => ({ text, state: 'pending' }));
       // Reclaim the oldest tombstone first; live pending/uncertain output is never evicted for new work.
       if (ledger.entries.length >= MAX_ENTRIES) {
         const oldest = ledger.entries.filter(e => !e.segments.length).sort((a, b) => a.createdAt - b.createdAt)[0];
@@ -200,11 +205,11 @@ export class DiscordFinalTextOutbox {
         this.mutate(store, ledger => { delete ledger.entries.find(e => e.key === entry.key)!.progressMessageId; });
         continue;
       }
-      const index = entry.segments.findIndex(s => s.state === 'pending');
+      const index = entry.segments.findIndex(s => s.state === 'pending' && !isSettledSegment(s));
       if (index < 0) {
         this.mutate(store, ledger => {
           const current = ledger.entries.find(e => e.key === entry.key)!;
-          current.state = current.segments.every(s => s.state === 'sent') ? 'delivered' : 'uncertain';
+          current.state = current.segments.every(isSettledSegment) ? 'delivered' : 'uncertain';
           if (current.state === 'delivered') current.segments = [];
         });
         continue;
@@ -242,7 +247,7 @@ export class DiscordFinalTextOutbox {
           if (current.state === 'cancelled' || !current.segments[index]) return;
           current.state = 'pending'; current.segments[index] = { text: '', state: 'sent' };
           (current.receipts ??= []).push(messageId);
-          if (current.segments.every(s => s.state === 'sent')) { current.state = 'delivered'; current.deliveredAt = this.now(); current.segments = []; }
+          if (current.segments.every(isSettledSegment)) { current.state = 'delivered'; current.deliveredAt = this.now(); current.segments = []; }
         });
       } finally { this.activeSegments.delete(activeKey); }
     }

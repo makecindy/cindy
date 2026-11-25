@@ -1043,6 +1043,45 @@ describe('locating folded history preserves display expansion', () => {
     view.setActive(false);
   });
 
+  // Unit regression for #12529. Existing preview tests keep a mounted owner.
+  // A cached running preview must remain usable after its last owner releases
+  // it (a card replaced the work group), until a changed revision needs a read.
+  it('keeps a completed running preview after release until its revision changes', async () => {
+    let messages = [row(1, 'thinking', 'first activity')];
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView(messages, true), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages, hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    const render = () => renderHistoryView({
+      view, snapshot: view.getSnapshot(), liveMessages: [], streaming: true,
+      build: rows => rows.map(message => message.content),
+      structure: ungroupedStructure,
+    });
+    try {
+      await view.refresh();
+      const preview = historyWorkSummaries(view.getSnapshot().items)[0]?.preview;
+      if (!preview) throw new Error('Expected a running preview');
+      const release = view.retainExpanded([preview.key]);
+      await view.loadDetails(preview);
+      release();
+      expect(view.getSnapshot().expanded.size).toBe(0);
+      expect(render()).toEqual(['first activity']);
+
+      messages = [...messages, row(2, 'thinking', 'second activity')];
+      await view.refresh();
+      expect(render()).not.toContain('first activity');
+      const next = historyWorkSummaries(view.getSnapshot().items)[0]?.preview;
+      if (!next) throw new Error('Expected a revised running preview');
+      const releaseNext = view.retainExpanded([next.key]);
+      await view.loadDetails(next);
+      releaseNext();
+      expect(render()).toEqual(['first activity', 'second activity']);
+    } finally {
+      view.setActive(false);
+    }
+  });
+
   it('keeps the previous running preview window while its advanced tail is still loading', async () => {
     const rows = Array.from({ length: 8 }, (_, i) => row(i + 1, 'thinking', `detail-${i}`));
     const items = projectHistoryView(rows, true);

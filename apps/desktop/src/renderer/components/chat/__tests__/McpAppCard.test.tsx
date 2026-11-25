@@ -70,8 +70,14 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
   },
 }));
 import { McpAppCard } from '../McpAppCard';
+import { clearDraft, getDraft } from '@/lib/composerDraftStore';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { applyPluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
+const allPluginUiRegions = {
+  workspace: true, sidebar: true, header: true, messages: true,
+  composer: true, tools: true, windowControls: true,
+};
 const digest = webcrypto.subtle.digest.bind(webcrypto.subtle);
 const pendingDigests: Promise<ArrayBuffer>[] = [];
 // The real presenter owns demand: no visible View means no state subscription;
@@ -111,6 +117,173 @@ it('subscribes only for a live View and coalesces context without reopening it',
     expect(controller.context).toHaveBeenCalledOnce();
   } finally { if (container.hasChildNodes()) await act(async () => root.unmount()); container.remove(); }
 });
+
+// 测试价值
+// - 生产入口与结果：真实 McpAppCard iframe 挂载和主题/容器变化，观察外层 iframe 底色。
+// - Bug／规则依据：离开任务时子画面缺帧会露出 iframe 自身底色，底色应跟随最近的不透明卡片背景。
+// - 现有缺口：已有测试覆盖 iframe 生命周期，却没有覆盖缺帧时的背景兜底或主题切换。
+// - 最小输入与 tier：一张可见卡片、一次背景切换和一次无关上下文更新，renderer unit。
+it('paints the iframe backdrop from the nearest card background without recomputing on context updates', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div');
+  container.style.backgroundColor = 'rgb(18, 18, 18)';
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const changed = { current: () => {} };
+  const contextSource = {
+    read: vi.fn(() => ({ revision: 1 })),
+    subscribe: vi.fn((callback: () => void) => { changed.current = callback; return () => {}; }),
+  };
+  const previousScheme = document.documentElement.style.colorScheme;
+  document.documentElement.style.colorScheme = 'dark';
+  const computedStyle = vi.spyOn(window, 'getComputedStyle');
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="backdrop-task" clientId="backdrop-card" title="App" contextSource={contextSource} />));
+    container.querySelector('dialog')!.style.backgroundColor = 'transparent';
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const frame = container.querySelector('iframe')!;
+    expect(frame.style.backgroundColor).toBe('rgb(18, 18, 18)');
+    // PR #12124, renderer unit: mount under a dark Cindy theme, then switch
+    // before App initialization. Reassigning src here would discard its document.
+    expect(new URL(frame.src).searchParams.get('scheme')).toBe('dark');
+    const setSrc = vi.spyOn(HTMLIFrameElement.prototype, 'src', 'set');
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage');
+
+    container.style.backgroundColor = 'rgb(245, 245, 245)';
+    await act(async () => {
+      document.documentElement.style.colorScheme = 'light';
+      await Promise.resolve();
+    });
+    expect(frame.style.backgroundColor).toBe('rgb(245, 245, 245)');
+    expect(post).toHaveBeenCalledWith({ type: 'cindy:sandbox-color-scheme', scheme: 'light' }, 'cindy-mcp-app://view-1');
+    expect(container.querySelector('iframe')).toBe(frame);
+    expect(setSrc).not.toHaveBeenCalled();
+
+    // A same-mode theme switch changes only data-theme (ThemeService.applyTheme).
+    container.style.backgroundColor = 'rgb(240, 236, 228)';
+    await act(async () => {
+      document.documentElement.dataset.theme = 'warm-light';
+      await Promise.resolve();
+    });
+    expect(frame.style.backgroundColor).toBe('rgb(240, 236, 228)');
+
+    container.style.backgroundColor = 'rgb(220, 220, 220)';
+    await act(async () => applyPluginUiRegions({ ...allPluginUiRegions, sidebar: false }));
+    expect(frame.style.backgroundColor).toBe('rgb(220, 220, 220)');
+    await act(async () => applyPluginUiRegions(allPluginUiRegions));
+
+    const readsBefore = computedStyle.mock.calls.filter(([element]) => element === container).length;
+    await act(async () => changed.current());
+    const readsAfter = computedStyle.mock.calls.filter(([element]) => element === container).length;
+    expect(readsAfter).toBe(readsBefore);
+  } finally {
+    document.documentElement.style.colorScheme = previousScheme;
+    delete document.documentElement.dataset.theme;
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+// Renderer unit through the real card lifecycle. The fallback stays on the iframe
+// for the App's lifetime, so it must equal what is already visible behind it.
+// Painting the body color hid the wallpaper, and painting a translucent layer
+// doubled it. Minimal failing inputs: an active wallpaper canvas, a translucent
+// ancestor, and an image-backed ancestor.
+it('keeps the iframe transparent over wallpaper, translucent and image backgrounds', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  document.body.style.backgroundColor = 'rgb(250, 250, 250)';
+  document.documentElement.dataset.wallpaperActive = 'true';
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="backdrop-wallpaper" clientId="backdrop-card" title="App" />));
+    container.querySelector('dialog')!.style.backgroundColor = 'transparent';
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const frame = container.querySelector('iframe')!;
+    expect(frame.style.backgroundColor).toBe('transparent');
+
+    await act(async () => {
+      delete document.documentElement.dataset.wallpaperActive;
+      await Promise.resolve();
+    });
+    expect(frame.style.backgroundColor).toBe('rgb(250, 250, 250)');
+
+    container.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    await act(async () => { document.documentElement.dataset.theme = 'translucent'; await Promise.resolve(); });
+    expect(frame.style.backgroundColor).toBe('transparent');
+
+    container.style.backgroundColor = 'transparent';
+    container.style.backgroundImage = 'url(wallpaper.png)';
+    await act(async () => { document.documentElement.dataset.theme = 'image'; await Promise.resolve(); });
+    expect(frame.style.backgroundColor).toBe('transparent');
+  } finally {
+    delete document.documentElement.dataset.wallpaperActive;
+    delete document.documentElement.dataset.theme;
+    document.body.style.backgroundColor = '';
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+it('does not walk backdrop ancestors for unrelated DOM changes', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  let dialog: Element | undefined;
+  let dialogParentReads = 0;
+  const parentPrototype = Object.getOwnPropertyDescriptor(Element.prototype, 'parentElement')?.get
+    ? Element.prototype : Node.prototype;
+  const parentGetter = Object.getOwnPropertyDescriptor(parentPrototype, 'parentElement')!.get!;
+  Object.defineProperty(parentPrototype, 'parentElement', {
+    configurable: true,
+    get() {
+      if (this === dialog) dialogParentReads++;
+      return parentGetter.call(this);
+    },
+  });
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="backdrop-unrelated" clientId="backdrop-card" title="App" />));
+    dialog = container.querySelector('dialog')!;
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    dialogParentReads = 0;
+    const unrelated = document.createElement('div');
+    document.body.appendChild(unrelated);
+    await act(async () => { await Promise.resolve(); });
+    expect(dialogParentReads).toBe(0);
+    unrelated.remove();
+  } finally {
+    Object.defineProperty(parentPrototype, 'parentElement', { configurable: true, get: parentGetter });
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 beforeEach(() => {
   vi.stubGlobal('crypto', webcrypto);
   vi.spyOn(webcrypto.subtle, 'digest').mockImplementation((...args) => {
@@ -619,6 +792,94 @@ it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-a
   },
 );
 
+// Unit through the real card lifecycle. Main can deliver an attachment the user
+// requested while teardown is in flight; the listener used to stop at unmount,
+// so the staged file reached no composer. Minimal failing input: one delivery
+// after unmount and before close() settles.
+it('keeps a composer delivery that crosses card teardown', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  let deliver!: (payload: unknown) => void;
+  const stop = vi.fn();
+  vi.stubGlobal('electronAPI', { maker: { mcpApps: vi.fn(async () => ({})),
+    onMcpAppComposerAttachment: (callback: typeof deliver) => { deliver = callback; return stop; } } });
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  let finish!: () => void;
+  const closed = new Promise<void>((resolve) => { finish = resolve; });
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="teardown-task" clientId="card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    const viewId = (controller as unknown as { document: { viewId: string } }).document.viewId;
+    controller.close.mockReturnValue(closed);
+    await act(async () => root.render(null));
+    expect(stop).not.toHaveBeenCalled();
+    deliver({ sessionId: 'teardown-task', viewId, attachment: { id: 'late', mcpAppResourceKey: 'resource', name: 'late.txt',
+      path: '/staged/late.txt', ext: '.txt', size: 1, category: 'text', mimeType: 'text/plain' } });
+    expect(getDraft('teardown-task')?.attachments.map(file => file.name)).toEqual(['late.txt']);
+    await act(async () => { finish(); await closed; });
+    expect(stop).toHaveBeenCalledOnce();
+  } finally {
+    finish();
+    clearDraft('teardown-task');
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+// Unit through the real card lifecycle and owner-scoped draft store. The listener
+// outlives unmount, so a delivery can land after an account switch and used to
+// enter the new owner's draft of a shared task ID. Minimal failing input: owner
+// a opens the card, the renderer switches to owner b, then the payload arrives.
+it('drops a composer delivery that arrives after an account switch', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  let deliver!: (payload: unknown) => void;
+  const mcpApps = vi.fn(async () => ({}));
+  vi.stubGlobal('electronAPI', { maker: { mcpApps,
+    onMcpAppComposerAttachment: (callback: typeof deliver) => { deliver = callback; return () => {}; } } });
+  setDataOwnerGeneration('owner-a');
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  let finish!: () => void;
+  const closed = new Promise<void>((resolve) => { finish = resolve; });
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="shared-task" clientId="card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    const viewId = (controller as unknown as { document: { viewId: string } }).document.viewId;
+    controller.close.mockReturnValue(closed);
+    await act(async () => root.render(null));
+    setDataOwnerGeneration('owner-b');
+    deliver({ sessionId: 'shared-task', viewId, attachment: { id: 'stale', mcpAppResourceKey: 'resource', name: 'stale.txt',
+      path: '/owner-a/stale.txt', ext: '.txt', size: 1, category: 'text', mimeType: 'text/plain' } });
+    expect(getDraft('shared-task')?.attachments ?? []).toEqual([]);
+    deliver({ sessionId: 'shared-task', viewId, requestId: 'contains', resourceKey: 'resource' });
+    expect(mcpApps).toHaveBeenLastCalledWith('shared-task', { op: 'host-result', requestId: 'contains', result: false });
+  } finally {
+    finish();
+    clearDraft('shared-task');
+    setDataOwnerGeneration(null);
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 it('reopens when device ownership is restored but ignores unchanged ownership', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
@@ -943,7 +1204,7 @@ it.each(['rising', 'oscillating'])('follows %s sizes without echoing height-only
     expect(options?.rootMargin).toBe('80px 0px');
     await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
     const controller = state.controllers[0];
-    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 0, maxHeight: 5000 } }));
+    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 0, maxHeight: 5000 } }), expect.any(Function));
     await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
     await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
     for (let i = 0; i < 10; i++) await act(async () => {
@@ -1057,7 +1318,7 @@ it('fills a panel with nonzero dimensions and ignores App automatic heights with
     Object.defineProperty(frameRoot, 'clientHeight', { configurable: true, get: () => height });
     await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
     const controller = state.controllers[0];
-    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 600, height: 450 } }));
+    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 600, height: 450 } }), expect.any(Function));
     expect(container.textContent).not.toContain('Page');
     for (let i = 0; i < 10; i++) await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 800 + i * 100 } }));
     expect((frameRoot as HTMLElement).style.height).toBe('');

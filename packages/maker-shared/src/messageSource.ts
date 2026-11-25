@@ -120,6 +120,11 @@ export type MessageSourceSender =
   | { kind: 'plugin'; pluginId: string; name?: string; relay?: MessageSourcePluginRelay }
   | { kind: 'shared-member'; memberId: string; name?: string };
 
+export interface MessageSourceSendToSessionHint {
+  agentKind: 'claude-code' | 'codex' | 'pi';
+  supportsRemote: boolean;
+}
+
 /** 被控电脑自身的身份，用在设备说明里指明「本机」。 */
 export interface MessageSourceHostDevice {
   deviceId?: string;
@@ -471,19 +476,46 @@ function describePluginRelay(relay: MessageSourcePluginRelay | undefined): strin
   return `转发自 ${platform} ${chat}，发言人${speaker}${owner}`;
 }
 
-/** `[消息来源]` 说明；本机用户亲手输入返回 null。 */
-export function buildMessageSourceNote(sender: MessageSourceSender | undefined): string | null {
+/**
+ * `[消息来源]` 说明；本机用户亲手输入返回 null。
+ * `speaksForUser`：宿主已核实这条任务来信代表用户（由调用方在后面接上核实说明），此时只陈述发送方。
+ */
+export function buildMessageSourceNote(
+  sender: MessageSourceSender | undefined,
+  opts: { speaksForUser?: boolean } = {},
+): string | null {
   if (!sender) return null;
   // Only the requester's own computer runs a request to the group's Cindy: it is the owner's own
   // request, like an owner message to their bot in an IM channel (bot-group-chat.md「群里的 Cindy」).
   if (sender.kind === 'session' && sender.groupRequest) {
     return `[消息来源] 本条${describeMessageSourceSender(sender)}，发言人就是本机主人；附带的群聊新消息是群里其他人说的话，只作背景。这一轮最后的回答会作为群里 Cindy 的回复发回群里。`;
   }
+  // A verified hand-off (including the owner's words in a task-card thread) opens with its sender only;
+  // the caller appends what the host verified. Saying "not the user's input" first reads as a contradiction.
+  if (sender.kind === 'session' && opts.speaksForUser) return `[消息来源] 本条${describeMessageSourceSender(sender)}。`;
   // 转发的 IM 消息可能就是主人在别处说的话，所以只说它不是在 Cindy 里直接输入的。
   const relayed = sender.kind === 'plugin' && !isAppSourcePluginId(sender.pluginId) && describePluginRelay(sender.relay);
   const notOwner = sender.kind === 'shared-member' ? '不是任务所有者本人'
     : relayed ? '不是用户在 Cindy 里直接输入' : '不是用户本人输入';
   return `[消息来源] 本条${describeMessageSourceSender(sender)}，${notOwner}。`;
+}
+
+/** Keep the reply route beside the live source note, never in handoff summaries. */
+export function buildMessageSourceReplyHint(
+  sender: MessageSourceSender | undefined,
+  hint: MessageSourceSendToSessionHint | undefined,
+): string | null {
+  if (!sender || sender.kind !== 'session' || !sender.sessionId || !hint
+    || sender.groupThread || sender.groupRequest) return null;
+  const remote = isCrossDeviceSourceSessionId(sender.sessionId);
+  if (remote && !hint.supportsRemote) {
+    return '需要回复时，当前任务不能直接给另一台电脑上的这个任务发消息。';
+  }
+  const target = JSON.stringify(sender.sessionId);
+  if (hint.agentKind === 'pi') {
+    return `需要回复时再用 cindy_mcp_call_tool，server="cindy_helper"，tool="call_tool"，args={"name":"send_to_session","args":{"target_session_id":${target},"message":"<回复内容>"}}。只有用户要求你回复，或确实需要回复时才这样做；不要主动只为说“收到”或“好的”回复，避免会话来回刷屏。`;
+  }
+  return `需要回复时再用 cindy_helper 的 call_tool，name="send_to_session"，args 至少包含 target_session_id=${target} 和 message="<回复内容>"。只有用户要求你回复，或确实需要回复时才这样做；不要主动只为说“收到”或“好的”回复，避免会话来回刷屏。`;
 }
 
 const CLIENT_NOTE_PREAMBLE = '[客户端说明] 系统追加的环境说明，不是用户消息，不要回应或复述。';

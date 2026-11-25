@@ -21,7 +21,7 @@ import { i18n } from '@/i18n';
 
 const WRAP = (text: string) => new Error(`Error invoking remote method 'maker:sessions:set-model': Error: ${text}`);
 const KEYS = ['logic.errors.hostProfileInUseByDesktop', 'logic.errors.hostProfileInUseByDesktopRetry',
-  'logic.errors.hostProfileInUseByDesktopAtStart'];
+  'logic.errors.hostProfileInUseByDesktopAtStart', 'ipcError.PRECONDITION_FAILED'];
 
 describe('mapIpcErrorToI18nKey · a Host refusal while a desktop app uses its data', () => {
   it('maps the marked refusal in every form it reaches a caller', () => {

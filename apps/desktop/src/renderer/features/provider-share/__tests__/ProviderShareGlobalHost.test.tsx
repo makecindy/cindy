@@ -15,6 +15,7 @@ import type {
   ProviderShareReceivedSnapshot,
 } from '../../../../shared/providerShare';
 import { ProviderShareGlobalHost } from '../ProviderShareGlobalHost';
+import { resetPluginEnginesStoreForTests } from '@/hooks/usePluginEngines';
 import { resetProviderShareStoreForTests } from '../providerShareStore';
 
 vi.mock('react-i18next', () => ({
@@ -142,7 +143,7 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => { cleanup(); resetProviderShareStoreForTests(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); resetProviderShareStoreForTests(); resetPluginEnginesStoreForTests(); vi.restoreAllMocks(); });
 
 function LocationProbe() {
   const location = useLocation();
@@ -518,5 +519,52 @@ describe('ProviderShareGlobalHost', () => {
       for (const listener of bus.manage) listener({ providerId: 'xd' });
     });
     expect(screen.getByTestId('location').textContent).toBe('/settings?tab=providers&shareProvider=xd');
+  });
+
+  it('enables approval with the plugin-engine callout only when the shareSupported plugin engine is present', async () => {
+    localCatalog.providers = [];
+    let engines = [{
+      key: 'dsh-acp:dsh',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      ghostId: 'dsh-acp',
+      harnessId: 'dsh',
+      name: 'DeepSeek Harness',
+      availability: { state: 'available' as const },
+      remoteUse: { supported: true, shareSupported: false, enabled: true },
+      models: [],
+      permissionModes: [],
+      defaultPermissionMode: 'default',
+    }];
+    let notifyEngines: ((list: typeof engines) => void) | null = null;
+    Object.assign(window.electronAPI, {
+      maker: {
+        listPluginEngines: vi.fn(async () => engines),
+        onPluginEnginesChanged: (cb: (list: typeof engines) => void) => { notifyEngines = cb; return () => { notifyEngines = null; }; },
+      },
+    });
+    currentOwner = {
+      ready: true,
+      shares: [{
+        shareId: 'share-plugin',
+        providerId: 'acp-plugin:dsh-acp:dsh',
+        providerLabel: 'DeepSeek Harness',
+        createdAt: '2026-10-01T00:00:00Z',
+        members: [],
+        requests: [request],
+      }],
+    };
+    renderHost();
+    const dialog = await screen.findByTestId('provider-share-approve-dialog');
+    const approve = screen.getByRole('button', { name: 'providerShare.approve.approve' }) as HTMLButtonElement;
+    // Non-shareSupported engine keeps Approve disabled.
+    await waitFor(() => expect(window.electronAPI.maker.listPluginEngines).toHaveBeenCalled());
+    expect(approve.disabled).toBe(true);
+
+    engines = [{ ...engines[0]!, remoteUse: { supported: true, shareSupported: true, enabled: true } }];
+    await act(async () => { notifyEngines?.(engines); });
+    await waitFor(() => expect(approve.disabled).toBe(false));
+    expect(dialog.textContent).toContain('providerShare.approve.calloutPluginEngine');
+    fireEvent.click(approve);
+    await waitFor(() => expect(bus.command).toHaveBeenCalledWith({ action: 'approve', requestId: 'req-1' }));
   });
 });

@@ -3332,13 +3332,15 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
   // 对外协议(plugin-harnesses.md「自己的其他电脑使用插件引擎」)：任务的文件在另一台电脑时，入口进程收到的
   // 唯一参数是宿主固定给的 --cindy-remote-workspace，插件据此关掉 Agent 自带的文件与命令工具。字面量就是
   // 插件作者依赖的约定，改了它已发布的插件就认不出这种启动；平常启动必须仍然没有任何参数。
-  it('passes only the host-authored remote-workspace argument to an engine started for another computer', async () => {
+  it('passes only the host-authored remote/guest workspace arguments to an engine started for another computer', async () => {
     const { broker, spawned } = setupHarness(harnessGhost());
     try {
       await broker.spawnHarness('node-ghost', 'dsh', { remoteWorkspace: true });
       expect(spawned[0].args).toEqual(['--cindy-remote-workspace']);
+      await broker.spawnHarness('node-ghost', 'dsh', { remoteWorkspace: true, guestWorkspace: true });
+      expect(spawned[1].args).toEqual(['--cindy-remote-workspace', '--cindy-guest-workspace']);
       await broker.spawnHarness('node-ghost', 'dsh');
-      expect(spawned[1].args).toEqual([]);
+      expect(spawned[2].args).toEqual([]);
     } finally { broker.destroyAll(); }
   });
 
@@ -3358,6 +3360,22 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
     try {
       await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toBeInstanceOf(AgentStartupStoppedError);
       expect(spawned).toHaveLength(0);
+    } finally { broker.destroyAll(); }
+  });
+
+  // #12595: the ninth request needs an actionable error, and an exit must allow a retry.
+  it('reports plugin capacity before forking and accepts a retry after an engine exits', async () => {
+    const { broker, spawned } = setupHarness(harnessGhost());
+    try {
+      for (let i = 0; i < 8; i++) await broker.spawnHarness('node-ghost', 'dsh');
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow(
+        'Plugin "node-ghost" is using 8/8 task engine slots. Try again after an engine process for this plugin exits.',
+      );
+      expect(spawned).toHaveLength(8);
+
+      spawned[0].proc.emit('exit', 0);
+      const replacement = await broker.spawnHarness('node-ghost', 'dsh');
+      expect(replacement).toBe(spawned[8].proc);
     } finally { broker.destroyAll(); }
   });
 

@@ -6,7 +6,7 @@
  *   - async 并发, 整体超时兜底
  *   - post-async 串行, 必须晚于 async (用于 db close 这种依赖 async 产物的清理)
  *
- * installQuitHandler 只覆盖不触发真实退出的异常分支；真实 process / app 信号路径仍走集成验证。
+ * installQuitHandler 通过模拟 Electron 事件和进程退出验证诊断；测试进程不会退出。
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -21,8 +21,7 @@ const scanFork = vi.hoisted(() => vi.fn());
 const electronPaths = vi.hoisted(() => ({ userData: '' }));
 
 // lifecycle.ts 里 import { app } from 'electron' —— 用最小 stub 喂给它。
-// 真实退出路径 (信号 / before-quit) 不在本文件覆盖。getPath / getVersion /
-// crashReporter 只供 session-end 用例初始化真实 run marker。
+// getPath / getVersion / crashReporter 供退出诊断用例初始化真实 run marker。
 vi.mock('electron', () => ({
   utilityProcess: { fork: scanFork },
   app: {
@@ -207,6 +206,26 @@ describe('runQuitDisposers', () => {
     await runQuitDisposers(1000);
 
     expect(log).toEqual(['a-sync', 'b-async', 'c-post']);
+  });
+
+  // Unit: an observer learns about every quit step that failed or ran out of time, with no
+  // dependence on the log wording; a clean chain reports none.
+  it('tells the quit observer about each step that did not finish cleanly', async () => {
+    const { onQuit, runQuitDisposers, observeQuitSteps } = await freshLifecycle();
+    const observer = { fault: vi.fn(), completed: vi.fn() };
+    observeQuitSteps(observer);
+    await runQuitDisposers(20);
+    expect(observer.fault).not.toHaveBeenCalled();
+    onQuit('sync-throws', () => { throw new Error('sync'); }, 'sync');
+    onQuit('sync-promise', (() => Promise.resolve()) as never, 'sync');
+    onQuit('async-throws', async () => { throw new Error('async'); }, 'async');
+    onQuit('async-hangs', () => new Promise<void>(() => {}), 'async');
+    onQuit('post-throws', async () => { throw new Error('post'); }, 'post-async');
+    onQuit('post-hangs', () => new Promise<void>(() => {}), 'post-async');
+    onQuit('post-throws-sync', () => { throw new Error('post sync'); }, 'post-async');
+    await runQuitDisposers(20);
+    expect(observer.fault).toHaveBeenCalledTimes(7);
+    expect(observer.completed).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('keeps real bootstrap Codex and DB dependencies until Maker settles or times out (timeout=%s)', async (timesOut) => {
@@ -839,6 +858,116 @@ describe('installQuitHandler', () => {
         err,
       );
     } finally {
+      snapshot.restore();
+    }
+  });
+
+  // #7210: exercise the installed before-quit handler and classify its real persisted marker.
+  // The existing exception tests start with an idle app. A pending disposer is the minimal
+  // condition needed to reproduce the race in this unit test. The fatal-shutdown
+  // notification drives log backfill and must be emitted once even if two exceptions arrive.
+  it.each([
+    {
+      name: 'fatal exception during cleanup',
+      timing: 'cleanup',
+      error: new TypeError('Object has been destroyed'),
+      exitCode: 1,
+      kind: 'crash-exit',
+      shutdownReason: 'uncaughtException',
+    },
+    {
+      name: 'fatal exception in app.exit before the exit event',
+      timing: 'before-exit-event',
+      error: new TypeError('Object has been destroyed'),
+      exitCode: 0,
+      kind: 'crash-exit',
+      shutdownReason: 'uncaughtException',
+    },
+    {
+      name: 'fatal exception in app.exit after the exit event',
+      timing: 'after-exit-event',
+      error: new TypeError('Object has been destroyed'),
+      exitCode: 0,
+      kind: 'crash-exit',
+      shutdownReason: 'uncaughtException',
+    },
+    {
+      name: 'recoverable network error during cleanup',
+      timing: 'cleanup',
+      error: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
+      exitCode: 0,
+      kind: 'clean',
+      shutdownReason: 'before-quit',
+    },
+  ])('records the outcome of $name on the next startup', async ({
+    error, exitCode, kind, shutdownReason, timing,
+  }) => {
+    const snapshot = snapshotProcessListeners([
+      'SIGINT', 'SIGTERM', 'exit', 'uncaughtException', 'unhandledRejection',
+    ]);
+    const sigbreakBefore = new Set(process.listeners('SIGBREAK'));
+    const previousUserData = electronPaths.userData;
+    electronPaths.userData = watchdogTmpDir;
+    vi.useFakeTimers({ toFake: ['setInterval'] });
+    try {
+      const lifecycle = await freshLifecycle();
+      const diagnostics = await import('../startup-diagnostics');
+      const { app } = await import('electron');
+      diagnostics.initStartupDiagnostics();
+      lifecycle.installQuitHandler();
+      const onFatalShutdown = vi.fn();
+      lifecycle.onFatalShutdown(onFatalShutdown);
+
+      let finishCleanup!: () => void;
+      const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
+      const dispose = vi.fn(() => cleanup);
+      lifecycle.onQuit('pending-cleanup', dispose, 'post-async');
+
+      const [, beforeQuit] = (vi.mocked(app.on).mock.calls as unknown as Array<[
+        string, (event: { preventDefault(): void }) => void,
+      ]>).find(([event]) => event === 'before-quit')!;
+      const event = { preventDefault: vi.fn() };
+      beforeQuit(event);
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+      expect(dispose).toHaveBeenCalledOnce();
+
+      const [uncaughtException] = snapshot.added('uncaughtException');
+      const raiseError = () => uncaughtException(error, 'uncaughtException');
+      vi.mocked(app.exit).mockImplementationOnce((actualExitCode = 0) => {
+        if (timing === 'before-exit-event') raiseError();
+        for (const onExit of snapshot.added('exit')) onExit(actualExitCode);
+        if (timing === 'after-exit-event') raiseError();
+      });
+      if (timing === 'cleanup') {
+        raiseError();
+        raiseError();
+      }
+      const repeatedQuit = { preventDefault: vi.fn() };
+      beforeQuit(repeatedQuit);
+      expect(app.exit).not.toHaveBeenCalled();
+      finishCleanup();
+
+      await vi.waitFor(() => expect(app.exit).toHaveBeenCalledOnce());
+      const nextStart = new diagnostics.RunMarkerStore({
+        dir: join(watchdogTmpDir, 'diagnostics', 'run-markers'),
+        pid: process.pid + 1,
+        version: 'next',
+        isPidAlive: () => false,
+      });
+      expect(nextStart.analyzePreviousRuns()).toMatchObject([
+        { kind, marker: { exitCode, shutdownReason, disposedAt: expect.any(String) } },
+      ]);
+      expect(onFatalShutdown.mock.calls).toEqual(
+        kind === 'crash-exit' ? [['uncaughtException']] : [],
+      );
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(repeatedQuit.preventDefault).toHaveBeenCalledOnce();
+    } finally {
+      electronPaths.userData = previousUserData;
+      vi.useRealTimers();
+      for (const listener of process.listeners('SIGBREAK')) {
+        if (!sigbreakBefore.has(listener)) process.removeListener('SIGBREAK', listener);
+      }
       snapshot.restore();
     }
   });

@@ -12,7 +12,20 @@
 import type { KimiCodingUsageSnapshot } from './kimiCodingUsage';
 import type { OpenCodeGoUsageSnapshot } from './opencodeGoUsage';
 
-import type { AgentKind } from '@cindy/model-providers';
+import type { AgentKind, Provider } from '@cindy/model-providers';
+
+export const ZHIPU_CODING_PLAN_ORIGINS = ['https://open.bigmodel.cn', 'https://api.z.ai'] as const;
+export function isZhipuCodingPlanPath(path: string): boolean {
+  return path === '/api/anthropic' || path.startsWith('/api/anthropic/') || path.startsWith('/api/coding/');
+}
+
+export function isZhipuCodingPlanRoute(route: Provider['routing'][AgentKind]): boolean {
+  if (!route?.upstream || route.disabled) return false;
+  const url = URL.parse(route.upstream);
+  return url !== null
+    && ZHIPU_CODING_PLAN_ORIGINS.some(origin => origin === url.origin)
+    && isZhipuCodingPlanPath(url.pathname);
+}
 
 export interface ProviderAccountUsageRequest {
   providerId: string;

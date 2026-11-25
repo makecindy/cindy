@@ -5,6 +5,7 @@ import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
 import { parseGhostHarnesses, type GhostHarnessDecl } from './pluginHarnesses.js';
+import { parseGhostFileOpener, type GhostFileOpenerDecl } from './pluginFileOpener.js';
 import { parseGhostSystemPromptFragments, type GhostSystemPromptFragment } from './runtimeContext.js';
 import { GHOST_LOCALES, type GhostLocale } from './locales.js';
 import { validateGhostReadmeDeclaration } from './readme.js';
@@ -113,6 +114,7 @@ export const LEGACY_GHOST_SLOTS = [
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'device-sync',
@@ -218,9 +220,7 @@ export interface GhostTaskViewDecl {
 
 /**
  * 芯片型意识注册给 agent 的工具声明(卡槽②)。
- * 声明式而非运行时动态注册(规则 9:确定性;且会话中途增删工具会破坏
- * prompt 缓存前缀,规则 10)——主机在会话建立时按"已装且唤醒"的意识
- * 快照注入工具集。
+ * 默认按需发现。任务启动时的具名工具须显式声明，目录在运行期间固定。
  */
 export interface GhostToolDecl {
   /** 工具名:小写字母开头,允许小写/数字/下划线/连字符,≤64。 */
@@ -229,6 +229,8 @@ export interface GhostToolDecl {
   description: string;
   /** JSON Schema(object)形态的参数声明;可省略(无参工具)。 */
   parameters?: Record<string, unknown>;
+  /** Opt in to named exposure in the host's ordinary local task tool snapshot. */
+  exposure?: 'startup';
   /** Host approval policy. `auto` requires explicit installation consent. */
   approval?: 'auto' | 'each-call';
 }
@@ -625,6 +627,14 @@ export interface GhostSecretOauthDecl {
   authorizeUrl: string;
   /** code / refresh token 交换端点(https;域名必须命中 hosts——clientSecret 只流向用户同意过的域名)。 */
   tokenUrl: string;
+  /**
+   * 可选:设备码授权端点(RFC 8628 Device Authorization Grant,https;域名必须命中
+   * hosts)。声明后主机改走「设备码登录」:申请 user_code 与确认页、拉起确认页,
+   * 再轮询 tokenUrl(grant_type=urn:ietf:params:oauth:grant-type:device_code),
+   * 无需 loopback 回调与重定向 URL 登记。authorizeUrl 仍必填:不认识本字段的旧
+   * 主机忽略它并退回授权码流程。与 tokenBroker / brokerBounce 互斥。
+   */
+  deviceAuthorizationUrl?: string;
   /**
    * 可选:作者内置的 OAuth 客户端 ID(2026-07-13 定案,开箱即用前置)。
    * 声明后用户零配置即可点"连接账号";用户在设置页自填的
@@ -1071,6 +1081,11 @@ export interface GhostManifest {
    */
   harnesses?: GhostHarnessDecl[];
   /**
+   * File types the plugin opens for the user instead of the system default app (v3 only;
+   * requires `node`). See `pluginFileOpener.ts`.
+   */
+  fileOpener?: GhostFileOpenerDecl;
+  /**
    * network 能力与访问范围。
    * 域名白名单 + 凭证声明由插件详情逐项展示,运行期主机代发并守门。
    */
@@ -1109,6 +1124,7 @@ export interface GhostManifest {
   notify?: true;
   badge?: true;
   confirm?: true;
+  form?: true;
   fs?: true;
   /** 持久作品库；卸载不删数据，位置和删除由 Host 设置页管理。 */
   library?: true;
@@ -1281,6 +1297,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'routineEvents',
   'models',
   'harnesses',
+  'fileOpener',
   'systemPrompt',
   'schemaVersion',
   'id',
@@ -1325,6 +1342,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'deviceSync',
@@ -1339,6 +1357,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'deviceSync',
@@ -1368,6 +1387,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   notify: 'notify',
   badge: 'badge',
   confirm: 'confirm',
+  form: 'form',
   fs: 'fs',
   library: 'library',
   deviceSync: 'device-sync',
@@ -2050,6 +2070,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       tools.push({
         name: t.name,
         description: t.description,
+        ...(prepared.schemaVersion === 3 && t.exposure === 'startup' ? { exposure: 'startup' as const } : {}),
         ...(t.approval !== undefined ? { approval: t.approval as 'auto' | 'each-call' } : {}),
         ...(t.parameters !== undefined
           ? { parameters: t.parameters as Record<string, unknown> }
@@ -2626,6 +2647,19 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
           if (!authorizeParsed.ok) return authorizeParsed;
           const tokenParsed = parseHostBoundUrl(oa.tokenUrl, 'tokenUrl');
           if (!tokenParsed.ok) return tokenParsed;
+          let deviceAuthorizationUrl: string | undefined;
+          if (oa.deviceAuthorizationUrl !== undefined) {
+            const deviceParsed = parseHostBoundUrl(oa.deviceAuthorizationUrl, 'deviceAuthorizationUrl');
+            if (!deviceParsed.ok) return deviceParsed;
+            if (oa.tokenBroker !== undefined || oa.brokerBounce !== undefined) {
+              return {
+                ok: false,
+                reason:
+                  'network.secrets[].oauth.deviceAuthorizationUrl 与 tokenBroker / brokerBounce 互斥(broker 只承接授权码交换)',
+              };
+            }
+            deviceAuthorizationUrl = deviceParsed.url;
+          }
           // 内置 client 凭证(可选,成对语义:secret 不许孤儿声明)。
           if (oa.clientId !== undefined) {
             if (
@@ -2943,6 +2977,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
           oauth = {
             authorizeUrl: authorizeParsed.url,
             tokenUrl: tokenParsed.url,
+            ...(deviceAuthorizationUrl !== undefined ? { deviceAuthorizationUrl } : {}),
             ...(oa.clientId !== undefined ? { clientId: oa.clientId as string } : {}),
             ...(oaClientIdAlternatives !== undefined
               ? { clientIdAlternatives: oaClientIdAlternatives }
@@ -3595,6 +3630,14 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     if (parsed.ok) harnesses = parsed.harnesses;
     else if (!preserveHistoricalParameterSize) return { ok: false, reason: parsed.reason };
   }
+  // 插件接管打开的文件类型(v3 only;v2 slots 不映射)。历史快照里本 Host 认识之前写下、
+  // 不合规的值只丢弃,不让已装插件失效。
+  let fileOpener: GhostFileOpenerDecl | undefined;
+  if (prepared.schemaVersion === 3 && raw.fileOpener !== undefined) {
+    const parsed = parseGhostFileOpener(raw.fileOpener, node);
+    if (parsed.ok) fileOpener = parsed.fileOpener;
+    else if (!preserveHistoricalParameterSize) return { ok: false, reason: parsed.reason };
+  }
   if (node?.secretBindings) {
     for (const binding of node.secretBindings) {
       if (network?.secrets?.some((secret) => secret.key === binding.key)) {
@@ -4110,6 +4153,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(models !== undefined ? { models } : {}),
       ...(harnesses !== undefined ? { harnesses } : {}),
+      ...(fileOpener !== undefined ? { fileOpener } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
@@ -4122,6 +4166,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(prepared.schemaVersion === 3 && slots.includes('notify') ? { notify: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('badge') ? { badge: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('confirm') ? { confirm: true as const } : {}),
+      ...(prepared.schemaVersion === 3 && slots.includes('form') ? { form: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('fs') ? { fs: true as const } : {}),
       ...(slots.includes('device-sync') ? { deviceSync: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('library')

@@ -38,10 +38,12 @@ transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCle
 
 Codex 的 MCP 目录探测可能拿到新工具，但原线程的客户端仍启动失败；读取工具时优先采用原生
 `runtimeStatus`，不以目录非空代替线程就绪。明确的 `null` 表示当前配置尚无原生运行状态，保持
-`pending` 并在后续发送时复查；只有字段缺失的旧运行时才保留目录兼容判据。明确配置且启用的 `cindy_helper` 失败后，在下次普通发送
+`pending` 并在后续发送时复查；只有字段缺失的旧运行时才保留目录兼容判据。明确配置且启用的
+`cindy_helper` 或 `cindy` 插件网关失败后，在下次普通发送
 之前复查；仅原线程明确 `failed`、没有原生子 Agent／终端／待续接工作时，释放该线程并冷恢复同一份
 完整历史，重用当前任务的 MCP 发现身份和配置。并发恢复合并，每个 handle 最多尝试两次，间隔至少
-30 秒；不后台轮询、不重放输入或工具，不重启共享 app-server／设备连接。健康任务不增加发送前查询。
+30 秒；不后台轮询、不重放输入或工具，不重启共享 app-server／设备连接。两组网关并行查询同一线程，
+各自按服务名过滤和分页，共用一个超时截止时间。不能以 helper 正常推定插件网关正常。健康任务不增加发送前查询。
 仍在异步启动、鉴权失败、明确停用、Review 或旧运行时无明确状态时不触发恢复。停止、关闭、账号退役
 或配置变化使在途恢复失效；取消后的迟到回包不得重新订阅，也不得释放新 handle 已接管的线程。
 接管按 handle 身份计算：同一 handle 的权限刷新、冷恢复与 daemon 恢复保留清理归属；新 handle
@@ -68,6 +70,13 @@ Host 按请求代次保存待确认的接管：未派发或收到关联的原生
 回写下一轮。异步启动转为明确不可用时，即使后台工作阻止恢复，也保留去重的缺席提示。
 原生冷恢复会重建失败任务内的 MCP 连接，其他任务的连接保持；后台工作未结束或状态不明时保留原线程。
 回归见 `agents/codex/helper-readiness.native.test.ts`、`index.test.ts` 与 `mcp-server-tools.test.ts`。
+
+单服务的线程就绪检查必须同时传 `threadId` 和 `serverName`。原生 Codex 0.166/0.167
+在缺少 `serverName` 时会重新发现全部 MCP 服务并建立临时客户端；某个无关服务阻塞时，
+健康 helper 的检查也会超时，临时客户端的迟到错误不能视为业务线程失效。
+helper 读取与恢复前复查、已有线程的 scheduler 检查均限定到目标服务；不增加查询、后台
+重试或共享进程重载。原生回归通过真实 app-server 验证健康连接不会重新初始化，也不会
+探测只对新连接挂起的其它服务；旧运行时忽略选择参数时保留原有兼容判据。
 
 回归见 `claude-code/__tests__/startup-cleanup.test.ts`、
 `pi/__tests__/pi-startsession-cleanup.test.ts` 与 `maker.test.ts`。
@@ -452,7 +461,9 @@ Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume �
 冻结输入。本地摘要再失败即正常报错，不循环切换。尚未结算的原生 exec continuation 无法跨
 线程迁移，不得重建后声称它仍可恢复。普通生成 502 与 stderr 文案不得触发此路径。
 
-Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
+Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志
+（唯一例外：每次响应的计时 trace 行只读来显示 tok/s，不驱动任何行为，见
+[实时生成速度](protocol-compatibility/live-generation-speed.md)），
 不得用 `remote compaction v2` 文案驱动恢复动作，也不得根据图片历史大小把重连超时
 改写为历史故障（包括读取已保存消息时）。收到当前 turn 的原生 `contextCompaction`
 开始事件后，取消短重连计时，压缩期间交给既有 upstream-idle 长超时保护；完成后恢复
@@ -879,6 +890,16 @@ Cindy 在返回拒绝前，通过已有 `turn/steer` 向对应 thread 和 expect
 `autoPermissionReviewer.test.ts`、Codex `index.test.ts` 与 `native-auto-review-policy.native.test.ts`
 的 long-command denial 用例；后者用未修改的 Codex 和本地模拟模型核对后续请求中的真实反馈，
 不代表真实审核模型的判定质量。
+
+**确认超时的说法（2026-11-21）。** 工具调用需要确认、但在时限内没人确认时（系统原因 `timeout` 或
+`*_timeout`，判据 `isPermissionConfirmationTimeoutReason`），模型收到的拒绝说明写明：没人在时限内确认、
+不是用户拒绝；不要自动重试同一个调用，改用不需要确认的方式，或告诉用户这一步需要用户确认。
+此前 Claude 只看到 `could not approve this tool call: timeout`，伙伴会把超时当成主人不同意。Codex exec/patch
+的原生结果可能仍显示用户拒绝；Cindy 已在同一轮向模型补充具体原因（上文的宿主反馈），本次改的是其中的超时说明。
+三个引擎共用 `PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE`：Claude 的工具结果与 Codex
+exec/patch 的同轮宿主反馈走 `formatPermissionDenial`，Pi 由桥接扩展按 `system-deny:<原因>` 解出同一句。
+只改文字，不改超时时长、判定和重试。**已知缺口**：Codex MCP 工具审批没有这条同轮反馈，超时时模型仍只看到
+`user rejected MCP tool call`（面向用户的超时诊断可见，不等于模型收到了原因）；补上需要为 MCP 拒绝新增一次 `turn/steer`，属于行为改动，未在本次处理。
 
 ### Auto 模式的同范围自动跟进
 

@@ -66,7 +66,6 @@ import { currentLedgerCurrency } from './ledgerCurrency.js';
 import {
   addCompatibleRegionalMoney,
   normalizeRegionalMoney,
-  toLedgerCurrency,
   USD_TO_CNY_FIXED_RATE,
   type MoneyCurrency,
   type RegionalMoney,
@@ -89,7 +88,7 @@ const MODEL_WINDOW_DAYS = 30;
 //    的聚合值，直接沿用会让升级后的首页继续显示按错币种算出的历史。整份作废重算。
 // v4:恢复 CN usage 的 CNY 账本口径，并让订阅 USD 估值按 6.7 投影到 CNY。
 // v6：重算每日展示投影，避免迁移前的 USD 历史继续沿用已归零的旧缓存。
-const DISK_CACHE_VERSION = 7;
+const DISK_CACHE_VERSION = 8;
 const DISK_CACHE_FILE = 'usage-history.json';
 /** 后台刷新完成后, renderer 的短轮询能拿到 fresh payload, 避免 stale 状态自循环。 */
 const MEMORY_FRESH_MS = 10_000;
@@ -102,11 +101,12 @@ export interface UsageHistoryDay {
 }
 
 function usageAgentKind(value: string): UsageHistoryModel['agentKind'] {
-  return value === 'codex' || value === 'pi' || value === 'media' || value === 'auxiliary' ? value : 'claude-code';
+  return value === 'codex' || value === 'pi' || value === 'acp' || value === 'media' || value === 'auxiliary'
+    ? value : 'claude-code';
 }
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp' | 'media' | 'auxiliary';
   model: string;
   /** SDK 实报美元 (Claude); Codex 恒 0。 */
   money: RegionalMoney;
@@ -124,7 +124,7 @@ export interface UsageHistoryModelDay {
   source?: string;
   providerId?: string;
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: UsageHistoryModel['agentKind'];
   model: string;
   /** 可比金额: Claude 实报 $; Codex 为价格表估算 (无价格 → 0, 只出现在图例 token 行)。 */
   money: RegionalMoney;
@@ -140,6 +140,7 @@ export interface UsageHistoryModelDay {
 }
 
 export interface UsageHistoryPayload {
+  currencies?: MoneyCurrency[];
   generatedAt: number;
   /** 本地时区今日 key — renderer 所有日期推算以此为锚。 */
   todayKey: string;
@@ -438,7 +439,7 @@ function optsKey(opts?: UsageHistoryReadOptions): string {
   // 'local' 沿用旧 key, 升级后首页与已有磁盘快照照常命中。
   const deviceSuffix = device === 'local' ? '' : `|device=${encodeURIComponent(device)}`;
   const taskSuffix = opts?.includeTasks ? '|tasks=1' : '';
-  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}${deviceSuffix}${taskSuffix}`;
+  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}${deviceSuffix}${taskSuffix}${opts?.currency ? '|currency=' + opts.currency : ''}`;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -480,6 +481,7 @@ function validateUsageHistoryPayload(value: unknown): UsageHistoryPayload | null
     todayKey: payload.todayKey,
     stale: Boolean(payload.stale),
     estimatesPending: Boolean(payload.estimatesPending),
+    currencies: payload.currencies,
     days: payload.days as UsageHistoryDay[],
     modelDaily: payload.modelDaily as UsageHistoryModelDay[],
     models: payload.models as UsageHistoryModel[],
@@ -568,6 +570,7 @@ function isLatestRefreshGeneration(expectedOptsKey: string, generation: number):
 }
 
 export interface UsageHistoryReadOptions {
+  currency?: MoneyCurrency;
   days?: number | 'all';
   /** Model/table aggregation window. `all` is used by Settings → Usage History. */
   modelDays?: number | 'all';
@@ -637,13 +640,6 @@ export async function readUsageHistoryWith(
   const modelWindowDays = normalizeWindowDays(opts?.modelDays, MODEL_WINDOW_DAYS);
   const todayKey = deps.todayKey();
 
-  // 每日展示统一到账本币种：USD→CNY 按既有固定汇率投影，不新增展示标记。
-  // XD 切换结算源后不会再切回 USD，不能把这些历史行永久显示为 0。
-  // 不支持的 CNY→USD 仍保持原有过滤规则；原始账本与 token 均不改动。
-  //
-  // 账本币种与写入侧同一事实源(currentLedgerCurrency)：由服务端按账号所属租户下发，
-  // 不保证等于发行区域。按区域取会把以 USD 结算的账号在 CN 构建上的每一行判成异币种、
-  // 整段归零成不计费。此投影仅服务用量展示，不回写任何金额。
   const [spendDayRows, , pricing] = await Promise.all([
     deps.getAllSpendDays(),
     // Gateway 报价只读内存或账号作用域内的磁盘快照，不发网络请求。必须等它完成，
@@ -651,11 +647,35 @@ export async function readUsageHistoryWith(
     deps.getGatewayModelPricing(),
     Promise.resolve(deps.getReferenceModelPricing()),
   ]);
-  // 必须在上面 pricing 恢复之后再读:hydrateFromDisk 会在磁盘缓存生效的同时回写账本币种,
-  // 而 prewarmModelPricing 与首页首次聚合是并发的。先读会拿到构建默认值,把该账号的日账与
-  // 模型行全部归零,还可能把这个错结果写进 usage-history 缓存。
-  const ledgerCurrency = currentLedgerCurrency();
-  // 零值也用账本币种:无消费日的 today/空聚合不能把展示单位翻回默认币种。
+  const heatmapCutoff = windowDays === 'all' ? null : shiftDayKey(todayKey, -(windowDays - 1));
+  const modelCutoff = modelWindowDays === 'all'
+    ? null
+    : shiftDayKey(todayKey, -(modelWindowDays - 1));
+  // 一次查询同时服务两个窗口: 热力图 tooltip 的每日 token (heatmap 窗口) 与
+  // 模型拆分聚合 (30 天窗口)。取更早的 cutoff (ISO day key 字符串可直接比较)。
+  const usageRowsSince = heatmapCutoff === null || modelCutoff === null
+    ? '0000-01-01'
+    : heatmapCutoff < modelCutoff
+      ? heatmapCutoff
+      : modelCutoff;
+  const rawModels = await deps.getModelUsageSince(usageRowsSince);
+  const priceOverrides = deps.getModelPriceOverridesSnapshot();
+  const available = new Set<MoneyCurrency>();
+  for (const row of spendDayRows) {
+    if (heatmapCutoff && row.day < heatmapCutoff && modelCutoff && row.day < modelCutoff) continue;
+    for (const money of row.monies) if (money.amount > 0) available.add(money.currency);
+  }
+  const pricedModels = rawModels.map(row => {
+    let money = row.money;
+    if (row.agentKind !== 'acp' && (!modelCutoff || row.day >= modelCutoff) && isSubscriptionUsageModel(row.model) && money.kind !== 'value-estimate' && money.amount === 0) {
+      const quote = getSubscriptionValuePriceFor(usageAgentKind(row.agentKind), displayModelName(row.model), pricing, row.day, priceOverrides);
+      money = computePriceQuoteTurnMoney(row, quote) ?? money;
+    }
+    if (money.amount > 0) available.add(money.currency);
+    return { ...row, money };
+  });
+  const currencies = [...available].sort();
+  const ledgerCurrency = opts?.currency ?? (currencies.length === 1 ? currencies[0] : currentLedgerCurrency());
   const zeroActual = (): RegionalMoney => ({
     amount: 0,
     currency: ledgerCurrency,
@@ -670,24 +690,20 @@ export async function readUsageHistoryWith(
     estimateReasons: ['subscription-value'],
   });
   const keepCompatibleMoney = (money: RegionalMoney): RegionalMoney => {
-    const projected = toLedgerCurrency(money, ledgerCurrency);
-    return projected.currency === ledgerCurrency
-      ? projected
-      : { ...projected, amount: 0, currency: ledgerCurrency };
+    return money.currency === ledgerCurrency ? money : { ...money, amount: 0, currency: ledgerCurrency };
   };
   const addOrZero = (
     values: RegionalMoney[],
     kind: 'actual-cost' | 'value-estimate' = 'actual-cost',
   ): RegionalMoney =>
     addCompatibleRegionalMoney(
-      values.map(value => toLedgerCurrency(value, ledgerCurrency))
-        .filter(value => value.currency === ledgerCurrency),
+      values.filter(value => value.currency === ledgerCurrency),
       ledgerCurrency,
     ) ?? (kind === 'actual-cost' ? zeroActual() : zeroEstimate());
   // 日账按币种拆开取回，折叠推迟到这里 —— 与上面等 pricing 是同一个理由：折叠依赖账本
   // 币种，而它要等报价快照恢复才确定。若在 getAllSpendDays 内部折叠，冷启动时会先按
   // 兜底币种把本账号那一行丢掉，等到这里再怎么等也拿不回来。
-  // 与 model 行使用同一展示换算，日总额、模型分段和小组件保持一致。
+  // 与 model 行选择同一币种，日总额、模型分段和小组件保持一致。
   const allDays = spendDayRows.map((row) => ({
     day: row.day,
     money: addOrZero(row.monies),
@@ -696,18 +712,7 @@ export async function readUsageHistoryWith(
     allDays.map((row) => [row.day, row.money.amount]),
   );
 
-  const heatmapCutoff = windowDays === 'all' ? null : shiftDayKey(todayKey, -(windowDays - 1));
-  const modelCutoff = modelWindowDays === 'all'
-    ? null
-    : shiftDayKey(todayKey, -(modelWindowDays - 1));
-  // 一次查询同时服务两个窗口: 热力图 tooltip 的每日 token (heatmap 窗口) 与
-  // 模型拆分聚合 (30 天窗口)。取更早的 cutoff (ISO day key 字符串可直接比较)。
-  const usageRowsSince = heatmapCutoff === null || modelCutoff === null
-    ? '0000-01-01'
-    : heatmapCutoff < modelCutoff
-      ? heatmapCutoff
-      : modelCutoff;
-  const allModelRows = (await deps.getModelUsageSince(usageRowsSince)).map((row) => ({
+  const allModelRows = pricedModels.map((row) => ({
     ...row,
     money: keepCompatibleMoney(row.money),
   }));
@@ -742,8 +747,8 @@ export async function readUsageHistoryWith(
   // pricing 在函数开头已与消费行并行取好(见那里的 race 注释)。
   // 覆盖记录也在这里读一次快照:缺价检查、模型聚合、每日明细三条遍历共用,
   // 避免历史重合并按 model-day 逐行 stat 覆盖文件。
-  const priceOverrides = deps.getModelPriceOverridesSnapshot();
   const hasMissingPendingSubscriptionPrice = modelRows.some((r) =>
+    r.agentKind !== 'acp' &&
     isSubscriptionUsageModel(r.model) &&
     r.money.kind !== 'value-estimate' &&
     !getSubscriptionValuePriceFor(
@@ -771,7 +776,7 @@ export async function readUsageHistoryWith(
     const agentKind = usageAgentKind(row.agentKind);
     // claude 订阅行同样带 #billing= 后缀, 展示名统一剥后缀; key 保留原始 model
     // (api / subscription 两个计费维度分行聚合)。
-    const model = displayModelName(row.model);
+    const model = agentKind === 'acp' ? row.model : displayModelName(row.model);
     const key = `${agentKind}\u0000${row.model}`;
     let agg = byKey.get(key);
     if (!agg) {
@@ -798,16 +803,7 @@ export async function readUsageHistoryWith(
     agg.cacheReadTokens += row.cacheReadTokens;
     agg.cacheCreateTokens += row.cacheCreateTokens;
     if (isSubscriptionUsageModel(row.model)) {
-      const estimate =
-        row.money.kind === 'value-estimate' && row.money.amount > 0
-          ? row.money
-          : row.money.kind !== 'value-estimate' && row.money.amount === 0
-            ? computePriceQuoteTurnMoney(
-                row,
-                getSubscriptionValuePriceFor(agentKind, model, pricing, row.day, priceOverrides),
-                ledgerCurrency,
-              )
-            : null;
+      const estimate = row.money.kind === 'value-estimate' ? row.money : null;
       if (estimate?.amount) {
         const estimates = subscriptionEstimatesByKey.get(key) ?? [];
         estimates.push(estimate);
@@ -829,19 +825,10 @@ export async function readUsageHistoryWith(
   // Claude 实报 $, Codex 行按价格表折算 (无价格 → 0, 该模型只出现在图例 token 行)。
   const modelDaily: UsageHistoryModelDay[] = modelRows.map((row) => {
     const agentKind = usageAgentKind(row.agentKind);
-    const model = displayModelName(row.model);
+    const model = agentKind === 'acp' ? row.model : displayModelName(row.model);
     const apiMoney = row.money.kind === 'actual-cost' ? row.money : zeroActual();
-    const subscriptionEstimateMoney = isSubscriptionUsageModel(row.model)
-      ? row.money.kind === 'value-estimate' && row.money.amount > 0
-        ? row.money
-        : row.money.kind !== 'value-estimate'
-          ? (computePriceQuoteTurnMoney(
-              row,
-              getSubscriptionValuePriceFor(agentKind, model, pricing, row.day, priceOverrides),
-              ledgerCurrency,
-            ) ?? zeroEstimate())
-          : zeroEstimate()
-      : zeroEstimate();
+    const subscriptionEstimateMoney = isSubscriptionUsageModel(row.model) && row.money.kind === 'value-estimate'
+      ? row.money : zeroEstimate();
     const money = apiMoney.amount > 0 ? apiMoney : subscriptionEstimateMoney;
     return {
       day: row.day,
@@ -932,6 +919,7 @@ export async function readUsageHistoryWith(
   return {
     generatedAt: Date.now(),
     todayKey,
+    currencies,
     estimatesPending,
     days,
     modelDaily,

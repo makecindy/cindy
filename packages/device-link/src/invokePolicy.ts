@@ -26,6 +26,7 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   'maker:get-plugin-engine-usage',
   'maker:list-available-agents',
   'maker:agent:status',
+  'maker:model-context-limit:get',
   'git-context:pr-refs:list',
   'git-context:pr-status',
   'git-context:mr-status',
@@ -239,6 +240,7 @@ export function resolveRemoteInvokeTimeoutMs(
 }
 
 const PEER_RESET_RETRYABLE_READ_CHANNELS = new Set([
+  'worktree:restore-status',
   'local-db:sessions:list',
   'local-db:sessions:get',
   'local-db:sessions:get-many',
