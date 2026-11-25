@@ -1521,10 +1521,13 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     if (!target) {
       reply = ui.agent.apiKeyMissing;
     } else {
+      const { row } = target;
       const context = permissionModeCommandContext(
-        target.row.id,
-        target.row.permissionMode,
-        runtime.runner.getPermissionModes(target.row.agentKind, { sessionId: target.row.id, providerId: target.row.providerId }),
+        row.id,
+        row.permissionMode,
+        await runtime.runner.getPermissionModes(row.agentKind, {
+          sessionId: row.id, providerId: row.providerId, agentDeviceId: row.agentDeviceId,
+        }),
       );
       const [, rawMode, rawConfirmation] = command.split(/\s+/);
       if (!rawMode) {
@@ -1535,7 +1538,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           reply = renderTextPermissionModePicker(ui, context);
         } else {
           const result = await runtime.runner.changePermissionMode({
-            sessionId: target.row.id,
+            sessionId: row.id,
             mode: mode.id,
             modes: context.modes,
             confirmedFullAccess: ['confirm', '确认'].includes(rawConfirmation?.toLowerCase()),

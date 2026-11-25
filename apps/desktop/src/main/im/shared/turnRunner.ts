@@ -121,7 +121,7 @@ import { transformXdtRefs } from '@cindy/im';
 import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
 import { hasBuiltinAgentKind } from '../../maker-host/engineKind';
-import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc';
+import { readImPluginEngine } from './pluginEngineCatalog';
 import { persistUserMessage } from '../messagePersistence';
 import { imAutoReviewReferences } from './autoReviewReferences';
 import { bindingStore } from '../binding';
@@ -708,9 +708,14 @@ export interface ImTurnRunner {
   /** Permission choices exposed by the session's concrete Agent implementation. */
   /**
    * The task's permission menu. A plugin-engine task (agentKind 'acp') offers its engine's own modes: the
-   * live session's (as negotiated), else the engine catalog of this computer, else Cindy's generic two.
+   * live session's negotiated modes, then its execution computer's catalog. Only local tasks use
+   * Cindy's generic modes when the engine's modes are unavailable.
    */
-  getPermissionModes(agentKind: EngineKind, task?: { sessionId?: string; providerId?: string | null }): PermissionModeDescriptor[];
+  getPermissionModes(agentKind: EngineKind, task: {
+    sessionId: string;
+    providerId?: string | null;
+    agentDeviceId?: string | null;
+  }): Promise<PermissionModeDescriptor[]>;
   changePermissionMode(args: {
     sessionId: string;
     mode: PermissionMode;
@@ -5129,17 +5134,22 @@ export function createTurnRunner(
     companionBotIdFor,
     rotateCompanionLane,
     peekCompanionRouteTarget,
-    getPermissionModes: (agentKind, task) => {
+    getPermissionModes: async (agentKind, task) => {
       if (agentKind !== 'acp') return getMaker().getCapabilities(agentKind).permissionModes;
-      const live = task?.sessionId ? getMakerSessionById(task.sessionId) : undefined;
-      if (live?.agentKind === 'acp' && live.capabilities.permissionModes.length) return live.capabilities.permissionModes;
-      const engine = task?.providerId
-        ? listPluginEngineViews().find((view) => view.providerId === task.providerId)
-        : undefined;
-      return engine?.permissionModes.length
-        ? engine.permissionModes.map((mode) => ({ id: mode.id as PermissionMode, displayName: mode.displayName,
-          ...(mode.description ? { description: mode.description } : {}) }))
-        : getMaker().getCapabilities('acp').permissionModes;
+      const live = getMakerSessionById(task.sessionId);
+      if (live?.agentKind === 'acp' && live.agentDeviceId === (task.agentDeviceId ?? null)
+        && live.capabilities.permissionModes.length) {
+        return live.capabilities.permissionModes;
+      }
+      const engine = await readImPluginEngine(task);
+      if (engine?.permissionModes.length) {
+        return engine.permissionModes.map((mode) => ({
+          id: mode.id as PermissionMode,
+          displayName: mode.displayName,
+          ...(mode.description ? { description: mode.description } : {}),
+        }));
+      }
+      return task.agentDeviceId ? [] : getMaker().getCapabilities('acp').permissionModes;
     },
     changePermissionMode: (args) =>
       changeSessionPermissionMode({

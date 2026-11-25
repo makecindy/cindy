@@ -105,7 +105,7 @@ function makeTurnRunner(overrides: Partial<ImTurnRunner> = {}): ImTurnRunner {
     disposeAllSessions: vi.fn(),
     disposeOneSession: vi.fn(),
     getMakerSessionById: vi.fn(() => null),
-    getPermissionModes: vi.fn(() => [
+    getPermissionModes: vi.fn(async () => [
       { id: 'auto', displayName: 'Auto', description: 'Safe default' },
     ]),
     changePermissionMode: vi.fn(),
@@ -667,7 +667,7 @@ describe('IM slash commands', () => {
       label: 'Full Access',
     }));
     const turnRunner = makeTurnRunner({
-      getPermissionModes: vi.fn(() => [
+      getPermissionModes: vi.fn(async () => [
         { id: 'auto' as const, displayName: 'Auto' },
         { id: 'bypassPermissions' as const, displayName: 'Full Access' },
       ]),

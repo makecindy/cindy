@@ -13,7 +13,7 @@
 
 import { imText } from './imText';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
-import { readDeviceProviderViews, readRemotePluginEngines } from '../../remote-agent/controller/deviceCatalog';
+import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../../maker-host/model-visibility-mirror';
 import { getSessionProvider } from '../../maker-host/session-provider-store';
 import {
@@ -24,7 +24,7 @@ import {
   type ProviderSection,
   type SectionModel,
 } from '@cindy/model-providers';
-import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc';
+import { readImPluginEngine } from './pluginEngineCatalog';
 import type { PluginEngineView } from '../../../shared/pluginEngines';
 import { createLogger } from '../../logger';
 
@@ -382,14 +382,7 @@ export function createSlashHandlers(
         if (row.agentKind === 'acp') {
           // 插件引擎任务(docs/plans/acp-plugin-bridge.md)：列它自己的引擎提供的模型，同一引擎内切换(与应用内
           // 选择器同一规则)。卡片按钮带引擎的 providerId；换到别的引擎只在应用里做(那要交接)。
-          // 引擎在同账号另一台电脑时读那台开放的目录(与内置引擎按 agentDeviceId 读远端目录同理)。
-          const engines = row.agentDeviceId
-            ? await readRemotePluginEngines(row.agentDeviceId).catch((err: unknown) => {
-                log.warn(`/model remote plugin engines unavailable: ${err instanceof Error ? err.message : String(err)}`);
-                return [] as PluginEngineView[];
-              })
-            : listPluginEngineViews();
-          const engine = engines.find((view) => view.providerId === row.providerId);
+          const engine = await readImPluginEngine(row);
           const section = engine ? pluginEngineModelSection(engine) : null;
           if (!section) {
             await safeSendText(ctx, imText('imBot.text.shared.slash.pluginEngineModelsUnavailable'));
@@ -693,7 +686,9 @@ export function createSlashHandlers(
         const context = permissionModeCommandContext(
           row.id,
           row.permissionMode,
-          turnRunner.getPermissionModes(row.agentKind, { sessionId: row.id, providerId: row.providerId }),
+          await turnRunner.getPermissionModes(row.agentKind, {
+            sessionId: row.id, providerId: row.providerId, agentDeviceId: row.agentDeviceId,
+          }),
         );
         if (!richIm) {
           const requested = commandArgs[0];

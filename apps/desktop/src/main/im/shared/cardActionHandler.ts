@@ -538,16 +538,15 @@ export function createCardActionHandler(
     const modeLabel = String(event.payload.modeLabel ?? mode);
     // A plugin-engine task validates against its own engine's modes (docs/plans/acp-plugin-bridge.md);
     // the task row, not the card payload, decides which engine that is.
-    const pluginEngineTask = event.payload.agentKind === 'acp'
-      || (await getMaker().getSessionMeta?.(sessionId).catch(() => null))?.agentKind === 'acp';
-    const agentKind: AgentKind =
-      event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
-    const pluginEngineProviderId = pluginEngineTask
-      ? getSessionProvider(sessionId) ?? (await readModelRouteSnapshot(sessionId).catch(() => null))?.providerId ?? null
-      : null;
-    const permissionModes = pluginEngineTask
-      ? turnRunner.getPermissionModes('acp', { sessionId, providerId: pluginEngineProviderId })
-      : getMaker().getCapabilities(agentKind).permissionModes;
+    const task = await getMaker().getSessionMeta?.(sessionId).catch(() => null);
+    const agentKind = task?.agentKind === 'acp' || event.payload.agentKind === 'acp'
+      ? 'acp'
+      : event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
+    const permissionModes = task?.agentKind === 'acp'
+      ? await turnRunner.getPermissionModes('acp', {
+        sessionId, providerId: task.providerId, agentDeviceId: task.agentDeviceId,
+      })
+      : agentKind === 'acp' ? [] : getMaker().getCapabilities(agentKind).permissionModes;
 
     if (event.buttonId === 'permmode:confirm-full-access' && mode !== 'bypassPermissions') {
       log.warn(`permmode:confirm-full-access received non-full mode=${mode} — ignoring`);

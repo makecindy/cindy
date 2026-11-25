@@ -58,8 +58,15 @@ const mocks = vi.hoisted(() => ({
   onSilentStopSettled: vi.fn(() => vi.fn()),
   rejectAllPending: vi.fn(() => []),
   dbSelect: vi.fn(),
+  readRemotePluginEngines: vi.fn(),
+  listPluginEngineViews: vi.fn(),
 }));
 
+vi.mock('../../../remote-agent/controller/deviceCatalog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../remote-agent/controller/deviceCatalog')>()),
+  readRemotePluginEngines: mocks.readRemotePluginEngines,
+}));
+vi.mock('../../../maker-ipc/pluginEnginesIpc', () => ({ listPluginEngineViews: mocks.listPluginEngineViews }));
 vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
 vi.mock('../../../maker-host/createDesktopProviderService', () => ({
@@ -322,6 +329,27 @@ async function runTurn(userId: string, text = 'hello'): Promise<void> {
 // 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
 beforeEach(() => setMainLocale('zh-CN'));
 afterEach(() => setMainLocale('en'));
+
+// Unit, #12820: the permission picker and its selection validator use the runner's modes.
+// Existing companion routing tests exercise dispatch, never a cold ACP task's settings.
+describe('turnRunner: plugin engine permission modes', () => {
+  it.each([true, false])('uses the execution computer for a cold task (reachable: %s)', async (reachable) => {
+    const providerId = 'acp-plugin:test:engine';
+    const remoteMode = { id: 'plan', displayName: 'Plan' };
+    mocks.listPluginEngineViews.mockReturnValue([{ providerId, permissionModes: [{ id: 'ask', displayName: 'Local ask' }] }]);
+    if (reachable) {
+      mocks.readRemotePluginEngines.mockResolvedValueOnce([{ providerId, permissionModes: [remoteMode] }]);
+    } else {
+      mocks.readRemotePluginEngines.mockRejectedValueOnce(new Error('offline'));
+    }
+
+    const modes = await runner.getPermissionModes('acp', { sessionId: 'cold', providerId, agentDeviceId: 'other-computer' });
+
+    expect(modes).toEqual(reachable ? [remoteMode] : []);
+    expect(mocks.readRemotePluginEngines).toHaveBeenCalledExactlyOnceWith('other-computer');
+    expect(mocks.listPluginEngineViews).not.toHaveBeenCalled();
+  });
+});
 
 describe('turnRunner: connection handed to a companion bot', () => {
   // Tier 1: one busy owner DM shares a task with Desktop; a fifth chat must still defer.
