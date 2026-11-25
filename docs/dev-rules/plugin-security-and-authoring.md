@@ -414,6 +414,16 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 订阅发现异常时释放当前代次的原始焦点与主任务去重记录，允许同一焦点重试和切回通知；
 迟到的旧代次失败不得清除新焦点。任务资格暂不可用时仍只释放原始焦点，保留同 Lead 去重。
 
+Desktop 电子脑可用 `cindy.sessionStates({ sessionIds })`（`session-state-request`）补查生命周期。
+仅当前账号下已安装、已启用、整体安装批准有效且声明 `session` 的实例可查；回包前复核
+owner、电子脑和安装批准代次。不新增权限组或批准记录，不改变事件投递。按
+`did-session-created`／`did-session-archived` 的会话资格筛选，再排除远程执行任务；只查本机库。
+每请求 1–100 个 id，仅做一次按 id 批量读取，不写库或轮询。回包每项仅 `sessionId`、
+`status`（`active`／`archived`／`deleted`／`out_of_scope`）；范围外与不存在不可区分。
+失败不返回会话数据，错误码为 `PERMISSION_DENIED`、`INVALID_REQUEST`、`HOST_NOT_READY`、
+`INTERNAL`。旧版 Desktop 不暴露该方法；方法存在但调用失败不表示不支持。
+示例见[作者手册 §4.6](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-event-subscriptions.md#查询会话状态desktop)。
+
 安装事实变化触发插件应用、浏览器扩展、未读与 Skill 对账。语言、OAuth 等展示变化
 只更新相关展示投影；语言变化还须更新插件 App 注册表中的本地化名称和工具说明，
 保证随后生成的卡片使用新语言，但不触发浏览器扩展、未读、Skill 或订阅索引对账。

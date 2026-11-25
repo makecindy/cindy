@@ -30,6 +30,42 @@
 首次连接先分页读取所需历史；事件顺序号只属于当次宿主运行，不能用作跨重启游标。
 停用、卸载、移除声明、更新安装或账号切换后，旧缓冲不会继续投递给新安装或新账号。
 
+### 查询会话状态（Desktop）
+
+重启、错过归档事件或收到 `dropped` 后，电子脑可用 `cindy.sessionStates({ sessionIds })`
+对账，对应管子消息 `{ type: 'session-state-request', sessionIds }`。插件须已安装、已启用、
+整体安装批准有效，且 `subscribe.topics` 包含 `session`。不需要 `control` 或 `history`，
+也没有额外确认。
+
+- 每次传 1–100 个 id；每个 id 由 1–64 个 ASCII 字母、数字或连字符组成。任一项不合法就拒绝整批。
+- 成功返回 `{ ok: true, sessions: [{ sessionId, status }] }`。顺序和重复项与请求一致，每项只有这两个键。
+- `active` 表示在用，`archived` 表示已归档，`deleted` 表示本机仍留有已删除记录。
+  未知 id（包括已清除的删除记录）与范围外统一返回 `out_of_scope`，不能据此推断是否删除。
+- 只查询当前账号本机、符合 `did-session-created`／`did-session-archived` 资格的用户会话。
+  不查询协同会话（含 Orca Lead 和 Worker）、后台自动化或远程执行任务，也不向其他设备取数。
+- 失败返回 `{ ok: false, errorCode, message }`，没有 `sessions`。错误码：
+  `PERMISSION_DENIED`（未获资格或查询期间被撤权）、`INVALID_REQUEST`（参数无效）、
+  `HOST_NOT_READY`（账号或数据库尚未就绪／在途上下文已切换）、`INTERNAL`（状态读取失败）。
+  调用通道拒绝、传输失败也不是会话状态。
+
+旧版 Desktop 没有 `cindy.sessionStates`，调用前检查该方法。方法存在时，不能把拒绝或查询
+失败当成旧版，也不能把失败当成 `active`。该接口仅支持 Desktop，独立 Node Host 未接入。
+
+```js
+async function reconcileSessionStates(sessionIds) {
+  if (typeof cindy.sessionStates !== 'function') return { outcome: 'unsupported' };
+  try {
+    const result = await cindy.sessionStates({ sessionIds });
+    if (!result.ok) return { outcome: 'failed', errorCode: result.errorCode };
+    return { outcome: 'ok', sessions: result.sessions };
+  } catch {
+    return { outcome: 'failed' };
+  }
+}
+```
+
+### 元数据旁听与消息钩子
+
 以下为原有元数据旁听与消息钩子，行为保持：一种事件模型,两个类型:
 - **监听(`did-`)** = 纯数据通知,事后告诉你发生了什么,你改变不了流程——适合做
   统计面板、成本记账、工作流水、"跟随用户正在看的会话"联动等纯观察型能力;
