@@ -1,17 +1,35 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { CredentialStoreHelpDialog } from '@/components/auth/CredentialStoreHelpDialog';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import { useResendCountdown } from '@/components/login/useResendCountdown';
-import type { DesktopContactChangeType } from '../../../shared/authIpc';
+import type { DesktopContactChangeResult, DesktopContactChangeType } from '../../../shared/authIpc';
 import { generalSettings } from './GeneralSettings.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 
 type Step = 'intro' | 'current-code' | 'new-value' | 'new-code';
+
+/** 发码(发送 / 重新发送)与提交验证码(下一步 / 确认更换)分开限流。 */
+type Action = 'send' | 'submit';
+
+/** 服务端 Retry-After 冷却:到期前不再发起同类请求。 */
+interface Cooldown {
+  action: Action;
+  until: number;
+}
+
+/** 冷却到期时刻:同一天只显示时间,跨天显示日期和时间。 */
+function formatRetryTime(until: number, locale: string): string {
+  const date = new Date(until);
+  return date.toDateString() === new Date().toDateString()
+    ? date.toLocaleTimeString(locale)
+    : date.toLocaleString(locale);
+}
 
 /** 这些错误说明换绑票据已失效,只能从验证当前联系方式重新开始。 */
 const RESTART_CODES = new Set(['CONTACT_CHANGE_TICKET_INVALID', 'AUTH_FLOW_SUPERSEDED']);
@@ -34,7 +52,7 @@ const NEW_VALUE_CODES = new Set([
  * 票据、凭据与网络都在 Electron main,本组件只持有展示状态与用户输入。
  */
 export function ContactChangeAction() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const setting = useSettingDefinition(generalSettings.contactChange);
   const { user, mode } = useAuth();
   const currentUserId = user?.id ?? null;
@@ -46,10 +64,27 @@ export function ContactChangeAction() {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [cooldown, setCooldown] = useState<Cooldown | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [credentialHelpOpen, setCredentialHelpOpen] = useState(false);
   const busyRef = useRef(false);
   const countdown = useResendCountdown(open && (step === 'current-code' || step === 'new-code'));
 
+  // 冷却期间每秒刷新剩余时间,到期后自动解除(不发任何请求)。
   useEffect(() => {
+    if (!cooldown) return;
+    const tick = () => {
+      const ts = Date.now();
+      setNow(ts);
+      if (ts >= cooldown.until) setCooldown(null);
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [cooldown]);
+
+  useEffect(() => {
+    setCooldown(null);
     if (mode !== 'cloud' || !currentUserId) {
       setType(null);
       return;
@@ -84,9 +119,14 @@ export function ContactChangeAction() {
     void window.electronAPI.authCancelContactChange().catch(() => undefined);
   };
 
-  /** 串行执行一步;失败时展示错误码,票据失效则回到第一步,其余失败交给 onFailure。 */
+  /**
+   * 串行执行一步;失败时展示错误码,票据失效则回到第一步,其余失败交给 onFailure。
+   * 本机凭证存储不可用时关闭弹窗并打开凭证存储帮助;服务端给出 Retry-After 时,
+   * 冷却结束前同类按钮保持禁用。
+   */
   const run = async <T,>(
-    operation: () => Promise<{ success: true; value: T } | { success: false; code: string }>,
+    action: Action,
+    operation: () => Promise<DesktopContactChangeResult<T>>,
     onSuccess: (value: T) => void,
     onFailure?: (code: string) => void,
   ) => {
@@ -99,6 +139,15 @@ export function ContactChangeAction() {
       if (result.success) {
         onSuccess(result.value);
         return;
+      }
+      if (result.code === 'CREDENTIAL_STORE_UNAVAILABLE') {
+        close();
+        setCredentialHelpOpen(true);
+        return;
+      }
+      if (typeof result.retryAt === 'number' && result.retryAt > Date.now()) {
+        setCooldown({ action, until: result.retryAt });
+        setNow(Date.now());
       }
       setErrorCode(result.code);
       if (RESTART_CODES.has(result.code)) {
@@ -117,6 +166,7 @@ export function ContactChangeAction() {
 
   const sendCurrentCode = () =>
     run(
+      'send',
       () => window.electronAPI.authRequestContactChangeCurrentCode(),
       (sent) => {
         setMaskedTarget(sent.maskedTarget);
@@ -128,6 +178,7 @@ export function ContactChangeAction() {
 
   const verifyCurrentCode = () =>
     run(
+      'submit',
       () => window.electronAPI.authVerifyContactChangeCurrentCode(code),
       () => {
         setCode('');
@@ -137,6 +188,7 @@ export function ContactChangeAction() {
 
   const sendNewCode = () =>
     run(
+      'send',
       () => window.electronAPI.authRequestContactChangeNewCode(newValue),
       () => {
         setCode('');
@@ -147,6 +199,7 @@ export function ContactChangeAction() {
 
   const confirmChange = () =>
     run(
+      'submit',
       () => window.electronAPI.authConfirmContactChange({ value: newValue, code }),
       (completed) => {
         toast.success(t(`settings.contactChange.${type}.success`, { target: completed.maskedValue }));
@@ -166,12 +219,17 @@ export function ContactChangeAction() {
     else void confirmChange();
   };
 
+  const isCodeStep = step === 'current-code' || step === 'new-code';
+  const waitSeconds = (action: Action) =>
+    cooldown && cooldown.action === action && cooldown.until > now
+      ? Math.ceil((cooldown.until - now) / 1000)
+      : 0;
+  const confirmWait = waitSeconds(isCodeStep ? 'submit' : 'send');
+  const resendWait = Math.max(countdown.remaining, waitSeconds('send'));
+
   const confirmDisabled =
-    step === 'current-code' || step === 'new-code'
-      ? code.length !== 6
-      : step === 'new-value'
-        ? newValue.trim().length === 0
-        : false;
+    confirmWait > 0 ||
+    (isCodeStep ? code.length !== 6 : step === 'new-value' ? newValue.trim().length === 0 : false);
 
   const title =
     step === 'new-value' || step === 'new-code'
@@ -194,11 +252,21 @@ export function ContactChangeAction() {
         ? t('settings.contactChange.next')
         : t('settings.contactChange.confirm');
 
-  const errorMessage = errorCode
-    ? t(`settings.contactChange.errors.${errorCode}`, {
-        defaultValue: t('settings.contactChange.errors.fallback'),
-      })
-    : null;
+  // 冷却中的按钮旁说明何时可重试;重新打开弹窗时也能看到为什么按钮不可用。
+  const visibleCooldownUntil =
+    cooldown && (confirmWait > 0 || (isCodeStep && errorCode === 'RATE_LIMITED' && resendWait > 0))
+      ? cooldown.until
+      : null;
+  const errorMessage =
+    visibleCooldownUntil !== null
+      ? t('settings.contactChange.errors.RATE_LIMITED_UNTIL', {
+          time: formatRetryTime(visibleCooldownUntil, i18n.language),
+        })
+      : errorCode
+        ? t(`settings.contactChange.errors.${errorCode}`, {
+            defaultValue: t('settings.contactChange.errors.fallback'),
+          })
+        : null;
 
   const resend = step === 'current-code' ? sendCurrentCode : sendNewCode;
 
@@ -277,11 +345,11 @@ export function ContactChangeAction() {
                   type="button"
                   tone="quiet"
                   className="self-start"
-                  disabled={busy || countdown.remaining > 0}
+                  disabled={busy || resendWait > 0}
                   onClick={() => void resend()}
                 >
-                  {countdown.remaining > 0
-                    ? t('settings.contactChange.resendIn', { seconds: countdown.remaining })
+                  {resendWait > 0
+                    ? t('settings.contactChange.resendIn', { seconds: resendWait })
                     : t('settings.contactChange.resend')}
                 </Button>
               </>
@@ -294,6 +362,7 @@ export function ContactChangeAction() {
           </div>
         }
       />
+      <CredentialStoreHelpDialog open={credentialHelpOpen} onOpenChange={setCredentialHelpOpen} />
     </>
   );
 }

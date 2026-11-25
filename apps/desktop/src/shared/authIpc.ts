@@ -174,8 +174,13 @@ export interface DesktopContactChangeCompleted {
   maskedValue: string;
 }
 
+/**
+ * 换绑一步的结果。失败时 `retryAt` 是服务端 Retry-After 给出的重试时刻(epoch ms),
+ * 只在仍处于冷却期时出现;冷却结束前 renderer 不再发起同类请求。
+ */
 export type DesktopContactChangeResult<T> =
-  { success: true; value: T } | { success: false; code: string };
+  | { success: true; value: T }
+  | { success: false; code: string; retryAt?: number };
 
 const MAX_CONTACT_VALUE_LENGTH = 254;
 

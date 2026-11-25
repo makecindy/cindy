@@ -2737,6 +2737,7 @@
         "CONTACT_CHANGE_UNAVAILABLE": "이 계정은 여기에서 로그인 방법을 변경할 수 없습니다.",
         "CONTACT_CHANGE_BUSY": "이전 단계를 아직 처리하고 있습니다.",
         "RATE_LIMITED": "요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
+        "RATE_LIMITED_UNTIL": "요청이 너무 많습니다. {{time}}(현지 시간) 이후에 다시 시도하세요.",
         "INVALID_PARAMS": "형식이 올바르지 않습니다. 확인 후 다시 시도하세요.",
         "EMAIL_DOMAIN_BLOCKED": "이 이메일은 사용할 수 없습니다. 다른 이메일을 사용하세요.",
         "EMAIL_PATTERN_BLOCKED": "이 이메일은 사용할 수 없습니다. 다른 이메일을 사용하세요.",

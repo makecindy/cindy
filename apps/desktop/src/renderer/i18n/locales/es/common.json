@@ -2805,6 +2805,7 @@
         "CONTACT_CHANGE_UNAVAILABLE": "Esta cuenta no puede cambiar su método de inicio de sesión aquí.",
         "CONTACT_CHANGE_BUSY": "El paso anterior aún se está procesando.",
         "RATE_LIMITED": "Demasiados intentos. Espera un momento y vuelve a intentarlo.",
+        "RATE_LIMITED_UNTIL": "Demasiados intentos. Vuelve a intentarlo después de las {{time}} (hora local).",
         "INVALID_PARAMS": "El formato no es válido. Revísalo y vuelve a intentarlo.",
         "EMAIL_DOMAIN_BLOCKED": "Este correo no se puede usar. Prueba con otro.",
         "EMAIL_PATTERN_BLOCKED": "Este correo no se puede usar. Prueba con otro.",

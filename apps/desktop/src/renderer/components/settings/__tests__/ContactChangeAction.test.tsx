@@ -5,11 +5,12 @@
  *   main 收到的验证码与新联系方式。
  * - 规则依据:换绑必须先验当前联系方式再验新联系方式;票据失效要回到第一步。
  * - 现有覆盖缺口:新组件,无相邻测试。
- * - 最小失败输入:确认时 main 返回 CONTACT_CHANGE_TICKET_INVALID。
+ * - 最小失败输入:确认时 main 返回 CONTACT_CHANGE_TICKET_INVALID;发码返回带 retryAt 的
+ *   RATE_LIMITED;发码返回 CREDENTIAL_STORE_UNAVAILABLE。
  * - tier:unit(jsdom,IPC 以内存 stub 代替)。
  * - 实测耗时:单独运行约 2 秒。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({
@@ -21,6 +22,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
       options?.target ? `${key}:${String(options.target)}` : key,
+    i18n: { language: 'zh-CN' },
   }),
 }));
 
@@ -183,5 +185,53 @@ describe('ContactChangeAction', () => {
     expect(api.authVerifyContactChangeCurrentCode).toHaveBeenCalledTimes(1);
     expect(api.authRequestContactChangeNewCode).toHaveBeenLastCalledWith('13700007777');
     expect(api.authConfirmContactChange).toHaveBeenLastCalledWith({ value: '13700007777', code: '112233' });
+  });
+
+  it('sends the user to credential-store help when the saved sign-in cannot be read', async () => {
+    api.authRequestContactChangeCurrentCode.mockResolvedValue({
+      success: false,
+      code: 'CREDENTIAL_STORE_UNAVAILABLE',
+    });
+    render(<ContactChangeAction />);
+    fireEvent.click(await screen.findByText('settings.contactChange.phone.change'));
+    fireEvent.click(screen.getByText('settings.contactChange.sendCode'));
+
+    expect(await screen.findByRole('dialog', { name: 'credentialStore.dialog.title' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'settings.contactChange.phone.verifyTitle' })).toBeNull();
+    expect(api.authCancelContactChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps sending disabled until the server cooldown ends, even after reopening', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['Date', 'setInterval', 'clearInterval'] });
+    try {
+      api.authRequestContactChangeCurrentCode.mockResolvedValueOnce({
+        success: false,
+        code: 'RATE_LIMITED',
+        retryAt: Date.now() + 60_000,
+      });
+      render(<ContactChangeAction />);
+      fireEvent.click(await screen.findByText('settings.contactChange.phone.change'));
+      fireEvent.click(screen.getByText('settings.contactChange.sendCode'));
+      expect(await screen.findByText('settings.contactChange.errors.RATE_LIMITED_UNTIL')).toBeTruthy();
+
+      const send = () => screen.getByText('settings.contactChange.sendCode') as HTMLButtonElement;
+      expect(send().disabled).toBe(true);
+      fireEvent.click(send());
+      // 重新点入口(草稿与错误提示被重置)后冷却仍在,并说明原因
+      fireEvent.click(screen.getByText('settings.contactChange.phone.change'));
+      expect(send().disabled).toBe(true);
+      expect(screen.getByText('settings.contactChange.errors.RATE_LIMITED_UNTIL')).toBeTruthy();
+      expect(api.authRequestContactChangeCurrentCode).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        vi.advanceTimersByTime(61_000);
+      });
+      await waitFor(() => expect(send().disabled).toBe(false));
+      fireEvent.click(send());
+      expect(await screen.findByText('settings.contactChange.codeSent:+8613****55')).toBeTruthy();
+      expect(api.authRequestContactChangeCurrentCode).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

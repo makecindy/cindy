@@ -2767,6 +2767,7 @@
         "CONTACT_CHANGE_UNAVAILABLE": "Für dieses Konto lässt sich die Anmeldemethode hier nicht ändern.",
         "CONTACT_CHANGE_BUSY": "Der vorherige Schritt wird noch verarbeitet.",
         "RATE_LIMITED": "Zu viele Versuche. Warte kurz und versuche es erneut.",
+        "RATE_LIMITED_UNTIL": "Zu viele Versuche. Versuche es nach {{time}} (Ortszeit) erneut.",
         "INVALID_PARAMS": "Das Format ist ungültig. Prüfe die Eingabe und versuche es erneut.",
         "EMAIL_DOMAIN_BLOCKED": "Diese E-Mail-Adresse kann nicht verwendet werden. Versuche eine andere.",
         "EMAIL_PATTERN_BLOCKED": "Diese E-Mail-Adresse kann nicht verwendet werden. Versuche eine andere.",

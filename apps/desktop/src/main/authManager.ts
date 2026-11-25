@@ -4733,15 +4733,23 @@ function commitAccountDeletionConfirmation(
   return status;
 }
 
-/** Run an authenticated auth-client request through the terminal auth boundary. */
-async function runProtectedAuthRequest<T>(request: () => Promise<T>): Promise<T> {
+/**
+ * Run an authenticated auth-client request through the terminal auth boundary.
+ * `ownsCurrentSession` is checked when the rejection arrives: a request that
+ * started under another sign-in must not tear down the account that is current now.
+ */
+async function runProtectedAuthRequest<T>(
+  request: () => Promise<T>,
+  ownsCurrentSession: () => boolean = () => true,
+): Promise<T> {
   try {
     return await request();
   } catch (error) {
     if (
       error instanceof AuthApiError &&
       error.statusCode === 401 &&
-      error.code === 'ACCOUNT_UNAVAILABLE'
+      error.code === 'ACCOUNT_UNAVAILABLE' &&
+      ownsCurrentSession()
     ) {
       void invalidateSession('account-unavailable');
     }
@@ -5064,9 +5072,15 @@ export function createContactChangeAuthClient(realm: AuthRegion): CindyAuthClien
   return createAuthClient(realm);
 }
 
-/** 受鉴权边界保护的 auth 请求:账号已不可用时让本地会话失效。 */
-export function runProtectedAccountRequest<T>(request: () => Promise<T>): Promise<T> {
-  return runProtectedAuthRequest(request);
+/**
+ * 受鉴权边界保护的换绑请求:账号已不可用时让本地会话失效。只在发起请求的登录态仍是
+ * 当前登录态时才失效——旧账号的迟到 401 不能登出用户之后切换到的账号。
+ */
+export function runProtectedAccountRequest<T>(
+  session: { realm: AuthRegion; passportId: string; epoch: number },
+  request: () => Promise<T>,
+): Promise<T> {
+  return runProtectedAuthRequest(request, () => isContactChangeSessionCurrent(session));
 }
 
 /**

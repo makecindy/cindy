@@ -2737,6 +2737,7 @@
         "CONTACT_CHANGE_UNAVAILABLE": "此帳號不可於此更換登入方式",
         "CONTACT_CHANGE_BUSY": "前一步猶在處理",
         "RATE_LIMITED": "操作過頻，請稍後再試。",
+        "RATE_LIMITED_UNTIL": "操作過頻，請於 {{time}}（本機時間）之後再試。",
         "INVALID_PARAMS": "格式不合，請檢查後再試",
         "EMAIL_DOMAIN_BLOCKED": "此電子郵件暫不可用，請易之",
         "EMAIL_PATTERN_BLOCKED": "此電子郵件暫不可用，請易之",

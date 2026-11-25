@@ -2767,6 +2767,7 @@
         "CONTACT_CHANGE_UNAVAILABLE": "This account can't change its sign-in method here.",
         "CONTACT_CHANGE_BUSY": "The previous step is still in progress.",
         "RATE_LIMITED": "Too many attempts. Wait a moment and try again.",
+        "RATE_LIMITED_UNTIL": "Too many attempts. Try again after {{time}} (local time).",
         "INVALID_PARAMS": "The format is invalid. Check it and try again.",
         "EMAIL_DOMAIN_BLOCKED": "This email can't be used. Try another one.",
         "EMAIL_PATTERN_BLOCKED": "This email can't be used. Try another one.",

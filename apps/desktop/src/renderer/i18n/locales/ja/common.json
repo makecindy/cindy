@@ -2737,6 +2737,7 @@
         "CONTACT_CHANGE_UNAVAILABLE": "このアカウントではここでログイン方法を変更できません。",
         "CONTACT_CHANGE_BUSY": "前の手順をまだ処理しています。",
         "RATE_LIMITED": "操作が多すぎます。しばらく待ってから再試行してください。",
+        "RATE_LIMITED_UNTIL": "操作が多すぎます。{{time}}（現地時間）以降に再試行してください。",
         "INVALID_PARAMS": "形式が正しくありません。確認して再試行してください。",
         "EMAIL_DOMAIN_BLOCKED": "このメールアドレスは使用できません。別のアドレスをお試しください。",
         "EMAIL_PATTERN_BLOCKED": "このメールアドレスは使用できません。別のアドレスをお試しください。",
