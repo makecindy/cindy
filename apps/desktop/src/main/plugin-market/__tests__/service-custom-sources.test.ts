@@ -180,6 +180,7 @@ const TEST_INSTALL_CONTEXT: PluginMarketInstallContext = {
 };
 import { MarketSourceManager } from '../sources';
 import { MarketSourceStore } from '../sources/store';
+import { confirmedTaskCapability, type GhostInstallConsentDecision } from '../../cindy-brain/ghostInstallConsent';
 import { createMarketSourceIdOf, SOURCE_ID_KEY_DIR } from '../sources/sourceId';
 import type { PluginMarketApi } from '../api';
 
@@ -2747,6 +2748,91 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       }, TEST_INSTALL_CONTEXT),
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'server-plugin' } } });
     expect(h.api.download).toHaveBeenCalled();
+  });
+
+  /* 测试价值（PR #12731 维护者评审 6055952481：显式跨市场替换归档了旧批准，新实例却漏授权）
+   * - 生产入口与可观察结果：PluginMarketService.install（allowSourceReplacement）的确认内容、交给运行时的
+   *   sourceChanged 与确认结论；用运行时实际调用的授予函数（confirmedTaskCapability）对同一结论求授予。
+   * - 缺口：跨路由替换时确认按旧实例算差异（added: []），提交却按换源归档、不继承旧批准；A、B 声明同样的任务能力
+   *   时，确认不展示、提交也不授予。
+   * - 最小失败输入：A、B 都声明 agent.tasks；自定义 A → 自定义 B、自定义 → 服务端市场各一次显式替换。
+   * - tier：unit（临时目录，运行时替身；授予函数为真实实现）。
+   */
+  const TASKS = { agent: { tasks: true } };
+  function installedWithTasks(root: string, id: string) {
+    const dir = path.join(root, 'installed', id);
+    fs.mkdirSync(dir, { recursive: true });
+    const manifest = ghostManifest(id, '1.0.0', TASKS);
+    fs.writeFileSync(path.join(dir, 'ghost.json'), JSON.stringify(manifest));
+    return { manifest, dir, enabled: true };
+  }
+  it('confirms and grants the full permissions when explicitly replacing one custom market with another', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dirA = writeLocalMarket(root, 'team-a', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const dirB = writeLocalMarket(root, 'team-b', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    for (const dir of [dirA, dirB]) {
+      fs.writeFileSync(path.join(dir, 'plugins', 'alpha', 'ghost.json'), JSON.stringify(ghostManifest('alpha', '1.0.0', TASKS)));
+    }
+    const h = harness([], [{ name: 'team-a', dir: dirA }, { name: 'team-b', dir: dirB }]);
+    runtime.install.mockImplementation(async () => {
+      const ghost = installedWithTasks(root, 'alpha');
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    const fromA = customMarketPluginId('team-a', 'alpha');
+    const fromB = customMarketPluginId('team-b', 'alpha');
+    await h.service.install(fromA, { expectedReleaseId: customMarketReleaseId('team-a', 'alpha', '1.0.0'),
+      expectedManifest: (await h.service.detail(fromA)).manifest }, TEST_INSTALL_CONTEXT);
+    const old = runtime.ghosts[0]!;
+    const detailB = await h.service.detail(fromB);
+    expect(detailB.installState).toBe('conflict');
+
+    const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => true);
+    await h.service.install(fromB, { expectedReleaseId: detailB.releaseId, expectedManifest: detailB.manifest,
+      expectedInstalledApproval: APPROVED_INSTALL_TOKEN, allowSourceReplacement: true }, { consent: { prompt, initiator: 'user' } });
+    const request = prompt.mock.calls[0]![0];
+    expect(request).toMatchObject({ origin: 'custom-market', originSourceChanged: true, facts: { kind: 'install' } });
+    expect(request.facts.kind === 'install' && request.facts.permissions.map((item) => item.key)).toContain('agent:tasks');
+    const options = runtime.install.mock.calls[1]![1] as { sourceChanged?: boolean; consent: GhostInstallConsentDecision };
+    expect(options.sourceChanged).toBe(true);
+    // The runtime grants with these helpers against the old instance: the new instance keeps its task capability.
+    expect(confirmedTaskCapability(options.consent, old as unknown as InstalledGhost, ghostManifest('alpha', '1.0.0', TASKS) as never)).toBe(true);
+  });
+
+  it('confirms and grants the full permissions when explicitly replacing a custom market plugin with the official one', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
+    const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
+    const old = installedWithTasks(root, 'server-plugin');
+    runtime.ghosts = [old];
+    runtime.install.mockResolvedValue({ manifest: ghostManifest('server-plugin', '1.0.0', TASKS), dir: '/ghosts/official-server-plugin', enabled: true });
+    h.ledger.upsertInstallation({
+      pluginId: customMarketPluginId('team-lib', 'server-plugin'), ghostId: 'server-plugin',
+      releaseId: customMarketReleaseId('team-lib', 'server-plugin', '1.0.0'), version: '1.0.0', sha256: 'custom-unverified',
+      scope: 'public', organizationId: null, source: 'local-market', installed: true, updatedAt: '2026-08-06T00:00:00.000Z',
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('server-plugin', '1.0.0', TASKS) as never),
+    });
+    vi.mocked(downloadVerifiedPlugin).mockImplementationOnce(async (_url, _expected, targetPath) => {
+      const zip = new JSZip();
+      zip.file('ghost.json', JSON.stringify(ghostManifest('server-plugin', '1.0.0', TASKS)));
+      zip.file('main.js', '// server package fixture');
+      await fs.promises.writeFile(targetPath, await zip.generateAsync({ type: 'nodebuffer' }), { flag: 'wx', mode: 0o600 });
+    });
+    h.api.download.mockResolvedValue({ url: 'https://downloads.test.invalid/plugin.cindy', expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64), sizeBytes: 42 });
+    const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => true);
+    const item = serverSummary();
+    await h.service.install(item.id, { expectedReleaseId: item.currentRelease.id, expectedInstalledApproval: APPROVED_INSTALL_TOKEN,
+      allowSourceReplacement: true }, { consent: { prompt, initiator: 'user' } });
+    const request = prompt.mock.calls[0]![0];
+    expect(request).toMatchObject({ origin: 'market', originSourceChanged: true, facts: { kind: 'install' } });
+    expect(request.facts.kind === 'install' && request.facts.permissions.map((entry) => entry.key)).toContain('agent:tasks');
+    const options = runtime.install.mock.calls[0]![1] as { sourceChanged?: boolean; consent: GhostInstallConsentDecision };
+    expect(options.sourceChanged).toBe(true);
+    expect(confirmedTaskCapability(options.consent, old as unknown as InstalledGhost, ghostManifest('server-plugin', '1.0.0', TASKS) as never)).toBe(true);
   });
 
   it('allows explicit official replacement when the previous custom source is unreadable', async () => {

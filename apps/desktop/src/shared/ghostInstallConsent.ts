@@ -106,8 +106,9 @@ export interface GhostInstallConsentRequest {
    */
   originSource?: PluginMarketSourceIdentity;
   /**
-   * 仅 custom-market 的更新：同一配置下实际来源已变（已装实例与这次候选的来源标识都可核实且不相等）。
-   * 确认会被强制弹出，并提示来源与已安装的版本不同；确认后安装记录改绑新来源，之后不再反复询问。
+   * 这次确认会按换源落位（契约 V2.4b）：自定义市场同一配置下实际来源已变，或显式跨市场替换（服务端 ↔ 自定义、
+   * 自定义 A ↔ B）。旧实例的批准与数据随旧来源归档，所以 `facts` 按首装给出新来源的完整权限，确认后旧账号与数据
+   * 隔离保存。只在 `origin` 为 `custom-market` 或 `market` 时出现；提示文案见 ghostInstallSourceChangedNoticeKey。
    */
   originSourceChanged?: true;
   /** Host-generated installation identity and account impact, never package-provided. */
@@ -194,4 +195,17 @@ export function ghostInstallConsentKey(
     packageSha256,
     receiverApprovalToken,
   ]);
+}
+
+/**
+ * 换源确认（`originSourceChanged`）的提示文案键（契约 V2.4b）。确认后旧实例归档、旧账号与数据隔离：自定义市场
+ * 的文案同时提醒核对上面显示的仓库；服务端市场（显式替换为插件市场版本）用不提仓库的文案；其它来源不出现。
+ */
+export function ghostInstallSourceChangedNoticeKey(
+  request: { origin?: GhostInstallConsentRequest['origin']; originSourceChanged?: GhostInstallConsentRequest['originSourceChanged'] },
+): string | null {
+  if (request.originSourceChanged !== true) return null;
+  if (request.origin === 'custom-market') return 'settings.ghosts.installConsent.originSourceChanged';
+  if (request.origin === 'market') return 'settings.ghosts.installConsent.marketSourceChanged';
+  return null;
 }

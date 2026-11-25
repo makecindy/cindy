@@ -8565,7 +8565,8 @@
         "originRepository": "Repositorio {{repository}}",
         "originRepositoryRef": "Repositorio {{repository}} ({{ref}})",
         "originLocalFolder": "Carpeta local",
-        "originSourceChanged": "Esta actualización procede de un origen distinto al de la versión instalada. Las cuentas y los datos existentes se archivan por separado; vuelve a conectar tus cuentas después de actualizar. Continúa solo si confías en el repositorio que se muestra arriba."
+        "originSourceChanged": "Esta actualización procede de un origen distinto al de la versión instalada. Las cuentas y los datos existentes se archivan por separado; vuelve a conectar tus cuentas después de actualizar. Continúa solo si confías en el repositorio que se muestra arriba.",
+        "marketSourceChanged": "Esta actualización cambia a la versión del mercado de complementos. Las cuentas y los datos existentes se archivan por separado. Vuelve a conectar tus cuentas después de actualizar."
       },
       "trust": {
         "official": "Complemento oficial de Cindy",

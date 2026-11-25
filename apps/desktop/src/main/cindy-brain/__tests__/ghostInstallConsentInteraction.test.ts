@@ -237,7 +237,13 @@ describe('plugin install confirmation card', () => {
     const sameSource = buildGhostInstallConsentInteraction('req-6', { initiator: 'agent', origin: 'custom-market',
       originLabel: 'Acme', originSource: source, facts: update }, translate);
     expect(sameSource.input).not.toHaveProperty('originSourceChanged');
-    const otherOrigin = buildGhostInstallConsentInteraction('req-7', { initiator: 'agent', origin: 'market',
+    // A replacement with the Cindy market version (review 6055952481) carries it too, with wording that names no
+    // repository; other origins never do.
+    const marketReplacement = buildGhostInstallConsentInteraction('req-7', { initiator: 'agent', origin: 'market',
+      originSourceChanged: true, facts: switched }, translate);
+    expect(marketReplacement.input).toMatchObject({ operation: 'install', origin: 'market', originSourceChanged: true });
+    expect(marketReplacement.description).toContain(translate('settings.ghosts.installConsent.marketSourceChanged'));
+    const otherOrigin = buildGhostInstallConsentInteraction('req-8', { initiator: 'agent', origin: 'local-file',
       originSourceChanged: true, facts: update }, translate);
     expect(otherOrigin.input).not.toHaveProperty('originSourceChanged');
   });

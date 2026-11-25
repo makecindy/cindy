@@ -18,6 +18,7 @@ import { isPluginMarketSourceIdentity } from '../../shared/pluginMarket.js';
 import {
   GHOST_INSTALL_CONSENT_TOOL_NAME,
   ghostInstallConsentOriginSourceText,
+  ghostInstallSourceChangedNoticeKey,
   ghostInstallSourceNoticeKey,
   type GhostInstallConsentRequest,
 } from '../../shared/ghostInstallConsent.js';
@@ -106,7 +107,8 @@ export function renderGhostInstallConsentText(
     lines.push(consentText(translate, 'installMeta', { version: facts.version, source }));
     lines.push(...targetLines);
     // 换源确认按首装展示（契约 V2.4b）：完整权限之前先说明来源变了、旧账号与数据隔离。
-    if (request.origin === 'custom-market' && request.originSourceChanged) lines.push(consentText(translate, 'originSourceChanged'));
+    const sourceChangedNotice = ghostInstallSourceChangedNoticeKey(request);
+    if (sourceChangedNotice) lines.push(translate(sourceChangedNotice));
     lines.push(consentText(translate, 'installDescription'));
     const sourceNotice = ghostInstallSourceNoticeKey(request.origin, request.communityMarket);
     if (sourceNotice) lines.push(translate(sourceNotice));
@@ -125,7 +127,8 @@ export function renderGhostInstallConsentText(
     consentText(translate, 'updateMeta', { from: facts.previousVersion, to: facts.version, source }),
   );
   lines.push(...targetLines);
-  if (request.origin === 'custom-market' && request.originSourceChanged) lines.push(consentText(translate, 'originSourceChanged'));
+  const sourceChangedNotice = ghostInstallSourceChangedNoticeKey(request);
+  if (sourceChangedNotice) lines.push(translate(sourceChangedNotice));
   lines.push(consentText(translate, 'updateDescription'));
   if (facts.builtinOauthClientChanged) lines.push(consentText(translate, 'oauthClientChanged'));
   if (facts.added.length > 0) {
@@ -171,7 +174,7 @@ export function buildGhostInstallConsentInteraction(
         : {}),
       // 自定义市场的实际来源与已装的不同（确认后旧账号与数据隔离保存）：控制端据此在卡片收起时也能提示。换源确认按
       // 首装展示完整权限，所以这里的 operation 是 'install'（契约 V2.4b）。
-      ...(request.origin === 'custom-market' && request.originSourceChanged === true
+      ...(ghostInstallSourceChangedNoticeKey(request)
         ? { originSourceChanged: true }
         : {}),
     },

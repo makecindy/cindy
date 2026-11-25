@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import type { GhostPermissionItem } from '../../shared/ghost';
 import {
   ghostInstallConsentOriginSourceText,
+  ghostInstallSourceChangedNoticeKey,
   ghostInstallSourceNoticeKey,
   type GhostInstallConsentFacts,
   type GhostInstallConsentRequest,
@@ -120,14 +121,13 @@ export function GhostInstallConsentContent({ facts, origin, communityMarket, cap
   originSourceChanged?: boolean;
 }) {
   const { t } = useTranslation();
+  const sourceChangedNotice = ghostInstallSourceChangedNoticeKey({ origin, ...(originSourceChanged ? { originSourceChanged: true } : {}) });
   if (facts.kind === 'install') {
     const sourceNotice = ghostInstallSourceNoticeKey(origin, communityMarket);
     return (
       <div>
-        {origin === 'custom-market' && originSourceChanged === true ? (
-          <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">
-            {t('settings.ghosts.installConsent.originSourceChanged')}
-          </p>
+        {sourceChangedNotice ? (
+          <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t(sourceChangedNotice)}</p>
         ) : null}
         <p className="text-13 leading-5 text-[var(--confirm-desc)]">
           {t('settings.ghosts.installConsent.installDescription')}
@@ -157,10 +157,8 @@ export function GhostInstallConsentContent({ facts, origin, communityMarket, cap
   }
   return (
     <div>
-      {origin === 'custom-market' && originSourceChanged === true ? (
-        <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">
-          {t('settings.ghosts.installConsent.originSourceChanged')}
-        </p>
+      {sourceChangedNotice ? (
+        <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t(sourceChangedNotice)}</p>
       ) : null}
       <p className="text-13 leading-5 text-[var(--confirm-desc)]">
         {capabilityOnly ? null : t(replacement ? 'sharing.localReplaceNotice' : 'settings.ghosts.installConsent.updateDescription')}

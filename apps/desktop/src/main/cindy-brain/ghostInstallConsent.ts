@@ -239,7 +239,8 @@ export async function obtainGhostInstallConsent(
       ...(policy.trust ? { trust: policy.trust } : {}),
       ...(policy.originLabel ? { originLabel: policy.originLabel } : {}),
       ...(policy.origin === 'custom-market' && policy.originSource ? { originSource: policy.originSource } : {}),
-      ...(policy.origin === 'custom-market' && policy.originSourceChanged ? { originSourceChanged: true as const } : {}),
+      ...((policy.origin === 'custom-market' || policy.origin === 'market') && policy.originSourceChanged
+        ? { originSourceChanged: true as const } : {}),
       ...(policy.target ? { target: { ...policy.target, ...(policy.target.namespace === 'local' && manifest.network?.secrets?.some(secret => secret.source === 'oidc-token') ? { organizationIdentityUnavailable: true as const } : {}) } } : {}),
       facts,
     });

@@ -750,6 +750,13 @@ function stripDirectionalControls(text: string): string {
 }
 /* eslint-enable no-control-regex */
 
+async function readInstalledMarketManifestIdentityAsync(
+  dir: string,
+): Promise<InstalledMarketManifestIdentity | null> {
+  const result = await readInstalledGhostManifestSnapshotAsync(dir, GHOST_MANIFEST_MAX_BYTES);
+  return result.ok ? installedMarketManifestIdentity(result.snapshot) : null;
+}
+
 function readInstalledMarketManifestIdentity(
   dir: string,
 ): InstalledMarketManifestIdentity | null {
@@ -2693,6 +2700,10 @@ export class PluginMarketService {
           : null;
         const sourceSwitch = isCustomSourceSwitch(installedSourceIdAtReview, discovered.sourceId);
         if (automatic && sourceSwitch) throw new CustomSourceSwitchConsentRequiredError();
+        // 「这次是否换源」只在这里判定一次：显式跨路由替换（服务端 ↔ 自定义、自定义 A ↔ B，要求 allowSourceReplacement）
+        // 与同一路由下实际来源变化都算。它同时决定确认内容（按首装展示完整权限并提示数据隔离）、授予范围与运行时归档；
+        // 提交锁内的判定必须与它一致，否则拒绝。
+        const replacesSource = Boolean(existing && (!matchesSelectedRoute || sourceSwitch));
         const assertCustomApprovalStateUnchanged = (installedNow: InstalledGhost | null): void => {
           if (!installedNow) return;
           if (options.expectedInstalledApproval === undefined) {
@@ -2732,6 +2743,7 @@ export class PluginMarketService {
           sourceId: discovered.sourceId,
           sourceIdKeyId: manager.sourceKeyId(),
           sourceSwitch,
+          replacesSource,
           assertCustomApprovalStateUnchanged,
         };
       });
@@ -2749,6 +2761,7 @@ export class PluginMarketService {
           sourceId,
           sourceIdKeyId,
           sourceSwitch,
+          replacesSource,
           assertCustomApprovalStateUnchanged,
         } = packedAttempt;
         // 来源只决定后台更新路由，不是 ghostId 的永久所有权。只有详情页明确
@@ -2769,7 +2782,7 @@ export class PluginMarketService {
                       originSource: sourceIdentity ?? undefined,
                       // 换源必须显式确认：即使权限没有变多也弹出确认，并提示来源与已安装时不同。旧实例的批准随旧来源
                       // 归档、不继承，所以按首装展示新来源的完整权限，并按同一份事实授予（契约 V2.4b）。
-                      ...(sourceSwitch ? { force: true, freshGrant: true, originSourceChanged: true as const } : {}),
+                      ...(replacesSource ? { force: true, freshGrant: true, originSourceChanged: true as const } : {}),
                     }
                   : consent,
                 installedGhostMatchingMarketPluginNow(plugin),
@@ -2844,14 +2857,15 @@ export class PluginMarketService {
               if (automatic) throw new CustomSourceSwitchConsentRequiredError();
               throwIpcError('PRECONDITION_FAILED', 'The installed Plugin came from another source');
             }
-            // 用户确认的是换源（按首装授予、旧数据隔离）；提交时已不再是换源就不能套用这份确认。
-            if (sourceSwitch && current && routeStillMatches && !actualSourceSwitch) {
-              throwIpcError('PRECONDITION_FAILED', 'The installed Plugin source changed during the update');
-            }
+
             // 换源事务（运行时的空闲检查、旧账号与数据隔离归档）：路由换了，或同一路由下这里核实到的实际换源
             // （用户已在确认里看到）。旧记录没有绑定、候选无法核实或密钥换过时 actualSourceSwitch 为 false，
             // 按同源更新保留数据。
             sourceChanged = Boolean(current && (!routeStillMatches || actualSourceSwitch));
+            // 确认时与提交时的换源判定必须一致：确认按哪种方式展示、授予，提交就按哪种方式归档或原位更新。
+            if (sourceChanged !== replacesSource) {
+              throwIpcError('PRECONDITION_FAILED', 'The installed Plugin source changed during the update');
+            }
           },
           expectedInstalledApproval: options.expectedInstalledApproval,
           assertCurrent: assertScope,
@@ -3329,14 +3343,38 @@ export class PluginMarketService {
           throwIpcError('GHOST_FILE_INVALID', 'Downloaded Plugin package identity changed');
         }
       }
+      // 「这次是否换源」在确认前判定一次（与提交锁内 commitDownloadedPackage 的判定同一条件）：显式替换或组织默认
+      // 接管且当前装着的不是这条记录送达的那份时，提交会归档旧实例、不继承旧批准。用户确认的路径据此按首装展示新来源
+      // 的完整权限并提示数据隔离；提交锁内的判定必须一致，否则拒绝。
+      const consentInstalled = installedGhostMatchingMarketPluginNow(plugin);
+      const reviewSourceChanged = options.consent.mode === 'prompt'
+        ? Boolean(
+            consentInstalled &&
+            (sourceReplacementMode === 'user-requested-source-change' ||
+              sourceReplacementMode === 'organization-default-takeover') &&
+            !serverRecordMatchesDelivery(
+              plugin,
+              consentInstalled,
+              serverInstallation(ledger, plugin),
+              await readInstalledMarketManifestIdentityAsync(consentInstalled.dir),
+            ),
+          )
+        : undefined;
+      requireSameMarketOwner(owner);
       // 权限以真实包为准:下载检查后、任何安装锁之外求确认。检查失败的包会在装入
       // 出口重新解析时被拒,不为它弹确认。
       const consent: GhostInstallConsentDecision =
         'rejection' in inspected
           ? { mode: 'unprompted' }
           : await obtainGhostInstallConsent(
-              options.consent.mode === 'prompt' ? { ...options.consent, trust: inspected.trust.level } : options.consent,
-              installedGhostMatchingMarketPluginNow(plugin),
+              options.consent.mode === 'prompt'
+                ? {
+                    ...options.consent,
+                    trust: inspected.trust.level,
+                    ...(reviewSourceChanged ? { force: true, freshGrant: true, originSourceChanged: true as const } : {}),
+                  }
+                : options.consent,
+              consentInstalled,
               inspected.manifest,
               inspected.packageSha256,
             );
@@ -3366,6 +3404,7 @@ export class PluginMarketService {
             expectedInstalled: options.expectedInstalled,
             verifiedServerRoot,
             ...(options.remoteOperation ? { remoteOperation: options.remoteOperation } : {}),
+            ...(reviewSourceChanged !== undefined ? { reviewSourceChanged } : {}),
             ...(options.expectedInstalledApproval !== undefined
               ? { expectedInstalledApproval: options.expectedInstalledApproval }
               : {}),
@@ -3420,6 +3459,8 @@ export class PluginMarketService {
       expectedInstalled: boolean;
       verifiedServerRoot?: string;
       remoteOperation?: RemoteOperationEvidence;
+      /** 用户确认时判定的「是否换源」；给出时提交锁内的判定必须与之一致。 */
+      reviewSourceChanged?: boolean;
     },
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
@@ -3481,6 +3522,9 @@ export class PluginMarketService {
           options.sourceReplacementMode === 'organization-default-takeover') &&
         !serverRecordMatchesDelivery(plugin, installedNow, currentRecordNow),
       );
+      if (options.reviewSourceChanged !== undefined && sourceChanged !== options.reviewSourceChanged) {
+        throwIpcError('PRECONDITION_FAILED', 'The installed Plugin source changed during the update');
+      }
       const simulatorMigration = installedNow?.manifest.id === LEGACY_SIMULATOR_ID && isSimulatorMigrationTarget(plugin);
       if (simulatorMigration && (!currentRecordNow || sourceChanged)) {
         throwIpcError('PRECONDITION_FAILED', 'Simulator migration requires its original market source');
