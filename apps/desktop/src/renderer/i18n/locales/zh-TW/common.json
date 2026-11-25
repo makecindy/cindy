@@ -18233,6 +18233,7 @@
       "timingMode": {
         "cron": "Cron 定時",
         "interval": "相對間隔",
+        "label": "計時方式",
         "cronHint": "按照日曆時鐘的固定時間槽位執行。",
         "intervalHint": "上一次執行完成後，再等待指定時長。",
         "intervalUnsupportedHint": "當前精確間隔會原樣保留；選擇分鐘或小時預設後才會替換。",

@@ -278,6 +278,7 @@ function PdfPage({
       data-pdf-page={pageNumber}
       data-pdf-page-placeholder={renderState !== 'rendered' ? 'true' : undefined}
       aria-busy={renderState !== 'rendered'}
+      // PDF 纸张自身的小圆角，属内容几何（DESIGN.md §5 插画登记，阴影见 §6）
       className="relative mb-2 shrink-0 overflow-hidden rounded-sm bg-white shadow-sm last:mb-0"
       style={{
         width: `${Math.floor(pageSize.width)}px`,

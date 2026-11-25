@@ -18475,6 +18475,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalo relativo",
+        "label": "Modo de agendamento",
         "cronHint": "Executa nos horários definidos no calendário.",
         "intervalHint": "Aguarda este intervalo após o término da execução anterior.",
         "intervalUnsupportedHint": "Este intervalo exato é preservado. Escolher uma predefinição de minutos ou horas irá substituí-lo.",

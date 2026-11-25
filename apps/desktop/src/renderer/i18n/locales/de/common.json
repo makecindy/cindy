@@ -18307,6 +18307,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Relatives Intervall",
+        "label": "Zeitsteuerung",
         "cronHint": "Wird zu festen Kalenderzeiten ausgeführt.",
         "intervalHint": "Wartet nach Ende der vorherigen Ausführung so lange.",
         "intervalUnsupportedHint": "Dieses exakte Intervall bleibt erhalten. Eine Minuten- oder Stundenvorgabe ersetzt es.",
