@@ -35,6 +35,38 @@ describe('useDeviceLinkDeviceList initial request', () => {
     await waitFor(() => expect(result.current?.[0]?.app).toBe('cindy-friend'));
     unmount();
   });
+  // Unit regression for PR #12872: the card reads this hook's device row. A
+  // presence changing only displayed metadata must publish the new directory row.
+  it.each([
+    ['version', { appVersion: '2' }, { appVersion: '2' }],
+    ['model', { deviceInfo: { modelLabel: 'Mac Studio' } }, { deviceInfo: { modelLabel: 'Mac Studio' } }],
+    ['last seen', { lastSeenAt: 2000 }, { lastSeenAt: new Date(2000).toISOString() }],
+  ] as const)('publishes a %s-only update for a remote device', async (_field, update, expected) => {
+    const target: DeviceLinkDeviceView = {
+      deviceId: 'peer', name: 'Mac', platform: 'darwin', appVersion: '1',
+      online: false, busy: false, remoteControlEnabled: true, controlEnabled: true,
+      isSelf: false, lastSeenAt: new Date(1000).toISOString(),
+    };
+    let changed!: (snapshot: DeviceLinkPresenceSnapshot) => void;
+    const listDevices = vi.fn()
+      .mockResolvedValueOnce({ devices: [target] })
+      .mockResolvedValue({ devices: [{ ...target, ...expected }] });
+    vi.stubGlobal('electronAPI', { deviceLink: {
+      listDevices, getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+      onPresenceChanged: (callback: typeof changed) => { changed = callback; },
+      onStatusChanged: vi.fn(), onControlTargetChanged: vi.fn(),
+    } });
+    const { useDeviceLinkDeviceList } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    const { result, unmount } = renderHook(useDeviceLinkDeviceList);
+    await waitFor(() => expect(result.current?.[0]).toMatchObject(target));
+    act(() => changed({
+      deviceId: 'peer', deviceName: 'Mac', platform: 'darwin', appVersion: '1',
+      online: false, busy: false, remoteControlEnabled: true, lastSeenAt: 1000, ...update,
+    }));
+    await waitFor(() => expect(result.current?.[0]).toMatchObject(expected));
+    unmount();
+  });
+
   // PR #11991 review: a stale fallback (e.g. a read that timed out right after waking) or a
   // one-leg read is still `ready`, but its online flags are not current evidence, so it must
   // not settle the first-connection window. Only a complete read is authoritative.
@@ -346,6 +378,7 @@ describe('useDeviceLinkDeviceList initial request', () => {
         deviceId: 'self-1',
         name: 'This Mac',
         platform: 'darwin',
+        appVersion: '0.1.27',
         online: true,
         remoteControlEnabled: true,
         controlEnabled: true,
@@ -439,6 +472,7 @@ describe('useDeviceLinkDeviceList initial request', () => {
         deviceId: 'peer-1',
         name: 'Peer Mac',
         platform: 'darwin',
+        appVersion: '0.1.27',
         online: true,
         remoteControlEnabled: true,
         controlEnabled: true,

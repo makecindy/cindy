@@ -101,7 +101,7 @@ function isDeviceLinkDeviceView(value: unknown): value is DeviceLinkDeviceView {
   );
 }
 
-/** 仅比较切换栏关心的字段(忽略 busy / lastSeenAt 等高频字段,避免无谓重渲染)。 */
+/** 比较设备切换栏和任务设备卡读取的字段，忽略在线设备持续变化的时间戳。 */
 function relevantEqual(a: DeviceLinkDeviceView[] | null, b: DeviceLinkDeviceView[]): boolean {
   if (a === null || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
@@ -115,6 +115,11 @@ function relevantEqual(a: DeviceLinkDeviceView[] | null, b: DeviceLinkDeviceView
       x.platform !== y.platform ||
       (x.app ?? 'cindy') !== (y.app ?? 'cindy') ||
       x.online !== y.online ||
+      (!x.isSelf &&
+        (normalizeDeviceMetadata(x.appVersion) !== normalizeDeviceMetadata(y.appVersion) ||
+          normalizeDeviceMetadata(x.deviceInfo?.modelLabel) !==
+            normalizeDeviceMetadata(y.deviceInfo?.modelLabel) ||
+          (!y.online && x.lastSeenAt !== y.lastSeenAt))) ||
       x.remoteControlEnabled !== y.remoteControlEnabled ||
       x.controlEnabled !== y.controlEnabled ||
       x.isSelf !== y.isSelf
@@ -125,8 +130,8 @@ function relevantEqual(a: DeviceLinkDeviceView[] | null, b: DeviceLinkDeviceView
   return true;
 }
 
-/** platform 在目录里可为 null、在 presence 里是字符串;比较前归一化,空值等价。 */
-function normalizePlatform(value: string | null | undefined): string {
+/** 目录与 presence 的可选设备资料统一比较，空值等价。 */
+function normalizeDeviceMetadata(value: string | null | undefined): string {
   return (value ?? '').trim();
 }
 
@@ -137,10 +142,8 @@ function normalizePlatform(value: string | null | undefined): string {
  * 拔网后回收僵尸订阅的兜底信号,刻意保留)。而本机每开始 / 跑完一轮任务都会翻转 busy 并上报,
  * 于是自己的 busy 绕一圈回来就触发一次全量 listDevices —— 开跑一次、跑完一次,纯浪费(issue #1726)。
  *
- * 判据与 `relevantEqual` 同源:只有切换栏真正消费的字段变化才值得重拉。`busy` / `lastSeenAt` /
- * `appVersion` / `deviceInfo` 虽然在 `DeviceLinkDeviceView` 里,但 `relevantEqual` 刻意不比较
- * 它们(「忽略 busy / lastSeenAt 等高频字段,避免无谓重渲染」)—— 既然它们变了也不会让快照替换,
- * 为它们重拉一整份目录就纯是浪费。
+ * 系统、版本与型号供任务设备卡使用。最后在线时间只在设备离线时才有意义，
+ * 在线 presence 时间戳和 busy 心跳不会触发目录重拉。
  *
  * 刻意**不**比较 `controlEnabled`:它由本地 opt-out 决定、不在 presence 里,其改动走
  * `control-target-changed` 事件的既有刷新路径。
@@ -171,7 +174,14 @@ export function shouldRefreshForPresence(
   return (
     row.online !== snap.online ||
     row.remoteControlEnabled !== snap.remoteControlEnabled ||
-    normalizePlatform(row.platform) !== normalizePlatform(snap.platform) ||
+    normalizeDeviceMetadata(row.platform) !== normalizeDeviceMetadata(snap.platform) ||
+    normalizeDeviceMetadata(row.appVersion) !== normalizeDeviceMetadata(snap.appVersion) ||
+    (snap.deviceInfo !== undefined &&
+      normalizeDeviceMetadata(row.deviceInfo?.modelLabel) !==
+        normalizeDeviceMetadata(snap.deviceInfo?.modelLabel)) ||
+    (!snap.online &&
+      snap.lastSeenAt > 0 &&
+      (!row.lastSeenAt || snap.lastSeenAt > Date.parse(row.lastSeenAt))) ||
     (row.app ?? 'cindy') !== (snap.app ?? 'cindy') ||
     row.name.trim() !== snap.deviceName.trim()
   );

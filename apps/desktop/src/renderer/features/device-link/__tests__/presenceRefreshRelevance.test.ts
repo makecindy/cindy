@@ -101,15 +101,13 @@ describe('shouldRefreshForPresence · 必须跳过', () => {
     ).toBe(false);
   });
 
-  it('对端只有 busy / lastSeenAt / appVersion / deviceInfo 变化(心跳噪音)', () => {
+  it('对端在线时只有 busy 和 lastSeenAt 变化，不为心跳重读目录', () => {
     expect(
       shouldRefreshForPresence(
         [view()],
         presence({
           busy: true,
           lastSeenAt: 999_999,
-          appVersion: '0.1.28',
-          deviceInfo: { note: 'whatever' } as never,
         }),
         'ready',
       ),

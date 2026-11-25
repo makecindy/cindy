@@ -1794,7 +1794,13 @@ The two registered chart members (§5) enlarge their non-hit-testing visible lay
     keycap fills mixed from `--tooltip-text` (`color-mix`), and the same text-derived hairline
     as the usage chart tooltip. No new tokens. Radii follow §5 (12px panel, 8px rows and swap
     button, 4px keycaps); motion uses `--motion-fast` and a 250ms row exchange (§14.4), both
-    off under reduced motion. Every other tooltip stays plain text through `Tip`.
+    off under reduced motion. Standard action tooltips stay plain text through `Tip`.
+- **Task header remote device card (owner decision, 2026-11-26).** The device indicator opens a
+  read-only connection card on hover or keyboard focus. It uses the shared tooltip positioning and
+  dismissal behavior. The card uses the surface and text tokens, with the same system icon before
+  the device name as the Remote connection V2 card (§4). Show the hardware and app version when
+  known, then the connection state, path, protocol and measured latency when available, or the last
+  seen time when offline. The card contains no controls.
 
 ## 15. CINDY Skin Family(品牌化 family,新用户默认)
 
