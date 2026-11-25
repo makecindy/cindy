@@ -44,11 +44,32 @@ const log = createLogger('local-agent');
  */
 const STARTUP_LOCK_WAIT_MS = 5_000;
 
+/**
+ * 本机接入是整个进程的长驻能力，而安装入口只有 getMaker() 那一次调用：一次 HOST_IN_USE 或
+ * owner 还没认领就失败，此前会让进程在剩下的生命周期里完全没有本机接入（外部本机应用，例如
+ * TapTap PC 的「让 Cindy 帮我排查」，只会一直看到「Cindy 本机服务还没就绪」）。失败后按指数
+ * 退避重试，直到成功或 host 被退役。
+ */
+const STARTUP_RETRY_BASE_MS = 1_000;
+const STARTUP_RETRY_MAX_MS = 30_000;
+/** owner 认领通常只要几百毫秒，先快后慢更贴近实际。 */
+const OWNER_PENDING_RETRY_BASE_MS = 500;
+/** owner 还没认领完成不是故障：不进 startupFailure，只影响重试节奏。 */
+const OWNER_PENDING = Symbol('owner-pending');
+
 let current: Promise<Awaited<ReturnType<typeof createLocalAgentServer>>> | undefined;
 let startupFailure: unknown;
 let teardown = Promise.resolve();
 let readyServer: Awaited<ReturnType<typeof createLocalAgentServer>> | undefined;
 let currentOwner: string | undefined;
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
+let retryAttempt = 0;
+/** 当前在途尝试的抢锁取消句柄；dispose 时用它中断最多 STARTUP_LOCK_WAIT_MS 的等锁。 */
+let leaseAbort: AbortController | undefined;
+/** 退役 / 重新安装都会递增；迟到的重试因此不会复活已经换代的 host。 */
+let installEpoch = 0;
+/** 同一个失败码只告警一次，退避重试本身不再刷日志。 */
+let reportedFailureCode: string | undefined;
 
 function instanceInfo(): LocalAgentInstanceInfo {
   return {
@@ -67,9 +88,45 @@ function notifySettings(): void {
   }
 }
 
+function failureCode(failure: unknown): string {
+  if (failure === OWNER_PENDING) return 'OWNER_PENDING';
+  return failure instanceof LocalAgentError ? failure.code : 'LOCAL_AGENT_FAILED';
+}
+
+function cancelStartupRetry(): void {
+  if (!retryTimer) return;
+  clearTimeout(retryTimer);
+  retryTimer = undefined;
+}
+
+function startupRetryDelay(failure: unknown, attempt: number): number {
+  const base = failure === OWNER_PENDING ? OWNER_PENDING_RETRY_BASE_MS : STARTUP_RETRY_BASE_MS;
+  return Math.min(base * 2 ** Math.max(0, attempt - 1), STARTUP_RETRY_MAX_MS);
+}
+
+function scheduleStartupRetry(maker: Maker, failure: unknown): void {
+  cancelStartupRetry();
+  retryAttempt += 1;
+  const epoch = installEpoch;
+  const delay = startupRetryDelay(failure, retryAttempt);
+  const timer = setTimeout(() => {
+    if (retryTimer === timer) retryTimer = undefined;
+    if (epoch !== installEpoch || current) return;
+    startLocalAgentHost(maker);
+  }, delay);
+  // 退避中的重试不能让进程在退出时多等一个定时器。
+  timer.unref?.();
+  retryTimer = timer;
+  log.debug('local agent API startup retry scheduled', {
+    code: failureCode(failure),
+    attempt: retryAttempt,
+    delayMs: delay,
+  });
+}
+
 /** A shared profile has one discovery endpoint and one grant writer. Reuse the
  * existing process lock so a passive/preview instance cannot resurrect revoked grants. */
-async function startWithProfileLease(deps: LocalAgentServerDeps) {
+async function startWithProfileLease(deps: LocalAgentServerDeps, signal?: AbortSignal) {
   const discovery = deps.discoveryDirectory ?? deps.directory;
   await fs.mkdir(discovery, { recursive: true, mode: 0o700 });
   let ready!: (server: Awaited<ReturnType<typeof createLocalAgentServer>>) => void;
@@ -111,6 +168,8 @@ async function startWithProfileLease(deps: LocalAgentServerDeps) {
         await server.close();
       }
     },
+    // 退役时中断等锁，否则退出 / 切账号要多等这一段 waitMs。
+    signal,
   );
   void lifetime.catch(failed);
   return started;
@@ -118,8 +177,20 @@ async function startWithProfileLease(deps: LocalAgentServerDeps) {
 
 export function installLocalAgentHost(maker: Maker): void {
   if (current) return;
+  installEpoch += 1;
+  cancelStartupRetry();
+  retryAttempt = 0;
+  reportedFailureCode = undefined;
+  startLocalAgentHost(maker);
+}
+
+function startLocalAgentHost(maker: Maker): void {
   const session = getActiveAppSession();
-  if (!session.dataOwnerId || isAppSessionBoundaryPending()) return;
+  if (!session.dataOwnerId || isAppSessionBoundaryPending()) {
+    // 抢在 owner 认领之前调用时不能就此放弃，否则整个进程都不会再有本机接入。
+    scheduleStartupRetry(maker, OWNER_PENDING);
+    return;
+  }
   const scope = createHash('sha256').update(`${session.mode}:${session.dataOwnerId}`).digest('hex');
   const liveOwner = activeOwnerScopeKey();
   const directory = ownerScopedUserDataPath('local-agent');
@@ -133,6 +204,8 @@ export function installLocalAgentHost(maker: Maker): void {
       : '';
   };
   startupFailure = undefined;
+  const lease = new AbortController();
+  leaseAbort = lease;
   const pending: Promise<Awaited<ReturnType<typeof createLocalAgentServer>>> = teardown.then(() =>
     startWithProfileLease({
       directory,
@@ -194,7 +267,7 @@ export function installLocalAgentHost(maker: Maker): void {
         if (scopeNow() !== scope) return;
         notifySettings();
       },
-    }),
+    }, lease.signal),
   );
   current = pending;
   currentOwner = liveOwner;
@@ -204,21 +277,36 @@ export function installLocalAgentHost(maker: Maker): void {
     (server) => {
       if (current === pending && scopeNow() === scope) {
         readyServer = server;
+        if (reportedFailureCode) {
+          log.info('local agent API recovered after startup retry', {
+            code: reportedFailureCode,
+            attempts: retryAttempt,
+          });
+          reportedFailureCode = undefined;
+        }
+        retryAttempt = 0;
         notifySettings();
       }
     },
     () => {},
   );
   void pending.catch((error) => {
-    if (current === pending) {
+    // dispose 取消的抢锁不是启动失败：不记 startupFailure、不告警、不重试。
+    if (lease.signal.aborted) return;
+    // 换代（dispose / 重新安装）之后才失败的尝试不再重试，避免旧 maker 复活。
+    const stillCurrent = current === pending;
+    if (stillCurrent) {
       current = undefined;
       readyServer = undefined;
       startupFailure = error;
       notifySettings();
     }
-    log.warn('local agent API startup failed', {
-      code: error instanceof LocalAgentError ? error.code : 'LOCAL_AGENT_FAILED',
-    });
+    const code = failureCode(error);
+    if (reportedFailureCode !== code) {
+      reportedFailureCode = code;
+      log.warn('local agent API startup failed', { code });
+    }
+    if (stillCurrent) scheduleStartupRetry(maker, error);
   });
 }
 
@@ -345,6 +433,13 @@ export async function setLocalAgentCreateVisibleSessions(
 }
 
 export async function disposeLocalAgentHost(): Promise<void> {
+  installEpoch += 1;
+  cancelStartupRetry();
+  retryAttempt = 0;
+  reportedFailureCode = undefined;
+  // 中断在途的抢锁：跨进程锁最长会等 STARTUP_LOCK_WAIT_MS，不能把它算进退出 / 切账号的收尾。
+  leaseAbort?.abort();
+  leaseAbort = undefined;
   cancelLocalAgentConfirmations();
   const previous = current;
   current = undefined;

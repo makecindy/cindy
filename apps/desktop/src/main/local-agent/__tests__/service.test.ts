@@ -28,6 +28,8 @@ const mock = vi.hoisted(() => ({
   region: 'cn',
   nonce: 0,
   startupGate: undefined as Promise<void> | undefined,
+  mkdir: vi.fn(async () => {}),
+  lockSignal: undefined as AbortSignal | undefined,
 }));
 vi.mock('electron', () => ({
   app: {
@@ -52,13 +54,17 @@ vi.mock('../../../shared/brandRegion.js', () => ({
 vi.mock('../../cindy-make/versionRuntimeIdentity.js', () => ({
   isCindyPersonalRuntime: () => mock.personal,
 }));
-vi.mock('node:fs/promises', () => ({ default: { mkdir: async () => {} } }));
+vi.mock('node:fs/promises', () => ({ default: { mkdir: mock.mkdir } }));
 vi.mock('../../device-link/crossProcessLock.js', () => ({
   withCrossProcessLock: async (
     _path: string,
     _options: unknown,
     task: (status: unknown) => Promise<unknown>,
-  ) => task({ held: mock.lockHeld, reason: 'busy' }),
+    signal?: AbortSignal,
+  ) => {
+    mock.lockSignal = signal;
+    return task({ held: mock.lockHeld, reason: 'busy' });
+  },
 }));
 vi.mock('../../appSessionState.js', () => ({
   getDataOwnerLifetime: () => 0,
@@ -73,7 +79,7 @@ vi.mock('../../windowFocusClassifier.js', () => ({
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: vi.fn(),
 }));
-vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn() }) }));
 vi.mock('../runtime.js', () => ({ openLocalAgentRuntime: vi.fn() }));
 vi.mock('../server.js', () => ({
   LocalAgentError: class extends Error {
@@ -295,11 +301,16 @@ describe('generic local app Cindy authorization', () => {
     expect(mock.send).not.toHaveBeenCalled();
   });
   it('does not load another grant snapshot when a shared-profile instance already owns discovery', async () => {
+    vi.useFakeTimers();
     await disposeLocalAgentHost();
     mock.lockHeld = false;
     mock.deps = undefined;
     installLocalAgentHost({} as any);
     await expect(localAgentConnections()).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(mock.deps).toBeUndefined();
+    expect(await localAgentDeveloperConnection()).toEqual({ state: 'host-in-use' });
+    // 退避重试不会因为别人还持着这个 profile 就去抢端点或读别人的授权快照。
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(mock.deps).toBeUndefined();
     expect(await localAgentDeveloperConnection()).toEqual({ state: 'host-in-use' });
   });
@@ -348,6 +359,7 @@ describe('generic local app Cindy authorization', () => {
       });
   });
   it('never returns an old owner endpoint or raw startup error from the code query', async () => {
+    vi.useFakeTimers();
     mock.generation++;
     expect(await localAgentDeveloperConnection()).toEqual({ state: 'owner-unavailable' });
     await disposeLocalAgentHost();
@@ -358,11 +370,98 @@ describe('generic local app Cindy authorization', () => {
     installLocalAgentHost({} as any);
     await expect(localAgentConnections()).rejects.toThrow('[INTERNAL]');
     expect(await localAgentDeveloperConnection()).toEqual({ state: 'failed' });
+    // 重试同样只能报失败态，不能把原始错误或旧 owner 的端点漏给查询方。
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await localAgentDeveloperConnection()).toEqual({ state: 'failed' });
     await expect(
       localAgentDeveloperConnection(() => {
         throw new Error('untrusted');
       }),
     ).rejects.toThrow('[INTERNAL]');
+  });
+
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：`installLocalAgentHost` 失败后本机应用仍然能拿到端点
+   *   （`localAgentConnections` / discovery 建立），而不是整个进程生命周期都没有本机接入。
+   * - Bug／规则依据：2026-11-20 自动更新重启（`reason=update-relaunch`,
+   *   `disposersCompleted=no`）把 `host.lock` 留在磁盘，新实例在 stale 窗口内拿到
+   *   HOST_IN_USE 后永不重试；TapTap PC 的「让 Cindy 帮我排查」由此连续 5 天报
+   *   「Cindy 本机服务还没就绪」，重启 Cindy 才恢复。
+   * - 现有覆盖缺口：相邻用例只断言「一次失败 → host-in-use / failed」，恢复路径无人覆盖。
+   * - 最小失败输入：`lockHeld=false` 后安装（等价旧实例刚退出、锁心跳还新的窗口）。
+   * - tier：unit（注入 Electron、锁与 server，不读写 profile、不用模型或网络）。
+   * - 实测耗时：本文件整体 < 1s。
+   */
+  it('retries while a stale profile lock clears and then publishes the endpoint', async () => {
+    const maker = {} as unknown as Parameters<typeof installLocalAgentHost>[0];
+    vi.useFakeTimers();
+    await disposeLocalAgentHost();
+    mock.lockHeld = false;
+    mock.deps = undefined;
+    installLocalAgentHost(maker);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mock.deps).toBeUndefined();
+    expect(await localAgentDeveloperConnection()).toEqual({ state: 'host-in-use' });
+
+    mock.lockHeld = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mock.deps).toBeDefined();
+    await expect(localAgentConnections()).resolves.toHaveLength(2);
+    expect(await localAgentDeveloperConnection()).not.toEqual({ state: 'host-in-use' });
+  });
+
+  it('waits for the owner to be claimed instead of dropping the host for the whole process', async () => {
+    const maker = {} as unknown as Parameters<typeof installLocalAgentHost>[0];
+    vi.useFakeTimers();
+    await disposeLocalAgentHost();
+    mock.owner = '';
+    mock.deps = undefined;
+    installLocalAgentHost(maker);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mock.deps).toBeUndefined();
+    expect(await localAgentDeveloperConnection()).toEqual({ state: 'owner-unavailable' });
+
+    mock.owner = 'owner-a';
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mock.deps).toBeDefined();
+    await expect(localAgentConnections()).resolves.toHaveLength(2);
+  });
+
+  it('cancels an in-flight lock wait when the host is retired', async () => {
+    const maker = {} as unknown as Parameters<typeof installLocalAgentHost>[0];
+    vi.useFakeTimers();
+    await disposeLocalAgentHost();
+    mock.lockHeld = false;
+    mock.deps = undefined;
+    installLocalAgentHost(maker);
+    await vi.advanceTimersByTimeAsync(0);
+    const signal = mock.lockSignal;
+    expect(signal?.aborted).toBe(false);
+
+    await disposeLocalAgentHost();
+    // 退出 / 切账号不能被最长 STARTUP_LOCK_WAIT_MS 的等锁拖住，也不能被记成启动失败。
+    expect(signal?.aborted).toBe(true);
+    expect(await localAgentDeveloperConnection()).toEqual({ state: 'stopped' });
+  });
+
+  it('stops retrying once the host is retired', async () => {
+    const maker = {} as unknown as Parameters<typeof installLocalAgentHost>[0];
+    vi.useFakeTimers();
+    await disposeLocalAgentHost();
+    mock.lockHeld = false;
+    mock.deps = undefined;
+    mock.mkdir.mockClear();
+    installLocalAgentHost(maker);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mock.mkdir).toHaveBeenCalledTimes(1);
+
+    await disposeLocalAgentHost();
+    mock.lockHeld = true;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(mock.mkdir).toHaveBeenCalledTimes(1);
+    expect(mock.deps).toBeUndefined();
+    expect(await localAgentDeveloperConnection()).toEqual({ state: 'stopped' });
   });
   it('closes a late startup instead of publishing its code after the host was retired', async () => {
     await disposeLocalAgentHost();
