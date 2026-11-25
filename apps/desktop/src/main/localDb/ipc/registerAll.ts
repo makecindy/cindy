@@ -1,4 +1,5 @@
 import { refineCreatedTaskTitle } from '../../maker-ipc/createdTaskTitles.js';
+import { listPluginSessionStatuses } from '../../maker-ipc/pluginObserveTasks.js';
 import { isTaskBusyForArchive } from '../../task-management/service.js';
 import { reconcileDeletedTaskViewState } from '../../mcp-apps/viewStateStore.js';
 import { registerCompanionImport } from '../../bot-import/registration.js';
@@ -227,6 +228,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
 
   registerSessionIpc(getCurrentDbClientUserId, {
     isBusyForProjectArchive: isTaskBusyForArchive,
+    readSessionStatuses: listPluginSessionStatuses,
     resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,
     applyContextWindowBudget: opts.applyContextWindowBudget,

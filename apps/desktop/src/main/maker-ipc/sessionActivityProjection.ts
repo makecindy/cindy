@@ -1,5 +1,6 @@
 import {
   projectSessionActivity,
+  resolveSessionRightStatus,
   type SessionActivitySnapshot,
   type SessionRecordStatus,
 } from '@cindy/maker-shared/session-activity';
@@ -7,9 +8,11 @@ import { eq } from 'drizzle-orm';
 
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getDbClient } from '../localDb/client/current.js';
+import type { DbClient } from '../localDb/client/DbClient.js';
 import { sessions } from '../localDb/schema.js';
 import {
   readLatestSessionTerminal,
+  readLatestSessionTerminals,
   type SessionTerminalHint,
 } from '../localDb/sessionTerminal.js';
 
@@ -106,15 +109,22 @@ export function readCanonicalSessionActivity(
  * Batch read for list views: one live projection pass, with persisted facts
  * supplied by the caller's own query, so each session does not rebuild the live list.
  */
-export function createCanonicalSessionActivityBatchReader(
+export function createCanonicalSessionRightStatusBatchReader(
   persisted: ReadonlyMap<string, PersistedSessionActivityFacts>,
+  db: DbClient['drizzle'],
 ) {
-  const live = new Map(
-    (getAgentIslandService()?.getSessionActivitySnapshots() ?? []).map((item) => [item.sessionId, item]),
-  );
-  return createSessionActivityReader({
-    getLiveSnapshot: (sessionId) => live.get(sessionId) ?? null,
+  const live = getAgentIslandService()?.getSessionActivityFlags(persisted.keys());
+  let terminals: Promise<Map<string, SessionTerminalHint>> | undefined;
+  const readPersisted = createSessionActivityReader({
+    getLiveSnapshot: () => null,
     getPersistedFacts: async (sessionId) => persisted.get(sessionId) ?? null,
-    getLatestTerminal: readLatestSessionTerminal,
+    getLatestTerminal: async (sessionId) => {
+      // Live-only reads skip messages. Cold readers share the same owner-bound lookup.
+      terminals ??= readLatestSessionTerminals(db, [...persisted]
+        .filter(([id]) => !live?.has(id))
+        .map(([id, row]) => [id, row.clearedAt]));
+      return (await terminals).get(sessionId);
+    },
   });
+  return async (id: string) => resolveSessionRightStatus(live?.get(id) ?? await readPersisted(id));
 }

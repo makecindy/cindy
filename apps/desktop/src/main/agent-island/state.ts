@@ -1844,6 +1844,21 @@ export function buildAllSessionActivitySnapshots(
   return snapshots;
 }
 
+/** Same local activity and unread ledger as the sidebar, without projecting chat previews or activity lines. */
+export function readSessionActivityFlags(state: AgentIslandState, ids: Iterable<string>) {
+  const flags = new Map<string, Pick<AgentIslandSessionSnapshot, 'phase' | 'attention'>>();
+  for (const id of ids) {
+    const session = state.sessions.get(id);
+    if (session?.sourceDeviceId === null && !session.groupChat) {
+      flags.set(id, { phase: session.phase, attention: isAttentionSession(session) });
+    } else {
+      const unread = state.remoteUnreadTerminals.get(id);
+      if (unread) flags.set(id, { phase: unread.phase, attention: true });
+    }
+  }
+  return flags;
+}
+
 /**
  * 其它设备任务在岛上的镜像，按与本机任务相同的快照口径读出。只供本进程内的消费方
  * (如键盘状态灯)使用，绝不能并入 {@link buildAllSessionActivitySnapshots} 的 relay 载荷。

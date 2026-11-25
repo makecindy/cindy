@@ -92,8 +92,8 @@ import {
   acceptPluginInvocation,
 } from '../cindy-brain/index.js';
 import { listPluginTargetCandidates, resolvePluginSessionTarget, resolvePluginTargetSession } from './pluginTargetCandidates.js';
-import { assertPluginObservableTask, listPluginObserveTasks } from './pluginObserveTasks.js';
-import { openPluginSession } from './pluginSessionNavigation.js';
+import { assertPluginObservableTask, listPluginObserveTasks, listPluginSessionStatuses } from './pluginObserveTasks.js';
+import { openPluginSession, readPluginSessionStatuses } from './pluginSessionNavigation.js';
 import { selectSessionWithCount } from '../localDb/sessionQueries.js';
 import { createPluginCompanionHost } from './pluginCompanionHost.js';
 import { createPluginTargetStore } from './pluginTargetStore.js';
@@ -1608,6 +1608,7 @@ import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { setBusyProbe as setDeviceLinkBusyProbe } from '../device-link/index.js';
 import {
   markRemoteSettingPersistedInsideHandler,
+  remoteInvokeEpoch,
   setSessionTextSnapshotReader,
   setRemoteTurnChangeAction,
   setRemoteReviewInputGuard as setDeviceLinkRemoteReviewInputGuard,
@@ -15230,6 +15231,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setPluginTaskHandler(handlePluginTask);
   setPluginObserveAdapter({
     projectTasks: listPluginObserveTasks,
+    sessionStatus: (ids, device, guard) => readPluginSessionStatuses({
+      selfDeviceId: getSelfDeviceId,
+      // Local disconnects and permanent closes received from the peer advance separate generations.
+      closeEpoch: deviceId => `${getRemoteLinkCloseEpoch(deviceId)}/${remoteInvokeEpoch(deviceId)}`,
+      readLocal: listPluginSessionStatuses,
+      listDevices: async () => {
+        if (!getAppCapabilities().canUseDeviceLink) throw new Error('[PERMISSION_DENIED] Device Link unavailable');
+        return (await handleListDevices(deviceDirectoryDeps())).devices;
+      },
+      invoke: remoteBackgroundInvoke,
+    }, ids, device, guard),
     openTask: async (taskId, guard) => {
       await assertPluginObservableTask(taskId);
       guard();

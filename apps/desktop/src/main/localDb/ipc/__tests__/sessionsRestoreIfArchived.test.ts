@@ -4,6 +4,7 @@
  * 确认框期间会话可能被删除、由其他入口恢复或移动项目；真实 IPC handler 必须用
  * 一条条件 UPDATE 同时校验 archived 状态和项目身份，不能用 get + update 两步校验。
  */
+import { providerShareGuestPeer } from '@cindy/device-link';
 import Database from 'better-sqlite3';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,6 +22,7 @@ const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  listPluginSessionStatuses: vi.fn<typeof import('../../../maker-ipc/pluginObserveTasks.js').listPluginSessionStatuses>(),
   tapWindowBroadcast: vi.fn(),
   captureOwner: false,
   ownerCurrent: true,
@@ -207,7 +209,7 @@ beforeEach(() => {
   h.handlers.clear();
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
-  registerSessionIpc();
+  registerSessionIpc(undefined, { readSessionStatuses: h.listPluginSessionStatuses });
 });
 
 afterEach(() => {
@@ -458,6 +460,27 @@ describe('bounded reconciliation read', () => {
       () => batch({}, ['target', 'missing', 'target']));
     expect(result).toEqual([expected]);
   });
+  // DB tier, engineering-conventions §8.1. The legacy array exercises the preview path only.
+  it('reads tagged batches of up to 200 ids over an account-owned link without querying previews', async () => {
+    const { runDeviceLinkInvokeContext } = await import('../../../device-link/invoke-context.js');
+    const channel = 'local-db:sessions:get-many';
+    const batch = h.handlers.get(channel)!;
+    const read = (ids: string[], controllerDeviceId = 'desktop') => runDeviceLinkInvokeContext({ controllerDeviceId, channel },
+      () => batch({}, { projection: 'sidebar-status', ids }));
+    const sessions = [{ id: 'target', status: 'awaiting' as const }];
+    h.listPluginSessionStatuses.mockResolvedValueOnce(sessions);
+    const select = vi.spyOn(getDbClient().drizzle, 'select');
+    try {
+      await expect(read(['target', ...Array<string>(199).fill('missing')])).resolves.toEqual({ sessions });
+      await expect(read(Array<string>(201).fill('target'))).rejects.toThrow('[INVALID_PARAMS]');
+      await expect(read(['target'], providerShareGuestPeer('share', 'member', 'desktop'))).rejects.toThrow('[PERMISSION_DENIED]');
+      expect(h.listPluginSessionStatuses).toHaveBeenCalledExactlyOnceWith(['target', 'missing']);
+      expect(select).not.toHaveBeenCalled();
+    } finally {
+      select.mockRestore();
+    }
+  });
+
   it('rejects untrusted local callers and oversized remote batches before querying', async () => {
     const { runDeviceLinkInvokeContext } = await import('../../../device-link/invoke-context.js');
     const batch = h.handlers.get('local-db:sessions:get-many')!;

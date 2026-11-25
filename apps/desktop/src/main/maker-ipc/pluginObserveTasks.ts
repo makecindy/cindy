@@ -1,26 +1,31 @@
 import { and, eq, inArray, isNull, ne, or } from 'drizzle-orm';
-import { getSessionListActivityAt, resolveSessionRightStatus, type SessionRightStatus } from '@cindy/maker-shared/session-activity';
+import { getSessionListActivityAt, type SessionRightStatus } from '@cindy/maker-shared/session-activity';
 import { getCurrentDbClientSnapshot, type CurrentDbClientSnapshot } from '../localDb/client/current.js';
+import type { DbClient } from '../localDb/client/DbClient.js';
 import { botSessionLinks, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
 import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirs.js';
 import { projectKeyComparisonKey } from '../../shared/projectKeys.js';
-import type { PluginObserveTask } from '../../shared/pluginObserve.js';
-import { createCanonicalSessionActivityBatchReader, type PersistedSessionActivityFacts } from './sessionActivityProjection.js';
+import type { PluginObserveTask, PluginObserveTaskStatus, PluginSessionStatus } from '../../shared/pluginObserve.js';
+import { createCanonicalSessionRightStatusBatchReader, type PersistedSessionActivityFacts } from './sessionActivityProjection.js';
 
 const MAX_PROJECT_TASKS = 200;
 const projectKey = (dir: string) => projectKeyComparisonKey(`local:${dir}`, process.platform);
 
-/** Same visibility as plugin targets, plus archived tasks; excludes dialogues. */
-const visibleTask = and(
+/** Ordinary records that openSession can navigate to by known ID in this account's database. */
+const observableSession = and(
   or(eq(sessions.status, 'active'), eq(sessions.status, 'archived')),
-  eq(sessions.workspaceKind, 'project'),
-  isNull(sessions.remoteHostId),
-  isNull(sessions.agentDeviceId),
   isNull(sessions.hiddenAt),
   isNull(botSessionLinks.id),
   ne(sessions.source, 'bot'),
   ne(sessions.source, 'review'),
   or(isNull(sessions.orcaRole), ne(sessions.orcaRole, 'worker')),
+);
+
+const visibleTask = and(
+  observableSession,
+  eq(sessions.workspaceKind, 'project'),
+  isNull(sessions.remoteHostId),
+  isNull(sessions.agentDeviceId),
 );
 
 const activityFacts = {
@@ -45,15 +50,45 @@ function withWorkerAttention(own: SessionRightStatus, workers: SessionRightStatu
   return own;
 }
 
-/**
- * Metadata-only task list for one registered local project, using the
- * canonical activity read model so status matches the sidebar.
- */
+async function readObserveStatuses(
+  db: DbClient['drizzle'],
+  matched: Array<PersistedSessionActivityFacts & Pick<typeof sessions.$inferSelect, 'id' | 'orcaRole'>>,
+): Promise<Map<string, PluginObserveTaskStatus>> {
+  const statuses = new Map<string, PluginObserveTaskStatus>();
+  if (matched.length === 0) return statuses;
+  const leadIds = matched.filter((row) => row.orcaRole === 'lead').map((row) => row.id);
+  const workers = leadIds.length === 0 ? [] : await db
+    .select({ ...activityFacts, id: sessions.id, leadSessionId: orcaTeams.leadSessionId })
+    .from(orcaWorkers)
+    .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
+    .innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
+    .where(and(
+      inArray(orcaTeams.leadSessionId, leadIds),
+      eq(orcaTeams.status, 'active'),
+      isNull(orcaWorkers.executionDeviceId),
+      eq(sessions.status, 'active'),
+    ));
+  const persisted = new Map<string, PersistedSessionActivityFacts>([...matched, ...workers].map((row) => [row.id, row]));
+  const readStatus = createCanonicalSessionRightStatusBatchReader(persisted, db);
+  const workerStatuses = new Map<string, SessionRightStatus[]>();
+  for (const worker of workers) {
+    const list = workerStatuses.get(worker.leadSessionId) ?? [];
+    list.push(await readStatus(worker.id));
+    workerStatuses.set(worker.leadSessionId, list);
+  }
+  for (const row of matched) {
+    const status = withWorkerAttention(await readStatus(row.id), workerStatuses.get(row.id) ?? []);
+    statuses.set(row.id, status === 'time' ? 'idle' : status);
+  }
+  return statuses;
+}
+
+/** Metadata-only task list for one registered local project. */
 export async function listPluginObserveTasks(project: string): Promise<PluginObserveTask[]> {
   const snapshot = getCurrentDbClientSnapshot();
   if (!snapshot) throw new Error('HOST_NOT_READY');
-  const key = await registeredProjectKey(snapshot, project);
   const db = snapshot.client.drizzle;
+  const key = await registeredProjectKey(snapshot, project);
   const rows = await db
     .select({
       ...activityFacts,
@@ -72,40 +107,35 @@ export async function listPluginObserveTasks(project: string): Promise<PluginObs
     .filter((row) => row.workingDir !== null && projectKey(row.workingDir) === key)
     .sort((a, b) => getSessionListActivityAt(b) - getSessionListActivityAt(a))
     .slice(0, MAX_PROJECT_TASKS);
-  const leadIds = matched.filter((row) => row.orcaRole === 'lead').map((row) => row.id);
-  const workers = leadIds.length === 0 ? [] : await db
-    .select({ ...activityFacts, id: sessions.id, leadSessionId: orcaTeams.leadSessionId })
-    .from(orcaWorkers)
-    .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
-    .innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
-    .where(and(
-      inArray(orcaTeams.leadSessionId, leadIds),
-      eq(orcaTeams.status, 'active'),
-      isNull(orcaWorkers.executionDeviceId),
-      eq(sessions.status, 'active'),
-    ));
-  const persisted = new Map<string, PersistedSessionActivityFacts>([...matched, ...workers].map((row) => [row.id, row]));
-  const readActivity = createCanonicalSessionActivityBatchReader(persisted);
-  const readStatus = async (id: string) => resolveSessionRightStatus(await readActivity(id));
-  const workerStatuses = new Map<string, SessionRightStatus[]>();
-  for (const worker of workers) {
-    const list = workerStatuses.get(worker.leadSessionId) ?? [];
-    list.push(await readStatus(worker.id));
-    workerStatuses.set(worker.leadSessionId, list);
-  }
-  const tasks = await Promise.all(matched.map(async (row): Promise<PluginObserveTask> => {
-    const status = withWorkerAttention(await readStatus(row.id), workerStatuses.get(row.id) ?? []);
-    return {
-      id: row.id,
-      title: row.title,
-      agentKind: row.agentKind,
-      archived: row.status === 'archived',
-      status: status === 'time' ? 'idle' : status,
-      lastActivityAt: getSessionListActivityAt(row),
-    };
-  }));
+  const statuses = await readObserveStatuses(db, matched);
   if (getCurrentDbClientSnapshot() !== snapshot) throw new Error('PERMISSION_DENIED');
-  return tasks;
+  return matched.map(row => ({
+    id: row.id,
+    title: row.title,
+    agentKind: row.agentKind,
+    archived: row.status === 'archived',
+    status: statuses.get(row.id)!,
+    lastActivityAt: getSessionListActivityAt(row),
+  }));
+}
+
+/** The record owner is the selected database. SSH and agent-device fields describe execution. */
+export async function listPluginSessionStatuses(ids: string[]): Promise<PluginSessionStatus[]> {
+  const snapshot = getCurrentDbClientSnapshot();
+  if (!snapshot) throw new Error('HOST_NOT_READY');
+  if (ids.length === 0) return [];
+  const db = snapshot.client.drizzle;
+  const requested = [...new Set(ids)];
+  const rows = await db.select({ ...activityFacts, id: sessions.id, orcaRole: sessions.orcaRole })
+    .from(sessions)
+    .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+    .where(and(inArray(sessions.id, requested), observableSession));
+  const statuses = await readObserveStatuses(db, rows);
+  if (getCurrentDbClientSnapshot() !== snapshot) throw new Error('PERMISSION_DENIED');
+  return requested.flatMap(id => {
+    const status = statuses.get(id);
+    return status ? [{ id, status }] : [];
+  });
 }
 
 /** Only a visible task of a registered local project may be opened. */

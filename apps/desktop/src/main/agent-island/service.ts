@@ -124,6 +124,7 @@ import {
   buildAgentIslandTaskOverview,
   buildLocalAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
+  readSessionActivityFlags,
   buildDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
@@ -2103,6 +2104,10 @@ export class AgentIslandService {
   /** Current public activity only; avoids scanning historical Bot Session links. */
   getSessionActivitySnapshots(): SessionActivitySnapshot[] {
     return this.buildSessionActivityPayload().map(canonicalSessionActivity);
+  }
+
+  getSessionActivityFlags(ids: Iterable<string>) {
+    return readSessionActivityFlags(this.state, ids);
   }
 
   /** Complete owned-host list, including unread results past the island's display TTL. */

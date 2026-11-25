@@ -10313,7 +10313,7 @@ export function registerGhostIpc(): void {
       }
       const revision = pluginObserveAuthorizationRevision(id);
       return handlePluginObserveRequest(pluginObserveAdapter, payload, () => {
-        if (!isCurrent() || !revision || pluginObserveAuthorizationRevision(id) !== revision)
+        if (isAppSessionBoundaryPending() || !isCurrent() || !revision || pluginObserveAuthorizationRevision(id) !== revision)
           throw Object.assign(new Error('PERMISSION_DENIED'), { code: 'PERMISSION_DENIED' });
       }, () => hasPluginHostToolGroupApproval(findGhostForInstanceId(id), 'history'));
     }

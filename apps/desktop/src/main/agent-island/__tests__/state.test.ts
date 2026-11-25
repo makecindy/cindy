@@ -21,6 +21,7 @@ import {
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
+  readSessionActivityFlags,
   closeAgentIslandSessionPreservingUnread,
   completedReplySummary,
   createAgentIslandState,
@@ -2956,6 +2957,17 @@ describe('Agent Island error read semantics (已读以 App 内真实展示为准
     expect(acknowledgeAgentIslandSessionRead(state, 'err', 3_200, { source: 'explicit' })).toBe('cleared');
     expect(state.remoteUnreadTerminals.has('err')).toBe(false);
     expect(state.sessions.get('err')?.unread).toBe(false);
+  });
+
+  it('reads requested sidebar flags and retained unread terminals without inspecting chat previews', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'earlier' }, terminalErrorEvent('failure'), 2_000);
+    buildAgentIslandDisplayState(state, 2_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 1);
+    applyAgentIslandUserPrompt(state, { sessionId: 'live' }, 'prompt', 3_000);
+    Object.defineProperty(state.sessions.get('live')!, 'messagePreview', { get() { throw new Error('preview read'); } });
+    expect(readSessionActivityFlags(state, ['live', 'earlier', 'absent'])).toEqual(new Map([
+      ['live', { phase: 'running', attention: false }], ['earlier', { phase: 'error', attention: true }],
+    ]));
   });
 
   it('keeps a ledger-only unread error through a fresh running turn and App badge mirror', () => {

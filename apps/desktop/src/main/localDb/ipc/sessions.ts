@@ -139,7 +139,9 @@ import { formatIslandToolDetail } from '../../agent-island/toolDetail';
 import { createLocalizedToolRowWording } from '../../agent-island/toolWording';
 import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
 import { SESSION_READ_BATCH_LIMIT } from '../../../shared/sessionRead';
-import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import { parseSessionStatusIds, SESSION_STATUS_PROJECTION, type PluginSessionStatus } from '../../../shared/pluginObserve.js';
+import { isScopedPeer } from '@cindy/device-link';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererWindow,
@@ -233,6 +235,7 @@ export interface SessionRecycleScope {
 
 export interface RegisterSessionIpcOpts {
   isBusyForProjectArchive?: (sessionId: string) => boolean;
+  readSessionStatuses?: (ids: string[]) => Promise<PluginSessionStatus[]>;
   localPluginWorktrees?: UserSessionCreatePorts['localPluginWorktrees'];
   /** Use the same live catalog as runtime usage, without writing during reads. */
   resolveContextWindow?: (session: ContextWindowSession) => number | null;
@@ -1510,6 +1513,15 @@ export function registerSessionIpc(
   // Omitted rows mean missing or remotely hidden; the tunnel filters visibility.
   ipcMain.handle('local-db:sessions:get-many', async (event, value: unknown) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    // A tagged first argument makes older hosts reject this read before loading any message preview.
+    if (value && typeof value === 'object' && 'projection' in value && value.projection === SESSION_STATUS_PROJECTION) {
+      const peer = getDeviceLinkInvokeContext();
+      if (peer?.sharedTask || isScopedPeer(peer?.controllerDeviceId)) throwIpcError('PERMISSION_DENIED', 'An account-owned link is required');
+      const ids = parseSessionStatusIds('ids' in value ? value.ids : undefined);
+      if (!ids) throwIpcError('INVALID_PARAMS', 'Invalid session status ids');
+      if (!opts.readSessionStatuses) throwIpcError('UNSUPPORTED_CAPABILITY', 'Sidebar status is unavailable');
+      return { sessions: await opts.readSessionStatuses(ids) };
+    }
     if (!Array.isArray(value) || value.length > SESSION_READ_BATCH_LIMIT) {
       throwIpcError(
         'INVALID_PARAMS',

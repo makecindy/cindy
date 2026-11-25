@@ -1,32 +1,26 @@
 import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
-import * as schema from '../../localDb/schema.js';
+import type { DbTransport } from '../../localDb/client/DbTransport.js';
+import { createDrizzleProxy } from '../../localDb/client/drizzleProxy.js';
 
 const mocks = vi.hoisted(() => ({
-  workdirs: [] as Array<{ path: string; exists: boolean }>,
+  workdirs: vi.fn<() => Promise<Array<{ path: string; exists: boolean }>>>(),
   phases: new Map<string, { phase: string; attention: boolean }>(),
-  onRead: null as null | (() => void),
-  batchReaders: [] as string[][],
+  snapshots: vi.fn<() => Map<string, { phase: string; attention: boolean }>>(),
 }));
-vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ listRecentWorkdirs: async () => mocks.workdirs }));
-vi.mock('../sessionActivityProjection.js', () => ({
-  createCanonicalSessionActivityBatchReader: (persisted: Map<string, unknown>) => {
-    mocks.batchReaders.push([...persisted.keys()].sort());
-    return async (id: string) => {
-      mocks.onRead?.();
-      return mocks.phases.get(id) ?? { phase: 'idle', attention: false };
-    };
-  },
+vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ listRecentWorkdirs: mocks.workdirs }));
+vi.mock('../../agent-island/service.js', () => ({
+  getAgentIslandService: () => ({ getSessionActivityFlags: mocks.snapshots }),
 }));
 
-import { assertPluginObservableTask, listPluginObserveTasks } from '../pluginObserveTasks.js';
+import { assertPluginObservableTask, listPluginObserveTasks, listPluginSessionStatuses } from '../pluginObserveTasks.js';
 
 let db: Database.Database;
 let client: DbClient;
+const readDb = vi.fn(({ sql, params }: { sql: string; params: unknown[] }) => db.prepare(sql).raw().all(...params));
 
 beforeEach(() => {
   db = new Database(':memory:');
@@ -39,42 +33,63 @@ beforeEach(() => {
       active_turn_started_at INTEGER, last_turn_ended_at INTEGER, cleared_at INTEGER,
       last_activity_at INTEGER, user_send_at INTEGER, updated_at INTEGER NOT NULL
     );
-    CREATE TABLE bot_session_links (id TEXT PRIMARY KEY, session_id TEXT NOT NULL);
+    CREATE TABLE messages (session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, rewind_at INTEGER);
+    CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
+    CREATE INDEX idx_messages_rewind_at ON messages(rewind_at);
+    CREATE INDEX idx_messages_active_error_tail ON messages(session_id, created_at) WHERE role = 'error' AND rewind_at IS NULL;
+    CREATE TABLE bot_session_links (id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE);
     CREATE TABLE orca_teams (id TEXT PRIMARY KEY, lead_session_id TEXT NOT NULL, status TEXT NOT NULL);
     CREATE TABLE orca_workers (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, session_id TEXT NOT NULL, execution_device_id TEXT);
   `);
-  client = { drizzle: drizzle(db, { schema }) } as unknown as DbClient;
+  readDb.mockClear();
+  const transport: DbTransport = {
+    async send<R>(op: string, args: unknown) {
+      if (op !== 'rawAll') throw new Error(`Unexpected DB operation ${op}`);
+      return readDb(args as Parameters<typeof readDb>[0]) as R;
+    },
+    on() {},
+    onTerminated() {},
+    async close() {},
+  };
+  const unexpected = (): never => { throw new Error('Expected a Drizzle read'); };
+  client = {
+    drizzle: createDrizzleProxy(transport),
+    query: unexpected, queryOne: unexpected, exec: unexpected, tx: unexpected,
+    vecAvailable: false, async dispose() {},
+  };
   setCurrentDbClient(client, 'test-user');
-  mocks.workdirs = [{ path: '/repo', exists: true }, { path: '/gone', exists: false }];
+  mocks.workdirs.mockReset().mockResolvedValue([{ path: '/repo', exists: true }, { path: '/gone', exists: false }]);
   mocks.phases.clear();
-  mocks.onRead = null;
-  mocks.batchReaders = [];
+  mocks.snapshots.mockReset().mockImplementation(() => mocks.phases);
 });
 afterEach(() => {
   clearCurrentDbClient();
   db.close();
 });
 
-const insert = (id: string, workingDir: string, updatedAt: number, extra = '') =>
-  db.prepare(`INSERT INTO sessions (id, title, working_dir, updated_at) VALUES (?, ?, ?, ?)`).run(id, `title ${id}`, workingDir, updatedAt) &&
-  (extra ? db.exec(`UPDATE sessions SET ${extra} WHERE id = '${id}'`) : undefined);
+function insert(id: string, workingDir: string | null, updatedAt: number, extra = '') {
+  db.prepare('INSERT INTO sessions (id, title, working_dir, updated_at) VALUES (?, ?, ?, ?)').run(id, `title ${id}`, workingDir, updatedAt);
+  if (extra) db.prepare(`UPDATE sessions SET ${extra} WHERE id = ?`).run(id);
+}
 
-// unit: real SQL filters against in-memory SQLite; only the activity reader and workdir registry are stubbed.
-it('lists only visible local tasks of the registered project, as metadata in activity order', async () => {
+// Unit coverage for observe visibility. A known dialogue or SSH task can be opened independently of the project registry.
+it('lists registered project metadata and looks up known ordinary session IDs across workspaces', async () => {
   insert('recent', '/repo', 30);
   insert('worktree', '/repo/.cindy-worktrees/branch', 10, 'last_activity_at = 50');
   insert('archived', '/repo', 20, "status = 'archived'");
   insert('other-project', '/elsewhere', 99);
   insert('deleted', '/repo', 99, "status = 'deleted'");
-  insert('dialogue', '/repo', 99, "workspace_kind = 'dialogue'");
+  insert('dialogue', null, 99, "workspace_kind = 'dialogue'");
   insert('hidden', '/repo', 99, 'hidden_at = 1');
   insert('worker', '/repo', 99, "orca_role = 'worker'");
   insert('review', '/repo', 99, "source = 'review'");
   insert('remote', '/repo', 99, "remote_host_id = 'ssh-host'");
   insert('device', '/repo', 99, "agent_device_id = 'other'");
   insert('bot', '/repo', 99);
+  insert('bot-source', null, 99, "source = 'bot'");
   db.exec("INSERT INTO bot_session_links VALUES ('link', 'bot')");
   mocks.phases.set('recent', { phase: 'running', attention: false });
+  mocks.phases.set('missing', { phase: 'running', attention: false });
   mocks.phases.set('worktree', { phase: 'needs-interaction', attention: true });
 
   const tasks = await listPluginObserveTasks('/repo');
@@ -84,6 +99,27 @@ it('lists only visible local tasks of the registered project, as metadata in act
     { id: 'recent', title: 'title recent', agentKind: 'cc', archived: false, status: 'running', lastActivityAt: 30 },
     { id: 'archived', title: 'title archived', agentKind: 'cc', archived: true, status: 'idle', lastActivityAt: 20 },
   ]);
+
+  mocks.workdirs.mockClear();
+  readDb.mockClear();
+  const statuses = await listPluginSessionStatuses([
+    'dialogue', 'missing', 'recent', 'other-project', 'remote', 'device', 'archived',
+    'deleted', 'hidden', 'worker', 'review', 'bot', 'bot-source',
+  ]);
+  expect(statuses).toEqual([
+    { id: 'dialogue', status: 'idle' }, { id: 'recent', status: 'running' },
+    { id: 'other-project', status: 'idle' }, { id: 'remote', status: 'idle' },
+    { id: 'device', status: 'idle' }, { id: 'archived', status: 'idle' },
+  ]);
+  expect(mocks.workdirs).not.toHaveBeenCalled();
+  expect(JSON.stringify(readDb.mock.results)).not.toContain('worktree');
+  const plans = readDb.mock.calls.flatMap(([{ sql, params }]) =>
+    db.prepare<unknown[], { detail: string }>(`EXPLAIN QUERY PLAN ${sql}`).all(...params).map(row => row.detail));
+  expect(plans).toEqual(expect.arrayContaining([
+    expect.stringMatching(/SEARCH sessions USING .*INDEX .*\(id=\?\)/),
+    expect.stringContaining('SEARCH tail USING INDEX idx_messages_session_created'),
+    expect.stringContaining('SEARCH messages USING INTEGER PRIMARY KEY'),
+  ]));
 });
 
 // unit: sidebar parity for Orca leads (orcaLeadWorkerAttention.ts) — a lead must not look idle while its worker waits or failed.
@@ -101,7 +137,10 @@ it('lifts local worker error and awaiting onto the lead with one batched activit
   const status = new Map((await listPluginObserveTasks('/repo')).map((task) => [task.id, task.status]));
 
   expect(Object.fromEntries(status)).toEqual({ 'lead-wait': 'awaiting', 'lead-error': 'error', 'lead-remote': 'idle', 'lead-done': 'idle' });
-  expect(mocks.batchReaders).toEqual([['lead-done', 'lead-error', 'lead-remote', 'lead-wait', 'w-error', 'w-wait']]);
+  expect(mocks.snapshots).toHaveBeenCalledTimes(1);
+  const ids = ['lead-remote', 'lead-error', 'lead-done', 'lead-wait'];
+  await expect(listPluginSessionStatuses([...ids, 'w-error'])).resolves.toEqual(ids.map(id => ({ id, status: status.get(id) })));
+  expect(mocks.snapshots).toHaveBeenCalledTimes(2);
 });
 
 it('rejects unregistered or missing projects and opens only listable tasks', async () => {
@@ -116,8 +155,59 @@ it('rejects unregistered or missing projects and opens only listable tasks', asy
   await expect(assertPluginObservableTask('missing')).rejects.toThrow('TARGET_UNAVAILABLE');
 });
 
-it('fails closed when the account database changes during the read', async () => {
+// Unit coverage for the status-only contract. The old projection mock could hide a body in the DB worker reply.
+it('batches visible terminal hints and preserves native completion, interruption, clear and rewind semantics', async () => {
+  const errors = [
+    ['malformed', 'private-error-body', 'error'],
+    ['dismissed', '{"dismissed":true}', 'idle'],
+    ['number', '{"dismissed":1}', 'error'],
+    ['string', '{"dismissed":"true"}', 'error'],
+    ['last-dismissal', '{"dismissed":false,"dismissed":true}', 'idle'],
+    ['last-reopened', '{"dismissed":true,"dismissed":false}', 'error'],
+    ['non-text', Buffer.from('{"dismissed":true}'), 'error'],
+  ] as const;
+  const message = db.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?)');
+  for (const [id, content] of errors) {
+    insert(id, '/repo', 1);
+    message.run(id, 'error', content, 15, null);
+  }
+  insert('completed', null, 1, "workspace_kind = 'dialogue', active_turn_started_at = 10, last_turn_ended_at = 20");
+  message.run('completed', 'error', 'private-error-body', 20, null);
+  message.run('completed', 'assistant', 'private-assistant-body', 20, null);
+  message.run('completed', 'error', 'private-error-body', 21, 22);
+  insert('cleared', '/repo', 1, 'active_turn_started_at = 10, cleared_at = 20');
+  message.run('cleared', 'error', 'private-error-body', 20, null);
+  insert('interrupted', '/repo', 1, 'active_turn_started_at = 21, last_turn_ended_at = 19, cleared_at = 20');
+  insert('unread', '/repo', 1);
+  message.run('unread', 'error', 'private-error-body', 20, null);
+  mocks.phases.set('unread', { phase: 'completed', attention: true });
+
+  // SQLite evaluates this view column only when a query actually touches the body.
+  db.function('error_content', (role, content) => {
+    if (role !== 'error') throw new Error('Ordinary message body read');
+    return content;
+  });
+  db.exec(`ALTER TABLE messages RENAME TO stored_messages;
+    CREATE VIEW messages AS SELECT rowid, session_id, role, error_content(role, content) AS content,
+      created_at, rewind_at FROM stored_messages;`);
+  const statuses = await listPluginSessionStatuses([...errors.map(([id]) => id), 'completed', 'cleared', 'interrupted', 'unread']);
+  expect(statuses).toEqual([
+    ...errors.map(([id, , status]) => ({ id, status })),
+    { id: 'completed', status: 'idle' }, { id: 'cleared', status: 'idle' },
+    { id: 'interrupted', status: 'error' }, { id: 'unread', status: 'done' },
+  ]);
+  expect(readDb.mock.calls.length).toBeLessThanOrEqual(2);
+  expect(JSON.stringify(readDb.mock.results)).not.toContain('private-');
+});
+
+it.each([
+  ['project tasks', () => listPluginObserveTasks('/repo')],
+  ['session statuses', () => listPluginSessionStatuses(['task'])],
+] as const)('rejects %s if the account changes while projecting the result', async (_name, read) => {
   insert('task', '/repo', 1);
-  mocks.onRead = () => setCurrentDbClient({} as DbClient, 'other-user');
-  await expect(listPluginObserveTasks('/repo')).rejects.toThrow('PERMISSION_DENIED');
+  mocks.snapshots.mockImplementationOnce(() => {
+    setCurrentDbClient({ ...client, get drizzle(): DbClient['drizzle'] { throw new Error('Read from another account'); } }, 'other-user');
+    return new Map();
+  });
+  await expect(read()).rejects.toThrow('PERMISSION_DENIED');
 });

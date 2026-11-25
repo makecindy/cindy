@@ -2785,11 +2785,15 @@ function notifyRemotePushChannel(deviceId: string, channel: string, payload?: un
   }
 }
 
+type BackgroundInvokeOptions = {
+  preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; liveProviderMetadata?: true; ownFreshness?: true;
+};
+
 export async function remoteBackgroundInvoke(
   agentDeviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void; beforeDispatch?: () => void; liveProviderMetadata?: true; ownFreshness?: true },
+  options?: BackgroundInvokeOptions,
 ): Promise<InvokeResultPayload> {
   const owner = activeOwnerScopeKey();
   const current = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner;
@@ -2908,7 +2912,7 @@ export function providerShareHostInvoke(target: string, channel: string, args: u
   return remoteBackgroundInvoke(target, channel, args);
 }
 
-async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; beforeDispatch?: () => void; liveProviderMetadata?: true; ownFreshness?: true }): Promise<InvokeResultPayload> {
+async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[], options?: BackgroundInvokeOptions): Promise<InvokeResultPayload> {
   if (options?.liveProviderMetadata) return backgroundInvokeDeviceLive(deviceId, channel, args, options);
   const epoch = getRemoteLinkCloseEpoch(deviceId);
   return invokeProviderMetadataContinuity(deviceId, channel, args,
@@ -2919,7 +2923,7 @@ async function backgroundInvokeDevice(deviceId: string, channel: string, args: u
     }, options?.ownFreshness ? { ownFreshness: true } : undefined);
 }
 
-async function backgroundInvokeDeviceLive(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; beforeDispatch?: () => void }): Promise<InvokeResultPayload> {
+async function backgroundInvokeDeviceLive(deviceId: string, channel: string, args: unknown[], options?: BackgroundInvokeOptions): Promise<InvokeResultPayload> {
   options?.preSend?.();
   if (!client?.isLinkReady(deviceId)) {
     assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {
