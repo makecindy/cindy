@@ -2577,6 +2577,27 @@ describe('pooled Codex model discovery', () => {
     }
   });
 
+  // Unit: native Codex chat can run without a readable workspace token. A quota
+  // notification during a turn must preserve its model list and any refresh in flight.
+  it.each([true, false])('keeps the active Codex catalog through a same-plan quota notification (workspace known: %s)', async workspaceKnown => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.read.mockResolvedValue({ authenticated: true, identity: 'same-login', plan: 'pro' });
+    if (!workspaceKnown) h.tokens.mockRejectedValue(new Error('native-only login'));
+    const model = 'gpt-6.2-sol';
+    h.rpc.mockResolvedValue({ data: [{ id: model }] });
+    const lease = await acquireSubscriptionAccount('openai', model, []);
+    try {
+      expect(readSubscriptionPoolCodexModels()?.map(entry => entry.id)).toEqual([model]);
+      h.rpc.mockImplementationOnce(async () => {
+        observeSubscriptionAccountUsage(lease!.account, { limitId: 'codex', planType: 'pro',
+          primary: { usedPercent: 10, windowMinutes: 300 } });
+        return { data: [{ id: model }, { id: 'new-model' }] };
+      });
+      await refreshSubscriptionPoolCodexModels(true);
+      expect(readSubscriptionPoolCodexModels()?.map(entry => entry.id)).toEqual([model, 'new-model']);
+    } finally { lease?.release(); }
+  });
+
   // PR #10327 review: failed discovery was cached as valid empty membership.
   // Unit: retry without an auth change, retain only this login's LKG, and let
   // the public manual refresh force a fresh read rather than reusing failure.
