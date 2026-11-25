@@ -16551,6 +16551,7 @@
       "legacy": "Das dieser Aufgabe zugewiesene Abonnementkonto ist nicht verfügbar. Prüfe Anmeldung und Nutzung auf dem ausführenden Computer oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt."
     },
     "annotations": {
+      "queued": "Zum Senden eingereiht",
       "add": "Anmerkung hinzufügen",
       "title": "Anmerkung",
       "open": "Anmerkung {{number}} öffnen",
@@ -20231,6 +20232,7 @@
       "reviseHint": "Du möchtest Änderungen? Sag einfach in der Lernsitzung Bescheid"
     },
     "ipcError": {
+    "ANNOTATION_ALREADY_QUEUED": "Diese Anmerkung ist bereits zum Senden eingereiht. Warte auf den Versand oder entferne die Nachricht aus der Warteschlange.",
       "LEARN_BUSY": "Eine Lernaufgabe läuft bereits",
       "LEARN_INVALID_STATE": "Der Status des Vorschlags hat sich geändert. Aktualisiere die Ansicht und versuch es erneut.",
       "NOT_FOUND": "Die Lernaufgabe existiert nicht oder wurde bereits bereinigt",

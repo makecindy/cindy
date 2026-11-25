@@ -137,9 +137,9 @@ export function MessageAnnotations({ sessionId, containerRef }: {
         : <p className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-sm leading-relaxed">{selected?.comment}</p>}
       {error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}
       <div className="mt-3 flex items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">{t(selected?.sentAt ? 'chat.annotations.sent' : 'chat.annotations.pending')}</span>
+        <span className="text-xs text-muted-foreground">{t(selected?.sentAt ? 'chat.annotations.sent' : selected?.queued ? 'chat.annotations.queued' : 'chat.annotations.pending')}</span>
         {draft ? <Button variant="secondary" className="message-annotation-action" size="sm" disabled={saving || !comment.trim()} onClick={() => void save()}>{t(saving ? 'chat.annotations.saving' : 'chat.annotations.save')} ↵</Button>
-          : !selected?.sentAt && selected && <Button size="sm" variant="secondary" disabled={saving} onClick={async () => {
+          : !selected?.sentAt && !selected?.queued && selected && <Button size="sm" variant="secondary" disabled={saving} onClick={async () => {
             setSaving(true);
             try { await updateMessageAnnotations({ action: 'remove', sessionId, id: selected.id }); close(); }
             catch { setError(t('chat.annotations.saveFailed')); }

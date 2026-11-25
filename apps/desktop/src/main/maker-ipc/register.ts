@@ -1,4 +1,5 @@
 import { assertSessionTreeOwner, navigateAndRehydrateSessionTree } from './sessionTreeNavigation.js';
+import { setMessageAnnotationQueueReader } from '../localDb/messageAnnotationQueue.js';
 import { bindSessionUsageAccount } from '../usage/sessionUsageOwner.js';
 import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt } from './contextRecoveryAssembly.js';
 import { desktopContextRecoveryAbortSignal } from './contextRecoveryAssembly.desktop.js';
@@ -20658,6 +20659,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;
+  setMessageAnnotationQueueReader(sessionId => inputCoordinator.getQueuedMessageAnnotationIds(sessionId));
   setBotInvitationRuntimeReady({
     discardLegacyQueuedWelcome: async (sessionId) =>
       (await discardQueuedInvitationWelcomes(inputCoordinator, sessionId)) !== null,

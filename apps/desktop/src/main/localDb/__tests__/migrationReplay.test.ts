@@ -435,13 +435,14 @@ describeMigrationReplay('migration replay', () => {
       db.exec("INSERT INTO sessions (id, created_at, updated_at) VALUES ('annotation-task', 1, 1)");
       db.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('reply', 'reply-client', 'annotation-task', 'assistant', ?, 1)")
         .run(JSON.stringify('同一句，同一句'));
+      const queuedIds = new Set<string>();
       const ports = {
         db: {
           query: async <T,>(sql: string, params: unknown[] = []) => db.prepare(sql).all(...params) as T[],
           queryOne: async <T,>(sql: string, params: unknown[] = []) => db.prepare(sql).get(...params) as T | undefined,
           exec: async (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params),
         },
-        assertCurrent: () => {}, canCreate: async () => true,
+        assertCurrent: () => {}, canCreate: async () => true, queuedIds: async () => queuedIds,
       };
       const request = { action: 'add' as const, sessionId: 'annotation-task', comment: '请展开第二处', anchor: {
         messageClientId: 'reply-client', sourceVersion: annotationSourceVersion('同一句，同一句'),
@@ -451,6 +452,10 @@ describeMigrationReplay('migration replay', () => {
       let records = await executeMessageAnnotationRequest(request, ports);
       expect(records).toHaveLength(1);
       expect(records[0]).toMatchObject({ ordinal: 1, sentAt: null, start: 4 });
+      queuedIds.add(records[0].id);
+      expect((await executeMessageAnnotationRequest({ action: 'list', sessionId: request.sessionId }, ports))[0]).toMatchObject({ sentAt: null, queued: true });
+      await expect(executeMessageAnnotationRequest({ action: 'remove', sessionId: request.sessionId, id: records[0].id }, ports)).rejects.toThrow('Annotation is queued');
+      queuedIds.clear();
       const args = { id: 'user-row', clientId: 'user-client', sessionId: 'annotation-task', role: 'user',
         content: JSON.stringify({ text: formatMessageAnnotationsForSend('', records) }), createdAt: 100 };
       runDbTransaction(db, { name: 'message.insert', args: { ...args, publication: 'stage' } });
@@ -470,6 +475,12 @@ describeMigrationReplay('migration replay', () => {
       const replaced = await executeMessageAnnotationRequest(request, ports);
       expect(replaced).toHaveLength(99);
       expect(new Set(replaced.map(a => a.ordinal)).size).toBe(99);
+      db.exec("UPDATE sessions SET cleared_at = 1 WHERE id = 'annotation-task'");
+      expect(await executeMessageAnnotationRequest({ action: 'list', sessionId: request.sessionId }, ports)).toEqual([]);
+      await expect(executeMessageAnnotationRequest(request, ports)).rejects.toThrow('Response is not saved yet');
+      db.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('new-reply', 'new-reply-client', 'annotation-task', 'assistant', ?, 2)")
+        .run(JSON.stringify('同一句，同一句'));
+      expect(await executeMessageAnnotationRequest({ ...request, anchor: { ...request.anchor, messageClientId: 'new-reply-client' } }, ports)).toHaveLength(1);
       db.exec("DELETE FROM sessions WHERE id = 'annotation-task'");
       expect(db.prepare('SELECT count(*) AS count FROM message_annotations').get()).toEqual({ count: 0 });
     } finally { cleanup(); }

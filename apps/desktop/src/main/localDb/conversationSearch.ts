@@ -218,14 +218,15 @@ export async function searchConversations(
       sessionId: string; messageId: string; messageClientId: string; comment: string; quote: string; createdAt: number;
     }>(`SELECT a.session_id AS sessionId, m.id AS messageId, m.client_id AS messageClientId,
       a.comment, json_extract(a.anchor_json, '$.quote') AS quote, a.created_at AS createdAt
-      FROM message_annotations a JOIN messages m ON m.id = a.message_id
+      FROM message_annotations a JOIN messages m ON m.id = a.message_id JOIN sessions s ON s.id = a.session_id
       WHERE m.rewind_at IS NULL AND m.role = 'assistant'
+      AND (s.cleared_at IS NULL OR m.created_at > s.cleared_at)
       AND a.session_id IN (SELECT value FROM json_each(?))
       AND (instr(lower(a.comment), lower(?)) > 0 OR instr(lower(json_extract(a.anchor_json, '$.quote')), lower(?)) > 0)
       ORDER BY a.created_at DESC LIMIT 150`, [JSON.stringify(allowedSessionIds), query, query]);
     for (const row of annotationRows) {
       const session = sessionSummaries.get(row.sessionId);
-      if (!session || (activityCutoff && row.createdAt < activityCutoff)) continue;
+      if (!session) continue;
       const preview = normalizeConversationContentPreview('user', `${row.quote}\n${row.comment}`, query, 180);
       contentHits.push({ session, hit: {
         messageId: row.messageId, messageClientId: row.messageClientId, role: 'assistant',

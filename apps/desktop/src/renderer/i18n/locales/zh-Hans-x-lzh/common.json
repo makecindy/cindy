@@ -16477,6 +16477,7 @@
       "legacy": "此差事所系订阅账号，暂不可用。请于执行差事的电脑检查登录与用量，或另选模型来源。此差事不自动更换账号。"
     },
     "annotations": {
+      "queued": "已列队，待发",
       "add": "添批注",
       "title": "批注",
       "open": "阅批注 {{number}}",
@@ -20155,6 +20156,7 @@
       "reviseHint": "欲改？径于学习差事中吩咐吾便是"
     },
     "ipcError": {
+    "ANNOTATION_ALREADY_QUEUED": "此批注已列队，请候发送，或先撤去队中相应消息。",
       "LEARN_BUSY": "已有一学习差事方行",
       "LEARN_INVALID_STATE": "议之状已变，请重整后再试",
       "NOT_FOUND": "学习差事不存，或已清除",

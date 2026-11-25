@@ -16704,6 +16704,7 @@
       "legacy": "La cuenta de suscripción asignada a esta tarea no está disponible. Revisa el inicio de sesión y el uso en el ordenador que ejecuta la tarea o elige otra fuente de modelos. La cuenta no cambia automáticamente."
     },
     "annotations": {
+      "queued": "En cola para enviar",
       "add": "Añadir anotación",
       "title": "Anotación",
       "open": "Abrir anotación {{number}}",
@@ -20417,6 +20418,7 @@
       "reviseHint": "¿Quieres cambios? Solo pídelo en la sesión de aprendizaje"
     },
     "ipcError": {
+    "ANNOTATION_ALREADY_QUEUED": "Esta anotación ya está en cola. Espera a que se envíe o elimina el mensaje de la cola.",
       "LEARN_BUSY": "Ya hay una tarea de aprendizaje en curso",
       "LEARN_INVALID_STATE": "El estado de la propuesta cambió. Actualiza e inténtalo de nuevo.",
       "NOT_FOUND": "La tarea de aprendizaje no existe o ya se eliminó",

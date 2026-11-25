@@ -16477,6 +16477,7 @@
       "legacy": "此差事所繫訂閱帳號，暫不可用。請於執行差事的電腦檢查登入與用量，或另選模型來源。此差事不自動更換帳號。"
     },
     "annotations": {
+      "queued": "已列隊，待發",
       "add": "添批註",
       "title": "批註",
       "open": "閱批註 {{number}}",
@@ -20155,6 +20156,7 @@
       "reviseHint": "欲改？逕於學習差事中吩咐吾便是"
     },
     "ipcError": {
+    "ANNOTATION_ALREADY_QUEUED": "此批註已列隊，請候發送，或先撤去隊中相應消息。",
       "LEARN_BUSY": "已有一學習差事方行",
       "LEARN_INVALID_STATE": "議之狀已變，請重整後再試",
       "NOT_FOUND": "學習差事不存，或已清除",

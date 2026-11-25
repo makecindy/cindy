@@ -16551,6 +16551,7 @@
       "legacy": "The subscription account assigned to this task is unavailable. Check its sign-in and usage status on the computer running the task, or choose another model source. This task does not switch accounts automatically."
     },
     "annotations": {
+      "queued": "Queued to send",
       "add": "Add annotation",
       "title": "Annotation",
       "open": "Open annotation {{number}}",
@@ -20231,6 +20232,7 @@
       "reviseHint": "Want changes? Just say so in the learning session"
     },
     "ipcError": {
+    "ANNOTATION_ALREADY_QUEUED": "This annotation is already queued. Wait for it to send or remove the queued message.",
       "LEARN_BUSY": "A learn task is already in progress",
       "LEARN_INVALID_STATE": "The proposal state has changed. Refresh and try again.",
       "NOT_FOUND": "The learn task does not exist or has been cleaned up",

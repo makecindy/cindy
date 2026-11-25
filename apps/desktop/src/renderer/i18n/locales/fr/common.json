@@ -16704,6 +16704,7 @@
       "legacy": "Le compte avec abonnement affecté à cette tâche est indisponible. Vérifiez sa connexion et son utilisation sur l’ordinateur d’exécution, ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement."
     },
     "annotations": {
+      "queued": "En attente d’envoi",
       "add": "Ajouter une annotation",
       "title": "Annotation",
       "open": "Ouvrir l’annotation {{number}}",
@@ -20417,6 +20418,7 @@
       "reviseHint": "Des modifications ? Dites-le simplement dans la session d'apprentissage"
     },
     "ipcError": {
+    "ANNOTATION_ALREADY_QUEUED": "Cette annotation est déjà en attente. Attendez son envoi ou retirez le message de la file.",
       "LEARN_BUSY": "Une tâche d'apprentissage est déjà en cours",
       "LEARN_INVALID_STATE": "L'état de la proposition a changé. Veuillez actualiser et réessayer.",
       "NOT_FOUND": "La tâche d'apprentissage n'existe pas ou a été nettoyée",

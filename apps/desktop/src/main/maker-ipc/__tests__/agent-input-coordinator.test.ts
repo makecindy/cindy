@@ -1,4 +1,5 @@
 import { BotCapabilityRefreshDeferredError } from '../botCompactRuntimeRefresh.js';
+import { formatMessageAnnotationsForSend, type MessageAnnotation } from '../../../shared/messageAnnotations.js';
 import { schedulePendingInteractionTimeout, type PendingInteractionTimeoutEntry } from '../interactionTimeout.js';
 import { desktopContextRecoveryAbortSignal } from '../contextRecoveryAssembly.desktop.js';
 import { acceptedAttachmentReplay } from '../attachmentReplay.js';
@@ -2469,6 +2470,50 @@ function createHarness(opts?: {
     },
   };
 }
+
+// Review regression: queued user rows are not yet published, so sentAt alone
+// allowed the same annotation into every subsequent send. Exercise real queue
+// admission, cancellation, steering, content replacement and snapshot restoration.
+describe('annotation queue ownership', () => {
+  const sid = 'annotation-queue';
+  const record = { id: 'annotation', sessionId: sid, ordinal: 1, messageClientId: 'answer',
+    sourceVersion: 'version', start: 0, end: 5, quote: 'quote', prefix: '', suffix: '',
+    comment: 'review', createdAt: 1, sentAt: null } satisfies MessageAnnotation;
+  const body = formatMessageAnnotationsForSend('', [record]);
+
+  it('reserves once and releases on queue cancellation without marking sent', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('first', body));
+    expect(() => h.coordinator.enqueue(sid, makeItem('second', body))).toThrow('ANNOTATION_ALREADY_QUEUED');
+    expect(await h.coordinator.getQueuedMessageAnnotationIds(sid)).toEqual(new Set([record.id]));
+    await expect(h.coordinator.steer(sid, makeItem('steer', body))).rejects.toThrow('ANNOTATION_ALREADY_QUEUED');
+    h.coordinator.enqueue(sid, makeItem('ordinary', 'next reply'));
+    expect(() => h.coordinator.updateContentWithResult(sid, 'ordinary', makeItem('ordinary', body))).toThrow('ANNOTATION_ALREADY_QUEUED');
+    h.coordinator.remove(sid, 'first');
+    expect(await h.coordinator.getQueuedMessageAnnotationIds(sid)).toEqual(new Set());
+    expect(() => h.coordinator.enqueue(sid, makeItem('retry', body))).not.toThrow();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['ordinary', 'retry']);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it('rehydrates reservations and releases them when queued content is replaced', async () => {
+    const h = createHarness();
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'agent-facing rewritten text', { persistedContent: JSON.stringify({ text: body }) })]);
+    expect(await h.coordinator.getQueuedMessageAnnotationIds(sid)).toEqual(new Set([record.id]));
+    h.coordinator.updateContentWithResult(sid, 'restored', makeItem('restored', 'edited without annotation'));
+    expect(await h.coordinator.getQueuedMessageAnnotationIds(sid)).toEqual(new Set());
+  });
+
+  it('releases a failed durable admission so the user can retry the annotation', async () => {
+    const h = createHarness({ awaitQueuePersistence: async () => { throw new Error('disk unavailable'); } });
+    h.setRunning(true);
+    await expect(h.coordinator.enqueueDurably(sid, makeItem('failed', body))).rejects.toThrow('disk unavailable');
+    expect(await h.coordinator.getQueuedMessageAnnotationIds(sid)).toEqual(new Set());
+    expect(() => h.coordinator.enqueue(sid, makeItem('retry', body))).not.toThrow();
+  });
+});
 
 describe('async question input admission', () => {
   it.each(['send', 'steer'] as const)('passes question identity through ordinary %s admission and persistence', async (action) => {

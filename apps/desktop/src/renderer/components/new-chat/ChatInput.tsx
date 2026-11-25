@@ -3368,7 +3368,7 @@ export function ChatInput({
   // 绝不比发送层乐观;禁用变更会广播 ghosts:changed,清单引用变化时重滤。
   const installedGhosts = useInstalledGhosts(deviceLinkDeviceId === null);
   const messageAnnotations = useMessageAnnotations(deviceLinkDeviceId ? null : sessionId);
-  const pendingMessageAnnotations = messageAnnotations.filter(annotation => annotation.sentAt === null);
+  const pendingMessageAnnotations = messageAnnotations.filter(annotation => annotation.sentAt === null && !annotation.queued);
   const pendingMessageAnnotationsRef = useRef(pendingMessageAnnotations);
   pendingMessageAnnotationsRef.current = pendingMessageAnnotations;
   const installedGhostsRef = useRef(installedGhosts);
@@ -6098,7 +6098,7 @@ export function ChatInput({
         // (截图在下方并入 filesToSend,与文本块里的 "attached as a labeled image"
         // caption 对应)。
         const annotationsForSend = sourceSessionId && !deviceLinkDeviceId && pendingMessageAnnotationsRef.current.length > 0
-          ? (await loadMessageAnnotations(sourceSessionId)).filter(annotation => annotation.sentAt === null) : [];
+          ? (await loadMessageAnnotations(sourceSessionId)).filter(annotation => annotation.sentAt === null && !annotation.queued) : [];
         const text = formatMessageAnnotationsForSend(formatBrowserCommentsForSend(commentsForSend, editorText), annotationsForSend);
         if (!text && attachmentsForSend.length === 0) return;
 

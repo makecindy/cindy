@@ -16704,6 +16704,7 @@
       "legacy": "A conta de assinatura atribuída a esta tarefa não está disponível. Verifique o login e o uso no computador que executa a tarefa ou escolha outra origem de modelos. A conta não muda automaticamente."
     },
     "annotations": {
+      "queued": "Na fila para enviar",
       "add": "Adicionar anotação",
       "title": "Anotação",
       "open": "Abrir anotação {{number}}",
@@ -20417,6 +20418,7 @@
       "reviseHint": "Quer alterações? Basta pedir na sessão de aprendizado"
     },
     "ipcError": {
+    "ANNOTATION_ALREADY_QUEUED": "Esta anotação já está na fila. Aguarde o envio ou remova a mensagem da fila.",
       "LEARN_BUSY": "Uma tarefa de aprendizado já está em andamento",
       "LEARN_INVALID_STATE": "O estado da proposta mudou. Atualize e tente novamente.",
       "NOT_FOUND": "A tarefa de aprendizado não existe ou foi removida",

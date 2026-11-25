@@ -16,6 +16,8 @@ export interface MessageAnnotation extends MessageAnnotationAnchor {
   comment: string;
   createdAt: number;
   sentAt: number | null;
+  /** Reserved by a queued/in-flight input; cancellation releases the reservation. */
+  queued?: boolean;
 }
 
 export type MessageAnnotationRequest =
