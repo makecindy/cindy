@@ -40,7 +40,7 @@ import { applyDockIcon } from './app-icon.js';
 import { pluginAppearanceRevision } from './cindy-brain/pluginAppearanceRevision.js';
 import { LOCAL_THEME_SUFFIX } from '../shared/local-themes.js';
 import { isBotWallpaperKey } from '../shared/botWallpapers.js';
-import { broadcastBotWallpapers, readBotWallpapers } from './bot-wallpaper-settings.js';
+import { broadcastBotWallpapers, loadBotWallpapers } from './bot-wallpaper-settings.js';
 import { importBotWallpaper, removeBotWallpaper } from './custom-wallpaper.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
@@ -136,7 +136,7 @@ export function registerAppearanceSettingsIpc(): void {
   // no remote allowlist, and the file path still comes only from the native picker.
   ipcMain.handle('appearance-settings:get-bot-wallpapers', async (event) => {
     assertTrustedAppRendererEvent(event);
-    return readBotWallpapers();
+    return loadBotWallpapers();
   });
 
   ipcMain.handle('appearance-settings:import-bot-wallpaper', async (event, botId: unknown) => {

@@ -9,10 +9,10 @@ import {
   normalizeBotWallpaperMap,
   type BotWallpaperMap,
 } from '../shared/botWallpapers.js';
-import { readBoundedFileNoFollowSync } from './utils/readBoundedFile.js';
+import { readBoundedFileNoFollow, readBoundedFileNoFollowSync } from './utils/readBoundedFile.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import { createLogger } from './logger.js';
-import { isTrustedAppearanceSettingsReadWindow } from './appearance-settings-reader.js';
+import { isTrustedAppRendererWindow } from './security/trustedAppRenderer.js';
 
 /**
  * 伙伴自定义壁纸：每位伙伴一张本机图片或视频。媒体文件与全局自定义壁纸同在
@@ -21,7 +21,7 @@ import { isTrustedAppearanceSettingsReadWindow } from './appearance-settings-rea
 const MAX_BYTES = 256 * 1024;
 const filePath = () => path.join(app.getPath('userData'), 'bot-wallpapers.json');
 
-export const botWallpaperStore = createOverrideSettingsFile<{ wallpapers: BotWallpaperMap }>({
+const botWallpaperStore = createOverrideSettingsFile<{ wallpapers: BotWallpaperMap }>({
   filePath,
   defaults: () => ({ wallpapers: {} }),
   normalize: (raw) => ({ wallpapers: normalizeBotWallpaperMap((raw as { wallpapers?: unknown } | null)?.wallpapers) }),
@@ -33,9 +33,48 @@ export const botWallpaperStore = createOverrideSettingsFile<{ wallpapers: BotWal
   logReadErrorDetails: false,
 });
 
-export function readBotWallpapers(): BotWallpaperMap {
-  botWallpaperStore.invalidateIfChanged();
-  return botWallpaperStore.read().wallpapers;
+/**
+ * What IPC handlers and broadcasts serve: an in-memory copy, loaded once without blocking
+ * main and replaced after every write. Keyed by file so a different userData never reuses it.
+ */
+let snapshot: { file: string; wallpapers: BotWallpaperMap } | undefined;
+let loading: { file: string; done: Promise<BotWallpaperMap> } | undefined;
+
+async function loadFromDisk(file: string): Promise<BotWallpaperMap> {
+  let wallpapers: BotWallpaperMap = {};
+  try {
+    const bytes = await readBoundedFileNoFollow(file, MAX_BYTES);
+    if (bytes) wallpapers = normalizeBotWallpaperMap((JSON.parse(bytes.toString('utf8')) as { wallpapers?: unknown } | null)?.wallpapers);
+  } catch {
+    // Missing or unreadable: nothing to show. Recycling reads strictly on its own.
+  }
+  // A write that finished meanwhile is newer than this read.
+  if (snapshot?.file !== file) snapshot = { file, wallpapers };
+  return snapshot.wallpapers;
+}
+
+export function loadBotWallpapers(): Promise<BotWallpaperMap> {
+  const file = filePath();
+  if (snapshot?.file === file) return Promise.resolve(snapshot.wallpapers);
+  if (loading?.file !== file) {
+    const done = loadFromDisk(file).finally(() => {
+      if (loading?.done === done) loading = undefined;
+    });
+    loading = { file, done };
+  }
+  return loading.done;
+}
+
+/** The only write path: updates the file under its lock, then the in-memory copy. */
+export async function updateBotWallpapers(
+  updater: (current: BotWallpaperMap) => BotWallpaperMap | null,
+): Promise<void> {
+  const file = filePath();
+  const value = await botWallpaperStore.updateAtomic(({ value: current }) => {
+    const next = updater(current.wallpapers);
+    return next ? { wallpapers: next } : null;
+  });
+  snapshot = { file, wallpapers: value.wallpapers };
 }
 
 /**
@@ -66,11 +105,14 @@ export function readReferencedBotWallpaperUrls(): string[] {
   });
 }
 
-/** Tell every app window the teammate wallpaper map changed; returns the map sent. */
+/**
+ * Tell every app-content window the teammate wallpaper map changed; returns the map sent.
+ * Font-only utility windows are appearance readers too, but never receive custom media URLs.
+ */
 export function broadcastBotWallpapers(): BotWallpaperMap {
-  const wallpapers = readBotWallpapers();
+  const wallpapers = snapshot?.file === filePath() ? snapshot.wallpapers : {};
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!isTrustedAppearanceSettingsReadWindow(win)) continue;
+    if (!isTrustedAppRendererWindow(win)) continue;
     try {
       win.webContents.send(BOT_WALLPAPERS_CHANGED_CHANNEL, wallpapers);
     } catch {

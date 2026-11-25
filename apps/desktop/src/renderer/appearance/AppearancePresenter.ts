@@ -8,6 +8,8 @@ import { LOCAL_THEME_SUFFIX } from '../../shared/local-themes';
 import type { ThemeSelection } from '../../shared/appearanceDefinition';
 
 let packageSelection: ThemeSelection | undefined;
+/** The explicit package choice still waiting for main; cleared when it settles. */
+let pendingSelection: ThemeSelection | undefined;
 /**
  * The saved (global) theme as last resolved by the caller. While a view-scoped palette is
  * shown, `themeService.getCurrentTheme()` is that palette, so rollbacks use this instead.
@@ -38,7 +40,10 @@ export function prepareThemeSelection(theme: Theme, commit: () => void, current:
   const requested = packageSelection = value;
   const bridge = window.electronAPI?.appearanceSettings;
   if (!bridge?.selectTheme) { notifyThemeAppearanceFailure(); return Promise.resolve(false); }
+  pendingSelection = requested;
+  const settle = () => { if (pendingSelection === requested) pendingSelection = undefined; };
   return bridge.selectTheme(value).then(() => {
+    settle();
     if (packageSelection !== requested) return false;
     if (!current()) {
       // An expired Agent request never becomes the saved choice. Rebuild only
@@ -54,6 +59,7 @@ export function prepareThemeSelection(theme: Theme, commit: () => void, current:
     commit();
     return true;
   }).catch(() => {
+    settle();
     if (packageSelection === requested && current()) notifyThemeAppearanceFailure();
     return false;
   });
@@ -102,10 +108,20 @@ export function trackSavedTheme(theme: Theme): void {
   savedTheme = theme;
 }
 
-/** Whether main already holds the package defaults (or none) that this theme needs. */
-export function isThemeSelectionPrepared(theme: Theme): boolean {
+/**
+ * Back to the saved palette when a view-scoped one is released. The shared defaults were
+ * never changed for the view, so they are prepared again only if the saved variant changed
+ * meanwhile. A global choice still waiting for main keeps its request: it commits or rolls
+ * back on its own, and re-preparing here would cancel it just because the view changed.
+ */
+export function restoreSavedTheme(theme: Theme): void {
+  themeService.applyTheme(theme);
+  savedTheme = theme;
+  paletteOverridden = false;
+  if (pendingSelection && pendingSelection === packageSelection) return;
   const value = packageThemeSelection(theme);
-  return value?.mode === packageSelection?.mode && value?.familyId === packageSelection?.familyId;
+  if (value?.mode === packageSelection?.mode && value?.familyId === packageSelection?.familyId) return;
+  prepareSharedDefaults(theme, true);
 }
 
 /** Errors use the existing toast; translation/notice modules stay off the default path. */

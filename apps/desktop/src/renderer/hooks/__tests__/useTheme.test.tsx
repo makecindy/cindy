@@ -269,6 +269,31 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
       cleanupPaper();
     });
 
+    // Review of 7bb1323: leaving a teammate page while a global package choice was still
+    // waiting for main re-prepared the old saved package, which cancelled the pending choice
+    // only because the view changed. Minimal input: saved paper, choose ink on a teammate
+    // page, leave before main answers.
+    it('lets a pending global package choice finish when the teammate page is left meanwhile', async () => {
+      const { selectTheme, result, rerender, unmount } = setup('light');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      let answer!: (value: typeof DEFAULT_APPEARANCE_SETTINGS) => void;
+      selectTheme.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+      let chosen!: Promise<boolean> | void;
+      act(() => { chosen = result.current.setFamily('ink-local') as Promise<boolean> | void; });
+      rerender({ botId: null });
+      await act(async () => {});
+      expect(selectTheme.mock.calls).toEqual([[{ mode: 'light', familyId: 'ink-local' }]]);
+      await act(async () => { answer(DEFAULT_APPEARANCE_SETTINGS); await chosen; });
+      expect(await chosen).toBe(true);
+      expect(localStorage.getItem('theme.familyId')).toBe('ink-local');
+      expect(selectTheme).toHaveBeenCalledOnce();
+      unmount();
+      cleanupPaper();
+    });
+
     it('prepares the new system variant after leaving when light/dark flipped meanwhile', async () => {
       systemPrefersDark = false;
       const { selectTheme, rerender, unmount } = setup('system');

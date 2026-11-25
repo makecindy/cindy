@@ -47,7 +47,7 @@ import {
   readCustomWallpaperUrl,
   readReferencedClientWallpaperUrls,
 } from '../custom-wallpaper-settings';
-import { readBotWallpapers } from '../bot-wallpaper-settings';
+import { loadBotWallpapers } from '../bot-wallpaper-settings';
 import {
   writeBlob,
   readFile,
@@ -240,7 +240,7 @@ describe('client-owned custom wallpaper lifecycle', () => {
     await importBotWallpaper(parent, 'bot-1');
     await selectImage('green');
     await importBotWallpaper(parent, 'bot-2');
-    const { 'bot-1': first, 'bot-2': second } = readBotWallpapers();
+    const { 'bot-1': first, 'bot-2': second } = await loadBotWallpapers();
     expect(first).toMatch(/^cindy-media:\/\/client-wallpaper\/[0-9a-f]{64}\.webp$/);
     expect(second).not.toBe(first);
     await selectImage('yellow');
@@ -248,7 +248,7 @@ describe('client-owned custom wallpaper lifecycle', () => {
     await expect(readClientWallpaperFile(first!)).resolves.toBeDefined();
     await expect(readClientWallpaperFile(second!)).resolves.toBeDefined();
     await removeBotWallpaper('bot-2');
-    expect(readBotWallpapers()).toEqual({ 'bot-1': first });
+    expect(await loadBotWallpapers()).toEqual({ 'bot-1': first });
     await expect(readClientWallpaperFile(second!)).rejects.toThrow();
     await expect(readClientWallpaperFile(first!)).resolves.toBeDefined();
     expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(2);

@@ -10,7 +10,7 @@ import {
   customWallpaperStore,
   readReferencedClientWallpaperUrls,
 } from './custom-wallpaper-settings.js';
-import { botWallpaperStore } from './bot-wallpaper-settings.js';
+import { updateBotWallpapers } from './bot-wallpaper-settings.js';
 import { sniffMediaMime } from './cindy-media/sniffMediaMime.js';
 import { createLogger } from './logger.js';
 import type { PluginAppearanceSource } from '../shared/pluginAppearance.js';
@@ -93,7 +93,7 @@ export async function importBotWallpaper(parent: BrowserWindow, botId: string): 
   return withClientWallpaperLock(async () => {
     const media = await ingestClientWallpaper(picked);
     try {
-      await botWallpaperStore.updateAtomic(({ value }) => ({ wallpapers: { ...value.wallpapers, [botId]: media.url } }));
+      await updateBotWallpapers((current) => ({ ...current, [botId]: media.url }));
     } catch (error) {
       await recycleUnusedWallpapers();
       throw error;
@@ -107,12 +107,10 @@ export async function importBotWallpaper(parent: BrowserWindow, botId: string): 
 export async function removeBotWallpaper(botId: string): Promise<boolean> {
   return withClientWallpaperLock(async () => {
     let removed = false;
-    await botWallpaperStore.updateAtomic(({ value }) => {
-      if (!Object.hasOwn(value.wallpapers, botId)) return null;
+    await updateBotWallpapers((current) => {
+      if (!Object.hasOwn(current, botId)) return null;
       removed = true;
-      const next = { ...value.wallpapers };
-      delete next[botId];
-      return { wallpapers: next };
+      return Object.fromEntries(Object.entries(current).filter(([id]) => id !== botId));
     });
     if (removed) await recycleUnusedWallpapers();
     return removed;

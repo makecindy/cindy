@@ -10,7 +10,7 @@ import {
 } from '../themes/families';
 import { onLocalThemesChange } from '../themes/local-themes';
 import {
-  isThemeSelectionPrepared,
+  restoreSavedTheme,
   prepareThemeSelection,
   presentPaletteOnly,
   trackSavedTheme,
@@ -179,7 +179,8 @@ export function applyThemeClass(theme: Theme, force = false, prepare = true): vo
     presentPaletteOnly(nextTheme);
     return;
   }
-  presentTheme(nextTheme, true, prepare && !(leavingOverride && isThemeSelectionPrepared(nextTheme)));
+  if (leavingOverride) restoreSavedTheme(nextTheme);
+  else presentTheme(nextTheme, true, prepare);
 }
 
 /** 无 ThemeProvider 的窗口用。 */
