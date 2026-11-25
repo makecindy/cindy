@@ -3,13 +3,15 @@
  * issue #12851 — 文件预览浮层在工具行被重建后仍然留着,并且在 Agent 改动正在看的
  * 文件时给出「文件已变更」提示。
  *
- * 三类用户可观察的行为:
+ * 四类用户可观察的行为:
  *   1. 打开文稿预览的那一行工具被卸载(运行中实时预览区收起 / 「最近 5 条」把旧行挤出 /
  *      work group 换 key 重挂)后,文稿预览浮层仍在 —— 修复前预览挂在那一行的局部
  *      state 上,行没了浮层跟着没了,用户并没有点关闭。
  *   2. 同理,打开文件改动 diff 的那一行被卸载后,diff 浮层仍在。
  *   3. 预览期间 Agent 改完了正在看的文件 → 浮层右上角出现「文件已变更」,
  *      点一下才重新读内容(不自动替换用户正在读的内容)。
+ *   4. 远程会话里点「文件已变更」但只取回历史副本(stale)时,提示不能被这次刷新
+ *      吃掉 —— 用户还得能再点一次。
  *
  * 走的都是生产入口:真实的 AgentActionRow(点文件 chip)、真实的 FilePreviewLightboxHost、
  * 真实的 TextLightbox / ToolPayloadLightbox。CodeMirror / Markdown 渲染引擎是 jsdom 里
@@ -19,15 +21,18 @@
  * - 生产入口与可观察结果:真实 AgentActionRow 的文件 chip 点击 → 真实
  *   FilePreviewLightboxHost → 真实 TextLightbox / ToolPayloadLightbox。用户可观察到的是:
  *   打开预览的那一行被卸载后浮层是否还在、浮层右上角有没有「文件已变更」、点一下内容
- *   是否换成最新的。
+ *   是否换成最新的、刷新没拿到最新内容时提示还在不在。
  * - Bug／规则依据:issue #12851(工具行被重建时,用户没点关闭,预览浮层凭空消失);
- *   PR review 的两条意见(编辑还没执行完就提示「文件已变更」、远程文件刷新后仍是旧副本)。
+ *   PR review 的三条意见(编辑还没执行完就提示「文件已变更」、远程文件刷新后仍是旧副本、
+ *   刷新只拿到历史副本或直接失败时提示被清掉)。
  * - 现有覆盖缺口:agentActionRowRendering.test.ts 把 TextLightbox 整个 mock 成 null、
  *   并把 shouldOpenTextLightbox 短路成 false,永远打不开预览;workGroupBlockLivePreview
- *   只断言实时预览区的行数裁剪,没有跨行卸载后浮层存活的断言。
+ *   只断言实时预览区的行数裁剪,没有跨行卸载后浮层存活的断言;没有用例覆盖远程预览
+ *   刷新失败 / 只拿到历史副本时的提示去留。
  * - 最小失败输入:一个已打开文稿预览(或 diff 预览)的工具行被卸载(实时预览区收起 /
  *   「最近 5 条」把旧行挤出 / work group 换 key);预览期间新增一条 Edit 该文件的
- *   tool_use 消息(编辑进行中)与它的 tool_result(编辑完成)。
+ *   tool_use 消息(编辑进行中)与它的 tool_result(编辑完成);远程会话里点一次
+ *   「文件已变更」而取回只返回历史副本。
  * - tier:unit(jsdom + testing-library,走真实组件入口;CodeMirror / Markdown 渲染引擎
  *   按仓库既有做法换成桩)。另开一个文件而不是并入 agentActionRowRendering.test.ts,
  *   是因为那个文件把预览整族 mock 掉了,合进去就再也测不到真实浮层。
@@ -106,6 +111,8 @@ const editResult: ChatMessage = {
 let sessionMessages: ChatMessage[] = [];
 let notifyStore: (() => void) | null = null;
 const readTextFilePreview = vi.fn();
+const chatFetch = vi.fn();
+const readCached = vi.fn();
 
 function Harness({ message }: { message?: ChatMessage }) {
   return (
@@ -121,14 +128,45 @@ function Harness({ message }: { message?: ChatMessage }) {
   );
 }
 
+/** 远程会话:文稿预览的取回走 chatFetch + readCached。 */
+function RemoteHarness({ message }: { message?: ChatMessage }) {
+  return (
+    <ChatSessionFileProvider
+      value={{
+        sessionId: SESSION_ID,
+        workingDir: WORKDIR,
+        origin: { kind: 'device', deviceId: 'device-1' },
+      }}
+    >
+      <FilePreviewLightboxProvider>
+        {message ? (
+          <AgentActionRow pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} message={message} />
+        ) : null}
+      </FilePreviewLightboxProvider>
+    </ChatSessionFileProvider>
+  );
+}
+
 beforeEach(() => {
   sessionMessages = [];
   notifyStore = null;
   readTextFilePreview.mockReset();
   readTextFilePreview.mockResolvedValue({ success: true, data: 'v1', size: 2 });
+  chatFetch.mockReset();
+  chatFetch.mockResolvedValue({
+    ok: true,
+    cachePath: '/tmp/cindy-cache/notes.txt',
+    size: 2,
+    stale: false,
+  });
+  readCached.mockReset();
+  readCached.mockResolvedValue({ ok: true, kind: 'text', content: 'v1' });
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { readTextFilePreview },
+    value: {
+      readTextFilePreview,
+      fileBrowser: { chatFetch, readCached, onTransferProgress: () => () => {} },
+    },
   });
   const original = makerChatStore.getSnapshot(SESSION_ID);
   vi.spyOn(makerChatStore, 'getSnapshot').mockImplementation(
@@ -205,4 +243,30 @@ it('flags the preview when an edit that was already running finishes', async () 
   sessionMessages = [editMessage, editResult];
   act(() => notifyStore?.());
   await waitFor(() => expect(screen.getByText(i18n.t('chat.filePreview.changed'))).toBeTruthy());
+});
+
+it('keeps the changed prompt when the remote refetch only reaches a cached copy', async () => {
+  // 远端不可达:只拿到历史副本。这次刷新不算成功 —— 提示留着,用户还能再点一次。
+  chatFetch.mockResolvedValue({
+    ok: true,
+    cachePath: '/tmp/cindy-cache/notes.txt',
+    size: 2,
+    stale: true,
+  });
+  render(<RemoteHarness message={readMessage} />);
+  fireEvent.click(screen.getByRole('button'));
+  await waitFor(() => expect(document.querySelector('[data-text-lightbox-overlay]')).toBeTruthy());
+
+  sessionMessages = [editMessage, editResult];
+  act(() => notifyStore?.());
+  await waitFor(() => expect(screen.getByText(i18n.t('chat.filePreview.changed'))).toBeTruthy());
+
+  fireEvent.click(screen.getByText(i18n.t('chat.filePreview.changed')));
+  await waitFor(() => expect(chatFetch).toHaveBeenCalledTimes(2));
+
+  expect(screen.getByText(i18n.t('chat.filePreview.changed'))).toBeTruthy();
+  // 头部标出「历史副本」(和文件大小排在同一行)。
+  expect(document.querySelector('[data-text-lightbox-overlay]')?.textContent).toContain(
+    i18n.t('chat.remoteFile.staleBadge'),
+  );
 });

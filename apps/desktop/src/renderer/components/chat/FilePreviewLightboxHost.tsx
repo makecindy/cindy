@@ -117,8 +117,14 @@ export function FilePreviewLightboxProvider({ children }: { children?: ReactNode
   }, []);
 
   const refresh = useCallback(() => {
+    // 只递增加计数,不在这里清提示:刷新可能只拿到历史副本(远端不可达)或直接失败,
+    // 那时提示要留着,用户才能再点一次 —— 清了就再也看不到「视图不是最新的」。
     setRefreshToken((token) => token + 1);
-    setChanged(false);
+  }, []);
+
+  // 预览真的换成了最新内容才收起提示(issue #12851)。
+  const handleRefreshed = useCallback((fresh: boolean) => {
+    if (fresh) setChanged(false);
   }, []);
 
   // 只有文稿预览有「文件已变更」这回事(diff 是打开瞬间的快照)。
@@ -190,6 +196,7 @@ export function FilePreviewLightboxProvider({ children }: { children?: ReactNode
           triggerRef={preview.triggerRef}
           onClose={close}
           refreshToken={refreshToken}
+          onRefreshed={handleRefreshed}
           changedBadge={changed ? <FileChangedBadge onClick={refresh} /> : undefined}
         />
       ) : null}

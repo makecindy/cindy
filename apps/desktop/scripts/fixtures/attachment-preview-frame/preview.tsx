@@ -3,9 +3,13 @@ import { mountPage, subscription } from '../../ui-page/harness';
 import { TextLightbox } from '../../../src/renderer/components/chat/TextLightbox';
 import { ImageLightbox } from '../../../src/renderer/components/chat/ImageLightbox';
 import { FileChangedBadge } from '../../../src/renderer/components/chat/FilePreviewLightboxHost';
+import { ChatSessionFileProvider } from '../../../src/renderer/components/chat/ChatSessionFileContext';
+import { LOCAL_FILE_ORIGIN } from '../../../src/renderer/lib/sessionFileOrigin';
 
 const ZIP = '/fixture/2026-11-03-八张信用卡发票与核对清单.zip';
 const MARKDOWN = '/fixture/2026-11-03-发票核对说明.md';
+// 远端取回后的本地副本路径(stale 场景:远端不可达,只剩这份历史副本)。
+const CACHED_ZIP = '/fixture/cached/2026-11-03-八张信用卡发票与核对清单.zip';
 
 const markdown = [
   '# 发票核对说明',
@@ -54,11 +58,19 @@ function Conversation() {
   );
 }
 
-function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' | 'changed' }) {
+function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' | 'changed' | 'stale' }) {
   const [open, setOpen] = useState(true);
   const [image] = useState(sampleImage);
+  // stale 场景是远程会话:取回只拿到历史副本,面板上要标出来。
+  const remote = kind === 'stale';
   return (
-    <>
+    <ChatSessionFileProvider
+      value={{
+        sessionId: 'fixture-session',
+        workingDir: '/fixture',
+        origin: remote ? { kind: 'device', deviceId: 'device-1' } : LOCAL_FILE_ORIGIN,
+      }}
+    >
       <Conversation />
       {open && kind === 'zip' && <TextLightbox filePath={ZIP} onClose={() => setOpen(false)} />}
       {open && kind === 'markdown' && (
@@ -71,10 +83,11 @@ function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' | 'changed' }) {
           changedBadge={<FileChangedBadge onClick={() => {}} />}
         />
       )}
+      {open && remote && <TextLightbox filePath={ZIP} onClose={() => setOpen(false)} />}
       {open && kind === 'image' && (
         <ImageLightbox src={image} filename="示例图片.png" onClose={() => setOpen(false)} />
       )}
-    </>
+    </ChatSessionFileProvider>
   );
 }
 
@@ -82,6 +95,13 @@ mountPage({
   route: '/',
   host: () => ({
     fileBrowser: {
+      // 远程取回:只拿到历史副本(stale),面板上要标出来。
+      chatFetch: async () => ({
+        ok: true,
+        cachePath: CACHED_ZIP,
+        size: 275_866,
+        stale: true,
+      }),
       readFile: async () => ({ ok: false, code: 'BINARY_FILE', message: 'binary' }),
       stat: async ({ relPath }: { relPath: string }) => ({
         relPath,
@@ -104,7 +124,9 @@ mountPage({
             ? 'image'
             : ctx.case === 'changed'
               ? 'changed'
-              : 'zip'
+              : ctx.case === 'stale'
+                ? 'stale'
+                : 'zip'
       }
     />
   ),
