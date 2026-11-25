@@ -37,10 +37,13 @@ describe('InputHandoffSession', () => {
   // native fill of the code reports the element stale, as after a re-render.
   // `fragment`: the code's frame only rewrites its address fragment once the phone is typed. `twoSteps`: confirming
   // moves to a password step on the same address that remounts a never-focused 1x1 field with the code's id.
-  type PayLayout = 'focus' | 'insert' | 'trap' | 'frame' | 'fragment' | 'twoSteps';
-  function payPage(options: { layout?: PayLayout; staleOnce?: boolean } = {}) {
+  // `sameFp`: the phone has no id or title, only a line above naming it, so it shares the code field's fingerprint.
+  // `twinFrames`: the code sits in a frame, and a second frame loading the same address holds a never-focused 1x1
+  // field with the same id. `rejects`: confirming shows a code error and takes the focus off the code.
+  type PayLayout = 'focus' | 'insert' | 'trap' | 'frame' | 'fragment' | 'twoSteps' | 'sameFp' | 'twinFrames';
+  function payPage(options: { layout?: PayLayout; staleOnce?: boolean; rejects?: boolean } = {}) {
     const layout = options.layout ?? 'focus';
-    const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce, secondStep: false };
+    const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce, secondStep: false, rejected: false };
     const acts: Array<{ kind: string; ref?: string }> = [];
     const chrome = { pid: 20, app: 'Google Chrome', bundleId: 'com.google.Chrome' };
     const n = (ref: string, role: string, extra: Record<string, unknown> = {}) =>
@@ -55,16 +58,25 @@ describe('InputHandoffSession', () => {
         out.push(n(next(), 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }));
         return out;
       }
-      out.push(n(next(), 'AXTextField', { title: 'Phone', frame: [460, 300, 260, 30], focused: state.focus === 'phone' }));
+      if (layout === 'sameFp') {
+        out.push(n(next(), 'AXStaticText', { value: 'Phone', frame: [460, 280, 60, 16] }));
+        out.push(n(next(), 'AXTextField', { frame: [460, 300, 260, 30], focused: state.focus === 'phone' }));
+      } else out.push(n(next(), 'AXTextField', { title: 'Phone', frame: [460, 300, 260, 30], focused: state.focus === 'phone' }));
       const note = layout === 'trap' ? !state.phoneTyped : ['insert', 'frame'].includes(layout) && state.phoneTyped;
       if (note) out.push(n(next(), 'AXStaticText', { value: 'Check the phone number', frame: [460, 340, 200, 16] }));
       out.push(n(next(), 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }));
       const code = { domId: 'sms-code', frame: [460, 440, 1, 1], focused: state.focus === 'code' };
-      if (layout === 'frame' || layout === 'fragment') {
+      if (state.rejected) out.push(n(next(), 'AXStaticText', { value: '验证码错误', frame: [460, 470, 200, 16] }));
+      if (layout === 'frame' || layout === 'fragment' || layout === 'twinFrames') {
         const frameRef = next();
         const address = layout === 'fragment' && state.phoneTyped ? 'https://secure.example.test/sms#sent' : 'https://secure.example.test/sms';
         out.push(n(frameRef, 'AXWebArea', { url: address, frame: [440, 400, 320, 120] }));
         out.push(n(`${frameRef}.1`, 'AXTextField', code));
+        if (layout === 'twinFrames') {
+          const twin = next();
+          out.push(n(twin, 'AXWebArea', { url: address, frame: [440, 600, 320, 120] }));
+          out.push(n(`${twin}.1`, 'AXTextField', { domId: 'sms-code', frame: [460, 640, 1, 1] }));
+        }
       } else out.push(n(next(), 'AXTextField', code));
       if (layout === 'trap') out.push(n(next(), 'AXTextField', { domId: 'bot-trap', frame: [460, 460, 1, 1] }));
       out.push(n(next(), 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }));
@@ -85,6 +97,9 @@ describe('InputHandoffSession', () => {
         } else if (layout === 'twoSteps' && !state.secondStep) {
           state.secondStep = true;
           state.focus = 'none';
+        } else if (options.rejects) {
+          state.rejected = true;
+          state.focus = 'none';
         }
         return { ok: true };
       },
@@ -104,6 +119,8 @@ describe('InputHandoffSession', () => {
     { name: 'its frame moves down the tree', layout: 'frame' as const, typed: ['0.1', '0.4.1'] },
     { name: 'the fill finds it stale once', layout: 'focus' as const, staleOnce: true, typed: ['0.1', '0.3', '0.3'] },
     { name: 'its frame rewrites the address fragment', layout: 'fragment' as const, typed: ['0.1', '0.3.1'] },
+    { name: 'the phone shares its fingerprint', layout: 'sameFp' as const, typed: ['0.2', '0.4'] },
+    { name: 'another frame loads the same address', layout: 'twinFrames' as const, typed: ['0.1', '0.3.1'] },
   ])('types a hidden code field found focused after an earlier field ($name)', async ({ layout, staleOnce, typed }) => {
     const page = payPage({ layout, staleOnce });
     const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
@@ -136,16 +153,35 @@ describe('InputHandoffSession', () => {
     session.cancel();
   });
 
-  // PR #12780 review (codex r4692228746): the owner clicks the phone field on the window while the card waits;
-  // the window watch re-read dropped the unfocused code field and handed back as done outside (steps=0).
-  it('keeps waiting when the owner moves the focus off a hidden code field on the window', async () => {
-    const page = payPage();
+  // PR #12780 reviews (codex r4692228746, r4693191354): the owner clicks the phone field on the window while the card
+  // waits; the window watch re-read dropped the unfocused code field and handed back as done outside (steps=0). With
+  // `sameFp`, dropping it made the phone's fingerprint unique, so its identity no longer matched the card's.
+  it.each(['focus', 'sameFp'] as const)('keeps waiting when the owner moves the focus off a hidden code field on the window (%s)', async (layout) => {
+    const page = payPage({ layout });
     const { session, latest, finished } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' }, windowWatchMs: 2 });
     await session.start();
     expect(latest().controls.filter((control) => control.kind === 'text')).toHaveLength(2);
     page.state.focus = 'phone';
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(finished).toEqual([]);
+    expect(latest().controls.filter((control) => control.kind === 'text')).toHaveLength(2);
+    session.cancel();
+  });
+
+  // PR #12780 review (codex r4693191346): the inserted line rebinds the code field to a new tree place; once the page
+  // rejects the code and takes the focus off it, the re-read lost the code and handed back as succeeded.
+  // Entry: session.submit. Unit tier.
+  it('stays on the card when the page rejects a hidden code field whose tree place moved', async () => {
+    const page = payPage({ layout: 'insert', rejects: true });
+    const { session, latest, finished } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
+    await session.start();
+    const step = latest();
+    const texts = step.controls.filter((control) => control.kind === 'text');
+    const values = Object.fromEntries(texts.map((control, i) => [control.id, i === 0 ? '18600000000' : '123456']));
+    await session.submit({ expectedRevision: step.revision, values, action: { kind: 'submit' } });
+    expect(page.state.rejected).toBe(true);
+    expect(finished).toEqual([]);
+    expect(latest().phase).toBe('ready');
     expect(latest().controls.filter((control) => control.kind === 'text')).toHaveLength(2);
     session.cancel();
   });

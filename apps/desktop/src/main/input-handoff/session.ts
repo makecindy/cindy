@@ -1300,9 +1300,8 @@ export class InputHandoffSession {
     try {
       step = extractStep(raw as NativeAxSnapshot);
       // The owner clicking another field moves the focus off a hidden code field of the step on the card; it is
-      // still that step's while the page still shows the step's other fields. Another form never inherits it.
-      const kept = this.keptHidden(step);
-      if (kept) step = extractStep(raw as NativeAxSnapshot, kept);
+      // still that step's while the page still shows the step's fields. Another form never inherits it.
+      step = this.keptHidden(raw as NativeAxSnapshot) ?? step;
     } catch (error) {
       if (error instanceof IncompleteFormError) {
         this.unreadablePage = error.page;
@@ -1342,23 +1341,21 @@ export class InputHandoffSession {
   }
 
   /**
-   * The hidden code fields of the step on the card, when a fresh read (taking in only focused ones) is still that
-   * step: same page, and exactly the same ordinary fields. A different form, even one that adds a field, starts
-   * without any.
+   * The read with the hidden code fields of the step on the card, when it is still that step: same page, and exactly
+   * the same fields. Both reads take in the same fields, so each field's identity is worked out among the same
+   * others. A different form, even one that adds a field, starts without any.
    */
-  private keptHidden(fresh: ExtractedStep): ReadonlySet<string> | undefined {
+  private keptHidden(raw: NativeAxSnapshot): ExtractedStep | undefined {
     const current = this.step;
     if (!current?.hiddenFields?.length) return undefined;
+    const fresh = extractStep(raw, new Set(current.hiddenFields));
     const page = (url: string | undefined) => url?.split('#')[0];
     if (page(fresh.url) !== page(current.url)) return undefined;
-    const ordinary = (step: ExtractedStep) => {
-      const hidden = new Set(step.hiddenRefs ?? []);
-      return [...step.bindings.values()]
-        .filter((binding): binding is ControlBinding & { kind: 'text' } => binding.kind === 'text' && !hidden.has(binding.ref))
-        .map((binding) => binding.identity)
-        .sort();
-    };
-    return JSON.stringify(ordinary(fresh)) === JSON.stringify(ordinary(current)) ? new Set(current.hiddenFields) : undefined;
+    const fields = (step: ExtractedStep) => [...step.bindings.values()]
+      .filter((binding): binding is ControlBinding & { kind: 'text' } => binding.kind === 'text')
+      .map((binding) => binding.identity)
+      .sort();
+    return JSON.stringify(fields(fresh)) === JSON.stringify(fields(current)) ? fresh : undefined;
   }
 
   /** A browser showing no page, or a page whose address went missing for now. */
@@ -1433,6 +1430,8 @@ export class InputHandoffSession {
     // Rebind only after the entire form matches. In particular, a reused old
     // index may now point at a different field with the same native fingerprint.
     for (const field of expected) field.ref = byIdentity.get(identity(field))!.ref;
+    // The hidden code fields move with them: a key holding a tree place is that of the same field now.
+    if (current.hiddenFields) step.hiddenFields = current.hiddenFields;
     return true;
   }
 

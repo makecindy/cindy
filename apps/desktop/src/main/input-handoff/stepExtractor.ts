@@ -48,8 +48,6 @@ export interface ExtractedStep {
   signIn?: boolean;
   /** Keys (`hiddenFieldKeys`) of shrunken fields this step took in; passed back to keep them once focus moves. */
   hiddenFields?: string[];
-  /** Tree places of those shrunken fields in this read, to tell them from the step's ordinary fields. */
-  hiddenRefs?: string[];
 }
 
 /** Keep verified page metadata even when its controls cannot form a complete step. */
@@ -121,8 +119,9 @@ function hiddenFieldInPage(node: NativeAxNode, page: NativeAxNode): boolean {
 
 /**
  * A hidden field found focused earlier in this step. Its page id with its fingerprint, within the document that
- * holds it (named by its address, which outlasts tree positions), survives text the page inserts after an earlier
- * field is typed; an id is unique only in its own document, so a frame's field of the same id is another field.
+ * holds it (named by its address and its order among documents at that address, which outlast tree positions),
+ * survives text the page inserts after an earlier field is typed; an id is unique only in its own document, so a
+ * frame's field of the same id is another field.
  * Its place in the tree covers only inputs without an id.
  */
 export const hiddenFieldKeys = (field: { ref: string; fp: string; domId?: string }, document: string): string[] =>
@@ -228,11 +227,22 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
   // nodes are excluded unless their bounds were clipped at the viewport edge.
   // The document a node belongs to: its nearest web area (the page itself or a frame inside it), by its address;
   // inserting text above a frame shifts the frame's tree position, not its address.
-  const documents = snapshot.nodes.filter((node) => node.role === 'AXWebArea').sort((a, b) => b.ref.length - a.ref.length);
+  // Two frames may load the same address, each its own document with its own ids: their order tells them apart.
+  const documentNames = new Map<NativeAxNode, string>();
+  const atAddress = new Map<string, number>();
+  for (const node of snapshot.nodes) {
+    if (node.role !== 'AXWebArea') continue;
+    // A frame that only rewrites its fragment (`#sent`) is still the same document.
+    const address = node.url?.split('#')[0];
+    if (address === undefined) { documentNames.set(node, `ref:${node.ref}`); continue; }
+    const order = atAddress.get(address) ?? 0;
+    atAddress.set(address, order + 1);
+    documentNames.set(node, JSON.stringify([address, order]));
+  }
+  const documents = [...documentNames.keys()].sort((a, b) => b.ref.length - a.ref.length);
   const documentOf = (node: NativeAxNode) => {
     const area = documents.find((candidate) => isWithin(node.ref, candidate.ref));
-    // A frame that only rewrites its fragment (`#sent`) is still the same document.
-    return area ? area.url?.split('#')[0] ?? `ref:${area.ref}` : '';
+    return area ? documentNames.get(area)! : '';
   };
   const keysOf = (node: NativeAxNode) => hiddenFieldKeys(node, documentOf(node));
   // Taken in by the hidden-field rule itself: focused now, or found focused earlier in this step.
@@ -478,7 +488,7 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
     ...(deviceCode ? { deviceCode } : {}),
     ...(pageMissing ? { pageMissing } : {}),
     ...(signIn ? { signIn } : {}),
-    ...(hiddenFields.length ? { hiddenFields, hiddenRefs: hiddenNodes.map((node) => node.ref) } : {}),
+    ...(hiddenFields.length ? { hiddenFields } : {}),
   };
 }
 
