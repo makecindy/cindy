@@ -101,11 +101,16 @@ describe('pluginMarketSourceIdentity', () => {
     // A stored config is untrusted: wrong value types never leak through or break the shape.
     const stored = (source: unknown) => pluginMarketSourceIdentity(source as MarketSource);
     expect(stored({ type: 'git', url: 42, sparsePaths: [] })).toBeNull();
-    expect(stored({ type: 'git', url: 'https://github.com/acme/plugins', ref: 42, sparsePaths: [] }))
-      .toEqual({ kind: 'git', repository: 'github.com/acme/plugins' });
-    expect(git('https://github.com/acme/plugins.git', '--upload-pack=evil'))
-      .toEqual({ kind: 'git', repository: 'github.com/acme/plugins' });
     expect(stored({ type: 'svn', url: 'https://github.com/acme/plugins' })).toBeNull();
+    // git still fetches a configured ref, so an invalid one yields no identity instead of a ref-less one.
+    for (const ref of [42, '--upload-pack=evil', 'main branch', '../main', `a${'b'.repeat(128)}`]) {
+      expect(stored({ type: 'git', url: 'https://github.com/acme/plugins', ref, sparsePaths: [] })).toBeNull();
+    }
+    // An unset ref (absent key as stored by the add dialog; null or empty as git treats them) is no ref.
+    for (const ref of [undefined, null, '']) {
+      expect(stored({ type: 'git', url: 'https://github.com/acme/plugins', ref, sparsePaths: [] }))
+        .toEqual({ kind: 'git', repository: 'github.com/acme/plugins' });
+    }
   });
 
   it('marks a local folder market by kind only, without its path', () => {

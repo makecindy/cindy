@@ -258,7 +258,8 @@ function sourceIdentityRepository(host: string, pathname: string): string | null
  * - scp 形式 `user@host:owner/repo(.git)` 只取 host 与路径；其它形式一律 null；
  * - 路径 2–4 段（允许 GitLab 子组），每段只允许字母数字与 `._-`，去掉结尾 `.git`；
  *   原始地址里出现 `.` / `..` 路径段也不生成，避免展示 URL 归一后的另一条路径；
- * - ref 只在配置了合法引用时给出；本地文件夹来源只返回 `{kind:'local'}`。
+ * - 没配置 ref 时不给 ref；配置了 ref 但不是合法引用（只可能来自手工改坏的配置）时整个身份
+ *   不生成，不给出缺了 ref 的部分身份；本地文件夹来源只返回 `{kind:'local'}`。
  * 输入按不可信处理：添加来源时已拒绝内嵌凭证，但手工改过的 sources.v1.json 也不能把
  * 凭证、路径或非字符串值带进确认与远程投影。结果不写日志。
  */
@@ -266,6 +267,14 @@ export function pluginMarketSourceIdentity(source: MarketSource): PluginMarketSo
   if (!source || typeof source !== 'object') return null;
   if (source.type === 'local') return { kind: 'local' };
   if (source.type !== 'git' || typeof source.url !== 'string') return null;
+  // 添加来源时没填 ref 存成缺省键，git 侧按真假判断，所以 null / 空串同样视为未配置。
+  // 其它值必须是合法引用：git 实际会用它取包，丢掉它展示的身份就与实际不符。
+  const rawRef: unknown = source.ref;
+  let ref: string | undefined;
+  if (rawRef !== undefined && rawRef !== null && rawRef !== '') {
+    if (typeof rawRef !== 'string' || !SOURCE_IDENTITY_REF.test(rawRef)) return null;
+    ref = rawRef;
+  }
   const url = source.url.trim();
   if (!url || url.length > 2048 || SOURCE_IDENTITY_UNSAFE_CHARS.test(url)) return null;
   let repository: string | null;
@@ -286,8 +295,7 @@ export function pluginMarketSourceIdentity(source: MarketSource): PluginMarketSo
     repository = scp ? sourceIdentityRepository(scp[1]!.toLowerCase(), scp[2]!) : null;
   }
   if (!repository) return null;
-  const ref = typeof source.ref === 'string' && SOURCE_IDENTITY_REF.test(source.ref) ? source.ref : undefined;
-  return { kind: 'git', repository, ...(ref ? { ref } : {}) };
+  return { kind: 'git', repository, ...(ref !== undefined ? { ref } : {}) };
 }
 
 /**
