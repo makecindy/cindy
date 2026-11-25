@@ -22697,6 +22697,10 @@
       "subagentHint": "Claude Code 与 Codex 的 Subagent 用哪个模型",
       "botsTitle": "伙伴",
       "botsHint": "每个伙伴用哪个模型、备用哪个，在伙伴自己的设置里"
+    },
+    "kinds": {
+      "byModel": "按模型",
+      "byProvider": "按供应商"
     }
   },
   "projectSettings": {

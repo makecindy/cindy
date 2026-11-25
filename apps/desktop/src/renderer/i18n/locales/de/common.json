@@ -22790,6 +22790,10 @@
       "subagentHint": "Welches Modell Subagents von Claude Code und Codex nutzen",
       "botsTitle": "Buddies",
       "botsHint": "Jeder Buddy wählt sein Modell und seine Reserven in den eigenen Einstellungen"
+    },
+    "kinds": {
+      "byModel": "Nach Modell",
+      "byProvider": "Nach Anbieter"
     }
   },
   "projectSettings": {

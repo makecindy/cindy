@@ -23010,6 +23010,10 @@
       "subagentHint": "Qual modelo os subagentes do Claude Code e do Codex usam",
       "botsTitle": "Parceiros",
       "botsHint": "Cada parceiro escolhe seu modelo e reservas nas próprias configurações"
+    },
+    "kinds": {
+      "byModel": "Por modelo",
+      "byProvider": "Por provedor"
     }
   },
   "projectSettings": {

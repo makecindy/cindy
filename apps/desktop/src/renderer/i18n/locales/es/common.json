@@ -23009,6 +23009,10 @@
       "subagentHint": "Qué modelo usan los subagentes de Claude Code y Codex",
       "botsTitle": "Compañeros",
       "botsHint": "Cada compañero elige su modelo y sus reservas en sus ajustes"
+    },
+    "kinds": {
+      "byModel": "Por modelo",
+      "byProvider": "Por proveedor"
     }
   },
   "projectSettings": {

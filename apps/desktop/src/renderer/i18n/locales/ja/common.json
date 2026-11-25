@@ -22697,6 +22697,10 @@
       "subagentHint": "Claude Code と Codex のサブエージェントが使うモデル",
       "botsTitle": "バディ",
       "botsHint": "各バディが使うモデルと予備は、そのバディの設定で選びます"
+    },
+    "kinds": {
+      "byModel": "モデル別",
+      "byProvider": "プロバイダー別"
     }
   },
   "projectSettings": {

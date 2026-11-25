@@ -142,6 +142,9 @@ function WeightInput({ value, label, onCommit }: { value: number; label: string;
   );
 }
 
+/** 路由列表里两种路由各自的小标题：与模型供应商页左栏的分组标题同一档字。 */
+const ROUTE_KIND_LABEL = 'px-1 text-12 font-medium leading-[1.33] text-[var(--text-tertiary)]';
+
 export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDivElement | null> }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
@@ -520,28 +523,49 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
           </Button>
         }
       >
-        <SettingsCard>
-          {userRoutes.map((item) => (
-            <SettingsRow
-              key={item.id}
-              media
-              data-model-group-route={item.id}
-              data-settings-search-action="Opens one route"
-              lead={<SettingsRowIcon><Waypoints size={16} aria-hidden /></SettingsRowIcon>}
-              title={item.name}
-              hint={routeSummary(item)}
-              chevron
-              onClick={() => openRoute(item.id)}
-            />
-          ))}
-          {sourceRoutes.map((item) => (
-            <SourceRouteRow key={item.id} route={item} config={config} options={sourceOptions} onOpen={() => { captureScroll(); setView({ kind: 'source', id: item.id }); }} />
-          ))}
-          <ProviderAllocationRows config={config} />
-          {userRoutes.length === 0 && sourceRoutes.length === 0 && (
-            <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.routesEmpty')}</SettingsBlock>
+        {/* 两种路由各一张卡片、各带一个小标题(2026-11-25 用户反馈：混在一张卡片里分不清)；只有一种时不加小标题。 */}
+        <div className="flex flex-col gap-4">
+          {userRoutes.length > 0 && (
+            <div role="group" aria-label={t('modelGroups.kinds.byModel')} data-model-group-kind="model" className="flex flex-col gap-1.5">
+              {sourceRoutes.length > 0 && <div className={ROUTE_KIND_LABEL}>{t('modelGroups.kinds.byModel')}</div>}
+              <SettingsCard>
+                {userRoutes.map((item) => (
+                  <SettingsRow
+                    key={item.id}
+                    media
+                    data-model-group-route={item.id}
+                    data-settings-search-action="Opens one route"
+                    lead={<SettingsRowIcon><Waypoints size={16} aria-hidden /></SettingsRowIcon>}
+                    title={item.name}
+                    hint={routeSummary(item)}
+                    chevron
+                    onClick={() => openRoute(item.id)}
+                  />
+                ))}
+              </SettingsCard>
+            </div>
           )}
-        </SettingsCard>
+          {sourceRoutes.length > 0 && (
+            <div role="group" aria-label={t('modelGroups.kinds.byProvider')} data-model-group-kind="provider" className="flex flex-col gap-1.5">
+              {userRoutes.length > 0 && <div className={ROUTE_KIND_LABEL}>{t('modelGroups.kinds.byProvider')}</div>}
+              <SettingsCard>
+                {sourceRoutes.map((item) => (
+                  <SourceRouteRow key={item.id} route={item} config={config} options={sourceOptions} onOpen={() => { captureScroll(); setView({ kind: 'source', id: item.id }); }} />
+                ))}
+                <ProviderAllocationRows config={config} />
+              </SettingsCard>
+            </div>
+          )}
+          {sourceRoutes.length === 0 && (
+            // 没有合并整个供应商的路由时，供应商内的分配行(几个账号、几台电脑)仍要有地方列；一行都没有时这张卡片不占地方。
+            <SettingsCard className="empty:hidden">
+              <ProviderAllocationRows config={config} />
+              {userRoutes.length === 0 && (
+                <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.routesEmpty')}</SettingsBlock>
+              )}
+            </SettingsCard>
+          )}
+        </div>
       </SettingsSection>
       <ModelSettingsElsewhere />
     </SettingsSection>

@@ -22697,6 +22697,10 @@
       "subagentHint": "Claude Code와 Codex의 서브에이전트가 쓰는 모델",
       "botsTitle": "버디",
       "botsHint": "각 버디의 모델과 예비 모델은 버디 설정에서 고릅니다"
+    },
+    "kinds": {
+      "byModel": "모델별",
+      "byProvider": "공급자별"
     }
   },
   "projectSettings": {

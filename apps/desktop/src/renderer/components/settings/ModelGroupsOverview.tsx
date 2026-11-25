@@ -3,6 +3,7 @@
  * 连线按节点的实际位置画在一层 SVG 上，尺寸变化时重画；悬停或聚焦一个节点时，与它相连的整条路径换成深一档的线色。
  * 来源后面的余量来自最近一次选中它时记下的额度，已过重置时刻的不显示。
  * 合并整个供应商的路由按供应商画：右边一个成员一格，不按它展开出的几十个模型逐个画(2026-11-25 用户反馈)。
+ * 两种路由各占一段(「按模型」在上、「按供应商」在下，中间一条分隔线)，不穿插排列；只有一种时就只画那一段。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 import { agentOptionOf } from '@/components/new-chat/agentOptions';
@@ -195,7 +196,7 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
   providers: CandidateNames;
 }) {
   const names = node.candidate ? providers(node.candidate) : null;
-  const icon = node.kind === 'route'
+  const icon = node.kind === 'route' && !node.candidate
     ? <Waypoints size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
     : node.candidate
       ? <ProviderMark providerId={node.candidate.providerId} name={names?.provider?.name} routing={names?.provider?.routing}
@@ -248,7 +249,7 @@ function RelationMap({ userRoutes, providerRoutes, decisions, liveQuota, onOpenR
 }) {
   const { t } = useTranslation();
 
-  const { columns, edges, parents } = useMemo(() => {
+  const { groups, edges, parents } = useMemo(() => {
     const now = Date.now();
     const sources = new Map<string, MapNode>();
     const list: MapEdge[] = [];
@@ -268,6 +269,7 @@ function RelationMap({ userRoutes, providerRoutes, decisions, liveQuota, onOpenR
     });
     // 合并整个供应商的路由：右边一个成员一格。同一个供应商在几条这样的路由里时共用一格。
     const members = new Map<string, MapNode>();
+    const providerNodes: MapNode[] = [];
     const parents = new Map<string, string>();
     for (const { route, children } of providerRoutes) {
       const id = nodeId('route', route.id);
@@ -291,17 +293,20 @@ function RelationMap({ userRoutes, providerRoutes, decisions, liveQuota, onOpenR
         }
         list.push({ from: id, to: members.get(key)!.id, off: off.has(key) });
       }
-      routes.push({
-        id, kind: 'route', name: route.name, meta: t('modelGroups.sources.models', { count: children.length }),
+      const first = children.flatMap((child) => child.candidates)[0];
+      providerNodes.push({
+        // 合并整个供应商的路由用第一个成员的品牌图标，一眼和按模型排的路由分开。
+        id, kind: 'route', name: route.name, meta: t('modelGroups.sources.models', { count: children.length }), ...(first ? { candidate: first } : {}),
         ...(onOpenSourceRoute ? { open: () => onOpenSourceRoute(route.id) } : {}),
         openLabel: t('modelGroups.overview.openRoute', { name: route.name }),
       });
     }
     return {
-      columns: [
-        { key: 'routes', title: t('modelGroups.routes'), nodes: routes },
-        { key: 'sources', title: t('modelGroups.overview.columnSources'), nodes: [...withEngineWhenAmbiguous([...sources.values()]), ...members.values()] },
-      ],
+      // 两种都有时各自写明是哪一种；只有一种时左边仍写「路由」。
+      groups: [
+        { key: 'model', title: providerNodes.length > 0 ? t('modelGroups.kinds.byModel') : t('modelGroups.routes'), routes, sources: withEngineWhenAmbiguous([...sources.values()]) },
+        { key: 'provider', title: routes.length > 0 ? t('modelGroups.kinds.byProvider') : t('modelGroups.routes'), routes: providerNodes, sources: [...members.values()] },
+      ].filter((group) => group.routes.length > 0),
       edges: list,
       parents,
     };
@@ -335,7 +340,7 @@ function RelationMap({ userRoutes, providerRoutes, decisions, liveQuota, onOpenR
     const observer = new ResizeObserver(() => measure());
     observer.observe(container);
     return () => observer.disconnect();
-  }, [measure, columns]);
+  }, [measure, groups]);
 
   const related = useMemo(() => (hovered ? relatedNodes(hovered, edges) : null), [hovered, edges]);
   // 最近一次任务实际走的路：选的路线和最后落到的来源。时段例外改走了别的路线时，选的路线连不到那个来源，不标。
@@ -373,7 +378,7 @@ function RelationMap({ userRoutes, providerRoutes, decisions, liveQuota, onOpenR
     .sort((x, y) => (Number(x.on) * 2 + Number(x.latest)) - (Number(y.on) * 2 + Number(y.latest)));
 
   return (
-    <div ref={containerRef} className="relative grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-x-12 px-4 pb-4 pt-3" data-testid="model-groups-map">
+    <div ref={containerRef} className="relative flex flex-col px-4 pb-4 pt-3" data-testid="model-groups-map">
       {/* 连线跟在格子后面淡入；动的是外层 HTML 元素，不在 SVG 上做动画。 */}
       <div className="pointer-events-none absolute inset-0 animate-fade-in motion-reduce:animate-none" style={{ animationDelay: 'var(--motion-enter)', animationFillMode: 'both' }} aria-hidden>
       <svg className="absolute inset-0 size-full overflow-visible">
@@ -392,26 +397,42 @@ function RelationMap({ userRoutes, providerRoutes, decisions, liveQuota, onOpenR
         ))}
       </svg>
       </div>
-      {columns.map((column, columnIndex) => (
-        <div key={column.key} className="flex min-w-0 flex-col gap-2.5">
-          <div className="truncate text-12 font-medium leading-[1.33] text-[var(--text-tertiary)]">{column.title}</div>
-          <div className="flex flex-1 flex-col justify-center gap-2">
-            {column.nodes.map((node, rowIndex) => (
-              <MapNodeButton
-                key={node.id}
-                node={node}
-                active={!!related?.has(node.id)}
-                latest={latest.has(node.id)}
-                enterDelayMs={columnIndex * 70 + rowIndex * 25}
-                onHover={setHovered}
-                register={register}
-                providers={namesOf}
-              />
-            ))}
-            {column.nodes.length === 0 && (
-              <div className="truncate text-12 leading-[1.33] text-[var(--text-tertiary)]">{t('modelGroups.overview.columnEmpty')}</div>
-            )}
-          </div>
+      {groups.map((group, groupIndex) => (
+        <div
+          key={group.key}
+          role="group"
+          aria-label={group.title}
+          data-model-group-kind={group.key}
+          className={cn(
+            'grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-x-12',
+            groupIndex > 0 && 'mt-4 border-t border-[var(--settings-theme-card-border)] pt-3',
+          )}
+        >
+          {[
+            { key: 'routes', title: group.title, nodes: group.routes },
+            { key: 'sources', title: t('modelGroups.overview.columnSources'), nodes: group.sources },
+          ].map((column, columnIndex) => (
+            <div key={column.key} className="flex min-w-0 flex-col gap-2.5">
+              <div className="truncate text-12 font-medium leading-[1.33] text-[var(--text-tertiary)]">{column.title}</div>
+              <div className="flex flex-1 flex-col justify-center gap-2">
+                {column.nodes.map((node, rowIndex) => (
+                  <MapNodeButton
+                    key={node.id}
+                    node={node}
+                    active={!!related?.has(node.id)}
+                    latest={latest.has(node.id)}
+                    enterDelayMs={columnIndex * 70 + rowIndex * 25}
+                    onHover={setHovered}
+                    register={register}
+                    providers={namesOf}
+                  />
+                ))}
+                {column.nodes.length === 0 && (
+                  <div className="truncate text-12 leading-[1.33] text-[var(--text-tertiary)]">{t('modelGroups.overview.columnEmpty')}</div>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       ))}
     </div>

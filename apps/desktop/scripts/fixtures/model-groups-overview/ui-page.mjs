@@ -32,6 +32,19 @@ export default {
     assert.deepEqual(all.filter((id) => id.startsWith('route:')), ['route:mine', 'route:auto:openai', 'route:auto:anthropic']);
     assert.equal(all.filter((id) => id.startsWith('source:')).length, 6);
     assert.equal(all.filter((id) => id.startsWith('source:provider')).length, 4);
+    // The two kinds of route are drawn in two labelled parts, never interleaved (2026-11-25 user feedback):
+    // the user's own route with its model sources first, the combined ones with their member providers after.
+    const parts = await page.locator('[data-testid="model-groups-map"] [data-model-group-kind]').evaluateAll((items) => items.map((item) => ({
+      kind: item.getAttribute('data-model-group-kind'),
+      cells: [...item.querySelectorAll('[data-model-group-node]')].map((cell) => cell.getAttribute('data-model-group-node').split('\u0000')[0]),
+    })));
+    assert.deepEqual(parts.map((part) => part.kind), ['model', 'provider']);
+    assert.deepEqual(parts[0].cells.filter((id) => id.startsWith('route:')), ['route:mine']);
+    assert.equal(parts[0].cells.some((id) => id.startsWith('source:provider')), false);
+    assert.deepEqual(parts[1].cells.filter((id) => id.startsWith('route:')), ['route:auto:openai', 'route:auto:anthropic']);
+    assert.equal(parts[1].cells.filter((id) => id.startsWith('source:')).every((id) => id.startsWith('source:provider')), true);
+    // A combined route carries the brand mark of its first member; the user's own route keeps the route mark.
+    assert.equal(await cell('route:auto:openai').locator('svg').count() > 0, true);
     // A combined route says how many models it covers (the wording follows the locale; the count does not).
     assert.match(await cell('route:auto:openai').textContent(), /3/);
     assert.match(await cell('route:auto:anthropic').textContent(), /2/);
