@@ -1878,7 +1878,7 @@ describe('forkSessionAtMessage', () => {
     expect(remoteInvokeMock).not.toHaveBeenCalled();
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
   });
-  it('rejects a historical engine boundary without a parked native session id', async () => {
+  it('rebuilds a historical fork when the engine boundary has no parked native session id', async () => {
     const target = makeMessageRow({
       id: 'historical-assistant',
       clientId: 'historical-assistant-client',
@@ -1904,12 +1904,14 @@ describe('forkSessionAtMessage', () => {
       rowid: 30,
     });
 
-    await expect(
-      forkSessionAtMessage('src-session', 'historical-assistant-client'),
-    ).rejects.toMatchObject({ code: 'UNSUPPORTED_HISTORY' });
+    await forkSessionAtMessage('src-session', 'historical-assistant-client');
 
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
-    expect(txCalls).toHaveLength(0);
+    const txArgs = txCalls.find((call) => call.name === 'fork.session')!.args as {
+      newSession: Record<string, unknown>;
+    };
+    expect(txArgs.newSession.agentKind).toBe('cc');
+    expect(txArgs.newSession.sdkSessionId).toBeNull();
   });
 
   it.each([
