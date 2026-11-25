@@ -103,11 +103,30 @@ export default {
     menu: { about: 'Original task menu with an approved plugin action' },
     input: { about: 'Provider completion in the real suggestion panel and processed attachment in the original tray' },
     'attachment-error': { about: 'Localized processing error keeps the original attachment' },
+    'task-main': { about: 'Explicit main-area toggle loads and releases a task-bound page', viewport: { width: 600, height: 320 } },
     'sidebar-section': { about: 'Slow sidebar App, animated resizing and collapse, and in-memory height reuse' },
   },
-  async ready(page) { await page.getByRole('button', { name: '示例摘要 · 插件界面示例', exact: true }).waitFor(); },
+  async ready(page) { await page.getByRole('button', { name: /^(示例摘要|当前任务) · 插件界面示例$/ }).waitFor(); },
   async check(page, ui) {
     assert.equal(await page.locator('iframe').count(), 0);
+    if (ui.case === 'task-main') {
+      const trigger = page.getByRole('button', { name: '当前任务 · 插件界面示例' });
+      await trigger.click();
+      const frame = page.locator('main iframe');
+      await frame.waitFor();
+      await page.frameLocator('main iframe').getByText('示例插件页面').waitFor();
+      await frame.evaluate(element => {
+        for (const method of ['initialized', 'sandbox-result-delivered']) window.dispatchEvent(new MessageEvent('message', {
+          source: element.contentWindow, data: { jsonrpc: '2.0', method: `ui/notifications/${method}` },
+        }));
+      });
+      await page.waitForFunction(() => document.querySelector('main iframe')?.style.opacity === '1');
+      await ui.capture('opened');
+      await trigger.click();
+      await frame.waitFor({ state: 'detached' });
+      await page.getByText('原生聊天区（验收样本）').waitFor();
+      return;
+    }
     assert.ok(await page.getByRole('button', { name: '打开示例工作台 · 插件界面示例', exact: true }).isVisible());
     assert.ok(await page.getByRole('button', { name: '示例摘要 · 插件界面示例', exact: true }).isVisible());
     if (ui.case === 'sidebar-section') return checkSidebarSection(page, ui);

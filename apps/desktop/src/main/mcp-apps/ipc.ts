@@ -353,12 +353,13 @@ export function registerMcpAppsIpc(
                 resource: async (source) => {
                   const scope = sessionId === null ? undefined : await assertSession(sessionId);
                   if (scope?.session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
-                  return bindPluginUiResource(caller, sessionId, source.instanceId, source.viewId, config => host.serverRevision(config), async () => {
+                  return bindPluginUiResource(caller, sessionId, source.instanceId, source.viewId, config => host.serverRevision(config), async (checkWorkdir) => {
                     if (!scope || sessionId === null) return;
                     const latest = await assertSession(sessionId);
-                    if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt || latest.session.remoteHostId)
+                    if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt || latest.session.remoteHostId ||
+                        checkWorkdir && latest.session.workingDir !== scope.session.workingDir)
                       throw new Error('MCP_APP_SESSION_UNAVAILABLE');
-                  }, scope ? { title: scope.session.title, workingDir: scope.session.workingDir, model: scope.session.model } : undefined);
+                  }, scope ? { title: scope.session.title, workingDir: scope.session.workingDir, model: scope.session.model } : undefined, source.taskMainContribution);
                 },
                 supply: (document, boundCaller, hostContext) =>
                   supplyMcpAppDocument(document, boundCaller, (input) =>

@@ -11,7 +11,7 @@ import type { McpAppResourceBinding } from './host.js';
 const id = z.string().min(1).max(256);
 export const mcpAppOperationSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('open'), clientId: id, openId: id.optional(), sdkCacheHashes: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(8).optional(), context: McpUiHostContextSchema.default({}) }),
-  z.object({ op: z.literal('open-resource'), source: z.object({ instanceId: id, viewId: id }), openId: id.optional(), context: McpUiHostContextSchema.default({}) }),
+  z.object({ op: z.literal('open-resource'), source: z.object({ instanceId: id, viewId: id, taskMainContribution: id.optional() }), openId: id.optional(), context: McpUiHostContextSchema.default({}) }),
   z.object({ op: z.literal('cancel-open'), openId: id }),
   z.object({ op: z.literal('message'), viewId: id, message: z.unknown() }),
   z.object({ op: z.literal('poll'), viewId: id, after: z.number().int().nonnegative().default(0) }),
@@ -32,7 +32,7 @@ export const mcpAppOperationSchema = z.discriminatedUnion('op', [
 ]);
 interface LocalViewDeps {
   supply(document: McpAppDocument, caller: string, hostContext: Record<string, unknown>): void;
-  resource?(source: { instanceId: string; viewId: string }): Promise<McpAppResourceBinding>;
+  resource?(source: { instanceId: string; viewId: string; taskMainContribution?: string }): Promise<McpAppResourceBinding>;
 }
 /** Called only by the protocol's frame-verified channel, with Host-bound task and View IDs. */
 export async function handleMcpAppFrameOperation(

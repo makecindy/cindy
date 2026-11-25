@@ -102,12 +102,8 @@ export function SessionContentHeaderRegistration({
   remoteSessionUnavailable = false,
   remoteSyncing = false,
   readOnly = false,
-}: {
-  session: Session;
-  remoteSessionUnavailable?: boolean;
-  remoteSyncing?: boolean;
-  readOnly?: boolean;
-}) {
+  taskMainTrigger,
+}: SessionContentHeaderProps) {
   useRegisterContentHeader(
     useMemo(
       () => (
@@ -116,15 +112,17 @@ export function SessionContentHeaderRegistration({
           remoteSessionUnavailable={remoteSessionUnavailable}
           remoteSyncing={remoteSyncing}
           readOnly={readOnly}
+          taskMainTrigger={taskMainTrigger}
         />
       ),
-      [readOnly, session, remoteSessionUnavailable, remoteSyncing],
+      [readOnly, session, remoteSessionUnavailable, remoteSyncing, taskMainTrigger],
     ),
   );
   return null;
 }
 
 interface SessionContentHeaderProps {
+  taskMainTrigger?: React.ReactNode;
   session: Session;
   remoteSessionUnavailable?: boolean;
   remoteSyncing?: boolean;
@@ -133,6 +131,7 @@ interface SessionContentHeaderProps {
 
 export function SessionContentHeader({
   session: sessionProp,
+  taskMainTrigger,
   remoteSessionUnavailable = false,
   remoteSyncing = false,
   readOnly = false,
@@ -550,6 +549,7 @@ export function SessionContentHeader({
 
   return (
     <div className="flex min-w-0 items-center gap-0.5 pl-1">
+      {taskMainTrigger}
       <PluginUiSlot position="session.header" sessionId={session.id} disabled={!!session.remoteHostId || !!session.deviceLinkDeviceId} />
       {!session.remoteHostId && !session.deviceLinkDeviceId && <PluginUiMenu sessionId={session.id} />}
       {!session.sideChatPromoted && session.source === 'side-chat' && session.parentSessionId && (

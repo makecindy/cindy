@@ -2346,6 +2346,17 @@ describe('interactive page declarations', () => {
     } };
     expect(validateGhostManifest({ ...base, mcpApps })).toMatchObject({ ok: true, manifest: { mcpApps } });
   });
+  // Unit: unlike the sidebar, the main task surface must never open a global resource.
+  it('recognizes an explicit main task button without giving it tools or global scope', () => {
+    const button = { id: 'open', title: 'Open', position: 'session.main', view: 'page' };
+    const validate = (scope: string, extra = {}) => validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: {
+      views: [{ id: 'page', title: 'Page', resourceUri: 'ui://planner', scope }], contributions: [{ ...button, ...extra }],
+    } } }).ok;
+    expect(validate('task')).toBe(true);
+    expect(hostUiApprovalSubjects({ contributions: [button] })).toHaveLength(1);
+    expect(validate('global')).toBe(false);
+    expect(validate('task', { presentation: 'popover' })).toBe(false);
+  });
   it('includes a declared message menu action in explicit host approval', () => {
     const host = { contributions: [{ id: 'help-menu', title: 'Help', position: 'message.menu', tool: 'help' }] };
     expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
@@ -2376,6 +2387,7 @@ describe('interactive page declarations', () => {
     { contributions: [{ id: 'new', title: 'New', position: 'sidebar.section', tool: 'help' }] },
     { contributions: [{ id: 'new', title: 'New', position: 'window.titlebar', kind: 'status' }] },
     { contributions: [{ id: 'new', title: 'New', position: 'workdir.menu', kind: 'status' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'session.main', tool: 'help' }] },
   ])('keeps legacy host authority when stored extensions are invalid: %j', extension => {
     const legacy = { contributions: [{ id: 'old', title: 'Old toolbar', position: 'composer.toolbar', tool: 'help' }],
       commands: [{ id: 'command', title: 'Old command', tool: 'help', shortcut: 'Mod+Shift+H' }] };

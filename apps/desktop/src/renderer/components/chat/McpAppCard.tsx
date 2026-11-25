@@ -159,7 +159,7 @@ interface McpAppCardProps {
   composerPlacement?: string;
   chrome?: 'card' | 'panel';
   sizing?: 'content' | 'fill' | 'sidebar-section';
-  source?: { instanceId: string; viewId: string };
+  source?: { instanceId: string; viewId: string; taskMainContribution?: string };
   contextSource?: { read(): Record<string, unknown>; subscribe(changed: () => void): () => void };
   onUnavailable?(): void;
 }
@@ -620,7 +620,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, composerPlacement, sidebarSection, heights, heightKey, rememberLayout]);
+  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, source?.taskMainContribution, composerPlacement, sidebarSection, heights, heightKey, rememberLayout]);
 
   useLayoutEffect(() => {
     const controller = controllerRef.current;

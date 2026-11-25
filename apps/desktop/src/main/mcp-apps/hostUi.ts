@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { McpUiHostContext } from '@modelcontextprotocol/ext-apps/app-bridge';
 import { readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
+import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import type { McpAppResourceBinding } from './host.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
@@ -98,7 +99,7 @@ const tool = (name: string, description: string, properties: Record<string, obje
 /** Resolve declarations in Main. A page never chooses an instance, task or resource. */
 export function bindPluginUiResource(caller: string, sessionId: string | null, instance: string, viewId: string,
   revision: (config: NonNullable<ReturnType<typeof readPluginHostUi>>['config']) => string,
-  assertScope?: () => Promise<void>, task?: Record<string, unknown>): McpAppResourceBinding {
+  assertScope?: (checkWorkdir: boolean) => Promise<void>, task?: Record<string, unknown>, taskMainContribution?: string): McpAppResourceBinding {
   const entry = readPluginHostUi(instance);
   const view = entry?.host.views?.find(view => view.id === viewId);
   if (!entry || !view || view.scope === 'task' && sessionId === null) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
@@ -109,14 +110,20 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
   const capabilities = entry.host.capabilities ?? [];
   const watching = sessionId !== null && (capabilities.includes('draft') || capabilities.includes('context'))
     ? new AbortController() : undefined;
+  // This marker comes only from the owning renderer's open-resource operation, never a frame message.
+  const taskMain = taskMainContribution !== undefined;
+  if (taskMain && !entry.host.contributions?.some(item => item.position === 'session.main' &&
+      item.id === taskMainContribution && item.view === viewId)) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
   const assertCurrent = () => {
+    if (taskMain && (view.scope !== 'task' || typeof task?.workingDir !== 'string' || !task.workingDir.trim() ||
+        isGhostDisabledForWorkdir(instance, task.workingDir))) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
     if (watching?.signal.aborted) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
     if (owner !== activeOwnerScopeKey() || readPluginHostUi(instance) !== entry) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
     entry.config.plugin!.assertCurrent(sessionId ?? undefined);
     callerWindow(caller);
   };
   assertCurrent();
-  const assertOperation = async () => { assertCurrent(); await assertScope?.(); assertCurrent(); };
+  const assertOperation = async () => { assertCurrent(); await assertScope?.(taskMain); assertCurrent(); };
   let draft: Record<string, unknown> | null = null;
   const tools: Tool[] = [tool('open', 'Open another approved view of this plugin.', { viewId: { type: 'string' }, input: { type: 'object' } }, ['viewId'])];
   if (entry.host.settings?.length) tools.push(tool('settings', 'Read, update or reset this plugin’s registered settings.', {

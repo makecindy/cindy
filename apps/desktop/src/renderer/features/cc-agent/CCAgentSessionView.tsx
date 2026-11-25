@@ -127,7 +127,7 @@ import { shortSessionId } from '@/lib/sessionId';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { isOverloadErrorMessage } from '@/utils/overloadError';
 import { ChatInput, type SessionModelPick } from '@/components/new-chat/ChatInput';
-import { PluginUiSlot, PluginUiWorkdirButton, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiSlot, PluginUiWorkdirButton, usePluginUiHas, usePluginUiTaskMain } from '@/cindy-brain/PluginUiContributions';
 import {
   SessionSubscriptionAccountProvider,
   sessionSubscriptionPoolProvider,
@@ -1083,7 +1083,7 @@ function CCAgentSessionContent({
   // A visible file-browse rail is still the open task, even when it is compact.
   // Split panes stay mounted together; only the route-owning pane may consume
   // hardware commands. The compact files rail is not a split pane.
-  const ownsHardwareTaskActions =
+  const ownsTaskActionRoute =
     paneFocused &&
     (ownsRoute ||
       (Boolean(sessionId) &&
@@ -1269,6 +1269,12 @@ function CCAgentSessionContent({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
+  const taskMain = usePluginUiTaskMain(
+    ownsRoute && viewVisible && !readOnly && !botChatIdentity && rightSidebarDeviceLinkDeviceId === null &&
+      !session?.remoteHostId && session?.status === 'active' && !session.clearedAt ? session.id : null,
+    session?.workingDir,
+  );
+  const ownsHardwareTaskActions = ownsTaskActionRoute && !taskMain.page;
   const composerBotMentions = useTaskBotMentions(
     rightSidebarDeviceLinkDeviceId,
     session?.remoteHostId,
@@ -6343,6 +6349,7 @@ function CCAgentSessionContent({
             remoteSessionUnavailable={remoteSessionUnavailable}
             remoteSyncing={remoteLoading === 'syncing'}
             readOnly={readOnly}
+            taskMainTrigger={taskMain.trigger}
           />
         )
       ) : null}
@@ -6397,7 +6404,10 @@ function CCAgentSessionContent({
           declare={setRightSidebarWorkdir}
         />
       )}
+      {taskMain.page}
       <section
+        inert={taskMain.page ? true : undefined}
+        style={taskMain.page ? { display: 'none' } : undefined}
         className="relative flex h-full w-full flex-col bg-content-area"
         data-plugin-ui-task={!session?.remoteHostId && !session?.deviceLinkDeviceId ? sessionId : undefined}
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
