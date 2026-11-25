@@ -2693,6 +2693,59 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "登入手機號碼",
+        "rowHint": "用以登入並收驗證碼",
+        "change": "更換手機號碼",
+        "verifyTitle": "驗現繫之手機號碼",
+        "introDescription": "為護帳號安全，更換之前須先驗現繫之手機號碼。",
+        "newTitle": "書新手機號碼",
+        "newDescription": "更換之後，請以新號登入；舊號不復能登入此帳號。",
+        "inputLabel": "新手機號碼",
+        "placeholder": "請書手機號碼",
+        "success": "手機號碼已更為 {{target}}"
+      },
+      "email": {
+        "rowTitle": "登入電子郵件",
+        "rowHint": "用以登入並收驗證碼",
+        "change": "更換電子郵件",
+        "verifyTitle": "驗現繫之電子郵件",
+        "introDescription": "為護帳號安全，更換之前須先驗現繫之電子郵件。",
+        "newTitle": "書新電子郵件",
+        "newDescription": "更換之後，請以新郵件登入；舊郵件不復能登入此帳號。",
+        "inputLabel": "新電子郵件地址",
+        "placeholder": "請書電子郵件地址",
+        "success": "電子郵件已更為 {{target}}"
+      },
+      "codeSent": "驗證碼已遣至 {{target}}",
+      "codeLabel": "驗證碼",
+      "codePlaceholder": "6 位驗證碼",
+      "sendCode": "遣驗證碼",
+      "next": "次步",
+      "confirm": "確認更換",
+      "cancel": "罷",
+      "resend": "重遣驗證碼",
+      "resendIn": "{{seconds}} 秒後可重遣",
+      "errors": {
+        "INVALID_CODE": "驗證碼有誤或已過期",
+        "CODE_ATTEMPTS_EXCEEDED": "驗證碼誤輸過多，請重取",
+        "CONTACT_TAKEN": "此手機號碼或電子郵件已繫他帳號",
+        "CONTACT_UNCHANGED": "與現繫之手機號碼或電子郵件相同",
+        "CONTACT_CHANGE_TICKET_INVALID": "驗證已過期，請重驗現繫之手機號碼或電子郵件",
+        "AUTH_FLOW_SUPERSEDED": "登入狀態已變，請重新開始",
+        "CONTACT_CHANGE_UNAVAILABLE": "此帳號不可於此更換登入方式",
+        "CONTACT_CHANGE_BUSY": "前一步猶在處理",
+        "RATE_LIMITED": "操作過頻，請稍後再試。",
+        "INVALID_PARAMS": "格式不合，請檢查後再試",
+        "EMAIL_DOMAIN_BLOCKED": "此電子郵件暫不可用，請易之",
+        "EMAIL_PATTERN_BLOCKED": "此電子郵件暫不可用，請易之",
+        "ACCOUNT_DELETION_PENDING": "帳號待刪除，不可更換",
+        "NETWORK_ERROR": "網路連線失敗，請檢查網路後再試",
+        "REQUEST_TIMEOUT": "請求逾時，請再試",
+        "fallback": "操作未成，請稍後再試"
+      }
+    },
     "help": {
       "title": "求助",
       "description": "知如何以 {{appName}} 成事",

@@ -334,6 +334,11 @@ import type {
   DesktopAccountDeletionConfirmResult,
   DesktopAccountDeletionStatusResult,
   DesktopAccountSwitcherSnapshot,
+  DesktopContactChangeAvailability,
+  DesktopContactChangeCodeSent,
+  DesktopContactChangeCompleted,
+  DesktopContactChangeResult,
+  DesktopContactChangeVerified,
   DesktopLoginAction,
   DesktopLoginActionResult,
 } from '../shared/authIpc';
@@ -2616,6 +2621,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('auth:account-deletion:clear-receipt'),
   authConsumeAccountDeletionRestoredNotice: (): Promise<boolean> =>
     ipcRenderer.invoke('auth:account-deletion:consume-restored-notice'),
+  // 换绑登录联系方式:票据与凭据留在 main,这里只传验证码、新值与展示结果。
+  authGetContactChangeAvailability: (): Promise<DesktopContactChangeAvailability> =>
+    ipcRenderer.invoke('auth:contact-change:get-availability'),
+  authRequestContactChangeCurrentCode: (): Promise<DesktopContactChangeResult<DesktopContactChangeCodeSent>> =>
+    ipcRenderer.invoke('auth:contact-change:request-current-code'),
+  authVerifyContactChangeCurrentCode: (
+    code: string,
+  ): Promise<DesktopContactChangeResult<DesktopContactChangeVerified>> =>
+    ipcRenderer.invoke('auth:contact-change:verify-current-code', code),
+  authRequestContactChangeNewCode: (value: string): Promise<DesktopContactChangeResult<null>> =>
+    ipcRenderer.invoke('auth:contact-change:request-new-code', value),
+  authConfirmContactChange: (input: {
+    value: string;
+    code: string;
+  }): Promise<DesktopContactChangeResult<DesktopContactChangeCompleted>> =>
+    ipcRenderer.invoke('auth:contact-change:confirm', input),
+  authCancelContactChange: (): Promise<void> => ipcRenderer.invoke('auth:contact-change:cancel'),
 
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──
   profileGetState: (): Promise<{

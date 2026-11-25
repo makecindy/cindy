@@ -49,6 +49,11 @@ type DesktopAccountDeletionConfirmResult =
 type DesktopAccountDeletionStatusResult =
   import('../shared/authIpc').DesktopAccountDeletionStatusResult;
 type DesktopAccountSwitcherSnapshot = import('../shared/authIpc').DesktopAccountSwitcherSnapshot;
+type DesktopContactChangeAvailability = import('../shared/authIpc').DesktopContactChangeAvailability;
+type DesktopContactChangeCodeSent = import('../shared/authIpc').DesktopContactChangeCodeSent;
+type DesktopContactChangeCompleted = import('../shared/authIpc').DesktopContactChangeCompleted;
+type DesktopContactChangeResult<T> = import('../shared/authIpc').DesktopContactChangeResult<T>;
+type DesktopContactChangeVerified = import('../shared/authIpc').DesktopContactChangeVerified;
 type PendingRemotePrecreatedWorktree =
   import('../shared/remotePrecreatedWorktreeLedger').PendingRemotePrecreatedWorktree;
 type PendingRemotePrecreatedWorktreeTarget =
@@ -2409,6 +2414,17 @@ interface ElectronAPI {
   authGetAccountDeletionStatus: () => Promise<DesktopAccountDeletionStatusResult>;
   authClearAccountDeletionReceipt: () => Promise<void>;
   authConsumeAccountDeletionRestoredNotice: () => Promise<boolean>;
+  authGetContactChangeAvailability: () => Promise<DesktopContactChangeAvailability>;
+  authRequestContactChangeCurrentCode: () => Promise<DesktopContactChangeResult<DesktopContactChangeCodeSent>>;
+  authVerifyContactChangeCurrentCode: (
+    code: string,
+  ) => Promise<DesktopContactChangeResult<DesktopContactChangeVerified>>;
+  authRequestContactChangeNewCode: (value: string) => Promise<DesktopContactChangeResult<null>>;
+  authConfirmContactChange: (input: {
+    value: string;
+    code: string;
+  }) => Promise<DesktopContactChangeResult<DesktopContactChangeCompleted>>;
+  authCancelContactChange: () => Promise<void>;
   onAuthStateChange: (callback: (state: AuthStateChangePayload) => void) => () => void;
   onAuthSessionExpired: (callback: (state: AuthSessionExpiredPayload) => void) => () => void;
 

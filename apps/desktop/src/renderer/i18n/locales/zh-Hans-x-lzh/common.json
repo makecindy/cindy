@@ -2693,6 +2693,59 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "登录手机号",
+        "rowHint": "用以登录并收验证码",
+        "change": "更换手机号",
+        "verifyTitle": "验现绑之手机号",
+        "introDescription": "为护账号安全，更换之前须先验现绑之手机号。",
+        "newTitle": "书新手机号",
+        "newDescription": "更换之后，请以新号登录；旧号不复能登录此账号。",
+        "inputLabel": "新手机号",
+        "placeholder": "请书手机号",
+        "success": "手机号已更为 {{target}}"
+      },
+      "email": {
+        "rowTitle": "登录邮箱",
+        "rowHint": "用以登录并收验证码",
+        "change": "更换邮箱",
+        "verifyTitle": "验现绑之邮箱",
+        "introDescription": "为护账号安全，更换之前须先验现绑之邮箱。",
+        "newTitle": "书新邮箱",
+        "newDescription": "更换之后，请以新邮箱登录；旧邮箱不复能登录此账号。",
+        "inputLabel": "新邮箱",
+        "placeholder": "请书邮箱",
+        "success": "邮箱已更为 {{target}}"
+      },
+      "codeSent": "验证码已遣至 {{target}}",
+      "codeLabel": "验证码",
+      "codePlaceholder": "6 位验证码",
+      "sendCode": "遣验证码",
+      "next": "次步",
+      "confirm": "确认更换",
+      "cancel": "罢",
+      "resend": "重遣验证码",
+      "resendIn": "{{seconds}} 秒后可重遣",
+      "errors": {
+        "INVALID_CODE": "验证码有误或已过期",
+        "CODE_ATTEMPTS_EXCEEDED": "验证码误输过多，请重取",
+        "CONTACT_TAKEN": "此手机号或邮箱已绑他账号",
+        "CONTACT_UNCHANGED": "与现绑之手机号或邮箱相同",
+        "CONTACT_CHANGE_TICKET_INVALID": "验证已过期，请重验现绑之手机号或邮箱",
+        "AUTH_FLOW_SUPERSEDED": "登录状态已变，请重新开始",
+        "CONTACT_CHANGE_UNAVAILABLE": "此账号不可于此更换登录方式",
+        "CONTACT_CHANGE_BUSY": "前一步犹在处理",
+        "RATE_LIMITED": "操作过频，请稍后再试。",
+        "INVALID_PARAMS": "格式不合，请检查后再试",
+        "EMAIL_DOMAIN_BLOCKED": "此邮箱暂不可用，请易之",
+        "EMAIL_PATTERN_BLOCKED": "此邮箱暂不可用，请易之",
+        "ACCOUNT_DELETION_PENDING": "账号待注销，不可更换",
+        "NETWORK_ERROR": "网络连接失败，请检查网络后再试",
+        "REQUEST_TIMEOUT": "请求超时，请再试",
+        "fallback": "操作未成，请稍后再试"
+      }
+    },
     "help": {
       "title": "求助",
       "description": "知如何以 {{appName}} 成事",

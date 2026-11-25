@@ -2761,6 +2761,59 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "Número de teléfono para iniciar sesión",
+        "rowHint": "Se usa para iniciar sesión y recibir códigos de verificación",
+        "change": "Cambiar número",
+        "verifyTitle": "Verificar el número actual",
+        "introDescription": "Para proteger tu cuenta, verifica primero tu número de teléfono actual.",
+        "newTitle": "Ingresa el nuevo número",
+        "newDescription": "Después del cambio, inicia sesión con el nuevo número. El número anterior ya no podrá iniciar sesión en esta cuenta.",
+        "inputLabel": "Nuevo número de teléfono",
+        "placeholder": "Ingresa tu número de teléfono",
+        "success": "Número de teléfono cambiado a {{target}}"
+      },
+      "email": {
+        "rowTitle": "Correo electrónico para iniciar sesión",
+        "rowHint": "Se usa para iniciar sesión y recibir códigos de verificación",
+        "change": "Cambiar correo",
+        "verifyTitle": "Verificar el correo actual",
+        "introDescription": "Para proteger tu cuenta, verifica primero tu correo electrónico actual.",
+        "newTitle": "Ingresa el nuevo correo",
+        "newDescription": "Después del cambio, inicia sesión con el nuevo correo. El correo anterior ya no podrá iniciar sesión en esta cuenta.",
+        "inputLabel": "Nuevo correo electrónico",
+        "placeholder": "Ingresa tu correo electrónico",
+        "success": "Correo electrónico cambiado a {{target}}"
+      },
+      "codeSent": "Enviamos un código de verificación a {{target}}",
+      "codeLabel": "Código de verificación",
+      "codePlaceholder": "Código de 6 dígitos",
+      "sendCode": "Enviar código",
+      "next": "Siguiente",
+      "confirm": "Confirmar cambio",
+      "cancel": "Cancelar",
+      "resend": "Reenviar código",
+      "resendIn": "Reenviar en {{seconds}} s",
+      "errors": {
+        "INVALID_CODE": "El código de verificación es incorrecto o venció.",
+        "CODE_ATTEMPTS_EXCEEDED": "Demasiados intentos incorrectos. Solicita un código nuevo.",
+        "CONTACT_TAKEN": "Este número de teléfono o correo ya está vinculado a otra cuenta.",
+        "CONTACT_UNCHANGED": "Es igual a tu número de teléfono o correo actual.",
+        "CONTACT_CHANGE_TICKET_INVALID": "La verificación venció. Verifica de nuevo tu número de teléfono o correo actual.",
+        "AUTH_FLOW_SUPERSEDED": "Tu inicio de sesión cambió. Empieza de nuevo.",
+        "CONTACT_CHANGE_UNAVAILABLE": "Esta cuenta no puede cambiar su método de inicio de sesión aquí.",
+        "CONTACT_CHANGE_BUSY": "El paso anterior aún se está procesando.",
+        "RATE_LIMITED": "Demasiados intentos. Espera un momento y vuelve a intentarlo.",
+        "INVALID_PARAMS": "El formato no es válido. Revísalo y vuelve a intentarlo.",
+        "EMAIL_DOMAIN_BLOCKED": "Este correo no se puede usar. Prueba con otro.",
+        "EMAIL_PATTERN_BLOCKED": "Este correo no se puede usar. Prueba con otro.",
+        "ACCOUNT_DELETION_PENDING": "Esta cuenta está pendiente de eliminación y no se puede cambiar.",
+        "NETWORK_ERROR": "No se pudo conectar a la red. Revisa tu conexión y vuelve a intentarlo.",
+        "REQUEST_TIMEOUT": "La solicitud tardó demasiado. Vuelve a intentarlo.",
+        "fallback": "Algo salió mal. Vuelve a intentarlo más tarde."
+      }
+    },
     "help": {
       "title": "Ayuda",
       "description": "Aprende a sacar adelante tu trabajo con {{appName}}.",

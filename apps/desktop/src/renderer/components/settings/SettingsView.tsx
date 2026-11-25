@@ -38,6 +38,7 @@ import type { SettingsSearchContext } from './settingsSearchTypes';
 import { useSettingsSectionTarget } from './useSettingsSectionTarget';
 import { SettingsSubpageBackContext, useSettingsEscape } from './useSettingsEscape';
 import { UserProfileCard } from './UserProfileCard';
+import { ContactChangeSection } from './ContactChangeSection';
 import { NotificationSection } from './NotificationSection';
 import { AwayFromComputerSection } from './AwayFromComputerSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
@@ -465,6 +466,8 @@ function SettingsViewContent() {
                 {/* Section — User Info */}
                 <section id={generalSettings.user.targetId} aria-label={t(generalSettings.user.titleKey)}>
                   <UserProfileCard />
+                  {/* 换绑登录手机号(国内版)/ 邮箱(国际版);SSO 会话等不可换绑时不渲染 */}
+                  <ContactChangeSection />
                 </section>
 
                 {/* Section — Language */}

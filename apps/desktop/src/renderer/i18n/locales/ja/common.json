@@ -2693,6 +2693,59 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "ログイン用の電話番号",
+        "rowHint": "ログインと認証コードの受信に使用します",
+        "change": "電話番号を変更",
+        "verifyTitle": "現在の電話番号を確認",
+        "introDescription": "アカウントを保護するため、変更する前に現在登録している電話番号を確認してください。",
+        "newTitle": "新しい電話番号を入力",
+        "newDescription": "変更後は新しい電話番号でログインしてください。以前の電話番号ではこのアカウントにログインできなくなります。",
+        "inputLabel": "新しい電話番号",
+        "placeholder": "電話番号を入力",
+        "success": "電話番号を {{target}} に変更しました"
+      },
+      "email": {
+        "rowTitle": "ログイン用のメールアドレス",
+        "rowHint": "ログインと認証コードの受信に使用します",
+        "change": "メールアドレスを変更",
+        "verifyTitle": "現在のメールアドレスを確認",
+        "introDescription": "アカウントを保護するため、変更する前に現在登録しているメールアドレスを確認してください。",
+        "newTitle": "新しいメールアドレスを入力",
+        "newDescription": "変更後は新しいメールアドレスでログインしてください。以前のメールアドレスではこのアカウントにログインできなくなります。",
+        "inputLabel": "新しいメールアドレス",
+        "placeholder": "メールアドレスを入力",
+        "success": "メールアドレスを {{target}} に変更しました"
+      },
+      "codeSent": "{{target}} に認証コードを送信しました",
+      "codeLabel": "認証コード",
+      "codePlaceholder": "6 桁のコード",
+      "sendCode": "コードを送信",
+      "next": "次へ",
+      "confirm": "変更を確定",
+      "cancel": "キャンセル",
+      "resend": "コードを再送信",
+      "resendIn": "{{seconds}} 秒後に再送信できます",
+      "errors": {
+        "INVALID_CODE": "認証コードが間違っているか期限切れです。",
+        "CODE_ATTEMPTS_EXCEEDED": "入力ミスが多すぎます。新しいコードを取得してください。",
+        "CONTACT_TAKEN": "この電話番号またはメールアドレスは別のアカウントに登録されています。",
+        "CONTACT_UNCHANGED": "現在登録している電話番号またはメールアドレスと同じです。",
+        "CONTACT_CHANGE_TICKET_INVALID": "確認の有効期限が切れました。現在の電話番号またはメールアドレスをもう一度確認してください。",
+        "AUTH_FLOW_SUPERSEDED": "ログイン状態が変わりました。最初からやり直してください。",
+        "CONTACT_CHANGE_UNAVAILABLE": "このアカウントではここでログイン方法を変更できません。",
+        "CONTACT_CHANGE_BUSY": "前の手順をまだ処理しています。",
+        "RATE_LIMITED": "操作が多すぎます。しばらく待ってから再試行してください。",
+        "INVALID_PARAMS": "形式が正しくありません。確認して再試行してください。",
+        "EMAIL_DOMAIN_BLOCKED": "このメールアドレスは使用できません。別のアドレスをお試しください。",
+        "EMAIL_PATTERN_BLOCKED": "このメールアドレスは使用できません。別のアドレスをお試しください。",
+        "ACCOUNT_DELETION_PENDING": "このアカウントは削除待ちのため変更できません。",
+        "NETWORK_ERROR": "ネットワークに接続できません。接続を確認して再試行してください。",
+        "REQUEST_TIMEOUT": "リクエストがタイムアウトしました。再試行してください。",
+        "fallback": "問題が発生しました。しばらくしてから再試行してください。"
+      }
+    },
     "help": {
       "title": "ヘルプ",
       "description": "{{appName}} で作業を進める方法をご案内します。",

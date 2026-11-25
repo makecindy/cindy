@@ -288,6 +288,48 @@ export type AccountDeletionStatus = z.infer<
 >;
 
 /**
+ * `/api/me/identities` 的已验证联系方式(值已由服务端打码)。
+ * `id` 与 `changeable` 随换绑接口上线新增:旧服务端缺这两个字段时,条目照常解析,
+ * 但不能换绑(客户端据此隐藏入口),避免部署先后顺序让整份列表解析失败。
+ */
+export const accountContactSchema = z.object({
+  id: z.string().min(1).optional(),
+  type: z.enum(["email", "phone"]),
+  value: z.string().min(1),
+  verifiedAt: z.string(),
+  changeable: z.boolean().optional(),
+});
+export type AccountContact = z.infer<typeof accountContactSchema>;
+
+export const accountIdentitiesSchema = z.object({
+  contacts: z.array(accountContactSchema),
+});
+
+export const contactChangeCodeSentSchema = z.object({
+  status: z.literal("sent"),
+  channel: z.enum(["email", "sms"]),
+  maskedTarget: z.string().min(1),
+});
+export type ContactChangeCodeSent = z.infer<typeof contactChangeCodeSentSchema>;
+
+export const contactChangeTicketSchema = z.object({
+  changeTicket: z.string().min(1),
+  type: z.enum(["email", "phone"]),
+  expiresAt: z.string().datetime(),
+});
+export type ContactChangeTicket = z.infer<typeof contactChangeTicketSchema>;
+
+export const contactChangeConfirmedSchema = z.object({
+  status: z.literal("ok"),
+  contact: accountContactSchema,
+});
+
+/** 换绑的新联系方式:类型由 changeTicket 决定,只带对应字段。 */
+export type ContactChangeTarget =
+  | { type: "phone"; phone: string }
+  | { type: "email"; email: string };
+
+/**
  * 托管回调链路(desktop 系统浏览器登录)的授权码取回结果。
  *
  * 背景:RFC 8252 loopback 会把 `127.0.0.1:<port>` 与授权码一起暴露在浏览器地址栏,

@@ -2723,6 +2723,59 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "Sign-in phone number",
+        "rowHint": "Used to sign in and receive verification codes",
+        "change": "Change phone number",
+        "verifyTitle": "Verify current phone number",
+        "introDescription": "To keep your account secure, verify your current phone number before changing it.",
+        "newTitle": "Enter new phone number",
+        "newDescription": "After the change, sign in with the new number. The old number will no longer sign in to this account.",
+        "inputLabel": "New phone number",
+        "placeholder": "Enter your phone number",
+        "success": "Phone number changed to {{target}}"
+      },
+      "email": {
+        "rowTitle": "Sign-in email",
+        "rowHint": "Used to sign in and receive verification codes",
+        "change": "Change email",
+        "verifyTitle": "Verify current email",
+        "introDescription": "To keep your account secure, verify your current email before changing it.",
+        "newTitle": "Enter new email",
+        "newDescription": "After the change, sign in with the new email. The old email will no longer sign in to this account.",
+        "inputLabel": "New email address",
+        "placeholder": "Enter your email address",
+        "success": "Email changed to {{target}}"
+      },
+      "codeSent": "A verification code was sent to {{target}}",
+      "codeLabel": "Verification code",
+      "codePlaceholder": "6-digit code",
+      "sendCode": "Send code",
+      "next": "Next",
+      "confirm": "Confirm change",
+      "cancel": "Cancel",
+      "resend": "Resend code",
+      "resendIn": "Resend in {{seconds}}s",
+      "errors": {
+        "INVALID_CODE": "The verification code is incorrect or expired.",
+        "CODE_ATTEMPTS_EXCEEDED": "Too many incorrect attempts. Request a new code.",
+        "CONTACT_TAKEN": "This phone number or email is already linked to another account.",
+        "CONTACT_UNCHANGED": "This is the same as your current phone number or email.",
+        "CONTACT_CHANGE_TICKET_INVALID": "Verification expired. Verify your current phone number or email again.",
+        "AUTH_FLOW_SUPERSEDED": "Your sign-in changed. Start again.",
+        "CONTACT_CHANGE_UNAVAILABLE": "This account can't change its sign-in method here.",
+        "CONTACT_CHANGE_BUSY": "The previous step is still in progress.",
+        "RATE_LIMITED": "Too many attempts. Wait a moment and try again.",
+        "INVALID_PARAMS": "The format is invalid. Check it and try again.",
+        "EMAIL_DOMAIN_BLOCKED": "This email can't be used. Try another one.",
+        "EMAIL_PATTERN_BLOCKED": "This email can't be used. Try another one.",
+        "ACCOUNT_DELETION_PENDING": "This account is scheduled for deletion and can't be changed.",
+        "NETWORK_ERROR": "Network connection failed. Check your network and try again.",
+        "REQUEST_TIMEOUT": "The request timed out. Try again.",
+        "fallback": "Something went wrong. Try again later."
+      }
+    },
     "help": {
       "title": "Help",
       "description": "Learn how to get work done with {{appName}}.",

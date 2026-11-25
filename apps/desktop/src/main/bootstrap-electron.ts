@@ -345,6 +345,7 @@ import {
   warmStaleProcessProvenance,
 } from './ownerNamespaceMigration.js';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
+import { createAccountContactChangeHandlers } from './accountContactChange';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { toSdrAvatarImage } from './hdrAvatarToSdr';
@@ -7200,6 +7201,45 @@ const registerIpcHandlers = () => {
   ipcMain.handle('auth:account-deletion:consume-restored-notice', () =>
     accountDeletionHandlers.consumeRestoredNotice(),
   );
+
+  // ── 换绑登录联系方式 IPC(设置 → 用户卡片;业务体在 accountContactChange.ts) ──
+  // changeTicket 与 account token 只留在 main,renderer 只拿打码展示值与错误码。
+  const contactChangeLog = createLogger('accountContactChange');
+  const contactChangeHandlers = createAccountContactChangeHandlers({
+    getSession: () => authManager.getContactChangeSession(),
+    isSessionCurrent: (session) => authManager.isContactChangeSessionCurrent(session),
+    issueAccountToken: (session) =>
+      authManager.issuePassportAccountToken(session.realm, session.passportId),
+    createClient: (realm) => authManager.createContactChangeAuthClient(realm),
+    runProtected: (request) => authManager.runProtectedAccountRequest(request),
+    reloadProfile: () => authManager.reloadCurrentMembershipProfile(),
+    now: () => Date.now(),
+    logWarn: (message, error) => contactChangeLog.warn(message, error),
+  });
+  ipcMain.handle('auth:contact-change:get-availability', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.getAvailability();
+  });
+  ipcMain.handle('auth:contact-change:request-current-code', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.requestCurrentCode();
+  });
+  ipcMain.handle('auth:contact-change:verify-current-code', (event, code: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.verifyCurrentCode(code);
+  });
+  ipcMain.handle('auth:contact-change:request-new-code', (event, value: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.requestNewCode(value);
+  });
+  ipcMain.handle('auth:contact-change:confirm', (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.confirm(input);
+  });
+  ipcMain.handle('auth:contact-change:cancel', (event) => {
+    assertTrustedAppRendererEvent(event);
+    contactChangeHandlers.cancel();
+  });
 
   // ── Profile 编辑 IPC(设置 → 用户卡片编辑;业务体在 profileEdit.ts,
   //    资料直写 auth-server,头像经 oss-server 预签名直传) ──
