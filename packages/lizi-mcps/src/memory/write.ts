@@ -57,7 +57,8 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
       ' (sizeBytes/softLimitBytes/hardLimitBytes), 按超限幅度决定不动 / 微剪 / memory_consolidate;' +
       ' 会让索引越过硬上限的写入被拒绝 (INVALID_PARAMS), 先合并或删除再写。' +
       ' 新建成功后若返回 savedRecently, 那是这份记忆里最近 24 小时保存的其它条目 (你上下文里的索引快照可能还没有它们):' +
-      ' 其中有说同一件事的, 用 memory_consolidate 合并, 不要留两条。',
+      ' 其中有说同一件事的, 用 memory_consolidate 合并, 不要留两条。' +
+      ' 注意: 记忆只是被动便签, 不会自动运行、监听事件或发通知; 需要告警/定时检查/流程拦截时请落地真实机制(CI/定时任务/代码/仓库文档), 不要靠写记忆代替实现; 旧条目作废或已迁入机制/仓库文档时用 memory_delete 删除, 不留“已被取代”条目。',
     inputShape: {
       type: z.enum(['user', 'feedback', 'project', 'reference']),
       name: shardNameSchema,
