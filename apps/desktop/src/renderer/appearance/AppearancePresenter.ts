@@ -8,6 +8,12 @@ import { LOCAL_THEME_SUFFIX } from '../../shared/local-themes';
 import type { ThemeSelection } from '../../shared/appearanceDefinition';
 
 let packageSelection: ThemeSelection | undefined;
+/**
+ * The saved (global) theme last presented through `presentTheme`. While a view-scoped palette
+ * is shown, `themeService.getCurrentTheme()` is that palette, so rollbacks use this instead.
+ */
+let savedTheme: Theme | undefined;
+let paletteOverridden = false;
 
 function packageThemeSelection(theme: Theme): ThemeSelection | undefined {
   return theme.packageSha256 && theme.appearance ? {
@@ -37,8 +43,12 @@ export function prepareThemeSelection(theme: Theme, commit: () => void, current:
     if (!current()) {
       // An expired Agent request never becomes the saved choice. Rebuild only
       // the Host defaults from the palette that is still selected.
-      const active = themeService.getCurrentTheme();
-      if (active) presentTheme(active, false);
+      const active = savedTheme ?? themeService.getCurrentTheme();
+      if (active) {
+        // Behind a teammate palette, restore only the shared defaults: the palette stays.
+        if (paletteOverridden) prepareSharedDefaults(active, false);
+        else presentTheme(active, false);
+      }
       return false;
     }
     commit();
@@ -51,9 +61,15 @@ export function prepareThemeSelection(theme: Theme, commit: () => void, current:
 
 /** Preserve synchronous palette application; only packages prepare extra defaults. */
 export function presentTheme(theme: Theme, notifyFailure = true, prepare = true): void {
+  themeService.applyTheme(theme);
+  savedTheme = theme;
+  paletteOverridden = false;
+  prepareSharedDefaults(theme, notifyFailure, prepare);
+}
+
+function prepareSharedDefaults(theme: Theme, notifyFailure: boolean, prepare = true): void {
   const previous = packageSelection;
   const value = packageThemeSelection(theme);
-  themeService.applyTheme(theme);
   packageSelection = value;
   if (!prepare) return;
   if (!packageSelection && !previous) return;
@@ -75,6 +91,7 @@ export function presentTheme(theme: Theme, notifyFailure = true, prepare = true)
  */
 export function presentPaletteOnly(theme: Theme): void {
   themeService.applyTheme(theme);
+  paletteOverridden = true;
 }
 
 /** Whether main already holds the package defaults (or none) that this theme needs. */

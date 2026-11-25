@@ -16,6 +16,7 @@ import { bootstrapLocalThemesSync, getLocalThemes } from '../../themes/local-the
 import { themeService } from '../../themes/theme-service';
 import { findFamilyByThemeId, tryGetFamily } from '../../themes/families';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../../shared/appearanceSettings';
+import { prepareThemeSelection } from '../../appearance/AppearancePresenter';
 import type { LocalThemesResult } from '../../../shared/local-themes';
 import {
   __resetLoginFirstLaunchLightGateForTest,
@@ -172,6 +173,8 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
             packageSha256: 'a'.repeat(64), appearance: { motion: 0 } },
           { id: 'paper-dark-local', family: 'paper', name: 'Paper', type: 'dark', colors: {},
             packageSha256: 'b'.repeat(64), appearance: { motion: 0 } },
+          { id: 'ink-light-local', family: 'ink', name: 'Ink', type: 'light', colors: {},
+            packageSha256: 'c'.repeat(64), appearance: { motion: 0 } },
         ] }), onChanged: () => () => {},
       } });
       bootstrapLocalThemesSync();
@@ -215,6 +218,29 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
       rerender({ botId: null });
       await act(async () => {});
       expect(selectTheme).toHaveBeenCalledOnce();
+      unmount();
+      cleanupPaper();
+    });
+
+    // Review of 1fb840e: an expired package request (e.g. an Agent preference change that
+    // took too long) rolled back from the palette on screen, which is the teammate's, so it
+    // cleared the saved package A for every window. It must restore A and keep the palette.
+    it('rolls an expired package request back to the saved package, keeping the teammate palette', async () => {
+      const { selectTheme, rerender, unmount } = setup('light');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      const applied = vi.mocked(themeService.applyTheme);
+      const ink = getLocalThemes().find((theme) => theme.id === 'ink-light-local')!;
+      await act(async () => { await prepareThemeSelection(ink, () => {}, () => false); });
+      expect(selectTheme.mock.calls).toEqual([
+        [{ mode: 'light', familyId: 'ink-local' }],
+        [{ mode: 'light', familyId: 'paper-local' }],
+      ]);
+      expect(findFamilyByThemeId(applied.mock.lastCall?.[0].id)?.id).toBe('default');
+      rerender({ botId: null });
+      await act(async () => {});
       unmount();
       cleanupPaper();
     });

@@ -1,12 +1,18 @@
-import { app } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { normalizeCustomWallpaperUrl } from '../shared/appearanceSettings.js';
-import { isBotWallpaperKey, normalizeBotWallpaperMap, type BotWallpaperMap } from '../shared/botWallpapers.js';
+import {
+  BOT_WALLPAPERS_CHANGED_CHANNEL,
+  isBotWallpaperKey,
+  normalizeBotWallpaperMap,
+  type BotWallpaperMap,
+} from '../shared/botWallpapers.js';
 import { readBoundedFileNoFollowSync } from './utils/readBoundedFile.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import { createLogger } from './logger.js';
+import { isTrustedAppearanceSettingsReadWindow } from './appearance-settings-reader.js';
 
 /**
  * 伙伴自定义壁纸：每位伙伴一张本机图片或视频。媒体文件与全局自定义壁纸同在
@@ -58,4 +64,18 @@ export function readReferencedBotWallpaperUrls(): string[] {
     if (!isBotWallpaperKey(botId) || !valid) throw new Error('Invalid teammate wallpaper reference');
     return valid;
   });
+}
+
+/** Tell every app window the teammate wallpaper map changed; returns the map sent. */
+export function broadcastBotWallpapers(): BotWallpaperMap {
+  const wallpapers = readBotWallpapers();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!isTrustedAppearanceSettingsReadWindow(win)) continue;
+    try {
+      win.webContents.send(BOT_WALLPAPERS_CHANGED_CHANNEL, wallpapers);
+    } catch {
+      // A window may be torn down between enumeration and send.
+    }
+  }
+  return wallpapers;
 }

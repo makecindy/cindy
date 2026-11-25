@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
   tx: null as null | ((name: string, args: unknown) => Promise<unknown>),
   removeBotWallpaper: vi.fn(async (_botId: string) => true),
-  broadcastBotWallpapers: vi.fn(async () => ({})),
+  broadcastBotWallpapers: vi.fn(() => ({})),
 }));
 
 vi.mock('electron', () => ({
@@ -38,7 +38,7 @@ vi.mock('../botProfileFolder.js', async (importOriginal) => ({
 
 // Teammate wallpaper media is owned by the client-wallpaper store; its own tests cover recycling.
 vi.mock('../../custom-wallpaper.js', () => ({ removeBotWallpaper: h.removeBotWallpaper }));
-vi.mock('../../appearance-settings-ipc.js', () => ({ broadcastBotWallpapers: h.broadcastBotWallpapers }));
+vi.mock('../../bot-wallpaper-settings.js', () => ({ broadcastBotWallpapers: h.broadcastBotWallpapers }));
 
 import { createBotLifecycleService } from '../botLifecycleService.js';
 import * as botProjectMemory from '../botProjectMemory.js';
