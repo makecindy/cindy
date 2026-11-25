@@ -74,7 +74,8 @@ describe('git-review diffReader', () => {
   it('returns the same staged and unstaged sibling edits for the guest and owner of a shared subdirectory', async () => {
     const workdir = path.join(repoPath, 'shared');
     await fs.mkdir(workdir);
-    const row = { id: 's1', workingDir: workdir, remoteHostId: null, worktreePath: null };
+    // Recycled checkouts leave this historical path in the session row.
+    const row = { id: 's1', workingDir: workdir, remoteHostId: null, worktreePath: path.join(repoPath, 'removed-worktree') };
     const read = () => withSessionReviewRowSnapshot(row, async () => {
       const resolved = await resolveReviewScope('s1');
       expect(resolved.repoRoot).toBe(path.resolve(repoPath));

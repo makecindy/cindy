@@ -302,7 +302,9 @@ export async function resolveReviewScope(
 
   const repoRoot = probe.repoRoot;
   if (sharedTask) {
-    const anchor = fallbackWorktreePath ?? row.workingDir!;
+    // Only a live task-bound worktree can replace the registered working directory.
+    // A telemetry candidate still needs to pass the independent repository check below.
+    const anchor = resolved.source === 'worktree' ? resolved.workdir : row.workingDir!;
     const anchorRoot = path.resolve(anchor) === path.resolve(resolved.workdir)
       ? repoRoot : (await readRepoRoot(anchor, deps.git)).repoRoot;
     if (!anchorRoot || path.relative(anchorRoot, repoRoot) !== '' || !containsWorkspace(path, repoRoot, anchor)) {
