@@ -128,7 +128,8 @@ pnpm mobile:sim:whoami -- --mock --json
 - 设备画面连接页：`cindy://devices/desktop/cindy-visual-mock-mac?liveScreen=cindy-simulator%7Cpreview`。
   mock provider 保持远程桌面请求等待，真实页面展示连接中、等待较久及原有超时状态，供返回按钮与明暗主题截图；不连接真实电脑。
 - 插件市场：插件页切到「插件市场」即读模拟电脑上的虚构 Demo 市场（`apps/mobile/src/debug/pluginMarketVisualFixture.ts`），
-  走真实的分页、详情、确认面板与安装回执；Demo Glossary Translate 演示下载失败，Demo Uncertain Sync 演示结果待确认，
+  走真实的分页、详情、确认面板与安装回执；Demo Glossary Translate 演示下载失败，Demo Uncertain Sync 演示结果待确认（安装后
+  离开插件页再回来，或在「安装到」切到另一台电脑，顶部一直有待核实提示，「查看」打开记录面板：核实结果、不再跟踪），
   Demo Notes 是同标识冲突。确认面板的对照：Demo Device Simulator（官方，有高风险 `node:execute`）、Demo Agenda
   （官方，无高风险）、Demo Shift Calendar（社区，回执带 `communityMarket`）、Demo Repo Tools（Demo Git Market 自定义市场，
   可正常安装，有高风险，确认面板显示仓库 github.com/demo-org/demo-git-market）、Demo Auto Agent（官方，没有 Node，但有后台 Agent 与派活取件两项高风险）、
@@ -146,7 +147,9 @@ pnpm mobile:sim:whoami -- --mock --json
   版本带 v。
   整页状态用 `cindy://plugins?market=<场景>`：`outdated`（电脑版本太旧）、`unavailable`、
   `organization`、`customPartial`、`empty`、`readFailed`（首次读取失败，重试恢复）、`twoComputers`（多一台在线的
-  CINDY Second Mock Mac，可在「安装到」里切换）、`offline`（离线模拟电脑变成可选且不应答，选中后显示离线状态），
+  CINDY Second Mock Mac，可在「安装到」里切换）、`offline`（离线模拟电脑变成可选且不应答，选中后显示离线状态）、
+  `hold`（确认后的安装、更新一直停在「进行中」，不自动完成：用于截「进行中时其它入口不可用、顶部提示可见」，例如 iPad 宽屏
+  打开 Demo Weather Board 详情点「更新到 v版本」并允许，再在旁边切到市场；换回 `normal` 后下一次查询即完成），
   `normal` 回到默认。插件页已打开时再发带不同 `market` 参数的深链，场景已经切换，但要在插件页下拉刷新一次
   才会重新读取（twoComputers / offline 改的是电脑列表，同样下拉刷新）。
   装好或升级后的 Demo 插件只在本次进程内保留，可在详情里卸载；不连接真实电脑或市场。

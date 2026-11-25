@@ -33,6 +33,10 @@ export interface ComposerSheetProps {
   aboveContentTitle?: string;
   footer?: ReactNode;
   testID?: string;
+  /** iOS `nativeContent` form only: extra modifiers for the scrolled form (for example a scroll-geometry observer). */
+  nativeContentModifiers?: unknown[];
+  /** iOS `nativeContent` form only: a view over the form's lower edge (for example a text-free fade). */
+  nativeContentOverlay?: ReactNode;
 }
 export function ComposerSheet(_props: ComposerSheetProps) {
   return null;

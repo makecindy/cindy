@@ -120,7 +120,7 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
       : state.kind === "failed" ? t("plugins.retry") : t("plugins.market.install");
     return (
       <Button testID={`plugins.market.install.${item.pluginId}`}
-        onPress={() => { if (state.kind === "unknown") void market.checkResult(); else market.install(item); }}
+        onPress={() => { if (state.kind === "unknown") void market.checkResult(item); else market.install(item); }}
         modifiers={[buttonStyle("bordered"), buttonBorderShape("capsule"), frame({ minHeight: 44 }),
           disabled(state.kind === "unknown" ? !market.online : state.kind === "sourceUnverified" || !market.canInstall),
           accessibilityLabel(state.kind === "idle" ? t("plugins.market.installAria", { name: item.name }) : label)]}>

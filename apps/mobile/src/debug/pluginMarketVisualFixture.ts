@@ -9,9 +9,9 @@ import type { ManagedMarketItem, ManagedPlugin } from "@/plugins/pluginManagemen
  */
 export type PluginMarketVisualScenario =
   | "normal" | "outdated" | "unavailable" | "organization" | "customPartial" | "empty" | "readFailed"
-  | "twoComputers" | "offline";
+  | "twoComputers" | "offline" | "hold";
 const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavailable", "organization", "customPartial", "empty",
-  "readFailed", "twoComputers", "offline"];
+  "readFailed", "twoComputers", "offline", "hold"];
 /** A second online mock computer for the twoComputers scenario (same demo market, shared process state). */
 export const PLUGIN_MARKET_VISUAL_SECOND_DEVICE_ID = "cindy-visual-mock-second-mac";
 /** Device-list adjustments for the market scenarios; other scenarios keep the mock computers unchanged. */
@@ -301,8 +301,9 @@ function receipt(operationId: string) {
         added: demo.update.added, removed: demo.update.removed, unchangedCount: demo.update.unchangedCount,
         builtinOauthClientChanged: false }
       : { kind: "install", ghostId: demo.ghostId, name: demo.name, version: RELEASE, permissions: demo.permissions ?? [] } } };
-  // Two polls of "installing" after consent, then the install commits.
-  if (op.polls < 3) return { operationId, phase: "running" };
+  // Two polls of "installing" after consent, then the install commits. `hold`: it stays in progress (for screenshots of
+  // an operation under way: other entries unavailable, the notice at the top), until another scenario is chosen.
+  if (op.polls < 3 || scenario === "hold") return { operationId, phase: "running" };
   installed.set(instanceKey(demo.ghostId), { demo, enabled: entry?.enabled ?? true, version: RELEASE });
   op.done = "succeeded";
   return { operationId, phase: "succeeded" };

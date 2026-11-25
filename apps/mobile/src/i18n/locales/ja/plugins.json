@@ -135,6 +135,7 @@
     "readmeLoadFailed": "紹介を読み込めませんでした。もう一度お試しください。",
     "readmeUnavailable": "紹介はありません。",
     "computerSettings": "コンピューターの Cindy で「プラグイン」からこのプラグインの詳細を開き、設定してください。",
+    "computerSettingsTitle": "コンピューターで設定を完了してください",
     "runtimeIssue": "プラグインが予期せず停止しました。再度開くか、タスクで再試行してください。",
     "runtimeFused": "エラーが繰り返し発生したため、プラグインを停止しました。一度無効にしてから再度有効にし、お試しください。",
     "status": {
@@ -186,9 +187,11 @@
     "reject": "キャンセル",
     "allow": "許可して続行",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "インストールするバージョン：{{version}}",
     "oauthChanged": "アカウントのログイン設定が変更されています。",
     "state": {
-      "readFailed": "プラグイン管理情報を読み込めませんでした。再読み込みしてください。"
+      "readFailed": "プラグイン管理情報を読み込めませんでした。再読み込みしてください。",
+      "readFailedTitle": "読み込めませんでした"
     },
     "permissions": {
       "mail": "メールの下書き・送信カードを使用",
@@ -311,8 +314,11 @@
       "nodeSecretOne": "ローカル Node プログラムが保存済みの認証情報 1 件を受け取れます"
     },
     "releaseChanged": "利用可能なバージョンが変更されました。更新後のバージョンを確認してからインストールしてください。",
+    "releaseChangedTitle": "バージョンが変わりました",
     "sourceUnverified": "このコンピューターからこのカスタムマーケットのリポジトリ情報が届いていないため、スマートフォンからはアップデートできません。先にそのコンピューターの Cindy を更新し、このマーケットを更新してください。それでも解決しない場合は、コンピューターで直接アップデートしてください。",
+    "sourceUnverifiedTitle": "スマートフォンからはアップデートできません",
     "sourceChanged": "このマーケットの提供元が変わったため、アップデートを中止しました。コンピューターでこのマーケットを確認してから再試行してください。",
+    "sourceChangedTitle": "マーケットのソースが変わりました",
     "settingsUnavailable": "プラグイン設定を読み込めませんでした。設定を再読み込みしてお試しください。",
     "settingsResultUnknown": "操作結果を確認できません。再送信する前にコンピューターの設定を再読み込みしてください。",
     "settingsOperationFailed": "設定の操作を完了できませんでした。接続を確認して再試行してください。",
@@ -325,8 +331,7 @@
     },
     "highRiskTitle": "リスクの高い権限",
     "highRiskTitleCount": "{{title}} · {{count}} 件",
-    "highRiskMore": "スクロールすると、リスクの高い権限をすべて確認できます",
-    "listMore": "上にスクロールすると、すべての権限を確認できます"
+    "scrollHint": "スクロールするとすべて表示できます"
   },
   "notice": {
     "title": {
@@ -478,5 +483,38 @@
   "slot": {
     "holder": "「{{device}}」の「{{name}}」の操作が終わっていません",
     "show": "表示"
+  },
+  "checks": {
+    "title": "終わっていないプラグイン操作",
+    "many": "{{count}} 件のプラグイン操作が終わっていません",
+    "waitingOne": "「{{device}}」の「{{name}}」の結果を確認してください",
+    "kind": {
+      "marketInstall": "インストール",
+      "update": "アップデート",
+      "uninstall": "アンインストール",
+      "pageApproval": "ページを有効にする",
+      "enable": "オン・オフ",
+      "taskSettings": "タスク設定"
+    },
+    "status": {
+      "preparing": "準備中",
+      "running": "コンピューターで処理中",
+      "confirmation": "確認待ち",
+      "checking": "結果を確認しています",
+      "waiting": "結果を確認できていません。もう一度確認するか、追跡をやめてください。",
+      "offline": "「{{device}}」に接続していません。接続すると結果を確認できます。"
+    },
+    "stop": "追跡をやめる",
+    "stopHint": "このスマートフォンでの追跡をやめるだけで、コンピューター上の操作は取り消されません。",
+    "result": {
+      "succeeded": "完了",
+      "installed": "インストール済み",
+      "failed": "完了しませんでした",
+      "cancelled": "キャンセル済み",
+      "untracked": "追跡をやめました",
+      "ended": "終了"
+    },
+    "open": "プラグインを開く",
+    "close": "閉じる"
   }
 }

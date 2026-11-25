@@ -103,7 +103,7 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
               </HStack>
             ) : state.kind !== "conflict" && state.kind !== "installed" ? (
               <Button testID="plugins.market.detailInstall"
-                onPress={() => { if (state.kind === "unknown") void market.checkResult(); else market.install(item, detail.detail); }}
+                onPress={() => { if (state.kind === "unknown") void market.checkResult(item); else market.install(item, detail.detail); }}
                 modifiers={[...(state.kind === "unknown" ? secondaryStyle : primaryStyle), frame({ maxWidth: Infinity }),
                   disabled(state.kind === "unknown" ? !online : state.kind === "sourceUnverified" || !online || !market.canInstall),
                   accessibilityLabel(state.kind === "idle" ? t("plugins.market.installAria", { name: item.name }) : primaryLabel)]}>
@@ -168,7 +168,8 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
                 <VStack key={fact.key} alignment="leading" spacing={0}>
                   <HStack spacing={spacing.lg} modifiers={[frame({ maxWidth: Infinity, minHeight: 50 })]}>
                     <Text modifiers={[font({ textStyle: "subheadline" }), foregroundStyle(colors.textSecondary), lineLimit(1)]}>{fact.title}</Text>
-                    <Text modifiers={[font({ textStyle: "subheadline" }), foregroundStyle(colors.textPrimary), lineLimit(1),
+                    {/* Two lines for the value (a long market or team name on a small screen, K-4). */}
+                    <Text modifiers={[font({ textStyle: "subheadline" }), foregroundStyle(colors.textPrimary), lineLimit(2),
                       frame({ maxWidth: Infinity, alignment: "trailing" })]}>{fact.value}</Text>
                   </HStack>
                   {index < facts.length - 1 ? <Divider /> : null}

@@ -24,6 +24,7 @@ const bridge = vi.hoisted(() => ({
   ownerCurrent: true,
   keyboardVisible: false,
   fontScale: 1,
+  width: 390,
   mode: "light" as "light" | "dark",
 }));
 vi.mock("@/hooks/useReduceMotion", () => ({ useReduceMotionEnabled: () => false }));
@@ -73,6 +74,11 @@ vi.mock("@expo/ui/swift-ui", async () => {
       bridge.props.set("host", p);
       return createElement("main", null, p.children);
     },
+    // A view with a slot laid over it: both rendered in place (the slot after the base).
+    Overlay: Object.assign((p: any) => {
+      if (p.testID) bridge.props.set(p.testID, p);
+      return React.createElement("div", { "data-native": "Overlay" }, p.children);
+    }, { Content: (p: any) => React.createElement("div", { "data-native": "OverlayContent" }, p.children) }),
     ...Object.fromEntries(
       [
         "Button",
@@ -120,10 +126,14 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
     rectangle: () => "rectangle",
     roundedRectangle: (p: any) => p,
   },
+  // Scroll geometry observer: kept so a test can report geometry.
+  useScrollGeometryChange: (callback: any) => ({ scrollGeometry: callback }),
   ...Object.fromEntries(
     [
       "accessibilityLabel",
       "accessibilityHidden",
+      "accessibilityHint",
+      "opacity",
       "clipped",
       "clipShape",
       "onGeometryChange",
@@ -169,7 +179,7 @@ vi.mock("react-native", () => ({
   Alert: { alert: vi.fn() },
   PlatformColor: (name: string) => name,
   Keyboard: { addListener: () => ({ remove() {} }) },
-  useWindowDimensions: () => ({ width: 390, height: 844, fontScale: bridge.fontScale }),
+  useWindowDimensions: () => ({ width: bridge.width, height: 844, fontScale: bridge.fontScale }),
   Image: () => null,
   View: (p: any) => {
     if (p.testID) bridge.props.set(p.testID, p);
@@ -309,6 +319,7 @@ afterEach(() => {
   bridge.ownerCurrent = true;
   bridge.keyboardVisible = false;
   bridge.fontScale = 1;
+  bridge.width = 390;
 });
 function mount(component: any, props: any) {
   const container = document.createElement("div");
@@ -1612,10 +1623,12 @@ describe("pinned high-risk permission", () => {
     const plan = planConsentSheet({ available, identity: 380, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4 });
     expect(plan).toMatchObject({ mode: "regular", clipped: true });
     expect(scroll().style.maxHeight).toBe(plan.mode === "regular" && plan.summaryLines);
-    // The list grows longer than its room: the hint floats over it and no height changes.
+    // The list grows longer than its room: a text-free fade floats over its lower edge and no height changes (J-1).
+    const textBefore = container.textContent;
     act(() => bridge.props.get("plugins.management.list").onLayout({ nativeEvent: { layout: { height: 300 } } }));
     act(() => bridge.props.get("plugins.management.list").onContentSizeChange(390, 1200));
-    expect(container.textContent).toContain("plugins.management.listMore");
+    expect(container.querySelector('[data-testid="plugins.management.listFade"]')).not.toBeNull();
+    expect(container.textContent).toBe(textBefore);
     expect(scroll().style.maxHeight).toBe(plan.mode === "regular" && plan.summaryLines);
     // Large text: the buttons stack, Allow on top (column-reverse), labels wrapping.
     expect(bridge.props.get("plugins.management.actions").style).toContainEqual({ flexDirection: "column-reverse" });
@@ -1640,6 +1653,80 @@ describe("pinned high-risk permission", () => {
     expect(container.querySelector('[data-testid="plugins.management.highRiskScroll"]')).toBeNull();
     expect(container.textContent).toContain("plugins.notice.consentSource.market");
     for (const line of fiveLines) expect(container.textContent).toContain(line);
+  });
+  /* 测试价值（调度要求 J-1、K-1、K-2、K-3；Android 与 iOS 复拍）
+   * - 生产入口与可观察结果：两端真实确认面板组件（原生视图替身）；观察滚动区上的渐隐、文字节点、按钮排布、标题位置。
+   * - 依据：「还能往下滚」只用不含文字、不占高度的渐隐表示，滚到底消失；Android 滚动条常显、iOS 由渐隐表示；按钮区
+   *   取实际高度、滚动区弹性占满其余；宽度足够时按钮并排；紧凑档标题进入滚动区。
+   * - 缺口：文字提示叠在正文上（Android 复拍）；iOS 静止时没有任何「可滚动」线索；按钮折行后按钮区压到正文；紧凑档
+   *   首屏只剩部分插件名。
+   * - 最小失败输入：五类高风险 + 大字号；列表内容高于可见高度；宽 800 的窗口。tier: unit。
+   */
+  it("Android marks more below with a text-free fade that takes no room and goes at the end", () => {
+    bridge.fontScale = 2;
+    const { container } = mount(AndroidManagementConfirmation, props(allFive));
+    const list = () => bridge.props.get("plugins.management.list");
+    expect(list().persistentScrollbar).toBe(true);
+    expect(list().accessibilityHint).toBe("plugins.management.scrollHint");
+    act(() => list().onLayout({ nativeEvent: { layout: { height: 300 } } }));
+    act(() => list().onContentSizeChange(390, 1200));
+    const fade = () => container.querySelector('[data-testid="plugins.management.listFade"]');
+    expect(fade()).not.toBeNull();
+    // No text over the scroll area: the fade holds no text node at all, and it never catches touches.
+    expect(fade()!.textContent).toBe("");
+    expect(bridge.props.get("plugins.management.listFade")).toMatchObject({ pointerEvents: "none" });
+    act(() => list().onScroll({ nativeEvent: { contentOffset: { y: 900 }, contentSize: { height: 1200 }, layoutMeasurement: { height: 300 } } }));
+    expect(fade()).toBeNull();
+  });
+  it("Android gives the buttons their own height below the scroll area, which flexes into the rest (K-1)", () => {
+    bridge.fontScale = 3;
+    mount(AndroidManagementConfirmation, props(allFive));
+    const flat = (style: any) => Object.assign({}, ...[style].flat(3).filter(Boolean));
+    const actions = flat(bridge.props.get("plugins.management.actions").style);
+    // In the normal flow (never laid over the list), so wrapped labels push the list up instead of covering it.
+    expect(actions.position).toBeUndefined();
+    const list = flat(bridge.props.get("plugins.management.list").style);
+    expect(list.height).toBeUndefined();
+    expect(list.maxHeight).toBeUndefined();
+  });
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s keeps Allow and Reject side by side at large text when the window is wide enough (K-3)", (platform, Sheet) => {
+      bridge.fontScale = 2.4;
+      bridge.width = 800;
+      const wide = mount(Sheet, props(allFive)).container;
+      const kind = (root: HTMLElement) => root.querySelector('[data-testid="plugins.management.actions"]')!.getAttribute("data-native");
+      if (platform === "Android") expect(bridge.props.get("plugins.management.actions").style).not.toContainEqual({ flexDirection: "column-reverse" });
+      else expect(kind(wide)).toBe("HStack");
+      bridge.width = 375;
+      const narrow = mount(Sheet, props(allFive)).container;
+      if (platform === "Android") expect(bridge.props.get("plugins.management.actions").style).toContainEqual({ flexDirection: "column-reverse" });
+      else expect(kind(narrow)).toBe("VStack");
+    });
+  it("iOS compact moves the sheet title into the scrolled list and sizes the footer to its content (K-1, K-3)", () => {
+    bridge.fontScale = 2.4;
+    mount(PluginManagementConfirmation, props(allFive));
+    const header = Math.ceil(64 * 2) + 10, chrome = 8 * 2 + 8 * 3 + 4 + 12;
+    geometry("plugins.management.actions", 844 - header - chrome - 100);
+    geometry("plugins.management.identity", 384);
+    geometry("plugins.management.highRiskTitle", 40);
+    const items = () => [...bridge.props.values()].filter((p: any) => fiveLines.includes(p.children));
+    items().forEach((item: any, index: number) => act(() => item.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 300, height: reviewLines[index] })));
+    const sheet = bridge.props.get("plugins.managementConfirmation");
+    expect(sheet.title).toBe("");
+    expect(findIn(sheet.children, "plugins.management.sheetTitle")).toBe(true);
+    expect(sheet.footer.props.modifiers).toContainEqual({ fixedSize: { horizontal: false, vertical: true } });
+  });
+  it("iOS shows the fade while the list has more below and hides it at the end (K-2)", () => {
+    mount(PluginManagementConfirmation, props(allFive));
+    const sheet = () => bridge.props.get("plugins.managementConfirmation");
+    const observe = (geometry: object) => act(() => sheet().nativeContentModifiers.find((m: any) => m.scrollGeometry).scrollGeometry(geometry));
+    const shown = () => sheet().nativeContentOverlay.props.modifiers.find((m: any) => "opacity" in m).opacity;
+    expect(shown()).toBe(0);
+    observe({ contentOffsetY: 0, containerHeight: 400, contentHeight: 1200 });
+    expect(shown()).toBe(1);
+    observe({ contentOffsetY: 800, containerHeight: 400, contentHeight: 1200 });
+    expect(shown()).toBe(0);
+    expect(sheet().nativeContentOverlay.props.modifiers).toContainEqual({ accessibilityHidden: true });
   });
   it("Android shows no pinned area when nothing is high risk", () => {
     const { container } = mount(AndroidManagementConfirmation, props(installOf([notify])));

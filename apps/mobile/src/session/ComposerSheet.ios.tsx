@@ -15,6 +15,7 @@ import {
   Text,
   VStack,
   ZStack,
+  Overlay,
 } from "@expo/ui/swift-ui";
 import {
   accessibilityLabel,
@@ -69,6 +70,8 @@ export function ComposerSheet({
   nativeRoot,
   preventDismiss = false,
   largeOnly: largeOnlyRequested = false,
+  nativeContentModifiers,
+  nativeContentOverlay,
 }: ComposerSheetProps) {
   const { mode, colors } = useTheme();
   const { t } = useTranslation();
@@ -199,16 +202,25 @@ export function ComposerSheet({
               ]}>
                 {children}
               </List>
-            ) : nativeContent ? (
-              <Form testID={testID} modifiers={[
-                ...editModeModifiers,
-                containerRelativeFrame({ axes: 'horizontal' }),
-                scrollContentBackground("hidden"),
-                ...(aboveContent ? [padding({ top: -12 })] : []),
-              ]}>
-                {children}
-              </Form>
-            ) : contentScrolls ? (
+            ) : nativeContent ? (() => {
+              const form = (
+                <Form testID={testID} modifiers={[
+                  ...editModeModifiers,
+                  containerRelativeFrame({ axes: 'horizontal' }),
+                  scrollContentBackground("hidden"),
+                  ...(aboveContent ? [padding({ top: -12 })] : []),
+                  ...((nativeContentModifiers ?? []) as never[]),
+                ]}>
+                  {children}
+                </Form>
+              );
+              return nativeContentOverlay ? (
+                <Overlay alignment="bottom">
+                  {form}
+                  <Overlay.Content>{nativeContentOverlay}</Overlay.Content>
+                </Overlay>
+              ) : form;
+            })() : contentScrolls ? (
               <RNHostView>
                 <View style={{ flex: 1 }} testID={testID}>
                   <RNScrollView

@@ -137,6 +137,7 @@
     "readmeLoadFailed": "Não foi possível carregar a apresentação. Tente novamente.",
     "readmeUnavailable": "Nenhuma apresentação disponível.",
     "computerSettings": "Para configurar este plugin, abra seus detalhes em Cindy → Plugins no seu computador.",
+    "computerSettingsTitle": "Conclua a configuração no computador",
     "runtimeIssue": "O plugin parou inesperadamente. Tente abri-lo novamente ou usá-lo em uma tarefa.",
     "runtimeFused": "O plugin parou após falhas repetidas. Desative-o e ative-o para tentar novamente.",
     "status": {
@@ -188,9 +189,11 @@
     "reject": "Cancelar",
     "allow": "Permitir e continuar",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "Versão a instalar: {{version}}",
     "oauthChanged": "A configuração de login da conta mudou.",
     "state": {
-      "readFailed": "Não foi possível ler as informações de gerenciamento do plugin. Atualize para verificar novamente."
+      "readFailed": "Não foi possível ler as informações de gerenciamento do plugin. Atualize para verificar novamente.",
+      "readFailedTitle": "Não foi possível ler"
     },
     "permissions": {
       "mail": "Usar rascunhos de e-mail e cartões de envio",
@@ -313,8 +316,11 @@
       "nodeSecretOne": "O programa Node local pode receber uma credencial armazenada"
     },
     "releaseChanged": "A versão disponível mudou. Revise a versão atualizada antes de instalar.",
+    "releaseChangedTitle": "A versão mudou",
     "sourceUnverified": "Este computador não informou o repositório deste marketplace personalizado, então não dá para atualizar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, atualize o plugin direto pelo computador.",
+    "sourceUnverifiedTitle": "Não é possível atualizar pelo celular",
     "sourceChanged": "A origem deste marketplace acabou de mudar e a atualização foi interrompida. Confira o marketplace no computador e tente de novo.",
+    "sourceChangedTitle": "A origem do mercado mudou",
     "settingsUnavailable": "Não foi possível carregar as configurações do plugin. Recarregue as configurações para tentar novamente.",
     "settingsResultUnknown": "Não foi possível confirmar o resultado da operação. Recarregue as configurações do computador antes de enviar novamente.",
     "settingsOperationFailed": "Não foi possível concluir a operação de configurações. Verifique a conexão e tente novamente.",
@@ -327,8 +333,7 @@
     },
     "highRiskTitle": "Permissões de alto risco",
     "highRiskTitleCount": "{{title}} · {{count}}",
-    "highRiskMore": "Role para ver todas as permissões de alto risco",
-    "listMore": "Role para cima para ver todas as permissões"
+    "scrollHint": "Role para ver tudo"
   },
   "notice": {
     "title": {
@@ -480,5 +485,38 @@
   "slot": {
     "holder": "Uma operação de “{{name}}” em “{{device}}” não terminou",
     "show": "Ver"
+  },
+  "checks": {
+    "title": "Operações de plugins não concluídas",
+    "many": "{{count}} operações de plugins não foram concluídas",
+    "waitingOne": "É preciso verificar o resultado de “{{name}}” em “{{device}}”",
+    "kind": {
+      "marketInstall": "Instalar",
+      "update": "Atualizar",
+      "uninstall": "Desinstalar",
+      "pageApproval": "Ativar páginas",
+      "enable": "Ativar ou desativar",
+      "taskSettings": "Configurações de tarefas"
+    },
+    "status": {
+      "preparing": "Preparando",
+      "running": "O computador está processando",
+      "confirmation": "Aguardando confirmação",
+      "checking": "Verificando o resultado",
+      "waiting": "Resultado não confirmado. Verifique de novo ou pare de acompanhar.",
+      "offline": "“{{device}}” não está conectado. Conecte-o para verificar o resultado."
+    },
+    "stop": "Parar de acompanhar",
+    "stopHint": "Só este celular para de acompanhar. A operação no computador não é cancelada.",
+    "result": {
+      "succeeded": "Concluído",
+      "installed": "Instalado",
+      "failed": "Não concluído",
+      "cancelled": "Cancelado",
+      "untracked": "Não acompanhado",
+      "ended": "Encerrado"
+    },
+    "open": "Abrir plugin",
+    "close": "OK"
   }
 }

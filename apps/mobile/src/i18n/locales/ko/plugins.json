@@ -135,6 +135,7 @@
     "readmeLoadFailed": "소개를 불러오지 못했습니다. 다시 시도하세요.",
     "readmeUnavailable": "소개가 없습니다.",
     "computerSettings": "컴퓨터의 Cindy에서 플러그인 메뉴를 열고 이 플러그인의 세부 정보에서 구성하세요.",
+    "computerSettingsTitle": "컴퓨터에서 설정을 완료하세요",
     "runtimeIssue": "플러그인이 예기치 않게 중지되었습니다. 다시 열거나 작업에서 다시 시도하세요.",
     "runtimeFused": "오류가 반복되어 플러그인이 중지되었습니다. 껐다가 다시 켠 후 시도하세요.",
     "status": {
@@ -186,9 +187,11 @@
     "reject": "취소",
     "allow": "허용하고 계속",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "설치할 버전: {{version}}",
     "oauthChanged": "계정 로그인 설정이 변경되었습니다.",
     "state": {
-      "readFailed": "플러그인 관리 정보를 불러오지 못했습니다. 새로 고침하세요."
+      "readFailed": "플러그인 관리 정보를 불러오지 못했습니다. 새로 고침하세요.",
+      "readFailedTitle": "읽지 못함"
     },
     "permissions": {
       "mail": "메일 초안 및 전송 카드 사용",
@@ -311,8 +314,11 @@
       "nodeSecretOne": "로컬 Node 프로그램이 저장된 자격 증명 1개를 받을 수 있음"
     },
     "releaseChanged": "사용 가능한 버전이 변경되었습니다. 새 버전을 확인한 뒤 설치하세요.",
+    "releaseChangedTitle": "버전이 변경됨",
     "sourceUnverified": "이 컴퓨터가 이 사용자 지정 마켓의 저장소 정보를 보내지 않아 휴대폰에서 업데이트할 수 없습니다. 먼저 그 컴퓨터에서 Cindy를 업데이트하고 이 마켓을 새로 고치세요. 그래도 안 되면 컴퓨터에서 바로 플러그인을 업데이트하세요.",
+    "sourceUnverifiedTitle": "휴대폰에서 업데이트할 수 없음",
     "sourceChanged": "이 마켓의 출처가 방금 바뀌어 업데이트를 중단했습니다. 컴퓨터에서 이 마켓을 확인한 뒤 다시 시도하세요.",
+    "sourceChangedTitle": "마켓 소스가 변경됨",
     "settingsUnavailable": "플러그인 설정을 불러오지 못했습니다. 설정을 다시 불러와 주세요.",
     "settingsResultUnknown": "작업 결과를 확인하지 못했습니다. 다시 제출하기 전에 컴퓨터의 설정을 다시 불러와 확인하세요.",
     "settingsOperationFailed": "설정 작업을 완료하지 못했습니다. 연결을 확인하고 다시 시도해 주세요.",
@@ -325,8 +331,7 @@
     },
     "highRiskTitle": "위험도가 높은 권한",
     "highRiskTitleCount": "{{title}} · {{count}}개",
-    "highRiskMore": "스크롤하면 위험도가 높은 권한을 모두 볼 수 있습니다",
-    "listMore": "위로 스크롤하면 모든 권한을 볼 수 있습니다"
+    "scrollHint": "스크롤하면 전체 내용을 볼 수 있습니다"
   },
   "notice": {
     "title": {
@@ -478,5 +483,38 @@
   "slot": {
     "holder": "\"{{device}}\"의 \"{{name}}\" 작업이 끝나지 않았습니다",
     "show": "보기"
+  },
+  "checks": {
+    "title": "끝나지 않은 플러그인 작업",
+    "many": "플러그인 작업 {{count}}개가 끝나지 않았습니다",
+    "waitingOne": "“{{device}}”의 “{{name}}” 결과를 확인해야 합니다",
+    "kind": {
+      "marketInstall": "설치",
+      "update": "업데이트",
+      "uninstall": "제거",
+      "pageApproval": "페이지 켜기",
+      "enable": "켜기 또는 끄기",
+      "taskSettings": "작업 설정"
+    },
+    "status": {
+      "preparing": "준비 중",
+      "running": "컴퓨터에서 처리 중",
+      "confirmation": "확인 대기 중",
+      "checking": "결과 확인 중",
+      "waiting": "결과가 확인되지 않았습니다. 다시 확인하거나 추적을 중지하세요.",
+      "offline": "“{{device}}”이(가) 연결되어 있지 않습니다. 연결하면 결과를 확인할 수 있습니다."
+    },
+    "stop": "추적 중지",
+    "stopHint": "이 휴대폰에서만 추적을 멈춥니다. 컴퓨터의 작업은 취소되지 않습니다.",
+    "result": {
+      "succeeded": "완료",
+      "installed": "설치됨",
+      "failed": "완료되지 않음",
+      "cancelled": "취소됨",
+      "untracked": "추적하지 않음",
+      "ended": "종료됨"
+    },
+    "open": "플러그인 열기",
+    "close": "닫기"
   }
 }

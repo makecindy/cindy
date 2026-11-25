@@ -135,6 +135,7 @@
     "readmeLoadFailed": "无法加载介绍，请重试。",
     "readmeUnavailable": "暂无介绍。",
     "computerSettings": "请在电脑端 Cindy 的「插件」中打开此插件详情，完成配置。",
+    "computerSettingsTitle": "需在电脑上完成配置",
     "runtimeIssue": "插件上次运行异常，可重新打开或在任务中重试。",
     "runtimeFused": "插件多次运行失败，已停止。关闭后重新启用，再试一次。",
     "status": {
@@ -186,9 +187,11 @@
     "reject": "取消",
     "allow": "允许并继续",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "将安装的版本：{{version}}",
     "oauthChanged": "账号登录配置发生了变化。",
     "state": {
-      "readFailed": "未能读取插件管理信息，请刷新查看。"
+      "readFailed": "未能读取插件管理信息，请刷新查看。",
+      "readFailedTitle": "读取失败"
     },
     "permissions": {
       "mail": "使用邮件草稿与发送卡片",
@@ -311,8 +314,11 @@
       "nodeSecretOne": "本机 Node 程序可获得 1 个已保存凭证"
     },
     "releaseChanged": "可用版本已变化，请查看刷新后的版本，再选择安装。",
+    "releaseChangedTitle": "版本已变化",
     "sourceUnverified": "这台电脑没有提供这个自定义市场的仓库信息，不能从手机更新这个插件。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上更新这个插件。",
+    "sourceUnverifiedTitle": "无法从手机更新",
     "sourceChanged": "这个市场的来源刚刚有变化，已停止更新。请在电脑上核对这个市场后再试。",
+    "sourceChangedTitle": "市场来源已变化",
     "settingsUnavailable": "插件设置加载失败，请重新加载设置后重试。",
     "settingsResultUnknown": "尚未确认操作结果。请先重新读取电脑上的设置，再决定是否提交。",
     "settingsOperationFailed": "设置操作未能完成，请检查连接后重试。",
@@ -325,8 +331,7 @@
     },
     "highRiskTitle": "高风险权限",
     "highRiskTitleCount": "{{title}} · {{count}} 项",
-    "highRiskMore": "滑动查看全部高风险权限",
-    "listMore": "向上滑动查看全部权限说明"
+    "scrollHint": "可上下滑动查看全部内容"
   },
   "notice": {
     "title": {
@@ -478,5 +483,38 @@
   "slot": {
     "holder": "「{{name}}」在「{{device}}」上的操作还没结束",
     "show": "查看"
+  },
+  "checks": {
+    "title": "还没结束的插件操作",
+    "many": "{{count}} 项插件操作还没结束",
+    "waitingOne": "「{{name}}」在「{{device}}」上的结果待核实",
+    "kind": {
+      "marketInstall": "安装",
+      "update": "更新",
+      "uninstall": "卸载",
+      "pageApproval": "启用页面",
+      "enable": "启用或停用",
+      "taskSettings": "任务设置"
+    },
+    "status": {
+      "preparing": "正在准备",
+      "running": "电脑正在处理",
+      "confirmation": "等待确认",
+      "checking": "正在核实结果",
+      "waiting": "结果未确认。可以再核实一次，或不再跟踪。",
+      "offline": "「{{device}}」未连接，连接后才能核实结果。"
+    },
+    "stop": "不再跟踪",
+    "stopHint": "只是这台手机不再跟踪，不会取消电脑上的操作。",
+    "result": {
+      "succeeded": "已完成",
+      "installed": "已安装",
+      "failed": "没有完成",
+      "cancelled": "已取消",
+      "untracked": "已不再跟踪",
+      "ended": "已结束"
+    },
+    "open": "打开插件",
+    "close": "完成"
   }
 }

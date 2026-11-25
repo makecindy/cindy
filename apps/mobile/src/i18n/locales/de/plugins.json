@@ -135,6 +135,7 @@
     "readmeLoadFailed": "Die Beschreibung konnte nicht geladen werden. Versuche es erneut.",
     "readmeUnavailable": "Keine Beschreibung verfügbar.",
     "computerSettings": "Öffne zum Konfigurieren dieses Plugins seine Details unter Cindy → Plugins auf deinem Computer.",
+    "computerSettingsTitle": "Einrichtung am Computer abschließen",
     "runtimeIssue": "Das Plugin wurde unerwartet beendet. Versuche, es erneut zu öffnen oder in einer Aufgabe zu verwenden.",
     "runtimeFused": "Das Plugin wurde nach wiederholten Fehlern gestoppt. Deaktiviere und aktiviere es, um es erneut zu versuchen.",
     "status": {
@@ -186,9 +187,11 @@
     "reject": "Abbrechen",
     "allow": "Erlauben und fortfahren",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "Zu installierende Version: {{version}}",
     "oauthChanged": "Die Anmeldekonfiguration des Kontos hat sich geändert.",
     "state": {
-      "readFailed": "Informationen zur Plugin-Verwaltung konnten nicht gelesen werden. Aktualisiere, um es erneut zu prüfen."
+      "readFailed": "Informationen zur Plugin-Verwaltung konnten nicht gelesen werden. Aktualisiere, um es erneut zu prüfen.",
+      "readFailedTitle": "Lesen fehlgeschlagen"
     },
     "permissions": {
       "mail": "E-Mail-Entwürfe und Versandkarten verwenden",
@@ -311,8 +314,11 @@
       "nodeSecretOne": "Lokales Node-Programm kann gespeicherte Zugangsdaten erhalten"
     },
     "releaseChanged": "Die verfügbare Version hat sich geändert. Prüfe die aktualisierte Version vor der Installation.",
+    "releaseChangedTitle": "Version geändert",
     "sourceUnverified": "Dieser Computer hat das Repository dieses benutzerdefinierten Marktplatzes nicht angegeben. Aktualisieren vom Handy ist daher nicht möglich. Aktualisiere zuerst Cindy auf diesem Computer und dann den Marktplatz; hilft das nicht, aktualisiere das Plugin direkt am Computer.",
+    "sourceUnverifiedTitle": "Update vom Handy nicht möglich",
     "sourceChanged": "Die Quelle dieses Marktplatzes hat sich gerade geändert, die Aktualisierung wurde gestoppt. Prüfe den Marktplatz am Computer und versuche es erneut.",
+    "sourceChangedTitle": "Quelle des Marktplatzes geändert",
     "settingsUnavailable": "Die Plugin-Einstellungen konnten nicht geladen werden. Lade die Einstellungen neu, um es erneut zu versuchen.",
     "settingsResultUnknown": "Das Ergebnis des Vorgangs konnte nicht bestätigt werden. Lade die Einstellungen des Computers neu, bevor du sie erneut sendest.",
     "settingsOperationFailed": "Der Einstellungsvorgang konnte nicht abgeschlossen werden. Prüfe die Verbindung und versuche es erneut.",
@@ -325,8 +331,7 @@
     },
     "highRiskTitle": "Berechtigungen mit hohem Risiko",
     "highRiskTitleCount": "{{title}} · {{count}}",
-    "highRiskMore": "Scrollen, um alle Berechtigungen mit hohem Risiko zu sehen",
-    "listMore": "Nach oben scrollen, um alle Berechtigungen zu sehen"
+    "scrollHint": "Scrolle, um alles zu sehen"
   },
   "notice": {
     "title": {
@@ -469,7 +474,7 @@
     "alreadyInstalled": "Dieses Plugin ist auf diesem Computer bereits installiert.",
     "unconfirmedMismatch": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin mit derselben Kennung auf diesem Computer stammt möglicherweise aus einer lokalen Datei, einer anderen Version oder einer anderen Quelle. Bitte prüfe es auf dem Computer.",
     "sourceUnverified": "Dieser Computer hat das Repository dieses benutzerdefinierten Marktplatzes nicht angegeben. Installieren vom Handy ist daher nicht möglich. Aktualisiere zuerst Cindy auf diesem Computer und dann den Marktplatz; hilft das nicht, installiere direkt am Computer.",
-    "sourceUnverifiedShort": "Repository-Angabe fehlt, Installieren vom Handy nicht möglich",
+    "sourceUnverifiedShort": "Kein Repository angegeben – am Computer installieren",
     "sourceChanged": "Die Quelle dieses Marktplatzes hat sich gerade geändert. Wähle das Plugin erneut aus.",
     "publicInstall": "Öffentlicher Marktplatz",
     "communityDisclaimer": "Dieses Plugin wird von Mitgliedern der Community entwickelt und gepflegt. Cindy hat diese Version geprüft, kann die Sicherheit des Plugins aber nicht in jeder Nutzungssituation garantieren."
@@ -478,5 +483,38 @@
   "slot": {
     "holder": "Ein Vorgang für „{{name}}“ auf „{{device}}“ ist nicht abgeschlossen",
     "show": "Anzeigen"
+  },
+  "checks": {
+    "title": "Nicht abgeschlossene Plugin-Vorgänge",
+    "many": "{{count}} Plugin-Vorgänge sind nicht abgeschlossen",
+    "waitingOne": "Das Ergebnis für „{{name}}“ auf „{{device}}“ muss geprüft werden",
+    "kind": {
+      "marketInstall": "Installieren",
+      "update": "Aktualisieren",
+      "uninstall": "Deinstallieren",
+      "pageApproval": "Seiten aktivieren",
+      "enable": "Aktivieren oder deaktivieren",
+      "taskSettings": "Aufgabeneinstellungen"
+    },
+    "status": {
+      "preparing": "Wird vorbereitet",
+      "running": "Der Computer bearbeitet den Vorgang",
+      "confirmation": "Wartet auf Bestätigung",
+      "checking": "Ergebnis wird geprüft",
+      "waiting": "Ergebnis unbestätigt. Prüfe es erneut oder verfolge es nicht weiter.",
+      "offline": "„{{device}}“ ist nicht verbunden. Verbinde ihn, um das Ergebnis zu prüfen."
+    },
+    "stop": "Nicht mehr verfolgen",
+    "stopHint": "Nur dieses Handy verfolgt den Vorgang nicht mehr. Auf dem Computer wird nichts abgebrochen.",
+    "result": {
+      "succeeded": "Erledigt",
+      "installed": "Installiert",
+      "failed": "Nicht abgeschlossen",
+      "cancelled": "Abgebrochen",
+      "untracked": "Wird nicht mehr verfolgt",
+      "ended": "Beendet"
+    },
+    "open": "Plugin öffnen",
+    "close": "Fertig"
   }
 }

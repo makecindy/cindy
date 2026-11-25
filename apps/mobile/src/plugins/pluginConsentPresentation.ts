@@ -42,6 +42,8 @@ export function isPinnedHighRiskPermission(item: Pick<PluginPermissionItem, "key
  * `available`: the sheet's height minus its fixed padding, the summary's padding and gaps, and the buttons.
  */
 export const PINNED_HIGH_RISK_MIN_HEIGHT = 44;
+/** Wide enough for Allow and Reject side by side at any text size (landscape phones, tablets): both sheets. */
+export const CONSENT_SIDE_BY_SIDE_MIN_WIDTH = 560;
 export interface ConsentSheetMeasures {
   available: number;
   identity: number;
@@ -235,6 +237,8 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
             previous: facts.previousVersion,
             next: facts.version,
           })
+        // A source switch replaces the installed plugin with this version (dispatcher J-4): say which one.
+        : consent.originSourceChanged === true ? t("plugins.management.switchVersion", { version: facts.version })
         : undefined,
     permissions:
       facts.kind === "install"

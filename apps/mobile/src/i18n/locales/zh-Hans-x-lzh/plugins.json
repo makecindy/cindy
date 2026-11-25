@@ -135,6 +135,7 @@
     "readmeLoadFailed": "介绍未能载入，请再试。",
     "readmeUnavailable": "暂无介绍。",
     "computerSettings": "请于机上 Cindy 之「法器」中启此法器详情，以竟其设。",
+    "computerSettingsTitle": "当于电脑设之",
     "runtimeIssue": "法器前次行之有异，可重启或于差事中再试。",
     "runtimeFused": "法器屡止。关之再启，然后再试。",
     "status": {
@@ -186,9 +187,11 @@
     "reject": "罢",
     "allow": "许而续之",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "将纳之版：{{version}}",
     "oauthChanged": "名籍登录之设置已变。",
     "state": {
-      "readFailed": "法器管理之资无从读取，请重整。"
+      "readFailed": "法器管理之资无从读取，请重整。",
+      "readFailedTitle": "读之未成"
     },
     "permissions": {
       "mail": "用邮件草稿与遣信之卡",
@@ -311,8 +314,11 @@
       "nodeSecretOne": "本机 Node 程序可得已存之凭证一件"
     },
     "releaseChanged": "可用之版已变，请观更新后之版，再择安装。",
+    "releaseChangedTitle": "版已易",
     "sourceUnverified": "此机未示此自订之坊之库，不能自手机更之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑更之。",
+    "sourceUnverifiedTitle": "不能自手机更之",
     "sourceChanged": "此坊之源方易，已止此番更新。请于电脑核此坊再试。",
+    "sourceChangedTitle": "坊之源已易",
     "settingsUnavailable": "法器规制加载未成，请重载规制后再试。",
     "settingsResultUnknown": "此举之果尚未确认。请先重读机上之设置，再决是否呈之。",
     "settingsOperationFailed": "设置之举未竟，请察连接后再试。",
@@ -325,8 +331,7 @@
     },
     "highRiskTitle": "险要之权",
     "highRiskTitleCount": "{{title}} · 凡 {{count}} 项",
-    "highRiskMore": "滑而览险要之权",
-    "listMore": "上滑以览诸权之说"
+    "scrollHint": "可上下滑以观全文"
   },
   "notice": {
     "title": {
@@ -478,5 +483,38 @@
   "slot": {
     "holder": "「{{name}}」于「{{device}}」之事未竟",
     "show": "观之"
+  },
+  "checks": {
+    "title": "未竟之法器事",
+    "many": "法器之事未竟者 {{count}}",
+    "waitingOne": "「{{name}}」于「{{device}}」之果待核",
+    "kind": {
+      "marketInstall": "纳之",
+      "update": "更之",
+      "uninstall": "卸之",
+      "pageApproval": "启其页",
+      "enable": "启或止",
+      "taskSettings": "任务之设"
+    },
+    "status": {
+      "preparing": "将备",
+      "running": "彼机方理之",
+      "confirmation": "待确",
+      "checking": "方核其果",
+      "waiting": "果未确。可复核之，或不复随之。",
+      "offline": "「{{device}}」未连，连之乃可核果。"
+    },
+    "stop": "不复随之",
+    "stopHint": "唯此手机不复随之，不废彼机之事。",
+    "result": {
+      "succeeded": "已成",
+      "installed": "已纳",
+      "failed": "未成",
+      "cancelled": "已罢",
+      "untracked": "已不复随之",
+      "ended": "已终"
+    },
+    "open": "启法器",
+    "close": "毕"
   }
 }

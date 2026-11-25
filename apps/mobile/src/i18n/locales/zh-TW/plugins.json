@@ -135,6 +135,7 @@
     "readmeLoadFailed": "無法載入介紹，請重試。",
     "readmeUnavailable": "暫無介紹。",
     "computerSettings": "請在電腦端 Cindy 的「插件」中開啟此插件詳情，完成設定。",
+    "computerSettingsTitle": "需在電腦上完成設定",
     "runtimeIssue": "插件上次執行異常，可重新開啟或在任務中重試。",
     "runtimeFused": "插件多次停止。關閉後重新啟用，再試一次。",
     "status": {
@@ -186,9 +187,11 @@
     "reject": "取消",
     "allow": "允許並繼續",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "將安裝的版本：{{version}}",
     "oauthChanged": "帳號登入設定已變更。",
     "state": {
-      "readFailed": "無法讀取插件管理資訊，請重新整理。"
+      "readFailed": "無法讀取插件管理資訊，請重新整理。",
+      "readFailedTitle": "讀取失敗"
     },
     "permissions": {
       "mail": "使用郵件草稿與傳送卡片",
@@ -311,8 +314,11 @@
       "nodeSecretOne": "本機 Node 程式可取得 1 個已儲存憑證"
     },
     "releaseChanged": "可用版本已變更，請查看更新後的版本，再選擇安裝。",
+    "releaseChangedTitle": "版本已變化",
     "sourceUnverified": "這台電腦沒有提供這個自訂市場的儲存庫資訊，無法從手機更新這個插件。請先在那台電腦上更新 Cindy 並重新整理這個市場；若仍不行，請直接在電腦上更新這個插件。",
+    "sourceUnverifiedTitle": "無法從手機更新",
     "sourceChanged": "這個市場的來源剛剛有變化，已停止更新。請在電腦上核對這個市場後再試。",
+    "sourceChangedTitle": "市場來源已變化",
     "settingsUnavailable": "插件設定載入失敗，請重新載入設定後再試。",
     "settingsResultUnknown": "尚未確認操作結果。請先重新讀取電腦上的設定，再決定是否提交。",
     "settingsOperationFailed": "設定操作未能完成，請檢查連線後再試。",
@@ -325,8 +331,7 @@
     },
     "highRiskTitle": "高風險權限",
     "highRiskTitleCount": "{{title}} · {{count}} 項",
-    "highRiskMore": "滑動查看全部高風險權限",
-    "listMore": "向上滑動查看全部權限說明"
+    "scrollHint": "可上下滑動查看全部內容"
   },
   "notice": {
     "title": {
@@ -478,5 +483,38 @@
   "slot": {
     "holder": "「{{name}}」在「{{device}}」上的操作還沒結束",
     "show": "查看"
+  },
+  "checks": {
+    "title": "還沒結束的插件操作",
+    "many": "{{count}} 項插件操作還沒結束",
+    "waitingOne": "「{{name}}」在「{{device}}」上的結果待核實",
+    "kind": {
+      "marketInstall": "安裝",
+      "update": "更新",
+      "uninstall": "解除安裝",
+      "pageApproval": "啟用頁面",
+      "enable": "啟用或停用",
+      "taskSettings": "任務設定"
+    },
+    "status": {
+      "preparing": "正在準備",
+      "running": "電腦正在處理",
+      "confirmation": "等待確認",
+      "checking": "正在核實結果",
+      "waiting": "結果待確認。可以再核實一次，或不再追蹤。",
+      "offline": "「{{device}}」未連線，連線後才能核實結果。"
+    },
+    "stop": "不再追蹤",
+    "stopHint": "只是這台手機不再追蹤，不會取消電腦上的操作。",
+    "result": {
+      "succeeded": "已完成",
+      "installed": "已安裝",
+      "failed": "沒有完成",
+      "cancelled": "已取消",
+      "untracked": "已不再追蹤",
+      "ended": "已結束"
+    },
+    "open": "開啟插件",
+    "close": "完成"
   }
 }

@@ -13,9 +13,8 @@ import {
   PLUGIN_MARKET_QUERY_MAX, pluginMarketErrorKey, pluginMarketMatchesFilter, pluginMarketOrganizationErrorKey,
   pluginMarketRequest, pluginMarketSourceUnverified, type PluginMarketCounts, type PluginMarketFilter, type PluginMarketPage,
 } from "./pluginMarketCatalog";
-import { usePluginManagement } from "./usePluginManagement";
+import { usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "./usePluginManagement";
 import { pluginManagementSlotFor, pluginOperationHold, usePluginManagementSlot, type PluginSlotToken } from "./pluginManagementSlot";
-import type { PluginManagementState } from "./pluginManagementController";
 
 /** Same freshness window as the computer's market browser; pull-to-refresh always re-reads. */
 const MARKET_REFRESH_MS = 30_000;
@@ -23,7 +22,7 @@ const CACHED_LISTS = 6;
 const SEARCH_DEBOUNCE_MS = 300;
 /** Plugin change notifications from one computer often come in a burst (install, enable, readback): read once after. */
 const PLUGIN_CHANGE_COALESCE_MS = 500;
-/** Install attempts still holding the page slot, per account, for the plugins page mounted again (see usePluginMarket). */
+/** Install attempts still holding their computer's slot, per account, for the plugins page mounted again (see usePluginMarket). */
 const pendingInstalls = new Map<string, InstallAttempt>();
 /** Attempt numbers are unique across mounts (a kept attempt and a new one never share a controller scope). */
 let nextAttemptId = 0;
@@ -115,9 +114,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   onInstalled.current = options.onInstalled;
 
   // ---- Install attempt (declared first: it pins the market to the installing computer).
-  // An attempt still holding the page slot outlives this hook (maintainer review 17:43): the plugins page mounted again
-  // takes it back, with its computer, plugin and attempt number, so its row shows it and "Check result" looks up the
-  // same operation through the controller that was kept for it (see usePluginManagement).
+  // An attempt still holding its computer's slot outlives this hook (maintainer review 17:43): the plugins page mounted
+  // again takes it back, with its computer, plugin and attempt number, so its row shows it and "Check result" looks up
+  // the same operation through the controller that was kept for it (see usePluginManagement). Once its result waits
+  // for the person to check it, the attempt ends here and its pending check carries on (maintainer review 18:45).
   const attemptOwner = `${owner.accountKey}\u0000${owner.generation}`;
   const [install, setInstallState] = useState<InstallAttempt | null>(() => {
     const kept = pendingInstalls.get(attemptOwner);
@@ -475,13 +475,21 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   // The page's one management slot decides whether Install may start: taken synchronously on the press (a second
   // press, a press from a stale render or from another entry in the same frame cannot take it), released by this
   // attempt's token when it ends, or by the controller once the install it was handed over to is over.
-  const { slot, holder } = usePluginManagementSlot();
+  const { slot, holderOn } = usePluginManagementSlot();
+  // Pending checks (maintainer review 18:45): an install this phone wrote whose result waits to be checked keeps its
+  // row on this computer ("Check result" looks up the original operation), whatever this view does meanwhile.
+  const checks = usePluginPendingChecks();
+  const checkFor = (pluginId: string) => checks.find((check) => check.entry === "market-install"
+    && check.who.deviceId === deviceId && check.who.pluginId === pluginId);
   // A kept attempt that had started was handed over to its controller already.
   const handedOver = useRef(install?.started ? install.id : 0);
+  /** The attempt whose controller had an operation (begin issued): only then can it be handed to a pending check. */
+  const operationSeen = useRef(0);
   const startInstall = useCallback((item: ManagedMarketItem, known?: ManagedMarketDetail) => {
     if (installRef.current || !target || !online || probeStatus !== "supported" || item.installState !== "not-installed"
       || pluginMarketSourceUnverified(known ?? item)) return;
-    const token = slot.tryAcquire("market-install", { name: item.name, deviceId: target.deviceId, deviceName: target.deviceName, pluginId: item.pluginId });
+    const token = slot.tryAcquire("market-install", { name: item.name, deviceId: target.deviceId, deviceName: target.deviceName,
+      pluginId: item.pluginId, ghostId: item.ghostId });
     if (!token) return;
     setRowErrors(({ [errorKey(target.deviceId, item.pluginId)]: _removed, ...rest }) => rest);
     const attempt = { id: ++nextAttemptId, token, target, item, detail: known, started: false, confirmed: false };
@@ -597,68 +605,26 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
         finish(attempt, pluginMarketErrorKey(after.errorCode ?? "PLUGIN_MANAGEMENT_STALE"));
     })();
   }, [install, management.state, management.controller, finish, invoke, slot]);
-  /**
-   * Settle an install whose original receipt the Host no longer has (NOT_FOUND), from the facts the
-   * controller read right after that answer (missingReceiptFacts), never from an earlier snapshot.
-   * - No same-id instance in those facts: release the row, "could not confirm; not on this computer now".
-   * - A same-id instance is only a lead (a local package can share id and namespace): read the market facts
-   *   for this exact plugin; installed at the release we asked for settles as installed and opens that
-   *   instance; anything else (conflict, another release or source) releases the row with an unconfirmed
-   *   note. The original operation is never sent again; a new install stays the person's explicit choice.
-   * Each settling run has a generation: a market-detail reply lands only if no newer verification started
-   * and the controller still holds the same facts.
-   */
-  const settledFacts = useRef<unknown>(undefined);
-  const verification = useRef(0);
-  const settleMissingReceipt = useCallback(async (attempt: InstallAttempt, facts: NonNullable<PluginManagementState["missingReceiptFacts"]>) => {
-    if (settledFacts.current === facts) return;
-    settledFacts.current = facts;
-    const generation = ++verification.current;
-    const controller = management.controller;
-    // Valid only while these facts are still the ones read by the newest installed read issued (derived by the
-    // controller when asked), and no newer verification started.
-    const current = () => mounted.current && installRef.current?.id === attempt.id && verification.current === generation
-      && !!controller && controller.currentMissingReceiptFacts() === facts;
-    // The one exit for the three outcomes; it re-checks validity right before applying.
-    const conclude = (verdict: { installed: string } | "notInstalled" | "mismatch") => {
-      if (!current()) return;
-      if (verdict === "notInstalled") finish(attempt, "plugins.market.unconfirmedNotInstalled");
-      else if (verdict === "mismatch") finish(attempt, "plugins.market.unconfirmedMismatch");
-      else complete(attempt, verdict.installed);
-    };
-    const instance = facts.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
-    if (!instance) { conclude("notInstalled"); return; }
-    // Contract V2.9: only the Host's own evidence can make this attempt's result: the computer recorded this attempt's
-    // operation id with the installed package and shows it to this device only. An instance installed by another
-    // operation (from the computer, another controller, an automatic update), by an older Host, or after this device's
-    // identity changed (signed out and in, reinstalled) has none of it and stays unconfirmed. Whether Allow was written
-    // does not matter, so a lost reply or a dropped connection cannot lose the evidence.
-    const operationId = controller?.getState().operationId;
-    if (!operationId) { conclude("mismatch"); return; }
-    let market: ManagedMarketDetail;
-    try {
-      market = await createPluginManagementClient({ invoke, deviceId: attempt.target.deviceId, isCurrent: current })
-        .detail(attempt.item.pluginId);
-    } catch {
-      return; // Market facts not read: still unconfirmed; "Check result" verifies again.
-    }
-    conclude(market.installState === "installed" && market.releaseId === attempt.item.releaseId
-      && market.installedOperationId === operationId ? { installed: instance.instanceKey } : "mismatch");
-  }, [invoke, complete, finish, management.controller]);
   useEffect(() => {
-    const attempt = install, state = management.state;
-    if (!attempt?.started || !state) return;
+    const attempt = install, state = management.state, controller = management.controller;
+    if (!attempt?.started || !state || !controller) return;
+    // Handed over and its result now waits for the person to check it (the computer's slot went), or its operation is
+    // no longer tracked ("Stop tracking"): this attempt ends; its pending check, if any, carries on with the row (see
+    // `rowState`). Before begin there is no operation to hand over: the paths below settle it.
+    if (state.operationId) operationSeen.current = attempt.id;
+    const live = controller.getState();
+    if (handedOver.current === attempt.id && !["succeeded", "failed", "cancelled"].includes(state.outcome)
+      && (controller.pendingCheck()?.waiting || (operationSeen.current === attempt.id && !live.operationId && !live.busy))) {
+      finish(attempt);
+      return;
+    }
     if (state.outcome === "confirmation" && !attempt.confirmed) {
       const next = { ...attempt, confirmed: true };
       installRef.current = next;
       setInstall(next);
     } else if (state.outcome === "failed") finish(attempt, pluginMarketErrorKey(state.errorCode));
     else if (state.outcome === "cancelled") finish(attempt);
-    else if (state.outcome === "unknown" && !state.busy && state.missingReceiptFacts) {
-      // Only facts read after the Host said the receipt is gone settle the result (see settleMissingReceipt).
-      // While the receipt may still exist (timeout, offline) the result stays unconfirmed until it is read.
-      void settleMissingReceipt(attempt, state.missingReceiptFacts);
-    } else if (state.outcome === "succeeded" && !state.busy) {
+    else if (state.outcome === "succeeded" && !state.busy) {
       // Wait for the controller's post-commit readback; it locates the new physical instance.
       const installed = state.snapshot?.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
       if (installed || state.errorCode) { complete(attempt, installed?.instanceKey); return; }
@@ -666,7 +632,23 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       const timer = setTimeout(() => complete(attempt, undefined), 5_000);
       return () => clearTimeout(timer);
     }
-  }, [install, management.state, finish, complete, settleMissingReceipt]);
+  }, [install, management.state, management.controller, finish, complete]);
+  // Pending checks of this market's installs that ended without this view (usePluginManagement): the row's note, and
+  // the computer's lists read again after an install. Each is applied once per mount.
+  const conclusions = usePluginCheckConclusions();
+  const applied = useRef(new Set<string>());
+  useEffect(() => {
+    for (const conclusion of conclusions) {
+      if (conclusion.entry !== "market-install" || conclusion.shown || applied.current.has(conclusion.operationId) || !conclusion.who.pluginId) continue;
+      applied.current.add(conclusion.operationId);
+      const { deviceId: on, pluginId } = conclusion.who;
+      const note = conclusion.result === "notInstalled" ? "plugins.market.unconfirmedNotInstalled"
+        : conclusion.result === "mismatch" ? "plugins.market.unconfirmedMismatch"
+          : conclusion.result === "failed" ? pluginMarketErrorKey(conclusion.errorCode) : undefined;
+      if (note) setRowErrors((current) => ({ ...current, [errorKey(on, pluginId)]: note }));
+      else if (conclusion.result === "succeeded" || conclusion.result === "installed") invalidateComputer(on, pluginId);
+    }
+  }, [conclusions, invalidateComputer]);
   const rowState = (item: ManagedMarketItem): PluginMarketRowState => {
     if (install?.item.pluginId === item.pluginId && install.target.deviceId === deviceId) {
       const outcome = management.state?.outcome;
@@ -674,6 +656,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       if (install.confirmed && (outcome === "running" || outcome === "succeeded")) return { kind: "installing" };
       return { kind: "waiting" };
     }
+    const check = checkFor(item.pluginId);
+    if (check) return check.waiting || check.state.outcome === "unknown" ? { kind: "unknown" } : { kind: "installing" };
     if (item.installState === "not-installed" && pluginMarketSourceUnverified(item)) return { kind: "sourceUnverified" };
     const failure = deviceId ? rowErrors[errorKey(deviceId, item.pluginId)] : undefined;
     if (failure) return { kind: "failed", messageKey: failure };
@@ -682,23 +666,16 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     return { kind: "idle" };
   };
   /**
-   * "Check result" only looks up the original operation (never a second begin); a receipt it finds settles
-   * the attempt. If the Host no longer knows it (restart, 15-minute receipt expiry, or begin never arrived),
-   * the controller reads the computer again and the attempt settles from those facts (settleMissingReceipt).
-   * While the computer is only unreachable (no NOT_FOUND), the result stays unconfirmed.
+   * "Check result" only looks up the original operation (never a second begin); a receipt it finds settles it. If the
+   * Host no longer knows it (restart, 15-minute receipt expiry, or begin never arrived), the controller reads the
+   * computer again and the pending check settles from those facts (usePluginManagement). While the computer is only
+   * unreachable (no NOT_FOUND), the result stays unconfirmed. `item`: the row's plugin (its attempt or pending check).
    */
-  const checkResult = useCallback(async () => {
+  const checkResult = useCallback(async (item?: ManagedMarketItem) => {
     const attempt = installRef.current, controller = management.controller;
-    if (!attempt || !controller) return;
-    // A new verification round: an earlier round's market detail must not land while this round's query runs
-    // (the controller also clears its earlier facts before sending the query).
-    verification.current += 1;
-    settledFacts.current = undefined;
-    await controller.reconcile();
-    const state = controller.getState();
-    if (installRef.current?.id !== attempt.id || state.outcome !== "unknown" || !state.missingReceiptFacts) return;
-    await settleMissingReceipt(attempt, state.missingReceiptFacts);
-  }, [management.controller, settleMissingReceipt]);
+    if (attempt && controller && (!item || attempt.item.pluginId === item.pluginId)) { await controller.reconcile(); return; }
+    if (item) await checkFor(item.pluginId)?.verify();
+  }, [management.controller, checks, deviceId]);
 
   return {
     target, online, targets, selectDevice,
@@ -719,7 +696,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     },
     rowState,
     installBusy: !!install,
-    canInstall: online && probeStatus === "supported" && !install && !holder,
+    canInstall: online && probeStatus === "supported" && !install && !holderOn(target?.deviceId),
     install: startInstall,
     checkResult,
     detail, openDetail, closeDetail,

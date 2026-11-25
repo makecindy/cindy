@@ -137,6 +137,7 @@
     "readmeLoadFailed": "No se pudo cargar la presentación. Inténtalo de nuevo.",
     "readmeUnavailable": "No hay presentación disponible.",
     "computerSettings": "Para configurar este complemento, abre sus detalles en Cindy → Complementos en tu computadora.",
+    "computerSettingsTitle": "Termina la configuración en el ordenador",
     "runtimeIssue": "El complemento se detuvo inesperadamente. Intenta abrirlo de nuevo o usarlo en una tarea.",
     "runtimeFused": "El complemento se detuvo después de repetidos fallos. Apágalo y enciéndelo para volver a intentarlo.",
     "status": {
@@ -188,9 +189,11 @@
     "reject": "Cancelar",
     "allow": "Permitir y continuar",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "Versión que se instalará: {{version}}",
     "oauthChanged": "La configuración de inicio de sesión de la cuenta ha cambiado.",
     "state": {
-      "readFailed": "No se pudo leer la información de administración del complemento. Actualiza para volver a comprobarlo."
+      "readFailed": "No se pudo leer la información de administración del complemento. Actualiza para volver a comprobarlo.",
+      "readFailedTitle": "No se pudo leer"
     },
     "permissions": {
       "mail": "Usar borradores de correo y tarjetas de envío",
@@ -313,8 +316,11 @@
       "nodeSecretOne": "El programa local Node puede recibir una credencial almacenada"
     },
     "releaseChanged": "La versión disponible cambió. Revisa la versión actualizada antes de instalar.",
+    "releaseChangedTitle": "La versión cambió",
     "sourceUnverified": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede actualizar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, actualiza el complemento directamente en el ordenador.",
+    "sourceUnverifiedTitle": "No se puede actualizar desde el teléfono",
     "sourceChanged": "El origen de este mercado acaba de cambiar y la actualización se ha detenido. Revisa el mercado en el ordenador y vuelve a intentarlo.",
+    "sourceChangedTitle": "Cambió el origen del mercado",
     "settingsUnavailable": "No se pudo cargar la configuración del complemento. Vuelve a cargar la configuración para intentarlo de nuevo.",
     "settingsResultUnknown": "No se pudo confirmar el resultado de la operación. Vuelve a cargar la configuración de la computadora antes de enviar de nuevo.",
     "settingsOperationFailed": "No se pudo completar la operación de configuración. Verifica la conexión y vuelve a intentarlo.",
@@ -327,8 +333,7 @@
     },
     "highRiskTitle": "Permisos de alto riesgo",
     "highRiskTitleCount": "{{title}} · {{count}}",
-    "highRiskMore": "Desplázate para ver todos los permisos de alto riesgo",
-    "listMore": "Desplázate hacia arriba para ver todos los permisos"
+    "scrollHint": "Desplázate para verlo todo"
   },
   "notice": {
     "title": {
@@ -480,5 +485,38 @@
   "slot": {
     "holder": "Una operación de “{{name}}” en “{{device}}” no ha terminado",
     "show": "Ver"
+  },
+  "checks": {
+    "title": "Operaciones de complementos sin terminar",
+    "many": "{{count}} operaciones de complementos no han terminado",
+    "waitingOne": "Hay que comprobar el resultado de «{{name}}» en «{{device}}»",
+    "kind": {
+      "marketInstall": "Instalar",
+      "update": "Actualizar",
+      "uninstall": "Desinstalar",
+      "pageApproval": "Activar páginas",
+      "enable": "Activar o desactivar",
+      "taskSettings": "Ajustes de tareas"
+    },
+    "status": {
+      "preparing": "Preparando",
+      "running": "El ordenador lo está procesando",
+      "confirmation": "Esperando confirmación",
+      "checking": "Comprobando el resultado",
+      "waiting": "Resultado sin confirmar. Compruébalo otra vez o deja de seguirlo.",
+      "offline": "«{{device}}» no está conectado. Conéctalo para comprobar el resultado."
+    },
+    "stop": "Dejar de seguir",
+    "stopHint": "Solo este teléfono deja de seguirla. La operación del ordenador no se cancela.",
+    "result": {
+      "succeeded": "Hecho",
+      "installed": "Instalado",
+      "failed": "No completado",
+      "cancelled": "Cancelado",
+      "untracked": "Ya no se sigue",
+      "ended": "Terminado"
+    },
+    "open": "Abrir complemento",
+    "close": "Listo"
   }
 }

@@ -89,7 +89,10 @@ import {
   type PluginDirectorySegment,
 } from "./PluginDirectoryView";
 import { usePluginMarket } from "./usePluginMarket";
-import { pluginOperationHold, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
+import { pluginOperationHold, samePluginSlotHolder, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
+import { usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
+import { PluginPendingChecksSheet, type PluginOperationLine } from "./PluginPendingChecksSheet";
+import { useSharedTaskConfirmation } from "@/session/useSharedTaskConfirmation";
 import { PluginMarketSection } from "./PluginMarketSection";
 import { PluginMarketDetailView } from "./PluginMarketDetailView";
 import { FileBrowserSegmentedControl } from "@/session/FileBrowserSegmentedControl";
@@ -212,15 +215,22 @@ function PluginDirectory() {
     !!management.state &&
     (management.state.busy ||
       ["running", "confirmation", "unknown"].includes(management.state.outcome));
-  // The page's one management slot (pluginManagementSlot.ts; maintainer review 15:37): the six entries (market
-  // install, update, uninstall, enable switch, page approval, task settings save) take it synchronously when pressed
-  // and only the holder's token releases it. Whether an entry may start is decided by `slot.tryAcquire`; the
-  // unavailable buttons below only show `holder`. The table of holders and releases is in plugin-mobile-implementation.md.
-  const { slot, holder } = usePluginManagementSlot();
-  // Who an installed-detail entry holds the slot for (shown after the page is mounted again; see the holder notice).
+  // The management slots, one per computer (pluginManagementSlot.ts; maintainer reviews 15:37, 18:45): the six entries
+  // (market install, update, uninstall, enable switch, page approval, task settings save) take their computer's slot
+  // synchronously when pressed and only the holder's token releases it. Whether an entry may start is decided by
+  // `slot.tryAcquire`; the unavailable buttons below only show `slot.available`. The table of holders, releases and
+  // pending checks is in plugin-mobile-implementation.md.
+  const { slot, holders, holderOn } = usePluginManagementSlot();
+  const holder = holderOn(selected?.row.host.deviceId);
+  // The app's two-mode prompt (dispatcher J-2): the system alert on iOS, the themed card on Android (light and dark
+  // follow the app's theme). A short title; the full explanation, when there is one, as its message.
+  const { confirm: prompt, dialog: promptDialog } = useSharedTaskConfirmation();
+  const tell = (title: string, message?: string) => { void prompt({ title: t(title), message: message ? t(message) : undefined, confirmLabel: t("plugins.gotIt") }); };
+  // Who an installed-detail entry holds the slot for (shown after the page is mounted again; see the notice at the top).
   const slotHolderOf = (row: HostedRemoteCollectionItem, name?: string): PluginSlotHolder => ({
     name: name ?? resolveRemoteText(row.item.display.title, i18n.language),
-    deviceId: row.host.deviceId, deviceName: row.host.deviceName, instanceKey: row.item.ref.id, rowKey: row.key });
+    deviceId: row.host.deviceId, deviceName: row.host.deviceName, instanceKey: row.item.ref.id, rowKey: row.key,
+    ...(row.key === selected?.row.key && managed ? { ghostId: managed.manifest.id } : {}) });
   // Market browsing and installs live in usePluginMarket; this screen only routes views.
   const market = usePluginMarket({
     visible: focused && (segment === "market" || !!query.trim()) && (wide || !selected),
@@ -245,8 +255,9 @@ function PluginDirectory() {
         });
     },
   });
-  // Shown unavailable while anyone holds the slot, or this detail's own operation is still open.
-  const managementLocked = !!holder || managementPending;
+  // Shown unavailable while anyone holds this computer's slot, this plugin has a pending check, or this detail's own
+  // operation is still open.
+  const managementLocked = managementPending || (!!selected && !slot.available(slotHolderOf(selected.row, managed?.manifest.name)));
   const managementReady =
     management.state?.capability === "supported" &&
     !management.state.errorCode &&
@@ -842,7 +853,7 @@ function PluginDirectory() {
     try {
       await invokePlugin(invoke, row.host.deviceId, row.item.ref.id, actionId);
     } catch {
-      if (current()) Alert.alert(t("plugins.actionFailed"), undefined, [{ text: t("plugins.gotIt") }]);
+      if (current()) tell("plugins.notice.title.managementFailed", "plugins.actionFailed");
     } finally {
       // A failed reply may follow an applied write; confirm by reading, never replaying it.
       if (current()) await showDetail(row);
@@ -885,36 +896,52 @@ function PluginDirectory() {
     }).catch(() => { /* Existing author page stays usable; an uncertain background read needs no second notice. */ });
   }, [uncertainConfiguration, selected?.row.key, focused, online, detailLoading, detailFailed, connectionEpoch, auth.accountGeneration]);
   const renderedGeneration = detailGeneration.current;
-  // The slot is held but its holder is not on screen (the page was mounted again, another plugin's detail is open, or the
-  // operation runs on another computer): say which plugin on which computer, and go to it (maintainer review 17:43).
-  // The market row or the plugin's detail then shows the operation and its "Check result".
-  const who = holder?.who;
-  const holderShown = !!holder && (holder.entry === "market-install"
-    ? showMarket && !selected
-    : !!selected && detailOpen && selected.row.host.deviceId === who?.deviceId && selected.row.item.ref.id === who?.instanceKey);
-  const showHolder = () => {
-    if (!holder || !who) return;
-    if (holder.entry === "market-install") {
-      detailGeneration.current += 1;
-      setSelected(undefined);
-      setQuery("");
-      setSegment("market");
-      return;
-    }
-    const known = list.items.find((item) => item.key === who.rowKey);
-    void showDetail(known ?? {
-      key: who.rowKey ?? JSON.stringify([who.deviceId, "plugins", "plugin", who.instanceKey]),
-      host: { deviceId: who.deviceId, deviceName: who.deviceName },
-      item: { ref: { collectionId: "plugins", kind: "plugin", id: who.instanceKey ?? "" }, revision: "", links: [], display: { title: who.name } },
-    } as HostedRemoteCollectionItem);
-  };
-  const holderNotice = holder && who && !holderShown ? (
-    <View style={styles.holderNotice}>
+  // Unfinished operations (maintainer reviews 17:43, 18:45): every computer's slot holder and every pending check, one
+  // line per operation, in a notice at the top while any is open. Only the line of the installed detail on screen is
+  // left out (that detail shows its own operation). "View" opens their list, drawn from what each kept, never from
+  // the directory or the market (PluginPendingChecksSheet).
+  const targetOnline = (id: string) => { const host = targets.find((candidate) => candidate.deviceId === id); return !!host && list.isOnline(host); };
+  const checks = usePluginPendingChecks(targetOnline, focused);
+  const conclusions = usePluginCheckConclusions();
+  const [checksOpen, setChecksOpen] = useState(false);
+  const operationLines: PluginOperationLine[] = [
+    ...checks.map((check) => ({ key: check.operationId, entry: check.entry, who: check.who, check })),
+    ...holders.filter((token) => !checks.some((check) => samePluginSlotHolder(check.who, token.who)))
+      .map((token) => ({ key: "slot:" + token.id, entry: token.entry, who: token.who })),
+  ];
+  const onScreen = (line: PluginOperationLine) => !!selected && detailOpen && selected.row.host.deviceId === line.who.deviceId
+    && !!line.who.instanceKey && selected.row.item.ref.id === line.who.instanceKey;
+  const noticeLines = operationLines.filter((line) => !onScreen(line));
+  const lone = noticeLines.length === 1 ? noticeLines[0] : undefined;
+  const loneWaits = !!lone?.check && (lone.check.waiting || lone.check.state.outcome === "unknown");
+  const holderNotice = noticeLines.length ? (
+    <View style={[styles.holderNotice, wide && styles.holderNoticeWide]}>
       <PluginNotice testID="plugins.slotHolder" icon="info" compact
-        title={t("plugins.slot.holder", { name: who.name, device: who.deviceName })}
-        actions={[{ label: t("plugins.slot.show"), testID: "plugins.slotHolder.show", onPress: showHolder }]} />
+        title={!lone ? t("plugins.checks.many", { count: noticeLines.length })
+          : t(loneWaits ? "plugins.checks.waitingOne" : "plugins.slot.holder", { name: lone.who.name, device: lone.who.deviceName })}
+        actions={[{ label: t("plugins.slot.show"), testID: "plugins.slotHolder.show", onPress: () => setChecksOpen(true) }]} />
     </View>
   ) : null;
+  const openInstalled = (who: PluginSlotHolder, instanceKey: string) => {
+    setChecksOpen(false);
+    const host = targets.find((candidate) => candidate.deviceId === who.deviceId) ?? { deviceId: who.deviceId, deviceName: who.deviceName };
+    void showDetail({ key: JSON.stringify([who.deviceId, "plugins", "plugin", instanceKey]), host,
+      item: { ref: { collectionId: "plugins", kind: "plugin", id: instanceKey }, revision: "", links: [], display: { title: who.name } } } as HostedRemoteCollectionItem);
+  };
+  // A market install's pending check settled as installed while this page is open: the same as an install finished
+  // here (the list read again; its detail opened, as on the computer). Only conclusions reached after mounting.
+  const knownConclusions = useRef<Set<string> | undefined>(undefined);
+  knownConclusions.current ??= new Set(conclusions.map((item) => item.operationId));
+  useEffect(() => {
+    for (const conclusion of conclusions) {
+      if (knownConclusions.current!.has(conclusion.operationId)) continue;
+      knownConclusions.current!.add(conclusion.operationId);
+      if (conclusion.shown) continue;
+      void list.refresh();
+      if (conclusion.entry === "market-install" && (conclusion.result === "installed" || conclusion.result === "succeeded")
+        && conclusion.instanceKey && focused && !checksOpen) openInstalled(conclusion.who, conclusion.instanceKey);
+    }
+  }, [conclusions]);
   const manageAction = async (action: string) => {
     if (
       !managementAvailable ||
@@ -943,32 +970,27 @@ function PluginDirectory() {
       if (!current() || state.outcome !== "failed" || state.operationId) return;
       // The controller's last detail read before begin: a source not named (refresh or update on the computer) is
       // told apart from a source that really changed.
-      if (state.errorCode === "PLUGIN_SOURCE_UNVERIFIED") Alert.alert(t("plugins.management.sourceUnverified"), undefined, [{ text: t("plugins.gotIt") }]);
-      else if (state.errorCode === "PLUGIN_SOURCE_CHANGED") Alert.alert(t("plugins.management.sourceChanged"), undefined, [{ text: t("plugins.gotIt") }]);
-      else Alert.alert(t("plugins.notice.title.managementFailed"), undefined, [{ text: t("plugins.gotIt") }]);
+      if (state.errorCode === "PLUGIN_SOURCE_UNVERIFIED") tell("plugins.management.sourceUnverifiedTitle", "plugins.management.sourceUnverified");
+      else if (state.errorCode === "PLUGIN_SOURCE_CHANGED") tell("plugins.management.sourceChangedTitle", "plugins.management.sourceChanged");
+      else tell("plugins.notice.title.managementFailed");
     };
     if (action === "uninstall" && managed) {
       const plugin = managed;
-      if (slot.holder()) return;
-      Alert.alert(
-        t("plugins.management.uninstallTitle", { name: plugin.manifest.name }),
-        t("plugins.management.uninstallBody", { device: row.host.deviceName }),
-        [
-          { text: t("plugins.cancel"), style: "cancel" },
-          {
-            text: t("plugins.management.uninstall"),
-            style: "destructive",
-            onPress: async () => {
-              if (!current()) return;
-              // Taken when the person confirms; the alert itself sends nothing.
-              const token = slot.tryAcquire("uninstall", slotHolderOf(row, plugin.manifest.name));
-              if (!token) return;
-              await controller.uninstall(plugin, pluginOperationHold(slot, token));
-              reportPreflightFailure();
-            },
-          },
-        ],
-      );
+      if (!slot.available(slotHolderOf(row, plugin.manifest.name))) return;
+      void prompt({
+        title: t("plugins.management.uninstallTitle", { name: plugin.manifest.name }),
+        message: t("plugins.management.uninstallBody", { device: row.host.deviceName }),
+        cancelLabel: t("plugins.cancel"),
+        confirmLabel: t("plugins.management.uninstall"),
+        destructive: true,
+        cancelable: true,
+        // Taken in the tap that confirms (the prompt itself sends nothing), so no other entry can start in that frame.
+        onConfirm: () => {
+          if (!current()) return;
+          const token = slot.tryAcquire("uninstall", slotHolderOf(row, plugin.manifest.name));
+          if (token) void controller.uninstall(plugin, pluginOperationHold(slot, token)).then(reportPreflightFailure);
+        },
+      });
     } else if (action === "update" && marketItem && managed) {
       const displayed = marketItem;
       // The slot is taken now, before the preparing read: another entry pressed in the same frame cannot start.
@@ -987,17 +1009,17 @@ function PluginDirectory() {
         if (!updateCurrent()) return;
         if (next.releaseId !== displayed.releaseId) {
           await controller.refresh();
-          if (current()) Alert.alert(t("plugins.management.releaseChanged"), undefined, [{ text: t("plugins.gotIt") }]);
+          if (current()) tell("plugins.management.releaseChangedTitle", "plugins.management.releaseChanged");
           return;
         }
         if (next.sourceType !== "server") {
           // No source named (older Host, or a Git market not refreshed since the Host was updated): the consent could
           // not be tied to a source, so the update continues on the computer.
-          if (!next.sourceIdentity) { Alert.alert(t("plugins.management.sourceUnverified"), undefined, [{ text: t("plugins.gotIt") }]); return; }
+          if (!next.sourceIdentity) { tell("plugins.management.sourceUnverifiedTitle", "plugins.management.sourceUnverified"); return; }
           // The plugin's market now points to another source than the one listed here: not the same update.
           if (displayed.sourceIdentity && !samePluginMarketSourceIdentity(next.sourceIdentity, displayed.sourceIdentity)) {
             await controller.refresh();
-            if (current()) Alert.alert(t("plugins.management.sourceChanged"), undefined, [{ text: t("plugins.gotIt") }]);
+            if (current()) tell("plugins.management.sourceChangedTitle", "plugins.management.sourceChanged");
             return;
           }
         }
@@ -1006,7 +1028,7 @@ function PluginDirectory() {
         await controller.install(next, managed, hold);
         reportPreflightFailure();
       } catch {
-        if (current()) Alert.alert(t("plugins.management.state.readFailed"), undefined, [{ text: t("plugins.gotIt") }]);
+        if (current()) tell("plugins.management.state.readFailedTitle", "plugins.management.state.readFailed");
       } finally {
         if (!handedOver) hold.onSettled();
       }
@@ -1094,7 +1116,7 @@ function PluginDirectory() {
     const key = JSON.stringify([selected.row.key, auth.accountGeneration, connectionEpoch, state.operationId]);
     if (failedOperationNotice.current === key) return;
     failedOperationNotice.current = key;
-    Alert.alert(t("plugins.notice.title.managementFailed"), undefined, [{ text: t("plugins.gotIt") }]);
+    tell("plugins.notice.title.managementFailed");
   }, [management.state?.outcome, management.state?.operationId, selected?.row.key, focused, auth.accountGeneration, connectionEpoch]);
   const newTask = () => {
     if (!selected || !model || busy || !online || !detail || !enabled) return;
@@ -1131,7 +1153,7 @@ function PluginDirectory() {
       case "reconnect":
       case "settings":
         if (originalSettings) setSettingsOpen(true);
-        else Alert.alert(t("plugins.detail.computerSettings"), undefined, [{ text: t("plugins.gotIt") }]);
+        else tell("plugins.detail.computerSettingsTitle", "plugins.detail.computerSettings");
         break;
     }
   };
@@ -1316,8 +1338,12 @@ function PluginDirectory() {
           active={focused && market.confirmation.state.online}
         />
       ) : null}
+      {/* Above both panes (a row on wide screens): one line across, never a column of its own. */}
+      {holderNotice}
+      {promptDialog}
+      <PluginPendingChecksSheet visible={checksOpen} lines={operationLines} conclusions={conclusions} isOnline={targetOnline}
+        onClose={() => setChecksOpen(false)} onOpenInstalled={openInstalled} />
       <View style={styles.layout}>
-        {holderNotice}
         {wide || (!selected && !marketDetail) ? directory : null}
         {wide || selected || marketDetail ? (
           <View style={styles.main}>
@@ -1372,6 +1398,8 @@ function PluginDirectory() {
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
     holderNotice: { paddingHorizontal: spacing.lg + spacing.xs, paddingTop: spacing.sm },
+    // Wide screens: as wide as the directory column's content, at the start, so it reads with the list it explains.
+    holderNoticeWide: { maxWidth: 560 },
     toast: {
       position: "absolute",
       top: spacing.md,

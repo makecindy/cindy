@@ -1,7 +1,7 @@
 import { randomUUID } from 'expo-crypto';
 import type { PluginPromptDisplay } from './pluginPromptReads';
 import { subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
-import type { PluginOperationHold } from './pluginManagementSlot';
+import type { PluginOperationHold, PluginSlotEntry, PluginSlotHolder } from './pluginManagementSlot';
 import { PluginManagementRequestError, pluginManagementErrorCode,
   type PluginManagementBegin, type PluginManagementClient } from './pluginManagementClient';
 import { marketItemMatchesPlugin, pluginApprovalToken, samePluginMarketSourceIdentity, type ManagedMarketDetail, type ManagedPlugin,
@@ -95,18 +95,52 @@ export function createPluginManagementController(client: PluginManagementClient,
    */
   let opHold: PluginOperationHold | null = null;
   /**
+   * The entry and plugin the operation was started for (from its hold), kept for the whole operation: a pending check
+   * (see `pendingCheck`) is listed by them after the slot went.
+   */
+  let opEntry: PluginSlotEntry | undefined, opWho: PluginSlotHolder | undefined;
+  /**
+   * The hold released while the operation waits for the person to check it (maintainer review 18:45; see `waitsForCheck`):
+   * other plugins on the computer may start meanwhile. Before this operation writes again, or once it moves on by
+   * itself again, it takes the computer's slot back through it; while someone else holds the slot it writes nothing.
+   */
+  let releasedHold: PluginOperationHold | null = null;
+  /**
    * One operation's life on this phone (maintainer review 17:43): a cancel is one of its states, never a side effect of
    * going away. At most one management:cancel per operation, and only while its consent is shown and this phone has
    * never written an answer to it (Allow or Reject, reply received or not). Disposing never writes anything.
    */
   let answerWrittenEver = false, cancelAttempted = false;
-  const opGuard = () => opHold?.guard() ?? true;
-  /** The held slot goes once the operation is over: no write on its way, and a final result or no operation at all. */
-  function settleHoldIfOver() {
-    if (opHold && !state.busy && writesInFlight === 0 && (state.operationId
-      ? ['succeeded', 'cancelled', 'failed'].includes(state.outcome) : state.outcome !== 'running')) settleHold();
+  const opGuard = () => {
+    if (!opHold && releasedHold && state.operationId) takeSlotBack();
+    return opHold ? opHold.guard() : !releasedHold;
+  };
+  const final = (outcome: PluginManagementState['outcome']) => ['succeeded', 'cancelled', 'failed'].includes(outcome);
+  /**
+   * The operation's result waits for the person to check it: nothing moves it on by itself anymore (automatic lookups
+   * stopped, the receipt is gone, or the one cancel of a shown consent could not be sent). Going offline is not such
+   * a state: the computer's slot stays held, and the result is looked up when it is back.
+   */
+  function waitsForCheck() {
+    if (!state.operationId || final(state.outcome)) return false;
+    if (state.outcome === 'unknown') return autoLookupStopped || !!missingReceipt || !!state.missingReceiptFacts;
+    return state.outcome === 'confirmation' && cancelAttempted && cancelling === null;
   }
-  const settleHold = () => { const hold = opHold; opHold = null; hold?.onSettled(); };
+  /**
+   * The held slot goes once the operation is over (no write on its way, and a final result or no operation at all),
+   * or, with no write on its way, while its result waits for the person to check it.
+   */
+  function settleHoldIfOver() {
+    if (!opHold || state.busy || writesInFlight !== 0) return;
+    if (state.operationId ? final(state.outcome) : state.outcome !== 'running') settleHold();
+    else if (waitsForCheck()) { const hold = opHold; settleHold(); releasedHold = hold; }
+  }
+  /** Moving on by itself again (or about to write): take the computer's slot back, if nobody else holds it. */
+  function takeSlotBack() {
+    const again = releasedHold && state.operationId ? releasedHold.reacquire(state.operationId) : null;
+    if (again) { opHold = again; releasedHold = null; }
+  }
+  const settleHold = () => { const hold = opHold; opHold = null; releasedHold = null; hold?.onSettled(); };
   let installDetail: ManagedMarketDetail | undefined;
   const listeners = new Set<() => void>();
   const current = (token: number) => !disposed && epoch === token && client.isCurrent();
@@ -207,6 +241,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       missingReceipt = null;
     }
     settleHoldIfOver();
+    if (!opHold && releasedHold && state.operationId && !final(state.outcome) && !waitsForCheck()) takeSlotBack();
     options.onChange?.(state);
     listeners.forEach((listener) => listener());
     ensureProgress();
@@ -380,6 +415,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (state.capability !== 'supported') { refuse({ errorCode: state.capability === 'unsupported' ? 'PLUGIN_MANAGEMENT_UNSUPPORTED' : 'PLUGIN_MANAGEMENT_NOT_READY' }); return; }
     settleHold();
     opHold = slotHold ?? null;
+    opEntry = slotHold?.entry; opWho = slotHold?.who;
     const token = ++epoch;
     let began = false, operationId: string | null = null;
     const holder = hold();
@@ -629,6 +665,28 @@ export function createPluginManagementController(client: PluginManagementClient,
      * result is being settled from the computer's facts by whoever shows it.
      */
     lookupsStopped: () => autoLookupStopped || !!missingReceipt || !!state.missingReceiptFacts,
+    /**
+     * This phone wrote this operation (its begin at least) and its result is not settled (maintainer review 18:45): what
+     * the pending-check list shows, by the entry and plugin it was started for. Null otherwise, or when no entry of the
+     * plugins page started it. `waiting`: the result waits for the person to check it (the computer's slot went).
+     */
+    pendingCheck(): { operationId: string; entry: PluginSlotEntry; who: PluginSlotHolder; detail?: ManagedMarketDetail; waiting: boolean } | null {
+      if (disposed || !opEntry || !opWho || !state.operationId || final(state.outcome)) return null;
+      return { operationId: state.operationId, entry: opEntry, who: opWho, detail: installDetail,
+        waiting: !state.busy && writesInFlight === 0 && waitsForCheck() };
+    },
+    /**
+     * Stop following the operation on this phone only ("Stop tracking", or a result settled from the computer's facts):
+     * nothing is written to the computer; the view goes back to no operation, its slot goes. Not while a write of it is
+     * on its way (the slot never goes then).
+     */
+    untrack(): boolean {
+      if (disposed || writesInFlight > 0) return false;
+      ++epoch; stopPolling(); busyHolder = 0; answers.clear(); cancelling = null;
+      publish({ operationId: null, receipt: null, outcome: 'idle', busy: false, errorCode: null });
+      settleHold();
+      return true;
+    },
     setOnline(online: boolean) {
       if (disposed || state.online === online) return;
       ++epoch; stopPolling(); busyHolder = 0;
@@ -640,6 +698,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     },
     dispose() {
       if (disposed) return;
+      releasedHold = null;
       // Only this phone's tracking ends: nothing is written to the Host (an answered operation must go on; an unanswered
       // consent left behind was cancelled, once, before getting here, or expires on the computer).
       disposed = true; ++epoch; stopPolling(); unsubscribeOwner(); listeners.clear();
@@ -660,7 +719,13 @@ export function nextDetachedStep(controller: PluginManagementController): Detach
   const state = controller.getState();
   if (!controller.hasOpenOperation()) return "letGo";
   if (!controller.idle()) return "wait";
-  if (state.outcome === "confirmation" && !state.answerHeld) return state.online && controller.mayCancel() ? "cancel" : "letGo";
+  if (state.outcome === "confirmation" && !state.answerHeld && state.online && controller.mayCancel()) return "cancel";
+  // Maintainer review 18:45: an operation an entry of the plugins page wrote stays a pending check whatever else happens
+  // (offline, lookups stopped, the receipt gone): only a final result, a result settled from the computer's facts, or
+  // the person's "Stop tracking" ends it.
+  if (controller.pendingCheck()) return "keep";
+  // Operations started elsewhere (the chat's page prompt) keep the earlier rule: nobody here can move them on.
+  if (state.outcome === "confirmation" && !state.answerHeld) return "letGo";
   if (state.outcome === "unknown" && (controller.lookupsStopped() || !state.online)) return "letGo";
   return "keep";
 }

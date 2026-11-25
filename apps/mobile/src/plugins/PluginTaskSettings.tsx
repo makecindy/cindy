@@ -47,8 +47,8 @@ export function PluginTaskSettings({
 }: {
   deviceId: string;
   pluginId: string;
-  /** Who a save holds the page slot for (shown if the page is mounted again while it is out). */
-  holder?: PluginSlotHolder;
+  /** Who a save holds the computer's slot for (shown if the page is mounted again while it is out). */
+  holder: PluginSlotHolder;
 }) {
   const { t } = useTranslation(),
     { invoke } = useDeviceLink(),
@@ -62,11 +62,11 @@ export function PluginTaskSettings({
     [busy, setBusy] = useState(false);
   const [capabilities, setCapabilities] =
     useState<MobileAgentCapabilities | null>(null);
-  // The page's one management slot (pluginManagementSlot.ts): a save takes it when pressed and releases it with its
+  // The computer's management slot (pluginManagementSlot.ts): a save takes it when pressed and releases it with its
   // own token when the write settles, even if this form was closed or mounted again meanwhile; while anyone holds
-  // it (another save, an install, an update…) the controls are unavailable.
-  const { slot, holder } = usePluginManagementSlot();
-  const blocked = !!holder;
+  // it (another save, an install, an update…), or this plugin has a pending check, the controls are unavailable.
+  const { slot } = usePluginManagementSlot();
+  const blocked = !slot.available(who);
   const alive = useRef(true),
     owner = useRef(getMobileAuthOwner()).current;
   const current = () => alive.current && isMobileAuthOwnerCurrent(owner);

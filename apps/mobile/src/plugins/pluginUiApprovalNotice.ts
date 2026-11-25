@@ -11,8 +11,8 @@ export function pluginUiApprovalNotice(
   t: (key: string, args?: Record<string, unknown>) => string,
   proactive = false,
   /**
-   * The plugins page's management slot: Enable takes it when pressed (and does nothing if it cannot), and the
-   * operation holds it until it is over. Its holder is only shown here (an unavailable button).
+   * The plugins page's management slots: Enable takes the computer's slot when pressed (and does nothing if it
+   * cannot), and the operation holds it until it is over. It is only shown here (an unavailable button).
    */
   page?: { slot: PluginManagementSlot; who: PluginSlotHolder },
 ): PluginNoticeProps | undefined {
@@ -20,7 +20,7 @@ export function pluginUiApprovalNotice(
   if (!plugin || !state || !controller || ('manifest' in plugin && !pluginNeedsUiApproval(plugin))) return;
   const supported = state.snapshot?.uiCapabilityApproval === true || state.uiConsent?.uiCapabilityApproval === true;
   if (proactive && (!supported || ('manifest' in plugin && plugin.uiPromptSuppressed))) return;
-  const pending = !!slot?.holder() || state.busy || ['running', 'confirmation', 'unknown'].includes(state.outcome);
+  const pending = (!!slot && !slot.available(page!.who)) || state.busy || ['running', 'confirmation', 'unknown'].includes(state.outcome);
   return {
     testID: 'plugins.uiApproval',
     title: t('plugins.uiApproval.title', { name: 'manifest' in plugin ? plugin.manifest.name : plugin.name }),

@@ -16,6 +16,7 @@ const fixture = vi.hoisted(() => ({
   appStateListeners: new Set<(state: string) => void>(),
   promptReads: null as ReturnType<typeof createPluginPromptReads> | null,
   realManagement: false,
+  realConfirmation: false,
   accountGeneration: 0,
   wire: vi.fn(),
   subscribe: vi.fn(async () => {}),
@@ -51,7 +52,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("@/plugins/usePluginManagement", async (importOriginal) => {
   const actual = await importOriginal<any>();
   return ({
-  __retainedForTests: actual.__retainedForTests,
+  ...actual,
   usePluginManagement: (...args: any[]) => {
     // The market's install controller is keyed "plugin-market:<attempt>"; keep it apart from the detail's.
     if (String(args[3] ?? "").startsWith("plugin-market")) {
@@ -97,12 +98,30 @@ vi.mock("@/plugins/pluginManagementClient", async (importOriginal) => {
 vi.mock("@/plugins/PluginManagementMenu", () => ({
   PluginManagementMenu: () => null,
 }));
-vi.mock("@/plugins/PluginManagementConfirmation", () => ({ PluginManagementConfirmation: (p: any) => { fixture.props.set("confirmation", p); return null; } }));
-vi.mock("@/plugins/PluginNotice", () => ({ PluginNotice: (p: any) => { fixture.props.set(p.testID ?? "notice", p); return createElement("span", null, p.title); } }));
+// The real sheet where a test presses its Allow (`realConfirmation`); elsewhere only what the screen hands it.
+vi.mock("@/plugins/PluginManagementConfirmation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/plugins/PluginManagementConfirmation")>();
+  return { PluginManagementConfirmation: (p: any) => {
+    fixture.props.set("confirmation", p);
+    return fixture.realConfirmation ? createElement(actual.PluginManagementConfirmation, p) : null;
+  } };
+});
+// The app's two-mode prompt, as its iOS path shows it: the system alert (the same buttons showConfirm passes).
+vi.mock("@/session/useSharedTaskConfirmation", () => ({ useSharedTaskConfirmation: () => ({ dialog: null,
+  confirm: (request: any) => new Promise((resolve) => fixture.alert(request.title, request.message, request.cancelLabel !== undefined
+    ? [{ style: "cancel", text: request.cancelLabel, onPress: () => resolve(false) },
+      { style: request.destructive ? "destructive" : "default", text: request.confirmLabel, onPress: () => { request.onConfirm?.(); resolve(true); } }]
+    : [{ text: request.confirmLabel, onPress: () => { request.onConfirm?.(); resolve(true); } }])) }) }));
+vi.mock("@/plugins/PluginNotice", () => ({ PluginNotice: (p: any) => {
+  fixture.props.set(p.testID ?? "notice", p);
+  // Its title and its real action buttons (tests press them by test id).
+  return createElement("span", { "data-testid": p.testID }, p.title, ...(p.actions ?? []).map((action: any) =>
+    createElement("button", { key: action.label, onClick: action.onPress, disabled: action.disabled, "data-testid": action.testID }, action.label)));
+} }));
 vi.mock("react-native", async () => {
   const React = await import("react");
-  const view = ({ children }: any) =>
-    React.createElement("div", null, children);
+  const view = ({ children, testID }: any) =>
+    React.createElement("div", { "data-testid": testID }, children);
   return {
     AppState: { currentState: "active", addEventListener: (_event: string, listener: (state: string) => void) => {
       fixture.appStateListeners.add(listener); return { remove: () => fixture.appStateListeners.delete(listener) };
@@ -113,7 +132,7 @@ vi.mock("react-native", async () => {
     Image: view,
     Pressable: (p: any) => {
       if (p.accessibilityLabel) fixture.props.set("pressable." + p.accessibilityLabel, p);
-      return React.createElement("button", { onClick: p.onPress, disabled: p.disabled }, p.children);
+      return React.createElement("button", { onClick: p.onPress, disabled: p.disabled, "data-testid": p.testID }, p.children);
     },
     RefreshControl: view,
     ScrollView: view,
@@ -129,6 +148,7 @@ vi.mock("react-native", async () => {
 });
 vi.mock("react-native-safe-area-context", async () => ({
   SafeAreaView: ({ children }: any) => createElement("div", null, children),
+  useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 vi.mock("expo-router", () => ({
   Stack: {
@@ -153,6 +173,7 @@ vi.mock("lucide-react-native", () =>
       "Info",
       "Monitor",
       "Puzzle",
+      "Check",
       "Search",
       "Plus",
     ].map((key) => [key, () => null]),
@@ -301,6 +322,7 @@ beforeEach(() => {
   fixture.props.clear();
   fixture.originalSettingsMounts = 0;
   fixture.realManagement = false;
+  fixture.realConfirmation = false;
   fixture.promptReads = null;
   fixture.accountGeneration = 0;
   fixture.wire.mockReset();
@@ -567,7 +589,7 @@ it.each(["reconnect", "return"])(
       model: { status: "disabled", canUseTasks: false },
     });
     expect(fixture.invoke).toHaveBeenCalledTimes(1);
-    expect(fixture.alert).toHaveBeenCalledWith("plugins.actionFailed", undefined, [{ text: "plugins.gotIt" }]);
+    expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed", "plugins.actionFailed", [{ text: "plugins.gotIt", onPress: expect.any(Function) }]);
   },
 );
 it("offers only a read retry when both the write reply and confirmation read fail", async () => {
@@ -608,7 +630,7 @@ it("locks duplicate taps, and a rejected write keeps the previous state without 
     enabled: true,
     busy: false,
   });
-  expect(fixture.alert).toHaveBeenCalledWith("plugins.actionFailed", undefined, [{ text: "plugins.gotIt" }]);
+  expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed", "plugins.actionFailed", [{ text: "plugins.gotIt", onPress: expect.any(Function) }]);
   expect(fixture.invoke).toHaveBeenCalledTimes(1);
 });
 it("does not change a plugin when its computer is offline", async () => {
@@ -798,7 +820,7 @@ it("guides setup to PC without opening configuration or creating a task", async 
   expect(detail.model.canUseTasks).toBe(true);
   expect(detail.children).toBeUndefined();
   await act(async () => detail.onResolveStatus());
-  expect(fixture.alert).toHaveBeenCalledWith("plugins.detail.computerSettings", undefined, [{ text: "plugins.gotIt" }]);
+  expect(fixture.alert).toHaveBeenCalledWith("plugins.detail.computerSettingsTitle", "plugins.detail.computerSettings", [{ text: "plugins.gotIt", onPress: expect.any(Function) }]);
   expect(fixture.push).not.toHaveBeenCalled();
   expect(fixture.invoke).not.toHaveBeenCalled();
 });
@@ -903,7 +925,7 @@ it.each(["update", "uninstall"])("reports %s preflight failure without an operat
   await openDetail();
   await act(async () => fixture.props.get("header").rightToolbar.props.onAction(action));
   if (action === "uninstall") await act(async () => fixture.alert.mock.calls.at(-1)![2][1].onPress());
-  expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed", undefined, [{ text: "plugins.gotIt" }]);
+  expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed", undefined, [{ text: "plugins.gotIt", onPress: expect.any(Function) }]);
 });
 it("discards an uninstall confirmation after navigating to another plugin", async () => {
   const { controller } = managedScreen();
@@ -932,7 +954,7 @@ it("requires an explicit review when the release changed before installing", asy
   expect(controller.install).not.toHaveBeenCalled();
   expect(controller.refresh).toHaveBeenCalled();
   expect(fixture.alert).toHaveBeenCalledWith(
-    "plugins.management.releaseChanged", undefined, [{ text: "plugins.gotIt" }],
+    "plugins.management.releaseChangedTitle", "plugins.management.releaseChanged", [{ text: "plugins.gotIt", onPress: expect.any(Function) }],
   );
 });
 it("mounts original settings with Host approval and retains the old-Host fallback", async () => {
@@ -1309,7 +1331,7 @@ describe("one page slot for every entry (real components, three ways of deliveri
     fixture.props.delete("plugins.slotHolder");
     await act(async () => root.render(createElement(PluginsScreen)));
     expect(fixture.props.has("plugins.slotHolder")).toBe(false);
-    expect(pluginManagementSlotFor().holder()).toBeNull();
+    expect((pluginManagementSlotFor().holders()[0] ?? null)).toBeNull();
   });
   // The maintainer's own steps: plugin A's task settings save is in flight; switch to plugin B and save there.
   it("keeps a second task settings save from another plugin's form while the first is in flight", async () => {
@@ -1336,7 +1358,7 @@ describe("one page slot for every entry (real components, three ways of deliveri
  * - 最小失败输入：每条路径各一次。tier: unit。
  */
 describe("page slot release paths", () => {
-  const holder = () => pluginManagementSlotFor().holder();
+  const holder = () => (pluginManagementSlotFor().holders()[0] ?? null);
   async function updateScreen(host: { begin?: (request: any) => unknown; operation?: (request: any) => unknown; answer?: (request: any) => unknown;
     detail?: () => unknown; cancel?: (request: any) => unknown; refuseCancel?: () => boolean }) {
     const { snapshot, market } = realManagementHost();
@@ -1408,7 +1430,9 @@ describe("page slot release paths", () => {
     await settle(14);
     expect(holder()).toBeNull();
   });
-  it("keeps it while a stopped unknown result is shown, and lets it go once that view is gone", async () => {
+  // Maintainer review 18:45 (I-3): a stopped unknown result waits for the person; the computer's slot goes (other
+  // plugins there may start), the pending check stays, shown or not, and still blocks this plugin.
+  it("frees the computer's slot while a stopped unknown result waits for a check, and keeps its pending check after the view is gone", async () => {
     const s = await updateScreen({
       begin: () => { throw new Error("[TIMEOUT] remote invoke timed out"); },
       operation: () => { throw new Error("[INVALID_RESPONSE] nonsense"); },
@@ -1417,11 +1441,15 @@ describe("page slot release paths", () => {
     await act(async () => { await fixture.props.get("observedManagement").controller.reconcile(); });
     await settle(14);
     expect(fixture.props.get("observedManagement").controller.lookupsStopped()).toBe(true);
-    // Still shown: "Check result" is right there, so the slot stays with it.
-    expect(holder()).toMatchObject({ entry: "update" });
+    expect(holder()).toBeNull();
+    const same = { name: "Demo", deviceId: "mac", deviceName: "Mac", instanceKey: "demo" };
+    expect(pluginManagementSlotFor().available(same)).toBe(false);
+    expect(pluginManagementSlotFor().available({ ...same, name: "Other", instanceKey: "other", ghostId: "other" })).toBe(true);
     await act(async () => root.render(createElement("div")));
     await settle(6);
     expect(holder()).toBeNull();
+    expect(__retainedForTests.size()).toBe(1);
+    expect(pluginManagementSlotFor().available(same)).toBe(false);
   });
   it("follows an update to its end after the page is left, then releases it", async () => {
     let finish!: () => void;
@@ -1639,9 +1667,11 @@ describe("installed custom-market update and its source", () => {
     await act(async () => fixture.props.get("header").rightToolbar.props.onAction("update"));
     await settle(14);
     expect(fixture.wire.mock.calls.some((call) => call[2]?.[0]?.actionId === "management:begin")).toBe(false);
-    // Android layout re-check: the alert's button is localized (RN's default "OK" showed in English).
-    for (const call of fixture.alert.mock.calls) expect(call[2]).toEqual([{ text: "plugins.gotIt" }]);
-    return fixture.alert.mock.calls.map((call) => call[0]);
+    // Android layout re-check: the alert's button is localized (RN's default "OK" showed in English). J-2: a short
+    // title, the full explanation as its message.
+    for (const call of fixture.alert.mock.calls) expect(call[2]).toEqual([{ text: "plugins.gotIt", onPress: expect.any(Function) }]);
+    for (const call of fixture.alert.mock.calls) expect(call[0]).toBe(call[1] + "Title");
+    return fixture.alert.mock.calls.map((call) => call[1]);
   };
   it.each([
     ["the detail names no source", undefined, undefined, "plugins.management.sourceUnverified"],
@@ -1770,7 +1800,7 @@ it("silently reads uncertain configuration once without clearing the detail or r
 it("reports a failed management operation once without a permanent refresh card", async () => {
   fixture.management = { state: { outcome: "failed", operationId: "failed-once", busy: false, capability: "supported", online: true, snapshot: null }, controller: null };
   await openDetail();
-  expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed", undefined, [{ text: "plugins.gotIt" }]);
+  expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed", undefined, [{ text: "plugins.gotIt", onPress: expect.any(Function) }]);
   await act(async () => root.render(createElement(PluginsScreen)));
   expect(fixture.alert).toHaveBeenCalledTimes(1);
   expect(fixture.invoke).not.toHaveBeenCalled();
@@ -2579,46 +2609,161 @@ describe("market install recovery", () => {
       }
     });
   }
-  /* 测试价值（维护者 17:43 复审第 2 条；调度要求 G）
-   * - 生产入口与可观察结果：真实 PluginsScreen + usePluginMarket + 管理 client / controller，只替换传输；整页卸载再打开后，
-   *   观察页面上是否能找到占用者、原行是否恢复为待确认、「核实结果」发出的请求。
-   * - 依据：持有占用的操作的身份（账号、电脑、入口、插件、尝试编号）与占用同层保存，任何页面重挂载时恢复；不允许
-   *   「占用还在、页面上找不到是谁占着、也没有核实入口」。
-   * - 缺口：重开的市场从空开始，拿不回原尝试，也无法核实，其它入口被旧占用挡住。
-   * - 最小失败输入：允许已写出、回包丢失、Host 持续返回同一确认时整页卸载再打开。tier: unit。
+  /* 测试价值（维护者 18:45 复审第 1、2 条；调度要求 I-4）
+   * - 生产入口与可观察结果：真实 PluginsScreen（Android 渲染：市场分段、筛选面板、市场行、确认面板、顶部提示、待核实
+   *   面板都是真实组件）+ usePluginMarket + 管理 client / controller，只替换设备互联传输；测试只点渲染出来的控件
+   *   （按 testID 找到 DOM 按钮再 click），观察发往电脑的 management:* 写请求与查询，以及查询带的操作号。
+   * - 依据：已写出、结果未定的操作是这个账号的待核实记录，不依赖目录、筛选、分页或市场列表；顶部提示在有记录时一直可见，
+   *   「查看」打开记录自己的面板，「核实结果」只按原操作号查询，不再发 begin、answer 或 cancel；断线时可读、不可核实并
+   *   说明原因，重连后按原操作号查。
+   * - 缺口：「查看」只切到市场分段，原条目被默认官方筛选、分页或「排除已装」藏起时找不到核实入口；写出后断线再离开整页，
+   *   记录被丢弃，重开重连也无法核实。
+   * - 最小失败输入：自定义市场安装，Allow 写出、回包丢失；整页卸载再打开，原条目被三种方式之一藏起；或卸载前先断线、
+   *   重开后再重连。tier: integration（jsdom，内存 Host，无真实等待）。
    */
-  it("restores an unconfirmed install after the whole plugins page is closed and opened again, and only looks it up", async () => {
-    const requests = installWire({
-      begin: () => demoConsent({ input: { operationId: "screen-operation" } } as any),
-      answer: () => { throw new Error("[TIMEOUT] remote invoke timed out"); },
-      // The Host keeps showing the same consent (the answer did not get there).
-      operation: () => demoConsent({ input: { operationId: "screen-operation" } } as any),
+  describe("pending checks reached through the page's own controls", () => {
+    const { publisherKind: _official, ...base } = marketItem("repo-tools", "Repo Tools");
+    const source = { kind: "git", repository: "github.com/demo-org/demo-git-market", sourceId: "DemoGitMarketSource001" };
+    const custom = { ...base, pluginId: "custom-market:Demo%20Git%20Market/repo-tools", sourceType: "git-market",
+      sourceMarketName: "Demo Git Market", sourceIdentity: source };
+    const official = marketItem("notes", "Notes");
+    const manifest = { schemaVersion: 3, id: "repo-tools", name: "Repo Tools", version: "1" };
+    const ghost = { instanceKey: "_root__repo-tools", namespace: null, manifest, enabled: true,
+      approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } };
+    const byId = (id: string) => element.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
+    async function click(id: string) {
+      const control = byId(id);
+      expect(control, `${id} is on screen`).not.toBeNull();
+      expect(control!.disabled, `${id} is available`).toBe(false);
+      await act(async () => control!.click());
+      await settle(14);
+    }
+    /** The Host: `hide` decides how the custom item is missing from the reopened market; `installed` after Allow arrives. */
+    function wire(world: { hide: "filter" | "paging" | "excludeInstalled" | null; installed: boolean; lookup: "consent" | "running" | "succeeded" }) {
+      return requests = marketWire((request) => {
+        const consent = { operationId: request.input?.operationId, phase: "confirmation", consent: {
+          requestId: "consent", initiator: "user", origin: "custom-market", originLabel: "Demo Git Market", originSource: source,
+          installationSource: { kind: "third-party" }, facts: { kind: "install", ghostId: "repo-tools", name: "Repo Tools", version: "1", permissions: [] } } };
+        switch (request.actionId) {
+          case "management:snapshot": {
+            if (request.input?.read === "capabilities") return { catalogPaging: true };
+            if (request.input?.read === "catalog") {
+              const scope = request.input.query?.scope;
+              // Paging: the custom item is on a page the reopened market never asked for.
+              if (world.hide === "paging") return { ...marketPage([official]), nextCursor: "page-2", customSourceNames: ["Demo Git Market"] };
+              // excludeInstalled: the Host installed it after all, so it is left out of every page.
+              const items = scope === "custom" || scope === "all" ? (world.installed && world.hide === "excludeInstalled" ? [] : [custom]) : [official];
+              return { ...marketPage(items), customSourceNames: ["Demo Git Market"] };
+            }
+            return { version: 1, market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
+              ghosts: world.installed ? [ghost] : [] };
+          }
+          case "management:market-detail": return { ...custom, manifest };
+          case "management:begin": return consent;
+          case "management:answer": throw new Error("[TIMEOUT] remote invoke timed out");   // written; the reply is lost
+          case "management:operation":
+            return world.lookup === "consent" ? consent : { operationId: request.input.operationId, phase: world.lookup };
+          default: throw new Error("unexpected " + request.actionId);
+        }
+      });
+    }
+    /** Real controls only: the market segment, its filter sheet (Custom), the row's Install, the sheet's Allow. */
+    let requests: MarketWireRequest[] = [];
+    async function installAndAllow() {
+      fixture.platform = "android";
+      fixture.realConfirmation = true;
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await act(async () => fixture.props.get("segment").onChange("market"));
+      await settle(14);
+      await click("plugins.market.filter");
+      await click("plugins.market.filter.custom");
+      await click(`plugins.market.install.${custom.pluginId}`);
+      await click("plugins.management.allow");
+    }
+    const sentFor = (requests: MarketWireRequest[]) => requests
+      .filter((request) => ["management:begin", "management:answer", "management:cancel", "management:operation"].includes(request.actionId!))
+      .map((request) => [request.actionId, request.input?.operationId]);
+    async function reopenPage() {
+      await act(async () => root.render(createElement("div")));
+      await settle(6);
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await settle(14);
+    }
+    it.each(["filter", "paging", "excludeInstalled"] as const)(
+      "opens the check from the notice and looks up only the original operation when the item is hidden by %s", async (hide) => {
+        const world = { hide: null as "filter" | "paging" | "excludeInstalled" | null, installed: false, lookup: "consent" as "consent" | "running" | "succeeded" };
+        const requests = wire(world);
+        await installAndAllow();
+        expect(sentFor(requests)).toEqual([["management:begin", "screen-operation"], ["management:answer", "screen-operation"]]);
+        // The Host goes on (or not) by itself; the reopened market no longer shows the item.
+        world.hide = hide;
+        if (hide === "excludeInstalled") world.installed = true;
+        await reopenPage();
+        await act(async () => fixture.props.get("segment").onChange("market"));
+        await settle(14);
+        if (hide !== "filter") { await click("plugins.market.filter"); await click("plugins.market.filter.custom"); }
+        expect(byId(`plugins.market.install.${custom.pluginId}`)).toBeNull();
+        // The notice stays at the top; "View" opens the check's own panel (not the directory or the market list).
+        expect(byId("plugins.slotHolder")?.textContent).toContain("plugins.checks.waitingOne");
+        await click("plugins.slotHolder.show");
+        expect(byId("plugins.checks")?.textContent).toContain("Repo Tools");
+        const before = requests.length;
+        world.lookup = "succeeded";
+        world.installed = true;
+        await click("plugins.checks.verify");
+        expect(sentFor(requests.slice(before))).toEqual([["management:operation", "screen-operation"]]);
+        // Settled by the original operation's receipt: the line says how it ended; nothing more is tracked.
+        expect(byId("plugins.checks.verify")).toBeNull();
+        expect(byId("plugins.checks")?.textContent).toContain("plugins.checks.result.succeeded");
+        await click("plugins.checks.close");
+        expect(byId("plugins.slotHolder")).toBeNull();
+        expect(sentFor(requests).filter(([action]) => action !== "management:operation"))
+          .toEqual([["management:begin", "screen-operation"], ["management:answer", "screen-operation"]]);
+      });
+    it("keeps the check through offline, leaving and reopening the page, and looks up only the original operation on reconnect", async () => {
+      const world = { hide: null, installed: false, lookup: "consent" as "consent" | "running" | "succeeded" };
+      const requests = wire(world);
+      await installAndAllow();
+      // Offline first, then the whole page goes away; it is opened again while the computer is still away.
+      fixture.online = false;
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await settle(6);
+      await reopenPage();
+      const sentBefore = requests.length;
+      expect(byId("plugins.slotHolder")?.textContent).toContain("plugins.checks.waitingOne");
+      await click("plugins.slotHolder.show");
+      // Readable, not checkable while offline, and says why.
+      expect(byId("plugins.checks.verify")?.disabled).toBe(true);
+      expect(byId("plugins.checks")?.textContent).toContain("plugins.checks.status.offline");
+      await click("plugins.checks.close");
+      world.lookup = "running";
+      fixture.online = true;
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await settle(14);
+      expect(sentFor(requests.slice(sentBefore))).toEqual([["management:operation", "screen-operation"]]);
+      expect(sentFor(requests).filter(([action]) => action !== "management:operation"))
+        .toEqual([["management:begin", "screen-operation"], ["management:answer", "screen-operation"]]);
+      // Still under way on the computer: the operation stays at the top (it holds the computer's slot again).
+      expect(byId("plugins.slotHolder")?.textContent).toContain("plugins.slot.holder");
     });
-    await openMarket();
-    await act(async () => shownMarket().install(shownMarket().items[0]));
-    await settle(14);
-    await approveOnPhone();
-    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
-    const begins = () => requests.filter((request) => request.actionId === "management:begin").length;
-    expect(begins()).toBe(1);
-    // The whole page goes away and is opened again.
-    await act(async () => root.render(createElement("div")));
-    await settle(6);
-    fixture.props.delete("plugins.slotHolder");
-    await act(async () => root.render(createElement(PluginsScreen)));
-    await settle(14);
-    // It says which plugin on which computer is still under way, and goes there.
-    expect(fixture.props.get("plugins.slotHolder")).toMatchObject({ title: "plugins.slot.holder" });
-    await act(async () => fixture.props.get("plugins.slotHolder").actions[0].onPress());
-    await settle(14);
-    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
-    expect(shownMarket().installBusy).toBe(true);
-    const before = requests.length;
-    await act(async () => { await shownMarket().checkResult(); });
-    await settle(14);
-    // "Check result" only looks up the original operation; no second install.
-    expect(requests.slice(before).map((request) => request.actionId)).toEqual(["management:operation"]);
-    expect(begins()).toBe(1);
+    it("stops tracking only on this phone: nothing is sent, the notice goes, and the plugin can be installed again", async () => {
+      const world = { hide: null, installed: false, lookup: "consent" as "consent" | "running" | "succeeded" };
+      const requests = wire(world);
+      await installAndAllow();
+      await reopenPage();
+      await click("plugins.slotHolder.show");
+      const before = requests.length;
+      await click("plugins.checks.stop");
+      expect(sentFor(requests.slice(before))).toEqual([]);
+      expect(byId("plugins.checks")?.textContent).toContain("plugins.checks.result.untracked");
+      await click("plugins.checks.close");
+      expect(byId("plugins.slotHolder")).toBeNull();
+      await act(async () => fixture.props.get("segment").onChange("market"));
+      await settle(14);
+      await click("plugins.market.filter");
+      await click("plugins.market.filter.custom");
+      expect(byId(`plugins.market.install.${custom.pluginId}`)?.disabled).toBe(false);
+    });
   });
   it("releases the row when the install never started because the computer went away mid-preparation", async () => {
     let releaseDetail!: () => void;
@@ -2661,7 +2806,7 @@ describe("market install recovery", () => {
     await settle(14);
     await approveOnPhone();
     expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
-    await act(async () => { await shownMarket().checkResult(); });
+    await act(async () => { await shownMarket().checkResult(item); });
     await settle(14);
     if (messageKey) expect(shownMarket()).toMatchObject({ installBusy: false, canInstall: true });
     if (messageKey) expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey });
@@ -2702,7 +2847,7 @@ describe("market install recovery", () => {
     receiptGone = true;
     await act(async () => controller.setOnline(true));
     await settle(14);
-    if (shownMarket().rowState(item).kind === "unknown") { await act(async () => { await shownMarket().checkResult(); }); await settle(14); }
+    if (shownMarket().rowState(item).kind === "unknown") { await act(async () => { await shownMarket().checkResult(item); }); await settle(14); }
     const opened = fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
     expect(opened).toBe(confirmed);
     // Unconfirmed: the row keeps the note and the market is released (confirmed opens the installed detail instead).
@@ -2732,7 +2877,7 @@ describe("market install recovery", () => {
     await openMarket();
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
-    await act(async () => { await shownMarket().checkResult(); });
+    await act(async () => { await shownMarket().checkResult(item); });
     await settle(14);
     // Maintainer review (2026-11-25): once the Host has no receipt and its facts are read, the row keeps the
     // unconfirmed note and the market and other management actions are released (no endless installBusy).
@@ -2789,7 +2934,7 @@ describe("market install recovery", () => {
     await settle(14);
     expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
     receiptGone = true;
-    await act(async () => { await shownMarket().checkResult(); });
+    await act(async () => { await shownMarket().checkResult(item); });
     await settle(14);
     const opened = fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
     if (expected === "installed") expect(opened).toBe(true);
@@ -2824,7 +2969,7 @@ describe("market install recovery", () => {
     await settle();
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
-    await act(async () => { await shownMarket().checkResult(); });
+    await act(async () => { await shownMarket().checkResult(item); });
     await settle(14);
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
@@ -2877,7 +3022,7 @@ describe("market install recovery", () => {
     // Meanwhile the same plugin appears on the computer (from another operation) and the receipt expires.
     onComputer = true; receiptGone = true;
     if (scenario === "unanswered" || scenario === "mismatch") await act(async () => { await controller.reconcile(); });
-    else await act(async () => { await shownMarket().checkResult(); });
+    else await act(async () => { await shownMarket().checkResult(item); });
     await settle(14);
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
     expect(shownMarket()).toMatchObject({ installBusy: false });
@@ -2966,7 +3111,7 @@ describe("market install recovery", () => {
     await openMarket();
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
-    await act(async () => { await shownMarket().checkResult(); });
+    await act(async () => { await shownMarket().checkResult(item); });
     await settle(14);
     expect(shownMarket()).toMatchObject({ installBusy: true });
     expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
@@ -3620,7 +3765,7 @@ describe("market read fences and lost-receipt facts", () => {
     receiptGone = true;
     holdSnapshot = true;
     const detailsBefore = sent.filter((request) => request.actionId === "management:market-detail").length;
-    await act(async () => { void shownMarket().checkResult(); });
+    await act(async () => { void shownMarket().checkResult(item); });
     await settle(14);
     // NOT_FOUND arrived but the fresh snapshot is still being read: nothing is concluded yet.
     expect(shownMarket()).toMatchObject({ installBusy: true });
@@ -3659,15 +3804,15 @@ describe("market read fences and lost-receipt facts", () => {
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
     await approveOnPhone();
-    await act(async () => { void shownMarket().checkResult(); });
+    await act(async () => { void shownMarket().checkResult(item); });
     await settle(14);
-    await act(async () => { void shownMarket().checkResult(); });
+    await act(async () => { void shownMarket().checkResult(item); });
     await settle(6);
     // The first round's detail would say "installed"; the second round's query has not returned yet.
     await act(async () => { firstDetail.release(); });
     await settle(10);
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
-    expect(shownMarket()).toMatchObject({ installBusy: true });
+    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
     await act(async () => { secondQuery.release(); });
     await settle(14);
     // The second round reads its own facts and settles: the plugin is installed from this release.
@@ -3704,7 +3849,7 @@ describe("market read fences and lost-receipt facts", () => {
     await settle(14);
     await approveOnPhone();
     holdNext = true;
-    await act(async () => { void shownMarket().checkResult(); });
+    await act(async () => { void shownMarket().checkResult(item); });
     await settle(6);
     // B: a plugin-change refresh starts after A and returns first, showing the plugin installed.
     instancePresent = true;
@@ -3747,7 +3892,7 @@ describe("market read fences and lost-receipt facts", () => {
     await settle(14);
     await approveOnPhone();
     hold = "A";
-    await act(async () => { void shownMarket().checkResult(); });
+    await act(async () => { void shownMarket().checkResult(item); });
     await settle(6);
     // B: a plugin-change refresh lands with an empty list.
     await act(async () => { await fixture.props.get("confirmation").controller.refresh(); });
@@ -3759,7 +3904,7 @@ describe("market read fences and lost-receipt facts", () => {
     expect(hold).toBeNull();
     await act(async () => { readA.release(); });
     await settle(14);
-    expect(shownMarket()).toMatchObject({ installBusy: true });
+    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
     expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
     // C lands with the plugin installed: the result follows the newest facts.
@@ -3796,7 +3941,7 @@ describe("market read fences and lost-receipt facts", () => {
     await settle(14);
     await approveOnPhone();
     holdDetail = true;
-    await act(async () => { void shownMarket().checkResult(); });
+    await act(async () => { void shownMarket().checkResult(item); });
     await settle(14);
     // The facts after NOT_FOUND showed the same-id instance; its market detail is in flight. Then the instance
     // is removed and a plugin-change refresh lands with the newer facts.
@@ -3855,7 +4000,7 @@ describe("market read fences and lost-receipt facts", () => {
       await settle(14);
       await approveOnPhone();
       checking = true;
-      await act(async () => { void shownMarket().checkResult(); });
+      await act(async () => { void shownMarket().checkResult(item); });
       await settle(14);
       const opened = () => fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
       let openedBeforeB = false;
@@ -3943,7 +4088,7 @@ describe("market read fences and lost-receipt facts", () => {
           await settle(14);
           await approveOnPhone();
           checking = true;
-          await act(async () => { void shownMarket().checkResult(); });
+          await act(async () => { void shownMarket().checkResult(item); });
           await settle(14);
           gate("A").release();
           await settle(14);
@@ -3957,7 +4102,7 @@ describe("market read fences and lost-receipt facts", () => {
               wanted = step === "sendB" ? "B" : "C";
               await act(async () => { void fixture.props.get("confirmation")?.controller.refresh(); });
             } else if (step === "check") {
-              await act(async () => { void shownMarket().checkResult(); });
+              await act(async () => { void shownMarket().checkResult(item); });
             } else gate(step === "releaseB" ? "B" : step === "releaseC" ? "C" : "detail").release();
             await settle(14);
             const now = opened() ? true : failed() ? false : null;
@@ -3970,7 +4115,7 @@ describe("market read fences and lost-receipt facts", () => {
             }
             if (concluded === null && reads.some((read) => !read.returned)) {
               expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
-              expect(shownMarket().installBusy).toBe(true);
+              // The attempt was handed to its pending check: the row still shows it as unconfirmed (above).
             }
           }
           // Every gate released (a read a newer one replaced may never be sent): never left waiting; the conclusion was
@@ -4026,10 +4171,10 @@ describe("market read fences and lost-receipt facts", () => {
         await settle(14);
         await approveOnPhone();
         round = 1;
-        await act(async () => { void shownMarket().checkResult(); });
+        await act(async () => { void shownMarket().checkResult(item); });
         await settle(14);
         round = 2;
-        await act(async () => { void shownMarket().checkResult(); });
+        await act(async () => { void shownMarket().checkResult(item); });
         await settle(6);
         let q2Returned = false;
         for (const step of order) {
@@ -4037,7 +4182,7 @@ describe("market read fences and lost-receipt facts", () => {
           if (step === "Q2") q2Returned = true;
           await settle(14);
           // Invariant ①/②: until round 2 has its own facts, round 1's detail gives no result.
-          if (!q2Returned) { expect(opened()).toBe(false); expect(shownMarket()).toMatchObject({ installBusy: true }); }
+          if (!q2Returned) { expect(opened()).toBe(false); expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" }); }
         }
         if (presentInRound2) expect(opened()).toBe(true);
         else {
@@ -4117,7 +4262,7 @@ describe("market read fences and lost-receipt facts", () => {
       const allowSent = sent.some((request) => request.actionId === "management:answer");
       expect(allowSent).toBe(order[0] === "releaseAllow");
       receiptGone = true;
-      await act(async () => { await shownMarket().checkResult(); });
+      await act(async () => { await shownMarket().checkResult(item); });
       await settle(14);
       // Sent with the reply lost: the result is confirmed from the computer. Stopped before sending: unconfirmed.
       expect(opened()).toBe(allowSent);
@@ -4233,9 +4378,9 @@ describe("market read fences and lost-receipt facts", () => {
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
     await approveOnPhone();
-    await act(async () => { void shownMarket().checkResult(); });
+    await act(async () => { void shownMarket().checkResult(item); });
     await settle(14);
-    await act(async () => { void shownMarket().checkResult(); });
+    await act(async () => { void shownMarket().checkResult(item); });
     await settle(14);
     expect(details).toHaveLength(2);
     await act(async () => { details[0]!.release(); });

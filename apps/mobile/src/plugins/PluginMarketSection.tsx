@@ -100,7 +100,7 @@ export function PluginMarketSection({ market, onConnectComputer }: {
       <Pressable accessibilityRole="button" testID={`plugins.market.install.${item.pluginId}`}
         accessibilityLabel={state.kind === "idle" ? t("plugins.market.installAria", { name: item.name }) : label}
         accessibilityState={{ disabled }} disabled={disabled} hitSlop={{ top: 4, bottom: 4 }}
-        onPress={() => { if (state.kind === "unknown") void market.checkResult(); else market.install(item); }}
+        onPress={() => { if (state.kind === "unknown") void market.checkResult(item); else market.install(item); }}
         style={[styles.pill, disabled && styles.unavailable]}>
         <Text style={styles.pillText}>{label}</Text>
       </Pressable>

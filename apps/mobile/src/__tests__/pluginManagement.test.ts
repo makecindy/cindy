@@ -18,6 +18,8 @@ import { parsePluginMarketPage, pluginMarketFacts, pluginMarketIconUri, pluginMa
   pluginMarketSubtitle } from '@/plugins/pluginMarketCatalog';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+/** The computer a test's slot belongs to (one slot per account and computer). */
+const SLOT_WHO = { name: 'Demo', deviceId: 'host-1', deviceName: 'Host' };
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'operation-1' }));
 const appState = vi.hoisted(() => ({ currentState: 'active', listeners: new Set<(state: string) => void>() }));
@@ -713,14 +715,19 @@ describe('progress only moves forward and never stops', () => {
     controllers.push(c);
     // The page slot held for this operation, and its view: shown, or gone (driven as usePluginManagement does).
     const slot = createPluginManagementSlot();
-    const token = slot.tryAcquire('update')!;
+    const token = slot.tryAcquire('update', SLOT_WHO)!;
     const hold = pluginOperationHold(slot, token);
-    const view = { detached: false, gone: false, steps: [] as string[] };
+    const view = { detached: false, gone: false, steps: [] as string[], lostCheck: false };
     let stopReview: (() => void) | undefined;
     const review = () => {
       if (!view.detached || view.gone) return;
       const next = nextDetachedStep(c);
-      if (next === 'letGo') { view.gone = true; view.steps.push('letGo'); stopReview?.(); c.dispose(); }
+      if (next === 'letGo') {
+        view.gone = true; view.steps.push('letGo');
+        // ⑪ evidence: what the controller still had when it was let go (a written, unsettled operation must not be).
+        view.lostCheck = !!c.pendingCheck();
+        stopReview?.(); c.dispose();
+      }
       else if (next === 'cancel') { view.steps.push('cancel'); void c.cancel(); }
     };
     return { c, host, pending, transit, timers, sent, writes, asked, slot, token, hold, view,
@@ -787,11 +794,22 @@ describe('progress only moves forward and never stops', () => {
     if (r.asked.filter((kind) => kind === 'cancel').length > 1) return `⑩ cancel asked for twice (${path})`;
     const firstAnswer = r.writes.indexOf('answer'), cancelAt = r.writes.indexOf('cancel');
     if (firstAnswer >= 0 && cancelAt > firstAnswer) return `⑩ cancel written after an answer (${path})`;
-    if (!r.slot.holds(r.token) && r.pending.some((entry) => entry.kind !== 'operation'))
+    // The computer's slot is this operation's alone here (its first token, or one it took back after waiting for a check).
+    const slotHeld = !!r.slot.holder('host-1');
+    if (!slotHeld && r.pending.some((entry) => entry.kind !== 'operation'))
       return `⑩ slot released with a ${r.pending.find((entry) => entry.kind !== 'operation')!.kind} in flight (${path})`;
-    if (r.view.gone && r.slot.holds(r.token)) return `⑩ slot held by a controller that was let go (${path})`;
-    // Let go: this phone no longer follows the operation (nothing more to check about it).
+    if (r.view.gone && slotHeld) return `⑩ slot held by a controller that was let go (${path})`;
+    // ⑪ (maintainer review 18:45) An operation whose begin was written keeps a pending check until its final result,
+    // whatever happens to its view or the connection (offline, leaving, lookups stopped, the receipt gone): it is never
+    // let go before that. While the check waits for the person, the computer's slot is free; while the operation moves
+    // on by itself, it holds the slot.
+    if (r.view.lostCheck) return `⑪ a written operation was let go before its final result (${path})`;
     if (r.view.gone) return null;
+    const check = r.c.pendingCheck();
+    if (r.writes.includes('begin') && !finalOutcome(st.outcome) && !check) return `⑪ written and unsettled, but no pending check (${path})`;
+    if (check?.waiting && slotHeld) return `⑪ slot kept by a result waiting to be checked (${path})`;
+    if (check && !check.waiting && r.pending.length === 0 && !st.busy && !slotHeld)
+      return `⑪ moving on by itself without its computer's slot (${path})`;
     if (tappable(r) && r.pending.some((entry) => entry.kind === 'answer')) return `① tappable while an answer is in flight (${path})`;
     if (r.host.answersWritten > 1) return `② ${r.host.answersWritten} answers written (${path})`;
     if (r.pending.filter((entry) => entry.kind === 'operation' && entry.epoch === r.connection()).length > 1) return `③ two lookups in flight (${path})`;
@@ -819,9 +837,18 @@ describe('progress only moves forward and never stops', () => {
       if (r.timers.length > 0) { await step(r, 'tick', counts); continue; }
       break;
     }
+    // A result waiting for the person (lookups stopped, the receipt gone) is settled by their "Check result", once.
+    if (!r.view.gone && r.c.pendingCheck()?.waiting) {
+      await step(r, 'check', counts);
+      for (let i = 0; i < 20; i++) {
+        const next = r.pending.find((entry) => entry.stage === 'queued') ?? r.transit[0] ?? r.pending.find((entry) => entry.stage === 'written' && entry.arrived);
+        if (!next) break;
+        await step(r, `${next.stage === 'queued' ? 'dequeue' : r.transit.includes(next) ? 'arrive' : 'deliver'}#${next.seq}`, counts);
+      }
+    }
     const st = r.c.getState();
     // Let go: this phone stopped following it (nothing written for that); it must not hold the slot.
-    if (r.view.gone) return r.slot.holds(r.token) ? '⑩ slot held after letting go' : null;
+    if (r.view.gone) return r.slot.holder('host-1') ? '⑩ slot held after letting go' : r.view.lostCheck ? '⑪ written operation let go' : null;
     if (r.host.phase === 'none') return st.outcome === 'failed' ? null : `⑧ Host never took the begin, phone shows ${st.outcome}`;
     if (r.host.phase === 'confirmation') return tappable(r) ? null : `⑧ Host waits for an answer, phone shows ${st.outcome}${st.answerHeld ? ' (held)' : ''}`;
     return st.outcome === r.host.phase ? null : `⑧ Host ${r.host.phase}, phone shows ${st.outcome}`;
@@ -1025,7 +1052,7 @@ describe('progress only moves forward and never stops', () => {
    * - 缺口：watcher 在取消收尾前反复进入；丢回包后再次取消；已允许的操作在离开时被取消。
    * - 最小失败输入：下面三种各一次。tier: unit。
    */
-  it('cancels a consent left unanswered once; refused before writing, it only lets go, with nothing written', async () => {
+  it('cancels a consent left unanswered once; refused before writing, it stays a pending check that waits for the person, with nothing written', async () => {
     const r = rig({ promptOnAccept: true });
     await r.c.refresh(); void r.c.install(detail, plugin, r.hold); await flush();
     await run(r, ['dequeue#1', 'arrive#1', 'deliver#1']);
@@ -1036,8 +1063,11 @@ describe('progress only moves forward and never stops', () => {
     await run(r, [`refuse#${cancel.seq}`]);
     expect(r.asked).toEqual(['begin', 'cancel']);
     expect(r.writes).toEqual(['begin']);
-    expect(r.view.steps).toEqual(['cancel', 'letGo']);
-    expect(r.slot.holds(r.token)).toBe(false);
+    // Maintainer review 18:45: the begin was written, so it is kept (its "Check result" and "Stop tracking" stay); the
+    // computer's slot goes, as nothing moves it on by itself.
+    expect(r.view.steps).toEqual(['cancel']);
+    expect(r.c.pendingCheck()).toMatchObject({ operationId: 'operation-1', entry: 'update', waiting: true });
+    expect(r.slot.holder('host-1')).toBeNull();
     expect(r.pending).toEqual([]);
   });
   it('after a written cancel whose reply is lost, only looks up the operation, never cancels again', async () => {
@@ -1052,11 +1082,12 @@ describe('progress only moves forward and never stops', () => {
     const lookup = r.pending.find((entry) => entry.kind === 'operation')!;
     expect(r.slot.holds(r.token)).toBe(true);                     // the lookup is still on its way
     await run(r, [`dequeue#${lookup.seq}`, `arrive#${lookup.seq}`, `deliver#${lookup.seq}`]);
-    // INVALID_RESPONSE stops the lookups; nobody here can move it on: let go, no second cancel.
+    // INVALID_RESPONSE stops the lookups; it waits for the person's "Check result" (kept, the slot free), no second cancel.
     expect(r.asked).toEqual(['begin', 'cancel', 'operation']);
     expect(r.writes).toEqual(['begin', 'cancel', 'operation']);
-    expect(r.view.steps).toEqual(['cancel', 'letGo']);
-    expect(r.slot.holds(r.token)).toBe(false);
+    expect(r.view.steps).toEqual(['cancel']);
+    expect(r.c.pendingCheck()?.waiting).toBe(true);
+    expect(r.slot.holder('host-1')).toBeNull();
   });
   it('never cancels an operation whose Allow was written, even when it is left after lookups stopped', async () => {
     const r = rig({ promptOnAccept: true, lookupInvalid: true });
@@ -1071,9 +1102,10 @@ describe('progress only moves forward and never stops', () => {
     await run(r, ['leave']);
     expect(r.asked).toEqual(['begin', 'answer', 'operation']);
     expect(r.writes).toEqual(['begin', 'answer', 'operation']);
-    expect(r.view.steps).toEqual(['letGo']);
+    expect(r.view.steps).toEqual([]);                             // kept as a pending check, never cancelled
+    expect(r.c.pendingCheck()?.waiting).toBe(true);
     expect(r.host.phase).toBe('running');                         // the computer goes on with it
-    expect(r.slot.holds(r.token)).toBe(false);
+    expect(r.slot.holder('host-1')).toBeNull();
   });
   // The rule is about the operation, not one consent: once this phone wrote an answer to it, nothing cancels it, even
   // when the computer then shows a second consent and the view goes away.
@@ -1113,16 +1145,16 @@ describe('progress only moves forward and never stops', () => {
 describe('page management slot', () => {
   it('lets only the holder release it, once, and refuses a second taker', () => {
     const slot = createPluginManagementSlot();
-    const first = slot.tryAcquire('update')!;
-    expect(slot.tryAcquire('market-install')).toBeNull();
-    expect(slot.tryAcquire('update')).toBeNull();
-    expect(slot.release({ id: first.id + 1, entry: 'update' })).toBe(false);
+    const first = slot.tryAcquire('update', SLOT_WHO)!;
+    expect(slot.tryAcquire('market-install', SLOT_WHO)).toBeNull();
+    expect(slot.tryAcquire('update', SLOT_WHO)).toBeNull();
+    expect(slot.release({ id: first.id + 1, entry: 'update', who: SLOT_WHO })).toBe(false);
     expect(slot.holds(first)).toBe(true);
     expect(slot.release(first)).toBe(true);
-    const second = slot.tryAcquire('enable')!;
+    const second = slot.tryAcquire('enable', SLOT_WHO)!;
     // A late release of the earlier token (a second path ending the same entry) leaves the new holder alone.
     expect(slot.release(first)).toBe(false);
-    expect(slot.holder()).toBe(second);
+    expect(slot.holder('host-1')).toBe(second);
   });
   it('keeps a later holder when the controller of an earlier one goes after the entry already released it', async () => {
     const slot = createPluginManagementSlot();
@@ -1139,16 +1171,16 @@ describe('page management slot', () => {
     const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }), { createOperationId: () => 'operation-1' });
     controllers.push(c);
     await c.refresh();
-    const first = slot.tryAcquire('market-install')!;
+    const first = slot.tryAcquire('market-install', SLOT_WHO)!;
     void c.install(detail, plugin, pluginOperationHold(slot, first));
     for (let i = 0; i < 50; i++) await Promise.resolve();
     expect(requests).toContain('begin');
     // The market row settled this attempt on its own (for example from the computer's facts) and released it…
     slot.release(first);
-    const second = slot.tryAcquire('update')!;
+    const second = slot.tryAcquire('update', SLOT_WHO)!;
     // …then the controller that still held the first token goes.
     c.dispose();
-    expect(slot.holder()).toBe(second);
+    expect(slot.holder('host-1')).toBe(second);
   });
   it('gives the next account a free slot, and releases the previous account\'s', async () => {
     const owner = getMobileAuthOwner();
@@ -1167,18 +1199,18 @@ describe('page management slot', () => {
       isCurrent: () => isMobileAuthOwnerCurrent(owner) }), { createOperationId: () => 'operation-1' });
     controllers.push(c);
     await c.refresh();
-    const token = previous.tryAcquire('update')!;
+    const token = previous.tryAcquire('update', SLOT_WHO)!;
     void c.install(detail, plugin, pluginOperationHold(previous, token));
     for (let i = 0; i < 50; i++) await Promise.resolve();
     setMobileAuthOwner('another-account-for-slot');
     try {
       // The next account starts with its own free slot at once.
-      expect(pluginManagementSlotFor().holder()).toBeNull();
+      expect(pluginManagementSlotFor().holder('host-1')).toBeNull();
       // The previous account's slot goes once the begin already on its way settles (never while a write is out).
-      expect(previous.holder()).not.toBeNull();
+      expect(previous.holder('host-1')).not.toBeNull();
       begin.resolve({ effects: [], result: receipt('running') });
       for (let i = 0; i < 50; i++) await Promise.resolve();
-      expect(previous.holder()).toBeNull();
+      expect(previous.holder('host-1')).toBeNull();
     } finally { setMobileAuthOwner(owner.accountId || null); }
   });
 });

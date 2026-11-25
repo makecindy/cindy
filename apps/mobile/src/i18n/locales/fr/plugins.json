@@ -137,6 +137,7 @@
     "readmeLoadFailed": "Impossible de charger la présentation. Réessayez.",
     "readmeUnavailable": "Aucune présentation disponible.",
     "computerSettings": "Pour configurer ce plugin, ouvrez ses détails dans Cindy → Plugins sur votre ordinateur.",
+    "computerSettingsTitle": "Terminez la configuration sur l’ordinateur",
     "runtimeIssue": "Le plugin s'est arrêté de manière inattendue. Essayez de l'ouvrir à nouveau ou de l'utiliser dans une tâche.",
     "runtimeFused": "Le plugin s'est arrêté après des échecs répétés. Désactivez-le puis réactivez-le pour réessayer.",
     "status": {
@@ -188,9 +189,11 @@
     "reject": "Annuler",
     "allow": "Autoriser et continuer",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "Version qui sera installée : {{version}}",
     "oauthChanged": "La configuration de connexion au compte a changé.",
     "state": {
-      "readFailed": "Impossible de lire les informations de gestion du plugin. Actualisez pour vérifier à nouveau."
+      "readFailed": "Impossible de lire les informations de gestion du plugin. Actualisez pour vérifier à nouveau.",
+      "readFailedTitle": "Lecture impossible"
     },
     "permissions": {
       "mail": "Utiliser les brouillons d'e-mail et les cartes d'envoi",
@@ -313,8 +316,11 @@
       "nodeSecretOne": "Le programme Node local peut recevoir un identifiant enregistré"
     },
     "releaseChanged": "La version disponible a changé. Examinez la version actualisée avant de l'installer.",
+    "releaseChangedTitle": "La version a changé",
     "sourceUnverified": "Cet ordinateur n’a pas indiqué le dépôt de ce marketplace personnalisé : la mise à jour depuis le téléphone n’est pas possible. Mettez d’abord Cindy à jour sur cet ordinateur et actualisez ce marketplace ; si cela ne suffit pas, mettez à jour le plugin directement depuis l’ordinateur.",
+    "sourceUnverifiedTitle": "Mise à jour impossible depuis le téléphone",
     "sourceChanged": "La source de ce marketplace vient de changer, la mise à jour a été arrêtée. Vérifiez ce marketplace sur l’ordinateur puis réessayez.",
+    "sourceChangedTitle": "La source de la place de marché a changé",
     "settingsUnavailable": "Impossible de charger les paramètres du plugin. Rechargez les paramètres pour réessayer.",
     "settingsResultUnknown": "Le résultat de l'opération n'a pas pu être confirmé. Rechargez les paramètres de l'ordinateur avant de soumettre à nouveau.",
     "settingsOperationFailed": "L'opération sur les paramètres n'a pas pu aboutir. Vérifiez la connexion et réessayez.",
@@ -327,8 +333,7 @@
     },
     "highRiskTitle": "Autorisations à haut risque",
     "highRiskTitleCount": "{{title}} · {{count}}",
-    "highRiskMore": "Faites défiler pour voir toutes les autorisations à haut risque",
-    "listMore": "Faites défiler vers le haut pour voir toutes les autorisations"
+    "scrollHint": "Faites défiler pour tout voir"
   },
   "notice": {
     "title": {
@@ -480,5 +485,38 @@
   "slot": {
     "holder": "Une opération pour « {{name}} » sur « {{device}} » n’est pas terminée",
     "show": "Voir"
+  },
+  "checks": {
+    "title": "Opérations de plugins non terminées",
+    "many": "{{count}} opérations de plugins ne sont pas terminées",
+    "waitingOne": "Le résultat pour « {{name}} » sur « {{device}} » doit être vérifié",
+    "kind": {
+      "marketInstall": "Installer",
+      "update": "Mettre à jour",
+      "uninstall": "Désinstaller",
+      "pageApproval": "Activer les pages",
+      "enable": "Activer ou désactiver",
+      "taskSettings": "Réglages des tâches"
+    },
+    "status": {
+      "preparing": "Préparation",
+      "running": "L’ordinateur s’en occupe",
+      "confirmation": "En attente de confirmation",
+      "checking": "Vérification du résultat",
+      "waiting": "Résultat non confirmé. Vérifiez à nouveau ou arrêtez le suivi.",
+      "offline": "« {{device}} » n’est pas connecté. Connectez-le pour vérifier le résultat."
+    },
+    "stop": "Arrêter le suivi",
+    "stopHint": "Seul ce téléphone arrête le suivi. L’opération sur l’ordinateur n’est pas annulée.",
+    "result": {
+      "succeeded": "Réussi",
+      "installed": "Installé",
+      "failed": "Non terminé",
+      "cancelled": "Annulé",
+      "untracked": "Plus suivi",
+      "ended": "Terminé"
+    },
+    "open": "Ouvrir le plugin",
+    "close": "OK"
   }
 }

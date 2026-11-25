@@ -135,6 +135,7 @@
     "readmeLoadFailed": "The introduction could not be loaded. Try again.",
     "readmeUnavailable": "No introduction is available.",
     "computerSettings": "To configure this plugin, open its details in Cindy → Plugins on your computer.",
+    "computerSettingsTitle": "Finish setup on the computer",
     "runtimeIssue": "The plugin stopped unexpectedly. Try opening it again or using it in a task.",
     "runtimeFused": "The plugin stopped after repeated failures. Turn it off and on to try again.",
     "status": {
@@ -186,9 +187,11 @@
     "reject": "Cancel",
     "allow": "Allow and continue",
     "versionChange": "{{previous}} → {{next}}",
+    "switchVersion": "Version to install: {{version}}",
     "oauthChanged": "The account sign-in configuration has changed.",
     "state": {
-      "readFailed": "Could not read plugin management information. Refresh to check again."
+      "readFailed": "Could not read plugin management information. Refresh to check again.",
+      "readFailedTitle": "Couldn’t read"
     },
     "permissions": {
       "mail": "Use mail drafts and send cards",
@@ -311,8 +314,11 @@
       "nodeSecretOne": "Local Node program can receive a stored credential"
     },
     "releaseChanged": "The available version changed. Review the refreshed version before installing.",
+    "releaseChangedTitle": "Version changed",
     "sourceUnverified": "This computer didn’t share the repository for this custom marketplace, so this plugin can’t be updated from your phone. Update Cindy on that computer and refresh this marketplace first; if that doesn’t help, update the plugin on the computer.",
+    "sourceUnverifiedTitle": "Can’t update from your phone",
     "sourceChanged": "This marketplace’s source just changed, so the update stopped. Check this marketplace on the computer and try again.",
+    "sourceChangedTitle": "Marketplace source changed",
     "settingsUnavailable": "Could not load the plugin settings. Reload settings to try again.",
     "settingsResultUnknown": "The operation result could not be confirmed. Reload the computer’s settings before submitting again.",
     "settingsOperationFailed": "The settings operation could not be completed. Check the connection and try again.",
@@ -325,8 +331,7 @@
     },
     "highRiskTitle": "High-risk permissions",
     "highRiskTitleCount": "{{title}} · {{count}}",
-    "highRiskMore": "Scroll to see every high-risk permission",
-    "listMore": "Scroll up to see every permission"
+    "scrollHint": "Scroll to see everything"
   },
   "notice": {
     "title": {
@@ -478,5 +483,38 @@
   "slot": {
     "holder": "An operation for “{{name}}” on “{{device}}” isn’t finished",
     "show": "View"
+  },
+  "checks": {
+    "title": "Unfinished plugin operations",
+    "many": "{{count}} plugin operations aren’t finished",
+    "waitingOne": "The result for “{{name}}” on “{{device}}” needs checking",
+    "kind": {
+      "marketInstall": "Install",
+      "update": "Update",
+      "uninstall": "Uninstall",
+      "pageApproval": "Turn on pages",
+      "enable": "Turn on or off",
+      "taskSettings": "Task settings"
+    },
+    "status": {
+      "preparing": "Getting ready",
+      "running": "The computer is working on it",
+      "confirmation": "Waiting for confirmation",
+      "checking": "Checking the result",
+      "waiting": "Result unconfirmed. Check it again, or stop tracking.",
+      "offline": "“{{device}}” isn’t connected. Connect it to check the result."
+    },
+    "stop": "Stop tracking",
+    "stopHint": "Only this phone stops tracking. The operation on the computer isn’t cancelled.",
+    "result": {
+      "succeeded": "Done",
+      "installed": "Installed",
+      "failed": "Not completed",
+      "cancelled": "Cancelled",
+      "untracked": "No longer tracked",
+      "ended": "Finished"
+    },
+    "open": "Open plugin",
+    "close": "Done"
   }
 }

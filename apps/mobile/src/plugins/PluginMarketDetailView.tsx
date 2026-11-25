@@ -70,7 +70,7 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
       ) : state.kind !== "conflict" && state.kind !== "installed" ? (
         <Pressable testID="plugins.market.detailInstall" accessibilityRole="button" disabled={disabled}
           accessibilityState={{ disabled }}
-          onPress={() => { if (state.kind === "unknown") void market.checkResult(); else market.install(item, detail.detail); }}
+          onPress={() => { if (state.kind === "unknown") void market.checkResult(item); else market.install(item, detail.detail); }}
           style={[styles.button, styles.primary, disabled && styles.unavailable]}>
           <Text style={[styles.buttonText, styles.primaryText]}>{primary}</Text>
         </Pressable>

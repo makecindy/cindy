@@ -5,7 +5,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
 import { useSharedTaskConfirmation } from '@/session/useSharedTaskConfirmation';
 
-const h = vi.hoisted(() => ({ native: vi.fn(), result: vi.fn(), close: () => {}, dark: false }));
+const h = vi.hoisted(() => ({ native: vi.fn(), alert: vi.fn(), result: vi.fn(), close: () => {}, dark: false, request: null as any }));
 vi.mock('@/platform/chrome/showActionMenu', () => ({ showConfirm: h.native }));
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
@@ -13,7 +13,7 @@ vi.mock('react-native', async () => {
   return { Platform: { OS: 'android' }, View: view, ScrollView: view,
     Modal: ({ children, onRequestClose }: { children: ReactNode; onRequestClose(): void }) => { h.close = onRequestClose; return createElement('div', { role: 'dialog' }, children); },
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
-    AccessibilityInfo: { setAccessibilityFocus: vi.fn() }, findNodeHandle: () => null,
+    AccessibilityInfo: { setAccessibilityFocus: vi.fn() }, findNodeHandle: () => null, Alert: { alert: h.alert },
   };
 });
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: { children: ReactNode }) => <span>{children}</span> }));
@@ -29,12 +29,12 @@ let host: HTMLDivElement;
 const input = { title: 'Leave?', message: 'Access will end.', cancelLabel: 'Stay', confirmLabel: 'Leave', destructive: true };
 function Harness() {
   const confirmation = useSharedTaskConfirmation();
-  return <><button onClick={() => { void confirmation.confirm(input).then(h.result); }}>open</button>{confirmation.dialog}</>;
+  return <><button onClick={() => { void confirmation.confirm(h.request ?? input).then(h.result); }}>open</button>{confirmation.dialog}</>;
 }
 async function click(text: string) { await act(async () => [...host.querySelectorAll('button')].find((button) => button.textContent === text)!.click()); }
 beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  vi.clearAllMocks(); Platform.OS = 'android'; h.dark = false;
+  vi.clearAllMocks(); Platform.OS = 'android'; h.dark = false; h.request = null;
   host = document.createElement('div'); root = createRoot(host);
   await act(async () => root.render(<Harness />));
 });
@@ -72,4 +72,32 @@ it('keeps iOS confirmation native without a second custom modal', async () => {
   expect(h.native).toHaveBeenCalledWith(input);
   expect(host.querySelector('[role=dialog]')).toBeNull();
   expect(h.result).toHaveBeenCalledWith(true);
+});
+/* 测试价值（调度要求 J-2：插件页的提示改走这套两态提示）
+ * - 生产入口与可观察结果：useSharedTaskConfirmation（Android 主题卡片、iOS 系统提示）；观察按钮、结果与回调时机。
+ * - 依据：只告知的提示只有一个「知道了」，不出现取消；确认动作在同一次点按里先执行（插件页据此同步拿占用）。
+ * - 缺口：系统 Alert 在 Android 不跟随应用的深浅色；长句当标题；确认后的占用晚一个微任务，被同帧另一入口抢先。
+ * - 最小失败输入：无 cancelLabel 的请求；带 onConfirm 的确认。tier: unit。
+ */
+it('shows a notice with one button only, on Android in the themed card and on iOS as the system alert', async () => {
+  h.request = { title: 'Short title', message: 'The full explanation.', confirmLabel: 'Got it' };
+  await click('open');
+  const actions = [...host.querySelector('[role=dialog]')!.querySelectorAll('button')];
+  expect(actions.map((button) => button.textContent)).toEqual(['Got it']);
+  expect(host.textContent).toContain('Short title');
+  expect(host.textContent).toContain('The full explanation.');
+  await click('Got it');
+  expect(h.result).toHaveBeenLastCalledWith(true);
+  Platform.OS = 'ios';
+  await click('open');
+  expect(h.native).not.toHaveBeenCalled();
+  expect(h.alert).toHaveBeenCalledWith('Short title', 'The full explanation.', [{ text: 'Got it', onPress: expect.any(Function) }], expect.objectContaining({ cancelable: true }));
+});
+it('runs onConfirm in the tap that confirms, before the promise settles', async () => {
+  const order: string[] = [];
+  h.request = { ...input, onConfirm: () => order.push('confirm') };
+  h.result.mockImplementation(() => order.push('settled'));
+  await click('open');
+  await act(async () => { host.querySelector<HTMLButtonElement>('[data-testid="sharedTask.confirmAccept"]')!.click(); order.push('tap'); });
+  expect(order).toEqual(['confirm', 'tap', 'settled']);
 });

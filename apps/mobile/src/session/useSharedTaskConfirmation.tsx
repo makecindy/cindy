@@ -1,13 +1,14 @@
 import type { ViewInstance } from 'react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, findNodeHandle, Modal, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, Alert, findNodeHandle, Modal, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { showConfirm } from '@/platform/chrome/showActionMenu';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
-type Confirmation = Parameters<typeof showConfirm>[0];
+/** A confirmation, or (no `cancelLabel`) a notice with one button that only closes it. */
+type Confirmation = Omit<Parameters<typeof showConfirm>[0], 'cancelLabel'> & { cancelLabel?: string };
 
 /** iOS owns native material; Android follows the shared-task dialog design tokens. */
 export function useSharedTaskConfirmation() {
@@ -21,7 +22,11 @@ export function useSharedTaskConfirmation() {
     resolver.current = null; setRequest(null); resolve?.(accepted);
   }, []);
   const confirm = useCallback((next: Confirmation): Promise<boolean> => {
-    if (Platform.OS === 'ios') return showConfirm(next);
+    if (Platform.OS === 'ios') {
+      if (next.cancelLabel !== undefined) return showConfirm({ ...next, cancelLabel: next.cancelLabel });
+      return new Promise((resolve) => Alert.alert(next.title, next.message, [{ text: next.confirmLabel, onPress: () => { next.onConfirm?.(); resolve(true); } }],
+        { cancelable: true, onDismiss: () => resolve(false) }));
+    }
     if (resolver.current) return Promise.resolve(false);
     return new Promise((resolve) => { resolver.current = resolve; setRequest(next); });
   }, []);
@@ -35,10 +40,10 @@ export function useSharedTaskConfirmation() {
           {!!request.message && <Text style={styles.body}>{request.message}</Text>}
         </ScrollView>
         <View style={styles.actions}>
-          <MainWindowActionButton density="compact" buttonRef={cancelButton} style={styles.button}
-            action={{ label: request.cancelLabel, onPress: () => settle(false), testID: 'sharedTask.confirmCancel' }} />
+          {request.cancelLabel !== undefined ? <MainWindowActionButton density="compact" buttonRef={cancelButton} style={styles.button}
+            action={{ label: request.cancelLabel, onPress: () => settle(false), testID: 'sharedTask.confirmCancel' }} /> : null}
           <MainWindowActionButton density="compact" style={styles.button}
-            action={{ label: request.confirmLabel, tone: request.destructive ? 'danger-solid' : 'primary', onPress: () => settle(true), testID: 'sharedTask.confirmAccept' }} />
+            action={{ label: request.confirmLabel, tone: request.destructive ? 'danger-solid' : 'primary', onPress: () => { request.onConfirm?.(); settle(true); }, testID: 'sharedTask.confirmAccept' }} />
         </View>
       </View>
     </View>

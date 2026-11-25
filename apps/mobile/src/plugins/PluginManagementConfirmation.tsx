@@ -16,7 +16,7 @@ import {
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
 import { useState } from "react";
-import { planConsentSheet, pluginConsentPresentation } from "./pluginConsentPresentation";
+import { CONSENT_SIDE_BY_SIDE_MIN_WIDTH, planConsentSheet, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -24,11 +24,12 @@ export function PluginManagementConfirmation(
     styles = useThemedStyles(makeStyles);
   const { consent, visible, answer } = usePluginConsent(props);
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
-  const { height: windowHeight, fontScale } = useWindowDimensions();
+  const { height: windowHeight, width: windowWidth, fontScale } = useWindowDimensions();
   // Two layouts by one rule (`planConsentSheet`, the same as iOS), from measured content heights only: regular, with the
   // summary pinned above the buttons, when the identity block (titles, computer, source, repository, source notes) and
   // the summary's heading with two items fit; compact otherwise, with everything in one scroll area above fixed buttons.
-  // The "keep scrolling" hints float over a scroll area's lower edge and never take room (they cannot change the plan).
+  // A scroll area with more below shows a text-free fade over its lower edge, with the scrollbar always visible
+  // (dispatcher J-1, K-2): neither takes room, so neither can change the plan.
   const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0 });
   const [lineHeights, setLineHeights] = useState<number[]>([]);
   const measure = (key: keyof typeof measured) => (event: { nativeEvent: { layout: { height: number } } }) => {
@@ -49,8 +50,9 @@ export function PluginManagementConfirmation(
   });
   const compact = plan.mode === "compact";
   const list = useScrollOverflow(), summary = useScrollOverflow();
-  // Large text: the buttons stack so each label shows in full (as the plugin notices do).
-  const stacked = fontScale > 1.2;
+  // Large text on a narrow screen: the buttons stack so each label shows in full (as the plugin notices do). Wide enough
+  // (landscape, tablets) they stay side by side, labels wrapping inside them, so the text keeps more room (K-3).
+  const stacked = fontScale > 1.2 && windowWidth < CONSENT_SIDE_BY_SIDE_MIN_WIDTH;
   const heading = info?.highRisk ? (
     // The heading wraps rather than truncates.
     <Text testID="plugins.management.highRiskTitle" style={styles.highRiskTitle} onLayout={measure("heading")}>{info.highRisk.title}</Text>
@@ -58,10 +60,11 @@ export function PluginManagementConfirmation(
   const summaryLines = info?.highRisk?.lines.map((line, index) => (
     <Text key={index} style={styles.highRiskBody} onLayout={measureLine(index)}>{line}</Text>
   ));
-  const moreHint = (testID: string, key: string) => (
-    // Floats over the scroll area's lower edge: takes no room, and says the area scrolls (read by screen readers too).
-    <View pointerEvents="none" style={styles.hintOverlay}>
-      <Text testID={testID} style={styles.hint}>{t(key)}</Text>
+  // Over the scroll area's lower edge while more is below: bands of the sheet's own surface color, more opaque toward
+  // the edge (one token, so it follows light and dark mode). No text; it takes no room and no touches.
+  const fade = (testID: string) => (
+    <View testID={testID} pointerEvents="none" style={styles.fade} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      {FADE_STEPS.map((opacity) => <View key={opacity} style={[styles.fadeBand, { opacity }]} />)}
     </View>
   );
   return (
@@ -73,7 +76,8 @@ export function PluginManagementConfirmation(
     >
       <View style={styles.sheet} testID="plugins.managementConfirmation">
         <View style={styles.listArea}>
-          <ScrollView contentContainerStyle={styles.content} testID="plugins.management.list"
+          <ScrollView contentContainerStyle={styles.content} testID="plugins.management.list" persistentScrollbar
+            accessibilityHint={t("plugins.management.scrollHint")}
             onLayout={list.onLayout} onContentSizeChange={list.onContentSizeChange} onScroll={list.onScroll}
             scrollEventThrottle={64}>
             {/* The identity block: where it goes and where it comes from first, in primary text; the first thing shown
@@ -119,22 +123,23 @@ export function PluginManagementConfirmation(
               </Text>
             ))}
           </ScrollView>
-          {list.more ? moreHint("plugins.management.listMore", "plugins.management.listMore") : null}
+          {list.more ? fade("plugins.management.listFade") : null}
         </View>
         {/* Regular: outside the scroll area, always visible above the buttons. */}
         {!compact && info?.highRisk ? (
           <View testID="plugins.management.highRisk" style={styles.highRisk}>
             {heading}
             <View>
-              {/* Scrolls inside its height; the bar stays visible and a floating hint says so while items are hidden. */}
+              {/* Scrolls inside its height; the bar stays visible and the fade shows while items are hidden below. */}
               <ScrollView testID="plugins.management.highRiskScroll" nestedScrollEnabled persistentScrollbar
+                accessibilityHint={t("plugins.management.scrollHint")}
                 style={{ maxHeight: plan.mode === "regular" ? plan.summaryLines : undefined }}
                 onLayout={summary.onLayout} onContentSizeChange={summary.onContentSizeChange} onScroll={summary.onScroll}
                 scrollEventThrottle={64}
                 contentContainerStyle={styles.highRiskLines}>
                 {summaryLines}
               </ScrollView>
-              {summary.more ? moreHint("plugins.management.highRiskMore", "plugins.management.highRiskMore") : null}
+              {summary.more ? fade("plugins.management.highRiskFade") : null}
             </View>
           </View>
         ) : null}
@@ -161,6 +166,8 @@ export function PluginManagementConfirmation(
     </SheetModal>
   );
 }
+const FADE_HEIGHT = 24;
+const FADE_STEPS = [0.15, 0.35, 0.6, 0.85];
 /** Whether a scroll area has more below what it shows (from its own scroll metrics; display only). */
 function useScrollOverflow() {
   const [area, setArea] = useState({ visible: 0, content: 0, atEnd: false });
@@ -241,21 +248,13 @@ const makeStyles = (c: ThemeColors) =>
     // Large text: Allow first, each button the full width, labels wrapping instead of truncating.
     stackedActions: { flexDirection: "column-reverse" },
     stackedButton: { flex: 0, paddingVertical: spacing.sm },
-    // The list takes what the pinned summary and the buttons leave; hints float over its lower edge.
+    // The list takes what the pinned summary and the buttons leave (flex, from their real heights: K-1); the fade floats
+    // over its lower edge.
     listArea: { flexShrink: 1 },
-    hintOverlay: { position: "absolute", right: 0, bottom: spacing.xs, alignItems: "flex-end" },
+    fade: { position: "absolute", left: 0, right: 0, bottom: 0, height: FADE_HEIGHT },
+    fadeBand: { flex: 1, backgroundColor: c.surfaceElevated },
     // Compact: the summary inside the scroll area, separated by the same hairline.
     highRiskInline: { paddingBottom: 0 },
-    hint: {
-      fontSize: typeScale.footnote,
-      lineHeight: lineHeight.caption,
-      color: c.textSecondary,
-      paddingHorizontal: spacing.sm,
-      paddingVertical: 2,
-      borderRadius: radius.pill,
-      overflow: "hidden",
-      backgroundColor: c.surfaceChip,
-    },
     unavailable: { opacity: 0.5 },
     button: {
       flex: 1,
