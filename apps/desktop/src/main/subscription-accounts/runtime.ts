@@ -3061,6 +3061,25 @@ export async function runSubscriptionAccountCommand(
   }
   let resultProviderId = owned;
   if (command.action === 'configure') {
+    // 账号的先后(2026-11-26 用户反馈：按顺序、按权重时调不了谁排前面)。每个账号连同它的几份登录副本整块移动；
+    // 只在这个供应商自己的账号占着的那些位置里重排，别的供应商的账号原地不动。
+    const blocks = command.order
+      ? await Promise.all(command.order.map((id) => managedAccountProfiles(state, provider, owned, id)))
+      : null;
+    if (blocks) {
+      assertOwner(state);
+      const moving = new Set(blocks.flatMap((block) => [...block]));
+      await updatePool(provider, (pool) => {
+        const byId = new Map(pool.accounts.map((account) => [account.id, account]));
+        const sequence = [...new Set(blocks.flatMap((block) => pool.accounts.filter((account) => block.has(account.id)).map((account) => account.id)))];
+        let next = 0;
+        return {
+          ...pool,
+          accounts: pool.accounts.map((account) => (moving.has(account.id) ? byId.get(sequence[next++] ?? account.id) ?? account : account)),
+        };
+      });
+      assertOwner(state);
+    }
     if (command.strategy && owned !== provider) await writeProviderStrategy(owned, command.strategy);
     await updatePool(provider, (pool) => ({
       ...pool,

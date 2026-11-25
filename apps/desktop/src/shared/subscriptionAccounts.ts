@@ -179,6 +179,11 @@ export type SubscriptionAccountCommand =
       /** null clears the setting: unlimited concurrency. */
       limit?: number | null;
       weight?: number;
+      /**
+       * The provider's accounts (ids as read) in the order the user wants: "in order" uses the first that can run,
+       * "by weight" lists them in this order. Accounts of other providers keep their places. Older hosts ignore it.
+       */
+      order?: string[];
     };
 
 /**

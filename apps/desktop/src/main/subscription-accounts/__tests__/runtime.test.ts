@@ -5012,6 +5012,22 @@ describe('native account assignment on the executing computer', () => {
       for (const lease of leases) lease.release();
     }
   });
+  // 2026-11-26 用户反馈(按顺序、按权重时调不了账号谁排前面) / unit：设置命令改先后之后，「按顺序」真的先用排到前面的账号；
+  // 失效后果：顺序存了不生效，或把别的供应商的账号挪乱。最小输入：两个账号，把第二个移到最前。
+  it('uses the account order the user set when the strategy is in order', async () => {
+    h.pools.anthropic = { strategy: 'order', accounts: [account('default'), account('second')] };
+    const first = (await acquireSubscriptionAccount('anthropic', undefined, []))!;
+    expect(first.account.configDir).toBe('anthropic/default');
+    first.release();
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'anthropic', order: ['second', 'default'] });
+    expect(h.pools.anthropic!.accounts.map((item) => item.id)).toEqual(['second', 'default']);
+    const moved = (await acquireSubscriptionAccount('anthropic', undefined, []))!;
+    expect(moved.account.configDir).toBe('anthropic/second');
+    moved.release();
+    // 不认识的账号整条拒绝，顺序不变。
+    await expect(runSubscriptionAccountCommand({ action: 'configure', providerId: 'anthropic', order: ['ghost', 'default'] })).rejects.toThrow();
+    expect(h.pools.anthropic!.accounts.map((item) => item.id)).toEqual(['second', 'default']);
+  });
   it('refuses paused or removed native resumes instead of sending with disabled credentials', async () => {
     const original = await acquireSubscriptionAccount('anthropic', undefined, []);
     await original!.bind(['native:thread-a']);

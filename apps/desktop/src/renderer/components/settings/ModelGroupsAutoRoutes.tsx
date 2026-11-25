@@ -126,8 +126,23 @@ function AccountsRouteRow({ provider, plain = null }: { provider: Provider; plai
       setSaving(false);
     }
   };
-  // 「按顺序」「按权重」要看得见每个账号排第几、权重多少：选了这两种就把账号列出来。权重在这里改(与供应商页账号行里
-  // 是同一个设置)；账号的先后是加入的先后，不能调。
+  // 账号的先后：整份顺序交给账号池，它只在这个供应商的账号之间重排(2026-11-26 补上)。
+  const move = async (index: number, delta: -1 | 1) => {
+    const order = view.accounts.map((account) => account.id);
+    const [item] = order.splice(index, 1);
+    order.splice(index + delta, 0, item!);
+    setSaving(true);
+    try {
+      await window.electronAPI.subscriptionAccounts.command({ action: 'configure', providerId: provider.id, order });
+      await read();
+    } catch {
+      toast.error(t('modelGroups.settings.saveFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
+  // 「按顺序」「按权重」要看得见每个账号排第几、权重多少：选了这两种就把账号列出来，先后与权重都在这里改
+  // (与供应商页账号行里是同一个设置)。
   const listed = view.strategy === 'weighted' || view.strategy === 'order';
   return (
     <>
@@ -153,18 +168,26 @@ function AccountsRouteRow({ provider, plain = null }: { provider: Provider; plai
             lead={<span className="flex w-8 justify-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>}
             title={name}
             className={cn(account.paused && '[&>span:nth-child(-n+2)]:opacity-60')}
-            trailing={view.strategy === 'weighted' ? (
-              <Select
-                label={t('providerGroup.member.weightAria', { name })}
-                value={String(account.weight)}
-                disabled={saving}
-                width="xs"
-                // 存着的权重不在那组里时照实列出，不悄悄显示成别的值。
-                options={[...new Set([...ACCOUNT_WEIGHTS, account.weight])].sort((a, b) => a - b)
-                  .map((weight) => ({ value: String(weight), label: t('providerGroup.member.weightOption', { weight }) }))}
-                onValueChange={(value) => { if (Number(value) !== account.weight) void setWeight(account.id, Number(value)); }}
-              />
-            ) : undefined}
+            trailing={
+              <span className="flex shrink-0 items-center gap-1">
+                {view.strategy === 'weighted' && (
+                  <span className="mr-2 flex items-center">
+                    <Select
+                      label={t('providerGroup.member.weightAria', { name })}
+                      value={String(account.weight)}
+                      disabled={saving}
+                      width="xs"
+                      // 存着的权重不在那组里时照实列出，不悄悄显示成别的值。
+                      options={[...new Set([...ACCOUNT_WEIGHTS, account.weight])].sort((a, b) => a - b)
+                        .map((weight) => ({ value: String(weight), label: t('providerGroup.member.weightOption', { weight }) }))}
+                      onValueChange={(value) => { if (Number(value) !== account.weight) void setWeight(account.id, Number(value)); }}
+                    />
+                  </span>
+                )}
+                <RowIconButton label={t('modelGroups.settings.moveUp')} disabled={saving || index === 0} onClick={() => void move(index, -1)}><ArrowUp size={15} /></RowIconButton>
+                <RowIconButton label={t('modelGroups.settings.moveDown')} disabled={saving || index === view.accounts.length - 1} onClick={() => void move(index, 1)}><ArrowDown size={15} /></RowIconButton>
+              </span>
+            }
           />
         );
       })}
@@ -188,17 +211,73 @@ function ComputersRouteRow({ provider, initial }: { provider: Provider; initial:
       setSaving(false);
     }
   };
+  // 组里各台电脑的先后与权重(2026-11-26 补上，原来只能在供应商页改权重、先后不能调)：与供应商页是同一份组配置。
+  const saveMembers = async (members: ProviderGroupConfig['members']) => {
+    setSaving(true);
+    try {
+      await group.save({ ...config, members });
+    } catch {
+      toast.error(t('modelGroups.settings.saveFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const listed = config.strategy === 'weighted' || config.strategy === 'order';
   return (
-    <SettingsRow
-      media
-      wrap
-      data-auto-route={`computers:${provider.id}`}
-      lead={<ProviderLead provider={provider} />}
-      title={provider.name}
-      hint={`${t('modelGroups.auto.computers', { count: providerGroupDeviceCount(config.members) })} · ${t(`modelGroups.strategy.${config.strategy}.hint`)}`}
-      trailing={<StrategySelect label={t('modelGroups.auto.pickFor', { name: provider.name })} value={config.strategy} disabled={saving} onChange={(next) => void change(next)} />}
-    />
+    <>
+      <SettingsRow
+        media
+        wrap
+        data-auto-route={`computers:${provider.id}`}
+        lead={<ProviderLead provider={provider} />}
+        title={provider.name}
+        hint={`${t('modelGroups.auto.computers', { count: providerGroupDeviceCount(config.members) })} · ${t(`modelGroups.strategy.${config.strategy}.hint`)}`}
+        trailing={<StrategySelect label={t('modelGroups.auto.pickFor', { name: provider.name })} value={config.strategy} disabled={saving} onChange={(next) => void change(next)} />}
+      />
+      {listed && config.members.map((member, index) => {
+        const name = member.agentDeviceId === null ? t('providerGroup.member.local') : member.label || member.providerName || member.providerId;
+        return (
+          <SettingsRow
+            key={member.key}
+            media
+            data-auto-route-member={member.key}
+            lead={<span className="flex w-8 justify-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>}
+            title={name}
+            className={cn(member.paused && '[&>span:nth-child(-n+2)]:opacity-60')}
+            trailing={
+              <span className="flex shrink-0 items-center gap-1">
+                {config.strategy === 'weighted' && (
+                  <span className="mr-2 flex items-center">
+                    <Select
+                      label={t('providerGroup.member.weightAria', { name })}
+                      value={String(member.weight)}
+                      disabled={saving}
+                      width="xs"
+                      options={[...new Set([...ACCOUNT_WEIGHTS, member.weight])].sort((a, b) => a - b)
+                        .map((weight) => ({ value: String(weight), label: t('providerGroup.member.weightOption', { weight }) }))}
+                      onValueChange={(value) => {
+                        if (Number(value) !== member.weight) void saveMembers(config.members.map((item) => (item.key === member.key ? { ...item, weight: Number(value) } : item)));
+                      }}
+                    />
+                  </span>
+                )}
+                <RowIconButton label={t('modelGroups.settings.moveUp')} disabled={saving || index === 0}
+                  onClick={() => void saveMembers(swap(config.members, index, index - 1))}><ArrowUp size={15} /></RowIconButton>
+                <RowIconButton label={t('modelGroups.settings.moveDown')} disabled={saving || index === config.members.length - 1}
+                  onClick={() => void saveMembers(swap(config.members, index, index + 1))}><ArrowDown size={15} /></RowIconButton>
+              </span>
+            }
+          />
+        );
+      })}
+    </>
   );
+}
+
+function swap<T>(items: readonly T[], from: number, to: number): T[] {
+  const next = [...items];
+  [next[from], next[to]] = [next[to]!, next[from]!];
+  return next;
 }
 
 /** 可以整个加进路由的供应商：本机已连接的，加上其他电脑上允许远程调用的、别人分享来的。 */
