@@ -88,15 +88,26 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
      用这次打包实际所用的缓存版本、取包记录和同一份配置生成，与提交前复核的 `sourceKey` 同出一处。提交时落位的
      就是租约内打好的那份包（`packed.tempPath`），不在提交时重新取包。
   3. Agent 发起的任务确认卡（`toolName:'cindy.plugin.install'`，`hostOwnedConfirmation:'plugin_install'`）的
-     `input`：`{ghost_id, version, operation, origin, source?}`。`source` 与同一次确认的 `originSource` 相同，
-     只在 `origin === 'custom-market'` 且能生成时给出。卡输入不进模型上下文（宿主交互不是 Agent 的工具调用）；
+     `input`：`{ghost_id, version, operation, origin, source?, originSourceChanged?}`。`source` 与同一次确认的
+     `originSource` 相同，只在 `origin === 'custom-market'` 且能生成时给出；`originSourceChanged: true` 只在
+     custom-market 确认带该字段时给出（换源确认按首装展示，所以 `operation` 为 `'install'`；见下文「实际来源变化时
+     的更新」），其它情况缺省。卡输入不进模型上下文（宿主交互不是 Agent 的工具调用）；
      IM 卡与官方 hook 卡的参数预览去掉 `source.sourceId`，仓库名本来就在说明里。
 - **`sourceId`**（`^[A-Za-z0-9_-]{22}$`）：
   - 算法：`HMAC-SHA256(K, input)` 的前 16 字节，base64url。`input` 是带域名与版本的 JSON 数组：
-    - 本地：`["cindy.plugin-market.source-id", 2, "local", marketSourceKey]`；
-    - Git：`["cindy.plugin-market.source-id", 2, "git", marketSourceKey, scheme, user, host, port, path]`，后五项是
-      **实际取包地址**的白名单部件，不含密码、令牌。URL 形式的地址带 `?` 或 `#` 时不生成：URL 解析器会把它们当作
-      查询串、片段截掉，git 却把它们当作仓库路径的一部分（ssh、git）或拼进请求（http），截掉会把不同仓库认成同一个。
+    - 本地：`["cindy.plugin-market.source-id", 3, "local", marketSourceKey]`；
+    - Git：`["cindy.plugin-market.source-id", 3, "git", marketSourceKey, identity]`。`identity` 是**实际取包地址**校验
+      通过后的原始字节串，**只**去掉 http / https / git 形式的 userinfo（凭证），其余一字不改；ssh 与 scp 形式整串
+      原样，包括登录用户、主机原始大小写（OpenSSH 的 Host 别名区分大小写）、端口、路径。不再按部件重组：任何在算
+      标识前做的规整或按 URL 语义的拆分，只要 git / ssh 实际不这样解释，就可能把两个不同端点并成一个。
+    - 解析器只负责两件事：拒绝有歧义的地址（整串含 `?` `#` `[` `]`、空白、控制符、`\`、`%` 时在拆分之前就不生成；
+      userinfo 非空、不含 `@` `/`，ssh 登录名不含 `:`——git 把 `git:tenant-a` 整串当登录名；host 是严格的 ASCII DNS
+      名；端口不带前导零；路径没有空段与 `.`/`..` 段；并与 WHATWG URL 的解析结果逐项交叉核对，用例另与 git 自己解析
+      出的主机对照），以及生成展示用的 `repository`（可规整：去 `.git`、去结尾斜杠、小写 host）。`resolveFetchUrl`
+      只去掉 git 输出末尾的那一个 LF（不去 CR、不 trim，末尾的 CR 或空白都交给白名单拒绝）。
+    - 结果只会偏保守：同一仓库的不同写法（主机或路径大小写、`plugins` 与 `plugins.git`、结尾斜杠、`:443` 与缺省）
+      得到不同标识，会多一次换源确认（确认后旧账号与数据隔离）或「未确认」。这是用户显式确认过的，可以接受；只换
+      https 凭证不改变标识，不会触发。
   - 用户名的取舍：`ssh://` 与 scp 形式（`user@host:path`）的登录用户算身份。普通 SSH 服务上，同主机同路径（尤其
     scp 相对路径）可随登录用户解析到不同家目录和仓库；`ssh://` 带绝对路径时也一律纳入，结果只会更保守。
     https / http / git 的 userinfo（含 `https://TOKEN@host` 单段令牌）算凭证，一律不读取，轮换凭证不改变标识。
@@ -105,7 +116,12 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     `sourceId` 都不同；同主机、同路径但 SSH 登录用户不同，`sourceId` 也不同。只改变 https 认证信息（例如改写
     注入的令牌不同）时不变。
   - 用 HMAC 而不是裸哈希，是因为本地路径与仓库地址可被穷举反推。
-  - 密钥 K 每个数据所有者一把，见[凭证与本地存储](../credentials-and-local-storage.md)的路径表。
+  - 密钥 K 每个数据所有者一把，按「代」存放，见[凭证与本地存储](../credentials-and-local-storage.md)的路径表。
+    新的一代在暂存子目录里写好后整体 rename 成 `v<N>`，目标已存在即失败，所以同一代只有一个写入者胜出，并发的
+    其它调用方（同进程或另一个 Cindy 进程）重读得到同一把；不依赖硬链接。缺失或损坏时写下一代，不就地覆盖。
+  - 密钥标识 `keyId`（由 K 派生的 12 字符短标识）随取包记录与安装绑定一起记下。比较两个 `sourceId` 前先比
+    `keyId`：不同即「无法核实」，不是「来源不同」。密钥被重建后，旧取包记录的标识在下次刷新前不用（身份缺省），
+    旧安装绑定不参与换源判断，所以不会因此暂停更新或隔离插件数据；下一次取包或安装后按新密钥重新记下。
   - 密钥与取包记录的读写都是异步的（市场列表、详情、远程目录这些 IPC 读路径会读到），同步计算只用已读好的
     密钥，没读好时标识缺省，不回退到同步读盘。
   - 实现：`apps/desktop/src/main/plugin-market/sources/sourceId.ts`。
@@ -131,22 +147,59 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   - 市场投影：该条目若为 `update-available`，同时带既有字段 `updateRequiresConsent: true`（与权限变多时同一字段、
     同一暂停机制），后台自动更新不尝试。
   - 实际取包（来源租约内）与提交前：后台路径一律拒绝换源并按「等待用户确认」暂停；显式更新强制弹出确认（即使
-    权限没有变多），确认请求带 `originSourceChanged: true`，确认框与任务卡提示「来源与已安装的版本不同」。
-  - 用户确认后安装记录改绑新来源，之后不再反复询问。旧记录没有绑定或候选身份缺省时不拦，保持既有行为（第一次
+    权限没有变多），确认请求带 `originSourceChanged: true`，确认框与任务卡提示「这次更新的来源与已安装的版本
+    不同，旧账号和数据会隔离保存，需要重新连接账号」，任务卡 `input` 同时带 `originSourceChanged: true`。
+  - 「是否换源」只判定一次，同时驱动确认内容、授予范围与运行时归档；覆盖同一路由下的实际来源变化，以及详情页
+    显式「替换」的跨路由替换（服务端 ↔ 自定义、自定义 A ↔ B，`allowSourceReplacement: true`）。替换为服务端市场
+    版本时确认的 `origin` 是 `'market'`，同样带 `originSourceChanged: true`，提示文案不提仓库（「这次更新会改为插件
+    市场里的版本……」）。提交锁内的判定与确认时不一致即拒绝（`PRECONDITION_FAILED`），不沿用任何一边。手机端与
+    Agent 发起的安装不允许跨路由替换（`allowSourceReplacement: false`）。
+  - 换源提示的文案按确认里展示了什么来定（本机确认、电脑作远程端／分享替换、任务卡与 IM 卡共用
+    `ghostInstallSourceChangedNoticeKey`）：`origin === 'market'` → `marketSourceChanged`（「改为插件市场里的版本」）；
+    `origin === 'custom-market'` 且 `originSource` 是合形的 git 身份（确认里展示了仓库）→ `originSourceChanged`（提醒
+    核对上面显示的仓库）；其余自定义市场（本地文件夹、身份缺省或形状不对）→ `sourceChangedIsolated`（只说换源与
+    数据隔离，不提仓库）。三句都说明旧账号和数据隔离保存、需要重新连接账号。
+  - 换源确认按首装展示：旧实例的批准（任务、页面、控制节点、执行引擎、免确认工具、文件打开方式、Cindy 模型）随
+    旧来源归档、不继承，所以 `facts` 是 `kind: 'install'`，`permissions` 是新来源的完整权限（不是相对旧来源的差异），
+    锁内复核与新 receipt 的各项授予都用同一份事实；确认键仍绑定实际的受体实例。提交时若已不再是换源，这份确认
+    作废（`PRECONDITION_FAILED`）。
+  - 用户确认后，提交锁内再核实一次；仍是实际换源时按既有换源事务落位：运行时先做换源空闲检查，旧实例的账号、
+    密钥、OAuth、KV 与私有数据按 `sourceStateArchiveId` 隔离归档，新来源读不到，归档可按既有流程恢复。安装记录
+    改绑新来源，之后不再反复询问。同一来源的更新、只换凭证、本地来源、服务端市场都不走这个事务，数据照常保留。旧记录没有绑定或候选身份缺省时不拦，保持既有行为（第一次
     后台更新会写入绑定，之后才开始比较），升级后不会让所有自定义市场插件集体暂停更新。服务端市场与本地来源
     （配置不变即同一来源）不受影响。
-  - 控制端：确认回执的 `consent.originSourceChanged?: true` 为可选新字段，可据此提示来源已变；条目的
-    `updateRequiresConsent` 是既有字段，现在也可能因来源变化置位。
+  - 只有同一 `keyId` 下两边都可核实且不相等才算实际换源。旧记录没有绑定、候选身份缺省、绑定是旧密钥算的，
+    一律按同一来源的更新处理：不暂停、不强制确认、不隔离数据（有用例锁住）。
+  - 控制端：确认回执的 `consent.originSourceChanged?: true` 为可选新字段，表示「来源变了，确认后旧账号和数据
+    隔离保存」，控制端只展示这一句；自定义市场的确认不带 `target`，所以这种情况下 `target.sourceChanged` 不会
+    出现，不会与之重复。条目的 `updateRequiresConsent` 是既有字段，现在也可能因来源变化置位。
 - **账本**（存量兼容）：
   - 自定义市场安装记录（`custom-ledger.v1.json`）只增一个可选字段 `sourceIdBinding:
-    {sourceId, sourceKey, rawManifestSha256}`。显式安装、后台自动更新、换源都经 `customInstall` 整条重写，
+    {sourceId, sourceKey, rawManifestSha256, keyId}`。显式安装、后台自动更新、换源都经 `customInstall` 整条重写，
     值取自打包所用的版本。
-  - 投影 `installedSourceId` 时，绑定的 `sourceKey` 与 raw 摘要必须仍等于记录当前的值，否则缺省。这样，
+  - 投影 `installedSourceId` 时，绑定的 `sourceKey` 与 raw 摘要必须仍等于记录当前的值、`keyId` 必须等于当前
+    密钥，否则缺省（本地来源改为按记录的 `sourceKey` 现算）。这样，
     任何保留了旧值、但来源或包已变的写入都不会让它误配。
   - 读取校验不检查这个字段，形状不对时投影当缺省，不会因此丢记录。旧记录不迁移：本地来源按记录的
     `sourceKey` 现算，Git 来源缺省（控制端未确认）。
   - 降级时，旧版本的读取校验同样只认已知键，读到的记录原样写回，字段被保留。旧版本重新安装或更新时写出不含
     此字段的记录，结果是缺省；旧版本的卸载标记、摘要补写保留字段，但不改来源与包摘要，绑定仍然成立。
+- **操作级安装证据 `installedOperationId`**（市场条目可选字段，服务端与自定义市场都给）：
+  - 远程 `management:begin` 且 `kind === 'install'`（首装与更新；控制端从已装详情发起的更新也走这个 kind）提交
+    成功时，Host 在安装记录里写可选字段 `remoteOperationBinding: {operationId, controller, keyId, rawManifestSha256}`。
+    `controller` 是发起方设备身份（device-link 的 controllerDeviceId）用本机来源标识密钥、独立域名 HMAC 得到的不可逆
+    标识，不存原始设备号；`keyId` 同来源标识。其它路径（电脑本机、后台自动更新、Agent、`install-file`、
+    `install-share`）不写，并且会整条重写记录，旧证据不残留。
+  - 只在远程管理的 snapshot（含 catalog、recommendations）与 market-detail 响应里、只对发起那次操作的控制端给出，
+    且要求记录为已安装、包摘要等于记录与磁盘上的包、keyId 等于当前密钥；证据按完整实例身份（`pluginId` + `ghostId` +
+    `namespace`，缺省即根）关联，同一 `pluginId` 在另一个 namespace 的实例拿不到它。电脑本机界面与同账号的其它控制端看不到，
+    所以复用同一操作号的另一台控制端冒认不了。
+  - 形状 `^[A-Za-z0-9_-]{8,128}$`；不合形状的操作号照常执行，只是不留证据。操作号不是机密，但不记日志。
+  - 持久化在账本里，Host 重启、原操作回执丢失后仍然可用。控制端设备身份在重连、App 重启、Host 重启后不变；
+    App 重装或重新配对后身份变了，或密钥重建后，旧证据不再投影，控制端按未确认处理。
+  - 控制端回执过期后的核实：已装、`releaseId` 相同、`installedOperationId` 等于本次操作号，三者都满足才算已确认。
+  - 账本兼容同 `sourceIdBinding`：只增可选字段，读取校验不检查它，旧记录缺省，降级时保留或重写丢弃，结果都是缺省。
+  - 实现：`plugin-market/service.ts` 的 `withInstalledOperationIds`、`remotePluginManagement.ts` 的 `withOperations`。
 - **白名单与缺省**：
   - `repository` 只含小写 host 加 2–4 段路径，整体匹配 `PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN`；用户名、密码、
     令牌、端口一律不读取。URL 形式带 `?` 或 `#` 的地址不生成（见上）。含空白、控制符、零宽或双向控制符、反斜杠、百分号编码、原始
@@ -175,7 +228,9 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   - 以 `.` 开头的路径段（如名为 `.github` 的仓库）、超过 4 段的路径、IPv6 主机生成不出 `repository`，Git 身份
     整体缺省，控制端按无法核实处理。
   - 升级后、到下次刷新前，Git 来源的旧缓存版本没有取包记录，身份缺省，控制端按无法核实处理；第一次刷新会改走
-    全新克隆以建立可核实的记录。
+    全新克隆以建立可核实的记录。**窗口没有上限**：Git 市场只在添加时克隆、在电脑上手动刷新该来源时取包，没有
+    定时刷新，手机或电脑作远程端也不会触发目标电脑刷新。这段时间控制端不能批准该市场的首装；在目标电脑的
+    插件市场来源列表里刷新一次即可消除。密钥重建后的窗口同理。
 - **自建中转**：字段位于既有 resource invoke 的结果载荷与交互请求中，中转按原样转发 `payload`、不解析内容
   （`packages/device-link-relay/src/hub.ts` 的 `route`），握手、帧路由、顶层字段与能力协商都不变，因此无需同步
   修改中转。新增内容每项最多约 330 字节，单页目录最多 100 项，远低于 2 MiB 的帧上限。

@@ -3140,9 +3140,13 @@ setRemotePluginManagementServices({
     query: input => getPluginMarketService().query(input),
     recommendations: () => getPluginMarketService().recommendations(),
     detail: id => getPluginMarketService().detail(id),
-    install: async (id, options, prompt, assertCurrent, assertScope) => {
-      await getPluginMarketService().install(id, options, { consent: { prompt, initiator: 'user' }, assertCurrent, assertScope });
+    install: async (id, options, prompt, assertCurrent, assertScope, remoteOperation) => {
+      await getPluginMarketService().install(id, options, {
+        consent: { prompt, initiator: 'user' }, assertCurrent, assertScope,
+        ...(remoteOperation ? { remoteOperation } : {}),
+      });
     },
+    installedOperations: (items, controller) => getPluginMarketService().withInstalledOperationIds(items, controller),
   },
 });
 registerGhostIpc();

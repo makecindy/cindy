@@ -590,6 +590,98 @@ describe('AgentNetSessionLinks', () => {
     expect(calls).toEqual(['device-link:invoke', 'device-link:openLink', 'device-link:sendInvokeResult']);
   });
 
+  // 2026-11-24 远程 Agent 断链回归：① 经中转的 Agent-Net 连接握手后会话宣告常在 2.8～3.4 秒到达，原 1.5 秒上限提前落回 Device Link；
+  // ② 控制端发包小（willSendNow=true）、被控端回程堵着大包时，首个只读超时后后续远程 Agent poll/caps 与列表探测立即改走会话，
+  // 写操作仍走原链路保序，待旧流排空后重开链路切换到会话，不影响相邻对端。
+  it('waits past 1.5s for a relayed session, escapes return-path timeouts for remote-agent polls, and upgrades an idle Device Link on reopen', async ({ onTestFinished }) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    onTestFinished(() => { vi.useRealTimers(); });
+
+    const relayedConnectedAt = new Map<string, number>([['a-host', performance.now()]]);
+    const relayedPair = pair({
+      connected: false,
+      connectedAt: (id) => relayedConnectedAt.get(id) ?? null,
+      controllerPath: (id) => (id === 'a-host' ? 'relay' : 'direct'),
+    });
+    answerOnSession(relayedPair.links.host);
+    const relayedCalls: string[] = [];
+    const relayedRouter = routeSessionPeers(idleDeviceLink(relayedCalls), relayedPair.links.controller);
+    const relayedOpen = relayedRouter.openLink('a-host', openPayload);
+    setTimeout(relayedPair.connect, 2_800);
+    await vi.advanceTimersByTimeAsync(2_800);
+    await expect(relayedOpen).resolves.toMatchObject({ appVersion: 'host' });
+    expect(relayedCalls).toEqual([]);
+
+    const { links } = pair();
+    const sessionCalls: string[] = [];
+    links.host.onFrame((env) => {
+      if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke') return;
+      const { channel, args } = env.payload as InvokePayload;
+      const op = (args?.[0] as { op?: string } | undefined)?.op;
+      sessionCalls.push(op ? `${channel}:${op}` : channel);
+      links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'session' });
+    });
+    const dlCalls: string[] = [];
+    let hostReturnStalled = true;
+    let hostPending = true;
+    let releasePreStallCall!: () => void;
+    const preStallGate = new Promise<void>((resolve) => { releasePreStallCall = resolve; });
+    const old = idleDeviceLink(dlCalls, 4);
+    old.isLinkReady = (dst) => dst === 'a-host' || dst === 'other-host';
+    old.isOutboundExplicitlyClosed = () => false;
+    old.hasPendingRequestsTo = (dst) => dst === 'a-host' && hostPending;
+    old.closeLink = (dst, reason) => { dlCalls.push(`device-link:closeLink:${dst}:${reason}`); };
+    old.invoke = async (dst, payload) => {
+      const op = (payload.args?.[0] as { op?: string } | undefined)?.op;
+      dlCalls.push(`device-link:invoke:${dst}:${op ? `${payload.channel}:${op}` : payload.channel}`);
+      if (dst === 'a-host' && op === 'pre-stall') {
+        await preStallGate;
+        return { ok: true, result: 'pre-stall-device-link' };
+      }
+      if (dst === 'a-host' && hostReturnStalled) {
+        const timeout = new DeviceLinkError('INVOKE_TIMEOUT', 'return path blocked behind large response');
+        timeout.inFlight = true;
+        throw timeout;
+      }
+      return { ok: true, result: 'device-link' };
+    };
+    const router = routeSessionPeers(old, links.controller);
+    // An older slow request is already in flight on Device Link when a concurrent read times out
+    // and triggers the guardInvoke -> recoverLink -> openLink callback.
+    const preStallInFlight = router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'pre-stall' }] });
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(
+      router.invoke('a-host', { channel: 'local-db:sessions:list', args: [] }).catch(async (err) => {
+        // Recovery openLink while hasPendingRequestsTo('a-host') === true stays on Device Link
+        // and must NOT erase targetReturnStalled.
+        await expect(router.openLink('a-host', openPayload)).resolves.toMatchObject({ appVersion: 'dl' });
+        throw err;
+      }),
+    ).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+    expect(links.controller.ownsOutbound('a-host')).toBe(false);
+    // Subsequent eligible reads (including remote-agent poll/caps and list probes) still bypass the stalled Device Link return path.
+    await expect(router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll', runs: [] }] })).resolves.toEqual({ ok: true, result: 'session' });
+    await expect(router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'caps' }] })).resolves.toEqual({ ok: true, result: 'session' });
+    // Even if the older pre-stall request finishes while newer responses remain backed up, reads keep bypassing Device Link.
+    releasePreStallCall();
+    await expect(preStallInFlight).resolves.toEqual({ ok: true, result: 'pre-stall-device-link' });
+    await expect(router.invoke('a-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'session' });
+    // Non-idempotent remote-agent commands stay ordered on the existing stream; once a post-stall call succeeds, the stall mark clears.
+    await vi.advanceTimersByTimeAsync(10);
+    hostReturnStalled = false;
+    await expect(router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'call', method: 'send' }] })).resolves.toEqual({ ok: true, result: 'device-link' });
+    await expect(router.invoke('a-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'device-link' });
+    await expect(router.invoke('other-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'device-link' });
+    // Once in-flight work drains, re-opening upgrades the ready Device Link to the live session and closes both cleanly on user disconnect.
+    hostPending = false;
+    await expect(router.openLink('a-host', openPayload)).resolves.toMatchObject({ appVersion: 'host' });
+    expect(links.controller.ownsOutbound('a-host')).toBe(true);
+    router.closeLink('a-host', 'user');
+    expect(sessionCalls).toEqual(['maker:remote-agent:v1:poll', 'maker:remote-agent:v1:caps', 'local-db:sessions:list']);
+    expect(dlCalls).toContain('device-link:closeLink:a-host:user');
+  });
+
   it('waits for the session of a peer that just connected instead of settling on Device Link, and only within the grace period', async ({ onTestFinished }) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     onTestFinished(() => { vi.useRealTimers(); });

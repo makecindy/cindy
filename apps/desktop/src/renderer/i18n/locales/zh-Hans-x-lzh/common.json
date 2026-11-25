@@ -8448,7 +8448,9 @@
         "originRepository": "仓库 {{repository}}",
         "originRepositoryRef": "仓库 {{repository}}（{{ref}}）",
         "originLocalFolder": "此机卷匣",
-        "originSourceChanged": "此番更新所出之源，与已装之版不同。唯信上列之仓库，方可续之。"
+        "originSourceChanged": "此番更新所出之源，与已装之版不同。旧名籍与数据隔离保留，须重新连接名籍。唯信上列之仓库，方可续之。",
+        "sourceChangedIsolated": "此番更新所出之源，与已装之版不同。旧名籍与数据隔离保留，须重新连接名籍。",
+        "marketSourceChanged": "此次更新将改为法器坊之版。旧名籍与数据隔离保留，须重新连接名籍。"
       },
       "trust": {
         "official": "Cindy 官方法器",
@@ -8710,6 +8712,7 @@
             "message_body": "消息正文",
             "tool_body": "工具结果",
             "sidebar_navigation": "侧边导航栏",
+            "workdir_menu": "工作目录菜单",
             "session_menu": "任务菜单",
             "settings_section": "设置页面",
             "composer_completion": "输入补全入口",
@@ -15507,6 +15510,7 @@
       "modelCatalogUnconfirmed": "模型清单暂未能核实。已保留所选模型，可刷新清单后重试。",
       "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
+      "modelRebuildRetry": "指令未发。请于电脑开此自动化，择「即行」以重试。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "前有自运未成。",
       "prCheck_dns": "{{device}} 未能析 {{host}} 之址。若屡然，宜察此机之网路与 DNS。凡 {{failures}} 次未成。自 {{retry}} 始，循例可复检。",
@@ -17883,7 +17887,7 @@
       "openWorkdirFailed": "启卷匣未成"
     },
     "runs": {
-      "boundPluginEngineRecovery": "所系之务用法器引擎，故自动之务未行。宜将所系之务改回内置引擎，或改系于用内置引擎之务。",
+      "boundPluginEngineRecovery": "自动之务未行。系于法器引擎之务者，循其务之模型，行于此机。若自动之务另择模型，宜去之，复行之。",
       "queueWaitTimeoutRecovery": "排候逾时，提示词未发。待所系任务闲，按「{{action}}」补行。",
       "status": {
         "running": "方行",
@@ -18235,6 +18239,7 @@
       "timingMode": {
         "cron": "Cron 定时",
         "interval": "相隔",
+        "label": "计时之法",
         "cronHint": "依历钟定刻而行，如晨钟暮鼓。",
         "intervalHint": "前次行毕，再候所定之时长。",
         "intervalUnsupportedHint": "今之精确间隔照旧保留；择分或时之预设，方易之。",

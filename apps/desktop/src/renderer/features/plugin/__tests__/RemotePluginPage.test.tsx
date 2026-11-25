@@ -809,6 +809,37 @@ describe('selected plugin host', () => {
       attachment: 'sandbox-transferred-package',
     });
   });
+  // Codex P1 on PR #12731 (unit, real RemotePluginPage confirmation path): when the target Host forces an update
+  // confirmation because the custom-market source changed, a Desktop managing it remotely must show the same
+  // warning. The repository text alone may not change (only the SSH user or port differ). Before this change the
+  // remote dialog never received the flag. Minimum input: one confirmation receipt with originSourceChanged.
+  it('warns in the remote confirmation when the Host reports a changed custom-market source', async () => {
+    const pick = vi.fn(async () => ({ attachment: 'sandbox-transferred-package' }));
+    Object.assign(window.electronAPI.deviceLink, { pickPluginPackage: pick });
+    const normal = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (device, channel, args) => {
+      const request = args?.[0];
+      if (request?.actionId === 'management:begin' || request?.actionId === 'management:operation')
+        return { effects: [], result: { operationId: request.input.operationId, phase: 'confirmation', consent: {
+          requestId: 'source-switch', initiator: 'user', origin: 'custom-market', originLabel: 'Acme',
+          originSource: { kind: 'git', repository: 'git.example.test/acme/plugins', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' },
+          originSourceChanged: true,
+          facts: { kind: 'update', ghostId: 'weather', name: 'Weather', version: '2.0.0', previousVersion: '1.0.0',
+            added: [], removed: [], unchangedCount: 1, builtinOauthClientChanged: false },
+        } } };
+      return normal(device, channel, args);
+    });
+    confirm.mockResolvedValue(false);
+    render(<RemotePluginPage device={{ deviceId: 'computer-b', name: 'B' }} online />);
+    await screen.findByText('computer-b');
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.ghosts.page.addPluginAria' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.ghosts.install' }));
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    const [options] = confirm.mock.calls[0] as unknown as [{ content: Parameters<typeof render>[0] }];
+    const { unmount } = render(options.content);
+    expect(screen.getByText('settings.ghosts.installConsent.originSourceChanged')).toBeTruthy();
+    unmount();
+  });
   it('keeps add-plugin disabled while offline', async () => {
     render(<RemotePluginPage device={{ deviceId: 'computer-b', name: 'B' }} online={false} />);
     expect(

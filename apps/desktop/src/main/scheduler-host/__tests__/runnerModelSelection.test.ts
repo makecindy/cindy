@@ -1504,40 +1504,51 @@ describe('MakerScheduleRunner model selection', () => {
       expect(h.setModel).not.toHaveBeenCalled();
     });
 
-    it('Codex context Host 身份在 preflight 后变化时不沿用旧模型派发', async () => {
+    it('一次性 Codex 任务在最后检查要求重建时不投递，重新运行后仅投递一次', async () => {
       mocks.getSessionProvider.mockReturnValue('mygpt');
       const h = createSessionHarness();
       Object.assign(h.session as unknown as Record<string, unknown>, {
         agentKind: 'codex',
         model: 'gpt-5.4',
-        requiresModelSwitchRebuild: vi.fn(async () => false),
+        requiresModelSwitchRebuild: vi.fn(async () => true).mockResolvedValueOnce(false),
       });
       const rebuildError = Object.assign(
         new Error('Codex model switch requires rebuilding the current session handle'),
         { code: 'CODEX_MODEL_SWITCH_REQUIRES_REBUILD' },
       );
-      h.setModel.mockRejectedValue(rebuildError);
+      h.setModel.mockRejectedValueOnce(rebuildError);
       const harness = createRunnerHarness(
         h,
         { model: 'gpt-5.4', effort: 'high', workDir: '/work', sdkSessionId: 'sdk-codex-1' },
         { sessionAlive: true },
       );
 
-      await expect(
-        harness.runner.fire(
-          baseSchedule({
-            agentKind: 'codex',
-            model: 'gpt-5.6-sol',
-            providerId: 'mygpt',
-            targetSessionId: 'scheduler-session',
-          }),
-          createFireContext(),
-        ),
-      ).rejects.toThrow('schedule model switch requires rebuilding the session before dispatch');
+      const schedule = baseSchedule({
+        agentKind: 'codex',
+        recurring: false,
+        model: 'gpt-5.6-sol',
+        providerId: 'mygpt',
+        targetSessionId: h.session.id,
+      });
+      await expect(harness.runner.fire(schedule, createFireContext())).rejects.toThrow(
+        /prompt was not sent.*Run Now/i,
+      );
 
       expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol');
       expect(h.send).not.toHaveBeenCalled();
       expect(mocks.backfillSessionMeta).not.toHaveBeenCalled();
+      expect(harness.closeSession).not.toHaveBeenCalled();
+
+      const rebuilt = createSessionHarness();
+      Object.assign(rebuilt.session, { agentKind: 'codex', model: schedule.model });
+      harness.createSession.mockResolvedValueOnce(rebuilt.session);
+      await fireToCompletion(harness, rebuilt, { ...schedule, status: 'expired' });
+      expect(harness.closeSession).toHaveBeenCalledWith(h.session.id, 'runtime-refresh');
+      expect(harness.createSession).toHaveBeenLastCalledWith(expect.objectContaining({
+        id: h.session.id, model: schedule.model, resumeSessionId: 'sdk-codex-1',
+      }));
+      expect(h.send).not.toHaveBeenCalled();
+      expect(rebuilt.send).toHaveBeenCalledTimes(1);
     });
 
     it('setModel 失败不阻断 fire（非致命，fresh spawn 路径 opts.model 已生效）', async () => {

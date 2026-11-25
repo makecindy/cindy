@@ -626,7 +626,7 @@ export class MarketSourceManager {
             // 实际地址相对上一版本的记录变了（改写目标变了，或上一版本没有可核实记录而这次有）：不在旧来源的
             // 历史上快进，回落到全新克隆。
             await this.deps.sourceIdOf?.prepare?.();
-            if (fetchedSourceId(before, sourceKey, this.deps.sourceIdOf) !== ((await readFetchIdentity(current))?.sourceId ?? null)) {
+            if (fetchedSourceId(before, sourceKey, this.deps.sourceIdOf) !== this.currentKeySourceId(await readFetchIdentity(current))) {
               throw new Error('The fetch address changed since the cached version');
             }
             revision = await fetchMarketplace(
@@ -726,6 +726,20 @@ export class MarketSourceManager {
   }
 
   /**
+   * 当前密钥的标识（见 sourceId.ts）。只有用同一个 keyId 算出的 sourceId 才能比较；不同即无法核实。任何一次
+   * 发现之后才有值。
+   */
+  sourceKeyId(): string | null {
+    return this.deps.sourceIdOf?.keyId() ?? null;
+  }
+
+  /** 取包记录里用当前密钥算出的 sourceId；密钥换过（keyId 不同）或没有记录时为 null（无法核实）。 */
+  private currentKeySourceId(record: { sourceId: string | null; keyId: string | null } | null): string | null {
+    const keyId = this.sourceKeyId();
+    return record?.sourceId && keyId && record.keyId === keyId ? record.sourceId : null;
+  }
+
+  /**
    * 在读取租约内为这份市场根目录生成来源身份与标识。Git 来源都取该缓存版本的取包记录（仓库是实际取包
    * 地址，标识含实际地址部件），不取配置字符串；本地来源的标识由来源指纹直接算。
    */
@@ -738,7 +752,7 @@ export class MarketSourceManager {
     const record = config.source.type === 'git' ? await readFetchIdentity(root) : null;
     const sourceId = config.source.type === 'local'
       ? this.localSourceIdOf(marketSourceKey(config.source))
-      : record?.sourceId ?? null;
+      : this.currentKeySourceId(record);
     return {
       sourceId,
       sourceIdentity: pluginMarketSourceIdentity(config.source, {

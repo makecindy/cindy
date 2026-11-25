@@ -15,7 +15,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { marketSourceKey, pluginMarketRepositoryFromUrl } from '../../../shared/pluginMarket';
+import { marketSourceKey, pluginMarketFetchAddress, pluginMarketRepositoryFromUrl } from '../../../shared/pluginMarket';
 import { MarketSourceManager, marketCloneSlug } from '../sources/index';
 import { cloneMarketplace, hasBranchConditionalConfig, resolveFetchUrl, type GitExecutor } from '../sources/git';
 import { MarketSourceStore } from '../sources/store';
@@ -25,7 +25,9 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function isolatedGit(config: string | ((root: string) => string)): { executor: GitExecutor; root: string; setConfig: (text: string) => void } {
+function isolatedGit(config: string | ((root: string) => string)): {
+  executor: GitExecutor; root: string; setConfig: (text: string) => void; env: NodeJS.ProcessEnv;
+} {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-fetch-url-')));
   roots.push(root);
   const globalConfig = path.join(root, 'gitconfig');
@@ -48,7 +50,7 @@ function isolatedGit(config: string | ((root: string) => string)): { executor: G
         else resolve({ stdout, stderr });
       });
     });
-  return { executor, root, setConfig };
+  return { executor, root, setConfig, env };
 }
 
 describe('resolveFetchUrl with real git', () => {
@@ -71,6 +73,50 @@ describe('resolveFetchUrl with real git', () => {
     // git itself resolves to the credentialed address; only the whitelist result may leave Main.
     expect(resolved).toContain('ghp_SECRET');
     expect(pluginMarketRepositoryFromUrl(resolved)).toBe('github.com/acme/plugins');
+  });
+});
+
+// PR #12731 maintainer review 6054636680: the host recorded as the verified source must be the host git itself
+// parses. git hands a credential helper the protocol and host it will contact; every address the whitelist accepts
+// must name the same host and port, and the ambiguous shapes it rejects are the ones where they would differ.
+describe('fetch address whitelist against git URL parsing', () => {
+  /**
+   * The host git parses from `url`: a credential helper that echoes its input receives `host=` (with port). git
+   * skips the helper when the URL already holds a username and password, so such URLs are not listed here.
+   */
+  function gitHost(env: NodeJS.ProcessEnv, cwd: string, url: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      const child = execFile('git', ['-c', 'credential.helper=!f() { cat >&2; }; f', 'credential', 'fill'],
+        { cwd, env, timeout: 10_000 }, (_error, _stdout, stderr) => resolve(/^host=(.*)$/m.exec(String(stderr))?.[1] ?? null));
+      child.stdin?.end(`url=${url}\n\n`);
+    });
+  }
+  it('accepts only addresses whose host and port match what git parses', async () => {
+    const { env, root } = isolatedGit('');
+    const accepted = [
+      'https://git.example.test/acme/plugins.git',
+      'https://ghp_ONE@git.example.test/acme/plugins.git',
+      'https://git.example.test:8443/acme/plugins.git',
+      'HTTPS://Git.Example.TEST/acme/plugins.git',
+      'http://git.example.test/acme/plugins/',
+    ];
+    const ambiguous = [
+      'https://git.example.test?@evil.example/acme/plugins.git',
+      'https://git.example.test#@evil.example/acme/plugins.git',
+      'https://git.example.test/@evil.example/acme/plugins.git',
+    ];
+    for (const url of accepted) {
+      const address = pluginMarketFetchAddress(url);
+      expect(address, url).not.toBeNull();
+      const parsed = await gitHost(env, root, url);
+      expect(parsed?.toLowerCase(), url).toBe(address!.port ? `${address!.host}:${address!.port}` : address!.host);
+    }
+    // git contacts git.example.test for these, while a greedy userinfo match would name evil.example: rejected.
+    for (const url of ambiguous) {
+      expect(await gitHost(env, root, url), url).toBe('git.example.test');
+      expect(pluginMarketFetchAddress(url), url).toBeNull();
+      expect(pluginMarketRepositoryFromUrl(url), url).toBeNull();
+    }
   });
 });
 

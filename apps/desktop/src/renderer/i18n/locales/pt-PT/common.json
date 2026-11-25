@@ -8565,7 +8565,9 @@
         "originRepository": "Repositório {{repository}}",
         "originRepositoryRef": "Repositório {{repository}} ({{ref}})",
         "originLocalFolder": "Pasta local",
-        "originSourceChanged": "Esta atualização vem de uma origem diferente da versão instalada. Continue apenas se confiar no repositório indicado acima."
+        "originSourceChanged": "Esta atualização vem de uma origem diferente da versão instalada. As contas e os dados existentes são arquivados separadamente; ligue novamente as suas contas após a atualização. Continue apenas se confiar no repositório indicado acima.",
+        "sourceChangedIsolated": "Esta atualização vem de uma origem diferente da versão instalada. As contas e os dados existentes são arquivados separadamente; ligue novamente as suas contas após a atualização.",
+        "marketSourceChanged": "Esta atualização muda para a versão do mercado de plugins. As contas e os dados existentes são arquivados separadamente. Ligue novamente as suas contas após a atualização."
       },
       "trust": {
         "official": "Plugin oficial de Cindy",
@@ -8861,6 +8863,7 @@
             "message_body": "corpo da mensagem",
             "tool_body": "resultado da ferramenta",
             "sidebar_navigation": "navegação lateral",
+            "workdir_menu": "menu do diretório de trabalho",
             "session_menu": "menu da tarefa",
             "settings_section": "página de definições",
             "composer_completion": "preenchimento automático",
@@ -15684,6 +15687,7 @@
       "modelCatalogUnconfirmed": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualiza a lista de modelos e tenta novamente.",
       "actionScheduled": "A autorização para esta ação expirou. A próxima execução continua agendada.",
       "actionExpired": "A autorização da sessão para esta ação expirou. Consulte a execução mais recente da automatização.",
+      "modelRebuildRetry": "A instrução não foi enviada. Abra a automatização no computador e selecione «Executar agora» para tentar novamente.",
       "actionRecovered": "A autorização para esta ação expirou. A mesma automatização foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
       "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS nesse dispositivo. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
@@ -18125,7 +18129,7 @@
       "openWorkdirFailed": "Falha ao abrir a pasta"
     },
     "runs": {
-      "boundPluginEngineRecovery": "A automatização não foi executada porque a tarefa associada usa um motor de plugin. Volta a usar um motor integrado nessa tarefa ou associa a automatização a uma tarefa que use um motor integrado.",
+      "boundPluginEngineRecovery": "A automatização não foi executada. Uma automatização associada a uma tarefa com motor de plugin usa o modelo da própria tarefa e é executada neste computador. Se a automatização escolher um modelo, remove-o e executa-a novamente.",
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes de a mensagem ser enviada. Quando a sessão de destino estiver livre, escolhe {{action}} para a executar.",
       "status": {
         "running": "Em execução",
@@ -18477,6 +18481,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalo relativo",
+        "label": "Modo de agendamento",
         "cronHint": "Executa em horários definidos no calendário.",
         "intervalHint": "Aguarda este período após a conclusão da execução anterior.",
         "intervalUnsupportedHint": "Este intervalo exato é preservado. Escolher uma predefinição de minutos ou horas irá substituí-lo.",

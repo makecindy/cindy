@@ -126,6 +126,29 @@ it('forces a source-change confirmation and pins it to the receiver receipt', as
   expect(() => assertGhostInstallConsent(decision, installed(next, { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' }), next, reviewedDigest)).toThrow();
   await expect(obtainGhostInstallConsent({ mode: 'prompt', prompt: userPrompt(false), initiator: 'agent', origin: 'forge', force: true }, old, next, reviewedDigest)).rejects.toThrow();
 });
+// Codex P1 on PR #12731: a confirmed custom-market source switch archives the old instance, so no approval is
+// inherited. Unit, real consent helpers: the switch confirmation shows the new source's full permissions (install
+// facts), the lock-time check still binds the actual receiver, and every grant follows those same facts. Before this
+// change the facts were the update diff (added: []), so tasks and pages already approved for the old source were lost.
+it('shows a source switch like a first install and grants what it showed, still pinned to the receiver', async () => {
+  const next: GhostManifest = { ...manifest(['api.weather.test']), agent: { tasks: true as const }, mcpApps: {
+    ui: { resources: [{ uri: 'ui://workspace', file: 'ui/workspace.html' }], tools: {} },
+  } };
+  const old = installed(next), prompt = vi.fn<GhostInstallConsentPrompt>(async () => true);
+  const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'custom-market',
+    force: true, freshGrant: true, originSourceChanged: true }, old, next, reviewedDigest);
+  const facts = prompt.mock.calls[0][0].facts;
+  expect(facts.kind).toBe('install');
+  expect(facts.kind === 'install' && facts.permissions.map(item => item.key)).toEqual(expect.arrayContaining(['agent:tasks', 'ui:pages']));
+  assertGhostInstallConsent(decision, old, next, reviewedDigest);
+  expect(() => assertGhostInstallConsent(decision, installed(next, { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' }), next, reviewedDigest)).toThrow();
+  expect(confirmedTaskCapability(decision, old, next)).toBe(true);
+  expect(confirmedUiCapability(decision, old, next)).toBe(true);
+  // The same confirmation without the switch is the ordinary update: nothing new to grant.
+  const update = await obtainGhostInstallConsent({ mode: 'prompt', prompt: userPrompt(true), initiator: 'user',
+    origin: 'custom-market', force: true }, old, next, reviewedDigest);
+  expect(confirmedTaskCapability(update, old, next)).toBeUndefined();
+});
 it('records tasks only when that capability was included in explicit install/update consent', async () => {
   const next = {...manifest(['api.weather.test']),agent:{tasks:true as const}};
   const policy = {mode:'prompt' as const,prompt:userPrompt(true),initiator:'user' as const,origin:'market' as const};

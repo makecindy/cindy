@@ -7,10 +7,12 @@ import { createGhostBackgroundRefresh } from '../../cindy-brain/ghostBackgroundR
 import { emptyPluginInstanceRegistry } from '../../cindy-brain/pluginInstanceRegistry.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
 
 const runtime = vi.hoisted(() => ({
+  /** 每个测试独立的 userData 目录（beforeEach 创建、afterEach 随 roots 回收），不用固定临时路径。 */
+  userDataRoot: '',
   ghosts: [] as Array<{
     manifest: Record<string, unknown>;
     dir: string;
@@ -68,7 +70,7 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: vi.fn(() => ({ ...runtime.session })),
   isAppSessionBoundaryPending: vi.fn(() => runtime.boundaryPending),
   ownerScopedUserDataPath: vi.fn((...parts: string[]) =>
-    path.join(os.tmpdir(), 'owners', runtime.session.dataOwnerId ?? 'local', ...parts),
+    path.join(runtime.userDataRoot, 'owners', runtime.session.dataOwnerId ?? 'local', ...parts),
   ),
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
@@ -95,6 +97,8 @@ vi.mock('../../cindy-brain/index.js', () => ({
         },
       })),
     inspect: runtime.inspect,
+    // Same default as service.test.ts: no first-party approval evidence for these fixtures.
+    approvedInstallEvidence: () => null,
   }),
   isGhostAvailableForActiveSession: vi.fn(() => runtime.accountGhostAvailable),
   installOrUpdateMarketGhostPackage: async (
@@ -176,9 +180,15 @@ const TEST_INSTALL_CONTEXT: PluginMarketInstallContext = {
 };
 import { MarketSourceManager } from '../sources';
 import { MarketSourceStore } from '../sources/store';
+import { confirmedTaskCapability, type GhostInstallConsentDecision } from '../../cindy-brain/ghostInstallConsent';
+import { createMarketSourceIdOf, SOURCE_ID_KEY_DIR } from '../sources/sourceId';
 import type { PluginMarketApi } from '../api';
 
 const roots: string[] = [];
+beforeEach(() => {
+  runtime.userDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-plugin-userdata-'));
+  roots.push(runtime.userDataRoot);
+});
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
 const APPROVED_INSTALL_TOKEN = 'approved:00000000-0000-4000-8000-000000000001';
 
@@ -1948,6 +1958,87 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(runtime.install).toHaveBeenCalledTimes(1);
   });
 
+  /* 测试价值（契约 V2.9，PR #12731）
+   * - 生产入口与可观察结果：PluginMarketService.install（带 Main-only 的 remoteOperation）写下的安装记录；
+   *   withInstalledOperationIds 对不同控制端给出的 installedOperationId；新建 service（重启）后的结果。
+   * - 缺口：回执过期后控制端需要 Host 返回的操作级证据，且只能对发起方可见、只认当前装着的那份包。
+   * - 最小失败输入：phone-a 远程安装后 phone-a / desktop-b 各读一次；新 service；desktop-b 远程更新；本机更新。
+   * - tier：unit（临时目录，运行时替身）。
+   */
+  it('records which remote operation installed a custom-market plugin and shows it only to that controller', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    let version = '1.0.0';
+    runtime.install.mockImplementation(async () => {
+      const ghost = installedGhost(root, 'alpha', version);
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    const install = async (remoteOperation?: { operationId: string; controller: string }) => {
+      const detail = await h.service.detail(pluginId);
+      const installed = runtime.ghosts.find((ghost) => ghost.manifest.id === 'alpha');
+      await h.service.install(pluginId, {
+        expectedReleaseId: detail.releaseId, expectedManifest: detail.manifest,
+        ...(installed ? { expectedInstalledApproval: APPROVED_INSTALL_TOKEN } : {}),
+      }, { ...TEST_INSTALL_CONTEXT, ...(remoteOperation ? { remoteOperation } : {}) });
+    };
+    const seenBy = async (service: PluginMarketService, controller: string) =>
+      (await service.withInstalledOperationIds([await service.detail(pluginId)], controller))[0]?.installedOperationId;
+
+    await install({ operationId: 'op-0000000000000001', controller: 'phone-a' });
+    expect(await seenBy(h.service, 'phone-a')).toBe('op-0000000000000001');
+    expect(await seenBy(h.service, 'desktop-b')).toBeUndefined();
+    // The ledger keeps only a local one-way tag of the controller, never its device id.
+    expect(JSON.stringify(h.ledger.read())).not.toContain('phone-a');
+    // Persisted: a new service (Host restart, receipts gone) still answers.
+    expect(await seenBy(new PluginMarketService(h.api as unknown as PluginMarketApi, h.ledger, h.sourceStore), 'phone-a'))
+      .toBe('op-0000000000000001');
+
+    // Another controller updates: the evidence becomes its own, invisible to the first.
+    version = '2.0.0';
+    writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha', version }]);
+    await install({ operationId: 'op-0000000000000002', controller: 'desktop-b' });
+    expect(await seenBy(h.service, 'phone-a')).toBeUndefined();
+    expect(await seenBy(h.service, 'desktop-b')).toBe('op-0000000000000002');
+
+    // A local update leaves no evidence; nothing from before survives.
+    version = '3.0.0';
+    writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha', version }]);
+    await install();
+    expect(await seenBy(h.service, 'desktop-b')).toBeUndefined();
+    expect(h.ledger.installationForGhost('alpha')).not.toHaveProperty('remoteOperationBinding');
+  });
+
+  it('records the remote operation for a server-market install as well', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const h = harness([serverSummary()], []);
+    h.api.download.mockResolvedValue({
+      url: 'https://downloads.test.invalid/plugin.cindy', expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64), sizeBytes: 42,
+    });
+    runtime.install.mockImplementation(async () => {
+      const ghost = installedGhost(root, 'server-plugin');
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    await h.service.install(PLUGIN_ID, { expectedReleaseId: serverSummary().currentRelease.id },
+      { ...TEST_INSTALL_CONTEXT, remoteOperation: { operationId: 'op-0000000000000003', controller: 'phone-a' } });
+    const [item] = await h.service.withInstalledOperationIds([await h.service.detail(PLUGIN_ID)], 'phone-a');
+    expect(item).toMatchObject({ installState: 'installed', installedOperationId: 'op-0000000000000003' });
+    // Another controller never sees it.
+    const [other] = await h.service.withInstalledOperationIds([await h.service.detail(PLUGIN_ID)], 'desktop-b');
+    expect(other).not.toHaveProperty('installedOperationId');
+    // Codex P1 (e2fbe72a): the same plugin id installed under another namespace is another instance; the evidence of
+    // the root instance must not be projected onto it.
+    const [elsewhere] = await h.service.withInstalledOperationIds(
+      [{ ...(await h.service.detail(PLUGIN_ID)), namespace: 'other' }], 'phone-a');
+    expect(elsewhere).not.toHaveProperty('installedOperationId');
+  });
+
   it('lets a selected custom source install when the server catalog declares the same ghostId', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
@@ -2264,15 +2355,17 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
    * - 最小失败输入：安装后把记录的 sourceKey 或 raw 摘要换掉但保留绑定；没有绑定的旧本地记录。
    * - tier：unit（临时目录，本地来源）。
    */
-  /* 测试价值（PR #12731 维护者评审 06:33 第 2 条：已知实际来源变化时，后台不能沿用旧来源的批准装入新来源）
-   * - 生产入口与可观察结果：PluginMarketService.snapshot（后台自动更新）与 install（显式更新）；runtime.install
-   *   是否被调用、条目 updateRequiresConsent、确认请求与账本绑定。
-   * - 缺口：此前市场投影与提交前只按配置 sourceKey 判断路由，同一配置被改写到 B 时，B 的较高版本、权限无新增
-   *   即被后台静默装入。
-   * - 最小失败输入：已装记录绑定来源 A（可核实），当前候选来源 B（可核实且不同），B 有更高版本、无新增权限。
-   * - tier：unit（临时目录，本地来源；A 的绑定由账本记录模拟，与同一配置被 Git 改写的效果相同）。
-   */
-  it('holds a background update whose actual source changed and asks before switching', async () => {
+  /** 当前 owner 的来源标识密钥标识（与服务读的是同一个密钥目录）。 */
+  async function currentSourceKeyId(): Promise<string> {
+    const sourceIds = createMarketSourceIdOf(
+      path.join(runtime.userDataRoot, 'owners', runtime.session.dataOwnerId ?? 'local', 'plugin-market', SOURCE_ID_KEY_DIR),
+    );
+    await sourceIds.prepare!();
+    return sourceIds.keyId()!;
+  }
+
+  /** 已装 1.0.0、市场上有 2.0.0（权限不变）的自定义市场插件；sourceIdBinding 与来源类别由用例给出。 */
+  async function installedAlphaWithUpdate(record: { source?: 'local-market' | 'git-market'; binding?: (sourceKey: string, rawManifestSha256: string) => object }) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha', version: '2.0.0' }]);
@@ -2287,16 +2380,34 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     const pluginId = customMarketPluginId('team-lib', 'alpha');
     h.ledger.upsertInstallation({
       pluginId, ghostId: 'alpha', releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'), version: '1.0.0',
-      sha256: 'custom-unverified', scope: 'public', organizationId: null, source: 'local-market', installed: true,
-      updatedAt: '2026-07-30T02:00:00.000Z', sourceKey,
+      sha256: 'custom-unverified', scope: 'public', organizationId: null, source: record.source ?? 'local-market',
+      installed: true, updatedAt: '2026-07-30T02:00:00.000Z', sourceKey,
       manifestDigest: ghostManifestDigest(ghostManifest('alpha', '1.0.0')), rawManifestSha256,
-      // Installed from source A, which the same configuration no longer fetches from.
-      sourceIdBinding: { sourceId: 'AAAAAAAAAAAAAAAAAAAAAA', sourceKey, rawManifestSha256 },
+      ...(record.binding
+        ? { sourceIdBinding: record.binding(sourceKey, rawManifestSha256) as NonNullable<PluginMarketInstallationRecord['sourceIdBinding']> }
+        : {}),
     });
     runtime.install.mockImplementation(async () => {
       const upgraded = installedGhost(root, 'alpha', '2.0.0');
       runtime.ghosts = [upgraded];
       return upgraded;
+    });
+    return { h, pluginId, sourceKey };
+  }
+
+  /* 测试价值（PR #12731 维护者评审 06:33 第 2 条：已知实际来源变化时，后台不能沿用旧来源的批准装入新来源）
+   * - 生产入口与可观察结果：PluginMarketService.snapshot（后台自动更新）与 install（显式更新）；runtime.install
+   *   是否被调用、条目 updateRequiresConsent、确认请求与账本绑定。
+   * - 缺口：此前市场投影与提交前只按配置 sourceKey 判断路由，同一配置被改写到 B 时，B 的较高版本、权限无新增
+   *   即被后台静默装入。
+   * - 最小失败输入：已装记录绑定来源 A（可核实），当前候选来源 B（可核实且不同），B 有更高版本、无新增权限。
+   * - tier：unit（临时目录，本地来源；A 的绑定由账本记录模拟，与同一配置被 Git 改写的效果相同）。
+   */
+  it('holds a background update whose actual source changed and asks before switching', async () => {
+    const keyId = await currentSourceKeyId();
+    // Installed from source A (same key), which the same configuration no longer fetches from.
+    const { h, pluginId } = await installedAlphaWithUpdate({
+      binding: (sourceKey, rawManifestSha256) => ({ sourceId: 'AAAAAAAAAAAAAAAAAAAAAA', sourceKey, rawManifestSha256, keyId }),
     });
 
     // Background: B's higher version without new permissions is not installed; the item waits for the user.
@@ -2305,18 +2416,63 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(held.items[0]).toMatchObject({ installState: 'update-available', updateRequiresConsent: true,
       installedSourceId: 'AAAAAAAAAAAAAAAAAAAAAA' });
 
-    // Explicit update: the confirmation is forced even without new permissions and says the source changed.
+    // Explicit update: the confirmation is shown even without new permissions and says the source changed.
     const detail = await h.service.detail(pluginId);
     const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => true);
     await h.service.install(pluginId, { expectedReleaseId: detail.releaseId, expectedManifest: detail.manifest,
       expectedInstalledApproval: APPROVED_INSTALL_TOKEN }, { consent: { prompt, initiator: 'user' } });
     expect(prompt).toHaveBeenCalledTimes(1);
+    // The old instance is archived and its approvals are not inherited, so the switch is confirmed like a first
+    // install: the new source's full permissions (contract V2.4b).
     expect(prompt.mock.calls[0]?.[0]).toMatchObject({ origin: 'custom-market', originSourceChanged: true,
-      originSource: detail.sourceIdentity, facts: { kind: 'update', added: [] } });
+      originSource: detail.sourceIdentity, facts: { kind: 'install', version: '2.0.0' } });
     expect(runtime.install).toHaveBeenCalledTimes(1);
+    // The confirmed switch reaches the runtime's source-change transaction (idle check, old accounts and data
+    // archived for the replacement), not an in-place update.
+    expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({ sourceChanged: true });
     // The installation is now bound to B, so later updates from B are not held again.
     expect(h.ledger.installationForGhost('alpha')?.sourceIdBinding?.sourceId).toBe(detail.sourceIdentity?.sourceId);
     expect(await h.service.detail(pluginId)).not.toHaveProperty('updateRequiresConsent');
+  });
+
+  /* 测试价值（PR #12731 维护者评审 07:34 / 07:49：换源会隔离插件数据，误判即丢账号与数据）
+   * - 生产入口与可观察结果：PluginMarketService.snapshot 的后台更新；runtime 安装是否被调用、是否带
+   *   sourceChanged（运行时据此隔离旧账号与数据）、条目是否 updateRequiresConsent。
+   * - 缺口：只有「两边都可核实且同一密钥下不相等」才算实际换源。升级前的安装记录没有绑定、密钥重建后的旧
+   *   绑定都只能算无法核实；若被当成换源，存量用户升级后第一次更新就会被暂停并隔离数据。
+   * - 最小失败输入：Git 来源记录没有绑定；绑定的标识与候选不同但 keyId 是旧密钥的；绑定就是当前来源。
+   * - tier：unit（临时目录，本地市场；Git 记录的来源类别只影响「无绑定时能否现算」，用记录字段模拟）。
+   */
+  it.each([
+    ['an installation recorded before source ids', { source: 'git-market' as const }],
+    ['a binding made with an earlier key', {
+      source: 'git-market' as const,
+      binding: (sourceKey: string, rawManifestSha256: string) =>
+        ({ sourceId: 'AAAAAAAAAAAAAAAAAAAAAA', sourceKey, rawManifestSha256, keyId: 'oldKeyOldKey' }),
+    }],
+    ['the same source', { source: 'local-market' as const, binding: 'current' as const }],
+  ])('updates %s in the background and keeps its data', async (_label, input) => {
+    const keyId = await currentSourceKeyId();
+    let currentSourceId = '';
+    const { h, pluginId } = await installedAlphaWithUpdate({
+      source: input.source,
+      ...('binding' in input
+        ? {
+            binding: input.binding === 'current'
+              ? (sourceKey: string, rawManifestSha256: string) => ({ sourceId: currentSourceId, sourceKey, rawManifestSha256, keyId })
+              : input.binding,
+          }
+        : {}),
+    });
+    currentSourceId = (await h.service.detail(pluginId)).sourceIdentity!.sourceId;
+    if ('binding' in input && input.binding === 'current') {
+      const record = h.ledger.installationForGhost('alpha')!;
+      h.ledger.upsertInstallation({ ...record, sourceIdBinding: { ...record.sourceIdBinding!, sourceId: currentSourceId } });
+    }
+    await h.service.snapshot();
+    expect(runtime.install).toHaveBeenCalledTimes(1);
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('sourceChanged');
+    expect(h.ledger.installationForGhost('alpha')?.sourceIdBinding).toMatchObject({ sourceId: currentSourceId, keyId });
   });
 
   it('binds the installed source id to the record it was written with', async () => {
@@ -2335,6 +2491,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     const record = h.ledger.installationForGhost('alpha')!;
     expect(record.sourceIdBinding).toEqual({
       sourceId: detail.sourceIdentity?.sourceId, sourceKey: record.sourceKey, rawManifestSha256: record.rawManifestSha256,
+      keyId: await currentSourceKeyId(),
     });
     expect((await h.service.detail(pluginId)).installedSourceId).toBe(detail.sourceIdentity?.sourceId);
 
@@ -2596,6 +2753,91 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       }, TEST_INSTALL_CONTEXT),
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'server-plugin' } } });
     expect(h.api.download).toHaveBeenCalled();
+  });
+
+  /* 测试价值（PR #12731 维护者评审 6055952481：显式跨市场替换归档了旧批准，新实例却漏授权）
+   * - 生产入口与可观察结果：PluginMarketService.install（allowSourceReplacement）的确认内容、交给运行时的
+   *   sourceChanged 与确认结论；用运行时实际调用的授予函数（confirmedTaskCapability）对同一结论求授予。
+   * - 缺口：跨路由替换时确认按旧实例算差异（added: []），提交却按换源归档、不继承旧批准；A、B 声明同样的任务能力
+   *   时，确认不展示、提交也不授予。
+   * - 最小失败输入：A、B 都声明 agent.tasks；自定义 A → 自定义 B、自定义 → 服务端市场各一次显式替换。
+   * - tier：unit（临时目录，运行时替身；授予函数为真实实现）。
+   */
+  const TASKS = { agent: { tasks: true } };
+  function installedWithTasks(root: string, id: string) {
+    const dir = path.join(root, 'installed', id);
+    fs.mkdirSync(dir, { recursive: true });
+    const manifest = ghostManifest(id, '1.0.0', TASKS);
+    fs.writeFileSync(path.join(dir, 'ghost.json'), JSON.stringify(manifest));
+    return { manifest, dir, enabled: true };
+  }
+  it('confirms and grants the full permissions when explicitly replacing one custom market with another', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dirA = writeLocalMarket(root, 'team-a', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const dirB = writeLocalMarket(root, 'team-b', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    for (const dir of [dirA, dirB]) {
+      fs.writeFileSync(path.join(dir, 'plugins', 'alpha', 'ghost.json'), JSON.stringify(ghostManifest('alpha', '1.0.0', TASKS)));
+    }
+    const h = harness([], [{ name: 'team-a', dir: dirA }, { name: 'team-b', dir: dirB }]);
+    runtime.install.mockImplementation(async () => {
+      const ghost = installedWithTasks(root, 'alpha');
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    const fromA = customMarketPluginId('team-a', 'alpha');
+    const fromB = customMarketPluginId('team-b', 'alpha');
+    await h.service.install(fromA, { expectedReleaseId: customMarketReleaseId('team-a', 'alpha', '1.0.0'),
+      expectedManifest: (await h.service.detail(fromA)).manifest }, TEST_INSTALL_CONTEXT);
+    const old = runtime.ghosts[0]!;
+    const detailB = await h.service.detail(fromB);
+    expect(detailB.installState).toBe('conflict');
+
+    const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => true);
+    await h.service.install(fromB, { expectedReleaseId: detailB.releaseId, expectedManifest: detailB.manifest,
+      expectedInstalledApproval: APPROVED_INSTALL_TOKEN, allowSourceReplacement: true }, { consent: { prompt, initiator: 'user' } });
+    const request = prompt.mock.calls[0]![0];
+    expect(request).toMatchObject({ origin: 'custom-market', originSourceChanged: true, facts: { kind: 'install' } });
+    expect(request.facts.kind === 'install' && request.facts.permissions.map((item) => item.key)).toContain('agent:tasks');
+    const options = runtime.install.mock.calls[1]![1] as { sourceChanged?: boolean; consent: GhostInstallConsentDecision };
+    expect(options.sourceChanged).toBe(true);
+    // The runtime grants with these helpers against the old instance: the new instance keeps its task capability.
+    expect(confirmedTaskCapability(options.consent, old as unknown as InstalledGhost, ghostManifest('alpha', '1.0.0', TASKS) as never)).toBe(true);
+  });
+
+  it('confirms and grants the full permissions when explicitly replacing a custom market plugin with the official one', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
+    const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
+    const old = installedWithTasks(root, 'server-plugin');
+    runtime.ghosts = [old];
+    runtime.install.mockResolvedValue({ manifest: ghostManifest('server-plugin', '1.0.0', TASKS), dir: '/ghosts/official-server-plugin', enabled: true });
+    h.ledger.upsertInstallation({
+      pluginId: customMarketPluginId('team-lib', 'server-plugin'), ghostId: 'server-plugin',
+      releaseId: customMarketReleaseId('team-lib', 'server-plugin', '1.0.0'), version: '1.0.0', sha256: 'custom-unverified',
+      scope: 'public', organizationId: null, source: 'local-market', installed: true, updatedAt: '2026-08-06T00:00:00.000Z',
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('server-plugin', '1.0.0', TASKS) as never),
+    });
+    vi.mocked(downloadVerifiedPlugin).mockImplementationOnce(async (_url, _expected, targetPath) => {
+      const zip = new JSZip();
+      zip.file('ghost.json', JSON.stringify(ghostManifest('server-plugin', '1.0.0', TASKS)));
+      zip.file('main.js', '// server package fixture');
+      await fs.promises.writeFile(targetPath, await zip.generateAsync({ type: 'nodebuffer' }), { flag: 'wx', mode: 0o600 });
+    });
+    h.api.download.mockResolvedValue({ url: 'https://downloads.test.invalid/plugin.cindy', expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64), sizeBytes: 42 });
+    const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => true);
+    const item = serverSummary();
+    await h.service.install(item.id, { expectedReleaseId: item.currentRelease.id, expectedInstalledApproval: APPROVED_INSTALL_TOKEN,
+      allowSourceReplacement: true }, { consent: { prompt, initiator: 'user' } });
+    const request = prompt.mock.calls[0]![0];
+    expect(request).toMatchObject({ origin: 'market', originSourceChanged: true, facts: { kind: 'install' } });
+    expect(request.facts.kind === 'install' && request.facts.permissions.map((entry) => entry.key)).toContain('agent:tasks');
+    const options = runtime.install.mock.calls[0]![1] as { sourceChanged?: boolean; consent: GhostInstallConsentDecision };
+    expect(options.sourceChanged).toBe(true);
+    expect(confirmedTaskCapability(options.consent, old as unknown as InstalledGhost, ghostManifest('server-plugin', '1.0.0', TASKS) as never)).toBe(true);
   });
 
   it('allows explicit official replacement when the previous custom source is unreadable', async () => {

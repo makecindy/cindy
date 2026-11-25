@@ -208,6 +208,54 @@ describe('plugin install confirmation card', () => {
       originSource: { kind: 'git', repository: 'github.com/acme/plugins' } as unknown as GhostInstallConsentRequest['originSource'] }, translate);
     expect(malformed.input).not.toHaveProperty('source');
   });
+
+  // Phone request relayed for PR #12731: a collapsed task card shows only the first description line, so the
+  // controller needs the source change as a field to show it without scrolling. Only a custom-market update
+  // confirmed for a source change carries it; everything else omits it.
+  // The phone uses this exact sample (byte for byte) in its own test of how it shows a Host-built card.
+  // A source switch is confirmed like a first install (full permissions, contract V2.4b), hence operation 'install'.
+  const SOURCE_SWITCH_CARD_INPUT_SAMPLE = {
+    ghost_id: 'weather-chip',
+    version: '2.0.0',
+    operation: 'install',
+    origin: 'custom-market',
+    source: { kind: 'git', repository: 'github.com/acme/plugins', ref: 'main', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' },
+    originSourceChanged: true,
+  };
+  it('marks a custom-market update confirmed for a source change in the task card input', () => {
+    const source = { kind: 'git' as const, repository: 'github.com/acme/plugins', ref: 'main', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' };
+    const update = {
+      kind: 'update' as const, ghostId: 'weather-chip', name: 'Weather', version: '2.0.0', previousVersion: '1.0.0',
+      added: [], removed: [], unchangedCount: 1, builtinOauthClientChanged: false,
+    };
+    const switched = { kind: 'install' as const, ghostId: 'weather-chip', name: 'Weather', version: '2.0.0', permissions: [] };
+    const changed = buildGhostInstallConsentInteraction('req-5', { initiator: 'agent', origin: 'custom-market',
+      originLabel: 'Acme', originSource: source, originSourceChanged: true, facts: switched }, translate);
+    expect(changed.description).toContain(translate('settings.ghosts.installConsent.originSourceChanged'));
+    expect(changed.input).toEqual(SOURCE_SWITCH_CARD_INPUT_SAMPLE);
+    expect(JSON.stringify(changed.input)).toBe(JSON.stringify(SOURCE_SWITCH_CARD_INPUT_SAMPLE));
+    const sameSource = buildGhostInstallConsentInteraction('req-6', { initiator: 'agent', origin: 'custom-market',
+      originLabel: 'Acme', originSource: source, facts: update }, translate);
+    expect(sameSource.input).not.toHaveProperty('originSourceChanged');
+    // A replacement with the Cindy market version (review 6055952481) carries it too, with wording that names no
+    // repository; other origins never do.
+    const marketReplacement = buildGhostInstallConsentInteraction('req-7', { initiator: 'agent', origin: 'market',
+      originSourceChanged: true, facts: switched }, translate);
+    expect(marketReplacement.input).toMatchObject({ operation: 'install', origin: 'market', originSourceChanged: true });
+    expect(marketReplacement.description).toContain(translate('settings.ghosts.installConsent.marketSourceChanged'));
+    // Review 6057084746: a local-folder market (or a missing identity) shows no repository, so the card text must
+    // not ask to trust one; the input still flags the switch.
+    for (const originSource of [{ kind: 'local' as const, sourceId: SOURCE_ID }, undefined]) {
+      const card = buildGhostInstallConsentInteraction('req-9', { initiator: 'agent', origin: 'custom-market',
+        originLabel: 'Acme', ...(originSource ? { originSource } : {}), originSourceChanged: true, facts: switched }, translate);
+      expect(card.input).toMatchObject({ originSourceChanged: true });
+      expect(card.description).toContain(translate('settings.ghosts.installConsent.sourceChangedIsolated'));
+      expect(card.description).not.toContain(translate('settings.ghosts.installConsent.originSourceChanged'));
+    }
+    const otherOrigin = buildGhostInstallConsentInteraction('req-8', { initiator: 'agent', origin: 'local-file',
+      originSourceChanged: true, facts: update }, translate);
+    expect(otherOrigin.input).not.toHaveProperty('originSourceChanged');
+  });
 });
 
 describe('createTaskInstallConsentPrompt', () => {

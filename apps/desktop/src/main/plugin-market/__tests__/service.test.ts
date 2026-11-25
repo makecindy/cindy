@@ -13,7 +13,7 @@ import { assertGhostInstallConsent, confirmedUiCapability, type GhostInstallCons
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { emptyPluginInstanceRegistry } from '../../cindy-brain/pluginInstanceRegistry.js';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ghostInstallApprovalToken,
@@ -26,6 +26,8 @@ import {
   type InstalledGhost,
 } from '../../../shared/ghost.js';
 const runtime = vi.hoisted(() => ({
+  /** 每个测试独立的 userData 目录（beforeEach 创建、afterEach 随 roots 回收），不用固定临时路径。 */
+  userDataRoot: '',
   receiptManager: null as GhostManager | null,
   readInstanceForContent: vi.fn<GhostManager['readInstanceForContent']>(() => null),
   readApprovedInstallReceipt: vi.fn<GhostManager['readApprovedInstallReceipt']>(() => null),
@@ -116,7 +118,7 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: vi.fn(() => ({ ...runtime.session })),
   isAppSessionBoundaryPending: vi.fn(() => runtime.boundaryPending),
   ownerScopedUserDataPath: vi.fn((...parts: string[]) =>
-    path.join(os.tmpdir(), 'owners', runtime.session.dataOwnerId ?? 'local', ...parts),
+    path.join(runtime.userDataRoot, 'owners', runtime.session.dataOwnerId ?? 'local', ...parts),
   ),
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
@@ -284,6 +286,10 @@ import { extractIpcError } from '../../../shared/ipcError';
 import { pluginMarketErrorKey } from '../../../renderer/features/plugin/lib/pluginMarketErrorKey';
 
 const roots: string[] = [];
+beforeEach(() => {
+  runtime.userDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-plugin-userdata-'));
+  roots.push(runtime.userDataRoot);
+});
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
 const RELEASE_ID = `c${'b'.repeat(24)}`;
 const APPROVED_INSTALL_TOKEN = 'approved:00000000-0000-4000-8000-000000000001';

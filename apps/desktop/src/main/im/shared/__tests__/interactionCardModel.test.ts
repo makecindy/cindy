@@ -439,8 +439,9 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
       kind: 'permission',
       requestId: 'req-plugin-install',
       toolName: 'cindy.plugin.install',
-      input: { ghost_id: 'weather', version: '1.0.0', operation: 'install', origin: 'custom-market',
-        source: { kind: 'git', repository: 'github.com/acme/plugins', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' } },
+      input: { ghost_id: 'weather', version: '1.0.0', operation: 'update', origin: 'custom-market',
+        source: { kind: 'git', repository: 'github.com/acme/plugins', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' },
+        originSourceChanged: true },
       description: 'v1.0.0 · From custom market Acme · Repository github.com/acme/plugins',
       metadata: { hostOwnedConfirmation: 'plugin_install' },
     };
@@ -449,6 +450,8 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
     for (const body of [im.body, hook?.card.body]) {
       expect(body).toContain('github.com/acme/plugins');
       expect(body).not.toContain('AbCdEfGhIjKlMnOpQrStUv');
+      // The source-change flag is an ordinary parameter and stays visible.
+      expect(body).toContain('originSourceChanged');
     }
     expect(request.input.source).toHaveProperty('sourceId');
   });

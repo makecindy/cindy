@@ -73,7 +73,6 @@ describe('pluginMarketRepositoryFromUrl', () => {
       'https://user:pass@github.com/acme/plugins.git',
       'https://github.com:8443/acme/plugins.git',
       'ssh://git@github.com:2222/acme/plugins.git',
-      'ssh://git:SECRET@github.com/acme/plugins.git',
     ]) {
       const repository = pluginMarketRepositoryFromUrl(url);
       expect(repository).toBe('github.com/acme/plugins');
@@ -106,7 +105,52 @@ describe('pluginMarketFetchAddress', () => {
   // Parts that feed the source id: scheme, host and port distinguish endpoints; credentials never appear.
   it('keeps the endpoint parts that tell sources apart and drops credentials', () => {
     expect(pluginMarketFetchAddress('https://ghp_SECRET@Git.Example.test:8443/acme/plugins.git'))
-      .toEqual({ scheme: 'https', user: '', host: 'git.example.test', port: '8443', path: '/acme/plugins.git' });
+      .toEqual({ identity: 'https://Git.Example.test:8443/acme/plugins.git', scheme: 'https', user: '', host: 'git.example.test', port: '8443', path: '/acme/plugins.git' });
+    // PR #12731 Codex P1 (trailing whitespace) and the follow-up audit: the parts are the raw bytes git uses.
+    // Nothing that could merge two different actual addresses is normalised: no trimming, no URL-parser
+    // normalisation, path and port kept as written. Only the host (DNS) and the scheme are lower-cased.
+    for (const raw of ['ssh://git@git.example.test/acme/plugins.git ', ' https://git.example.test/acme/plugins.git',
+      'git@git.example.test:acme/plugins.git\t', 'https://bücher.example/acme/plugins.git']) {
+      expect(pluginMarketFetchAddress(raw)).toBeNull();
+    }
+    const part = (raw: string) => pluginMarketFetchAddress(raw);
+    expect(part('https://git.example.test/acme/plugins')?.path).toBe('/acme/plugins');
+    expect(part('https://git.example.test/acme/plugins.git')?.path).toBe('/acme/plugins.git');
+    expect(part('https://git.example.test/acme/plugins.git/')?.path).toBe('/acme/plugins.git/');
+    expect(part('https://git.example.test/Acme/Plugins.git')?.path).toBe('/Acme/Plugins.git');
+    expect(part('https://git.example.test:443/acme/plugins.git')?.port).toBe('443');
+    expect(part('https://git.example.test/acme/plugins.git')?.port).toBe('');
+    expect(part('HTTPS://Git.Example.TEST/acme/plugins.git')).toMatchObject({ scheme: 'https', host: 'git.example.test' });
+    // Display may still normalise: these spellings share one repository text but not one source id.
+    for (const raw of ['https://git.example.test/acme/plugins', 'https://git.example.test/acme/plugins.git/']) {
+      expect(pluginMarketRepositoryFromUrl(raw)).toBe('git.example.test/acme/plugins');
+    }
+    // PR #12731 maintainer review 6054636680: a `?` or `#` before the first path slash ends the authority for
+    // libcurl and git, but a greedy userinfo match swallowed it and reported another host. The whole string is
+    // rejected before it is split, and so is every other shape on which parsers can disagree.
+    for (const raw of [
+      'https://git.example.test?@evil.example/acme/plugins.git',
+      'https://git.example.test#@evil.example/acme/plugins.git',
+      'https://user@git.example.test@evil.example/acme/plugins.git',
+      'https://a/b@evil.example/acme/plugins.git',
+      'https://@git.example.test/acme/plugins.git',
+      'https://[::1]/acme/plugins.git',
+      'https://git.example.test:abc/acme/plugins.git',
+      'https://git.example.test:0443/acme/plugins.git',
+      'https://git.example.test:70000/acme/plugins.git',
+      'https://git.example.test:/acme/plugins.git',
+      'https://git.example.test//acme/plugins.git',
+      'https://git.example.test/acme//plugins.git',
+      'https://git.example.test./acme/plugins.git',
+      'ssh://-oProxyCommand@git.example.test/acme/plugins.git',
+      'ssh://git@git.example.test:22:23/acme/plugins.git',
+      'git@git.example.test:acme/plugins.git:x',
+      'git@git.example.test:acme//plugins.git',
+      'git@git.example.test:../plugins.git',
+    ]) {
+      expect(pluginMarketFetchAddress(raw), raw).toBeNull();
+      expect(pluginMarketRepositoryFromUrl(raw), raw).toBeNull();
+    }
     // PR #12731 Codex P1: `?…` / `#…` would be cut off by a URL parser while git fetches a different repository
     // (`plugins.git?other` is another path on an SSH server), so such addresses have no endpoint at all.
     for (const suffix of ['?other', '#other']) {
@@ -117,11 +161,21 @@ describe('pluginMarketFetchAddress', () => {
     // SSH login users are part of the source (same host and path can resolve per user); https userinfo is a
     // credential and is never read.
     expect(pluginMarketFetchAddress('ssh://deploy@git.example.test:2222/acme/plugins.git'))
-      .toEqual({ scheme: 'ssh', user: 'deploy', host: 'git.example.test', port: '2222', path: '/acme/plugins.git' });
+      .toEqual({ identity: 'ssh://deploy@git.example.test:2222/acme/plugins.git', scheme: 'ssh', user: 'deploy', host: 'git.example.test', port: '2222', path: '/acme/plugins.git' });
     expect(pluginMarketFetchAddress('git@git.example.test:acme/plugins.git'))
-      .toEqual({ scheme: 'scp', user: 'git', host: 'git.example.test', port: '', path: 'acme/plugins.git' });
-    expect(pluginMarketFetchAddress('ssh://git:SECRET@git.example.test/acme/plugins.git')).toMatchObject({ user: 'git' });
-    expect(JSON.stringify(pluginMarketFetchAddress('ssh://git:SECRET@git.example.test/acme/plugins.git'))).not.toContain('SECRET');
+      .toEqual({ identity: 'git@git.example.test:acme/plugins.git', scheme: 'scp', user: 'git', host: 'git.example.test', port: '', path: 'acme/plugins.git' });
+    // PR #12731 Codex P1: git passes `git:tenant-a` to ssh as the whole login name, not user and password, so two
+    // tenants would merge if the suffix were dropped. Such SSH userinfo yields no identity.
+    expect(pluginMarketFetchAddress('ssh://git:tenant-a@git.example.test/acme/plugins.git')).toBeNull();
+    expect(pluginMarketRepositoryFromUrl('ssh://git:tenant-a@git.example.test/acme/plugins.git')).toBeNull();
+    // PR #12731 maintainer review 6055280843: OpenSSH Host aliases are case-sensitive, so the identity keeps the raw
+    // host; only http(s)/git userinfo (a credential) is removed. Display still normalises.
+    const identity = (raw: string) => pluginMarketFetchAddress(raw)?.identity;
+    expect(identity('ssh://git@Mirror/acme/plugins.git')).not.toBe(identity('ssh://git@mirror/acme/plugins.git'));
+    expect(identity('git@Mirror:acme/plugins.git')).not.toBe(identity('git@mirror:acme/plugins.git'));
+    expect(identity('https://ghp_ONE@git.example.test/acme/plugins.git')).toBe('https://git.example.test/acme/plugins.git');
+    expect(identity('https://ghp_TWO@git.example.test/acme/plugins.git')).toBe(identity('https://git.example.test/acme/plugins.git'));
+    expect(pluginMarketRepositoryFromUrl('git@Mirror:acme/plugins.git')).toBe(pluginMarketRepositoryFromUrl('git@mirror:acme/plugins.git'));
     // Paths the display identity rejects (e.g. a `.github` repository) still identify a source.
     expect(pluginMarketFetchAddress('https://github.com/acme/.github')).toMatchObject({ path: '/acme/.github' });
     expect(pluginMarketRepositoryFromUrl('https://github.com/acme/.github')).toBeNull();

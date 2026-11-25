@@ -373,6 +373,7 @@ export async function hasBranchConditionalConfig(
  * git 实际会连的地址：`ls-remote --get-url` 按当前 git 配置展开 `url.*.insteadOf`，不联网。
  * `target` 是配置里的地址（clone 前）或 `origin`（在已克隆的工作目录里 fetch 前）。
  * 结果可能含改写注入的凭证：只交给白名单生成函数，不得写日志、错误详情或任何文件；失败返回 null。
+ * 返回 git 输出的原始地址（只去掉行终止符），不做任何规整。
  */
 export async function resolveFetchUrl(
   target: string,
@@ -384,7 +385,9 @@ export async function resolveFetchUrl(
       ...(cwd ? { cwd } : {}),
       timeoutMs: 10_000,
     });
-    const value = stdout.trim();
+    // 只去掉 git 输出的那一个 LF，不 trim、也不去 CR：改写目标末尾可以真的带空白或 CR，它们是 git 实际使用的地址
+    // 的一部分，留给白名单拒绝（身份缺省）。Git for Windows 的管道输出同样只用 LF。
+    const value = stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
     return value && !value.includes('\n') ? value : null;
   } catch {
     return null;

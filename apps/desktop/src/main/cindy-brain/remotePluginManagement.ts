@@ -96,7 +96,14 @@ export interface RemotePluginManagementDeps {
       prompt: GhostInstallConsentPrompt,
       assertCurrent: () => void,
       assertScope: () => void,
+      /** 契约 V2.9：发起这次安装的远程操作与控制端（设备身份），提交成功时记作操作级证据。 */
+      remoteOperation?: { operationId: string; controller: string },
     ): Promise<void>;
+    /**
+     * 契约 V2.9：只对 `controller` 补上它自己那次操作留下的 `installedOperationId`，其它一律去掉。缺省时远程响应
+     * 不带这个字段。
+     */
+    installedOperations?<T extends PluginMarketItem>(items: readonly T[], controller: string): Promise<T[]>;
   };
   setEnabled(
     id: string,
@@ -297,6 +304,16 @@ export class RemotePluginManagement {
   invalidate(): void {
     this.prune();
   }
+  /** 契约 V2.9：`installedOperationId` 只对发起那次操作的控制端给出；不支持时整体去掉。 */
+  private async withOperations<T extends PluginMarketItem>(peer: string, items: readonly T[]): Promise<T[]> {
+    if (this.deps.market.installedOperations) return this.deps.market.installedOperations(items, peer);
+    return items.map((item) => {
+      if (!('installedOperationId' in item)) return item;
+      const copy = { ...item };
+      delete copy.installedOperationId;
+      return copy;
+    });
+  }
   async invoke(
     peer: string,
     request: RemoteActionInvokeRequest,
@@ -328,12 +345,18 @@ export class RemotePluginManagement {
           : read === 'recommendations' && this.deps.market.recommendations
             ? await this.deps.market.recommendations() : null;
         if (!current()) return unavailable();
-        return result(value);
+        const projected = !value ? value : Array.isArray(value)
+          ? await this.withOperations(peer, value)
+          : { ...value, items: await this.withOperations(peer, value.items) };
+        if (!current()) return unavailable();
+        return result(projected);
       }
-      const [market, projects] = await Promise.all([
+      const [snapshot, projects] = await Promise.all([
         this.deps.market.snapshot(read === undefined),
         this.deps.projects?.list(),
       ]);
+      if (!current()) return unavailable();
+      const market = { ...snapshot, items: await this.withOperations(peer, snapshot.items) };
       if (!current()) return unavailable();
       const browsed = this.browsedProjects.get(peer)?.project;
       const scopeProjects = browsed && projects
@@ -416,7 +439,9 @@ export class RemotePluginManagement {
       if (!current()) return unavailable();
       const detail = await this.deps.market.detail(str(input.pluginId, 1024));
       if (!current()) return unavailable();
-      return result(detail);
+      const [projected] = await this.withOperations(peer, [detail]);
+      if (!current()) return unavailable();
+      return result(projected);
     }
     if (request.actionId === 'management:operation') {
       if (Object.keys(input).some((k) => k !== 'operationId')) return invalid();
@@ -591,6 +616,8 @@ export class RemotePluginManagement {
               assertCurrent,
               // The installer owns approval checks; this guard survives its directory swap.
               () => this.assertScope(op),
+              // 契约 V2.9：提交成功时把这次操作号记作安装证据，只对本控制端（peer）投影。
+              { operationId: id, controller: peer },
             );
             break;
           case 'install-file':

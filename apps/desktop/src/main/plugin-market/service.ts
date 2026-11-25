@@ -60,6 +60,7 @@ import type {
 import {
   customMarketPluginId,
   customMarketReleaseId,
+  isPluginMarketOperationId,
   isPluginMarketSourceId,
   marketSourceKey,
   parseCustomMarketPluginId,
@@ -155,7 +156,7 @@ import {
 import type { DiscoveredMarketPlugin } from './sources/discover.js';
 import { checkGitPreflight, type GitPreflightResult } from './sources/preflight.js';
 import { MarketSourceManager } from './sources/index.js';
-import { createMarketSourceIdOf, SOURCE_ID_KEY_FILE } from './sources/sourceId.js';
+import { createMarketSourceIdOf, SOURCE_ID_KEY_DIR, type MarketSourceIdOf } from './sources/sourceId.js';
 import { MarketSourceStore } from './sources/store.js';
 
 const log = createLogger('plugin-market');
@@ -623,27 +624,54 @@ function isGhostBusy(
 }
 
 /** 自定义市场发现到的单个插件条目（快照投影的原料）。 */
+/** 写进安装记录的远程操作证据（契约 V2.9），落位时再补上当次包的 raw manifest 摘要。 */
+interface RemoteOperationEvidence {
+  operationId: string;
+  /** 发起方设备身份的本机不可逆标识。 */
+  controller: string;
+  keyId: string;
+}
+
+function remoteOperationBindingOf(
+  evidence: RemoteOperationEvidence | null | undefined,
+  rawManifestSha256: string,
+): Pick<PluginMarketInstallationRecord, 'remoteOperationBinding'> {
+  return evidence ? { remoteOperationBinding: { ...evidence, rawManifestSha256 } } : {};
+}
+
+/** 同一 owner 当前密钥下的来源标识视图（见 sources/sourceId.ts）。只有同一 keyId 算出的标识才能比较。 */
+interface CustomSourceIds {
+  keyId: string | null;
+  /** 本地来源的标识只由来源指纹决定，可按当前密钥现算。 */
+  localSourceIdOf: (sourceKey: string) => string | null;
+}
+
+function customSourceIdsOf(manager: MarketSourceManager): CustomSourceIds {
+  return { keyId: manager.sourceKeyId(), localSourceIdOf: (sourceKey) => manager.localSourceIdOf(sourceKey) };
+}
+
 /**
- * 已装实例的来源标识，取自安装记录的 `sourceIdBinding`：绑定的 `sourceKey` 与 raw manifest 摘要必须仍等于
- * 记录当前的值，否则缺省（防止某条写入保留了旧标识、来源或包却已变）。没有绑定的旧记录：本地来源由记录的
- * 来源指纹现算（不涉及 git 改写，结果等价）；Git 来源缺省，控制端按未确认处理。
+ * 已装实例在当前密钥下的来源标识，取自安装记录的 `sourceIdBinding`：绑定的 `sourceKey` 与 raw manifest 摘要
+ * 必须仍等于记录当前的值，且 `keyId` 等于当前密钥，否则缺省（防止某条写入保留了旧标识、来源或包却已变；
+ * 密钥重建后旧绑定一律无法核实，而不是「来源不同」）。本地来源在绑定缺省或密钥换过时由记录的来源指纹现算
+ * （不涉及 git 改写，结果等价）；Git 来源缺省，控制端按未确认处理，换源判断也不成立。
  */
 function installedSourceIdOf(
   record: PluginMarketInstallationRecord,
-  localSourceIdOf: (sourceKey: string) => string | null,
+  sourceIds: CustomSourceIds,
 ): string | null {
   const binding: unknown = record.sourceIdBinding;
   if (binding !== undefined) {
     if (!binding || typeof binding !== 'object' || Array.isArray(binding)) return null;
     const value = binding as Record<string, unknown>;
-    return isPluginMarketSourceId(value.sourceId) &&
+    const bound = isPluginMarketSourceId(value.sourceId) &&
       typeof record.sourceKey === 'string' && value.sourceKey === record.sourceKey &&
-      typeof record.rawManifestSha256 === 'string' && value.rawManifestSha256 === record.rawManifestSha256
-      ? value.sourceId
-      : null;
+      typeof record.rawManifestSha256 === 'string' && value.rawManifestSha256 === record.rawManifestSha256;
+    if (!bound) return null;
+    if (sourceIds.keyId && value.keyId === sourceIds.keyId) return value.sourceId as string;
   }
   return record.source === 'local-market' && typeof record.sourceKey === 'string' && record.sourceKey
-    ? localSourceIdOf(record.sourceKey)
+    ? sourceIds.localSourceIdOf(record.sourceKey)
     : null;
 }
 
@@ -655,8 +683,8 @@ interface CustomMarketEntry {
   sourceIdentity: PluginMarketSourceIdentity | null;
   /** 同一份配置与缓存版本的不透明来源标识（展示身份生成不出时仍可能有）。 */
   sourceId: string | null;
-  /** 同一 owner 密钥的本地来源标识计算器；旧账本记录没有存标识时，本地来源按记录的来源指纹现算。 */
-  localSourceIdOf: (sourceKey: string) => string | null;
+  /** 同一 owner 当前密钥下的来源标识视图；已装记录的绑定只有 keyId 相同才能与候选比较。 */
+  sourceIds: CustomSourceIds;
 }
 
 interface CustomMarketDiscovery {
@@ -696,6 +724,11 @@ export interface PluginMarketSnapshotOptions {
  */
 export interface PluginMarketInstallContext {
   consent: { prompt: GhostInstallConsentPrompt; initiator: GhostInstallConsentInitiator };
+  /**
+   * Main-only：这次安装由远程管理的哪一次操作、哪个控制端（设备身份）发起（契约 V2.9）。提交成功时写进安装记录
+   * 作为操作级证据；Renderer 的 IPC 永远不传。
+   */
+  remoteOperation?: { operationId: string; controller: string };
   /** Main-only caller authority and installed approval, checked before replacement. */
   assertCurrent?: () => void;
   /** Owner/peer/cancellation only; remains valid after the package directory swap. */
@@ -716,6 +749,13 @@ function stripDirectionalControls(text: string): string {
   );
 }
 /* eslint-enable no-control-regex */
+
+async function readInstalledMarketManifestIdentityAsync(
+  dir: string,
+): Promise<InstalledMarketManifestIdentity | null> {
+  const result = await readInstalledGhostManifestSnapshotAsync(dir, GHOST_MANIFEST_MAX_BYTES);
+  return result.ok ? installedMarketManifestIdentity(result.snapshot) : null;
+}
 
 function readInstalledMarketManifestIdentity(
   dir: string,
@@ -2293,6 +2333,12 @@ export class PluginMarketService {
   ): Promise<PluginMarketInstallResult> {
     const { assertCurrent, assertScope = assertCurrent } = context;
     assertCurrent?.();
+    // 只有远程管理发起时才异步算证据；本机路径不能在捕获 owner 之前多出一次 await。远程路径的 assertCurrent 会在
+    // 这之后立即复核 owner 与控制端。
+    const operationEvidence = context.remoteOperation
+      ? await this.remoteOperationEvidence(context.remoteOperation)
+      : null;
+    if (context.remoteOperation) assertCurrent?.();
     const customRef = parseCustomMarketPluginId(pluginId);
     if (customRef) {
       return this.customInstall(
@@ -2309,6 +2355,7 @@ export class PluginMarketService {
         assertCurrent,
         assertScope,
         progress,
+        operationEvidence,
       );
     }
     if (!isValidPluginResourceId(pluginId)) {
@@ -2366,6 +2413,7 @@ export class PluginMarketService {
             ? 'user-requested-source-change'
             : 'preserve-existing-source',
         ...(progress ? { progress } : {}),
+        ...(operationEvidence ? { remoteOperation: operationEvidence } : {}),
       },
       owner,
       ledger,
@@ -2552,7 +2600,7 @@ export class PluginMarketService {
               plugin,
               sourceIdentity: discovered.sourceIdentity,
               sourceId: discovered.sourceId,
-              localSourceIdOf: (sourceKey) => manager.localSourceIdOf(sourceKey),
+              sourceIds: customSourceIdsOf(manager),
               iconKey: await customMarketIconKey(
                 owner,
                 discovered.config,
@@ -2594,6 +2642,8 @@ export class PluginMarketService {
     assertCurrent?: () => void,
     assertScope = assertCurrent,
     progress?: PluginInstallProgress,
+    /** 远程管理发起时的操作证据（契约 V2.9）；其它路径不传，落位后的记录里就没有。 */
+    operationEvidence?: RemoteOperationEvidence | null,
   ): Promise<PluginMarketInstallResult> {
     const automatic = consent.mode === 'automatic';
     if (options.expectedManifest === undefined) {
@@ -2646,10 +2696,14 @@ export class PluginMarketService {
         }
         // 同一路由（同一配置）下实际来源是否已变：已装实例的标识取自安装记录，候选取自这份打包所用的缓存版本。
         const installedSourceIdAtReview = matchesSelectedRoute && currentRecord
-          ? installedSourceIdOf(currentRecord, (key) => manager.localSourceIdOf(key))
+          ? installedSourceIdOf(currentRecord, customSourceIdsOf(manager))
           : null;
         const sourceSwitch = isCustomSourceSwitch(installedSourceIdAtReview, discovered.sourceId);
         if (automatic && sourceSwitch) throw new CustomSourceSwitchConsentRequiredError();
+        // 「这次是否换源」只在这里判定一次：显式跨路由替换（服务端 ↔ 自定义、自定义 A ↔ B，要求 allowSourceReplacement）
+        // 与同一路由下实际来源变化都算。它同时决定确认内容（按首装展示完整权限并提示数据隔离）、授予范围与运行时归档；
+        // 提交锁内的判定必须与它一致，否则拒绝。
+        const replacesSource = Boolean(existing && (!matchesSelectedRoute || sourceSwitch));
         const assertCustomApprovalStateUnchanged = (installedNow: InstalledGhost | null): void => {
           if (!installedNow) return;
           if (options.expectedInstalledApproval === undefined) {
@@ -2685,9 +2739,11 @@ export class PluginMarketService {
           // 不在确认前按市场名重读（可能已被同名来源替换）。beforeCommit 复核 sourceKey，来源被换即
           // 拒绝，所以确认展示的就是随后安装的来源。
           sourceIdentity: discovered.sourceIdentity,
-          // 同一份配置与缓存版本的来源标识；落位后与这份包的 raw manifest 摘要一起写进账本。
+          // 同一份配置与缓存版本的来源标识；落位后与这份包的 raw manifest 摘要、算出它的密钥标识一起写进账本。
           sourceId: discovered.sourceId,
+          sourceIdKeyId: manager.sourceKeyId(),
           sourceSwitch,
+          replacesSource,
           assertCustomApprovalStateUnchanged,
         };
       });
@@ -2703,7 +2759,9 @@ export class PluginMarketService {
           sourceType,
           sourceIdentity,
           sourceId,
+          sourceIdKeyId,
           sourceSwitch,
+          replacesSource,
           assertCustomApprovalStateUnchanged,
         } = packedAttempt;
         // 来源只决定后台更新路由，不是 ghostId 的永久所有权。只有详情页明确
@@ -2722,8 +2780,9 @@ export class PluginMarketService {
                       ...consent,
                       trust: packed.inspected.trust.level,
                       originSource: sourceIdentity ?? undefined,
-                      // 换源必须显式确认：即使权限没有变多也弹出确认，并提示来源与已安装时不同。
-                      ...(sourceSwitch ? { force: true, originSourceChanged: true as const } : {}),
+                      // 换源必须显式确认：即使权限没有变多也弹出确认，并提示来源与已安装时不同。旧实例的批准随旧来源
+                      // 归档、不继承，所以按首装展示新来源的完整权限，并按同一份事实授予（契约 V2.4b）。
+                      ...(replacesSource ? { force: true, freshGrant: true, originSourceChanged: true as const } : {}),
                     }
                   : consent,
                 installedGhostMatchingMarketPluginNow(plugin),
@@ -2790,16 +2849,23 @@ export class PluginMarketService {
             if (current && !routeStillMatches && options.allowSourceReplacement !== true) {
               throwIpcError('PRECONDITION_FAILED', 'Installed Plugin source changed');
             }
-            // 提交前再按现读的安装记录比较实际来源：后台路径一律不换源；显式路径只放行确认时已提示过的换源。
-            if (
-              routeStillMatches && record &&
-              isCustomSourceSwitch(installedSourceIdOf(record, (key) => manager.localSourceIdOf(key)), sourceId) &&
-              (automatic || !sourceSwitch)
-            ) {
+            // 提交前再按现读的安装记录比较实际来源（同一密钥下两边都可核实且不相等）：后台路径一律不换源；
+            // 显式路径只放行确认时已提示过的换源。
+            const actualSourceSwitch = Boolean(routeStillMatches && record &&
+              isCustomSourceSwitch(installedSourceIdOf(record, customSourceIdsOf(manager)), sourceId));
+            if (actualSourceSwitch && (automatic || !sourceSwitch)) {
               if (automatic) throw new CustomSourceSwitchConsentRequiredError();
               throwIpcError('PRECONDITION_FAILED', 'The installed Plugin came from another source');
             }
-            sourceChanged = Boolean(current && !routeStillMatches);
+
+            // 换源事务（运行时的空闲检查、旧账号与数据隔离归档）：路由换了，或同一路由下这里核实到的实际换源
+            // （用户已在确认里看到）。旧记录没有绑定、候选无法核实或密钥换过时 actualSourceSwitch 为 false，
+            // 按同源更新保留数据。
+            sourceChanged = Boolean(current && (!routeStillMatches || actualSourceSwitch));
+            // 确认时与提交时的换源判定必须一致：确认按哪种方式展示、授予，提交就按哪种方式归档或原位更新。
+            if (sourceChanged !== replacesSource) {
+              throwIpcError('PRECONDITION_FAILED', 'The installed Plugin source changed during the update');
+            }
           },
           expectedInstalledApproval: options.expectedInstalledApproval,
           assertCurrent: assertScope,
@@ -2878,9 +2944,10 @@ export class PluginMarketService {
                 rawManifestSha256: evidence.rawManifestSha256,
                 // 这份包取自的来源标识（打包所在租约里的同一份配置与缓存版本）。显式安装、后台自动更新、
                 // 换源都经这里整条重写，标识随新包更新；绑定 sourceKey 与 raw 摘要，投影时对不上即缺省。
-                ...(sourceId
-                  ? { sourceIdBinding: { sourceId, sourceKey, rawManifestSha256: evidence.rawManifestSha256 } }
+                ...(sourceId && sourceIdKeyId
+                  ? { sourceIdBinding: { sourceId, sourceKey, rawManifestSha256: evidence.rawManifestSha256, keyId: sourceIdKeyId } }
                   : {}),
+                ...remoteOperationBindingOf(operationEvidence, evidence.rawManifestSha256),
               });
             });
             replacedRoute = null;
@@ -2996,7 +3063,7 @@ export class PluginMarketService {
             plugin,
             sourceIdentity,
             sourceId,
-            localSourceIdOf: (sourceKey) => manager.localSourceIdOf(sourceKey),
+            sourceIds: customSourceIdsOf(manager),
             iconKey: await customMarketIconKey(owner, config, plugin, iconProjectionGeneration),
           });
         }
@@ -3062,7 +3129,7 @@ export class PluginMarketService {
     // 且磁盘上的包仍是记录里那份时给出。控制端核实回执过期的安装时与原尝试的 originSource.sourceId 比对。
     const installedSourceId = ghost && record?.installed && record.pluginId === pluginId && identity &&
       verifyInstalledMarketManifest(record, identity)
-      ? installedSourceIdOf(record, entry.localSourceIdOf)
+      ? installedSourceIdOf(record, entry.sourceIds)
       : null;
     // 同一路由下候选的实际来源与已装的不同（两边都可核实）：不作为可静默套用的更新，标成等待用户确认。
     const sourceSwitch = matchesUpdateRoute && isCustomSourceSwitch(installedSourceId, entry.sourceId);
@@ -3128,7 +3195,7 @@ export class PluginMarketService {
     return new MarketSourceManager({
       store: this.sourceStore.bind(ownerScopedUserDataPath('plugin-market', 'sources.v1.json')),
       cloneRoot: ownerScopedUserDataPath('plugin-market', 'sources'),
-      sourceIdOf: createMarketSourceIdOf(ownerScopedUserDataPath('plugin-market', SOURCE_ID_KEY_FILE)),
+      sourceIdOf: createMarketSourceIdOf(ownerScopedUserDataPath('plugin-market', SOURCE_ID_KEY_DIR)),
     });
   }
 
@@ -3155,6 +3222,8 @@ export class PluginMarketService {
       acquireMutation?: boolean;
       /** Display-only progress of a user-started install; background installs pass none. */
       progress?: PluginInstallProgress;
+      /** 远程管理发起时的操作证据（契约 V2.9）。 */
+      remoteOperation?: RemoteOperationEvidence;
     },
     owner = captureMarketOwner(),
     ledger = this.ledgerForOwner(owner),
@@ -3274,14 +3343,38 @@ export class PluginMarketService {
           throwIpcError('GHOST_FILE_INVALID', 'Downloaded Plugin package identity changed');
         }
       }
+      // 「这次是否换源」在确认前判定一次（与提交锁内 commitDownloadedPackage 的判定同一条件）：显式替换或组织默认
+      // 接管且当前装着的不是这条记录送达的那份时，提交会归档旧实例、不继承旧批准。用户确认的路径据此按首装展示新来源
+      // 的完整权限并提示数据隔离；提交锁内的判定必须一致，否则拒绝。
+      const consentInstalled = installedGhostMatchingMarketPluginNow(plugin);
+      const reviewSourceChanged = options.consent.mode === 'prompt'
+        ? Boolean(
+            consentInstalled &&
+            (sourceReplacementMode === 'user-requested-source-change' ||
+              sourceReplacementMode === 'organization-default-takeover') &&
+            !serverRecordMatchesDelivery(
+              plugin,
+              consentInstalled,
+              serverInstallation(ledger, plugin),
+              await readInstalledMarketManifestIdentityAsync(consentInstalled.dir),
+            ),
+          )
+        : undefined;
+      requireSameMarketOwner(owner);
       // 权限以真实包为准:下载检查后、任何安装锁之外求确认。检查失败的包会在装入
       // 出口重新解析时被拒,不为它弹确认。
       const consent: GhostInstallConsentDecision =
         'rejection' in inspected
           ? { mode: 'unprompted' }
           : await obtainGhostInstallConsent(
-              options.consent.mode === 'prompt' ? { ...options.consent, trust: inspected.trust.level } : options.consent,
-              installedGhostMatchingMarketPluginNow(plugin),
+              options.consent.mode === 'prompt'
+                ? {
+                    ...options.consent,
+                    trust: inspected.trust.level,
+                    ...(reviewSourceChanged ? { force: true, freshGrant: true, originSourceChanged: true as const } : {}),
+                  }
+                : options.consent,
+              consentInstalled,
               inspected.manifest,
               inspected.packageSha256,
             );
@@ -3310,6 +3403,8 @@ export class PluginMarketService {
             ...(reclaimLegacyBareInstance ? { reclaimLegacyBareInstance: true } : {}),
             expectedInstalled: options.expectedInstalled,
             verifiedServerRoot,
+            ...(options.remoteOperation ? { remoteOperation: options.remoteOperation } : {}),
+            ...(reviewSourceChanged !== undefined ? { reviewSourceChanged } : {}),
             ...(options.expectedInstalledApproval !== undefined
               ? { expectedInstalledApproval: options.expectedInstalledApproval }
               : {}),
@@ -3363,6 +3458,9 @@ export class PluginMarketService {
       assertCurrent?: () => void;
       expectedInstalled: boolean;
       verifiedServerRoot?: string;
+      remoteOperation?: RemoteOperationEvidence;
+      /** 用户确认时判定的「是否换源」；给出时提交锁内的判定必须与之一致。 */
+      reviewSourceChanged?: boolean;
     },
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
@@ -3424,6 +3522,9 @@ export class PluginMarketService {
           options.sourceReplacementMode === 'organization-default-takeover') &&
         !serverRecordMatchesDelivery(plugin, installedNow, currentRecordNow),
       );
+      if (options.reviewSourceChanged !== undefined && sourceChanged !== options.reviewSourceChanged) {
+        throwIpcError('PRECONDITION_FAILED', 'The installed Plugin source changed during the update');
+      }
       const simulatorMigration = installedNow?.manifest.id === LEGACY_SIMULATOR_ID && isSimulatorMigrationTarget(plugin);
       if (simulatorMigration && (!currentRecordNow || sourceChanged)) {
         throwIpcError('PRECONDITION_FAILED', 'Simulator migration requires its original market source');
@@ -3489,7 +3590,8 @@ export class PluginMarketService {
               rawManifestSha256: evidence.rawManifestSha256,
               legacyManifestDigest: evidence.legacyManifestDigest,
               legacyManifestDigests: [],
-            }), ...(options.verifiedServerRoot ? { serverRoot: options.verifiedServerRoot } : {}) };
+            }), ...(options.verifiedServerRoot ? { serverRoot: options.verifiedServerRoot } : {}),
+            ...remoteOperationBindingOf(options.remoteOperation, evidence.rawManifestSha256) };
             if (simulatorMigration) {
               if (!currentRecordNow || !ledger.migrateSimulatorInstallation(currentRecordNow, next)) {
                 throwIpcError('PRECONDITION_FAILED', 'Simulator market route changed during migration');
@@ -3516,6 +3618,77 @@ export class PluginMarketService {
         throw error;
       });
       return installed;
+    });
+  }
+
+  /** 当前 owner 的来源标识计算器（密钥已异步备好）。 */
+  private async preparedSourceIds(): Promise<MarketSourceIdOf> {
+    const sourceIds = createMarketSourceIdOf(ownerScopedUserDataPath('plugin-market', SOURCE_ID_KEY_DIR));
+    await sourceIds.prepare?.();
+    return sourceIds;
+  }
+
+  /**
+   * 远程管理发起的安装要留的操作证据（契约 V2.9）。操作号不合 PLUGIN_MARKET_OPERATION_ID_PATTERN、或密钥不可用时
+   * 不留证据（照常安装，控制端届时按未确认处理）。原始设备身份只用于算本机标识，不写盘、不记日志。
+   */
+  private async remoteOperationEvidence(
+    remoteOperation: PluginMarketInstallContext['remoteOperation'],
+  ): Promise<RemoteOperationEvidence | null> {
+    if (!remoteOperation || !isPluginMarketOperationId(remoteOperation.operationId)) return null;
+    const sourceIds = await this.preparedSourceIds();
+    const controller = sourceIds.controllerTag?.(remoteOperation.controller) ?? null;
+    const keyId = sourceIds.keyId();
+    return controller && keyId ? { operationId: remoteOperation.operationId, controller, keyId } : null;
+  }
+
+  /**
+   * 远程管理响应专用（契约 V2.9）：只对发起那次操作的控制端，给条目补上 `installedOperationId`。要求当前已装
+   * 实例的安装记录为已安装、属于该条目，记录里的操作证据由当前密钥为这个控制端算出，且绑定的包摘要等于记录与
+   * 磁盘上的包。传入条目上已有的该字段一律先去掉（只认这里的结论）。本机界面不经过这里，永远看不到。
+   */
+  async withInstalledOperationIds<T extends PluginMarketItem>(
+    items: readonly T[],
+    controller: string,
+  ): Promise<T[]> {
+    const stripped = items.map((item) => {
+      if (!('installedOperationId' in item)) return item;
+      const copy = { ...item };
+      delete copy.installedOperationId;
+      return copy;
+    });
+    if (stripped.length === 0 || !controller || !canCaptureMarketOwner()) return stripped;
+    const owner = captureMarketOwner();
+    const sourceIds = await this.preparedSourceIds();
+    requireSameMarketOwner(owner);
+    const tag = sourceIds.controllerTag?.(controller) ?? null;
+    const keyId = sourceIds.keyId();
+    if (!tag || !keyId) return stripped;
+    const local = await this.readLocalInstallSnapshot(owner);
+    requireSameMarketOwner(owner);
+    // 按完整实例身份关联（pluginId + ghostId + namespace，缺省 namespace 即根）：同一 pluginId 可在多个 namespace 各有
+    // 一份安装记录，一份记录的证据不能投影到另一个实例的条目上。
+    const instanceKey = (entry: { pluginId: string; ghostId: string; namespace?: string | null }) =>
+      JSON.stringify([entry.pluginId, entry.ghostId, entry.namespace ?? null]);
+    const evidenceByInstance = new Map<string, string>();
+    for (const record of Object.values(local.installations)) {
+      const binding: unknown = record.remoteOperationBinding;
+      if (!record.installed || !binding || typeof binding !== 'object' || Array.isArray(binding)) continue;
+      const value = binding as Record<string, unknown>;
+      if (
+        !isPluginMarketOperationId(value.operationId) || value.controller !== tag || value.keyId !== keyId ||
+        typeof record.rawManifestSha256 !== 'string' || value.rawManifestSha256 !== record.rawManifestSha256
+      ) continue;
+      const ghost = snapshotGhost(local, record);
+      const identity = ghost ? local.manifestIdentityByStoragePart.get(installedGhostStoragePart(ghost)) : null;
+      if (!identity || !verifyInstalledMarketManifest(record, identity)) continue;
+      evidenceByInstance.set(instanceKey(record), value.operationId);
+    }
+    return stripped.map((item) => {
+      const operationId = item.installState === 'installed' || item.installState === 'update-available'
+        ? evidenceByInstance.get(instanceKey(item))
+        : undefined;
+      return operationId ? { ...item, installedOperationId: operationId } : item;
     });
   }
 
