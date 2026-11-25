@@ -6662,8 +6662,11 @@ function CCAgentSessionContent({
             {/* worktree 恢复横幅(P1):worktree 已被回收(目录缺失、分支还在)时
               提供一键恢复。组件自查 restore-status,非 restorable 自渲染 null;
               与 error/streaming 互斥条件从轻——目录缺失是持续状态,不依赖错误出现。 */}
-            {!readOnly && sessionId && !isStreaming && !agentStatus.isRunning && (
+            {viewVisible && !readOnly && sessionId && rightSidebarDeviceLinkDeviceId !== undefined && !isStreaming && !agentStatus.isRunning && (
               <WorktreeRestoreBanner
+                key={JSON.stringify([rightSidebarDeviceLinkDeviceId, sessionId])}
+                deviceId={rightSidebarDeviceLinkDeviceId}
+                online={rightSidebarDeviceLinkDeviceId === null || remoteConn === 'connected'}
                 sessionId={sessionId}
                 style={{ width: inputWidth }}
               />

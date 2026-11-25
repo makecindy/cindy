@@ -190,6 +190,7 @@ export interface ListSessionsParams {
 }
 
 export interface SessionSummary {
+  pinnedAt: number | null;
   hiddenAt: number | null;
   lastActivityAt: number;
   companion: HistoryCompanion | null;
@@ -271,6 +272,7 @@ export async function listSessionsForHistory(
       workspaceKind: sessions.workspaceKind,
       model: sessions.model,
       status: sessions.status,
+      pinnedAt: sessions.pinnedAt,
       hiddenAt: sessions.hiddenAt,
       source: sessions.source,
       orcaRole: sessions.orcaRole,
@@ -312,6 +314,7 @@ export async function listSessionsForHistory(
     workspaceKind: r.workspaceKind,
     model: r.model,
     status: r.status,
+    pinnedAt: r.pinnedAt,
     hiddenAt: r.hiddenAt,
     source: r.source,
     orcaRole: r.orcaRole,

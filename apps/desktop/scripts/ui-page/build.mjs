@@ -268,7 +268,7 @@ const common = (definition, plugins, overlay) => ({
     'import.meta.env.PROD': 'true',
     'import.meta.env.DEV': 'false',
     'import.meta.env.MODE': '"production"',
-    'import.meta.env.VITE_CINDY_AUTH_REGION': '"global"',
+    'import.meta.env.VITE_CINDY_AUTH_REGION': JSON.stringify(definition.authRegion ?? 'global'),
     'process.env.NODE_ENV': '"production"',
   },
   logLevel: 'silent',
