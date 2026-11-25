@@ -36,11 +36,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-import { Server as SshServer, type ServerChannel, type Session } from 'ssh2';
+import { Client as SshClient, Server as SshServer, utils, type Connection, type ParsedKey, type ServerChannel, type Session } from 'ssh2';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteHost } from '@cindy/maker-remote-ssh';
@@ -148,16 +147,22 @@ interface FakeSshd {
 async function startFakeSshd(opts: {
   fakeHome: string;
   hostKeyPem: string;
+  allowedKey: ParsedKey;
   stubEnv: Record<string, string>;
 }): Promise<FakeSshd> {
   const execs: ExecRecord[] = [];
-  const sockets = new Set<net.Socket>();
+  const connections = new Set<Connection>();
   const server = new SshServer({ hostKeys: [opts.hostKeyPem] }, (client) => {
     client.on('authentication', (ctx) => {
-      // 只接受 publickey(与生产 agent/key 路径同族),不校验具体 key —— 环回
-      // 测试无真实凭据可言,接受即匿名。
-      if (ctx.method === 'publickey') ctx.accept();
-      else ctx.reject(['publickey']);
+      // 只允许本次 fixture 的临时密钥,并验证签名。环回端口也不能向其他
+      // 本地进程开放任意命令执行。
+      if (ctx.method !== 'publickey' || ctx.key.algo !== opts.allowedKey.type
+        || !ctx.key.data.equals(opts.allowedKey.getPublicSSH())
+        || (ctx.signature && (!ctx.blob || opts.allowedKey.verify(ctx.blob, ctx.signature, ctx.hashAlgo) !== true))) {
+        ctx.reject(['publickey']);
+        return;
+      }
+      ctx.accept();
     });
     client.on('ready', () => {
       client.on('session', (accept) => {
@@ -216,9 +221,9 @@ async function startFakeSshd(opts: {
     });
     client.on('error', () => { /* client teardown races */ });
   });
-  server.on('connection', (s) => {
-    sockets.add(s);
-    s.on('close', () => sockets.delete(s));
+  server.on('connection', (connection) => {
+    connections.add(connection);
+    connection.on('close', () => connections.delete(connection));
   });
   await new Promise<void>((resolveListen, rejectListen) => {
     server.once('error', rejectListen);
@@ -230,7 +235,7 @@ async function startFakeSshd(opts: {
     port: addr.port,
     execs,
     close: async () => {
-      for (const s of sockets) s.destroy();
+      for (const connection of connections) connection.end();
       await new Promise<void>((r) => server.close(() => r()));
     },
   };
@@ -321,6 +326,8 @@ async function startFixture(): Promise<Fixture> {
       publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
       privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
     });
+    const allowedKey = utils.parseKey(clientKeyPem);
+    if (allowedKey instanceof Error) throw allowedKey;
     const identityFile = path.join(tmp, 'id_test');
     fs.writeFileSync(identityFile, clientKeyPem, { mode: 0o600 });
 
@@ -331,6 +338,7 @@ async function startFixture(): Promise<Fixture> {
     sshd = await startFakeSshd({
       fakeHome,
       hostKeyPem,
+      allowedKey,
       stubEnv: {
         CINDY_STUB_LOG_FILE: stubLogFile,
         CINDY_STUB_FAIL_HELLO_FILE: failHelloFile,
@@ -449,6 +457,28 @@ describe.skipIf(process.platform !== 'linux')('ssh channel lifecycle (#12571, lo
   afterEach(async () => {
     if (f) await stopFixture(f);
   });
+
+  // The loopback server runs shell commands as the test user: an unrelated key
+  // must not authenticate. Previously any local public key was accepted.
+  it('rejects clients with a different ephemeral key', async () => {
+    const { privateKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+      publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+    });
+    const client = new SshClient();
+    try {
+      const result = await withDeadline(new Promise<string>((resolve) => {
+        client.once('ready', () => resolve('accepted'));
+        client.once('error', () => resolve('rejected'));
+        client.connect({ host: '127.0.0.1', port: f.sshd.port, username: 'tester', privateKey });
+      }), 10_000, 'unauthorized SSH client');
+      expect(result).toBe('rejected');
+      expect(f.sshd.execs).toHaveLength(0);
+    } finally {
+      client.end();
+    }
+  }, 30_000);
 
   it('open tags the remote bridge env; dispose kills the remote process via client-sent signal', async () => {
     const { dispose } = await openCcManagerSession(openOpts(f));
