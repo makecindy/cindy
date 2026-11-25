@@ -956,6 +956,33 @@ describe('MarketSourceManager source identity', () => {
     expect(at(8443)).not.toBe(at(9443));
   });
 
+  // PR #12731 maintainer review (06:33, item 1): on a plain SSH server the same host and relative path
+  // resolve per login user, so the user is part of the source (only inside the local HMAC input).
+  it('gives the same relative scp path under two SSH users different source ids', () => {
+    const root = makeRoot();
+    const sourceIdOf = createMarketSourceIdOf(path.join(root, 'source-id.key'));
+    const sourceKey = marketSourceKey({ type: 'git', url: 'https://origin.example.test/acme/plugins.git', sparsePaths: [] });
+    const as = (url: string) => sourceIdOf({ kind: 'git', sourceKey, address: pluginMarketFetchAddress(url)! });
+    expect(as('alice@git.example.test:plugins.git')).toMatch(SOURCE_ID);
+    expect(as('alice@git.example.test:plugins.git')).not.toBe(as('bob@git.example.test:plugins.git'));
+    expect(as('ssh://alice@git.example.test/srv/plugins.git')).not.toBe(as('ssh://bob@git.example.test/srv/plugins.git'));
+    // HTTPS credentials are not identity: rotating them keeps the same id.
+    expect(as('https://ghp_ONE@git.example.test/acme/plugins.git')).toBe(as('https://ghp_TWO@git.example.test/acme/plugins.git'));
+  });
+
+  it('keeps an SSH login user out of the fetch record and the identity', async () => {
+    const root = makeRoot();
+    const manager = identityManager(root, rewritingGit(() => 'alice@git.example.test:acme/plugins.git').executor);
+    await manager.addSource({ source: 'https://origin.example.test/acme/plugins.git' });
+    const { sourceIdentity } = await manager.discoverSource('hub');
+    expect(sourceIdentity).toMatchObject({ kind: 'git', repository: 'git.example.test/acme/plugins' });
+    const records = fs.readdirSync(path.join(root, 'sources'), { recursive: true })
+      .map(String).filter((file) => file.endsWith('cindy-fetch-identity.json'))
+      .map((file) => fs.readFileSync(path.join(root, 'sources', file), 'utf8'));
+    expect(records).toHaveLength(1);
+    expect(`${JSON.stringify(sourceIdentity)}${records.join('')}`).not.toContain('alice');
+  });
+
   it('keeps the key on this computer and rebuilds it only when missing or damaged', () => {
     const root = makeRoot();
     const keyPath = path.join(root, 'plugin-market', 'source-id.key');

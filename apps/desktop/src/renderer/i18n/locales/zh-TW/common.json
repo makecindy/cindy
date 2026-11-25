@@ -8447,7 +8447,8 @@
         "otherCopies": "已有 {{count}} 份同名插件；它們不會被覆蓋或停用。另裝的插件需要單獨連接帳號。",
         "originRepository": "儲存庫 {{repository}}",
         "originRepositoryRef": "儲存庫 {{repository}}（{{ref}}）",
-        "originLocalFolder": "本機資料夾"
+        "originLocalFolder": "本機資料夾",
+        "originSourceChanged": "這次更新的來源與已安裝的版本不同。請確認你信任上面顯示的儲存庫後再繼續。"
       },
       "trust": {
         "official": "Cindy 官方插件",

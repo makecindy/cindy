@@ -3,9 +3,11 @@
  *
  * sourceId = base64url(HMAC-SHA256(K, input)) 的前 16 字节，input 是带域名与版本的 JSON 数组（数组元素
  * 有界，没有拼接歧义）：
- * - 本地文件夹：["cindy.plugin-market.source-id", 1, "local", marketSourceKey]
- * - Git：["cindy.plugin-market.source-id", 1, "git", marketSourceKey, scheme, host, port, path]，后四项是
- *   **实际取包地址**按白名单取出的部件（pluginMarketFetchAddress），不含用户名、密码、令牌、查询串、片段。
+ * - 本地文件夹：["cindy.plugin-market.source-id", 2, "local", marketSourceKey]
+ * - Git：["cindy.plugin-market.source-id", 2, "git", marketSourceKey, scheme, user, host, port, path]，后五项是
+ *   **实际取包地址**按白名单取出的部件（pluginMarketFetchAddress）：`user` 只是 ssh / scp 的登录用户（同主机
+ *   同路径可随用户解析到不同仓库），https 等协议的 userinfo 是凭证、不读取；不含密码、令牌、查询串、片段。
+ *   登录用户只进这里的 HMAC 输入，不进取包记录、展示、回执或日志。
  *   Git 来源的 sourceId 在取包时算好，记在该缓存版本的取包记录里（见 fetchIdentity.ts）。
  * 于是不同本地目录、同主机不同端口、不同协议写法、不同稀疏路径、配置相同但被 insteadOf 改写到不同地址，
  * 都得到不同的标识。用 HMAC 而不是裸哈希：本地路径与仓库地址熵低，裸哈希可被穷举反推。
@@ -25,7 +27,7 @@ import { atomicWriteFileSync, readAtomicFileSync } from '../../utils/atomicWrite
 
 export const SOURCE_ID_KEY_FILE = 'source-id.key';
 const SOURCE_ID_DOMAIN = 'cindy.plugin-market.source-id';
-const SOURCE_ID_VERSION = 1;
+const SOURCE_ID_VERSION = 2;
 const KEY_TEXT = /^[0-9a-f]{64}$/;
 
 export type MarketSourceIdInput =
@@ -77,6 +79,7 @@ export function createMarketSourceIdOf(keyPath: string): MarketSourceIdOf {
           'git',
           input.sourceKey,
           input.address.scheme,
+          input.address.user,
           input.address.host,
           input.address.port,
           input.address.path,

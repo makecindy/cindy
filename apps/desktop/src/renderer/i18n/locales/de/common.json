@@ -8490,7 +8490,8 @@
         "otherCopies": "Es gibt {{count}} weitere Kopien dieses Plugins. Sie bleiben installiert und behalten ihren aktuellen Aktivierungsstatus. Eine separate Kopie benötigt eigene Kontoverbindungen.",
         "originRepository": "Repository {{repository}}",
         "originRepositoryRef": "Repository {{repository}} ({{ref}})",
-        "originLocalFolder": "Lokaler Ordner"
+        "originLocalFolder": "Lokaler Ordner",
+        "originSourceChanged": "Dieses Update stammt aus einer anderen Quelle als die installierte Version. Fahre nur fort, wenn du dem oben angezeigten Repository vertraust."
       },
       "trust": {
         "official": "Offizielles Cindy-Plugin",

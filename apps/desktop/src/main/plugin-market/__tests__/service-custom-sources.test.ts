@@ -2264,6 +2264,61 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
    * - 最小失败输入：安装后把记录的 sourceKey 或 raw 摘要换掉但保留绑定；没有绑定的旧本地记录。
    * - tier：unit（临时目录，本地来源）。
    */
+  /* 测试价值（PR #12731 维护者评审 06:33 第 2 条：已知实际来源变化时，后台不能沿用旧来源的批准装入新来源）
+   * - 生产入口与可观察结果：PluginMarketService.snapshot（后台自动更新）与 install（显式更新）；runtime.install
+   *   是否被调用、条目 updateRequiresConsent、确认请求与账本绑定。
+   * - 缺口：此前市场投影与提交前只按配置 sourceKey 判断路由，同一配置被改写到 B 时，B 的较高版本、权限无新增
+   *   即被后台静默装入。
+   * - 最小失败输入：已装记录绑定来源 A（可核实），当前候选来源 B（可核实且不同），B 有更高版本、无新增权限。
+   * - tier：unit（临时目录，本地来源；A 的绑定由账本记录模拟，与同一配置被 Git 改写的效果相同）。
+   */
+  it('holds a background update whose actual source changed and asks before switching', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha', version: '2.0.0' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const installedDir = path.join(root, 'installed-alpha');
+    fs.mkdirSync(installedDir, { recursive: true });
+    const rawManifest = JSON.stringify(ghostManifest('alpha', '1.0.0'));
+    fs.writeFileSync(path.join(installedDir, 'ghost.json'), rawManifest);
+    runtime.ghosts = [{ manifest: ghostManifest('alpha', '1.0.0'), dir: installedDir, enabled: true }];
+    const sourceKey = marketSourceKey({ type: 'local', path: dir });
+    const rawManifestSha256 = crypto.createHash('sha256').update(rawManifest).digest('hex');
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    h.ledger.upsertInstallation({
+      pluginId, ghostId: 'alpha', releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'), version: '1.0.0',
+      sha256: 'custom-unverified', scope: 'public', organizationId: null, source: 'local-market', installed: true,
+      updatedAt: '2026-07-30T02:00:00.000Z', sourceKey,
+      manifestDigest: ghostManifestDigest(ghostManifest('alpha', '1.0.0')), rawManifestSha256,
+      // Installed from source A, which the same configuration no longer fetches from.
+      sourceIdBinding: { sourceId: 'AAAAAAAAAAAAAAAAAAAAAA', sourceKey, rawManifestSha256 },
+    });
+    runtime.install.mockImplementation(async () => {
+      const upgraded = installedGhost(root, 'alpha', '2.0.0');
+      runtime.ghosts = [upgraded];
+      return upgraded;
+    });
+
+    // Background: B's higher version without new permissions is not installed; the item waits for the user.
+    const held = await h.service.snapshot();
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(held.items[0]).toMatchObject({ installState: 'update-available', updateRequiresConsent: true,
+      installedSourceId: 'AAAAAAAAAAAAAAAAAAAAAA' });
+
+    // Explicit update: the confirmation is forced even without new permissions and says the source changed.
+    const detail = await h.service.detail(pluginId);
+    const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => true);
+    await h.service.install(pluginId, { expectedReleaseId: detail.releaseId, expectedManifest: detail.manifest,
+      expectedInstalledApproval: APPROVED_INSTALL_TOKEN }, { consent: { prompt, initiator: 'user' } });
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt.mock.calls[0]?.[0]).toMatchObject({ origin: 'custom-market', originSourceChanged: true,
+      originSource: detail.sourceIdentity, facts: { kind: 'update', added: [] } });
+    expect(runtime.install).toHaveBeenCalledTimes(1);
+    // The installation is now bound to B, so later updates from B are not held again.
+    expect(h.ledger.installationForGhost('alpha')?.sourceIdBinding?.sourceId).toBe(detail.sourceIdentity?.sourceId);
+    expect(await h.service.detail(pluginId)).not.toHaveProperty('updateRequiresConsent');
+  });
+
   it('binds the installed source id to the record it was written with', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

@@ -105,11 +105,15 @@ describe('pluginMarketFetchAddress', () => {
   // Parts that feed the source id: scheme, host and port distinguish endpoints; credentials never appear.
   it('keeps the endpoint parts that tell sources apart and drops credentials', () => {
     expect(pluginMarketFetchAddress('https://ghp_SECRET@Git.Example.test:8443/acme/plugins.git?x=1#y'))
-      .toEqual({ scheme: 'https', host: 'git.example.test', port: '8443', path: '/acme/plugins.git' });
-    expect(pluginMarketFetchAddress('ssh://git@git.example.test:2222/acme/plugins.git'))
-      .toEqual({ scheme: 'ssh', host: 'git.example.test', port: '2222', path: '/acme/plugins.git' });
+      .toEqual({ scheme: 'https', user: '', host: 'git.example.test', port: '8443', path: '/acme/plugins.git' });
+    // SSH login users are part of the source (same host and path can resolve per user); https userinfo is a
+    // credential and is never read.
+    expect(pluginMarketFetchAddress('ssh://deploy@git.example.test:2222/acme/plugins.git'))
+      .toEqual({ scheme: 'ssh', user: 'deploy', host: 'git.example.test', port: '2222', path: '/acme/plugins.git' });
     expect(pluginMarketFetchAddress('git@git.example.test:acme/plugins.git'))
-      .toEqual({ scheme: 'scp', host: 'git.example.test', port: '', path: 'acme/plugins.git' });
+      .toEqual({ scheme: 'scp', user: 'git', host: 'git.example.test', port: '', path: 'acme/plugins.git' });
+    expect(pluginMarketFetchAddress('ssh://git:SECRET@git.example.test/acme/plugins.git')).toMatchObject({ user: 'git' });
+    expect(JSON.stringify(pluginMarketFetchAddress('ssh://git:SECRET@git.example.test/acme/plugins.git'))).not.toContain('SECRET');
     // Paths the display identity rejects (e.g. a `.github` repository) still identify a source.
     expect(pluginMarketFetchAddress('https://github.com/acme/.github')).toMatchObject({ path: '/acme/.github' });
     expect(pluginMarketRepositoryFromUrl('https://github.com/acme/.github')).toBeNull();

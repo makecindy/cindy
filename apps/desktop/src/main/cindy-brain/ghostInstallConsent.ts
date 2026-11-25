@@ -52,6 +52,7 @@ export type GhostInstallConsentPolicy =
       originLabel?: string;
       /** 仅 custom-market 生效；必须由打包所用的那份来源配置生成（见 PluginMarketService.customInstall）。 */
       originSource?: GhostInstallConsentRequest['originSource'];
+      originSourceChanged?: GhostInstallConsentRequest['originSourceChanged'];
       trust?: GhostInstallConsentRequest['trust'];
       target?: GhostInstallConsentRequest['target'];
       force?: boolean;
@@ -224,6 +225,7 @@ export async function obtainGhostInstallConsent(
       ...(policy.trust ? { trust: policy.trust } : {}),
       ...(policy.originLabel ? { originLabel: policy.originLabel } : {}),
       ...(policy.origin === 'custom-market' && policy.originSource ? { originSource: policy.originSource } : {}),
+      ...(policy.origin === 'custom-market' && policy.originSourceChanged ? { originSourceChanged: true as const } : {}),
       ...(policy.target ? { target: { ...policy.target, ...(policy.target.namespace === 'local' && manifest.network?.secrets?.some(secret => secret.source === 'oidc-token') ? { organizationIdentityUnavailable: true as const } : {}) } } : {}),
       facts,
     });

@@ -8447,7 +8447,8 @@
         "otherCopies": "已有同名法器 {{count}} 份；彼等不被覆蓋或停用。另納之法器須各自連接名籍。",
         "originRepository": "儲存庫 {{repository}}",
         "originRepositoryRef": "儲存庫 {{repository}}（{{ref}}）",
-        "originLocalFolder": "此機卷匣"
+        "originLocalFolder": "此機卷匣",
+        "originSourceChanged": "此番更新所出之源，與已裝之版不同。唯信上列之儲存庫，方可續之。"
       },
       "trust": {
         "official": "Cindy 官方法器",

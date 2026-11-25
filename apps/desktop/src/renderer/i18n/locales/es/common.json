@@ -8564,7 +8564,8 @@
         "otherCopies": "Hay otras {{count}} copias de este complemento. Seguirán instaladas y conservarán su estado de activación actual. Cada copia necesita sus propias conexiones de cuentas.",
         "originRepository": "Repositorio {{repository}}",
         "originRepositoryRef": "Repositorio {{repository}} ({{ref}})",
-        "originLocalFolder": "Carpeta local"
+        "originLocalFolder": "Carpeta local",
+        "originSourceChanged": "Esta actualización procede de un origen distinto al de la versión instalada. Continúa solo si confías en el repositorio que se muestra arriba."
       },
       "trust": {
         "official": "Complemento oficial de Cindy",

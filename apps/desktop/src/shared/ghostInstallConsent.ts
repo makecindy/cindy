@@ -105,6 +105,11 @@ export interface GhostInstallConsentRequest {
    * 展示的就是随后安装的来源。生成不出时缺省。
    */
   originSource?: PluginMarketSourceIdentity;
+  /**
+   * 仅 custom-market 的更新：同一配置下实际来源已变（已装实例与这次候选的来源标识都可核实且不相等）。
+   * 确认会被强制弹出，并提示来源与已安装的版本不同；确认后安装记录改绑新来源，之后不再反复询问。
+   */
+  originSourceChanged?: true;
   /** Host-generated installation identity and account impact, never package-provided. */
   target?: { namespace: string | null; sourceChanged: boolean; otherCopies: number; organizationIdentityUnavailable?: true };
   facts: GhostInstallConsentFacts;

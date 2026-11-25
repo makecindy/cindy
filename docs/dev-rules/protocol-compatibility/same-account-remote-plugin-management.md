@@ -93,11 +93,16 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
      IM 卡与官方 hook 卡的参数预览去掉 `source.sourceId`，仓库名本来就在说明里。
 - **`sourceId`**（`^[A-Za-z0-9_-]{22}$`）：
   - 算法：`HMAC-SHA256(K, input)` 的前 16 字节，base64url。`input` 是带域名与版本的 JSON 数组：
-    - 本地：`["cindy.plugin-market.source-id", 1, "local", marketSourceKey]`；
-    - Git：`["cindy.plugin-market.source-id", 1, "git", marketSourceKey, scheme, host, port, path]`，后四项是
-      **实际取包地址**的白名单部件，不含用户名、密码、令牌、查询串、片段。
+    - 本地：`["cindy.plugin-market.source-id", 2, "local", marketSourceKey]`；
+    - Git：`["cindy.plugin-market.source-id", 2, "git", marketSourceKey, scheme, user, host, port, path]`，后五项是
+      **实际取包地址**的白名单部件，不含密码、令牌、查询串、片段。
+  - 用户名的取舍：`ssh://` 与 scp 形式（`user@host:path`）的登录用户算身份。普通 SSH 服务上，同主机同路径（尤其
+    scp 相对路径）可随登录用户解析到不同家目录和仓库；`ssh://` 带绝对路径时也一律纳入，结果只会更保守。
+    https / http / git 的 userinfo（含 `https://TOKEN@host` 单段令牌）算凭证，一律不读取，轮换凭证不改变标识。
+    登录用户只进本机 HMAC 输入，不进取包记录、展示、回执或日志；不合常见账户名字符集时整个标识缺省。
   - 区分能力：不同本地目录、同主机不同端口、不同协议写法、不同稀疏路径、配置相同但被改写到不同实际地址，
-    `sourceId` 都不同。只改变认证信息（例如改写注入的令牌不同）时不变。
+    `sourceId` 都不同；同主机、同路径但 SSH 登录用户不同，`sourceId` 也不同。只改变 https 认证信息（例如改写
+    注入的令牌不同）时不变。
   - 用 HMAC 而不是裸哈希，是因为本地路径与仓库地址可被穷举反推。
   - 密钥 K 每个数据所有者一把，见[凭证与本地存储](../credentials-and-local-storage.md)的路径表。
   - 实现：`apps/desktop/src/main/plugin-market/sources/sourceId.ts`。
@@ -115,6 +120,16 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     不进错误详情；git 子进程的输出由 `resolveFetchUrl` 读取后只交给白名单函数，失败时丢弃不记录。
   - 快进刷新复制旧版本后必须重写或删除记录；删除失败时放弃这份暂存目录、改走全新克隆。
   - 实现：`sources/fetchIdentity.ts`、`sources/git.ts`。
+- **实际来源变化时的更新**（同一路由、两边都可核实且 `sourceId` 不同，例如同一配置被改写到另一个仓库）：
+  - 市场投影：该条目若为 `update-available`，同时带既有字段 `updateRequiresConsent: true`（与权限变多时同一字段、
+    同一暂停机制），后台自动更新不尝试。
+  - 实际取包（来源租约内）与提交前：后台路径一律拒绝换源并按「等待用户确认」暂停；显式更新强制弹出确认（即使
+    权限没有变多），确认请求带 `originSourceChanged: true`，确认框与任务卡提示「来源与已安装的版本不同」。
+  - 用户确认后安装记录改绑新来源，之后不再反复询问。旧记录没有绑定或候选身份缺省时不拦，保持既有行为（第一次
+    后台更新会写入绑定，之后才开始比较），升级后不会让所有自定义市场插件集体暂停更新。服务端市场与本地来源
+    （配置不变即同一来源）不受影响。
+  - 控制端：确认回执的 `consent.originSourceChanged?: true` 为可选新字段，可据此提示来源已变；条目的
+    `updateRequiresConsent` 是既有字段，现在也可能因来源变化置位。
 - **账本**（存量兼容）：
   - 自定义市场安装记录（`custom-ledger.v1.json`）只增一个可选字段 `sourceIdBinding:
     {sourceId, sourceKey, rawManifestSha256}`。显式安装、后台自动更新、换源都经 `customInstall` 整条重写，

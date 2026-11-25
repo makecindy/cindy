@@ -8447,7 +8447,8 @@
         "otherCopies": "同名のプラグインがほかに {{count}} 個あります。上書きや無効化はされません。別のコピーには個別のアカウント接続が必要です。",
         "originRepository": "リポジトリ {{repository}}",
         "originRepositoryRef": "リポジトリ {{repository}}（{{ref}}）",
-        "originLocalFolder": "ローカルフォルダー"
+        "originLocalFolder": "ローカルフォルダー",
+        "originSourceChanged": "この更新はインストール済みのバージョンとは別のソースから取得されています。上に表示されたリポジトリを信頼できる場合のみ続けてください。"
       },
       "trust": {
         "official": "Cindy 公式プラグイン",
