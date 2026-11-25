@@ -43,8 +43,8 @@ interface SegmentedControlProps<T extends string> {
   /** Scene density only; all variants share the same selection and interaction. Default `md`. */
   density?: SegmentedDensity;
   /**
-   * @deprecated Use `density`. Kept only for scenes whose size is not one of the four presets
-   * yet (listed in DESIGN.md §4 Desktop segmented controls); overrides the preset.
+   * @deprecated Use `density`. Kept only for older call sites not yet assigned to a preset;
+   * overrides the preset.
    */
   height?: number;
   /** @deprecated Use `density`; see `height`. */
