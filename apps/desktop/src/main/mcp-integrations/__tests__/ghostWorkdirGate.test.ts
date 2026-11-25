@@ -115,6 +115,9 @@ const ledgerAddRefMock = vi.fn(async (params: TestLedgerRef) => {
   ledgerRefs.push({ ...params });
   return `ref-${ledgerRefs.length}`;
 });
+const githubConnectMock = vi.fn();
+const instanceConfigMock = vi.fn<() => object | null>(() => null);
+vi.mock('../../instance-runtime/config.js', () => ({ getInstanceConfig: instanceConfigMock }));
 const callCindyMediaMock = vi.fn();
 const callEvaluateMock = vi.fn();
 const readEvaluationImageFileMock = vi.fn();
@@ -210,6 +213,7 @@ const sessionSnapshotMock = vi.fn(async (): Promise<{
   remoteHostId: null,
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
+  connectGhostGithubAccount: githubConnectMock,
   getGhostManager: () => ({ list: listInstalledMock,
     findInstalledInstance: findInstalledInstanceMock,
     readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
@@ -399,6 +403,8 @@ beforeEach(() => {
   listInstalledMock.mockClear();
   listInstalledAsyncMock.mockClear();
   findInstalledInstanceMock.mockClear();
+  githubConnectMock.mockReset();
+  instanceConfigMock.mockReturnValue(null);
   listMock.mockReset();
   listMock.mockReturnValue([chipGhost('art'), chipGhost('other')]);
   activeSessionAvailableMock.mockReset();
@@ -1407,6 +1413,24 @@ describe('connect_account ordinary task entry', () => {
     expect(githubSignIn.open).toHaveBeenCalledTimes(2);
     expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+  // Rule: the GitHub device login helper ships only in the managed cloud image, so only a cloud instance
+  // takes that path; every other desktop keeps Cindy's GitHub sign-in. Minimal input: a signed-out gh-cli
+  // GitHub plugin whose device login answers as it does without the helper, with and without an instance
+  // configuration (unit).
+  it.each([
+    ['an ordinary desktop', null, { errorCode: 'GITHUB_SIGN_IN_REQUIRED', signInOpened: true }],
+    ['a managed cloud instance', { deviceId: 'cloud-device-test' }, { errorCode: 'GITHUB_LOGIN_UNAVAILABLE' }],
+  ])('connects GitHub on %s through the login that machine has', async (_machine, instanceConfig, expected) => {
+    instanceConfigMock.mockReturnValue(instanceConfig);
+    githubConnectMock.mockResolvedValue({ ok: false, errorCode: 'GITHUB_LOGIN_UNAVAILABLE', ghostId: 'cindy-github' });
+    listMock.mockReturnValue([chipGhost('cindy-github', ['tool'], {
+      network: { secrets: [{ key: 'my_token', label: 'GitHub', source: 'gh-cli' }] },
+    })]);
+    githubSignIn.read.mockResolvedValueOnce({ status: 'missing' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github', reauthorize: true }))
+      .toMatchObject({ ok: false, ...expected });
+    expect(githubConnectMock).toHaveBeenCalledTimes(instanceConfig ? 1 : 0);
   });
   it('blocks disabled GitHub before offering its existing connection method', async () => {
     listMock.mockReturnValue([chipGhost('cindy-github')]);

@@ -79,6 +79,7 @@ vi.mock('../../device-link/index.js', () => ({
   remoteBackgroundInvoke: (...args: unknown[]) => historyInvoke(...args),
   openRemoteLink: (...args: unknown[]) => historyOpenLink(...args),
   getRemoteLinkCloseEpoch: (peer: string) => historyCloseEpoch(peer),
+  isPeerDeliveringBusinessTraffic: vi.fn(() => false),
   onRemoteLinkClosed: (peer: string, listener: () => void) => {
     const notify = (closedPeer: string) => { if (closedPeer === peer) listener(); };
     historyCloseListeners.add(notify);

@@ -103,6 +103,8 @@ it('keeps project creation unavailable until the device is online', () => {
   );
   const view = render(renderHeader(true));
   const action = screen.getByRole('button', { name: 'New project' });
+  // ProjectsSection's trailing status slot yields when a header action receives keyboard focus.
+  expect(action.getAttribute('data-device-header-action')).toBe('true');
   fireEvent.click(action);
   expect(create).not.toHaveBeenCalled();
   view.rerender(renderHeader(false));
@@ -115,6 +117,7 @@ it('checks automatically while revealing the shortcut only on hover or keyboard 
   render(header());
   expect(invoke).not.toHaveBeenCalled();
   const action = screen.getByRole('button', { name: 'Checking remote desktop…' });
+  expect(action.getAttribute('data-device-header-action')).toBe('true');
   expect(action.parentElement!.className).toContain('opacity-0');
   expect(action.parentElement!.className).toContain('group-hover/device-header:opacity-100');
   expect(action.parentElement!.className).toContain('has-[:focus-visible]:opacity-100');

@@ -1234,6 +1234,8 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 
 随包作者手册只描述随包版本的当前能力，不写发布状态或首个可用版本；用到新能力时，`minCindyVersion` 填开发测试所用的 Cindy 版本。
 
+本机工作目录菜单的 `workdir.menu` 复用原生菜单动作与具名页面。该位置沿用安装批准、任务归属和页面上下文边界，状态栏按钮的字号仅影响排版。旧端忽略新位置，存量插件无需重装或迁移。
+
 插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
 MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 能力以整版安装/更新
 批准有效、已启用及 manifest 声明为准，不另存分项批准。旧 receipt 的 `approvedHostUi` 残留字段
@@ -1637,6 +1639,13 @@ Main 从当前接受的输入、原批准和持久回执读取 scope，交给现
 作者契约见 cindy-plugin-creator/references/plugin-agent-tasks.md §4.11.7。
 
 ## 通用 OAuth 宿主保护
+
+声明式 OAuth 可选 `deviceAuthorizationUrl` 走 RFC 8628 设备码登录（协议约定见
+[插件 OAuth 设备码登录](protocol-compatibility/plugin-oauth-device-grant.md)）。不变量：确认页只接受落在
+设备码端点／授权页／token 端点域名或 `network.hosts` 内的 https 默认端口地址；`device_code`、`user_code`
+与令牌不进日志、卡片快照、插件或模型；本机只在服务商没给带码确认页时把验证码放进剪贴板，结束时只撤掉
+仍属于本单的内容；远程单只经 `authorizationV1` 交给控制端，旧控制端失败关闭，不回退到执行设备开浏览器；
+令牌保管、刷新与注入沿用授权码模式，未声明该字段的存量插件归一化清单与权限投影逐字不变。
 
 账号头像对声明了身份头像字段的插件开放，下载必须经过受防护网络通道的 DNS/IP、重定向、超时和流式大小检查。失败只省略头像，不把宿主变成内网读取通道。固定回调端口被占用时，所有插件统一在主窗口展示占用程序与 PID，经用户确认且再次核对进程身份后才结束程序并重试。
 
