@@ -6752,6 +6752,20 @@
         "ssh": "Hosts remotos SSH",
         "hook": "Bots de mensagens do Cindy"
       },
+      "cloudComputer": {
+        "title": "Computador na nuvem",
+        "hint": {
+          "addCloud": "Configure um computador na nuvem com o Cindy instalado. Quando estiver pronto, ele aparece na sua lista de dispositivos.",
+          "preparingCloud": "Seu computador na nuvem está sendo preparado. Ele aparece na sua lista de dispositivos quando estiver pronto.",
+          "manageCloud": "Ligue, desligue, renove, reinstale ou exclua-o na web."
+        },
+        "actions": {
+          "addCloud": "Adicionar computador na nuvem",
+          "preparingCloud": "Ver progresso",
+          "manageCloud": "Gerenciar computador na nuvem"
+        },
+        "openFailed": "Não foi possível abrir a página do computador na nuvem. Verifique as configurações do navegador padrão."
+      },
       "hook": {
         "description": "Conecte Slack, Telegram, Feishu / Lark e outros canais ao mesmo Cindy. As mensagens são encaminhadas a este dispositivo e compartilham sua lista de projetos e seu executor de sessões; o modelo e as permissões de cada projeto são compartilhados por todos os canais, e cada canal mantém sua própria vinculação de conta.",
         "slackDescription": "Vincule espaços de trabalho do Slack e atribua tarefas ao Cindy pelo Slack.",
@@ -8270,6 +8284,11 @@
         "installedExpand": "Mostrar todos os {{count}} plugins instalados",
         "installedCollapse": "Ocultar plugins instalados adicionais",
         "recommendedSection": "Recomendado",
+        "allPlugins": "Todos os plugins",
+        "searchResults": "Resultados da pesquisa",
+        "marketSort": {
+          "label": "Ordenar"
+        },
         "todayRecommendations": "Recomendações de hoje",
         "marketSection": "Marketplace de plugins",
         "browseMarket": "Explorar o marketplace de plugins",
@@ -8755,6 +8774,7 @@
         "libraryPersist": "Pode usar uma biblioteca persistente (arquivos grandes e bancos de dados)",
         "libraryPersistDetail": "Recebe uma área de armazenamento gerenciada pela Cindy para seu trabalho (telas, imagens, bancos de dados), sem a cota normal de dados de plugins. Todas as operações de arquivos e bancos de dados são executadas pelo host; o plugin usa apenas caminhos relativos dentro da própria biblioteca e não pode acessar seus outros arquivos. Também pode pedir à Cindy para mostrar um arquivo da biblioteca no Finder ou Explorer, ou abrir a caixa de diálogo Salvar como do sistema para você escolher onde salvar uma cópia; cancelar Salvar como não copia nada. Também pode gravar uma imagem bitmap PNG na área de transferência do sistema sem caixa de diálogo de confirmação; isso substitui o conteúdo atual da área de transferência. Desinstalar o plugin não exclui esses dados; a exclusão exige uma confirmação separada nas configurações da Cindy.",
         "networkHost": "Acessa o destino de rede {{host}}",
+        "networkHosts": "Destinos de rede",
         "networkSecret": "Precisa de uma credencial sua: \"{{name}}\"",
         "networkSecretGhostInputDetail": "Coletada pela interface de configurações do próprio plugin — a página do plugin vê o valor no momento da entrada. Em seguida, ele é entregue ao host em uma única etapa para armazenamento criptografado; depois de armazenado, o plugin nunca mais pode lê-lo, e o host só o injeta nos domínios declarados pelo plugin.",
         "networkSecretIdentity": "Usará seu e-mail de login como credencial \"{{name}}\"",
@@ -8961,6 +8981,8 @@
         "dangerTitle": "Desinstalar plugin",
         "infoContents": "Contém",
         "infoVersion": "Versão",
+        "infoPackageSize": "Tamanho do pacote",
+        "infoPackageSizeWithVersion": "{{size}} ({{version}})",
         "updateTitle": "Atualizar versão",
         "updateDesc": "Escolha um novo arquivo .cindy para substituir a versão instalada; o estado de ativação e a posição do painel serão preservados.",
         "errandPrefs": {
@@ -8983,11 +9005,27 @@
           "restoreModel": "Redefinir modelo"
         },
         "toolsTitle": "Ferramentas",
+        "toolCount_one": "{{count}} ferramenta",
+        "toolCount_other": "{{count}} ferramentas",
+        "toolCount_many": "{{count}} ferramentas",
         "permissionsTitle": "Permissões",
         "infoDescription": "Descrição",
         "customSlotAsleep": "Este plugin está desativado. Ative-o para ver sua interface de configurações aqui.",
         "descriptionExpand": "Mostrar mais",
         "descriptionCollapse": "Mostrar menos",
+        "recentUpdates": "Atualizações recentes",
+        "olderUpdates": "Atualizações anteriores",
+        "collapseOlderUpdates": "Ocultar atualizações anteriores",
+        "includesHighRisk": "Alto risco",
+        "heroDownloads": "Downloads totais",
+        "heroUsage": "Usos totais",
+        "heroWeeklyUsage": "Usos nos últimos 7 dias",
+        "heroWeeklyUsageExplanation": "Chamadas de ferramentas nos últimos 7 dias, somando todas as versões no escopo de compartilhamento atual.",
+        "heroInstalledVersion": "Versão instalada",
+        "heroListedVersion": "Versão publicada",
+        "heroLatestUpdate": "Última atualização",
+        "morePlugins": "Mais plugins",
+        "morePluginsHint": "Seleção aleatória. Não reflete nenhuma preferência da Cindy.",
         "readmeTitle": "Sobre",
         "useAction": "Usar plugin",
         "chatAction": "Conversa",
@@ -9026,6 +9064,7 @@
         "portReclaimMessage": "“{{name}}” precisa da porta {{port}}. Encerrar o programa abaixo?",
         "portReclaimDetail": "Encerrá-lo pode interromper o trabalho do programa ou causar a perda de dados não salvos. Você pode cancelar e fechar o programa manualmente.",
         "configurationTitle": "Configuração",
+        "recordTitle": "Informações do plugin",
         "sidebarEntryTitle": "Item de navegação",
         "showInSidebar": "Mostrar na navegação à esquerda",
         "fileOpenerTitle": "Abrir arquivos com este plugin",
@@ -9036,6 +9075,7 @@
         "viewAllTools": "Ver tudo",
         "collapseTools": "Recolher ferramentas",
         "viewAllPermissions": "Ver tudo",
+        "remainingPermissions": "Ver mais {{count}}",
         "permissionsDialogDescription": "Todas as {{count}} permissões solicitadas por este plugin",
         "closeDialog": "Fechar janela",
         "resetPlacement": "Restaurar posição padrão"
@@ -9354,6 +9394,7 @@
         "anonymousUnavailable": "Configurações do autor indisponíveis",
         "anonymousUpdateFailed": "Não foi possível confirmar se a configuração de anonimato foi salva. Atualize antes de tentar novamente.",
         "myPlugins": "Publicar plugin",
+        "backToPublish": "Voltar à publicação de plugins",
         "publish": "Enviar para análise",
         "submitUpdate": "Enviar nova versão para análise",
         "publishHint": "Publique apenas plugins que você tem permissão para publicar. A listagem na comunidade exige aprovação humana.",
@@ -9393,6 +9434,7 @@
         "publishedContentUnavailable": "A descrição e as notas de versão da versão publicada atualmente estão temporariamente indisponíveis.",
         "currentSubmission": "Envio atual",
         "localState": {
+          "installed": "Versão local {{version}}",
           "missing": "Não instalado neste computador",
           "unavailable": "Versão local temporariamente indisponível"
         },
@@ -9405,7 +9447,7 @@
         "publishing": "Publicação",
         "latestSubmission": "Último envio",
         "noSubmission": "Nenhum envio ainda",
-        "marketVersion": "Publicado · {{version}}",
+        "marketVersion": "Publicado {{version}}",
         "market": {
           "not_listed": "Não listado",
           "disabled": "Fora da listagem",
@@ -9415,7 +9457,7 @@
         "review": {
           "pending": "Análise pendente",
           "approved": "Aprovado",
-          "rejected": "Devolvido",
+          "rejected": "Rejeitado",
           "published": "Publicado",
           "superseded": "Substituído por um envio posterior",
           "legacy_unverified": "Revisão histórica indisponível",
@@ -9423,9 +9465,12 @@
           "cancelled": "Cancelado"
         },
         "reason": "Motivo",
+        "rejectionReason": "Motivo da rejeição",
+        "rejectionReasonLine": "<reasonLabel>Motivo da rejeição:</reasonLabel> <reasonText />",
         "submittedContent": "Conteúdo enviado",
         "snapshotUnavailable": "O conteúdo original não foi mantido ou não pode mais ser verificado.",
         "history": "Histórico de publicação",
+        "marketChanges": "Alterações na publicação",
         "loadMore": "Carregar mais",
         "loadMoreHistory": "Carregar mais histórico",
         "releaseId": "ID da versão",
@@ -9440,7 +9485,7 @@
           "submitted": "Enviado",
           "metadata_updated": "Informações de exibição atualizadas",
           "approved": "Aprovado",
-          "rejected": "Devolvido",
+          "rejected": "Rejeitado",
           "enabled": "Publicado",
           "disabled": "Fora da listagem",
           "archived": "Arquivado",
@@ -9522,6 +9567,8 @@
         "notApproved": "Ainda não aprovado",
         "timeUnavailable": "Não registrado",
         "releaseNotes": "Notas de versão",
+        "expandReleaseNotes": "Mostrar tudo",
+        "noReleaseNotes": "Nenhuma nota de versão foi informada.",
         "versionUpdates": "Versões e atualizações",
         "versionManagement": "Gerenciar versões",
         "versionContent": "Conteúdo da versão",
@@ -9538,7 +9585,6 @@
         "cancelled": "Cancelado",
         "cancelReviewCompleted": "Análise cancelada. A versão listada atualmente permanece inalterada.",
         "cancelReviewAlreadyFinal": "A análise já foi concluída e, por isso, não foi cancelada. O resultado real é exibido abaixo.",
-        "viewPendingVersion": "Ver versão em análise",
         "submitFailed": "Falha no envio",
         "viewDetails": "Ver detalhes"
       },

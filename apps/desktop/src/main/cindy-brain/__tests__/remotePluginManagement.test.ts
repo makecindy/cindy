@@ -4,6 +4,7 @@ import { RemotePluginManagement, type RemotePluginManagementDeps } from '../remo
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import type { PluginManagementReceipt } from '../../../shared/pluginManagement';
+import type { PluginMarketItem } from '../../../shared/pluginMarket';
 
 function fixture() {
   let owner = 'owner-a',
@@ -102,6 +103,29 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
 });
+// Unit: an older peer can omit the size; a newer Host delivers it through every market read.
+it('keeps the published package size in peer snapshots, pages, recommendations, and details', async () => {
+  const f = fixture();
+  const item: PluginMarketItem = {
+    pluginId: 'weather-market', ghostId: 'weather', name: 'Weather', description: null, author: null,
+    scope: 'public', organizationId: null, defaultInstall: false, releaseId: 'release-2',
+    version: '2.0.0', publishedAt: '2026-11-25T00:00:00Z', icon: null, installState: 'update-available',
+    sourceType: 'server', sourceMarketName: null, enabled: true, sizeBytes: 1_200,
+  };
+  const snapshot = { items: [item], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] };
+  const page = { ...snapshot, nextCursor: null, counts: null };
+  f.deps.market.snapshot = async () => snapshot;
+  f.deps.market.query = async () => page;
+  f.deps.market.recommendations = async () => [item];
+  f.deps.market.detail = async () => ({ ...item, manifest: f.ghosts[0].manifest });
+
+  const full = await f.invoke('snapshot', {});
+  expect(full).toHaveProperty('market.items', [item]);
+  expect(await f.invoke('snapshot', { read: 'catalog' })).toEqual({ ...page, items: [item] });
+  expect(await f.invoke('snapshot', { read: 'recommendations' })).toEqual([item]);
+  expect(await f.invoke('market-detail', { pluginId: item.pluginId })).toEqual({ ...item, manifest: f.ghosts[0].manifest });
+});
+
 const flush = async () => {
   await Promise.resolve();
   await Promise.resolve();
