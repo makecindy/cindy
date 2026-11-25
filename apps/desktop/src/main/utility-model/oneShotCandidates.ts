@@ -1,4 +1,5 @@
 import { createAuxiliaryUsageRecorder } from '../usage/auxiliaryUsage.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionTextOptions } from '@cindy/maker-core';
 // The one-shot requests live in oneShotCandidatesCore.ts (shared with the Node Host). This
 // module builds the single Desktop instance; its ports resolve the Desktop modules when
 // called, never when this module loads.
@@ -36,6 +37,17 @@ export type {
   UtilityTextRequestOptions,
 } from './oneShotCandidatesCore.js';
 
+type NativeSubscriptionTextRunner = (prompt: string, opts: NativeSubscriptionTextOptions) => Promise<string>;
+let nativeSubscriptionTextRunner: NativeSubscriptionTextRunner | null = null;
+
+/**
+ * The Maker host registers its Claude Code entry once the Maker exists. Registration
+ * (instead of importing the Maker host here) keeps this module out of that import graph.
+ */
+export function setNativeSubscriptionTextRunner(runner: NativeSubscriptionTextRunner | null): void {
+  nativeSubscriptionTextRunner = runner;
+}
+
 const desktopOneShot = createOneShotCandidates({
   getCatalog: () => getDesktopSelectableCatalog(),
   acquireSubscriptionAccount: async (...args) => {
@@ -68,6 +80,31 @@ const desktopOneShot = createOneShotCandidates({
   isAuxiliaryModelTemporarilyUnavailable,
   captureAuxiliaryHealthObserver,
   reportAuxiliaryChainOutcome: (...args) => reportAuxiliaryChainOutcome(...args),
+  requestNativeSubscriptionText: async ({ prompt, sessionId, ...request }) => {
+    const run = nativeSubscriptionTextRunner;
+    if (!run) throw new Error('Claude Code is not ready');
+    // Follow the companion task's bound Claude account when the user has several;
+    // without an account pool the CLI uses its default login. Read-only: no binding.
+    const lease = await acquireSubscriptionAccount(
+      'anthropic', request.model, sessionId ? [`task:${sessionId}`] : [], false, { resuming: false },
+    );
+    try {
+      if (lease) {
+        lease.assertDispatchable();
+        lease.running(true);
+      }
+      return await run(prompt, {
+        ...request,
+        beforeDispatch: async () => {
+          try { lease?.assertDispatchable(); } catch { return false; }
+          return request.beforeDispatch ? request.beforeDispatch() : true;
+        },
+        ...(lease ? { [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account } : {}),
+      });
+    } finally {
+      lease?.release();
+    }
+  },
 });
 type Instance = typeof desktopOneShot;
 export const captureAuxiliaryRoutes = desktopOneShot.captureAuxiliaryRoutes;

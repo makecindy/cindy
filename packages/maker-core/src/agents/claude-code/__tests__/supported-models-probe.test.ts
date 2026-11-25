@@ -19,6 +19,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }));
 
 import { ClaudeCodeAgent, setClaudeSupportedModelsListener } from '../index.js';
+import { OneShotError } from '../../base-agent.js';
 
 function createNoopLogger(): Logger {
   const logger: Logger = {
@@ -152,5 +153,75 @@ describe('ClaudeCodeAgent.refreshLocalModels(主动读取订阅模型清单)', (
     // Unit #11880: hosts need the original failure to classify it; legacy callers keep false.
     await expect(agent.refreshLocalModels({ throwOnError: true })).rejects.toBe(failure);
     expect(q.close).toHaveBeenCalledTimes(2);
+  });
+});
+
+// 测试价值:伙伴语音通话选 Claude 订阅时,回复只能由 Claude Code CLI 用自己的登录作答
+// (Cindy 不经手订阅凭证)。经公开入口 nativeSubscriptionText 断言:CLI 在空目录里无工具、
+// 无设置、无 MCP、不落盘地跑一轮,流式文本与最终结果交回调用方;未登录或派发守卫拒绝时
+// 不起 CLI;CLI 报错结果映射为 OneShotError。unit:SDK query 为内存 fake。
+function fakeTextQuery(messages: unknown[]) {
+  return Object.assign((async function* () { yield* messages; })(), { close: vi.fn() });
+}
+
+describe('ClaudeCodeAgent.nativeSubscriptionText(订阅登录的无状态文本请求)', () => {
+  it('隔离运行一轮:无工具/设置/MCP/会话落盘,流式文本与结果交回,结束后清理', async () => {
+    const q = fakeTextQuery([
+      { type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '{"say":' } } },
+      { type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '"hi"}' } } },
+      { type: 'result', subtype: 'success', is_error: false, result: ' {"say":"hi"} ' },
+    ]);
+    sdkMock.query.mockReturnValue(q);
+    const { agent, getState } = createAgent(true);
+    const onText = vi.fn();
+    const beforeDispatch = vi.fn(async () => true);
+
+    await expect(agent.nativeSubscriptionText('user words', {
+      model: 'claude-opus-4-5', systemPrompt: 'call rules', disableReasoning: true, onText, beforeDispatch,
+    })).resolves.toBe('{"say":"hi"}');
+
+    expect(getState).toHaveBeenCalledWith({ credentialMode: 'oauth-bearer' });
+    expect(beforeDispatch).toHaveBeenCalledTimes(1);
+    expect(onText.mock.calls.map(([text]) => text)).toEqual(['{"say":', '{"say":"hi"}']);
+    const [{ prompt, options }] = sdkMock.query.mock.calls[0] as [{ prompt: string; options: Record<string, unknown> }];
+    expect(prompt).toBe('user words');
+    expect(options).toMatchObject({
+      model: 'claude-opus-4-5',
+      systemPrompt: 'call rules',
+      tools: [],
+      mcpServers: {},
+      strictMcpConfig: true,
+      settingSources: [],
+      persistSession: false,
+      maxTurns: 1,
+      includePartialMessages: true,
+      thinking: { type: 'disabled' },
+      pathToClaudeCodeExecutable: process.execPath,
+    });
+    expect(path.basename(options.cwd as string)).toMatch(/^cindy-claude-text-/);
+    await expect(fs.access(options.cwd as string)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(q.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('未登录订阅或派发守卫拒绝时不起 CLI', async () => {
+    const { agent: unauthed } = createAgent(false);
+    await expect(unauthed.nativeSubscriptionText('x', { model: 'claude-opus-4-5' }))
+      .rejects.toMatchObject({ name: 'OneShotError', reason: 'auth' });
+
+    const { agent } = createAgent(true);
+    await expect(agent.nativeSubscriptionText('x', { model: 'claude-opus-4-5', beforeDispatch: async () => false }))
+      .rejects.toBeInstanceOf(OneShotError);
+
+    expect(sdkMock.query).not.toHaveBeenCalled();
+  });
+
+  it('CLI 以错误结果结束时抛 OneShotError,不返回空文本', async () => {
+    const q = fakeTextQuery([{ type: 'result', subtype: 'error_during_execution', is_error: true }]);
+    sdkMock.query.mockReturnValue(q);
+    const { agent } = createAgent(true);
+
+    await expect(agent.nativeSubscriptionText('x', { model: 'claude-opus-4-5' }))
+      .rejects.toMatchObject({ name: 'OneShotError', reason: 'network' });
+    expect(q.close).toHaveBeenCalledTimes(1);
   });
 });

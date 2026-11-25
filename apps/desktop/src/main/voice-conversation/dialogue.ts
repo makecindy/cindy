@@ -111,6 +111,9 @@ export class CompanionCallDialogue {
           timeoutMs: 60_000,
           disableReasoning: true,
           onText,
+          // A Claude subscription companion is answered by its own Claude Code CLI
+          // login (stateless, tool-free); Cindy never borrows that credential.
+          nativeSubscriptionCli: true,
           beforeDispatch: async () => {
             if (!this.current() || this.ended) return false;
             const latest = await readVoiceCompanionRoute(this.input.botId, this.input.sessionId);

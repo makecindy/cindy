@@ -78,6 +78,7 @@ import {
   type AgentDeps,
   type StartSessionOptions,
   type OneShotOptions,
+  type NativeSubscriptionTextOptions,
   type RefreshLocalModelsOptions,
   type SendOptions,
   type TurnPermissionPolicy,
@@ -1388,6 +1389,119 @@ export class ClaudeCodeAgent extends BaseAgent {
     } finally {
       clearTimeout(timeoutId);
       opts?.signal?.removeEventListener('abort', onExternalAbort);
+    }
+  }
+
+  /**
+   * Stateless text reply through the Claude subscription, answered by the bundled
+   * Claude Code CLI with its own login. Cindy never reads or forwards that
+   * credential (unlike `oneShot`, which calls the Messages API with a host key).
+   *
+   * Isolation: a fresh empty working directory, no built-in tools, no MCP servers,
+   * no filesystem settings (so no hooks, plugins, skills or CLAUDE.md), one turn and
+   * no persisted transcript. The same workspace-settings guard as subscription
+   * sessions applies, so nothing can redirect the request elsewhere.
+   */
+  override async nativeSubscriptionText(
+    prompt: string,
+    opts: NativeSubscriptionTextOptions,
+  ): Promise<string> {
+    const log = this.deps.logger.child('claude-code/nativeSubscriptionText');
+    const nativeSubscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
+    nativeSubscriptionAccount?.assertCurrent();
+    const model = opts.model.trim();
+    if (!model) throw new OneShotError('malformed', 'nativeSubscriptionText requires a model');
+    const timeoutMs = opts.timeoutMs ?? 60_000;
+    let timedOut = false;
+    const abortController = new AbortController();
+    const timer = setTimeout(() => {
+      timedOut = true;
+      abortController.abort();
+    }, timeoutMs);
+    const onExternalAbort = () => abortController.abort();
+    if (opts.signal?.aborted) abortController.abort();
+    opts.signal?.addEventListener('abort', onExternalAbort);
+    const startedAt = Date.now();
+    let workDir: string | null = null;
+    let q: Query | null = null;
+    try {
+      const authState = await this.deps.auth.getState({ credentialMode: 'oauth-bearer', nativeSubscriptionAccount });
+      if (!authState.authenticated) {
+        throw new OneShotError('auth', `claude subscription not authenticated: ${authState.errorReason ?? 'no_login'}`);
+      }
+      workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-claude-text-'));
+      const override = await findWorkspaceSettingsOverride(workDir);
+      if (override) throw new OneShotError('auth', workspaceSettingsOverrideMessage(override));
+      const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
+        credentialMode: 'oauth-bearer',
+        nativeSubscriptionAccount,
+        nativeCliAuth: true,
+        subagentModel: null,
+      });
+      if (abortController.signal.aborted) throw new OneShotError(timedOut ? 'timeout' : 'network', 'aborted before dispatch');
+      nativeSubscriptionAccount?.assertCurrent();
+      // Ownership fence right before the paid request is started.
+      if (opts.beforeDispatch && !(await opts.beforeDispatch())) {
+        throw new OneShotError('network', 'Claude subscription text dispatch guard rejected');
+      }
+      const systemPrompt = opts.systemPrompt?.trim();
+      q = sdkQuery({
+        prompt,
+        options: {
+          abortController,
+          cwd: workDir,
+          pathToClaudeCodeExecutable: this.deps.binaryPath,
+          env,
+          model: this.sdkModelFor(model),
+          ...(systemPrompt ? { systemPrompt } : {}),
+          tools: [],
+          mcpServers: {},
+          strictMcpConfig: true,
+          settingSources: [],
+          persistSession: false,
+          maxTurns: 1,
+          includePartialMessages: Boolean(opts.onText),
+          ...(opts.disableReasoning ? { thinking: { type: 'disabled' as const } } : {}),
+        },
+      });
+      let streamed = '';
+      for await (const message of q) {
+        if (message.type === 'stream_event' && opts.onText && message.parent_tool_use_id === null) {
+          const event = message.event;
+          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+            streamed += event.delta.text;
+            try { opts.onText(streamed); } catch { log.warn('text observer failed'); }
+          }
+          continue;
+        }
+        if (message.type !== 'result') continue;
+        if (message.subtype !== 'success' || message.is_error) {
+          throw new OneShotError('network', `Claude subscription request ended: ${message.subtype}`);
+        }
+        const text = message.result.trim();
+        log.info('done', { model, elapsedMs: Date.now() - startedAt, chars: text.length });
+        if (!text) throw new OneShotError('malformed', 'Empty response from model');
+        return text;
+      }
+      throw new OneShotError(timedOut ? 'timeout' : 'malformed', 'Claude subscription request ended without a result');
+    } catch (error) {
+      log.warn('failed', {
+        model,
+        elapsedMs: Date.now() - startedAt,
+        timedOut,
+        externalAborted: opts.signal?.aborted ?? false,
+        reason: error instanceof OneShotError ? error.reason : error instanceof Error ? error.name : typeof error,
+      });
+      if (timedOut) throw new OneShotError('timeout', `nativeSubscriptionText timed out after ${timeoutMs}ms`);
+      if (opts.signal?.aborted) throw error;
+      if (error instanceof OneShotError) throw error;
+      throw new OneShotError('network', error instanceof Error ? error.message : String(error));
+    } finally {
+      clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onExternalAbort);
+      try { q?.close(); } catch { /* CLI already exited */ }
+      abortController.abort();
+      if (workDir) await fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 

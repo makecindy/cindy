@@ -60,6 +60,7 @@ import type {
   BaseAgent,
   StartSessionOptions,
   OneShotOptions,
+  NativeSubscriptionTextOptions,
   RefreshLocalModelsOptions,
 } from './agents/base-agent.js';
 import type { MemoryStatus, MemorySetResult, MemoryResetResult } from './types/memory.js';
@@ -1934,6 +1935,19 @@ export class Maker {
     } finally {
       recorder?.close();
     }
+  }
+
+  /**
+   * Stateless, tool-free text reply through the agent's own native subscription
+   * login (Claude Code CLI). Used where the host may not call the provider
+   * directly because the subscription credential belongs to the CLI only.
+   */
+  async nativeSubscriptionText(
+    agentKind: AgentKind,
+    prompt: string,
+    opts: NativeSubscriptionTextOptions,
+  ): Promise<string> {
+    return this.requireAgent(agentKind).nativeSubscriptionText(prompt, opts);
   }
 
   /**

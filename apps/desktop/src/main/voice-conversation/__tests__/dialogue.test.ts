@@ -210,7 +210,9 @@ it('persists one UI-only record and uses the selected route with read-only conte
   const call = await start();
   expect(await call.submit('input', 'Hi', false)).toBe(true);
   await vi.waitFor(() => expect(h.generate).toHaveBeenCalled());
-  expect(h.generate.mock.calls[0][1]).toMatchObject({ providerId: 'selected', model: 'chosen' });
+  // The reply opts in to the CLI login so a Claude subscription companion can answer
+  // (without it every call turn failed before dispatch, 2026-11-24).
+  expect(h.generate.mock.calls[0][1]).toMatchObject({ providerId: 'selected', model: 'chosen', nativeSubscriptionCli: true });
   expect(h.generate.mock.calls[0][0]).toContain('Read-only facts');
   expect(h.dispatch).not.toHaveBeenCalled();
   expect(

@@ -281,7 +281,7 @@ import { resolveDesktopClaudeSubagentModelAccess } from './subagent-model-access
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
 import { createToolLoopReviewer } from './tool-loop-reviewer.js';
-import { createCustomAutoReviewFallback, requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { createCustomAutoReviewFallback, requestUtilityText, setNativeSubscriptionTextRunner } from '../utility-model/oneShotCandidates.js';
 import {
   AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
   createAutoReviewModelRouter,
@@ -3005,6 +3005,12 @@ export function getMaker(): Maker {
     const apiModelBackfill = _codexApiModelBackfill;
     setCodexApiModelProbe(() => { void apiModelBackfill.request(); });
     void apiModelBackfill.request();
+    // Explicit Claude subscription text (companion voice calls) is answered by the
+    // Claude Code CLI with its own login; a replaced Maker stops serving it.
+    setNativeSubscriptionTextRunner((prompt, opts) => {
+      if (_maker !== makerRef) return Promise.reject(new Error('Claude Code is not ready'));
+      return makerRef.nativeSubscriptionText('claude-code', prompt, opts);
+    });
     // Anthropic 清单只来自 Claude Code SDK:maker 就绪后主动读一次,不等用户先跑任务
     // (旧缓存也可能缺少 SDK 只以简称返回的当前型号)。登录 / 认领后由对应收口再次请求。
     setAnthropicModelProbe((onSupportedModels, account) =>
@@ -3140,6 +3146,7 @@ export function resetMaker(): void {
   _sessionArchiveSync?.stop();
   _sessionArchiveSync = null;
   setSessionArchiveSyncRequester(null);
+  setNativeSubscriptionTextRunner(null);
   cancelCodexAuthModeChange();
   setCodexAppliedCustomProviderRoutes([]);
   _maker = null;

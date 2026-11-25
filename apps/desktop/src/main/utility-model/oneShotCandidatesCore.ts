@@ -128,6 +128,14 @@ export type UtilityTextRequestOptions = {
   pinnedProfileId?: string;
   /** Configuration tests may retry a model that was isolated after runtime failures. */
   bypassAuxiliaryModelHealth?: boolean;
+  /**
+   * Explicit routes only: when the selected route is the Claude subscription, let the
+   * bundled Claude Code CLI answer with its own login (stateless, tool-free) instead
+   * of reporting the route as unusable. Cindy still never reads that credential. Opt-in
+   * because each request starts a CLI process (slower than direct HTTP); callers with
+   * tight budgets such as the 2-second voice exit classifier must not use it.
+   */
+  nativeSubscriptionCli?: boolean;
 };
 
 /**
@@ -210,6 +218,22 @@ export interface OneShotCandidatesPorts {
    * Desktop only: the Node Host has no surface to show it and leaves it unset.
    */
   reportAuxiliaryChainOutcome?: (outcome: 'success' | 'no_candidate' | 'failed') => void;
+  /**
+   * Claude subscription text through the local Claude Code CLI login (see
+   * `UtilityTextRequestOptions.nativeSubscriptionCli`). Desktop only; when unset the
+   * subscription route stays unavailable to direct requests, as before.
+   */
+  requestNativeSubscriptionText?: (input: {
+    prompt: string;
+    model: string;
+    sessionId?: string;
+    systemPrompt?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    disableReasoning?: boolean;
+    onText?: (text: string) => void;
+    beforeDispatch?: () => Promise<boolean>;
+  }) => Promise<string>;
 }
 
 /** One instance per launcher. */
@@ -1207,6 +1231,8 @@ async function requestExplicitProviderText(
       validateResponse: opts.validateResponse,
       beforeDispatch: opts.beforeDispatch,
       routeStillCurrent,
+      nativeSubscriptionCli: opts.nativeSubscriptionCli,
+      sessionId: opts.sessionId,
     });
   }
 
@@ -1405,6 +1431,8 @@ async function requestBuiltinProviderText(
     validateResponse?: (text: string) => boolean;
     beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
     routeStillCurrent?: () => boolean;
+    nativeSubscriptionCli?: boolean;
+    sessionId?: string;
   },
 ): Promise<UtilityTextResult> {
   const profile: UtilityModelProfile = {
@@ -1517,7 +1545,39 @@ async function requestBuiltinProviderText(
   if (providerCatalogId(input.provider) === 'anthropic') {
     // Claude 订阅只供内置 Claude Code CLI 用它自己的登录发起请求;Cindy 进程不持有也不借用
     // 这份凭证,辅助模型 / 标题等直连调用不走它(调用方按候选链回落到其它来源)。
-    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
+    // 显式选择了该路由且明确允许走 CLI 的调用方(伙伴语音通话),由 CLI 无工具、无状态地
+    // 作答;凭证仍只在 CLI 内部。
+    const requestNative = ports.requestNativeSubscriptionText;
+    if (!input.nativeSubscriptionCli || input.agentKind !== 'claude-code' || !requestNative) {
+      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
+    }
+    return executeCandidates([{
+      providerId: input.provider.id,
+      model: input.model,
+      transport: input.transport,
+      profile,
+      execute: (text, requestOpts) => {
+        const guard = requestOpts?.beforeDispatch;
+        return requestNative({
+          prompt: text,
+          model: input.model,
+          sessionId: input.sessionId,
+          systemPrompt: requestOpts?.systemPrompt,
+          timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+          signal: requestOpts?.signal ?? input.signal,
+          disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
+          onText: requestOpts?.onText,
+          beforeDispatch: async () =>
+            (input.routeStillCurrent?.() ?? true)
+            && (!guard || await guard({
+              providerId: input.provider.id,
+              agentKind: input.agentKind,
+              model: input.model,
+            }))
+            && (input.routeStillCurrent?.() ?? true),
+        });
+      },
+    }], prompt, [], input);
   }
 
   if (isOpenAiSubscriptionProvider(input.provider)) {

@@ -62,6 +62,8 @@ export type {
 export type { PiRemoteFileOps } from './agents/base-agent.js';
 // 设备托管会话的链路往来快照(host 的任务隧道记录)。
 export type { DeviceHostedLinkActivity } from './agents/base-agent.js';
+// 原生订阅登录的无状态文本请求(Claude Code CLI 作答,宿主不经手凭证)。
+export type { NativeSubscriptionTextOptions } from './agents/base-agent.js';
 
 // core
 export * from './session.js';
