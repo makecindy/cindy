@@ -92,10 +92,10 @@ function visible(node: NativeAxNode, windowFrame: number[]): boolean {
 }
 
 /** Chrome clips offscreen AX bounds at the viewport edge, while retaining the field's identity. */
-function laidOutInPage(node: NativeAxNode, page: NativeAxNode, confirmed?: ReadonlySet<string>): boolean {
+function laidOutInPage(node: NativeAxNode, page: NativeAxNode, takenHidden: (node: NativeAxNode) => boolean): boolean {
   if (visible(node, [])) return true;
   if (!node.frame || !page.frame) return false;
-  if (hiddenFieldInPage(node, page) && (node.focused || hiddenFieldKeys(node).some((key) => confirmed?.has(key)))) return true;
+  if (takenHidden(node)) return true;
   const [x, y, w, h] = node.frame;
   const [px, py, pw, ph] = page.frame;
   const edge = (value: number, start: number, size: number) => Math.abs(value - start) < 2 || Math.abs(value - start - size) < 2;
@@ -118,12 +118,14 @@ function hiddenFieldInPage(node: NativeAxNode, page: NativeAxNode): boolean {
 }
 
 /**
- * A hidden field found focused earlier in this step. Its page id with its fingerprint survives text the page
- * inserts after an earlier field is typed (tree positions shift); its place in the tree covers inputs without an id.
+ * A hidden field found focused earlier in this step. Its page id with its fingerprint, within the document (web
+ * area) that holds it, survives text the page inserts after an earlier field is typed (tree positions shift); an
+ * id is unique only in its own document, so a frame's field of the same id is another field. Its place in the tree
+ * covers inputs without an id.
  */
-export const hiddenFieldKeys = (field: { ref: string; fp: string; domId?: string }): string[] => [
+export const hiddenFieldKeys = (field: { ref: string; fp: string; domId?: string }, document: string): string[] => [
   JSON.stringify(['ref', field.ref, field.fp]),
-  ...(field.domId ? [JSON.stringify(['dom', field.domId, field.fp])] : []),
+  ...(field.domId ? [JSON.stringify(['dom', document, field.domId, field.fp])] : []),
 ];
 
 const isWithin = (ref: string, scope: string) => ref === scope || ref.startsWith(`${scope}.`);
@@ -223,10 +225,16 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
   // A page's accessibility tree includes laid-out fields below the viewport.
   // Scrolling must not turn one form into unrelated partial steps. Zero-size
   // nodes are excluded unless their bounds were clipped at the viewport edge.
-  const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb, confirmedHidden)) : pageMissing ? [] : nodes;
-  const hiddenFields = topWeb
-    ? scoped.filter((node) => !visible(node, []) && hiddenFieldInPage(node, topWeb)).flatMap(hiddenFieldKeys)
-    : [];
+  // The document a node belongs to: its nearest web area (the page itself or a frame inside it).
+  const documents = snapshot.nodes.filter((node) => node.role === 'AXWebArea').sort((a, b) => b.ref.length - a.ref.length);
+  const documentOf = (node: NativeAxNode) => documents.find((area) => isWithin(node.ref, area.ref))?.ref ?? '';
+  const keysOf = (node: NativeAxNode) => hiddenFieldKeys(node, documentOf(node));
+  // Taken in by the hidden-field rule itself: focused now, or found focused earlier in this step.
+  const takenHidden = (node: NativeAxNode) => !!topWeb && hiddenFieldInPage(node, topWeb) &&
+    (!!node.focused || keysOf(node).some((key) => confirmedHidden?.has(key)));
+  const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb, takenHidden)) : pageMissing ? [] : nodes;
+  // Only fields the hidden-field rule took in are remembered, never zero-size fields kept for the viewport edge.
+  const hiddenFields = scoped.filter((node) => !visible(node, []) && takenHidden(node)).flatMap(keysOf);
 
   // Modal sheets take over the window.
   const sheet = scoped.find((node) => node.role === 'AXSheet');

@@ -28,6 +28,24 @@ describe('extractStep', () => {
   // ended a handoff as nothing_to_fill. Entry: extractStep, the step the card shows. Unit tier.
   // Existing coverage kept zero-size fields only when clipped at the page edge. Minimal failing input:
   // a focused 1x1 AXTextField inside the page under the code prompt. An unfocused one (a bot trap) stays out.
+  // PR #12780 review (codex r4692473266): remembered hidden fields matched by page id across the whole tree, and a
+  // zero-height field kept for the viewport edge was remembered too. Re-reading the step then took in a frame's
+  // never-focused 1x1 field with the same id, and the submit check failed on the extra field. Entry: extractStep
+  // read twice as sameFields does. Unit tier. Minimal failing input: edge field id=code + frame field id=code.
+  it('remembers only fields the hidden rule took in, each within its own document', () => {
+    const snap = snapshot([
+      node('0', 'AXWebArea', { url: 'https://example.test/form', frame: [0, 60, 1200, 840] }),
+      node('0.1', 'AXTextField', { title: '', domId: 'code', frame: [100, 900, 200, 0] }),
+      node('0.2', 'AXWebArea', { url: 'https://example.test/frame', frame: [100, 200, 400, 300] }),
+      node('0.2.1', 'AXTextField', { title: '', domId: 'code', frame: [150, 250, 1, 1] }),
+    ]);
+    const first = extractStep(snap);
+    expect(first.shown.filter(c => c.kind === 'text')).toHaveLength(1);
+    expect(first.hiddenFields).toBeUndefined();
+    const again = extractStep(snap, new Set(first.hiddenFields ?? []));
+    expect(again.shown.filter(c => c.kind === 'text')).toHaveLength(1);
+  });
+
   it('keeps the focused one-pixel input behind drawn code boxes, and leaves unfocused hidden fields out', () => {
     const step = extractStep(snapshot([
       node('0', 'AXWebArea', { url: 'https://secure.example.test/pay', frame: [0, 60, 1200, 840] }),
