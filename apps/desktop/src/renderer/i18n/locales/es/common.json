@@ -11813,7 +11813,7 @@
         "nameRequired": "Introduce un nombre para el grupo",
         "membersLabel": "Elige amigos",
         "selectedCount_one": "{{count}} seleccionado, hasta {{max}}",
-        "selectedCount_other": "{{count}} seleccionado, hasta {{max}}",
+        "selectedCount_other": "{{count}} seleccionados, hasta {{max}}",
         "minMembers": "Elige al menos {{min}} amigos",
         "notEnoughBots": "Necesitas al menos {{min}} amigos disponibles para iniciar un chat grupal. Primero agrega un amigo.",
         "submit": "Crear chat grupal",
@@ -17863,7 +17863,7 @@
   "effortLevels": {
     "off": "Desactivado",
     "minimal": "Mínimo",
-    "low": "Baja",
+    "low": "Bajo",
     "medium": "Medio",
     "high": "Alto",
     "xhigh": "Extra alto",
@@ -19347,7 +19347,7 @@
       },
       "uninstall": "Desinstalar habilidad",
       "uninstallDialog": {
-        "title": "¿Desinstalar \"{{name}}\"?",
+        "title": "¿Desinstalar «{{name}}»?",
         "description": "Los archivos y cambios locales se moverán a la papelera y podrán restaurarse.\n\nLos otros Agents que comparten esta habilidad también se verán afectados. Las versiones publicadas y las instalaciones en otras ubicaciones no se verán afectadas.",
         "confirm": "Desinstalar",
         "cancel": "Cancelar"

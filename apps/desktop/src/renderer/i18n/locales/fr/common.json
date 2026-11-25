@@ -251,7 +251,7 @@
     "skippedTitle_one": "{{count}} fichier ou dossier n'a pas été copié. Tout le reste a été copié intégralement :",
     "skippedTitle_other": "{{count}} fichiers ou dossiers n'ont pas été copiés. Tout le reste a été copié intégralement :",
     "skippedMore_one": "{{count}} autre élément non listé.",
-    "skippedMore_other": "{{count}} autre élément non listé.",
+    "skippedMore_other": "{{count}} autres éléments non listés.",
     "completeWithSkipped_one": "Copié, {{count}} élément ignoré",
     "completeWithSkipped_other": "Copié, {{count}} éléments ignorés",
     "skippedReasons": {
@@ -11813,7 +11813,7 @@
         "nameRequired": "Saisissez un nom de groupe",
         "membersLabel": "Choisir les amis",
         "selectedCount_one": "{{count}} sélectionné, {{max}} maximum",
-        "selectedCount_other": "{{count}} sélectionné, {{max}} maximum",
+        "selectedCount_other": "{{count}} sélectionnés, {{max}} maximum",
         "minMembers": "Choisissez au moins {{min}} amis",
         "notEnoughBots": "Il vous faut au moins {{min}} amis disponibles pour démarrer une conversation de groupe. Ajoutez d'abord un ami.",
         "submit": "Créer le groupe",
@@ -17861,9 +17861,9 @@
     }
   },
   "effortLevels": {
-    "off": "Désactivées",
+    "off": "Désactivé",
     "minimal": "Minimal",
-    "low": "Basse",
+    "low": "Faible",
     "medium": "Moyen",
     "high": "Élevé",
     "xhigh": "Très élevé",
@@ -17953,7 +17953,7 @@
     },
     "template": {
       "useTemplate": "Premiers pas",
-      "blank": "Vierge",
+      "blank": "Vide",
       "backToGallery": "← Retour aux modèles",
       "params": {
         "heading": "Paramètres du modèle"

@@ -11813,7 +11813,7 @@
         "nameRequired": "Insira um nome para o grupo",
         "membersLabel": "Escolher amigos",
         "selectedCount_one": "{{count}} selecionado, até {{max}}",
-        "selectedCount_other": "{{count}} selecionado, até {{max}}",
+        "selectedCount_other": "{{count}} selecionados, até {{max}}",
         "minMembers": "Escolha pelo menos {{min}} amigos",
         "notEnoughBots": "Você precisa de pelo menos {{min}} amigos disponíveis para iniciar uma conversa em grupo. Adicione um amigo primeiro.",
         "submit": "Criar conversa em grupo",
@@ -17863,7 +17863,7 @@
   "effortLevels": {
     "off": "Desativado",
     "minimal": "Mínimo",
-    "low": "Baixa",
+    "low": "Baixo",
     "medium": "Médio",
     "high": "Alto",
     "xhigh": "Muito alto",
@@ -19347,7 +19347,7 @@
       },
       "uninstall": "Desinstalar Skill",
       "uninstallDialog": {
-        "title": "Desinstalar \"{{name}}\"?",
+        "title": "Desinstalar “{{name}}”?",
         "description": "Os arquivos e as edições locais serão movidos para a lixeira e poderão ser restaurados.\n\nOutros Agents que compartilham esta Skill também serão afetados. As versões publicadas e as instalações em outros locais não serão afetadas.",
         "confirm": "Desinstalar",
         "cancel": "Cancelar"
