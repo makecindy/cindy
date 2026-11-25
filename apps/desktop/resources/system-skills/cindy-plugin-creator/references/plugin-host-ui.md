@@ -77,7 +77,7 @@
 | `sidebar.section` | 侧栏中的折叠 MCP App 分区 |
 | `window.titlebar` | 窗口标题区的原生图标按钮 |
 
-`session.main` 只允许静态页面按钮，例如 `{"id":"open-page","title":"任务页","position":"session.main","view":"task-page"}`。`task-page` 必须引用本插件声明的 `scope:"task"` 具名 MCP App 资源；不接收网址、工具、`match` 或 `presentation`。仅对已批准、启用且未在当前工作目录禁用的插件显示；未解析、本机以外、只读及非活动任务不开页。进入时才加载，切换任务、关闭或撤权时释放。页面通过 `hostContext.cindy.source.sessionId` 获取宿主绑定的任务，不是 `taskView.html` 的 `?session=`；不授予历史读取、消息定位、代发或窗口控制。普通 `taskView` 和既有具名页入口保持原路径。
+`session.main` 只允许静态页面按钮，例如 `{"id":"open-page","title":"任务页","position":"session.main","view":"task-page"}`。`task-page` 必须引用本插件声明的 `scope:"task"` 具名 MCP App 资源；不接收网址、工具、`match` 或 `presentation`。仅对已批准、启用且未在当前工作目录禁用的插件显示；未解析、本机以外、只读及非活动任务不开页。进入时才加载，切换任务、关闭或撤权时释放。原生权限确认、提问或计划审核等交互会让主区立即回到聊天；处理后须再次点击才会打开插件页。无关插件的清单更新不会关闭仍然有效的页面。页面通过 `hostContext.cindy.source.sessionId` 获取宿主绑定的任务，不是 `taskView.html` 的 `?session=`；不授予历史读取、消息定位、代发或窗口控制。普通 `taskView` 和既有具名页入口保持原路径。
 
 `statusbar` 等原生控件位置支持 `button`、`select` 和 `status`。需要点击打开页面或调用工具时，
 声明 `kind:"button"` 并指定 `view` 或 `tool`；示例的底部「示例已就绪」按钮会打开当前任务页。

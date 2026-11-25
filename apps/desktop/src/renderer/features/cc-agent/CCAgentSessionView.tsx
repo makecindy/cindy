@@ -1269,12 +1269,6 @@ function CCAgentSessionContent({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
-  const taskMain = usePluginUiTaskMain(
-    ownsRoute && viewVisible && !readOnly && !botChatIdentity && rightSidebarDeviceLinkDeviceId === null &&
-      !session?.remoteHostId && session?.status === 'active' && !session.clearedAt ? session.id : null,
-    session?.workingDir,
-  );
-  const ownsHardwareTaskActions = ownsTaskActionRoute && !taskMain.page;
   const composerBotMentions = useTaskBotMentions(
     rightSidebarDeviceLinkDeviceId,
     session?.remoteHostId,
@@ -2074,6 +2068,15 @@ function CCAgentSessionContent({
     updateQueueItemContent,
     chatDisplaySnapshot,
   } = useCCAgentChat(confirmedSessionId, handleTitleUpdate, { chatRealtime });
+  const hasNativeInteraction = Boolean(pendingPlanReview || pendingPermission || pendingAskUser ||
+    pendingPluginSetup || pendingIssueConfirm || pendingRenameSessionsConfirm || pendingGhostGrantConfirm ||
+    pendingRemoteDesktopConfirmation || pendingInputHandoff);
+  const taskMain = usePluginUiTaskMain(
+    ownsRoute && viewVisible && !readOnly && !botChatIdentity && rightSidebarDeviceLinkDeviceId === null &&
+      !session?.remoteHostId && session?.status === 'active' && !session.clearedAt ? session.id : null,
+    session?.workingDir, hasNativeInteraction,
+  );
+  const ownsHardwareTaskActions = ownsTaskActionRoute && !taskMain.page;
   // 待切到插件引擎(docs/plans/acp-plugin-bridge.md)的意图只交给模型选择器呈现；内置引擎的展示、
   // 能力、登录检查与发送只看切到内置引擎的意图，与没有插件引擎时一致。
   const agentSwitchIntent = builtinAgentSwitchIntent(storedAgentSwitchIntent);
@@ -6768,19 +6771,7 @@ function CCAgentSessionContent({
                  时,卡片会被 portal 出去,这里就显占位。 */}
               <div className="contents" data-plugin-ui-keep-visible>
               <InteractionPromptHost
-                hasInteraction={
-                  !!(
-                    pendingPlanReview ||
-                    pendingPermission ||
-                    pendingAskUser ||
-                    pendingPluginSetup ||
-                    pendingIssueConfirm ||
-                    pendingRenameSessionsConfirm ||
-                    pendingGhostGrantConfirm ||
-                    pendingRemoteDesktopConfirmation ||
-                    pendingInputHandoff
-                  )
-                }
+                hasInteraction={hasNativeInteraction}
                 placeholder={
                   <div className="w-full rounded-xl border border-dashed border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))] px-4 py-3 text-center text-12 text-[var(--cmd-palette-item-meta)]">
                     {t('ccAgent.layout.waitForReply')}

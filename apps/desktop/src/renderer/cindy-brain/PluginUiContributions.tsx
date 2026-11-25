@@ -6,7 +6,7 @@ import { getApprovedGhostHostUi, ghostInstallApprovalToken, type InstalledGhost 
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import { useInstalledGhosts, readInstalledGhostsSnapshot } from './useInstalledGhosts';
 import { usePluginUiControl } from './pluginUiControls';
-import { useWorkdirDisabledGhostIds } from './ghostWorkdirFilter';
+import { useWorkdirDisabledGhostPolicy } from './ghostWorkdirFilter';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
@@ -401,11 +401,10 @@ export function PluginUiSlotControls({ entries, sessionId = null, clientId, appe
 }
 
 /** Only a user's choice in the owning task can replace its chat surface. No persisted route or plugin command. */
-export function usePluginUiTaskMain(sessionId: string | null, workdir: string | null | undefined) {
+export function usePluginUiTaskMain(sessionId: string | null, workdir: string | null | undefined, hasNativeInteraction = false) {
   const directory = useContext(DirectoryContext);
-  const entries = sessionId && workdir?.trim() ? directory.get('session.main') ?? NO_ENTRIES : NO_ENTRIES;
-  const ghosts = useMemo(() => entries.map(entry => entry.ghost), [entries]);
-  const disabled = useWorkdirDisabledGhostIds(workdir, ghosts);
+  const entries = sessionId && workdir?.trim() && !hasNativeInteraction ? directory.get('session.main') ?? NO_ENTRIES : NO_ENTRIES;
+  const disabled = useWorkdirDisabledGhostPolicy(workdir, entries.length > 0);
   const choices = useMemo(() => !disabled ? [] : entries.filter(entry => !disabled.has(entry.instanceId)).map(entry => ({
     entry, key: JSON.stringify([sessionId, workdir, entry.instanceId, entry.contribution.id,
       entry.ghost.approval.state === 'approved' && entry.ghost.approval.revision]),
