@@ -26,6 +26,7 @@ export { TEAMMATE_PROJECT_MEMORY_SEGMENTS };
 /** Derived files beside the records: USER.md travels inside the profile, MEMORY.md is a rebuilt index. */
 const DERIVED_MEMORY_FILES = new Set(['user.md', 'memory.md', 'readme.md']);
 const MAX_MEMORY_FILENAME_LENGTH = 160;
+const WINDOWS_FORBIDDEN_CHARS = /[<>:"|?*]/;
 const RESERVED_WINDOWS_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i;
 
 /** Filenames handled by MakerMemoryStore (curated + internal digest shards). */
@@ -48,6 +49,7 @@ export function isSafeTeammateMemoryFilename(filename: unknown): filename is str
   if (DERIVED_MEMORY_FILES.has(filename.toLowerCase())) return false;
   if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) return false;
   if (/[\x00-\x1f\x7f]/.test(filename)) return false;
+  if (WINDOWS_FORBIDDEN_CHARS.test(filename)) return false;
   if (RESERVED_WINDOWS_NAME.test(filename)) return false;
   return path.basename(filename) === filename;
 }

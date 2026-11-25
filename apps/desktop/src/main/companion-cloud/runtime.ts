@@ -34,8 +34,8 @@ import { isCindyCompanion, mergeCompanionsInto, readProfileSnapshot } from './me
 import { importCloudHistory } from './materialize.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, isUnreachable, type CompanionApi, type CompanionLog } from './types.js';
-import { createCompanionStore, readCompanionRestoreValue, readPreference, type CompanionStoreTransfer } from './store.js';
-import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_SKILL_PREFIX, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
+import { createCompanionStore, readCompanionRestoreValue, readCompanionRows, readPreference, type CompanionStoreTransfer } from './store.js';
+import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_SKILL_PREFIX, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, isOwnedCompanionKey, type CompanionPreferenceValue } from './uploader.js';
 
 /** Electron/database side of the feature, wired in register.ts. */
 export interface CompanionCloudHost {
@@ -935,6 +935,23 @@ export function startCompanionCloud(input: {
     return (await probe(deviceId).catch(() => false)) ? COMPANION_CLOUD_TEAMMATE_PROJECT_VERSION : 0;
   }
 
+  /**
+   * An uncompleted take-over skips local upload (the cloud already holds the authoritative copy),
+   * but an older target still cannot receive store-only values or >64 KiB legacy skill bodies.
+   */
+  async function checkCloudTargetCompatibility(actor: CompanionRuntimeActor, targetVersion: number): Promise<void> {
+    const preferencesOnly = targetVersion < COMPANION_CLOUD_STORE_READ_VERSION;
+    const legacySkills = targetVersion < COMPANION_CLOUD_SKILL_SOURCE_VERSION;
+    if (!preferencesOnly && !legacySkills) return;
+    const rows = await readCompanionRows(input.api, store, actor.id);
+    fence.assertCurrent();
+    if (actorOf(actor.externalId)?.id !== actor.id) throw new Error('COMPANION_CHANGED');
+    if (legacySkills) checkLegacySkillSizes(rows);
+    if (preferencesOnly && rows.some(row => row.fromStore && row.value !== null && isOwnedCompanionKey(row.key))) {
+      throw new Error(COMPANION_VALUE_TOO_LARGE);
+    }
+  }
+
   /** Everything the new home needs reaches the server, then the home moves and this copy is demoted. */
   async function handOver(actor: CompanionRuntimeActor, targetDeviceId: string, targetVersion: number): Promise<CompanionCloudActionResult> {
     const botId = actor.externalId;
@@ -943,33 +960,29 @@ export function startCompanionCloud(input: {
     if (await turnActive() || materializing.has(botId) || repairing.has(botId)) return { ok: false, code: 'BUSY' };
     // A computer whose take-over never finished (still demoted here) never ran the companion or
     // produced local state: the cloud already holds the authoritative copy. Allow moving it on
-    // (for example back to its previous computer) as long as no other install here owns it.
+    // (for example back to its previous computer) as long as no other install here owns it and
+    // the target version can receive everything stored in the cloud.
     const uncompletedTakeOver = state.isDemoted(botId) && !pick(null).some(bot => bot.botId === botId);
-    if (uncompletedTakeOver) {
-      try {
+    try {
+      if (uncompletedTakeOver) {
         if (installId && await claimInstall(actor, 'check', input.api) === 'other') {
           return { ok: false, code: 'FAILED', reason: 'OWNED_BY_OTHER_INSTALL' };
         }
+        await checkCloudTargetCompatibility(actor, targetVersion);
         await checkProfileSources(actor);
-      } catch (error) {
-        input.log?.warn('Companion hand-over stopped: sync did not finish', { actorId: actor.id, code: errorCode(error) });
-        return error instanceof BotProfileSourceTooLong ? actionFailure(error) : syncFailure(error);
-      }
-    } else {
-      // An older target reads only the preferences: what only the store holds would not arrive, so
-      // such a value still refuses the move, as before the store existed.
-      try {
+      } else {
+        // An older target reads only the preferences: what only the store holds would not arrive, so
+        // such a value still refuses the move, as before the store existed.
         await flush(botId, {
           preferencesOnly: targetVersion < COMPANION_CLOUD_STORE_READ_VERSION,
           validateValues: targetVersion < COMPANION_CLOUD_SKILL_SOURCE_VERSION ? checkLegacySkillSizes : undefined,
         });
         await checkProfileSources(actor);
       }
-      catch (error) {
-        input.log?.warn('Companion hand-over stopped: sync did not finish', { actorId: actor.id, code: errorCode(error) });
-        if (error instanceof SkillTargetOutdated) return { ok: false, code: 'SKILL_TARGET_OUTDATED', oversizedSkill: error.skill };
-        return error instanceof BotProfileSourceTooLong ? actionFailure(error) : syncFailure(error);
-      }
+    } catch (error) {
+      input.log?.warn('Companion hand-over stopped: sync did not finish', { actorId: actor.id, code: errorCode(error) });
+      if (error instanceof SkillTargetOutdated) return { ok: false, code: 'SKILL_TARGET_OUTDATED', oversizedSkill: error.skill };
+      return error instanceof BotProfileSourceTooLong ? actionFailure(error) : syncFailure(error);
     }
     // Checked again right before the move: a turn or restore may have started during the flush.
     if (await turnActive() || materializing.has(botId) || repairing.has(botId)) return { ok: false, code: 'BUSY' };

@@ -44,6 +44,9 @@ export const COMPANION_PROJECT_CARRYOVER_KEY = 'companion.project-carryover.v1';
 const OWNED_PREFIXES = [COMPANION_PROFILE_KEY, COMPANION_MEMORY_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_SKILL_FILES_PREFIX,
   COMPANION_TODO_PREFIX, COMPANION_ROUTINE_PREFIX, COMPANION_WORKBENCH_KEY, COMPANION_CAPABILITIES_KEY,
   COMPANION_PROJECT_RULES_KEY, COMPANION_AUTOMATION_PREFIX, COMPANION_PROJECT_CARRYOVER_KEY];
+/** True for keys carrying companion content (profile, memories, skills, rules, automations). */
+export const isOwnedCompanionKey = (key: string): boolean =>
+  OWNED_PREFIXES.some(prefix => key === prefix || (prefix.endsWith(':') && key.startsWith(prefix)));
 const MAX_KEY_LENGTH = 160;
 export const COMPANION_VALUE_MAX_BYTES = 60 * 1024;
 /** A value over the size limit was not uploaded (thrown only when every value is required). */
@@ -109,7 +112,7 @@ export function createCompanionUploader(deps: {
   store?: CompanionStore;
 }) {
   const maxBytes = deps.maxValueBytes ?? COMPANION_VALUE_MAX_BYTES;
-  const owned = (key: string) => OWNED_PREFIXES.some(prefix => key === prefix || (prefix.endsWith(':') && key.startsWith(prefix)));
+  const owned = isOwnedCompanionKey;
   type Row = { key: string; value: unknown; revision: number };
   const readRows = (actorId: string): Promise<Row[]> => readPreferences(deps.api, actorId);
   /** Values the store refused for good (`${actorId}\n${key}` → hash): not asked again until they change. */

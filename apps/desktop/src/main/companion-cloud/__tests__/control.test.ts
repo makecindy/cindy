@@ -1783,6 +1783,63 @@ describe('recovery from an uncompleted take-over (#12621)', () => {
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
   });
 
+  // #12621 review P1: skipping local flush for an uncompleted take-over must still enforce target
+  // version compatibility against cloud content (store-only rows for <v3 and >64 KiB skills for <v5).
+  it.each([
+    {
+      label: 'rejects store-only cloud memory for a target without store reader (v2)',
+      version: 2,
+      storeEntries: [{ key: 'companion.memory.v1:big.md', revision: 1, cursor: '1', hash: 'h1', size: 70_000, deleted: false,
+        value: { companionStore: 1, prefRevision: 0, value: { filename: 'big.md', content: 'x'.repeat(65_000) } } }],
+      expected: { ok: false, code: 'FAILED', reason: 'COMPANION_VALUE_TOO_LARGE' },
+    },
+    {
+      label: 'allows store-only cloud memory for a store-capable target (v4)',
+      version: 4,
+      storeEntries: [{ key: 'companion.memory.v1:big.md', revision: 1, cursor: '1', hash: 'h1', size: 70_000, deleted: false,
+        value: { companionStore: 1, prefRevision: 0, value: { filename: 'big.md', content: 'x'.repeat(65_000) } } }],
+      expected: { ok: true },
+    },
+    {
+      label: 'rejects >64 KiB cloud skill body for a pre-v5 target (v4)',
+      version: 4,
+      storeEntries: [{ key: 'companion.skill.v1:large', revision: 1, cursor: '1', hash: 'h2', size: 72_000, deleted: false,
+        value: { companionStore: 1, prefRevision: 0, value: { slug: 'large', content: 'x'.repeat(71_560) } } }],
+      expected: { ok: false, code: 'SKILL_TARGET_OUTDATED', oversizedSkill: { slug: 'large', bodyBytes: 71_560 } },
+    },
+    {
+      label: 'allows >64 KiB cloud skill body for a current target (v5)',
+      version: COMPANION_CLOUD_VERSION,
+      storeEntries: [{ key: 'companion.skill.v1:large', revision: 1, cursor: '1', hash: 'h2', size: 72_000, deleted: false,
+        value: { companionStore: 1, prefRevision: 0, value: { slug: 'large', content: 'x'.repeat(71_560) } } }],
+      expected: { ok: true },
+    },
+  ])('$label during an uncompleted take-over hand-over', async ({ version, storeEntries, expected }) => {
+    const t = setup({
+      home: 'desk',
+      devices: [device('laptop')],
+      store: { enabled: () => true },
+      homeLink: { version: async () => version, targets: async () => [], handOver: async () => ({ ok: true }) },
+      handler: (route, method) => {
+        if (route.startsWith('/preferences') && method === 'GET') {
+          return [{ key: 'companion.profile.v1', value: MIA, revision: 1 }];
+        }
+        if (route.startsWith('/companion-store/changes')) {
+          return { entries: storeEntries, cursor: '1', hasMore: false };
+        }
+        if (route.startsWith('/companion-store/entry?')) {
+          return { key: 'companion.profile.v1', revision: 0, cursor: '0', hash: '', size: 0, deleted: true };
+        }
+        if (method === 'PATCH') return {};
+        throw new Error(`unexpected ${method} ${route}`);
+      },
+    });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; });
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual(expected);
+    expect(t.actors[0]!.homeDeviceId).toBe(expected.ok ? 'laptop' : 'desk');
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(expected.ok);
+  });
+
   it('records needsModel, avoids server polling until a local model is usable, and finishes on local change', async () => {
     let modelReady = false;
     let notifyLocalChange: ((botId: string) => void) | undefined;

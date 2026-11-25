@@ -92,7 +92,11 @@ it('writes and removes safe portable markdown memories while rejecting unsafe fi
   expect(classifyMemoryFilename('user_tea.md')).toBe('store');
   expect(classifyMemoryFilename('daily_2026-11-24.md')).toBe('portable');
   expect(classifyMemoryFilename('project_MyNotes.md')).toBe('portable');
-  for (const bad of ['../escape.md', 'sub/a.md', 'sub\\a.md', '.hidden.md', 'MEMORY.md', 'memory.md', 'USER.md', 'README.md', 'CON.md', 'bad\n.md', 'notes.txt']) {
+  for (const bad of [
+    '../escape.md', 'sub/a.md', 'sub\\a.md', '.hidden.md', 'MEMORY.md', 'memory.md', 'USER.md', 'README.md',
+    'CON.md', 'bad\n.md', 'notes.txt',
+    'notes?.md', 'a*b.md', 'a:b.md', 'a<b.md', 'a>b.md', 'a"b.md', 'a|b.md',
+  ]) {
     expect(isSafeTeammateMemoryFilename(bad)).toBe(false);
     expect(classifyMemoryFilename(bad)).toBe('invalid');
     await expect(writeRawTeammateMemoryFile(dir, bad, 'x')).rejects.toThrow('[INVALID_PARAMS] Invalid memory');
@@ -100,6 +104,11 @@ it('writes and removes safe portable markdown memories while rejecting unsafe fi
   }
   await writeRawTeammateMemoryFile(dir, 'daily_2026-11-24.md', '# Daily\nkept');
   await writeRawTeammateMemoryFile(dir, 'project_MyNotes.md', 'upper case ok');
+  // On POSIX hosts a file with Windows-forbidden characters can exist on disk; upload must skip it.
+  if (process.platform !== 'win32') {
+    await writeFile(path.join(dir, 'notes?.md'), 'non-portable');
+    await writeFile(path.join(dir, 'a:b.md'), 'ads-like');
+  }
   expect(await readTeammateMemories([dir])).toEqual([
     { filename: 'daily_2026-11-24.md', content: '# Daily\nkept' },
     { filename: 'project_MyNotes.md', content: 'upper case ok' },
