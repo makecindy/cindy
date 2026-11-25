@@ -78,3 +78,33 @@ export function pluginTaskRouteAttempts<T extends { agentKind: AgentKind }>(
 export function pluginTaskSelectionIsOpen(selection: { agentKind?: unknown; model?: unknown; providerId?: unknown; effort?: unknown; fastMode?: unknown }): boolean {
   return !selection.agentKind && !selection.model && !selection.providerId;
 }
+
+/**
+ * Last resort when no auxiliary candidate can run a plugin's own task: the new-task
+ * model, but at the lightest effort it accepts. Following the new-task selection
+ * as-is would run subtitle passages at whatever effort the user picked for coding
+ * (for example xhigh), which is slow and costly; the user is told about the
+ * fallback through the auxiliary-model health notice.
+ */
+export async function resolveLightestPluginTaskFallback<
+  S extends { effort?: string; fastMode?: boolean | 'ultrafast' },
+  T extends { agentKind: string; model: string; providerId?: string | null; fastMode?: boolean | 'ultrafast' },
+>(resolve: (selection: S) => Promise<T>, selection: S): Promise<T> {
+  const fallback = await resolve(selection);
+  for (const effort of PLUGIN_TASK_LIGHT_EFFORTS) {
+    try {
+      // Pin the identity the new-task selection resolved to; only the effort changes.
+      return await resolve({
+        ...selection,
+        agentKind: fallback.agentKind,
+        model: fallback.model,
+        providerId: fallback.providerId,
+        fastMode: fallback.fastMode ?? selection.fastMode,
+        effort,
+      } as S);
+    } catch {
+      // This model does not offer that level; try the next one.
+    }
+  }
+  return fallback;
+}

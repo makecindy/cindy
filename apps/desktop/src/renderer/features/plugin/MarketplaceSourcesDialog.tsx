@@ -19,6 +19,7 @@ import type { MarketSourceSummary } from '../../../shared/pluginMarket';
 
 import { marketplaceSourceErrorKey } from './lib/pluginMarketErrorKey';
 import { MarketplaceDiscoveryNotice } from './MarketplaceDiscoveryNotice';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 export interface MarketplaceSourcesDialogProps {
   open: boolean;
@@ -133,14 +134,14 @@ export function MarketplaceSourcesDialog({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10001]',
+            'modal-scrim fixed inset-0 z-modal-raised',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised -translate-x-1/2 -translate-y-1/2',
             'flex max-h-[85vh] w-full select-none flex-col p-4',
           )}
           style={
@@ -279,7 +280,7 @@ export function MarketplaceSourcesDialog({
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setPendingRemove(null);
         }}
-        zIndex={10002}
+        zIndex={Z_INDEX_LAYERS['modal-nested']}
         title={
           pendingRemove
             ? t('settings.ghosts.market.sources.removeConfirmTitle', {

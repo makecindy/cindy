@@ -97,7 +97,7 @@ it('discards a still-CONNECTING network socket without an uncaught error when cl
   expect(ws.readyState).toBe(WebSocket.CLOSED);
 });
 
-async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { intervalMs: number; timeoutMs: number }; networkChangeProbeMs?: number; workerFile?: URL }) {
+async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { intervalMs: number; timeoutMs: number }; networkChangeProbeMs?: number; relayStuckMs?: number; workerFile?: URL }) {
   const relay = new WebSocketServer({ host: '127.0.0.1', port: 0, autoPong: options.autoPong });
   await once(relay, 'listening');
   const accepted = once(relay, 'connection') as Promise<[WebSocket]>;
@@ -114,10 +114,11 @@ async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { inte
     log: { info: (line: string) => { infos.push(line); }, warn: (line: string) => { warnings.push(line); } },
     uplinkKeepalive: options.keepalive ?? { intervalMs: 10, timeoutMs: 50 },
     ...(options.networkChangeProbeMs ? { networkChangeProbeMs: options.networkChangeProbeMs } : {}),
+    ...(options.relayStuckMs ? { relayStuckMs: options.relayStuckMs } : {}),
   } as Parameters<typeof AgentNetWorkerSocket.open>[0]);
   cleanup.push(() => { socket.terminate(); for (const peer of relay.clients) peer.terminate(); relay.close(); });
   const [server] = await accepted;
-  return { server, warnings, infos, socket };
+  return { server, warnings, infos, socket, relay };
 }
 
 it('drops a relay connection whose pings are never answered, so the worker reconnects it (2026-11-13)', async () => {
@@ -126,11 +127,54 @@ it('drops a relay connection whose pings are never answered, so the worker recon
   expect(warnings).toEqual([expect.stringMatching(/^agent-net relay connection is not answering \(no pong for \d+ms, \d+ bytes waiting to be sent\); reconnecting$/)]);
 });
 
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open` 之后中转连接断了，worker 却一直不再请求连接（它的重连卡住了）：
+ *   Main 在 `relayStuckMs` 后让 worker 从头重连（`relay-restart`），中转看到新连接，日志记一条警告。
+ * - Bug 依据：2026-11-25 一台 Mac 的中转连接 04:26 断开后 worker 再没请求过连接，只经中转能到的设备离线 4.5 小时，
+ *   重启 App 才恢复。那条原因已在 worker 里修掉（socket.integration.test.ts「reconnects its relay after ending …」），这里是
+ *   Main 侧的兜底：以后再有让 worker 停止重连的原因，也不必重启。
+ * - 现有覆盖缺口：此前 Main 只管已打开的中转连接是否活着（保活、换网探测），连接断开以后完全交给 worker。
+ * - 最小失败输入：中转关掉唯一的连接，worker 不再发 `ws-open`。
+ * - tier：unit，内联最小 worker 与本机回环真实 WebSocket，时限压到 100 毫秒。
+ */
+it('tells a worker whose relay reconnect is stuck to start over (2026-11-25)', async () => {
+  const stuckWorker = new URL('data:text/javascript,' + encodeURIComponent(`
+import { parentPort } from 'node:worker_threads';
+let url, id = 0;
+parentPort.on('message', (m) => {
+  if (m.type === 'init') { url = m.client.base.replace(/^http/, 'ws') + '/ws'; parentPort.postMessage({ type: 'ready' }); }
+  if (m.type === 'init' || m.type === 'relay-restart') parentPort.postMessage({ type: 'ws-open', id: ++id, url, headers: {} });
+});
+`));
+  const { server, socket, warnings, relay } = await openAgainstRelay({ autoPong: true, keepalive: { intervalMs: 60_000, timeoutMs: 120_000 },
+    relayStuckMs: 100, workerFile: stuckWorker });
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  // An open relay connection is never restarted, however long it stays open.
+  // real-wait: only time past relayStuckMs (100 ms) on a real open connection shows the watchdog stays quiet; Main's timers run in real time here.
+  await new Promise(resolve => setTimeout(resolve, 250));
+  expect(warnings).toEqual([]);
+  const reconnected = once(relay, 'connection');
+  const droppedAt = performance.now();
+  server.close();
+  await reconnected;
+  // The worker gets the whole period from the drop, however long ago it last connected (here 250 ms, more than the period).
+  expect(performance.now() - droppedAt).toBeGreaterThanOrEqual(100);
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(warnings).toEqual([expect.stringMatching(/^agent-net relay connection is down and no reconnect was attempted for \d+s; restarting it$/)]);
+});
+
 it('reports whether its relay connection is open, and when that changes', async () => {
-  const { server, socket } = await openAgainstRelay({ autoPong: true, keepalive: { intervalMs: 60_000, timeoutMs: 120_000 } });
+  const { server, socket } = await openAgainstRelay({ autoPong: true, networkChangeProbeMs: 50, keepalive: { intervalMs: 60_000, timeoutMs: 120_000 } });
   await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
   // 中转的往返时间（远程连接页显示）：连上就先测一次，不等第一次保活。
   await vi.waitFor(() => expect(socket.relayRttMs()).toEqual(expect.any(Number)));
+  // A single stalled peer must not disconnect an answering relay.
+  const ping = once(server, 'ping');
+  socket.relayStalled();
+  await ping;
+  await new Promise(resolve => setTimeout(resolve, 75));
+  expect(socket.relayConnected()).toBe(true);
   const changes: boolean[] = [];
   socket.on('relay', (up: boolean) => { changes.push(up); });
   server.close();
@@ -204,13 +248,14 @@ parentPort.on('message', (message) => {
   expect(socket.peerRoutes()).toEqual([{ deviceId: 'lan-peer', path: 'connecting', rttMs: null }]);
 });
 
-it('replaces a relay connection that does not answer right after a network change, before the keepalive would', async () => {
+it.each(['networkChanged', 'relayStalled'] as const)('probes a silent relay after %s before the keepalive would', async trigger => {
   const { server, warnings, socket } = await openAgainstRelay({ autoPong: false, keepalive: { intervalMs: 60_000, timeoutMs: 120_000 }, networkChangeProbeMs: 30 });
   const closed = new Promise<void>((resolve) => { server.on('close', () => resolve()); });
   await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
-  socket.networkChanged();
+  socket[trigger]();
+  socket[trigger]();
   await closed;
-  expect(warnings).toEqual(['agent-net relay connection did not answer after a network change; reconnecting']);
+  expect(warnings).toEqual([expect.stringContaining('relay connection did not answer')]);
 });
 
 /** Turns each application frame `{ tag, count, size }` into that many relay datagrams; byte 0 is the tag. */
@@ -311,6 +356,11 @@ parentPort.on('message', (m) => {
   const post = async (...messages: unknown[]) => { socket.send(JSON.stringify(messages)); while (socket.bufferedAmount > 0) await new Promise((resolve) => setImmediate(resolve)); };
   const lines = () => infos.filter((line) => line.startsWith('agent-net peer'));
 
+  // Control the logging interval without depending on worker scheduling or CI load.
+  let now = 1_000;
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+  cleanup.push(() => clock.mockRestore());
+
   // A device that is known but never connected is not reported, in snapshots either.
   await post(status(null));
   await post({ type: 'path', id: 'peer-a', path: 'relay' }, status('relay'));
@@ -318,9 +368,10 @@ parentPort.on('message', (m) => {
   await post(status('direct'));
   expect(lines()).toEqual(['agent-net peer peer-a connected via relay', 'agent-net peer peer-a moved from relay to direct']);
   // Flipping inside the interval writes nothing more; after it, where the route ended up.
+  now += 39;
   await post(status('relay'), status('direct'), status('relay'));
   expect(lines()).toHaveLength(2);
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  now += 1;
   await post(status('relay'));
   expect(lines().slice(2)).toEqual(['agent-net peer peer-a moved from direct to relay']);
   await post({ type: 'path', id: 'peer-a', path: null }, status(null));

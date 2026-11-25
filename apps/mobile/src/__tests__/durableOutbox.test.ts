@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
+import { uploadMobileAttachmentFromFile } from '@/session/mobileAttachmentUpload';
 import { accountVaultKey } from '@cindy/auth-client';
 import { cancelledCreationDraft, outboxCreationRetryIdentity } from '../session/cancelledCreationDraft';
 import { cindyMakeOutboxPolicy } from '../session/cindyMakeOutboxPolicy';
@@ -820,6 +822,51 @@ describe("durable mobile outbox ownership", () => {
 });
 
 describe("app-owned delivery and reconciliation", () => {
+  // #4841 (unit): unlike the generic retry fixtures, use the Mobile API error
+  // from a DNS failure during attachment presign and see whether the same item can send.
+  it('keeps an unsent item queued when Android DNS blocks attachment presign', async () => {
+    const { store, deps } = await setup();
+    const offline = new Error('fetch failed: java.net.UnknownHostException: Unable to resolve host "relay.example.invalid": No address associated with hostname');
+    const fetch = vi.fn()
+      .mockRejectedValueOnce(offline)
+      .mockRejectedValueOnce(offline)
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        putUrl: 'https://upload.example.invalid/object', key: 'object', expiresAt: '2099-01-01T00:00:00Z',
+      })));
+    vi.stubGlobal('fetch', fetch);
+    vi.useFakeTimers();
+    const uploadFile = vi.fn().mockResolvedValue({ status: 200 });
+    const runner = createDurableOutboxDelivery({
+      ...deps,
+      upload: (_record, candidate) => uploadMobileAttachmentFromFile(candidate, 'file:///unit.txt', {
+        token: null, deps: { uploadFile, readFileChunk: async () => 'eA==' },
+      }),
+      retryable: isAutoRecoveringRemoteError,
+      describe: formatRemoteError,
+    });
+    try {
+      const record = message();
+      await store.add({ ...record, item: { ...record.item, attachmentSlots: [null] },
+        uploads: [{ slot: 0, kind: 'file', fileName: 'unit.txt', name: 'unit.txt', size: 1 }] });
+      const attempt = runner.run();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await attempt;
+      expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued' });
+      expect(deps.enqueue).not.toHaveBeenCalled();
+      expect(uploadFile).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(2);
+      runner.wake();
+      await runner.run();
+      expect(uploadFile).toHaveBeenCalledOnce();
+      expect(deps.enqueue).toHaveBeenCalledOnce();
+      expect(deps.enqueue.mock.calls[0]?.[0].item.clientId).toBe('id-1');
+    } finally {
+      runner.stop();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(['legacy', 'legacy-prepared'] as const)('keeps %s enqueue success uncertain across restart until history confirms it', async (host) => {
     const first = await setup();
     const legacy = { pendingQueue: [] } as unknown as DeliveryProjection;

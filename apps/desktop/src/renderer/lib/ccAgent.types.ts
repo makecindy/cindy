@@ -130,6 +130,8 @@ export interface PluginModelRouteNote {
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  /** This input yielded to already queued messages after a context overflow. */
+  inputNotice?: 'oversized-input-skipped';
   /** 新任务「让插件选」的结果(宿主写入，非模型回复)。 */
   pluginModelRoute?: PluginModelRouteNote;
   /** Model boundary recorded by the host when the next input is dispatched. */
@@ -139,6 +141,8 @@ export interface CcMeta {
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
+  /** Set only on finished user-visible progress for a foreground plugin task input. */
+  pluginProgressInputId?: string;
   /** Native text item identity, used to reconcile streamed and imported history. */
   agentMessageId?: string;
   /** Codex item text is durable but its sampling request has not yet been accepted. */
@@ -398,6 +402,7 @@ export interface Session {
   sdkSessionId: string | null;
   totalTokenUsage: number;
   totalCostUsd: number;
+  totalCostUsdIsApproximate?: boolean;
   /** 新版区域累计金额；旧会话仍只带 totalCostUsd。 */
   totalMoney?: RegionalMoney;
   contextTokens: number;

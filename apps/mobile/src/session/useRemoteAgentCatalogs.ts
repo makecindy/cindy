@@ -57,6 +57,11 @@ type DeviceModelRoute = { deviceId: string; route: ProviderPickerModel };
 type ShareState = { controlledDeviceId: string; shares: readonly ProviderShareCatalogEntry[]; loaded: boolean };
 
 const NO_CATALOGS: RemoteAgentCatalog[] = [];
+/**
+ * 被控电脑报了分享清单变化后，屏幕上已有的分享行最多留这么久等实时重读(被控电脑逐个读分享目录
+ * 最多 10 秒)。缓存照旧立即作废；重读失败或超时就退回作废后的状态，不留无界的旧清单。
+ */
+const SHARE_CHANGE_DISPLAY_HOLD_MS = 12_000;
 
 function cachedShareState(controlledDeviceId: string): ShareState {
   const cached = controlledDeviceId ? getCachedProviderShareCatalogs(controlledDeviceId) : undefined;
@@ -136,6 +141,7 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
     const controlledDeviceId = input.controlledDeviceId;
     if (!input.enabled || !controlledDeviceId || status !== 'online' || !readShares) return;
     let cancelled = false;
+    let retired = false;
     const previousVersion = shareCatalogVersionRef.current;
     if (previousVersion.deviceId !== controlledDeviceId) {
       shareCatalogVersionRef.current = { deviceId: controlledDeviceId, version: shareCatalogVersion };
@@ -144,10 +150,23 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
       // only this target's cached share rows; the live re-read below supplies the
       // new authoritative list. Presence/push is not an authorization result.
       evictProviderShareCatalogs(controlledDeviceId);
+      retired = true;
       shareCatalogVersionRef.current = { deviceId: controlledDeviceId, version: shareCatalogVersion };
     }
-    setShareState(cachedShareState(controlledDeviceId));
+    // 分享者电脑上线/离线都会推一次清单变化。缓存已作废，但屏幕上的行留到这次重读有结果(最多
+    // SHARE_CHANGE_DISPLAY_HOLD_MS)，不让分享在一次来回(实测约 2 秒)里消失又出现
+    // (2026-11-23 用户裁决「保留并标注」)；重读失败或超时就退回作废后的状态。
+    let hold: ReturnType<typeof setTimeout> | undefined;
+    const showCache = () => {
+      if (hold) clearTimeout(hold);
+      hold = undefined;
+      if (!cancelled) setShareState(cachedShareState(controlledDeviceId));
+    };
+    if (retired) hold = setTimeout(showCache, SHARE_CHANGE_DISPLAY_HOLD_MS);
+    else showCache();
     const unsubscribe = subscribeProviderShareCatalogs(controlledDeviceId, (shares) => {
+      if (hold) clearTimeout(hold);
+      hold = undefined;
       if (!cancelled) setShareState({ controlledDeviceId, shares,
         loaded: isProviderShareCatalogComplete(controlledDeviceId) !== false });
     });
@@ -156,10 +175,12 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
       PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL,
       [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
     )).catch(() => {
-      // 保留缓存;下次打开选择器或重连时再读。
+      // 保留缓存;下次打开选择器或重连时再读。清单变化后的重读失败时，不再留着作废前的行。
+      if (hold) showCache();
     });
     return () => {
       cancelled = true;
+      if (hold) clearTimeout(hold);
       unsubscribe();
     };
     // keepOnly 也在依赖里:打开选择器时即使分享列表已在显示,也在后台再读一次。
@@ -263,6 +284,7 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
       keepDeviceIds: keepKey ? keepKey.split('\n') : [],
       keepOnly,
       deviceName: (share) => names.get(share.agentDeviceId) ?? t('providerShare.picker.shareName', { owner: share.ownerName }),
+      offlineName: (name) => t('providerShare.picker.offline', { name }),
       unavailableName: t('providerShare.picker.unavailable'),
     });
   }, [input.controlledDeviceId, input.enabled, keepKey, keepOnly, readShares, shareState, t]);

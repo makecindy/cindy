@@ -712,6 +712,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     binaryPath: options.binaryPath,
     logger: LOGGER,
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+    getMcpToolApprovalEvidence: undefined,
     // As the desktop: first-party read-only tools go through the SDK allowedTools.
     claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),
     reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
@@ -801,6 +802,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         // As the desktop: Host exit reaps the tool trees below these app-servers (main.ts stop).
         registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+        getMcpToolApprovalEvidence: undefined,
         // As the desktop: a credential-mode switch of the shared local app-server refuses busy
         // sessions and soft-closes idle ones first.
         prepareCodexLocalCredentialModeSwitch: async (ctx) => {
@@ -873,6 +875,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         binaryPath: options.piBinaryPath,
         logger: LOGGER,
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+        getMcpToolApprovalEvidence: undefined,
         reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
         mcpProviders,
         resolvePiAgentHome: () => path.join(options.userDataDir, 'pi-agent-home'),
@@ -913,6 +916,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         // As the desktop (pi-host.ts): the shared resolver with the Host's ports (pi-native-providers.ts),
         // and the Cindy gateway block's API and compat from the same probe state.
         resolvePiNativeProviders: (ctx) => piNativeProviders.resolvePiNativeProviders(ctx),
+        // #12298: the Host's own subscription connection state (read-only), so subagent
+        // routes skip a source the Host knows is disconnected.
+        isNativeProviderSourceConnected: piNativeProviders.subscriptionSourceConnected,
         // As the desktop (pi-host.ts): durable Subagent runners, forked as Node child processes (pi-subagent-runner.ts).
         spawnPiSubagentRunner: (request) => spawnHostPiSubagentRunner(request),
         resolvePiManagedPackageResources: piPackages.deps.resolvePiManagedPackageResources,

@@ -29,6 +29,7 @@ import path from 'node:path';
 import { createLogger } from '../logger';
 import { isPreservingUnreadableSettingsFilesByDefault } from '../maker-host/override-settings-file.js';
 
+import { inspectSettingsFile, isSettingBoolean, isSettingStringList, isSettingsObject, validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
 
 export interface DeviceLinkSettings {
   /** Device-local V2 preference; absent in existing files means V1. */
@@ -53,6 +54,8 @@ export interface DeviceLinkSettings {
   disabledControlDeviceIds: string[];
   /** deviceId → last known non-placeholder display name, local-only cache. */
   lastKnownDeviceNames: Record<string, string>;
+  /** 逐设备的 Agent-Net 选路偏好覆盖（仅存非 auto 的手动选择；缺省或空时省略，保持旧文件形状不变）。 */
+  peerPathPreferences?: Record<string, 'direct' | 'relay'>;
 }
 export interface DeviceLinkSettingsStorePorts {
 getUserDataDir: () => string;
@@ -63,6 +66,17 @@ const { getUserDataDir, withAvailabilityPolicyMutation } = ports;
 
 
 const log = createLogger('device-link-settings');
+
+/** 只读持久偏好，不探测设备、relay、powerSaveBlocker 或系统授权。 */
+function inspectDeviceLinkSettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize, savedSource: 'unknown',
+    validate: (raw) => validateOptionalSettingsFields(raw, {
+      remoteDesktopEnabled: isSettingBoolean, remoteControlEnabled: isSettingBoolean, keepAwake: isSettingBoolean,
+      revokedControllers: isSettingStringList, disabledControlDeviceIds: isSettingStringList,
+      lastKnownDeviceNames: (value) => isSettingsObject(value) && Object.values(value).every((name) => typeof name === 'string'),
+    }),
+  });
+}
 
 const DEFAULTS: DeviceLinkSettings = {
   agentNetEnabled: false,
@@ -96,11 +110,25 @@ function normalize(raw: unknown): DeviceLinkSettings {
       : [],
     disabledControlDeviceIds: normalizeStringList(r.disabledControlDeviceIds),
     lastKnownDeviceNames: normalizeDeviceNameMap(r.lastKnownDeviceNames),
+    ...optional('peerPathPreferences', normalizePeerPathPreferences(r.peerPathPreferences)),
   };
 }
 
-function optional<K extends 'agentNetChangedBy' | 'agentNetPendingSwitch'>(key: K, value: DeviceLinkSettings[K]): Partial<Pick<DeviceLinkSettings, K>> {
+function optional<K extends 'agentNetChangedBy' | 'agentNetPendingSwitch' | 'peerPathPreferences'>(key: K, value: DeviceLinkSettings[K]): Partial<Pick<DeviceLinkSettings, K>> {
   return value ? { [key]: value } as Partial<Pick<DeviceLinkSettings, K>> : {};
+}
+
+function normalizePeerPathPreferences(raw: unknown): Record<string, 'direct' | 'relay'> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, 'direct' | 'relay'> = {};
+  let count = 0;
+  for (const [deviceId, pref] of Object.entries(raw as Record<string, unknown>)) {
+    const trimmed = deviceId.trim();
+    if (!trimmed || (pref !== 'direct' && pref !== 'relay')) continue;
+    out[trimmed] = pref;
+    count += 1;
+  }
+  return count > 0 ? out : undefined;
 }
 
 function normalizeAgentNetChange(raw: unknown): DeviceLinkSettings['agentNetChangedBy'] {
@@ -491,6 +519,22 @@ function isPlaceholderDeviceName(name: string): boolean {
   return normalized === 'unknown' || normalized === 'no';
 }
 
+async function setPeerPathPreference(
+  deviceId: string,
+  preference: 'auto' | 'direct' | 'relay',
+): Promise<Record<string, 'direct' | 'relay'>> {
+  const trimmed = deviceId.trim();
+  if (!trimmed) return readDeviceLinkSettings().peerPathPreferences ?? {};
+  // 不在写队列外拿磁盘旧值判重：快速连点（如 auto → relay → auto）必须按队列内最新值串行落地，防止先入队的旧写覆盖最后选择。
+  const next = await updateDeviceLinkSetting('peerPathPreferences', (latest) => {
+    const copy: Record<string, 'direct' | 'relay'> = { ...(latest ?? {}) };
+    if (preference === 'auto') delete copy[trimmed];
+    else copy[trimmed] = preference;
+    return Object.keys(copy).length > 0 ? copy : undefined;
+  });
+  return next ?? {};
+}
+
 const __testing = { normalize };
-return { readDeviceLinkSettings, onDeviceLinkSettingChanged, updateDeviceLinkSetting, writeDeviceLinkSetting, readLastKnownDeviceNames, writeLastKnownDeviceNames, setDeviceControlEnabled, rememberLastKnownDeviceName, forgetLastKnownDeviceName, normalizeCachedDeviceName, isPlaceholderDeviceName, __testing };
+return { inspectDeviceLinkSettings, readDeviceLinkSettings, onDeviceLinkSettingChanged, updateDeviceLinkSetting, writeDeviceLinkSetting, readLastKnownDeviceNames, writeLastKnownDeviceNames, setDeviceControlEnabled, setPeerPathPreference, rememberLastKnownDeviceName, forgetLastKnownDeviceName, normalizeCachedDeviceName, isPlaceholderDeviceName, __testing };
 }

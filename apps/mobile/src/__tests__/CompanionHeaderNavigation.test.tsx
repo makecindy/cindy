@@ -166,7 +166,7 @@ function PageHost({ bindings }) {
   const adaptiveWindow = { barEdge: bindings.barEdge ?? 'none' };
   const horizontalSystemHeader = bindings.nativeHeader ?? false;
   const companionSettingsRequest = bindings.companionSettingsRequest;
-  const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false, sessionListDrawerFloating = false;
+  const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false, stackGestureEnabled = true;
   ${statements.slice(stateStart, stateEnd).map(n => n.getText(source)).join('\n')}
   ${statements[declaration('companionHeaderShown')].getText(source)}
   ${relevantJsx(header)}

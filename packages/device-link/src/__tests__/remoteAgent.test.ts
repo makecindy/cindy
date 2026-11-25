@@ -21,6 +21,14 @@ import {
 const runId = '0f9c4a2e-6d1b-4c3a-9e8f-1a2b3c4d5e6f';
 const otherId = '1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d';
 
+// Unit wire contract: a false capacity hint must survive parsing. Missing or
+// malformed optional hints keep old executors usable through bounded fallback.
+it.each([true, false, undefined, 'false'])('parses the optional live capacity hint (%s)', value => {
+  const caps = { version: 1, maxRuns: 16, uploadChunkBytes: 1024, maxPayloadBytes: 8192 };
+  expect(parseRemoteAgentCaps({ ...caps, runCapacityAvailable: value }).runCapacityAvailable)
+    .toBe(typeof value === 'boolean' ? value : undefined);
+});
+
 describe('shared image request', () => {
   const request = {
     op: 'shared-image', action: 'start', requestId: runId, providerId: 'openai',
@@ -51,6 +59,15 @@ it('preserves optional direct-switch generations and accepts legacy requests', (
   expect(parseRemoteAgentRequest(request)).toEqual(request);
   expect(parseRemoteAgentRequest({ ...request, generation: runId })).toEqual({ ...request, generation: runId });
   expect(() => parseRemoteAgentRequest({ ...request, generation: 'invalid' })).toThrow();
+});
+
+it('negotiates optional reporting on capable peers and bounds authorization messages', () => {
+  const caps = { version: 1, maxRuns: 10, uploadChunkBytes: 1024, maxPayloadBytes: 8192 };
+  expect(parseRemoteAgentCaps(caps).companyTokenReporting).toBeUndefined();
+  expect(parseRemoteAgentCaps({ ...caps, companyTokenReporting: true }).companyTokenReporting).toBe(true);
+  const grant = { op: 'company-reporting-grant', runId, grant: 'test' };
+  expect(parseRemoteAgentRequest(grant)).toEqual(grant);
+  expect(() => parseRemoteAgentRequest({ ...grant, grant: 'x'.repeat(8193) })).toThrow();
 });
 
 describe('subscription Fast policy wire compatibility', () => {

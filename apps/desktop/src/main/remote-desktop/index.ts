@@ -1,3 +1,6 @@
+import { supportsManagedX11Clipboard } from './linuxX11Clipboard';
+import { readLinuxInputSupport } from './linuxInputHost';
+import { getInstanceConfig } from '../instance-runtime/config.js';
 import {
   app,
   desktopCapturer,
@@ -12,7 +15,10 @@ import {
   type WebContents,
   type DesktopCapturerSource,
 } from 'electron';
+import { macPermissionAppPath } from '../../shared/macControlPermission.js';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { readdirSync } from 'node:fs';
 import { release as osRelease } from 'node:os';
 import { createLogger } from '../logger';
@@ -108,8 +114,9 @@ import {
 import {
   DesktopInputHost,
   readDesktopDisplayModes,
+  isEditableDesktopPoint,
   setDesktopDisplayMode,
-  readDesktopInputPermission,
+  readDesktopInputAccess,
   resolveDesktopInputBinary,
   readDesktopLockState,
   lockDesktopScreen,
@@ -124,32 +131,44 @@ import {
 } from '../computer-permission-guide/request';
 
 const log = createLogger('remote-desktop');
+const runMacOpen = promisify(execFile);
 
+// Local settings only: why remote keyboard and mouse are still missing on
+// macOS 27.3 when the person allowed Cindy to control chosen apps only.
+let inputChosenAppsOnly = false;
 const permissions = new RemoteDesktopPermissionsService({
   required: process.platform === 'darwin',
   screen: () => {
     const status = systemPreferences.getMediaAccessStatus('screen');
     return status === 'granted' ? 'granted' : status === 'unknown' ? 'unknown' : 'missing';
   },
-  accessibility: readDesktopInputPermission,
-  request: async (permission, isCurrent, signal) => {
-    if (permission === 'accessibility') await requestDesktopInputPermission(isCurrent, signal);
-    else
-      await enumerateDesktopSources(
-        () =>
-          desktopCapturer.getSources({
-            types: ['screen'],
-            thumbnailSize: { width: 0, height: 0 },
-          }),
-        REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs,
-      );
+  accessibility: async () => {
+    const access = await readDesktopInputAccess('postEvents');
+    inputChosenAppsOnly = access.chosenAppsOnly === true;
+    return access.status;
   },
-  openSettings: (permission) =>
-    shell.openExternal(
-      permission === 'screenRecording'
-        ? MAC_SCREEN_RECORDING_SETTINGS_URL
-        : MAC_ACCESSIBILITY_SETTINGS_URL,
-    ),
+  request: async (permission, isCurrent, signal) => {
+    if (permission === 'accessibility') return requestDesktopInputPermission(isCurrent, signal, 'postEvents');
+    await enumerateDesktopSources(
+      () =>
+        desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: 0, height: 0 },
+        }),
+      REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs,
+    );
+    return systemPreferences.getMediaAccessStatus('screen') === 'granted';
+  },
+  openSettings: async (permission, separateWindow) => {
+    const url = permission === 'screenRecording' ? MAC_SCREEN_RECORDING_SETTINGS_URL : MAC_ACCESSIBILITY_SETTINGS_URL;
+    if (separateWindow) {
+      // Open a separate system-owned settings window without interacting with
+      // another pane's pending edits. Fixed app and URL, no shell interpolation.
+      await runMacOpen('/usr/bin/open', ['-n', '-b', 'com.apple.systempreferences', url], { timeout: 5000 });
+      return;
+    }
+    await shell.openExternal(url);
+  },
   showGuide: () => {
     const window = getDeepLinkMainWindow();
     if (window && !window.isDestroyed()) {
@@ -235,6 +254,12 @@ const applyExcludedWindows = () =>
 export function setAwayCaptureExcludedWindows(ids: number[]): void {
   awayExcluded = ids;
   applyExcludedWindows();
+}
+async function linuxInputSupported(): Promise<boolean> {
+  // The managed cloud X11 desktop keeps its guarded X11 input adapter.
+  if (!wayland() && getInstanceConfig()) return readLinuxInputSupport();
+  // Portal-selected Wayland surfaces must remain view-only.
+  return (nativeWayland() || isX11Desktop()) && (await readLinuxDesktopInputSupport());
 }
 // While the phone shows picture-in-picture the input helper is stopped on purpose;
 // the local exit confirmation then has nothing to pause, and cancelling it must not
@@ -910,6 +935,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
     const settings = readDeviceLinkSettings();
     const enabled = settings.remoteDesktopEnabled && settings.remoteControlEnabled;
     const viewerDisplay = enabled && (await viewerDisplaySupported());
+    const x11Clipboard = enabled && await supportsManagedX11Clipboard();
     const linuxDisplays =
       enabled && nativeWayland() && supportsLinuxDisplay()
         ? (await linuxMonitors()).map(linuxDisplay)
@@ -930,15 +956,15 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       clipboardContent:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
-        (supportsLinuxLock() && supportsLinuxClipboard()),
+        (supportsLinuxLock() && supportsLinuxClipboard()) || x11Clipboard,
       clipboardSync:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
-        (supportsLinuxLock() && supportsLinuxClipboard()),
+        (supportsLinuxLock() && supportsLinuxClipboard()) || x11Clipboard,
       clipboardInline:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
-        (supportsLinuxLock() && supportsLinuxClipboard()),
+        (supportsLinuxLock() && supportsLinuxClipboard()) || x11Clipboard,
       privacyScreen:
         supportsPrivacyScreen || (enabled && nativeWayland() && (await supportsLinuxPrivacy())),
       hostMute:
@@ -946,7 +972,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       clipboardText:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
-        (supportsLinuxLock() && supportsLinuxClipboard()),
+        (supportsLinuxLock() && supportsLinuxClipboard()) || x11Clipboard,
       videoSettings: true,
       trickleIce: true,
       backgroundViewing: true,
@@ -966,7 +992,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       canControl:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
-        (enabled && (await readLinuxDesktopInputSupport())),
+        (enabled && (await linuxInputSupported())),
       platform: process.platform,
       ...(enabled ? { permissions: await permissions.read() } : {}),
       displays:
@@ -1099,6 +1125,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       : systemAudioMuteGuard.restore('remote-desktop'),
   viewerHidden: setViewerHidden,
   videoBackground: setVideoBackground,
+  editableAt: process.platform === 'darwin' ? isEditableDesktopPoint : undefined,
   displayModes: readDesktopDisplayModes,
   displayPresent: async (displayId) => {
     if (nativeWayland()) {
@@ -1130,10 +1157,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   startInput: async (displayId, window) => {
     // A portal-selected window is not the whole compositor coordinate space.
     // Never allow a forged control request to drive that view-only fallback.
-    if (
-      process.platform === 'linux' &&
-      ((!nativeWayland() && !isX11Desktop()) || !(await readLinuxDesktopInputSupport()))
-    )
+    if (process.platform === 'linux' && !(await linuxInputSupported()))
       throw new Error('DESKTOP_INPUT_UNSUPPORTED');
     if (window) await input.start(displayId, { windowId: window.windowId, pid: window.pid });
     else await input.start(displayId);
@@ -1145,7 +1169,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       return;
     }
     try {
-      input.input(events);
+      return input.input(events);
     } catch (error) {
       // The input host refused before injecting anything (helper gone, or this
       // lease's display is unavailable). Release control so the host and the
@@ -1486,9 +1510,18 @@ export function registerRemoteDesktopIpc(
       await permissions.showIfNeeded(() => readDeviceLinkSettings().remoteDesktopEnabled);
     }
   });
-  ipcMain.handle(DESKTOP_LOCAL.PERMISSIONS, (event) => {
+  ipcMain.handle(DESKTOP_LOCAL.PERMISSIONS, async (event) => {
     assertTrustedAppRendererEvent(event);
-    return permissions.read();
+    const status = await permissions.read();
+    // Finder can distinguish identically named official and personal installs.
+    // Never attach this local path to device-link permission replies.
+    const bundle = macPermissionAppPath(process.platform, process.execPath);
+    return {
+      ...status,
+      ...(bundle ? { appBundlePath: bundle } : {}),
+      ...(status.accessibility === 'missing' && inputChosenAppsOnly ? { accessibilityChosenAppsOnly: true } : {}),
+      separateWindowRetries: permissions.separateWindowRetries,
+    };
   });
   ipcMain.handle(DESKTOP_LOCAL.OPEN_PERMISSION, (event, permission: unknown) => {
     assertTrustedAppRendererEvent(event);

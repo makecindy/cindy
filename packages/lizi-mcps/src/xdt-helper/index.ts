@@ -37,7 +37,13 @@ export {
 export {
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
+  registerPinSessionsTools,
+  type PinSessionsDeps,
+  registerSnoozeSessionsTool,
   type ArchiveSessionsDeps,
+  type SnoozeSessionsDeps,
+  type SessionSnoozeChangeItem,
+  type SetSessionsSnoozeResult,
   type SessionStatus,
   type SessionStatusChangeItem,
   type SetSessionsStatusResult,

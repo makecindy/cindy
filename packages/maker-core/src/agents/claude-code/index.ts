@@ -2276,16 +2276,22 @@ export class ClaudeCodeAgent extends BaseAgent {
     // everything else stays with the native classifier so no call is reviewed twice.
     const nativeAutoPolicyHook: HookCallback = async (input) => {
       if (input.hook_event_name !== 'PreToolUse') return { continue: true };
-      if (
-        mutablePermissionMode !== 'auto' || mutablePlanMode || planTurnActive
-        || !usesNativeClaudeAutoReview()
-      ) return { continue: true };
       const pre = input as PreToolUseHookInput;
       const toolName = pre.tool_name;
       const decide = (permissionDecision: 'allow' | 'ask', reason: string) => ({
         continue: true,
         hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision, permissionDecisionReason: reason },
       });
+      // A user or project `permissions.allow` rule skips canUseTool in every mode, which is where a
+      // channel turn's forced confirmation (non-owner destructive call) is decided. Hand those calls
+      // back to the approval chain in Ask as well as Auto (the modes that accept a turn policy).
+      if (!mutablePlanMode && !planTurnActive && forceTurnConfirmation(toolName, pre.tool_input)) {
+        return decide('ask', 'This channel turn requires confirmation for this action.');
+      }
+      if (
+        mutablePermissionMode !== 'auto' || mutablePlanMode || planTurnActive
+        || !usesNativeClaudeAutoReview()
+      ) return { continue: true };
       const isMcp = resolveMcpToolTarget(toolName, registeredMcpServerNames) !== null;
       const mcpPolicy = isMcp ? classifyMcpApprovalPolicy(toolName, pre.tool_input) : null;
       // Requester authority (owner / group guest) and forceConfirmToolCall are only known to
@@ -2688,8 +2694,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       let reviewedWritePath: string | null | undefined;
       let executionInput = input;
       const normalizedAction = normalizeBuiltinToolForAutoReview(toolName, input);
+      const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+      const reviewInput = (mcpTarget && this.deps.getMcpToolApprovalEvidence?.({
+        ...mcpTarget, toolParams: input,
+      })) ?? input;
       const builtinReviewAction = normalizedAction.kind === 'other'
-        ? toolAutoReviewAction(toolName, input)
+        ? toolAutoReviewAction(toolName, reviewInput)
         : normalizedAction;
       const directorySensitivePermission = builtinReviewAction?.kind === 'read'
         || builtinReviewAction?.kind === 'file-write';
@@ -2728,7 +2738,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           executionInput = bindClaudeFileWriteTarget(toolName, input, reviewedWritePath);
         }
         const autoDecision = await reviewAutoAction(
-          turnPolicyForcePrompt ? toolAutoReviewAction(toolName, input, undefined, action) : action,
+          turnPolicyForcePrompt ? toolAutoReviewAction(toolName, reviewInput, undefined, action) : action,
           workspaceRoots,
           writableRoots,
           hosted ? hosted.platform : opts.remoteHostId ? 'linux' : process.platform,

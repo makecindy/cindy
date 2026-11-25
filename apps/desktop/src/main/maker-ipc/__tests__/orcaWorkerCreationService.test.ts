@@ -530,6 +530,25 @@ function providerRoutingContext(
   };
 }
 
+it('boots a Worker with the selected group route and leaves the first dispatch receipt on that Worker', async () => {
+  const { deps } = createDeps({
+    modelGroupStart: {
+      prepare: vi.fn(async () => ({
+        token: 'group-receipt',
+        route: { agentKind: 'cc' as const, model: 'claude-sonnet-4-6', providerId: 'xd', agentDeviceId: null },
+      })),
+    },
+  });
+  const result = await createOrcaWorkerCreationService(deps).createWorker({
+    leadSessionId: 'lead-1', role: 'developer', label: 'developer-1',
+    agent: 'codex', model: 'gpt-5.5', effort: 'low', modelGroup: 'coding',
+  });
+  expect(result).toMatchObject({ ok: true, resolved: { agent: 'claude-code', model: 'claude-sonnet-4-6', effort: 'high' } });
+  expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+    id: WORKER_SESSION_ID, agentKind: 'claude-code', model: 'claude-sonnet-4-6', modelGroupStart: 'group-receipt',
+  }));
+});
+
 function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
   const calls: string[] = [];
   const ids = ['worker-1'];

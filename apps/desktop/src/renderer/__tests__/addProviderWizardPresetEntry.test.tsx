@@ -63,8 +63,10 @@ import { openFirstRunGuide, closeFirstRunGuide, parkFirstRunGuideForConnection, 
 import { AddSpeechModelsDialog } from '@/components/settings/AddSpeechModelsDialog';
 import { UnifiedModelList } from '@/components/settings/UnifiedModelList';
 import { speechModels } from '../../main/voice-conversation/models';
+import { realtimeModels } from '../../main/voice-conversation/realtimeModels';
 import { __resetForTest as resetVisibility, setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { createCustomProvider, updateCustomProvider, deleteCustomProvider, readCustomProviderKey } from '@/lib/customProviders';
+import { fetchProviderModels as fetchModelsThroughMain } from '../../main/maker-host/provider-model-fetch';
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn() }),
@@ -365,6 +367,31 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+it('uses two real HTTP reads for the Token Rhythm wizard three-engine discovery', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'tokenrhythm')!;
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry }));
+  const transport = vi.fn<typeof fetch>(async () => new Response('{"data":[{"id":"future-account-model"}]}'));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(input => fetchModelsThroughMain(input, transport));
+  renderWizard('tokenrhythm');
+  fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-tokenrhythm-key' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await screen.findByText('future-account-model');
+  expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledTimes(3);
+  expect(transport).toHaveBeenCalledTimes(2);
+  for (const [url, init] of transport.mock.calls) {
+    expect(String(url)).toBe('https://tokenrhythm.studio/v1/models');
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fake-tokenrhythm-key');
+  }
+  fireEvent.click(screen.getByText('future-account-model'));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const [saved, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    expect(saved.runtimes[agent]!.models.map(model => model.id)).toEqual(['future-account-model']);
+    expect(keys![agent]).toBe('fake-tokenrhythm-key');
+  }
+});
+
 // #8485 unit: the editable vLLM preset can discover Magpie, too. Existing form
 // tests skipped Wizard's per-engine picks and its two final config projections.
 // Minimal failure: a successful source response (or removal) was lost at save.
@@ -437,19 +464,21 @@ describe('Magpie sources through preset discovery', () => {
     }
   });
 
-  it.each(['finish', 'return'] as const)('lets refreshed sources replace old draft fields on %s, including successful removal', async action => {
+  it.each(['finish', 'return'] as const)('lets refreshed sources and pricing replace old draft fields on %s, including successful removal', async action => {
     const agents = ['codex', 'pi'] as const;
     const oldSource = { kind: 'magpie' as const, providerId: 'Old source', snapshotId: 'old-receipt' };
     const config: CustomProviderConfig = { id: 'draft', name: 'Gateway', auth: { method: 'none' }, runtimes: Object.fromEntries(
       agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat', models: [
-        { id: 'foo', name: 'Foo', opaqueModelId: true, discoveredSource: oldSource, discoverySnapshotId: 'old-receipt' },
+        { id: 'foo', name: 'Foo', opaqueModelId: true, discoveredSource: oldSource,
+          discoverySnapshotId: 'old-receipt', discoveredCost: { input: 2, output: 8 } },
       ] }]),
     ) };
     const preset = { id: 'vllm', name: 'vLLM', authMethod: 'none' as const, runtimes: Object.fromEntries(
       agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat' as const, baseUrlEditable: true, models: [] }]),
     ) };
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async ({ agent }) => ({ ok: true, models: [
-      { id: 'foo', name: 'Foo', discoverySnapshotId: `receipt-${agent}`, ...(agent === 'pi' ? { discoveredSource: source(agent) } : {}) },
+      { id: 'foo', name: 'Foo', discoverySnapshotId: `receipt-${agent}`,
+        ...(agent === 'pi' ? { discoveredSource: source(agent), discoveredCost: { input: 3, output: 15 } } : {}) },
     ] }));
     const onReturnCustom = vi.fn();
     render(<AddProviderWizard providers={[]} detected={{ agent: 'pi', apiKey: '', keys: {}, config, preset }}
@@ -472,6 +501,7 @@ describe('Magpie sources through preset discovery', () => {
       expect(model.opaqueModelId).toBe(true);
       expect(model.discoverySnapshotId).toBe(`receipt-${agent}`);
       expect(model.discoveredSource).toEqual(agent === 'pi' ? source(agent) : undefined);
+      expect(model.discoveredCost).toEqual(agent === 'pi' ? { input: 3, output: 15 } : undefined);
     }
   });
 });
@@ -754,6 +784,48 @@ it.each(['delayed', 'failed'] as const)('waits for a %s catalog before building 
 });
 
 describe('AddProviderWizard — preset 直达', () => {
+  // Unit: select the reviewed release after catalog recovery, both for a new install and an older install without ACP.
+  it.each(['not-installed', 'update-available'] as const)('opens the reviewed official engine release for %s', async installState => {
+    const { __resetInstalledGhostsStoreForTest } = await import('../cindy-brain/useInstalledGhosts');
+    __resetInstalledGhostsStoreForTest();
+    const action = installState === 'not-installed' ? 'settings.providers.wizard.installAndConfigure' : 'settings.ghosts.market.update';
+    const query = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ items: [], officialIds: ['tool'], totalOfficial: 2, nextCursor: 'next' }).mockResolvedValueOnce({
+      items: [{ name: 'Antigravity', ghostId: 'engine', pluginId: 'official-engine' }], officialIds: ['official-engine'], totalOfficial: null, nextCursor: 'community-only',
+    });
+    Object.assign(window.electronAPI, { pluginMarket: { officialModelPlugins: query, cancelOfficialModelPlugins: vi.fn().mockResolvedValue(undefined) } });
+    const detail = vi.fn().mockResolvedValue({ pluginId: 'official-engine', ghostId: 'engine', sourceType: 'server',
+      scope: 'public', publisherKind: 'official', releaseId: 'r1', installState, manifest: { harnesses: [{ protocol: 'acp' }] } });
+    const install = vi.fn().mockRejectedValue({ code: 'MUTATION_CANCELLED' });
+    Object.assign(window.electronAPI.pluginMarket, { detail, install });
+    const ghosts = installState === 'update-available' ? [{ manifest: { id: 'engine', version: '0.1.0' },
+      dir: '/plugins/engine', enabled: true, approval: { state: 'approved', revision: 'previous' } }] : [];
+    Object.assign(window.electronAPI, { ghosts: { listSync: () => ({ ghosts }), onChanged: () => () => {} } });
+    render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} showOfficialModelPlugins />);
+    await screen.findByText('settings.ghosts.market.unavailable');
+    expect(screen.getByText('DeepSeek')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.retryPlugin' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.contribution.loadMore' }));
+    await screen.findByText('Antigravity');
+    expect(screen.queryByText('settings.ghosts.market.unavailable')).toBeNull();
+    const search = screen.getByRole('textbox', { name: 'settings.providers.wizard.searchPlaceholder' });
+    fireEvent.change(search, { target: { value: 'deepseek' } });
+    expect(screen.queryByText('Antigravity')).toBeNull();
+    expect(screen.getByText('DeepSeek')).toBeTruthy();
+    fireEvent.change(search, { target: { value: 'antigravity' } });
+    expect(screen.queryByText('Image tool')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Antigravity/ }));
+    await screen.findByRole('button', { name: action });
+    expect(detail).toHaveBeenCalledWith('official-engine');
+    fireEvent.click(screen.getByRole('button', { name: action }));
+    await waitFor(() => expect(install).toHaveBeenCalledWith('official-engine', {
+      ...(installState === 'update-available' ? { expectedInstalledApproval: 'approved:previous' } : {}),
+      expectedReleaseId: 'r1', expectedManifest: { harnesses: [{ protocol: 'acp' }] }, allowSourceReplacement: false,
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    expect(screen.getByRole('textbox', { name: 'settings.providers.wizard.searchPlaceholder' })).toHaveProperty('value', 'antigravity');
+    expect(query.mock.calls).toEqual([[null], [null], ['next']]);
+  });
+
   it('opens custom configuration from the header and leaves only cancel below the list', async () => {
     const onOpenCustomForm = vi.fn();
     const onClose = vi.fn();
@@ -2385,6 +2457,42 @@ describe('speech models in the existing provider wizard', () => {
 
 // PR #6768 / #6660 integration regression (Renderer unit): the real wizard and
 // additions dialog must save defaults supported at the configured endpoint.
+it.each(['gpt-realtime-2.1-mini', 'gpt-realtime-2.1'])(
+  'offers and saves only the realtime ID returned by OpenAI (%s)',
+  async (id) => {
+    // The preset and the supplemental endpoint catalog both have offline candidates.
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openai-api')!);
+    preset.runtimes.codex!.models.push({ id: 'gpt-realtime-mini', name: 'Offline Realtime Mini' });
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({
+      presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry,
+    });
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({
+      ok: true, models: [{ id, name: id }, { id: 'gpt-4o-mini-tts', name: 'TTS' }],
+    });
+    renderWizard(preset.id);
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fixture-api-key' } });
+    await clickNext();
+    const section = await screen.findByRole('region', { name: 'bots.voiceMode.realtime.title' });
+    const choice = await within(section).findByRole('checkbox', { name: new RegExp(id) });
+    expect(within(section).getAllByRole('checkbox')).toHaveLength(1);
+    fireEvent.click(choice);
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    for (const runtime of Object.values(config.runtimes)) {
+      expect(runtime!.models.filter(m => m.id.startsWith('gpt-realtime')).map(m => m.id)).toEqual([id]);
+    }
+    const view = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    expect(view.audioModels?.filter(m => m.mode === 'realtime').map(m => m.id)).toEqual([id]);
+    const options = realtimeModels({
+      catalog: { ...BUNDLED_CATALOG, providers: [view] },
+      gatewayAllowed: false, gatewayConnection: () => { throw new Error('unexpected gateway'); },
+      readKey: (_, agent) => keys[agent] ?? null, disabled: () => false,
+    });
+    expect(options).toMatchObject([{ id, protocol: 'openai-realtime', pickerVisible: true }]);
+  },
+);
+
 // Previous tests asserted one brand-wide CosyVoice default; a public DashScope
 // URL is the smallest failing input. No live credentials or synthesis required.
 describe('Alibaba speech recommendations follow the actual endpoint', () => {

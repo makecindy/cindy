@@ -96,6 +96,7 @@ let activeAuthRealm = 'global', pendingAuthRealm = null, loginFlowState = null;
 let pendingAccountToken = null, pendingAccountRefreshToken = null, pendingAccountMemberships = [];
 let accountDeletionRestoredNoticePending = false, confirmedAccountDeletionCredential = null;
 let coldStartAuthInFlight = null, coldStartRetryWait = null, refreshTimer = null;
+let enterpriseGuestSignIn = null;
 let coldStartRecoveryStopped = false, coldStartRetryState = null;
 let lastAcceptedRefreshToken = null, persistedRefreshTokenNeedsIdentityCheck = false;
 let foreignDeviceLocalSignOut = false;
@@ -206,8 +207,28 @@ function setup(random = 0) {
     exchangeAccountMembership: vi.fn(async () => ok.data),
   };
   const deps = {
+    // Exercise the Linux cold-start path on every test host, with no enrollment on disk.
+    process: { platform: 'linux', env: {} },
+    deviceId: 'test-device',
+    desktopAuthFetch: vi.fn(),
+    readCloudGuest: vi.fn<() => Promise<object | null>>(async () => null),
+    cloudGuestSaved: vi.fn(async () => false),
+    cloudGuestAuthorization: vi.fn<() => Promise<{ code: string; verifier: string }>>(),
+    isAtomicPersistedSecretAbsent: () => true,
+    writeAtomicSafe: () => true,
+    confirmCloudGuestWhenOnline: vi.fn<(base: () => string, token: () => string | null, transport: typeof fetch) => void>(),
+    activateClientEndpointRealm: vi.fn(),
+    getClientEndpointForRealm: (realm: string) => 'https://model-access.' + realm + '.example.invalid',
+    getAccessToken: () => null,
     saved,
     vault,
+    // An ordinary Desktop has no managed-instance config, so the
+    // managed-instance branches of initialize/refresh must never run here.
+    getInstanceConfig: () => null,
+    instanceAuthReady: () => { throw new Error('managed instance path'); },
+    authenticateManagedInstance: () => { throw new Error('managed instance path'); },
+    // Sign-in entries guard managed-instance accounts; an ordinary Desktop always passes.
+    assertInstanceAuthMutationAllowed: () => {},
     onStartupFallback: vi.fn(),
     transactAuthAccountVault: transaction,
     accountVaultKey,
@@ -308,10 +329,31 @@ describe('saved login recovery after startup network failure', () => {
     vi.useRealTimers();
   });
 
+  // Standard tier: a pending enrollment used to hold the launch screen until the guest retry deadline.
+  it('unlocks the startup screen while one guest enrollment continues and discards a superseded grant', async () => {
+    const h = setup();
+    h.saved.session = null;
+    h.deps.readCloudGuest.mockResolvedValue({ requestId: 'pilot-order' });
+    let grant!: (value: { code: string; verifier: string }) => void;
+    h.deps.cloudGuestAuthorization.mockImplementation(() => new Promise((resolve) => { grant = resolve; }));
+    const onColdStartPending = vi.fn<(completion: Promise<unknown>) => void>();
+    const startup = h.start({ onColdStartPending });
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(startup).resolves.toMatchObject({ isAuthenticated: false });
+    expect(h.deps.cloudGuestAuthorization).toHaveBeenCalledExactlyOnceWith(
+      { requestId: 'pilot-order' }, 'test-device', 'https://auth.example.invalid', expect.any(Object), h.deps.desktopAuthFetch,
+    );
+    expect(onColdStartPending).toHaveBeenCalledTimes(1);
+    h.cancelRecovery();
+    grant({ code: 'test-code', verifier: 'test-verifier' });
+    await expect(onColdStartPending.mock.calls[0][0]).resolves.toMatchObject({ isAuthenticated: false });
+  });
+
   it('keeps slowly retrying beyond three failures and restores the original account after the startup fallback', async () => {
     const h = setup();
     const pending = h.start();
     await vi.advanceTimersByTimeAsync(20_000);
+    expect(h.deps.confirmCloudGuestWhenOnline).not.toHaveBeenCalled();
     await expect(pending).resolves.toMatchObject({ isAuthenticated: false });
     await vi.advanceTimersByTimeAsync(400_000);
     expect(h.request.mock.calls.length).toBeGreaterThan(3);
@@ -322,6 +364,26 @@ describe('saved login recovery after startup network failure', () => {
     expect(h.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
     expect(h.saved.session.refreshToken).toBe('test-rotated');
     expect(h.deps.notifyAuthListeners).toHaveBeenCalled();
+  });
+
+  // Standard tier: a saved enterprise session in another realm must confirm against that realm after recovery.
+  it('confirms registration only after restoring the stored enterprise realm', async () => {
+    const h = setup();
+    h.saved.session.realm = 'cn';
+    const memberKey = accountVaultKey('cn', 'original');
+    h.vault.activeAccountKey = memberKey;
+    h.vault.resources = { [memberKey]: { realm: 'cn', refreshToken: 'test-refresh' } };
+    const startup = h.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await startup;
+    expect(h.deps.confirmCloudGuestWhenOnline).not.toHaveBeenCalled();
+    h.request.mockResolvedValue({ ...h.ok, data: { ...h.ok.data, membership: { ...h.ok.data.membership, kind: 'org' } } });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.deps.activateClientEndpointRealm).toHaveBeenCalledWith('cn');
+    expect(h.deps.confirmCloudGuestWhenOnline).toHaveBeenCalledTimes(1);
+    const [base, , transport] = h.deps.confirmCloudGuestWhenOnline.mock.calls[0];
+    expect(base()).toBe('https://model-access.cn.example.invalid');
+    expect(transport).toBe(h.deps.desktopAuthFetch);
   });
 
   it('retry restores the saved login instead of fetching fresh login providers', async () => {

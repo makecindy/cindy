@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 
 import type { WorktreeMeta } from '../worktree/types';
 import type { LocalWorktreeReference } from '../localDb/worker/worktreeReferences';
@@ -35,11 +36,13 @@ vi.mock('../worktree/gitExec', () => ({ gitExec: git }));
 
 import { checkpointWorktreeForReuse, recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
 import { pruneUnreferencedRecoveryArchives, readRecycleRecord, writeRecycleRecord } from '../worktree/recycleJournal';
-import { physicalWorktreeKey } from '../worktree/resourceLock';
+import * as resourceLock from '../worktree/resourceLock';
 import { readWorktreeRuntimePaths } from '../worktree/runtimeLeases';
 import { releaseWorktreeRuntimeLease } from '../worktree/runtimeLeases';
 import { createLinkedWorktreeMetadata } from './fixtures/linkedWorktree';
 import { seedLegacySharedRuntimeLease } from './fixtures/legacySharedRuntimeLease';
+
+const { physicalWorktreeKey } = resourceLock;
 
 describe('shared worktree recycling', () => {
   let meta: WorktreeMeta;
@@ -95,6 +98,9 @@ describe('shared worktree recycling', () => {
   });
 
   it('limits simultaneous recycling of distinct resources to one', async () => {
+    // #9872 / unit: exercise the real recycle entry and its global queue, holding
+    // work at the first resource-lock boundary. Journal/lock I/O is covered by
+    // the other cases; repeating it here couples the queue assertion to disk load.
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let markEntered!: () => void;
@@ -102,22 +108,25 @@ describe('shared worktree recycling', () => {
     let active = 0;
     let peak = 0;
     let checked = 0;
-    const jobs = Array.from({ length: 12 }, (_, index) => {
-      const candidate = { ...meta, sessionId: `batch-${index}`, path: path.join(path.dirname(meta.path), `batch-${index}`) };
-      state.registry.set(candidate.sessionId, candidate);
-      return recycleManagedWorktree(candidate, { canRemove: async () => {
-        active++; peak = Math.max(peak, active); checked++;
-        markEntered();
-        try { await gate; return false; } finally { active--; }
-      } });
+    const enteredPaths: string[] = [];
+    vi.spyOn(resourceLock, 'withWorktreeResourceLock').mockImplementation(async (value) => {
+      enteredPaths.push(value);
+      active++; peak = Math.max(peak, active); checked++;
+      markEntered();
+      try { await gate; return false; } finally { active--; }
     });
+    const candidates = Array.from({ length: 12 }, (_, index) => ({
+      ...meta, sessionId: `batch-${index}`, path: path.join(path.dirname(meta.path), `batch-${index}`),
+    }));
+    const jobs = candidates.map(candidate => recycleManagedWorktree(candidate, { canRemove: async () => false }));
     // Observe every job immediately and drain them before fixture cleanup,
     // including when an assertion or filesystem operation fails.
     const settled = Promise.allSettled(jobs);
     try {
-      // Journal/lock I/O can exceed waitFor's default 1s on Windows CI.
-      // Synchronize on entry instead; the suite timeout still bounds a hang.
       await Promise.race([entered, settled]);
+      // Let other scheduled jobs try to enter while the first is still held.
+      // Observing only the first arrival can miss a queue that admits two jobs.
+      await setImmediate();
       expect(active).toBe(1);
       expect(checked).toBe(1);
     } finally {
@@ -126,6 +135,7 @@ describe('shared worktree recycling', () => {
     }
     expect(await Promise.all(jobs)).toEqual(Array(12).fill(false));
     expect(checked).toBe(12); expect(peak).toBe(1);
+    expect(enteredPaths).toEqual(candidates.map(candidate => candidate.path));
   });
 
   it('saves new files in the Git snapshot, writes no archive, and drops registration after deletion', async () => {

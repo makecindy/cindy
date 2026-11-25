@@ -37,7 +37,7 @@ export function ThreadPanel({ children, actions, onClose, panelRef, resize, root
     {/* Keep the Shift+Tab route from Close back into the parent chat. */}
     {resize && <div role="separator" aria-orientation="vertical" aria-label={t('diffPanel.shell.resizeHandleAria')}
       tabIndex={0} {...resize.handleProps}
-      className="absolute inset-y-0 left-0 z-10 w-2 touch-none cursor-col-resize hover:border-l hover:border-[var(--text-tertiary)] focus-visible:border-l focus-visible:border-[var(--focus-ring)] focus-visible:outline-none" />}
+      className="absolute inset-y-0 left-0 z-raised w-2 touch-none cursor-col-resize hover:border-l hover:border-[var(--text-tertiary)] focus-visible:border-l focus-visible:border-[var(--focus-ring)] focus-visible:outline-none" />}
   </aside>;
 }
 

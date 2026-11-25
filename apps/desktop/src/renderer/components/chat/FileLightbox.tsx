@@ -153,7 +153,7 @@ export function FileLightbox({
         role="dialog"
         aria-modal="true"
         aria-label={name}
-        className={`z-[9999] text-[var(--text-primary)] outline-none ${PREVIEW_PANEL_CLASS}`}
+        className={`z-fullscreen text-[var(--text-primary)] outline-none ${PREVIEW_PANEL_CLASS}`}
         style={unrenderable ? previewCompactPanelStyle(collection ? 64 : 0) : PREVIEW_PANEL_STYLE}
       >
         <div className={`absolute inset-0 pt-16 ${collection && kind !== 'pdf' ? 'pb-16' : ''}`}>

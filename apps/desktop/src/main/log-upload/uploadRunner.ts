@@ -11,7 +11,7 @@
 
 import type { LogUploadReason } from '../../shared/logUpload';
 import { AUTO_UPLOAD_MIN_INTERVAL_MS } from './limits';
-import { evaluateGate, type ConsentGateDeps } from './consentGate';
+import { evaluateGate, type ConsentGateDeps, type GateVerdict } from './consentGate';
 import type { ClaimedMarker, PendingMarkerStore } from './pendingMarkers';
 import type { LogSinkResult } from './logSink';
 import type { CollectResult, LogUploadMeta, LogUploadTarget } from './types';
@@ -29,6 +29,7 @@ export type UploadOutcome =
 
 export interface UploadRunnerDeps {
   gate: ConsentGateDeps;
+  evaluateManualConsent?(): Promise<GateVerdict>;
   /** 已配置的目标；闸放行后必定非 null（闸的第一条就是「未配置」）。 */
   resolveTarget(): LogUploadTarget | null;
   collect(request: { reason: LogUploadReason; anchors: number[] }): Promise<CollectResult>;
@@ -93,7 +94,10 @@ async function runUploadInner(
   deps: UploadRunnerDeps,
   request: RunUploadRequest,
 ): Promise<UploadOutcome> {
-  const verdict = evaluateGate(deps.gate, request.reason);
+  // Crash-time checks stay synchronous; a manual request can wait for the current consent records.
+  const verdict = request.reason === 'manual' && deps.evaluateManualConsent
+    ? await deps.evaluateManualConsent()
+    : evaluateGate(deps.gate, request.reason);
   if (verdict.kind === 'denied') {
     // 「未配置」不是用户撤回授权,而是**这个构建传不了**(典型:无版本 / dev 包没有
     // config/log-upload.json,或注入短暂异常)。dev/正式版共享同一份 userData —— 若在这里

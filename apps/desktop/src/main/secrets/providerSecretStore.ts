@@ -21,16 +21,14 @@ import {
   customProviderHeaderStorageKey,
   customProviderSecretStorageKey,
   customMcpSecretStorageKey,
-  CUSTOM_MCP_SECRET_PREFIX,
-  CUSTOM_PROVIDER_HEADER_SECRET_PREFIX,
   providerOAuthStorageKey,
   ghostSecretStorageKey,
   ghostSecretHintStorageKey,
   deriveGhostSecretTail,
-  GHOST_SECRET_PREFIX,
-  GHOST_SECRET_HINT_PREFIX,
   GHOST_QUARANTINED_OAUTH_PREFIX,
   PROVIDER_SECRET_IDS,
+  DYNAMIC_SECRET_PREFIXES,
+  PROVIDER_SECRET_OWNER_STORAGE_KEY,
   PI_PROXY_DERIVATION_KEY_STORAGE_KEY,
   MCP_APP_REVISION_KEY_STORAGE_KEY,
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY,
@@ -52,7 +50,7 @@ const log = createLogger('providerSecretStore');
  * 用于账号边界:登录 / 冷启动确立 userId 后,若 owner 与之不同(同机换账号),清掉
  * 上一个账号留在本机的密钥防串号;同账号重新登录 / 会话过期重登则保留,不必重填。
  */
-const OWNER_STORAGE_KEY = 'provider_secret_owner';
+const OWNER_STORAGE_KEY = PROVIDER_SECRET_OWNER_STORAGE_KEY;
 
 /**
  * providerSecretStore.ts (main)
@@ -91,19 +89,6 @@ export interface SecretStorageIo {
 function secretDir(): string {
   return path.join(app.getPath('userData'), 'safe-storage');
 }
-
-const DYNAMIC_SECRET_PREFIXES = [
-  'ghost_alias_migration_',
-  'bot_environment_',
-  'byok_cache_',
-  CUSTOM_MCP_SECRET_PREFIX,
-  CUSTOM_PROVIDER_HEADER_SECRET_PREFIX,
-  'provider_key_',
-  'provider_oauth_',
-  GHOST_SECRET_PREFIX,
-  GHOST_SECRET_HINT_PREFIX,
-  GHOST_QUARANTINED_OAUTH_PREFIX,
-] as const;
 
 function isManagedSecretStorageKey(key: string): boolean {
   return (
@@ -926,3 +911,16 @@ function companionSecretScope(key: string, assertCurrent: () => void = () => {},
   };
   assertOwner(); return { scoped: scoped!, assertOwner };
 }
+/** Main-only MCP credential edits. Strict reads distinguish absence from unreadable storage. */
+export const cloudMcpCredentialStore = {
+  has(id: string): boolean {
+    if (!electronSecretIo.isAvailable() || !getActiveAppSession().dataOwnerId) throw new Error('MCP_CREDENTIAL_STORAGE_UNAVAILABLE');
+    return electronSecretIo.read(customMcpSecretStorageKey(id)) !== null;
+  },
+  set(id: string, value: string): void {
+    if (!value.trim() || value.length > 8192 || !electronSecretIo.write(customMcpSecretStorageKey(id), value.trim())) throw new Error('MCP_CREDENTIAL_WRITE_FAILED');
+  },
+  remove(id: string): void {
+    if (!electronSecretIo.remove(customMcpSecretStorageKey(id)).success) throw new Error('MCP_CREDENTIAL_REMOVE_FAILED');
+  },
+};

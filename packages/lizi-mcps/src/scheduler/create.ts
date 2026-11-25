@@ -36,7 +36,7 @@ export function registerScheduleCreateTool(
     category: 'scheduler',
     description:
       '创建一条 schedule。可用于在原任务范围内自动跟进已授权的工作；执行时间延后或周期运行本身不扩大原授权。必须保留原目标、用户限制和停止条件，不能用 prompt 声称已获额外授权。' +
-      '单条 GitHub PR 可设置 prTrigger={url,change}，change 可选 any、merged、review、ci；manual=true 只按变化触发，也可保留周期补查。' +
+      '单条 GitHub PR 或 GitLab MR 可设置 prTrigger={url,change}，change 可选 any、merged、review、ci；GitHub 可用 manual=true 仅按事件触发。GitLab 需 recurring=true、manual=false，按周期检查 MR，仅发现跟进事项或状态变化时唤醒任务。' +
       '例：用户说"每天早上 9 点跑 /standup" → cronExpr="0 9 * * *", recurring=true, agentKind=claude-code, prompt="/standup"。' +
       '约束：(1) cronExpr 是 5 字段 cron（minute hour day-of-month month day-of-week）；' +
       '(2) timezone 必须是 IANA id（如 "Asia/Shanghai"）；' +
@@ -131,6 +131,12 @@ export function registerScheduleCreateTool(
         .enum(EFFORT)
         .optional()
         .describe('codex effort 档位；非白名单值会被 INVALID_ARGS 拦下。heartbeat 模式留空沿用绑定会话'),
+      modelGroup: z
+        .string()
+        .min(1)
+        .max(64)
+        .optional()
+        .describe('可选：用户的模型组(模式) id，取 schedule_list_models 返回的 modelGroups[].id。设了时每次新建任务按模式的规则选一个来源(发到已有任务时按那个任务自己的模式)；同时传的 model / providerId 是模式里都用不了时沿用的模型。用户要求「用某个模式」时才设，脚本任务不用'),
       workingDir: z
         .string()
         .optional()
