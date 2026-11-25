@@ -28,6 +28,12 @@ interface PrepareAccountSendDeps {
   moveRoute?(id: string, providerId: string, assertCurrent: () => void, fromProviderId: string): Promise<void>;
 }
 
+/**
+ * The destinations this file hands a moved task over to: a local OpenAI subscription pool (built-in,
+ * a created pool provider, or a merged legacy connection of that pool). The set-model entry skips
+ * the native fork only for these (`isUserCodexSourceSwitch`) — keep the two predicates in step:
+ * a destination without a replacement handoff keeps its fork path.
+ */
 export function hasCodexHandoffPool(providerId: string | null): boolean {
   return resolveSubscriptionPoolProviderRef(providerId)?.kind === 'openai' && !!readPool('openai');
 }

@@ -122,6 +122,28 @@ describe('Codex writer decision freshness', () => {
     expect(getSessionProvider(sessionId)).toBe('cprov-target');
   });
 
+  // 不在交接范围内的换源（BYOK→BYOK、订阅→BYOK 等目标没有本机账号池）照旧先迁移线程：
+  // 那里没有替代交接，跳过 fork 会把请求交给一个读不到旧线程的来源。
+  it.each([
+    ['byok-a', 'byok-b'],
+    ['openai', 'byok-b'],
+  ] as const)('keeps the thread fork for an out-of-scope source change (%s → %s)', async (from, to) => {
+    const sessionId = rememberSession(`out-of-scope-switch-${from}-${to}`);
+    setSessionProvider(sessionId, from);
+    const relink = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({ agentKind: 'codex', model: 'source', setModel: vi.fn(),
+        requiresModelSwitchRebuild: async () => true }),
+      listActiveSessions: () => [{ id: sessionId, agentKind: 'codex', isTurnRunning: () => false }],
+      closeSession: async () => {},
+    };
+    await expect(applyRuntimeSetModelChange({ maker, sessionId, model: 'target', providerId: to,
+      handOffCodexThread: false, requiresCodexThreadRelink: async () => true, relinkCodexThread: relink }))
+      .resolves.toEqual({ status: 'applied', persistedRoute: true, retiredRuntime: true });
+    expect(relink).toHaveBeenCalledOnce();
+    expect(getSessionProvider(sessionId)).toBe(to);
+  });
+
   // 旧账号已失效 + 旧线程仍被另一个进程加载：这就是实测里换源被挡住的组合。
   // 交接改由发送前完成，入口不去 fork，也就不再向旧账号申请权限；旧的 fork 若被调用会抛错。
   it('does not need the old account when the loaded thread belongs to the source being left', async () => {
@@ -402,7 +424,8 @@ describe('isUserCodexSourceSwitch', () => {
     ['agent picked the source', { ...base, source: 'agent' }, false],
     ['non-codex task', { ...base, agentKind: 'claude-code' }, false],
     ['remote or other-computer task', { ...base, local: false }, false],
-    ['destination without a pool', { ...base, handoffPool: false }, false],
+    ['BYOK → BYOK destination (no pool)', { ...base, handoffPool: false }, false],
+    ['subscription → BYOK destination (no pool)', { ...base, handoffPool: false }, false],
   ] as const)('%s', (_label, input, expected) => {
     expect(isUserCodexSourceSwitch(input)).toBe(expected);
   });

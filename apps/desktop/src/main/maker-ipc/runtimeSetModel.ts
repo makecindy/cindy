@@ -144,9 +144,11 @@ export interface ApplyRuntimeSetModelChangeInput {
   /** Closes over the captured Profile DB and atomically commits thread + full target route. */
   relinkCodexThread?: () => Promise<void>;
   /**
-   * The user moved this task to another source. Its native thread belongs to the source being
-   * left, so the next start hands the transcript over instead of forking it into the destination;
-   * forking would first have to authorize the old account, which is exactly what the user left.
+   * The user moved this task to another source that has a replacement handoff (a local OpenAI
+   * subscription pool; see `isUserCodexSourceSwitch`). Its native thread belongs to the source
+   * being left, so the next start hands the transcript over instead of forking it into the
+   * destination; forking would first have to authorize the old account, which is exactly what the
+   * user left. Any other provider change keeps the fork path.
    */
   handOffCodexThread?: boolean;
   logger?: RuntimeSetModelLogger;
