@@ -81,6 +81,7 @@ import { createPluginManagementClient } from "./pluginManagementClient";
 import {
   marketItemMatchesPlugin,
   pluginApprovalToken,
+  samePluginMarketSourceIdentity,
 } from "./pluginManagementTypes";
 import { pluginDetailModel } from "./pluginDetailModel";
 import {
@@ -896,8 +897,12 @@ function PluginDirectory() {
       liveSelection.current.online;
     const reportPreflightFailure = () => {
       const state = controller.getState();
-      if (current() && state.outcome === "failed" && !state.operationId)
-        Alert.alert(t("plugins.notice.title.managementFailed"));
+      if (!current() || state.outcome !== "failed" || state.operationId) return;
+      // The controller's last detail read before begin: a source not named (refresh or update on the computer) is
+      // told apart from a source that really changed.
+      if (state.errorCode === "PLUGIN_SOURCE_UNVERIFIED") Alert.alert(t("plugins.management.sourceUnverified"));
+      else if (state.errorCode === "PLUGIN_SOURCE_CHANGED") Alert.alert(t("plugins.management.sourceChanged"));
+      else Alert.alert(t("plugins.notice.title.managementFailed"));
     };
     if (action === "uninstall" && managed) {
       const plugin = managed;
@@ -934,6 +939,17 @@ function PluginDirectory() {
           await controller.refresh();
           if (current()) Alert.alert(t("plugins.management.releaseChanged"));
           return;
+        }
+        if (next.sourceType !== "server") {
+          // No source named (older Host, or a Git market not refreshed since the Host was updated): the consent could
+          // not be tied to a source, so the update continues on the computer.
+          if (!next.sourceIdentity) { Alert.alert(t("plugins.management.sourceUnverified")); return; }
+          // The plugin's market now points to another source than the one listed here: not the same update.
+          if (displayed.sourceIdentity && !samePluginMarketSourceIdentity(next.sourceIdentity, displayed.sourceIdentity)) {
+            await controller.refresh();
+            if (current()) Alert.alert(t("plugins.management.sourceChanged"));
+            return;
+          }
         }
         // The controller is busy from here on; the preparation flag can be released once it has started.
         const started = controller.install(next, managed);

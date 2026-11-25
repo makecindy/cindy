@@ -308,6 +308,8 @@
       "nodeSecretOne": "可將已存之憑證一件交予本機 Node 程式"
     },
     "releaseChanged": "可用之版已變，請觀更新後之版，再擇安裝。",
+    "sourceUnverified": "此機暫未示此坊之庫，不能自手機升之。請於電腦刷新此坊再試（Cindy 舊則先更新），或於電腦升之。",
+    "sourceChanged": "此坊之源方易，已止其升。請於電腦核此坊再試。",
     "settingsUnavailable": "法器規制載入未成，請重載規制後再試。",
     "settingsResultUnknown": "此舉之果尚未確認。請先重讀機上之設定，再決是否呈之。",
     "settingsOperationFailed": "設定之舉未竟，請察連線後再試。",
@@ -347,7 +349,8 @@
       "repositoryRef": "庫 {{repository}}（{{ref}}）",
       "localFolder": "本地之匣",
       "repositoryMissingInstall": "此機未示庫之所出，不能於手機許此納。請於電腦刷新此坊再試（Cindy 舊則先更新），或於電腦納之。",
-      "repositoryMissingUpdate": "此機未示庫之所出。欲核其源，請於電腦設置「已增之坊」中觀此坊。"
+      "repositoryMissingUpdate": "此機未示庫之所出，不能於手機許此升。請於電腦刷新此坊再試（Cindy 舊則先更新），或於電腦升之。",
+      "sourceChanged": "所請之源與汝擇時異，不能於手機許之。請卻之而復擇。"
     },
     "sourceNotice": {
       "community": "此法器由社群作者開發與維護，{{appName}} 已審核此版本，但無法保證其在所有使用情境下皆安全。",

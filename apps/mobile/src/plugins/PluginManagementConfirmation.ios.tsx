@@ -24,7 +24,7 @@ export function PluginManagementConfirmation(
   const { t } = useTranslation(),
     { colors } = useTheme();
   const { consent, visible, answer } = usePluginConsent(props);
-  const info = consent ? pluginConsentPresentation(consent, t, props.deviceName) : undefined;
+  const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
   const body = (text?: string, lead = false) =>
     text ? (
       <Text
@@ -128,6 +128,7 @@ export function PluginManagementConfirmation(
         {body(info?.device, true)}
         {body(info?.origin, true)}
         {body(info?.repository, true)}
+        {body(info?.sourceChanged, true)}
         {body(info?.trust, true)}
         {body(info?.sourceNotice)}
         {body(info?.version)}

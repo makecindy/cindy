@@ -310,6 +310,8 @@
       "nodeSecretOne": "Kann gespeicherte Zugangsdaten dem lokalen Node-Programm bereitstellen"
     },
     "releaseChanged": "Die verfügbare Version hat sich geändert. Prüfe die aktualisierte Version vor der Installation.",
+    "sourceUnverified": "Dieser Computer hat das Repository dieses Marktplatzes noch nicht angegeben. Aktualisieren vom Handy ist daher nicht möglich. Aktualisiere den Marktplatz am Computer und versuche es erneut (bei älterem Cindy zuerst Cindy aktualisieren) oder aktualisiere am Computer.",
+    "sourceChanged": "Die Quelle dieses Marktplatzes hat sich gerade geändert, die Aktualisierung wurde gestoppt. Prüfe den Marktplatz am Computer und versuche es erneut.",
     "settingsUnavailable": "Die Plugin-Einstellungen konnten nicht geladen werden. Lade die Einstellungen neu, um es erneut zu versuchen.",
     "settingsResultUnknown": "Das Ergebnis des Vorgangs konnte nicht bestätigt werden. Lade die Einstellungen des Computers neu, bevor du sie erneut sendest.",
     "settingsOperationFailed": "Der Einstellungsvorgang konnte nicht abgeschlossen werden. Prüfe die Verbindung und versuche es erneut.",
@@ -349,7 +351,8 @@
       "repositoryRef": "Repository {{repository}} ({{ref}})",
       "localFolder": "Lokaler Ordner",
       "repositoryMissingInstall": "Dieser Computer hat das Repository nicht angegeben. Diese Installation kann nicht vom Handy aus erlaubt werden. Aktualisiere den Marktplatz am Computer und versuche es erneut (bei älterem Cindy zuerst Cindy aktualisieren) oder installiere am Computer.",
-      "repositoryMissingUpdate": "Dieser Computer hat das Repository nicht angegeben. Um die Quelle zu prüfen, sieh dir diesen Marktplatz in den Einstellungen des Computers unter „Hinzugefügte Marktplätze“ an."
+      "repositoryMissingUpdate": "Dieser Computer hat das Repository nicht angegeben. Diese Aktualisierung kann nicht vom Handy aus erlaubt werden. Aktualisiere den Marktplatz am Computer und versuche es erneut (bei älterem Cindy zuerst Cindy aktualisieren) oder aktualisiere am Computer.",
+      "sourceChanged": "Die Quelle in dieser Anfrage weicht von deiner Auswahl ab und kann nicht vom Handy aus erlaubt werden. Lehne ab und wähle erneut."
     },
     "sourceNotice": {
       "community": "Dieses Plugin wird von Mitgliedern der Community entwickelt und gepflegt. {{appName}} hat diese Version geprüft, kann die Sicherheit des Plugins aber nicht in jeder Nutzungssituation garantieren.",

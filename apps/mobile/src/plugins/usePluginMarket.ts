@@ -237,6 +237,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const countsKey = JSON.stringify([scope, debouncedQuery]);
   const liveListKey = useRef(listKey);
   liveListKey.current = listKey;
+  const liveCountsKey = useRef(countsKey);
+  liveCountsKey.current = countsKey;
   // Official and community share the public list; a follow-up page must still serve the filter and the
   // typed (not yet debounced) search the person is looking at now.
   const liveFilter = useRef(filter);
@@ -250,8 +252,14 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
    * share one public list).
    */
   const followUpAllowed = (list: CatalogList, query: string, publisher?: PluginMarketFilter) => readsOpen()
-    && lists.current.get(list.key) === list && liveListKey.current === list.key && liveQuery.current === query
+    && lists.current.get(list.key) === list && sameView(liveListKey, list.key, query)
     && (publisher === undefined || liveFilter.current === publisher);
+  /**
+   * Every list and count read (first page, next pages, counts) is checked against the view it was made for when it
+   * leaves the queue and when it lands: its key is still the one on screen and the typed search equals the one it
+   * was read with. A search typed while a request waits in the Device Link queue cancels it.
+   */
+  const sameView = (live: { current: string }, key: string, query: string) => live.current === key && liveQuery.current === query;
   /** A search shows every source, so its pages are judged against "all", not the hidden source filter. */
   const publisher: PluginMarketFilter = debouncedQuery ? "all" : filter;
   const lists = useRef(new Map<string, CatalogList>());
@@ -276,7 +284,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     try {
       // This request's ticket, re-checked when it leaves the queue and when it lands: a next page still has to
       // serve the list and typed search on screen (and, when chained, the source filter it was judged by).
-      const ticket = () => current() && (!cursor || followUpAllowed(list, debouncedQuery, chained ? publisher : undefined));
+      const ticket = () => current() && (cursor ? followUpAllowed(list, debouncedQuery, chained ? publisher : undefined)
+        : sameView(liveListKey, list.key, debouncedQuery));
       const page = await client.catalog({ query: debouncedQuery, scope: request.scope, cursor, limit: request.limit,
         excludeInstalled: true, counts: false }, ticket);
       if (!current()) { abandon(); return; }
@@ -302,7 +311,11 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
         await readPage(list, page.nextCursor, publisher, token, true);
       } else chain.current = 0;
     } catch (error) {
-      if (!current()) { abandon(); return; }
+      // Dropped because the view moved on (another computer, list or search): release it, it is not a failure.
+      if (!current() || !(cursor ? followUpAllowed(list, debouncedQuery) : sameView(liveListKey, list.key, debouncedQuery))) {
+        abandon();
+        return;
+      }
       if (cursor) list.loadingMore = false; else list.status = "failed";
       chain.current = 0;
       rerender();
@@ -334,7 +347,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     try {
       // The same light count read as the computer: scope all, one item, counts only.
       const page = await client.catalog({ query: debouncedQuery, scope: "all", limit: 1, excludeInstalled: true, counts: true },
-        () => counts.current.get(countsKey) === entry && liveScope.current === readScope);
+        () => counts.current.get(countsKey) === entry && liveScope.current === readScope
+          && sameView(liveCountsKey, countsKey, debouncedQuery));
       if (counts.current.get(countsKey) !== entry) return;
       if (liveScope.current !== readScope) { entry.at = 0; return; }
       entry.counts = page.counts; entry.customSourceNames = page.customSourceNames;

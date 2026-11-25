@@ -312,6 +312,8 @@
       "nodeSecretOne": "Peut fournir un identifiant enregistré au programme Node local"
     },
     "releaseChanged": "La version disponible a changé. Examinez la version actualisée avant de l'installer.",
+    "sourceUnverified": "Cet ordinateur n’a pas encore indiqué le dépôt de ce marketplace : la mise à jour depuis le téléphone n’est pas possible. Actualisez le marketplace sur l’ordinateur puis réessayez (mettez d’abord Cindy à jour si elle est plus ancienne), ou mettez à jour depuis l’ordinateur.",
+    "sourceChanged": "La source de ce marketplace vient de changer, la mise à jour a été arrêtée. Vérifiez ce marketplace sur l’ordinateur puis réessayez.",
     "settingsUnavailable": "Impossible de charger les paramètres du plugin. Rechargez les paramètres pour réessayer.",
     "settingsResultUnknown": "Le résultat de l'opération n'a pas pu être confirmé. Rechargez les paramètres de l'ordinateur avant de soumettre à nouveau.",
     "settingsOperationFailed": "L'opération sur les paramètres n'a pas pu aboutir. Vérifiez la connexion et réessayez.",
@@ -351,7 +353,8 @@
       "repositoryRef": "Dépôt {{repository}} ({{ref}})",
       "localFolder": "Dossier local",
       "repositoryMissingInstall": "Cet ordinateur n’a pas indiqué le dépôt : cette installation ne peut pas être autorisée depuis le téléphone. Actualisez le marketplace sur l’ordinateur puis réessayez (mettez d’abord Cindy à jour si elle est plus ancienne), ou installez depuis l’ordinateur.",
-      "repositoryMissingUpdate": "Cet ordinateur n’a pas indiqué le dépôt. Pour vérifier la source, retrouvez ce marketplace dans « Marketplaces ajoutés » dans les réglages de l’ordinateur."
+      "repositoryMissingUpdate": "Cet ordinateur n’a pas indiqué le dépôt : cette mise à jour ne peut pas être autorisée depuis le téléphone. Actualisez le marketplace sur l’ordinateur puis réessayez (mettez d’abord Cindy à jour si elle est plus ancienne), ou mettez à jour depuis l’ordinateur.",
+      "sourceChanged": "La source de cette demande diffère de celle que vous avez choisie : elle ne peut pas être autorisée depuis le téléphone. Refusez-la et choisissez à nouveau."
     },
     "sourceNotice": {
       "community": "Ce plugin est développé et maintenu par des membres de la communauté. {{appName}} a examiné cette version, mais ne peut pas garantir la sécurité du plugin dans toutes les situations d’utilisation.",

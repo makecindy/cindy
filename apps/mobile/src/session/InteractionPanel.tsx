@@ -824,9 +824,18 @@ function PermissionCard({
   const isMcpUrl = item.request.toolName === 'mcp_url';
   const url = (item.request.input as { url?: string })?.url;
   const { t, i18n: i18nInstance } = useTranslation();
+  // Host-owned plugin install card: never hand the raw input to the generic previews (they serialize it whole). The
+  // source is shown only as the checked repository line below; its sourceId or a malformed value never appears.
+  const displayRequest = useMemo(() => {
+    if (item.request.toolName !== 'cindy.plugin.install') return item.request;
+    const raw = item.request.input && typeof item.request.input === 'object' ? item.request.input as Record<string, unknown> : {};
+    const safe: Record<string, string> = {};
+    for (const key of ['ghost_id', 'version', 'operation', 'origin'] as const) if (typeof raw[key] === 'string') safe[key] = raw[key] as string;
+    return { ...item.request, input: safe };
+  }, [item.request]);
   const presentation = useMemo(
-    () => buildPermissionReviewPresentation(item.request, mobilePresentationLocalizer),
-    [i18nInstance.language, item.request],
+    () => buildPermissionReviewPresentation(displayRequest, mobilePresentationLocalizer),
+    [i18nInstance.language, displayRequest],
   );
   const companion = useContext(CompanionInteractionContext);
   const companionIdentity = useContext(CompanionIdentityContext);
@@ -844,8 +853,10 @@ function PermissionCard({
   // A first install the phone cannot tie to a source stays rejectable only: an older Host's card has no origin
   // (it may come from a custom market), and a custom-market card without a valid source cannot say which
   // repository would be allowed. Install on the computer instead.
-  const installSourceUnverified = isFirstInstall
-    && (installInput?.origin === undefined || (installInput.origin === 'custom-market' && !installSource));
+  // A custom-market card without a valid source is never allowed here, install or update (maintainer review 05:55,
+  // contract #12731); an older Host's first-install card without an origin is not either.
+  const installSourceUnverified = (isPluginInstall && installInput?.origin === 'custom-market' && !installSource)
+    || (isFirstInstall && installInput?.origin === undefined);
   const installRepository = installSource
     ? installSource.kind === 'local' ? t('plugins.notice.consentSource.localFolder')
       : installSource.ref
@@ -900,7 +911,8 @@ function PermissionCard({
   const allowButton = (
     <ResolveButton
       key="allow"
-      disabled={installSourceUnverified}
+      // An update's first press only opens its details; the decision itself stays unavailable.
+      disabled={installSourceUnverified && (isFirstInstall || !installSummary)}
       accessibilityLabel={t(isFirstInstall ? 'interaction.permission.install' : installSummary ? 'interaction.companion.details' : isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnceAccessibility')}
       armed={armedDecision === 'allow-once'}
       busy={busy}
@@ -935,7 +947,7 @@ function PermissionCard({
         {url}
       </Text> : null}
       {installSummary ? <Text style={styles.body}>{presentation.description?.split('\n', 1)[0]}</Text> : isMcpUrl ? (!companion && presentation.description ? <Text style={styles.body}>{presentation.description}</Text> : null) : <PermissionEvidence
-        input={item.request.input}
+        input={displayRequest.input}
         armed={!!armedDecision}
         presentation={presentation}
         riskWarningText={permissionState.riskWarningText}
@@ -949,7 +961,8 @@ function PermissionCard({
       ) : null}
       {isFirstInstall && <InteractionTouchButton
         accessibilityLabel={t('interaction.companion.details')} expanded={showInstallDetails}
-        disabled={busy} onPress={() => setShowInstallDetails(open => !open)} style={styles.companionDetailsButton}>
+        disabled={busy} onPress={() => setShowInstallDetails(open => !open)} style={styles.companionDetailsButton}
+        testID="interaction.permission.installDetailsButton">
         <Text style={styles.companionDetailsText}>{t('interaction.companion.details')}</Text>
       </InteractionTouchButton>}
     </>

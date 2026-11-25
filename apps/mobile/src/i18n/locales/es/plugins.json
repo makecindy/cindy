@@ -312,6 +312,8 @@
       "nodeSecretOne": "Puede proporcionar una credencial almacenada al programa local Node"
     },
     "releaseChanged": "La versión disponible cambió. Revisa la versión actualizada antes de instalar.",
+    "sourceUnverified": "Este ordenador aún no ha indicado el repositorio de este mercado, así que no se puede actualizar desde el teléfono. Actualiza el mercado en el ordenador y vuelve a intentarlo (si Cindy es más antigua, actualízala primero), o actualiza en el ordenador.",
+    "sourceChanged": "El origen de este mercado acaba de cambiar y la actualización se ha detenido. Revisa el mercado en el ordenador y vuelve a intentarlo.",
     "settingsUnavailable": "No se pudo cargar la configuración del complemento. Vuelve a cargar la configuración para intentarlo de nuevo.",
     "settingsResultUnknown": "No se pudo confirmar el resultado de la operación. Vuelve a cargar la configuración de la computadora antes de enviar de nuevo.",
     "settingsOperationFailed": "No se pudo completar la operación de configuración. Verifica la conexión y vuelve a intentarlo.",
@@ -351,7 +353,8 @@
       "repositoryRef": "Repositorio {{repository}} ({{ref}})",
       "localFolder": "Carpeta local",
       "repositoryMissingInstall": "Este ordenador no ha indicado el repositorio, así que no se puede permitir esta instalación desde el teléfono. Actualiza el mercado en el ordenador y vuelve a intentarlo (si Cindy es más antigua, actualízala primero), o instala en el ordenador.",
-      "repositoryMissingUpdate": "Este ordenador no ha indicado el repositorio. Para comprobar el origen, busca este mercado en «Mercados agregados» en los ajustes del ordenador."
+      "repositoryMissingUpdate": "Este ordenador no ha indicado el repositorio, así que no se puede permitir esta actualización desde el teléfono. Actualiza el mercado en el ordenador y vuelve a intentarlo (si Cindy es más antigua, actualízala primero), o actualiza en el ordenador.",
+      "sourceChanged": "El origen de esta solicitud no coincide con el que elegiste, así que no se puede permitir desde el teléfono. Recházala y vuelve a elegir."
     },
     "sourceNotice": {
       "community": "Este complemento lo desarrollan y mantienen miembros de la comunidad. {{appName}} ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso.",

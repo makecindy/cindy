@@ -1042,6 +1042,32 @@ describe('plugin first-install task card and its source', () => {
     await click('interaction.permission.denyButton');
     expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'deny' }));
   });
+  // Maintainer review 05:55 #1: the expanded details handed the whole input to the generic previews (the companion
+  // card serializes it), so a valid source's sourceId and a malformed source's credential URL appeared.
+  it.each([false, true])('never shows the raw source fields in the expanded details (companion=%s)', async (companion) => {
+    for (const shown of [source, { kind: 'git', repository: 'https://ghp_secret@github.com/acme/market', sourceId: 'x' }]) {
+      remoteSessionStore.setPendingInteractions('s1', [{ request: card({ operation: 'install', origin: 'custom-market', source: shown }) }]);
+      await act(async () => root.render(<Harness companion={companion} />));
+      await click('interaction.permission.installDetailsButton');
+      const details = host.querySelector<HTMLButtonElement>('[data-testid="interaction.permission.detailsButton"]');
+      if (details) await act(async () => details.click());
+      expect(host.textContent).toContain('runner');
+      for (const raw of ['SourceA_0123456789abcd', 'ghp_secret', 'sourceId', '"source"']) expect(host.textContent).not.toContain(raw);
+      await act(async () => root.render(<></>));
+    }
+  });
+  // Maintainer review 05:55 #3: an update card that is explicitly from a custom market but carries no source is not
+  // allowed here either. Its first press still opens the details; the decision itself stays unavailable.
+  it('keeps only Reject for a custom-market update card without a source', async () => {
+    await render({ operation: 'update', origin: 'custom-market' });
+    await click('interaction.permission.allowOnceButton'); // Opens the update details.
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).not.toBeNull();
+    await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).not.toHaveBeenCalled();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.denyButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'deny' }));
+  });
   it('shows the repository of a custom-market card and allows it', async () => {
     await render({ operation: 'install', origin: 'custom-market', source });
     expect(host.querySelector('[data-testid="interaction.permission.installRepository"]')?.textContent)

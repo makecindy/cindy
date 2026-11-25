@@ -932,18 +932,24 @@ describe('confirmation sheet wording', () => {
     // Market installs never show a repository line, even if a Host sent one.
     expect(pluginConsentPresentation(install({ originSource: { kind: 'git', repository: 'github.com/acme/plugins' } }, []), t).repository).toBeUndefined();
   });
-  // PR #12684 (older Host without repository identity; proposal pending maintainer confirmation): a first install
-  // cannot be allowed on the phone, an update stays allowed with the way to check the source on the computer.
-  it('blocks Allow only for a first custom-market install without a repository identity', () => {
+  // Maintainer review 05:55 #3 (contract #12731): a custom-market consent without a source is not allowed on the
+  // phone, install or update; the line says how to continue on the computer.
+  it('blocks Allow for a custom-market install or update without a source, and for another source than the one chosen', () => {
     const named = install({ origin: 'custom-market', originLabel: 'Acme', originSource: { kind: 'git', repository: 'github.com/acme/plugins' } }, []);
     const unnamed = install({ origin: 'custom-market', originLabel: 'Acme' }, []);
     const update = { ...unnamed, facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [],
       removed: [], unchangedCount: 0, builtinOauthClientChanged: false } };
     expect(pluginConsentPresentation(unnamed, t, 'Mac')).toMatchObject({ allowBlocked: true,
       repository: 'plugins.notice.consentSource.repositoryMissingInstall' });
-    expect(pluginConsentPresentation(update, t, 'Mac')).toMatchObject({ allowBlocked: false,
+    expect(pluginConsentPresentation(update, t, 'Mac')).toMatchObject({ allowBlocked: true,
       repository: 'plugins.notice.consentSource.repositoryMissingUpdate' });
     expect(pluginConsentPresentation(named, t, 'Mac').allowBlocked).toBe(false);
+    // Maintainer review 05:55 #2: compared with the full identity chosen on the phone, sourceId included.
+    const chosen = { kind: 'git' as const, repository: 'github.com/acme/plugins', sourceId: 'SourceA_0123456789abcd' };
+    const consented = (sourceId: string) => install({ origin: 'custom-market', originLabel: 'Acme', originSource: { ...chosen, sourceId } }, []);
+    expect(pluginConsentPresentation(consented(chosen.sourceId), t, 'Mac', chosen)).toMatchObject({ allowBlocked: false, sourceChanged: undefined });
+    expect(pluginConsentPresentation(consented('SourceB_0123456789abcd'), t, 'Mac', chosen))
+      .toMatchObject({ allowBlocked: true, sourceChanged: 'plugins.notice.consentSource.sourceChanged' });
     // Official and community market installs carry no repository and are never blocked by its absence.
     expect(pluginConsentPresentation(install({}, []), t, 'Mac')).toMatchObject({ allowBlocked: false, repository: undefined });
   });

@@ -312,6 +312,8 @@
       "nodeSecretOne": "Pode fornecer uma credencial armazenada ao programa Node local"
     },
     "releaseChanged": "A versão disponível mudou. Revise a versão atualizada antes de instalar.",
+    "sourceUnverified": "Este computador ainda não informou o repositório deste marketplace, então não dá para atualizar pelo celular. Atualize o marketplace no computador e tente de novo (atualize a Cindy antes se for mais antiga), ou atualize pelo computador.",
+    "sourceChanged": "A origem deste marketplace acabou de mudar e a atualização foi interrompida. Confira o marketplace no computador e tente de novo.",
     "settingsUnavailable": "Não foi possível carregar as configurações do plugin. Recarregue as configurações para tentar novamente.",
     "settingsResultUnknown": "Não foi possível confirmar o resultado da operação. Recarregue as configurações do computador antes de enviar novamente.",
     "settingsOperationFailed": "Não foi possível concluir a operação de configurações. Verifique a conexão e tente novamente.",
@@ -351,7 +353,8 @@
       "repositoryRef": "Repositório {{repository}} ({{ref}})",
       "localFolder": "Pasta local",
       "repositoryMissingInstall": "Este computador não informou o repositório, então esta instalação não pode ser permitida pelo celular. Atualize o marketplace no computador e tente de novo (atualize a Cindy antes se for mais antiga), ou instale pelo computador.",
-      "repositoryMissingUpdate": "Este computador não informou o repositório. Para conferir a origem, veja este marketplace em “Marketplaces adicionados” nas configurações do computador."
+      "repositoryMissingUpdate": "Este computador não informou o repositório, então esta atualização não pode ser permitida pelo celular. Atualize o marketplace no computador e tente de novo (atualize a Cindy antes se for mais antiga), ou atualize pelo computador.",
+      "sourceChanged": "A origem desta solicitação é diferente da que você escolheu, então ela não pode ser permitida pelo celular. Recuse e escolha de novo."
     },
     "sourceNotice": {
       "community": "Este plugin é desenvolvido e mantido por membros da comunidade. A {{appName}} revisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de uso.",

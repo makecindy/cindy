@@ -4,7 +4,7 @@ import { subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { PluginManagementRequestError, pluginManagementErrorCode,
   type PluginManagementBegin, type PluginManagementClient } from './pluginManagementClient';
 import { marketItemMatchesPlugin, pluginApprovalToken, samePluginMarketSourceIdentity, type ManagedMarketDetail, type ManagedPlugin,
-  type PluginManagementReceipt, type PluginManagementSnapshot, type PluginUiConsentItem, type PluginUiConsentSnapshot } from './pluginManagementTypes';
+  type PluginManagementReceipt, type PluginManagementSnapshot, type PluginMarketSourceIdentity, type PluginUiConsentItem, type PluginUiConsentSnapshot } from './pluginManagementTypes';
 
 export interface PluginManagementState {
   capability: 'unknown' | 'supported' | 'unsupported';
@@ -22,6 +22,12 @@ export interface PluginManagementState {
    * new operation or outcome; absent when that read failed.
    */
   missingReceiptFacts?: PluginManagementSnapshot | null;
+  /**
+   * Custom-market installs and updates started here: the full source identity the person chose. The consent's
+   * `originSource` must equal it exactly before Allow is offered (the Host may pack another source under the same
+   * name after the last detail read). Absent for server items and consents not started here.
+   */
+  expectedSource?: PluginMarketSourceIdentity | null;
 }
 export interface PluginManagementControllerOptions {
   /** Optional shared chat hint. Never used by readSnapshot or mutation validation. */
@@ -203,7 +209,8 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (state.capability !== 'supported') { publish({ errorCode: state.capability === 'unsupported' ? 'PLUGIN_MANAGEMENT_UNSUPPORTED' : 'PLUGIN_MANAGEMENT_NOT_READY' }); return; }
     const token = ++epoch;
     let began = false;
-    publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle' });
+    publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle',
+      expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null });
     const installed = intent.installed;
     if (!installed && intent.kind !== 'install') { publish({ busy: false, outcome: 'failed', errorCode: 'PLUGIN_INSTALL_CHANGED' }); return; }
     receiver = installed && 'manifest' in installed ? installed : undefined;
@@ -217,11 +224,14 @@ export function createPluginManagementController(client: PluginManagementClient,
         if (detail.releaseId !== intent.detail.releaseId || detail.namespace !== intent.detail.namespace
           || detail.sourceType !== intent.detail.sourceType || (detail.sourceType !== 'server'
             && JSON.stringify(detail.manifest) !== JSON.stringify(intent.detail.manifest))) throw new Error('PLUGIN_RELEASE_CHANGED');
-        // Custom markets: this is the last detail read before begin. Its source must be exactly the one the person
-        // chose (a same-name market may now point to another repository or folder with the same id, release and
-        // manifest); missing or changed, stop and let them choose again.
-        if (detail.sourceType !== 'server' && !samePluginMarketSourceIdentity(detail.sourceIdentity, intent.detail.sourceIdentity))
-          throw new Error('PLUGIN_SOURCE_CHANGED');
+        // Custom markets: this is the last detail read before begin. A Host that does not name the source (older Host,
+        // or a Git market not refreshed since the Host was updated) cannot be checked: stop and send the person to the
+        // computer. A source that differs from the one chosen (a same-name market now pointing to another repository or
+        // folder with the same id, release and manifest) has really changed: stop and let them choose again.
+        if (detail.sourceType !== 'server') {
+          if (!detail.sourceIdentity || !intent.detail.sourceIdentity) throw new Error('PLUGIN_SOURCE_UNVERIFIED');
+          if (!samePluginMarketSourceIdentity(detail.sourceIdentity, intent.detail.sourceIdentity)) throw new Error('PLUGIN_SOURCE_CHANGED');
+        }
         request = { ...intent, detail };
       }
       const snapshot = await readSnapshot(token);

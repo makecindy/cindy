@@ -213,6 +213,7 @@ export function pluginMarketErrorKey(code: string | null | undefined): string {
     case "ALREADY_EXISTS": return "plugins.market.errors.conflict";
     case "PLUGIN_RELEASE_CHANGED": return "plugins.management.releaseChanged";
     case "PLUGIN_SOURCE_CHANGED": return "plugins.market.sourceChanged";
+    case "PLUGIN_SOURCE_UNVERIFIED": return "plugins.market.sourceUnverified";
     case "PRECONDITION_FAILED":
     case "PLUGIN_INSTALL_CHANGED": return "plugins.market.errors.stateChanged";
     case "PLUGIN_LIST_CHANGED": return "plugins.market.errors.listChanged";

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginUiEnablePrompt } from "@/plugins/PluginUiEnablePrompt";
 import { sharedTaskHostPeer, providerShareHostPeer } from "@cindy/device-link";
 import PluginsScreen from "@/plugins/PluginsScreen";
+import { pluginConsentPresentation } from "@/plugins/pluginConsentPresentation";
 import { usePluginManagement } from "@/plugins/usePluginManagement";
 import { createPluginPromptReads } from "@/plugins/pluginPromptReads";
 
@@ -1062,6 +1063,44 @@ it("holds the management slot while an update reads its market detail, so the ma
   // Only the update reaches begin.
   expect(begins().map((request) => request.input.pluginId)).toEqual([market.pluginId]);
 });
+// Maintainer review 05:55 #3: an installed custom-market plugin's update. The preflight tells a source the computer did
+// not name (refresh or update there) apart from a source that really changed; neither reaches begin.
+describe("installed custom-market update and its source", () => {
+  const sourceA = { kind: "git", repository: "github.com/acme/market", sourceId: "SourceA_0123456789abcd" };
+  const sourceB = { kind: "git", repository: "github.com/acme/market", sourceId: "SourceB_0123456789abcd" };
+  const run = async (screenRead: unknown, controllerRead: unknown) => {
+    const { snapshot, market } = realManagementHost();
+    Object.assign(market, { pluginId: "custom:Team/demo", sourceType: "git-market", sourceMarketName: "Team", sourceIdentity: sourceA });
+    Object.assign(snapshot.market, { customSourceNames: ["Team"] });
+    let reads = 0;
+    const readHost = fixture.wire.getMockImplementation()!;
+    fixture.wire.mockImplementation(async (...args: any[]) => {
+      const request = args[2]?.[0];
+      if (request?.actionId === "management:market-detail") {
+        args[3]?.preSend?.();
+        // The screen's preflight read, then the controller's last read before begin.
+        const source = ++reads === 1 ? screenRead : controllerRead;
+        const { sourceIdentity: _a, ...rest } = market as any;
+        return { result: { ...rest, ...(source ? { sourceIdentity: source } : {}) } };
+      }
+      if (request?.actionId === "management:begin") throw new Error("begin must not be sent");
+      return readHost(...args);
+    });
+    await openDetail();
+    await act(async () => fixture.props.get("header").rightToolbar.props.onAction("update"));
+    await settle(14);
+    expect(fixture.wire.mock.calls.some((call) => call[2]?.[0]?.actionId === "management:begin")).toBe(false);
+    return fixture.alert.mock.calls.map((call) => call[0]);
+  };
+  it.each([
+    ["the detail names no source", undefined, undefined, "plugins.management.sourceUnverified"],
+    ["the detail names another source", sourceB, sourceB, "plugins.management.sourceChanged"],
+    ["the controller's last read names another source", sourceA, sourceB, "plugins.management.sourceChanged"],
+    ["the controller's last read names no source", sourceA, undefined, "plugins.management.sourceUnverified"],
+  ])("stops before begin when %s", async (_name, screenRead, controllerRead, message) => {
+    expect(await run(screenRead, controllerRead)).toContain(message);
+  });
+});
 it("rejects a delayed native menu after changing selection through the real hook", async () => {
   realManagementHost();
   await openDetail();
@@ -2110,13 +2149,44 @@ describe("market install recovery", () => {
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
   });
+  // Maintainer review 05:55 #2: both detail reads show A, then the computer points the same-name market at folder B
+  // (same id, release and manifest) and the Host packs B. The consent must be compared with the identity chosen.
+  it("keeps only Reject when the consent names another source than the one chosen after the last detail read", async () => {
+    const { publisherKind: _server, ...base } = marketItem("demo", "Demo");
+    const folderA = { kind: "local", sourceId: "SourceA_0123456789abcd" }, folderB = { kind: "local", sourceId: "SourceB_0123456789abcd" };
+    const item = { ...base, pluginId: "custom:Team/demo", sourceType: "local-market", sourceMarketName: "Team", sourceIdentity: folderA };
+    const requests = marketWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return { ...marketPage([item]), customSourceNames: ["Team"] };
+          return managementSnapshot(false);
+        case "management:market-detail": return { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+        case "management:begin": return { operationId: request.input.operationId, phase: "confirmation", consent: {
+          requestId: "consent", initiator: "user", origin: "custom-market", originLabel: "Team", originSource: folderB,
+          installationSource: { kind: "third-party" }, facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } };
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    });
+    await openMarket();
+    await act(async () => shownMarket().setFilter("custom"));
+    await settle();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    expect(requests.filter((request) => request.actionId === "management:market-detail")).toHaveLength(2);
+    const sheet = fixture.props.get("confirmation");
+    expect(sheet.state.expectedSource).toEqual(folderA);
+    const view = pluginConsentPresentation(sheet.state.receipt.consent, (key: string) => key, "Mac", sheet.state.expectedSource);
+    expect(view).toMatchObject({ allowBlocked: true, sourceChanged: "plugins.notice.consentSource.sourceChanged" });
+  });
   // Maintainer review 04:44 #1: the controller re-reads the detail right before begin; a same-name market that now
   // points to another source (same id, release and manifest) must stop there, and so must a detail without a source.
   it.each([
-    ["another source under the same name", { kind: "git", repository: "github.com/other/market", sourceId: "SourceB_0123456789abcd" }],
-    ["the same repository text but another source id", { ...sourceA, sourceId: "SourceB_0123456789abcd" }],
-    ["no source identity", undefined],
-  ])("stops before begin when the last detail read shows %s", async (_name, laterSource) => {
+    ["another source under the same name", { kind: "git", repository: "github.com/other/market", sourceId: "SourceB_0123456789abcd" }, "plugins.market.sourceChanged"],
+    ["the same repository text but another source id", { ...sourceA, sourceId: "SourceB_0123456789abcd" }, "plugins.market.sourceChanged"],
+    // Missing is not "changed": the computer did not name the source (refresh or update it there).
+    ["no source identity", undefined, "plugins.market.sourceUnverified"],
+  ])("stops before begin when the last detail read shows %s", async (_name, laterSource, messageKey) => {
     const { publisherKind: _server, ...base } = marketItem("demo", "Demo");
     const item = { ...base, pluginId: "custom:Team/demo", sourceType: "git-market", sourceMarketName: "Team", sourceIdentity: sourceA };
     let details = 0;
@@ -2144,7 +2214,7 @@ describe("market install recovery", () => {
     expect(details).toBe(2);
     expect(requests.some((request) => request.actionId === "management:begin")).toBe(false);
     expect(shownMarket()).toMatchObject({ installBusy: false });
-    expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.sourceChanged" });
+    expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey });
   });
   it("stays unconfirmed while the original operation may still exist on an unreachable computer", async () => {
     let sameIdOnComputer = false;
@@ -2637,6 +2707,30 @@ describe("market read fences and lost-receipt facts", () => {
     expect(sent.filter((request) => request.input?.query?.cursor)).toEqual([]);
   });
 
+  // Codex review (3200468): search A's first page and its count read wait in the Device Link queue; the search
+  // becomes B (debounced). The first page skipped the follow-up check and counts checked only their cache entry, so
+  // both A reads still went out after B was shown.
+  it("drops queued first-page and count reads of a search that was replaced before they were sent", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const gate = deferred();
+      const sent = queuedWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true }
+        : { ...marketPage([marketItem("demo", "Demo")]), counts: null },
+      (request) => request !== "manifest" && request.input?.read === "catalog" && request.input?.query?.query === "alpha" ? gate.promise : undefined);
+      await openMarket();
+      const type = async (text: string) => {
+        await act(async () => fixture.props.get("stack").headerSearchBarOptions.onChangeText({ nativeEvent: { text } }));
+        await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+        await settle(10);
+      };
+      await type("alpha");
+      await type("beta");
+      expect(sent.some((request) => request.input?.query?.query === "beta")).toBe(true);
+      await act(async () => { gate.release(); });
+      await settle(10);
+      expect(sent.filter((request) => request.input?.query?.query === "alpha")).toEqual([]);
+    } finally { vi.useRealTimers(); }
+  });
   // Maintainer review 03:10 #1: a snapshot read before NOT_FOUND must not settle the result, and a market
   // detail from an earlier verification must not open an instance.
   const item = marketItem("demo", "Demo");

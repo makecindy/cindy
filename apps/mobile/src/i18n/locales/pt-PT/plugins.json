@@ -312,6 +312,8 @@
       "nodeSecretOne": "Pode fornecer uma credencial guardada ao programa Node local"
     },
     "releaseChanged": "A versão disponível mudou. Reveja a versão atualizada antes de instalar.",
+    "sourceUnverified": "Este computador ainda não indicou o repositório deste mercado, por isso não é possível atualizar a partir do telemóvel. Atualize o mercado no computador e tente novamente (atualize primeiro a Cindy se for mais antiga), ou atualize a partir do computador.",
+    "sourceChanged": "A origem deste mercado acabou de mudar e a atualização foi interrompida. Verifique o mercado no computador e tente novamente.",
     "settingsUnavailable": "Não foi possível carregar as definições do plugin. Recarregue as definições para tentar novamente.",
     "settingsResultUnknown": "Não foi possível confirmar o resultado da operação. Recarregue as definições do computador antes de voltar a submeter.",
     "settingsOperationFailed": "Não foi possível concluir a operação de definições. Verifique a ligação e tente novamente.",
@@ -351,7 +353,8 @@
       "repositoryRef": "Repositório {{repository}} ({{ref}})",
       "localFolder": "Pasta local",
       "repositoryMissingInstall": "Este computador não indicou o repositório, por isso esta instalação não pode ser permitida a partir do telemóvel. Atualize o mercado no computador e tente novamente (atualize primeiro a Cindy se for mais antiga), ou instale a partir do computador.",
-      "repositoryMissingUpdate": "Este computador não indicou o repositório. Para verificar a origem, procure este mercado em “Mercados adicionados” nas definições do computador."
+      "repositoryMissingUpdate": "Este computador não indicou o repositório, por isso esta atualização não pode ser permitida a partir do telemóvel. Atualize o mercado no computador e tente novamente (atualize primeiro a Cindy se for mais antiga), ou atualize a partir do computador.",
+      "sourceChanged": "A origem deste pedido é diferente da que escolheu, por isso não pode ser permitido a partir do telemóvel. Recuse e escolha novamente."
     },
     "sourceNotice": {
       "community": "Este plugin é desenvolvido e mantido por membros da comunidade. A {{appName}} analisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de utilização.",

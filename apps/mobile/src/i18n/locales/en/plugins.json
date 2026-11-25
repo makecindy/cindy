@@ -310,6 +310,8 @@
       "nodeSecretOne": "Can provide a stored credential to the local Node program"
     },
     "releaseChanged": "The available version changed. Review the refreshed version before installing.",
+    "sourceUnverified": "This computer hasn’t shared the repository for this marketplace yet, so it can’t be updated from your phone. Refresh this marketplace on the computer and try again (update Cindy first if it’s older), or update on the computer.",
+    "sourceChanged": "This marketplace’s source just changed, so the update stopped. Check this marketplace on the computer and try again.",
     "settingsUnavailable": "Could not load the plugin settings. Reload settings to try again.",
     "settingsResultUnknown": "The operation result could not be confirmed. Reload the computer’s settings before submitting again.",
     "settingsOperationFailed": "The settings operation could not be completed. Check the connection and try again.",
@@ -349,7 +351,8 @@
       "repositoryRef": "Repository {{repository}} ({{ref}})",
       "localFolder": "Local folder",
       "repositoryMissingInstall": "This computer didn’t share the repository, so this install can’t be allowed from your phone. Refresh this marketplace on the computer and try again (update Cindy first if it’s older), or install on the computer.",
-      "repositoryMissingUpdate": "This computer didn’t share the repository. To check the source, look up this marketplace in Added Marketplaces in the computer’s settings."
+      "repositoryMissingUpdate": "This computer didn’t share the repository, so this update can’t be allowed from your phone. Refresh this marketplace on the computer and try again (update Cindy first if it’s older), or update on the computer.",
+      "sourceChanged": "The source in this request differs from the one you chose, so it can’t be allowed from your phone. Deny it and choose again."
     },
     "sourceNotice": {
       "community": "Community developers build and maintain this plugin. {{appName}} has reviewed this version but can’t guarantee it’s safe in every situation.",

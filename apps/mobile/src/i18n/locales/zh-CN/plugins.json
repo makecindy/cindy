@@ -310,6 +310,8 @@
       "nodeSecretOne": "可将 1 个已保存凭证提供给本机 Node 程序"
     },
     "releaseChanged": "可用版本已变化，请查看刷新后的版本，再选择安装。",
+    "sourceUnverified": "这台电脑暂未提供这个市场的仓库信息，不能从手机升级。请在电脑上刷新这个市场后再试（Cindy 较旧时先更新），或在电脑上升级。",
+    "sourceChanged": "这个市场的来源刚刚有变化，已停止升级。请在电脑上核对这个市场后再试。",
     "settingsUnavailable": "插件设置加载失败，请重新加载设置后重试。",
     "settingsResultUnknown": "尚未确认操作结果。请先重新读取电脑上的设置，再决定是否提交。",
     "settingsOperationFailed": "设置操作未能完成，请检查连接后重试。",
@@ -349,7 +351,8 @@
       "repositoryRef": "仓库 {{repository}}（{{ref}}）",
       "localFolder": "本地文件夹",
       "repositoryMissingInstall": "这台电脑没有提供仓库信息，不能在手机上允许这次安装。请在电脑上刷新这个市场后再试（Cindy 较旧时先更新），或在电脑上安装。",
-      "repositoryMissingUpdate": "这台电脑没有提供仓库信息。如需核对来源，请在电脑设置的「已添加的市场」里查看这个市场。"
+      "repositoryMissingUpdate": "这台电脑没有提供仓库信息，不能在手机上允许这次升级。请在电脑上刷新这个市场后再试（Cindy 较旧时先更新），或在电脑上升级。",
+      "sourceChanged": "确认里的来源与你选择时不同，不能在手机上允许。请拒绝后重新选择。"
     },
     "sourceNotice": {
       "community": "此插件由社区作者开发和维护，{{appName}} 已审核该版本，但无法保证插件在所有使用场景下都安全。",

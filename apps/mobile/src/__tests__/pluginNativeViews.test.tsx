@@ -1311,11 +1311,25 @@ describe("older Host without a repository identity", () => {
       // Rejecting stays possible, so the waiting install can be closed from the phone.
       expect(disabled("plugins.management.reject")).toBe(false);
     });
+  // Maintainer review 05:55 #3 (contract #12731): an update from a custom market without a source is not allowed
+  // here either; Reject stays available and the line says how to continue on the computer.
   it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
-    "%s keeps Allow for an update and names where to check the source", (_platform, Sheet) => {
+    "%s keeps only Reject for an update without a source too", (_platform, Sheet) => {
       const { container } = mount(Sheet, sheetProps({}, updateFacts));
       expect(container.textContent).toContain("plugins.notice.consentSource.repositoryMissingUpdate");
-      expect(disabled("plugins.management.allow")).toBe(false);
+      expect(disabled("plugins.management.allow")).toBe(true);
+      expect(disabled("plugins.management.reject")).toBe(false);
+    });
+  // Maintainer review 05:55 #2: the consent names another source than the one chosen on the phone.
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s keeps only Reject when the consent names another source than the one chosen", (_platform, Sheet) => {
+      const chosen = { kind: "local", sourceId: "SourceA_0123456789abcd" };
+      const p = sheetProps({ originSource: { kind: "local", sourceId: "SourceB_0123456789abcd" } }, installFacts);
+      p.state.expectedSource = chosen;
+      const { container } = mount(Sheet, p);
+      expect(container.textContent).toContain("plugins.notice.consentSource.sourceChanged");
+      expect(disabled("plugins.management.allow")).toBe(true);
+      expect(disabled("plugins.management.reject")).toBe(false);
     });
   it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
     "%s allows a first install whose repository the Host named", (_platform, Sheet) => {

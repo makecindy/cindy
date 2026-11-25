@@ -1,7 +1,9 @@
 import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
-import type {
-  PluginManagementReceipt,
-  PluginPermissionItem,
+import {
+  samePluginMarketSourceIdentity,
+  type PluginManagementReceipt,
+  type PluginMarketSourceIdentity,
+  type PluginPermissionItem,
 } from "./pluginManagementTypes";
 
 type Consent = NonNullable<PluginManagementReceipt["consent"]>;
@@ -46,8 +48,8 @@ function sourceLabel(consent: Consent, t: Translate): string {
 function repositoryLine(consent: Consent, t: Translate): string | undefined {
   if (consent.origin !== "custom-market") return undefined;
   const source = consent.originSource;
-  // Older Host: no repository identity. A new install cannot be allowed here (see allowBlocked); an update
-  // of an already installed plugin stays allowed with a way to check the source on the computer.
+  // No source identity (older Host, or a Git market not refreshed since the Host was updated): neither an install
+  // nor an update can be allowed here (see allowBlocked); the line says how to continue on the computer.
   if (!source) return t(consent.facts.kind === "install"
     ? "plugins.notice.consentSource.repositoryMissingInstall"
     : "plugins.notice.consentSource.repositoryMissingUpdate");
@@ -66,7 +68,15 @@ function sourceNotice(consent: Consent, t: Translate): string | undefined {
   return undefined;
 }
 
-export function pluginConsentPresentation(consent: Consent, t: Translate, deviceName?: string) {
+/**
+ * `expectedSource`: the full source identity the person chose when this install or update was started on the phone
+ * (controller state). The consent must name exactly that source; otherwise Allow stays unavailable.
+ */
+export function pluginConsentPresentation(consent: Consent, t: Translate, deviceName?: string,
+  expectedSource?: PluginMarketSourceIdentity | null) {
+  const custom = consent.origin === "custom-market";
+  const sourceChanged = custom && !!expectedSource && !!consent.originSource
+    && !samePluginMarketSourceIdentity(consent.originSource, expectedSource);
   const facts = consent.facts;
   const detailOf = (item: PluginPermissionItem) =>
     [
@@ -125,11 +135,14 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
       : undefined,
     /** Shown right under the source line so it stays in view with the pinned summary at the medium detent. */
     repository: repositoryLine(consent, t),
+    /** The consent names another source than the one chosen (it changed after the last check): choose again. */
+    sourceChanged: sourceChanged ? t("plugins.notice.consentSource.sourceChanged") : undefined,
     /**
-     * A first install from a custom market whose repository the Host did not name: the phone cannot show which
-     * repository the person would be allowing, so Allow stays unavailable (install on the computer instead).
+     * A custom-market install or update the phone cannot tie to the chosen source: the Host did not name the source,
+     * so the phone cannot show what would be allowed, or it names another source than the one chosen. Allow stays
+     * unavailable; Reject stays available (continue on the computer, or choose again).
      */
-    allowBlocked: consent.origin === "custom-market" && facts.kind === "install" && !consent.originSource,
+    allowBlocked: custom && (!consent.originSource || sourceChanged),
     identity: facts.ghostId,
     trust: pluginSourceWarningKey(consent.installationSource) ? t(pluginSourceWarningKey(consent.installationSource)!) : undefined,
     origin: [
