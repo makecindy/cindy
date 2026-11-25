@@ -1,5 +1,184 @@
-import type { LinuxCloseBehavior } from '../shared/windowBehavior.js';
+import type {
+  LinuxCloseBehavior,
+  TitleBarQuitOutcome,
+  WindowsCloseBehavior,
+} from '../shared/windowBehavior.js';
 import type { WindowsTrayWindow } from './windowsTrayLifecycle.js';
+
+/**
+ * Read the "is a turn running?" probe for quit protection. A probe that throws is an unknown
+ * state, and every quit path treats unknown as busy: confirming once too often is recoverable,
+ * silently killing a running task is not.
+ */
+function readActiveTurnForQuit(probe: () => boolean): boolean {
+  try {
+    return probe();
+  } catch {
+    return true;
+  }
+}
+
+/** Side effects for the single active-turn quit guard shared by every app-quit entry point. */
+export interface ActiveTurnQuitGuardDependencies<TOwner> {
+  /** Raw busy probe; a throw is handled by {@link readActiveTurnForQuit}. */
+  hasActiveTurn(): boolean;
+  /** Main's own (native, synchronous) confirmation; true when the user chose to quit. */
+  confirmQuit(): boolean;
+  quit(): void;
+  /**
+   * Whether the user can be looking at the in-app confirmation drawn by `owner` (the main
+   * window's renderer): its window is shown and not minimized, and the renderer is alive and responsive.
+   */
+  canShowInAppConfirmation(owner: TOwner): boolean;
+  /** Bring `owner`'s window to the front so the user finds the confirmation already open. */
+  revealInAppConfirmation(owner: TOwner): void;
+}
+
+/**
+ * Main owns every quit confirmation. The title-bar X draws its confirmation in the renderer,
+ * but main decides whether one is needed and remembers that it asked; the renderer's answer
+ * only counts against that record.
+ */
+export interface ActiveTurnQuitGuard<TOwner> {
+  /**
+   * Tray Quit, native main-window close (Alt+F4, taskbar, window manager), the first-close
+   * chooser and any quit whose sender cannot be resolved. Returns true when it quit.
+   * `busyUnknown`: the caller knows this process cannot see the turns (tray Quit in Host client
+   * mode), so it confirms as for a throwing probe instead of trusting a local idle read.
+   */
+  requestQuit(options?: { busyUnknown?: boolean }): boolean;
+  /**
+   * Title-bar X of the main window. Reads the busy state and acts on it in the same call:
+   * idle quits now ('quitting'); busy records a pending in-app confirmation for `owner`
+   * ('confirm'). 'none' when main's own confirmation is already open.
+   */
+  requestInAppQuit(owner: TOwner): TitleBarQuitOutcome;
+  /**
+   * The answer from `owner`'s in-app confirmation. A confirmation quits without asking again
+   * only when main holds the pending record for that same owner, which it consumes; otherwise
+   * main runs its own guard. A cancellation drops the record.
+   */
+  resolveInAppConfirmation(owner: TOwner, confirmed: boolean): TitleBarQuitOutcome;
+  /** `owner` can no longer be showing its confirmation (navigation, crash, hang, destroyed). */
+  dropInAppConfirmation(owner: TOwner): void;
+}
+
+/**
+ * Bind the guard's side effects once. Two confirmations never stack:
+ * - While main's native confirmation is open, every other quit request is ignored. A
+ *   synchronous message box runs a nested message loop on Windows, so another Alt+F4, taskbar
+ *   close or tray Quit can re-enter from inside confirmQuit; it must neither stack a second
+ *   dialog nor quit underneath the one the user is still answering.
+ * - While an in-app confirmation is pending and visible, the other routes only bring it to the
+ *   front. If the user cannot be looking at it (window hidden, minimized or gone, renderer
+ *   dead or hung), the record is dropped and the route falls back to the native
+ *   confirmation, so a pending record can never make the app unquittable.
+ */
+export function createActiveTurnQuitGuard<TOwner>(
+  deps: ActiveTurnQuitGuardDependencies<TOwner>,
+): ActiveTurnQuitGuard<TOwner> {
+  let confirming = false;
+  let pending: { owner: TOwner } | null = null;
+
+  const quit = (): void => {
+    pending = null;
+    deps.quit();
+  };
+
+  const requestQuit = (options?: { busyUnknown?: boolean }): boolean => {
+    if (confirming) return false;
+    if (pending) {
+      if (deps.canShowInAppConfirmation(pending.owner)) {
+        deps.revealInAppConfirmation(pending.owner);
+        return false;
+      }
+      pending = null;
+    }
+    if (options?.busyUnknown || readActiveTurnForQuit(() => deps.hasActiveTurn())) {
+      confirming = true;
+      let confirmed: boolean;
+      try {
+        confirmed = deps.confirmQuit();
+      } finally {
+        confirming = false;
+      }
+      if (!confirmed) return false;
+    }
+    quit();
+    return true;
+  };
+
+  return {
+    requestQuit,
+    requestInAppQuit(owner) {
+      if (confirming) return 'none';
+      if (readActiveTurnForQuit(() => deps.hasActiveTurn())) {
+        pending = { owner };
+        return 'confirm';
+      }
+      quit();
+      return 'quitting';
+    },
+    resolveInAppConfirmation(owner, confirmed) {
+      if (!confirmed) {
+        if (pending?.owner === owner) pending = null;
+        return 'none';
+      }
+      if (pending?.owner === owner) {
+        quit();
+        return 'quitting';
+      }
+      return requestQuit() ? 'quitting' : 'none';
+    },
+    dropInAppConfirmation(owner) {
+      if (pending?.owner === owner) pending = null;
+    },
+  };
+}
+
+/** Platform policy inputs for a Windows / Linux main-window close request. */
+export interface MainWindowCloseRequestDependencies {
+  platform: NodeJS.Platform;
+  readWindowsCloseBehavior(): WindowsCloseBehavior | null;
+  readLinuxCloseBehavior(): LinuxCloseBehavior | null;
+  /** First close without a saved choice: ask, then the chooser applies the answer. */
+  requestWindowsCloseBehavior(): void;
+  requestLinuxCloseBehavior(): void;
+  hideToTray(): void;
+  minimize(): void;
+}
+
+/**
+ * Apply the main window's close policy for native closes (Alt+F4, taskbar, window manager) and
+ * the custom title-bar X alike; `quit` is the guarded quit of the calling route. macOS
+ * hide-on-close stays with the Electron adapter.
+ */
+export function handleMainWindowCloseRequest(
+  deps: MainWindowCloseRequestDependencies,
+  quit: () => void,
+): void {
+  if (deps.platform === 'win32') {
+    const behavior = deps.readWindowsCloseBehavior();
+    if (!behavior) {
+      deps.requestWindowsCloseBehavior();
+    } else if (behavior === 'tray') {
+      deps.hideToTray();
+    } else {
+      quit();
+    }
+    return;
+  }
+  if (deps.platform === 'linux') {
+    const behavior = deps.readLinuxCloseBehavior();
+    if (!behavior) {
+      deps.requestLinuxCloseBehavior();
+      return;
+    }
+    applyLinuxMainWindowCloseBehavior({ minimize: deps.minimize }, behavior, quit, deps.minimize);
+    return;
+  }
+  quit();
+}
 
 /** Only the latest pending fullscreen hide may change a window's visibility. */
 const pendingHides = new WeakMap<object, () => void>();
@@ -106,16 +285,24 @@ export interface MainWindowClosePromptWindow {
   };
 }
 
+/**
+ * Bring the main window to the front so the user sees a dialog it shows: drop a pending
+ * fullscreen hide, restore it if minimized, show it if hidden, then focus it.
+ */
+export function revealMainWindow(window: Omit<MainWindowClosePromptWindow, 'webContents'>): void {
+  cancelPendingWindowHide(window);
+  if (window.isMinimized()) window.restore();
+  if (!window.isVisible()) window.show();
+  window.focus();
+}
+
 /** Keep the main window visible and ask its renderer to show the platform chooser. */
 export function requestMainWindowCloseBehavior(
   window: MainWindowClosePromptWindow,
   channel: string,
 ): void {
   if (window.isDestroyed() || window.webContents.isDestroyed()) return;
-  cancelPendingWindowHide(window);
-  if (window.isMinimized()) window.restore();
-  if (!window.isVisible()) window.show();
-  window.focus();
+  revealMainWindow(window);
   window.webContents.send(channel);
 }
 

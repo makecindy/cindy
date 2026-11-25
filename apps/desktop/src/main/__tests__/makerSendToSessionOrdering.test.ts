@@ -7,7 +7,7 @@
  *    DB 已经是单一真相源。
  * 2. Session.send 的 SESSION_RUNNING 必须映射成业务 BUSY，而不是 INTERNAL。
  * 3. create 分支的 session created 广播必须跟 accepted 持久化边界一致。
- * 4. WindowControls 的 any-session-in-turn 判定必须覆盖 Session.send reservation 窗口。
+ * 4. 关窗 / 退出确认所用的 anySessionInTurn 判定必须覆盖 Session.send reservation 窗口。
  */
 
 import { readFileSync } from 'node:fs';

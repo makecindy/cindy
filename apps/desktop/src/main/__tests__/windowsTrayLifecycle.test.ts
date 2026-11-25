@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   hideWindowToWindowsTray,
   popUpWindowsTrayMenu,
-  requestWindowsTrayQuit,
   type WindowsTrayMenuHost,
   type WindowsTrayPopupMenu,
   type WindowsTrayWindow,
@@ -64,32 +63,6 @@ describe('Windows tray lifecycle', () => {
     window.emitLeaveFullScreen();
 
     expect(window.hide).not.toHaveBeenCalled();
-  });
-
-  it('quits without confirmation while no turn is active', () => {
-    const confirmQuit = vi.fn(() => false);
-    const quit = vi.fn();
-
-    requestWindowsTrayQuit({ hasActiveTurn: () => false, confirmQuit, quit });
-
-    expect(confirmQuit).not.toHaveBeenCalled();
-    expect(quit).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps the app open when active-turn confirmation is cancelled', () => {
-    const quit = vi.fn();
-
-    requestWindowsTrayQuit({ hasActiveTurn: () => true, confirmQuit: () => false, quit });
-
-    expect(quit).not.toHaveBeenCalled();
-  });
-
-  it('quits after active-turn confirmation', () => {
-    const quit = vi.fn();
-
-    requestWindowsTrayQuit({ hasActiveTurn: () => true, confirmQuit: () => true, quit });
-
-    expect(quit).toHaveBeenCalledTimes(1);
   });
 });
 

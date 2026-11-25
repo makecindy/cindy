@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   applyLinuxMainWindowCloseBehavior,
   cancelPendingWindowHide,
+  createActiveTurnQuitGuard,
   createCloseBehaviorPromptFallbackController,
+  handleMainWindowCloseRequest,
   minimizeDesktopWindow,
   requestMainWindowCloseBehavior,
   type MainWindowClosePromptWindow,
@@ -301,5 +303,235 @@ describe('main window close behavior prompt', () => {
 
     expect(harness.deps.showRendererPrompt).toHaveBeenCalledTimes(2);
     expect(harness.deps.schedule).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Native closes (Alt+F4, taskbar "Close window", Linux WM close) with behavior "quit" used to
+// call app.quit() straight from bootstrap's close handler, skipping the active-turn
+// confirmation that only the title-bar X (renderer) and tray Quit applied; the renderer and
+// tray also disagreed on a failed busy probe (idle vs busy). The Electron close handler and the
+// 'window-close' IPC now run handleMainWindowCloseRequest with the guard's requestQuit, which is
+// what this matrix drives. Before the fix the busy/throws rows quit without confirmQuit.
+// Unit tier: all side effects are in-memory spies; owners are plain strings standing in for
+// the main window's webContents.
+type Busy = 'idle' | 'busy' | 'throws';
+
+function guardHarness(initial: { busy: Busy; confirm?: boolean; onScreen?: boolean }) {
+  const state = { confirm: false, onScreen: true, ...initial };
+  const deps = {
+    hasActiveTurn: vi.fn(() => {
+      if (state.busy === 'throws') throw new Error('No handler registered');
+      return state.busy === 'busy';
+    }),
+    confirmQuit: vi.fn(() => state.confirm),
+    quit: vi.fn(),
+    canShowInAppConfirmation: vi.fn(() => state.onScreen),
+    revealInAppConfirmation: vi.fn(),
+  };
+  return { state, deps, guard: createActiveTurnQuitGuard<string>(deps) };
+}
+
+type Guard = ReturnType<typeof guardHarness>['guard'];
+
+function closeWithQuitBehavior(guard: Guard): void {
+  handleMainWindowCloseRequest(closePolicyDeps({ platform: 'win32', windowsBehavior: 'quit' }), () =>
+    guard.requestQuit(),
+  );
+}
+
+function closePolicyDeps(options: {
+  platform: NodeJS.Platform;
+  windowsBehavior?: 'quit' | 'tray' | null;
+  linuxBehavior?: 'quit' | 'minimize' | null;
+}) {
+  return {
+    platform: options.platform,
+    readWindowsCloseBehavior: () => options.windowsBehavior ?? null,
+    readLinuxCloseBehavior: () => options.linuxBehavior ?? null,
+    requestWindowsCloseBehavior: vi.fn(),
+    requestLinuxCloseBehavior: vi.fn(),
+    hideToTray: vi.fn(),
+    minimize: vi.fn(),
+  };
+}
+
+describe('main window close request quit guard', () => {
+  it.each([
+    // [platform, windows behavior, linux behavior, busy, user confirms, quits, prompted]
+    ['win32', 'quit', null, 'idle', false, true, false],
+    ['win32', 'quit', null, 'busy', false, false, true],
+    ['win32', 'quit', null, 'busy', true, true, true],
+    ['win32', 'quit', null, 'throws', false, false, true],
+    ['linux', null, 'quit', 'busy', false, false, true],
+    ['linux', null, 'quit', 'throws', true, true, true],
+    ['freebsd', null, null, 'busy', false, false, true],
+  ] as const)(
+    '%s windows=%s linux=%s busy=%s confirm=%s -> quit=%s prompted=%s',
+    (platform, windowsBehavior, linuxBehavior, busy, confirm, quits, prompted) => {
+      const policy = closePolicyDeps({ platform, windowsBehavior, linuxBehavior });
+      const { deps, guard } = guardHarness({ busy, confirm });
+
+      handleMainWindowCloseRequest(policy, () => guard.requestQuit());
+
+      expect(deps.quit).toHaveBeenCalledTimes(quits ? 1 : 0);
+      expect(deps.confirmQuit).toHaveBeenCalledTimes(prompted ? 1 : 0);
+      expect(policy.hideToTray).not.toHaveBeenCalled();
+      expect(policy.minimize).not.toHaveBeenCalled();
+    },
+  );
+
+  // Regression from this PR's first commit (Copilot review, PR #9779): in Host client mode
+  // (CINDY_HOST_API) the turns run in the Host and this process's probe reads idle. Tray Quit
+  // asked every time there before the shared guard (getMakerCore() throws in client mode); on the
+  // local probe it quit mid-task without asking. The tray route passes busyUnknown in that mode.
+  it('confirms a quit whose caller cannot read the busy state although the probe reads idle', () => {
+    const { deps, guard } = guardHarness({ busy: 'idle', confirm: false });
+
+    expect(guard.requestQuit({ busyUnknown: true })).toBe(false);
+
+    expect(deps.confirmQuit).toHaveBeenCalledTimes(1);
+    expect(deps.quit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['win32', 'tray', null, 'hideToTray'],
+    ['linux', null, 'minimize', 'minimize'],
+    ['win32', null, null, 'requestWindowsCloseBehavior'],
+    ['linux', null, null, 'requestLinuxCloseBehavior'],
+  ] as const)(
+    'keeps running without probing on %s windows=%s linux=%s',
+    (platform, windowsBehavior, linuxBehavior, action) => {
+      const policy = closePolicyDeps({ platform, windowsBehavior, linuxBehavior });
+      const { deps, guard } = guardHarness({ busy: 'busy', confirm: true });
+
+      handleMainWindowCloseRequest(policy, () => guard.requestQuit());
+
+      expect(policy[action]).toHaveBeenCalledTimes(1);
+      expect(deps.hasActiveTurn).not.toHaveBeenCalled();
+      expect(deps.quit).not.toHaveBeenCalled();
+    },
+  );
+
+  // The native confirm is a synchronous message box with a nested message loop on Windows, so
+  // an Alt+F4, a title-bar X or a renderer answer can re-enter the guard while a tray Quit
+  // confirmation is still open. Without the latch the nested close stacked a second prompt and
+  // a renderer "confirmed" quit underneath the open dialog; only the first prompt may decide.
+  it.each([false, true])(
+    'ignores quit requests that arrive while the native confirmation is open (confirm=%s)',
+    (confirm) => {
+      const { deps, guard } = guardHarness({ busy: 'busy', confirm });
+      const nested: unknown[] = [];
+      deps.confirmQuit.mockImplementationOnce(() => {
+        closeWithQuitBehavior(guard);
+        nested.push(guard.requestInAppQuit('main'), guard.resolveInAppConfirmation('main', true));
+        return confirm;
+      });
+
+      guard.requestQuit();
+
+      expect(deps.confirmQuit).toHaveBeenCalledTimes(1);
+      expect(nested).toEqual(['none', 'none']);
+      expect(deps.quit).toHaveBeenCalledTimes(confirm ? 1 : 0);
+    },
+  );
+
+  // Review finding (PR #9779): the X used to probe busy in one IPC and quit in a later one, so a
+  // task starting in between was killed without a prompt. requestInAppQuit reads and acts in the
+  // same call: idle quits right there without any confirmation, busy (or a throwing probe)
+  // records the in-app confirmation and neither quits nor opens the native one.
+  it.each([
+    ['idle', 'quitting', 1],
+    ['busy', 'confirm', 0],
+    ['throws', 'confirm', 0],
+  ] as const)('title-bar X with %s quits only under its own read (%s)', (busy, outcome, quits) => {
+    const { deps, guard } = guardHarness({ busy, confirm: true });
+
+    expect(guard.requestInAppQuit('main')).toBe(outcome);
+
+    expect(deps.hasActiveTurn).toHaveBeenCalledTimes(1);
+    expect(deps.quit).toHaveBeenCalledTimes(quits);
+    expect(deps.confirmQuit).not.toHaveBeenCalled();
+  });
+
+  // Review finding (PR #9779): 'window-close' took a renderer-supplied activeTurnChecked flag as
+  // authority to skip main's confirmation, so any script in the renderer could quit mid-task.
+  // A renderer "confirmed" answer now skips the native confirmation only against the record main
+  // made for that same owner when it read busy, and only once; anything else re-reads the busy
+  // state and runs main's own confirmation.
+  it.each([
+    // [label, record made for, answer from, busy at answer, native answer, outcome, prompted]
+    ['no record, busy, user cancels', null, 'main', 'busy', false, 'none', 1],
+    ['no record, busy, user confirms', null, 'main', 'busy', true, 'quitting', 1],
+    ['no record, idle', null, 'main', 'idle', false, 'quitting', 0],
+    // Another owner's answer is a competing route: the open confirmation stays in charge.
+    ['record for another owner', 'main', 'other', 'busy', false, 'none', 0],
+    ['record for this owner', 'main', 'main', 'busy', false, 'quitting', 0],
+  ] as const)(
+    'renderer confirmation with %s',
+    (_label, recordFor, answerFrom, busyAtAnswer, nativeAnswer, outcome, prompted) => {
+      const { state, deps, guard } = guardHarness({ busy: 'busy', confirm: nativeAnswer });
+      if (recordFor) expect(guard.requestInAppQuit(recordFor)).toBe('confirm');
+      state.busy = busyAtAnswer;
+
+      expect(guard.resolveInAppConfirmation(answerFrom, true)).toBe(outcome);
+
+      expect(deps.confirmQuit).toHaveBeenCalledTimes(prompted);
+      expect(deps.quit).toHaveBeenCalledTimes(outcome === 'quitting' ? 1 : 0);
+    },
+  );
+
+  it('consumes the in-app confirmation record on use', () => {
+    const { deps, guard } = guardHarness({ busy: 'busy', confirm: false });
+    guard.requestInAppQuit('main');
+
+    expect(guard.resolveInAppConfirmation('main', true)).toBe('quitting');
+    expect(guard.resolveInAppConfirmation('main', true)).toBe('none');
+
+    expect(deps.quit).toHaveBeenCalledTimes(1);
+    expect(deps.confirmQuit).toHaveBeenCalledTimes(1);
+  });
+
+  // Review finding (PR #9779, Greptile): with the X's in-app confirmation open, Alt+F4 or tray
+  // Quit opened a second, native confirmation; cancelling it left the in-app one on screen. A
+  // competing route now only brings the window with the open confirmation to the front. When
+  // the user cannot be looking at it (hidden, minimized, renderer gone), the record is dropped
+  // and the route asks natively, so the record can never make the app unquittable.
+  it.each([
+    [true, 0, 1],
+    [false, 1, 0],
+  ] as const)(
+    'competing quit route while the in-app confirmation is pending (on screen=%s)',
+    (onScreen, prompted, revealed) => {
+      const { deps, guard } = guardHarness({ busy: 'busy', confirm: false, onScreen });
+      guard.requestInAppQuit('main');
+
+      closeWithQuitBehavior(guard);
+
+      expect(deps.confirmQuit).toHaveBeenCalledTimes(prompted);
+      expect(deps.revealInAppConfirmation).toHaveBeenCalledTimes(revealed);
+      expect(deps.quit).not.toHaveBeenCalled();
+      // A dropped record no longer lets the renderer answer skip main's confirmation.
+      guard.resolveInAppConfirmation('main', true);
+      expect(deps.confirmQuit).toHaveBeenCalledTimes(prompted + (onScreen ? 0 : 1));
+    },
+  );
+
+  // Cancelling (any dismissal) and the renderer resets (navigation, crash, hang, destruction)
+  // clear the record, after which a competing route gets the native confirmation again; a
+  // reset for another owner leaves it in place.
+  it.each([
+    ['cancel', (guard: Guard) => guard.resolveInAppConfirmation('main', false), 1],
+    ['reset', (guard: Guard) => guard.dropInAppConfirmation('main'), 1],
+    ['reset of another owner', (guard: Guard) => guard.dropInAppConfirmation('other'), 0],
+  ] as const)('after %s a competing route asks natively %s time(s)', (_label, clear, prompted) => {
+    const { deps, guard } = guardHarness({ busy: 'busy', confirm: false });
+    guard.requestInAppQuit('main');
+
+    clear(guard);
+    closeWithQuitBehavior(guard);
+
+    expect(deps.confirmQuit).toHaveBeenCalledTimes(prompted);
+    expect(deps.revealInAppConfirmation).toHaveBeenCalledTimes(1 - prompted);
+    expect(deps.quit).not.toHaveBeenCalled();
   });
 });
