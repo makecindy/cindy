@@ -22,6 +22,7 @@ import { favoritesSyncFailureI18nKey } from './favoritesSyncFailure';
 import { Check, ChevronRight, Loader2, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useInitialPaint } from '@/hooks/useInitialPaint';
+import { Spinner } from '@/components/ui/spinner';
 
 import {
   unifiedModelEntries,
@@ -426,7 +427,8 @@ export function UnifiedModelPanel(props: UnifiedModelPanelProps) {
       count + Object.values(provider.models).reduce((sum, models) => sum + models.length, 0), 0);
     const remoteRows = props.remoteSources?.groups.reduce((count, group) => count + group.entries.length, 0) ?? 0;
     if (localRows + remoteRows >= 80) {
-      return <div ref={panelRoot} role="status" style={{ height: props.listMaxHeight ?? 428 }} className="flex min-h-0 shrink items-center justify-center px-3 text-13 text-[var(--text-tertiary)]">
+      return <div ref={panelRoot} role="status" style={{ height: props.listMaxHeight ?? 428 }} className="flex min-h-0 shrink items-center justify-center gap-1.5 px-3 text-13 text-[var(--text-tertiary)]">
+        <Spinner size={14} />
         {t('newChat.modelSelector.trigger.loading')}
       </div>;
     }
