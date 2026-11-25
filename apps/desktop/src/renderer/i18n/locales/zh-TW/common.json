@@ -6641,6 +6641,20 @@
         "ssh": "SSH 遠端主機",
         "hook": "Cindy IM 機器人"
       },
+      "cloudComputer": {
+        "title": "雲端主機",
+        "hint": {
+          "addCloud": "開通一台裝好 Cindy 的雲端主機，開好後會自動出現在裝置清單裡。",
+          "preparingCloud": "雲端主機正在準備，好了會自動出現在裝置清單裡。",
+          "manageCloud": "開關機、續費、重灌和刪除都在網頁上操作。"
+        },
+        "actions": {
+          "addCloud": "新增雲端主機",
+          "preparingCloud": "查看進度",
+          "manageCloud": "管理雲端主機"
+        },
+        "openFailed": "無法開啟雲端主機頁面，請檢查系統預設瀏覽器設定"
+      },
       "hook": {
         "description": "把 Slack、Telegram、飛書 / Lark 等渠道接入同一個 Cindy：訊息都會派發到這臺裝置，共用這裡的專案清單和任務；每個專案的模型和權限所有渠道共用一份，帳號繫結按渠道分開保存。",
         "slackDescription": "繫結 Slack workspace，在 Slack 裡 @Cindy 派發任務。",

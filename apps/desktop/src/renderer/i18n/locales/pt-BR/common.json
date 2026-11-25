@@ -6749,6 +6749,20 @@
         "ssh": "Hosts remotos SSH",
         "hook": "Bots de mensagens do Cindy"
       },
+      "cloudComputer": {
+        "title": "Computador na nuvem",
+        "hint": {
+          "addCloud": "Configure um computador na nuvem com o Cindy instalado. Quando estiver pronto, ele aparece na sua lista de dispositivos.",
+          "preparingCloud": "Seu computador na nuvem está sendo preparado. Ele aparece na sua lista de dispositivos quando estiver pronto.",
+          "manageCloud": "Ligue, desligue, renove, reinstale ou exclua-o na web."
+        },
+        "actions": {
+          "addCloud": "Adicionar computador na nuvem",
+          "preparingCloud": "Ver progresso",
+          "manageCloud": "Gerenciar computador na nuvem"
+        },
+        "openFailed": "Não foi possível abrir a página do computador na nuvem. Verifique as configurações do navegador padrão."
+      },
       "hook": {
         "description": "Conecte Slack, Telegram, Feishu / Lark e outros canais ao mesmo Cindy. As mensagens são encaminhadas a este dispositivo e compartilham sua lista de projetos e seu executor de sessões; o modelo e as permissões de cada projeto são compartilhados por todos os canais, e cada canal mantém sua própria vinculação de conta.",
         "slackDescription": "Vincule espaços de trabalho do Slack e atribua tarefas ao Cindy pelo Slack.",

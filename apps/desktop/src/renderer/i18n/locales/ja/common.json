@@ -6641,6 +6641,20 @@
         "ssh": "SSH リモートホスト",
         "hook": "Cindy IM ボット"
       },
+      "cloudComputer": {
+        "title": "クラウドマシン",
+        "hint": {
+          "addCloud": "Cindy をインストール済みのクラウドマシンを用意します。準備ができるとデバイス一覧に表示されます。",
+          "preparingCloud": "クラウドマシンを準備しています。準備ができるとデバイス一覧に表示されます。",
+          "manageCloud": "起動・停止、更新、再インストール、削除は Web で行います。"
+        },
+        "actions": {
+          "addCloud": "クラウドマシンを追加",
+          "preparingCloud": "進捗を見る",
+          "manageCloud": "クラウドマシンを管理"
+        },
+        "openFailed": "クラウドマシンのページを開けませんでした。既定のブラウザの設定を確認してください。"
+      },
       "hook": {
         "description": "Slack、Telegram、Feishu / Lark などを同じ Cindy に接続します。メッセージはこのデバイスに送られ、プロジェクト一覧とセッション実行基盤を共有します。各プロジェクトのモデルと権限は全チャンネル共通で、アカウント連携だけがチャンネルごとに分かれます。",
         "slackDescription": "Slack ワークスペースを連携し、Slack から Cindy にタスクを依頼できます。",

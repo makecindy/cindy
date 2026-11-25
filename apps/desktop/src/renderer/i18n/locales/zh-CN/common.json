@@ -6641,6 +6641,20 @@
         "ssh": "SSH 远程主机",
         "hook": "Cindy IM 机器人"
       },
+      "cloudComputer": {
+        "title": "云主机",
+        "hint": {
+          "addCloud": "开通一台装好 Cindy 的云主机，开好后会自动出现在设备列表里。",
+          "preparingCloud": "云主机正在准备，好了会自动出现在设备列表里。",
+          "manageCloud": "开关机、续费、重装和删除在网页上操作。"
+        },
+        "actions": {
+          "addCloud": "添加云主机",
+          "preparingCloud": "查看进度",
+          "manageCloud": "管理云主机"
+        },
+        "openFailed": "云主机页面打开失败，请检查系统默认浏览器设置"
+      },
       "hook": {
         "description": "把 Slack、Telegram、飞书 / Lark 等渠道接入同一个 Cindy：消息都会派发到这台设备，共用这里的项目清单和任务；每个项目的模型和权限所有渠道共用一份，账号绑定按渠道分开保存。",
         "slackDescription": "绑定 Slack workspace，在 Slack 里 @Cindy 派发任务。",

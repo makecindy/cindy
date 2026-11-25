@@ -6641,6 +6641,20 @@
         "ssh": "SSH 远方主机",
         "hook": "Cindy IM 使者"
       },
+      "cloudComputer": {
+        "title": "云机",
+        "hint": {
+          "addCloud": "启一云机，已装 Cindy；备毕则见于设备之列。",
+          "preparingCloud": "云机备置中，毕则自见于设备之列。",
+          "manageCloud": "开关、续期、重装、删除，皆于网页行之。"
+        },
+        "actions": {
+          "addCloud": "增云机",
+          "preparingCloud": "观其进度",
+          "manageCloud": "理云机"
+        },
+        "openFailed": "云机之页未能启，请察系统默认浏览器之设。"
+      },
       "hook": {
         "description": "将 Slack、Telegram、飞书 / Lark 诸渠道接入同一 Cindy：讯皆派至此台设备，共用此间案之清单与差事；每案之模型与权限，诸渠道共用一份，名籍绑定依渠道各自隔离。",
         "slackDescription": "绑定 Slack workspace，于 Slack 中 @Cindy 派差事。",
