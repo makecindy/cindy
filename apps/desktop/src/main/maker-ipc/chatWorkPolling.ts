@@ -3,18 +3,22 @@ export interface WorkActor { id: string; busy: boolean; ready: boolean }
 export interface WorkAvailability { botId: string; pending: boolean; enabled: boolean }
 export interface WorkError { status?: number; retryAt?: number }
 
+const MAX_PARALLEL_ACTIONS = 4;
+const RATE_LIMIT_RECOVERY_MS = 15_000;
+
 export class WorkRequestDeferred extends Error {
   constructor(readonly retryAt: number) { super('CHAT_WORK_DEFERRED'); }
 }
 
 /** Account/endpoint-wide admission. Observed restrictions take effect immediately. */
 export function createWorkRequestGate(errorInfo: (error: unknown) => WorkError) {
-  let until = 0, holds = 0;
+  let until = 0, holds = 0, rateLimitUntil = 0;
   // A refresh is an in-flight auth barrier, not a failed request. Keep a finite
   // wake deadline while held; the regular tick resumes promptly after release.
   const deadline = () => holds ? Math.max(until, Date.now() + 60_000) : until;
   return {
     get until() { return deadline(); },
+    get recoveringFromRateLimit() { return rateLimitUntil > 0 && Date.now() < rateLimitUntil + RATE_LIMIT_RECOVERY_MS; },
     hold() {
       holds++;
       let held = true;
@@ -22,14 +26,17 @@ export function createWorkRequestGate(errorInfo: (error: unknown) => WorkError) 
     },
     observe(error: unknown) {
       const info = errorInfo(error);
-      if (info.status === 401 || info.status === 429)
-        until = Math.max(until, Date.now() + 60_000, info.retryAt ?? 0);
+      if (info.status === 401 || info.status === 429) {
+        const restriction = Math.max(Date.now() + 60_000, info.retryAt ?? 0);
+        until = Math.max(until, restriction);
+        if (info.status === 429) rateLimitUntil = Math.max(rateLimitUntil, restriction);
+      }
     },
     check() { const at = deadline(); if (Date.now() < at) throw new WorkRequestDeferred(at); },
   };
 }
 
-type State = { revision: number; direct: boolean; wakeAt: number; next: number; misses: number;
+type State = { revision: number; direct: boolean; available: boolean; wakeAt: number; next: number; misses: number;
   actionAfter: number; actionFailures: number; probeAfter: number; probeFailures: number };
 
 export function createChatWorkPolling<E>(deps: {
@@ -59,7 +66,7 @@ export function createChatWorkPolling<E>(deps: {
   const state = (id: string) => {
     let value = states.get(id);
     if (!value) {
-      value = { revision: 0, direct: false, wakeAt: 0, next: 0, misses: 0,
+      value = { revision: 0, direct: false, available: false, wakeAt: 0, next: 0, misses: 0,
         actionAfter: 0, actionFailures: 0, probeAfter: 0, probeFailures: 0 };
       states.set(id, value);
     }
@@ -90,9 +97,10 @@ export function createChatWorkPolling<E>(deps: {
   }
   function act(actor: WorkActor) {
     if (!current() || acting.has(actor.id) || Date.now() < deps.gate.until) return;
+    if (deps.gate.recoveringFromRateLimit ? acting.size + probes >= 1 : acting.size >= MAX_PARALLEL_ACTIONS) return;
     const value = state(actor.id), revision = value.revision;
     const phase = actor.busy ? 'scan' : 'claim';
-    acting.add(actor.id); value.direct = false;
+    acting.add(actor.id); value.direct = false; value.available = false;
     void (async () => {
       deps.gate.check();
       if (actor.busy) {
@@ -124,7 +132,12 @@ export function createChatWorkPolling<E>(deps: {
         value.probeFailures = 0; value.probeAfter = 0;
         if (!item.enabled) { value.next = Date.now() + 2_000; deps.disabled(actor.id); }
         else if (!item.pending) idle(actor.id, value.revision, true);
-        else if (Date.now() >= value.actionAfter) act(actor);
+        else if (Date.now() >= value.actionAfter) {
+          // A confirmed actor stays ready while the account's action budget is full.
+          value.available = true;
+          value.next = 0;
+          act(actor);
+        }
       }
     })().catch(error => {
       if (!current()) return;
@@ -146,10 +159,11 @@ export function createChatWorkPolling<E>(deps: {
         nextWake = Math.min(nextWake, Math.max(value.wakeAt, value.actionAfter)); continue;
       }
       if (Date.now() < value.actionAfter || (!value.direct && Date.now() < value.next)) continue;
-      if (actor.busy || value.direct || !deps.canProbe()) act(actor);
+      if (actor.busy || value.direct || value.available || !deps.canProbe()) act(actor);
       else if (!probing.has(actor.id) && Date.now() >= value.probeAfter) candidates.push(actor.id);
     }
-    for (let offset = 0; probes < 4 && offset < candidates.length; offset += 128) probe(candidates.slice(offset, offset + 128));
+    const probeLimit = deps.gate.recoveringFromRateLimit ? Math.max(0, 1 - acting.size) : 4;
+    for (let offset = 0; probes < probeLimit && offset < candidates.length; offset += 128) probe(candidates.slice(offset, offset + 128));
     if (Number.isFinite(nextWake)) schedule(nextWake);
   }
   return {
@@ -167,7 +181,7 @@ export function createChatWorkPolling<E>(deps: {
     /** Registry/connection changes invalidate stale probes without inventing work. */
     reset() {
       for (const value of states.values()) {
-        value.revision++; value.misses = 0;
+        value.revision++; value.misses = 0; value.available = false;
         value.next = deps.canProbe() ? 0 : Date.now() + 250;
       }
       if (deps.canProbe()) schedule();

@@ -325,7 +325,7 @@ export interface ProviderGroupService {
   /** Keep an in-flight send and its replacement open cancellable by task Stop. */
   trackGuestStartRecovery(sessionId: string): { signal: AbortSignal; isCurrent(): boolean; dispose(): void };
   /** 用户亲自接手：这一轮重新从头试。 */
-  noteUserAction(sessionId: string): void;
+  noteUserAction(sessionId: string, ownReconnectRecoverySignal?: AbortSignal): void;
   /**
    * 任务此刻归哪个组(模型列表据此把它显示在组那一项下，provider-groups.md §10)：有绑定、且任务记录里的
    * 位置就是绑定的那台时返回组；没归组、位置与绑定对不上(挪到了别处，等下次核对)时返回 null。只读本机记录，
@@ -363,6 +363,8 @@ export interface ProviderGroupTurnErrorHooks {
   notHandled?(): boolean;
   /** 不换了，马上交回原有处理(报错与额度重置后自动继续)：先把错误放出来。 */
   beforeFallback?(): void;
+  /** Per-turn fallback retains its caller's run identity even when the token is rearmed. */
+  fallback?(token: number, options?: UsageLimitRecoveryOptions): void;
   /** 已换到另一台电脑(或原电脑恢复后在原电脑)续上了这一轮。 */
   resumed?(): void;
   /** 原电脑连不上，先等它恢复：开始第 attempt 次重试(从 1 起)。 */
@@ -528,6 +530,7 @@ type ReturnOutcome = 'reachable' | 'back' | 'gone' | 'stopped';
 
 interface SwitchRun {
   superseded: boolean;
+  recoverySignal?: AbortSignal;
   onSuperseded?: () => void;
   isCurrent?(): boolean;
   onRelocationMutationStart?(): void;
@@ -1308,7 +1311,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       hooks?.beforeFallback?.();
       const fallbackToken = deps.leaseRecovery(sessionId, token) ? token : deps.rearmContinue(sessionId, lease, null);
       if (fallbackToken !== null) {
-        if (accountSwitchChecked) deps.fallback(sessionId, signals, fallbackToken, { accountSwitchChecked: true });
+        if (hooks?.fallback) hooks.fallback(fallbackToken, accountSwitchChecked ? { accountSwitchChecked: true } : undefined);
+        else if (accountSwitchChecked) deps.fallback(sessionId, signals, fallbackToken, { accountSwitchChecked: true });
         else deps.fallback(sessionId, signals, fallbackToken);
       }
     };
@@ -2184,7 +2188,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       if (handled) return;
       if (hooks?.notHandled?.()) return;
       hooks?.beforeFallback?.();
-      deps.fallback(sessionId, signals, token);
+      if (hooks?.fallback) hooks.fallback(token);
+      else deps.fallback(sessionId, signals, token);
     },
 
     async beforeSend(sessionId, options) {
@@ -2394,6 +2399,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     trackGuestStartRecovery(sessionId) {
       const { run, done } = trackRun(sessionId);
       const abort = new AbortController();
+      run.recoverySignal = abort.signal;
       run.onSuperseded = () => abort.abort(new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
       return { signal: abort.signal, isCurrent: () => !run.superseded, dispose: done };
     },
@@ -2421,8 +2427,9 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       }
     },
 
-    noteUserAction(sessionId) {
+    noteUserAction(sessionId, ownReconnectRecoverySignal) {
       for (const run of runningSwitches.get(sessionId) ?? []) {
+        if (ownReconnectRecoverySignal && run.recoverySignal === ownReconnectRecoverySignal) continue;
         run.superseded = true;
         run.onSuperseded?.();
       }

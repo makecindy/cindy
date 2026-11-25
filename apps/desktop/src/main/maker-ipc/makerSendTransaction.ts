@@ -40,6 +40,7 @@ import {
 } from '../maker-host/send-outcome.js';
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
+import type { SharedReconnectSendEvidence } from '../remote-agent/controller/proxyHandle.js';
 import { routinePermissionSnapshot } from '../maker-host/routinePermission.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
@@ -150,6 +151,8 @@ type MakerSendOptions = {
   /** Main-only observation: preparation may have side effects even if selection later changes. */
   onRuntimePreparation?: () => void;
   reconnectRecovery?: {
+    canCapture?(session: object): boolean;
+    onUndispatchedFailure?(): void;
     signal: AbortSignal;
     schedulerRunSignal?: AbortSignal;
     isCurrent(): boolean;
@@ -366,7 +369,7 @@ export interface MakerSendTransactionDeps {
     signal: AbortSignal;
     isCurrent(): boolean;
     close(): Promise<boolean>;
-    captureOffer<T>(send: () => Promise<T>): Promise<T>;
+    captureOffer<T>(send: () => Promise<T>, evidence?: SharedReconnectSendEvidence, replacement?: boolean): Promise<T>;
     takeOffer(error: unknown): (() => void) | undefined;
     dispose(): void;
   } | undefined;
@@ -407,6 +410,8 @@ export interface MakerSendTransactionDeps {
     opts?: {
       shouldBroadcast?: () => boolean;
       expectedClearBoundaryMs?: number | null;
+      /** Main-only identity for the recovery registered by this exact write. */
+      ownReconnectRecoverySignal?: AbortSignal;
     },
   ): Promise<unknown>;
   /** Resolve the actual /learn Skill winner once for this exact dispatch. */
@@ -591,6 +596,11 @@ export interface SharedReconnectRecovery {
   onReplacementSession(session: MakerSendTransactionSession): void;
   onScheduledModesChanged(): void;
   onDispatching(): void;
+  onDispatched?(): void;
+  observeSend?: {
+    evidence: SharedReconnectSendEvidence;
+    run<T>(send: () => Promise<T>): Promise<T>;
+  };
   offer(): void;
   assertCurrent(): void;
 }
@@ -1926,7 +1936,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       let userPromptPreviewClientId: string | null = null;
       const reconnectInput = requestedSendOpts.reconnectRecovery;
       const reconnect = !recovery && createOpts && persistUserMessage && reconnectInput
+        && reconnectInput.canCapture?.(sess) !== false
         ? deps.captureSharedReconnectRecovery?.(sess) : undefined;
+      const sendEvidence = recovery?.observeSend?.evidence
+        ?? (reconnect && reconnectInput?.onUndispatchedFailure ? { handedToTransport: false } : undefined);
+      const replacementEvidence: SharedReconnectSendEvidence = { handedToTransport: false };
+      let replacementDispatched = false;
+      let completion: { result: DesktopMakerSendResult } | { error: unknown };
+      let originalFailure: { error: unknown } | undefined;
       try {
         let cindyLearnInvocation: CindyLearnInvocationGrant | null = null;
         // Every Cindy harness consumes this exact-path pin at its provider
@@ -2130,9 +2147,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                           : {}),
                       },
                     },
-                    persistUserMessage.shouldBroadcast ||
+                    reconnect || persistUserMessage.shouldBroadcast ||
                       persistUserMessage.expectedClearBoundaryMs !== undefined
                       ? {
+                          // This write supersedes earlier switch runs. Keep only the
+                          // registration made by this send, using its local identity.
+                          ...(reconnect ? { ownReconnectRecoverySignal: reconnect.signal } : {}),
                           ...(persistUserMessage.shouldBroadcast
                             ? { shouldBroadcast: persistUserMessage.shouldBroadcast }
                             : {}),
@@ -2182,7 +2202,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             }
           },
         })));
-        const sendResult = await (reconnect ? reconnect.captureOffer(send) : send());
+        const sendResult = await (recovery?.observeSend ? recovery.observeSend.run(send)
+          : reconnect ? reconnect.captureOffer(send, sendEvidence) : send());
+        if (sendEvidence?.failure?.kind === 'unconfirmed') throw sendEvidence.failure.error;
+        if (sendResult.accepted) recovery?.onDispatched?.();
         if (inputHandoffOwnerNote && sendResult.accepted) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
         sendAccepted = sendResult.accepted;
         if (sendAccepted) {
@@ -2242,13 +2265,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (directPreDispatchHookStarted && !sendResult.accepted) {
           deps.onUndispatchedDirectUserTurn?.(sessionId);
         }
-        return toCompatibleMakerSendResult(
+        completion = { result: toCompatibleMakerSendResult(
           toDesktopSessionDispatchOutcome(sendResult, {
             source: 'maker-ipc',
             context: `SEND/${sessionId}/send`,
           }),
-        );
-      } catch (err) {
+        ) };
+      } catch (error) {
+        const err = sendEvidence?.failure?.kind === 'unconfirmed' ? sendEvidence.failure.error : error;
         if (!sendAccepted) {
           await rewindPersistedUserMessageAfterClearIfStale();
           await cleanupRejectedMaterialization();
@@ -2263,121 +2287,155 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (directPreDispatchHookStarted) {
           deps.onUndispatchedDirectUserTurn?.(sessionId);
         }
+        completion = { error: err };
         if (reconnect && reconnectInput && sess.agentDeviceId && !sendAccepted && userMessagePersisted && persistUserMessage) {
-          const offer = reconnect.takeOffer(err);
-          if (!offer) {
-            deps.log.warn('send: remote agent switch credential abandoned', {
-              sessionId, reason: 'no-credential',
-            });
-            throw err;
-          }
-          // The stopped open and its offer prove nothing was sent. If a new
-          // input already took over, retire this input without blocking it.
+          originalFailure = { error: err };
+          const shareDeviceId = sess.agentDeviceId;
           const schedulerRunSignal = reconnectInput.schedulerRunSignal;
-          const cancelledBeforeDispatch = () => toCompatibleMakerSendResult(toDesktopSessionDispatchOutcome(
-            { accepted: false, reason: 'cancelled-before-dispatch' },
-            { source: 'maker-ipc', context: `SEND/${sessionId}/shared-reconnect` },
-          ));
-          const abandoned = reconnectInput.signal.aborted || schedulerRunSignal?.aborted ? 'input-cancelled'
-            : requestedSendOpts.signal?.aborted ? 'stop'
-              : !reconnectInput.isCurrent() ? 'new-input'
-                : !reconnect.isCurrent() ? 'share-unavailable' : null;
-          if (abandoned) {
-            deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: abandoned });
-            if (schedulerRunSignal?.aborted) return cancelledBeforeDispatch();
-            reconnectInput.signal.throwIfAborted();
-            throw err;
-          }
-          const assertCurrent = () => {
-            requestedSendOpts.signal?.throwIfAborted();
-            schedulerRunSignal?.throwIfAborted();
-            if (!reconnectInput.isCurrent() || !reconnect.isCurrent()) throw err;
-          };
-          const runId = so.origin?.kind === 'scheduler' ? so.origin.runId : undefined;
-          let replacementSettled = false;
-          let scheduledModesChanged = false;
-          let replacementDispatching = false;
-          let replacement: MakerSendTransactionSession | undefined;
-          let stopped: true | undefined;
-          let failure = err;
-          deps.onSharedReconnectClaimed?.(sessionId, persistUserMessage.clientId);
-          try {
-            requestedSendOpts.onUndispatchedRetry?.();
-            const closed = await reconnect.close().catch((error: unknown) => {
-              deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'close-failed' });
-              throw error;
-            });
-            if (closed) {
-              assertCurrent();
-              const replacementOpts = schedulerRunSignal ? {
-                ...so,
-                signal: so.signal ? AbortSignal.any([so.signal, schedulerRunSignal]) : schedulerRunSignal,
-              } : so;
-              const replacementResult = await dispatch(undefined, outgoingMessage, replacementOpts, sessionId, createOpts, dispatchProductTurn,
-                {
-                  error: err, clientId: persistUserMessage.clientId, shareDeviceId: sess.agentDeviceId,
-                  signal: AbortSignal.any([
-                    reconnectInput.signal, reconnect.signal,
-                    ...(schedulerRunSignal ? [schedulerRunSignal] : []),
-                    ...(requestedSendOpts.signal ? [requestedSendOpts.signal] : []),
-                  ]),
-                  runtimeContext, offer, assertCurrent,
-                  onReplacementSession: session => { replacement = session; },
-                  // The accepted callback's rollback defers a run whose modes changed.
-                  onScheduledModesChanged: () => { scheduledModesChanged = true; },
-                  onDispatching: () => { replacementDispatching = true; },
-                  expectedClearBoundaryMs: persistUserMessage.expectedClearBoundaryMs,
-                });
-              // Keep the queue's existing Stop rollback result when the Session
-              // explicitly reports cancellation before dispatch.
-              // A dead replacement may report cancelled-before-dispatch even
-              // without a Stop. It still owes the scheduler its original error.
-              const status = replacement?.getStatus?.();
-              const replacementLive = replacement != null && !replacement.hasStartedClosing?.()
-                && status !== 'closed' && status !== 'error';
-              if (replacementResult.accepted) {
-                replacementSettled = replacementLive && deps.getSession(sessionId) === replacement;
-                if (!replacementSettled) {
-                  failure = new Error('Replacement session ended after dispatch without a terminal result');
-                }
-              } else if (replacementResult.reason === 'cancelled-before-dispatch' && reconnectInput.wasStopped?.()) {
-                stopped = true;
-              }
-              return replacementResult;
+          const attempt = async () => {
+            const offer = sendEvidence?.handedToTransport ? undefined : reconnect.takeOffer(err);
+            if (!offer) {
+              deps.log.warn('send: remote agent switch credential abandoned', {
+                sessionId, reason: 'no-credential',
+              });
+              throw err;
             }
-            deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'close-not-closed' });
-            if (runId && (reconnectInput.wasStopped?.() || schedulerRunSignal?.aborted)) throw err;
-          } catch (error) {
-            if (error instanceof TurnDispatchUnconfirmedError) {
-              failure = error;
-              throw error;
-            }
-            if (runId && !replacementDispatching) {
+            // The stopped open and its offer prove nothing was sent. If a new
+            // input already took over, retire this input without blocking it.
+            const cancelledBeforeDispatch = () => toCompatibleMakerSendResult(toDesktopSessionDispatchOutcome(
+              { accepted: false, reason: 'cancelled-before-dispatch' },
+              { source: 'maker-ipc', context: `SEND/${sessionId}/shared-reconnect` },
+            ));
+            const abandoned = reconnectInput.signal.aborted || schedulerRunSignal?.aborted ? 'input-cancelled'
+              : requestedSendOpts.signal?.aborted ? 'stop'
+                : !reconnectInput.isCurrent() ? 'new-input'
+                  : !reconnect.isCurrent() ? 'share-unavailable' : null;
+            if (abandoned) {
+              deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: abandoned });
               if (schedulerRunSignal?.aborted) return cancelledBeforeDispatch();
-              if (reconnectInput.wasStopped?.()) {
-                stopped = true;
-                return cancelledBeforeDispatch();
+              reconnectInput.signal.throwIfAborted();
+              throw err;
+            }
+            const assertCurrent = () => {
+              requestedSendOpts.signal?.throwIfAborted();
+              schedulerRunSignal?.throwIfAborted();
+              if (!reconnectInput.isCurrent() || !reconnect.isCurrent()) throw err;
+            };
+            const runId = so.origin?.kind === 'scheduler' ? so.origin.runId : undefined;
+            let replacementSettled = false;
+            let scheduledModesChanged = false;
+            let replacementDispatching = false;
+            let replacement: MakerSendTransactionSession | undefined;
+            let stopped: true | undefined;
+            let failure = err;
+            deps.onSharedReconnectClaimed?.(sessionId, persistUserMessage.clientId);
+            try {
+              requestedSendOpts.onUndispatchedRetry?.();
+              const closed = await reconnect.close().catch((error: unknown) => {
+                deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'close-failed' });
+                throw error;
+              });
+              if (closed) {
+                assertCurrent();
+                const replacementOpts = schedulerRunSignal ? {
+                  ...so,
+                  signal: so.signal ? AbortSignal.any([so.signal, schedulerRunSignal]) : schedulerRunSignal,
+                } : so;
+                const replacementResult = await dispatch(undefined, outgoingMessage, replacementOpts, sessionId, createOpts, dispatchProductTurn,
+                  {
+                    error: err, clientId: persistUserMessage.clientId, shareDeviceId,
+                    signal: AbortSignal.any([
+                      reconnectInput.signal, reconnect.signal,
+                      ...(schedulerRunSignal ? [schedulerRunSignal] : []),
+                      ...(requestedSendOpts.signal ? [requestedSendOpts.signal] : []),
+                    ]),
+                    runtimeContext, offer, assertCurrent,
+                    onReplacementSession: session => { replacement = session; },
+                    // The accepted callback's rollback defers a run whose modes changed.
+                    onScheduledModesChanged: () => { scheduledModesChanged = true; },
+                    onDispatching: () => { replacementDispatching = true; },
+                    onDispatched: () => { replacementDispatched = true; },
+                    ...(sendEvidence ? { observeSend: {
+                      evidence: replacementEvidence,
+                      run: send => reconnect.captureOffer(send, replacementEvidence, true),
+                    } } : {}),
+                    expectedClearBoundaryMs: persistUserMessage.expectedClearBoundaryMs,
+                  });
+                // Keep the queue's existing Stop rollback result when the Session
+                // explicitly reports cancellation before dispatch.
+                // A dead replacement may report cancelled-before-dispatch even
+                // without a Stop. It still owes the scheduler its original error.
+                const status = replacement?.getStatus?.();
+                const replacementLive = replacement != null && !replacement.hasStartedClosing?.()
+                  && status !== 'closed' && status !== 'error';
+                if (replacementResult.accepted) {
+                  replacementSettled = replacementLive && deps.getSession(sessionId) === replacement;
+                  if (!replacementSettled) {
+                    failure = new Error('Replacement session ended after dispatch without a terminal result');
+                  }
+                } else if (replacementResult.reason === 'cancelled-before-dispatch' && reconnectInput.wasStopped?.()) {
+                  stopped = true;
+                }
+                return replacementResult;
               }
+              deps.log.warn('send: remote agent switch credential abandoned', { sessionId, reason: 'close-not-closed' });
+              if (runId && (reconnectInput.wasStopped?.() || schedulerRunSignal?.aborted)) throw err;
+            } catch (error) {
+              if (error instanceof TurnDispatchUnconfirmedError) {
+                failure = error;
+                throw error;
+              }
+              if (runId && !replacementDispatching) {
+                if (schedulerRunSignal?.aborted) return cancelledBeforeDispatch();
+                if (reconnectInput.wasStopped?.()) {
+                  stopped = true;
+                  return cancelledBeforeDispatch();
+                }
+              }
+              if (error instanceof SnapshotOperationDeadlineError) failure = error;
+              // A newer manual input can take over while the replacement is
+              // opening. Keep that cancellation distinct from a quota error.
+              reconnectInput.signal.throwIfAborted();
+              throw error;
+            } finally {
+              // A cancelled FireContext already settles its own run.
+              if (runId && !schedulerRunSignal?.aborted && !replacementSettled && (stopped || !scheduledModesChanged)) {
+                deps.onSharedReconnectFailed?.(sessionId, runId, failure, stopped);
+              }
+              deps.onSharedReconnectFinished?.(sessionId, persistUserMessage.clientId);
             }
-            if (error instanceof SnapshotOperationDeadlineError) failure = error;
-            // A newer manual input can take over while the replacement is
-            // opening. Keep that cancellation distinct from a quota error.
-            reconnectInput.signal.throwIfAborted();
-            throw error;
-          } finally {
-            // A cancelled FireContext already settles its own run.
-            if (runId && !schedulerRunSignal?.aborted && !replacementSettled && (stopped || !scheduledModesChanged)) {
-              deps.onSharedReconnectFailed?.(sessionId, runId, failure, stopped);
-            }
-            deps.onSharedReconnectFinished?.(sessionId, persistUserMessage.clientId);
+            return undefined;
+          };
+          const outcome = await attempt().then(
+            result => ({ ok: true as const, result }),
+            error => ({ ok: false as const, error }),
+          );
+          if (!outcome.ok) completion = { error: outcome.error };
+          else if (outcome.result !== undefined) completion = { result: outcome.result };
+          else if (deps.isSessionRunningError(err)) {
+            throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
           }
-        }
-        if (deps.isSessionRunningError(err)) {
+        } else if (deps.isSessionRunningError(err)) {
           throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
         }
-        throw err;
       } finally {
         reconnect?.dispose();
       }
+
+      // Both Session's non-accepted return and a thrown failure settle here.
+      // Each attempt must independently prove the input did not reach the agent.
+      if (reconnect && reconnectInput?.onUndispatchedFailure && sendEvidence && userMessagePersisted
+        && !sendAccepted && !replacementDispatched && !('result' in completion && completion.result.accepted)
+        && !reconnectInput.signal.aborted && !requestedSendOpts.signal?.aborted
+        && !reconnectInput.schedulerRunSignal?.aborted && !reconnectInput.wasStopped?.() && reconnectInput.isCurrent()
+        && [sendEvidence, replacementEvidence].every(evidence => !evidence.handedToTransport
+          || evidence.failure?.kind === 'not-written' || evidence.failure?.kind === 'rejected')) {
+        reconnectInput.onUndispatchedFailure();
+        if (originalFailure) throw originalFailure.error;
+        if (sendEvidence.failure) throw sendEvidence.failure.error;
+        if ('result' in completion && !completion.result.accepted) throw new Error(completion.result.outcome.message);
+      }
+      if ('error' in completion) throw completion.error;
+      return completion.result;
   }
 }

@@ -34,6 +34,7 @@ import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-ident
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
 import { createHostService } from './service.mjs';
+import { holdError } from './agent/profile-hold.js';
 import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
 import {
   createHostProfileCoexistenceMonitor, createDesktopScanner, HOST_PROFILE_IN_USE_BY_DESKTOP, HostProfileInUseError,
@@ -1771,14 +1772,35 @@ const serverDeps = {
       activity: row.lastToolUse?.toolName ?? null,
     }));
   },
-  updateSession: lockSessionRoute(createHostSessionUpdate({
-    restoreTaskToActive: taskRestore.restoreTaskToActive,
-    publish: event => eventHub.publish(event),
-    setModel: (sessionId, model, providerId, revision, selection) =>
-      runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
-    persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
-    move: sessionMove.move,
-  })),
+  updateSession: (() => {
+    const run = createHostSessionUpdate({
+      restoreTaskToActive: taskRestore.restoreTaskToActive,
+      publish: event => eventHub.publish(event),
+      setModel: (sessionId, model, providerId, revision, selection) =>
+        runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
+      persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
+      move: sessionMove.move,
+      onSoftDelete: async sessionId => {
+        await inputQueue.disposeSession(sessionId);
+        runtimeSelection.clearIntent(sessionId);
+        void recoverGeneratedImagesForHistory(sessionId).catch(() => undefined);
+        try { removeSessionModelInterface(sessionId); } catch (error) {
+          hostLog.warn('session interface snapshot cleanup failed', { sessionId, error: String(error) });
+        }
+        void removeTurnChangeSetsForSession(sessionId).catch(error =>
+          hostLog.warn('turn change-set cleanup failed', { sessionId, err: error instanceof Error ? error.message : String(error) }));
+        forgetProvisionalSession(sessionId);
+      },
+    });
+    return (sessionId: string, patch: Record<string, unknown>, options?: { deleteTarget?: 'side-chat' | 'task' }) => {
+      const owner = activeOwnerScopeKey();
+      return run(sessionId, patch, options, () => {
+        const held = inputQueue.profileHoldReason();
+        if (held) throw holdError(held);
+        if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('[NOT_FOUND] Host account changed');
+      });
+    };
+  })(),
   /**
    * Register a switch under the route lock for enqueue or the dispatch boundary.
    */
@@ -2312,6 +2334,18 @@ function startDeviceLink(): void {
     invoke: service, subscribe: eventHub.subscribe,
     isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
       || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
+    sessionInTurn: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
+      || inputQueue.isTurnRunning(id) || inputQueue.isTurnRecovering(id),
+    closeRuntimeSession: id => {
+      const owner = activeOwnerScopeKey();
+      return withSendToSessionLock(id, async () => {
+        const held = inputQueue.profileHoldReason();
+        if (held) throw holdError(held);
+        if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('[NOT_FOUND] Host account changed');
+        await agentGraph?.maker.closeSession(id);
+        interactions.detach(id, 'session_closed');
+      });
+    },
     onProjectTaskStatus: (sessionId, status) => {
       eventHub.publish({ type: 'session_changed', sessionId, status, patch: { status } });
     },

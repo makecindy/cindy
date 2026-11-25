@@ -1063,6 +1063,28 @@ describe('cross-region provider share', () => {
     await expect(resolveRemoteAgentTargetWhenReady(`share:${usable}`)).resolves.toBe(providerShareHostPeer(usable, 'owner-pc'));
   });
 
+
+  // Unit: a known peer-region share can recover after one network error, while a rate limit
+  // follows the existing regional backoff. The ordinary read never starts the extra session.
+  it.each([
+    ['network', '[DEVICE_LINK_NOT_CONNECTED] Provider share service unreachable', 1],
+    ['rate limit', '[PRECONDITION_FAILED] Provider share request rejected', 0],
+  ])('bounds explicit catalog retries after a peer-region %s failure', async (_kind, message, expected) => {
+    state.responses.set('/session', { shares: [share], credential: CREDENTIAL, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    state.responses.set('/session', new Error(message));
+    await refreshProviderShareCrossRegion('global');
+    const sessions = () => state.calls.filter(({ path }) => path.endsWith('/session')).length;
+    const before = sessions();
+    await expect(resolveRemoteAgentTargetWhenReady('share:share-x')).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+    expect(sessions()).toBe(before);
+    const retry = () => resolveRemoteAgentTargetWhenReady('share:share-x', { retryDirectory: true });
+    await Promise.all([retry(), retry()].map(result => expect(result).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED')));
+    await expect(retry()).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+    expect(sessions() - before).toBe(expected);
+  });
+
   it('does not confirm an incomplete or failed peer list for favorite cleanup', async () => {
     expect(getConfirmedCrossRegionReceivedRegions()).toEqual([]);
     state.responses.set('/requests', { requestId: 'r1', status: 'pending', pairingCode: '0042', expiresAt: new Date().toISOString(), requestToken: TOKEN });

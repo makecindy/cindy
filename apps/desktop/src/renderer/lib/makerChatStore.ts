@@ -5233,6 +5233,8 @@ function applyInputProjection(
     const authRetryProjectionError =
       s._authRetryPersistOnProjectionError &&
       projection.error &&
+      // A cold queue snapshot can describe a previous refusal without a new send.
+      !(projection.queuePaused && projection.error === '[REMOTE_COMPAT_MODE_UNSUPPORTED]') &&
       projection.pendingQueue.some(
         (q) => q.clientId === s._authRetryPersistOnProjectionError!.clientId,
       )
@@ -19230,6 +19232,9 @@ export const makerChatStore = {
   getLightSnapshot,
   /** Non-creating read: session has a paused, non-empty pending queue (sidebar indicator). */
   hasPausedQueue,
+  /** Read only the presence of an existing feedback request, without creating chat state. */
+  hasPendingIssueConfirm: (sessionId: string): boolean =>
+    sessions.get(sessionId)?.pendingIssueConfirm != null,
   /** 查询会话是否有正在运行的 wake 型后台任务 (local_agent / local_workflow)。 */
   hasRunningWakeTask: (sessionId: string): boolean => {
     const state = sessions.get(sessionId);
