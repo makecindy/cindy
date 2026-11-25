@@ -6,9 +6,9 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('useTelegramBot');
 /** Telegram 数字 user id(私聊 chat id 同值);现网长度 5-15 位左右, 放宽到 4-20。 */
-const OWNER_USER_ID_PATTERN = /^\d{4,20}$/;
+export const OWNER_USER_ID_PATTERN = /^\d{4,20}$/;
 /** BotFather token 形态: `<botId>:<secret>` — 只做粗校验挡手滑。 */
-const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{20,}$/;
+export const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{20,}$/;
 
 interface TelegramBotCache {
   ownerUserId: string;

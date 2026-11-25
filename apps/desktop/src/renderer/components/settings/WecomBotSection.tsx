@@ -50,6 +50,49 @@ export function WecomBotSection({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const controller = useWecomBot();
+  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('wecom');
+  // The card body unmounts while collapsed; state read here and the unsaved URL outlive it.
+  const wecomGroup = useWecomGroupNotificationSettings();
+  const webhookDraft = useState('');
+  return (
+    <WecomBotSectionView
+      expanded={expanded}
+      onToggle={onToggle}
+      controller={controller}
+      routeSummary={routeSummary}
+      defaultSettings={
+        <ImDefaultSettingsSection channel="wecom" embedded onSummaryChange={setRouteSummary} />
+      }
+      notificationSettings={
+        <WecomGroupNotificationSectionView wecomGroup={wecomGroup} webhookDraft={webhookDraft} />
+      }
+    />
+  );
+}
+
+export function WecomBotSectionView({
+  controller,
+  idPrefix = '',
+  canDisconnect = true,
+  routeSummary,
+  defaultSettings,
+  connectionDetails,
+  notificationSettings,
+  expanded,
+  onToggle,
+}: {
+  idPrefix?: string;
+  canDisconnect?: boolean;
+  controller: ReturnType<typeof useWecomBot>;
+  routeSummary: import('./ImDefaultSettingsSection').ImDefaultSettingsSummary | null;
+  defaultSettings: React.ReactNode;
+  connectionDetails?: React.ReactNode;
+  notificationSettings?: React.ReactNode;
+
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const {
     botId,
     setBotId,
@@ -65,13 +108,10 @@ export function WecomBotSection({
     connect,
     reconnect,
     disconnect,
-  } = useWecomBot();
+  } = controller;
   const [showSecret, setShowSecret] = useState(false);
-  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('wecom');
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
-  const wecomGroup = useWecomGroupNotificationSettings();
-  const [webhookUrl, setWebhookUrl] = useState('');
 
   const handleDisconnect = useCallback(async () => {
     const approved = await confirm({
@@ -85,7 +125,7 @@ export function WecomBotSection({
 
   return (
     <ImChannelSettingsCard
-      id={imBotSettings.wecom.targetId}
+      id={`${idPrefix}${imBotSettings.wecom.targetId}`}
       title={t(imBotSettings.wecom.titleKey)}
       description={t('settings.wecomBot.description')}
       routeSummary={
@@ -120,7 +160,7 @@ export function WecomBotSection({
         </span>
       }
     >
-      <ImDefaultSettingsSection channel="wecom" embedded onSummaryChange={setRouteSummary} />
+      {defaultSettings}
       <div className="h-px w-full bg-[var(--border-default)]" />
 
       {status.kind === 'connected' ? (
@@ -139,11 +179,13 @@ export function WecomBotSection({
               <div className="text-13 font-medium text-[var(--settings-section-title)]">
                 {t('settings.wecomBot.connected.heading')}
               </div>
-              <div className="mt-1 text-12 leading-[1.6] text-[var(--settings-section-desc)]">
-                {ownerUserId
-                  ? t('settings.wecomBot.connected.ownerBound', { ownerUserId })
-                  : t('settings.wecomBot.connected.awaitingOwner')}
-              </div>
+              {connectionDetails ?? (
+                <div className="mt-1 text-12 leading-[1.6] text-[var(--settings-section-desc)]">
+                  {ownerUserId
+                    ? t('settings.wecomBot.connected.ownerBound', { ownerUserId })
+                    : t('settings.wecomBot.connected.awaitingOwner')}
+                </div>
+              )}
             </div>
           </div>
           <Button data-setting-id={imBotSettings.wecom.id}
@@ -152,7 +194,7 @@ export function WecomBotSection({
             loading={isDisconnecting}
             type="button"
             onClick={() => void handleDisconnect()}
-            disabled={isDisconnecting}
+            disabled={!canDisconnect || isDisconnecting}
           >
             <Trash2 size={13} />
             {t('settings.wecomBot.disconnect')}
@@ -168,6 +210,7 @@ export function WecomBotSection({
           </label>
           <input data-setting-id={imBotSettings.wecom.id}
             type="text"
+            aria-label={t('settings.wecomBot.botIdLabel')}
             value={botId}
             onChange={(event) => setBotId(event.target.value)}
             placeholder={t('settings.wecomBot.botIdPlaceholder')}
@@ -181,6 +224,7 @@ export function WecomBotSection({
           <div className="relative">
             <input data-setting-id={imBotSettings.wecom.id}
               type={showSecret ? 'text' : 'password'}
+              aria-label={t('settings.wecomBot.secretLabel')}
               value={secret}
               onChange={(event) => setSecret(event.target.value)}
               placeholder={t('settings.wecomBot.secretPlaceholder')}
@@ -242,7 +286,7 @@ export function WecomBotSection({
                 loading={isDisconnecting}
                 type="button"
                 onClick={() => void handleDisconnect()}
-                disabled={isDisconnecting}
+                disabled={!canDisconnect || isDisconnecting}
                 className="flex-1"
               >
                 <Trash2 size={13} />
@@ -253,111 +297,131 @@ export function WecomBotSection({
         </div>
       )}
       <div className="h-px w-full bg-[var(--border-default)]" />
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p
-              className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-              style={{ letterSpacing: '0.12px' }}
-            >
-              {t('settings.notifications.wecomGroupLabel')}
-            </p>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {wecomGroup.configured
-                ? t('settings.notifications.wecomGroupConfiguredHint', {
-                    maskedKey: wecomGroup.maskedKey,
-                  })
-                : t('settings.notifications.wecomGroupHint')}
-            </p>
-          </div>
-          <Switch data-setting-id={imBotSettings.wecom.id}
-            checked={wecomGroup.enabled && wecomGroup.configured}
-            onCheckedChange={(next) => {
-              void wecomGroup
-                .setEnabled(next)
-                .catch(() => toast.error(t('settings.notifications.wecomGroupToggleFailed')));
-            }}
-            disabled={!wecomGroup.configured || wecomGroup.busy}
-            aria-label={t('settings.notifications.wecomGroupAria')}
-          />
-        </div>
-
-        {wecomGroup.configured ? (
-          <div className="flex gap-2">
-            <Button data-setting-id={imBotSettings.wecom.id}
-              variant="secondary"
-              size="lg"
-              loading={wecomGroup.busy}
-              type="button"
-              disabled={wecomGroup.busy}
-              onClick={() => {
-                void wecomGroup
-                  .test(t('settings.notifications.wecomGroupTestMessage'))
-                  .then(() => toast.success(t('settings.notifications.wecomGroupTestSuccess')))
-                  .catch(() => toast.error(t('settings.notifications.wecomGroupTestFailed')));
-              }}
-              className="flex-1"
-            >
-              <Send size={13} />
-              {t('settings.notifications.wecomGroupTest')}
-            </Button>
-            <Button data-setting-id={imBotSettings.wecom.id}
-              variant="secondary"
-              size="lg"
-              type="button"
-              disabled={wecomGroup.busy}
-              onClick={() => {
-                void wecomGroup
-                  .clear()
-                  .then(() => toast.success(t('settings.notifications.wecomGroupCleared')))
-                  .catch(() => toast.error(t('settings.notifications.wecomGroupClearFailed')));
-              }}
-              className="flex-1"
-            >
-              <Trash2 size={13} />
-              {t('settings.notifications.wecomGroupClear')}
-            </Button>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <input data-setting-id={imBotSettings.wecom.id}
-              type="password"
-              value={webhookUrl}
-              onChange={(event) => setWebhookUrl(event.target.value)}
-              placeholder={t('settings.notifications.wecomGroupPlaceholder')}
-              autoComplete="new-password"
-              spellCheck={false}
-              aria-label={t('settings.notifications.wecomGroupLabel')}
-              className={cn(
-                'h-[42px] w-full rounded-full px-3.5',
-                'border border-[var(--settings-input-border)]',
-                'bg-[var(--settings-input-bg)] text-13 text-[var(--settings-input-text)]',
-                'placeholder:text-[var(--settings-input-placeholder)] outline-none',
-                'focus:border-[var(--settings-input-border-focus)]',
-              )}
-            />
-            <Button data-setting-id={imBotSettings.wecom.id}
-              variant="cta"
-              size="lg"
-              loading={wecomGroup.busy}
-              type="button"
-              disabled={wecomGroup.busy || !webhookUrl.trim()}
-              onClick={() => {
-                void wecomGroup
-                  .saveAndTest(webhookUrl.trim(), t('settings.notifications.wecomGroupTestMessage'))
-                  .then(() => {
-                    setWebhookUrl('');
-                    toast.success(t('settings.notifications.wecomGroupSaveSuccess'));
-                  })
-                  .catch(() => toast.error(t('settings.notifications.wecomGroupSaveFailed')));
-              }}
-            >
-              <Send size={14} />
-              {t('settings.notifications.wecomGroupSaveAndTest')}
-            </Button>
-          </div>
-        )}
-      </div>
+      {notificationSettings}
     </ImChannelSettingsCard>
+  );
+}
+
+/** Shared group-webhook control; the cloud surface supplies a target-scoped controller. */
+export function WecomGroupNotificationSectionView({
+  wecomGroup,
+  webhookDraft,
+  hint,
+}: {
+  wecomGroup: ReturnType<typeof useWecomGroupNotificationSettings>;
+  /** Draft owned by a host that remounts this view (e.g. after a cloud list reload). */
+  webhookDraft?: [string, (next: string) => void];
+  /** Replaces the unconfigured hint, e.g. to name the instance that stores the URL. */
+  hint?: string;
+}) {
+  const { t } = useTranslation();
+  const localDraft = useState('');
+  const [webhookUrl, setWebhookUrl] = webhookDraft ?? localDraft;
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <p
+            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
+            style={{ letterSpacing: '0.12px' }}
+          >
+            {t('settings.notifications.wecomGroupLabel')}
+          </p>
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+            {wecomGroup.configured
+              ? t('settings.notifications.wecomGroupConfiguredHint', {
+                  maskedKey: wecomGroup.maskedKey,
+                })
+              : (hint ?? t('settings.notifications.wecomGroupHint'))}
+          </p>
+        </div>
+        <Switch data-setting-id={imBotSettings.wecom.id}
+          checked={wecomGroup.enabled && wecomGroup.configured}
+          onCheckedChange={(next) => {
+            void wecomGroup
+              .setEnabled(next)
+              .catch(() => toast.error(t('settings.notifications.wecomGroupToggleFailed')));
+          }}
+          disabled={!wecomGroup.configured || wecomGroup.busy}
+          aria-label={t('settings.notifications.wecomGroupAria')}
+        />
+      </div>
+
+      {wecomGroup.configured ? (
+        <div className="flex gap-2">
+          <Button data-setting-id={imBotSettings.wecom.id}
+            variant="secondary"
+            size="lg"
+            loading={wecomGroup.busy}
+            type="button"
+            disabled={wecomGroup.busy}
+            onClick={() => {
+              void wecomGroup
+                .test(t('settings.notifications.wecomGroupTestMessage'))
+                .then(() => toast.success(t('settings.notifications.wecomGroupTestSuccess')))
+                .catch(() => toast.error(t('settings.notifications.wecomGroupTestFailed')));
+            }}
+            className="flex-1"
+          >
+            <Send size={13} />
+            {t('settings.notifications.wecomGroupTest')}
+          </Button>
+          <Button data-setting-id={imBotSettings.wecom.id}
+            variant="secondary"
+            size="lg"
+            type="button"
+            disabled={wecomGroup.busy}
+            onClick={() => {
+              void wecomGroup
+                .clear()
+                .then(() => toast.success(t('settings.notifications.wecomGroupCleared')))
+                .catch(() => toast.error(t('settings.notifications.wecomGroupClearFailed')));
+            }}
+            className="flex-1"
+          >
+            <Trash2 size={13} />
+            {t('settings.notifications.wecomGroupClear')}
+          </Button>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <input data-setting-id={imBotSettings.wecom.id}
+            type="password"
+            value={webhookUrl}
+            onChange={(event) => setWebhookUrl(event.target.value)}
+            placeholder={t('settings.notifications.wecomGroupPlaceholder')}
+            autoComplete="new-password"
+            spellCheck={false}
+            aria-label={t('settings.notifications.wecomGroupLabel')}
+            className={cn(
+              'h-[42px] w-full rounded-full px-3.5',
+              'border border-[var(--settings-input-border)]',
+              'bg-[var(--settings-input-bg)] text-13 text-[var(--settings-input-text)]',
+              'placeholder:text-[var(--settings-input-placeholder)] outline-none',
+              'focus:border-[var(--settings-input-border-focus)]',
+            )}
+          />
+          <Button data-setting-id={imBotSettings.wecom.id}
+            variant="cta"
+            size="lg"
+            loading={wecomGroup.busy}
+            type="button"
+            disabled={wecomGroup.busy || !webhookUrl.trim()}
+            onClick={() => {
+              void wecomGroup
+                .saveAndTest(webhookUrl.trim(), t('settings.notifications.wecomGroupTestMessage'))
+                .then(() => {
+                  setWebhookUrl('');
+                  toast.success(t('settings.notifications.wecomGroupSaveSuccess'));
+                })
+                .catch(() => toast.error(t('settings.notifications.wecomGroupSaveFailed')));
+            }}
+          >
+            <Send size={14} />
+            {t('settings.notifications.wecomGroupSaveAndTest')}
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }

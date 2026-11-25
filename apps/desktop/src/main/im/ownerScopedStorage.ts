@@ -225,6 +225,14 @@ function readSecretResult(name: string): IMSecretReadResult {
 }
 
 /** @cindy/im secret adapter whose logical keys follow the active data owner. */
+/** Explicit preference reset needs a durable outcome instead of best-effort cleanup. */
+export function removeOwnerScopedImSecretStrict(name: string): void {
+  const target = prepareSecretPath(name);
+  if (!target) throw new Error('IM owner is unavailable');
+  try { fs.unlinkSync(target); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+}
+
 export const ownerScopedImSecrets: ImSecrets = {
   isAvailable: () => safeStorage.isEncryptionAvailable() && scopedSecretPath('probe') !== null,
   write(name, plaintext) {

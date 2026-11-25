@@ -6,7 +6,7 @@ import { createLogger } from '@/lib/logger';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 const log = createLogger('useDiscordBot');
-const OWNER_USER_ID_PATTERN = /^\d{17,20}$/;
+export const OWNER_USER_ID_PATTERN = /^\d{17,20}$/;
 
 interface DiscordBotCache {
   ownerUserId: string;
