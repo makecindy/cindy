@@ -58,6 +58,8 @@ export function createPluginManagementController(client: PluginManagementClient,
    * still reading on them stops), and while the newest read is in flight no facts are published.
    */
   let missingReceipt: { token: number; after: number } | null = null;
+  /** Sequence of the installed read the published missing-receipt facts came from. */
+  let missingFactsSequence = 0;
   const publish = (patch: Partial<PluginManagementState>) => {
     if (disposed) return;
     state = { ...state, ...patch };
@@ -86,15 +88,32 @@ export function createPluginManagementController(client: PluginManagementClient,
   }
   /** Sequence of the snapshot currently in state (readSnapshot, refresh or display read). */
   let publishedSnapshotSequence = 0;
+  /**
+   * Issue the sequence of a new installed (or display) read. After a missing receipt, the facts published so far are
+   * withdrawn right away: the newer read replaces them, so nothing may settle on them while it is in flight.
+   */
+  function issueSnapshotRead(): number {
+    const sequence = ++snapshotSequence;
+    if (missingReceipt && state.missingReceiptFacts) publish({ missingReceiptFacts: null });
+    return sequence;
+  }
+  /**
+   * The missing-receipt facts that may settle a result right now: only facts read by the newest installed read issued.
+   * Derived when asked (not stored), so a read issued in the meantime invalidates them even before anything publishes.
+   */
+  function currentMissingReceiptFacts(): PluginManagementSnapshot | null {
+    if (!missingReceipt || missingReceipt.token !== epoch || state.outcome !== 'unknown') return null;
+    return missingFactsSequence === snapshotSequence ? state.missingReceiptFacts ?? null : null;
+  }
   /** Publish the newest installed snapshot; after a missing receipt it is also that result's facts. */
   function publishSnapshot(sequence: number, token: number, snapshot: PluginManagementSnapshot, patch: Partial<PluginManagementState>) {
     publishedSnapshotSequence = sequence;
-    const facts = missingReceipt && missingReceipt.token === token && sequence > missingReceipt.after
-      && state.outcome === 'unknown' ? { missingReceiptFacts: snapshot } : {};
-    publish({ ...patch, snapshot, ...facts });
+    const asFacts = !!missingReceipt && missingReceipt.token === token && sequence > missingReceipt.after && state.outcome === 'unknown';
+    if (asFacts) missingFactsSequence = sequence;
+    publish({ ...patch, snapshot, ...(asFacts ? { missingReceiptFacts: snapshot } : {}) });
   }
   async function readSnapshot(token: number) {
-    const sequence = ++snapshotSequence;
+    const sequence = issueSnapshotRead();
     const factsToken = ++factsSequence;
     const snapshot = await client.snapshot(options.snapshotRead);
     if (current(token) && factsToken === factsSequence) facts = snapshot;
@@ -150,7 +169,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     const token = epoch, sequence = ++refreshSequence;
     try {
       if (options.readDisplay) {
-        const snapshotToken = ++snapshotSequence;
+        const snapshotToken = issueSnapshotRead();
         const reading = { token, sequence: snapshotToken, promise: options.readDisplay() };
         pendingDisplay = reading;
         try {
@@ -166,7 +185,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (!current(token) || sequence !== refreshSequence) return;
       publish({ capability, uiConsent: null, errorCode: null, ...(capability === 'unsupported' ? { snapshot: null } : {}) });
       if (capability === 'supported') {
-        const snapshotToken = ++snapshotSequence;
+        const snapshotToken = issueSnapshotRead();
         const factsToken = ++factsSequence;
         const snapshot = await client.snapshot(options.snapshotRead);
         if (current(token) && factsToken === factsSequence) facts = snapshot;
@@ -251,6 +270,7 @@ export function createPluginManagementController(client: PluginManagementClient,
         // becomes the facts when it lands (publishSnapshot).
         const latestLanded = publishedSnapshotSequence === snapshotSequence && publishedSnapshotSequence > notFoundSequence;
         const facts = ours === snapshotSequence ? fresh : latestLanded ? state.snapshot : null;
+        if (facts) missingFactsSequence = snapshotSequence;
         publish({ busy: false, missingReceiptFacts: facts });
       }
     }
@@ -289,6 +309,7 @@ export function createPluginManagementController(client: PluginManagementClient,
   });
   return {
     getState: () => state,
+    currentMissingReceiptFacts,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     refresh,
     install: (detail: ManagedMarketDetail, installed?: ManagedPlugin) => start({ kind: 'install', detail, installed }),

@@ -2785,6 +2785,68 @@ describe("market read fences and lost-receipt facts", () => {
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
   });
+  // Maintainer review 05:04: facts settle a result only while they come from the newest installed read issued.
+  // Instead of hand-picked orders, run every order of: A (read after NOT_FOUND) returns, a plugin-change refresh B
+  // is sent, the market detail read on the facts returns, B returns (B is always sent before it returns).
+  // A shows the same-id instance; the detail always says "installed" (a stale detail is the dangerous case).
+  const permutations = <T,>(items: T[]): T[][] => items.length <= 1 ? [items]
+    : items.flatMap((first, index) => permutations([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [first, ...rest]));
+  type Step = "releaseA" | "sendB" | "releaseDetail" | "releaseB";
+  const orders = permutations<Step>(["releaseA", "sendB", "releaseDetail", "releaseB"])
+    .filter((order) => order.indexOf("sendB") < order.indexOf("releaseB"));
+  describe.each([["B still shows the instance", true], ["B shows it removed", false]])("every reply order when %s", (_case, bPresent) => {
+    it.each(orders.map((order) => [order.join(" → "), order] as const))("settles only on the newest installed read: %s", async (_label, order) => {
+      const gates = new Map<string, { promise: Promise<void>; release: () => void }>();
+      const gate = (label: string) => {
+        if (!gates.has(label)) { let release!: () => void; const promise = new Promise<void>((resolve) => { release = resolve; }); gates.set(label, { promise, release }); }
+        return gates.get(label)!;
+      };
+      let began = false, checking = false, sentA = false, sentB = false, sentDetail = false, bIssued = false, bReturned = false;
+      queuedWire((request) => {
+        switch (request.actionId) {
+          case "management:snapshot": {
+            if (request.input?.read === "capabilities") return { catalogPaging: true };
+            if (request.input?.read === "catalog") return marketPage([item]);
+            const label = (request as any).label;
+            if (label === "B") bReturned = true;
+            return managementSnapshot(began && (label === "A" ? true : label === "B" || bReturned ? bPresent : true));
+          }
+          case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", manifest: demoManifest };
+          case "management:begin": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
+          case "management:operation": throw hostError("NOT_FOUND");
+          default: throw new Error("unexpected " + request.actionId);
+        }
+      }, (request) => {
+        if (request === "manifest" || !checking) return undefined;
+        if (request.actionId === "management:snapshot" && request.input?.read === "installed") {
+          if (!sentA) { sentA = true; (request as any).label = "A"; return gate("A").promise; }
+          if (bIssued && !sentB) { sentB = true; (request as any).label = "B"; return gate("B").promise; }
+        }
+        if (request.actionId === "management:market-detail" && !sentDetail) { sentDetail = true; return gate("detail").promise; }
+        return undefined;
+      });
+      await openMarket();
+      await act(async () => shownMarket().install(shownMarket().items[0]));
+      await settle(14);
+      checking = true;
+      await act(async () => { void shownMarket().checkResult(); });
+      await settle(14);
+      const opened = () => fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
+      let openedBeforeB = false;
+      for (const step of order) {
+        if (step === "sendB") { bIssued = true; await act(async () => { void fixture.props.get("confirmation").controller.refresh(); }); }
+        else gate(step === "releaseA" ? "A" : step === "releaseB" ? "B" : "detail").release();
+        await settle(14);
+        if (!bIssued) { openedBeforeB = opened(); continue; }
+        // Once B is sent, nothing may open an instance until B has returned showing it.
+        if (!bReturned) expect(opened()).toBe(openedBeforeB);
+        if (!bPresent) expect(opened()).toBe(openedBeforeB);
+      }
+      if (openedBeforeB) return; // A was the newest read and settled the result before B was sent: valid.
+      if (bPresent) expect(opened()).toBe(true);
+      else expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
+    });
+  });
   it("ignores a market detail from an earlier verification that arrives late", async () => {
     let verifying = false;
     const details: Array<{ release: () => void; promise: Promise<void> }> = [];

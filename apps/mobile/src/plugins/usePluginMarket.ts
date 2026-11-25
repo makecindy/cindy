@@ -508,10 +508,19 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     settledFacts.current = facts;
     const generation = ++verification.current;
     const controller = management.controller;
+    // Valid only while these facts are still the ones read by the newest installed read issued (derived by the
+    // controller when asked), and no newer verification started.
     const current = () => installRef.current?.id === attempt.id && verification.current === generation
-      && controller?.getState().missingReceiptFacts === facts;
+      && !!controller && controller.currentMissingReceiptFacts() === facts;
+    // The one exit for the three outcomes; it re-checks validity right before applying.
+    const conclude = (verdict: { installed: string } | "notInstalled" | "mismatch") => {
+      if (!current()) return;
+      if (verdict === "notInstalled") finish(attempt, "plugins.market.unconfirmedNotInstalled");
+      else if (verdict === "mismatch") finish(attempt, "plugins.market.unconfirmedMismatch");
+      else complete(attempt, verdict.installed);
+    };
     const instance = facts.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
-    if (!instance) { finish(attempt, "plugins.market.unconfirmedNotInstalled"); return; }
+    if (!instance) { conclude("notInstalled"); return; }
     let market: ManagedMarketDetail;
     try {
       market = await createPluginManagementClient({ invoke, deviceId: attempt.target.deviceId, isCurrent: current })
@@ -519,13 +528,12 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     } catch {
       return; // Market facts not read: still unconfirmed; "Check result" verifies again.
     }
-    if (!current()) return;
     // A custom market can be replaced by another repository under the same name, with the same plugin id and
     // release: the Host's "installed" then describes the new source. Require the source identity recorded
     // when this install started; without it (older Host) the result stays unconfirmed.
     const sameSource = attempt.item.sourceType === "server" || samePluginMarketSourceIdentity(attempt.source, market.sourceIdentity);
-    if (market.installState === "installed" && market.releaseId === attempt.item.releaseId && sameSource) complete(attempt, instance.instanceKey);
-    else finish(attempt, "plugins.market.unconfirmedMismatch");
+    conclude(market.installState === "installed" && market.releaseId === attempt.item.releaseId && sameSource
+      ? { installed: instance.instanceKey } : "mismatch");
   }, [invoke, complete, finish, management.controller]);
   useEffect(() => {
     const attempt = install, state = management.state;
