@@ -11,6 +11,7 @@ import { NewTaskSelectionSheet } from "../session/NewTaskSelectionSheet.ios";
 import { ContextSheetFooterButton, ContextSheetRow } from "../session/ContextSheet.ios";
 import { PermissionGuideView } from "../remote-desktop/PermissionGuideView.ios";
 import { HomeDisplayMenu } from "../session/HomeDisplayMenu.ios";
+import { NativePreviewHeader } from "../session/PreviewNativeChrome.ios";
 import { buildHomeDisplayPullDownActions, homeDisplayActionPatch, type HomeDisplayMenuState } from "../session/homeChromeMenus";
 import type { NewTaskSelectionSheetProps } from "../session/NewTaskSelectionSheet";
 
@@ -27,7 +28,7 @@ vi.mock("@/theme", () => ({
   iconStroke: { regular: 2 },
   radius: { pill: 9999 },
   typeScale: { body: 16 },
-  spacing: { md: 12 },
+  spacing: { sm: 8, md: 12, lg: 16 },
   textStyles: { caption: {} },
   useTheme: () => ({
     mode: state.mode,
@@ -59,6 +60,13 @@ vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
 }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+}));
+vi.mock("expo-router", () => ({
+  Stack: { Toolbar: Object.assign(() => null, { Menu: () => null, MenuAction: () => null }) },
+}));
+vi.mock("@/platform/chrome/SystemNavigationBack", () => ({
+  SystemNavigationBack: () => null,
+  useSystemNavigationBack: () => false,
 }));
 vi.mock("@/session/ComposerSheet", () => ({
   ComposerSheet: ({ children, footer }: any) => <div>{children}{footer}</div>,
@@ -92,7 +100,9 @@ vi.mock("lucide-react-native", () => {
   };
 });
 vi.mock("@expo/ui", () => ({
-  Host: ({ children }: any) => <div>{children}</div>,
+  Host: ({ children, matchContents, style }: any) => (
+    <div data-host-layout={JSON.stringify({ matchContents, style })}>{children}</div>
+  ),
 }));
 vi.mock("@expo/ui/swift-ui", () => {
   const Container = ({ children }: any) => <div>{children}</div>;
@@ -101,7 +111,9 @@ vi.mock("@expo/ui/swift-ui", () => {
     VStack: Container,
     Spacer: () => null,
     RNHostView: Container,
-    Text: ({ children, modifiers }: any) => <span data-text-style={JSON.stringify(modifiers)}>{children}</span>,
+    Text: ({ children, modifiers, testID }: any) => (
+      <span data-testid={testID} data-text-style={JSON.stringify(modifiers)}>{children}</span>
+    ),
     Picker: Container,
     Toggle: ({ children, isOn, onIsOnChange, testID, modifiers = [] }: any) => {
       state.toggleRenders += 1;
@@ -149,6 +161,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
     "font",
     "labelStyle",
     "lineLimit",
+    "truncationMode",
     "tint",
     "pickerStyle",
     "tag",
@@ -183,6 +196,47 @@ function mount(children: ReactNode) {
   act(() => root.render(children));
   return host;
 }
+
+it.each(["clip.mp4", "Antigravity-English-UI-Cindy-Animated-Product-Walkthrough.mp4"])(
+  "bounds the video title host between the actions and exposes the full name for %s",
+  (name) => {
+    const close = vi.fn();
+    const fileInfo = vi.fn();
+    const host = mount(<NativePreviewHeader
+      name={name}
+      onClose={close}
+      closeLabel="Close"
+      closeDisabled={false}
+      closeTestID="preview.close"
+      moreLabel="More"
+      actions={[{ key: "fileInfo", label: "File info", onPress: fileInfo }]}
+    />);
+    const title = host.querySelector('[data-testid="preview.title"]')!;
+    const closeButton = host.querySelector<HTMLButtonElement>('[data-testid="preview.close"]')!;
+    const menu = host.querySelector('[data-testid="preview.more"]')!;
+    const titleHost = title.closest("[data-host-layout]")!;
+    const closeHost = closeButton.closest("[data-host-layout]")!;
+    const menuHost = menu.closest("[data-host-layout]")!;
+    const row = titleHost.parentElement!;
+    const hostLayout = (node: Element) => JSON.parse(node.getAttribute("data-host-layout")!);
+
+    expect(Array.from(row.children)).toEqual([closeHost, titleHost, menuHost]);
+    expect(JSON.parse(row.getAttribute("data-rn-style")!)).toMatchObject({ flexDirection: "row", gap: 8 });
+    expect(hostLayout(titleHost)).toEqual({ style: { flex: 1, minWidth: 0, height: 44 } });
+    expect(hostLayout(closeHost).style).toEqual({ width: 44, height: 44 });
+    expect(hostLayout(menuHost).style).toEqual({ width: 44, height: 44 });
+    expect(title.textContent).toBe(name);
+    expect(JSON.parse(title.getAttribute("data-text-style")!)).toEqual(expect.arrayContaining([
+      { name: "lineLimit", value: 1 },
+      { name: "truncationMode", value: "tail" },
+      { name: "accessibilityLabel", value: name },
+    ]));
+    act(() => closeButton.click());
+    act(() => menu.querySelector("button")!.click());
+    expect(close).toHaveBeenCalledOnce();
+    expect(fileInfo).toHaveBeenCalledOnce();
+  },
+);
 
 // Sidebar scrolling and task selection update the trigger without changing its
 // choices. Those updates must not resend every Toggle through the native bridge.

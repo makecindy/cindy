@@ -24,6 +24,7 @@ import {
   menuOrder,
   menuStyle,
   padding,
+  truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
 import { NativeChromeButton } from "@/platform/chrome/NativeChromeButton.ios";
 import {
@@ -190,22 +191,25 @@ export function NativePreviewHeader({
         disabled={closeDisabled}
         testID={closeTestID}
       /> : null}
-      <View pointerEvents="box-none" style={{ flex: 1, minWidth: 0, alignItems: "center" }}>
-        <Host {...host} matchContents style={{ maxWidth: "100%" }}>
-          <NativeText
-            testID="preview.title"
-            modifiers={[
-              font({ size: typeScale.body, weight: "semibold" }),
-              lineLimit(1),
-              padding({ horizontal: spacing.lg }),
-              frame({ height: SIZE }),
-              ...groupStyle,
-            ]}
-          >
-            {name}
-          </NativeText>
-        </Host>
-      </View>
+      {/* Give SwiftUI the space left by the buttons so the title can truncate within it. */}
+      <Host {...host} style={{ flex: 1, minWidth: 0, height: SIZE }}>
+        <NativeText
+          testID="preview.title"
+          modifiers={[
+            font({ size: typeScale.body, weight: "semibold" }),
+            lineLimit(1),
+            truncationMode("tail"),
+            accessibilityLabel(name),
+            padding({ horizontal: spacing.lg }),
+            frame({ height: SIZE }),
+            ...groupStyle,
+            // Center the content-sized glass in the space provided by the host.
+            frame({ minWidth: 0, maxWidth: Infinity }),
+          ]}
+        >
+          {name}
+        </NativeText>
+      </Host>
       {!rail ? <Host {...host} style={{ width: SIZE, height: SIZE }}>
         <Menu
           testID="preview.more"
