@@ -1345,6 +1345,7 @@ export function UserMessage({
               key={`img-${idx}`}
               src={src}
               filename={filename ?? `image-${idx + 1}`}
+              galleryId={messageClientId ? `message:${messageClientId}:image:${idx}` : undefined}
               variant="user-attached"
               sessionId={sessionId}
               annotationSourceUrl={isUrlMode ? img.annotationSourceUrl : undefined}
