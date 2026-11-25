@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
@@ -54,5 +54,18 @@ describe('代输入 screenshot read', () => {
     const missing = await readHandoffPicture(path.join(task, 'elsewhere', 'shot.webp'), task, authorize as never);
     expect(missing).toMatchObject({ ok: false, errorCode: 'IMAGE_NOT_FOUND' });
     expect(!missing.ok && missing.message).toContain('on the computer running Cindy');
+
+    // PR #12772 review (greptile, r4691724318): a folder Cindy may not read is not a missing file.
+    const locked = path.join(task, 'locked');
+    mkdirSync(locked);
+    writeFileSync(path.join(locked, 'shot.png'), 'png');
+    chmodSync(locked, 0o000);
+    try {
+      const denied = await readHandoffPicture(path.join(locked, 'shot.png'), task, authorize as never);
+      expect(denied).toMatchObject({ ok: false, errorCode: 'IMAGE_NOT_FOUND' });
+      expect(!denied.ok && denied.message).not.toContain('on the computer running Cindy');
+    } finally {
+      chmodSync(locked, 0o700);
+    }
   });
 });

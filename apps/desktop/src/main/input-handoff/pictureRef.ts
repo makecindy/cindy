@@ -86,7 +86,15 @@ export async function readHandoffPicture(
   // Host-managed media of this account; resolveSafe already confined it to the store.
   if (trimmed.startsWith('cindy-media://') || trimmed.startsWith('xdt-image://')) return readFile(file);
   const source = classifyLocalAttachmentPath(file, workingDir ?? null, { mimeForExt: (ext) => IMAGE_MIME[ext] ?? null });
-  if (source.kind === 'not-local') return (await fs.stat(file).then(() => true, () => false)) ? notFound() : missingHere(file);
+  if (source.kind === 'not-local') {
+    // Only a missing file is "not on this computer"; a folder Cindy may not read is a different problem.
+    try {
+      await fs.stat(file);
+      return notFound();
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === 'ENOENT' ? missingHere(file) : notFound();
+    }
+  }
   if (source.kind === 'unsupported-type') return notAnImage();
   if (source.kind === 'outside-workdir') {
     const grant = await authorize(source.absPath);
