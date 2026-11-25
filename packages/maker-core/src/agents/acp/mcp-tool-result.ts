@@ -327,17 +327,19 @@ export function createAcpMcpResultBackfiller(opts: {
       const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
       const tracked = toolUseId ? openTools.get(toolUseId) : undefined;
       if (toolUseId) openTools.delete(toolUseId);
-      if (!tracked || typeof data.fullText !== 'string' || data.fullText.length > 0) {
-        return event;
-      }
+      if (!tracked) return event;
       const parsed = parseAcpMcpToolName(tracked.toolName, opts.serverNames);
       if (!parsed) return event;
+      // Always retire the matching Host receipt when an MCP call settles so a native-output
+      // or interrupted call cannot leave a stale receipt for a later identical call.
       const receipt = opts.takeMcpToolResult({
         serverName: parsed.serverName,
         toolName: parsed.toolName,
         input: tracked.input,
       });
-      if (!receipt) return event;
+      if (!receipt || typeof data.fullText !== 'string' || data.fullText.length > 0) {
+        return event;
+      }
       const nextIsError = data.isError === true || receipt.isError;
       if (receipt.isError && data.isError !== true) {
         if (failedByBackfill.size >= MAX_TRACKED_REMOTE_TOOLS) {

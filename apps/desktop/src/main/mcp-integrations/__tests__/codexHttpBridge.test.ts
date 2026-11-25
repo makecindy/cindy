@@ -2053,16 +2053,37 @@ describe('codexHttpBridge', () => {
         input: { ghost_id: 'cindy-github', tool: 'fail_card', args: {} },
       })).toEqual({ fullText: '{"ok":false,"errorCode":"DENIED"}', isError: true });
 
-      // 4. After dispose, new calls are no longer retained.
-      recorderA.dispose();
+      // 4. clear() drops stale queued receipts while keeping recording active for later calls.
       await clientA.callTool({
         name: 'ghost_call',
         arguments: { ghost_id: 'cindy-github', tool: 'pr_card', args: { pr: '12881' } },
       });
+      recorderA.clear();
       expect(recorderA.take({
         serverName: 'cindy',
         toolName: 'ghost_call',
         input: { ghost_id: 'cindy-github', tool: 'pr_card', args: { pr: '12881' } },
+      })).toBeNull();
+      await clientA.callTool({
+        name: 'ghost_call',
+        arguments: { ghost_id: 'cindy-github', tool: 'pr_card', args: { pr: '12882' } },
+      });
+      expect(recorderA.take({
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        input: { ghost_id: 'cindy-github', tool: 'pr_card', args: { pr: '12882' } },
+      })).toEqual({ fullText: cardPayload, isError: false });
+
+      // 5. After dispose, new calls are no longer retained.
+      recorderA.dispose();
+      await clientA.callTool({
+        name: 'ghost_call',
+        arguments: { ghost_id: 'cindy-github', tool: 'pr_card', args: { pr: '12883' } },
+      });
+      expect(recorderA.take({
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        input: { ghost_id: 'cindy-github', tool: 'pr_card', args: { pr: '12883' } },
       })).toBeNull();
     } finally {
       recorderA.dispose();

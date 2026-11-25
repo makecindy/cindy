@@ -97,7 +97,7 @@ export interface CodexHttpBridge {
   enableMcpToolResultRecording?(
     sessionId: string,
     sessionInstanceId?: string,
-  ): { take: TakeMcpToolResult; dispose: () => void };
+  ): { take: TakeMcpToolResult; clear: () => void; dispose: () => void };
   shutdown(): Promise<void>;
 }
 
@@ -743,6 +743,9 @@ async function startCodexHttpBridge(
       receiptBuckets.set(key, bucket);
       return {
         take: (query) => bucket.take(query),
+        clear: () => {
+          bucket.clear();
+        },
         dispose: () => {
           bucket.clear();
           if (receiptBuckets.get(key) === bucket) receiptBuckets.delete(key);

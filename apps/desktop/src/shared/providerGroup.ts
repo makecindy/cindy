@@ -7,6 +7,8 @@
  */
 import { isProviderShareAgentDeviceId, PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from './providerShare.js';
 import type { ProviderManagementRequest, ProviderManagementResult } from './providerManagement';
+import type { OpenAiGroupAccount, OpenAiGroupAccountDetail, OpenAiGroupApiAgent, OpenAiGroupProbeResult } from './openAiAccountGroup.js';
+import type { SubscriptionAccountView } from './subscriptionAccounts.js';
 import { readProviderMetadataContinuity, type ProviderMetadataContinuity } from '@cindy/device-link';
 
 export const PROVIDER_GROUP_IPC = {
@@ -101,6 +103,49 @@ export interface ProviderGroupConfig {
   /** 组内电脑失败时自动换一台继续，默认开启。 */
   autoSwitch: boolean;
   members: ProviderGroupMember[];
+  /** Additional local connections, never published in the remote group directory. */
+  localAccountIds?: string[];
+  /** Local task allocation only. Never included in a public group view. */
+  localAccountSettings?: { weights?: Record<string, number>; order?: string[];
+    limits?: Record<string, number | null>; paused?: string[] };
+}
+
+export type ProviderGroupAccountAllocation =
+  | { strategy: Exclude<ProviderGroupStrategy, 'usage'> }
+  | { accountId: string; weight: number }
+  | { accountId: string; limit: number | null }
+  | { accountId: string; paused: boolean }
+  | { order: string[] };
+
+export function providerGroupLocalAccountKey(providerId: string): string {
+  return 'local:' + providerId;
+}
+
+export function withLocalProviderGroupAccounts(config: ProviderGroupConfig, groupProviderId: string): ProviderGroupConfig {
+  if (!config.localAccountIds?.length) return config;
+  const localMember = (providerId: string, key = providerGroupLocalAccountKey(providerId)): ProviderGroupMember => ({
+    key, kind: 'local', agentDeviceId: null, providerId,
+    limit: PROVIDER_GROUP_DEFAULT_LIMIT, weight: PROVIDER_GROUP_DEFAULT_WEIGHT, paused: false,
+  });
+  const members = config.members.some(member => member.kind === 'local') ? [...config.members]
+    : [localMember(groupProviderId, PROVIDER_GROUP_LOCAL_MEMBER_KEY), ...config.members];
+  members.push(...config.localAccountIds.map(id => localMember(id)));
+  const settings = config.localAccountSettings;
+  const byId = new Map(members.filter(member => member.kind === 'local').map(member => [member.providerId, member]));
+  const order = (settings?.order ?? [...byId.keys()]).map(id => byId.get(id)!);
+  const paused = new Set(settings?.paused);
+  let index = 0;
+  // Reorder the local connections within their slots. The remote members keep
+  // their relative order and positions in the existing group configuration.
+  return { ...config, members: members.map(member => {
+    if (member.kind !== 'local') return member;
+    const local = order[index++]!;
+    const id = local.providerId;
+    const limits = settings?.limits;
+    const limit = limits && Object.hasOwn(limits, id) ? limits[id] : undefined;
+    return { ...local, ...(limit !== undefined ? concurrencyLimitPatch(limit) : {}),
+      weight: settings?.weights?.[id] ?? local.weight, paused: paused.has(id) };
+  }) };
 }
 
 export type ProviderGroupMemberState =
@@ -288,6 +333,13 @@ export interface ProviderGroupCandidate {
 
 export type ProviderGroupLocalCommand =
   | { action: 'get'; providerId: string }
+  | { action: 'account-list'; providerId: string }
+  | { action: 'account-detail'; providerId: string }
+  | { action: 'account-quota'; providerId: string; accountId: string }
+  | { action: 'account-merge'; providerId: string; targetProviderId: string }
+  | { action: 'account-remove'; providerId: string; accountId: string }
+  | { action: 'account-test'; providerId: string; accountId: string; agent?: OpenAiGroupApiAgent }
+  | { action: 'account-allocation'; providerId: string; expectedConfig: ProviderGroupConfig; edit: ProviderGroupAccountAllocation }
   | { action: 'candidates'; providerId: string }
   | { action: 'save'; providerId: string; config: ProviderGroupConfig }
   | { action: 'delete'; providerId: string }
@@ -318,6 +370,11 @@ export type ProviderGroupSessionGroup = { groupDeviceId: string | null; provider
 
 export type ProviderGroupCommandResult<C extends ProviderGroupCommand> =
   C extends { action: 'remote-manage'; request: infer R extends ProviderManagementRequest } ? ProviderManagementResult<R>
+  : C extends { action: 'account-list' } ? OpenAiGroupAccount[]
+  : C extends { action: 'account-detail' } ? OpenAiGroupAccountDetail
+  : C extends { action: 'account-quota' } ? Pick<SubscriptionAccountView, 'id' | 'identity' | 'usage'>[]
+  : C extends { action: 'account-merge' | 'account-test' | 'account-remove' } ? OpenAiGroupProbeResult
+  : C extends { action: 'account-allocation' } ? ProviderGroupConfig
   : C extends { action: 'list' } ? Record<string, ProviderGroupConfig>
   : C extends { action: 'get' } ? ProviderGroupView
     : C extends { action: 'candidates' } ? ProviderGroupCandidate[]
@@ -444,7 +501,33 @@ export function normalizeProviderGroupConfig(raw: unknown, groupProviderId: stri
     members.push(member);
   }
   if (members.length === 0) return null;
+  const localAccountIds = Array.isArray(value.localAccountIds)
+    ? [...new Set(value.localAccountIds.filter((id): id is string => isProviderGroupProviderId(id) && id !== groupProviderId))]
+      .slice(0, PROVIDER_GROUP_STORAGE_MEMBER_CAP - members.length)
+    : [];
+  const settings = value.localAccountSettings as ProviderGroupConfig['localAccountSettings'];
+  const localIds = [groupProviderId, ...localAccountIds];
+  const weights = Object.fromEntries(localIds.flatMap(id => {
+    const weight = settings?.weights && Object.hasOwn(settings.weights, id) ? settings.weights[id] : undefined;
+    return typeof weight === 'number' && Number.isFinite(weight)
+      ? [[id, clampInt(weight, 1, PROVIDER_GROUP_MAX_WEIGHT, PROVIDER_GROUP_DEFAULT_WEIGHT)]] : [];
+  }));
+  const savedOrder = Array.isArray(settings?.order)
+    ? [...new Set(settings.order.slice(0, PROVIDER_GROUP_STORAGE_MEMBER_CAP).filter(id => localIds.includes(id)))] : [];
+  const order = savedOrder.length ? [...savedOrder, ...localIds.filter(id => !savedOrder.includes(id))] : [];
+  const limits = Object.fromEntries(localIds.flatMap(id => {
+    const limit = settings?.limits && Object.hasOwn(settings.limits, id) ? settings.limits[id] : undefined;
+    return limit === null || (typeof limit === 'number' && Number.isFinite(limit))
+      ? [[id, limit === null ? null : clampInt(limit, 1, PROVIDER_GROUP_MAX_LIMIT, PROVIDER_GROUP_DEFAULT_LIMIT)]] : [];
+  }));
+  const paused = Array.isArray(settings?.paused)
+    ? localIds.filter(id => settings.paused!.includes(id)) : [];
+  const localAccountSettings = localAccountIds.length && (Object.keys(weights).length || order.length || Object.keys(limits).length || paused.length)
+    ? { ...(Object.keys(weights).length ? { weights } : {}), ...(order.length ? { order } : {}),
+      ...(Object.keys(limits).length ? { limits } : {}), ...(paused.length ? { paused } : {}) } : undefined;
   return { strategy, autoSwitch: value.autoSwitch !== false, members,
+    ...(localAccountIds.length > 0 ? { localAccountIds } : {}),
+    ...(localAccountSettings ? { localAccountSettings } : {}),
     ...(typeof value.allowFast === 'boolean' ? { allowFast: value.allowFast } : {}) };
 }
 
@@ -484,7 +567,17 @@ export function providerGroupSummaryForWire(config: ProviderGroupConfig): Provid
 
 /** 读另一台电脑目录里的组摘要；格式不对返回 null(当作没有组)。 */
 export function readProviderGroupSummary(raw: unknown, groupProviderId: string): ProviderGroupConfig | null {
-  return normalizeProviderGroupConfig(raw, groupProviderId);
+  const config = normalizeProviderGroupConfig(raw, groupProviderId);
+  if (!config) return null;
+  return publicProviderGroupConfig(config);
+}
+
+export function publicProviderGroupConfig(config: ProviderGroupConfig): ProviderGroupConfig {
+  if (!config.localAccountIds && !config.localAccountSettings) return config;
+  const publicConfig = { ...config };
+  delete publicConfig.localAccountIds;
+  delete publicConfig.localAccountSettings;
+  return publicConfig;
 }
 
 /** 换电脑的原因里，会让组所在电脑冷却那台的几种(连不上只由发现它的电脑自己避开，不替全组判断)。 */
@@ -791,7 +884,7 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
   const model = typeof value.model === 'string' && value.model.length > 0 && value.model.length <= 512
     ? value.model
     : undefined;
-  const config = normalizeProviderGroupConfig(value.config, groupProviderId);
+  const config = readProviderGroupSummary(value.config, groupProviderId);
   if (!config) return empty;
   const keys = new Set(config.members.map((m) => m.key));
   const count = (v: unknown, max: number) =>

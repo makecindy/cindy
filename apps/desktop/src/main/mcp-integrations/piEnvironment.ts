@@ -356,7 +356,11 @@ async function getPiExtraSpawnConfig(
     disposeLease();
     throw error;
   }
-  let receiptRecorder: { take: NonNullable<PiExtraSpawnConfig['takeMcpToolResult']>; dispose: () => void } | undefined;
+  let receiptRecorder: {
+    take: NonNullable<PiExtraSpawnConfig['takeMcpToolResult']>;
+    clear: () => void;
+    dispose: () => void;
+  } | undefined;
   try {
     if (sessionCtx?.recordMcpToolResults === true && bridge.enableMcpToolResultRecording) {
       receiptRecorder = bridge.enableMcpToolResultRecording(sessionId, sessionCtx.sessionInstanceId);
@@ -398,8 +402,10 @@ async function getPiExtraSpawnConfig(
       },
       ...(sessionCtx?.sessionInstanceId
         ? {
+            // Per-run cleanup (e.g. remote-agent idle reclaim/slot yield) clears stale receipts
+            // and closes old transports, but keeps recording registered for reconnect on the same mcp.
             closeSessionInstance: () => {
-              receiptRecorder?.dispose();
+              receiptRecorder?.clear();
               bridge.closeSessionInstance(sessionCtx.sessionInstanceId!);
             },
           }

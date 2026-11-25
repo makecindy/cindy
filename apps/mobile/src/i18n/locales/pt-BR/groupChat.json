@@ -655,5 +655,6 @@
     "externalFormatError": "Abra novamente o link completo da mensagem original."
   },
   "memberCount_many": "{{count}} membros",
-  "waitingForOwner": "Aguardando confirmação"
+  "waitingForOwner": "Aguardando confirmação",
+  "externalBadge": "Externo"
 }

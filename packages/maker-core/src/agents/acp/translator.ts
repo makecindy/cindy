@@ -336,16 +336,18 @@ export class AcpUpdateTranslator {
     tool.settled = true;
     let isError = result !== 'done';
     let rendered = renderAcpToolContent(tool.content, tool.rawOutput);
-    if (!rendered && result !== 'interrupted' && this.options.takeMcpToolResult) {
+    if (this.options.takeMcpToolResult) {
       const parsed = (tool.name ? parseAcpMcpToolName(tool.name, this.options.mcpServerNames) : null)
         ?? (tool.title ? parseAcpMcpToolName(tool.title, this.options.mcpServerNames) : null);
       if (parsed) {
+        // Always retire the matching Host receipt when an MCP call settles so a native-output
+        // or interrupted call cannot leave a stale receipt for a later identical call.
         const receipt = this.options.takeMcpToolResult({
           serverName: parsed.serverName,
           toolName: parsed.toolName,
           input: tool.rawInput,
         });
-        if (receipt) {
+        if (receipt && !rendered && result !== 'interrupted') {
           rendered = clip(receipt.fullText);
           if (receipt.isError) isError = true;
         }

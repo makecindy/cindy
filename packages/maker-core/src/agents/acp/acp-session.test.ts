@@ -40,7 +40,7 @@ import {
   createMcpToolResultBucket,
   parseAcpMcpToolName,
 } from './mcp-tool-result.js';
-import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '../base-agent.js';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError, TurnPermissionPolicyUnsupportedError, type SendOptions } from '../base-agent.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import type { Logger } from '../../interfaces/logger.js';
 import { Session } from '../../session.js';
@@ -292,6 +292,17 @@ describe('openAcpSession handshake', () => {
     await expect(open(agent, { resumeSessionId: 'old-1' })).rejects.toBeInstanceOf(AcpResumeUnavailableError);
     expect(agent.methods()).toEqual(['initialize']);
     expect(agent.closedByClient).toBe(true);
+  });
+
+  // Idle runtime reclamation closes only runtimes the next send can reopen; an agent with neither
+  // method would fail that resume (above), so it must answer false and keep its runtime.
+  it.each([
+    { name: 'neither method', caps: {}, reopenable: false },
+    { name: 'session/load', caps: { loadSession: true }, reopenable: true },
+    { name: 'session/resume', caps: { sessionCapabilities: { resume: {} } }, reopenable: true },
+  ])('reports whether a closed session can be reopened with $name', async ({ caps, reopenable }) => {
+    const { session } = await open(createFakeAgent({ agentCapabilities: caps }));
+    expect(session.canResumeAfterClose()).toBe(reopenable);
   });
 });
 
@@ -654,6 +665,19 @@ describe('AcpSession permissions', () => {
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
     const answer = await agent.requestPermission({ toolCall: { toolCallId: 't1', title: 'Write' }, options: PERMISSION_OPTIONS });
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+  });
+
+  // Security review on #12820: IM group turns carry a per-turn policy that requires the owner's
+  // confirmation. A plugin's agent can act without asking Cindy, so the turn must be refused before
+  // any prompt reaches the agent, in every mode. Minimal input: send with turnPermissionPolicy.
+  it.each(['ask', 'bypassPermissions'] as const)('refuses a turn that carries a per-turn permission policy (%s)', async (mode) => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent, { permissionMode: mode });
+    const policy = { evaluate: () => ({ kind: 'confirm' }) } as unknown as NonNullable<SendOptions['turnPermissionPolicy']>;
+    expect(() => session.validateSendOptions({ turnPermissionPolicy: policy })).toThrow(TurnPermissionPolicyUnsupportedError);
+    await expect(session.send({ type: 'user', content: 'go' }, { turnPermissionPolicy: policy }))
+      .rejects.toMatchObject({ code: 'TURN_PERMISSION_POLICY_UNSUPPORTED', agentKind: 'acp' });
+    expect(agent.prompts).toHaveLength(0);
   });
 
   it('does not convert allow once into persistent permission when the agent only offers the latter', async () => {
@@ -1763,20 +1787,51 @@ describe('AcpAgent (the acp engine)', () => {
     expect(fullById.get('call-err')).toEqual({ toolUseId: 'call-err', fullText: errJson, isError: true });
     expect(summaryById.get('call-err')).toBe('failed');
     expect(fullById.get('call-native')).toEqual({ toolUseId: 'call-native', fullText: '{"from":"agent"}', isError: false });
-    // Unconsumed host receipt for call-native stays intact.
-    expect(bucket.size()).toBe(1);
+    // Native-output call retired its matching Host receipt so a later identical empty call cannot reuse it.
+    expect(bucket.size()).toBe(0);
 
-    // Interrupted call must not consume a pending receipt.
-    await handle.send({ type: 'user', content: 'cancel mid call' });
+    // Follow-up identical call with empty ACP output gets only its own fresh receipt.
+    await handle.send({ type: 'user', content: 'repeat ghost_info and cancel mid call' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-native-repeat',
+      title: 'mcp__cindy__ghost_info',
+      rawInput: { ghost_id: 'cindy-github' },
+    });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_info',
+      input: { ghost_id: 'cindy-github' },
+      fullText: '{"from":"host-v2"}',
+      isError: false,
+    });
+    agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-native-repeat', status: 'completed' });
+
+    // Interrupted call retires its already-recorded Host receipt while keeping the interrupted text.
     agent.update({
       sessionUpdate: 'tool_call',
       toolCallId: 'call-cancelled',
       title: 'mcp__cindy__ghost_info',
       rawInput: { ghost_id: 'cindy-github' },
     });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_info',
+      input: { ghost_id: 'cindy-github' },
+      fullText: '{"from":"interrupted-call"}',
+      isError: false,
+    });
     agent.prompts[1]!.settle.resolve({ stopReason: 'cancelled' });
     await vi.waitFor(() => expect(events.filter((e) => e.type === 'done')).toHaveLength(2));
+    const repeatFull = events.find(
+      (e) => e.type === 'tool_result_full' && (e.data as AcpRecord).toolUseId === 'call-native-repeat',
+    )?.data as AcpRecord | undefined;
+    expect(repeatFull).toEqual({
+      toolUseId: 'call-native-repeat',
+      fullText: '{"from":"host-v2"}',
+      isError: false,
+    });
     const cancelledFull = events.find(
       (e) => e.type === 'tool_result_full' && (e.data as AcpRecord).toolUseId === 'call-cancelled',
     )?.data as AcpRecord | undefined;
@@ -1785,7 +1840,7 @@ describe('AcpAgent (the acp engine)', () => {
       fullText: 'Interrupted before the tool finished.',
       isError: true,
     });
-    expect(bucket.size()).toBe(1);
+    expect(bucket.size()).toBe(0);
 
     await handle.close();
     await pump;
@@ -1855,9 +1910,45 @@ describe('AcpAgent (the acp engine)', () => {
     const errSummary = mapEvent({ type: 'tool_result', data: { summary: 'done', toolUseIds: ['tu-2'] } });
     expect(errSummary.data).toEqual({ summary: 'failed', toolUseIds: ['tu-2'] });
 
-    // Non-empty tool_result_full passes through unchanged.
-    mapEvent({ type: 'tool_use', data: { toolUseId: 'tu-3', toolName: 'mcp__cindy__ghost_call', input: {} } });
+    // Non-empty tool_result_full passes through unchanged AND retires its matching Host receipt,
+    // so a subsequent identical empty-output call receives its own fresh receipt instead of the old one.
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      fullText: '{"ok":true,"xdt_card_id":"stale-card"}',
+      isError: false,
+    });
+    mapEvent({
+      type: 'tool_use',
+      data: {
+        toolUseId: 'tu-3',
+        toolName: 'mcp__cindy__ghost_call',
+        input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      },
+    });
     const untouched = mapEvent({ type: 'tool_result_full', data: { toolUseId: 'tu-3', fullText: 'already here', isError: false } });
     expect(untouched.data).toEqual({ toolUseId: 'tu-3', fullText: 'already here', isError: false });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      fullText: '{"ok":true,"xdt_card_id":"fresh-card"}',
+      isError: false,
+    });
+    mapEvent({
+      type: 'tool_use',
+      data: {
+        toolUseId: 'tu-4',
+        toolName: 'mcp__cindy__ghost_call',
+        input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      },
+    });
+    const freshFilled = mapEvent({ type: 'tool_result_full', data: { toolUseId: 'tu-4', fullText: '', isError: false } });
+    expect(freshFilled.data).toEqual({
+      toolUseId: 'tu-4',
+      fullText: '{"ok":true,"xdt_card_id":"fresh-card"}',
+      isError: false,
+    });
   });
 });

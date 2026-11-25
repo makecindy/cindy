@@ -1470,6 +1470,7 @@ describe('piEnvironment per-session identity', () => {
     expect(serverUrl).toBeTruthy();
 
     const client = new Client({ name: 'antigravity-client', version: '1' });
+    let reconnectedClient: Client | null = null;
     await client.connect(new StreamableHTTPClientTransport(new URL(serverUrl!), {
       requestInit: { headers: { Authorization: `Bearer ${acp!.mcpBridge!.token}` } },
     }));
@@ -1479,11 +1480,29 @@ describe('piEnvironment per-session identity', () => {
         fullText: '{"ok":true,"xdt_card_id":"card-pi-env"}',
         isError: false,
       });
+
+      // Simulate remote-agent idle reclaim / slot yield: closeSessionInstance clears stale
+      // receipts and closes old transports, while keeping recording enabled on reconnect.
       await client.callTool({ name: 'ghost_call', arguments: {} });
+      acp!.closeSessionInstance?.();
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toBeNull();
+
+      reconnectedClient = new Client({ name: 'antigravity-client', version: '1' });
+      await reconnectedClient.connect(new StreamableHTTPClientTransport(new URL(serverUrl!), {
+        requestInit: { headers: { Authorization: `Bearer ${acp!.mcpBridge!.token}` } },
+      }));
+      await reconnectedClient.callTool({ name: 'ghost_call', arguments: {} });
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toEqual({
+        fullText: '{"ok":true,"xdt_card_id":"card-pi-env"}',
+        isError: false,
+      });
+
+      await reconnectedClient.callTool({ name: 'ghost_call', arguments: {} });
       acp!.disposeSessionCtx?.();
       expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toBeNull();
     } finally {
       acp?.disposeSessionCtx?.();
+      await reconnectedClient?.close().catch(() => {});
       await client.close().catch(() => {});
     }
   });

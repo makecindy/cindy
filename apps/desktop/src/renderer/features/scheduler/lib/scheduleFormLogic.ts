@@ -806,7 +806,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
   if (form.agentKind === 'codex' || form.agentKind === 'pi') base.fastMode = form.fastMode;
   if (form.pluginEngine && !form.persistentSession) {
-    // 插件引擎：每次新建任务、在本机运行；没有 Fast、worktree 与运行位置。
+    // 插件引擎：每次新建任务、在本机运行；没有 Fast 与运行位置，worktree 与内置引擎相同。
     return {
       ...base,
       agentKind: 'acp',
@@ -815,7 +815,6 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
       providerId: form.pluginEngine.providerId,
       effort: form.pluginEngine.effort,
       fastMode: false,
-      useWorktree: false,
       agentDeviceId: undefined,
       modelAgentDeviceId: undefined,
     };
