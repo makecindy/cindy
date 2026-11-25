@@ -14,6 +14,7 @@ import {
   supportsLinuxClipboard,
 } from './linuxClipboardNative';
 
+import { managedX11Clipboard } from './linuxX11Clipboard';
 import {
   CLIPBOARD_IMAGE_BYTES as IMAGE_BYTES,
   CLIPBOARD_IMAGE_PIXELS as IMAGE_PIXELS,
@@ -101,14 +102,7 @@ export async function transferDesktopClipboard(
     : clipboard.readText();
   check();
   if (writtenText !== text) throw new Error('DESKTOP_CLIPBOARD_WRITE_FAILED');
-  const modifier = process.platform === 'darwin' ? 'MetaLeft' : 'ControlLeft';
-  input([
-    { kind: 'release' },
-    { kind: 'key', code: modifier, down: true },
-    { kind: 'key', code: 'KeyV', down: true },
-    { kind: 'key', code: 'KeyV', down: false },
-    { kind: 'key', code: modifier, down: false },
-  ]);
+  input(clipboardPasteShortcut());
 }
 
 /** Portable formats are written together so HTML/image alternatives survive. */
@@ -182,7 +176,10 @@ export async function transferDesktopClipboardContent(
       (value.text || value.url || undefined) !== actual.text ||
       value.html !== actual.html ||
       value.rtf !== actual.rtf ||
-      value.png !== actual.png
+      (managedX11Clipboard() && value.png && actual.png
+        ? !clipboardPng(nativeImage.createFromBuffer(incomingPng(value.png)))
+          .equals(clipboardPng(nativeImage.createFromBuffer(incomingPng(actual.png))))
+        : value.png !== actual.png)
     )
       throw new Error('DESKTOP_CLIPBOARD_WRITE_FAILED');
     if (options?.sync) {
@@ -226,12 +223,20 @@ export async function transferDesktopClipboardContent(
       return { version };
     }
   }
-  const modifier = process.platform === 'darwin' ? 'MetaLeft' : 'ControlLeft';
-  input([
+  input(clipboardPasteShortcut());
+}
+
+/** Shift+Insert is the native X11 paste binding shared by Chrome/GTK and the
+ * terminal; Ctrl+V is a literal-input command in a terminal. Sync never calls it. */
+function clipboardPasteShortcut(): DesktopInput[] {
+  const x11 = managedX11Clipboard();
+  const modifier = x11 ? 'ShiftLeft' : process.platform === 'darwin' ? 'MetaLeft' : 'ControlLeft';
+  const key = x11 ? 'Insert' : 'KeyV';
+  return [
     { kind: 'release' },
     { kind: 'key', code: modifier, down: true },
-    { kind: 'key', code: 'KeyV', down: true },
-    { kind: 'key', code: 'KeyV', down: false },
+    { kind: 'key', code: key, down: true },
+    { kind: 'key', code: key, down: false },
     { kind: 'key', code: modifier, down: false },
-  ]);
+  ];
 }

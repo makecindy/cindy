@@ -1153,6 +1153,15 @@ describe('owner-only subscription identity', () => {
     await refreshSubscriptionPoolCodexModels(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    // #12716: disagreement about an older model must not hide an addition
+    // reported by both model/list and this synthetic account directory's cache.
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: ['astra', 'sol', 'new-model', 'disk-only']
+      .map(slug => ({ slug, supported_in_api: true, visibility: 'list' })) }));
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }, { id: 'new-model' }] });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol', 'new-model']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
     h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: [{ slug: 'sol', supported_in_api: true, visibility: 'list' }] }));
     await refreshSubscriptionPoolCodexModels(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
@@ -7545,8 +7554,7 @@ describe('shared subscription recovery through controller and account allocation
             const failed = expect(send.mock.results[0].value).rejects.toThrow('REMOTE_AGENT_OFFLINE');
             failOfflineOpen.resolve();
             // The controller retries the read-only capability handshake while offline.
-            await vi.advanceTimersByTimeAsync(8_000);
-            await failed;
+            await Promise.all([failed, vi.advanceTimersByTimeAsync(8_000)]);
             await vi.waitFor(() => expect(persistedError).toHaveBeenCalledExactlyOnceWith(task, expect.stringContaining('REMOTE_AGENT_OFFLINE')));
             expect(emitProjection).toHaveBeenCalledWith(expect.objectContaining({
               sessionId: task, error: expect.stringContaining('REMOTE_AGENT_OFFLINE'),

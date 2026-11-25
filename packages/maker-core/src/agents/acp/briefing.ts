@@ -16,6 +16,8 @@ export interface PluginEngineBriefingSkill {
   description?: string;
   /** The Skill's SKILL.md on the computer the agent runs on. */
   path?: string;
+  /** Found in the task's project (`repo`) or for every task (`user`); only the `/` menu reads it. */
+  scope?: 'user' | 'repo';
 }
 
 const SKILL_LIST_MAX_ITEMS = 120;

@@ -58,6 +58,7 @@ export type RsbWindowCommand =
       instanceId: string;
       resourceViewId?: string;
       resourceInput?: Record<string, unknown>;
+      resourceWorkingDir?: string;
       /** Main 从路由请求写入的来源；缺省为被动，仅用于保留选中与焦点语义。 */
       userInitiated?: boolean;
     }
