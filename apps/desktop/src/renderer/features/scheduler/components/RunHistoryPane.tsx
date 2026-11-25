@@ -33,7 +33,7 @@ import { clearSessionAttentionMany } from '@/lib/sessionAttentionStore';
 
 import { useRuns } from '../hooks/useRuns';
 import { useSessionReferences } from '../hooks/useSessionReferences';
-import { cronToConfig, formatIntervalDuration, summarizeConfig } from '../lib/cronCodexPreset';
+import { formatIntervalDuration, summarizeCron } from '../lib/cronCodexPreset';
 import { describeDestination, humanizeAgentKind } from '../lib/formatters';
 import { useProjectLabel } from '../hooks/useProjectLabel';
 import { groupRunsForHistory } from '../lib/runHistoryGrouping';
@@ -220,12 +220,11 @@ export function RunHistoryPane({
   const isPaused = s.status === 'paused';
   const isExpired = s.status === 'expired';
   const isProjectSchedule = s.source === 'project';
-  // 用 summarizeConfig 复用创建对话框那套语义化摘要（"Daily at 09:00" / "Hourly" / "Weekly on Mon, Wed at 14:30" ...），
-  // 跟 chip 文案 100% 对齐；不再用 cronToHuman 的 "At 09:00" 风格。
+  // 复用现有调度预设的语义化摘要。
   // manual schedule 不参与 cron，cron 字段是占位 → header 显示 "Manual trigger"。
   const timingText = s.manual
     ? t('scheduler.detail.manualTrigger')
-    : s.intervalMs ? formatIntervalDuration(s.intervalMs, appI18n.language) : summarizeConfig(cronToConfig(s.cronExpr), t);
+    : s.intervalMs ? formatIntervalDuration(s.intervalMs, appI18n.language) : summarizeCron(s.cronExpr, t);
   const rules = schedulePrTriggers(s);
   const prText = rules.map(rule => `${rule.url.replace('https://github.com/', '').replace('/pull/', '#').replace('/-/merge_requests/', '!')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
   const cronText = prText ? (s.manual ? prText : `${timingText} · ${prText}`) : s.webhookTrigger
