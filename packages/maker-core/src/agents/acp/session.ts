@@ -161,6 +161,12 @@ export interface OpenAcpSessionOptions {
   briefing?: string | ((acceptedMcpServers: readonly string[]) => string);
   /** Current companion settings for the first prompt after restoring the native conversation. */
   resumedCompanionBriefing?: string;
+  /**
+   * Collaboration role instructions (a Lead's or a Worker's), sent in the same block as `briefing` and under the same
+   * rules. They are the one part of that block a promotion replaces (`queuePluginEngineBriefing`) and a team ending
+   * takes back (`setVendorOptions`): what the host tells every conversation stays.
+   */
+  roleBriefing?: string;
   /** Lowercase Skill names discovered for this session, so host briefings defuse `/skill` mentions. */
   skillCommandNames?: readonly string[];
   /**
@@ -430,11 +436,12 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       acceptedMcpServers: accepted.map((server) => server.name),
       droppedMcpServers: dropped,
       // A new session, or a resume that explicitly forces it (one-shot Orca Lead promotion), gets the
-      // full briefing (it already carries the companion part). Any other resume only refreshes the
-      // companion settings.
+      // full briefing (it already carries the companion part) and the role instructions. Any other resume
+      // only refreshes the companion settings.
       briefing: outcome === 'new' || opts.forceBriefingOnResume === true
         ? typeof opts.briefing === 'function' ? opts.briefing(accepted.map((server) => server.name)) : opts.briefing ?? ''
         : opts.resumedCompanionBriefing ?? '',
+      roleBriefing: outcome === 'new' || opts.forceBriefingOnResume === true ? opts.roleBriefing ?? '' : '',
       options: opts,
     });
     router.attach(session, Array.isArray(result.configOptions));
@@ -465,6 +472,8 @@ interface AcpSessionInit {
    * new session (or a resume that forces it), the companion settings alone for any other resume.
    */
   briefing: string;
+  /** The role instructions sent with it: empty unless the briefing itself is sent. */
+  roleBriefing: string;
   options: OpenAcpSessionOptions;
 }
 
@@ -518,6 +527,8 @@ export class AcpSession {
   private readonly pendingPrompts: AcpContentBlock[][] = [];
   /** Sent once, ahead of the first prompt of a new session. */
   private pendingBriefing: string | null;
+  /** Sent in the same block: the collaboration role instructions, queued on promotion and taken back with the team. */
+  private pendingRoleBriefing: string | null;
   /** Slash-command names advertised by Skills or `available_commands_update`. */
   private readonly commandNames = new Set<string>();
   private pendingBriefingDelivered: (() => void) | undefined;
@@ -525,11 +536,12 @@ export class AcpSession {
   private announcedCommands: ReadonlySet<string> | null = null;
   /**
    * The briefing a queued prompt carries: Stop gives it back when it discards that prompt, and ending
-   * the team takes its block out of the prompt.
+   * the team takes the rules out of its block.
    */
   private readonly briefingCarriers = new WeakMap<AcpContentBlock[], {
-    briefing: string;
-    block: AcpContentBlock;
+    general: string | null;
+    role: string | null;
+    block: Extract<AcpContentBlock, { type: 'text' }>;
     onDelivered: (() => void) | undefined;
   }>();
   private sendChain: Promise<void> = Promise.resolve();
@@ -582,9 +594,9 @@ export class AcpSession {
     this.onSetVendorOptions = init.options.onSetVendorOptions;
     this.now = init.options.now ?? Date.now;
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
-    const briefing = init.briefing;
-    this.pendingBriefing = briefing.trim() ? briefing : null;
-    this.pendingBriefingDelivered = this.pendingBriefing ? init.options.onBriefingDelivered : undefined;
+    this.pendingBriefing = init.briefing.trim() ? init.briefing : null;
+    this.pendingRoleBriefing = init.roleBriefing.trim() ? init.roleBriefing : null;
+    this.pendingBriefingDelivered = this.pendingBriefing || this.pendingRoleBriefing ? init.options.onBriefingDelivered : undefined;
     for (const name of init.options.skillCommandNames ?? []) {
       const trimmed = name.trim().replace(/^\/+/, '').toLowerCase();
       if (trimmed) this.commandNames.add(trimmed);
@@ -685,7 +697,7 @@ export class AcpSession {
   queuePluginEngineBriefing(briefing: string, onDelivered?: () => void): void {
     if (this.ended || this.closing) return;
     if (briefing.trim()) {
-      this.pendingBriefing = briefing;
+      this.pendingRoleBriefing = briefing;
       this.pendingBriefingDelivered = onDelivered;
     }
   }
@@ -694,7 +706,7 @@ export class AcpSession {
     if (this.ended || this.closing) throw new Error('ACP session is closed');
     this.onSetVendorOptions?.(patch);
     if (patch.orcaRole === null) {
-      this.pendingBriefing = null;
+      this.pendingRoleBriefing = null;
       this.pendingBriefingDelivered = undefined;
       this.revokeQueuedBriefings();
     }
@@ -716,12 +728,19 @@ export class AcpSession {
       // A native command has to stay at the head of the prompt, so the briefing waits for the next one. Text shaped
       // like a command counts even when the agent never announced it (`isLeadingSlashCommand`), and so does a command
       // it announced, whatever characters its name has (`startsWithNativeCommand`).
-      if (this.pendingBriefing && !isLeadingSlashCommand(firstText) && !startsWithNativeCommand(prompt[0], this.announcedCommands)) {
+      const briefing = [this.pendingBriefing, this.pendingRoleBriefing].filter((part) => part !== null).join('\n\n');
+      if (briefing && !isLeadingSlashCommand(firstText) && !startsWithNativeCommand(prompt[0], this.announcedCommands)) {
         // The host's own text must not start a command of the agent either: its `/name` mentions are defused.
-        const block: AcpContentBlock = { type: 'text', text: defusePluginEngineSlashMentions(this.pendingBriefing, this.commandNames) };
+        const block = { type: 'text' as const, text: defusePluginEngineSlashMentions(briefing, this.commandNames) };
         prompt.unshift(block);
-        this.briefingCarriers.set(prompt, { briefing: this.pendingBriefing, block, onDelivered: this.pendingBriefingDelivered });
+        this.briefingCarriers.set(prompt, {
+          general: this.pendingBriefing,
+          role: this.pendingRoleBriefing,
+          block,
+          onDelivered: this.pendingBriefingDelivered,
+        });
         this.pendingBriefing = null;
+        this.pendingRoleBriefing = null;
         this.pendingBriefingDelivered = undefined;
       }
       this.pendingPrompts.push(prompt);
@@ -984,14 +1003,23 @@ export class AcpSession {
     );
   }
 
-  /** The team ended: its briefing goes out of the prompts still queued, so it is neither sent nor handed back. */
+  /**
+   * The team ended: its rules go out of the prompts still queued, so they are neither sent nor handed back. What the
+   * host told the conversation besides them stays in front of the prompt.
+   */
   private revokeQueuedBriefings(): void {
     for (const prompt of this.pendingPrompts) {
       const carrier = this.briefingCarriers.get(prompt);
-      if (!carrier) continue;
-      this.briefingCarriers.delete(prompt);
-      const at = prompt.indexOf(carrier.block);
-      if (at >= 0) prompt.splice(at, 1);
+      if (!carrier?.role) continue;
+      if (carrier.general === null) {
+        this.briefingCarriers.delete(prompt);
+        const at = prompt.indexOf(carrier.block);
+        if (at >= 0) prompt.splice(at, 1);
+        continue;
+      }
+      carrier.block.text = defusePluginEngineSlashMentions(carrier.general, this.commandNames);
+      carrier.role = null;
+      carrier.onDelivered = undefined;
     }
   }
 
@@ -1001,11 +1029,13 @@ export class AcpSession {
       const carrier = this.briefingCarriers.get(prompt);
       if (!carrier) continue;
       this.briefingCarriers.delete(prompt);
-      // A briefing queued after it (a newer promotion) already replaced it.
-      if (this.pendingBriefing === null) {
-        this.pendingBriefing = carrier.briefing;
-        this.pendingBriefingDelivered = carrier.onDelivered;
-      }
+      // Rules queued after it (a newer promotion) already replaced its own.
+      const restoresGeneral = carrier.general !== null && this.pendingBriefing === null;
+      const restoresRole = carrier.role !== null && this.pendingRoleBriefing === null;
+      if (restoresGeneral) this.pendingBriefing = carrier.general;
+      if (restoresRole) this.pendingRoleBriefing = carrier.role;
+      // The callback belongs to the rules the block carried, or to the host briefing when it carried none.
+      if (carrier.role !== null ? restoresRole : restoresGeneral) this.pendingBriefingDelivered = carrier.onDelivered;
     }
   }
 

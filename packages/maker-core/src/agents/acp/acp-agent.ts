@@ -305,12 +305,13 @@ export class AcpAgent extends BaseAgent {
         skills: await this.readSessionSkills(opts.workingDir, logger),
       };
     const skillCommandNames = capabilities ? collectPluginEngineSkillNames(capabilities.skills) : [];
-    // The workspace note comes first: without it the agent has no way to know where the project is.
+    // The workspace note comes first: without it the agent has no way to know where the project is. The
+    // collaboration role instructions follow it in the same block, but travel apart (`roleBriefing`): a promotion
+    // replaces them and a team ending takes them back, never the rest.
     const briefing = (acceptedMcpServers: readonly string[]): string => [
       hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',
       companionBriefing,
       capabilities ? renderPluginEngineCapabilityBriefing(capabilities, acceptedMcpServers) : '',
-      opts.pluginEngineBriefing ?? '',
     ].filter((part) => part.trim()).join('\n\n');
     // `/<skill>` from the composer: the Skill is read from the same list as the briefing, on every
     // message that asks for one (resumed conversations included). Same exclusions as the Skill list:
@@ -354,6 +355,7 @@ export class AcpAgent extends BaseAgent {
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
           briefing,
+          ...(opts.pluginEngineBriefing ? { roleBriefing: opts.pluginEngineBriefing } : {}),
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),
           ...(expandSlashInvocation ? { expandSlashInvocation } : {}),

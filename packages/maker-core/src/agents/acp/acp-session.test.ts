@@ -2110,6 +2110,29 @@ describe('AcpAgent (the acp engine)', () => {
       await session.close();
     });
 
+    // The host tells a new conversation what plugins and Skills exist; a Lead's rules come and go on top of that. Queuing
+    // the rules must not replace it, and ending the team takes back the rules only.
+    // Gap: the rules replaced the whole text still waiting, and ending the team dropped all of it, so a conversation whose
+    // first message was a native command never learned the plugins and Skills it can use.
+    // Minimal failing input: a new session whose first message is "/compact", then rules queued (and the team ended).
+    it.each([
+      { name: 'queued', ends: false, text: 'Plugins and Skills\n\nLead rules' },
+      { name: 'taken back when the team ends', ends: true, text: 'Plugins and Skills' },
+    ])('keeps the host briefing waiting when Lead rules are $name', async ({ ends, text }) => {
+      const fake = createFakeAgent();
+      const session = await openAcpSession({ transport: fake.transport, cwd: '/w', clientInfo, briefing: 'Plugins and Skills' });
+      await session.send({ type: 'user', content: '/compact' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      expect(fake.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/compact' }]);
+      fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      session.queuePluginEngineBriefing('Lead rules');
+      if (ends) await session.setVendorOptions({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+      await session.send({ type: 'user', content: 'hello' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([{ type: 'text', text }, { type: 'text', text: 'hello' }]);
+      await session.close();
+    });
+
     // Gap: ending the team only cleared the briefing still pending; one already put in front of a queued prompt was sent
     // with it, or handed back by Stop to the next ordinary message, and reported as delivered.
     // Minimal failing input: a prompt queued behind a running turn carries team A's briefing, then A ends.
