@@ -135,6 +135,7 @@ export type ApplySessionRuntimeSelection = (
  */
 export interface SessionRuntimeSelectionPorts {
   maker: Maker;
+  hasCodexHandoffPool?(providerId: string | null): boolean;
   agentSwitchPending: PendingAgentSwitchRegistry;
   broadcastSessionRuntimeProjection: (sessionId: string, baselineOverride?: SessionRuntimeProfile) => Promise<void>;
   assertReviewSettingsUnlocked: (sessionId: string, sendLockHeld?: boolean) => Promise<void>;
@@ -210,6 +211,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
   ): ReturnType<ApplySessionRuntimeSelection> => {
     const {
       maker: makerPort,
+      hasCodexHandoffPool,
       agentSwitchPending,
       broadcastSessionRuntimeProjection,
       assertReviewSettingsUnlocked,
@@ -844,7 +846,8 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       // destination first (that fork would have to authorize the old account, which is exactly
       // what the user is leaving). Ordinary resumes never reach this.
       const userSourceSwitch = internalOptions.source === 'user' && runtimeAgentKind === 'codex'
-        && targetRouteProviderId !== currentProviderId;
+        && targetRouteProviderId !== currentProviderId && !runtimeStatus.remoteHostId && !runtimeStatus.agentDeviceId
+        && hasCodexHandoffPool?.(targetRouteProviderId) === true;
       let currentRuntimeModel = liveSessionBeforeRouteChange?.model ??
         internalOptions.previousPiRoute?.model ?? persistedSessionMeta?.model;
       let runtimeRouteChanged =

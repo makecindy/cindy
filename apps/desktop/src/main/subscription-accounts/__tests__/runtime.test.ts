@@ -7149,9 +7149,9 @@ describe('unbound Codex history account recovery', () => {
     expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(true);
     expect(deps.rebuild).toHaveBeenCalledOnce();
     expect(row.sdkSessionId).toBeNull();
-    // 旧来源的账号绑定随来源一起作废, 新来源自己选号。
+    // 新任务路由重新选号，旧线程仍归原账号。
     expect(h.bindings.has('task:old-task')).toBe(false);
-    expect(h.bindings.has('native:legacy')).toBe(false);
+    expect(h.bindings.get('native:legacy')?.accountId).toBe('third');
     expect(deps.consumeSourceSwitch).toHaveBeenCalledOnce();
 
     const handle = await agent.startSession({ providerId: 'openai', sessionId: 'old-task',
@@ -7204,7 +7204,10 @@ describe('unbound Codex history account recovery', () => {
       if (condition === 'bound') h.bindings.set('task:old-task', { providerId: 'openai', accountId: 'second' });
       if (condition === 'ssh') row.remoteHostId = 'ssh-host';
       if (condition === 'remote-agent') row.agentDeviceId = 'other-computer';
-      if (condition === 'other-provider') row.providerId = 'custom';
+      if (condition === 'other-provider') {
+        row.providerId = 'custom';
+        deps.matchesSourceSwitch.mockReturnValue(true);
+      }
       if (condition === 'other-engine') row.agentKind = 'pi';
       const before = new Map(h.bindings);
       expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(false);

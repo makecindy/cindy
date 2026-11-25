@@ -28,6 +28,10 @@ interface PrepareAccountSendDeps {
   moveRoute?(id: string, providerId: string, assertCurrent: () => void, fromProviderId: string): Promise<void>;
 }
 
+export function hasCodexHandoffPool(providerId: string | null): boolean {
+  return resolveSubscriptionPoolProviderRef(providerId)?.kind === 'openai' && !!readPool('openai');
+}
+
 /** Called under the ordinary send lock, before lazy bootstrap or reuse of a live handle.
  * Disabling an account is an explicit routing decision. Quota exhaustion alone is not.
  * A task on a merged legacy connection hands off like any other (2026-11-13): pausing that
@@ -52,9 +56,8 @@ export async function prepareSubscriptionAccountForSend(
   // A user source switch ends this task's affinity with the source it left (recorded once at
   // selection, so an ordinary resume never reaches this). Hand the transcript over and drop the
   // old account binding; the source the user picked then chooses its own account.
-  if (row && row.providerId && row.agentKind === 'codex' && !row.remoteHostId && !row.agentDeviceId
-    && resolveSubscriptionPoolProviderRef(row.providerId)?.kind === 'openai'
-    && deps.matchesSourceSwitch?.(row.providerId)) {
+  if (row?.status !== 'deleted' && row?.providerId && row.agentKind === 'codex' && !row.remoteHostId && !row.agentDeviceId
+    && deps.matchesSourceSwitch?.(row.providerId) && hasCodexHandoffPool(row.providerId)) {
     if (deps.isRunning(sessionId)) return false;
     try {
       // Prove the destination can serve this model before retiring the old context. Reserve nothing.
@@ -72,10 +75,7 @@ export async function prepareSubscriptionAccountForSend(
         if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
       });
     }
-    await clearAccountBindings([
-      `task:${sessionId}`,
-      ...(row.sdkSessionId ? [`native:${row.sdkSessionId}`] : []),
-    ], 'openai');
+    await clearAccountBindings([`task:${sessionId}`], 'openai');
     deps.consumeSourceSwitch?.();
     return true;
   }

@@ -10,7 +10,7 @@ import {
   readSubscriptionTaskUsage,
 } from '../subscription-accounts/runtime.js';
 import { withRemoteAccountReads } from '../subscription-accounts/remotePreflight.js';
-import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
+import { hasCodexHandoffPool, prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
 import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot, schedulerFailureDetail, type SchedulerQueueBridge, type SchedulerQueuedPromptObserver, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
@@ -23287,6 +23287,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const handleSetModel = createHandleSetModel(() => ({
     maker,
+    hasCodexHandoffPool: providerId => hasCodexHandoffPool(providerId),
     agentSwitchPending,
     broadcastSessionRuntimeProjection,
     assertReviewSettingsUnlocked,
