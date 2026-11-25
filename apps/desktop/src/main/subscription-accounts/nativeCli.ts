@@ -252,12 +252,13 @@ async function readCodexTokenFile(directory: string, webUsage: boolean) {
     };
     if (!sameFile(before, after) || !canDispatch())
       throw new Error('Codex account authentication bridge is unavailable');
-    if (typeof raw.tokens?.access_token !== 'string' || !raw.tokens.access_token) {
-      if (webUsage && (raw.auth_mode === 'apikey' || typeof raw.OPENAI_API_KEY === 'string' && raw.OPENAI_API_KEY.length > 0)) {
-        return { accessToken: null, chatgptAccountId: null, canDispatch };
-      }
-      throw new Error('Codex account authentication bridge is unavailable');
+    const hasApiKey = typeof raw.OPENAI_API_KEY === 'string' && raw.OPENAI_API_KEY.trim().length > 0;
+    if (webUsage && (raw.auth_mode === 'apikey' || (raw.auth_mode == null && hasApiKey && !raw.tokens?.access_token))) {
+      if (!hasApiKey) throw new Error('Codex account authentication bridge is unavailable');
+      return { accessToken: null, chatgptAccountId: null, canDispatch };
     }
+    if (typeof raw.tokens?.access_token !== 'string' || !raw.tokens.access_token)
+      throw new Error('Codex account authentication bridge is unavailable');
     return {
       accessToken: raw.tokens.access_token as string,
       chatgptAccountId: webUsage ? codexWorkspaceIdFromTokens(raw.tokens)

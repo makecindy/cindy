@@ -357,8 +357,10 @@ describe('official Codex profiles', () => {
       const apiKey = await readCodexWebTokens(dir);
       expect(apiKey.accessToken).toBeNull();
       expect(apiKey.canDispatch()).toBe(true);
-      await writeFile(authPath, JSON.stringify({ auth_mode: 'chatgpt', tokens: {} }));
+      await writeFile(authPath, JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: 'fixture-old-key', tokens: {} }));
       expect(apiKey.canDispatch()).toBe(false);
+      await expect(readCodexWebTokens(dir)).rejects.toThrow('authentication bridge');
+      await writeFile(authPath, JSON.stringify({ auth_mode: 'apikey' }));
       await expect(readCodexWebTokens(dir)).rejects.toThrow('authentication bridge');
       await rm(authPath);
       expect(second.canDispatch()).toBe(false);
