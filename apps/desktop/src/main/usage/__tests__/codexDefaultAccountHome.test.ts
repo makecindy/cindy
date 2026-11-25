@@ -44,7 +44,8 @@ vi.mock('../../subscription-accounts/nativeCli.js', () => ({
 }));
 
 import { createCodexRateLimitResetService } from '../codexRateLimitReset.js';
-import { detachedDefaultCodexHome, withDetachedDefaultCodexHome } from '../codexDefaultAccountHome.js';
+import { createCodexAccountUsageSnapshotReader } from '../codexAccountUsageRefresh.js';
+import { detachedDefaultCodexHome, readCodexWebUsageCredentials, withDetachedDefaultCodexHome } from '../codexDefaultAccountHome.js';
 
 const DEFAULT_LIMITS = {
   rateLimits: { planType: 'pro', primary: { usedPercent: 42, windowDurationMins: 10_080 } },
@@ -86,6 +87,36 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('built-in Codex quota target of the account pool default account', () => {
+  it('refreshes the authorized default without a null reset notification, including after reconnect', async () => {
+    // #12700: the private adapter remains disconnected while the pool owns the system login.
+    const adapter = { getAccessToken: vi.fn().mockResolvedValue(null), getAccountId: vi.fn() };
+    const snapshot = { accountId: 'workspace-default', source: 'openai-web' };
+    const clearSnapshot = vi.fn();
+    const fetchWebUsageSnapshot = vi.fn().mockResolvedValue(snapshot);
+    const reader = createCodexAccountUsageSnapshotReader({
+      readCredentials: () => readCodexWebUsageCredentials(undefined, adapter),
+      fetchWebUsageSnapshot, readCachedSnapshot: async () => snapshot,
+      clearSnapshot, recordSnapshot: vi.fn(), now: Date.now, onRefreshError: vi.fn(),
+    });
+    await expect(reader({ fresh: true })).resolves.toEqual(snapshot);
+    expect(clearSnapshot).not.toHaveBeenCalled();
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledWith({ accessToken: 'fake-token', accountId: 'workspace-default' });
+    h.pool!.disconnected = true;
+    adapter.getAccessToken.mockResolvedValue('obsolete-private-login');
+    await expect(reader()).resolves.toBeNull();
+    expect(clearSnapshot).toHaveBeenCalledOnce();
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(1);
+
+    h.pool!.disconnected = false;
+    await expect(reader({ fresh: true })).resolves.toEqual(snapshot);
+    expect(clearSnapshot).toHaveBeenCalledOnce();
+    adapter.getAccountId.mockResolvedValue('other-workspace');
+    await expect(readCodexWebUsageCredentials('another-provider', adapter)).resolves.toEqual({
+      accessToken: 'obsolete-private-login', accountId: 'other-workspace',
+    });
+    expect(adapter.getAccessToken).toHaveBeenLastCalledWith('another-provider');
+  });
+
   it('reads and redeems on the default account home when the built-in connection has no login', async () => {
     const builtIn = native();
     const service = createCodexRateLimitResetService(withDetachedDefaultCodexHome(builtIn, () => {}));

@@ -1,8 +1,7 @@
 import type { RateLimitSnapshot } from '../usageBroadcaster.js';
 
 interface CodexWebUsageRefreshDeps {
-  readAccessToken(): Promise<string | null>;
-  readAccountId(): Promise<string | null>;
+  readCredentials(): Promise<{ accessToken: string; accountId: string | null } | null>;
   fetchWebUsageSnapshot(args: {
     accessToken: string;
     accountId: string | null;
@@ -59,10 +58,8 @@ export function createCodexAccountUsageSnapshotReader(
 
   async function isRefreshStillCurrent(accessToken: string, accountId: string | null): Promise<boolean> {
     try {
-      const currentAccessToken = await deps.readAccessToken();
-      if (currentAccessToken !== accessToken) return false;
-      const currentAccountId = await deps.readAccountId();
-      return currentAccountId === accountId;
+      const current = await deps.readCredentials();
+      return current?.accessToken === accessToken && current.accountId === accountId;
     } catch (err) {
       deps.onRefreshError(err);
       return false;
@@ -116,32 +113,26 @@ export function createCodexAccountUsageSnapshotReader(
   }
 
   return async (readOptions) => {
-    let accessToken: string | null;
+    // Resolve credentials after the cache read so a disconnect during I/O takes effect before dispatch.
+    const cachedSnapshot = await deps.readCachedSnapshot();
+    let credentials;
     try {
-      accessToken = await deps.readAccessToken();
+      credentials = await deps.readCredentials();
     } catch (err) {
       deps.onRefreshError(err);
-      return await deps.readCachedSnapshot();
+      return null;
     }
-    if (!accessToken) {
+    if (!credentials) {
       await clearCachedSnapshot();
       return null;
     }
-
-    let accountId: string | null = null;
-    try {
-      accountId = await deps.readAccountId();
-    } catch (err) {
-      deps.onRefreshError(err);
-    }
-
-    const cachedSnapshot = await deps.readCachedSnapshot();
+    const { accessToken, accountId } = credentials;
     const cachedAccountId = cachedSnapshot?.accountId ?? null;
     if (cachedSnapshot && (cachedAccountId !== accountId
       || (accountId === null && lastUnknownAccountSnapshotAccessToken !== accessToken))) {
       await clearCachedSnapshot();
       if (!readOptions?.fresh) {
-        void triggerRefresh(accessToken, accountId);
+        if (await isRefreshStillCurrent(accessToken, accountId)) void triggerRefresh(accessToken, accountId);
         return null;
       }
     }

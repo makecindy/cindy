@@ -24,7 +24,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const fresh = { ...cached, secondary: { usedPercent: 0 } };
     const fetchWebUsageSnapshot = vi.fn().mockReturnValueOnce(oldRequest.promise).mockResolvedValue(fresh);
     const reader = createCodexAccountUsageSnapshotReader({
-      readAccessToken: async () => 'token', readAccountId: async () => 'account-id',
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
       fetchWebUsageSnapshot, recordSnapshot: async value => { cached = value as typeof cached; },
       clearSnapshot: async () => {}, readCachedSnapshot: async () => cached,
       now: () => 10_000, onRefreshError: vi.fn(),
@@ -42,8 +42,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const fetchDeferred = deferred<RateLimitSnapshot | null>();
     const recordSnapshot = vi.fn().mockResolvedValue(undefined);
     const reader = createCodexAccountUsageSnapshotReader({
-      readAccessToken: vi.fn().mockResolvedValue('token'),
-      readAccountId: vi.fn().mockResolvedValue('account-id'),
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
       fetchWebUsageSnapshot: vi.fn().mockReturnValue(fetchDeferred.promise),
       recordSnapshot,
       clearSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -67,8 +66,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const fetchWebUsageSnapshot = vi.fn().mockReturnValueOnce(fetchDeferred.promise);
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken: vi.fn().mockResolvedValue('token'),
-        readAccountId: vi.fn().mockResolvedValue('account-id'),
+        readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
         fetchWebUsageSnapshot,
         recordSnapshot: vi.fn().mockResolvedValue(undefined),
         clearSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -100,8 +98,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const onRefreshError = vi.fn();
     const cached = makeSnapshot('cached');
     const reader = createCodexAccountUsageSnapshotReader({
-      readAccessToken: vi.fn().mockResolvedValue('token'),
-      readAccountId: vi.fn().mockResolvedValue('account-id'),
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
       fetchWebUsageSnapshot: vi.fn().mockRejectedValue(new Error('offline')),
       recordSnapshot: vi.fn().mockResolvedValue(undefined),
       clearSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -119,13 +116,12 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const fetchWebUsageSnapshot = vi.fn().mockResolvedValue(makeSnapshot('openai-web'));
     const recordSnapshot = vi.fn().mockResolvedValue(undefined);
     const clearSnapshot = vi.fn().mockResolvedValue(undefined);
-    const readAccessToken = vi.fn()
+    const readCredentials = vi.fn()
       .mockResolvedValueOnce(null)
-      .mockResolvedValue('token');
+      .mockResolvedValue({ accessToken: 'token', accountId: 'account-id' });
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken,
-        readAccountId: vi.fn().mockResolvedValue('account-id'),
+        readCredentials,
         fetchWebUsageSnapshot,
         recordSnapshot,
         clearSnapshot,
@@ -137,7 +133,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     );
 
     await reader();
-    await vi.waitFor(() => expect(readAccessToken).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(readCredentials).toHaveBeenCalledTimes(1));
     expect(clearSnapshot).toHaveBeenCalledTimes(1);
     expect(fetchWebUsageSnapshot).not.toHaveBeenCalled();
 
@@ -151,14 +147,13 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     let now = 10_000;
     const fetchWebUsageSnapshot = vi.fn().mockResolvedValue(makeSnapshot('openai-web'));
     const recordSnapshot = vi.fn().mockResolvedValue(undefined);
-    const readAccessToken = vi.fn()
+    const readCredentials = vi.fn()
       .mockRejectedValueOnce(new Error('keychain unavailable'))
-      .mockResolvedValue('token');
+      .mockResolvedValue({ accessToken: 'token', accountId: 'account-id' });
     const onRefreshError = vi.fn();
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken,
-        readAccountId: vi.fn().mockResolvedValue('account-id'),
+        readCredentials,
         fetchWebUsageSnapshot,
         recordSnapshot,
         clearSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -186,8 +181,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const clearSnapshot = vi.fn(async () => { cached = null; });
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken: vi.fn().mockResolvedValue('token'),
-        readAccountId: vi.fn().mockResolvedValue('new-account'),
+        readCredentials: async () => ({ accessToken: 'token', accountId: 'new-account' }),
         fetchWebUsageSnapshot,
         recordSnapshot: vi.fn(async (value: RateLimitSnapshot) => { cached = value; }),
         clearSnapshot,
@@ -208,8 +202,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const clearSnapshot = vi.fn().mockResolvedValue(undefined);
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken: vi.fn().mockResolvedValue('token'),
-        readAccountId: vi.fn().mockResolvedValue(null),
+        readCredentials: async () => ({ accessToken: 'token', accountId: null }),
         fetchWebUsageSnapshot,
         recordSnapshot: vi.fn().mockResolvedValue(undefined),
         clearSnapshot,
@@ -240,8 +233,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     });
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken: vi.fn().mockResolvedValue('token-b'),
-        readAccountId: vi.fn().mockResolvedValue(null),
+        readCredentials: async () => ({ accessToken: 'token-b', accountId: null }),
         fetchWebUsageSnapshot,
         recordSnapshot,
         clearSnapshot,
@@ -276,8 +268,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     });
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken: vi.fn().mockImplementation(async () => accessToken),
-        readAccountId: vi.fn().mockImplementation(async () => accountId),
+        readCredentials: async () => ({ accessToken, accountId }),
         fetchWebUsageSnapshot,
         recordSnapshot,
         clearSnapshot,
@@ -320,8 +311,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const clearSnapshot = vi.fn().mockResolvedValue(undefined);
     const onRefreshError = vi.fn();
     const reader = createCodexAccountUsageSnapshotReader({
-      readAccessToken: vi.fn().mockResolvedValue('token'),
-      readAccountId: vi.fn().mockResolvedValue('account-id'),
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
       fetchWebUsageSnapshot: vi.fn().mockRejectedValue(unauthorized),
       recordSnapshot: vi.fn().mockResolvedValue(undefined),
       clearSnapshot,

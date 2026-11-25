@@ -59,6 +59,32 @@ export async function detachedDefaultCodexHome(): Promise<string | null> {
     && defaultAccountAvailable() && accountDirectory('openai', 'default') === home ? home : null;
 }
 
+/** Credentials for the account whose web usage is being refreshed. */
+export async function readCodexWebUsageCredentials(
+  providerId: string | undefined,
+  adapter: {
+    getAccessToken(providerId?: string): Promise<string | null>;
+    getAccountId(providerId?: string): Promise<string | null>;
+  },
+) {
+  if (!providerId || providerId === 'openai') {
+    const home = await detachedDefaultCodexHome();
+    if (home) {
+      // Read the token and workspace from one file generation. Neither leaves main.
+      const tokens = await readNativeCodexTokens(home).catch(() => {
+        throw new Error('Default Codex usage credentials are unavailable');
+      });
+      if (await detachedDefaultCodexHome() !== home || !tokens.canDispatch()) {
+        throw new Error('Default Codex account changed');
+      }
+      return { accessToken: tokens.accessToken, accountId: tokens.chatgptAccountId };
+    }
+    if (readPool('openai')?.disconnected) return null;
+  }
+  const accessToken = await adapter.getAccessToken(providerId);
+  return accessToken ? { accessToken, accountId: await adapter.getAccountId(providerId) } : null;
+}
+
 /** Identity of that home, with the credential guard used before a redemption. */
 export async function readDefaultCodexHomeIdentity(
   home: string,
