@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { constants, zstdCompressSync } from 'node:zlib';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { readZstdFrames } from '../zstdFrames';
 import { readLines } from '../lineReader';
 import { deepseekAdapter } from '../sources/deepseek';
@@ -35,6 +35,14 @@ it('reads every frame and rejects corrupt or truncated input', async () => {
     // A skippable frame claiming >1 GiB must fail without allocating its payload.
     await writeFile(file, Buffer.from([0x50, 0x2a, 0x4d, 0x18, 0x01, 0x00, 0x00, 0x40]));
     await expect(read()).rejects.toThrow('Invalid Zstandard skippable frame');
+    // Bit 4 of the frame descriptor is Unused_bit: decoders must ignore it, so
+    // history carrying it still has to import. Bit 3 is Reserved_bit.
+    const unusedBit = Buffer.from(bytes); unusedBit[4]! |= 0x10;
+    await writeFile(file, unusedBit);
+    expect(await read()).toBe('first\nsecond\n');
+    const reservedBit = Buffer.from(bytes); reservedBit[4]! |= 0x08;
+    await writeFile(file, reservedBit);
+    await expect(read()).rejects.toThrow('Invalid Zstandard frame descriptor');
     // Reserved block type is invalid even when it is marked as the last block.
     await writeFile(file, Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x00, 0x07, 0x00, 0x00]));
     await expect(read()).rejects.toThrow('Invalid Zstandard block');
@@ -46,6 +54,9 @@ it('scans and reads messages across appended DeepSeek frames', async () => {
   const dir = path.join(home, '.dsh/sessions/project/example');
   const frame = (x: object) => zstdCompressSync(Buffer.from(JSON.stringify(x) + '\n'));
   try {
+    // DSH_HOME takes priority over homeDir, so an inherited value would point the
+    // scan at another directory (possibly the developer's real history).
+    vi.stubEnv('DSH_HOME', path.join(home, '.dsh'));
     await mkdir(dir, { recursive: true });
     await writeFile(path.join(dir, 'session.v4.jsonl.zstd'), Buffer.concat([
       frame({ type: 'session', id: 'test', version: 4 }),
@@ -58,7 +69,10 @@ it('scans and reads messages across appended DeepSeek frames', async () => {
     const messages = [];
     for await (const message of deepseekAdapter.read(listed.sessions[0]!, { cindySessionId: 'test' })) messages.push(message.content);
     expect(messages).toEqual(['question', 'answer']);
-  } finally { await rm(home, { recursive: true, force: true }); }
+  } finally {
+    vi.unstubAllEnvs();
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 // Regression: a small frame with many empty blocks must not stall session discovery.

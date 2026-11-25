@@ -45,7 +45,9 @@ export async function* readZstdFrames(file: string, onBytes?: (bytes: number) =>
       }
       if (magic !== 0xfd2fb528) throw new Error('Invalid Zstandard frame magic');
       const descriptor = (await read(1))[0]!;
-      if (descriptor & 0x18) throw new Error('Invalid Zstandard frame descriptor');
+      // Bit 3 is Reserved_bit and must be rejected; bit 4 is Unused_bit, which
+      // decoders must ignore, so history written with it still decodes elsewhere.
+      if (descriptor & 0x08) throw new Error('Invalid Zstandard frame descriptor');
       const single = (descriptor & 0x20) !== 0;
       if (!single) await read(1); // window descriptor, validated by the native decoder
       const dictionaryFlag = descriptor & 3;
