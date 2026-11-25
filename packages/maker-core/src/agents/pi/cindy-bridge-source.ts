@@ -3314,11 +3314,19 @@ const SCHEMA_COMBINATORS = ['allOf', 'anyOf', 'oneOf'];
 const SCHEMA_CONDITIONAL_KEYWORDS = ['if', 'then', 'else'];
 /** 依赖分支: dependentSchemas(2020-12)与 schema 形态的 dependencies(draft-07)里声明的字段同样算数。 */
 const SCHEMA_DEPENDENCY_KEYWORDS = ['dependentSchemas', 'dependencies'];
+/** 按属性点名「有它就必须带上这些字段」的写法: dependentRequired(2019-09)与数组形态的 dependencies(draft-07)。 */
+const SCHEMA_DEPENDENT_NAME_KEYWORDS = ['dependentRequired', 'dependencies'];
 /** 放开额外字段的两种写法: additionalProperties(draft-07)与 unevaluatedProperties(2019-09 起)。 */
 const SCHEMA_DYNAMIC_KEYWORDS = ['additionalProperties', 'unevaluatedProperties'];
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 把 required / dependentRequired 这类「字段名数组」里的字符串并进声明名; 不是数组就什么都不做。 */
+function collectDeclaredNames(names: unknown, into: Set<string>): void {
+  if (!Array.isArray(names)) return;
+  for (const name of names) if (typeof name === 'string') into.add(name);
 }
 
 /**
@@ -3358,11 +3366,11 @@ function resolveLocalSchemaRef(root: Record<string, unknown>, ref: string): Reco
  * 指针)同样算不完整。
  */
 interface SchemaParameterSurface {
-  /** 走到的节点声明过的参数名(properties 的键, 以及 required 列出的字段)。 */
+  /** 走到的节点声明过的参数名(properties 的键, 以及 required / dependentRequired / 数组形态 dependencies 点名的字段)。 */
   names: Set<string>;
   /** 有没有节点声明过属性名(properties 里至少有一个键)。 */
   declaresProperties: boolean;
-  /** 沿合取边($ref / allOf)合起来看, 有一组节点凑齐了「{name, args} 信封形状」的三个信号。 */
+  /** 是 {name, args} 信封形状: name 在每条路径上都必填, 且有一条路径凑齐三个信号(见 settleEnvelope)。 */
   envelope: boolean;
   /** 有节点明确放开了额外字段(additionalProperties / unevaluatedProperties 为 true 或一个 schema)。 */
   additionalAllowed: boolean;
@@ -3384,13 +3392,30 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
   };
   const seenPatterns = new Set<string>();
   const visited = new Set<Record<string, unknown>>();
+  // 走过的节点的「合取信号」: 它自己的声明 + 沿合取边连起来的节点的声明。环、被多处引用的定义第二次
+  // 走到时不再往下走, 把这一份交给现在这个组。
+  const closure = new Map<Record<string, unknown>, number>();
   let remainingNodes = SCHEMA_WALK_MAX_NODES;
-  const walk = (node: unknown, depth: number, evidence: EnvelopeEvidence): void => {
-    if (!isPlainRecord(node) || visited.has(node)) return;
+  const rootGroup: EnvelopeGroup = { own: 0, base: null, alternatives: [] };
+  // groups[0] 是根组; 之后按创建顺序追加分支组。
+  const groups: EnvelopeGroup[] = [rootGroup];
+  const branchGroup = (base: EnvelopeGroup): EnvelopeGroup => {
+    const group: EnvelopeGroup = { own: 0, base, alternatives: [] };
+    groups.push(group);
+    return group;
+  };
+  // 返回这个节点沿合取边连起来的信号; 分支(anyOf / oneOf / 条件 / 依赖)的信号记在各自的分支组里。
+  const walk = (node: unknown, depth: number, group: EnvelopeGroup): number => {
+    if (!isPlainRecord(node)) return 0;
+    if (visited.has(node)) {
+      const known = closure.get(node) ?? 0;
+      group.own |= known;
+      return known;
+    }
     if (depth > SCHEMA_WALK_MAX_DEPTH || remainingNodes <= 0) {
       // 预算用尽: 剩下的声明我们看不到, 这份表态不完整。
       surface.truncated = true;
-      return;
+      return 0;
     }
     visited.add(node);
     remainingNodes--;
@@ -3398,14 +3423,14 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
     if (propertyNames.length > 0) surface.declaresProperties = true;
     for (const name of propertyNames) surface.names.add(name);
     // required 可以列出 properties 里没有的字段(合法写法): 服务端既然校验它必填, 它就是认的参数。
-    const required = node.required;
-    if (Array.isArray(required)) {
-      for (const name of required) if (typeof name === 'string') surface.names.add(name);
+    // 「有 tag 就必须带 file_id」(dependentRequired, draft-07 的数组形态 dependencies)同理。
+    collectDeclaredNames(node.required, surface.names);
+    for (const keyword of SCHEMA_DEPENDENT_NAME_KEYWORDS) {
+      const dependents = node[keyword];
+      if (!isPlainRecord(dependents)) continue;
+      for (const names of Object.values(dependents)) collectDeclaredNames(names, surface.names);
     }
-    if (!surface.envelope) {
-      collectEnvelopeEvidence(schema, node, evidence);
-      if (evidence.nameIsString && evidence.argsIsObject && evidence.nameRequired) surface.envelope = true;
-    }
+    let signals = declaredEnvelopeSignals(schema, node);
     for (const keyword of SCHEMA_DYNAMIC_KEYWORDS) {
       const dynamic = node[keyword];
       if (dynamic === true || (typeof dynamic === 'object' && dynamic !== null)) {
@@ -3429,27 +3454,42 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
     if (typeof node.$ref === 'string') {
       const resolved = resolveLocalSchemaRef(schema, node.$ref);
       // 解析不了的引用(远程引用、指向不存在节点的指针)那边的声明我们看不到。
-      if (resolved) walk(resolved, depth + 1, evidence);
+      if (resolved) signals |= walk(resolved, depth + 1, group);
       else surface.truncated = true;
     }
-    // 信封证据只沿 allOf / $ref 往上合: 这些声明对每次调用同时生效。anyOf / oneOf 的分支只生效
-    // 一个, 各自从零起算 —— 拼起来会把「二选一」的普通工具认成信封(Codex P1 on #10908)。
     for (const keyword of SCHEMA_COMBINATORS) {
       const branches = node[keyword];
-      if (!Array.isArray(branches)) continue;
+      if (!Array.isArray(branches) || branches.length === 0) continue;
+      // allOf 的分支对每次调用同时生效, 留在出发点的组里; 只有一个分支的 anyOf / oneOf 就是那个
+      // 分支本身, 同样按合取边走。
+      if (keyword === 'allOf' || branches.length === 1) {
+        for (const branch of branches) {
+          // 预算用尽后不再逐个走剩下的分支: 否则多大的分支数组都要每个进一次 walk, 组合声明面的
+          // 工作量随分支总数增长(Codex P2 on #10908)。没走的分支里的声明一律按没看到处理。
+          if (remainingNodes <= 0) {
+            surface.truncated = true;
+            break;
+          }
+          signals |= walk(branch, depth + 1, group);
+        }
+        continue;
+      }
+      // 多分支的 anyOf / oneOf: 每个分支只在一个条件下生效, 各自另起一组、接在出发点那一组后面。
+      const alternatives: EnvelopeGroup[] = [];
+      group.alternatives.push(alternatives);
       for (const branch of branches) {
-        // 预算用尽后不再逐个走剩下的分支: 否则多大的分支数组都要每个进一次 walk, 组合声明面的
-        // 工作量随分支总数增长(Codex P2 on #10908)。没走的分支里的声明一律按没看到处理。
         if (remainingNodes <= 0) {
           surface.truncated = true;
           break;
         }
-        walk(branch, depth + 1, keyword === 'allOf' ? evidence : freshEnvelopeEvidence());
+        const nested = branchGroup(group);
+        alternatives.push(nested);
+        walk(branch, depth + 1, nested);
       }
     }
     for (const keyword of SCHEMA_CONDITIONAL_KEYWORDS) {
       if (node[keyword] === undefined) continue;
-      walk(node[keyword], depth + 1, freshEnvelopeEvidence());
+      walk(node[keyword], depth + 1, branchGroup(group));
     }
     for (const keyword of SCHEMA_DEPENDENCY_KEYWORDS) {
       const dependencies = node[keyword];
@@ -3459,26 +3499,38 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
           surface.truncated = true;
           break;
         }
-        walk(dependency, depth + 1, freshEnvelopeEvidence());
+        // 数组形态的属性依赖不是子 schema: 它点名的字段已经在上面收进声明名了。
+        if (!isPlainRecord(dependency)) continue;
+        walk(dependency, depth + 1, branchGroup(group));
       }
     }
+    closure.set(node, signals);
+    group.own |= signals;
+    return signals;
   };
-  walk(schema, 0, freshEnvelopeEvidence());
+  walk(schema, 0, rootGroup);
+  surface.envelope = settleEnvelope(groups);
   return surface;
 }
 
-/** {name, args} 信封形状的三个信号; 按组合声明的合取关系分开累计(见 collectEnvelopeEvidence)。 */
-interface EnvelopeEvidence {
-  /** 声明过 string 类型的 name 属性。 */
-  nameIsString: boolean;
-  /** 声明过 object 类型的 args 属性。 */
-  argsIsObject: boolean;
-  /** required 含 name。 */
-  nameRequired: boolean;
-}
+/** 信封三个信号的位标记; 也当集合用(并、比)。 */
+const ENVELOPE_NAME_IS_STRING = 1;
+const ENVELOPE_ARGS_IS_OBJECT = 2;
+const ENVELOPE_NAME_REQUIRED = 4;
+const ENVELOPE_TYPES = ENVELOPE_NAME_IS_STRING | ENVELOPE_ARGS_IS_OBJECT;
 
-function freshEnvelopeEvidence(): EnvelopeEvidence {
-  return { nameIsString: false, argsIsObject: false, nameRequired: false };
+/**
+ * 信封证据的一组。沿合取边($ref、allOf、只有一个分支的 anyOf / oneOf)连起来的节点同属一组:
+ * 这些声明对落在这组里的每次调用同时成立, 信号直接并在一起。只在一个条件下生效的分支
+ * (多分支 anyOf / oneOf、if / then / else、依赖分支)各自另起一组, 接在出发点那一组后面。
+ */
+interface EnvelopeGroup {
+  /** 本组节点自己声明的信号(沿合取边并起来)。 */
+  own: number;
+  /** 这一组是从哪一组分出去的; 根组没有。 */
+  base: EnvelopeGroup | null;
+  /** 本组节点上遇到的每个多分支 anyOf / oneOf 的各分支组。 */
+  alternatives: EnvelopeGroup[][];
 }
 
 /** 判属性类型时最多看多少个节点: 组合声明可能有环, 也可能很宽。 */
@@ -3515,47 +3567,75 @@ function propertyAdmitsType(root: Record<string, unknown>, property: unknown, ex
 }
 
 /**
- * 把这个节点声明的信封信号并进 evidence。
+ * 这个节点自己声明的信封信号。
  *
  * 判据必须用**形状指纹**而不是名字或单个字段：Pi 也接入用户自接的第三方 MCP，它们可能
  * 同样叫 call_tool（但信封是 {tool_name, arguments}），也可能有个叫 name 的必填字符串
- * 参数却是文件名。所以要求三个信号同时成立 —— properties.name 是 string、properties.args
- * 是 object、且 required 含 name。少一个都不认。
+ * 参数却是文件名。所以三个信号缺一不可 —— properties.name 是 string、properties.args
+ * 是 object、required 含 name。
  *
- * 三个信号可以分散在对每次调用同时生效的几个节点里(allOf 的两个分支各声明一个字段、根层
- * $ref 指向的定义只写了 required), 所以沿合取关系累加, 而不是要求单个节点自己凑齐
- * (Codex P1 on #10908)。「恰好这两个字段、不放开动态字段」那一半按整份表态判, 见
- * isNameEnvelopeSchema。
+ * 三个信号可以分散在几个节点里(allOf 的两个分支各声明一个字段、根层 $ref 指向的定义只写了
+ * required), 所以先按组并起来, 遍历结束后再结算(见 settleEnvelope), 而不是要求单个节点
+ * 自己凑齐(Codex P1 on #10908)。
+ */
+function declaredEnvelopeSignals(root: Record<string, unknown>, node: Record<string, unknown>): number {
+  const properties = isPlainRecord(node.properties) ? node.properties : null;
+  let signals = 0;
+  if (properties) {
+    if (propertyAdmitsType(root, properties.name, 'string')) signals |= ENVELOPE_NAME_IS_STRING;
+    if (propertyAdmitsType(root, properties.args, 'object')) signals |= ENVELOPE_ARGS_IS_OBJECT;
+  }
+  const required = node.required;
+  if (Array.isArray(required) && required.includes('name')) signals |= ENVELOPE_NAME_REQUIRED;
+  return signals;
+}
+
+/**
+ * 遍历结束后结算信封证据: groups[0] 是根组。两个条件同时成立才算信封。
+ *
+ * 1. **name 在每条路径上都必填**: 根组自己的 required, 或每个分支都必填的 anyOf / oneOf。
+ *    分支里的 required 是有条件的 —— 「两个分支里只有一个要求 name」的普通工具, name 可省;
+ *    按信封检查去拦没给 name 的调用, 就是永久拒绝。
+ * 2. **有一条路径凑齐三个信号**: 一组的信号 = 本组的 + 出发点那一组的(沿 base 一路并上去)。
+ *    根层声明并要求必填的 name, 与某个 anyOf 分支里声明的 args, 对走了那个分支的调用同时
+ *    成立(Codex P1 on #10908)。分支之间各算各的: 一个分支声明 name、另一个声明 args, 拼不成信封。
+ *
+ * 结算放在遍历之后而不是边走边判: 合取边上的声明可能在分支之后才走到 —— name 写在 allOf 的
+ * 后一个分支里, args 写在前一个分支的 anyOf 里。
  *
  * 归一化(平铺信封重建)与执行前的信封检查必须用同一判据，否则两处对「这是不是信封」
  * 的理解会分叉：重建出来的形状与检查时的形状对不上。
  */
-function collectEnvelopeEvidence(
-  root: Record<string, unknown>,
-  node: Record<string, unknown>,
-  evidence: EnvelopeEvidence,
-): void {
-  const properties = isPlainRecord(node.properties) ? node.properties : null;
-  if (properties) {
-    if (!evidence.nameIsString && propertyAdmitsType(root, properties.name, 'string')) {
-      evidence.nameIsString = true;
-    }
-    if (!evidence.argsIsObject && propertyAdmitsType(root, properties.args, 'object')) {
-      evidence.argsIsObject = true;
+function settleEnvelope(groups: EnvelopeGroup[]): boolean {
+  // 分支组排在出发点那一组之后: 倒着走, 内层并选先于外层并进各自的组。
+  for (let index = groups.length - 1; index >= 0; index--) {
+    const group = groups[index];
+    for (const alternatives of group.alternatives) {
+      if (alternatives.length > 0 && alternatives.every(branch => (branch.own & ENVELOPE_NAME_REQUIRED) !== 0)) {
+        group.own |= ENVELOPE_NAME_REQUIRED;
+      }
     }
   }
-  const required = node.required;
-  if (Array.isArray(required) && required.includes('name')) evidence.nameRequired = true;
+  const root = groups[0];
+  if (!root || (root.own & ENVELOPE_NAME_REQUIRED) === 0) return false;
+  return groups.some(group => {
+    let types = 0;
+    for (let at: EnvelopeGroup | null = group; at !== null && types !== ENVELOPE_TYPES; at = at.base) {
+      types |= at.own & ENVELOPE_TYPES;
+    }
+    return types === ENVELOPE_TYPES;
+  });
 }
 
 /**
  * 这个工具的 schema 是不是 Cindy 通用 call_tool 的 {name, args} 信封形状。
  *
- * 凑齐三个信号(见 collectEnvelopeEvidence)之外, 还要求**恰好声明这两个字段**、且不放开动态
- * 字段: 多一个兄弟字段、或放开 additionalProperties / patternProperties 的工具(name/args 是它
- * 自己的参数, 不是信封)不能被当成信封 —— 否则平铺调用会把兄弟字段挪进 args 里, 在服务端校验
- * 之前就改错了层级(Codex P1 on #10908)。真实的注册表入口(call_tool)声明的就是 name + args
- * 两个字段。兄弟字段与动态字段可以藏在组合声明里, 所以按整份表态判, 不能只看根层。
+ * 信封形状(name 在每条路径上都必填, 且有一条路径凑齐三个信号, 见 settleEnvelope)之外, 还要求
+ * **恰好声明这两个字段**、且不放开动态字段: 多一个兄弟字段、或放开 additionalProperties /
+ * patternProperties 的工具(name/args 是它自己的参数, 不是信封)不能被当成信封 —— 否则平铺
+ * 调用会把兄弟字段挪进 args 里, 在服务端校验之前就改错了层级(Codex P1 on #10908)。真实的
+ * 注册表入口(call_tool)声明的就是 name + args 两个字段。兄弟字段与动态字段可以藏在组合声明里,
+ * 所以按整份表态判, 不能只看根层。
  */
 function isNameEnvelopeSchema(schema: unknown, surface?: SchemaParameterSurface | null): boolean {
   const root = isPlainRecord(schema) ? schema : null;
@@ -3737,9 +3817,9 @@ type SchemaKeyStatus = 'accepted' | 'rejected' | 'unknown';
  * - patternProperties 命中某个模式 → 收。但只跑回溯组合数有上界的模式(见 patternBacktrackBudget):
  *   模式是服务端给的、键是模型给的, 判不了的模式不跑。一轮里**所有模式**的估算总和也有上界:
  *   单条都过关、合起来仍可能把同步路径拖住。
- * - 有模式没跑成(键太长 / 预算用尽 / 模式估不了或是非法正则)且其余都不命中 → unknown:
- *   按「没声明」丢掉它, 丢的可能正是 schema 声明过的参数(Codex P1 on #10908), 与声明面被截断
- *   是同一类事 —— 调用方按不丢处理。
+ * - 有模式没跑成(键太长 / 预算用尽 / 模式估不了或是非法正则)且其余都不命中 → unknown(判不了):
+ *   这个键可能正是没跑成的那个模式声明的参数, 按「没声明」丢掉它就是丢参数(Codex P1 on #10908),
+ *   与声明面被截断是同一类事 —— 调用方按不丢处理。
  * - 所有模式都跑过且都不命中（或 schema 根本没有模式）→ 不收：schema 没表态, 宁漏不误转。
  *   JSON Schema 默认允许额外字段，但「默认允许」不等于「这个键是模型想给的参数」，
  *   把模型的私货转过去只会让服务端多一条校验错误。

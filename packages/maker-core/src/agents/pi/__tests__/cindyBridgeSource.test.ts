@@ -3567,15 +3567,16 @@ it('folds top-level keys declared in conditional and dependent schema branches',
 
 // 评审 P1(遗漏 draft-07 dependencies): 旧版 JSON Schema 使用 dependencies 声明依赖子 schema
 // (而不是 2020-12 的 dependentSchemas); 只走 dependentSchemas 会把仅出现在 dependencies
-// 子 schema 里的合法参数判成未声明并丢掉。同时数组形态的属性依赖(dependencies.tag = ['file_id'])
-// 不是 schema, 必须安全跳过。
+// 子 schema 里的合法参数判成未声明并丢掉。同一个 dependencies 里还可以混着数组形态的属性依赖
+// (dependencies.tag = ['file_id']): 它不是子 schema, 不能当 schema 去走(被它点名的字段算声明过,
+// 见「only lists in required or property dependencies」那条用例)。
 //
 // - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
 // - Bug 依据:codex 对 71d60521a1 的 P1。
 // - 覆盖缺口:上一轮只测了 dependentSchemas, 未覆盖 draft-07 dependencies。
 // - 最小失败输入:schema 用 dependencies.file_id 声明 sheet_id, 调用把 sheet_id 放顶层。
 // - tier:unit。
-it('folds top-level keys declared in draft-07 dependencies schemas while ignoring array dependencies', async () => {
+it('folds top-level keys declared in draft-07 dependencies subschemas', async () => {
   const { Gateway } = loadGatewayHarness();
   const requests: Array<{ method: string; params: unknown }> = [];
   const client = { request: async (method: string, params: unknown) => {
@@ -3757,8 +3758,8 @@ it('does not treat a tool with composed sibling parameters as a registry envelop
 // - 覆盖缺口:信封藏在组合声明后面的用例只盖了「单个节点(根层 $ref 的目标)自己就凑齐」。
 // - 最小失败输入:allOf:[{properties:{name}, required:['name']}, {properties:{args}}] + 平铺的 name/args。
 // - tier:unit。
-// 证据只沿 allOf / $ref 合并(这些声明对每次调用同时生效); anyOf 的分支只生效一个, 各自算 ——
-// 合并的话, 「只给 args」的合法调用会被信封检查永久拒绝。
+// anyOf / oneOf 的分支之间各算各的: 一个分支声明 name、另一个声明 args, 拼不成信封 —— 合并的话,
+// 「只给 args」的合法调用会被信封检查永久拒绝。分支接在分支外的声明后面怎么算, 见下面两条用例。
 it('rebuilds a flattened envelope whose fields are declared in separate allOf branches', async () => {
   const { Gateway } = loadGatewayHarness();
   const requests: Array<{ method: string; params: unknown }> = [];
@@ -3786,6 +3787,107 @@ it('rebuilds a flattened envelope whose fields are declared in separate allOf br
   // anyOf 的两个分支不是信封: 只给 args 的调用按普通参数转发, 不被信封检查拦下。
   await gateway.executeCall({ server: 'cindy_registry', tool: 'invoke', args: { type: 'project' } });
   expect(requests[1].params).toEqual({ name: 'invoke', arguments: { type: 'project' } });
+});
+
+// 评审 P1(信封的 args 声明在 anyOf / oneOf / 条件分支里): 上一轮让每个分支各自从零起算, 根层
+// 声明并要求必填的 name 与分支里声明的 args 就凑不到一起 —— 平铺的 {name, args} 又被当成普通
+// 参数: 顶层 name 折进参数容器, 信封的 args 层消失, 内层工具被按空参数调用。分支要接在分支外的
+// 声明后面看: 根层的 name + 分支里的 args, 对走了那个分支的调用同时成立。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 9af3cc5486 的 P1。
+// - 覆盖缺口:上一轮只盖了「两个字段都在 allOf 分支里」与「两个 anyOf 分支各出一半」。
+// - 最小失败输入:根层 properties.name + required:['name'] + anyOf:[{properties:{args}}], 平铺的 name/args。
+// - tier:unit。
+it('rebuilds a flattened envelope whose args is declared inside union or conditional branches', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const nameAtRoot = { properties: { name: { type: 'string' } }, required: ['name'] };
+  const argsBranches = [
+    { properties: { args: { type: 'object' } } },
+    { properties: { args: { type: 'object' } }, required: ['args'] },
+  ];
+  const shapes = [
+    { ...nameAtRoot, anyOf: argsBranches },
+    { ...nameAtRoot, oneOf: argsBranches },
+    // name 写在 allOf 的后一个分支里: 走到前一个分支的 anyOf 时它还没被看到。
+    { allOf: [{ anyOf: argsBranches }, nameAtRoot] },
+    { ...nameAtRoot, if: { required: ['args'] }, then: { properties: { args: { type: 'object' } } } },
+    // 判别联合写法: 两个分支各自都是一个完整信封, name 在每个分支里都必填。
+    {
+      oneOf: [
+        { properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name', 'args'] },
+        nameAtRoot,
+      ],
+    },
+    // 嵌套并选: 每条路径都要求 name —— 内层的并选先并进外层的分支, 再并进根。
+    {
+      anyOf: [
+        nameAtRoot,
+        {
+          anyOf: [
+            { properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] },
+            nameAtRoot,
+          ],
+        },
+      ],
+    },
+  ];
+  const gateway = new Gateway();
+  gateway.add('cindy_registry', client,
+    shapes.map((inputSchema, index) => ({ name: `call_tool_${index}`, inputSchema })));
+  gateway.register({ registerTool: () => undefined });
+  for (const [index] of shapes.entries()) {
+    await gateway.listResult({ server: 'cindy_registry', tool: `call_tool_${index}` });
+    await gateway.executeCall({
+      server: 'cindy_registry', tool: `call_tool_${index}`, name: 'memory_write', args: { type: 'project' },
+    });
+    expect(requests[index].params).toEqual({
+      name: `call_tool_${index}`,
+      arguments: { name: 'memory_write', args: { type: 'project' } },
+    });
+  }
+});
+
+// 评审收尾(分支里的 required 只在走了那个分支时成立): 一个分支自己就是完整信封、另一个分支是 {}
+// 的普通工具(字段恰好是 name + args), name 可省; 把分支里的 required 当成无条件必填, 没给 name 的
+// 合法调用就会被信封检查永久拒绝。所以 name 的必填必须在每条路径上都成立: 根上的 required, 或
+// 每个分支都必填的 anyOf / oneOf。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数(没被信封检查拦下)。
+// - Bug 依据:自查(修 codex 对 9af3cc5486 的 P1 时)。第三个形态修复前就被认成信封。
+// - 覆盖缺口:信封用例没有「required 只出现在分支里」的形态。
+// - 最小失败输入:properties 恰好 name + args + anyOf:[{required:['name']}, {}], 调用只给 args。
+// - tier:unit。
+it('does not treat a tool whose name is only required on some branches as a registry envelope', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const twoFields = { properties: { name: { type: 'string' }, args: { type: 'object' } } };
+  const shapes = [
+    // 只有一个分支要求 name: 走另一个分支时 name 可省。
+    { ...twoFields, anyOf: [{ required: ['name'] }, {}] },
+    // 条件成立时才要求 name。
+    { ...twoFields, if: { required: ['args'] }, then: { required: ['name'] } },
+    // 一个分支自己就是完整信封, 另一个分支是 {}: 第二个分支上 name 可省。
+    { anyOf: [{ ...twoFields, required: ['name'] }, {}] },
+  ];
+  const gateway = new Gateway();
+  gateway.add('cindy_registry', client,
+    shapes.map((inputSchema, index) => ({ name: `invoke_${index}`, inputSchema })));
+  gateway.register({ registerTool: () => undefined });
+  for (const [index] of shapes.entries()) {
+    await gateway.listResult({ server: 'cindy_registry', tool: `invoke_${index}` });
+    await gateway.executeCall({ server: 'cindy_registry', tool: `invoke_${index}`, args: { payload: 'p' } });
+    expect(requests[index].params).toEqual({ name: `invoke_${index}`, arguments: { payload: 'p' } });
+  }
 });
 
 // 评审 P1(属性类型写成数组或藏在组合里): 信封指纹用 name.type === 'string' / args.type === 'object'
@@ -3926,11 +4028,12 @@ it('forwards flattened keys that unevaluatedProperties explicitly allows', async
 // 平铺的 row 被记成 unmapped 不转发 —— schema 明确要求它必填, 服务端只能报缺参。
 //
 // - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
-// - Bug 依据:codex 对 af161e62aa 的 P2。
+// - Bug 依据:codex 对 af161e62aa 的 P2(required);codex 对 9af3cc5486 的 P2(数组形态的
+//   dependencies / dependentRequired:「有 tag 就必须带 file_id」, file_id 同样只在名字列表里出现)。
 // - 覆盖缺口:参数名收集的用例只盖了 properties(含组合分支里的)。
 // - 最小失败输入:properties.file_id + required: ['file_id', 'row'] + 顶层 row。
 // - tier:unit。
-it('folds flattened keys that the schema only lists in required', async () => {
+it('folds flattened keys that the schema only lists in required or property dependencies', async () => {
   const { Gateway } = loadGatewayHarness();
   const requests: Array<{ method: string; params: unknown }> = [];
   const client = { request: async (method: string, params: unknown) => {
@@ -3952,6 +4055,22 @@ it('folds flattened keys that the schema only lists in required', async () => {
       inputSchema: { type: 'object', required: ['query'] },
       input: { args: {}, query: 'x', limit: 10 },
       forwarded: { query: 'x', limit: 10 },
+      unmapped: '',
+    },
+    {
+      // draft-07 的数组形态 dependencies: 「有 tag 就必须带 file_id」—— file_id 只在名字列表里。
+      tool: 'set_cell_dep',
+      inputSchema: { type: 'object', properties: { tag: {} }, dependencies: { tag: ['file_id'] } },
+      input: { args: { tag: 'a' }, file_id: 'doc-1', note: 'not a parameter' },
+      forwarded: { tag: 'a', file_id: 'doc-1' },
+      unmapped: 'were not forwarded because the tool schema does not declare them: note',
+    },
+    {
+      // 2019-09 的 dependentRequired 是同一种写法。
+      tool: 'set_cell_dreq',
+      inputSchema: { type: 'object', properties: { tag: {} }, dependentRequired: { tag: ['file_id'] } },
+      input: { args: { tag: 'a' }, file_id: 'doc-1' },
+      forwarded: { tag: 'a', file_id: 'doc-1' },
       unmapped: '',
     },
   ];
