@@ -94,9 +94,14 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
     if (!listed) return null;
     for (const login of listed.logins) {
       const token = await deps.readTokenForLogin(login);
-      // 刚被拒的凭证已经单独复核过;没有它的时候按老规矩跳过活跃账号。
-      if (!token || token === failedToken || (!failedToken && active.ok && active.token === token))
+      // 账号在列表里但读不到它的 token(钥匙串/子进程失败)不等于「这个账号读不到仓库」,
+      // 不能据此写失败记忆。
+      if (!token) {
+        unknown = true;
         continue;
+      }
+      // 刚被拒的凭证已经单独复核过;没有它的时候按老规矩跳过活跃账号。
+      if (token === failedToken || (!failedToken && active.ok && active.token === token)) continue;
       const access = await deps.repoAccess(token, pr);
       if (access === 'unknown') {
         unknown = true;

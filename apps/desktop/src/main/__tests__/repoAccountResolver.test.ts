@@ -92,6 +92,18 @@ describe('repoAccountResolver', () => {
     expect(repoAccess).toHaveBeenCalledTimes(2);
   });
 
+  it('账号在列表里但 token 读不到时不写失败记忆', async () => {
+    // 钥匙串/子进程一时读不到某个账号的 token,不代表它读不到仓库。
+    const listLogins = vi.fn(async () => ({ logins: ['work'], complete: true }));
+    const readTokenForLogin = vi.fn(async () => null);
+    const resolver = createRepoAccountResolver(deps({ listLogins, readTokenForLogin }));
+
+    expect(await resolver.recover(PR)).toBeNull();
+    expect(await resolver.recover(PR)).toBeNull();
+    // 没有 10 分钟 miss:两次都真的重新读了一遍。
+    expect(readTokenForLogin).toHaveBeenCalledTimes(2);
+  });
+
   it('PR 编号写错时先复核刚被拒的凭证,不因此换账号', async () => {
     // 活跃账号能读仓库,只是这条 PR 不存在:PR 接口 404 不等于仓库没权限。
     const repoAccess = vi.fn(async (token: string) => token === 'active-token');
