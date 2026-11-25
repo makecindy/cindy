@@ -24,69 +24,95 @@ export interface SourceRouteProviders {
   providers: ProviderView[];
   /** 面板里选中了拼出来的供应商的一行：对应哪条路由、记哪个真实成员。不是这种行返回 null。 */
   hit(providerId: string | null | undefined, modelId: string): SourceRouteHit | null;
-  /** 草稿里记着的真实成员(或选着的那条展开的路由)在面板里显示成哪个条目；不在任何供应商路由里返回 null。 */
-  shownAs(providerId: string | null | undefined, activeRouteId?: string | null): string | null;
+  /**
+   * 草稿里记着的真实成员(或选着的那条展开的路由)在面板里显示成哪个条目；不在任何供应商路由里返回 null。
+   * agentDeviceId = 那个成员所在的位置(另一台电脑或分享)，本机省略。
+   */
+  shownAs(providerId: string | null | undefined, activeRouteId?: string | null, agentDeviceId?: string | null): string | null;
+  /** 别的位置上的这个供应商已经并进某个合并后的条目：面板里不再单列它那一格。 */
+  hidesRemote(agentDeviceId: string, providerId: string): boolean;
 }
 
 const agentOf = (kind: ModelGroupCandidate['agentKind']): AgentKind => (kind === 'cc' ? 'claude-code' : kind);
+const memberKey = (agentDeviceId: string | null | undefined, providerId: string) => `${agentDeviceId ?? ''}\u0000${providerId}`;
 
 export function withSourceRouteProviders(
   providers: ProviderView[],
   config: ModelGroupsConfig | null | undefined,
   /** 草稿当前记着的模型：它直接指着某个成员、而合并后的条目里没有这个写法的模型时，那个成员照旧单列，不让当前选择消失。 */
-  current?: { providerId?: string | null; modelId: string },
+  current?: { providerId?: string | null; modelId: string; agentDeviceId?: string | null },
+  /** 其他电脑与分享来的位置上的供应商(成员可以在那里)；没读到的位置不在里面，那里的成员这次不算。 */
+  remote?: ReadonlyMap<string, readonly ProviderView[]>,
 ): SourceRouteProviders {
   const routes = (config?.sourceRoutes ?? []).filter((route) => !route.hidden);
-  const none: SourceRouteProviders = { providers, hit: () => null, shownAs: () => null };
+  const none: SourceRouteProviders = { providers, hit: () => null, shownAs: () => null, hidesRemote: () => false };
   if (!config || routes.length === 0) return none;
+  const viewsAt = (agentDeviceId: string | undefined) => (agentDeviceId ? remote?.get(agentDeviceId) ?? [] : providers);
   const hits = new Map<string, SourceRouteHit>();
   const memberOf = new Map<string, string>();
   const byRoute = new Map<string, string>();
-  const virtual = new Map<string, ProviderView>();
+  /** 合并后的条目，连同它排在哪个本机成员的位置(成员都不在本机时排在最后)。 */
+  const virtual: { entry: ProviderView; at: string | null }[] = [];
   for (const route of routes) {
-    const members = route.sources.flatMap((source) => providers.filter((provider) => provider.id === source.providerId));
+    const members = route.sources.flatMap((source) => viewsAt(source.agentDeviceId)
+      .filter((provider) => provider.id === source.providerId)
+      .map((provider) => ({ provider, agentDeviceId: source.agentDeviceId })));
     const id = `${SOURCE_ROUTE_PROVIDER_PREFIX}${route.id}`;
     const models: Partial<Record<AgentKind, CatalogModel[]>> = {};
     for (const child of config.routes) {
       if (child.parent?.id !== route.id || child.hidden) continue;
-      const candidate = child.candidates.find((item) => !item.off && !item.agentDeviceId);
-      const agent = candidate ? agentOf(candidate.agentKind) : null;
-      const model = candidate && agent
-        ? members.find((provider) => provider.id === candidate.providerId)?.models?.[agent]?.find((item) => item.id === candidate.model)
-        : undefined;
-      if (!candidate || !agent || !model) continue;
-      (models[agent] ??= []).push({ ...model, name: child.name });
-      hits.set(`${id}\u0000${model.id}`, { route: child, candidate });
-      byRoute.set(child.id, id);
+      // 草稿里记的那个真实成员：第一个没停用、目录读得到的来源。
+      for (const candidate of child.candidates) {
+        if (candidate.off) continue;
+        const agent = agentOf(candidate.agentKind);
+        const model = members.find((member) => member.provider.id === candidate.providerId && (member.agentDeviceId ?? null) === (candidate.agentDeviceId ?? null))
+          ?.provider.models?.[agent]?.find((item) => item.id === candidate.model);
+        if (!model) continue;
+        (models[agent] ??= []).push({ ...model, name: child.name });
+        hits.set(`${id}\u0000${model.id}`, { route: child, candidate });
+        byRoute.set(child.id, id);
+        break;
+      }
     }
     const agents = Object.keys(models) as AgentKind[];
     if (members.length === 0 || agents.length === 0) continue;
+    const base = members[0].provider;
     // 以第一个成员为底：品牌、接入方式、图标都沿用它；模型与各引擎的路由信息取全部成员的。
-    virtual.set(members[0].id, {
-      ...members[0],
-      id, name: route.name, agents,
-      // 合并后的条目自己的 id 认不出品牌：明确沿用第一个成员的品牌图标。
-      logoKind: members[0].logoKind ?? resolveProviderLogoKind(members[0].id, members[0].routing) ?? undefined,
-      models: models as ProviderView['models'],
-      routing: Object.assign({}, ...members.map((provider) => provider.routing)) as ProviderView['routing'],
-      // 这些说的是某一个成员自己的账号、组与别名，不属于合并后的条目。
-      subscriptionAccountKeys: undefined, subscriptionPoolAlias: undefined, subscriptionAccount: undefined, openAiAccount: undefined,
-      ...({ group: undefined, runLocation: undefined } as object),
+    virtual.push({
+      at: members.find((member) => !member.agentDeviceId)?.provider.id ?? null,
+      entry: {
+        ...base,
+        id, name: route.name, agents,
+        // 合并后的条目自己的 id 认不出品牌：明确沿用第一个成员的品牌图标。
+        logoKind: base.logoKind ?? resolveProviderLogoKind(base.id, base.routing) ?? undefined,
+        models: models as ProviderView['models'],
+        routing: Object.assign({}, ...members.map((member) => member.provider.routing)) as ProviderView['routing'],
+        connected: true,
+        // 这些说的是某一个成员自己的账号、组与别名，不属于合并后的条目。
+        subscriptionAccountKeys: undefined, subscriptionPoolAlias: undefined, subscriptionAccount: undefined, openAiAccount: undefined,
+        ...({ group: undefined, runLocation: undefined } as object),
+      },
     });
     for (const member of members) {
-      if (member.id === current?.providerId && !hits.has(`${id}\u0000${current.modelId}`)) continue;
-      memberOf.set(member.id, id);
+      const isCurrent = member.provider.id === current?.providerId && (member.agentDeviceId ?? null) === (current.agentDeviceId ?? null);
+      if (isCurrent && !hits.has(`${id}\u0000${current!.modelId}`)) continue;
+      memberOf.set(memberKey(member.agentDeviceId, member.provider.id), id);
     }
   }
-  if (virtual.size === 0) return none;
+  if (virtual.length === 0) return none;
   return {
-    // 合并后的条目放在第一个成员原来的位置，成员不再单列。
-    providers: providers.flatMap((provider) => [
-      ...(virtual.has(provider.id) ? [virtual.get(provider.id)!] : []),
-      ...(memberOf.has(provider.id) ? [] : [provider]),
-    ]),
+    // 合并后的条目放在它第一个本机成员原来的位置(成员都在别处时排在最后)，成员不再单列。
+    providers: [
+      ...providers.flatMap((provider) => [
+        ...virtual.filter((item) => item.at === provider.id).map((item) => item.entry),
+        ...(memberOf.has(memberKey(null, provider.id)) ? [] : [provider]),
+      ]),
+      ...virtual.filter((item) => item.at === null).map((item) => item.entry),
+    ],
     hit: (providerId, modelId) => (providerId ? hits.get(`${providerId}\u0000${modelId}`) ?? null : null),
-    shownAs: (providerId, activeRouteId) => (activeRouteId && byRoute.get(activeRouteId)) || (providerId ? memberOf.get(providerId) ?? null : null),
+    shownAs: (providerId, activeRouteId, agentDeviceId) =>
+      (activeRouteId && byRoute.get(activeRouteId)) || (providerId ? memberOf.get(memberKey(agentDeviceId, providerId)) ?? null : null),
+    hidesRemote: (agentDeviceId, providerId) => memberOf.has(memberKey(agentDeviceId, providerId)),
   };
 }
 
@@ -97,10 +123,11 @@ export function withSourceRouteProviders(
  */
 export function implicitSourceRouteSelection(
   config: ModelGroupsConfig,
-  current: { providerId?: string | null; model: string },
+  current: { providerId?: string | null; model: string; agentDeviceId?: string | null },
 ): ModelGroupSelection | null {
   if (!current.providerId) return null;
   const route = config.routes.find((item) => item.parent && !item.hidden && item.candidates.some((candidate) =>
-    !candidate.agentDeviceId && candidate.providerId === current.providerId && candidate.model === current.model));
+    (candidate.agentDeviceId ?? null) === (current.agentDeviceId ?? null)
+    && candidate.providerId === current.providerId && candidate.model === current.model));
   return route ? { type: 'route', id: route.id } : null;
 }

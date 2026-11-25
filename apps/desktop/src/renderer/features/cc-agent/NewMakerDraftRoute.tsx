@@ -5549,7 +5549,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       const sendBaseRoute = { persistedAgentKind, model, submittedEffort, providerId, effectiveFastMode };
       // 选着的是某条供应商路由成员的模型但没记路由(旧草稿、最近、收藏)：照样按那条路由选成员(implicitSourceRouteSelection)。
       const modelGroupAtSend = chosenModelGroupAtSend ?? (sourceRoutesImplicit && !shouldEnableCollab && !pluginModelAtSend
-        ? implicitSourceRouteSelection(modelGroupsConfig, sendBaseRoute) : null);
+        ? implicitSourceRouteSelection(modelGroupsConfig, { ...sendBaseRoute, agentDeviceId: effectiveAgentDeviceId }) : null);
       markSendInFlight(true);
       // 已登记乐观标题预览的会话 id。交接链路(rehomeDraftAttachments / setPending /
       // navigate)在登记之后抛错时,消息没被交出去、权威标题永不回流,预览必须在下面的
@@ -6996,7 +6996,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
         const goalPluginModel = shouldEnableCollab ? null : activePluginModel;
         const goalModelGroup = shouldEnableCollab || goalPluginModel ? null
-          : activeModelGroup ?? (sourceRoutesImplicit ? implicitSourceRouteSelection(modelGroupsConfig, goalBaseRoute) : null);
+          : activeModelGroup ?? (sourceRoutesImplicit
+            ? implicitSourceRouteSelection(modelGroupsConfig, { ...goalBaseRoute, agentDeviceId: effectiveAgentDeviceId }) : null);
         // 同 handleSend:remoteDraftState 未就绪时不得放行,否则提交 capability 兜底值而非该设备的
         // 草稿值(缓存已热时另两个 loading 会立刻为 false,拦不住)。
         // 选了模型组时先选路，沿用原模型时才查草稿那台的目录(见选路之后)。

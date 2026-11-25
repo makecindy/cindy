@@ -9,7 +9,7 @@ import {
   normalizeModelGroupsConfig,
   type ModelGroupsConfig,
 } from '../../shared/modelGroups.js';
-import { effectiveModelGroupsConfig } from './sourceRoutes.js';
+import { effectiveModelGroupsConfig, type SourceCatalog } from './sourceRoutes.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { ownerScopedPath } from '../ownerContext.js';
@@ -41,7 +41,6 @@ const ownerScope = () => ownerScopedPath('model-groups.json');
 let catalog: { scope: string; value: SourceCatalog } | null = null;
 let effective: { stored: ModelGroupsConfig; catalog: SourceCatalog | null; config: ModelGroupsConfig } | null = null;
 
-type SourceCatalog = NonNullable<Parameters<typeof effectiveModelGroupsConfig>[1]>;
 
 /** 供应商目录读出来后由读取方(设置页／选择器取配置、解析路由)交进来。 */
 export function setModelGroupSourceCatalog(value: SourceCatalog): void {

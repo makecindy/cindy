@@ -22654,27 +22654,30 @@
       "computers_other": "{{count}} 机",
       "pickFor": "{{name}} 之择法",
       "hiddenTag": "已隐",
-      "hide": "择模型时不列",
-      "hideAria": "择模型时不列「{{name}}」",
       "show": "择模型时列之",
-      "showAria": "择模型时列「{{name}}」",
       "assignedBy": "新任务依「{{strategy}}」分之",
       "adjust": "于模型组调之",
       "quotaFirst": "账号之间、诸机之间，无论何择法，能读订阅用量者，先用将复而余多者；相若乃依择法。"
     },
     "sources": {
-      "title": "供应商之模式",
-      "description": "合数源为一模式，用之如一供应商：择模型如常，由模式定此番用何源。同家之供应商自合。",
       "models_other": "{{count}} 模型",
       "autoTag": "自成",
-      "new": "合供应商",
-      "newName": "新供应商之模式",
-      "empty": "尚无可合之源。连同家供应商二以上则自合，亦可点「合供应商」自择。",
-      "addProvider": "添供应商",
       "chooseProvider": "择供应商",
       "removeAria": "自此模式去 {{name}}",
-      "deleteAria": "删模式「{{name}}」",
-      "note": "自成之模式随供应商之连接增减，其员不可改，可易择法或隐之。"
+      "note": "自成之模式随供应商之连接增减，其员不可改，可易择法或隐之。",
+      "providers_other": "{{count}} 供应商",
+      "addWhole": "添整供应商",
+      "addWholeHint": "其诸模型皆入此模式：择模型时此模式如一供应商，择模型如常，由模式定用何员。",
+      "addModelHint": "独添某供应商之某模型：择此模式时依择法于诸源择其一。",
+      "detailHint": "此模式合整供应商：择模型时如一供应商，择模型与思深如常。"
+    },
+    "elsewhere": {
+      "title": "他处所用之模型",
+      "description": "此诸设置各在其页，由此可径往。",
+      "auxiliaryHint": "命名、荐令、摘要诸杂务所用之模型",
+      "subagentHint": "Claude Code 与 Codex 之 Subagent 用何模型",
+      "botsTitle": "伙伴",
+      "botsHint": "各伙伴用何模型、备何模型，于其自设中定之"
     }
   },
   "projectSettings": {

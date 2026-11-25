@@ -73,7 +73,7 @@ export function registerModelGroupsIpc(): void {
   void refreshAutoModelGroupRoutes();
   ipcMain.handle(MODEL_GROUPS_IPC.GET, async (event) => {
     assertModelGroupsCaller(event);
-    await refreshAutoModelGroupRoutes();
+    await refreshAutoModelGroupRoutes({ waitRemote: true });
     return isDeviceLinkInvoke() ? modelGroupsConfigForRemote(readModelGroupsConfig()) : readModelGroupsConfig();
   });
   ipcMain.handle(MODEL_GROUPS_IPC.SET, (event, raw: unknown) => {

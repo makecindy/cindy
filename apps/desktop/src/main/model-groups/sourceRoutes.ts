@@ -25,6 +25,7 @@ import {
   type ModelGroupsConfig,
   type ModelGroupSourceRoute,
 } from '../../shared/modelGroups.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 
 const GROUP_KIND: Partial<Record<AgentKind, ModelGroupAgentKind>> = { 'claude-code': 'cc', codex: 'codex', pi: 'pi' };
 
@@ -42,14 +43,43 @@ export function providerFamily(view: ProviderView): string | null {
 
 const usable = (view: ProviderView) => view.connected && !view.suspended && !view.removed;
 
-/** 同一家有两个以上已连接的供应商时自动合成一条。名字用这一家里排在最前的那个供应商的名字。 */
-export function buildAutoSourceRoutes(views: readonly ProviderView[], config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff'>): ModelGroupSourceRoute[] {
-  // 同一个登录在列表里出现两次只算一个：与设置页、选择器用同一条合并规则。
-  const folded = listedSourceFolds({ base: views }).hiddenBase;
-  const families = new Map<string, ProviderView[]>();
-  for (const view of views) {
-    const family = usable(view) && !folded.has(view.id) ? providerFamily(view) : null;
-    if (family) families.set(family, [...(families.get(family) ?? []), view]);
+/** 合成与展开用的目录：本机的供应商与可用引擎；其他电脑与分享来的位置各自允许远程调用的供应商(读得到的那些)。 */
+export interface SourceCatalog {
+  views: readonly ProviderView[];
+  agents: readonly string[];
+  /** 运行位置(另一台电脑的设备 id 或 `share:<id>`) → 那里的供应商。没读到的位置不在里面。 */
+  remote?: ReadonlyMap<string, readonly ProviderView[]>;
+  /** 这个来源现在能不能为新任务选用；views / agents 是它所在位置的目录。 */
+  available(candidate: ModelGroupCandidate, views: readonly ProviderView[], agents: readonly string[]): boolean;
+}
+
+/** 别的位置上可以远程调用的引擎，与插件卡片里的远程模型同一份名单。 */
+const REMOTE_AGENTS: readonly string[] = ['codex', 'claude-code', 'pi'];
+
+const locationViews = (catalog: SourceCatalog, agentDeviceId: string | undefined) =>
+  (agentDeviceId ? catalog.remote?.get(agentDeviceId) ?? [] : catalog.views);
+const locationAgents = (catalog: SourceCatalog, agentDeviceId: string | undefined) => (agentDeviceId ? REMOTE_AGENTS : catalog.agents);
+
+/**
+ * 同一家有两个以上能用的供应商时自动合成一条：本机的、其他电脑上的、别人分享来的都算(两个朋友各分享一个 Claude
+ * 就是两个成员)。同一个登录在几处出现只算一个，用设置页、选择器同一条合并规则。名字用这一家里排在最前的那个的名字。
+ */
+export function buildAutoSourceRoutes(
+  catalog: Pick<SourceCatalog, 'views' | 'remote'>,
+  config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff'>,
+): ModelGroupSourceRoute[] {
+  const others = [...(catalog.remote ?? [])].map(([deviceId, providers]) => ({ deviceId, providers }));
+  // 去重只在自己的电脑之间做(同一个登录在两台电脑上算一个)。别人分享来的各是各的账号，即使供应商同名也都算成员，
+  // 与选择器一致：分享不参与这条合并规则。
+  const folds = listedSourceFolds({ base: catalog.views, others: others.filter((other) => !isProviderShareAgentDeviceId(other.deviceId)) });
+  const families = new Map<string, { view: ProviderView; agentDeviceId?: string }[]>();
+  const add = (view: ProviderView, agentDeviceId?: string) => {
+    const family = usable(view) ? providerFamily(view) : null;
+    if (family) families.set(family, [...(families.get(family) ?? []), { view, ...(agentDeviceId ? { agentDeviceId } : {}) }]);
+  };
+  for (const view of catalog.views) if (!folds.hiddenBase.has(view.id)) add(view);
+  for (const { deviceId, providers } of others) {
+    for (const view of providers) if (!folds.hiddenOther.get(deviceId)?.has(view.id)) add(view, deviceId);
   }
   const hidden = new Set(config.hiddenAuto ?? []);
   const switchOff = new Set(config.autoSwitchOff ?? []);
@@ -59,9 +89,11 @@ export function buildAutoSourceRoutes(views: readonly ProviderView[], config: Pi
     const id = `${MODEL_GROUP_AUTO_PREFIX}${family}`.slice(0, MODEL_GROUP_LIMITS.id);
     routes.push({
       id,
-      name: members[0].name.slice(0, MODEL_GROUP_LIMITS.name),
+      name: members[0].view.name.slice(0, MODEL_GROUP_LIMITS.name),
       strategy: config.autoStrategy?.[id] ?? 'expiring',
-      sources: members.slice(0, MODEL_GROUP_LIMITS.candidates).map((view) => ({ providerId: view.id })),
+      sources: members.slice(0, MODEL_GROUP_LIMITS.candidates).map(({ view, agentDeviceId }) => ({
+        providerId: view.id, ...(agentDeviceId ? { agentDeviceId } : {}),
+      })),
       ...(switchOff.has(id) ? { autoSwitch: false as const } : {}),
       auto: true,
       ...(hidden.has(id) ? { hidden: true as const } : {}),
@@ -86,15 +118,12 @@ const expandedId = (routeId: string, modelKey: string) =>
   `${MODEL_GROUP_EXPANDED_PREFIX}${createHash('sha256').update(`${routeId}\u0000${modelKey}`).digest('hex').slice(0, 40)}`;
 
 /** 一条供应商路由展开成每个模型一条普通路由：成员里谁提供这个模型，谁就是这条的来源(顺序同成员顺序)。 */
-export function expandSourceRoute(
-  route: ModelGroupSourceRoute,
-  views: readonly ProviderView[],
-  agents: readonly string[],
-  available: (candidate: ModelGroupCandidate) => boolean,
-): ModelGroupRoute[] {
-  const allowed = agents.filter((agent): agent is AgentKind => agent in GROUP_KIND);
+export function expandSourceRoute(route: ModelGroupSourceRoute, catalog: SourceCatalog): ModelGroupRoute[] {
   const byModel = new Map<string, { name: string; candidates: ModelGroupCandidate[] }>();
   for (const source of route.sources) {
+    const views = locationViews(catalog, source.agentDeviceId);
+    const agents = locationAgents(catalog, source.agentDeviceId);
+    const allowed = agents.filter((agent): agent is AgentKind => agent in GROUP_KIND);
     const view = views.find((item) => item.id === source.providerId);
     if (!view || !usable(view)) continue;
     const seen = new Set<string>();
@@ -110,9 +139,10 @@ export function expandSourceRoute(
         if (!recommended || !agentKind || !wire) continue;
         const candidate: ModelGroupCandidate = {
           agentKind, providerId: view.id, model: wire,
+          ...(source.agentDeviceId ? { agentDeviceId: source.agentDeviceId } : {}),
           ...(source.off ? { off: true } : {}), ...(source.weight ? { weight: source.weight } : {}),
         };
-        if (!available(candidate)) continue;
+        if (!catalog.available(candidate, views, agents)) continue;
         seen.add(key);
         const entry = byModel.get(key) ?? { name: view.models?.[recommended]?.find((item) => item.id === wire)?.name ?? model.name ?? key, candidates: [] };
         entry.candidates.push(candidate);
@@ -133,15 +163,10 @@ export function expandSourceRoute(
 }
 
 /** 存盘的配置 + 此刻的目录 = 读取方看到的配置：用户排的路由、供应商路由(用户建的与自动合成的)及其展开。 */
-export function effectiveModelGroupsConfig(
-  stored: ModelGroupsConfig,
-  catalog: { views: readonly ProviderView[]; agents: readonly string[]; available(candidate: ModelGroupCandidate): boolean } | null,
-): ModelGroupsConfig {
+export function effectiveModelGroupsConfig(stored: ModelGroupsConfig, catalog: SourceCatalog | null): ModelGroupsConfig {
   if (!catalog) return stored;
-  const sourceRoutes = [...(stored.sourceRoutes ?? []), ...buildAutoSourceRoutes(catalog.views, stored)];
-  const expanded = sourceRoutes
-    .flatMap((route) => expandSourceRoute(route, catalog.views, catalog.agents, catalog.available))
-    .slice(0, MODEL_GROUP_EXPANDED_LIMIT);
+  const sourceRoutes = [...(stored.sourceRoutes ?? []), ...buildAutoSourceRoutes(catalog, stored)];
+  const expanded = sourceRoutes.flatMap((route) => expandSourceRoute(route, catalog)).slice(0, MODEL_GROUP_EXPANDED_LIMIT);
   return {
     ...stored,
     routes: [...stored.routes, ...expanded],

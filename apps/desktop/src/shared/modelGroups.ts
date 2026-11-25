@@ -145,9 +145,11 @@ export interface ModelGroupRoute {
   hidden?: true;
 }
 
-/** 供应商路由的成员：一整个供应商(它提供的全部模型)，不指定模型。目前只支持本机的供应商。 */
+/** 供应商路由的成员：一整个供应商(它提供的全部模型)，不指定模型。 */
 export interface ModelGroupSource {
   providerId: string;
+  /** 运行位置：另一台电脑的设备 id，或分享来的供应商(`share:<id>`)。省略 = 本机。与 ModelGroupCandidate 同义。 */
+  agentDeviceId?: string;
   /** 用户暂时不让这条路由用它；保留在列表里。 */
   off?: boolean;
   /** 「按权重」时的权重，1–1000；不设为 1。 */
@@ -445,10 +447,17 @@ function normalizeSourceRoute(raw: unknown): ModelGroupSourceRoute | null {
   const sources = (Array.isArray(value.sources) ? value.sources : []).flatMap((item): ModelGroupSource[] => {
     const entry = item && typeof item === 'object' ? item as Record<string, unknown> : null;
     const providerId = entry ? text(entry.providerId, MODEL_GROUP_LIMITS.field) : '';
-    if (!entry || !providerId || seen.has(providerId)) return [];
-    seen.add(providerId);
+    // 运行位置格式不对的整条丢弃，不悄悄变成本机。
+    const location = entry && entry.agentDeviceId !== undefined && entry.agentDeviceId !== null
+      ? modelGroupAgentDeviceId(entry.agentDeviceId) : undefined;
+    const key = `${location ?? ''}\u0000${providerId}`;
+    if (!entry || !providerId || location === null || seen.has(key)) return [];
+    seen.add(key);
     const weight = modelGroupWeight(entry.weight);
-    return [{ providerId, ...(entry.off === true ? { off: true } : {}), ...(weight !== 1 ? { weight } : {}) }];
+    return [{
+      providerId, ...(location ? { agentDeviceId: location } : {}),
+      ...(entry.off === true ? { off: true } : {}), ...(weight !== 1 ? { weight } : {}),
+    }];
   }).slice(0, MODEL_GROUP_LIMITS.candidates);
   const strategy = MODEL_GROUP_STRATEGIES.find((item) => item === value.pick)
     ?? MODEL_GROUP_STRATEGIES.find((item) => item === value.strategy) ?? 'expiring';

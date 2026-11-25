@@ -1,3 +1,4 @@
+import type { ProviderView } from '@cindy/model-providers';
 import type { ModelGroupTraceQuota } from '../../shared/modelGroups.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
@@ -49,17 +50,64 @@ async function quotaWindows() {
   return byProvider;
 }
 
+/** 其他电脑与分享来的位置各自允许远程调用的供应商：按账号记，最多每分钟读一次。 */
+let remoteCatalogs: { scope: string; at: number; value: Map<string, ProviderView[]> } | null = null;
+let remoteReading: Promise<void> | null = null;
+let lastLocal: { scope: string; views: ProviderView[] } | null = null;
+const REMOTE_CATALOG_TTL_MS = 60_000;
+
+function publishCatalog(): void {
+  const scope = activeOwnerScopeKey();
+  if (lastLocal?.scope !== scope) return;
+  const views = lastLocal.views;
+  setModelGroupSourceCatalog({
+    views,
+    agents: getPluginModelPickerAgents(),
+    ...(remoteCatalogs?.scope === scope ? { remote: remoteCatalogs.value } : {}),
+    // 与解析路由时同一个判断；别的位置上的来源按那个位置的目录看，执行时那台还会再拦一次。
+    available: (candidate, locationViews, agents) =>
+      isPluginModelPickerRouteAvailable({ ...candidate, effort: '', fastMode: false }, locationViews as ProviderView[], agents),
+  });
+}
+
+/**
+ * 读其他电脑与分享来的供应商目录(供应商路由的成员可以在那里)。只在有人读配置、选路或发消息时才读，没有定时器；
+ * 同一时刻只读一轮，一分钟内不重读；每个位置读一次目录(与选择器列那台的模型是同一个请求)，各自最多等
+ * MODEL_GROUP_REMOTE_WAIT_MS。这次没读到的位置沿用不了旧目录(对方可能已经收回)，按没有处理。
+ */
+function readRemoteCatalogs(): Promise<void> {
+  const scope = activeOwnerScopeKey();
+  if (remoteReading) return remoteReading;
+  if (remoteCatalogs?.scope === scope && Date.now() - remoteCatalogs.at < REMOTE_CATALOG_TTL_MS) return Promise.resolve();
+  const timeout = <T>(work: Promise<T>): Promise<T | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      work.catch(() => null),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), MODEL_GROUP_REMOTE_WAIT_MS); }),
+    ]).finally(() => clearTimeout(timer));
+  };
+  remoteReading = (async () => {
+    const { locations } = await readWorkerAgentLocations();
+    const entries = await Promise.all(locations.map(async ({ agentDeviceId }) => {
+      const catalog = await timeout(readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId));
+      return catalog && !catalog.stale ? [agentDeviceId, catalog.views] as const : null;
+    }));
+    if (scope !== activeOwnerScopeKey()) return;
+    remoteCatalogs = { scope, at: Date.now(), value: new Map(entries.filter((entry): entry is readonly [string, ProviderView[]] => !!entry)) };
+    publishCatalog();
+  })().catch(() => undefined).finally(() => { remoteReading = null; });
+  return remoteReading;
+}
+
 /**
  * 本机供应商目录的快照(不触发发现或登录)。每次读出来顺手交给配置读取：供应商路由按它合成和展开，取配置与
- * 解析路由都先读目录，所以两处看到的供应商路由与目录是同一时刻的。
+ * 解析路由都先读目录，所以两处看到的供应商路由与目录是同一时刻的。别处的目录在后台跟上，不让这里等。
  */
 async function localViews() {
   const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
-  const agents = getPluginModelPickerAgents();
-  setModelGroupSourceCatalog({
-    views, agents,
-    available: (candidate) => isPluginModelPickerRouteAvailable({ ...candidate, effort: '', fastMode: false }, views, agents),
-  });
+  lastLocal = { scope: activeOwnerScopeKey(), views };
+  publishCatalog();
+  void readRemoteCatalogs();
   return views;
 }
 
@@ -69,12 +117,13 @@ let refreshedAt = 0;
 /**
  * 读配置前调用：让随后读到的配置带上此刻的供应商路由(它们按供应商目录合成和展开，不存盘)。读目录失败时沿用上一次的。
  * 发消息、出问题接替这些路径每次都会调：一秒内只读一次目录快照，同时来的调用等同一次读取。
+ * `waitRemote`：界面取配置时，别处的目录还一次都没读到就等它读完(有时限)，免得第一次打开看不到分享来的成员。
  */
-export function refreshAutoModelGroupRoutes(): Promise<void> {
-  if (refreshing) return refreshing;
-  if (Date.now() - refreshedAt < 1_000) return Promise.resolve();
-  refreshing = localViews().then(() => undefined, () => undefined).finally(() => { refreshedAt = Date.now(); refreshing = null; });
-  return refreshing;
+export function refreshAutoModelGroupRoutes(options: { waitRemote?: boolean } = {}): Promise<void> {
+  const remoteMissing = options.waitRemote && remoteCatalogs?.scope !== activeOwnerScopeKey();
+  if (!refreshing && Date.now() - refreshedAt < 1_000) return remoteMissing ? readRemoteCatalogs() : Promise.resolve();
+  refreshing ??= localViews().then(() => undefined, () => undefined).finally(() => { refreshedAt = Date.now(); refreshing = null; });
+  return remoteMissing ? refreshing.then(() => readRemoteCatalogs()) : refreshing;
 }
 
 export const resolver = createModelGroupResolver({

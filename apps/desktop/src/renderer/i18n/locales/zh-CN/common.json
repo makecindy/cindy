@@ -22496,7 +22496,7 @@
     "title": "智能路由",
     "description": "把模型供应商里已有的几个来源合成一个可选项。选模型时在「智能路由」里选它，由 Cindy 决定这次用哪个来源。",
     "routes": "路由",
-    "routesDescription": "一个路由里放几个来源，开新任务时按选法挑一个。",
+    "routesDescription": "把几个来源合成一个选项。来源可以是整个供应商（照常选模型，由路由决定用哪个），也可以是某个指定的模型。同一家的几个供应商会自动合好。",
     "sourceCount_other": "{{count}} 个来源",
     "strategy": {
       "expiring": {
@@ -22654,27 +22654,30 @@
       "computers_other": "{{count}} 台电脑",
       "pickFor": "{{name}} 的选法",
       "hiddenTag": "已隐藏",
-      "hide": "选模型时不显示",
-      "hideAria": "选模型时不显示「{{name}}」",
       "show": "选模型时显示",
-      "showAria": "选模型时显示「{{name}}」",
       "assignedBy": "新任务按「{{strategy}}」分配",
       "adjust": "在智能路由里调整",
       "quotaFirst": "账号之间、电脑之间不论选哪种选法，读得到订阅用量时都先用快重置、还剩得多的那个；差不多时才按选法挑。"
     },
     "sources": {
-      "title": "供应商路由",
-      "description": "把几个来源合成一条路由，用起来像一个合并后的供应商：照常选模型，由路由决定这次用哪个。同一家的几个供应商会自动合好。",
       "models_other": "{{count}} 个模型",
       "autoTag": "自动",
-      "new": "合并供应商",
-      "newName": "新的供应商路由",
-      "empty": "还没有可以合并的来源。连接两个以上同一家的供应商会自动合成一条，也可以点「合并供应商」自己挑。",
-      "addProvider": "添加供应商",
       "chooseProvider": "选择供应商",
       "removeAria": "把 {{name}} 从这条路由里去掉",
-      "deleteAria": "删除路由「{{name}}」",
-      "note": "自动合成的路由跟着供应商的连接增减，成员不能改，可以改选法或隐藏。"
+      "note": "自动合成的路由跟着供应商的连接增减，成员不能改，可以改选法或隐藏。",
+      "providers_other": "{{count}} 个供应商",
+      "addWhole": "添加整个供应商",
+      "addWholeHint": "它的全部模型都进这条路由：选模型时这条路由像一个供应商，照常选模型，由路由决定这次用哪个成员。",
+      "addModelHint": "只加某个供应商的某个模型：选这条路由时按选法在这些来源里挑一个。",
+      "detailHint": "这条路由合并的是整个供应商：选模型时它像一个供应商，照常选模型、思考深度，由路由决定这次用哪个成员。"
+    },
+    "elsewhere": {
+      "title": "其他地方用的模型",
+      "description": "这些模型设置在各自的页面里，从这里可以直接过去。",
+      "auxiliaryHint": "任务命名、推荐指令、摘要这类后台小事用的模型",
+      "subagentHint": "Claude Code 与 Codex 的 Subagent 用哪个模型",
+      "botsTitle": "伙伴",
+      "botsHint": "每个伙伴用哪个模型、备用哪个，在伙伴自己的设置里"
     }
   },
   "projectSettings": {

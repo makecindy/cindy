@@ -68,6 +68,20 @@ describe('provider routes', () => {
     ]);
   });
 
+  // 2026-11-25 用户反馈：两个朋友各分享了一个 Claude，合不到一起。分享各是各的账号，即使供应商同名也都是成员。
+  it('combines the same provider shared by two people, with each share as its own member', () => {
+    const shared = view('anthropic', 'Anthropic', 'claude-code', ['claude-opus-5']);
+    const config = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [{ ...OTHER, connected: false } as ProviderView], agents: AGENTS, available: () => true,
+      remote: new Map([['share:a', [shared]], ['share:b', [shared]]]),
+    });
+    expect(config.sourceRoutes).toEqual([{
+      id: 'auto:anthropic', name: 'Anthropic', strategy: 'expiring', auto: true,
+      sources: [{ providerId: 'anthropic', agentDeviceId: 'share:a' }, { providerId: 'anthropic', agentDeviceId: 'share:b' }],
+    }]);
+    expect(childrenOf(config, 'auto:anthropic').map((route) => route.candidates.map((item) => item.agentDeviceId))).toEqual([['share:a', 'share:b']]);
+  });
+
   it('drops the automatic route once fewer than two providers of the brand are connected', () => {
     const config = effective({ routes: [] }, [SUBSCRIPTION, { ...ORGANIZATION, connected: false } as ProviderView, GATEWAY]);
     expect(config.sourceRoutes).toBeUndefined();

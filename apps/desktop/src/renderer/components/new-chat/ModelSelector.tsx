@@ -1431,7 +1431,10 @@ function ModelSelectorContentView({
   // 下面整套目录(能力 / 供应商 / 可见性 / 用量 / 收藏)都随 deviceId 换成那台电脑的。
   const remoteAgentDeviceId = remoteAgent?.selectedDeviceId ?? null;
   // 插件引擎在独立的来源格。浏览从任务所在电脑的目录开始，换内置模型时照常按实际运行位置判断是否要换电脑。
-  const preferredBrowseDeviceId = pluginEngines?.active ? null : remoteAgentDeviceId;
+  // 选着供应商路由下的模型时同理：合并后的条目列在任务所在电脑的目录里，从那里开始，不跳到某个成员所在的电脑。
+  const activeSourceRouteAtOpen = !!modelGroupsProp?.onAttach && !!modelGroupsProp.active
+    && modelGroupsProp.config.routes.some((route) => route.id === modelGroupsProp.active?.id && !!route.parent && !route.hidden);
+  const preferredBrowseDeviceId = pluginEngines?.active || activeSourceRouteAtOpen ? null : remoteAgentDeviceId;
   const [remoteBrowse, setRemoteBrowse] = useState<{
     deviceId: string;
     /** null = 还不知道该落在哪个供应商格(等那台的目录到了再按当前来源 / 首个供应商定)。 */
@@ -1577,23 +1580,40 @@ function ModelSelectorContentView({
   // 供应商路由在面板里就是一个普通供应商(sourceRouteProviders.ts)：只在新任务草稿、看本机目录时这样列。
   const sourceRoutesListed = !!modelGroupsProp?.onAttach && !!onUnifiedSelectProp && !deviceId && !providersOverride && !sshCatalogProviders;
   const sourceRouteConfig = sourceRoutesListed ? modelGroupsProp?.config : null;
+  // 成员可以在其他电脑上或是分享来的：读那些位置的目录(与下面列那台模型用的是同一份缓存，不多发请求)。
+  const sourceRouteRemoteIds = useMemo(() => [...new Set((sourceRouteConfig?.sourceRoutes ?? []).filter((route) => !route.hidden)
+    .flatMap((route) => route.sources.flatMap((source) => (source.agentDeviceId ? [source.agentDeviceId] : []))))], [sourceRouteConfig]);
+  const sourceRouteRemoteCatalogs = useDevicesProviders(sourceRouteRemoteIds, { retainDisplaySnapshot: true });
+  const sourceRouteRemote = useMemo(() => new Map(sourceRouteRemoteIds.flatMap((id) => {
+    const catalog = sourceRouteRemoteCatalogs.get(id);
+    return catalog ? [[id, remoteAgentProviders(catalog.providers)] as const] : [];
+  })), [sourceRouteRemoteIds, sourceRouteRemoteCatalogs]);
+  const sourceRouteCurrent = useMemo(
+    () => ({ providerId: currentProviderIdProp, modelId, agentDeviceId: remoteAgentDeviceId }),
+    [currentProviderIdProp, modelId, remoteAgentDeviceId],
+  );
   const sourceRoutes = useMemo(
-    () => withSourceRouteProviders(listedProviders, sourceRouteConfig, { providerId: currentProviderIdProp, modelId }),
-    [listedProviders, sourceRouteConfig, currentProviderIdProp, modelId],
+    () => withSourceRouteProviders(listedProviders, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote),
+    [listedProviders, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote],
   );
   const providers = sourceRoutes.providers;
   // 草稿里记的是一个真实成员的模型；它属于某条供应商路由时，面板里选中的是合并后的那个条目。
-  const currentProviderId = sourceRoutes.shownAs(currentProviderIdProp, modelGroupsProp?.active?.id) ?? currentProviderIdProp;
+  const currentProviderId = sourceRoutes.shownAs(currentProviderIdProp, modelGroupsProp?.active?.id, remoteAgentDeviceId) ?? currentProviderIdProp;
   const activeSourceRoute = !!modelGroupsProp?.active && sourceRoutes.shownAs(null, modelGroupsProp.active.id) !== null;
   const attachSourceRoute = modelGroupsProp?.onAttach;
   const onUnifiedSelect = useMemo<typeof onUnifiedSelectProp>(() => onUnifiedSelectProp && ((selection) => {
     const hit = sourceRoutes.hit(selection.providerId, selection.modelId);
     if (!hit) return onUnifiedSelectProp(selection);
     // 草稿照常记下一个真实成员的模型(显示名、思考深度、Fast 都按它来)，再记下由哪条路由决定这次用哪个成员。
-    const applied = onUnifiedSelectProp({ ...selection, providerId: hit.candidate.providerId, modelId: hit.candidate.model });
+    // 那个成员在另一台电脑上或是分享来的：连同运行位置一起交给草稿，与在那台的格子里选这个模型相同。
+    const location = hit.candidate.agentDeviceId;
+    const applied = onUnifiedSelectProp({
+      ...selection, providerId: hit.candidate.providerId, modelId: hit.candidate.model,
+      ...(location ? { agentDevice: { deviceId: location, name: deviceDisplayName(location, undefined, remoteAgent?.devices ?? []) } } : {}),
+    });
     void Promise.resolve(applied).then((ok) => { if (ok !== false) attachSourceRoute?.({ type: 'route', id: hit.route.id }); });
     return applied;
-  }), [onUnifiedSelectProp, sourceRoutes, attachSourceRoute]);
+  }), [onUnifiedSelectProp, sourceRoutes, attachSourceRoute, remoteAgent?.devices]);
   // SSH 目录里 Codex 来自远端主机：本机账号用量、本机供应商组都不能代表它。
   const sshCodexActive = sshCodex !== undefined;
   const mixedCatalog = !!providersOverride || sshCodexActive;
@@ -1995,6 +2015,8 @@ function ModelSelectorContentView({
       const providerIds = [...new Set(entries.map((entry) => entry.providerId))].filter(
         (providerId) =>
           !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId)) &&
+          // 已经并进某条供应商路由的成员不再单列一格。
+          !sourceRoutes.hidesRemote(device.deviceId, providerId) &&
           ((!hiddenThere.has(providerId) && !remoteDisable.isHidden(device.deviceId, providerId)) ||
             (remoteAgentDeviceId === device.deviceId && currentProviderId === providerId)),
       );
@@ -2015,7 +2037,7 @@ function ModelSelectorContentView({
       return [];
     });
   }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold, remoteDisable, remoteAgentDeviceId, currentProviderId,
-    receivedShares]);
+    receivedShares, sourceRoutes]);
   // 其他电脑的模式只在那台电脑已列在「其他电脑」那一段时出现：选了它，Agent 在那台运行，只能用那台开了
   // 「允许被远程调用」的来源(model-groups.md §3.1、§6.3)。
   const deviceModelGroupChoices = useMemo(() => {
@@ -2035,8 +2057,8 @@ function ModelSelectorContentView({
   const hasRemoteAgent = remoteAgent !== undefined;
   // 有其他电脑可选时，本机那一段的侧栏另从这份列表建：供应商路由同样作为一个普通供应商列在里面。
   const homeSourceRoutes = useMemo(
-    () => withSourceRouteProviders(localProviders.providers, sourceRouteConfig, { providerId: currentProviderIdProp, modelId }),
-    [localProviders.providers, sourceRouteConfig, currentProviderIdProp, modelId],
+    () => withSourceRouteProviders(localProviders.providers, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote),
+    [localProviders.providers, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote],
   );
   const homeProviders = homeDeviceId ? homeDeviceProviders.providers : homeSourceRoutes.providers;
   const homeModelVisibilityOverrides = homeDeviceProviders.modelVisibilityOverrides;

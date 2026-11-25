@@ -22584,7 +22584,7 @@
     "title": "Smart routing",
     "description": "Combine sources you already have under Model providers into one choice. Pick it under Smart routing in the model picker and Cindy decides which source to use.",
     "routes": "Routes",
-    "routesDescription": "A route holds several sources. Each new task picks one by the route's rule.",
+    "routesDescription": "Combine several sources into one choice. A source can be a whole provider (pick a model as usual and the route decides which one runs it) or one specific model. Providers of the same brand are combined automatically.",
     "sourceCount_one": "{{count}} source",
     "sourceCount_other": "{{count}} sources",
     "strategy": {
@@ -22745,28 +22745,32 @@
       "computers_other": "{{count}} computers",
       "pickFor": "Strategy for {{name}}",
       "hiddenTag": "Hidden",
-      "hide": "Hide from the model picker",
-      "hideAria": "Hide {{name}} from the model picker",
       "show": "Show in the model picker",
-      "showAria": "Show {{name}} in the model picker",
       "assignedBy": "New tasks are assigned by “{{strategy}}”",
       "adjust": "Adjust in Smart routing",
       "quotaFirst": "Between accounts or computers, whatever the strategy, the one with the most quota left before its next reset goes first when subscription usage can be read; the strategy decides among those that are about the same."
     },
     "sources": {
-      "title": "Provider routes",
-      "description": "Combine several sources into one route that works like a single merged provider: pick a model as usual and the route decides which source runs it. Providers of the same brand are combined automatically.",
       "models_one": "{{count}} model",
       "models_other": "{{count}} models",
       "autoTag": "Automatic",
-      "new": "Combine providers",
-      "newName": "New provider route",
-      "empty": "Nothing to combine yet. Connect two or more providers of the same brand and they are combined automatically, or choose Combine providers to pick your own.",
-      "addProvider": "Add a provider",
       "chooseProvider": "Choose a provider",
       "removeAria": "Remove {{name}} from this route",
-      "deleteAria": "Delete route {{name}}",
-      "note": "Automatic routes follow your connected providers. Their members cannot be changed; you can change the strategy or hide them."
+      "note": "Automatic routes follow your connected providers. Their members cannot be changed; you can change the strategy or hide them.",
+      "providers_one": "{{count}} provider",
+      "providers_other": "{{count}} providers",
+      "addWhole": "Add a whole provider",
+      "addWholeHint": "All of its models join this route. In the model picker the route works like one provider: pick a model as usual and the route decides which member runs it.",
+      "addModelHint": "Add one model from one provider. Choosing this route picks one of these sources by its strategy.",
+      "detailHint": "This route combines whole providers. In the model picker it works like one provider: pick a model and effort as usual and the route decides which member runs it."
+    },
+    "elsewhere": {
+      "title": "Models used elsewhere",
+      "description": "These model settings live on their own pages. Go straight to them from here.",
+      "auxiliaryHint": "The model for background chores such as naming tasks, suggestions and summaries",
+      "subagentHint": "Which model Claude Code and Codex subagents use",
+      "botsTitle": "Buddies",
+      "botsHint": "Each buddy chooses its own model and backups in its settings"
     }
   },
   "projectSettings": {

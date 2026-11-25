@@ -22745,28 +22745,32 @@
       "computers_other": "{{count}} Computer",
       "pickFor": "Strategie für {{name}}",
       "hiddenTag": "Ausgeblendet",
-      "hide": "In der Modellauswahl ausblenden",
-      "hideAria": "{{name}} in der Modellauswahl ausblenden",
       "show": "In der Modellauswahl anzeigen",
-      "showAria": "{{name}} in der Modellauswahl anzeigen",
       "assignedBy": "Neue Aufgaben werden nach „{{strategy}}“ verteilt",
       "adjust": "In Modellgruppen anpassen",
       "quotaFirst": "Zwischen Konten oder Computern gilt unabhängig von der Strategie: Lässt sich die Abo-Nutzung lesen, kommt zuerst, wer vor dem nächsten Zurücksetzen am meisten Kontingent übrig hat; bei ähnlichem Stand entscheidet die Strategie."
     },
     "sources": {
-      "title": "Anbieter-Modi",
-      "description": "Mehrere Quellen zu einem Modus zusammenfassen, der wie ein einzelner Anbieter funktioniert: Modell wie gewohnt wählen, der Modus entscheidet, welche Quelle es ausführt. Anbieter derselben Marke werden automatisch zusammengefasst.",
       "models_one": "{{count}} Modell",
       "models_other": "{{count}} Modelle",
       "autoTag": "Automatisch",
-      "new": "Anbieter zusammenfassen",
-      "newName": "Neuer Anbieter-Modus",
-      "empty": "Noch nichts zum Zusammenfassen. Verbinde zwei oder mehr Anbieter derselben Marke, dann werden sie automatisch zusammengefasst, oder wähle selbst über „Anbieter zusammenfassen“.",
-      "addProvider": "Anbieter hinzufügen",
       "chooseProvider": "Anbieter wählen",
       "removeAria": "{{name}} aus diesem Modus entfernen",
-      "deleteAria": "Modus {{name}} löschen",
-      "note": "Automatische Modi folgen deinen verbundenen Anbietern. Ihre Mitglieder lassen sich nicht ändern; Strategie ändern oder ausblenden ist möglich."
+      "note": "Automatische Modi folgen deinen verbundenen Anbietern. Ihre Mitglieder lassen sich nicht ändern; Strategie ändern oder ausblenden ist möglich.",
+      "providers_one": "{{count}} Anbieter",
+      "providers_other": "{{count}} Anbieter",
+      "addWhole": "Ganzen Anbieter hinzufügen",
+      "addWholeHint": "Alle seine Modelle gehören dann zu diesem Modus. In der Modellauswahl verhält er sich wie ein Anbieter: Modell wie gewohnt wählen, der Modus entscheidet, welches Mitglied es ausführt.",
+      "addModelHint": "Ein Modell eines Anbieters hinzufügen. Beim Wählen dieses Modus wird eine dieser Quellen nach der Strategie gewählt.",
+      "detailHint": "Dieser Modus fasst ganze Anbieter zusammen. In der Modellauswahl verhält er sich wie ein Anbieter: Modell und Denktiefe wie gewohnt wählen."
+    },
+    "elsewhere": {
+      "title": "Anderswo genutzte Modelle",
+      "description": "Diese Modelleinstellungen liegen auf eigenen Seiten. Von hier gelangst du direkt dorthin.",
+      "auxiliaryHint": "Das Modell für Hintergrundaufgaben wie Benennen, Vorschläge und Zusammenfassungen",
+      "subagentHint": "Welches Modell Subagents von Claude Code und Codex nutzen",
+      "botsTitle": "Buddies",
+      "botsHint": "Jeder Buddy wählt sein Modell und seine Reserven in den eigenen Einstellungen"
     }
   },
   "projectSettings": {

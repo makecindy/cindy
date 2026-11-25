@@ -22496,7 +22496,7 @@
     "title": "智慧路由",
     "description": "把模型供應商裡已有的幾個來源合成一個可選項。選模型時在「智慧路由」裡選它，由 Cindy 決定這次用哪個來源。",
     "routes": "路由",
-    "routesDescription": "一個路由裡放幾個來源，開新任務時按選法挑一個。",
+    "routesDescription": "把幾個來源合成一個選項。來源可以是整個供應商（照常選模型，由路由決定用哪個），也可以是某個指定的模型。同一家的幾個供應商會自動合好。",
     "sourceCount_other": "{{count}} 個來源",
     "strategy": {
       "expiring": {
@@ -22654,27 +22654,30 @@
       "computers_other": "{{count}} 台電腦",
       "pickFor": "{{name}} 的選法",
       "hiddenTag": "已隱藏",
-      "hide": "選模型時不顯示",
-      "hideAria": "選模型時不顯示「{{name}}」",
       "show": "選模型時顯示",
-      "showAria": "選模型時顯示「{{name}}」",
       "assignedBy": "新任務依「{{strategy}}」分配",
       "adjust": "在智慧路由中調整",
       "quotaFirst": "帳號之間、電腦之間不論選哪種選法，讀得到訂閱用量時都先用快重置、還剩得多的那個；差不多時才依選法挑。"
     },
     "sources": {
-      "title": "供應商路由",
-      "description": "把幾個來源合成一條路由，用起來像一個合併後的供應商：照常選模型，由路由決定這次用哪個。同一家的幾個供應商會自動合好。",
       "models_other": "{{count}} 個模型",
       "autoTag": "自動",
-      "new": "合併供應商",
-      "newName": "新的供應商路由",
-      "empty": "還沒有可以合併的來源。連接兩個以上同一家的供應商會自動合成一條，也可以點「合併供應商」自己挑。",
-      "addProvider": "新增供應商",
       "chooseProvider": "選擇供應商",
       "removeAria": "把 {{name}} 從這條路由中移除",
-      "deleteAria": "刪除路由「{{name}}」",
-      "note": "自動合成的路由會跟著供應商的連接增減，成員不能改，可以改選法或隱藏。"
+      "note": "自動合成的路由會跟著供應商的連接增減，成員不能改，可以改選法或隱藏。",
+      "providers_other": "{{count}} 個供應商",
+      "addWhole": "新增整個供應商",
+      "addWholeHint": "它的全部模型都進這條路由：選模型時這條路由像一個供應商，照常選模型，由路由決定這次用哪個成員。",
+      "addModelHint": "只加某個供應商的某個模型：選這條路由時依選法在這些來源裡挑一個。",
+      "detailHint": "這條路由合併的是整個供應商：選模型時它像一個供應商，照常選模型、思考深度，由路由決定這次用哪個成員。"
+    },
+    "elsewhere": {
+      "title": "其他地方用的模型",
+      "description": "這些模型設定在各自的頁面裡，從這裡可以直接過去。",
+      "auxiliaryHint": "任務命名、推薦指令、摘要這類背景小事用的模型",
+      "subagentHint": "Claude Code 與 Codex 的 Subagent 用哪個模型",
+      "botsTitle": "夥伴",
+      "botsHint": "每個夥伴用哪個模型、備用哪個，在夥伴自己的設定裡"
     }
   },
   "projectSettings": {

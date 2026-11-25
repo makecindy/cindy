@@ -22963,29 +22963,34 @@
       "computers_other": "{{count}} computadores",
       "pickFor": "Estratégia de {{name}}",
       "hiddenTag": "Oculto",
-      "hide": "Ocultar no seletor de modelos",
-      "hideAria": "Ocultar {{name}} no seletor de modelos",
       "show": "Mostrar no seletor de modelos",
-      "showAria": "Mostrar {{name}} no seletor de modelos",
       "assignedBy": "Novas tarefas são atribuídas por “{{strategy}}”",
       "adjust": "Ajustar em Grupos de modelos",
       "quotaFirst": "Entre contas ou computadores, seja qual for a estratégia, quando o uso da assinatura pode ser lido vai primeiro quem tem mais cota antes da próxima renovação; a estratégia decide entre os que estão parecidos."
     },
     "sources": {
-      "title": "Modos de provedores",
-      "description": "Combine várias fontes em um modo que funciona como um único provedor: escolha o modelo como sempre e o modo decide qual fonte o executa. Provedores da mesma marca são combinados automaticamente.",
       "models_one": "{{count}} modelo",
       "models_many": "{{count}} modelos",
       "models_other": "{{count}} modelos",
       "autoTag": "Automático",
-      "new": "Combinar provedores",
-      "newName": "Novo modo de provedores",
-      "empty": "Ainda não há nada para combinar. Conecte dois ou mais provedores da mesma marca e eles serão combinados automaticamente, ou escolha os seus em Combinar provedores.",
-      "addProvider": "Adicionar provedor",
       "chooseProvider": "Escolher provedor",
       "removeAria": "Remover {{name}} deste modo",
-      "deleteAria": "Excluir o modo {{name}}",
-      "note": "Os modos automáticos acompanham seus provedores conectados. Os membros não podem ser alterados; você pode mudar a estratégia ou ocultá-los."
+      "note": "Os modos automáticos acompanham seus provedores conectados. Os membros não podem ser alterados; você pode mudar a estratégia ou ocultá-los.",
+      "providers_one": "{{count}} provedor",
+      "providers_many": "{{count}} provedores",
+      "providers_other": "{{count}} provedores",
+      "addWhole": "Adicionar um provedor inteiro",
+      "addWholeHint": "Todos os modelos dele entram neste modo. No seletor ele funciona como um provedor: escolha o modelo como sempre e o modo decide qual membro o executa.",
+      "addModelHint": "Adicione um modelo de um provedor. Ao escolher este modo, uma dessas fontes é escolhida pela estratégia.",
+      "detailHint": "Este modo combina provedores inteiros. No seletor ele funciona como um provedor: escolha modelo e esforço como sempre."
+    },
+    "elsewhere": {
+      "title": "Modelos usados em outros lugares",
+      "description": "Essas configurações de modelo ficam em páginas próprias. Vá direto a elas por aqui.",
+      "auxiliaryHint": "O modelo para tarefas de fundo, como nomear, sugestões e resumos",
+      "subagentHint": "Qual modelo os subagentes do Claude Code e do Codex usam",
+      "botsTitle": "Parceiros",
+      "botsHint": "Cada parceiro escolhe seu modelo e reservas nas próprias configurações"
     }
   },
   "projectSettings": {

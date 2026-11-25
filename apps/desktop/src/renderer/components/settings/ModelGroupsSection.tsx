@@ -47,7 +47,14 @@ import {
   type ModelGroupStrategy,
 } from '../../../shared/modelGroups';
 import { ModelGroupRouteExceptions } from './ModelGroupRouteExceptions';
-import { ModelGroupsAutoRoutes } from './ModelGroupsAutoRoutes';
+import {
+  ModelSettingsElsewhere,
+  ProviderAllocationRows,
+  SourceRouteDetail,
+  SourceRouteRow,
+  useSourceOptions,
+  WholeProviderAddRow,
+} from './ModelGroupsAutoRoutes';
 import { modelGroupsSettings } from './ModelGroupsSection.settings-search';
 import { ModelGroupsOverview } from './ModelGroupsOverview';
 import { SettingsTextInput } from './SettingsTextInput';
@@ -56,7 +63,7 @@ const log = createLogger('ModelGroupsSection');
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const UNSET_EFFORT = '__unset__';
 
-type View = { kind: 'list' } | { kind: 'route'; id: string };
+type View = { kind: 'list' } | { kind: 'route'; id: string } | { kind: 'source'; id: string };
 
 /** 行尾的小图标按钮：32px 热区，带可见提示。 */
 function RowIconButton({ label, onClick, disabled, children }: { label: string; onClick(): void; disabled?: boolean; children: ReactNode }) {
@@ -141,6 +148,9 @@ export function ModelGroupsSection() {
   // 这里能打开、能改的是用户按模型排的路由；供应商路由(及它们在每个模型上的展开)在下面单独一段(ModelGroupsAutoRoutes)。
   const userRoutes = useMemo(() => config.routes.filter((item) => !item.parent), [config]);
   const shownConfig = useMemo(() => ({ ...config, routes: userRoutes }), [config, userRoutes]);
+  // 路由只有一种，来源分两类：某个模型，或一整个供应商(含其他电脑上的、分享来的)。后一类存在 sourceRoutes 里。
+  const sourceRoutes = config.sourceRoutes ?? [];
+  const sourceOptions = useSourceOptions();
   // 时段例外可能改走别的路线：「试一下」里会出现别的路线的来源，名字一起备好。
   const allCandidates = useMemo(() => config.routes.flatMap((item) => item.candidates), [config]);
   const namesOf = useModelGroupCandidateNames(allCandidates);
@@ -188,6 +198,10 @@ export function ModelGroupsSection() {
   const back = () => setView({ kind: 'list' });
 
   // ── 路线详情 ───────────────────────────────────────────────────────────────
+  const sourceRoute = view.kind === 'source' ? sourceRoutes.find((item) => item.id === view.id) : undefined;
+  if (view.kind === 'source' && sourceRoute) {
+    return <SourceRouteDetail route={sourceRoute} config={config} options={sourceOptions} save={save} onBack={back} />;
+  }
   const route = view.kind === 'route' ? userRoutes.find((item) => item.id === view.id) : undefined;
   if (view.kind === 'route' && route) {
     const move = (index: number, delta: number) => updateRoute(route.id, (current) => {
@@ -363,9 +377,21 @@ export function ModelGroupsSection() {
                 {route.candidates.length === 0 && (
                   <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.sourcesEmpty')}</SettingsBlock>
                 )}
+                {/* 还没有来源时可以改成合并整个供应商：这条路由随之变成「像一个供应商，照常选模型」的那一类。 */}
+                {route.candidates.length === 0 && (
+                  <WholeProviderAddRow options={sourceOptions} taken={[]} onAdd={(source) => void save((latest) => ({
+                    ...latest,
+                    routes: latest.routes.filter((item) => item.id !== route.id),
+                    sourceRoutes: [...(latest.sourceRoutes ?? []), {
+                      id: route.id, name: route.name, strategy: route.strategy, sources: [source],
+                      ...(route.effort ? { effort: route.effort } : {}),
+                      ...(route.autoSwitch === false ? { autoSwitch: false as const } : {}),
+                    }],
+                  })).then((ok) => { if (ok) setView({ kind: 'source', id: route.id }); })} />
+                )}
                 <SettingsRow
                   title={t('modelGroups.settings.addSource')}
-                  hint={full ? t('modelGroups.settings.sourcesFull', { count: MODEL_GROUP_LIMITS.candidates }) : undefined}
+                  hint={full ? t('modelGroups.settings.sourcesFull', { count: MODEL_GROUP_LIMITS.candidates }) : route.candidates.length === 0 ? t('modelGroups.sources.addModelHint') : undefined}
                   wrap
                   trailing={
                     <div className="w-[280px] max-w-full">
@@ -494,12 +520,16 @@ export function ModelGroupsSection() {
               onClick={() => setView({ kind: 'route', id: item.id })}
             />
           ))}
-          {userRoutes.length === 0 && (
+          {sourceRoutes.map((item) => (
+            <SourceRouteRow key={item.id} route={item} config={config} options={sourceOptions} onOpen={() => setView({ kind: 'source', id: item.id })} />
+          ))}
+          <ProviderAllocationRows config={config} />
+          {userRoutes.length === 0 && sourceRoutes.length === 0 && (
             <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.routesEmpty')}</SettingsBlock>
           )}
         </SettingsCard>
       </SettingsSection>
-      <ModelGroupsAutoRoutes config={config} save={save} />
+      <ModelSettingsElsewhere />
     </SettingsSection>
   );
 }

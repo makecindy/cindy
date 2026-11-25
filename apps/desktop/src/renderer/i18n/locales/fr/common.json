@@ -22962,29 +22962,34 @@
       "computers_other": "{{count}} ordinateurs",
       "pickFor": "Stratégie pour {{name}}",
       "hiddenTag": "Masqué",
-      "hide": "Masquer dans le sélecteur de modèles",
-      "hideAria": "Masquer {{name}} dans le sélecteur de modèles",
       "show": "Afficher dans le sélecteur de modèles",
-      "showAria": "Afficher {{name}} dans le sélecteur de modèles",
       "assignedBy": "Les nouvelles tâches sont réparties selon « {{strategy}} »",
       "adjust": "Ajuster dans Groupes de modèles",
       "quotaFirst": "Entre comptes ou ordinateurs, quelle que soit la stratégie, celui qui a le plus de quota avant sa prochaine réinitialisation passe en premier lorsque l’utilisation de l’abonnement est lisible ; la stratégie départage ceux qui sont proches."
     },
     "sources": {
-      "title": "Modes de fournisseurs",
-      "description": "Réunissez plusieurs sources en un mode qui fonctionne comme un seul fournisseur : choisissez le modèle comme d’habitude, le mode décide quelle source l’exécute. Les fournisseurs d’une même marque sont réunis automatiquement.",
       "models_one": "{{count}} modèle",
       "models_many": "{{count}} modèles",
       "models_other": "{{count}} modèles",
       "autoTag": "Automatique",
-      "new": "Réunir des fournisseurs",
-      "newName": "Nouveau mode de fournisseurs",
-      "empty": "Rien à réunir pour l’instant. Connectez au moins deux fournisseurs de la même marque pour qu’ils soient réunis automatiquement, ou choisissez les vôtres avec Réunir des fournisseurs.",
-      "addProvider": "Ajouter un fournisseur",
       "chooseProvider": "Choisir un fournisseur",
       "removeAria": "Retirer {{name}} de ce mode",
-      "deleteAria": "Supprimer le mode {{name}}",
-      "note": "Les modes automatiques suivent vos fournisseurs connectés. Leurs membres ne sont pas modifiables ; vous pouvez changer la stratégie ou les masquer."
+      "note": "Les modes automatiques suivent vos fournisseurs connectés. Leurs membres ne sont pas modifiables ; vous pouvez changer la stratégie ou les masquer.",
+      "providers_one": "{{count}} fournisseur",
+      "providers_many": "{{count}} fournisseurs",
+      "providers_other": "{{count}} fournisseurs",
+      "addWhole": "Ajouter un fournisseur entier",
+      "addWholeHint": "Tous ses modèles rejoignent ce mode. Dans le sélecteur, il fonctionne comme un fournisseur : choisissez le modèle comme d’habitude et le mode décide quel membre l’exécute.",
+      "addModelHint": "Ajoutez un modèle d’un fournisseur. Choisir ce mode sélectionne l’une de ces sources selon la stratégie.",
+      "detailHint": "Ce mode réunit des fournisseurs entiers. Dans le sélecteur, il fonctionne comme un fournisseur : choisissez le modèle et l’effort comme d’habitude."
+    },
+    "elsewhere": {
+      "title": "Modèles utilisés ailleurs",
+      "description": "Ces réglages de modèle ont leurs propres pages. Accédez-y directement d’ici.",
+      "auxiliaryHint": "Le modèle des tâches d’arrière-plan : nommage, suggestions, résumés",
+      "subagentHint": "Quel modèle utilisent les sous-agents de Claude Code et Codex",
+      "botsTitle": "Compagnons",
+      "botsHint": "Chaque compagnon choisit son modèle et ses secours dans ses réglages"
     }
   },
   "projectSettings": {
