@@ -281,8 +281,11 @@ export class InputHandoffSession {
   private initial: HandoffTarget | null = null;
   private step: ExtractedStep | null = null;
   private unreadablePage: IncompleteFormError['page'] | null = null;
-  /** The last read lost the card's hidden code fields on the same page, which still lays out hidden ones. */
-  private hiddenUnsure = false;
+  /**
+   * A read that is the card's step except for its hidden code fields, on the same page that still lays out hidden
+   * ones: whose they are can no longer be told, which is no evidence the owner finished or moved on.
+   */
+  private unsureRead: ExtractedStep | null = null;
   private stepNumber = 0;
   private submissions = 0;
   private finishingUntil: number | undefined;
@@ -574,6 +577,13 @@ export class InputHandoffSession {
       if (this.ended) return true;
       if (settled === 'ended') {
         this.end('succeeded', 'detected');
+        return true;
+      }
+      // The page kept the step (a code error, say) but whose its hidden code field is can no longer be told: the card
+      // stays on it rather than taking the step as done. Answering it again stops before typing into a guess.
+      if (settled === this.unsureRead && this.step) {
+        if (!ok) this.failure = outcome === 'origin_changed' ? 'origin_changed' : 'action_failed';
+        this.publish('ready');
         return true;
       }
       const next = settledForm(settled, current) ? askingNothing(settled) : settled;
@@ -1153,7 +1163,7 @@ export class InputHandoffSession {
     const read = await this.read().catch(() => null);
     if (!read || read.pageMissing || !this.watching()) return;
     // Not telling whose a hidden code field is now is no evidence of anything: the card stays as it is.
-    if (this.hiddenUnsure) return;
+    if (read === this.unsureRead) return;
     const step = settledForm(read, this.step) ? askingNothing(read) : read;
     // Answering on a picture because nothing could be read: now something can.
     if (this.picture) {
@@ -1301,15 +1311,13 @@ export class InputHandoffSession {
     this.target = { ...this.target, window: { index: raw.window.index, title: raw.window.title } };
     this.unreadablePage = null;
     let step: ExtractedStep;
-    this.hiddenUnsure = false;
+    this.unsureRead = null;
     try {
       step = extractStep(raw as NativeAxSnapshot);
       // The owner clicking another field moves the focus off a hidden code field of the step on the card; it is
       // still that step's while the page still shows the step's fields. Another form never inherits it.
       const kept = this.keptHidden(raw as NativeAxSnapshot);
-      // Kept fields lost on the same page that still lays out hidden ones: whose they are can no longer be told.
-      this.hiddenUnsure = !kept && !!this.step?.hiddenFields?.length && !!step.hiddenCandidates &&
-        step.url?.split('#')[0] === this.step.url?.split('#')[0];
+      if (!kept && this.lostHiddenOnly(step)) this.unsureRead = step;
       step = kept ?? step;
     } catch (error) {
       if (error instanceof IncompleteFormError) {
@@ -1371,6 +1379,30 @@ export class InputHandoffSession {
       .map((field) => unnamed(field.identity))
       .sort();
     return JSON.stringify(fields(fresh)) === JSON.stringify(fields(current)) ? fresh : undefined;
+  }
+
+  /**
+   * A fresh read that is the card's step without its hidden code fields: the same page, still laying out hidden
+   * fields, with every other field the same. A form with any other field is another step, shown as usual.
+   */
+  private lostHiddenOnly(fresh: ExtractedStep): boolean {
+    const current = this.step;
+    const hidden = current?.hiddenTaken ?? 0;
+    if (!current || !hidden || !fresh.hiddenCandidates || fresh.url?.split('#')[0] !== current.url?.split('#')[0]) return false;
+    // Names and tree places change with the hidden fields gone (an error above a field, a fingerprint now unique).
+    const plain = (step: ExtractedStep) => [...step.bindings.values()]
+      .flatMap<{ identity: string }>((binding) => binding.kind !== 'text' ? [] : (binding.segments ?? [binding]))
+      .map((field) => {
+        const [domId, fp, , , frameOrigin] = JSON.parse(field.identity) as unknown[];
+        return JSON.stringify([domId, fp, frameOrigin]);
+      });
+    const left = plain(current);
+    for (const field of plain(fresh)) {
+      const at = left.indexOf(field);
+      if (at < 0) return false;
+      left.splice(at, 1);
+    }
+    return left.length === hidden;
   }
 
   /** A browser showing no page, or a page whose address went missing for now. */

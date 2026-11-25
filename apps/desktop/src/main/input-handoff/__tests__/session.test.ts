@@ -45,9 +45,11 @@ describe('InputHandoffSession', () => {
   // above the code, where it names it. `noIds`: the code fields have no page id, and with `twinDrop` the second frame
   // loads another address. `twinSwap`: typing the phone swaps the two frames; `twinDropOther`: moving the focus off the
   // code removes the second frame. `dupId`: no phone; next to the focused code, a never-focused 1x1 field reads with
-  // the same id (ids are read cut off at 64 characters) and fingerprint.
+  // the same id (ids are read cut off at 64 characters) and fingerprint; `dupIdDrop` has the phone, and typing it
+  // removes the focused one. `twinIds`: the two frames' fields have different ids, and a rejected code removes the
+  // second frame.
   type PayLayout = 'focus' | 'insert' | 'trap' | 'frame' | 'fragment' | 'twoSteps' | 'sameFp' | 'twinFrames' | 'twinDrop' |
-    'twinSwap' | 'twinDropOther' | 'splitCode' | 'dupId';
+    'twinSwap' | 'twinDropOther' | 'twinIds' | 'splitCode' | 'dupId' | 'dupIdDrop';
   function payPage(options: { layout?: PayLayout; staleOnce?: boolean; rejects?: boolean; errorAbove?: boolean; noIds?: boolean } = {}) {
     const layout = options.layout ?? 'focus';
     const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce, secondStep: false, rejected: false };
@@ -78,7 +80,7 @@ describe('InputHandoffSession', () => {
       out.push(n(next(), 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }));
       const code = { ...(options.noIds ? {} : { domId: 'sms-code' }), frame: [460, 440, 1, 1], focused: state.focus === 'code', ...(layout === 'splitCode' ? { title: 'Code 2' } : {}) };
       if (state.rejected) out.push(n(next(), 'AXStaticText', { value: '验证码错误', frame: [460, options.errorAbove ? 425 : 470, 200, 12] }));
-      const twins = ['twinFrames', 'twinDrop', 'twinSwap', 'twinDropOther'].includes(layout);
+      const twins = ['twinFrames', 'twinDrop', 'twinSwap', 'twinDropOther', 'twinIds'].includes(layout);
       if (layout === 'frame' || layout === 'fragment' || twins) {
         const address = layout === 'fragment' && state.phoneTyped ? 'https://secure.example.test/sms#sent' : 'https://secure.example.test/sms';
         // Except with `twinFrames`, each frame names its own field, so both read alike.
@@ -94,18 +96,18 @@ describe('InputHandoffSession', () => {
           const twin = next();
           out.push(n(twin, 'AXWebArea', { url: options.noIds && layout === 'twinDrop' ? 'https://secure.example.test/sms-b' : address, frame: [440, 600, 320, 120] }));
           if (named) out.push(n(`${twin}.0`, 'AXStaticText', { value: '验证码', frame: [460, 620, 60, 16] }));
-          out.push(n(`${twin}.1`, 'AXTextField', { ...(options.noIds ? {} : { domId: 'sms-code' }), frame: [460, 640, 1, 1] }));
+          out.push(n(`${twin}.1`, 'AXTextField', { ...(options.noIds ? {} : { domId: layout === 'twinIds' ? 'sms-code-b' : 'sms-code' }), frame: [460, 640, 1, 1] }));
         };
         if (layout === 'twinSwap' && state.phoneTyped) {
           frameB();
           frameA();
         } else {
           if (!(layout === 'twinDrop' && state.phoneTyped)) frameA();
-          if (!(layout === 'twinDropOther' && state.focus !== 'code')) frameB();
+          if (!(layout === 'twinDropOther' && state.focus !== 'code') && !(layout === 'twinIds' && state.rejected)) frameB();
         }
-      } else out.push(n(next(), 'AXTextField', code));
+      } else if (!(layout === 'dupIdDrop' && state.phoneTyped)) out.push(n(next(), 'AXTextField', code));
       if (layout === 'trap') out.push(n(next(), 'AXTextField', { domId: 'bot-trap', frame: [460, 460, 1, 1] }));
-      if (layout === 'dupId') out.push(n(next(), 'AXTextField', { domId: 'sms-code', frame: [460, 460, 1, 1] }));
+      if (layout === 'dupId' || layout === 'dupIdDrop') out.push(n(next(), 'AXTextField', { domId: 'sms-code', frame: [460, 460, 1, 1] }));
       out.push(n(next(), 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }));
       return out;
     };
@@ -212,6 +214,10 @@ describe('InputHandoffSession', () => {
     { layout: 'twinDrop' as const, noIds: false },
     { layout: 'twinDrop' as const, noIds: true },
     { layout: 'twinSwap' as const, noIds: false },
+    // PR #12780 reviews (codex r4694200899, r4694200914): without ids the swapped frame's field took the code's tree
+    // place; with ids read alike, removing the focused one left the other alone in the code's key.
+    { layout: 'twinSwap' as const, noIds: true },
+    { layout: 'dupIdDrop' as const, noIds: false },
   ])('does not hand a hidden code field over to another frame once its own moves or goes away (%o)', async ({ layout, noIds }) => {
     const page = payPage({ layout, noIds });
     const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
@@ -260,6 +266,40 @@ describe('InputHandoffSession', () => {
     expect(finished).toEqual([]);
     expect(latest().phase).toBe('ready');
     expect(latest().controls.filter((control) => control.kind === 'text').map((control) => control.label)).toEqual(['Code']);
+    session.cancel();
+  });
+
+  // PR #12780 review (codex r4694200929, `twinIds`): the rejected code removed the other frame at the code's address;
+  // the settled read after the submit lost the code and handed back as succeeded. Entry: session.submit. Unit tier.
+  it('stays on the card when a rejected code also removes another frame at its address', async () => {
+    const page = payPage({ layout: 'twinIds', rejects: true });
+    const { session, latest, finished } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
+    await session.start();
+    const step = latest();
+    const texts = step.controls.filter((control) => control.kind === 'text');
+    expect(texts).toHaveLength(2);
+    const values = Object.fromEntries(texts.map((control, i) => [control.id, i === 0 ? '18600000000' : '123456']));
+    await session.submit({ expectedRevision: step.revision, values, action: { kind: 'submit' } });
+    expect(page.acts.filter((act) => act.kind === 'text').map((act) => act.ref)).toEqual(['0.1', '0.3.1']);
+    expect(page.state.rejected).toBe(true);
+    expect(finished).toEqual([]);
+    expect(latest().phase).toBe('ready');
+    expect(latest().controls.filter((control) => control.kind === 'text')).toHaveLength(2);
+    session.cancel();
+  });
+
+  // PR #12780 review (codex r4694200936): the owner moved on to the next form on the window, which keeps a hidden
+  // field of its own; the window watch kept the old card instead of showing the password step.
+  it('shows the next form the owner reached on the window even when it lays out a hidden field', async () => {
+    const page = payPage({ layout: 'twoSteps' });
+    const { session, latest, finished } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' }, windowWatchMs: 2 });
+    await session.start();
+    expect(latest().controls.filter((control) => control.kind === 'text')).toHaveLength(2);
+    page.state.secondStep = true;
+    page.state.focus = 'password';
+    await vi.waitFor(() => expect(latest().controls.filter((control) => control.kind === 'text')
+      .map((control) => control.kind === 'text' && control.contentType)).toEqual(['password']));
+    expect(finished).toEqual([]);
     session.cancel();
   });
 

@@ -48,6 +48,8 @@ export interface ExtractedStep {
   signIn?: boolean;
   /** Keys (`hiddenFieldKeys`) of shrunken fields this step took in; passed back to keep them once focus moves. */
   hiddenFields?: string[];
+  /** How many shrunken fields this step took in, remembered by key or not (an ambiguous key is not remembered). */
+  hiddenTaken?: number;
   /** The page lays out shrunken fields, taken in or not: a code field whose keys stopped matching may be among them. */
   hiddenCandidates?: boolean;
 }
@@ -120,18 +122,15 @@ function hiddenFieldInPage(node: NativeAxNode, page: NativeAxNode): boolean {
 }
 
 /**
- * A hidden field found focused earlier in this step. Its page id with its fingerprint, within the document that
- * holds it (named by its address and how many documents are at that address, which outlast tree positions),
- * survives text the page inserts after an earlier field is typed; an id is unique only in its own document, so a
- * frame's field of the same id is another field.
- * Its place in the tree covers only inputs without an id, still within its document: a field of another frame may
- * take that place once this one's frame goes.
- * A key is kept only while exactly one hidden field reads with it: two frames at one address, or two ids read alike
- * (they are read cut off), cannot tell whose the field was.
+ * A hidden field found focused earlier in this step: its page id (if any) with its fingerprint, within the document
+ * that holds it (named by its address). It survives text the page inserts after an earlier field is typed, which
+ * shifts tree positions; an id is unique only in its own document, so a frame's field of the same id is another field.
+ * The tree position is left out: another field (of another frame, say) may take that place.
+ * A key counts only while exactly one hidden field reads with it, and is remembered only then: two frames at one
+ * address, two fields without ids, or two ids read alike (they are read cut off) cannot tell whose the field was.
  */
-export const hiddenFieldKeys = (field: { ref: string; fp: string; domId?: string }, document: string): string[] =>
-  // With an id, only the id counts: another field may take this one's old place in the tree.
-  field.domId ? [JSON.stringify(['dom', document, field.domId, field.fp])] : [JSON.stringify(['ref', document, field.ref, field.fp])];
+export const hiddenFieldKeys = (field: { fp: string; domId?: string }, document: string): string[] =>
+  [JSON.stringify(['hidden', document, field.domId ?? null, field.fp])];
 
 const isWithin = (ref: string, scope: string) => ref === scope || ref.startsWith(`${scope}.`);
 const parentRef = (ref: string) => ref.slice(0, Math.max(0, ref.lastIndexOf('.')));
@@ -233,20 +232,13 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
   // The document a node belongs to: its nearest web area (the page itself or a frame inside it), by its address;
   // inserting text above a frame shifts the frame's tree position, not its address.
   // Two frames may load the same address, each its own document with its own ids; their keys read alike, so neither
-  // is kept (see `hiddenFieldKeys`). Once one goes or another comes, the count changes and so does every key there:
-  // the field is not handed over to a frame that took the place of the gone one.
+  // is kept (see `hiddenFieldKeys`).
   const documentNames = new Map<NativeAxNode, string>();
-  // A frame that only rewrites its fragment (`#sent`) is still the same document.
-  const addressOf = (node: NativeAxNode) => node.url?.split('#')[0];
-  const atAddress = new Map<string, number>();
-  for (const node of snapshot.nodes) {
-    const address = node.role === 'AXWebArea' ? addressOf(node) : undefined;
-    if (address !== undefined) atAddress.set(address, (atAddress.get(address) ?? 0) + 1);
-  }
   for (const node of snapshot.nodes) {
     if (node.role !== 'AXWebArea') continue;
-    const address = addressOf(node);
-    documentNames.set(node, address === undefined ? `ref:${node.ref}` : JSON.stringify([address, atAddress.get(address)]));
+    // A frame that only rewrites its fragment (`#sent`) is still the same document.
+    const address = node.url?.split('#')[0];
+    documentNames.set(node, address === undefined ? `ref:${node.ref}` : address);
   }
   const documents = [...documentNames.keys()].sort((a, b) => b.ref.length - a.ref.length);
   const documentOf = (node: NativeAxNode) => {
@@ -266,7 +258,8 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
   const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb, takenHidden)) : pageMissing ? [] : nodes;
   // Only fields the hidden-field rule took in are remembered, never zero-size fields kept for the viewport edge.
   const hiddenNodes = scoped.filter((node) => !visible(node, []) && takenHidden(node));
-  const hiddenFields = hiddenNodes.flatMap(keysOf);
+  // Remembered only when unambiguous now: a key two fields read with names neither once the focus moves.
+  const hiddenFields = hiddenNodes.flatMap(keysOf).filter((key) => readers.get(key) === 1);
 
   // Modal sheets take over the window.
   const sheet = scoped.find((node) => node.role === 'AXSheet');
@@ -505,6 +498,7 @@ export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: Readon
     ...(pageMissing ? { pageMissing } : {}),
     ...(signIn ? { signIn } : {}),
     ...(hiddenFields.length ? { hiddenFields } : {}),
+    ...(hiddenNodes.length ? { hiddenTaken: hiddenNodes.length } : {}),
     ...(hiddenCandidates.length ? { hiddenCandidates: true } : {}),
   };
 }
