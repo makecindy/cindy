@@ -107,6 +107,7 @@ describe('WechatIM host boundary', () => {
       expect(vi.mocked(db.tx).mock.calls.filter(([name]) => name === 'wechatLeaseNextTask')).toHaveLength(3);
       expect(listeners()).toBe(initialListeners);
       await im.dispose();
+      expect(signal.aborted).toBe(true);
       expect(listeners()).toBe(0);
       expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(400);

@@ -938,7 +938,11 @@ describe("discoverSsoOrgRealm", () => {
       });
       await expect(discoverSsoOrgRealm("corp", clients, {
         allowPartialSuccess: true,
-      })).resolves.toEqual({ region, discovery: discovery(region) });
+      })).resolves.toEqual({
+        region,
+        discovery: discovery(region),
+        unconfirmedRegion: region === "cn" ? "global" : "cn",
+      });
     },
   );
 
@@ -966,7 +970,11 @@ describe("discoverSsoOrgRealm", () => {
         await vi.advanceTimersByTimeAsync(1);
         await outcome;
         expect(failed).not.toHaveBeenCalled();
-        expect(settled).toHaveBeenCalledExactlyOnceWith({ region, discovery: discovery(region) });
+        expect(settled).toHaveBeenCalledExactlyOnceWith({
+          region,
+          discovery: discovery(region),
+          unconfirmedRegion: region === "cn" ? "global" : "cn",
+        });
       } finally {
         vi.useRealTimers();
       }
@@ -991,9 +999,9 @@ describe("discoverSsoOrgRealm", () => {
     async (region, cn, global) => {
       await expect(
         discoverSsoOrgRealm("corp", { cn, global }),
-      ).resolves.toMatchObject({
+      ).resolves.toEqual({
         region,
-        discovery: { region },
+        discovery: discovery(region),
       });
     },
   );
@@ -1022,7 +1030,11 @@ describe("discoverSsoOrgRealm", () => {
   ] as const)("accepts a single valid hit with an unavailable peer when opted in", async (cn, global, region) => {
     await expect(discoverSsoOrgRealm("corp", { cn, global }, {
       allowPartialSuccess: true,
-    })).resolves.toEqual({ region, discovery: discovery(region) });
+    })).resolves.toEqual({
+      region,
+      discovery: discovery(region),
+      unconfirmedRegion: region === "cn" ? "global" : "cn",
+    });
   });
 
   it.each([

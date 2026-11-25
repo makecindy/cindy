@@ -20,6 +20,10 @@ export const membershipSchema = z.object({
   email: z.string().nullable(),
   orgId: z.string().nullable(),
   orgName: z.string().nullable(),
+  // 企业实名与部门(auth-server GET /api/me 组织身份新增);personal 或未升级服务端省略。
+  enterpriseName: z.string().nullable().optional(),
+  department: z.string().nullable().optional(),
+  departmentPath: z.array(z.string()).nullable().optional(),
   // 企业 logo(auth console 组织设置上传);personal 或未设置 = null。
   // optional 兼容尚未升级的旧 auth-server 响应(缺字段不整份拒绝)。
   orgLogoUrl: z.string().nullable().optional(),

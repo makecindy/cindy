@@ -2332,12 +2332,14 @@ export const __testing = {
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(finish, ms);
-    function finish() {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
       clearTimeout(timer);
-      signal?.removeEventListener('abort', finish);
       resolve();
     }
-    signal?.addEventListener('abort', finish, { once: true });
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

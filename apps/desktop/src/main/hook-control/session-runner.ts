@@ -890,10 +890,15 @@ export function createMakerHookSessionRunner(deps: {
         agentDeviceId = row?.agentDeviceId ?? meta?.agentDeviceId ?? null;
       }
 
-      const fail = (msg: string, finalText = ''): HookRunOutcome => ({
+      const fail = (
+        msg: string,
+        finalText = '',
+        errorReason?: string | null,
+      ): HookRunOutcome => ({
         status: 'error',
         finalText,
         errorMessage: msg,
+        ...(errorReason ? { errorReason } : {}),
         durationMs: Date.now() - startedAt,
       });
 
@@ -1876,7 +1881,7 @@ export function createMakerHookSessionRunner(deps: {
             surface: 'official',
           })
           : err instanceof Error ? err.message : String(err);
-        return { ...fail(message), ...collected };
+        return { ...fail(message, '', observer.errorReason), ...collected };
       } finally {
         // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
@@ -2052,6 +2057,7 @@ function beginContinuationWatch(
         status: 'error',
         finalText: '',
         errorMessage,
+        ...(observer.errorReason ? { errorReason: observer.errorReason } : {}),
         durationMs: Date.now() - startedAt,
       });
       return;
@@ -2071,6 +2077,7 @@ function beginContinuationWatch(
         status: errorMessage === null ? 'ok' : 'error',
         finalText: collected.finalText,
         errorMessage,
+        ...(errorMessage !== null && observer.errorReason ? { errorReason: observer.errorReason } : {}),
         durationMs: Date.now() - startedAt,
         ...(collected.attachments !== undefined ? { attachments: collected.attachments } : {}),
       });
