@@ -322,7 +322,10 @@
       "verified-publisher": "發佈者已驗",
       "unverified": "未驗"
     },
-    "highRiskTitle": "險要之權"
+    "highRiskTitle": "險要之權",
+    "highRiskTitleCount": "{{title}} · 凡 {{count}} 項",
+    "highRiskMore": "於上框中滑而覽險要之權",
+    "listMore": "上滑以覽諸權之說"
   },
   "notice": {
     "title": {

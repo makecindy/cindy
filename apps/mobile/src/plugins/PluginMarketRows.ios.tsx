@@ -4,9 +4,9 @@ import {
 import {
   accessibilityLabel, buttonBorderShape, buttonStyle, contentShape, disabled, fixedSize, font, foregroundStyle,
   frame, lineLimit, listRowBackground, listRowInsets, listRowSeparator, onAppear, padding, pickerStyle, shapes, tag,
-  background, clipShape,
+  background, clipShape, onGeometryChange,
 } from "@expo/ui/swift-ui/modifiers";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { iconSize, spacing, useTheme } from "@/theme";
 import { PluginMarketIcon } from "./PluginMarketIcon";
@@ -19,6 +19,12 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
   const { t } = useTranslation();
   const { colors } = useTheme();
   const device = market.target?.deviceName ?? "";
+  // Every row has the same text column and the same few source labels: measure them once. A label that would take more
+  // than 40% of the column (German "Benutzerdefiniert", or any language at a large text size) moves under the name,
+  // so the name keeps a reasonable width (SwiftUI has no wrapping row).
+  const [columnWidth, setColumnWidth] = useState(0);
+  const [labelWidths, setLabelWidths] = useState<Record<string, number>>({});
+  const labelBelow = (label: string) => columnWidth > 0 && (labelWidths[label] ?? 0) > columnWidth * 0.4;
   // Standalone text actions keep a 44×44pt hit target (ios-native-design §5), whatever their label size.
   const textButton = (label: string, onPress: () => void, testID?: string) => (
     <Button testID={testID} onPress={onPress} modifiers={[buttonStyle("borderless"), accessibilityLabel(label)]}>
@@ -141,21 +147,32 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
           <HStack spacing={spacing.md} modifiers={[frame({ maxWidth: Infinity, minHeight: 54, alignment: "leading" }),
             contentShape(shapes.rectangle())]}>
             <RNHostView matchContents><PluginMarketIcon item={item} variant="row" /></RNHostView>
-            <VStack alignment="leading" spacing={3} modifiers={[frame({ maxWidth: Infinity, alignment: "leading" })]}>
-              <HStack spacing={6}>
-                {/* Larger accessibility sizes keep a second line for the name, like the installed rows that wrap. */}
-                {/* Names may take two lines at any size (as on Android), so "Demo Repo…" no longer cuts a short name. */}
-                <Text modifiers={[font({ textStyle: "body" }), lineLimit(2)]}>{item.name}</Text>
-                {origin ? (
-                  // The source label never wraps; the name gives way instead.
+            <VStack testID={`plugins.market.text.${item.pluginId}`} alignment="leading" spacing={3} modifiers={[frame({ maxWidth: Infinity, alignment: "leading" }),
+              ...(first ? [onGeometryChange((size: { width: number }) => {
+                const width = Math.round(size.width);
+                if (width > 0) setColumnWidth((current) => current === width ? current : width);
+              })] : [])]}>
+              {(() => {
+                const label = origin ? t("plugins.market.filter." + origin) : "";
+                // Names may take two lines at any size (as on Android), so "Demo Repo…" no longer cuts a short name.
+                const name = <Text modifiers={[font({ textStyle: "body" }), lineLimit(2)]}>{item.name}</Text>;
+                // The source label never wraps or truncates; when it would squeeze the name it goes under it.
+                const badge = origin ? (
                   <Text testID={`plugins.market.badge.${item.pluginId}`}
                     modifiers={[font({ textStyle: "caption2", weight: "semibold" }), foregroundStyle(colors.textSecondary),
                     lineLimit(1), fixedSize({ horizontal: true, vertical: false }),
-                    padding({ horizontal: spacing.sm, vertical: 2 }), background(colors.surfaceChip), clipShape("capsule")]}>
-                    {t("plugins.market.filter." + origin)}
+                    padding({ horizontal: spacing.sm, vertical: 2 }), background(colors.surfaceChip), clipShape("capsule"),
+                    onGeometryChange((size: { width: number }) => {
+                      const width = Math.round(size.width);
+                      if (width > 0) setLabelWidths((current) => current[label] === width ? current : { ...current, [label]: width });
+                    })]}>
+                    {label}
                   </Text>
-                ) : null}
-              </HStack>
+                ) : null;
+                return labelBelow(label)
+                  ? <VStack testID={`plugins.market.titleStacked.${item.pluginId}`} alignment="leading" spacing={3}>{name}{badge}</VStack>
+                  : <HStack testID={`plugins.market.titleRow.${item.pluginId}`} spacing={6}>{name}{badge}</HStack>;
+              })()}
               {line ? (
                 <Text modifiers={[font({ textStyle: state.kind === "idle" ? "subheadline" : "footnote" }),
                   foregroundStyle(colors.textSecondary), lineLimit(state.kind === "idle" ? 2 : 3)]}>{line}</Text>

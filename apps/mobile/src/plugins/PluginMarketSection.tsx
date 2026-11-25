@@ -123,7 +123,8 @@ export function PluginMarketSection({ market, onConnectComputer }: {
           onPress={() => market.openDetail(item)} style={styles.rowMain}>
           <PluginMarketIcon item={item} variant="row" />
           <View style={styles.rowText}>
-            {/* The name may take two lines; the source label stays on its first line. */}
+            {/* The name may take two lines; the source label follows it, or wraps below it when a long label (German
+                "Benutzerdefiniert") would otherwise squeeze the name. */}
             <View style={styles.titleRow}>
               <Text numberOfLines={2} style={styles.rowTitle}>{item.name}</Text>
               {origin ? <Text style={styles.badge}>{t("plugins.market.filter." + origin)}</Text> : null}
@@ -213,7 +214,7 @@ const makeStyles = (c: ThemeColors) =>
     reserve: { opacity: 0 },
     lineOverlay: { position: "absolute", top: 0, left: 0, right: 0 },
     checkSpace: { width: iconSize.lg },
-    titleRow: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+    titleRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start", columnGap: spacing.sm, rowGap: spacing.xs },
     rowTitle: {
       flexShrink: 1, fontSize: typeScale.subtitle, lineHeight: lineHeight.subtitle, fontWeight: fontWeight.medium, color: c.textPrimary,
     },

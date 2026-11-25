@@ -140,7 +140,7 @@ pnpm mobile:sim:whoami -- --mock --json
   Weather Board 新增运行 Node 程序、Secret Sync 已有 Node 只新增凭证绑定（两者都显示高风险固定段）、Vault Upgrade 是升级版的极端情况（新增五类高风险、
   4 个凭证绑定 × 16 个方法）、Moved Source 的升级来源与已装实例不同（回执带 `originSourceChanged`，按首装给出完整权限，含两类高风险；Git 来源，提示句请用户核对上面显示的仓库）、
   Moved Folder 是本地文件夹市场的同类换源（不显示仓库，提示句不提仓库）、Reading List 只新增通知
-  （没有固定段）、Legacy Sync 来自旧 Host 的自定义市场（没有来源，手机上不能升级：已装详情点「更新」后提示在电脑上刷新或更新）。
+  （没有固定段）、Legacy Sync 来自旧 Host 的自定义市场（没有来源，手机上不能升级：已装详情点「升级 · 版本」后提示在电脑上刷新或更新）。
   整页状态用 `cindy://plugins?market=<场景>`：`outdated`（电脑版本太旧）、`unavailable`、
   `organization`、`customPartial`、`empty`、`readFailed`（首次读取失败，重试恢复）、`twoComputers`（多一台在线的
   CINDY Second Mock Mac，可在「安装到」里切换）、`offline`（离线模拟电脑变成可选且不应答，选中后显示离线状态），
@@ -152,7 +152,9 @@ pnpm mobile:sim:whoami -- --mock --json
 - 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。
 - Agent 安装插件确认卡：`cindy://sessions/visual-plugin-install-card?deviceId=cindy-visual-mock-mac`，与 Host
   `buildGhostInstallConsentInteraction` 同形的 `cindy.plugin.install` 卡（自定义市场首装、长仓库名带 ref），看仓库一行、
-  展开详情不显示原始来源字段；允许或拒绝后卡片消失，不连接真实电脑。
+  展开详情不显示原始来源字段；允许或拒绝后卡片消失，不连接真实电脑。缺来源的同类卡：
+  `cindy://sessions/visual-plugin-install-card-unverified?deviceId=cindy-visual-mock-mac`（自定义市场、卡上没有 `source`，
+  只能拒绝，并说明在电脑上处理）。
 - 反馈确认：`cindy://sessions/visual-issue-confirm?deviceId=cindy-visual-mock-mac`，合成反馈草稿、署名与环境，覆盖预览、编辑和展开详情；不提交。Desktop 对应 `pnpm ui:check --page issue-confirm --case all --theme all`，两端均加载实际组件。
 - 代输入：`cindy://sessions/visual-input-handoff?deviceId=cindy-visual-mock-mac`，一条英文的电脑 App 登录请求（长目的、Agent 补充、邮箱与密码），点「填写」打开实际的 iOS 原生面板；用于在 iPhone Duo 折叠／展开、短屏与常规机型上检查对齐和高度。合成数据，「继续」不会提交到任何电脑。
 - 群聊点名：`cindy://companions/groups/mention-qa?deviceId=cindy-visual-mock-mac`，合成成员覆盖显式身份、唯一名称回退、重名、未知及群体提及。沿用实际群聊组件与成员身份 sheet，只用于界面验收；话题入口另由直连 Chat Server 的组件回归覆盖。

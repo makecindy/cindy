@@ -16,7 +16,7 @@ import {
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
 import { useState } from "react";
-import { pinnedHighRiskMaxHeight, pluginConsentPresentation } from "./pluginConsentPresentation";
+import { layoutConsentSheet, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -24,19 +24,35 @@ export function PluginManagementConfirmation(
     styles = useThemedStyles(makeStyles);
   const { consent, visible, answer } = usePluginConsent(props);
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
-  const { height: windowHeight } = useWindowDimensions();
-  // The summary's lines are shown in full; beyond its bound they scroll inside (a ScrollView hugs shorter content).
-  // The bound keeps the identity block (titles, computer, source, repository, source notes) and the buttons in view
-  // without scrolling, from their measured heights; the sheet itself is at most 85% of the window.
-  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0 });
+  const { height: windowHeight, fontScale } = useWindowDimensions();
+  // The sheet (at most 85% of the window) shares its height between the identity block at the top of the list and
+  // the pinned summary by one rule (`layoutConsentSheet`, the same as iOS): the summary keeps its heading and two full
+  // lines, the identity block (titles, computer, source, repository, source notes) comes next, the rest of the summary
+  // last. Every part is measured on screen; what does not fit scrolls, with a hint below the summary or the list.
+  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0, hint: 0, listHint: 0 });
+  const [lineHeights, setLineHeights] = useState<number[]>([]);
   const measure = (key: keyof typeof measured) => (event: { nativeEvent: { layout: { height: number } } }) => {
     const height = Math.ceil(event.nativeEvent.layout.height);
     setMeasured((current) => current[key] === height ? current : { ...current, [key]: height });
   };
+  const measureLine = (index: number) => (event: { nativeEvent: { layout: { height: number } } }) => {
+    const height = Math.ceil(event.nativeEvent.layout.height);
+    setLineHeights((current) => current[index] === height ? current : Object.assign([...current], { [index]: height }));
+  };
   const sheetPadding = spacing.lg + spacing.xs;
-  const summaryCap = pinnedHighRiskMaxHeight({ available: Math.floor(windowHeight * 0.85),
-    chrome: sheetPadding * 2 + spacing.md /* list bottom padding */ + spacing.md * 2 + spacing.xs /* summary padding, gap */,
-    ...measured });
+  const lineCount = info?.highRisk?.lines.length ?? 0;
+  // The list scrolls under the summary; its hint shows while the list is longer than its room, until its end is reached.
+  const [list, setList] = useState({ content: 0, atEnd: false });
+  const allocation = layoutConsentSheet({
+    available: Math.floor(windowHeight * 0.85) - sheetPadding * 2 - spacing.md /* list bottom padding */
+      - (info?.highRisk ? spacing.md * 2 + spacing.xs : 0) /* summary padding, gap under its heading */ - measured.actions,
+    identity: measured.identity, heading: measured.heading, lines: Array.from({ length: lineCount }, (_, index) => lineHeights[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
+    summaryHint: measured.hint, listHint: measured.listHint, hintGap: spacing.xs,
+    listContent: Math.max(0, list.content - spacing.md /* its bottom padding, already counted */),
+  });
+  const listClipped = allocation.listClipped && !list.atEnd;
+  // Large text: the buttons stack so each label shows in full (as the plugin notices do).
+  const stacked = fontScale > 1.2;
   return (
     <SheetModal
       nativePresentation
@@ -45,7 +61,14 @@ export function PluginManagementConfirmation(
       onBackdropPress={() => answer(false)}
     >
       <View style={styles.sheet} testID="plugins.managementConfirmation">
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={styles.content} testID="plugins.management.list"
+          onContentSizeChange={(_width, height) => { const content = Math.ceil(height); setList((current) => current.content === content ? current : { ...current, content }); }}
+          onScroll={(event) => {
+            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+            const atEnd = contentOffset.y + layoutMeasurement.height >= contentSize.height - 2;
+            setList((current) => current.atEnd === atEnd ? current : { ...current, atEnd });
+          }}
+          scrollEventThrottle={64}>
           {/* The identity block: where it goes and where it comes from first, in primary text, kept in view with the
               pinned summary on short screens (measured for its bound); the explanations follow in secondary text. */}
           <View testID="plugins.management.identity" style={styles.identity} onLayout={measure("identity")}>
@@ -82,22 +105,25 @@ export function PluginManagementConfirmation(
             </Text>
           ))}
         </ScrollView>
+        {listClipped ? <Text testID="plugins.management.listMore" style={[styles.hint, styles.listHint]} onLayout={measure("listHint")}>{t("plugins.management.listMore")}</Text> : null}
         {/* Outside the scroll area: always visible above the buttons, even on short screens. */}
         {info?.highRisk ? (
-          // Bounded summary: every line in full, scrolling inside its height bound; full details are in the scrolled list.
+          // Bounded summary: every line in full, scrolling inside its share; full details are in the scrolled list.
           <View testID="plugins.management.highRisk" style={styles.highRisk}>
-            <Text numberOfLines={1} style={styles.highRiskTitle} onLayout={measure("heading")}>{info.highRisk.title}</Text>
-            {/* Scrolls inside its bound; the bar stays visible so the hidden lines are discoverable. */}
+            {/* The heading wraps rather than truncates. */}
+            <Text testID="plugins.management.highRiskTitle" style={styles.highRiskTitle} onLayout={measure("heading")}>{info.highRisk.title}</Text>
+            {/* Scrolls inside its share; the bar stays visible and a hint says so when lines are hidden. */}
             <ScrollView testID="plugins.management.highRiskScroll" nestedScrollEnabled persistentScrollbar
-              style={{ maxHeight: summaryCap }}
+              style={{ maxHeight: allocation.summaryLines }}
               contentContainerStyle={styles.highRiskLines}>
               {info.highRisk.lines.map((line, index) => (
-                <Text key={index} style={styles.highRiskBody}>{line}</Text>
+                <Text key={index} style={styles.highRiskBody} onLayout={measureLine(index)}>{line}</Text>
               ))}
             </ScrollView>
+            {allocation.clipped ? <Text testID="plugins.management.highRiskMore" style={styles.hint} onLayout={measure("hint")}>{t("plugins.management.highRiskMore")}</Text> : null}
           </View>
         ) : null}
-        <View testID="plugins.management.actions" style={styles.actions} onLayout={measure("actions")}>
+        <View testID="plugins.management.actions" style={[styles.actions, stacked && styles.stackedActions]} onLayout={measure("actions")}>
           {[false, true].map((accept) => (
             <Pressable
               key={String(accept)}
@@ -108,9 +134,9 @@ export function PluginManagementConfirmation(
                 || (accept && info?.allowBlocked === true)
               }
               onPress={() => answer(accept)}
-              style={[styles.button, accept && styles.primary, accept && info?.allowBlocked && styles.unavailable]}
+              style={[styles.button, stacked && styles.stackedButton, accept && styles.primary, accept && info?.allowBlocked && styles.unavailable]}
             >
-              <Text style={[styles.label, accept && styles.primaryText]}>
+              <Text style={[styles.label, styles.buttonLabel, accept && styles.primaryText]}>
                 {t("plugins.management." + (accept ? "allow" : "reject"))}
               </Text>
             </Pressable>
@@ -177,15 +203,26 @@ const makeStyles = (c: ThemeColors) =>
       color: c.textPrimary,
     },
     actions: { flexDirection: "row", gap: spacing.sm },
+    // Large text: Allow first, each button the full width, labels wrapping instead of truncating.
+    stackedActions: { flexDirection: "column-reverse" },
+    stackedButton: { flex: 0, paddingVertical: spacing.sm },
+    listHint: { marginTop: spacing.xs },
+    hint: {
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      color: c.textSecondary,
+    },
     unavailable: { opacity: 0.5 },
     button: {
       flex: 1,
       minHeight: 44,
       alignItems: "center",
       justifyContent: "center",
+      paddingHorizontal: spacing.md,
       borderRadius: radius.pill,
       backgroundColor: c.surfaceChip,
     },
     primary: { backgroundColor: c.cta },
     primaryText: { color: c.ctaText },
+    buttonLabel: { textAlign: "center" },
   });

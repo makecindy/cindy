@@ -1042,6 +1042,17 @@ describe('plugin first-install task card and its source', () => {
     await click('interaction.permission.denyButton');
     expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'deny' }));
   });
+  // Android re-check of d81200da: after expanding, the button still said "Details". It now says what a tap does.
+  it.each([false, true])('labels the install details button by what a tap does (companion=%s)', async (companion) => {
+    remoteSessionStore.setPendingInteractions('s1', [{ request: card({ operation: 'install', origin: 'market' }) }]);
+    await act(async () => root.render(<Harness companion={companion} />));
+    const button = () => host.querySelector('[data-testid="interaction.permission.installDetailsButton"]')!;
+    expect(button().textContent).toBe('interaction.companion.details');
+    await click('interaction.permission.installDetailsButton');
+    expect(button().textContent).toBe('interaction.panel.collapse');
+    await click('interaction.permission.installDetailsButton');
+    expect(button().textContent).toBe('interaction.companion.details');
+  });
   // Maintainer review 05:55 #1: the expanded details handed the whole input to the generic previews (the companion
   // card serializes it), so a valid source's sourceId and a malformed source's credential URL appeared.
   it.each([false, true])('never shows the raw source fields in the expanded details (companion=%s)', async (companion) => {

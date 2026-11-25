@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { isPinnedHighRiskPermission, PINNED_HIGH_RISK_MIN_HEIGHT, pinnedHighRiskMaxHeight, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
+import { allocateConsentSheet, isPinnedHighRiskPermission, layoutConsentSheet, PINNED_HIGH_RISK_MIN_HEIGHT, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
 import { DeviceLinkError, sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
@@ -1597,7 +1597,7 @@ describe('confirmation sheet wording', () => {
     const secret = { ...item('node:secret:token:worker.cjs:run', 'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name: 'API token' }, detail: 'run' };
     const view = pluginConsentPresentation(install({}, [item('notify', 'notify', 'notify', 'notifyDetail'), secret, nodeExecute('nodeMcp')]), t, 'Mac');
     // Pinned above the buttons: a heading and one short line per high-risk class, in the Host's order.
-    expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitle',
+    expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitleCount(title=plugins.management.highRiskTitle,count=2)',
       lines: ['plugins.management.permissions.nodeMcp', 'plugins.management.permissions.nodeSecretOne'] });
     // The scrolled list keeps every full explanation (credential names and methods included), high-risk items first.
     expect(view.permissions.map((row) => [row.title, row.detail])).toEqual([
@@ -1636,28 +1636,75 @@ describe('confirmation sheet wording', () => {
       expect(strings.nodeSecretCount.startsWith(receiver)).toBe(true);
     }
   });
-  // Layout re-checks (3587f6ca): the summary's bound must leave the identity block (name, computer, source,
-  // repository, source notes), its heading and the buttons in view without scrolling. Matrix of measured heights
-  // (dp/pt) for Chinese / English / German × default (914) and short (610) screens × normal and large text.
-  it('bounds the pinned summary so the identity block and buttons always stay in view', () => {
-    const chrome = 80;
+  // Layout re-checks (iOS and Android, d81200da): on short screens the summary still took four or five lines while the
+  // identity block lost its repository line, source note or third-party line. One rule for both platforms: the summary
+  // keeps its heading and two full lines, the identity block gets what it needs next, the rest of the summary last;
+  // both floors not fitting share the room in proportion; normal sizes are unchanged. Matrix of measured heights
+  // (dp/pt) for Chinese / English / German × default and short screens × normal and large text (Demo Long Repository
+  // Tools: five classes, each line 20 or 26 high).
+  it('shares a confirmation sheet between the identity block and the summary by one rule', () => {
+    const gap = 4;
     const cases = [
-      // [case, available, identity, heading, actions]
-      ['zh default normal', 777, 170, 20, 48], ['zh default large', 777, 230, 26, 60],
-      ['zh short normal', 518, 170, 20, 48], ['zh short large', 518, 230, 26, 60],
-      ['en default normal', 777, 190, 20, 48], ['en default large', 777, 300, 26, 60],
-      ['en short normal', 518, 190, 20, 48], ['en short large', 518, 300, 26, 60],
-      ['de default normal', 777, 210, 20, 48], ['de default large', 777, 330, 26, 60],
-      ['de short normal', 518, 210, 20, 48], ['de short large', 518, 330, 26, 60],
+      // [case, available (sheet minus padding and buttons), identity, heading, line height]
+      ['zh default normal', 640, 210, 20, 20], ['zh default large', 640, 300, 26, 26],
+      ['zh short normal', 400, 230, 20, 20], ['zh short large', 400, 300, 26, 26],
+      ['en default normal', 640, 230, 20, 20], ['en default large', 640, 340, 26, 26],
+      ['en short normal', 400, 250, 20, 20], ['en short large', 400, 340, 26, 26],
+      ['de default normal', 640, 250, 20, 20], ['de default large', 640, 370, 26, 26],
+      ['de short normal', 400, 270, 20, 20], ['de short large', 400, 370, 26, 26],
     ] as const;
-    for (const [name, available, identity, heading, actions] of cases) {
-      const cap = pinnedHighRiskMaxHeight({ available, chrome, identity, heading, actions });
-      expect(cap, name).toBeGreaterThanOrEqual(PINNED_HIGH_RISK_MIN_HEIGHT);
-      // Whatever the summary takes, the identity block still fits above it, unless only the one-line floor is left.
-      if (cap > PINNED_HIGH_RISK_MIN_HEIGHT) expect(available - chrome - heading - actions - cap, name).toBeGreaterThanOrEqual(identity);
+    for (const [name, available, identity, heading, line] of cases) {
+      const lines = [line, line, line, line, line];
+      const full = 5 * line + 4 * gap, floor = 2 * line + gap;
+      const share = allocateConsentSheet({ available, identity, heading, lines, gap });
+      const room = available - heading;
+      expect(share.identity + share.summaryLines, name).toBeLessThanOrEqual(room);
+      if (identity + full <= room) {
+        // Room for everything: nothing changes.
+        expect(share, name).toEqual({ identity, summaryLines: full, clipped: false });
+      } else if (identity + floor <= room) {
+        // The identity block is complete; the summary keeps at least its two lines.
+        expect(share.identity, name).toBe(identity);
+        expect(share.summaryLines, name).toBeGreaterThanOrEqual(floor);
+        expect(share.clipped, name).toBe(true);
+      } else {
+        // Both floors do not fit: in proportion.
+        expect(Math.abs(share.identity / (share.identity + share.summaryLines) - identity / (identity + floor)), name).toBeLessThan(0.01);
+        expect(share.clipped, name).toBe(true);
+      }
     }
+    // The Android short-screen numbers (Demo Long Repository Tools): before, the summary kept 107–140 dp and the
+    // repository line was cut; now the identity block comes first and the summary keeps two lines.
+    const shortZh = allocateConsentSheet({ available: 332, identity: 230, heading: 25, lines: [20, 20, 20, 20, 20], gap });
+    expect(shortZh).toEqual({ identity: 230, summaryLines: 77, clipped: true });
     // Before measuring: a conservative quarter of the sheet.
-    expect(pinnedHighRiskMaxHeight({ available: 700, chrome, identity: 0, heading: 0, actions: 0 })).toBe(175);
+    expect(allocateConsentSheet({ available: 700, identity: 0, heading: 0, lines: [], gap })).toEqual({ identity: 0, summaryLines: 175, clipped: false });
+    expect(allocateConsentSheet({ available: 100, identity: 0, heading: 0, lines: [], gap }).summaryLines).toBe(PINNED_HIGH_RISK_MIN_HEIGHT);
+  });
+  // The hints below the summary and the list take room too (self-check of the layout batch: without it the list hint
+  // pushed the identity block under the summary on short screens). Both are decided from measured content only, so
+  // showing a hint never changes whether it shows (no back-and-forth between frames). Tier: unit.
+  it('reserves room for the summary and list hints, decided from content only', () => {
+    const base = { available: 400, identity: 230, heading: 20, lines: [20, 20, 20, 20, 20], gap: 4, hintGap: 4 };
+    const sizes = [0, 18, 40];
+    for (const summaryHint of sizes) for (const listHint of sizes) for (const listContent of [0, 150, 230, 600]) {
+      const name = `summaryHint=${summaryHint} listHint=${listHint} listContent=${listContent}`;
+      const layout = layoutConsentSheet({ ...base, summaryHint, listHint, listContent });
+      const used = base.heading + layout.summaryLines + (layout.clipped ? summaryHint + base.hintGap : 0)
+        + (layout.listClipped ? listHint + base.hintGap : 0);
+      // The summary, its hint and the list hint leave the identity share in view.
+      expect(used + layout.identity, name).toBeLessThanOrEqual(base.available);
+      // Whether the list hint shows does not depend on the hint's own height.
+      expect(layout.listClipped, name).toBe(layoutConsentSheet({ ...base, summaryHint, listHint: 0, listContent }).listClipped);
+      // Not measured: no hint.
+      if (listContent === 0) expect(layout.listClipped, name).toBe(false);
+    }
+    // Room for everything: no hints, the summary complete.
+    expect(layoutConsentSheet({ ...base, available: 800, summaryHint: 18, listHint: 18, listContent: 300 }))
+      .toEqual({ identity: 230, summaryLines: 5 * 20 + 4 * 4, clipped: false, listClipped: false });
+    // No summary: the list hint alone, when the list is longer than the sheet.
+    expect(layoutConsentSheet({ ...base, heading: 0, lines: [], summaryHint: 0, listHint: 18, listContent: 500 }).listClipped).toBe(true);
+    expect(layoutConsentSheet({ ...base, heading: 0, lines: [], summaryHint: 0, listHint: 18, listContent: 300 }).listClipped).toBe(false);
   });
   it('orders the pinned classes the same way whatever order the package declares them in', () => {
     const resident = item('node:resident', 'node', 'nodeResident', 'nodeResidentDetail');
@@ -1672,7 +1719,7 @@ describe('confirmation sheet wording', () => {
     const view = pluginConsentPresentation({ requestId: 'r', initiator: 'user', origin: 'market',
       facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [secret], removed: [],
         unchangedCount: 3, builtinOauthClientChanged: false } } as any, t, 'Mac');
-    expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitle', lines: ['plugins.management.permissions.nodeSecretOne'] });
+    expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitleCount(title=plugins.management.highRiskTitle,count=1)', lines: ['plugins.management.permissions.nodeSecretOne'] });
     expect(view.permissions[0]).toEqual({ title: 'plugins.management.permissions.added · plugins.management.permissions.nodeSecret(name=API token)',
       detail: 'plugins.management.permissions.nodeSecretDetail\n\nrun' });
   });
@@ -1720,7 +1767,7 @@ describe('confirmation sheet wording', () => {
         unchangedCount: 2, builtinOauthClientChanged: false } }) as any;
     const adds = pluginConsentPresentation(update([item('notify', 'notify', 'notify'), nodeExecute()], []), t, 'Mac');
     expect(adds).toMatchObject({ device: 'Mac', sourceNotice: undefined,
-      highRisk: { title: 'plugins.management.highRiskTitle', lines: ['plugins.management.permissions.nodeRuntime'] } });
+      highRisk: { title: 'plugins.management.highRiskTitleCount(title=plugins.management.highRiskTitle,count=1)', lines: ['plugins.management.permissions.nodeRuntime'] } });
     expect(adds.permissions[0].title).toBe('plugins.management.permissions.added · plugins.management.permissions.nodeRuntime');
     const removes = pluginConsentPresentation(update([item('notify', 'notify', 'notify')], [nodeExecute()]), t, 'Mac');
     expect(removes.highRisk).toBeUndefined();

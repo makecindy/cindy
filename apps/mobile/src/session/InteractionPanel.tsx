@@ -963,11 +963,12 @@ function PermissionCard({
           {t('interaction.permission.installSourceUnverified')}
         </Text>
       ) : null}
+      {/* Says what tapping does: show the details, or fold them again. */}
       {isFirstInstall && <InteractionTouchButton
-        accessibilityLabel={t('interaction.companion.details')} expanded={showInstallDetails}
+        accessibilityLabel={t(showInstallDetails ? 'interaction.panel.collapse' : 'interaction.companion.details')} expanded={showInstallDetails}
         disabled={busy} onPress={() => setShowInstallDetails(open => !open)} style={styles.companionDetailsButton}
         testID="interaction.permission.installDetailsButton">
-        <Text style={styles.companionDetailsText}>{t('interaction.companion.details')}</Text>
+        <Text style={styles.companionDetailsText}>{t(showInstallDetails ? 'interaction.panel.collapse' : 'interaction.companion.details')}</Text>
       </InteractionTouchButton>}
     </>
   );

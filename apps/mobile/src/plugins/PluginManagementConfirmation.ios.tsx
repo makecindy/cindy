@@ -6,7 +6,6 @@ import {
   font,
   foregroundStyle,
   frame,
-  lineLimit,
   onGeometryChange,
   padding,
   scrollIndicators,
@@ -22,7 +21,7 @@ import {
 import { useState } from "react";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { pinnedHighRiskMaxHeight, pluginConsentPresentation } from "./pluginConsentPresentation";
+import { layoutConsentSheet, pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
@@ -32,22 +31,37 @@ export function PluginManagementConfirmation(
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
   const { height: windowHeight, fontScale } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  // The summary's lines are shown in full; beyond its bound they scroll inside. The bound keeps the identity block
-  // (title, computer, source, repository, source notes), the summary heading and the buttons in view without
-  // scrolling, from their measured heights. The sheet opens large when it has a summary: the window minus the top
-  // inset and the sheet's own header (title row and drag handle, which grow with text size).
+  // The sheet shares its height between the identity block at the top of the list and the pinned summary by one rule
+  // (`layoutConsentSheet`, the same as Android): the summary keeps its heading and two full lines, the identity block
+  // (title, computer, source, repository, source notes) comes next, the rest of the summary last. Every part is
+  // measured; lines beyond the summary's share scroll inside it, with a hint below. The usable height is the window
+  // minus the top inset and the sheet's own header (title row and drag handle, which grow with text size).
   // A SwiftUI ScrollView takes all the height it is offered, so it gets an explicit height: the measured content
-  // height, capped by the bound.
-  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0 });
+  // height, capped by its share.
+  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0, hint: 0, listHint: 0 });
+  const [lineHeights, setLineHeights] = useState<number[]>([]);
   const measure = (key: keyof typeof measured) => (size: { height: number }) => {
     const height = Math.ceil(size.height);
     if (height > 0) setMeasured((current) => current[key] === height ? current : { ...current, [key]: height });
   };
+  const measureLine = (index: number) => (size: { height: number }) => {
+    const height = Math.ceil(size.height);
+    if (height > 0) setLineHeights((current) => current[index] === height ? current : Object.assign([...current], { [index]: height }));
+  };
   const sheetHeader = Math.ceil(64 * Math.min(Math.max(fontScale, 1), 2)) + 10;
-  const summaryCap = pinnedHighRiskMaxHeight({ available: Math.floor(windowHeight - insets.top - sheetHeader),
-    chrome: spacing.sm * 2 /* list padding */ + spacing.sm * 3 /* footer spacing */ + spacing.xs + 12 /* footer bottom */ + insets.bottom,
-    ...measured });
+  const lineCount = info?.highRisk?.lines.length ?? 0;
+  const allocation = layoutConsentSheet({
+    available: Math.floor(windowHeight - insets.top - sheetHeader) - spacing.sm * 2 /* list padding */
+      - spacing.sm * 4 /* footer spacing */ - spacing.xs - 12 /* footer bottom */ - insets.bottom - measured.actions,
+    identity: measured.identity, heading: measured.heading, lines: Array.from({ length: lineCount }, (_, index) => lineHeights[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
+    summaryHint: measured.hint, listHint: measured.listHint, hintGap: spacing.sm,
+    // The list must show the identity block without scrolling; its hint says when it cannot.
+    listContent: measured.identity,
+  });
   const [summaryHeight, setSummaryHeight] = useState(0);
+  const listClipped = allocation.listClipped;
+  // Large text: the buttons stack so each label shows in full (as the plugin notices do).
+  const stacked = fontScale > 1.2;
   const body = (text?: string, lead = false) =>
     text ? (
       <Text
@@ -60,31 +74,66 @@ export function PluginManagementConfirmation(
         {text}
       </Text>
     ) : null;
+  const answerButton = (accept: boolean) => (
+    <Button
+      key={String(accept)}
+      testID={"plugins.management." + (accept ? "allow" : "reject")}
+      onPress={() => answer(accept)}
+      modifiers={[
+        buttonStyle(accept ? "borderedProminent" : "bordered"),
+        ...(accept ? [tint(colors.cta), foregroundStyle(colors.ctaText)] : []),
+        disabled(
+          !props.active || props.state.busy || !!props.state.answerHeld || !props.state.online
+            || (accept && info?.allowBlocked === true),
+        ),
+        frame({ maxWidth: Infinity, minHeight: 44 }),
+      ]}
+    >
+      <Text
+        modifiers={[
+          font({ textStyle: "subheadline", weight: "medium" }),
+          ...(accept ? [foregroundStyle(colors.ctaText)] : []),
+          // The label wraps rather than truncates at large text sizes.
+          fixedSize({ horizontal: false, vertical: true }),
+        ]}
+      >
+        {t("plugins.management." + (accept ? "allow" : "reject"))}
+      </Text>
+    </Button>
+  );
   return (
     <ComposerSheet
       visible={visible}
       onClose={() => answer(false)}
       title={t("plugins.notice.title.confirmation")}
       nativeContent
-      // With high-risk items the whole list must be reachable before Allow; at the medium detent an upward swipe
-      // expands the sheet instead of scrolling, so open large.
-      largeOnly={!!info?.highRisk}
+      // Open large when the summary, a source-change notice or an accessibility text size needs the room (at the medium
+      // detent an upward swipe expands the sheet instead of scrolling the list).
+      largeOnly={!!info?.highRisk || !!info?.originSourceChanged || fontScale >= 1.35}
       testID="plugins.managementConfirmation"
       footer={
         // The pinned high-risk text lives in the footer, which stays visible at the medium detent too.
         <VStack alignment="leading" spacing={spacing.sm}>
           {/* A separator between the scrolled list and the pinned summary, so a list title resting right above
               the summary does not read as a repeat. */}
+          {listClipped ? (
+            <Text testID="plugins.management.listMore" modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary),
+              fixedSize({ horizontal: false, vertical: true }), onGeometryChange(measure("listHint"))]}>
+              {t("plugins.management.listMore")}
+            </Text>
+          ) : null}
           {info?.highRisk ? <Divider /> : null}
           {info?.highRisk ? (
             // Bounded summary: every line in full, scrolling inside its height bound; full details are in the scrolled list.
             <VStack testID="plugins.management.highRisk" alignment="leading" spacing={spacing.xs}>
               <Text
+                testID="plugins.management.highRiskTitle"
                 modifiers={[
                   // Same size as the list's permission titles, one step heavier.
                   font({ textStyle: "subheadline", weight: "semibold" }),
                   foregroundStyle(colors.textPrimary),
-                  lineLimit(1),
+                  // Wraps rather than truncates.
+                  fixedSize({ horizontal: false, vertical: true }),
                   onGeometryChange(measure("heading")),
                 ]}
               >
@@ -92,7 +141,7 @@ export function PluginManagementConfirmation(
               </Text>
               {/* Scrolls inside its bound; the indicator stays visible so the hidden lines are discoverable. */}
               <ScrollView testID="plugins.management.highRiskScroll"
-                modifiers={[frame({ height: Math.min(summaryCap, summaryHeight || summaryCap) }), scrollIndicators("visible")]}>
+                modifiers={[frame({ height: Math.min(allocation.summaryLines, summaryHeight || allocation.summaryLines) }), scrollIndicators("visible")]}>
                 <VStack alignment="leading" spacing={spacing.xs}
                   modifiers={[frame({ maxWidth: Infinity, alignment: "leading" }),
                     onGeometryChange((size) => { if (size.height > 0) setSummaryHeight(size.height); })]}>
@@ -103,6 +152,7 @@ export function PluginManagementConfirmation(
                         font({ textStyle: "footnote" }),
                         foregroundStyle(colors.textPrimary),
                         fixedSize({ horizontal: false, vertical: true }),
+                        onGeometryChange(measureLine(index)),
                       ]}
                     >
                       {line}
@@ -110,35 +160,23 @@ export function PluginManagementConfirmation(
                   ))}
                 </VStack>
               </ScrollView>
+              {allocation.clipped ? (
+                <Text testID="plugins.management.highRiskMore" modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary),
+                  fixedSize({ horizontal: false, vertical: true }), onGeometryChange(measure("hint"))]}>
+                  {t("plugins.management.highRiskMore")}
+                </Text>
+              ) : null}
             </VStack>
           ) : null}
+          {stacked ? (
+            <VStack testID="plugins.management.actions" spacing={spacing.sm} modifiers={[onGeometryChange(measure("actions"))]}>
+              {[true, false].map((accept) => answerButton(accept))}
+            </VStack>
+          ) : (
           <HStack testID="plugins.management.actions" spacing={spacing.md} modifiers={[onGeometryChange(measure("actions"))]}>
-            {[false, true].map((accept) => (
-              <Button
-                key={String(accept)}
-                testID={"plugins.management." + (accept ? "allow" : "reject")}
-                onPress={() => answer(accept)}
-                modifiers={[
-                  buttonStyle(accept ? "borderedProminent" : "bordered"),
-                  ...(accept ? [tint(colors.cta), foregroundStyle(colors.ctaText)] : []),
-                  disabled(
-                    !props.active || props.state.busy || !!props.state.answerHeld || !props.state.online
-                      || (accept && info?.allowBlocked === true),
-                  ),
-                  frame({ maxWidth: Infinity, minHeight: 44 }),
-                ]}
-              >
-                <Text
-                  modifiers={[
-                    font({ textStyle: "subheadline", weight: "medium" }),
-                    ...(accept ? [foregroundStyle(colors.ctaText)] : []),
-                  ]}
-                >
-                  {t("plugins.management." + (accept ? "allow" : "reject"))}
-                </Text>
-              </Button>
-            ))}
+            {[false, true].map((accept) => answerButton(accept))}
           </HStack>
+          )}
         </VStack>
       }
     >

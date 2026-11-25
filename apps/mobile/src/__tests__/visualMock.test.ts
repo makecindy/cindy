@@ -75,6 +75,12 @@ it('serves an Agent plugin install task card with the Host-generated source', as
   const pending = await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'maker:get-pending-interactions', ['visual-plugin-install-card']) as any[];
   expect(pending[0].request).toMatchObject({ toolName: 'cindy.plugin.install',
     input: { operation: 'install', origin: 'custom-market', source: { kind: 'git', sourceId: 'DemoLongMarketSource01' } } });
+  // Re-checks of d81200da asked for the card a custom market without a source shows (only Reject).
+  const unverified = await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'maker:get-pending-interactions', ['visual-plugin-install-card-unverified']) as any[];
+  expect(unverified[0].request).toMatchObject({ toolName: 'cindy.plugin.install', input: { operation: 'install', origin: 'custom-market' } });
+  expect(unverified[0].request.input).not.toHaveProperty('source');
+  await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'maker:resolve-interaction', ['visual-plugin-install-card-unverified-request', { behavior: 'deny' }]);
+  expect(await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'maker:get-pending-interactions', ['visual-plugin-install-card-unverified'])).toEqual([]);
 });
 it('supplies valid demo plugin projections and confirms enable/disable through the real client', async () => {
   const mock = await import('@/debug/visualMock');

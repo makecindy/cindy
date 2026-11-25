@@ -322,7 +322,10 @@
       "verified-publisher": "Verifizierter Herausgeber",
       "unverified": "Nicht verifiziert"
     },
-    "highRiskTitle": "Berechtigungen mit hohem Risiko"
+    "highRiskTitle": "Berechtigungen mit hohem Risiko",
+    "highRiskTitleCount": "{{title}} · {{count}}",
+    "highRiskMore": "Im Feld oben scrollen, um alle Berechtigungen mit hohem Risiko zu sehen",
+    "listMore": "Nach oben scrollen, um alle Berechtigungen zu sehen"
   },
   "notice": {
     "title": {

@@ -322,7 +322,10 @@
       "verified-publisher": "發佈者已驗證",
       "unverified": "未驗證"
     },
-    "highRiskTitle": "高風險權限"
+    "highRiskTitle": "高風險權限",
+    "highRiskTitleCount": "{{title}} · {{count}} 項",
+    "highRiskMore": "在上方的框內滑動查看全部高風險權限",
+    "listMore": "向上滑動查看全部權限說明"
   },
   "notice": {
     "title": {

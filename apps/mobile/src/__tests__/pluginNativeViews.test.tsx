@@ -13,6 +13,7 @@ import { PluginTaskPickerView } from "@/plugins/PluginTaskPickerView.ios";
 import { PluginTaskPickerView as AndroidTaskPickerView } from "@/plugins/PluginTaskPickerView";
 import { pluginDetailModel } from "@/plugins/pluginDetailModel";
 import { palettes } from "@/theme/tokens";
+import { allocateConsentSheet, layoutConsentSheet } from "@/plugins/pluginConsentPresentation";
 import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation.ios";
 import { PluginManagementConfirmation as AndroidManagementConfirmation } from "@/plugins/PluginManagementConfirmation";
 import { PluginModelPicker } from '@/plugins/PluginModelPicker';
@@ -424,6 +425,30 @@ it("keeps market row names readable at accessibility sizes while waiting", () =>
   const badge = bridge.props.get("plugins.market.badge.market/demo");
   expect(badge.modifiers).toContainEqual({ lineLimit: 1 });
   expect(badge.modifiers).toContainEqual({ fixedSize: { horizontal: true, vertical: false } });
+});
+// Android re-check of d81200da: in German the "Benutzerdefiniert" label and the Install button left the name about
+// 64 dp ("Demo / Long …"). On iOS a label that would take more than 40% of the measured text column goes under the
+// name; a short label stays beside it. Minimal failing input: a 200 pt column and a 100 pt label. Tier: unit.
+it("moves a long source label under the market row name on iOS", () => {
+  const item = { pluginId: "custom:Team/demo", ghostId: "demo", name: "Demo Long Repository Tools", description: "From a market",
+    publisherKind: null, scope: "public", sourceType: "git-market", sourceMarketName: "Team", installState: "not-installed", icon: null };
+  const market = marketModel({ items: [item] });
+  mount(PluginDirectoryView, { ...directory(), market, segment: "market" });
+  const measure = (id: string, width: number) => act(() => {
+    bridge.props.get(id).modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width, height: 20 });
+  });
+  expect(bridge.props.has("plugins.market.titleRow.custom:Team/demo")).toBe(true);
+  measure("plugins.market.text.custom:Team/demo", 200);
+  const badge = bridge.props.get("plugins.market.badge.custom:Team/demo");
+  bridge.props.clear();
+  act(() => badge.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 100, height: 20 }));
+  expect(bridge.props.has("plugins.market.titleStacked.custom:Team/demo")).toBe(true);
+  expect(bridge.props.has("plugins.market.titleRow.custom:Team/demo")).toBe(false);
+  const stackedBadge = bridge.props.get("plugins.market.badge.custom:Team/demo");
+  bridge.props.clear();
+  act(() => stackedBadge.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 60, height: 20 }));
+  expect(bridge.props.has("plugins.market.titleRow.custom:Team/demo")).toBe(true);
+  expect(bridge.props.has("plugins.market.titleStacked.custom:Team/demo")).toBe(false);
 });
 it("uses a scrolling native title row without a separator or sticky section header", () => {
   const p = directory();
@@ -1503,38 +1528,91 @@ describe("pinned high-risk permission", () => {
   const geometry = (id: string, height: number) => act(() => {
     bridge.props.get(id).modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 390, height });
   });
-  it("iOS shows every pinned line in full and bounds it by the measured identity block and buttons", () => {
+  // Layout re-checks (d81200da): one sharing rule for both platforms (`allocateConsentSheet`, its matrix is in
+  // pluginManagement.test.ts). Here: the sheets feed it what they measure and use its result; the heading wraps and
+  // says how many classes follow; a hint shows when lines are hidden; at large text the buttons stack, Allow first.
+  it("iOS shows every pinned line in full and shares the sheet by the measured parts", () => {
     bridge.fontScale = 2.4;
     mount(PluginManagementConfirmation, props(allFive));
     const scroll = () => bridge.props.get("plugins.management.highRiskScroll");
-    const lines = (Array.isArray(scroll().children.props.children) ? scroll().children.props.children : [scroll().children.props.children]).flat();
-    expect(lines.map((line: any) => line.props.children)).toEqual(fiveLines);
-    for (const line of lines) expect(line.props.modifiers.some((m: any) => "lineLimit" in m)).toBe(false);
+    const lines = () => (Array.isArray(scroll().children.props.children) ? scroll().children.props.children : [scroll().children.props.children]).flat();
+    expect(lines().map((line: any) => line.props.children)).toEqual(fiveLines);
+    for (const line of lines()) expect(line.props.modifiers.some((m: any) => "lineLimit" in m)).toBe(false);
+    expect(bridge.props.get("plugins.management.highRiskTitle").modifiers.some((m: any) => "lineLimit" in m)).toBe(false);
     expect(scroll().modifiers).toContainEqual({ scrollIndicators: "visible" });
-    // The window (844 pt, no insets here) minus the sheet header at this text size is what the large sheet offers.
-    const available = 844 - (Math.ceil(64 * 2) + 10);
+    // The window (844 pt, no insets here) minus the sheet header at this text size, the fixed footer spacing and the buttons.
+    const header = Math.ceil(64 * 2) + 10, chrome = 8 * 2 + 8 * 4 + 4 + 12;
     const height = () => scroll().modifiers.find((m: any) => m.frame)?.frame.height;
-    expect(height()).toBe(Math.floor(available * 0.25)); // not measured yet: a conservative share
+    expect(height()).toBe(Math.floor((844 - header - chrome) * 0.25)); // not measured yet: a conservative share
     geometry("plugins.management.identity", 360);
     geometry("plugins.management.actions", 96);
-    const chrome = 8 * 2 + 8 * 3 + 4 + 12;
-    expect(height()).toBe(Math.max(44, available - chrome - 360 - 96));
+    geometry("plugins.management.highRiskTitle", 30);
+    lines().forEach((line: any) => act(() => line.props.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 300, height: 40 })));
+    const share = allocateConsentSheet({ available: 844 - header - chrome - 96, identity: 360, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4 });
+    expect(share).toMatchObject({ identity: 360, clipped: true });
+    // The hint takes room too once it shows.
+    geometry("plugins.management.highRiskMore", 20);
+    const hinted = allocateConsentSheet({ available: 844 - header - chrome - 96 - 20 - 8, identity: 360, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4 });
+    expect(height()).toBe(hinted.summaryLines);
+    expect(hinted.summaryLines).toBeGreaterThanOrEqual(2 * 40 + 4);
+    expect(bridge.props.has("plugins.management.listMore")).toBe(false);
+    // An identity block taller than its share: the list hint says to scroll up, and takes room from the summary.
+    geometry("plugins.management.identity", 520);
+    expect(bridge.props.has("plugins.management.listMore")).toBe(true);
+    geometry("plugins.management.listMore", 20);
+    const tall = layoutConsentSheet({ available: 844 - header - chrome - 96, identity: 520, heading: 30, lines: [40, 40, 40, 40, 40],
+      gap: 4, summaryHint: 20, listHint: 20, hintGap: 8, listContent: 520 });
+    expect(tall.listClipped).toBe(true);
+    expect(height()).toBe(tall.summaryLines);
+    // Large text: the buttons stack (a VStack), Allow first.
+    const actions = bridge.props.get("plugins.management.actions");
+    const order = (Array.isArray(actions.children) ? actions.children : [actions.children]).flat().map((child: any) => child.props.testID);
+    expect(order).toEqual(["plugins.management.allow", "plugins.management.reject"]);
   });
-  it("Android shows every pinned line in full and bounds it by the measured identity block and buttons", () => {
+  it("Android shows every pinned line in full and shares the sheet by the measured parts", () => {
     bridge.fontScale = 2;
     mount(AndroidManagementConfirmation, props(allFive));
     const scroll = () => bridge.props.get("plugins.management.highRiskScroll");
-    const lines = (Array.isArray(scroll().children) ? scroll().children : [scroll().children]).flat().filter(Boolean);
-    expect(lines.map((line: any) => line.props.children)).toEqual(fiveLines);
-    for (const line of lines) expect(line.props.numberOfLines).toBeUndefined();
+    const lines = () => (Array.isArray(scroll().children) ? scroll().children : [scroll().children]).flat().filter(Boolean);
+    expect(lines().map((line: any) => line.props.children)).toEqual(fiveLines);
+    for (const line of lines()) expect(line.props.numberOfLines).toBeUndefined();
+    const heading = () => (bridge.props.get("plugins.management.highRisk").children as any[]).flat().find((child: any) => child?.props?.testID === "plugins.management.highRiskTitle");
+    expect(heading().props.numberOfLines).toBeUndefined();
     expect(scroll().persistentScrollbar).toBe(true);
-    // Before measuring: a conservative quarter of the sheet (85% of 844).
-    expect(scroll().style).toMatchObject({ maxHeight: Math.floor(Math.floor(844 * 0.85) * 0.25) });
-    // English, short screen, larger text: a tall identity block leaves the summary only what is left.
-    act(() => bridge.props.get("plugins.management.identity").onLayout({ nativeEvent: { layout: { height: 330 } } }));
-    act(() => bridge.props.get("plugins.management.actions").onLayout({ nativeEvent: { layout: { height: 52 } } }));
     const chrome = 20 * 2 + 12 + 12 * 2 + 4;
-    expect(scroll().style.maxHeight).toBe(Math.max(44, Math.floor(844 * 0.85) - chrome - 330 - 52));
+    // Before measuring: a conservative quarter of the sheet (85% of 844, minus its padding).
+    expect(scroll().style).toMatchObject({ maxHeight: Math.floor((Math.floor(844 * 0.85) - chrome) * 0.25) });
+    const layout = (id: string, height: number) => act(() => bridge.props.get(id).onLayout({ nativeEvent: { layout: { height } } }));
+    layout("plugins.management.identity", 380);
+    layout("plugins.management.actions", 104);
+    act(() => heading().props.onLayout({ nativeEvent: { layout: { height: 30 } } }));
+    lines().forEach((line: any) => act(() => line.props.onLayout({ nativeEvent: { layout: { height: 40 } } })));
+    const available = Math.floor(844 * 0.85) - chrome - 104;
+    expect(allocateConsentSheet({ available, identity: 380, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4 })).toMatchObject({ identity: 380, clipped: true });
+    const hint = (bridge.props.get("plugins.management.highRisk").children as any[]).flat().find((child: any) => child?.props?.testID === "plugins.management.highRiskMore");
+    act(() => hint.props.onLayout({ nativeEvent: { layout: { height: 20 } } }));
+    const hinted = allocateConsentSheet({ available: available - 20 - 4, identity: 380, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4 });
+    expect(scroll().style.maxHeight).toBe(hinted.summaryLines);
+    expect(hinted.summaryLines).toBeGreaterThanOrEqual(2 * 40 + 4);
+    // The list is longer than the room left to it: its hint shows and takes its own room from the summary's share.
+    const listMore = () => (bridge.props.get("plugins.managementConfirmation").children as any[]).flat()
+      .find((child: any) => child?.props?.testID === "plugins.management.listMore");
+    expect(listMore()).toBeUndefined();
+    act(() => bridge.props.get("plugins.management.list").onContentSizeChange(390, 1200));
+    expect(listMore()).toBeDefined();
+    act(() => listMore().props.onLayout({ nativeEvent: { layout: { height: 20 } } }));
+    const withList = layoutConsentSheet({ available, identity: 380, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4,
+      summaryHint: 20, listHint: 20, hintGap: 4, listContent: 1200 - 12 });
+    expect(withList.listClipped).toBe(true);
+    expect(scroll().style.maxHeight).toBe(withList.summaryLines);
+    expect(withList.summaryLines).toBeLessThan(hinted.summaryLines);
+    // Scrolled to the end: the hint goes, the room stays (nothing jumps under the finger).
+    act(() => bridge.props.get("plugins.management.list").onScroll({ nativeEvent: { contentOffset: { y: 900 },
+      contentSize: { height: 1200 }, layoutMeasurement: { height: 300 } } }));
+    expect(listMore()).toBeUndefined();
+    expect(scroll().style.maxHeight).toBe(withList.summaryLines);
+    // Large text: the buttons stack, Allow on top (column-reverse), labels wrapping.
+    expect(bridge.props.get("plugins.management.actions").style).toContainEqual({ flexDirection: "column-reverse" });
   });
   it("Android shows no pinned area when nothing is high risk", () => {
     const { container } = mount(AndroidManagementConfirmation, props(installOf([notify])));
