@@ -285,57 +285,34 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
 
   return (
     <SettingsCard>
-      {/* Primary form header + tactile path well */}
+      {/* Primary form header + full-width description + tactile path well */}
       <div className="flex flex-col gap-3 px-5 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                role="heading"
-                aria-level={3}
-                className="text-13 font-medium leading-[1.4] text-[var(--settings-section-title)]"
-              >
-                {t('bots.homeFolder.workspaceLocation.title')}
-              </span>
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium',
-                  badge.textClass,
-                )}
-              >
-                <span className={cn('size-1.5 shrink-0 rounded-full', badge.dotClass)} aria-hidden />
-                {t(badge.key)}
-              </span>
-            </div>
-            <p className="mt-1 text-12 leading-[1.45] text-[var(--text-secondary)] [text-wrap:pretty]">
-              {t(
-                isMoved
-                  ? 'bots.homeFolder.workspaceLocation.movedDescription'
-                  : 'bots.homeFolder.workspaceLocation.description',
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span
+              role="heading"
+              aria-level={3}
+              className="min-w-0 truncate text-13 font-medium leading-[1.4] text-[var(--settings-section-title)]"
+            >
+              {t('bots.homeFolder.workspaceLocation.title')}
+            </span>
+            <span
+              className={cn(
+                'inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium',
+                badge.textClass,
               )}
-            </p>
+            >
+              <span className={cn('size-1.5 shrink-0 rounded-full', badge.dotClass)} aria-hidden />
+              {t(badge.key)}
+            </span>
           </div>
-
-          {canStartMove ? (
-            <div className="flex shrink-0 items-center gap-2 pt-0.5">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                compact
-                className="gap-1.5"
-                disabled={busy}
-                onClick={() => void chooseTarget()}
-              >
-                {busy ? <Spinner size={13} /> : <ArrowRightLeft size={13} aria-hidden />}
-                {t(
-                  isFailed
-                    ? 'bots.homeFolder.workspaceLocation.chooseAnother'
-                    : 'bots.homeFolder.workspaceLocation.moveAction',
-                )}
-              </Button>
-            </div>
-          ) : null}
+          <p className="text-12 leading-[1.5] text-[var(--text-secondary)] [text-wrap:pretty]">
+            {t(
+              isMoved
+                ? 'bots.homeFolder.workspaceLocation.movedDescription'
+                : 'bots.homeFolder.workspaceLocation.description',
+            )}
+          </p>
         </div>
 
         <div className="flex flex-col gap-2">
@@ -374,6 +351,27 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
             </div>
           ) : null}
         </div>
+
+        {canStartMove && !preview ? (
+          <div className="flex justify-end pt-0.5">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              compact
+              className="gap-1.5"
+              disabled={busy}
+              onClick={() => void chooseTarget()}
+            >
+              {busy ? <Spinner size={13} /> : <ArrowRightLeft size={13} aria-hidden />}
+              {t(
+                isFailed
+                  ? 'bots.homeFolder.workspaceLocation.chooseAnother'
+                  : 'bots.homeFolder.workspaceLocation.moveAction',
+              )}
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       {/* Inline migration plan — clean hairline band with From → To route & CTA hierarchy */}

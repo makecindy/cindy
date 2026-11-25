@@ -77,7 +77,7 @@ import { BotSettingsSaveStatus } from './BotSettingsSaveStatus';
 import { BotProjectsSettings } from './BotProjectsSettings';
 import { BotAutomationsSettings } from './BotAutomationsSettings';
 import { BotProjectRepositorySettings } from './BotProjectRepositorySettings';
-import { SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { SettingsBlock, SettingsCard } from '@/components/ui/settings-rows';
 import { BotWorkspaceLocationSettings } from './BotWorkspaceLocationSettings';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -731,43 +731,34 @@ export function BotSettings({
                 <BotProjectRepositorySettings key={bot.id} botId={bot.id} />
               </SettingsBlock>
               {!isRemote ? (
-                <SettingsRow
-                  wrap
-                  className="px-5"
-                  title={t('bots.homeFolder.title')}
-                  hint={
-                    bot.homeDir ? (
-                      <span
-                        className="block max-w-full truncate font-mono text-12 text-[var(--text-secondary)]"
-                        title={bot.homeDir}
-                      >
-                        {bot.homeDir}
-                      </span>
-                    ) : undefined
-                  }
-                  trailing={
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      compact
-                      type="button"
-                      className="gap-1.5"
-                      disabled={!bot.homeDir}
-                      onClick={() => {
-                        if (!bot.homeDir) return;
-                        setFolderError(null);
-                        void window.electronAPI.openPath(bot.homeDir).then((result) => {
-                          if (shouldShowOpenPathError(result))
-                            setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
-                        });
-                      }}
-                    >
-                      <FolderOpen size={13} aria-hidden />
-                      {t('bots.homeFolder.open')}
-                    </Button>
-                  }
-                />
-              ) : null}
+                <SettingsBlock className="flex items-center justify-between gap-3 px-5 py-3.5">
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-12 text-[var(--text-secondary)]"
+                    title={bot.homeDir ?? undefined}
+                  >
+                    {bot.homeDir ?? ''}
+                  </span>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    compact
+                    type="button"
+                    className="shrink-0 gap-1.5"
+                    disabled={!bot.homeDir}
+                    onClick={() => {
+                      if (!bot.homeDir) return;
+                      setFolderError(null);
+                      void window.electronAPI.openPath(bot.homeDir).then((result) => {
+                        if (shouldShowOpenPathError(result))
+                          setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
+                      });
+                    }}
+                  >
+                    <FolderOpen size={13} aria-hidden />
+                    {t('bots.homeFolder.open')}
+                  </Button>
+                </SettingsBlock>
+              ) : null}
               {!isRemote && folderError ? (
                 <SettingsBlock className="px-5 py-3">
                   <p className="text-12 text-[var(--text-danger)]" role="alert">

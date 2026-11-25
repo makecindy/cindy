@@ -23,15 +23,15 @@ describe('WorkspacePathField helpers', () => {
     expect(extractDriveBadge('\\\\server\\share\\bot')).toBeNull();
   });
 
-  it('compacts deeply nested paths to the leading anchor and last three segments', () => {
+  it('compacts deeply nested paths to the leading anchor and last two segments and elides long parent ids', () => {
     expect(
       formatCompactPath('D:\\Cindy-QA\\default-root\\buddy-workspaces\\owner1\\bot-1-workspace'),
-    ).toBe('…\\buddy-workspaces\\owner1\\bot-1-workspace');
+    ).toBe('…\\owner1\\bot-1-workspace');
     expect(formatCompactPath('D:\\CindyWorkspaces\\bot-1-workspace')).toBe(
       'CindyWorkspaces\\bot-1-workspace',
     );
-    expect(formatCompactPath('/Users/alice/Library/Cindy/bots/bot-1/workspace')).toBe(
-      'Users/…/bots/bot-1/workspace',
+    expect(formatCompactPath('/Users/alice/Library/Cindy/bots/bot_1795586506392_abc123/workspace')).toBe(
+      '…/bot_179558…92_abc123/workspace',
     );
   });
 });

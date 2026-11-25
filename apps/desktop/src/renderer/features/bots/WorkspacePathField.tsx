@@ -25,17 +25,26 @@ export function extractDriveBadge(rawPath: string): string | null {
  * Formats a full filesystem path for compact single-line display while preserving
  * the leading volume/anchor and the most meaningful trailing segments.
  */
+function elideSegment(segment: string, maxLen = 20): string {
+  if (segment.length <= maxLen) return segment;
+  const head = Math.max(6, Math.floor((maxLen - 1) * 0.55));
+  const tail = Math.max(4, maxLen - 1 - head);
+  return `${segment.slice(0, head)}…${segment.slice(-tail)}`;
+}
+
 export function formatCompactPath(rawPath: string): string {
   const trimmed = rawPath.trim();
   const drive = extractDriveBadge(trimmed);
   const sep = trimmed.includes('\\') && !trimmed.includes('/') ? '\\' : '/';
   const withoutDrive = drive ? trimmed.slice(2) : trimmed;
   const parts = withoutDrive.split(/[\\/]+/).filter(Boolean);
-  if (parts.length <= 3) {
-    return drive ? parts.join(sep) || sep : trimmed;
+  if (parts.length <= 2) {
+    const compact = parts.map((part, idx) => (idx === parts.length - 1 ? part : elideSegment(part))).join(sep);
+    return drive ? compact || sep : compact ? `${sep}${compact}` : trimmed;
   }
-  const tail = parts.slice(-3).join(sep);
-  return drive ? `…${sep}${tail}` : `${parts[0]}${sep}…${sep}${tail}`;
+  const parent = elideSegment(parts[parts.length - 2]);
+  const leaf = parts[parts.length - 1];
+  return `…${sep}${parent}${sep}${leaf}`;
 }
 
 export interface WorkspacePathFieldProps {
