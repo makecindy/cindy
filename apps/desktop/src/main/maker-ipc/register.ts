@@ -911,7 +911,7 @@ import {
 } from './orcaIdleReleaseWatcher.js';
 import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
 import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
-import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
+import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, ORDINARY_PLUGIN_ENGINE_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES, DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
 import { configureTaskArchiveRuntime } from '../task-management/service.js';
 import { hasIdleReleaseQueuedWork, hasPendingIdleReleaseInput as hasPendingIdleReleaseInputFor, hasScheduledIdleReleaseAutoResume } from './idleReleaseInputGates.js';
 import {
@@ -1300,7 +1300,7 @@ import {
   prependHandoffToUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
-import { readMessageSourcePluginRelay, sanitizeSourceName } from '@cindy/maker-shared/message-source';
+import { messageSourceSenderFromMeta, readMessageSourcePluginRelay, sanitizeSourceName, type MessageSourcePluginReply } from '@cindy/maker-shared/message-source';
 import { registerSessionHandoffIpc } from './sessionHandoffIpc.js';
 import {
   installLocalAgentVisibleSessionHost,
@@ -3293,7 +3293,7 @@ async function companionCloudPeerVersion(deviceId: string): Promise<number> {
   } catch { return 0; } finally { clearTimeout(timer); }
 }
 const COMPANION_FAILURE_CODES: ReadonlySet<CompanionCloudFailureCode> = new Set<CompanionCloudFailureCode>(
-  ['HOME_CONFLICT', 'LOCAL_CINDY_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED', 'SKILL_TARGET_OUTDATED']);
+  ['HOME_CONFLICT', 'LOCAL_CINDY_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED', 'SKILL_TARGET_OUTDATED', 'PROFILE_SNAPSHOT_MISSING']);
 /** Kept and merged Cindy ids from a request (local IPC or another computer). */
 function companionMergeIds(keepBotId: unknown, fromBotIds: unknown): { keep: string; from: string[] } {
   if (typeof keepBotId !== 'string' || !keepBotId || keepBotId.length > 200) throwIpcError('INVALID_PARAMS', 'keepBotId required');
@@ -3311,8 +3311,15 @@ function companionMergeResult(value: unknown): CompanionMergeResult {
 }
 /** What a move does while the companion is still working; anything else is the default (fail as busy). */
 function companionSwitchOptions(value: unknown): CompanionSwitchOptions | undefined {
-  const whenBusy = value && typeof value === 'object' ? (value as { whenBusy?: unknown }).whenBusy : undefined;
-  return whenBusy === 'wait' || whenBusy === 'stop' ? { whenBusy } : undefined;
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as { whenBusy?: unknown; allowMissingProfile?: unknown };
+  const whenBusy = record.whenBusy === 'wait' || record.whenBusy === 'stop' ? record.whenBusy : undefined;
+  const allowMissingProfile = record.allowMissingProfile === true ? true : undefined;
+  return whenBusy || allowMissingProfile ? { ...(whenBusy ? { whenBusy } : {}), ...(allowMissingProfile ? { allowMissingProfile } : {}) } : undefined;
+}
+function companionTakeOverOptions(value: unknown): import('../../shared/companionCloud.js').CompanionTakeOverOptions | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  return (value as { allowMissingProfile?: unknown }).allowMissingProfile === true ? { allowMissingProfile: true } : undefined;
 }
 /** A failure code answered by another computer; unknown codes (newer versions) are plain failures. */
 function companionFailureCode(code: string): CompanionCloudFailureCode {
@@ -3421,6 +3428,7 @@ let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
 let piIdleReleaseWatcher: PiIdleReleaseWatcher | null = null;
 let claudeIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 let codexIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
+let pluginEngineIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 
 /**
  * 取 Orca collab service, ready 前返 null。registerMakerIpc 执行完成后 holder
@@ -3461,6 +3469,8 @@ export function stopOrcaIdleWatcher(): void {
   claudeIdleReleaseWatcher = null;
   codexIdleReleaseWatcher?.stop();
   codexIdleReleaseWatcher = null;
+  pluginEngineIdleReleaseWatcher?.stop();
+  pluginEngineIdleReleaseWatcher = null;
   configureTaskArchiveRuntime(null);
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
@@ -6169,6 +6179,12 @@ function notePluginTaskLifecycle(operation: (service: PluginTaskService) => Prom
   if (!pluginTaskServiceForCurrentOwner) return;
   try { void operation(pluginTaskServiceForCurrentOwner()).catch(() => log.warn('Plugin task receipt update failed')); }
   catch { /* Database is unavailable during logout/startup; never switch to another owner. */ }
+}
+/** Awaited plugin follow-up bookkeeping; a failure is logged and never fails the hand-off itself. */
+async function withPluginTaskService<T>(operation: (service: PluginTaskService) => Promise<T>): Promise<T | undefined> {
+  if (!pluginTaskServiceForCurrentOwner) return undefined;
+  try { return await operation(pluginTaskServiceForCurrentOwner()); }
+  catch { log.warn('Plugin follow-up bookkeeping failed'); return undefined; }
 }
 
 function isCurrentProductTurnFailureOwner(owner: ProductTurnFailureOwner): boolean {
@@ -12423,6 +12439,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
      * reconcileCreateOptsAgainstDb 再读当前落库档位,不使用入队时的旧快照。
      */
     resumeWithStoredPermissionMode?: boolean;
+    /** Host-stamped by sendToSession only: a plugin follows this word back (origin.pluginReply). */
+    pluginReply?: MessageSourcePluginReply;
+    /** Host-only hook to record a new local task before its first input is dispatched. */
+    beforeLocalTaskDispatch?: (taskId: string) => Promise<void>;
   }, hostDispatch?: 'bot' | 'group' | 'group-assistant', localSessionTool = false): Promise<SendToSessionInternalResult> {
     await assertTaskActionCurrent();
     if (hasTaskActionAuthorization()) params = { ...params, forceQueue: true };
@@ -12449,6 +12469,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ...(await readSenderIdentity(origin ? undefined : dispatcherSessionId)),
       message,
       explicitOrigin: origin,
+      ...(params.pluginReply ? { pluginReply: params.pluginReply } : {}),
     });
     const inputAgentMeta: AgentMeta | undefined = queuedOrigin || params.sourcePlugin || params.autoReviewUserText !== undefined
       ? {
@@ -12743,6 +12764,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const clientId = createId();
         createdPreviewSessionId = session.id;
         createdPreviewClientId = clientId;
+        if (!inheritedAgentDeviceId && !session.remoteHostId && params.beforeLocalTaskDispatch) {
+          await params.beforeLocalTaskDispatch(session.id);
+        }
         if (verifiedOwnerRequestText(params.autoReviewUserText) !== undefined) {
           // New tasks need the same accepted-input provenance as busy and idle
           // recipients, so further handoffs cannot lose the original request.
@@ -13876,10 +13900,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     companionCloud: createCompanionCloudHost({
       log,
-      ensureCanonicalSession: async (botId) => {
-        const ensured = await ensureBotCanonicalSession(botId, { onCreated: broadcastSessionCreated });
+      ensureCanonicalSession: async (botId, options) => {
+        const ensured = await ensureBotCanonicalSession(botId, {
+          onCreated: broadcastSessionCreated,
+          ...(options?.allowMissingModel ? { allowMissingModel: true } : {}),
+        });
         if (!ensured.ok) throw new Error(ensured.errorCode);
-        return ensured.sessionId;
+        return ensured.missingModel ? { sessionId: ensured.sessionId, missingModel: true } : ensured.sessionId;
       },
       discardInvitationWelcome: async (sessionId) => (await discardQueuedInvitationWelcomes(inputCoordinator, sessionId)) !== null,
       // Cloud history was added: rebuild like a restart, but never interrupt a turn.
@@ -14215,13 +14242,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return value;
   };
   const companionNotEnabled: CompanionCloudActionResult = { ok: false, code: 'NOT_ENABLED' };
-  ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_TAKE_OVER, async (event, botId: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_TAKE_OVER, async (event, botId: unknown, options?: unknown) => {
     assertTrustedAppRendererEvent(event);
     const id = companionBotId(botId);
     const mock = companionProfileUiMock();
     if (mock?.botId === id) return mock.takeOver();
     currentCompanionHomes();
-    return activeCompanionCloud()?.takeOver(id) ?? companionNotEnabled;
+    return activeCompanionCloud()?.takeOver(id, companionTakeOverOptions(options)) ?? companionNotEnabled;
   });
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_REPAIR_PROFILE, async (event, botId: unknown, request: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -14536,6 +14563,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pluginTaskEpoch = snapshot;
     pluginTasks = createPluginTaskService({
       store: createPluginTaskStore(snapshot.client), assertCurrent, assertAuthorized: assertPlugin, resolveRoute,
+      // The relay the Host stamped on a stored input: a plugin message's own, or the one a follow-up carries on.
+      readInputRelay: async (taskId, inputClientIds) => {
+        if (!inputClientIds.length) return undefined;
+        const rows = await snapshot.client.drizzle.select({ agentMeta: messages.agentMeta }).from(messages)
+          .where(and(eq(messages.sessionId, taskId), eq(messages.role, 'user'), inArray(messages.clientId, [...inputClientIds])))
+          .limit(inputClientIds.length);
+        assertCurrent();
+        for (const row of rows) {
+          let meta: unknown = row.agentMeta;
+          if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { continue; } }
+          const sender = messageSourceSenderFromMeta(meta);
+          const relay = sender?.kind === 'plugin' ? sender.relay : sender?.kind === 'session' ? sender.pluginReply?.relay : undefined;
+          if (relay) return relay;
+        }
+        return undefined;
+      },
       resolveImProjectPermission: async (pluginId, project) => {
         const { alias, target } = await resolveImProjectTarget(pluginId, project);
         target.assertCurrent();
@@ -17290,6 +17333,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   codexIdleReleaseWatcher.start();
 
+  // Ordinary local plugin engine (ACP) tasks: same scope and gates as Codex. Each task holds
+  // one engine process that does not exit when idle, so idle ones are retired like the built-in
+  // engines' runtimes. Only runtimes whose agent can reopen the conversation (session/resume or
+  // session/load) are released; the next send resumes it lazily.
+  pluginEngineIdleReleaseWatcher?.stop();
+  pluginEngineIdleReleaseWatcher = createClaudeIdleReleaseWatcher({
+    agentKind: 'acp',
+    listSessions: () => maker.listActiveSessions(),
+    getSession: (id) => maker.getSession(id),
+    readMinutes: () => DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES,
+    isOrdinaryTask: createOrdinaryIdleReleaseTaskCheck(getDbClient, ORDINARY_PLUGIN_ENGINE_TASK_SQL),
+    hasPendingInput: hasPendingIdleReleaseInput,
+    isHostBusy: (id) => isSessionTurnPendingCompletion(id)
+      || hasPendingAgentInteractionForSession(id)
+      || hasIdleReleaseQueuedWork(inputCoordinator, id)
+      || pendingCredentialSwitchHolder?.has(id) === true,
+    withLock: withSendToSessionLock,
+    close: createIdleReleaseRuntimeClose(maker, withRehydrateCloseSuppressed),
+    now: () => performance.now(),
+    released: (sessionId, idleMs) => log.info('pluginEngineIdleWatcher: released idle runtime', { sessionId, idleMs }),
+    warn: (message) => log.warn(message),
+  });
+  pluginEngineIdleReleaseWatcher.start();
+
   let applySessionRuntimeSelection: ApplySessionRuntimeSelection = async () => {
     throw new Error('session runtime selection is not ready');
   };
@@ -17962,6 +18029,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? maker.getSession(params.dispatcherSessionId) : undefined;
       const localSessionTool = dispatcher?.getStatus() === 'active' && !dispatcher.remoteHostId;
       const pluginSource = !params.dispatcherSessionId ? hostPluginInputSource() : undefined;
+      // A task this turn opens is remembered for the plugin run that started the turn (follow-ups):
+      // read the opener's inputs now, before any await can let the turn move on.
+      const openerId = fromSessionTool && !params.targetSessionId && !isDeviceLinkInvoke() ? params.dispatcherSessionId : undefined;
+      const opener = openerId ? maker.getSession(openerId) : undefined;
+      const openerInputs = openerId && opener?.getStatus() === 'active' && !opener.remoteHostId
+        ? getSessionActiveInputClientIds(openerId) : [];
       let projectFromWorkingDir = false;
       if (!params.targetSessionId && !params.createDefaults) {
         if (!params.dispatcherSessionId) {
@@ -17987,19 +18060,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) {
         return { ok: false, errorCode: 'AGENT_NOT_READY', message: 'Data owner changed before delivery.' };
       }
-      const sent = await sendToSessionInternal({
-        ...params,
-        ...(pluginSource ? { sourcePlugin: pluginSource, inheritTargetPlanMode: true, resumeWithStoredPermissionMode: true } : {}),
-        ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
-        autoReviewUserText: pluginSource ? params.message : request.autoReviewUserText,
-        ...(params.targetSessionId && params[AUTO_REVIEW_DELEGATED_CONTINUATION] ? {
-          autoReviewUserText: { ...request.autoReviewUserText, kind: 'delegated-continuation' as const },
-          // Use the durable path for idle and busy targets alike. It restores the
-          // target's user intent and current permission mode at dispatch time.
-          forceQueue: true,
-          resumeWithStoredPermissionMode: true,
-        } : {}),
-      }, undefined, localSessionTool);
+      // Word back from a task a plugin run opened: the plugin follows the turn it starts and delivers
+      // its answer where that run's request came from. Only that task's word counts (the owner's own
+      // turns and other tasks' messages never do); it waits in the queue so it is a turn of its own.
+      const followUp = localSessionTool && params.targetSessionId && params.dispatcherSessionId && !params.deliveryClientId
+        ? await withPluginTaskService(service => service.openFollowUp(params.dispatcherSessionId!, params.targetSessionId!))
+        : undefined;
+      const followUpName = followUp ? sanitizeSourceName(getInstalledGhostName(followUp.pluginId)) : undefined;
+      let sent: SendToSessionInternalResult;
+      try {
+        sent = await sendToSessionInternal({
+          ...params,
+          ...(pluginSource ? { sourcePlugin: pluginSource, inheritTargetPlanMode: true, resumeWithStoredPermissionMode: true } : {}),
+          ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
+          autoReviewUserText: pluginSource ? params.message : request.autoReviewUserText,
+          ...(openerId && openerInputs.length ? {
+            beforeLocalTaskDispatch: async (openedTaskId: string) => {
+              if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+              // Persist the link before the new task can send any reply, even on its first turn.
+              await withPluginTaskService(service => service.noteOpenedTask(openerId, openerInputs, openedTaskId));
+            },
+          } : {}),
+          ...(params.targetSessionId && params[AUTO_REVIEW_DELEGATED_CONTINUATION] ? {
+            autoReviewUserText: { ...request.autoReviewUserText, kind: 'delegated-continuation' as const },
+            // Use the durable path for idle and busy targets alike. It restores the
+            // target's user intent and current permission mode at dispatch time.
+            forceQueue: true,
+            resumeWithStoredPermissionMode: true,
+          } : {}),
+          ...(followUp ? { clientId: followUp.clientId, forceQueue: true, pluginReply: { pluginId: followUp.pluginId,
+            ...(followUpName ? { name: followUpName } : {}), ...(followUp.relay ? { relay: followUp.relay } : {}) } } : {}),
+        }, undefined, localSessionTool);
+      } catch (error) {
+        if (followUp) await withPluginTaskService(service => service.abandonFollowUp(followUp.runId));
+        throw error;
+      }
+      if (followUp && !sent.ok) await withPluginTaskService(service => service.abandonFollowUp(followUp.runId));
       return sent.ok && projectFromWorkingDir ? { ...sent, projectFromWorkingDir: true } : sent;
     },
     enableOrca: enableOrcaInternal,

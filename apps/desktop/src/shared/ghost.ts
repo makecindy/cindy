@@ -8053,6 +8053,21 @@ export type GhostPipeTaskViewResult =
       message: string;
     };
 
+export interface GhostPipeSessionStateRequest {
+  type: 'session-state-request';
+  sessionIds: string[];
+}
+
+export type GhostSessionState = 'active' | 'archived' | 'deleted' | 'out_of_scope';
+
+export type GhostPipeSessionStateResult =
+  | { ok: true; sessions: Array<{ sessionId: string; status: GhostSessionState }> }
+  | {
+      ok: false;
+      errorCode: 'PERMISSION_DENIED' | 'INVALID_REQUEST' | 'HOST_NOT_READY' | 'INTERNAL';
+      message: string;
+    };
+
 /**
  * schedule-request(agent.schedule 加档)的上行载荷。
  *

@@ -601,7 +601,8 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         });
         if ((!provider?.connected && routeExplicit) || !catalogModel) {
           throwIpcError(
-            'INVALID_PARAMS',
+            runtimeAgentKind === 'pi' && provider?.connected && !catalogModel
+              ? 'MODEL_SELECTION_UNAVAILABLE' : 'INVALID_PARAMS',
             `model "${model}" is unavailable from provider "${actualProviderId ?? 'default'}"`,
           );
         }
@@ -858,7 +859,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       if (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh) && liveSessionBeforeRouteChange) {
         if (!piPreview || piPreview.action === 'unavailable') {
           throwIpcError(
-            'PRECONDITION_FAILED',
+            piPreview?.modelNotOffered ? 'MODEL_SELECTION_UNAVAILABLE' : 'PRECONDITION_FAILED',
             piPreview?.reason ?? 'Pi target route cannot be previewed; runtime selection was not changed',
           );
         }

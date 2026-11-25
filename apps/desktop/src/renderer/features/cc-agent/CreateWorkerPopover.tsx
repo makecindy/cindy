@@ -1382,7 +1382,7 @@ export function CreateWorkerPopover({
           <button
             type="button"
             aria-label={t('orca.createWorker.closeAria')}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
             disabled={isSubmitting}
             onClick={handleClose}
           >

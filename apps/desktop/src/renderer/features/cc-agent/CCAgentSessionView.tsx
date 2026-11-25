@@ -177,8 +177,11 @@ import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
+import { BrandLoadingMark } from '@/components/branding/BrandLoadingMark';
+import { useInitialPaint } from '@/hooks/useInitialPaint';
 import {
   MessageStream,
+  RENDER_WINDOW_INITIAL_ITEMS,
   type InlinePlanVisibility,
 } from '@/components/chat/MessageStream';
 import {
@@ -279,7 +282,7 @@ import {
 import { useTurnElapsed } from './hooks/useTurnElapsed';
 import { useSessionTurnActiveTruth } from '@/features/cc-agent/hooks/useSessionTurnActiveTruth';
 import { useHistoryRecoveryNavigation } from '@/features/cc-agent/hooks/useHistoryRecoveryNavigation';
-import { useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
+import { REMOTE_LOADING_DELAY_MS, useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
 import { RemoteSessionBanner } from './RemoteSessionBanner';
 import { AuxiliaryModelHealthBanner } from './AuxiliaryModelHealthBanner';
 import { WorkingDirectoryTip } from './WorkingDirectoryTip';
@@ -879,6 +882,31 @@ export function createWritableDirRemovalQueue() {
       });
     },
   };
+}
+
+function SessionMessageStream(props: React.ComponentProps<typeof MessageStream>) {
+  const ready = useInitialPaint(() =>
+    !!props.hasMoreMessages || props.messages.length >= RENDER_WINDOW_INITIAL_ITEMS,
+  );
+  if (ready) return <MessageStream {...props} />;
+  return <div className="flex h-full items-center justify-center"><BrandLoadingMark /></div>;
+}
+
+function LocalHistoryLoading({ sessionId }: { sessionId: string }) {
+  const { t } = useTranslation();
+  const subscribe = useCallback((notify: () => void) => makerChatStore.subscribe(sessionId, notify), [sessionId]);
+  const loading = useSyncExternalStore(subscribe, () => makerChatStore.isInitialHistoryLoading(sessionId));
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    setVisible(false);
+    if (!loading) return;
+    const timer = setTimeout(() => setVisible(true), REMOTE_LOADING_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [loading]);
+  if (!visible || !loading) return null;
+  return <div role="status" className="pointer-events-none absolute inset-0 z-raised flex items-center justify-center gap-2 text-13 text-[var(--text-secondary)]">
+    <Spinner size={14} />{t('ccAgent.common.loading')}
+  </div>;
 }
 
 export function CCAgentSessionView(props: CCAgentSessionViewProps) {
@@ -6204,7 +6232,7 @@ function CCAgentSessionContent({
   const messageStreamEl = (
     <BotChatQuoteProvider value={botChatQuote}>
     <MessageReadAloudContext.Provider value={messageReadAloud.value}>
-    <MessageStream
+    <SessionMessageStream
       pendingMessages={pendingMessages}
       renderPendingMessage={renderPendingMessage}
       header={messageStreamHeader}
@@ -6498,6 +6526,9 @@ function CCAgentSessionContent({
           <Button variant="secondary" onClick={creationPreview.editAfterFailure}>{t('ccAgent.draft.directoryRecovery.edit')}</Button>
         </div>}
         {remoteLoading === 'loading' && <RemoteSessionLoading />}
+        {sessionId && !remoteDeviceId && !botChatIdentity && !creationPreview && !historyLoaded && !messages.length && !pendingQueue.length && (
+          <LocalHistoryLoading key={sessionId} sessionId={sessionId} />
+        )}
         {remoteLoading === 'inline-syncing' && <RemoteSessionLoading compact />}
 
         {/* Full-area drop overlay.
@@ -7138,7 +7169,7 @@ function CCAgentSessionContent({
                             e.stopPropagation();
                             if (sessionId) worktreeCreationStore.clear(sessionId);
                           }}
-                          className="shrink-0 rounded p-0.5 transition-colors hover:bg-foreground/10"
+                          className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-foreground/10"
                           aria-label={t('common.dismiss', 'Dismiss')}
                         >
                           <X size={10} className="text-[color-mix(in_srgb,var(--error-fg)_70%,transparent)]" />

@@ -179,6 +179,16 @@ export interface BotGroupMemberView {
   role?: 'owner' | 'admin' | 'member' | 'guest';
   displayName?: string;
   nickname?: string | null;
+  /** Enterprise organization name when visible to this viewer; absent on older servers or personal accounts. */
+  orgName?: string | null;
+  /** Leaf department name; strictly present only when the viewer belongs to the same organization. */
+  department?: string | null;
+  /** Full department path joined with " / "; strictly same-organization viewers only. */
+  departmentPath?: string | null;
+  /** True only for enterprise viewers looking at a human outside their own organization. */
+  external?: boolean;
+  /** True when the member's organization name should be appended to their default display name. */
+  showOrgName?: boolean;
   ownerActorId?: string;
   ownerName?: string;
   isOwned?: boolean;
@@ -657,6 +667,10 @@ export interface BotGroupSummary {
   revision?: number;
   id: string;
   name: string;
+  /** Owning enterprise organization name for org-created groups; absent for personal groups or older servers. */
+  orgName?: string | null;
+  /** True only for enterprise viewers when the group belongs to another org/personal or contains external humans. */
+  external?: boolean;
   replyMode: BotGroupReplyMode;
   speakingMode: BotGroupSpeakingMode;
   members: BotGroupMemberView[];

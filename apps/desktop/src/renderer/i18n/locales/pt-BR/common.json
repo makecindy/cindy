@@ -6735,6 +6735,20 @@
         "ssh": "Hosts remotos SSH",
         "hook": "Bots de mensagens do Cindy"
       },
+      "cloudComputer": {
+        "title": "Computador na nuvem",
+        "hint": {
+          "addCloud": "Configure um computador na nuvem com o Cindy instalado. Quando estiver pronto, ele aparece na sua lista de dispositivos.",
+          "preparingCloud": "Seu computador na nuvem está sendo preparado. Ele aparece na sua lista de dispositivos quando estiver pronto.",
+          "manageCloud": "Ligue, desligue, renove, reinstale ou exclua-o na web."
+        },
+        "actions": {
+          "addCloud": "Adicionar computador na nuvem",
+          "preparingCloud": "Ver progresso",
+          "manageCloud": "Gerenciar computador na nuvem"
+        },
+        "openFailed": "Não foi possível abrir a página do computador na nuvem. Verifique as configurações do navegador padrão."
+      },
       "hook": {
         "description": "Conecte Slack, Telegram, Feishu / Lark e outros canais ao mesmo Cindy. As mensagens são encaminhadas a este dispositivo e compartilham sua lista de projetos e seu executor de sessões; o modelo e as permissões de cada projeto são compartilhados por todos os canais, e cada canal mantém sua própria vinculação de conta.",
         "slackDescription": "Vincule espaços de trabalho do Slack e atribua tarefas ao Cindy pelo Slack.",
@@ -6921,6 +6935,7 @@
           "guide": {
             "usageLabel": "Como usar",
             "usageBody": "Publique no X mencionando @askmycindy e a tarefa será encaminhada a este dispositivo para execução aqui; o resultado será enviado como resposta.",
+            "usageBodyOnDevice": "Publique no X mencionando @askmycindy e a tarefa será encaminhada a {{device}} para execução lá; o resultado será enviado como resposta.",
             "riskLabel": "As respostas são públicas",
             "riskPublicBody": "As respostas são públicas e visíveis para qualquer pessoa. Use este recurso para perguntas e problemas públicos, não para assuntos particulares que possam expor sua privacidade.",
             "riskWorkdirBody": "Todas as tarefas do X são executadas no projeto padrão definido nas configurações de conexão com o X. O Agent pode ler e gravar arquivos nele, e sua conclusão é tornada pública — se esse projeto apontar para um repositório privado, o conteúdo dos arquivos também poderá se tornar público.",
@@ -8252,6 +8267,11 @@
         "installedExpand": "Mostrar todos os {{count}} plugins instalados",
         "installedCollapse": "Ocultar plugins instalados adicionais",
         "recommendedSection": "Recomendado",
+        "allPlugins": "Todos os plugins",
+        "searchResults": "Resultados da pesquisa",
+        "marketSort": {
+          "label": "Ordenar"
+        },
         "todayRecommendations": "Recomendações de hoje",
         "marketSection": "Marketplace de plugins",
         "browseMarket": "Explorar o marketplace de plugins",
@@ -8737,6 +8757,7 @@
         "libraryPersist": "Pode usar uma biblioteca persistente (arquivos grandes e bancos de dados)",
         "libraryPersistDetail": "Recebe uma área de armazenamento gerenciada pela Cindy para seu trabalho (telas, imagens, bancos de dados), sem a cota normal de dados de plugins. Todas as operações de arquivos e bancos de dados são executadas pelo host; o plugin usa apenas caminhos relativos dentro da própria biblioteca e não pode acessar seus outros arquivos. Também pode pedir à Cindy para mostrar um arquivo da biblioteca no Finder ou Explorer, ou abrir a caixa de diálogo Salvar como do sistema para você escolher onde salvar uma cópia; cancelar Salvar como não copia nada. Também pode gravar uma imagem bitmap PNG na área de transferência do sistema sem caixa de diálogo de confirmação; isso substitui o conteúdo atual da área de transferência. Desinstalar o plugin não exclui esses dados; a exclusão exige uma confirmação separada nas configurações da Cindy.",
         "networkHost": "Acessa o destino de rede {{host}}",
+        "networkHosts": "Destinos de rede",
         "networkSecret": "Precisa de uma credencial sua: \"{{name}}\"",
         "networkSecretGhostInputDetail": "Coletada pela interface de configurações do próprio plugin — a página do plugin vê o valor no momento da entrada. Em seguida, ele é entregue ao host em uma única etapa para armazenamento criptografado; depois de armazenado, o plugin nunca mais pode lê-lo, e o host só o injeta nos domínios declarados pelo plugin.",
         "networkSecretIdentity": "Usará seu e-mail de login como credencial \"{{name}}\"",
@@ -8943,6 +8964,8 @@
         "dangerTitle": "Desinstalar plugin",
         "infoContents": "Contém",
         "infoVersion": "Versão",
+        "infoPackageSize": "Tamanho do pacote",
+        "infoPackageSizeWithVersion": "{{size}} ({{version}})",
         "updateTitle": "Atualizar versão",
         "updateDesc": "Escolha um novo arquivo .cindy para substituir a versão instalada; o estado de ativação e a posição do painel serão preservados.",
         "errandPrefs": {
@@ -8965,11 +8988,27 @@
           "restoreModel": "Redefinir modelo"
         },
         "toolsTitle": "Ferramentas",
+        "toolCount_one": "{{count}} ferramenta",
+        "toolCount_other": "{{count}} ferramentas",
+        "toolCount_many": "{{count}} ferramentas",
         "permissionsTitle": "Permissões",
         "infoDescription": "Descrição",
         "customSlotAsleep": "Este plugin está desativado. Ative-o para ver sua interface de configurações aqui.",
         "descriptionExpand": "Mostrar mais",
         "descriptionCollapse": "Mostrar menos",
+        "recentUpdates": "Atualizações recentes",
+        "olderUpdates": "Atualizações anteriores",
+        "collapseOlderUpdates": "Ocultar atualizações anteriores",
+        "includesHighRisk": "Alto risco",
+        "heroDownloads": "Downloads totais",
+        "heroUsage": "Usos totais",
+        "heroWeeklyUsage": "Usos nos últimos 7 dias",
+        "heroWeeklyUsageExplanation": "Chamadas de ferramentas nos últimos 7 dias, somando todas as versões no escopo de compartilhamento atual.",
+        "heroInstalledVersion": "Versão instalada",
+        "heroListedVersion": "Versão publicada",
+        "heroLatestUpdate": "Última atualização",
+        "morePlugins": "Mais plugins",
+        "morePluginsHint": "Seleção aleatória. Não reflete nenhuma preferência da Cindy.",
         "readmeTitle": "Sobre",
         "useAction": "Usar plugin",
         "chatAction": "Conversa",
@@ -9008,6 +9047,7 @@
         "portReclaimMessage": "“{{name}}” precisa da porta {{port}}. Encerrar o programa abaixo?",
         "portReclaimDetail": "Encerrá-lo pode interromper o trabalho do programa ou causar a perda de dados não salvos. Você pode cancelar e fechar o programa manualmente.",
         "configurationTitle": "Configuração",
+        "recordTitle": "Informações do plugin",
         "sidebarEntryTitle": "Item de navegação",
         "showInSidebar": "Mostrar na navegação à esquerda",
         "fileOpenerTitle": "Abrir arquivos com este plugin",
@@ -9018,6 +9058,7 @@
         "viewAllTools": "Ver tudo",
         "collapseTools": "Recolher ferramentas",
         "viewAllPermissions": "Ver tudo",
+        "remainingPermissions": "Ver mais {{count}}",
         "permissionsDialogDescription": "Todas as {{count}} permissões solicitadas por este plugin",
         "closeDialog": "Fechar janela",
         "resetPlacement": "Restaurar posição padrão"
@@ -9285,6 +9326,7 @@
         "taskWorkdirBoundary": "O diretório de trabalho permanece no computador de destino. Altere-o lá.",
         "configurationLoading": "Carregando configurações…",
         "configurationReadFailed": "Não foi possível carregar as configurações.",
+        "settingsWriteUnconfirmed": "Não foi possível confirmar o salvamento. Atualize as configurações para verificar antes de tentar novamente.",
         "refreshConfiguration": "Atualizar configurações",
         "enableBeforeConfigure": "Este plugin está desativado. Ative-o com o botão acima antes de configurar.",
         "settingsPageUnavailable": "Abra o Cindy em {{device}} para usar a página de configurações deste plugin. Esta versão do computador de destino não pode exibi-la remotamente.",
@@ -9335,6 +9377,7 @@
         "anonymousUnavailable": "Configurações do autor indisponíveis",
         "anonymousUpdateFailed": "Não foi possível confirmar se a configuração de anonimato foi salva. Atualize antes de tentar novamente.",
         "myPlugins": "Publicar plugin",
+        "backToPublish": "Voltar à publicação de plugins",
         "publish": "Enviar para análise",
         "submitUpdate": "Enviar nova versão para análise",
         "publishHint": "Publique apenas plugins que você tem permissão para publicar. A listagem na comunidade exige aprovação humana.",
@@ -9374,6 +9417,7 @@
         "publishedContentUnavailable": "A descrição e as notas de versão da versão publicada atualmente estão temporariamente indisponíveis.",
         "currentSubmission": "Envio atual",
         "localState": {
+          "installed": "Versão local {{version}}",
           "missing": "Não instalado neste computador",
           "unavailable": "Versão local temporariamente indisponível"
         },
@@ -9386,7 +9430,7 @@
         "publishing": "Publicação",
         "latestSubmission": "Último envio",
         "noSubmission": "Nenhum envio ainda",
-        "marketVersion": "Publicado · {{version}}",
+        "marketVersion": "Publicado {{version}}",
         "market": {
           "not_listed": "Não listado",
           "disabled": "Fora da listagem",
@@ -9396,7 +9440,7 @@
         "review": {
           "pending": "Análise pendente",
           "approved": "Aprovado",
-          "rejected": "Devolvido",
+          "rejected": "Rejeitado",
           "published": "Publicado",
           "superseded": "Substituído por um envio posterior",
           "legacy_unverified": "Revisão histórica indisponível",
@@ -9404,9 +9448,12 @@
           "cancelled": "Cancelado"
         },
         "reason": "Motivo",
+        "rejectionReason": "Motivo da rejeição",
+        "rejectionReasonLine": "<reasonLabel>Motivo da rejeição:</reasonLabel> <reasonText />",
         "submittedContent": "Conteúdo enviado",
         "snapshotUnavailable": "O conteúdo original não foi mantido ou não pode mais ser verificado.",
         "history": "Histórico de publicação",
+        "marketChanges": "Alterações na publicação",
         "loadMore": "Carregar mais",
         "loadMoreHistory": "Carregar mais histórico",
         "releaseId": "ID da versão",
@@ -9421,7 +9468,7 @@
           "submitted": "Enviado",
           "metadata_updated": "Informações de exibição atualizadas",
           "approved": "Aprovado",
-          "rejected": "Devolvido",
+          "rejected": "Rejeitado",
           "enabled": "Publicado",
           "disabled": "Fora da listagem",
           "archived": "Arquivado",
@@ -9503,6 +9550,8 @@
         "notApproved": "Ainda não aprovado",
         "timeUnavailable": "Não registrado",
         "releaseNotes": "Notas de versão",
+        "expandReleaseNotes": "Mostrar tudo",
+        "noReleaseNotes": "Nenhuma nota de versão foi informada.",
         "versionUpdates": "Versões e atualizações",
         "versionManagement": "Gerenciar versões",
         "versionContent": "Conteúdo da versão",
@@ -9519,7 +9568,6 @@
         "cancelled": "Cancelado",
         "cancelReviewCompleted": "Análise cancelada. A versão listada atualmente permanece inalterada.",
         "cancelReviewAlreadyFinal": "A análise já foi concluída e, por isso, não foi cancelada. O resultado real é exibido abaixo.",
-        "viewPendingVersion": "Ver versão em análise",
         "submitFailed": "Falha no envio",
         "viewDetails": "Ver detalhes"
       },
@@ -12388,7 +12436,8 @@
         "failed": "Não foi possível concluir esta ação. Tente novamente.",
         "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair."
       },
-      "memberCount_many": "{{count}} membros"
+      "memberCount_many": "{{count}} membros",
+      "externalBadge": "Externo"
     },
     "joined": {
       "today": "Entrou hoje",
@@ -12662,6 +12711,12 @@
       "arrivingLater": "{{name}} foi transferido para este computador e ainda está sendo preparado. Em breve aparecerá entre seus amigos",
       "arrivalPermissions": "{{name}} agora usa as permissões padrão deste computador.",
       "arrivalModel": "O modelo salvo de {{name}} não está disponível neste computador, por isso ele segue o modelo padrão deste computador.",
+      "arrivalModelSetup": "{{name}} está neste computador, mas ainda não há um modelo disponível. Conecte um provedor de modelos ou escolha um modelo nas configurações deste amigo, em Modelo.",
+      "arrivalPartialContent": "{{name}} agora roda neste computador, mas alguns itens sincronizados não puderam ser restaurados. As cópias na nuvem continuam intactas.",
+      "missingProfileTitle": "Continuar {{name}} com o perfil padrão?",
+      "missingProfileDescription": "O computador principal original ainda não enviou o perfil de {{name}}. Se esse computador foi reinstalado ou não pode ser recuperado, você pode continuar aqui com o perfil padrão mantendo as conversas e os conteúdos já sincronizados.",
+      "missingProfileConfirm": "Continuar com perfil padrão",
+      "missingProfileFailed": "O perfil de {{name}} ainda não foi enviado para a nuvem",
       "busyTitle": "{{name}} ainda está respondendo",
       "busyDescription": "Mova para “{{device}}” quando esta resposta terminar, ou interrompa a resposta e mova agora.",
       "busyWait": "Mover ao terminar",
@@ -15667,6 +15722,7 @@
       "modelCatalogUnconfirmed": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualize a lista de modelos e tente novamente.",
       "actionScheduled": "A autorização para esta ação expirou. A próxima execução continua agendada.",
       "actionExpired": "A autorização da sessão para esta ação expirou. Confira a execução mais recente da automação.",
+      "modelRebuildRetry": "A instrução não foi enviada. Abra a automação no computador e selecione “Executar agora” para tentar novamente.",
       "actionRecovered": "A autorização para esta ação expirou. A mesma automação foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
       "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS desse dispositivo. Falhas consecutivas: {{failures}}. As verificações agendadas poderão ser retomadas a partir de {{retry}}.",
@@ -18108,7 +18164,7 @@
       "openWorkdirFailed": "Falha ao abrir pasta"
     },
     "runs": {
-      "boundPluginEngineRecovery": "A automação não foi executada porque a tarefa vinculada usa um mecanismo de plug-in. Volte a usar um mecanismo integrado nessa tarefa ou vincule a automação a uma tarefa que use um mecanismo integrado.",
+      "boundPluginEngineRecovery": "A automação não foi executada. Uma automação vinculada a uma tarefa com mecanismo de plug-in usa o modelo da própria tarefa e é executada neste computador. Se a automação escolher um modelo, remova-o e execute-a novamente.",
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes do envio da mensagem. Quando a sessão de destino estiver livre, escolha {{action}} para executá-la.",
       "status": {
         "running": "Em execução",
@@ -18460,6 +18516,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalo relativo",
+        "label": "Modo de agendamento",
         "cronHint": "Executa nos horários definidos no calendário.",
         "intervalHint": "Aguarda este intervalo após o término da execução anterior.",
         "intervalUnsupportedHint": "Este intervalo exato é preservado. Escolher uma predefinição de minutos ou horas irá substituí-lo.",

@@ -6627,6 +6627,20 @@
         "ssh": "SSH 遠方主機",
         "hook": "Cindy IM 使者"
       },
+      "cloudComputer": {
+        "title": "雲機",
+        "hint": {
+          "addCloud": "啟一雲機，已裝 Cindy；備畢則見於裝置之列。",
+          "preparingCloud": "雲機備置中，畢則自見於裝置之列。",
+          "manageCloud": "開關、續期、重裝、刪除，皆於網頁行之。"
+        },
+        "actions": {
+          "addCloud": "增雲機",
+          "preparingCloud": "觀其進度",
+          "manageCloud": "理雲機"
+        },
+        "openFailed": "雲機之頁未能啟，請察系統預設瀏覽器之設。"
+      },
       "hook": {
         "description": "將 Slack、Telegram、飛書 / Lark 諸渠道接入同一 Cindy：訊皆派至此臺裝置，共用此間案之清單與差事；每案之模型與權限，諸渠道共用一份，名籍繫結依渠道各自隔離。",
         "slackDescription": "繫結 Slack workspace，於 Slack 中 @Cindy 派差事。",
@@ -6809,6 +6823,7 @@
           "guide": {
             "usageLabel": "用法",
             "usageBody": "於 X 上發一則推文 @askmycindy，差事即派至此臺裝置執行，結論以回帖覆君。",
+            "usageBodyOnDevice": "於 X 上發一則推文 @askmycindy，差事即派至「{{device}}」執行，結論以回帖覆君。",
             "riskLabel": "回帖乃公開",
             "riskPublicBody": "回覆乃公開推文，人人可見。宜於公開提問、解決難題；不宜處理私事，免洩隱私。",
             "riskWorkdirBody": "X 差事皆落於 X 連線設定中之常例案，Agent 能讀寫其中之卷，而結論將公開回帖 —— 若常例案指向私密倉庫，卷中內容或隨之公開，慎之。",
@@ -8140,6 +8155,11 @@
         "installedExpand": "展全部已納法器 {{count}} 件",
         "installedCollapse": "收餘下已納法器",
         "recommendedSection": "所薦",
+        "allPlugins": "諸法器",
+        "searchResults": "檢索所得",
+        "marketSort": {
+          "label": "次第"
+        },
         "todayRecommendations": "今日所薦",
         "marketSection": "法器市集",
         "browseMarket": "覽法器市集",
@@ -8586,6 +8606,7 @@
         "libraryPersist": "可用持久作品庫(大量檔案與資料庫)",
         "libraryPersistDetail": "其將得一 Cindy 所管之獨立儲存區，用以存君之作品資料(如畫布、圖、資料庫)，不受一般法器資料配額所限。檔案與資料庫之操作全由主機代行，法器僅能用庫內相對路徑，不能觸君之他檔案。其亦可請 Cindy 於系統資料夾中顯示庫內檔案，或彈系統另存為視窗由君擇拷貝之處；罷之則不拷出任何檔案。其亦可將 PNG 點陣圖寫入系統剪貼簿；無確認框，將覆蓋當前剪貼簿內容。卸除法器不刪此等資料；刪除須於 Cindy 規制中另行確認。",
         "networkHost": "存取網路位址 {{host}}",
+        "networkHosts": "存取網路位址",
         "networkSecret": "須君提供憑證「{{name}}」",
         "networkSecretGhostInputDetail": "憑證由此法器自身之設定介面收集，錄入時經法器頁面；隨即一次交主機加密保管，存入後法器不能讀回，主機僅於請求其所宣告之網域時注入。",
         "networkSecretIdentity": "將以君登門之電子郵件為憑證「{{name}}」",
@@ -8812,6 +8833,8 @@
         "dangerTitle": "卸除法器",
         "infoContents": "所含",
         "infoVersion": "版次",
+        "infoPackageSize": "包之體量",
+        "infoPackageSizeWithVersion": "{{size}}（{{version}}）",
         "updateTitle": "易新版",
         "updateDesc": "擇新 .cindy 卷原處替換；生效之狀與面板位置不變。",
         "errandPrefs": {
@@ -8834,11 +8857,25 @@
           "restoreModel": "復預設模型"
         },
         "toolsTitle": "Tools",
+        "toolCount_other": "{{count}} 個",
         "permissionsTitle": "權柄",
         "infoDescription": "述",
         "customSlotAsleep": "法器未生效；生效後，此處將示其設定介面。",
         "descriptionExpand": "展",
         "descriptionCollapse": "收",
+        "recentUpdates": "近日更新",
+        "olderUpdates": "往昔更新",
+        "collapseOlderUpdates": "收往昔更新",
+        "includesHighRisk": "含高風險",
+        "heroDownloads": "總下載",
+        "heroUsage": "總用次",
+        "heroWeeklyUsage": "近七日用次",
+        "heroWeeklyUsageExplanation": "今所共享之各版本，近七日呼叫工具之次數。",
+        "heroInstalledVersion": "已裝版本",
+        "heroListedVersion": "已刊版本",
+        "heroLatestUpdate": "最近更新",
+        "morePlugins": "其餘插件",
+        "morePluginsHint": "隨機擇取，非 Cindy 有所偏重",
         "readmeTitle": "介紹",
         "useAction": "用",
         "chatAction": "言談",
@@ -8877,6 +8914,7 @@
         "portReclaimMessage": "「{{name}}」須用埠 {{port}}，可結束下列程式乎？",
         "portReclaimDetail": "結束之，或致其事中斷、未存之資料遺失。亦可取消，自行關閉佔用程式。",
         "configurationTitle": "設定",
+        "recordTitle": "法器資料",
         "sidebarEntryTitle": "導覽入口",
         "showInSidebar": "現於左側導覽",
         "fileOpenerTitle": "以此法器啟文件",
@@ -8887,6 +8925,7 @@
         "viewAllTools": "觀全部",
         "collapseTools": "收 Tool",
         "viewAllPermissions": "觀全部",
+        "remainingPermissions": "觀餘 {{count}} 項",
         "permissionsDialogDescription": "此法器所請權柄共 {{count}} 項",
         "closeDialog": "闔彈窗",
         "resetPlacement": "復預設位置"
@@ -9154,6 +9193,7 @@
         "taskWorkdirBoundary": "工作目錄依目標之機所設，請於彼機改之。",
         "configurationLoading": "方讀規制…",
         "configurationReadFailed": "規制未能讀取。",
+        "settingsWriteUnconfirmed": "存錄是否得成，尚未可知。請重讀規制，驗明後再試。",
         "refreshConfiguration": "重整規制",
         "enableBeforeConfigure": "法器已停用，請先啟上方開關，再設之。",
         "settingsPageUnavailable": "請於 {{device}} 之 Cindy 中啟此法器之規制頁；目標之機今版尚不能遠端顯示。",
@@ -9204,6 +9244,7 @@
         "anonymousUnavailable": "作者之設暫弗能用",
         "anonymousUpdateFailed": "匿名設定是否已存，無從確認，請重整後再試。",
         "myPlugins": "發布法器",
+        "backToPublish": "返法器發佈",
         "publish": "呈審",
         "submitUpdate": "呈新版待審",
         "publishHint": "僅限有權發布之法器，審核通過後於社群上架。",
@@ -9243,6 +9284,7 @@
         "publishedContentUnavailable": "今上架之版之介紹與更新說明，暫無從讀取。",
         "currentSubmission": "今所呈",
         "localState": {
+          "installed": "此機 {{version}}",
           "missing": "此機未納",
           "unavailable": "此機之版暫無從讀取"
         },
@@ -9255,7 +9297,7 @@
         "publishing": "發佈之理",
         "latestSubmission": "近所呈",
         "noSubmission": "尚無所呈",
-        "marketVersion": "已陳列 · {{version}}",
+        "marketVersion": "已陳列 {{version}}",
         "market": {
           "not_listed": "未上架",
           "disabled": "已撤",
@@ -9265,7 +9307,7 @@
         "review": {
           "pending": "待審",
           "approved": "審准",
-          "rejected": "見退",
+          "rejected": "見駁",
           "published": "已陳列",
           "superseded": "已為後呈所代",
           "legacy_unverified": "舊修訂無從核實",
@@ -9273,9 +9315,12 @@
           "cancelled": "已罷"
         },
         "reason": "處置之由",
+        "rejectionReason": "駁回之由",
+        "rejectionReasonLine": "<reasonLabel>駁回之由：</reasonLabel><reasonText />",
         "submittedContent": "已呈之內容",
         "snapshotUnavailable": "原呈內容未留存，或已無從核實。",
         "history": "發佈之錄",
+        "marketChanges": "陳列更易",
         "loadMore": "載更多",
         "loadMoreHistory": "載更多舊錄",
         "releaseId": "版錄 ID",
@@ -9290,7 +9335,7 @@
           "submitted": "已呈",
           "metadata_updated": "展示之訊已新",
           "approved": "審准",
-          "rejected": "見退",
+          "rejected": "見駁",
           "enabled": "已陳列",
           "disabled": "已撤",
           "archived": "已封存",
@@ -9372,6 +9417,8 @@
         "notApproved": "未獲准",
         "timeUnavailable": "未記",
         "releaseNotes": "更新之述",
+        "expandReleaseNotes": "盡展",
+        "noReleaseNotes": "未書更新之要",
         "versionUpdates": "版次與更新",
         "versionManagement": "理版",
         "versionContent": "版之內容",
@@ -9388,7 +9435,6 @@
         "cancelled": "已罷",
         "cancelReviewCompleted": "此次審核已罷。今上架之版不受影響。",
         "cancelReviewAlreadyFinal": "審核已畢，此次未能罷之。下方所示為實際審核之果。",
-        "viewPendingVersion": "觀方審之版",
         "submitFailed": "提交未成",
         "viewDetails": "觀詳情"
       },
@@ -12242,7 +12288,8 @@
         "dissolved": "群議已散，仍可覽有權存取之舊訊。",
         "failed": "操作未竟，請再試。",
         "lastOwner": "請先轉讓群主或解散群議，再退出。"
-      }
+      },
+      "externalBadge": "外部"
     },
     "joined": {
       "today": "今日入列",
@@ -12516,6 +12563,12 @@
       "arrivingLater": "{{name}} 已移至此機，方在籌備，稍後將現於同伴錄中",
       "arrivalPermissions": "{{name}} 已依此機預設權柄運作。",
       "arrivalModel": "{{name}} 前所選之模型此機不可用，已改用此機預設模型。",
+      "arrivalModelSetup": "{{name}} 已至此機，然尚無可用模型。請連結模型供方，或於此同伴之「設定 → 模型」擇一模型。",
+      "arrivalPartialContent": "{{name}} 已至此機，部分雲端所存未能復原，原物仍留於雲端。",
+      "missingProfileTitle": "以初設資料續 {{name}} 乎？",
+      "missingProfileDescription": "原主力電腦尚未傳 {{name}} 之人設與簡介。若原機已重裝或不可復，可於此機以初設資料續之，已同步雲端之對話與所存仍保留。",
+      "missingProfileConfirm": "以初設資料續之",
+      "missingProfileFailed": "{{name}} 之資料尚未上傳雲端",
       "busyTitle": "{{name}} 方在回覆",
       "busyDescription": "可待此輪畢再移至「{{device}}」，亦可止此輪即移。",
       "busyWait": "待畢再移",
@@ -15490,6 +15543,7 @@
       "modelCatalogUnconfirmed": "模型清單暫未能核實。已保留所選模型，可刷新清單後重試。",
       "actionScheduled": "這次操作的任務授權已失效。下一輪仍會按計畫執行。",
       "actionExpired": "這次操作的任務授權已失效。請查看自動化最近一次執行的結果。",
+      "modelRebuildRetry": "指令未發。請於電腦開此自動化，擇「即行」以重試。",
       "actionRecovered": "這次操作的授權已失效。同一自動化後來已成功執行。",
       "text": "前有自運未成。",
       "prCheck_dns": "{{device}} 未能析 {{host}} 之址。若屢然，宜察此機之網路與 DNS。凡 {{failures}} 次未成。自 {{retry}} 始，循例可復檢。",
@@ -17866,7 +17920,7 @@
       "openWorkdirFailed": "啟卷匣未成"
     },
     "runs": {
-      "boundPluginEngineRecovery": "所繫之務用法器引擎，故自動之務未行。宜將所繫之務改回內建引擎，或改繫於用內建引擎之務。",
+      "boundPluginEngineRecovery": "自動之務未行。繫於法器引擎之務者，循其務之模型，行於此機。若自動之務另擇模型，宜去之，復行之。",
       "queueWaitTimeoutRecovery": "排候逾時，提示詞未發。待所繫任務閒，按「{{action}}」補行。",
       "status": {
         "running": "方行",
@@ -18218,6 +18272,7 @@
       "timingMode": {
         "cron": "Cron 定時",
         "interval": "相隔",
+        "label": "計時之法",
         "cronHint": "依曆鐘定刻而行，如晨鐘暮鼓。",
         "intervalHint": "前次行畢，再候所定之時長。",
         "intervalUnsupportedHint": "今之精確間隔照舊保留；擇分或時之預設，方易之。",

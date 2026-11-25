@@ -22,7 +22,7 @@ import {
 } from '../collect';
 import { readRemoteSubscriptions, retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen, type RemoteSubscriptionDeps } from '../remoteSubscriptions';
 import { buildMenubarView, topModels, type MenubarSubscriptionInput } from '../snapshot';
-import { MENUBAR_HARNESS_LOGOS } from '../logos';
+import { ANTIGRAVITY_LOGO, MENUBAR_HARNESS_LOGOS, monogramLogo } from '../logos';
 import { buildMenubarUiStrings, createMenubarTranslate } from '../strings';
 import { mainStringKeysUnder, rawMainString } from '../../i18n.desktop';
 import { DEFAULT_MENUBAR_SETTINGS } from '../../../shared/menubarQuota';
@@ -579,6 +579,24 @@ describe('collectMenubarInputs', () => {
     expect(collected.usage.days).toHaveLength(90);
   });
 
+  // Unit / #12735: a running task carries only the legacy provider ID. Its
+  // rendered icon must come from the catalogue name, even without quota data.
+  it('uses the catalog mark for a legacy Antigravity task without quota data', async () => {
+    const providerId = 'acp-plugin:legacy:cli';
+    const view = await panel(deps({
+      listProviders: async () => [],
+      listPluginEngines: () => [{
+        key: 'legacy:cli', providerId, ghostId: 'legacy', harnessId: 'cli', name: 'Antigravity',
+        availability: { state: 'available' }, models: [],
+        permissionModes: [{ id: 'ask', displayName: 'Ask' }], defaultPermissionMode: 'ask',
+      }],
+      activities: () => [{ sessionId: 's1', phase: 'running', startedAtMs: NOW } as never],
+      sessionRow: async () => ({ title: 'Legacy task', model: 'gemini', providerId, agentKind: 'acp' }),
+    }));
+    expect(view.sources).toEqual([]);
+    expect(view.tasks).toMatchObject([{ sessionId: 's1', logoSvg: ANTIGRAVITY_LOGO }]);
+  });
+
   it.each(['cindy-make', 'cindy-make-merge'])('hides %s usage tasks without changing accounting totals', async (source) => {
     const input = usage([task('hidden', source), task('ordinary', null)]);
     const collected = await collectMenubarInputs(deps({ readUsage: async () => input }));
@@ -902,6 +920,18 @@ describe('plugin engine quota collection', () => {
       balances: [{ currency: 'USD', amount: 9.25 }],
     });
     expect(collected.sources.map((s) => s.id)).toEqual([dsh.providerId, gemini.providerId]);
+  });
+
+  // Unit: quota cards must keep the Antigravity silhouette across installed,
+  // scoped and older catalog identities, and preserve other engines' monograms.
+  it.each([
+    ['agy', 'acp-plugin:agy:agy', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:_root__agy-plugin:agy', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:_ns__local__agy-acp:agy~second', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:legacy:cli', 'Antigravity', ANTIGRAVITY_LOGO],
+    ['other', 'acp-plugin:other:cli', 'Another engine', monogramLogo('Another engine')],
+  ])('uses the correct quota card logo for %s / %s', (ghostId, providerId, name, logoSvg) => {
+    expect(pluginEngineSource({ key: providerId, providerId, ghostId, name }, null, NOW).logoSvg).toBe(logoSvg);
   });
 
   it('keeps distinct plugin engines separate even with identical window percentages and collects remote offered engines', async () => {

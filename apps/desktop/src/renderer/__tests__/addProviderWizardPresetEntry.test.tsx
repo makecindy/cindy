@@ -1,3 +1,4 @@
+import { ANTIGRAVITY_MARK_PATH } from '@cindy/maker-shared/branding';
 // @vitest-environment jsdom
 
 /**
@@ -550,7 +551,7 @@ it.each([
     fireEvent.click(screen.getByText('settings.providers.wizard.next'));
     const name = await screen.findByText('DeepSeek V4 Flash Vision Exp');
     await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
-    const row = name.closest('button')!;
+    const row = name.closest('label')!;
     expect.soft(within(row).queryByText('settings.providers.models.capabilityNote')).toBeNull();
     fireEvent.click(row);
     fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
@@ -586,10 +587,10 @@ it('keeps Registry engine exclusions through shared discovery and saving', async
   await screen.findByDisplayValue('DeepSeek');
   fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'registry-membership-test-value' } });
   fireEvent.click(screen.getByText('settings.providers.wizard.next'));
-  const row = (await screen.findByText('Codex only')).closest('button')!;
+  const row = (await screen.findByText('Codex only')).closest('label')!;
   await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
   fireEvent.click(row);
-  fireEvent.click((await screen.findByText('Media only')).closest('button')!);
+  fireEvent.click((await screen.findByText('Media only')).closest('label')!);
   fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
   await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
   const saved = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
@@ -624,7 +625,7 @@ it('retained remote catalog keeps Vision Exp CC membership after merging', async
   await screen.findByDisplayValue('DeepSeek');
   fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-reproduction-fake' } });
   fireEvent.click(screen.getByText('settings.providers.wizard.next'));
-  const row = (await screen.findByText('DeepSeek V4 Flash Vision Exp')).closest('button')!;
+  const row = (await screen.findByText('DeepSeek V4 Flash Vision Exp')).closest('label')!;
   // The unchanged hint must disappear because the actual membership is fixed.
   expect(within(row).queryByText('settings.providers.models.capabilityNote')).toBeNull();
   fireEvent.click(row);
@@ -771,7 +772,7 @@ it.each(['delayed', 'failed'] as const)('waits for a %s catalog before building 
   if (catalogState === 'delayed') completeCatalog({ presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
   await waitFor(() => expect(next.hasAttribute('disabled')).toBe(false));
   fireEvent.click(next);
-  const row = (await screen.findByText('DeepSeek V4 Flash Vision Exp')).closest('button')!;
+  const row = (await screen.findByText('DeepSeek V4 Flash Vision Exp')).closest('label')!;
   expect(within(row).queryByText('settings.providers.models.capabilityNote')).toBeNull();
   fireEvent.click(row);
   fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
@@ -805,7 +806,9 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(screen.getByText('DeepSeek')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.retryPlugin' }));
     fireEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.contribution.loadMore' }));
-    await screen.findByText('Antigravity');
+    // The official catalog may omit artwork or provide a different listing ID.
+    const antigravity = await screen.findByRole('button', { name: /Antigravity/ });
+    expect(antigravity.querySelector('svg path')?.getAttribute('d')).toBe(ANTIGRAVITY_MARK_PATH);
     expect(screen.queryByText('settings.ghosts.market.unavailable')).toBeNull();
     const search = screen.getByRole('textbox', { name: 'settings.providers.wizard.searchPlaceholder' });
     fireEvent.change(search, { target: { value: 'deepseek' } });
@@ -1160,7 +1163,7 @@ describe('AddProviderWizard — preset 直达', () => {
     fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
     fireEvent.click(screen.getByText('settings.providers.wizard.next'));
     const piModel = await screen.findByText('Pi Model');
-    fireEvent.click(piModel.closest('button') as HTMLButtonElement);
+    fireEvent.click(piModel.closest('label') as HTMLLabelElement);
     fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
 
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
@@ -2339,7 +2342,7 @@ describe('speech models in the existing provider wizard', () => {
     const speech = await screen.findByRole('checkbox', { name: /qwen3-tts-flash/ });
     const firstChat = screen.getByText('Chat 0');
     expect(speech.compareDocumentPosition(firstChat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(speech.getAttribute('aria-checked')).toBe('true');
+    expect((speech as HTMLInputElement).checked).toBe(true);
     expect(screen.queryByRole('checkbox', { name: /cosyvoice/ })).toBeNull();
   });
   it('reuses server API presets instead of duplicating the same speech service entry', async () => {
@@ -2355,7 +2358,7 @@ describe('speech models in the existing provider wizard', () => {
     fireEvent.click(serverPreset);
     fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-test-key' } });
     fireEvent.click(screen.getByText('settings.providers.wizard.next'));
-    expect((await screen.findByRole('checkbox', { name: /qwen3-tts-flash/ })).getAttribute('aria-checked')).toBe('true');
+    expect(((await screen.findByRole('checkbox', { name: /qwen3-tts-flash/ })) as HTMLInputElement).checked).toBe(true);
   });
   async function enter(presetId: string, speechOnly = false) {
     render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId, speechOnly }} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
@@ -2366,8 +2369,8 @@ describe('speech models in the existing provider wizard', () => {
   it('defaults to one recommended speech model, allows speech-only and does not save unchecked references', async () => {
     await enter('openai-api', true);
     const recommended = await screen.findByRole('checkbox', { name: /gpt-4o-mini-tts/i });
-    expect(recommended.getAttribute('aria-checked')).toBe('true');
-    expect(screen.getByRole('checkbox', { name: /tts-1(?!-hd)/i }).getAttribute('aria-checked')).toBe('false');
+    expect((recommended as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: /tts-1(?!-hd)/i }) as HTMLInputElement).checked).toBe(false);
     fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalled());
     const config = vi.mocked(createCustomProvider).mock.calls[0][0];
@@ -2382,7 +2385,8 @@ describe('speech models in the existing provider wizard', () => {
       { model_id: 'new-voice-model', name: 'New speech model', can_do_text_to_speech: true },
     ])! });
     await enter('elevenlabs-api');
-    expect(screen.queryByRole('checkbox', { name: /eleven_flash_v2_5/ })).toBeNull();
+    // 通用模型行也是勾选框，这里只看语音区：未展开「更多」时不列出该语音模型。
+    expect(within(screen.getByRole('region', { name: 'settings.providers.speechSetup.title' })).queryByRole('checkbox', { name: /eleven_flash_v2_5/ })).toBeNull();
     fireEvent.click(screen.getByText('settings.providers.speechSetup.more'));
     const discovered = screen.getByRole('checkbox', { name: /New speech model/ });
     fireEvent.click(discovered);
@@ -2516,7 +2520,7 @@ describe('Alibaba speech recommendations follow the actual endpoint', () => {
   }
   function expectRecommendation(id: string | null) {
     const section = screen.getByRole('region', { name: 'settings.providers.speechSetup.title' });
-    const checked = within(section).queryAllByRole('checkbox').filter(row => row.getAttribute('aria-checked') === 'true');
+    const checked = within(section).queryAllByRole('checkbox').filter(box => (box as HTMLInputElement).checked).map(box => box.closest('label')!);
     expect(checked).toHaveLength(id ? 1 : 0);
     if (id) {
       expect(checked[0].textContent).toContain(id);
@@ -2587,9 +2591,9 @@ describe('Alibaba speech recommendations follow the actual endpoint', () => {
     vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
     render(<AddSpeechModelsDialog provider={provider} onClose={vi.fn()} onSaved={vi.fn()} />);
     const saved = await screen.findByRole('checkbox', { name: /My saved voice/ });
-    expect((saved as HTMLButtonElement).disabled).toBe(true);
-    expect(within(saved).getByText('settings.providers.speechSetup.saved')).toBeTruthy();
-    expect(screen.getByRole('checkbox', { name: /qwen3-tts-flash/ }).getAttribute('aria-checked')).toBe('true');
+    expect((saved as HTMLInputElement).disabled).toBe(true);
+    expect(within(saved.closest('label')!).getByText('settings.providers.speechSetup.saved')).toBeTruthy();
+    expect((screen.getByRole('checkbox', { name: /qwen3-tts-flash/ }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByText('settings.providers.wizard.addManualModel'));
     await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledTimes(1));
     expect(vi.mocked(updateCustomProvider).mock.calls[0][0].runtimes.codex?.models).toEqual([
@@ -2613,8 +2617,8 @@ describe('existing connection speech additions', () => {
     const saved = vi.fn();
     render(<AddSpeechModelsDialog provider={provider} onClose={vi.fn()} onSaved={saved} />);
     const recommended = await screen.findByRole('checkbox', { name: /speech-2.8-turbo/ });
-    expect(recommended.getAttribute('aria-checked')).toBe('true');
-    expect((screen.getByRole('checkbox', { name: /speech-2.8-hd/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((recommended as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: /speech-2.8-hd/ }) as HTMLInputElement).disabled).toBe(true);
     expect(readCustomProviderKey).toHaveBeenCalledWith('my-minimax', 'codex');
     expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(expect.objectContaining({ savedProviderId: 'my-minimax', apiKey: 'fake-stored-key' }));
     fireEvent.click(screen.getByText('settings.providers.wizard.addManualModel'));

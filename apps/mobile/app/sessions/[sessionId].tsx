@@ -1286,7 +1286,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
   const historyView = useMemo(() => ({ ...unfilteredHistoryView,
     snapshot: historyAfter(unfilteredHistoryView.snapshot, sideChatBoundary)!,
-  }), [unfilteredHistoryView.view, unfilteredHistoryView.snapshot, sideChatBoundary]);
+  }), [unfilteredHistoryView.view, unfilteredHistoryView.snapshot, unfilteredHistoryView.cacheRestoring, sideChatBoundary]);
   useEffect(() => {
     if (messageScreenFocusedRef.current && messageAppActiveRef.current) historyView.view.setActive(true);
   }, [connectionEpoch, messageReloadRevision, historyView.view]);
@@ -11332,7 +11332,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 <RecentMessageHistories
                   key={auth.accountGeneration}
                   activeKey={JSON.stringify([deviceId, sessionId])}
-                  ready={topOverlayHeight > 0 && (historyView.snapshot.ready || messageListItems.length > 0 || (!loading && !syncingWhileEmpty))}
+                  ready={topOverlayHeight > 0 && (historyView.snapshot.ready || (!historyView.cacheRestoring && (messageListItems.length > 0 || (!loading && !syncingWhileEmpty))))}
                   // Android 的常驻消息层画在页面之上;顶栏经 SessionChromeLayer 盖在它上面,
                   // 所以消息层从顶部开始绘制,滚动时能透过半透明顶栏看到。
                   topInset={Platform.OS === 'android' ? 0 : topOverlayHeight}

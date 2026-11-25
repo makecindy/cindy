@@ -1856,6 +1856,26 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  // #12814: an idle Codex Worker can compact with no accepted input. Its
+  // running status is visible to the composer, but must not start an Orca task.
+  it('keeps manual compact busy status out of the Worker turn lifecycle', async () => {
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    try {
+      const compact = event('status', { isRunning: true, manualCompact: true }, { source: 'codex' });
+      h.emit(compact);
+      await microtasks();
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'status', data: expect.objectContaining({ isRunning: true }) }),
+      }));
+      expect(h.activity.isSessionInTurn('task')).toBe(false);
+      expect(h.deps.orcaTeamServiceForEvents.handleWorkerTurnStarted).not.toHaveBeenCalled();
+      h.emit(event('status', { isRunning: true }, { source: 'codex' }));
+      await microtasks();
+      expect(h.deps.orcaTeamServiceForEvents.handleWorkerTurnStarted).toHaveBeenCalledExactlyOnceWith('task');
+    } finally { await h.dispose(); }
+  });
+
   it('waits for accepted persistence and worker start while returning synchronously', async () => {
     const h = harness(),
       writes = deferred(),

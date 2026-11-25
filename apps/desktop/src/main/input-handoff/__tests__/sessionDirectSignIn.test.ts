@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { InputHandoffSnapshot } from '@cindy/device-link';
 import type { HandoffDriver } from '../macDriver.js';
-import { InputHandoffSession, type HandoffResult, type HandoffTargetSpec } from '../session.js';
+import { InputHandoffSession, type HandoffCompletionHints, type HandoffResult, type HandoffTargetSpec } from '../session.js';
 import type { HandoffFieldPlan, NativeAxNode } from '../types.js';
+import { desktopInputRevision } from '../../remote-desktop/inputOwnership.js';
 
 const node = (ref: string, role: string, extra: Partial<NativeAxNode> = {}): NativeAxNode => ({
   ref,
@@ -107,6 +108,7 @@ function start(
   driver: HandoffDriver,
   target: HandoffTargetSpec = { app: 'Google Chrome', windowTitle: 'Sign in' },
   fields?: HandoffFieldPlan[],
+  completeWhen?: HandoffCompletionHints,
 ) {
   const published: InputHandoffSnapshot[] = [];
   const finished: HandoffResult[] = [];
@@ -117,6 +119,7 @@ function start(
     purpose: 'Sign in',
     target,
     fields,
+    completeWhen,
     timeoutMs: 600_000,
     hostPid: 1,
     remoteInput: true,
@@ -508,6 +511,336 @@ describe('a waiting card watching its window', () => {
     await settle();
     expect(second.finished).toEqual([]);
     second.session.cancel();
+  });
+
+  // Production entry: InputHandoffSession watching the window, unit tier (fake driver). 2026-11-25 real run:
+  // twice a Ctrip sign-in handoff with complete_when url_contains ended "succeeded" while the page was still the
+  // sign-in page, because the owner switched to the scan tab / a slider check and the password fields went away.
+  // Existing tests only cover a page without hints ("ends when a form that is not a sign-in goes away").
+  // Minimal failing input: hint urlContains=app.example.com, password page -> blank page at the same address.
+  it('keeps waiting while fields are gone but the agent\'s completion hint is not met yet', async () => {
+    const { driver, state } = desktop('password');
+    // PR #12766 review (codex, r4691679719 / r4692101054 / r4692101068): the repeated scan check while waiting
+    // must not raise the window, must not take the desktop from other tasks, and looks only at the focused target.
+    const qr = vi.fn(async (_target: unknown, _frame: number[] | null) => null);
+    driver.qr = qr;
+    let targetFocused = false;
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = targetFocused ? w.title === 'Sign in' : w.title !== 'Sign in';
+      return windows;
+    };
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    const raisedAtStart = state.raised;
+    state.screen = 'blank';
+    await settle();
+    // Another window of the browser is the focused one: no look at all.
+    expect(qr).not.toHaveBeenCalled();
+    targetFocused = true;
+    const inputRevision = desktopInputRevision();
+    await settle();
+    await settle();
+    expect(run.finished).toEqual([]);
+    expect(qr.mock.calls.length).toBeGreaterThan(1);
+    expect(qr.mock.calls.every(([, frame]) => Array.isArray(frame))).toBe(true);
+    expect(state.raised).toBe(raisedAtStart);
+    expect(desktopInputRevision()).toBe(inputRevision);
+    expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toContain('password');
+    state.screen = 'password';
+    await settle();
+    expect(run.finished).toEqual([]);
+    state.screen = 'signedIn';
+    state.windowTitle = 'Inbox';
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0 });
+  });
+
+  // PR #12766 review (greptile, r4691611648): closing the live view re-reads the window through decide(refresh),
+  // which presented the fieldless page as done outside and bypassed the pending hint. Same entry, unit tier.
+  // Minimal failing input: hint pending, password page -> blank page, then afterLiveView().
+  it('does not hand back when the live view closes on a page that still misses the completion hint', async () => {
+    const { driver, state } = desktop('password');
+    // The sign-in window is the focused one, so the refresh re-reads it rather than following another window.
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    state.screen = 'blank';
+    await run.session.afterLiveView();
+    await settle();
+    expect(run.finished).toEqual([]);
+    expect(run.latest()).toMatchObject({ phase: 'ready' });
+    expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toContain('password');
+    state.screen = 'signedIn';
+    state.windowTitle = 'Inbox';
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0 });
+  });
+
+  // PR #12766 review (codex r4692318185): a phone holding a form that is not a sign-in closes its live view while
+  // the fields are gone and the hint is pending. The card kept the asked step, but watching() stopped for a held
+  // card, so the hint showing up later was never seen. Entry: claim -> afterLiveView -> window watch. Unit tier.
+  it('keeps watching for the completion hint after a device holding a form closes its live view', async () => {
+    const { driver, state } = desktop('address');
+    // The form's window is the focused one, so the refresh re-reads it rather than following another window.
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    let done = false;
+    const read = driver.snapshot.bind(driver);
+    driver.snapshot = async (pid, window) => done
+      ? { pid, app: chrome.app, bundleId: chrome.bundleId, frontmost: true, window: { index: 1, title: 'Sign in', frame }, nodes: page('https://app.example.com/done', []) }
+      : read(pid, window);
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    state.screen = 'blank';
+    await run.session.afterLiveView();
+    await settle();
+    expect(run.finished).toEqual([]);
+    done = true;
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0 });
+  });
+
+  // PR #12766 review (codex r4692520499): the sign-in page turns into a device-code page before the hint shows.
+  // The wait kept the password step, so the code and its link never reached the card. Entry: window watch. Unit tier.
+  // PR #12766 review (codex r4692756395): past the sign-in the page shows its own reply box while the hint is pending.
+  // The wait judged the raw read (a field, so not waiting) and looked for a code by raising the window, then
+  // present() dropped the reply box and kept the asked step, so every third read raised it again.
+  // Entry: window watch. Unit tier. Minimal failing input: password page -> page with only a Reply field.
+  it('does not raise the window over a page whose only field is past the sign-in while the hint is pending', async () => {
+    const { driver, state } = desktop('password');
+    const qr = vi.fn(async (_target: unknown, _frame: number[] | null) => null);
+    driver.qr = qr;
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com/done' });
+    await run.session.start();
+    const raisedAtStart = state.raised;
+    const inputRevision = desktopInputRevision();
+    state.screen = 'signedIn';
+    await settle();
+    await settle();
+    expect(run.finished).toEqual([]);
+    expect(qr.mock.calls.some(([, frame]) => frame === null)).toBe(false);
+    expect(state.raised).toBe(raisedAtStart);
+    expect(desktopInputRevision()).toBe(inputRevision);
+    expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toContain('password');
+    run.session.cancel();
+  });
+
+  // PR #12766 review (codex r4692976207): during the passive look the card's step was the fieldless read, so an owner
+  // claiming the card then was published an empty step, and restoring it afterwards published nothing.
+  // Entry: window watch + claim while driver.qr is pending. Unit tier.
+  it('keeps the asked step on the card while a passive look for a code is pending', async () => {
+    const { driver, state } = desktop('password');
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    const releases: Array<() => void> = [];
+    const qr = vi.fn(() => new Promise<null>((resolve) => { releases.push(() => resolve(null)); }));
+    driver.qr = qr;
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    state.screen = 'blank';
+    await vi.waitFor(() => expect(qr).toHaveBeenCalled());
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    const passwordShown = () => run.latest().controls.map((c) => c.kind === 'text' && c.contentType).includes('password');
+    expect(passwordShown()).toBe(true);
+    releases.splice(0).forEach((release) => release());
+    await settle();
+    expect(passwordShown()).toBe(true);
+    expect(run.finished).toEqual([]);
+    run.session.cancel();
+    releases.splice(0).forEach((release) => release());
+  });
+
+  // PR #12766 review (codex r4693243900): the fields came back during a passive look for a code and the owner moved
+  // on through the card; the late look then swapped the next step for the old code, clearing its draft.
+  // Entry: window watch with session.submit. Unit tier.
+  it('drops a passive look for a code that returns after the card moved to the next step', async () => {
+    const { driver, state } = desktop('password');
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    driver.act = async (request) => {
+      if (request.kind === 'text') state.screen = 'code';
+      return { ok: true };
+    };
+    const releases: Array<() => void> = [];
+    const qr = vi.fn(() => new Promise<Awaited<ReturnType<NonNullable<HandoffDriver['qr']>>>>((resolve) => {
+      releases.push(() => resolve({
+        text: 'weixin://dl/login?x=1',
+        capture: { jpeg: Buffer.from('jpeg'), width: 8, height: 8, area: frame, windowFrame: frame },
+      }));
+    }));
+    driver.qr = qr;
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    state.screen = 'blank';
+    await vi.waitFor(() => expect(qr).toHaveBeenCalled());
+    state.screen = 'password';
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    const asked = run.latest();
+    const password = asked.controls.find((c) => c.kind === 'text')!;
+    await run.session.submit({ expectedRevision: asked.revision, values: { [password.id]: 'synthetic-secret' }, action: { kind: 'submit' } }, { deviceId: 'phone' });
+    const labels = () => run.latest().controls.map((c) => c.kind === 'text' && c.label);
+    await settle();
+    expect(labels()).toEqual(['Verification code']);
+    releases.splice(0).forEach((release) => release());
+    await settle();
+    expect(labels()).toEqual(['Verification code']);
+    expect(run.latest().qr).toBeUndefined();
+    run.session.cancel();
+  });
+
+  // PR #12766 review (codex r4693526385): the same race with a look that finds nothing: it set the wait back on for the
+  // step the owner had already left, so the next form was swapped under the phone when the page added a field.
+  // Entry: window watch with session.submit. Unit tier.
+  // PR #12766 review (codex r4693769193): the owner switched to the window picture while a passive look was out; the
+  // late code replaced the picture with the old scan, clearing what the phone had open.
+  // Entry: window watch with session.decide('picture'). Unit tier.
+  it('drops a passive look for a code once the owner switched to the window picture', async () => {
+    const { driver, state } = desktop('password');
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    driver.capture = async () => ({ jpeg: Buffer.from('window'), width: 800, height: 1000, area: frame, windowFrame: frame });
+    const releases: Array<() => void> = [];
+    const qr = vi.fn(() => new Promise<Awaited<ReturnType<NonNullable<HandoffDriver['qr']>>>>((resolve) => {
+      releases.push(() => resolve({
+        text: 'weixin://dl/login?x=1',
+        capture: { jpeg: Buffer.from('jpeg'), width: 8, height: 8, area: frame, windowFrame: frame },
+      }));
+    }));
+    driver.qr = qr;
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    state.screen = 'blank';
+    await vi.waitFor(() => expect(qr).toHaveBeenCalled());
+    expect(await run.session.decide({ kind: 'input_handoff', action: 'picture', expectedRevision: run.latest().revision })).toBe(true);
+    expect(run.latest().qr).toBeUndefined();
+    const revision = run.latest().revision;
+    releases.splice(0).forEach((release) => release());
+    await settle();
+    expect(run.latest().qr).toBeUndefined();
+    expect(run.latest().revision).toBe(revision);
+    run.session.cancel();
+    releases.splice(0).forEach((release) => release());
+  });
+
+  it('does not wait over the next step after a passive look that started on the earlier one', async () => {
+    const { driver, state } = desktop('address');
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    let next = false;
+    let moreFields = false;
+    driver.act = async (request) => {
+      if (request.kind !== 'text') next = true;
+      return { ok: true };
+    };
+    const read = driver.snapshot.bind(driver);
+    // Confirming the address moves on to the next form of the same page.
+    driver.snapshot = async (pid, window) => next
+      ? { pid, app: chrome.app, bundleId: chrome.bundleId, frontmost: true, window: { index: 1, title: 'Sign in', frame },
+        nodes: page('https://shop.example.com/', [node('1.0', 'AXTextField', { title: 'Workspace name' }),
+          ...(moreFields ? [node('1.1', 'AXTextField', { title: 'Team size' })] : [])]) }
+      : read(pid, window);
+    const releases: Array<() => void> = [];
+    const qr = vi.fn(() => new Promise<null>((resolve) => { releases.push(() => resolve(null)); }));
+    driver.qr = qr;
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    state.screen = 'blank';
+    await vi.waitFor(() => expect(qr).toHaveBeenCalled());
+    state.screen = 'address';
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    const asked = run.latest();
+    const street = asked.controls.find((c) => c.kind === 'text')!;
+    await run.session.submit({ expectedRevision: asked.revision, values: { [street.id]: '1 Main St' }, action: { kind: 'submit' } }, { deviceId: 'phone' });
+    await settle();
+    const labels = () => run.latest().controls.map((c) => c.kind === 'text' && c.label);
+    expect(labels()).toEqual(['Workspace name']);
+    const revision = run.latest().revision;
+    // The page adds a field as the late look returns.
+    moreFields = true;
+    releases.splice(0).forEach((release) => release());
+    await settle();
+    expect(run.latest().revision).toBe(revision);
+    expect(labels()).toEqual(['Workspace name']);
+    expect(run.finished).toEqual([]);
+    run.session.cancel();
+    releases.splice(0).forEach((release) => release());
+  });
+
+  it('shows a device code that replaces the sign-in fields while the completion hint is pending', async () => {
+    const { driver, state } = desktop('password');
+    let deviceCode = false;
+    const read = driver.snapshot.bind(driver);
+    driver.snapshot = async (pid, window) => deviceCode
+      ? { pid, app: chrome.app, bundleId: chrome.bundleId, frontmost: true, window: { index: 1, title: 'Sign in', frame },
+        nodes: page('https://login.example.com/device', [node('1.0', 'AXStaticText', { value: 'Open github.com/login/device and enter WDJB-MJHT' })]) }
+      : read(pid, window);
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    deviceCode = true;
+    await vi.waitFor(() => expect(run.latest().deviceCode).toMatchObject({ code: 'WDJB-MJHT' }));
+    expect(run.finished).toEqual([]);
+    expect(state.screen).toBe('password');
+    run.session.cancel();
+  });
+
+  // PR #12766 review (codex r4692520509): after a held form's fields came back, the card kept watching for the hint
+  // and a later change of the page swapped the holder's form. Fields back = the holder's form is protected again.
+  it('stops watching a held form once its fields come back', async () => {
+    const { driver, state } = desktop('address');
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    let moreFields = false;
+    const read = driver.snapshot.bind(driver);
+    driver.snapshot = async (pid, window) => moreFields
+      ? { pid, app: chrome.app, bundleId: chrome.bundleId, frontmost: true, window: { index: 1, title: 'Sign in', frame },
+        nodes: page('https://shop.example.com/', [node('1.0', 'AXTextField', { title: 'Street' }), node('1.1', 'AXTextField', { title: 'City' })]) }
+      : read(pid, window);
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    state.screen = 'blank';
+    await run.session.afterLiveView();
+    state.screen = 'address';
+    await settle();
+    const revision = run.latest().revision;
+    // The page adds a field while the phone is typing: the card must not swap the holder's form.
+    moreFields = true;
+    await settle();
+    expect(run.latest().revision).toBe(revision);
+    expect(run.finished).toEqual([]);
+    run.session.cancel();
   });
 
   it('shows a code to scan when the fields go away because a second factor needs scanning', async () => {
