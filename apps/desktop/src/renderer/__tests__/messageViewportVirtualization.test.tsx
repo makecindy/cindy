@@ -111,6 +111,29 @@ afterEach(async () => {
   host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 describe('message viewport content virtualization', () => {
+  // #12504: ordinary commits and clicks caused synchronous browser layout.
+  // Count the browser API calls at the real viewport boundary in jsdom.
+  it('reuses the mounted window on an unchanged commit without reading layout', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    await flushFrames();
+    const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get');
+    height.mockClear();
+    await act(async () => root.render(<Fixture restore />));
+    expect(height).not.toHaveBeenCalled();
+    expect(row(40).querySelector('button')).not.toBeNull();
+  });
+
+  it('does not query native selection on an ordinary pointer or focus change', async () => {
+    vi.useFakeTimers();
+    await act(async () => root.render(<Fixture restore />));
+    const selection = vi.spyOn(document, 'getSelection');
+    await act(async () => {
+      row(40).dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      row(40).dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+      vi.runOnlyPendingTimers();
+    });
+    expect(selection).not.toHaveBeenCalled();
+  });
   // A thread root lives before items and can resize without any row mutation.
   // Keep scrollTop fixed to model reading after a header layout change.
   it.each([{ height: 0, anchor: 42 }, { height: 720, anchor: 38 }])(
@@ -432,17 +455,26 @@ describe('message viewport content virtualization', () => {
     });
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
-  it('keeps the selected history mounted without reading the range on unchanged pointer or focus events', async () => {
+  it('keeps just the selected rows available across scrolling without rereading on pointer or focus', async () => {
     vi.useFakeTimers();
     await act(async () => root.render(<Fixture restore />));
     const outside = host.appendChild(document.createElement('button'));
     const selection = document.getSelection()!;
     await act(async () => {
       const range = document.createRange();
-      range.selectNodeContents(row(40));
+      range.setStart(row(40).querySelector('button')!.firstChild!, 0);
+      range.setEndAfter(row(42).querySelector('button')!);
       selection.addRange(range);
       vi.runOnlyPendingTimers();
     });
+    expect(scroller().querySelectorAll('button').length).toBeLessThan(20);
+    await act(async () => {
+      scroller().scrollTop = 0;
+      scroller().dispatchEvent(new Event('scroll'));
+    });
+    await flushFrames();
+    expect(row(0).querySelector('button')).not.toBeNull();
+    expect(selection.toString()).toBe('Row 40Row 41Row 42');
     const readSelection = vi.spyOn(document, 'getSelection');
     await act(async () => {
       outside.dispatchEvent(new Event('pointerdown', { bubbles: true }));
@@ -453,11 +485,14 @@ describe('message viewport content virtualization', () => {
     });
     // #12504: selection getters can synchronously flush Chromium layout.
     expect(readSelection).not.toHaveBeenCalled();
-    expect(scroller().querySelectorAll('button')).toHaveLength(80);
+    expect(scroller().querySelectorAll('button').length).toBeLessThan(20);
     await act(async () => {
       selection.removeAllRanges();
+      document.dispatchEvent(new Event('selectionchange'));
       vi.runOnlyPendingTimers();
     });
+    await flushFrames();
+    expect(row(40).querySelector('button')).toBeNull();
     expect(scroller().querySelectorAll('button').length).toBeLessThan(20);
   });
   it('keeps page-text access active when a selection ends, then releases independently', async () => {

@@ -37,6 +37,7 @@ import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
 import type { ImFinalOutput } from '@cindy/im';
 import type { ImTurnRunner } from '../shared/turnRunner';
+import { PluginEngineUnsupportedError } from '../../maker-host/engineKind';
 import {
   createWechatTurnPermissionPolicy,
   WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS,
@@ -361,7 +362,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     // Registered in Desktop Main with a trusted-renderer sender check.
   }
 
-  async authorize(): Promise<{ started: true }> {
+  async authorize(signal?: AbortSignal): Promise<{ started: true }> {
+    signal?.throwIfAborted();
     if (this.#deps.isCompatibilityDisabled() && !this.#compatibilityDisabled) {
       await this.setCompatibilityDisabled(true);
     }
@@ -381,6 +383,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     this.cancelAuthorization();
     const abort = new AbortController();
     this.#authorizationAbort = abort;
+    const cancelOwn = () => { if (this.#authorizationAbort === abort) this.cancelAuthorization(); };
+    signal?.addEventListener('abort', cancelOwn, { once: true });
+    if (signal?.aborted) { cancelOwn(); signal.throwIfAborted(); }
     this.#setState({ ...this.#state, phase: 'authorizing', errorCode: undefined });
     const transport = this.#deps.createTransport({
       credentials: null,
@@ -436,6 +441,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           });
         }
       } finally {
+        signal?.removeEventListener('abort', cancelOwn);
         if (this.#authorizationAbort === abort) this.#authorizationAbort = null;
       }
     })();
@@ -1254,8 +1260,12 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         }),
       });
     } catch (error) {
-      await stopTyping();
-      throw error;
+      if (error instanceof PluginEngineUnsupportedError) {
+        dispatch = { kind: 'rejected' as const, reason: error.code };
+      } else {
+        await stopTyping();
+        throw error;
+      }
     }
 
     if (dispatch.kind !== 'accepted') {
@@ -2322,14 +2332,14 @@ export const __testing = {
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      resolve();
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

@@ -127,7 +127,9 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 给既有任务发消息（隐藏群专线不是群聊收件地址，返回不支持且说明未送达） | 有 | 有（2026-10-14；接收电脑执行同一判定，隐藏目标仍优先遵守可见性检查） |
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目；来源不绑项目时按执行目录所在的已登记可见项目归属，2026-11-10） | 有 | 有（2026-11-11，`device` 指定任务电脑；项目与默认模型在目标解析，不继承本机路径）               |
 | 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `provider_device_id`（兼容 `agent_device_id`），取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在 `device` 指定的电脑） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
+| 任务 | 新建普通任务时选择本机供应商连接（`send_to_session` create 的可选 `provider_id`，取 `list_available_models` 对应模型的 `providers[].provider_id`） | 有。指定连接从首轮生效，省略时沿用原选路。连接不可用或不提供所选模型时返回 `PROVIDER_ROUTE_UNAVAILABLE` | 跨电脑创建、使用远程供应商或从 SSH 任务创建时，显式指定连接返回 `INVALID_ARGS` |
 | 任务     | 归档 / 取消归档                                             | 有   | 有（2026-10-16） |
+| 任务     | 置顶 / 取消置顶（`pin_sessions` / `unpin_sessions`）；列表和摘要查回 `pinned` | 有（保留已有置顶顺序） | 有（每批限一台电脑，沿用任务权限及远控授权） |
 | 任务     | 稍后处理（指定时间 / 无限期）与提前取回，与收件箱同一字段和唤回规则（`snooze_sessions`，与归档同在 control 类） | 有（2026-11-22） | 有（2026-11-22，既有 patch-meta，按顺序写，结果不明不重发） |
 | 任务     | `delete_session` 删除明确任务（不能删除当前调用任务），复用宿主生命周期清理 | 有（整体安装授予的 control 声明） | 有（既有 patch-meta，结果不明不重发） |
 | 自动归档 | 设置 → 存储空间中的闲置自动归档开关、保留天数、预览与恢复默认；`tasks.auto-archive` 仍通过 `task-management` 配置分类复用 `get_app_settings` / `update_app_settings` / `reset_app_settings` | 有（当前账号本机） | 无（设置本身为本机范围，远程仍使用现有归档与恢复） |
@@ -164,6 +166,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 伙伴     | 自身关联项目：列出、添加与移除（原有文件工具按需读资料） | 有 | 无（远程设置界面可管理） |
 | 伙伴     | 资料、能力（待办与 V1 后台任务已于 2026-11-08 移除；开任务见上面的 `send_to_session`） | 有 | 无 |
 | 伙伴     | 项目规则、技能与自动化：伙伴项目的 `AGENTS.md`、`.agents/skills`、`.cindy/automations/schedules.json`（原有文件工具与 `schedule_*`；伙伴项目的自动化免导入确认） | 有（2026-11-08） | 无（随云端伙伴迁到新主力电脑） |
+| 伙伴     | [工作区迁移](../teammate-workspace-migration.md)（`teammate_workspace_migration`）；新建伙伴的默认工作区目录在桌面「设置 → 存储 → 伙伴工作区」配置 | 有（2026-11-25；`preview` / `status` 只读，`request` / `cancel` 沿当前任务权限档和写操作门禁，仅在执行电脑上登记或取消） | 无（SSH／远程工作区调用方不可用，不新增跨设备迁移协议） |
 | 伙伴     | 显式重新接受已保存模型，恢复旧版遗留的自动模型记录 | 有（`update_teammate_profile` 显式提交完整 `modelChain`，即使值未变） | 无（远程设置 IPC 可按版本接受，不等于跨电脑 Agent 工具） |
 | 伙伴     | 发现与选择 Codex Apps 连接器（继承默认保留，显式 MCP 白名单可收窄） | 有（能力工具） | 无（SSH Codex 不提供） |
 | 工具     | 添加自定义 MCP 服务器（远程 HTTP/SSE；`request_mcp_setup` 在本任务打开同一设置表单，凭证由主人在表单填写）；伙伴随后用能力工具加入，原任务下一轮生效（2026-11-01） | 有（本机桌面任务） | 无（主人到受信电脑的设置 → 工具 → 外部工具添加） |
@@ -218,6 +221,9 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
 - 新建任务的 Agent 所在电脑：`packages/lizi-mcps/src/xdt-helper/send_to_session.ts` 的 `provider_device_id`（兼容 `agent_device_id`），
   host 侧解析见 `apps/desktop/src/main/maker-ipc/sendToSessionExecutionConfig.ts`
   （`resolveSendToSessionCreateRoute`）。
+- 新建任务的本机供应商连接由 `packages/lizi-mcps/src/xdt-helper/list_available_models.ts` 列出，
+  `send_to_session.ts` 接收可选的 `provider_id`。`apps/desktop/src/main/mcp-integrations/mcp-providers.ts`
+  在转发到其他电脑前检查该参数，本机创建由上述 `resolveSendToSessionCreateRoute` 校验连接和模型。
 - 任务摘要（`get_task_digest`）：`packages/lizi-mcps/src/xdt-helper/get_task_digest.ts`（输出合同 ≤2KB）、
   `apps/desktop/src/main/mcp-integrations/taskDigest.ts` 与 `taskDigestHost.ts`（跨电脑只读，复用
   `local-db:sessions:get`、`maker:list-active`、历史消息与 PR 状态通道）。

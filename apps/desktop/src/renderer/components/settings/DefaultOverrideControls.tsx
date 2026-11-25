@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { RestoreDefaultButton } from '@/components/ui/reset-buttons';
@@ -35,6 +36,31 @@ export function DefaultOverrideControls({
         onClick={onReset}
         disabled={resetDisabled}
       />
+    </div>
+  );
+}
+
+/** A saved override and how to clear it, for a single-control row that offers a reset. */
+export interface DefaultOverrideReset {
+  customized: boolean;
+  disabled?: boolean;
+  onReset(): void;
+}
+
+/**
+ * The row's control with DefaultOverrideControls in front of it. Without `reset` the control is
+ * returned unchanged, so callers that do not pass one render the control exactly as given.
+ */
+export function withDefaultOverride(control: ReactNode, reset?: DefaultOverrideReset) {
+  if (!reset) return control;
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <DefaultOverrideControls
+        isCustomized={reset.customized}
+        disabled={reset.disabled}
+        onReset={reset.onReset}
+      />
+      {control}
     </div>
   );
 }

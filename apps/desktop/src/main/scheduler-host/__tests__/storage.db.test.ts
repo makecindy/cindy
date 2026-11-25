@@ -8,6 +8,9 @@ import type { DbTransport } from '../../localDb/client/DbTransport';
  */
 
 import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import { mkdtempSync, rmdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -16,6 +19,7 @@ import * as schema from '../../localDb/schema';
 import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
+import { applyAgentSwitchToSessionRowWithPorts } from '../../localDb/agentSwitchRows';
 import { recordScheduleRunCostDirect, applyScheduleRunCostMetaChange } from '../runCostLedger';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
 
@@ -96,6 +100,14 @@ const SCHEDULER_DDL = [
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'desktop',
+      agent_kind TEXT NOT NULL DEFAULT 'cc',
+      model TEXT,
+      provider_id TEXT,
+      sdk_session_id TEXT,
+      agent_device_id TEXT,
+      effort TEXT,
+      fast_mode INTEGER,
+      scheduled_model_baseline TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       working_dir TEXT,
@@ -277,8 +289,8 @@ const SCHEDULER_DDL = [
   `,
 ];
 
-function createStorageHarness(queries?: { query: string; params: unknown[] }[]) {
-  const sqlite = new Database(':memory:');
+function createStorageHarness(queries?: { query: string; params: unknown[] }[], dbPath = ':memory:') {
+  const sqlite = new Database(dbPath);
   sqlite.pragma('foreign_keys = ON');
   for (const statement of SCHEDULER_DDL) sqlite.exec(statement);
 
@@ -821,6 +833,35 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(afterReschedule.find((run) => run.runId === 'run-ext')?.nextFireAt).toBe(12_000);
     } finally {
       harness.close();
+    }
+  });
+
+  // #12397, DB tier. A second writer repoints one rule without changing the
+  // count, status, or due time. Both affected picker entries must refresh.
+  it('refreshes plugin eligibility when another writer changes a schedule binding', async () => {
+    const { db, storage, close } = createStorageHarness();
+    const other = new DrizzleScheduleStorage(() => db);
+    try {
+      await storage.insert(baseSchedule({ id: 'run-rule' }));
+      for (const id of ['old-target', 'new-target']) {
+        db.run(sql`INSERT INTO sessions (id, title, source) VALUES (${id}, ${id}, 'scheduler')`);
+        await storage.insertRun({
+          id, scheduleId: 'run-rule', sessionId: id, firedAt: 1, finishedAt: 2, status: 'success',
+        });
+      }
+      await other.insert(baseSchedule({ id: 'binding', targetSessionId: 'old-target' }));
+      const picker = async (id: string) =>
+        (await storage.listSidebarIndexRuns()).findLast(run => run.sessionId === id)?.canSwitchPluginEngine === true;
+      await expect(picker('old-target')).resolves.toBe(false);
+      await expect(picker('new-target')).resolves.toBe(true);
+
+      await other.update('binding', { targetSessionId: 'new-target' });
+      await expect(storage.canSwitchCompletedAutomationSession('old-target')).resolves.toBe(true);
+      await expect(storage.canSwitchCompletedAutomationSession('new-target')).resolves.toBe(false);
+      await expect(picker('old-target')).resolves.toBe(true);
+      await expect(picker('new-target')).resolves.toBe(false);
+    } finally {
+      close();
     }
   });
 
@@ -2073,6 +2114,96 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       harness.close();
     }
   });
+});
+
+// #12397, DB tier. The sidebar and switch handler share the completed-run
+// predicate. A run resumed or a different automation bound to the same task
+// must no longer let that task pick a plugin engine.
+it('offers the same plugin switch eligibility in the sidebar and send guard', async () => {
+  const harness = createStorageHarness();
+  const { db, storage } = harness;
+  try {
+    await storage.insert(baseSchedule({ id: 'fresh-rule' }));
+    db.run(sql`INSERT INTO sessions (id, title, source) VALUES ('fresh-task', 'fresh task', 'scheduler')`);
+    await storage.insertRun({
+      id: 'first-run', scheduleId: 'fresh-rule', sessionId: 'fresh-task', firedAt: 1, status: 'running',
+    });
+    const eligibility = async () => ({
+      switch: await storage.canSwitchCompletedAutomationSession('fresh-task'),
+      picker: (await storage.listSidebarIndexRuns())
+        .findLast(run => run.sessionId === 'fresh-task')?.canSwitchPluginEngine === true,
+    });
+    await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
+    await storage.updateRun('first-run', { status: 'success', finishedAt: 2 });
+    await expect(eligibility()).resolves.toEqual({ switch: true, picker: true });
+    await storage.update('fresh-rule', { persistentSession: true });
+    await expect(eligibility()).resolves.toEqual({ switch: true, picker: true });
+
+    await storage.insert(baseSchedule({ id: 'bound-rule', targetSessionId: 'fresh-task', persistentSession: true }));
+    await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
+    await storage.delete('bound-rule');
+
+    await storage.insertRun({
+      id: 'interrupted-run', scheduleId: 'fresh-rule', sessionId: 'fresh-task',
+      firedAt: 3, finishedAt: 4, status: 'interrupted',
+    });
+    await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
+  } finally {
+    harness.close();
+  }
+});
+
+// #12397, DB tier. Two SQLite connections pass the initial checks while
+// the task is still on a builtin engine. In either commit order only the
+// first operation may succeed, even without a shared JavaScript lock.
+it.each(['create', 'update'])('serializes plugin switching with a binding from another connection (%s)', async operation => {
+  const dir = mkdtempSync(join(tmpdir(), 'cindy-schedule-route-'));
+  const dbPath = join(dir, 'schedule.sqlite');
+  const { db, storage, close } = createStorageHarness(undefined, dbPath);
+  const second = new Database(dbPath);
+  const routes = drizzle(second, { schema });
+  setCurrentDbClient({ drizzle: routes } as unknown as DbClient, 'test-user');
+  const owner = {
+    captureOwnerScope: () => true,
+    isOwnerScopeCurrent: () => true,
+    broadcastSessionPatched: () => {},
+  };
+  try {
+    await storage.insert(baseSchedule({ id: 'run-rule' }));
+    for (const sessionId of ['bind-first', 'switch-first']) {
+      db.run(sql`INSERT INTO sessions (id, title, source) VALUES (${sessionId}, 'task', 'scheduler')`);
+      await storage.insertRun({
+        id: sessionId, scheduleId: 'run-rule', sessionId, firedAt: 1, finishedAt: 2, status: 'success',
+      });
+      const rule = baseSchedule({ id: `rule-${sessionId}` });
+      if (operation === 'update') await storage.insert(rule);
+      expect(await storage.canSwitchCompletedAutomationSession(sessionId)).toBe(true);
+      expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('cc');
+      const bind = () => operation === 'create'
+        ? storage.insert({ ...rule, targetSessionId: sessionId })
+        : storage.update(rule.id, { targetSessionId: sessionId });
+      const switchRoute = () => applyAgentSwitchToSessionRowWithPorts(
+        sessionId, { agentKind: 'acp', model: 'default', providerId: 'acp-plugin:test:engine' }, owner,
+      );
+
+      if (sessionId === 'bind-first') {
+        await expect(bind()).resolves.toMatchObject({ targetSessionId: sessionId });
+        await expect(switchRoute()).rejects.toThrow('[PRECONDITION_FAILED]');
+        expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('cc');
+      } else {
+        await switchRoute();
+        await expect(bind()).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+        expect((await storage.get(rule.id))?.targetSessionId).toBeUndefined();
+        expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('acp');
+      }
+    }
+  } finally {
+    clearCurrentDbClient();
+    second.close();
+    close();
+    rmSync(dbPath);
+    rmdirSync(dir);
+  }
 });
 
 it('excludes internal routine rows in SQLite before materializing the public sidebar index', async () => {

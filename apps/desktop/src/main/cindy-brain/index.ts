@@ -557,6 +557,7 @@ import { GhostBrowserExtensionSlot } from './browserExtensionSlot.js';
 import { createNativeBinding } from '../browser-extension/native-binding.js';
 import { loadWindowsTaskbarNative } from '../windowsTaskbarNative.js';
 import { broadcastTaskViewOpen, GhostTaskViewSlot } from './taskViewSlot.js';
+import { GhostSessionStateSlot, readGhostSessionStateRows } from './sessionStateSlot.js';
 import { LiveScreenHost } from './liveScreenHost.js';
 import { PluginLiveScreenViews } from '../remote-desktop-viewer/pluginViews.js';
 import { GhostScheduleSlot, isMainShellWindowUrl } from './scheduleSlot.js';
@@ -752,8 +753,9 @@ import { createHostToolRuntime, disposePluginHostTools, hasPluginHostTools, reco
 import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
 import { handlePluginHostToolRequest } from './hostToolSlot.js';
 import { withPluginSchedulerApproval } from './pluginSchedulerApproval.js';
-import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
+import { getSharedGhCliTokenSource, invalidateSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { openGithubSignIn, readLocalGithubToken } from '../git-context/githubSetupIpc.js';
+import { connectGithubDevice, githubDeviceLoginAvailable, startGithubDeviceLogin } from '../git-context/githubDeviceLogin.js';
 import { bindingStore } from '../im/binding.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
@@ -1020,6 +1022,39 @@ export function captureGhostMutationOwnerForMcp(): ActiveAppSession {
 
 export function acquireGhostMutationLeaseForMcp(expectedOwner: ActiveAppSession): () => void {
   return beginGhostMutation(expectedOwner);
+}
+
+/** Reuses the existing official gh-cli credential source; no plugin changes or token IPC. */
+export async function connectGhostGithubAccount(input: {
+  sessionId: string; reauthorize?: boolean; signal?: AbortSignal; assertCurrent(): void;
+}): Promise<Record<string, unknown> | null> {
+  const ghost = findAvailableGhost('cindy-github');
+  if (!ghost || !isCindyOfficialTrustInfo(ghost.trust)
+    || !ghost.manifest.network?.secrets?.some(secret => secret.source === 'gh-cli')) return null;
+  const owner = captureGhostMutationOwner();
+  return connectGithubDevice({ ...input, ghost: { id: ghost.manifest.id, name: ghost.manifest.name },
+    assertCurrent: () => {
+      input.assertCurrent();
+      const current = findAvailableGhost('cindy-github');
+      if (!ghostOwnerScope.isStable?.(owner) || !current || current.dir !== ghost.dir
+        || !isCindyOfficialTrustInfo(current.trust) || JSON.stringify(current.approval) !== JSON.stringify(ghost.approval))
+        throw new Error('AUTH_FAILED');
+    } }, {
+    available: githubDeviceLoginAvailable,
+    probe: () => getSharedGhCliTokenSource().probeAvailability(),
+    start: startGithubDeviceLogin,
+    acquireCommitLease: () => beginGhostMutation(owner),
+    invalidateTokenCache: invalidateSharedGhCliTokenSource,
+    openCard: cardInput => {
+      const bridge = getGhostSetupInteractionBridge();
+      if (!bridge) throw new Error('AUTH_FAILED');
+      return openDeviceAuthorizationCard(cardInput, { bridge,
+        openExternal: url => shell.openExternal(url),
+        copyDeviceCode: code => copyPrivateDeviceCode(clipboard, code),
+        copy: { title: authorizationText('pluginDeviceAuthorization.githubTitle'),
+          description: authorizationText('pluginDeviceAuthorization.githubDescription') } });
+    },
+  });
 }
 
 function isSameAppSession(a: ActiveAppSession, b: ActiveAppSession): boolean {
@@ -1442,6 +1477,18 @@ export function findTrustedXdGhostForScript(id: string): InstalledGhost | null {
   const loaded = loadGhostFirstPartyFactsForGhost(storagePart, 'runtime');
   return isTrustedXdGhostForScriptTarget(ghost, loaded, getGhostManager().isPendingLegacyNamespace(storagePart))
     ? ghost : null;
+}
+
+/** Private settings projection; it carries no capability pins. */
+export function getHostPluginPreferenceContext() {
+  return availableGhosts().map(ghost => {
+    const agent = !!ghost.manifest.workspace || ghost.manifest.agent?.errand === true || ghost.manifest.agent?.tasks === true;
+    return { id: ghost.manifest.id, name: ghost.manifest.name, supported: {
+      cindy: !!ghost.manifest.cindy, agent,
+      model: ghost.manifest.showTaskPreferences !== false && (agent || (ghost.manifest.cindy?.text ?? []).includes('oneshot')),
+      mainView: !!ghost.manifest.mainView,
+    } };
+  });
 }
 
 function requireGhostAvailableForActiveSession(id: string): void {
@@ -6490,6 +6537,9 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
       // 意识 OAuth 的 token 端点(Google / Atlassian 等)多在境外。
       fetchImpl: (url, init) => outboundFetch(url, init as RequestInit),
       openExternal: (url) => shell.openExternal(url),
+      // 设备码登录只给了通用确认页时,把验证码放进剪贴板供用户粘贴(与随包 CLI
+      // 设备码卡片的本机行为一致);本单结束时只撤掉仍属于本单的验证码。
+      presentDeviceUserCode: (prompt) => copyPrivateDeviceCode(clipboard, prompt.userCode),
       // tokenBroker 资格按可信安装事实判定，名称前缀不放行。
       // 校验层保持纯函数不感知装入语境，门控在装入闸与连接闸。经独立 oauth-broker
       // 服务换/刷 token:serverApiFetch 自带登录 JWT 注入与
@@ -10159,6 +10209,10 @@ export function registerGhostIpc(): void {
     readOwner: getActiveAppSession,
     ghostIdForLogicWebContents,
   });
+  const sessionStateSlot = new GhostSessionStateSlot({
+    getGhost: findGhostForInstanceId,
+    readSessions: (sessionIds) => readGhostSessionStateRows(getDbClient(), sessionIds),
+  });
   ipcMain.handle('ghost-pipe:send', async (event, payload: unknown) => {
     const id = ghostIdForLogicWebContents(event.sender.id);
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
@@ -10166,6 +10220,14 @@ export function registerGhostIpc(): void {
     const coreResult = executionPipe(id, payload, () => !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id);
     if (coreResult !== undefined) return coreResult;
     const type = (payload as { type?: unknown } | null)?.type;
+    if (type === 'session-state-request') {
+      const owner = ghostOwnerScope.capture();
+      const ownerId = getActiveAppSession().dataOwnerId;
+      return sessionStateSlot.handleRequest(id, payload, () =>
+        ownerId != null && getCurrentDbClientUserId() === ownerId &&
+        ghostOwnerScope.isCurrent(owner) && ghostOwnerScope.isStable(owner) &&
+        !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id);
+    }
     if (type === 'ui-state-update') return publishPluginUiControl(id, payload);
     if (type === 'recommendations-update') {
       const ghost = findGhostForInstanceId(id);
@@ -10365,7 +10427,7 @@ export function registerGhostIpc(): void {
       try { return { ok: true, data: await pluginTargetSlot.handle(id, payload, assertAuthorized) }; }
       catch (error) {
         const rawCode = (error as { code?: unknown })?.code ?? (error instanceof Error ? error.message : '');
-        const code = ['PERMISSION_DENIED', 'HOST_NOT_READY', 'INVALID_PARAMS', 'INVALID_ATTACHMENTS', 'INVALID_INVOCATION', 'TASK_BUSY', 'TARGET_UNAVAILABLE', 'SUPERSEDED', 'REQUEST_KEY_CONFLICT', 'DELIVERY_UNCERTAIN', 'DELIVERY_REJECTED', 'STALE_REVISION', 'ROUTE_UNAVAILABLE'].includes(String(rawCode)) ? String(rawCode) : 'HOST_NOT_READY';
+        const code = ['PERMISSION_DENIED', 'UNSUPPORTED_CAPABILITY', 'HOST_NOT_READY', 'INVALID_PARAMS', 'INVALID_ATTACHMENTS', 'INVALID_INVOCATION', 'TASK_BUSY', 'TARGET_UNAVAILABLE', 'SUPERSEDED', 'REQUEST_KEY_CONFLICT', 'DELIVERY_UNCERTAIN', 'DELIVERY_REJECTED', 'STALE_REVISION', 'ROUTE_UNAVAILABLE'].includes(String(rawCode)) ? String(rawCode) : 'HOST_NOT_READY';
         return { ok: false, error: { code, message: code, retryable: code === 'TASK_BUSY' } };
       }
     }

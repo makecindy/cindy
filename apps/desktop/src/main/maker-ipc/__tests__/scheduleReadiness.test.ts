@@ -53,6 +53,14 @@ vi.mock('electron', () => ({
 
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
+  captureDataOwnerBroadcastScope: vi.fn(() => ({
+    ownerScopeKey: h.ownerScope,
+    ownerStamp: { dataOwnerId: h.ownerScope, ownerGeneration: 1 },
+  })),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(
+    (scope: { ownerScopeKey?: string } | undefined) =>
+      !h.boundaryPending && scope?.ownerScopeKey === h.ownerScope,
+  ),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
 
@@ -285,5 +293,94 @@ describe('scheduler readiness holder', () => {
     expect(h.webContentsSend.mock.invocationCallOrder[0]).toBeLessThan(
       h.handleScheduleEvent.mock.invocationCallOrder[0],
     );
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：attachSchedulerEventListeners 对新主机 skipped 事件做远端有界合并（10s 静默 / 30s 封顶向 tapWindowBroadcast 补一条带 skippedRunId 与捕获时 ownerStamp 的兼容 changed，本机窗口零额外 changed），并在即时 changed、切账号或账号边界挂起时取消/拒投。
+  // - 规则依据：docs/dev-rules/protocol-compatibility.md、docs/dev-rules/server-channel-review.md 与 docs/dev-rules/credentials-and-local-storage.md —— 旧端保留有界 changed 对账，现代端凭 skippedRunId 去重，延时回调严禁跨账号代投递。
+  // - 现有覆盖缺口：既有测试未覆盖 skippedRunId 对账标记、安排时 captureDataOwnerBroadcastScope + 发送时校验拦截跨账号投递。
+  // - 最小失败输入：连续 skipped 脉冲、skipped 后紧跟 changed、skipped 后 resetSchedulerReady()、skipped 后 ownerScope 切换或 boundaryPending=true。
+  // - tier：unit（vi.useFakeTimers）。
+  it('coalesces steady-state skipped into owner-scoped remote changed with skippedRunId and drops cross-owner timers', async () => {
+    vi.useFakeTimers();
+    const handlers = new Map<string, (event: never) => void>();
+    const scheduler = {
+      on: vi.fn((name: string, handler: (event: never) => void) => {
+        handlers.set(name, handler);
+      }),
+    } as never;
+
+    attachSchedulerEventListeners(scheduler, storage1);
+    h.webContentsSend.mockClear();
+    h.tapWindowBroadcast.mockClear();
+
+    const emitSkipped = (scheduleId: string, runId: string) =>
+      handlers.get('skipped')!({
+        type: 'skipped',
+        scheduleId,
+        runId,
+        sessionId: '',
+        lastFiredAt: Date.now(),
+        lastFinishedAt: Date.now(),
+        nextFireAt: Date.now() + 300_000,
+        preRunCheckSucceeded: true,
+      } as never);
+
+    // 1) Burst of 6 skipped events every 5s (t=0..25s), then +5s to t=30s:
+    // capped at 30s max wait -> 1 remote changed carrying latest skippedRunId + captured ownerStamp, 0 local changed.
+    for (let i = 0; i < 6; i += 1) {
+      emitSkipped('sched-burst', `r-${i}`);
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    expect(vi.getTimerCount()).toBe(0);
+    const localChanged = h.webContentsSend.mock.calls.filter(
+      ([, payload]) => (payload as { type?: string })?.type === 'changed',
+    );
+    const remoteChangedAfterCap = h.tapWindowBroadcast.mock.calls.filter(
+      ([, payload]) => (payload as { type?: string })?.type === 'changed',
+    );
+    expect(localChanged).toEqual([]);
+    expect(remoteChangedAfterCap).toEqual([
+      [
+        'maker:schedule:event',
+        { type: 'changed', scheduleId: 'sched-burst', skippedRunId: 'r-5' },
+        { dataOwnerId: 'owner-a:1', ownerGeneration: 1 },
+      ],
+    ]);
+
+    // 2) Immediate changed (e.g. failure recovery) cancels pending remote coalescer so it does not double-send.
+    h.tapWindowBroadcast.mockClear();
+    emitSkipped('sched-recover', 'r-rec');
+    handlers.get('changed')!({ type: 'changed', scheduleId: 'sched-recover' } as never);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(
+      h.tapWindowBroadcast.mock.calls.filter(
+        ([, payload]) => (payload as { type?: string })?.type === 'changed',
+      ),
+    ).toEqual([['maker:schedule:event', { type: 'changed', scheduleId: 'sched-recover' }]]);
+
+    // 3) Logout / resetSchedulerReady clears pending timer immediately.
+    emitSkipped('sched-owner-a', 'r-a');
+    expect(vi.getTimerCount()).toBe(1);
+    h.tapWindowBroadcast.mockClear();
+    resetSchedulerReady();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+
+    // 4) Even if a timer fires across an owner change or pending account boundary before reset,
+    // send-time isDataOwnerBroadcastScopeCurrent drops it so owner-a never broadcasts under owner-b.
+    emitSkipped('sched-cross-owner', 'r-cross');
+    h.tapWindowBroadcast.mockClear();
+    h.ownerScope = 'owner-b:2';
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+
+    emitSkipped('sched-boundary', 'r-bound');
+    h.tapWindowBroadcast.mockClear();
+    h.boundaryPending = true;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
   });
 });

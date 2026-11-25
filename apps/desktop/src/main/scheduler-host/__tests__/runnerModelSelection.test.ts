@@ -258,6 +258,8 @@ function createRunnerHarness(
     resolveInheritedModel?: ConstructorParameters<typeof MakerScheduleRunner>[0]['resolveInheritedModel'];
     bootstrapSession?: ConstructorParameters<typeof MakerScheduleRunner>[0]['bootstrapSession'];
     sessionAlive?: boolean;
+    getSession?: () => Session | undefined;
+    closeSessionIfCurrent?: Maker['closeSessionIfCurrent'];
     acquirePendingAgentSwitch?: ConstructorParameters<typeof MakerScheduleRunner>[0]['acquirePendingAgentSwitch'];
     prepareModelPreferences?: ConstructorParameters<typeof MakerScheduleRunner>[0]['prepareModelPreferences'];
     onModelDispatched?: ConstructorParameters<typeof MakerScheduleRunner>[0]['onModelDispatched'];
@@ -289,7 +291,8 @@ function createRunnerHarness(
   const maker = {
     createSession,
     getSessionMeta: vi.fn(opts.getSessionMeta ?? (async () => meta)),
-    getSession: vi.fn(() => h.session),
+    getSession: vi.fn(opts.getSession ?? (() => h.session)),
+    closeSessionIfCurrent: opts.closeSessionIfCurrent,
     listActiveSessions: vi.fn(() => opts.activeSessions ?? [h.session]),
     closeSession,
     // issue #456:runner fire 时按所选模型 efforts reconcile effort;测试经 availableModels 注入能力。
@@ -485,6 +488,27 @@ describe('MakerScheduleRunner model selection', () => {
     });
   });
 
+
+  // #12397, unit through runner.fire. A previous run's manual ACP route must
+  // never become the route or session id of a new per-round automation task.
+  it('starts the next independent run on the rule model after a previous task switched to ACP', async () => {
+    const h = createSessionHarness();
+    const previous = createSessionHarness().session;
+    Object.defineProperties(previous, {
+      id: { value: 'previous-run-task' },
+      agentKind: { value: 'acp' },
+      model: { value: 'gemini-scheduled-followup' },
+    });
+    const harness = createRunnerHarness(h, null, {
+      activeSessions: [previous],
+      resolveModelSelection: async (choice) => choice,
+    });
+    const opts = await fireToCompletion(harness, h, baseSchedule({
+      agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-automation', providerId: 'openai-work',
+    }));
+    expect(opts).toMatchObject({ agentKind: 'codex', model: 'gpt-automation', providerId: 'openai-work' });
+    expect(harness.createSession.mock.calls[0][0].id).not.toBe(previous.id);
+  });
   it('starts a fresh Claude task after a persisted project binding is cleared', async () => {
     const h = createSessionHarness();
     const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-5.5', workDir: '/work' });
@@ -1504,40 +1528,155 @@ describe('MakerScheduleRunner model selection', () => {
       expect(h.setModel).not.toHaveBeenCalled();
     });
 
-    it('Codex context Host 身份在 preflight 后变化时不沿用旧模型派发', async () => {
+    // #12714, unit: only a verified cold resume may receive the one-shot prompt.
+    it.each(['resume', 'cancel', 'cancel during resume', 'owner changed during resume', 'missing checkpoint', 'replacement', 'wrong model', 'source mismatch', 'busy once', 'busy recurring'] as const)(
+      'late Codex rebuild before dispatch: %s',
+      async (scenario) => {
+        mocks.getSessionProvider.mockReturnValue('mygpt');
+        const h = createSessionHarness();
+        Object.assign(h.session as unknown as Record<string, unknown>, {
+          agentKind: 'codex',
+          model: 'gpt-5.4',
+          requiresModelSwitchRebuild: vi.fn(async () => false),
+          sdkSessionId: 'sdk-codex-1',
+        });
+        const rebuildError = Object.assign(
+          new Error('Codex model switch requires rebuilding the current session handle'),
+          { code: 'CODEX_MODEL_SWITCH_REQUIRES_REBUILD' },
+        );
+        const controller = new AbortController();
+        h.setModel.mockImplementation(async () => {
+          if (scenario === 'cancel') controller.abort();
+          if (scenario === 'replacement') active = resumed.session;
+          if (scenario.startsWith('busy')) Object.assign(h.session, { isTurnRunning: () => true });
+          throw rebuildError;
+        });
+        const resumed = createSessionHarness();
+        Object.assign(resumed.session, {
+          agentKind: 'codex',
+          sdkSessionId: 'sdk-codex-1',
+          model: scenario === 'wrong model' ? 'gpt-5.4' : 'gpt-5.6-sol',
+        });
+        let active: Session | undefined = h.session;
+        const harness = createRunnerHarness(
+          h,
+          {
+            model: 'gpt-5.4',
+            effort: 'high',
+            workDir: '/work',
+            sdkSessionId: scenario === 'missing checkpoint' ? undefined : 'sdk-codex-1',
+          },
+          {
+            sessionAlive: true,
+            getSession: () => active,
+            closeSessionIfCurrent: async (candidate) => {
+              if (active === candidate) active = undefined;
+            },
+            acquirePendingAgentSwitch: async () => () => {},
+          },
+        );
+
+        harness.closeSession.mockImplementation(async () => {
+          active = undefined;
+        });
+        harness.createSession
+          .mockResolvedValueOnce(h.session)
+          .mockImplementationOnce(async () => {
+            active = resumed.session;
+            if (scenario === 'cancel during resume') controller.abort();
+            return active;
+          });
+        const run = harness.runner.fire(
+          baseSchedule({
+            agentKind: 'codex',
+            recurring: scenario === 'busy recurring',
+            model: 'gpt-5.6-sol',
+            providerId: scenario === 'source mismatch' ? undefined : 'mygpt',
+            targetSessionId: 'scheduler-session',
+          }),
+          {
+            ...createFireContext(),
+            signal: controller.signal,
+            assertFireContext: () => {
+              if (scenario === 'owner changed during resume' && active === resumed.session)
+                throw new Error('owner changed');
+            },
+          },
+        );
+        if (scenario === 'resume') {
+          await vi.waitFor(() => expect(resumed.send).toHaveBeenCalledOnce());
+          resumed.emit({ type: 'done', data: {} });
+          expect(await run).toMatchObject({ sessionId: h.session.id });
+          expect(harness.createSession.mock.calls[1][0]).toMatchObject({
+            id: h.session.id,
+            resumeSessionId: 'sdk-codex-1',
+            model: 'gpt-5.6-sol',
+            providerId: 'mygpt',
+          });
+        } else {
+          if (scenario === 'busy recurring') {
+            await expect(run).resolves.toMatchObject({ sessionId: h.session.id, deferred: true });
+          } else {
+            const reason = scenario.startsWith('cancel') ? /abort/i : scenario === 'owner changed during resume' ? /owner changed/ : scenario === 'busy once' ? /SESSION_RUNNING/ : /prompt was not sent.*Run now/i;
+            await expect(run).rejects.toThrow(reason);
+          }
+          expect(resumed.send).not.toHaveBeenCalled();
+          expect(mocks.backfillSessionMeta).not.toHaveBeenCalled();
+          if (scenario === 'wrong model' || scenario.endsWith('during resume')) {
+            expect(active).toBeUndefined();
+          } else {
+            expect(harness.closeSession).not.toHaveBeenCalled();
+          }
+        }
+        expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol');
+        expect(h.send).not.toHaveBeenCalled();
+      },
+    );
+    it('一次性 Codex 任务在最后检查要求重建时不投递，重新运行后仅投递一次', async () => {
       mocks.getSessionProvider.mockReturnValue('mygpt');
       const h = createSessionHarness();
       Object.assign(h.session as unknown as Record<string, unknown>, {
         agentKind: 'codex',
         model: 'gpt-5.4',
-        requiresModelSwitchRebuild: vi.fn(async () => false),
+        requiresModelSwitchRebuild: vi.fn(async () => true).mockResolvedValueOnce(false),
       });
       const rebuildError = Object.assign(
         new Error('Codex model switch requires rebuilding the current session handle'),
         { code: 'CODEX_MODEL_SWITCH_REQUIRES_REBUILD' },
       );
-      h.setModel.mockRejectedValue(rebuildError);
+      h.setModel.mockRejectedValueOnce(rebuildError);
       const harness = createRunnerHarness(
         h,
         { model: 'gpt-5.4', effort: 'high', workDir: '/work', sdkSessionId: 'sdk-codex-1' },
         { sessionAlive: true },
       );
 
-      await expect(
-        harness.runner.fire(
-          baseSchedule({
-            agentKind: 'codex',
-            model: 'gpt-5.6-sol',
-            providerId: 'mygpt',
-            targetSessionId: 'scheduler-session',
-          }),
-          createFireContext(),
-        ),
-      ).rejects.toThrow('schedule model switch requires rebuilding the session before dispatch');
+      const schedule = baseSchedule({
+        agentKind: 'codex',
+        recurring: false,
+        model: 'gpt-5.6-sol',
+        providerId: 'mygpt',
+        targetSessionId: h.session.id,
+      });
+      await expect(harness.runner.fire(schedule, createFireContext())).rejects.toThrow(
+        /prompt was not sent.*Run Now/i,
+      );
 
       expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol');
       expect(h.send).not.toHaveBeenCalled();
       expect(mocks.backfillSessionMeta).not.toHaveBeenCalled();
+      expect(harness.closeSession).not.toHaveBeenCalled();
+
+      const rebuilt = createSessionHarness();
+      Object.assign(rebuilt.session, { agentKind: 'codex', model: schedule.model });
+      harness.createSession.mockResolvedValueOnce(rebuilt.session);
+      await fireToCompletion(harness, rebuilt, { ...schedule, status: 'expired' });
+      expect(harness.closeSession).toHaveBeenCalledWith(h.session.id, 'runtime-refresh');
+      expect(harness.createSession).toHaveBeenLastCalledWith(expect.objectContaining({
+        id: h.session.id, model: schedule.model, resumeSessionId: 'sdk-codex-1',
+      }));
+      expect(h.send).not.toHaveBeenCalled();
+      expect(rebuilt.send).toHaveBeenCalledTimes(1);
     });
 
     it('setModel 失败不阻断 fire（非致命，fresh spawn 路径 opts.model 已生效）', async () => {

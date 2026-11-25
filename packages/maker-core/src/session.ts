@@ -494,6 +494,11 @@ export class Session {
       ? this.handle.negotiatedCapabilities ?? this.initialCapabilities
       : this.initialCapabilities;
   }
+
+  /** ACP-only command names used when sanitizing host-added wire notes. */
+  getPluginEngineCommandNames(): readonly string[] {
+    return this.handle.getPluginEngineCommandNames?.() ?? [];
+  }
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;
   /** 见 SessionOptions.agentDeviceId。 */
@@ -1589,6 +1594,15 @@ export class Session {
   }
 
   /**
+   * Whether closing this runtime keeps the conversation (see
+   * AgentSessionHandle.canResumeAfterClose). A plugin engine that does not say
+   * so counts as unable: reclamation must never strand a conversation.
+   */
+  canResumeAfterClose(): boolean {
+    return this.handle.canResumeAfterClose?.() ?? this.agentKind !== 'acp';
+  }
+
+  /**
    * Provider work that outlives a turn but is not listed as a background task
    * (see AgentSessionHandle.hasLiveBackgroundWork). Closed runtimes have none.
    * A throwing probe counts as busy: reclamation must never guess "idle".
@@ -2426,6 +2440,10 @@ export class Session {
   // ── Rewind (Stage 2 C2) ────────────────────────────────────────────────────
   // Claude 走 SDK checkpoint；Codex 走 thread/rollback 裁剪对话。
   // 业务层 (desktop agentRewind.ts) 通过这个委托对外暴露。
+
+  hasReclaimedSharedRun(): boolean {
+    return this.getStatus() === 'active' && this.handle.hasReclaimedSharedRun?.() === true;
+  }
 
   /**
    * 当前是否有 turn 在跑 (rewind preview/commit 业务前置守卫用)。

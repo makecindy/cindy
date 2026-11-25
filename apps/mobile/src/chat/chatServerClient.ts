@@ -52,6 +52,7 @@ function invitationPreview(value: MobileChatInvitePreview): MobileChatInvitePrev
 
 export interface ChatRoom {
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
+  org_id?: string | null; org_name?: string | null; external?: boolean;
   topic?: string; description?: string; allow_mention_all_bots?: boolean; allow_member_invites?: boolean;
   created_at: string; updated_at: string; revision: number; head?: string;
   response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential'; organizer_id?: string | null;
@@ -63,6 +64,7 @@ export interface ChatMember {
   role: 'owner' | 'admin' | 'member' | 'guest';
   /** Group-scoped identity and grants; older servers omit them. */
   displayName?: string; nickname?: string | null; groupAvatar?: string | null; defaultAvatarUrl?: string | null;
+  orgName?: string | null; department?: string | null; departmentPath?: string | null; external?: boolean; showOrgName?: boolean;
   guestAccess?: 'none' | 'chat' | 'tools'; accessRevision?: number;
 }
 export interface ChatMessage {
@@ -246,6 +248,10 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
   const preview = joinedPreview ?? (last
     ? mobileMarkdownPreviewText(sharedReplyPreview(last, members, selfId) || botGroupMessageSummaryText({ content: contentText(last), task: taskCardOf(last) ?? undefined, deleted: last.deleted }) || mediaNames(last)).slice(0, 160) || subtitle
     : '');
+  const externalBadge = room.kind !== 'direct' && room.external === true ? (i18next.isInitialized ? {
+    fallback: i18next.t('groupChat.externalBadge', { lng: DEFAULT_LOCALE }),
+    translations: Object.fromEntries(SUPPORTED_LOCALES.map(lng => [lng, i18next.t('groupChat.externalBadge', { lng })])),
+  } : 'External') : undefined;
   return { key: `chat:${room.id}`, host: { deviceId: '', deviceName: '' },
     lastReplySequence: snapshot && selfId ? chatLastReplySequence(snapshot.messages, selfId) : undefined,
     chatUnread: snapshot?.reads && selfId ? chatUnread(snapshot, selfId) : undefined,
@@ -255,6 +261,7 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
       subtitle,
       ...(activity ? { teammateActivity: activity } : {}),
       ...(snapshot ? { preview } : {}),
+      ...(externalBadge ? { badges: [{ tone: 'external', label: externalBadge, accessibilityLabel: externalBadge }] } : {}),
       timestamp: botGroupActivityAt({ createdAt: Date.parse(room.created_at), lastMessage: last ? { createdAt: Date.parse(last.createdAt) } : null }),
       lastReplyAt: snapshot && selfId ? chatLastReplyAt(snapshot.messages, selfId) : undefined },
     links: members.map(member => ({ rel: 'member', label: memberName(member, ownerMembers),
@@ -349,6 +356,11 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     ...(member.assistant === true ? { assistant: true } : {}),
     ...(member.displayName !== undefined ? { displayName: member.displayName } : {}),
     ...(member.nickname !== undefined ? { nickname: member.nickname } : {}),
+    ...(member.orgName ? { orgName: member.orgName } : {}),
+    ...(member.department ? { department: member.department } : {}),
+    ...(member.departmentPath ? { departmentPath: member.departmentPath } : {}),
+    ...(member.external === true ? { external: true } : {}),
+    ...(member.showOrgName === true ? { showOrgName: true } : {}),
     ...(member.groupAvatar !== undefined ? { groupAvatar: member.groupAvatar } : {}),
     ...(member.defaultAvatarUrl !== undefined ? { defaultAvatarUrl: member.defaultAvatarUrl } : {}),
     ...(member.guestAccess ? { guestAccess: member.guestAccess, accessRevision: member.accessRevision } : {}),
@@ -465,6 +477,8 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const currentStep = open?.steps.find(step => step.position === open.currentStep);
   return { id: room.id, conversationKind: room.kind === 'direct' ? 'direct' : 'group',
     name: room.kind === 'direct' ? active.filter(member => member.id !== selfId).map(member => memberName(member, [])).join(', ') || room.name : room.name,
+    ...(room.kind !== 'direct' && room.org_name ? { orgName: room.org_name } : {}),
+    ...(room.kind !== 'direct' && room.external === true ? { external: true } : {}),
     ...(room.kind !== 'direct' && page.snapshot.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}),
     serverBacked: true, supportsGroupLeave: room.kind !== 'direct', dissolvedAt: room.dissolved_at ?? null, archived: room.archived, selfActorId: selfId,
     // Invite links are created by an owner or admin this account controls, as on Desktop.

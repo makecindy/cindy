@@ -97,6 +97,16 @@ function parseRecord(raw: string, id: string): WorktreeRecycleRecord {
   return record;
 }
 
+export async function readRecycleRecordById(id: string): Promise<WorktreeRecycleRecord | null> {
+  if (!/^[a-f0-9]{64}$/.test(id)) return null;
+  try {
+    return parseRecord(await fs.readFile(path.join(recycleJournalRoot(), `${id}.json`), 'utf8'), id);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 export async function readRecycleRecord(value: string, sessionId?: string): Promise<WorktreeRecycleRecord | null> {
   const id = worktreeResourceId(await physicalWorktreeKey(value));
   try {
@@ -178,6 +188,35 @@ export async function newRecycleRecord(meta: WorktreeMeta): Promise<WorktreeRecy
 const archiveNamePattern = /^[a-f0-9-]+\.tar\.gz\.enc$/;
 /** Older clients may still be writing an archive in a shared profile; their writes finish well within this. */
 const ORPHAN_ARCHIVE_MIN_AGE_MS = 2 * 60 * 60_000;
+
+export async function listPresentRecoveryArchives(): Promise<ReadonlySet<string>> {
+  let names: string[];
+  try {
+    names = await fs.readdir(recycleJournalRoot());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
+    throw error;
+  }
+  return new Set(names.filter((name) => archiveNamePattern.test(name)));
+}
+
+/**
+ * Delete a named legacy recovery archive once startup reconciliation proves every referencing
+ * record was restored or belongs exclusively to deleted tasks across all known databases.
+ */
+export async function removeObsoleteRecoveryArchive(fileName: string): Promise<boolean> {
+  if (!archiveNamePattern.test(fileName)) return false;
+  const target = path.join(recycleJournalRoot(), fileName);
+  try {
+    const stat = await fs.lstat(target);
+    if (!stat.isFile() || stat.isSymbolicLink()) return false;
+    await fs.rm(target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
 
 /**
  * Delete recovery archives no record points to. Older clients left one per interrupted attempt;

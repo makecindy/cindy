@@ -693,6 +693,24 @@ describe('createContextOverflowRollover', () => {
     expect(deps.setPendingHandoff).not.toHaveBeenCalled();
   });
 
+  // Unit: account recovery sends the accepted input again. Its handoff must
+  // omit that exact row once while the persisted context survives a stopped retry.
+  it('keeps full saved context but omits the exact input from its account retry handoff', async () => {
+    const deps = makeDeps([
+      { clientId: 'first', role: 'user', content: 'phrase-in-prior-turn', createdAt: 1 },
+      { clientId: 'reply', role: 'assistant', content: 'prior-answer', createdAt: 2 },
+      { clientId: 'retry', role: 'user', content: 'exact-interrupted-input', createdAt: 3 },
+    ]);
+    const onHandoff = vi.fn();
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn(),
+      undefined, { userClientId: 'retry', onHandoff });
+    expect(onHandoff).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('exact-interrupted-input'), expect.stringContaining('prior-answer'));
+    expect(onHandoff.mock.calls[0]![1]).not.toContain('exact-interrupted-input');
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1',
+      expect.stringContaining('exact-interrupted-input'), expect.anything(), expect.any(AbortSignal));
+  });
+
   it('can restart a Bot before a native handle was ever created', async () => {
     const deps = makeDeps([]);
     deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', sdkSessionId: null, contextTokens: 0 });
@@ -1090,6 +1108,25 @@ describe('createContextOverflowRollover', () => {
       expect.any(String),
       expect.objectContaining({ reason: 'model-window-switch' }),
     );
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  // Quota fallback regression (unit): unknown old capacity is not a reason to
+  // block a known overfull target; preserve history through the real handoff.
+  it.each([10_000, 300_000])('continues a Claude switch with unknown old window and %s tokens', async contextTokens => {
+    const deps = makeDeps([msg('user', 'Keep the migration plan and continue', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({ ...(await deps.getSessionRow()),
+      agentKind: 'cc', contextWindow: 0, contextTokens, model: 'uncatalogued-model' });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareModelWindowSwitch('s1', {
+      contextWindow: 200_000, recheckTargetPressure: true, confirmedTargetPressure: true,
+    })).resolves.toBe(contextTokens > 200_000 ? 'rebuilt' : 'not-needed');
+    if (contextTokens > 200_000) {
+      expect(deps.commitRebuild).toHaveBeenCalledWith('s1',
+        expect.stringContaining('Keep the migration plan and continue'),
+        expect.objectContaining({ reason: 'model-window-switch' }));
+    } else expect(deps.commitRebuild).not.toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
