@@ -12404,7 +12404,8 @@
         "failed": "No se pudo completar esta acción. Inténtalo de nuevo.",
         "lastOwner": "Transfiere la propiedad o disuelve este grupo antes de salir."
       },
-      "memberCount_many": "Miembros de {{count}}"
+      "memberCount_many": "Miembros de {{count}}",
+      "externalBadge": "Externo"
     },
     "joined": {
       "today": "Se unió hoy",

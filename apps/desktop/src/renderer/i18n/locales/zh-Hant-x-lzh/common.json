@@ -12258,7 +12258,8 @@
         "dissolved": "群議已散，仍可覽有權存取之舊訊。",
         "failed": "操作未竟，請再試。",
         "lastOwner": "請先轉讓群主或解散群議，再退出。"
-      }
+      },
+      "externalBadge": "外部"
     },
     "joined": {
       "today": "今日入列",
