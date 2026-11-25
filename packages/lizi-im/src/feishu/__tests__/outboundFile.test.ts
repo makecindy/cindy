@@ -84,7 +84,7 @@ function stubWindowsPathHelper(candidate: string, outcome = 'success', onFd?: (f
     onFd?.((options!.stdio as [number, string, string])[0]);
     if (outcome !== 'timeout') {
       queueMicrotask(() => {
-        child.stdout.end(Buffer.from("\\\\?\\" + candidate, 'utf8'));
+        child.stdout.end(Buffer.from(path.win32.toNamespacedPath(candidate), 'utf8'));
         child.emit('close', 0);
       });
     }
