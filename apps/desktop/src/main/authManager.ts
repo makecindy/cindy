@@ -4733,15 +4733,23 @@ function commitAccountDeletionConfirmation(
   return status;
 }
 
-/** Run an authenticated auth-client request through the terminal auth boundary. */
-async function runProtectedAuthRequest<T>(request: () => Promise<T>): Promise<T> {
+/**
+ * Run an authenticated auth-client request through the terminal auth boundary.
+ * `ownsCurrentSession` is checked when the rejection arrives: a request that
+ * started under another sign-in must not tear down the account that is current now.
+ */
+async function runProtectedAuthRequest<T>(
+  request: () => Promise<T>,
+  ownsCurrentSession: () => boolean = () => true,
+): Promise<T> {
   try {
     return await request();
   } catch (error) {
     if (
       error instanceof AuthApiError &&
       error.statusCode === 401 &&
-      error.code === 'ACCOUNT_UNAVAILABLE'
+      error.code === 'ACCOUNT_UNAVAILABLE' &&
+      ownsCurrentSession()
     ) {
       void invalidateSession('account-unavailable');
     }
@@ -5021,6 +5029,87 @@ export async function updateServerProfile(
       avatar: membership?.avatarUrl ?? null,
     },
   };
+}
+
+// ── 换绑登录联系方式(流程见 accountContactChange.ts) ──
+
+/**
+ * 当前可换绑联系方式的 Passport 会话。换绑走 Passport 级 account 凭据:企业 SSO 会话
+ * 没有 account 凭据,被动共享实例不能轮换保存的凭据,二者都返回 null。只读本地状态,
+ * 不发网络请求。
+ */
+export function getContactChangeSession(): { realm: AuthRegion; passportId: string; epoch: number } | null {
+  if (!accessToken || !currentUser?.passportId || isPassiveSharedUserDataInstance()) return null;
+  const vault = readAuthAccountVault({ allowUnreadable: true });
+  if (!vault.passports[passportVaultKey(activeAuthRealm, currentUser.passportId)]) return null;
+  return { realm: activeAuthRealm, passportId: currentUser.passportId, epoch: authStateEpoch };
+}
+
+/**
+ * 流程进行中的轻量校验:仍是发起换绑时的那个登录态(未登出、未换 Passport)。
+ * 只比较内存状态,不读加密 vault,供每一步之间调用。
+ */
+export function isContactChangeSessionCurrent(session: {
+  realm: AuthRegion;
+  passportId: string;
+  epoch: number;
+}): boolean {
+  return (
+    accessToken !== null &&
+    currentUser?.passportId === session.passportId &&
+    activeAuthRealm === session.realm &&
+    authStateEpoch === session.epoch
+  );
+}
+
+/** 用保存的 Passport 会话换取 account access token(refresh token 轮换后立即持久化)。 */
+export async function issuePassportAccountToken(realm: AuthRegion, passportId: string): Promise<string> {
+  const pair = await refreshPassportSessionSingleFlight(createAuthClient(realm), realm, passportId);
+  return pair.accountToken;
+}
+
+export function createContactChangeAuthClient(realm: AuthRegion): CindyAuthClient {
+  return createAuthClient(realm);
+}
+
+/**
+ * 受鉴权边界保护的换绑请求:账号已不可用时让本地会话失效。只在发起请求的登录态仍是
+ * 当前登录态时才失效——旧账号的迟到 401 不能登出用户之后切换到的账号。
+ */
+export function runProtectedAccountRequest<T>(
+  session: { realm: AuthRegion; passportId: string; epoch: number },
+  request: () => Promise<T>,
+): Promise<T> {
+  return runProtectedAuthRequest(request, () => isContactChangeSessionCurrent(session));
+}
+
+/**
+ * 换绑邮箱后从 /api/me 重读当前身份,更新展示邮箱。个人身份的邮箱随换绑更新,
+ * 企业身份的邮箱来自企业断言、不变;请求期间登出或换号则不回写。
+ */
+export async function reloadCurrentMembershipProfile(): Promise<void> {
+  if (!accessToken || !currentUser) return;
+  const token = accessToken;
+  const epochAtStart = authStateEpoch;
+  const realm = activeAuthRealm;
+  const me = await runProtectedAuthRequest(() => createAuthClient(realm).getMe(token));
+  const membership = me.membership;
+  if (
+    authStateEpoch !== epochAtStart ||
+    currentUser === null ||
+    currentUser.id !== membership.id ||
+    currentUser.email === membership.email
+  ) {
+    return;
+  }
+  currentUser = {
+    ...currentUser,
+    email: membership.email,
+    name: currentUser.membershipDisplayName || membership.email || currentUser.name,
+  };
+  await rememberUpdatedMembershipMetadata(membership, realm, currentUser.passportId);
+  notifyRenderer();
+  notifyAuthListeners();
 }
 
 let enterpriseGuestSignIn: Promise<AuthState> | null = null;

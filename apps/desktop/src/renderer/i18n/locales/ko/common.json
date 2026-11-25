@@ -1416,6 +1416,9 @@
     "ENDPOINT_NOT_FOUND": "엔드포인트를 찾을 수 없습니다(404). 기본 URL을 확인하세요",
     "CONTEXT_TOO_LONG": "컨텍스트가 모델의 길이 제한을 초과했습니다",
     "WIRE_INCOMPATIBLE": "엔드포인트가 이 프로토콜과 완전히 호환되지 않습니다(인식할 수 없는 요청 필드가 있음)",
+    "INVALID_PROBE_RESPONSE": "모델 서비스가 비어 있거나 유효하지 않은 응답을 반환했습니다",
+    "PROBE_NO_OUTPUT": "연결 테스트에서 모델이 출력을 생성했는지 확인하지 못했습니다",
+    "PROBE_REFUSED": "모델 서비스가 테스트 요청을 거부하거나 차단했습니다",
     "UPSTREAM_ERROR": "업스트림 서버 오류(5xx)입니다. 잠시 후 다시 시도하세요",
     "UPSTREAM_UNREACHABLE": "엔드포인트에 연결할 수 없습니다. 네트워크와 기본 URL을 확인하세요",
     "TIMEOUT": "연결 시간이 초과되었습니다. 네트워크와 기본 URL을 확인하세요",
@@ -2693,6 +2696,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "로그인 휴대폰 번호",
+        "rowHint": "로그인과 인증 코드 수신에 사용됩니다",
+        "change": "휴대폰 번호 변경",
+        "verifyTitle": "현재 휴대폰 번호 확인",
+        "introDescription": "계정을 안전하게 보호하기 위해 변경하기 전에 현재 등록된 휴대폰 번호를 확인해야 합니다.",
+        "newTitle": "새 휴대폰 번호 입력",
+        "newDescription": "변경 후에는 새 번호로 로그인하세요. 이전 번호로는 이 계정에 더 이상 로그인할 수 없습니다.",
+        "inputLabel": "새 휴대폰 번호",
+        "placeholder": "휴대폰 번호 입력",
+        "success": "휴대폰 번호가 {{target}}(으)로 변경되었습니다"
+      },
+      "email": {
+        "rowTitle": "로그인 이메일",
+        "rowHint": "로그인과 인증 코드 수신에 사용됩니다",
+        "change": "이메일 변경",
+        "verifyTitle": "현재 이메일 확인",
+        "introDescription": "계정을 안전하게 보호하기 위해 변경하기 전에 현재 등록된 이메일을 확인해야 합니다.",
+        "newTitle": "새 이메일 입력",
+        "newDescription": "변경 후에는 새 이메일로 로그인하세요. 이전 이메일로는 이 계정에 더 이상 로그인할 수 없습니다.",
+        "inputLabel": "새 이메일 주소",
+        "placeholder": "이메일 주소 입력",
+        "success": "이메일이 {{target}}(으)로 변경되었습니다"
+      },
+      "codeSent": "{{target}}(으)로 인증 코드를 보냈습니다",
+      "codeLabel": "인증 코드",
+      "codePlaceholder": "6자리 코드",
+      "sendCode": "코드 보내기",
+      "next": "다음",
+      "confirm": "변경 확인",
+      "cancel": "취소",
+      "resend": "코드 다시 보내기",
+      "resendIn": "{{seconds}}초 후 다시 보낼 수 있습니다",
+      "errors": {
+        "INVALID_CODE": "인증 코드가 잘못되었거나 만료되었습니다.",
+        "CODE_ATTEMPTS_EXCEEDED": "잘못 입력한 횟수가 너무 많습니다. 새 코드를 받으세요.",
+        "CONTACT_TAKEN": "이 휴대폰 번호 또는 이메일은 이미 다른 계정에 연결되어 있습니다.",
+        "CONTACT_UNCHANGED": "현재 등록된 휴대폰 번호 또는 이메일과 같습니다.",
+        "CONTACT_CHANGE_TICKET_INVALID": "확인 시간이 만료되었습니다. 현재 휴대폰 번호 또는 이메일을 다시 확인하세요.",
+        "AUTH_FLOW_SUPERSEDED": "로그인 상태가 바뀌었습니다. 처음부터 다시 시작하세요.",
+        "CONTACT_CHANGE_UNAVAILABLE": "이 계정은 여기에서 로그인 방법을 변경할 수 없습니다.",
+        "CONTACT_CHANGE_BUSY": "이전 단계를 아직 처리하고 있습니다.",
+        "RATE_LIMITED": "요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
+        "RATE_LIMITED_UNTIL": "요청이 너무 많습니다. {{time}}(현지 시간) 이후에 다시 시도하세요.",
+        "INVALID_PARAMS": "형식이 올바르지 않습니다. 확인 후 다시 시도하세요.",
+        "EMAIL_DOMAIN_BLOCKED": "이 이메일은 사용할 수 없습니다. 다른 이메일을 사용하세요.",
+        "EMAIL_PATTERN_BLOCKED": "이 이메일은 사용할 수 없습니다. 다른 이메일을 사용하세요.",
+        "ACCOUNT_DELETION_PENDING": "이 계정은 삭제 대기 중이라 변경할 수 없습니다.",
+        "NETWORK_ERROR": "네트워크에 연결하지 못했습니다. 네트워크를 확인한 후 다시 시도하세요.",
+        "REQUEST_TIMEOUT": "요청 시간이 초과되었습니다. 다시 시도하세요.",
+        "fallback": "문제가 발생했습니다. 잠시 후 다시 시도하세요."
+      }
+    },
     "help": {
       "title": "도움말",
       "description": "{{appName}}로 작업을 진행하는 방법을 알아보세요.",
@@ -2976,7 +3033,12 @@
         "reconcileButton": "진단",
         "reconcileFailed": "진단에 실패했습니다",
         "reconcileHealthy": "장부와 디스크가 일치합니다. 이상이 없습니다.",
-        "reconcileIssues": "이상 발견: 장부에 없는 파일 {{orphans}}개({{orphanSize}}), 누락된 파일 {{missing}}개, 인식할 수 없는 항목 {{stray}}개. 전체 목록은 앱 로그를 확인하세요."
+        "reconcileIssues": "이상 발견: 장부에 없는 파일 {{orphans}}개({{orphanSize}}), 누락된 파일 {{missing}}개, 인식할 수 없는 항목 {{stray}}개. 전체 목록은 앱 로그를 확인하세요.",
+        "buddyWorkspaceDirectoryTitle": "동반자 워크스페이스",
+        "buddyWorkspaceDirectoryDescription": "새로 만드는 동반자의 워크스페이스가 저장되는 폴더입니다. 기존 동반자는 현재 위치에 유지되며 고급 설정에서 개별 이동할 수 있습니다.",
+        "buddyWorkspaceDirectoryDetails": "새 동반자 워크스페이스를 위해 계정별 하위 폴더를 생성하고 원래 경로의 링크를 유지합니다.",
+        "buddyWorkspaceDirectoryChoose": "폴더 변경",
+        "buddyWorkspaceDirectoryFailed": "동반자 워크스페이스 폴더를 업데이트할 수 없습니다."
       },
       "piKernel": {
         "manage": "Pi 버전 관리",
@@ -10027,6 +10089,18 @@
       "title": "자동 업데이트 실패",
       "description": "업데이터를 실행할 수 없습니다. 시스템 보안 정책에 의해 차단되었을 수 있습니다. 최신 설치 파일을 직접 다운로드해 주세요.",
       "confirm": "다운로드 페이지로"
+    },
+    "workspaceMigration": {
+      "title": "동반자 워크스페이스 이동 중",
+      "progressLabel": "동반자 워크스페이스 이동 진행률",
+      "safetyHint": "전환 전에 파일을 복사하고 검증하고 있습니다. 완료될 때까지 Cindy를 닫지 마세요.",
+      "phase": {
+        "preparing": "이동 준비 중",
+        "copying": "파일 복사 중",
+        "verifying": "파일 검증 중",
+        "switching": "위치 전환 중",
+        "cleaning": "백업 정리 중"
+      }
     }
   },
   "welcome": {
@@ -11357,6 +11431,69 @@
           "corrections": "내가 바로잡은 점",
           "routines": "확인이 필요한 루틴",
           "upgrade": "자동으로 옮기지 못한 항목"
+        }
+      },
+      "workspaceLocation": {
+        "title": "워크스페이스 위치",
+        "description": "이 동반자의 워크스페이스를 다른 로컬 디스크로 옮겨 시스템 드라이브 공간을 확보할 수 있습니다. 원래 경로에 링크가 유지되어 기존 작업, 자동화, 스크립트가 계속 작동합니다.",
+        "movedDescription": "기존 작업과 스크립트는 계속 원래 경로를 사용합니다.",
+        "chooseDialogTitle": "동반자 워크스페이스 이동 대상 폴더 선택",
+        "fullPath": "전체 경로",
+        "targetPathLabel": "대상 폴더",
+        "currentPathLabel": "현재 폴더",
+        "defaultPathLabel": "대상 폴더(기본 위치)",
+        "logicalPathLabel": "원래 연결 경로",
+        "copyPath": "경로 복사",
+        "pathCopied": "경로를 복사했습니다",
+        "pathCopyFailed": "경로를 복사할 수 없습니다",
+        "openTarget": "폴더 열기",
+        "moveAction": "워크스페이스 이동",
+        "moveBackAction": "기본 위치로",
+        "chooseAnother": "다른 폴더 선택",
+        "restartNow": "지금 다시 시작",
+        "restartAndMove": "다시 시작하고 이동",
+        "scheduleNextRestart": "다음 재시작 시 이동",
+        "cancel": "취소",
+        "dismissFailed": "닫기",
+        "scheduledToast": "다음 Cindy 재시작 시 이동하도록 예약했습니다",
+        "cancelledToast": "워크스페이스 이동이 취소되었습니다",
+        "previewTitle": "워크스페이스 이동 준비 완료",
+        "previewSummary": "파일 크기: {{size}}",
+        "previewNotice": "재시작하기 전에 이 워크스페이스를 사용하는 앱과 스크립트를 종료하세요.",
+        "previewClaudeSkillsNotice": "워크스페이스에 자체 Git 저장소가 없으면 이동 후 Claude Code가 새 위치의 상위 폴더에서 스킬을 찾을 수 있습니다. 이를 원하지 않으면 상위 폴더에 Claude Code 스킬이 없는 위치를 선택하세요.",
+        "pendingHint": "이 폴더를 사용 중인 외부 프로그램을 닫은 뒤 Cindy를 다시 시작하세요.",
+        "unavailableTitle": "이동된 워크스페이스에 접근할 수 없음",
+        "unavailableDescription": "{{target}}에 접근할 수 없습니다. 드라이브를 다시 연결하거나 폴더를 복원하세요. 빈 폴더로 덮어쓰지 않습니다.",
+        "errorTitle": "워크스페이스를 이동할 수 없음",
+        "failedTitle": "이전 워크스페이스 이동 실패",
+        "interruptedTitle": "워크스페이스 이동 복구 필요",
+        "backupRemainingHint": "확인을 위해 원본 백업이 보관되었습니다: {{backup}}",
+        "personalPreviewHint": "개인 미리보기 인스턴스를 닫고 기본 Cindy 빌드에서 워크스페이스 이동을 예약하거나 실행하세요.",
+        "status": {
+          "default": "기본 위치",
+          "pending": "재시작 대기 중",
+          "moved": "이동됨",
+          "failed": "실패",
+          "interrupted": "복구 필요",
+          "unavailable": "사용 불가"
+        },
+        "warnings": {
+          "waitingExclusive": "단독 시작을 기다리는 중입니다. 이 프로필을 공유하는 다른 Cindy 인스턴스를 닫고 다시 시작하세요.",
+          "receiptUpdateFailed": "워크스페이스는 정상 사용 가능하지만 이동 기록 업데이트에 실패했습니다. 다음 시작 시 다시 시도합니다."
+        },
+        "errors": {
+          "insufficientSpace": "대상 드라이브에 여유 공간이 부족합니다.",
+          "overlapsCindyData": "Cindy 데이터 폴더와 현재 워크스페이스 바깥의 폴더를 선택하세요.",
+          "localDiskRequired": "네트워크 공유가 아닌 로컬 디스크 폴더를 선택하세요.",
+          "unsupportedFileOrHardLink": "하드 링크나 특수 파일이 포함되어 있어 현재 안전하게 이동할 수 없습니다.",
+          "alreadyRedirected": "Cindy가 이 워크스페이스의 폴더 링크를 인식하지 못합니다. 링크와 파일을 그대로 두세요.",
+          "botHomeRedirected": "이 동반자의 홈 폴더가 수동으로 리디렉션되어 자동 이동할 수 없습니다.",
+          "targetExists": "대상 폴더가 이미 존재합니다. 다른 위치를 선택하세요.",
+          "workspaceChanged": "검증 중 파일이 변경되었습니다. 외부 프로그램을 닫고 다시 시도하세요.",
+          "backupRetained": "이동은 완료되었지만 백업에 차이가 있어 데이터 보호를 위해 남겨 두었습니다.",
+          "backupCleanupIncomplete": "이동은 완료되었지만 임시 백업 정리가 끝나지 않았습니다. 다음 시작 시 다시 시도합니다.",
+          "cutoverInterrupted": "이전 전환이 중단되어 원래 워크스페이스를 복원했습니다. 새 빈 폴더를 선택해 다시 시도하세요.",
+          "generic": "워크스페이스 이동 요청을 완료할 수 없습니다. 다시 시도하세요."
         }
       }
     },
@@ -22454,6 +22591,19 @@
     "rendered": "문서 보기",
     "wrap": "자동 줄 바꿈",
     "lineNumbers": "줄 번호"
+  },
+  "openAiAccountGroup": {
+    "strategy": "계정 그룹 전략",
+    "leastHint": "실행 중인 작업이 가장 적은 연결 우선",
+    "quotaHint": "구독 사용량을 확인할 수 있으면 사용량으로 연결을 먼저 선별한 뒤 그룹 전략을 적용합니다.",
+    "removeDescription": "이 연결은 그룹의 새 작업을 받지 않습니다. 실행 중인 작업은 이 연결에 그대로 남습니다.",
+    "mergeDescription": "{{target}}에서 시작한 새 작업은 두 제공자를 모두 사용할 수 있습니다. 로그인, 키, 기존 작업은 그대로 유지됩니다. 연결하기 전에 Cindy가 {{apiKey}}의 API 키를 테스트합니다.",
+    "modelUnavailable": "이 연결에서는 테스트에 선택된 모델을 사용할 수 없습니다. 다시 테스트하면 다른 후보를 시도할 수 있습니다.",
+    "noTestModel": "테스트에 사용할 수 있는 설정된 모델이 없습니다. OpenAI 프로젝트에서 사용할 수 있는 모델을 확인한 뒤 이 연결의 모델 목록을 새로 고치거나 수정하세요.",
+    "billingPaused": "잔액 부족 또는 결제 한도로 그룹 배정이 일시 중지되었습니다.",
+    "title": "계정 그룹",
+    "testPassed": "테스트 성공",
+    "refresh": "할당량 새로고침"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

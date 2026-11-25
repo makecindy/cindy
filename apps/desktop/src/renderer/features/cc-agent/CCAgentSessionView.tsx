@@ -2324,10 +2324,16 @@ function CCAgentSessionContent({
   // Agent 被挪到另一台电脑(例如供应商组按额度挪过去)的任务照样可以选：选插件引擎时 Agent 回到任务所属电脑。
   const pluginEngineOnTaskComputer = !!session && !isSharedTaskPeer(pluginEngineDeviceId)
     && !session.remoteHostId;
+  const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
+  const localAutomation = session?.source === 'scheduler' && !remoteDeviceId
+    && !pluginEngineDeviceId && !session.agentDeviceId;
+  const completedLocalAutomation = localAutomation && scheduleSessionInfo?.canSwitchPluginEngine === true;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
-    && isPluginEngineSwitchSourceAllowed(session.source)
+    && (isPluginEngineSwitchSourceAllowed(session.source) || completedLocalAutomation)
     && session.status !== 'archived';
+  const automationCanReturnToBuiltin = localAutomation && pluginEngineOnTaskComputer && pluginEngineTask
+    && !readOnly && !session.orcaRole && !session.orcaRemoteLead && session.status === 'active';
   const localPluginEngines = usePluginEngines(!pluginEngineDeviceId && (pluginEngineTask || pluginEngineSwitchEligible));
   const remotePluginCatalogue = useRemotePluginEngines(
     pluginEngineOnTaskComputer && !readOnly && (pluginEngineTask || pluginEngineSwitchEligible)
@@ -2472,7 +2478,7 @@ function CCAgentSessionContent({
         ? (session?.agentDeviceId ?? undefined)
         : (pluginEngineSwitchIntent.agentDeviceId ?? undefined))
     : undefined;
-  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId;
+  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId && !completedLocalAutomation;
   // 远程控制的被控电脑上的任务：与内置模型一样按被控电脑的名单列出同账号其他电脑与它收到的插件供应商分享
   // 开放的引擎，经被控电脑代读(provider-sharing.md §5.1)；被控电脑不提供名单时只列它自己的引擎。
   const canBrowseControlledPluginEngines = viewVisible && pluginEngineSwitchEligible && !!pluginEngineDeviceId
@@ -2859,7 +2865,6 @@ function CCAgentSessionContent({
   //     →「重试/关闭」
   // 后面有真实进展 = 任务已被推进；位置/模型/历史边界卡不代表恢复成功。
   // 只有实际渲染的横幅才认领 MessageStream 中同一条错误，避免双显或只读时丢失原因。
-  const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
   const unreadFailedScheduleRunIds =
     scheduleSessionInfo?.unreadFailedRunIds ?? EMPTY_UNREAD_FAILED_RUN_IDS;
   useReadFailedScheduleRuns(unreadFailedScheduleRunIds, viewVisible && historyLoaded, remoteDeviceId ?? undefined);
@@ -4040,18 +4045,18 @@ function CCAgentSessionContent({
   // 普通任务的选择器列出本机及同账号其他电脑开放的插件引擎(本机须已装对应插件)：
   // 当前选中的是待切到的引擎，或任务自己的引擎；待切到内置引擎时不选中任何插件引擎。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {
-    if (!pluginEngineSwitchEligible || !session
+    if ((!pluginEngineSwitchEligible && !automationCanReturnToBuiltin) || !session
       || (!pluginEngineTask && !pluginEngineDeviceId && switchablePluginEngines.length === 0 && switchPluginEngineDevices.length === 0)) {
       return undefined;
     }
     return {
-      engines: switchablePluginEngines,
+      engines: pluginEngineSwitchEligible ? switchablePluginEngines : [],
       active: activeSessionPluginEngineChoice,
       running: runningSessionPluginEngineChoice,
       onSelect: handlePluginEngineSwitchSelect,
       readCatalogue: readSessionPluginEngines,
     };
-  }, [pluginEngineSwitchEligible, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,
+  }, [pluginEngineSwitchEligible, automationCanReturnToBuiltin, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,
     session, activeSessionPluginEngineChoice, runningSessionPluginEngineChoice, pluginEngineTask,
     handlePluginEngineSwitchSelect, readSessionPluginEngines]);
 
