@@ -51,8 +51,10 @@ export interface PluginEngineModel {
   group?: string;
   /** Levels the engine offers for this model, low → high; absent = no selectable level. */
   efforts?: PluginEngineEffort[];
-  /** The engine's own level when none is chosen (one of `efforts`). */
+  /** Default for a new task, including the provider's saved override (one of `efforts`). */
   defaultEffort?: PluginEngineEffort;
+  /** With an override, the original plugin default. Null means the plugin declared no level. */
+  declaredDefaultEffort?: PluginEngineEffort | null;
 }
 
 /**
@@ -135,6 +137,8 @@ export interface PluginEngineView {
   declaredName?: string;
   /** The models the user turned off, as the engine lists them. Not sent to phones or other computers. */
   disabledModels?: PluginEngineModel[];
+  /** Explicit per-model reasoning defaults, for settings on this computer. */
+  modelEfforts?: Readonly<Partial<Record<string, PluginEngineEffort>>>;
   /**
    * 2026-11-23 (subscription-account-pools.md 插件引擎的账号): the plugin reports this engine's
    * account; with sign-in methods, Cindy can add accounts to it. Absent on older hosts and plugins.
@@ -159,6 +163,8 @@ export interface PluginEnginePrefsInput {
   suspended?: boolean;
   /** Turns these models of the engine off or on again. */
   models?: { ids: string[]; disabled: boolean };
+  /** A null effort restores the plugin's default for this model. */
+  modelEffort?: { id: string; effort: PluginEngineEffort | null };
 }
 
 /** Longest display name the user can give an engine (a plugin's declared name has the same bound). */

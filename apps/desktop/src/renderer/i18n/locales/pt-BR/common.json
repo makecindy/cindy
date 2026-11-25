@@ -9301,6 +9301,7 @@
         "enableBeforeConfigure": "Este plugin está desativado. Ative-o com o botão acima antes de configurar.",
         "settingsPageUnavailable": "Abra o Cindy em {{device}} para usar a página de configurações deste plugin. Esta versão do computador de destino não pode exibi-la remotamente.",
         "offlineNotice": "{{device}} está offline. O gerenciamento ficará indisponível até a conexão ser restabelecida.",
+        "publishOnTarget": "Publique os plugins no Cindy em {{device}} ou atualize o Cindy nesse computador para publicá-los remotamente.",
         "managingTarget": "Gerenciando {{device}}",
         "managingDescription": "As alterações são salvas neste computador.",
         "viewingTarget": "Instalado em {{device}}",
@@ -12945,6 +12946,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "Vozes do sistema",
+        "myVoices": "Minhas vozes",
+        "refreshMyVoices": "Atualizar minhas vozes",
+        "callMode": "Modo de chamada",
+        "messageReadAloud": "Leitura de mensagens em voz alta",
+        "callVoice": "Voz das chamadas em tempo real",
+        "readAloudVoice": "Voz de leitura",
+        "readAloudHint": "Clique no alto-falante abaixo de uma resposta de texto para ouvi-la com esta voz.",
+        "resetReadAloud": "Restaurar padrões de leitura",
+        "title": "Áudio em tempo real",
+        "add": "Adicionar modelos de áudio em tempo real",
+        "off": "Usar síntese de voz"
+      },
       "openConversation": "Abrir conversa",
       "inCallWith": "Em chamada com {{name}}",
       "showDetails": "Mostrar transcrição da chamada",
@@ -12966,7 +12981,7 @@
       "settingsTitle": "Voz",
       "openSettings": "Configurações de voz",
       "startConversation": "Iniciar conversa por voz",
-      "settingsHint": "Escolha o modelo de fala e a voz deste amigo e inicie uma conversa por voz no campo de mensagem.",
+      "settingsHint": "Quando as chamadas usam síntese de voz, o modelo e a voz abaixo também são usados para ler mensagens.",
       "previewNeedsChat": "Inicie uma conversa com este amigo para ouvir uma prévia da voz.",
       "voiceId": "ID da voz",
       "manualVoice": "Insira um ID de voz",
@@ -18104,6 +18119,7 @@
       "openWorkdirFailed": "Falha ao abrir pasta"
     },
     "runs": {
+      "boundPluginEngineRecovery": "A automação não foi executada porque a tarefa vinculada usa um mecanismo de plug-in. Volte a usar um mecanismo integrado nessa tarefa ou vincule a automação a uma tarefa que use um mecanismo integrado.",
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes do envio da mensagem. Quando a sessão de destino estiver livre, escolha {{action}} para executá-la.",
       "status": {
         "running": "Em execução",

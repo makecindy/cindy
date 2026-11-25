@@ -500,7 +500,7 @@ export function MainLayout() {
   const contentFeatureKey = companionChatTarget(location.pathname, location.search)
     ? 'cc-agent'
     : location.pathname.split('/')[1] || 'root';
-  const isSettingsRoute = location.pathname === '/settings';
+  const isSettingsRoute = location.pathname === '/settings' || location.pathname === '/cloud-settings';
 
   // 任务浏览栈与它的快捷键监听挂在常驻壳层:设置页会整个卸载左上按钮簇
   // (下面的 `!isSettingsRoute && <ChromeActions>`)，快捷键不能跟着一起消失——

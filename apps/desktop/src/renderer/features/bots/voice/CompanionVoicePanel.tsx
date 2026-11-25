@@ -17,7 +17,7 @@ import type { BotChatIdentity } from '../BotSessionContentHeader';
 import { SectionCollapse } from '../../cc-agent/sidebar/SectionCollapse';
 import { VoiceConversationController, type VoiceSnapshot } from './VoiceConversationController';
 import { PcmSpeechPlayer } from './PcmSpeechPlayer';
-import { resolveVoiceConfiguration } from './voiceConfiguration';
+import { readVoiceCallConfiguration } from './voiceConfiguration';
 import { CompanionVoiceToolbar } from './CompanionVoiceToolbar';
 import type { VoiceTaskFailure } from './VoiceReplyTracker';
 import type { VoiceQuestionBridge } from '@/components/new-chat/voiceQuestionSelection';
@@ -126,19 +126,15 @@ export function CompanionVoicePanel(props: Props) {
     setLoading(true);
     setConfigurationError(false);
     try {
-      const [models, preference] = await Promise.all([
-        window.electronAPI.voiceConversation.models(),
-        window.electronAPI.voiceConversation.preference(props.bot.id),
-      ]);
+      const { selection, sentencePlayback } = await readVoiceCallConfiguration(window.electronAPI.voiceConversation, props.bot.id);
       if (version !== launchVersion.current || !latest.current.open || latest.current.blocked)
         return;
-      const { selection, protocol } = resolveVoiceConfiguration(models, preference.selection);
-      if (!selection || !protocol) {
+      if (!selection) {
         latest.current.onConfigure();
         return;
       }
       controller.setBlocked(false);
-      await controller.start(selection, preference.sentencePlayback ?? true);
+      await controller.start(selection, sentencePlayback);
       if (version === launchVersion.current && latest.current.open && !latest.current.blocked)
         controller.retryUnsent();
     } catch {

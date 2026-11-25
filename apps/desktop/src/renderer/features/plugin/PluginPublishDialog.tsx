@@ -31,7 +31,7 @@ export interface PluginPublishDialogRequest {
 /** Mounted for one owner-bound opening; retained through Radix's exit animation. */
 export function PluginPublishDialog({
   open, ownerKey, initialInstanceId, onOpenChange, onClosed,
-  reader, localPlugins, installedPluginCount, onPrepare, onSubmitUpdate,
+  reader, localPlugins, installedPluginCount, onPrepare, onSubmitUpdate, sourceDevice,
   submitBusy = false, installedRevision, submissionRevision = 0,
 }: {
   open: boolean;
@@ -39,7 +39,9 @@ export function PluginPublishDialog({
   initialInstanceId?: string;
   onOpenChange: (open: boolean) => void;
   onClosed: () => void;
-  reader: PluginContributionsApi;
+  reader: Pick<PluginContributionsApi, 'prepare' | 'discard'> &
+    Partial<Pick<PluginContributionsApi, 'list' | 'releases'>>;
+  sourceDevice?: string;
   localPlugins: readonly GhostPluginListItem[];
   installedPluginCount: number;
   onPrepare?: PluginContributionsApi['prepare'];
@@ -66,7 +68,7 @@ export function PluginPublishDialog({
   }, []);
   const pickerReadKey = JSON.stringify([ownerKey, installedRevision, submissionRevision]);
   const pickerRead = pickerPlugins?.key === pickerReadKey ? pickerPlugins : null;
-  const pickerReady = Boolean(pickerRead && !pickerRead.failure);
+  const pickerReady = !reader.list || Boolean(pickerRead && !pickerRead.failure);
   const pickerItem = localPlugins.find(item => item.id === pickerSelection);
   const pickerUnavailable = (local: GhostPluginListItem) => {
     const plugin = pickerRead?.plugins.find(item => item.localInstanceId === local.id);
@@ -84,7 +86,7 @@ export function PluginPublishDialog({
   const versionReadKey = JSON.stringify([pickerReadKey, pickerItem?.id, pickerItem?.version, selectedPlugin?.pluginId]);
   const selectedVersionRead = versionRead?.key === versionReadKey ? versionRead : null;
   const selectedPickerUnavailable = initialUnavailable ?? (selectedVersionRead?.used ? `${copy}.errors.VERSION_ALREADY_SUBMITTED` : null);
-  const versionReady = !selectedPlugin || Boolean(selectedVersionRead && !selectedVersionRead.used && !selectedVersionRead.failure);
+  const versionReady = !reader.releases || !selectedPlugin || Boolean(selectedVersionRead && !selectedVersionRead.used && !selectedVersionRead.failure);
   const pickerKey = JSON.stringify([pickerReadKey, location.key, pickerSelection, pickerItem?.version, pickerRefresh]);
   const pickerContextKey = JSON.stringify([pickerKey, open]);
   const pickerContext = useRef({ key: pickerContextKey, token: {}, open });
@@ -97,14 +99,15 @@ export function PluginPublishDialog({
 
   useEffect(() => {
     let disposed = false;
-    if (!open || !localPlugins.length) return;
+    const list = reader.list;
+    if (!open || !localPlugins.length || !list) return;
     setPickerPlugins(null);
     void (async () => {
       const plugins: MyPluginView[] = [];
       const cursors = new Set<string>();
       let cursor: string | undefined;
       do {
-        const page = await reader.list({ query: '', filter: 'all', cursor });
+        const page = await list({ query: '', filter: 'all', cursor });
         if (disposed) return;
         plugins.push(...page.plugins);
         cursor = page.nextCursor ?? undefined;
@@ -119,7 +122,8 @@ export function PluginPublishDialog({
   }, [open, pickerReadKey, reader, localPlugins.length]);
 
   useEffect(() => {
-    if (!open || !pickerReady || !pickerItem || !selectedPlugin || initialUnavailable) return;
+    const releases = reader.releases;
+    if (!open || !pickerReady || !pickerItem || !selectedPlugin || initialUnavailable || !releases) return;
     let disposed = false;
     setVersionRead(null);
     const pluginId = selectedPlugin.pluginId, version = pickerItem.version;
@@ -127,7 +131,7 @@ export function PluginPublishDialog({
       const cursors = new Set<string>();
       let cursor: string | undefined;
       do {
-        const page = await reader.releases(pluginId, cursor);
+        const page = await releases(pluginId, cursor);
         if (disposed) return;
         if (page.releases.some(release => release.version === version)) {
           setVersionRead({ key: versionReadKey, used: true });
@@ -158,6 +162,7 @@ export function PluginPublishDialog({
             {t(`${copy}.publishPlugin`)}
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-13 leading-5 text-[var(--text-secondary)]">
+            {sourceDevice ? <span className="block font-medium">{t('settings.ghosts.remote.managingTarget', { device: sourceDevice })}</span> : null}
             {t(`${copy}.chooseLocal`)}
           </Dialog.Description>
           <div className="my-4 min-h-0 overflow-y-auto p-1">
@@ -198,11 +203,21 @@ export function PluginPublishDialog({
                   <h3 className="font-medium">{t(`${copy}.releaseNotes`)}</h3>
                   <p className="whitespace-pre-wrap break-words">{currentPickerDraft.prepared.releaseNotes}</p>
                 </> : null}
+                {sourceDevice && currentPickerDraft.prepared.permissionLabels?.length ? (
+                  <>
+                    <h3 className="font-medium">{t('settings.ghosts.detail.permissionsTitle')}</h3>
+                    <ul className="list-inside list-disc">
+                      {currentPickerDraft.prepared.permissionLabels.map(label => (
+                        <li key={label}>{t(`settings.ghosts.perm.${label}`, { defaultValue: label })}</li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
                 <p>{t(`${copy}.confirmPublic`)}</p>
               </> : pickerReady && !selectedPickerUnavailable && !currentPickerDraft?.error && !selectedVersionRead?.failure ? <p role="status">{t(`${copy}.${versionReady ? 'preparing' : 'loading'}`)}</p> : null}
             </section>
           ) : null}
-          {localPlugins.length > 0 && !pickerRead ? <p role="status" className="mb-3 shrink-0 text-13 leading-5 text-[var(--text-secondary)]">{t(`${copy}.loading`)}</p> : null}
+          {localPlugins.length > 0 && !pickerReady && !pickerRead ? <p role="status" className="mb-3 shrink-0 text-13 leading-5 text-[var(--text-secondary)]">{t(`${copy}.loading`)}</p> : null}
           {pickerRead?.failure || selectedVersionRead?.failure || currentPickerDraft?.error ? (
             <p role="alert" className="mb-3 shrink-0 text-13 leading-5 text-[var(--text-secondary)]">
               {t((pickerRead?.failure ?? selectedVersionRead?.failure ?? currentPickerDraft?.error)!, { defaultValue: t(`${copy}.loadFailed`) })}

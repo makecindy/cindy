@@ -72,6 +72,20 @@ describe('theme refresh confirmation', () => {
     expect(localStorage.getItem('theme.familyId')).toBe('default');
   });
 
+  // Unit: a cloud save sends the values it read; this window saved a newer one since, which stays.
+  it('applies nothing from a change read before this window saved a newer value', async () => {
+    await act(async () => { await receive({ ...request(), requestId: 'read', operation: 'get' }); });
+    const read = state.reply.mock.calls[0]![0].state.theme as 'system' | 'light' | 'dark';
+    const stale = read === 'light' ? 'dark' as const : 'light' as const;
+    state.reply.mockClear();
+    await act(async () => { await receive({ ...request(), requestId: 'stale', operation: 'update', patch: { theme: 'dark' }, expected: { theme: stale } }); });
+    expect(state.reply).toHaveBeenCalledExactlyOnceWith({ requestId: 'stale', ok: false, code: 'CONFLICT' });
+    expect(localStorage.getItem('theme')).not.toBe('dark');
+    await act(async () => { await receive({ ...request(), requestId: 'current', operation: 'update', patch: { theme: 'dark' }, expected: { theme: read } }); });
+    expect(state.reply).toHaveBeenLastCalledWith(expect.objectContaining({ requestId: 'current', ok: true }));
+    expect(localStorage.getItem('theme')).toBe('dark');
+  });
+
   // Unit through the mounted Agent bridge and real ThemeProvider: a mixed
   // mode/family update must wait before either write, then return its actual
   // result. Old persistence-only coverage confirmed a rejected package too early.

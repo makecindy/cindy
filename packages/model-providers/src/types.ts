@@ -347,6 +347,8 @@ export interface CatalogModel {
   /** Execution-host derived display identity only; original id remains the request/storage key. */
   selectionAliasKey?: string;
   supportsToolCalls?: boolean;
+  supportsReasoning?: boolean;
+  reasoningOffEffort?: ModelMetadata["reasoningOffEffort"];
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
   /** Local Pi Chat compatibility override; not inherited public model metadata. */

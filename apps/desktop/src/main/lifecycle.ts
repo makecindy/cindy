@@ -58,6 +58,7 @@ import {
 } from './startup-diagnostics';
 import { isGhostSandboxWebContentsId } from './cindy-brain/runtime/electronSandboxAdapter';
 import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup-surfaces';
+import { isCloudLoginWindow } from './cloud-settings-client/login-window-registry.js';
 import { isResourceUsageWebContentsId } from './resource-usage-window/registry.js';
 import { isRemoteDesktopViewer } from './remote-desktop-viewer/registry.js';
 import { isRsbWindowWebContentsId } from './right-sidebar-window/registry.js';
@@ -123,15 +124,30 @@ export function onQuit(
   registry.push({ name, phase, fn });
 }
 
+/**
+ * Told when a quit step did not finish cleanly and when the quit chain completed. A managed cloud
+ * instance records clean shutdowns with it; nothing else observes the quit chain.
+ */
+export interface QuitStepObserver {
+  fault(): void;
+  completed(reason: string): void;
+}
+let quitObserver: QuitStepObserver | null = null;
+export function observeQuitSteps(observer: QuitStepObserver): void {
+  quitObserver = observer;
+}
+
 export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
   // ── Phase 1: sync ────────────────────────────────────────────────────────
   for (const d of registry.filter((x) => x.phase === 'sync')) {
     try {
       const ret = d.fn();
       if (ret && typeof (ret as Promise<unknown>).then === 'function') {
+        quitObserver?.fault();
         log.warn(`sync disposer "${d.name}" returned a promise — not awaited`);
       }
     } catch (err) {
+      quitObserver?.fault();
       log.error(`sync disposer "${d.name}" threw`, err);
     }
   }
@@ -144,6 +160,7 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
         Promise.resolve()
           .then(() => d.fn())
           .catch((err) => {
+            quitObserver?.fault();
             log.error(`async disposer "${d.name}" threw`, err);
             throw err;
           }),
@@ -160,6 +177,7 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
       ),
     ]);
     if (timedOut) {
+      quitObserver?.fault();
       log.warn(`async disposers timed out after ${timeoutMs}ms — proceeding to post-async`);
     }
   }
@@ -172,9 +190,10 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
     try {
       const ret = d.fn();
       if (ret && typeof (ret as Promise<unknown>).then === 'function') {
-        const settled = (ret as Promise<unknown>).catch((err) =>
-          log.error(`post-async disposer "${d.name}" threw`, err),
-        );
+        const settled = (ret as Promise<unknown>).catch((err) => {
+          quitObserver?.fault();
+          log.error(`post-async disposer "${d.name}" threw`, err);
+        });
         let timer: NodeJS.Timeout | undefined;
         let timedOut = false;
         await Promise.race([
@@ -188,10 +207,12 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
         ]);
         clearTimeout(timer);
         if (timedOut) {
+          quitObserver?.fault();
           log.warn(`post-async disposer "${d.name}" timed out after ${timeoutMs}ms — continuing`);
         }
       }
     } catch (err) {
+      quitObserver?.fault();
       log.error(`post-async disposer "${d.name}" threw`, err);
     }
   }
@@ -515,8 +536,10 @@ function beginShutdown(timeoutMs: number, reason: string): Promise<void> {
     .then(() => {
       log.info('runQuitDisposers completed');
       noteQuitDisposersCompleted();
+      quitObserver?.completed(reason);
     })
     .catch((err) => {
+      quitObserver?.fault();
       log.error('runQuitDisposers threw', err);
     });
   return _disposeStarted;
@@ -690,7 +713,7 @@ export function installQuitHandler(timeoutMs = 2000): void {
       );
       return;
     }
-    if (isResourceUsageWebContentsId(webContents.id) || isRemoteDesktopViewer(webContents.id)) {
+    if (isResourceUsageWebContentsId(webContents.id) || isRemoteDesktopViewer(webContents.id) || isCloudLoginWindow(webContents.id)) {
       log.warn(
         `resource usage render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
