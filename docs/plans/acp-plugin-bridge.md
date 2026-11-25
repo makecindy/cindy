@@ -280,9 +280,10 @@ export interface PluginHarnessRegistry {
 
 ## 第一期明确不支持（遇到即明确拒绝，不回落到内置引擎）
 
-（换引擎、定时任务与协同 Worker 已在第二期支持；分叉、侧聊与起名见「分叉、侧聊与起名」一节。）回退、移到另一台电脑或 SSH、
-插件引擎当协同 Lead、IM 渠道、共享任务、其他任务经 send_to_session 向插件引擎任务发消息、/learn 捕获、
-上下文溢出后的重放、Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
+（换引擎、定时任务与协同 Worker 已在第二期支持；分叉、侧聊与起名，以及 /learn、目标模式与溢出续接见下文。）
+回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、IM 渠道、共享任务、
+其他任务经 send_to_session 向插件引擎任务发消息、Learn Skill 的调用捕获（`/learn` 命令可用）、
+Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
 
 伙伴的后续支持范围见[模型候选链](../product-rules/cindy-bots-runtime.md#5-模型候选链)。伙伴可以在设置中选择所在电脑的插件模型，主聊天按所选模型运行。
 
@@ -408,6 +409,26 @@ export interface PluginHarnessRegistry {
   Agent 长时间静默等待（如一次等很久的定时检查）期间，名额紧张时可能被收回。只发进度、界面上没有
   变化的调用不会传到 Desktop：这类调用超过 31 分钟没有可见输出时，任务内「正在后台继续工作」先熄灭，
   结果到达时再亮起（maker-core 不会因此提前收尾该调用）。
+
+## /learn、目标模式与溢出续接（2026-11-25）
+
+用户要求插件引擎与内置引擎在任务里的能力一致（2026-11-25 用户决定）。三项都不借用用户没选的内置引擎。
+
+- **上下文溢出续接**：插件引擎报出能识别为上下文溢出的错误（`isContextOverflowErrorData` 的文本匹配）时，
+  与内置引擎一样关掉溢出的会话、用 Cindy 记录写交接并重放这条消息，任务在同一插件引擎、同一来源的全新会话里继续。
+  `getLiveSession` 看不到插件引擎的运行时，忙碌检查与关闭改用 `getRuntimeSession`；宿主没有这个读取口时什么都不
+  重建（此前会在旧会话仍开着时提交重建、挂上交接，重放又被拒绝）。发送前的换会话（含插件引擎账号切换）同一规则。
+  重建记录写 `sourceAgentKind = acp`。插件引擎不会自己压缩上下文，Cindy 也不能截断它的历史，主动换窗不适用。
+  实现见 `maker-ipc/contextOverflowRollover.ts`、`contextRecoveryAssembly.ts`，回归见 `contextOverflowRollover.test.ts`。
+- **/learn**：蒸馏任务开在同一个插件引擎上，与在它上面新建任务同一准入（停用、卸载、不可用或模型关闭时本次 /learn
+  明确失败），素材与内置引擎相同（含用户画像与其他任务的检索片段，这些内容会交给该插件的服务商），权限收敛到
+  acceptEdits。另一台电脑上的插件引擎仍拒绝。Learn Skill 的调用捕获（按 Skill 文件钉住）没有对应的 ACP 原语，仍只走
+  `/learn` 命令。实现见 `learn-host/pluginEngineLearnSession.ts`。
+- **目标模式**：插件引擎任务可以设目标，休眠后按自己的引擎与来源恢复（`goal-host/sessionRestore.ts`）。插件引擎没有
+  AskUserQuestion，首轮跳过「澄清目标」，按原文执行（`buildFirstTurnDirective` 的 `clarify: false`）。插件引擎不发
+  回合结束的状态事件，每轮用量取自回合结果的 `usage`（含缓存），否则 token 预算永远不触发。插件引擎自己登录，Cindy
+  没有它的账号快照：限额错误自带的重置时刻照常用，账号限额查询对它返回空。`session_goals.agent_kind` 的 `'acp'`
+  只在 TS 枚举里，SQLite 无 CHECK 约束，不需要迁移。权限沿用任务原有档位，插件 Agent 不主动请求确认的操作 Cindy 拦不住。
 
 ## 插件与 Skill 告知（2026-11-24）
 
