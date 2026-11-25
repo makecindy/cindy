@@ -154,11 +154,15 @@ command belonging to a different installation.
 
 ## Updates, existing installations, and recovery
 
-Choose Update in Cindy, then restart when convenient. Linux never installs
-while idle. Managed user installs need no system password. System `.deb`
-installs still request authorization. Unknown/package-manager-owned layouts
-are rejected **before Cindy quits or stops active work** with a guide prompt.
-The downloaded package remains available.
+Managed user installs need no system password, so they behave like macOS:
+Settings → About offers "Install updates automatically when idle", and a staged
+update is also applied at the next launch. System `.deb` installs request
+pkexec authorization, so they only install when you choose to restart and the
+switch is not shown. Unknown/package-manager-owned layouts, and system `.deb`
+installs on a computer without `pkexec`, are rejected **before Cindy quits or
+stops active work** with a guide prompt. The downloaded package remains
+available; switching to a managed user install (above) enables unattended
+updates.
 
 Each update verifies the manifest size and SHA-256 again using a private
 snapshot, checks the package's version/architecture/region, then prepares a new
