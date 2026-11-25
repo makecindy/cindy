@@ -1162,6 +1162,126 @@ describe('provider group relay for shared users', () => {
     }
   });
 
+  // Unit: real Host.handle(allocate) admission. Repeated identical allocation
+  // attempts used to fill the mutation budget behind a slow first attempt;
+  // revocation deduplication did not cover this path. No real model or timer.
+  it.each([false, true])('joins pending allocation retries without consuming other guests admission (failure=%s)', async failFirst => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const other = providerShareGuestPeer('share', 'member', 'other-guest');
+    const allocation = { deviceId: 'executor', generation: '11111111-1111-4111-8111-111111111111', leaseDurationMs: 60_000 };
+    let firstAttempt = true;
+    const allocate = vi.fn(async (controller: string) => {
+      if (controller === peer && firstAttempt) {
+        firstAttempt = false;
+        enter(); await gate;
+        if (failFirst) throw new Error('authorization unavailable');
+      }
+      return allocation;
+    });
+    const host = fakeAgentHost('allocate-queue', [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner', allocate, status() {}, release: async () => {},
+      switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+    } });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'codex', model: 'model' };
+    const head = Promise.allSettled([host.handle(peer, request)]);
+    let duplicates: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      duplicates = Promise.allSettled(Array.from({ length: 255 }, () => host.handle(peer, request)));
+      await expect(host.handle(other, request)).resolves.toEqual({ ...allocation, directStatusBatch: true });
+      release();
+      const results = [...await head, ...await duplicates];
+      expect(results.every(result => result.status === (failFirst ? 'rejected' : 'fulfilled'))).toBe(true);
+      if (!failFirst) expect(results.every(result => result.status === 'fulfilled'
+        && JSON.stringify(result.value) === JSON.stringify({ ...allocation, directStatusBatch: true }))).toBe(true);
+      expect(allocate).toHaveBeenCalledTimes(2);
+      // Only in-flight work joins. A failure or an expired successful lease
+      // cannot be kept as an authorization/result cache.
+      await expect(host.handle(peer, request)).resolves.toEqual({ ...allocation, directStatusBatch: true });
+      expect(allocate).toHaveBeenCalledTimes(3);
+    } finally { release(); await head; await duplicates; await host.dispose(); }
+  });
+
+  it('does not join an allocation across changed arguments, a revocation or an account change', async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const order: string[] = [];
+    let first = true;
+    let ownerScope = 'owner';
+    const host = fakeAgentHost('allocate-mutations', [], { trust: controller => controller === OWNER_DEVICE ? 'owner' : 'guest',
+      directGuestExecution: {
+        ownerScope: () => ownerScope,
+        allocate: async (_controller, request) => {
+          if (first) { first = false; enter(); await gate; }
+          order.push(`allocate:${request.model}`);
+          return null;
+        },
+        status() {}, release: async () => {}, switch: async () => ({}), usage() {}, forget: () => false,
+        delegate: async () => { order.push('revoke'); return false; },
+        sessionAllowed: () => true, sessionDelegated: () => true,
+      },
+    });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'codex', model: 'model' };
+    const head = host.handle(peer, request);
+    let waiting: Promise<unknown[]> | undefined;
+    try {
+      await entered;
+      waiting = Promise.all([
+        host.handle(peer, { ...request, model: 'other-model' }),
+        host.handle(peer, request),
+        host.handle(OWNER_DEVICE, { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member',
+          guestDeviceId: 'guest', providerId: 'provider', model: 'model', sessionId: 'task',
+          generation: '11111111-1111-4111-8111-111111111111' }),
+        host.handle(peer, request),
+      ]);
+      release(); await head; await waiting;
+      expect(order).toEqual(['allocate:model', 'allocate:other-model', 'allocate:model', 'revoke', 'allocate:model']);
+      // A new owner scope must execute independently. Work queued under the
+      // old account must fail its original owner check rather than lend an ACK.
+      first = true;
+      const old = Promise.allSettled([host.handle(peer, request)]);
+      ownerScope = 'another-owner';
+      await expect(host.handle(peer, request)).resolves.toBeNull();
+      expect(await old).toEqual([expect.objectContaining({ status: 'rejected' })]);
+    } finally { release(); await head; await waiting; await host.dispose(); }
+  });
+
+  it.each(['direct-release', 'direct-switch', 'standby-prepare'] as const)(
+    'does not borrow an allocation receipt across a service-serialized %s', async op => {
+      let enter!: () => void;
+      let release!: () => void;
+      const entered = new Promise<void>(resolve => { enter = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const peer = providerShareGuestPeer('share', 'member', 'guest');
+      let first = true;
+      const allocate = vi.fn(async () => { if (first) { first = false; enter(); await gate; } return null; });
+      const host = fakeAgentHost(`allocate-${op}`, [], { trust: () => 'guest', directGuestExecution: {
+        ownerScope: () => 'owner', allocate, status() {}, release: async () => {},
+        switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+        sessionAllowed: () => true, sessionDelegated: () => false,
+      } });
+      const request = { op: 'allocate', sessionId: '22222222-2222-4222-8222-222222222222', agentKind: 'codex', model: 'model' };
+      const head = host.handle(peer, request);
+      let waiting: Promise<unknown[]> | undefined;
+      try {
+        await entered;
+        waiting = Promise.all([
+          host.handle(peer, { ...request, op, generation: '11111111-1111-4111-8111-111111111111' }),
+          host.handle(peer, request),
+        ]);
+        release(); await head; await waiting;
+        expect(allocate).toHaveBeenCalledTimes(op === 'standby-prepare' ? 3 : 2);
+      } finally { release(); await head; await waiting; await host.dispose(); }
+    });
+
   // Unit, #12552: real Host.handle(delegate) queue admission. Existing forget
   // deduplication missed repeated revokes while native cleanup was pending;
   // 256 copies could consume the shared mutation budget and refuse another peer.

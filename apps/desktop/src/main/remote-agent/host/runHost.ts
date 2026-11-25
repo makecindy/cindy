@@ -879,6 +879,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     tail: Promise<void>;
     pending: Map<string, Promise<unknown>>;
     mutationEpoch: number;
+    allocation?: { key: string; work: Promise<unknown> };
   }>();
   let directGuestOperations = 0;
 
@@ -888,18 +889,25 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
    * work is bounded even when a native startup or filesystem operation stalls.
    */
   function withDirectGuestLock(peer: string, fn: () => Promise<unknown>,
-    dedupe?: { kind: 'forget' | 'revoke'; key: string }): Promise<unknown> {
+    dedupe?: { kind: 'forget' | 'revoke' | 'allocate'; key: string }): Promise<unknown> {
     const ownerScope = deps.directGuestExecution?.ownerScope();
     if (!ownerScope) fail('REMOTE_AGENT_INVALID', 'direct guest account is unavailable');
     const scope = JSON.stringify([ownerScope, peer]);
     const previous = directGuestLocks.get(scope);
-    const queue = previous ?? { tail: Promise.resolve(), pending: new Map<string, Promise<unknown>>(), mutationEpoch: 0 };
+    const queue: NonNullable<typeof previous> = previous
+      ?? { tail: Promise.resolve(), pending: new Map<string, Promise<unknown>>(), mutationEpoch: 0 };
     // A grant/open between two revokes is an ordering boundary: the later
     // revoke must not borrow an ACK from before the intervening mutation.
-    const dedupeKey = dedupe && JSON.stringify([dedupe.kind, dedupe.kind === 'revoke' ? queue.mutationEpoch : null, dedupe.key]);
-    const duplicate = dedupeKey ? queue.pending.get(dedupeKey) : undefined;
+    const allocationKey = dedupe?.kind === 'allocate' ? dedupe.key : undefined;
+    const dedupeKey = dedupe && dedupe.kind !== 'allocate'
+      && JSON.stringify([dedupe.kind, dedupe.kind === 'revoke' ? queue.mutationEpoch : null, dedupe.key]);
+    const duplicate = allocationKey ? queue.allocation?.key === allocationKey ? queue.allocation.work : undefined
+      : dedupeKey ? queue.pending.get(dedupeKey) : undefined;
     if (duplicate) return duplicate;
     if (directGuestOperations >= 256) fail('REMOTE_AGENT_BUSY', 'too many pending shared task operations');
+    // Only adjacent identical in-flight allocations join. A different model,
+    // task, grant, open or revoke must fence the old allocation's receipt.
+    queue.allocation = undefined;
     if (dedupe?.kind !== 'revoke') queue.mutationEpoch += 1;
     const owner = deps.captureOwner();
     directGuestOperations += 1;
@@ -912,10 +920,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     const tail = work.then(() => undefined, () => undefined).finally(() => {
       directGuestOperations -= 1;
       if (dedupeKey && queue.pending.get(dedupeKey) === work) queue.pending.delete(dedupeKey);
+      if (queue.allocation?.work === work) queue.allocation = undefined;
       if (queue.tail === tail) directGuestLocks.delete(scope);
     });
     queue.tail = tail;
     if (dedupeKey) queue.pending.set(dedupeKey, work);
+    if (allocationKey) queue.allocation = { key: allocationKey, work };
     directGuestLocks.set(scope, queue);
     return work;
   }
@@ -3478,6 +3488,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   async function handleRequest(controller: string, request: RemoteAgentRequest,
     signal?: AbortSignal, directLocked = false): Promise<unknown> {
     if (!deps.isControllerAuthorized(controller)) fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
+    // These route mutations serialize in the service rather than this guest
+    // queue. A later allocation must not borrow a receipt from before them.
+    if (request.op === 'direct-release' || request.op === 'direct-switch' || request.op === 'standby-prepare') {
+      const ownerScope = deps.directGuestExecution?.ownerScope();
+      const queue = ownerScope && directGuestLocks.get(JSON.stringify([ownerScope, controller]));
+      if (queue) queue.allocation = undefined;
+    }
     switch (request.op) {
       case 'native-history': {
         if (trustOf(controller) !== 'owner' || !deps.nativeHistory) fail('REMOTE_AGENT_UNSUPPORTED', 'native history transfer is unavailable');
@@ -3525,7 +3542,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       case 'allocate':
       case 'standby-prepare': {
         if (trustOf(controller) !== 'guest' || !deps.directGuestExecution) fail('REMOTE_AGENT_INVALID', 'allocation is only for shared users');
-        if (request.op === 'allocate' && !directLocked) return withDirectGuestLock(controller, () => handleRequest(controller, request, signal, true));
+        if (request.op === 'allocate' && !directLocked) return withDirectGuestLock(controller,
+          () => handleRequest(controller, request, signal, true), { kind: 'allocate', key: JSON.stringify(request) });
         // An existing O-hosted task stays on its legacy route, even when an old
         // controller asks to allocate it again without a native resume ID.
         if (request.op === 'allocate' && deps.directGuestExecution.locate
