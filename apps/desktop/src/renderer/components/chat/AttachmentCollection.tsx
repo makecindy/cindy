@@ -12,8 +12,8 @@ export {
 } from './AttachmentCollectionContext';
 import { ImageLightbox } from './ImageLightbox';
 import { VideoLightbox } from './VideoLightbox';
-import { createPortal } from 'react-dom';
-import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewScrim } from './PreviewChrome';
+import { PreviewHeader } from './PreviewChrome';
+import { PreviewWindow } from './PreviewWindow';
 import { Spinner } from '@/components/ui/spinner';
 const TextLightbox = lazy(() =>
   import('./TextLightbox').then((module) => ({ default: module.TextLightbox })),
@@ -91,19 +91,12 @@ export function AttachmentCollectionPreview({
           <ActivePreviewCollection.Provider value={{ items, index, select, beforeLeave, restoreFocus }}>
             <Suspense
               key={item.id}
-              fallback={createPortal(
-                <>
-                  <PreviewScrim onClose={close} />
-                  <div
-                    className={`z-fullscreen flex items-center justify-center ${PREVIEW_PANEL_CLASS}`}
-                    style={PREVIEW_PANEL_STYLE}
-                  >
-                    <PreviewHeader name={item.name} onClose={close} />
-                    <Spinner />
-                  </div>
-                </>,
-                document.body,
-              )}
+              fallback={
+                <PreviewWindow ariaLabel={item.name} className="flex items-center justify-center">
+                  <PreviewHeader name={item.name} onClose={close} />
+                  <Spinner />
+                </PreviewWindow>
+              }
             >
               {index === start && initial ? (
                 initial

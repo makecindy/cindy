@@ -1,17 +1,18 @@
-import { usePreviewFocusReturn } from './PreviewChrome';
 import { AttachmentCollectionPreview, useOpeningCollection } from './AttachmentCollection';
 /**
  * VideoLightbox
  * ---------------------------------------------------------------------------
- * Full-screen video player rendered via React Portal. Mirrors ImageLightbox
- * but adapted for <video>:
+ * Floating video player rendered via the shared `PreviewWindow`. Mirrors
+ * ImageLightbox but adapted for <video>:
  *
- *   - Overlay: rgba(0,0,0,0.85), 200ms fade, scroll lock on data-scroll-container
- *   - Focus: FocusScope moves focus to <video> on open, traps Tab inside the
- *     overlay, and returns focus to the pre-open element on unmount.
+ *   - Shell: non-modal floating window, 200ms fade, no scrim and no background
+ *     scroll lock; the conversation behind stays usable.
+ *   - Focus: the window moves focus to <video> on open and restores the opener
+ *     on close, without trapping Tab (DESIGN.md §14.2).
  *   - Esc key closes (same gesture suppression as ImageLightbox for menu close)
- *   - Background click closes; click ON the <video controls> region does NOT
- *     close (users need to drag the seek bar / hit pause without dismissing).
+ *   - A click on the panel's bare background or its backdrop button closes;
+ *     clicks ON <video controls> do not close (seek / pause stay usable), and
+ *     clicking the conversation behind never closes.
  *   - Right-click (xdt-video:// only): 复制视频 / 打开视频所在目录。复制走
  *     OS 原生文件剪贴板(Win/Mac),粘贴出来是文件本体而不是字节流。
  *   - <video controls autoPlay loop preload="auto"> — autoplay is fine because
@@ -22,8 +23,6 @@ import { AttachmentCollectionPreview, useOpeningCollection } from './AttachmentC
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { FocusScope } from '@radix-ui/react-focus-scope';
 import { Copy, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
@@ -35,9 +34,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
 import { useVideoContextMenu } from './useVideoContextMenu';
-import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewFooter, PreviewScrim } from './PreviewChrome';
+import { PreviewHeader, PreviewFooter } from './PreviewChrome';
+import { PreviewWindow } from './PreviewWindow';
 import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
-import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 interface VideoLightboxProps {
   src: string;
@@ -89,7 +88,6 @@ function VideoLightboxContent({
   filename,
   kind = 'video',
   initialTime = 0, onClose }: VideoLightboxProps) {
-  const restorePreviewFocus = usePreviewFocusReturn();
   const { t } = useTranslation();
   const Media = kind === 'audio' ? 'audio' : 'video';
   const [isVisible, setIsVisible] = useState(false);
@@ -137,16 +135,6 @@ function VideoLightboxContent({
     return () => document.removeEventListener('keydown', handler);
   }, [handleClose]);
 
-  useEffect(() => {
-    const container = document.querySelector(
-      '[data-scroll-container]',
-    ) as HTMLElement | null;
-    if (container) container.style.overflowY = 'hidden';
-    return () => {
-      if (container) container.style.overflowY = '';
-    };
-  }, []);
-
   const canRevealInFolder = src.startsWith('xdt-video://') || src.startsWith('cindy-media://');
 
   async function handleRevealInFolder(): Promise<void> {
@@ -168,34 +156,14 @@ function VideoLightboxContent({
   }
 
   const overlay = (
-    // FocusScope(trapped+loop):键盘打开后焦点必须进入弹窗并圈禁在内——
-    // 否则焦点留在 z-index 9999 遮罩背后的预览触发器上,Tab 会穿过被遮挡
-    // 的聊天控件,视频 controls 也够不着。挂载时焦点直接给 <video>(Space
-    // 暂停 / 方向键 seek 立即可用);卸载时 FocusScope 默认把焦点还给打开
-    // 前的元素(ChatVideoView 键盘路径 = 预览触发器,与 onClose 里的显式
-    // 恢复指向同一元素)。
-    <>
-    <PreviewScrim
-      onClose={() => {
+    <PreviewWindow
+      ariaLabel={filename ?? previewSourceName(src, t('attachmentPreview.video'))}
+      initialFocusRef={videoRef}
+      onBackgroundClick={() => {
         if (performance.now() - lastMenuCloseAt.current < 150) return;
         handleClose();
       }}
-    />
-    <FocusScope
-      onUnmountAutoFocus={restorePreviewFocus}
-      asChild
-      trapped
-      loop
-      onMountAutoFocus={(event) => {
-        event.preventDefault();
-        videoRef.current?.focus();
-      }}
-    >
-    <div
-      className={PREVIEW_PANEL_CLASS}
       style={{
-        ...PREVIEW_PANEL_STYLE,
-        zIndex: Z_INDEX_LAYERS.fullscreen,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -350,10 +318,8 @@ function VideoLightboxContent({
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
-    </div>
-    </FocusScope>
-    </>
+    </PreviewWindow>
   );
 
-  return createPortal(overlay, document.body);
+  return overlay;
 }

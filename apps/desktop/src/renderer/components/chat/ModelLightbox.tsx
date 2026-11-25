@@ -1,18 +1,11 @@
-import { usePreviewFocusReturn } from './PreviewChrome';
-import {
-  PREVIEW_PANEL_CLASS,
-  PREVIEW_PANEL_STYLE,
-  PreviewHeader,
-  PreviewFooter,
-  PreviewButton,
-  PreviewScrim,
-} from './PreviewChrome';
+import { PreviewHeader, PreviewFooter, PreviewButton } from './PreviewChrome';
+import { PreviewWindow } from './PreviewWindow';
 import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * ModelLightbox
  * ---------------------------------------------------------------------------
- * Full-screen 3D model lightbox rendered via React Portal. Mirror of
+ * Full-screen 3D model viewer rendered in the shared `PreviewWindow`. Mirror of
  * VideoLightbox but drives `<model-viewer>` instead of `<video>`.
  *
  * Sources (discriminated union):
@@ -28,16 +21,15 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
  *     image — the exact symptom of the 2026-06 scheme-privilege regression.
  *
  * Interaction parity with VideoLightbox:
- *   - Esc closes; click on overlay background closes; click on the model
- *     itself does NOT close (we need rotate/zoom gestures without dismissing)
+ *   - Esc closes; a click on the bare panel closes; clicking the model itself
+ *     does NOT close (rotate/zoom gestures must not dismiss the viewer); the
+ *     conversation behind stays usable and clicking it does not close
  *   - Right-click → 打开模型 / 打开模型所在目录
- *   - Focus: FocusScope moves focus into the overlay on open, traps Tab
- *     inside, and returns focus to the pre-open element on unmount.
+ *   - Focus enters the window on open and returns to the opener on close,
+ *     without trapping Tab (DESIGN.md §14.2).
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { FocusScope } from '@radix-ui/react-focus-scope';
 import { Box, FolderOpen, RotateCcw, Minus, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
@@ -50,7 +42,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 /** Where the model bytes come from — decides URL building and menu actions. */
 export type ModelLightboxSource =
@@ -97,7 +88,6 @@ function isModelViewerDefined(): boolean {
 }
 
 export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps) {
-  const restorePreviewFocus = usePreviewFocusReturn();
   const { t } = useTranslation();
   const [isVisible, setIsVisible] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -114,7 +104,7 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
     source.kind === 'local' ? toLocalFileUrl(source.absPath) : source.url,
   );
   const modelViewerRef = useRef<HTMLElement | null>(null);
-  // FocusScope 挂载焦点的落点:overlay 根(tabIndex=-1 由 FocusScope 合入)。
+  // 共享预览窗的焦点落点:窗口根节点(tabIndex=-1 由 FocusScope 合入)。
   const overlayRef = useRef<HTMLDivElement | null>(null);
   // "open" / "reveal" 正在执行时禁用菜单, 避免重复点击。Mirror ChatImageView。
   const [modelPending, setModelPending] = useState<'open' | 'reveal' | null>(null);
@@ -165,17 +155,6 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [handleClose]);
-
-  // Scroll lock
-  useEffect(() => {
-    const container = document.querySelector(
-      '[data-scroll-container]',
-    ) as HTMLElement | null;
-    if (container) container.style.overflowY = 'hidden';
-    return () => {
-      if (container) container.style.overflowY = '';
-    };
-  }, []);
 
   // <model-viewer> 加载/解析失败只派发 'error' 事件,UI 会一直停留在 poster
   // 上——不监听就是"看起来像一张拖不动的静态图"的静默失败(历史上协议特权
@@ -257,37 +236,22 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
     }
   }
 
+  const previewName =
+    filename ??
+    previewSourceName(
+      source.kind === 'local' ? source.absPath : source.url,
+      t('chat.media.modelPreviewAlt'),
+    );
+
   const overlay = (
-    // FocusScope(trapped+loop):键盘打开后焦点进入弹窗并圈禁,Tab 不穿过被
-    // 遮挡的聊天控件。挂载焦点给 overlay 根(全局 outline:none 不闪全屏焦
-    // 点框),Tab 下一站是 backdrop 关闭按钮;卸载时 FocusScope 默认把焦点
-    // 还给打开前的元素(ChatImageView 键盘路径 = 预览触发器)。handleClose
-    // 里既有的 blur 仍保留——点进模型后 model-viewer shadow DOM 的焦点框
-    // 要在淡出前先灭掉。
-    <>
-    <PreviewScrim
-      onClose={() => {
+    <PreviewWindow
+      ariaLabel={previewName}
+      panelRef={overlayRef}
+      onBackgroundClick={() => {
         if (performance.now() - lastMenuCloseAt.current < 150) return;
         handleClose();
       }}
-    />
-    <FocusScope
-      onUnmountAutoFocus={restorePreviewFocus}
-      asChild
-      trapped
-      loop
-      onMountAutoFocus={(event) => {
-        event.preventDefault();
-        overlayRef.current?.focus();
-      }}
-    >
-    <div
-      ref={overlayRef}
-      data-lightbox-layer
-      className={PREVIEW_PANEL_CLASS}
       style={{
-        ...PREVIEW_PANEL_STYLE,
-        zIndex: Z_INDEX_LAYERS.fullscreen,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -314,13 +278,7 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
         }}
       />
         <PreviewHeader
-          name={
-            filename ??
-            previewSourceName(
-              source.kind === 'local' ? source.absPath : source.url,
-              t('chat.media.modelPreviewAlt'),
-            )
-          }
+          name={previewName}
           onClose={handleClose}
           onSave={() => {
             void window.electronAPI
@@ -505,10 +463,8 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-    </div>
-    </FocusScope>
-    </>
+    </PreviewWindow>
   );
 
-  return createPortal(overlay, document.body);
+  return overlay;
 }

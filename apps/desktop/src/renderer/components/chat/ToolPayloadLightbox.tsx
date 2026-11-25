@@ -1,4 +1,5 @@
-import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewButton, PreviewScrim } from './PreviewChrome';
+import { PreviewHeader, PreviewButton } from './PreviewChrome';
+import { PreviewWindow } from './PreviewWindow';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 /**
@@ -11,10 +12,9 @@ import { Button } from '@/components/ui/button';
  *   - mode: 'text' → renders a single plain-text block (in-memory content,
  *     e.g. ChatInput 长文本粘贴 chip 的预览 — 无文件路径可给 TextLightbox)
  *
- * Pattern intentionally mirrors TextLightbox: portal to body, 80vw/80vh
- * doc card, Esc / backdrop close, scroll-lock on the message stream
- * container. Kept as a SEPARATE component (rather than overloading
- * TextLightbox) because:
+ * Pattern intentionally mirrors TextLightbox: shared non-modal PreviewWindow,
+ * Esc / bare-panel close, no background scroll lock or Tab trap. Kept as a
+ * SEPARATE component (rather than overloading TextLightbox) because:
  *   - TextLightbox loads file content via IPC + Web Worker syntax-highlight,
  *     none of which is needed here.
  *   - textLightbox.test.ts contains tight source-scan invariants; adding a
@@ -30,7 +30,6 @@ import {
   CHAT_CODE_SURFACE_CLASS,
 } from './chatChrome';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Copy, Download, FileText, Folder, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -46,7 +45,6 @@ import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
 import { downloadRemoteChatEntry } from '@/lib/remoteFileOpen';
 import { useChatSessionFile } from './ChatSessionFileContext';
-import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 export type ToolDiffSegment =
   | {
@@ -195,15 +193,6 @@ export function ToolPayloadLightbox({
     return () => document.removeEventListener('keydown', handler);
   }, [handleClose]);
 
-  // Scroll lock — same selector as TextLightbox / ImageLightbox
-  useEffect(() => {
-    const container = document.querySelector('[data-scroll-container]') as HTMLElement | null;
-    if (container) container.style.overflowY = 'hidden';
-    return () => {
-      if (container) container.style.overflowY = '';
-    };
-  }, []);
-
   // ── Toolbar bits ────────────────────────────────────────────────────────
   const displayName =
     payload.kind === 'diff'
@@ -282,28 +271,14 @@ export function ToolPayloadLightbox({
   }
 
   const overlay = (
-    <div
-      data-tool-payload-lightbox-overlay
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: Z_INDEX_LAYERS.fullscreen,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        transition: 'opacity 200ms ease',
-        opacity: isVisible ? 1 : 0,
-        cursor: 'default',
-      }}
+    <PreviewWindow
+      ariaLabel={displayName}
+      onBackgroundClick={handleClose}
+      layerAttrs={{ 'data-tool-payload-lightbox-overlay': '' }}
+      panelAttrs={{ 'data-tool-payload-lightbox-card': '' }}
+      className="cursor-auto flex flex-col pt-16"
+      style={{ transition: 'opacity 200ms ease', opacity: isVisible ? 1 : 0, cursor: 'default' }}
     >
-      {/* 遮罩在根节点的层叠上下文里,压在预览窗(zIndex 1)之下。 */}
-      <PreviewScrim onClose={handleClose} zIndex={0} />
-      <div
-        data-tool-payload-lightbox-card
-        className={cn('cursor-auto flex flex-col pt-16', PREVIEW_PANEL_CLASS)}
-        style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}
-      >
         <PreviewHeader
           name={displayName}
           onClose={handleClose}
@@ -468,9 +443,8 @@ export function ToolPayloadLightbox({
             </Button>
           </div>
         )}
-      </div>
-    </div>
+    </PreviewWindow>
   );
 
-  return createPortal(overlay, document.body);
+  return overlay;
 }

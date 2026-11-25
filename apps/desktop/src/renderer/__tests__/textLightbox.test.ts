@@ -9,20 +9,16 @@ import '../themes/colors';
  * and avoids dragging in jsdom + react-dom for these contract checks.
  *
  * Contracts asserted:
- *   F3  Overlay backdrop uses --overlay-lightbox (rgba(0,0,0,0.85)).
  *   F4  Toolbar copies file path on filename click; copies content on Copy btn;
  *       Toolbar shows ONLY Copy + Close (no ExternalLink) — Open-in-System
  *       moved exclusively to the Oversize CTA after the file-modal-and-toast
  *       polish on 2026-04-19.
  *   F4  Toolbar Close (X) button wires to handleClose.
- *   Private-card geometry and tooltip source checks retired with PreviewChrome;
- *   real closing and rendering are covered in runtime acceptance.
  *   F5  Oversize body shows triangle-alert + i18n 阈值文案 + Open-in-system CTA
  *       (Oversize is the SOLE caller of window.electronAPI.openPath now).
- *   F6  Esc closes; Doc Card clicks stop propagation; Overlay onClick=handleClose
- *   F6  handleClose is idempotent via isClosingRef
- *   General: scroll-lock targets the same [data-scroll-container] selector
- *            ImageLightbox uses (parity).
+ *   F6  Esc closes; Doc Card clicks stop propagation; idempotent handleClose.
+ *   The shared non-modal window (scrim / scroll lock / focus) is covered by the
+ *   real-component regression in TextLightboxInteraction.test.tsx, not here.
  *   formatBytes: known sizes round-trip to the spec's "<n> <unit>" format.
  */
 
@@ -66,18 +62,6 @@ describe('TextLightbox — F6 close behaviour', () => {
   it('handleClose guards against double-fire via isClosingRef', () => {
     expect(source).toContain('isClosingRef.current');
     expect(source).toMatch(/if\s*\(isClosingRef\.current\)\s*return;/);
-  });
-});
-
-// ── F3: overlay style parity ────────────────────────────────────────────────
-
-describe('TextLightbox — F3 overlay style', () => {
-  it('floats the document over the shared preview scrim instead of filling the window', () => {
-    // 遮罩与弹窗共用 .modal-scrim(PreviewScrim),组件内不写遮罩颜色;
-    // 文稿卡片使用公共预览窗几何。
-    expect(source).toContain('<PreviewScrim onClose={handleClose} zIndex={0} />');
-    expect(source).toContain('style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}');
-    expect(source).not.toContain("width: '100vw'");
   });
 });
 
@@ -218,14 +202,10 @@ describe('TextLightbox — CodeMirror source preview', () => {
   });
 });
 
-// ── Scroll-lock parity with ImageLightbox ──────────────────────────────────
-
-describe('TextLightbox — scroll lock parity', () => {
-  it('targets [data-scroll-container] (same selector as ImageLightbox)', () => {
-    expect(source).toMatch(/\[data-scroll-container\]/);
-    expect(source).toMatch(/overflowY\s*=\s*'hidden'/);
-  });
-});
+// The old F3 scrim/geometry and scroll-lock source contracts were retired with
+// the shared non-modal preview window. Their observable behaviour — no scrim,
+// no scroll lock, no Tab trap, usable composer — is asserted by rendering the
+// real TextLightbox in components/chat/__tests__/TextLightboxInteraction.test.tsx.
 
 // ── formatBytes — pure function ─────────────────────────────────────────────
 

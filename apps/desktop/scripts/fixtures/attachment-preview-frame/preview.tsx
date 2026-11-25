@@ -33,11 +33,14 @@ function sampleImage() {
   return canvas.toDataURL('image/png');
 }
 
-/** 被预览窗盖住的对话,只用来看清遮罩后面还露出原界面。 */
+/** 预览窗旁边的对话：非模态预览时仍要可读、可选中、可点击。 */
 function Conversation() {
   const bubble = 'rounded-2xl bg-[var(--surface-chip)] px-4 py-3 text-14 leading-relaxed';
   return (
-    <main className="flex h-screen flex-col gap-4 overflow-hidden bg-[var(--surface)] px-10 pt-14 text-[var(--text-primary)]">
+    <main
+      data-scroll-container=""
+      className="flex h-screen flex-col gap-4 overflow-hidden bg-[var(--surface)] px-10 pt-14 text-[var(--text-primary)]"
+    >
       <div className="text-13 text-[var(--text-secondary)]">信用卡发票整理</div>
       <div className={`${bubble} self-end`}>把这八张信用卡的发票整理一下，做个核对清单。</div>
       <div className="max-w-[640px] text-14 leading-relaxed">

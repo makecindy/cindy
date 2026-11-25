@@ -88,7 +88,7 @@ describe('ToolPayloadLightbox editable text mode', () => {
     expect(writeText).toHaveBeenCalledWith('new draft');
   });
 
-  it.each(['cancel', 'escape', 'close', 'backdrop'] as const)(
+  it.each(['cancel', 'escape', 'close', 'background'] as const)(
     '%s closes without saving',
     (closeMethod) => {
       vi.useFakeTimers();
@@ -105,10 +105,12 @@ describe('ToolPayloadLightbox editable text mode', () => {
         const closeButtons = screen.getAllByLabelText('chat.lightbox.close');
         fireEvent.click(closeButtons[closeButtons.length - 1]);
       } else {
-        const overlay = document.querySelector('[data-tool-payload-lightbox-overlay]');
-        const backdrop = overlay?.querySelector(':scope > [data-preview-scrim]');
-        expect(backdrop).toBeInstanceOf(HTMLElement);
-        fireEvent.click(backdrop as HTMLElement);
+        // The shared non-modal window closes on a click on its bare panel
+        // background; there is no full-window scrim any more.
+        const panel = document.querySelector('[data-preview-window-panel]');
+        expect(panel).toBeInstanceOf(HTMLElement);
+        expect(document.querySelector('[data-preview-scrim]')).toBeNull();
+        fireEvent.click(panel as HTMLElement);
       }
 
       expect(onSave).not.toHaveBeenCalled();

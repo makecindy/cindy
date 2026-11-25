@@ -1,4 +1,5 @@
-import { usePreviewFocusReturn } from './PreviewChrome';
+import { PreviewHeader, PreviewFooter, PreviewButton } from './PreviewChrome';
+import { PreviewWindow } from './PreviewWindow';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
 import { openHtmlFileByPreference } from './messageLinkActions';
 import { DocSearchBar } from '@/features/cc-agent/workdir-browse/DocSearchBar';
@@ -8,16 +9,7 @@ import {
   ActivePreviewCollection,
 } from './AttachmentCollection';
 import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
-import { FocusScope } from '@radix-ui/react-focus-scope';
 import { toLocalFileUrl } from '@/lib/localPathResolver';
-import {
-  PREVIEW_PANEL_CLASS,
-  PREVIEW_PANEL_STYLE,
-  PreviewHeader,
-  PreviewFooter,
-  PreviewButton,
-  PreviewScrim,
-} from './PreviewChrome';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -26,7 +18,6 @@ import {
   Suspense,
   useCallback,
   useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { isLightboxCovered } from '@/lib/lightboxLayer';
 import { acquireFindInPage, isPreviewPopupKeyEvent } from '@/components/find-in-page/findInPageOwnership';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -48,7 +39,6 @@ import {
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { PlaintextEditor, type PlaintextEditorHandle } from '@/components/markdown/PlaintextEditor';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 const FileLightbox = lazy(() =>
   import('./FileLightbox').then((module) => ({ default: module.FileLightbox })),
@@ -75,7 +65,6 @@ interface TextLightboxProps {
 // IPC response also carries `limitMb` so dynamic copy stays single-sourced.
 const OVERSIZE_LIMIT_MB = 10;
 const OVERSIZE_LIMIT = OVERSIZE_LIMIT_MB * 1024 * 1024;
-const TEXT_LIGHTBOX_OVERLAY_Z_INDEX = Z_INDEX_LAYERS.fullscreen;
 
 /**
  * Markdown line-scroll anchor selection (pure, unit-tested).
@@ -127,22 +116,18 @@ export function TextLightbox(props: TextLightboxProps) {
     <TextDocumentLightbox {...props} />
   ) : (
     <Suspense
-      fallback={createPortal(
-        <>
-          <PreviewScrim onClose={props.onClose} />
-          <div
-            className={cn('z-fullscreen flex items-center justify-center', PREVIEW_PANEL_CLASS)}
-            style={PREVIEW_PANEL_STYLE}
-          >
-            <PreviewHeader
-              name={props.fileName ?? basename(props.filePath)}
-              onClose={props.onClose}
-            />
-            <Spinner />
-          </div>
-        </>,
-        document.body,
-      )}
+      fallback={
+        <PreviewWindow
+          ariaLabel={props.fileName ?? basename(props.filePath)}
+          className="flex items-center justify-center"
+        >
+          <PreviewHeader
+            name={props.fileName ?? basename(props.filePath)}
+            onClose={props.onClose}
+          />
+          <Spinner />
+        </PreviewWindow>
+      }
     >
       <FileLightbox {...props} />
     </Suspense>
@@ -151,7 +136,6 @@ export function TextLightbox(props: TextLightboxProps) {
 
 function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onClose }: TextLightboxProps) {
   const { t } = useTranslation();
-  const restorePreviewFocus = usePreviewFocusReturn();
   const collection = useContext(ActivePreviewCollection);
   const [isVisible, setIsVisible] = useState(false);
   const [loadState, setLoadState] = useState<LoadState>({ phase: 'loading' });
@@ -318,17 +302,6 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
       window.removeEventListener('keyup', onKeyUp, true);
     };
   }, [handleClose, search, renderable.kind, showSource]);
-
-  // F6: Scroll lock on the message stream's scroll container.
-  // Same selector ImageLightbox uses; keeping it in sync prevents the page
-  // behind the overlay from scrolling under wheel/touchpad input.
-  useEffect(() => {
-    const container = document.querySelector('[data-scroll-container]') as HTMLElement | null;
-    if (container) container.style.overflowY = 'hidden';
-    return () => {
-      if (container) container.style.overflowY = '';
-    };
-  }, []);
 
   // 1-second grace period before showing the loading spinner. If content
   // becomes ready within 1s the user sees it directly ("instant open").
@@ -506,36 +479,20 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
   const oversizeLimitMb = showOversize ? loadState.limitMb : OVERSIZE_LIMIT_MB;
 
   const overlay = (
-    <div
-      data-text-lightbox-overlay
-      data-lightbox-layer
-      ref={overlayRef}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: TEXT_LIGHTBOX_OVERLAY_Z_INDEX,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        transition: 'opacity 200ms ease',
-        opacity: isVisible ? 1 : 0,
-        cursor: 'default',
+    <PreviewWindow
+      ariaLabel={displayName}
+      focusFirstOnOpen
+      panelRef={overlayRef}
+      onBackgroundClick={handleClose}
+      layerAttrs={{ 'data-text-lightbox-overlay': '' }}
+      panelAttrs={{
+        'data-text-lightbox-card': '',
+        'data-text-lightbox-search-host':
+          renderable.kind === 'markdown' && !showSource ? '' : undefined,
       }}
+      className={cn('cursor-auto flex flex-col pt-16', collection && 'pb-16')}
+      style={{ transition: 'opacity 200ms ease', opacity: isVisible ? 1 : 0, cursor: 'default' }}
     >
-      {/* 遮罩在根节点的层叠上下文里,压在预览窗(zIndex 1)之下。 */}
-      <PreviewScrim onClose={handleClose} zIndex={0} />
-      {/* F3: Doc Card — clicks inside MUST NOT close (per F6 异常流). */}
-      <div
-        data-text-lightbox-card
-        data-text-lightbox-search-host={renderable.kind === 'markdown' && !showSource ? '' : undefined}
-        className={cn(
-          'cursor-auto flex flex-col pt-16',
-          collection && 'pb-16',
-          PREVIEW_PANEL_CLASS,
-        )}
-        style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}
-      >
         <PreviewHeader
           name={displayName}
           detail={[displaySize, remoteCopy?.stale ? t('chat.remoteFile.staleBadge') : null]
@@ -755,14 +712,10 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
           )}
 
         {collection ? <PreviewFooter /> : null}
-      </div>
-    </div>
+    </PreviewWindow>
   );
 
-  const documentView = createPortal(
-    <FocusScope onUnmountAutoFocus={restorePreviewFocus} trapped loop asChild>
-      {overlay}
-    </FocusScope>, document.body);
+  const documentView = overlay;
   if (/\.(mmd|mermaid)$/i.test(filePath) && loadState.phase === 'ready' && !showSource)
     return <MarkdownMermaidBlock raw={loadState.content} fullscreen fullscreenFallback={documentView} onClose={handleClose} />;
   return documentView;

@@ -151,6 +151,53 @@ it.each(['pending', 'invalid'])('keeps the diagram %s state closable', async (ph
   expect(close).toHaveBeenCalledOnce();
 });
 
+// Regression (2026-11-25): opening a Markdown attachment put a full-window
+// scrim and a trapped FocusScope over the conversation, so the message bar
+// could not be clicked or typed into. Production entry: real TextLightbox with
+// a .md path; observable result: no scrim, no background scroll lock, no focus
+// trap, and the composer behind the preview stays focusable and editable.
+// Minimum failing input: one open Markdown preview. Tier: unit (jsdom).
+it('keeps the background conversation usable while a Markdown file is open', async () => {
+  mockFile('# 核对说明\n\n正文');
+  const onClose = vi.fn();
+  render(
+    <>
+      <div data-scroll-container="">
+        <p>background message</p>
+        <input aria-label="background composer" />
+      </div>
+      <TextLightbox filePath="/notes.md" onClose={onClose} />
+    </>,
+  );
+  await screen.findByLabelText('Preview video');
+
+  const layer = document.querySelector('[data-preview-window-layer]') as HTMLElement | null;
+  const panel = document.querySelector('[data-preview-window-panel]') as HTMLElement | null;
+  const scroller = document.querySelector('[data-scroll-container]') as HTMLElement;
+  const composer = screen.getByLabelText('background composer') as HTMLInputElement;
+  composer.focus();
+  fireEvent.focusIn(composer);
+  const observed = {
+    fullscreenScrim: Boolean(document.querySelector('[data-preview-scrim], .modal-scrim')),
+    ariaModal: Boolean(document.querySelector('[aria-modal="true"]')),
+    backgroundScrollLocked: scroller.style.overflowY === 'hidden',
+    layerCapturesBackgroundClicks: layer?.style.pointerEvents !== 'none',
+    panelTakesPointerEvents: panel?.style.pointerEvents === 'auto',
+    composerFocusable: document.activeElement === composer,
+  };
+  expect(observed).toEqual({
+    fullscreenScrim: false,
+    ariaModal: false,
+    backgroundScrollLocked: false,
+    layerCapturesBackgroundClicks: false,
+    panelTakesPointerEvents: true,
+    composerFocusable: true,
+  });
+  fireEvent.change(composer, { target: { value: 'still typing' } });
+  expect(composer.value).toBe('still typing');
+  expect(onClose).not.toHaveBeenCalled();
+});
+
 // Unit regression from markdown-preview-find: the document capture listener
 // closed the preview before Radix could handle its menu Escape. Use the real
 // preview menu; engine stubs above do not replace keyboard ownership.

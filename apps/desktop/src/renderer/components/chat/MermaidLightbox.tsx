@@ -1,13 +1,14 @@
 import { isLightboxCovered } from '@/lib/lightboxLayer';
-import { usePreviewFocusReturn } from './PreviewChrome';
 import { PlaintextEditor } from '@/components/markdown/PlaintextEditor';
 /**
  * MermaidLightbox
  * ---------------------------------------------------------------------------
- * Full-screen mermaid SVG viewer with pan + zoom.
+ * Floating mermaid SVG viewer with pan + zoom, in the shared `PreviewWindow`.
  *
- * Mirrors ImageLightbox's conventions (Portal, overlay click closes, Esc closes,
- * 200ms fade, scroll lock) and adds:
+ * Keeps ImageLightbox's conventions that still apply (Esc closes, 200ms fade,
+ * a click on the bare panel closes) and adds:
+ *   - no scrim, no background scroll lock and no Tab trap: the conversation
+ *     behind stays readable and usable (DESIGN.md §14.2)
  *   - trackpad/mouse wheel pan, with ctrl/cmd+wheel zoom at cursor
  *   - drag to pan (when zoomed in)
  *   - double-click to reset
@@ -18,18 +19,14 @@ import { PlaintextEditor } from '@/components/markdown/PlaintextEditor';
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FocusScope } from '@radix-ui/react-focus-scope';
 import {
-  PREVIEW_PANEL_CLASS,
-  PREVIEW_PANEL_STYLE,
   PreviewHeader,
   PreviewFooter,
   PreviewButton as ToolbarButton,
-  PreviewScrim,
 } from './PreviewChrome';
+import { PreviewWindow } from './PreviewWindow';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
-import { createPortal } from 'react-dom';
 import { Check, Copy, Minus, Pen, Plus, Maximize } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
@@ -46,7 +43,6 @@ import {
   wheelZoomFactor,
   zoomAtPoint,
 } from './lightboxGestures';
-import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 interface MermaidLightboxProps {
   svg: string;
@@ -62,7 +58,6 @@ interface MermaidLightboxProps {
 }
 
 export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLightboxProps) {
-  const restorePreviewFocus = usePreviewFocusReturn();
   const { t } = useTranslation();
   const [showSource, setShowSource] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
@@ -145,16 +140,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
     return () => document.removeEventListener('keydown', handler);
   }, [handleClose]);
 
-  // Scroll lock
-  useEffect(() => {
-    const container = document.querySelector('[data-scroll-container]') as HTMLElement | null;
-    if (container) container.style.overflowY = 'hidden';
-    return () => {
-      if (container) container.style.overflowY = '';
-    };
-  }, []);
-
-  // Native wheel listener (passive: false) is required so the full-screen viewer
+  // Native wheel listener (passive: false) is required so the preview viewer
   // can own trackpad pinch/scroll gestures without browser-page scrolling.
   useEffect(() => {
     const stage = stageRef.current;
@@ -261,27 +247,17 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
   }
 
   const overlay = (
-    <>
-    <PreviewScrim onClose={handleClose} />
-    <FocusScope onUnmountAutoFocus={restorePreviewFocus} trapped loop asChild
-      onMountAutoFocus={(event) => { event.preventDefault(); overlayRef.current?.focus(); }}
-    >
-      <div
-      ref={overlayRef}
-      data-mermaid-lightbox-overlay
-      data-lightbox-layer
-      className={PREVIEW_PANEL_CLASS}
+    <PreviewWindow
+      ariaLabel={t('chat.mermaid.viewDiagram')}
+      panelRef={overlayRef}
+      panelAttrs={{ 'data-mermaid-lightbox-overlay': '', onClick: handleOverlayClick }}
       style={{
-        ...PREVIEW_PANEL_STYLE,
-        zIndex: Z_INDEX_LAYERS.fullscreen,
         transition: 'opacity 200ms ease',
         opacity: isVisible ? 1 : 0,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        overflow: 'hidden',
       }}
-      onClick={handleOverlayClick}
     >
         {showSource ? (
           <div className="absolute inset-x-0 bottom-16 top-16 flex bg-[var(--surface)]">
@@ -386,10 +362,8 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
           {copiedImage ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
         </ToolbarButton>
       </PreviewFooter>
-      </div>
-    </FocusScope>
-    </>
+    </PreviewWindow>
   );
 
-  return createPortal(overlay, document.body);
+  return overlay;
 }

@@ -4,14 +4,15 @@
 
 ## 打开与返回
 
-Desktop 预览浮在原界面之上、点窗外关闭，打不开的文件用小窗；手机（含 iPad）全屏，按钮与内置浏览器一致浮在页面上。视觉见[附件预览视觉与交互](../design-rules/attachment-preview.md#呈现方式用户定稿-2026-11-03)。所有查看器都有固定的文件名、关闭和文件操作入口。关闭在加载、失败、播放、放大时可达；关闭仅结束查看，不能删除附件、撤回消息或离开来源任务。桌面保留 Esc、焦点归还；手机保留系统返回、安全区和原生播放器。未保存标注由原标注流程询问保存、放弃或继续；不能通过切换附件绕过。
+Desktop 预览浮在原界面之上；除图片查看器外（2026-11-25）均为非模态浮窗：默认贴右、可拖动、可调整尺寸，不画遮罩、不圈禁 Tab、不锁背景滚动，背景消息保持可读 / 可滚动 / 可选中 / 可复制，消息栏可用。关闭走标题栏按钮、Esc 或浮窗内空白背景，点背景对话不关闭。图片查看器在本分支仍点窗外关闭，其非模态改造由另一张已发布 PR 负责；打不开的文件用小窗。手机（含 iPad）全屏，按钮与内置浏览器一致浮在页面上。视觉见[附件预览视觉与交互](../design-rules/attachment-preview.md#呈现方式用户定稿-2026-11-03)。所有查看器都有固定的文件名、关闭和文件操作入口。关闭在加载、失败、播放、放大时可达；关闭仅结束查看，不能删除附件、撤回消息或离开来源任务。桌面保留 Esc 与焦点归还：打开时焦点进入预览窗，关闭时回到入口；Tab 不被圈禁，可以到达消息栏。手机保留系统返回、安全区和原生播放器。未保存标注由原标注流程询问保存、放弃或继续；不能通过切换附件绕过。
 
 同一条消息、待发托盘或文件列表可提供明确集合。进入时固定其身份与顺序，不扫描整页 DOM、不将新到消息插入当前集合。Desktop 显示上一项 / 计数 / 下一项，到边界禁用，计数可打开文件列表。手机不显示集合导航（不放上一项 / 下一项，也不显示「3 / 7」计数，用户定稿 2026-11-07）：图片、视频在看图器里左右滑动切换，文件浏览里能横滑的文件照旧横滑；PDF、3D 模型、流程图等不能横滑的附件，关掉预览再点下一个。只有一项时不显示无意义导航。纯图片消息原有图库和缩略图行为继续保留。
 
-Desktop 文档预览的 Tab 焦点留在预览窗内。Esc 先交给当前菜单、提示气泡、全屏播放器或嵌套查看器，
+Desktop 非模态预览的 Tab 不圈禁在预览窗内（DESIGN.md §14.2）；Esc 先交给当前菜单、提示气泡、全屏播放器或嵌套查看器，
 再关闭查找，最后才关闭文档；同一次按键不能跨层关闭。Markdown 阅读态的 Ctrl/Cmd+F 查找正文，
 被全屏媒体或嵌套查看器覆盖时不切换为源码。源码和纯文本使用预览内的查找栏，查找快捷键跟随
-用户改绑；背景编辑器、项目搜索和语音输入均须让路，不能抢焦点或被同一次 Esc 关闭。
+用户改绑；预览处于前景时背景编辑器、项目搜索和语音输入让路，焦点回到背景后由背景自己处理，
+不能抢焦点或被同一次 Esc 关闭。
 回归见 `TextLightboxInteraction.test.tsx` 与
 `apps/desktop/scripts/fixtures/markdown-preview-find/ui-page.mjs`。
 
@@ -39,7 +40,7 @@ Desktop 文档预览的 Tab 焦点留在预览窗内。Esc 先交给当前菜单
 
 ## 实现入口
 
-共享类型判定在 `packages/maker-shared/src/attachmentPreview.ts`。Desktop 使用 `PreviewChrome`、`AttachmentCollection`，经 `TextLightbox` / `FileLightbox` 分派既有内容渲染器。Mobile 使用 `PreviewChrome`、`RemoteAttachmentPreview`、`DocumentPreviewChrome` 和类型阅读器；任务、群附件、草稿、插件媒体与伙伴成果接入同一合同。
+共享类型判定在 `packages/maker-shared/src/attachmentPreview.ts`。Desktop 使用 `PreviewChrome`、`AttachmentCollection` 与共享非模态外壳 `PreviewWindow` / `previewWindowGeometry`，经 `TextLightbox` / `FileLightbox` 分派既有内容渲染器；视频、Mermaid、模型、工具 payload 与集合 fallback 都落在同一外壳上。图片查看器暂沿用 `PreviewChrome` 的模态外壳，因此旧导出继续保留。Mobile 使用 `PreviewChrome`、`RemoteAttachmentPreview`、`DocumentPreviewChrome` 和类型阅读器；任务、群附件、草稿、插件媒体与伙伴成果接入同一合同。
 
 移动端离线资源由 `node apps/mobile/scripts/sync-document-preview-assets.mjs` 从现有依赖和 Desktop draw.io vendor 生成；更新依赖后重新生成，禁止手改生成文件。没有新增 native dependency、协议字段或授权记录迁移。
 
