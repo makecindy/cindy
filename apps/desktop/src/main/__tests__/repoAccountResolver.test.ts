@@ -73,8 +73,8 @@ describe('repoAccountResolver', () => {
     const repoAccess = vi.fn(async () => false);
     const resolver = createRepoAccountResolver(deps({ listLogins, repoAccess }));
 
-    expect(await resolver.recover(PR)).toBeNull();
-    expect(await resolver.recover(PR)).toBeNull();
+    expect(await resolver.recover(PR)).toEqual({ ok: false, reason: 'unknown' });
+    expect(await resolver.recover(PR)).toEqual({ ok: false, reason: 'unknown' });
     // 没有 10 分钟 miss:两次都真的重新探测。
     expect(listLogins).toHaveBeenCalledTimes(2);
   });
@@ -85,10 +85,10 @@ describe('repoAccountResolver', () => {
     const repoAccess = vi.fn(async (): Promise<boolean | 'unknown'> => 'unknown');
     const resolver = createRepoAccountResolver(deps({ listLogins, repoAccess }));
 
-    expect(await resolver.recover(PR, 'active-token')).toBeNull();
+    expect(await resolver.recover(PR, 'active-token')).toEqual({ ok: false, reason: 'unknown' });
     // 不换账号、不写 miss,也不去列账号。
     expect(listLogins).not.toHaveBeenCalled();
-    expect(await resolver.recover(PR, 'active-token')).toBeNull();
+    expect(await resolver.recover(PR, 'active-token')).toEqual({ ok: false, reason: 'unknown' });
     expect(repoAccess).toHaveBeenCalledTimes(2);
   });
 
@@ -98,8 +98,8 @@ describe('repoAccountResolver', () => {
     const readTokenForLogin = vi.fn(async () => null);
     const resolver = createRepoAccountResolver(deps({ listLogins, readTokenForLogin }));
 
-    expect(await resolver.recover(PR)).toBeNull();
-    expect(await resolver.recover(PR)).toBeNull();
+    expect(await resolver.recover(PR)).toEqual({ ok: false, reason: 'unknown' });
+    expect(await resolver.recover(PR)).toEqual({ ok: false, reason: 'unknown' });
     // 没有 10 分钟 miss:两次都真的重新读了一遍。
     expect(readTokenForLogin).toHaveBeenCalledTimes(2);
   });
@@ -137,7 +137,7 @@ describe('repoAccountResolver', () => {
     let listed: { logins: string[]; complete: boolean } | null = null;
     const resolver = createRepoAccountResolver(deps({ listLogins: async () => listed }));
 
-    expect(await resolver.recover(PR)).toBeNull();
+    expect(await resolver.recover(PR)).toEqual({ ok: false, reason: 'unknown' });
     listed = { logins: ['me', 'work'], complete: true };
     expect(await resolver.recover(PR)).toEqual({ ok: true, token: 'work-token' });
   });
@@ -167,6 +167,32 @@ describe('repoAccountResolver', () => {
     expect(repoAccess).toHaveBeenCalledTimes(1);
   });
 
+  it('确认没有账号能读后,同样的 404 不再发预检请求', async () => {
+    // 真实调用路径带 failedToken:仓库已确认读不到时,每次刷新都会带着同一份 token 再来。
+    // 10 分钟的结论没过期就不该为它再发一次 GET /repos 预检。
+    const listLogins = vi.fn(async () => ({ logins: ['me', 'work'], complete: true }));
+    const repoAccess = vi.fn(async () => false);
+    const resolver = createRepoAccountResolver(deps({ listLogins, repoAccess }));
+
+    expect(await resolver.recover(PR, 'active-token')).toBeNull();
+    repoAccess.mockClear();
+    expect(await resolver.recover(PR, 'active-token')).toBeNull();
+    // 结论没过期:既不再发预检,也不再重探账号。
+    expect(repoAccess).not.toHaveBeenCalled();
+    expect(listLogins).toHaveBeenCalledTimes(1);
+  });
+
+  it('预检没查成时不把 404 当成「没有账号能读」', async () => {
+    // 刷新时最常见的组合:同一份 token 又被 404,而预检本身限流了。这时不能给调用方一个
+    // 「确定换不了」的结论——那会让它把一条读得到的 PR 缓成「不存在」直到 TTL 过期。
+    const repoAccess = vi.fn(async (): Promise<boolean | 'unknown'> => 'unknown');
+    const resolver = createRepoAccountResolver(deps({ repoAccess }));
+
+    expect(await resolver.recover(PR, 'active-token')).toEqual({ ok: false, reason: 'unknown' });
+    expect(await resolver.recover(PR, 'active-token')).toEqual({ ok: false, reason: 'unknown' });
+    expect(repoAccess).toHaveBeenCalledTimes(2);
+  });
+
   it('账号列表没查成时不写失败记忆', async () => {
     let reachable = false;
     const listLogins = vi.fn(async () =>
@@ -174,7 +200,7 @@ describe('repoAccountResolver', () => {
     );
     const resolver = createRepoAccountResolver(deps({ listLogins }));
 
-    expect(await resolver.recover(PR)).toBeNull();
+    expect(await resolver.recover(PR)).toEqual({ ok: false, reason: 'unknown' });
     reachable = true;
     expect(await resolver.recover(PR)).toEqual({ ok: true, token: 'work-token' });
     expect(listLogins).toHaveBeenCalledTimes(2);
@@ -209,7 +235,7 @@ describe('repoAccountResolver', () => {
       deps({ listLogins, repoAccess: async () => (reachable ? true : 'unknown') }),
     );
 
-    expect(await resolver.recover(PR)).toBeNull();
+    expect(await resolver.recover(PR)).toEqual({ ok: false, reason: 'unknown' });
     reachable = true;
     expect(await resolver.recover(PR)).toEqual({ ok: true, token: 'work-token' });
     expect(listLogins).toHaveBeenCalledTimes(2);
@@ -232,7 +258,7 @@ describe('repoAccountResolver', () => {
     await vi.waitFor(() => expect(gate.release).toBeTypeOf('function'));
     resolver.reset();
     gate.release?.(true);
-    expect(await recovering).toBeNull();
+    expect(await recovering).toEqual({ ok: false, reason: 'unknown' });
 
     readToken.mockClear();
     expect(await resolver.tokenFor(PR)).toEqual({ ok: true, token: 'active-token' });

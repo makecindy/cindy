@@ -8,7 +8,8 @@
  *   - 活跃账号仍是默认;只有它 404 之后才按仓库去试其它已登录账号,正常路径零额外请求。
  *   - 判断依据是**仓库**权限,不是某一条 PR:否则一次查错的 PR 编号会把整个仓库记成读不到。
  *   - 选中的账号按仓库记住(默认 30 分钟);确认所有账号都读不到时也记 10 分钟。
- *   - 没查成(网络/限流/5xx/账号列表读不到)不算「读不到」,不写失败记忆,下一次刷新重试。
+ *   - 没查成(网络/限流/5xx/账号列表读不到)不算「读不到」,不写失败记忆,下一次刷新重试;
+ *     也不能当成「没有别的账号能读」(那会让调用方把 404 缓存成「PR 不存在」)。
  *   - 记着的账号也会失去权限:它自己 404 时按失败的那份 token 重新探测,而不是一直用它。
  *   - 401/403 不换账号:凭证失效、限流和无权限是不同的事,不能靠换身份掩盖。
  */
@@ -34,14 +35,29 @@ export interface RepoAccountDeps {
   now?: () => number;
 }
 
+/**
+ * recover() 的三种结论:`{ok:true,token}` 换到了能读的账号;`null` 确定本机没有别的账号
+ * 能读;**`{ok:false,reason:'unknown'}` 这次没查成**(账号列表/钥匙串/网络没给出结论)。
+ * 最后一种不能当成「没有备用账号」:调用方拿它去缓存「PR 不存在」会把一条能读到的 PR
+ * 钉死到缓存过期。
+ */
+export type RepoAccountRecovery =
+  | { ok: true; token: string }
+  | { ok: false; reason: 'unknown' }
+  | null;
+
+/** recover() 没查出结论:本机是否有别的账号能读这个仓库,这次没法回答。 */
+const UNKNOWN_RECOVERY = { ok: false, reason: 'unknown' } as const;
+
 export interface RepoAccountResolver {
   /** 这个仓库该用哪个账号:记过的账号优先,否则活跃账号。永不抛错。 */
   tokenFor(pr: PrIdentity): Promise<GhCliTokenReadResult>;
   /**
-   * 404 之后换一个能读到它的账号并记住;没有这样的账号时返回 null。永不抛错。
+   * 404 之后换一个能读到它的账号并记住;`null` 表示确定没有这样的账号,
+   * `{ok:false,reason:'unknown'}` 表示这次没查成(调用方不该据此下结论)。永不抛错。
    * failedToken 是刚被拒的那份凭证:如果它就是记住的账号,丢掉这个记忆重新探测。
    */
-  recover(pr: PrIdentity, failedToken?: string): Promise<GhCliTokenReadResult | null>;
+  recover(pr: PrIdentity, failedToken?: string): Promise<RepoAccountRecovery>;
   reset(): void;
 }
 
@@ -51,7 +67,7 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
   const now = deps.now ?? Date.now;
   const chosen = new Map<string, { login: string; until: number }>();
   const missing = new Map<string, number>();
-  const pending = new Map<string, Promise<GhCliTokenReadResult | null>>();
+  const pending = new Map<string, Promise<RepoAccountRecovery>>();
   const key = (pr: PrIdentity) => `${pr.owner}/${pr.repo}`.toLowerCase();
   // 登录态变化会重置缓存;重置前发起的探测不能把旧结果写回来。
   let generation = 0;
@@ -62,7 +78,7 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
     map.set(k, value);
   }
 
-  async function saved(pr: PrIdentity): Promise<GhCliTokenReadResult | null> {
+  async function saved(pr: PrIdentity): Promise<{ ok: true; token: string } | null> {
     const k = key(pr);
     const hit = chosen.get(k);
     if (!hit) return null;
@@ -81,7 +97,7 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
     pr: PrIdentity,
     failedToken?: string,
     gen: number = generation,
-  ): Promise<GhCliTokenReadResult | null> {
+  ): Promise<RepoAccountRecovery> {
     const k = key(pr);
     // 这个仓库已经选好账号了:直接用,不必再探一遍。
     const known = await saved(pr).catch(() => null);
@@ -91,7 +107,7 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
     const active = await deps.readToken();
     const listed = await deps.listLogins();
     // 账号列表没探测成功:整体当没查成,不留失败记忆(下次重新探测)。
-    if (!listed) return null;
+    if (!listed) return UNKNOWN_RECOVERY;
     for (const login of listed.logins) {
       const token = await deps.readTokenForLogin(login);
       // 账号在列表里但读不到它的 token(钥匙串/子进程失败)不等于「这个账号读不到仓库」,
@@ -108,13 +124,13 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
         continue;
       }
       if (!access) continue;
-      if (gen !== generation) return null;
+      if (gen !== generation) return UNKNOWN_RECOVERY;
       remember(chosen, k, { login, until: now() + ttl });
       missing.delete(k);
       return { ok: true, token };
     }
     // 没查成、列表不完整,或者登录态刚变过:不留下失败记忆,下一次刷新重新探测。
-    if (unknown || !listed.complete || gen !== generation) return null;
+    if (unknown || !listed.complete || gen !== generation) return UNKNOWN_RECOVERY;
     remember(missing, k, now() + missTtl);
     return null;
   }
@@ -123,25 +139,33 @@ export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountRes
     async tokenFor(pr: PrIdentity): Promise<GhCliTokenReadResult> {
       return (await saved(pr)) ?? deps.readToken();
     },
-    async recover(pr: PrIdentity, failedToken?: string): Promise<GhCliTokenReadResult | null> {
+    async recover(pr: PrIdentity, failedToken?: string): Promise<RepoAccountRecovery> {
       const k = key(pr);
       const gen = generation;
       const inflight = pending.get(k);
       if (inflight) return inflight;
       // 同一仓库的多条 PR 共用一次探测。
       const p = (async () => {
+        // 这个仓库刚在 10 分钟内确认过「本机没有账号能读」:结论还没过期,不必为了它再发
+        // 一次预检请求,也不必重新探测账号。过期后照常从头查。
+        if ((missing.get(k) ?? 0) > now()) return null;
         // 先复核「刚被拒的那份凭证」本身能不能读这个仓库:PR 编号写错或 PR 已删时,
         // PR 接口同样回 404,那不是权限问题,不该因此在这个仓库上换账号或写失败记忆。
-        // 只有确定「读不到」才继续换账号;没查成("unknown")不留任何缓存结论。
-        if (failedToken && (await deps.repoAccess(failedToken, pr)) !== false) return null;
+        // 只有确定「读不到」才继续换账号;没查成("unknown")也不下结论——把这种 404
+        // 当成「没有别的账号能读」会写进 not-found 缓存,让一条读得到的 PR 显示不存在。
+        if (failedToken) {
+          const access = await deps.repoAccess(failedToken, pr);
+          if (access === 'unknown') return UNKNOWN_RECOVERY;
+          if (access !== false) return null;
+        }
         // 探测期间登录态变了:这次恢复已经过期,不能删掉新选择、也不能写入新结果。
-        if (gen !== generation) return null;
+        if (gen !== generation) return UNKNOWN_RECOVERY;
         // 能走到这一步就是因为这个 token 被拒了,而它可能就是记住的选择。
         // 不先丢掉,find() 会把同一个 token 原样取回来,后面的账号探测一次都不跑。
         chosen.delete(k);
         return find(pr, failedToken, gen);
       })()
-        .catch(() => null)
+        .catch(() => UNKNOWN_RECOVERY)
         .finally(() => {
           if (pending.get(k) === p) pending.delete(k);
         });

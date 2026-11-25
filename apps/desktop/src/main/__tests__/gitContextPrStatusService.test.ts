@@ -475,6 +475,23 @@ describe('PrStatusService', () => {
     expect((await svcNet.getStatuses([Q]))[0]).toMatchObject({ ok: false, reason: 'fetch-failed' });
   });
 
+  it('换账号没查成时不把这次 404 缓存成 not-found', async () => {
+    // 预检/账号列表没给出结论(限流、钥匙串读不到)时,不能把「PR 不存在」钉进缓存:
+    // 那会让本机另一个能读的账号在 60 秒内都看不到这条 PR。
+    const fetchPr = vi.fn(async () => {
+      throw Object.assign(new Error('nf'), { status: 404 });
+    });
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      recoverToken: async () => ({ ok: false, reason: 'unknown' }),
+      fetchPr,
+    });
+    expect((await svc.getStatuses([Q]))[0]).toMatchObject({ ok: false, reason: 'fetch-failed' });
+    // 不缓存:下一次查询立即重新探测。
+    expect((await svc.getStatuses([Q]))[0]).toMatchObject({ ok: false, reason: 'fetch-failed' });
+    expect(fetchPr).toHaveBeenCalledTimes(2);
+  });
+
   it('活跃账号 404 时换本机另一个账号再读,读不到仍是 not-found', async () => {
     // 私有仓库对没权限的账号回 404;同机另一个 gh 账号能看到它。
     const fetchPr = vi.fn(async (token: string) => {

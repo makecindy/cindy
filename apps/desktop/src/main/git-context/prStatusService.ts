@@ -19,6 +19,7 @@
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '../logger.js';
 import type { GhCliTokenReadResult } from './ghCliTokenSource.js';
+import type { RepoAccountRecovery } from './repoAccountResolver.js';
 import {
   prStatusQuery,
   prStatusKey,
@@ -84,11 +85,14 @@ export interface PrStatusServiceDeps {
    * 带 PR 参数是因为同一台电脑可能登录多个账号:私有仓库要用看得到它的那个账号读。
    */
   readToken: (q: PrStatusQuery) => Promise<GhCliTokenReadResult>;
-  /** 这个仓库 404 后,换一个本机能读到它的账号(failedToken 是刚被拒的那份);没有时返回 null。 */
+  /**
+   * 这个仓库 404 后,换一个本机能读到它的账号(failedToken 是刚被拒的那份);
+   * `null` = 确定没有别的账号能读,`{ok:false,reason:'unknown'}` = 这次没查成。
+   */
   recoverToken?: (
     q: PrStatusQuery,
     failedToken: string,
-  ) => Promise<GhCliTokenReadResult | null>;
+  ) => Promise<RepoAccountRecovery>;
   /** 查单条 PR。404 等错误直接抛(带 status 的错误对象)。 */
   readGitlabToken?: (host: string) => Promise<GlabTokenResult>;
   fetchGitlab?: (token: string, q: PrStatusQuery) => Promise<PrRemoteState>;
@@ -350,7 +354,10 @@ export class PrStatusService {
     } catch (err) {
       if (gitlab || (err as { status?: unknown })?.status !== 404) throw err;
       const alt = await this.deps.recoverToken?.(q, token).catch(() => null);
-      if (!alt?.ok) throw err;
+      // 没查成本机是否有别的账号能读这个仓库:这次 404 不能当成「PR 不存在」记进缓存
+      // (fetchOne 只缓存 ok / not-found),抛可重试的失败,下一次刷新重新探测。
+      if (alt && !alt.ok) throw new Error('repo account recovery was inconclusive');
+      if (!alt) throw err;
       return await fetchPr(alt.token, q);
     }
   }
