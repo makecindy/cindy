@@ -624,3 +624,108 @@ export const __testing = {
     ledgerApiOverride = api;
   },
 };
+
+export interface PrecreateRemoteDraftWorktreeInput {
+  deviceId: string;
+  /** Preset id shared by worktree:create and maker:create-session (close-session reclaims by it). */
+  sessionId: string;
+  /** Owner captured at send; the cleanup ledger is bound to it. */
+  dataOwnerId: string | null | undefined;
+  baseRepo: string;
+  /** Name typed by the user; empty → an automatic one. */
+  name: string;
+  sourceBranch: string;
+  /** This computer names the worktree; the remote receives an ordinary explicit name. */
+  resolveName: (name: string) => Promise<string>;
+  makeRecoveryKey: () => string;
+  invoke: RemoteWorktreeInvoke;
+  isCurrent: () => boolean;
+  /** Creating overlay: shown with the provisional name, renamed once named, cleared at the end. */
+  progress: { start: (name: string) => void; named: (name: string) => void; end: () => void };
+}
+
+export type PrecreateRemoteDraftWorktreeResult =
+  | { ok: true; path: string; recoveryKey: string; createdAt: number }
+  | { ok: false; error: WorktreeError };
+
+/**
+ * 远程新建任务的 worktree 预创建(两步创建的第一步)：先恢复同设备遗留的清理义务，
+ * 在远端副作用前持久化 recoveryKey，再请被控端检出。内置引擎与插件引擎的新建共用这一段
+ * (2026-11-25 用户要求插件引擎在所有地方与内置引擎一样能用 worktree)。
+ *
+ * - 被控端明确拒绝(`ok: false`)：账本已撤销，调用方提示错误并恢复草稿。
+ * - 回包缺失或抛错：无法判断被控端是否已建好，保留账本并抛 CleanupPending，交给重连/重启恢复。
+ * - 账号在等待中变化：抛 OwnerChanged，调用方静默放弃。
+ */
+export async function precreateRemoteDraftWorktree(
+  input: PrecreateRemoteDraftWorktreeInput,
+): Promise<PrecreateRemoteDraftWorktreeResult> {
+  const { deviceId, dataOwnerId, invoke, isCurrent } = input;
+  // 账本必须绑定发起时的账号/本地数据 owner；没有 owner 无法承担清理义务。
+  if (!dataOwnerId) throw new RemotePrecreatedWorktreeCleanupPendingError();
+  // 上次两步创建若断线失败，本地账本仍承担 cleanup obligation：新建下一份前先恢复，
+  // 无法确认回收/认领时硬挡本次 worktree:create，避免每次重试生成一个新的受管目录。
+  const recovery = await recoverPendingRemotePrecreatedWorktrees({ deviceId, dataOwnerId, invoke, isCurrent });
+  assertCurrent(isCurrent);
+  // 账本不可读时磁盘上是否还有旧 obligation 未知，同样 fail closed。
+  if (!recovery.storageReadable || recovery.retained > 0) {
+    throw new RemotePrecreatedWorktreeCleanupPendingError();
+  }
+  let name = input.name.trim();
+  if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
+  const recoveryKey = input.makeRecoveryKey();
+  const createdAt = Date.now();
+  const reservation = {
+    deviceId,
+    sessionId: input.sessionId,
+    dataOwnerId,
+    recoveryKey,
+    createdAt,
+    phase: 'reserved' as const,
+  };
+  // 远端副作用之前先持久化 reservation。首次写盘失败时绝不调用 worktree:create。
+  assertCurrent(isCurrent);
+  const reservationRecorded = await registerPendingRemotePrecreatedWorktree(reservation, isCurrent);
+  assertCurrent(isCurrent);
+  if (!reservationRecorded) {
+    await forgetPendingRemotePrecreatedWorktree(reservation, isCurrent);
+    throw new RemotePrecreatedWorktreeCleanupPendingError();
+  }
+  input.progress.start(name);
+  try {
+    name = await input.resolveName(name);
+    assertCurrent(isCurrent);
+    input.progress.named(name);
+    const createRequest: RemoteWorktreeCreateRequest = {
+      sessionId: input.sessionId,
+      baseRepo: input.baseRepo,
+      name,
+      sourceBranch: input.sourceBranch.trim() || 'HEAD',
+      recoveryKey,
+    };
+    const resp = parseRemoteWorktreeCreateResult(await invoke('worktree:create', [createRequest]), createRequest);
+    if (!resp) throw new RemotePrecreatedWorktreeCleanupPendingError();
+    if (!resp.ok) {
+      assertCurrent(isCurrent);
+      await forgetPendingRemotePrecreatedWorktree(reservation, isCurrent);
+      assertCurrent(isCurrent);
+      return { ok: false, error: resp.error };
+    }
+    // 回包后尽力补 path；即使更新失败，已落盘的 recoveryKey reservation 仍足够精确恢复。
+    assertCurrent(isCurrent);
+    await registerPendingRemotePrecreatedWorktree(
+      { ...reservation, path: resp.meta.path, phase: 'precreated' },
+      isCurrent,
+    );
+    assertCurrent(isCurrent);
+    return { ok: true, path: resp.meta.path, recoveryKey, createdAt };
+  } catch (err) {
+    if (isRemotePrecreatedWorktreeOwnerChangedError(err)) throw err;
+    if (isRemotePrecreatedWorktreeCleanupPendingError(err)) throw err;
+    // invoke 抛错时无法判断被控端是否已完成创建：保留 reservation，交给重连/重启恢复，
+    // 不能把「不知道」展示成普通创建失败后允许重试。
+    throw new RemotePrecreatedWorktreeCleanupPendingError({ cause: err });
+  } finally {
+    input.progress.end();
+  }
+}

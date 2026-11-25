@@ -188,7 +188,7 @@ function validateScheduleExecutionShape(
     }
   }
   // 插件引擎(docs/plans/acp-plugin-bridge.md)只在自动任务所在电脑上、每次新建任务运行：必须指出是
-  // 哪个引擎，不绑定已有任务、不换电脑、不用 worktree、不走脚本执行。旧端只改了其中一半(例如把
+  // 哪个引擎，不绑定已有任务、不换电脑、不走脚本执行；worktree 与内置引擎相同。旧端只改了其中一半(例如把
   // agentKind 写回内置引擎)时整份拒绝，不悄悄换引擎。
   if (schedule.agentKind === 'acp' || schedule.modelAgentKind === 'acp') {
     if (schedule.agentKind !== 'acp' || schedule.modelAgentKind !== 'acp') {
@@ -206,9 +206,6 @@ function validateScheduleExecutionShape(
     }
     if (schedule.agentDeviceId || schedule.modelAgentDeviceId) {
       throw new Error('Plugin engines run on the automation host only');
-    }
-    if (schedule.useWorktree) {
-      throw new Error('Plugin engine schedules cannot use a worktree');
     }
   }
   if (schedule.agentDeviceId !== undefined) {

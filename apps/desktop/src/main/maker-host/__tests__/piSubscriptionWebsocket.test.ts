@@ -2,10 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebSocketMessageTransform } from '@cindy/anthropic-compat-proxy';
 import type { NativeSubscriptionAccount } from '@cindy/maker-core';
 
-const state = vi.hoisted(() => ({ owner: 'owner-a', pending: false, provider: 'openai' as string | null, guest: false, hosted: false, fastAllowed: true }));
+const state = vi.hoisted(() => ({ owner: 'owner-a', pending: false, guest: false, fastAllowed: true }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.owner, isAppSessionBoundaryPending: () => state.pending }));
 vi.mock('../codex-account-auth.desktop.js', () => ({ isOpenAiSubscriptionProviderId: (id: string) => id === 'openai' || id === 'account-b' }));
-vi.mock('../session-provider-store.js', () => ({ getSessionProvider: () => state.provider, hasHostedSessionModelAccess: () => state.hosted }));
 vi.mock('../guest-provider-route-store.js', () => ({ guestProviderRouteForSession: () => state.guest ? {} : null }));
 vi.mock('../anthropic-responses-bridge-host.js', () => ({ getChatgptBridgeAuthForDispatch: vi.fn(), invalidateChatgptBridgeAuth: vi.fn(async () => false) }));
 
@@ -14,6 +13,7 @@ vi.mock('../subscription-fast-request-policy.js', () => ({ subscriptionRequestAl
 import { subscriptionRequestAllowsFast } from '../subscription-fast-request-policy.js';
 import { createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms } from '../pi-subscription-websocket.js';
 import { registerPiProxySession, resetPiProxySessionsForTest } from '../pi-proxy-session-auth.js';
+import { bindHostedSessionProvider, clearAllSessionProviders, setSessionProvider } from '../session-provider-store.js';
 
 const context = (provider = 'openai', token = 'fixture-token') => ({ url: '/codex/responses', headers: {
   'x-cindy-pi-session-id': 'fixture-session', 'x-cindy-pi-session-token': token,
@@ -53,8 +53,9 @@ describe('Pi subscription WebSocket routing', () => {
   });
   beforeEach(() => {
     resetPiProxySessionsForTest();
-    state.owner = 'owner-a'; state.pending = false; state.provider = 'openai';
-    state.guest = false; state.hosted = false; state.fastAllowed = true;
+    clearAllSessionProviders();
+    setSessionProvider('fixture-session', 'openai');
+    state.owner = 'owner-a'; state.pending = false; state.guest = false; state.fastAllowed = true;
   });
 
   // Regression #7427: the native Fast intent can remain true before the policy poll.
@@ -88,7 +89,7 @@ describe('Pi subscription WebSocket routing', () => {
   // Regression #7427: a WS refusal must use the token proof captured for that
   // connection, while late failures from replaced credentials are ignored.
   it('invalidates explicit handshake authentication errors only for the current account proof', async () => {
-    state.provider = 'account-b';
+    setSessionProvider('fixture-session', 'account-b');
     registerPiProxySession('fixture-session', 'fixture-token', () => 'account-b');
     let current = true;
     const invalidate = vi.fn(async (_failure: { status: number; body: string; failedAccessToken: string }, _provider?: string) => true);
@@ -144,7 +145,36 @@ describe('Pi subscription WebSocket routing', () => {
   it('keeps hosted and shared-provider routes on HTTP for live per-model authorization', () => {
     registerPiProxySession('fixture-session', 'fixture-token', () => 'openai');
     state.guest = true; expect(resolvePiWebSocketUpstream(context())).toBeNull();
-    state.guest = false; state.hosted = true; expect(resolvePiWebSocketUpstream(context())).toBeNull();
+    state.guest = false;
+    bindHostedSessionProvider('fixture-session', 'openai', () => false);
+    expect(resolvePiWebSocketUpstream(context())).toBeNull();
+  });
+
+  // Unit, PR #12818: HTTP binds hosted tokens to their original grant. WS
+  // must not treat an old hosted token as local once that grant disappears.
+  // Earlier WS tests only created a grant after a local token was minted.
+  it.each(['session', 'subagent-route'] as const)('never opens WS for a %s token minted under a hosted grant', async scope => {
+    const grant = bindHostedSessionProvider('fixture-session', 'openai', (provider, model) =>
+      provider === 'openai' && model === 'gpt-6-astra');
+    const close = registerPiProxySession('fixture-session', 'fixture-token', () => 'openai', { scope });
+    const readAuth = vi.fn<NonNullable<Parameters<typeof createPiWebSocketRequestPreparer>[0]>>();
+    const prepare = createPiWebSocketRequestPreparer(readAuth);
+    const expectHttpOnly = async () => {
+      expect(resolvePiWebSocketUpstream(context())).toBeNull();
+      await expect(prepare(context())).rejects.toThrow('PI_WEBSOCKET_ROUTE_UNAVAILABLE');
+      expect(readAuth).not.toHaveBeenCalled();
+    };
+    await expectHttpOnly();
+    const replacement = bindHostedSessionProvider('fixture-session', 'openai', () => true);
+    grant.release(); // cannot erase the replacement
+    await expectHttpOnly();
+    replacement.release(); // no live binding, but the old token is still hosted
+    await expectHttpOnly();
+    close();
+    await expectHttpOnly();
+    // A newly registered local token for the same task still works normally.
+    registerPiProxySession('fixture-session', 'fixture-token', () => 'openai', { scope });
+    expect(resolvePiWebSocketUpstream(context())).toBe('https://chatgpt.com/backend-api');
   });
 
   it('rejects forged, wrong-provider, expired, non-subscription and wrong-path requests', () => {
@@ -155,13 +185,13 @@ describe('Pi subscription WebSocket routing', () => {
     expect(resolvePiWebSocketUpstream(context('account-b'))).toBeNull();
     expect(resolvePiWebSocketUpstream(context('xai'))).toBeNull();
     expect(resolvePiWebSocketUpstream({ ...context(), url: '/messages' })).toBeNull();
-    state.provider = 'account-b'; expect(resolvePiWebSocketUpstream(context())).toBeNull();
-    state.provider = 'openai'; state.pending = true; expect(resolvePiWebSocketUpstream(context())).toBeNull();
+    setSessionProvider('fixture-session', 'account-b'); expect(resolvePiWebSocketUpstream(context())).toBeNull();
+    setSessionProvider('fixture-session', 'openai'); state.pending = true; expect(resolvePiWebSocketUpstream(context())).toBeNull();
     state.pending = false; close(); expect(resolvePiWebSocketUpstream(context())).toBeNull();
   });
 
   it('injects the selected account, preserves the native session and strips local secrets', async () => {
-    state.provider = 'account-b';
+    setSessionProvider('fixture-session', 'account-b');
     const close = registerPiProxySession('fixture-session', 'fixture-token', () => 'account-b');
     const read = vi.fn(async () => ({ accessToken: 'fixture-upstream-token', accountId: 'fixture-upstream-account', canDispatch: () => true }));
     const prepared = await createPiWebSocketRequestPreparer(read)(context('account-b'));
@@ -191,9 +221,9 @@ describe('Pi subscription WebSocket routing', () => {
     expect(prepared.authorize?.()).toBe(true);
     if (kind === 'owner') state.owner = 'owner-b';
     if (kind === 'pending') state.pending = true;
-    if (kind === 'provider') state.provider = 'account-b';
+    if (kind === 'provider') setSessionProvider('fixture-session', 'account-b');
     if (kind === 'guest') state.guest = true;
-    if (kind === 'hosted') state.hosted = true;
+    if (kind === 'hosted') bindHostedSessionProvider('fixture-session', 'openai', () => false);
     expect(prepared.authorize?.()).toBe(false);
   });
 
@@ -202,7 +232,7 @@ describe('Pi subscription WebSocket routing', () => {
     const read = vi.fn(async () => {
       if (kind === 'owner') state.owner = 'owner-b';
       if (kind === 'pending') state.pending = true;
-      if (kind === 'provider') state.provider = 'account-b';
+      if (kind === 'provider') setSessionProvider('fixture-session', 'account-b');
       if (kind === 'revoked') close();
       if (kind === 'replaced') registerPiProxySession('fixture-session', 'fixture-token', () => 'openai');
       return { accessToken: 'fixture-token', accountId: null, canDispatch: () => true };

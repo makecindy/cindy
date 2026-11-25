@@ -170,6 +170,8 @@ Project image thumbnails use the same 25% corner crop on Desktop and Mobile, inc
 
 **Mobile group mention text** — 用户 2026-11-04 要求群聊 `@点名` 样式对齐 PC；专用 `groupMentionText` 采用 CINDY Light／Dark `msg-link` 的对应色（Mobile 数值正本 `apps/mobile/src/theme/tokens.ts`），只用于群聊已识别点名，不用于普通链接、状态或其他文字。仅着色，不另加下划线、底色或字重；身份入口与边界见 §14.5、`bot-group-chat.md`。
 
+**Group chat External badge (user decision, 2026-11-25)** — 面向企业 SSO 查看者的「外部 / External」小徽标（仅在群含非本组织成员或群归属外部时，于群列表行、群顶栏、群设置头、消息作者行、成员列表与点名浮层出现；C 端个人账号永不显示）。Desktop 复用已登记的 `--status-info` 前景与 `color-mix(in srgb, var(--status-info) 14%, transparent)` 淡底（4px `rounded` 微圆角，区别于中性圆胶囊标签）；Mobile 复用 `groupMentionText` 前景与同色 14% 淡底（`radius.micro` 4pt 圆角、`micro` 11/16 medium）。仅表达跨组织/外部成员边界，不复用为状态或链接色；同组织部门标签继续使用中性 `--surface-chip` / `surfaceChip`。
+
 - **PR/MR merge conflicts (user decision, 2026-11-05)** — an open, non-draft PR/MR with a confirmed merge conflict uses `--warning-fg` (Mobile `warningFg`) on its existing state icon across headers, sidebars, companion cards and management lists; no extra icon. Draft, merged and closed keep their main-state colors. The Desktop hover panel shows a separate Merge / Conflicts data row for open and draft conflicts, with a warning-colored, medium-weight value; its header stays unchanged. The button's accessible name includes the conflict. Unknown or absent conflict fields add no signal; passing checks remain independent. Both Light and Dark use the same semantic tokens. Plugin cards are outside this scope and retain their existing merge-state text row.
 
 Toast loading is neutral: use the shared 16×16 Spinner in `--text-secondary`, with polite status semantics. Keep it visible until the operation settles and explicitly dismiss it; only failures use the error variant.

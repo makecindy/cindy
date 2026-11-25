@@ -53,6 +53,7 @@ import { isBotGroupCapabilityNoticeCode, isBotGroupRuntimeFailureCode } from '..
 import { GroupMaskMessageAvatar } from './GroupMaskControls';
 import { useGroupMask, maskIdentity } from './groupMaskPresentation';
 import { BotAvatar } from './BotAvatar';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { BotGroupMentionCard, botGroupMentionMember } from './BotGroupMentionCard';
 import { splitBotGroupMentionSegments } from './botGroupMentions';
 import { botGroupNoticeKey } from './botGroupPresentation';
@@ -278,10 +279,10 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
 
 // ---- Pieces ----------------------------------------------------------------------------
 
-/** Quiet pill after an author name (负责人, 第 k 步, 某某的主人). */
-export function BotGroupNameTag({ children }: { children: ReactNode }) {
+/** Quiet pill after an author name (负责人, 第 k 步, 某某的主人, 部门). */
+export function BotGroupNameTag({ children, title }: { children: ReactNode; title?: string }) {
   return (
-    <Badge className="max-w-[12rem] truncate">
+    <Badge title={title} className="max-w-[12rem] truncate">
       {children}
     </Badge>
   );
@@ -311,6 +312,12 @@ export interface BotGroupTimelineItemProps {
   avatar?: { name: string; avatar: string | null; avatarUrl?: string | null; avatarColor: string | null };
   /** Bots a human author brought into the group: 「某某的主人」. */
   ownerOf?: string;
+  /** Same-organization colleague leaf department (strictly same-org viewers only). */
+  department?: string;
+  /** Full department path tooltip (strictly same-org viewers only). */
+  departmentPath?: string;
+  /** True only for enterprise viewers looking at an external human member. */
+  external?: boolean;
   /** 「第 k 步」 on a step hand-off. */
   stepNumber?: number;
   members: readonly BotGroupMemberView[];
@@ -621,6 +628,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           {!continued ? (
             <span className="flex min-w-0 max-w-full select-none items-baseline gap-1.5">
               <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{authorName}</span>
+              {props.external ? <BotGroupExternalBadge /> : null}
+              {props.department ? <BotGroupNameTag title={props.departmentPath ?? props.department}>{props.department}</BotGroupNameTag> : null}
               {isPlanCard ? <BotGroupOrganizerTag /> : null}
               {props.stepNumber ? <BotGroupNameTag>{t('bots.groupChat.timeline.stepTag', { count: props.stepNumber })}</BotGroupNameTag> : null}
               {props.ownerOf ? <BotGroupNameTag>{t('bots.groupChat.ownerOf', { name: props.ownerOf })}</BotGroupNameTag> : null}

@@ -108,7 +108,8 @@ async function listConnectedProvidersForAgent(agentKind: AgentKind): Promise<Pro
  */
 export async function generateMakerSessionTitle(
   message: string,
-  agentKind: AgentKind,
+  /** null = plugin-engine task: auxiliary model only. */
+  agentKind: AgentKind | null,
   sessionId?: string,
 ): Promise<string | null> {
   // 空消息(如仅图片/附件的首条输入)不发标题请求:LLM 收到空素材会把
@@ -133,8 +134,8 @@ export async function generateMakerSessionTitle(
 
 /** regenerate 的依赖注入面——单测用内存实现替换 DB / LLM 调用。 */
 export interface RegenerateTitleDeps {
-  /** 读会话 agentKind。会话不存在 → null(直接放弃)。 */
-  readSessionAgentKind: (sessionId: string) => Promise<AgentKind | null>;
+  /** 读会话 agentKind。会话不存在 → null(直接放弃)；插件引擎任务 → 'plugin-engine'(只用辅助模型)。 */
+  readSessionAgentKind: (sessionId: string) => Promise<AgentKind | 'plugin-engine' | null>;
   /** 素材包:对话开场 + 最近 limit 条非空消息(与 sessionTaskSummary 同可见性口径)。 */
   collectMaterial: (
     sessionId: string,
@@ -144,21 +145,20 @@ export interface RegenerateTitleDeps {
   /** 用给定 prompt 走 title oneShot 通道。 */
   generateTitle: (
     sessionId: string,
-    agentKind: AgentKind,
+    agentKind: AgentKind | null,
     prompt: string,
   ) => Promise<TitleOneShotResult>;
 }
 
-async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind | null> {
+async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind | 'plugin-engine' | null> {
   const [row] = await getDbClient()
     .drizzle.select({ agentKind: sessions.agentKind, status: sessions.status })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
   if (!row || row.status === 'deleted') return null;
-  if (row.agentKind === 'acp') {
-    throwIpcError('TITLE_PROVIDER_UNSUPPORTED', 'The current provider does not support AI naming');
-  }
+  // Plugin-engine tasks use the auxiliary title model without an engine one-shot.
+  if (row.agentKind === 'acp') return 'plugin-engine';
   return dbToMakerAgentKind(row.agentKind);
 }
 
@@ -225,7 +225,7 @@ export async function regenerateMakerSessionTitle(
       .join('\n');
     const generated = await deps.generateTitle(
       sessionId,
-      agentKind,
+      agentKind === 'plugin-engine' ? null : agentKind,
       buildRegenerateTitlePrompt(openingText, transcript, getResolvedMainLocale()),
     );
     if (generated.status !== 'ok') {
@@ -271,7 +271,8 @@ const TITLE_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const satisfies read
 
 interface GenerateTitleRequest {
   message: string;
-  agentKind: AgentKind;
+  /** null = plugin-engine task ('acp' on the wire): auxiliary model only. */
+  agentKind: AgentKind | null;
   sessionId?: string;
 }
 
@@ -287,7 +288,9 @@ function parseSessionId(raw: unknown, optional = false): string | undefined {
   return raw;
 }
 
-function parseAgentKind(raw: unknown): AgentKind {
+/** 'acp' = 插件引擎任务(docs/plans/acp-plugin-bridge.md)：只用辅助模型起名，解析为 null。 */
+function parseAgentKind(raw: unknown): AgentKind | null {
+  if (raw === 'acp') return null;
   if (!TITLE_AGENT_KINDS.includes(raw as AgentKind)) {
     throwIpcError('INVALID_PARAMS', 'invalid agentKind');
   }
@@ -358,9 +361,14 @@ const PREDICTION_RECENT_MESSAGE_LIMIT = 6;
 /** 预测请求:素材(messages / workingDir)一律由 main 从 DB 读取，不信任 renderer 上报内容。
  * completionRevision 来自本次运行期真实收到的 lastTurnEndedAt push，main 再与 DB 权威值
  * 复核并作为跨窗口幂等键；turnGen 仅保留 renderer 侧请求代次。 */
+/** 'acp' = 插件引擎任务：推荐与标题一样只用辅助模型链，不经任何引擎。 */
+type PredictionAgentKind = AgentKind | 'acp';
+const predictionAgentKindOf = (dbKind: typeof sessions.agentKind._.data): PredictionAgentKind =>
+  dbKind === 'acp' ? 'acp' : dbToMakerAgentKind(dbKind);
+
 interface PredictPromptRequest {
   sessionId: string;
-  agentKind: AgentKind;
+  agentKind: PredictionAgentKind;
   turnGen: number;
   completionRevision: number;
   cacheOnly?: boolean;
@@ -371,7 +379,7 @@ type CancelPromptRequest = { sessionId: string; completionRevision: number; canc
 interface PromptPredictionCacheEntry {
   revision: number;
   ownerScope: ReturnType<typeof activeOwnerScopeKey>;
-  agentKind: AgentKind;
+  agentKind: PredictionAgentKind;
   workingDir: string | null;
   promise: Promise<string | null>;
 }
@@ -399,7 +407,7 @@ function parsePredictPromptRequest(raw: unknown): PredictPromptRequest | CancelP
     }
     return { sessionId, completionRevision, cancel: true };
   }
-  if (!TITLE_AGENT_KINDS.includes(agentKind as AgentKind)) {
+  if (agentKind !== 'acp' && !TITLE_AGENT_KINDS.includes(agentKind as AgentKind)) {
     throwIpcError('INVALID_PARAMS', `invalid agentKind for predict-prompt: ${String(agentKind)}`);
   }
   if (typeof turnGen !== 'number' || !Number.isFinite(turnGen) || turnGen < 0) {
@@ -421,7 +429,7 @@ function parsePredictPromptRequest(raw: unknown): PredictPromptRequest | CancelP
   }
   return {
     sessionId,
-    agentKind: agentKind as AgentKind,
+    agentKind: agentKind as PredictionAgentKind,
     turnGen,
     completionRevision,
     cacheOnly,
@@ -474,8 +482,6 @@ async function predictPromptForCompletedRevision(
     sessionRow.remoteHostId ||
     sessionRow.source === 'review' ||
     sessionRow.status === 'deleted' ||
-    // Plugin engine tasks: the prediction would run their conversation through Claude.
-    sessionRow.agentKind === 'acp' ||
     sessionRow.lastTurnEndedAt !== completionRevision ||
     (sessionRow.activeTurnStartedAt != null &&
       sessionRow.activeTurnStartedAt >= completionRevision) ||
@@ -486,7 +492,7 @@ async function predictPromptForCompletedRevision(
   }
   if (options.isSessionTurnPendingCompletion?.(sessionId)) throw new PromptPredictionPendingError();
 
-  const dbAgentKind = dbToMakerAgentKind(sessionRow.agentKind);
+  const dbAgentKind = predictionAgentKindOf(sessionRow.agentKind);
   if (dbAgentKind !== agentKind) {
     log.warn('predict-prompt agentKind mismatch — rejecting', {
       sessionId,
@@ -509,7 +515,7 @@ async function predictPromptForCompletedRevision(
         latest.source === 'review' || latest.status === 'deleted' ||
         latest.lastTurnEndedAt !== completionRevision ||
         (latest.activeTurnStartedAt != null && latest.activeTurnStartedAt >= completionRevision) ||
-        dbToMakerAgentKind(latest.agentKind) !== agentKind ||
+        predictionAgentKindOf(latest.agentKind) !== agentKind ||
         (latest.workingDir ?? null) !== (sessionRow.workingDir ?? null) ||
         wasPromptPredictionSessionStopped(sessionId) ||
         wasPromptPredictionSessionCancelled(sessionId, completionRevision, ownerScope)) return null;
@@ -569,7 +575,7 @@ async function predictPromptForCompletedRevision(
       log.debug('predict-prompt session updated during drain — rejecting', { sessionId });
       return null;
     }
-    const latestDbAgentKind = dbToMakerAgentKind(latestSessionRow.agentKind);
+    const latestDbAgentKind = predictionAgentKindOf(latestSessionRow.agentKind);
     if (latestDbAgentKind !== agentKind) {
       log.warn('predict-prompt agentKind changed after drain — rejecting', {
         sessionId,

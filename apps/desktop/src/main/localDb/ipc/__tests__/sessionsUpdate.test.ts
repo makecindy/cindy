@@ -2504,7 +2504,27 @@ it.each([true, false])('publishes a local ACP task only after successful checkou
     : undefined);
 });
 
-it.each([{ agentDeviceId: 'other-computer' }, { remoteHostId: 'ssh-host' }, { orcaRole: 'worker' }])(
+// 2026-11-25: an engine on another computer of the same account still works in this computer's files,
+// so the checkout happens here like any local task; the row keeps the engine's location.
+it('provisions the local worktree when the plugin engine runs on another computer', async () => {
+  const baseRepo = path.join(h.userDataDir!, 'repo-remote-engine');
+  const managedPath = path.join(baseRepo, '.cindy-worktrees', 'fixture');
+  await mkdir(baseRepo);
+  const create = vi.fn(async (input: CreateWorktreeReq): Promise<CreateWorktreeResp> => ({
+    ok: true, meta: { ...input, path: managedPath, branch: 'cindy/fixture', createdAt: '2026-01-01T00:00:00.000Z' },
+  }));
+  registerSessionIpc(undefined, { localPluginWorktrees: { create, discard: vi.fn() } });
+  await expect(invokeCreate({
+    id: 'acp-remote-engine', agentKind: 'acp', providerId: 'acp-plugin:fixture:marker',
+    model: 'fixture-model', workspaceKind: 'project', workingDir: baseRepo, agentDeviceId: 'other-computer',
+    localPluginWorktree: { name: 'fixture', sourceBranch: 'main' },
+  })).resolves.toMatchObject({ workingDir: normalizeWorkingDirForStorage(managedPath) });
+  expect(create).toHaveBeenCalledOnce();
+  expect(h.sqlite!.prepare('SELECT worktree_path, agent_device_id FROM sessions WHERE id = ?').get('acp-remote-engine'))
+    .toEqual({ worktree_path: normalizeWorkingDirForStorage(managedPath), agent_device_id: 'other-computer' });
+});
+
+it.each([{ remoteHostId: 'ssh-host' }, { orcaRole: 'worker' }])(
   'rejects local ACP worktree provisioning for %j before any Git or task write',
   async (placement) => {
     const create = vi.fn();
