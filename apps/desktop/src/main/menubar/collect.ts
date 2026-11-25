@@ -944,7 +944,7 @@ export function pluginEngineSource(
       label: row.label,
       usedPercent: clampPercent(100 - row.remainingPercent),
       resetsAtMs: row.resetsAt ?? null,
-      windowMinutes: 0,
+      windowMinutes: row.windowMinutes ?? 0,
     }));
   const balances = (usage?.balances ?? []).flatMap((row) => {
     const amount = Number(row.amount);

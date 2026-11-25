@@ -863,7 +863,8 @@ describe('plugin engine quota collection', () => {
           return {
             updatedAt: NOW - 10_000,
             windows: [
-              { label: 'Weekly', remainingPercent: 72, resetsAt: NOW + 86_400_000 },
+              { label: 'Weekly', remainingPercent: 72, resetsAt: NOW + 86_400_000, windowMinutes: 10_080 },
+              { label: 'Other', remainingPercent: 60 },
               { label: 'Expired', remainingPercent: 0, resetsAt: NOW - 1 },
             ],
             balances: [{ currency: 'CNY', amount: '18.50' }],
@@ -891,7 +892,10 @@ describe('plugin engine quota collection', () => {
       family: 'plugin',
       brand: 'DeepSeek Harness',
       consuming: true,
-      windows: [{ kind: 'custom', label: 'Weekly', usedPercent: 28, resetsAtMs: NOW + 86_400_000 }],
+      windows: [
+        { kind: 'custom', label: 'Weekly', usedPercent: 28, resetsAtMs: NOW + 86_400_000, windowMinutes: 10_080 },
+        { kind: 'custom', label: 'Other', usedPercent: 40, windowMinutes: 0 },
+      ],
       balances: [{ currency: 'CNY', amount: 18.5 }],
     });
     expect(gemSource).toMatchObject({
