@@ -422,7 +422,7 @@ describe('AgentTaskCard', () => {
       await Promise.resolve();
     });
     expect(stopAgentTaskForMock).toHaveBeenCalledWith('remote-session', 'bash-remote');
-    expect(reportStopFailureMock).toHaveBeenCalledWith(failure, expect.any(Function));
+    expect(reportStopFailureMock).toHaveBeenCalledWith(failure, expect.any(Function), 'task');
   });
 
   it.each(['cc', 'codex'] as const)(

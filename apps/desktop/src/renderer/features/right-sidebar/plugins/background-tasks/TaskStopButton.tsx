@@ -68,7 +68,7 @@ export function TaskStopButton({
       void request
         .catch((error: unknown) => {
           // 失败时保持真实 running 状态,允许用户重试;旧远程端会提示升级。
-          reportBackgroundTaskStopFailure(error, t);
+          reportBackgroundTaskStopFailure(error, t, scope);
         })
         .finally(() => {
           stoppingRef.current = false;

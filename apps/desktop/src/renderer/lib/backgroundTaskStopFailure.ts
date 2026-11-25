@@ -15,13 +15,14 @@ import { extractIpcError } from '@/utils/ipcError';
 
 import { toast } from './toast';
 
-export function reportBackgroundTaskStopFailure(error: unknown, t: TFunction): void {
-  if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+export function reportBackgroundTaskStopFailure(error: unknown, t: TFunction, scope?: 'task' | 'workflow' | 'workflow-agent'): void {
+  const code = extractIpcError(error)?.code;
+  if (code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' || (scope === 'workflow-agent' && code === 'UNSUPPORTED_CAPABILITY')) {
     toast.warning(t('chat.backgroundActivity.remoteStopUnsupported'));
     return;
   }
   const message = error instanceof Error ? error.message : String(error);
-  if (isTransientRemoteError(message) || extractIpcError(error)?.code === 'DEVICE_LINK_BUSY') {
+  if (isTransientRemoteError(message) || code === 'DEVICE_LINK_BUSY') {
     toast.warning(t('chat.backgroundActivity.remoteStopUnreachable'));
   }
 }

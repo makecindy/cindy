@@ -5047,6 +5047,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 防止把同名/同 id 的其它运行误停。stopped 闩锁只作用于当前 Query,换代即清空。
     type WorkflowRunControl = {
       update: AgentTaskUpdateEventData;
+      /** Keep the terminal snapshot only while native stop calls still own it. */
+      pendingStops: number;
       /** agentId → 被停止时的 attempt;后续明确重试的新 attempt 不受旧闩锁影响。 */
       stoppedAgentAttempts: Map<string, number>;
     };
@@ -5159,7 +5161,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     const retireBackgroundTask = (taskId: string): void => {
       runningBackgroundTasks.delete(taskId);
-      workflowRunControls.delete(taskId);
+      const control = workflowRunControls.get(taskId);
+      if (control?.pendingStops) {
+        if (control.update.status === 'running') control.update = { ...control.update, status: 'stopped' };
+      } else {
+        workflowRunControls.delete(taskId);
+      }
       terminalBackgroundTaskIds.add(taskId);
     };
     const retireContinuationTasks = (claim: ContinuationClaim): void => {
@@ -5368,24 +5375,22 @@ export class ClaudeCodeAgent extends BaseAgent {
       const update = e.data as AgentTaskUpdateEventData;
       const status = data?.status;
       const previousControl = workflowRunControls.get(taskId);
-      if (previousControl || (
-        status === 'running' && update.taskType === 'local_workflow' &&
-        !terminalBackgroundTaskIds.has(taskId) && continuationCancellationGeneration === null
-      )) {
+      const liveUpdate = status === 'running' &&
+        !terminalBackgroundTaskIds.has(taskId) && continuationCancellationGeneration === null;
+      if (previousControl || (liveUpdate && update.taskType === 'local_workflow')) {
         const stoppedAgentAttempts = previousControl?.stoppedAgentAttempts ?? new Map<string, number>();
         const projected = projectStoppedWorkflowAgents(update.workflowProgress, stoppedAgentAttempts);
         if (projected && projected !== update.workflowProgress) {
           update.workflowProgress = projected;
         }
-        if (status === 'running') {
-          workflowRunControls.set(taskId, {
-            update: {
-              ...previousControl?.update,
-              ...update,
-              workflowProgress: projected ?? previousControl?.update.workflowProgress,
-            },
-            stoppedAgentAttempts,
-          });
+        if (liveUpdate || (previousControl && status !== 'running')) {
+          const control = previousControl ?? { update, pendingStops: 0, stoppedAgentAttempts };
+          control.update = {
+            ...control.update,
+            ...update,
+            workflowProgress: projected ?? control.update.workflowProgress,
+          };
+          workflowRunControls.set(taskId, control);
         }
       }
       if (status === 'running') {
@@ -7770,31 +7775,41 @@ export class ClaudeCodeAgent extends BaseAgent {
         // task-notification("was stopped by user") 让主模型知道用户意图。
         // 不 interrupt 当前 turn,也不调用 Workflow 顶层的停止入口。
         const attempt = row.attempt ?? 1;
-        await q.stopTask(agentId);
-        if (closed) return;
-        const latest = workflowRunControls.get(workflowTaskId);
-        if (!latest) return;
-        const latestRow = latest.update.workflowProgress?.find(
-          (entry) => entry.type === 'workflow_agent' && entry.agentId === agentId,
-        );
-        // 自然完成先于停止确认到达时,完成保持优先;error/progress 则是停止在途
-        // 与 CLI 原生进度帧的常见竞态,按已接受的用户停止收口。
-        if (
-          !latestRow || (latestRow.attempt ?? 1) !== attempt ||
-          latestRow.state === 'done' || latestRow.state === 'completed'
-        ) return;
-        latest.stoppedAgentAttempts.set(agentId, attempt);
-        const projected = projectStoppedWorkflowAgents(
-          latest.update.workflowProgress,
-          latest.stoppedAgentAttempts,
-        );
-        if (!projected) return;
-        latest.update = { ...latest.update, workflowProgress: projected };
-        eventQueue.push({
-          type: 'agent_task_update',
-          data: { ...latest.update, workflowProgress: projected },
-          source: 'claude-code',
-        });
+        control.pendingStops++;
+        try {
+          await q.stopTask(agentId);
+          if (closed || workflowRunControls.get(workflowTaskId) !== control) return;
+          const latest = control;
+          const latestRow = latest.update.workflowProgress?.find(
+            (entry) => entry.type === 'workflow_agent' && entry.agentId === agentId,
+          );
+          // 自然完成先于停止确认到达时,完成保持优先;error/progress 则是停止在途
+          // 与 CLI 原生进度帧的常见竞态,按已接受的用户停止收口。
+          if (
+            !latestRow || (latestRow.attempt ?? 1) !== attempt ||
+            latestRow.state === 'done' || latestRow.state === 'completed'
+          ) return;
+          latest.stoppedAgentAttempts.set(agentId, attempt);
+          const projected = projectStoppedWorkflowAgents(
+            latest.update.workflowProgress,
+            latest.stoppedAgentAttempts,
+          );
+          if (!projected) return;
+          latest.update = { ...latest.update, workflowProgress: projected };
+          eventQueue.push({
+            type: 'agent_task_update',
+            data: { ...latest.update, workflowProgress: projected },
+            source: 'claude-code',
+          });
+        } finally {
+          control.pendingStops--;
+          if (
+            control.pendingStops === 0 && terminalBackgroundTaskIds.has(workflowTaskId) &&
+            workflowRunControls.get(workflowTaskId) === control
+          ) {
+            workflowRunControls.delete(workflowTaskId);
+          }
+        }
       },
 
       listBackgroundTasks() {

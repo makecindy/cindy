@@ -2807,7 +2807,40 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.close().catch(() => undefined);
   });
 
-  it('stopBackgroundTask success closes an awaiting continuation without a task notification', async () => {
+  // PR #12825 unit: a terminal Workflow frame may precede the last child's stop acknowledgment.
+  it.each([true, false])('settles the last Workflow Agent after the Workflow ends (accepted: %s)', async (accepted) => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+    await handle.send({ type: 'user', content: 'spawn workflow' });
+    stream.emit(taskStarted('wf-1', 'local_workflow'));
+    const row = { type: 'workflow_agent' as const, index: 0, agentId: 'agent-a', label: 'A' };
+    stream.emit(workflowProgress('wf-1', [{ ...row, state: 'progress' }]));
+    await waitFor(() => observedWorkflowRows(events)?.[0]?.state === 'progress', 'workflow row observed');
+
+    const stopped = createDeferred();
+    fakeQuery.stopTask!.mockImplementationOnce(() => stopped.promise);
+    const request = handle.stopWorkflowAgent!('wf-1', 'agent-a');
+    stream.emit(workflowProgress('wf-1', [{ ...row, state: 'error' }]));
+    stream.emit(taskNotification('wf-1', 'failed'));
+    await waitFor(() => (taskEvents(events).at(-1)?.data as AgentTaskUpdateEventData)?.status === 'failed', 'workflow terminal observed');
+
+    if (accepted) {
+      stopped.resolve();
+      await request;
+      await waitFor(() => observedWorkflowRows(events)?.[0]?.state === 'stopped', 'accepted stop observed on terminal workflow');
+      expect((taskEvents(events).at(-1)?.data as AgentTaskUpdateEventData)?.status).toBe('failed');
+    } else {
+      stopped.reject(new Error('stop failed'));
+      await expect(request).rejects.toThrow('stop failed');
+      expect(observedWorkflowRows(events)?.[0]?.state).not.toBe('stopped');
+    }
+    expect(handle.listBackgroundTasks?.()).toEqual([]);
+    await handle.stopWorkflowAgent!('wf-1', 'agent-a');
+    expect(fakeQuery.stopTask).toHaveBeenCalledExactlyOnceWith('agent-a');
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('stopBackgroundTask success an awaiting continuation without a task notification', async () => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream();
 
     await handle.send({ type: 'user', content: 'spawn background work' });
