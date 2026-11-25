@@ -308,6 +308,29 @@ describe('maker title IPC — 本机 / device-link 来源边界', () => {
     expect(h.generateTitleResult).not.toHaveBeenCalled();
   });
 
+  // Unit, #12692 / docs/plans/acp-plugin-bridge.md: AI rename of an active plugin engine task answered
+  // NOT_FOUND because the engine lookup dropped 'acp'. Minimal input: an active plugin engine task with
+  // text. It is named by the auxiliary chain alone: agentKind null means no built-in engine fallback.
+  it('AI 重命名插件引擎任务只走辅助模型，不借用内置引擎', async () => {
+    vi.mocked(getDbClient).mockReturnValue({
+      drizzle: {
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: async () => [{ agentKind: 'acp', status: 'active' }],
+            }),
+          }),
+        }),
+      },
+    } as unknown as ReturnType<typeof getDbClient>);
+
+    await expect(invokeRegenerate('plugin-task')).resolves.toEqual({ title: '任务标题' });
+    expect(h.generateTitleResult).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'plugin-task', agentKind: null }),
+      expect.anything(),
+    );
+  });
+
   it.each([
     ['unsupported-provider', 'TITLE_PROVIDER_UNSUPPORTED'],
     ['failed', 'INTERNAL'],

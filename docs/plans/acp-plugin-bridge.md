@@ -280,9 +280,9 @@ export interface PluginHarnessRegistry {
 
 ## 第一期明确不支持（遇到即明确拒绝，不回落到内置引擎）
 
-（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节。）分叉、回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、IM 渠道、共享任务、
-其他任务经 send_to_session 向插件引擎任务发消息、/learn 捕获、上下文溢出后的重放、Cindy 生成标题、
-Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
+（换引擎、定时任务与协同 Worker 已在第二期支持；分叉、侧聊与起名见「分叉、侧聊与起名」一节。）回退、移到另一台电脑或 SSH、
+插件引擎当协同 Lead、IM 渠道、共享任务、其他任务经 send_to_session 向插件引擎任务发消息、/learn 捕获、
+上下文溢出后的重放、Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
 
 伙伴的后续支持范围见[模型候选链](../product-rules/cindy-bots-runtime.md#5-模型候选链)。伙伴可以在设置中选择所在电脑的插件模型，主聊天按所选模型运行。
 
@@ -446,6 +446,26 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
   不会展开；可重复的说明留给下一条消息，切换引擎的交接同样顺延。
 - **代价**：只有以 `/` 开头的消息才在发送前读一次 Skill 清单（隔离、限时的扫描进程）；其他消息的发送路径不变。
   展开内容在当轮用户消息里，不进 system prompt。手机与自动化发来的 `/名字` 走同一发送路径，同样展开；手机输入框的列表本次未改。
+
+## 分叉、侧聊与起名（2026-11-25）
+
+用户要求插件引擎与内置引擎在任务里的体验一致（2026-11-25 用户决定）。插件引擎的原生历史归插件 Agent 所有，
+Cindy 不能复制或截断，所以这三项都只用 Cindy 自己的记录。
+
+- **分叉与侧聊**：目标消息所在的那一段跑在插件引擎上时（当前就在插件引擎上，或任务之后换走了，按换走时
+  `agent_switch` 边界的 `fromProviderId` / `fromModel` 找回是哪个引擎），子任务留在同一个插件引擎上：复制可见
+  历史，不开原生分叉（`sdk_session_id = null`），写一条待发送的交接（`context_rebuild`，
+  `reason = native-session-recovery`，`sourceAgentKind = acp`），子任务第一条消息启动全新会话并带上它。
+  在第一条消息上分叉时没有可交接的内容，不写空交接。目标在内置引擎的段落里时照旧原生分叉。
+  只限本机插件引擎：那一段跑在另一台电脑或收到的分享上时，分叉会绕过执行端对每个任务的准入，仍明确拒绝
+  （见[插件引擎协议记录](../dev-rules/protocol-compatibility/plugin-harnesses.md)「暂未开放」）。
+  实现见 `maker-orchestration/fork.ts`（`resolveForkNativeSource`），回归见 `__tests__/fork.test.ts`。
+  侧聊走同一条路径。`[Fork·已剥离]`（剥离加密思考块）只针对 Claude，仍拒绝。手机不需改动。
+- **起名**：自动起名、插件建的任务起名与「AI 重命名」都走辅助模型。辅助模型不可用时不借用任何内置引擎
+  兜底（以前普通任务按 Claude Code 读，会回落到 Claude 的一次性请求），标题保留用户原话的截断版；
+  「AI 重命名」此时提示生成失败。实现见 `maker-ipc/title.ts`、`maker-host/auxiliary-title-one-shot.ts`
+  （`agentKind: null` = 没有可兜底的内置引擎）。
+- **仍不支持回退**：回退要裁剪插件 Agent 自己的历史并回滚文件，界面不显示回退。
 
 ## 已知限制
 

@@ -879,8 +879,8 @@ export function UserMessage({
   // renderer 'cc' ↔ maker 'claude-code' 别名映射 (DB / Session 用 'cc', maker IPC 用 'claude-code')
   const makerKind: MakerAgentKind =
     agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
-  // 插件引擎任务(agent_kind = 'acp')不支持分叉与回退，也不读任何内置 Harness 的能力
-  // (docs/plans/acp-plugin-bridge.md)。
+  // 插件引擎任务(agent_kind = 'acp')不读任何内置 Harness 的能力。分叉由主进程从 Cindy 的记录交接；
+  // 回退要改动插件 Agent 自己的历史，仍不支持(docs/plans/acp-plugin-bridge.md)。
   const pluginEngineTask = isPluginEngineKind(agentKind);
   // device-link 远程会话:fork/rewind 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // 媒体来源(device/ssh)用于把附件/文件预览 URL 改写到 cindy-remote-media://(入方向媒体)。
@@ -898,7 +898,7 @@ export function UserMessage({
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
   const forkSupported =
-    !isRemote && !pluginEngineTask && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && (pluginEngineTask || !agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
     !isRemote && !pluginEngineTask &&
     (!agentKind || (capabilities?.rewind?.supported ?? true));

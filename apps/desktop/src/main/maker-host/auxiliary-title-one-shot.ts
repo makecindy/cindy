@@ -51,7 +51,8 @@ const DEFAULT_DEPS: AuxiliaryTitleRuntimeDeps = {
 
 type TitleRequest = {
   sessionId: string;
-  agentKind: AgentKind;
+  /** null = the task runs on a plugin engine: no built-in session agent to fall back to. */
+  agentKind: AgentKind | null;
   prompt: string;
   signal?: AbortSignal;
 };
@@ -60,7 +61,11 @@ export interface AuxiliaryTextRequest {
   source?: string;
   automaticTitle?: boolean;
   sessionId?: string;
-  agentKind: AgentKind;
+  /**
+   * The owning session's built-in agent, used only for the automatic-chain fallback. null = a plugin
+   * engine task (docs/plans/acp-plugin-bridge.md): its text never goes to an engine the user did not pick.
+   */
+  agentKind: AgentKind | null;
   prompt: string;
   maxTokens: number;
   timeoutMs: number;
@@ -102,9 +107,11 @@ export async function requestAuxiliaryText(
       && getEffectiveAuxiliaryModelChainSnapshot() === auxiliaryChainSnapshot
       && currentModels === snapshot;
   };
+  const sessionAgent = args.agentKind;
   // `route.model` 是 agent 实际选中的模型(Codex 默认模型在 thread/start 后才知道)。
   const beforeSessionAgentDispatch = async (route?: { model?: string }) =>
-    !(await isAgentOneShotRouteDisabled(args.agentKind, route?.model)) && await beforeDispatch();
+    sessionAgent !== null
+      && !(await isAgentOneShotRouteDisabled(sessionAgent, route?.model)) && await beforeDispatch();
   const result = await deps.requestText(args.prompt, {
     source: args.source, sessionId: args.sessionId, automaticTitle: args.automaticTitle,
     maxTokens: args.maxTokens,
@@ -124,12 +131,13 @@ export async function requestAuxiliaryText(
   // the automatic chain may use that same-agent fallback; custom and env
   // chains are explicit routing decisions and must remain fail-closed.
   const canFallbackToSessionAgent = args.sessionAgentFallback !== false
+    && sessionAgent !== null
     && auxiliaryChain.source === 'auto'
-    && agentSupportsOneShot(args.agentKind)
+    && agentSupportsOneShot(sessionAgent)
     && await beforeSessionAgentDispatch();
-  if (canFallbackToSessionAgent) {
+  if (canFallbackToSessionAgent && sessionAgent !== null) {
     try {
-      const fallbackText = await getMaker().oneShot(args.agentKind, args.prompt, {
+      const fallbackText = await getMaker().oneShot(sessionAgent, args.prompt, {
         source: args.source, sessionId: args.sessionId,
         maxTokens: args.maxTokens,
         timeoutMs: args.timeoutMs,

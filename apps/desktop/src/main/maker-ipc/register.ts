@@ -14403,7 +14403,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     void maker.getSessionMeta(taskId).then(meta => {
       if (!meta || !snapshot || snapshot !== getCurrentDbClientSnapshot()
         || revision !== pluginTaskAuthorizationRevision(pluginId) || !isPluginTaskAuthorized(pluginId)) return;
-      if (meta.agentKind !== 'acp') scheduleSessionAutoTitle({ sessionId: taskId, text, placeholderText, agentKind: meta.agentKind, isUserText: true });
+      // Plugin engine tasks are named by the auxiliary model only (sessionAutoTitle / title.ts).
+      scheduleSessionAutoTitle({ sessionId: taskId, text, placeholderText, agentKind: meta.agentKind, isUserText: true });
     }).catch(() => log.warn('Plugin task automatic naming could not be scheduled'));
   };
   setGhostAgentTurnRunner(createGhostAgentTurnRunner({

@@ -15,11 +15,11 @@
 
 import { ipcMain } from 'electron';
 import { activeOwnerScopeKey } from '../appSessionState.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, dbToMakerEngineKind } from '../../shared/agentKindConversion.js';
 import { eq } from 'drizzle-orm';
 
 import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import { AUTO_TITLE_MAX_CHARS } from '@cindy/maker-shared/session-title';
 
 import { getResolvedMainLocale } from '../i18n.desktop.js';
@@ -103,12 +103,20 @@ async function listConnectedProvidersForAgent(agentKind: AgentKind): Promise<Pro
 }
 
 /**
+ * 插件引擎任务(docs/plans/acp-plugin-bridge.md)与内置引擎一样用辅助模型起名，但辅助模型不可用时
+ * 不借用任何内置引擎兜底：用户的原话不送到他没选的引擎。null = 没有可兜底的内置引擎。
+ */
+function titleSessionAgent(agentKind: EngineKind): AgentKind | null {
+  return agentKind === 'acp' ? null : agentKind;
+}
+
+/**
  * 给某会话起标题。`sessionId` 用于读 DB 显式来源(race-free);空串 = 走 WYSIWYG 默认。
  * 失败统一返回 null(调用方回落启发式),不抛。
  */
 export async function generateMakerSessionTitle(
   message: string,
-  agentKind: AgentKind,
+  agentKind: EngineKind,
   sessionId?: string,
 ): Promise<string | null> {
   // 空消息(如仅图片/附件的首条输入)不发标题请求:LLM 收到空素材会把
@@ -118,7 +126,7 @@ export async function generateMakerSessionTitle(
   return generateTitleWithAuxiliaryModel(
     {
       sessionId: sessionId ?? '',
-      agentKind,
+      agentKind: titleSessionAgent(agentKind),
       prompt: buildAutoTitlePrompt(
         trimmed.slice(0, AUTO_TITLE_MESSAGE_SLICE),
         getResolvedMainLocale(),
@@ -133,8 +141,8 @@ export async function generateMakerSessionTitle(
 
 /** regenerate 的依赖注入面——单测用内存实现替换 DB / LLM 调用。 */
 export interface RegenerateTitleDeps {
-  /** 读会话 agentKind。会话不存在 → null(直接放弃)。 */
-  readSessionAgentKind: (sessionId: string) => Promise<AgentKind | null>;
+  /** 读会话引擎('acp' = 插件引擎)。会话不存在或已删除 → null(直接放弃)。 */
+  readSessionAgentKind: (sessionId: string) => Promise<EngineKind | null>;
   /** 素材包:对话开场 + 最近 limit 条非空消息(与 sessionTaskSummary 同可见性口径)。 */
   collectMaterial: (
     sessionId: string,
@@ -144,20 +152,19 @@ export interface RegenerateTitleDeps {
   /** 用给定 prompt 走 title oneShot 通道。 */
   generateTitle: (
     sessionId: string,
-    agentKind: AgentKind,
+    agentKind: EngineKind,
     prompt: string,
   ) => Promise<TitleOneShotResult>;
 }
 
-async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind | null> {
+async function readSessionAgentKindFromDb(sessionId: string): Promise<EngineKind | null> {
   const [row] = await getDbClient()
     .drizzle.select({ agentKind: sessions.agentKind, status: sessions.status })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
-  // Plugin-engine tasks have no built-in engine to generate titles with.
-  if (!row || row.status === 'deleted' || row.agentKind === 'acp') return null;
-  return dbToMakerAgentKind(row.agentKind);
+  if (!row || row.status === 'deleted') return null;
+  return dbToMakerEngineKind(row.agentKind);
 }
 
 const defaultRegenerateDeps: RegenerateTitleDeps = {
@@ -168,7 +175,7 @@ const defaultRegenerateDeps: RegenerateTitleDeps = {
     }),
   generateTitle: (sessionId, agentKind, prompt) =>
     generateTitleWithAuxiliaryModelResult(
-      { sessionId, agentKind, prompt },
+      { sessionId, agentKind: titleSessionAgent(agentKind), prompt },
       {
         readSessionProviderId: readSessionProviderIdFromDb,
         listConnectedProviders: listConnectedProvidersForAgent,
