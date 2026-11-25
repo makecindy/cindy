@@ -113,8 +113,6 @@ export function createCodexAccountUsageSnapshotReader(
   }
 
   return async (readOptions) => {
-    // Resolve credentials after the cache read so a disconnect during I/O takes effect before dispatch.
-    const cachedSnapshot = await deps.readCachedSnapshot();
     let credentials;
     try {
       credentials = await deps.readCredentials();
@@ -128,6 +126,8 @@ export function createCodexAccountUsageSnapshotReader(
       return null;
     }
     const { accessToken, accountId } = credentials;
+    const cachedSnapshot = await deps.readCachedSnapshot();
+    if (!await isRefreshStillCurrent(accessToken, accountId)) return null;
     const cachedAccountId = cachedSnapshot?.accountId ?? null;
     if (cachedSnapshot && (cachedAccountId !== accountId
       || (accountId === null && lastUnknownAccountSnapshotAccessToken !== accessToken))) {
