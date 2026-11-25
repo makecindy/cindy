@@ -31,10 +31,12 @@ const QUOTA_WAIT_MS = MODEL_GROUP_REMOTE_WAIT_MS;
  * 总览里只列了本机那份的，别的电脑上的来源按读不到额度处理。分享来的来源按运行位置 `share:<id>` 取那个分享
  * 开放给本账号的额度(分享者没开「允许查看剩余额度」或读不到时总览里没有它，按读不到处理)。
  */
-async function quotaWindows() {
+async function quotaWindows(options?: { cached?: boolean }) {
   const overview = getQuotaOverviewService();
   overview.lease(QUOTA_LEASE_MS);
-  const build = await overview.fresh(QUOTA_WAIT_MS);
+  // 总览里常有来源还没读全(刚启动、某个来源在刷新、有电脑离线)，这时等一份读全的会等满上限。
+  // 只为显示时不等：拿手头这份，同时照常催它重读，下一次就是新的。
+  const build = await overview.fresh(options?.cached ? 0 : QUOTA_WAIT_MS);
   const byProvider = new Map<string, (ModelGroupTraceQuota & { scopedTo?: string | null })[]>();
   for (const source of build?.input.sources ?? []) {
     if (source.kind !== 'subscription' || (source.device && source.lastSeenAtMs != null)) continue;

@@ -66,8 +66,9 @@ Object.assign(window, { overviewFixture: {
 void mountPage({
   host: (ctx) => ({ modelGroups: {
     decisions: async () => (ctx.data.empty === true ? [] : decisions),
-    resolve: async ({ selection }: { selection: ModelGroupSelection }) => {
-      calls.resolved.push(selection.id);
+    resolve: async ({ selection, cachedQuota }: { selection: ModelGroupSelection; cachedQuota?: boolean }) => {
+      // The map asks twice: readings on hand first, then the usual read. Only the first round is counted.
+      if (cachedQuota) calls.resolved.push(selection.id);
       const route = config.routes.find((item) => item.id === selection.id)!;
       return { outcome: 'routed', trace: route.candidates.map((candidate) => ({ ...candidate, modelName: candidate.model, sourceName: candidate.providerId,
         state: 'standby', why: 'expiring', quota: quotaOf(candidate) })) };

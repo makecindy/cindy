@@ -39,7 +39,7 @@ import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
  *     fetchProviderModels,additions-only 合并进配置(与 OAuth 动态发现同语义)。
  */
 
-import { Activity, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Activity, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
@@ -115,7 +115,6 @@ import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money'
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
-import { ModelGroupsSection } from './ModelGroupsSection';
 import { OpenSmartRoutingContext } from './RouteStrategyNote';
 import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from './SubscriptionAccountsSection';
 import { subscriptionAccountErrorKey } from './subscriptionAccountErrors';
@@ -197,6 +196,10 @@ import { providerGroupDeviceCount } from '../../../shared/providerGroup';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 import { isCustomRoutedProvider, isOrganizationManagedProvider, storedCustomProviderId } from '@cindy/model-providers';
+
+// 「智能路由」那一页点开才加载(与它还是单独一个设置页时一样)：它带着关系图、路由编辑和选模型面板一大串代码，
+// 跟着模型供应商页一起加载的话，打开模型供应商页要先等这些代码，「加载中」会多停一两秒。
+const ModelGroupsSection = lazy(() => import('./ModelGroupsSection').then(module => ({ default: module.ModelGroupsSection })));
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -2622,6 +2625,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
 } = {}) {
   const { t } = useTranslation();
   const openSmartRouting = useCallback(() => onRoutingChange?.(true), [onRoutingChange]);
+  const routingPaneRef = useRef<HTMLDivElement | null>(null);
   const reducedMotion = useReducedMotion();
   const signInToCindy = useSignInToCindy();
   const { dataOwnerId } = useAuth();
@@ -3913,8 +3917,11 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
             className="flex min-h-0 min-w-0 flex-1 flex-col"
           >
             {routing ? (
-              <div id="settings-panel-model-groups" data-testid="provider-routing-pane" className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-                <ModelGroupsSection />
+              <div ref={routingPaneRef} id="settings-panel-model-groups" data-testid="provider-routing-pane" className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                <Suspense fallback={<div role="status" className="py-1 text-13 leading-[1.5] text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
+                  {/* 滚动的是这一格：进出某条路由的详情时，回到列表要落在原来的位置。 */}
+                  <ModelGroupsSection scrollRef={routingPaneRef} />
+                </Suspense>
               </div>
             ) : selectedShare ? (
               <ProviderShareReceivedDetail share={selectedShare} />

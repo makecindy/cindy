@@ -54,6 +54,29 @@ describe('ModelGroupsOverview source quota', () => {
     await waitFor(() => expect(screen.getAllByText('97%')).toHaveLength(2));
     expect(resolve).toHaveBeenCalledWith({ selection: { type: 'route', id: 'r1' }, dryRun: true });
   });
+
+  // 2026-11-25 用户反馈：打开页面后余量要等两秒才出来。额度没读全时照常的解析会等满上限，
+  // 所以先要手头已有的读数立刻显示，再用照常读到的换掉。失效后果：余量每次都晚两秒出现，或被旧数盖回去。
+  it('shows the readings on hand at once and replaces them when the usual read arrives', async () => {
+    const trace = (used: number) => ({
+      outcome: 'routed', groupName: 'Dev', modelName: 'sol', sourceName: 'openai', route: SOL, why: 'order', quota: quota(used),
+      trace: [{ ...SOL, modelName: 'sol', sourceName: 'openai', state: 'picked', why: 'order', quota: quota(used) }],
+    }) as ModelGroupResolveResult;
+    let finishUsual: (value: ModelGroupResolveResult) => void = () => {};
+    const resolve = vi.fn((request: { cachedQuota?: boolean }) => (request.cachedQuota
+      ? Promise.resolve(trace(40))
+      : new Promise<ModelGroupResolveResult>((done) => { finishUsual = done; })));
+    Object.assign(window, { electronAPI: { modelGroups: { resolve, decisions: vi.fn().mockResolvedValue([]) } } });
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+
+    render(<ModelGroupsOverview config={config} onOpenRoute={vi.fn()} />);
+
+    expect(await screen.findByText('60%')).toBeTruthy();
+    expect(resolve).toHaveBeenCalledWith({ selection: { type: 'route', id: 'r1' }, dryRun: true, cachedQuota: true });
+    finishUsual(trace(10));
+    expect(await screen.findByText('90%')).toBeTruthy();
+    expect(screen.queryByText('60%')).toBeNull();
+  });
 });
 
 // Unit: the overview quota test does not navigate. Enter a route from a

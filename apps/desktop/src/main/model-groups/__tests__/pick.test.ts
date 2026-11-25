@@ -622,3 +622,24 @@ describe('auto switch setting', () => {
     expect(modelGroupAutoSwitchFor(config, { type: 'route', id: 'gone' })).toBe(false);
   });
 });
+
+// 2026-11-25 用户反馈(打开设置页，余量要晚两秒才出现) / unit：界面显示余量时请求带 cachedQuota，读额度那一步要被告知
+// 「用手头的读数，不等新的」；真正给任务选来源(不带)时不能带上它。真实入口：createModelGroupResolver().resolve。
+// 失效后果：显示每次都等满上限，或真选路改按旧读数选。最小输入：一条路由、一个来源。
+it('asks for the quota readings on hand only when the request is for display', async () => {
+  const groups = { routes: [{ id: 'r1', name: 'R', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'a', model: 'gpt' }] }] } as ModelGroupsConfig;
+  const view = {
+    id: 'a', name: 'a', source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+    models: { codex: [{ id: 'gpt', name: 'GPT', mode: 'chat', efforts: [] }] },
+  } as unknown as ProviderView;
+  const quotaWindows = vi.fn(async (_options?: { cached?: boolean }) => new Map<string, ModelGroupTraceQuota[]>());
+  const resolver = createModelGroupResolver({
+    config: () => groups, views: async () => [view], agents: () => ['codex'],
+    harnessInstalled: async () => true, quotaWindows, scope: () => 'owner', now: () => NOW,
+  });
+  const selection = { type: 'route', id: 'r1' } as const;
+  await resolver.resolve({ selection, dryRun: true, cachedQuota: true });
+  await resolver.resolve({ selection, dryRun: true });
+  await resolver.resolve({ selection });
+  expect(quotaWindows.mock.calls.map(([options]) => options?.cached === true)).toEqual([true, false, false]);
+});

@@ -99,6 +99,7 @@ export function registerModelGroupsIpc(): void {
     const request: ModelGroupResolveRequest = {
       selection,
       dryRun: value.dryRun === true,
+      ...(value.cachedQuota === true ? { cachedQuota: true } : {}),
       ...(context ? { context: {
         ...(context.hasImages === true ? { hasImages: true } : {}),
         ...(typeof context.effort === 'string' && /^[a-z]{1,32}$/.test(context.effort) ? { effort: context.effort } : {}),

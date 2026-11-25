@@ -51,7 +51,7 @@ export interface ModelGroupResolverDeps {
    * 各订阅来源当前的额度窗口，键是 modelGroupQuotaKey：本机的按供应商连接 ID，别的电脑上的再加那台的设备 id。
    * 本机连接的额度不会拿去给别的电脑上同 ID 的连接用。
    */
-  quotaWindows(): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
+  quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
   /**
    * 其他电脑与分享来的位置里此刻能选的那些(插件卡片的远程模型用的同一份名单)。只在路线里有不在本机的来源时读；
    * 没提供时这些来源一律不可用。
@@ -226,7 +226,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   }
 
   async function inspect(
-    route: ModelGroupRoute, views: ProviderView[], context?: ModelGroupResolveRequest['context'],
+    route: ModelGroupRoute, views: ProviderView[], context?: ModelGroupResolveRequest['context'], cachedQuota = false,
   ): Promise<ModelGroupCandidateFacts[]> {
     const agents = deps.agents();
     // 供应商路由展开出来的路由在选择器里是普通模型行：思考深度与 Fast 用用户在那里选的；路由自己设了思考深度时以它为准。
@@ -234,7 +234,8 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const wantedFast = route.parent ? context?.fastMode : undefined;
     // 远程读取与读额度同时进行，整体仍在额度等待的时限内。
     const remote = remoteReads(route);
-    const quota = await deps.quotaWindows().catch(() => new Map<string, never[]>());
+    // cachedQuota(只为显示)：用手头的读数，不等一份新的。
+    const quota = await deps.quotaWindows(cachedQuota ? { cached: true } : undefined).catch(() => new Map<string, never[]>());
     const pricing = route.strategy === 'cheapest' && deps.pricing ? await deps.pricing().catch(() => null) : null;
     const installed = new Map<string, boolean>();
     for (const candidate of route.candidates) {
@@ -308,7 +309,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     // 为另一台电脑跑 Agent 时只认允许被远程调用的连接：别的连接在这次选路里按没有连接处理。
     const remoteInvocable = (view: ProviderView) => (deps.remoteInvocable ? deps.remoteInvocable(view.id) : view.remoteInvocationEnabled === true);
     const views = request.remoteInvocableOnly ? allViews.filter(remoteInvocable) : allViews;
-    const facts = await inspect(route, views, request.context);
+    const facts = await inspect(route, views, request.context, request.cachedQuota === true);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
       weightCounters: countersFor(`${scope}\u0000${route.id}`, weightSignature(target.route)),

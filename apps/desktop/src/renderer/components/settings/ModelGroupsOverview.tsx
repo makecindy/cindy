@@ -133,7 +133,8 @@ function remainingFor(
 }
 
 /**
- * 打开总览时读一次各条路线每个来源此刻的额度：与「试一下」同一个只看不选的解析(不推进轮流、不记录)。
+ * 打开总览时读各条路线每个来源此刻的额度：与「试一下」同一个只看不选的解析(不推进轮流、不记录)。
+ * 读两遍：先要手头已有的读数(立刻回来，打开就有数)，再照常读一遍(额度没读全时最多等两秒)把数换成新的。
  * 只在路线或来源变了时重读，不轮询。
  */
 function useLiveSourceQuota(routes: readonly ModelGroupRoute[]): ReadonlyMap<string, ModelGroupTraceQuota | null> {
@@ -144,10 +145,14 @@ function useLiveSourceQuota(routes: readonly ModelGroupRoute[]): ReadonlyMap<str
   useEffect(() => {
     let cancelled = false;
     const ids = routesKey ? routesKey.split('\u0003').map((entry) => entry.split('\u0001')[0]) : [];
-    void Promise.all(ids.map((id) => window.electronAPI.modelGroups.resolve({ selection: { type: 'route', id }, dryRun: true })
+    let settled = false;
+    const read = (cachedQuota: boolean) => Promise.all(ids.map((id) => window.electronAPI.modelGroups
+      .resolve({ selection: { type: 'route', id }, dryRun: true, ...(cachedQuota ? { cachedQuota: true } : {}) })
       .catch((error: unknown) => { log.warn('model group source quota unavailable', error); return null; })))
       .then((results) => {
-        if (cancelled) return;
+        // 手头的读数晚于新读数回来时不盖掉新的。
+        if (cancelled || (cachedQuota && settled)) return;
+        if (!cachedQuota) settled = true;
         const next = new Map<string, ModelGroupTraceQuota | null>();
         for (const result of results) {
           for (const entry of result?.trace ?? []) {
@@ -155,8 +160,16 @@ function useLiveSourceQuota(routes: readonly ModelGroupRoute[]): ReadonlyMap<str
             if (!next.get(key)) next.set(key, entry.quota ?? null);
           }
         }
-        setLive(next);
+        // 新读数里读不到的来源，沿用手头那份里有的：不让已经显示的数又消失。
+        setLive((previous) => {
+          if (cachedQuota) return next;
+          const merged = new Map(previous);
+          for (const [key, value] of next) if (value || !merged.get(key)) merged.set(key, value);
+          return merged;
+        });
       });
+    void read(true);
+    void read(false);
     return () => { cancelled = true; };
   }, [routesKey]);
   return live;
