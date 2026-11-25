@@ -15650,6 +15650,7 @@
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
       "piRetryHistoryTooLarge": "Your message was not sent. Pi could not read the history needed to retry after a frame exceeded the local 16 MiB limit. You can continue in a new task.",
       "messageNotSent": "Your message was not sent.",
+      "upstreamEmpty550": "The model service returned HTTP 550 with an empty response",
       "replyFailed": "Could not complete the reply",
       "queuedSendRecovery": "Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.",
       "retryTitle": "Resend the last message",

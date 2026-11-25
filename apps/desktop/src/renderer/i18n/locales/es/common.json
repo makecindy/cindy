@@ -15749,6 +15749,7 @@
       "requestFormatError": "La aplicación envió una solicitud no válida, por lo que no se pudo completar esta respuesta.",
       "piRetryHistoryTooLarge": "Tu mensaje no se envió. Al leer el historial para reintentar, Pi encontró una trama que superaba el límite local de 16 MiB. Puedes continuar en una tarea nueva.",
       "messageNotSent": "Tu mensaje no se envió.",
+      "upstreamEmpty550": "El servicio del modelo devolvió HTTP 550 con una respuesta vacía",
       "replyFailed": "No se pudo completar la respuesta",
       "queuedSendRecovery": "Tu mensaje no se envió. Selecciona «Reintentar» para enviarlo tal cual. Si envías un mensaje nuevo, reemplazará al anterior.",
       "retryTitle": "Reenviar el último mensaje",

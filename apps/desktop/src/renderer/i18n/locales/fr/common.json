@@ -15749,6 +15749,7 @@
       "requestFormatError": "L'application a envoyé une requête non valide : cette réponse n'a donc pas pu aboutir.",
       "piRetryHistoryTooLarge": "Message non envoyé. En lisant l’historique nécessaire au nouvel essai, Pi a rencontré une trame dépassant la limite locale de 16 MiB. Vous pouvez continuer dans une nouvelle tâche.",
       "messageNotSent": "Message non envoyé.",
+      "upstreamEmpty550": "Le service du modèle a renvoyé HTTP 550 avec une réponse vide",
       "replyFailed": "Impossible de terminer la réponse",
       "queuedSendRecovery": "Ton message n’a pas été envoyé. Sélectionne « Réessayer » pour le renvoyer tel quel. Si tu envoies un nouveau message, il remplacera le précédent.",
       "retryTitle": "Renvoyer le dernier message",

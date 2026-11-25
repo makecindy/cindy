@@ -15575,6 +15575,7 @@
       "requestFormatError": "應用程式所發請求格式有謬，此答未能竟。",
       "piRetryHistoryTooLarge": "此信未發。Pi 讀取舊錄以重試時，一幀逾本機 16 MiB 之限。可另啟任務。",
       "messageNotSent": "此信未發。",
+      "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前訊未遣。點「再試」可依原樣遣發。若遣新訊，則取代前訊。",
       "retryTitle": "再遣末一訊",
