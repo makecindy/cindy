@@ -3227,6 +3227,17 @@ struct DetailPage: View {
               }
               .padding(.horizontal, 14)
             }
+            // Top-level facts start with the pooled ones in group order; the rest (device, balance,
+            // account) are not part of a pool and follow below the pools.
+            let rest = Array(detail.facts.dropFirst(groups.reduce(0) { $0 + $1.facts.count }))
+            if !rest.isEmpty {
+              LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(rest, id: \.self) { fact in
+                  FactCard(fact: fact)
+                }
+              }
+              .padding(EdgeInsets(top: 14, leading: 14, bottom: 0, trailing: 14))
+            }
           }
           .padding(.bottom, 14)
         } else {

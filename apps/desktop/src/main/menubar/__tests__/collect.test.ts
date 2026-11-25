@@ -267,9 +267,12 @@ describe('collectMenubarInputs', () => {
     ]);
     expect(detail).toMatchObject({ plan: 'Ultra', bigValue: '71', bigUnit: '%', bigCompact: true,
       sayPrimary: 'Claude/GPT 5-hour is lowest; ', saySecondary: `refills ${detail.groups![1]!.facts[0]!.value}.` });
-    for (const key of ['rings', 'legend', 'facts'] as const) {
+    for (const key of ['rings', 'legend'] as const) {
       expect(detail[key]).toEqual([...detail.groups![0]![key], ...detail.groups![1]![key]]);
     }
+    const labels = ['Gemini 5-hour resets', 'Gemini Weekly resets', 'Claude/GPT 5-hour resets', 'Claude/GPT Weekly resets'];
+    const groupedFacts = detail.groups!.flatMap(group => group.facts);
+    expect(detail.facts).toEqual(groupedFacts.map((fact, index) => ({ ...fact, label: labels[index] })));
   });
 
   it('falls back to the 5-hour GLM quota if weekly resets during collection', async () => {

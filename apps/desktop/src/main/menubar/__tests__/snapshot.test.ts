@@ -650,6 +650,7 @@ describe('plugin engine menubar and widget projection', () => {
     const window = (group: string, label: string, windowMinutes: number) =>
       ({ group, label, windowMinutes, kind: 'custom' as const, usedPercent: 20, resetsAtMs: NOW + HOUR });
     const source = codex('source', 0, { family: 'plugin', balances: [{ currency: 'USD', amount: 5 }],
+      device: { id: 'peer', name: 'MacBook Pro' },
       windows: [window('First', 'First · monthly', 0), window('Second', 'Custom', 0),
         window('First', 'Week', 10_080), window('Second', 'Session', 300)] });
     const detail = buildMenubarView(input([source])).details.source;
@@ -660,9 +661,15 @@ describe('plugin engine menubar and widget projection', () => {
     expect(first.facts.map(fact => fact.label)).toEqual(['Weekly resets', 'monthly resets']);
     expect(second.legend.map(entry => entry.label)).toEqual(['Second 5-hour 80%', 'Second Custom 80%']);
     expect(second.facts.map(fact => fact.label)).toEqual(['5-hour resets', 'Custom resets']);
-    const amount = expect.objectContaining({ value: '$5.00' });
-    expect(detail.facts).toContainEqual(amount);
-    expect(first.facts.concat(second.facts)).not.toContainEqual(amount);
+    // Swift skips exactly these top-level reset facts before drawing the account-wide tiles.
+    const labels = ['First Weekly resets', 'First monthly resets', 'Second 5-hour resets', 'Second Custom resets'];
+    const pooled = [...first.facts, ...second.facts];
+    expect(detail.facts.slice(0, pooled.length)).toEqual(pooled.map((fact, i) => ({ ...fact, label: labels[i] })));
+    expect(detail.facts.slice(pooled.length)).toEqual([
+      expect.objectContaining({ label: 'Balance', value: '$5.00' }),
+      expect.objectContaining({ label: 'Computer', value: 'MacBook Pro' }),
+      expect.objectContaining({ label: 'Account' }),
+    ]);
   });
 
   it('renders a balance-only plugin engine as a filled tube and keeps it in widgets and low-quota checks', () => {

@@ -983,7 +983,7 @@ class Builder {
     return window.windowMinutes === 10_080 ? this.t('window.weekShort') : this.poolWindowLabel(window);
   }
 
-  private poolGroups(windows: WindowState[]): MenubarRingGroup[] | undefined {
+  private poolGroups(windows: WindowState[]): { groups: MenubarRingGroup[]; facts: MenubarFact[] } | undefined {
     if (windows.length < 2 || windows.length > 4) return undefined;
     const pools = new Map<string, WindowState[]>();
     for (const state of windows) {
@@ -994,7 +994,11 @@ class Builder {
       else pools.set(title, [state]);
     }
     if (pools.size !== 2 || [...pools.values()].some(pool => pool.length > 2)) return undefined;
-    return Array.from(pools, ([title, members], poolIndex) => {
+    // The first N top-level facts correspond to all grouped facts in group order.
+    // Windows needs the pool name in each label; macOS shows it in the group heading.
+    // Account-wide facts follow these N entries on both platforms.
+    const topLevelFacts: MenubarFact[] = [];
+    const groups = Array.from(pools, ([title, members], poolIndex) => {
       const colors: [MenubarColor, MenubarColor] = poolIndex === 0 ? ['poolBlue', 'poolBlue2'] : ['poolRed', 'poolRed2'];
       const short = members[0]!.window.groupShort ?? title;
       const longestFirst = [...members].sort((a, b) => b.window.windowMinutes - a.window.windowMinutes);
@@ -1005,14 +1009,17 @@ class Builder {
       }));
       const facts = members.filter(({ window }) => window.resetsAtMs !== null)
         .sort((a, b) => (a.window.windowMinutes || Infinity) - (b.window.windowMinutes || Infinity))
-        .map(({ window, leftMs }) => ({
-          label: this.t('fact.windowResets', { window: this.poolWindowLabel(window) }),
-          value: this.at(window.resetsAtMs!),
-          sub: this.t('fact.timeLeft', { duration: this.duration(leftMs) }),
-        }));
+        .map(({ window, leftMs }) => {
+          const label = this.poolWindowLabel(window);
+          const value = this.at(window.resetsAtMs!);
+          const sub = this.t('fact.timeLeft', { duration: this.duration(leftMs) });
+          topLevelFacts.push({ label: this.t('fact.windowResets', { window: `${short} ${label}` }), value, sub });
+          return { label: this.t('fact.windowResets', { window: label }), value, sub };
+        });
       return { title, rings, bigValue: String(Math.round(tightest.remaining)), bigUnit: '%',
         bigCaption: this.t('detail.windowLeft', { window: this.poolWindowLabel(tightest.window) }), legend, facts };
     });
+    return { groups, facts: topLevelFacts };
   }
 
   private subscriptionDetail(source: MenubarSubscriptionInput): MenubarDetail {
@@ -1083,7 +1090,8 @@ class Builder {
     const colors = FAMILY_COLORS[source.family];
     const multi = state.windows.length > 1;
     const limits = state.windows.filter((window) => window.window.kind !== 'scoped');
-    const groups = source.family === 'plugin' ? this.poolGroups(limits) : undefined;
+    const pooled = source.family === 'plugin' ? this.poolGroups(limits) : undefined;
+    const groups = pooled?.groups;
     const ringColor = levelColor(level) ?? colors[0]!;
     const rings = groups?.flatMap(group => group.rings) ?? (multi
       ? state.windows.map((window, index) => ({
@@ -1139,7 +1147,7 @@ class Builder {
       sayPrimary = this.t('say.onPace');
       saySecondary = refreshList ? this.t('headline.sentence', { text: refreshList }) : null;
     }
-    const facts: MenubarFact[] = groups?.flatMap(group => group.facts) ?? [];
+    const facts: MenubarFact[] = pooled?.facts ?? [];
     if (!groups) {
       for (const window of limits) {
         if (window.window.resetsAtMs === null) continue;
