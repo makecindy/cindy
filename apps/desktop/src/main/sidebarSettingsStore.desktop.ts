@@ -24,6 +24,9 @@ import type {
   SidebarMainViewHiddenWriteRequest,
 } from '../shared/sidebarSettings.js';
 export {
+  commitHostSidebarHidden,
+  inspectHostSidebarSettings,
+  inspectSidebarSettings,
   loadSidebarSettingsSnapshot,
   restoreLocalProjectVisibility,
   setLocalProjectHidden,
