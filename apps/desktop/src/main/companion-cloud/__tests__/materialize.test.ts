@@ -396,6 +396,41 @@ describe('materializeCompanion', () => {
     expect(local.host.createProfile).not.toHaveBeenCalled();
   });
 
+  // 2026-11-25 resilient explicit take-over: when allowed without a cloud profile snapshot,
+  // rebuild from default/local profile data, keep synced memories & history, skip failing secondary
+  // items without marking them local (so cloud originals are never tombstoned), and record notices.
+  it('completes resilient take-over without a cloud profile snapshot, tolerating partial content failures and missing models', async () => {
+    const { api } = cloud([
+      { key: 'companion.memory.v1:user_ok.md', value: { filename: 'user_ok.md', content: 'ok' } },
+      { key: 'companion.memory.v1:user_bad.md', value: { filename: 'user_bad.md', content: 'bad' } },
+    ], [roomMessage('m1', 1, 'human', 'saved msg', 1_700_000_000_000)]);
+    const local = fakeLocal({
+      restoreMemory: vi.fn(async (_bot: string, filename: string, raw: string) => {
+        if (filename === 'user_bad.md') throw new Error('EBUSY');
+        local.memories.set(filename, raw);
+      }),
+      ensureCanonicalSession: vi.fn(async (_bot, _fence, opts) =>
+        opts?.allowMissingModel ? { sessionId: 'session-1', missingModel: true } : 'session-1'),
+    });
+    const log = { warn: vi.fn(), info: vi.fn() };
+    const { state } = memoryState();
+    const result = await materializeCompanion({
+      api, state, host: local.host,
+      actor: { id: 'actor-cindy', externalId: 'cindy-default', name: 'Cindy', avatar: null },
+      roomId: async () => ROOM, log, allowMissingProfile: true, resilient: true,
+    });
+    expect(result.created).toBe(true);
+    expect(result.inserted).toBe(1);
+    expect(result.notices).toEqual(expect.arrayContaining(['permissions', 'partial_content', 'model_setup']));
+    expect(state.bot('cindy-default')?.demoted).toBeUndefined();
+    expect(state.bot('cindy-default')?.prefs['companion.memory.v1:user_ok.md']?.local).toBe(true);
+    expect(state.bot('cindy-default')?.prefs['companion.memory.v1:user_bad.md']).toBeUndefined();
+    expect(state.bot('cindy-default')?.prefs['companion.profile.v1']).toBeUndefined();
+    expect(local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'cindy-default', templateId: 'cindy', fallbackOnTransient: true,
+    }), expect.anything());
+  });
+
   it('seeds the mirror cursor at the newest own row even under many newer imported history rows', async () => {
     const room = Array.from({ length: 60 }, (_, i) => roomMessage(`m${i}`, i + 1, i % 2 ? 'actor-1' : 'human', `cloud ${i}`, 1_700_000_100_000 + i * 1000));
     const { api } = cloud([profilePref], room);

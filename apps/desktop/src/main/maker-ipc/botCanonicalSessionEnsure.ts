@@ -6,7 +6,7 @@ import { botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
 import { resolveBotCanonicalSession } from './botCanonicalSessionRegistry.js';
 
 export type EnsureBotCanonicalSessionResult =
-  | { ok: true; sessionId: string }
+  | { ok: true; sessionId: string; missingModel?: boolean }
   | { ok: false; errorCode: string; message: string };
 
 /**
@@ -16,7 +16,7 @@ export type EnsureBotCanonicalSessionResult =
  */
 export async function ensureBotCanonicalSession(
   botId: string,
-  opts: { beforeRecovery?: () => Promise<void>; onCreated?: (sessionId: string) => void } = {},
+  opts: { beforeRecovery?: () => Promise<void>; onCreated?: (sessionId: string) => void; allowMissingModel?: boolean } = {},
 ): Promise<EnsureBotCanonicalSessionResult> {
   const db = getDbClient().drizzle;
   const [profile] = await db
@@ -27,10 +27,11 @@ export async function ensureBotCanonicalSession(
   if (!profile || profile.status !== 'active') {
     return { ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: '目标伙伴已暂停或归档' };
   }
-  const { beforeRecovery, onCreated } = opts;
+  const { beforeRecovery, onCreated, allowMissingModel } = opts;
   await beforeRecovery?.();
   const registered = await resolveBotCanonicalSession(profile.id);
   let expected = registered.status === 'resolved' ? registered.sessionId : null;
+  let missingModel = false;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (expected) {
       const [current] = await db
@@ -41,7 +42,7 @@ export async function ensureBotCanonicalSession(
         .limit(1);
       if (current?.status === 'active' && current.source === 'bot'
         && current.botId === profile.id && current.role === 'canonical') {
-        return { ok: true, sessionId: expected };
+        return { ok: true, sessionId: expected, ...(missingModel ? { missingModel: true } : {}) };
       }
     }
     await beforeRecovery?.();
@@ -50,7 +51,8 @@ export async function ensureBotCanonicalSession(
       botId: profile.id,
       expectedCanonicalSessionId: expected,
       expectedProfileVersion: profile.currentVersion,
-    }, beforeRecovery);
+    }, beforeRecovery, allowMissingModel ? { allowMissingModel: true } : undefined);
+    if (created.missingModel) missingModel = true;
     if (created.created) onCreated?.(created.canonicalSessionId);
     expected = created.canonicalSessionId;
   }

@@ -9,9 +9,11 @@
 import type { CompanionMirrorCursor, CompanionMirrorRow } from './mirror.js';
 import { correctedProfile, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
 import { validateCompanionProfileSources } from '../../shared/botProfileSources.js';
+import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../shared/botTemplatePreset.js';
 import { COMPANION_HISTORY_CLIENT_PREFIX } from './mirror.js';
 import { parseCompanionCapabilities, type CompanionArrivalNotice, type CompanionCapabilitiesValue } from './capabilities.js';
 import { directRoomSourceId } from './directRoom.js';
+import { isCindyCompanion } from './merge.js';
 import { readAllRoomMessages } from './room.js';
 import type { BotSkillFile } from '../maker-ipc/botSkillFiles.js';
 import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
@@ -45,6 +47,8 @@ export interface CompanionMaterializeHost {
     id: string; name: string; description: string; identitySource: string; userContextSource: string; avatar: string | null;
     /** The preset the companion was made from (the cloud profile's `templateId`). */
     templateId?: string;
+    /** Explicit take-over falls back to a local-only default avatar on transient download failures. */
+    fallbackOnTransient?: boolean;
   }, fence: CompanionWriteFence) => Promise<void>;
   /**
    * Also makes the profile active again. Undefined fields stay unchanged; a restored cloud avatar
@@ -53,6 +57,7 @@ export interface CompanionMaterializeHost {
   updateProfile: (input: {
     id: string; name: string; description?: string; identitySource?: string; userContextSource?: string; avatar: string | null;
     templateId?: string;
+    fallbackOnTransient?: boolean;
   }, fence: CompanionWriteFence) => Promise<void>;
   /**
    * Apply the companion's portable capability setup (capabilities.ts): references stay even when
@@ -107,7 +112,11 @@ export interface CompanionMaterializeHost {
    * like a local upgrade carries them. Teammates no longer keep todos.
    */
   applyLegacyTodos?: (botId: string, todos: unknown[], fence: CompanionWriteFence) => Promise<void>;
-  ensureCanonicalSession: (botId: string, fence: CompanionWriteFence) => Promise<string>;
+  ensureCanonicalSession: (
+    botId: string,
+    fence: CompanionWriteFence,
+    options?: { allowMissingModel?: boolean },
+  ) => Promise<string | { sessionId: string; missingModel?: boolean }>;
   /**
    * Local rows created at or after `fromMs`, including rewound and deleted ones (`removed`):
    * dedupe against mirrored, delivered and deliberately removed messages.
@@ -176,6 +185,10 @@ export async function materializeCompanion(input: {
   /** Publish the demotion (send guard, routines, lists) before the first local write. */
   onDemoted?: () => void;
   correction?: ProfileCorrection;
+  /** Explicit recovery when the cloud has no profile snapshot (same-device reinstall or user confirmed). */
+  allowMissingProfile?: boolean;
+  /** Explicit user take-over: degrade non-critical content/avatar/model gaps instead of staying locked demoted. */
+  resilient?: boolean;
   /** Brings the room's files along with the history; without it only their names come. */
   download?: CompanionRoomDownload;
 }): Promise<CompanionMaterializeResult> {
@@ -219,15 +232,18 @@ export async function materializeCompanion(input: {
   state.update(botId, actor.id, entry => { entry.demoted = true; });
   input.onDemoted?.();
   // Without the home's profile snapshot this copy's own (or empty) profile would be published as
-  // the companion's identity: wait (demoted, retried) until the home has uploaded one.
-  if (!profile) throw new Error('PROFILE_SNAPSHOT_MISSING');
-  if (input.correction && profileRowForRepair) profile = correctedProfile(profileRowForRepair, input.correction);
-  validateCompanionProfileSources(profile);
-  const templateId = text(record(profile)?.templateId);
+  // the companion's identity: wait (demoted, retried) until the home has uploaded one, unless
+  // explicit recovery allowed rebuilding from initial/local profile data.
+  const missingProfileFallback = !profile && input.allowMissingProfile === true;
+  if (!profile && !missingProfileFallback) throw new Error('PROFILE_SNAPSHOT_MISSING');
+  if (profile && input.correction && profileRowForRepair) profile = correctedProfile(profileRowForRepair, input.correction);
+  if (profile) validateCompanionProfileSources(profile);
+  const inferredCindy = missingProfileFallback && isCindyCompanion(botId, null);
+  const templateId = profile ? text(record(profile)?.templateId) : (inferredCindy ? 'cindy' : undefined);
   // The cloud externalId is the only reusable local identity. Another Cindy (even one with
   // the same name) must not be overwritten, re-keyed or silently merged into this actor.
   await assertCompanionIdentity(host, botId, templateId, fence);
-  if (input.correction) {
+  if (input.correction && profile) {
     if (!host.backupProfileSource) throw new CompanionProfileRepairError('backup');
     try { await step(() => host.backupProfileSource!(botId, profileValue, fence)); }
     catch (error) {
@@ -244,16 +260,24 @@ export async function materializeCompanion(input: {
     state.update(botId, actor.id, entry => { entry.backedUp = true; });
   }
   const name = text(profile?.name)?.trim() || actor.name || local?.displayName || '伙伴';
+  const fallbackOnTransient = input.resilient === true;
+  const restoredAvatar = actor.avatar ?? (inferredCindy ? BOT_TEMPLATE_PRESET_AVATARS.cindy : null);
   if (!local) {
     await step(() => host.createProfile({ id: botId, name, description: text(profile?.description) ?? '',
-      identitySource: text(profile?.soul) ?? '', userContextSource: text(profile?.user) ?? '', avatar: actor.avatar,
-      ...(templateId ? { templateId } : {}) }, fence));
+      identitySource: profile ? (text(profile.soul) ?? '') : (inferredCindy ? CINDY_DEFAULT_IDENTITY : ''),
+      userContextSource: text(profile?.user) ?? '', avatar: restoredAvatar,
+      ...(templateId ? { templateId } : {}), ...(fallbackOnTransient ? { fallbackOnTransient: true } : {}) }, fence));
     // From here the copy exists, so a retry no longer sees it as new: remember the permission reset now.
     state.update(botId, actor.id, entry => { entry.arrivalNotices = [...new Set([...(entry.arrivalNotices ?? []), 'permissions' as const])]; });
   } else {
-    await step(() => host.updateProfile({ id: botId, name, description: text(profile?.description),
-      identitySource: text(profile?.soul), userContextSource: text(profile?.user), avatar: actor.avatar,
-      ...(templateId ? { templateId } : {}) }, fence));
+    await step(() => host.updateProfile({ id: botId, name,
+      ...(profile ? {
+        description: text(profile.description),
+        identitySource: text(profile.soul),
+        userContextSource: text(profile.user),
+      } : {}),
+      avatar: restoredAvatar,
+      ...(templateId ? { templateId } : {}), ...(fallbackOnTransient ? { fallbackOnTransient: true } : {}) }, fence));
   }
   const systemPrompt = text(profile?.systemPrompt);
   if (systemPrompt !== undefined) await step(() => host.writeSystemPrompt(botId, systemPrompt, fence));
@@ -406,16 +430,25 @@ export async function materializeCompanion(input: {
   }
 
   if (failures > 0) {
-    // Keep what was restored (so the retry does not back the copy up again) and stay demoted.
-    state.update(botId, actor.id, entry => {
-      for (const [key, value] of applied) remember(entry, key, value);
-      // The copy now exists: the retry no longer sees it as new, so remember what it could not keep.
-      if (notices.length) entry.arrivalNotices = notices;
-    });
-    throw new Error('RESTORE_INCOMPLETE');
+    if (!input.resilient) {
+      // Keep what was restored (so the retry does not back the copy up again) and stay demoted.
+      state.update(botId, actor.id, entry => {
+        for (const [key, value] of applied) remember(entry, key, value);
+        // The copy now exists: the retry no longer sees it as new, so remember what it could not keep.
+        if (notices.length) entry.arrivalNotices = notices;
+      });
+      throw new Error('RESTORE_INCOMPLETE');
+    }
+    // Failed items were not recorded in `applied`, so the uploader never tombstones their cloud originals.
+    if (!notices.includes('partial_content')) notices.push('partial_content');
   }
 
-  const sessionId = await step(() => host.ensureCanonicalSession(botId, fence));
+  const ensured = await step(() => host.ensureCanonicalSession(botId, fence,
+    input.resilient ? { allowMissingModel: true } : undefined));
+  const sessionId = typeof ensured === 'string' ? ensured : ensured.sessionId;
+  if (typeof ensured === 'object' && ensured.missingModel && !notices.includes('model_setup')) {
+    notices.push('model_setup');
+  }
   const roomId = await step(() => input.roomId());
   const inserted = await importCloudHistory({ api, host, sessionId, botActorId: actor.id, roomId, fence,
     ...(input.download ? { download: input.download } : {}), ...(log ? { log } : {}) });

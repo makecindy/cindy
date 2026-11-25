@@ -58,7 +58,7 @@ const bot = z.object({
    * What the last take-over could not keep of the old setup (cloud-companions.md §2): shown once
    * after the move, then cleared by the owner.
    */
-  arrivalNotices: z.array(z.enum(['permissions', 'model'])).optional(),
+  arrivalNotices: z.array(z.enum(['permissions', 'model', 'model_setup', 'partial_content'])).optional(),
   /** Room file holding each skill file's content (by sha256), so unchanged files are not sent again. */
   skillFileMedia: z.record(z.string(), z.string()).optional(),
   /** Skill files the cloud does not have, learned at take-over; passed on until this computer has them. */
