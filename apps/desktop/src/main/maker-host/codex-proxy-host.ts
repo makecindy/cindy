@@ -136,6 +136,7 @@ import type { CodexSubagentRouteSnapshot } from './codex-subagent-config.js';
 import { getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed } from './session-provider-store.js';
 import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
 import { captureGuestRequestUsage, guestProviderModelDenial, guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel } from './guest-provider-route-store.js';
+import { getSessionSubscriptionAccount } from '../subscription-accounts/session.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { xaiServerSideTools } from './xai-server-side-tools.js';
@@ -2809,7 +2810,18 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'sc
   frozenAuthInjection?: CodexProxyAuthInjection,
   guestSessionId?: string,
   frozenRoutes?: readonly CodexCustomProviderRoute[],
+  account = getSessionSubscriptionAccount(guestSessionId),
 ): (body: unknown, ctx: RequestTransformCtx) => Promise<RoutingDecision | null | undefined> {
+  // The native engine supplies the bearer from this lease. A proxy from an
+  // earlier run of the same task must stop as soon as its lease is replaced.
+  const leaseIsCurrent = (): boolean => {
+    try {
+      return !!guestSessionId && account?.sharedProviderId === providerId
+        && getSessionSubscriptionAccount(guestSessionId) === account
+        && guestProviderRouteForSession(guestSessionId)?.providerId === providerId
+        && getSessionProvider(guestSessionId) === providerId;
+    } catch { return false; }
+  };
   return async (body, ctx) => {
     const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
     const requestSessionId = sessionIdFromHeaders(ctx.headers);
@@ -2818,6 +2830,9 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'sc
     if (guestSessionId && ((requestSessionId && requestSessionId !== guestSessionId)
       || guestProviderRouteForSession(guestSessionId)?.providerId !== providerId
       || getSessionProvider(guestSessionId) !== providerId)) return codexGuestRouteRefusal();
+    const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
+    if (account?.sharedProviderId && (authInjection !== 'oauth-bearer' || !leaseIsCurrent()))
+      return codexGuestRouteRefusal();
     const sessionId = requestSessionId ?? guestSessionId;
     const customPath = parseCodexCustomProviderPath(ctx.url);
     if (customPath.kind === 'route' && customPath.pathKind === 'images') {
@@ -2833,8 +2848,7 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'sc
       ? reviewerModelBySession.get(sessionId)
       : undefined;
     if (!await guestProviderModelAllowed(providerId, reviewerModel ?? requestModel, sessionId)) return codexGuestRouteRefusal(sessionId, reviewerModel ?? requestModel, 'model');
-    if (parseCodexCustomProviderPath(ctx.url).kind !== 'not-custom-provider-route') return undefined;
-    const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
+    if (customPath.kind !== 'not-custom-provider-route') return undefined;
     if (ctx.url.split('?', 1)[0]?.endsWith('/responses')) {
       const effectiveModel = providerAwareGuardianReviewerModel(body, ctx.headers, authInjection) ?? requestModel;
       if (effectiveModel !== requestModel && !await guestProviderModelAllowed(providerId, effectiveModel, sessionId)) return codexGuestRouteRefusal(sessionId, effectiveModel, 'model');
@@ -2842,6 +2856,11 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'sc
         ? isOpenAiSubscriptionProviderId(providerId)
         : await guestProviderOffersModel(providerId, 'codex', effectiveModel, sessionId ?? undefined);
       if (!offered) return codexGuestRouteRefusal(sessionId, effectiveModel, 'model');
+    }
+    if (account?.sharedProviderId) {
+      return leaseIsCurrent()
+        ? { upstreamOverride: CODEX_OAUTH_UPSTREAM, dispatchGenerationValid: leaseIsCurrent }
+        : codexGuestRouteRefusal();
     }
     if (requestSessionId) {
       return guestProviderRouteForSession(requestSessionId)?.providerId === providerId
@@ -3701,7 +3720,8 @@ async function createCodexProxyHandle(
   const modelRoute = createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, () => alive,
     ctx => { crossProviderRequests.add(ctx.headers); }, guestSessionId);
   // 供应商分享受邀者的任务：先过受邀者守门，只经分享的那一个供应商出站。
-  const guestGuard = guestProviderId ? createCodexGuestRoutingGuard(guestProviderId, frozenAuthInjection, guestSessionId, frozenCustomProviderRoutes) : undefined;
+  const guestAccount = guestProviderId ? getSessionSubscriptionAccount(guestSessionId) : undefined;
+  const guestGuard = guestProviderId ? createCodexGuestRoutingGuard(guestProviderId, frozenAuthInjection, guestSessionId, frozenCustomProviderRoutes, guestAccount) : undefined;
   const route: RoutingTransform = guestGuard
     ? async (body, ctx) => {
       const guarded = await guestGuard(body, ctx);
@@ -3752,7 +3772,8 @@ async function createCodexProxyHandle(
           return normalized ? { ...rewritten, body: Buffer.from(JSON.stringify(normalized)) } : rewritten;
         } };
       }
-      if (!decision?.localHandler && guestProviderId && isOpenAiSubscriptionProviderId(guestProviderId)) return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
+      if (!decision?.localHandler && guestProviderId && (isOpenAiSubscriptionProviderId(guestProviderId) || guestAccount?.sharedProviderId === guestProviderId))
+        return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
       if (decision?.localHandler || !isXaiUpstream(decision?.upstreamOverride ?? '')
         || ctx.method !== 'POST' || !ctx.url.split('?', 1)[0]?.endsWith('/responses')) return decision;
       // The observer receives raw wire bytes. Negotiate plaintext so the execution-price

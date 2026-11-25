@@ -53,6 +53,7 @@ import { providerShareGate } from '@/features/provider-share/providerShareFormat
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
+import { PluginFileOpenerSwitch } from './PluginFileOpenerSwitch';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import {
@@ -92,7 +93,7 @@ import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
 import { ghostPrimaryAction } from './lib/ghostPluginViewModel';
 import { permissionItemIcon } from './lib/permissionItemIcon';
-import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
+import { PluginInstalledDetailFrame } from './PluginDetailTopBar';
 import { PluginInstallRing } from './PluginInstallRing';
 import { usePluginInstallProgress } from './lib/pluginInstallProgress';
 import './plugin-motion.css';
@@ -185,7 +186,6 @@ export function GhostPluginDetailView({
 }: GhostPluginDetailViewProps) {
   const { t, i18n } = useTranslation();
   const uiLanguage = i18n.resolvedLanguage ?? i18n.language;
-  const { scrolled, onScroll } = usePluginDetailScrolled();
   // 只有本窗口发起的更新才有进度;远程设备上的插件仍按回执显示。
   const updateProgress = usePluginInstallProgress(remote ? null : marketItem?.pluginId);
   const updateFailed = updateProgress?.download.phase === 'failed';
@@ -221,6 +221,7 @@ export function GhostPluginDetailView({
   const hasConfiguration =
     hasGithubConnection ||
     Boolean(ghost?.manifest.browserExtension) ||
+    Boolean(ghost?.manifest.fileOpener) ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
     detail.hasTaskPreferences ||
@@ -262,17 +263,11 @@ export function GhostPluginDetailView({
   }
 
   return (
-    <main
-      className="app-wallpaper-surface plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
-      onScroll={onScroll}
+    <PluginInstalledDetailFrame
+      label={t('settings.ghosts.detail.backToList')}
+      onBack={onBack}
+      actions={sharePluginId ? <PluginShareButton pluginId={sharePluginId} /> : localShareAvailable && ghost ? <PluginShareButton ghost={ghost} /> : undefined}
     >
-      <PluginDetailTopBar
-        label={t('settings.ghosts.detail.backToList')}
-        onBack={onBack}
-        scrolled={scrolled}
-        actions={sharePluginId ? <PluginShareButton pluginId={sharePluginId} /> : localShareAvailable && ghost ? <PluginShareButton ghost={ghost} /> : undefined}
-      />
-      <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
         <PluginDetailHeader
           id={detail.id}
           name={detail.name}
@@ -535,6 +530,14 @@ export function GhostPluginDetailView({
                   />
                 </div>
               ) : null}
+              {ghost?.manifest.fileOpener ? (
+                <PluginFileOpenerSwitch
+                  ghostId={detail.id}
+                  name={detail.name}
+                  extensions={ghost.manifest.fileOpener.extensions}
+                  surfaceClassName={DETAIL_SURFACE_CLASS}
+                />
+              ) : null}
               {detail.hasSettingsUi ? (
                 ghost ? (
                   <>
@@ -683,8 +686,7 @@ export function GhostPluginDetailView({
         {publishingSection}
 
         <DetailsSection detail={remote ? { ...detail, installDir: null } : detail} panelStatus={panelStatus} />
-      </article>
-    </main>
+    </PluginInstalledDetailFrame>
   );
 }
 
@@ -903,6 +905,7 @@ function SectionTextAction({
       type="button"
       aria-expanded={expanded}
       onClick={onClick}
+      // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
       className="shrink-0 rounded-md px-1 py-0.5 text-13 text-[var(--text-secondary)] transition-colors duration-150 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
     >
       {children}
@@ -1118,8 +1121,6 @@ export function DetailsSection({
   );
   // 用户拖过 / 弹过 / 已套过默认边:给「恢复默认位置」。
   const canResetPlacement = hasPluginPlacementMemory(detail.id);
-  const placementActionClass =
-    'shrink-0 rounded-md px-2 py-1 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
   const facts: Array<{
     key: string;
     label: string;
@@ -1186,26 +1187,30 @@ export function DetailsSection({
             action: (
               <span className="flex shrink-0 items-center gap-1">
                 {detail.enabled && !inSidebar && (
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    tone="quiet"
+                    size="xs"
+                    compact
                     onClick={() => {
                       if (installedGhost) void openPluginInSidebar(installedGhost, 'panel');
                     }}
-                    className={placementActionClass}
                   >
                     {t('settings.ghosts.detail.openInSidebar')}
-                  </button>
+                  </Button>
                 )}
                 {canResetPlacement && (
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    tone="quiet"
+                    size="xs"
+                    compact
                     onClick={() => {
                       if (installedGhost) void resetPluginPlacementAndReturn(installedGhost);
                     }}
-                    className={placementActionClass}
                   >
                     {t('settings.ghosts.detail.resetPlacement')}
-                  </button>
+                  </Button>
                 )}
               </span>
             ),
@@ -1231,7 +1236,7 @@ export function DetailsSection({
                   }}
                   title={t('settings.ghosts.detail.copyLocation')}
                   aria-label={t('settings.ghosts.detail.copyLocation')}
-                  className="grid size-7 shrink-0 place-items-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  className="grid size-7 shrink-0 place-items-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                 >
                   <Copy size={14} aria-hidden="true" />
                 </button>
@@ -1250,7 +1255,7 @@ export function DetailsSection({
                   }}
                   title={t('settings.ghosts.detail.openLocation')}
                   aria-label={t('settings.ghosts.detail.openLocation')}
-                  className="grid size-7 shrink-0 place-items-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  className="grid size-7 shrink-0 place-items-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                 >
                   <FolderOpen size={14} aria-hidden="true" />
                 </button>

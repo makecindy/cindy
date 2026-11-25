@@ -7,6 +7,7 @@
  * - 持有依赖注入的 deps，但具体使用由子类决定
  */
 
+import type { ChildProcess } from 'node:child_process';
 import type { AutoReviewUserIntent, AutoReviewUserReferences } from './shared/auto-review-decision.js';
 import { LIBRARY_READ_ROOT } from './shared/library-native-read.js';
 import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
@@ -317,6 +318,16 @@ export interface PiNativeProvidersResult {
   env: Record<string, string>;
 }
 
+/** The selected BYOM source was absent from Pi's native route set at startup.
+ * The host must separately verify whether the saved connection still exists.
+ */
+export class PiByomRouteAbsentError extends Error {
+  constructor(readonly providerId: string, message: string) {
+    super(message);
+    this.name = 'PiByomRouteAbsentError';
+  }
+}
+
 /**
  * The host could not construct the first-party Pi provider because its local
  * compatibility proxy is not ready. This is a fatal startup condition for
@@ -455,6 +466,8 @@ export type CodexAppServerProcessRole = 'task-host' | 'control-plane-service';
 
 export interface CodexAppServerProcessRegistration {
   pid: number;
+  /** The local spawn handle used by the owning runtime at shutdown. */
+  child?: ChildProcess;
   role: CodexAppServerProcessRole;
 }
 
@@ -2560,6 +2573,8 @@ export interface PiModelSwitchPreview {
   targetContextWindow: number | null;
   /** Only true when the live Pi runtime has confirmed this exact target window. */
   windowVerified: boolean;
+  /** The target provider was resolved and its model list excludes this selection. */
+  modelNotOffered?: true;
   /** Non-secret reason suitable for a host error; never include env values. */
   reason?: string;
 }
@@ -2587,6 +2602,8 @@ export interface AgentMcpServerToolsReport {
 }
 
 export interface AgentSessionHandle {
+  /** The sharing computer confirmed that it reclaimed this idle native run. */
+  hasReclaimedSharedRun?(): boolean;
   /** Canonical physical Skill identities frozen at native runtime startup. */
   readonly disabledSkillPaths?: readonly string[];
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
@@ -2612,6 +2629,8 @@ export interface AgentSessionHandle {
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
+  /** ACP-only slash-command names advertised by the current plugin session. */
+  getPluginEngineCommandNames?(): readonly string[];
   /** An explicit Skill send may retry exhausted discovery on the existing process. */
   retryFailedRuntimeCapabilityCapture?(): void;
   /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */
@@ -2760,6 +2779,8 @@ export interface AgentSessionHandle {
   getUsageSnapshot(): UsageSnapshot;
   /** Replayable authoritative usage for Host-synthesized terminal events. */
   getPendingTurnUsage?(): Record<string, unknown> | undefined;
+  /** True only while a delivered reply is waiting for automatic compaction. */
+  isCompactingDeliveredReply?(): boolean;
 
   /** Structured context usage breakdown. Only Claude Code implements this today. */
   getContextUsage?(): Promise<ContextUsageData>;

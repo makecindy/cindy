@@ -259,6 +259,15 @@ export async function discardInvalidSessionTurnLease(
   return result.changes === 1;
 }
 
+type LeaseRecoveryResult = 'cleared' | 'active-turn-conflict' | 'owner-still-live' | 'exact-release-missed';
+
+/** Carries the fixed reason logged when lease replacement fails. */
+class LeaseReplacementError extends Error {
+  constructor(readonly reason: Exclude<LeaseRecoveryResult, 'cleared'> | 'own-row-missing') {
+    super('could not replace the previous turn lease');
+  }
+}
+
 export interface SessionTurnLeaseTrackerDeps {
   getDbClient(): SessionTurnLeaseDb;
   owner: ReviewRunOwner;
@@ -288,6 +297,10 @@ export class SessionTurnLeaseTracker {
     const next = previous.catch(() => undefined).then(action);
     const observed = next
       .catch((error) => {
+        if (error instanceof LeaseReplacementError) {
+          this.deps.warn?.('session turn lease replacement failed', { reason: error.reason });
+          return;
+        }
         this.deps.warn?.('session turn lease write failed', {
           sessionId,
           error: error instanceof Error ? error.message : String(error),
@@ -307,22 +320,21 @@ export class SessionTurnLeaseTracker {
   private async clearRecoverableLease(
     dbClient: SessionTurnLeaseDb,
     row: PersistedSessionTurnLeaseRow,
-  ): Promise<boolean> {
-    if (!row.lease) return discardInvalidSessionTurnLease(dbClient, row);
-    if (row.lease.owner.instanceId === this.deps.owner.instanceId) {
-      if (this.activeTurnIds.get(row.sessionId) === row.lease.turnId) return false;
-      return releaseSessionTurnLease(dbClient, {
-        sessionId: row.sessionId,
-        turnId: row.lease.turnId,
-        owner: row.lease.owner,
-      });
+  ): Promise<LeaseRecoveryResult> {
+    if (!row.lease) {
+      return (await discardInvalidSessionTurnLease(dbClient, row)) ? 'cleared' : 'exact-release-missed';
     }
-    if (!(await this.ownerProcessEnded(row.lease.owner))) return false;
-    return releaseSessionTurnLease(dbClient, {
+    if (row.lease.owner.instanceId === this.deps.owner.instanceId) {
+      if (this.activeTurnIds.get(row.sessionId) === row.lease.turnId) return 'active-turn-conflict';
+    } else if (!(await this.ownerProcessEnded(row.lease.owner))) {
+      return 'owner-still-live';
+    }
+    const released = await releaseSessionTurnLease(dbClient, {
       sessionId: row.sessionId,
       turnId: row.lease.turnId,
       owner: row.lease.owner,
     });
+    return released ? 'cleared' : 'exact-release-missed';
   }
 
   markTurnStarted(sessionId: string, requestedTurnId?: string): Promise<void> {
@@ -359,9 +371,9 @@ export class SessionTurnLeaseTracker {
         const ownRow = rows.find(
           (row) => row.clientId === sessionTurnLeaseClientId(this.deps.owner),
         );
-        if (!ownRow || !(await this.clearRecoverableLease(dbClient, ownRow))) {
-          throw new Error('could not replace the previous turn lease');
-        }
+        if (!ownRow) throw new LeaseReplacementError('own-row-missing');
+        const recovery = await this.clearRecoverableLease(dbClient, ownRow);
+        if (recovery !== 'cleared') throw new LeaseReplacementError(recovery);
         const acquired = await tryAcquireSessionTurnLease(dbClient, {
           sessionId,
           turnId,
@@ -437,7 +449,7 @@ export class SessionTurnLeaseTracker {
     const rows = await readPersistedSessionTurnLeases(dbClient, sessionId);
     let active = false;
     for (const row of rows) {
-      if (!(await this.clearRecoverableLease(dbClient, row))) active = true;
+      if ((await this.clearRecoverableLease(dbClient, row)) !== 'cleared') active = true;
     }
     return active;
   }

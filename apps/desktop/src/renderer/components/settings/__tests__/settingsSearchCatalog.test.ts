@@ -3,9 +3,9 @@ import { createInstance, type TFunction } from 'i18next';
 import { TAB_IDS, TAB_LABEL_KEY } from '@/lib/tabLabels';
 import zhCN from '../../../i18n/locales/zh-CN/common.json';
 import en from '../../../i18n/locales/en/common.json';
+import { mergeCloudStrings } from '../../../i18n/cloudStrings';
 import { SELECTABLE_WALLPAPER_IDS } from '../../../../shared/appearanceSettings';
 import { AGENT_ISLAND_SOUND_EVENTS, AGENT_ISLAND_SOUND_OPTIONS } from '../../../../shared/agentIsland';
-
 
 import {
   buildSettingsSearchDocuments,
@@ -385,6 +385,18 @@ describe('settings discoverability regressions', () => {
       .not.toContain('shortcuts.close-tab-or-window');
   });
 
+  // #8494: the English alias returned no shortcut row.
+  it.each([
+    ['zh-CN', '截屏'],
+    ['en', 'screen capture'],
+  ])('finds the region screenshot shortcut by its %s alias', (locale, query) => {
+    const translate = searchI18n.getFixedT(locale);
+    const documents = buildSettingsSearchDocuments(translate, TAB_IDS, { ...searchContext, platform: 'darwin' });
+    const results = searchSettings(documents, query).filter(({ entry }) =>
+      entry.targetId === 'settings-shortcut-region-screenshot');
+    expect(results.map(({ entry }) => entry.id)).toEqual(['shortcuts.region-screenshot']);
+  });
+
   it.each([['win32', 'Ctrl+Enter'], ['darwin', '⌘+Enter']])('keeps the %s shortcut in the search result title', (platform, shortcut) => {
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform });
     const result = searchSettings(documents, shortcut).find(({ entry }) => entry.id === 'settings.composer.sendShortcut.label');
@@ -398,6 +410,13 @@ describe('settings search catalog', () => {
     const matches = searchSettings(buildSettingsSearchDocuments(t, ['builtin-tools']), 'MCP');
     expect(matches.some(match => match.entry.id === 'mcp.duplicates')).toBe(true);
     expect(resolveSettingsSearchTarget('builtin-tools', 'mcp.duplicates')).toBe('settings-mcp-duplicates');
+  });
+  // Search is another entry point: login alone does not grant cloud access.
+  it.each([undefined, false, true])('requires affirmative cloud admission for search (%s)', (canAccessCloudInstances) => {
+    const documents = buildSettingsSearchDocuments(t, TAB_IDS, {
+      region: 'cn', mode: 'cloud', membershipKind: 'org', platform: 'darwin', canAccessCloudInstances,
+    });
+    expect(documents.some(({ entry }) => entry.id === 'remoteControl.cloudInstances')).toBe(canAccessCloudInstances === true);
   });
   it('normalizes mixed-width and repeated whitespace', () => {
     expect(normalizeSettingsSearchText('  Ａppearance\u00a0  ')).toBe('appearance');
@@ -505,7 +524,13 @@ describe('settings search catalog', () => {
       '../../../i18n/locales/*/common.json',
       { eager: true, import: 'default' },
     );
-    for (const [path, translation] of Object.entries(locales)) {
+    // Cloud copy joins the common namespace at load time; search must see it too.
+    const cloud = import.meta.glob<Record<string, unknown>>(
+      '../../../i18n/locales/*/cloud.json',
+      { eager: true, import: 'default' },
+    );
+    for (const [path, common] of Object.entries(locales)) {
+      const translation = mergeCloudStrings(common, cloud[path.replace(/common\.json$/, 'cloud.json')] ?? {});
       const language = path.split('/').at(-2)!;
       const instance = createInstance();
       await instance.init({
@@ -569,5 +594,22 @@ describe('settings search catalog', () => {
       expect(visible).toContain('imBot.lark');
     }
     expect(ids()).not.toContain('imBot.cindy');
+  });
+
+  // A managed cloud instance's own settings must not offer keep-awake or a quit-on-close choice.
+  it('hides app behavior entries in a managed cloud instance', () => {
+    const ids = (managedCloudInstance?: boolean) =>
+      buildSettingsSearchDocuments(t, TAB_IDS, {
+        platform: 'linux',
+        region: 'cn',
+        mode: 'cloud',
+        membershipKind: 'personal',
+        managedCloudInstance,
+      }).map(({ entry }) => entry.id);
+    for (const id of ['settings.devices.keepAwake', 'settings.windowBehavior.closeBehavior.label']) {
+      expect(ids()).toContain(id);
+      expect(ids(false)).toContain(id);
+      expect(ids(true)).not.toContain(id);
+    }
   });
 });

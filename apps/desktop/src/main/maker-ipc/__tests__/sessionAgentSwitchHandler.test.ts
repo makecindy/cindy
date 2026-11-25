@@ -118,7 +118,8 @@ describe('manual SWITCH_SESSION_AGENT takeover', () => {
   // must fail at the Desktop sender gate, before cancelling recovery or locking.
   it('rejects a frame-less local caller before it can supersede recovery', async () => {
     const withSessionLock = vi.fn(async () => { throw new Error('unexpected lock'); });
-    const { deps } = makeDeps({ withSessionLock });
+    const cancelStart = vi.fn();
+    const { deps } = makeDeps({ withSessionLock, cancelPendingRemoteStart: cancelStart });
     const noteUserAction = vi.fn();
     const ipc = new IpcHarness();
     registerMakerSessionAgentSwitchHandler(ipc, deps, (event, sessionId) => {
@@ -132,6 +133,7 @@ describe('manual SWITCH_SESSION_AGENT takeover', () => {
     await expect(ipc.invokeFrom(42, MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', 'gpt-5.5', null))
       .rejects.toThrow('PERMISSION_DENIED');
     expect(noteUserAction).not.toHaveBeenCalled();
+    expect(cancelStart).not.toHaveBeenCalled();
     expect(withSessionLock).not.toHaveBeenCalled();
   });
 });
@@ -728,6 +730,8 @@ describe('same-engine selection at send', () => {
     const h = sharedSelectionHarness();
     const withSessionLock = vi.fn(async () => { throw new Error('unexpected lock'); });
     h.deps.withSessionLock = withSessionLock;
+    const cancelStart = vi.fn();
+    h.deps.cancelPendingRemoteStart = cancelStart;
     const ipc = new IpcHarness();
     const onUserSwitchRequested = vi.fn();
     registerMakerSessionAgentSwitchHandler(ipc, h.deps, onUserSwitchRequested);
@@ -742,6 +746,7 @@ describe('same-engine selection at send', () => {
     await expect(select(undefined, '')).rejects.toThrow('INVALID_PARAMS');
     expect(h.context.sharedTaskSetting.admitted).toBe(false);
     expect(onUserSwitchRequested).not.toHaveBeenCalled();
+    expect(cancelStart).not.toHaveBeenCalled();
     expect(withSessionLock).not.toHaveBeenCalled();
   });
 
@@ -838,6 +843,21 @@ describe('same-engine selection at send', () => {
     expect(h.row().providerId).toBe('openai');
     await applyPendingAgentSwitchIfIdle(h.deps, 's1');
     expect(h.row().providerId).toBe('xd');
+  });
+
+  // #12771 (unit): a confirmed catalog mismatch blocks repeated sends until a fresh pick.
+  it('holds a rejected Pi selection and lets the next pick land', async () => {
+    const h = selectionHarness();
+    const invalid: PendingAgentSwitchIntent = { sameAgentSelection: true, targetAgentKind: 'pi', model: 'a', providerId: 'B' };
+    h.pending.set('s1', invalid);
+    h.apply.mockRejectedValueOnce(Object.assign(new Error('missing model'), { code: 'MODEL_SELECTION_UNAVAILABLE' }));
+    await expect(applyPendingAgentSwitchIfIdle(h.deps, 's1')).rejects.toHaveProperty('code', 'MODEL_SELECTION_UNAVAILABLE');
+    await expect(applyPendingAgentSwitchIfIdle(h.deps, 's1')).rejects.toHaveProperty('code', 'MODEL_SELECTION_UNAVAILABLE');
+    expect(h.apply).toHaveBeenCalledTimes(1);
+    h.pending.set('s1', { sameAgentSelection: true, targetAgentKind: 'pi', model: 'b', providerId: 'B' });
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.row()).toMatchObject({ model: 'b', providerId: 'B' });
+    expect(h.pending.get('s1')).toBeUndefined();
   });
 
   it('does not apply before a running turn settles, or when send has been canceled', async () => {

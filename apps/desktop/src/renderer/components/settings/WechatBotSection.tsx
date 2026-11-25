@@ -58,23 +58,81 @@ export function WechatBotSection({
    */
   host?: { name: string; api: Window['electronAPI']['wechatBot'] };
 }) {
+  const controller = useWechatBot(host?.api);
+  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('wechat');
+  return (
+    <WechatBotSectionView
+      expanded={expanded}
+      onToggle={onToggle}
+      companion={companion}
+      host={host}
+      controller={controller}
+      routeSummary={routeSummary}
+      defaultSettings={
+        <ImDefaultSettingsSection channel="wechat" embedded onSummaryChange={setRouteSummary} />
+      }
+      workingDirectory={
+        <WechatWorkingDirectory
+          settings={controller.channelSettings}
+          pending={controller.isUpdatingWorkingDir}
+          onChoose={() => void controller.chooseWorkingDirectory()}
+          onReset={() => void controller.resetWorkingDirectory()}
+        />
+      }
+    />
+  );
+}
+
+export function WechatBotSectionView({
+  controller,
+  messageTargetName,
+  idPrefix = '',
+  canDisconnect = true,
+  routeSummary,
+  defaultSettings,
+  workingDirectory,
+  authorizationAvailable,
+  expanded,
+  onToggle,
+  companion,
+  host,
+}: {
+  idPrefix?: string;
+  /** Names the execution target without instantiating a local or remote controller. */
+  messageTargetName?: string;
+  canDisconnect?: boolean;
+  controller: Omit<
+    ReturnType<typeof useWechatBot>,
+    'isUpdatingWorkingDir' | 'chooseWorkingDirectory' | 'resetWorkingDirectory'
+  >;
+  routeSummary: import('./ImDefaultSettingsSection').ImDefaultSettingsSummary | null;
+  defaultSettings: React.ReactNode;
+  workingDirectory: React.ReactNode;
+  authorizationAvailable?: boolean;
+
+  expanded: boolean;
+  onToggle: () => void;
+  companion?: { id: string; name: string };
+  /**
+   * Set when the teammate runs on another computer: its WeChat API. Authorizing opens a browser and
+   * scanning happens on that computer, so connecting stays there; assignment and release work from here.
+   */
+  host?: { name: string; api: Window['electronAPI']['wechatBot'] };
+}) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const targetName = messageTargetName;
   const {
     state,
     channelSettings,
     isAuthorizing,
     isUnbinding,
-    isUpdatingWorkingDir,
     authorize,
     cancelAuthorization,
     unbind,
-    chooseWorkingDirectory,
-    resetWorkingDirectory,
     setCompanion,
     isUpdatingCompanion,
-  } = useWechatBot(host?.api);
-  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('wechat');
+  } = controller;
   const assigned = channelSettings?.companionBotId;
   const otherCompanion = !!companion && !!assigned && assigned !== companion.id;
   const needsAssignment = !!companion && assigned !== companion.id;
@@ -133,7 +191,7 @@ export function WechatBotSection({
 
   return (
     <ImChannelSettingsCard
-      id={companion ? 'companion-im-wechat' : 'personal-im-wechat'}
+      id={`${idPrefix}${companion ? 'companion-im-wechat' : 'personal-im-wechat'}`}
       title={t(imBotSettings.wechat.titleKey)}
       description={t('settings.wechatBot.description')}
       routeSummary={
@@ -189,16 +247,11 @@ export function WechatBotSection({
           ) : null}
         </div>
       ) : <>
-      <ImDefaultSettingsSection channel="wechat" embedded onSummaryChange={setRouteSummary} />
+      {defaultSettings}
 
       <div className="h-px w-full bg-[var(--border-default)]" />
 
-      <WechatWorkingDirectory
-        settings={channelSettings}
-        pending={isUpdatingWorkingDir}
-        onChoose={() => void chooseWorkingDirectory()}
-        onReset={() => void resetWorkingDirectory()}
-      />
+      {workingDirectory}
       </>}
 
       <div className="h-px w-full bg-[var(--border-default)]" />
@@ -240,7 +293,10 @@ export function WechatBotSection({
                 )}
               </h3>
               <p className="mt-1 text-12 leading-[1.6] text-[var(--settings-section-desc)]">
-                {t(`settings.wechatBot.bound.notes.${state.phase}`)}
+                {t(
+                  `settings.wechatBot.bound.notes.${state.phase}${targetName && (state.phase === 'connected' || state.phase === 'reconnecting') ? 'OnHost' : ''}`,
+                  { name: targetName },
+                )}
               </p>
             </div>
           </div>
@@ -252,7 +308,12 @@ export function WechatBotSection({
                 loading={isAuthorizing}
                 type="button"
                 onClick={() => void handleAuthorize()}
-                disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}
+                disabled={
+                  isAuthorizing ||
+                  isUpdatingCompanion ||
+                  !(authorizationAvailable ?? !!channelSettings) ||
+                  disabledByPolicy
+                }
                 className="flex-1"
               >
                 <RotateCw size={13} />
@@ -265,7 +326,7 @@ export function WechatBotSection({
               loading={isUnbinding}
               type="button"
               onClick={() => void handleUnbind()}
-              disabled={isUnbinding}
+              disabled={!canDisconnect || isUnbinding}
               className="flex-1"
             >
               <Trash2 size={13} />
@@ -282,7 +343,10 @@ export function WechatBotSection({
                   ? 'settings.wechatBot.disabledNote'
                   : state.phase === 'error'
                     ? 'settings.wechatBot.errorNote'
-                    : 'settings.wechatBot.intro',
+                    : targetName
+                      ? 'settings.wechatBot.introOnHost'
+                      : 'settings.wechatBot.intro',
+                { name: targetName },
               )}
             </p>
           </div>
@@ -297,7 +361,12 @@ export function WechatBotSection({
               loading={isAuthorizing}
               type="button"
               onClick={() => void handleAuthorize()}
-              disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}
+              disabled={
+                isAuthorizing ||
+                isUpdatingCompanion ||
+                !(authorizationAvailable ?? !!channelSettings) ||
+                disabledByPolicy
+              }
               className="w-full"
             >
               {t('settings.wechatBot.actions.connect')}
@@ -309,7 +378,7 @@ export function WechatBotSection({
   );
 }
 
-function WechatWorkingDirectory({
+export function WechatWorkingDirectory({
   settings,
   pending,
   onChoose,

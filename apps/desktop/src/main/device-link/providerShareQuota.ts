@@ -1,4 +1,5 @@
 import type { ProviderView } from '@cindy/model-providers';
+import { MetadataContinuityReader } from '@cindy/device-link';
 import { MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS } from '../../shared/providerShareInsights.js';
 import type {
   ProviderShareQuotaAccount,
@@ -42,8 +43,24 @@ const empty = (state: ProviderShareQuotaAccount['state']): ProviderShareQuotaAcc
   windows: [],
   balance: null,
 });
-let cacheOwner = '';
-const cache = new Map<string, { until: number; pending: Promise<ProviderShareQuotaAccount> }>();
+// Reuse bounded metadata storage/single-flight, with display-specific ages and
+// no stale-on-failure fallback. Never used for execution permission or quota admission.
+const quotaReader = new MetadataContinuityReader({ retryable: () => false });
+let quotaScope: { key: string } | undefined;
+function captureQuotaScope() {
+  const assertOwner = captureProviderManagementScope();
+  const scopeKey = () => JSON.stringify([activeOwnerScopeKey(),
+    getClientEndpoint('deviceLinkApiBaseUrl'), getClientEndpoint('modelAccessApiBaseUrl')]);
+  const key = scopeKey();
+  if (quotaScope?.key !== key) { quotaReader.clear(); quotaScope = { key }; }
+  const identity = quotaScope;
+  const assertCurrent = () => {
+    assertOwner();
+    if (quotaScope !== identity || scopeKey() !== key) throwIpcError('PRECONDITION_FAILED', 'Quota display scope changed');
+  };
+  return { key, current: () => { try { assertCurrent(); return true; } catch { return false; } },
+    signalingAvailable: () => true, assertCurrent };
+}
 
 function windowsAccount(value: ReturnType<typeof claudeSource>): ProviderShareQuotaAccount {
   const windows = value.windows.filter((window) => window.kind !== 'period').map((window) => ({
@@ -142,28 +159,17 @@ export async function readProviderShareQuotaAccount(
   providerId: string,
 ): Promise<ProviderShareQuotaAccount> {
   if (pluginEngineKeyFromProviderId(providerId)) return empty('unsupported');
-  const assertCurrent = captureProviderManagementScope();
+  const scope = captureQuotaScope();
+  const { assertCurrent } = scope;
   const provider = (
     await getDesktopProviderService().listProviders({ allowSideEffects: false })
   ).find((item) => item.id === providerId);
   assertCurrent();
   if (!provider) return empty('unavailable');
-  const owner = activeOwnerScopeKey();
-  if (owner !== cacheOwner) {
-    cacheOwner = owner;
-    cache.clear();
-  }
   const key = JSON.stringify(provider);
-  for (const [entry, value] of cache) if (value.until <= Date.now()) cache.delete(entry);
-  let pending = cache.get(key);
-  if (!pending) {
-    pending = {
-      until: Date.now() + FRESH_MS,
-      pending: readAccount(provider).catch(() => empty('unavailable')),
-    };
-    cache.set(key, pending);
-  }
-  const result = await pending.pending;
+  const { value: result } = await quotaReader.read({ ...scope, freshForMs: FRESH_MS, validForMs: FRESH_MS },
+    `account:${key}`, () => readAccount(provider).catch(() => empty('unavailable')))
+    .catch(error => { assertCurrent(); throw error; });
   assertCurrent();
   const latest = (
     await getDesktopProviderService().listProviders({ allowSideEffects: false })
@@ -326,34 +332,14 @@ function sanitizeQuotaAccount(raw: ProviderShareQuotaAccount): ProviderShareQuot
 }
 
 /** 同一账号/组配置共享在途与短缓存，受邀者人数不会放大组内查询频率。 */
-const groupCache = new Map<string, { until: number; pending: ReturnType<typeof readGroupQuota> }>();
-let groupCacheOwner = '';
 export async function readProviderShareQuota(providerId: string) {
-  const assertCurrent = captureProviderManagementScope();
-  const owner = activeOwnerScopeKey();
-  if (owner !== groupCacheOwner) {
-    groupCacheOwner = owner;
-    groupCache.clear();
-  }
+  const scope = captureQuotaScope();
+  const { assertCurrent } = scope;
   const config = JSON.stringify(readProviderGroup(providerId));
   const key = JSON.stringify([providerId, config]);
-  for (const [entry, value] of groupCache) if (value.until <= Date.now()) groupCache.delete(entry);
-  let cached = groupCache.get(key);
-  if (!cached) {
-    const pending = readGroupQuota(providerId);
-    cached = { until: Infinity, pending };
-    groupCache.set(key, cached);
-    const entry = cached;
-    void pending.then(
-      () => {
-        entry.until = Date.now() + 15_000;
-      },
-      () => {
-        if (groupCache.get(key) === entry) groupCache.delete(key);
-      },
-    );
-  }
-  const result = await cached.pending;
+  const { value: result } = await quotaReader.read({ ...scope, freshForMs: 15_000, validForMs: 15_000 },
+    `group:${key}`, () => readGroupQuota(providerId))
+    .catch(error => { assertCurrent(); throw error; });
   assertCurrent();
   if (config !== JSON.stringify(readProviderGroup(providerId)))
     throwIpcError('PRECONDITION_FAILED', 'Provider group changed');

@@ -64,16 +64,16 @@ export async function readDefaultTeammatePortrait(index: number): Promise<{ buff
   const root = app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources');
   const image = sharp(path.join(root, 'teammate-portrait-gallery.png'));
   const { width, height } = await image.metadata();
-  if (!width || !height || width < 4 || height < 4) throw new Error('Invalid buddy portrait gallery');
-  const cell = Math.abs(Math.trunc(index)) % 16;
-  const column = cell % 4;
-  const row = Math.floor(cell / 4);
-  const left = Math.floor(column * width / 4);
-  const top = Math.floor(row * height / 4);
+  if (!width || !height || width < 5 || height < 5) throw new Error('Invalid buddy portrait gallery');
+  const cell = Math.abs(Math.trunc(index)) % 25;
+  const column = cell % 5;
+  const row = Math.floor(cell / 5);
+  const left = Math.floor(column * width / 5);
+  const top = Math.floor(row * height / 5);
   const buffer = await image.extract({
     left, top,
-    width: Math.floor((column + 1) * width / 4) - left,
-    height: Math.floor((row + 1) * height / 4) - top,
+    width: Math.floor((column + 1) * width / 5) - left,
+    height: Math.floor((row + 1) * height / 5) - top,
   }).resize(256, 256).png().toBuffer();
   return { buffer, mimeType: validateBotAvatarBuffer(buffer) };
 }

@@ -313,7 +313,7 @@ export class NativeTransport implements Transport {
     if (credentials === this.relayCredentials) return;
     this.relayCredentials = credentials;
     await this.call({ op: 'relayUdp', server, ...(credentials
-      ? { session: toBase64Url(credentials.session), key: toBase64Url(credentials.key) } : { session: null }) });
+      ? { session: toBase64Url(credentials.session), key: toBase64Url(credentials.key), ...(credentials.probe === true ? { probe: true } : {}) } : { session: null }) });
   }
   private noteRelayCredentials(credentials: object | null): void {
     if (credentials === this.relayUdpFor) return;
@@ -395,6 +395,11 @@ export class NativeTransport implements Transport {
       this.localAddresses = addresses;
       this.updateCandidates();
     }).catch(() => undefined).finally(() => { this.refreshingAddresses = false; });
+  }
+  relayStalled(): void {
+    if (this.closed || !this.enhanced || !this.supports('relay-udp-v2')) return;
+    void this.call({ op: 'relayStalled' }).catch(() => undefined);
+    this.wake();
   }
   reserve(bytes: number): void {
     if (this.pendingBytes + bytes > MAX_PENDING) throw new Error('NATIVE_TRANSPORT_BACKPRESSURE');
@@ -830,6 +835,7 @@ class NativeChannel implements PeerChannel {
         this.bodyHandler = handler;
         for (const [key, bytes] of this.earlyBodies.splice(0)) handler(key, bytes);
       },
+      onDrain: (handler) => this.onDrain(handler),
     };
   }
   /** Session v2: bodies count like their lanes, on the control and normal lanes with what the core still buffers. */

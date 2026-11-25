@@ -317,7 +317,7 @@ import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { getModel, type ProviderView } from '@cindy/model-providers/registry';
 import { shouldBlockLegacyRemoteModelWindowSwitch } from '@cindy/maker-shared/agent-capabilities';
 import { clearSessionMirror, makeSessionMirrorAccessors } from '@/session/sessionModelMirror';
-import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
+import { composerModelLabel, effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import {
   buildMobileModelSections,
   isSelectedSourceDisconnected,
@@ -915,8 +915,9 @@ interface ComposerRuntimeSummary {
 function buildComposerRuntimeSummary(
   session: RemoteSession,
   runtime: MobileSessionRuntimeOptions,
+  catalogModelName?: string,
 ): ComposerRuntimeSummary {
-  const modelLabel = runtime.currentModel?.label ?? session.model;
+  const modelLabel = composerModelLabel(session.model, catalogModelName, runtime.currentModel?.label);
   const effortLabel = effortLabelFromRuntime(runtime, session.effort);
   return {
     modelSummary: [modelLabel, effortLabel].filter(Boolean).join(' · '),
@@ -2352,6 +2353,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     openSession: openCollabSession,
     // 远程供应商：被控电脑声明支持时，Worker 可以像任务一样选其他电脑 / 分享的供应商。
     workerAgentLocationSelectable: capabilities?.supportsOrcaWorkerAgentDevice === true,
+    workerModelGroupSelectable: capabilities?.supportsOrcaWorkerModelGroup === true,
   });
   const { running: runningModel, pending: pendingModel } = taskModelCatalogRoutes(currentSession, deviceId);
   const composerDeviceProviders = useDeviceProviders(
@@ -3050,13 +3052,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : null,
     [composerDisplayCapabilities, composerDisplaySession],
   );
-  const composerRuntimeSummary = useMemo(
-    () => composerDisplaySession && composerDisplayRuntimeOptions
-      ? buildComposerRuntimeSummary(composerDisplaySession, composerDisplayRuntimeOptions)
-      : null,
-    // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
-    [composerDisplayRuntimeOptions, composerDisplaySession, i18nInstance.language],
-  );
   // 被控端供应商目录 → provider-aware 模型分段(与新建会话页同逻辑;0 供应商回退扁平 modelOptions)。
   // Agent 下一条消息在另一台电脑运行时,模型与来源属于那台的目录。
   const composerModelSections = useMemo(
@@ -3190,6 +3185,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const composerPillSourceId = composerSelectedSourceDisconnected
     ? (composerDisplaySession?.providerId ?? null)
     : (composerPillSourceProvider?.id ?? null);
+  const composerCatalogModel = composerDisplaySession && composerPillSourceProvider
+    ? getModel(composerPillSourceProvider, composerDisplaySession.model, composerDisplayAgentKind)
+    : undefined;
+  const catalogModelName = composerCatalogModel?.name;
+  const composerRuntimeSummary = useMemo(
+    () => composerDisplaySession && composerDisplayRuntimeOptions
+      ? buildComposerRuntimeSummary(composerDisplaySession, composerDisplayRuntimeOptions, catalogModelName)
+      : null,
+    // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
+    [composerDisplayRuntimeOptions, composerDisplaySession, catalogModelName, i18nInstance.language],
+  );
   const composerPillFastOn = agentSwitchIntent
     ? (agentSwitchIntent.fastMode ?? false)
     : !composerSelectedSourceDisconnected && rowFastEditable({
@@ -3218,8 +3224,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const composerPluginEngineLabel = (() => {
     if (!composerPluginEngine) return null;
     const { engine, modelId, effort, pending } = composerPluginEngine;
-    const model = pluginEngineModelName(engine, modelId)
-      ?? (!modelId || modelId === PLUGIN_ENGINE_DEFAULT_MODEL ? t('models.pluginEngines.defaultModel') : modelId);
+    const model = !modelId || modelId === PLUGIN_ENGINE_DEFAULT_MODEL
+      ? t('models.pluginEngines.defaultModel')
+      : composerModelLabel(modelId, pluginEngineModelName(engine, modelId));
     const level = resolvePluginEngineEffort(engine, modelId, effort);
     const modelSummary = [model, level ? t(`models.options.effortLevels.${level}`, { defaultValue: level }) : null]
       .filter(Boolean).join(' · ');
@@ -7802,9 +7809,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               // Agent(下一条消息起)在另一台电脑运行:与桌面 trigger 同一个远程标记。
               <MobileModelIconMark
                 color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
-                icon={composerDisplaySession && composerPillSourceProvider
-                  ? getModel(composerPillSourceProvider, composerDisplaySession.model, composerDisplayAgentKind)?.icon
-                  : undefined}
+                icon={composerCatalogModel?.icon}
                 name={composerPillSourceProvider?.name ?? composerPillSourceId}
                 providerId={composerPillSourceId}
                 routing={composerPillSourceProvider?.routing}
@@ -11226,6 +11231,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 return result;
               },
               onSelect: collab.workerForm.modelPicker.select,
+              modelGroups: collab.workerForm.modelPicker.modelGroups,
               // 远程供应商:其他电脑上开放了远程调用的供应商与分享接在后面(与任务模型列表同一套)，
               // 选中 = Worker 的 Agent 在那台运行。
               ...(collab.workerForm.agentLocationSelectable

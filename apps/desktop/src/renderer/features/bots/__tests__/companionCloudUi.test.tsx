@@ -499,6 +499,29 @@ describe('BotHomeComputerSetting', () => {
     expect(maker.switchCompanionHome).toHaveBeenLastCalledWith('mia', 'desk', { force: true });
   });
 
+  // Merge with the missing-profile confirmation (2026-11-25): a forced take-over that then meets a missing
+  // profile snapshot keeps the force when that second confirmation is accepted. Without it the retry was
+  // refused as HOME_UNRESPONSIVE and the owner was sent back to the force dialog.
+  it('keeps the force through the missing-profile confirmation', async () => {
+    const here = { deviceId: 'desk', name: 'Desk', online: true, isSelf: true };
+    maker.getCompanionHomeChoices.mockResolvedValue({ homeDeviceId: 'laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] });
+    maker.switchCompanionHome.mockImplementation(async (_bot: string, _target: string, options?: { force?: boolean; allowMissingProfile?: boolean }) =>
+      !options?.force ? { ok: false, code: 'HOME_UNRESPONSIVE' }
+        : !options.allowMissingProfile ? { ok: false, code: 'PROFILE_SNAPSHOT_MISSING' } : { ok: true });
+    show(snapshot('laptop'));
+    openMenu();
+    fireEvent.click(await screen.findByText('bots.cloud.forceHere'));
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.forceAction' }));
+    expect(await screen.findByText('bots.cloud.missingProfileTitle:{"name":"Mia"}')).toBeTruthy();
+    h.ensureLoaded.mockImplementation(async () => {
+      resetCompanionCloudStoreForTests(snapshot('desk'));
+      return [{ id: 'mia', status: 'active' }];
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.missingProfileConfirm' }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/mia'));
+    expect(maker.switchCompanionHome).toHaveBeenLastCalledWith('mia', 'desk', { allowMissingProfile: true, force: true });
+  });
+
   it('explains when the main computer runs an older Cindy', async () => {
     maker.getCompanionHomeChoices.mockResolvedValue({ homeDeviceId: 'laptop', mode: 'unavailable', reason: 'HOME_OUTDATED', targets: [] });
     show(snapshot('laptop'));
@@ -645,5 +668,35 @@ describe('CompanionShadowBanner', () => {
     fireEvent.click(screen.getByText('bots.cloud.continueHere'));
     await waitFor(() => expect(maker.takeOverCompanion).toHaveBeenCalledWith('mia'));
     await waitFor(() => expect(h.ensureLoaded).toHaveBeenCalledWith(true));
+  });
+
+  // 2026-11-25 missing profile snapshot confirmation: another computer asks once before continuing with default profile.
+  it('asks for confirmation on PROFILE_SNAPSHOT_MISSING and retries with allowMissingProfile', async () => {
+    const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.takeOverCompanion
+      .mockResolvedValueOnce({ ok: false, code: 'PROFILE_SNAPSHOT_MISSING' })
+      .mockResolvedValueOnce({ ok: true });
+    render(<CompanionShadowBanner botId="mia" name="Mia" />);
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    expect(await screen.findByText('bots.cloud.missingProfileTitle:{"name":"Mia"}')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.missingProfileConfirm' }));
+    await waitFor(() => expect(maker.takeOverCompanion).toHaveBeenLastCalledWith('mia', { allowMissingProfile: true }));
+    await waitFor(() => expect(h.ensureLoaded).toHaveBeenCalledWith(true));
+  });
+
+  it('asks for confirmation on PROFILE_SNAPSHOT_MISSING in CloudCompanionOfflineView and continues with allowMissingProfile', async () => {
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.takeOverCompanion
+      .mockResolvedValueOnce({ ok: false, code: 'PROFILE_SNAPSHOT_MISSING' })
+      .mockResolvedValueOnce({ ok: true });
+    render(<CloudCompanionOfflineView botId="mia" deviceId="laptop" name="Mia" deviceName="Laptop" />);
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    expect(await screen.findByText('bots.cloud.missingProfileTitle:{"name":"Mia"}')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.missingProfileConfirm' }));
+    await waitFor(() => expect(maker.takeOverCompanion).toHaveBeenLastCalledWith('mia', { allowMissingProfile: true }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/mia'));
   });
 });

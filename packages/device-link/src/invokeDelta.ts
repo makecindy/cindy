@@ -192,34 +192,101 @@ const MAX_BASE_CHARS = 4 * 1024 * 1024;
 /** 同一控制端最多占总预算的一半。 */
 const MAX_BASE_CHARS_PER_PEER = MAX_BASE_CHARS / 2;
 
+interface DeltaBaseSnapshot {
+  tag: string;
+  text: string;
+}
+
+interface DeltaBaseSlot {
+  /** Last snapshot proven held by the controller (`ifNoneMatch` hit), retained across unacked updates. */
+  confirmed?: DeltaBaseSnapshot;
+  /** Prior emitted snapshot so an in-flight pipelined update also stays patchable. */
+  previous?: DeltaBaseSnapshot;
+  /** Most recently emitted snapshot for this `(src, requestKey)`. */
+  latest: DeltaBaseSnapshot;
+}
+
+function slotCharCount(slot: DeltaBaseSlot): number {
+  let total = slot.latest.text.length;
+  if (slot.confirmed && slot.confirmed.tag !== slot.latest.tag) {
+    total += slot.confirmed.text.length;
+  }
+  if (
+    slot.previous
+    && slot.previous.tag !== slot.latest.tag
+    && slot.previous.tag !== slot.confirmed?.tag
+  ) {
+    total += slot.previous.text.length;
+  }
+  return total;
+}
+
 /**
- * 被控端：每个控制端、每个请求最近一次发出的结果全文，只在内存、有上限。
+ * 被控端：每个控制端、每个请求最近发出的结果全文，只在内存、有上限。
+ * 保留控制端最近确认持有的基准（`confirmed`）与最近一次发出的全文（`latest`）：
+ * 弱网下前一次增量结果尚未送达控制端时，控制端重试或并发读取仍携带旧 `ifNoneMatch`，
+ * 不会因为被控端提前覆盖基准而退回连续发送多份数百 KiB 全文。
  * 记不住（被淘汰、进程重启、连接重建）时控制端的 `ifNoneMatch` 对不上，自然回全文。
  */
 export class InvokeDeltaBases {
-  private readonly entries = new Map<string, { tag: string; text: string }>();
+  private readonly entries = new Map<string, DeltaBaseSlot>();
   private chars = 0;
 
-  get(src: string, requestKey: string): { tag: string; text: string } | undefined {
-    return this.entries.get(`${src}\u0000${requestKey}`);
+  get(src: string, requestKey: string, expectedTag?: string): { tag: string; text: string } | undefined {
+    const slot = this.entries.get(`${src}\u0000${requestKey}`);
+    if (!slot) return undefined;
+    if (expectedTag === undefined) return slot.latest;
+    if (slot.latest.tag === expectedTag) return slot.latest;
+    if (slot.confirmed?.tag === expectedTag) return slot.confirmed;
+    if (slot.previous?.tag === expectedTag) return slot.previous;
+    return undefined;
   }
 
-  remember(src: string, requestKey: string, tag: string, text: string): void {
+  remember(src: string, requestKey: string, tag: string, text: string, matchedClientTag?: string): void {
     const key = `${src}\u0000${requestKey}`;
-    const previous = this.entries.get(key);
-    if (previous) {
-      this.chars -= previous.text.length;
+    const existing = this.entries.get(key);
+    if (existing) {
+      this.chars -= slotCharCount(existing);
       this.entries.delete(key);
     }
     if (text.length > MAX_BASE_CHARS_PER_PEER) return;
-    this.entries.set(key, { tag, text });
-    this.chars += text.length;
+
+    const latest: DeltaBaseSnapshot = { tag, text };
+    let confirmed: DeltaBaseSnapshot | undefined;
+    if (matchedClientTag !== undefined && matchedClientTag !== tag && existing) {
+      if (existing.latest.tag === matchedClientTag) confirmed = existing.latest;
+      else if (existing.confirmed?.tag === matchedClientTag) confirmed = existing.confirmed;
+      else if (existing.previous?.tag === matchedClientTag) confirmed = existing.previous;
+    }
+    let previous: DeltaBaseSnapshot | undefined =
+      existing && existing.latest.tag !== tag && existing.latest.tag !== confirmed?.tag
+        ? existing.latest
+        : existing?.previous && existing.previous.tag !== tag && existing.previous.tag !== confirmed?.tag
+          ? existing.previous
+          : undefined;
+
+    let slot: DeltaBaseSlot = {
+      ...(confirmed ? { confirmed } : {}),
+      ...(previous ? { previous } : {}),
+      latest,
+    };
+    if (slotCharCount(slot) > MAX_BASE_CHARS_PER_PEER && previous) {
+      previous = undefined;
+      slot = { ...(confirmed ? { confirmed } : {}), latest };
+    }
+    if (slotCharCount(slot) > MAX_BASE_CHARS_PER_PEER && confirmed) {
+      confirmed = undefined;
+      slot = { latest };
+    }
+
+    this.entries.set(key, slot);
+    this.chars += slotCharCount(slot);
     const prefix = `${src}\u0000`;
     // 先淘汰该控制端自己最旧的几份（条数、字符两道上限），再按全局上限淘汰。
     const own = [...this.entries].filter(([entry]) => entry.startsWith(prefix));
-    let ownChars = own.reduce((sum, [, entry]) => sum + entry.text.length, 0);
+    let ownChars = own.reduce((sum, [, entry]) => sum + slotCharCount(entry), 0);
     for (let i = 0; i < own.length - 1 && (own.length - i > MAX_BASE_ENTRIES_PER_PEER || ownChars > MAX_BASE_CHARS_PER_PEER); i++) {
-      ownChars -= own[i]![1].text.length;
+      ownChars -= slotCharCount(own[i]![1]);
       this.delete(own[i]![0]);
     }
     while (this.entries.size > MAX_BASE_ENTRIES || this.chars > MAX_BASE_CHARS) {
@@ -230,7 +297,7 @@ export class InvokeDeltaBases {
   private delete(key: string): void {
     const entry = this.entries.get(key);
     if (!entry) return;
-    this.chars -= entry.text.length;
+    this.chars -= slotCharCount(entry);
     this.entries.delete(key);
   }
 

@@ -83,6 +83,7 @@ import {
   PiManagedPackageMutationFailedError,
   projectPiPackageCommandDiagnostic,
   PiNativeProviderProxyNotReadyError,
+  PiByomRouteAbsentError,
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
   TurnPermissionPolicyUnsupportedError,
@@ -2915,13 +2916,15 @@ export class PiAgent extends BaseAgent {
       return !native || !native.models.some((candidate) => candidate.id === nativeModel);
     };
     if (explicitByomUnresolvable(opts.providerId, opts.model, nativeResolveFailed)) {
-      throw new Error(
-        `pi: BYOM provider '${opts.providerId}' cannot serve model '${opts.model}'` +
-          `${nativeResolveFailed
-            ? ' (native provider resolution failed)'
-            : ' (provider absent, or it no longer offers this model)'}; ` +
-          'refusing to fall back to the Cindy gateway (would send prompts to the wrong endpoint).',
-      );
+      const message = `pi: BYOM provider '${opts.providerId}' cannot serve model '${opts.model}'` +
+        `${nativeResolveFailed
+          ? ' (native provider resolution failed)'
+          : ' (provider absent, or it no longer offers this model)'}; ` +
+        'refusing to fall back to the Cindy gateway (would send prompts to the wrong endpoint).';
+      if (!nativeResolveFailed && resolvePiNativeProviders && !nativeProviderForSource(opts.providerId)) {
+        throw new PiByomRouteAbsentError(opts.providerId, message);
+      }
+      throw new Error(message);
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
     // Loopback is interpreted on the execution host. Shared-loopback topologies can reach
@@ -7266,7 +7269,7 @@ export class PiAgent extends BaseAgent {
         }
         if (!nativeModel) {
           return { action: 'unavailable', targetContextWindow: null, windowVerified: false,
-            reason: `Pi provider '${sourceId}' does not offer model '${model}'` };
+            modelNotOffered: true, reason: `Pi provider '${sourceId}' does not offer model '${model}'` };
         }
         inheritsNativeWindow = native.inheritModels === true && nativeModel.api === undefined
           && nativeModel.catalogAddition !== true && nativeModel.contextWindow === undefined;
@@ -8802,6 +8805,11 @@ export class PiAgent extends BaseAgent {
 
       getPendingTurnUsage() {
         return ctx.turnGeneration > 0 && ctx.pendingHostTurnStartToken === null ? piTurnUsageOf(ctx) : undefined;
+      },
+      isCompactingDeliveredReply() {
+        return !proc.isClosed && !ctx.turnSettled && ctx.pendingHostTurnStartToken === null
+          && ctx.replyPhase === 'threshold-compaction'
+          && piToolMarkupProjection(ctx).hasDeliveredReply(ctx.finalAssistantText);
       },
 
       setInteractionResolver(resolver: InteractionResolver): void {

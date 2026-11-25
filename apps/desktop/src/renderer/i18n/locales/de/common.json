@@ -1363,6 +1363,7 @@
     "openPermissionInNewWindow": "In neuem Fenster öffnen"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Eine andere Cindy-Instanz auf diesem Computer verwendet die Remote-Verbindung. Schließe sie, damit diese Instanz automatisch übernimmt.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
@@ -2867,6 +2868,14 @@
         "projectsRootReset": "Vorgeschlagenen Speicherort wiederherstellen",
         "projectsRootDescription": "Hier werden Projektordner angelegt, wenn du aus einer Sitzung ein Projekt erstellst. Ohne Einstellung wird ein Ort anhand deiner vorhandenen Projekte vorgeschlagen.",
         "projectsRootFailed": "Speicherort für neue Projekte konnte nicht aktualisiert werden",
+        "taskExportDirectoryTitle": "Speicherort für Sitzungsexporte",
+        "taskExportDirectoryUnset": "Jedes Mal fragen",
+        "taskExportDirectoryMissing": "Ordner nicht gefunden",
+        "taskExportDirectoryUnreadable": "Einstellung nicht lesbar",
+        "taskExportDirectoryChoose": "Verzeichnis auswählen",
+        "taskExportDirectoryReset": "Wieder jedes Mal fragen",
+        "taskExportDirectoryDescription": "Wenn festgelegt, werden vom Agent exportierte Sitzungen ohne Nachfrage hier gespeichert; vorhandene Dateien werden nie ersetzt. Ohne Einstellung wählst du bei jedem Export einen Speicherort.",
+        "taskExportDirectoryFailed": "Speicherort für Sitzungsexporte konnte nicht aktualisiert werden",
         "dialogueDirectoryOpen": "Verzeichnis öffnen",
         "dialogueDirectoryChoose": "Verzeichnis ändern",
         "dialogueDirectoryReset": "Standardspeicherort wiederherstellen",
@@ -6857,6 +6866,7 @@
           "guide": {
             "usageLabel": "So funktioniert’s",
             "usageBody": "Erwähne @askmycindy in einem Beitrag auf X – die Aufgabe wird dann an dieses Gerät gesendet und hier ausgeführt; das Ergebnis kommt als Antwort zurück.",
+            "usageBodyOnDevice": "Erwähne @askmycindy in einem Beitrag auf X – die Aufgabe wird dann an {{device}} gesendet und dort ausgeführt; das Ergebnis kommt als Antwort zurück.",
             "riskLabel": "Antworten sind öffentlich",
             "riskPublicBody": "Antworten sind öffentlich und für alle sichtbar. Nutze diese Funktion für öffentliche Fragen und Probleme, nicht für private Angelegenheiten, die deine Privatsphäre gefährden könnten.",
             "riskWorkdirBody": "Jede X-Aufgabe wird im Standardprojekt ausgeführt, das in den X-Verbindungseinstellungen festgelegt ist. Der Agent kann dort Dateien lesen und schreiben. Sein Ergebnis wird öffentlich gepostet – wenn dieses Projekt auf ein privates Repository verweist, können dabei auch Dateiinhalte öffentlich werden.",
@@ -8697,6 +8707,8 @@
         "liveScreenDetail": "Über den Remote-Desktop können Ihr Telefon oder Ihre anderen Computer die Geräte-Bildschirme anzeigen, die es bereitstellt (zum Beispiel Simulatoren), und Berührungen, Tasten und Text an sie senden. Die Verbindung besteht nur, wenn Sie sie von einem dieser Geräte aus öffnen, und es wird nichts anderes von diesem Computer angezeigt.",
         "preview": "Kann Vorschauseiten der folgenden Websites im Seitenleistenbrowser öffnen",
         "previewDetail": "Nur die unten aufgeführten Websites können geöffnet werden. Jede geöffnete Seite wird diesem Plugin zugeordnet.",
+        "fileOpener": "Kann die folgenden Dateitypen öffnen, wenn Sie sie aus Cindy öffnen",
+        "fileOpenerDetail": "Das Plugin erhält den vollständigen Pfad der Datei und öffnet sie anstelle Ihrer Standard-App. Gelingt das nicht, öffnet Ihre Standard-App sie. Sie können das in den Plugin-Details ausschalten.",
         "browserExtension": "Erlaubt seiner mitgelieferten Browsererweiterung, sich mit Cindy zu verbinden",
         "browserNativeHost": "Kann die Browserverbindung „{{name}}“ registrieren",
         "browserNativeHostDetail": "Das registrierte Programm läuft außerhalb der Sandbox und greift mit deinem Benutzerkonto und den Systemberechtigungen lokal zu.",
@@ -8772,6 +8784,7 @@
             "message_body": "Nachrichtentext",
             "tool_body": "Werkzeugergebnis",
             "sidebar_navigation": "Seitenleistennavigation",
+            "workdir_menu": "Menü des Arbeitsverzeichnisses",
             "session_menu": "Aufgabenmenü",
             "settings_section": "Einstellungsseite",
             "composer_completion": "Eingabevervollständigung",
@@ -8938,6 +8951,8 @@
         "configurationTitle": "Konfiguration",
         "sidebarEntryTitle": "Navigationseintrag",
         "showInSidebar": "In der linken Navigation anzeigen",
+        "fileOpenerTitle": "Dateien mit diesem Plugin öffnen",
+        "fileOpenerDescription": "Wenn Sie {{extensions}}-Dateien aus Cindy öffnen, öffnet {{name}} sie anstelle Ihrer Standard-App. Dateien von anderen Computern werden weiterhin mit Ihrer Standard-App geöffnet.",
         "sidebarEntryDescription": "Wenn aktiviert, erscheint „{{title}}“ in der linken Navigation neben Automatisierungen und Plugins, entweder oben oder unter „Mehr“. Den Ort wählst du unter Mehr → Anpassen. Das Ausblenden deaktiviert das Plugin nicht.",
         "openTool": "Details zum Tool {{name}} anzeigen",
         "noToolDescription": "Für dieses Tool ist keine Beschreibung verfügbar.",
@@ -9211,10 +9226,12 @@
         "taskWorkdirBoundary": "Das Arbeitsverzeichnis bleibt auf dem Zielcomputer. Ändere es dort.",
         "configurationLoading": "Einstellungen werden geladen…",
         "configurationReadFailed": "Einstellungen konnten nicht geladen werden.",
+        "settingsWriteUnconfirmed": "Das Speichern konnte nicht bestätigt werden. Aktualisiere die Einstellungen und prüfe sie vor einem erneuten Versuch.",
         "refreshConfiguration": "Einstellungen aktualisieren",
         "enableBeforeConfigure": "Dieses Plugin ist deaktiviert. Aktiviere es vor der Konfiguration mit dem Schalter oben.",
         "settingsPageUnavailable": "Öffne Cindy auf {{device}}, um die Einstellungsseite dieses Plugins zu verwenden. Die Version auf dem Zielcomputer kann sie nicht aus der Ferne anzeigen.",
         "offlineNotice": "{{device}} ist offline. Die Verwaltung ist erst wieder verfügbar, wenn die Verbindung wiederhergestellt ist.",
+        "publishOnTarget": "Veröffentliche Plugins in Cindy auf {{device}} oder aktualisiere Cindy dort, um sie aus der Ferne zu veröffentlichen.",
         "managingTarget": "Verwaltung von {{device}}",
         "managingDescription": "Änderungen werden auf diesem Computer gespeichert.",
         "viewingTarget": "Auf {{device}} installiert",
@@ -12304,8 +12321,8 @@
       "footnote": "Dies wird in den Identitätskontext des Freundes aufgenommen. Schnelle Persönlichkeitseinstellungen werden separat gespeichert und bleiben bei Änderungen dieses Textes erhalten."
     },
     "welcome": {
-      "generic": "Hi, ich bin {{name}}. Sag mir ab jetzt einfach, was du brauchst — ich orientiere mich inzwischen schon mal.",
-      "withRole": "Hi, ich bin {{name}} — {{description}}. Sag mir einfach, was du brauchst."
+      "generic": "Hi, ich bin {{name}}. Sag mir einfach, was du brauchst.",
+      "withUser": "Hi {{userName}}, ich bin {{name}}. Sag mir einfach, was du brauchst."
     },
     "invitation": {
       "title": "Vorbereitung auf das Kennenlernen",
@@ -12560,6 +12577,12 @@
       "arrivingLater": "{{name}} wurde auf diesen Computer verschoben und wird noch vorbereitet. Der Freund erscheint bald in deiner Liste",
       "arrivalPermissions": "{{name}} nutzt jetzt die Standardberechtigungen dieses Computers.",
       "arrivalModel": "Das für {{name}} gespeicherte Modell ist auf diesem Computer nicht verfügbar. Daher wird das Standardmodell dieses Computers verwendet.",
+      "arrivalModelSetup": "{{name}} ist jetzt auf diesem Computer, aber noch ohne verfügbares Modell. Verbinde einen Modellanbieter oder wähle unter „Modell“ in den Einstellungen dieses Freundes ein Modell aus.",
+      "arrivalPartialContent": "{{name}} läuft jetzt auf diesem Computer, aber einige synchronisierte Inhalte konnten nicht wiederhergestellt werden. Die Cloud-Kopien bleiben erhalten.",
+      "missingProfileTitle": "{{name}} mit Standardprofil starten?",
+      "missingProfileDescription": "Der ursprüngliche Hauptcomputer hat Persönlichkeit und Beschreibung von {{name}} noch nicht hochgeladen. Wenn dieser Computer neu installiert wurde oder nicht mehr erreichbar ist, kannst du hier mit einem Standardprofil fortfahren. Bereits synchronisierte Unterhaltungen und Inhalte bleiben erhalten.",
+      "missingProfileConfirm": "Mit Standardprofil fortfahren",
+      "missingProfileFailed": "Das Profil von {{name}} wurde noch nicht in die Cloud hochgeladen",
       "busyTitle": "{{name}} antwortet noch",
       "busyDescription": "Verschiebe den Freund nach dieser Antwort auf „{{device}}“ oder stoppe die Antwort und verschiebe ihn jetzt.",
       "busyWait": "Nach Abschluss verschieben",
@@ -12837,6 +12860,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "Systemstimmen",
+        "myVoices": "Meine Stimmen",
+        "refreshMyVoices": "Meine Stimmen aktualisieren",
+        "callMode": "Anrufmodus",
+        "messageReadAloud": "Nachrichten vorlesen",
+        "callVoice": "Stimme für Echtzeitanrufe",
+        "readAloudVoice": "Vorlesestimme",
+        "readAloudHint": "Klicke auf den Lautsprecher unter einer Textantwort, um sie mit dieser Stimme vorlesen zu lassen.",
+        "resetReadAloud": "Vorleseeinstellungen zurücksetzen",
+        "title": "Echtzeit-Audio",
+        "add": "Echtzeit-Audiomodelle hinzufügen",
+        "off": "Sprachsynthese verwenden"
+      },
       "openConversation": "Gespräch öffnen",
       "inCallWith": "Im Anruf mit {{name}}",
       "showDetails": "Anruftranskript anzeigen",
@@ -12858,7 +12895,7 @@
       "settingsTitle": "Stimme",
       "openSettings": "Stimmeinstellungen",
       "startConversation": "Sprachgespräch starten",
-      "settingsHint": "Wähle das Sprachmodell und die Stimme dieses Freundes und starte dann ein Sprachgespräch über das Nachrichtenfeld.",
+      "settingsHint": "Bei Anrufen mit Sprachsynthese gelten das folgende Modell und die Stimme auch für das Vorlesen von Nachrichten.",
       "previewNeedsChat": "Starte ein Gespräch mit diesem Freund, um eine Stimme anzuhören.",
       "voiceId": "Stimmen-ID",
       "manualVoice": "Stimmen-ID eingeben",
@@ -14648,6 +14685,7 @@
       "missingDir": "Ordner nicht gefunden"
     },
     "pendingQueue": {
+      "waitingForDevice": "Nicht gesendet · Wird gesendet, sobald der andere Computer wieder verbunden ist",
       "stopping": "Wird gestoppt",
       "queued": "In der Warteschlange",
       "editingInComposer": "Wird im Eingabefeld unten bearbeitet…",
@@ -15128,6 +15166,7 @@
       "unavailable": "Automatische Eingabe ist in der aktuellen App nicht verfügbar. Kopiere das Transkript und gib es manuell ein.",
       "unconfirmed": "Es konnte nicht bestätigt werden, ob die automatische Eingabe erfolgreich war. Kopiere bei Bedarf das Transkript.",
       "permission": "Für die Spracheingabe in der aktuellen App ist die Bedienungshilfen-Berechtigung erforderlich. Erteile sie und versuche es erneut.",
+      "appNotAllowed": "{{app}} darf diese App nicht steuern, daher wurde der Text nicht eingegeben. Füge die App in „System & App Protection Override“ für {{app}} hinzu oder kopiere den Text und füge ihn selbst ein.",
       "failed": "Automatische Eingabe fehlgeschlagen. Kopiere das Transkript und gib es manuell ein."
     },
     "permissionPrompts": {
@@ -15313,6 +15352,7 @@
       "label_other": "{{count}} neue Nachrichten"
     },
     "messageNavRail": {
+      "you": "Du",
       "aria": "Prompt-Navigation",
       "jumpAria": "Zu Prompt {{index}} springen: {{preview}}",
       "attachmentOnly_one": "{{count}} Anhang",
@@ -15464,6 +15504,7 @@
       "gatewayProxyTokenInvalid": "Die Zugangsdaten für Cindy AI sind nicht mehr gültig. Klicke auf „Erneut versuchen“. Falls es erneut passiert, melde dich ab und wieder an",
       "gatewayProxyTokenInvalidNoRetry": "Die Zugangsdaten für Cindy AI sind nicht mehr gültig. Falls es erneut passiert, melde dich ab und wieder an",
       "modelAccessDenied": "Das Konto beim vorgeschalteten Dienst hat keinen Zugriff auf dieses Modell. Wähle ein anderes Modell oder prüfe den Zugriff beim Anbieter",
+      "providerSafetyRefusal": "Die Sicherheitsrichtlinie des Modellanbieters hat diese Antwort blockiert. Passe deine Anfrage an, bevor du sie erneut sendest",
       "silentStopContinue": "Weiter",
       "silentStopContinueTitle": "Aktuelle Aufgabe fortsetzen",
       "piTransportClosed": "Verbindung zu Remote Pi unterbrochen (SSH-Kanal geschlossen). Die Remote-Aufgabe läuft weiter — verbinde dich erneut, um fortzufahren.",
@@ -15514,13 +15555,14 @@
       "modelCatalogUnconfirmed": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
       "actionScheduled": "Die Berechtigung für diese Aktion ist abgelaufen. Der nächste Lauf ist weiterhin geplant.",
       "actionExpired": "Die Sitzungsberechtigung für diese Aktion ist abgelaufen. Prüfe den letzten Lauf der Automatisierung.",
+      "modelRebuildRetry": "Die Anweisung wurde nicht gesendet. Öffne die Automatisierung auf deinem Computer und wähle „Jetzt ausführen“, um es erneut zu versuchen.",
       "actionRecovered": "Die Berechtigung für diese Aktion ist abgelaufen. Dieselbe Automatisierung wurde später erfolgreich ausgeführt.",
       "text": "Ein automatischer Durchlauf ist fehlgeschlagen.",
-      "prCheck_dns": "{{device}} konnte {{host}} nicht auflösen. Prüfe bei anhaltenden Problemen Netzwerk und DNS auf diesem Gerät. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
-      "prCheck_timeout": "Die Verbindung zu GitHub auf {{device}} ist abgelaufen. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
-      "prCheck_auth": "Melde dich auf {{device}} erneut bei GitHub an. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
-      "prCheck_rate-limit": "GitHub begrenzt die Anfragen von {{device}}. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
-      "prCheck_unknown": "Die PR-Prüfung auf {{device}} ist fehlgeschlagen. Details stehen im Laufprotokoll. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
+      "prCheck_dns": "{{device}} konnte {{host}} nicht auflösen. Prüfe bei anhaltenden Problemen Netzwerk und DNS auf diesem Gerät. Fehlversuche in Folge: {{failures}}. Planmäßige Prüfungen sind ab {{retry}} wieder möglich.",
+      "prCheck_timeout": "Die Verbindung zu GitHub auf {{device}} ist abgelaufen. Fehlversuche in Folge: {{failures}}. Planmäßige Prüfungen sind ab {{retry}} wieder möglich.",
+      "prCheck_auth": "Melde dich auf {{device}} erneut bei GitHub an. Fehlversuche in Folge: {{failures}}. Planmäßige Prüfungen sind ab {{retry}} wieder möglich.",
+      "prCheck_rate-limit": "GitHub begrenzt die Anfragen von {{device}}. Fehlversuche in Folge: {{failures}}. Planmäßige Prüfungen sind ab {{retry}} wieder möglich.",
+      "prCheck_unknown": "Die PR-Prüfung auf {{device}} ist fehlgeschlagen. Details stehen im Laufprotokoll. Fehlversuche in Folge: {{failures}}. Planmäßige Prüfungen sind ab {{retry}} wieder möglich.",
       "precheck": "Automatische Prüfungen sind vorübergehend blockiert.",
       "preRunBlocked": "Die Prüfung vor dem Start ist fehlgeschlagen. Dieser Lauf wurde nicht gestartet.",
       "rateLimited": "Automatische Prüfungen sind wegen eines Anfragelimits vorübergehend blockiert.",
@@ -17927,6 +17969,7 @@
       "openWorkdirFailed": "Ordner konnte nicht geöffnet werden"
     },
     "runs": {
+      "boundPluginEngineRecovery": "Die Automatisierung wurde nicht ausgeführt. Eine Automatisierung, die mit einer Aufgabe auf einer Plug-in-Engine verknüpft ist, nutzt das Modell der Aufgabe und läuft auf diesem Computer. Wenn in der Automatisierung ein Modell gewählt ist, entferne es und führe sie erneut aus.",
       "queueWaitTimeoutRecovery": "Die Wartezeit ist abgelaufen, bevor die Eingabe gesendet wurde. Sobald die Zielsitzung frei ist, wähle {{action}}, um sie auszuführen.",
       "status": {
         "running": "Wird ausgeführt",
@@ -18278,6 +18321,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Relatives Intervall",
+        "label": "Zeitsteuerung",
         "cronHint": "Wird zu festen Kalenderzeiten ausgeführt.",
         "intervalHint": "Wartet nach Ende der vorherigen Ausführung so lange.",
         "intervalUnsupportedHint": "Dieses exakte Intervall bleibt erhalten. Eine Minuten- oder Stundenvorgabe ersetzt es.",
@@ -18881,7 +18925,7 @@
       "expired": "Eingabeübergabe wegen zu langer Wartezeit beendet."
     },
     "failure": {
-      "permission": "Cindy kann die Oberfläche auf diesem Mac nicht lesen. Prüfe die Steuerungsberechtigung für die laufende Cindy-App. Die Steuerungsberechtigung findest du ab macOS 27.3 unter „System & App Protection Override“, auf älteren Versionen unter „Bedienungshilfen“.",
+      "permission": "Cindy kann die Oberfläche auf diesem Mac nicht lesen. Prüfe die Steuerungsberechtigung für die laufende Cindy-App. Die Steuerungsberechtigung findest du ab macOS 27.3 unter „System & App Protection Override“, auf älteren Versionen unter „Bedienungshilfen“. Darf Cindy nur ausgewählte Apps steuern, füge auch diese App hinzu.",
       "target_gone": "Das Zielfenster wurde geschlossen.",
       "unreadable": "Dieser Bildschirm kann nicht gelesen werden. Du kannst den Schritt auf dem Host-Computer abschließen und dann an den Agent zurückgeben.",
       "action_failed": "Diese Aktion hatte keine Wirkung. Prüfe den Bildschirm und versuche es erneut.",
@@ -22660,6 +22704,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Bei Problemen automatisch die Quelle wechseln",
+        "hint": "Fällt die Quelle dieses Modus aus, zur nächsten nutzbaren wechseln und es unter dem Durchgang vermerken. Ausgeschaltet wird der Wechsel nur beim Fehler angeboten."
+      },
       "newRoute": "Neuer Modus",
       "newRouteName": "Neuer Modus",
       "routesEmpty": "Noch keine Modi. Erstelle einen und füge mehrere Quellen hinzu.",
@@ -22892,6 +22940,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "Wähle in „System & App Protection Override“ {{app}} und klicke rechts auf ⓘ. Fehlt die App, füge die laufende Kopie mit + hinzu.",
-    "review": "$t(macControlPermission.selectApp)\nFalls angeboten, lässt sich die Kontrolle auf ausgewählte Apps beschränken. Vollständige Kontrolle erlaubt Zugriff auf alle Apps und Daten. Wenn du zustimmst, lies und bestätige jeden Punkt und erlaube den Zugriff unten im Fenster."
+    "review": "$t(macControlPermission.selectApp)\nFalls angeboten, lässt sich die Kontrolle auf ausgewählte Apps beschränken. Vollständige Kontrolle erlaubt Zugriff auf alle Apps und Daten. Wenn du zustimmst, lies und bestätige jeden Punkt und erlaube den Zugriff unten im Fenster.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nTastatur und Maus aus der Ferne wirken auf den ganzen Mac und brauchen deshalb die Kontrolle über den ganzen Mac: Wähle beim Hinzufügen mit + „Override System Protections“; ist die App schon aufgeführt, aktiviere unter ⓘ „Control Your Entire Mac and All Apps“. Sind nur ausgewählte Apps erlaubt, blockiert macOS jede Tastatur- und Mauseingabe aus der Ferne. Prüfe vor dem Erlauben den Zugriff, den macOS auflistet.",
+    "chosenAppsOnly": "{{app}} darf nur die ausgewählten Apps steuern, daher blockiert macOS jede Tastatur- und Mauseingabe aus der Ferne. Für die Fernsteuerung klicke in „System & App Protection Override“ neben {{app}} auf ⓘ und aktiviere „Control Your Entire Mac and All Apps“."
   }
 }

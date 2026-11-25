@@ -34,12 +34,14 @@
  */
 
 import { CredentialModeSwitchBusyError } from '../maker-host/credentialSwitchError.js';
+import { PROVIDER_GROUP_SUPERSEDED_ERROR } from '../provider-group/failurePolicy.js';
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import {
   CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   isSharedTaskPeer,
   parseProviderSharePeer,
 } from '@cindy/device-link';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -263,6 +265,9 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   ): Promise<{ deferred: boolean; superseded?: boolean }>;
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
+  /** Retire this task's uncompleted remote startup after an authorized manual
+   * choice, before waiting for the send lock held by its historical probe. */
+  cancelPendingRemoteStart?(sessionId: string, reason?: Error): void;
   /**
    * 停用轴的边界裁决(生产 = register.ts 的 assertModelRouteUsable,内核纯逻辑在
    * model-route-guard.ts)。跨引擎切换是新的路由选择,目标 (agent, model, 来源) 被
@@ -486,6 +491,8 @@ export interface PendingAgentSwitchIntent {
   cindyAutoRelocation?: { fromProviderId: string; targetProviderId: string };
   /** SET_MODEL intent: apply the route without a cross-engine handoff. */
   sameAgentSelection?: boolean;
+  /** Keep a rejected pick as a send barrier until a new user selection replaces it. */
+  requiresModelReselection?: true;
   /** Original user input, before staging fills omitted axes from the current row. */
   credentialSelectionAxes?: { effort: boolean; fastMode: boolean };
   /** Set by the host at selection time. Never projected or accepted from IPC. */
@@ -1798,6 +1805,9 @@ export function applyPendingAgentSwitchIfIdle(
         const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
         const access = sharedTask ? createSharedTaskPendingSelectionGuard(sharedTask, sessionId) : undefined;
         access?.();
+        if (intent.requiresModelReselection) {
+          throwIpcError('MODEL_SELECTION_UNAVAILABLE', 'Select an available model before sending');
+        }
         // #7825: the guest triggers a send, but the choice above came from the
         // host registry. Apply only that choice under host authority; retain the
         // captured send fence through preflight and admit before mutation. Keep
@@ -1889,6 +1899,12 @@ export function applyPendingAgentSwitchIfIdle(
       throwIfAgentSwitchAborted(opts?.signal);
     } catch (err) {
       // 失败(包括 pre-check 后 running guard 的竞态)保留原 intent,下一次发送重试。
+      if (intent.sameAgentSelection && intent.targetAgentKind === 'pi' && isUserPendingAgentSwitchIntent(intent)
+        && isIpcError(err) && err.code === 'MODEL_SELECTION_UNAVAILABLE') {
+        // Mutate only the object that failed. A concurrent re-selection owns a fresh intent.
+        intent.requiresModelReselection = true;
+        throw err;
+      }
       deps.log.warn('agent-switch: pending apply failed; intent retained for next send', {
         sessionId,
         targetAgentKind: intent.targetAgentKind,
@@ -1983,6 +1999,8 @@ export function registerMakerSessionAgentSwitchHandler(
         guard();
         // An authorized manual choice supersedes recovery even if locked admission later rejects it.
         onUserSwitchRequested(event, valid.sessionId);
+        deps.cancelPendingRemoteStart?.(valid.sessionId,
+          new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
       }
       const run = () => performSessionAgentSwitch(deps, request);
       return typeof sessionId === 'string' && sessionId && deps.withSessionLock

@@ -373,8 +373,14 @@ Desktop `runtime.transcript()` 经注入的 Chat History 读取，首次按现�
   「来自其他设备」，因为房间消息没有经认证的设备标识，不满足 [消息来源](message-source.md) 的盖章条件。
 - 手机换电脑后，只有在等待期间从目标电脑读到的列表行才算接管完成，缓存里的旧行不算。手机伙伴列表在列出的行变化
   （新行出现或已有行内容更新）和下拉刷新时重新读取各伙伴的主力电脑，停留在列表上也能跟上别处发起的换电脑。
-- 已知限制：主力电脑在第一次上传资料之前就离线时，其他电脑和手机暂时不能换电脑继续，要等主力电脑重新上线上传后。
-- 已知限制：伙伴跟随默认模型（云端没有它自己的模型链）、而这台电脑只连了产品推荐之外的供应商（自定义 / 第三方）时，没有可用的伙伴默认模型，接管建主任务会停在「请先连接模型供应商或选择伙伴模型」，副本保持降级，自动接管约每分钟重试。先在 设置 → 通用 → 伙伴 → 默认模型 选一个模型，下一轮自动重试就会读到它并完成接管，不需要重启或重装（接管每次按当前默认建主任务；回归见 `botCanonicalSession.test.ts`「retries into the main task once the owner sets the companions' default model」）。接管不为此回退到新任务草稿里选中的模型，以保持「伙伴默认模型与新任务选择独立」（[cindy-bots-runtime.md](cindy-bots-runtime.md) 2026-10-21 裁决）；一个可用模型都没有时同样如此。接管期间本机副本保持降级、不能运行；主力电脑是本机且副本已降级时，伙伴列表补一条只读云端恢复入口，沿用「在这台电脑继续」，同机另一安装持有它时也只允许用户显式接管，不自动抢占安装。恢复完成后云端补行消失，显示原 ID 的本机伙伴；其他电脑和手机仍按原规则补行。
+- 已知限制与显式接管韧性（2026-11-25 产品裁决）：
+  - **首次资料快照上传**：本安装首次确认归属（`checkInstall` 变为 `mine`）且云端尚无 `companion.profile.v1` 时，免 15 秒防抖立即触发首次资料上传，压缩「已登记主力电脑但尚无快照」的窗口。
+  - **云端无资料快照（`PROFILE_SNAPSHOT_MISSING`）**：后台自动接管（`scheduleAuto`）仍等待原主力电脑上传快照、不静默重建；显式「在这台电脑继续」分两类——
+    - **同机重装（`homeDeviceId === selfDeviceId`）**：直接跳过快照缺失拦截，复用本机已有资料或默认模板（Cindy 沿用 `cindy` 预设）加云端名字与头像拉回、认领安装、导入已有云端历史与其余内容，解除降级后立即上传资料快照（不绕过 `LOCAL_CINDY_CONFLICT`）；
+    - **异机接管（`homeDeviceId !== selfDeviceId`）**：首次返回 `PROFILE_SNAPSHOT_MISSING` 且不改主力电脑，界面经二次确认后带 `allowMissingProfile: true` 以初始资料拉回并保留已同步的云端对话与内容。
+  - **本机尚无可用伙伴默认模型**：显式接管经仅宿主可传入的 `allowMissingModel` 建立本机主任务、导入历史并解除降级，同时写入 `model_setup` 到达提示，用户进入伙伴后再连接供应商或选择模型；普通 IPC `local-db:bots:create-canonical-session` 仍按原规则要求可用模型（回归见 `botCanonicalSession.test.ts` 与 `control.test.ts`）。
+  - **局部内容与头像韧性**：显式接管时，头像下载遇到暂时性失败改用带本地隔离标记（`avatarFallback: true`）的默认头像完成拉回、不回写覆盖云端头像；记忆／技能／规则／自动化／关联项目中个别条目落盘失败时，跳过该项并在本机记下失败的云端 key，恢复完成前既不上传本机旧值，也不因本机缺失写入删除标记。写入 `partial_content` 到达提示并放行拉回。后台自动接管保留原有严格重试语义。
+  - 实现见 `companion-cloud/runtime.ts`、`materialize.ts`、`avatarRestore.ts`、`host.ts`、`localDb/ipc/bots.ts`、`maker-ipc/botCanonicalSessionEnsure.ts`；回归见 `control.test.ts`、`materialize.test.ts`、`avatarRestore.test.ts`、`botCanonicalSession.test.ts` 与 `companionCloudUi.test.tsx`。
 - 已知限制：交出伙伴时，对话导入完成之后产生的对话，以及最后一轮上传之后、服务器改主力电脑的请求返回之前（一次请求往返）
   写入的资料或记忆不会上传，只留在原电脑的本机副本里；不为此冻结伙伴的本机写入。原主力电脑仍在线时被别处「在这台电脑继续」接走，
   它正在进行的那一轮上传（资料，或一批对话导入）可能在接走之后才写入云端；迟到的对话留在房间里，新主力电脑已完成的历史导入不会再吸收它，直到下次接管。资料方面：新主力电脑本机仍是接管时的值，且不会覆盖这次写入（首次同步只更新版本号，不把云端较新的值当成本机修改；本机真正改了这一项才会上传），下次接管时才拿到；

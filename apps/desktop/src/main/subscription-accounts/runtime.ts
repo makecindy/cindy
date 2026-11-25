@@ -8,6 +8,7 @@ import { subscriptionImageModelId } from '../cindy-media/sharedSubscriptionImage
 import { getCodexHome } from '../maker-host/codex-home-path.js';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { type AuthState, type NativeSubscriptionAccount } from '@cindy/maker-core';
+import { readAccountBeforeSend } from './remotePreflight.js';
 import { matchScopedWindowForModel } from '@cindy/maker-shared/subscription-usage';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
@@ -1460,7 +1461,13 @@ export async function refreshSubscriptionPoolCodexModels(
           ? restored.models.some(model => cached.has(model.id) && !reported.has(model.id))
           : Number.isFinite(Date.parse(nativeCache?.fetched_at)));
         if (needsConfirmation) {
-          const visible = restored?.models ?? mapped;
+          // An uncertain removal does not invalidate additions present in both
+          // the live reply and this profile's cache. Keep the durable baseline
+          // until we can confirm the whole list.
+          const priorIds = new Set(restored?.models.map(model => model.id));
+          const visible = restored
+            ? [...restored.models, ...mapped.filter(model => cached.has(model.id) && !priorIds.has(model.id))]
+            : mapped;
           state.codexModels.set(id, { auth, accountKey: info.accountKey, models: visible,
             confirmedAt: restored?.confirmedAt, failedAt: confirmedAt });
           log.info('Codex model list differs from cached membership; awaiting confirmation', { refreshId,
@@ -2329,7 +2336,8 @@ async function readRemoteTaskAccount(
   const legacyProviderId = provider === 'openai' && row.providerId && !taskSubscriptionProvider(row)
     ? row.providerId : undefined;
   const routeProviderId = legacyProviderId ? undefined : row.providerId ?? undefined;
-  const reply = await invokeRemote(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
+  const read = readAccountBeforeSend(invokeRemote, state);
+  const reply = await read(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
     action: 'session', providerId: provider,
     ...(row.sdkSessionId ? { nativeSessionId: row.sdkSessionId } : {}),
     ...(row.model ? { model: row.model } : {}),
@@ -2359,7 +2367,7 @@ async function readRemoteTaskAccount(
   if (!paused || view.routeProviderId !== undefined) return { number, paused, blocked, ...replacement,
     available: (blocked || paused) && view.account.switchAvailable === true };
   if (!row.model) return { number, paused, blocked, available: false };
-  const availableReply = await invokeRemote(row.agentDeviceId, 'maker:subscription-pool:quota',
+  const availableReply = await read(row.agentDeviceId, 'maker:subscription-pool:quota',
     [provider, row.model], { preSend });
   assertOwner(state);
   const available = availableReply.ok
