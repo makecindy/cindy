@@ -11,6 +11,7 @@ import {
   pluginMarketRequest, type PluginMarketCounts, type PluginMarketFilter, type PluginMarketPage,
 } from "./pluginMarketCatalog";
 import { usePluginManagement } from "./usePluginManagement";
+import type { PluginManagementState } from "./pluginManagementController";
 
 /** Same freshness window as the computer's market browser; pull-to-refresh always re-reads. */
 const MARKET_REFRESH_MS = 30_000;
@@ -151,28 +152,38 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const scope = JSON.stringify([deviceId ?? "", accountGeneration, connectionEpoch]);
   const liveScope = useRef(scope);
   liveScope.current = scope;
-  const client = useMemo<PluginManagementClient | null>(() => deviceId
-    ? createPluginManagementClient({ invoke, deviceId, isCurrent: () => liveScope.current === scope })
-    : null, [deviceId, invoke, scope]);
-  const active = visible && focused && online && !!client;
-  const activeRef = useRef(active);
-  activeRef.current = active;
-  // Refs keep their last render's values after unmount; this flag fences replies and follow-up pages.
+  // Refs keep their last render's values after unmount; this flag fences sends, replies and follow-up pages.
   // Reset on mount so a development remount (effects run twice) keeps working.
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const activeRef = useRef(false);
+  /**
+   * The one send fence for every market read (probe, pages, counts, detail): the plugins page is mounted and
+   * the market is shown on a focused, online computer. The client re-checks it right before a queued request
+   * leaves, so nothing queued before unmount or leaving the market goes out on the shared link.
+   */
+  const readsOpen = () => mounted.current && activeRef.current;
+  const client = useMemo<PluginManagementClient | null>(() => deviceId
+    ? createPluginManagementClient({ invoke, deviceId, isCurrent: () => readsOpen() && liveScope.current === scope })
+    : null, [deviceId, invoke, scope]);
+  const active = visible && focused && online && !!client;
+  activeRef.current = active;
 
   const [probe, setProbe] = useState<{ scope: string; status: "loading" | "supported" | "outdated" | "failed" }>();
+  // Only the newest probe lands: leaving a computer and coming back starts another probe for the same scope,
+  // and the older one must not overwrite its result when it finishes (or times out) later.
+  const probeGeneration = useRef(0);
   const readProbe = useCallback(async () => {
     if (!client) return;
-    const probeScope = scope;
+    const probeScope = scope, generation = ++probeGeneration.current;
+    const latest = () => mounted.current && probeGeneration.current === generation && liveScope.current === probeScope;
     setProbe({ scope: probeScope, status: "loading" });
     try {
       const status = (await client.capability()) === "unsupported" ? "outdated"
         : (await client.catalogPaging()) ? "supported" : "outdated";
-      if (liveScope.current === probeScope) setProbe({ scope: probeScope, status });
+      if (latest()) setProbe({ scope: probeScope, status });
     } catch {
-      if (liveScope.current === probeScope) setProbe({ scope: probeScope, status: "failed" });
+      if (latest()) setProbe({ scope: probeScope, status: "failed" });
     }
   }, [client, scope]);
   useEffect(() => {
@@ -205,6 +216,15 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   liveFilter.current = filter;
   const liveQuery = useRef("");
   liveQuery.current = options.query.trim().slice(0, PLUGIN_MARKET_QUERY_MAX);
+  /**
+   * The one gate for asking for a next page (automatic chain and scroll "load more"): the page is mounted,
+   * the market is shown, this is still the cached list on screen, and the typed search equals the settled
+   * one. The automatic chain also needs the source filter it judged the page by (official and community
+   * share one public list).
+   */
+  const followUpAllowed = (list: CatalogList, query: string, publisher?: PluginMarketFilter) => readsOpen()
+    && lists.current.get(list.key) === list && liveListKey.current === list.key && liveQuery.current === query
+    && (publisher === undefined || liveFilter.current === publisher);
   /** A search shows every source, so its pages are judged against "all", not the hidden source filter. */
   const publisher: PluginMarketFilter = debouncedQuery ? "all" : filter;
   const lists = useRef(new Map<string, CatalogList>());
@@ -246,8 +266,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       // A publisher tab may find nothing on a public page; continue a few pages, never unbounded.
       const contributed = fresh.filter((item) => pluginMarketMatchesFilter(item, publisher)).length;
       if (page.nextCursor && contributed === 0 && (publisher === "official" || publisher === "community")
-        && chain.current < MAX_EMPTY_CHAIN && mounted.current && activeRef.current && liveListKey.current === list.key
-        && liveFilter.current === publisher && liveQuery.current === debouncedQuery) {
+        && chain.current < MAX_EMPTY_CHAIN && followUpAllowed(list, debouncedQuery, publisher)) {
         chain.current += 1;
         list.loadingMore = true;
         await readPage(list, page.nextCursor, publisher, token);
@@ -323,11 +342,12 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
         : list.status === "failed" && !list.items.length ? "failed" : "ready";
   const loadMore = useCallback(() => {
     const current = lists.current.get(listKey);
-    if (!ready || !current || current.status !== "ready" || current.loadingMore || !current.nextCursor) return;
+    if (!ready || !current || current.status !== "ready" || current.loadingMore || !current.nextCursor
+      || !followUpAllowed(current, debouncedQuery)) return;
     current.loadingMore = true;
     rerender();
     void readPage(current, current.nextCursor, publisher);
-  }, [ready, listKey, readPage, publisher]);
+  }, [ready, listKey, readPage, publisher, debouncedQuery]);
   const refresh = useCallback(async () => {
     if (!active) return;
     if (probeStatus !== "supported") { await readProbe(); return; }
@@ -434,32 +454,38 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     })();
   }, [install, management.state, management.controller, finish, invoke]);
   /**
-   * Without the original operation's receipt, a same-id plugin in the snapshot is not proof: a local
-   * package can share the ghost id and namespace. Settle as installed only when the computer's market
-   * facts for this exact plugin say it is installed from this source at the release we asked for.
-   * Conflict, another source or another release keeps the result unconfirmed; nothing unrelated opens.
-   * One market-detail read per fresh snapshot.
+   * Settle an install whose original receipt the Host no longer has (NOT_FOUND), from the facts the
+   * controller read right after that answer (missingReceiptFacts), never from an earlier snapshot.
+   * - No same-id instance in those facts: release the row, "could not confirm; not on this computer now".
+   * - A same-id instance is only a lead (a local package can share id and namespace): read the market facts
+   *   for this exact plugin; installed at the release we asked for settles as installed and opens that
+   *   instance; anything else (conflict, another release or source) releases the row with an unconfirmed
+   *   note. The original operation is never sent again; a new install stays the person's explicit choice.
+   * Each settling run has a generation: a market-detail reply lands only if no newer verification started
+   * and the controller still holds the same facts.
    */
-  const verifiedSnapshot = useRef<unknown>(undefined);
-  const confirmUnknown = useCallback(async (attempt: InstallAttempt, snapshot: unknown, instanceKey: string, receiptGone: boolean) => {
-    if (verifiedSnapshot.current === snapshot) return;
-    verifiedSnapshot.current = snapshot;
-    const current = () => installRef.current?.id === attempt.id;
-    let facts: ManagedMarketDetail;
+  const settledFacts = useRef<unknown>(undefined);
+  const verification = useRef(0);
+  const settleMissingReceipt = useCallback(async (attempt: InstallAttempt, facts: NonNullable<PluginManagementState["missingReceiptFacts"]>) => {
+    if (settledFacts.current === facts) return;
+    settledFacts.current = facts;
+    const generation = ++verification.current;
+    const controller = management.controller;
+    const current = () => installRef.current?.id === attempt.id && verification.current === generation
+      && controller?.getState().missingReceiptFacts === facts;
+    const instance = facts.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
+    if (!instance) { finish(attempt, "plugins.market.unconfirmedNotInstalled"); return; }
+    let market: ManagedMarketDetail;
     try {
-      facts = await createPluginManagementClient({ invoke, deviceId: attempt.target.deviceId, isCurrent: current })
+      market = await createPluginManagementClient({ invoke, deviceId: attempt.target.deviceId, isCurrent: current })
         .detail(attempt.item.pluginId);
     } catch {
-      return; // Facts not read: still unconfirmed; "Check result" reads again with the next fresh snapshot.
+      return; // Market facts not read: still unconfirmed; "Check result" verifies again.
     }
     if (!current()) return;
-    if (facts.installState === "installed" && facts.releaseId === attempt.item.releaseId) { complete(attempt, instanceKey); return; }
-    // The Host no longer knows the original operation and its facts do not show this install: the same-id
-    // plugin is something else (local package, another version or source). Keep the unconfirmed note on
-    // this row only and release the market and the other management actions. The original operation is
-    // never sent again; a new install stays the person's explicit choice.
-    if (receiptGone) finish(attempt, "plugins.market.unconfirmedMismatch");
-  }, [invoke, complete, finish]);
+    if (market.installState === "installed" && market.releaseId === attempt.item.releaseId) complete(attempt, instance.instanceKey);
+    else finish(attempt, "plugins.market.unconfirmedMismatch");
+  }, [invoke, complete, finish, management.controller]);
   useEffect(() => {
     const attempt = install, state = management.state;
     if (!attempt?.started || !state) return;
@@ -469,10 +495,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       setInstall(next);
     } else if (state.outcome === "failed") finish(attempt, pluginMarketErrorKey(state.errorCode));
     else if (state.outcome === "cancelled") finish(attempt);
-    else if (state.outcome === "unknown" && !state.busy) {
-      // A later read that names a same-id instance is only a lead; the market facts decide (see confirmUnknown).
-      const installed = state.snapshot?.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
-      if (installed) void confirmUnknown(attempt, state.snapshot, installed.instanceKey, state.errorCode === "NOT_FOUND");
+    else if (state.outcome === "unknown" && !state.busy && state.missingReceiptFacts) {
+      // Only facts read after the Host said the receipt is gone settle the result (see settleMissingReceipt).
+      // While the receipt may still exist (timeout, offline) the result stays unconfirmed until it is read.
+      void settleMissingReceipt(attempt, state.missingReceiptFacts);
     } else if (state.outcome === "succeeded" && !state.busy) {
       // Wait for the controller's post-commit readback; it locates the new physical instance.
       const installed = state.snapshot?.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
@@ -481,7 +507,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       const timer = setTimeout(() => complete(attempt, undefined), 5_000);
       return () => clearTimeout(timer);
     }
-  }, [install, management.state, finish, complete, confirmUnknown]);
+  }, [install, management.state, finish, complete, settleMissingReceipt]);
   const rowState = (item: ManagedMarketItem): PluginMarketRowState => {
     if (install?.item.pluginId === item.pluginId && install.target.deviceId === deviceId) {
       const outcome = management.state?.outcome;
@@ -496,27 +522,19 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     return { kind: "idle" };
   };
   /**
-   * "Check result" only looks up the original operation (never a second begin); a receipt it finds
-   * settles the attempt. If the Host no longer knows it (restart, 15-minute receipt expiry, or begin never
-   * arrived), the reconcile's fresh read of the computer decides: a same-id instance is checked against
-   * the market facts (confirmUnknown) and either settles as installed or, not matching, releases the row
-   * with an unconfirmed note; absent → release the row and say we could not confirm and it is not installed
-   * now. That reports a current fact; it does not claim a rollback, and any new install stays the user's
-   * explicit choice. While the computer is only unreachable (no NOT_FOUND), the result stays unconfirmed.
+   * "Check result" only looks up the original operation (never a second begin); a receipt it finds settles
+   * the attempt. If the Host no longer knows it (restart, 15-minute receipt expiry, or begin never arrived),
+   * the controller reads the computer again and the attempt settles from those facts (settleMissingReceipt).
+   * While the computer is only unreachable (no NOT_FOUND), the result stays unconfirmed.
    */
   const checkResult = useCallback(async () => {
     const attempt = installRef.current, controller = management.controller;
     if (!attempt || !controller) return;
-    const before = controller.getState().snapshot;
     await controller.reconcile();
     const state = controller.getState();
-    if (installRef.current?.id !== attempt.id || state.outcome !== "unknown") return;
-    const fresh = state.snapshot !== before ? state.snapshot : null;
-    if (!fresh) return;
-    const installed = fresh.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
-    if (installed) await confirmUnknown(attempt, fresh, installed.instanceKey, state.errorCode === "NOT_FOUND");
-    else if (state.errorCode === "NOT_FOUND") finish(attempt, "plugins.market.unconfirmedNotInstalled");
-  }, [management.controller, confirmUnknown, finish]);
+    if (installRef.current?.id !== attempt.id || state.outcome !== "unknown" || !state.missingReceiptFacts) return;
+    await settleMissingReceipt(attempt, state.missingReceiptFacts);
+  }, [management.controller, settleMissingReceipt]);
 
   return {
     target, online, targets, selectDevice,

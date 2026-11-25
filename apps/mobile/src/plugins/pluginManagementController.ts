@@ -16,6 +16,12 @@ export interface PluginManagementState {
   online: boolean;
   outcome: 'idle' | 'running' | 'confirmation' | 'succeeded' | 'cancelled' | 'failed' | 'unknown';
   errorCode: string | null;
+  /**
+   * The installed snapshot read right after the Host reported the original operation gone (NOT_FOUND).
+   * Callers that settle a lost receipt use only these facts, never a snapshot read earlier. Cleared on a
+   * new operation or outcome; absent when that read failed.
+   */
+  missingReceiptFacts?: PluginManagementSnapshot | null;
 }
 export interface PluginManagementControllerOptions {
   /** Optional shared chat hint. Never used by readSnapshot or mutation validation. */
@@ -49,6 +55,8 @@ export function createPluginManagementController(client: PluginManagementClient,
   const publish = (patch: Partial<PluginManagementState>) => {
     if (disposed) return;
     state = { ...state, ...patch };
+    // Facts about a missing receipt belong to that unknown result only.
+    if ((patch.outcome !== undefined && patch.outcome !== 'unknown') || patch.operationId !== undefined) state.missingReceiptFacts = null;
     options.onChange?.(state);
     listeners.forEach((listener) => listener());
   };
@@ -203,8 +211,13 @@ export function createPluginManagementController(client: PluginManagementClient,
     catch (error) {
       if (!current(token)) return;
       // NOT_FOUND can mean Host restart or its 15-minute memory expiry. Never infer rollback or send begin again.
-      publish({ busy: false, outcome: 'unknown', errorCode: pluginManagementErrorCode(error) });
-      try { await readSnapshot(token); } catch { /* Keep the original unknown-result reason. */ }
+      const code = pluginManagementErrorCode(error);
+      const gone = code === 'NOT_FOUND';
+      // While the facts after a missing receipt are read, stay busy: the snapshot already in state predates them.
+      publish({ busy: gone, outcome: 'unknown', errorCode: code, missingReceiptFacts: null });
+      let fresh: PluginManagementSnapshot | null = null;
+      try { fresh = await readSnapshot(token); } catch { /* Keep the original unknown-result reason. */ }
+      if (gone && current(token)) publish({ busy: false, missingReceiptFacts: fresh });
     }
   }
   async function answer(confirmed: boolean) {

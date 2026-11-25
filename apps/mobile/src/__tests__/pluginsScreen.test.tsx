@@ -2261,6 +2261,193 @@ describe("market reads that outlive their purpose", () => {
     expect(requests.filter((request) => request.input?.read === "catalog" && !request.input.query.counts)).toHaveLength(1);
   });
 });
+/* 测试价值（PR #12684 第五轮评审：读取围栏统一与回执过期后的判定绑定，2026-11-25）
+ * - 生产入口与可观察结果：真实 PluginsScreen + usePluginMarket + 管理 client/controller；观察真正离开设备互联的请求、
+ *   能力探测状态、行内状态与是否打开已装实例。
+ * - 依据：维护者 03:10 第 1 条（NOT_FOUND 后只用本次新读到的快照与实例，核对市场详情读取代次）；Codex：卸载后的发送围栏、
+ *   同 scope 能力探测代次、搜索未稳定时的滚动续页；server-channel-review.md 无消费者的请求不发。
+ * - 缺口：此前回包落地有围栏，排队中的请求在发出前没有；探测只比较 scope；loadMore 不看未去抖的搜索词；
+ *   NOT_FOUND 后可用旧快照结束核实。
+ * - 最小失败输入：排队中卸载；A 的第一次探测在第二次成功后才超时；去抖期间滚动；NOT_FOUND 后新快照挂起；旧详情晚到。
+ * - tier: unit（jsdom，内存 Host）。
+ */
+describe("market read fences and lost-receipt facts", () => {
+  type Request = { device: string; actionId?: string; input?: any; resourceRef?: any };
+  // Like the real link queue: the client's last check (preSend) runs only when the request actually leaves.
+  function queuedWire(respond: (request: Request) => unknown, wait: (request: Request | "manifest", device: string) => Promise<void> | undefined) {
+    const sent: Request[] = [];
+    fixture.realManagement = true;
+    fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => {
+      if (channel.endsWith(":manifest")) {
+        await wait("manifest", device);
+        options?.preSend?.();
+        return { protocolVersion: 1, collections: [{ id: "plugins", actions: [{ id: "management:snapshot", label: "Manage" }] }] };
+      }
+      const envelope = args?.[0] ?? {};
+      const request = { device, actionId: envelope.actionId, input: envelope.input, resourceRef: envelope.resourceRef };
+      await wait(request, device);
+      options?.preSend?.();
+      sent.push(request);
+      return { effects: [], result: await respond(request) };
+    });
+    return sent;
+  }
+  const deferred = () => { let release!: () => void; const promise = new Promise<void>((resolve) => { release = resolve; }); return { promise, release }; };
+
+  it("does not send queued catalog and count reads after the plugins page unmounts", async () => {
+    const gate = deferred();
+    const sent = queuedWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true }
+      : { ...marketPage([marketItem("demo", "Demo")]), counts: null },
+    (request) => request !== "manifest" && request.input?.read === "catalog" ? gate.promise : undefined);
+    await openMarket();
+    await act(async () => root.render(null));
+    await act(async () => { gate.release(); });
+    await settle(10);
+    expect(sent.filter((request) => request.input?.read === "catalog")).toEqual([]);
+  });
+  it("does not send the paging probe when the manifest read finishes after the page unmounted", async () => {
+    const gate = deferred();
+    const sent = queuedWire(() => ({ catalogPaging: true }), (request) => request === "manifest" ? gate.promise : undefined);
+    await act(async () => root.render(createElement(PluginsScreen)));
+    await act(async () => fixture.props.get("directory").onSegmentChange("market"));
+    await settle();
+    await act(async () => root.render(null));
+    await act(async () => { gate.release(); });
+    await settle(10);
+    expect(sent.filter((request) => request.input?.read === "capabilities")).toEqual([]);
+  });
+  it("keeps a newer successful probe when an older probe for the same computer fails later", async () => {
+    fixture.extraDevices = [{ deviceId: "pc", name: "PC", platform: "win32", remoteControlEnabled: true }];
+    const firstMacProbe = deferred();
+    let macManifests = 0;
+    fixture.realManagement = true;
+    fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => {
+      if (channel.endsWith(":manifest")) {
+        if (device === "mac" && ++macManifests === 1) { await firstMacProbe.promise; throw new Error("[TIMEOUT] remote invoke timed out"); }
+        options?.preSend?.();
+        return { protocolVersion: 1, collections: [{ id: "plugins", actions: [{ id: "management:snapshot", label: "Manage" }] }] };
+      }
+      options?.preSend?.();
+      const input = args?.[0]?.input;
+      return { effects: [], result: input?.read === "capabilities" ? { catalogPaging: true } : marketPage([marketItem(`${device}-demo`, `${device} demo`)]) };
+    });
+    await openMarket();
+    expect(shownMarket()).toMatchObject({ status: "loading", target: { deviceId: "mac" } });
+    await act(async () => shownMarket().selectDevice("pc"));
+    await settle();
+    await act(async () => shownMarket().selectDevice("mac"));
+    await settle(14);
+    expect(shownMarket()).toMatchObject({ status: "ready", items: [expect.objectContaining({ name: "mac demo" })] });
+    await act(async () => { firstMacProbe.release(); });
+    await settle(10);
+    expect(shownMarket().status).toBe("ready");
+  });
+  it("does not load the next page of the old search while the new search text is not debounced yet", async () => {
+    const sent = queuedWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true }
+      : { ...marketPage([marketItem("demo", "Demo")]), nextCursor: "cursor-1", counts: null }, () => undefined);
+    await openMarket();
+    expect(shownMarket()).toMatchObject({ hasMore: true });
+    await act(async () => fixture.props.get("stack").headerSearchBarOptions.onChangeText({ nativeEvent: { text: "rota" } }));
+    await act(async () => shownMarket().loadMore());
+    await settle();
+    expect(sent.filter((request) => request.input?.query?.cursor)).toEqual([]);
+  });
+
+  // Maintainer review 03:10 #1: a snapshot read before NOT_FOUND must not settle the result, and a market
+  // detail from an earlier verification must not open an instance.
+  const item = marketItem("demo", "Demo");
+  const demoManifest = { schemaVersion: 3, id: "demo", name: "Demo", version: "1" };
+  it("waits for the snapshot read after NOT_FOUND instead of settling from an earlier one", async () => {
+    let installed = false, receiptGone = false;
+    const snapshotGate = deferred();
+    let holdSnapshot = false;
+    const sent = queuedWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return marketPage([item]);
+          return managementSnapshot(installed);
+        case "management:market-detail": return { ...item, installState: installed ? "conflict" : "not-installed", manifest: demoManifest };
+        // The install is accepted and keeps running on the computer.
+        case "management:begin": installed = true; return { operationId: request.input.operationId, phase: "running" };
+        case "management:operation":
+          if (receiptGone) throw hostError("NOT_FOUND");
+          return { operationId: request.input.operationId, phase: "running" };
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    }, (request) => {
+      if (holdSnapshot && request !== "manifest" && request.actionId === "management:snapshot" && request.input?.read === "installed") {
+        holdSnapshot = false;
+        return snapshotGate.promise;
+      }
+      return undefined;
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    expect(fixture.props.get("confirmation").state.outcome).toBe("running");
+    // While the operation runs, a plugin-change refresh puts the same-id instance into the controller's snapshot.
+    await act(async () => { await fixture.props.get("confirmation").controller.refresh(); });
+    await settle();
+    expect(shownMarket()).toMatchObject({ installBusy: true });
+    receiptGone = true;
+    holdSnapshot = true;
+    const detailsBefore = sent.filter((request) => request.actionId === "management:market-detail").length;
+    await act(async () => { void shownMarket().checkResult(); });
+    await settle(14);
+    // NOT_FOUND arrived but the fresh snapshot is still being read: nothing is concluded yet.
+    expect(shownMarket()).toMatchObject({ installBusy: true });
+    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
+    expect(sent.filter((request) => request.actionId === "management:market-detail")).toHaveLength(detailsBefore);
+    // Meanwhile the instance was removed on the computer; the fresh facts decide.
+    installed = false;
+    await act(async () => { snapshotGate.release(); });
+    await settle(14);
+    expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+  });
+  it("ignores a market detail from an earlier verification that arrives late", async () => {
+    let verifying = false;
+    const details: Array<{ release: () => void; promise: Promise<void> }> = [];
+    queuedWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return marketPage([item]);
+          return managementSnapshot(verifying);
+        case "management:market-detail":
+          // The first verification's facts said "installed"; the second (newer) says "conflict".
+          if (!verifying) return { ...item, manifest: demoManifest };
+          return { ...item, installState: (request as any).verification === 1 ? "installed" : "conflict", manifest: demoManifest };
+        case "management:begin": verifying = true; throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:operation": throw hostError("NOT_FOUND");
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    }, (request) => {
+      if (verifying && request !== "manifest" && request.actionId === "management:market-detail") {
+        const gate = deferred();
+        details.push(gate);
+        (request as any).verification = details.length;
+        return gate.promise;
+      }
+      return undefined;
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    await act(async () => { void shownMarket().checkResult(); });
+    await settle(14);
+    await act(async () => { void shownMarket().checkResult(); });
+    await settle(14);
+    expect(details).toHaveLength(2);
+    await act(async () => { details[0]!.release(); });
+    await settle(10);
+    await act(async () => { details[1]!.release(); });
+    await settle(10);
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
+  });
+});
 // Review F2 (2026-11-25): an offline remembered computer should not cost an extra step; explicit choices stay.
 describe("market computer choice", () => {
   const remembered = "cindy.pluginMarketDevice.v1.demo";
