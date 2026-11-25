@@ -102,7 +102,7 @@ export type SendToRemoteSessionCallback = (params: {
 }) => Promise<
   ControlResult<
     {
-      agentKind: ControlWorkerAgent;
+      agentKind: ControlWorkerEngine;
       wakeKind: "resumed" | "already-active" | "queued";
       targetTitle: string | null;
       targetLastUserSendAt: string | null;

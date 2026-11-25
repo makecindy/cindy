@@ -40,6 +40,8 @@ export interface SessionRowSnapshot {
   sideChatPromoted?: boolean;
   /** 会话当前模型;限额判定据此只看该模型的额度窗口。 */
   model?: string | null;
+  /** 会话保存的思考深度;lazy-resume 恢复时沿用。 */
+  effort?: string | null;
   /** Native id used by the execution host to resolve the task's subscription account. */
   sdkSessionId?: string | null;
   /** Authoritative `/clear` visibility boundary (unix ms). */
@@ -70,6 +72,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       source: sessions.source,
       sideChatPromoted: sessions.sideChatPromoted,
       model: sessions.model,
+      effort: sessions.effort,
       sdkSessionId: sessions.sdkSessionId,
     })
     .from(sessions)
