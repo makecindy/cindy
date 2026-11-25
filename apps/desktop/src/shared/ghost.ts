@@ -1092,6 +1092,16 @@ export interface GhostSecretOauthDecl {
   /** code / refresh token 交换端点(https;域名必须命中 hosts——clientSecret 只流向用户同意过的域名)。 */
   tokenUrl: string;
   /**
+   * 可选:设备码授权端点(RFC 8628 Device Authorization Grant,https;域名必须命中
+   * hosts)。声明后主机改走「设备码登录」:向本端点申请 user_code 与确认页,
+   * 拉起确认页(远程时交给控制端展示验证码),再按服务商给的间隔轮询 tokenUrl
+   * (grant_type=urn:ietf:params:oauth:grant-type:device_code),无需 loopback 回调,
+   * 服务商后台也不用登记重定向 URL。令牌保管、刷新与注入与授权码模式完全一致。
+   * authorizeUrl 仍必填:不认识本字段的旧主机会忽略它,退回授权码 + loopback 流程。
+   * 与 tokenBroker / brokerBounce 互斥(broker 只承接授权码交换)。
+   */
+  deviceAuthorizationUrl?: string;
+  /**
    * 可选:作者内置的 OAuth 客户端 ID(2026-07-13 Lizi 定案,filo-google
    * 开箱即用前置)。声明后用户零配置即可点"连接账号";用户在设置页自填的
    * client 凭证**覆盖**内置值(清除自填 = 回落内置)。桌面应用的 client
@@ -2668,9 +2678,12 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       // OAuth 凭证:展示授权域名 + scopes 全量如实列出(通用声明式的知情
       // 同意面——平台不预设 provider,用户看到的就是全部授权事实)。detail
       // 用作者声明的 scope 原文,不翻译不加工。
-      let authorizeHost = secret.oauth.authorizeUrl;
+      // 设备码登录时用户在设备码端点所属服务确认授权,展示该域名;未声明时
+      // 仍展示 authorizeUrl,存量插件的权限投影保持不变。
+      const authorizeEndpoint = secret.oauth.deviceAuthorizationUrl ?? secret.oauth.authorizeUrl;
+      let authorizeHost = authorizeEndpoint;
       try {
-        authorizeHost = new URL(secret.oauth.authorizeUrl).hostname;
+        authorizeHost = new URL(authorizeEndpoint).hostname;
       } catch {
         /* 校验已保证合法,防御性兜底原文 */
       }
@@ -6355,6 +6368,19 @@ function validateGhostManifestInput(
           if (!authorizeParsed.ok) return authorizeParsed;
           const tokenParsed = parseHostBoundUrl(oa.tokenUrl, 'tokenUrl');
           if (!tokenParsed.ok) return tokenParsed;
+          let deviceAuthorizationUrl: string | undefined;
+          if (oa.deviceAuthorizationUrl !== undefined) {
+            const deviceParsed = parseHostBoundUrl(oa.deviceAuthorizationUrl, 'deviceAuthorizationUrl');
+            if (!deviceParsed.ok) return deviceParsed;
+            if (oa.tokenBroker !== undefined || oa.brokerBounce !== undefined) {
+              return {
+                ok: false,
+                reason:
+                  'network.secrets[].oauth.deviceAuthorizationUrl 与 tokenBroker / brokerBounce 互斥(broker 只承接授权码交换)',
+              };
+            }
+            deviceAuthorizationUrl = deviceParsed.url;
+          }
           // 内置 client 凭证(可选,成对语义:secret 不许孤儿声明)。
           if (oa.clientId !== undefined) {
             if (
@@ -6656,6 +6682,7 @@ function validateGhostManifestInput(
           oauth = {
             authorizeUrl: authorizeParsed.url,
             tokenUrl: tokenParsed.url,
+            ...(deviceAuthorizationUrl !== undefined ? { deviceAuthorizationUrl } : {}),
             ...(oa.clientId !== undefined ? { clientId: oa.clientId as string } : {}),
             ...(oaClientIdAlternatives !== undefined
               ? { clientIdAlternatives: oaClientIdAlternatives }

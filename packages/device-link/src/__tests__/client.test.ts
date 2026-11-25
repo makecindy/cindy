@@ -13155,9 +13155,17 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       expect(acked.rttMs).toBeGreaterThanOrEqual(0);
       expect(acked.sentAgoMs).toBeGreaterThanOrEqual(40);
       expect(acked.receivedAgoMs).toBeNull();
-      encodeReliableFrames({
-        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: { channel: 'maker:event', payload: { n: 1 } },
-      }, 'peer-stream', 1).forEach((frame) => ws.push(frame));
+      const splitFrames = encodeReliableFrames({
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+        payload: { channel: 'maker:event', payload: { text: 'x'.repeat(300_000) } },
+      }, 'peer-stream', 1);
+      expect(splitFrames.length).toBeGreaterThan(1);
+      ws.push(splitFrames[0]);
+      await vi.advanceTimersByTimeAsync(0);
+      offset += 10;
+      const assembling = h.client.getPeerLinkSnapshots()[0];
+      expect(assembling.receivedAgoMs).toBeGreaterThanOrEqual(10);
+      for (const frame of splitFrames.slice(1)) ws.push(frame);
       await vi.advanceTimersByTimeAsync(0);
       offset += 25;
       const received = h.client.getPeerLinkSnapshots()[0];

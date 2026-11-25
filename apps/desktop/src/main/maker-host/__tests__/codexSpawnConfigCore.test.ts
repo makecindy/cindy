@@ -8,9 +8,10 @@ import { setActiveCatalog } from '../active-catalog.js';
 import { createCodexSpawnConfig } from '../codexSpawnConfigCore.js';
 import { prepareCodexBrowserCompanion } from '../codex-browser-companion.js';
 import { prepareCodexCustomContextCatalog } from '../codex-custom-context-catalog.js';
+import { desktopMakerLogger } from '../logger-adapter.js';
 
 vi.mock('../logger-adapter.js', () => ({
-  desktopMakerLogger: { warn: vi.fn(), error: vi.fn() },
+  desktopMakerLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock('../subagent-model-settings-store.js', () => ({
   readSubagentModelSettings: () => ({ codexSmartSubagentRouting: false }),
@@ -158,6 +159,65 @@ describe('Codex spawn MCP ownership', () => {
     f.scopedReady.mockReturnValue(false);
     await expect(f.prepare([], guest)).rejects.toMatchObject({ codexSpawnConfigFatal: true });
     expect(f.release).toHaveBeenCalledOnce();
+  });
+
+  // 测试价值：依据未装 ChatGPT.app 重复 WARN 1550 次事故；此前 codexSpawnConfigCore.test.ts 只 mock ready 状态，
+  // 漏测 unavailable 时的日志级别与重复准备去重；失效后果是每次会话准备都向主进程日志刷重复 WARN；
+  // 生产入口 createCodexSpawnConfig；最小失败输入为连续返回 provider_not_installed 与重复 provider_untrusted；tier: unit。
+  it('never warns when ChatGPT.app is not installed and deduplicates unchanged unavailable warnings until state changes', async () => {
+    const f = fixture();
+    vi.mocked(prepareCodexBrowserCompanion)
+      .mockResolvedValueOnce({
+        status: 'unavailable',
+        reason: 'provider_not_installed',
+        detail: 'companion app bundle is not installed: /Applications/ChatGPT.app',
+        extraArgs: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'unavailable',
+        reason: 'provider_not_installed',
+        detail: 'companion app bundle is not installed: /Applications/ChatGPT.app',
+        extraArgs: [],
+      });
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    expect(desktopMakerLogger.warn).not.toHaveBeenCalled();
+    expect(desktopMakerLogger.debug).toHaveBeenCalledTimes(1);
+
+    vi.mocked(prepareCodexBrowserCompanion)
+      .mockResolvedValueOnce({
+        status: 'unavailable',
+        reason: 'provider_untrusted',
+        detail: 'companion app bundle failed OpenAI macOS signature verification',
+        extraArgs: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'unavailable',
+        reason: 'provider_untrusted',
+        detail: 'companion app bundle failed OpenAI macOS signature verification',
+        extraArgs: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'ready',
+        extraArgs: browserArgs,
+        version: 'fixture',
+        startupTimeoutMs: 10_000,
+        browserClientPath: 'unused-browser-client',
+      })
+      .mockResolvedValueOnce({
+        status: 'unavailable',
+        reason: 'provider_untrusted',
+        detail: 'companion app bundle failed OpenAI macOS signature verification',
+        extraArgs: [],
+      });
+
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    expect(desktopMakerLogger.warn).toHaveBeenCalledTimes(1);
+
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    expect(desktopMakerLogger.warn).toHaveBeenCalledTimes(2);
   });
 });
 
