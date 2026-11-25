@@ -132,6 +132,7 @@ export function PluginManagementConfirmation(
         {body(info?.device, true)}
         {body(info?.origin, true)}
         {body(info?.repository, true)}
+        {body(info?.originSourceChanged, true)}
         {body(info?.sourceChanged, true)}
         {body(info?.trust, true)}
         {body(info?.sourceNotice)}

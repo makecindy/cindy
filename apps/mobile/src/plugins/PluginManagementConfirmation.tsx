@@ -41,7 +41,7 @@ export function PluginManagementConfirmation(
           <Text style={styles.title}>{info?.title}</Text>
           {/* Where it goes and where it comes from first, in primary text, so they stay in view with the
               pinned high-risk summary on short screens; the explanations follow in secondary text. */}
-          {[info?.device, info?.origin, info?.repository, info?.sourceChanged, info?.trust]
+          {[info?.device, info?.origin, info?.repository, info?.originSourceChanged, info?.sourceChanged, info?.trust]
             .filter(Boolean)
             .map((text, index) => (
               <Text key={"lead" + index} style={styles.lead}>

@@ -350,6 +350,7 @@
       "initiatedByAgent": "Agent 요청 · {{origin}}",
       "repository": "저장소 {{repository}}",
       "repositoryRef": "저장소 {{repository}} ({{ref}})",
+      "originSourceChanged": "이 업데이트는 설치된 버전과 다른 소스에서 가져옵니다. 위에 표시된 저장소를 신뢰하는 경우에만 계속하세요.",
       "localFolder": "로컬 폴더",
       "repositoryMissingInstall": "이 컴퓨터가 저장소 정보를 보내지 않아 휴대폰에서는 이 설치를 허용할 수 없습니다. 컴퓨터에서 마켓을 새로 고친 뒤 다시 시도하거나(Cindy가 오래되었다면 먼저 업데이트) 컴퓨터에서 설치하세요.",
       "repositoryMissingUpdate": "이 컴퓨터가 저장소 정보를 보내지 않아 휴대폰에서는 이 업데이트를 허용할 수 없습니다. 컴퓨터에서 마켓을 새로 고친 뒤 다시 시도하거나(Cindy가 오래되었다면 먼저 업데이트) 컴퓨터에서 업데이트하세요.",

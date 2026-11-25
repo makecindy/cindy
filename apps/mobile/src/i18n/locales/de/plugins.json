@@ -350,6 +350,7 @@
       "initiatedByAgent": "Vom Agent angefordert · {{origin}}",
       "repository": "Repository {{repository}}",
       "repositoryRef": "Repository {{repository}} ({{ref}})",
+      "originSourceChanged": "Dieses Update stammt aus einer anderen Quelle als die installierte Version. Fahre nur fort, wenn du dem oben angezeigten Repository vertraust.",
       "localFolder": "Lokaler Ordner",
       "repositoryMissingInstall": "Dieser Computer hat das Repository nicht angegeben. Diese Installation kann nicht vom Handy aus erlaubt werden. Aktualisiere den Marktplatz am Computer und versuche es erneut (bei älterem Cindy zuerst Cindy aktualisieren) oder installiere am Computer.",
       "repositoryMissingUpdate": "Dieser Computer hat das Repository nicht angegeben. Diese Aktualisierung kann nicht vom Handy aus erlaubt werden. Aktualisiere den Marktplatz am Computer und versuche es erneut (bei älterem Cindy zuerst Cindy aktualisieren) oder aktualisiere am Computer.",

@@ -1068,6 +1068,15 @@ describe('plugin first-install task card and its source', () => {
     await click('interaction.permission.denyButton');
     expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'deny' }));
   });
+  // Contract V2.4b: an update card from another source than the installed version says so without opening details.
+  it('says on a custom-market update card when the source differs from the installed version', async () => {
+    await render({ operation: 'update', origin: 'custom-market', source, originSourceChanged: true });
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')?.textContent)
+      .toBe('plugins.notice.consentSource.originSourceChanged');
+    // Only `true` counts.
+    await render({ operation: 'update', origin: 'custom-market', source, originSourceChanged: 'yes' });
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')).toBeNull();
+  });
   it('shows the repository of a custom-market card and allows it', async () => {
     await render({ operation: 'install', origin: 'custom-market', source });
     expect(host.querySelector('[data-testid="interaction.permission.installRepository"]')?.textContent)

@@ -837,7 +837,8 @@ function PermissionCard({
   const requestId = readRequestId(item);
   const [armedDecision, setArmedDecision] = useState<'allow-once' | 'always-allow' | null>(null);
   const isPluginInstall = item.request.toolName === 'cindy.plugin.install';
-  const installInput = isPluginInstall ? item.request.input as { operation?: unknown; origin?: unknown; source?: unknown } | null : null;
+  const installInput = isPluginInstall
+    ? item.request.input as { operation?: unknown; origin?: unknown; source?: unknown; originSourceChanged?: unknown } | null : null;
   const isFirstInstall = installInput?.operation === 'install';
   // Host-owned plugin install card (Agent-initiated). Newer Hosts name the origin and, for custom markets, the
   // source they pack from; a malformed source counts as missing.
@@ -947,6 +948,11 @@ function PermissionCard({
         touchLayout={touchLayout}
       />}
       {installRepository ? <Text style={styles.body} testID="interaction.permission.installRepository">{installRepository}</Text> : null}
+      {installSource && installInput?.operation === 'update' && installInput.originSourceChanged === true ? (
+        <Text style={styles.body} testID="interaction.permission.installOriginSourceChanged">
+          {t('plugins.notice.consentSource.originSourceChanged')}
+        </Text>
+      ) : null}
       {installSourceUnverified ? (
         <Text style={styles.body} testID="interaction.permission.installSourceUnverified">
           {t('interaction.permission.installSourceUnverified')}

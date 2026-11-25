@@ -352,6 +352,7 @@
       "initiatedByAgent": "Solicitado pelo Agent · {{origin}}",
       "repository": "Repositório {{repository}}",
       "repositoryRef": "Repositório {{repository}} ({{ref}})",
+      "originSourceChanged": "Esta atualização vem de uma origem diferente da versão instalada. Continue apenas se confiar no repositório indicado acima.",
       "localFolder": "Pasta local",
       "repositoryMissingInstall": "Este computador não indicou o repositório, por isso esta instalação não pode ser permitida a partir do telemóvel. Atualize o mercado no computador e tente novamente (atualize primeiro a Cindy se for mais antiga), ou instale a partir do computador.",
       "repositoryMissingUpdate": "Este computador não indicou o repositório, por isso esta atualização não pode ser permitida a partir do telemóvel. Atualize o mercado no computador e tente novamente (atualize primeiro a Cindy se for mais antiga), ou atualize a partir do computador.",

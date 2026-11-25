@@ -1320,6 +1320,16 @@ describe("older Host without a repository identity", () => {
       expect(disabled("plugins.management.allow")).toBe(true);
       expect(disabled("plugins.management.reject")).toBe(false);
     });
+  // Contract V2.4b: the update comes from another source than the installed version; said without scrolling.
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s says when an update comes from another source than the installed version", (_platform, Sheet) => {
+      const { container } = mount(Sheet, sheetProps({ originSource: { kind: "local", sourceId: "SourceA_0123456789abcd" },
+        originSourceChanged: true }, updateFacts));
+      const text = container.textContent!;
+      const line = text.indexOf("plugins.notice.consentSource.originSourceChanged");
+      expect(line).toBeGreaterThan(text.indexOf("plugins.notice.consentSource.localFolder"));
+      expect(line).toBeLessThan(text.indexOf("plugins.management.versionChange"));
+    });
   // Maintainer review 05:55 #2: the consent names another source than the one chosen on the phone.
   it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
     "%s keeps only Reject when the consent names another source than the one chosen", (_platform, Sheet) => {

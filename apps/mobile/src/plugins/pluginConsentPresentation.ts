@@ -146,6 +146,9 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
       : undefined,
     /** Shown right under the source line so it stays in view with the pinned summary at the medium detent. */
     repository: repositoryLine(consent, t),
+    /** Same sentence as the computer's dialog: this custom-market update comes from another source than the installed one. */
+    originSourceChanged: custom && facts.kind === "update" && consent.originSourceChanged === true
+      ? t("plugins.notice.consentSource.originSourceChanged") : undefined,
     /** The consent names another source than the one chosen (it changed after the last check): choose again. */
     sourceChanged: sourceChanged ? t("plugins.notice.consentSource.sourceChanged") : undefined,
     /**

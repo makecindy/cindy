@@ -352,6 +352,7 @@
       "initiatedByAgent": "Solicitado pelo Agent · {{origin}}",
       "repository": "Repositório {{repository}}",
       "repositoryRef": "Repositório {{repository}} ({{ref}})",
+      "originSourceChanged": "Esta atualização vem de uma origem diferente da versão instalada. Continue apenas se você confiar no repositório mostrado acima.",
       "localFolder": "Pasta local",
       "repositoryMissingInstall": "Este computador não informou o repositório, então esta instalação não pode ser permitida pelo celular. Atualize o marketplace no computador e tente de novo (atualize a Cindy antes se for mais antiga), ou instale pelo computador.",
       "repositoryMissingUpdate": "Este computador não informou o repositório, então esta atualização não pode ser permitida pelo celular. Atualize o marketplace no computador e tente de novo (atualize a Cindy antes se for mais antiga), ou atualize pelo computador.",

@@ -350,6 +350,7 @@
       "initiatedByAgent": "由 Agent 发起 · {{origin}}",
       "repository": "仓库 {{repository}}",
       "repositoryRef": "仓库 {{repository}}（{{ref}}）",
+      "originSourceChanged": "这次更新的来源与已安装的版本不同。请确认你信任上面显示的仓库后再继续。",
       "localFolder": "本地文件夹",
       "repositoryMissingInstall": "这台电脑没有提供仓库信息，不能在手机上允许这次安装。请在电脑上刷新这个市场后再试（Cindy 较旧时先更新），或在电脑上安装。",
       "repositoryMissingUpdate": "这台电脑没有提供仓库信息，不能在手机上允许这次升级。请在电脑上刷新这个市场后再试（Cindy 较旧时先更新），或在电脑上升级。",

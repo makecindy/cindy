@@ -73,8 +73,8 @@ it('supplies valid demo plugin projections and confirms enable/disable through t
   const link = mock.createVisualMockDeviceLinkContext();
   const host = { deviceId: mock.VISUAL_MOCK_DEVICE_ID, deviceName: mock.VISUAL_MOCK_DEVICE_NAME };
   const items = normalizeRemoteCollectionItems(await listRemoteCollection(link.invoke, host, PLUGIN_COLLECTION), PLUGIN_COLLECTION);
-  // 28 teammate/demo plugins plus the five market demos pre-installed at an older version (update consent).
-  expect(items).toHaveLength(33);
+  // 28 teammate/demo plugins plus the six market demos pre-installed at an older version (update consent).
+  expect(items).toHaveLength(34);
   expect(items.filter(item => item.display.badges?.length)).toHaveLength(2);
   const ref = items[0].ref;
   await invokePlugin(link.invoke, host.deviceId, ref.id, 'disable');
@@ -429,6 +429,10 @@ it('serves the market demo consents in the Host shape, including updates that ad
   const vaultUpgrade = (await consentOf('demo-market/demo-vault-upgrade', '_root__demo-vault-upgrade')).consent;
   expect(vaultUpgrade.facts).toMatchObject({ kind: 'update', previousVersion: '1.3.0' });
   expect(pluginConsentPresentation(vaultUpgrade, (key: string) => key).highRisk!.lines).toEqual(vaultSummary.lines);
+  // Contract V2.4b demo: the update comes from another source than the installed instance.
+  const moved = (await consentOf('demo-market/demo-moved-source', '_root__demo-moved-source')).consent;
+  expect(moved).toMatchObject({ origin: 'custom-market', originSourceChanged: true, facts: { kind: 'update' } });
+  expect(pluginConsentPresentation(moved, (key: string) => key).originSourceChanged).toBe('plugins.notice.consentSource.originSourceChanged');
   const reading = await consentOf('demo-market/demo-reading-list', '_root__demo-reading-list');
   expect(keys((reading.consent.facts as any).added)).toEqual(['notify']);
   // Allowing the update commits the new version on the mock computer.

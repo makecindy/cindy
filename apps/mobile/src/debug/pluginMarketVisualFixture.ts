@@ -47,6 +47,8 @@ interface DemoPlugin {
   update?: { added: DemoPermission[]; removed: DemoPermission[]; unchangedCount: number };
   /** Custom market of an older Host that does not name the repository (no sourceIdentity / originSource). */
   legacySource?: true;
+  /** Installed from another source than the market's current one: its update consent says the source changed. */
+  sourceMoved?: true;
 }
 type DemoPermission = { key: string; kind: string; labelKey: string; labelArgs?: Record<string, string>; detailKey?: string; detail?: string };
 // Same keys, kinds and copy keys as the Host's ghostPermissionItems; node:execute is the one it calls high risk.
@@ -127,6 +129,11 @@ const DEMOS: DemoPlugin[] = [
   { ghostId: "demo-auto-agent", name: "Demo Auto Agent", publisher: "official", author: "Cindy",
     description: "Start Agent work in the background and hand errands to an Agent.", tools: ["demo_start_errand"],
     permissions: [agentErrand, agentBackground, agentUserAction, notify] },
+  // An update whose source differs from the installed instance's (the computer forces the consent and says so).
+  { ghostId: "demo-moved-source", name: "Demo Moved Source", publisher: "custom", author: null, sourceMoved: true,
+    description: "Installed from another repository than the market now points to. Its update says the source changed.",
+    tools: ["demo_moved"], permissions: [network("moved.example.com")], installedVersion: "1.3.0",
+    update: { added: [], removed: [], unchangedCount: 1 } },
   // Older Host: a custom market without a repository identity. A new install is not offered on the phone.
   { ghostId: "demo-legacy-tools", name: "Demo Legacy Tools", publisher: "custom", author: null, legacySource: true,
     description: "From a custom market on an older computer version that does not name its repository.",
@@ -178,7 +185,8 @@ function marketItem(demo: DemoPlugin): ManagedMarketItem {
     sourceType: server ? "server" : "git-market", sourceMarketName: server ? null : marketName(demo),
     ...(server || demo.legacySource ? {} : { sourceIdentity: CUSTOM_MARKET_SOURCE }),
     // The installed instance came from this item's source (newer Hosts only).
-    ...(entry && !server && !demo.legacySource ? { installedSourceId: CUSTOM_MARKET_SOURCE.sourceId } : {}),
+    ...(entry && !server && !demo.legacySource
+      ? { installedSourceId: demo.sourceMoved ? "DemoOldMarketSource001" : CUSTOM_MARKET_SOURCE.sourceId } : {}),
     ...(entry && entry.version !== RELEASE ? { updateRequiresConsent: true as const } : {}),
   };
 }
@@ -242,6 +250,8 @@ function receipt(operationId: string) {
   if (!op.answered) return { operationId, phase: "confirmation", consent: {
     requestId: `demo-consent-${operationId}`, initiator: "user", origin: demo.publisher === "custom" ? "custom-market" : "market",
     ...(demo.publisher === "custom" ? { originLabel: marketName(demo), ...(demo.legacySource ? {} : { originSource: CUSTOM_MARKET_SOURCE }) } : {}),
+    // Host: an update from another (verifiable) source than the installed instance's carries originSourceChanged.
+    ...(demo.sourceMoved && op.kind === "update" ? { originSourceChanged: true as const } : {}),
     // The Host marks a verified public community publisher; the phone shows the community notice.
     ...(demo.publisher === "personal" ? { communityMarket: true } : {}),
     // Host: trust comes from the inspected package signature; unsigned custom-market packages are "unverified".

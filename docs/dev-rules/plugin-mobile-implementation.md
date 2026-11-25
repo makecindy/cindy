@@ -142,6 +142,10 @@
     形状按契约第 2 版：git `{kind, repository, ref?, sourceId}`、本地 `{kind, sourceId}`，`sourceId` 为 22 位 base64url，
     多键或缺键都算不合法。回执里 `originSource` 不合法时整份回执按无效处理；市场条目的 `sourceIdentity` 不合法时
     只丢掉该字段，`installedSourceId` 不合法时按缺省。比较来源时四个键都要相等，`sourceId` 不展示。
+  - 来源变化的更新（契约 V2.4b）：回执的 `originSourceChanged`（只接受 `true` 或缺省，否则整份回执无效）表示已装实例
+    与这次更新的来源都可核实且不同。升级确认面板在仓库行下方用 textPrimary 显示与电脑端相同的那句「这次更新的来源与
+    已安装的版本不同……」；任务卡在 `input.originSourceChanged === true` 且来源有效时同样显示（不用展开详情）。市场条目的
+    `updateRequiresConsent` 现在也可能因来源变化置位，手机端只解析、不展示，没有受影响的文案。
   - 发起前复核来源：市场开始安装时读到的详情、以及 controller 在 begin 前最后一次读到的详情，其 `sourceIdentity`
     都必须与用户选择时的完全相等；缺失或变化时不发 begin，这一行提示「来源刚刚有变化，请重新选择」。
   - Agent 发起的安装走任务确认卡（`cindy.plugin.install`，`InteractionPanel`）：卡的 `input` 带 `origin`，自定义市场

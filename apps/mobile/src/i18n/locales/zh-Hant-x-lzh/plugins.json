@@ -348,6 +348,7 @@
       "initiatedByAgent": "由 Agent 所發 · {{origin}}",
       "repository": "庫 {{repository}}",
       "repositoryRef": "庫 {{repository}}（{{ref}}）",
+      "originSourceChanged": "此番更新所出之源，與已裝之版不同。唯信上列之儲存庫，方可續之。",
       "localFolder": "本地之匣",
       "repositoryMissingInstall": "此機未示庫之所出，不能於手機許此納。請於電腦刷新此坊再試（Cindy 舊則先更新），或於電腦納之。",
       "repositoryMissingUpdate": "此機未示庫之所出，不能於手機許此升。請於電腦刷新此坊再試（Cindy 舊則先更新），或於電腦升之。",

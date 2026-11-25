@@ -352,6 +352,7 @@
       "initiatedByAgent": "Demandé par l'Agent · {{origin}}",
       "repository": "Dépôt {{repository}}",
       "repositoryRef": "Dépôt {{repository}} ({{ref}})",
+      "originSourceChanged": "Cette mise à jour provient d’une autre source que la version installée. Continuez uniquement si vous faites confiance au dépôt indiqué ci-dessus.",
       "localFolder": "Dossier local",
       "repositoryMissingInstall": "Cet ordinateur n’a pas indiqué le dépôt : cette installation ne peut pas être autorisée depuis le téléphone. Actualisez le marketplace sur l’ordinateur puis réessayez (mettez d’abord Cindy à jour si elle est plus ancienne), ou installez depuis l’ordinateur.",
       "repositoryMissingUpdate": "Cet ordinateur n’a pas indiqué le dépôt : cette mise à jour ne peut pas être autorisée depuis le téléphone. Actualisez le marketplace sur l’ordinateur puis réessayez (mettez d’abord Cindy à jour si elle est plus ancienne), ou mettez à jour depuis l’ordinateur.",

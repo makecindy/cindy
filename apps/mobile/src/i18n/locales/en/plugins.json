@@ -350,6 +350,7 @@
       "initiatedByAgent": "Requested by Agent · {{origin}}",
       "repository": "Repository {{repository}}",
       "repositoryRef": "Repository {{repository}} ({{ref}})",
+      "originSourceChanged": "This update comes from a different source than the installed version. Continue only if you trust the repository shown above.",
       "localFolder": "Local folder",
       "repositoryMissingInstall": "This computer didn’t share the repository, so this install can’t be allowed from your phone. Refresh this marketplace on the computer and try again (update Cindy first if it’s older), or install on the computer.",
       "repositoryMissingUpdate": "This computer didn’t share the repository, so this update can’t be allowed from your phone. Refresh this marketplace on the computer and try again (update Cindy first if it’s older), or update on the computer.",

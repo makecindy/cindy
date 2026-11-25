@@ -999,6 +999,23 @@ describe('confirmation sheet wording', () => {
     expect(samePluginMarketSourceIdentity(git, { ...git, ref: 'main' })).toBe(false);
     expect(samePluginMarketSourceIdentity(git, undefined)).toBe(false);
   });
+  // Contract V2.4b: a custom-market update from another (verifiable) source than the installed instance carries
+  // originSourceChanged; the phone says so next to the repository, like the computer's dialog.
+  it('says when a custom-market update comes from another source than the installed version', () => {
+    const id = 'SourceA_0123456789abcd';
+    const receipt = (originSourceChanged: unknown, kind = 'update') => ({ operationId: 'op', phase: 'confirmation', consent: {
+      requestId: 'r', initiator: 'user', origin: 'custom-market', originLabel: 'Acme', originSource: { kind: 'local', sourceId: id },
+      ...(originSourceChanged === undefined ? {} : { originSourceChanged }),
+      facts: kind === 'update' ? { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [], removed: [],
+        unchangedCount: 1, builtinOauthClientChanged: false } : { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } });
+    const consent = parsePluginManagementReceipt(receipt(true), 'op').consent!;
+    expect(consent.originSourceChanged).toBe(true);
+    expect(pluginConsentPresentation(consent, t, 'Mac').originSourceChanged).toBe('plugins.notice.consentSource.originSourceChanged');
+    expect(pluginConsentPresentation(parsePluginManagementReceipt(receipt(undefined), 'op').consent!, t, 'Mac').originSourceChanged).toBeUndefined();
+    // Only for updates; any other value makes the receipt invalid.
+    expect(pluginConsentPresentation(parsePluginManagementReceipt(receipt(true, 'install'), 'op').consent!, t, 'Mac').originSourceChanged).toBeUndefined();
+    for (const value of [false, 'true', 1]) expect(() => parsePluginManagementReceipt(receipt(value), 'op')).toThrow('INVALID_RESPONSE');
+  });
   it('accepts the community flag only as true', () => {
     const receipt = (communityMarket: unknown) => ({ operationId: 'op', phase: 'confirmation', consent: { requestId: 'r', initiator: 'user',
       origin: 'market', ...(communityMarket === undefined ? {} : { communityMarket }), facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } });
