@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -83,6 +84,37 @@ describe('WechatIM host boundary', () => {
         contextNonce: context.nonce, contextCiphertext: context.ciphertext, contextTag: context.tag });
       expect(await pending).toBeNull();
     } finally { await im.dispose(); }
+  });
+
+  // #12845, unit: a single empty poll misses listeners retained across idle waits.
+  it('releases completed idle waits while the connection keeps polling', async () => {
+    vi.useFakeTimers();
+    const { im, transport, db } = restoredConnection(() => 0);
+    const poll = vi.mocked(transport.poll);
+    poll.mockResolvedValue({ cursor: '', messages: [] });
+    vi.mocked(db.tx).mockImplementation((async (name: string) =>
+      name === 'wechatCommitPollBatch' ? {
+        committed: true, insertedTaskIds: [], duplicateTaskIds: [], rejectedTaskIds: [],
+      } : null) as DbClient['tx']);
+    try {
+      await im.init();
+      await vi.advanceTimersByTimeAsync(0);
+      const signal = poll.mock.calls[0]![1];
+      const listeners = () => getEventListeners(signal, 'abort').length;
+      const initialListeners = listeners();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(poll).toHaveBeenCalledTimes(5);
+      expect(vi.mocked(db.tx).mock.calls.filter(([name]) => name === 'wechatLeaseNextTask')).toHaveLength(3);
+      expect(listeners()).toBe(initialListeners);
+      await im.dispose();
+      expect(listeners()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(poll).toHaveBeenCalledTimes(5);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('clears reconnecting after an empty successful poll', async () => {
