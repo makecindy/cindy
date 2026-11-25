@@ -31,41 +31,46 @@ export async function readCodexThreadMcpServerTools(
   return reports.get(serverName)!;
 }
 
-/** Share one thread-status traversal and deadline across the requested servers. */
+/** Read selected live-thread servers within one shared deadline and page budget. */
 export async function readCodexThreadMcpServersTools(
   request: StatusRequest,
   threadId: string,
   serverNames: readonly string[],
   timeoutMs = 5_000,
 ): Promise<Map<string, AgentMcpServerToolsReport>> {
-  const missing = new Set(serverNames);
+  const selected = new Set(serverNames);
   const reports = new Map<string, AgentMcpServerToolsReport>();
-  if (!missing.size) return reports;
+  if (!selected.size) return reports;
   const deadline = Date.now() + timeoutMs;
-  const seenCursors = new Set<string>();
-  let cursor: string | null = null;
-  for (let page = 0; page < MAX_STATUS_PAGES; page++) {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) throw new Error('Codex MCP status timed out');
-    const status: CodexMcpServerStatusListResponse = await request<CodexMcpServerStatusListResponse>(
-      Method.McpServerStatusList,
-      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName },
-      { timeoutMs: remainingMs },
-    );
-    for (const server of status.data) {
-      if (!missing.delete(server.name)) continue;
-      reports.set(server.name, reportFromCodexStatus(server));
-    }
-    if (!missing.size) return reports;
-    cursor = status.nextCursor;
-    if (cursor === null) {
-      for (const name of missing) reports.set(name, { state: 'not-mounted', tools: [] });
-      return reports;
-    }
-    if (seenCursors.has(cursor)) throw new Error('Codex MCP status pagination repeated a cursor');
-    seenCursors.add(cursor);
+  let pages = 0;
+  // Native Codex accepts a singular selector. Never omit it to read several
+  // gateways: that starts fresh discovery for every configured MCP server.
+  for (const serverName of selected) {
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    do {
+      if (pages++ >= MAX_STATUS_PAGES) throw new Error(`Codex MCP status pagination exceeded ${MAX_STATUS_PAGES} pages`);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) throw new Error('Codex MCP status timed out');
+      const status: CodexMcpServerStatusListResponse = await request<CodexMcpServerStatusListResponse>(
+        Method.McpServerStatusList,
+        { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName },
+        { timeoutMs: remainingMs },
+      );
+      const server = status.data.find(entry => entry.name === serverName);
+      if (server) {
+        reports.set(serverName, reportFromCodexStatus(server));
+        break;
+      }
+      cursor = status.nextCursor;
+      if (cursor === null) reports.set(serverName, { state: 'not-mounted', tools: [] });
+      else {
+        if (seenCursors.has(cursor)) throw new Error('Codex MCP status pagination repeated a cursor');
+        seenCursors.add(cursor);
+      }
+    } while (cursor !== null);
   }
-  throw new Error(`Codex MCP status pagination exceeded ${MAX_STATUS_PAGES} pages`);
+  return reports;
 }
 
 function reportFromCodexStatus(server: CodexMcpServerStatus): AgentMcpServerToolsReport {

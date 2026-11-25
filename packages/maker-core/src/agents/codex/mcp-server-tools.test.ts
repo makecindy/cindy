@@ -5,7 +5,7 @@ type Page = { data: Array<Record<string, unknown>>; nextCursor: string | null };
 
 function requestFor(pages: Record<string, Page>) {
   const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
-    pages[String(params.cursor ?? 'first')]!);
+    pages[`${params.serverName}:${params.cursor ?? 'first'}`] ?? pages[String(params.cursor ?? 'first')]!);
   return { request, invoke: request as Parameters<typeof readCodexThreadMcpServerTools>[0] };
 }
 
@@ -72,17 +72,58 @@ describe('Codex thread MCP server tools', () => {
   });
 
   // Gateway recovery must see a failed plugin client even beside a healthy
-  // helper, without multiplying status RPCs or confusing missing legacy state.
-  // Unit tier, production reader; the servers straddle two native status pages.
-  it('reads independent gateway states in one paginated traversal', async () => {
+  // helper, without unscoped native discovery or confusing missing legacy state.
+  // Unit tier, production reader; each selected server owns its pagination cursor.
+  it('reads independent gateway states through selected-server requests', async () => {
     const { request, invoke } = requestFor({
-      first: { nextCursor: 'next', data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }] },
-      next: { nextCursor: null, data: [{ name: 'cindy', runtimeStatus: 'failed', tools: { ghost_info: {} } }] },
+      'cindy_helper:first': { nextCursor: null, data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }] },
+      'cindy:first': { nextCursor: 'next', data: [] },
+      'cindy:next': { nextCursor: null, data: [{ name: 'cindy', runtimeStatus: 'failed', tools: { ghost_info: {} } }] },
+      'missing:first': { nextCursor: null, data: [] },
     });
     const reports = await readCodexThreadMcpServersTools(invoke, 'thread-1', ['cindy_helper', 'cindy', 'missing']);
     expect(reports.get('cindy_helper')).toMatchObject({ state: 'connected' });
     expect(reports.get('cindy')).toEqual({ state: 'failed', tools: [] });
     expect(reports.get('missing')).toEqual({ state: 'not-mounted', tools: [] });
-    expect(request.mock.calls.map(([, params]) => params.cursor)).toEqual([null, 'next']);
+    expect(request.mock.calls.map(([, params]) => [params.serverName, params.cursor])).toEqual([
+      ['cindy_helper', null], ['cindy', null], ['cindy', 'next'], ['missing', null],
+    ]);
+  });
+
+  // #12627 + ea2df3b merge regression: selected requests must still share the
+  // original total deadline. Unit tier; advancing Date.now avoids real waits.
+  it.each([2_000, 5_000])('shares the deadline across selected servers after %d ms', async elapsed => {
+    let now = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>, _opts: { timeoutMs: number }) => {
+      now += elapsed;
+      return { data: [{ name: params.serverName, runtimeStatus: 'connected', tools: { list_tools: {} } }], nextCursor: null };
+    });
+    try {
+      const read = readCodexThreadMcpServersTools(request as Parameters<typeof readCodexThreadMcpServerTools>[0],
+        'thread-1', ['cindy_helper', 'cindy_helper', 'cindy']);
+      if (elapsed === 5_000) {
+        await expect(read).rejects.toThrow('timed out');
+        expect(request.mock.calls.map(([, params]) => params.serverName)).toEqual(['cindy_helper']);
+      } else {
+        expect([...(await read).keys()]).toEqual(['cindy_helper', 'cindy']);
+        expect(request.mock.calls.map(([, , opts]) => opts.timeoutMs)).toEqual([5_000, 3_000]);
+      }
+    } finally { clock.mockRestore(); }
+  });
+
+  // Keep the existing five-page cap global, rather than granting each server
+  // a new budget. Minimal unit input: the first target consumes all five pages.
+  it('shares the page budget across selected servers', async () => {
+    let pages = 0;
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) => {
+      pages++;
+      return pages === 5
+        ? { data: [{ name: params.serverName, tools: { list_tools: {} } }], nextCursor: null }
+        : { data: [], nextCursor: String(pages) };
+    });
+    await expect(readCodexThreadMcpServersTools(request as Parameters<typeof readCodexThreadMcpServerTools>[0],
+      'thread-1', ['cindy_helper', 'cindy'])).rejects.toThrow('exceeded 5 pages');
+    expect(request.mock.calls.map(([, params]) => params.serverName)).toEqual(Array(5).fill('cindy_helper'));
   });
 });

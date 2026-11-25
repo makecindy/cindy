@@ -37756,17 +37756,20 @@ describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverNa
   async function setup(state: string | null | (() => string | null), background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
     const agent = new CodexAgent(createDeps());
     let resumes = 0;
-    const host = installFakeHost(agent, method => {
+    const host = installFakeHost(agent, (method, params) => {
       if (method === Method.ThreadResume) {
         resumes++;
         return { thread: { id: threadId }, model: 'gpt-5.4' };
       }
       if (method === Method.ThreadBackgroundTerminalsList) return background();
-      if (method === Method.McpServerStatusList) return { data: [
-        ...(serverName === 'cindy' ? [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }] : []),
-        { name: serverName, runtimeStatus: resumes > 1 && recover ? 'connected' : typeof state === 'function' ? state() : state,
-          tools: serverName === 'cindy' ? { ghost_info: {}, ghost_call: {} } : { list_tools: {}, call_tool: {} } },
-      ], nextCursor: null };
+      if (method === Method.McpServerStatusList) {
+        // Selected-server reads must not advance another gateway's fixture state.
+        if (serverName === 'cindy' && (params as { serverName?: string })?.serverName === 'cindy_helper') return {
+          data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null,
+        };
+        return { data: [{ name: serverName, runtimeStatus: resumes > 1 && recover ? 'connected' : typeof state === 'function' ? state() : state,
+          tools: serverName === 'cindy' ? { ghost_info: {}, ghost_call: {} } : { list_tools: {}, call_tool: {} } }], nextCursor: null };
+      }
       if (method === Method.TurnStart) return { turn: { id: 'helper-turn' } };
       return undefined;
     }, { buildSessionMcpConfig: () => ({
@@ -37928,7 +37931,10 @@ describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverNa
     expect(events.filter(event => event.type === 'text' && event.standaloneText
       && (event.data as { code?: string }).code === 'CINDY_EXPECTED_HELPER_UNAVAILABLE')).toHaveLength(serverName === 'cindy_helper' ? 1 : 0);
     expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadResume)).toHaveLength(1);
-    expect(host.request.mock.calls.filter(([m]) => m === Method.McpServerStatusList)).toHaveLength(finalState === 'failed' ? 3 : 2);
+    const probesPerServer = finalState === 'failed' ? 3 : 2;
+    const probes = host.request.mock.calls.filter(([m]) => m === Method.McpServerStatusList);
+    expect(probes.filter(([, params]) => (params as { serverName?: string })?.serverName === serverName)).toHaveLength(probesPerServer);
+    expect(probes).toHaveLength(probesPerServer * (serverName === 'cindy' ? 2 : 1));
     await agent.dispose();
   });
   it('backs off repeated failures and stops after two recovery attempts', async () => {
