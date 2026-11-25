@@ -22,6 +22,8 @@ import {
 } from '@cindy/device-link';
 import { HISTORY_VIEW_VERSION, isHistoryViewUnavailable, type HistoryViewPage } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
+import { createPluginManagementClient } from '../plugins/pluginManagementClient';
+import { setMobileAuthOwner } from '../auth/authOwnerGeneration';
 import { setMobileAgentNetPreferences, waitForMobileAgentNetPreferences } from '../device-link/agentNetPreferences';
 // Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
 const directTransport = vi.hoisted(() => ({ enabled: false, owner: '' }));
@@ -274,6 +276,43 @@ it('runs a caller preSend at entry and right before the first socket write, and 
     error = await context.invoke('host', REMOTE_RESOURCE_INVOKE_CHANNEL, [{}], { preSend: () => { if (!allow) throw refusal; } }).catch((e) => e);
   });
   expect(error).toBe(refusal);
+});
+
+// Maintainer review 09:30 of #12684 (#1, #3). Through the real Provider and its link recovery (the handshake runs before
+// the business request), the caller's write receipt (`onRequestWritten`) is this request's own first write: a handshake
+// that was written and then timed out is in flight but never this request; a request stopped by the last check in the
+// queue was never written; a request written and then timed out was. The plugin client classifies its answer from it:
+// only a written Allow is an unknown outcome, and only a written one counts as sent.
+// Gap: the stand-in client models where Device Link calls the receipt; client.test.ts drives the real client. Tier: unit/jsdom.
+describe('the write receipt of one request through link recovery', () => {
+  const lost = (message: string) => { const error = new DeviceLinkError('INVOKE_TIMEOUT', message); error.inFlight = true; return error; };
+  it.each([
+    ['only the handshake was written, then it timed out', 'handshake', false],
+    ['the handshake was accepted, then the last check stopped the request in the queue', 'dequeue', false],
+    ['the request was written, then its reply timed out', 'written', true],
+  ] as const)('%s', async (_name, end, written) => {
+    const client = transport.clients[0];
+    client.needsLinkRecovery = () => true;
+    client.openLink.mockImplementation(async () => { if (end === 'handshake') throw lost('no link-accept after the handshake was written'); return accepted(); });
+    let current = true;
+    const sends: string[] = [];
+    client.invoke.mockImplementation(async (_deviceId, _payload, _timeout, options) => {
+      sends.push('client.invoke');
+      if (end === 'dequeue') current = false;
+      options?.preSend?.();
+      options?.onRequestWritten?.();
+      throw lost('no reply after first socket write');
+    });
+    setMobileAuthOwner('owner');
+    const sent = vi.fn();
+    const plugins = createPluginManagementClient({ deviceId: 'host', invoke: context.invoke, isCurrent: () => current });
+    let error: unknown;
+    await act(async () => { error = await plugins.answer('operation-1', 'consent-1', true, undefined, sent).catch((e) => e); });
+    expect(client.openLink).toHaveBeenCalled();
+    expect(sends).toEqual(end === 'handshake' ? [] : ['client.invoke']);
+    expect(error).toMatchObject({ outcomeUnknown: written });
+    expect(sent).toHaveBeenCalledTimes(written ? 1 : 0);
+  });
 });
 
 // Unit/jsdom. The real Provider delivers Device Link pushes to the route's scoped alert subscription.

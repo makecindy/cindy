@@ -1004,14 +1004,16 @@ it.each([
 /**
  * The transport stand-in follows the production order (DeviceLinkContext.invoke → sendInvoke → client.invoke; see
  * plugin-mobile-implementation.md and the contract test in historyViewProvider.test.tsx): `preSend` runs at entry,
- * the request may then wait (queue, reconnect), and `preSend` runs again right before the first socket write. A
- * reply that never comes after the write is a transport timeout marked `inFlight` (the request reached the wire).
+ * the request may then wait (queue, reconnect), and `preSend` runs again right before the first socket write, where
+ * `onRequestWritten` runs. A reply that never comes after the write is a transport timeout marked `inFlight`.
  */
 async function transportSend<T>(options: any, write: () => T | Promise<T>, queue?: () => Promise<void> | undefined): Promise<T> {
   options?.preSend?.();
   const queued = queue?.();
   if (queued) await queued;
   options?.preSend?.();
+  // The first socket write of this request: from here on a lost reply is an unknown outcome.
+  options?.onRequestWritten?.();
   try { return await write(); }
   catch (error) {
     if (!/\[TIMEOUT\]/.test(String((error as Error)?.message))) throw error;
@@ -1047,7 +1049,7 @@ it("holds the management slot while an update reads its market detail, so the ma
   const held = new Promise<void>((resolve) => { releaseDetail = resolve; });
   let holdUpdateDetail = true;
   fixture.wire.mockImplementation(async (_host: string, channel: string, args: any[], options: any) => {
-    options?.preSend?.();
+    options?.preSend?.(); options?.onRequestWritten?.();
     if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
     const request = args[0];
     if (request.actionId === "management:snapshot") {
@@ -1095,7 +1097,7 @@ describe("installed custom-market update and its source", () => {
     fixture.wire.mockImplementation(async (...args: any[]) => {
       const request = args[2]?.[0];
       if (request?.actionId === "management:market-detail") {
-        args[3]?.preSend?.();
+        args[3]?.preSend?.(); args[3]?.onRequestWritten?.();
         // The screen's preflight read, then the controller's last read before begin.
         const source = ++reads === 1 ? screenRead : controllerRead;
         const { sourceIdentity: _a, ...rest } = market as any;
@@ -1138,7 +1140,7 @@ it("keeps a successful write unconfirmed when production snapshot readback fails
   fixture.wire.mockImplementation(async (...args) => {
     const request = args[2]?.[0];
     if (request?.actionId === "management:begin") {
-      args[3]?.preSend?.();
+      args[3]?.preSend?.(); args[3]?.onRequestWritten?.();
       completed = true;
       return { result: { operationId: request.input.operationId, phase: "succeeded" } };
     }
@@ -1267,7 +1269,8 @@ it("refreshes an unknown management result using its original operation without 
   const readHost = fixture.wire.getMockImplementation()!;
   fixture.wire.mockImplementation(async (...args) => {
     const request = args[2]?.[0];
-    if (request?.actionId === "management:begin") throw new Error("CONNECTION_LOST");
+    // Written, then the connection was lost before the reply.
+    if (request?.actionId === "management:begin") { args[3]?.onRequestWritten?.(); throw new Error("CONNECTION_LOST"); }
     if (request?.actionId === "management:operation") return { result: { operationId: request.input.operationId, phase: "running" } };
     return readHost(...args);
   });
@@ -1288,7 +1291,8 @@ it("checks an unknown operation from the phone detail and restores actions", asy
   const readHost = fixture.wire.getMockImplementation()!;
   fixture.wire.mockImplementation(async (...args) => {
     const request = args[2]?.[0];
-    if (request?.actionId === "management:begin") throw new Error("CONNECTION_LOST");
+    // Written, then the connection was lost before the reply.
+    if (request?.actionId === "management:begin") { args[3]?.onRequestWritten?.(); throw new Error("CONNECTION_LOST"); }
     if (request?.actionId === "management:operation") return { result: { operationId: request.input.operationId, phase: "succeeded" } };
     return readHost(...args);
   });
@@ -1386,7 +1390,7 @@ function lightweightPromptHost(change: 'defer-ui' | 'approve-ui' | 'uninstall' |
   let release!: (value: unknown) => void;
   const readback = new Promise(resolve => { release = resolve; });
   fixture.wire.mockImplementation(async (_id, channel, args, opts) => {
-    opts?.preSend?.();
+    opts?.preSend?.(); opts?.onRequestWritten?.();
     if (channel.endsWith(':manifest')) return { collections: [{ id: 'plugins', actions: [
       { id: 'management:snapshot' }, { id: 'management:ui-consent' },
     ] }] };
@@ -1489,7 +1493,7 @@ function consentReceiptHost(action: 'defer-ui' | 'approve-ui', running = false) 
   const readback = new Promise((resolve, reject) => { completeReadback = resolve; failReadback = reject; });
   let delayedConsent: Promise<unknown> | undefined;
   fixture.wire.mockImplementation(async (id, channel, args, options) => {
-    options?.preSend?.();
+    options?.preSend?.(); options?.onRequestWritten?.();
     const request = args?.[0];
     if (request?.actionId === 'management:ui-consent') {
       const response = { result: { version: 1, uiCapabilityApproval: true, item } };
@@ -2731,10 +2735,10 @@ describe("market read fences and lost-receipt facts", () => {
     fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => {
       if (channel.endsWith(":manifest")) {
         if (device === "mac" && ++macManifests === 1) { await firstMacProbe.promise; throw new Error("[TIMEOUT] remote invoke timed out"); }
-        options?.preSend?.();
+        options?.preSend?.(); options?.onRequestWritten?.();
         return { protocolVersion: 1, collections: [{ id: "plugins", actions: [{ id: "management:snapshot", label: "Manage" }] }] };
       }
-      options?.preSend?.();
+      options?.preSend?.(); options?.onRequestWritten?.();
       const input = args?.[0]?.input;
       return { effects: [], result: input?.read === "capabilities" ? { catalogPaging: true } : marketPage([marketItem(`${device}-demo`, `${device} demo`)]) };
     });

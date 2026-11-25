@@ -309,6 +309,39 @@ describe('AgentNetSessionLinks', () => {
       .toSatisfy((error) => error instanceof DeviceLinkError && error.code === 'LINK_NOT_OPEN' && error.inFlight !== true);
   });
 
+  // #12684（维护者 09:30 复审）：手机插件管理靠本次调用自己的「已写出」回执区分「确定没发出」和「发出了、结果不明」。会话路径和
+  // Device Link 一样：会话收下请求才算写出，回执在调用结束前调用一次；本端检查拦下的、会话已经没了（NOT_SENT → LINK_NOT_OPEN）的都不调用。
+  // 最小失败输入：会话上的调用没有回执，或没写出的调用也有回执。覆盖缺口：此前会话路径只有 inFlight 标记。tier：unit。
+  it('runs the write receipt only for a request the session took, once, before the call settles', async () => {
+    const { links, sessions } = pair();
+    links.host.onFrame((env) => {
+      if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind === 'invoke' && (env.payload as InvokePayload).args?.[0] === 'answered') {
+        links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'done' });
+      }
+    });
+    await links.controller.openLink('a-host', openPayload);
+    const refused = vi.fn();
+    const stop = new Error('stopped before the write');
+    await expect(links.controller.invoke('a-host', { channel: 'maker:send-message', args: ['refused'] }, 1_000,
+      { preSend: () => { throw stop; }, onRequestWritten: refused })).rejects.toBe(stop);
+    expect(refused).not.toHaveBeenCalled();
+    const order: string[] = [];
+    await links.controller.invoke('a-host', { channel: 'maker:send-message', args: ['answered'] }, 1_000,
+      { onRequestWritten: () => order.push('written') }).then(() => order.push('result'));
+    expect(order).toEqual(['written', 'result']);
+    const lost = vi.fn();
+    const write = links.controller.invoke('a-host', { channel: 'maker:send-message', args: ['lost'] }, 40, { onRequestWritten: lost });
+    await expect.poll(() => links.controller.hasPendingRequestsTo('a-host')).toBe(true);
+    sessions.controller!.dispose('DEVICE_OFFLINE');
+    await expect(write).rejects.toMatchObject({ code: 'DEVICE_OFFLINE', inFlight: true });
+    expect(lost).toHaveBeenCalledTimes(1);
+    const gone = vi.fn();
+    await expect(links.controller.invoke('a-host', { channel: 'maker:send-message', args: ['gone'] }, 1_000, { onRequestWritten: gone }))
+      .rejects.toMatchObject({ code: 'LINK_NOT_OPEN' });
+    expect(gone).not.toHaveBeenCalled();
+  });
+
   // 2026-11-17 审查：写在途时连接断了（换网、对方重建节点），Device Link 重连后按原序号续传、结果照样回来；会话上原来直接报
   // 「可能已执行」，界面显示发送失败。现在会话回来时请业务重开链路，重开后用原请求号再发，对方按请求号去重，只执行一次。
   it('sends a write that was in flight when the session broke again on the re-opened link, with its request id, so it runs once', async () => {

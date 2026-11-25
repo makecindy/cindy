@@ -281,12 +281,14 @@ export interface DeviceLinkContextValue {
    * 中止本次发送(错误原样上抛)。供写序敏感的调用方(patchHomeSession 的 isLatest
    * 屏障)把「过期即放弃」判定贴到实际发送点——重连或排队期间写可能被同字段新写
    * 取代,等待前的检查不够晚。
+   * opts.onRequestWritten:本次业务请求可能已写出时(Device Link 首次 socket 写出、Agent-Net 会话收下请求、
+   * 直连路径尝试过)在调用结束前调用一次;握手帧不算。调用失败且它没被调用 = 业务请求确定没写出。
    */
   invoke<T = unknown>(
     deviceId: string,
     channel: string,
     args?: unknown[],
-    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
+    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; onRequestWritten?: () => void },
   ): Promise<T>;
   // `owner` is a stable id for the mounted consumer (e.g. `session:<id>`, `device:<id>`),
   // so repeated subscribes from resync/retry are idempotent and a topic is only released
@@ -2290,7 +2292,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     deviceId: string,
     channel: string,
     args: unknown[] = [],
-    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
+    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; onRequestWritten?: () => void },
   ) => {
     const preSend = () => {
       if (presenceAvailableByDeviceRef.current.get(deviceId) === false) {
@@ -2316,7 +2318,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       },
       async () => {
         if (!isSharedTaskPeer(deviceId)) {
-          const result = await tryMobilePeerInvoke(deviceId, channel, args);
+          let result: Awaited<ReturnType<typeof tryMobilePeerInvoke>>;
+          try {
+            result = await tryMobilePeerInvoke(deviceId, channel, args);
+          } catch (err) {
+            // The direct path may have delivered it before failing.
+            opts?.onRequestWritten?.();
+            throw err;
+          }
+          if (result) opts?.onRequestWritten?.();
           preSend();
           if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
           if (result) {
@@ -2332,13 +2342,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         } else {
           await recoverLinkBeforeSend(client, deviceId, preSend);
         }
-        return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background, noResultCache: opts?.noResultCache });
+        return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, {
+          preSend, background: opts?.background, noResultCache: opts?.noResultCache, onRequestWritten: opts?.onRequestWritten,
+        });
       },
     );
     const result = isLowPriorityRead(channel)
-      // A caller's own preSend can cancel only its own read, so it must not share one.
+      // A caller's own preSend or write receipt belongs to its own read, so it must not share one.
       ? await lowPriorityReadGateFor(client).run(
-        opts?.preSend ? null : JSON.stringify([deviceId, channel, args, opts?.background ?? null]), send,
+        opts?.preSend || opts?.onRequestWritten ? null : JSON.stringify([deviceId, channel, args, opts?.background ?? null]), send,
       )
       : await send();
     // Existing list refreshes also reconcile optional project display names. This read
@@ -2898,6 +2910,8 @@ async function sendOpenLink(
 
 interface SendInvokeOptions {
   preSend?: () => void;
+  /** See DeviceLinkContextValue.invoke opts.onRequestWritten. */
+  onRequestWritten?: () => void;
   background?: boolean;
   noResultCache?: boolean;
   /** 同一轮明确 fan-out 共享;普通独立请求省略。 */
@@ -2950,7 +2964,7 @@ async function sendInvoke<T>(
       // 长通道(media / 文件搜索 / schedule 就绪窗口等)按 invokeTimeouts 解析
       // 规则保留更长窗口,避免 mobile 收紧的默认 15s 误伤合法慢操作。
       resolveMobileInvokeTimeoutMs(channel, args),
-      { background: opts?.background, noResultCache: opts?.noResultCache, preSend: () => {
+      { background: opts?.background, noResultCache: opts?.noResultCache, onRequestWritten: opts?.onRequestWritten, preSend: () => {
         try {
           opts?.preSend?.();
         } catch (err) {

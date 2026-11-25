@@ -473,7 +473,9 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   }
 
   async invoke(dst: string, payload: InvokePayload, timeoutMs?: number,
-    options?: { preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' }): Promise<InvokeResultPayload> {
+    options?: { preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile';
+      /** Same local-only write receipt as Device Link `invoke`: runs before the call settles once a session took its request. */
+      onRequestWritten?: () => void }): Promise<InvokeResultPayload> {
     if (this.remoteControlDisabled.has(dst)) throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target');
     if (!this.live(dst)) throw new DeviceLinkError('LINK_NOT_OPEN', 'no Agent-Net session with the target');
     const queuedAt = performance.now();
@@ -488,6 +490,12 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
         return { ok: false, error: { code: 'IPC_ERROR', message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' } };
       }
       const sentAt = performance.now();
+      let requestWritten = false;
+      const noteRequestWritten = () => {
+        if (requestWritten) return;
+        requestWritten = true;
+        try { options?.onRequestWritten?.(); } catch (error) { this.options.log.debug('agent-net session onRequestWritten callback failed', error); }
+      };
       // 跨账号对端和 Device Link 一样不用历史页增量和结果缓存（对方也不按这两样编码给受邀者的结果）。
       const scoped = isScopedPeer(dst);
       const attempt = async (fullHistory: boolean, timeout: number | undefined): Promise<Attempt> => {
@@ -506,7 +514,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
         const backgroundLane = fileBlock || isRemoteAgentUploadChunk(tagged);
         // Pass the resolved policy too: an explicit false would otherwise undo
         // a channel's default background lane after admission used its cap.
-        const raw = await this.request(dst, transfer?.payload ?? tagged, timeout, priority === 'background' || backgroundLane);
+        const raw = await this.request(dst, transfer?.payload ?? tagged, timeout, priority === 'background' || backgroundLane, noteRequestWritten);
         const result = transfer ? await transfer.decode(raw) : raw;
         if (transfer?.retryWithoutBase()) return { result, retry: 'remaining-budget' };
         if (!result.ok) return { result };
@@ -748,7 +756,8 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
    * 幂等读照旧报 PEER_RESET 让业务重读；文件块不在这里续（文件直传随会话收掉）。跨账号同样续：分享连接不会自己回来，会话断时就请业务重开
    * （broken）。
    */
-  private async request(dst: string, payload: InvokePayload, timeoutMs: number | undefined, background?: boolean): Promise<InvokeResultPayload> {
+  private async request(dst: string, payload: InvokePayload, timeoutMs: number | undefined, background?: boolean,
+    onWritten?: () => void): Promise<InvokeResultPayload> {
     let session = this.live(dst);
     if (!session) throw new DeviceLinkError('LINK_NOT_OPEN', 'no Agent-Net session with the target');
     const peer = this.peer(dst);
@@ -768,11 +777,16 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
       for (let attempt = 0; ; attempt++) {
         attempts = attempt + 1;
         const generation = peer.generation;
-        outcome = await session.request(channel, args ?? [], { id, timeoutMs: Math.max(1, Math.round(deadline - performance.now())), background,
-          // 幂等读不排在之前因为太大改走后台通道的请求后面；写照原来的先后（lanes.ts）。
-          unordered: isPeerResetRetryableInvoke(channel, args),
-          ...(lane ? { lane } : {}), ...(attempt > 0 ? { extra: { ...extra, agentNetResumeOnly: true } }
-            : Object.keys(extra).length ? { extra } : {}) });
+        // A handle that throws instead of answering may already have handed the request to the peer.
+        try {
+          outcome = await session.request(channel, args ?? [], { id, timeoutMs: Math.max(1, Math.round(deadline - performance.now())), background,
+            // 幂等读不排在之前因为太大改走后台通道的请求后面；写照原来的先后（lanes.ts）。
+            unordered: isPeerResetRetryableInvoke(channel, args),
+            ...(lane ? { lane } : {}), ...(attempt > 0 ? { extra: { ...extra, agentNetResumeOnly: true } }
+              : Object.keys(extra).length ? { extra } : {}) });
+        } catch (error) { onWritten?.(); throw error; }
+        // Only NOT_SENT proves the session never took the request; anything else may have reached the peer.
+        if (outcome.ok || outcome.error.code !== 'NOT_SENT') onWritten?.();
         if (attempt > 0 && outcome.ok) {
           const result = outcome.result as InvokeResultPayload;
           if (result?.ok === false && result.error?.code === 'INVOKE_TIMEOUT') {

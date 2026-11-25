@@ -10566,6 +10566,55 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     }, { pingIntervalMs: 600_000 });
   });
 
+  // Plugin management on the phone (#12684, maintainer review 09:30): a caller tells "never written" from "written,
+  // result unknown" by this call's own write receipt. It runs once, at the first socket write of the invoke itself
+  // (the point that also marks a failure inFlight), before the call settles; a refusal, a route yield or an expiry
+  // before that write never runs it. Minimal failing input: the receipt is missing, or runs for an unwritten request.
+  // Gap: inFlight alone cannot tell a caller's own refusal or a handshake from this request. Tier: unit (fake socket).
+  it('runs the write receipt once at the first socket write of the request itself, never for an unwritten one', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const socket = h.current();
+      const invokes = () => socket.sent.filter(env => env.kind === 'invoke' && env.dst === 'dev-b');
+      // Refused by the caller's last check: nothing written, no receipt.
+      const refusedReceipt = vi.fn();
+      const cancelled = new Error('stopped before the write');
+      await expect(h.client.invoke('dev-b', { channel: 'maker:send', args: ['refused'] }, 5_000,
+        { preSend: () => { throw cancelled; }, onRequestWritten: refusedReceipt })).rejects.toBe(cancelled);
+      expect(refusedReceipt).not.toHaveBeenCalled();
+      // Expired before the first write (local backpressure): not in flight, no receipt.
+      const expiredReceipt = vi.fn();
+      socket.bufferedAmount = 700 * 1024;
+      const expired = h.client.invoke('dev-b', { channel: 'maker:send', args: ['expired'] }, 59_000,
+        { onRequestWritten: expiredReceipt }).catch((error: unknown) => error);
+      await advance(10_000);
+      expect(await expired).toMatchObject({ code: 'BACKPRESSURE', inFlight: false });
+      expect(expiredReceipt).not.toHaveBeenCalled();
+      socket.bufferedAmount = 0;
+      await advance(250);
+      // Written, then no reply: the receipt ran at the write, once, and the failure is in flight.
+      const before = invokes().length;
+      const writtenReceipt = vi.fn(() => { expect(invokes().length).toBeGreaterThan(before); });
+      const written = h.client.invoke('dev-b', { channel: 'maker:send', args: ['written'] }, 1_000,
+        { onRequestWritten: writtenReceipt }).catch((error: unknown) => error);
+      await advance(1);
+      expect(writtenReceipt).toHaveBeenCalledTimes(1);
+      await advance(2_000);
+      expect(await written).toMatchObject({ code: 'INVOKE_TIMEOUT', inFlight: true });
+      expect(writtenReceipt).toHaveBeenCalledTimes(1);
+      // A reply: the receipt ran before the result.
+      const order: string[] = [];
+      const replied = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] }, 5_000,
+        { onRequestWritten: () => order.push('written') }).then(() => order.push('result'));
+      await advance(1);
+      const request = invokes().at(-1)!;
+      encodeReliableFrames({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'dev-b', id: request.id,
+        payload: { ok: true, result: [] } }, 'remote-stream', 1).forEach(frame => socket.push(frame));
+      await advance(1);
+      await replied;
+      expect(order).toEqual(['written', 'result']);
+    }, { pingIntervalMs: 600_000 });
+  });
+
   // The MacBook incident had a ready reliable stream and 27 older frames. A new negotiation
   // may yield before its first byte, without consuming another sequence or disturbing the backlog.
   it('yields an unsent invoke on a ready, backlogged peer without replaying it after drain', async () => {

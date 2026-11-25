@@ -1,4 +1,4 @@
-import { DeviceLinkError, isInFlightDeviceLinkError, isSharedTaskPeer, isProviderSharePeer, REMOTE_RESOURCE_INVOKE_CHANNEL,
+import { isSharedTaskPeer, isProviderSharePeer, REMOTE_RESOURCE_INVOKE_CHANNEL,
   REMOTE_RESOURCE_MANIFEST_CHANNEL } from '@cindy/device-link';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { isRemoteResourcesUnsupported } from '@/device-link/remoteResources';
@@ -11,7 +11,7 @@ import { parsePluginMarketPage, pluginMarketQueryInput, type PluginMarketPage, t
 
 /** Use DeviceLinkContext.invoke directly; preserve its final, synchronous queue fence. */
 export type PluginManagementInvoke = <T = unknown>(deviceId: string, channel: string, args?: unknown[],
-  options?: { preSend?: () => void; background?: boolean }) => Promise<T>;
+  options?: { preSend?: () => void; background?: boolean; onRequestWritten?: () => void }) => Promise<T>;
 export interface PluginManagementClientOptions {
   invoke: PluginManagementInvoke;
   deviceId: string;
@@ -47,13 +47,13 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
   const isOwnerCurrent = () => !owner.switching && isMobileAuthOwnerCurrent(owner);
   const isCurrent = () => isOwnerCurrent() && (options.isCurrent?.() ?? true);
   /**
-   * Whether a request reached the wire is decided by the transport only, never by `preSend` (which is only a check:
-   * DeviceLinkContext.invoke calls it at entry, again after a direct-path attempt and once the connection is ready,
-   * and the device-link client calls it right before the first socket write; see plugin-mobile-implementation.md):
-   * - written: a reply came back, or the transport failed it as `inFlight` (written, reply lost) — `onWritten` runs;
-   * - not written: refused at the entry check, or the transport says `inFlight === false` (expired before writing);
-   * - otherwise unknown (refused at a later check: a direct-path attempt may already have delivered it).
-   * A mutation whose result is not known to be unsent is an unknown outcome: it is looked up, never replayed.
+   * Whether a request was written is decided by the transport only, never by `preSend` (which is only a check, run at
+   * several points before the write; see plugin-mobile-implementation.md): DeviceLinkContext.invoke calls
+   * `onRequestWritten` at the first write of this request itself (a link handshake's writes never count).
+   * - written: a reply came back, or `onRequestWritten` ran before the failure — `onWritten` runs;
+   * - not written: the call failed and `onRequestWritten` never ran (refused by a check, the queue or the route,
+   *   a handshake that failed, or expired before writing): a plain failure, safe to try again.
+   * A mutation that was written but whose result is lost is an unknown outcome: it is looked up, never replayed.
    */
   async function call<T>(channel: string, payload: unknown, parse: (value: unknown) => T, mutation = false, guard?: () => boolean, cleanup = false,
     onWritten?: () => void): Promise<T> {
@@ -62,19 +62,15 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
       if (isSharedTaskPeer(options.deviceId) || isProviderSharePeer(options.deviceId)) localError('PLUGIN_MANAGEMENT_OWNER_ONLY');
       if (!requestCurrent()) localError('PLUGIN_MANAGEMENT_STALE'); };
     assertRequestCurrent();
-    let checks = 0, refusedAtEntry = false;
-    const preSend = () => {
-      checks += 1;
-      try { assertRequestCurrent(); } catch (error) { if (checks === 1) refusedAtEntry = true; throw error; }
-    };
+    let written = false;
+    const onRequestWritten = () => { written = true; };
     let response: unknown;
     try {
-      response = await options.invoke(options.deviceId, channel, [payload], { preSend });
+      response = await options.invoke(options.deviceId, channel, [payload], { preSend: assertRequestCurrent, onRequestWritten });
     } catch (error) {
-      if (isInFlightDeviceLinkError(error)) onWritten?.();
-      const notWritten = refusedAtEntry || (error instanceof DeviceLinkError && error.inFlight === false);
-      if (error instanceof PluginManagementRequestError && (!mutation || notWritten)) throw error;
-      throw new PluginManagementRequestError(pluginManagementErrorCode(error), mutation && !notWritten);
+      if (written) onWritten?.();
+      if (error instanceof PluginManagementRequestError && (!mutation || !written)) throw error;
+      throw new PluginManagementRequestError(pluginManagementErrorCode(error), mutation && written);
     }
     onWritten?.();
     try {

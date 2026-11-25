@@ -64,8 +64,10 @@ type Envelope = { actionId: string; input: Record<string, unknown>; resourceRef?
 function host(handler?: (request: Envelope) => unknown | Promise<unknown>, marketDetail: ManagedMarketDetail = detail) {
   const requests: Envelope[] = [];
   let facts = snapshot();
-  const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void }) => {
+  const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
     options?.preSend?.();
+    // Like the transport: the request is written once its last check passed; a handler that throws lost the reply.
+    options?.onRequestWritten?.();
     if (channel.endsWith(':manifest')) return capability;
     const request = args?.[0] as Envelope;
     requests.push(request);
@@ -160,31 +162,38 @@ describe('mobile management contract', () => {
   });
 });
 
-// Maintainer review 08:48: `preSend` is only a check (the mobile invoke calls it at entry, after a direct-path
-// attempt, once connected, and right before the first socket write), never evidence that a request was written.
-// Written is what the transport reports: a reply, or a failure marked in flight.
+// Maintainer reviews 08:48 and 09:30: `preSend` is only a check (the mobile invoke calls it at entry, after a direct-path
+// attempt, once connected, and right before the first socket write), never evidence that a request was written, and a
+// link handshake's writes are not this request's. Written is what the transport reports for the request itself: a reply,
+// or `onRequestWritten` (its first socket write) before the failure. A mutation that was never written is a plain failure.
 describe('what counts as written', () => {
   const uninstall = (client: ReturnType<typeof createPluginManagementClient>) => client.begin({ operationId: 'operation-1', kind: 'uninstall', installed: plugin });
+  const handshakeTimeout = () => { const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no link-accept after the handshake was written'); error.inFlight = true; return error; };
   it.each([
     // [case, how the transport ends, outcome unknown]
     ['refused at the entry check', 'entry', false],
-    ['refused at the last check before the write (it was never written)', 'dequeue', true],
+    ['refused at the last check before the write (it was never written)', 'dequeue', false],
     ['expired before the first write (BACKPRESSURE, not in flight)', 'expired', false],
+    ['failed in the link handshake after the handshake was written (in flight, but not this request)', 'handshake', false],
     ['written, then the reply was lost (in flight)', 'lost', true],
+    ['written, then refused at a later check (a resend after the first write)', 'resend', true],
   ] as const)('classifies a write %s', async (_name, end, unknown) => {
     let active = true;
     const invoke = vi.fn(async (_d, _c, _a, opts) => {
       if (end === 'entry') active = false;
       opts!.preSend!();
+      if (end === 'handshake') throw handshakeTimeout();
       if (end === 'dequeue') active = false;
       opts!.preSend!();
       if (end === 'expired') { const error = new DeviceLinkError('BACKPRESSURE', 'expired before socket write'); error.inFlight = false; throw error; }
+      opts!.onRequestWritten!();
+      if (end === 'resend') { active = false; opts!.preSend!(); }
       const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no reply after first socket write'); error.inFlight = true; throw error;
     }) as PluginManagementInvoke;
     const client = createPluginManagementClient({ invoke, deviceId: 'host-1', isCurrent: () => active });
     await expect(uninstall(client)).rejects.toMatchObject({ outcomeUnknown: unknown });
   });
-  it('reports a write only from the transport, never from a passing check', async () => {
+  it('reports a write only from the transport, never from a passing check or a handshake', async () => {
     const written = vi.fn();
     let active = true;
     // Passes the entry check, then is refused right before the write: not written.
@@ -192,14 +201,65 @@ describe('what counts as written', () => {
     await expect(createPluginManagementClient({ invoke: refused, deviceId: 'host-1', isCurrent: () => active })
       .answer('operation-1', 'consent-1', true, undefined, written)).rejects.toBeTruthy();
     expect(written).not.toHaveBeenCalled();
+    // Only the handshake was written and timed out: not written.
+    const handshake = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); throw handshakeTimeout(); }) as PluginManagementInvoke;
+    await expect(createPluginManagementClient({ invoke: handshake, deviceId: 'host-1' })
+      .answer('operation-1', 'consent-1', true, undefined, written)).rejects.toMatchObject({ outcomeUnknown: false });
+    expect(written).not.toHaveBeenCalled();
     // Written, reply lost: written. A reply: written.
-    const lost = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.preSend!();
+    const lost = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.preSend!(); opts!.onRequestWritten!();
       const error = new DeviceLinkError('INVOKE_TIMEOUT', 'lost'); error.inFlight = true; throw error; }) as PluginManagementInvoke;
     await expect(createPluginManagementClient({ invoke: lost, deviceId: 'host-1' }).answer('operation-1', 'consent-1', true, undefined, written)).rejects.toBeTruthy();
     expect(written).toHaveBeenCalledTimes(1);
-    const replied = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.preSend!(); return { effects: [], result: receipt('running') }; }) as PluginManagementInvoke;
+    const replied = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.preSend!(); opts!.onRequestWritten!(); return { effects: [], result: receipt('running') }; }) as PluginManagementInvoke;
     await createPluginManagementClient({ invoke: replied, deviceId: 'host-1' }).answer('operation-1', 'consent-1', true, undefined, written);
     expect(written).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Maintainer review 09:30 #3 (reproduced on b93ba486 with 0 writes: it ended "unknown", the original-operation lookup
+// said NOT_FOUND and it stayed unknown, so this computer's management slot could not start the next operation).
+// A disable is queued; a refresh meanwhile finds the instance gone, so the last send check stops it before the write.
+// Minimal failing input: one queued disable, one refresh without the instance. Tier: unit (in-memory Host).
+describe('a queued operation stopped before it was written', () => {
+  it('fails, frees the management slot and is never looked up or sent again', async () => {
+    let facts = snapshot();
+    let hold: Promise<void> | undefined;
+    let release!: () => void;
+    const requests: Envelope[] = [];
+    // Production order: the check at entry, the queue, the last check, then the write.
+    const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+      options?.preSend?.();
+      const request = args?.[0] as Envelope;
+      if (!channel.endsWith(':manifest') && request.actionId === 'management:begin' && hold) await hold;
+      options?.preSend?.();
+      options?.onRequestWritten?.();
+      if (channel.endsWith(':manifest')) return capability;
+      requests.push(request);
+      if (request.actionId === 'management:snapshot') return { effects: [], result: facts };
+      if (request.actionId === 'management:operation') throw Object.assign(new Error('forgotten'), { code: 'NOT_FOUND' });
+      return { effects: [], result: receipt('succeeded') };
+    }) as unknown as PluginManagementInvoke;
+    const c = controller(createPluginManagementClient({ deviceId: 'host-1', invoke }));
+    await c.refresh();
+    hold = new Promise((resolve) => { release = resolve; });
+    const disabling = c.setEnabled(plugin, false);
+    await vi.waitFor(() => expect(c.getState()).toMatchObject({ busy: true, outcome: 'running', operationId: 'operation-1' }));
+    facts = snapshot([]);
+    await c.refresh();
+    release();
+    await disabling;
+    expect(requests.filter((r) => r.actionId === 'management:begin')).toHaveLength(0);
+    expect(c.getState()).toMatchObject({ busy: false, outcome: 'failed', errorCode: 'PLUGIN_MANAGEMENT_STALE' });
+    await c.reconcile();
+    expect(requests.filter((r) => r.actionId === 'management:operation')).toHaveLength(0);
+    // The slot is free: once the plugin is back, the next operation starts and is sent once.
+    hold = undefined;
+    facts = snapshot();
+    await c.refresh();
+    await c.setEnabled(plugin, false);
+    expect(requests.filter((r) => r.actionId === 'management:begin')).toHaveLength(1);
+    expect(c.getState()).toMatchObject({ busy: false, outcome: 'succeeded' });
   });
 });
 
