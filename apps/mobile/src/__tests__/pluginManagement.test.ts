@@ -606,12 +606,17 @@ describe('progress only moves forward and never stops', () => {
   const notFound = () => Object.assign(new Error('[NOT_FOUND] gone'), { code: 'NOT_FOUND' });
   const POLL = 1000;
   // `promptOnAccept`: the Host shows the consent before answering begin; `consent: false`: an operation without one.
-  function rig(hostOptions: { promptOnAccept?: boolean; consent?: boolean } = {}) {
+  function rig(hostOptions: { promptOnAccept?: boolean; consent?: boolean; lookupInvalid?: boolean } = {}) {
     const host = { phase: 'none' as 'none' | 'accepted' | 'confirmation' | 'running' | 'succeeded' | 'cancelled', allowed: false, answersWritten: 0 };
     const hostReceipt = (): PluginManagementReceipt | null => host.phase === 'none' ? null
       : host.phase === 'confirmation' ? confirmation() : receipt(host.phase === 'accepted' ? 'running' : host.phase);
     const pending: Item[] = [], transit: Item[] = [];
     let connection = 0, seq = 0;
+    // This replay's own timers (the controller's scheduler), so liveness never counts another path's poll.
+    const timers: Array<{ run: () => void; delayMs: number }> = [];
+    const scheduler = { set: (run: () => void, delayMs: number) => { const timer = { run, delayMs }; timers.push(timer); return timer; },
+      clear: (handle: unknown) => { const index = timers.indexOf(handle as typeof timers[number]); if (index >= 0) timers.splice(index, 1); } };
+    const sent = { lookups: 0, snapshots: 0 };
     const settle = (item: Item) => { const index = pending.indexOf(item); if (index >= 0) pending.splice(index, 1); };
     const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
       options?.preSend?.();
@@ -620,10 +625,11 @@ describe('progress only moves forward and never stops', () => {
       if (!['begin', 'answer', 'operation', 'cancel'].includes(action ?? '')) {
         options?.preSend?.(); options?.onRequestWritten?.();
         if (channel.endsWith(':manifest')) return capability;
-        if (action === 'snapshot') return { effects: [], result: snapshot() };
+        if (action === 'snapshot') { sent.snapshots += 1; return { effects: [], result: snapshot() }; }
         if (action === 'market-detail') return { effects: [], result: detail };
         throw new Error('unexpected ' + action);
       }
+      if (action === 'operation') sent.lookups += 1;
       return new Promise((resolve, reject) => {
         let reply: (() => void) | undefined;
         const item: Item = { kind: action as Kind, seq: ++seq, stage: 'queued', epoch: connection, arrived: false,
@@ -644,7 +650,10 @@ describe('progress only moves forward and never stops', () => {
             if (item.kind === 'answer' && host.phase === 'confirmation') { host.phase = 'running'; host.allowed = !!item.confirmed; }
             if (item.kind === 'cancel' && ['accepted', 'confirmation', 'running'].includes(host.phase)) host.phase = 'cancelled';
             const captured = hostReceipt();
-            reply = () => { if (captured) resolve({ effects: [], result: captured }); else reject(notFound()); };
+            reply = () => {
+              if (item.kind === 'operation' && hostOptions.lookupInvalid) resolve({ effects: [], result: { phase: 'nonsense' } });
+              else if (captured) resolve({ effects: [], result: captured }); else reject(notFound());
+            };
           },
           deliver: () => { settle(item); reply!(); },
           lose: () => { settle(item); reject(lostError()); },
@@ -653,9 +662,11 @@ describe('progress only moves forward and never stops', () => {
       });
     }) as unknown as PluginManagementInvoke;
     const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }),
-      { createOperationId: () => 'operation-1', pollIntervalMs: POLL });
+      { createOperationId: () => 'operation-1', pollIntervalMs: POLL, scheduler });
     controllers.push(c);
-    return { c, host, pending, transit, consentless: hostOptions.consent === false, toggle: () => { connection += 1; }, connection: () => connection };
+    return { c, host, pending, transit, timers, sent, consentless: hostOptions.consent === false, toggle: () => { connection += 1; }, connection: () => connection,
+      // Done with this replay: its controller and timers go before the next path starts.
+      dispose: () => { c.dispose(); controllers.splice(controllers.indexOf(c), 1); timers.length = 0; } };
   }
   const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
   type R = ReturnType<typeof rig>;
@@ -672,7 +683,7 @@ describe('progress only moves forward and never stops', () => {
     else if (name === 'host') {
       if (r.host.phase === 'accepted') r.host.phase = r.consentless ? 'succeeded' : 'confirmation';
       else if (r.host.phase === 'running') r.host.phase = r.host.allowed ? 'succeeded' : 'cancelled';
-    } else if (name === 'tick') await vi.advanceTimersByTimeAsync(POLL);
+    } else if (name === 'tick') r.timers.shift()?.run();
     else if (name === 'dequeue') item!.dequeue();
     else if (name === 'arrive') item!.arrive();
     else if (name === 'deliver') item!.deliver();
@@ -686,7 +697,7 @@ describe('progress only moves forward and never stops', () => {
     if (tappable(r) && (counts.allow ?? 0) + (counts.reject ?? 0) < 2) list.push('allow', 'reject');
     if (st.outcome === 'unknown' && st.online && !st.busy && !counts.check) list.push('check');
     if ((r.host.phase === 'accepted' || r.host.phase === 'running') && (counts.host ?? 0) < 3) list.push('host');
-    if (vi.getTimerCount() > 0 && (counts.tick ?? 0) < 3) list.push('tick');
+    if (r.timers.length > 0 && (counts.tick ?? 0) < 3) list.push('tick');
     const firstQueued = r.pending.find((entry) => entry.stage === 'queued');
     if (firstQueued) list.push(`dequeue#${firstQueued.seq}`);
     // Requests reach the Host in the order they were written; a reply comes only after that, a lost one any time.
@@ -704,7 +715,7 @@ describe('progress only moves forward and never stops', () => {
     if (r.pending.filter((entry) => entry.kind === 'operation' && entry.epoch === r.connection()).length > 1) return `③ two lookups in flight (${path})`;
     if (st.busy && r.pending.length === 0) return `⑤ busy with nothing in flight (${path})`;
     const open = !!st.operationId && ['running', 'confirmation', 'unknown'].includes(st.outcome);
-    if (open && st.online && r.pending.length === 0 && !st.busy && !tappable(r) && vi.getTimerCount() === 0
+    if (open && st.online && r.pending.length === 0 && !st.busy && !tappable(r) && r.timers.length === 0
       && !(st.outcome === 'unknown' && st.missingReceiptFacts !== undefined && st.missingReceiptFacts !== null))
       return `⑥ stuck: ${st.outcome}${st.answerHeld ? ' (answer held)' : ''} with nothing in flight and no poll (${path})`;
     const rank = st.outcome === 'confirmation' ? 1 : st.outcome === 'running' ? (r.host.answersWritten > 0 && r.host.phase !== 'confirmation' ? 2 : 0)
@@ -723,7 +734,7 @@ describe('progress only moves forward and never stops', () => {
       const written = r.pending.find((entry) => entry.stage === 'written' && entry.arrived);
       if (written) { await step(r, `deliver#${written.seq}`, counts); continue; }
       if (r.host.phase === 'accepted' || r.host.phase === 'running') { await step(r, 'host', counts); continue; }
-      if (vi.getTimerCount() > 0) { await step(r, 'tick', counts); continue; }
+      if (r.timers.length > 0) { await step(r, 'tick', counts); continue; }
       break;
     }
     const st = r.c.getState();
@@ -738,21 +749,29 @@ describe('progress only moves forward and never stops', () => {
     await flush();
     const counts: Record<string, number> = {}, shown = { rank: -1 };
     for (let i = 0; i < events.length; i++) {
+      const lostLookup = events[i].startsWith('lose#')
+        && r.pending.some((entry) => entry.kind === 'operation' && `lose#${entry.seq}` === events[i]);
+      const snapshotsBefore = r.sent.snapshots;
       await step(r, events[i], counts);
-      const violation = check(r, shown, events.slice(0, i + 1).join(' → '));
+      const path = events.slice(0, i + 1).join(' → ');
+      // ⑨ Automatic lookups are bounded by the timer firings (plus reconnects and taps); a failed lookup reads no snapshot.
+      if (r.sent.lookups > (counts.tick ?? 0) + (counts.online ?? 0) + (counts.check ?? 0) + 1)
+        return { violation: `⑨ ${r.sent.lookups} lookups for ${counts.tick ?? 0} timer firings (${path})`, r, counts, next: [] as string[] };
+      if (lostLookup && r.sent.snapshots > snapshotsBefore)
+        return { violation: `⑨ snapshot read after a failed lookup (${path})`, r, counts, next: [] as string[] };
+      const violation = check(r, shown, path);
       if (violation) return { violation, r, counts, next: [] as string[] };
     }
     return { violation: null, r, counts, next: enabled(r, counts) };
   }
   const fingerprint = (r: R, counts: Record<string, number>) => JSON.stringify([r.host, r.c.getState().outcome, r.c.getState().busy,
-    r.c.getState().answerHeld, r.c.getState().online, r.c.getState().receipt?.phase, vi.getTimerCount(),
+    r.c.getState().answerHeld, r.c.getState().online, r.c.getState().receipt?.phase, r.timers.length,
     r.pending.map((entry) => [entry.kind, entry.stage, entry.arrived, entry.confirmed, entry.epoch === r.connection()]),
     r.transit.map((entry) => [entry.kind, entry.confirmed]), counts]);
   // The maintainer's orders, as plain regressions (each fails on ea3874b2 and e46ff0aa).
   const run = async (r: R, events: string[]) => { const counts = {}; for (const event of events) await step(r, event, counts); };
   it('A: a late begin consent after Allow already ran neither goes back nor stops the polling', async () => {
-    vi.useFakeTimers();
-    try {
+    {
       const r = rig({ promptOnAccept: true });
       await r.c.refresh(); void r.c.install(detail, plugin); await flush();
       await run(r, ['dequeue#1', 'arrive#1', 'offline', 'online', 'dequeue#2', 'arrive#2', 'deliver#2']);
@@ -765,20 +784,18 @@ describe('progress only moves forward and never stops', () => {
       const lookup = r.pending.find((entry) => entry.kind === 'operation')!;
       await run(r, [`dequeue#${lookup.seq}`, `arrive#${lookup.seq}`, `deliver#${lookup.seq}`]);
       expect(r.c.getState()).toMatchObject({ outcome: 'succeeded', busy: false });
-    } finally { vi.useRealTimers(); }
+    }
   });
   it('B: a final outcome from the reconnect lookup lands after a late begin running', async () => {
-    vi.useFakeTimers();
-    try {
+    {
       const r = rig({ consent: false });
       await r.c.refresh(); void r.c.uninstall(plugin); await flush();
       await run(r, ['dequeue#1', 'arrive#1', 'offline', 'online', 'host', 'dequeue#2', 'arrive#2', 'deliver#1', 'deliver#2']);
       expect(r.c.getState()).toMatchObject({ outcome: 'succeeded', busy: false });
-    } finally { vi.useRealTimers(); }
+    }
   });
   it('a written answer whose reply is lost after a later lookup still found its consent becomes checkable, then settles', async () => {
-    vi.useFakeTimers();
-    try {
+    {
       const r = rig();
       await r.c.refresh(); void r.c.install(detail, plugin); await flush();
       await run(r, ['dequeue#1', 'arrive#1', 'deliver#1', 'host', 'tick', 'dequeue#2', 'arrive#2', 'deliver#2']);
@@ -788,38 +805,78 @@ describe('progress only moves forward and never stops', () => {
       await run(r, ['lose#3']);                                    // the answer's reply is lost
       // Not a dead end: a checkable unknown result whose answer stays locked, looked up by itself.
       expect(r.c.getState()).toMatchObject({ outcome: 'unknown', answerHeld: 'consent-1', busy: false });
-      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      expect(r.timers.length).toBeGreaterThan(0);
       await run(r, ['arrive#3', 'host', 'tick']);                  // the answer reached the Host after all; it finishes
       const lookup = r.pending.find((entry) => entry.kind === 'operation')!;
       await run(r, [`dequeue#${lookup.seq}`, `arrive#${lookup.seq}`, `deliver#${lookup.seq}`]);
       expect(r.c.getState()).toMatchObject({ outcome: 'succeeded' });
       expect(r.host.answersWritten).toBe(1);
-    } finally { vi.useRealTimers(); }
+    }
   });
   it('keeps every invariant after every step, and reaches the Host result without taps', async () => {
-    vi.useFakeTimers();
-    try {
-      const violations = new Set<string>(), seen = new Set<string>();
-      let leaves = 0;
-      const explore = async (events: string[]): Promise<void> => {
-        const { violation, r, counts, next } = await replay(events);
-        if (violation) { violations.add(violation); return; }
-        const key = fingerprint(r, counts);
-        if (seen.has(key)) return;
-        seen.add(key);
-        if (!next.length || events.length >= 10) {
-          leaves += 1;
-          const end = await drain(r);
-          if (end) violations.add(`${end} (${events.join(' → ')})`);
-          return;
-        }
-        for (const event of next) await explore([...events, event]);
-      };
-      await explore([]);
-      expect([...violations].slice(0, 8)).toEqual([]);
-      expect(leaves).toBeGreaterThan(200);
-    } finally { vi.useRealTimers(); }
+    const violations = new Set<string>(), seen = new Set<string>();
+    let leaves = 0;
+    const explore = async (events: string[]): Promise<void> => {
+      const { violation, r, counts, next } = await replay(events);
+      if (violation) { violations.add(violation); r.dispose(); return; }
+      const key = fingerprint(r, counts);
+      if (seen.has(key)) { r.dispose(); return; }
+      seen.add(key);
+      if (!next.length || events.length >= 10) {
+        leaves += 1;
+        const end = await drain(r);
+        if (end) violations.add(`${end} (${events.join(' → ')})`);
+        r.dispose();
+        return;
+      }
+      r.dispose();
+      for (const event of next) await explore([...events, event]);
+    };
+    await explore([]);
+    expect([...violations].slice(0, 8)).toEqual([]);
+    expect(leaves).toBeGreaterThan(200);
   }, 30_000);
+  // Maintainer review 14:18 #1: a lookup that keeps failing while the computer stays online made one lookup and one
+  // extra snapshot read per second, for as long as the failure lasted. Now: no snapshot on a failed lookup, lookups
+  // back off and stop after a few failures (a protocol error stops them at once); "Check result" stays available, and
+  // coming back online starts over. Minimal failing input: a written begin whose reply is lost, then lookups that time out.
+  it('backs off and stops automatic lookups that keep failing, without reading a snapshot each time', async () => {
+    const r = rig();
+    await r.c.refresh(); void r.c.install(detail, plugin); await flush();
+    await run(r, ['dequeue#1', 'arrive#1', 'lose#1']);          // the begin's reply is lost: unknown
+    expect(r.c.getState().outcome).toBe('unknown');
+    const snapshots = r.sent.snapshots, delays: number[] = [];
+    for (let i = 0; i < 10 && r.timers.length; i++) {
+      delays.push(r.timers[0].delayMs);
+      await run(r, ['tick']);
+      const lookup = r.pending.find((entry) => entry.kind === 'operation')!;
+      await run(r, [`dequeue#${lookup.seq}`, `arrive#${lookup.seq}`, `lose#${lookup.seq}`]);
+    }
+    expect(r.sent.lookups).toBe(4);
+    expect(delays).toEqual([POLL, 2 * POLL, 4 * POLL, 8 * POLL]);
+    expect(r.sent.snapshots).toBe(snapshots);
+    // Stopped, not stuck: "Check result" can be tapped, and it looks up once.
+    expect(r.c.getState()).toMatchObject({ outcome: 'unknown', busy: false, online: true });
+    expect(r.timers).toHaveLength(0);
+    void r.c.reconcile(); await flush();
+    expect(r.sent.lookups).toBe(5);
+    const manual = r.pending.find((entry) => entry.kind === 'operation')!;
+    await run(r, [`dequeue#${manual.seq}`, `arrive#${manual.seq}`, `lose#${manual.seq}`]);
+    expect(r.timers).toHaveLength(0);
+    // Back online after going away: automatic lookups start over.
+    await run(r, ['offline', 'online']);
+    expect(r.sent.lookups).toBe(6);
+  });
+  it('stops automatic lookups at once on a protocol error and keeps "Check result"', async () => {
+    const r = rig({ lookupInvalid: true });
+    await r.c.refresh(); void r.c.install(detail, plugin); await flush();
+    await run(r, ['dequeue#1', 'arrive#1', 'lose#1', 'tick']);
+    const lookup = r.pending.find((entry) => entry.kind === 'operation')!;
+    await run(r, [`dequeue#${lookup.seq}`, `arrive#${lookup.seq}`, `deliver#${lookup.seq}`]);
+    expect(r.c.getState()).toMatchObject({ outcome: 'unknown', errorCode: 'INVALID_RESPONSE', busy: false });
+    expect(r.timers).toHaveLength(0);
+    expect(r.sent.lookups).toBe(1);
+  });
 });
 
 describe('mobile management transactions', () => {

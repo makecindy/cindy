@@ -34,6 +34,7 @@ const fixture = vi.hoisted(() => ({
   alert: vi.fn(),
   push: vi.fn(),
   blocks: [] as any[],
+  stubTaskSettings: false,
   extraRows: [] as any[],
   extraDevices: [] as any[],
   offlineDevices: new Set<string>(),
@@ -275,6 +276,14 @@ vi.mock("@/session/FileBrowserSegmentedControl", () => ({
 vi.mock("@/session/SheetModal", () => ({ SheetModal: (p: any) => p.children }));
 vi.mock("@/session/SheetSurface", () => ({ SheetSurface: (p: any) => p.children }));
 vi.mock("@/plugins/PluginPage", () => ({ PluginPage: () => null }));
+// The real form, except where a test only needs what the screen hands it (the management slot): `stubTaskSettings`.
+vi.mock("@/plugins/PluginTaskSettings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/plugins/PluginTaskSettings")>();
+  return { PluginTaskSettings: (p: any) => {
+    fixture.props.set("taskSettings", p);
+    return fixture.stubTaskSettings ? null : createElement(actual.PluginTaskSettings, p);
+  } };
+});
 vi.mock("@/plugins/PluginReadmePage", () => ({ PluginReadmePage: () => null }));
 vi.mock("@/plugins/pluginClient", () => ({
   invokePlugin: (...args: any[]) => fixture.invoke(...args),
@@ -304,6 +313,7 @@ beforeEach(() => {
       fixture.storage.set(key, value);
     });
   fixture.blocks = [];
+  fixture.stubTaskSettings = false;
   fixture.extraRows = [];
   fixture.extraDevices = [];
   fixture.offlineDevices.clear();
@@ -1083,6 +1093,105 @@ it("holds the management slot while an update reads its market detail, so the ma
   // Only the update reaches begin.
   expect(begins().map((request) => request.input.pluginId)).toEqual([market.pluginId]);
 });
+// Maintainer review 13:41: the slot missed "disable first, then install from the market" (the switch used its own lock
+// and request) and the task settings save. Every entry that writes to the Host or opens a confirmation, on either side of
+// the wide screen, holds the one management slot while its request is in flight (table in plugin-mobile-implementation.md).
+// For every ordered pair: while the first entry's request is held, the second is unavailable and trying it sends
+// nothing. Minimal failing input: a held disable, then an install from the market (e46ff0aa sent it). Tier: unit.
+describe("one management slot for every entry, both directions", () => {
+  const entries = ["market install", "update", "uninstall", "enable switch", "page approval", "task settings"] as const;
+  type Entry = typeof entries[number];
+  const findTaskSettings = (node: any): any => {
+    if (!node || typeof node !== "object") return undefined;
+    if (Array.isArray(node)) { for (const child of node) { const hit = findTaskSettings(child); if (hit) return hit; } return undefined; }
+    if (node.props?.onSavingChange) return node;
+    return findTaskSettings(node.props?.children);
+  };
+  async function screen() {
+    const { plugin, snapshot, market } = realManagementHost();
+    Object.assign(plugin.manifest, { tools: [{ name: "open" }], mcpApps: { ui: { resources: [{ uri: "ui://form", file: "ui/form.html" }], tools: { open: { resourceUri: "ui://form" } } } } });
+    Object.assign(snapshot, { uiCapabilityApproval: true });
+    fixture.blocks = [{ id: "capabilities", data: { tasks: true } }];
+    fixture.stubTaskSettings = true;
+    fixture.width = 900;
+    const other = { ...marketItem("other", "Other"), pluginId: "market/other" };
+    const hold = { other: false, update: false, begin: false, toggle: false };
+    const gates: Array<() => void> = [];
+    const held = () => new Promise<void>((resolve) => { gates.push(resolve); });
+    const writes: string[] = [];
+    fixture.wire.mockImplementation(async (_host: string, channel: string, args: any[], options: any) => {
+      options?.preSend?.(); options?.onRequestWritten?.();
+      if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
+      const request = args[0];
+      if (request.actionId === "management:snapshot") {
+        if (request.input?.read === "capabilities") return { result: { catalogPaging: true } };
+        if (request.input?.read === "catalog") return { result: marketPage([other]) };
+        return { result: snapshot };
+      }
+      if (request.actionId === "management:market-detail") {
+        const isOther = request.input?.pluginId === other.pluginId;
+        writes.push(isOther ? "market-detail:other" : "market-detail:update");
+        if (isOther ? hold.other : hold.update) await held();
+        return { result: isOther ? { ...other, manifest: { schemaVersion: 3, id: "other", name: "Other", version: "1" } } : market };
+      }
+      if (request.actionId === "management:begin") {
+        writes.push(`begin:${request.input.kind}`);
+        if (hold.begin) await held();
+        return { result: { operationId: request.input.operationId, phase: "running" } };
+      }
+      if (request.actionId === "management:operation") return { result: { operationId: request.input.operationId, phase: "running" } };
+      throw new Error("Unexpected action " + request.actionId);
+    });
+    fixture.invoke.mockImplementation(async (..._args: any[]) => { writes.push("switch"); if (hold.toggle) await held(); return {}; });
+    await openDetail();
+    await act(async () => fixture.props.get("directory").onSegmentChange("market"));
+    await settle(14);
+    const menu = (id: string) => fixture.props.get("header").rightToolbar.props.actions.find((action: any) => action.id === id);
+    const approval = () => fixture.props.get("detail").uiApprovalNotice?.actions?.[0];
+    const taskSettings = () => findTaskSettings(fixture.props.get("detail").settingsContent);
+    const available: Record<Entry, () => boolean> = {
+      "market install": () => shownMarket().canInstall === true,
+      update: () => !!menu("update") && !menu("update").disabled,
+      uninstall: () => !!menu("uninstall") && !menu("uninstall").disabled,
+      "enable switch": () => fixture.props.get("detail").busy === false,
+      "page approval": () => approval()?.disabled === false,
+      "task settings": () => !!taskSettings() && taskSettings().props.blocked === false,
+    };
+    // Starting an entry: what a tap does. `keep` holds its request in flight.
+    const start = async (entry: Entry, keep: boolean) => {
+      if (entry === "market install") { hold.other = keep; await act(async () => { void shownMarket().install(shownMarket().items[0]); }); }
+      if (entry === "update") { hold.update = keep; await act(async () => { void fixture.props.get("header").rightToolbar.props.onAction("update"); }); }
+      if (entry === "uninstall") {
+        hold.begin = keep;
+        const alerts = fixture.alert.mock.calls.length;
+        await act(async () => { void fixture.props.get("header").rightToolbar.props.onAction("uninstall"); });
+        if (fixture.alert.mock.calls.length > alerts) await act(async () => { void fixture.alert.mock.calls.at(-1)![2][1].onPress(); });
+      }
+      if (entry === "enable switch") { hold.toggle = keep; await act(async () => { void fixture.props.get("detail").onEnabledChange(false); }); }
+      if (entry === "page approval") { hold.begin = keep; await act(async () => { approval()?.onPress(); }); }
+      if (entry === "task settings") await act(async () => { taskSettings()?.props.onSavingChange(true); });
+      await settle(6);
+    };
+    const release = async (entry: Entry) => {
+      if (entry === "task settings") await act(async () => { taskSettings()?.props.onSavingChange(false); });
+      await act(async () => { gates.splice(0).forEach((open) => open()); });
+      await settle(14);
+    };
+    return { available, start, release, writes };
+  }
+  it.each(entries.flatMap((holder) => entries.filter((other) => other !== holder).map((other) => [holder, other] as const)))(
+    "while %s is in flight, %s is unavailable and sends nothing", async (holder, other) => {
+      const s = await screen();
+      for (const entry of [holder, other]) expect(s.available[entry](), `${entry} before`).toBe(true);
+      await s.start(holder, true);
+      expect(s.available[other](), `${other} while ${holder}`).toBe(false);
+      const sent = [...s.writes];
+      await s.start(other, false);
+      // Only the holder's own request; the second entry sent nothing.
+      expect(s.writes.slice(sent.length)).toEqual([]);
+      await s.release(holder);
+    });
+});
 // Codex review of b93ba486: on a wide screen the market sits beside an installed detail. While a market install was
 // still in its preflight, the installed detail's page approval stayed available, so two controllers could each reach a
 // confirmation. Every installed-detail entry that starts a management operation shares the one slot.
@@ -1175,11 +1284,15 @@ describe("market cache after plugin changes on the computer", () => {
     const reads = setup();
     await showBoth();
     const before = { ...reads };
-    await act(async () => {
-      for (let i = 0; i < 3; i++) fixture.resourceListeners.forEach((listener) => listener("mac", { collectionId: "plugins" }));
-      fixture.resourceListeners.forEach((listener) => listener("mac", { collectionId: "sessions" }));
-      await new Promise((resolve) => setTimeout(resolve, 700));
-    });
+    // The coalescing window runs on fake timers (no real waiting).
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        for (let i = 0; i < 3; i++) fixture.resourceListeners.forEach((listener) => listener("mac", { collectionId: "plugins" }));
+        fixture.resourceListeners.forEach((listener) => listener("mac", { collectionId: "sessions" }));
+        await vi.advanceTimersByTimeAsync(600);
+      });
+    } finally { vi.useRealTimers(); }
     await settle(14);
     expect(reads.pages).toBe(before.pages + 1);
     expect(reads.counts).toBe(before.counts + 1);

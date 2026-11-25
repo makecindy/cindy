@@ -42,12 +42,19 @@ export interface PluginManagementControllerOptions {
   /** Testable identity source; production uses the existing Expo UUID implementation. */
   createOperationId?: () => string;
   pollIntervalMs?: number;
+  /** Timer for the next automatic lookup (tests observe it); defaults to setTimeout / clearTimeout. */
+  scheduler?: { set(run: () => void, delayMs: number): unknown; clear(handle: unknown): void };
   /** Only for callers that already confirmed paged-catalog support; default stays the v1 full snapshot. */
   snapshotRead?: 'installed';
 }
 type BeginIntent = PluginManagementBegin extends infer T ? T extends PluginManagementBegin ? Omit<T, 'operationId'> : never : never;
 type ConsentIntent = { kind: 'approve-ui' | 'defer-ui'; installed: PluginUiConsentItem };
 const terminal = (receipt: PluginManagementReceipt) => ['succeeded', 'cancelled', 'failed'].includes(receipt.phase);
+const AUTO_LOOKUP_FAILURES = 4;
+const AUTO_LOOKUP_MAX_DELAY_MS = 30_000;
+/** Lookup failures a later automatic lookup can get past (the link or the computer was slow or briefly away). */
+const TRANSIENT_LOOKUP_ERRORS = new Set(['INVOKE_TIMEOUT', 'TIMEOUT', 'DEVICE_OFFLINE', 'NOT_CONNECTED', 'LINK_NOT_OPEN',
+  'BACKPRESSURE', 'PEER_RESET', 'REMOTE_DISABLED', 'PLUGIN_MANAGEMENT_STALE']);
 
 /** One controller per selected Host/owner. Dispose when changing targets. No persisted writes or replay queue. */
 export function createPluginManagementController(client: PluginManagementClient, options: PluginManagementControllerOptions = {}) {
@@ -57,7 +64,16 @@ export function createPluginManagementController(client: PluginManagementClient,
   // Display reads cannot erase the full Host facts used for queued write guards.
   let facts: PluginManagementSnapshot | null = null, factsSequence = 0;
   let pendingDisplay: { token: number; sequence: number; promise: Promise<PluginPromptDisplay> } | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: unknown;
+  const scheduler = options.scheduler ?? { set: (run: () => void, delayMs: number) => setTimeout(run, delayMs),
+    clear: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
+  /**
+   * Automatic lookups after a failed one back off (maintainer review 14:18): the delay doubles per consecutive failure
+   * up to AUTO_LOOKUP_MAX_DELAY_MS, and after AUTO_LOOKUP_FAILURES failures, or one that retrying cannot fix (a protocol
+   * error such as INVALID_RESPONSE), they stop: the result waits for "Check result" (still something to do). A
+   * successful lookup, coming back online or to the foreground, and a new operation start over.
+   */
+  let lookupFailures = 0, autoLookupStopped = false;
   let receiver: ManagedPlugin | undefined;
   let uiConsentOperation = false;
   let installDetail: ManagedMarketDetail | undefined;
@@ -150,7 +166,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     listeners.forEach((listener) => listener());
     ensureProgress();
   };
-  const stopPolling = () => { if (timer !== undefined) clearTimeout(timer); timer = undefined; };
+  const stopPolling = () => { if (timer !== undefined) scheduler.clear(timer); timer = undefined; };
   /**
    * Liveness, in one place (maintainer review 13:02), checked after every state change and when a request settles: an
    * operation that is not final, with nothing in flight on an online computer, always has a way forward. Running, or an
@@ -170,8 +186,11 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (requestId && (answers.get(requestId) === 'written' || cancelling === 'written')) publish({ outcome: 'unknown' });
       return;
     }
-    if (state.outcome === 'unknown' && missingReceipt) return;
-    if (timer === undefined) timer = setTimeout(() => { timer = undefined; void reconcile(); }, Math.max(250, options.pollIntervalMs ?? 1000));
+    if (state.outcome === 'unknown' && (missingReceipt || autoLookupStopped)) return;
+    const interval = Math.max(250, options.pollIntervalMs ?? 1000);
+    const delay = state.outcome === 'running' && lookupFailures === 0 ? interval
+      : Math.min(interval * 2 ** lookupFailures, AUTO_LOOKUP_MAX_DELAY_MS);
+    if (timer === undefined) timer = scheduler.set(() => { timer = undefined; void reconcile(); }, delay);
   }
   function matchesReceiver(live: ManagedPlugin): boolean {
     return !!receiver && live.instanceKey === receiver.instanceKey
@@ -314,6 +333,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     let began = false, operationId: string | null = null;
     const holder = hold();
     answers.clear(); cancelling = null; consentOrder.length = 0; answerSentAt.clear(); shownRank = -1;
+    lookupFailures = 0; autoLookupStopped = false;
     publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle',
       expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null });
     const installed = intent.installed;
@@ -392,17 +412,27 @@ export function createPluginManagementController(client: PluginManagementClient,
     }
   }
   async function lookup(id: string, token: number, holder: number, lookupAt: number) {
-    try { await acceptReceipt(await tracked(() => client.operation(id)), token, holder, lookupAt); }
-    catch (error) {
+    try {
+      const reply = await tracked(() => client.operation(id));
+      lookupFailures = 0; autoLookupStopped = false;
+      await acceptReceipt(reply, token, holder, lookupAt);
+    } catch (error) {
       // A late lookup never reopens an operation that has a final outcome meanwhile (see `undecided`), and a lookup
       // overtaken by a receipt (the Host's newer state) says nothing anymore.
       if (!current(token) || !undecided(id) || appliedReceiptAt > lookupAt) { drop(holder); return; }
       // NOT_FOUND can mean Host restart or its 15-minute memory expiry. Never infer rollback or send begin again.
       const code = pluginManagementErrorCode(error);
       const gone = code === 'NOT_FOUND';
+      if (!gone) {
+        // A failed lookup says nothing about the computer's plugins: no snapshot is read here (only after NOT_FOUND,
+        // when the facts settle a result whose receipt is gone). The next automatic lookup backs off, or stops.
+        lookupFailures += 1;
+        if (!TRANSIENT_LOOKUP_ERRORS.has(code) || lookupFailures >= AUTO_LOOKUP_FAILURES) autoLookupStopped = true;
+        release(holder, { outcome: 'unknown', errorCode: code, missingReceiptFacts: null });
+        return;
+      }
       // While the facts after a missing receipt are read, stay busy: the snapshot already in state predates them.
-      if (gone) publish({ outcome: 'unknown', errorCode: code, missingReceiptFacts: null });
-      else { release(holder, { outcome: 'unknown', errorCode: code, missingReceiptFacts: null }); }
+      publish({ outcome: 'unknown', errorCode: code, missingReceiptFacts: null });
       const notFoundSequence = snapshotSequence;
       if (gone) missingReceipt = { token, after: notFoundSequence };
       const ours = snapshotSequence + 1; // readSnapshot takes the next sequence synchronously
@@ -528,6 +558,8 @@ export function createPluginManagementController(client: PluginManagementClient,
     setOnline(online: boolean) {
       if (disposed || state.online === online) return;
       ++epoch; stopPolling(); busyHolder = 0;
+      // Back online or in the foreground: automatic lookups start over.
+      if (online) { lookupFailures = 0; autoLookupStopped = false; }
       const active = state.operationId && !['succeeded', 'cancelled', 'failed'].includes(state.outcome);
       publish({ online, busy: false, ...(active ? { outcome: 'unknown' as const } : {}) });
       if (online) void reconcile();

@@ -25,12 +25,13 @@ export function pluginUiApprovalNotice(
       label: t('plugins.uiApproval.enable'),
       testID: 'plugins.uiApproval.enable',
       disabled: pending || !state.online,
-      onPress: () => { void ('manifest' in plugin ? controller.approveUi(plugin) : controller.approveUiFromConsent(plugin)); },
+      // A press delivered after the slot was taken (a stale render) does nothing.
+      onPress: () => { if (!pending && state.online) void ('manifest' in plugin ? controller.approveUi(plugin) : controller.approveUiFromConsent(plugin)); },
     }, ...(proactive ? [{
       label: t('plugins.uiApproval.later'),
       testID: 'plugins.uiApproval.later',
       disabled: pending || !state.online,
-      onPress: () => { void ('manifest' in plugin ? controller.deferUi(plugin) : controller.deferUiFromConsent(plugin)); },
+      onPress: () => { if (!pending && state.online) void ('manifest' in plugin ? controller.deferUi(plugin) : controller.deferUiFromConsent(plugin)); },
     }] : [])] : undefined,
   };
 }

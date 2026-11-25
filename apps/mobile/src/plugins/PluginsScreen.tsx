@@ -215,6 +215,10 @@ function PluginDirectory() {
         ["running", "confirmation", "unknown"].includes(
           management.state.outcome,
         )));
+  // The enable / disable switch (its write and read-back) and a task settings save hold the slot too (maintainer
+  // review 13:41: a pending disable let the market start an install beside it).
+  const [toggling, setToggling] = useState(false);
+  const [taskSettingsSaving, setTaskSettingsSaving] = useState(false);
   // Market browsing and installs live in usePluginMarket; this screen only routes views.
   const market = usePluginMarket({
     visible: focused && (segment === "market" || !!query.trim()) && (wide || !selected),
@@ -223,7 +227,7 @@ function PluginDirectory() {
     isOnline: list.isOnline,
     installedDeviceId: deviceId,
     query,
-    blocked: managementPending,
+    blocked: managementPending || toggling || taskSettingsSaving,
     onInstalled: (host, instanceKey, item) => {
       void list.refresh();
       // Same as the computer: a fresh install opens its installed detail.
@@ -242,16 +246,21 @@ function PluginDirectory() {
   });
   const liveMarketBusy = useRef(market.installBusy);
   liveMarketBusy.current = market.installBusy;
-  // One management slot for the whole screen (Codex review of b93ba486): a market install and every installed-detail
-  // entry that starts a management operation or opens a confirmation (update, uninstall, enable / disable, page
-  // approval, task settings) share it, so two confirmations can never be active side by side on a wide screen.
-  const managementLocked = managementPending || market.installBusy;
-  const managementAvailable =
+  // One management slot for the whole screen (Codex review of b93ba486, maintainer review 13:41): every entry that writes
+  // to the Host or opens a confirmation holds it while its request (and read-back) is in flight, and each entry is
+  // unavailable while another holds it. Holders: the market install, the management controller (update, uninstall,
+  // page approval), the enable / disable switch and a task settings save. The table is in plugin-mobile-implementation.md.
+  type SlotHolder = "controller" | "toggle" | "taskSettings";
+  const slotHeldOutside = (self: SlotHolder) => market.installBusy || (self !== "controller" && managementPending)
+    || (self !== "toggle" && toggling) || (self !== "taskSettings" && taskSettingsSaving);
+  // The controller's own operation (or update preparation) also keeps its other entries unavailable.
+  const managementLocked = managementPending || slotHeldOutside("controller");
+  const managementReady =
     management.state?.capability === "supported" &&
     !management.state.errorCode &&
     !!management.state.snapshot &&
-    management.state.online &&
-    !managementLocked;
+    management.state.online;
+  const managementAvailable = managementReady && !managementLocked;
   const marketDetail = selected ? null : market.detail;
   const marketView = {
     ...market,
@@ -812,7 +821,7 @@ function PluginDirectory() {
       !selected ||
       !detail ||
       enableLock.current ||
-      managementLocked ||
+      slotHeldOutside("toggle") ||
       !list.isOnline(selected.row.host)
     )
       return;
@@ -830,6 +839,7 @@ function PluginDirectory() {
       generation === detailGeneration.current &&
       isMobileAuthOwnerCurrent(owner);
     enableLock.current = true;
+    setToggling(true);
     setBusy(true);
     try {
       await invokePlugin(invoke, row.host.deviceId, row.item.ref.id, actionId);
@@ -839,6 +849,7 @@ function PluginDirectory() {
       // A failed reply may follow an applied write; confirm by reading, never replaying it.
       if (current()) await showDetail(row);
       enableLock.current = false;
+      setToggling(false);
       if (isMobileAuthOwnerCurrent(owner)) setBusy(false);
       void list.refresh();
     }
@@ -1098,7 +1109,7 @@ function PluginDirectory() {
         instanceId: managed.instanceKey,
         expectedInstalledApproval: pluginApprovalToken(managed),
       }}
-      active={focused && online && detailOpen && !managementPending}
+      active={focused && online && detailOpen && !managementPending && !market.installBusy && !toggling && !taskSettingsSaving}
       onNotice={(notice) => {
         if (
           renderedGeneration === detailGeneration.current &&
@@ -1112,13 +1123,13 @@ function PluginDirectory() {
   ) : undefined;
   const taskSettingsAvailable = model?.taskPreferences && managed?.approval.state === "approved" &&
     managed.enabled && enabled && online && focused && detailOpen && !busy &&
-    managementAvailable && !detailLoading && !detailFailed;
+    managementReady && !slotHeldOutside("taskSettings") && !detailLoading && !detailFailed;
   const detailView =
     selected && model ? (
       <PluginDetailView
         row={selected.row}
         enabled={enabled}
-        busy={busy || detailLoading || managementLocked}
+        busy={busy || detailLoading || slotHeldOutside("toggle")}
         statusRecoveryBusy={busy || detailLoading}
         uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t, false, managementLocked)}
         managementNotice={management.state?.outcome === "unknown" ? {
@@ -1147,6 +1158,8 @@ function PluginDirectory() {
                   key={JSON.stringify(["tasks", selected.row.host.deviceId, managed.instanceKey, pluginApprovalToken(managed), connectionEpoch])}
                   deviceId={selected.row.host.deviceId}
                   pluginId={managed.instanceKey}
+                  blocked={slotHeldOutside("taskSettings")}
+                  onSavingChange={setTaskSettingsSaving}
                 />
               ) : null}
               {originalSettingsContent}

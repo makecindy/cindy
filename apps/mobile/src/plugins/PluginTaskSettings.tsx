@@ -42,9 +42,15 @@ import { invokePlugin } from "./pluginClient";
 export function PluginTaskSettings({
   deviceId,
   pluginId,
+  blocked = false,
+  onSavingChange,
 }: {
   deviceId: string;
   pluginId: string;
+  /** Another management entry on the screen holds the slot: saving waits (plugin-mobile-implementation.md). */
+  blocked?: boolean;
+  /** A save holds the screen's management slot from its write until it settles, even if this view closes meanwhile. */
+  onSavingChange?: (saving: boolean) => void;
 }) {
   const { t } = useTranslation(),
     { invoke } = useDeviceLink(),
@@ -58,6 +64,10 @@ export function PluginTaskSettings({
     [busy, setBusy] = useState(false);
   const [capabilities, setCapabilities] =
     useState<MobileAgentCapabilities | null>(null);
+  const blockedRef = useRef(blocked),
+    savingChangeRef = useRef(onSavingChange);
+  blockedRef.current = blocked;
+  savingChangeRef.current = onSavingChange;
   const alive = useRef(true),
     lock = useRef(false),
     owner = useRef(getMobileAuthOwner()).current;
@@ -119,9 +129,11 @@ export function PluginTaskSettings({
     };
   }, [picker, maker, agent]);
   const save = async (patch: Record<string, unknown>) => {
-    if (!preferences || lock.current || !current()) return false;
+    if (!preferences || lock.current || blockedRef.current || !current()) return false;
     lock.current = true;
     setBusy(true);
+    const savingChange = savingChangeRef.current;
+    savingChange?.(true);
     try {
       const value = await call<PluginTaskPreferences>("task-settings:set", {
         expectedRevision: preferences.revision,
@@ -140,6 +152,7 @@ export function PluginTaskSettings({
       return false;
     } finally {
       lock.current = false;
+      savingChange?.(false);
       if (current()) setBusy(false);
     }
   };
@@ -200,7 +213,7 @@ export function PluginTaskSettings({
       <View style={styles.card}>
         <Pressable
           accessibilityRole="button"
-          disabled={!preferences || busy || error}
+          disabled={!preferences || busy || blocked || error}
           style={styles.row}
           onPress={() => setPicker(true)}
         >
@@ -214,7 +227,7 @@ export function PluginTaskSettings({
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          disabled={!preferences || busy || error}
+          disabled={!preferences || busy || blocked || error}
           style={styles.row}
           onPress={choosePermission}
         >
@@ -233,7 +246,7 @@ export function PluginTaskSettings({
         {config?.model ? (
           <Pressable
             accessibilityRole="button"
-            disabled={busy || error}
+            disabled={busy || blocked || error}
             style={styles.row}
             onPress={() => {
               void save({ model: null });
@@ -276,7 +289,7 @@ export function PluginTaskSettings({
         selectedEffort={config?.effort ?? ""}
         selectedFastMode={config?.fastMode ?? false}
         loading={providers.loading}
-        disabled={busy || error}
+        disabled={busy || blocked || error}
         hidePermissionTrigger
         activePermissionMode={
           config?.permissionMode ?? preferences?.defaultPermissionMode ?? ""

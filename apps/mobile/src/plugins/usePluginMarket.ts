@@ -429,8 +429,11 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const management = usePluginManagement(install?.target.deviceId, install ? isOnline(install.target) : false,
     focused, install ? `plugin-market:${install.id}` : "plugin-market", false, "installed");
   const blocked = !!options.blocked;
+  // Checked when a press arrives too: another management entry may have taken the slot since the last render.
+  const liveBlocked = useRef(blocked);
+  liveBlocked.current = blocked;
   const startInstall = useCallback((item: ManagedMarketItem, known?: ManagedMarketDetail) => {
-    if (installRef.current || blocked || !target || !online || probeStatus !== "supported" || item.installState !== "not-installed"
+    if (installRef.current || blocked || liveBlocked.current || !target || !online || probeStatus !== "supported" || item.installState !== "not-installed"
       || pluginMarketSourceUnverified(known ?? item)) return;
     setRowErrors(({ [errorKey(target.deviceId, item.pluginId)]: _removed, ...rest }) => rest);
     const attempt = { id: ++attemptId.current, target, item, detail: known, started: false, confirmed: false };
