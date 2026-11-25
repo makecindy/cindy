@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
+import { COMPANION_CLOUD_VERSION, parseCompanionCloudRemoteActionResult } from '@cindy/device-link';
 import { createIpcError, missingBotModelError } from '../../../shared/ipc-errors.js';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import type { CompanionCloudActionResult } from '../../../shared/companionCloud.js';
@@ -1275,7 +1275,11 @@ describe('switch home from any computer', () => {
       home.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; });
       const caller = setup({ selfDeviceId: 'laptop', home: 'desk', devices: [device('desk')], homeLink: {
         version: async () => 2, targets: () => home.runtime.transferTargets(),
-        handOver: (_deviceId, botId, target) => home.runtime.transfer(botId, target),
+        handOver: async (_deviceId, botId, target) => {
+          const parsed = parseCompanionCloudRemoteActionResult(await home.runtime.transfer(botId, target));
+          if (parsed.ok || parsed.code !== 'FAILED') throw new Error('Expected the home to decline the hand-over');
+          return { ...parsed, code: 'FAILED' };
+        },
       } });
       expect(await caller.runtime.homeChoices('bot_mia')).toMatchObject({ mode: 'remote', homeDeviceId: 'desk' });
       expect(await caller.runtime.switchHome('bot_mia', 'laptop')).toEqual({

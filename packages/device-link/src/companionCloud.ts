@@ -82,7 +82,7 @@ export interface CompanionOversizedSkill {
 
 export type CompanionCloudRemoteActionResult =
   | { ok: true }
-  | { ok: false; code: string; homeDeviceId?: string | null; oversizedSkill?: CompanionOversizedSkill };
+  | { ok: false; code: string; homeDeviceId?: string | null; oversizedSkill?: CompanionOversizedSkill; handOverFailure?: 'HOME_NOT_READY' };
 
 /** Declared cloud-companion version, or 0 when the answer is not a caps record. */
 export function companionCloudCapsVersion(value: unknown): number {
@@ -116,6 +116,9 @@ export function parseCompanionCloudRemoteActionResult(value: unknown): Companion
   const code = typeof record.code === 'string' && /^[A-Z_]{1,40}$/.test(record.code) ? record.code : 'FAILED';
   const homeDeviceId = typeof record.homeDeviceId === 'string' ? record.homeDeviceId : record.homeDeviceId === null ? null : undefined;
   const failure = { ok: false as const, code, ...(homeDeviceId !== undefined ? { homeDeviceId } : {}) };
+  if (record.ok === false && record.code === 'FAILED' && record.handOverFailure === 'HOME_NOT_READY') {
+    return { ...failure, handOverFailure: 'HOME_NOT_READY' };
+  }
   if (code === 'SKILL_TARGET_OUTDATED' && record.oversizedSkill && typeof record.oversizedSkill === 'object') {
     const { slug, bodyBytes } = record.oversizedSkill as Record<string, unknown>;
     if (typeof slug === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(slug)
