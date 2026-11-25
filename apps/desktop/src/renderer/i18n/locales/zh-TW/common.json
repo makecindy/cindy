@@ -11355,6 +11355,7 @@
         "previewTitle": "準備遷移工作區",
         "previewSummary": "檔案大小：{{size}}",
         "previewNotice": "重新啟動前，請關閉正在使用此工作區的應用程式或指令碼。",
+        "previewClaudeSkillsNotice": "如果工作區沒有自己的 Git 儲存庫，Claude Code 搬遷後可能發現新位置上層資料夾的技能。若不想引入這些技能，請選擇上層未設定 Claude Code 技能的位置。",
         "pendingHint": "請先關閉佔用該目錄的外部程式，再重啟 Cindy 執行遷移。",
         "unavailableTitle": "已遷移的工作區無法使用",
         "unavailableDescription": "Cindy 無法存取 {{target}}。請重新連接磁碟或還原資料夾；Cindy 不會建立空資料夾覆蓋它。",

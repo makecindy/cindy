@@ -115,6 +115,9 @@ describe('BotWorkspaceLocationSettings', () => {
     fireEvent.click(moveButton);
 
     const preview = await screen.findByTestId('workspace-migration-preview');
+    expect(
+      within(preview).getByText('bots.homeFolder.workspaceLocation.previewClaudeSkillsNotice'),
+    ).toBeTruthy();
     const targetPath = 'D:\\CindyWorkspaces\\bot-1-workspace';
     const target = within(preview).getByRole('group', {
       name: 'bots.homeFolder.workspaceLocation.targetPathLabel',

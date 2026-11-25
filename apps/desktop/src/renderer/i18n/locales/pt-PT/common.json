@@ -11486,6 +11486,7 @@
         "previewTitle": "Pronto para mover o espaço de trabalho",
         "previewSummary": "Tamanho dos ficheiros: {{size}}",
         "previewNotice": "Antes de reiniciar, fecha as aplicações e os scripts que utilizam este espaço de trabalho.",
+        "previewClaudeSkillsNotice": "Se o espaço de trabalho não tiver um repositório Git próprio, o Claude Code poderá encontrar competências nas pastas superiores da nova localização. Para evitar isso, escolhe uma localização sem competências do Claude Code nas pastas superiores.",
         "pendingHint": "Feche programas externos que utilizem esta pasta e reinicie a Cindy para iniciar a movimentação.",
         "unavailableTitle": "Espaço de trabalho movido indisponível",
         "unavailableDescription": "A Cindy não conseguiu aceder a {{target}}. Volte a ligar o disco ou restaure a pasta; a Cindy não criará uma pasta vazia por cima.",

@@ -11355,6 +11355,7 @@
         "previewTitle": "워크스페이스 이동 준비 완료",
         "previewSummary": "파일 크기: {{size}}",
         "previewNotice": "재시작하기 전에 이 워크스페이스를 사용하는 앱과 스크립트를 종료하세요.",
+        "previewClaudeSkillsNotice": "워크스페이스에 자체 Git 저장소가 없으면 이동 후 Claude Code가 새 위치의 상위 폴더에서 스킬을 찾을 수 있습니다. 이를 원하지 않으면 상위 폴더에 Claude Code 스킬이 없는 위치를 선택하세요.",
         "pendingHint": "이 폴더를 사용 중인 외부 프로그램을 닫은 뒤 Cindy를 다시 시작하세요.",
         "unavailableTitle": "이동된 워크스페이스에 접근할 수 없음",
         "unavailableDescription": "{{target}}에 접근할 수 없습니다. 드라이브를 다시 연결하거나 폴더를 복원하세요. 빈 폴더로 덮어쓰지 않습니다.",

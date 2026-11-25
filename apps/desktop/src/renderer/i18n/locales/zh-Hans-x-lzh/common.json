@@ -11355,6 +11355,7 @@
         "previewTitle": "工坊迁徙已备",
         "previewSummary": "文件大小：{{size}}",
         "previewNotice": "重启前，请关闭正用此工作区之应用及脚本。",
+        "previewClaudeSkillsNotice": "若工作区无自有 Git 仓库，迁后 Claude Code 或见新处上层目录之技能。若不欲引入，请择上层未设 Claude Code 技能之处。",
         "pendingHint": "请先息占此目录之外程序，再重启 Cindy 以行迁徙。",
         "unavailableTitle": "已迁工坊今不可达",
         "unavailableDescription": "Cindy 未能及 {{target}}。请复接磁盘或复其目录；Cindy 不另立空目录覆之。",

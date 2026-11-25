@@ -11355,6 +11355,7 @@
         "previewTitle": "ワークスペースの移動準備完了",
         "previewSummary": "ファイルサイズ：{{size}}",
         "previewNotice": "再起動前に、このワークスペースを使用中のアプリやスクリプトを終了してください。",
+        "previewClaudeSkillsNotice": "ワークスペースに独自の Git リポジトリがない場合、移動後に Claude Code が移動先の上位フォルダーにあるスキルを検出することがあります。これを避けるには、上位フォルダーに Claude Code のスキルがない場所を選んでください。",
         "pendingHint": "このフォルダーを使用中の外部アプリを閉じてから Cindy を再起動してください。",
         "unavailableTitle": "移動後のワークスペースにアクセスできません",
         "unavailableDescription": "{{target}} に到達できませんでした。ドライブを再接続するかフォルダーを復元してください。空のフォルダーで上書きされることはありません。",

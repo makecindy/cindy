@@ -422,9 +422,12 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
             </div>
           </div>
 
-          <p className={SETTINGS_HINT}>
-            {t('bots.homeFolder.workspaceLocation.previewNotice')}
-          </p>
+          <div className="flex flex-col gap-1.5">
+            <p className={SETTINGS_HINT}>{t('bots.homeFolder.workspaceLocation.previewNotice')}</p>
+            <p className={SETTINGS_HINT}>
+              {t('bots.homeFolder.workspaceLocation.previewClaudeSkillsNotice')}
+            </p>
+          </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2 pt-0.5">
             <Button

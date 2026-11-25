@@ -11400,6 +11400,7 @@
         "previewTitle": "Ready to move workspace",
         "previewSummary": "File size: {{size}}",
         "previewNotice": "Close any apps or scripts using this workspace before restarting.",
+        "previewClaudeSkillsNotice": "If the workspace has no Git repository of its own, Claude Code may discover skills in parent folders at the new location. To avoid this, choose a location with no Claude Code skills in its parent folders.",
         "pendingHint": "Close external programs using this workspace, then restart Cindy to start the move.",
         "unavailableTitle": "Moved workspace is unavailable",
         "unavailableDescription": "Cindy could not reach {{target}}. Reconnect the drive or restore the folder; Cindy will not create an empty folder over it.",

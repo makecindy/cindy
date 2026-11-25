@@ -11486,6 +11486,7 @@
         "previewTitle": "Prêt à déplacer l'espace de travail",
         "previewSummary": "Taille des fichiers : {{size}}",
         "previewNotice": "Avant de redémarrer, fermez les applications et scripts qui utilisent cet espace de travail.",
+        "previewClaudeSkillsNotice": "Si l’espace de travail n’a pas son propre dépôt Git, Claude Code peut détecter des compétences dans les dossiers parents du nouvel emplacement. Pour éviter cela, choisissez un emplacement sans compétences Claude Code dans ses dossiers parents.",
         "pendingHint": "Fermez les programmes externes utilisant ce dossier puis redémarrez Cindy pour lancer le déplacement.",
         "unavailableTitle": "L'espace de travail déplacé est indisponible",
         "unavailableDescription": "Cindy n'a pas pu accéder à {{target}}. Reconnectez le disque ou restaurez le dossier ; Cindy ne créera pas de dossier vide par-dessus.",

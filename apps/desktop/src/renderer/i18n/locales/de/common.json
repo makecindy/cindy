@@ -11400,6 +11400,7 @@
         "previewTitle": "Bereit zum Verschieben",
         "previewSummary": "Dateigröße: {{size}}",
         "previewNotice": "Schließe vor dem Neustart alle Apps und Skripte, die diesen Arbeitsbereich verwenden.",
+        "previewClaudeSkillsNotice": "Hat der Arbeitsbereich kein eigenes Git-Repository, kann Claude Code Skills in übergeordneten Ordnern am neuen Speicherort finden. Wähle einen Ort ohne Claude-Code-Skills in den übergeordneten Ordnern, wenn du das vermeiden möchtest.",
         "pendingHint": "Schließe externe Programme, die diesen Ordner verwenden, und starte Cindy neu.",
         "unavailableTitle": "Verschobener Arbeitsbereich nicht erreichbar",
         "unavailableDescription": "Cindy konnte {{target}} nicht erreichen. Verbinde das Laufwerk erneut oder stelle den Ordner wieder her; Cindy erstellt keinen leeren Ordner darüber.",

@@ -11355,6 +11355,7 @@
         "previewTitle": "准备迁移工作区",
         "previewSummary": "文件大小：{{size}}",
         "previewNotice": "重启前，请关闭正在使用此工作区的应用或脚本。",
+        "previewClaudeSkillsNotice": "如果工作区没有自己的 Git 仓库，Claude Code 搬迁后可能发现新位置上层目录的技能。如不希望引入这些技能，请选择上层未配置 Claude Code 技能的位置。",
         "pendingHint": "请先关闭占用该目录的外部程序，再重启 Cindy 执行迁移。",
         "unavailableTitle": "已迁移的工作区不可用",
         "unavailableDescription": "Cindy 无法访问 {{target}}。请重新连接对应磁盘或恢复目录；Cindy 不会自动新建空目录覆盖它。",
