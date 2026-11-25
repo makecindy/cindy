@@ -83,7 +83,6 @@ import { readBotProjectMode } from '../../../shared/botProjectMode.js';
 import { ownTeammateProjectState } from '../../scheduler-host/ownTeammateProject.js';
 import { readBotResponsibilityScope } from '../../maker-ipc/botTaskCreation.js';
 import {
-  NEW_BOT_DEFAULT_PI_EFFORT,
   NEW_BOT_DEFAULT_PI_MODEL,
   NEW_BOT_DEFAULT_PI_PROVIDER,
 } from '../../../shared/botDefaults.js';
@@ -202,6 +201,26 @@ function botUserContextSource(config: Record<string, unknown>): string {
 }
 
 /**
+ * The Home files are user-owned: a save may rewrite a slot only while that slot
+ * still exactly matches the frozen snapshot. A strict read cannot distinguish an
+ * unreadable file from a hand edit, so any error fails closed. Callers must
+ * complete legacy-Home migration/seeding before relying on this comparison.
+ */
+async function folderSourcesUnchanged(
+  userDataDir: string,
+  botId: string,
+  expected: { identitySource?: string; userContextSource?: string },
+): Promise<boolean> {
+  try {
+    const folder = await readBotProfileFolder(userDataDir, botId, { strict: true });
+    return (expected.identitySource === undefined || folder.identitySource === expected.identitySource)
+      && (expected.userContextSource === undefined || folder.userContextSource === expected.userContextSource);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Seed a Bot Home that was never created (profiles from before the folder existed)
  * so any save leaves editable SOUL.md / USER.md. Idempotent: an existing SOUL.md
  * means the Home exists and nothing is touched.
@@ -211,15 +230,17 @@ async function ensureBotProfileFolderSeeded(
   identitySource: string,
   config: Record<string, unknown>,
   userDataDir = ownerScopedUserDataPath(),
-): Promise<void> {
+): Promise<boolean> {
   try {
     await migrateBotProfileFolder(userDataDir, botId, {
       identitySource,
       userContextSource: botUserContextSource(config),
       config: Object.fromEntries(Object.entries(config).filter(([key]) => key !== 'userContextSource')),
     }, app.getPath('userData'));
+    return true;
   } catch (cause) {
     log.warn('seed bot profile folder failed', { botId, error: String(cause) });
+    return false;
   }
 }
 
@@ -900,13 +921,8 @@ function botSessionRouteFields(config: Record<string, unknown>, primaryRoute: Bo
           : agentKind === 'pi'
             ? NEW_BOT_DEFAULT_PI_PROVIDER
             : undefined),
-    effort:
-      primaryRoute?.effort ||
-      (typeof config.effort === 'string' && config.effort.trim()
-        ? config.effort.trim()
-        : agentKind === 'pi'
-          ? NEW_BOT_DEFAULT_PI_EFFORT
-          : undefined),
+    // Local admission chooses the model default. Remote tasks skip it and persist '' for no selection.
+    effort: primaryRoute?.effort || (primaryRoute?.agentDeviceId ? '' : undefined),
     fastMode: agentKind === 'acp' ? false : (primaryRoute?.fastMode ?? config.fastMode === true),
     agentDeviceId: primaryRoute?.agentDeviceId ?? null,
     agentKind,
@@ -2227,15 +2243,42 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     }
     owner.assertCurrent();
   }
+  const previousIdentitySource = version?.identitySource ?? '';
+  const nextName = patch.displayName ?? current.displayName;
+  const nextDescription = patch.description ?? current.description;
+  const identityMetadataChanged =
+    nextName !== current.displayName || nextDescription !== current.description;
+  let regeneratedDefaultIdentity = false;
+  // Only an untouched Cindy-generated default follows a name/description edit.
+  // Migrate/seed the authoritative Home first: an old non-owner Home may still
+  // hold a hand-edited SOUL that has not reached this owner's directory yet. Use
+  // the committed config here so a rejected save cannot leak uncommitted context
+  // into the Home files before the transaction succeeds.
+  if (
+    body.identitySource === undefined
+    && identityMetadataChanged
+    && previousIdentitySource === buildDefaultBotIdentity(current.displayName, current.description)
+  ) {
+    const homeReady = await ensureBotProfileFolderSeeded(id, previousIdentitySource, previous, owner.userDataDir);
+    owner.assertCurrent();
+    regeneratedDefaultIdentity = homeReady && await folderSourcesUnchanged(
+      owner.userDataDir,
+      id,
+      { identitySource: previousIdentitySource },
+    );
+    owner.assertCurrent();
+  }
   const nextIdentitySource =
     body.identitySource !== undefined
       ? readBotProfileSource(body.identitySource, 'identitySource') ||
-        buildDefaultBotIdentity(patch.displayName ?? current.displayName, patch.description ?? current.description)
-      : (version?.identitySource ?? '');
+        buildDefaultBotIdentity(nextName, nextDescription)
+      : regeneratedDefaultIdentity
+        ? buildDefaultBotIdentity(nextName, nextDescription)
+        : previousIdentitySource;
   const profileContentChanged = botProfileContentChanged({
     previousCapabilities: previous,
     nextCapabilities: normalizedNextConfig,
-    previousIdentitySource: version?.identitySource ?? '',
+    previousIdentitySource,
     nextIdentitySource,
   }) || (patch.displayName !== undefined && patch.displayName !== current.displayName)
     || (patch.description !== undefined && patch.description !== current.description);
@@ -2319,17 +2362,30 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     });
   } else await commitProfile();
   // The files are the user's editing surface: rewrite only the file whose content this
-  // save changed, so pinning, a model change or editing the other file cannot clobber
-  // hand edits that have not been reconciled yet.
+  // save changed. An automatically regenerated default SOUL is written only if the
+  // authoritative file still matches the frozen snapshot at the write boundary; a
+  // hand edit made while the DB commit or permission refresh was in flight survives
+  // and is adopted by the next folder reconciliation.
   const nextUserContextSource = botUserContextSource(normalizedNextConfig);
+  const previousUserContextSource = botUserContextSource(previous);
   const folderPatch = {
-    ...(nextIdentitySource !== (version?.identitySource ?? '') ? { identitySource: nextIdentitySource } : {}),
-    ...(nextUserContextSource !== botUserContextSource(previous) ? { userContextSource: nextUserContextSource } : {}),
+    ...(nextIdentitySource !== previousIdentitySource ? { identitySource: nextIdentitySource } : {}),
+    ...(nextUserContextSource !== previousUserContextSource ? { userContextSource: nextUserContextSource } : {}),
   };
-  await ensureBotProfileFolderSeeded(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
+  const folderReady = await ensureBotProfileFolderSeeded(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
   owner.assertCurrent();
-  if (Object.keys(folderPatch).length > 0) {
-    await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
+  const finalFolderPatch = { ...folderPatch };
+  if (regeneratedDefaultIdentity && finalFolderPatch.identitySource !== undefined) {
+    const unchangedAtWriteBoundary = folderReady && await folderSourcesUnchanged(
+      owner.userDataDir,
+      id,
+      { identitySource: previousIdentitySource },
+    );
+    owner.assertCurrent();
+    if (!unchangedAtWriteBoundary) delete finalFolderPatch.identitySource;
+  }
+  if (Object.keys(finalFolderPatch).length > 0) {
+    await syncBotProfileFolder(id, finalFolderPatch, owner.userDataDir);
     owner.assertCurrent();
   }
   // Project mode (experimental): turning it on makes the workspace a registered,

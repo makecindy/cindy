@@ -197,7 +197,8 @@ describeMigrationReplay('existing side-chat teams', () => {
         '0159_restore_native_usage_currency.sql',
         '0160_native_usage_amount_metadata.sql',
         '0161_schedule_model_group.sql',
-        '0162_majestic_hitman.sql',
+        '0162_schedule_mr_observation.sql',
+        '0163_gray_leech.sql',
       ]);
       expect(columnNames(db, 'schedules')).toContain('model_group');
       expect(columnNames(db, 'schedules')).toContain('primary_host_key');
@@ -431,7 +432,7 @@ describeMigrationReplay('migration replay', () => {
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
           143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160,
-          161, 162,
+          161, 162, 163,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -612,7 +613,7 @@ describeMigrationReplay('migration replay', () => {
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
         130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161,
-        162,
+        162, 163,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
@@ -787,6 +788,8 @@ describeMigrationReplay('migration replay', () => {
       expect(tableExists(db, 'bot_group_plan_steps')).toBe(true);
       expect(indexExists(db, 'idx_bot_group_plans_group_created')).toBe(true);
       expect(indexExists(db, 'idx_messages_active_error_tail')).toBe(true);
+      expect(columnNames(db, 'schedule_runs')).toContain('mr_observation');
+      expect(indexExists(db, 'idx_schedule_runs_mr_observation')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_running_schedule')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_running_heartbeat')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_running_legacy')).toBe(true);

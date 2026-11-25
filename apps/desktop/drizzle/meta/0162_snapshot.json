@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "1c91a26e-9e23-4870-9c28-d06d9fbc6c20",
+  "id": "cb417ef8-6561-4771-a291-5d37e762f26a",
   "prevId": "b11f478d-1cd5-4aec-bebb-423047da9fe0",
   "tables": {
     "account_usage_snapshots": {
@@ -2101,13 +2101,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'{}'"
-        },
-        "stdio": {
-          "name": "stdio",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "sort_order": {
           "name": "sort_order",
@@ -4917,6 +4910,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "mr_observation": {
+          "name": "mr_observation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "read_at": {
           "name": "read_at",
           "type": "integer",
@@ -4940,6 +4940,17 @@
             "fired_at"
           ],
           "isUnique": false
+        },
+        "idx_schedule_runs_mr_observation": {
+          "name": "idx_schedule_runs_mr_observation",
+          "columns": [
+            "schedule_id",
+            "status",
+            "fired_at",
+            "id"
+          ],
+          "isUnique": false,
+          "where": "\"schedule_runs\".\"mr_observation\" IS NOT NULL"
         },
         "idx_schedule_runs_running_schedule": {
           "name": "idx_schedule_runs_running_schedule",

@@ -45,6 +45,7 @@ import type {
   BotImFeishuService,
   BotImGroupActivationMode,
 } from '../../../shared/botImConnection';
+import { BOT_IM_CONNECT_TIMEOUT_REASON } from '../../../shared/botImConnection';
 import { useBotTranslation } from './botPronounContext';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
 import { RemoteOfficialXCard } from './RemoteOfficialXCard';
@@ -895,7 +896,10 @@ function BotChannelAddDialog({
       } else if (message.includes('CONNECT_FAILED')) {
         const marker = 'CONNECT_FAILED: ';
         const reason = message.slice(message.indexOf(marker) + marker.length).trim();
-        setError(t('bots.channels.add.errors.connectFailed', { reason: reason || '…' }));
+        // 只是超时: 表单内容原样保留, 再点一次即用原输入重试。
+        setError(reason === BOT_IM_CONNECT_TIMEOUT_REASON
+          ? t('bots.channels.add.errors.connectTimedOut')
+          : t('bots.channels.add.errors.connectFailed', { reason: reason || '…' }));
       } else {
         setError(t('bots.channels.add.errors.failed'));
       }

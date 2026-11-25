@@ -3,6 +3,8 @@ import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
 import { Select } from '@/components/ui/select';
 import { duplicateSubscriptionProviders, listedSourceFolds } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
+import { useSettingsSubpageBack } from './useSettingsEscape';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { providersSettings } from './ProvidersSection.settings-search';
 import {
   BorrowedProviderModels,
@@ -12,7 +14,7 @@ import {
 } from './ProviderRunLocationRow';
 import { useProviderBorrow } from '@/hooks/useProviderBorrow';
 import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
-import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
+import { providerSpeechSetup, providerRealtimeSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { SubscriptionFastSetting } from '@/features/provider-share/SubscriptionFastSetting';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
@@ -37,7 +39,7 @@ import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
  *     fetchProviderModels,additions-only 合并进配置(与 OAuth 动态发现同语义)。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Activity, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
@@ -165,6 +167,7 @@ import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalP
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
 import {
+  ProviderShareReceivedCatalogRetry,
   ProviderShareReceivedDetail,
   ProviderShareReceivedRailGroup,
 } from '@/features/provider-share/ProviderShareReceivedRail';
@@ -738,9 +741,11 @@ function DetailHeader({
   const manualReset = useCodexRateLimitReset(resetSnapshot, refreshResets, provider?.id ?? 'openai');
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const hasDetail = Boolean(detail);
+  const detailWasOpen = useRef(false);
   useLayoutEffect(() => {
-    // Reveal newly opened authentication content without resetting on typing or quota refresh.
-    if (hasDetail && detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
+    // Returning from sharing reconnects layout effects without opening new authentication content.
+    if (hasDetail && !detailWasOpen.current && detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
+    detailWasOpen.current = hasDetail;
   }, [hasDetail]);
   const subscriptionProduct =
     provider?.access?.kind === 'subscription' ? provider.access.product : null;
@@ -2725,6 +2730,13 @@ export function ProvidersSection() {
   );
   const [shareManageProviderId, setShareManageProviderId] = useState<string | null>(null);
   const [shareManageRemote, setShareManageRemote] = useState<OwnRemoteProvider | null>(null);
+  const { entry: searchEntry, activation: searchActivation } = useSettingsSearchNavigation();
+  useEffect(() => {
+    if (searchEntry?.tab === 'providers') {
+      setShareManageProviderId(null);
+      setShareManageRemote(null);
+    }
+  }, [searchEntry, searchActivation]);
   const openaiReconnectRequired = codexAuth.state.kind === 'reconnect-required';
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -2732,7 +2744,8 @@ export function ProvidersSection() {
   // 选中本机供应商或登录引导时清空。
   const [selectedShareId, setSelectedShareId] = useState<string | null>(null);
   const [selectedRemoteKey, setSelectedRemoteKey] = useState<string | null>(null);
-  const { received: receivedShares, loaded: receivedSharesLoaded } = useProviderShareReceived();
+  const { received: receivedShares, loaded: receivedSharesLoaded, retryCatalogShareIds } = useProviderShareReceived();
+  const retryCatalogShareId = selectedShareId && retryCatalogShareIds?.has(selectedShareId) ? selectedShareId : null;
   const selectedShare = selectedShareId
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
@@ -2763,7 +2776,7 @@ export function ProvidersSection() {
     ? remotePluginEngines.find((entry) => entry.key === selectedEngineKey) ?? null
     : null;
   // 右栏正在显示的不是本机普通供应商：分享给我的、另一台电脑上的，或由插件提供的(互斥)。
-  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null || selectedEngine !== null
+  const otherDeviceSelected = selectedShare !== null || retryCatalogShareId !== null || selectedRemote !== null || selectedEngine !== null
     || selectedRemoteEngine !== null;
   // 用户或深链、向导完成、导入完成等「打开某个供应商」时，右栏回到那个供应商(即使它就是当前选中项)。
   const selectProvider = useCallback((providerId: string) => {
@@ -2801,7 +2814,7 @@ export function ProvidersSection() {
     ids: Set<string>;
   }>({ dataOwnerId, ids: new Set<string>() });
   // 向导:null = 关;{ entry } = 打开(entry 指定直达的供应商,来自检测建议)。
-  const [speechProvider, setSpeechProvider] = useState<{ provider: ProviderView; owner: string | null; generation: number | null } | null>(null);
+  const [speechProvider, setSpeechProvider] = useState<{ provider: ProviderView; owner: string | null; generation: number | null; mode?: 'realtime' } | null>(null);
   const [wizard, setWizard] = useState<null | { entry?: WizardEntry; detected?: DetectedProviderDraft }>(null);
   // 自定义供应商完整表单(编辑,或从向导「自定义端点」进入新建)。
   const [dialog, setDialog] = useState<
@@ -3618,6 +3631,14 @@ export function ProvidersSection() {
     ? pluginEngines.find((engine) => engine.providerId === shareManageProviderId) ?? null
     : null;
   const shareManageProvider = shareManageRemote?.provider ?? (shareManageProviderId ? byId.get(shareManageProviderId) ?? null : null);
+  const backFromSharing = () => {
+    if (shareManageRemote) setSelectedRemoteKey(shareManageRemote.key);
+    else if (shareManagePluginEngine) selectEngine(shareManagePluginEngine.key);
+    else if (!shareManageIsPluginEngine) setSelectedId(shareManageProviderId);
+    setShareManageProviderId(null);
+    setShareManageRemote(null);
+  };
+  useSettingsSubpageBack(shareManageProviderId ? backFromSharing : null);
   const shareManagePage = shareManageProviderId ? (
     <ProviderShareManagePage
       key={`${shareManageRemote?.deviceId ?? 'local'}:${shareManageProviderId}`}
@@ -3643,13 +3664,7 @@ export function ProvidersSection() {
           ? (!shareManagePluginEngine || shareManagePluginEngine.remoteUse?.enabled === true)
           : (!shareManageProvider || shareManageProvider.remoteInvocationEnabled === true),
       })}
-      onBack={() => {
-        if (shareManageRemote) setSelectedRemoteKey(shareManageRemote.key);
-        else if (shareManagePluginEngine) selectEngine(shareManagePluginEngine.key);
-        else if (!shareManageIsPluginEngine) setSelectedId(shareManageProviderId);
-        setShareManageProviderId(null);
-        setShareManageRemote(null);
-      }}
+      onBack={backFromSharing}
     />
   ) : null;
 
@@ -3791,7 +3806,9 @@ export function ProvidersSection() {
   return (
     <SubscriptionPoolViewCache.Provider value={subscriptionPoolViews}>
     <div className="flex h-full min-h-0 flex-col gap-6">
-      {shareManagePage ?? (<>
+      {shareManagePage}
+      {/* Preserve both scroll panes and their filters while their subscriptions are paused. */}
+      <Activity mode={shareManagePage ? 'hidden' : 'visible'}>
       <div className="shrink-0">
         <SettingsPageHeader
           title={t('settings.providers.title')}
@@ -3817,7 +3834,7 @@ export function ProvidersSection() {
             className="flex w-[224px] shrink-0 flex-col border-r"
             style={{ borderColor: 'var(--settings-theme-card-border)' }}
           >
-            <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
+            <div data-testid="provider-list-scroll" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
               {showCindySignin && (
                 <CindySigninRow
                   selected={cindySigninActive && !otherDeviceSelected}
@@ -3924,8 +3941,8 @@ export function ProvidersSection() {
           {/* 右栏身份固定；说明、资产和模型共用 DetailHeader 的滚动区。 */}
           <div
             key={
-              selectedShare
-                ? `share:${selectedShare.shareId}`
+              selectedShare || retryCatalogShareId
+                ? `share:${selectedShare?.shareId ?? retryCatalogShareId}`
                 : selectedRemote
                   ? `remote:${selectedRemote.key}`
                   : selectedEngine
@@ -3938,6 +3955,8 @@ export function ProvidersSection() {
           >
             {selectedShare ? (
               <ProviderShareReceivedDetail share={selectedShare} />
+            ) : retryCatalogShareId ? (
+              <ProviderShareReceivedCatalogRetry shareId={retryCatalogShareId} />
             ) : selectedRemote ? (
               <OwnRemoteProviderDetail
                 entry={selectedRemote}
@@ -4128,7 +4147,11 @@ export function ProvidersSection() {
                         provider={effectiveSelected}
                         remoteControlEnabled={remoteControlEnabled}
                         pendingShareRequests={pendingShareCounts.get(effectiveSelected.id) ?? 0}
-                        onManageShare={() => { setShareManageRemote(null); setShareManageProviderId(effectiveSelected.id); }}
+                        onManageShare={() => {
+                          setFocusedModel(null);
+                          setShareManageRemote(null);
+                          setShareManageProviderId(effectiveSelected.id);
+                        }}
                         {...(effectiveSelected.subscriptionPoolAlias ? { poolName: providers.find(p => p.id === (effectiveSelected.subscriptionPoolTarget ?? 'openai'))?.name ?? 'OpenAI' } : {})}
                       />
                     )}
@@ -4159,6 +4182,9 @@ export function ProvidersSection() {
                           provider={selectedBorrow.borrowed ? { ...modelsProvider, connected: true } : modelsProvider}
                           onAddSpeechModels={providerSpeechSetup(effectiveSelected) ? () => {
                             setSpeechProvider({ provider: effectiveSelected, owner: dataOwnerId, generation: ownerGeneration });
+                          } : undefined}
+                          onAddRealtimeModels={providerRealtimeSetup(effectiveSelected) ? () => {
+                            setSpeechProvider({ provider: effectiveSelected, owner: dataOwnerId, generation: ownerGeneration, mode: 'realtime' });
                           } : undefined}
                           focusModelId={
                             focusedModel?.providerId === effectiveSelected.id
@@ -4294,7 +4320,7 @@ export function ProvidersSection() {
         </div>
       )}
 
-      </>)}
+      </Activity>
 
       <WithdrawnModelsDialog
         review={withdrawnReview && withdrawnReview.dataOwnerId === dataOwnerId
@@ -4305,6 +4331,7 @@ export function ProvidersSection() {
       />
       {speechProvider && speechProvider.owner === dataOwnerId && speechProvider.generation === ownerGeneration && (
         <AddSpeechModelsDialog key={`${dataOwnerId}:${ownerGeneration}:${speechProvider.provider.id}`}
+          mode={speechProvider.mode}
           provider={speechProvider.provider} onClose={() => setSpeechProvider(null)}
           onSaved={() => { setSpeechProvider(null); void refetch(); }} />
       )}

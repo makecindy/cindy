@@ -10,6 +10,7 @@ import { isCredentialModeSwitchBusyError } from '../maker-host/credentialSwitchE
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort, OrcaWorkerStatus } from './orcaTeamService.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
+import type { ModelGroupSessionStart } from '../model-groups/sessionStart.js';
 import type { OrcaRemoteWorkerProxySessionSeed } from '../localDb/client/tx/types.js';
 import {
   resolveOrcaWorkerPermissionMode,
@@ -252,6 +253,8 @@ export interface OrcaWorkerCreateParams {
    */
   providerId?: string | null;
   initialTask?: string;
+  /** Model group on the task host. The concrete model is retained as a fallback. */
+  modelGroup?: string;
   /** 可选, 随 initial_task 发给 worker 的本机图片绝对路径; 仅本机 worker。 */
   initialTaskImages?: string[];
   /**
@@ -313,6 +316,7 @@ export interface OrcaWorkerCreationDeps {
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
+  modelGroupStart?: Pick<ModelGroupSessionStart, 'prepare'>;
   getCreationSelection?(): WorkerCreationSelection | null;
   getWorkerPermissionMode(): OrcaWorkerPermissionMode;
   /** Validate existence and target project policy before reserving or bootstrapping. */
@@ -407,6 +411,7 @@ export interface OrcaWorkerCreationDeps {
     role: string;
     agent: AgentKind;
     model?: string;
+    modelGroup?: string;
     providerId?: string;
     agentDeviceId?: string | null;
     effort?: string;
@@ -645,6 +650,7 @@ function resolveWorkerConfig(params: {
   availableModels: OrcaWorkerModelCapabilities[];
   model: string;
   providerId: string | null;
+  useModelDefaultEffort?: boolean;
 }): ResolveWorkerConfigResult {
   const { input, lead, defaults, availableModels, model, providerId } = params;
   const modelCapabilities = availableModels.find((candidate) => candidate.id === model);
@@ -656,7 +662,7 @@ function resolveWorkerConfig(params: {
   }
   const normalizedEffort = normalizeResolvedEffort({
     model: modelCapabilities,
-    effort: input.effort ?? defaults.effort ?? lead.effort,
+    effort: input.effort ?? (params.useModelDefaultEffort ? undefined : defaults.effort ?? lead.effort),
     explicit: input.effort !== undefined,
   });
   return {
@@ -973,6 +979,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           label,
           role,
           agent: params.agent,
+          ...(params.modelGroup ? { modelGroup: params.modelGroup } : {}),
           ...(params.model !== undefined ? { model: params.model } : {}),
           ...(explicitSourceId ? { providerId: explicitSourceId } : {}),
           ...(params.agentDeviceId !== undefined ? { agentDeviceId: params.agentDeviceId } : {}),
@@ -1143,6 +1150,25 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       || !deps.createWorkerWorktree || !deps.discardWorkerWorktree)) {
       return {ok: false, errorCode: 'INVALID_PARAMS', message: 'Worker worktree requires a local project'};
     }
+    if (params.modelGroup && (lead.remoteHostId || params.agent === 'acp' || !deps.modelGroupStart)) {
+      return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Model groups are unavailable for this Worker location' };
+    }
+    const modelGroup = params.modelGroup && params.executionDeviceId === undefined ? await deps.modelGroupStart!.prepare(params.modelGroup, {
+      keptModelName: params.model || lead.model,
+    }) : null;
+    const groupRoute = modelGroup?.route;
+    if (groupRoute) {
+      params = {
+        ...params,
+        agent: groupRoute.agentKind === 'cc' ? 'claude-code' : groupRoute.agentKind,
+        providerId: groupRoute.providerId,
+        model: groupRoute.model,
+        effort: groupRoute.effort as OrcaWorkerEffort | undefined,
+        fast: false,
+        agentDeviceId: groupRoute.agentDeviceId,
+      };
+      rememberedRouting = undefined;
+    }
     const workerLocation = resolveWorkerAgentDeviceId(params, lead, deps.isSelfDeviceId);
     if (!workerLocation.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: workerLocation.message };
@@ -1215,7 +1241,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         : null;
     // Lead 归在供应商组里：跟 Lead 的 Worker 跟那个组(组按策略给它选电脑、出问题时换电脑，与普通任务选组那一项
     // 一样)。组那一项不提供这个模型或读不到时照旧跟 Lead 所在那台。
-    let groupFollow = rememberedRouting ? null : leadProviderGroupFollowCandidate(params, lead, workerLocation.agentDeviceId, requestedSourceId);
+    let groupFollow = rememberedRouting || groupRoute ? null : leadProviderGroupFollowCandidate(params, lead, workerLocation.agentDeviceId, requestedSourceId);
     let groupFollowRouting: OrcaWorkerProviderRoutingContext | undefined;
     if (groupFollow) {
       try {
@@ -1426,6 +1452,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       availableModels,
       model: modelResolution.model,
       providerId: inheritedProviderId,
+      useModelDefaultEffort: !!groupRoute,
     });
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
@@ -1499,7 +1526,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           defaultEffort: routeEffortMeta.defaultEffort,
           effortsUnknown: routeEffortMeta.effortsUnknown,
         },
-        effort: params.effort ?? defaults.effort ?? lead.effort,
+        effort: params.effort ?? (groupRoute ? undefined : defaults.effort ?? lead.effort),
         explicit: params.effort !== undefined,
       });
       if (!renormalized.ok) {
@@ -1709,6 +1736,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
         const workerOpts = deps.buildCreateOptsWithStderr({
           id: workerSessionId,
+          ...(modelGroup ? { modelGroupStart: modelGroup.token } : {}),
           agentKind: params.agent,
           // 未指定目录时保留 Lead 的 workspace 语义（包括 dialogue 托管目录）。
           // 显式选择目录才使用 project，并在 bootstrap 前完成校验。

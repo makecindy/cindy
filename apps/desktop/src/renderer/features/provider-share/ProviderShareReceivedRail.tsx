@@ -19,13 +19,14 @@ import {
   readOnlyProviderModels,
 } from '@/components/settings/ReadOnlyProviderModels';
 import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useRemotePluginEngines } from '@/hooks/usePluginEngines';
 import { providerMonogram } from '@/lib/providerModels';
-import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
+import { retryProviderShareCatalog } from '@/lib/remoteCatalogSnapshot';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
@@ -184,6 +185,33 @@ function useCredentialConsent(shareId: string) {
       });
   };
   return { skip, saving, update };
+}
+
+export function ProviderShareReceivedCatalogRetry({ shareId }: { shareId: string }) {
+  const { t } = useTranslation();
+  const [retrying, setRetrying] = useState(false);
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await retryProviderShareCatalog(providerShareAgentDeviceId(shareId));
+    } catch {
+      // The unavailable view remains visible and allows another manual retry.
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  return (
+    <ErrorNotice
+      className="m-5"
+      message={t('newChat.modelSelector.remoteLoadFailed')}
+      actions={(
+        <Button variant="secondary" size="sm" disabled={retrying} onClick={() => void retry()}>
+          {t(retrying ? 'providerShare.received.modelsLoading' : 'providerShare.received.retryModels')}
+        </Button>
+      )}
+    />
+  );
 }
 
 /** 右栏：一条分享给我的供应商。 */
@@ -379,7 +407,7 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
           onRefresh={status === 'active'
             ? (isPluginEngine
                 ? () => pluginCatalogue.refresh()
-                : () => void refreshRemoteCatalogSnapshot(catalogDeviceId).catch(() => undefined))
+                : () => void retryProviderShareCatalog(catalogDeviceId).catch(() => undefined))
             : undefined}
           refreshing={isPluginEngine ? pluginCatalogue.engines === null && status === 'active' : catalog.loading}
           action={
@@ -387,7 +415,7 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => void refreshRemoteCatalogSnapshot(catalogDeviceId).catch(() => undefined)}
+                onClick={() => void retryProviderShareCatalog(catalogDeviceId).catch(() => undefined)}
               >
                 {t('providerShare.received.retryModels')}
               </Button>

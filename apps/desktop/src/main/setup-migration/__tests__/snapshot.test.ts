@@ -10,6 +10,7 @@ import {
   type SourceMcpFact,
 } from '../snapshot.js';
 import { buildSetupPlan } from '../plan.js';
+import { SETUP_SETTINGS_GROUPS } from '../settingsGroups.js';
 import { installFacts, planInputs, snapshot } from './fixtures.js';
 
 function deps(overrides: Partial<SetupSnapshotSourceDeps> = {}): SetupSnapshotSourceDeps {
@@ -42,6 +43,22 @@ function deps(overrides: Partial<SetupSnapshotSourceDeps> = {}): SetupSnapshotSo
 }
 
 describe('collectSetupSnapshot', () => {
+  // Unit regression for #12448: use the registered platform filter at both ends.
+  it('carries a disabled tray card from Windows into the new Windows PC setup plan', async () => {
+    const group = SETUP_SETTINGS_GROUPS.find(group => group.id === 'menubar')!;
+    const result = await collectSetupSnapshot(deps({
+      platform: 'win32',
+      settingsGroups: [{ ...group, settings: { readCustomized: () => ({ enabled: false }), applyPatch: vi.fn() } }],
+    }));
+    expect(result.settings).toEqual([{ id: group.id, values: { enabled: false } }]);
+    const plan = buildSetupPlan(planInputs({
+      snapshot: result,
+      platform: 'win32',
+      settings: [{ id: group.id, platforms: group.platforms, customized: {} }],
+    }));
+    expect(plan.settings).toMatchObject([{ id: group.id, state: 'ready', changeCount: 1 }]);
+  });
+
   it('exports changed settings for this platform and parses on the other side', async () => {
     const result = await collectSetupSnapshot(deps());
     expect(result.settings).toEqual([

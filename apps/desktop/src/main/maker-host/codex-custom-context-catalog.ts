@@ -350,10 +350,13 @@ export async function prepareCodexCustomContextCatalog(params: {
   binaryPath: string;
   codexHome: string;
   modelId: string;
-  contextWindow: number;
+  /** Omitted for Review hosts that only need a speed declaration. */
+  contextWindow?: number;
   scanChunkBytes?: number;
   /** Same-provider model IDs, including aliases absent from native discovery. */
   modelIds?: readonly string[];
+  /** Declare Fast for the selected API route without changing the native default tier. */
+  declareFastMode?: boolean;
   /** Same-provider budgets for native previous-model compaction after cold resume. */
   resolveContextWindow?: (modelId: string) => number | null;
   resolveCompactionPct?: (modelId: string) => number | null;
@@ -365,15 +368,18 @@ export async function prepareCodexCustomContextCatalog(params: {
     ? bundled
     : normalizeNativeCatalog(parseCodexModelCatalog(JSON.stringify(params.baseCatalog)));
   base = await catalogWithModels(base, bundled, [params.modelId, ...(params.modelIds ?? [])], params.binaryPath);
-  const patched = patchCodexModelMaxContextWindow(
-    base,
-    params.modelId,
-    params.contextWindow,
-  );
+  const patched = params.contextWindow === undefined
+    ? base
+    : patchCodexModelMaxContextWindow(base, params.modelId, params.contextWindow);
   // A global model_context_window override also applies to the previous model
   // reconstructed by Codex. Keep budgets per descriptor so native can see the
   // old > new relationship and compact with the old model before downshifting.
-  patched.models = patched.models.map((model) => {
+  const models = patched.models.map((entry) => {
+    const tiers: unknown[] = Array.isArray(entry.service_tiers) ? entry.service_tiers : [];
+    const model = params.declareFastMode && entry.slug === params.modelId &&
+      !tiers.some(tier => isRecord(tier) && tier.id === 'priority')
+      ? { ...entry, service_tiers: [...tiers, { id: 'priority', name: 'Fast', description: 'Fast mode' }] }
+      : entry;
     const window = model.slug === params.modelId
       ? params.contextWindow : params.resolveContextWindow?.(model.slug);
     if (typeof window !== 'number' || !Number.isSafeInteger(window) || window <= 0) return model;
@@ -381,7 +387,7 @@ export async function prepareCodexCustomContextCatalog(params: {
       max_context_window: Math.max(Number(model.max_context_window) || 0, window),
       auto_compact_token_limit: Math.max(1, Math.floor(window * ((params.resolveCompactionPct?.(model.slug) ?? 90) / 100))) };
   });
-  const content = `${JSON.stringify(patched)}\n`;
+  const content = `${JSON.stringify({ ...patched, models })}\n`;
   const catalogPath = await persistCatalog(params.codexHome, content);
   return {
     catalogPath,

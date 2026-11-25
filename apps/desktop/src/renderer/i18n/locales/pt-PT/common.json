@@ -2256,6 +2256,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Disposição da conversa",
+        "standard": "Padrão",
+        "wide": "Larga",
+        "width": "Largura do conteúdo",
+        "hint": "Usa o espaço entre as margens da conversa. Os painéis estreitos ajustam-se automaticamente."
+      },
       "title": "Aspeto",
       "modeLabel": "Modo de aspeto",
       "appIcon": {
@@ -2501,6 +2508,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Cartão da área de notificação",
+        "hint": "Passe o ponteiro sobre o ícone da Cindy na área de notificação para ver a cota restante e as tarefas por ler."
+      },
       "menubar": {
         "label": "Mostrar utilização restante na barra de menus",
         "hint": "Adiciona um ícone do Cindy à barra de menus do macOS. Clique nele para ver o que resta nas suas subscrições, o seu saldo Cindy e a utilização de hoje."
@@ -2846,7 +2857,8 @@
         "errorBusy": "Já está em curso um envio. Aguarde.",
         "errorFailed": "O envio dos registos falhou. Verifique a sua rede e tente novamente.",
         "unavailableNotConfigured": "O envio de registos não está configurado nesta compilação.",
-        "unavailableNoConsent": "Tem de aceitar primeiro a Política de Privacidade."
+        "unavailableNoConsent": "Tem de aceitar primeiro a Política de Privacidade.",
+        "consentPrompt": "Antes de enviar, lê a <policy>Política de Privacidade</policy> e seleciona <accept>Aceitar</accept>."
       },
       "openLogsDirError": "Não foi possível abrir o diretório de registos",
       "autoUpdateLabel": "Instalar atualizações durante a inatividade",
@@ -2893,6 +2905,14 @@
         "projectsRootReset": "Restaurar localização sugerida",
         "projectsRootDescription": "Onde ficam as pastas de projeto ao criar um projeto a partir de uma sessão. Se não estiver definida, é sugerida uma localização com base nos projetos existentes.",
         "projectsRootFailed": "Não foi possível atualizar a localização de novos projetos",
+        "taskExportDirectoryTitle": "Localização de exportação de sessões",
+        "taskExportDirectoryUnset": "Perguntar sempre",
+        "taskExportDirectoryMissing": "Pasta não encontrada",
+        "taskExportDirectoryUnreadable": "Não é possível ler a definição",
+        "taskExportDirectoryChoose": "Escolher diretório",
+        "taskExportDirectoryReset": "Voltar a perguntar sempre",
+        "taskExportDirectoryDescription": "Quando definida, as sessões exportadas pelo Agent são guardadas aqui sem perguntar a localização, e os ficheiros existentes nunca são substituídos. Se não estiver definida, escolhe a localização em cada exportação.",
+        "taskExportDirectoryFailed": "Não foi possível atualizar a localização de exportação de sessões",
         "dialogueDirectoryOpen": "Abrir diretório",
         "dialogueDirectoryChoose": "Alterar diretório",
         "dialogueDirectoryReset": "Restaurar localização predefinida",
@@ -3448,6 +3468,7 @@
       "description": "Traga sessões de outras ferramentas de programação com IA para o Cindy e continue a trabalhar. O Cindy apenas lê os originais e nunca os altera.",
       "rescan": "Procurar novamente",
       "allSources": "Todas as origens",
+      "sourceFilterAria": "Origem",
       "search": "Procurar sessões ou pastas",
       "projectFilter": "Apenas {{name}}",
       "clearProjectFilter": "Mostrar todos os projetos",
@@ -5240,6 +5261,7 @@
       "formHint": "O ID de utilizador é numérico; envie uma mensagem direta a @userinfobot para consultar o seu ID.",
       "connect": "Ligar",
       "connectingAction": "A ligar…",
+      "connectTimedOut": "A ligação excedeu o tempo limite. Tente novamente.",
       "errorCode": {
         "invalid-token": "O token do bot é inválido ou foi reposto — introduza-o novamente",
         "provider-api": "O Telegram devolveu um erro — tente novamente dentro de instantes",
@@ -8280,6 +8302,7 @@
           "official": "Oficial",
           "community": "Comunidade"
         },
+        "communityDisclaimer": "Este plugin é desenvolvido e mantido por membros da comunidade. A Cindy analisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de utilização.",
         "publisherDescription": {
           "official": "Publicado e mantido pela Cindy",
           "community": "Publicado e mantido por programadores da comunidade",
@@ -8395,7 +8418,7 @@
             "authTitle": "Repositórios privados",
             "authBody": "A autenticação depende inteiramente da configuração Git do sistema — Cindy nunca guarda credenciais Git. SSH: deve existir uma chave funcional configurada neste computador; se a organização exigir SAML SSO, autorize a chave para essa organização através de Configure SSO nas definições de chaves SSH do GitHub. HTTPS: utilize um Personal Access Token guardado pelo gestor de credenciais do sistema.",
             "rulesTitle": "Regras de instalação",
-            "rulesBody": "Os identificadores dos plugins são globalmente únicos e atribuídos por ordem de chegada — os conflitos com plugins instalados são indicados explicitamente. Os plugins cujos identificadores utilizam os prefixos oficiais reservados ({{reservedGhostIdPrefixes}}) não podem ser instalados ao arrastar um pacote, escolher um ficheiro ou utilizar um mercado de plugins personalizado. As permissões declaradas são apresentadas na página de detalhes; clicar em Instalar conclui a instalação e ativa o plugin sem outro diálogo de confirmação de permissões.",
+            "rulesBody": "Os identificadores dos plugins são globalmente únicos e atribuídos por ordem de chegada — os conflitos com plugins instalados são indicados explicitamente. Os plugins cujos identificadores utilizam os prefixos oficiais reservados ({{reservedGhostIdPrefixes}}) não podem ser instalados ao arrastar um pacote, escolher um ficheiro ou utilizar um mercado de plugins personalizado. As permissões declaradas são apresentadas na página de detalhes. Na primeira instalação manual de um plugin, Cindy pede que confirme as permissões solicitadas. O plugin é ativado automaticamente após a instalação.",
             "copy": "Copiar guia",
             "copied": "Guia copiado para a área de transferência.",
             "copyFailed": "Não foi possível copiar. Tente novamente."
@@ -8512,6 +8535,8 @@
         "installMeta": "Versão {{version}} · {{source}}",
         "updateMeta": "Versão {{from}} → {{to}} · {{source}}",
         "installDescription": "Nada é instalado até confirmar. O plugin é ativado imediatamente após a instalação e pode desativá-lo ou desinstalá-lo a qualquer momento na página Plugins.",
+        "customMarketSourceNotice": "Confirme que confia neste mercado e verifique as permissões pedidas pelo plugin.",
+        "localFileSourceNotice": "Antes de continuar a instalação, confirme que o ficheiro veio de uma fonte de confiança.",
         "updateDescription": "A atualização só começa após a sua confirmação. A versão atual permanece disponível até lá.",
         "grantsTitle": "Após a instalação, o plugin terá:",
         "noPermissions": "Este plugin não declara permissões adicionais.",
@@ -8754,6 +8779,8 @@
         "liveScreenDetail": "Através do ambiente de trabalho remoto, o telemóvel ou os seus outros computadores podem mostrar os ecrãs de dispositivos que fornece (como simuladores) e enviar-lhes toques, botões e texto. Só liga quando o abre a partir de um desses dispositivos e não mostra mais nada deste computador.",
         "preview": "Pode abrir páginas de pré-visualização dos sites abaixo no navegador da barra lateral",
         "previewDetail": "Só podem ser abertos os sites indicados abaixo; cada página aberta é atribuída a este plugin.",
+        "fileOpener": "Pode abrir os tipos de ficheiro abaixo quando os abre a partir do Cindy",
+        "fileOpenerDetail": "O plugin recebe o caminho completo do ficheiro e abre-o em vez da aplicação predefinida; se não conseguir, a aplicação predefinida abre-o. Pode desativar isto nos detalhes do plugin.",
         "browserExtension": "Permite que a extensão de navegador incluída se ligue a Cindy",
         "browserNativeHost": "Pode registar a ligação do navegador «{{name}}»",
         "browserNativeHostDetail": "O programa registado é executado fora da sandbox e acede ao computador com a sua conta e as permissões do sistema.",
@@ -8995,6 +9022,8 @@
         "configurationTitle": "Configuração",
         "sidebarEntryTitle": "Entrada de navegação",
         "showInSidebar": "Mostrar na navegação à esquerda",
+        "fileOpenerTitle": "Abrir ficheiros com este plugin",
+        "fileOpenerDescription": "Quando abre ficheiros {{extensions}} a partir do Cindy, o {{name}} abre-os em vez da aplicação predefinida. Os ficheiros de outros computadores continuam a abrir com a aplicação predefinida.",
         "sidebarEntryDescription": "Quando ativado, «{{title}}» aparece na navegação à esquerda, junto a Automatizações e Plugins, no topo ou em Mais — escolha a posição em Mais → Personalizar. Ocultá-lo não desativa o plugin.",
         "openTool": "Ver detalhes da ferramenta {{name}}",
         "noToolDescription": "Não existe descrição para esta ferramenta.",
@@ -9272,6 +9301,7 @@
         "enableBeforeConfigure": "Este plugin está desativado. Ative-o com o interruptor acima antes de o configurar.",
         "settingsPageUnavailable": "Abra o Cindy em {{device}} para usar a página de definições deste plugin. A versão no computador de destino não permite apresentá-la remotamente.",
         "offlineNotice": "{{device}} está offline. A gestão não estará disponível até a ligação ser restabelecida.",
+        "publishOnTarget": "Publique os plugins no Cindy em {{device}} ou atualize o Cindy nesse computador para os publicar remotamente.",
         "managingTarget": "A gerir {{device}}",
         "managingDescription": "As alterações são guardadas neste computador.",
         "viewingTarget": "Instalado em {{device}}",
@@ -12624,6 +12654,8 @@
       "transferBusy": "{{name}} ainda está a preparar uma resposta. Mova-o quando a resposta terminar",
       "targetUnavailable": "“{{device}}” não está disponível. Tem de estar online com o controlo remoto ativado",
       "targetOutdated": "«{{device}}» tem uma versão antiga do Cindy que ainda não consegue executar {{name}}. Atualize primeiro o Cindy nesse computador",
+      "skillTargetOutdated": "Uma Skill de {{name}} tem um corpo de texto superior a 64 KB que a versão antiga do Cindy em «{{device}}» não consegue receber. Atualize o Cindy nesse computador antes de mover o seu amigo. O amigo permanece no computador original",
+      "skillTargetOutdated_skill": "A versão antiga do Cindy em «{{device}}» não consegue receber a Skill «{{slug}}». O texto tem {{bodyBytes, number}} bytes e excede o limite de 64 KB. {{name}} continua no computador original. Atualize o Cindy no computador de destino e tente novamente.",
       "targetOutdatedItem": "Mover para «{{device}}» · Cindy antigo",
       "targetOutdatedMeta": "Cindy antigo",
       "olderTargetNote": "«{{device}}» tem uma versão antiga do Cindy, por isso {{name}} funcionará aí como antes: o histórico da conversa continua sincronizado, mas as regras e automatizações do projeto não se aplicam aí.",
@@ -12867,6 +12899,7 @@
           "conflict": "Este bot já está ligado neste computador, em Definições → Bots de mensagens instantâneas ou noutro amigo.",
           "botUnavailable": "{{name}} está indisponível neste momento. Tente novamente quando regressar.",
           "connectFailed": "Não foi possível ligar: {{reason}}",
+          "connectTimedOut": "A ligação excedeu o tempo limite. Tente novamente.",
           "failed": "Não foi possível concluir. Tente novamente mais tarde.",
           "personalBotGone": "Este bot já não está configurado em Definições → Bots de mensagens instantâneas. Introduza as credenciais."
         },
@@ -12917,6 +12950,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "Vozes do sistema",
+        "myVoices": "As minhas vozes",
+        "refreshMyVoices": "Atualizar as minhas vozes",
+        "callMode": "Modo de chamada",
+        "messageReadAloud": "Leitura de mensagens em voz alta",
+        "callVoice": "Voz das chamadas em tempo real",
+        "readAloudVoice": "Voz de leitura",
+        "readAloudHint": "Clique no altifalante por baixo de uma resposta de texto para a ouvir com esta voz.",
+        "resetReadAloud": "Repor predefinições de leitura",
+        "title": "Áudio em tempo real",
+        "add": "Adicionar modelos de áudio em tempo real",
+        "off": "Usar síntese de voz"
+      },
       "openConversation": "Abrir conversa",
       "inCallWith": "Em chamada com {{name}}",
       "showDetails": "Mostrar transcrição da chamada",
@@ -12938,7 +12985,7 @@
       "settingsTitle": "Voz",
       "openSettings": "Definições de voz",
       "startConversation": "Iniciar conversa de voz",
-      "settingsHint": "Escolha o modelo de fala e a voz deste amigo e, em seguida, inicie uma conversa de voz na caixa de mensagem.",
+      "settingsHint": "Quando as chamadas usam síntese de voz, o modelo e a voz abaixo também são usados para ler mensagens.",
       "previewNeedsChat": "Inicie uma conversa com este amigo para ouvir uma amostra de voz.",
       "voiceId": "ID da voz",
       "manualVoice": "Introduza um ID de voz",
@@ -14743,6 +14790,7 @@
       "missingDir": "Pasta não encontrada"
     },
     "pendingQueue": {
+      "waitingForDevice": "Por enviar · Será enviada quando o outro computador voltar a ligar-se",
       "stopping": "A parar",
       "queued": "Em fila",
       "editingInComposer": "A editar na caixa de entrada abaixo…",
@@ -15230,6 +15278,7 @@
       "unavailable": "A introdução automática não está disponível na aplicação atual. Copie a transcrição e introduza-a manualmente.",
       "unconfirmed": "Não foi possível confirmar se a introdução automática foi bem-sucedida. Copie a transcrição, se necessário.",
       "permission": "É necessária permissão de acessibilidade para introduzir texto por voz na aplicação atual. Conceda a permissão e tente novamente.",
+      "appNotAllowed": "{{app}} não tem permissão para controlar esta aplicação, pelo que o texto não foi introduzido. Adicione esta aplicação para {{app}} em «System & App Protection Override» ou copie o texto e cole-o manualmente.",
       "failed": "A introdução automática falhou. Copie a transcrição e introduza-a manualmente."
     },
     "permissionPrompts": {
@@ -15634,12 +15683,13 @@
       "actionExpired": "A autorização da sessão para esta ação expirou. Consulte a execução mais recente da automatização.",
       "actionRecovered": "A autorização para esta ação expirou. A mesma automatização foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
-      "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS nesse dispositivo. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
-      "prCheck_timeout": "A ligação ao GitHub excedeu o tempo limite em {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
-      "prCheck_auth": "Volte a iniciar sessão no GitHub em {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
-      "prCheck_rate-limit": "O GitHub limitou os pedidos de {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
-      "prCheck_unknown": "A verificação do PR falhou em {{device}}. Consulte os detalhes da execução. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS nesse dispositivo. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
+      "prCheck_timeout": "A ligação ao GitHub excedeu o tempo limite em {{device}}. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
+      "prCheck_auth": "Volte a iniciar sessão no GitHub em {{device}}. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
+      "prCheck_rate-limit": "O GitHub limitou os pedidos de {{device}}. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
+      "prCheck_unknown": "A verificação do PR falhou em {{device}}. Consulte os detalhes da execução. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
+      "preRunBlocked": "A verificação prévia falhou. Esta execução não foi iniciada.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de pedidos.",
       "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
       "pluginMissingUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário não está instalado. Elas serão retomadas após a instalação.",
@@ -16619,7 +16669,13 @@
       "open": "Abrir a tarefa «{{title}}»",
       "untitled": "Tarefa sem título",
       "startedOne": "Iniciada",
-      "handedToOne": "Entregue a"
+      "handedToOne": "Entregue a",
+      "status": {
+        "running": "Em execução",
+        "needsAction": "A aguardar por si",
+        "error": "Erro",
+        "idle": "Inativa"
+      }
     },
     "botTaskLetter": {
       "replied": "respondeu",
@@ -17866,15 +17922,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "As verificações agendadas continuam sem notificações da GitHub App.",
-      "label": "PR",
-      "url": "URL do pull request",
+      "label": "PR / MR",
+      "url": "URL de PR ou MR",
       "condition": "Executar quando",
-      "any": "Atividade no PR",
+      "any": "Atividade",
       "merged": "Integração",
       "review": "Atividade de revisão",
       "ci": "Alterações na CI",
       "timed": "Verificar também periodicamente",
-      "invalid": "Introduza o URL de um pull request do GitHub."
+      "invalid": "Introduza o URL de um PR do GitHub ou MR do GitLab."
     },
     "presentation": {
       "status": {
@@ -18066,6 +18122,7 @@
       "openWorkdirFailed": "Falha ao abrir a pasta"
     },
     "runs": {
+      "boundPluginEngineRecovery": "A automatização não foi executada porque a tarefa associada usa um motor de plugin. Volta a usar um motor integrado nessa tarefa ou associa a automatização a uma tarefa que use um motor integrado.",
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes de a mensagem ser enviada. Quando a sessão de destino estiver livre, escolhe {{action}} para a executar.",
       "status": {
         "running": "Em execução",
@@ -19021,7 +19078,7 @@
       "expired": "Introdução manual terminada por tempo de espera excedido."
     },
     "failure": {
-      "permission": "O Cindy não consegue ler a interface deste Mac. Verifique a permissão de controlo da cópia do Cindy em execução. No macOS 27.3 ou posterior, a permissão de controlo encontra-se em «System & App Protection Override». Nas versões anteriores, abra Acessibilidade.",
+      "permission": "O Cindy não consegue ler a interface deste Mac. Verifique a permissão de controlo da cópia do Cindy em execução. No macOS 27.3 ou posterior, a permissão de controlo encontra-se em «System & App Protection Override». Nas versões anteriores, abra Acessibilidade. Se o Cindy só puder controlar algumas aplicações, adicione também esta.",
       "target_gone": "A janela de destino foi fechada.",
       "unreadable": "Não é possível ler este ecrã. Pode concluir este passo no computador anfitrião e depois devolver o controlo ao Agent.",
       "action_failed": "A ação não teve efeito. Verifique o ecrã e tente novamente.",
@@ -22846,6 +22903,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Mudar de fonte automaticamente quando houver problema",
+        "hint": "Quando a fonte usada por este modo falhar, mudar para a seguinte disponível e anotar por baixo dessa ronda. Desligado, a mudança só é sugerida no erro."
+      },
       "newRoute": "Novo modo",
       "newRouteName": "Novo modo",
       "routesEmpty": "Ainda não há modos. Crie um e adicione várias fontes.",
@@ -23078,6 +23139,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "Em «System & App Protection Override», clique em ⓘ junto de {{app}}. Se a aplicação não constar da lista, adicione a cópia em execução com +.",
-    "review": "$t(macControlPermission.selectApp)\nSe a opção estiver disponível, pode limitar o controlo às aplicações que escolher. O controlo total dá acesso a todas as aplicações e dados. Se concordar, leia e confirme cada item e permita o acesso no fundo da janela."
+    "review": "$t(macControlPermission.selectApp)\nSe a opção estiver disponível, pode limitar o controlo às aplicações que escolher. O controlo total dá acesso a todas as aplicações e dados. Se concordar, leia e confirme cada item e permita o acesso no fundo da janela.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nO teclado e o rato remotos atuam em todo o Mac, pelo que precisam do controlo do Mac inteiro: ao adicionar com +, escolha «Override System Protections»; se a aplicação já constar da lista, ative «Control Your Entire Mac and All Apps» em ⓘ. Se apenas algumas aplicações forem permitidas, o macOS bloqueia toda a introdução remota por teclado e rato. Reveja o acesso que o macOS indica antes de permitir.",
+    "chosenAppsOnly": "{{app}} só pode controlar as aplicações escolhidas, pelo que o macOS bloqueia toda a introdução remota por teclado e rato. Para o controlo remoto, clique em ⓘ junto de {{app}} em «System & App Protection Override» e ative «Control Your Entire Mac and All Apps»."
   }
 }

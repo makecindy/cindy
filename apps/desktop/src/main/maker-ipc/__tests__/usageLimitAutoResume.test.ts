@@ -58,6 +58,9 @@ describe('remote companion scheduled quota wait', () => {
     expect(h.deps.continueSession).toHaveBeenCalledTimes(action === 'resume' ? 1 : 0);
     expect(await eligibility.providerGroup('s', { kind: 'before-send', clientId: 'retry', scheduled: true }))
       .toBe(action === 'resume');
+    // A live, owned schedule checks its selected group before delayed waiting.
+    expect(await eligibility.providerGroup('s', { kind: 'failure', token: 1 }))
+      .toBe(action === 'resume');
   });
 });
 

@@ -2188,6 +2188,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "對話版面",
+        "standard": "標準",
+        "wide": "寬螢幕",
+        "width": "內容寬度",
+        "hint": "依對話區扣除兩側留白後的寬度計算。窄欄會自動調整。"
+      },
       "title": "外觀",
       "modeLabel": "顯示模式",
       "appIcon": {
@@ -2433,6 +2440,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "系統匣懸浮卡片",
+        "hint": "將滑鼠停在 Cindy 系統匣圖示上，即可查看剩餘配額和未讀任務。"
+      },
       "menubar": {
         "label": "在選單列顯示餘量",
         "hint": "在 macOS 選單列放一個 Cindy 圖示，點開查看訂閱餘量、Cindy 餘額和今天的用量。"
@@ -2778,7 +2789,8 @@
         "errorBusy": "已有一次上傳正在進行，請稍候",
         "errorFailed": "日誌上傳失敗，請檢查網路後重試",
         "unavailableNotConfigured": "當前版本未配置日誌上傳。",
-        "unavailableNoConsent": "需要先同意《隱私政策》。"
+        "unavailableNoConsent": "需要先同意《隱私政策》。",
+        "consentPrompt": "上傳前請閱讀<policy>《隱私政策》</policy>並<accept>同意</accept>。"
       },
       "openLogsDirError": "開啟日誌目錄失敗",
       "autoUpdateLabel": "空閒時自動安裝更新",
@@ -2825,6 +2837,14 @@
         "projectsRootReset": "恢復推薦位置",
         "projectsRootDescription": "在任務裡新建專案時，專案資料夾會放在這裡。未設定時，依你現有專案所在的資料夾推薦。",
         "projectsRootFailed": "無法更新新專案存放位置",
+        "taskExportDirectoryTitle": "任務匯出位置",
+        "taskExportDirectoryUnset": "每次選擇",
+        "taskExportDirectoryMissing": "資料夾不存在",
+        "taskExportDirectoryUnreadable": "設定無法讀取",
+        "taskExportDirectoryChoose": "選擇目錄",
+        "taskExportDirectoryReset": "改回每次選擇",
+        "taskExportDirectoryDescription": "設定後，Agent 匯出任務時會直接存到這裡，不再每次跳出視窗選位置，也不會覆寫同名檔案。未設定時，每次匯出都由你選擇位置。",
+        "taskExportDirectoryFailed": "無法更新任務匯出位置",
         "dialogueDirectoryOpen": "開啟目錄",
         "dialogueDirectoryChoose": "變更目錄",
         "dialogueDirectoryReset": "恢復預設位置",
@@ -3380,6 +3400,7 @@
       "description": "把其他 AI 程式設計工具裡的任務接到 Cindy 接著做。只讀取原始記錄，不會改動它們。",
       "rescan": "重新掃描",
       "allSources": "全部來源",
+      "sourceFilterAria": "來源",
       "search": "搜尋任務或資料夾",
       "projectFilter": "只看 {{name}}",
       "clearProjectFilter": "顯示全部專案",
@@ -5139,6 +5160,7 @@
       "formHint": "使用者 ID 是純數字；私聊 @userinfobot 可以查到自己的 ID。",
       "connect": "連線",
       "connectingAction": "連線中…",
+      "connectTimedOut": "連線逾時，請重試",
       "errorCode": {
         "invalid-token": "Bot Token 無效或已被重置，請重新填寫",
         "provider-api": "Telegram 服務返回錯誤，請稍後重試",
@@ -8168,6 +8190,7 @@
           "official": "官方",
           "community": "社群"
         },
+        "communityDisclaimer": "此插件由社群作者開發與維護，Cindy 已審核這個版本，但無法保證插件在所有使用情境下都安全。",
         "publisherDescription": {
           "official": "由 Cindy 官方發布及維護",
           "community": "由社群開發者發布及維護",
@@ -8281,7 +8304,7 @@
             "authTitle": "私有倉庫",
             "authBody": "認證完全依賴系統的 Git 設定，Cindy 不儲存任何 Git 憑證。SSH 方式：本機已設定可用的 key；若組織開啟了 SAML SSO，還需在 GitHub 的 SSH key 設定裡為該組織點 Configure SSO 授權。HTTPS 方式：使用 Personal Access Token，並由系統 credential helper 儲存。",
             "rulesTitle": "安裝規則",
-            "rulesBody": "插件 id 全域唯一、先裝先得——與已安裝插件衝突時會明確提示。id 使用官方保留字首（{{reservedGhostIdPrefixes}}）的插件，無法透過拖入、選取檔案或自訂插件市場安裝。插件宣告的權限會在詳情頁展示；點選安裝後直接完成安裝並自動開啟，不再額外彈窗確認權限。",
+            "rulesBody": "插件 id 全域唯一、先裝先得——與已安裝插件衝突時會明確提示。id 使用官方保留字首（{{reservedGhostIdPrefixes}}）的插件，無法透過拖入、選取檔案或自訂插件市場安裝。插件宣告的權限會顯示在詳情頁。首次手動安裝時，Cindy 會請你確認插件要求的權限。安裝完成後，插件會自動啟用。",
             "copy": "複製指南",
             "copied": "指南已複製到剪貼簿。",
             "copyFailed": "複製失敗，請重試。"
@@ -8395,6 +8418,8 @@
         "installMeta": "版本 {{version}} · {{source}}",
         "updateMeta": "版本 {{from}} → {{to}} · {{source}}",
         "installDescription": "確認後才會安裝，安裝好後立即啟用，可隨時在插件頁停用或解除安裝。",
+        "customMarketSourceNotice": "請確認你信任這個市場，再核對插件要求的權限。",
+        "localFileSourceNotice": "請確認檔案來自你信任的來源，再繼續安裝。",
         "updateDescription": "確認後才會更新；在此之前舊版本照常可用。",
         "grantsTitle": "安裝後它將擁有：",
         "noPermissions": "這個插件沒有宣告額外權限。",
@@ -8637,6 +8662,8 @@
         "liveScreenDetail": "透過遠端桌面，你的手機或其他電腦可以檢視它提供的裝置畫面（例如模擬器）並直接觸控、按鍵和輸入文字。只在你從這些裝置開啟時連線，不會開啟電腦的其他內容。",
         "preview": "可在右側欄瀏覽器中開啟以下網站的預覽頁面",
         "previewDetail": "只能開啟下方列出的網站；每次開啟都會提示是哪個插件開啟的。",
+        "fileOpener": "你在 Cindy 裡開啟以下類型的檔案時，由它開啟",
+        "fileOpenerDetail": "插件會取得檔案的完整路徑，代替系統預設應用程式開啟它；無法開啟時仍使用預設應用程式。可以在插件詳情中關閉。",
         "browserExtension": "可讓它自帶的瀏覽器擴充功能連線到 Cindy",
         "browserNativeHost": "可註冊瀏覽器連線「{{name}}」",
         "browserNativeHostDetail": "註冊的程式在沙箱外執行，依你的系統帳號與系統授權存取本機。",
@@ -8878,6 +8905,8 @@
         "configurationTitle": "組態",
         "sidebarEntryTitle": "導航入口",
         "showInSidebar": "顯示在左側導航",
+        "fileOpenerTitle": "用這個插件開啟檔案",
+        "fileOpenerDescription": "在 Cindy 裡開啟 {{extensions}} 檔案時，改用 {{name}} 開啟，不再使用系統預設應用程式。其他電腦上的檔案仍以預設應用程式開啟。",
         "sidebarEntryDescription": "開啟後，「{{title}}」會出現在左側導航，和「自動化」「插件」並列。放在最外層還是收進「更多」，可在「更多 → 自訂」中調整。隱藏入口不會停用插件。",
         "openTool": "檢視 Tool {{name}} 的詳情",
         "noToolDescription": "該 Tool 暫無描述。",
@@ -9155,6 +9184,7 @@
         "enableBeforeConfigure": "插件已停用，請先開啟上方開關，再進行設定。",
         "settingsPageUnavailable": "請在 {{device}} 的 Cindy 中開啟此插件的設定頁，目標電腦目前版本暫不支援遠端顯示。",
         "offlineNotice": "「{{device}}」已離線，暫時無法管理。連線恢復後即可繼續。",
+        "publishOnTarget": "請在「{{device}}」上的 Cindy 發佈插件，或更新該電腦上的 Cindy 後遠端發佈。",
         "managingTarget": "正在管理「{{device}}」",
         "managingDescription": "變更將儲存在這台電腦上。",
         "viewingTarget": "「{{device}}」的已安裝插件",
@@ -12478,6 +12508,8 @@
       "transferBusy": "{{name}} 還在回覆，等這一輪結束再換電腦",
       "targetUnavailable": "「{{device}}」現在無法使用，它需要上線並開啟遠端控制",
       "targetOutdated": "「{{device}}」上的 Cindy 版本較舊，還不能執行「{{name}}」，請先在那台電腦上更新 Cindy",
+      "skillTargetOutdated": "「{{name}}」有技能正文超過 64 KB，「{{device}}」上的舊版 Cindy 無法接收。請先更新那台電腦上的 Cindy，再更換主力電腦。夥伴仍留在原電腦",
+      "skillTargetOutdated_skill": "「{{device}}」上的舊版 Cindy 無法接收技能「{{slug}}」（正文 {{bodyBytes, number}} 位元組，超過 64 KB）。「{{name}}」仍在原電腦上執行。請在目標電腦上更新 Cindy，再更換主力電腦。",
       "targetOutdatedItem": "換到「{{device}}」· 舊版 Cindy",
       "targetOutdatedMeta": "舊版 Cindy",
       "olderTargetNote": "「{{device}}」上是舊版 Cindy，{{name}} 在那裡按舊方式執行：對話記錄照常同步，專案規則和自動化在那裡不生效。",
@@ -12710,6 +12742,7 @@
           "conflict": "這個機器人已經在這台電腦上使用了：在 設定 → IM 機器人 裡，或是在另一位夥伴那裡。",
           "botUnavailable": "{{name}} 目前無法使用，等它恢復後再試。",
           "connectFailed": "未能連線：{{reason}}",
+          "connectTimedOut": "連線逾時，請重試。",
           "failed": "未能完成，請稍後再試。",
           "personalBotGone": "設定 → IM 機器人 裡已經沒有這個機器人了，請改為填寫憑證。"
         },
@@ -12769,6 +12802,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "系統音色",
+        "myVoices": "我的音色",
+        "refreshMyVoices": "重新整理我的音色",
+        "callMode": "通話方式",
+        "messageReadAloud": "訊息朗讀",
+        "callVoice": "即時通話音色",
+        "readAloudVoice": "朗讀音色",
+        "readAloudHint": "點選夥伴文字回覆下方的喇叭，即可以這個聲音朗讀。",
+        "resetReadAloud": "還原朗讀預設值",
+        "title": "即時語音",
+        "add": "新增即時語音模型",
+        "off": "使用語音合成"
+      },
       "openConversation": "開啟對話",
       "inCallWith": "正在與 {{name}} 通話",
       "showDetails": "展開通話記錄",
@@ -12790,7 +12837,7 @@
       "settingsTitle": "語音",
       "openSettings": "語音設定",
       "startConversation": "開始語音對話",
-      "settingsHint": "選擇這位夥伴使用的朗讀模型和音色。設定完成後，從輸入框開始語音對話。",
+      "settingsHint": "使用語音合成通話時，通話與訊息朗讀共用下方的模型和音色。",
       "previewNeedsChat": "與夥伴開始對話後可試聽。",
       "voiceId": "音色 ID",
       "manualVoice": "手動輸入音色 ID",
@@ -14572,6 +14619,7 @@
       "missingDir": "目錄不存在"
     },
     "pendingQueue": {
+      "waitingForDevice": "尚未傳送，待另一台電腦重新連線後傳送",
       "stopping": "停止處理中",
       "queued": "排隊中",
       "editingInComposer": "正在下方輸入框編輯…",
@@ -15046,6 +15094,7 @@
       "unavailable": "目前的應用程式無法自動輸入。你可以複製文字後手動輸入。",
       "unconfirmed": "無法確認是否已經自動輸入。你可以複製文字後手動輸入。",
       "permission": "需要開啟輔助使用權限，才能自動把語音輸入到目前的應用程式。授權後可再次嘗試。",
+      "appNotAllowed": "{{app}} 未獲准控制目前的 App，無法自動輸入。可在「System & App Protection Override」為 {{app}} 加入這個 App，或複製文字後手動貼上。",
       "failed": "未能自動輸入。你可以複製文字後手動輸入。"
     },
     "permissionPrompts": {
@@ -15465,12 +15514,13 @@
       "actionExpired": "這次操作的任務授權已失效。請查看自動化最近一次執行的結果。",
       "actionRecovered": "這次操作的授權已失效。同一自動化後來已成功執行。",
       "text": "先前有自動執行失敗。",
-      "prCheck_dns": "{{device}} 無法解析 {{host}}。若問題持續，請檢查這台裝置的網路或 DNS。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
-      "prCheck_timeout": "{{device}} 連線至 GitHub 逾時。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
-      "prCheck_auth": "請在 {{device}} 上重新登入 GitHub。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
-      "prCheck_rate-limit": "GitHub 暫時限制了 {{device}} 的請求頻率。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
-      "prCheck_unknown": "{{device}} 上的 PR 檢查失敗，請查看執行詳情。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
+      "prCheck_dns": "{{device}} 無法解析 {{host}}。若問題持續，請檢查這台裝置的網路或 DNS。已連續失敗 {{failures}} 次。自 {{retry}} 起，定期檢查可自動重試。",
+      "prCheck_timeout": "{{device}} 連線至 GitHub 逾時。已連續失敗 {{failures}} 次。自 {{retry}} 起，定期檢查可自動重試。",
+      "prCheck_auth": "請在 {{device}} 上重新登入 GitHub。已連續失敗 {{failures}} 次。自 {{retry}} 起，定期檢查可自動重試。",
+      "prCheck_rate-limit": "GitHub 暫時限制了 {{device}} 的請求頻率。已連續失敗 {{failures}} 次。自 {{retry}} 起，定期檢查可自動重試。",
+      "prCheck_unknown": "{{device}} 上的 PR 檢查失敗，請查看執行詳情。已連續失敗 {{failures}} 次。自 {{retry}} 起，定期檢查可自動重試。",
       "precheck": "自動檢查暫時受阻。",
+      "preRunBlocked": "啟動前檢查未通過，本輪未開始。",
       "rateLimited": "自動檢查暫時受阻：請求限流。",
       "pluginMissing": "自動檢查暫時受阻：「{{name}}」插件未安裝，裝好後自動恢復。",
       "pluginMissingUnnamed": "自動檢查暫時受阻：需要的插件未安裝，裝好後自動恢復。",
@@ -16392,7 +16442,13 @@
       "open": "開啟任務「{{title}}」",
       "untitled": "未命名任務",
       "startedOne": "開了任務",
-      "handedToOne": "交給任務"
+      "handedToOne": "交給任務",
+      "status": {
+        "running": "執行中",
+        "needsAction": "待確認",
+        "error": "出錯",
+        "idle": "閒置"
+      }
     },
     "botTaskLetter": {
       "replied": "回信",
@@ -17624,15 +17680,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "尚未接通 GitHub App 通知，仍會依排程檢查。",
-      "label": "PR",
-      "url": "PR 連結",
+      "label": "PR / MR",
+      "url": "PR 或 MR 連結",
       "condition": "觸發條件",
-      "any": "PR 有新動態",
+      "any": "有新動態",
       "merged": "PR 已合併",
       "review": "審查有新動態",
       "ci": "CI 狀態變更",
       "timed": "同時定時檢查",
-      "invalid": "請輸入完整的 GitHub PR 連結。"
+      "invalid": "請輸入完整的 GitHub PR 或 GitLab MR 連結。"
     },
     "presentation": {
       "status": {
@@ -17824,6 +17880,7 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
+      "boundPluginEngineRecovery": "自動化未執行，因為繫結的任務使用插件引擎。請將任務切回內建引擎，或將自動化重新繫結到使用內建引擎的任務。",
       "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",
@@ -18777,7 +18834,7 @@
       "expired": "等待時間過長，代輸入已結束。"
     },
     "failure": {
-      "permission": "Cindy 無法讀取這台 Mac 的介面。請檢查執行中的這份 Cindy 是否有控制權限。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
+      "permission": "Cindy 無法讀取這台 Mac 的介面。請檢查執行中的這份 Cindy 是否有控制權限。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。若只允許 Cindy 控制部分 App，請把這個 App 也加進去。",
       "target_gone": "目標視窗已關閉。",
       "unreadable": "無法讀取這個介面。可以在主機電腦上直接完成，然後交還給 Agent。",
       "action_failed": "剛才的操作沒有生效，請檢查介面後重試。",
@@ -22542,6 +22599,10 @@
       "separator": "；"
     },
     "settings": {
+      "autoSwitch": {
+        "title": "出問題時自動換來源",
+        "hint": "這個模式正在用的來源出問題時，自動換到下一個能用的來源，並在那一輪下面寫明。關掉後只在出錯時提議換來源。"
+      },
       "newRoute": "新增模式",
       "newRouteName": "新模式",
       "routesEmpty": "還沒有模式。新增一個，把幾個來源放進去。",
@@ -22774,6 +22835,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "在「System & App Protection Override」找到 {{app}}，按右側的 ⓘ。若清單中沒有，可按「＋」依路徑加入。",
-    "review": "$t(macControlPermission.selectApp)\n系統若提供「選擇 App」，可限定控制範圍。完整控制可存取所有 App 和資料。若同意，請逐項閱讀並按「OK」確認，再按視窗底部的允許按鈕。"
+    "review": "$t(macControlPermission.selectApp)\n系統若提供「選擇 App」，可限定控制範圍。完整控制可存取所有 App 和資料。若同意，請逐項閱讀並按「OK」確認，再按視窗底部的允許按鈕。",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\n遠端鍵盤和滑鼠會操作整台 Mac：用「＋」加入時選「Override System Protections」；已在清單中的，在 ⓘ 裡打開「Control Your Entire Mac and All Apps」。只允許部分 App 時，macOS 會攔下所有遠端鍵盤和滑鼠操作。允許前請逐項閱讀系統列出的存取範圍。",
+    "chosenAppsOnly": "{{app}} 目前只能控制你選定的 App，macOS 會攔下所有遠端鍵盤和滑鼠操作。如需遠端控制，在「System & App Protection Override」按 {{app}} 右側的 ⓘ，打開「Control Your Entire Mac and All Apps」。"
   }
 }

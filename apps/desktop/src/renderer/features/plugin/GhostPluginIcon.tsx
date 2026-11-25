@@ -69,6 +69,7 @@ export function GhostPluginIcon({
   iconDataUrl,
   iconId,
   iconName,
+  fallbackKind,
   iconContainerRef,
   onIconLoad,
   onIconLoadError,
@@ -77,6 +78,7 @@ export function GhostPluginIcon({
   iconDataUrl?: string;
   iconId: string;
   iconName: string;
+  fallbackKind?: GhostFallbackIconKind;
   iconContainerRef?: Ref<HTMLSpanElement>;
   onIconLoad?: () => void;
   onIconLoadError?: () => void;
@@ -91,8 +93,7 @@ export function GhostPluginIcon({
   const failed = imageState.source === iconDataUrl && imageState.failed;
   const resolvedIconDataUrl = !failed ? ghostPluginIconSource(iconDataUrl) : undefined;
   const svg = resolvedIconDataUrl ? isSvgIconSrc(resolvedIconDataUrl) : false;
-  const fallbackKind = ghostFallbackIconKind(iconName, iconId);
-  const FallbackIcon = FALLBACK_ICONS[fallbackKind];
+  const FallbackIcon = FALLBACK_ICONS[fallbackKind ?? ghostFallbackIconKind(iconName, iconId)];
 
   return (
     <span

@@ -1,3 +1,4 @@
+import { qualifiedCardPrKey } from '@cindy/maker-shared';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { readGhostCardSupersededBy } from '@cindy/maker-shared/ghost-card-form';
@@ -18,7 +19,7 @@ export function findSessionPrCard(snapshot: GhostCardSnapshot, sessionId: string
     if (
       entry.status !== 'ready' ||
       entry.sessionId !== sessionId ||
-      `github:github.com/${readPrStatusSlotKey(entry.html)}` !== prKey ||
+      qualifiedCardPrKey(readPrStatusSlotKey(entry.html)) !== prKey ||
       readGhostCardSupersededBy(entry.html)
     )
       continue;

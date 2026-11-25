@@ -43,6 +43,8 @@ interface ExecResult {
 
 interface RunDriverOptions {
   stdin?: string;
+  /** Opt-in recovery at the deadline when the driver exited but pipes are still open. */
+  acceptExitedOutput?: (stdout: string) => boolean;
   /** spawn 后回调子进程句柄(grant 流程需要持有以便 stale 时收割)。 */
   onChild?: (child: ChildProcess) => void;
 }
@@ -746,10 +748,27 @@ function runDriver(args: string[], timeoutMs: number, options: RunDriverOptions 
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let exitedSuccessfully = false;
+    if (options.acceptExitedOutput) {
+      child.once('exit', (code, signal) => {
+        exitedSuccessfully = code === 0 && signal === null;
+      });
+    }
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill();
+      // A descendant can inherit the pipes and keep 'close' pending after the
+      // driver exits. Give normal output the full drain window before falling back.
+      if (exitedSuccessfully) {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        if (stdout.length < MAX_STDOUT_BYTES && options.acceptExitedOutput?.(stdout)) {
+          resolve({ stdout, stderr, exitCode: 0, signal: null });
+          return;
+        }
+      } else {
+        child.kill();
+      }
       reject(new ComputerDriverError(`cua-driver timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
@@ -1217,8 +1236,32 @@ function runProcess(command: string, args: string[], timeoutMs: number): Promise
   });
 }
 
+// cua-driver's running status has a mandatory socket and PID line. Versions
+// that report authorization diagnostics append a block; require the whole
+// known block when present. Unknown output can still use the normal close path.
+const daemonStatusHeader = /^Cua Driver daemon is running\r?\n {2}socket: [^\r\n\x00\uFFFD]+\r?\n {2}pid: (?:[1-9]\d*|unknown \(no pid file\))\r?\n/;
+const statusAuthorizationDetails = new RegExp([
+  String.raw`^ {2}permission mode: [\w -]+ \([\w -]+\)\r?\n`,
+  String.raw` {2}user policy: configured=(?:true|false), active=(?:true|false), valid=(?:true|false)\r?\n`,
+  String.raw`(?: {2}user policy sha256: [a-f0-9]{64}\r?\n)?`,
+  String.raw` {2}managed policy: configured=(?:true|false), active=(?:true|false), valid=(?:true|false)\r?\n`,
+  String.raw`(?: {2}managed policy sha256: [a-f0-9]{64}\r?\n)?`,
+  String.raw` {2}authorization host: [\w -]+ \([\w -]+\)\r?\n`,
+  String.raw` {2}capability manifest: configured=(?:true|false), approved_at_startup=(?:true|false), valid=(?:true|false)\r?\n`,
+  String.raw`(?: {2}capability manifest sha256: (?:[a-f0-9]{64}|unknown)\r?\n)?(?![\s\S])`,
+].join(''));
+
+function isCompleteDaemonStatus(stdout: string): boolean {
+  const header = daemonStatusHeader.exec(stdout);
+  if (!header) return false;
+  const details = stdout.slice(header[0].length);
+  return details === '' || statusAuthorizationDetails.test(details);
+}
+
 async function readDaemonStatus(): Promise<DaemonStatus> {
-  const res = await runDriver(['status'], STATUS_TIMEOUT_MS);
+  const res = await runDriver(['status'], STATUS_TIMEOUT_MS, {
+    acceptExitedOutput: isCompleteDaemonStatus,
+  });
   const message = (res.stdout || res.stderr).trim();
   // 输出形如 "  pid: 58564"。pid 用作 daemon 生命周期标识(权限探测缓存的门控键):
   // macOS 改屏幕录制授权必然杀掉目标进程,pid 变化 = 授权状态可能已变,需要重新实测。

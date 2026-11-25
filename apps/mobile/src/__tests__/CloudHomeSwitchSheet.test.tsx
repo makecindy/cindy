@@ -18,7 +18,9 @@ vi.mock('react-native', () => ({
   StyleSheet: { create: (s: unknown) => s },
   View: ({ children }: any) => createElement('div', null, children),
 }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({
+  t: (key: string, options?: Record<string, unknown>) => options?.context ? `${key}:${JSON.stringify(options)}` : key,
+}) }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => createElement('span', null, children) }));
 vi.mock('@/theme', () => ({ useThemedStyles: () => ({}) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke }) }));
@@ -40,6 +42,29 @@ beforeEach(() => {
   host = document.createElement('div'); root = createRoot(host);
 });
 afterEach(() => act(() => root.unmount()));
+
+// #12112, unit: a known refusal must explain oversized skills without claiming a move,
+// while generic version refusals from older homes must not acquire a false skill cause.
+it.each([
+  { code: 'SKILL_TARGET_OUTDATED', error: 'devices.cloudCompanion.skillTargetOutdated' },
+  { code: 'SKILL_TARGET_OUTDATED', error: 'devices.cloudCompanion.skillTargetOutdated', oversizedSkill: { slug: 'research-paper-writing', bodyBytes: 71_560 } },
+  { code: 'TARGET_OUTDATED', error: 'devices.cloudCompanion.switchFailed' },
+])('keeps the current home and shows the hand-over refusal ($code)', async ({ code, error, oversizedSkill }) => {
+  const invoke = h.invoke.getMockImplementation()!;
+  h.invoke.mockImplementation(async (device: string, channel: string) => channel === COMPANION_CLOUD_HAND_OVER_CHANNEL
+    ? { ok: false, code, oversizedSkill } : invoke(device, channel));
+  const onMoved = vi.fn();
+  const readHome = vi.fn();
+  await act(async () => root.render(<CloudHomeSwitchSheet visible onClose={() => {}} botId="bot" name="Writer"
+    homeDeviceId="pc" homeName="PC" onMoved={onMoved} readHome={readHome} />));
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="cloudHome.target.mac"]')!.click());
+  const buttons = h.alert.mock.calls[0]![2] as Array<{ onPress?: () => void }>;
+  await act(async () => buttons.at(-1)!.onPress!());
+  expect(host.textContent).toContain(oversizedSkill
+    ? `${error}:${JSON.stringify({ name: 'Writer', device: 'Mac', context: 'skill', ...oversizedSkill })}` : error);
+  expect(onMoved).not.toHaveBeenCalled();
+  expect(readHome).not.toHaveBeenCalled();
+});
 
 it.each([
   { home: 'mac', moved: true, error: null },
