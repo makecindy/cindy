@@ -3,7 +3,7 @@ import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginUiEnablePrompt } from "@/plugins/PluginUiEnablePrompt";
-import { sharedTaskHostPeer, providerShareHostPeer } from "@cindy/device-link";
+import { DeviceLinkError, sharedTaskHostPeer, providerShareHostPeer } from "@cindy/device-link";
 import PluginsScreen from "@/plugins/PluginsScreen";
 import { pluginConsentPresentation } from "@/plugins/pluginConsentPresentation";
 import { usePluginManagement } from "@/plugins/usePluginManagement";
@@ -1001,6 +1001,25 @@ it.each([
   expect(fixture.invoke).toHaveBeenCalledTimes(calls);
 });
 // Production screen → hook → controller → client. Transport and visual leaves remain isolated.
+/**
+ * The transport stand-in follows the production order (DeviceLinkContext.invoke → sendInvoke → client.invoke; see
+ * plugin-mobile-implementation.md and the contract test in historyViewProvider.test.tsx): `preSend` runs at entry,
+ * the request may then wait (queue, reconnect), and `preSend` runs again right before the first socket write. A
+ * reply that never comes after the write is a transport timeout marked `inFlight` (the request reached the wire).
+ */
+async function transportSend<T>(options: any, write: () => T | Promise<T>, queue?: () => Promise<void> | undefined): Promise<T> {
+  options?.preSend?.();
+  const queued = queue?.();
+  if (queued) await queued;
+  options?.preSend?.();
+  try { return await write(); }
+  catch (error) {
+    if (!/\[TIMEOUT\]/.test(String((error as Error)?.message))) throw error;
+    const timeout = new DeviceLinkError("INVOKE_TIMEOUT", "no reply within the timeout after first socket write");
+    timeout.inFlight = true;
+    throw timeout;
+  }
+}
 function realManagementHost() {
   const { plugin, market, snapshot } = managedScreen();
   Object.assign(plugin.manifest, { schemaVersion: 3 });
@@ -1009,14 +1028,13 @@ function realManagementHost() {
   Object.assign(market.manifest, { schemaVersion: 3 });
   Object.assign(snapshot.market, { unavailableReason: null, customSourceNames: [] });
   fixture.realManagement = true;
-  fixture.wire.mockImplementation(async (_host, channel, args, options) => {
-    options?.preSend?.();
+  fixture.wire.mockImplementation(async (_host, channel, args, options) => transportSend(options, () => {
     if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
     const request = args[0];
     if (request.actionId === "management:snapshot") return { result: snapshot };
     if (request.actionId === "management:market-detail") return { result: market };
     throw new Error("Unexpected action " + request.actionId);
-  });
+  }));
   return { plugin, market, snapshot };
 }
 // Codex review (c656f8da): on a wide screen the market stays beside an installed detail. While an update read its
@@ -1749,15 +1767,14 @@ type MarketWireRequest = { device: string; actionId?: string; input?: any; resou
 function marketWire(respond: (request: MarketWireRequest) => unknown) {
   const requests: MarketWireRequest[] = [];
   fixture.realManagement = true;
-  fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => {
-    options?.preSend?.();
+  fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => transportSend(options, async () => {
     if (channel.endsWith(":manifest"))
       return { protocolVersion: 1, collections: [{ id: "plugins", actions: [{ id: "management:snapshot", label: "Manage" }] }] };
     const envelope = args?.[0] ?? {};
     const request = { device, actionId: envelope.actionId, input: envelope.input, resourceRef: envelope.resourceRef };
     requests.push(request);
     return { effects: [], result: await respond(request) };
-  });
+  }));
   return requests;
 }
 const marketItem = (ghostId: string, name: string) => ({
@@ -2671,17 +2688,14 @@ describe("market read fences and lost-receipt facts", () => {
     const sent: Request[] = [];
     fixture.realManagement = true;
     fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => {
-      if (channel.endsWith(":manifest")) {
-        await wait("manifest", device);
-        options?.preSend?.();
-        return { protocolVersion: 1, collections: [{ id: "plugins", actions: [{ id: "management:snapshot", label: "Manage" }] }] };
-      }
+      if (channel.endsWith(":manifest")) return transportSend(options,
+        () => ({ protocolVersion: 1, collections: [{ id: "plugins", actions: [{ id: "management:snapshot", label: "Manage" }] }] }),
+        () => wait("manifest", device));
       const envelope = args?.[0] ?? {};
       const request = { device, actionId: envelope.actionId, input: envelope.input, resourceRef: envelope.resourceRef };
-      await wait(request, device);
-      options?.preSend?.();
-      sent.push(request);
-      return { effects: [], result: await respond(request) };
+      // `sent` records what passed the last check before the write (what actually reached the wire).
+      return transportSend(options, async () => { sent.push(request); return { effects: [], result: await respond(request) }; },
+        () => wait(request, device));
     });
     return sent;
   }

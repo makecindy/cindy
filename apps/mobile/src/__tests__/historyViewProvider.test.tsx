@@ -9,6 +9,7 @@ import {
   CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
+  REMOTE_RESOURCE_INVOKE_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
   SHARED_TASK_CAPABILITY,
   isScopedPeer,
@@ -239,6 +240,41 @@ beforeEach(async () => {
   await act(async () => render());
 });
 afterEach(async () => { await act(async () => root.unmount()); });
+
+// Contract for the transport stand-ins in pluginsScreen.test.tsx (transportSend) and pluginManagement.test.ts
+// (maintainer review 08:48 of #12684): through the real Provider, a caller's preSend runs first at entry, before the
+// device-link client is asked to send, and last inside the client right before the first socket write; a failure
+// after that write keeps its in-flight mark, and a refusal at the last check is the caller's own error.
+it('runs a caller preSend at entry and right before the first socket write, and keeps the in-flight mark', async () => {
+  const client = transport.clients[0];
+  const calls: string[] = [];
+  client.invoke.mockImplementationOnce(async (_deviceId, _payload, _timeout, options) => {
+    calls.push('client.invoke');
+    options?.preSend?.();
+    calls.push('write');
+    const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no reply after first socket write');
+    error.inFlight = true;
+    throw error;
+  });
+  let error: unknown;
+  await act(async () => {
+    error = await context.invoke('host', REMOTE_RESOURCE_INVOKE_CHANNEL, [{}], { preSend: () => { calls.push('preSend'); } }).catch((e) => e);
+  });
+  expect(calls[0]).toBe('preSend');
+  const send = calls.indexOf('client.invoke');
+  expect(send).toBeGreaterThan(0);
+  expect(calls.slice(send)).toEqual(['client.invoke', 'preSend', 'write']);
+  expect(error).toBeInstanceOf(DeviceLinkError);
+  expect((error as DeviceLinkError).inFlight).toBe(true);
+  // Refused at the last check before the write: the caller's own error comes back, without an in-flight mark.
+  let allow = true;
+  client.invoke.mockImplementationOnce(async (_deviceId, _payload, _timeout, options) => { allow = false; options?.preSend?.(); return { ok: true, result: null }; });
+  const refusal = new Error('refused by the caller');
+  await act(async () => {
+    error = await context.invoke('host', REMOTE_RESOURCE_INVOKE_CHANNEL, [{}], { preSend: () => { if (!allow) throw refusal; } }).catch((e) => e);
+  });
+  expect(error).toBe(refusal);
+});
 
 // Unit/jsdom. The real Provider delivers Device Link pushes to the route's scoped alert subscription.
 it('keeps the legacy mobile credential alert unless the host confirms the previous settings', async () => {

@@ -75,7 +75,7 @@
   事实才有效），新的已装读取一发出，已发布的事实就撤回，按旧事实在途的市场详情不再落地；市场的三种结论（已装上 /
   目前没有 / 未能确认）只经同一个出口，落地前再判断一次有效性。回归用例按全部回包顺序枚举，不手挑顺序；每次判定带代次，
   较早一次核实的市场详情晚到时不落地，也不打开实例。快照里有同 ghostId、同 namespace 的实例只是线索
-  （电脑上可能是同标识的本地包）。只有用户在手机上实际批准过的才可能是这次的结果：controller 在「允许」交给 Host 前
+  （电脑上可能是同标识的本地包）。只有用户在手机上实际批准过的才可能是这次的结果：controller 在「允许」**写出到传输层**时
   记下 `approval`（这次操作与当时回执里的来源），新操作才清掉；没有它（拒绝、没点就断线、确认没送达、来源不符时「允许」
   不可用），电脑上之后出现什么都按「未能确认」处理，官方与社区市场同样适用；自定义市场另要求批准时的来源与用户选中的
   完整来源相等（controller 在来源不符时直接拒绝发送「允许」）。满足后再按原 `pluginId` 读一次 `management:market-detail`，只有电脑按市场来源记录
@@ -108,6 +108,18 @@
   | 能力探测 | ✓ 发送前、代次 | ✓ 发送前 | ✓ scope、代次 | ✓ scope | — | — | — |
   | 市场详情 | ✓ 发送前 | ✓ 发送前 | ✓ scope、详情关闭 | ✓ scope | — | — | — |
 
+- 发送时序与「已写出」（维护者 2026-11-25 08:48 评审后对照代码写明）：
+  - `DeviceLinkContext.invoke` 的 `preSend` 只是校验：入口先调一次；不是共享任务对端时，直连尝试（`tryMobilePeerInvoke`）
+    返回后再调一次；走中继时，`recoverLinkBeforeSend` 与 `sendInvoke` 在连接就绪后再调；device-link client 在请求出队、
+    首次写 socket 之前最后调一次。任一次抛错就中止发送，错误原样上抛。直连路径可能在第二次调用之前已经把请求送达。
+  - 「已写出」只由传输层认定：device-link client 的 `noteFirstWrite` 在首次写出时记录；之后超时或断线以
+    `DeviceLinkError` 失败并带 `inFlight: true`；首次写出前过期是 `BACKPRESSURE`、`inFlight: false`。连接等待失败、
+    `NOT_CONNECTED` 等发生在交给 client 之前，不带这个标记。
+  - 插件管理 client 据此分三态：有回包或 `inFlight: true` = 已写出（`onWritten`，批准证据只在这里写）；入口校验就被拒、
+    或 `inFlight: false` = 未写出；其余（后续校验被拒、不带标记的失败）= 不确定。写操作（begin / answer / cancel）只有
+    确定未写出才算失败，其余按「结果未知」处理：只查原操作，不重发。
+  - 测试用的传输替身按同一顺序：入口调 `preSend`、可选排队、出队前再调 `preSend`、写出后超时以 `inFlight` 失败；
+    `historyViewProvider.test.tsx` 用真实 Provider 锁住这个顺序。
 - 确认面板（全新安装与升级共用 `PluginManagementConfirmation(.ios).tsx`，文字由 `pluginConsentPresentation.ts`
   统一给出，提案实现，待维护者确认）：
   - 来源行与电脑端 `ghostInstallConsentSourceLabel` 同口径：「来自 {{appName}} 插件市场」「来自自定义市场「<市场名>」」

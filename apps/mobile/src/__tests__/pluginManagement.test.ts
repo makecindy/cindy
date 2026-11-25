@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { isPinnedHighRiskPermission, PINNED_HIGH_RISK_MIN_HEIGHT, pinnedHighRiskMaxHeight, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
-import { sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
+import { DeviceLinkError, sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -157,6 +157,49 @@ describe('mobile management contract', () => {
     expect(() => preSend()).toThrow('PLUGIN_MANAGEMENT_STALE');
     pending.resolve({ effects: [], result: receipt('succeeded') });
     await expect(request).rejects.toMatchObject({ message: 'PLUGIN_MANAGEMENT_STALE', outcomeUnknown: true });
+  });
+});
+
+// Maintainer review 08:48: `preSend` is only a check (the mobile invoke calls it at entry, after a direct-path
+// attempt, once connected, and right before the first socket write), never evidence that a request was written.
+// Written is what the transport reports: a reply, or a failure marked in flight.
+describe('what counts as written', () => {
+  const uninstall = (client: ReturnType<typeof createPluginManagementClient>) => client.begin({ operationId: 'operation-1', kind: 'uninstall', installed: plugin });
+  it.each([
+    // [case, how the transport ends, outcome unknown]
+    ['refused at the entry check', 'entry', false],
+    ['refused at the last check before the write (it was never written)', 'dequeue', true],
+    ['expired before the first write (BACKPRESSURE, not in flight)', 'expired', false],
+    ['written, then the reply was lost (in flight)', 'lost', true],
+  ] as const)('classifies a write %s', async (_name, end, unknown) => {
+    let active = true;
+    const invoke = vi.fn(async (_d, _c, _a, opts) => {
+      if (end === 'entry') active = false;
+      opts!.preSend!();
+      if (end === 'dequeue') active = false;
+      opts!.preSend!();
+      if (end === 'expired') { const error = new DeviceLinkError('BACKPRESSURE', 'expired before socket write'); error.inFlight = false; throw error; }
+      const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no reply after first socket write'); error.inFlight = true; throw error;
+    }) as PluginManagementInvoke;
+    const client = createPluginManagementClient({ invoke, deviceId: 'host-1', isCurrent: () => active });
+    await expect(uninstall(client)).rejects.toMatchObject({ outcomeUnknown: unknown });
+  });
+  it('reports a write only from the transport, never from a passing check', async () => {
+    const written = vi.fn();
+    let active = true;
+    // Passes the entry check, then is refused right before the write: not written.
+    const refused = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); active = false; opts!.preSend!(); }) as PluginManagementInvoke;
+    await expect(createPluginManagementClient({ invoke: refused, deviceId: 'host-1', isCurrent: () => active })
+      .answer('operation-1', 'consent-1', true, undefined, written)).rejects.toBeTruthy();
+    expect(written).not.toHaveBeenCalled();
+    // Written, reply lost: written. A reply: written.
+    const lost = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.preSend!();
+      const error = new DeviceLinkError('INVOKE_TIMEOUT', 'lost'); error.inFlight = true; throw error; }) as PluginManagementInvoke;
+    await expect(createPluginManagementClient({ invoke: lost, deviceId: 'host-1' }).answer('operation-1', 'consent-1', true, undefined, written)).rejects.toBeTruthy();
+    expect(written).toHaveBeenCalledTimes(1);
+    const replied = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.preSend!(); return { effects: [], result: receipt('running') }; }) as PluginManagementInvoke;
+    await createPluginManagementClient({ invoke: replied, deviceId: 'host-1' }).answer('operation-1', 'consent-1', true, undefined, written);
+    expect(written).toHaveBeenCalledTimes(2);
   });
 });
 

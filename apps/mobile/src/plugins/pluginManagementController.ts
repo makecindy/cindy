@@ -29,8 +29,8 @@ export interface PluginManagementState {
    */
   expectedSource?: PluginMarketSourceIdentity | null;
   /**
-   * Set when Allow actually leaves the phone for this operation (the client's send callback), with the source the
-   * consent named at that moment; a queued Allow stopped before sending never sets it.
+   * Set when Allow reached the wire for this operation (the transport's write evidence: a reply, or a failure marked
+   * in flight), with the source the consent named; an Allow still queued or stopped before writing never sets it.
    * A result whose receipt is later gone may be confirmed only from this: without it (rejected, never answered,
    * consent never received, Allow unavailable) nothing on the computer counts as this attempt's result. Cleared by a
    * new operation only.
@@ -319,10 +319,10 @@ export function createPluginManagementController(client: PluginManagementClient,
         if (!current(token)) return;
         if (!receiverCurrent(snapshot)) throw new PluginManagementRequestError('PLUGIN_INSTALL_CHANGED');
       }
-      // The approval is recorded only when Allow actually leaves (the client's send callback, after the last checks):
-      // still queued or stopped by those checks (a refresh changed the facts, the computer went offline) is not an
-      // approval; sent with the result unknown (timeout, reply lost) may be, and only that can later confirm a result
-      // whose receipt is gone. One place writes it.
+      // The approval is recorded only when Allow reached the wire, as the transport reports it (a reply, or a failure
+      // marked in flight; `preSend` passing is not evidence): still queued or stopped before writing (a refresh changed
+      // the facts, the computer went offline) is not an approval; written with the reply lost may be, and only that can
+      // later confirm a result whose receipt is gone. One place writes it.
       const recordApproval = () => {
         if (confirmed && current(token)) publish({ approval: { operationId: receipt.operationId, originSource: consent.originSource } });
       };

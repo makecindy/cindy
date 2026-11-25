@@ -1,4 +1,5 @@
-import { isSharedTaskPeer, isProviderSharePeer, REMOTE_RESOURCE_INVOKE_CHANNEL, REMOTE_RESOURCE_MANIFEST_CHANNEL } from '@cindy/device-link';
+import { DeviceLinkError, isInFlightDeviceLinkError, isSharedTaskPeer, isProviderSharePeer, REMOTE_RESOURCE_INVOKE_CHANNEL,
+  REMOTE_RESOURCE_MANIFEST_CHANNEL } from '@cindy/device-link';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { isRemoteResourcesUnsupported } from '@/device-link/remoteResources';
 import {
@@ -46,19 +47,37 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
   const isOwnerCurrent = () => !owner.switching && isMobileAuthOwnerCurrent(owner);
   const isCurrent = () => isOwnerCurrent() && (options.isCurrent?.() ?? true);
   /**
-   * `onSent` runs when the request actually leaves: inside the transport's `preSend`, after the last checks pass.
-   * A request still queued, or stopped by those checks, never calls it.
+   * Whether a request reached the wire is decided by the transport only, never by `preSend` (which is only a check:
+   * DeviceLinkContext.invoke calls it at entry, again after a direct-path attempt and once the connection is ready,
+   * and the device-link client calls it right before the first socket write; see plugin-mobile-implementation.md):
+   * - written: a reply came back, or the transport failed it as `inFlight` (written, reply lost) — `onWritten` runs;
+   * - not written: refused at the entry check, or the transport says `inFlight === false` (expired before writing);
+   * - otherwise unknown (refused at a later check: a direct-path attempt may already have delivered it).
+   * A mutation whose result is not known to be unsent is an unknown outcome: it is looked up, never replayed.
    */
   async function call<T>(channel: string, payload: unknown, parse: (value: unknown) => T, mutation = false, guard?: () => boolean, cleanup = false,
-    onSent?: () => void): Promise<T> {
+    onWritten?: () => void): Promise<T> {
     const requestCurrent = () => (cleanup ? isOwnerCurrent() : isCurrent()) && (!guard || guard());
     const assertRequestCurrent = () => {
       if (isSharedTaskPeer(options.deviceId) || isProviderSharePeer(options.deviceId)) localError('PLUGIN_MANAGEMENT_OWNER_ONLY');
       if (!requestCurrent()) localError('PLUGIN_MANAGEMENT_STALE'); };
     assertRequestCurrent();
+    let checks = 0, refusedAtEntry = false;
+    const preSend = () => {
+      checks += 1;
+      try { assertRequestCurrent(); } catch (error) { if (checks === 1) refusedAtEntry = true; throw error; }
+    };
+    let response: unknown;
     try {
-      const response = await options.invoke(options.deviceId, channel, [payload], {
-        preSend: () => { assertRequestCurrent(); onSent?.(); } });
+      response = await options.invoke(options.deviceId, channel, [payload], { preSend });
+    } catch (error) {
+      if (isInFlightDeviceLinkError(error)) onWritten?.();
+      const notWritten = refusedAtEntry || (error instanceof DeviceLinkError && error.inFlight === false);
+      if (error instanceof PluginManagementRequestError && (!mutation || notWritten)) throw error;
+      throw new PluginManagementRequestError(pluginManagementErrorCode(error), mutation && !notWritten);
+    }
+    onWritten?.();
+    try {
       if (!requestCurrent()) throw new PluginManagementRequestError('PLUGIN_MANAGEMENT_STALE', mutation);
       if (!isBoundedPluginResponse(response)) throw new Error('INVALID_RESPONSE');
       return parse(response);
@@ -68,7 +87,7 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
     }
   }
   async function action<T>(name: string, input: Record<string, unknown>, parse: (value: unknown) => T, instance?: string, mutation = false, guard?: () => boolean, cleanup = false,
-    onSent?: () => void) {
+    onWritten?: () => void) {
     if (!isBoundedPluginResponse(input)) return localError('INVALID_INPUT');
     if (utf8Bytes(JSON.stringify(input)) > 64 * 1024) return localError('INPUT_TOO_LARGE');
     return call(REMOTE_RESOURCE_INVOKE_CHANNEL, {
@@ -77,12 +96,12 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
     }, (response) => {
       if (!response || typeof response !== 'object' || !('result' in response)) throw new Error('INVALID_RESPONSE');
       return parse(response.result);
-    }, mutation, guard, cleanup, onSent);
+    }, mutation, guard, cleanup, onWritten);
   }
   const receiptAction = (name: string, operationId: string, input: Record<string, unknown> = {}, mutation = false, guard?: () => boolean, cleanup = false,
-    onSent?: () => void) => {
+    onWritten?: () => void) => {
     if (!validId(operationId)) return localError('INVALID_INPUT');
-    return action(name, { operationId, ...input }, (v) => parsePluginManagementReceipt(v, operationId), undefined, mutation, guard, cleanup, onSent);
+    return action(name, { operationId, ...input }, (v) => parsePluginManagementReceipt(v, operationId), undefined, mutation, guard, cleanup, onWritten);
   };
   return {
     deviceId: options.deviceId,
@@ -160,10 +179,10 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
       return action('begin', input, (v) => parsePluginManagementReceipt(v, request.operationId), installed?.instanceKey, true, guard);
     },
     operation: (id: string) => receiptAction('operation', id),
-    /** `onSent`: the answer actually left (see `call`); a queued or stopped answer never calls it. */
-    answer(id: string, requestId: string, confirmed: boolean, guard?: () => boolean, onSent?: () => void) {
+    /** `onWritten`: the answer reached the wire (see `call`); a queued or stopped answer never calls it. */
+    answer(id: string, requestId: string, confirmed: boolean, guard?: () => boolean, onWritten?: () => void) {
       if (!validId(requestId) || typeof confirmed !== 'boolean') return localError('INVALID_INPUT');
-      return receiptAction('answer', id, { requestId, confirmed }, true, guard, false, onSent);
+      return receiptAction('answer', id, { requestId, confirmed }, true, guard, false, onWritten);
     },
     cancel: (id: string, guard?: () => boolean) => receiptAction('cancel', id, {}, true, guard),
     /** Controller teardown only: cancel the original Host operation after its view is gone. Owner fencing remains mandatory. */
