@@ -4627,3 +4627,192 @@ it('leaves a direct tool alone when its required name is not the Cindy envelope'
   expect(requests).toHaveLength(1);
   expect(requests[0].params).toEqual({ name: 'write_file', arguments: { content: 'text' } });
 });
+
+// 评审 P1(截断把信封指纹的信号本身藏掉): required 写在足够多的分支之后把节点预算耗尽时,
+// 已看到的部分有 name/args 的类型信号、声明的名字也恰好是这两个, 但 required 信号没看到 ——
+// 信封结算失败(envelope=false), indeterminateEnvelope 不触发, 平铺的 {name, args} 被按普通工具
+// 折进参数容器: 服务端拿到 {type, name}, 没有 args 层, 内层工具被按空参数调用。截断下
+// 「已看到的部分就是信封的样子」本身就够判不了 —— 部分指纹同样要拒收(Codex P1 on 51c6ed253d)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 在该 schema 下拒收并指路, 0 个请求发出。
+// - Bug 依据:codex 对 51c6ed253d 的 P1。
+// - 覆盖缺口:上一轮的拒收用例 required 都在预算耗尽前看到(根层), 信封结算仍然成立。
+// - 最小失败输入:properties.name/args 在前 + required:['name'] 在 600 个分支之后的信封 schema
+//   + 平铺调用 {name, args}。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('rejects a flattened call when truncation hid the envelope required signal', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  // 根 + 600 个分支远超 512 节点预算: required 所在的最后一个分支没走到, 信号没看到。
+  const branches: Record<string, unknown>[] = Array.from({ length: 600 }, () => ({}));
+  branches.push({ required: ['name'] });
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, args: { type: 'object' } },
+      allOf: branches,
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 平铺: 顶层 name 是信封层的内层工具名, 还是这个工具自己的参数 —— 看不全, 拒收并指路。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  })).rejects.toThrow(/could not read the schema of this tool in full .* Put everything in args/);
+  // 容器形态(顶层没有 name): 不存在这层歧义, 照发。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool', arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+// 评审 P1(同名内层参数对象被当成重复信封折掉一层): 「同一个选择器写了两遍」的裁决没有问
+// 内层工具自己的 schema。内层工具自己就声明 name + args 参数时(run 这类), args 容器里的
+// {name, args} 可能正是它的参数对象 —— 内层名恰好与选择器撞名而已。折叠后服务端收到的
+// arguments 仍被 registry 当信封剥一层, 内层工具拿到 {cwd}, 自己声明的 name/args 没了。
+// 执行前双包裁决本就按内层 schema 判(声明了 args 就放行), 归一化必须同源: 内层 schema
+// 声明了 args 就不折叠, 照实重建; 没声明 / 本地查不到时维持折叠(2026-10-31 实测撞出的形状)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 51c6ed253d 的 P1。
+// - 覆盖缺口:「keeps both name layers」用例刻意让内层 name 与选择器不同(target), 撞名的那支没盖。
+// - 最小失败输入:内层工具 run 的 schema 声明 name + args + 调用 {name:'run', args:{name:'run', args:{…}}}。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('keeps the inner parameter object when the selected tool declares name and args of its own', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  const envelopeSchema = { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } } };
+  gateway.add('cindy_memory', client, [
+    { name: 'call_tool', inputSchema: { ...envelopeSchema, required: ['name'] } },
+    // 内层工具自己就声明 name + args: args 容器里的 {name:'run', args:{cwd}} 可以正是它的参数。
+    { name: 'run', inputSchema: { ...envelopeSchema, required: ['name', 'args'] } },
+    // 对照: 内层工具没有 args 参数 —— 容器里的 {name, args} 只能是重复信封, 照旧折叠。
+    { name: 'recall', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 内层名与选择器撞名, 但 run 自己声明了 name + args: 不折叠, 两层都保留。
+  const result = await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'run', args: { name: 'run', args: { cwd: '/work' } },
+  });
+  expect(requests[0].params).toEqual({
+    name: 'call_tool', arguments: { name: 'run', args: { name: 'run', args: { cwd: '/work' } } },
+  });
+  const note = result.content.map(block => block.text ?? '').join('\n');
+  expect(note).toContain('Forwarded arguments: {"name":"run","args":{"name":"run","args":{"cwd":"/work"}}}');
+  // 对照: 内层工具没有 args 参数, 撞名仍按「选择器写了两遍」折叠成一层。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'recall', args: { name: 'recall', args: { cwd: '/work' } },
+  });
+  expect(requests[1].params).toEqual({
+    name: 'call_tool', arguments: { name: 'recall', args: { cwd: '/work' } },
+  });
+});
+
+// 评审 P1(enum / const 的类型证据没被认): name 用 {enum: ['memory_write']}、args 用对象值
+// {const: …} 时, JSON Schema 语义已把基本类型定死, 但判据只认 type 关键字 —— 信封结算失败,
+// 平铺调用走普通工具那条路, 内层工具被按空参数调用。enum / const 的值就是类型证据:
+// 全是字符串的 enum 是 string, 对象值的 const / enum 是 object; 混型不推断(Codex P1 on 51c6ed253d)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 51c6ed253d 的 P1。
+// - 覆盖缺口:类型信号用例只盖了 type 关键字(含数组与组合声明)。
+// - 最小失败输入:properties.name 只有 enum、properties.args 只有 const + 平铺调用。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('recognizes enum and const type evidence in the envelope fingerprint', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [
+    {
+      name: 'call_tool',
+      // 不写 type: 类型证据全在 enum / const 的值里。
+      inputSchema: {
+        type: 'object',
+        properties: { name: { enum: ['memory_write', 'memory_read'] }, args: { const: {} } },
+        required: ['name'],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: 'mixed_entry',
+      // 对照: 混型 enum 不推断 —— 缺 name 的类型信号, 不当信封。
+      inputSchema: {
+        type: 'object',
+        properties: { name: { enum: ['memory_write', 42] }, args: { const: {} } },
+        required: ['name'],
+        additionalProperties: false,
+      },
+    },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'mixed_entry' });
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  });
+  expect(requests[0].params).toEqual({
+    name: 'call_tool', arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'mixed_entry', name: 'memory_write', args: { type: 'project' },
+  });
+  expect(requests[1].params).toEqual({
+    name: 'mixed_entry', arguments: { type: 'project', name: 'memory_write' },
+  });
+});
+
+// 评审 P2(声明名收集没有封顶): 节点预算管不住 Object.keys —— 一个 properties 塞十万键时
+// 键数组全量物化、名字逐个进 Set, 表面在权限与执行两条路径上还要重建多次。收集封顶,
+// 收满即标 truncated: 声明面不完整, 顶层键不能证明「没声明」就照常转发不丢(Codex P2 on 51c6ed253d)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 即时返回, 且名字收满后顶层键按不完整处理
+//   (schema 里没有的键被折进 args 转发, 而不是被记成未声明丢掉)。
+// - Bug 依据:codex 对 51c6ed253d 的 P2。
+// - 覆盖缺口:预算用例只盖了分支遍历, 名字收集这条线没有预算。
+// - 最小失败输入:10 万键的 properties + properties 里没有的顶层键 extra_note。
+// - tier:unit;耗时上限 1 秒与既有预算用例同款(封顶后收集是常数工作量)。
+it('bounds schema name collection by a cap and keeps forwarding keys past it', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  const bigProperties: Record<string, unknown> = {};
+  for (let index = 0; index < 100_000; index++) bigProperties['field_' + index] = { type: 'string' };
+  gateway.add('cindy_big', client, [
+    { name: 'wide', inputSchema: { type: 'object', properties: bigProperties } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_big', tool: 'wide' });
+  const started = performance.now();
+  // extra_note 不在 properties 里: 名字没收满时它会被记成未声明丢掉; 收满了(截断)就照常转发。
+  const result = await gateway.executeCall({
+    server: 'cindy_big', tool: 'wide', args: { field_0: 'v' }, extra_note: 'keep',
+  });
+  expect(performance.now() - started).toBeLessThan(1000);
+  // 名字封顶 → 声明面不完整 → extra_note 不能证明「没声明」, 照常折进 args 转发。
+  expect(requests[0].params).toEqual({ name: 'wide', arguments: { field_0: 'v', extra_note: 'keep' } });
+  const note = result.content.map(block => block.text ?? '').join('\n');
+  expect(note).toContain('Cindy moved these top-level parameters into args before forwarding: extra_note');
+});

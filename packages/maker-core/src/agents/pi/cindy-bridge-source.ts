@@ -3319,6 +3319,12 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
 /** 组合 schema 遍历的预算: 节点数与深度封顶 —— 循环引用、超大 schema 都不能拖住同步路径。 */
 const SCHEMA_WALK_MAX_NODES = 512;
 const SCHEMA_WALK_MAX_DEPTH = 32;
+/**
+ * 声明名收集的封顶。节点预算管不住键的枚举: 一个 properties 塞十万键时, Object.keys 全量
+ * 物化键数组、名字逐个进 Set, 而表面在权限与执行两条路径上要重建多次 —— 收集必须是常数
+ * 工作量。收满即标 truncated(见 walk), 没看到的声明按没看到处理。
+ */
+const SCHEMA_NAMES_MAX = 512;
 const SCHEMA_COMBINATORS = ['allOf', 'anyOf', 'oneOf'];
 /** 条件分支: 这些节点里声明的属性也是服务端认的参数(条件成立时的 then / 不成立时的 else)。 */
 const SCHEMA_CONDITIONAL_KEYWORDS = ['if', 'then', 'else'];
@@ -3337,10 +3343,15 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** 把 required / dependentRequired 这类「字段名数组」里的字符串并进声明名; 不是数组就什么都不做。 */
-function collectDeclaredNames(names: unknown, into: Set<string>): void {
-  if (!Array.isArray(names)) return;
-  for (const name of names) if (typeof name === 'string') into.add(name);
+/** 把 required / dependentRequired 这类「字段名数组」里的字符串并进声明名; 不是数组就什么都不做。
+ * 收集器装不下(封顶)时返回 false, 调用方据此标 truncated —— 剩下的名字没看到。 */
+function collectDeclaredNames(names: unknown, collect: (name: string) => boolean): boolean {
+  if (!Array.isArray(names)) return true;
+  for (const name of names) {
+    if (typeof name !== 'string') continue;
+    if (!collect(name)) return false;
+  }
+  return true;
 }
 
 /**
@@ -3410,6 +3421,16 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
   // 走到时不再往下走, 把这一份交给现在这个组。
   const closure = new Map<Record<string, unknown>, number>();
   let remainingNodes = SCHEMA_WALK_MAX_NODES;
+  // 声明名收集与节点遍历共用一份封顶(Codex P2 on #10908): properties / required / 依赖写法
+  // 收进的名字加起来不超过 SCHEMA_NAMES_MAX, 装不下就标 truncated。已收过的名字不占额度。
+  let remainingNames = SCHEMA_NAMES_MAX;
+  const collectName = (name: string): boolean => {
+    if (surface.names.has(name)) return true;
+    if (remainingNames <= 0) return false;
+    remainingNames--;
+    surface.names.add(name);
+    return true;
+  };
   const rootGroup: EnvelopeGroup = { own: 0, base: null, alternatives: [] };
   // groups[0] 是根组; 之后按创建顺序追加分支组。
   const groups: EnvelopeGroup[] = [rootGroup];
@@ -3440,18 +3461,37 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
       return 0;
     }
     visited.add(node);
-    const propertyNames = isPlainRecord(node.properties) ? Object.keys(node.properties) : [];
-    if (propertyNames.length > 0) surface.declaresProperties = true;
-    for (const name of propertyNames) surface.names.add(name);
+    // for-in 惰性枚举: 十万键的 properties 只看到封顶为止, 不全量物化键数组(Codex P2 on #10908)。
+    // schema 文档是 JSON.parse 的产物, for-in 枚举的就是自己的键; 原型上的同名属性用 hasOwnProperty 挡掉。
+    if (isPlainRecord(node.properties)) {
+      for (const name in node.properties) {
+        if (!Object.prototype.hasOwnProperty.call(node.properties, name)) continue;
+        surface.declaresProperties = true;
+        if (!collectName(name)) {
+          // 封顶: 剩下的声明名没看到, 这份表态不完整。
+          surface.truncated = true;
+          break;
+        }
+      }
+    }
     // required 可以列出 properties 里没有的字段(合法写法): 服务端既然校验它必填, 它就是认的参数。
-    collectDeclaredNames(node.required, surface.names);
+    if (!collectDeclaredNames(node.required, collectName)) surface.truncated = true;
     // 「有 tag 就必须带 file_id」: 触发的 tag 与被点名的 file_id 同理, 都不在 properties 里时也算声明过。
     for (const keyword of SCHEMA_DEPENDENT_KEYWORDS) {
       const dependents = node[keyword];
       if (!isPlainRecord(dependents)) continue;
-      for (const [trigger, names] of Object.entries(dependents)) {
-        surface.names.add(trigger);
-        collectDeclaredNames(names, surface.names);
+      let dependentFull = false;
+      // 同 properties: 惰性枚举 + 封顶, 十万条依赖不物化(Codex P2 on #10908)。
+      for (const trigger in dependents) {
+        if (!Object.prototype.hasOwnProperty.call(dependents, trigger)) continue;
+        if (!collectName(trigger) || !collectDeclaredNames(dependents[trigger], collectName)) {
+          dependentFull = true;
+          break;
+        }
+      }
+      if (dependentFull) {
+        surface.truncated = true;
+        break;
       }
     }
     let signals = declaredEnvelopeSignals(schema, node);
@@ -3462,7 +3502,9 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
       }
     }
     if (isPlainRecord(node.patternProperties)) {
-      for (const pattern of Object.keys(node.patternProperties)) {
+      // 同 properties: 惰性枚举, 十万条模式不物化键数组; 封顶照旧(Codex P2 on #10908)。
+      for (const pattern in node.patternProperties) {
+        if (!Object.prototype.hasOwnProperty.call(node.patternProperties, pattern)) continue;
         // 数量封顶在循环内生效: 一个 patternProperties 里塞上百条模式时, 只看前 N 条,
         // 否则单次调用要把上百条模式全部编译并跑一遍(Codex P1 on #10908)。
         // 碰到封顶提前停下来时必须标 truncated: 剩下的模式没看到, 不能把后面声明的键静默丢掉。
@@ -3518,11 +3560,14 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
     for (const keyword of SCHEMA_DEPENDENCY_KEYWORDS) {
       const dependencies = node[keyword];
       if (!isPlainRecord(dependencies)) continue;
-      for (const dependency of Object.values(dependencies)) {
+      // 同 properties: 惰性枚举, 十万条依赖不物化值数组(Codex P2 on #10908)。
+      for (const trigger in dependencies) {
+        if (!Object.prototype.hasOwnProperty.call(dependencies, trigger)) continue;
         if (remainingNodes <= 0) {
           surface.truncated = true;
           break;
         }
+        const dependency = dependencies[trigger];
         // 数组形态的属性依赖不是子 schema: 它点名的字段已经在上面收进声明名了。
         if (!isPlainRecord(dependency)) continue;
         walk(dependency, depth + 1, branchGroup(group));
@@ -3562,17 +3607,19 @@ const SCHEMA_PROPERTY_TYPE_MAX_NODES = 32;
 
 /**
  * 属性 schema 容不容得下某个基本类型: type 是它, 或 type 是含它的数组(可空的 args 常写成
- * ['object', 'null'])。类型抽到组合声明里($ref 指向的定义、allOf / anyOf / oneOf 分支)时, 任一
- * 分支容得下就算 —— 指纹要认的是「这个字段像不像 string / object」, 不是替服务端做校验。
- * 看不到底(环、超出节点数)按看不出类型处理。
+ * ['object', 'null']), 或 enum / const 的值把它定死了(见 schemaAdmitsTypeByValues)。类型抽到
+ * 组合声明里($ref 指向的定义、allOf / anyOf / oneOf 分支)时, 任一分支容得下就算 —— 指纹要认的
+ * 是「这个字段像不像 string / object」, 不是替服务端做校验。看不到底(环、超出节点数)按看不出
+ * 类型处理。
  */
-function propertyAdmitsType(root: Record<string, unknown>, property: unknown, expected: string): boolean {
+function propertyAdmitsType(root: Record<string, unknown>, property: unknown, expected: 'string' | 'object'): boolean {
   let remaining = SCHEMA_PROPERTY_TYPE_MAX_NODES;
   const visit = (node: unknown): boolean => {
     if (!isPlainRecord(node) || remaining <= 0) return false;
     remaining--;
     const type = node.type;
     if (type === expected || (Array.isArray(type) && type.includes(expected))) return true;
+    if (schemaAdmitsTypeByValues(node, expected)) return true;
     if (typeof node.$ref === 'string') {
       const resolved = resolveLocalSchemaRef(root, node.$ref);
       if (resolved && visit(resolved)) return true;
@@ -3588,6 +3635,19 @@ function propertyAdmitsType(root: Record<string, unknown>, property: unknown, ex
     return false;
   };
   return visit(property);
+}
+
+/**
+ * enum / const 不写 type 也把基本类型定死(JSON Schema 语义): 值全是字符串的 enum 就是 string,
+ * 对象值的 const / enum 就是 object(Codex P1 on #10908)。混型不推断 —— 字符串里混数字、对象里
+ * 混 null 都判不出「像不像」, 当不像处理。
+ */
+function schemaAdmitsTypeByValues(node: Record<string, unknown>, expected: 'string' | 'object'): boolean {
+  const values = node.const !== undefined ? [node.const] : Array.isArray(node.enum) ? node.enum : null;
+  if (!values || values.length === 0) return false;
+  return values.every((value) => expected === 'string'
+    ? typeof value === 'string'
+    : isPlainRecord(value));
 }
 
 /**
@@ -3652,22 +3712,27 @@ function settleEnvelope(groups: EnvelopeGroup[]): boolean {
 }
 
 /**
- * 这份表态「就是信封的样子」: 凑齐三个信号、恰好声明 name / args 两个字段、不放开动态字段。
+ * 已看到的表态「就是信封的样子」: 恰好声明 name / args 两个字段、不放开动态字段。
  *
  * 多一个兄弟字段、或放开 additionalProperties / patternProperties 的工具(name/args 是它自己的参数,
  * 不是信封)不能被当成信封 —— 否则平铺调用会把兄弟字段挪进 args 里, 在服务端校验之前就改错了层级
  * (Codex P1 on #10908)。真实的注册表入口(call_tool)声明的就是 name + args 两个字段。兄弟字段与动态
  * 字段可以藏在组合声明里, 所以按整份表态判, 不能只看根层。
  *
- * 表态完不完整(truncated)不在这里判: 「看到的部分是不是信封的样子」与「有没有看到全部」是两件事。
+ * 三个信封信号凑没凑齐(envelope)不在这里判: 「看到的部分是不是信封的样子」与「信号齐不齐」是
+ * 两件事 —— 完整表态凑齐了才重建(isNameEnvelopeSchema); 截断的部分表态由 normalizeGatewayArgs
+ * 的 indeterminateEnvelope 另行拒收。
  */
-function resemblesNameEnvelope(surface: SchemaParameterSurface): boolean {
-  return Boolean(surface.envelope)
-    && surface.names.size === 2
+function resemblesPartialNameEnvelope(surface: SchemaParameterSurface): boolean {
+  return surface.names.size === 2
     && surface.names.has('name')
     && surface.names.has('args')
     && !surface.additionalAllowed
     && surface.patterns.length === 0;
+}
+
+function resemblesNameEnvelope(surface: SchemaParameterSurface): boolean {
+  return Boolean(surface.envelope) && resemblesPartialNameEnvelope(surface);
 }
 
 /**
@@ -3930,7 +3995,16 @@ function setOwnArgument(target: Record<string, unknown>, key: string, value: unk
  * 「没传这个键」与「显式传 null」必须分开: 后者是模型给了一个用不了的形态,
  * 静默发 arguments: {} 只会让服务端按缺省值兜底并返回成功。
  */
-function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMcpTool): GatewayArgsResolution {
+/**
+ * 内层工具的本地查询, 由网关注入(归一化是自由函数, 不碰工具表)。查不到返回 null。
+ */
+type InnerToolLookup = (innerName: string) => { inputSchema: unknown } | null;
+
+function normalizeGatewayArgs(
+  record: Record<string, unknown>,
+  tool: ConnectedMcpTool,
+  lookupInnerTool?: InnerToolLookup,
+): GatewayArgsResolution {
   const provided = record.args !== undefined || record.arguments !== undefined;
   const raw = record.args !== undefined ? record.args : record.arguments;
   let params: Record<string, unknown> = {};
@@ -3976,18 +4050,34 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
   // 只有 args 容器自身就是一个完整信封({name, args})、且它说的内层工具与顶层 name 一致
   // (或顶层 name 只是入口工具自己的名字)时, 才是模型把同一个选择器写了两遍, 不再包一层。
   const selector = typeof record.name === 'string' ? record.name : undefined;
-  const repeatsEnvelope = selector !== undefined
-    && Object.prototype.hasOwnProperty.call(params, 'name')
+  // 「同一个选择器写了两遍」的撞名分支要先问内层工具自己的 schema(Codex P1 on 51c6ed253d):
+  // 内层工具自己就声明 name + args 参数时(run 这类), args 容器里的 {name, args} 可能正是它的
+  // 参数对象 —— 内层名恰好与选择器撞名而已。折叠后 registry 收到的 arguments 仍被剥一层信封,
+  // 内层工具拿到 {cwd}, 自己声明的 name/args 没了。内层 schema 声明了 args(与执行前双包裁决
+  // 同一判据、同一来源)就不折叠, 照实重建; 没声明 / 本地查不到 / 判不了时维持折叠 ——
+  // 平铺是 2026-10-31 实测撞出的形状, 从宽折叠, 由服务端报真实的参数要求。
+  const containerLooksEnvelope = Object.prototype.hasOwnProperty.call(params, 'name')
     && typeof params.name === 'string'
-    && Object.prototype.hasOwnProperty.call(params, 'args')
-    && (params.name === selector || selector === tool.name);
+    && Object.prototype.hasOwnProperty.call(params, 'args');
+  const innerDeclaresArgs = containerLooksEnvelope && lookupInnerTool
+    ? schemaDeclaresArgs((lookupInnerTool(params.name as string)?.inputSchema ?? null) as {
+      properties?: Record<string, unknown>;
+    } | null) === true
+    : false;
+  const repeatsEnvelope = selector !== undefined
+    && containerLooksEnvelope
+    && ((params.name === selector && !innerDeclaresArgs) || selector === tool.name);
   const envelopeSchema = isNameEnvelopeSchema(schema, surface);
   // 信封判不了: schema 看不全, 但已看到的部分就是信封的样子, 而顶层给了 name。它可能是信封层的
   // 内层工具名 —— 按普通工具折进参数容器, 服务端拿到的是 {name, <内层参数>}: 没有 args 层, 内层
   // 工具被按空参数调用还返回成功(Codex P1 on #10908)。也可能就是这个工具自己的 name 参数,
   // 包一层同样是错的。两种都走得通的形状只有一个 —— 全部放进 args, 由 callInputError 拒收并指路。
+  //
+  // 部分指纹也算(Codex P1 on 51c6ed253d): required 写在足够多的分支之后把节点预算耗尽时,
+  // required 信号本身被截掉, 信封结算失败(envelope=false) —— 不能因此就按普通工具转发。
+  // 已看到的就是信封的样子(names 恰好 name/args、没放开动态字段)就已经够判不了了。
   const indeterminateEnvelope = selector !== undefined && surface !== null
-    && surface.truncated && resemblesNameEnvelope(surface);
+    && surface.truncated && resemblesPartialNameEnvelope(surface);
   if (indeterminateEnvelope) {
     return {
       args: params, provided, malformed, folded, shadowed, unmapped, parsedFromString, indeterminateEnvelope: true,
@@ -4052,9 +4142,15 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
  */
 function schemaDeclaresArgs(schema: { properties?: Record<string, unknown> } | null | undefined): boolean | null {
   const props = schema?.properties;
-  if (props == null || typeof props !== 'object' || Object.keys(props).length === 0) {
-    return null;
+  if (props == null || typeof props !== 'object') return null;
+  // 只判「非空」与「有没有 args」: 惰性枚举, 十万键的 properties 不全量物化(Codex P2 on #10908)。
+  let hasAnyKey = false;
+  for (const key in props) {
+    if (!Object.prototype.hasOwnProperty.call(props, key)) continue;
+    hasAnyKey = true;
+    break;
   }
+  if (!hasAnyKey) return null;
   return Object.prototype.hasOwnProperty.call(props, 'args');
 }
 
@@ -4249,7 +4345,7 @@ class CindyMcpGateway {
     const tool = server && typeof record.tool === 'string'
       ? this.tools.get(mcpGatewayKey(server, record.tool)) : undefined;
     if (!tool) return null;
-    const resolution = normalizeGatewayArgs(record, tool);
+    const resolution = normalizeGatewayArgs(record, tool, this.innerToolLookup(tool));
     if (resolution.malformed) {
       // 参数放在一个用不了的地方: 原样转发只会让服务端按缺省值静默兜底。
       // 显式传 null 与「没传这个键」不是一回事, 所以单独点名, 让模型知道要省略这个键。
@@ -4299,6 +4395,11 @@ class CindyMcpGateway {
     return required.filter(key => !Object.prototype.hasOwnProperty.call(args, key));
   }
 
+  /** 归一化撞名裁决用的内层工具本地查询: 按 server + 内层名查工具表, 查不到返回 null。 */
+  private innerToolLookup(tool: ConnectedMcpTool): InnerToolLookup {
+    return (innerName) => this.tools.get(mcpGatewayKey(tool.serverName, innerName)) ?? null;
+  }
+
   resolveCall(input: unknown): ResolvedMcpGatewayCall | null {
     if (this.callInputError(input)) return null;
     const record = recordInput(input);
@@ -4309,7 +4410,7 @@ class CindyMcpGateway {
     if (!serverName || (this.botMemoryFacadeEnabled && serverName === 'cindy_memory')) return null;
     const tool = this.tools.get(mcpGatewayKey(serverName, toolName));
     if (!tool) return null;
-    const resolution = normalizeGatewayArgs(record, tool);
+    const resolution = normalizeGatewayArgs(record, tool, this.innerToolLookup(tool));
     return {
       qualifiedName: 'mcp__' + serverName + '__' + toolName,
       args: resolution.args,
