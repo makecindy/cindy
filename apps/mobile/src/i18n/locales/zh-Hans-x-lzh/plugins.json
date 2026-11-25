@@ -332,17 +332,20 @@
       "managementFailed": "此举未成",
       "confirmation": "确认法器权柄"
     },
-    "consentOrigin": {
-      "market": "官方之坊",
-      "custom-market": "自定之坊",
-      "local-file": "此机之卷",
-      "forge": "此机所造"
+    "taskCapability": "用于今差事",
+    "consentSource": {
+      "market": "出自 {{appName}} 法器坊",
+      "customMarket": "出自自订之坊「{{name}}」",
+      "customMarketUnnamed": "出自自订之坊",
+      "localFile": "出自此机 .cindy 卷",
+      "forge": "此机自造之法器",
+      "initiatedByAgent": "由 Agent 所发 · {{origin}}"
     },
-    "initiator": {
-      "user": "君所发起",
-      "agent": "Agent 所发起"
-    },
-    "taskCapability": "用于今差事"
+    "sourceNotice": {
+      "community": "此法器由社区作者开发与维护，{{appName}} 已审核此版本，但无法保证其在所有使用情境下皆安全。",
+      "customMarket": "宜先信此法器坊，再核法器所请权柄。",
+      "localFile": "档之来处可信，方可续纳。"
+    }
   },
   "uiApproval": {
     "title": "法器「{{name}}」添加交互之页，须君确认后方可用",

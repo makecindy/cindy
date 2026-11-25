@@ -334,17 +334,20 @@
       "managementFailed": "Vorgang fehlgeschlagen",
       "confirmation": "Plugin-Berechtigungen prüfen"
     },
-    "consentOrigin": {
-      "market": "Offizieller Marktplatz",
-      "custom-market": "Benutzerdefinierter Marktplatz",
-      "local-file": "Lokale Datei",
-      "forge": "Lokal erstellt"
+    "taskCapability": "Für diese Aufgabe",
+    "consentSource": {
+      "market": "Aus dem Plugin-Marktplatz von {{appName}}",
+      "customMarket": "Aus dem benutzerdefinierten Marktplatz „{{name}}“",
+      "customMarketUnnamed": "Aus einem benutzerdefinierten Marktplatz",
+      "localFile": "Aus einer lokalen .cindy-Datei",
+      "forge": "Lokal entwickeltes Plugin",
+      "initiatedByAgent": "Vom Agent angefordert · {{origin}}"
     },
-    "initiator": {
-      "user": "Von dir angefordert",
-      "agent": "Vom Agent angefordert"
-    },
-    "taskCapability": "Für diese Aufgabe"
+    "sourceNotice": {
+      "community": "Dieses Plugin wird von Mitgliedern der Community entwickelt und gepflegt. {{appName}} hat diese Version geprüft, kann die Sicherheit des Plugins aber nicht in jeder Nutzungssituation garantieren.",
+      "customMarket": "Installiere nur aus einem Marktplatz, dem du vertraust, und prüfe die angeforderten Berechtigungen.",
+      "localFile": "Fahre mit der Installation nur fort, wenn du der Quelle der Datei vertraust."
+    }
   },
   "uiApproval": {
     "title": "Das Plugin „{{name}}“ hat interaktive Seiten hinzugefügt. Prüfe ihre Berechtigungen, bevor du sie verwendest.",

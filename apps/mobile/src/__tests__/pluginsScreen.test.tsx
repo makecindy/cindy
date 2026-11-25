@@ -1758,6 +1758,47 @@ it("installs from the market through the existing consent sheet and opens the ne
     .map((request) => request.input?.read)).toEqual(["capabilities", "catalog", "catalog", "installed", "installed", "installed", "installed"]);
 });
 
+// PR review (2026-11-25): a first install from the user's own Git market, end to end on the phone side.
+it("installs from a custom Git market with the Host's manifest check and opens the new installed detail", async () => {
+  const { publisherKind: _server, ...base } = marketItem("repo-tools", "Repo Tools");
+  const item = { ...base, pluginId: "custom-market:Demo%20Git%20Market/repo-tools", sourceType: "git-market", sourceMarketName: "Demo Git Market" };
+  const manifest = { schemaVersion: 3, id: "repo-tools", name: "Repo Tools", version: "1", node: { entry: "worker.cjs", protocol: "json-rpc-stdio" } };
+  let installed = false;
+  const requests = marketWire((request) => {
+    switch (request.actionId) {
+      case "management:snapshot":
+        if (request.input?.read === "capabilities") return { catalogPaging: true };
+        if (request.input?.read === "catalog") return { ...marketPage(installed ? [] : [item]), customSourceNames: ["Demo Git Market"] };
+        return { version: 1, market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
+          ghosts: installed ? [{ instanceKey: "_root__repo-tools", namespace: null, manifest, enabled: true,
+            approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } }] : [] };
+      case "management:market-detail": return { ...item, manifest };
+      case "management:begin": return { operationId: request.input.operationId, phase: "confirmation", consent: {
+        requestId: "consent", initiator: "user", origin: "custom-market", originLabel: "Demo Git Market",
+        installationSource: { kind: "third-party" },
+        facts: { kind: "install", ghostId: "repo-tools", name: "Repo Tools", version: "1",
+          permissions: [{ key: "node:execute", kind: "node", labelKey: "nodeRuntime", detailKey: "nodeRuntimeDetail" }] } } };
+      case "management:answer": installed = true; return { operationId: request.input.operationId, phase: "succeeded" };
+      default: throw new Error("unexpected " + request.actionId);
+    }
+  });
+  await openMarket();
+  await act(async () => shownMarket().setFilter("custom"));
+  await settle();
+  await act(async () => shownMarket().install(shownMarket().items[0]));
+  await settle(14);
+  // Custom-market packages are checked against the manifest the phone was shown (server items never send one).
+  expect(requests.find((request) => request.actionId === "management:begin")!.input).toMatchObject({
+    kind: "install", pluginId: item.pluginId, expectedReleaseId: item.releaseId, expectedManifest: manifest });
+  const sheet = fixture.props.get("confirmation");
+  expect(sheet.state.receipt.consent).toMatchObject({ origin: "custom-market", originLabel: "Demo Git Market" });
+  await act(async () => sheet.controller.answer(true));
+  await settle(14);
+  // The installed detail opened is the new instance (the mocked resource read always titles it "Demo").
+  expect(fixture.read).toHaveBeenLastCalledWith(fixture.wire, expect.objectContaining({ deviceId: "mac" }),
+    expect.objectContaining({ id: "_root__repo-tools" }), "en", ["plugin-capabilities"]);
+});
+
 const hostError = (code: string) => new Error(`[${code}] Plugin management request is no longer available`);
 const demoGhost = { instanceKey: "_root__demo", namespace: null, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" },
   enabled: true, approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } };

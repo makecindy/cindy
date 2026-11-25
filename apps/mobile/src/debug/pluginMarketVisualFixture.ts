@@ -39,14 +39,34 @@ interface DemoPlugin {
   /** Install outcome after the package check: consent (default), download failure, or a lost begin reply. */
   outcome?: "downloadFailed" | "uncertain";
   conflict?: boolean;
+  /** Permissions in the Host's consent shape (no tools: the Host's consent list leaves them out). */
+  permissions?: DemoPermission[];
+  /** Pre-installed at this older version, so the installed detail offers an update that asks for consent. */
+  installedVersion?: string;
+  /** The update's permission change versus the installed version. */
+  update?: { added: DemoPermission[]; removed: DemoPermission[]; unchangedCount: number };
 }
+type DemoPermission = { key: string; kind: string; labelKey: string; labelArgs?: Record<string, string>; detailKey?: string };
+// Same keys, kinds and copy keys as the Host's ghostPermissionItems; node:execute is the one it calls high risk.
+const nodeExecute = (labelKey: "nodeRuntime" | "nodeMcp" = "nodeRuntime"): DemoPermission =>
+  ({ key: "node:execute", kind: "node", labelKey, detailKey: "nodeRuntimeDetail" });
+const network = (host: string): DemoPermission => ({ key: `network:${host}`, kind: "network", labelKey: "networkHost", labelArgs: { host } });
+const notify: DemoPermission = { key: "notify", kind: "notify", labelKey: "notify", detailKey: "notifyDetail" };
+const badge: DemoPermission = { key: "badge", kind: "notify", labelKey: "badge", detailKey: "badgeDetail" };
+const fsWrite: DemoPermission = { key: "fs", kind: "fs", labelKey: "fsWrite", detailKey: "fsWriteDetail" };
+const RELEASE = "1.4.2";
 const DEMOS: DemoPlugin[] = [
   { ghostId: "demo-device-simulator", name: "Demo Device Simulator", publisher: "official", author: "Cindy",
     description: "Open a phone simulator in a task, take screenshots, tap and type into the app you are building.",
-    tools: ["demo_boot_device", "demo_screenshot", "demo_tap", "demo_type_text", "demo_install_app"] },
+    tools: ["demo_boot_device", "demo_screenshot", "demo_tap", "demo_type_text", "demo_install_app"],
+    // Consent with a high-risk item (pinned above the buttons).
+    permissions: [nodeExecute("nodeMcp"), { key: "panel:tab:Demo Device Simulator", kind: "panel", labelKey: "panelTab",
+      labelArgs: { title: "Demo Device Simulator" } }, network("simulator.example.com")] },
   // Named apart from the installed demo plugins so a market row never looks like something already installed.
   { ghostId: "demo-agenda", name: "Demo Agenda", publisher: "official", author: "Cindy",
-    description: "View, create and adjust events across several calendar accounts.", tools: ["demo_list_events", "demo_create_event"] },
+    description: "View, create and adjust events across several calendar accounts.", tools: ["demo_list_events", "demo_create_event"],
+    // Consent without any high-risk item, for comparison.
+    permissions: [network("calendar.example.com"), notify] },
   { ghostId: "demo-image-studio", name: "Demo Image Studio", publisher: "official", author: "Cindy",
     description: "Generate and edit images in a conversation and keep the results in the library.", tools: ["demo_generate_image"] },
   { ghostId: "demo-glossary", name: "Demo Glossary Translate", publisher: "official", author: "Cindy", outcome: "downloadFailed",
@@ -55,11 +75,25 @@ const DEMOS: DemoPlugin[] = [
   { ghostId: "demo-uncertain-sync", name: "Demo Uncertain Sync", publisher: "official", author: "Cindy", outcome: "uncertain",
     description: "The install reply is lost on purpose; use Check result to confirm what happened.", tools: ["demo_sync"] },
   { ghostId: "demo-shift-calendar", name: "Demo Shift Calendar", publisher: "personal", author: "community-author",
-    description: "Build a shift rota and sync it to a calendar.", tools: ["demo_build_rota"] },
+    description: "Build a shift rota and sync it to a calendar.", tools: ["demo_build_rota"],
+    // Community publisher: the consent carries communityMarket and shows the community notice.
+    permissions: [network("rota.example.com"), notify] },
   { ghostId: "demo-team-sheets", name: "Demo Team Sheets", publisher: "organization", author: "Demo Org",
     description: "Read and write the team's shared tables.", tools: ["demo_read_table", "demo_write_table"] },
   { ghostId: "demo-notes", name: "Demo Notes", publisher: "custom", author: null, conflict: true,
     description: "A same-ID plugin is already installed on this computer, so it cannot be installed here.", tools: [] },
+  { ghostId: "demo-repo-tools", name: "Demo Repo Tools", publisher: "custom", author: null,
+    description: "Run repository checks with a bundled Node program. Installs from the custom Git market.",
+    tools: ["demo_run_checks"], permissions: [nodeExecute(), network("api.github.com"), fsWrite] },
+  // Installed at an older version; updating asks for consent. One update adds the high-risk item, one does not.
+  { ghostId: "demo-weather-board", name: "Demo Weather Board", publisher: "official", author: "Cindy",
+    description: "Show forecasts for saved places. Its update adds a bundled Node program.", tools: ["demo_forecast"],
+    permissions: [nodeExecute(), network("weather.example.com"), notify], installedVersion: "1.3.0",
+    update: { added: [nodeExecute(), notify], removed: [badge], unchangedCount: 1 } },
+  { ghostId: "demo-reading-list", name: "Demo Reading List", publisher: "official", author: "Cindy",
+    description: "Save articles to read later. Its update only adds notifications.", tools: ["demo_save_article"],
+    permissions: [network("reader.example.com"), notify], installedVersion: "1.3.0",
+    update: { added: [notify], removed: [], unchangedCount: 1 } },
   ...Array.from({ length: 26 }, (_, index): DemoPlugin => ({
     ghostId: `demo-extension-${index + 1}`, name: `Demo Extension ${index + 1}`, publisher: index % 3 ? "personal" : "official",
     author: index % 3 ? "community-author" : "Cindy", description: "A filler entry that exercises paging and long lists.", tools: ["demo_tool"],
@@ -67,28 +101,35 @@ const DEMOS: DemoPlugin[] = [
 ];
 const CUSTOM_MARKET = "Demo Git Market";
 const OFFLINE_MARKET = "Demo Offline Market";
-const installed = new Map<string, { demo: DemoPlugin; enabled: boolean }>();
-const operations = new Map<string, { kind: "install" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled" }>();
+const installed = new Map<string, { demo: DemoPlugin; enabled: boolean; version: string }>();
+const operations = new Map<string, { kind: "install" | "update" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled" }>();
 const instanceKey = (ghostId: string) => `_root__${ghostId}`;
+const seedInstalled = () => {
+  for (const demo of DEMOS) if (demo.installedVersion && !installed.has(instanceKey(demo.ghostId)))
+    installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: demo.installedVersion });
+};
+seedInstalled();
 // Same form the phone receives from a real Host: dispatch's IPC_ERROR unwraps to Error("[CODE] message").
 const failure = (code: string) => new Error(`[${code}] Demo plugin management request`);
 
 function marketItem(demo: DemoPlugin): ManagedMarketItem {
   const server = demo.publisher !== "custom";
+  const entry = installed.get(instanceKey(demo.ghostId));
   return {
     pluginId: `demo-market/${demo.ghostId}`, ghostId: demo.ghostId, namespace: null, name: demo.name,
     description: demo.description, author: demo.author,
     ...(server && demo.publisher !== "organization" ? { publisherKind: demo.publisher === "official" ? "official" as const : "personal" as const } : {}),
     scope: demo.publisher === "organization" ? "organization" : "public",
     organizationId: demo.publisher === "organization" ? "demo-org" : null, defaultInstall: false,
-    releaseId: `${demo.ghostId}@1.4.2`, version: "1.4.2", publishedAt: "2026-11-01T00:00:00.000Z", icon: null,
-    installState: demo.conflict ? "conflict" : installed.has(instanceKey(demo.ghostId)) ? "installed" : "not-installed",
-    enabled: installed.get(instanceKey(demo.ghostId))?.enabled ?? null,
+    releaseId: `${demo.ghostId}@${RELEASE}`, version: RELEASE, publishedAt: "2026-11-01T00:00:00.000Z", icon: null,
+    installState: demo.conflict ? "conflict" : !entry ? "not-installed" : entry.version === RELEASE ? "installed" : "update-available",
+    enabled: entry?.enabled ?? null,
     sourceType: server ? "server" : "git-market", sourceMarketName: server ? null : CUSTOM_MARKET,
+    ...(entry && entry.version !== RELEASE ? { updateRequiresConsent: true as const } : {}),
   };
 }
-const manifest = (demo: DemoPlugin) => ({
-  schemaVersion: 3, id: demo.ghostId, name: demo.name, version: "1.4.2", description: demo.description,
+const manifest = (demo: DemoPlugin, version = RELEASE) => ({
+  schemaVersion: 3, id: demo.ghostId, name: demo.name, version, description: demo.description,
   ...(demo.author ? { author: demo.author } : {}),
   tools: demo.tools.map((name) => ({ name, description: "Example capability" })),
 });
@@ -98,7 +139,8 @@ function catalog(query: Record<string, unknown> = {}) {
   if (scenario === "readFailed" && failedReads++ < 1) throw failure("TIMEOUT");
   const text = typeof query.query === "string" ? query.query.trim().toLocaleLowerCase() : "";
   const scope = typeof query.scope === "string" ? query.scope : "all";
-  const visible = DEMOS.map(marketItem).filter((item) => item.installState !== "installed"
+  // excludeInstalled leaves out anything already on the computer, including plugins with an update.
+  const visible = DEMOS.map(marketItem).filter((item) => item.installState !== "installed" && item.installState !== "update-available"
     && (scenario !== "organization" || item.scope !== "organization")
     && `${item.name} ${item.description} ${item.ghostId}`.toLocaleLowerCase().includes(text));
   const matches = scenario === "empty" || scenario === "unavailable" ? [] : visible;
@@ -125,8 +167,8 @@ function catalog(query: Record<string, unknown> = {}) {
     counts: query.counts === true ? { ...counts, all: counts.public + counts.organization + counts.custom } : null,
   };
 }
-function ghost(key: string, entry: { demo: DemoPlugin; enabled: boolean }): ManagedPlugin {
-  return { instanceKey: key, namespace: null, manifest: manifest(entry.demo) as ManagedPlugin["manifest"], enabled: entry.enabled,
+function ghost(key: string, entry: { demo: DemoPlugin; enabled: boolean; version: string }): ManagedPlugin {
+  return { instanceKey: key, namespace: null, manifest: manifest(entry.demo, entry.version) as ManagedPlugin["manifest"], enabled: entry.enabled,
     approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } };
 }
 function snapshot() {
@@ -141,24 +183,25 @@ function receipt(operationId: string) {
   if (op.done) return { operationId, phase: op.done, ...(op.done === "failed" ? { errorCode: "GHOST_DOWNLOAD_FAILED" } : {}) };
   if (op.kind === "uninstall") { installed.delete(instanceKey(op.ghostId)); op.done = "succeeded"; return { operationId, phase: "succeeded" }; }
   if (demo.outcome === "downloadFailed") { op.done = "failed"; return receipt(operationId); }
+  const entry = installed.get(instanceKey(demo.ghostId));
   if (!op.answered) return { operationId, phase: "confirmation", consent: {
     requestId: `demo-consent-${operationId}`, initiator: "user", origin: demo.publisher === "custom" ? "custom-market" : "market",
     ...(demo.publisher === "custom" ? { originLabel: CUSTOM_MARKET } : {}),
+    // The Host marks a verified public community publisher; the phone shows the community notice.
+    ...(demo.publisher === "personal" ? { communityMarket: true } : {}),
     trust: demo.publisher === "official" ? "cindy-official" : "reviewed",
     // Same source facts as the Host's obtainGhostInstallConsent for each market origin.
     installationSource: demo.publisher === "custom" ? { kind: "third-party" }
       : demo.publisher === "organization" ? { kind: "organization", namespace: "demo-org" }
         : { kind: demo.publisher === "official" ? "official" : "market" },
-    facts: { kind: "install", ghostId: demo.ghostId, name: demo.name, version: "1.4.2", permissions: [
-      ...demo.tools.map((name) => ({ key: `tool:${name}`, kind: "tool", labelKey: "tool", labelArgs: { name } })),
-      ...(demo.ghostId === "demo-device-simulator" ? [
-        { key: "panel", kind: "panel", labelKey: "panelTab", labelArgs: { title: demo.name } },
-        { key: "node", kind: "node-runtime", labelKey: "nodeRuntime", detailKey: "nodeRuntimeDetail" },
-      ] : []),
-    ] } } };
+    facts: op.kind === "update" && entry && demo.update
+      ? { kind: "update", ghostId: demo.ghostId, name: demo.name, version: RELEASE, previousVersion: entry.version,
+        added: demo.update.added, removed: demo.update.removed, unchangedCount: demo.update.unchangedCount,
+        builtinOauthClientChanged: false }
+      : { kind: "install", ghostId: demo.ghostId, name: demo.name, version: RELEASE, permissions: demo.permissions ?? [] } } };
   // Two polls of "installing" after consent, then the install commits.
   if (op.polls < 3) return { operationId, phase: "running" };
-  installed.set(instanceKey(demo.ghostId), { demo, enabled: true });
+  installed.set(instanceKey(demo.ghostId), { demo, enabled: entry?.enabled ?? true, version: RELEASE });
   op.done = "succeeded";
   return { operationId, phase: "succeeded" };
 }
@@ -188,7 +231,14 @@ export function pluginMarketVisualManagement(actionId: string | undefined, input
         return result({ operationId, phase: "running" });
       }
       const demo = demoFor(input.pluginId);
-      if (!demo || input.kind !== "install" || input.expectedReleaseId !== `${demo.ghostId}@1.4.2`) throw failure("PRECONDITION_FAILED");
+      if (!demo || input.kind !== "install" || input.expectedReleaseId !== `${demo.ghostId}@${RELEASE}`) throw failure("PRECONDITION_FAILED");
+      // An update is an install that names the installed instance (resourceRef + expectedInstalledApproval).
+      const current = resourceId ? installed.get(resourceId) : undefined;
+      if (resourceId) {
+        if (!current || current.demo !== demo || current.version === RELEASE || !demo.update) throw failure("PRECONDITION_FAILED");
+        operations.set(operationId, { kind: "update", ghostId: demo.ghostId, answered: false, polls: 2 });
+        return result({ operationId, phase: "running" });
+      }
       if (demo.conflict || installed.has(instanceKey(demo.ghostId))) throw failure("ALREADY_EXISTS");
       operations.set(operationId, { kind: "install", ghostId: demo.ghostId, answered: demo.outcome === "uncertain", polls: 2 });
       // Simulate a reply lost after the Host accepted the install; Check result reads the original operation.

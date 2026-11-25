@@ -91,6 +91,8 @@ export interface PluginManagementReceipt {
     initiator: 'user' | 'agent';
     origin: 'market' | 'custom-market' | 'local-file' | 'forge';
     originLabel?: string;
+    /** Host-verified public community publisher (market origin only); drives the community notice. */
+    communityMarket?: true;
     purpose?: 'task-capability' | 'ui-capability';
     trust?: 'unverified' | 'cindy-official' | 'reviewed' | 'verified-publisher';
     facts: PluginConsentFacts;
@@ -203,7 +205,7 @@ export function parsePluginManagementReceipt(value: unknown, operationId: string
   if (value.consent !== undefined) {
     const c = value.consent;
     if (!record(c) || !str(c.requestId) || !oneOf(c.initiator, ['user', 'agent']) || !oneOf(c.origin, ['market', 'custom-market', 'local-file', 'forge'])
-      || !optionalString(c.originLabel) || (c.purpose !== undefined && !oneOf(c.purpose, ['task-capability', 'ui-capability']))
+      || !optionalString(c.originLabel) || (c.communityMarket !== undefined && c.communityMarket !== true) || (c.purpose !== undefined && !oneOf(c.purpose, ['task-capability', 'ui-capability']))
       || (c.trust !== undefined && !oneOf(c.trust, ['unverified', 'cindy-official', 'reviewed', 'verified-publisher'])) || !record(c.facts)) return invalid();
     const f = c.facts;
     const permissions = (v: unknown) => Array.isArray(v) && v.every(permission);

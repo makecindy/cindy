@@ -23,7 +23,7 @@ export function PluginManagementConfirmation(
   const { t } = useTranslation(),
     { colors } = useTheme();
   const { consent, visible, answer } = usePluginConsent(props);
-  const info = consent ? pluginConsentPresentation(consent, t) : undefined;
+  const info = consent ? pluginConsentPresentation(consent, t, props.deviceName) : undefined;
   const body = (text?: string) =>
     text ? (
       <Text
@@ -44,32 +44,47 @@ export function PluginManagementConfirmation(
       nativeContent
       testID="plugins.managementConfirmation"
       footer={
-        <HStack spacing={spacing.md}>
-          {[false, true].map((accept) => (
-            <Button
-              key={String(accept)}
-              testID={"plugins.management." + (accept ? "allow" : "reject")}
-              onPress={() => answer(accept)}
+        // The pinned high-risk text lives in the footer, which stays visible at the medium detent too.
+        <VStack alignment="leading" spacing={spacing.sm}>
+          {info?.highRisk ? (
+            <Text
+              testID="plugins.management.highRisk"
               modifiers={[
-                buttonStyle(accept ? "borderedProminent" : "bordered"),
-                ...(accept ? [tint(colors.cta), foregroundStyle(colors.ctaText)] : []),
-                disabled(
-                  !props.active || props.state.busy || !props.state.online,
-                ),
-                frame({ maxWidth: Infinity, minHeight: 44 }),
+                font({ textStyle: "footnote", weight: "medium" }),
+                foregroundStyle(colors.textPrimary),
+                fixedSize({ horizontal: false, vertical: true }),
               ]}
             >
-              <Text
+              {info.highRisk}
+            </Text>
+          ) : null}
+          <HStack spacing={spacing.md}>
+            {[false, true].map((accept) => (
+              <Button
+                key={String(accept)}
+                testID={"plugins.management." + (accept ? "allow" : "reject")}
+                onPress={() => answer(accept)}
                 modifiers={[
-                  font({ textStyle: "subheadline", weight: "medium" }),
-                  ...(accept ? [foregroundStyle(colors.ctaText)] : []),
+                  buttonStyle(accept ? "borderedProminent" : "bordered"),
+                  ...(accept ? [tint(colors.cta), foregroundStyle(colors.ctaText)] : []),
+                  disabled(
+                    !props.active || props.state.busy || !props.state.online,
+                  ),
+                  frame({ maxWidth: Infinity, minHeight: 44 }),
                 ]}
               >
-                {t("plugins.management." + (accept ? "allow" : "reject"))}
-              </Text>
-            </Button>
-          ))}
-        </HStack>
+                <Text
+                  modifiers={[
+                    font({ textStyle: "subheadline", weight: "medium" }),
+                    ...(accept ? [foregroundStyle(colors.ctaText)] : []),
+                  ]}
+                >
+                  {t("plugins.management." + (accept ? "allow" : "reject"))}
+                </Text>
+              </Button>
+            ))}
+          </HStack>
+        </VStack>
       }
     >
       <VStack
@@ -85,10 +100,11 @@ export function PluginManagementConfirmation(
         >
           {info?.title ?? ""}
         </Text>
-        {body(props.deviceName)}
+        {body(info?.device)}
         {body(info?.identity)}
         {body(info?.trust)}
         {body(info?.origin)}
+        {body(info?.sourceNotice)}
         {body(info?.version)}
         {info?.permissions.map((permission, index) => (
           <VStack key={index} alignment="leading" spacing={spacing.xs}>

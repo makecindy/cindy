@@ -334,17 +334,20 @@
       "managementFailed": "操作に失敗しました",
       "confirmation": "プラグインの権限を確認"
     },
-    "consentOrigin": {
-      "market": "公式マーケット",
-      "custom-market": "カスタムマーケット",
-      "local-file": "ローカルファイル",
-      "forge": "ローカルビルド"
+    "taskCapability": "現在のタスク用",
+    "consentSource": {
+      "market": "{{appName}} プラグインマーケットから",
+      "customMarket": "カスタムマーケット「{{name}}」から",
+      "customMarketUnnamed": "カスタムマーケットから",
+      "localFile": "ローカルの .cindy ファイルから",
+      "forge": "ローカルで開発したプラグイン",
+      "initiatedByAgent": "Agent からのリクエスト · {{origin}}"
     },
-    "initiator": {
-      "user": "あなたのリクエスト",
-      "agent": "Agent のリクエスト"
-    },
-    "taskCapability": "現在のタスク用"
+    "sourceNotice": {
+      "community": "このプラグインはコミュニティの開発者が開発・保守しています。{{appName}} はこのバージョンを審査しましたが、あらゆる場面で安全に使えることを保証するものではありません。",
+      "customMarket": "このマーケットが信頼できることを確かめ、プラグインが要求する権限を確認してください。",
+      "localFile": "信頼できるところから入手したファイルか確認してから、インストールを続けてください。"
+    }
   },
   "uiApproval": {
     "title": "プラグイン「{{name}}」にインタラクティブページが追加されました。使用するには権限の確認が必要です。",

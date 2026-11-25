@@ -334,17 +334,20 @@
       "managementFailed": "操作失敗",
       "confirmation": "確認插件權限"
     },
-    "consentOrigin": {
-      "market": "官方市集",
-      "custom-market": "自訂市集",
-      "local-file": "本機檔案",
-      "forge": "本機建置"
+    "taskCapability": "用於目前任務",
+    "consentSource": {
+      "market": "來自 {{appName}} 插件市場",
+      "customMarket": "來自自訂市場「{{name}}」",
+      "customMarketUnnamed": "來自自訂市場",
+      "localFile": "來自本機 .cindy 檔案",
+      "forge": "本機開發的插件",
+      "initiatedByAgent": "由 Agent 發起 · {{origin}}"
     },
-    "initiator": {
-      "user": "由你發起",
-      "agent": "由 Agent 發起"
-    },
-    "taskCapability": "用於目前任務"
+    "sourceNotice": {
+      "community": "此插件由社群作者開發與維護，{{appName}} 已審核這個版本，但無法保證插件在所有使用情境下都安全。",
+      "customMarket": "請確認你信任這個市場，再核對插件要求的權限。",
+      "localFile": "請確認檔案來自你信任的來源，再繼續安裝。"
+    }
   },
   "uiApproval": {
     "title": "插件「{{name}}」新增了互動頁面，需要你確認後才能使用",

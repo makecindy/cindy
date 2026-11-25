@@ -334,17 +334,20 @@
       "managementFailed": "작업 실패",
       "confirmation": "플러그인 권한 확인"
     },
-    "consentOrigin": {
-      "market": "공식 마켓",
-      "custom-market": "사용자 지정 마켓",
-      "local-file": "로컬 파일",
-      "forge": "로컬 빌드"
+    "taskCapability": "현재 작업용",
+    "consentSource": {
+      "market": "{{appName}} 플러그인 마켓에서",
+      "customMarket": "사용자 지정 마켓 \"{{name}}\"에서",
+      "customMarketUnnamed": "사용자 지정 마켓에서",
+      "localFile": "로컬 .cindy 파일에서",
+      "forge": "로컬에서 개발한 플러그인",
+      "initiatedByAgent": "Agent 요청 · {{origin}}"
     },
-    "initiator": {
-      "user": "사용자가 요청함",
-      "agent": "Agent가 요청함"
-    },
-    "taskCapability": "현재 작업용"
+    "sourceNotice": {
+      "community": "이 플러그인은 커뮤니티 개발자가 개발하고 유지 관리합니다. {{appName}}는 이 버전을 검토했지만 모든 사용 상황에서 안전하다고 보장할 수는 없습니다.",
+      "customMarket": "이 마켓을 신뢰할 수 있는지 확인하고 플러그인이 요청하는 권한을 검토하세요.",
+      "localFile": "신뢰할 수 있는 출처에서 받은 파일인지 확인한 뒤에 설치를 계속하세요."
+    }
   },
   "uiApproval": {
     "title": "플러그인 “{{name}}”에 대화형 페이지가 추가되었습니다. 사용하려면 권한을 확인해 주세요.",

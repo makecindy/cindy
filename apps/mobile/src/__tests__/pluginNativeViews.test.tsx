@@ -2,7 +2,7 @@
 import { PluginNativeNotice, PluginNotice as PluginNoticeHost } from "@/plugins/PluginNotice.ios";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginDirectoryView } from "@/plugins/PluginDirectoryView.ios";
 import { PluginMarketSection } from "@/plugins/PluginMarketSection";
 import { PluginDetailView } from "@/plugins/PluginDetailView.ios";
@@ -12,6 +12,7 @@ import { PluginTaskPickerView as AndroidTaskPickerView } from "@/plugins/PluginT
 import { pluginDetailModel } from "@/plugins/pluginDetailModel";
 import { palettes } from "@/theme/tokens";
 import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation.ios";
+import { PluginManagementConfirmation as AndroidManagementConfirmation } from "@/plugins/PluginManagementConfirmation";
 import { PluginModelPicker } from '@/plugins/PluginModelPicker';
 
 const bridge = vi.hoisted(() => ({
@@ -1056,7 +1057,8 @@ it("shows full consent facts in a separate sheet and rejects stale owner or requ
   const props = { state, controller, active: true, deviceName: "Mac" };
   const { container, rerender } = mount(PluginManagementConfirmation, props);
   expect(bridge.props.get("plugins.managementConfirmation").visible).toBe(true);
-  for (const fact of ["Plugin · 2", "plugin-id", "Verified source", "Full local access risk", "Removed host access", "plugins.management.permissions.nodeRuntimeDetail", "plugins.management.oauthChanged"]) expect(container.textContent).toContain(fact);
+  // The custom market name is interpolated into the source line (pluginManagement.test.ts checks the text).
+  for (const fact of ["Plugin · 2", "plugin-id", "plugins.notice.consentSource.customMarket", "Full local access risk", "Removed host access", "plugins.management.permissions.nodeRuntimeDetail", "plugins.management.oauthChanged"]) expect(container.textContent).toContain(fact);
   const allow = bridge.props.get("plugins.management.allow").onPress;
   state.online = false;
   rerender({ ...props, active: false });
@@ -1234,6 +1236,49 @@ it.each([PluginDetailView, AndroidDetailView])("keeps unknown-result recovery re
   expect(onPress).toHaveBeenCalledTimes(1);
   rerender({ ...p, managementNotice: undefined });
   expect(container.textContent).not.toContain("Result unconfirmed");
+});
+
+/* 测试价值（PR 评审：高风险权限在点「允许」前可见，2026-11-25）
+ * - 生产入口与可观察结果：两端真实确认面板组件；观察固定段是否在滚动内容之外、紧挨按钮。
+ * - 依据：维护者要求高风险权限在确认前可见；iOS 半高面板与 Android 矮屏都只保证按钮区可见。
+ * - 缺口：此前 Node 权限说明只在可滚动的权限列表里。
+ * - 最小失败输入：新装含 node:execute；对照组不含。tier: unit。
+ */
+describe("pinned high-risk permission", () => {
+  const consentState = (permissions: any[]) => ({ outcome: "confirmation", online: true, busy: false, receipt: { consent: {
+    requestId: "request", origin: "market", initiator: "user",
+    facts: { kind: "install", ghostId: "runner", name: "Runner", version: "1", permissions },
+  } } }) as any;
+  const node = { key: "node:execute", kind: "node", labelKey: "nodeRuntime", detailKey: "nodeRuntimeDetail" };
+  const notify = { key: "notify", kind: "notify", labelKey: "notify", detailKey: "notifyDetail" };
+  const risk = "plugins.management.permissions.nodeRuntimeDetail";
+  const props = (permissions: any[]) => { const state = consentState(permissions);
+    return { state, controller: { getState: () => state, answer: vi.fn() } as any, active: true, deviceName: "Mac" }; };
+
+  it("iOS shows it in the footer beside the buttons, not in the scrolled content", () => {
+    const { container } = mount(PluginManagementConfirmation, props([notify, node]));
+    const pinned = container.querySelector('[data-testid="plugins.management.highRisk"]')!;
+    expect(pinned.textContent).toBe(risk);
+    expect(pinned.parentElement!.querySelector('[data-testid="plugins.management.allow"]')).not.toBeNull();
+    expect(container.textContent!.split(risk)).toHaveLength(2);
+    expect(container.textContent).toContain("plugins.market.installTo");
+  });
+  it("iOS shows no pinned text when nothing is high risk", () => {
+    const { container } = mount(PluginManagementConfirmation, props([notify]));
+    expect(container.querySelector('[data-testid="plugins.management.highRisk"]')).toBeNull();
+  });
+  it("Android keeps it outside the scroll area, after the scrolled content and before the buttons", () => {
+    const { container, rerender } = mount(AndroidManagementConfirmation, props([notify, node]));
+    const sheet = container.querySelector('[data-testid="plugins.managementConfirmation"]')!;
+    const scroll = sheet.firstElementChild!;
+    expect(scroll.textContent).not.toContain(risk);
+    expect(scroll.textContent).toContain("plugins.management.permissions.nodeRuntime");
+    const text = sheet.textContent!;
+    expect(text.indexOf(risk)).toBeGreaterThanOrEqual(scroll.textContent!.length);
+    expect(text.indexOf(risk)).toBeLessThan(text.indexOf("plugins.management.allow"));
+    rerender(props([notify]));
+    expect(sheet.textContent).not.toContain(risk);
+  });
 });
 
 /* 依据：三端展示同一份页面权限 facts；最小输入：ui purpose + app 工具列表；tier: unit。 */

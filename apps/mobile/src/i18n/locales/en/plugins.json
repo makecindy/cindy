@@ -334,17 +334,20 @@
       "managementFailed": "Operation failed",
       "confirmation": "Review plugin permissions"
     },
-    "consentOrigin": {
-      "market": "Official market",
-      "custom-market": "Custom market",
-      "local-file": "Local file",
-      "forge": "Built locally"
+    "taskCapability": "For this task",
+    "consentSource": {
+      "market": "From the {{appName}} plugin market",
+      "customMarket": "From custom marketplace “{{name}}”",
+      "customMarketUnnamed": "From a custom marketplace",
+      "localFile": "From a local .cindy file",
+      "forge": "Locally developed plugin",
+      "initiatedByAgent": "Requested by Agent · {{origin}}"
     },
-    "initiator": {
-      "user": "Requested by you",
-      "agent": "Requested by Agent"
-    },
-    "taskCapability": "For this task"
+    "sourceNotice": {
+      "community": "Community developers build and maintain this plugin. {{appName}} has reviewed this version but can’t guarantee it’s safe in every situation.",
+      "customMarket": "Make sure you trust this marketplace and review the permissions the plugin requests.",
+      "localFile": "Make sure this file came from a source you trust before installing."
+    }
   },
   "uiApproval": {
     "title": "Plugin “{{name}}” has added interactive pages. Review their permissions before using them.",

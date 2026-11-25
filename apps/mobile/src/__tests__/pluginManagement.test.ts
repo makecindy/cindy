@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
+import { isPinnedHighRiskPermission, pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
 import { sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
@@ -800,4 +800,80 @@ it.each([
   expect(pluginConsentPresentation(consent, key => key).trust).toBe(warning);
   expect(consent.trust).toBe('unverified');
   expect(() => parsePluginManagementReceipt({ ...input, consent: { ...input.consent, trust: 'local' } }, 'operation-1')).toThrow('INVALID_RESPONSE');
+});
+
+/* 测试价值（PR 评审：确认面板来源文案与高风险摘要，2026-11-25）
+ * - 生产入口与可观察结果：pluginConsentPresentation（两端确认面板共用）与 parsePluginManagementReceipt 的输出文字。
+ * - 依据：维护者要求渠道统一为电脑端口径、高风险权限在确认前可见；电脑端 ghostInstallConsentSourceLabel /
+ *   ghostInstallSourceNoticeKey；ghostPermissionItems 只有 node:execute 的说明自标「高风险」。
+ * - 缺口：此前只测 trust 行；没有覆盖来源行、来源说明、高风险的判断口径和升级只看新增。
+ * - 最小失败输入：社区插件被写成「官方市场」；Node 权限混在列表里没有固定摘要；node:secret 被当作高风险。
+ * - tier: unit。
+ */
+describe('confirmation sheet wording', () => {
+  // Interpolating stand-in for i18next, so names and devices are visible in assertions.
+  const t = (key: string, args?: Record<string, unknown>) => {
+    const values = Object.entries(args ?? {}).filter(([name]) => name !== 'defaultValue').map(([name, value]) => `${name}=${String(value)}`);
+    return values.length ? `${key}(${values.join(',')})` : key;
+  };
+  const item = (key: string, kind: string, labelKey: string, detailKey?: string) => ({ key, kind, labelKey, ...(detailKey ? { detailKey } : {}) });
+  const nodeExecute = (labelKey = 'nodeRuntime') => item('node:execute', 'node', labelKey, 'nodeRuntimeDetail');
+  const install = (consent: Record<string, unknown>, permissions: any[]) => ({ requestId: 'r', initiator: 'user', origin: 'market',
+    ...consent, facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions } }) as any;
+
+  it('pins only the item the Host itself marks as high risk, whatever protocol label it carries', () => {
+    expect(isPinnedHighRiskPermission(nodeExecute('nodeRuntime'))).toBe(true);
+    expect(isPinnedHighRiskPermission(nodeExecute('nodeMcp'))).toBe(true);
+    // Other node items are not called high risk by the Host; kind alone must not decide.
+    for (const key of ['node:secret:token:worker.cjs:run', 'node:resident', 'node:child-spawn', 'harnesses', 'fs', 'notify'])
+      expect(isPinnedHighRiskPermission({ key })).toBe(false);
+    const secret = item('node:secret:token:worker.cjs:run', 'node', 'nodeSecret', 'nodeSecretDetail');
+    const view = pluginConsentPresentation(install({}, [item('notify', 'notify', 'notify', 'notifyDetail'), secret, nodeExecute('nodeMcp')]), t, 'Mac');
+    expect(view.highRisk).toBe('plugins.management.permissions.nodeRuntimeDetail');
+    // The pinned item moves first and keeps only its title; the others keep their explanations.
+    expect(view.permissions.map((row) => [row.title, row.detail])).toEqual([
+      ['plugins.management.permissions.nodeMcp', ''],
+      ['plugins.management.permissions.notify', 'plugins.management.permissions.notifyDetail'],
+      ['plugins.management.permissions.nodeSecret', 'plugins.management.permissions.nodeSecretDetail'],
+    ]);
+    expect(pluginConsentPresentation(install({}, [item('notify', 'notify', 'notify', 'notifyDetail')]), t).highRisk).toBeUndefined();
+  });
+
+  it('uses the computer\'s source line and source notices, and says which computer a new install goes to', () => {
+    const official = pluginConsentPresentation(install({}, []), t, 'Mac');
+    expect(official).toMatchObject({ device: 'plugins.market.installTo(device=Mac)', origin: 'plugins.notice.consentSource.market', sourceNotice: undefined });
+    expect(pluginConsentPresentation(install({ communityMarket: true }, []), t)).toMatchObject({
+      origin: 'plugins.notice.consentSource.market', sourceNotice: 'plugins.notice.sourceNotice.community' });
+    expect(pluginConsentPresentation(install({ origin: 'custom-market', originLabel: 'Demo Git Market' }, []), t)).toMatchObject({
+      origin: 'plugins.notice.consentSource.customMarket(name=Demo Git Market)', sourceNotice: 'plugins.notice.sourceNotice.customMarket' });
+    expect(pluginConsentPresentation(install({ origin: 'custom-market' }, []), t).origin).toBe('plugins.notice.consentSource.customMarketUnnamed');
+    expect(pluginConsentPresentation(install({ origin: 'local-file' }, []), t)).toMatchObject({
+      origin: 'plugins.notice.consentSource.localFile', sourceNotice: 'plugins.notice.sourceNotice.localFile' });
+    // A user-started install adds no initiator text; an Agent-started one wraps the source like the computer.
+    expect(pluginConsentPresentation(install({ initiator: 'agent' }, []), t).origin)
+      .toBe('plugins.notice.consentSource.initiatedByAgent(origin=plugins.notice.consentSource.market)');
+    expect(pluginConsentPresentation(install({ purpose: 'ui-capability' }, []), t).origin)
+      .toBe('plugins.notice.consentSource.market · plugins.uiApproval.purpose');
+  });
+
+  it('pins a high-risk item in an update only when the update adds it', () => {
+    const update = (added: any[], removed: any[]) => ({ requestId: 'r', initiator: 'user', origin: 'market', communityMarket: true,
+      facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added, removed,
+        unchangedCount: 2, builtinOauthClientChanged: false } }) as any;
+    const adds = pluginConsentPresentation(update([item('notify', 'notify', 'notify'), nodeExecute()], []), t, 'Mac');
+    expect(adds).toMatchObject({ device: 'Mac', sourceNotice: undefined, highRisk: 'plugins.management.permissions.nodeRuntimeDetail' });
+    expect(adds.permissions[0].title).toBe('plugins.management.permissions.added · plugins.management.permissions.nodeRuntime');
+    const removes = pluginConsentPresentation(update([item('notify', 'notify', 'notify')], [nodeExecute()]), t, 'Mac');
+    expect(removes.highRisk).toBeUndefined();
+    expect(removes.permissions[1]).toEqual({ title: 'plugins.management.permissions.removed · plugins.management.permissions.nodeRuntime',
+      detail: 'plugins.management.permissions.nodeRuntimeDetail' });
+  });
+
+  it('accepts the community flag only as true', () => {
+    const receipt = (communityMarket: unknown) => ({ operationId: 'op', phase: 'confirmation', consent: { requestId: 'r', initiator: 'user',
+      origin: 'market', ...(communityMarket === undefined ? {} : { communityMarket }), facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } });
+    expect(parsePluginManagementReceipt(receipt(true), 'op').consent?.communityMarket).toBe(true);
+    expect(parsePluginManagementReceipt(receipt(undefined), 'op').consent?.communityMarket).toBeUndefined();
+    for (const value of ['true', 1, false, null]) expect(() => parsePluginManagementReceipt(receipt(value), 'op')).toThrow('INVALID_RESPONSE');
+  });
 });

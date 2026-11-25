@@ -336,17 +336,20 @@
       "managementFailed": "Operación fallida",
       "confirmation": "Revisar los permisos del complemento"
     },
-    "consentOrigin": {
-      "market": "Mercado oficial",
-      "custom-market": "Mercado personalizado",
-      "local-file": "Archivo local",
-      "forge": "Construido localmente"
+    "taskCapability": "Para esta tarea",
+    "consentSource": {
+      "market": "Del mercado de complementos de {{appName}}",
+      "customMarket": "Del mercado personalizado “{{name}}”",
+      "customMarketUnnamed": "De un mercado personalizado",
+      "localFile": "De un archivo .cindy local",
+      "forge": "Complemento desarrollado localmente",
+      "initiatedByAgent": "Solicitado por Agent · {{origin}}"
     },
-    "initiator": {
-      "user": "Solicitado por ti",
-      "agent": "Solicitado por Agent"
-    },
-    "taskCapability": "Para esta tarea"
+    "sourceNotice": {
+      "community": "Este complemento lo desarrollan y mantienen miembros de la comunidad. {{appName}} ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso.",
+      "customMarket": "Asegúrate de que confías en este mercado y revisa los permisos que solicita el complemento.",
+      "localFile": "Antes de continuar, comprueba que el archivo procede de una fuente de confianza."
+    }
   },
   "uiApproval": {
     "title": "El complemento “{{name}}” ha agregado páginas interactivas. Revisa sus permisos antes de usarlas.",

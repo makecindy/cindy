@@ -336,17 +336,20 @@
       "managementFailed": "Échec de l'opération",
       "confirmation": "Autorisations du plugin"
     },
-    "consentOrigin": {
-      "market": "Marketplace officielle",
-      "custom-market": "Marketplace personnalisée",
-      "local-file": "Fichier local",
-      "forge": "Créé localement"
+    "taskCapability": "Pour cette tâche",
+    "consentSource": {
+      "market": "Depuis le marketplace de plugins {{appName}}",
+      "customMarket": "Depuis le marketplace personnalisé « {{name}} »",
+      "customMarketUnnamed": "Depuis un marketplace personnalisé",
+      "localFile": "Depuis un fichier .cindy local",
+      "forge": "Plugin développé localement",
+      "initiatedByAgent": "Demandé par l'Agent · {{origin}}"
     },
-    "initiator": {
-      "user": "Demandé par vous",
-      "agent": "Demandé par l'Agent"
-    },
-    "taskCapability": "Pour cette tâche"
+    "sourceNotice": {
+      "community": "Ce plugin est développé et maintenu par des membres de la communauté. {{appName}} a examiné cette version, mais ne peut pas garantir la sécurité du plugin dans toutes les situations d’utilisation.",
+      "customMarket": "Assurez-vous de faire confiance à ce marketplace et vérifiez les autorisations demandées par le plugin.",
+      "localFile": "Avant de poursuivre l’installation, assurez-vous que le fichier provient d’une source de confiance."
+    }
   },
   "uiApproval": {
     "title": "Le plugin « {{name}} » a ajouté des pages interactives. Vérifiez leurs autorisations avant de les utiliser.",

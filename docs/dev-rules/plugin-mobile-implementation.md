@@ -70,6 +70,22 @@
   或版本不一致时保持「结果待确认」，不打开任何实例。快照里没有时放开这一行并说明
   「没能确认结果、目前这台电脑上没有这个插件」，只陈述当前事实、不推断回滚，是否再装由用户决定。
   同标识冲突（`conflict`）只提示到电脑上处理。
+- 确认面板（全新安装与升级共用 `PluginManagementConfirmation(.ios).tsx`，文字由 `pluginConsentPresentation.ts`
+  统一给出，提案实现，待维护者确认）：
+  - 来源行与电脑端 `ghostInstallConsentSourceLabel` 同口径：「来自 {{appName}} 插件市场」「来自自定义市场「<市场名>」」
+    「来自本地 .cindy 文件」「本地开发的插件」；用户发起不加说明，Agent 发起套「由 Agent 发起 · …」。品牌名走 i18n
+    的 `{{appName}}`（两版同为 Cindy，见 region-and-editions.md §2.1）。
+  - 来源说明与电脑端 `ghostInstallSourceNoticeKey` 同规则，只在全新安装时显示：回执带 `communityMarket: true`
+    （Host 核实的社区发布者）时显示社区说明，自定义市场显示「请确认你信任该市场……」，本地文件显示对应提示。
+    解析只接受缺省或 `true`。
+  - 全新安装首行写「安装到 <电脑>」，升级仍只写电脑名。
+  - 高风险固定段：只固定显示 Host 自己文案标明「高风险」的那一类——运行随包 Node 程序（权限 key `node:execute`，
+    见 `isPinnedHighRiskPermission`）。手机端不另定分级；`kind: 'node'` 还包含凭证注入、常驻、代启子进程等电脑未标
+    高风险的项，所以按稳定的 diff key 判断。该项排在权限列表最前、列表里只留标题，说明原文放在按钮正上方、
+    滚动区之外（iOS 在 ComposerSheet 的 footer，Android 在 ScrollView 与按钮之间），textPrimary、medium 字重、
+    不用警示色，所以 iOS 半高面板与 Android 矮屏都不用滚动就能看到。升级只在新增项里有它时显示。
+  - 自定义市场的仓库地址：Host 的确认回执只带市场名（marketplace.json 的 `name`），手机目前只显示市场名；
+    显示仓库需要 Host 增加可选的脱敏字段，做法待维护者选择。
 - 第一版不做：README、安装前权限预览、下载进度、自定义市场图标、替换同标识插件、今日推荐、
   手机添加自定义市场、兼容 0.1.112–0.1.129 的全量读取回退。组织插件首装遇到电脑上残留的同名作品库时，
   电脑会弹只能在电脑上点的原生对话框，手机会等到超时（Host 行为未改）。

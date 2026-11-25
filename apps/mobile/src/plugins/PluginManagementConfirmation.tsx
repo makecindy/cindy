@@ -22,7 +22,7 @@ export function PluginManagementConfirmation(
   const { t } = useTranslation(),
     styles = useThemedStyles(makeStyles);
   const { consent, visible, answer } = usePluginConsent(props);
-  const info = consent ? pluginConsentPresentation(consent, t) : undefined;
+  const info = consent ? pluginConsentPresentation(consent, t, props.deviceName) : undefined;
   return (
     <SheetModal
       nativePresentation
@@ -36,7 +36,7 @@ export function PluginManagementConfirmation(
             {t("plugins.notice.title.confirmation")}
           </Text>
           <Text style={styles.title}>{info?.title}</Text>
-          {[props.deviceName, info?.identity, info?.trust, info?.origin, info?.version]
+          {[info?.device, info?.identity, info?.trust, info?.origin, info?.sourceNotice, info?.version]
             .filter(Boolean)
             .map((text, index) => (
               <Text key={index} style={styles.body}>
@@ -57,6 +57,12 @@ export function PluginManagementConfirmation(
             </Text>
           ))}
         </ScrollView>
+        {/* Outside the scroll area: always visible above the buttons, even on short screens. */}
+        {info?.highRisk ? (
+          <Text testID="plugins.management.highRisk" style={styles.highRisk}>
+            {info.highRisk}
+          </Text>
+        ) : null}
         <View style={styles.actions}>
           {[false, true].map((accept) => (
             <Pressable
@@ -106,6 +112,13 @@ const makeStyles = (c: ThemeColors) =>
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
       color: c.textSecondary,
+    },
+    highRisk: {
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.medium,
+      color: c.textPrimary,
+      paddingBottom: spacing.md,
     },
     actions: { flexDirection: "row", gap: spacing.sm },
     button: {

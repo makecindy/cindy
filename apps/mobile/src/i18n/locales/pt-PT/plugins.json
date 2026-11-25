@@ -336,17 +336,20 @@
       "managementFailed": "Falha na operação",
       "confirmation": "Rever permissões do plugin"
     },
-    "consentOrigin": {
-      "market": "Mercado oficial",
-      "custom-market": "Mercado personalizado",
-      "local-file": "Ficheiro local",
-      "forge": "Compilado localmente"
+    "taskCapability": "Para esta tarefa",
+    "consentSource": {
+      "market": "Do mercado de plugins de {{appName}}",
+      "customMarket": "Do mercado personalizado “{{name}}”",
+      "customMarketUnnamed": "De um mercado personalizado",
+      "localFile": "De um ficheiro .cindy local",
+      "forge": "Plugin desenvolvido localmente",
+      "initiatedByAgent": "Solicitado pelo Agent · {{origin}}"
     },
-    "initiator": {
-      "user": "Pedido por si",
-      "agent": "Pedido pelo Agent"
-    },
-    "taskCapability": "Para esta tarefa"
+    "sourceNotice": {
+      "community": "Este plugin é desenvolvido e mantido por membros da comunidade. A {{appName}} analisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de utilização.",
+      "customMarket": "Confirme que confia neste mercado e verifique as permissões pedidas pelo plugin.",
+      "localFile": "Antes de continuar a instalação, confirme que o ficheiro veio de uma fonte de confiança."
+    }
   },
   "uiApproval": {
     "title": "O plugin «{{name}}» adicionou páginas interativas. Reveja as respetivas permissões antes de as usar.",
