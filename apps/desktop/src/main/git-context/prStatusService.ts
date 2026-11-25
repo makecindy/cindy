@@ -79,8 +79,16 @@ export interface PrRemoteState {
 }
 
 export interface PrStatusServiceDeps {
-  /** 读本机 gh 登录 token,拿不到时带原因(见 ghCliTokenSource.readTokenDetailed)。 */
-  readToken: () => Promise<GhCliTokenReadResult>;
+  /**
+   * 读本机 gh 登录 token,拿不到时带原因(见 ghCliTokenSource.readTokenDetailed)。
+   * 带 PR 参数是因为同一台电脑可能登录多个账号:私有仓库要用看得到它的那个账号读。
+   */
+  readToken: (q: PrStatusQuery) => Promise<GhCliTokenReadResult>;
+  /** 这个仓库 404 后,换一个本机能读到它的账号(failedToken 是刚被拒的那份);没有时返回 null。 */
+  recoverToken?: (
+    q: PrStatusQuery,
+    failedToken: string,
+  ) => Promise<GhCliTokenReadResult | null>;
   /** 查单条 PR。404 等错误直接抛(带 status 的错误对象)。 */
   readGitlabToken?: (host: string) => Promise<GlabTokenResult>;
   fetchGitlab?: (token: string, q: PrStatusQuery) => Promise<PrRemoteState>;
@@ -271,7 +279,7 @@ export class PrStatusService {
     try {
       read = gitlab
         ? ((await this.deps.readGitlabToken?.(q.host ?? '')) ?? { ok: false, reason: 'no-token' })
-        : await this.deps.readToken();
+        : await this.deps.readToken(q);
     } catch {
       return { ok: false, ...base, reason: 'no-token' };
     }
@@ -291,7 +299,7 @@ export class PrStatusService {
     try {
       const fetchPr = gitlab ? this.deps.fetchGitlab : this.deps.fetchPr;
       if (!fetchPr) return { ok: false, ...base, reason: 'unsupported' };
-      const remote = await fetchPr(token, q);
+      const remote = await this.fetchRemote(fetchPr, q, token, gitlab);
       return {
         ok: true,
         ...base,
@@ -324,6 +332,26 @@ export class PrStatusService {
         status: typeof status === 'number' ? status : undefined,
       });
       return { ok: false, ...base, reason: 'fetch-failed' };
+    }
+  }
+
+  /**
+   * 私有仓库对没权限的账号回 404 而不是 403,所以 404 时按仓库换本机另一个已登录账号再读一次。
+   * 401/403 与其它错误原样上抛:凭证失效、限流不能当成「换个账号就好」。
+   */
+  private async fetchRemote(
+    fetchPr: (token: string, q: PrStatusQuery) => Promise<PrRemoteState>,
+    q: PrStatusQuery,
+    token: string,
+    gitlab: boolean,
+  ): Promise<PrRemoteState> {
+    try {
+      return await fetchPr(token, q);
+    } catch (err) {
+      if (gitlab || (err as { status?: unknown })?.status !== 404) throw err;
+      const alt = await this.deps.recoverToken?.(q, token).catch(() => null);
+      if (!alt?.ok) throw err;
+      return await fetchPr(alt.token, q);
     }
   }
 }

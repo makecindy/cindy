@@ -475,6 +475,39 @@ describe('PrStatusService', () => {
     expect((await svcNet.getStatuses([Q]))[0]).toMatchObject({ ok: false, reason: 'fetch-failed' });
   });
 
+  it('活跃账号 404 时换本机另一个账号再读,读不到仍是 not-found', async () => {
+    // 私有仓库对没权限的账号回 404;同机另一个 gh 账号能看到它。
+    const fetchPr = vi.fn(async (token: string) => {
+      if (token !== 'work-token') throw Object.assign(new Error('nf'), { status: 404 });
+      return remote({});
+    });
+    const recoverToken = vi.fn(async () => ({ ok: true as const, token: 'work-token' }));
+    const svc = new PrStatusService({ readToken: TOKEN_OK, recoverToken, fetchPr });
+    expect((await svc.getStatuses([Q]))[0]).toMatchObject({ ok: true, status: 'open' });
+    expect(fetchPr.mock.calls.map(([token]) => token)).toEqual(['ghp_x', 'work-token']);
+
+    const none = new PrStatusService({
+      readToken: TOKEN_OK,
+      recoverToken: async () => null,
+      fetchPr: async () => {
+        throw Object.assign(new Error('nf'), { status: 404 });
+      },
+    });
+    expect((await none.getStatuses([Q]))[0]).toMatchObject({ ok: false, reason: 'not-found' });
+
+    // 403/限流不换账号:凭证与配额问题不能靠换身份掩盖。
+    const recover403 = vi.fn(async () => ({ ok: true as const, token: 'work-token' }));
+    const blocked = new PrStatusService({
+      readToken: TOKEN_OK,
+      recoverToken: recover403,
+      fetchPr: async () => {
+        throw Object.assign(new Error('rate'), { status: 403 });
+      },
+    });
+    expect((await blocked.getStatuses([Q]))[0]).toMatchObject({ ok: false, reason: 'fetch-failed' });
+    expect(recover403).not.toHaveBeenCalled();
+  });
+
   it('批量查询上限 10 条,超出忽略', async () => {
     const fetchPr = vi.fn(async () => remote({}));
     const svc = new PrStatusService({ readToken: TOKEN_OK, fetchPr });

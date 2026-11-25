@@ -1,0 +1,132 @@
+/**
+ * repoAccountResolver — 本机登录了多个 gh 账号时,按仓库选该用哪个账号读 PR。
+ *
+ * 动机:有人用不同 GitHub 账号维护不同项目。私有仓库对没有权限的账号返回 404
+ * (不是 403),只认活跃账号就会把「另一个账号能看到」的 PR 显示成不存在。
+ *
+ * 约束:
+ *   - 活跃账号仍是默认;只有它 404 之后才按仓库去试其它已登录账号,正常路径零额外请求。
+ *   - 判断依据是**仓库**权限,不是某一条 PR:否则一次查错的 PR 编号会把整个仓库记成读不到。
+ *   - 选中的账号按仓库记住(默认 30 分钟);确认所有账号都读不到时也记 10 分钟。
+ *   - 没查成(网络/限流/5xx/账号列表读不到)不算「读不到」,不写失败记忆,下一次刷新重试。
+ *   - 记着的账号也会失去权限:它自己 404 时按失败的那份 token 重新探测,而不是一直用它。
+ *   - 401/403 不换账号:凭证失效、限流和无权限是不同的事,不能靠换身份掩盖。
+ */
+
+import type { PrIdentity } from '@cindy/maker-shared';
+import type { GhCliTokenReadResult } from './ghCliTokenSource.js';
+
+const DEFAULT_TTL_MS = 30 * 60_000;
+const DEFAULT_MISS_TTL_MS = 10 * 60_000;
+
+export interface RepoAccountDeps {
+  /** 当前活跃账号(原 gh → 插件 PAT → GitHub App 的同一条链)。 */
+  readToken(): Promise<GhCliTokenReadResult>;
+  /** 本机登录的账号;`null` 表示这次探测没做成(不能当成「没有备用账号」)。 */
+  listLogins(): Promise<string[] | null>;
+  readTokenForLogin(login: string): Promise<string | null>;
+  /** 这个 token 对这个仓库有没有读权限;'unknown' 表示没查成,不能当成没有权限。 */
+  repoAccess(token: string, pr: PrIdentity): Promise<boolean | 'unknown'>;
+  ttlMs?: number;
+  missTtlMs?: number;
+  now?: () => number;
+}
+
+export interface RepoAccountResolver {
+  /** 这个仓库该用哪个账号:记过的账号优先,否则活跃账号。永不抛错。 */
+  tokenFor(pr: PrIdentity): Promise<GhCliTokenReadResult>;
+  /**
+   * 404 之后换一个能读到它的账号并记住;没有这样的账号时返回 null。永不抛错。
+   * failedToken 是刚被拒的那份凭证:如果它就是记住的账号,丢掉这个记忆重新探测。
+   */
+  recover(pr: PrIdentity, failedToken?: string): Promise<GhCliTokenReadResult | null>;
+  reset(): void;
+}
+
+export function createRepoAccountResolver(deps: RepoAccountDeps): RepoAccountResolver {
+  const ttl = deps.ttlMs ?? DEFAULT_TTL_MS;
+  const missTtl = deps.missTtlMs ?? DEFAULT_MISS_TTL_MS;
+  const now = deps.now ?? Date.now;
+  const chosen = new Map<string, { login: string; until: number }>();
+  const missing = new Map<string, number>();
+  const pending = new Map<string, Promise<GhCliTokenReadResult | null>>();
+  const key = (pr: PrIdentity) => `${pr.owner}/${pr.repo}`.toLowerCase();
+  // 登录态变化会重置缓存;重置前发起的探测不能把旧结果写回来。
+  let generation = 0;
+
+  async function saved(pr: PrIdentity): Promise<GhCliTokenReadResult | null> {
+    const k = key(pr);
+    const hit = chosen.get(k);
+    if (!hit) return null;
+    if (hit.until <= now()) {
+      chosen.delete(k);
+      return null;
+    }
+    const token = await deps.readTokenForLogin(hit.login).catch(() => null);
+    if (token) return { ok: true, token };
+    // 那个账号登出了:忘掉它,回到活跃账号。
+    chosen.delete(k);
+    return null;
+  }
+
+  async function find(pr: PrIdentity): Promise<GhCliTokenReadResult | null> {
+    const k = key(pr);
+    // 这个仓库已经选好账号了:直接用,不必再探一遍。
+    const known = await saved(pr).catch(() => null);
+    if (known) return known;
+    if ((missing.get(k) ?? 0) > now()) return null;
+    const gen = generation;
+    let unknown = false;
+    const active = await deps.readToken();
+    const logins = await deps.listLogins();
+    // 账号列表没探测成功:整体当没查成,不留失败记忆(下次重新探测)。
+    if (!logins) return null;
+    for (const login of logins) {
+      const token = await deps.readTokenForLogin(login);
+      // 活跃账号刚刚才 404,不必再问它一次。
+      if (!token || (active.ok && active.token === token)) continue;
+      const access = await deps.repoAccess(token, pr);
+      if (access === 'unknown') {
+        unknown = true;
+        continue;
+      }
+      if (!access) continue;
+      if (gen !== generation) return null;
+      chosen.set(k, { login, until: now() + ttl });
+      missing.delete(k);
+      return { ok: true, token };
+    }
+    // 没查成,或者登录态刚变过:不留下失败记忆,下一次刷新重新探测。
+    if (unknown || gen !== generation) return null;
+    missing.set(k, now() + missTtl);
+    return null;
+  }
+
+  return {
+    async tokenFor(pr: PrIdentity): Promise<GhCliTokenReadResult> {
+      return (await saved(pr)) ?? deps.readToken();
+    },
+    async recover(pr: PrIdentity): Promise<GhCliTokenReadResult | null> {
+      const k = key(pr);
+      // 能走到 recover 就是因为「手上这个 token 刚被 404 了」,而它可能就是记住的选择。
+      // 不先丢掉,下面的 find() 会把同一个 token 原样取回来,后面的账号探测一次都不跑。
+      chosen.delete(k);
+      const inflight = pending.get(k);
+      if (inflight) return inflight;
+      // 同一仓库的多条 PR 共用一次探测。
+      const p = find(pr)
+        .catch(() => null)
+        .finally(() => {
+          if (pending.get(k) === p) pending.delete(k);
+        });
+      pending.set(k, p);
+      return p;
+    },
+    reset() {
+      generation += 1;
+      chosen.clear();
+      missing.clear();
+      pending.clear();
+    },
+  };
+}

@@ -51,12 +51,12 @@ export class GithubReadTransport {
         ...(options.body ? { body: JSON.stringify(options.body) } : {}),
       });
       if (generation !== this.generation) throw new Error('GITHUB_AUTH_CHANGED');
-      if (
+      const rateLimited =
         response.status === 429 ||
         (response.status === 403 &&
           (response.headers.has('retry-after') ||
-            response.headers.get('x-ratelimit-remaining') === '0'))
-      ) {
+            response.headers.get('x-ratelimit-remaining') === '0'));
+      if (rateLimited) {
         const retry = Number(response.headers.get('retry-after'));
         const reset = Number(response.headers.get('x-ratelimit-reset')) * 1000;
         this.retryAt.set(
@@ -73,6 +73,8 @@ export class GithubReadTransport {
       if (!response.ok)
         throw Object.assign(new Error(`GITHUB_HTTP_${response.status}`), {
           status: response.status,
+          // 限流不是权限问题:调用方要和「确认读不到」区分开,不能写失败记忆。
+          ...(rateLimited ? { rateLimited: true } : {}),
         });
       const data: unknown = await response.json();
       if (generation !== this.generation) throw new Error('GITHUB_AUTH_CHANGED');

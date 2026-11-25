@@ -49,6 +49,7 @@ import type { GithubReadService } from './githubReadService';
 import type { GithubReadMethod } from '@cindy/maker-shared';
 import { optionalNullableString, requireString, throwIpcError } from '../utils/ipcValidate';
 import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
+import { createRepoAccountResolver } from './repoAccountResolver.js';
 import { registerGithubSetupIpc } from './githubSetupIpc.js';
 import { GitContextService } from './GitContextService.js';
 import {
@@ -122,6 +123,36 @@ const ghCliTokenSource = getSharedGhCliTokenSource();
 async function readGithubToken() {
   return readGithubTokenDetailed();
 }
+
+/**
+ * 这个 token 对这个仓库有没有读权限。404 是确定没有;其余错误(403 限流、超时、网络、5xx)
+ * 是没查成,不能当成没权限记下来。用仓库而不是单条 PR:一次写错的 PR 编号不能把整个仓
+ * 库记成读不到。
+ */
+async function repoAccess(token: string, q: PrStatusQuery): Promise<boolean | 'unknown'> {
+  try {
+    await new GithubClient({
+      token,
+      owner: q.owner,
+      repo: q.repo,
+      fetchImpl: githubStatusFetch(token),
+    }).getRepo();
+    return true;
+  } catch (err) {
+    const { status, rateLimited } = err as { status?: unknown; rateLimited?: unknown };
+    // 带限流标记的 403/429 只是「现在没查成」,不是「这个账号读不到这个仓库」。
+    if (rateLimited === true) return 'unknown';
+    return status === 404 || status === 403 ? false : 'unknown';
+  }
+}
+
+/** 本机登录多个 gh 账号时,按仓库选用看得到它的那个(见 repoAccountResolver)。 */
+const repoAccounts = createRepoAccountResolver({
+  readToken: readGithubToken,
+  listLogins: () => ghCliTokenSource.listLogins(),
+  readTokenForLogin: (login) => ghCliTokenSource.readTokenForLogin(login),
+  repoAccess,
+});
 
 async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteState> {
   // fetchImpl:api.github.com 是境外端点,走吃系统代理的通道(见 maker-host/outbound-fetch)。
@@ -251,7 +282,8 @@ export function registerGitContextIpc(deps: { readGitlabPluginToken: (host: stri
     onChanged: (snapshot) => broadcastToAllWindows(GIT_CONTEXT_PUSH.CHANGED, snapshot),
   });
   prStatusService = new PrStatusService({
-    readToken: readGithubToken,
+    readToken: (q) => repoAccounts.tokenFor(q),
+    recoverToken: (q, failedToken) => repoAccounts.recover(q, failedToken),
     readGitlabToken: host => readGitlabStatusToken(host, glabCliTokenSource, activeOwnerScopeKey, deps.readGitlabPluginToken),
     fetchGitlab: (token, query) => fetchGitlabMrStatus(token, query, outboundFetch),
     rejectGitlabToken: (host) => glabCliTokenSource.rejectToken(host),
@@ -281,6 +313,7 @@ export function registerGitContextIpc(deps: { readGitlabPluginToken: (host: stri
   setGithubReadRuntime({ read: readGithub, manage: manageGithubPrs });
   registerGithubSetupIpc(() => {
     prStatusService?.invalidate();
+    repoAccounts.reset();
     githubTransport.invalidate();
   });
   ipcMain.handle('git-context:github-read', async (event, payload: unknown) => {
