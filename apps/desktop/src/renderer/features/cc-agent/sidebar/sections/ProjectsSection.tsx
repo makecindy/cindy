@@ -50,7 +50,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { Tip } from '@/components/ui/tooltip';
+import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1623,6 +1623,9 @@ export function SessionGroupNode({
                 <span className="size-5 shrink-0" />
               </div>
               <div
+                onPointerDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
                 className={cn(
                   'absolute right-0 top-0 flex h-6 items-center gap-0.5',
                   'pointer-events-none opacity-0 transition-opacity duration-[var(--motion-fast)]',
@@ -1630,27 +1633,17 @@ export function SessionGroupNode({
                   'focus-within:pointer-events-auto focus-within:opacity-100',
                 )}
               >
-                <Tip text={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}>
-                  <button
-                    type="button"
-                    aria-label={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}
-                    disabled={isCreateDisabled}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (!isCreateDisabled) onCreateDialogue();
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
-                    className={cn(
-                      'flex size-5 shrink-0 items-center justify-center rounded-md',
-                      'text-sidebar-action-icon hover:text-foreground',
-                      'hover:bg-sidebar-item-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                      'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
-                    )}
-                  >
-                    <SquarePen size={14} strokeWidth={2} />
-                  </button>
-                </Tip>
+                <SidebarIconButton
+                  icon={SquarePen}
+                  label={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}
+                  disabled={isCreateDisabled}
+                  onClick={onCreateDialogue}
+                  className={cn(
+                    'size-5 text-sidebar-action-icon hover:text-foreground [&>svg]:size-3.5',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    'disabled:cursor-not-allowed disabled:opacity-50',
+                  )}
+                />
               </div>
             </div>
           </div>
