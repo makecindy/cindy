@@ -47,8 +47,9 @@ export function WorkflowAgentStrip({
   const overflow = cells.length - visible.length;
   // title 是用户可见 tooltip:状态词走 i18n(与树行同一词表 key),词表外原词兜底。
   const cellTitle = (cell: WorkflowAgentStripCell): string | undefined => {
-    const stateLabel = cell.state
-      ? t(`chat.workflowTree.state.${cell.state}`, { defaultValue: cell.state })
+    const state = cell.skipped ? 'stopped' : cell.state;
+    const stateLabel = state
+      ? t(`chat.workflowTree.state.${state}`, { defaultValue: state })
       : undefined;
     if (cell.label && stateLabel) return `${cell.label} · ${stateLabel}`;
     return cell.label ?? stateLabel;

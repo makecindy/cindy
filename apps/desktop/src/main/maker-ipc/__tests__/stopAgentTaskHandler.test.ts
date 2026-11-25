@@ -144,10 +144,26 @@ describe('stop agent task IPC handler', () => {
  * 现有顶层停止用例不覆盖新通道;最小失败输入是缺 agentId、跨 scope id 和不支持。
  */
 describe('stop workflow agent IPC handler', () => {
+  // Electron security §5: a rejected sender cannot reach the session lookup.
+  it('rejects an unauthorized caller before looking up the session', async () => {
+    const harness = new IpcHarness();
+    const getLiveSession = vi.fn();
+    const rejection = new Error('untrusted sender');
+    registerStopWorkflowAgentHandler(harness, {
+      assertCaller: () => { throw rejection; },
+      getLiveSession,
+    });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.STOP_WORKFLOW_AGENT, 'session-1', 'wf-1', 'agent-1'),
+    ).rejects.toBe(rejection);
+    expect(getLiveSession).not.toHaveBeenCalled();
+  });
+
   it('validates all three ids before looking up a session', async () => {
     const harness = new IpcHarness();
     const getLiveSession = vi.fn();
-    registerStopWorkflowAgentHandler(harness, { getLiveSession });
+    registerStopWorkflowAgentHandler(harness, { assertCaller: vi.fn(), getLiveSession });
 
     for (const args of [
       ['', 'wf-1', 'agent-1'],
@@ -166,6 +182,7 @@ describe('stop workflow agent IPC handler', () => {
     const harness = new IpcHarness();
     const stopWorkflowAgent = vi.fn().mockResolvedValue(undefined);
     registerStopWorkflowAgentHandler(harness, {
+      assertCaller: vi.fn(),
       getLiveSession: vi.fn(() => ({ stopWorkflowAgent })),
     });
 
@@ -177,7 +194,7 @@ describe('stop workflow agent IPC handler', () => {
 
   it('is idempotent when the owning process is no longer loaded', async () => {
     const harness = new IpcHarness();
-    registerStopWorkflowAgentHandler(harness, { getLiveSession: vi.fn(() => undefined) });
+    registerStopWorkflowAgentHandler(harness, { assertCaller: vi.fn(), getLiveSession: vi.fn(() => undefined) });
 
     await expect(
       harness.invoke(MAKER_INVOKE.STOP_WORKFLOW_AGENT, 'session-1', 'wf-1', 'agent-1'),
@@ -192,7 +209,7 @@ describe('stop workflow agent IPC handler', () => {
       .mockRejectedValueOnce(unsupported)
       .mockRejectedValueOnce(new Error('rpc timeout'));
     registerStopWorkflowAgentHandler(harness, {
-      getLiveSession: vi.fn(() => ({ stopWorkflowAgent })),
+      assertCaller: vi.fn(),      getLiveSession: vi.fn(() => ({ stopWorkflowAgent })),
     });
 
     await expect(

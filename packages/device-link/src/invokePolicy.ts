@@ -68,6 +68,7 @@ const INTERACTIVE_INVOKE_CHANNELS = new Set([
   'maker:input:remove',
   'maker:resolve-interaction',
   'maker:agent-task:stop',
+  'maker:workflow-agent:stop',
 ]);
 
 export function isInteractiveInvoke(channel: string, args?: readonly unknown[]): boolean {
@@ -86,7 +87,7 @@ export function isInteractiveInvoke(channel: string, args?: readonly unknown[]):
   }
   if (op === 'close') return true;
   return op === 'call' && (method === 'send' || method === 'steer' || method === 'abort'
-    || method === 'requestGracefulStop' || method === 'stopBackgroundTask');
+    || method === 'requestGracefulStop' || method === 'stopBackgroundTask' || method === 'stopWorkflowAgent');
 }
 
 export type InvokePriority = 'interactive' | 'foreground' | 'background';

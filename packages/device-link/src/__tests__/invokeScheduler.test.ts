@@ -328,7 +328,7 @@ describe("invoke admission", () => {
   });
 
   it("classifies sends and interaction answers as interactive, never demoted by a background hint", () => {
-    for (const channel of ["maker:input:enqueue", "maker:input:steer", "maker:input:stop", "maker:send", "maker:resolve-interaction", "maker:agent-task:stop"]) {
+    for (const channel of ["maker:input:enqueue", "maker:input:steer", "maker:input:stop", "maker:send", "maker:resolve-interaction", "maker:agent-task:stop", "maker:workflow-agent:stop"]) {
       expect(isInteractiveInvoke(channel)).toBe(true);
       expect(resolveInvokePriority(channel, true)).toBe("interactive");
     }
@@ -340,7 +340,7 @@ describe("invoke admission", () => {
     expect(resolveInvokePriority("maker:predict-prompt")).toBe("background");
     const remote = 'maker:remote-agent:v1';
     for (const request of [
-      ...['send', 'steer', 'abort', 'requestGracefulStop', 'stopBackgroundTask'].map(method => ({ op: 'call', method })),
+      ...['send', 'steer', 'abort', 'requestGracefulStop', 'stopBackgroundTask', 'stopWorkflowAgent'].map(method => ({ op: 'call', method })),
       ...['interaction', 'callback', 'error'].map(type => ({ op: 'reply', payload: { json: { type } } })),
       { op: 'close' },
     ]) expect(resolveInvokePriority(remote, true, [request])).toBe('interactive');

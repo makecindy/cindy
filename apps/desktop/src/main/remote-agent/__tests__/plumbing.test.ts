@@ -375,6 +375,31 @@ describe('tunnel', () => {
   });
 });
 
+describe('remote Workflow Agent stop', () => {
+  // PR #12825 unit: a host without the advertised method must never receive
+  // a fallback stop. An upgraded host must receive the exact two child-scope IDs.
+  it.each([false, true])('honors the executor capability (advertised: %s)', async advertised => {
+    const call = vi.fn(async () => undefined);
+    const { handle } = createRemoteAgentHandle({
+      client: { call } as unknown as RemoteAgentRunClient,
+      started: {
+        id: 'remote', agentKind: 'claude-code', model: 'm', shadowDir: '',
+        methods: advertised ? ['stopWorkflowAgent'] : [], state: {},
+      },
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval() {}, newId: () => 'req', dispose: async () => undefined,
+    });
+
+    if (advertised) {
+      await handle.stopWorkflowAgent!('workflow-1', 'agent-2');
+      expect(call).toHaveBeenCalledExactlyOnceWith('stopWorkflowAgent', ['workflow-1', 'agent-2']);
+    } else {
+      expect(handle.stopWorkflowAgent).toBeUndefined();
+      expect(call).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe('remote AgentSessionHandle close', () => {
   // #9985 unit: close classification must use the foreground terminal and local
   // teardown intent. Existing idle cleanup tests never sent a turn before close.

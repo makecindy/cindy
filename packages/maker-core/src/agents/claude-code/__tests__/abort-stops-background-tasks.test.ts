@@ -2762,26 +2762,47 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.close().catch(() => undefined);
   });
 
-  it('stopWorkflowAgent keeps a natural completion that wins the stop race', async () => {
+  // PR #12825: a retry may arrive before the first attempt's stop is acknowledged.
+  // Unit coverage goes through the provider handle and observes the next attempt's progress.
+  it.each([
+    { state: 'done', attempt: 1 },
+    { state: 'progress', attempt: 2 },
+  ])('stopWorkflowAgent preserves $state for attempt $attempt when a stop settles late', async ({ state, attempt }) => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream();
     await handle.send({ type: 'user', content: 'spawn workflow' });
     stream.emit(taskStarted('wf-1', 'local_workflow'));
     stream.emit(workflowProgress('wf-1', [
       { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'A', state: 'progress' },
+      { type: 'workflow_agent', index: 1, agentId: 'agent-b', label: 'B', state: 'progress' },
     ]));
-    await waitFor(() => observedWorkflowRows(events)?.length === 1, 'workflow row observed');
+    await waitFor(() => observedWorkflowRows(events)?.length === 2, 'workflow rows observed');
 
     const stopped = createDeferred();
     fakeQuery.stopTask!.mockImplementationOnce(() => stopped.promise);
     const request = handle.stopWorkflowAgent!('wf-1', 'agent-a');
     stream.emit(workflowProgress('wf-1', [
-      { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'A', state: 'done' },
+      { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'A', state, attempt },
+      { type: 'workflow_agent', index: 1, agentId: 'agent-b', label: 'B', state: 'progress' },
     ]));
-    await waitFor(() => observedWorkflowRows(events)?.[0]?.state === 'done', 'natural done observed');
+    await waitFor(() => observedWorkflowRows(events)?.[0]?.attempt === attempt, 'updated attempt observed');
     stopped.resolve();
     await request;
 
-    expect(observedWorkflowRows(events)?.[0]?.state).toBe('done');
+    stream.emit(workflowProgress('wf-1', [
+      { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'Updated A', state, attempt },
+      { type: 'workflow_agent', index: 1, agentId: 'agent-b', label: 'B', state: 'progress' },
+    ]));
+    await waitFor(() => observedWorkflowRows(events)?.[0]?.label === 'Updated A', 'next progress observed');
+    expect(observedWorkflowRows(events)?.[0]?.state).toBe(state);
+    expect(observedWorkflowRows(events)?.[1]?.state).toBe('progress');
+    expect(fakeQuery.stopTask).toHaveBeenCalledExactlyOnceWith('agent-a');
+    if (attempt === 2) {
+      await handle.stopWorkflowAgent!('wf-1', 'agent-a');
+      await waitFor(() => observedWorkflowRows(events)?.[0]?.state === 'stopped', 'retry stopped');
+      expect(observedWorkflowRows(events)?.[1]?.state).toBe('progress');
+      expect(fakeQuery.stopTask!.mock.calls).toEqual([['agent-a'], ['agent-a']]);
+    }
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
     stream.end();
     await handle.close().catch(() => undefined);
   });

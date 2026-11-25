@@ -11,6 +11,7 @@ import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 export interface StopWorkflowAgentHandlerDeps {
+  assertCaller(event: unknown): void;
   getLiveSession(
     sessionId: string,
   ): { stopWorkflowAgent(workflowTaskId: string, agentId: string): Promise<void> } | undefined;
@@ -33,7 +34,8 @@ export function registerStopWorkflowAgentHandler(
 ): void {
   registry.handle(
     MAKER_INVOKE.STOP_WORKFLOW_AGENT,
-    async (_event, sessionId: unknown, workflowTaskId: unknown, agentId: unknown) => {
+    async (event, sessionId: unknown, workflowTaskId: unknown, agentId: unknown) => {
+      deps.assertCaller(event);
       requiredId(sessionId, 'sessionId');
       requiredId(workflowTaskId, 'workflowTaskId');
       requiredId(agentId, 'agentId');

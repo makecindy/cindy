@@ -386,8 +386,8 @@ describe('icon-only button tooltip coverage', () => {
 
   it('keeps disabled icon actions hoverable and keyboard discoverable', () => {
     const sidebar = rendererSource('features/cc-agent/CCAgentSidebarUpper.tsx');
-    const backgroundTasks = rendererSource(
-      'features/right-sidebar/plugins/background-tasks/BackgroundTasksBody.tsx',
+    const taskStopButton = rendererSource(
+      'features/right-sidebar/plugins/background-tasks/TaskStopButton.tsx',
     );
 
     expect(sidebar).toContain("t('ccAgent.sidebar.bulkSelection.actionInProgress')");
@@ -408,7 +408,7 @@ describe('icon-only button tooltip coverage', () => {
     expect(sidebar).toContain("t('ccAgent.sidebar.creationInProgress')");
     expect(sidebar).toContain("t('ccAgent.sidebar.projectAction.newInDirectory')");
     expect(sidebar).toContain("t('ccAgent.remoteSession.actionsUnavailable')");
-    expect(backgroundTasks).toContain(
+    expect(taskStopButton).toContain(
       "`${actionLabel} — ${t('rightSidebar.backgroundTasks.stopping')}`",
     );
     const rail = rendererSource('features/cc-agent/sidebar/RailNav.tsx');

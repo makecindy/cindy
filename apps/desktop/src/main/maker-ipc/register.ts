@@ -7102,6 +7102,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // Workflow 行级停止使用独立通道;旧远程端不支持时必须明确失败,不能误停顶层任务。
   registerStopWorkflowAgentHandler(createElectronIpcHandlerRegistry(), {
+    assertCaller: (event) => {
+      if (!isDeviceLinkInvoke()) {
+        assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+      }
+    },
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? undefined,
   });
 

@@ -97,7 +97,7 @@ export function TaskStopButton({
         <Button
           type="button"
           variant="secondary"
-          tone={danger ? 'danger' : 'quiet'}
+          tone={danger ? (showLabel ? 'danger-solid' : 'danger') : 'quiet'}
           size="sm"
           compact={showLabel}
           loading={stopping}
