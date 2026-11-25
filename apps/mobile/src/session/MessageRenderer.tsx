@@ -33,7 +33,7 @@ import { AgentErrorDetails } from './AgentErrorDetails';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionThreadSummary, type CompanionThreads } from './CompanionThreads';
-import { companionTurnContinuations } from './companionConversationPresentation';
+import { companionTimeGroupRows, companionTurnContinuations } from './companionConversationPresentation';
 import { CompanionMessageActions } from './CompanionMessageActions';
 import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
 import { MarkdownBlockCopyButton } from './MarkdownBlockCopyButton';
@@ -1826,16 +1826,20 @@ export function MessageRenderer({
   // confirmation. Outbox rows carry the time across restarts.
   const pendingSentAtRef = useRef(new Map<string, number>());
   const companionTimeGroups = useStableValue(
-    useMemo(() => companion ? collectBotMessageTimeGroups(items.flatMap((item): BotTimelineMessage[] => {
-      if (item.type === 'pending_send') {
-        const sentAt = item.sentAt ?? localSendStartedAt(item.key);
-        if (sentAt === null) return [];
-        pendingSentAtRef.current.set(item.key, sentAt);
-        return [{ clientId: item.key, createdAt: sentAt }];
-      }
-      return item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
-        ? [{ clientId: item.key, createdAt: pendingSentAtRef.current.get(item.key) ?? localSendStartedAt(item.key) ?? item.message.createdAt }] : [];
-    })) : undefined, [companion, items]),
+    useMemo(() => {
+      if (!companion) return undefined;
+      const groups = collectBotMessageTimeGroups(items.flatMap((item): BotTimelineMessage[] => {
+        if (item.type === 'pending_send') {
+          const sentAt = item.sentAt ?? localSendStartedAt(item.key);
+          if (sentAt === null) return [];
+          pendingSentAtRef.current.set(item.key, sentAt);
+          return [{ clientId: item.key, createdAt: sentAt }];
+        }
+        return item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
+          ? [{ clientId: item.key, createdAt: pendingSentAtRef.current.get(item.key) ?? localSendStartedAt(item.key) ?? item.message.createdAt }] : [];
+      }));
+      return companionTimeGroupRows(items, groups, companionContinuationKeys);
+    }, [companion, items, companionContinuationKeys]),
     (previous, next) => sameMapEntries(previous, next, (a, b) => a === b),
   );
   const quoteItemsRef = useRef(items);
@@ -3163,10 +3167,12 @@ export function MessageRenderer({
 
 const RenderItemView = memo(function RenderItemView({
   item,
+  groupTimestamp,
   actions,
   focused = false,
 }: {
   item: MobileMessageRenderItem | MobileWorkChildItem;
+  groupTimestamp?: number;
   actions: MessageActions & { firstUserMessageClientId?: string };
   focused?: boolean;
 }) {
@@ -3303,9 +3309,17 @@ const RenderItemView = memo(function RenderItemView({
               <FileChip key={`${name}:${index}`} name={name} presentationOnly
                 layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
             )}
-            renderText={(text, index) => (
+            renderText={(text, index, longMessage) => (
+              // 排队/待发送正文仍是可读内容:待答 ask 卡锁住输入框时,主人要能长按
+              // 选中并复制刚排队的话,再粘到自定义答案里。发送锁不能降级为阅读锁。
+              // 长正文展开后沿用完成态同款有界保护:普通任务回退可选中的 RN Text,
+              // 伙伴用有界文本分组保留部分选字,避免巨型 iOS UITextView 展开后空白。
+              // longMessage 由真实气泡按整条正文实测透传,结构化 atom 与普通正文共用,
+              // 避免在此按单块 token 再判一次长度(单一状态所有者)。
               <MarkdownBody key={`text:${index}`} text={text} streaming={false}
-                selectable={false} pinContentWidth={false}
+                selectable pinContentWidth={false}
+                allowIosUITextView={!longMessage || actions.companion === true}
+                boundTextRuns={longMessage && actions.companion === true}
                 layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
             )}
             resolveRemoteMedia={actions.onResolveRemoteMedia}
@@ -3319,8 +3333,6 @@ const RenderItemView = memo(function RenderItemView({
       logUnhandledRenderItem(item);
       break;
   }
-  const groupTimestamp = actions.companion && (item.type === 'message' || item.type === 'pending_send')
-    ? actions.companionTimeGroups?.get(item.key) : undefined;
   // Only the first top-level row owns the turn's portrait. Nested details clear
   // companionAvatar, so expanding them cannot repeat it.
   const processAvatar = actions.companion && item.type === 'work_group' && !actions.companionTurnContinuation
@@ -3390,7 +3402,7 @@ const RenderListItemView = memo(function RenderListItemView({
     <MessageListItemViewableContext.Provider value={isViewable}>
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible}>
     <TableDocumentRow rowKey={item.key}>
-      <RenderItemView actions={itemActions} focused={focused} item={item} />
+      <RenderItemView actions={itemActions} focused={focused} item={item} groupTimestamp={actions.companionTimeGroups?.get(item.key)} />
     </TableDocumentRow>
     </MessageHeavyContentVisibilityContext.Provider>
     </MessageListItemViewableContext.Provider>

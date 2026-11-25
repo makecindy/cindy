@@ -42,7 +42,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { structuredPatch } from 'diff';
 import { syncCodexArchiveState } from './archive-state.js';
-import { readCodexThreadMcpServerTools } from './mcp-server-tools.js';
+import { readCodexThreadMcpServerTools, readCodexThreadMcpServersTools } from './mcp-server-tools.js';
 import { CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS, readAccountRateLimitsWithRefresh } from './app-server/account-rate-limits.js';
 
 import {
@@ -138,6 +138,7 @@ import {
   type AutoReviewUserIntent,
   isSystemPermissionDenialReason,
   formatPermissionDenial,
+  isPermissionConfirmationTimeoutReason,
   resolveAutoReviewDecision,
   withAutoReviewContext,
   toolAutoReviewAction,
@@ -158,6 +159,7 @@ import {
 import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
 import { listCodexModels } from './app-server/list-models.js';
 import { buildCodexEnv } from './env-builder.js';
+import { codexCommandRustLogExclusion } from './app-server/response-timing.js';
 import type { CodexErrorInfo } from './app-server/protocol.js';
 import {
   buildCodexBotSkillConfigOverrides,
@@ -224,6 +226,8 @@ import {
   codexUsageRefreshDue,
   resetCodexSpeed,
   settleCodexSpeedUsage,
+  noteCodexResponseEnded,
+  noteCodexResponseTiming,
   resumeCodexGeneration,
   translateAgentMessageDelta,
   translateReasoningSummaryTextDelta,
@@ -256,12 +260,16 @@ import {
   readCodexRolloutModelProvider,
   sanitizeCodexForkRolloutFileInPlace,
 } from './rollout-sanitize.js';
-import { hasCurrentTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions.js';
+import { hasCurrentTeammateInstructions, rememberDeliveredTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions.js';
 import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
-import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
+import {
+  extractNonSecretErrorSignals,
+  isProviderSafetyRefusalError,
+  matchesDeterministicUsageExhaustionText,
+} from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, CodexNativeInitializationStoppedError, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
 import { AppServerRequestTimeoutError, type RequestProgressDeadline } from './app-server/client.js';
 import { useCodexHistoryHome, type CodexExternalAuth } from './app-server/external-auth.js';
@@ -1746,6 +1754,8 @@ const isLikelyValidThreadId = (id: string | undefined): id is string =>
 export class CodexAgent extends BaseAgent {
   readonly kind = 'codex' as const;
   readonly capabilities: Capabilities;
+  /** Teammate instruction marker this process put into each recent thread (bounded); cleared by a compaction it sees. */
+  private readonly deliveredTeammateInstructions = new Map<string, string>();
 
   /**
    * Hosts keyed by target — `'local'` 或 `remote:<remoteHostId>`。每个 target
@@ -2011,7 +2021,7 @@ export class CodexAgent extends BaseAgent {
             ...(this.deps.disableCodexPluginRuntime ? ['--disable', 'plugins', '--disable', 'remote_plugin'] : []),
             '-c', 'cli_auth_credentials_store="ephemeral"',
           ],
-          onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({ pid, role: 'control-plane-service' }),
+          onProcessSpawned: (pid, child) => this.deps.registerLocalCodexAppServerProcess?.({ pid, child, role: 'control-plane-service' }),
         }),
         requireEphemeralAuth: true,
         logger: this.deps.logger,
@@ -3195,6 +3205,9 @@ assertRouteCurrent();
                 : {}),
               ...(hostPurpose ? { hostPurpose } : {}),
               ...(nativeStorageOnly ? { nativeStorageOnly } : {}),
+              ...(hostPurpose === 'review' && customContextModel
+                ? { customContextModel, customContextProviderId }
+                : {}),
               ...(hostPurpose === 'custom-context'
                 ? {
                     customContextModel,
@@ -3203,7 +3216,13 @@ assertRouteCurrent();
                     customContextHostKey: `${key}:${generation}`,
                   }
                 : {}),
-              ...(deviceHostedGuestProviderId ? { deviceHostedGuestProviderId, deviceHostedGuestSessionId, deviceHostedGuestModelIds } : {}),
+              ...(deviceHostedGuestProviderId ? {
+                deviceHostedGuestProviderId: deviceHostedGuestProviderId === 'openai'
+                  ? nativeSubscriptionAccount?.sharedProviderId ?? deviceHostedGuestProviderId
+                  : deviceHostedGuestProviderId,
+                deviceHostedGuestSessionId,
+                deviceHostedGuestModelIds,
+              } : {}),
             },
           );
           hostRetirementCleanup = cfg.onHostRetired;
@@ -3383,8 +3402,8 @@ assertRouteCurrent();
           : extraArgs,
         // 必须把注销函数交回 transport：进程退出后登记要随之移除，
         // 退出回收（codex-tool-tree-reaper）据此认领 PID，残留登记遇 PID 复用会误杀。
-        onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({
-          pid,
+        onProcessSpawned: (pid, child) => this.deps.registerLocalCodexAppServerProcess?.({
+          pid, child,
           role:
             hostPurpose === 'control-plane'
               ? 'control-plane-service'
@@ -4563,6 +4582,8 @@ assertRouteCurrent();
      * 一起失去。memory flush 侧仍保持原有的「controller 存在才通知」语义。
      */
     const handleCompactBoundary = (): void => {
+      // Compaction may drop earlier developer items; the next resume re-delivers the teammate block.
+      if (sdkSessionId) this.deliveredTeammateInstructions.delete(sdkSessionId);
       nativeRecovery?.publish('codex', 'contextCompaction', {});
       compactionStormTracker.noteCompaction();
       memoryFlushController?.onCompactBoundary();
@@ -5288,14 +5309,20 @@ assertRouteCurrent();
     let initialCustomContextWindow = !reviewMode
       ? mutableContextWindowBudget ?? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
       : null;
+    // A route-specific Fast declaration cannot follow the model to another connection.
     const customContextCatalogIdentity = (
+      providerId: string | null | undefined,
       model: string,
       contextWindow: number | null,
     ): string | null =>
       typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
-        ? `${model}\0${Math.floor(contextWindow)}`
+        ? JSON.stringify([
+          model, Math.floor(contextWindow),
+          !opts.remoteHostId && this.deps.needsCodexFastCatalog?.(providerId, model) ? providerId ?? '' : null,
+        ])
         : null;
     let initialCustomContextCatalogIdentity = customContextCatalogIdentity(
+      opts.providerId,
       opts.model,
       initialCustomContextWindow,
     );
@@ -5315,7 +5342,7 @@ assertRouteCurrent();
       const contextWindow = reviewMode
         ? null
         : nextBudget ?? await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
-      return customContextCatalogIdentity(newModel, contextWindow);
+      return customContextCatalogIdentity(providerId, newModel, contextWindow);
     };
     const modelSwitchRequiresRebuild = async (
       newModel: string,
@@ -5405,7 +5432,12 @@ assertRouteCurrent();
         ...(localAuthPolicy === 'isolated' ? { localAuthPolicy } : {}),
         ...(guestCodexHome && guestProviderId ? { deviceHostedGuestProviderId: guestProviderId, deviceHostedGuestSessionId: sid, deviceHostedGuestModelIds: hosted?.guestProvider?.modelIds } : {}),
         ...(reviewMode
-          ? { hostPurpose: 'review' as const }
+          ? {
+              hostPurpose: 'review' as const,
+              ...(opts.fastMode === true && this.deps.needsCodexFastCatalog?.(opts.providerId, opts.model)
+                ? { customContextModel: opts.model, customContextProviderId: opts.providerId }
+                : {}),
+            }
           : usesCustomContextHost
             ? {
                 hostPurpose: 'custom-context' as const,
@@ -5432,7 +5464,7 @@ assertRouteCurrent();
           credentialMode = requestedCredentialMode ?? (localAuthPolicy === 'isolated' ? 'provider-oauth' : undefined);
           initialCustomContextWindow = !reviewMode
             ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null : null;
-          initialCustomContextCatalogIdentity = customContextCatalogIdentity(opts.model, initialCustomContextWindow);
+          initialCustomContextCatalogIdentity = customContextCatalogIdentity(opts.providerId, opts.model, initialCustomContextWindow);
           usesCustomContextHost = initialCustomContextCatalogIdentity !== null;
           currentHostKey = resolveSessionHostKey();
         }
@@ -5956,6 +5988,30 @@ assertRouteCurrent();
         // Failure to inspect policy must preserve native behavior, not replace an
         // unseen custom policy or disable review. No user config file is written.
         log.warn('Native auto-review continuation policy unavailable; preserving native policy');
+      }
+    }
+    // Cindy's local app-server gets RUST_LOG only to emit the response timing trace
+    // (env-builder). Codex hands its own environment to the commands it runs, so give
+    // them the user's own value back, or keep the variable out when there was none.
+    let commandRustLogConfig: Record<string, unknown> = {};
+    if (!opts.remoteHostId) {
+      const userRustLog = process.env.RUST_LOG;
+      if (userRustLog?.trim()) {
+        commandRustLogConfig = { 'shell_environment_policy.set.RUST_LOG': userRustLog };
+      } else {
+        try {
+          const response = await host.request<{ config?: Record<string, unknown> }>(
+            Method.ConfigRead, { cwd: opts.workingDir, includeLayers: false },
+            { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+          );
+          assertCurrentHost('Command environment policy');
+          commandRustLogConfig = codexCommandRustLogExclusion(response.config?.shell_environment_policy) ?? {};
+        } catch (error) {
+          if (error instanceof CodexRouteSelectionChangedError) throw error;
+          // Replacing an exclusion list that could not be read might expose a variable the
+          // user keeps from commands; a stray log filter is the lesser harm.
+          log.warn('Codex command environment policy unavailable; RUST_LOG may reach commands');
+        }
       }
     }
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
@@ -6883,6 +6939,7 @@ assertRouteCurrent();
         // and lose the Host origin after the first terminal event.
         'features.goals': false,
         ...taskShellEnvConfig,
+        ...commandRustLogConfig,
         // Keep companion memory in its own Home. Native delegation uses the
         // same feature settings and permissions as an ordinary task.
         ...(isolatedBotProfile(opts.botRuntimeProfile) ? {
@@ -7368,48 +7425,55 @@ assertRouteCurrent();
     };
 
     // Configuration proves intent, not that this native thread completed MCP
-    // startup. Observe only explicitly provisioned helpers, after capability
+    // startup. Observe only explicitly provisioned host gateways, after capability
     // isolation/disabled overrides; never probe the shared host catalog.
-    let helperNeedsRecheck = false;
-    let helperRecoveryAttempts = 0;
-    let helperRecoveryNotBefore = 0;
-    let helperRecoveryAbort: AbortController | undefined;
-    let helperRecoveryPending: Promise<void> | null = null;
+    let expectedMcpNeedsRecheck = false;
+    let mcpRecoveryAttempts = 0;
+    let mcpRecoveryNotBefore = 0;
+    let mcpRecoveryAbort: AbortController | undefined;
+    let mcpRecoveryPending: Promise<void> | null = null;
     let reportedHelperState: string | undefined;
-    const expectedHelperConfig = (): Record<string, unknown> | null => {
+    const expectedGatewayNames = ['cindy_helper', 'cindy'];
+    const expectedRuntimeMcpConfig = (): Record<string, unknown> | null => {
       const config = currentThreadWorkspaceConfig().config;
-      if (!config || reviewMode || config['mcp_servers.cindy_helper.enabled'] === false
-        || !['url', 'command'].some(key => {
-          const value = config?.[`mcp_servers.cindy_helper.${key}`];
+      if (!config || reviewMode) return null;
+      const expected = expectedGatewayNames.filter(name => config[`mcp_servers.${name}.enabled`] !== false
+        && ['url', 'command'].some(key => {
+          const value = config[`mcp_servers.${name}.${key}`];
           return typeof value === 'string' && value.trim().length > 0;
-        })) return null;
-      return Object.fromEntries(Object.entries(config).filter(([key]) => key.startsWith('mcp_servers.cindy_helper.')));
+        }));
+      if (!expected.length) return null;
+      return Object.fromEntries(Object.entries(config).filter(([key]) => expected.some(name => key.startsWith(`mcp_servers.${name}.`))));
     };
-    const reportExpectedHelperAvailability = async (
-      knownReport?: Awaited<ReturnType<typeof readCodexThreadMcpServerTools>>, signal?: AbortSignal,
+    const readExpectedMcpTools = (config: Record<string, unknown>) => readCodexThreadMcpServersTools(
+      (method, params, requestOpts) => host.request(method, params, requestOpts), threadId,
+      expectedGatewayNames.filter(name => Object.keys(config).some(key => key.startsWith(`mcp_servers.${name}.`))),
+    );
+    const reportExpectedRuntimeMcpAvailability = async (
+      knownReports?: Awaited<ReturnType<typeof readExpectedMcpTools>>, signal?: AbortSignal,
     ): Promise<void> => {
-      const helperConfig = expectedHelperConfig();
-      if (!helperConfig) { helperNeedsRecheck = false; reportedHelperState = undefined; return; }
+      const mcpConfig = expectedRuntimeMcpConfig();
+      if (!mcpConfig) { expectedMcpNeedsRecheck = false; reportedHelperState = undefined; return; }
       const checkedThreadId = threadId;
-      let state: string;
-      let ready = false;
+      let reports: Awaited<ReturnType<typeof readExpectedMcpTools>> | undefined;
       try {
-        const report = knownReport ?? await awaitCodexRouteSelection(readCodexThreadMcpServerTools(
-          (method, params, requestOpts) => host.request(method, params, requestOpts),
-          checkedThreadId, 'cindy_helper',
-        ), signal);
-        ready = report.state === 'connected' && ['list_tools', 'call_tool'].every(name => report.tools.some(tool => tool.name === name));
-        state = report.state;
+        reports = knownReports ?? await awaitCodexRouteSelection(readExpectedMcpTools(mcpConfig), signal);
       } catch {
         signal?.throwIfAborted();
         // A failed probe is not proof of missing tools. Keep that distinction,
         // and never expose transport errors containing endpoints/credentials.
-        state = 'unverified';
       }
       if (closed || threadId !== checkedThreadId || !isCurrentHost()
-        || JSON.stringify(expectedHelperConfig()) !== JSON.stringify(helperConfig)) return;
-      if (ready) { helperNeedsRecheck = false; reportedHelperState = undefined; return; }
-      helperNeedsRecheck = state === 'failed' || state === 'pending' || state === 'unverified';
+        || JSON.stringify(expectedRuntimeMcpConfig()) !== JSON.stringify(mcpConfig)) return;
+      expectedMcpNeedsRecheck = !reports || [...reports.values()].some(report => report.state === 'failed' || report.state === 'pending');
+      // A healthy helper does not prove that the plugin gateway initialized.
+      // Keep its independently failed client eligible for the same cold resume.
+      const helperExpected = Object.keys(mcpConfig).some(key => key.startsWith('mcp_servers.cindy_helper.'));
+      if (!helperExpected) { reportedHelperState = undefined; return; }
+      const report = reports?.get('cindy_helper');
+      const state = report?.state ?? 'unverified';
+      const ready = report?.state === 'connected' && ['list_tools', 'call_tool'].every(name => report.tools.some(tool => tool.name === name));
+      if (ready) { reportedHelperState = undefined; return; }
       // Optional native servers can still be starting; do not turn async
       // discovery into an outage or restart an in-flight initialization.
       if (state === 'pending') return;
@@ -7478,6 +7542,9 @@ assertRouteCurrent();
         codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
       } else if (developerInstructions) {
         codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
+        if (opts.botRuntimeProfile) {
+          rememberDeliveredTeammateInstructions(this.deliveredTeammateInstructions, threadId, teammateRuntimeInstructionItem(developerInstructions).marker);
+        }
       }
       sdkSessionId = threadId;
       workspacePermissionProfileActive = currentWorkspacePermissionProfile() !== undefined;
@@ -7703,13 +7770,15 @@ assertRouteCurrent();
         if (opts.botRuntimeProfile && developerInstructions && !useProxyChannel) {
           const current = teammateRuntimeInstructionItem(developerInstructions);
           if (!await hasCurrentTeammateInstructions(sessionRolloutPath, current.marker,
-            opts.remoteHostId ? this.deps.getRemoteAgentFileOps?.(opts.remoteHostId) ?? {} : undefined)) {
+            opts.remoteHostId ? this.deps.getRemoteAgentFileOps?.(opts.remoteHostId) ?? {} : undefined,
+            this.deliveredTeammateInstructions.get(threadId))) {
             assertCurrentHost('thread/inject_items');
             await host.request(Method.ThreadInjectItems, { threadId, items: [current.item] }, {
               timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
             });
             assertCurrentHost('thread/inject_items');
           }
+          rememberDeliveredTeammateInstructions(this.deliveredTeammateInstructions, threadId, current.marker);
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
         }
         // Resumed app-server threads may have sticky collaborationMode='plan' from
@@ -8038,7 +8107,7 @@ assertRouteCurrent();
           ? replacementProfileFingerprint
           : null;
         threadMayHaveRollout = retainHistory;
-        await reportExpectedHelperAvailability();
+        await reportExpectedRuntimeMcpAvailability();
         log.debug('thread replaced with workspace permission profile', {
           previousThreadId,
           threadId,
@@ -8116,7 +8185,7 @@ assertRouteCurrent();
             ? resumeProfileFingerprint
             : null;
           threadMayHaveRollout = true;
-          await reportExpectedHelperAvailability();
+          await reportExpectedRuntimeMcpAvailability();
           log.debug('workspace permission profile restored before turn/start', {
             threadId,
             referenceRoots: mutableExtraDirs.length,
@@ -8127,7 +8196,7 @@ assertRouteCurrent();
 
     // Loaded-thread resume ignores arbitrary config. Release only this thread,
     // then cold-resume its intact rollout before accepting another turn.
-    const ensureContextLimitForNextTurn = (signal?: AbortSignal, forceMcpRefresh = false, reportHelperReadiness = true): Promise<void> | null => {
+    const ensureContextLimitForNextTurn = (signal?: AbortSignal, forceMcpRefresh = false, reportMcpReadiness = true): Promise<void> | null => {
       const desired = currentContextLimit();
       if (desired === appliedContextLimit && !forceMcpRefresh) return null;
       return (async () => {
@@ -8175,7 +8244,7 @@ assertRouteCurrent();
             subscription = host.subscribeThread(threadId, handlers, threadOwner);
             registerRootCodexMcpContext();
             resetAcceptedUsageCursors('context settings refresh');
-            if (reportHelperReadiness) await reportExpectedHelperAvailability();
+            if (reportMcpReadiness) await reportExpectedRuntimeMcpAvailability();
           } catch (error) {
             // A timed-out resume can still complete later. Close this handle so a
             // retry cannot use that loaded thread with an unconfirmed budget. The
@@ -8191,66 +8260,67 @@ assertRouteCurrent();
       })();
     };
 
-    // Native reload is process-wide. Recover only a positively failed helper,
+    // Native reload is process-wide. Recover only a positively failed gateway,
     // at the next ordinary send boundary, using the existing single-thread cold
     // resume. No user/tool input has been dispatched here, so none is replayed.
-    const ensureExpectedHelperForNextTurn = (signal?: AbortSignal): Promise<void> | null => {
-      if (helperRecoveryPending) return helperRecoveryPending;
-      if (!helperNeedsRecheck || !threadMayHaveRollout || helperRecoveryAttempts >= 2
-        || Date.now() < helperRecoveryNotBefore || !expectedHelperConfig()) return null;
+    const ensureExpectedMcpForNextTurn = (signal?: AbortSignal): Promise<void> | null => {
+      if (mcpRecoveryPending) return mcpRecoveryPending;
+      if (!expectedMcpNeedsRecheck || !threadMayHaveRollout || mcpRecoveryAttempts >= 2
+        || Date.now() < mcpRecoveryNotBefore || !expectedRuntimeMcpConfig()) return null;
       const pending = (async () => {
         const abort = new AbortController();
-        helperRecoveryAbort = abort;
+        mcpRecoveryAbort = abort;
         const recoverySignal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
         const recoveringThread = threadId;
-        const helperConfig = JSON.stringify(expectedHelperConfig());
+        const mcpConfig = JSON.stringify(expectedRuntimeMcpConfig());
         const assertRecoveryCurrent = () => {
           recoverySignal.throwIfAborted();
-          assertCurrentHost('helper recovery');
+          assertCurrentHost('MCP recovery');
           nativeSubscriptionAccount?.assertCurrent();
-          if (closed || threadId !== recoveringThread || JSON.stringify(expectedHelperConfig()) !== helperConfig) {
-            throw new Error('Codex helper recovery cancelled because the task configuration changed');
+          if (closed || threadId !== recoveringThread || JSON.stringify(expectedRuntimeMcpConfig()) !== mcpConfig) {
+            throw new Error('Codex MCP recovery cancelled because the task configuration changed');
           }
         };
         try {
           assertRecoveryCurrent();
-          let report;
+          let reports;
           try {
-            report = await awaitCodexRouteSelection(readCodexThreadMcpServerTools(
-              (method, params, requestOpts) => host.request(method, params, requestOpts), threadId, 'cindy_helper',
-            ), recoverySignal);
+            reports = await awaitCodexRouteSelection(readExpectedMcpTools(expectedRuntimeMcpConfig()!), recoverySignal);
           } catch { assertRecoveryCurrent(); return; }
           assertRecoveryCurrent();
-          await reportExpectedHelperAvailability(report, recoverySignal);
+          await reportExpectedRuntimeMcpAvailability(reports, recoverySignal);
           assertRecoveryCurrent();
-          if (report.state !== 'failed') return;
+          if (![...reports.values()].some(report => report.state === 'failed')) return;
           // Unloading a thread also stops native children/terminals. Leave those
           // intact, and unknown background state is busy, just as idle cleanup.
           if (await awaitCodexRouteSelection(handle.hasLiveBackgroundWork!().catch(() => true), recoverySignal)) return;
           assertRecoveryCurrent();
-          helperRecoveryAttempts++;
-          helperRecoveryNotBefore = Date.now() + 30_000 * helperRecoveryAttempts;
-          log.info('recovering failed Codex task helper', { threadId, attempt: helperRecoveryAttempts });
+          mcpRecoveryAttempts++;
+          mcpRecoveryNotBefore = Date.now() + 30_000 * mcpRecoveryAttempts;
+          log.info('recovering failed Codex task MCP', {
+            threadId, attempt: mcpRecoveryAttempts,
+            servers: [...reports].filter(([, report]) => report.state === 'failed').map(([name]) => name),
+          });
           await withMcpDiscoveryContext(async () => {
             assertRecoveryCurrent();
             await ensureContextLimitForNextTurn(recoverySignal, true, false);
           });
           assertRecoveryCurrent();
-          await reportExpectedHelperAvailability(undefined, recoverySignal);
+          await reportExpectedRuntimeMcpAvailability(undefined, recoverySignal);
         } catch (error) {
           // Probe cancellation is proven pre-dispatch. Let Session retire its
           // reservation without an ambiguous provider-error drain. A cancelled
           // cold resume closes the handle and keeps its existing failure fence.
           if (!closed && recoverySignal.aborted) {
-            throw new TurnDispatchRejectedError('Codex helper recovery cancelled before acceptance');
+            throw new TurnDispatchRejectedError('Codex MCP recovery cancelled before acceptance');
           }
           throw error;
         } finally {
-          if (helperRecoveryAbort === abort) helperRecoveryAbort = undefined;
+          if (mcpRecoveryAbort === abort) mcpRecoveryAbort = undefined;
         }
       })();
-      helperRecoveryPending = pending;
-      const clearPending = () => { if (helperRecoveryPending === pending) helperRecoveryPending = null; };
+      mcpRecoveryPending = pending;
+      const clearPending = () => { if (mcpRecoveryPending === pending) mcpRecoveryPending = null; };
       void pending.then(clearPending, clearPending);
       return pending;
     };
@@ -8279,7 +8349,7 @@ assertRouteCurrent();
             if (remainingMs <= 0) return false;
             const status: CodexMcpServerStatusListResponse = await host.request<CodexMcpServerStatusListResponse>(
               Method.McpServerStatusList,
-              { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId },
+              { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName: 'cindy_scheduler' },
               { timeoutMs: remainingMs },
             );
             const scheduler = status.data.find((server) => server.name === 'cindy_scheduler');
@@ -8625,8 +8695,7 @@ assertRouteCurrent();
           policyCause?: string,
         ) => {
           if (kind !== 'mcpServerElicitation') return;
-          const timedOut = source === 'system' && isSystemPermissionDenialReason(reason) &&
-            (reason === 'timeout' || reason?.endsWith('_timeout'));
+          const timedOut = source === 'system' && isPermissionConfirmationTimeoutReason(reason);
           const code = source === 'auto-review' ? 'MCP_APPROVAL_AUTO_BLOCKED'
             : timedOut ? 'MCP_APPROVAL_CONFIRMATION_TIMEOUT' : 'MCP_APPROVAL_CONFIRMATION_UNAVAILABLE';
           // IDs and a closed set of causes only: no arguments, credentials, or
@@ -10154,6 +10223,7 @@ assertRouteCurrent();
       // inner action。查询继续静默，高风险 action 逐次确认且不得持久化授权。
       const approvalPolicy = mcpToolApprovalPolicy(params);
       const policyPermissionInput = mcpElicitationPermissionInput(params);
+      const reviewEvidence = this.deps.getMcpToolApprovalEvidence?.(mcpToolApprovalContext(params));
       const turnPolicyForcePrompt = forceTurnConfirmation(
         `mcp:${params.serverName}`,
         policyPermissionInput,
@@ -10195,7 +10265,8 @@ assertRouteCurrent();
           // against the review budget (see mcpToolReviewAction).
           autoReviewAction: policyPermissionInput.toolParams === undefined
             ? { kind: 'other' as const, description: undefined }
-            : mcpToolReviewAction(`mcp:${params.serverName}`, policyPermissionInput),
+            : mcpToolReviewAction(`mcp:${params.serverName}`, reviewEvidence === undefined
+              ? policyPermissionInput : { ...policyPermissionInput, toolParams: reviewEvidence }),
           ...(toolUseId ? { itemId: toolUseId } : {}),
         },
       );
@@ -11306,9 +11377,19 @@ assertRouteCurrent();
         typeof error?.additionalDetails === 'string' ? error.additionalDetails : null;
       if (!message && !additionalDetails) return null;
       const classifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
+      const tag = codexErrorInfoTag(error?.codexErrorInfo);
       // 远端 compact 密文 400 是 Codex 内部硬失败，HTTP 剥密文跳过 compaction blob，
       // 重投必再 400。不得当推理密文 400 去 arm WS→HTTP recovery。
-      if (isRemoteCompactEncryptedContentError(classifyText)) return null;
+      // 供应商安全策略拦截同理：保留上游决定，不做传输切换重投。
+      if (
+        tag === 'cyberPolicy' ||
+        tag === 'misalignmentPolicyViolation' ||
+        isProviderSafetyRefusalError(message) ||
+        (additionalDetails !== null && isProviderSafetyRefusalError(additionalDetails)) ||
+        isRemoteCompactEncryptedContentError(classifyText)
+      ) {
+        return null;
+      }
       try {
         return this.deps.armCodexHttpRecovery({
           sessionId: sid,
@@ -11466,8 +11547,24 @@ assertRouteCurrent();
       // Try the same model/account summary once; explicit exhausted quota stays terminal.
       const compactRateLimit = isTerminalRateLimitRetryExhaustion(text, signals.errorStatus, error?.codexErrorInfo);
       const tag = codexErrorInfoTag(error?.codexErrorInfo);
-      if (tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded' || tag === 'unauthorized' || tag === 'cyberPolicy') return false;
-      if (/\b(?:content_policy_violation|request_too_large)\b/i.test(text)) return false;
+      if (
+        tag === 'usageLimitExceeded' ||
+        tag === 'sessionBudgetExceeded' ||
+        tag === 'unauthorized' ||
+        tag === 'cyberPolicy' ||
+        tag === 'misalignmentPolicyViolation'
+      ) {
+        return false;
+      }
+      const rawErrMsg = typeof error?.message === 'string' ? error.message : '';
+      const rawErrDetails = typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+      if (
+        isProviderSafetyRefusalError(rawErrMsg) ||
+        isProviderSafetyRefusalError(rawErrDetails) ||
+        /\b(?:content_policy_violation|request_too_large)\b/i.test(text)
+      ) {
+        return false;
+      }
       // Preserve the existing capacity backoff and SDK-owned overload handling.
       if (parseOverloadError(text, signals.errorStatus, tag)) return false;
       // A terminal turn alone does not prove an upstream compact request failed:
@@ -13118,12 +13215,15 @@ assertRouteCurrent();
           });
           // Input/cache-only segments still belong in the ledger, but cannot
           // pair already reported output with a later generation denominator.
+          let settledReading = false;
           if (last.outputTokens > 0) {
             const calibration = settleCodexSpeedUsage(translatorRt, last);
             if (calibration) log.debug('SDK ▷ token speed calibration', { turnId: params.turnId, ...calibration });
+            settledReading = calibration?.requestTps !== undefined;
           }
-          // The tool can run for minutes with no further delta to flush this settlement.
-          if (last.outputTokens > 0 && translatorRt.generationPendingToolIds.size > 0) pushStatus(lastStatusText);
+          // The tool can run for minutes with no further delta to flush this settlement, and a
+          // request's own reading must not wait for the next request's events (at most one a request).
+          if (last.outputTokens > 0 && (translatorRt.generationPendingToolIds.size > 0 || settledReading)) pushStatus(lastStatusText);
           else maybePushUsageRefresh();
           // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
           if (memoryFlushController) {
@@ -13424,6 +13524,17 @@ assertRouteCurrent();
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。
         // 迟到的旧 turn 收口只允许发 background 结果,不能给当前 turn 注入前台状态。
         if (isTurnInFlight && !isLateCollabTerminal) pushStatus('Generating...');
+      },
+      responseCompleted: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.responseCompleted?.(params))) return;
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        noteCodexResponseEnded(translatorRt, params.turnId);
+      },
+      responseTiming: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.responseTiming?.(params))) return;
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        // A generation time that arrived after its usage replaces the reading just shown.
+        if (noteCodexResponseTiming(translatorRt, params) && lastUsageRefreshAt !== 0) pushStatus(lastStatusText);
       },
       itemOmitted: (params) => {
         // 正文超限被宿主丢弃的条目不再展示, 但它仍是这一轮真实发生过的工作 (常见是写过大文件):
@@ -13852,8 +13963,17 @@ assertRouteCurrent();
           tryTakeOverTerminalRateLimit: () => {
             // willRetry=true 仍归 daemon 自己退避，绝不叠第二层。这里只接它已经明确
             // 耗尽内部 retry budget 的终态 429；usageLimitExceeded 由判定器排除。
-            if (params.willRetry === true || isCodexAccessRejectedError(effectiveParams.error, downshiftRejection)) return null;
+            const errTag = codexErrorInfoTag(effectiveParams.error?.codexErrorInfo);
+            if (
+              params.willRetry === true ||
+              errTag === 'cyberPolicy' ||
+              errTag === 'misalignmentPolicyViolation' ||
+              isCodexAccessRejectedError(effectiveParams.error, downshiftRejection)
+            ) {
+              return null;
+            }
             const rawMessage = effectiveParams.error?.message ?? '';
+            if (isProviderSafetyRefusalError(rawMessage)) return null;
             const signals = extractNonSecretErrorSignals(rawMessage);
             if (
               !isTerminalRateLimitRetryExhaustion(
@@ -13944,7 +14064,7 @@ assertRouteCurrent();
         return;
       }
       closed = true;
-      helperRecoveryAbort?.abort();
+      mcpRecoveryAbort?.abort();
       finishManualCompact(new Error('Codex session closed during compaction'));
       cancelInteractionContinuation('session_closed', true);
       translatorRt.samplingSegments.clear();
@@ -14138,7 +14258,7 @@ assertRouteCurrent();
           if (profileRefresh) await profileRefresh;
           const environmentRepair = repairHostedEnvironmentIfDisconnected();
           if (environmentRepair) await environmentRepair;
-          const helperRecovery = isContinuation ? null : ensureExpectedHelperForNextTurn(sendOpts?.signal);
+          const helperRecovery = isContinuation ? null : ensureExpectedMcpForNextTurn(sendOpts?.signal);
           if (helperRecovery) await helperRecovery;
           turnWorkspaceConfig = currentTurnWorkspaceConfig();
           // A stale-daemon retry must hydrate the exact thread-level profile
@@ -14707,7 +14827,7 @@ assertRouteCurrent();
               // every thread on the daemon shares the same process-level
               // cumulative usage source.
               resetAcceptedUsageCursors('thread/resume after stale daemon');
-              await reportExpectedHelperAvailability();
+              await reportExpectedRuntimeMcpAvailability();
               if (collaborationMode?.mode === 'default') {
                 planModeDefaultMarkerNeeded = true;
                 if (turnParams.collaborationMode?.mode === 'default') {
@@ -15096,8 +15216,8 @@ assertRouteCurrent();
       },
 
       async abort() {
-        const pendingHelperRecovery = helperRecoveryPending;
-        helperRecoveryAbort?.abort();
+        const pendingHelperRecovery = mcpRecoveryPending;
+        mcpRecoveryAbort?.abort();
         // Probe RPCs may outlive Stop. Their aborted wait must release the send
         // reservation before abort returns so the next input can start afresh.
         if (pendingHelperRecovery) await pendingHelperRecovery.catch(() => {});
@@ -15655,7 +15775,7 @@ assertRouteCurrent();
           refreshCodexAutoReviewerRoute(threadId);
           registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
-          await reportExpectedHelperAvailability();
+          await reportExpectedRuntimeMcpAvailability();
         } else {
           sdkSessionId = threadId;
           threadMayHaveRollout = true;
@@ -15772,7 +15892,7 @@ assertRouteCurrent();
       const schedulerRefresh = ensureSchedulerMcpForResumedThread();
       if (schedulerRefresh) await schedulerRefresh;
     }
-    await reportExpectedHelperAvailability();
+    await reportExpectedRuntimeMcpAvailability();
     return handle;
   }
 
@@ -15883,13 +16003,18 @@ assertRouteCurrent();
       const storage = await this.deps.resolveCodexThreadStorage?.(opts.threadId);
       const companionEnvironment = opts.sessionId
         ? await this.deps.resolveSessionEnvironment?.(opts.sessionId) : undefined;
+      // Same identity as the live session's host (startSession), including the subscription account
+      // it runs on; without it a session's own host looked like another writer and every explicit
+      // route apply closed and relinked an unchanged session.
+      const subscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
       const targetKey = localSessionHostIdentity({
         sessionId: opts.sessionId ?? '', accountProviderId,
-        accountSessionHost: accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true,
+        accountSessionHost: subscriptionAccount !== undefined || accountProviderId !== undefined
+          || this.deps.isolateCodexAccountSessions === true,
         reviewMode: opts.reviewMode === true,
         customContext: typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0,
         storage, policy: selection.policy, environmentIdentity: companionEnvironment?.identity,
-      });
+      }) + (subscriptionAccount ? `:subscription:${subscriptionAccount.id}` : '');
       if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
       for (const [key, host] of hosts) {
         if (!registryCurrent()) break;

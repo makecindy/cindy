@@ -125,7 +125,7 @@ const valueClass = 'font-medium';
 const rowClass = 'flex items-baseline justify-between gap-3 py-0.5';
 const descClass = cn(labelClass, 'text-right flex-1');
 const codeClass = cn(
-  'inline shrink-0 px-[5px] py-px rounded-[4px] font-mono text-13',
+  'inline shrink-0 px-1 py-px rounded-[4px] font-mono text-13',
   'bg-[var(--status-bar-accent)]/15',
   'text-[var(--status-bar-accent)]',
 );
@@ -440,7 +440,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
             </div>
           )}
 
-          <div className="flex flex-col gap-[5px]">
+          <div className="flex flex-col gap-1">
             {visibleCategories.map((cat) => (
               <div
                 key={cat.name}
@@ -503,7 +503,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                       <span className="shrink-0 tabular-nums">{fmtContextTokens(row.tokens)}</span>
                       <span className="w-[42px] shrink-0 text-right tabular-nums">{row.count}</span>
                     </button>
-                    {isDetailExpanded && <div className="mt-1 pl-[18px]">{row.content}</div>}
+                    {isDetailExpanded && <div className="mt-1 pl-4">{row.content}</div>}
                   </div>
                 );
               })}
@@ -1082,7 +1082,7 @@ function AutoResumeActionRow({
         className={cn(
           'flex w-full items-center gap-1.5',
           ACTIVITY_ROW_RADIUS_CLASS,
-          'px-2 py-[3px]',
+          'px-2 py-0.5',
           'text-left outline-none',
           canExpand
             ? cn(
@@ -1129,7 +1129,7 @@ function AutoResumeActionRow({
       {canExpand && expanded && (
         <div
           className={cn(
-            'mx-2 mt-1 mb-1 rounded-[6px] px-[10px] py-2',
+            'mx-2 mt-1 mb-1 rounded-lg px-[10px] py-2',
             'bg-[var(--msg-user-bg)]',
             'border border-[var(--msg-user-border)]',
             'text-[var(--msg-tool-card-chevron)]',
@@ -1307,7 +1307,7 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
         {handoff ? (
           <div
             className={cn(
-              'mx-auto mt-2 max-w-full rounded-[10px] border border-[var(--msg-tool-card-border)]',
+              'mx-auto mt-2 max-w-full rounded-xl border border-[var(--msg-tool-card-border)]',
               'bg-[var(--msg-tool-card-bg)] px-4 py-3 select-text',
             )}
           >
@@ -1390,7 +1390,7 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
         {handoff ? (
           <div
             className={cn(
-              'mx-auto mt-2 max-w-full rounded-[10px] border border-[var(--msg-tool-card-border)]',
+              'mx-auto mt-2 max-w-full rounded-xl border border-[var(--msg-tool-card-border)]',
               'bg-[var(--msg-tool-card-bg)] px-4 py-3 select-text',
             )}
           >

@@ -9,6 +9,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { performance as hooks } from 'node:perf_hooks';
 import { createLocalJWKSet, SignJWT } from 'jose';
 import { createAgentNetSharingAuth } from '@cindy/agent-net-relay/sharing-auth';
 import { createPrivateNetwork, startAgentNetRelay, generateIdentity, createJoinRequest, approveJoin, createDelegation, issueCertificate, signature } from '@cindy/agent-net-relay';
@@ -32,7 +33,9 @@ import { StunClient } from '../stun.js';
 import { createCoreTransport } from '../transport.js';
 import { Endpoint, type Connection, type RecvStream } from '@cindy/agent-net-core/node';
 import type { PeerChannel } from '../types.js';
-import WebSocket from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
@@ -518,6 +521,50 @@ it.each(['undeclared', 'budget'] as const)('closes a connection whose peer opens
   await vi.waitFor(() => expect(closed).toBe(true), { timeout: 20_000 });
 }, 40_000);
 
+/** 测试价值（Node 驱动按速率发包时不空转）
+ * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的端点（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。按速率发包、
+ *   两次发包之间不到一毫秒时，驱动所在线程大部分时间空着（事件循环利用率），而不是一轮一轮看时间。
+ * - Bug 依据：2026-11-22 容器弱网矩阵（Linux、Electron 42）：计时器精度 1 毫秒的系统（Linux、macOS）上，驱动把所有短于一毫秒的等待都当成
+ *   等不起，两毫秒没有包到达就每轮看时间，20 Mbit 线路上每 MiB 285–470 毫秒 CPU（Device Link 43–46）。Windows 的计时器精度 16 毫秒，
+ *   一直由核心判断，不受影响。
+ * - 现有覆盖缺口：`coreDriverWake.test.ts` 只测唤醒计划这个纯函数，「等不等得起」由谁判断不在里面；别的测试只看收发结果。
+ * - 最小失败输入：两个端点只经一条 JS 线路相连（单程 20 毫秒、每秒 2 MB，每 5 毫秒到一批），传 3 MB。改前 Linux 上事件循环利用率 0.47，
+ *   改后 0.11。到达均匀时确认包每一两毫秒就有一个、带着核心走，看不出空转；成批到达时两批之间没有到达。
+ * - tier：integration，两个真实 WASM 端点，线路是本进程里的计时器。 */
+it('leaves the driver thread mostly idle while it paces a transfer, instead of polling the clock', async () => {
+  const server = generateIdentity('a-server'), client = generateIdentity('b-client');
+  const accepting = await Endpoint.create({ identity: server.transportPrivateKey, prologue: 'unit-pacing', udp: false, accept: { admit: () => true } });
+  const dialing = await Endpoint.create({ identity: client.transportPrivateKey, prologue: 'unit-pacing', udp: false });
+  cleanup.push(() => accepting.close()); cleanup.push(() => dialing.close());
+  // One direction of a 2 MB/s line with 20 ms one way: datagrams leave in order at the line's rate, then travel, and arrive in
+  // 5 ms batches as over Wi-Fi aggregation or a busy relay. Between batches nothing arrives to drive the core.
+  const line = (deliver: (datagram: Uint8Array) => void) => {
+    let free = 0;
+    return (datagram: Uint8Array) => {
+      const at = Math.max(free, performance.now()) + datagram.length / 2_000;
+      free = at;
+      const copy = datagram.slice();
+      setTimeout(() => deliver(copy), Math.ceil((at + 20) / 5) * 5 - performance.now());
+    };
+  };
+  let toServer!: (datagram: Uint8Array) => void, toClient!: (datagram: Uint8Array) => void;
+  const clientLink = dialing.createLink((datagram) => toServer(datagram));
+  const serverLink = accepting.createLink((datagram) => toClient(datagram));
+  toServer = line((datagram) => serverLink.deliver(datagram));
+  toClient = line((datagram) => clientLink.deliver(datagram));
+  const total = 3_000_000;
+  let received = 0;
+  accepting.on('connection', (connection: Connection) => connection.on('stream', (stream: RecvStream) => stream.on('data', (data: Uint8Array) => { received += data.length; })));
+  const connection = dialing.connect(Buffer.from(server.transportKey, 'base64url'), clientLink.address);
+  await vi.waitFor(() => expect(connection.established).toBe(true), { timeout: 5_000 });
+  const stream = connection.openStream('normal');
+  const before = hooks.eventLoopUtilization();
+  stream.write(new Uint8Array(total));
+  await vi.waitFor(() => expect(received).toBeGreaterThanOrEqual(total), { timeout: 20_000, interval: 50 });
+  const busy = hooks.eventLoopUtilization(before).utilization;
+  // 2026-11-22 Linux container, Node 22: 0.47 before the fix, 0.11 after; Windows was already 0.1 (its timer is coarse, the core decided).
+  expect(busy).toBeLessThan(0.3);
+}, 30_000);
 /** 测试价值（Node 驱动收回交完的流）
  * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的连接（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。写完、连结束标记
  *   都交给核心的流，以及放弃了的流，不再留在连接的表里；进度和缓冲照样按流号问核心。
@@ -598,6 +645,47 @@ it('tells a directly connected peer right away when its worker socket is termina
   expect(read().received - before.received).toBeGreaterThanOrEqual(4096);
   host.terminate();
   await vi.waitFor(() => expect(controller.pathTo('a-host')).toBeNull(), { timeout: 2_000 });
+});
+/** 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 连真实中转。连上以后中转
+ *   发来一帧本机不认的消息，本机自己关掉这条连接：随后要自己连回中转（中转看到第二条连接、`relayConnected` 又为真），日志写明
+ *   是本机关的、为什么。
+ * - Bug 依据：2026-11-25 一台 Mac 04:26 的中转连接被本机关掉后再没有重连，只经中转能到的设备全部离线 4.5 小时，重启 App 才恢复。
+ *   worker 里代替 WebSocket 的对象 terminate() 后不发 'close'，Main 随后报的关闭又因它已被删掉而被丢弃，上面一层一直把这条死掉的
+ *   连接当成中转连接，从不重连。
+ * - 现有覆盖缺口：中转断开的用例都是中转或网络关的（Main 收到 close 再转给 worker），没有本机自己关的。
+ * - 最小失败输入：连上后中转发来一帧未知类型的控制消息（经本机回环转发注入）。
+ * - tier：integration，真实 worker、真实中转与证书，本机回环转发；约 1 秒。 */
+it('reconnects its relay after ending that relay connection itself over a frame it refused', async () => {
+  const f = await network(false, undefined, true);
+  f.host.stop();
+  // Between this device and the relay, so a test can send this device a frame the relay itself never would.
+  const forwarder = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(forwarder, 'listening');
+  const toDevice: WebSocket[] = [];
+  forwarder.on('connection', (device, request) => {
+    toDevice.push(device);
+    const relay = new WebSocket(f.relay.url.replace(/^http/, 'ws') + request.url, { headers: { authorization: request.headers.authorization! } });
+    relay.on('message', (data, binary) => { if (device.readyState === WebSocket.OPEN) device.send(data, { binary }); });
+    device.on('message', (data, binary) => { if (relay.readyState === WebSocket.OPEN) relay.send(data, { binary }); });
+    relay.on('close', () => device.terminate()); relay.on('error', () => device.terminate());
+    device.on('close', () => relay.terminate()); device.on('error', () => relay.terminate());
+  });
+  cleanup.push(() => { for (const device of forwarder.clients) device.terminate(); forwarder.close(); });
+  const forwarderUrl = 'ws://127.0.0.1:' + (forwarder.address() as AddressInfo).port;
+  f.a.transport.createWebSocket = (url, options) => new WebSocket(forwarderUrl + new URL(url).pathname, options);
+  const warnings: string[] = [];
+  const socket = await AgentNetWorkerSocket.open({ workerFile: new URL('../../dist/node-worker.mjs', import.meta.url), client: f.a,
+    userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false, bindAddress: '127.0.0.1', lanDiscovery: false,
+    log: { info() {}, warn: (line: string) => { warnings.push(line); } } });
+  cleanup.push(() => socket.close());
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(toDevice).toHaveLength(1);
+  toDevice[0].send(JSON.stringify({ type: 'not-a-relay-message' }));
+  await vi.waitFor(() => expect(toDevice).toHaveLength(2), { timeout: 5_000 });
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(toDevice[0].readyState).toBe(WebSocket.CLOSED);
+  expect(warnings).toEqual(['agent-net relay connection was ended by this device (INVALID_CONTROL); reconnecting']);
 });
 /** 测试价值
  * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 与真实中转读目录。
@@ -865,6 +953,43 @@ it('does not renew an expired public-directory cache or use it for an offline bu
   }));
   socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'invoke', id: 'expired-cache-request', dst: 'a-host', payload: { channel: 'test:echo', args: [] } }));
   expect(await denied).toMatchObject({ payload: { code: 'DEVICE_OFFLINE' } });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：AgentNetWorkerSocket 的 `setPeerPathPreference` 与 `peerRoutes()` 双路往返（directRttMs / relayRttMs）。
+ * - Bug／规则依据：2026-11-22 用户需求——跨国直连慢于中转时需支持双路测速与无断链手动切换（自动 / 直连 / 中转），且两端同步切路。
+ * - 现有覆盖缺口：此前集成测试只验证了中转打洞升级直连，未覆盖直连切回中转、双路 RTT 采集及再切回直连。
+ * - 最小失败输入：一对已直连的真实 worker 对端，依次执行 `setPeerPathPreference('a-host', 'relay')` 和 `'direct'`。
+ * - tier：integration，真实 worker、真实 WASM 核心与 V2 中转。
+ */
+it('measures both direct and relay RTTs and symmetrically switches a live peer between direct and relay without dropping RPC', async () => {
+  const f = await network(true, undefined, true); serve(f.host);
+  await f.controller.openLink('a-host', openPayload);
+  const host = f.sockets.find((socket) => socket.deviceId === 'a-host')!;
+  const controller = f.sockets.find((socket) => socket.deviceId === 'b-controller')!;
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('direct');
+    expect(host.pathTo('b-controller')).toBe('direct');
+  }, { timeout: 8_000 });
+  // Switching to relay updates both sides symmetrically and keeps RPC alive without reconnecting.
+  controller.setPeerPathPreference!('a-host', 'relay');
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('relay');
+    expect(host.pathTo('b-controller')).toBe('relay');
+  }, { timeout: 8_000 });
+  const relayed = controller.peerSnapshot('a-host');
+  expect(relayed).toMatchObject({ path: 'relay', pathPreference: 'relay' });
+  expect(typeof relayed?.directRttMs).toBe('number');
+  expect(typeof relayed?.relayRttMs).toBe('number');
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['via-relay'] })).toMatchObject({ ok: true, result: 'via-relay' });
+  // Switching back to direct restores direct on both sides.
+  controller.setPeerPathPreference!('a-host', 'direct');
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('direct');
+    expect(host.pathTo('b-controller')).toBe('direct');
+  }, { timeout: 8_000 });
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['back-direct'] })).toMatchObject({ ok: true, result: 'back-direct' });
 });
 
 // Bug: cached identities could keep an existing direct path, but could not find it after both nodes restarted.

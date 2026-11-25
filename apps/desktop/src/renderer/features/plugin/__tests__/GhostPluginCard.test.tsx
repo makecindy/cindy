@@ -48,6 +48,7 @@ import {
   failPluginInstallProgress,
 } from '../lib/pluginInstallProgress';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
+import { PluginPublisherBadge } from '../PluginPublisherBadge';
 
 const {
   InstalledPluginDisclosure,
@@ -427,7 +428,8 @@ describe('GhostPluginCard', () => {
     });
     expect(update.getAttribute('aria-busy')).toBe('true');
     expect(update.querySelector('.animate-spinner')).toBeTruthy();
-    expect(update.querySelector('.opacity-0')?.textContent).toContain('settings.ghosts.page.updateTo');
+    expect(update.querySelector('.opacity-0')?.textContent).toBe('settings.ghosts.installConsent.confirmUpdate');
+    expect(update.getAttribute('title')).toBe(update.getAttribute('aria-label'));
     expect((update as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -619,6 +621,26 @@ describe('GhostPluginCard', () => {
 });
 
 describe('MarketPluginCard', () => {
+  it.each([
+    ['public', 'official', 'settings.ghosts.market.publisherKind.official'],
+    ['public', 'personal', 'settings.ghosts.market.publisherKind.community'],
+    ['organization', undefined, 'settings.ghosts.page.origin.organization'],
+    ['custom', undefined, 'settings.ghosts.page.origin.custom'],
+    ['local', undefined, 'settings.ghosts.page.origin.local'],
+  ] as const)('keeps the %s/%s source badge without a hover tooltip', (origin, kind, label) => {
+    vi.useFakeTimers();
+    try {
+      render(<PluginPublisherBadge origin={origin} kind={kind} />);
+      const badge = screen.getByText(label);
+      expect(badge.closest('[title]')).toBeNull();
+      fireEvent.pointerMove(badge, { pointerType: 'mouse' });
+      act(() => vi.advanceTimersByTime(600));
+      expect(screen.queryByRole('tooltip')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Unit: tooltips receive pointer events above the compact card's sibling hit
   // target. A click must still open detail exactly once, without installing.
   it.each([false, true])('opens detail from downloads with compact=%s and keeps installation separate', compact => {
@@ -768,17 +790,19 @@ describe('MarketPluginCard', () => {
     ).toBeTruthy();
   });
 
-  it('shows scope, author and downloads without crowding the list with version or machine id', () => {
+  it.each([false, true])('shows one public source, author and downloads on each market card (compact=%s)', (compact) => {
     const { container } = render(
       <MarketPluginCard
+        compact={compact}
         item={{ ...marketPlugin, downloadStatistics: { requestCount: '12480' } }}
         busy={false}
         onSelect={vi.fn()}
         onIconLoadError={vi.fn()}
       />,
     );
-    const metadata = screen.getByText('settings.ghosts.page.origin.public').parentElement;
-    expect(metadata?.textContent).toBe('settings.ghosts.page.origin.public·Cindy·12.4k');
+    expect(screen.getByText('settings.ghosts.market.publisherKind.official')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.page.origin.public')).toBeNull();
+    expect(screen.getByText('Cindy').parentElement?.textContent).toBe('Cindy·12.4k');
     expect(screen.queryByText('v1.3.11')).toBeNull();
     expect(screen.queryByText('google-calendar')).toBeNull();
     expect(container.querySelector('button button')).toBeNull();

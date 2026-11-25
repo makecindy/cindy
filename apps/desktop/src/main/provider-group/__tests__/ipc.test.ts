@@ -256,7 +256,7 @@ describe('executeProviderGroupCommand reads', () => {
     expect(await executeProviderGroupCommand(d, { action: 'list' })).toEqual({ anthropic: expect.any(Object) });
     expect(d.router.view).not.toHaveBeenCalled();
     await executeProviderGroupCommand(d, { action: 'remote-view', providerId: 'anthropic', deviceId: 'mini' });
-    expect(remoteView).toHaveBeenCalledWith('mini', 'anthropic');
+    expect(remoteView).toHaveBeenCalledWith('mini', 'anthropic', undefined);
   });
 
   it('marks a computer in another computer’s group that this computer cannot reach', async () => {

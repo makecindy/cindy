@@ -227,7 +227,9 @@ export async function handleProviderGroupRemote(
       return {};
     case 'view': {
       if (!deps.isRemoteAllowed(request.providerId)) return { providerId: request.providerId, config: null, members: [] };
-      const options = request.agentKind !== undefined
+      const options = request.display !== undefined
+        ? { display: request.display, includeGuestSupport: request.includeGuestSupport === true }
+        : request.agentKind !== undefined
         ? { model: request.model, agentKind: request.agentKind, includeGuestSupport: request.includeGuestSupport === true }
         : request.model !== undefined
         ? request.includeGuestSupport === true

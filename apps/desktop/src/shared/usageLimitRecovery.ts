@@ -10,6 +10,8 @@ import { readProviderAccountLimitCode } from '@cindy/maker-shared/error-redactio
  * because a reset time here schedules an automatic continuation.
  */
 
+import { isProviderSafetyRefusalError } from '@cindy/maker-shared/error-redaction';
+
 export interface UsageLimitRecoveryHint {
   resetAtMs: number | null;
   /** True only when upstream explicitly identifies account-cycle exhaustion, not a generic 429. */
@@ -353,7 +355,18 @@ export function extractUsageLimitRecoveryHint(
   const codexErrorInfo = typeof root.codexErrorInfo === 'string' ? root.codexErrorInfo : '';
   const status = finiteNumber(root.errorStatus ?? root.status);
 
+  const hasSafetyRefusal =
+    isProviderSafetyRefusalError(text, root.reason) ||
+    records.some((record) =>
+      Object.values(record).some(
+        (value) => typeof value === 'string' && isProviderSafetyRefusalError(value, root.reason),
+      ),
+    );
   if (
+    codexErrorInfo === 'cyberPolicy' ||
+    codexErrorInfo === 'misalignmentPolicyViolation' ||
+    sdkError === 'content_filter' ||
+    hasSafetyRefusal ||
     isBillingDepletionError(root) ||
     codexErrorInfo === 'serverOverloaded' ||
     status === 529 ||
@@ -366,6 +379,7 @@ export function extractUsageLimitRecoveryHint(
   const isUsageLimit =
     sdkError === 'rate_limit' ||
     codexErrorInfo === 'usageLimitExceeded' ||
+    codexErrorInfo === 'rateLimitExceeded' ||
     isAccountUsageLimit ||
     root.usageLimit === true ||
     status === 429 ||

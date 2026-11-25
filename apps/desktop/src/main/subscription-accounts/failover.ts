@@ -5,8 +5,10 @@
  * A task stays on its bound account while that account works. Before the next send (a user
  * message, a retry or an automatic continuation), a bound account that remembers a real failure
  * (usage limit, sign-in, overload), whose trusted quota for the task model is exhausted, or that
- * is signed out moves the task to another usable account chosen by the pool policy. The running
- * turn is never interrupted, and with nowhere to go the message is sent to the original account.
+ * is signed out moves the task to another usable account chosen by the pool policy. A ChatGPT
+ * account whose plan window is used up may still run on credits, so it only moves to an account
+ * with plan quota left (2026-11-24 user decision). The running turn is never interrupted, and with
+ * nowhere to go the message is sent to the original account.
  *
  * Paused or removed accounts are handled by their own pre-send handoff, not here. A same-account
  * remote Agent task is handed off by the native-session recovery before send
@@ -25,7 +27,7 @@ import {
   acquireSubscriptionAccount,
   readRemoteSubscriptionAccountSwitch,
   readRemoteSubscriptionAccountHandoff,
-  readSubscriptionAccountBlocked,
+  readSubscriptionAccountBlockReason,
   type RemoteSubscriptionInvoke,
 } from './runtime.js';
 import { taskPoolRouteAllowsModel, readTaskPoolAccount, type TaskPoolAccount } from './taskAccount.js';
@@ -121,11 +123,12 @@ export async function readSubscriptionAccountSwitch(
   }
   const bound = local ? boundAccount(sessionId, row) : null;
   const agent = row.agentKind === 'pi' ? 'pi' : 'codex';
-  if (!bound || !readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model, agent)) return null;
+  const reason = bound && readSubscriptionAccountBlockReason(bound.provider, bound.accountId, bound.model, agent);
+  if (!bound || !reason) return null;
   if (!(await routeAdmits(bound))) return null;
   try {
     await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, {
-      includeApiKeys: true, agent, exclude: new Set([bound.accountId]), dryRun: true,
+      includeApiKeys: true, agent, exclude: new Set([bound.accountId]), planQuotaOnly: reason === 'plan-exhausted', dryRun: true,
     });
     return `local#${bound.provider}:${bound.accountId}`;
   } catch {
@@ -196,16 +199,19 @@ export async function prepareSubscriptionAccountFailover(
   const bound = row && boundAccount(sessionId, row);
   if (!bound || deps.isRunning(sessionId)) return false;
   const agent = row?.agentKind === 'pi' ? 'pi' : 'codex';
-  if (!readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model, agent)) return false;
+  const reason = readSubscriptionAccountBlockReason(bound.provider, bound.accountId, bound.model, agent);
+  if (!reason) return false;
   if (bound.previousProviderId && !deps.moveRoute) return false;
   if (!(await routeAdmits(bound))) return false;
   assertOwner();
   // Reserve the replacement with the same pool policy, limits and quota order as a new task.
   // None left (all blocked or full): keep the original account and let the send report it.
+  // A ChatGPT account with a used-up plan window can still spend credits, so it only hands the
+  // task to an account with plan quota left; otherwise the task keeps its native context.
   let lease: import('./runtime.js').SubscriptionAccountLease | null;
   try {
     lease = await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, {
-      includeApiKeys: true, agent, exclude: new Set([bound.accountId]),
+      includeApiKeys: true, agent, exclude: new Set([bound.accountId]), planQuotaOnly: reason === 'plan-exhausted',
     });
   } catch {
     return false;
@@ -234,7 +240,7 @@ export async function prepareSubscriptionAccountFailover(
     await lease.bind([`task:${sessionId}`]);
     lease.reserveForTask(sessionId);
     deps.log?.('subscription account failover: moved task before send', {
-      sessionId, provider: bound.provider, from: bound.accountId, to: lease.accountId,
+      sessionId, provider: bound.provider, from: bound.accountId, to: lease.accountId, reason,
       ...(bound.previousProviderId ? { mergedRoute: true } : {}),
     });
     return true;

@@ -16,11 +16,19 @@ export interface CheckboxProps extends Omit<React.InputHTMLAttributes<HTMLInputE
 }
 
 const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
-  ({ className, indeterminate = false, ...props }, forwardedRef) => {
+  ({ className, indeterminate = false, onChange, ...props }, forwardedRef) => {
     const innerRef = React.useRef<HTMLInputElement | null>(null);
-    React.useEffect(() => {
+    // A click clears the native flag even when the prop stays true (e.g. a bulk toggle that
+    // cannot change a partial group), so re-apply the prop after every render, not only when
+    // it changes.
+    React.useLayoutEffect(() => {
       if (innerRef.current) innerRef.current.indeterminate = indeterminate;
-    }, [indeterminate]);
+    });
+    const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+      onChange?.(event);
+      // The parent may not re-render at all (unchanged state); restore the flag right away.
+      event.currentTarget.indeterminate = indeterminate;
+    };
     const setRef = React.useCallback((node: HTMLInputElement | null) => {
       innerRef.current = node;
       if (typeof forwardedRef === 'function') forwardedRef(node);
@@ -38,6 +46,7 @@ const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
           className,
         )}
         {...props}
+        onChange={handleChange}
       />
     );
   },

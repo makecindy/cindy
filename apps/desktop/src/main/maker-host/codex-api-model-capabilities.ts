@@ -1,6 +1,9 @@
 import type {
-  AgentKind, Catalog, CatalogModel, ModelMetadata, ProviderRuntimeModelConfig, RoutingDescriptor,
+  AgentKind, Catalog, CatalogModel, ModelMetadata, Provider, ProviderRuntimeModelConfig, RoutingDescriptor,
 } from '@cindy/model-providers';
+
+// https://developers.openai.com/api/docs/guides/fast-mode documents Fast for this exact Responses model.
+const OFFICIAL_API_FAST_FALLBACK_MODEL = 'gpt-6.2-sol';
 
 /** model/list describes engine capabilities, not account membership or API entitlement. */
 function isOpenAiApiCodexRoute(
@@ -34,15 +37,29 @@ export function codexApiModelMetadata(
   model: ProviderRuntimeModelConfig,
   routing: RoutingDescriptor,
 ): ModelMetadata | undefined {
-  if (!models || !isOpenAiApiCodexRoute(agent, model, routing)) return undefined;
-  // Exact IDs only. Do not infer support for aliases, relays, other engines or Ultrafast.
-  const report = models.find(candidate => candidate.id === model.id)?.discoveredMetadata;
-  if (!report) return undefined;
+  if (!isOpenAiApiCodexRoute(agent, model, routing)) return undefined;
+  const report = models?.find(candidate => candidate.id === model.id)?.discoveredMetadata;
+  const supportsFastMode = report?.supportsFastMode ??
+    (model.id === OFFICIAL_API_FAST_FALLBACK_MODEL && model.discoveredMetadata?.supportsFastMode === undefined
+      ? true : undefined);
+  if (!report && supportsFastMode === undefined) return undefined;
   return {
-    ...(report.efforts !== undefined ? { efforts: report.efforts } : {}),
-    ...(report.defaultEffort !== undefined ? { defaultEffort: report.defaultEffort } : {}),
-    ...(report.supportsFastMode !== undefined ? { supportsFastMode: report.supportsFastMode } : {}),
+    ...(report?.efforts !== undefined ? { efforts: report.efforts } : {}),
+    ...(report?.defaultEffort !== undefined ? { defaultEffort: report.defaultEffort } : {}),
+    ...(supportsFastMode !== undefined ? { supportsFastMode } : {}),
   };
+}
+
+/** The execution catalog must use the same final, route-specific capability as the picker. */
+export function needsOpenAiApiCodexFastDeclaration(
+  provider: Provider | undefined,
+  modelId: string,
+): boolean {
+  if (modelId !== OFFICIAL_API_FAST_FALLBACK_MODEL || provider?.source !== 'user') return false;
+  const routing = provider.routing.codex;
+  const model = provider.models.codex?.find(candidate => candidate.id === modelId);
+  return !!routing && !routing.disabled && model?.supportsFastMode === true &&
+    isOpenAiApiCodexRoute('codex', { route: model.route, api: model.userModelConfig?.api }, routing);
 }
 
 let probe: (() => void) | null = null;

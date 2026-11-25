@@ -1,6 +1,24 @@
-import { useEffect, type RefObject } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 
-import { isEditableKeyboardTarget, shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
+import {
+  editableTargetConsumesKey,
+  isEditableKeyboardTarget,
+  shouldCardShortcutYield,
+} from '@/lib/editableKeyboardTarget';
+
+/** The visible settings subpage owns Back; the root handles keyboard priority once. */
+export const SettingsSubpageBackContext = createContext<RefObject<(() => void) | null> | null>(null);
+
+export function useSettingsSubpageBack(back: (() => void) | null) {
+  const activeBack = useContext(SettingsSubpageBackContext);
+  useLayoutEffect(() => {
+    if (!activeBack || !back) return;
+    activeBack.current = back;
+    return () => {
+      if (activeBack.current === back) activeBack.current = null;
+    };
+  }, [activeBack, back]);
+}
 
 /**
  * 设置页的 Esc 逐层返回（全平台同一套）。按键只在无人认领时才由设置页处理：
@@ -17,6 +35,7 @@ export function useSettingsEscape(
   enabled: boolean,
   onEscape: () => void,
 ) {
+  const subpageBack = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!enabled) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -38,6 +57,8 @@ export function useSettingsEscape(
         !event.defaultPrevented &&
         !event.isComposing &&
         isEditableKeyboardTarget(target) &&
+        // 勾选框不收文字，与按钮一样不需要「先失焦」这一步。
+        editableTargetConsumesKey(target, event.key) &&
         root?.contains(target)
       ) {
         event.preventDefault();
@@ -49,9 +70,11 @@ export function useSettingsEscape(
       // 面板会挂到收合动画结束；它在场时这一下 Esc 归它。
       if (document.querySelector('[data-morph-side]')) return;
       event.preventDefault();
-      onEscape();
+      const back = subpageBack.current ?? onEscape;
+      back();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [enabled, onEscape, rootRef]);
+  return subpageBack;
 }

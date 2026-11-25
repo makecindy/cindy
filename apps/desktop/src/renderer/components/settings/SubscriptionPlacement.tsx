@@ -144,13 +144,17 @@ export function useMoveSubscriptionAccount(providerId: string, onDone?: () => vo
 /** Use the existing provider-to-target flow for placement and local scheduling. */
 export function MergeProviderButton({
   kind,
+  targets: givenTargets,
   providerId,
   providerName,
   disabled,
   onDone,
   openAiAccounts,
 }: {
-  kind: SubscriptionProvider | null;
+  /** Built-in pools: targets are the connected providers of this kind. */
+  kind?: SubscriptionProvider | null;
+  /** Plugin engines (2026-11-23): the other providers of the same engine. */
+  targets?: readonly PlacementTarget[];
   providerId: string;
   providerName: string;
   disabled?: boolean;
@@ -159,7 +163,8 @@ export function MergeProviderButton({
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const targets = useSubscriptionPlacementTargets(kind, providerId);
+  const loadedTargets = useSubscriptionPlacementTargets(givenTargets ? null : kind ?? null, providerId);
+  const targets = givenTargets ?? loadedTargets;
   const source = openAiAccounts?.find(account => account.id === providerId && account.connected);
   const mixedTargets = source ? openAiAccounts?.filter(account => account.mergeTarget) ?? [] : [];
   const [merging, setMerging] = useState(false);

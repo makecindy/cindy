@@ -114,6 +114,8 @@ const CLOSE_COPIES: u8 = 2;
 pub(crate) const CLOSE_PACKET_LEN: usize = DATA_PREFIX + wire::CLOSE_FRAME_LEN + TAG_LEN;
 /// 备用路径最多记这么多条，见 [`SecureConnection::set_path_cost`]。
 const MAX_ALTERNATES: usize = 4;
+/// 最多缓存这么多条未取走的路径测速结果（`poll_probe_rtt`）。
+const MAX_PROBE_RTTS: usize = 16;
 /// 数据路径这么久（也至少这么多个往返）没收到对端的包，才算安静，见 `SecureConnection::set_path_cost`。
 /// 打洞成功、这一端先换到直连时，对端要一两个往返才跟过来，这期间它的包还从中继来，不能把这一端拉回去。
 /// 刚换过路径时新路径的往返还没量出来，按换之前那条路径的往返算。
@@ -542,6 +544,8 @@ struct Candidate {
     /// 这一轮发出的验证值是从 `first` 起连续 `challenges` 个，对端回哪一个都算。
     first: u64,
     challenges: u32,
+    /// 每次发出验证包的时间戳（微秒），收到对应回复时算路径往返。
+    sent_at: [u64; MAX_CHALLENGES as usize],
     due_at: u64,
     interval_us: u64,
     deadline: u64,
@@ -551,6 +555,8 @@ struct Candidate {
     /// 地址来自已认证的对端或这一端自己，不受放大限制，每轮最多发 `MAX_CHALLENGES` 个满长度的验证包，顺便确认这条路径过得了满长度的包；
     /// 数据路径来了新包也接着验证。
     proactive: bool,
+    /// 验证通过后是否按代价切换数据路径；`false` 表示仅测速与验证可达性（`measure_path`）。
+    switch_on_pass: bool,
 }
 
 /// 往哪条路径发，以及正在验证的新路径。路径是调用方编的号，见模块说明。
@@ -561,6 +567,8 @@ struct Paths {
     candidates: Vec<Candidate>,
     /// 还没回的路径验证：（来自哪条路径，值，包长）。回复发回验证来的那条路径。
     responses: VecDeque<(u64, u64, usize)>,
+    /// 最近验证通过并算出的路径往返：（路径号，微秒）。
+    probe_rtts: VecDeque<(u64, u64)>,
     next_value: u64,
     /// 调用方给的路径代价，没给的是 0。
     costs: Vec<(u64, u8)>,
@@ -578,6 +586,7 @@ impl Paths {
             active: 0,
             candidates: Vec::new(),
             responses: VecDeque::new(),
+            probe_rtts: VecDeque::new(),
             next_value: 0,
             costs: Vec::new(),
             alternates: Vec::new(),
@@ -640,13 +649,26 @@ impl Paths {
         }
     }
 
-    fn push_candidate(&mut self, now_us: u64, path: u64, interval_us: u64, same_route: bool, proactive: bool) {
+    fn push_candidate(&mut self, now_us: u64, path: u64, interval_us: u64, same_route: bool, proactive: bool, switch_on_pass: bool) {
         if self.candidates.len() == MAX_CANDIDATES {
             let index = self.candidates.iter().position(|candidate| !candidate.proactive).unwrap_or(0);
             self.candidates.remove(index);
         }
         let deadline = now_us + interval_us * VALIDATION_RTOS;
-        self.candidates.push(Candidate { path, received: 0, sent: 0, first: self.next_value, challenges: 0, due_at: now_us, interval_us, deadline, same_route, proactive });
+        self.candidates.push(Candidate {
+            path,
+            received: 0,
+            sent: 0,
+            first: self.next_value,
+            challenges: 0,
+            sent_at: [0; MAX_CHALLENGES as usize],
+            due_at: now_us,
+            interval_us,
+            deadline,
+            same_route,
+            proactive,
+            switch_on_pass,
+        });
         self.next_value += MAX_CHALLENGES as u64;
     }
 
@@ -665,20 +687,23 @@ impl Paths {
         if self.cost(path) > self.cost(self.active) && !active_failing {
             return false;
         }
-        self.push_candidate(now_us, path, interval_us, same_route, false);
+        self.push_candidate(now_us, path, interval_us, same_route, false, true);
         true
     }
 
     /// 这一端自己要验证 `path`。已经在跟着对端验证的改成这一端自己要的。返回是否开始了新一轮验证。
-    fn probe(&mut self, now_us: u64, path: u64, interval_us: u64) -> bool {
+    fn probe(&mut self, now_us: u64, path: u64, interval_us: u64, switch_on_pass: bool) -> bool {
         if path == self.active {
             return false;
         }
         if let Some(candidate) = self.candidates.iter_mut().find(|candidate| candidate.path == path) {
             candidate.proactive = true;
+            if switch_on_pass {
+                candidate.switch_on_pass = true;
+            }
             return false;
         }
-        self.push_candidate(now_us, path, interval_us, false, true);
+        self.push_candidate(now_us, path, interval_us, false, true, switch_on_pass);
         true
     }
 
@@ -697,17 +722,28 @@ impl Paths {
             None => max_packet_size,
         };
         let candidate = &mut self.candidates[index];
+        let challenge_index = candidate.challenges as usize;
         let value = candidate.first + candidate.challenges as u64;
+        if challenge_index < candidate.sent_at.len() {
+            candidate.sent_at[challenge_index] = now_us;
+        }
         candidate.due_at = now_us + (candidate.interval_us << candidate.challenges);
         candidate.challenges += 1;
         Some((candidate.path, value, size, candidate.same_route))
     }
 
-    /// 对端回了验证：返回是哪一条正在验证的路径发出的值、它是否只换了端口、是不是这一端自己要验证的；不是任何一条的值时返回 `None`。
-    /// 换不换过去由调用方决定（[`switch_to`](Self::switch_to) 或 [`keep_alternate`](Self::keep_alternate)）。
-    fn on_response(&self, value: u64) -> Option<(u64, bool, bool)> {
+    /// 对端回了验证：返回是哪一条正在验证的路径发出的值、是否只换了端口、是不是这一端自己要验证的、以及是否允许换过去；
+    /// 不是任何一条的值时返回 `None`。同时记录这次探测测得的往返时间。
+    fn on_response(&mut self, now_us: u64, value: u64) -> Option<(u64, bool, bool, bool)> {
         let candidate = self.candidates.iter().find(|candidate| (candidate.first..candidate.first + candidate.challenges as u64).contains(&value))?;
-        Some((candidate.path, candidate.same_route, candidate.proactive))
+        let offset = (value - candidate.first) as usize;
+        let rtt_us = candidate.sent_at.get(offset).copied().map(|sent| now_us.saturating_sub(sent)).unwrap_or(0);
+        let result = (candidate.path, candidate.same_route, candidate.proactive, candidate.switch_on_pass);
+        if self.probe_rtts.len() == MAX_PROBE_RTTS {
+            self.probe_rtts.pop_front();
+        }
+        self.probe_rtts.push_back((result.0, rtt_us));
+        Some(result)
     }
 
     /// 数据换到 `path`，其余的验证都不用了。从代价更高的路径换到更便宜的时，原来那条留作备用。`srtt_us` 是原来那条路径的往返。
@@ -1026,11 +1062,29 @@ impl<C: Crypto> SecureConnection<C> {
         if !self.is_established() {
             return false;
         }
-        let started = self.paths.probe(now_us, path, self.config.initial_rto_us);
+        let started = self.paths.probe(now_us, path, self.config.initial_rto_us, true);
         if started {
             self.stats.path_probes += 1;
         }
         started
+    }
+
+    /// 仅探测 `path` 的可达性与往返时间（不切数据路径）；测完后往返经 [`poll_probe_rtt`](Self::poll_probe_rtt) 取出，
+    /// 可达时保留为备用路径。
+    pub fn measure_path(&mut self, now_us: u64, path: u64) -> bool {
+        if !self.is_established() {
+            return false;
+        }
+        let started = self.paths.probe(now_us, path, self.config.initial_rto_us, false);
+        if started {
+            self.stats.path_probes += 1;
+        }
+        started
+    }
+
+    /// 取走一条刚测得的路径往返：（路径号，微秒）。
+    pub fn poll_probe_rtt(&mut self) -> Option<(u64, u64)> {
+        self.paths.probe_rtts.pop_front()
     }
 
     /// 这么久（至少 `floor_us`，也至少 3 个往返）没从数据路径收到对端的包。
@@ -1262,7 +1316,12 @@ impl<C: Crypto> SecureConnection<C> {
                 // 验证期间的确认又都发往了旧端口。真换了网络时不补：自己知道换了网络的对端已经重来，补的确认只确认旧路径上的包，
                 // 2026-11-05 模拟里这时上传反而慢 2%、双向慢 3%。
                 // 这一端自己要验证的路径比数据路径贵、数据路径又还好好的：留作备用，不换。
-                let Some((path, same_route, proactive)) = self.paths.on_response(value) else { return };
+                let Some((path, same_route, proactive, switch_on_pass)) = self.paths.on_response(now_us, value) else { return };
+                if !switch_on_pass {
+                    self.paths.keep_alternate(path);
+                    self.stats.alternates_kept += 1;
+                    return;
+                }
                 // 断了的判断和发起退回时一样：自己连续超时、又安静了，或者可以跟着对端走了。
                 let failing = Self::active_dead(&self.connection, &self.paths, now_us) || Self::active_failing(&self.connection, &self.paths, now_us);
                 if proactive && self.paths.cost(path) > self.paths.cost(self.paths.active) && !failing {
@@ -1591,7 +1650,7 @@ impl<C: Crypto> SecureConnection<C> {
         // 数据路径断了、又有代价更高的备用路径（比如中继）：去验证它，通了就换过去；数据路径在验证期间恢复了就不换。
         if Self::active_dead(&self.connection, &self.paths, now_us)
             && let Some(path) = self.paths.fallback()
-            && self.paths.probe(now_us, path, self.config.initial_rto_us)
+            && self.paths.probe(now_us, path, self.config.initial_rto_us, true)
         {
             self.stats.path_probes += 1;
             self.stats.fallback_probes += 1;

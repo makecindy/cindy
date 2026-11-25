@@ -426,13 +426,13 @@ describe('remote group continuity wiring', () => {
     io.catalogState.mockImplementation(async (...args: unknown[]) =>
       readDeviceProviderCatalog(args[0] as Parameters<typeof readDeviceProviderCatalog>[0],
         args[1] as string, args[2] as Parameters<typeof readDeviceProviderCatalog>[2]));
-    io.invoke.mockImplementation(async (device: string, channel: string, args: unknown[], options?: { preSend?: () => void }) => {
+    io.invoke.mockImplementation(async (device: string, channel: string, args: unknown[], options?: { preSend?: () => void; ownFreshness?: true }) => {
       options?.preSend?.();
       if (channel === 'maker:provider:list') {
         const reply = await invokeProviderMetadataContinuity(device, channel, args, async () => {
           if (directoryFails) throw Object.assign(new Error('directory timeout'), { code: 'TIMEOUT' });
           return { ok: true, result: oldResult };
-        });
+        }, undefined, options?.ownFreshness ? { ownFreshness: true } : undefined);
         if (reply.ok) lastDirectory = reply.result;
         return reply;
       }

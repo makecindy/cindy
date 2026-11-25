@@ -7,6 +7,62 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 桌面后台只读通道的缺失回执
+
+桌面控制端按窗口、对端和通道记住只读接口的明确缺失，不记业务结果，不用版本号猜能力。
+资源列表、历史查询、调度列表及侧栏运行索引在正常桌面上必须注册；调度服务未就绪要等已有
+readiness，不能因为尚未过启动画面而向控制端报“没有 handler”。只认解开 Electron 包装后
+与本次通道完全匹配的 `[NOT_FOUND] no local IPC handler for channel '<channel>'`（仅限线性注册通道），
+以及对端 `REMOTE_INVOKE_ALLOWLIST` 明确拒绝本次通道的 `[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel '<channel>' not allowed remotely`。
+对象不存在、本机加密／信任传输策略拦截、非 owner 或共享任务作用域拒绝、Host 模式不支持、权限拒绝、背压及超时均原样返回，下次读取仍发送。
+延迟在启动画面后注册的插件引擎列表与 `maker:model-context-limit:get` 不记缺 handler，以便同一连接在启动完成后读取。对端重连、版本或已协商能力变化后可再次探测，
+不增加定时器、不重开其它设备连接。旧端无需升级；手机版不走 Electron 后台刷新入口。
+回归：Desktop preload 的 `remoteReadBridge.test.ts`、renderer 的 `useCodexContextWindow.test.tsx` 与 `remoteModelGroups.test.tsx`。
+
+## 远程模型目录统一读取口径（2026-11-23）
+
+同一台电脑、同一份分享的模型目录在各入口给出一致结论，不再因各自的缓存与等待时长而一处有、一处无：
+
+- **一次读取供所有读者**：Main 的目录读取器（`packages/device-link/src/metadataContinuity.ts`）对
+  `maker:provider:list`、`maker:get-capabilities`、`maker:list-available-agents` 设 15 秒新鲜窗口
+  （`REMOTE_CATALOG_FRESH_MS`）：窗口内选择器、机器人、Orca、名单轮询等读者共用上一次实际读取，不再各自
+  发起。来源推送的变化通知与权限变化改变缓存键，立即失效；实时读取（发送前探测、执行）不经过它；
+  `maker:agent:status` 与供应商组视图保持实时。供应商组目录自带 15 秒缓存，且撤下路由需要对方当下的答复，
+  它的读取以 `ownFreshness` 跳过共享窗口（仍有既有的有界回退）。
+- **嵌套读取期限分层**：远控任务经任务电脑代读来源时，代读最多 20 秒，短于控制端默认 30 秒；来源的临时失败
+  保持临时错误码（见协议记录 `remote-agent.md`），控制端保留有界显示并可重试。
+- **分享在线状态一条规则**：`providerSharePickerState`（`packages/device-link/src/providerShareCatalog.ts`）
+  供 Desktop 选择器、收藏与 Mobile 选择器共用。分享者电脑暂时离线时照常列出并标「暂时离线」，不随在线状态
+  来回出现、消失；已暂停的分享仍只在任务正用着时保留。
+- **信任期到期后补读**：Desktop 供应商目录与 Agent 能力的有界快照到期时，若仍有界面在用，补读一次（同一来源
+  5 秒内最多一次），与 Mobile 一致；能力读取遇临时失败保留上一份有界快照，与供应商目录一致。
+- **临时失败不报红**：任务电脑的目录或能力读取遇到临时失败（超时、断链、繁忙、无响应）时，只要上一份有界快照
+  还在界面上，模型药丸与选择器不再显示「读取失败」红色提示（此前一次抖动就亮红，要打开选择器重读才消失）。
+  快照到期、拒绝、不支持等非临时错误照常提示。同一判断（`renderer/lib/temporaryCatalogFailure.ts`）也用于：
+  选择器左侧其他电脑的条目（刷新期间与临时失败时保留，不再整段消失、收藏不再变灰），以及远控任务里被控电脑上
+  的分享名单（临时失败保留上一次确认的名单；断链、在线状态与控制开关变化仍立即清空）。恢复仍按既有设计在回到
+  前台、连接恢复或来源推送变化时重读，不增加定时重试（避免多窗口放大请求与后台轮询）。
+- **手机恢复重试有界**：目录读取失败后的后台恢复最多 8 轮（约 2 分钟退避），之后等回到前台、打开选择器、
+  重连或目录变化再读，不在电脑长期离线时每 30 秒一直读下去。
+- **手机来源页保留分享行**：分享者电脑离线、或刚上线还在连接供应商时，分享来的供应商读成未连接、没有模型。
+  Mobile 来源页仍在原位置列出这条分享（`RemoteAgentCatalog.shareSource`），离线时打开后显示「对方电脑不在线」
+  说明，与 Desktop 选择器保留分享条目一致。
+- **清单变化推送不清空显示**：分享者上线/离线时被控电脑推一次分享清单变化。Mobile 仍立即作废缓存并重读，但屏幕
+  上已有的分享行留到这次重读有结果（最多 12 秒，`SHARE_CHANGE_DISPLAY_HOLD_MS`）；重读失败或超时退回作废后的
+  状态，不留无界旧清单。此前这一来回（Android 实测约 2 秒）会让分享消失再出现。
+
+故障半径三问：① 证据是单个来源目录读取的慢、超时或在线状态变化，只影响这一来源的显示新鲜度，不等于链路或账号
+失效；② 只复用、补读或保留这一来源的目录快照，不重建链路、不重放创建或发送，不延长任何信任期（补读拿到的仍是
+主机转发的剩余预算）；③ 其他电脑、其他分享与同一电脑的其他目录各自按自己的缓存键与预算处理，互不失效。
+不改 wire 形状、channel 或字段，旧端行为不变，自建中转无需修改。
+
+实现与回归：`metadataContinuity.ts`、`providerMetadataContinuity.ts`、`controlledModelCatalog.ts`、
+`useDeviceProviders.ts`、`useAgentCapabilities.ts`、`useProviderShareAgentDevices.ts`、`providerShareFavorites.ts`，
+Mobile `remoteAgentCatalogs.ts`、`useRemoteAgentCatalogs.ts`、`UnifiedModelPickerSheet.tsx`、`useDeviceProviders.ts`；
+`metadataContinuity.test.ts`、`providerMetadataContinuity.test.ts`（「shared catalog fresh window」）、
+`controlledModelCatalog.test.ts`，Mobile `remoteAgentCatalogs.test.ts`、`remoteAgentCatalogsProviderShare.test.tsx`、
+`unifiedMobilePicker.test.tsx`。
+
 ## 手机 Agent-Net 冷启动并行与前台直连快恢复（2026-11-22）
 
 手机 `openMobileAgentNetSocket` 在官方网络下将 `/api/device-link/devices` 准入列表预取（3 秒上限）
@@ -50,6 +106,25 @@ Device Link 的网络提示在防抖期间收到有效帧，就已取得该提�
 互通覆盖真实自建中转的加入、设备签名通信、自动重连与 SDK 版本矩阵。
 
 ## 远程 Agent 控制请求与发送取消（2026-11-18）
+
+正文派发与连接准备分别判定：`proxyHandle.sendLike` 的普通 `send` 分支在 `link.ensure()`（能力握手、原生重开、
+设置恢复）遇到既有 `isRetryableLinkError` 判定的链路失败时，当前输入尚未进入 `callWithId`，
+即使该准备 RPC 带 `inFlight=true`，也返回
+既有的未派发结果，保留 Session 供显式重试，不因它启动正文的未知尾部排空。已确认的启动错误
+保留原错误对象，继续由原有 stopped-open offer 交接判定；没有 offer 不授予换机或重放权限。
+正文调用发出后的超时仍保留原始错误和接受未知语义。能力读取沿用原来最多六次的有界重试，
+没有新增重试、后台恢复器或正文重放。回归见 `connectionPool.test.ts` 的六次 caps 超时与
+显式原线程重试，以及 `proxyHandleClose.test.ts` 的已发出正文超时。Goal 来源保留原始准备错误，
+继续由既有 Goal 失败路径置为 blocked，避免被当成供应商拒绝后自动重试整轮握手；
+`connectionPool.test.ts` 经真实 GoalController → Session → 远程 starter 验证六次超时后没有下一轮 caps。
+非链路准备失败保持原错误合同：组配额的 `ProviderGroupUsageLimitError.limit.resetAtMs`、
+授权拒绝、版本不兼容等交给原有处理者；不把这些业务拒绝吞成无结构的未派发结果。
+同文件经真实重连 open 验证已知／未知配额重置时间仍保留类型和元数据，正文没有派发。
+
+Device Link 的请求与执行诊断使用固定的远程 Agent 操作类别（如 `caps`、`open`、`call:send`），
+未知操作／方法不记录原值，不解码载荷或采集正文、凭证。超时日志与 INFO 诊断共用短请求号，
+分享目标先解析出物理设备引用再截短，避免统一显示成分享前缀。诊断不参与权限、重试或路由判定。
+无 wire 变化，旧端及自建中转继续透明传输既有请求。
 
 `maker:remote-agent:v1` 按请求内容区分优先级：发送、插话、停止、关闭以及内联交互／回调／错误回复
 复用已有交互名额；上传、执行环境帧、HTTP 回复与长轮询仍走普通名额。不扩大并发、排队、字节或
@@ -378,8 +453,40 @@ WebSocket ping，45 秒收不到 pong 就关闭这条连接，交给 worker 既�
 加密连接）保留，device-link 链路不复位、不重放；在持续丢包的线路上最坏约每分钟重连一次，不会
 形成紧循环；③ `packages/agent-net/src/__tests__/workerSocket.test.ts` 用本机真实 WebSocket
 中继验证：不回 pong 时断开，正常回 pong 时超过时限也不断开。用的是标准控制帧，官方中继和自建
-中继（同一 V2 内核，默认自动回 pong）都无需改动。手机端（React Native 的 WebSocket 没有 ping
-接口）仍是同一盲区，尚未处理。
+中继的 WebSocket 都默认自动回复标准 pong。手机端的 React Native WebSocket 没有标准 ping
+接口，改用中继通过 hello 声明支持的 `relay-probe`，在拨号或业务失败后按需验证本机与中继的往返。
+见本文件「同一台电脑的旧可靠连接与新会话同时存在」及
+[Agent-Net 会话兼容说明](protocol-compatibility/agent-net-session.md#手机按需验证中继上行)。
+
+### Agent-Net 中继连接断开后必须重连
+
+2026-11-25 04:26：一台 Mac 的 Agent-Net 中继连接断开后再没有重连，只经中继能到的电脑和手机全部离线，
+直到 08:53 重启 App；同一台电脑另一条中继连接照常每 29 分钟断开重连。原因是 worker 里代替 WebSocket 的对象：
+上传连接拒收中继发来的一帧、自己关掉连接时，它 `terminate()` 后不发 `close`，Main 随后报的关闭又因为它已被删掉而被丢弃，
+`AgentNetSocket` 一直把这条死连接当成中继连接，网络变化时也因此跳过重连。日志特征：`relay connection closed` 前后都没有
+`duplicate hello-ack`，此后没有任何 `opened` / `failed`。
+
+现在三层都要保证重连：
+
+- **worker**：代替对象 `terminate()` 后和 `ws` 一样在下一轮发 `close`（1006），上传连接自己关掉的连接也走正常的断开重连
+  （`packages/agent-net/src/worker.ts`）。
+- **原因进日志**：上传连接自己关掉已建立的连接时带上原因码，Main 记
+  `agent-net relay connection was ended by this device (<CODE>); reconnecting`，原因码只收大写字母、数字与下划线。
+- **Main 兜底**：没有打开的中继连接、worker 又 `AGENT_NET_RELAY_STUCK_MS`（90 秒，从中继断开或 worker 最后一次请求连接算起，取较晚的）
+  没请求过连接时，Main 让 worker
+  `restartRelay`：丢掉它仍当作中继连接的那条、不再等一直没结果的连接尝试，按当前退避重连，并记一条警告。90 秒高于正常重连
+  两次尝试之间最长的间隔（退避最长 15 秒加握手 10 秒，身份冲突冷却最长 60 秒），不打断正常重连；之后仍不通则每 90 秒最多再催一次。
+  计时器迟到超过一个周期（系统睡眠、Main 卡住）时只重新计时，不算证据。
+- **退避**：中继连接撑过 10 秒才把重连间隔重置为 0.5 秒；连上就断的继续翻倍到 15 秒。原来每次连上都重置，若中继每次连上都发来
+  同一帧被拒收，修好以后会变成每半秒重连一次。
+
+故障半径三问：① 证据只是本机到中继这一条连接已断（Main 手里没有打开的中继 WebSocket）且 worker 长时间没有重连，与对端是否在线
+无关；② 只重建本机这一条中继连接，直连与经中继的加密对端连接、device-link 链路和会话都保留，不复位、不重放；兜底最多每 90 秒
+一次，连上即断的连接按退避最长 15 秒一次，不形成紧循环；③ `socket.integration.test.ts`「reconnects its relay after ending that
+relay connection itself over a frame it refused」用真实 worker、真实中继和本机回环转发注入一帧拒收消息，验证重新连上并记下原因；
+`workerSocket.test.ts`「tells a worker whose relay reconnect is stuck to start over」验证 Main 兜底；`portableSocket.test.ts`
+「backs off a relay connection that keeps ending as it opens …」验证退避与 `restartRelay`；三条去掉对应修复时都失败。
+只改客户端，不改 wire、中继与协议；手机用的 `PortableUplink` 原本就会在自己关掉连接后报关闭，只多了退避这一条变化。
 
 ### Agent-Net 中继发送排队上限
 
@@ -507,6 +614,11 @@ WebSocket；不关 WebSocket、不复位对端、不清队列，切换期间丢�
   每轮事件循环看一次时间（Windows 的计时器要 15.6 毫秒，见 `TIMER_GRANULARITY_US`）。数据稳定在传时，对端每两个包回一个确认，
   每个到达的包本来就带着核心走一轮、把到点的包发出去；现在最近 2 毫秒收到过包就不看时间，只设 1 毫秒的计时器兜底
   （`wakePlan`、`INBOUND_CLOCK_US`）。每一阵开头、第一个确认回来之前的那一个往返没有到达可依靠，照旧看时间。
+  2026-11-22 又查到计时器准的系统上仍然空转：Linux、macOS 的计时器精度是 1 毫秒，`needsFineTimer` 原来不问核心，把这些系统上所有
+  短于一毫秒的等待都当成等不起，确认包成批到达、两批之间超过 2 毫秒时就一轮一轮看时间。现在和 Windows 一样由核心的 `fine_timer`
+  判断（每毫秒要发 64 KB 以上才看时间）。容器弱网（Linux、Electron 42）：每 MiB 的 CPU 4G 线路 224–460 → 145–228 毫秒，跨国线路
+  410–580 → 140–250 毫秒，速度不变。回归：`socket.integration.test.ts`「leaves the driver thread mostly idle…」（改前 Linux 上事件循环
+  利用率 0.43–0.47，改后 0.11）。
 - **日志看不出对端走直连还是中转。** 连接都是先经中转建立、再换到直连，而 `agent-net peer … connected via …` 只在建立和断开时记。
   现在已连上的对端换路径时再记一行 `agent-net peer … moved from relay to direct`（或反过来），来回跳动时每台对端 30 秒最多一行，
   之后记下最后停在哪条路（`workerSocket.ts` 的 `logPath`）。只写缩短的设备号和路径，不写地址。
@@ -543,8 +655,11 @@ Device Link 上有活着的链路时照旧走 Device Link，那上面已确认�
 对端把结果放进本机已经没有的旧可靠链路，59 秒后超时、再引发重开。包这一层后，原客户端返回它自己的方法（`connectionFor`、
 `crossAccountConnection`）改为返回这一层，入口里「`connectionFor(peer) === client`」这类身份比较仍然成立。
 和对端的连接刚建好（或换了一条）时，双方的会话宣告还要一来一回：这段时间里 Device Link 上又没有这个对端的链路状态，
-建链和调用先等会话，最多到连接建好后 250 毫秒 + 4 个往返（往返未知时 1.5 秒，上限也是 1.5 秒），会话一到就放行；
-到时还没有（对端没启用会话）就走 Device Link，之后不再等。不等的话这一次会落到 Device Link 并一直用到那条链路断开。
+建链和调用先等会话，直连最多到连接建好后 250 毫秒 + 4 个往返（往返未知时 1.5 秒，上限 1.5 秒），经 Agent-Net 中转的路径上限放宽到 4 秒
+（2026-11-24 实测中转路径从连接建好到会话宣告就绪常需 2.8～3.4 秒，1.5 秒上限会导致提前回落 Device Link），会话一到就放行；
+到时还没有（对端没启用会话）就走 Device Link，之后不再等。即使首轮建链早于会话到达落在了 Device Link 上：若控制端发包小但被控端回程大包堵住导致
+`INVOKE_TIMEOUT`，后续同账号幂等只读请求（含 `maker:remote-agent:v1` 的 `poll` / `caps` 与列表探测）立即改走已就绪的会话，写操作仍保序留在原流；
+一旦旧 Device Link 流无待发帧与在途请求，下一次 `openLink` 重开即把控制链路平滑切到会话（用户显式断开时同步关闭两条出站状态）。
 连接建好的时刻取自 Agent-Net 主连接的路径通知（`agentNetRuntime.ts`）。
 还没有连接时（2026-11-17 真机发现，同账号所有开着 Agent-Net 的设备都有）：
 - 对方此刻在 Agent-Net 目录里在线（本机刚启动，或连接刚断）：先拨它（`PortableSocket.connectSession`），会话一到就放行，最多 1.5 秒，不等拨号结束；
@@ -1037,6 +1152,14 @@ Session 准备期柔性停止的 `SendOptions.signal` 由本机代理传到同�
 权限、Plan 和自动动作来源沿用原轮次；Stop、新输入、归档／删除使恢复失效。持续不可达、撤权或
 接不回原生会话保留原错误与人工恢复入口。伙伴、目标模式与共享任务沿用既有自动恢复归属检查。
 
+`remote_agent_restarted` 是以上三类关闭的恢复分类，不证明操作系统进程退出。未完成轮次的合成
+错误保留收到的 `remoteCloseReason` 与原 `remoteRunId`，并经现有持久化字段 `sdkError` 保存同一关联；
+合成错误只说明远端运行不可用，不把关闭详情放进参与恢复判定的 `message` / `sdkError`，避免上下文
+重建、工具或账号错误判定抢占原线程恢复。此前已收到的真实业务错误仍由原终态归属保留，不从这些
+关闭信号推断崩溃、OOM 或退出时刻。
+仅修改当前 run 的本地错误投影，不增加请求、恢复次数或副作用重放，不影响其他 peer；沿用已有
+wire 字段，旧执行端和官方／自建中转无需升级。回归见 `connectionPool.test.ts` 的 first-turn restart 场景。
+
 托管 Claude Code 的工具连接（2026-11-04）：设备托管时 Cindy 工具都是经隧道回到任务所在电脑的
 HTTP MCP，每次握手都要跨机往返。Claude Code 默认 `MCP_TIMEOUT` 只等 30s，到点即判连接失败，
 这一轮没有任何工具（实测中转变慢时 91 个工具全部被判断开，Agent 只能回复连不上）。托管会话启动时
@@ -1056,11 +1179,18 @@ HTTP MCP，每次握手都要跨机往返。Claude Code 默认 `MCP_TIMEOUT` 只
 既有 `user-revoked`，不自动续跑或让供应商组换电脑；中转也不发换电脑凭证。旧版 `aborted` 无法
 区分退出和主动断开：兼容旧版退出意味着旧版一键断开可能连回一次，关闭远程控制则被权限门拒绝。
 
-分享在已经发生链路不可达后临时报 `ACCESS_REVOKED` / `REMOTE_AGENT_SHARE_UNAVAILABLE`，
-只保留原两分钟窗口，不重置截止时间；首次即撤权仍立即失败。恢复只作用于当前 run 的连接与
+分享名单未确认等临时故障可能首先报 `REMOTE_AGENT_SHARE_UNAVAILABLE`，此时也进入已有两分钟
+拉取恢复窗口，沿原游标重拉，不重发正文；错误仍携带明确撤权或关闭远控的底层 code 时，不按
+临时不可用启动恢复。已经发生链路不可达后临时报 `ACCESS_REVOKED` / `REMOTE_AGENT_SHARE_UNAVAILABLE`，
+只保留原窗口，不重置截止时间；首次即撤权、明确暂停／移除与远端撤权终态仍立即失败。恢复只作用于当前 run 的连接与
 当前电脑的拉取器，不重连共享 relay、不绕过授权。两控制端共用一个 host 的回归中，一个 run 消失并
 重新打开，另一控制端仍能发送、原生会话不变。实现及回归：`remote-agent/controller/`、
 `remote-agent/__tests__/connectionPool.test.ts`、`poll.test.ts` 与 `provider-group/service.ts`。
+
+远程 Agent 分享调用层保留拒绝的原始底层 code，供应商策略拒绝保留固定的
+`REMOTE_AGENT_PROVIDER_NOT_ALLOWED` 标记；分享专属展示前缀不替代拒绝证据。
+首次明确撤权、关闭远控或供应商策略拒绝不会被 `IPC_ERROR + SHARE_UNAVAILABLE` 翻译成临时重试。
+回归经 `remoteInvokeSendGuard.test.ts` 的真实分享调用适配器、invoker 与 poller 串联验证。
 
 直连分享任务持久位置仍为 `share:<id>`，该位置代表 O，不等于实际执行电脑 M。重启恢复通过
 现有直连句柄向 O 为原 M 申请新许可并探测 M，空闲 run 重开也先完成相同授权，不改选电脑。
@@ -1078,7 +1208,10 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
 
 1. **故障层级**：只处理同一台被控端的事件拉取。`poll` 遇到 peer reset、超时、背压或链路暂断时，
    用同样的游标重拉(0.5s 起指数退避，上限 5s；另一个在途 poll 成功即提前恢复)；连续 2 分钟拉不到
-   才结束这台被控端上的任务并提示对方不可达。本机「目标设备无响应」熔断打开后的快速失败
+   才结束这台被控端上的任务并提示对方不可达。若该被控端此刻仍在持续向本机送达业务分片或推送（`DeviceLinkClient`
+   分片重组期同步更新 `lastBusinessReceivedAt`，慢中转上单个数百 KB 回包堵住队头时对端并非失联），`responsivenessTracker`
+   在 90 秒耐心上限内不把并发超时计入 `DEVICE_UNRESPONSIVE` 熔断，`RemoteAgentPoller` 也暂缓推进 2 分钟失联计时（总上限
+   `REMOTE_AGENT_CONGESTED_GIVE_UP_MS = 5 分钟`，防止单向刷推送而 `poll` 永久卡死时无限挂起）。本机「目标设备无响应」熔断打开后的快速失败
    (`DEVICE_UNRESPONSIVE`)同样按链路暂断重拉：它不发网络请求，熔断按自己的单飞探测恢复，
    不能绕过两分钟窗口直接结束任务（2026-11-04：一次 1–2 分钟的出口抖动让后台 PR 跟进轮次
    当场失败）。单个任务的流数据与游标对不上时只结束那一个任务。
@@ -1929,3 +2062,13 @@ review 按此检查：功能类 PR 缺这段说明 = P1。
 4. PR Description 是否给出了三选一结论，而不是留空或只写「不涉及」？
 5. 触及重试／超时／断链恢复路径的改动：恢复动作是否与故障同半径？扩大半径是否给出
    明确理由？是否有多 peer 拓扑用例证明其它 peer 零感知？
+
+### 同一台电脑的旧可靠连接与新会话同时存在
+
+同账号 Device Link 等待恢复时，新的任务列表、单条及批量会话读取、待恢复会话和运行中任务查询可以在已认证的 Agent-Net 会话上发出，回包按请求来路交付。旧连接上尚待确认的写入和回执继续在原处恢复。等旧连接没有待发帧、也没有业务请求等结果时，下次控制握手可以交给新会话，再按原订阅流程建订阅。跨账号连接仍按分享资源绑定。对同一台电脑的同一轮拨号共用等待；同会话、相同握手内容和超时预算的并发建链共享一次握手。
+
+即使 Device Link 显示就绪，同账号设备的可靠窗口、发送缓冲或发送配额也可能阻塞。只在发送端确认本次调用一片都没写出时，任务快照、资源目录（manifest、list、get）与新远程桌面连接的能力、认证协商和启动请求可以交给同一设备当前已认证的 Agent-Net 会话。能在入队前判断就不占序号；已占序号的先撤下原业务帧，同序号保留 skip。只切这一次调用，已发出的分片、结果未知的请求、旧订阅和其他设备继续走原路。新桌面连接在备用会话上取得的租约，其信令、输入和停止跟随同一会话；等待发送时复核取消、显式断开和会话身份。故障证据与动作限于这台设备的一个请求，沿用现有协议和被控端权限检查。
+
+单台电脑的业务超时或拨号失败只触发路径验证。手机对目录中在线的设备首次拨号失败时，也验证当时使用的中继连接。桌面和 Host 对 WebSocket 中继发协议 ping；手机在同账号中继 hello 声明 `relayProbe: true` 时才发送 `relay-probe`，中继在当前已认证连接上回答 `relay-pong`。手机每 15 秒最多一次探测，有应答就保留连接；正常调度下探测满 15 秒仍无应答才触发这条上行的重连。中继不向访客声明这个能力。旧客户端忽略新增 hello 字段，新客户端连旧中继时不发新帧；官方和自建中继共用实现。中继连接恢复不重建其它设备的直连，也不重发已经送达的业务操作。
+
+回归入口为 `agentNetSessionLinks.test.ts`（64 帧积压、读写分流、订阅接手、并发建链，以及真实回环 WebSocket 上单向阻塞 27 帧时的资源查询和远程桌面建连）、`portableClient.test.ts`（应答、静默、旧版握手）、`workerSocket.test.ts` 和中继 `relay.integration.test.ts`（真实 WebSocket 往返）。

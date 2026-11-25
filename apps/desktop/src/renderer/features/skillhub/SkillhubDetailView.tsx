@@ -499,6 +499,7 @@ function SkillUsagePanel({
                 >
                   <button
                     type="button"
+                    // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                     className="inline-block max-w-full cursor-help truncate rounded-sm bg-transparent p-0 text-right font-medium text-inherit underline decoration-[var(--cmd-palette-item-meta)] decoration-dotted underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                   >
                     {formatReadObservation(summary.readObservation)}
@@ -514,6 +515,7 @@ function SkillUsagePanel({
                 >
                   <button
                     type="button"
+                    // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                     className="inline-block max-w-full cursor-help truncate rounded-sm bg-transparent p-0 text-right font-medium text-inherit underline decoration-[var(--cmd-palette-item-meta)] decoration-dotted underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                   >
                     {formatVersionComparison(versionComparison)}
@@ -556,7 +558,7 @@ function SkillUsagePanel({
                 <div
                   role="img"
                   aria-label={t('skillhub.detail.usageTrendChartLabel')}
-                  className="flex h-14 items-end gap-[3px] border-b border-[var(--cmd-palette-border)]"
+                  className="flex h-14 items-end gap-0.5 border-b border-[var(--cmd-palette-border)]"
                 >
                   {trendRows.map((point) => {
                     const height =
@@ -849,7 +851,7 @@ function DiagnosisAgentOption({
         'disabled:cursor-not-allowed disabled:opacity-60',
       )}
     >
-      <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--settings-btn-secondary-bg)] text-[var(--msg-assistant-text)]">
+      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--settings-btn-secondary-bg)] text-[var(--msg-assistant-text)]">
         <Icon size={16} />
       </span>
       <span className="text-sm font-medium text-[var(--msg-assistant-text)]">{title}</span>
@@ -915,7 +917,7 @@ function FileTreeRow({ entry, parentDir, depth, currentPath, onSelectFile }: Fil
         onClick={onRowClick}
         style={{ paddingLeft: 4 + depth * 16 }}
         className={cn(
-          'flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left',
+          'flex w-full items-center gap-1.5 rounded-lg px-1 py-1 text-left',
           'transition-colors',
           isSelected
             ? 'bg-[var(--settings-btn-secondary-bg)]'

@@ -13,6 +13,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
 import { buildUserProvider } from '@cindy/model-providers';
+import { prepareCodexCustomContextCatalog } from '../codex-custom-context-catalog.js';
 import { CodexAgent } from '../../../../../../packages/maker-core/src/agents/codex/index.js';
 import type { CodexModelListItem } from '../../../../../../packages/maker-core/src/agents/codex/app-server/protocol.js';
 import type { AgentSessionHandle } from '../../../../../../packages/maker-core/src/agents/base-agent.js';
@@ -45,7 +46,12 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
   it.each([
     { model: 'gpt-5.6-terra', effort: 'max' },
     { model: 'gpt-6.1-terra', effort: 'xhigh' },
-  ])('forwards $model Ultra and Fast to a loopback API', async ({ model, effort }) => {
+    // #12423 integration: exact model missing from native discovery, one Fast
+    // request and one Standard control through the real Desktop proxy.
+    { model: 'gpt-6.2-sol', effort: 'medium', declareFastMode: true, mode: 'task' },
+    // Review has a dedicated host without a context-window override.
+    { model: 'gpt-6.2-sol', effort: 'medium', declareFastMode: true, mode: 'review' },
+  ])('forwards $model with the selected speed to a loopback API ($mode)', async ({ model, effort, declareFastMode, mode }) => {
     fixture.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-terra-native-'));
     const home = path.join(fixture.root, 'home');
     const codex = path.join(fixture.root, 'codex');
@@ -120,14 +126,28 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
         OPENAI_API_KEY: '', CODEX_API_KEY: '', XDT_CODEX_API_KEY: 'synthetic-placeholder',
         HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', ALL_PROXY: 'http://127.0.0.1:9',
         NO_PROXY: '127.0.0.1,localhost' };
+      const review = mode === 'review';
       agent = new CodexAgent({ binaryPath: binary!, logger,
         auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }),
           logout: async () => {}, getAuthEnv: async () => env },
         runtimeConfig: { behaviorFlags: env }, resolveCodexLocalAuthPolicy: routing.captureCodexLocalAuthPolicy,
-        prepareCodexExtraSpawnConfig: async () => ({
-          extraArgs: buildCodexProxySpawnArgs(endpoint, 'provider-oauth'), extraEnv: {},
-          codexProxyActive: true, codexOpenAiWebSocketsEnabled: false,
-        }),
+        ...(declareFastMode ? {
+          resolveCodexThreadContextWindow: () => 272_000,
+          needsCodexFastCatalog: (providerId, modelId) => providerId === 'openai-api' && modelId === model,
+        } : {}),
+        prepareCodexExtraSpawnConfig: async (_providers, context) => {
+          const extraArgs = buildCodexProxySpawnArgs(endpoint, 'provider-oauth');
+          if (declareFastMode && context.hostPurpose === (review ? 'review' : 'custom-context') &&
+              context.customContextModel === model && context.customContextProviderId === 'openai-api') {
+            if (review) expect(context.customContextWindow).toBeUndefined();
+            const prepared = await prepareCodexCustomContextCatalog({
+              binaryPath: binary!, codexHome: codex, modelId: model,
+              contextWindow: context.customContextWindow, declareFastMode,
+            });
+            extraArgs.push(...prepared.extraArgs);
+          }
+          return { extraArgs, extraEnv: {}, codexProxyActive: true, codexOpenAiWebSocketsEnabled: false };
+        },
         registerCodexSystemPromptForThread: ({ sessionId, threadId, text, ...options }) =>
           proxy.registerComposed(sessionId, threadId, text, options),
       });
@@ -135,10 +155,16 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
       expect(await agent.refreshLocalModels({ credentialMode: 'provider-oauth',
         onModelsListed: models => { listed = models; } })).toBe(true);
       const discovered = listed.find(item => item.model === model);
-      expect(discovered?.supportedReasoningEfforts?.map(item => item.reasoningEffort)).toContain('ultra');
-      expect(discovered?.additionalSpeedTiers).toContain('fast');
+      if (declareFastMode) {
+        expect(discovered).toBeUndefined();
+      } else {
+        expect(discovered?.supportedReasoningEfforts?.map(item => item.reasoningEffort)).toContain('ultra');
+        expect(discovered?.additionalSpeedTiers).toContain('fast');
+      }
       handle = await agent.startSession({ sessionId: 'native-terra-api', providerId: 'openai-api', model,
-        effort: 'ultra', fastMode: true, workingDir: work, permissionMode: 'bypassPermissions', makerMemoryEnabled: false });
+        effort: declareFastMode ? 'medium' : 'ultra', fastMode: true, workingDir: work,
+        ...(review ? { reviewMode: true } : {}),
+        permissionMode: 'bypassPermissions', makerMemoryEnabled: false });
       const events: string[] = [];
       const complete = (async () => {
         for await (const event of handle!.events()) {
@@ -163,7 +189,23 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
       expect(failures).toEqual([]);
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({ model, reasoning: { effort }, service_tier: 'priority' });
-      expect(JSON.stringify(requests[0]!.input)).toContain('Proactive multi-agent delegation is active.');
+      if (declareFastMode && !review) {
+        await handle.setFastMode!(false);
+        const finished = (async () => {
+          for await (const event of handle!.events()) {
+            if (event.type === 'error') throw new Error(JSON.stringify(event));
+            if (event.type === 'done') return;
+          }
+          throw new Error('Native Codex ended before completing the Standard turn');
+        })();
+        await handle.send({ type: 'user', content: 'Use Standard for the second request.' }, { throwOnStartFailure: true });
+        await finished;
+        expect(requests).toHaveLength(2);
+        expect(requests[1]).toMatchObject({ model });
+        expect(requests[1]).not.toHaveProperty('service_tier');
+      } else if (!review) {
+        expect(JSON.stringify(requests[0]!.input)).toContain('Proactive multi-agent delegation is active.');
+      }
       expect(events.join('')).toContain('SYNTHETIC_TERRA_OK');
     } finally {
       try {

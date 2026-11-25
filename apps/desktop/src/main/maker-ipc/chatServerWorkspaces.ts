@@ -2,7 +2,7 @@
  * What this computer keeps for a chat server's groups: project choices and prepared workspaces, the
  * task cards it posted, and each group's Cindy task. Device-local; never shared chat state.
  */
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
@@ -70,21 +70,40 @@ const liveTaskCard = z.object({
 });
 export type ChatLiveTaskCardRecord = z.infer<typeof liveTaskCard>;
 /**
+ * The cards file last read, while the file on disk is still that one: a sync pass reads the store once
+ * per card and step, and re-reading and checking the whole file each time is what it costs. One file
+ * only (the account and server in use), dropped when its owner is gone. Callers replace a card rather
+ * than change it in place, so the cards are shared and only the map is copied.
+ */
+let taskCardsRead: { file: string; stamp: string; cards: Record<string, ChatLiveTaskCardRecord> } | null = null;
+const fileStamp = (file: string) => {
+  try { const s = statSync(file); return `${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`; } catch { return null; }
+};
+/**
  * Task cards this computer posted (bot-group-chat.md §10), by message ID: it keeps each card and the
  * group in step with the card's task (`groupTaskCards.ts`). Local only; the card itself is in the group.
  */
 export function chatServerTaskCards(endpoint: string, actorId: string, current: () => boolean) {
   const file = ownerScopedUserDataPath('chat-workspace-settings', createHash('sha256').update(`${endpoint}\n${actorId}`).digest('hex'), 'task-cards.json');
-  const check = () => { if (!current()) throw new Error('OWNER_CHANGED'); };
+  const forget = () => { if (taskCardsRead?.file === file) taskCardsRead = null; };
+  const check = () => { if (!current()) { forget(); throw new Error('OWNER_CHANGED'); } };
   return {
     read(): Record<string, ChatLiveTaskCardRecord> {
-      check(); const raw = readAtomicFileSync(file);
+      check();
+      const stamp = fileStamp(file);
+      if (stamp && taskCardsRead?.file === file && taskCardsRead.stamp === stamp) return { ...taskCardsRead.cards };
+      forget();
+      const raw = readAtomicFileSync(file);
       if (!raw) return {};
       const parsed = z.record(z.string(), liveTaskCard).safeParse(JSON.parse(raw));
-      return parsed.success ? parsed.data : {};
+      if (!parsed.success) return {};
+      const read = fileStamp(file);
+      if (read && read === stamp) taskCardsRead = { file, stamp: read, cards: parsed.data };
+      return { ...parsed.data };
     },
     save(value: Record<string, ChatLiveTaskCardRecord>) {
       check(); mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      forget();
       atomicWriteFileSync(file, JSON.stringify(value));
     },
   };

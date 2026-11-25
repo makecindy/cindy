@@ -265,9 +265,13 @@ function runtimeForActiveOwner(): OwnerRuntime {
     localAppVersion: () => app.getVersion(),
     listDevices: async () => (await handleListDevices(deviceDirectoryDeps())).devices,
     readDeviceProviders: async (agentDeviceId, options) => rememberPools(agentDeviceId,
-      await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live })),
+      await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId,
+        { groupMember: true, live: options?.live, ownFreshness: true })),
     readDeviceProviderCatalog: async (agentDeviceId, options) => {
-      const catalog = await readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live });
+      // The directory keeps its own 15s cache and its retirement decisions need the host's
+      // current answer, so it opts out of the shared fresh window (still gets continuity fallback).
+      const catalog = await readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId,
+        { groupMember: true, live: options?.live, ownFreshness: true });
       rememberPools(agentDeviceId, catalog.views);
       return catalog;
     },
@@ -418,6 +422,14 @@ const routerFacade: ProviderGroupRouter = {
     const runtime = runtimeForActiveOwner();
     const view = await runtime.router.view(providerId, options);
     return activeOwnerScopeKey() === runtime.owner ? view : { providerId, config: null, members: [] };
+  },
+  memberViews: (providerId) => {
+    const runtime = runtimeForActiveOwner();
+    return new Map([...runtime.router.memberViews(providerId)].map(([key, read]) => [key, async () => {
+      if (activeOwnerScopeKey() !== runtime.owner) return { providerId, config: null, members: [] };
+      const view = await read();
+      return activeOwnerScopeKey() === runtime.owner ? view : { providerId, config: null, members: [] };
+    }]));
   },
   running: (providerId, memberKey) => runtimeForActiveOwner().router.running(providerId, memberKey),
   markCooling: (providerId, memberKey, until, model) => runtimeForActiveOwner().router.markCooling(providerId, memberKey, until, model),

@@ -32,7 +32,7 @@
     "notFound": "이 기기는 더 이상 계정에 없습니다.",
     "deleteDevice": "기기 삭제",
     "deleteTitle": "{{name}} 기기를 삭제할까요?",
-    "deleteMessage": "계정에서 이 기기를 제거하고 원격 연결을 끊습니다. 기기의 세션과 파일은 유지됩니다. 해당 기기에서 다시 로그인하면 추가할 수 있습니다.",
+    "deleteMessage": "계정에서 이 기기를 제거하고 원격 연결을 끊습니다. 기기의 세션과 파일은 유지됩니다. 해당 기기에서 ‘다시 참여’를 탭하면 되돌릴 수 있습니다.",
     "deleteFailed": "기기를 삭제하지 못했습니다.",
     "deleteOnline": "현재 서버는 온라인 기기 제거를 지원하지 않습니다. 서비스 업데이트 후 다시 시도하세요.",
     "deleteRejectedWhileOffline": "기기를 삭제하지 못했습니다. 목록에서는 오프라인이지만 서버에는 아직 온라인으로 기록되어 있습니다.",
@@ -393,6 +393,7 @@
       "showDeviceTasks": "작업 보기",
       "openDevice": "열기",
       "renameDevice": "이름 변경",
+      "groupDevice": "기기",
       "groupProject": "프로젝트",
       "sortBy": {
         "priority": "우선순위",
@@ -434,11 +435,15 @@
       "showCollapsedTeammateAvatars": "접었을 때 아바타 표시",
       "displayHeading": "표시",
       "view": {
+        "card": "카드",
         "text": "텍스트",
         "list": "리스트"
       },
       "taskInfoHeading": "작업 정보",
       "taskInfo": {
+        "teammate": "동반자 아바타",
+        "project": "프로젝트 아이콘 및 이름",
+        "harness": "Harness 아이콘",
         "time": "시간",
         "pr": "PR 상태",
         "tokens": "토큰",
@@ -952,6 +957,8 @@
     "timeout": "“{{device}}”이(가) 아직 준비되지 않았습니다. 그 컴퓨터에서 Cindy가 열려 있고 온라인인지 확인한 뒤 다시 시도하세요.",
     "conflict": "{{name}}은(는) 이미 “{{device}}”(으)로 옮겨졌습니다.",
     "switchFailed": "지금은 주 컴퓨터를 바꿀 수 없습니다. 잠시 후 다시 시도하세요.",
+    "skillTargetOutdated": "“{{name}}”에 본문이 64 KB를 초과하는 스킬이 있어 “{{device}}”의 이전 버전 Cindy가 받을 수 없습니다. 해당 컴퓨터의 Cindy를 업데이트한 후 동반자를 옮기세요. 동반자는 기존 컴퓨터에 그대로 있습니다",
+    "skillTargetOutdated_skill": "“{{device}}”의 이전 버전 Cindy는 “{{slug}}” 스킬을 받을 수 없습니다. 본문이 {{bodyBytes, number}}바이트로 64 KB 제한을 초과합니다. “{{name}}”은 기존 컴퓨터에서 계속 실행 중입니다. 대상 컴퓨터에서 Cindy를 업데이트한 후 다시 시도하세요.",
     "unknownDevice": "다른 컴퓨터",
     "runsOn": "“{{device}}”에서 실행 중",
     "homeTitle": "주 컴퓨터",

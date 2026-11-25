@@ -1,3 +1,4 @@
+import { TASK_ACTIVITY_CAPABILITY, TASK_ACTIVITY_SNAPSHOT, type ForegroundHostTaskActivity } from '@cindy/device-link';
 import type { readUsageWidgetSnapshot } from '../quota-overview/service.js';
 import type { configureStandbyGuestCleanup } from './providerShareAvailabilityGuests.js';
 import type { prepareShareAvailability } from './providerShareAvailability.js';
@@ -357,8 +358,8 @@ interface QueuedRemoteInvokeResult {
   queuedAt: number;
 }
 
-/** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
-type SessionsSubscribedListener = (controllerDeviceId: string) => void;
+/** 列表或共享任务订阅恢复时通知 host 定向补发活动状态。 */
+type SessionsSubscribedListener = (controllerDeviceId: string, sessionId?: string) => void;
 
 /**
  * 一个待发批段。按 ownerStamp 分段:ownerStamp 是数据归属水印、批内必须一致,
@@ -471,6 +472,8 @@ export interface InboundDispatchPorts {
   syncRemoteControlAccessGeneration: typeof syncRemoteControlAccessGeneration;
   requestPluginOauth?: typeof requestPluginOauth;
   invalidatePluginOauth?: typeof invalidatePluginOauth;
+  /** An omitted verdict leaves channel handling to the existing IPC path. */
+  hasLocalChannel?: (channel: string) => boolean | undefined;
   dispatchLocalInvoke: typeof dispatchLocalInvoke;
   assertRemoteBotInvocationAllowed: typeof assertRemoteBotInvocationAllowed;
   projectRemoteSessionResult: typeof projectRemoteSessionResult;
@@ -499,6 +502,15 @@ export interface InboundDispatchPorts {
   projectInteractionDismissedForRemote: typeof projectInteractionDismissedForRemote;
   projectInteractionRequestForRemote: typeof projectInteractionRequestForRemote;
   remoteWorkingDirRejectionToIpcError: typeof remoteWorkingDirRejectionToIpcError;
+}
+
+/**
+ * Private same-account channels registered only by a managed cloud runtime.
+ * Unregistered (every ordinary desktop), a channel answers CHANNEL_NOT_ALLOWED.
+ */
+export interface CloudPrivateInvokeHandler {
+  channel: string;
+  handle(controller: string, raw: unknown): Promise<unknown>;
 }
 
 export function createInboundDispatch(ports: InboundDispatchPorts) {
@@ -530,6 +542,7 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     syncRemoteControlAccessGeneration,
     requestPluginOauth = unavailable('requestPluginOauth'),
     invalidatePluginOauth,
+    hasLocalChannel,
     dispatchLocalInvoke,
     assertRemoteBotInvocationAllowed,
     projectRemoteSessionResult,
@@ -838,6 +851,11 @@ let providerGroupRemoteHandler: ProviderGroupRemoteHandler | null = null;
 function setProviderGroupRemoteHandler(handler: ProviderGroupRemoteHandler | null): void {
   providerGroupRemoteHandler = handler;
 }
+
+/** The owner's browser reaches provider management through the settings relay. */
+function getProviderGroupRemoteHandler(): ProviderGroupRemoteHandler | null {
+  return providerGroupRemoteHandler;
+}
 let setupSnapshotRemoteHandler: SetupSnapshotRemoteHandler | null = null;
 
 function setSetupSnapshotRemoteHandler(handler: SetupSnapshotRemoteHandler | null): void {
@@ -852,6 +870,17 @@ let agentNetSwitchRemoteHandler: AgentNetSwitchRemoteHandler | null = null;
 
 function setAgentNetSwitchRemoteHandler(handler: AgentNetSwitchRemoteHandler | null): void {
   agentNetSwitchRemoteHandler = handler;
+}
+
+const cloudPrivateInvokeHandlers = new Map<string, CloudPrivateInvokeHandler>();
+/** Registers one channel; null removes them all (runtime teardown). */
+function setCloudPrivateInvokeHandler(handler: CloudPrivateInvokeHandler | null): void {
+  if (handler) cloudPrivateInvokeHandlers.set(handler.channel, handler);
+  else cloudPrivateInvokeHandlers.clear();
+}
+/** The same handler for the owner's browser, which CIS relays instead of DeviceLink. */
+function getCloudPrivateInvokeHandler(channel: string): CloudPrivateInvokeHandler | undefined {
+  return cloudPrivateInvokeHandlers.get(channel);
 }
 
 /** 组摘要只给同账号电脑：分享受邀者与共享任务访客是其他账号，看不到组内电脑。 */
@@ -1620,9 +1649,9 @@ function shouldAcquireRemoteInvokeBusyLease(
   return !UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS.has(payload.channel);
 }
 
-function notifySessionsSubscribed(controllerDeviceId: string): void {
+function notifySessionsSubscribed(controllerDeviceId: string, sessionId?: string): void {
   try {
-    onSessionsSubscribed?.(controllerDeviceId);
+    onSessionsSubscribed?.(controllerDeviceId, sessionId);
   } catch (err) {
     log.warn(`sessions subscribe replay failed for ${shortId(controllerDeviceId)}: ${String(err)}`);
   }
@@ -2397,8 +2426,22 @@ function clearAllSessionActivityStages(): void {
   for (const dst of [...latestStatePushStages.keys()]) clearLatestStatePushStage(dst);
 }
 
+// Same-account iPhones opt in. Use the existing owner-fenced, coalescing sessions
+// queue, including for a subscription replay directed at just one controller.
+function publishHostTaskActivity(read: () => ForegroundHostTaskActivity | null, target?: string): void {
+  if (!activeClient || !hasRemoteBotSessionLookup() || !readDeviceLinkSettings().remoteControlEnabled) return;
+  const peers = subscriptions.getControllersForTopic('sessions').filter(dst =>
+    (!target || dst === target) && isSameAccountController(dst) && !isControllerRevoked(dst)
+      && subscriptions.controllerSupports(dst, TASK_ACTIVITY_CAPABILITY));
+  if (!peers.length) return;
+  const summary = read();
+  if (!summary) return;
+  const stamp = broadcastTap.getSafeDataOwnerPushStamp?.();
+  for (const dst of peers) stageLatestStatePush(dst, TASK_ACTIVITY_SNAPSHOT, TASK_ACTIVITY_SNAPSHOT, summary, stamp);
+}
+
 /**
- * 会话活动 replay 的**定向**投递:只发给刚完成 sessions 订阅的那一台控制端。
+ * 会话活动 replay 的**定向**投递:只发给刚完成列表或共享任务订阅的控制端。
  * 走同一条 latest-wins 暂存链路(与 tap 路径同 key 合并),不经 topic 扇出——
  * 一台控制端 subscribe 不应把全量活动快照重复灌给其它所有控制端
  * (v0.1.26 线上:两台手机互相被对方的 subscribe 风暴灌爆窗口)。
@@ -2408,7 +2451,9 @@ function pushSessionActivityToController(
   payload: unknown,
 ): void {
   if (!activeClient) return;
-  if (!subscriptions.getControllersForTopic('sessions').includes(controllerDeviceId)) return;
+  const sessionId = sessionActivityKey(payload);
+  const topic: Topic = isSharedTaskPeer(controllerDeviceId) && sessionId ? `session:${sessionId}` : 'sessions';
+  if (!subscriptions.getControllersForTopic(topic).includes(controllerDeviceId)) return;
   stageSessionActivityPush(controllerDeviceId, payload, broadcastTap.getSafeDataOwnerPushStamp?.());
 }
 
@@ -4704,6 +4749,13 @@ function handleSubscriptionFrame(
     // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
     flushMakerEventBatchesFor(src);
     drainOfflinePushQueueTo(src, topics);
+    // Replay after the backlog so an old running frame cannot overwrite the
+    // current terminal state. Shared guests subscribe to their task, not lists.
+    if (isSharedTaskPeer(src)) {
+      for (const topic of topics) {
+        if (topic.startsWith('session:')) notifySessionsSubscribed(src, topic.slice('session:'.length));
+      }
+    }
     if (subscriptions.controllerSupports(src, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)) {
       // Capture and enqueue synchronously: old batches/backlog precede this
       // snapshot and subsequent live deltas follow it through the same DB gate.
@@ -5087,6 +5139,10 @@ async function runAuthorizedInvoke(
   return withRemoteDbAdmission(payload?.channel, () => executeRemoteInvoke(src, payload, timing));
 }
 
+function channelNotAllowed(channel: string): InvokeResultPayload {
+  return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${channel}' not allowed remotely` } };
+}
+
 async function executeRemoteInvoke(src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming): Promise<InvokeResultPayload> {
   if (!payload || typeof payload.channel !== 'string') {
     return { ok: false, error: { code: 'INTERNAL', message: 'malformed invoke payload' } };
@@ -5104,13 +5160,28 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'access revoked by target device' } };
   }
   if (ordinaryPeer) noteControllerAccessAllowed(src);
+  const cloudPrivate = cloudPrivateInvokeHandlers.get(payload.channel);
+  if (cloudPrivate) {
+    if (!isSameAccountController(src)) {
+      return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed` } };
+    }
+    try {
+      return {
+        ok: true,
+        result: await timing.measure('handler', () => runDeviceLinkInvokeContext(
+          { controllerDeviceId: src, channel: payload.channel },
+          () => cloudPrivate.handle(src, payload.args?.[0]),
+        )),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: { code: 'IPC_ERROR', message: /^\[[A-Z_]+\]/.test(message) ? message : '[INTERNAL] cloud request failed' } };
+    }
+  }
   // 双层校验之二:allowlist(权威)
   if (!REMOTE_INVOKE_ALLOWLIST.has(payload.channel)) {
     log.warn(`blocked non-allowlisted channel from ${shortId(src)}: ${payload.channel}`);
-    return {
-      ok: false,
-      error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed remotely` },
-    };
+    return channelNotAllowed(payload.channel);
   }
 
   if (payload.channel === FILE_PEER_CHANNEL) {
@@ -5129,6 +5200,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       const code = /\bMIGRATION_[A-Z_]+\b/.exec(error instanceof Error ? error.message : '')?.[0] ?? 'MIGRATION_FAILED';
       return { ok: false, error: { code: 'IPC_ERROR', message: code } };
     }
+  }
+  if (payload.channel === TASK_ACTIVITY_SNAPSHOT && !isSameAccountController(src)) {
+    return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'An account-owned link is required' } };
   }
   if (payload.channel === SETUP_SNAPSHOT_CHANNEL) {
     // 只给同账号电脑：共享任务访客与供应商分享受邀者是其他账号(它们的通道清单里也没有它)。
@@ -5456,6 +5530,11 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     // session, so it gets full pushes again until its next page read.
     if (payload.channel === 'local-db:messages:list' && typeof args[0] === 'string') subscriptions.forgetFoldedAcrossLink(src, args[0]);
     if (hasRemoteBotSessionLookup()) await timing.measure('authorizeBefore', () => assertRemoteBotInvocationAllowed(args, payload.channel));
+    const isTurnChangeAction = payload.channel === 'maker:turn-change-set:apply';
+    const isTaskTagsAction = payload.channel === TASK_TAG_CHANNEL;
+    if (!isTurnChangeAction && !isTaskTagsAction && hasLocalChannel?.(payload.channel) === false) {
+      return channelNotAllowed(payload.channel);
+    }
     const listingCapabilities = payload.channel === 'maker:provider:list'
       ? invokeControllerCapabilities(payload)
       : [];
@@ -5476,7 +5555,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
       () =>
-          payload.channel === 'maker:turn-change-set:apply'
+          isTurnChangeAction
             ? (() => {
                 if (!remoteTurnChangeAction) throw new Error('[UNSUPPORTED_CAPABILITY] Turn restore is unavailable');
                 return remoteTurnChangeAction(args[0], args[1], args[2], async () => {
@@ -5490,7 +5569,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
                   }
                 });
               })()
-            : payload.channel === TASK_TAG_CHANNEL
+            : isTaskTagsAction
             ? executeTaskTags(args[0] as TaskTagRequest)
             : dispatchLocalInvoke(
         payload.channel,
@@ -5611,6 +5690,7 @@ const __testing = {
     completedRemoteInvokeResults.clear();
     providerShareDenialLoggedAt.clear();
     providerGroupRemoteHandler = null;
+    cloudPrivateInvokeHandlers.clear();
     completedRemoteInvokeResultBytes = 0;
     inFlightRemoteInvokeResults.clear();
     inFlightRemoteInvokeBytes = 0;
@@ -5712,6 +5792,10 @@ return {
   revalidateRemoteModelAccess,
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
+  getProviderGroupRemoteHandler,
+  setCloudPrivateInvokeHandler,
+  getCloudPrivateInvokeHandler,
+  projectRoutingForDisplay,
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,
   setAgentNetSwitchRemoteHandler,
@@ -5734,6 +5818,7 @@ return {
   getActiveControllers,
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
+  publishHostTaskActivity,
   pushSessionActivityToController,
   pushToTopicSubscribers,
   dropAllControllers,

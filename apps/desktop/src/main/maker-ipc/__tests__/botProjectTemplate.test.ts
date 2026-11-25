@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createHash } from 'node:crypto';
 
+import { botSkillRootDir, setBotProjectSkillsDir, setBotSkillEnabled } from '../botSkillStore.js';
 import { OWN_RULES_HEADING, TEAMMATE_TEMPLATE_RECORD, TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate, teammateTemplateFiles } from '../botProjectTemplate.js';
 
 // 2026-11-09: every teammate starts from a clean template it then owns. A newer template
@@ -54,6 +55,50 @@ describe('applyTeammateTemplate', () => {
     });
   });
 
+  // Tier 1: a current template receipt used to suppress repair after a role change.
+  // The disabled copy and unrelated deleted records must survive both repair and upgrade.
+  it('repairs a missing standard at the same version and respects the disabled shelf', async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'buddy-settings-'));
+    const profile = botSkillRootDir(dir, 'Test');
+    const workspace = path.join(profile, 'workspace');
+    setBotProjectSkillsDir(dir, 'Test', true);
+    const relative = '.agents/skills/hand-off/SKILL.md';
+    const active = path.join(workspace, relative);
+    const guide = path.join(workspace, '.cindy/settings/README.md');
+    await applyTeammateTemplate(workspace, 'Test');
+    await fs.rm(active);
+    await fs.rm(guide);
+    expect(await applyTeammateTemplate(workspace, 'Test')).toBe(true);
+    expect(await fs.readFile(active, 'utf8')).toBe(teammateTemplateFiles('Test')[relative]);
+    expect(await fs.readFile(guide, 'utf8')).toContain('profile.json');
+    expect(await applyTeammateTemplate(workspace, 'Test')).toBe(false);
+    const disabled = path.join(profile, 'disabled-skills', 'hand-off');
+    await fs.mkdir(path.dirname(disabled), { recursive: true });
+    await fs.rename(path.dirname(active), disabled);
+    await fs.appendFile(path.join(disabled, 'SKILL.md'), 'Keep my rule.\n');
+    expect(await applyTeammateTemplate(workspace, 'Test')).toBe(false);
+    const updated = teammateTemplateFiles('Test')[relative]!.replace('## Scheduled work', '## Updated scheduling standard');
+    // A previous host advanced the receipt and put its stock file back in the native scan.
+    await fs.mkdir(path.dirname(active), { recursive: true });
+    await fs.writeFile(active, updated);
+    await fs.writeFile(path.join(path.dirname(active), 'attachment.txt'), 'kept asset');
+    await fs.writeFile(path.join(workspace, TEAMMATE_TEMPLATE_RECORD), JSON.stringify({
+      version: TEAMMATE_TEMPLATE_VERSION + 1, files: { [relative]: createHash('sha256').update(updated).digest('hex') },
+    }));
+    const apply = () => applyTeammateTemplate(workspace, 'Test', TEAMMATE_TEMPLATE_VERSION + 1, { [relative]: updated });
+    expect(await apply()).toBe(true);
+    await expect(fs.stat(active)).rejects.toMatchObject({ code: 'ENOENT' });
+    const saved = await fs.readFile(path.join(disabled, 'SKILL.md'), 'utf8');
+    expect(saved).toContain('Keep my rule.');
+    expect(saved).toContain('## Updated scheduling standard');
+    const backups = path.join(profile, 'disabled-skill-backups');
+    const [backup] = await fs.readdir(backups);
+    await expect(fs.readFile(path.join(backups, backup!, 'attachment.txt'), 'utf8')).resolves.toBe('kept asset');
+    expect(await apply()).toBe(false);
+    await setBotSkillEnabled(dir, 'Test', 'hand-off', true);
+    await expect(fs.readFile(active, 'utf8')).resolves.toBe(saved);
+  });
+
   // 2026-11-22 owner decision: standard skills are two layers in one file. A new standard replaces
   // the standard text; the teammate's own rules stay, and what it had changed in the old standard
   // text is kept exactly (a diff against the standard it started from, or its whole earlier text)
@@ -72,7 +117,7 @@ describe('applyTeammateTemplate', () => {
       await fs.writeFile(path.join(dir, skill), current);
       await fs.writeFile(path.join(dir, TEAMMATE_TEMPLATE_RECORD), JSON.stringify({ version: 1, files: tracked ? { [skill]: sha(oldStandard) } : {} }));
     };
-    const fromHistory = async (_relative: string, hash: string) => hash === sha(oldStandard) ? oldStandard : null;
+    const fromHistory = async (_relative: string, hash?: string) => hash === sha(oldStandard) ? oldStandard : null;
     const upgrade = (version: number, standard: string) => applyTeammateTemplate(dir, 'Mimi', version, { [skill]: standard }, fromHistory);
     const read = () => fs.readFile(path.join(dir, skill), 'utf8');
     const ownOf = (text: string) => text.slice(text.indexOf(OWN_RULES_HEADING));
@@ -202,6 +247,26 @@ describe('applyTeammateTemplate', () => {
       await upgrade(2, newStandard());
       const own = await carried();
       expect(own).toContain('````markdown\n# Hand-off\n\n- Design reviews go straight to the owner.\n````');
+    });
+
+    // User feedback 2026-11-22: automations a teammate set up for the owner never reported back.
+    // The rule lives in this layered skill so teammates already on template 9 get it too (unit, the
+    // real v9 hand-off as installed, with an own rule the owner gave).
+    it('gives a teammate on template 9 the scheduled-work standard and keeps its own rules', async () => {
+      const v9 = await fs.readFile(new URL('./fixtures/hand-off-v9.md', import.meta.url), 'utf8');
+      const installed = `${v9}- Always copy Bob on summaries.\n`;
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-layered-'));
+      await fs.mkdir(path.join(dir, '.agents/skills/hand-off'), { recursive: true });
+      await fs.mkdir(path.join(dir, '.cindy'), { recursive: true });
+      await fs.writeFile(path.join(dir, skill), installed);
+      await fs.writeFile(path.join(dir, TEAMMATE_TEMPLATE_RECORD), JSON.stringify({ version: 9, files: { [skill]: sha(v9) } }));
+      await expect(applyTeammateTemplate(dir, 'Mimi', TEAMMATE_TEMPLATE_VERSION,
+        { [skill]: teammateTemplateFiles('Mimi')[skill]! }, async (_relative, hash) => hash === sha(v9) ? v9 : null)).resolves.toBe(true);
+      const text = await read();
+      expect(text).toContain('## Scheduled work');
+      expect(text).toContain('`bindToCurrentSession=true`');
+      expect(text.match(/Always copy Bob on summaries\./g)).toHaveLength(1);
+      expect(text.indexOf('Always copy Bob')).toBeGreaterThan(text.indexOf(OWN_RULES_HEADING));
     });
 
     it('carries the own rules through later standards without repeating them', async () => {

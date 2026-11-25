@@ -15,6 +15,7 @@ import { subscriptionAccountKind } from '../maker-host/subscription-account-auth
 import { setClaudeRateLimitInfoListener, type Maker } from '@cindy/maker-core';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { cloudManagementProviderRegistry } from '../host-settings/managementCalls.js';
 import {
   readClaudeAccountUsageSnapshot,
   readClaudeAccountQuotaClear,
@@ -41,7 +42,7 @@ import {
 import { app, powerMonitor } from 'electron';
 import { requireAppCapability } from '../appCapabilities.js';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
-import { readUsageDeviceRows } from '../usage/usageDeviceRows.js';
+import { createUsageTaskDeltaCache, readUsageDeviceRows } from '../usage/usageDeviceRows.js';
 import {
   configurePeerUsageSync,
   peerUsageCacheFilePath,
@@ -85,6 +86,7 @@ import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { CodexResetAutoUse, parseCodexResetAutoUse } from '../usage/codexResetAutoUse.js';
 import {
   detachedDefaultCodexHome,
+  readCodexWebUsageCredentials,
   readDefaultCodexHomeIdentity,
   withDetachedDefaultCodexHome,
 } from '../usage/codexDefaultAccountHome.js';
@@ -241,19 +243,24 @@ export function readCodexAccountUsageSnapshotWithWebRefresh(requestedProviderId?
   const key = providerId ?? 'openai';
   const existing = codexUsageReaders.get(key);
   if (existing) return existing(options);
-const reader = createCodexAccountUsageSnapshotReader({
-  readAccessToken: () => scope === activeOwnerScopeKey() ? desktopCodexAuthAdapter.getAccessToken(providerId) : Promise.reject(new Error('Account scope changed')),
-  readAccountId: () => desktopCodexAuthAdapter.getAccountId(providerId),
-  fetchWebUsageSnapshot: fetchCodexWebUsageSnapshot,
-  recordSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
-  clearSnapshot: () => scope === activeOwnerScopeKey() ? clearCodexAccountUsageSnapshot(providerId) : Promise.resolve(),
-  readCachedSnapshot: () => scope === activeOwnerScopeKey() ? readCodexAccountUsageSnapshot(providerId) : Promise.resolve(null),
-  now: () => Date.now(),
-  isUnauthorizedError: (err) => err instanceof CodexWebUsageUnauthorizedError,
-  onRefreshError: (err) => {
-    log.warn('codex web usage refresh failed:', err instanceof Error ? err.message : String(err));
-  },
-});
+  const reader = createCodexAccountUsageSnapshotReader({
+    readCredentials: async () => {
+      const current = () => scope === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
+      if (!current()) throw new Error('Account scope changed');
+      const credentials = await readCodexWebUsageCredentials(providerId, desktopCodexAuthAdapter);
+      if (!current()) throw new Error('Account scope changed');
+      return credentials;
+    },
+    fetchWebUsageSnapshot: fetchCodexWebUsageSnapshot,
+    recordSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
+    clearSnapshot: () => scope === activeOwnerScopeKey() ? clearCodexAccountUsageSnapshot(providerId) : Promise.resolve(),
+    readCachedSnapshot: () => !isAppSessionBoundaryPending() && scope === activeOwnerScopeKey() ? readCodexAccountUsageSnapshot(providerId) : Promise.resolve(null),
+    now: () => Date.now(),
+    isUnauthorizedError: (err) => err instanceof CodexWebUsageUnauthorizedError,
+    onRefreshError: (err) => {
+      log.warn('codex web usage refresh failed:', err instanceof Error ? err.message : String(err));
+    },
+  });
 
   codexUsageReaders.set(key, reader);
   return reader(options);
@@ -358,11 +365,11 @@ export function registerMakerUsageIpc(maker: Maker): void {
   }
 
   // Account identity and automatic rules belong to the same owner and selected login as the read.
-  const readCodexRateLimits: CodexRateLimitsReader = async (providerId) => {
+  const readCodexRateLimits = async (providerId?: string, automatic = false): Promise<MobileCodexRateLimitsResult> => {
     const scope = activeOwnerScopeKey();
     const accountKey = await accountKeyFor(providerId);
     const service = getResetService(providerId);
-    const result = await service.read();
+    const result = await service.read(automatic);
     if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
     if (accountKey !== await accountKeyFor(providerId)) throw new Error('ChatGPT account changed');
     return { ...result, providerId: providerId ?? 'openai', autoUse: codexResetAutoUseStore.read(providerId ?? 'openai', accountKey) };
@@ -370,7 +377,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
   codexRateLimitsReader = readCodexRateLimits;
 
   const automatic = new CodexResetAutoUse({
-    scope: activeOwnerScopeKey, now: Date.now, read: readCodexRateLimits,
+    scope: activeOwnerScopeKey, now: Date.now, read: providerId => readCodexRateLimits(providerId, true),
     authorized: (providerId, snapshot) => {
       if (isAppSessionBoundaryPending() || !snapshot.autoUse?.accountKey) return false;
       const current = codexResetAutoUseStore.read(providerId, snapshot.autoUse.accountKey);
@@ -403,8 +410,9 @@ export function registerMakerUsageIpc(maker: Maker): void {
   app.once('will-quit', () => { clearInterval(timer); unobserve(); unobservePool(); powerMonitor.removeListener('resume', checkEnabled); });
   checkEnabled();
 
+  const usageTaskDeltaCache = createUsageTaskDeltaCache();
   setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
-  registerMakerUsageHandlers(createElectronIpcHandlerRegistry(), {
+  registerMakerUsageHandlers(cloudManagementProviderRegistry(createElectronIpcHandlerRegistry()), {
     readAgentTodayUsage,
     readCodexAccountUsageSnapshot: readCodexAccountUsageSnapshotWithWebRefresh,
     readCodexRateLimits,
@@ -459,6 +467,8 @@ export function registerMakerUsageIpc(maker: Maker): void {
             return new Set(ids.filter((id) => (access.get(id) ?? 'hidden') !== 'hidden'));
           },
           todayKey: () => localDayKey(),
+          taskDeltaCache: usageTaskDeltaCache,
+          scopeKey: activeOwnerScopeKey,
         },
         request,
       ),

@@ -172,7 +172,7 @@ function FileHeader({ relPath, matchCount, collapsed, onToggle }: FileHeaderProp
       type="button"
       onClick={onToggle}
       className={cn(
-        'flex h-[26px] w-full items-center gap-1.5 overflow-hidden rounded-md',
+        'flex h-[26px] w-full items-center gap-1.5 overflow-hidden rounded-lg',
         'pr-1 pl-2 text-left transition-colors hover:bg-sidebar-item-hover',
       )}
     >
@@ -213,7 +213,7 @@ function MatchRow({ match, onClick }: MatchRowProps) {
       onClick={onClick}
       title={`Line ${match.lineNumber}`}
       className={cn(
-        'flex h-[22px] w-full items-center rounded-[4px]',
+        'flex h-[22px] w-full items-center rounded-lg',
         'pr-1 pl-[30px] text-left transition-colors hover:bg-sidebar-item-hover',
       )}
     >
