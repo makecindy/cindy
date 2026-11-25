@@ -169,7 +169,7 @@ const collapseStart = bubbleStatements.indexOf(bodyStatement('automationOrigin',
 const collapseEnd = bubbleStatements.indexOf(bodyStatement('longMessageCollapsed', 'MessageBubble'));
 const collapseCode = bubbleStatements.slice(collapseStart, collapseEnd + 1).map(statement => statement.getText(rendererSource)).join(String.fromCharCode(10));
 const markdownStateCode = ['measuresSettledWidth', 'useRowState', 'contentWidth', 'nativeBodySize',
-  'handleSettledWidthLayout', 'pinSettledWidth', 'settledTextStyle', 'measureTableBootstrap', 'renderSingleBlock']
+  'handleSettledWidthLayout', 'pinSettledWidth', 'bodyTextStyle', 'settledTextStyle', 'measureTableBootstrap', 'renderSingleBlock']
   .map(name => bodyStatement(name, 'MarkdownBodyBase').getText(rendererSource)).join(String.fromCharCode(10));
 const markdownReturn = rendererFunction('MarkdownBodyBase').body!.statements.find(ts.isReturnStatement);
 if (!markdownReturn) throw new Error('MarkdownBody return was not found');
@@ -198,7 +198,7 @@ const UITextView = nativeText('ios-text-view');
 const ScrollView = (props: SurfaceProps) => React.createElement('div', { 'data-scroll': true }, props.children);
 const { BubbleHarness, MarkdownHarness } = executeRenderer<{ BubbleHarness: React.ComponentType<any>; MarkdownHarness: React.ComponentType<any> }>(
   String.raw`
-function MarkdownHarness({ pinContentWidth = false, androidTableSelection = false, allowIosUITextView = true, boundTextRuns = false, selectable, text, layout, code = false, codeCopyEnabled = true, streaming = false }) {
+function MarkdownHarness({ pinContentWidth = false, androidTableSelection = false, allowIosUITextView = true, boundTextRuns = false, selectable, text, layout, code = false, codeCopyEnabled = true, streaming = false, smallerBody = false }) {
   const styles = {};
   // The paragraph and code inputs here use the native path. The table document
   // and its mount/selection lifecycle have dedicated component tests.
@@ -242,7 +242,8 @@ function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
   const isStreamingAssistant = false;
   const contentLayout = buildMessageContentLayout({ screenWidth: 402 });
   const t = i18n.t.bind(i18n);
-  ` + collapseCode + ['ownBubbleColors', 'tableFallbackBackground', 'bubble']
+  const smallerBody = false;
+  ` + ['bodyTextStyle'].map(name => bodyStatement(name, 'MessageBubble').getText(rendererSource)).join(String.fromCharCode(10)) + collapseCode + ['ownBubbleColors', 'tableFallbackBackground', 'bubble']
     .map(name => bodyStatement(name, 'MessageBubble').getText(rendererSource)).join(String.fromCharCode(10)) + String.raw`
   return bubble;
 }

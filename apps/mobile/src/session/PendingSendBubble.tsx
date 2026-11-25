@@ -13,7 +13,7 @@
  *  - ⚠ = 失败,可重试 / 删除。
  * 「排入队尾」是个事实断言,未确认时画它就是谎报,所以未确认一律转圈。
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ActivityIndicator, Animated, Easing, Pressable, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
@@ -81,6 +81,7 @@ import {
   type ThemeColors,
 } from '@/theme';
 import { radius, spacing, typeScale } from '@/theme/tokens';
+import { ChatReadingSizeContext } from '@/settings/chatReadingSize';
 import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
 
 /** 与已发送消息上的来源标签同一组图标(自动化 Timer / 任务 Send / Orca Bot / 插件 Ghost)。 */
@@ -321,7 +322,7 @@ export function PendingSendBubble({
    * iOS UITextView 展开后空白的回归。text 只是单块 token,判定必须按整条 displayBody,
    * 因此这个状态由气泡单点持有并透传给宿主;结构化 atom 与普通正文两条路径共用同一判定。
    */
-  renderText: (text: string, index: number, longMessage: boolean) => ReactNode;
+  renderText: (text: string, index: number, longMessage: boolean, smallerBody: boolean) => ReactNode;
   renderFile: (name: string, index: number) => ReactNode;
   /** 伙伴私聊的引用回复块;普通任务不传。 */
   renderReplyQuote?: (quote: NonNullable<MobilePendingSendItem['replyQuote']>) => ReactNode;
@@ -333,6 +334,8 @@ export function PendingSendBubble({
   onOpenImage?: (payload: MessagePayload) => void;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const smallerBody = useContext(ChatReadingSizeContext) === 'smaller';
+  const bodyTextStyle = smallerBody ? styles.smallerBubbleText : styles.bubbleText;
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 待发送的一定是自己的消息;与落定后的正式气泡同色,避免发出瞬间换色。
@@ -359,11 +362,11 @@ export function PendingSendBubble({
   const rendersSentInlineBody = item.sentInlineTokens.some((token) => token.kind !== 'text');
   const displayBody = rendersSentInlineBody ? sentInlineTokensDisplayText(item.sentInlineTokens) : item.text;
   const density = summarizeMessageBubblePresentation({ kind: 'user', body: displayBody, attachmentCount: item.attachmentCount }).density;
-  const [measuredBody, setMeasuredBody] = useState<{ body: string; lines: number } | null>(null);
+  const [measuredBody, setMeasuredBody] = useState<{ body: string; lines: number; smallerBody: boolean } | null>(null);
   const [expandedBody, setExpandedBody] = useState<string | null>(null);
   const measureBody = mayExceedVisualLineThreshold(displayBody);
   const collapseResolved = measureBody && resolveUserMessageCollapse(
-    displayBody, measuredBody?.body === displayBody ? measuredBody.lines : null,
+    displayBody, measuredBody?.body === displayBody && measuredBody.smallerBody === smallerBody ? measuredBody.lines : null,
     LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
   );
   const [collapseLatchBody, setCollapseLatchBody] = useState<string | null>(null);
@@ -561,14 +564,14 @@ export function PendingSendBubble({
                   maxVisibleLines={collapsedLines}
                   numberOfLines={collapsedLines}
                   renderText={collapsedLines ? undefined : (text, index) => (
-                    <View key={`text:${index}`} style={styles.textChunk}>{renderText(text, index, shouldCollapse)}</View>
+                    <View key={`text:${index}`} style={styles.textChunk}>{renderText(text, index, shouldCollapse, smallerBody)}</View>
                   )}
                   testID="pendingSend.sentInlineAtoms"
-                  textStyle={styles.bubbleText}
+                  textStyle={bodyTextStyle}
                   tokens={item.sentInlineTokens}
                 />
-              ) : item.text && !collapsedLines ? renderText(item.text, 0, shouldCollapse) : item.text ? (
-                <Text numberOfLines={collapsedLines} style={styles.bubbleText}>
+              ) : item.text && !collapsedLines ? renderText(item.text, 0, shouldCollapse, smallerBody) : item.text ? (
+                <Text numberOfLines={collapsedLines} style={bodyTextStyle}>
                   {item.text}
                 </Text>
               ) : null}
@@ -576,8 +579,8 @@ export function PendingSendBubble({
               <View accessibilityElementsHidden accessible={false} importantForAccessibility="no-hide-descendants"
                 pointerEvents="none" style={styles.collapseMeasureWrap}>
                 <Text numberOfLines={LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD + 1}
-                  onTextLayout={(event) => setMeasuredBody({ body: displayBody, lines: event.nativeEvent.lines.length })}
-                  style={styles.bubbleText}>{displayBody}</Text>
+                  onTextLayout={(event) => setMeasuredBody({ body: displayBody, lines: event.nativeEvent.lines.length, smallerBody })}
+                  style={bodyTextStyle}>{displayBody}</Text>
               </View>
             ) : null}
             {shouldCollapse ? (
@@ -805,6 +808,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.bodyLarge,
     lineHeight: lineHeight.bodyLarge,
   },
+  smallerBubbleText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   attachmentLine: { alignItems: 'center', flexDirection: 'row', gap: 4 },
   attachmentLineText: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   attachmentStrip: { alignItems: 'flex-end', marginBottom: spacing.xs, maxWidth: '100%' },

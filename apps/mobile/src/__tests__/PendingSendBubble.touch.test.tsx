@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { GestureResponderEvent } from 'react-native';
 import type { MenuAction } from '@react-native-menu/menu';
+import { CHAT_READING_SIZES, ChatReadingSizeContext } from '@/settings/chatReadingSize';
 import { PendingSendBubble, type PendingSendBubbleActions } from '@/session/PendingSendBubble';
 import { MessageBodyText } from '@/session/ShareMessageCheckbox';
 import { buildQueueRowPresentation, EMPTY_INPUT_PROJECTION } from '@/session/inputProjection';
@@ -468,17 +469,23 @@ it.each(['plain', 'atoms'])('forwards the measured long-body state through the r
   const toggle = [...host.querySelectorAll('span')].find(node => node.textContent === 'message.renderer.expand');
   expect(toggle).toBeDefined();
   await act(async () => (toggle as HTMLElement).click());
-  expect(renderText).toHaveBeenCalledWith(text, 0, true);
+  expect(renderText).toHaveBeenCalledWith(text, 0, true, false);
   expect(renderText.mock.calls.every(([, , longMessage]) => longMessage === true)).toBe(true);
 });
 
-it('forwards a short body as non-long text through the real bubble plain path', () => {
+// #12378, unit: the ordinary pending bubble must pass the selected reading
+// size to Markdown for a single plain message. Existing cases cover collapse.
+it.each(CHAT_READING_SIZES)('forwards the %s reading size for a short pending body', readingSize => {
   const renderText = vi.fn((body: string, _index: number, longMessage: boolean) =>
     <span data-long-message={String(longMessage)}>{body}</span>);
   const actions: PendingSendBubbleActions = { selectedClientId: null, onSelect: select, onRemove: remove,
     onBeginEdit: edit, onSteer: steer, onMove: move, onRetryOutbox: retryOutbox, onRemoveOutbox: removeOutbox };
-  act(() => root.render(<PendingSendBubble item={item} actions={actions}
-    onOpenImage={openImage} renderImage={() => null} renderFile={() => null} renderText={renderText} />));
-  expect(renderText).toHaveBeenCalledExactlyOnceWith('hello', 0, false);
+  act(() => root.render(
+    <ChatReadingSizeContext.Provider value={readingSize}>
+      <PendingSendBubble item={item} actions={actions}
+        onOpenImage={openImage} renderImage={() => null} renderFile={() => null} renderText={renderText} />
+    </ChatReadingSizeContext.Provider>,
+  ));
+  expect(renderText).toHaveBeenCalledExactlyOnceWith('hello', 0, false, readingSize === 'smaller');
   expect(host.querySelector('[data-long-message="true"]')).toBeNull();
 });
