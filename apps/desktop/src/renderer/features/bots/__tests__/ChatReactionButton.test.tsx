@@ -18,6 +18,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en
     if (name === 'reactorSelf') return 'You';
     if (name === 'reactorFormer') return `${o?.name} (left)`;
     if (name === 'reactorsUnavailable') return `${o?.count} unavailable`;
+    if (name === 'reactionTotal') return `${o?.emoji} · ${o?.count} reactions`;
     if (name === 'reactionCount') return `${o?.emoji} · ${o?.count}`;
     if (name === 'reactionWho') return `${o?.emoji} · ${o?.count}: ${o?.names}`;
     return name;
@@ -282,6 +283,29 @@ describe('reaction avatars', () => {
     expect(badge().getAttribute('aria-pressed')).toBe('false');
   });
 
+  it('shares the last choice across the timeline and thread while a write is pending', async () => {
+    let acknowledge!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise(resolve => { acknowledge = () => resolve({ ok: true }); }));
+    const row = message([]);
+    const timelineReads = new ChatReactionReads();
+    const threadReads = new ChatReactionReads();
+    const refreshTimeline = vi.fn();
+    const refreshThread = vi.fn();
+    const timeline = renderHook(() => useChatReactions('room', row, refreshTimeline, timelineReads));
+    act(() => { void timeline.result.current.toggle('👍'); });
+    const thread = renderHook(() => useChatReactions('room', row, refreshThread, threadReads));
+    expect(thread.result.current.reactions).toEqual([{ emoji: '👍', me: true, count: 1 }]);
+    act(() => { void timeline.result.current.toggle('👍'); });
+    expect(thread.result.current.reactions).toEqual([]);
+    act(() => { void thread.result.current.toggle('👍'); });
+    expect(timeline.result.current.reactions).toEqual(thread.result.current.reactions);
+    timeline.unmount();
+    await act(async () => acknowledge());
+    expect(mocks.react.mock.calls.map(([request]) => request.present)).toEqual([true]);
+    expect(refreshTimeline).not.toHaveBeenCalled();
+    expect(refreshThread).toHaveBeenCalledOnce();
+  });
+
   it('allows undo from the new badge while its picker write is pending and serializes the final choice', async () => {
     let acknowledge!: () => void;
     mocks.react.mockImplementationOnce(() => new Promise(resolve => { acknowledge = () => resolve({ ok: true }); }));
@@ -303,7 +327,7 @@ describe('reaction avatars', () => {
     const pending = new Promise(r => { resolve = r; });
     mocks.reactors.mockReturnValue(pending);
     render(actions([{ emoji: '👍', count: 1, me: false }, { emoji: '❤️', count: 1, me: false }]));
-    const toggle = screen.getByRole('button', { name: '👍 ❤️ · 2' });
+    const toggle = screen.getByRole('button', { name: '👍 ❤️ · 2 reactions' });
     expect(mocks.reactors).not.toHaveBeenCalled();
     fireEvent.click(toggle);
     expect(mocks.reactors).toHaveBeenCalledTimes(2);
@@ -322,7 +346,7 @@ describe('reaction avatars', () => {
     const zoe = { ok: true, reactors: [reactor('z', 'Zoe')] };
     mocks.reactors.mockResolvedValueOnce({ ok: false }).mockResolvedValue(zoe);
     render(actions([{ emoji: '👍', count: 1, me: false }, { emoji: '❤️', count: 1, me: false }]));
-    const toggle = screen.getByRole('button', { name: '👍 ❤️ · 2' });
+    const toggle = screen.getByRole('button', { name: '👍 ❤️ · 2 reactions' });
     await act(async () => fireEvent.click(toggle));
     expect(badge().getAttribute('aria-label')).toBe('👍 · 1');
     expect(mocks.reactors).toHaveBeenCalledTimes(2);

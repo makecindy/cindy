@@ -12084,6 +12084,7 @@
         "moreReactions": "More reactions",
         "addReaction": "Add reaction",
         "reactionCount": "{{emoji}} · {{count}} reactions",
+        "reactionTotal": "{{emoji}} · {{count}} reactions",
         "reactionWho": "{{emoji}} · {{count}} reactions: {{names}}",
         "reactorSelf": "You",
         "reactorFormer": "{{name}} (no longer in group)",

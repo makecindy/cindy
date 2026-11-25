@@ -76,7 +76,7 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
       onFinishGesture={controls.finishGesture} onToggle={() => void controls.toggle(reaction.emoji)} />
   ));
   const total = reactions.reduce((n, r) => n + r.count, 0);
-  const label = t(key('reactionCount'), { emoji: reactions.slice(0, 2).map(r => r.emoji).join(' '), count: total });
+  const label = t(key('reactionTotal'), { emoji: reactions.slice(0, 2).map(r => r.emoji).join(' '), count: total });
   return (
     <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} data-message-reactions=""
       className={cn('absolute -top-2.5 z-[5] w-max', align === 'right' ? '-left-1' : '-right-1')}>

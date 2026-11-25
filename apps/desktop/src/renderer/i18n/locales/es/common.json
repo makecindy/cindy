@@ -12181,6 +12181,7 @@
         "moreReactions": "Más reacciones",
         "addReaction": "Agregar reacción",
         "reactionCount": "{{emoji}} · {{count}} reacciones",
+        "reactionTotal": "{{emoji}} · {{count}} reacciones",
         "reactionWho": "{{emoji}} · {{count}} reacciones: {{names}}",
         "reactorSelf": "Tú",
         "reactorFormer": "{{name}} (ya no está en el grupo)",

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import type { BotGroupMessageView } from '../../../shared/botGroupChat';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, subscribeDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
@@ -34,6 +34,13 @@ export class ChatReactionReads {
   }
 }
 
+type ReactionView = (emoji: string, desired: boolean, accepted?: boolean) => void;
+type MessageWrites = {
+  pending: Map<string, { desired: boolean; sent: boolean }>;
+  views: Set<ReactionView>;
+};
+const messageWrites = new Map<string, MessageWrites>();
+
 export function useChatReactions(groupId: string | undefined, message: BotGroupMessageView,
   onChanged: (id: string) => void, reads?: ChatReactionReads) {
   const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
@@ -48,10 +55,47 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
     setGesture(current => current === finished ? null : current);
   }, []);
 
-  useLayoutEffect(() => () => {
-    for (const edit of edits.values()) edit.stopWaiting?.();
-    edits.clear();
-  }, [edits]);
+  const scope = JSON.stringify([owner.dataOwnerId, owner.generation, groupId, messageId]);
+  const refresh = useRef(onChanged);
+  useLayoutEffect(() => { refresh.current = onChanged; }, [onChanged]);
+
+  useLayoutEffect(() => {
+    if (!groupId) return;
+    const writes: MessageWrites = messageWrites.get(scope) ?? { pending: new Map(), views: new Set() };
+    messageWrites.set(scope, writes);
+    const update: ReactionView = (emoji, desired, accepted) => {
+      edits.get(emoji)?.stopWaiting?.();
+      const edit: Edit = { desired, writing: accepted === undefined };
+      edits.set(emoji, edit);
+      if (accepted === undefined) {
+        if (desired) displayOrder.emojis = [emoji, ...displayOrder.emojis.filter(item => item !== emoji)];
+      } else {
+        edit.stopWaiting = reads?.afterNextRead(messageId, row => {
+          if (accepted && desired !== Boolean(row.reactions?.some(r => r.emoji === emoji && r.me))) return false;
+          edits.delete(emoji);
+          redraw();
+          return true;
+        });
+        if (accepted) {
+          edit.expiresAt = Date.now() + ECHO_TIMEOUT_MS;
+          refresh.current(messageId);
+        }
+      }
+      redraw();
+    };
+    writes.views.add(update);
+    for (const [emoji, write] of writes.pending) update(emoji, write.desired);
+    return () => {
+      writes.views.delete(update);
+      if (!writes.views.size) {
+        // Discard unsent choices on navigation, but serialize with a remount while the request is in flight.
+        for (const write of writes.pending.values()) write.desired = write.sent;
+        if (!writes.pending.size) messageWrites.delete(scope);
+      }
+      for (const edit of edits.values()) edit.stopWaiting?.();
+      edits.clear();
+    };
+  }, [displayOrder, edits, groupId, messageId, reads, scope]);
 
   useEffect(() => {
     let nextExpiry = Infinity;
@@ -74,47 +118,33 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
 
   async function toggle(emoji: string, from?: ReactionGesture['from']) {
     if (!groupId || !isDataOwnerGenerationCurrent(owner)) return;
-    const previous = edits.get(emoji);
-    const mine = previous?.desired ?? server.some(r => r.emoji === emoji && r.me);
-    const edit = previous ?? { desired: mine, writing: false };
-    edit.stopWaiting?.();
-    edit.stopWaiting = undefined;
-    edit.expiresAt = undefined;
-    edit.desired = !mine;
-    if (edit.desired) displayOrder.emojis = [emoji, ...displayOrder.emojis.filter(item => item !== emoji)];
+    const writes = messageWrites.get(scope);
+    if (!writes) return;
+    const pending = writes.pending.get(emoji);
+    const mine = pending?.desired ?? edits.get(emoji)?.desired ?? server.some(r => r.emoji === emoji && r.me);
+    const write = pending ?? { desired: !mine, sent: !mine };
+    write.desired = !mine;
+    writes.pending.set(emoji, write);
     setGesture(mine ? null : { emoji, from, scope: edits });
-    edits.set(emoji, edit);
-    redraw();
-    if (edit.writing) return;
-    edit.writing = true;
+    for (const view of writes.views) view(emoji, write.desired);
+    if (pending) return;
 
-    // A new user choice during the write is the only reason to send again.
-    // One failed write by itself schedules neither another write nor a refresh.
-    let sent: boolean;
     let accepted: boolean;
     do {
-      sent = edit.desired;
+      write.sent = write.desired;
       try {
-        const result = await window.electronAPI.maker.chatServer.react({ groupId, messageId, emoji, present: sent });
+        const result = await window.electronAPI.maker.chatServer.react({ groupId, messageId, emoji, present: write.sent });
         accepted = result.ok;
       } catch {
         accepted = false;
       }
-      if (edits.get(emoji) !== edit || !isDataOwnerGenerationCurrent(owner)) return;
-    } while (sent !== edit.desired);
+    } while (write.sent !== write.desired && isDataOwnerGenerationCurrent(owner));
 
-    edit.writing = false;
-    edit.stopWaiting = reads?.afterNextRead(messageId, row => {
-      if (accepted && sent !== Boolean(row.reactions?.some(r => r.emoji === emoji && r.me))) return false;
-      edits.delete(emoji);
-      redraw();
-      return true;
-    });
-    if (accepted) {
-      edit.expiresAt = Date.now() + ECHO_TIMEOUT_MS;
-      onChanged(messageId);
+    writes.pending.delete(emoji);
+    if (!writes.views.size && !writes.pending.size) messageWrites.delete(scope);
+    if (isDataOwnerGenerationCurrent(owner)) {
+      for (const view of writes.views) view(emoji, write.sent, accepted);
     }
-    redraw();
   }
 
   let reactions = server;

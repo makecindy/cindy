@@ -340,7 +340,8 @@ export default {
       assert.equal(await tea.evaluate(inkAlpha), 255);
       await tea.click();
       assert.equal(await corner.locator('.chat-reaction-glyph').first().textContent(), '🧋', 'newest reaction leads the corner badge');
-      await row.locator('[data-message-reactions] button[aria-haspopup="dialog"]').click();
+      const totalLabel = await ui.t('bots.groupChat.server.reactionTotal', { emoji: '🧋 👍', count: 2 });
+      await corner.getByRole('button', { name: totalLabel, exact: true }).click();
       const selected = page.getByRole('dialog').getByRole('button', { name: /🧋/ });
       assert.equal(await toolbar.isVisible(), false, 'the reaction details also replace the action bar');
       assert.equal(await corner.isVisible(), false);

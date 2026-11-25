@@ -12039,6 +12039,7 @@
         "moreReactions": "その他のリアクション",
         "addReaction": "リアクションを追加",
         "reactionCount": "{{emoji}} · {{count}} 件のリアクション",
+        "reactionTotal": "{{emoji}} · {{count}} 件のリアクション",
         "reactionWho": "{{emoji}} · {{count}} 件のリアクション：{{names}}",
         "reactorSelf": "あなた",
         "reactorFormer": "{{name}}（現在はグループにいません）",

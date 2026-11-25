@@ -12039,6 +12039,7 @@
         "moreReactions": "余诸表情",
         "addReaction": "增表情回应",
         "reactionCount": "{{emoji}} · {{count}} 人应之",
+        "reactionTotal": "{{emoji}} · 凡应 {{count}} 次",
         "reactionWho": "{{emoji}} · {{count}} 人应之：{{names}}",
         "reactorSelf": "君",
         "reactorFormer": "{{name}}（已不在群中）",
