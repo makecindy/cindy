@@ -3008,6 +3008,39 @@ describe('TelegramIM', () => {
     });
   });
 
+  // Unit: a host that silently fails to unlink a credential must not produce a successful IPC receipt.
+  it.each([
+    ['telegram-bot-token', 'retained'],
+    ['telegram-owner-user-id', 'retained'],
+    ['telegram-bot-runtime-active', 'retained'],
+    ['telegram-updates-offset', 'retained'],
+    ['telegram-bot-offline', 'retained'],
+    ['telegram-bot-token', 'unreadable'],
+  ] as const)('reports a failed disconnect when %s is %s after removal, and can retry', async (key, failure) => {
+    await connect();
+    ctx.secrets.set(key, ctx.secrets.get(key) ?? '1');
+    const disconnect = ctx.handlers.get('telegramBot:disconnect')!;
+    const remove = ctx.host.secrets.remove;
+    const readResult = ctx.host.secrets.readResult!;
+    const sentBefore = api.calls.filter(call => call.method === 'sendMessage').length;
+    ctx.host.secrets.remove = (name) => {
+      if (failure === 'unreadable' || name !== key) remove(name);
+    };
+    if (failure === 'unreadable') {
+      ctx.host.secrets.readResult = (name) => name === key ? { kind: 'error' } : readResult(name);
+    }
+
+    expect(await disconnect()).toMatchObject({ status: { kind: 'error', code: 'secret-unavailable' } });
+    expect(im.getConfigState().ownerUserId).toBe(OWNER_ID);
+    expect(api.calls.filter(call => call.method === 'sendMessage')).toHaveLength(sentBefore);
+    if (failure === 'retained') expect(ctx.secrets.has(key)).toBe(true);
+
+    ctx.host.secrets.remove = remove;
+    ctx.host.secrets.readResult = readResult;
+    expect(await disconnect()).toEqual({ status: { kind: 'idle' } });
+    expect(ctx.secrets.has(key)).toBe(false);
+  });
+
   it('disconnect 清空凭证并回 idle', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:disconnect')!();

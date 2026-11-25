@@ -60,7 +60,7 @@ import {
   normalizeMessage,
   type TelegramGroupWindowEntry,
 } from './inbound.js';
-import { TelegramGroupAdmission, TelegramGroupAdmissionStorageError } from './groupAdmission.js';
+import { removeTelegramSecret, TelegramGroupAdmission, TelegramGroupAdmissionStorageError } from './groupAdmission.js';
 import { markdownToTelegramHtml } from './markdown.js';
 import { TELEGRAM_PERSONAL_CAPABILITIES } from './presentationCapabilities.js';
 import {
@@ -783,7 +783,24 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.api = (this.opts.apiFactory ?? createTelegramApiClient)(retainedToken);
       }
     }
-    // 顺手清掉 owner scope 的命令菜单(解绑后菜单残留会误导)。
+    // Unbinding cannot succeed while a persisted group grant could survive it.
+    const credentials = [
+      TOKEN_SECRET_KEY,
+      OWNER_USER_ID_SECRET_KEY,
+      LEGACY_RUNTIME_ACTIVE_SECRET_KEY,
+      UPDATES_OFFSET_SECRET_KEY,
+      // Leaving this flag would put a replacement binding offline on restart.
+      OFFLINE_SECRET_KEY,
+    ];
+    if (!this.groupAdmission().clear() || !credentials.every((key) =>
+      removeTelegramSecret(this.host.secrets, this.secretKey(key))
+    )) {
+      await this.stopPolling();
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
+      return { status: this.status };
+    }
+
+    // The retained API client can still clean up Telegram after the local deletion.
     if (this.api && disconnectedOwnerUserId) {
       void this.api
         .call('deleteMyCommands', {
@@ -791,12 +808,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         })
         .catch(() => {});
     }
-    // Unbinding cannot succeed while a persisted group grant could survive it.
-    if (!this.groupAdmission().clear()) {
-      await this.stopPolling();
-      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
-      return { status: this.status };
-    }
+    this.groupAdmissionState = undefined;
     this.ownerUserId = '';
     await this.sendOwnerNoticeWithTimeout(
       disconnectedOwnerUserId,
@@ -804,14 +816,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       OWNER_NOTICE_TIMEOUT_MS,
       () => !this.ownerUserId,
     );
-    this.host.secrets.remove(this.secretKey(TOKEN_SECRET_KEY));
-    this.host.secrets.remove(this.secretKey(OWNER_USER_ID_SECRET_KEY));
-    this.groupAdmissionState = undefined;
-    this.host.secrets.remove(this.secretKey(LEGACY_RUNTIME_ACTIVE_SECRET_KEY));
-    this.host.secrets.remove(this.secretKey(UPDATES_OFFSET_SECRET_KEY));
-    // 解绑必须连下线标志一起清: 留着的话重新填 token 会连上、但重启即回
-    // offline, 表现为"填了 token 却不工作"。
-    this.host.secrets.remove(this.secretKey(OFFLINE_SECRET_KEY));
     await this.stopPolling();
     this.setStatus({ kind: 'idle' });
     return { status: this.status };
