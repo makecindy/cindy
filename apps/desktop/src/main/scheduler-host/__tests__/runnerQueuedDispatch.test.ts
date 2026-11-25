@@ -1172,6 +1172,53 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(admitPluginEngine).toHaveBeenCalledTimes(2);
   });
 
+  // User report 2026-11-25: the GitHub plugin's PR follow-up (bindToCurrentSession, no model)
+  // failed every round on an Antigravity task with PLUGIN_ENGINE_UNSUPPORTED. Through runner.fire
+  // and the real dispatch callbacks, the run must become a queued message in that task on its own
+  // engine and model, idle or busy. Minimal input: target row agent_kind='acp', schedule saved with
+  // agentKind='claude-code' as the plugin skill writes it. Unit tier.
+  it.each([false, true])('runs a linked plugin-engine task as a queued message on its own model (busy=%s)', async (busy) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'acp', model: 'plugin-model' });
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active', agentKind: 'acp', userSendAt: null, providerId: 'acp-plugin:test:engine',
+    });
+    const queue = createQueueHarness({ busy });
+    const prepareModelPreferences = vi.fn(async () => undefined);
+    const admitPluginEngine = vi.fn(() => ({ model: 'plugin-model', effort: '' }));
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
+      metaModel: 'plugin-model', prepareModelPreferences, admitPluginEngine,
+    });
+    const ctx = createFireContext();
+    const outcome = runner.fire(heartbeatSchedule(), ctx).then(result => ({ result }), error => ({ error }));
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    expect(queue.enqueueCalls[0]).toMatchObject({ sessionId: SESSION_ID, persistedContent: 'PR #971 heartbeat prompt' });
+    await queue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {} });
+    expect(await outcome).toMatchObject({ result: { sessionId: SESSION_ID } });
+    expect(ctx.onTurnActive).toHaveBeenCalledOnce();
+    expect(maker.createSession).not.toHaveBeenCalled();
+    expect(h.session.setModel).not.toHaveBeenCalled();
+    expect(prepareModelPreferences).not.toHaveBeenCalled();
+    expect(admitPluginEngine).not.toHaveBeenCalled();
+  });
+
+  // Same entry: a model chosen for the automation cannot run on the task's plugin engine. It must
+  // fail visibly before anything is queued, never switch the task or run on a built-in engine.
+  it('refuses a linked plugin-engine task when the automation chose a model', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'acp', model: 'plugin-model' });
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', agentKind: 'acp', userSendAt: null, providerId: null });
+    const queue = createQueueHarness({ busy: false });
+    const { runner, notifier } = createRunnerHarness(h.session, queue.deps);
+    await expect(runner.fire(heartbeatSchedule({ model: 'claude-opus-4-6' }), createFireContext())).rejects.toMatchObject({
+      code: 'PLUGIN_ENGINE_UNSUPPORTED', message: expect.stringContaining('uses the task\'s own model'),
+    });
+    expect(queue.enqueueCalls).toHaveLength(0);
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed' });
+  });
+
   it('dispatches a fresh implicit provider route using the resolved fire-local schedule', async () => {
     const h = createSessionHarness(async () => ({ accepted: true }));
     Object.assign(h.session, { agentKind: 'pi', model: 'shared-model' });

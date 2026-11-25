@@ -309,6 +309,12 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
   Agent 自动任务；绑定任务、持续会话、worktree、另一台电脑、脚本执行与项目自动化不提供。保存与每次运行前都按本机此刻
   提供的引擎准入，插件停用或不可用时保存或本次运行明确失败，不回落内置模型。权限与内置引擎的自动任务一样默认「全部允许」；
   插件 Agent 自己不请求确认的操作，Cindy 拦不住。
+- **绑定插件引擎任务的自动化（2026-11-25）**：用户反馈 Antigravity 任务里 GitHub 插件的 PR 自动跟进每轮都报
+  「Scheduled tasks is not available for tasks running on a plugin engine」——跟进是绑定当前任务的定时检查，而绑定任务此前一律拒绝。
+  现在绑定到本机插件引擎任务的自动化（`bindToCurrentSession` / `targetSessionId`）按用户续发消息运行：不论任务忙闲都进该任务的
+  消息队列，由任务自己的发送路径启动引擎，沿用任务当前的引擎、模型与权限档，运行历史与通知照常。以下仍明确拒绝，不换引擎、不回落内置模型：
+  自动化指定了模型、来源或思考深度（保存时指定引擎也拒绝；Fast 不是插件引擎的设置，不算指定）、任务在另一台电脑、伙伴例行任务。
+  入口见 `scheduler-host/runner.ts` 的 `boundPluginEngineRefusal`。
 
 ## 第二期：多 Agent 协同（2026-11-19）
 
