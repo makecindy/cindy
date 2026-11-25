@@ -1,5 +1,5 @@
 import { createAuxiliaryUsageRecorder } from '../usage/auxiliaryUsage.js';
-import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionTextOptions } from '@cindy/maker-core';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, OneShotError, type NativeSubscriptionTextOptions } from '@cindy/maker-core';
 // The one-shot requests live in oneShotCandidatesCore.ts (shared with the Node Host). This
 // module builds the single Desktop instance; its ports resolve the Desktop modules when
 // called, never when this module loads.
@@ -18,7 +18,7 @@ import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
 import { reportAuxiliaryChainOutcome } from './auxiliaryChainOutcomeSink.js';
 // After the Desktop modules, so module evaluation keeps the former order.
-import { createOneShotCandidates } from './oneShotCandidatesCore.js';
+import { createOneShotCandidates, fenceStreamedText } from './oneShotCandidatesCore.js';
 import { getDesktopSelectableCatalog } from '../maker-host/createDesktopProviderService.js';
 import { acquireSubscriptionAccount } from '../subscription-accounts/runtime.js';
 import { accountProviderId } from '../subscription-accounts/placement.js';
@@ -80,7 +80,7 @@ const desktopOneShot = createOneShotCandidates({
   isAuxiliaryModelTemporarilyUnavailable,
   captureAuxiliaryHealthObserver,
   reportAuxiliaryChainOutcome: (...args) => reportAuxiliaryChainOutcome(...args),
-  requestNativeSubscriptionText: async ({ prompt, sessionId, providerId, ...request }) => {
+  requestNativeSubscriptionText: async ({ prompt, sessionId, providerId, onText, signal, ...request }) => {
     const run = nativeSubscriptionTextRunner;
     if (!run) throw new Error('Claude Code is not ready');
     // Pick within the selected provider (built-in or an independent Claude connection),
@@ -105,20 +105,34 @@ const desktopOneShot = createOneShotCandidates({
         lease.assertDispatchable();
         lease.running(true);
       }
-      const text = await run(prompt, {
-        ...request,
-        beforeDispatch: async () => {
-          if (!dispatchable()) return false;
-          if (request.beforeDispatch && !(await request.beforeDispatch())) return false;
-          // The awaited route/owner read can outlive a pause, disconnect or provider move.
-          return dispatchable();
-        },
-        ...(lease ? { [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account } : {}),
-      });
+      // Streamed lines are spoken at once, so each one needs the account too.
+      const stream = fenceStreamedText(onText, signal, dispatchable);
+      let text: string;
+      try {
+        text = await run(prompt, {
+          ...request,
+          signal: stream.signal,
+          onText: stream.onText,
+          beforeDispatch: async () => {
+            if (!dispatchable()) return false;
+            if (request.beforeDispatch && !(await request.beforeDispatch())) return false;
+            // The awaited route/owner read can outlive a pause, disconnect or provider move.
+            return dispatchable();
+          },
+          ...(lease ? { [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account } : {}),
+        });
+      } catch (error) {
+        // Like subscription sends: report the CLI's failure (sign-in, overload, usage
+        // limit) so the pool cools this account. A cancellation says nothing about it.
+        if (lease && !stream.stale() && !stream.signal?.aborted) {
+          lease.observeFailure(error instanceof OneShotError && error.failure ? error.failure : error, request.model, 'run');
+        }
+        throw error;
+      }
       // A reply cannot outlive the account that produced it (the HTTP path rechecks
       // its credential after the full response the same way); the core reports it as
       // request_failed, so nothing is spoken.
-      if (!dispatchable()) throw new Error('The subscription account changed before the reply was accepted');
+      if (stream.stale() || !dispatchable()) throw new Error('The subscription account changed before the reply was accepted');
       return text;
     } finally {
       lease?.release();

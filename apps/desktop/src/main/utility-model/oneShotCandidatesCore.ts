@@ -240,6 +240,31 @@ export interface OneShotCandidatesPorts {
   }) => Promise<string>;
 }
 
+/**
+ * Streamed CLI text reaches the caller only while `current()` holds: a voice call speaks
+ * each complete line at once, and rejecting the final reply cannot take it back. The
+ * first stale update stops forwarding for good and cancels the request.
+ */
+export function fenceStreamedText(
+  onText: ((text: string) => void) | undefined,
+  signal: AbortSignal | undefined,
+  current: () => boolean,
+): { onText?: (text: string) => void; signal?: AbortSignal; stale: () => boolean } {
+  if (!onText) return { signal, stale: () => false };
+  const controller = new AbortController();
+  let stale = false;
+  return {
+    onText: (text) => {
+      if (stale) return;
+      if (current()) return onText(text);
+      stale = true;
+      controller.abort();
+    },
+    signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+    stale: () => stale,
+  };
+}
+
 /** One instance per launcher. */
 export function createOneShotCandidates(ports: OneShotCandidatesPorts) {
 const getCatalog = ports.getCatalog ?? getActiveCatalog;
@@ -1565,30 +1590,38 @@ async function requestBuiltinProviderText(
       profile,
       execute: async (text, requestOpts) => {
         const guard = requestOpts?.beforeDispatch;
-        const reply = await requestNative({
-          prompt: text,
+        const routeCurrent = () => input.routeStillCurrent?.() ?? true;
+        // The caller's own route read (a voice call rereads the companion's provider/model).
+        const callerRouteCurrent = async () => !guard || await guard({
           providerId: input.provider.id,
+          agentKind: input.agentKind,
           model: input.model,
-          sessionId: input.sessionId,
-          systemPrompt: requestOpts?.systemPrompt,
-          timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-          signal: requestOpts?.signal ?? input.signal,
-          disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
-          onText: requestOpts?.onText,
-          beforeDispatch: async () =>
-            (input.routeStillCurrent?.() ?? true)
-            && (!guard || await guard({
-              providerId: input.provider.id,
-              agentKind: input.agentKind,
-              model: input.model,
-            }))
-            && (input.routeStillCurrent?.() ?? true),
-          // Runs inside the metered context: keeps the caller's source and task.
-          onUsage: ({ model, ...tokens }) => recordUsage(tokens, NATIVE_SUBSCRIPTION_CLI_TRANSPORT, input.model, model),
         });
-        // Like the HTTP path: a complete reply cannot outlive the route that sent it
-        // (provider disabled, reconfigured or its model removed during the CLI turn).
-        if (input.routeStillCurrent && !input.routeStillCurrent()) {
+        const stream = fenceStreamedText(requestOpts?.onText, requestOpts?.signal ?? input.signal, routeCurrent);
+        let reply: string;
+        try {
+          reply = await requestNative({
+            prompt: text,
+            providerId: input.provider.id,
+            model: input.model,
+            sessionId: input.sessionId,
+            systemPrompt: requestOpts?.systemPrompt,
+            timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+            signal: stream.signal,
+            disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
+            onText: stream.onText,
+            beforeDispatch: async () => routeCurrent() && await callerRouteCurrent() && routeCurrent(),
+            // Runs inside the metered context: keeps the caller's source and task.
+            onUsage: ({ model, ...tokens }) => recordUsage(tokens, NATIVE_SUBSCRIPTION_CLI_TRANSPORT, input.model, model),
+          });
+        } catch (error) {
+          if (stream.stale()) throw new UtilityTextExecutionError({ reason: 'request_failed' });
+          throw error;
+        }
+        // Like the HTTP path: a complete reply cannot outlive the route that sent it,
+        // whether the catalog route (provider disabled, reconfigured or its model
+        // removed) or the caller's route (another provider or model selected).
+        if (stream.stale() || !routeCurrent() || !(await callerRouteCurrent()) || !routeCurrent()) {
           throw new UtilityTextExecutionError({ reason: 'request_failed' });
         }
         return reply;

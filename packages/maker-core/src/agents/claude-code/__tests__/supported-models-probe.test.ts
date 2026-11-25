@@ -260,4 +260,32 @@ describe('ClaudeCodeAgent.nativeSubscriptionText(订阅登录的无状态文本�
     expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-opus-4-5', inputTokens: 30 }));
     expect(q.close).toHaveBeenCalledTimes(1);
   });
+
+  // Codex P2 (PR #12756, 26afa31): without a rate_limit_event, the CLI's own failure detail
+  // is the only evidence the host's account pool has to cool a signed-out, overloaded or
+  // exhausted account; the error used to carry only the result subtype.
+  it.each([
+    {
+      name: 'API 错误 envelope(登录失效)',
+      messages: [
+        { type: 'assistant', parent_tool_use_id: null, error: 'authentication_failed',
+          message: { content: [{ type: 'text', text: 'Invalid API key · Please run /login' }] } },
+        { type: 'result', subtype: 'success', is_error: true, result: 'Invalid API key · Please run /login' },
+      ],
+      failure: { message: 'Invalid API key · Please run /login', sdkError: 'authentication_failed' },
+    },
+    {
+      name: '重试用尽(过载)',
+      messages: [
+        { type: 'system', subtype: 'api_retry', attempt: 10, max_retries: 10, retry_delay_ms: 0, error_status: 529, error: 'overloaded' },
+        { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['Overloaded'] },
+      ],
+      failure: { sdkError: 'overloaded', errorStatus: 529 },
+    },
+  ])('CLI 失败结果把非敏感失败信号随 OneShotError 交回:$name', async ({ messages, failure }) => {
+    sdkMock.query.mockReturnValue(fakeTextQuery(messages));
+    const { agent } = createAgent(true);
+    await expect(agent.nativeSubscriptionText('x', { model: 'claude-opus-4-5' }))
+      .rejects.toMatchObject({ name: 'OneShotError', reason: 'network', failure: expect.objectContaining(failure) });
+  });
 });

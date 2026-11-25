@@ -45,8 +45,10 @@ import type {
   McpServerConfig,
   PermissionUpdate,
   PreToolUseHookInput,
+  SDKResultMessage,
   Settings,
 } from '@anthropic-ai/claude-agent-sdk';
+import { extractNonSecretErrorSignals, redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
@@ -79,6 +81,7 @@ import {
   type StartSessionOptions,
   type OneShotOptions,
   type NativeSubscriptionTextOptions,
+  type OneShotFailureSignals,
   type RefreshLocalModelsOptions,
   type SendOptions,
   type TurnPermissionPolicy,
@@ -836,6 +839,27 @@ async function reportNativeTextUsage(
   }
 }
 
+/**
+ * Failure signals of a failed CLI text turn, kept for the host's account pool the way
+ * subscription sessions keep them on their terminal error: an API-error envelope or
+ * retry notice from the CLI plus the result text, redacted.
+ */
+function nativeTextFailure(
+  result: SDKResultMessage,
+  apiError: OneShotFailureSignals | undefined,
+): OneShotFailureSignals {
+  const raw = (result.subtype === 'success' ? result.result : (result.errors ?? []).join('\n')).trim();
+  const signals = extractNonSecretErrorSignals(raw);
+  const errorStatus = signals.errorStatus ?? apiError?.errorStatus;
+  return {
+    message: [...new Set([apiError?.message, redactSensitiveText(raw)].filter(Boolean))].join('\n')
+      || `Claude subscription request ended: ${result.subtype}`,
+    ...(apiError?.sdkError ? { sdkError: apiError.sdkError } : {}),
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
+    ...(signals.usageLimit || apiError?.usageLimit ? { usageLimit: true } : {}),
+  };
+}
+
 function mapAnthropicError(err: unknown): OneShotError {
   if (err instanceof APIError) {
     if (err.status === 401 || err.status === 403) {
@@ -1497,6 +1521,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
       });
       let streamed = '';
+      let apiError: OneShotFailureSignals | undefined;
       for await (const message of q) {
         // Same as subscription sessions: keep the account's quota snapshot and pool
         // scheduling current; this request runs on the subscription login.
@@ -1512,11 +1537,40 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
           continue;
         }
+        // Keep why the API failed (sign-in, overload, usage limit) for the result below.
+        if (message.type === 'assistant' && message.error) {
+          const text = message.message.content
+            .map((block) => (block.type === 'text' ? block.text : ''))
+            .join('\n')
+            .trim();
+          const signals = extractNonSecretErrorSignals(text);
+          const errorStatus = signals.errorStatus ?? apiError?.errorStatus;
+          apiError = {
+            message: redactSensitiveText(text || `SDK error: ${message.error}`),
+            sdkError: message.error,
+            ...(errorStatus !== undefined ? { errorStatus } : {}),
+            ...(signals.usageLimit ? { usageLimit: true } : {}),
+          };
+          continue;
+        }
+        if (message.type === 'system' && message.subtype === 'api_retry') {
+          apiError = {
+            ...apiError,
+            message: apiError?.message ?? `SDK API request failed: ${message.error}`,
+            sdkError: apiError?.sdkError ?? message.error,
+            ...(message.error_status != null ? { errorStatus: message.error_status } : {}),
+          };
+          continue;
+        }
         if (message.type !== 'result') continue;
         // Report what was consumed even when the turn failed; a crashed start reports zeros.
         await reportNativeTextUsage(message, model, opts.onUsage, log);
         if (message.subtype !== 'success' || message.is_error) {
-          throw new OneShotError('network', `Claude subscription request ended: ${message.subtype}`);
+          throw new OneShotError(
+            'network',
+            `Claude subscription request ended: ${message.subtype}`,
+            nativeTextFailure(message, apiError),
+          );
         }
         const text = message.result.trim();
         log.info('done', { model, elapsedMs: Date.now() - startedAt, chars: text.length });

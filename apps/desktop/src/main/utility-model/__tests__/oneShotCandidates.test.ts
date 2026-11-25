@@ -125,7 +125,7 @@ vi.mock('../../model-access/gatewayKeyRejection.js', () => ({
   reportCindyGatewayKeyRejected: vi.fn(),
 }));
 
-import { NATIVE_SUBSCRIPTION_ACCOUNT, type Maker } from '@cindy/maker-core';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, OneShotError, type Maker } from '@cindy/maker-core';
 // model-compat's own profile table; one test adds a temporary gateway-object
 // profile because the only real one (cline-pass) shares its address with a
 // conflicting profile and never resolves.
@@ -3115,7 +3115,8 @@ describe('utility one-shot candidates', () => {
         model: 'claude-opus-4-5', systemPrompt: 'call rules', disableReasoning: true, timeoutMs: 60_000,
       }));
       expect(onText).toHaveBeenCalledWith('{"say":"你好"}');
-      expect(routes).toEqual([{ providerId: 'anthropic', agentKind: 'claude-code', model: 'claude-opus-4-5' }]);
+      // Checked before dispatch and again before the reply is accepted.
+      expect(routes).toEqual(Array(2).fill({ providerId: 'anthropic', agentKind: 'claude-code', model: 'claude-opus-4-5' }));
       expect(acquireAccount).toHaveBeenCalledWith('anthropic', 'claude-opus-4-5', ['task:companion-task'], false, { resuming: false });
 
       allow = false;
@@ -3273,6 +3274,97 @@ describe('utility one-shot candidates', () => {
       });
       dispatchable = false;
       expect(await request()).toMatchObject({ ok: false });
+      expect(lease.release).toHaveBeenCalledTimes(2);
+    });
+
+    function poolLease() {
+      let usable = true;
+      const lease = {
+        account: { id: 'acct-1', configDir: '/tmp/acct-1', assertCurrent: vi.fn(), readState: vi.fn() },
+        accountId: 'acct-1', pinned: true,
+        assertDispatchable: vi.fn(() => { if (!usable) throw new Error('account paused'); }),
+        running: vi.fn(), release: vi.fn(),
+        observeFailure: vi.fn(() => true), changeModel: vi.fn(), bind: vi.fn(), reserveForTask: vi.fn(),
+      };
+      acquireAccount.mockResolvedValue(lease as never);
+      return { lease, pause: () => { usable = false; } };
+    }
+
+    // Codex P2 (PR #12756, 26afa31): with sentence playback, each complete streamed line is
+    // spoken at once, so a line streamed after the account was paused or the route was
+    // reconfigured must not reach the call; the request is cancelled and the reply rejected.
+    it.each(['account', 'route'] as const)('流式文本在%s失效后不再转给通话,并取消请求', async (invalidated) => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      const { pause } = poolLease();
+      const invalidate = invalidated === 'account' ? pause : () => {
+        activeCatalog.mockReturnValue({
+          providers: [{ ...(subscriptionCatalog as { providers: Record<string, unknown>[] }).providers[0], models: { 'claude-code': [] } }],
+        } as never);
+      };
+      let cancelled: boolean | undefined;
+      setNativeSubscriptionTextRunner(async (_prompt, opts) => {
+        if (opts.beforeDispatch && !(await opts.beforeDispatch())) throw new Error('guard rejected');
+        opts.onText?.('{"say":"一"}\n');
+        invalidate();
+        opts.onText?.('{"say":"一"}\n{"say":"二"}\n');
+        cancelled = opts.signal?.aborted;
+        return '{"say":"一"}\n{"say":"二"}';
+      });
+      const onText = vi.fn();
+
+      expect(await requestExplicitUtilityText('hello', {
+        sessionId: 'companion-task', providerId: 'anthropic', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true, onText,
+      })).toMatchObject({ ok: false, attempts: [expect.objectContaining({ status: 'failed', reason: 'request_failed' })] });
+      expect(onText.mock.calls).toEqual([['{"say":"一"}\n']]);
+      expect(cancelled).toBe(true);
+    });
+
+    // Codex P2 (PR #12756, 26afa31): the companion's provider/model can change during the
+    // CLI turn while the old provider stays enabled; only the caller's guard sees that.
+    it('作答期间伙伴换了来源或模型时,回复按 request_failed 拒绝', async () => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      let answered = false;
+      setNativeSubscriptionTextRunner(async (_prompt, opts) => {
+        if (opts.beforeDispatch && !(await opts.beforeDispatch())) throw new Error('guard rejected');
+        answered = true;
+        return '{"say":"hi"}';
+      });
+      const guard = vi.fn(async () => !answered);
+
+      expect(await requestExplicitUtilityText('hello', {
+        sessionId: 'companion-task', providerId: 'anthropic', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true, beforeDispatch: guard,
+      })).toMatchObject({ ok: false, attempts: [expect.objectContaining({ status: 'failed', reason: 'request_failed' })] });
+      expect(guard).toHaveBeenCalledTimes(2);
+    });
+
+    // Codex P2 (PR #12756, 26afa31): a CLI auth/overload/usage-limit failure without a
+    // rate_limit_event must reach the lease before it is released, so the pool cools the
+    // account instead of admitting it again; a cancelled request reports nothing.
+    it('CLI 失败信号在释放租约前交给账号池,取消的请求不上报', async () => {
+      activeCatalog.mockReturnValue(subscriptionCatalog);
+      const { lease } = poolLease();
+      const failure = { message: 'API Error: 401 authentication_error', sdkError: 'authentication_failed', errorStatus: 401 };
+      setNativeSubscriptionTextRunner(async () => {
+        throw new OneShotError('network', 'Claude subscription request ended: success', failure);
+      });
+      const request = (signal?: AbortSignal) => requestExplicitUtilityText('hello', {
+        sessionId: 'companion-task', providerId: 'anthropic', agentKind: 'claude-code',
+        model: 'claude-opus-4-5', nativeSubscriptionCli: true, signal,
+      });
+
+      expect(await request()).toMatchObject({ ok: false });
+      expect(lease.observeFailure).toHaveBeenCalledWith(failure, 'claude-opus-4-5', 'run');
+      expect(lease.observeFailure.mock.invocationCallOrder[0]).toBeLessThan(lease.release.mock.invocationCallOrder[0]);
+
+      const controller = new AbortController();
+      setNativeSubscriptionTextRunner(async () => {
+        controller.abort();
+        throw new Error('aborted');
+      });
+      expect(await request(controller.signal)).toMatchObject({ ok: false });
+      expect(lease.observeFailure).toHaveBeenCalledTimes(1);
       expect(lease.release).toHaveBeenCalledTimes(2);
     });
   });

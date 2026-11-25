@@ -1749,10 +1749,23 @@ export interface NativeSubscriptionTextOptions {
  */
 export type OneShotErrorReason = 'timeout' | 'auth' | 'network' | 'malformed';
 
+/**
+ * Non-secret failure detail of a native subscription request (`nativeSubscriptionText`):
+ * the host's account pool reads it, like a terminal turn error, to decide whether to
+ * cool the account (sign-in failed, overloaded, usage limit).
+ */
+export interface OneShotFailureSignals {
+  message: string;
+  sdkError?: string;
+  errorStatus?: number;
+  usageLimit?: boolean;
+}
+
 export class OneShotError extends Error {
   constructor(
     public readonly reason: OneShotErrorReason,
     msg?: string,
+    public readonly failure?: OneShotFailureSignals,
   ) {
     super(msg ?? `oneshot-failed:${reason}`);
     this.name = 'OneShotError';
