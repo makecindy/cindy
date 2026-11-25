@@ -9182,6 +9182,7 @@
         "taskWorkdirBoundary": "工作目錄沿用目標電腦的設定，請在目標電腦修改。",
         "configurationLoading": "正在讀取設定…",
         "configurationReadFailed": "未能讀取設定。",
+        "settingsWriteUnconfirmed": "無法確認儲存結果。請重新整理設定，確認後再決定是否重試。",
         "refreshConfiguration": "重新整理設定",
         "enableBeforeConfigure": "插件已停用，請先開啟上方開關，再進行設定。",
         "settingsPageUnavailable": "請在 {{device}} 的 Cindy 中開啟此插件的設定頁，目標電腦目前版本暫不支援遠端顯示。",

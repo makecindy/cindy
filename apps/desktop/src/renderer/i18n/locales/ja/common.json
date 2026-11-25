@@ -9182,6 +9182,7 @@
         "taskWorkdirBoundary": "作業ディレクトリは対象コンピューターの設定を維持します。変更は対象コンピューターで行ってください。",
         "configurationLoading": "設定を読み込み中…",
         "configurationReadFailed": "設定を読み込めませんでした。",
+        "settingsWriteUnconfirmed": "保存結果を確認できませんでした。再試行する前に設定を更新して確認してください。",
         "refreshConfiguration": "設定を更新",
         "enableBeforeConfigure": "このプラグインは無効です。設定するには、上のスイッチをオンにしてください。",
         "settingsPageUnavailable": "{{device}} の Cindy でこのプラグインの設定ページを開いてください。接続先の現在のバージョンではリモート表示に対応していません。",
