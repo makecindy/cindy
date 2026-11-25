@@ -50,6 +50,13 @@ export function chatGroupHumanDisplayName(member: {
   return name.endsWith(suffix) ? name : `${name}${suffix}`;
 }
 
+export function chatGroupMentionRoster(members: readonly BotGroupMemberView[]): BotGroupMemberView[] {
+  return members.filter(member => !member.isSelf).map(member => {
+    const name = chatGroupHumanDisplayName(member);
+    return name === member.name ? member : { ...member, name, displayName: member.name };
+  });
+}
+
 /** The server's member.name already includes that room's nickname override. Display only; never infer ownership from names. */
 export function chatGroupOwnerName(member: ChatGroupNamedMember, members: readonly ChatGroupNamedMember[]): string {
   const owner = member.kind === 'bot' && member.ownerActorId

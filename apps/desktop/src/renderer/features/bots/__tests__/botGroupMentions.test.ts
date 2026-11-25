@@ -1,3 +1,4 @@
+import { chatGroupMentionRoster } from '@cindy/maker-shared/botGroupPresentation';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -24,6 +25,22 @@ const members = [
 ];
 
 describe('resolveBotGroupMentions', () => {
+  // Group identity: two namesakes from different organizations share a short alias.
+  it('uses the visible organization name for candidate search and typed mentions', () => {
+    const roster = chatGroupMentionRoster(['Alpha', 'Beta'].map(orgName => ({
+      name: 'Ann', botId: orgName, orgName, showOrgName: true, actorKind: 'human',
+      status: 'active', avatar: '', avatarColor: '',
+    })));
+    const draft = '@Ann · Beta';
+    const query = findBotGroupMentionQuery(draft, draft.length, roster);
+    expect(query?.query).toBe('Ann · Beta');
+    expect(filterBotGroupMentionCandidates(query!.query, roster).map(member => member.botId)).toEqual(['Beta']);
+    const input = { members: roster, allLabels: [] };
+    expect(resolveBotGroupMentions(draft, input).botIds).toEqual(['Beta']);
+    expect(ambiguousBotGroupMentionLabels('@Ann', input)).toEqual(['Ann']);
+    expect(resolveBotGroupMentions('@Ann', { ...input, members: roster.slice(1) }).botIds).toEqual(['Beta']);
+  });
+
   // User decision: Everyone addresses humans; All Teammates is an independent
   // broadcast. Existing tests cover only one broadcast kind (unit regression).
   it('keeps human and companion broadcasts separate, including a picked namesake', () => {
