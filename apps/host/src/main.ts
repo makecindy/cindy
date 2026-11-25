@@ -1802,6 +1802,7 @@ const serverDeps = {
         runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
       persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
       move: sessionMove.move,
+      onManualTitleWrite: sessionId => hostAutoTitle.markManuallyRenamed(sessionId),
       onSoftDelete: async sessionId => {
         await inputQueue.disposeSession(sessionId);
         runtimeSelection.clearIntent(sessionId);
@@ -1814,17 +1815,13 @@ const serverDeps = {
         forgetProvisionalSession(sessionId);
       },
     });
-    return async (sessionId: string, patch: Record<string, unknown>, options?: { deleteTarget?: 'side-chat' | 'task' }) => {
+    return (sessionId: string, patch: Record<string, unknown>, options?: { deleteTarget?: 'side-chat' | 'task' }) => {
       const owner = activeOwnerScopeKey();
-      const result = await run(sessionId, patch, options, () => {
+      return run(sessionId, patch, options, () => {
         const held = inputQueue.profileHoldReason();
         if (held) throw holdError(held);
         if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('[NOT_FOUND] Host account changed');
       });
-      if (patch && typeof patch.title === 'string') {
-        hostAutoTitle.markManuallyRenamed(sessionId);
-      }
-      return result;
     };
   })(),
   /**

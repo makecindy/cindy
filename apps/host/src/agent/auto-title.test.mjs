@@ -17,6 +17,7 @@ import { configureHostOwner } from './claude-auth.mjs';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
 import { createInputQueue } from './input-queue.mjs';
 import { createHostAutoTitle } from './auto-title.ts';
+import { createHostSessionUpdate } from './session-update.ts';
 
 async function waitFor(predicate, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs;
@@ -113,7 +114,7 @@ async function fixture(t, overrides = {}) {
     getMaker: () => maker,
     profileHoldReason: () => held,
     profileHoldGeneration: () => holdGeneration,
-    hasEnabledUserMessageHookGhost: () => false,
+    hasEnabledUserMessageHookGhost: () => overrides.screeningActive?.() ?? false,
     drainHistories: () => queue.drainHistories(),
     isSessionTurnPendingCompletion: id => queue.isTurnRunning(id),
     publish: event => events.push(event),
@@ -225,4 +226,66 @@ test('regenerateTitle reads SQLite messages, rejects empty sessions, and refuses
   const heldRun = await f.autoTitle.runAutoTitle({ sessionId: 's-empty', text: 'should skip' });
   assert.deepEqual(heldRun, { applied: false, done: false });
   assert.equal((await f.readSession('s-empty')).title, DEFAULT_DRAFT_SESSION_TITLE);
+});
+
+test('Browser runAutoTitle skips placeholder write when user-message screening hook is active', async t => {
+  const f = await fixture(t, { screeningActive: () => true });
+  await f.seedSession('s-screened');
+  const res = await f.autoTitle.runAutoTitle({ sessionId: 's-screened', text: 'secret text' });
+  assert.deepEqual(res, { applied: false, done: false });
+  assert.equal((await f.readSession('s-screened')).title, DEFAULT_DRAFT_SESSION_TITLE);
+  assert.equal(f.oneShotPrompts.length, 0);
+  assert.equal(f.events.filter(e => e.type === 'session_changed' && e.sessionId === 's-screened').length, 0);
+});
+
+test('In-flight smart title from before a profile hold/release cycle is discarded', async t => {
+  let releaseAi;
+  const aiGate = new Promise(resolve => { releaseAi = resolve; });
+  const f = await fixture(t, {
+    nextAiTitle: async () => {
+      await aiGate;
+      return { ok: true, text: 'Stale Pre-Hold Title' };
+    },
+  });
+  await f.seedSession('s-hold-cycle');
+
+  const run = f.autoTitle.runAutoTitle({ sessionId: 's-hold-cycle', text: 'Keep This Name' });
+  await waitFor(() => f.oneShotPrompts.length === 1);
+  f.setHeld('desktop took profile');
+  f.setHeld(null);
+  releaseAi();
+  await run;
+  assert.equal((await f.readSession('s-hold-cycle')).title, 'Keep This Name');
+});
+
+test('Mixed session update records manual rename before async follow-up writes so same-value rename wins', async t => {
+  let releaseAi;
+  const aiGate = new Promise(resolve => { releaseAi = resolve; });
+  const f = await fixture(t, {
+    nextAiTitle: async () => {
+      await aiGate;
+      return { ok: true, text: 'AI Overwrites Saved Title' };
+    },
+  });
+  const title = 'Keep My Exact Placeholder';
+  await f.seedSession('s-mixed-rename');
+  const run = f.autoTitle.runAutoTitle({ sessionId: 's-mixed-rename', text: title });
+  await waitFor(() => f.oneShotPrompts.length === 1);
+
+  const update = createHostSessionUpdate({
+    publish: () => { releaseAi(); },
+    persistSessionFields: async () => { await run; },
+    restoreTaskToActive: async () => {},
+    setModel: async () => ({}),
+    onManualTitleWrite: id => f.autoTitle.markManuallyRenamed(id),
+    move: {
+      lookupSessionWorktreeBinding: async () => null,
+      closeIdleSessionForMove: async () => true,
+      broadcastRecentWorkdirsChanged: () => {},
+    },
+  });
+  const updated = await update('s-mixed-rename', { title, contextWindowBudget: 32768 });
+  await run;
+  assert.equal(updated.title, title);
+  assert.equal((await f.readSession('s-mixed-rename')).title, title);
 });

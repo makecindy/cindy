@@ -593,7 +593,7 @@ export function createInputQueue(deps) {
             refuseWhileHeld();
             if (state.admission !== admission) throw new Error('input cancelled before acceptance');
           }
-          const commitAutoTitle = await deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
+          const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
           let accepted = false;
           try {
             state.lastUserActionAt = Date.now();
@@ -670,7 +670,7 @@ export function createInputQueue(deps) {
         return command(id, async (state, admission) => {
           refuseWhileHeld();
           const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
-          const commitAutoTitle = await deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
+          const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
           const previous = prepared.ownerId
             ? attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId) : null;
           let accepted = false;

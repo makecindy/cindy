@@ -2,14 +2,18 @@ import { and, eq } from 'drizzle-orm';
 import type { AgentKind, Maker } from '@cindy/maker-core';
 import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { deriveAutoTitleSeed, type AgentInputQueuedMessage } from '../../../desktop/src/shared/agentInputQueue.js';
+import { resolveSystemLocale, type SupportedLocale } from '../../../desktop/src/shared/locale.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { isDeviceLinkInvoke } from '../../../desktop/src/main/device-link/invoke-context.js';
 import { getCurrentDbClientSnapshot, getDbClient } from '../../../desktop/src/main/localDb/client/current.js';
 import { regenerateTitleMaterial } from '../../../desktop/src/main/localDb/latestMessageText.js';
 import { sessions as sessionTable } from '../../../desktop/src/main/localDb/schema.js';
-import { createLogger } from '../../../desktop/src/main/logger.js';
 import { createAuxiliaryTitleOneShotCore } from '../../../desktop/src/main/maker-host/auxiliaryTitleOneShotCore.js';
-import { createSessionAutoTitleCore, type OverwritableAutoTitleTarget } from '../../../desktop/src/main/maker-ipc/sessionAutoTitleCore.js';
+import {
+  createSessionAutoTitleCore,
+  type OverwritableAutoTitleTarget,
+  type SessionAutoTitleDeps,
+} from '../../../desktop/src/main/maker-ipc/sessionAutoTitleCore.js';
 import { buildAutoTitlePrompt } from '../../../desktop/src/main/maker-ipc/title-prompt.js';
 import {
   AUTO_TITLE_MESSAGE_SLICE,
@@ -18,13 +22,11 @@ import {
   readSessionAgentKindFromDb,
   regenerateMakerSessionTitleCore,
 } from '../../../desktop/src/main/maker-ipc/titleCore.js';
-import { resolveSystemLocale, type SupportedLocale } from '../../../desktop/src/shared/locale.js';
 import { uiText } from '../../../desktop/src/main/uiText.js';
 import { holdError } from './profile-hold.js';
 import type { createHostAutoReview } from './auto-review.js';
 
 const FORK_PLACEHOLDER_TITLE_PREFIX = '[Fork';
-const log = createLogger('host-auto-title');
 
 export interface HostAutoTitleDeps {
   getAutoReview(): ReturnType<typeof createHostAutoReview> | null;
@@ -39,16 +41,18 @@ export interface HostAutoTitleDeps {
 }
 
 export function createHostAutoTitle(deps: HostAutoTitleDeps) {
-  const resolveLocale: () => SupportedLocale = deps.resolveLocale ?? (() => resolveSystemLocale(Intl.DateTimeFormat().resolvedOptions().locale));
+  const resolveLocale: () => SupportedLocale =
+    deps.resolveLocale ?? (() => resolveSystemLocale(Intl.DateTimeFormat().resolvedOptions().locale));
   const holdGeneration = () => deps.profileHoldGeneration?.() ?? 0;
   const canWrite = () => !deps.profileHoldReason() && !isAppSessionBoundaryPending();
+  const isRunCurrent = (startGen: number) => canWrite() && holdGeneration() === startGen;
 
   function assertNotHeld(): void {
     const held = deps.profileHoldReason();
     if (held) throw holdError(held);
   }
 
-  function makeOneShotCore() {
+  function makeOneShotCore(startGen: number) {
     const review = deps.getAutoReview();
     const maker = deps.getMaker();
     if (!review || !maker) return null;
@@ -61,7 +65,7 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
       isAgentOneShotRouteDisabled: (agentKind, model) => review.isOneShotRouteDisabled(agentKind, model),
       getMaker: () => maker,
       requestText: (prompt, opts) => review.oneShot.requestUtilityText(maker, prompt, opts),
-      isDispatchAllowed: canWrite,
+      isDispatchAllowed: () => isRunCurrent(startGen),
     });
   }
 
@@ -97,14 +101,13 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
     sessionId: string,
     title: string,
     expectedTitle: string = DEFAULT_DRAFT_SESSION_TITLE,
+    startGen: number = holdGeneration(),
   ): Promise<boolean> {
     const owner = getCurrentDbClientSnapshot();
-    const gen = holdGeneration();
     const stillCurrent = () =>
       owner !== null &&
       getCurrentDbClientSnapshot() === owner &&
-      holdGeneration() === gen &&
-      canWrite();
+      isRunCurrent(startGen);
     if (!stillCurrent()) return false;
     const cleanTitle = normalizeAutoTitle(title);
     if (!cleanTitle || cleanTitle === DEFAULT_DRAFT_SESSION_TITLE) return false;
@@ -115,7 +118,7 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
         .from(sessionTable)
         .where(eq(sessionTable.id, sessionId))
         .limit(1);
-      return !!current && current.title === cleanTitle;
+      return stillCurrent() && !!current && current.title === cleanTitle;
     }
     if (!stillCurrent()) return false;
     await db
@@ -138,10 +141,11 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
     message: string,
     agentKind: AgentKind | null,
     sessionId?: string,
+    startGen: number = holdGeneration(),
   ): Promise<string | null> {
     const trimmed = message.trim();
-    if (!trimmed || !canWrite()) return null;
-    const oneShot = makeOneShotCore();
+    if (!trimmed || !isRunCurrent(startGen)) return null;
+    const oneShot = makeOneShotCore(startGen);
     if (!oneShot) return null;
     return oneShot.generateTitleWithAuxiliaryModel({
       sessionId: sessionId ?? '',
@@ -150,12 +154,21 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
     });
   }
 
+  function scopedAutoTitleDeps(startGen: number): SessionAutoTitleDeps {
+    return {
+      resolveOverwritableTitle: async (sessionId, synthesizedPlaceholder) => {
+        if (!isRunCurrent(startGen)) return null;
+        return resolveOverwritableTitle(sessionId, synthesizedPlaceholder);
+      },
+      generateTitle: (message, agentKind, sessionId) =>
+        generateMakerSessionTitle(message, agentKind, sessionId, startGen),
+      persistTitle: (sessionId, title, expectedTitle) =>
+        persistTitle(sessionId, title, expectedTitle, startGen),
+    };
+  }
+
   const core = createSessionAutoTitleCore({
-    getDefaultDeps: () => ({
-      resolveOverwritableTitle,
-      generateTitle: generateMakerSessionTitle,
-      persistTitle,
-    }),
+    getDefaultDeps: () => scopedAutoTitleDeps(holdGeneration()),
     isUntitledSessionAwaitingAutoTitle: async (sessionId, synthesizedPlaceholder) =>
       (await resolveOverwritableTitle(sessionId, synthesizedPlaceholder)) !== null,
     canWrite,
@@ -166,10 +179,10 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
     markManuallyRenamed(sessionId: string): void {
       core.markSessionManuallyRenamed(sessionId, getCurrentDbClientSnapshot());
     },
-    async prepareDeviceLinkAutoTitle(
+    prepareDeviceLinkAutoTitle(
       sessionId: string,
       queued: AgentInputQueuedMessage,
-    ): Promise<() => void> {
+    ): () => void {
       const noop = () => {};
       if (!isDeviceLinkInvoke()) return noop;
       const seed = deriveAutoTitleSeed(queued, {
@@ -177,52 +190,53 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
         file: uiText('ccAgent.autoTitle.file', 'File'),
       });
       if (!seed) return noop;
-      let eligible: boolean;
-      try {
-        eligible = await core.isSessionAutoTitleEligible(sessionId);
-      } catch (err) {
-        log.warn('[device-link] auto-title precheck failed (scheduling anyway)', {
-          sessionId,
-          err: err instanceof Error ? err.message : String(err),
-        });
-        eligible = true;
-      }
-      if (!eligible) return noop;
+      const agentKind = queued.createOpts?.agentKind ?? 'claude-code';
       return () => {
-        core.scheduleSessionAutoTitle({
-          sessionId,
-          text: seed.text,
-          agentKind: queued.createOpts?.agentKind ?? 'claude-code',
-          isUserText: seed.isUserText,
-        });
+        if (!canWrite()) return;
+        const startGen = holdGeneration();
+        core.scheduleSessionAutoTitle(
+          { sessionId, text: seed.text, agentKind, isUserText: seed.isUserText },
+          scopedAutoTitleDeps(startGen),
+        );
       };
     },
     async runAutoTitle(input: { sessionId?: unknown; text?: unknown; isUserText?: unknown; agentKind?: unknown }) {
       const sessionId = typeof input?.sessionId === 'string' ? input.sessionId : '';
       const text = typeof input?.text === 'string' ? input.text : '';
       if (!sessionId || !text.trim() || !canWrite()) return { applied: false, done: false };
+      if (deps.hasEnabledUserMessageHookGhost()) return { applied: false, done: false };
+      const startGen = holdGeneration();
       const agentKind: AgentKind =
         input.agentKind === 'codex' || input.agentKind === 'pi' ? input.agentKind : 'claude-code';
-      return core.runSessionAutoTitle({
-        sessionId,
-        text,
-        agentKind,
-        ...(typeof input.isUserText === 'boolean' ? { isUserText: input.isUserText } : {}),
-      });
+      return core.runSessionAutoTitle(
+        {
+          sessionId,
+          text,
+          agentKind,
+          ...(typeof input.isUserText === 'boolean' ? { isUserText: input.isUserText } : {}),
+        },
+        scopedAutoTitleDeps(startGen),
+      );
     },
     async generateTitle(rawRequest: unknown): Promise<{ title: string | null }> {
       assertNotHeld();
+      const startGen = holdGeneration();
       const { message, agentKind, sessionId } = parseGenerateTitleRequest(rawRequest);
-      return { title: await generateMakerSessionTitle(message, agentKind, sessionId) };
+      return { title: await generateMakerSessionTitle(message, agentKind, sessionId, startGen) };
     },
     async regenerateTitle(rawRequest: unknown): Promise<{ title: string | null }> {
       assertNotHeld();
+      const startGen = holdGeneration();
       const owner = getCurrentDbClientSnapshot();
       const { sessionId } = parseRegenerateTitleRequest(rawRequest);
       const pendingBeforeDrain = deps.isSessionTurnPendingCompletion(sessionId) === true;
       await deps.drainHistories();
       assertNotHeld();
-      if (owner !== getCurrentDbClientSnapshot() || isAppSessionBoundaryPending()) {
+      if (
+        owner !== getCurrentDbClientSnapshot() ||
+        isAppSessionBoundaryPending() ||
+        holdGeneration() !== startGen
+      ) {
         return { title: null };
       }
       let pendingObserved = pendingBeforeDrain;
@@ -233,7 +247,7 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
         return pendingObserved;
       };
       latestTurnIsPendingCompletion();
-      const oneShot = makeOneShotCore();
+      const oneShot = makeOneShotCore(startGen);
       const title = await regenerateMakerSessionTitleCore(
         sessionId,
         {
@@ -242,7 +256,7 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
             regenerateTitleMaterial(sid, recentLimit, inFlight, { preferHookUserText: true }),
           generateTitle: async (sid, agentKind, prompt) => {
             assertNotHeld();
-            if (!oneShot) return { status: 'failed' };
+            if (!oneShot || !isRunCurrent(startGen)) return { status: 'failed' };
             return oneShot.generateTitleWithAuxiliaryModelResult({ sessionId: sid, agentKind, prompt });
           },
         },
