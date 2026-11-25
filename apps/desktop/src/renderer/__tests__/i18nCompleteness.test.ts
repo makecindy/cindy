@@ -14,9 +14,10 @@
  *  - KNOWN_MISSING:**与 device-link 无关的既有遗漏**,记录在案不阻断本轮;修一条删一条。
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { glob } from 'node:fs/promises';
+import { mergeCloudStrings } from '../i18n/cloudStrings';
 
 const RENDERER = resolve(__dirname, '..');
 const LOCALES_DIR = resolve(RENDERER, 'i18n', 'locales');
@@ -34,13 +35,17 @@ function loadLocales(): Record<string, unknown>[] {
   const dirs = readdirSync(LOCALES_DIR, { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
-  return dirs.map(
-    (d) =>
-      JSON.parse(readFileSync(resolve(LOCALES_DIR, d, 'common.json'), 'utf8')) as Record<
-        string,
-        unknown
-      >,
-  );
+  return dirs.map((d) => {
+    const common = JSON.parse(readFileSync(resolve(LOCALES_DIR, d, 'common.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    // Cloud copy (cloud.json) joins the common namespace at load time.
+    const cloud = resolve(LOCALES_DIR, d, 'cloud.json');
+    return existsSync(cloud)
+      ? mergeCloudStrings(common, JSON.parse(readFileSync(cloud, 'utf8')) as Record<string, unknown>)
+      : common;
+  });
 }
 
 function localeNames(): string[] {
