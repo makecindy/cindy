@@ -50,6 +50,8 @@ export interface WallpaperSettings {
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
   playbackFailed: boolean;
+  /** The media whose playback failed, global or view-scoped; empty when none. */
+  playbackFailedUrl: string;
   downloadPending: boolean;
   downloadFailed: boolean;
   downloadProgress: number;
@@ -326,6 +328,7 @@ export function WallpaperSettingsProvider({
       visibility,
       lastBlur: lastBlurRef.current,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
+      playbackFailedUrl: failedUrl,
       downloadPending,
       downloadFailed,
       downloadProgress,
@@ -384,4 +387,12 @@ export function useWallpaperSettings(): WallpaperSettingsContextValue {
   if (!context)
     throw new Error('useWallpaperSettings must be used within WallpaperSettingsProvider');
   return context;
+}
+
+/**
+ * The media whose playback failed, for pages that show a view-scoped wallpaper's own error
+ * (a teammate's video). Empty when nothing failed or the window has no wallpaper provider.
+ */
+export function useWallpaperPlaybackFailedUrl(): string {
+  return useContext(WallpaperSettingsContext)?.playbackFailedUrl ?? '';
 }

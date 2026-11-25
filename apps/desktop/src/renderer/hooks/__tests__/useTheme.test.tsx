@@ -245,6 +245,30 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
       cleanupPaper();
     });
 
+    // Review of c4430b7: the saved snapshot was only refreshed by presentTheme, which a
+    // teammate page never calls. After the global package was switched A -> B there, an
+    // expired request rolled the shared defaults back to A while storage said B.
+    // Minimal input: saved package paper, switch to ink on a teammate page, then an expired request.
+    it('rolls an expired request back to the package chosen on the teammate page', async () => {
+      const { selectTheme, result, rerender, unmount } = setup('light');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      await act(async () => { await result.current.setFamily('ink-local'); });
+      expect(localStorage.getItem('theme.familyId')).toBe('ink-local');
+      selectTheme.mockClear();
+      const paper = getLocalThemes().find((theme) => theme.id === 'paper-light-local')!;
+      await act(async () => { await prepareThemeSelection(paper, () => {}, () => false); });
+      expect(selectTheme.mock.calls).toEqual([
+        [{ mode: 'light', familyId: 'paper-local' }],
+        [{ mode: 'light', familyId: 'ink-local' }],
+      ]);
+      rerender({ botId: null });
+      await act(async () => {});
+      unmount();
+      cleanupPaper();
+    });
+
     it('prepares the new system variant after leaving when light/dark flipped meanwhile', async () => {
       systemPrefersDark = false;
       const { selectTheme, rerender, unmount } = setup('system');

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ImagePlus } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -7,6 +7,7 @@ import { extractIpcError } from '@/utils/ipcError';
 
 import { Select } from '@/components/ui/select';
 import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { useWallpaperPlaybackFailedUrl } from '@/hooks/useWallpaperSettings';
 import { getThemeFamilies, tryGetFamily, type ThemeFamily } from '@/themes/families';
 import { onLocalThemesChange } from '@/themes/local-themes';
 import { SELECTABLE_WALLPAPER_IDS, RETIRED_WALLPAPER_IDS } from '@/../shared/appearanceSettings';
@@ -14,6 +15,7 @@ import { isLocalThemeId } from '../../../shared/local-themes';
 
 import { useBotTranslation } from './botPronounContext';
 import {
+  getBotAppearance,
   importBotCustomWallpaper,
   isBotWallpaperId,
   removeBotCustomWallpaper,
@@ -55,8 +57,16 @@ export function BotAppearanceSettings({ botId }: { botId: string }) {
     appearance.wallpaperId === 'custom' && !customUrl ? FOLLOW : (appearance.wallpaperId ?? FOLLOW);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // One import or removal at a time, also for the picker opened from the wallpaper row.
+  const working = useRef(false);
+  // The drawer can move to another teammate without remounting this page.
+  useEffect(() => setError(''), [botId]);
+  const failedUrl = useWallpaperPlaybackFailedUrl();
+  const playbackFailed = appearance.wallpaperId === 'custom' && !!customUrl && failedUrl === customUrl;
 
   const chooseImage = async () => {
+    if (working.current) return;
+    working.current = true;
     setBusy(true);
     setError('');
     try {
@@ -70,18 +80,23 @@ export function BotAppearanceSettings({ botId }: { botId: string }) {
         ),
       );
     } finally {
+      working.current = false;
       setBusy(false);
     }
   };
   const removeImage = async () => {
+    if (working.current) return;
+    working.current = true;
     setBusy(true);
     setError('');
     try {
       await removeBotCustomWallpaper(botId);
-      if (appearance.wallpaperId === 'custom') setBotAppearance(botId, { wallpaperId: null });
+      // Read the choice again: the user may have picked another wallpaper meanwhile.
+      if (getBotAppearance(botId).wallpaperId === 'custom') setBotAppearance(botId, { wallpaperId: null });
     } catch {
       setError(t('settings.appearance.wallpaper.customFailed'));
     } finally {
+      working.current = false;
       setBusy(false);
     }
   };
@@ -165,7 +180,13 @@ export function BotAppearanceSettings({ botId }: { botId: string }) {
           }
         />
       </SettingsCard>
-      {error && <ErrorNotice role="alert" className="mt-3" message={error} />}
+      {(error || playbackFailed) && (
+        <ErrorNotice
+          role="alert"
+          className="mt-3"
+          message={error || t('settings.appearance.wallpaper.customPlaybackFailed')}
+        />
+      )}
     </div>
   );
 }

@@ -47,16 +47,17 @@ function parse(raw: string | null): BotAppearanceMap {
     return {};
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const out: BotAppearanceMap = {};
+  const out: [string, BotAppearance][] = [];
   for (const [botId, entry] of Object.entries(value as Record<string, unknown>)) {
     if (!entry || typeof entry !== 'object') continue;
     const { familyId, wallpaperId } = entry as Record<string, unknown>;
     const next: BotAppearance = {};
     if (typeof familyId === 'string' && familyId) next.familyId = familyId;
     if (isBotWallpaperId(wallpaperId)) next.wallpaperId = wallpaperId;
-    if (next.familyId !== undefined || next.wallpaperId !== undefined) out[botId] = Object.freeze(next);
+    if (next.familyId !== undefined || next.wallpaperId !== undefined) out.push([botId, Object.freeze(next)]);
   }
-  return out;
+  // fromEntries defines own properties, so an ID such as "__proto__" stays plain data.
+  return Object.fromEntries(out);
 }
 
 function readMap(): BotAppearanceMap {
@@ -80,7 +81,8 @@ function notify(): void {
 
 export function getBotAppearance(botId: string | null | undefined): BotAppearance {
   if (!botId) return EMPTY;
-  return readMap()[botId] ?? EMPTY;
+  const map = readMap();
+  return Object.hasOwn(map, botId) ? map[botId]! : EMPTY;
 }
 
 /** `null` 表示回到「跟随全局」，删除对应字段。 */
@@ -88,8 +90,8 @@ export function setBotAppearance(
   botId: string,
   patch: { familyId?: string | null; wallpaperId?: BotWallpaperId | null },
 ): void {
-  const map = { ...readMap() };
-  const next: BotAppearance = { ...map[botId] };
+  const entries = new Map(Object.entries(readMap()));
+  const next: BotAppearance = { ...entries.get(botId) };
   if (patch.familyId !== undefined) {
     if (patch.familyId) next.familyId = patch.familyId;
     else delete next.familyId;
@@ -98,11 +100,12 @@ export function setBotAppearance(
     if (patch.wallpaperId && isBotWallpaperId(patch.wallpaperId)) next.wallpaperId = patch.wallpaperId;
     else delete next.wallpaperId;
   }
-  if (next.familyId === undefined && next.wallpaperId === undefined) delete map[botId];
-  else map[botId] = next;
-  const parsed = parse(JSON.stringify(map));
+  if (next.familyId === undefined && next.wallpaperId === undefined) entries.delete(botId);
+  else entries.set(botId, next);
+  const raw = JSON.stringify(Object.fromEntries(entries));
+  const parsed = parse(raw);
   try {
-    if (Object.keys(map).length) localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify(map));
+    if (entries.size) localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, raw);
     else localStorage.removeItem(BOT_APPEARANCE_STORAGE_KEY);
     unsavedMap = null;
   } catch {
@@ -139,7 +142,7 @@ let stopCustomUrlBridge: (() => void) | null = null;
 
 function setCustomUrls(next: Record<string, string> | null | undefined): void {
   if (!next || typeof next !== 'object') return;
-  customUrls = Object.freeze({ ...next });
+  customUrls = Object.freeze(Object.fromEntries(Object.entries(next)));
   for (const listener of [...customUrlListeners]) listener();
 }
 
@@ -168,7 +171,7 @@ function subscribeCustomUrls(listener: () => void): () => void {
 
 /** 这位伙伴自己的图片或视频；没有时为 null。 */
 export function useBotCustomWallpaperUrl(botId: string | null | undefined): string | null {
-  return useSyncExternalStore(subscribeCustomUrls, () => (botId ? customUrls[botId] ?? null : null));
+  return useSyncExternalStore(subscribeCustomUrls, () => (botId && Object.hasOwn(customUrls, botId) ? customUrls[botId]! : null));
 }
 
 /** 打开系统文件选择器，为这位伙伴导入图片或视频；取消返回 false。 */

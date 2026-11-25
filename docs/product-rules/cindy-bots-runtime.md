@@ -494,6 +494,8 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
 - 伙伴自己的图片／视频与全局自定义壁纸同在 client-wallpaper 媒体库：引用只记在 main 的
   `userData/bot-wallpapers.json`（伙伴 ID → 媒体 URL），回收读取同一张引用表，读不了就延后清理，
   不会误删任何一张。localStorage 只记「选了自定义」；媒体缺失时按跟随全局显示，绝不借用全局自定义图片。
+  伙伴的视频无法播放时，提示出现在这位伙伴的「外观」页（`playbackFailedUrl` 按实际失败的媒体记录），
+  不会把全局自定义壁纸标成无法播放。
   删除伙伴时与头像等自定义资源一起删除它的图片（`botLifecycleService` 删除收尾，失败只记日志）；远程伙伴的
   图片存在控制端，由控制端在对方确认删除后自行清理（`forgetBotAppearance`）。
   通道 `appearance-settings:{get,import,remove}-bot-wallpaper(s)` 与推送 `bot-wallpapers-changed`
@@ -502,7 +504,8 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
   窗口统一应用，继续跟随全局主题；主题包的共享默认层（字体、壁纸、动效）也不随伙伴进出准备或清除，
   因此伙伴选主题包时只换配色，全局主题包的默认壁纸等在伙伴视图里照常保留。
 - 实现与回归：`features/bots/botAppearance.ts`、`BotAppearanceSettings.tsx`、`main/bot-wallpaper-settings.ts`；
-  `useTheme.test.tsx`、`useWallpaperSettings.test.tsx`、`customWallpaper.test.ts` 的伙伴外观用例。
+  `botAppearanceSettings.test.tsx`，以及 `useTheme.test.tsx`、`useWallpaperSettings.test.tsx`、
+  `customWallpaper.test.ts` 的伙伴外观用例。
 
 ### 伙伴的项目在界面上（2026-11-08 主人裁决）
 

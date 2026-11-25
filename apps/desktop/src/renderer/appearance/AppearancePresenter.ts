@@ -9,8 +9,8 @@ import type { ThemeSelection } from '../../shared/appearanceDefinition';
 
 let packageSelection: ThemeSelection | undefined;
 /**
- * The saved (global) theme last presented through `presentTheme`. While a view-scoped palette
- * is shown, `themeService.getCurrentTheme()` is that palette, so rollbacks use this instead.
+ * The saved (global) theme as last resolved by the caller. While a view-scoped palette is
+ * shown, `themeService.getCurrentTheme()` is that palette, so rollbacks use this instead.
  */
 let savedTheme: Theme | undefined;
 let paletteOverridden = false;
@@ -92,6 +92,14 @@ function prepareSharedDefaults(theme: Theme, notifyFailure: boolean, prepare = t
 export function presentPaletteOnly(theme: Theme): void {
   themeService.applyTheme(theme);
   paletteOverridden = true;
+}
+
+/**
+ * The saved choice can change behind a view-scoped palette (settings, another window, system
+ * light/dark) without being presented; an expired request must roll back to the latest one.
+ */
+export function trackSavedTheme(theme: Theme): void {
+  savedTheme = theme;
 }
 
 /** Whether main already holds the package defaults (or none) that this theme needs. */

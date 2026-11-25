@@ -13,6 +13,7 @@ import {
   isThemeSelectionPrepared,
   prepareThemeSelection,
   presentPaletteOnly,
+  trackSavedTheme,
   presentTheme,
 } from '../appearance/AppearancePresenter';
 import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
@@ -158,6 +159,9 @@ export function applyThemeClass(theme: Theme, force = false, prepare = true): vo
   // 重放与系统色变化都不会把登录界面翻回暗色;门由登录页卸载时结束。
   const { theme: nextTheme } = resolveSessionActiveTheme(theme);
   const nextDark = nextTheme.type === 'dark';
+  const overridden = overrideFamilyId() !== null;
+  // Before the short-circuit: the saved variant can change while the shown palette does not.
+  if (overridden) trackSavedTheme(resolveSessionActiveTheme(theme, true).theme);
 
   if (!force && nextDark === wasDark && root.dataset.theme === nextTheme.id) {
     return;
@@ -171,7 +175,7 @@ export function applyThemeClass(theme: Theme, force = false, prepare = true): vo
   // (fonts, wallpaper, motion) live in the shared AppearanceService and reach every
   // window, so showing an override never prepares or clears them. Leaving re-prepares
   // only if the saved variant changed meanwhile (system light/dark, or a new global theme).
-  if (overrideFamilyId() !== null) {
+  if (overridden) {
     presentPaletteOnly(nextTheme);
     return;
   }
