@@ -2976,7 +2976,12 @@
         "reconcileButton": "진단",
         "reconcileFailed": "진단에 실패했습니다",
         "reconcileHealthy": "장부와 디스크가 일치합니다. 이상이 없습니다.",
-        "reconcileIssues": "이상 발견: 장부에 없는 파일 {{orphans}}개({{orphanSize}}), 누락된 파일 {{missing}}개, 인식할 수 없는 항목 {{stray}}개. 전체 목록은 앱 로그를 확인하세요."
+        "reconcileIssues": "이상 발견: 장부에 없는 파일 {{orphans}}개({{orphanSize}}), 누락된 파일 {{missing}}개, 인식할 수 없는 항목 {{stray}}개. 전체 목록은 앱 로그를 확인하세요.",
+        "buddyWorkspaceDirectoryTitle": "동반자 워크스페이스",
+        "buddyWorkspaceDirectoryDescription": "새로 만드는 동반자의 워크스페이스가 저장되는 폴더입니다. 기존 동반자는 현재 위치에 유지되며 고급 설정에서 개별 이동할 수 있습니다.",
+        "buddyWorkspaceDirectoryDetails": "새 동반자 워크스페이스를 위해 계정별 하위 폴더를 생성하고 원래 경로의 링크를 유지합니다.",
+        "buddyWorkspaceDirectoryChoose": "폴더 변경",
+        "buddyWorkspaceDirectoryFailed": "동반자 워크스페이스 폴더를 업데이트할 수 없습니다."
       },
       "piKernel": {
         "manage": "Pi 버전 관리",
@@ -10027,6 +10032,18 @@
       "title": "자동 업데이트 실패",
       "description": "업데이터를 실행할 수 없습니다. 시스템 보안 정책에 의해 차단되었을 수 있습니다. 최신 설치 파일을 직접 다운로드해 주세요.",
       "confirm": "다운로드 페이지로"
+    },
+    "workspaceMigration": {
+      "title": "동반자 워크스페이스 이동 중",
+      "progressLabel": "동반자 워크스페이스 이동 진행률",
+      "safetyHint": "전환 전에 파일을 복사하고 검증하고 있습니다. 완료될 때까지 Cindy를 닫지 마세요.",
+      "phase": {
+        "preparing": "이동 준비 중",
+        "copying": "파일 복사 중",
+        "verifying": "파일 검증 중",
+        "switching": "위치 전환 중",
+        "cleaning": "백업 정리 중"
+      }
     }
   },
   "welcome": {
@@ -11357,6 +11374,69 @@
           "corrections": "내가 바로잡은 점",
           "routines": "확인이 필요한 루틴",
           "upgrade": "자동으로 옮기지 못한 항목"
+        }
+      },
+      "workspaceLocation": {
+        "title": "워크스페이스 위치",
+        "description": "이 동반자의 워크스페이스를 다른 로컬 디스크로 옮겨 시스템 드라이브 공간을 확보할 수 있습니다. 원래 경로에 링크가 유지되어 기존 작업, 자동화, 스크립트가 계속 작동합니다.",
+        "movedDescription": "기존 작업과 스크립트는 계속 원래 경로를 사용합니다.",
+        "chooseDialogTitle": "동반자 워크스페이스 이동 대상 폴더 선택",
+        "fullPath": "전체 경로",
+        "targetPathLabel": "대상 폴더",
+        "currentPathLabel": "현재 폴더",
+        "defaultPathLabel": "대상 폴더(기본 위치)",
+        "logicalPathLabel": "원래 연결 경로",
+        "copyPath": "경로 복사",
+        "pathCopied": "경로를 복사했습니다",
+        "pathCopyFailed": "경로를 복사할 수 없습니다",
+        "openTarget": "폴더 열기",
+        "moveAction": "워크스페이스 이동",
+        "moveBackAction": "기본 위치로",
+        "chooseAnother": "다른 폴더 선택",
+        "restartNow": "지금 다시 시작",
+        "restartAndMove": "다시 시작하고 이동",
+        "scheduleNextRestart": "다음 재시작 시 이동",
+        "cancel": "취소",
+        "dismissFailed": "닫기",
+        "scheduledToast": "다음 Cindy 재시작 시 이동하도록 예약했습니다",
+        "cancelledToast": "워크스페이스 이동이 취소되었습니다",
+        "previewTitle": "워크스페이스 이동 준비 완료",
+        "previewSummary": "파일 크기: {{size}}",
+        "previewNotice": "재시작하기 전에 이 워크스페이스를 사용하는 앱과 스크립트를 종료하세요.",
+        "previewClaudeSkillsNotice": "워크스페이스에 자체 Git 저장소가 없으면 이동 후 Claude Code가 새 위치의 상위 폴더에서 스킬을 찾을 수 있습니다. 이를 원하지 않으면 상위 폴더에 Claude Code 스킬이 없는 위치를 선택하세요.",
+        "pendingHint": "이 폴더를 사용 중인 외부 프로그램을 닫은 뒤 Cindy를 다시 시작하세요.",
+        "unavailableTitle": "이동된 워크스페이스에 접근할 수 없음",
+        "unavailableDescription": "{{target}}에 접근할 수 없습니다. 드라이브를 다시 연결하거나 폴더를 복원하세요. 빈 폴더로 덮어쓰지 않습니다.",
+        "errorTitle": "워크스페이스를 이동할 수 없음",
+        "failedTitle": "이전 워크스페이스 이동 실패",
+        "interruptedTitle": "워크스페이스 이동 복구 필요",
+        "backupRemainingHint": "확인을 위해 원본 백업이 보관되었습니다: {{backup}}",
+        "personalPreviewHint": "개인 미리보기 인스턴스를 닫고 기본 Cindy 빌드에서 워크스페이스 이동을 예약하거나 실행하세요.",
+        "status": {
+          "default": "기본 위치",
+          "pending": "재시작 대기 중",
+          "moved": "이동됨",
+          "failed": "실패",
+          "interrupted": "복구 필요",
+          "unavailable": "사용 불가"
+        },
+        "warnings": {
+          "waitingExclusive": "단독 시작을 기다리는 중입니다. 이 프로필을 공유하는 다른 Cindy 인스턴스를 닫고 다시 시작하세요.",
+          "receiptUpdateFailed": "워크스페이스는 정상 사용 가능하지만 이동 기록 업데이트에 실패했습니다. 다음 시작 시 다시 시도합니다."
+        },
+        "errors": {
+          "insufficientSpace": "대상 드라이브에 여유 공간이 부족합니다.",
+          "overlapsCindyData": "Cindy 데이터 폴더와 현재 워크스페이스 바깥의 폴더를 선택하세요.",
+          "localDiskRequired": "네트워크 공유가 아닌 로컬 디스크 폴더를 선택하세요.",
+          "unsupportedFileOrHardLink": "하드 링크나 특수 파일이 포함되어 있어 현재 안전하게 이동할 수 없습니다.",
+          "alreadyRedirected": "Cindy가 이 워크스페이스의 폴더 링크를 인식하지 못합니다. 링크와 파일을 그대로 두세요.",
+          "botHomeRedirected": "이 동반자의 홈 폴더가 수동으로 리디렉션되어 자동 이동할 수 없습니다.",
+          "targetExists": "대상 폴더가 이미 존재합니다. 다른 위치를 선택하세요.",
+          "workspaceChanged": "검증 중 파일이 변경되었습니다. 외부 프로그램을 닫고 다시 시도하세요.",
+          "backupRetained": "이동은 완료되었지만 백업에 차이가 있어 데이터 보호를 위해 남겨 두었습니다.",
+          "backupCleanupIncomplete": "이동은 완료되었지만 임시 백업 정리가 끝나지 않았습니다. 다음 시작 시 다시 시도합니다.",
+          "cutoverInterrupted": "이전 전환이 중단되어 원래 워크스페이스를 복원했습니다. 새 빈 폴더를 선택해 다시 시도하세요.",
+          "generic": "워크스페이스 이동 요청을 완료할 수 없습니다. 다시 시도하세요."
         }
       }
     },

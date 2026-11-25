@@ -2976,7 +2976,12 @@
         "reconcileButton": "体检",
         "reconcileFailed": "体检失败",
         "reconcileHealthy": "账实一致，没有发现异常。",
-        "reconcileIssues": "发现异常：无账文件 {{orphans}} 个（{{orphanSize}}）、缺失文件 {{missing}} 个、无法识别的条目 {{stray}} 个。详细清单见应用日志。"
+        "reconcileIssues": "发现异常：无账文件 {{orphans}} 个（{{orphanSize}}）、缺失文件 {{missing}} 个、无法识别的条目 {{stray}} 个。详细清单见应用日志。",
+        "buddyWorkspaceDirectoryTitle": "伙伴工作区",
+        "buddyWorkspaceDirectoryDescription": "新建伙伴的工作区默认存放于此目录。已有伙伴保持原位，可在各自的高级配置中单独迁移。",
+        "buddyWorkspaceDirectoryDetails": "Cindy 会在此目录下为当前账号创建独立子目录存放新建伙伴的工作区，并在原路径保留目录链接。",
+        "buddyWorkspaceDirectoryChoose": "更改目录",
+        "buddyWorkspaceDirectoryFailed": "未能更新伙伴工作区目录。"
       },
       "piKernel": {
         "manage": "管理 Pi 版本",
@@ -10027,6 +10032,18 @@
       "title": "自动更新失败",
       "description": "更新程序无法启动，可能被系统安全策略拦截。请手动下载最新版安装包完成更新。",
       "confirm": "前往下载"
+    },
+    "workspaceMigration": {
+      "title": "正在迁移伙伴工作区",
+      "progressLabel": "伙伴工作区迁移进度",
+      "safetyHint": "正在复制并校验文件，切换前不会改动原数据，请勿强行关闭 Cindy。",
+      "phase": {
+        "preparing": "正在准备迁移",
+        "copying": "正在复制文件",
+        "verifying": "正在校验文件",
+        "switching": "正在切换路径",
+        "cleaning": "正在清理备份"
+      }
     }
   },
   "welcome": {
@@ -11357,6 +11374,69 @@
           "corrections": "你纠正过的做法",
           "routines": "需要看一下的例行任务",
           "upgrade": "升级时没能自动带过来的"
+        }
+      },
+      "workspaceLocation": {
+        "title": "工作区位置",
+        "description": "可将此伙伴的工作区迁移到本机其他磁盘以释放系统盘空间。Cindy 会在原路径保留目录链接，已有任务、自动化与脚本可继续正常工作。",
+        "movedDescription": "原路径仍可用于现有任务和脚本。",
+        "chooseDialogTitle": "选择伙伴工作区迁移的目标位置",
+        "fullPath": "完整路径",
+        "targetPathLabel": "目标目录",
+        "currentPathLabel": "当前目录",
+        "defaultPathLabel": "目标目录（默认位置）",
+        "logicalPathLabel": "原逻辑链接路径",
+        "copyPath": "复制路径",
+        "pathCopied": "已复制路径",
+        "pathCopyFailed": "复制路径失败",
+        "openTarget": "打开目录",
+        "moveAction": "迁移工作区",
+        "moveBackAction": "搬回默认位置",
+        "chooseAnother": "另选目录",
+        "restartNow": "立即重启",
+        "restartAndMove": "重启并迁移",
+        "scheduleNextRestart": "下次重启时迁移",
+        "cancel": "取消",
+        "dismissFailed": "关闭记录",
+        "scheduledToast": "已登记迁移，将在下次重启 Cindy 时执行",
+        "cancelledToast": "已取消工作区迁移",
+        "previewTitle": "准备迁移工作区",
+        "previewSummary": "文件大小：{{size}}",
+        "previewNotice": "重启前，请关闭正在使用此工作区的应用或脚本。",
+        "previewClaudeSkillsNotice": "如果工作区没有自己的 Git 仓库，Claude Code 搬迁后可能发现新位置上层目录的技能。如不希望引入这些技能，请选择上层未配置 Claude Code 技能的位置。",
+        "pendingHint": "请先关闭占用该目录的外部程序，再重启 Cindy 执行迁移。",
+        "unavailableTitle": "已迁移的工作区不可用",
+        "unavailableDescription": "Cindy 无法访问 {{target}}。请重新连接对应磁盘或恢复目录；Cindy 不会自动新建空目录覆盖它。",
+        "errorTitle": "无法迁移工作区",
+        "failedTitle": "上次工作区迁移失败",
+        "interruptedTitle": "工作区迁移待恢复",
+        "backupRemainingHint": "原目录备份仍保留以供核对：{{backup}}",
+        "personalPreviewHint": "请退出共享数据的个人测试版，改用主版本 Cindy 登记或执行工作区迁移。",
+        "status": {
+          "default": "默认位置",
+          "pending": "等待重启",
+          "moved": "已迁移",
+          "failed": "迁移失败",
+          "interrupted": "待恢复",
+          "unavailable": "目标不可用"
+        },
+        "warnings": {
+          "waitingExclusive": "正在等待独占启动。请关闭共享此账号数据的其他 Cindy 实例，再重启以执行迁移。",
+          "receiptUpdateFailed": "工作区当前可用，但迁移记录更新失败，将在下次重启时自动修复。"
+        },
+        "errors": {
+          "insufficientSpace": "目标磁盘可用空间不足，无法容纳当前工作区。",
+          "overlapsCindyData": "请选择 Cindy 数据目录和当前工作区之外的目录。",
+          "localDiskRequired": "请选择本机磁盘目录，不支持网络共享路径。",
+          "unsupportedFileOrHardLink": "工作区包含硬链接或特殊文件，暂不支持直接安全迁移。",
+          "alreadyRedirected": "Cindy 无法识别这个工作区的目录链接。请保留现有链接和文件。",
+          "botHomeRedirected": "该伙伴主目录已被手动重定向，无法自动迁移其工作区。",
+          "targetExists": "目标目录已存在，请另选位置。",
+          "workspaceChanged": "校验期间工作区内容发生变化，请关闭外部占用程序后重试。",
+          "backupRetained": "迁移已完成，但原备份校验存在差异，已保留备份以免丢失数据。",
+          "backupCleanupIncomplete": "迁移已完成，但临时备份未能清空，将在下次重启时自动重试。",
+          "cutoverInterrupted": "上次切换中断，Cindy 已恢复原工作区。请另选空目录重新迁移。",
+          "generic": "无法完成工作区迁移操作，请重试。"
         }
       }
     },

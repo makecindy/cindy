@@ -2976,7 +2976,12 @@
         "reconcileButton": "体察",
         "reconcileFailed": "体察未成",
         "reconcileHealthy": "帐实相符，未见异状。",
-        "reconcileIssues": "见异状：无帐之卷 {{orphans}} 个({{orphanSize}})、缺失之卷 {{missing}} 个、不可识者 {{stray}} 个。详录见应用日志。"
+        "reconcileIssues": "见异状：无帐之卷 {{orphans}} 个({{orphanSize}})、缺失之卷 {{missing}} 个、不可识者 {{stray}} 个。详录见应用日志。",
+        "buddyWorkspaceDirectoryTitle": "同伴工坊",
+        "buddyWorkspaceDirectoryDescription": "新立同伴之工坊皆置于此。旧有同伴仍居故址，可于其高级之设中各自迁徙。",
+        "buddyWorkspaceDirectoryDetails": "Cindy 将于此目录下为本号别立子目录以置新伴工坊，并留链接于旧径。",
+        "buddyWorkspaceDirectoryChoose": "易目录",
+        "buddyWorkspaceDirectoryFailed": "未能更易同伴工坊目录。"
       },
       "piKernel": {
         "manage": "理 Pi 版本",
@@ -10027,6 +10032,18 @@
       "title": "自动更新未成",
       "description": "更新程序无法启动，或为系统安全策略所拦。请手动下载最新版安装包以完成更新。",
       "confirm": "往取之"
+    },
+    "workspaceMigration": {
+      "title": "方迁同伴工坊",
+      "progressLabel": "伙伴工坊迁徙之进",
+      "safetyHint": "方抄录校验诸卷，未毕前不动故本，切勿强闭 Cindy。",
+      "phase": {
+        "preparing": "备迁",
+        "copying": "抄录诸卷",
+        "verifying": "校验诸卷",
+        "switching": "易径",
+        "cleaning": "清旧备"
+      }
     }
   },
   "welcome": {
@@ -11357,6 +11374,69 @@
           "corrections": "君所纠正",
           "routines": "例行之务待查",
           "upgrade": "升级时未能自携者"
+        }
+      },
+      "workspaceLocation": {
+        "title": "工坊所在",
+        "description": "可迁此伴工坊于本机他盘，以宽系统盘之余地。Cindy 仍留链接于旧径，诸务与脚本皆如常无碍。",
+        "movedDescription": "现有任务与脚本仍循原路径。",
+        "chooseDialogTitle": "择同伴工坊迁往之所",
+        "fullPath": "全径",
+        "targetPathLabel": "新址目录",
+        "currentPathLabel": "现目录",
+        "defaultPathLabel": "所迁目录（默认处）",
+        "logicalPathLabel": "旧径链接",
+        "copyPath": "录其径",
+        "pathCopied": "已录其径",
+        "pathCopyFailed": "未能录径",
+        "openTarget": "启其目录",
+        "moveAction": "迁徙工坊",
+        "moveBackAction": "迁回默认处",
+        "chooseAnother": "另择目录",
+        "restartNow": "即刻重启",
+        "restartAndMove": "重启并迁",
+        "scheduleNextRestart": "俟后启再迁",
+        "cancel": "罢之",
+        "dismissFailed": "阖旧录",
+        "scheduledToast": "已登迁徙之约，俟下次重启 Cindy 行之",
+        "cancelledToast": "已罢工坊迁徙",
+        "previewTitle": "工坊迁徙已备",
+        "previewSummary": "文件大小：{{size}}",
+        "previewNotice": "重启前，请关闭正用此工作区之应用及脚本。",
+        "previewClaudeSkillsNotice": "若工作区无自有 Git 仓库，迁后 Claude Code 或见新处上层目录之技能。若不欲引入，请择上层未设 Claude Code 技能之处。",
+        "pendingHint": "请先息占此目录之外程序，再重启 Cindy 以行迁徙。",
+        "unavailableTitle": "已迁工坊今不可达",
+        "unavailableDescription": "Cindy 未能及 {{target}}。请复接磁盘或复其目录；Cindy 不另立空目录覆之。",
+        "errorTitle": "工坊未能迁徙",
+        "failedTitle": "前番工坊迁徙未成",
+        "interruptedTitle": "工坊迁徙待复",
+        "backupRemainingHint": "旧本仍留以备覆核：{{backup}}",
+        "personalPreviewHint": "请先退共享数据之个人试版，改以主版 Cindy 登记或行迁徙。",
+        "status": {
+          "default": "故址",
+          "pending": "待重启",
+          "moved": "已迁",
+          "failed": "未成",
+          "interrupted": "待复",
+          "unavailable": "不可达"
+        },
+        "warnings": {
+          "waitingExclusive": "方候独启。请闭同享此号数据之余 Cindy 实例，再重启以迁。",
+          "receiptUpdateFailed": "工坊尚可用，然迁录未得更，俟下次重启自修。"
+        },
+        "errors": {
+          "insufficientSpace": "新盘余量不足，未能容此工坊。",
+          "overlapsCindyData": "请择 Cindy 数据与今工坊之外地。",
+          "localDiskRequired": "请择本机磁盘之目录，不纳网络共享径。",
+          "unsupportedFileOrHardLink": "工坊内含硬链或异卷，暂未便径迁。",
+          "alreadyRedirected": "Cindy 未能辨识此工作区之目录链接，请保全链接及文件。",
+          "botHomeRedirected": "此伴主舍既经手转，未便自迁其工坊。",
+          "targetExists": "新址既在，请另择空地。",
+          "workspaceChanged": "校验之际工坊有变，请闭外占程序再试。",
+          "backupRetained": "迁徙既成，然旧备有异，已留存以防失遗。",
+          "backupCleanupIncomplete": "迁徙既成，暂备未尽除，俟后启再清。",
+          "cutoverInterrupted": "前番易径中辍，已复故工坊。请另择空目录重行。",
+          "generic": "工坊迁徙未竟，请复试之。"
         }
       }
     },

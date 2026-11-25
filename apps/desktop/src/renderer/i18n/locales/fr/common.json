@@ -3044,7 +3044,12 @@
         "reconcileButton": "Vérifier",
         "reconcileFailed": "Échec de la vérification",
         "reconcileHealthy": "Le registre et le disque correspondent. Aucun problème détecté.",
-        "reconcileIssues": "Problèmes détectés : {{orphans}} fichiers non suivis ({{orphanSize}}), {{missing}} fichiers manquants, {{stray}} entrées non reconnues. Consultez le journal de l'application pour la liste complète."
+        "reconcileIssues": "Problèmes détectés : {{orphans}} fichiers non suivis ({{orphanSize}}), {{missing}} fichiers manquants, {{stray}} entrées non reconnues. Consultez le journal de l'application pour la liste complète.",
+        "buddyWorkspaceDirectoryTitle": "Espace de travail des amis",
+        "buddyWorkspaceDirectoryDescription": "Dossier où les nouveaux amis créent leur espace de travail. Les amis existants restent à leur emplacement et peuvent être déplacés individuellement dans leur configuration avancée.",
+        "buddyWorkspaceDirectoryDetails": "Cindy crée ici un sous-dossier par compte pour les espaces de travail des nouveaux amis tout en gardant le chemin d'origine lié.",
+        "buddyWorkspaceDirectoryChoose": "Changer de répertoire",
+        "buddyWorkspaceDirectoryFailed": "Impossible de mettre à jour le dossier d'espace de travail des amis."
       },
       "piKernel": {
         "manage": "Gérer la version de Pi",
@@ -10146,6 +10151,18 @@
       "title": "Échec de la mise à jour automatique",
       "description": "Impossible de lancer le programme de mise à jour, peut-être bloqué par la politique de sécurité du système. Veuillez télécharger manuellement le dernier programme d'installation.",
       "confirm": "Aller au téléchargement"
+    },
+    "workspaceMigration": {
+      "title": "Déplacement de l'espace de travail",
+      "progressLabel": "Progression du déplacement de l'espace de travail",
+      "safetyHint": "Copie et vérification des fichiers avant la bascule. Gardez Cindy ouvert jusqu'à la fin.",
+      "phase": {
+        "preparing": "Préparation",
+        "copying": "Copie des fichiers",
+        "verifying": "Vérification des fichiers",
+        "switching": "Changement d'emplacement",
+        "cleaning": "Nettoyage de la sauvegarde"
+      }
     }
   },
   "welcome": {
@@ -11490,6 +11507,69 @@
           "corrections": "Vos corrections",
           "routines": "Routines à vérifier",
           "upgrade": "Non repris automatiquement"
+        }
+      },
+      "workspaceLocation": {
+        "title": "Emplacement de l'espace de travail",
+        "description": "Déplacez l'espace de travail de cet ami vers un autre disque local pour libérer le disque système. Cindy conserve un lien au chemin d'origine pour que tâches, automatisations et scripts continuent de fonctionner.",
+        "movedDescription": "Les tâches et scripts existants utilisent toujours le chemin d’origine.",
+        "chooseDialogTitle": "Choisir le dossier de destination",
+        "fullPath": "Chemin complet",
+        "targetPathLabel": "Dossier cible",
+        "currentPathLabel": "Dossier actuel",
+        "defaultPathLabel": "Dossier cible (par défaut)",
+        "logicalPathLabel": "Chemin d'origine lié",
+        "copyPath": "Copier le chemin",
+        "pathCopied": "Chemin copié",
+        "pathCopyFailed": "Impossible de copier le chemin",
+        "openTarget": "Ouvrir le dossier",
+        "moveAction": "Déplacer l'espace de travail",
+        "moveBackAction": "Revenir au dossier par défaut",
+        "chooseAnother": "Choisir un autre dossier",
+        "restartNow": "Redémarrer maintenant",
+        "restartAndMove": "Redémarrer et déplacer",
+        "scheduleNextRestart": "Déplacer au prochain redémarrage",
+        "cancel": "Annuler",
+        "dismissFailed": "Fermer",
+        "scheduledToast": "Déplacement programmé pour le prochain redémarrage de Cindy",
+        "cancelledToast": "Déplacement annulé",
+        "previewTitle": "Prêt à déplacer l'espace de travail",
+        "previewSummary": "Taille des fichiers : {{size}}",
+        "previewNotice": "Avant de redémarrer, fermez les applications et scripts qui utilisent cet espace de travail.",
+        "previewClaudeSkillsNotice": "Si l’espace de travail n’a pas son propre dépôt Git, Claude Code peut détecter des compétences dans les dossiers parents du nouvel emplacement. Pour éviter cela, choisissez un emplacement sans compétences Claude Code dans ses dossiers parents.",
+        "pendingHint": "Fermez les programmes externes utilisant ce dossier puis redémarrez Cindy pour lancer le déplacement.",
+        "unavailableTitle": "L'espace de travail déplacé est indisponible",
+        "unavailableDescription": "Cindy n'a pas pu accéder à {{target}}. Reconnectez le disque ou restaurez le dossier ; Cindy ne créera pas de dossier vide par-dessus.",
+        "errorTitle": "Impossible de déplacer l'espace de travail",
+        "failedTitle": "Le déplacement précédent a échoué",
+        "interruptedTitle": "Récupération nécessaire",
+        "backupRemainingHint": "Sauvegarde originale conservée pour vérification : {{backup}}",
+        "personalPreviewHint": "Fermez les instances d'aperçu personnel et lancez la version principale de Cindy pour programmer ou exécuter le déplacement.",
+        "status": {
+          "default": "Par défaut",
+          "pending": "En attente de redémarrage",
+          "moved": "Déplacé",
+          "failed": "Échec",
+          "interrupted": "Récupération requise",
+          "unavailable": "Indisponible"
+        },
+        "warnings": {
+          "waitingExclusive": "En attente d'un démarrage exclusif. Fermez les autres instances Cindy partageant ce profil puis redémarrez.",
+          "receiptUpdateFailed": "L'espace de travail est utilisable, mais la mise à jour du journal a échoué et sera retentée au prochain redémarrage."
+        },
+        "errors": {
+          "insufficientSpace": "Espace libre insuffisant sur le disque de destination.",
+          "overlapsCindyData": "Choisissez un dossier en dehors des données Cindy et de l'espace de travail actuel.",
+          "localDiskRequired": "Choisissez un dossier sur un disque local plutôt qu'un partage réseau.",
+          "unsupportedFileOrHardLink": "Cet espace de travail contient des liens physiques ou fichiers spéciaux ne pouvant pas être déplacés en toute sécurité.",
+          "alreadyRedirected": "Cindy ne reconnaît pas le lien de ce dossier de travail. Conservez le lien et les fichiers en l’état.",
+          "botHomeRedirected": "Le dossier principal de cet ami a été redirigé manuellement et ne peut pas être déplacé automatiquement.",
+          "targetExists": "Le dossier cible existe déjà. Choisissez un autre emplacement.",
+          "workspaceChanged": "Des fichiers ont changé pendant la vérification. Fermez les programmes externes et réessayez.",
+          "backupRetained": "Le déplacement a réussi, mais la sauvegarde différait et a été conservée par sécurité.",
+          "backupCleanupIncomplete": "Le déplacement a réussi, mais le nettoyage de la sauvegarde temporaire sera retenté au prochain redémarrage.",
+          "cutoverInterrupted": "La bascule précédente a été interrompue et l'original a été restauré. Choisissez un nouveau dossier vide pour réessayer.",
+          "generic": "Impossible de terminer la demande de déplacement. Réessayez."
         }
       }
     },

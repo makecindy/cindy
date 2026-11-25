@@ -4161,6 +4161,12 @@ interface ElectronAPI {
     choose(): Promise<import('../shared/dialogueWorkspaceSettings').DialogueWorkspaceSettingsState>;
     reset(): Promise<import('../shared/dialogueWorkspaceSettings').DialogueWorkspaceSettingsState>;
   };
+  buddyWorkspace?: {
+    open(): Promise<{ success: boolean }>;
+    get(): Promise<import('../shared/buddyWorkspaceSettings').BuddyWorkspaceSettingsState>;
+    choose(): Promise<import('../shared/buddyWorkspaceSettings').BuddyWorkspaceSettingsState>;
+    reset(): Promise<import('../shared/buddyWorkspaceSettings').BuddyWorkspaceSettingsState>;
+  };
   projectsRoot: {
     get(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
     choose(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
@@ -5300,6 +5306,32 @@ interface ElectronAPI {
     bots: {
       ownsProject: (workingDir: string) => Promise<boolean>;
       projectRepository: (botId: string, retry: boolean) => Promise<import('../shared/botProjectMode').BotProjectRepositoryStatus>;
+      workspaceMigration?: {
+        getStatus: (
+          botId: string,
+        ) => Promise<import('../shared/workspaceMigration').WorkspaceMigrationStatus>;
+        chooseTarget: (
+          botId: string,
+          useDefault?: boolean,
+        ) => Promise<import('../shared/workspaceMigration').WorkspaceMigrationChooseTargetResult>;
+        schedule: (
+          input: import('../shared/workspaceMigration').WorkspaceMigrationScheduleInput,
+        ) => Promise<import('../shared/workspaceMigration').WorkspaceMigrationScheduleResult>;
+        cancel: (
+          botId: string,
+        ) => Promise<import('../shared/workspaceMigration').WorkspaceMigrationStatus>;
+        restart: (botId: string) => Promise<{ relaunching: boolean }>;
+        getStartupProgress: () => Promise<
+          import('../shared/workspaceMigration').WorkspaceMigrationStartupProgress | null
+        >;
+        onStartupProgress: (
+          callback: (
+            progress:
+              | import('../shared/workspaceMigration').WorkspaceMigrationStartupProgress
+              | null,
+          ) => void,
+        ) => () => void;
+      };
       getModelChainSettings: () => Promise<{
         modelChain: import('../shared/botModelChain').BotModelRoute[];
         isCustomized: boolean;
