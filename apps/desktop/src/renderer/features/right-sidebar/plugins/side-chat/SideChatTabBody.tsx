@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { MessagesSquare, UsersRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useTranslation } from 'react-i18next';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import { useSidebarNavigate } from '@/features/cc-agent/sidebar/sidebarNavigation';
@@ -8,7 +9,7 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 import { useDocumentVisible, useWindowVisible } from '@/hooks/useWindowVisible';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { discardDraft } from '@/lib/composerDraftStore';
+import { clearDraft, discardDraft } from '@/lib/composerDraftStore';
 import { setStatus } from '@/lib/sessionService';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { toast } from '@/lib/toast';
@@ -20,6 +21,13 @@ import { SidebarHostSessionProvider } from '../../lib/sidebarHostSession';
 import { mergeSidebarWindowBack } from '../../lib/mergeSidebarWindowBack';
 import { closeTab } from '../../store';
 import type { TabKindBodyProps } from '../../types';
+import {
+  cancelPendingSideChat,
+  getPendingSideChat,
+  removePendingSideChat,
+  setPendingSideChatQueuedSend,
+  subscribePendingSideChat,
+} from './pendingSideChat';
 import { sideChatTaskRoute, type SideChatState } from './state';
 
 export function SideChatTabBody({ state, ctx, active, shellVisible = true }: TabKindBodyProps<SideChatState>) {
@@ -50,7 +58,20 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
   const documentVisible = useDocumentVisible(Boolean(active && shellVisible));
   const viewVisible = Boolean(active && shellVisible && windowVisible);
   const chatRealtime = Boolean(active && shellVisible && documentVisible);
-  const childId = state.sessionId;
+  const pending = useSyncExternalStore(
+    subscribePendingSideChat,
+    () => getPendingSideChat(ctx.tabId),
+  );
+  const childId = state.sessionId ?? pending?.childSession?.id ?? null;
+  const awaitingSessionCreation = !childId && pending?.status === 'creating';
+  const creationFailed = !childId && pending?.status === 'failed';
+  const effectiveSessionId = childId ?? pending?.draftKey ?? null;
+  const effectiveDraftKey = pending?.draftKey;
+  const pendingChildSession = pending?.childSession?.id === childId ? pending.childSession : null;
+  const pendingChildRef = useRef<Session | null>(null);
+  pendingChildRef.current = pendingChildSession;
+  const pendingDraftKeyRef = useRef<string | undefined>(undefined);
+  pendingDraftKeyRef.current = pending?.draftKey;
   const retiredChildRef = useRef<string | null>(null);
   const linkedChildRef = useRef<string | null>(null);
   const pendingClose = useRef<Promise<boolean> | null>(null);
@@ -67,8 +88,13 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     : await window.electronAPI.localDb.sessions.get(id)) as Session | null, [state.deviceId]);
   useEffect(() => {
     if (childId && state.deviceId) remoteProjectsStore.pinSessionOrigin(state.deviceId, childId);
+    if (childId && state.deviceId && pendingChildSession) {
+      setRemoteSession(previous => previous?.id === childId
+        ? previous
+        : { ...pendingChildSession, id: childId, deviceLinkDeviceId: state.deviceId! });
+    }
     setRegisteredChild(childId);
-  }, [childId, state.deviceId]);
+  }, [childId, pendingChildSession, state.deviceId]);
   useEffect(() => {
     const deviceId = state.deviceId;
     if (!childId) return;
@@ -87,7 +113,11 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
       if (status === 'deleted') {
         makerChatStore.closeSessionQuery(childId);
         discardDraft(childId);
+        if (pendingDraftKeyRef.current && pendingDraftKeyRef.current !== childId) {
+          discardDraft(pendingDraftKeyRef.current);
+        }
       }
+      removePendingSideChat(ctx.tabId);
       void closeTab(ctx.sessionId, ctx.tabId, { skipBeforeClose: true })
         .catch(() => { if (valid()) toast.error(t('chat.sideChat.closeFailed')); });
     };
@@ -107,9 +137,16 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
       }
       updateCollaboration(payload.patch);
       if (deviceId) {
-        setRemoteSession(previous => previous?.id === childId
-          ? { ...previous, ...payload.patch, id: childId, deviceLinkDeviceId: deviceId }
-          : previous);
+        setRemoteSession(previous => {
+          const base = previous?.id === childId
+            ? previous
+            : pendingChildRef.current?.id === childId
+              ? pendingChildRef.current
+              : null;
+          return base
+            ? { ...base, ...payload.patch, id: childId, deviceLinkDeviceId: deviceId }
+            : previous;
+        });
       }
     };
     // Hidden tabs still need deletion notifications; subscribe before reading.
@@ -149,7 +186,15 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     return () => { disposed = true; off(); };
   }, [active, childId, ctx.sessionId, ctx.tabId, readChild, retry, state.deviceId, t]);
   const close = useCallback(() => {
-    if (!childId) return Promise.resolve(true);
+    if (!childId) {
+      const currentPending = cancelPendingSideChat(ctx.tabId);
+      if (currentPending) {
+        if (currentPending.hasTransferredAttachments) clearDraft(currentPending.draftKey);
+        else discardDraft(currentPending.draftKey);
+        removePendingSideChat(ctx.tabId);
+      }
+      return Promise.resolve(true);
+    }
     if (pendingClose.current) return pendingClose.current;
     const owner = getDataOwnerGeneration();
     const current = () => isDataOwnerGenerationCurrent(owner);
@@ -199,6 +244,10 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
         makerChatStore.closeSessionQuery(childId);
         makerChatStore.purgeSession(childId);
         discardDraft(childId);
+        if (pendingDraftKeyRef.current && pendingDraftKeyRef.current !== childId) {
+          discardDraft(pendingDraftKeyRef.current);
+        }
+        removePendingSideChat(ctx.tabId);
         return true;
       } catch {
         if (current() && retiredChildRef.current !== childId) toast.error(t('chat.sideChat.closeFailed'));
@@ -208,12 +257,26 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     pendingClose.current = request;
     void request.then(() => { if (pendingClose.current === request) pendingClose.current = null; });
     return request;
-  }, [childId, confirm, ctx.sessionId, readChild, state.deviceId, t]);
+  }, [childId, confirm, ctx.sessionId, ctx.tabId, readChild, state.deviceId, t]);
   useEffect(() => ctx.setCloseInterceptor(close), [ctx, close]);
+  const handlePendingSendStateChange = useCallback((queued: boolean) => {
+    setPendingSideChatQueuedSend(ctx.tabId, queued);
+  }, [ctx.tabId]);
+  const handlePendingDraftSettled = useCallback(() => {
+    if (!state.sessionId) return;
+    removePendingSideChat(ctx.tabId);
+  }, [ctx.tabId, state.sessionId]);
   if (unavailableChild && unavailableChild === childId) return null;
   const role = collaboration?.childId === childId ? collaboration?.role : undefined;
   const collaborationActive = role === 'lead';
   const collaborationEnded = childId !== null && linkedChild === childId && role === null;
+  const effectiveSnapshot = remoteSession?.id === childId
+    ? remoteSession
+    : pendingChildSession
+      ? (state.deviceId ? { ...pendingChildSession, deviceLinkDeviceId: state.deviceId } : pendingChildSession)
+      : !childId
+        ? pending?.previewSession ?? null
+        : null;
   const content = <SidebarHostSessionProvider sessionId={ctx.sessionId}>
     <div className="chat-rail-compact flex h-full min-h-0 flex-col">
       <div className="mx-4 flex items-center justify-between gap-2 border-b border-[var(--border-default)] py-3">
@@ -232,19 +295,30 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
             : <><MessagesSquare aria-hidden="true" size={14} />{t('chat.sideChat.openConversation')}</>}
         </Button>}
       </div>
+      {creationFailed && <ErrorNotice
+        className="mx-4 mt-3 shrink-0"
+        message={pending?.errorMessage ?? t('chat.sideChat.failed')}
+        actions={pending?.onRetry && <Button size="sm" compact onClick={() => pending.onRetry?.()}>{t('commonUi.retry')}</Button>}
+      />}
       <div className="min-h-0 flex-1">
-        {state.deviceId && (loadFailed || remoteSession?.id !== childId) ? <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        {state.deviceId && !effectiveSnapshot && (loadFailed || remoteSession?.id !== childId) ? <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
           <p className="text-sm leading-5 text-muted-foreground">{t(loadFailed ? 'chat.sideChat.failed' : 'chat.sideChat.opening')}</p>
           {loadFailed && <Button onClick={() => setRetry(value => value + 1)}>{t('commonUi.retry')}</Button>}
-        </div> : childId && (!state.deviceId || registeredChild === childId) && <CCAgentSessionView
-          key={childId}
-          sessionIdProp={childId}
-          sessionSnapshotProp={remoteSession}
+        </div> : effectiveSessionId && (!state.deviceId || registeredChild === childId || Boolean(effectiveSnapshot)) && <CCAgentSessionView
+          key={ctx.tabId}
+          sessionIdProp={effectiveSessionId}
+          sessionSnapshotProp={effectiveSnapshot}
+          draftKeyProp={effectiveDraftKey}
+          awaitingSessionCreation={awaitingSessionCreation}
+          creationFailed={creationFailed}
+          onPendingSendStateChange={pending ? handlePendingSendStateChange : undefined}
+          onPendingDraftSettled={pending && state.sessionId ? handlePendingDraftSettled : undefined}
           compact
           compactToolbar
           viewVisible={viewVisible}
           chatRealtime={chatRealtime}
           disableAutofocus={!viewVisible}
+          focusComposerOnOpen={Boolean(pending && viewVisible)}
           navigationMode="sidebar-embedded"
           sidebarTargetSessionId={ctx.sessionId}
         />}

@@ -1,11 +1,10 @@
-import { lazy } from 'react';
 import { MessagesSquare } from 'lucide-react';
 import { registerTabKind } from '../../registry';
 import { hasTabCloseInterceptor, setActiveTab } from '../../store';
 import type { TabKindPlugin } from '../../types';
+import { SideChatTabBody } from './SideChatTabBody';
+import { cancelPendingSideChat } from './pendingSideChat';
 import { hydrateSideChatState, type SideChatState } from './state';
-
-const SideChatTabBody = lazy(() => import('./SideChatTabBody').then(module => ({ default: module.SideChatTabBody })));
 
 const plugin: TabKindPlugin<SideChatState> = {
   kind: 'side-chat',
@@ -24,7 +23,11 @@ const plugin: TabKindPlugin<SideChatState> = {
   hydrateState: hydrateSideChatState,
   serializeState: hydrateSideChatState,
   onBeforeClose: async (state, ctx) => {
-    if (!state.sessionId || hasTabCloseInterceptor(ctx.tabId)) return true;
+    if (!state.sessionId) {
+      cancelPendingSideChat(ctx.tabId);
+      return true;
+    }
+    if (hasTabCloseInterceptor(ctx.tabId)) return true;
     // Recovered, unmounted tabs must install the close handler before a task
     // can be reclaimed.
     await setActiveTab(ctx.sessionId, ctx.tabId);

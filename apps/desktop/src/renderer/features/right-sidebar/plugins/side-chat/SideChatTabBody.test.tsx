@@ -3,24 +3,33 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TabKindHostContext } from '../../types';
 
-const mocks = vi.hoisted(() => ({ navigate: vi.fn(), invoke: vi.fn(), subscribe: vi.fn(), pin: vi.fn(), confirm: vi.fn(), archive: vi.fn(), status: vi.fn(), merge: vi.fn(), cache: vi.fn(), closeTab: vi.fn(), detached: false, t: (key: string) => key }));
+const mocks = vi.hoisted(() => ({ navigate: vi.fn(), invoke: vi.fn(), subscribe: vi.fn(), pin: vi.fn(), confirm: vi.fn(), archive: vi.fn(), status: vi.fn(), merge: vi.fn(), cache: vi.fn(), closeTab: vi.fn(), clearDraft: vi.fn(), discardDraft: vi.fn(), detached: false, t: (key: string) => key }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 // Match the stable translation callback; changing it on every render restarts the metadata read.
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t }) }));
-vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({ CCAgentSessionView: (props: { sessionIdProp: string; sessionSnapshotProp: unknown }) => <div data-testid="editor">{JSON.stringify(props)}</div> }));
+vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({ CCAgentSessionView: (props: { sessionIdProp: string; sessionSnapshotProp: unknown; draftKeyProp?: string; awaitingSessionCreation?: boolean; creationFailed?: boolean }) => <div data-testid="editor">{JSON.stringify(props)}</div> }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: { pinSessionOrigin: mocks.pin, mergeDeviceSessions: mocks.cache, getDeviceName: () => 'Host' } }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: mocks.confirm }) }));
 vi.mock('@/hooks/useWindowVisible', () => ({ useWindowVisible: () => true, useDocumentVisible: () => true }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: { closeSessionQuery: vi.fn(), purgeSession: vi.fn() } }));
-vi.mock('@/lib/composerDraftStore', () => ({ discardDraft: vi.fn() }));
+vi.mock('@/lib/composerDraftStore', () => ({ clearDraft: mocks.clearDraft, discardDraft: mocks.discardDraft }));
 vi.mock('@/lib/sessionService', () => ({ setStatus: mocks.status }));
 vi.mock('@/lib/sidebarWindow', () => ({ isSidebarWindow: () => mocks.detached }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
-vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => 1, isDataOwnerGenerationCurrent: () => true, isDataOwnerPushCurrent: () => true }));
+vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => ({ dataOwnerId: 'owner', generation: 1 }), isDataOwnerGenerationCurrent: () => true, isDataOwnerPushCurrent: () => true }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
 vi.mock('../../lib/mergeSidebarWindowBack', () => ({ mergeSidebarWindowBack: mocks.merge }));
 vi.mock('../../store', () => ({ closeTab: mocks.closeTab }));
+import type { Session } from '@/lib/ccAgent.types';
 import { SideChatTabBody } from './SideChatTabBody';
+import {
+  __resetPendingSideChatsForTest,
+  buildPreviewSideChatSession,
+  failPendingSideChat,
+  getPendingSideChat,
+  registerPendingSideChat,
+  resolvePendingSideChat,
+} from './pendingSideChat';
 
 // Unit regression (2026-10-25): opening a side-chat tab used to show only a navigation
 // button. Mount the production panel with one local/remote child and verify it exposes
@@ -31,6 +40,7 @@ describe('side chat panel lifecycle', () => {
   const ctx = { sessionId: 'parent', tabId: 'tab', setCloseInterceptor: (fn: () => Promise<boolean>) => { close = fn; return () => { close = null; }; } } as unknown as TabKindHostContext;
   beforeEach(() => {
     vi.clearAllMocks(); close = null; mocks.detached = false;
+    __resetPendingSideChatsForTest();
     mocks.confirm.mockResolvedValue(false); mocks.status.mockResolvedValue(undefined);
     mocks.subscribe.mockReturnValue(() => {});
     mocks.closeTab.mockResolvedValue(undefined);
@@ -165,7 +175,9 @@ describe('side chat panel lifecycle', () => {
     expect(mocks.closeTab).not.toHaveBeenCalled();
     await expect(close!()).resolves.toBe(false);
     expect(mocks.invoke.mock.calls.some(([, channel]) => channel === 'local-db:sessions:patch-meta')).toBe(false);
-    await expect(close!()).resolves.toBe(true);
+    await act(async () => {
+      await expect(close!()).resolves.toBe(true);
+    });
     expect(mocks.invoke).toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta', [
       'child', { status: 'archived', archiveSideChatParentId: 'parent' },
     ]);
@@ -213,5 +225,78 @@ describe('side chat panel lifecycle', () => {
     expect(screen.queryByTestId('editor')).toBeNull();
     expect(screen.getByText('chat.sideChat.returnToMain')).toBeTruthy();
     expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  // Unit: optimistic pending side chat must mount the editor immediately and keep
+  // the same mounted instance + draftKey when the host returns the forked child.
+  it.each([null, 'host'])('mounts immediately while pending and keeps the same editor instance on resolution (%s)', async deviceId => {
+    const draftKey = 'side-chat-pending:1';
+    registerPendingSideChat({
+      tabId: 'tab',
+      draftKey,
+      parentSessionId: 'parent',
+      deviceId,
+      previewSession: buildPreviewSideChatSession('parent', null, draftKey, deviceId),
+      status: 'creating',
+      childSession: null,
+      hasTransferredAttachments: false,
+    });
+    const { rerender } = render(<SideChatTabBody state={{ sessionId: null, deviceId }} ctx={ctx} active />);
+    const initialEditor = screen.getByTestId('editor');
+    expect(JSON.parse(initialEditor.textContent!)).toMatchObject({
+      sessionIdProp: draftKey,
+      draftKeyProp: draftKey,
+      awaitingSessionCreation: true,
+      creationFailed: false,
+    });
+
+    await act(async () => {
+      resolvePendingSideChat('tab', {
+        id: 'child', parentSessionId: 'parent', source: 'side-chat', status: 'active', model: 'forked-model',
+      } as Session);
+    });
+    rerender(<SideChatTabBody state={{ sessionId: 'child', deviceId }} ctx={ctx} active />);
+    const resolvedEditor = screen.getByTestId('editor');
+    expect(resolvedEditor).toBe(initialEditor);
+    expect(JSON.parse(resolvedEditor.textContent!)).toMatchObject({
+      sessionIdProp: 'child',
+      draftKeyProp: draftKey,
+      awaitingSessionCreation: false,
+      creationFailed: false,
+    });
+  });
+
+  it('surfaces retryable failure inline without unmounting the composer and cleans up on close', async () => {
+    const onRetry = vi.fn();
+    const draftKey = 'side-chat-pending:2';
+    registerPendingSideChat({
+      tabId: 'tab',
+      draftKey,
+      parentSessionId: 'parent',
+      deviceId: null,
+      previewSession: buildPreviewSideChatSession('parent', null, draftKey, null),
+      status: 'creating',
+      childSession: null,
+      hasTransferredAttachments: true,
+      onRetry,
+    });
+    render(<SideChatTabBody state={{ sessionId: null, deviceId: null }} ctx={ctx} active />);
+    await act(async () => {
+      failPendingSideChat('tab', 'chat.sideChat.notReady');
+    });
+    expect(screen.getByText('chat.sideChat.notReady')).toBeTruthy();
+    expect(JSON.parse(screen.getByTestId('editor').textContent!)).toMatchObject({
+      creationFailed: true,
+      draftKeyProp: draftKey,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await expect(close!()).resolves.toBe(true);
+    });
+    expect(mocks.clearDraft).toHaveBeenCalledWith(draftKey);
+    expect(mocks.discardDraft).not.toHaveBeenCalled();
+    expect(getPendingSideChat('tab')).toBeUndefined();
   });
 });
